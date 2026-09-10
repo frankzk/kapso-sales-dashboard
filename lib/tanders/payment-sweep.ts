@@ -19,7 +19,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { decrypt } from "@/lib/crypto";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { extractPaymentEvidence, TandersClient } from "@/lib/tanders/client";
-import { checkTandersPayment, REASON_LABEL } from "@/lib/tanders/payment-check";
+import { alertDuplicatePayments } from "@/lib/tanders/duplicate-alert";
+import {
+  checkTandersPayment,
+  normalizeOperationNumber,
+  REASON_LABEL,
+} from "@/lib/tanders/payment-check";
 import { readTandersPayment } from "@/lib/tanders/payment-vision";
 import {
   isNotYetDelivered,
@@ -54,6 +59,55 @@ function expectedAmount(raw: Candidate["tanders_raw"]): number | null {
   const v = raw?.collectionAmount;
   const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * ¿Este nº de operación ya se registró en OTRA guía?
+ *
+ * Es la detección de comprobante reusado: el mismo pago no puede cobrar dos
+ * pedidos. Se compara contra cualquier comprobación anterior, no solo contra
+ * las validadas —un voucher que se rechazó en la guía A por monto y reaparece
+ * en la B sigue siendo el mismo papel presentado dos veces—, y se excluye la
+ * propia guía, que se relee en cada pasada mientras siga pendiente.
+ *
+ * Devuelve los pedidos (o guías) con los que choca, para que el veredicto
+ * pueda nombrarlos. Si la consulta falla devuelve vacío: no acusar por un
+ * error de red es preferible a acusar en falso, y la guía se vuelve a mirar.
+ */
+async function guiasConLaMismaOperacion(
+  admin: SupabaseClient,
+  operacion: string | null,
+  shipmentId: string,
+): Promise<string[]> {
+  if (!operacion) return [];
+  const { data, error } = await admin
+    .from("tanders_payment_checks")
+    .select("shipment_id")
+    .eq("operation_number", operacion)
+    .neq("shipment_id", shipmentId)
+    .limit(20);
+  if (error) return [];
+  const ids = [...new Set(((data as { shipment_id: string }[]) ?? []).map((r) => r.shipment_id))];
+  if (!ids.length) return [];
+
+  const { data: guias } = await admin
+    .from("shipments")
+    .select("order_name,guide_code")
+    .in("id", ids);
+  return ((guias as { order_name: string | null; guide_code: string }[]) ?? []).map(
+    (g) => g.order_name ?? g.guide_code,
+  );
+}
+
+/** Un comprobante que apareció en más de una guía. */
+export interface SweepDuplicate {
+  guia: string;
+  pedido: string | null;
+  operacion: string;
+  /** Las otras guías donde ya estaba. */
+  otras: string[];
+  monto: number | null;
+  storeId: string;
 }
 
 export interface SweepDetail {
@@ -97,6 +151,12 @@ export interface SweepReport {
    * «no supe leerla».
    */
   muestras: { guia: string; respuesta: string }[];
+  /**
+   * Comprobantes que ya se habían presentado en otra guía. Van aparte del
+   * resto de rechazos porque son los únicos que avisan por Telegram: un cobro
+   * mal hecho se corrige, el mismo papel dos veces hay que mirarlo hoy.
+   */
+  duplicados: SweepDuplicate[];
   rejected: string[];
   detalle: SweepDetail[];
 }
@@ -146,6 +206,7 @@ export async function sweepTandersPayments(
     fallos: [],
     detenido: false,
     muestras: [],
+    duplicados: [],
     rejected: [],
     detalle: [],
   };
@@ -252,17 +313,30 @@ export async function sweepTandersPayments(
         visionCreds.get(row.store_id) ?? {},
       );
       const expected = expectedAmount(row.tanders_raw);
+      const operacion = normalizeOperationNumber(reading.operationNumber);
+      const duplicateOf = await guiasConLaMismaOperacion(admin, operacion, row.id);
       const verdict = checkTandersPayment({
+        duplicateOf,
         voucher: {
           ok: reading.ok,
           isVoucher: reading.isPaymentProof,
           method: reading.method,
           recipientName: reading.recipientName,
           amount: reading.amount,
-          operationNumber: reading.operationNumber,
+          operationNumber: operacion,
         },
         expectedAmount: expected,
       });
+      if (duplicateOf.length) {
+        report.duplicados.push({
+          guia: row.guide_code,
+          pedido: row.order_name,
+          operacion: operacion ?? "?",
+          otras: duplicateOf,
+          monto: reading.amount,
+          storeId: row.store_id,
+        });
+      }
 
       report[verdict.state as "validado" | "rechazado" | "pendiente"] += 1;
       if (verdict.state === "validado") report.entregado += 1;
@@ -282,7 +356,7 @@ export async function sweepTandersPayments(
           medio: reading.method,
           destinatario: reading.recipientName,
           monto: reading.amount,
-          operacion: reading.operationNumber,
+          operacion: operacion,
           modelo: reading.model,
         },
         veredicto: verdict.state,
@@ -303,7 +377,9 @@ export async function sweepTandersPayments(
         reasons: verdict.reasons,
         recipient_name: reading.recipientName,
         amount: reading.amount,
-        operation_number: reading.operationNumber,
+        // Normalizado: es la clave con la que se detecta el reuso, y dos
+        // transcripciones del mismo pago tienen que colisionar.
+        operation_number: operacion,
         expected_amount: expected,
         model: reading.model,
         raw: raw as Record<string, unknown>,
@@ -350,6 +426,10 @@ export async function sweepTandersPayments(
       .update({ payment_checked_at: new Date().toISOString() })
       .in("id", mirados);
   }
+
+  // El aviso, al final y solo de verdad. Va después de escribir para que un
+  // Telegram lento no retrase el bloqueo, que es lo que de verdad protege.
+  if (!dry) await alertDuplicatePayments(admin, report.duplicados);
 
   return report;
 }

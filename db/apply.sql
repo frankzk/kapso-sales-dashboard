@@ -309,6 +309,8 @@
 \ir migrations/0152_tanders_payment_checked_at.sql
 \echo 'Applying 0153_payment_gateway.sql'
 \ir migrations/0153_payment_gateway.sql
-\echo 'Applying 0154_lead_insights_rollup.sql'
-\ir migrations/0154_lead_insights_rollup.sql
+\echo 'Applying 0154_tanders_operation_number_normalize.sql'
+\ir migrations/0154_tanders_operation_number_normalize.sql
+\echo 'Applying 0155_lead_insights_rollup.sql'
+\ir migrations/0155_lead_insights_rollup.sql
 \echo 'Done.'

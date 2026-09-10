@@ -1018,6 +1018,24 @@ sin tope de antigüedad. Reglas:
     la imagen contra el monto de la guía y el nombre de Grupo GF SAC: que el
     courier se dé por pagado a sí mismo no es constancia de que el dinero
     llegó a nuestra cuenta.
+  - **EL MISMO COMPROBANTE NO COBRA DOS PEDIDOS.** Si el nº de operación ya
+    quedó registrado en otra guía, la comprobación sale **`rechazado`** por
+    `operacion_duplicada` aunque todo lo demás cuadre —buen medio, buena
+    cuenta, buen monto—: es el mismo dinero acreditando dos pedidos. Se compara
+    contra cualquier comprobación anterior, no solo las validadas (un voucher
+    rechazado en A que reaparece en B sigue siendo el mismo papel dos veces), y
+    se excluye la propia guía, que se relee mientras siga pendiente.
+    - **Es el único motivo que además AVISA por Telegram**, al mismo canal de
+      la tienda que el resumen diario. Los otros rechazos son un cobro mal
+      hecho y se corrigen; este hay que mirarlo hoy. El aviso es accesorio: el
+      veredicto ya bloqueó el cobro.
+    - El nº se guarda **normalizado** (solo letras y dígitos, en mayúsculas) y
+      **nunca como número**: Yape los emite con ceros a la izquierda
+      («06420756»). Una lectura **truncada** («202609...495099») se guarda como
+      null: un dato inventado en la clave que detecta un fraude puede tanto
+      acusar en falso como tapar el duplicado bueno.
+    - Al implantarlo (10-09-2026) el histórico de 78 comprobaciones no tenía
+      **ninguna** colisión.
   - **Medios de cobro aceptados: Yape, Plin y transferencia BCP.** Plin entró
     el 10-09-2026: el motorizado remite con la billetera que tenga, y Plin y
     Yape se pagan entre sí y caen en la misma cuenta —la constancia de un Plin

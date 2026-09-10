@@ -150,7 +150,7 @@ describe("buildBurndown (today's backlog reconstructed by hour)", () => {
 });
 
 describe("rollupToInputs: de las filas agrupadas en la base a los constructores", () => {
-  // La 0154 devuelve una fila por (cubo, día) o (cubo, hora) en vez de las
+  // La 0155 devuelve una fila por (cubo, día) o (cubo, hora) en vez de las
   // ~17.000 filas que se drenaban por carga (28 M al día, medido el 10-09-2026).
   it("reparte cada cubo en su mapa y expande las horas al histograma que espera buildBurndown", () => {
     const r = rollupToInputs([
@@ -199,9 +199,9 @@ describe("el panel pregunta primero al RPC y la SQL dice lo mismo que el código
     expect(body).toContain("if (!rollup.error && Array.isArray(rollup.data))");
   });
 
-  it("los predicados de la 0154 son los mismos que los del drenado", () => {
+  it("los predicados de la 0155 son los mismos que los del drenado", () => {
     // Si divergen, el panel dice una cosa con el RPC y otra sin él.
-    const sql = read("db/migrations/0154_lead_insights_rollup.sql");
+    const sql = read("db/migrations/0155_lead_insights_rollup.sql");
     expect(sql).toContain("first_seen_at >= p_window_start");
     expect(sql).toContain("or (first_seen_at is null and created_at >= p_window_start)");
     expect(sql).toContain("and new_status is not null\n      and new_status <> 'nuevo'");

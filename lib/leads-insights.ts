@@ -308,7 +308,7 @@ export function buildTrend(opts: {
   return { trend, saldoInicio: trend[0]?.saldo ?? 0 };
 }
 
-/** Una fila del RPC `lead_insights_rollup` (0154): cubo, día u hora, conteo. */
+/** Una fila del RPC `lead_insights_rollup` (0155): cubo, día u hora, conteo. */
 export interface RollupRow {
   bucket: string;
   key: string;
@@ -371,7 +371,7 @@ export function rollupToInputs(rows: readonly RollupRow[]): RollupInputs {
 
 /**
  * Los mismos conteos, drenando filas (el camino de antes). Queda como respaldo
- * para una base sin la 0154 aplicada: el panel sigue saliendo, solo que caro.
+ * para una base sin la 0155 aplicada: el panel sigue saliendo, solo que caro.
  */
 async function drainInputs(
   sb: Sb,
@@ -448,7 +448,7 @@ async function drainInputs(
  * current "por llamar" count (already computed by the page, passed in as the
  * anchor). RLS-scoped reads; productivity is best-effort.
  *
- * LOS CONTEOS SE AGRUPAN EN LA BASE (RPC `lead_insights_rollup`, 0154): unas
+ * LOS CONTEOS SE AGRUPAN EN LA BASE (RPC `lead_insights_rollup`, 0155): unas
  * cuarenta filas en vez de las ~17.000 que se drenaban por carga. Medido el
  * 10-09-2026: 28 millones de filas al día solo de este panel. El drenado queda
  * como respaldo si el RPC no existe todavía.

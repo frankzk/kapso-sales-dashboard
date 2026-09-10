@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0154_lead_insights_rollup.sql — el panel de gráficos de Leads deja de
+-- 0155_lead_insights_rollup.sql — el panel de gráficos de Leads deja de
 -- descargar la semana entera para contar siete números.
 --
 -- QUÉ PASABA. `getLeadsInsights` (lib/leads-insights.ts) reconstruía el
