@@ -70,7 +70,11 @@ import {
   type StockMovementRow,
 } from "@/lib/fenix-ledger";
 import { resolveEmails } from "@/lib/productivity";
-import { shopifyShippingAddress } from "@/lib/shopify-address";
+import {
+  reprogramDestination,
+  shopifyShippingAddress,
+  type ShipmentDestination,
+} from "@/lib/shopify-address";
 import { env } from "@/lib/env";
 import {
   createGuide,
@@ -600,6 +604,7 @@ export async function registerRerouteCall(
     // crearía una segunda guía y un segundo paquete.
     const viaApi = await swaypGuideForReprogram(
       admin,
+      shipmentId,
       cur.order_id,
       input.nextFollowupAt,
       input.note,
@@ -1828,6 +1833,7 @@ async function createFenixGuideViaApi(args: {
  */
 async function swaypGuideForReprogram(
   admin: SupabaseClient,
+  shipmentId: string,
   orderId: string | null | undefined,
   dispatchDateIso: string | null | undefined,
   note?: string | null,
@@ -1843,7 +1849,19 @@ async function swaypGuideForReprogram(
   const order = data as unknown as DirectGuideOrderRecord | null;
   if (!order) return { ok: false, reason: "no se pudo leer el pedido" };
 
-  const { address } = await resolveDirectGuideAddress(admin, order);
+  // El destino de la guía se lee ACÁ y no se recibe del llamador: que una reja
+  // dependa de que quien la llama se acuerde de seleccionar las columnas justas
+  // es exactamente como se coló el fallo de cobertura (MOM §19.0.2).
+  const { data: destRow } = await admin
+    .from("shipments")
+    .select(`customer_name,customer_phone,delivery_address,delivery_reference,${FENIX_COVERAGE_COLUMNS}`)
+    .eq("id", shipmentId)
+    .maybeSingle();
+
+  const address = reprogramDestination(
+    destRow as ShipmentDestination | null,
+    (await resolveDirectGuideAddress(admin, order)).address,
+  );
   const district = address?.city ?? null;
   const city = deriveFenixCoverageCity(district, address?.province ?? null);
   const totalRefunded = order.total_refunded ?? 0;

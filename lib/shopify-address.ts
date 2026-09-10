@@ -70,3 +70,69 @@ export function shopifyShippingAddress(raw: unknown): OrderShippingAddress | nul
   };
   return Object.values(result).some((v) => v !== null) ? result : null;
 }
+
+/** El destino que guarda la propia guía, tal cual sale de `shipments`. */
+export interface ShipmentDestination {
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  delivery_address?: string | null;
+  delivery_reference?: string | null;
+  district?: string | null;
+  province?: string | null;
+  region?: string | null;
+  city?: string | null;
+}
+
+/**
+ * El destino de una REPROGRAMACIÓN: manda el de la guía, no el del pedido.
+ *
+ * POR QUÉ. `resolveDirectGuideAddress` busca la dirección en el pedido —el
+ * `shippingAddress` de Shopify, el carrito COD, el lead— porque para una guía
+ * DIRECTA no hay otra: la salida todavía no existe. Al reprogramar sí existe, y
+ * su destino es mejor dato por tres razones: es el que el courier usó, es el que
+ * la operadora ve en el drawer («Destino de entrega · Importado desde Aliclik»),
+ * y es el que ella puede haber CORREGIDO a mano. Usar el del pedido por encima
+ * de una corrección mandaría el paquete de vuelta a la dirección mala.
+ *
+ * EL CASO: #KP131632, Arequipa, Cerro Colorado. El pedido no tenía
+ * `shippingAddress` —ni carrito ni lead—, así que la reprogramación se quedaba
+ * sin destino, `buildSwaypGuideInput` fallaba por ciudad vacía y la guía salía
+ * con código manual sin decir por qué. La dirección estaba ahí todo el tiempo,
+ * en el envío, importada de Aliclik: «AV los incas 203, cerro colorado». Con
+ * ella el payload valida y el ubigeo sale exacto (040104). Son 90 envíos de
+ * Arequipa con el pedido sin dirección, 51 de ellos con la dirección en la guía.
+ *
+ * Es el mismo error que la cobertura (MOM §19.0.2): el dato existe, la función
+ * lo buscaba donde no estaba.
+ *
+ * Se resuelve CAMPO A CAMPO y no en bloque: una guía puede traer el distrito y
+ * no el teléfono, y quedarse con el bloque entero perdería lo que sí tiene el
+ * pedido. Pura.
+ */
+export function reprogramDestination(
+  shipment: ShipmentDestination | null | undefined,
+  fromOrder: OrderShippingAddress | null,
+): OrderShippingAddress | null {
+  const pick = (a: string | null | undefined, b: string | null | undefined): string | null =>
+    (a ?? "").trim() || (b ?? "").trim() || null;
+
+  const address: OrderShippingAddress = {
+    address1: pick(shipment?.delivery_address, fromOrder?.address1),
+    address2: pick(shipment?.delivery_reference, fromOrder?.address2),
+    // `city` en `shipments` es la clave de cobertura normalizada («arequipa»),
+    // NO el distrito: el distrito vive en `district`. Confundirlos mandaría
+    // «arequipa» como distrito y el ubigeo saldría del cercado.
+    city: pick(shipment?.district, fromOrder?.city),
+    province: pick(shipment?.province ?? shipment?.region, fromOrder?.province),
+    name: pick(shipment?.customer_name, fromOrder?.name),
+    phone: pick(shipment?.customer_phone, fromOrder?.phone),
+    // El envío no guarda coordenadas geocodificadas por Shopify; si el pedido
+    // las trae, se conservan.
+    latitude: fromOrder?.latitude ?? null,
+    longitude: fromOrder?.longitude ?? null,
+  };
+
+  // Sin dirección ni distrito no hay destino que valga: devolver un objeto de
+  // nulos haría creer al llamador que hay dato.
+  return address.address1 || address.city ? address : null;
+}

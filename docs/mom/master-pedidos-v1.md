@@ -1981,6 +1981,20 @@ bodega, Swayp recibiría una guía que su almacén no puede armar. Si falta
 cualquier ítem, el envío cae al código local con el motivo —no se bloquea la
 reprogramación, que antes de esto no validaba nada—.
 
+**El destino lo pone la GUÍA, no el pedido.** Al reprogramar, la salida ya
+existe y su destino es mejor dato que el del pedido por tres razones: es el que
+el courier usó, es el que la operadora ve en el drawer, y es el que ella puede
+haber corregido a mano. Usar el del pedido por encima de una corrección
+devolvería el paquete a la dirección mala. El del pedido queda de respaldo, y se
+resuelve campo a campo: una guía puede traer el distrito y no el teléfono.
+
+Importa más de lo que parece porque **el pedido a menudo no tiene dirección**:
+el `shippingAddress` de Shopify llega vacío en el 6,8% de los envíos de Arequipa
+—90 de 1.324—, y en 51 de ellos la dirección sí está en la guía. Buscarla solo
+en el pedido convertía «no la tengo acá» en «no hay destino», y la guía salía
+con código manual sin decir por qué. Es el mismo error que la cobertura
+(§19.0.2): el dato existe, se buscaba donde no estaba.
+
 **El número que emite Swayp se guarda en `swayp_guide`, no solo en
 `guide_code`.** El webhook de Swayp busca la guía por esa columna: sin ella el
 envío se quedaría En ruta para siempre por más que el mensajero reportara.
