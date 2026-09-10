@@ -4,12 +4,12 @@
 // comprobante del pago. Solo la segunda importa acá — la primera no es un
 // comprobante y pasarla por el lector daría basura.
 //
-// Qué se comprueba: que sea un comprobante REAL —Yape o transferencia BCP, los
-// dos medios con los que el repartidor remite—, a Grupo GF SAC, por el monto que
-// la guía dice que había que cobrar. Un pago a otra cuenta es dinero que no
-// llegó; un monto distinto es un cobro mal hecho; un medio no acordado no se
-// puede conciliar después. Los tres exigen que alguien mire, y hasta entonces la
-// guía NO pasa a entregada.
+// Qué se comprueba: que sea un comprobante REAL —Yape, Plin o transferencia
+// BCP, los medios con los que el repartidor remite—, a Grupo GF SAC, por el
+// monto que la guía dice que había que cobrar. Un pago a otra cuenta es dinero
+// que no llegó; un monto distinto es un cobro mal hecho; un medio no acordado no
+// se puede conciliar después. Los tres exigen que alguien mire, y hasta entonces
+// la guía NO pasa a entregada.
 //
 // Puro y testeado: acá se decide si un cobro se da por bueno.
 
@@ -31,7 +31,7 @@ export type PaymentCheckReason =
 
 export const REASON_LABEL: Record<PaymentCheckReason, string> = {
   no_es_comprobante: "La imagen no es un comprobante de pago",
-  medio_no_aceptado: "El medio de pago no es Yape ni transferencia BCP",
+  medio_no_aceptado: "El medio de pago no es Yape, Plin ni transferencia BCP",
   destinatario_distinto: "El pago NO va a Grupo GF SAC",
   monto_distinto: "El monto no coincide con el de la guía",
   sin_destinatario: "No se pudo leer a quién se pagó",
@@ -40,6 +40,14 @@ export const REASON_LABEL: Record<PaymentCheckReason, string> = {
 
 /** A quién tiene que ir el dinero. Igual que en lib/vision.ts. */
 export const EXPECTED_RECIPIENT = "Grupo GF SAC";
+
+/** Cómo se nombra cada medio en el resumen que lee la operadora. */
+export const METHOD_LABEL: Record<PaymentCheckInput["voucher"]["method"], string> = {
+  yape: "Yape",
+  plin: "Plin",
+  bcp: "Transferencia BCP",
+  otro: "Medio no reconocido",
+};
 
 /**
  * Tolerancia del monto, en soles. Un céntimo de diferencia es redondeo del
@@ -54,8 +62,8 @@ export interface PaymentCheckInput {
     /** false = el modelo no pudo decidir (sin clave, timeout, ilegible). */
     ok: boolean;
     isVoucher: boolean;
-    /** El repartidor remite por Yape o por transferencia BCP: valen los dos. */
-    method: "yape" | "bcp" | "otro";
+    /** El repartidor remite por Yape, Plin o transferencia BCP: valen los tres. */
+    method: "yape" | "plin" | "bcp" | "otro";
     recipientName: string | null;
     amount: number | null;
     operationNumber: string | null;
@@ -126,8 +134,13 @@ export function checkTandersPayment(input: PaymentCheckInput): PaymentCheckVerdi
     };
   }
 
-  // Los dos medios que la operación acepta. Cualquier otro exige que alguien
-  // mire: un pago por una vía no acordada no se puede conciliar después.
+  // Los medios que la operación acepta. Cualquier otro exige que alguien mire:
+  // un pago por una vía no acordada no se puede conciliar después.
+  //
+  // PLIN CUENTA. Plin y Yape se pagan entre sí y caen en la misma cuenta —la
+  // constancia de un Plin al número de Grupo GF SAC dice literalmente «Enviado
+  // a: … - Yape»—, y el motorizado remite con la billetera que tenga. El
+  // 10-09-2026, 7 de 9 rechazos fueron cobros buenos rechazados por el logo.
   if (voucher.method === "otro") reasons.push("medio_no_aceptado");
 
   if (!voucher.recipientName) reasons.push("sin_destinatario");
@@ -142,7 +155,7 @@ export function checkTandersPayment(input: PaymentCheckInput): PaymentCheckVerdi
     return {
       state: "validado",
       reasons: [],
-      summary: `${voucher.method === "bcp" ? "Transferencia BCP" : "Yape"} a ${EXPECTED_RECIPIENT}${
+      summary: `${METHOD_LABEL[voucher.method]} a ${EXPECTED_RECIPIENT}${
         voucher.amount != null ? ` por S/ ${voucher.amount.toFixed(2)}` : ""
       }.`,
     };
