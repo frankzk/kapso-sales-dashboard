@@ -124,6 +124,13 @@ export async function sweepTandersPayments(
     .in("delivery_status", ["pendiente", "en_ruta"])
     .or(`created_at.gte.${since},api_report_at.gte.${since}`)
     .or("payment_check_state.is.null,payment_check_state.eq.pendiente")
+    // LA QUE HACE MÁS TIEMPO QUE NO SE MIRA, PRIMERO. Sin este orden la
+    // consulta cortaba en 60 de 238 candidatas y PostgREST elegía cuáles: las
+    // mismas cada pasada, y el resto nunca. No era atraso, era hambre — el
+    // 10-09-2026 el #AUR176448 llevaba un día entregado y con su Yape
+    // verificado sin entrar jamás en el lote. Mismo patrón que el barrido de
+    // estados con `last_report_at` (0152).
+    .order("payment_checked_at", { ascending: true, nullsFirst: true })
     .limit(MAX_PER_RUN);
   if (error) throw new Error(error.message);
 
@@ -146,6 +153,15 @@ export async function sweepTandersPayments(
   // Una sesión por tienda: el cliente cachea su token entre guías.
   const clients = new Map<string, TandersClient | null>();
   const visionCreds = new Map<string, StoreVisionCreds>();
+
+  // Las guías que esta pasada SÍ llegó a mirar. Se sellan todas juntas al
+  // final para que la siguiente empiece por las otras: es lo único que hace
+  // que la cola avance en vez de repetir siempre el mismo lote (0152). Entra
+  // también lo que falló de forma definitiva —una guía sin credenciales
+  // fallaría igual mañana, y dejarla sin sello la clava en la cabeza de la
+  // cola—. NO entra la que se topó con el 429: a esa no se la llegó a
+  // preguntar, así que le toca ir primero la próxima vez.
+  const mirados: string[] = [];
 
   for (const row of candidates) {
     try {
@@ -189,6 +205,7 @@ export async function sweepTandersPayments(
               : "La guía no tiene id interno de Tanders (tanders_order_id).",
           ),
         );
+        mirados.push(row.id);
         continue;
       }
 
@@ -214,6 +231,7 @@ export async function sweepTandersPayments(
             respuesta: JSON.stringify(raw).slice(0, 2000),
           });
         }
+        mirados.push(row.id);
         continue;
       }
 
@@ -222,6 +240,7 @@ export async function sweepTandersPayments(
       const img = await fetch(evidence.imageUrl);
       if (!img.ok) {
         report.errores += 1;
+        mirados.push(row.id);
         continue;
       }
       const base64 = Buffer.from(await img.arrayBuffer()).toString("base64");
@@ -273,6 +292,7 @@ export async function sweepTandersPayments(
         imagen: evidence.imageUrl,
       });
 
+      mirados.push(row.id);
       if (dry) continue;
 
       await admin.from("tanders_payment_checks").insert({
@@ -303,18 +323,32 @@ export async function sweepTandersPayments(
       // un fallo: se cuenta como en curso y no ensucia el reporte.
       if (isNotYetDelivered(err)) {
         report.enCurso += 1;
+        mirados.push(row.id);
         continue;
       }
       // Una guía que falla no puede tumbar el barrido de las demás — pero el
       // motivo se guarda. Ver sweep-failures.ts.
       report.errores += 1;
       recordSweepFailure(report.fallos, err);
-      // Un 429 es Tanders diciendo «basta»: lo que queda va en la próxima.
+      // Un 429 es Tanders diciendo «basta»: lo que queda va en la próxima. Sin
+      // sello: a esta guía no se la llegó a preguntar.
       if (isThrottled(err)) {
         report.detenido = true;
         break;
       }
+      mirados.push(row.id);
     }
+  }
+
+  // El sello, de una vez. Va aparte del veredicto a propósito: se pone también
+  // a las que no dieron ninguno —en ruta, sin credenciales, imagen caída—, que
+  // son justo las que sin él se quedarían atascadas al frente de la cola para
+  // siempre. En seco no se escribe nada, como el resto del barrido.
+  if (!dry && mirados.length) {
+    await admin
+      .from("shipments")
+      .update({ payment_checked_at: new Date().toISOString() })
+      .in("id", mirados);
   }
 
   return report;

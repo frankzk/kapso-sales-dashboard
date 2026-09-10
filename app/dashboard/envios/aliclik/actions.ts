@@ -321,6 +321,22 @@ export async function searchAliclikSkus(
   }));
 }
 
+/**
+ * Traduce el error de «la tabla no existe» a algo accionable.
+ *
+ * Desplegar NO aplica migraciones en este proyecto: se corren a mano antes de
+ * que salga el código (DEPLOY.md), y olvidarlo ya costó horas el 19-08-2026 con
+ * la 0123. Postgres dice «relation "public.x" does not exist», que a quien está
+ * vinculando productos no le dice nada — pulsa «Vincular» y parece que la
+ * pantalla no hace nada. Nombrar la causa convierte media hora de desconcierto
+ * en un comando.
+ */
+function explicaError(message: string, tabla: string, migracion: string): string {
+  return /does not exist|no existe/i.test(message) && message.includes(tabla)
+    ? `Falta aplicar la migración ${migracion} en la base de datos: la tabla «${tabla}» todavía no existe.`
+    : message;
+}
+
 // ── Swayp ───────────────────────────────────────────────────────────────────
 //
 // El mismo mapeo, otro courier. La fila de la pantalla es el producto de
@@ -354,7 +370,7 @@ export async function mapSwaypCodbar(
     { store_id: storeId, shopify_sku: shopifySku, codbar, nombre, created_by: ctx.userId, updated_at: new Date().toISOString() },
     { onConflict: "store_id,shopify_sku" },
   );
-  if (error) return { error: error.message };
+  if (error) return { error: explicaError(error.message, "swayp_sku_map", "0151") };
 
   revalidatePath(PATH);
   return { notice: `${shopifySku} → ${codbar}.` };
@@ -375,7 +391,7 @@ export async function unmapSwaypCodbar(
     .delete()
     .eq("store_id", storeId)
     .eq("shopify_sku", shopifySku);
-  if (error) return { error: error.message };
+  if (error) return { error: explicaError(error.message, "swayp_sku_map", "0151") };
 
   revalidatePath(PATH);
   return { notice: `${shopifySku} desvinculado de Swayp.` };

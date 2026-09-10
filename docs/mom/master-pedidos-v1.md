@@ -994,7 +994,48 @@ sin tope de antigüedad. Reglas:
   - Por lo mismo, una guía que responde **200 sin constancia reconocible SÍ está
     entregada**: el problema entonces no es del courier sino de nuestro
     extractor, y la lectura en seco guarda la respuesta cruda de hasta tres de
-    ellas para poder verlo.
+    ellas para poder verlo. **Así se encontró el fallo el 10-09-2026**: las 60
+    guías salían «sin constancia aún» y ninguna lo estaba.
+  - **La forma de la respuesta de evidencias, confirmada el 10-09-2026:**
+
+    ```
+    { orderNumber, evidences: [ … la ENTREGA … ],
+      payments: [{ id, amount, paymentMethod, entity: "YAPE",
+                   paymentDocument: "…/files_payment%2F…jpg",
+                   status: "VERIFIED", paymentDate, createdAt }] }
+    ```
+
+    El enlace de la constancia es **`payments[].paymentDocument`**, y el medio
+    de pago es **`entity`** («YAPE», «BCP»). El `method` de la respuesta NO es
+    el medio de pago: cuelga de la evidencia de entrega y vale «Asignación
+    masiva por mapa». El extractor se había escrito contra una forma imaginada,
+    sin `paymentDocument` en su lista de claves, y por eso no validó ni un cobro
+    entre el 15-08 y el 10-09. Ahora se prueba contra la respuesta literal
+    (`test/tanders-payment-evidence.test.ts`): **una forma adivinada no se
+    verifica leyéndola.**
+  - Lo que Tanders dice del pago (`amount`, `entity`, `status: VERIFIED`) es
+    dato de apoyo, **no el veredicto**. Quien decide sigue siendo la lectura de
+    la imagen contra el monto de la guía y el nombre de Grupo GF SAC: que el
+    courier se dé por pagado a sí mismo no es constancia de que el dinero
+    llegó a nuestra cuenta.
+  - **Medios de cobro aceptados: Yape, Plin y transferencia BCP.** Plin entró
+    el 10-09-2026: el motorizado remite con la billetera que tenga, y Plin y
+    Yape se pagan entre sí y caen en la misma cuenta —la constancia de un Plin
+    a Grupo GF SAC dice literalmente «Enviado a: Grupo Gf S · 930 555 309 -
+    Yape»—. **7 de los 9 rechazos de ese día eran cobros buenos rechazados por
+    el logo.** Aceptar el medio no es aceptar el pago: el destinatario y el
+    monto se siguen exigiendo igual.
+  - **La cola de cobros se recorre entera: la que hace más tiempo que no se
+    mira va primero.** El 10-09-2026 había **238 guías candidatas y el tope es
+    de 60 por pasada**, y la consulta cortaba sin orden ninguno: entraban
+    siempre las mismas y el resto no se miraba nunca. El #AUR176448 llevaba un
+    día entregado, con su Yape de S/ 129 verificado, y no estaba en el lote —ni
+    iba a estarlo—. **No era atraso, era hambre.** Ahora cada guía mirada deja
+    sello (`payment_checked_at`, 0152) **haya dado veredicto o no**: las en ruta
+    no escriben comprobación, así que sin sello se clavarían al frente de la
+    cola para siempre. La que se topa con el 429 no se sella —no se la llegó a
+    preguntar— y va primero en la siguiente. Con 60 cada dos horas, las 238 se
+    recorren en unas ocho horas.
   - **El barrido de cobros pide la constancia directamente**, sin preguntar
     antes el estado. Una constancia bajo `files_payment/` existe solo cuando el
     motorizado cobró, así que es por sí misma la prueba de entrega; y es una
@@ -2009,13 +2050,26 @@ descarta una ella misma:
 
 | Forma | Qué es |
 | --- | --- |
-| `productos: [{codbar, cantidad, nombre}]` | Estructurada. `codbar` es su código de barras (`AURE001`) |
-| `contenido: "2 x NOMBRE EXACTO"` | Texto. *«Tiende a ser inestable porque se busca por nombre y no por código»* — Swayp |
+| `contenido: "2 x AURE001"` | **La que usamos.** Texto con el CÓDIGO, el formato que pidieron: *«CANTIDAD X SKU … con el match exacto del sku»* |
+| `contenido: "2 x NOMBRE EXACTO"` | Texto con el nombre. *«Tiende a ser inestable porque se busca por nombre y no por código»* — Swayp |
+| `productos: [{codbar, cantidad, nombre}]` | Estructurada. Nos la describieron por escrito, pero **no está en su documentación** y al preguntar por el catálogo respondieron que «no está disponible para consumir por API». La duda sigue abierta, así que no se manda: un campo que quizá no procesan puede devolver 400 y dejar al envío sin guía |
 
 Vamos por `codbar`. Buscar por nombre ata el descuento de stock a que su
 catálogo y el nuestro escriban igual un producto: cambian una tilde y las guías
 dejan de descontar **sin error y sin aviso**, hasta que el inventario no cuadre.
-`contenido` se sigue mandando, pero solo como etiqueta legible.
+**`contenido` lleva el código y NADA más.** Ni el nombre, ni un paréntesis: no
+conocemos la gramática de su buscador, y si le sobra texto hay dos desenlaces
+—lo tolera, o no encuentra el producto y no descuenta stock—. No hay un tercero
+donde falle ruidosamente.
+
+**El nombre legible va en `observaciones`**, que nadie parsea, con la misma
+información: `contenido: "2 x AURE001"` y `observaciones: "2 x CANDIDA CLEANSE"`.
+Lo parseable en el campo parseable, lo humano en el campo libre. Se usa el nombre
+de Swayp que guarda el mapeo —corto y el que su almacén reconoce— y solo se cae a
+nuestro título de Shopify si no hay otro; por eso vale la pena rellenar el campo
+«Nombre en Swayp» de la pantalla de Catálogo. La nota del operador se conserva a
+continuación, y el conjunto se recorta a 500 caracteres: no sabemos el límite del
+campo, y perder una guía por un texto de cortesía sería mal negocio.
 
 **Los dos catálogos no tienen relación** y el puente es una decisión humana, no
 una regla: el mismo producto es `765545233` en Shopify y `AURE001` en Swayp. El
@@ -2029,6 +2083,14 @@ sin vincular RECHAZA la guía** nombrándolo, y el envío cae al Excel. Nunca se
 manda el ítem con el código vacío ni se aproxima por nombre: eso dejaría unas
 guías descontando stock y otras no, sin que se note — la misma razón por la que
 un ubigeo aproximado se rechaza (§11.3).
+
+**La bodega de origen se nombra, no se deduce.** Swayp opera cuatro bodegas
+—Arequipa, Trujillo, Juliaca-Puno y Piura— y el campo `idWarehouse` dice de cuál
+sale el paquete. Sin él lo decide Swayp: si acierta no nos enteramos, y si se
+equivoca descuenta del inventario de otra ciudad. **Juliaca y Puno comparten
+bodega**, así que el ubigeo de origen no basta para distinguirlas. El id va
+junto al remitente de esa ciudad en `SWAYP_SENDERS`, porque el remitente ya ES
+la bodega y separarlos dejaría dos sitios que pueden discrepar.
 
 **El `idBusiness` deja de ser opcional en la práctica.** Swayp valida los
 productos contra un id único de tienda, así que sin ese campo es Swayp quien

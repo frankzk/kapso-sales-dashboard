@@ -90,7 +90,7 @@ export function defaultCollectionAmount(input: {
   orderTotal: number | null | undefined;
   financialStatus?: string | null;
   totalRefunded?: number | null;
-  /** Solo la pasarela confirmada del checkout cuenta como pago web (0152). */
+  /** Solo la pasarela confirmada del checkout cuenta como pago web (0153). */
   paymentGateway?: PaymentGateway | null;
 }): number {
   return expectedCollectAmount(

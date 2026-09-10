@@ -39,7 +39,13 @@ export function AliclikCatalog({
 }) {
   const [filter, setFilter] = useState<Filter>(view.unmapped ? "sin_mapear" : "todos");
   const [search, setSearch] = useState("");
-  const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  // El mensaje recuerda DE QUÉ FILA salió. Sin eso se pintaba sólo arriba del
+  // todo, y en una lista larga eso está fuera de pantalla: pulsabas «Vincular»,
+  // la acción fallaba y la pantalla no hacía nada visible. Pasó de verdad con la
+  // migración 0151 sin aplicar — el error existía y nadie podía verlo.
+  const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string; rowKey?: string } | null>(
+    null,
+  );
   const [pending, startTransition] = useTransition();
 
   const rows = useMemo(() => {
@@ -57,12 +63,12 @@ export function AliclikCatalog({
     });
   }, [view.rows, filter, search]);
 
-  const run = (fd: FormData, fn: typeof mapSku) => {
+  const run = (fd: FormData, fn: typeof mapSku, rowKey?: string) => {
     setMsg(null);
     startTransition(async () => {
       const res = await fn({}, fd);
-      if (res.error) setMsg({ kind: "error", text: res.error });
-      else if (res.notice) setMsg({ kind: "ok", text: res.notice });
+      if (res.error) setMsg({ kind: "error", text: res.error, rowKey });
+      else if (res.notice) setMsg({ kind: "ok", text: res.notice, rowKey });
     });
   };
 
@@ -117,7 +123,7 @@ export function AliclikCatalog({
         </div>
       )}
 
-      {msg && (
+      {msg && !msg.rowKey && (
         <p
           className={`rounded-lg border px-3 py-2 text-sm ${
             msg.kind === "ok"
@@ -173,10 +179,11 @@ export function AliclikCatalog({
               storeId={storeId}
               canManage={canManage}
               pending={pending}
-              onMap={(fd) => run(fd, mapSku)}
-              onUnmap={(fd) => run(fd, unmapSku)}
-              onMapSwayp={(fd) => run(fd, mapSwaypCodbar)}
-              onUnmapSwayp={(fd) => run(fd, unmapSwaypCodbar)}
+              onMap={(fd) => run(fd, mapSku, r.rowKey)}
+              onUnmap={(fd) => run(fd, unmapSku, r.rowKey)}
+              onMapSwayp={(fd) => run(fd, mapSwaypCodbar, r.rowKey)}
+              onUnmapSwayp={(fd) => run(fd, unmapSwaypCodbar, r.rowKey)}
+              msg={msg?.rowKey === r.rowKey ? msg : null}
             />
           ))}
         </div>
@@ -194,6 +201,7 @@ function CatalogRowCard({
   onUnmap,
   onMapSwayp,
   onUnmapSwayp,
+  msg,
 }: {
   row: CatalogRow;
   storeId: string;
@@ -203,6 +211,8 @@ function CatalogRowCard({
   onUnmap: (fd: FormData) => void;
   onMapSwayp: (fd: FormData) => void;
   onUnmapSwayp: (fd: FormData) => void;
+  /** Resultado de la última acción sobre ESTA fila. */
+  msg: { kind: "ok" | "error"; text: string } | null;
 }) {
   const [choice, setChoice] = useState(row.suggestion?.ean ?? "");
 
@@ -312,6 +322,18 @@ function CatalogRowCard({
           </div>
         )}
       </div>
+
+      {msg && (
+        <p
+          className={`mt-2 rounded-lg border px-2.5 py-1.5 text-xs ${
+            msg.kind === "ok"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : "border-rose-200 bg-rose-50 text-rose-700"
+          }`}
+        >
+          {msg.text}
+        </p>
+      )}
 
       <SwaypCodbarRow
         row={row}

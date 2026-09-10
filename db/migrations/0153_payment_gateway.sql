@@ -1,4 +1,4 @@
--- 0152 — Por dónde entró el dinero de un pedido pagado en Shopify.
+-- 0153 — Por dónde entró el dinero de un pedido pagado en Shopify.
 --
 -- POR QUÉ. «Pagado en Shopify» se deducía como pagado por web cuando no había
 -- comprobantes cargados (lib/order-paid.ts). Dos fallos de esa deducción:
@@ -36,4 +36,4 @@ comment on column orders.payment_gateway is
   'Por dónde entró el dinero según Shopify (lib/payment-gateway.ts): checkout | manual | cod. '
   'NULL si se sincronizó antes de pedir el dato. Solo checkout se salta las constancias.';
 comment on column order_master.payment_gateway is
-  'Copiado de orders en cada recálculo (0152). NULL: manda la regla indirecta de order-paid.';
+  'Copiado de orders en cada recálculo (0153). NULL: manda la regla indirecta de order-paid.';

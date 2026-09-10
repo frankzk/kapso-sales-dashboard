@@ -60,7 +60,7 @@ async function run(req: NextRequest) {
     }
   }
 
-  // La pasarela de los pedidos pagados que siguen vivos, por tandas (0152).
+  // La pasarela de los pedidos pagados que siguen vivos, por tandas (0153).
   // Sin ella la regla estricta los da por NO pagados, también a los que sí
   // cobró el checkout. Best-effort: nunca tumba la sincronización.
   let gatewayBackfill = { candidates: 0, updated: 0 };

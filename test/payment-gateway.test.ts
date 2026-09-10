@@ -134,7 +134,7 @@ describe("el dato viaja de Shopify al Master y a quien decide", () => {
   });
 
   it("la migración existe y no rellena a la fuerza", () => {
-    const sql = read("db/migrations/0152_payment_gateway.sql");
+    const sql = read("db/migrations/0153_payment_gateway.sql");
     expect(sql).toContain("alter table orders\n  add column if not exists payment_gateway text;");
     expect(sql).toContain("alter table order_master\n  add column if not exists payment_gateway text;");
     expect(sql).not.toMatch(/^update /m);

@@ -85,7 +85,7 @@ export interface OrderRow {
   total_amount: number | null;
   currency: string | null;
   financial_status: string | null;
-  /** Por dónde entró el dinero (0152, lib/payment-gateway.ts): `checkout` es la
+  /** Por dónde entró el dinero (0153, lib/payment-gateway.ts): `checkout` es la
    *  única que nace pagada. NULL si se sincronizó antes de pedir el dato. */
   payment_gateway?: PaymentGateway | null;
   cancelled_at: string | null;
@@ -509,7 +509,7 @@ export interface OrderMasterRow {
   financial_status?: string | null;
   /** Reembolsado: deshace el prepago (lib/order-paid.ts). 0128. */
   total_refunded?: number | null;
-  /** Por dónde entró el dinero (0152). Copiado de `orders` en cada recálculo. */
+  /** Por dónde entró el dinero (0153). Copiado de `orders` en cada recálculo. */
   payment_gateway?: PaymentGateway | null;
   status_locked: boolean;
   current_courier: string | null;

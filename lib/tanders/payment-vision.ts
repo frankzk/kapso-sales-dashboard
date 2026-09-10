@@ -18,8 +18,16 @@ import { normalizeMediaType, resolveVisionCreds, type StoreVisionCreds } from "@
 const ANTHROPIC_VERSION = "2023-06-01";
 const REQUEST_TIMEOUT_MS = 20_000;
 
-/** Cómo remitió el repartidor. `otro` incluye lo que no se reconoce. */
-export type PaymentMethod = "yape" | "bcp" | "otro";
+/**
+ * Cómo remitió el repartidor. `otro` incluye lo que no se reconoce.
+ *
+ * Plin entró el 10-09-2026: la constancia de #KP131846 era un Plin al número
+ * Yape de Grupo GF SAC («Enviado a: Grupo Gf S · 930 555 309 - Yape»), o sea el
+ * mismo dinero en la misma cuenta. Plin y Yape se pagan entre sí, y el
+ * motorizado usa la billetera que tenga; rechazarlo por el logo era rechazar un
+ * cobro bueno. 7 de los 9 rechazos de ese día fueron por esto.
+ */
+export type PaymentMethod = "yape" | "plin" | "bcp" | "otro";
 
 export interface TandersPaymentReading {
   /** ¿La imagen es un comprobante de pago (de cualquiera de los dos medios)? */
@@ -44,21 +52,24 @@ const FAILED: Omit<TandersPaymentReading, "model"> = {
 
 const SYSTEM_PROMPT =
   "Eres un lector de constancias de pago peruanas. Recibes UNA imagen y " +
-  "transcribes SOLO lo que se ve. Puede ser un comprobante de Yape (billetera " +
-  "móvil) o el voucher de una transferencia bancaria (BCP u otro banco): los " +
-  "dos son válidos. Nunca inventes ni completes un dato parcial: si un campo " +
-  "está cortado, borroso o no aparece, devuélvelo como null. Un dato mal " +
-  "transcrito es peor que ninguno. Responde ÚNICAMENTE con un objeto JSON.";
+  "transcribes SOLO lo que se ve. Puede ser un comprobante de Yape o de Plin " +
+  "(billeteras móviles) o el voucher de una transferencia bancaria (BCP u otro " +
+  "banco): los tres son válidos. Nunca inventes ni completes un dato parcial: " +
+  "si un campo está cortado, borroso o no aparece, devuélvelo como null. Un " +
+  "dato mal transcrito es peor que ninguno. Responde ÚNICAMENTE con un objeto JSON.";
 
 const PROMPT =
   "Devuelve JSON con esta forma exacta:\n" +
   "{\n" +
-  '  "is_payment_proof": boolean,     // ¿es un comprobante de pago real?\n' +
-  '  "method": "yape"|"bcp"|"otro",   // medio que se ve en la imagen\n' +
-  '  "recipient_name": string|null,   // a QUIÉN se pagó, tal como aparece\n' +
-  '  "amount": number|null,           // monto en soles, solo el número\n' +
-  '  "operation_number": string|null  // nº de operación / constancia\n' +
+  '  "is_payment_proof": boolean,          // ¿es un comprobante de pago real?\n' +
+  '  "method": "yape"|"plin"|"bcp"|"otro", // medio que se ve en la imagen\n' +
+  '  "recipient_name": string|null,        // a QUIÉN se pagó, tal como aparece\n' +
+  '  "amount": number|null,                // monto en soles, solo el número\n' +
+  '  "operation_number": string|null       // nº de operación / constancia\n' +
   "}\n" +
+  "El medio se reconoce por el logo y el diseño de la app: Yape es morado, " +
+  "Plin es celeste. Un Plin puede decir que el destino es un número «Yape»: " +
+  "eso sigue siendo un comprobante de Plin, que es lo que hay que devolver.\n" +
   "El destinatario es el dato más importante: cópialo literal, aunque venga " +
   "recortado. No lo confundas con quien envía el dinero.";
 
@@ -69,6 +80,11 @@ function parseAmount(v: unknown): number | null {
 
 function parseMethod(v: unknown): PaymentMethod {
   const s = String(v ?? "").toLowerCase();
+  // Plin va PRIMERO: una constancia de Plin nombra el destino como número
+  // «Yape», así que "plin (a yape)" tiene que salir plin, no yape. Al revés no
+  // pasa —un Yape no menciona Plin—, y para el veredicto valen los dos igual;
+  // esto es para que el reporte diga la verdad de lo que se vio.
+  if (s.includes("plin")) return "plin";
   if (s.includes("yape")) return "yape";
   if (s.includes("bcp") || s.includes("transfer")) return "bcp";
   return "otro";
