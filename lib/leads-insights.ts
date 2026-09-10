@@ -471,7 +471,7 @@ export async function getLeadsInsights(
   }
   const windowStartIso = new Date(nowMs - 7 * 86_400_000).toISOString();
 
-  // Primero el RPC; si no existe (base sin la 0154), el drenado de siempre.
+  // Primero el RPC; si no existe (base sin la 0155), el drenado de siempre.
   let inputs: RollupInputs;
   const rollup = await sb.rpc("lead_insights_rollup", {
     p_store_ids: storeIds,
