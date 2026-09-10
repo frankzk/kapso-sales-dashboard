@@ -287,10 +287,78 @@ describe("buildSwaypGuideInput", () => {
   });
 });
 
+/**
+ * `idWarehouse` importa desde que hay más de una bodega. Con una sola, Swayp la
+ * deducía del ubigeo de origen; con cuatro ya no siempre — Juliaca y Puno
+ * COMPARTEN bodega (211101), así que el ubigeo no las distingue. Sin el campo
+ * elige Swayp, y si elige mal descuenta del inventario de otra ciudad.
+ */
+describe("idWarehouse", () => {
+  const conBodega = { ...SENDER, idWarehouse: 132 };
+
+  it("se manda cuando la ciudad lo tiene configurado", () => {
+    const r = buildSwaypGuideInput({ ...base, senders: { arequipa: conBodega } });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.input.idWarehouse).toBe(132);
+  });
+
+  it("se OMITE cuando no está, en vez de mandar 0", () => {
+    // Un 0 Swayp lo leería como una bodega, no como «no sé».
+    const r = buildSwaypGuideInput(base);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.input).not.toHaveProperty("idWarehouse");
+  });
+
+  it("acepta el id como número o como cadena", () => {
+    // En un JSON escrito a mano llega igual de fácil 132 que "132"; rechazar la
+    // segunda forma no protege de nada.
+    const p = parseSenders(JSON.stringify({ arequipa: { ...SENDER, idWarehouse: "132" } }));
+    expect(p.arequipa?.idWarehouse).toBe(132);
+  });
+
+  it("un id inválido descarta esa ciudad entera, no manda basura", () => {
+    for (const idWarehouse of [0, -1, 1.5, "abc", null]) {
+      const p = parseSenders(JSON.stringify({ arequipa: { ...SENDER, idWarehouse } }));
+      expect(p.arequipa, String(idWarehouse)).toBeUndefined();
+    }
+  });
+
+  it("Juliaca y Puno comparten ubigeo de bodega pero pueden llevar ids distintos", () => {
+    // Es el caso que justifica el campo: mismo 211101, dos entradas.
+    const senders = {
+      juliaca: { ...SENDER, idWarehouse: 211 },
+      puno: { ...SENDER, idWarehouse: 211 },
+    };
+    const j = buildSwaypGuideInput({ ...base, city: "juliaca", district: "Juliaca", senders });
+    const pu = buildSwaypGuideInput({ ...base, city: "puno", district: "Puno", senders });
+    expect(j.ok && pu.ok).toBe(true);
+    if (j.ok && pu.ok) {
+      expect(j.input.ciudadRemitente).toBe(pu.input.ciudadRemitente); // misma bodega
+      expect(j.input.ciudadDestinatario).not.toBe(pu.input.ciudadDestinatario); // distinto destino
+    }
+  });
+});
+
 describe("parseSenders", () => {
   it("parses a valid map", () => {
     const p = parseSenders(JSON.stringify({ arequipa: SENDER }));
     expect(p.arequipa?.nombre).toBe("Kenku");
+  });
+
+  /**
+   * Una ciudad rota se cae SOLA. Antes `z.record` validaba el objeto entero: un
+   * dedazo configurando Trujillo dejaba a Arequipa sin API y nadie relacionaba
+   * una cosa con la otra. Con cuatro bodegas eso era cuestión de tiempo.
+   */
+  it("una ciudad inválida no se lleva por delante a las demás", () => {
+    const p = parseSenders(
+      JSON.stringify({
+        arequipa: SENDER,
+        trujillo: { nombre: "Kenku" }, // incompleta
+        piura: SENDER,
+      }),
+    );
+    expect(Object.keys(p).sort()).toEqual(["arequipa", "piura"]);
   });
 
   it("returns {} for blank, malformed JSON or an invalid shape", () => {
@@ -299,7 +367,10 @@ describe("parseSenders", () => {
     expect(parseSenders(undefined)).toEqual({});
     expect(parseSenders("")).toEqual({});
     expect(parseSenders("{not json")).toEqual({});
+    // Con una sola ciudad y esa inválida, el resultado sigue siendo {} — pero
+    // ahora porque se descartó ELLA, no porque tirase el objeto entero.
     expect(parseSenders(JSON.stringify({ arequipa: { nombre: "X" } }))).toEqual({});
     expect(parseSenders(JSON.stringify({ arequipa: { ...SENDER, direccion: "abc" } }))).toEqual({});
+    expect(parseSenders(JSON.stringify([SENDER]))).toEqual({});
   });
 });

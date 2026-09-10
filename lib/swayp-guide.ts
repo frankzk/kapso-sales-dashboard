@@ -42,25 +42,54 @@ const senderSchema = z.object({
   /** Teléfono con el que el mensajero coordina la recogida; por defecto el mismo. */
   telefonoRecogida: z.string().min(1).optional(),
   email: z.string().min(3),
+  /**
+   * Id de la bodega en Swayp (`idWarehouse`). Va acá y no en otra variable
+   * porque el remitente YA describe la bodega de origen: son el mismo hecho, y
+   * separarlos sería dejar dos sitios que pueden discrepar.
+   *
+   * Importa desde que hay más de una bodega. Con una sola, Swayp podía deducirla
+   * del ubigeo de origen; con cuatro ya no siempre: **Juliaca y Puno comparten
+   * bodega** (`211101`), así que el ubigeo solo no la distingue. Sin este campo
+   * es Swayp quien elige, y si elige mal descuenta del inventario de otra ciudad
+   * — un fallo silencioso, como el de `idBusiness`.
+   *
+   * `coerce` porque en un JSON escrito a mano un id llega tan fácil como 132 o
+   * como "132", y rechazar la segunda forma no protege de nada.
+   */
+  idWarehouse: z.coerce.number().int().positive().optional(),
 });
 
 export type SwaypSender = z.infer<typeof senderSchema>;
-
-const sendersSchema = z.record(z.string(), senderSchema);
 
 /**
  * Parsea SWAYP_SENDERS. Devuelve {} ante JSON inválido en vez de lanzar: un
  * error de configuración no debe tumbar la página de envíos, sólo desactivar
  * la creación por API (que cae al alta manual).
+ *
+ * SE VALIDA CIUDAD POR CIUDAD, no el objeto entero. Con `z.record` una sola
+ * entrada mal escrita tiraba TODAS: un dedazo configurando Trujillo dejaba a
+ * Arequipa sin API sin que nadie relacionara una cosa con la otra. Con una
+ * bodega el riesgo era teórico; con cuatro —Arequipa, Trujillo, Juliaca-Puno y
+ * Piura— es cuestión de tiempo. Ahora la ciudad rota se cae sola y las demás
+ * siguen despachando, que es la conducta que el propio comentario de arriba
+ * prometía.
  */
 export function parseSenders(raw: string | undefined): Record<string, SwaypSender> {
   if (!raw?.trim()) return {};
+  let parsed: unknown;
   try {
-    const parsed = sendersSchema.safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data : {};
+    parsed = JSON.parse(raw);
   } catch {
     return {};
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+
+  const out: Record<string, SwaypSender> = {};
+  for (const [city, value] of Object.entries(parsed as Record<string, unknown>)) {
+    const sender = senderSchema.safeParse(value);
+    if (sender.success) out[city] = sender.data;
+  }
+  return out;
 }
 
 export interface BuildGuideInput {
@@ -236,6 +265,7 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
 
       contenido,
       ...(productos ? { productos } : {}),
+      ...(sender.idWarehouse ? { idWarehouse: sender.idWarehouse } : {}),
       ...(Number.isFinite(b.idBusiness) && Number(b.idBusiness) > 0
         ? { idBusiness: Number(b.idBusiness) }
         : {}),

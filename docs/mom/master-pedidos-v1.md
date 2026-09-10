@@ -2030,6 +2030,14 @@ manda el ítem con el código vacío ni se aproxima por nombre: eso dejaría una
 guías descontando stock y otras no, sin que se note — la misma razón por la que
 un ubigeo aproximado se rechaza (§11.3).
 
+**La bodega de origen se nombra, no se deduce.** Swayp opera cuatro bodegas
+—Arequipa, Trujillo, Juliaca-Puno y Piura— y el campo `idWarehouse` dice de cuál
+sale el paquete. Sin él lo decide Swayp: si acierta no nos enteramos, y si se
+equivoca descuenta del inventario de otra ciudad. **Juliaca y Puno comparten
+bodega**, así que el ubigeo de origen no basta para distinguirlas. El id va
+junto al remitente de esa ciudad en `SWAYP_SENDERS`, porque el remitente ya ES
+la bodega y separarlos dejaría dos sitios que pueden discrepar.
+
 **El `idBusiness` deja de ser opcional en la práctica.** Swayp valida los
 productos contra un id único de tienda, así que sin ese campo es Swayp quien
 decide a qué comercio atribuye la guía; si se equivoca, descuenta del stock de
