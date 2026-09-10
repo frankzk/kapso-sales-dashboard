@@ -1025,6 +1025,17 @@ sin tope de antigüedad. Reglas:
     Yape»—. **7 de los 9 rechazos de ese día eran cobros buenos rechazados por
     el logo.** Aceptar el medio no es aceptar el pago: el destinatario y el
     monto se siguen exigiendo igual.
+  - **La cola de cobros se recorre entera: la que hace más tiempo que no se
+    mira va primero.** El 10-09-2026 había **238 guías candidatas y el tope es
+    de 60 por pasada**, y la consulta cortaba sin orden ninguno: entraban
+    siempre las mismas y el resto no se miraba nunca. El #AUR176448 llevaba un
+    día entregado, con su Yape de S/ 129 verificado, y no estaba en el lote —ni
+    iba a estarlo—. **No era atraso, era hambre.** Ahora cada guía mirada deja
+    sello (`payment_checked_at`, 0152) **haya dado veredicto o no**: las en ruta
+    no escriben comprobación, así que sin sello se clavarían al frente de la
+    cola para siempre. La que se topa con el 429 no se sella —no se la llegó a
+    preguntar— y va primero en la siguiente. Con 60 cada dos horas, las 238 se
+    recorren en unas ocho horas.
   - **El barrido de cobros pide la constancia directamente**, sin preguntar
     antes el estado. Una constancia bajo `files_payment/` existe solo cuando el
     motorizado cobró, así que es por sí misma la prueba de entrega; y es una
