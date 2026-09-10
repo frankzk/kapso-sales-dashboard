@@ -986,6 +986,15 @@ sin tope de antigüedad. Reglas:
     seguir solo quema llamadas y alarga el castigo. Lo que queda va en la
     siguiente pasada; el tope por pasada bajó de 200 a 60 y las nunca leídas
     van primero, así que el atraso entra igual, en unas horas.
+  - **`400 Order is not yet delivered` es la respuesta normal**, no un fallo.
+    El endpoint de evidencias la devuelve mientras el paquete sigue en ruta, lo
+    que confirma que **ese endpoint es por sí mismo la prueba de entrega**. La
+    guía se cuenta como en curso. Contarla como error —15 de 15 «errores» el
+    10-09-2026— infla el reporte y esconde los fallos de verdad.
+  - Por lo mismo, una guía que responde **200 sin constancia reconocible SÍ está
+    entregada**: el problema entonces no es del courier sino de nuestro
+    extractor, y la lectura en seco guarda la respuesta cruda de hasta tres de
+    ellas para poder verlo.
   - **El barrido de cobros pide la constancia directamente**, sin preguntar
     antes el estado. Una constancia bajo `files_payment/` existe solo cuando el
     motorizado cobró, así que es por sí misma la prueba de entrega; y es una

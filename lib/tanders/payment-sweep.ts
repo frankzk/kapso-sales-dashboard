@@ -22,6 +22,7 @@ import { extractPaymentEvidence, TandersClient } from "@/lib/tanders/client";
 import { checkTandersPayment, REASON_LABEL } from "@/lib/tanders/payment-check";
 import { readTandersPayment } from "@/lib/tanders/payment-vision";
 import {
+  isNotYetDelivered,
   isThrottled,
   pace,
   recordSweepFailure,
@@ -34,6 +35,8 @@ const DAY_MS = 86_400_000;
 export const LOOKBACK_DAYS = 8;
 /** Tope por pasada: cada guía cuesta una llamada al modelo. */
 export const MAX_PER_RUN = 60;
+/** Respuestas crudas que se conservan en seco. Tres bastan para ver la forma. */
+const MAX_MUESTRAS = 3;
 
 interface Candidate {
   id: string;
@@ -87,6 +90,13 @@ export interface SweepReport {
   fallos: SweepFailure[];
   /** true = Tanders devolvió 429 y el barrido paró ahí; lo demás va en la próxima pasada. */
   detenido: boolean;
+  /**
+   * SOLO en seco: la respuesta cruda de las guías entregadas en las que no se
+   * reconoció ninguna constancia. Es lo único que permite saber si el extractor
+   * busca donde no es — sin esto, «sin constancia aún» es indistinguible de
+   * «no supe leerla».
+   */
+  muestras: { guia: string; respuesta: string }[];
   rejected: string[];
   detalle: SweepDetail[];
 }
@@ -128,6 +138,7 @@ export async function sweepTandersPayments(
     errores: 0,
     fallos: [],
     detenido: false,
+    muestras: [],
     rejected: [],
     detalle: [],
   };
@@ -193,7 +204,16 @@ export async function sweepTandersPayments(
       const raw = await client.evidences(row.tanders_order_id);
       const payments = extractPaymentEvidence(raw);
       if (!payments.length) {
+        // La API contestó 200, así que la guía SÍ está entregada (si no,
+        // habría dado 400). Que no encontremos constancia es sospechoso: se
+        // guarda una muestra para poder mirar dónde está de verdad.
         report.enCurso += 1;
+        if (dry && report.muestras.length < MAX_MUESTRAS) {
+          report.muestras.push({
+            guia: row.guide_code,
+            respuesta: JSON.stringify(raw).slice(0, 2000),
+          });
+        }
         continue;
       }
 
@@ -279,6 +299,12 @@ export async function sweepTandersPayments(
       await admin.from("shipments").update(patch).eq("id", row.id);
       if (row.order_id) await recomputeOrderMasterSafe(admin, [row.order_id]);
     } catch (err) {
+      // «Todavía no entregada» es la respuesta normal de una guía en ruta, no
+      // un fallo: se cuenta como en curso y no ensucia el reporte.
+      if (isNotYetDelivered(err)) {
+        report.enCurso += 1;
+        continue;
+      }
       // Una guía que falla no puede tumbar el barrido de las demás — pero el
       // motivo se guarda. Ver sweep-failures.ts.
       report.errores += 1;
