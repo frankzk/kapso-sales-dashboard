@@ -1018,6 +1018,32 @@ sin tope de antigüedad. Reglas:
     la imagen contra el monto de la guía y el nombre de Grupo GF SAC: que el
     courier se dé por pagado a sí mismo no es constancia de que el dinero
     llegó a nuestra cuenta.
+  - **Vocabulario de estados de Tanders, confirmado por la operación el
+    10-09-2026** (hasta entonces 105 guías vivían en estados que el Master no
+    traducía, entre ellas paquetes ya de vuelta que nadie sabía que habían
+    vuelto):
+
+    | Tanders | Guía | Custodia | ¿Sella devolución? |
+    |---|---|---|---|
+    | `PENDING` | pendiente | empresa | no |
+    | `PICKED` | en ruta | courier | no |
+    | `DELIVERED` | en ruta | courier | no (el cobro decide, §9.4) |
+    | `RETURNING` | en ruta | retorno | **no** — va de camino, no ha llegado |
+    | `RETURNED` | anulado | devuelto | **sí** (`returned_at`) |
+    | `CANCELLED` | anulado | — | no |
+
+    - **`RETURNED` cierra la GUÍA, no el pedido.** El paquete está físicamente
+      en el almacén y **puede volver a salir con otro courier** mientras no se
+      anule en Shopify. El Master lo lee por `returned_at`/custodia y lo manda
+      a recuperación, que es de donde se vuelve a despachar.
+    - **`RETURNING` no sella nada.** Sellar la devolución antes de recibir el
+      paquete metería el pedido en la cola de recuperación —de la que sale un
+      mensaje pidiéndole un adelanto a la clienta— por algo que nadie tiene aún.
+    - **`CANCELLED` no toca la custodia**: que la guía muera no dice dónde está
+      el paquete, y afirmarlo mandaría a buscar al almacén algo que sigue en la
+      calle.
+    - El sello lleva procedencia `tanders_api` (0118): quien decide pedir un
+      adelanto ve si la devolución la reportó el courier o una persona.
   - **EL MISMO COMPROBANTE NO COBRA DOS PEDIDOS.** Si el nº de operación ya
     quedó registrado en otra guía, la comprobación sale **`rechazado`** por
     `operacion_duplicada` aunque todo lo demás cuadre —buen medio, buena

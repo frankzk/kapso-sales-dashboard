@@ -18,6 +18,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decrypt } from "@/lib/crypto";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { sealReturn } from "@/lib/returned-source";
 import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
 import { TandersClient } from "@/lib/tanders/client";
 import { mapTandersStatus, reconcileTandersCustodyState } from "@/lib/tanders/status";
@@ -46,6 +47,8 @@ interface Candidate {
   custody_state: string | null;
   dispatched_at: string | null;
   custody_transferred_at: string | null;
+  returned_at: string | null;
+  returned_source: string | null;
 }
 
 export interface TandersStatusReport {
@@ -82,7 +85,7 @@ export async function sweepTandersStatus(
     .from("shipments")
     .select(
       "id,store_id,guide_code,tanders_order_id,order_id,order_name,delivery_status," +
-        "custody_state,dispatched_at,custody_transferred_at",
+        "custody_state,dispatched_at,custody_transferred_at,returned_at,returned_source",
     )
     .eq("courier", "tanders")
     .in("delivery_status", ["pendiente", "en_ruta"])
@@ -181,6 +184,22 @@ export async function sweepTandersStatus(
         if (nextCustody === "courier" && !row.custody_transferred_at) {
           patch.custody_transferred_at = nowIso;
         }
+        changed = true;
+      }
+
+      // El paquete de vuelta en el almacén se sella UNA vez y con su
+      // procedencia (0118): `returned_at` es lo que abre la cola de
+      // recuperación, y de ahí sale un mensaje pidiéndole un adelanto a la
+      // clienta — quien lo manda tiene derecho a saber si la devolución la
+      // reportó el courier o la escribió una persona. `sealReturn` no pisa un
+      // sello anterior: una devolución recibida a mano no se convierte
+      // retroactivamente en un reporte de la API.
+      if (mapped.returned && !row.returned_at) {
+        // «tanders_api» es la convención de returned-source.ts: la pantalla lo
+        // pinta como «API de Tanders».
+        const sello = sealReturn(row, { returned: true, at: nowIso, source: "tanders_api" });
+        patch.returned_at = sello.returned_at;
+        patch.returned_source = sello.returned_source;
         changed = true;
       }
 
