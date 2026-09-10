@@ -56,6 +56,15 @@ import {
   listNames,
   type OutputForDecision,
 } from "@/lib/labels/resolve-output";
+import {
+  AGENCY_ATTESTED_CREATED_VIA,
+  AGENCY_ATTESTED_MATCH,
+  attestedShipmentNote,
+  attestedShipmentState,
+  isAgencyCourierChoice,
+  needsAttestedAgencyShipment,
+  type AgencyCourier,
+} from "@/lib/agency-attested-shipment";
 import type { RouteKey } from "@/lib/order-route-plan";
 import type { OrderMasterRow } from "@/lib/types";
 import { ADELANTO_MINIMO, ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
@@ -64,6 +73,10 @@ import { discardRecovery, validarMotivoDescarte } from "@/lib/recovery-discard";
 export interface MasterActionState {
   error?: string;
   notice?: string;
+  /** El marcado se rechazó porque el pedido de agencia no tiene ninguna salida y
+   *  hace falta decir por qué agencia se envió. La pantalla lo usa para abrir el
+   *  desplegable en vez de mostrar el error a secas. */
+  needsAgencyCourier?: boolean;
 }
 
 const MASTER_PATH = "/dashboard/pedidos";
@@ -928,7 +941,14 @@ export async function applyOrderStatusBulk(
  */
 export async function setOrderStatus(
   orderId: string,
-  input: { general: string; operational?: string | null; reason?: string },
+  input: {
+    general: string;
+    operational?: string | null;
+    reason?: string;
+    /** Por qué agencia salió, cuando el pedido es de Agencia y no consta ninguna
+     *  salida. Solo se mira en ese caso; en el resto se ignora. */
+    agencyCourier?: string | null;
+  },
 ): Promise<MasterActionState> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) {
@@ -961,6 +981,41 @@ export async function setOrderStatus(
       : defaultOperationalFor(target);
 
   const admin = createAdminSupabase();
+
+  // UN PEDIDO DE AGENCIA NO PUEDE HABER LLEGADO SIN HABER SALIDO. Si el estado
+  // que se marca dice que la caja ya está en la sucursal (o más allá) y no consta
+  // ninguna salida, se pide el courier y se registra la salida aquí mismo.
+  //
+  // Medido el 09-09-2026: de los pedidos de agencia ya recogidos o entregados,
+  // los que traen su estado del rastreo de Shalom tienen salida el 100% de las
+  // veces (107 de 107) y los marcados a mano fallan el 18,5% (42 de 227). Son 43
+  // pedidos y S/6.140 desde agosto invisibles para todo indicador de envío, y
+  // ocho siguen hoy en la agencia sin aviso de vencimiento.
+  //
+  // Se pregunta AQUÍ y no en un formulario aparte porque el camino aparte ya
+  // existía —`createManualRouteOutput` admite Olva— y no se usó ni una vez en 40
+  // días contra 866 salidas de Shalom.
+  const { count: shipmentCount, error: countError } = await admin
+    .from("shipments")
+    .select("id", { count: "exact", head: true })
+    .eq("order_id", orderId);
+  // Sin saber cuántas salidas hay no se puede decidir: seguir daría por bueno un
+  // pedido sin salida por un fallo de lectura, que es justo lo que se corrige.
+  if (countError) {
+    return { error: `No se pudieron leer las salidas del pedido (${countError.message}). Vuelve a intentarlo.` };
+  }
+  const needsCourier = needsAttestedAgencyShipment({
+    coverage: ctx.row.coverage,
+    operational,
+    shipmentCount: shipmentCount ?? 0,
+  });
+  if (needsCourier && !isAgencyCourierChoice(input.agencyCourier)) {
+    return {
+      error: "Este pedido de agencia no tiene ninguna salida registrada. Elige por qué agencia se envió.",
+      needsAgencyCourier: true,
+    };
+  }
+
   const eventError = await recordEvent(admin, ctx, {
     kind: "status_override",
     previousStatus: ctx.row.general_status,
@@ -971,9 +1026,74 @@ export async function setOrderStatus(
   });
   if (eventError) return { error: eventError };
 
+  // La salida se crea DESPUÉS del evento de estado y antes del recálculo: si
+  // fallara, el marcado ya quedó escrito y el pedido sigue como estaba respecto
+  // de la salida — el mismo agujero de siempre, no uno nuevo.
+  let attested = "";
+  if (needsCourier && isAgencyCourierChoice(input.agencyCourier)) {
+    const problem = await attestAgencyShipment(admin, ctx, input.agencyCourier, operational);
+    if (problem) return { error: problem };
+    attested = ` Salida de ${input.agencyCourier === "olva" ? "Olva" : "Shalom"} registrada.`;
+  }
+
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
-  return { notice: `Estado actualizado a ${target.replace("_", " ")}.` };
+  return { notice: `Estado actualizado a ${target.replace("_", " ")}.${attested}` };
+}
+
+/**
+ * Registra la salida de agencia que nadie había registrado, con la firma de quien
+ * marca el estado. Devuelve el mensaje de error, o cadena vacía si fue bien.
+ *
+ * La salida NACE EN EL ESTADO DEL PEDIDO, no en «pendiente»: el recálculo lee las
+ * salidas para decidir el estado, así que una salida pendiente tiraría el pedido
+ * hacia atrás y desharía el marcado que la creó.
+ *
+ * `custody_state` es de la agencia y no de la empresa: la caja ya no está en el
+ * almacén, y decir lo contrario la metería en las colas de despacho.
+ */
+async function attestAgencyShipment(
+  admin: ReturnType<typeof createAdminSupabase>,
+  ctx: OrderContext,
+  courier: AgencyCourier,
+  operational: string,
+): Promise<string> {
+  const state = attestedShipmentState(operational);
+  const shipmentId = randomUUID();
+  const { error } = await admin.from("shipments").insert({
+    id: shipmentId,
+    store_id: ctx.storeId,
+    order_id: ctx.row.order_id,
+    courier,
+    // Sin código: la guía la tiene el mostrador de la agencia y aquí nadie la
+    // teclea. Un código inventado sería peor — se cotejaría contra el reporte del
+    // courier y no casaría nunca.
+    guide_code: null,
+    order_name: ctx.row.order_name,
+    customer_name: ctx.row.customer_name,
+    customer_phone: ctx.row.customer_phone,
+    district: ctx.row.district,
+    province: ctx.row.province,
+    region: ctx.row.region,
+    delivery_address: ctx.row.address,
+    delivery_reference: ctx.row.reference,
+    matched: true,
+    match_method: AGENCY_ATTESTED_MATCH,
+    created_via: AGENCY_ATTESTED_CREATED_VIA,
+    custody_state: "agencia",
+    dispatched_at: new Date().toISOString(),
+    ...state,
+  });
+  if (error) return `No se pudo registrar la salida de agencia: ${error.message}`;
+
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "route_output_created",
+    source: courier,
+    courier,
+    shipmentId,
+    note: attestedShipmentNote(courier, operational),
+  });
+  return eventError ?? "";
 }
 
 /**

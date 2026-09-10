@@ -68,6 +68,10 @@ import {
 import { limaTodayKey } from "@/lib/shipments";
 import { COURIER_TBD } from "@/lib/shipment-output";
 import {
+  AGENCY_COURIER_OPTIONS,
+  needsAttestedAgencyShipment,
+} from "@/lib/agency-attested-shipment";
+import {
   agencyHasActivity,
   emptyFilters,
   hasActiveFilters,
@@ -3500,8 +3504,9 @@ function OrderDrawer({
                   row={detail.row}
                   canOverride={canOverride}
                   pending={pending}
-                  onStatus={(general, operational, reason) =>
-                    run(() => setOrderStatus(orderId, { general, operational, reason }))
+                  outputCount={detail.routePlan.outputCount}
+                  onStatus={(general, operational, reason, agencyCourier) =>
+                    run(() => setOrderStatus(orderId, { general, operational, reason, agencyCourier }))
                   }
                   onComment={(text, type) => run(() => addOrderComment(orderId, { text, type }))}
                   onReturn={(reason, guideCode) => run(() => registerReturn(orderId, { reason, guideCode }))}
@@ -4353,6 +4358,7 @@ function OrderActions({
   row,
   canOverride,
   pending,
+  outputCount,
   onStatus,
   onComment,
   onReturn,
@@ -4361,7 +4367,10 @@ function OrderActions({
   row: OrderMasterRow;
   canOverride: boolean;
   pending: boolean;
-  onStatus: (general: string, operational: string, reason: string) => void;
+  /** Cuántas salidas tiene el pedido, activas o no. Un pedido de agencia que
+   *  llega a la sucursal con CERO salidas es el que hay que preguntar. */
+  outputCount: number;
+  onStatus: (general: string, operational: string, reason: string, agencyCourier?: string) => void;
   onComment: (text: string, type: string) => void;
   onReturn: (reason: string, guideCode: string) => void;
   onRelink: (guideCode: string) => void;
@@ -4376,10 +4385,20 @@ function OrderActions({
   const [returnReason, setReturnReason] = useState("");
   const [returnGuide, setReturnGuide] = useState(row.guide_code ?? "");
   const [relinkCode, setRelinkCode] = useState("");
+  const [agencyCourier, setAgencyCourier] = useState("");
 
   const options = operationalStatusesFor(general);
   const closed = ["entregado", "anulado", "devuelto"].includes(row.general_status);
   const changingClosed = closed && general !== row.general_status;
+  // MISMA función pura que decide en el servidor. Aquí solo adelanta la pregunta
+  // para no gastar un viaje de ida y vuelta; quien manda sigue siendo el servidor,
+  // que rechaza el guardado si falta. Duplicar la regla en el cliente sería
+  // invitarla a divergir justo donde nadie la volvería a mirar.
+  const needsAgencyCourier = needsAttestedAgencyShipment({
+    coverage: row.coverage,
+    operational,
+    shipmentCount: outputCount,
+  });
 
   useEffect(() => {
     // Al cambiar el estado general, el operativo elegido puede dejar de aplicar.
@@ -4436,6 +4455,36 @@ function OrderActions({
             {!canOverride && "; tu rol no lo permite"}.
           </p>
         )}
+        {/* UN PEDIDO DE AGENCIA NO PUEDE HABER LLEGADO SIN HABER SALIDO.
+            Medido el 09-09-2026: los pedidos de agencia cuyo estado viene del
+            rastreo de Shalom tienen salida el 100% de las veces (107 de 107); los
+            marcados a mano fallan el 18,5% (42 de 227). Son 43 pedidos y S/6.140
+            desde agosto invisibles para todo indicador de envío, y ocho seguían
+            en la agencia sin aviso de vencimiento, el más viejo de 62 días.
+            Se pregunta AQUÍ y no en un formulario aparte porque el formulario
+            aparte ya existe —la salida manual admite Olva— y no se usó ni una vez
+            en 40 días contra 866 salidas de Shalom. */}
+        {needsAgencyCourier && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-2.5">
+            <p className="text-xs leading-5 text-amber-900">
+              Este pedido no tiene ninguna salida registrada. ¿Por qué agencia se envió? Queda
+              como salida con tu firma, y sin ella el pedido no aparece en los indicadores de
+              envío ni en el aviso de vencimiento en agencia.
+            </p>
+            <select
+              value={agencyCourier}
+              onChange={(e) => setAgencyCourier(e.target.value)}
+              className="mt-2 rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-sm"
+            >
+              <option value="">Elige la agencia…</option>
+              {AGENCY_COURIER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <input
           value={reason}
           onChange={(e) => setReason(e.target.value)}
@@ -4443,8 +4492,12 @@ function OrderActions({
           className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
         />
         <button
-          disabled={pending || (changingClosed && (!canOverride || !reason.trim()))}
-          onClick={() => onStatus(general, operational, reason)}
+          disabled={
+            pending ||
+            (changingClosed && (!canOverride || !reason.trim())) ||
+            (needsAgencyCourier && !agencyCourier)
+          }
+          onClick={() => onStatus(general, operational, reason, agencyCourier || undefined)}
           className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
         >
           Guardar estado
