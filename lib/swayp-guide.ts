@@ -22,7 +22,12 @@
 import { z } from "zod";
 import { resolveUbigeo, warehouseUbigeo } from "@/lib/ubigeo";
 import type { SwaypCreateGuideInput } from "@/lib/swayp";
-import { buildProductos, type SwaypProducto } from "@/lib/swayp-productos";
+import {
+  buildProductos,
+  contenidoDeProductos,
+  juntaObservaciones,
+  resumenLegible,
+} from "@/lib/swayp-productos";
 
 /** Dimensiones por defecto. La base no guarda peso ni medidas por producto, y
  *  Swayp los exige; verificado que acepta estos valores. Ajustables por env sin
@@ -42,25 +47,54 @@ const senderSchema = z.object({
   /** Teléfono con el que el mensajero coordina la recogida; por defecto el mismo. */
   telefonoRecogida: z.string().min(1).optional(),
   email: z.string().min(3),
+  /**
+   * Id de la bodega en Swayp (`idWarehouse`). Va acá y no en otra variable
+   * porque el remitente YA describe la bodega de origen: son el mismo hecho, y
+   * separarlos sería dejar dos sitios que pueden discrepar.
+   *
+   * Importa desde que hay más de una bodega. Con una sola, Swayp podía deducirla
+   * del ubigeo de origen; con cuatro ya no siempre: **Juliaca y Puno comparten
+   * bodega** (`211101`), así que el ubigeo solo no la distingue. Sin este campo
+   * es Swayp quien elige, y si elige mal descuenta del inventario de otra ciudad
+   * — un fallo silencioso, como el de `idBusiness`.
+   *
+   * `coerce` porque en un JSON escrito a mano un id llega tan fácil como 132 o
+   * como "132", y rechazar la segunda forma no protege de nada.
+   */
+  idWarehouse: z.coerce.number().int().positive().optional(),
 });
 
 export type SwaypSender = z.infer<typeof senderSchema>;
-
-const sendersSchema = z.record(z.string(), senderSchema);
 
 /**
  * Parsea SWAYP_SENDERS. Devuelve {} ante JSON inválido en vez de lanzar: un
  * error de configuración no debe tumbar la página de envíos, sólo desactivar
  * la creación por API (que cae al alta manual).
+ *
+ * SE VALIDA CIUDAD POR CIUDAD, no el objeto entero. Con `z.record` una sola
+ * entrada mal escrita tiraba TODAS: un dedazo configurando Trujillo dejaba a
+ * Arequipa sin API sin que nadie relacionara una cosa con la otra. Con una
+ * bodega el riesgo era teórico; con cuatro —Arequipa, Trujillo, Juliaca-Puno y
+ * Piura— es cuestión de tiempo. Ahora la ciudad rota se cae sola y las demás
+ * siguen despachando, que es la conducta que el propio comentario de arriba
+ * prometía.
  */
 export function parseSenders(raw: string | undefined): Record<string, SwaypSender> {
   if (!raw?.trim()) return {};
+  let parsed: unknown;
   try {
-    const parsed = sendersSchema.safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data : {};
+    parsed = JSON.parse(raw);
   } catch {
     return {};
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+
+  const out: Record<string, SwaypSender> = {};
+  for (const [city, value] of Object.entries(parsed as Record<string, unknown>)) {
+    const sender = senderSchema.safeParse(value);
+    if (sender.success) out[city] = sender.data;
+  }
+  return out;
 }
 
 export interface BuildGuideInput {
@@ -189,22 +223,42 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
   const telefono = (b.customerPhone ?? "").trim();
   if (!telefono) return { ok: false, error: "El envío no tiene teléfono del destinatario." };
 
-  const contenido = buildContenido(b.lineItems);
-  if (!contenido) return { ok: false, error: "El pedido no tiene productos para declarar." };
-
-  // Los productos por CÓDIGO. `contenido` se sigue mandando —es la etiqueta que
-  // se lee— pero lo que descuenta stock es esto.
-  let productos: SwaypProducto[] | undefined;
+  // Los productos por CÓDIGO, dentro de `contenido`.
+  //
+  // POR QUÉ NO EN `productos[]`. Su desarrollador respondió que listar el
+  // inventario «no está disponible para consumir por API, hay que ponerlo en
+  // cola de desarrollo». Esa respuesta era sobre el endpoint de LECTURA, pero
+  // ante la duda no se manda un campo que quizá no procesan: un 400 dejaría al
+  // envío sin guía. Cuando confirmen que `productos[]` funciona, volver a
+  // mandarlo es añadir una línea — el mapeo y la reja ya están.
+  //
+  // El formato es el que pidieron por escrito: «CANTIDAD X SKU … con el match
+  // exacto del sku». Nada más, porque no conocemos la gramática de su buscador.
+  let contenido: string;
+  let resumen: string | null = null;
   if (b.skuMap && b.skuMap.size > 0) {
     const armados = buildProductos(b.lineItems, b.skuMap);
     if (!armados.ok) {
       return {
         ok: false,
-        error: `Falta vincular a Swayp: ${armados.faltan.join(", ")}. Mápealos en Catálogo.`,
+        // Singular cuando falta uno: es el caso normal —se vinculan de a poco— y
+        // «Mápealos» sobre un solo producto se lee como si faltaran varios.
+        error:
+          `Falta vincular a Swayp: ${armados.faltan.join(", ")}. ` +
+          `${armados.faltan.length === 1 ? "Mápealo" : "Mápealos"} en Catálogo de productos.`,
       };
     }
-    productos = armados.productos;
+    contenido = contenidoDeProductos(armados.productos);
+    resumen = resumenLegible(armados.productos);
+  } else {
+    // Sin mapeo se sigue mandando el título, como hasta hoy. Es la vía que su
+    // propio desarrollador llama inestable —«se busca por nombre y no por
+    // código»—, y por eso es el respaldo y no el camino.
+    contenido = buildContenido(b.lineItems);
   }
+  if (!contenido) return { ok: false, error: "El pedido no tiene productos para declarar." };
+
+  const observaciones = juntaObservaciones(resumen, b.observaciones);
 
   const cod = Number.isFinite(b.codAmount) ? Math.max(0, b.codAmount) : 0;
   const valor = String(cod || 1); // valorDeclarado no puede ser 0
@@ -235,11 +289,11 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
       ciudadDestinatario: destino.code,
 
       contenido,
-      ...(productos ? { productos } : {}),
+      ...(sender.idWarehouse ? { idWarehouse: sender.idWarehouse } : {}),
       ...(Number.isFinite(b.idBusiness) && Number(b.idBusiness) > 0
         ? { idBusiness: Number(b.idBusiness) }
         : {}),
-      ...(b.observaciones?.trim() ? { observaciones: b.observaciones.trim() } : {}),
+      ...(observaciones ? { observaciones } : {}),
       ...(b.dispatchDateIso ? { fechaEntrega: b.dispatchDateIso } : {}),
 
       ...DEFAULT_PACKAGE,

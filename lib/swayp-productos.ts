@@ -98,3 +98,50 @@ export function buildProductos(
   if (!porCodbar.size) return { ok: false, faltan: ["(el pedido no tiene productos)"] };
   return { ok: true, productos: [...porCodbar.values()] };
 }
+
+/**
+ * `contenido`: lo que Swayp PARSEA. Solo cantidad y código.
+ *
+ * Es el formato que pidieron —«CANTIDAD X SKU … con el match exacto del sku»—
+ * y no lleva nada más a propósito. No conocemos la gramática de su buscador, y
+ * si le sobra texto hay dos desenlaces: lo tolera, o no encuentra el producto y
+ * no descuenta stock. No hay un tercero donde falle ruidosamente. Un paréntesis
+ * de más es exactamente lo que un parser hecho a mano no contempla.
+ *
+ * El nombre legible va en `observaciones`, que nadie parsea.
+ */
+export function contenidoDeProductos(productos: SwaypProducto[]): string {
+  return productos.map((p) => `${p.cantidad} x ${p.codbar}`).join(", ");
+}
+
+/**
+ * `observaciones`: la MISMA información, para que la lea una persona.
+ *
+ * Usa el nombre de Swayp cuando el mapeo lo guardó —«CANDIDA CLEANSE», corto y
+ * el que su almacén reconoce— y cae a nuestro título solo si no hay otro. Es
+ * también la razón de que el campo «Nombre en Swayp» de la pantalla de Catálogo
+ * valga la pena rellenar: sin él acá acaba un título de Shopify de 200
+ * caracteres.
+ */
+export function resumenLegible(productos: SwaypProducto[]): string {
+  return productos.map((p) => `${p.cantidad} x ${p.nombre}`).join(", ");
+}
+
+/**
+ * Junta el resumen de productos con la nota del operador, recortando si hace
+ * falta.
+ *
+ * EL RECORTE. No sabemos el límite de `observaciones` en Swayp, y nuestros
+ * títulos de Shopify llegan a 200 caracteres cada uno: tres productos sin
+ * nombre corto pasarían de 600. Si el campo tuviera tope, la API rechazaría la
+ * guía entera y el envío caería al Excel — perder una guía por un texto de
+ * cortesía sería un mal negocio. Se recorta lo prescindible y se conserva lo
+ * que decide algo, que es el `contenido`.
+ */
+export const OBSERVACIONES_MAX = 500;
+
+export function juntaObservaciones(...partes: (string | null | undefined)[]): string | null {
+  const texto = partes.map((p) => (p ?? "").trim()).filter(Boolean).join(" · ");
+  if (!texto) return null;
+  return texto.length <= OBSERVACIONES_MAX ? texto : `${texto.slice(0, OBSERVACIONES_MAX - 1)}…`;
+}
