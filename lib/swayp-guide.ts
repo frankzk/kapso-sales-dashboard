@@ -22,7 +22,12 @@
 import { z } from "zod";
 import { resolveUbigeo, warehouseUbigeo } from "@/lib/ubigeo";
 import type { SwaypCreateGuideInput } from "@/lib/swayp";
-import { buildProductos, type SwaypProducto } from "@/lib/swayp-productos";
+import {
+  buildProductos,
+  contenidoDeProductos,
+  juntaObservaciones,
+  resumenLegible,
+} from "@/lib/swayp-productos";
 
 /** Dimensiones por defecto. La base no guarda peso ni medidas por producto, y
  *  Swayp los exige; verificado que acepta estos valores. Ajustables por env sin
@@ -218,12 +223,19 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
   const telefono = (b.customerPhone ?? "").trim();
   if (!telefono) return { ok: false, error: "El envío no tiene teléfono del destinatario." };
 
-  const contenido = buildContenido(b.lineItems);
-  if (!contenido) return { ok: false, error: "El pedido no tiene productos para declarar." };
-
-  // Los productos por CÓDIGO. `contenido` se sigue mandando —es la etiqueta que
-  // se lee— pero lo que descuenta stock es esto.
-  let productos: SwaypProducto[] | undefined;
+  // Los productos por CÓDIGO, dentro de `contenido`.
+  //
+  // POR QUÉ NO EN `productos[]`. Su desarrollador respondió que listar el
+  // inventario «no está disponible para consumir por API, hay que ponerlo en
+  // cola de desarrollo». Esa respuesta era sobre el endpoint de LECTURA, pero
+  // ante la duda no se manda un campo que quizá no procesan: un 400 dejaría al
+  // envío sin guía. Cuando confirmen que `productos[]` funciona, volver a
+  // mandarlo es añadir una línea — el mapeo y la reja ya están.
+  //
+  // El formato es el que pidieron por escrito: «CANTIDAD X SKU … con el match
+  // exacto del sku». Nada más, porque no conocemos la gramática de su buscador.
+  let contenido: string;
+  let resumen: string | null = null;
   if (b.skuMap && b.skuMap.size > 0) {
     const armados = buildProductos(b.lineItems, b.skuMap);
     if (!armados.ok) {
@@ -232,8 +244,17 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
         error: `Falta vincular a Swayp: ${armados.faltan.join(", ")}. Mápealos en Catálogo.`,
       };
     }
-    productos = armados.productos;
+    contenido = contenidoDeProductos(armados.productos);
+    resumen = resumenLegible(armados.productos);
+  } else {
+    // Sin mapeo se sigue mandando el título, como hasta hoy. Es la vía que su
+    // propio desarrollador llama inestable —«se busca por nombre y no por
+    // código»—, y por eso es el respaldo y no el camino.
+    contenido = buildContenido(b.lineItems);
   }
+  if (!contenido) return { ok: false, error: "El pedido no tiene productos para declarar." };
+
+  const observaciones = juntaObservaciones(resumen, b.observaciones);
 
   const cod = Number.isFinite(b.codAmount) ? Math.max(0, b.codAmount) : 0;
   const valor = String(cod || 1); // valorDeclarado no puede ser 0
@@ -264,12 +285,11 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
       ciudadDestinatario: destino.code,
 
       contenido,
-      ...(productos ? { productos } : {}),
       ...(sender.idWarehouse ? { idWarehouse: sender.idWarehouse } : {}),
       ...(Number.isFinite(b.idBusiness) && Number(b.idBusiness) > 0
         ? { idBusiness: Number(b.idBusiness) }
         : {}),
-      ...(b.observaciones?.trim() ? { observaciones: b.observaciones.trim() } : {}),
+      ...(observaciones ? { observaciones } : {}),
       ...(b.dispatchDateIso ? { fechaEntrega: b.dispatchDateIso } : {}),
 
       ...DEFAULT_PACKAGE,

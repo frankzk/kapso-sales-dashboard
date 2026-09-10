@@ -237,13 +237,16 @@ export interface SwaypCreateGuideInput {
   // pedido
   contenido: string;
   /**
-   * Los productos, por CÓDIGO. Swayp acepta dos formas y descarta una: esta, o
-   * el nombre exacto dentro de `contenido`, que ellos mismos llaman «inestable
-   * porque se busca por nombre y no por código». `contenido` se sigue mandando
-   * como etiqueta legible; lo que descuenta stock es esto.
+   * Los productos como arreglo estructurado. Swayp lo describió por escrito
+   * —`[{ codbar, cantidad, nombre }]`— pero NO está en su documentación, y al
+   * preguntar por el catálogo su desarrollador respondió que «esa funcionalidad
+   * no está disponible para consumir por API». Esa respuesta era sobre el
+   * endpoint de LECTURA, no sobre este campo, así que la duda sigue abierta.
    *
-   * `codbar` es el código de barras de su inventario («AURE001»), NO nuestro
-   * SKU de Shopify: son numeraciones distintas y el puente es `swayp_sku_map`.
+   * Hoy no se manda: un campo que quizá no procesan puede devolver 400 y dejar
+   * al envío sin guía. Mientras tanto los códigos viajan dentro de `contenido`
+   * como «2 x AURE001», que es el formato que sí pidieron por escrito. Cuando
+   * confirmen que esto funciona, volver a mandarlo es una línea.
    */
   productos?: Array<{ codbar: string; cantidad: number; nombre: string }>;
   idBusiness?: number;

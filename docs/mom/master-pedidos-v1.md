@@ -2009,13 +2009,26 @@ descarta una ella misma:
 
 | Forma | Qué es |
 | --- | --- |
-| `productos: [{codbar, cantidad, nombre}]` | Estructurada. `codbar` es su código de barras (`AURE001`) |
-| `contenido: "2 x NOMBRE EXACTO"` | Texto. *«Tiende a ser inestable porque se busca por nombre y no por código»* — Swayp |
+| `contenido: "2 x AURE001"` | **La que usamos.** Texto con el CÓDIGO, el formato que pidieron: *«CANTIDAD X SKU … con el match exacto del sku»* |
+| `contenido: "2 x NOMBRE EXACTO"` | Texto con el nombre. *«Tiende a ser inestable porque se busca por nombre y no por código»* — Swayp |
+| `productos: [{codbar, cantidad, nombre}]` | Estructurada. Nos la describieron por escrito, pero **no está en su documentación** y al preguntar por el catálogo respondieron que «no está disponible para consumir por API». La duda sigue abierta, así que no se manda: un campo que quizá no procesan puede devolver 400 y dejar al envío sin guía |
 
 Vamos por `codbar`. Buscar por nombre ata el descuento de stock a que su
 catálogo y el nuestro escriban igual un producto: cambian una tilde y las guías
 dejan de descontar **sin error y sin aviso**, hasta que el inventario no cuadre.
-`contenido` se sigue mandando, pero solo como etiqueta legible.
+**`contenido` lleva el código y NADA más.** Ni el nombre, ni un paréntesis: no
+conocemos la gramática de su buscador, y si le sobra texto hay dos desenlaces
+—lo tolera, o no encuentra el producto y no descuenta stock—. No hay un tercero
+donde falle ruidosamente.
+
+**El nombre legible va en `observaciones`**, que nadie parsea, con la misma
+información: `contenido: "2 x AURE001"` y `observaciones: "2 x CANDIDA CLEANSE"`.
+Lo parseable en el campo parseable, lo humano en el campo libre. Se usa el nombre
+de Swayp que guarda el mapeo —corto y el que su almacén reconoce— y solo se cae a
+nuestro título de Shopify si no hay otro; por eso vale la pena rellenar el campo
+«Nombre en Swayp» de la pantalla de Catálogo. La nota del operador se conserva a
+continuación, y el conjunto se recorta a 500 caracteres: no sabemos el límite del
+campo, y perder una guía por un texto de cortesía sería mal negocio.
 
 **Los dos catálogos no tienen relación** y el puente es una decisión humana, no
 una regla: el mismo producto es `765545233` en Shopify y `AURE001` en Swayp. El

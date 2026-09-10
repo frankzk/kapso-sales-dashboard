@@ -183,32 +183,52 @@ describe("buildSwaypGuideInput", () => {
    * Un nombre que deja de coincidir no da error, deja de descontar stock.
    */
   describe("productos: el mapa es el interruptor", () => {
-    const conSku = [{ title: "Cándida Cleanse", quantity: 2, sku: "765545233" }];
+    const conSku = [{ title: "Cándida Cleanse - Fórmula Ayurvédica (90 Cápsulas)", quantity: 2, sku: "765545233" }];
     const mapa = new Map([["765545233", { codbar: "AURE001", nombre: "CANDIDA CLEANSE" }]]);
 
-    it("sin mapa la guía sale como hasta hoy, sin `productos`", () => {
+    it("sin mapa manda el título, como hasta hoy", () => {
       // Una tienda que todavía no vinculó nada no deja de crear guías el día
-      // del despliegue.
+      // del despliegue. Es el respaldo, no el camino: buscar por nombre es lo
+      // que su propio desarrollador llama inestable.
       const r = buildSwaypGuideInput({ ...base, lineItems: conSku });
       expect(r.ok).toBe(true);
-      if (r.ok) expect(r.input).not.toHaveProperty("productos");
+      if (r.ok) expect(r.input.contenido).toContain("Cándida Cleanse");
     });
 
-    it("un mapa VACÍO tampoco enciende nada", () => {
-      const r = buildSwaypGuideInput({ ...base, lineItems: conSku, skuMap: new Map() });
-      expect(r.ok).toBe(true);
-      if (r.ok) expect(r.input).not.toHaveProperty("productos");
-    });
-
-    it("con mapa manda codbar y cantidad, y `contenido` sigue yendo", () => {
+    it("con mapa, `contenido` lleva el CÓDIGO y nada más", () => {
+      // El formato que pidieron por escrito: «CANTIDAD X SKU». Sin paréntesis,
+      // sin nombre: no conocemos la gramática de su buscador y texto de más
+      // puede hacer que no encuentre el producto — sin error y sin descuento.
       const r = buildSwaypGuideInput({ ...base, lineItems: conSku, skuMap: mapa });
       expect(r.ok).toBe(true);
       if (!r.ok) return;
-      expect(r.input.productos).toEqual([
-        { codbar: "AURE001", cantidad: 2, nombre: "CANDIDA CLEANSE" },
-      ]);
-      // `contenido` es la etiqueta legible; lo que descuenta stock es productos.
-      expect(r.input.contenido).toBe("2 x Cándida Cleanse");
+      expect(r.input.contenido).toBe("2 x AURE001");
+      expect(r.input.contenido).not.toMatch(/[()]/);
+      expect(r.input.contenido).not.toMatch(/Cándida/);
+    });
+
+    it("y `observaciones` lleva LO MISMO en legible", () => {
+      const r = buildSwaypGuideInput({ ...base, lineItems: conSku, skuMap: mapa });
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.input.observaciones).toBe("2 x CANDIDA CLEANSE");
+    });
+
+    it("la nota del operador se conserva junto al resumen", () => {
+      const r = buildSwaypGuideInput({
+        ...base, lineItems: conSku, skuMap: mapa, observaciones: "Entregar por la tarde",
+      });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.input.observaciones).toContain("2 x CANDIDA CLEANSE");
+      expect(r.input.observaciones).toContain("Entregar por la tarde");
+    });
+
+    it("NO se manda `productos[]` mientras Swayp no lo confirme", () => {
+      // Un campo que quizá no procesan puede devolver 400 y dejar al envío sin
+      // guía. Los códigos ya viajan en `contenido`.
+      const r = buildSwaypGuideInput({ ...base, lineItems: conSku, skuMap: mapa });
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.input).not.toHaveProperty("productos");
     });
 
     it("con mapa encendido, un producto sin vincular RECHAZA la guía y lo nombra", () => {
@@ -220,19 +240,7 @@ describe("buildSwaypGuideInput", () => {
       expect(r.ok).toBe(false);
       if (r.ok) return;
       expect(r.error).toContain("Pulsera Magnética");
-      // Y dice dónde arreglarlo, que es lo que la operadora necesita.
       expect(r.error).toMatch(/cat[áa]logo/i);
-    });
-
-    it("nunca manda un ítem con codbar vacío", () => {
-      // Mandarlo igual dejaría unas guías descontando stock y otras no, sin
-      // que nadie lo note hasta que el inventario no cuadre.
-      const r = buildSwaypGuideInput({
-        ...base,
-        lineItems: [{ title: "Sin vincular", quantity: 1, sku: "NOPE" }],
-        skuMap: mapa,
-      });
-      expect(r.ok).toBe(false);
     });
   });
 
