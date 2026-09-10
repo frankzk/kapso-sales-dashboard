@@ -141,6 +141,9 @@ export interface CatalogRow {
   variantTitle: string | null;
   ean: string | null;
   source: string | null;
+  /** Código de barras de Swayp. Independiente del EAN: son dos couriers. */
+  codbar: string | null;
+  codbarNombre: string | null;
   aliclikName: string | null;
   aliclikVariant: string | null;
   warehouseName: string | null;
@@ -154,6 +157,9 @@ export interface CatalogView {
   rows: CatalogRow[];
   mapped: number;
   unmapped: number;
+  /** Cuántos productos NO tienen codbar de Swayp: son los que no pueden salir
+   *  por su API. Se cuenta aparte del de Aliclik porque son mapeos distintos. */
+  swaypUnmapped: number;
   missingSku: number;
   catalogSize: number;
   syncedAt: string | null;
@@ -181,7 +187,7 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
   // `loadAllAliclikSkus` PAGINA. Sin eso se leían solo los primeros 1000 de los
   // ~3.700 del catálogo (PostgREST corta ahí), y dos tercios de los productos
   // aparecían "sin candidato automático" cuando su candidato sí existía.
-  const [shopify, skus, mapRes] = await Promise.all([
+  const [shopify, skus, mapRes, swaypRes] = await Promise.all([
     loadShopifySkuDetails(
       storeId,
       admin,
@@ -192,9 +198,15 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
     ),
     loadAllAliclikSkus(storeId, admin),
     admin.from("aliclik_sku_map").select("shopify_sku,ean,source").eq("store_id", storeId),
+    admin.from("swayp_sku_map").select("shopify_sku,codbar,nombre").eq("store_id", storeId),
   ]);
 
   const byEan = new Map(skus.map((s) => [s.ean, s]));
+  const swaypMap = new Map(
+    ((swaypRes.data ?? []) as { shopify_sku: string; codbar: string; nombre: string | null }[]).map(
+      (m) => [m.shopify_sku, m],
+    ),
+  );
   const mapping = new Map(
     ((mapRes.data ?? []) as { shopify_sku: string; ean: string; source: string }[]).map((m) => [
       m.shopify_sku,
@@ -217,6 +229,7 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
       const shopifySku = shopifyProduct.shopifySku;
       const { title, variantTitle } = shopifyProduct;
       const m = shopifySku ? mapping.get(shopifySku) : undefined;
+      const sw = shopifySku ? swaypMap.get(shopifySku) : undefined;
       const hit = m ? byEan.get(m.ean) : undefined;
       const suggestedEan = m ? null : (byName.get(normalizeProductName(title)) ?? null);
       const suggested = suggestedEan ? byEan.get(suggestedEan) : undefined;
@@ -227,6 +240,8 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
         variantTitle,
         ean: m?.ean ?? null,
         source: m?.source ?? null,
+        codbar: sw?.codbar ?? null,
+        codbarNombre: sw?.nombre ?? null,
         aliclikName: hit?.product_name ?? null,
         aliclikVariant: hit?.sku_name ?? null,
         warehouseName: hit?.warehouse_name ?? null,
@@ -248,6 +263,7 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
     rows,
     mapped: rows.filter((r) => r.ean).length,
     unmapped: rows.filter((r) => !r.ean).length,
+    swaypUnmapped: rows.filter((r) => !r.codbar).length,
     missingSku: rows.filter((r) => !r.shopifySku).length,
     catalogSize: skus.length,
     syncedAt: skus[0]?.synced_at ?? null,
@@ -303,4 +319,64 @@ export async function searchAliclikSkus(
     warehouseName: s.warehouse_name,
     stockVirtual: s.stock_virtual,
   }));
+}
+
+// ── Swayp ───────────────────────────────────────────────────────────────────
+//
+// El mismo mapeo, otro courier. La fila de la pantalla es el producto de
+// Shopify, así que el codbar de Swayp es una columna más al lado del EAN de
+// Aliclik en vez de una pantalla casi idéntica.
+//
+// Diferencia con Aliclik: acá NO se valida el código contra un espejo del
+// catálogo, porque no hay espejo — todavía no nos han documentado el endpoint
+// de referencias que alimenta su desplegable. El código se escribe a mano y un
+// error se ve cuando Swayp rechace la guía, que es peor que validarlo pero
+// mejor que inventar una tabla que nadie puede llenar. Cuando den el endpoint,
+// esta validación es lo primero que hay que añadir.
+
+export async function mapSwaypCodbar(
+  _prev: CatalogActionState,
+  formData: FormData,
+): Promise<CatalogActionState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const shopifySku = normalizeSku(String(formData.get("shopify_sku") ?? ""));
+  // Mayúsculas: los suyos son «AURE001» y una minúscula colada haría que el
+  // mapa no encuentre nada sin decir por qué.
+  const codbar = String(formData.get("codbar") ?? "").trim().toUpperCase();
+  const nombre = String(formData.get("nombre") ?? "").trim() || null;
+
+  const ctx = await authorize(storeId);
+  if (!ctx) return { error: "Tu rol no permite gestionar el catálogo." };
+  if (!shopifySku) return { error: "Este producto no tiene SKU en Shopify; sin él no hay nada que vincular." };
+  if (!codbar) return { error: "Falta el código de barras de Swayp." };
+
+  const { error } = await ctx.admin.from("swayp_sku_map").upsert(
+    { store_id: storeId, shopify_sku: shopifySku, codbar, nombre, created_by: ctx.userId, updated_at: new Date().toISOString() },
+    { onConflict: "store_id,shopify_sku" },
+  );
+  if (error) return { error: error.message };
+
+  revalidatePath(PATH);
+  return { notice: `${shopifySku} → ${codbar}.` };
+}
+
+export async function unmapSwaypCodbar(
+  _prev: CatalogActionState,
+  formData: FormData,
+): Promise<CatalogActionState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const shopifySku = normalizeSku(String(formData.get("shopify_sku") ?? ""));
+
+  const ctx = await authorize(storeId);
+  if (!ctx) return { error: "Tu rol no permite gestionar el catálogo." };
+
+  const { error } = await ctx.admin
+    .from("swayp_sku_map")
+    .delete()
+    .eq("store_id", storeId)
+    .eq("shopify_sku", shopifySku);
+  if (error) return { error: error.message };
+
+  revalidatePath(PATH);
+  return { notice: `${shopifySku} desvinculado de Swayp.` };
 }

@@ -1995,6 +1995,37 @@ en el pedido convertía «no la tengo acá» en «no hay destino», y la guía s
 con código manual sin decir por qué. Es el mismo error que la cobertura
 (§19.0.2): el dato existe, se buscaba donde no estaba.
 
+**Los productos van por CÓDIGO, no por nombre.** Swayp acepta las dos formas y
+descarta una ella misma:
+
+| Forma | Qué es |
+| --- | --- |
+| `productos: [{codbar, cantidad, nombre}]` | Estructurada. `codbar` es su código de barras (`AURE001`) |
+| `contenido: "2 x NOMBRE EXACTO"` | Texto. *«Tiende a ser inestable porque se busca por nombre y no por código»* — Swayp |
+
+Vamos por `codbar`. Buscar por nombre ata el descuento de stock a que su
+catálogo y el nuestro escriban igual un producto: cambian una tilde y las guías
+dejan de descontar **sin error y sin aviso**, hasta que el inventario no cuadre.
+`contenido` se sigue mandando, pero solo como etiqueta legible.
+
+**Los dos catálogos no tienen relación** y el puente es una decisión humana, no
+una regla: el mismo producto es `765545233` en Shopify y `AURE001` en Swayp. El
+mapeo vive en `swayp_sku_map` y se edita en **Catálogo de productos**, junto al
+de Aliclik — la unidad de trabajo es el producto, no el courier.
+
+**El mapa es el interruptor.** Una tienda sin ninguna vinculación crea guías
+como hasta hoy, sin `productos`: nadie deja de despachar el día del despliegue.
+Con al menos una vinculación la función está en marcha, y entonces **un producto
+sin vincular RECHAZA la guía** nombrándolo, y el envío cae al Excel. Nunca se
+manda el ítem con el código vacío ni se aproxima por nombre: eso dejaría unas
+guías descontando stock y otras no, sin que se note — la misma razón por la que
+un ubigeo aproximado se rechaza (§11.3).
+
+**El `idBusiness` deja de ser opcional en la práctica.** Swayp valida los
+productos contra un id único de tienda, así que sin ese campo es Swayp quien
+decide a qué comercio atribuye la guía; si se equivoca, descuenta del stock de
+otro y no nos enteramos.
+
 **El número que emite Swayp se guarda en `swayp_guide`, no solo en
 `guide_code`.** El webhook de Swayp busca la guía por esa columna: sin ella el
 envío se quedaría En ruta para siempre por más que el mensajero reportara.

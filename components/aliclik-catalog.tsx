@@ -14,15 +14,17 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Card, EmptyState } from "@/components/ui";
 import {
   mapSku,
+  mapSwaypCodbar,
   searchAliclikSkus,
   syncCatalog,
   unmapSku,
+  unmapSwaypCodbar,
   type AliclikSkuOption,
   type CatalogRow,
   type CatalogView,
 } from "@/app/dashboard/envios/aliclik/actions";
 
-type Filter = "sin_mapear" | "mapeados" | "todos";
+type Filter = "sin_mapear" | "mapeados" | "sin_swayp" | "todos";
 
 export function AliclikCatalog({
   view,
@@ -45,6 +47,7 @@ export function AliclikCatalog({
     return view.rows.filter((r) => {
       if (filter === "sin_mapear" && r.ean) return false;
       if (filter === "mapeados" && !r.ean) return false;
+      if (filter === "sin_swayp" && r.codbar) return false;
       if (!q) return true;
       return (
         r.title.toLowerCase().includes(q) ||
@@ -67,7 +70,7 @@ export function AliclikCatalog({
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-slate-900">Catálogo Aliclik · {storeName}</h1>
+          <h1 className="text-xl font-semibold text-slate-900">Catálogo de productos · {storeName}</h1>
           <p className="text-sm text-slate-500">
             {view.mapped} de {view.mapped + view.unmapped} productos asociados ·{" "}
             {view.catalogSize} SKUs en el catálogo de Aliclik
@@ -99,6 +102,14 @@ export function AliclikCatalog({
         </div>
       )}
 
+      {view.swaypUnmapped > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <span className="font-medium">{view.swaypUnmapped} producto(s) sin vincular a Swayp.</span>{" "}
+          Una guía que incluya cualquiera de ellos no sale por su API y cae al Excel: Swayp descuenta
+          stock por el código de barras, y sin él no sabría qué descontar.
+        </div>
+      )}
+
       {view.missingSku > 0 && (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
           <span className="font-medium">{view.missingSku} producto(s) activo(s) no tienen SKU en Shopify.</span>{" "}
@@ -119,7 +130,7 @@ export function AliclikCatalog({
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        {(["sin_mapear", "mapeados", "todos"] as Filter[]).map((f) => (
+        {(["sin_mapear", "mapeados", "sin_swayp", "todos"] as Filter[]).map((f) => (
           <button
             key={f}
             type="button"
@@ -130,7 +141,13 @@ export function AliclikCatalog({
                 : "border border-slate-300 text-slate-700 hover:bg-slate-50"
             }`}
           >
-            {f === "sin_mapear" ? `Sin asociar (${view.unmapped})` : f === "mapeados" ? `Asociados (${view.mapped})` : "Todos"}
+            {f === "sin_mapear"
+              ? `Sin asociar Aliclik (${view.unmapped})`
+              : f === "mapeados"
+                ? `Asociados Aliclik (${view.mapped})`
+                : f === "sin_swayp"
+                  ? `Sin vincular Swayp (${view.swaypUnmapped})`
+                  : "Todos"}
           </button>
         ))}
         <input
@@ -158,6 +175,8 @@ export function AliclikCatalog({
               pending={pending}
               onMap={(fd) => run(fd, mapSku)}
               onUnmap={(fd) => run(fd, unmapSku)}
+              onMapSwayp={(fd) => run(fd, mapSwaypCodbar)}
+              onUnmapSwayp={(fd) => run(fd, unmapSwaypCodbar)}
             />
           ))}
         </div>
@@ -173,6 +192,8 @@ function CatalogRowCard({
   pending,
   onMap,
   onUnmap,
+  onMapSwayp,
+  onUnmapSwayp,
 }: {
   row: CatalogRow;
   storeId: string;
@@ -180,6 +201,8 @@ function CatalogRowCard({
   pending: boolean;
   onMap: (fd: FormData) => void;
   onUnmap: (fd: FormData) => void;
+  onMapSwayp: (fd: FormData) => void;
+  onUnmapSwayp: (fd: FormData) => void;
 }) {
   const [choice, setChoice] = useState(row.suggestion?.ean ?? "");
 
@@ -289,7 +312,118 @@ function CatalogRowCard({
           </div>
         )}
       </div>
+
+      <SwaypCodbarRow
+        row={row}
+        storeId={storeId}
+        canManage={canManage}
+        pending={pending}
+        onMap={onMapSwayp}
+        onUnmap={onUnmapSwayp}
+      />
     </Card>
+  );
+}
+
+/**
+ * El vínculo con Swayp: SKU de Shopify → código de barras de su inventario.
+ *
+ * Va en la MISMA fila que el de Aliclik y no en otra pantalla porque la unidad
+ * de trabajo es el producto, no el courier: quien está vinculando el catálogo
+ * quiere resolver un producto entero de una sentada.
+ *
+ * A diferencia de Aliclik, acá se escribe el código a mano: todavía no tenemos
+ * el endpoint de referencias de Swayp, así que no hay lista de dónde elegir ni
+ * forma de validar que el código exista. Un error se descubre cuando Swayp
+ * rechace la guía. Cuando den ese endpoint, esto pasa a ser un buscador como el
+ * de Aliclik.
+ */
+function SwaypCodbarRow({
+  row,
+  storeId,
+  canManage,
+  pending,
+  onMap,
+  onUnmap,
+}: {
+  row: CatalogRow;
+  storeId: string;
+  canManage: boolean;
+  pending: boolean;
+  onMap: (fd: FormData) => void;
+  onUnmap: (fd: FormData) => void;
+}) {
+  const [codbar, setCodbar] = useState("");
+
+  // Sin SKU en Shopify no hay clave con la que vincular, y el bloque de arriba
+  // ya lo dice con su propio aviso; repetirlo sería ruido.
+  if (!row.shopifySku) return null;
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
+      <p className="text-xs">
+        <span className="font-medium uppercase tracking-wide text-slate-400">Swayp</span>{" "}
+        {row.codbar ? (
+          <span className="text-emerald-700">
+            ✓ {row.codbar}
+            {row.codbarNombre ? ` · ${row.codbarNombre}` : ""}
+          </span>
+        ) : (
+          <span className="text-amber-700">
+            Sin vincular — no puede salir por la API de Swayp.
+          </span>
+        )}
+      </p>
+
+      {canManage &&
+        (row.codbar ? (
+          <form
+            action={(fd) => {
+              fd.set("store_id", storeId);
+              fd.set("shopify_sku", row.shopifySku!);
+              onUnmap(fd);
+            }}
+          >
+            <button
+              type="submit"
+              disabled={pending}
+              className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Desvincular
+            </button>
+          </form>
+        ) : (
+          <form
+            action={(fd) => {
+              fd.set("store_id", storeId);
+              fd.set("shopify_sku", row.shopifySku!);
+              onMap(fd);
+              setCodbar("");
+            }}
+            className="flex items-center gap-2"
+          >
+            <input
+              name="codbar"
+              value={codbar}
+              onChange={(e) => setCodbar(e.target.value)}
+              placeholder="Código de barras (AURE001)"
+              className="w-52 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs uppercase"
+            />
+            <input
+              name="nombre"
+              placeholder="Nombre en Swayp (opcional)"
+              className="w-52 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+            />
+            <button
+              type="submit"
+              disabled={pending || !codbar.trim()}
+              className="rounded-lg bg-brand-700 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-brand-800 disabled:opacity-50"
+            >
+              Vincular
+            </button>
+          </form>
+        ))}
+    </div>
   );
 }
 

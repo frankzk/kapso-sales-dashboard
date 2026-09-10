@@ -22,6 +22,7 @@
 import { z } from "zod";
 import { resolveUbigeo, warehouseUbigeo } from "@/lib/ubigeo";
 import type { SwaypCreateGuideInput } from "@/lib/swayp";
+import { buildProductos, type SwaypProducto } from "@/lib/swayp-productos";
 
 /** Dimensiones por defecto. La base no guarda peso ni medidas por producto, y
  *  Swayp los exige; verificado que acepta estos valores. Ajustables por env sin
@@ -72,8 +73,20 @@ export interface BuildGuideInput {
   address1: string | null | undefined;
   /** Referencia / complemento (shipments.delivery_reference). */
   reference?: string | null;
-  /** Líneas del pedido, para el campo `contenido`. */
-  lineItems: Array<{ title: string; quantity: number }>;
+  /** Líneas del pedido: alimentan `contenido` y, vía el mapa, `productos`. */
+  lineItems: Array<{ title: string; quantity: number; sku?: string | null }>;
+  /**
+   * SKU de Shopify (normalizado) → código de barras de Swayp. Sale de
+   * `swayp_sku_map`.
+   *
+   * EL MAPA ES EL INTERRUPTOR. Vacío o ausente, la guía sale como hasta hoy, sin
+   * `productos`: una tienda que todavía no ha vinculado nada no tiene por qué
+   * dejar de crear guías de golpe el día del despliegue. Con al menos una
+   * entrada, la función está en marcha y un producto sin vincular RECHAZA la
+   * guía nombrándolo — a partir de ahí un hueco es un hueco, y esconderlo
+   * dejaría unas guías descontando stock y otras no, sin que se note.
+   */
+  skuMap?: Map<string, { codbar: string; nombre?: string | null }>;
   /** Monto a cobrar contra entrega. 0 si el envío no lleva recaudo. */
   codAmount: number;
   /** Fecha de despacho, ISO 8601. Opcional. */
@@ -179,6 +192,20 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
   const contenido = buildContenido(b.lineItems);
   if (!contenido) return { ok: false, error: "El pedido no tiene productos para declarar." };
 
+  // Los productos por CÓDIGO. `contenido` se sigue mandando —es la etiqueta que
+  // se lee— pero lo que descuenta stock es esto.
+  let productos: SwaypProducto[] | undefined;
+  if (b.skuMap && b.skuMap.size > 0) {
+    const armados = buildProductos(b.lineItems, b.skuMap);
+    if (!armados.ok) {
+      return {
+        ok: false,
+        error: `Falta vincular a Swayp: ${armados.faltan.join(", ")}. Mápealos en Catálogo.`,
+      };
+    }
+    productos = armados.productos;
+  }
+
   const cod = Number.isFinite(b.codAmount) ? Math.max(0, b.codAmount) : 0;
   const valor = String(cod || 1); // valorDeclarado no puede ser 0
 
@@ -208,6 +235,7 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
       ciudadDestinatario: destino.code,
 
       contenido,
+      ...(productos ? { productos } : {}),
       ...(Number.isFinite(b.idBusiness) && Number(b.idBusiness) > 0
         ? { idBusiness: Number(b.idBusiness) }
         : {}),
