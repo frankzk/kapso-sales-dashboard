@@ -1227,6 +1227,55 @@ vuelve a comprar tiene dos. Por eso no basta para elegir entre ellos.
 > (106620–127540). El día que lleguen al millón, siete dígitos dejarán de ser
 > «identificador de Aliclik» y habrá que revisar esto.
 
+#### Un pedido de Agencia no puede haber llegado sin haber salido
+
+Marcar `recogido`, `entregado`, `disponible_para_recojo` o cualquier otro estado
+que signifique que la caja ya está en la sucursal **exige que exista una salida**.
+Si el pedido es de cobertura Agencia y no consta ninguna, el Master pide **por qué
+agencia se envió** —Shalom u Olva— y registra la salida con la firma de quien
+marca. Sin courier elegido el marcado no se guarda.
+
+**Por qué.** Una salida es lo único por lo que el tablero sabe que un pedido se
+despachó. Un pedido que llega a la agencia sin ella desaparece de los indicadores
+de envío, del aviso de vencimiento en agencia y del cotejo de liquidación.
+Auditado el 09-09-2026 sobre los pedidos de Agencia ya recogidos o entregados:
+
+| Origen del estado | Con salida | Sin salida |
+| --- | --- | --- |
+| Rastreo de Shalom | 107 | **0** |
+| Marcado a mano | 185 | **42 (18,5 %)** |
+
+El agujero está entero en el marcado manual. Son **43 pedidos y S/ 6.140 desde
+agosto**, y ocho seguían ese día en la agencia sin fecha de vencimiento —el más
+viejo de 62 días— justo cuando entre el 5 % y el 6 % de los envíos de agencia
+acaba devuelto por no recogerse a tiempo. El problema ya venía cerrándose solo
+(98,9 % sin salida en junio, 82,7 % en julio, 8,6 % en agosto, tras la integración
+de Shalom); esto cierra el residuo.
+
+**Se pregunta en el propio marcado, no en un formulario aparte**, porque el
+formulario aparte ya existía: la salida manual (§4) admite Olva desde antes. No se
+usó **ni una vez en 40 días**, contra 866 salidas de Shalom. Kapta no tiene una
+sola guía de Olva.
+
+**La firma del operador es lo que autoriza**, igual que al vincular una guía
+creada en el portal (abajo). Por eso la salida nace con `match_method =
+agency_operator_attested` y no con el `manual` de las demás: quien audite tiene
+que distinguir la salida que trajo el courier de la que afirmó una persona. Nace
+además **sin código de guía** —la tiene el mostrador de la agencia, y uno
+inventado se cotejaría contra el reporte del courier sin casar nunca— y **en el
+estado que el pedido declara**, no en «pendiente»: una salida pendiente haría que
+el recálculo tirase el pedido hacia atrás y deshiciera el marcado que la creó.
+
+> ⚠️ **La fecha de despacho es la del registro, no la del envío real**, y así lo
+> dice la nota que queda en el historial. Nadie recuerda la fecha exacta y una
+> inventada contamina peor que una declarada — pero las cohortes de los
+> indicadores de despacho se arman con esa fecha, así que un pedido salido en
+> julio y atestiguado hoy cuenta como despacho de hoy.
+
+**Solo Agencia.** Lima sale por la mesa de despacho, que ya crea la salida sola;
+añadir la misma fricción allí por simetría sería un coste cierto sin problema
+medido.
+
 #### Vincular una guía creada en el portal de Aliclik
 
 La API oficial solo lista los pedidos de la integración (`ALC…`). Una guía creada
