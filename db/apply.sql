@@ -305,4 +305,6 @@
 \ir migrations/0150_lead_coverage_pushes.sql
 \echo 'Applying 0151_swayp_sku_map.sql'
 \ir migrations/0151_swayp_sku_map.sql
+\echo 'Applying 0152_tanders_payment_checked_at.sql'
+\ir migrations/0152_tanders_payment_checked_at.sql
 \echo 'Done.'
