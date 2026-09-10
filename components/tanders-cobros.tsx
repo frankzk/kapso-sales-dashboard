@@ -159,6 +159,28 @@ export function TandersCobros() {
           </Card>
           <Failures fallos={report.fallos} detenido={report.detenido} />
 
+          {report.muestras.length > 0 && (
+            <details className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <summary className="cursor-pointer text-sm font-medium text-amber-900">
+                Guías entregadas sin constancia reconocida ({report.muestras.length} de muestra) —
+                respuesta cruda de Tanders
+              </summary>
+              <p className="mt-2 text-xs text-amber-800">
+                La API respondió 200, así que estas guías SÍ están entregadas: si no lo estuvieran,
+                habría contestado «not yet delivered». Que no encontremos la constancia apunta a que
+                el extractor busca donde no es.
+              </p>
+              {report.muestras.map((m) => (
+                <div key={m.guia} className="mt-3">
+                  <p className="font-mono text-xs text-amber-900">{m.guia}</p>
+                  <pre className="mt-1 max-h-64 overflow-auto rounded-lg bg-white p-2 text-[11px] leading-snug text-slate-700">
+                    {m.respuesta}
+                  </pre>
+                </div>
+              ))}
+            </details>
+          )}
+
           {report.detalle.length === 0 ? (
             <p className="text-sm text-slate-500">
               Ninguna guía llegó a la validación: o Tanders todavía no las da por entregadas, o ya

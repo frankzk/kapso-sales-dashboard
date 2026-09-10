@@ -43,6 +43,25 @@ export function describeSweepError(err: unknown): string {
   return String(err).slice(0, 300);
 }
 
+/**
+ * ¿Es el «todavía no entregada» de la API de evidencias?
+ *
+ * `GET /orders/me/{id}/aliclik/evidences` responde **400 Order is not yet
+ * delivered** mientras el paquete sigue en ruta. Es la respuesta NORMAL de una
+ * guía viva, no un fallo: contarla como error infla el reporte y esconde los
+ * fallos de verdad —el 08-09 fueron 15 de 15 «errores» que no lo eran—.
+ *
+ * De paso confirma la regla: la constancia existe solo cuando el motorizado
+ * cobró, así que este endpoint ES la prueba de entrega.
+ */
+export function isNotYetDelivered(err: unknown): boolean {
+  return (
+    err instanceof TandersApiError &&
+    err.status === 400 &&
+    /not yet delivered/i.test(err.message)
+  );
+}
+
 /** Suma un fallo a la lista, agrupando por mensaje y respetando el tope. */
 export function recordSweepFailure(list: SweepFailure[], err: unknown): void {
   const mensaje = describeSweepError(err);

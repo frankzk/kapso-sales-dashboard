@@ -7,6 +7,7 @@ import {
   recordSweepFailure,
   SWEEP_PACE_MS,
   type SweepFailure,
+  isNotYetDelivered,
 } from "@/lib/tanders/sweep-failures";
 import { TandersApiError } from "@/lib/tanders/types";
 
@@ -94,5 +95,23 @@ describe("recordSweepFailure", () => {
     // Un motivo ya visto sigue sumando en su fila aunque el tope esté lleno.
     recordSweepFailure(list, new Error("motivo 0"));
     expect(list[0]).toEqual({ mensaje: "Error: motivo 0", n: 2 });
+  });
+});
+
+describe("isNotYetDelivered", () => {
+  it("reconoce el 400 de una guía todavía en ruta", () => {
+    // Es la respuesta NORMAL del endpoint de evidencias mientras el paquete no
+    // se entregó: contarla como error escondía los fallos de verdad.
+    expect(
+      isNotYetDelivered(
+        new TandersApiError("Order is not yet delivered", 400, null, "GET", "/orders/me/x/aliclik/evidences"),
+      ),
+    ).toBe(true);
+  });
+
+  it("no confunde otros 400 ni otros status", () => {
+    expect(isNotYetDelivered(new TandersApiError("Bad request", 400))).toBe(false);
+    expect(isNotYetDelivered(new TandersApiError("Order is not yet delivered", 500))).toBe(false);
+    expect(isNotYetDelivered(new Error("Order is not yet delivered"))).toBe(false);
   });
 });
