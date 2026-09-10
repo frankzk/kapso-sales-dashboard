@@ -34,6 +34,7 @@ import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
 import { derivedGuideDates } from "@/lib/guide-dates";
 import { ttlCache } from "@/lib/ttl-cache";
 import { isWebPrepaid } from "@/lib/order-paid";
+import { paymentGatewayOf, type PaymentGateway } from "@/lib/payment-gateway";
 import {
   MOM_RESOLUTION_VERSION,
   resolveMacroStage,
@@ -49,7 +50,7 @@ import {
 } from "@/lib/order-status";
 
 const ORDER_COLUMNS =
-  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,shipping_mode,customer_phone,total_amount,total_refunded,raw";
+  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,payment_gateway,shipping_mode,customer_phone,total_amount,total_refunded,raw";
 
 // Las columnas de gestión (assigned_at … agency_expires_at) las añade 0047. El
 // código se despliega antes que la migración, así que se intenta el conjunto
@@ -126,6 +127,7 @@ interface OrderRecord {
   created_at: string | null;
   cancelled_at: string | null;
   financial_status: string | null;
+  payment_gateway?: PaymentGateway | null;
   shipping_mode: string | null;
   customer_phone: string | null;
   total_amount: number | null;
@@ -993,10 +995,15 @@ export async function recomputeOrderMaster(
     // Se resuelve acá, en el único sitio que tiene delante las dos vías, y no
     // dentro de `paymentState`: esa función es pura sobre comprobantes y la usan
     // sitios que no conocen a Shopify.
+    // Por dónde entró el dinero: la columna si el ingest ya la puso; si no, se
+    // lee del payload guardado (los que llegaron por webhook lo traen). Sin
+    // dato, `null`, y manda la regla indirecta. Ver lib/payment-gateway.ts.
+    const paymentGateway = order.payment_gateway ?? paymentGatewayOf(order.raw);
     const paymentFacts = {
       financialStatus: order.financial_status,
       totalRefunded: order.total_refunded,
       paymentState: voucherState,
+      paymentGateway,
     };
     const resolvedPaymentState = isWebPrepaid(paymentFacts) ? "pago_completo" : voucherState;
     // `classifyOrderCoverage` queda como reserva para el caso en que la 0104 no
@@ -1117,6 +1124,7 @@ export async function recomputeOrderMaster(
       // drawer y el rótulo, y los tres leen esta tabla (0128).
       financial_status: order.financial_status,
       total_refunded: order.total_refunded ?? 0,
+      payment_gateway: paymentGateway,
       status_since: state.since,
       status_source: state.source,
       // Que EXISTA un override no basta: uno anterior a la anulación en Shopify

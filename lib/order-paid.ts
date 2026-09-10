@@ -20,6 +20,8 @@
 // adivinar qué hacer con `partially_paid`: no aparece. El día que aparezca, no
 // contará como pagado, que es el lado seguro del error.
 
+import type { PaymentGateway } from "@/lib/payment-gateway";
+
 /** Lo que hace falta saber del pedido para decidir si ya está cobrado. */
 export interface OrderPaymentFacts {
   /** `orders.financial_status`, tal cual lo manda Shopify. */
@@ -28,6 +30,13 @@ export interface OrderPaymentFacts {
   totalRefunded?: number | null;
   /** El estado de los comprobantes Yape (`paymentState`, lib/pickup-key.ts). */
   paymentState?: string | null;
+  /**
+   * Por dónde entró el dinero (`payment_gateway`, lib/payment-gateway.ts).
+   * `checkout` es la única que nace pagada; `manual` y `cod` siguen el conducto
+   * de las constancias. null = no se sabe (pedidos sincronizados antes de
+   * pedirle el dato a Shopify): manda la regla indirecta de abajo.
+   */
+  paymentGateway?: PaymentGateway | null;
 }
 
 /**
@@ -42,6 +51,17 @@ export function isWebPrepaid(facts: OrderPaymentFacts): boolean {
   const refunded = facts.totalRefunded ?? 0;
   if (Number.isFinite(refunded) && refunded > 0) return false;
 
+  // CUANDO SE SABE POR DÓNDE ENTRÓ EL DINERO, ESO MANDA (10-09-2026). La
+  // pasarela del checkout cobró: pagado, haya o no comprobantes cargados —
+  // #KP132708 tenía una captura de Shopify subida como comprobante y la regla
+  // indirecta de abajo lo dejó pidiendo un adelanto ya cobrado. «Manual» o
+  // COD: nadie cobró en el checkout, alguien lo marcó; si se quiere dar por
+  // pagado, se sube la constancia y mandan las reglas de Yape.
+  if (facts.paymentGateway === "checkout") return true;
+  if (facts.paymentGateway === "manual" || facts.paymentGateway === "cod") return false;
+
+  // SIN EL DATO, LA REGLA INDIRECTA DE SIEMPRE.
+  //
   // SI HAY COMPROBANTES, EL DINERO ENTRÓ POR YAPE — y entonces mandan las reglas
   // de Yape, no `financial_status`.
   //

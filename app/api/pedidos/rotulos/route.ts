@@ -16,6 +16,7 @@ import { buildRotulosPdf, type RotuloData } from "@/lib/labels/rotulo-pdf";
 import { selectLabelsForOrders, type ShipmentForLabel } from "@/lib/labels/pick-shipment";
 import { labelItemsFor } from "@/lib/labels/line-items";
 import { orderFullyPaid } from "@/lib/order-paid";
+import type { PaymentGateway } from "@/lib/payment-gateway";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -123,7 +124,7 @@ export async function GET(request: NextRequest) {
     // pedido— para sacarle una línea.
     const { data: orderRows } = await sb
       .from("orders")
-      .select("id,line_items,total_amount,currency,shopify_note,financial_status,total_refunded")
+      .select("id,line_items,total_amount,currency,shopify_note,financial_status,total_refunded,payment_gateway")
       .in("id", selectedOrderIds);
     type OrderRow = {
       id: string;
@@ -133,6 +134,7 @@ export async function GET(request: NextRequest) {
       shopify_note: string | null;
       financial_status: string | null;
       total_refunded: number | null;
+      payment_gateway: PaymentGateway | null;
     };
     // El estado de los comprobantes Yape vive en el read-model, no en `orders`.
     // Sin él, un pedido cobrado por Yape imprimiría igualmente el total en el
@@ -152,6 +154,7 @@ export async function GET(request: NextRequest) {
         financialStatus: order.financial_status,
         totalRefunded: order.total_refunded,
         paymentState: paymentStateByOrder.get(order.id) ?? null,
+        paymentGateway: order.payment_gateway,
       };
       moneyByOrder.set(order.id, {
         total: order.total_amount,

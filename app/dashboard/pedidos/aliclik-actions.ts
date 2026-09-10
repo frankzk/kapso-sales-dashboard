@@ -771,6 +771,7 @@ export async function previewAliclikGuide(
     financialStatus: ctx.row.financial_status,
     totalRefunded: ctx.row.total_refunded,
     paymentState: ctx.row.payment_state,
+    paymentGateway: ctx.row.payment_gateway,
   });
   if (prepaidBlock) return { ok: false, error: prepaidBlock };
 
@@ -1064,6 +1065,7 @@ export async function createAliclikGuide(
     financialStatus: ctx.row.financial_status,
     totalRefunded: ctx.row.total_refunded,
     paymentState: ctx.row.payment_state,
+    paymentGateway: ctx.row.payment_gateway,
   });
   if (prepaidBlock) return { error: prepaidBlock };
 

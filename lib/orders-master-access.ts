@@ -120,6 +120,8 @@ export const MASTER_DETAIL_EXTRA_COLUMNS = [
   // comprobante o solo enseña la constancia de que ya está pagado.
   "financial_status",
   "total_refunded",
+  // Por dónde entró el dinero (0152): solo el checkout se salta las constancias.
+  "payment_gateway",
 ] as const;
 const MASTER_DETAIL_COLUMNS =
   `${MASTER_COLUMNS},${MASTER_DETAIL_EXTRA_COLUMNS.join(",")}`;

@@ -2101,6 +2101,17 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   entran pedidos con pasarela (`financial_status = 'paid'`), «ya está cobrado»
   tiene dos vías —comprobante Yape o pago web— y **no se suman**: sumarlas sería
   contar dos veces el mismo dinero. Un reembolso deshace el prepago.
+- **Solo la pasarela del checkout nace pagada** (decidido el 10-09-2026).
+  Shopify dice por dónde entró el dinero (`payment_gateway`,
+  `lib/payment-gateway.ts`): «Checkout Flow | Tarjeta, Transf., Cuotas débito»
+  cobró, y ese pedido se salta la verificación de constancias aunque alguien
+  haya subido una captura como comprobante (#KP132708). **«Manual»** —alguien
+  lo marcó como pagado a mano en Shopify— y **COD** siguen el conducto
+  regular: si se quiere dar por pagado, se sube la constancia y mandan las
+  reglas de Yape. Los pedidos sincronizados antes de pedirle el dato a Shopify
+  no lo tienen; para ésos manda la regla indirecta de siempre: pagado en
+  Shopify y sin ningún comprobante cargado. Traerles la pasarela es una decisión
+  aparte, porque 388 pedidos vivos marcados a mano pasarían a exigir constancia.
   De esa regla única cuelga todo lo demás:
   - El panel de cobro colapsa a una constancia: ni pide comprobante ni enseña
     saldo por cargar. Lo que sí sigue haciendo falta en Agencia —DNI y agencia de
