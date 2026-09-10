@@ -1541,7 +1541,15 @@ La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
   `devolucion_pendiente_inventario` **como razón**, conviviendo con la gestión.
 - **La ventana** es `return_recovery_max_days` (30 por defecto), el mismo número
   que la recuperación por WhatsApp, contada desde que el courier cerró la guía
-  (`closed_at`, que el barrido sella al anular).
+  (`closed_at`, que el barrido sella al anular). Las guías anteriores al sello
+  no lo tienen: el ancla se deriva del historial de llamadas —la última
+  transición terminal, `lib/guide-dates.ts`— y ese cálculo es **el mismo en el
+  Master y en Envíos**. Caer a `returned_at` no vale: el retorno llega días
+  después del cierre (medido: 58 guías con más de un día de diferencia) y
+  estiraría la ventana solo en una de las dos pantallas.
+- **No aplica si alguna guía del pedido ya ENTREGÓ**: ése es el reenvío que
+  funcionó, la venta terminó bien. Ni si hay una guía viva: la gestión la lleva
+  ella.
 - **La gestión es sobre el PEDIDO**: la mesa de confirmación registra los
   contactos aunque la guía esté anulada. Reenviar por Swayp es la acción normal,
   no una excepción; si no hay stock en su ciudad, Shalom u Olva con adelanto.

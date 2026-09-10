@@ -31,6 +31,7 @@ import {
 } from "@/lib/order-confirmation";
 import { classifyOrderCoverage, type OrderCoverage } from "@/lib/order-coverage";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
+import { derivedGuideDates } from "@/lib/guide-dates";
 import { isWebPrepaid } from "@/lib/order-paid";
 import {
   MOM_RESOLUTION_VERSION,
@@ -229,41 +230,9 @@ function text(value: unknown): string | null {
   return trimmed || null;
 }
 
-/**
- * Fechas de la gestión derivadas del historial de llamadas, para las guías que
- * todavía no tienen las columnas explícitas de 0047. `shipment_calls` registra
- * cada transición de estado, así que el despacho es la PRIMERA vez que la guía
- * entró en "en_ruta" y el cierre la ÚLTIMA vez que entró en un estado terminal.
- * Cuando la columna explícita existe, manda ella.
- */
-function derivedGuideDates(calls: CallRecord[]): {
-  dispatched_at: string | null;
-  rescheduled_at: string | null;
-  closed_at: string | null;
-  lastCallAt: string | null;
-} {
-  let dispatched: string | null = null;
-  let rescheduled: string | null = null;
-  let closed: string | null = null;
-  let last: string | null = null;
-  for (const c of calls) {
-    if (!c.occurred_at) continue;
-    if (!last || c.occurred_at > last) last = c.occurred_at;
-    if (c.new_status === "en_ruta" && (!dispatched || c.occurred_at < dispatched)) {
-      dispatched = c.occurred_at;
-    }
-    if (c.kind === "reroute" && (!rescheduled || c.occurred_at > rescheduled)) {
-      rescheduled = c.occurred_at;
-    }
-    if (
-      (c.new_status === "entregado" || c.new_status === "anulado" || c.new_status === "transferido") &&
-      (!closed || c.occurred_at > closed)
-    ) {
-      closed = c.occurred_at;
-    }
-  }
-  return { dispatched_at: dispatched, rescheduled_at: rescheduled, closed_at: closed, lastCallAt: last };
-}
+// Las fechas derivadas del historial (`derivedGuideDates`) viven en
+// `lib/guide-dates.ts`: Envíos ancla la ventana de recuperación con el MISMO
+// cálculo, y tenerlo acá lo dejaba fuera de su alcance.
 
 function toGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): GuideSnapshot {
   const derived = derivedGuideDates(calls);
@@ -1643,6 +1612,42 @@ export async function reconcileOrderMaster(
       if (!seen.has(id)) {
         pending.push(id);
         seen.add(id);
+      }
+    }
+  }
+  // QUINTA PUERTA: la ventana de recuperación vence SOLA.
+  //
+  // Las otras cuatro se disparan porque algo se escribió —un pedido nuevo, una
+  // guía tocada, una versión nueva—. El paso de «En gestión Reproprovincia» a
+  // «Recuperación vencida» no escribe nada: solo pasa el tiempo. Medido al
+  // cuadrar Envíos con el Master (10-09-2026): #AUR174406 con la ventana
+  // vencida a las 23:14 seguía en gestión a la mañana siguiente, porque nada lo
+  // había tocado. `macro_since` es justo el cierre que ancla la ventana (el
+  // resolvedor lo escribe así), de modo que «vencido» es `macro_since` anterior
+  // a hoy menos la ventana de SU tienda. Recalcular es idempotente: si la
+  // tienda tiene una ventana más larga que la que se usó, la fila vuelve igual.
+  if (pending.length < limit) {
+    const { data: storeRows } = await admin
+      .from("stores")
+      .select("id,return_recovery_max_days")
+      .in("id", storeIds as string[]);
+    const seenVencidas = new Set(pending);
+    for (const store of (storeRows ?? []) as { id: string; return_recovery_max_days: number | null }[]) {
+      if (pending.length >= limit) break;
+      const windowDays = store.return_recovery_max_days ?? RECOVERY_DEFAULT_MAX_DAYS;
+      const cutoff = new Date(Date.now() - windowDays * 86_400_000).toISOString();
+      const { data: vencidas } = await admin
+        .from("order_master")
+        .select("order_id")
+        .eq("store_id", store.id)
+        .eq("operational_status", "pendiente_nuevo_courier")
+        .in("macro_substage", ["gestion_reproprovincia", "por_reprogramar_lima"])
+        .lt("macro_since", cutoff)
+        .limit(limit - pending.length);
+      for (const row of (vencidas ?? []) as { order_id: string }[]) {
+        if (seenVencidas.has(row.order_id) || pending.length >= limit) continue;
+        pending.push(row.order_id);
+        seenVencidas.add(row.order_id);
       }
     }
   }

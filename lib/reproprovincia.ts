@@ -91,6 +91,21 @@ export function guideClosedAt(guide: RecoveryGuideLike): string | null {
   return guide.closed_at ?? guide.returned_at ?? guide.updated_at ?? null;
 }
 
+/**
+ * ¿Tiene sentido hablar de recuperación con estas guías?
+ *
+ * No si hay una guía VIVA —la gestión la lleva ella— ni si alguna ya ENTREGÓ:
+ * ese es justo el reenvío que funcionó, y la venta terminó bien. Medido al
+ * cuadrar Envíos con el Master (10-09-2026): 3 pedidos con la Aliclik anulada y
+ * una Fenix entregada que Envíos listaba como «Anulado · Reproprovincia»
+ * mientras el Master, con razón, los daba por entregados.
+ */
+function recoveryApplies(guides: readonly RecoveryGuideLike[]): boolean {
+  return !guides.some(
+    (g) => g.delivery_status === "pendiente" || g.delivery_status === "en_ruta" || g.delivery_status === "entregado",
+  );
+}
+
 function addDays(iso: string, days: number): string {
   return new Date(Date.parse(iso) + days * 86_400_000).toISOString();
 }
@@ -113,11 +128,7 @@ export function recoveryWindow(
   windowDays: number = RECOVERY_DEFAULT_MAX_DAYS,
 ): RecoveryWindow | null {
   if (events.some((e) => e.kind === RECOVERY_DISCARDED_KIND)) return null;
-  // Si hay alguna guía VIVA, la gestión la lleva ella: esto es solo para cuando
-  // todas las de verdad ya terminaron.
-  if (guides.some((g) => g.delivery_status === "pendiente" || g.delivery_status === "en_ruta")) {
-    return null;
-  }
+  if (!recoveryApplies(guides)) return null;
   const failed = guides.filter(aliclikGuideFailedAfterDispatch);
   if (!failed.length) return null;
   // La más reciente: si hubo dos intentos con Aliclik, la ventana corre desde
@@ -191,9 +202,7 @@ export function recoveryOutcome(
   nowIso: string,
   windowDays?: number,
 ): RecoveryKind | null {
-  if (guides.some((g) => g.delivery_status === "pendiente" || g.delivery_status === "en_ruta")) {
-    return null;
-  }
+  if (!recoveryApplies(guides)) return null;
   if (!guides.some(aliclikGuideFailedAfterDispatch)) return null;
   // El descarte se mira DESPUÉS de saber que era recuperable: un evento suelto
   // sobre un pedido que nunca lo fue no convierte una guía cualquiera en

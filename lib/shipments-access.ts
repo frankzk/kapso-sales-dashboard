@@ -27,10 +27,12 @@ import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
 import {
   RECOVERY_DISCARDED_KIND,
+  aliclikGuideFailedAfterDispatch,
   recoveryOutcome,
   type RecoveryEventLike,
   type RecoveryGuideLike,
 } from "@/lib/reproprovincia";
+import { derivedGuideDates, type GuideCallLike } from "@/lib/guide-dates";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
@@ -221,14 +223,15 @@ export async function withRecoveryState(
     new Set(candidates.map((r) => r.order_id).filter((id): id is string => !!id)),
   );
 
-  const guidesByOrder = new Map<string, RecoveryGuideLike[]>();
+  type SiblingGuide = RecoveryGuideLike & { id: string; order_id: string };
+  const guidesByOrder = new Map<string, SiblingGuide[]>();
   const eventsByOrder = new Map<string, RecoveryEventLike[]>();
   const cancelled = new Set<string>();
   for (const part of chunk(orderIds, 300)) {
     const [guides, events, orders] = await Promise.all([
       sb
         .from("shipments")
-        .select("order_id,courier,delivery_status,reported_status,closed_at,returned_at,updated_at")
+        .select("id,order_id,courier,delivery_status,reported_status,closed_at,returned_at,updated_at")
         .in("order_id", part),
       sb
         .from("order_events")
@@ -237,7 +240,7 @@ export async function withRecoveryState(
         .eq("kind", RECOVERY_DISCARDED_KIND),
       sb.from("orders").select("id,cancelled_at").in("id", part).not("cancelled_at", "is", null),
     ]);
-    for (const g of ((guides.data ?? []) as (RecoveryGuideLike & { order_id: string })[])) {
+    for (const g of ((guides.data ?? []) as SiblingGuide[])) {
       const list = guidesByOrder.get(g.order_id) ?? [];
       list.push(g);
       guidesByOrder.set(g.order_id, list);
@@ -248,6 +251,32 @@ export async function withRecoveryState(
       eventsByOrder.set(e.order_id, list);
     }
     for (const o of ((orders.data ?? []) as { id: string }[])) cancelled.add(o.id);
+  }
+
+  // EL ANCLA DE LA VENTANA ES LA MISMA QUE EN EL MASTER. Las guías anteriores al
+  // sello no tienen `closed_at`, y el Master lo deriva del historial de llamadas
+  // (última transición terminal). Envíos caía a `returned_at`, que llega días
+  // después: medido, 58 guías con la llamada «anulado» más de un día antes del
+  // retorno — vencidas para el Master, activas para Envíos. Se deriva igual.
+  const sinSello = Array.from(guidesByOrder.values())
+    .flat()
+    .filter((g) => !g.closed_at && aliclikGuideFailedAfterDispatch(g));
+  if (sinSello.length) {
+    const callsByGuide = new Map<string, GuideCallLike[]>();
+    for (const part of chunk(sinSello.map((g) => g.id), 300)) {
+      const { data } = await sb
+        .from("shipment_calls")
+        .select("shipment_id,kind,new_status,occurred_at")
+        .in("shipment_id", part);
+      for (const c of ((data ?? []) as (GuideCallLike & { shipment_id: string })[])) {
+        const list = callsByGuide.get(c.shipment_id) ?? [];
+        list.push(c);
+        callsByGuide.set(c.shipment_id, list);
+      }
+    }
+    for (const g of sinSello) {
+      g.closed_at = derivedGuideDates(callsByGuide.get(g.id) ?? []).closed_at;
+    }
   }
 
   // La ventana es por tienda: `return_recovery_max_days`, el mismo número que la
