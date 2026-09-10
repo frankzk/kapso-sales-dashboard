@@ -11,6 +11,7 @@ import {
   recoveryWindow,
 } from "@/lib/reproprovincia";
 import { DISCARD_REASON_MAX, DISCARD_REASON_MIN, validarMotivoDescarte } from "@/lib/recovery-discard";
+import { derivedGuideDates } from "@/lib/guide-dates";
 import { resolveOrderState, type GuideSnapshot, type OrderSnapshot } from "@/lib/order-status";
 import {
   MACRO_SUBSTAGES_BY_STAGE,
@@ -471,5 +472,67 @@ describe("gestión sobre la guía anulada, desde Envíos", () => {
   it("y el MOM lo dice", () => {
     const mom = read("docs/mom/master-pedidos-v1.md");
     expect(mom).toContain("**Desde Envíos, sobre la guía anulada**");
+  });
+});
+
+/**
+ * Cuadrar Envíos con el Master (10-09-2026), la mañana siguiente.
+ *
+ * Con el recompute terminado se cruzaron los dos conjuntos. Dos diferencias no
+ * eran explicables y las dos eran la misma enfermedad: la misma pregunta con
+ * dos fórmulas. (1) Tres pedidos con la Aliclik anulada y una Fenix ENTREGADA:
+ * el Master los daba por entregados, Envíos los listaba «Anulado ·
+ * Reproprovincia». (2) Diecisiete guías sin `closed_at`: el Master ancla la
+ * ventana en la última transición terminal del historial, Envíos caía a
+ * `returned_at`, que llega días después — vencidas para uno, activas para el otro.
+ */
+describe("cuadrar Envíos con el Master", () => {
+  const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
+
+  it("con una guía ENTREGADA en el pedido no hay recuperación: ése fue el reenvío que funcionó", () => {
+    const fenixEntregada = guia({ id: "g2", courier: "fenix", delivery_status: "entregado", reported_status: null });
+    expect(recoveryWindow([guia(), fenixEntregada], [], NOW, 30)).toBeNull();
+    expect(recoveryOutcome([guia(), fenixEntregada], [], NOW, 30)).toBeNull();
+  });
+
+  it("el ancla derivada es la ÚLTIMA transición terminal del historial, como en el Master", () => {
+    const d = derivedGuideDates([
+      { kind: "call", new_status: "en_ruta", occurred_at: hace(20) },
+      { kind: "report", new_status: "anulado", occurred_at: hace(12) },
+      { kind: "report", new_status: "anulado", occurred_at: hace(10) },
+      { kind: "call", new_status: null, occurred_at: hace(2) },
+    ]);
+    expect(d.closed_at).toBe(hace(10));
+    expect(d.dispatched_at).toBe(hace(20));
+    expect(derivedGuideDates([]).closed_at).toBeNull();
+  });
+
+  it("el Master y Envíos derivan con la MISMA función, del mismo archivo", () => {
+    expect(read("lib/order-master.ts")).toContain('import { derivedGuideDates } from "@/lib/guide-dates";');
+    expect(read("lib/order-master.ts")).not.toContain("function derivedGuideDates(");
+    const src = read("lib/shipments-access.ts");
+    const start = src.indexOf("export async function withRecoveryState(");
+    const fn = src.slice(start, src.indexOf("\n}\n", start));
+    expect(fn).toContain("g.closed_at = derivedGuideDates(callsByGuide.get(g.id) ?? []).closed_at;");
+    expect(fn).toContain('.select("shipment_id,kind,new_status,occurred_at")');
+  });
+
+  it("la ventana vence SOLA, así que el barrido tiene una puerta que la mira", () => {
+    // #AUR174406: ventana vencida a las 23:14, y a la mañana siguiente seguía
+    // «En gestión» porque nada había escrito nada. Las otras puertas se
+    // disparan por escrituras; ésta por el tiempo.
+    const src = read("lib/order-master.ts");
+    const start = src.indexOf("export async function reconcileOrderMaster(");
+    const fn = src.slice(start, src.indexOf("\nexport ", start + 10));
+    expect(fn).toContain('.eq("operational_status", "pendiente_nuevo_courier")');
+    expect(fn).toContain('.in("macro_substage", ["gestion_reproprovincia", "por_reprogramar_lima"])');
+    expect(fn).toContain('.lt("macro_since", cutoff)');
+    expect(fn).toContain("store.return_recovery_max_days ?? RECOVERY_DEFAULT_MAX_DAYS");
+  });
+
+  it("y el MOM lo dice", () => {
+    const mom = read("docs/mom/master-pedidos-v1.md");
+    expect(mom).toContain("**el mismo en el\n  Master y en Envíos**");
+    expect(mom).toContain("**No aplica si alguna guía del pedido ya ENTREGÓ**");
   });
 });
