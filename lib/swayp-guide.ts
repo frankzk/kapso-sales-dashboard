@@ -241,7 +241,11 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
     if (!armados.ok) {
       return {
         ok: false,
-        error: `Falta vincular a Swayp: ${armados.faltan.join(", ")}. Mápealos en Catálogo.`,
+        // Singular cuando falta uno: es el caso normal —se vinculan de a poco— y
+        // «Mápealos» sobre un solo producto se lee como si faltaran varios.
+        error:
+          `Falta vincular a Swayp: ${armados.faltan.join(", ")}. ` +
+          `${armados.faltan.length === 1 ? "Mápealo" : "Mápealos"} en Catálogo de productos.`,
       };
     }
     contenido = contenidoDeProductos(armados.productos);

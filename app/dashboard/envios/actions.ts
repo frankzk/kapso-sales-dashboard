@@ -2155,11 +2155,12 @@ export async function createDirectFenixGuide(input: {
 
   await syncMasterForShipment(admin, childId);
   revalidatePath("/dashboard/envios");
-  const fecha = new Date(input.dispatchDateIso).toLocaleDateString("es-PE", {
-    day: "2-digit",
-    month: "short",
-    timeZone: "UTC",
-  });
+  // `es-PE` con mes corto ya trae punto —«11 set.»— y la frase añade el suyo,
+  // así que el aviso salía «despacho 11-set..». Se quita el de la fecha y lo
+  // pone la frase, que es la que sabe si termina ahí.
+  const fecha = new Date(input.dispatchDateIso)
+    .toLocaleDateString("es-PE", { day: "2-digit", month: "short", timeZone: "UTC" })
+    .replace(/\.$/, "");
   // El id vuelve al cliente para que el tablero salte a "En ruta" —donde nace la
   // guía— y la resalte: creándola desde "Pendiente" el refresco no muestra nada
   // porque la guía nueva no pertenece a esa lista.

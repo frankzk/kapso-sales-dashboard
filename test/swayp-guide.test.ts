@@ -241,6 +241,21 @@ describe("buildSwaypGuideInput", () => {
       if (r.ok) return;
       expect(r.error).toContain("Pulsera Magnética");
       expect(r.error).toMatch(/cat[áa]logo/i);
+      // Uno solo: «Mápealos» se leería como si faltaran varios.
+      expect(r.error).toContain("Mápealo en");
+    });
+
+    it("con varios faltantes, el plural", () => {
+      const r = buildSwaypGuideInput({
+        ...base,
+        lineItems: [
+          { title: "Uno", quantity: 1, sku: "A" },
+          { title: "Dos", quantity: 1, sku: "B" },
+        ],
+        skuMap: mapa,
+      });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toContain("Mápealos en");
     });
   });
 
