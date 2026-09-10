@@ -84,6 +84,7 @@ import {
   swaypOptsFromEnv,
 } from "@/lib/swayp";
 import { buildSwaypGuideInput, esCiudadPorApiSwayp, parseSenders } from "@/lib/swayp-guide";
+import { normalizeSku } from "@/lib/swayp-productos";
 import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import type {
@@ -1764,6 +1765,36 @@ export async function previewDirectFenixGuide(input: {
  * courier='fenix' row — En ruta, sin guía madre, marcada created_via='fenix_directo'.
  */
 /**
+ * El mapa SKU de Shopify → codbar de Swayp de una tienda.
+ *
+ * Vacío cuando la tienda no ha vinculado nada, y eso APAGA la función: la guía
+ * sale como hasta hoy, sin `productos`. Ver `BuildGuideInput.skuMap` para por
+ * qué el mapa es el interruptor.
+ *
+ * Ante un error de lectura devuelve el mapa vacío en vez de lanzar. Es la misma
+ * elección que el resto de este camino: no conseguir el dato no bloquea una
+ * operación viva. La contrapartida —una guía sin `productos` en vez de un
+ * rechazo— es la conducta de hoy, no una peor.
+ */
+async function loadSwaypSkuMap(
+  admin: SupabaseClient,
+  storeId: string,
+): Promise<Map<string, { codbar: string; nombre?: string | null }>> {
+  const { data, error } = await admin
+    .from("swayp_sku_map")
+    .select("shopify_sku,codbar,nombre")
+    .eq("store_id", storeId);
+  if (error) {
+    console.error("[swayp] no se pudo leer swayp_sku_map:", error.message);
+    return new Map();
+  }
+  const rows = (data as { shopify_sku: string; codbar: string; nombre: string | null }[]) ?? [];
+  return new Map(
+    rows.map((r) => [normalizeSku(r.shopify_sku), { codbar: r.codbar, nombre: r.nombre }]),
+  );
+}
+
+/**
  * Pide la guía a Swayp y devuelve el número que ELLOS emiten — el reemplazo del
  * código inventado localmente por autoFenixGuideCode/rescheduleGuideCode.
  *
@@ -1776,13 +1807,16 @@ export async function previewDirectFenixGuide(input: {
  * POST repetido tras un timeout crearía una segunda guía y un segundo paquete.
  */
 async function createFenixGuideViaApi(args: {
+  admin: SupabaseClient;
+  /** Tienda del pedido: el mapa de productos es por tienda. */
+  storeId: string;
   city: string;
   district: string | null;
   customerName: string | null;
   customerPhone: string | null;
   address1: string | null;
   reference: string | null;
-  lineItems: Array<{ title: string; quantity: number }>;
+  lineItems: Array<{ title: string; quantity: number; sku?: string | null }>;
   codAmount: number;
   dispatchDateIso?: string | null;
   observaciones?: string | null;
@@ -1793,6 +1827,7 @@ async function createFenixGuideViaApi(args: {
     ...args,
     senders: parseSenders(env.swaypSenders()),
     idBusiness: env.swaypIdBusiness(),
+    skuMap: await loadSwaypSkuMap(args.admin, args.storeId),
   });
   if (!built.ok) return { ok: false, reason: built.error };
 
@@ -1902,6 +1937,8 @@ async function swaypGuideForReprogram(
   }
 
   return createFenixGuideViaApi({
+    admin,
+    storeId: order.store_id,
     city,
     district,
     customerName: address?.name ?? null,
@@ -2014,6 +2051,8 @@ export async function createDirectFenixGuide(input: {
   let swaypNotice = "";
   if (!input.guideCode?.trim()) {
     const viaApi = await createFenixGuideViaApi({
+      admin,
+      storeId: order.store_id,
       city,
       district,
       customerName: address?.name ?? null,

@@ -177,6 +177,65 @@ describe("buildSwaypGuideInput", () => {
     expect(r.error).not.toMatch(/bodega/i);
   });
 
+  /**
+   * Los productos van por CÓDIGO. Swayp acepta las dos formas y descarta la del
+   * nombre: «tiende a ser inestable porque se busca por nombre y no por código».
+   * Un nombre que deja de coincidir no da error, deja de descontar stock.
+   */
+  describe("productos: el mapa es el interruptor", () => {
+    const conSku = [{ title: "Cándida Cleanse", quantity: 2, sku: "765545233" }];
+    const mapa = new Map([["765545233", { codbar: "AURE001", nombre: "CANDIDA CLEANSE" }]]);
+
+    it("sin mapa la guía sale como hasta hoy, sin `productos`", () => {
+      // Una tienda que todavía no vinculó nada no deja de crear guías el día
+      // del despliegue.
+      const r = buildSwaypGuideInput({ ...base, lineItems: conSku });
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.input).not.toHaveProperty("productos");
+    });
+
+    it("un mapa VACÍO tampoco enciende nada", () => {
+      const r = buildSwaypGuideInput({ ...base, lineItems: conSku, skuMap: new Map() });
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.input).not.toHaveProperty("productos");
+    });
+
+    it("con mapa manda codbar y cantidad, y `contenido` sigue yendo", () => {
+      const r = buildSwaypGuideInput({ ...base, lineItems: conSku, skuMap: mapa });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.input.productos).toEqual([
+        { codbar: "AURE001", cantidad: 2, nombre: "CANDIDA CLEANSE" },
+      ]);
+      // `contenido` es la etiqueta legible; lo que descuenta stock es productos.
+      expect(r.input.contenido).toBe("2 x Cándida Cleanse");
+    });
+
+    it("con mapa encendido, un producto sin vincular RECHAZA la guía y lo nombra", () => {
+      const r = buildSwaypGuideInput({
+        ...base,
+        lineItems: [...conSku, { title: "Pulsera Magnética", quantity: 1, sku: "64565434" }],
+        skuMap: mapa,
+      });
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error).toContain("Pulsera Magnética");
+      // Y dice dónde arreglarlo, que es lo que la operadora necesita.
+      expect(r.error).toMatch(/cat[áa]logo/i);
+    });
+
+    it("nunca manda un ítem con codbar vacío", () => {
+      // Mandarlo igual dejaría unas guías descontando stock y otras no, sin
+      // que nadie lo note hasta que el inventario no cuadre.
+      const r = buildSwaypGuideInput({
+        ...base,
+        lineItems: [{ title: "Sin vincular", quantity: 1, sku: "NOPE" }],
+        skuMap: mapa,
+      });
+      expect(r.ok).toBe(false);
+    });
+  });
+
   it("refuses an address shorter than the API's 5-character minimum", () => {
     const r = buildSwaypGuideInput({ ...base, address1: "Av." });
     expect(r.ok).toBe(false);

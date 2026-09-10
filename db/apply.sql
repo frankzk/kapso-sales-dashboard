@@ -303,4 +303,6 @@
 \ir migrations/0149_cod_points_require_delivery.sql
 \echo 'Applying 0150_lead_coverage_pushes.sql'
 \ir migrations/0150_lead_coverage_pushes.sql
+\echo 'Applying 0151_swayp_sku_map.sql'
+\ir migrations/0151_swayp_sku_map.sql
 \echo 'Done.'

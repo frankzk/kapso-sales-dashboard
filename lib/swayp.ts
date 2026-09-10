@@ -236,6 +236,16 @@ export interface SwaypCreateGuideInput {
   ciudadDestinatario: string;
   // pedido
   contenido: string;
+  /**
+   * Los productos, por CÓDIGO. Swayp acepta dos formas y descarta una: esta, o
+   * el nombre exacto dentro de `contenido`, que ellos mismos llaman «inestable
+   * porque se busca por nombre y no por código». `contenido` se sigue mandando
+   * como etiqueta legible; lo que descuenta stock es esto.
+   *
+   * `codbar` es el código de barras de su inventario («AURE001»), NO nuestro
+   * SKU de Shopify: son numeraciones distintas y el puente es `swayp_sku_map`.
+   */
+  productos?: Array<{ codbar: string; cantidad: number; nombre: string }>;
   idBusiness?: number;
   idWarehouse?: number;
   observaciones?: string;
