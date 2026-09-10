@@ -103,6 +103,7 @@ import {
 } from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, type KeyState, type PaymentState } from "@/lib/pickup-key";
 import { orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
+import { PAYMENT_GATEWAY_LABEL } from "@/lib/payment-gateway";
 import {
   CONFIRMATION_CHANNELS,
   CONFIRMATION_MAX_DAYS,
@@ -2682,6 +2683,7 @@ function OrderDrawer({
         paymentFacts: {
           financialStatus: detail.row.financial_status,
           totalRefunded: detail.row.total_refunded,
+          paymentGateway: detail.row.payment_gateway,
         },
         hasAgencyCandidate:
           canCreateShalomGuide &&
@@ -2690,6 +2692,14 @@ function OrderDrawer({
           ),
       })
     : null;
+  // Shopify dice «pagado» pero no lo cobró el checkout: se explica por qué el
+  // panel sigue pidiendo la constancia (lib/payment-gateway.ts).
+  const gatewayNote =
+    detail &&
+    (detail.row.financial_status ?? "").toLowerCase() === "paid" &&
+    (detail.row.payment_gateway === "manual" || detail.row.payment_gateway === "cod")
+      ? `${PAYMENT_GATEWAY_LABEL[detail.row.payment_gateway]}: no lo cobró el checkout. Para darlo por pagado, sube la constancia.`
+      : null;
   const showPaymentPanel = paymentPanel?.show ?? false;
   const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel) : null;
 
@@ -3421,6 +3431,7 @@ function OrderDrawer({
                 <PickupKeyPanel
                   orderId={orderId}
                   mode={paymentPanel.mode}
+                  gatewayNote={gatewayNote}
                   onChanged={onSaved}
                 />
               </div>

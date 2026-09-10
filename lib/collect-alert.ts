@@ -23,6 +23,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { collectAmountMismatch } from "@/lib/aliclik-money";
 import { getStoreCreds } from "@/lib/ingest";
 import { orderFullyPaid, type OrderPaymentFacts } from "@/lib/order-paid";
+import type { PaymentGateway } from "@/lib/payment-gateway";
 import { sendTelegramToAll } from "@/lib/telegram";
 
 /** Re-aviso como mucho cada 3h mientras el descuadre siga vivo. */
@@ -123,7 +124,7 @@ export function formatCollectAlert(
 /** Columnas mínimas para decidir. `orders` aporta cómo se pagó. */
 const SELECT =
   "id, order_name, guide_code, courier, delivery_status, reported_collect_amount, " +
-  "collect_alert_sent_at, order:orders(total_amount, financial_status, total_refunded), " +
+  "collect_alert_sent_at, order:orders(total_amount, financial_status, total_refunded, payment_gateway), " +
   "master:order_master(payment_state)";
 
 /**
@@ -168,6 +169,7 @@ export async function alertCollectMismatches(
         financialStatus: (order?.financial_status as string | null) ?? null,
         totalRefunded: numOrNull(order?.total_refunded) ?? 0,
         paymentState: (master?.payment_state as string | null) ?? null,
+        paymentGateway: (order?.payment_gateway as PaymentGateway | null) ?? null,
       },
       alertSentAtMs: r.collect_alert_sent_at
         ? new Date(r.collect_alert_sent_at as string).getTime()

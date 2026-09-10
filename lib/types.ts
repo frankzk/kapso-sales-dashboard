@@ -1,6 +1,7 @@
 // Shared domain types + constants used across ingestion, metrics and UI.
 
 import type { RecoveryKind } from "@/lib/reproprovincia";
+import type { PaymentGateway } from "@/lib/payment-gateway";
 
 export type Role = "owner" | "admin" | "viewer" | "vendedora";
 export type ShippingMode = "cod" | "agency" | null;
@@ -84,6 +85,9 @@ export interface OrderRow {
   total_amount: number | null;
   currency: string | null;
   financial_status: string | null;
+  /** Por dónde entró el dinero (0153, lib/payment-gateway.ts): `checkout` es la
+   *  única que nace pagada. NULL si se sincronizó antes de pedir el dato. */
+  payment_gateway?: PaymentGateway | null;
   cancelled_at: string | null;
   /** Motivo de anulación según Shopify, en minúscula (0125). NULL si no está
    *  anulado, o si se sincronizó antes de que se pidiera el campo. */
@@ -505,6 +509,8 @@ export interface OrderMasterRow {
   financial_status?: string | null;
   /** Reembolsado: deshace el prepago (lib/order-paid.ts). 0128. */
   total_refunded?: number | null;
+  /** Por dónde entró el dinero (0153). Copiado de `orders` en cada recálculo. */
+  payment_gateway?: PaymentGateway | null;
   status_locked: boolean;
   current_courier: string | null;
   last_courier: string | null;

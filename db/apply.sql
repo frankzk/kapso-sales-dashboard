@@ -307,4 +307,6 @@
 \ir migrations/0151_swayp_sku_map.sql
 \echo 'Applying 0152_tanders_payment_checked_at.sql'
 \ir migrations/0152_tanders_payment_checked_at.sql
+\echo 'Applying 0153_payment_gateway.sql'
+\ir migrations/0153_payment_gateway.sql
 \echo 'Done.'

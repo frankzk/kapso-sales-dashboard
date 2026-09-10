@@ -13,6 +13,7 @@ import {
   TAGS,
 } from "@/lib/types";
 import { normalizePhone } from "@/lib/phone";
+import { paymentGatewayOf } from "@/lib/payment-gateway";
 import { extractNumericId, shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 
 // Client-safe id/URL helpers (extractNumericId, admin deep-links) live in
@@ -219,6 +220,7 @@ export function mapRestOrder(payload: any, storeId: string): OrderRow {
     total_amount: toNumber(payload?.total_price ?? payload?.current_total_price),
     currency: payload?.currency ?? payload?.presentment_currency ?? null,
     financial_status: payload?.financial_status ?? null,
+    payment_gateway: paymentGatewayOf(payload),
     cancelled_at: payload?.cancelled_at ?? null,
     cancel_reason: normalizeCancelReason(payload?.cancel_reason),
     total_refunded: toNumber(payload?.total_refunded) ?? sumRestRefunds(payload?.refunds),
@@ -277,6 +279,7 @@ export function mapGraphqlOrder(node: any, storeId: string): OrderRow {
     financial_status: node?.displayFinancialStatus
       ? String(node.displayFinancialStatus).toLowerCase()
       : null,
+    payment_gateway: paymentGatewayOf(node),
     cancelled_at: node?.cancelledAt ?? null,
     cancel_reason: normalizeCancelReason(node?.cancelReason),
     total_refunded: toNumber(node?.totalRefundedSet?.shopMoney?.amount) ?? 0,
@@ -562,6 +565,7 @@ export function buildOrdersQuery(withPhone: boolean): string {
           cancelledAt
           cancelReason
           displayFinancialStatus
+          paymentGatewayNames
           totalPriceSet { shopMoney { amount currencyCode } }
           currentTotalPriceSet { shopMoney { amount currencyCode } }
           totalRefundedSet { shopMoney { amount } }
@@ -670,6 +674,7 @@ function buildOrderByIdQuery(withPhone: boolean): string {
       cancelledAt
       cancelReason
       displayFinancialStatus
+      paymentGatewayNames
       totalPriceSet { shopMoney { amount currencyCode } }
       currentTotalPriceSet { shopMoney { amount currencyCode } }
       totalRefundedSet { shopMoney { amount } }

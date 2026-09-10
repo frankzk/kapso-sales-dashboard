@@ -14,7 +14,11 @@ import { orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
  * darle la clave para recogerlo.
  */
 
-const PREPAID = { financialStatus: "paid", totalRefunded: 0 };
+// Pagado por la pasarela CONFIRMADA del checkout, guardada. Desde el 10-09-2026
+// «pagado por web» es solo esto: sin `paymentGateway: "checkout"` no hay prepago,
+// diga lo que diga `financial_status`.
+const PREPAID = { financialStatus: "paid", totalRefunded: 0, paymentGateway: "checkout" as const };
+const PAID_SIN_PASARELA = { financialStatus: "paid", totalRefunded: 0 };
 
 const ctx = (over: Record<string, unknown> = {}) => ({
   orderId: "o1",
@@ -59,7 +63,7 @@ describe("la clave de recojo de un pedido pagado por web", () => {
     // El dinero volvió: el pedido está otra vez por cobrar, y la clave es la
     // llave del paquete.
     const v = canRevealPickupKey(
-      ctx({ paymentFacts: { financialStatus: "paid", totalRefunded: 456.3 } }),
+      ctx({ paymentFacts: { ...PREPAID, totalRefunded: 456.3 } }),
     );
     expect(v.allowed).toBe(false);
     expect(v.blockers).toContain("adelanto_no_registrado");
@@ -112,50 +116,29 @@ describe("el panel del drawer", () => {
     ).toEqual({ show: true, mode: "required" });
   });
 
-  // LA REGRESIÓN. `isWebPrepaid` lee la guarda «si hay comprobantes mandan las
-  // reglas de Yape» de `facts.paymentState`. Ese dato viaja TAMBIÉN en
-  // `input.paymentState`, y el drawer llenaba solo ese: con el hueco vacío la
-  // guarda no disparaba nunca y cualquier pedido `paid` en Shopify —que acá es
-  // casi todo lo cobrado por Yape— salía como «Pagado por web». Medido en
-  // producción: 331 pedidos, 141 abiertos, 16 con un comprobante observado que
-  // nadie podía completar porque esa rama esconde el campo.
-  it("el estado de cobro por comprobantes gana al `paid` de Shopify", () => {
-    for (const state of [
-      "adelanto_validado",
-      "diferencia_cargada",
-      "adelanto_cargado",
-      "pago_completo",
-    ]) {
+  // LA REGLA (10-09-2026). «Pagado por web» ya no se deduce: es la pasarela
+  // confirmada del checkout, guardada. Antes, `paid` sin comprobantes contaba
+  // como prepago y, como en esta operación casi todo lo cobrado por Yape acaba
+  // marcado `paid` a mano en Shopify, cualquier hueco en los datos dibujaba
+  // «Pagado por web» sobre pedidos por cobrar (331 medidos, 141 abiertos).
+  it("`paid` en Shopify SIN pasarela guardada no es prepago, con o sin comprobantes", () => {
+    for (const state of ["sin_pago", "adelanto_validado", "diferencia_cargada", "adelanto_cargado"]) {
       const p = orderPaymentPanelPresentation({
         ...base,
         paymentState: state,
-        paymentFacts: PREPAID,
+        paymentFacts: PAID_SIN_PASARELA,
       });
       expect(p.mode, state).not.toBe("prepaid");
     }
   });
 
-  it("y no depende de que quien llama lo copie dentro de paymentFacts", () => {
-    // El mismo hecho vivía en dos sitios y uno se quedó sin llenar. La función
-    // lo toma del campo que ya exige, así que da igual lo que traiga el bolso
-    // opcional: si el pedido tiene cobro por comprobantes, no es prepago web.
-    expect(
-      orderPaymentPanelPresentation({
-        ...base,
-        paymentState: "diferencia_cargada",
-        paymentFacts: { financialStatus: "paid", totalRefunded: 0 },
-      }).mode,
-    ).not.toBe("prepaid");
-
-    // Y al revés: sin comprobantes sigue siendo prepago, que es el caso real
-    // que este modo existe para servir.
-    expect(
-      orderPaymentPanelPresentation({
-        ...base,
-        paymentState: "sin_pago",
-        paymentFacts: { financialStatus: "paid", totalRefunded: 0 },
-      }).mode,
-    ).toBe("prepaid");
+  it("y con la pasarela del checkout es prepago aunque haya comprobantes cargados (#KP132708)", () => {
+    // Alguien subió la captura de Shopify como comprobante de S/ 447 y el
+    // pedido se quedó pidiendo un adelanto ya cobrado. El checkout cobró: punto.
+    for (const state of ["sin_pago", "adelanto_cargado", "adelanto_validado"]) {
+      const p = orderPaymentPanelPresentation({ ...base, paymentState: state, paymentFacts: PREPAID });
+      expect(p.mode, state).toBe("prepaid");
+    }
   });
 
   it("el drawer le pasa el estado de cobro al panel", () => {
@@ -227,48 +210,42 @@ describe("el dato viaja hasta donde se decide", () => {
   });
 });
 
-describe("la guarda: con comprobantes mandan las reglas de Yape", () => {
-  // POR QUÉ. En la operación real casi todo pedido cobrado por Yape acaba
-  // también marcado `paid` en Shopify. Sin esta condición, un pedido con el
-  // adelanto cargado y la diferencia pendiente contaría como «pagado por web» y
-  // abriría la compuerta de la clave — la pérdida de dinero que esa compuerta
-  // existe para evitar. `paid` SIN comprobantes es lo único que solo puede venir
-  // de la pasarela.
+describe("la compuerta de la clave: solo la pasarela confirmada se salta las constancias", () => {
   const conComprobante = [
     { kind: "adelanto", validation_status: "validado", order_id: "o1", amount: 30 },
   ];
 
-  it("un pedido con adelanto y diferencia pendiente NO pasa por prepago", () => {
+  it("pagado en el checkout con un comprobante suelto: la clave se entrega igual", () => {
+    // Antes un comprobante vivo apagaba el prepago «porque el dinero entró por
+    // Yape». Con la pasarela guardada eso ya no se deduce: el checkout cobró, y
+    // la captura subida por error no vuelve a exigir el dinero.
     const v = canRevealPickupKey(ctx({ payments: conComprobante, paymentFacts: PREPAID }));
-    expect(v.allowed).toBe(false);
-    expect(v.blockers).toContain("diferencia_no_registrada");
+    expect(v.allowed).toBe(true);
+    expect(v.blockers).toEqual([]);
   });
 
-  it("y el panel tampoco lo da por cobrado por web", () => {
+  it("`paid` sin pasarela guardada exige sus comprobantes como cualquier otro", () => {
+    const v = canRevealPickupKey(ctx({ payments: [], paymentFacts: PAID_SIN_PASARELA }));
+    expect(v.allowed).toBe(false);
+    expect(v.blockers).toContain("adelanto_no_registrado");
+  });
+
+  it("marcado «pagado» a mano en Shopify tampoco: alguien lo marcó, nadie cobró", () => {
+    const v = canRevealPickupKey(
+      ctx({ payments: [], paymentFacts: { ...PAID_SIN_PASARELA, paymentGateway: "manual" } }),
+    );
+    expect(v.allowed).toBe(false);
     expect(
       orderPaymentPanelPresentation({
         operation: "agencia",
         currentCourier: "shalom",
         shippingMode: "agency",
-        macroSubstage: "pendiente_pago_diferencia",
-        paymentState: "adelanto_validado",
+        macroSubstage: "sin_llamar",
+        paymentState: "sin_pago",
         hasAgencyCandidate: true,
-        paymentFacts: { ...PREPAID, paymentState: "adelanto_validado" },
+        paymentFacts: { ...PAID_SIN_PASARELA, paymentGateway: "manual" },
       }).mode,
     ).toBe("required");
-  });
-
-  it("sin comprobantes sí es prepago: es lo único que solo puede venir de la pasarela", () => {
-    expect(canRevealPickupKey(ctx({ payments: [], paymentFacts: PREPAID })).allowed).toBe(true);
-  });
-
-  it("un comprobante RECHAZADO no cuenta como comprobante vivo", () => {
-    // Un Yape rechazado no es dinero: si además el pedido está pagado por web,
-    // bloquear por esa fila sería negarle la clave a quien sí pagó.
-    const rechazado = [
-      { kind: "adelanto", validation_status: "rechazado", order_id: "o1", amount: 30 },
-    ];
-    expect(canRevealPickupKey(ctx({ payments: rechazado, paymentFacts: PREPAID })).allowed).toBe(true);
   });
 });
 

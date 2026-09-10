@@ -248,6 +248,7 @@ export async function loadPaymentPanel(
       financialStatus: ctx.row.financial_status,
       totalRefunded: ctx.row.total_refunded,
       paymentState: ctx.row.payment_state,
+      paymentGateway: ctx.row.payment_gateway,
     },
   });
 
@@ -997,6 +998,7 @@ export async function revealPickupKey(
       financialStatus: ctx.row.financial_status,
       totalRefunded: ctx.row.total_refunded,
       paymentState: ctx.row.payment_state,
+      paymentGateway: ctx.row.payment_gateway,
     },
   });
 

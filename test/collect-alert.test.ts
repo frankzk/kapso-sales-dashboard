@@ -45,7 +45,7 @@ describe("qué se avisa", () => {
   it("un pedido PAGADO cuya guía cobra: la alerta más cara", () => {
     // Antes esto no era ni un descuadre: 456.30 contra 456.30 «cuadra». Lo que
     // lo convierte en alarma es saber que el cliente ya puso el dinero.
-    const due = selectCollectMismatches([row({ facts: { financialStatus: "paid" } })], AHORA);
+    const due = selectCollectMismatches([row({ facts: { financialStatus: "paid", paymentGateway: "checkout" } })], AHORA);
     expect(due).toHaveLength(1);
     expect(due[0]!.kind).toBe("cobra_de_mas");
     expect(due[0]!.gap).toBe(456.3);
@@ -65,7 +65,7 @@ describe("qué se avisa", () => {
 
   it("una guía en 0 sobre un pedido pagado es lo CORRECTO: silencio", () => {
     expect(
-      selectCollectMismatches([row({ reported: 0, facts: { financialStatus: "paid" } })], AHORA),
+      selectCollectMismatches([row({ reported: 0, facts: { financialStatus: "paid", paymentGateway: "checkout" } })], AHORA),
     ).toHaveLength(0);
   });
 });
@@ -76,7 +76,7 @@ describe("cuándo NO se avisa", () => {
     // devolverlo no se hace desde el panel del courier.
     for (const estado of ["entregado", "devuelto", "anulado", "transferido"]) {
       const due = selectCollectMismatches(
-        [row({ deliveryStatus: estado, facts: { financialStatus: "paid" } })],
+        [row({ deliveryStatus: estado, facts: { financialStatus: "paid", paymentGateway: "checkout" } })],
         AHORA,
       );
       expect(due, estado).toHaveLength(0);
@@ -86,13 +86,13 @@ describe("cuándo NO se avisa", () => {
   it("avisado hace poco: no se repite cada 20 minutos", () => {
     // El cron corre cada 20 min. Sin este freno, el mismo pedido genera setenta
     // alertas antes de entregarse y el canal deja de leerse justo cuando importa.
-    const reciente = row({ facts: { financialStatus: "paid" }, alertSentAtMs: HACE(30) });
+    const reciente = row({ facts: { financialStatus: "paid", paymentGateway: "checkout" }, alertSentAtMs: HACE(30) });
     expect(selectCollectMismatches([reciente], AHORA)).toHaveLength(0);
   });
 
   it("pero SÍ se repite pasadas las tres horas: el problema no se resuelve solo", () => {
     const viejo = row({
-      facts: { financialStatus: "paid" },
+      facts: { financialStatus: "paid", paymentGateway: "checkout" },
       alertSentAtMs: HACE(COLLECT_REALERT_MIN + 1),
     });
     expect(selectCollectMismatches([viejo], AHORA)).toHaveLength(1);
@@ -105,7 +105,7 @@ describe("cuándo NO se avisa", () => {
 
 describe("el mensaje", () => {
   it("nombra el pedido y la guía: hay que ir a buscarlos", () => {
-    const due = selectCollectMismatches([row({ facts: { financialStatus: "paid" } })], AHORA);
+    const due = selectCollectMismatches([row({ facts: { financialStatus: "paid", paymentGateway: "checkout" } })], AHORA);
     const text = formatCollectAlert("Kenku Peru", due);
     expect(text).toContain("Kenku Peru");
     expect(text).toContain("#KP130001");
@@ -114,12 +114,12 @@ describe("el mensaje", () => {
   });
 
   it("el encabezado concuerda en número", () => {
-    const uno = selectCollectMismatches([row({ facts: { financialStatus: "paid" } })], AHORA);
+    const uno = selectCollectMismatches([row({ facts: { financialStatus: "paid", paymentGateway: "checkout" } })], AHORA);
     expect(formatCollectAlert("Kenku", uno)).toContain("1 guía va a cobrar");
     const dos = selectCollectMismatches(
       [
-        row({ id: "a", facts: { financialStatus: "paid" } }),
-        row({ id: "b", orderName: "#KP130002", facts: { financialStatus: "paid" } }),
+        row({ id: "a", facts: { financialStatus: "paid", paymentGateway: "checkout" } }),
+        row({ id: "b", orderName: "#KP130002", facts: { financialStatus: "paid", paymentGateway: "checkout" } }),
       ],
       AHORA,
     );
@@ -134,7 +134,7 @@ describe("el aviso cabe en Telegram", () => {
   // MISMO mensaje y falla igual cada 20 minutos, para siempre. El aviso se
   // rompería exactamente cuando más hay que contar.
   const muchas = Array.from({ length: 60 }, (_, i) =>
-    row({ id: `s${i}`, orderName: `#KP1300${i}`, facts: { financialStatus: "paid" } }),
+    row({ id: `s${i}`, orderName: `#KP1300${i}`, facts: { financialStatus: "paid", paymentGateway: "checkout" } }),
   );
 
   it("un atraso de 60 guías no produce un mensaje que Telegram rechace", () => {
@@ -153,7 +153,7 @@ describe("el aviso cabe en Telegram", () => {
   });
 
   it("cuando caben todas no sobra la coletilla", () => {
-    const due = selectCollectMismatches([row({ facts: { financialStatus: "paid" } })], AHORA);
+    const due = selectCollectMismatches([row({ facts: { financialStatus: "paid", paymentGateway: "checkout" } })], AHORA);
     expect(formatCollectAlert("Kenku", due, due.length)).not.toContain("más. Salen");
   });
 

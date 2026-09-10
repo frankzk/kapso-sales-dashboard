@@ -42,7 +42,7 @@ import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovi
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.10" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.11" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

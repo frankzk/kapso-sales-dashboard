@@ -187,10 +187,17 @@ export function PickupKeyPanel({
   orderId,
   onChanged,
   mode = "required",
+  gatewayNote = null,
 }: {
   orderId: string;
   onChanged: () => void;
   mode?: OrderPaymentPanelMode;
+  /**
+   * Cuando Shopify dice «pagado» pero NO lo cobró el checkout (lo marcó alguien
+   * a mano): se dice, para que se entienda por qué el panel sigue pidiendo la
+   * constancia. Solo el checkout se la salta (lib/payment-gateway.ts).
+   */
+  gatewayNote?: string | null;
 }) {
   const { panel, error, setError, notice, setNotice, pending, startTransition, reload } =
     usePaymentPanel(orderId);
@@ -285,6 +292,10 @@ export function PickupKeyPanel({
           {paymentLabel}
         </span>
       </div>
+
+      {gatewayNote && (
+        <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{gatewayNote}</p>
+      )}
 
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       {notice && (

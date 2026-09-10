@@ -5,6 +5,7 @@
 import type { TandersOrderPayload, TandersPackageType } from "./types";
 import { isLimaMetropolitanaOrCallao, isNonMetroLimaLocation } from "@/lib/order-coverage";
 import { expectedCollectAmount } from "@/lib/order-paid";
+import type { PaymentGateway } from "@/lib/payment-gateway";
 
 /**
  * Caja y peso por defecto. La operación despacha siempre XXS con 100 g
@@ -89,12 +90,15 @@ export function defaultCollectionAmount(input: {
   orderTotal: number | null | undefined;
   financialStatus?: string | null;
   totalRefunded?: number | null;
+  /** Solo la pasarela confirmada del checkout cuenta como pago web (0153). */
+  paymentGateway?: PaymentGateway | null;
 }): number {
   return expectedCollectAmount(
     {
       paymentState: input.paymentState,
       financialStatus: input.financialStatus,
       totalRefunded: input.totalRefunded,
+      paymentGateway: input.paymentGateway,
     },
     input.orderTotal,
   );
