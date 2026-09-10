@@ -52,10 +52,34 @@ describe("checkTandersPayment", () => {
     expect(v.summary).toContain("Transferencia BCP");
   });
 
-  it("rechaza un medio que no es ni Yape ni BCP", () => {
+  it("acepta un Plin: cae en la misma cuenta que el Yape", () => {
+    // #KP131846 (10-09-2026): Plin de S/ 298 a «Grupo Gf S · 930 555 309 -
+    // Yape». Es el mismo dinero en la misma cuenta; el motorizado remite con la
+    // billetera que tenga. Rechazarlo por el logo rechazaba un cobro bueno —7
+    // de los 9 rechazos de ese día eran esto.
+    const v = checkTandersPayment({
+      voucher: voucher({ method: "plin", amount: 298 }),
+      expectedAmount: 298,
+    });
+    expect(v.state).toBe("validado");
+    expect(v.summary).toContain("Plin");
+  });
+
+  it("rechaza un medio que no es Yape, Plin ni BCP", () => {
     const v = checkTandersPayment({ voucher: voucher({ method: "otro" }), expectedAmount: 89 });
     expect(v.state).toBe("rechazado");
     expect(v.reasons).toContain("medio_no_aceptado");
+  });
+
+  it("un Plin a otra cuenta se rechaza igual que un Yape a otra cuenta", () => {
+    // Aceptar el medio no es aceptar el pago: lo que decide sigue siendo a
+    // quién fue el dinero.
+    const v = checkTandersPayment({
+      voucher: voucher({ method: "plin", recipientName: "Juan Pérez" }),
+      expectedAmount: 89,
+    });
+    expect(v.state).toBe("rechazado");
+    expect(v.reasons).toContain("destinatario_distinto");
   });
 
   it("rechaza un Yape a otra cuenta y dice a quién se pagó", () => {

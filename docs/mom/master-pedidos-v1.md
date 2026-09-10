@@ -1018,6 +1018,13 @@ sin tope de antigüedad. Reglas:
     la imagen contra el monto de la guía y el nombre de Grupo GF SAC: que el
     courier se dé por pagado a sí mismo no es constancia de que el dinero
     llegó a nuestra cuenta.
+  - **Medios de cobro aceptados: Yape, Plin y transferencia BCP.** Plin entró
+    el 10-09-2026: el motorizado remite con la billetera que tenga, y Plin y
+    Yape se pagan entre sí y caen en la misma cuenta —la constancia de un Plin
+    a Grupo GF SAC dice literalmente «Enviado a: Grupo Gf S · 930 555 309 -
+    Yape»—. **7 de los 9 rechazos de ese día eran cobros buenos rechazados por
+    el logo.** Aceptar el medio no es aceptar el pago: el destinatario y el
+    monto se siguen exigiendo igual.
   - **El barrido de cobros pide la constancia directamente**, sin preguntar
     antes el estado. Una constancia bajo `files_payment/` existe solo cuando el
     motorizado cobró, así que es por sí misma la prueba de entrega; y es una
