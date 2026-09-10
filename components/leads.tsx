@@ -23,6 +23,7 @@ import {
   type UrgencyTier,
 } from "@/lib/lead-urgency";
 import type { LeadsInsights } from "@/lib/leads-insights";
+import { FORCED_REFRESH_MS, decideQueueRefresh } from "@/lib/leads-live-refresh";
 import {
   buildMetaAudienceCsv,
   buildMetaAudienceRows,
@@ -64,7 +65,7 @@ import {
   loadLeadDetail,
   loadLeadsInsightsPanel,
   openLeadDrawer,
-  pollLeadsQueueSignature,
+  pollLeadsQueue,
   releaseLead,
   resolveHandoff,
   searchLeads,
@@ -595,10 +596,11 @@ const ICON_CHAT = "M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z
 // Mismo espíritu que ONLINE_POLL_MS de Productividad, un poco más ágil porque
 // "Atender ahora" es una cola que se trabaja al momento.
 const LEADS_LIVE_POLL_MS = 30_000;
-// Red de seguridad del refresco por firma: aunque la firma diga que nada cambió,
-// se recarga igualmente de vez en cuando. Cubre lo que la firma no ve (una base
-// sin el trigger `leads_touch`, un despliegue sin la migración 0059).
-const LEADS_FORCED_REFRESH_MS = 5 * 60_000;
+// Cuándo recargar de verdad —urgente, tranquila cada dos minutos, o forzada
+// cada cinco— lo decide lib/leads-live-refresh.ts, que es puro y está probado.
+// El panel de gráficos se recarga con la misma calma: ve una semana entera, y
+// bajarlo en cada refresco era la segunda partida del egress.
+const INSIGHTS_MIN_REFRESH_MS = 5 * 60_000;
 // Filas que se pintan de entrada. La cola completa puede traer miles de leads y
 // montarlas TODAS de golpe era el segundo motivo de que el panel se sintiera
 // pesado: miles de nodos por render, y un render por cada tecla del buscador.
@@ -734,6 +736,7 @@ export function LeadsBoard({
   // cuando llegan los datos nuevos (el usuario no ve el refetch). Cambiar de
   // tienda no arrastra datos viejos: la página remonta el board con
   // key={storeId}:{view}.
+  const insightsLoadedAtRef = useRef<{ scopeKey: string; at: number } | null>(null);
   useEffect(() => {
     let alive = true;
     if (insights) {
@@ -742,6 +745,16 @@ export function LeadsBoard({
         alive = false;
       };
     }
+    // Como mucho cada INSIGHTS_MIN_REFRESH_MS por alcance: el panel ve una
+    // semana y no cambia de forma con un lead más. El primer montaje siempre
+    // carga; un cambio de tienda también.
+    const last = insightsLoadedAtRef.current;
+    if (last && last.scopeKey === scopeKey && Date.now() - last.at < INSIGHTS_MIN_REFRESH_MS) {
+      return () => {
+        alive = false;
+      };
+    }
+    insightsLoadedAtRef.current = { scopeKey, at: Date.now() };
     void loadLeadsInsightsPanel(scope, timezone, counts.sin_llamar).then((result) => {
       if (alive && !("error" in result)) setInsightsData(result);
     });
@@ -851,23 +864,39 @@ export function LeadsBoard({
   useEffect(() => {
     if (queueSignature) signatureRef.current = queueSignature;
   }, [queueSignature]);
+  // Los contadores con los que se comparó la última vez: «Atender ahora» y
+  // Yapes son los que hacen urgente una recarga (lib/leads-live-refresh.ts).
+  const countsRef = useRef(counts);
+  useEffect(() => {
+    countsRef.current = counts;
+  }, [counts]);
   useEffect(() => {
     let alive = true;
     let lastRefreshAt = Date.now();
     const check = async () => {
       if (document.hidden) return;
-      if (Date.now() - lastRefreshAt >= LEADS_FORCED_REFRESH_MS) {
-        lastRefreshAt = Date.now();
+      const now = Date.now();
+      if (now - lastRefreshAt >= FORCED_REFRESH_MS) {
+        lastRefreshAt = now;
         router.refresh();
         return;
       }
-      // Sin firma previa (o sin firma del servidor) no hay nada que comparar:
-      // se comporta como antes y recarga.
-      const next = await pollLeadsQueueSignature(scope).catch(() => null);
+      const next = await pollLeadsQueue(scope).catch(() => null);
       if (!alive || document.hidden) return;
       if (next === null) return; // fallo puntual: se reintenta al siguiente tick
-      if (signatureRef.current !== null && next === signatureRef.current) return;
-      signatureRef.current = next;
+      const decision = decideQueueRefresh({
+        prevSignature: signatureRef.current,
+        nextSignature: next.signature,
+        prevCounts: countsRef.current,
+        nextCounts: next.counts,
+        lastRefreshAt,
+        now: Date.now(),
+      });
+      // «skip» por calma NO adelanta la firma: el siguiente sondeo vuelve a
+      // ver el cambio y recarga cuando toque.
+      if (decision === "skip") return;
+      signatureRef.current = next.signature;
+      countsRef.current = next.counts;
       lastRefreshAt = Date.now();
       router.refresh();
     };
