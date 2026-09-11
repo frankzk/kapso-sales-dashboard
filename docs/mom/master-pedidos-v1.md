@@ -49,6 +49,15 @@ heredados continúan disponibles como evidencia y compatibilidad.
 Orden comercial creada en Shopify. Tiene una identidad única y puede sobrevivir
 a múltiples intentos logísticos.
 
+**No todos nacen de una conversación.** Desde agosto de 2026 las dos tiendas
+venden también por un formulario COD en la web (EasySell, etiqueta
+`easysell_cod_form`): 591 pedidos y S/93.677 en los 30 días previos al
+11-09-2026, de los cuales 488 no tienen lead ninguno. Para el Master no cambia
+nada —los 591 están en `order_master` y 499 ya tienen guía—, pero sí para todo
+lo que se calcula recorriendo leads: ese camino no los ve. El anuncio que los
+trajo viaja en `orders.utm_meta`, y las reglas para leerlo están en
+`lib/cod-cart-attribution.ts`.
+
 ### Salida
 
 Intento físico de entregar un pedido. Una salida corresponde a un paquete, un

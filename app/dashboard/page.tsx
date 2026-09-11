@@ -10,9 +10,11 @@ import {
   getConversations,
   getLatestOps,
   getLeadsForDashboard,
+  getMetaAdCatalog,
   getMetaAdPerformance,
   getOrdersByIds,
   getOrders,
+  getWebAdOrders,
   getRollups,
   getUserRoleSummary,
   getWaNumbers,
@@ -94,8 +96,18 @@ async function ConsolidatedContent({
   const campaignOrdersPromise = campaignLeadsPromise.then((campaignLeads) =>
     getOrdersByIds(storeIds, campaignLeads.map((lead) => lead.order_id)),
   );
-  const campaignDeliveriesPromise = campaignLeadsPromise.then((leads) =>
-    getCampaignDeliveryOutcomes(leads.map((l) => l.order_id)),
+  // Los pedidos del carrito COD de la web, que no llegan por ningún lead y por
+  // eso el panel de anuncios no los veía (lib/cod-cart-attribution.ts).
+  const webAdOrdersPromise = getWebAdOrders(storeIds, range);
+  const metaAdCatalogPromise = webAdOrdersPromise.then((web) => getMetaAdCatalog(web));
+  // La entrega de ESTOS pedidos también, o su ROAS entregado saldría en cero y
+  // el panel diría que un anuncio que vende no entrega nada.
+  const campaignDeliveriesPromise = Promise.all([campaignLeadsPromise, webAdOrdersPromise]).then(
+    ([leads, web]) =>
+      getCampaignDeliveryOutcomes([
+        ...leads.map((l) => l.order_id),
+        ...web.map((w) => w.order.id),
+      ]),
   );
   const [
     rollups,
@@ -110,6 +122,8 @@ async function ConsolidatedContent({
     campaignLeads,
     campaignOrders,
     metaAdPerformance,
+    webAdOrders,
+    metaAdCatalog,
   ] =
     await Promise.all([
       getRollups(storeIds, range),
@@ -124,6 +138,8 @@ async function ConsolidatedContent({
       campaignLeadsPromise,
       campaignOrdersPromise,
       metaAdPerformancePromise,
+      webAdOrdersPromise,
+      metaAdCatalogPromise,
     ]);
 
   // Atribución de fuente y canal de cierre, igual que en la página de tienda.
@@ -165,6 +181,8 @@ async function ConsolidatedContent({
         campaignLeads={campaignLeads}
         campaignOrders={campaignOrders}
         metaAdPerformance={metaAdPerformance}
+        webAdOrders={webAdOrders}
+        metaAdCatalog={metaAdCatalog}
       />
     </div>
   );

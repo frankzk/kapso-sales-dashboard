@@ -8,6 +8,7 @@ import {
   getConversations,
   getLatestOps,
   getLeadsForDashboard,
+  getMetaAdCatalog,
   getMetaAdPerformance,
   getMetaSpend,
   getOrders,
@@ -15,6 +16,7 @@ import {
   getRollups,
   getUserRoleSummary,
   getWaNumbers,
+  getWebAdOrders,
   parseRange,
   previousRange,
 } from "@/lib/access";
@@ -50,16 +52,25 @@ export default async function StorePage({
   ]);
   const campaignLeads = await getCampaignLeadsForDashboard(storeId, range, store.timezone);
   const campaignOrdersPromise = getOrdersByIds([storeId], campaignLeads.map((lead) => lead.order_id));
+  // Los pedidos del carrito COD de la web, que no llegan por ningún lead y por
+  // eso el panel de anuncios no los veía (lib/cod-cart-attribution.ts).
+  const webAdOrders = await getWebAdOrders([storeId], range);
 
   // Resolve Meta ad names + WhatsApp-number labels for the breakdowns, the
   // per-phone attribution signals (source / advisor touches / winback sends,
   // keyed off the period's orders), and Meta ad spend for ROAS. All best-effort.
-  const [metaAdPerformance, waNumbers, attributionInputs, metaSpend, campaignDeliveries] = await Promise.all([
+  const [metaAdPerformance, waNumbers, attributionInputs, metaSpend, campaignDeliveries, metaAdCatalog] = await Promise.all([
     getMetaAdPerformance(storeId, range),
     getWaNumbers(leads.map((l) => l.wa_phone_number_id)),
     getAttributionInputs([storeId], orders),
     getMetaSpend(storeId, range),
-    getCampaignDeliveryOutcomes(campaignLeads.map((l) => l.order_id)),
+    // La entrega de los pedidos web también, o su ROAS entregado saldría en
+    // cero y el panel diría que un anuncio que vende no entrega nada.
+    getCampaignDeliveryOutcomes([
+      ...campaignLeads.map((l) => l.order_id),
+      ...webAdOrders.map((w) => w.order.id),
+    ]),
+    getMetaAdCatalog(webAdOrders),
   ]);
   const campaignOrders = await campaignOrdersPromise;
   const adNames = await getAdNames([
@@ -92,6 +103,8 @@ export default async function StorePage({
       campaignLeads={campaignLeads}
       campaignOrders={campaignOrders}
       metaAdPerformance={metaAdPerformance}
+      webAdOrders={webAdOrders}
+      metaAdCatalog={metaAdCatalog}
     />
   );
 }
