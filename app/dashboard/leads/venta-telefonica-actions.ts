@@ -20,6 +20,11 @@ import { getAccessibleStores } from "@/lib/access";
 import { normalizePhone } from "@/lib/phone";
 import { getPedidosRecientesPorTelefono } from "@/lib/leads-access";
 import { avisoDuplicado, type AvisoDuplicado } from "@/lib/pedido-duplicado";
+import {
+  VENTANA_CANDIDATOS_MS,
+  ordenarCandidatos,
+  type CandidatoSinNumero,
+} from "@/lib/lead-sin-numero";
 
 export interface ClienteParaVenta {
   ok: boolean;
@@ -29,6 +34,9 @@ export interface ClienteParaVenta {
   existia?: boolean;
   nombre?: string | null;
   aviso?: AvisoDuplicado | null;
+  /** Conversaciones abiertas sin teléfono, cuando el número tecleado no existe.
+   *  Vacío cuando el cliente sí apareció: ahí no hay nada que desambiguar. */
+  candidatos?: CandidatoSinNumero[];
 }
 
 /**
@@ -40,6 +48,7 @@ export interface ClienteParaVenta {
 export async function consultarClientePorTelefono(
   storeId: string,
   phone: string,
+  nombre?: string | null,
 ): Promise<ClienteParaVenta> {
   const stores = await getAccessibleStores();
   if (!stores.some((s) => s.id === storeId)) return { ok: false, error: "Tienda inválida o sin acceso." };
@@ -63,13 +72,66 @@ export async function consultarClientePorTelefono(
   const aviso = avisoDuplicado(previos, [], new Date().toISOString());
 
   const l = lead as { id: string; name: string | null } | null;
+
+  // SI NO APARECIÓ NADIE, puede que el cliente SÍ esté en la cola sin número.
+  // Desde agosto de 2026 hay quien escribe con nombre de usuario de WhatsApp y
+  // Meta no entrega su teléfono, así que su lead nace con `phone` vacío y esta
+  // búsqueda —que va por `(store_id, phone)`— no lo encuentra jamás. Crear otro
+  // lead parte al cliente en dos y le quita la venta al anuncio que lo trajo
+  // (ver lib/lead-sin-numero.ts). Antes de dejar que eso pase, se le enseñan a
+  // la asesora las conversaciones abiertas sin número para que reconozca la suya.
+  const candidatos = l ? [] : await conversacionesSinNumero(storeId, nombre);
+
   return {
     ok: true,
     leadId: l?.id,
     existia: !!l,
     nombre: l?.name ?? null,
     aviso,
+    candidatos,
   };
+}
+
+/**
+ * Conversaciones recientes de esa tienda cuyo lead no tiene teléfono.
+ *
+ * NO FILTRA POR NOMBRE, ordena por él: el nombre es opcional en el formulario y
+ * muchas fichas llegan con el apodo de WhatsApp («andreita😘») en vez del nombre
+ * real, así que descartar por no coincidir escondería justo al cliente que se
+ * busca. Medido sobre 7 días de Kenku en ventanas de dos horas salen 3 de media
+ * y 16 en el peor caso, así que la lista corta cabe en pantalla.
+ */
+async function conversacionesSinNumero(
+  storeId: string,
+  nombre?: string | null,
+): Promise<CandidatoSinNumero[]> {
+  const sb = await createServerSupabase();
+  const desde = new Date(Date.now() - VENTANA_CANDIDATOS_MS).toISOString();
+  const { data } = await sb
+    .from("leads")
+    .select("id,name,username,ad_headline,last_interaction_at")
+    .eq("store_id", storeId)
+    .is("phone", null)
+    .gte("last_interaction_at", desde)
+    .order("last_interaction_at", { ascending: false })
+    .limit(40);
+  const filas = (data ?? []) as {
+    id: string;
+    name: string | null;
+    username: string | null;
+    ad_headline: string | null;
+    last_interaction_at: string | null;
+  }[];
+  return ordenarCandidatos(
+    filas.map((f) => ({
+      id: f.id,
+      name: f.name,
+      username: f.username,
+      adHeadline: f.ad_headline,
+      lastInteractionAt: f.last_interaction_at,
+    })),
+    nombre,
+  );
 }
 
 /**
