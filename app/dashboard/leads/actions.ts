@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { getPedidosRecientesPorTelefono } from "@/lib/leads-access";
 import { avisoDuplicado, cuandoLabel } from "@/lib/pedido-duplicado";
+import { debeGuardarTelefono } from "@/lib/lead-sin-numero";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
@@ -2495,18 +2496,51 @@ export async function generateOrder(
   await recomputeOrderMasterSafe(admin, [internalOrderId]);
 
   // 3) Lead won + draft mirror.
-  const leadUpdate = admin
-    .from("leads")
-    .update({
-      has_order: true,
-      order_id: internalOrderId,
-      status: "pedido_generado",
-      category: "won",
-      needs_attention: false,
-      last_interaction_at: nowIso,
-      ...(reuseExistingDraft ? { draft_order_status: "completed" } : {}),
-    })
-    .eq("id", leadId);
+  //
+  // EL CELULAR TECLEADO SE QUEDA EN EL LEAD cuando el lead no traía ninguno, y
+  // no es cosmética: desde agosto de 2026 una parte creciente de los clientes
+  // escribe con NOMBRE DE USUARIO de WhatsApp y Meta no entrega su número, así
+  // que el lead nace con `phone` vacío (0% en junio-julio, 4,8% en septiembre).
+  // Ese hueco cuesta tres cosas a la vez:
+  //
+  //   - El courier no tiene a quién llamar para coordinar la entrega.
+  //   - «Venta telefónica» busca por `(store_id, phone)`, no encuentra el lead
+  //     y crea uno NUEVO: la venta se le acredita a un clon sin `ad_id` y el
+  //     anuncio que la trajo figura como si no hubiera vendido.
+  //   - La siguiente vez que ese cliente escriba, vuelve a pasar.
+  //
+  // Copiarlo es seguro: medido sobre 4.465 pedidos, el número del pedido es el
+  // mismo que el del lead en 4.461 (99,9%). Y solo se RELLENA el hueco — nunca
+  // se pisa un número que el lead ya tenía, porque ese vino de WhatsApp y es la
+  // identidad del cliente, mientras que el del formulario puede ser el de quien
+  // recibe el paquete.
+  const guardaTelefono = debeGuardarTelefono(l.phone, phone);
+  const leadPatch = {
+    has_order: true,
+    order_id: internalOrderId,
+    status: "pedido_generado",
+    category: "won",
+    needs_attention: false,
+    last_interaction_at: nowIso,
+    ...(reuseExistingDraft ? { draft_order_status: "completed" } : {}),
+  };
+  // El teléfono se intenta APARTE del resto del parche. `leads` tiene índice
+  // único en (store_id, phone), así que si un duplicado anterior ya se quedó con
+  // ese número el update entero fallaría y el lead se quedaría SIN marcar como
+  // ganado — sin `order_id`, sin acreditación, justo lo contrario de lo que se
+  // viene a arreglar. Ante el choque se reintenta sin el teléfono: el hueco es
+  // molesto, perder la venta del lead es grave.
+  const leadUpdate = (async () => {
+    if (guardaTelefono) {
+      const { error } = await admin
+        .from("leads")
+        .update({ ...leadPatch, phone })
+        .eq("id", leadId);
+      if (!error) return;
+      if (error.code !== "23505") return; // otro fallo: no se insiste
+    }
+    await admin.from("leads").update(leadPatch).eq("id", leadId);
+  })();
   const draftMirror =
     reuseExistingDraft && draftGid
       ? admin
