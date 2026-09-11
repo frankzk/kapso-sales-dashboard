@@ -24,7 +24,7 @@ import {
   reconcileAliclikCustodyState,
   reconcileAliclikPreparationState,
 } from "@/lib/aliclik-status";
-import { categoryOf, reconcileDeliveryStatus, reopensForFailedAttempt } from "@/lib/shipments";
+import { categoryOf, reconcileDeliveryStatus, statusAfterFailedAttempt } from "@/lib/shipments";
 import { sealReturn } from "@/lib/returned-source";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { cambiosMateriales, soloSellos } from "@/lib/aliclik-snapshot-diff";
@@ -236,16 +236,20 @@ export async function applyAliclikSnapshot(
   // cada pocos minutos: si solo lo hiciera el import, este la devolvería a "En
   // ruta" enseguida y la guía quedaría rebotando entre estados.
   //
+  // Y UNA VEZ EN LA COLA, EL MISMO NO CONTESTA NO LA SACA. Este barrido relee la
+  // misma guía cada 20 minutos (dos veces, de hecho: las dos tiendas listan los
+  // mismos pedidos). Sin la segunda mitad de la regla, la relectura veía una
+  // guía `pendiente` con un `en_ruta` entrante y la avanzaba, y la siguiente la
+  // reabría otra vez: ver `statusAfterFailedAttempt`.
+  //
   // El día del intento es HOY: la API está diciendo AHORA que no la encontró.
-  const reopen = reopensForFailedAttempt({
+  const next = statusAfterFailedAttempt({
     existingStatus: shipment.delivery_status,
+    incoming: reconcileDeliveryStatus(shipment.delivery_status, mapped.deliveryStatus),
     attemptFailed: mapped.attemptFailed,
     attemptDate: new Date().toISOString().slice(0, 10),
     scheduledFor: shipment.next_followup_at,
   });
-  const next = reopen
-    ? "pendiente"
-    : reconcileDeliveryStatus(shipment.delivery_status, mapped.deliveryStatus);
   const nowIso = new Date().toISOString();
 
   const patch: Record<string, unknown> = {

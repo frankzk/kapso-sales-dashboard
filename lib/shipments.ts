@@ -940,6 +940,45 @@ export function reopensForFailedAttempt(input: {
   return attempt >= scheduled;
 }
 
+/**
+ * El estado que queda tras cruzar un intento fallido con lo que ya tiene la guía.
+ *
+ * `reopensForFailedAttempt` mete la guía en la cola (`en_ruta` → `pendiente`).
+ * Esta función añade la otra mitad, sin la cual la primera REBOTA: un NO
+ * CONTESTA nunca la SACA de la cola. Sin esto, el mismo snapshot leído dos
+ * veces —y el barrido de la API relee TODO cada 20 minutos— hacía el viaje de
+ * ida y vuelta: la primera lectura reabría (`pendiente`), la segunda veía una
+ * guía `pendiente` con un estado `en_ruta` entrante y la avanzaba por la
+ * precedencia monotónica, la tercera volvía a reabrir… Medido el 11-09-2026:
+ * 90 guías con NOT_RESPOND cambiando de estado dos veces por ciclo, 430
+ * eventos `courier_status` por hora de madrugada y un recálculo del Master en
+ * cada vuelta, con el pedido saltando entre «por llamar» y «en reparto» sin que
+ * nadie hubiera hecho nada. Antes no se veía: el barrido tardaba tanto que
+ * rara vez llegaba a releer la misma guía dos veces seguidas.
+ *
+ * Una guía `pendiente` con un intento fallido está en la cola porque ESE
+ * intento la puso ahí. Sale cuando alguien la reprograma (Envíos la pone
+ * `en_ruta` con fecha) o cuando el courier reporta otra cosa (RESCHEDULED,
+ * PICKED, entregado…): un estado que no sea un intento fallido avanza igual que
+ * siempre.
+ *
+ * `incoming` es lo que la precedencia monotónica habría escrito. Pure.
+ */
+export function statusAfterFailedAttempt(input: {
+  existingStatus: string | null | undefined;
+  /** Lo que la vía (API o Excel) habría escrito sin esta regla. */
+  incoming: string;
+  attemptFailed: boolean;
+  attemptDate: string | null | undefined;
+  scheduledFor: string | null | undefined;
+}): string {
+  if (reopensForFailedAttempt(input)) return "pendiente";
+  if (input.attemptFailed && input.existingStatus === "pendiente" && input.incoming === "en_ruta") {
+    return "pendiente";
+  }
+  return input.incoming;
+}
+
 /** ¿El reporte observó la guía DESPUÉS que la última lectura de la API? */
 export function reportSeenAfterApi(
   reportAt: string | null | undefined,
