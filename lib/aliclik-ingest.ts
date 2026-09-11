@@ -14,7 +14,7 @@ import {
   isPending,
   maxDeliveryDate,
   reconcileReportedDeliveryStatus,
-  reopensForFailedAttempt,
+  statusAfterFailedAttempt,
 } from "./shipments";
 import { coverageInputOf, evaluateFenix, type FenixStockRow } from "./fenix";
 import { describeRecompute, recomputeOrderMasterSafe, type RecomputeOutcome } from "./order-master";
@@ -196,13 +196,16 @@ export async function ingestAliclikReport(
     // llamadas: es la única transición hacia atrás. Si se queda En ruta nadie
     // la vuelve a llamar, se agota la ventana de reprogramación con Aliclik y
     // el paquete se devuelve a Lima con flete a cargo nuestro.
-    const reopen = reopensForFailedAttempt({
+    // Y el mismo NO CONTESTA, importado otra vez, no la saca de la cola
+    // (`statusAfterFailedAttempt`): el mismo archivo subido dos veces no puede
+    // dejar la guía en un estado distinto.
+    const finalStatus = statusAfterFailedAttempt({
       existingStatus: existing?.delivery_status,
+      incoming: mergedStatus,
       attemptFailed: inc.row.attempt_failed === true,
       attemptDate: inc.row.aliclik_service_date,
       scheduledFor: existing?.next_followup_at,
     });
-    const finalStatus = reopen ? "pendiente" : mergedStatus;
     const keepManualAddress = existing?.address_override === true;
     const district = keepManualAddress
       ? existing.district

@@ -548,6 +548,15 @@ Reglas:
   (`aliclik-track`), el Excel de Aliclik (`aliclik-ingest`) y el Excel de los
   demás couriers (`report-ingest`)—; en una sola no sirve, porque la otra
   devolvería la guía a `en_ruta` en el siguiente barrido.
+  **Y el mismo `NO CONTESTA` no la saca de la cola** (`statusAfterFailedAttempt`):
+  una guía `pendiente` con un intento fallido entrante se queda `pendiente`. Sin
+  esta segunda mitad la primera rebotaba: el barrido relee cada guía cada 20
+  minutos —dos veces, porque las dos tiendas listan los mismos pedidos— y el
+  mismo snapshot reabría la guía en una lectura y la avanzaba en la siguiente
+  (medido el 11-09-2026: 90 guías, 430 cambios de estado por hora de madrugada,
+  un recálculo del Master en cada uno). Sale de la cola cuando la asesora la
+  reprograma (Envíos la pone `en_ruta` con fecha) o cuando el courier reporta
+  algo que no sea un intento fallido.
 - A diferencia de la vía autenticada, el Excel **solo** fija `delivery_status`:
   no avanza `custody_state` ni `preparation_state` (el dato de despacho del Excel
   es ruidoso — `VALIDADO` persiste incluso en entregados). Por eso un `VALIDADO`

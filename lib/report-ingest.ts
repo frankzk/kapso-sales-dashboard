@@ -15,7 +15,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { chunk } from "@/lib/access";
 import { matchShipment, type MatchResult, type OrderCandidate } from "@/lib/shipment-match";
-import { reconcileReportedDeliveryStatus, reopensForFailedAttempt, categoryOf } from "@/lib/shipments";
+import { reconcileReportedDeliveryStatus, statusAfterFailedAttempt, categoryOf } from "@/lib/shipments";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { sealReturn } from "@/lib/returned-source";
 import type { CanonicalReportRow } from "@/lib/couriers/registry";
@@ -235,13 +235,15 @@ export async function ingestCourierReport(
     // Un NO CONTESTA en el día agendado consume la reprogramación: la guía
     // vuelve a la cola de llamadas para reprogramarla otra vez antes de que se
     // agote la ventana de Aliclik (ver reopensForFailedAttempt).
-    const reopen = reopensForFailedAttempt({
+    // Y el mismo NO CONTESTA, importado otra vez, no la saca de la cola
+    // (`statusAfterFailedAttempt`).
+    const finalStatus = statusAfterFailedAttempt({
       existingStatus: existing?.delivery_status,
+      incoming: mergedStatus,
       attemptFailed: inc.row.attempt_failed === true,
       attemptDate: inc.row.attempt_date,
       scheduledFor: existing?.next_followup_at,
     });
-    const finalStatus = reopen ? "pendiente" : mergedStatus;
     if (!existing || existing.delivery_status !== finalStatus) updatedCount++;
 
     // El vínculo con el pedido nunca se degrada.

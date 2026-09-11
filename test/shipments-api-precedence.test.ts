@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   API_OWNERSHIP_DAYS,
@@ -5,6 +7,7 @@ import {
   reconcileDeliveryStatus,
   reconcileReportedDeliveryStatus,
   reopensForFailedAttempt,
+  statusAfterFailedAttempt,
 } from "@/lib/shipments";
 
 // La API manda sobre el Excel mientras su lectura siga fresca.
@@ -156,5 +159,67 @@ describe("reopensForFailedAttempt — un NO CONTESTA devuelve la guía a la cola
 
   it("una entrega normal no reabre nada", () => {
     expect(reopensForFailedAttempt({ ...base, attemptFailed: false })).toBe(false);
+  });
+});
+
+describe("statusAfterFailedAttempt — el mismo NO CONTESTA no saca la guía de la cola", () => {
+  // EL CASO (11-09-2026): el barrido de la API relee cada guía cada 20 minutos,
+  // dos veces (las dos tiendas listan los mismos pedidos). El mismo snapshot
+  // NOT_RESPOND reabría la guía en una lectura y la avanzaba en la siguiente:
+  // 90 guías rebotando pendiente ↔ en_ruta, 430 eventos por hora de madrugada.
+  const snapshot = {
+    attemptFailed: true,
+    attemptDate: "2026-09-11",
+    scheduledFor: null,
+  };
+
+  it("primera lectura: la reabre (en_ruta → pendiente)", () => {
+    expect(statusAfterFailedAttempt({ ...snapshot, existingStatus: "en_ruta", incoming: "en_ruta" })).toBe("pendiente");
+  });
+
+  it("segunda lectura del MISMO snapshot: se queda en la cola, no rebota", () => {
+    expect(statusAfterFailedAttempt({ ...snapshot, existingStatus: "pendiente", incoming: "en_ruta" })).toBe("pendiente");
+  });
+
+  it("es un punto fijo: aplicarla dos veces da lo mismo que una", () => {
+    const once = statusAfterFailedAttempt({ ...snapshot, existingStatus: "en_ruta", incoming: "en_ruta" });
+    const twice = statusAfterFailedAttempt({ ...snapshot, existingStatus: once, incoming: "en_ruta" });
+    expect(twice).toBe(once);
+  });
+
+  it("un estado que NO es un intento fallido avanza como siempre", () => {
+    // RESCHEDULED / PICKED: el courier movió el paquete; la guía sale de la cola.
+    expect(
+      statusAfterFailedAttempt({ ...snapshot, attemptFailed: false, existingStatus: "pendiente", incoming: "en_ruta" }),
+    ).toBe("en_ruta");
+    expect(
+      statusAfterFailedAttempt({ ...snapshot, attemptFailed: true, existingStatus: "pendiente", incoming: "entregado" }),
+    ).toBe("entregado");
+  });
+
+  it("la reprogramación sigue protegida: un intento viejo no reabre lo agendado para después", () => {
+    expect(
+      statusAfterFailedAttempt({
+        attemptFailed: true,
+        attemptDate: "2026-09-11",
+        scheduledFor: "2026-09-15T00:00:00+00",
+        existingStatus: "en_ruta",
+        incoming: "en_ruta",
+      }),
+    ).toBe("en_ruta");
+  });
+
+  it("y un terminal no se toca", () => {
+    for (const st of ["entregado", "anulado", "transferido"]) {
+      expect(statusAfterFailedAttempt({ ...snapshot, existingStatus: st, incoming: st })).toBe(st);
+    }
+  });
+
+  it("las TRES vías que escriben estado la usan, y ninguna decide el reabrir por su cuenta", () => {
+    for (const file of ["lib/aliclik-track.ts", "lib/aliclik-ingest.ts", "lib/report-ingest.ts"]) {
+      const src = readFileSync(resolve(process.cwd(), file), "utf8");
+      expect(src, file).toContain("statusAfterFailedAttempt({");
+      expect(src, file).not.toContain("reopensForFailedAttempt({");
+    }
   });
 });
