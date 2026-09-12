@@ -528,6 +528,16 @@ export interface OrderMasterRow {
   pickup_state: string | null;
   /** Indicadores del cobro Yape y de la clave de recojo (Shalom). */
   payment_state: string | null;
+  /**
+   * Verificación de la constancia de cobro que sube el COURIER, tomada de la
+   * guía vigente: `validado` | `rechazado` | `pendiente` | `revisado`, y null
+   * cuando ese courier no sube constancia por guía.
+   *
+   * No confundir con `payment_state`, que es el cobro del PEDIDO (adelantos de
+   * la clienta). Este dice si el dinero que cobró el motorizado llegó a la
+   * cuenta. Hoy solo lo escribe Tanders (§9.4) — la columna no es suya.
+   */
+  payment_check_state: string | null;
   key_state: string | null;
   agency_branch: string | null;
   agency_arrived_at: string | null;

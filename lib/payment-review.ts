@@ -85,6 +85,10 @@ export function paymentKindLabel(kind: string): string {
   if (kind === "adelanto") return "Adelanto";
   if (kind === "diferencia") return "Diferencia";
   if (kind === "total") return "Pago total";
+  // Los tres de arriba los paga la clienta; este lo cobró el motorizado en
+  // efectivo y lo remitió. Quien revisa necesita saber cuál tiene delante: la
+  // pregunta que hay que hacerle a la imagen no es la misma.
+  if (kind === "cobro_courier") return "Cobro del courier";
   return kind;
 }
 

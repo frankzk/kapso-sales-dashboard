@@ -125,6 +125,12 @@ export function normalizeOperationNumber(
   opts: { labelled?: boolean } = {},
 ): string | null {
   if (!value) return null;
+  // UNA LECTURA TRUNCADA NO ES UNA LLAVE. En las constancias de Tanders
+  // aparecieron «202609...495099» y «2026...675»: el modelo elidió el medio en
+  // vez de devolver null. Quitarle los puntos daría un número que no existe, y
+  // como este valor es un índice único GLOBAL, ese número inventado puede tanto
+  // bloquear un pago bueno como dejar pasar el repetido de verdad.
+  if (/…|\.{2,}/.test(String(value))) return null;
   const cleaned = String(value).toUpperCase().replace(/[^A-Z0-9]/g, "");
   // Con un rótulo de operación reconocido detrás, cuatro caracteres bastan: los
   // vouchers de PAPEL de BCP (`NO.OPE.`) y BBVA (`OPER.`) traen operaciones de

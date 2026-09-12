@@ -148,14 +148,22 @@ export function TandersCobros() {
       {report && (
         <>
           <Card>
-            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-6">
+            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-7">
               <Stat label="Revisadas" value={report.scanned} />
               <Stat label="Sin constancia aún" value={report.enCurso} />
+              <Stat label="Ya en Validar pagos" value={report.enCola} />
               <Stat label="Validado" value={report.validado} tone="text-emerald-700" />
               <Stat label="Rechazado" value={report.rechazado} tone="text-red-700" />
               <Stat label="Pendiente" value={report.pendiente} tone="text-amber-700" />
               <Stat label="Errores" value={report.errores} />
             </dl>
+            <p className="mt-3 text-xs text-slate-500">
+              El lector prepara la ficha; quien da el dinero por recibido es una persona, en{" "}
+              <a href="/dashboard/pagos" className="font-medium text-slate-700 underline">
+                Validar pagos
+              </a>
+              . En seco no se encola nada.
+            </p>
           </Card>
           <Failures fallos={report.fallos} detenido={report.detenido} />
 
@@ -178,6 +186,14 @@ export function TandersCobros() {
                     <span className="font-mono text-xs">{d.operacion}</span>
                     <br />
                     <span className="text-xs">ya estaba en: {d.otras.join(", ")}</span>
+                    {d.desandadas.length > 0 && (
+                      <>
+                        <br />
+                        <span className="text-xs font-semibold">
+                          ⚠️ {d.desandadas.join(", ")} estaba dado por cobrado y ya no lo está
+                        </span>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>

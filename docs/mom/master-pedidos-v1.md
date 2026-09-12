@@ -1036,6 +1036,51 @@ sin tope de antigüedad. Reglas:
     la imagen contra el monto de la guía y el nombre de Grupo GF SAC: que el
     courier se dé por pagado a sí mismo no es constancia de que el dinero
     llegó a nuestra cuenta.
+  - **QUIEN DA EL DINERO POR RECIBIDO ES UNA PERSONA** (0158). El lector de
+    imágenes valida **una imagen, no un depósito**: no detecta una captura
+    editada, ni un comprobante real de otra transferencia. Mientras no haya
+    conexión con el estado de cuenta del banco, el modelo **prepara la ficha** y
+    la firma la pone alguien.
+    - Cada cobro entra a **«Validar pagos»** (`order_payments`, tipo
+      `cobro_courier`) con la imagen guardada en NUESTRO bucket —la evidencia de
+      un cobro no puede depender de que el courier conserve el archivo— y con lo
+      que leyó el modelo en `vision`.
+    - El estado de entrada dice QUÉ mirar: `pendiente_revision` (el modelo no
+      vio nada raro), `revision_admin` (vio algo que no cuadra: no es un
+      rechazo, es «míralo tú») e `info_incompleta` (no se pudo leer — culpar a
+      la captura cuando falló el lector manda a perseguir a alguien por una foto
+      correcta).
+    - **La guía sigue pasando a `entregado` con la lectura del modelo**: el
+      paquete SÍ llegó y eso lo acredita el courier. Lo que espera al humano es
+      el cierre del dinero. Son dos preguntas distintas y las contesta cada uno
+      quien puede.
+    - **Un duplicado NO entra a la cola**: no es un cobro por confirmar, es una
+      incidencia. Queda bloqueado y avisa — una sola vez, no en cada pasada.
+    - Al entrar aquí se hereda lo que la vía paralela de Tanders no tenía: nº de
+      operación único en todo el sistema, huella `sha256` que atrapa la misma
+      imagen renombrada (es lo que habría cazado el «198yape.png» sin depender
+      de leer bien el número) y la coincidencia difusa de monto + fecha +
+      pagador (`lib/yape-dedup.ts`). El normalizador del nº de operación es
+      ahora **uno solo**: dos reglas para la misma llave global es como se cuela
+      un duplicado.
+  - **El cobro del courier se ve y se filtra desde el Master** (0156). El
+    veredicto viaja de la guía vigente a `order_master.payment_check_state` y
+    el filtro **«Cobro del courier»** ofrece `validado`, `rechazado`,
+    `pendiente`, `revisado` y **«courier sin constancia por guía»**. Esa última
+    opción no es decorativa: sin ella, pedir «validado» sacaría de la lista
+    todo lo que no es Tanders y parecería que solo esos pedidos están cobrados,
+    cuando los demás se liquidan en bloque (`rider_settlements`) y esta columna
+    nunca se les escribe.
+    - **La columna no es de Tanders.** Hoy es el único courier que sube
+      constancia por guía; el día que otro lo haga, el Master ya sabe
+      enseñarlo. Lo específico de Tanders es quién la escribe, no el concepto.
+    - Motivo: el 10-09-2026 había **21 guías con el cobro rechazado** —una por
+      comprobante reusado— bloqueando pedidos, y ninguna pantalla podía
+      listarlas. Un bloqueo que nadie puede ver es un pedido parado para
+      siempre.
+    - No confundir con `payment_state`, que es el cobro del PEDIDO (adelantos
+      de la clienta). Este dice si el dinero que cobró el motorizado llegó a la
+      cuenta.
   - **Vocabulario de estados de Tanders, confirmado por la operación el
     10-09-2026** (hasta entonces 105 guías vivían en estados que el Master no
     traducía, entre ellas paquetes ya de vuelta que nadie sabía que habían
