@@ -205,82 +205,89 @@ if (CHECK) {
       "\nSi ninguno la reconoce, la llave está mal copiada o no es una apiKey de Flow.\n" +
       "Si la reconoce producción, corre la sonda con -Prod.\n",
   );
-  process.exit(0);
 }
 
-const stamp = Date.now();
-const results = [];
+// `process.exit()` justo después de un fetch revienta con una aserción de
+// libuv en Windows —«!(handle->flags & UV_HANDLE_CLOSING)», src\win\async.c—
+// porque quedan sockets a medio cerrar. Es ruido después de la salida útil,
+// pero un mensaje que dice «Assertion failed» detrás de un diagnóstico hace
+// dudar del diagnóstico. Así que no se sale a la fuerza: el resto del fichero
+// queda bajo este `else` y el proceso termina solo cuando no queda nada.
+if (!CHECK) {
+  const stamp = Date.now();
+  const results = [];
 
-console.log(`\nFlow probe → ${BASE}`);
-console.log(`Monto S/ ${AMOUNT} · medios: ${METHODS.join(", ")}\n`);
+  console.log(`\nFlow probe → ${BASE}`);
+  console.log(`Monto S/ ${AMOUNT} · medios: ${METHODS.join(", ")}\n`);
 
-for (const method of METHODS) {
-  const commerceOrder = `SONDA-${stamp}-${method}`;
-  const params = {
-    apiKey: API_KEY,
-    amount: AMOUNT,
-    commerceOrder,
-    currency: "PEN",
-    email: EMAIL,
-    paymentMethod: method,
-    subject: `Sonda adelanto (medio ${method})`,
-    timeout: TIMEOUT,
-    urlConfirmation: RETURN_URL,
-    urlReturn: RETURN_URL,
-  };
+  for (const method of METHODS) {
+    const commerceOrder = `SONDA-${stamp}-${method}`;
+    const params = {
+      apiKey: API_KEY,
+      amount: AMOUNT,
+      commerceOrder,
+      currency: "PEN",
+      email: EMAIL,
+      paymentMethod: method,
+      subject: `Sonda adelanto (medio ${method})`,
+      timeout: TIMEOUT,
+      urlConfirmation: RETURN_URL,
+      urlReturn: RETURN_URL,
+    };
 
-  const created = await post("/payment/create", params);
+    const created = await post("/payment/create", params);
 
-  if (created.status !== 200 || !created.json?.token) {
-    // Un medio no contratado en sandbox falla acá, y ese fallo es información:
-    // dice que el ID no existe en este ambiente, no que la integración esté mal.
-    const detail = created.json?.message ?? created.raw ?? "(sin cuerpo)";
-    console.log(`  ✗ medio ${String(method).padEnd(4)} HTTP ${created.status} — ${detail}`);
-    results.push({ method, commerceOrder, error: { status: created.status, detail } });
-    continue;
+    if (created.status !== 200 || !created.json?.token) {
+      // Un medio no contratado en sandbox falla acá, y ese fallo es información:
+      // dice que el ID no existe en este ambiente, no que la integración esté mal.
+      const detail = created.json?.message ?? created.raw ?? "(sin cuerpo)";
+      console.log(`  ✗ medio ${String(method).padEnd(4)} HTTP ${created.status} — ${detail}`);
+      results.push({ method, commerceOrder, error: { status: created.status, detail } });
+      continue;
+    }
+
+    const { url, token, flowOrder } = created.json;
+    const link = `${url}?token=${token}`;
+    console.log(`  ✓ medio ${String(method).padEnd(4)} ${link}`);
+
+    // El estado inicial sirve de contrato: deja ver la forma real de la respuesta
+    // (status, medio, montos) antes de que nadie pague.
+    const status = await get("/payment/getStatus", { apiKey: API_KEY, token });
+
+    results.push({
+      method,
+      commerceOrder,
+      flowOrder,
+      link,
+      initialStatus: status.json ?? { httpStatus: status.status, raw: status.raw },
+    });
   }
 
-  const { url, token, flowOrder } = created.json;
-  const link = `${url}?token=${token}`;
-  console.log(`  ✓ medio ${String(method).padEnd(4)} ${link}`);
+  const out = join(dirname(fileURLToPath(import.meta.url)), ".flow-probe.json");
+  writeFileSync(
+    out,
+    JSON.stringify(
+      {
+        base: BASE,
+        // La apiKey identifica al comercio; no es tan sensible como el secretKey,
+        // pero el volcado se comparte y no hay razón para que viaje entera.
+        apiKey: `${API_KEY.slice(0, 8)}…`,
+        amount: AMOUNT,
+        currency: "PEN",
+        probedAt: new Date().toISOString(),
+        results,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
 
-  // El estado inicial sirve de contrato: deja ver la forma real de la respuesta
-  // (status, medio, montos) antes de que nadie pague.
-  const status = await get("/payment/getStatus", { apiKey: API_KEY, token });
-
-  results.push({
-    method,
-    commerceOrder,
-    flowOrder,
-    link,
-    initialStatus: status.json ?? { httpStatus: status.status, raw: status.raw },
-  });
+  console.log(`\nVolcado → ${out}`);
+  console.log(
+    "\nAbre los links en un celular con Yape instalado y anota, para cada medio:\n" +
+      "  · ¿abre la app Yape directamente, o pide un código de 6 dígitos?\n" +
+      "  · ¿qué nombre le pone Flow al medio en su página?\n" +
+      "Con el link de `9` se ven todos los nombres juntos, que es lo que el panel no aclara.\n",
+  );
 }
-
-const out = join(dirname(fileURLToPath(import.meta.url)), ".flow-probe.json");
-writeFileSync(
-  out,
-  JSON.stringify(
-    {
-      base: BASE,
-      // La apiKey identifica al comercio; no es tan sensible como el secretKey,
-      // pero el volcado se comparte y no hay razón para que viaje entera.
-      apiKey: `${API_KEY.slice(0, 8)}…`,
-      amount: AMOUNT,
-      currency: "PEN",
-      probedAt: new Date().toISOString(),
-      results,
-    },
-    null,
-    2,
-  ),
-  "utf8",
-);
-
-console.log(`\nVolcado → ${out}`);
-console.log(
-  "\nAbre los links en un celular con Yape instalado y anota, para cada medio:\n" +
-    "  · ¿abre la app Yape directamente, o pide un código de 6 dígitos?\n" +
-    "  · ¿qué nombre le pone Flow al medio en su página?\n" +
-    "Con el link de `9` se ven todos los nombres juntos, que es lo que el panel no aclara.\n",
-);
