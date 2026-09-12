@@ -2251,6 +2251,28 @@ otra guía con una nota a medio escribir, el texto se descartaba sin preguntar.
 Ahora se avisa y se puede volver. En una cola de llamadas, ese texto es lo que
 la asesora acaba de oír por teléfono.
 
+### 11.6 Una reprogramación confirmada no puede ser de ayer
+
+La fecha que acompaña a **Cliente confirma reprogramación** tiene que ser
+futura, y se valida en los dos lados:
+
+- En el formulario, el `min` del campo y la etiqueta del botón («Elige una
+  fecha futura»), igual que para «Programar próxima llamada».
+- En el servidor, `isFutureShipmentFollowup`, porque el `min` de un
+  `<input type="date">` es una sugerencia del navegador: la fecha se puede
+  teclear. Hasta el 12-09-2026 ninguno de los dos lo exigía para «confirma»
+  —solo que la fecha existiera— y se emitía una guía Swayp con la fecha pasada
+  **estampada en su número** (`rescheduleGuideCode`) y un despacho agendado para
+  un día que ya había pasado. Es la acción más frecuente de la pantalla.
+
+La **fecha de entrega informada por el courier** («Reprogramado por Swayp») sigue
+otra regla, porque es otro hecho: **hoy sí vale** —el motorizado puede
+reprogramar para más tarde el mismo día—, ayer no (`isTodayOrLaterDelivery`).
+
+Y los topes de intentos se leen de una constante, no de un texto: la métrica del
+cajón muestra `MAX_INTENTOS` (7 llamadas) y `ALICLIK_MAX_INTENTOS` (3 intentos de
+Aliclik), las mismas que aplican la transición y la ventana de reprogramación.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom
