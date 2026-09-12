@@ -79,8 +79,14 @@ if ($Check) {
 Remove-Item Env:\FLOWCL_CHECK -ErrorAction SilentlyContinue
 
 if ($Prod) {
-  Write-Host "PRODUCCIÓN: se van a crear $(($Methods -split ',').Count) órdenes reales de S/ $Amount." -ForegroundColor Yellow
-  Write-Host "Quedan PENDIENTES y caducan en $Timeout s. No completes el pago al abrir los links." -ForegroundColor Yellow
+  # El conteo se calcula ANTES y aparte. Windows PowerShell 5.1 se pierde con
+  # comillas simples dentro de un $() dentro de una cadena de comillas dobles:
+  # da por abierta una cadena que nunca cierra y el error sale líneas más
+  # abajo, señalando a una línea inocente. Fuera de la cadena no hay nada que
+  # confundir, y de paso se lee mejor.
+  $cuantas = ($Methods -split ',').Count
+  Write-Host ("PRODUCCIÓN: se van a crear {0} órdenes reales de S/ {1}." -f $cuantas, $Amount) -ForegroundColor Yellow
+  Write-Host ("Quedan PENDIENTES y caducan en {0} s. No completes el pago al abrir los links." -f $Timeout) -ForegroundColor Yellow
   if ((Read-Host "Escribe PRODUCCION para continuar") -ne "PRODUCCION") { throw "Cancelado." }
   $env:FLOWCL_API_BASE = "https://www.flow.cl/api"
   $env:FLOWCL_ALLOW_PROD = "1"
