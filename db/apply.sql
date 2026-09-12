@@ -315,4 +315,6 @@
 \ir migrations/0155_lead_insights_rollup.sql
 \echo 'Applying 0156_orders_utm_meta.sql'
 \ir migrations/0156_orders_utm_meta.sql
+\echo 'Applying 0157_flowcl_payment_links.sql'
+\ir migrations/0157_flowcl_payment_links.sql
 \echo 'Done.'

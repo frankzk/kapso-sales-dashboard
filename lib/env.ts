@@ -182,6 +182,20 @@ export const env = {
   // apuntar aquí al sandbox con las llaves de producción da «apiKey not found».
   flowclApiBase: () =>
     (process.env.FLOWCL_API_BASE ?? "https://www.flow.cl/api").trim().replace(/\/$/, ""),
+  // Secreto de la URL de `urlConfirmation`. Flow NO firma sus avisos —manda un
+  // POST con un `token` y nada más—, así que el secreto viaja en la URL y se
+  // compara en tiempo constante, igual que el de Aliclik y el de Kapso.
+  //
+  // ES UNO SOLO PARA LAS DOS TIENDAS, y por la misma razón que
+  // CHATBY_WEBHOOK_SECRET: la cuenta de Flow es una sola. El secreto-por-tienda
+  // existe para que el dueño de una tienda no pueda inyectar datos en otra;
+  // acá las dos son del mismo dueño y de la misma cuenta de pasarela.
+  //
+  // NO ES LA ÚNICA DEFENSA, y por eso un fallo suyo no da por bueno un cobro:
+  // el aviso solo dice «mira otra vez», y lo que se escribe sale de consultar
+  // payment/getStatus firmado. Un aviso falsificado, como mucho, nos hace
+  // releer la verdad.
+  flowclWebhookSecret: () => (process.env.FLOWCL_WEBHOOK_SECRET ?? "").trim(),
   /** ¿Hay con qué cobrar? El botón del drawer no se enseña si no. */
   flowclConfigured: () =>
     Boolean((process.env.FLOWCL_API_KEY ?? "").trim() && (process.env.FLOWCL_SECRET_KEY ?? "").trim()),
