@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { cn, Card, STICKY_HEAD, TABLE_WRAP } from "@/components/ui";
+import { cn, Card, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import {
   COURIER_REPORT_RESULTS,
   attemptLabel,
@@ -951,8 +951,16 @@ function ShipmentTable({
   }
 
   return (
-    <div className={TABLE_WRAP}>
-      <table className="w-full text-sm">
+    // ONCE COLUMNAS NO ENTRAN EN UN PORTÁTIL. Con la barra lateral y el cajón
+    // de 34 rem abierto, en 1.280–1.600 px las columnas de la derecha quedaban
+    // bajo el cajón o la página entera scrolleaba en horizontal (la barra
+    // lateral se iba de lado). Ahora la tabla tiene ancho propio y el
+    // contenedor scrollea hasta que entra de verdad; por encima de 1.800 px
+    // vuelve el encabezado fijo (ver TABLE_WRAP_FROM en ui.tsx). Y por debajo
+    // de `xl`, Producto y Última entrega Aliclik —que el cajón muestra enteras—
+    // se esconden para que la cola quepa con menos scroll.
+    <div className={TABLE_WRAP_FROM[1800]}>
+      <table className="w-full min-w-[1100px] text-sm xl:min-w-[1400px]">
         <thead>
           <tr className={cn(STICKY_HEAD, "text-xs text-slate-500")}>
             <SortableShipmentHeader label="Guía" sortKey="guide" sort={sort} onSort={toggleSort} />
@@ -961,10 +969,10 @@ function ShipmentTable({
             )}
             <SortableShipmentHeader label="Pedido" sortKey="order" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Cliente" sortKey="customer" sort={sort} onSort={toggleSort} />
-            <SortableShipmentHeader label="Producto" sortKey="product" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Producto" sortKey="product" sort={sort} onSort={toggleSort} className={SECONDARY_COLUMN} />
             <SortableShipmentHeader label="Distrito / Ciudad" sortKey="location" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Estado" sortKey="status" sort={sort} onSort={toggleSort} />
-            <SortableShipmentHeader label="Última entrega Aliclik" sortKey="lastDelivery" sort={sort} onSort={toggleSort} />
+            <SortableShipmentHeader label="Última entrega Aliclik" sortKey="lastDelivery" sort={sort} onSort={toggleSort} className={SECONDARY_COLUMN} />
             <SortableShipmentHeader label="Última gestión" sortKey="lastGestion" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Reprogramación" sortKey="reprogramming" sort={sort} onSort={toggleSort} />
             <SortableShipmentHeader label="Ruta sugerida" sortKey="route" sort={sort} onSort={toggleSort} />
@@ -1011,7 +1019,7 @@ function ShipmentTable({
                 {s.customer_name ?? "—"}
                 <span className="block text-xs text-slate-500">{s.customer_phone ?? ""}</span>
               </td>
-              <td className="w-44 max-w-44 px-3 py-2.5 align-middle">
+              <td className={cn(SECONDARY_COLUMN, "w-44 max-w-44 px-3 py-2.5 align-middle")}>
                 <span
                   className="line-clamp-2 text-xs leading-4 text-slate-600"
                   title={s.product ?? undefined}
@@ -1029,7 +1037,7 @@ function ShipmentTable({
               <td className="px-4 py-2.5">
                 <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
               </td>
-              <td className="px-4 py-2.5 whitespace-nowrap text-slate-700 tabular-nums">
+              <td className={cn(SECONDARY_COLUMN, "px-4 py-2.5 whitespace-nowrap text-slate-700 tabular-nums")}>
                 {fmtAliclikDate(s.aliclik_service_date)}
               </td>
               <td className="px-4 py-2.5 whitespace-nowrap tabular-nums">
@@ -1069,22 +1077,31 @@ function ShipmentTable({
   );
 }
 
+/** Columnas que el cajón ya muestra enteras: solo a partir de `xl`. */
+const SECONDARY_COLUMN = "hidden xl:table-cell";
+
 function SortableShipmentHeader({
   label,
   sortKey,
   sort,
   onSort,
+  className,
 }: {
   label: string;
   sortKey: ShipmentSortKey;
   sort: { key: ShipmentSortKey; direction: ShipmentSortDirection } | null;
   onSort: (key: ShipmentSortKey) => void;
+  className?: string;
 }) {
   const active = sort?.key === sortKey;
   const ariaSort = active ? (sort.direction === "asc" ? "ascending" : "descending") : "none";
   return (
     // El fondo/sticky/separador los pone STICKY_HEAD desde el <tr> (ver ui.tsx).
-    <th scope="col" aria-sort={ariaSort} className="px-2 py-1 text-left font-medium first:pl-4 last:pr-4">
+    <th
+      scope="col"
+      aria-sort={ariaSort}
+      className={cn("px-2 py-1 text-left font-medium first:pl-4 last:pr-4", className)}
+    >
       <button
         type="button"
         onClick={() => onSort(sortKey)}
