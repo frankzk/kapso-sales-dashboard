@@ -822,9 +822,19 @@ export function ShipmentsBoard({
               </span>
             </div>
           )}
-          {fenixExportError && view === "en_ruta" && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-              {fenixExportError}
+          {fenixExportError && (
+            <div
+              role="alert"
+              className="flex items-start justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800"
+            >
+              <span className="break-words">{fenixExportError}</span>
+              <button
+                type="button"
+                onClick={() => setFenixExportError(null)}
+                className="shrink-0 font-semibold text-rose-700 hover:underline"
+              >
+                Cerrar
+              </button>
             </div>
           )}
 
@@ -1129,7 +1139,11 @@ function ShipmentDrawer({
   // repo repite.
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof loadShipmentDetail>> | null>(null);
   const [noveltyOpen, setNoveltyOpen] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  // Lo que respondió la última acción, CON su naturaleza. Un error y un aviso
+  // se pintaban con el mismo gris («Vincula el pedido antes de descartar» se
+  // leía como una nota), y el aviso se borraba solo: cada acción recarga el
+  // detalle y la recarga lo limpiaba. Ahora solo se limpia al cambiar de guía.
+  const [feedback, setFeedback] = useState<{ kind: "error" | "notice"; text: string } | null>(null);
   const [pending, start] = useTransition();
   const [claimState, setClaimState] = useState<"claiming" | "mine" | "blocked">("claiming");
   const [claimMessage, setClaimMessage] = useState<string | null>(null);
@@ -1176,6 +1190,19 @@ function ShipmentDrawer({
     setClaimState("claiming");
     setClaimMessage(null);
 
+    // Si la pestaña se cierra o se recarga con el panel abierto, el cierre
+    // normal nunca corre y la reserva bloqueaba a los demás hasta agotar el TTL
+    // (10 minutos). `sendBeacon` sobrevive a la descarga de la página; una
+    // acción de servidor, no.
+    const onPageHide = () => {
+      if (session.shouldRelease) return;
+      session.shouldRelease = true;
+      navigator.sendBeacon?.(
+        "/api/envios/release-claim",
+        new Blob([JSON.stringify({ shipmentId })], { type: "application/json" }),
+      );
+    };
+
     void claimShipment(shipmentId)
       .then((result) => {
         if (session.shouldRelease) {
@@ -1190,6 +1217,7 @@ function ShipmentDrawer({
         }
 
         setClaimState("mine");
+        window.addEventListener("pagehide", onPageHide);
         heartbeat = setInterval(() => {
           void renewShipmentClaim(shipmentId)
             .then((renewal) => {
@@ -1216,15 +1244,25 @@ function ShipmentDrawer({
 
     return () => {
       active = false;
+      window.removeEventListener("pagehide", onPageHide);
       if (heartbeat) clearInterval(heartbeat);
     };
+  }, [shipmentId]);
+
+  // La respuesta de una acción pertenece a la guía en la que se hizo.
+  useEffect(() => {
+    setFeedback(null);
   }, [shipmentId]);
 
   useEffect(() => {
     let alive = true;
     setDetail(null);
     setShowAddressEditor(false);
-    loadShipmentDetail(shipmentId).then((d) => {
+    loadShipmentDetail(shipmentId)
+      .catch(() => ({
+        error: "No pudimos cargar este envío. Revisa la conexión e inténtalo de nuevo.",
+      }))
+      .then((d) => {
       if (!alive) return;
       setDetail(d);
       if (d && !("error" in d)) {
@@ -1235,7 +1273,6 @@ function ShipmentDrawer({
         setShowCancelledException(false);
         setCancelledExceptionDate("");
         setCancelledExceptionNote("");
-        setMsg(null);
         const decision = evaluateAliclikReschedule({
           courier: d.shipment.courier,
           attempts: d.shipment.aliclik_attempts,
@@ -1285,13 +1322,23 @@ function ShipmentDrawer({
     onSuccess?: () => void | Promise<void>,
   ) {
     start(async () => {
-      const r = await fn();
-      setMsg(r.error ?? r.notice ?? null);
-      if (!r.error) {
-        await onSuccess?.();
-        await onShipmentUpdated(shipmentId);
-        refresh();
+      let r: { error?: string; notice?: string };
+      try {
+        r = await fn();
+      } catch {
+        // Una acción de servidor que no llega (red caída, sesión vencida) lanza
+        // en vez de devolver `{ error }`. Sin esto el botón volvía a su estado
+        // normal y no pasaba nada: el peor error es el que no se ve.
+        r = { error: "No se pudo completar la acción. Revisa la conexión e inténtalo de nuevo." };
       }
+      if (r.error) {
+        setFeedback({ kind: "error", text: r.error });
+        return;
+      }
+      setFeedback(r.notice ? { kind: "notice", text: r.notice } : null);
+      await onSuccess?.();
+      await onShipmentUpdated(shipmentId);
+      refresh();
     });
   }
 
@@ -1415,7 +1462,21 @@ function ShipmentDrawer({
         onClick={(e) => e.stopPropagation()}
       >
         {detail && "error" in detail ? (
-          <p className="text-sm text-rose-600">{detail.error}</p>
+          <div role="alert" className="space-y-2.5">
+            <p className="break-words text-sm text-rose-700">{detail.error}</p>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={refresh}
+                className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700"
+              >
+                Reintentar
+              </button>
+              <button type="button" onClick={handleClose} className="text-xs text-slate-500 hover:underline">
+                Cerrar
+              </button>
+            </div>
+          </div>
         ) : !detail ? (
           <p className="text-sm text-slate-400">Cargando…</p>
         ) : (
@@ -1781,7 +1842,19 @@ function ShipmentDrawer({
               </div>
             </section>
 
-            {msg && <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-sm text-slate-700">{msg}</p>}
+            {feedback && (
+              <p
+                role={feedback.kind === "error" ? "alert" : "status"}
+                className={cn(
+                  "break-words rounded-lg border px-2.5 py-1.5 text-sm",
+                  feedback.kind === "error"
+                    ? "border-rose-200 bg-rose-50 text-rose-800"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-800",
+                )}
+              >
+                {feedback.text}
+              </p>
+            )}
 
             {detail.shipment.delivery_status === "anulado" && (
               <section className="space-y-2.5 rounded-xl border border-rose-200 bg-rose-50/60 p-3 shadow-[0_1px_0_rgba(244,63,94,0.08)]">
@@ -2398,9 +2471,11 @@ function ShipmentDrawer({
               </section>
             )}
 
-            </fieldset>
-
+            {/* El historial va DENTRO del bloqueo: con la guía reservada por otra
+                persona, «no modificarla» incluye sus notas. */}
             <ShipmentGuideHistory guides={detail.guideHistory} onSaved={refresh} />
+
+            </fieldset>
           </div>
         )}
       </div>
