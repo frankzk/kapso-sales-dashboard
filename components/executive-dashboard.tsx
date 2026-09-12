@@ -25,6 +25,7 @@ import {
   lostRevenueByReason,
   rollupSeries,
   topProducts,
+  webNoAtribuido,
   type CartRecoveryStats,
   type SalesAttribution,
 } from "@/lib/metrics";
@@ -160,6 +161,8 @@ export function ExecutiveDashboard({
   campaignLeads,
   campaignOrders,
   metaAdPerformance,
+  webAdOrders,
+  metaAdCatalog,
 }: {
   stores: StoreSummary[];
   scope: "all" | string;
@@ -185,6 +188,10 @@ export function ExecutiveDashboard({
   campaignLeads?: LeadRow[];
   campaignOrders?: OrderRow[];
   metaAdPerformance?: import("@/lib/types").MetaAdPerformance[];
+  /** Los pedidos del carrito COD de la web, que no llegan por ningún lead.
+   *  Sin esto, el panel enseñaba en cero a 32 campañas que sí venden. */
+  webAdOrders?: import("@/lib/cod-cart-attribution").WebAdOrder[];
+  metaAdCatalog?: import("@/lib/cod-cart-attribution").AnuncioMeta[];
 }) {
   const names: Record<string, string> = Object.fromEntries(stores.map((s) => [s.id, s.name]));
   const totals = aggregateRollups(rollups);
@@ -235,7 +242,12 @@ export function ExecutiveDashboard({
     adNames ?? {},
     campaignDeliveries ?? [],
     metaAdPerformance ?? [],
+    webAdOrders ?? [],
+    metaAdCatalog ?? [],
   );
+  // Lo que el carrito COD vendió y no se pudo colgar de un anuncio concreto. Se
+  // enseña para que ese dinero no desaparezca de la tabla sin decir nada.
+  const webSuelto = webNoAtribuido(campaignLeads ?? leadList, webAdOrders ?? [], metaAdCatalog ?? []);
   const campaignTrend = campaignDailyTrend(campaignLeads ?? leadList, adNames ?? {}, timezone);
   const waStats = leadsByWaNumber(leadList, orders);
   const funnelStages = conversationalFunnel({
@@ -424,6 +436,15 @@ export function ExecutiveDashboard({
               currency={currency}
               catalogStoreIds={scope === "all" ? stores.map((store) => store.id) : [scope]}
             />
+            {webSuelto.pedidos > 0 && (
+              <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                Fuera de la tabla: <strong>{webSuelto.pedidos}</strong> pedidos del carrito COD de la
+                web ({formatCurrency(webSuelto.ingresos, currency)}) llegaron sin decir de qué
+                anuncio salieron. Se sabe la campaña, no la creatividad, y repartirlos entre sus
+                anuncios sería inventar cuál vendió. Se arregla en Meta: la plantilla de URL de esas
+                cuentas manda el nombre del anuncio donde debería mandar <code>{"{{ad.id}}"}</code>.
+              </p>
+            )}
           </Module>
         </div>
       )}

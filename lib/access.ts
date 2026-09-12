@@ -15,6 +15,7 @@ import type {
   StoreSummary,
 } from "@/lib/types";
 import type { AdMeta } from "@/lib/meta-ads";
+import { idsEnUtm, type AnuncioMeta, type WebAdOrder } from "@/lib/cod-cart-attribution";
 import type { AttributionInputs, AttributionSource } from "@/lib/metrics";
 import type { WaNumber } from "@/lib/wa-numbers";
 
@@ -597,6 +598,116 @@ export async function getAdNames(
     };
   }
   return out;
+}
+
+/**
+ * Los pedidos del carrito COD de la web, con los UTM que dicen qué anuncio los
+ * trajo.
+ *
+ * Son los que «Rendimiento por anuncio» no veía: nacen en Shopify sin
+ * conversación de WhatsApp, así que no tienen lead y el panel —que se construye
+ * recorriendo leads— no llegaba a ellos. 591 pedidos y S/93.588 en 30 días. El
+ * porqué y las reglas de emparejamiento están en `lib/cod-cart-attribution.ts`.
+ *
+ * Lee `utm_meta`, la columna generada de la 0156, y NO `raw`: la consulta
+ * equivalente sobre `raw` tardaba 2,9 s por carga descomprimiendo el jsonb de
+ * los 7.554 pedidos del rango para devolver 591.
+ *
+ * `utm_meta` no existe hasta que se aplica la 0156, y desplegar no aplica
+ * migraciones (DEPLOY.md). Mientras tanto devuelve vacío: el panel vuelve a
+ * enseñar solo lo de WhatsApp, que es lo que enseñaba antes, en vez de romperse.
+ */
+export async function getWebAdOrders(
+  storeIds: string[],
+  range: DateRange,
+): Promise<WebAdOrder[]> {
+  if (!storeIds.length) return [];
+  const sb = await createServerSupabase();
+  const { startIso, endIso } = rangeBounds(range);
+  const out: WebAdOrder[] = [];
+  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+    const { data, error } = await sb
+      .from("orders")
+      .select(
+        "id,store_id,shopify_order_id,name,created_at,total_amount,total_refunded,cancelled_at,currency,line_items,utm_meta",
+      )
+      .in("store_id", storeIds)
+      // Sin filtro por etiqueta `kapso`: estos pedidos no la llevan ninguno
+      // (medido: 0 de 591). La trae el pedido nacido en la conversación.
+      .not("utm_meta", "is", null)
+      .gte("created_at", startIso)
+      .lte("created_at", endIso)
+      .order("created_at", { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error || !data?.length) break;
+    type Atributo = { name?: string | null; value?: string | null };
+    for (const row of data as unknown as Array<OrderRow & { utm_meta: Atributo[] | null }>) {
+      // Por NOMBRE y no por posición: Shopify guarda los atributos en el orden
+      // que le da la gana y cambia de un pedido a otro.
+      const utm = new Map((row.utm_meta ?? []).map((a) => [a.name ?? "", a.value ?? null]));
+      out.push({
+        order: { ...row, tags: [], discount_codes: [] } as OrderRow,
+        utm: {
+          utmId: utm.get("utm_id") ?? null,
+          utmSource: utm.get("utm_source") ?? null,
+          utmMedium: utm.get("utm_medium") ?? null,
+          utmCampaign: utm.get("utm_campaign") ?? null,
+          utmContent: utm.get("utm_content") ?? null,
+          utmTerm: utm.get("utm_term") ?? null,
+        },
+      });
+    }
+    if (data.length < PAGE_SIZE) break;
+  }
+  return out;
+}
+
+/**
+ * Los anuncios de Meta de las campañas que citan esos pedidos, para emparejar.
+ *
+ * Trae la CAMPAÑA ENTERA y no solo los ids sueltos porque la mayoría de las
+ * plantillas de URL mandan el NOMBRE del anuncio en vez de su id (medido: solo
+ * 162 de 592 pedidos traen un `ad_id`), y el nombre solo se puede resolver
+ * comparándolo contra los anuncios de su campaña.
+ *
+ * `meta_ads` no es legible bajo RLS (migración 0034), así que va por el cliente
+ * de servicio. Los ids de campaña salen de los pedidos del propio llamante, ya
+ * filtrados por RLS: solo se pueden mirar las campañas que citan tus pedidos.
+ */
+export async function getMetaAdCatalog(webOrders: WebAdOrder[]): Promise<AnuncioMeta[]> {
+  const campaignIds = [...new Set(webOrders.map((w) => w.utm.utmId).filter((id): id is string => !!id))];
+  // Y los ids sueltos que citan los UTM, para el anuncio cuya campaña no esté
+  // sincronizada: sin esto se perdería la única señal que no se puede confundir.
+  const adIds = [...new Set(webOrders.flatMap((w) => idsEnUtm(w.utm)))];
+  if (!campaignIds.length && !adIds.length) return [];
+  const admin = createAdminSupabase();
+  const porColumna = async (columna: "campaign_id" | "ad_id", ids: string[]) => {
+    const batches = await Promise.all(
+      chunk(ids, 200).map(async (batch) => {
+        const { data, error } = await admin
+          .from("meta_ads")
+          .select("ad_id,adset_id,campaign_id,ad_name")
+          .in(columna, batch);
+        return error || !data ? [] : (data as Array<Record<string, string | null>>);
+      }),
+    );
+    return batches.flat();
+  };
+  const [porCampana, porAnuncio] = await Promise.all([
+    porColumna("campaign_id", campaignIds),
+    porColumna("ad_id", adIds),
+  ]);
+  const unicos = new Map<string, AnuncioMeta>();
+  for (const row of [...porCampana, ...porAnuncio]) {
+    if (!row.ad_id || unicos.has(row.ad_id)) continue;
+    unicos.set(row.ad_id, {
+      adId: row.ad_id,
+      adsetId: row.adset_id ?? null,
+      campaignId: row.campaign_id ?? null,
+      adName: row.ad_name ?? null,
+    });
+  }
+  return [...unicos.values()];
 }
 
 /** Latest courier state for the exact orders attributed to Meta leads. */
