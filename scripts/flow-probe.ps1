@@ -33,7 +33,10 @@ param(
   # panel son de producción y el sandbox no los tiene: cuál de los dos Yape es
   # «One Shot» no se puede responder en otro sitio. Crea órdenes PENDIENTES
   # —no mueven plata mientras nadie las pague— y pide confirmación.
-  [switch]$Prod
+  [switch]$Prod,
+  # Solo diagnostica a qué ambiente pertenece la credencial. No crea nada: son
+  # GETs. Es lo primero que hay que correr ante un «apiKey not found».
+  [switch]$Check
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,6 +62,21 @@ $env:FLOWCL_METHODS = $Methods
 $env:FLOWCL_TIMEOUT = $Timeout
 if ($Email) { $env:FLOWCL_EMAIL = $Email }
 if ($ReturnUrl) { $env:FLOWCL_RETURN_URL = $ReturnUrl }
+
+if ($Check) {
+  # Una llave cortada al pegar produce el MISMO «apiKey not found» que una de
+  # otro ambiente. Se ven los largos —no los valores— para separar los dos
+  # casos antes de culpar al ambiente.
+  Write-Host ("apiKey: {0} chars, empieza en {1}" -f $env:FLOWCL_API_KEY.Length,
+    $env:FLOWCL_API_KEY.Substring(0, [Math]::Min(8, $env:FLOWCL_API_KEY.Length))) -ForegroundColor Cyan
+  Write-Host ("secret: {0} chars" -f $env:FLOWCL_SECRET_KEY.Length) -ForegroundColor Cyan
+  $env:FLOWCL_CHECK = "1"
+  Remove-Item Env:\FLOWCL_API_BASE -ErrorAction SilentlyContinue
+  node $probe
+  Remove-Item Env:\FLOWCL_CHECK -ErrorAction SilentlyContinue
+  return
+}
+Remove-Item Env:\FLOWCL_CHECK -ErrorAction SilentlyContinue
 
 if ($Prod) {
   Write-Host "PRODUCCIÓN: se van a crear $(($Methods -split ',').Count) órdenes reales de S/ $Amount." -ForegroundColor Yellow

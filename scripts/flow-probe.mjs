@@ -23,6 +23,8 @@
 //   FLOWCL_EMAIL='tu@correo.com'   email del pagador de prueba
 //   FLOWCL_RETURN_URL='https://…'  urlReturn y urlConfirmation de prueba
 //   FLOWCL_TIMEOUT='900'            segundos hasta que la orden caduca
+//   FLOWCL_CHECK='1'                solo diagnostica de qué ambiente es la
+//                                   credencial; no crea nada (ver más abajo)
 //
 // Escribe scripts/.flow-probe.json (ignorado por git) con el volcado de las
 // respuestas, enmascarando la apiKey. El secretKey no se escribe ni se imprime
@@ -59,10 +61,15 @@ if (!API_KEY || !SECRET_KEY) {
   process.exit(1);
 }
 
+/** Modo diagnóstico: solo averigua a qué ambiente pertenece la credencial, sin
+ *  crear nada. Ver el bloque de más abajo. */
+const CHECK = process.env.FLOWCL_CHECK === "1";
+
 // El freno de mano. Esta sonda CREA órdenes: contra producción serían cobros
 // reales con el nombre «SONDA» delante. No hay motivo para correrla ahí, así
-// que no se puede sin decirlo a gritos.
-if (!BASE.includes("sandbox") && process.env.FLOWCL_ALLOW_PROD !== "1") {
+// que no se puede sin decirlo a gritos. En modo CHECK no aplica: ahí solo se
+// hacen GET que no crean nada.
+if (!CHECK && !BASE.includes("sandbox") && process.env.FLOWCL_ALLOW_PROD !== "1") {
   console.error(
     `Rechazado: ${BASE} no es el sandbox y esta sonda crea órdenes de pago.\n` +
       "Si de verdad quieres correrla contra producción: FLOWCL_ALLOW_PROD=1",
@@ -138,6 +145,67 @@ async function get(path, params) {
     /* ídem */
   }
   return { status: res.status, json, raw: json ? null : text.slice(0, 500) };
+}
+
+// ── Modo CHECK ───────────────────────────────────────────────────────────────
+// «apiKey not found» dice que ESE ambiente no conoce la llave, pero no dice
+// cuál sí. En vez de adivinar, se le pregunta a los dos.
+//
+// La pregunta se hace con `payment/getStatus` y un token inventado, porque es
+// un GET que no crea nada y su respuesta discrimina sola:
+//   · «apiKey not found»  → la llave NO vive en ese ambiente
+//   · cualquier otro error → la llave SÍ existe ahí, y el fallo es por el token
+//     de mentira, que es exactamente lo que queremos
+//
+// De regalo valida la FIRMA: si Flow encuentra la apiKey, verifica el HMAC
+// antes de mirar el token. Un error de firma aquí diría que el firmado está
+// mal, algo que el 401 de «apiKey not found» no llega a comprobar nunca.
+if (CHECK) {
+  console.log("\nDiagnóstico de credencial — solo lecturas, no crea nada.\n");
+  for (const [nombre, base] of [
+    ["sandbox   ", SANDBOX],
+    ["producción", "https://www.flow.cl/api"],
+  ]) {
+    const params = { apiKey: API_KEY, token: "TOKEN-INEXISTENTE-DE-DIAGNOSTICO" };
+    const qs = new URLSearchParams(
+      Object.entries({ ...params, s: sign(params) }).map(([k, v]) => [k, String(v)]),
+    );
+    let veredicto = "?";
+    let msg;
+    try {
+      const res = await fetch(`${base}/payment/getStatus?${qs}`);
+      const text = await res.text();
+      let parsed = null;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        /* HTML ante un fallo de infraestructura */
+      }
+      msg = `HTTP ${res.status} — ${parsed?.message ?? text.slice(0, 120)}`;
+
+      // Hay que distinguir «Flow contestó» de «algo contestó». Un proxy de red
+      // devolviendo 403 no dice NADA sobre la llave, y darlo por bueno sería
+      // peor que no preguntar: el diagnóstico afirmaría que la credencial vive
+      // en un ambiente que ni siquiera se alcanzó. El objeto Error de Flow
+      // lleva `code` numérico y `message`; sin esa forma, es indeterminado.
+      const deFlow = parsed && typeof parsed === "object" &&
+        (typeof parsed.code === "number" || "status" in parsed || "flowOrder" in parsed);
+      if (!deFlow) veredicto = "?";
+      else if (/apikey not found/i.test(String(parsed.message ?? ""))) veredicto = "✗";
+      else veredicto = "✓";
+    } catch (e) {
+      msg = `sin respuesta: ${e.message}`;
+    }
+    console.log(`  ${veredicto} ${nombre}  ${msg}`);
+  }
+  console.log(
+    "\n  ✗ = Flow contestó y no conoce la llave en ese ambiente.\n" +
+      "  ✓ = la llave vive ahí (el error es por el token inventado, no por ella).\n" +
+      "  ? = no contestó Flow, sino la red o un proxy. No dice nada de la llave.\n" +
+      "\nSi ninguno la reconoce, la llave está mal copiada o no es una apiKey de Flow.\n" +
+      "Si la reconoce producción, corre la sonda con -Prod.\n",
+  );
+  process.exit(0);
 }
 
 const stamp = Date.now();
