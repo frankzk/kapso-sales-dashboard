@@ -88,6 +88,59 @@ export function resolveAliclikHealth(
   return latest.status === "operativo" ? "operativo" : latest.status === "fallos" ? "fallos" : "sin_monitoreo";
 }
 
+// ---------------------------------------------------------------------------
+// Cuándo dejar de insistir al cotizar (2026-09-12)
+//
+// La pasada de reintentos de `previewAliclikGuide` vuelve a pedirle al MISMO
+// almacén la MISMA coordenada que acaba de fallar, tres veces, con esperas de
+// 2 s y 4 s. Con la API sana eso rescata un 500 suelto. Con la API caída no
+// rescata nada, y la operadora se come 34 segundos con la clienta al teléfono.
+//
+// La sonda lleva 10 días diciendo cuál de los dos mundos es el real, y no hay
+// término medio:
+//
+//   * 98 rachas de caída en 10 días —unas diez al día—, el 11% del tiempo.
+//   * Son GLOBALES: de 316 sondas en fallo, 315 tenían 0 de 3 puntos vivos.
+//     Lima, Arequipa y Trujillo se caen juntas. No es el pin.
+//   * NINGUNA racha baja de 2 sondas, o sea de ~5 minutos. 76 de las 98 duran
+//     3 sondas (~10-15 min) y la peor duró 50.
+//   * Cuando falla, su API tarda ~9 s en contestar «Internal server error»,
+//     contra 1,3 s cuando responde bien.
+//
+// Con la racha más corta medida en cinco minutos, una ventana de reintentos de
+// 34 segundos no puede sobrevivirla jamás. Así que cuando la sonda dice que está
+// caída, se hace UN intento y se dice lo que pasa. Lo que sí se conserva es la
+// vuelta por los otros almacenes: la sonda varía la coordenada con un almacén
+// fijo, así que prueba que el fallo no es del pin — pero NO dice nada sobre si
+// un almacén puede caerse mientras otro cotiza, que es para lo que está esa
+// vuelta.
+// ---------------------------------------------------------------------------
+
+/** Lo que se le dice a la operadora cuando se decide no insistir. Nombra a
+ *  Aliclik y da la duración medida, que es lo que convierte «error» en «espera
+ *  diez minutos y vuelve»: sin eso, reintenta a ciegas. */
+export const ALICLIK_QUOTE_OUTAGE_NOTE =
+  "Aliclik está caído ahora mismo: el monitor lo acaba de confirmar. Sus caídas son globales " +
+  "—las direcciones de Lima, Arequipa y Trujillo fallan a la vez— y duran unos diez minutos, " +
+  "así que no es el pin ni el almacén. Vuelve a intentarlo en un rato.";
+
+/**
+ * ¿Sirve de algo la pasada de reintentos tras un fallo pasajero al cotizar? PURA.
+ *
+ * Solo se rinde con la sonda FRESCA diciendo «fallos»: `sin_monitoreo` no es una
+ * caída, es no saber, y ahí se reintenta como siempre. Un fallo que no sea
+ * pasajero (4xx: sin cobertura, token malo) nunca llega hasta aquí, pero se
+ * comprueba igual porque reintentarlo sería peor todavía.
+ */
+export function shouldRetryQuote(
+  health: AliclikHealth,
+  allTransient: boolean,
+): { retry: boolean; note: string | null } {
+  if (!allTransient) return { retry: false, note: null };
+  if (health === "fallos") return { retry: false, note: ALICLIK_QUOTE_OUTAGE_NOTE };
+  return { retry: true, note: null };
+}
+
 /**
  * Ventana en la que un intento de creación todavía dice algo del estado de ahora.
  * Más corta que la frescura de la sonda porque las creaciones son esporádicas: si
