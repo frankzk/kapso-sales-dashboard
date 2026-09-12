@@ -53,7 +53,7 @@ describe("el cajón y el modal son diálogos", () => {
 
 describe("cada control tiene nombre", () => {
   it("búsqueda, «✕» y los selects/notas de llamada", () => {
-    expect(src).toContain('aria-label="Buscar guía, pedido, guía Fenix o celular"');
+    expect(src).toContain('aria-label="Buscar guía, pedido, guía Swayp o celular"');
     expect(src).toContain('aria-label="Limpiar búsqueda"');
     expect(src).toContain('aria-label="Cerrar"');
     // Los dos <select> de disposición y las dos notas van dentro de un <label>.
@@ -92,9 +92,9 @@ describe("títulos de sección semánticos", () => {
     for (const title of [
       "Destino de entrega",
       "Registrar o programar llamada",
-      "Continúa en la guía Fenix activa",
+      "Continúa en la guía Swayp activa",
       "Registrar resultado del courier",
-      "Generar guía Fenix (manual)",
+      "Guía Swayp (antes Fénix) a mano",
       "Historial desde el origen",
     ]) {
       expect(src, title).toMatch(new RegExp(`<h3[^>]*>${title.replace(/[()]/g, "\\$&")}</h3>`));

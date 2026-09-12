@@ -1705,7 +1705,7 @@ tras un descarte diría lo de antes durante minutos.
 courier, que no se falsea: sigue diciendo «Anulado»—; la segunda es en qué
 quedó el pedido: **«Anulado · Reproprovincia»** mientras se puede reenviar,
 **«Anulado · Recuperación vencida»** o **«Anulado · Descartada»** después. Es
-el mismo patrón de «Pendiente · Ingestión» y «Entregado · por Fenix». Sin la
+el mismo patrón de «Pendiente · Sin llamar» y «Entregado · por Swayp». Sin la
 segunda mitad, una guía viva para Swayp se veía igual que una muerta. Las
 vencidas y descartadas se quedan en la pestaña Anulado, que es el registro, con
 su segunda mitad escrita. No se inventa un `delivery_status` «reproprovincia»:

@@ -55,8 +55,9 @@ describe("un solo acento de acción", () => {
   it("los botones primarios son de la marca; rose solo para lo irreversible", () => {
     expect(src).not.toMatch(/bg-(orange|emerald|violet|indigo|sky|teal)-6\d\d px/);
     expect(src.match(/bg-brand-600/g)?.length).toBeGreaterThan(4);
-    // Rose queda en: crear la guía de excepción, «no quiere» y resolver la novedad de Swayp.
-    expect(src.match(/(?<!hover:)bg-rose-(600|700)/g)?.length).toBe(3);
+    // Rose queda en: crear la guía de excepción, «no quiere» (primer clic y
+    // confirmación) y resolver la novedad de Swayp.
+    expect(src.match(/(?<!hover:)bg-rose-(600|700)/g)?.length).toBe(4);
   });
 
   it("los filtros activos y la ruta elegida usan el acento, no el color del courier", () => {

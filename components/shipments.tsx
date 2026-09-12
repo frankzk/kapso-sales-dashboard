@@ -123,7 +123,7 @@ const DISPOSITIONS: { key: RerouteDisposition; label: string }[] = [
   { key: "programar", label: "Programar próxima llamada" },
   { key: "no_contesta", label: "No contesta" },
   // «Entregado» ya no es un resultado de llamada. Una guía se marca entregada
-  // desde «Registrar resultado del courier» (Fenix) o desde la API/Excel
+  // desde «Registrar resultado del courier» (Swayp) o desde la API/Excel
   // (Aliclik): dos puertas al mismo estado terminal eran dos formas de cerrar
   // una guía que el courier no había cerrado.
   { key: "cancela", label: "Cliente cancela / anula" },
@@ -132,7 +132,7 @@ const DISPOSITIONS: { key: RerouteDisposition; label: string }[] = [
 /** Next reprogrammed follow-up date (next_followup_at) as "12 ago", or "—".
  *  Read in UTC: the date is picked from `<input type=date>` and stored as UTC
  *  midnight, so this shows the day the operator chose (and matches the day the
- *  Fenix guide code is stamped with) regardless of the viewer's timezone. */
+ *  Swayp guide code is stamped with) regardless of the viewer's timezone. */
 function fmtReprogram(iso: string | null | undefined): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("es-PE", {
@@ -174,7 +174,7 @@ function shipmentHistoryLabel(call: ShipmentCallRow): string {
   }
   const labels: Record<string, string> = {
     call: "Gestión de llamada",
-    courier_report: "Reporte Fenix",
+    courier_report: "Reporte Swayp",
     state_change: "Corrección administrativa",
     reroute: "Reprogramación",
     address_change: "Cambio de dirección",
@@ -211,7 +211,7 @@ function tomorrowDateInputValue(): string {
 }
 
 /**
- * Segunda mitad del badge: «· Intento 3» en pendiente, «· por Fenix» en
+ * Segunda mitad del badge: «· Intento 3» en pendiente, «· por Swayp» en
  * entregado, y en una guía cerrada sin entregar, en qué quedó el PEDIDO:
  * «Anulado · Reproprovincia» mientras se puede reenviar, «· Recuperación
  * vencida» o «· Descartada» después. La primera mitad sigue siendo la guía —la
@@ -225,7 +225,7 @@ function subState(s: {
 }): string {
   if (s.status_category === "pending") return ` · ${attemptLabel(s.reroute_attempts)}`;
   if (s.status_category === "delivered" && s.delivered_source)
-    return ` · por ${s.delivered_source === "fenix" ? "Fenix" : "Aliclik"}`;
+    return ` · por ${s.delivered_source === "fenix" ? "Swayp" : "Aliclik"}`;
   if (s.recovery) return ` · ${RECOVERY_LABEL[s.recovery]}`;
   return "";
 }
@@ -311,7 +311,7 @@ export function ShipmentsBoard({
   const [uncontactedOnly, setUncontactedOnly] = useState(false);
   const [fenixFilter, setFenixFilter] = useState<FenixAvailabilityFilter>("all");
   const [aliclikRouteFilter, setAliclikRouteFilter] = useState<AliclikRouteFilter>("all");
-  // "En ruta"/"Entregado": distinguir guías reprogramadas con Aliclik vs Fénix.
+  // "En ruta"/"Entregado": distinguir guías reprogramadas con Aliclik vs Swayp.
   const [reprogFilter, setReprogFilter] = useState<"all" | ReprogramCourier>("all");
   const [exportingFenix, setExportingFenix] = useState(false);
   const [fenixExportError, setFenixExportError] = useState<string | null>(null);
@@ -336,7 +336,7 @@ export function ShipmentsBoard({
   );
 
   // Province is imported from Aliclik. Keep it separate from `city`, which is
-  // the normalized Fenix coverage key and can intentionally contain a district.
+  // the normalized Swayp coverage key and can intentionally contain a district.
   const departmentOptions = useMemo(
     () => Array.from(new Set(shipments.map(shipmentDepartment))).sort((a, b) => a.localeCompare(b)),
     [shipments],
@@ -575,7 +575,7 @@ export function ShipmentsBoard({
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as { error?: string } | null;
-        throw new Error(payload?.error || "No se pudo generar el Excel de Fenix.");
+        throw new Error(payload?.error || "No se pudo generar el Excel de Swayp.");
       }
 
       const blob = await response.blob();
@@ -589,7 +589,7 @@ export function ShipmentsBoard({
       URL.revokeObjectURL(url);
     } catch (error) {
       setFenixExportError(
-        error instanceof Error ? error.message : "No se pudo generar el Excel de Fenix.",
+        error instanceof Error ? error.message : "No se pudo generar el Excel de Swayp.",
       );
     } finally {
       setExportingFenix(false);
@@ -612,8 +612,8 @@ export function ShipmentsBoard({
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar guía, pedido, guía Fenix, celular…"
-              aria-label="Buscar guía, pedido, guía Fenix o celular"
+              placeholder="Buscar guía, pedido, guía Swayp, celular…"
+              aria-label="Buscar guía, pedido, guía Swayp o celular"
               className="w-full rounded-lg border border-slate-200 py-1.5 pl-8 pr-7 text-sm md:w-64"
             />
             {search && (
@@ -637,13 +637,13 @@ export function ShipmentsBoard({
             onClick={() => setDirectGuideOpen(true)}
             className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >
-            Guía Fenix directa
+            Guía Swayp directa
           </button>
           <a
             href="/dashboard/envios/stock"
             className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >
-            Stock Fenix
+            Stock Swayp
           </a>
         </div>
       </div>
@@ -782,8 +782,8 @@ export function ShipmentsBoard({
                     !dateFilter
                       ? "Elige primero la fecha de programación"
                       : !fenixRowsForExport.length
-                        ? "No hay guías Fenix visibles para esa fecha"
-                        : "Descarga las guías Fenix que quedan en la lista"
+                        ? "No hay guías Swayp visibles para esa fecha"
+                        : "Descarga las guías Swayp que quedan en la lista"
                   }
                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -791,7 +791,7 @@ export function ShipmentsBoard({
                     ? "Generando Excel…"
                     : !dateFilter
                       ? "Elige fecha para Excel"
-                      : `Descargar Excel Fenix (${fenixRowsForExport.length})`}
+                      : `Descargar Excel Swayp (${fenixRowsForExport.length})`}
                 </button>
               )}
               {view === "pendiente" && (
@@ -814,13 +814,13 @@ export function ShipmentsBoard({
                       Aliclik disponible ({aliclikRouteCounts.aliclikAvailable})
                     </option>
                     <option value="fenix_required">
-                      Fenix requerido ({aliclikRouteCounts.fenixRequired})
+                      Swayp requerido ({aliclikRouteCounts.fenixRequired})
                     </option>
                   </select>
                 </label>
               )}
               <label className="flex items-center gap-1.5 text-xs text-slate-500">
-                Fenix:
+                Swayp:
                 <select
                   value={fenixFilter}
                   onChange={(e) => {
@@ -833,8 +833,8 @@ export function ShipmentsBoard({
                   className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
                 >
                   <option value="all">Todos</option>
-                  <option value="ok">Fenix ok · con stock</option>
-                  <option value="sin_stock">Sin stock Fenix</option>
+                  <option value="ok">Swayp ok · con stock</option>
+                  <option value="sin_stock">Sin stock Swayp</option>
                   <option value="sin_cobertura">Fuera de cobertura</option>
                 </select>
               </label>
@@ -853,9 +853,9 @@ export function ShipmentsBoard({
                           : "border-slate-200 bg-white text-slate-700",
                     )}
                   >
-                    <option value="all">Aliclik y Fénix</option>
+                    <option value="all">Aliclik y Swayp</option>
                     <option value="aliclik">Aliclik ({reprogCounts.aliclik})</option>
-                    <option value="fenix">Fénix ({reprogCounts.fenix})</option>
+                    <option value="fenix">Swayp ({reprogCounts.fenix})</option>
                   </select>
                 </label>
               )}
@@ -1115,7 +1115,7 @@ const ShipmentTable = memo(function ShipmentTable({
                   {s.guide_code}
                 </button>
                 {s.courier === "fenix" && (
-                  <span className="ml-1 rounded bg-orange-50 px-1 text-xs text-orange-700">Fenix</span>
+                  <span className="ml-1 rounded bg-orange-50 px-1 text-xs text-orange-700">Swayp</span>
                 )}
                 {s.created_via === "fenix_directo" && (
                   <span className="ml-1 rounded bg-indigo-50 px-1 text-xs text-indigo-700">Directa</span>
@@ -1212,7 +1212,7 @@ const ShipmentTable = memo(function ShipmentTable({
                 <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="font-mono text-sm text-slate-800">{s.guide_code}</span>
                   {s.courier === "fenix" && (
-                    <span className="rounded bg-orange-50 px-1 text-xs text-orange-700">Fenix</span>
+                    <span className="rounded bg-orange-50 px-1 text-xs text-orange-700">Swayp</span>
                   )}
                   {s.created_via === "fenix_directo" && (
                     <span className="rounded bg-indigo-50 px-1 text-xs text-indigo-700">Directa</span>
@@ -1360,7 +1360,7 @@ function AliclikRouteCell({ shipment }: { shipment: ShipmentRow }) {
   return (
     <div className="min-w-32">
       <span className="inline-flex rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-800">
-        Fenix requerido
+        Swayp requerido
       </span>
       <span className="mt-0.5 block text-xs leading-4 text-orange-700">
         {reasonLabels[decision.reason] ?? "Aliclik no disponible"}
@@ -1372,10 +1372,10 @@ function AliclikRouteCell({ shipment }: { shipment: ShipmentRow }) {
 function FenixAvailabilityInline({ shipment }: { shipment: ShipmentRow }) {
   const reason = currentFenixReason(shipment);
   if (reason === "ok") {
-    return <span className="ml-1 font-medium text-emerald-700">· Fenix ok</span>;
+    return <span className="ml-1 font-medium text-emerald-700">· Swayp ok</span>;
   }
   if (reason === "sin_stock") {
-    return <span className="ml-1 font-medium text-amber-700">· Sin stock Fenix</span>;
+    return <span className="ml-1 font-medium text-amber-700">· Sin stock Swayp</span>;
   }
   return <span className="ml-1 font-medium text-rose-600">· Fuera de cobertura</span>;
 }
@@ -1446,6 +1446,8 @@ function ShipmentDrawer({
   const [recoveryDisposition, setRecoveryDisposition] = useState<RecoveryCallDisposition>("programar");
   const [recoveryDate, setRecoveryDate] = useState("");
   const [recoveryNote, setRecoveryNote] = useState("");
+  // Segundo paso del descarte: nombra el pedido antes de cerrarlo.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -1651,7 +1653,7 @@ function ShipmentDrawer({
   // El Excel del courier manda sobre city/district, pero a dónde va el paquete lo
   // decide la dirección de Shopify. Cuando se contradicen (courier "cusco" vs
   // Shopify "Juliaca · Puno") el envío sale a la ciudad equivocada y la cobertura
-  // Fenix se evalúa con el dato malo — antes solo se cazaba a ojo. Si ya se
+  // Swayp se evalúa con el dato malo — antes solo se cazaba a ojo. Si ya se
   // corrigió a mano (address_override) no hay nada que avisar.
   const localityConflict =
     !!shipment &&
@@ -1721,7 +1723,7 @@ function ShipmentDrawer({
   const fenixReadyForCustomerManagement =
     shipment?.courier === "fenix" && shipment.delivery_status === "pendiente";
   // Una sola resolución para todo el cajón: los dos botones que autogeneran una
-  // guía Fenix leían `shipment.order_name` por su cuenta, y arreglar uno solo
+  // guía Swayp leían `shipment.order_name` por su cuenta, y arreglar uno solo
   // habría dejado el otro deshabilitado sobre el mismo envío.
   const drawerOrderName = effectiveOrderName(
     shipment?.order_name,
@@ -1793,7 +1795,7 @@ function ShipmentDrawer({
                   {detail.shipment.created_via === "fenix_directo" && (
                     <span
                       className="rounded bg-indigo-50 px-1.5 py-0.5 text-xs font-medium text-indigo-700"
-                      title="Guía Fenix directa: creada desde el pedido, sin guía Aliclik previa"
+                      title="Guía Swayp directa: creada desde el pedido, sin guía Aliclik previa"
                     >
                       Directa
                     </span>
@@ -1885,10 +1887,10 @@ function ShipmentDrawer({
                 <CompactMetric label="Fecha Aliclik" value={fmtAliclikDate(detail.shipment.aliclik_service_date)} />
                 <CompactMetric label="Llamadas" value={`${detail.shipment.reroute_attempts} / 7`} />
                 <CompactMetric
-                  label="Fenix"
+                  label="Swayp"
                   value={
                     fenixReason === "ok"
-                      ? "Fenix ok"
+                      ? "Swayp ok"
                       : fenixReason === "sin_stock"
                         ? "Sin stock"
                         : "Fuera de cobertura"
@@ -1899,7 +1901,7 @@ function ShipmentDrawer({
               {fenixDeliverySchedule && (
                 <div className="flex items-center gap-1.5 border-t border-slate-100 bg-slate-50 px-3 py-1.5 text-xs text-slate-700">
                   <span>
-                    <strong>Horario Fenix: {fenixDeliverySchedule.hours}</strong>
+                    <strong>Horario Swayp: {fenixDeliverySchedule.hours}</strong>
                     {fenixDeliverySchedule.note && (
                       <span className="text-slate-500"> · {fenixDeliverySchedule.note}</span>
                     )}
@@ -2171,7 +2173,7 @@ function ShipmentDrawer({
                       {enRecuperacion ? "Reproprovincia" : "Excepción auditada"}
                     </p>
                     <h3 className="mt-0.5 text-sm font-semibold text-slate-900">
-                      {enRecuperacion ? "Reenviar por Fenix / Swayp" : "Reprogramar un pedido anulado"}
+                      {enRecuperacion ? "Reenviar por Swayp" : "Reprogramar un pedido anulado"}
                     </h3>
                   </div>
                   {!showCancelledException && (
@@ -2186,8 +2188,8 @@ function ShipmentDrawer({
                 </div>
                 <p className="text-xs leading-relaxed text-slate-600">
                   {enRecuperacion
-                    ? "La guía Aliclik ya terminó y no se toca: queda como madre transferida y se crea una guía Fenix con la fecha acordada con la clienta."
-                    : "No se borrará la anulación. Esta guía quedará como madre transferida y se creará una nueva guía Fenix con la fecha acordada."}
+                    ? "La guía Aliclik ya terminó y no se toca: queda como madre transferida y se crea una guía Swayp con la fecha acordada con la clienta."
+                    : "No se borrará la anulación. Esta guía quedará como madre transferida y se creará una nueva guía Swayp con la fecha acordada."}
                 </p>
 
                 {showCancelledException && (
@@ -2219,15 +2221,15 @@ function ShipmentDrawer({
                       </p>
                     ) : (
                       <p className="rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
-                        Falta vincular un N° de pedido para autogenerar la guía Fenix.
+                        Falta vincular un N° de pedido para autogenerar la guía Swayp.
                       </p>
                     )}
 
                     {cancelledExceptionUnavailable && (
                       <p className="rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
                         {fenixReason === "sin_stock"
-                          ? `Fenix no tiene stock para este pedido en ${detail.shipment.city ?? "la ciudad indicada"}.`
-                          : `Fenix no tiene cobertura en ${detail.shipment.city ?? "la ciudad indicada"}.`}
+                          ? `Swayp no tiene stock para este pedido en ${detail.shipment.city ?? "la ciudad indicada"}.`
+                          : `Swayp no tiene cobertura en ${detail.shipment.city ?? "la ciudad indicada"}.`}
                       </p>
                     )}
 
@@ -2261,7 +2263,7 @@ function ShipmentDrawer({
                         disabled={pending || !cancelledExceptionReady}
                         className="flex-1 rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
                       >
-                        {pending ? "Creando…" : "Crear nueva guía Fenix"}
+                        {pending ? "Creando…" : "Crear nueva guía Swayp"}
                       </button>
                     </div>
                   </div>
@@ -2284,7 +2286,10 @@ function ShipmentDrawer({
                   Resultado de la llamada
                   <select
                     value={recoveryDisposition}
-                    onChange={(e) => setRecoveryDisposition(e.target.value as RecoveryCallDisposition)}
+                    onChange={(e) => {
+                      setRecoveryDisposition(e.target.value as RecoveryCallDisposition);
+                      setConfirmDiscard(false);
+                    }}
                     className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
                   >
                     {RECOVERY_CALL_DISPOSITIONS.map((d) => (
@@ -2301,7 +2306,7 @@ function ShipmentDrawer({
                 )}
                 {recoveryDisposition !== "no_quiere" && (
                   <label className="block text-xs font-medium text-slate-600">
-                    {recoveryDisposition === "programar" ? "Fecha de próxima llamada" : "Próximo intento (opcional)"}
+                    {recoveryDisposition === "programar" ? "Fecha de próxima llamada" : "Fecha de próxima llamada (opcional)"}
                     <input
                       type="date"
                       value={recoveryDate}
@@ -2312,7 +2317,7 @@ function ShipmentDrawer({
                   </label>
                 )}
                 <label className="block text-xs font-medium text-slate-600">
-                  {recoveryDisposition === "no_quiere" ? "Motivo (obligatorio)" : "Nota de la llamada"}
+                  {recoveryDisposition === "no_quiere" ? "Motivo del descarte" : "Nota de la llamada"}
                   <textarea
                     value={recoveryNote}
                     onChange={(e) => setRecoveryNote(e.target.value)}
@@ -2324,50 +2329,106 @@ function ShipmentDrawer({
                     className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
                     rows={2}
                   />
-                </label>
-                <button
-                  onClick={() =>
-                    run(
-                      () =>
-                        registerRecoveryCall(shipmentId, {
-                          disposition: recoveryDisposition,
-                          note: recoveryNote,
-                          nextFollowupAt: recoveryDate ? new Date(recoveryDate).toISOString() : null,
-                        }),
-                      () => {
-                        setRecoveryNote("");
-                        setRecoveryDate("");
-                      },
-                    )
-                  }
-                  disabled={
-                    pending ||
-                    (recoveryDisposition === "programar" && !recoveryDate) ||
-                    (recoveryDisposition === "no_quiere" && recoveryNote.trim().length < 8)
-                  }
-                  className={cn(
-                    "w-full rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50",
-                    recoveryDisposition === "no_quiere"
-                      ? "bg-rose-600 hover:bg-rose-700"
-                      : "bg-brand-600 hover:bg-brand-700",
+                  {/* La regla estaba en el servidor y el botón solo se apagaba: la
+                      persona escribía «no quiere» y no sabía por qué no podía
+                      seguir. Se dice antes, junto al campo. */}
+                  {recoveryDisposition === "no_quiere" && (
+                    <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                      {recoveryNote.trim().length < 8
+                        ? `Mínimo 8 caracteres · faltan ${8 - recoveryNote.trim().length}`
+                        : "Queda escrito en el pedido como motivo del descarte."}
+                    </span>
                   )}
-                >
-                  {pending
-                    ? "Registrando…"
-                    : recoveryDisposition === "no_quiere"
-                      ? "Descartar la recuperación"
-                      : "Registrar"}
-                </button>
+                </label>
+                {/* DESCARTAR ES TERMINAL: el pedido pasa a cierre y sale de la
+                    cola. Un solo clic no basta; el segundo nombra el pedido y la
+                    consecuencia, y se puede cancelar. */}
+                {recoveryDisposition === "no_quiere" && confirmDiscard ? (
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDiscard(false)}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        run(
+                          () =>
+                            registerRecoveryCall(shipmentId, {
+                              disposition: recoveryDisposition,
+                              note: recoveryNote,
+                              nextFollowupAt: null,
+                            }),
+                          () => {
+                            setRecoveryNote("");
+                            setRecoveryDate("");
+                            setConfirmDiscard(false);
+                          },
+                        )
+                      }
+                      disabled={pending || recoveryNote.trim().length < 8}
+                      className="flex-1 rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+                    >
+                      {pending
+                        ? "Descartando…"
+                        : `Sí, descartar ${detail.shipment.order_name ? `el pedido ${detail.shipment.order_name}` : "este pedido"}`}
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (recoveryDisposition === "no_quiere") {
+                        setConfirmDiscard(true);
+                        return;
+                      }
+                      run(
+                        () =>
+                          registerRecoveryCall(shipmentId, {
+                            disposition: recoveryDisposition,
+                            note: recoveryNote,
+                            nextFollowupAt: recoveryDate ? new Date(recoveryDate).toISOString() : null,
+                          }),
+                        () => {
+                          setRecoveryNote("");
+                          setRecoveryDate("");
+                        },
+                      );
+                    }}
+                    disabled={
+                      pending ||
+                      (recoveryDisposition === "programar" && !recoveryDate) ||
+                      (recoveryDisposition === "no_quiere" && recoveryNote.trim().length < 8)
+                    }
+                    className={cn(
+                      "w-full rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50",
+                      recoveryDisposition === "no_quiere"
+                        ? "bg-rose-600 hover:bg-rose-700"
+                        : "bg-brand-600 hover:bg-brand-700",
+                    )}
+                  >
+                    {pending
+                      ? "Registrando…"
+                      : recoveryDisposition === "no_quiere"
+                        ? "Descartar la recuperación…"
+                        : recoveryDisposition === "programar"
+                          ? "Programar llamada"
+                          : "Registrar llamada"}
+                  </button>
+                )}
               </section>
             )}
 
-            {/* Step 1 for active Fenix deliveries: process the courier outcome
+            {/* Step 1 for active Swayp deliveries: process the courier outcome
                 before any customer call or reprogramming can be registered. */}
             {detail.shipment.courier === "fenix" && detail.shipment.delivery_status !== "anulado" && (
               detail.shipment.delivery_status === "transferido" ? (
                 <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Guía reemplazada</p>
-                  <h3 className="text-sm font-semibold text-slate-900">Continúa en la guía Fenix activa</h3>
+                  <h3 className="text-sm font-semibold text-slate-900">Continúa en la guía Swayp activa</h3>
                   <p className="text-xs leading-relaxed text-slate-600">
                     “Transferido” lo asigna Kapta automáticamente; no es un resultado del motorizado.
                   </p>
@@ -2390,7 +2451,7 @@ function ShipmentDrawer({
               ) : fenixReadyForCustomerManagement && !showCourierCorrection ? (
                 <section className="flex items-start justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">Etapa 1 completada</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">Resultado del courier registrado</p>
                     <p className="mt-0.5 text-sm font-semibold text-emerald-900">Pendiente de gestión con el cliente</p>
                     <p className="mt-0.5 text-xs leading-relaxed text-emerald-800">
                       Continúa abajo con la llamada. Si confirma, recién se generará la nueva reprogramación.
@@ -2409,7 +2470,7 @@ function ShipmentDrawer({
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.12em] text-orange-700">
-                        {fenixAwaitingCourierResult ? "Etapa 1 · obligatoria" : "Corrección del reporte"}
+                        {fenixAwaitingCourierResult ? "Resultado del courier · obligatorio" : "Corrección del reporte"}
                       </p>
                       <h3 className="mt-0.5 text-sm font-semibold text-slate-900">Registrar resultado del courier</h3>
                       <p className="mt-0.5 font-mono text-xs font-semibold text-slate-800">
@@ -2432,7 +2493,7 @@ function ShipmentDrawer({
                   )}
 
                   <label className="block text-xs font-medium text-slate-600">
-                    ¿Qué informó Fenix?
+                    ¿Qué informó Swayp (antes Fénix)?
                     <select
                       value={courierResult}
                       onChange={(e) => {
@@ -2464,7 +2525,7 @@ function ShipmentDrawer({
 
                   {courierResultDefinition?.requiresDate && (
                     <label className="block text-xs font-medium text-slate-600">
-                      Nueva fecha de entrega informada por Fenix
+                      Nueva fecha de entrega informada por Swayp
                       <input
                         type="date"
                         value={courierDate}
@@ -2479,7 +2540,7 @@ function ShipmentDrawer({
                       {courierResult === "no_contesta"
                         ? "Comentario para el historial (opcional)"
                         : courierResultDefinition.requiresNote
-                          ? "Motivo informado por Fenix"
+                          ? "Motivo informado por Swayp"
                           : "Detalle del reporte (opcional)"}
                       <textarea
                         value={courierNote}
@@ -2563,7 +2624,7 @@ function ShipmentDrawer({
                   <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-                        Paso 1 · elegir ruta
+                        Elegir ruta
                       </p>
                       <p className="mt-0.5 text-xs text-slate-600">{aliclikDecisionCopy(aliclikDecision)}</p>
                     </div>
@@ -2575,11 +2636,11 @@ function ShipmentDrawer({
                     {!showRouteChooser && (
                       <p className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700">
                         <span className="font-semibold">
-                          {reprogramProvider === "aliclik" ? "Ruta: Aliclik · misma guía" : "Ruta: Fenix · nueva guía"}
+                          {reprogramProvider === "aliclik" ? "Ruta: Aliclik · misma guía" : "Ruta: Swayp · nueva guía"}
                         </span>
                         <span className="text-slate-500">
                           {reprogramProvider === "aliclik"
-                            ? " · Fenix sin stock o cobertura para este destino."
+                            ? " · Swayp sin stock o cobertura para este destino."
                             : " · Aliclik no disponible para esta guía."}
                         </span>
                       </p>
@@ -2619,7 +2680,7 @@ function ShipmentDrawer({
                           !fenixRouteAvailable && "cursor-not-allowed opacity-45",
                         )}
                       >
-                        <span className="block font-semibold">Fenix</span>
+                        <span className="block font-semibold">Swayp</span>
                         <span>{fenixRouteAvailable ? "Nueva guía" : "Sin stock/cobertura"}</span>
                       </button>
                     </div>
@@ -2645,7 +2706,7 @@ function ShipmentDrawer({
                         Primero realiza la reprogramación en Aliclik. Luego confírmala aquí: se conservará la guía actual.
                       </p>
                     ) : detail.shipment.order_name ? (
-                      // Antes decía sólo «se generará una nueva guía Fenix», sin
+                      // Antes decía sólo «se generará una nueva guía Swayp», sin
                       // distinguir los DOS caminos que hay detrás del mismo botón.
                       // La operadora apretaba sin saber si el número lo pondría
                       // Swayp o si tendría que cargar la guía a mano en el Excel,
@@ -2653,21 +2714,21 @@ function ShipmentDrawer({
                       // decide cuál es; decirlo antes es gratis.
                       detail.swaypApiCity ? (
                         <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs leading-relaxed text-slate-600">
-                          Se generará una <b>nueva guía Fenix</b> con la fecha elegida y{" "}
+                          Se generará una <b>nueva guía Swayp</b> con la fecha elegida y{" "}
                           <b>el número lo emite Swayp</b>: quedará creada en su sistema, sin
                           cargarla al Excel. Si Swayp no responde, queda con código local y el
                           aviso te dice por qué.
                         </p>
                       ) : (
                         <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs leading-relaxed text-slate-600">
-                          Se generará una <b>nueva guía Fenix</b> con la fecha elegida{" "}
+                          Se generará una <b>nueva guía Swayp</b> con la fecha elegida{" "}
                           <b>con código local</b>: este destino todavía no emite por API, así que
                           hay que cargarla en el Excel de programación.
                         </p>
                       )
                     ) : (
                       <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs leading-relaxed text-amber-800">
-                        Sin N° de pedido no se puede autogenerar. Usa <b>Generar guía Fenix (manual)</b> abajo.
+                        Sin N° de pedido no se puede autogenerar. Usa <b>Ingresar una guía Swayp a mano</b>, abajo.
                       </p>
                     )}
                   </div>
@@ -2682,7 +2743,7 @@ function ShipmentDrawer({
                   {disposition === "confirma"
                     ? reprogramProvider === "aliclik"
                       ? "Fecha de reprogramación en Aliclik"
-                      : "Fecha de reprogramación (va en la nueva guía Fenix)"
+                      : "Fecha de reprogramación (va en la nueva guía Swayp)"
                     : disposition === "programar"
                       ? "Fecha de próxima llamada"
                       : "Próximo intento"}
@@ -2722,7 +2783,7 @@ function ShipmentDrawer({
                   {disposition === "confirma" && !nextDate
                     ? "Elige la fecha para confirmar"
                     : fenixAutoUnavailable
-                      ? "Fenix no disponible; usa una excepción manual"
+                      ? "Swayp no disponible; usa una excepción manual"
                     : overrideNoteMissing
                       ? "Explica el motivo de la excepción"
                     : programDateInvalid
@@ -2732,15 +2793,15 @@ function ShipmentDrawer({
                         : disposition === "confirma" && reprogramProvider === "aliclik"
                           ? "Confirmar reprogramación Aliclik"
                           : disposition === "confirma"
-                            ? "Crear guía Fenix y confirmar"
+                            ? "Crear guía Swayp y confirmar"
                             : "Registrar llamada"}
                 </button>
               </section>
             )}
 
-            {/* Fenix guide — manual fallback. The common path auto-generates the
+            {/* Swayp guide — manual fallback. The common path auto-generates the
                 guide from "Cliente confirma" above; this stays for shipments
-                without an order name, or to type a specific Fenix code. */}
+                without an order name, or to type a specific Swayp code. */}
             {/* Plegado por defecto: el camino normal es «Cliente confirma», que
                 autogenera la guía. Este formulario compartía la fecha con el de
                 la llamada (`nextDate`): teclear una fecha arriba rellenaba en
@@ -2753,13 +2814,13 @@ function ShipmentDrawer({
                 onClick={() => setShowManualGuide(true)}
                 className="text-xs font-medium text-brand-700 hover:underline"
               >
-                Ingresar una guía Fenix a mano
+                Ingresar una guía Swayp a mano
               </button>
             )}
             {detail.shipment.delivery_status === "pendiente" && (showManualGuide || !!detail.shipment.fenix_shipment_id) && (
               <section className="space-y-1.5 rounded-xl border border-slate-200 bg-white p-2.5">
               <div className="flex items-start justify-between gap-3">
-                <h3 className="text-sm font-semibold text-slate-900">Generar guía Fenix (manual)</h3>
+                <h3 className="text-sm font-semibold text-slate-900">Guía Swayp (antes Fénix) a mano</h3>
                 {!detail.shipment.fenix_shipment_id && (
                   <button
                     type="button"
@@ -2771,7 +2832,7 @@ function ShipmentDrawer({
                 )}
               </div>
               {detail.shipment.fenix_shipment_id ? (
-                <p className="text-xs text-emerald-700">Ya tiene guía Fenix vinculada.</p>
+                <p className="text-xs text-emerald-700">Ya tiene guía Swayp vinculada.</p>
               ) : (
                 <>
                   <label className="block text-xs font-medium text-slate-600">
@@ -2787,7 +2848,7 @@ function ShipmentDrawer({
                     <input
                       value={fenixGuide}
                       onChange={(e) => setFenixGuide(e.target.value)}
-                      placeholder="N° de guía Fenix"
+                      placeholder="N° de guía Swayp"
                       className="flex-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
                     />
                     <button
@@ -2823,7 +2884,7 @@ function ShipmentDrawer({
                     disabled={pending || !fenixGuide.trim()}
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                   >
-                    Crear guía Fenix
+                    Crear guía Swayp
                   </button>
                 </>
               )}
@@ -2882,7 +2943,7 @@ function ShipmentGuideHistory({
               <div className="flex items-center gap-2 py-1.5" aria-label="Transferencia a una nueva guía">
                 <span className="h-px flex-1 bg-slate-200" />
                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
-                  Transferida → nueva guía Fenix
+                  Transferida → nueva guía Swayp
                 </span>
                 <span className="h-px flex-1 bg-slate-200" />
               </div>
@@ -2919,8 +2980,8 @@ function ShipmentGuideHistory({
                     >
                       {guide.courier === "fenix"
                         ? guide.created_via === "fenix_directo"
-                          ? "Fenix directa"
-                          : "Fenix"
+                          ? "Swayp directa"
+                          : "Swayp"
                         : "Aliclik"}
                     </span>
                     {guide.is_current && (
@@ -3039,7 +3100,6 @@ function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: ()
                 setEditing(true);
               }}
               className="shrink-0 text-xs font-medium text-brand-700 hover:underline"
-              title="Editar nota"
             >
               Editar
             </button>
@@ -3181,7 +3241,7 @@ function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
 }
 
 
-// ── Métricas de reprogramación Kapso→Fénix ───────────────────────────────────
+// ── Métricas de reprogramación Kapta→Swayp ───────────────────────────────────
 
 function pctLabel(tasa: number | null): string | null {
   return tasa == null ? null : `${Math.round(tasa * 100)}%`;
@@ -3225,21 +3285,11 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
             <thead>
               <tr className="border-t border-slate-100 text-xs text-slate-500">
                 <th className="px-3 py-1.5 text-left font-medium">Asesora</th>
-                <th className="px-3 py-1.5 text-right font-medium" title="Acciones de gestión hoy (llamadas + reprogramaciones)">
-                  Gestiones
-                </th>
-                <th className="px-3 py-1.5 text-right font-medium" title="Confirmadas → En ruta">
-                  Reprogram.
-                </th>
-                <th className="px-3 py-1.5 text-right font-medium" title="Cliente canceló → Anulado">
-                  Anuladas
-                </th>
-                <th className="px-3 py-1.5 text-right font-medium" title="Marcadas Entregado en la gestión">
-                  Entregadas
-                </th>
-                <th className="px-3 py-1.5 text-right font-medium" title="Guías distintas tocadas hoy">
-                  Guías
-                </th>
+                <th className="px-3 py-1.5 text-right font-medium">Gestiones</th>
+                <th className="px-3 py-1.5 text-right font-medium">Reprogramadas</th>
+                <th className="px-3 py-1.5 text-right font-medium">Anuladas</th>
+                <th className="px-3 py-1.5 text-right font-medium">Entregadas</th>
+                <th className="px-3 py-1.5 text-right font-medium">Guías</th>
               </tr>
             </thead>
             <tbody>
@@ -3267,6 +3317,13 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
               </tr>
             </tfoot>
           </table>
+          {/* Lo que antes solo decía un tooltip: con teclado o en táctil no
+              existía. Una línea, visible, y las cabeceras sin abreviar. */}
+          <p className="border-t border-slate-100 px-3 py-2 text-xs leading-relaxed text-slate-500">
+            Gestiones: llamadas y reprogramaciones registradas hoy · Reprogramadas: confirmadas y en ruta ·
+            Anuladas: la clienta canceló · Entregadas: cerradas por el resultado del courier · Guías: distintas
+            tocadas hoy.
+          </p>
         </div>
       )}
     </div>
@@ -3274,7 +3331,7 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
 }
 
 /** Franja compacta bajo el encabezado: la tasa de entrega de lo reprogramado en
- *  Kapso (guías Fénix hijas), visible sin clics. "Ver detalle" abre el popup. */
+ *  Kapta (guías Swayp hijas), visible sin clics. "Ver detalle" abre el popup. */
 function ReprogramStrip({ stats, stores }: { stats: ReprogramStats; stores: StoreSummary[] }) {
   const [open, setOpen] = useState(false);
   if (!stats.historico.total) return null;
@@ -3283,9 +3340,9 @@ function ReprogramStrip({ stats, stores }: { stats: ReprogramStats; stores: Stor
   return (
     <>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs tabular-nums text-slate-600">
-        <span className="text-sm font-semibold text-slate-800">Reprogramados en Kapso</span>
+        <span className="text-sm font-semibold text-slate-800">Reprogramados en Kapta</span>
         <span className="text-slate-500">últimos 30 días:</span>
-        <span className="font-semibold text-slate-800" title="Reprogramaciones confirmadas (Aliclik + Fénix)">
+        <span className="font-semibold text-slate-800" title="Reprogramaciones confirmadas (Aliclik + Swayp)">
           {c.total}
         </span>
         <span>
@@ -3297,7 +3354,7 @@ function ReprogramStrip({ stats, stores }: { stats: ReprogramStats; stores: Stor
             </>
           )}
         </span>
-        <span className="text-sky-700">{c.entregadosFenix} por Fénix</span>
+        <span className="text-sky-700">{c.entregadosFenix} por Swayp</span>
         <span>{c.anulados} anulados</span>
         <span>
           {c.enCurso} en curso
@@ -3319,11 +3376,11 @@ function ReprogramCountsRow({ label, c }: { label: string; c: ReprogramCounts })
   return (
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-sm">
       <span className="w-28 shrink-0 truncate font-medium text-slate-700">{label}</span>
-      <span className="tabular-nums text-slate-800" title="Reprogramaciones (Aliclik + Fénix)">{c.total}</span>
+      <span className="tabular-nums text-slate-800" title="Reprogramaciones (Aliclik + Swayp)">{c.total}</span>
       <span className="tabular-nums text-emerald-700" title="Entregados (ambos couriers)">{c.entregados} entregados</span>
       {c.entregadosFenix > 0 && (
-        <span className="tabular-nums text-sky-700" title="De los entregados, los que salieron por Fénix">
-          {c.entregadosFenix} por Fénix
+        <span className="tabular-nums text-sky-700" title="De los entregados, los que salieron por Swayp">
+          {c.entregadosFenix} por Swayp
         </span>
       )}
       <span className="tabular-nums text-slate-500">{c.anulados} anulados</span>
@@ -3441,7 +3498,7 @@ function ReprogramModal({
       >
         <div className="mb-3 flex items-center justify-between">
           <h2 id="reprogram-modal-title" className="text-base font-semibold text-slate-900">
-            Reprogramaciones (Aliclik + Fénix)
+            Reprogramaciones (Aliclik + Swayp, antes Fénix)
           </h2>
           <button
             type="button"
@@ -3571,8 +3628,8 @@ function ReprogramModal({
 
         <p className="mt-4 text-xs leading-relaxed text-slate-500">
           Universo: reprogramaciones confirmadas en el dashboard — <b>Aliclik</b> (la guía sigue en Aliclik) y{" "}
-          <b>Fénix</b> (se creó una guía Fénix); las entregas de primer intento no entran. <b>Por Fénix</b> es el
-          subconjunto de entregados que salió por una guía Fénix. Los cortes por rango usan la fecha en que se confirmó
+          <b>Swayp</b> (antes Fénix; se creó una guía Swayp); las entregas de primer intento no entran. <b>Por Swayp</b> es el
+          subconjunto de entregados que salió por una guía Swayp. Los cortes por rango usan la fecha en que se confirmó
           la reprogramación. La <b>tasa</b> es entregados ÷ cerrados (entregados + anulados) — lo en curso no la afecta.{" "}
           <b>Varados</b>: en curso hace más de {REPROGRAM_STALE_DAYS} días, probables anulados sin confirmar.
         </p>

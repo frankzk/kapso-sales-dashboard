@@ -102,8 +102,10 @@ describe("delivery status model", () => {
   });
 
   it("labels the pending sub-state from the intento counter", () => {
-    expect(attemptLabel(0)).toBe("Ingestión");
-    expect(attemptLabel(null)).toBe("Ingestión");
+    // «Ingestión» era jerga de importación; lo que la asesora necesita saber es
+    // que a esa guía todavía nadie la llamó.
+    expect(attemptLabel(0)).toBe("Sin llamar");
+    expect(attemptLabel(null)).toBe("Sin llamar");
     expect(attemptLabel(3)).toBe("Intento 3");
     expect(attemptLabel(7)).toBe("Intento 7");
     expect(attemptLabel(99)).toBe("Intento 7"); // clamped to MAX_INTENTOS

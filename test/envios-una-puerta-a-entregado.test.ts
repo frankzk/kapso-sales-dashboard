@@ -50,21 +50,21 @@ describe("si no hay elección, no se pregunta", () => {
   it("el selector de ruta solo aparece con dos caminos reales", () => {
     expect(ui).toContain("const showRouteChooser =\n    canForceAliclik || (!!aliclikDecision?.eligible && fenixRouteAvailable);");
     expect(ui).toContain("{!showRouteChooser && (");
-    expect(ui).toContain('"Ruta: Aliclik · misma guía" : "Ruta: Fenix · nueva guía"');
+    expect(ui).toContain('"Ruta: Aliclik · misma guía" : "Ruta: Swayp · nueva guía"');
     expect(ui).toContain("{canForceAliclik && (");
   });
 });
 
 describe("el formulario manual tiene fecha propia y se pliega", () => {
   it("no comparte `nextDate` con la llamada", () => {
-    const manual = ui.slice(ui.indexOf("Generar guía Fenix (manual)</h3>"), ui.indexOf("Crear guía Fenix\n"));
+    const manual = ui.slice(ui.indexOf("Guía Swayp (antes Fénix) a mano</h3>"), ui.indexOf("Crear guía Swayp\n"));
     expect(manual).toContain("value={manualGuideDate}");
     expect(manual).not.toContain("value={nextDate}");
     expect(manual).not.toContain("nextDate ?");
   });
 
   it("plegado con pedido; abierto solo cuando no hay N° de pedido", () => {
-    expect(ui).toContain("Ingresar una guía Fenix a mano");
+    expect(ui).toContain("Ingresar una guía Swayp a mano");
     expect(ui).toContain("setShowManualGuide(!effectiveOrderName(d.shipment.order_name, d.order?.name));");
   });
 });
