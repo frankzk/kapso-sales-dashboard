@@ -93,6 +93,7 @@ export const PERMISSIONS = [
   // Rutas de reparto
   "routes.manage", // armar la ruta del día y asignarla
   "routes.deliver", // reportar SUS propias paradas desde /reparto
+  "routes.report_others", // reportar por un motorizado, con actor y motivo propios
   // Recuperación del pedido devuelto (0112): escribirle a la clienta cuya guía
   // volvió, proponiéndole el reenvío por agencia con adelanto. Permiso propio y
   // no `master.edit` por el mismo motivo que las guías: es una escritura hacia
@@ -154,6 +155,12 @@ export function isPermission(value: string): value is Permission {
  * nadie pueda conceder — que lo dejaría sin poder ejercer NADIE.
  */
 export const GRANTED_ONE_BY_ONE = [
+  {
+    permission: "routes.report_others",
+    label: "Reportar entregas de rutas",
+    description: "Registrar entregas o no entregas por un motorizado, con evidencia y motivo. No permite cerrar liquidaciones.",
+    lastOneMatters: false,
+  },
   {
     permission: "payments.validate",
     label: "Validar pagos",

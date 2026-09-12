@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
+import { routeReportAccess } from "@/lib/route-report-access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "No autenticado." }, { status: 401 });
 
   const perms = await getMasterPermissions();
-  if (!perms.can("routes.deliver") && !perms.can("routes.manage")) {
+  if (!perms.can("routes.deliver") && !perms.can("routes.report_others")) {
     return NextResponse.json({ error: "Tu rol no permite reportar entregas." }, { status: 403 });
   }
 
@@ -75,6 +76,9 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
   if (!stop) {
     return NextResponse.json({ error: "Esa parada no es tuya." }, { status: 403 });
+  }
+  if (!await routeReportAccess(stop.route_id)) {
+    return NextResponse.json({ error: "No tienes permiso para reportar esta ruta o ya no está en curso." }, { status: 403 });
   }
 
   const bytes = new Uint8Array(await file.arrayBuffer());
