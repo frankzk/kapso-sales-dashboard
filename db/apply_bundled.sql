@@ -12652,7 +12652,7 @@ comment on column flowcl_payment_links.payment_id is
 -- ---- 0161 ----
 -- 0161_flowcl_store_credentials.sql — las credenciales de Flow.cl, por tienda.
 --
--- POR QUÉ SE MUEVEN DEL ENTORNO. La 0157 las dejó en variables de entorno con
+-- POR QUÉ SE MUEVEN DEL ENTORNO. La 0160 las dejó en variables de entorno con
 -- este argumento: Aurela y Kenku comparten UNA cuenta de Flow, y duplicar la
 -- misma llave en dos filas garantiza que algún día se rote en una y se olvide
 -- en la otra. El argumento era correcto y la conclusión no.
