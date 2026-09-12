@@ -66,11 +66,7 @@ describe("las señales de decisión se leen", () => {
     expect(src).not.toContain("text-teal-600");
     expect(src).not.toContain("text-sky-600");
     expect(src).not.toContain("text-emerald-600");
-    // El único amber-600 que queda es el glifo decorativo ◷, oculto al lector.
-    const amber = [...src.matchAll(/text-amber-600/g)];
-    expect(amber.length).toBe(1);
-    const at = amber[0]?.index ?? 0;
-    expect(src.slice(at - 40, at)).toContain('aria-hidden="true"');
+    expect(src).not.toContain("text-amber-600");
   });
 
   it("los párrafos de consecuencia respiran", () => {
