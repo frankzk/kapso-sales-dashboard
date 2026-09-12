@@ -22,14 +22,22 @@
 //   FLOWCL_AMOUNT='20'             monto del cobro de prueba
 //   FLOWCL_EMAIL='tu@correo.com'   email del pagador de prueba
 //   FLOWCL_RETURN_URL='https://…'  urlReturn y urlConfirmation de prueba
+//   FLOWCL_TIMEOUT='900'            segundos hasta que la orden caduca
 //
 // Escribe scripts/.flow-probe.json (ignorado por git) con el volcado de las
 // respuestas, enmascarando la apiKey. El secretKey no se escribe ni se imprime
 // nunca, en ningún caso.
 //
-// NO ES SOLO LECTURA: crea órdenes de pago. Por eso está clavado al SANDBOX y
-// se niega a correr contra producción. Una orden de sandbox no mueve plata; una
-// de producción sí.
+// NO ES SOLO LECTURA: crea órdenes de pago. Por eso apunta al SANDBOX y se
+// niega a correr contra producción salvo que se lo digan a gritos
+// (FLOWCL_ALLOW_PROD=1).
+//
+// CUÁNDO SÍ CONTRA PRODUCCIÓN. Los IDs de medio de pago del panel son de
+// producción: el sandbox tiene los suyos, o ninguno. Así que cuál de los dos
+// Yape del panel es «One Shot» SOLO se responde en producción. Lo que hace
+// segura esa corrida es que `payment/create` deja la orden PENDIENTE: no mueve
+// un sol mientras nadie la pague, y con `timeout` caduca sola. Se abre el
+// link, se mira qué hace Yape, y no se completa el pago.
 
 import { createHmac } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -74,6 +82,11 @@ const METHODS = (process.env.FLOWCL_METHODS ?? "9,170,152,169")
 // Aquí es un parámetro de la sonda, no una regla de negocio.
 const AMOUNT = Number(process.env.FLOWCL_AMOUNT ?? 20);
 const EMAIL = process.env.FLOWCL_EMAIL ?? "sonda@example.com";
+// Segundos hasta que la orden caduca. Importa sobre todo si esto se corre
+// contra producción: una orden de sonda que no caduca queda pagable para
+// siempre, y un link de «SONDA» cobrado tres meses después es un cobro que
+// nadie sabe explicar. 15 minutos alcanzan para abrirlo en el celular y mirar.
+const TIMEOUT = Number(process.env.FLOWCL_TIMEOUT ?? 900);
 // Flow exige ambas URLs. Para la sonda da igual dónde apunten —no vamos a
 // cobrar de verdad— pero si Flow valida que respondan, el error lo dirá.
 const RETURN_URL = process.env.FLOWCL_RETURN_URL ?? "https://example.com/flow/retorno";
@@ -143,6 +156,7 @@ for (const method of METHODS) {
     email: EMAIL,
     paymentMethod: method,
     subject: `Sonda adelanto (medio ${method})`,
+    timeout: TIMEOUT,
     urlConfirmation: RETURN_URL,
     urlReturn: RETURN_URL,
   };

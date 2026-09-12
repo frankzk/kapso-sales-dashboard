@@ -25,7 +25,15 @@ param(
   # donde se leen los nombres reales de cada medio Yape.
   [string]$Methods = '9,170,152,169',
   [string]$Email,
-  [string]$ReturnUrl
+  [string]$ReturnUrl,
+  # Segundos hasta que la orden caduca. Importa en producción: una orden de
+  # sonda sin caducidad queda pagable para siempre.
+  [int]$Timeout = 900,
+  # Corre contra PRODUCCIÓN. Hace falta porque los IDs de medio de pago del
+  # panel son de producción y el sandbox no los tiene: cuál de los dos Yape es
+  # «One Shot» no se puede responder en otro sitio. Crea órdenes PENDIENTES
+  # —no mueven plata mientras nadie las pague— y pide confirmación.
+  [switch]$Prod
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,7 +56,22 @@ Se obtienen en https://sandbox.flow.cl/app/web/misDatos.php
 # a node. Solo se fijan las que el usuario pasó: lo demás lo decide el .mjs.
 $env:FLOWCL_AMOUNT = $Amount
 $env:FLOWCL_METHODS = $Methods
+$env:FLOWCL_TIMEOUT = $Timeout
 if ($Email) { $env:FLOWCL_EMAIL = $Email }
 if ($ReturnUrl) { $env:FLOWCL_RETURN_URL = $ReturnUrl }
+
+if ($Prod) {
+  Write-Host "PRODUCCIÓN: se van a crear $(($Methods -split ',').Count) órdenes reales de S/ $Amount." -ForegroundColor Yellow
+  Write-Host "Quedan PENDIENTES y caducan en $Timeout s. No completes el pago al abrir los links." -ForegroundColor Yellow
+  if ((Read-Host "Escribe PRODUCCION para continuar") -ne "PRODUCCION") { throw "Cancelado." }
+  $env:FLOWCL_API_BASE = "https://www.flow.cl/api"
+  $env:FLOWCL_ALLOW_PROD = "1"
+} else {
+  # `$env:` sobrevive a la llamada: sin esto, un `-Prod` de hace diez minutos
+  # dejaría la siguiente corrida apuntando a producción SIN avisar, que es
+  # exactamente el accidente que el freno de mano existe para evitar.
+  Remove-Item Env:\FLOWCL_API_BASE -ErrorAction SilentlyContinue
+  Remove-Item Env:\FLOWCL_ALLOW_PROD -ErrorAction SilentlyContinue
+}
 
 node $probe
