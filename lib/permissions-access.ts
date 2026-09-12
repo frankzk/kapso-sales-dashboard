@@ -25,10 +25,14 @@ export interface MasterPermissions {
 
 async function loadGrants(): Promise<PermissionGrant[]> {
   const sb = await createServerSupabase();
+  const user = await getCurrentUser();
+  if (!user) return [];
   // `user_permissions` llega con la fase 3. Antes de esa migración la consulta
   // falla y los permisos salen solo del rol — que es exactamente el
   // comportamiento correcto durante la ventana de despliegue.
-  const { data, error } = await sb.from("user_permissions").select("permission,granted");
+  // RLS lets org admins read teammates' grants too; never union those into
+  // the current actor's permissions.
+  const { data, error } = await sb.from("user_permissions").select("permission,granted").eq("user_id", user.id);
   if (error) return [];
   return ((data ?? []) as { permission: string; granted: boolean | null }[]).map((r) => ({
     permission: r.permission,
@@ -65,7 +69,7 @@ const loadOrgPermissions = cache(async (orgId: string): Promise<Set<Permission>>
       .eq("org_id", orgId)
       .eq("user_id", user.id)
       .maybeSingle(),
-    sb.from("user_permissions").select("permission,granted").eq("org_id", orgId),
+    sb.from("user_permissions").select("permission,granted").eq("org_id", orgId).eq("user_id", user.id),
   ]);
   if (!membership) return new Set<Permission>();
   return permissionsFor(
