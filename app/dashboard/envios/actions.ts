@@ -427,8 +427,9 @@ export async function releaseShipment(shipmentId: string): Promise<ShipmentActio
 
 /**
  * Register a gestión call. Reads the current state, applies the transition
- * (confirma→En ruta / no_contesta→siguiente intento o Anulado / cancela→Anulado
- * / entregado→Entregado por Fenix), updates the shipment and logs the call.
+ * (confirma→En ruta / no_contesta→siguiente intento o Anulado / cancela→Anulado),
+ * updates the shipment and logs the call. Marking a guide as delivered is NOT a
+ * call outcome: that comes from the courier (`registerCourierReportResult`).
  *
  * "Cliente confirma" doubles as the re-dispatch step: it AUTO-generates a new,
  * unique Fenix guide (date-stamped with the reprogramación date) and transfers
@@ -505,6 +506,13 @@ export async function registerRerouteCall(
   // (transferido/entregado/anulado) guide into an active queue.
   if (!isCallable(cur.delivery_status)) {
     return { error: "Este envío ya no admite gestión (entregado, anulado o transferido)." };
+  }
+  // Una pestaña con el código viejo todavía puede mandar «entregado». La
+  // puerta es una sola: el resultado del courier (ver lib/shipments.ts).
+  if ((input.disposition as string) === "entregado") {
+    return {
+      error: "Una guía se marca entregada desde «Registrar resultado del courier», no desde la llamada.",
+    };
   }
 
   // A confirmed reprogramación must carry its date: it stamps the new Fenix guide
@@ -678,11 +686,6 @@ export async function registerRerouteCall(
     next_followup_at: nextFollowup,
   });
 
-  // Guía Fénix entregada → descuenta 1 del inventario (idempotente, best-effort).
-  if (t.status === "entregado") {
-    await consumeFenixStockOnDelivery(admin, shipmentId).catch(() => {});
-  }
-
   await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
   let notice: string;
@@ -695,8 +698,6 @@ export async function registerRerouteCall(
     notice = `Llamada programada para el ${date}; los intentos no cambiaron.`;
   } else if (t.status === "en_ruta") {
     notice = "Registrado — En ruta (Fenix).";
-  } else if (t.status === "entregado") {
-    notice = "Registrado — Entregado.";
   } else if (t.status === "anulado") {
     notice = "Registrado — Anulado.";
   } else {

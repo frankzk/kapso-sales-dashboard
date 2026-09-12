@@ -483,11 +483,11 @@ describe("nextShipmentTransition (gestión flow)", () => {
   it("pending: cancela → anulado", () => {
     expect(nextShipmentTransition("pendiente", "cancela", 1).status).toBe("anulado");
   });
-  it("en_ruta: entregado → entregado por Fenix", () => {
+  it("«entregado» ya no es una disposición de llamada: la puerta es el resultado del courier", () => {
+    // @ts-expect-error — la disposición no existe; ver lib/shipments.ts y test/envios-una-puerta-a-entregado.test.ts
     const r = nextShipmentTransition("en_ruta", "entregado", 3);
-    expect(r.status).toBe("entregado");
-    expect(r.deliveredSource).toBe("fenix");
-    expect(r.closed).toBe(true);
+    expect(r.status).not.toBe("entregado");
+    expect(r.deliveredSource).toBeNull();
   });
   it("en_ruta: no_contesta returns to pending at the SAME intento", () => {
     const r = nextShipmentTransition("en_ruta", "no_contesta", 2);

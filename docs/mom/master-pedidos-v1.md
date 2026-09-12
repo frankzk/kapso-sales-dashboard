@@ -2163,6 +2163,26 @@ otro y no nos enteramos.
 `guide_code`.** El webhook de Swayp busca la guía por esa columna: sin ella el
 envío se quedaría En ruta para siempre por más que el mensajero reportara.
 
+### 11.4 Una sola puerta a «entregado»
+
+La llamada de gestión desde Envíos **no cierra guías como entregadas**. Una
+guía se marca entregada solo por quien la entregó: para Swayp/Fenix, el
+resultado del courier («Registrar resultado del courier», con «Entregado —
+cerrar la guía»); para Aliclik, la API o el Excel. Hasta el 12-09-2026 el
+formulario de llamada ofrecía además «Entregado (Fenix)»: dos puertas al mismo
+estado terminal, y la segunda podía cerrar una guía que el courier no había
+cerrado, incluso una que nunca salió del almacén. Se quitó del formulario, del
+tipo `RerouteDisposition` y el servidor la rechaza si llega de una pestaña con
+el código viejo. Los resultados de llamada son cuatro: **Cliente confirma
+reprogramación**, **Programar próxima llamada**, **No contesta** y **Cliente
+cancela / anula**.
+
+Dos reglas más del mismo cajón, por la misma razón (no preguntar lo que ya
+está decidido): si «Ruta sugerida» deja una sola ruta posible, la llamada no
+pide elegir entre Aliclik y Fenix, lo dice; y el formulario manual de guía
+Fenix, con fecha propia, queda plegado salvo cuando el envío no tiene número
+de pedido, único caso en que es el camino obligado.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom

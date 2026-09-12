@@ -618,10 +618,16 @@ export function getFenixDeliverySchedule(
 //
 //   Pendiente:  no_contesta → Intento N+1 ; en el 7º sin respuesta → Anulado
 //               confirma    → En ruta (sale a reparto Fenix, mismo intento)
-//               cancela     → Anulado ; entregado → Entregado (por Fenix)
-//   En ruta:    entregado   → Entregado (Fenix)
-//               no_contesta → vuelve a Pendiente al mismo intento
 //               cancela     → Anulado
+//   En ruta:    no_contesta → vuelve a Pendiente al mismo intento
+//               cancela     → Anulado
+//
+// UNA SOLA PUERTA A «ENTREGADO». La llamada de gestión NO cierra guías como
+// entregadas: eso lo dice el courier —«Registrar resultado del courier» para
+// Fenix (`courierReportTransition`), la API o el Excel para Aliclik—. Hasta
+// el 12-09-2026 existía la disposición «Entregado (Fenix)» aquí, y era una
+// segunda forma de cerrar una guía que el courier no había cerrado, incluso
+// una que nunca salió del almacén.
 // ---------------------------------------------------------------------------
 
 export const MAX_INTENTOS = 7;
@@ -631,8 +637,7 @@ export type RerouteDisposition =
   | "confirma" // customer confirmed → goes out with Fenix (en_ruta)
   | "programar" // customer asks for a later call; keep state + intento
   | "no_contesta" // no answer
-  | "cancela" // customer cancels / refuses → anulado
-  | "entregado"; // delivery confirmed (por Fenix)
+  | "cancela"; // customer cancels / refuses → anulado
 
 export interface ShipmentTransition {
   status: string; // the delivery_status to set
@@ -653,8 +658,6 @@ export function nextShipmentTransition(
 ): ShipmentTransition {
   const inRoute = current === "en_ruta";
   switch (disposition) {
-    case "entregado":
-      return { status: "entregado", attempts, deliveredSource: "fenix", closed: true };
     case "cancela":
       return { status: "anulado", attempts, deliveredSource: null, closed: true };
     case "confirma":

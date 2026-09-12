@@ -122,7 +122,10 @@ const DISPOSITIONS: { key: RerouteDisposition; label: string }[] = [
   { key: "confirma", label: "Cliente confirma reprogramación" },
   { key: "programar", label: "Programar próxima llamada" },
   { key: "no_contesta", label: "No contesta" },
-  { key: "entregado", label: "Entregado (Fenix)" },
+  // «Entregado» ya no es un resultado de llamada. Una guía se marca entregada
+  // desde «Registrar resultado del courier» (Fenix) o desde la API/Excel
+  // (Aliclik): dos puertas al mismo estado terminal eran dos formas de cerrar
+  // una guía que el courier no había cerrado.
   { key: "cancela", label: "Cliente cancela / anula" },
 ];
 
@@ -645,9 +648,21 @@ export function ShipmentsBoard({
         </div>
       </div>
 
-      {reprogram && <ReprogramStrip stats={reprogram} stores={stores} />}
-
-      {todayByAgent && <TodayByAgentPanel rows={todayByAgent} />}
+      {/* LA COLA VA PRIMERO. Las métricas de 30 días y el marcador por asesora
+          son lectura de dirección, no de quien marca el teléfono: cada apertura
+          de Envíos costaba un scroll y una lectura antes de la primera guía.
+          Siguen a un clic, plegadas, con los mismos datos. */}
+      {(reprogram || todayByAgent) && (
+        <details className="group rounded-xl border border-slate-200 bg-white">
+          <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium text-slate-700 marker:text-slate-500">
+            Resumen: reprogramaciones y gestión de hoy
+          </summary>
+          <div className="space-y-3 border-t border-slate-100 p-3">
+            {reprogram && <ReprogramStrip stats={reprogram} stores={stores} />}
+            {todayByAgent && <TodayByAgentPanel rows={todayByAgent} />}
+          </div>
+        </details>
+      )}
 
       {searchActive ? (
         <Card className="p-0">
@@ -1410,6 +1425,9 @@ function ShipmentDrawer({
   const [courierNote, setCourierNote] = useState("");
   const [showCourierCorrection, setShowCourierCorrection] = useState(false);
   const [fenixGuide, setFenixGuide] = useState("");
+  // Fecha PROPIA del formulario manual: no comparte estado con la llamada.
+  const [manualGuideDate, setManualGuideDate] = useState("");
+  const [showManualGuide, setShowManualGuide] = useState(false);
   const [showOrderPicker, setShowOrderPicker] = useState(false);
   const [showAddressEditor, setShowAddressEditor] = useState(false);
   const [address, setAddress] = useState("");
@@ -1537,6 +1555,10 @@ function ShipmentDrawer({
         setShowCancelledException(false);
         setCancelledExceptionDate("");
         setCancelledExceptionNote("");
+        // Sin número de pedido no hay autogeneración: el formulario manual es
+        // el camino obligado y se abre solo. Con pedido, queda plegado.
+        setManualGuideDate("");
+        setShowManualGuide(!effectiveOrderName(d.shipment.order_name, d.order?.name));
         const decision = evaluateAliclikReschedule({
           courier: d.shipment.courier,
           attempts: d.shipment.aliclik_attempts,
@@ -1714,6 +1736,15 @@ function ShipmentDrawer({
   const cancelledExceptionDateInvalid =
     !cancelledExceptionDate || cancelledExceptionDate <= localDateInputValue();
   const cancelledExceptionUnavailable = fenixReason !== "ok";
+  // ¿Hay de verdad dos rutas entre las que elegir? La excepción manual de
+  // Aliclik cuenta como elección: hay que tomarla a sabiendas.
+  const canForceAliclik =
+    !!aliclikDecision &&
+    !aliclikDecision.eligible &&
+    aliclikDecision.reason !== "not_aliclik" &&
+    aliclikDecision.reason !== "three_attempts";
+  const showRouteChooser =
+    canForceAliclik || (!!aliclikDecision?.eligible && fenixRouteAvailable);
   const cancelledExceptionReady =
     !!cancelledExceptionGuide &&
     !cancelledExceptionDateInvalid &&
@@ -2536,6 +2567,24 @@ function ShipmentDrawer({
                       </p>
                       <p className="mt-0.5 text-xs text-slate-600">{aliclikDecisionCopy(aliclikDecision)}</p>
                     </div>
+                    {/* Si solo hay una ruta posible no se pregunta: «Ruta
+                        sugerida» ya lo decidió en la fila. El selector aparece
+                        solo cuando de verdad hay dos caminos (o la excepción
+                        manual de Aliclik, que es una decisión que hay que
+                        tomar a sabiendas). */}
+                    {!showRouteChooser && (
+                      <p className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700">
+                        <span className="font-semibold">
+                          {reprogramProvider === "aliclik" ? "Ruta: Aliclik · misma guía" : "Ruta: Fenix · nueva guía"}
+                        </span>
+                        <span className="text-slate-500">
+                          {reprogramProvider === "aliclik"
+                            ? " · Fenix sin stock o cobertura para este destino."
+                            : " · Aliclik no disponible para esta guía."}
+                        </span>
+                      </p>
+                    )}
+                    {showRouteChooser && (
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
@@ -2574,9 +2623,8 @@ function ShipmentDrawer({
                         <span>{fenixRouteAvailable ? "Nueva guía" : "Sin stock/cobertura"}</span>
                       </button>
                     </div>
-                    {!aliclikDecision.eligible &&
-                      aliclikDecision.reason !== "not_aliclik" &&
-                      aliclikDecision.reason !== "three_attempts" && (
+                    )}
+                    {canForceAliclik && (
                       <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-dashed border-slate-300 bg-white p-2 text-xs text-slate-600">
                         <input
                           type="checkbox"
@@ -2693,22 +2741,48 @@ function ShipmentDrawer({
             {/* Fenix guide — manual fallback. The common path auto-generates the
                 guide from "Cliente confirma" above; this stays for shipments
                 without an order name, or to type a specific Fenix code. */}
-            {detail.shipment.delivery_status === "pendiente" && (
+            {/* Plegado por defecto: el camino normal es «Cliente confirma», que
+                autogenera la guía. Este formulario compartía la fecha con el de
+                la llamada (`nextDate`): teclear una fecha arriba rellenaba en
+                silencio la de aquí. Ahora tiene la suya y solo se despliega si se
+                pide, o solo si el envío no tiene N° de pedido (único caso en que
+                es el camino obligado). */}
+            {detail.shipment.delivery_status === "pendiente" && !detail.shipment.fenix_shipment_id && !showManualGuide && (
+              <button
+                type="button"
+                onClick={() => setShowManualGuide(true)}
+                className="text-xs font-medium text-brand-700 hover:underline"
+              >
+                Ingresar una guía Fenix a mano
+              </button>
+            )}
+            {detail.shipment.delivery_status === "pendiente" && (showManualGuide || !!detail.shipment.fenix_shipment_id) && (
               <section className="space-y-1.5 rounded-xl border border-slate-200 bg-white p-2.5">
-              <h3 className="text-sm font-semibold text-slate-900">Generar guía Fenix (manual)</h3>
+              <div className="flex items-start justify-between gap-3">
+                <h3 className="text-sm font-semibold text-slate-900">Generar guía Fenix (manual)</h3>
+                {!detail.shipment.fenix_shipment_id && (
+                  <button
+                    type="button"
+                    onClick={() => setShowManualGuide(false)}
+                    className="text-xs text-slate-500 hover:underline"
+                  >
+                    Ocultar
+                  </button>
+                )}
+              </div>
               {detail.shipment.fenix_shipment_id ? (
                 <p className="text-xs text-emerald-700">Ya tiene guía Fenix vinculada.</p>
               ) : (
                 <>
                   <label className="block text-xs font-medium text-slate-600">
                     Fecha de reprogramación (va en la guía)
+                    <input
+                      type="date"
+                      value={manualGuideDate}
+                      onChange={(e) => setManualGuideDate(e.target.value)}
+                      className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
+                    />
                   </label>
-                  <input
-                    type="date"
-                    value={nextDate}
-                    onChange={(e) => setNextDate(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-                  />
                   <div className="flex gap-2">
                     <input
                       value={fenixGuide}
@@ -2722,7 +2796,7 @@ function ShipmentDrawer({
                         setFenixGuide(
                           rescheduleGuideCode(
                             drawerOrderName,
-                            nextDate ? new Date(nextDate).toISOString() : null,
+                            manualGuideDate ? new Date(manualGuideDate).toISOString() : null,
                           ),
                         )
                       }
@@ -2742,7 +2816,7 @@ function ShipmentDrawer({
                       run(() =>
                         createFenixGuide(shipmentId, {
                           guideCode: fenixGuide,
-                          nextFollowupAt: nextDate ? new Date(nextDate).toISOString() : null,
+                          nextFollowupAt: manualGuideDate ? new Date(manualGuideDate).toISOString() : null,
                         }),
                       )
                     }
