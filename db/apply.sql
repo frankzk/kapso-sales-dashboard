@@ -317,4 +317,6 @@
 \ir migrations/0156_orders_utm_meta.sql
 \echo 'Applying 0157_flowcl_payment_links.sql'
 \ir migrations/0157_flowcl_payment_links.sql
+\echo 'Applying 0158_flowcl_store_credentials.sql'
+\ir migrations/0158_flowcl_store_credentials.sql
 \echo 'Done.'

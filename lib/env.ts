@@ -163,42 +163,18 @@ export const env = {
 
   // --- Flow.cl: pasarela de pagos (cobro del adelanto por link) ---
   //
-  // EL PREFIJO ES `FLOWCL_` Y NO `FLOW_` A PROPÓSITO. En este repo «flow» ya
-  // es Shopify Flow —la automatización de carritos abandonados que entra por
-  // `app/api/webhooks/flow/` y guarda su secreto en
-  // `stores.flow_webhook_secret_enc`—. La colisión ya vive en la base de
-  // datos; con el prefijo corto, `FLOW_SECRET` sería ambiguo entre un carrito
-  // abandonado y una llave que firma cobros.
+  // AQUÍ NO HAY SECRETOS, Y NO POR DESCUIDO. La apiKey y el secretKey de Flow
+  // viven en `stores` cifrados (migración 0158), como los de Shopify y Kapso.
+  // Una cuenta de Flow no es configuración: es dónde CAE EL DINERO —está atada
+  // a un RUC y a una cuenta bancaria—, así que dos tiendas de distinto titular
+  // no pueden compartirla. Una variable global aquí sería una invitación a que
+  // una tienda nueva cobrara en el banco de otra sin que nadie se entere.
   //
-  // VAN AQUÍ Y NO EN AJUSTES POR TIENDA, que es donde viven los secretos de
-  // Shopify, Kapso y Meta. Aurela y Kenku comparten UNA sola cuenta de Flow:
-  // el checkout se presenta como «Aurela Kenku» y el dinero cae en la misma
-  // razón social. Duplicar la misma llave en dos filas de `stores` es
-  // garantizar que algún día se rote en una y se olvide en la otra. Si algún
-  // día cada marca tiene su cuenta, esto se mueve a `stores` y no al revés.
-  flowclApiKey: () => (process.env.FLOWCL_API_KEY ?? "").trim(),
-  flowclSecretKey: () => (process.env.FLOWCL_SECRET_KEY ?? "").trim(),
-  // El sandbox es una CUENTA distinta con credenciales distintas, no un modo:
-  // apuntar aquí al sandbox con las llaves de producción da «apiKey not found».
+  // Solo queda la base del API, que no es secreta. El sandbox es una CUENTA
+  // distinta con credenciales distintas, no un modo: apuntar aquí al sandbox
+  // con llaves de producción da «apiKey not found».
   flowclApiBase: () =>
     (process.env.FLOWCL_API_BASE ?? "https://www.flow.cl/api").trim().replace(/\/$/, ""),
-  // Secreto de la URL de `urlConfirmation`. Flow NO firma sus avisos —manda un
-  // POST con un `token` y nada más—, así que el secreto viaja en la URL y se
-  // compara en tiempo constante, igual que el de Aliclik y el de Kapso.
-  //
-  // ES UNO SOLO PARA LAS DOS TIENDAS, y por la misma razón que
-  // CHATBY_WEBHOOK_SECRET: la cuenta de Flow es una sola. El secreto-por-tienda
-  // existe para que el dueño de una tienda no pueda inyectar datos en otra;
-  // acá las dos son del mismo dueño y de la misma cuenta de pasarela.
-  //
-  // NO ES LA ÚNICA DEFENSA, y por eso un fallo suyo no da por bueno un cobro:
-  // el aviso solo dice «mira otra vez», y lo que se escribe sale de consultar
-  // payment/getStatus firmado. Un aviso falsificado, como mucho, nos hace
-  // releer la verdad.
-  flowclWebhookSecret: () => (process.env.FLOWCL_WEBHOOK_SECRET ?? "").trim(),
-  /** ¿Hay con qué cobrar? El botón del drawer no se enseña si no. */
-  flowclConfigured: () =>
-    Boolean((process.env.FLOWCL_API_KEY ?? "").trim() && (process.env.FLOWCL_SECRET_KEY ?? "").trim()),
 
   // --- Shopify OAuth app (optional; enables "Install on Shopify") ---
   shopifyAppApiKey: () => process.env.SHOPIFY_APP_API_KEY ?? "",

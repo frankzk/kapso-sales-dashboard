@@ -184,3 +184,38 @@ describe("buildStoreUpdate — Aliclik (0054)", () => {
     expect(buildStoreUpdate({}, KEY).aliclik_enabled).toBeUndefined();
   });
 });
+
+describe("buildStoreUpdate — Flow.cl (0158)", () => {
+  it("cifra las tres credenciales de la pasarela", () => {
+    const patch = buildStoreUpdate(
+      {
+        flowcl_api_key: "APIKEY-1234",
+        flowcl_secret_key: "secretito",
+        flowcl_webhook_secret: "whsec",
+      },
+      KEY,
+    );
+    expect(decrypt(patch.flowcl_api_key_enc as string, KEY)).toBe("APIKEY-1234");
+    expect(decrypt(patch.flowcl_secret_key_enc as string, KEY)).toBe("secretito");
+    expect(decrypt(patch.flowcl_webhook_secret_enc as string, KEY)).toBe("whsec");
+  });
+
+  it("en blanco conserva el valor existente, como el resto de secretos", () => {
+    const patch = buildStoreUpdate(
+      { flowcl_api_key: "  ", flowcl_secret_key: "", flowcl_webhook_secret: "" },
+      KEY,
+    );
+    expect(patch.flowcl_api_key_enc).toBeUndefined();
+    expect(patch.flowcl_secret_key_enc).toBeUndefined();
+    expect(patch.flowcl_webhook_secret_enc).toBeUndefined();
+  });
+
+  it("NO toca el secreto de Shopify Flow, que se llama parecido y es otra cosa", () => {
+    // `flow_webhook_secret` (carritos abandonados) y `flowcl_webhook_secret`
+    // (pasarela de pagos) conviven en la misma tabla. Escribir uno creyendo
+    // tocar el otro dejaría una integración muda sin decir por qué.
+    const patch = buildStoreUpdate({ flowcl_webhook_secret: "de-la-pasarela" }, KEY);
+    expect(patch.flow_webhook_secret_enc).toBeUndefined();
+    expect(decrypt(patch.flowcl_webhook_secret_enc as string, KEY)).toBe("de-la-pasarela");
+  });
+});

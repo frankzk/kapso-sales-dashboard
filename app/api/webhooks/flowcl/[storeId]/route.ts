@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
+import { getStoreCreds } from "@/lib/ingest";
 import { FlowClient } from "@/lib/flow/client";
 import { confirmFlowPayment } from "@/lib/flow/confirm";
 
@@ -14,7 +15,10 @@ import { confirmFlowPayment } from "@/lib/flow/confirm";
 // `flowcl`.
 //
 // Se le pasa a Flow como `urlConfirmation` al crear cada cobro:
-//   {SITE}/api/webhooks/flowcl/<storeId>?secret=<FLOWCL_WEBHOOK_SECRET>
+//   {SITE}/api/webhooks/flowcl/<storeId>?secret=<flowcl_webhook_secret de la tienda>
+//
+// No se configura en ningún panel de Flow: viaja en cada petición, y por eso
+// el secreto puede ser POR TIENDA (0158) como los de Kapso y Aliclik.
 //
 // EL AVISO NO SE CREE. Flow manda un POST con un solo parámetro, `token`, sin
 // firma y sin monto. Eso no dice que algo esté pagado: dice «mira otra vez».
@@ -45,10 +49,16 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ storeId: s
 export async function POST(req: NextRequest, ctx: { params: Promise<{ storeId: string }> }) {
   const { storeId } = await ctx.params;
 
-  if (!secretEquals(readSecret(req), env.flowclWebhookSecret() || null)) {
+  // LAS CREDENCIALES SON DE ESTA TIENDA, no del entorno: la cuenta de Flow
+  // decide en qué banco cae el dinero, así que no se comparte entre tiendas de
+  // distinto titular. Y no hay respaldo a una cuenta global — una tienda mal
+  // configurada tiene que fallar, no cobrar en la cuenta de otro.
+  const creds = await getStoreCreds(storeId);
+  if (!creds) return new NextResponse("unauthorized", { status: 401 });
+  if (!secretEquals(readSecret(req), creds.flowcl_webhook_secret)) {
     return new NextResponse("unauthorized", { status: 401 });
   }
-  if (!env.flowclConfigured()) {
+  if (!creds.flowcl_api_key || !creds.flowcl_secret_key) {
     // Sin credenciales no se puede consultar el estado, y sin consultarlo no
     // se escribe nada. Un 500 hace que Flow reintente, que es lo correcto:
     // el aviso es bueno, lo que falta es configuración nuestra.
@@ -74,8 +84,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ storeId: s
     const result = await confirmFlowPayment(token, {
       admin: createAdminSupabase(),
       client: new FlowClient({
-        apiKey: env.flowclApiKey(),
-        secretKey: env.flowclSecretKey(),
+        apiKey: creds.flowcl_api_key,
+        secretKey: creds.flowcl_secret_key,
         baseUrl: env.flowclApiBase(),
       }),
     });
