@@ -71,3 +71,14 @@ body {
 body {
   @apply bg-slate-50 text-slate-900 antialiased;
 }
+
+/* Foco visible, de la paleta y en TODO el producto.
+   Medido en Envíos el 12-09-2026: 2 de 36 controles declaraban foco; el resto
+   dependía del outline por defecto del navegador, fino y del color del sistema,
+   que sobre botones de marca y chips redondeados apenas se ve. Un solo sitio,
+   para que ningún módulo tenga que acordarse; quien necesite otro trazo lo
+   sobrescribe con `focus-visible:` en su clase. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-brand-500);
+  outline-offset: 2px;
+}
