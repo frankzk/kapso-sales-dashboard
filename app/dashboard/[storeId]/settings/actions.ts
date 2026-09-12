@@ -159,6 +159,14 @@ export async function updateStore(
     // clave de Anthropic por tienda (5l del DEPLOY) nunca llegaba a guardarse.
     anthropic_api_key: get("anthropic_api_key"),
     anthropic_model: get("anthropic_model"),
+    // Flow.cl (0161). Mismo tropiezo que el de arriba, repetido: los campos
+    // salieron en el formulario y en buildStoreUpdate, pero no acá, así que el
+    // formulario los enviaba y el servidor los tiraba en silencio —la pantalla
+    // seguía diciendo «no configurado» sin ningún error—. Hay una prueba que
+    // ahora compara los dos ficheros para que no haya una tercera vez.
+    flowcl_api_key: get("flowcl_api_key"),
+    flowcl_secret_key: get("flowcl_secret_key"),
+    flowcl_webhook_secret: get("flowcl_webhook_secret"),
   }, undefined, {
     shalom_pro_email: (currentStore as { shalom_pro_email?: string | null } | null)?.shalom_pro_email ?? null,
   });
