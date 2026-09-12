@@ -2224,9 +2224,32 @@ cancela / anula**.
 
 Dos reglas más del mismo cajón, por la misma razón (no preguntar lo que ya
 está decidido): si «Ruta sugerida» deja una sola ruta posible, la llamada no
-pide elegir entre Aliclik y Fenix, lo dice; y el formulario manual de guía
-Fenix, con fecha propia, queda plegado salvo cuando el envío no tiene número
+pide elegir entre Aliclik y Swayp, lo dice; y el formulario manual de guía
+Swayp, con fecha propia, queda plegado salvo cuando el envío no tiene número
 de pedido, único caso en que es el camino obligado.
+
+### 11.5 Lo que cierra una venta se confirma, y se avisa antes
+
+Tres salidas del cajón de Envíos terminan una venta. Las tres piden la misma
+ceremonia, porque el coste de equivocarse es el mismo:
+
+- **Cliente cancela / anula** pide un segundo clic que nombra la guía y el
+  pedido («Sí, anular la guía AUR5X… del pedido #KP…»), con Cancelar al lado.
+  Antes se registraba con el mismo botón «Registrar llamada» que un «No
+  contesta».
+- **El último intento.** Con los {MAX_INTENTOS} intentos agotados, registrar un
+  «No contesta» más **anula la guía** (`nextShipmentTransition`). El cajón lo
+  dice antes, en ámbar, y el botón pasa a «Registrar y anular la guía»: la
+  guía se cerraba en silencio mientras la pantalla solo mostraba «Llamadas
+  7 / 7».
+- **Descartar la recuperación** ya lo hacía (§11 y `lib/recovery-discard.ts`):
+  motivo de 8 caracteres como mínimo, visible junto al campo, y segundo clic
+  que nombra el pedido.
+
+Y lo que **no** es terminal pero se perdía igual: al cerrar el cajón o saltar a
+otra guía con una nota a medio escribir, el texto se descartaba sin preguntar.
+Ahora se avisa y se puede volver. En una cola de llamadas, ese texto es lo que
+la asesora acaba de oír por teléfono.
 
 ## 12. Agencia: Shalom y Olva
 

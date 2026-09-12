@@ -19,6 +19,12 @@ describe("la tabla solo se repinta cuando cambian sus filas", () => {
   it("está memoizada y sus props son estables", () => {
     expect(src).toContain("const ShipmentTable = memo(function ShipmentTable({");
     expect(src).toContain("const storeName = useCallback(");
+    // El orden vive en el tablero (para poder ofrecer «Siguiente») y también
+    // está memoizado: si cambiara de identidad en cada render, la tabla
+    // memoizada se repintaría igual.
+    expect(src).toContain("const queueOrder = useMemo(");
+    expect(src).toContain("const toggleSort = useCallback(");
+    expect(src).toContain("const claimedBy = useCallback(");
     const chain = src.slice(src.indexOf("const { filteredWithoutAliclikRoute, aliclikRouteCounts, filtered, fenixRowsForExport } = useMemo("));
     expect(chain).toContain("aliclikRouteFilter,\n  ]);");
     // Las opciones de los filtros tampoco se recalculan por tecla.
@@ -30,7 +36,9 @@ describe("la tabla solo se repinta cuando cambian sus filas", () => {
 describe("se pintan 200 filas, no 4.000", () => {
   it("la ventana se aplica DESPUÉS de ordenar y filtrar el conjunto entero", () => {
     expect(src).toContain("const VISIBLE_STEP = 200;");
-    const i = src.indexOf("const sortedRows = useMemo(");
+    // La tabla recibe las filas YA ordenadas y solo entonces recorta.
+    expect(src).toContain("rows: sortedRows,");
+    const i = src.indexOf("const queueOrder = useMemo(");
     const j = src.indexOf("const shownRows = shownCount < sortedRows.length ? sortedRows.slice(0, shownCount) : sortedRows;");
     expect(i).toBeGreaterThan(-1);
     expect(j).toBeGreaterThan(i);
@@ -38,7 +46,9 @@ describe("se pintan 200 filas, no 4.000", () => {
   });
 
   it("la ventana vuelve al principio cuando cambian las filas", () => {
-    expect(src).toContain("if (windowFor !== rows) {\n    setWindowFor(rows);\n    setVisibleCount(VISIBLE_STEP);");
+    expect(src).toContain(
+      "if (windowFor !== sortedRows) {\n    setWindowFor(sortedRows);\n    setVisibleCount(VISIBLE_STEP);",
+    );
   });
 
   it("la fila recién actualizada se ve aunque caiga fuera de la ventana", () => {
