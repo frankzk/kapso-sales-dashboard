@@ -315,4 +315,8 @@
 \ir migrations/0155_lead_insights_rollup.sql
 \echo 'Applying 0156_orders_utm_meta.sql'
 \ir migrations/0156_orders_utm_meta.sql
+\echo 'Applying 0157_order_master_payment_check.sql'
+\ir migrations/0157_order_master_payment_check.sql
+\echo 'Applying 0158_order_payments_cobro_courier.sql'
+\ir migrations/0158_order_payments_cobro_courier.sql
 \echo 'Done.'

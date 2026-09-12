@@ -63,7 +63,11 @@ const SHIPMENT_BASE_COLUMNS =
   "customer_name,customer_phone,created_at,updated_at,reported_status";
 const SHIPMENT_GESTION_COLUMNS =
   ",assigned_at,dispatched_at,out_for_delivery_at,rescheduled_at,closed_at," +
-  "returned_at,pickup_state,agency_branch,agency_arrived_at,agency_expires_at";
+  "returned_at,pickup_state,agency_branch,agency_arrived_at,agency_expires_at," +
+  // Verificación de la constancia de cobro del courier (0084). Hoy solo la
+  // escribe Tanders, pero la columna no es de nadie: cuando otro courier
+  // suba constancia por guía, el Master ya sabe enseñarla y filtrarla.
+  "payment_check_state";
 // Lo que Aliclik cotizó para esta guía concreta (0054). Va en su propio escalón
 // porque el costo real solo lo tienen las guías creadas por API: si la columna
 // aún no existe, el cálculo sigue funcionando con las tarifas de siempre.
@@ -169,6 +173,7 @@ interface ShipmentRecord {
   agency_branch?: string | null;
   agency_arrived_at?: string | null;
   agency_expires_at?: string | null;
+  payment_check_state?: string | null;
   quoted_delivery_cost?: number | null;
   quoted_return_cost?: number | null;
   created_via?: string | null;
@@ -258,6 +263,7 @@ function toGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): GuideSnapshot 
     agency_branch: s.agency_branch ?? null,
     agency_arrived_at: s.agency_arrived_at ?? null,
     agency_expires_at: s.agency_expires_at ?? null,
+    payment_check_state: s.payment_check_state ?? null,
     // `custody_transferred_at` es una de las guardas de la corrección de
     // registro: si la caja llegó a salir, no se toca el estado.
     custody_transferred_at: s.custody_transferred_at ?? null,
@@ -1136,6 +1142,9 @@ export async function recomputeOrderMaster(
       courier_count: state.courierCount,
       attempt_count: state.attemptCount,
       guide_code: state.guideCode,
+      // De la guía VIGENTE, igual que el costo real de arriba: si un pedido
+      // salió dos veces, lo que importa es el cobro de la que está entregando.
+      payment_check_state: activeGuide?.payment_check_state ?? null,
       dispatched_at: state.dispatchedAt,
       delivered_at: state.deliveredAt,
       delivered_courier: state.deliveredCourier,

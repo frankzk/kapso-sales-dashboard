@@ -199,6 +199,12 @@ export async function writeCourierGuide(
         droppedColumns: dropped,
       };
     }
+    // Un error real no es una carrera. Antes se descartaba aquí y el operador
+    // solo veía «la salida ya no está disponible», incluso cuando Postgres
+    // explicaba exactamente qué columna o restricción había fallado.
+    if (error) {
+      return { error: error.message ?? "No se pudo actualizar la salida existente." };
+    }
     // Sin fila devuelta la carrera la ganó otro: se sigue por el camino normal.
   }
 
@@ -266,6 +272,11 @@ async function findFillable(admin: SupabaseClient, orderId: string): Promise<Can
  * misma fila del mismo pedido, y mandarlos solo abre la puerta a moverla.
  */
 const BOX_OWNED_COLUMNS = [
+  // El llamador construye una fila completa porque el mismo objeto también
+  // sirve para INSERT. Al rellenar una salida existente, ese UUID nuevo jamás
+  // puede viajar en el UPDATE: cambiaría la identidad de la caja y Postgres lo
+  // rechazará en cuanto ya exista un evento o cotejo que la referencie.
+  "id",
   "store_id",
   "order_id",
   "preparation_state",

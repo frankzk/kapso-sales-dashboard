@@ -18,7 +18,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decrypt } from "@/lib/crypto";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { categoryOf } from "@/lib/shipments";
 import { extractPaymentEvidence, TandersClient } from "@/lib/tanders/client";
+import {
+  COURIER_COLLECTION_KIND,
+  registerCourierCollection,
+} from "@/lib/tanders/collection-payment";
 import { alertDuplicatePayments } from "@/lib/tanders/duplicate-alert";
 import {
   checkTandersPayment,
@@ -70,15 +75,26 @@ function expectedAmount(raw: Candidate["tanders_raw"]): number | null {
  * en la B sigue siendo el mismo papel presentado dos veces—, y se excluye la
  * propia guía, que se relee en cada pasada mientras siga pendiente.
  *
- * Devuelve los pedidos (o guías) con los que choca, para que el veredicto
- * pueda nombrarlos. Si la consulta falla devuelve vacío: no acusar por un
- * error de red es preferible a acusar en falso, y la guía se vuelve a mirar.
+ * Devuelve las guías con las que choca, con su estado actual: hace falta para
+ * nombrarlas en el veredicto Y para poder desandar la que ya se hubiera dado
+ * por cobrada con ese mismo comprobante. Si la consulta falla devuelve vacío:
+ * no acusar por un error de red es preferible a acusar en falso, y la guía se
+ * vuelve a mirar en la siguiente pasada.
  */
+interface GuiaChocada {
+  id: string;
+  nombre: string;
+  paymentCheckState: string | null;
+  deliveryStatus: string;
+  orderId: string | null;
+  storeId: string;
+}
+
 async function guiasConLaMismaOperacion(
   admin: SupabaseClient,
   operacion: string | null,
   shipmentId: string,
-): Promise<string[]> {
+): Promise<GuiaChocada[]> {
   if (!operacion) return [];
   const { data, error } = await admin
     .from("tanders_payment_checks")
@@ -92,11 +108,106 @@ async function guiasConLaMismaOperacion(
 
   const { data: guias } = await admin
     .from("shipments")
-    .select("order_name,guide_code")
+    .select("id,order_name,guide_code,payment_check_state,delivery_status,order_id,store_id")
     .in("id", ids);
-  return ((guias as { order_name: string | null; guide_code: string }[]) ?? []).map(
-    (g) => g.order_name ?? g.guide_code,
-  );
+  return ((guias as Record<string, string | null>[]) ?? []).map((g) => ({
+    id: String(g.id),
+    nombre: g.order_name ?? String(g.guide_code),
+    paymentCheckState: g.payment_check_state ?? null,
+    deliveryStatus: String(g.delivery_status ?? ""),
+    orderId: g.order_id ?? null,
+    storeId: String(g.store_id),
+  }));
+}
+
+/**
+ * Desanda la guía que YA se había dado por cobrada con el comprobante que
+ * ahora resulta compartido.
+ *
+ * POR QUÉ HACE FALTA. La comprobación bloquea la SEGUNDA guía que ve el mismo
+ * nº de operación — la primera ya pasó. Cuál fue cuál lo decide el orden de la
+ * cola, que es arbitrario: el 10-09-2026 las dos guías del yape de S/ 198
+ * (#KP125070 y #KP124793) cayeron en la misma pasada con un minuto de
+ * diferencia. Sin esto, una de las dos se queda marcada como cobrada con un
+ * comprobante que ya no prueba nada, y justo la que nadie va a revisar.
+ *
+ * `entregado` en este sistema significa «entregado Y cobrado» (§9.4). Si el
+ * cobro deja de estar probado, `entregado` deja de ser cierto: la guía vuelve
+ * a `en_ruta`, que es lo que el courier sí acredita. No es inventar una regla
+ * nueva, es aplicar la que ya había.
+ *
+ * NO se toca una guía en `revisado`: ahí un administrador ya miró y decidió a
+ * mano, y su decisión no la deshace un barrido.
+ */
+async function desandarCobroDuplicado(
+  admin: SupabaseClient,
+  chocadas: GuiaChocada[],
+  operacion: string,
+  nuevaGuia: string,
+): Promise<string[]> {
+  const desandadas: string[] = [];
+  for (const otra of chocadas) {
+    if (otra.paymentCheckState !== "validado") continue;
+    await admin.from("tanders_payment_checks").insert({
+      shipment_id: otra.id,
+      store_id: otra.storeId,
+      state: "rechazado",
+      reasons: ["operacion_duplicada"],
+      operation_number: operacion,
+      raw: {
+        motivo:
+          `Se dio por cobrada con la operación ${operacion}, que después apareció ` +
+          `también en ${nuevaGuia}. Al menos una de las dos no está pagada.`,
+      },
+    });
+    const patch: Record<string, unknown> = { payment_check_state: "rechazado" };
+    if (otra.deliveryStatus === "entregado") {
+      patch.delivery_status = "en_ruta";
+      patch.status_category = categoryOf("en_ruta");
+    }
+    await admin.from("shipments").update(patch).eq("id", otra.id);
+    if (otra.orderId) await recomputeOrderMasterSafe(admin, [otra.orderId]);
+    desandadas.push(otra.nombre);
+  }
+  return desandadas;
+}
+
+/**
+ * ¿El cobro de esta guía ya tiene ficha en la cola de validación?
+ *
+ * Es lo que impide que una guía `rechazado` se relea en cada pasada: entra una
+ * vez, deja su ficha, y a partir de ahí el barrido la salta. Sin esto, incluir
+ * las rechazadas sería un bucle que quema llamadas a Tanders para siempre.
+ */
+async function yaEnLaCola(admin: SupabaseClient, orderId: string | null): Promise<boolean> {
+  if (!orderId) return false;
+  const { data } = await admin
+    .from("order_payments")
+    .select("id")
+    .eq("order_id", orderId)
+    .eq("kind", COURIER_COLLECTION_KIND)
+    .neq("validation_status", "rechazado")
+    .limit(1);
+  return Boolean((data as { id: string }[] | null)?.length);
+}
+
+/**
+ * ¿Ya se avisó de que esta guía trae un comprobante repetido?
+ *
+ * Un duplicado nunca entra a la cola —no es un cobro por confirmar, es una
+ * incidencia—, así que `yaEnLaCola` no lo frena y la guía se relee. Eso está
+ * bien (el bloqueo se mantiene) pero el aviso NO puede repetirse cada dos
+ * horas: una alerta que llega sola todos los días deja de leerse, y entonces no
+ * sirve el día que llegue una nueva.
+ */
+async function yaAvisado(admin: SupabaseClient, shipmentId: string): Promise<boolean> {
+  const { data } = await admin
+    .from("tanders_payment_checks")
+    .select("id")
+    .eq("shipment_id", shipmentId)
+    .contains("reasons", ["operacion_duplicada"])
+    .limit(1);
+  return Boolean((data as { id: string }[] | null)?.length);
 }
 
 /** Un comprobante que apareció en más de una guía. */
@@ -106,6 +217,12 @@ export interface SweepDuplicate {
   operacion: string;
   /** Las otras guías donde ya estaba. */
   otras: string[];
+  /**
+   * De esas otras, las que se habían dado por COBRADAS con este comprobante y
+   * han dejado de estarlo. Son las que urge revisar: alguien ya las contó como
+   * plata entrada.
+   */
+  desandadas: string[];
   monto: number | null;
   storeId: string;
 }
@@ -135,6 +252,10 @@ export interface SweepReport {
   scanned: number;
   /** Sin constancia de pago todavía en Tanders: no hay nada que validar. */
   enCurso: number;
+  /** Su cobro ya tiene ficha en «Validar pagos»: lo decide una persona. */
+  enCola: number;
+  /** Cobros encolados en esta pasada para que los confirme una persona. */
+  aRevision: number;
   entregado: number;
   validado: number;
   rechazado: number;
@@ -183,7 +304,16 @@ export async function sweepTandersPayments(
     .eq("courier", "tanders")
     .in("delivery_status", ["pendiente", "en_ruta"])
     .or(`created_at.gte.${since},api_report_at.gte.${since}`)
-    .or("payment_check_state.is.null,payment_check_state.eq.pendiente")
+    // También las RECHAZADAS. Antes salían del barrido para siempre: el modelo
+    // había dicho «esto no cuadra» y ahí moría, sin que nadie pudiera
+    // resolverlo. Ahora tienen que llegar a la cola de «Validar pagos» para que
+    // una persona decida, así que vuelven a ser candidatas. No es un bucle: en
+    // cuanto el cobro tiene su ficha en la cola, la guía se salta (ver
+    // `yaEnLaCola`).
+    .or(
+      "payment_check_state.is.null,payment_check_state.eq.pendiente," +
+        "payment_check_state.eq.rechazado",
+    )
     // LA QUE HACE MÁS TIEMPO QUE NO SE MIRA, PRIMERO. Sin este orden la
     // consulta cortaba en 60 de 238 candidatas y PostgREST elegía cuáles: las
     // mismas cada pasada, y el resto nunca. No era atraso, era hambre — el
@@ -198,6 +328,8 @@ export async function sweepTandersPayments(
   const report: SweepReport = {
     scanned: candidates.length,
     enCurso: 0,
+    enCola: 0,
+    aRevision: 0,
     entregado: 0,
     validado: 0,
     rechazado: 0,
@@ -255,6 +387,14 @@ export async function sweepTandersPayments(
         });
       }
 
+      // Su cobro ya está en manos de una persona: no hay nada que volver a
+      // preguntarle a Tanders. Va antes de gastar la llamada.
+      if (await yaEnLaCola(admin, row.order_id)) {
+        report.enCola += 1;
+        mirados.push(row.id);
+        continue;
+      }
+
       const client = clients.get(row.store_id);
       if (!client || !row.tanders_order_id) {
         report.errores += 1;
@@ -304,7 +444,11 @@ export async function sweepTandersPayments(
         mirados.push(row.id);
         continue;
       }
-      const base64 = Buffer.from(await img.arrayBuffer()).toString("base64");
+      // Los bytes se conservan: además de leerlos, hay que guardarlos en
+      // nuestro bucket al encolar el cobro. La evidencia de un pago no puede
+      // depender de que Tanders conserve el archivo ni de un token que caduque.
+      const bytes = await img.arrayBuffer();
+      const base64 = Buffer.from(bytes).toString("base64");
       const mediaType = normalizeMediaType(img.headers.get("content-type"));
 
       const reading = await readTandersPayment(
@@ -314,7 +458,8 @@ export async function sweepTandersPayments(
       );
       const expected = expectedAmount(row.tanders_raw);
       const operacion = normalizeOperationNumber(reading.operationNumber);
-      const duplicateOf = await guiasConLaMismaOperacion(admin, operacion, row.id);
+      const chocadas = await guiasConLaMismaOperacion(admin, operacion, row.id);
+      const duplicateOf = chocadas.map((c) => c.nombre);
       const verdict = checkTandersPayment({
         duplicateOf,
         voucher: {
@@ -328,14 +473,33 @@ export async function sweepTandersPayments(
         expectedAmount: expected,
       });
       if (duplicateOf.length) {
-        report.duplicados.push({
-          guia: row.guide_code,
-          pedido: row.order_name,
-          operacion: operacion ?? "?",
-          otras: duplicateOf,
-          monto: reading.amount,
-          storeId: row.store_id,
-        });
+        // La que ya se había dado por cobrada con este mismo comprobante deja
+        // de estarlo: bloquear solo a la recién llegada dejaría cobrada
+        // justamente la que nadie va a revisar. Ver desandarCobroDuplicado.
+        const desandadas = dry
+          ? chocadas.filter((c) => c.paymentCheckState === "validado").map((c) => c.nombre)
+          : await desandarCobroDuplicado(
+              admin,
+              chocadas,
+              operacion ?? "?",
+              row.order_name ?? row.guide_code,
+            );
+        // Solo se avisa la PRIMERA vez. La guía duplicada se relee en cada
+        // pasada —no entra a la cola, porque no es un cobro por confirmar sino
+        // una incidencia— y repetir el Telegram cada dos horas convertiría la
+        // alerta en ruido: una que llega sola todos los días deja de leerse, y
+        // entonces no sirve el día que llegue una nueva.
+        if (dry || !(await yaAvisado(admin, row.id))) {
+          report.duplicados.push({
+            guia: row.guide_code,
+            pedido: row.order_name,
+            operacion: operacion ?? "?",
+            otras: duplicateOf,
+            desandadas,
+            monto: reading.amount,
+            storeId: row.store_id,
+          });
+        }
       }
 
       report[verdict.state as "validado" | "rechazado" | "pendiente"] += 1;
@@ -393,6 +557,30 @@ export async function sweepTandersPayments(
         patch.status_category = "delivered";
       }
       await admin.from("shipments").update(patch).eq("id", row.id);
+
+      // 4) Y el cobro va a la cola donde lo confirma una PERSONA. El modelo
+      //    valida una imagen, no un depósito: mientras no haya conexión con el
+      //    estado de cuenta, la firma la pone alguien. Un duplicado no entra —no
+      //    es un cobro por confirmar, es una incidencia, y ya quedó bloqueado.
+      if (!duplicateOf.length && row.order_id) {
+        const alta = await registerCourierCollection(admin, {
+          storeId: row.store_id,
+          orderId: row.order_id,
+          guideCode: row.guide_code,
+          imageUrl: evidence.imageUrl,
+          imageBytes: bytes,
+          mediaType,
+          reading,
+          verdict,
+          expectedAmount: expected,
+        });
+        if (alta.registered) report.aRevision += 1;
+        else if (alta.reason === "error") {
+          report.errores += 1;
+          recordSweepFailure(report.fallos, new Error(`No se pudo encolar el cobro: ${alta.detail}`));
+        }
+      }
+
       if (row.order_id) await recomputeOrderMasterSafe(admin, [row.order_id]);
     } catch (err) {
       // «Todavía no entregada» es la respuesta normal de una guía en ruta, no

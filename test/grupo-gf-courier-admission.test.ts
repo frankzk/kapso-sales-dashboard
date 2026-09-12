@@ -29,6 +29,7 @@ describe("admisión de pedidos de Grupo GF Courier", () => {
   it("conserva el QR al rellenar una salida por definir", () => {
     const action = readFileSync(resolve(root, "app/dashboard/courier/actions.ts"), "utf8");
     expect(action).toContain("writeCourierGuide(admin, orderId");
+    expect(action).toContain("const newShipmentId = fillable?.id ?? randomUUID()");
     expect(action).toContain("Se reutilizó la salida existente y su QR.");
     expect(action).toContain("reusedOutput: write.filled");
   });

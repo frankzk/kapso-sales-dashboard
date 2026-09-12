@@ -14,6 +14,17 @@ export interface MasterFilters {
   generalStatuses: Set<string>;
   operationalStatuses: Set<string>;
   couriers: Set<string>;
+  /**
+   * Verificación de la constancia de cobro del courier: `validado`,
+   * `rechazado`, `pendiente`, `revisado`, y `sin` para los pedidos cuyo
+   * courier no sube constancia por guía.
+   *
+   * `sin` existe para que el filtro no mienta: sin él, pedir «validado» sacaría
+   * de la lista todo lo que no es Tanders y parecería que nada más está
+   * cobrado, cuando lo que pasa es que esos couriers se liquidan de otra forma
+   * (rider_settlements) y esta columna nunca se les escribe.
+   */
+  paymentChecks: Set<string>;
   shippingModes: Set<string>;
   regions: Set<string>;
   provinces: Set<string>;
@@ -49,6 +60,7 @@ export function emptyFilters(): MasterFilters {
     generalStatuses: new Set(),
     operationalStatuses: new Set(),
     couriers: new Set(),
+    paymentChecks: new Set(),
     shippingModes: new Set(),
     regions: new Set(),
     provinces: new Set(),
@@ -80,6 +92,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.generalStatuses.size > 0 ||
     f.operationalStatuses.size > 0 ||
     f.couriers.size > 0 ||
+    f.paymentChecks.size > 0 ||
     f.shippingModes.size > 0 ||
     f.regions.size > 0 ||
     f.provinces.size > 0 ||
@@ -102,6 +115,18 @@ export function hasActiveFilters(f: MasterFilters): boolean {
 
 /** Margen con el que un recojo se considera "próximo a vencer": 3 días. */
 export const EXPIRING_WINDOW_MS = 3 * 86_400_000;
+
+/** Valor con el que se pide «sin verificación de cobro» (la columna en null). */
+export const PAYMENT_CHECK_NONE = "sin";
+
+/** Las opciones del filtro, en el orden en que se enseñan. */
+export const PAYMENT_CHECK_OPTIONS: { value: string; label: string }[] = [
+  { value: "validado", label: "Cobro validado" },
+  { value: "rechazado", label: "Cobro rechazado" },
+  { value: "pendiente", label: "Cobro sin verificar aún" },
+  { value: "revisado", label: "Revisado a mano" },
+  { value: PAYMENT_CHECK_NONE, label: "Courier sin constancia por guía" },
+];
 
 /** Un conjunto vacío no filtra; si no, la fila debe pertenecer al conjunto. */
 function inSet(set: Set<string>, value: string | null | undefined): boolean {
@@ -148,6 +173,13 @@ export function matchesFilters(
       (row.current_courier != null && f.couriers.has(row.current_courier)) ||
       (row.last_courier != null && f.couriers.has(row.last_courier));
     if (!matches) return false;
+  }
+
+  // `sin` (= la columna en null) es una opción como las demás: un courier que
+  // no sube constancia por guía no es «no cobrado», es «por otra vía».
+  if (f.paymentChecks.size) {
+    const value = row.payment_check_state ?? PAYMENT_CHECK_NONE;
+    if (!f.paymentChecks.has(value)) return false;
   }
 
   if (!inDateRange(row.order_created_at, f.createdFrom, f.createdTo)) return false;

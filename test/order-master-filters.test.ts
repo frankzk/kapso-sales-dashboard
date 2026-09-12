@@ -9,6 +9,7 @@ import {
   facetValues,
   hasActiveFilters,
   matchesFilters,
+  PAYMENT_CHECK_NONE,
   sortRows,
   type MasterFilters,
 } from "@/lib/order-master-filters";
@@ -55,6 +56,7 @@ function row(id: string, overrides: Partial<OrderMasterRow> = {}): OrderMasterRo
     logistics_cost: null,
     pickup_state: null,
     payment_state: null,
+    payment_check_state: null,
     key_state: null,
     agency_branch: null,
     agency_arrived_at: null,
@@ -97,6 +99,38 @@ describe("matchesFilters — dimensiones multi-selección", () => {
     // Ya pasó a otra guía, pero Fenix lo gestionó: debe seguir apareciendo.
     expect(matchesFilters(row("1", { current_courier: "shalom", last_courier: "fenix" }), f, NOW)).toBe(true);
     expect(matchesFilters(row("2", { current_courier: "aliclik", last_courier: "aliclik" }), f, NOW)).toBe(false);
+  });
+
+  it("filtra por la verificación del cobro del courier", () => {
+    // Los 21 rechazos del 10-09-2026 bloqueaban pedidos y no había forma de
+    // listarlos: el bloqueo que nadie puede ver es un pedido parado para
+    // siempre.
+    const f = withFilter({ paymentChecks: new Set(["rechazado"]) });
+    expect(matchesFilters(row("1", { payment_check_state: "rechazado" }), f, NOW)).toBe(true);
+    expect(matchesFilters(row("2", { payment_check_state: "validado" }), f, NOW)).toBe(false);
+    expect(matchesFilters(row("3", { payment_check_state: null }), f, NOW)).toBe(false);
+  });
+
+  it("«sin» es una opción con nombre, no un «no cobrado»", () => {
+    // Un courier que liquida en bloque no sube constancia por guía. Sin esta
+    // opción, pedir «validado» sacaría de la lista todo lo que no es Tanders y
+    // parecería que solo esos están cobrados — que es falso.
+    const f = withFilter({ paymentChecks: new Set([PAYMENT_CHECK_NONE]) });
+    expect(matchesFilters(row("1", { payment_check_state: null }), f, NOW)).toBe(true);
+    expect(matchesFilters(row("2", { payment_check_state: "validado" }), f, NOW)).toBe(false);
+  });
+
+  it("se pueden pedir varios estados a la vez, incluido «sin»", () => {
+    const f = withFilter({ paymentChecks: new Set(["rechazado", PAYMENT_CHECK_NONE]) });
+    expect(matchesFilters(row("1", { payment_check_state: "rechazado" }), f, NOW)).toBe(true);
+    expect(matchesFilters(row("2", { payment_check_state: null }), f, NOW)).toBe(true);
+    expect(matchesFilters(row("3", { payment_check_state: "validado" }), f, NOW)).toBe(false);
+  });
+
+  it("sin filtro de cobro no descarta a nadie", () => {
+    const f = withFilter({});
+    expect(matchesFilters(row("1", { payment_check_state: null }), f, NOW)).toBe(true);
+    expect(matchesFilters(row("2", { payment_check_state: "rechazado" }), f, NOW)).toBe(true);
   });
 
   it("filtra por estado general y operativo", () => {

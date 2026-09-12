@@ -160,6 +160,8 @@ export interface GuideSnapshot {
   agency_branch: string | null;
   agency_arrived_at: string | null;
   agency_expires_at: string | null;
+  /** Verificación de la constancia de cobro del courier para ESTA guía (0084). */
+  payment_check_state?: string | null;
   /** Cuándo la caja pasó al motorizado. Nulo = nunca salió de la empresa. */
   custody_transferred_at?: string | null;
   /** La etiqueta cruda de Aliclik (`status · dispatch · call`). Es lo único que
