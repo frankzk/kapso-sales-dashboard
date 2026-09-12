@@ -815,7 +815,10 @@ export async function takeGroupGfCourierOrders(
       const product = lineItems
         .map((item) => `${item.title ?? "Producto"}${(item.quantity ?? 1) > 1 ? ` ×${item.quantity}` : ""}`)
         .join(" | ") || null;
-      const newShipmentId = randomUUID();
+      // Si Almacén ya creó la caja «por definir», su UUID también es la base
+      // del código interno. Generar otro aquí producía un código que parecía
+      // pertenecer a una caja distinta, aunque el UPDATE conservara la original.
+      const newShipmentId = fillable?.id ?? randomUUID();
       const guideCode = manualRouteGuideCode(
         row.order_name == null ? null : String(row.order_name),
         newShipmentId,
