@@ -88,7 +88,20 @@ const METHODS = (process.env.FLOWCL_METHODS ?? "9,170,152,169")
 // `lib/adelanto-minimo.ts`, que es el único sitio donde vive (ver #KP133181).
 // Aquí es un parámetro de la sonda, no una regla de negocio.
 const AMOUNT = Number(process.env.FLOWCL_AMOUNT ?? 20);
-const EMAIL = process.env.FLOWCL_EMAIL ?? "sonda@example.com";
+// Flow VALIDA el email y rechaza los de relleno: con `sonda@example.com`
+// devuelve «The userEmail: … is not valid» y no crea la orden. Poner un
+// dominio reservado por defecto era regalar cuatro peticiones fallidas a quien
+// corriera la sonda sin leer los opcionales. Se pide de verdad.
+const EMAIL = process.env.FLOWCL_EMAIL?.trim();
+if (!EMAIL) {
+  console.error(
+    "Falta el email del pagador de prueba, y Flow lo valida —los de relleno\n" +
+      "como sonda@example.com los rechaza con HTTP 400.\n\n" +
+      "  .\\scripts\\flow-probe.ps1 -Email 'tucorreo@real.com'\n" +
+      "  FLOWCL_EMAIL='tucorreo@real.com' node scripts/flow-probe.mjs",
+  );
+  process.exit(1);
+}
 // Segundos hasta que la orden caduca. Importa sobre todo si esto se corre
 // contra producción: una orden de sonda que no caduca queda pagable para
 // siempre, y un link de «SONDA» cobrado tres meses después es un cobro que
@@ -284,10 +297,24 @@ if (!CHECK) {
   );
 
   console.log(`\nVolcado → ${out}`);
-  console.log(
-    "\nAbre los links en un celular con Yape instalado y anota, para cada medio:\n" +
-      "  · ¿abre la app Yape directamente, o pide un código de 6 dígitos?\n" +
-      "  · ¿qué nombre le pone Flow al medio en su página?\n" +
-      "Con el link de `9` se ven todos los nombres juntos, que es lo que el panel no aclara.\n",
-  );
+
+  // «Abre los links» cuando no se creó ninguno es la misma falta que el MOM ya
+  // tiene documentada para el drawer de pagos: una lectura fallida no es una
+  // respuesta, y una frase que afirma algo solo vale cuando hay con qué
+  // sostenerla. Las cuatro peticiones pueden fallar enteras —pasó con el email
+  // de relleno— y el script mandaba igual a buscar links inexistentes.
+  const creados = results.filter((r) => r.link);
+  if (creados.length === 0) {
+    console.log(
+      "\nNo se creó ningún link: las " + results.length + " peticiones fallaron.\n" +
+        "El motivo de cada una está arriba y en el volcado. Nada que abrir.\n",
+    );
+  } else {
+    console.log(
+      `\nAbre los ${creados.length} link(s) en un celular con Yape instalado y anota, para cada medio:\n` +
+        "  · ¿abre la app Yape directamente, o pide un código de 6 dígitos?\n" +
+        "  · ¿qué nombre le pone Flow al medio en su página?\n" +
+        "Con el link de `9` se ven todos los nombres juntos, que es lo que el panel no aclara.\n",
+    );
+  }
 }

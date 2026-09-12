@@ -19,10 +19,14 @@
 # Uso, desde donde sea (resuelve el repo solo):
 #   $env:FLOWCL_API_KEY='...'
 #   $env:FLOWCL_SECRET_KEY='...'
-#   .\scripts\flow-probe.ps1
+#   .\scripts\flow-probe.ps1 -Email 'tucorreo@real.com'
+#
+# -Email es OBLIGATORIO salvo en -Check: Flow valida el email del pagador y
+# rechaza los de relleno (con sonda@example.com devuelve HTTP 400 y no crea la
+# orden).
 #
 # Opcionales:
-#   .\scripts\flow-probe.ps1 -Amount 20 -Methods '9,170,152,169' -Email 'tu@correo.com'
+#   .\scripts\flow-probe.ps1 -Amount 20 -Methods '9,170,152,169'
 
 [CmdletBinding()]
 param(
