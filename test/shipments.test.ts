@@ -102,8 +102,10 @@ describe("delivery status model", () => {
   });
 
   it("labels the pending sub-state from the intento counter", () => {
-    expect(attemptLabel(0)).toBe("Ingestión");
-    expect(attemptLabel(null)).toBe("Ingestión");
+    // «Ingestión» era jerga de importación; lo que la asesora necesita saber es
+    // que a esa guía todavía nadie la llamó.
+    expect(attemptLabel(0)).toBe("Sin llamar");
+    expect(attemptLabel(null)).toBe("Sin llamar");
     expect(attemptLabel(3)).toBe("Intento 3");
     expect(attemptLabel(7)).toBe("Intento 7");
     expect(attemptLabel(99)).toBe("Intento 7"); // clamped to MAX_INTENTOS
@@ -483,11 +485,11 @@ describe("nextShipmentTransition (gestión flow)", () => {
   it("pending: cancela → anulado", () => {
     expect(nextShipmentTransition("pendiente", "cancela", 1).status).toBe("anulado");
   });
-  it("en_ruta: entregado → entregado por Fenix", () => {
+  it("«entregado» ya no es una disposición de llamada: la puerta es el resultado del courier", () => {
+    // @ts-expect-error — la disposición no existe; ver lib/shipments.ts y test/envios-una-puerta-a-entregado.test.ts
     const r = nextShipmentTransition("en_ruta", "entregado", 3);
-    expect(r.status).toBe("entregado");
-    expect(r.deliveredSource).toBe("fenix");
-    expect(r.closed).toBe(true);
+    expect(r.status).not.toBe("entregado");
+    expect(r.deliveredSource).toBeNull();
   });
   it("en_ruta: no_contesta returns to pending at the SAME intento", () => {
     const r = nextShipmentTransition("en_ruta", "no_contesta", 2);

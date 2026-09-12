@@ -19,6 +19,7 @@ import { writeCourierGuide } from "@/lib/route-output-fill";
 import { manualRouteGuideCode, pickFillableRouteOutput } from "@/lib/shipment-output";
 import { courierKey } from "@/lib/dispatch";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
+import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 
 const COURIER_PATH = "/dashboard/courier";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -100,6 +101,8 @@ export interface CourierAcceptedOrder extends Omit<
 
 export interface CourierRouteAssignment {
   manifestId: string;
+  loadNumber: number;
+  deliveryRouteId: string | null;
   routeDate: string;
   riderId: string | null;
   riderName: string;
@@ -110,6 +113,8 @@ export interface CourierRouteAssignment {
 
 export interface CourierRouteSummary {
   manifestId: string;
+  loadNumber: number;
+  deliveryRouteId: string | null;
   routeDate: string;
   riderId: string | null;
   riderName: string;
@@ -268,13 +273,13 @@ async function loadCourierOperations(
   const day = limaClock().day;
   const [
     { data: stores },
-    { data: queueRows, error: queueError, count: sourceCount },
-    { data: requestRows, error: requestError },
+    queueRows,
+    requestRows,
     { data: riderRows },
   ] =
     await Promise.all([
       admin.from("stores").select("id,name").in("id", storeIds),
-      admin
+      allCourierRows((from, to) => admin
         .from("order_master")
         .select(
           "order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_stage,macro_substage",
@@ -286,8 +291,9 @@ async function loadCourierOperations(
         )
         .eq("coverage", "lima")
         .order("order_created_at", { ascending: false })
-        .limit(300),
-      admin
+        .order("order_id")
+        .range(from, to)),
+      allCourierRows((from, to) => admin
         .from("logistics_requests")
         .select(
           "id,agreement_id,store_id,order_id,shipment_id,status,district_key,tariff_id,tariff_amount,currency,scheduled_for,accepted_at,observation",
@@ -295,7 +301,8 @@ async function loadCourierOperations(
         .eq("provider_id", config.provider.id)
         .neq("status", "cancelled")
         .order("created_at", { ascending: false })
-        .limit(300),
+        .order("id")
+        .range(from, to)),
       admin
         .from("riders")
         .select("id,full_name,courier")
@@ -303,28 +310,15 @@ async function loadCourierOperations(
         .eq("active", true)
         .order("full_name"),
     ]);
-  if (queueError) throw new Error(`No se pudo cargar Pedidos disponibles: ${queueError.message}`);
-  if (requestError) {
-    // Permite desplegar el código antes de aplicar 0138 sin convertir todo el
-    // tarifario en una página 500. La bandeja queda vacía con una causa clara en
-    // despliegue; tras la migración la lectura vuelve automáticamente.
-    if (/logistics_requests/i.test(requestError.message)) return EMPTY_OPERATIONS;
-    throw new Error(`No se pudieron cargar las solicitudes logísticas: ${requestError.message}`);
-  }
+  const sourceCount = queueRows.length;
 
   const queueOrderIds = ((queueRows ?? []) as QueueOrderRow[]).map((order) => order.order_id);
-  const { data: admissionShipmentRows, error: admissionShipmentError } = queueOrderIds.length
-    ? await admin
+  const { data: admissionShipmentRows } = await courierRowsByIds(queueOrderIds, (ids) => admin
         .from("shipments")
         .select(
           "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at",
         )
-        .in("order_id", queueOrderIds)
-        .limit(2_000)
-    : { data: [], error: null };
-  if (admissionShipmentError) {
-    throw new Error(`No se pudo validar el historial de salidas: ${admissionShipmentError.message}`);
-  }
+        .in("order_id", ids));
   const shipmentsByOrder = new Map<string, AdmissionShipmentRow[]>();
   const lastDispatchByOrder = new Map<string, string>();
   for (const row of (admissionShipmentRows ?? []) as AdmissionShipmentRow[]) {
@@ -422,27 +416,21 @@ async function loadCourierOperations(
     .map((request) => request.shipment_id)
     .filter((shipmentId): shipmentId is string => Boolean(shipmentId));
   const [{ data: acceptedOrders }, { data: shipments }, { data: manifestItems }] = await Promise.all([
-    requestOrderIds.length
-      ? admin
+    courierRowsByIds(requestOrderIds, (ids) => admin
           .from("order_master")
           .select(
             "order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at",
           )
-          .in("order_id", requestOrderIds)
-      : Promise.resolve({ data: [] }),
-    shipmentIds.length
-      ? admin
+          .in("order_id", ids)),
+    courierRowsByIds(shipmentIds, (ids) => admin
           .from("shipments")
           .select("id,output_code,preparation_state")
-          .in("id", shipmentIds)
-      : Promise.resolve({ data: [] }),
-    shipmentIds.length
-      ? admin
+          .in("id", ids)),
+    courierRowsByIds(shipmentIds, (ids) => admin
           .from("dispatch_manifest_items")
           .select("shipment_id,manifest_id,office_checked_at,pickup_checked_at")
-          .in("shipment_id", shipmentIds)
-          .is("removed_at", null)
-      : Promise.resolve({ data: [] }),
+          .in("shipment_id", ids)
+          .is("removed_at", null)),
   ]);
   const orderById = new Map(
     ((acceptedOrders ?? []) as QueueOrderRow[]).map((order) => [order.order_id, order]),
@@ -460,17 +448,17 @@ async function loadCourierOperations(
     }>).map((item) => [item.shipment_id, item]),
   );
   const manifestIds = [...new Set([...manifestItemByShipment.values()].map((item) => item.manifest_id))];
-  const { data: manifestRows } = manifestIds.length
-    ? await admin
+  const { data: manifestRows } = await courierRowsByIds(manifestIds, (ids) => admin
         .from("dispatch_manifests")
-        .select("id,route_date,rider_id,driver_name,state")
-        .in("id", manifestIds)
-        .neq("state", "cancelled")
-    : { data: [] };
+        .select("id,route_date,rider_id,driver_name,state,load_number,delivery_route_id")
+        .in("id", ids)
+        .neq("state", "cancelled"));
   const manifestById = new Map(
     ((manifestRows ?? []) as Array<{
       id: string;
       route_date: string;
+      load_number: number;
+      delivery_route_id: string | null;
       rider_id: string | null;
       driver_name: string | null;
       state: string;
@@ -511,6 +499,8 @@ async function loadCourierOperations(
       route: manifest
         ? {
             manifestId: manifest.id,
+            loadNumber: manifest.load_number,
+            deliveryRouteId: manifest.delivery_route_id,
             routeDate: manifest.route_date,
             riderId: manifest.rider_id,
             riderName: manifest.driver_name ?? "Motorizado sin nombre",
@@ -534,6 +524,8 @@ async function loadCourierOperations(
     if (!order.route) continue;
     const current = routeById.get(order.route.manifestId) ?? {
       manifestId: order.route.manifestId,
+      loadNumber: order.route.loadNumber,
+      deliveryRouteId: order.route.deliveryRouteId,
       routeDate: order.route.routeDate,
       riderId: order.route.riderId,
       riderName: order.route.riderName,
@@ -815,7 +807,10 @@ export async function takeGroupGfCourierOrders(
       const product = lineItems
         .map((item) => `${item.title ?? "Producto"}${(item.quantity ?? 1) > 1 ? ` ×${item.quantity}` : ""}`)
         .join(" | ") || null;
-      const newShipmentId = randomUUID();
+      // Si Almacén ya creó la caja «por definir», su UUID también es la base
+      // del código interno. Generar otro aquí producía un código que parecía
+      // pertenecer a una caja distinta, aunque el UPDATE conservara la original.
+      const newShipmentId = fillable?.id ?? randomUUID();
       const guideCode = manualRouteGuideCode(
         row.order_name == null ? null : String(row.order_name),
         newShipmentId,
@@ -967,6 +962,25 @@ export interface AssignCourierRouteResult extends CourierActionResult {
   assigned: number;
   manifestIds: string[];
   failed: Array<{ requestId: string; error: string }>;
+}
+
+export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[]): Promise<CourierActionResult> {
+  const auth = await requireManager(orgId);
+  if ("error" in auth) return auth;
+  if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
+  const admin = createAdminSupabase();
+  const { data: rider } = await admin.from("riders").select("id,courier").eq("id", riderId).eq("org_id", orgId).eq("active", true).maybeSingle();
+  if (!rider || !isGroupGfRiderCourier(rider.courier)) return { error: "Elige un motorizado activo de Grupo GF." };
+  const taken = await takeGroupGfCourierOrders(orgId, orderIds);
+  const acceptedIds = [...taken.accepted.map((item) => item.orderId), ...taken.alreadyAccepted];
+  if (!acceptedIds.length) return { error: taken.error ?? "No se pudieron tomar los pedidos." };
+  const { data: requests, error } = await admin.from("logistics_requests")
+    .select("id,logistics_providers!inner(org_id)").in("order_id", acceptedIds)
+    .eq("logistics_providers.org_id", orgId).in("status", ["accepted", "scheduled"]);
+  if (error) return { notice: taken.notice, error: "Se tomaron los pedidos, pero no se pudieron asignar. Continúa desde Pedidos tomados." };
+  const assigned = await assignGroupGfCourierRoute(orgId, riderId, (requests ?? []).map((request) => request.id));
+  const details = [...taken.failed.map((item) => `${item.orderId}: ${item.error}`), ...assigned.failed.map((item) => item.error)];
+  return { notice: [taken.notice, assigned.notice, assigned.error, ...details].filter(Boolean).join(" ") };
 }
 
 const MAX_ASSIGN_ORDERS = 100;
@@ -1121,47 +1135,14 @@ export async function assignGroupGfCourierRoute(
   const manifestIds: string[] = [];
   const changedOrderIds = new Set<string>();
   for (const [routeDate, group] of groups) {
-    let { data: manifest } = await admin
-      .from("dispatch_manifests")
-      .select("id,state")
-      .eq("org_id", orgId)
-      .eq("route_date", routeDate)
-      .eq("rider_id", rider.id)
-      .neq("state", "cancelled")
-      .maybeSingle();
-    if (!manifest) {
-      const created = await admin
-        .from("dispatch_manifests")
-        .insert({
-          org_id: orgId,
-          courier: "propio",
-          kind: "reparto",
-          route_date: routeDate,
-          route_label: rider.full_name,
-          rider_id: rider.id,
-          driver_name: rider.full_name,
-          created_by: auth.userId,
-        })
-        .select("id,state")
-        .single();
-      if (created.error) {
-        for (const request of group) failed.push({ requestId: request.id, error: created.error.message });
-        continue;
-      }
-      manifest = created.data;
-      await admin.from("dispatch_events").insert({
-        org_id: orgId,
-        manifest_id: manifest.id,
-        actor: auth.userId,
-        kind: "manifest_created",
-        payload: { source: "grupo_gf_courier", riderId: rider.id, routeDate },
-      });
-    }
-    if (manifest.state !== "draft") {
-      const message = "La caja de esa ruta ya inició el cotejo. No se pueden mezclar paquetes nuevos en este manifiesto.";
-      for (const request of group) failed.push({ requestId: request.id, error: message });
+    const { data: manifestId, error: loadError } = await admin.rpc("gf_dispatch_load", {
+      p_org_id: orgId, p_rider_id: rider.id, p_day: routeDate, p_actor: auth.userId,
+    });
+    if (loadError || !manifestId) {
+      for (const request of group) failed.push({ requestId: request.id, error: loadError?.message ?? "No se pudo abrir la carga." });
       continue;
     }
+    const manifest = { id: manifestId as string };
     manifestIds.push(manifest.id);
 
     for (const request of group) {

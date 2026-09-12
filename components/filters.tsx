@@ -62,9 +62,13 @@ export function ChecklistFilter({
 
   return (
     <div ref={boxRef} className="relative">
+      {/* `aria-expanded` dice si la lista está abierta y `▾` queda oculto al
+          lector: era un carácter suelto que se leía en voz alta sin significar
+          nada. El contador de selección sí se anuncia, que es el dato. */}
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
         className={cn(
           "rounded-lg border px-2.5 py-1 text-xs font-medium",
           selected.size > 0
@@ -73,7 +77,8 @@ export function ChecklistFilter({
         )}
       >
         {label}
-        {selected.size > 0 ? ` (${selected.size})` : ""} ▾
+        {selected.size > 0 ? ` (${selected.size})` : ""}
+        <span aria-hidden="true"> ▾</span>
       </button>
       {open && (
         <div className={cn("absolute left-0 mt-1 w-60 rounded-lg border border-slate-200 bg-white p-2 shadow-lg", OVER_TABLE_Z)}>
@@ -113,7 +118,7 @@ export function ChecklistFilter({
               </li>
             ))}
             {shown.length === 0 && (
-              <li className="px-1.5 py-1 text-xs text-slate-400">Sin coincidencias.</li>
+              <li className="px-1.5 py-1 text-xs text-slate-500">Sin coincidencias.</li>
             )}
           </ul>
         </div>

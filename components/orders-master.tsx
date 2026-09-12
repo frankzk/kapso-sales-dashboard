@@ -75,6 +75,7 @@ import {
   agencyHasActivity,
   emptyFilters,
   hasActiveFilters,
+  PAYMENT_CHECK_OPTIONS,
   type AgencySummary,
   type MasterFilters,
   type MasterSortKey,
@@ -728,7 +729,7 @@ export function OrdersMasterBoard({
               className="inline-flex min-h-9 items-center gap-2 rounded-lg bg-slate-900 px-3 text-sm font-medium text-white transition hover:bg-slate-700"
             >
               <span aria-hidden="true">▦</span>
-              Mesa de despacho
+              Almacén · Entregas a couriers
             </Link>
           )}
           <MasterSearchInput value={filters.search} onCommit={commitSearch} />
@@ -941,6 +942,19 @@ export function OrdersMasterBoard({
               options={facets.courier}
               selected={filters.couriers}
               onChange={(couriers) => patch({ couriers })}
+            />
+            {/* Las opciones son fijas, no una faceta: «rechazado» tiene que
+                poder pedirse aunque hoy no haya ninguno, que es justo cuando
+                interesa comprobar que no hay ninguno. */}
+            <ChecklistFilter
+              label="Cobro del courier"
+              options={PAYMENT_CHECK_OPTIONS.map((o) => o.value)}
+              selected={filters.paymentChecks}
+              onChange={(paymentChecks) => patch({ paymentChecks })}
+              capitalize={false}
+              optionLabel={(v) =>
+                PAYMENT_CHECK_OPTIONS.find((o) => o.value === v)?.label ?? v
+              }
             />
             <ChecklistFilter
               label="Región"
@@ -3304,6 +3318,28 @@ function OrderDrawer({
                     </li>
                   ))}
                 </ul>
+              )}
+              {/* El cobro del courier lo confirma una PERSONA en Validar
+                  pagos: el lector de imágenes prepara la ficha, pero valida una
+                  imagen, no un depósito. Desde acá se llega de un clic en vez
+                  de buscar el pedido en la otra pantalla. */}
+              {detail.row.payment_check_state && (
+                <p className="mt-3 text-xs text-slate-500">
+                  Cobro del courier:{" "}
+                  <strong className="text-slate-700">
+                    {PAYMENT_CHECK_OPTIONS.find((o) => o.value === detail.row.payment_check_state)
+                      ?.label ?? detail.row.payment_check_state}
+                  </strong>
+                  .{" "}
+                  <a
+                    href="/dashboard/pagos"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium text-slate-700 underline"
+                  >
+                    Confirmarlo en Validar pagos
+                  </a>
+                </p>
               )}
               {detail.guides.some((guide) => guide.courier === "shalom") && (
                 <ShalomPickupKeyPanel orderId={orderId} onChanged={onSaved} />

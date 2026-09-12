@@ -164,7 +164,7 @@ export const env = {
   // --- Flow.cl: pasarela de pagos (cobro del adelanto por link) ---
   //
   // AQUÍ NO HAY SECRETOS, Y NO POR DESCUIDO. La apiKey y el secretKey de Flow
-  // viven en `stores` cifrados (migración 0158), como los de Shopify y Kapso.
+  // viven en `stores` cifrados (migración 0161), como los de Shopify y Kapso.
   // Una cuenta de Flow no es configuración: es dónde CAE EL DINERO —está atada
   // a un RUC y a una cuenta bancaria—, así que dos tiendas de distinto titular
   // no pueden compartirla. Una variable global aquí sería una invitación a que

@@ -30,10 +30,16 @@ export function formatDuplicateAlert(storeName: string, dups: SweepDuplicate[]):
     lines.push(`• <b>${esc(d.pedido ?? d.guia)}</b>${monto}`);
     lines.push(`  operación <code>${esc(d.operacion)}</code>`);
     lines.push(`  ya estaba en: ${esc(d.otras.join(", "))}`);
+    // Lo más urgente del mensaje: esas ya se habían contado como plata
+    // entrada, y han dejado de estarlo.
+    if (d.desandadas.length) {
+      lines.push(`  ⚠️ ${esc(d.desandadas.join(", "))} estaba dado por COBRADO y ya no lo está`);
+    }
   }
   lines.push("");
   lines.push(
-    "El mismo pago no puede cobrar dos pedidos. Estas guías NO se dieron por cobradas: revísalas en Cobros Tanders.",
+    "El mismo pago no puede cobrar dos pedidos: al menos uno de los dos no está pagado. " +
+      "Ninguno se da por cobrado hasta que alguien mire cuál es cuál, en Cobros Tanders.",
   );
   return lines.join("\n");
 }

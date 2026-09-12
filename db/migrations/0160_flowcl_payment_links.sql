@@ -1,4 +1,4 @@
--- 0157_flowcl_payment_links.sql — los links de cobro de Flow.cl (pasarela).
+-- 0160_flowcl_payment_links.sql — los links de cobro de Flow.cl (pasarela).
 --
 -- QUÉ ES. Cuando el asesor genera un link de pago desde el drawer, Flow crea
 -- una orden y nos devuelve un token. Esta tabla guarda ese hecho: a qué pedido

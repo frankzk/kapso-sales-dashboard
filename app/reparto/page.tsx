@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/access";
 import { getMyRider, getRouteDetail, getRoutes } from "@/lib/routes-access";
 import { RiderRouteScreen } from "@/components/rider-route";
+import { GfRiderReceipt } from "@/components/gf-rider-receipt";
+import { getMyGfLoads } from "@/lib/gf-rider-loads";
 
 export const dynamic = "force-dynamic";
 
@@ -39,18 +41,18 @@ export default async function RepartoPage({
 
   // RLS solo devuelve las rutas ya entregadas al motorizado ('en_curso' o
   // 'cerrada'), así que no hay que filtrar por estado aquí.
-  const routes = await getRoutes({ riderId: rider.id, limit: 30 });
+  const [routes, loads] = await Promise.all([getRoutes({ riderId: rider.id, limit: 30 }), getMyGfLoads()]);
   const active = routes.find((r) => r.status === "en_curso");
   const wanted = sp.ruta && routes.some((r) => r.id === sp.ruta) ? sp.ruta : null;
   const routeId = wanted ?? active?.id ?? routes[0]?.id ?? null;
   const detail = routeId ? await getRouteDetail(routeId) : null;
 
   return (
-    <RiderRouteScreen
+    <><GfRiderReceipt loads={loads} /><RiderRouteScreen
       riderName={rider.full_name}
       routes={routes}
       route={detail?.route ?? null}
       stops={detail?.stops ?? []}
-    />
+    /></>
   );
 }

@@ -18,7 +18,7 @@ import { confirmFlowPayment } from "@/lib/flow/confirm";
 //   {SITE}/api/webhooks/flowcl/<storeId>?secret=<flowcl_webhook_secret de la tienda>
 //
 // No se configura en ningún panel de Flow: viaja en cada petición, y por eso
-// el secreto puede ser POR TIENDA (0158) como los de Kapso y Aliclik.
+// el secreto puede ser POR TIENDA (0161) como los de Kapso y Aliclik.
 //
 // EL AVISO NO SE CREE. Flow manda un POST con un solo parámetro, `token`, sin
 // firma y sin monto. Eso no dice que algo esté pagado: dice «mira otra vez».

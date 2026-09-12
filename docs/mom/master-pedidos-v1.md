@@ -1036,6 +1036,51 @@ sin tope de antigüedad. Reglas:
     la imagen contra el monto de la guía y el nombre de Grupo GF SAC: que el
     courier se dé por pagado a sí mismo no es constancia de que el dinero
     llegó a nuestra cuenta.
+  - **QUIEN DA EL DINERO POR RECIBIDO ES UNA PERSONA** (0158). El lector de
+    imágenes valida **una imagen, no un depósito**: no detecta una captura
+    editada, ni un comprobante real de otra transferencia. Mientras no haya
+    conexión con el estado de cuenta del banco, el modelo **prepara la ficha** y
+    la firma la pone alguien.
+    - Cada cobro entra a **«Validar pagos»** (`order_payments`, tipo
+      `cobro_courier`) con la imagen guardada en NUESTRO bucket —la evidencia de
+      un cobro no puede depender de que el courier conserve el archivo— y con lo
+      que leyó el modelo en `vision`.
+    - El estado de entrada dice QUÉ mirar: `pendiente_revision` (el modelo no
+      vio nada raro), `revision_admin` (vio algo que no cuadra: no es un
+      rechazo, es «míralo tú») e `info_incompleta` (no se pudo leer — culpar a
+      la captura cuando falló el lector manda a perseguir a alguien por una foto
+      correcta).
+    - **La guía sigue pasando a `entregado` con la lectura del modelo**: el
+      paquete SÍ llegó y eso lo acredita el courier. Lo que espera al humano es
+      el cierre del dinero. Son dos preguntas distintas y las contesta cada uno
+      quien puede.
+    - **Un duplicado NO entra a la cola**: no es un cobro por confirmar, es una
+      incidencia. Queda bloqueado y avisa — una sola vez, no en cada pasada.
+    - Al entrar aquí se hereda lo que la vía paralela de Tanders no tenía: nº de
+      operación único en todo el sistema, huella `sha256` que atrapa la misma
+      imagen renombrada (es lo que habría cazado el «198yape.png» sin depender
+      de leer bien el número) y la coincidencia difusa de monto + fecha +
+      pagador (`lib/yape-dedup.ts`). El normalizador del nº de operación es
+      ahora **uno solo**: dos reglas para la misma llave global es como se cuela
+      un duplicado.
+  - **El cobro del courier se ve y se filtra desde el Master** (0156). El
+    veredicto viaja de la guía vigente a `order_master.payment_check_state` y
+    el filtro **«Cobro del courier»** ofrece `validado`, `rechazado`,
+    `pendiente`, `revisado` y **«courier sin constancia por guía»**. Esa última
+    opción no es decorativa: sin ella, pedir «validado» sacaría de la lista
+    todo lo que no es Tanders y parecería que solo esos pedidos están cobrados,
+    cuando los demás se liquidan en bloque (`rider_settlements`) y esta columna
+    nunca se les escribe.
+    - **La columna no es de Tanders.** Hoy es el único courier que sube
+      constancia por guía; el día que otro lo haga, el Master ya sabe
+      enseñarlo. Lo específico de Tanders es quién la escribe, no el concepto.
+    - Motivo: el 10-09-2026 había **21 guías con el cobro rechazado** —una por
+      comprobante reusado— bloqueando pedidos, y ninguna pantalla podía
+      listarlas. Un bloqueo que nadie puede ver es un pedido parado para
+      siempre.
+    - No confundir con `payment_state`, que es el cobro del PEDIDO (adelantos
+      de la clienta). Este dice si el dinero que cobró el motorizado llegó a la
+      cuenta.
   - **Vocabulario de estados de Tanders, confirmado por la operación el
     10-09-2026** (hasta entonces 105 guías vivían en estados que el Master no
     traducía, entre ellas paquetes ya de vuelta que nadie sabía que habían
@@ -1705,7 +1750,7 @@ tras un descarte diría lo de antes durante minutos.
 courier, que no se falsea: sigue diciendo «Anulado»—; la segunda es en qué
 quedó el pedido: **«Anulado · Reproprovincia»** mientras se puede reenviar,
 **«Anulado · Recuperación vencida»** o **«Anulado · Descartada»** después. Es
-el mismo patrón de «Pendiente · Ingestión» y «Entregado · por Fenix». Sin la
+el mismo patrón de «Pendiente · Sin llamar» y «Entregado · por Swayp». Sin la
 segunda mitad, una guía viva para Swayp se veía igual que una muerta. Las
 vencidas y descartadas se quedan en la pestaña Anulado, que es el registro, con
 su segunda mitad escrita. No se inventa un `delivery_status` «reproprovincia»:
@@ -2162,6 +2207,71 @@ otro y no nos enteramos.
 **El número que emite Swayp se guarda en `swayp_guide`, no solo en
 `guide_code`.** El webhook de Swayp busca la guía por esa columna: sin ella el
 envío se quedaría En ruta para siempre por más que el mensajero reportara.
+
+### 11.4 Una sola puerta a «entregado»
+
+La llamada de gestión desde Envíos **no cierra guías como entregadas**. Una
+guía se marca entregada solo por quien la entregó: para Swayp/Fenix, el
+resultado del courier («Registrar resultado del courier», con «Entregado —
+cerrar la guía»); para Aliclik, la API o el Excel. Hasta el 12-09-2026 el
+formulario de llamada ofrecía además «Entregado (Fenix)»: dos puertas al mismo
+estado terminal, y la segunda podía cerrar una guía que el courier no había
+cerrado, incluso una que nunca salió del almacén. Se quitó del formulario, del
+tipo `RerouteDisposition` y el servidor la rechaza si llega de una pestaña con
+el código viejo. Los resultados de llamada son cuatro: **Cliente confirma
+reprogramación**, **Programar próxima llamada**, **No contesta** y **Cliente
+cancela / anula**.
+
+Dos reglas más del mismo cajón, por la misma razón (no preguntar lo que ya
+está decidido): si «Ruta sugerida» deja una sola ruta posible, la llamada no
+pide elegir entre Aliclik y Swayp, lo dice; y el formulario manual de guía
+Swayp, con fecha propia, queda plegado salvo cuando el envío no tiene número
+de pedido, único caso en que es el camino obligado.
+
+### 11.5 Lo que cierra una venta se confirma, y se avisa antes
+
+Tres salidas del cajón de Envíos terminan una venta. Las tres piden la misma
+ceremonia, porque el coste de equivocarse es el mismo:
+
+- **Cliente cancela / anula** pide un segundo clic que nombra la guía y el
+  pedido («Sí, anular la guía AUR5X… del pedido #KP…»), con Cancelar al lado.
+  Antes se registraba con el mismo botón «Registrar llamada» que un «No
+  contesta».
+- **El último intento.** Con los {MAX_INTENTOS} intentos agotados, registrar un
+  «No contesta» más **anula la guía** (`nextShipmentTransition`). El cajón lo
+  dice antes, en ámbar, y el botón pasa a «Registrar y anular la guía»: la
+  guía se cerraba en silencio mientras la pantalla solo mostraba «Llamadas
+  7 / 7».
+- **Descartar la recuperación** ya lo hacía (§11 y `lib/recovery-discard.ts`):
+  motivo de 8 caracteres como mínimo, visible junto al campo, y segundo clic
+  que nombra el pedido.
+
+Y lo que **no** es terminal pero se perdía igual: al cerrar el cajón o saltar a
+otra guía con una nota a medio escribir, el texto se descartaba sin preguntar.
+Ahora se avisa y se puede volver. En una cola de llamadas, ese texto es lo que
+la asesora acaba de oír por teléfono.
+
+### 11.6 Una reprogramación confirmada no puede ser de ayer
+
+La fecha que acompaña a **Cliente confirma reprogramación** tiene que ser
+futura, y se valida en los dos lados:
+
+- En el formulario, el `min` del campo y la etiqueta del botón («Elige una
+  fecha futura»), igual que para «Programar próxima llamada».
+- En el servidor, `isFutureShipmentFollowup`, porque el `min` de un
+  `<input type="date">` es una sugerencia del navegador: la fecha se puede
+  teclear. Hasta el 12-09-2026 ninguno de los dos lo exigía para «confirma»
+  —solo que la fecha existiera— y se emitía una guía Swayp con la fecha pasada
+  **estampada en su número** (`rescheduleGuideCode`) y un despacho agendado para
+  un día que ya había pasado. Es la acción más frecuente de la pantalla.
+
+La **fecha de entrega informada por el courier** («Reprogramado por Swayp») sigue
+otra regla, porque es otro hecho: **hoy sí vale** —el motorizado puede
+reprogramar para más tarde el mismo día—, ayer no (`isTodayOrLaterDelivery`).
+
+Y los topes de intentos se leen de una constante, no de un texto: la métrica del
+cajón muestra `MAX_INTENTOS` (7 llamadas) y `ALICLIK_MAX_INTENTOS` (3 intentos de
+Aliclik), las mismas que aplican la transición y la ventana de reprogramación.
 
 ## 12. Agencia: Shalom y Olva
 
@@ -3703,6 +3813,36 @@ externa, para no mantener un segundo flujo especial de «propios».
 
 ### 29.2 Alcance inicial
 
+#### Recorrido unificado aprobado el 12-09-2026
+
+Master representa a la tienda; Almacén prepara y entrega; Grupo GF Courier
+planifica, recibe, reparte y liquida. Los pedidos elegibles de Aurela/Kenku se
+ofrecen automáticamente, sin una segunda aprobación en Master. La búsqueda y
+la paginación cubren todo el universo elegible, nunca solo los primeros 300.
+Se mantienen confirmación, cobertura, tarifa, disponibilidad y exclusividad.
+
+El camino rápido es **Tomar y asignar**: una selección, un motorizado, las fechas
+previstas visibles. Se conservan dos hechos auditados aunque haya un solo gesto.
+**Tomar sin asignar** sigue disponible. Almacén trabaja en paralelo; no se exige
+su escaneo para admitir ni planificar. Verificar físicamente el paquete puede
+registrar su armado cuando todavía no estaba marcado, sin un tercer escaneo.
+
+Los cotejos de GF viven en **Grupo GF Courier → Rutas**, sobre la caja exacta:
+verificar caja, recibir carga y consultar reparto. Abrir una caja con pedidos
+va al siguiente control pendiente, no vuelve a pedir asignarlos. Agregar pedidos
+es una acción secundaria. El escaneo confirma solo lo previamente asignado.
+Oficina y motorizado conservan autores independientes y permisos separados.
+
+Almacén conserva **Entregas a couriers** para los demás operadores. Los enlaces
+antiguos de GF redirigen a su módulo sin cambiar ids, QR ni historial.
+
+Una ruta diaria de reparto puede tener varias cargas/manifiestos vinculados.
+Una carga adicional solo se abre después de recibir íntegramente la anterior;
+no reabre ni modifica sus cotejos. Cada nueva carga exige ambos controles.
+Al completar recepción se incorporan automáticamente las paradas a la misma
+ruta de reparto. Una ruta liquidada no admite cargas; no se recrean rutas ni
+se sustituyen paradas ya reportadas. Finanzas conserva aprobación humana.
+
 - Cobertura: Lima Metropolitana y Callao.
 - Punto de operación: un único almacén de Grupo GF.
 - Corte para salida el mismo día: **11:30**.
@@ -3732,7 +3872,8 @@ prepara, hayan sido tomados o no. La bandeja del courier muestra
 nunca como candado para admitir la solicitud. El operador del courier no debe
 entrar a la pantalla de Almacén para hacer avanzar el pedido.
 
-**Tomar, asignar y cotejar tampoco son el mismo gesto.** Desde `Pedidos tomados`,
+**Tomar, asignar y cotejar son hechos distintos.** El camino rápido combina
+tomar y asignar en un gesto, pero nunca combina asignar con cotejar. Desde `Pedidos tomados`,
 Grupo GF Courier puede seleccionar solicitudes y asignarlas a la ruta diaria de
 un motorizado aunque Almacén todavía no haya terminado de armarlas. La asignación
 reutiliza la única ruta de ese motorizado para la fecha prevista y coloca cada
@@ -3742,8 +3883,8 @@ motorizado con todos los pedidos que alcanzaron a preparar. El **cotejo de
 oficina** ocurre frente a esa caja: se escanea cada paquete armado y solo se
 confirma lo que ya estaba asignado. Un pedido pendiente de armado puede figurar
 en la ruta planificada, pero no puede superar el cotejo ni transferir custodia
-hasta existir físicamente. La bandeja enlaza directamente la ruta/caja en la Mesa
-de despacho para continuar ese cotejo sin volver a seleccionar los pedidos.
+hasta existir físicamente. La bandeja abre la caja dentro de Grupo GF Courier
+para continuar ese cotejo sin volver a seleccionar los pedidos.
 
 La operación se lee en dos niveles. `Pedidos tomados` separa **Sin ruta**,
 **Asignados**, **Pendientes de armado** y **Listos para cotejo** sin duplicar
@@ -3751,7 +3892,7 @@ estados persistidos. `Rutas operativas` agrupa por manifiesto/motorizado y fecha
 y muestra cuatro contadores distintos: asignados, armados por Almacén, cotejados
 en oficina y recibidos por el motorizado. El porcentaje visible corresponde al
 primer cotejo físico, no al mero armado ni a la planificación. Desde cada fila
-se abre el manifiesto exacto en Mesa de despacho.
+se abre el manifiesto exacto dentro de Grupo GF Courier.
 
 `Tomar pedidos` crea o reutiliza una **solicitud logística** idempotente, congela
 contrato, tarifa, distrito y fecha prevista, y recién entonces crea la salida.
@@ -3859,11 +4000,11 @@ tienda/fecha; el courier se decide en despacho, no durante el armado.
   por separado `motorizado_responsable` y `reportado_por`, con motivo, fecha y
   evidencia. Nadie suplanta al motorizado.
 
-Los dos modelos técnicos actuales —`delivery_routes` para `/rutas` y `/reparto`,
-y `dispatch_manifests` para la Mesa de despacho— deben converger en un ciclo
-canónico. Hasta completar la migración no se borra historial ni se duplica una
-custodia. El destino es una ruta diaria con cargas/manifiestos vinculados, paradas
-y eventos append-only.
+Para Grupo GF, `delivery_routes` representa la ruta diaria y cada
+`dispatch_manifests` vinculado representa una carga numerada. Completar la
+recepción incorpora automáticamente sus paradas a `/reparto`, dentro de la misma
+transacción que transfiere custodia. Los otros couriers conservan sus manifiestos
+diarios actuales. Nunca se borran historiales ni se sustituyen paradas reportadas.
 
 ### 29.6 Agenda y cambios posteriores al corte
 
@@ -4017,4 +4158,3 @@ El orden obligatorio evita reescribir las pantallas sobre identidades ambiguas:
 
 Cada fase debe ser compatible con Aurela y Kenku y no debe convertir una
 solicitud logística externa en un pedido comercial de Shopify.
-

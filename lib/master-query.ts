@@ -21,6 +21,7 @@ const SET_KEYS: { param: string; field: keyof MasterFilters }[] = [
   { param: "g", field: "generalStatuses" },
   { param: "op", field: "operationalStatuses" },
   { param: "c", field: "couriers" },
+  { param: "pc", field: "paymentChecks" },
   { param: "sm", field: "shippingModes" },
   { param: "r", field: "regions" },
   { param: "p", field: "provinces" },

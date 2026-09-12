@@ -16,20 +16,16 @@ import { TandersApiError } from "@/lib/tanders/types";
 
 const h = vi.hoisted(() => ({
   respuestas: new Map<string, unknown>(),
+  /** Fichas ya existentes en «Validar pagos». */
+  enLaCola: [] as { id: string }[],
+  /** Lo que el lector devuelve. Por defecto, un comprobante impecable. */
+  lectura: {} as Record<string, unknown>,
 }));
 
 vi.mock("@/lib/crypto", () => ({ decrypt: (s: string) => s }));
 vi.mock("@/lib/order-master", () => ({ recomputeOrderMasterSafe: vi.fn(async () => {}) }));
 vi.mock("@/lib/tanders/payment-vision", () => ({
-  readTandersPayment: vi.fn(async () => ({
-    isPaymentProof: true,
-    method: "yape" as const,
-    recipientName: "Grupo GF SAC",
-    amount: 129,
-    operationNumber: "1",
-    ok: true,
-    model: "m",
-  })),
+  readTandersPayment: vi.fn(async () => h.lectura),
 }));
 vi.mock("@/lib/tanders/client", async (orig) => ({
   ...(await orig<typeof import("@/lib/tanders/client")>()),
@@ -83,10 +79,11 @@ function adminFalso(candidatas: unknown[]) {
     orden: [] as { col: string; opts: unknown }[],
     updates: [] as { patch: Record<string, unknown>; ids: string[] }[],
     inserts: 0,
+    encolados: [] as Record<string, unknown>[],
   };
   function consulta() {
     const q: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "in", "or", "limit"]) q[m] = () => q;
+    for (const m of ["select", "eq", "in", "or", "limit", "contains"]) q[m] = () => q;
     q.order = (col: string, opts: unknown) => {
       visto.orden.push({ col, opts });
       return q;
@@ -96,6 +93,9 @@ function adminFalso(candidatas: unknown[]) {
     return q;
   }
   const admin = {
+    storage: {
+      from: () => ({ upload: async () => ({ error: null }) }),
+    },
     from(tabla: string) {
       if (tabla === "stores") {
         return {
@@ -111,6 +111,23 @@ function adminFalso(candidatas: unknown[]) {
               }),
             }),
           }),
+        };
+      }
+      if (tabla === "order_payments") {
+        return {
+          // La cola de «Validar pagos». Vacía por defecto: lo que se prueba
+          // acá es el barrido, no la cola.
+          select: () => {
+            const q: Record<string, unknown> = {};
+            for (const m of ["eq", "neq", "limit"]) q[m] = () => q;
+            q.then = (ok: (v: unknown) => unknown) =>
+              Promise.resolve({ data: h.enLaCola, error: null }).then(ok);
+            return q;
+          },
+          insert: async (fila: Record<string, unknown>) => {
+            visto.encolados.push(fila);
+            return { error: null };
+          },
         };
       }
       if (tabla === "tanders_payment_checks") {
@@ -156,6 +173,16 @@ function sellados(visto: ReturnType<typeof adminFalso>["visto"]): string[] {
 
 beforeEach(() => {
   h.respuestas.clear();
+  h.enLaCola = [];
+  h.lectura = {
+    isPaymentProof: true,
+    method: "yape",
+    recipientName: "Grupo GF SAC",
+    amount: 129,
+    operationNumber: "123456",
+    ok: true,
+    model: "m",
+  };
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => ({
@@ -221,5 +248,58 @@ describe("cola del barrido de cobros", () => {
     expect(r.validado).toBe(1);
     expect(visto.updates).toEqual([]);
     expect(visto.inserts).toBe(0);
+  });
+});
+
+describe("el cobro entra a la cola de «Validar pagos»", () => {
+  it("deja la ficha para que la confirme una persona", async () => {
+    // El modelo valida una IMAGEN, no un depósito. Mientras no haya conexión
+    // con el estado de cuenta, quien declara que el dinero entró es un humano;
+    // el barrido solo le prepara la ficha.
+    h.respuestas.set("oid-1", conPago("TANDER1"));
+    const { admin, visto } = adminFalso([fila(1)]);
+
+    const r = await sweepTandersPayments(admin);
+    expect(r.aRevision).toBe(1);
+    const ficha = visto.encolados[0]!;
+    expect(ficha.kind).toBe("cobro_courier");
+    expect(ficha.validation_status).toBe("pendiente_revision");
+    expect(ficha.amount).toBe(129);
+    // La imagen se guarda en NUESTRO bucket: la evidencia de un cobro no puede
+    // depender de que Tanders conserve el archivo.
+    expect(String(ficha.file_path)).toContain("tanders-TANDER1");
+    expect(ficha.file_sha256).toEqual(expect.any(String));
+  });
+
+  it("una guía cuyo cobro ya está en la cola no se vuelve a preguntar", async () => {
+    // Es lo que impide que las rechazadas —que ahora vuelven a ser candidatas
+    // para poder resolverse— se relean en cada pasada para siempre.
+    h.enLaCola = [{ id: "pago-1" }];
+    h.respuestas.set("oid-1", conPago("TANDER1"));
+    const { admin, visto } = adminFalso([fila(1)]);
+
+    const r = await sweepTandersPayments(admin);
+    expect(r.enCola).toBe(1);
+    expect(r.validado).toBe(0);
+    expect(visto.encolados).toEqual([]);
+  });
+
+  it("lo que el modelo no dio por bueno entra marcado para que alguien lo mire", async () => {
+    // No es un rechazo: es «mira esto tú». Los 41 bloqueados del 10-09 no
+    // tenían dónde resolverse; ahora llegan a la cola con la duda escrita.
+    h.respuestas.set("oid-1", conPago("TANDER1"));
+    // El monto leído no cuadra con el de la guía: el modelo lo marca.
+    h.lectura.amount = 999;
+    const { admin, visto } = adminFalso([fila(1)]);
+
+    await sweepTandersPayments(admin);
+    expect(visto.encolados[0]?.validation_status).toBe("revision_admin");
+  });
+
+  it("en seco no encola nada", async () => {
+    h.respuestas.set("oid-1", conPago("TANDER1"));
+    const { admin, visto } = adminFalso([fila(1)]);
+    await sweepTandersPayments(admin, { dry: true });
+    expect(visto.encolados).toEqual([]);
   });
 });
