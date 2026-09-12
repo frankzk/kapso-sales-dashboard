@@ -159,7 +159,7 @@ export function DispatchWorkspace({
   const storeName = useMemo(() => new Map(stores.map((store) => [store.id, store.name])), [stores]);
 
   async function refresh(preferId?: string) {
-    const fresh = await loadDispatchWorkspace();
+    const fresh = await loadDispatchWorkspace(preferId ?? selectedId);
     setData(scopeData(fresh));
     if (preferId) setSelectedId(preferId);
   }

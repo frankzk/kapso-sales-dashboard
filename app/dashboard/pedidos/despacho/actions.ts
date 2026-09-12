@@ -194,8 +194,8 @@ async function recalculateManifest(manifestId: string, actor?: string): Promise<
   return next;
 }
 
-export async function loadDispatchWorkspace(): Promise<DispatchWorkspaceData> {
-  return getDispatchWorkspaceData();
+export async function loadDispatchWorkspace(requestedId?: string | null): Promise<DispatchWorkspaceData> {
+  return getDispatchWorkspaceData(requestedId);
 }
 
 export async function lookupDispatchShipment(code: string): Promise<DispatchActionResult> {

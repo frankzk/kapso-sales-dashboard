@@ -20,6 +20,8 @@ export function GfRiderReceipt({ loads }: { loads: RiderLoad[] }) {
         const result = await receiveMyGfPackage(id, value);
         setMessage(result.error ?? result.notice ?? "");
         if (!result.error) { setCode(""); router.refresh(); }
+      } catch {
+        setMessage("No pudimos confirmar la recepción. Reintenta el mismo código; no se duplicará.");
       } finally { scanning.current = false; }
     });
   }
