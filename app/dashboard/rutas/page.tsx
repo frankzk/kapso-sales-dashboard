@@ -12,6 +12,8 @@ import { getRiders } from "@/lib/settlements-access";
 import { EmptyState } from "@/components/ui";
 import { RoutesBoard } from "@/components/routes";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
+import { redirect } from "next/navigation";
+import { routeReportAccess } from "@/lib/route-report-access";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +41,7 @@ async function RutasContent({
   ]);
   if (!stores.length) return <EmptyState title="No tienes tiendas asignadas" />;
   if (!perms.can("routes.manage")) {
+    if (perms.can("routes.report_others")) redirect("/reparto");
     return <EmptyState title="Tu rol no permite armar rutas" />;
   }
 
@@ -75,6 +78,7 @@ async function RutasContent({
       assignable={assignable}
       retries={retries}
       day={day}
+      canReport={detail ? Boolean(await routeReportAccess(detail.route.id)) : false}
     />
   );
 }

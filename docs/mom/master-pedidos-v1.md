@@ -4014,6 +4014,18 @@ tienda/fecha; el courier se decide en despacho, no durante el armado.
   por separado `motorizado_responsable` y `reportado_por`, con motivo, fecha y
   evidencia. Nadie suplanta al motorizado.
 
+**Permiso de reporte por coordinación (12-09-2026):** Equipo expone la casilla
+«Reportar entregas de rutas» (`routes.report_others`) por persona y organización.
+La lectura de concesiones filtra explícitamente al usuario autenticado; poder
+consultar permisos de compañeros como administrador no concede esos permisos.
+No viene incluido en admin ni en routes.manage. El owner lo conserva, revocable
+desde Equipo. Permite registrar/corregir paradas de rutas en curso de su
+organización desde Rutas → Reportar entregas, sin crear una ficha de motorizado.
+Reutiliza las exigencias de evidencia del reparto y exige un motivo adicional.
+El responsable permanece en la ruta; `reported_by` y el actor del evento son el
+usuario autenticado que reportó. No concede validación bancaria, cierre de ruta
+ni liquidación. Rutas cerradas o todavía no recibidas no admiten reportes.
+
 Para Grupo GF, `delivery_routes` representa la ruta diaria y cada
 `dispatch_manifests` vinculado representa una carga numerada. Completar la
 recepción incorpora automáticamente sus paradas a `/reparto`, dentro de la misma
