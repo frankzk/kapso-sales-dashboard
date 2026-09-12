@@ -1,5 +1,7 @@
 "use client";
 
+import mobile from "./courier-mobile.module.css";
+
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -97,41 +99,44 @@ export function GrupoGfCourierBoard({
 
   const provider = snapshot.provider;
   return (
-    <div className="space-y-5">
+    <div className={cn("space-y-4", mobile.board)}>
       <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
             Operación logística
           </p>
           <h1 className="mt-1 text-xl font-semibold text-slate-950">Grupo GF Courier</h1>
-          <p className="mt-1 max-w-3xl text-sm text-slate-600">
+          <p className="mt-1 hidden max-w-3xl text-sm text-slate-600 sm:block">
             Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega.
           </p>
         </div>
-        <div className="grid grid-cols-3 divide-x divide-slate-200 rounded-xl border border-slate-200 bg-white px-1 py-3 text-sm shadow-sm">
+        <details className="rounded-xl border border-slate-200 bg-white px-3 text-sm lg:min-w-80"><summary className="min-h-12 cursor-pointer py-3 font-medium text-slate-600">Condiciones del servicio</summary><div className="grid grid-cols-3 divide-x divide-slate-200 pb-3">
           <Summary label="Corte" value={provider.same_day_cutoff.slice(0, 5)} />
           <Summary label="Yape" value={`${snapshot.yapePercentage} %`} />
           <Summary label="Efectivo máximo" value={money(provider.cash_limit_amount)} />
-        </div>
+        </div></details>
       </header>
 
-      <nav aria-label="Secciones de Grupo GF Courier" className="flex gap-1 border-b border-slate-200">
+      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-4 gap-1 border-b border-slate-200 lg:flex">
         <CourierTab
           active={tab === "available"}
           onClick={() => setTab("available")}
           label="Pedidos disponibles"
+          shortLabel="Disponibles"
           count={snapshot.operations.available.length}
         />
         <CourierTab
           active={tab === "preparation"}
           onClick={() => setTab("preparation")}
           label="Pedidos tomados"
+          shortLabel="Tomados"
           count={snapshot.operations.accepted.length}
         />
         <CourierTab
           active={tab === "routes"}
           onClick={() => setTab("routes")}
           label="Rutas operativas"
+          shortLabel="Rutas"
           count={new Set(snapshot.operations.routes.map((route) => `${route.riderId}:${route.routeDate}`)).size}
         />
         <CourierTab
@@ -189,6 +194,7 @@ export function GrupoGfCourierBoard({
 }
 
 function CourierTab({
+  shortLabel,
   active,
   onClick,
   label,
@@ -198,6 +204,7 @@ function CourierTab({
   onClick: () => void;
   label: string;
   count?: number;
+  shortLabel?: string;
 }) {
   return (
     <button
@@ -205,14 +212,14 @@ function CourierTab({
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "relative min-h-11 px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
+        "relative flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 px-1 py-2 text-xs font-semibold lg:flex-row lg:px-3 lg:text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
         active ? "text-brand-700" : "text-slate-500 hover:text-slate-800",
       )}
     >
-      {label}
+      <span className={shortLabel ? "hidden lg:inline" : ""}>{label}</span>{shortLabel && <span className="lg:hidden">{shortLabel}</span>}
       {count != null && (
         <span className={cn(
-          "ml-2 rounded-full px-2 py-0.5 text-xs tabular-nums",
+          "rounded-full px-1.5 py-0.5 text-xs tabular-nums sm:ml-1",
           active ? "bg-brand-50 text-brand-700" : "bg-slate-100 text-slate-600",
         )}>
           {count}
@@ -379,7 +386,7 @@ function AvailableOrders({
       </p>
 
       {selected.size > 0 && (
-        <div className="sticky top-3 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 shadow-sm">
+        <div className="relative z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 shadow-sm lg:sticky lg:top-3">
           <p className="text-sm font-semibold text-brand-950">
             {selected.size} pedido{selected.size === 1 ? "" : "s"} seleccionado{selected.size === 1 ? "" : "s"}
           </p>
@@ -412,12 +419,12 @@ function AvailableOrders({
         </div>
       )}
 
-      <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm")}>
+      <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm", mobile.orders)}>
         <table className="w-full min-w-[980px] text-sm">
           <thead className={STICKY_HEAD}>
             <tr className="text-left text-xs text-slate-500">
               <th className="w-12 px-4 py-3">
-                <input
+                <label className={mobile.check}><input
                   type="checkbox"
                   aria-label="Seleccionar pedidos visibles"
                   checked={allVisibleSelected}
@@ -429,7 +436,7 @@ function AvailableOrders({
                       return next;
                     });
                   }}
-                />
+                /></label>
               </th>
               <th className="px-3 py-3 font-medium">Pedido</th>
               <th className="px-3 py-3 font-medium">Cliente</th>
@@ -444,12 +451,12 @@ function AvailableOrders({
             {visible.map((order) => (
               <tr key={order.orderId} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/70">
                 <td className="px-4 py-3">
-                  <input
+                  <label className={mobile.check}><input
                     type="checkbox"
                     aria-label={`Seleccionar ${order.orderName}`}
                     checked={selected.has(order.orderId)}
                     onChange={() => toggle(order.orderId)}
-                  />
+                  /></label>
                 </td>
                 <td className="px-3 py-3">
                   <Link href={`/dashboard/pedidos?q=${encodeURIComponent(order.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">
@@ -468,10 +475,10 @@ function AvailableOrders({
                   <p className="font-medium text-slate-800">{order.customerName}</p>
                   <p className="mt-0.5 text-xs text-slate-500">{order.customerPhone ?? "Sin teléfono"}</p>
                 </td>
-                <td className="px-3 py-3 text-slate-700">{order.district}</td>
-                <td className="px-3 py-3 text-right tabular-nums text-slate-700">{money(order.orderTotal)}</td>
-                <td className="px-3 py-3 text-right font-semibold tabular-nums text-slate-900">{money(order.tariffAmount)}</td>
-                <td className="px-3 py-3 text-slate-700">{formatDate(order.scheduledFor)}</td>
+                <td data-label="Destino" className="px-3 py-3 text-slate-700">{order.district}</td>
+                <td data-label="Venta" className="px-3 py-3 text-right tabular-nums text-slate-700">{money(order.orderTotal)}</td>
+                <td data-label="Tarifa" className="px-3 py-3 text-right font-semibold tabular-nums text-slate-900">{money(order.tariffAmount)}</td>
+                <td data-label="Salida" className="px-3 py-3 text-slate-700">{formatDate(order.scheduledFor)}</td>
                 <td className="px-4 py-3 text-right">
                   <button
                     type="button"
@@ -507,7 +514,7 @@ function AvailableOrders({
           </tbody>
         </table>
       </div>
-      <div className="flex items-center justify-between gap-3 text-sm" aria-label="Paginación de pedidos disponibles">
+      <div className="flex flex-col items-start justify-between gap-3 text-sm sm:flex-row sm:items-center" aria-label="Paginación de pedidos disponibles">
         <span>{filtered.length} resultados · Página {currentPage + 1} de {Math.max(1, Math.ceil(filtered.length / 50))}</span>
         <div className="flex gap-2">
           <button disabled={currentPage === 0 || pending} onClick={() => setPage(currentPage - 1)} className="rounded-lg border px-3 py-2 disabled:opacity-40">Anterior</button>
@@ -684,12 +691,12 @@ function AcceptedOrders({
           ))}
         </div>
       </div>
-      <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm")}>
+      <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm", mobile.orders)}>
         <table className="w-full min-w-[1080px] text-sm">
           <thead className={STICKY_HEAD}>
             <tr className="text-left text-xs text-slate-500">
               <th className="w-12 px-4 py-3">
-                <input
+                <label className={mobile.check}><input
                   type="checkbox"
                   aria-label="Seleccionar pedidos sin ruta"
                   checked={allSelected}
@@ -702,7 +709,7 @@ function AcceptedOrders({
                       return next;
                     });
                   }}
-                />
+                /></label>
               </th>
               <th className="px-4 py-3 font-medium">Pedido</th>
               <th className="px-3 py-3 font-medium">Cliente</th>
@@ -719,13 +726,13 @@ function AcceptedOrders({
               return (
                 <tr key={order.requestId} className="border-b border-slate-100 last:border-0">
                   <td className="px-4 py-3">
-                    <input
+                    <label className={mobile.check}><input
                       type="checkbox"
                       aria-label={`Seleccionar ${order.orderName} para una ruta`}
                       checked={selected.has(order.requestId)}
                       disabled={!canManageDispatch || !canAssign}
                       onChange={() => toggle(order.requestId)}
-                    />
+                    /></label>
                   </td>
                   <td className="px-4 py-3">
                     <Link href={`/dashboard/pedidos?q=${encodeURIComponent(order.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">{order.orderName}</Link>
@@ -737,7 +744,7 @@ function AcceptedOrders({
                     <span className={cn("rounded-md px-2 py-1 text-xs font-semibold", status.tone)}>{status.label}</span>
                     {order.observation && <p className="mt-1 max-w-64 text-xs text-red-600">{order.observation}</p>}
                   </td>
-                  <td className="px-3 py-3 text-right font-semibold tabular-nums text-slate-900">{money(order.tariffAmount)}</td>
+                  <td data-label="Tarifa" className="px-3 py-3 text-right font-semibold tabular-nums text-slate-900">{money(order.tariffAmount)}</td>
                   <td className="px-4 py-3">
                     {order.route ? (
                       <div>
@@ -799,7 +806,7 @@ function CourierRoutes({
         <div>
           <h2 id="courier-routes-title" className="text-base font-semibold text-slate-950">Rutas y cajas operativas</h2>
           <p className="mt-1 max-w-4xl text-sm leading-6 text-slate-600">
-            Una ruta al día por motorizado. Cada fila es una carga de esa ruta; las recogidas adicionales conservan el mismo reparto y sus cotejos independientes.
+            Abre la caja del motorizado para verificar sus paquetes y registrar la recepción.
           </p>
         </div>
         {unassignedCount > 0 && (
@@ -813,7 +820,27 @@ function CourierRoutes({
         )}
       </div>
 
-      <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm")}>
+      <div className="space-y-3 lg:hidden" aria-label="Cajas operativas">
+        {routes.map((route) => <article key={route.manifestId} className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div><h3 className="text-base font-semibold text-slate-950">{route.riderName}</h3><p className="mt-1 text-sm text-slate-600">{formatDate(route.routeDate)} · Carga {route.loadNumber ?? 1}</p></div>
+            <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">{routeStateLabel(route.state)}</span>
+          </div>
+          <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+            <div className="flex justify-between gap-2"><dt className="text-slate-600">Asignados</dt><dd className="font-semibold tabular-nums">{route.assignedCount}</dd></div>
+            <div className="flex justify-between gap-2"><dt className="text-slate-600">Armados</dt><dd className="font-semibold tabular-nums">{route.armedCount}</dd></div>
+            <div className="flex justify-between gap-2"><dt className="text-slate-600">Verificados</dt><dd className="font-semibold tabular-nums">{route.officeCheckedCount}</dd></div>
+            <div className="flex justify-between gap-2"><dt className="text-slate-600">Recibidos</dt><dd className="font-semibold tabular-nums">{route.pickupCheckedCount}</dd></div>
+          </dl>
+          <progress aria-label={`Verificación de la caja de ${route.riderName}`} max={route.assignedCount || 1} value={route.officeCheckedCount} className="mt-3 h-2 w-full accent-brand-600" />
+          <Link href={`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(route.manifestId)}`} className="mt-3 flex min-h-12 items-center justify-center rounded-xl bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2">
+            {route.state === "in_custody" ? "Ver caja recibida" : route.state === "ready_for_pickup" || route.state === "pickup_check" ? "Recibir carga" : "Verificar caja"}
+          </Link>
+          {route.deliveryRouteId && route.state === "in_custody" && <Link href={`/dashboard/rutas?id=${route.deliveryRouteId}`} className="mt-2 flex min-h-12 items-center justify-center text-sm font-semibold text-brand-700">Ver reparto y liquidación</Link>}
+        </article>)}
+        {!routes.length && <p className="rounded-xl border border-dashed border-slate-300 p-5 text-sm text-slate-600">Todavía no hay rutas. Asigna pedidos a un motorizado desde Pedidos tomados.</p>}
+      </div>
+      <div className={cn(TABLE_WRAP_FROM[980], "hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:block")}>
         <table className="w-full min-w-[980px] text-sm">
           <thead className={STICKY_HEAD}>
             <tr className="text-left text-xs text-slate-500">
@@ -983,7 +1010,7 @@ function TariffMatrix({
         </p>
       </section>
 
-      <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm")}>
+      <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm", mobile.orders, mobile.tariffs)}>
         <table className="w-full min-w-[980px] text-sm">
           <thead className={STICKY_HEAD}>
             <tr className="text-left text-xs text-slate-500">
@@ -1130,7 +1157,7 @@ function TariffRow({
             </button>
           )}
         </td>
-        <td className="px-3 py-3">
+        <td data-label="Zona" className="px-3 py-3">
           <input
             value={zone}
             onChange={(event) => setZone(event.target.value)}
@@ -1139,7 +1166,7 @@ function TariffRow({
             className="h-9 w-40 rounded-lg border border-slate-200 bg-white px-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
           />
         </td>
-        <td className="px-3 py-3 text-right">
+        <td data-label="Entrega o rechazo" className="px-3 py-3 text-right">
           <MoneyInput label={`Tarifa de entrega o rechazo en ${district.district}`} value={delivery} onChange={setDelivery} />
         </td>
         <td className="px-3 py-3">

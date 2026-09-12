@@ -3813,6 +3813,20 @@ externa, para no mantener un segundo flujo especial de «propios».
 
 ### 29.2 Alcance inicial
 
+#### Experiencia móvil del cotejo — 12-09-2026
+
+La vista móvil presenta cada carga con motorizado, fecha, número de carga,
+contadores independientes y acceso visible a verificar/recibir. Los pedidos
+se leen verticalmente sin esconder sus acciones a la derecha de una tabla.
+La cámara es la entrada principal; escribir el código es explícito y nunca
+abre el teclado automáticamente en una pantalla táctil.
+
+Al terminar oficina, la pantalla confirma **Caja verificada** y ofrece pasar
+a recepción solo a quien tiene permiso. Ese botón cambia de vista, no marca
+paquetes ni transfiere custodia. El segundo cotejo sigue siendo independiente.
+Las correcciones de contenido se despliegan aparte, con motivo e historial.
+No cambian elegibilidad, tarifas, identidad de salidas ni reglas de liquidación.
+
 #### Recorrido unificado aprobado el 12-09-2026
 
 Master representa a la tienda; Almacén prepara y entrega; Grupo GF Courier
