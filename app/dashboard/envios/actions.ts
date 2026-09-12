@@ -102,7 +102,7 @@ export interface ShipmentActionState {
   notice?: string;
 }
 
-/** Filas crudas de reprogramaciones (guías Fénix hijas) + nombres de asesor,
+/** Filas crudas de reprogramaciones (guías Swayp hijas) + nombres de asesor,
  *  para que el popup recompute los cortes por rango en el cliente. RLS-scoped. */
 export async function loadReprogramData(): Promise<{
   rows: ReprogramChildRow[];
@@ -120,8 +120,8 @@ export async function loadReprogramData(): Promise<{
  * PIDE EL DESTINO COMPLETO, no solo `city`. El alta por la API de Aliclik deja
  * esa columna vacía —219 envíos, 85 de ellos pendientes— y `evaluateFenix` la
  * deriva del distrito, pero solo si se la pasan. Cuando esta reja leía `city` a
- * secas, la cola mostraba «Fenix Ok» (la lectura sí trae el distrito) y el botón
- * respondía «Fenix no tiene cobertura en la ciudad indicada» sobre el mismo
+ * secas, la cola mostraba «Swayp Ok» (la lectura sí trae el distrito) y el botón
+ * respondía «Swayp no tiene cobertura en la ciudad indicada» sobre el mismo
  * envío. La frase delataba el bug: «la ciudad indicada» es el texto de respaldo
  * de cuando `city` es NULL.
  */
@@ -348,7 +348,7 @@ export async function updateShipmentCallNote(
   return { notice: "Nota actualizada." };
 }
 
-/** Global search (guía / pedido / guía Fenix / celular), RLS-scoped. */
+/** Global search (guía / pedido / guía Swayp / celular), RLS-scoped. */
 export async function searchShipments(query: string): Promise<ShipmentRow[]> {
   const sb = await createServerSupabase();
   const {
@@ -427,15 +427,16 @@ export async function releaseShipment(shipmentId: string): Promise<ShipmentActio
 
 /**
  * Register a gestión call. Reads the current state, applies the transition
- * (confirma→En ruta / no_contesta→siguiente intento o Anulado / cancela→Anulado
- * / entregado→Entregado por Fenix), updates the shipment and logs the call.
+ * (confirma→En ruta / no_contesta→siguiente intento o Anulado / cancela→Anulado),
+ * updates the shipment and logs the call. Marking a guide as delivered is NOT a
+ * call outcome: that comes from the courier (`registerCourierReportResult`).
  *
  * "Cliente confirma" doubles as the re-dispatch step: it AUTO-generates a new,
- * unique Fenix guide (date-stamped with the reprogramación date) and transfers
- * this shipment to it, in one action — because Fenix rejects re-uploading a guide
+ * unique Swayp guide (date-stamped with the reprogramación date) and transfers
+ * this shipment to it, in one action — because Swayp rejects re-uploading a guide
  * code it has already seen, every confirmed reprogramación needs a fresh guide.
  * Successive re-dispatches chain (each new guide spins off the current active one),
- * so an order can accumulate several Fenix guides over its life.
+ * so an order can accumulate several Swayp guides over its life.
  */
 export async function registerRerouteCall(
   shipmentId: string,
@@ -459,7 +460,7 @@ export async function registerRerouteCall(
   let shipmentResult = await fetchShipment(
     `id,courier,guide_code,delivery_status,reroute_attempts,order_id,order_name,${FENIX_COVERAGE_COLUMNS},product,fenix_eligible,fenix_shipment_id,aliclik_attempts,aliclik_service_date`,
   );
-  // 0038 may land moments after the app deploy. Preserve the existing Fenix
+  // 0038 may land moments after the app deploy. Preserve the existing Swayp
   // workflow instead of making every gestión return "No encontrado".
   if (shipmentResult.error) {
     shipmentResult = await fetchShipment(
@@ -491,12 +492,12 @@ export async function registerRerouteCall(
     aliclik_service_date: shipmentSnapshot.aliclik_service_date ?? null,
   };
 
-  // A Fenix guide that is still En ruta is waiting for the courier/motorizado
+  // A Swayp guide that is still En ruta is waiting for the courier/motorizado
   // outcome. Do not let a stale drawer skip that operational stage and create
   // another reprogramming before the delivery result has been processed.
   if (shipmentRequiresCourierResult(cur.courier, cur.delivery_status)) {
     return {
-      error: `Primero registra el resultado del courier para la guía ${cur.guide_code}. Si Fenix informa “No contesta”, volverá a Pendiente y se habilitará la gestión con el cliente.`,
+      error: `Primero registra el resultado del courier para la guía ${cur.guide_code}. Si Swayp informa “No contesta”, volverá a Pendiente y se habilitará la gestión con el cliente.`,
     };
   }
 
@@ -506,8 +507,15 @@ export async function registerRerouteCall(
   if (!isCallable(cur.delivery_status)) {
     return { error: "Este envío ya no admite gestión (entregado, anulado o transferido)." };
   }
+  // Una pestaña con el código viejo todavía puede mandar «entregado». La
+  // puerta es una sola: el resultado del courier (ver lib/shipments.ts).
+  if ((input.disposition as string) === "entregado") {
+    return {
+      error: "Una guía se marca entregada desde «Registrar resultado del courier», no desde la llamada.",
+    };
+  }
 
-  // A confirmed reprogramación must carry its date: it stamps the new Fenix guide
+  // A confirmed reprogramación must carry its date: it stamps the new Swayp guide
   // and schedules the dispatch. Required so we never mint a guide with a silent
   // "today" fallback (the UI also disables the button until a date is picked).
   if (input.disposition === "confirma" && !input.nextFollowupAt) {
@@ -520,10 +528,10 @@ export async function registerRerouteCall(
     return { error: "Elige una fecha futura para programar la próxima llamada." };
   }
 
-  // Cliente confirma + fecha → generate a NEW Fenix guide automatically and
+  // Cliente confirma + fecha → generate a NEW Swayp guide automatically and
   // transfer this shipment to it (skip if already transferred). Needs an order
   // name to build the code; without one we fall through to the plain En ruta
-  // transition and the operator uses the manual "Generar guía Fenix" section.
+  // transition and the operator uses the manual "Generar guía Swayp" section.
   const reprogramProvider = input.reprogramProvider ?? "fenix";
   if (input.disposition === "confirma" && reprogramProvider === "aliclik") {
     const decision = evaluateAliclikReschedule({
@@ -532,10 +540,10 @@ export async function registerRerouteCall(
       serviceDate: cur.aliclik_service_date,
     });
     if (decision.reason === "not_aliclik") {
-      return { error: "Esta ya no es una guía Aliclik; corresponde continuar con Fenix." };
+      return { error: "Esta ya no es una guía Aliclik; corresponde continuar con Swayp." };
     }
     if (decision.reason === "three_attempts") {
-      return { error: "Aliclik ya registra 3 intentos o más; solo corresponde continuar con Fenix." };
+      return { error: "Aliclik ya registra 3 intentos o más; solo corresponde continuar con Swayp." };
     }
     if (!decision.eligible && !input.forceAliclik) {
       return { error: aliclikDecisionMessage(decision) };
@@ -576,7 +584,7 @@ export async function registerRerouteCall(
   if (input.disposition === "confirma" && reprogramProvider === "fenix" && cur.courier === "aliclik") {
     const currentFenix = await resolveCurrentFenixEligibility(admin, ctx.storeId, cur);
     if ("error" in currentFenix) {
-      return { error: `No se pudo validar el stock Fenix: ${currentFenix.error}` };
+      return { error: `No se pudo validar el stock Swayp: ${currentFenix.error}` };
     }
     if (currentFenix.eligible !== cur.fenix_eligible) {
       await admin.from("shipments").update({ fenix_eligible: currentFenix.eligible }).eq("id", shipmentId);
@@ -587,8 +595,8 @@ export async function registerRerouteCall(
           // La ciudad la nombra `currentFenix`, que es la que se evaluó de
           // verdad: `cur.city` viene vacía en las guías de la API de Aliclik y
           // el mensaje quedaba en «la ciudad indicada», que no dice nada.
-          ? `Fenix no tiene stock disponible para este producto en ${currentFenix.city || cur.district || "la ciudad indicada"}.`
-          : `Fenix no tiene cobertura en ${currentFenix.city || cur.district || "la ciudad indicada"}.`,
+          ? `Swayp no tiene stock disponible para este producto en ${currentFenix.city || cur.district || "la ciudad indicada"}.`
+          : `Swayp no tiene cobertura en ${currentFenix.city || cur.district || "la ciudad indicada"}.`,
       };
     }
   }
@@ -642,7 +650,7 @@ export async function registerRerouteCall(
       revalidatePath("/dashboard/envios");
       return {
         notice:
-          `Confirmado — nueva guía Fenix ${spun.guideCode} (En ruta).` +
+          `Confirmado — nueva guía Swayp ${spun.guideCode} (En ruta).` +
           (viaApi.ok ? " Emitida por Swayp." : swaypNotice),
       };
     }
@@ -678,11 +686,6 @@ export async function registerRerouteCall(
     next_followup_at: nextFollowup,
   });
 
-  // Guía Fénix entregada → descuenta 1 del inventario (idempotente, best-effort).
-  if (t.status === "entregado") {
-    await consumeFenixStockOnDelivery(admin, shipmentId).catch(() => {});
-  }
-
   await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
   let notice: string;
@@ -694,9 +697,7 @@ export async function registerRerouteCall(
     });
     notice = `Llamada programada para el ${date}; los intentos no cambiaron.`;
   } else if (t.status === "en_ruta") {
-    notice = "Registrado — En ruta (Fenix).";
-  } else if (t.status === "entregado") {
-    notice = "Registrado — Entregado.";
+    notice = "Registrado — En ruta (Swayp).";
   } else if (t.status === "anulado") {
     notice = "Registrado — Anulado.";
   } else {
@@ -817,15 +818,15 @@ function aliclikDecisionMessage(
   decision: ReturnType<typeof evaluateAliclikReschedule>,
 ): string {
   if (decision.reason === "three_attempts") {
-    return "Aliclik ya registra 3 intentos o más; solo corresponde continuar con Fenix.";
+    return "Aliclik ya registra 3 intentos o más; solo corresponde continuar con Swayp.";
   }
   if (decision.reason === "outside_week") {
-    return `La fecha de Aliclik está fuera de la ventana ${decision.cutoffDate}–${decision.today}. Continúa con Fenix o usa la excepción manual.`;
+    return `La fecha de Aliclik está fuera de la ventana ${decision.cutoffDate}–${decision.today}. Continúa con Swayp o usa la excepción manual.`;
   }
   if (decision.reason === "missing_attempts") {
-    return "El Excel no informó NRO. INTENTOS. Continúa con Fenix o usa la excepción manual.";
+    return "El Excel no informó NRO. INTENTOS. Continúa con Swayp o usa la excepción manual.";
   }
-  return "El Excel no informó una fecha operativa válida. Continúa con Fenix o usa la excepción manual.";
+  return "El Excel no informó una fecha operativa válida. Continúa con Swayp o usa la excepción manual.";
 }
 
 export interface ShipmentAddressInput {
@@ -990,7 +991,7 @@ export async function updateShipmentDeliveryAddress(
   };
 }
 
-/** Register one row/result from the Fenix courier report. Operators choose the
+/** Register one row/result from the Swayp courier report. Operators choose the
  * courier outcome; the application owns the internal status transition. */
 export async function registerCourierReportResult(
   shipmentId: string,
@@ -1008,7 +1009,7 @@ export async function registerCourierReportResult(
 
   const note = input.note?.trim() || null;
   if (definition.requiresNote && !note) {
-    return { error: "Describe el motivo informado por Fenix para anular la guía." };
+    return { error: "Describe el motivo informado por Swayp para anular la guía." };
   }
 
   let deliveryDate: string | null = null;
@@ -1034,13 +1035,13 @@ export async function registerCourierReportResult(
     fenix_shipment_id: string | null;
   };
   if (current.courier !== "fenix") {
-    return { error: "Este flujo corresponde al reporte Fenix. Aliclik se actualiza con su Excel diario." };
+    return { error: "Este flujo corresponde al reporte Swayp. Aliclik se actualiza con su Excel diario." };
   }
   if (current.delivery_status === "transferido") {
     return {
       error: current.fenix_shipment_id
-        ? "Esta guía ya fue reemplazada. Registra el resultado en su nueva guía Fenix."
-        : "Una guía transferida no admite resultados; abre la guía Fenix activa.",
+        ? "Esta guía ya fue reemplazada. Registra el resultado en su nueva guía Swayp."
+        : "Una guía transferida no admite resultados; abre la guía Swayp activa.",
     };
   }
 
@@ -1067,7 +1068,7 @@ export async function registerCourierReportResult(
   if (error) return { error: error.message };
 
   const auditNote = [
-    `Resultado Fenix: ${definition.label}.`,
+    `Resultado Swayp: ${definition.label}.`,
     note,
   ].filter(Boolean).join(" ");
   await admin.from("shipment_calls").insert({
@@ -1128,7 +1129,7 @@ export async function setShipmentStatus(
 /**
  * Audited exception for a customer who re-confirms after a guide was cancelled.
  * The cancelled guide is never silently reopened: it becomes the transferred
- * parent and a brand-new active Fenix guide is created with the requested date.
+ * parent and a brand-new active Swayp guide is created with the requested date.
  */
 export async function reprogramCancelledShipmentException(
   shipmentId: string,
@@ -1174,7 +1175,7 @@ export async function reprogramCancelledShipmentException(
     return { error: "La guía ya cambió de estado. Actualiza el panel antes de continuar." };
   }
   if (current.fenix_shipment_id) {
-    return { error: "Esta guía anulada ya tiene una guía Fenix de reemplazo." };
+    return { error: "Esta guía anulada ya tiene una guía Swayp de reemplazo." };
   }
 
   // La copia del envío puede estar vacía aunque el enlace exista (ver
@@ -1191,14 +1192,14 @@ export async function reprogramCancelledShipmentException(
   const orderName = effectiveOrderName(current.order_name, linkedOrderName);
   const guideCode = rescheduleGuideCode(orderName, input.nextFollowupAt);
   if (!guideCode) {
-    return { error: "Este envío no tiene N° de pedido para generar automáticamente la nueva guía Fenix." };
+    return { error: "Este envío no tiene N° de pedido para generar automáticamente la nueva guía Swayp." };
   }
 
   // Never use the cached flag for this exception: inventory may have changed
   // since the Excel import or since the drawer was opened.
   const currentFenix = await resolveCurrentFenixEligibility(admin, ctx.storeId, current);
   if ("error" in currentFenix) {
-    return { error: `No se pudo validar el stock Fenix: ${currentFenix.error}` };
+    return { error: `No se pudo validar el stock Swayp: ${currentFenix.error}` };
   }
   if (currentFenix.eligible !== current.fenix_eligible) {
     await admin
@@ -1209,8 +1210,8 @@ export async function reprogramCancelledShipmentException(
   if (!currentFenix.eligible) {
     return {
       error: currentFenix.reason === "sin_stock"
-        ? `Fenix no tiene stock disponible para este pedido en ${currentFenix.city || current.district || "la ciudad indicada"}.`
-        : `Fenix no tiene cobertura en ${currentFenix.city || current.district || "la ciudad indicada"}.`,
+        ? `Swayp no tiene stock disponible para este pedido en ${currentFenix.city || current.district || "la ciudad indicada"}.`
+        : `Swayp no tiene cobertura en ${currentFenix.city || current.district || "la ciudad indicada"}.`,
     };
   }
 
@@ -1218,7 +1219,7 @@ export async function reprogramCancelledShipmentException(
   const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode, {
     childNextFollowupAt: input.nextFollowupAt,
     expectedSourceStatus: "anulado",
-    parentAuditNote: `${auditNote}. Nueva guía Fenix: ${guideCode}.`,
+    parentAuditNote: `${auditNote}. Nueva guía Swayp: ${guideCode}.`,
   });
   if ("error" in spun) return { error: spun.error };
 
@@ -1239,13 +1240,13 @@ export async function reprogramCancelledShipmentException(
 }
 
 /**
- * Spin off a Fenix sub-guide from a shipment: insert a second shipments row
+ * Spin off a Swayp sub-guide from a shipment: insert a second shipments row
  * (courier='fenix', En ruta) carrying the order snapshot, then freeze the source
- * shipment as `transferido` (the Fenix guide is the active shipment going
+ * shipment as `transferido` (the Swayp guide is the active shipment going
  * forward) and log the hand-off. Shared by the manual `createFenixGuide` and the
  * automatic confirma flow in `registerRerouteCall`. `guideCode` is normalized
  * (trim + uppercase). Returns the new child id + code, or an error (missing code,
- * source already transferred, or a unique violation = code already used in Fenix).
+ * source already transferred, or a unique violation = code already used in Swayp).
  */
 async function spinOffFenixGuide(
   admin: SupabaseClient,
@@ -1268,7 +1269,7 @@ async function spinOffFenixGuide(
   } = {},
 ): Promise<{ error: string } | { childId: string; guideCode: string }> {
   const code = guideCode.trim().toUpperCase();
-  if (!code) return { error: "Ingresa el número de guía de Fenix." };
+  if (!code) return { error: "Ingresa el número de guía de Swayp." };
 
   const fetchParent = (columns: string) => admin
     .from("shipments")
@@ -1291,10 +1292,10 @@ async function spinOffFenixGuide(
     fenix_shipment_id: string | null;
   };
   if (shipmentRequiresCourierResult(source.courier, source.delivery_status)) {
-    return { error: "Primero registra el resultado del courier antes de crear otra guía Fenix." };
+    return { error: "Primero registra el resultado del courier antes de crear otra guía Swayp." };
   }
   if (source.fenix_shipment_id) {
-    return { error: "Este envío ya tiene una guía Fenix." };
+    return { error: "Este envío ya tiene una guía Swayp." };
   }
   if (opts.expectedSourceStatus && source.delivery_status !== opts.expectedSourceStatus) {
     return { error: "La guía cambió de estado antes de guardar. Actualiza el panel y vuelve a revisarla." };
@@ -1334,12 +1335,12 @@ async function spinOffFenixGuide(
     .select("id")
     .single();
   if (insErr || !child) {
-    // unique(courier, guide_code) violation → this code was already used in Fenix
+    // unique(courier, guide_code) violation → this code was already used in Swayp
     const dup = (insErr as { code?: string } | null)?.code === "23505";
     return {
       error: dup
-        ? `Ya existe una guía Fenix con el código ${code}. Elige otra fecha de reprogramación.`
-        : (insErr?.message ?? "No se pudo crear la guía Fenix."),
+        ? `Ya existe una guía Swayp con el código ${code}. Elige otra fecha de reprogramación.`
+        : (insErr?.message ?? "No se pudo crear la guía Swayp."),
     };
   }
 
@@ -1367,7 +1368,7 @@ async function spinOffFenixGuide(
     .maybeSingle();
   if (updErr || !transferred) {
     await admin.from("shipments").delete().eq("id", child.id);
-    return { error: "Este envío acaba de recibir otra guía Fenix. Actualiza y reintenta." };
+    return { error: "Este envío acaba de recibir otra guía Swayp. Actualiza y reintenta." };
   }
   await admin.from("shipment_calls").insert({
     shipment_id: shipmentId,
@@ -1375,15 +1376,15 @@ async function spinOffFenixGuide(
     agent: ctx.userId,
     kind: "reroute",
     new_status: "transferido",
-    note: opts.parentAuditNote ?? `Guía Fenix creada: ${code}`,
+    note: opts.parentAuditNote ?? `Guía Swayp creada: ${code}`,
   });
 
   return { childId: child.id as string, guideCode: code };
 }
 
 /**
- * Create a Fenix sub-guide for a re-routed shipment (manual entry of the guide
- * number generated in Fenix's own system). Inserts a second shipments row
+ * Create a Swayp sub-guide for a re-routed shipment (manual entry of the guide
+ * number generated in Swayp's own system). Inserts a second shipments row
  * (courier='fenix') and links the parent. API-ready: a later phase swaps the
  * manual `guideCode` for createFenixGuideViaApi() without changing this shape.
  */
@@ -1395,7 +1396,7 @@ export async function createFenixGuide(
   if (!ctx) return { error: "Sin acceso." };
   const admin = createAdminSupabase();
 
-  // carry the reprogramación date onto the new Fenix guide (same as the
+  // carry the reprogramación date onto the new Swayp guide (same as the
   // automatic confirma flow) so it isn't left En ruta without a dispatch date
   const r = await spinOffFenixGuide(admin, ctx, shipmentId, input.guideCode, {
     childNextFollowupAt: input.nextFollowupAt ?? null,
@@ -1404,13 +1405,13 @@ export async function createFenixGuide(
 
   await syncMasterForShipment(admin, shipmentId, r.childId);
   revalidatePath("/dashboard/envios");
-  return { notice: `Guía Fenix ${r.guideCode} creada.` };
+  return { notice: `Guía Swayp ${r.guideCode} creada.` };
 }
 
-// ── Guía Fenix DIRECTA: desde un pedido, sin guía Aliclik madre ──────────────
-// Urgencias que salen del almacén regional de Fénix sin pasar por Aliclik. La
+// ── Guía Swayp DIRECTA: desde un pedido, sin guía Aliclik madre ──────────────
+// Urgencias que salen del almacén regional de Swayp sin pasar por Aliclik. La
 // guía nace En ruta con su fecha de despacho (desde mañana) y entra al Excel de
-// programación de ese día como cualquier guía Fénix. Gate de creación: cobertura
+// programación de ese día como cualquier guía Swayp. Gate de creación: cobertura
 // + stock de TODOS los productos del pedido; el descuento de inventario sigue
 // ocurriendo al entregar (salida_entrega), igual que el resto de guías.
 
@@ -1695,7 +1696,7 @@ export async function previewDirectFenixGuide(input: {
     .from("fenix_stock")
     .select("city,product,sku,quantity")
     .eq("org_id", orgId);
-  if (stockError) return { error: `No se pudo consultar el stock Fenix: ${stockError.message}` };
+  if (stockError) return { error: `No se pudo consultar el stock Swayp: ${stockError.message}` };
 
   const lineItems = (order.line_items ?? []).map((li) => ({
     title: li.title ?? "",
@@ -1759,7 +1760,7 @@ export async function previewDirectFenixGuide(input: {
 }
 
 /**
- * Create the direct Fenix guide. Never trusts the preview: re-runs every gate
+ * Create the direct Swayp guide. Never trusts the preview: re-runs every gate
  * server-side (access → order sanity → destination → duplicates → stock for
  * every line item → dispatch date → guide code) before inserting the
  * courier='fenix' row — En ruta, sin guía madre, marcada created_via='fenix_directo'.
@@ -1989,7 +1990,7 @@ export async function createDirectFenixGuide(input: {
   if (!district) {
     return {
       error:
-        "El pedido no tiene distrito/ciudad de envío, así que no se puede validar la cobertura ni el stock Fenix. Complétalo en Shopify y reintenta.",
+        "El pedido no tiene distrito/ciudad de envío, así que no se puede validar la cobertura ni el stock Swayp. Complétalo en Shopify y reintenta.",
     };
   }
 
@@ -2005,7 +2006,7 @@ export async function createDirectFenixGuide(input: {
   const guides = await findGuidesOfOrder(admin, order);
   const active = guides.find((g) => DIRECT_GUIDE_ACTIVE_STATUSES.has(g.delivery_status));
   if (active) {
-    const courierLabel = active.courier === "fenix" ? "Fenix" : "Aliclik";
+    const courierLabel = active.courier === "fenix" ? "Swayp" : "Aliclik";
     return {
       error: `Este pedido ya tiene una guía activa: ${active.guide_code} (${courierLabel}, ${labelOfStatus(active.delivery_status)}). Gestiónala o anúlala antes de crear una guía directa.`,
     };
@@ -2016,7 +2017,7 @@ export async function createDirectFenixGuide(input: {
     .from("fenix_stock")
     .select("city,product,sku,quantity")
     .eq("org_id", orgId);
-  if (stockError) return { error: `No se pudo consultar el stock Fenix: ${stockError.message}` };
+  if (stockError) return { error: `No se pudo consultar el stock Swayp: ${stockError.message}` };
   const lineItems = (order.line_items ?? []).map((li) => ({
     title: li.title ?? "",
     quantity: li.quantity ?? 1,
@@ -2026,14 +2027,14 @@ export async function createDirectFenixGuide(input: {
   if (!check.ok) {
     if (check.reason === "sin_stock") {
       return {
-        error: `Sin stock Fenix en ${city} para: ${check.uncovered.join(", ")}. Actualiza el inventario en Stock Fenix e intenta de nuevo.`,
+        error: `Sin stock Swayp en ${city} para: ${check.uncovered.join(", ")}. Actualiza el inventario en Stock Swayp e intenta de nuevo.`,
       };
     }
-    return { error: `Fenix no tiene cobertura en ${district || "el destino del pedido"}.` };
+    return { error: `Swayp no tiene cobertura en ${district || "el destino del pedido"}.` };
   }
 
   // Dispatch date: required, from tomorrow (Lima) onward — the day's Excel is
-  // usually already sent, so a same-day guide would never reach Fenix.
+  // usually already sent, so a same-day guide would never reach Swayp.
   const dispatchDay = (input.dispatchDateIso || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dispatchDay) || Number.isNaN(Date.parse(input.dispatchDateIso))) {
     return { error: "Elige la fecha de despacho." };
@@ -2132,8 +2133,8 @@ export async function createDirectFenixGuide(input: {
     const dup = insertResult.error?.code === "23505";
     return {
       error: dup
-        ? `Ya existe una guía Fenix con el código ${code}. Cambia la fecha o edita el código.`
-        : (insertResult.error?.message ?? "No se pudo crear la guía Fenix."),
+        ? `Ya existe una guía Swayp con el código ${code}. Cambia la fecha o edita el código.`
+        : (insertResult.error?.message ?? "No se pudo crear la guía Swayp."),
     };
   }
   const childId = (insertResult.data as { id: string }).id;
@@ -2147,7 +2148,7 @@ export async function createDirectFenixGuide(input: {
     agent: user.id,
     kind: "reroute",
     new_status: null,
-    note: [`Guía Fenix directa creada: ${code} (pedido ${order.name ?? "sin número"}).`, input.note?.trim() || null]
+    note: [`Guía Swayp directa creada: ${code} (pedido ${order.name ?? "sin número"}).`, input.note?.trim() || null]
       .filter(Boolean)
       .join(" "),
     next_followup_at: input.dispatchDateIso,
@@ -2165,7 +2166,7 @@ export async function createDirectFenixGuide(input: {
   // guía— y la resalte: creándola desde "Pendiente" el refresco no muestra nada
   // porque la guía nueva no pertenece a esa lista.
   return {
-    notice: `Guía Fenix directa ${code} creada — En ruta, despacho ${fecha}.${swaypNotice}`,
+    notice: `Guía Swayp directa ${code} creada — En ruta, despacho ${fecha}.${swaypNotice}`,
     shipmentId: childId,
   };
 }
@@ -2385,8 +2386,8 @@ export async function clearShipmentSuggestion(shipmentId: string): Promise<Shipm
 }
 
 /**
- * Search a store's Shopify catalog to populate the Fenix-stock product picker.
- * RLS-authorized to the store; the store is only the catalog source (Fenix stock
+ * Search a store's Shopify catalog to populate the Swayp-stock product picker.
+ * RLS-authorized to the store; the store is only the catalog source (Swayp stock
  * itself stays org-scoped). Degrades to [] if the store lacks read_products.
  */
 export async function searchStockProducts(
@@ -2415,9 +2416,9 @@ export async function searchStockProducts(
   }
 }
 
-// ── Fenix stock (admin) ──────────────────────────────────────────────────────
+// ── Swayp stock (admin) ──────────────────────────────────────────────────────
 
-/** Upsert a Fenix stock row for the caller's org. RLS gates the write to admins. */
+/** Upsert a Swayp stock row for the caller's org. RLS gates the write to admins. */
 export async function upsertFenixStock(input: {
   city: string;
   product: string;
@@ -2495,7 +2496,7 @@ export async function upsertFenixStock(input: {
     : { notice: `Stock actualizado — ${sync.updated} guías sincronizadas.` };
 }
 
-/** Delete a Fenix stock row (admin). */
+/** Delete a Swayp stock row (admin). */
 export async function deleteFenixStock(id: string): Promise<ShipmentActionState> {
   const sb = await createServerSupabase();
   const { error } = await sb.from("fenix_stock").delete().eq("id", id);
@@ -2512,7 +2513,7 @@ export async function deleteFenixStock(id: string): Promise<ShipmentActionState>
  * Registra un movimiento manual de kardex sobre un renglón de stock (admin):
  *   entrada       → suma `quantity` unidades.
  *   salida_merma  → resta `quantity` unidades (daño/pérdida), motivo obligatorio.
- *   ajuste        → `quantity` es el CONTEO REAL de Fénix; el delta se calcula
+ *   ajuste        → `quantity` es el CONTEO REAL de Swayp; el delta se calcula
  *                   solo para llevar el saldo a ese número.
  * Actualiza el saldo + inserta el historial (recordStockMovement) y re-sincroniza
  * la elegibilidad de las guías.
@@ -2552,7 +2553,7 @@ export async function recordFenixStockMovement(input: {
     if (!note) return { error: "La merma/pérdida necesita un motivo." };
     delta = -qty;
   } else {
-    // ajuste: qty es el conteo real de Fénix
+    // ajuste: qty es el conteo real de Swayp
     delta = ajusteDelta(s.quantity, qty);
   }
   if (delta === 0) return { notice: "El saldo ya coincide; no se registró movimiento." };

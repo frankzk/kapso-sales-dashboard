@@ -1,7 +1,7 @@
 // Canonical shipment state model + helpers. Pure + unit-tested. The model is
 // centered on the CALL-GESTIÓN flow. A confirmed reprogramming first stays on
 // Aliclik when its weekly/attempt rules allow it; otherwise it can spin off a
-// Fenix guide. The shared state machine remains courier-agnostic:
+// Swayp guide. The shared state machine remains courier-agnostic:
 //
 //   pendiente → (confirma) → en_ruta → (entregado) → entregado
 //        │                      │
@@ -11,7 +11,7 @@
 //
 // A new guide is `pendiente` (sub-state = intento via reroute_attempts) unless
 // the report already says ENTREGADO. The `pendiente` queue is split in the UI by
-// `fenix_eligible` (only guides with Fenix stock in their city are worked).
+// `fenix_eligible` (only guides with Swayp stock in their city are worked).
 
 export type ShipmentCategory = "pending" | "in_route" | "delivered" | "closed" | "transferred";
 
@@ -23,7 +23,7 @@ export type ShipmentCategory = "pending" | "in_route" | "delivered" | "closed" |
  * pero la cola de Repro Provincia no preguntaba de cuál venían: filtraba por
  * tienda y por categoría, y listaba lo que quedara. Así, de 2255 pendientes,
  * 255 eran de Shalom. El caso que lo destapó: una guía de Shalom en Arequipa
- * a la que la pantalla le ofrecía «Fenix Ok» — proponer una ruta para un
+ * a la que la pantalla le ofrecía «Swayp Ok» — proponer una ruta para un
  * paquete que ya está esperando en el mostrador de la agencia.
  *
  * QUÉ SE VA. Shalom es AGENCIA: la clienta recoge en el terminal, no hay
@@ -54,7 +54,7 @@ export function perteneceARepro(courier: string | null | undefined): boolean {
  * recién preparada no tiene nada que reprogramar: el paquete sigue en casa y el
  * intento ni se ha hecho. Aparecían 92 así entre las pendientes —89 sin un solo
  * intento, creadas ese mismo día— mezcladas con el trabajo real, y la pantalla
- * les ofrecía ruta Fenix como a cualquier otra.
+ * les ofrecía ruta Swayp como a cualquier otra.
  *
  * EL CRITERIO ES LA CUSTODIA, NO EL CONTADOR DE INTENTOS. `custody_state` es un
  * hecho que Aliclik acredita con su propio cotejo (§6.2): `TO_PREPARE` y
@@ -66,7 +66,7 @@ export function perteneceARepro(courier: string | null | undefined): boolean {
  * courier sin intentos informados: con la custodia se quedan, que es lo correcto.
  *
  * SOLO APLICA A ALICLIK. Las `por_definir` —pedidos sin salida todavía— y las
- * guías Fenix pendientes también están en custodia `empresa`, pero sacarlas es
+ * guías Swayp pendientes también están en custodia `empresa`, pero sacarlas es
  * otra decisión y no está tomada (§11).
  */
 export function esperaSalidaDeAliclik(
@@ -113,8 +113,8 @@ export const DELIVERY_STATUSES: DeliveryStatusDef[] = [
   { code: "en_ruta", label: "En ruta", category: "in_route", callable: true, terminal: false },
   { code: "entregado", label: "Entregado", category: "delivered", callable: false, terminal: true },
   { code: "anulado", label: "Anulado", category: "closed", callable: false, terminal: true },
-  // Set on the Aliclik "parent" guide when a Fenix sub-guide is created for it — the
-  // Fenix guide becomes the active shipment going forward, so the parent freezes here
+  // Set on the Aliclik "parent" guide when a Swayp sub-guide is created for it — the
+  // Swayp guide becomes the active shipment going forward, so the parent freezes here
   // instead of staying duplicated in the same active tabs as its child.
   { code: "transferido", label: "Transferido", category: "transferred", callable: false, terminal: true },
 ];
@@ -140,7 +140,7 @@ export function isValidStatus(code: string): boolean {
   return BY_CODE.has(code);
 }
 
-/** Whether a status is in the managed "Pendiente" bucket (evaluated for Fenix). */
+/** Whether a status is in the managed "Pendiente" bucket (evaluated for Swayp). */
 export function isPending(code: string): boolean {
   return categoryOf(code) === "pending";
 }
@@ -167,7 +167,7 @@ export function statusSince(
 /** Sub-state label of a pending shipment, derived from its intento counter. */
 export function attemptLabel(attempts: number | null | undefined): string {
   const n = attempts ?? 0;
-  if (n <= 0) return "Ingestión";
+  if (n <= 0) return "Sin llamar";
   return `Intento ${Math.min(n, MAX_INTENTOS)}`;
 }
 
@@ -227,7 +227,7 @@ export type AliclikRouteFilter = "all" | "aliclik_available" | "fenix_required";
  * Aliclik permits a reprogramming only for guides dated from the most recent
  * Saturday through today, and only while its own report shows fewer than three
  * delivery attempts. On Saturday the window resets, so older guides move to
- * Fenix. Missing source data fails closed; the UI still offers an audited
+ * Swayp. Missing source data fails closed; the UI still offers an audited
  * manual override for exceptional cases.
  */
 export function evaluateAliclikReschedule(
@@ -288,13 +288,13 @@ export function matchesAliclikRouteFilter(
 }
 
 /** Los dos `reroute_outcome` que marcan una reprogramación hecha con Aliclik
- *  (la misma guía sigue en curso; no se genera una guía hija Fénix). */
+ *  (la misma guía sigue en curso; no se genera una guía hija Swayp). */
 export const ALICLIK_REPROGRAM_OUTCOMES = ["reprogramado_aliclik", "reprogramado_aliclik_manual"];
 
 export type ReprogramCourier = "fenix" | "aliclik";
 
 /** Con qué courier se reprogramó una guía — insumo del filtro "En ruta":
- *  Fénix → se generó una guía hija (`courier='fenix'`); Aliclik → la misma guía
+ *  Swayp → se generó una guía hija (`courier='fenix'`); Aliclik → la misma guía
  *  quedó con un `reroute_outcome` de reprogramación Aliclik. `null` = ni una ni
  *  otra (p. ej. una guía que pasó a En ruta sin reprogramación registrada). */
 export function reprogramCourierOf(input: {
@@ -384,12 +384,12 @@ function stripAccents(s: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// City normalization for Fenix coverage. Collapses "Juliaca/Puno", accents and
+// City normalization for Swayp coverage. Collapses "Juliaca/Puno", accents and
 // casing to coverage keys. Real gating uses the fenix_stock table; FENIX_CITIES
 // is just the known coverage set (extensible later).
 // ---------------------------------------------------------------------------
 
-// El orden importa dos veces: es el del desplegable de Stock Fenix y es el que
+// El orden importa dos veces: es el del desplegable de Stock Swayp y es el que
 // `normalizeCity` recorre para quedarse con el PRIMER token que encuentre. Por
 // eso `juliaca` va antes que `puno` —«Juliaca/Puno» tiene que resolver a
 // juliaca— y por eso las ciudades nuevas se agregan al final: cualquier otro
@@ -408,12 +408,12 @@ export const FENIX_CITIES = [
 ];
 
 /**
- * Localidades que Fenix SÍ atiende pero desde el almacén de otra ciudad.
+ * Localidades que Swayp SÍ atiende pero desde el almacén de otra ciudad.
  *
  * No son ciudades de `FENIX_CITIES` —no hay stock propio ahí— sino destinos que
  * el reparto cubre desde el almacén al que apuntan. Sin esta tabla el envío cae
  * a su propia clave (`chupaca`), que no existe en `fenix_stock`, y la guía sale
- * como «Fuera de cobertura» aunque Fenix llegue perfectamente: el almacén que la
+ * como «Fuera de cobertura» aunque Swayp llegue perfectamente: el almacén que la
  * atiende está en la lista, pero nada lo conectaba con el destino.
  *
  * La ciudad VISIBLE no se toca: el paquete va a Chupaca, no a Huancayo. Esto
@@ -423,7 +423,7 @@ export const FENIX_CITIES = [
  * que se muda aquí. Diferencia: `puno` además está en `FENIX_CITIES`, mientras
  * que las localidades nuevas solo existen como alias.
  *
- * Para ampliarla hace falta saber qué reparte Fenix desde cada almacén; no se
+ * Para ampliarla hace falta saber qué reparte Swayp desde cada almacén; no se
  * deduce de la distancia. Confirmado con la operación (2026-08-15): Jauja,
  * Chepén y Chala NO tienen cobertura, pese a estar cerca de un almacén.
  */
@@ -462,7 +462,7 @@ export function fenixWarehouseKey(city: string | null | undefined): string {
   return FENIX_CITY_ALIASES[normalized] ?? normalized;
 }
 
-/** Is this (normalized) city in the Fenix coverage set? */
+/** Is this (normalized) city in the Swayp coverage set? */
 export function isFenixCity(city: string | null | undefined): boolean {
   return FENIX_CITIES.includes(fenixWarehouseKey(city));
 }
@@ -470,7 +470,7 @@ export function isFenixCity(city: string | null | undefined): boolean {
 /**
  * Coverage key of a destination given its raw address parts, the same rule the
  * Aliclik import and the address editor apply: scan the combined
- * distrito + provincia/departamento label for a known Fenix city token; when
+ * distrito + provincia/departamento label for a known Swayp city token; when
  * none is present fall back to the normalized district (an uncovered key).
  * In Shopify's Peru convention `district` = shippingAddress.city and
  * `province` = shippingAddress.province (departamento). Pure.
@@ -488,7 +488,7 @@ export function deriveFenixCoverageCity(
  * en Shopify? El Excel de Aliclik manda sobre `city`/`district` del envío, pero
  * la fuente de verdad de a dónde va el paquete es la dirección de Shopify. Si el
  * courier dice "cusco" y Shopify dice "Juliaca · Puno", el envío sale a la ciudad
- * equivocada — y la cobertura Fenix se decide con el dato malo.
+ * equivocada — y la cobertura Swayp se decide con el dato malo.
  *
  * Se compara la CLAVE DE COBERTURA de cada lado, no el texto crudo, para no
  * gritar por diferencias de forma: "Wanchaq" + "Cusco" y "cusco" dan la misma
@@ -506,7 +506,7 @@ export function localityMismatch(
   return !courier.includes(shopify) && !shopify.includes(courier);
 }
 
-// The specific districts Fenix serves within each covered city. Used to
+// The specific districts Swayp serves within each covered city. Used to
 // pre-select the district filter by default (the "routable" districts). City
 // (cercado) forms are stored bare so a district cell of just "Arequipa" matches.
 export const FENIX_DISTRICTS = [
@@ -528,7 +528,7 @@ export function normalizeDistrict(raw: string | null | undefined): string {
   return stripAccents(String(raw).trim().toLowerCase()).replace(/\s+/g, " ");
 }
 
-/** Whether a district is in the Fenix-served set (tolerant: handles "(cercado)"
+/** Whether a district is in the Swayp-served set (tolerant: handles "(cercado)"
  *  and longer official names like "… y Rivero"). */
 export function isFenixDistrict(raw: string | null | undefined): boolean {
   const d = normalizeDistrict(raw);
@@ -574,7 +574,7 @@ function belongsToDistrictGroup(district: string, group: string[]): boolean {
   );
 }
 
-/** Operational delivery hours supplied by Fenix. District takes precedence in
+/** Operational delivery hours supplied by Swayp. District takes precedence in
  * cities whose schedule changes within the same province. */
 export function getFenixDeliverySchedule(
   city: string | null | undefined,
@@ -617,22 +617,27 @@ export function getFenixDeliverySchedule(
 // Gestión decision flow — up to 7 call attempts ("intentos") in Pendiente.
 //
 //   Pendiente:  no_contesta → Intento N+1 ; en el 7º sin respuesta → Anulado
-//               confirma    → En ruta (sale a reparto Fenix, mismo intento)
-//               cancela     → Anulado ; entregado → Entregado (por Fenix)
-//   En ruta:    entregado   → Entregado (Fenix)
-//               no_contesta → vuelve a Pendiente al mismo intento
+//               confirma    → En ruta (sale a reparto Swayp, mismo intento)
 //               cancela     → Anulado
+//   En ruta:    no_contesta → vuelve a Pendiente al mismo intento
+//               cancela     → Anulado
+//
+// UNA SOLA PUERTA A «ENTREGADO». La llamada de gestión NO cierra guías como
+// entregadas: eso lo dice el courier —«Registrar resultado del courier» para
+// Swayp (`courierReportTransition`), la API o el Excel para Aliclik—. Hasta
+// el 12-09-2026 existía la disposición «Entregado (Swayp)» aquí, y era una
+// segunda forma de cerrar una guía que el courier no había cerrado, incluso
+// una que nunca salió del almacén.
 // ---------------------------------------------------------------------------
 
 export const MAX_INTENTOS = 7;
 
 /** The disposition an agent records at the end of a gestión call. */
 export type RerouteDisposition =
-  | "confirma" // customer confirmed → goes out with Fenix (en_ruta)
+  | "confirma" // customer confirmed → goes out with Swayp (en_ruta)
   | "programar" // customer asks for a later call; keep state + intento
   | "no_contesta" // no answer
-  | "cancela" // customer cancels / refuses → anulado
-  | "entregado"; // delivery confirmed (por Fenix)
+  | "cancela"; // customer cancels / refuses → anulado
 
 export interface ShipmentTransition {
   status: string; // the delivery_status to set
@@ -653,12 +658,10 @@ export function nextShipmentTransition(
 ): ShipmentTransition {
   const inRoute = current === "en_ruta";
   switch (disposition) {
-    case "entregado":
-      return { status: "entregado", attempts, deliveredSource: "fenix", closed: true };
     case "cancela":
       return { status: "anulado", attempts, deliveredSource: null, closed: true };
     case "confirma":
-      // customer accepts → out for delivery with Fenix (keep the intento reached)
+      // customer accepts → out for delivery with Swayp (keep the intento reached)
       return { status: "en_ruta", attempts, deliveredSource: null, closed: false };
     case "programar":
       // A real contact that only schedules the next conversation. Do not make
@@ -667,7 +670,7 @@ export function nextShipmentTransition(
     case "no_contesta":
     default:
       if (inRoute) {
-        // Fenix couldn't reach them → back to the queue at the SAME intento
+        // Swayp couldn't reach them → back to the queue at the SAME intento
         return { status: "pendiente", attempts, deliveredSource: null, closed: false };
       }
       // pending: advance the intento; failing past intento 7 gives up → anulado
@@ -682,7 +685,7 @@ export function nextShipmentTransition(
 }
 
 // ---------------------------------------------------------------------------
-// Resultado del reporte Fenix — traduce lo que informa el courier a nuestros
+// Resultado del reporte Swayp — traduce lo que informa el courier a nuestros
 // estados internos. La asesora nunca debe elegir directamente `transferido`:
 // ese estado se reserva para la guía anterior cuando el sistema crea una hija.
 // ---------------------------------------------------------------------------
@@ -692,7 +695,7 @@ export const COURIER_REPORT_RESULTS = [
     code: "entregado",
     label: "Entregado",
     optionLabel: "Entregado — cerrar la guía",
-    effect: "La guía quedará cerrada como Entregada por Fenix.",
+    effect: "La guía quedará cerrada como Entregada por Swayp.",
     resultingStatus: "entregado",
     requiresDate: false,
     requiresNote: false,
@@ -708,7 +711,7 @@ export const COURIER_REPORT_RESULTS = [
   },
   {
     code: "reprogramado",
-    label: "Reprogramado por Fenix",
+    label: "Reprogramado por Swayp",
     optionLabel: "Reprogramado — indicar nueva fecha",
     effect: "La guía continuará En ruta con una nueva fecha de entrega.",
     resultingStatus: "en_ruta",
@@ -737,7 +740,7 @@ export const COURIER_REPORT_RESULTS = [
 
 export type CourierReportResult = (typeof COURIER_REPORT_RESULTS)[number]["code"];
 
-/** An active Fenix dispatch must receive the motorizado/courier outcome before
+/** An active Swayp dispatch must receive the motorizado/courier outcome before
  * the customer-management flow can create another reprogramming. */
 export function shipmentRequiresCourierResult(
   courier: string | null | undefined,
@@ -755,7 +758,7 @@ export interface CourierReportTransition {
 }
 
 /** Pure transition used by the individual report-entry flow. It deliberately
- * allows a courier correction to reopen an incorrectly closed Fenix guide
+ * allows a courier correction to reopen an incorrectly closed Swayp guide
  * (e.g. Anulado → No contesta → Pendiente), while `transferido` is blocked by
  * the server action because its active result belongs on the child guide. */
 export function courierReportTransition(result: CourierReportResult): CourierReportTransition {
@@ -830,7 +833,7 @@ export function isClaimActive(
 // `anulado` (CANCELADO/ANULADO/RECHAZADO/DEVUELTO) o `entregado`. La precedencia
 // sigue protegiendo el trabajo del equipo: un terminal (entregado/anulado) manda
 // y nunca se reabre por un reporte posterior, y `en_ruta` no puede regresar a
-// `pendiente`. La guía madre transferida a una hija Fénix queda en `transferido`
+// `pendiente`. La guía madre transferida a una hija Swayp queda en `transferido`
 // (rango máximo), a salvo de un CANCELADO tardío de Aliclik.
 // ---------------------------------------------------------------------------
 
@@ -1040,7 +1043,7 @@ export function maxDeliveryDate(
 }
 
 /**
- * Suggest a Fenix guide code from the linked Shopify order + today's date
+ * Suggest a Swayp guide code from the linked Shopify order + today's date
  * (DDMMYYYY), e.g. order "#KP118847" on 2026-07-01 → "#KP11884701072026".
  * Just a starting point the operator can edit before creating the guide —
  * `now` is injectable for tests.
@@ -1055,7 +1058,7 @@ export function autoFenixGuideCode(orderName: string | null | undefined, now: Da
 
 /**
  * Guide code for a confirmed re-dispatch (reprogramación). Each confirmed
- * reprogramación must produce a NEW, unique Fenix guide — Fenix rejects
+ * reprogramación must produce a NEW, unique Swayp guide — Swayp rejects
  * re-uploading a guide code it has already seen — so the code carries the
  * reprogramación date (DDMMYYYY) to disambiguate successive dispatches of the
  * same order.
@@ -1064,7 +1067,7 @@ export function autoFenixGuideCode(orderName: string | null | undefined, now: Da
  * by the client as UTC midnight). We read its UTC calendar day so the code
  * reflects the date the operator chose regardless of the server's timezone. When
  * no date is picked, falls back to `now`. Empty string when there's no order name
- * (the caller then keeps the manual "Generar guía Fenix" path). Pure.
+ * (the caller then keeps the manual "Generar guía Swayp" path). Pure.
  */
 /**
  * El N° de pedido del envío, cayendo al del pedido enlazado cuando la copia
@@ -1074,7 +1077,7 @@ export function autoFenixGuideCode(orderName: string | null | undefined, now: Da
  * `orders.name`, y hay 601 envíos vinculados donde la copia quedó vacía aunque
  * el enlace existe. Se ve raro en pantalla —el cajón muestra los productos del
  * pedido y a la vez dice "Pedido —"— pero lo caro es que **189 de ellos están
- * anulados y no se pueden reprogramar**, porque la guía Fenix se autogenera a
+ * anulados y no se pueden reprogramar**, porque la guía Swayp se autogenera a
  * partir del número y el generador leía solo la copia.
  *
  * NO ES UNA SEGUNDA DEFINICIÓN: `orders.name` es la fuente de verdad y la copia
@@ -1116,7 +1119,7 @@ export function rescheduleGuideCode(
 // ── Productividad del día por asesora (Repro Provincia) ──────────────────────
 // Snapshot de fin de día: cuánto gestionó hoy cada persona en el módulo, para
 // que puedan mandar una "foto" de su trabajo. Se arma desde shipment_calls del
-// día (hora Lima). Los dos caminos de reprogramación (Aliclik y Fénix) registran
+// día (hora Lima). Los dos caminos de reprogramación (Aliclik y Swayp) registran
 // kind='reroute'; las demás disposiciones (no contesta, cancela, programar)
 // registran kind='call'. Gestiones = ambas; Reprogramadas = solo las reroute.
 
@@ -1173,9 +1176,9 @@ export function aggregateReproDay(calls: ReproDayCall[]): ReproDayAgentCount[] {
     );
 }
 
-// ── Métricas de reprogramación (guías Fénix hijas creadas desde el dashboard) ─
+// ── Métricas de reprogramación (guías Swayp hijas creadas desde el dashboard) ─
 // El universo es EXACTO por construcción: cada reprogramación confirmada en el
-// dashboard genera una guía Fénix nueva vinculada a la guía Aliclik original
+// dashboard genera una guía Swayp nueva vinculada a la guía Aliclik original
 // (fenix_shipment_id) — las entregas de primer intento de Aliclik no entran.
 // "En curso" es el RESTO (todo lo que no cerró en entregado/anulado): cubre
 // pendiente, en_ruta, transferido, por_preparar y cualquier estado futuro sin
@@ -1189,16 +1192,16 @@ export interface ReprogramChildRow {
   createdAt: string | null; // cuándo se confirmó la reprogramación
   status: string; // delivery_status actual de la guía
   agent?: string | null; // user id de quien confirmó la reprogramación (null = histórico sin log)
-  fenix?: boolean; // true (o ausente) = guía Fénix; false = reprogramación Aliclik
+  fenix?: boolean; // true (o ausente) = guía Swayp; false = reprogramación Aliclik
 }
 
 /** Clave del asesor no atribuible (guías previas a que se registrara el agente). */
 export const REPROGRAM_UNASSIGNED = "sin_asignar";
 
 export interface ReprogramCounts {
-  total: number; // reprogramaciones confirmadas (Aliclik + Fénix)
+  total: number; // reprogramaciones confirmadas (Aliclik + Swayp)
   entregados: number; // entregados de ambos couriers
-  entregadosFenix: number; // de `entregados`, los que salieron por una guía Fénix (dato aparte)
+  entregadosFenix: number; // de `entregados`, los que salieron por una guía Swayp (dato aparte)
   anulados: number;
   enCurso: number; // resto: aún sin desenlace
   enCursoViejos: number; // en curso hace más de REPROGRAM_STALE_DAYS días (probables muertos)
