@@ -1,5 +1,5 @@
 /* Scoped to the courier: operational actions never live beyond a phone's edge. */
-@media (max-width: 767px) {
+@media (max-width: 1023px) {
   .board { min-width: 0; }
   .board button, .board select { min-height: 48px; }
   .board input:not([type="checkbox"]) { min-height: 48px; font-size: 1rem; }

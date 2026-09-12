@@ -117,7 +117,7 @@ export function GrupoGfCourierBoard({
         </div></details>
       </header>
 
-      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-4 gap-1 border-b border-slate-200 sm:flex">
+      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-4 gap-1 border-b border-slate-200 lg:flex">
         <CourierTab
           active={tab === "available"}
           onClick={() => setTab("available")}
@@ -212,11 +212,11 @@ function CourierTab({
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "relative flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 px-1 py-2 text-xs font-semibold sm:flex-row sm:px-3 sm:text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
+        "relative flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 px-1 py-2 text-xs font-semibold lg:flex-row lg:px-3 lg:text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
         active ? "text-brand-700" : "text-slate-500 hover:text-slate-800",
       )}
     >
-      <span className={shortLabel ? "hidden sm:inline" : ""}>{label}</span>{shortLabel && <span className="sm:hidden">{shortLabel}</span>}
+      <span className={shortLabel ? "hidden lg:inline" : ""}>{label}</span>{shortLabel && <span className="lg:hidden">{shortLabel}</span>}
       {count != null && (
         <span className={cn(
           "rounded-full px-1.5 py-0.5 text-xs tabular-nums sm:ml-1",
@@ -386,7 +386,7 @@ function AvailableOrders({
       </p>
 
       {selected.size > 0 && (
-        <div className="relative z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 shadow-sm">
+        <div className="relative z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 shadow-sm lg:sticky lg:top-3">
           <p className="text-sm font-semibold text-brand-950">
             {selected.size} pedido{selected.size === 1 ? "" : "s"} seleccionado{selected.size === 1 ? "" : "s"}
           </p>
@@ -820,7 +820,7 @@ function CourierRoutes({
         )}
       </div>
 
-      <div className="space-y-3 md:hidden" aria-label="Cajas operativas">
+      <div className="space-y-3 lg:hidden" aria-label="Cajas operativas">
         {routes.map((route) => <article key={route.manifestId} className="rounded-xl border border-slate-200 bg-white p-4">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div><h3 className="text-base font-semibold text-slate-950">{route.riderName}</h3><p className="mt-1 text-sm text-slate-600">{formatDate(route.routeDate)} · Carga {route.loadNumber ?? 1}</p></div>
@@ -840,7 +840,7 @@ function CourierRoutes({
         </article>)}
         {!routes.length && <p className="rounded-xl border border-dashed border-slate-300 p-5 text-sm text-slate-600">Todavía no hay rutas. Asigna pedidos a un motorizado desde Pedidos tomados.</p>}
       </div>
-      <div className={cn(TABLE_WRAP_FROM[980], "hidden rounded-xl border border-slate-200 bg-white shadow-sm md:block")}>
+      <div className={cn(TABLE_WRAP_FROM[980], "hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:block")}>
         <table className="w-full min-w-[980px] text-sm">
           <thead className={STICKY_HEAD}>
             <tr className="text-left text-xs text-slate-500">
