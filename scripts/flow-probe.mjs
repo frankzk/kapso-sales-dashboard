@@ -1,5 +1,34 @@
 // Sonda de la API de Flow.cl — se corre EN TU MÁQUINA, no en el servidor.
 //
+// LO QUE YA RESPONDIÓ (12-09-2026, cuenta «Aurela Kenku», producción).
+// Esto es el resultado, no la hipótesis. Si vuelves a dudar, no hace falta
+// correrla otra vez:
+//
+//   · El medio 170 es «Pago con Yape One Shot» —confirmado en el HTML del
+//     checkout: data-id="170", alt="Yape One Shot"—. El 152 es «Pago con
+//     YAPE», la integración antigua, y cuesta 0.80 fijo de más por cobro. Son
+//     indistinguibles en el panel; solo el checkout les pone nombre.
+//   · El flujo del 170 EN MÓVIL es: abrir el link → botón «Solicitar
+//     aprobación» → se abre la app Yape con «¿Deseas aprobar el yapeo?», el
+//     monto y el botón «Yapear». Sin teclear teléfono, sin código de 6
+//     dígitos, sin QR.
+//   · El 152 pide teléfono y código en un formulario. El 169 (QR
+//     interoperable) enseña un QR, inservible desde el propio móvil.
+//   · La firma HMAC está validada contra la API REAL, no solo contra el
+//     ejemplo del spec: Flow verifica el HMAC en cuanto encuentra la apiKey.
+//   · Una sola cuenta de Flow para las dos marcas (el checkout dice «Aurela
+//     Kenku»). Las credenciales van a variable de entorno, no a ajustes por
+//     tienda: la misma llave duplicada en dos filas se rota en una y se olvida
+//     en la otra.
+//
+// LO QUE SIGUE SIN SABERSE: el monto mínimo de Yape One Shot. Con S/ 1 el
+// checkout responde «El servicio de pago no está disponible en este momento»
+// y con S/ 20 funciona, pero en esa prueba cambiaron DOS cosas a la vez —el
+// monto y el dispositivo (escritorio → móvil)—, así que no está aislado cuál
+// de los dos mandaba. Importa porque `lib/adelanto-minimo.ts` dice que su
+// número es «negociable por naturaleza»: si el adelanto vuelve a bajar, esto
+// hay que medirlo antes, no después.
+//
 // PARA QUÉ. Antes de construir el cobro del adelanto por link hay UNA pregunta
 // que ninguna documentación responde: cuando el pagador abre el checkout de
 // Flow con Yape como medio, ¿Flow lo manda a la app por deeplink —un tap y
