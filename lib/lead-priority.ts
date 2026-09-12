@@ -115,6 +115,79 @@ const WEIGHTS_BY_STORE: Record<string, SegmentWeights> = {
 // fresco (16) pasa a un carrito de 6-24h (11) —medido: 27,6% contra 24,9%, sí—
 // y en Aurela NO lo pasa (11 contra 12) —medido: 17,0% contra 19,9%, tampoco—.
 // El orden que producen los pesos coincide con el orden medido en las dos.
+//
+// `converso` Y `frio` TAMBIÉN DECAEN (2026-09-12). Hasta acá no tenían tramos, y
+// eso no era una decisión sino un hueco: sin tramos el peso es plano, no hay bono
+// de ticket y el desgaste diario corre sobre `last_interaction_at` —que NO es la
+// edad del lead y que el 23,5% de la cola tiene puesto en hoy—, así que los 1.245
+// fríos «sin llamar» puntuaban EXACTAMENTE IGUAL. Empatados todos, el orden lo
+// decidía el desempate por vencimiento, que pone al más viejo primero: en la
+// pantalla salía un lead de 39 días por delante del de esta mañana. El desempate
+// está bien para un carrito, que vence; en un balde sin tramos no vence nada y
+// ese criterio no significa nada.
+//
+// Medido con el mismo método (60 días, solo los que se llamaron, por horas hasta
+// la PRIMERA llamada):
+//
+//              converso            frio
+//            Aurela  Kenku     Aurela  Kenku
+//   < 1 h      3,45   7,09       0,00   2,49
+//   1–6 h      2,46   2,94       0,64   1,48
+//   6–24 h     1,50   2,65       0,26   1,05
+//   +1 día     0,35   1,85       0,48   1,15
+//
+// `converso` es sólido: juntando tiendas, 6,43% antes de la hora contra 2,00%
+// después (z = 5,3). `frio` apunta al mismo lado y NO es concluyente: 1,72%
+// contra 0,72%, z = 1,8, p ≈ 0,07. Se le ponen tramos igual porque el hueco
+// actual no es «plano», es «empatado», y un empate lo resuelve hoy un criterio
+// que apunta al revés de la única evidencia que hay.
+//
+// El sesgo del balde juega A FAVOR, no en contra: el segmento se calcula con el
+// estado de HOY, así que el frío o el conversó al que la llamada le funcionó
+// normalmente salió del balde. Eso APLANA el gradiente; encontrarlo igual es
+// conservador.
+//
+// NORMALIZADOS POR EL MEJOR TRAMO, no por el promedio del balde. Los de `carrito`
+// e `interes` se hicieron contra el promedio, que reparte hacia arriba y hacia
+// abajo; acá eso SUBIRÍA al conversó fresco por encima de segmentos que lo ganan
+// medidos (Kenku: conversó <1h 7,09% contra `interes` de 6-24h 9,30%). Contra el
+// mejor tramo, el más fresco conserva el peso plano que el balde ya tenía y los
+// demás bajan: nadie sube de sitio, y los que estaban de más caen a donde la
+// medición los pone. Los tramos que la muestra no separa comparten peso (Kenku
+// frío 6-24h y +1d: 1,05% contra 1,15%; conversó 1-6h y 6-24h: 2,94% contra
+// 2,65%), porque partirlos sería inventar la diferencia.
+//
+// Control, en Kenku: un frío recién llegado (1) pasa a un conversó de más de un
+// día (0,9) —medido 2,49% contra 1,85%, sí— y NO pasa a uno de 1-6h (1,5)
+// —medido 2,49% contra 2,94%, tampoco—.
+//
+// AURELA FRÍO SE QUEDA SIN TRAMOS a propósito: son 5 cierres en 1.274 llamadas y
+// el tramo de <1h tiene CERO. No hay gradiente que copiar, y su peso plano ya es
+// 0, así que el balde está al fondo de la cola de todas formas. Su orden interno
+// sigue siendo el del desempate; cuando haya muestra se mide y se pone.
+//
+// DENTRO DE «+1 DÍA» NO SE PARTE MÁS, y esto es lo que hay que leer antes de
+// volver a tocar esto. La queja que originó el cambio era ver, en «Frío», un lead
+// de 8 días por delante de uno de 2; los dos están en «+1 día» y ahí siguen, uno
+// al lado del otro. Se midió si se podían separar (90 días, los dos baldes):
+//
+//              converso        frio
+//   1–3 días    2,11 (665)    1,15 (608)
+//   3–7 días    2,12 (660)    0,58 (866)
+//   +7 días    15,15  (33)    6,90  (29)
+//
+// 1-3 y 3-7 son indistinguibles. Y el salto de «+7 días» NO es señal: son 33 y 29
+// llamadas, y un lead de más de una semana que alguien decide llamar no es un
+// lead cualquiera —lo eligieron a mano, o el cliente volvió a escribir—. Es
+// selección, y codificarla pondría lo más muerto de la cola en cabeza.
+//
+// Así que dentro de «+1 día» los leads empatan de verdad, y el desempate por
+// vencimiento los deja en FIFO: primero el que lleva más esperando. A tasa de
+// cierre igual eso no cuesta nada y acota cuánto puede esperar un lead, en vez de
+// dejar que el fondo de la cola se pudra. Lo que sí estaba mal —y es lo que esto
+// arregla— era que un lead de 40 minutos EMPATARA con uno de 8 días y perdiera el
+// desempate. Medido en la cola real de Kenku al aplicarlo: el frío más fresco
+// pasa de la posición 213 a la 1.
 const WEIGHT_BY_AGE: Record<string, Partial<Record<LeadSegment, AgeTier[]>>> = {
   aurela: {
     carrito: [
@@ -129,6 +202,14 @@ const WEIGHT_BY_AGE: Record<string, Partial<Record<LeadSegment, AgeTier[]>>> = {
       { maxHours: 24, weight: 4 },
       { maxHours: Infinity, weight: 3 },
     ],
+    // 2,9 y no 3 para que el `interes` de más de un día (3) le siga ganando:
+    // medido, 6,37% contra 3,45%.
+    converso: [
+      { maxHours: 1, weight: 2.9 },
+      { maxHours: 6, weight: 1.6 },
+      { maxHours: 24, weight: 1.6 },
+      { maxHours: Infinity, weight: 0.3 },
+    ],
   },
   "kenku peru": {
     carrito: [
@@ -142,6 +223,20 @@ const WEIGHT_BY_AGE: Record<string, Partial<Record<LeadSegment, AgeTier[]>>> = {
       { maxHours: 6, weight: 9 },
       { maxHours: 24, weight: 8 },
       { maxHours: Infinity, weight: 3 },
+    ],
+    converso: [
+      { maxHours: 1, weight: 4 },
+      { maxHours: 6, weight: 1.5 },
+      { maxHours: 24, weight: 1.5 },
+      // 0,9 y no 1 para que un frío recién llegado (1) le pase: medido, 2,49%
+      // contra 1,85%.
+      { maxHours: Infinity, weight: 0.9 },
+    ],
+    frio: [
+      { maxHours: 1, weight: 1 },
+      { maxHours: 6, weight: 0.6 },
+      { maxHours: 24, weight: 0.45 },
+      { maxHours: Infinity, weight: 0.45 },
     ],
   },
 };

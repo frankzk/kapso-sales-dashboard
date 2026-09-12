@@ -179,17 +179,121 @@ describe("carrito: el peso decae por HORAS", () => {
     expect(deHoras).toBeCloseTo(8, 0); // tramo 6-24h
   });
 
-  // Conversó y frío SÍ siguen planos: no se midieron por tramos, y sin medición
-  // no se inventa la curva. Ese es el contrato de weightForAge — un segmento sin
-  // tabla usa su peso plano, no una interpolación.
-  it("conversó y frío no decaen por horas: no hay tramos medidos", () => {
-    for (const señales of [{ inbound_count: 3 }, {}]) {
-      const fresco = leadPriorityScore({ ...señales, first_seen_at: hoursAgo(0.2) }, KENKU, NOW);
-      const deHoras = leadPriorityScore({ ...señales, first_seen_at: hoursAgo(12) }, KENKU, NOW);
-      // Solo el desgaste diario general (~0,1 en 12 h), nada parecido al escalón
-      // del carrito, que en el mismo lapso pierde 13 puntos.
-      expect(Math.abs(fresco - deHoras)).toBeLessThan(0.2);
-    }
+  // CONVERSÓ Y FRÍO TAMBIÉN DECAEN (2026-09-12). Antes este test afirmaba lo
+  // contrario, y no porque se hubiera medido que no: es que no se había medido.
+  // Sin tramos el peso es plano, no hay bono de ticket y el desgaste diario corre
+  // sobre `last_interaction_at` —que no es la edad del lead—, así que los 1.245
+  // fríos «sin llamar» puntuaban EXACTAMENTE IGUAL y el orden lo terminaba
+  // decidiendo el desempate por vencimiento: el más viejo primero, uno de 39 días
+  // por delante del de esa mañana. Medido, es al revés.
+  it("conversó pierde peso al pasar la primera hora, en las DOS tiendas", () => {
+    const fresco = leadPriorityScore({ inbound_count: 3, first_seen_at: hoursAgo(0.2) }, KENKU, NOW);
+    const deHoras = leadPriorityScore({ inbound_count: 3, first_seen_at: hoursAgo(12) }, KENKU, NOW);
+    expect(fresco).toBeGreaterThan(deHoras);
+    expect(fresco).toBeCloseTo(4, 1); // tramo <1h de Kenku
+    expect(deHoras).toBeCloseTo(1.5, 1); // tramo 6-24h
+    // Aurela con su propia escala: 3,45% en la primera hora contra 1,80% después.
+    // La caída es del mismo signo en las dos, que es lo que sostiene la regla.
+    const frescoA = leadPriorityScore({ inbound_count: 3, first_seen_at: hoursAgo(0.2) }, AURELA, NOW);
+    const deHorasA = leadPriorityScore({ inbound_count: 3, first_seen_at: hoursAgo(3) }, AURELA, NOW);
+    expect(frescoA).toBeGreaterThan(deHorasA * 1.5);
+  });
+
+  it("frío también, en la tienda donde hay muestra", () => {
+    const fresco = leadPriorityScore({ first_seen_at: hoursAgo(0.2) }, KENKU, NOW);
+    const deHoras = leadPriorityScore({ first_seen_at: hoursAgo(12) }, KENKU, NOW);
+    expect(fresco).toBeGreaterThan(deHoras);
+    expect(fresco).toBeCloseTo(1, 1);
+    expect(deHoras).toBeCloseTo(0.45, 2);
+  });
+
+  // El control de que no se pasó de rosca, del lado de abajo de la escala: un
+  // frío recién llegado (2,49%) SÍ pasa a un conversó de más de un día (1,85%) y
+  // NO pasa a uno de 1-6h (2,94%). Es la comparación que obligó a bajar el último
+  // tramo de conversó a 0,9 en vez de dejarlo en 1.
+  it("un frío recién llegado pasa a un conversó de días, pero no a uno de horas", () => {
+    const frioFresco = leadPriorityScore({ first_seen_at: hoursAgo(0.2) }, KENKU, NOW);
+    const conversoViejo = leadPriorityScore(
+      { inbound_count: 3, first_seen_at: hoursAgo(72), last_interaction_at: hoursAgo(0.2) },
+      KENKU,
+      NOW,
+    );
+    const conversoDeHoras = leadPriorityScore(
+      { inbound_count: 3, first_seen_at: hoursAgo(3) },
+      KENKU,
+      NOW,
+    );
+    expect(frioFresco).toBeGreaterThan(conversoViejo);
+    expect(frioFresco).toBeLessThan(conversoDeHoras);
+  });
+
+  // LOS TRAMOS QUE LA MUESTRA NO SEPARA COMPARTEN PESO, y eso es una decisión,
+  // no un descuido: partirlos sería inventar la diferencia. Frío de Kenku 6-24h
+  // contra +1d: 1,05% y 1,15%. Conversó 1-6h contra 6-24h: 2,94% y 2,65%.
+  it("los tramos indistinguibles pesan igual, no se parten por si acaso", () => {
+    const mismaFrescura = { last_interaction_at: hoursAgo(1) };
+    const frio12 = leadPriorityScore({ ...mismaFrescura, first_seen_at: hoursAgo(12) }, KENKU, NOW);
+    const frio48 = leadPriorityScore({ ...mismaFrescura, first_seen_at: hoursAgo(48) }, KENKU, NOW);
+    expect(frio12).toBe(frio48);
+
+    const conv3 = leadPriorityScore(
+      { ...mismaFrescura, inbound_count: 3, first_seen_at: hoursAgo(3) },
+      KENKU,
+      NOW,
+    );
+    const conv12 = leadPriorityScore(
+      { ...mismaFrescura, inbound_count: 3, first_seen_at: hoursAgo(12) },
+      KENKU,
+      NOW,
+    );
+    expect(conv3).toBe(conv12);
+  });
+
+  // En Aurela el conversó se cae a plomo pasado el día: 1,80% entre 1 y 24 horas
+  // contra 0,35% después. Es la caída más fuerte de las cuatro tablas y la que
+  // hace que ahí valga más un conversó de la mañana que veinte de la semana.
+  it("en Aurela el conversó de más de un día se desploma", () => {
+    const mismaFrescura = { inbound_count: 3, last_interaction_at: hoursAgo(1) };
+    const deHoras = leadPriorityScore({ ...mismaFrescura, first_seen_at: hoursAgo(3) }, AURELA, NOW);
+    const deDias = leadPriorityScore({ ...mismaFrescura, first_seen_at: hoursAgo(48) }, AURELA, NOW);
+    expect(deDias).toBeLessThan(deHoras / 4);
+  });
+
+  // DENTRO DE «+1 DÍA» EMPATAN, y es lo correcto: medido sobre 90 días, un
+  // conversó de 1-3 días cierra 2,11% y uno de 3-7 días 2,12%; un frío 1,15% y
+  // 0,58%. El salto de «+7 días» (15% y 6,9%) son 33 y 29 llamadas de leads que
+  // alguien eligió a mano — selección, no señal. Partir ahí pondría lo más muerto
+  // de la cola en cabeza.
+  it("dos leads viejos del mismo balde empatan: la muestra no los separa", () => {
+    const dosDias = leadPriorityScore(
+      { first_seen_at: hoursAgo(48), last_interaction_at: hoursAgo(1) },
+      KENKU,
+      NOW,
+    );
+    const ochoDias = leadPriorityScore(
+      { first_seen_at: hoursAgo(192), last_interaction_at: hoursAgo(1) },
+      KENKU,
+      NOW,
+    );
+    expect(dosDias).toBe(ochoDias);
+  });
+
+  // Y del lado de arriba: el conversó más fresco NO puede subir por encima del
+  // `interes` de más de un día, que lo gana medido (Aurela 6,37% contra 3,45%).
+  // Es lo que obliga a normalizar por el MEJOR tramo y no por el promedio del
+  // balde: contra el promedio, ese conversó salía por encima.
+  it("el conversó más fresco no se sube por encima de un interés de días", () => {
+    const conversoFresco = leadPriorityScore(
+      { inbound_count: 3, first_seen_at: hoursAgo(0.2) },
+      AURELA,
+      NOW,
+    );
+    const interesViejo = leadPriorityScore(
+      { district: "Ate", first_seen_at: hoursAgo(72), last_interaction_at: hoursAgo(0.2) },
+      AURELA,
+      NOW,
+    );
+    expect(conversoFresco).toBeLessThan(interesViejo);
   });
 
   // CONSECUENCIA BUSCADA, no un efecto colateral: en Kenku un carrito de más de
@@ -253,11 +357,15 @@ describe("carrito: el peso decae por HORAS", () => {
   });
 
   // Un segmento sin tabla no debe heredar la de otro: si `byAge` se indexara mal
-  // (p. ej. cayendo siempre a `carrito`), un frío recién llegado puntuaría 24.
+  // (p. ej. cayendo siempre a `carrito`), un frío recién llegado puntuaría 44.
+  // El frío de Aurela es hoy el único balde sin tramos, y a propósito: 5 cierres
+  // en 1.274 llamadas, con CERO en el tramo de <1h. No hay gradiente que copiar.
   it("weightForAge: un segmento sin tabla usa su peso plano", () => {
-    expect(KENKU.byAge.converso).toBeUndefined();
-    expect(KENKU.byAge.frio).toBeUndefined();
-    expect(weightForAge(KENKU.byAge.frio, 0.2, KENKU.segment.frio)).toBe(KENKU.segment.frio);
+    expect(AURELA.byAge.frio).toBeUndefined();
+    expect(weightForAge(AURELA.byAge.frio, 0.2, AURELA.segment.frio)).toBe(AURELA.segment.frio);
+    expect(leadPriorityScore({ first_seen_at: hoursAgo(0.2) }, AURELA, NOW)).toBe(
+      AURELA.segment.frio,
+    );
   });
 });
 
