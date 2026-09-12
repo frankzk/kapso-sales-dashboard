@@ -25,7 +25,7 @@ function between(start: string, end: string): string {
 
 describe("abrir una guía con el teclado", () => {
   it("el código de la guía es un botón dentro de la fila", () => {
-    const row = between("{sortedRows.map((s) => (", "{s.courier === \"fenix\" && (");
+    const row = between("{shownRows.map((s) => (", "{s.courier === \"fenix\" && (");
     expect(row).toContain('<button\n                  type="button"');
     expect(row).toContain("onOpen(s.id);");
     expect(row).toContain("e.stopPropagation();");

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { cn, Card, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import {
   COURIER_REPORT_RESULTS,
@@ -322,16 +322,23 @@ export function ShipmentsBoard({
   const [recentlyUpdatedId, setRecentlyUpdatedId] = useState<string | null>(null);
   const updatedRowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const storeName = (id: string) => stores.find((s) => s.id === id)?.name ?? "—";
+  // Estable entre renders: es prop de la tabla memoizada. Si cambiara de
+  // identidad en cada tecla del buscador, la tabla se repintaría entera.
+  const storeName = useCallback(
+    (id: string) => stores.find((s) => s.id === id)?.name ?? "—",
+    [stores],
+  );
 
   // Province is imported from Aliclik. Keep it separate from `city`, which is
   // the normalized Fenix coverage key and can intentionally contain a district.
-  const departmentOptions = Array.from(
-    new Set(shipments.map(shipmentDepartment)),
-  ).sort((a, b) => a.localeCompare(b));
-  const districtOptions = Array.from(
-    new Set(shipments.map((s) => s.district || SIN_DISTRITO)),
-  ).sort((a, b) => a.localeCompare(b));
+  const departmentOptions = useMemo(
+    () => Array.from(new Set(shipments.map(shipmentDepartment))).sort((a, b) => a.localeCompare(b)),
+    [shipments],
+  );
+  const districtOptions = useMemo(
+    () => Array.from(new Set(shipments.map((s) => s.district || SIN_DISTRITO))).sort((a, b) => a.localeCompare(b)),
+    [shipments],
+  );
 
   // Every view opens without province or district restrictions.
   useEffect(() => {
@@ -374,51 +381,78 @@ export function ShipmentsBoard({
     if (updatedRowTimerRef.current) clearTimeout(updatedRowTimerRef.current);
   }, []);
 
-  const filteredWithoutAliclikRoute = shipments.filter(
-    (s) =>
-      (storeFilter.size === 0 || storeFilter.has(s.store_id)) &&
-      (departmentFilter.size === 0 || departmentFilter.has(shipmentDepartment(s))) &&
-      (districtFilter.size === 0 || districtFilter.has(s.district || SIN_DISTRITO)) &&
-      (!dateFilter || (s.next_followup_at ? s.next_followup_at.slice(0, 10) === dateFilter : false)) &&
-      (!unmatchedOnly || !s.matched) &&
-      (!uncontactedTodayOnly ||
-        view !== "pendiente" ||
-        isShipmentReadyForContactToday(s.today_contact_count, s.next_followup_at)) &&
-      (!uncontactedOnly ||
-        view !== "pendiente" ||
-        isShipmentReadyForContact(s.contact_count, s.next_followup_at)) &&
-      (!soloPorRecuperar || esPorRecuperar(s)) &&
-      (reprogFilter === "all" || reprogramCourierOf(s) === reprogFilter) &&
-      matchesFenixAvailability(s, fenixFilter),
-  );
-  const aliclikRouteCounts = filteredWithoutAliclikRoute.reduce(
-    (routeCounts, shipment) => {
-      const input = {
+  // LA CADENA DE FILTROS SE RECALCULA SOLO CUANDO CAMBIA UN FILTRO. Medido el
+  // 12-09-2026: Pendiente carga 3.089 filas y Entregado 4.042. Antes esto corría
+  // en cada render del tablero —cada tecla del buscador, abrir o cerrar el
+  // cajón, cada latido de la reserva— y, como devolvía un array nuevo, la
+  // tabla entera se repintaba detrás. Con `useMemo` la identidad de `filtered`
+  // se conserva y la tabla memoizada no se entera.
+  const { filteredWithoutAliclikRoute, aliclikRouteCounts, filtered, fenixRowsForExport } = useMemo(() => {
+    const base = shipments.filter(
+      (s) =>
+        (storeFilter.size === 0 || storeFilter.has(s.store_id)) &&
+        (departmentFilter.size === 0 || departmentFilter.has(shipmentDepartment(s))) &&
+        (districtFilter.size === 0 || districtFilter.has(s.district || SIN_DISTRITO)) &&
+        (!dateFilter || (s.next_followup_at ? s.next_followup_at.slice(0, 10) === dateFilter : false)) &&
+        (!unmatchedOnly || !s.matched) &&
+        (!uncontactedTodayOnly ||
+          view !== "pendiente" ||
+          isShipmentReadyForContactToday(s.today_contact_count, s.next_followup_at)) &&
+        (!uncontactedOnly ||
+          view !== "pendiente" ||
+          isShipmentReadyForContact(s.contact_count, s.next_followup_at)) &&
+        (!soloPorRecuperar || esPorRecuperar(s)) &&
+        (reprogFilter === "all" || reprogramCourierOf(s) === reprogFilter) &&
+        matchesFenixAvailability(s, fenixFilter),
+    );
+    const routeCounts = base.reduce(
+      (acc, shipment) => {
+        const input = {
+          courier: shipment.courier,
+          statusCategory: shipment.status_category,
+          attempts: shipment.aliclik_attempts,
+          serviceDate: shipment.aliclik_service_date,
+        };
+        if (matchesAliclikRouteFilter(input, "aliclik_available")) {
+          acc.aliclikAvailable += 1;
+        } else if (matchesAliclikRouteFilter(input, "fenix_required")) {
+          acc.fenixRequired += 1;
+        }
+        return acc;
+      },
+      { aliclikAvailable: 0, fenixRequired: 0 },
+    );
+    const byRoute = base.filter((shipment) =>
+      matchesAliclikRouteFilter({
         courier: shipment.courier,
         statusCategory: shipment.status_category,
         attempts: shipment.aliclik_attempts,
         serviceDate: shipment.aliclik_service_date,
-      };
-      if (matchesAliclikRouteFilter(input, "aliclik_available")) {
-        routeCounts.aliclikAvailable += 1;
-      } else if (matchesAliclikRouteFilter(input, "fenix_required")) {
-        routeCounts.fenixRequired += 1;
-      }
-      return routeCounts;
-    },
-    { aliclikAvailable: 0, fenixRequired: 0 },
-  );
-  const filtered = filteredWithoutAliclikRoute.filter((shipment) =>
-    matchesAliclikRouteFilter({
-      courier: shipment.courier,
-      statusCategory: shipment.status_category,
-      attempts: shipment.aliclik_attempts,
-      serviceDate: shipment.aliclik_service_date,
-    }, aliclikRouteFilter),
-  );
-  const fenixRowsForExport = filtered.filter(
-    (shipment) => shipment.courier === "fenix" && shipment.status_category === "in_route",
-  );
+      }, aliclikRouteFilter),
+    );
+    return {
+      filteredWithoutAliclikRoute: base,
+      aliclikRouteCounts: routeCounts,
+      filtered: byRoute,
+      fenixRowsForExport: byRoute.filter(
+        (shipment) => shipment.courier === "fenix" && shipment.status_category === "in_route",
+      ),
+    };
+  }, [
+    shipments,
+    view,
+    storeFilter,
+    departmentFilter,
+    districtFilter,
+    dateFilter,
+    unmatchedOnly,
+    uncontactedTodayOnly,
+    uncontactedOnly,
+    soloPorRecuperar,
+    reprogFilter,
+    fenixFilter,
+    aliclikRouteFilter,
+  ]);
 
   // "Reprogramado por": conteos sobre la vista cargada (independiente de los
   // demás filtros) para etiquetar las opciones. Solo tiene sentido donde
@@ -921,7 +955,19 @@ export function ShipmentsBoard({
   );
 }
 
-function ShipmentTable({
+/**
+ * Filas que se pintan de una vez. Pendiente trae 3.089 y Entregado 4.042: a
+ * once celdas y un botón por fila son más de 30.000 nodos, y el navegador los
+ * maqueta todos aunque la pantalla muestre veinte. Se pintan las primeras 200
+ * —ordenadas y filtradas sobre el conjunto ENTERO, no sobre la ventana— y un
+ * botón trae 200 más o todas. Nada se esconde: el contador de arriba sigue
+ * diciendo cuántas hay, y la búsqueda global y los filtros ven el total.
+ */
+const VISIBLE_STEP = 200;
+
+// Memoizada: con `rows` y `storeName` estables, escribir en el buscador, abrir
+// el cajón o renovar la reserva ya no repinta la tabla.
+const ShipmentTable = memo(function ShipmentTable({
   rows,
   stores,
   storeName,
@@ -942,6 +988,21 @@ function ShipmentTable({
     () => sort ? sortShipmentRows(rows, sort.key, sort.direction, storeName) : rows,
     [rows, sort, storeName],
   );
+
+  // La ventana vuelve al principio cuando cambian las filas (otro filtro, otra
+  // pestaña, una recarga): lo que se pidió ver fue de ESE conjunto.
+  const [visibleCount, setVisibleCount] = useState(VISIBLE_STEP);
+  const [windowFor, setWindowFor] = useState(rows);
+  if (windowFor !== rows) {
+    setWindowFor(rows);
+    setVisibleCount(VISIBLE_STEP);
+  }
+  // La fila recién actualizada se ve aunque caiga fuera de la ventana: es la
+  // que la persona acaba de tocar.
+  const highlightedIndex = highlightedId ? sortedRows.findIndex((r) => r.id === highlightedId) : -1;
+  const shownCount = Math.min(sortedRows.length, Math.max(visibleCount, highlightedIndex + 1));
+  const shownRows = shownCount < sortedRows.length ? sortedRows.slice(0, shownCount) : sortedRows;
+  const hiddenCount = sortedRows.length - shownRows.length;
 
   function toggleSort(key: ShipmentSortKey) {
     setSort((current) => ({
@@ -979,7 +1040,7 @@ function ShipmentTable({
           </tr>
         </thead>
         <tbody>
-          {sortedRows.map((s) => (
+          {shownRows.map((s) => (
             <tr
               key={s.id}
               onClick={() => onOpen(s.id)}
@@ -1073,9 +1134,32 @@ function ShipmentTable({
           ))}
         </tbody>
       </table>
+      {hiddenCount > 0 && (
+        <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500">
+          <span>
+            Se muestran {shownRows.length} de {sortedRows.length}.
+          </span>
+          <button
+            type="button"
+            onClick={() => setVisibleCount((n) => n + VISIBLE_STEP)}
+            className="font-medium text-brand-700 hover:underline"
+          >
+            Mostrar {Math.min(VISIBLE_STEP, hiddenCount)} más
+          </button>
+          {hiddenCount > VISIBLE_STEP && (
+            <button
+              type="button"
+              onClick={() => setVisibleCount(sortedRows.length)}
+              className="font-medium text-brand-700 hover:underline"
+            >
+              Mostrar todas
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
-}
+});
 
 /** Columnas que el cajón ya muestra enteras: solo a partir de `xl`. */
 const SECONDARY_COLUMN = "hidden xl:table-cell";
