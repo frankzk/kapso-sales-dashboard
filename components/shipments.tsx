@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { cn, Card, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
+import { CopyButton } from "@/components/copy-button";
 import {
   COURIER_REPORT_RESULTS,
   attemptLabel,
@@ -13,6 +14,7 @@ import {
   isShipmentReadyForContact,
   isShipmentReadyForContactToday,
   labelOf,
+  ALICLIK_MAX_INTENTOS,
   CLAIM_TTL_MINUTES,
   MAX_INTENTOS,
   matchesAliclikRouteFilter,
@@ -356,6 +358,8 @@ export function ShipmentsBoard({
 }) {
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(initialOpenId ?? null);
+  /** La fila señalada por el teclado (`j`/`k`), que `Enter` abre. */
+  const [cursorId, setCursorId] = useState<string | null>(null);
 
   // client-side filters over the loaded view. Empty set = "all".
   const [storeFilter, setStoreFilter] = useState<Set<string>>(new Set());
@@ -574,6 +578,60 @@ export function ShipmentsBoard({
     },
     [openId],
   );
+
+  /**
+   * ATAJOS DE TECLADO PARA LA COLA. Quien trabaja doscientas guías por turno las
+   * recorría a ratón: llegar a la fila cincuenta eran cincuenta tabulaciones.
+   *
+   * `j`/`k` mueven por la cola visible, `Enter` abre, `n` salta a la siguiente
+   * con el cajón abierto. No se tocan cuando el foco está escribiendo —un `j` en
+   * una nota es una letra, no un atajo— ni con modificadores, que pertenecen al
+   * navegador.
+   */
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      const el = document.activeElement;
+      const writing =
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLSelectElement ||
+        (el instanceof HTMLElement && el.isContentEditable);
+      if (writing) return;
+      // Con el cajón abierto solo vale `n`: el resto del teclado es del diálogo.
+      if (openId) {
+        if (e.key === "n" && nextInQueue) {
+          e.preventDefault();
+          setOpenId(nextInQueue);
+        }
+        return;
+      }
+      if (e.key === "j" || e.key === "k") {
+        e.preventDefault();
+        setCursorId((current) => {
+          if (!visibleOrder.length) return null;
+          const i = current ? visibleOrder.findIndex((r) => r.id === current) : -1;
+          const next = e.key === "j" ? i + 1 : i - 1;
+          const clamped = Math.max(0, Math.min(visibleOrder.length - 1, next));
+          return visibleOrder[clamped]?.id ?? null;
+        });
+        return;
+      }
+      if (e.key === "Enter" && cursorId) {
+        e.preventDefault();
+        setOpenId(cursorId);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [openId, cursorId, nextInQueue, visibleOrder]);
+
+  // La fila señalada por el teclado se trae a la vista: moverse con j/k sin ver
+  // dónde se está no sirve de nada.
+  useEffect(() => {
+    if (!cursorId) return;
+    document.getElementById(`shipment-row-${cursorId}`)?.scrollIntoView({ block: "nearest" });
+  }, [cursorId]);
 
   /**
    * La guía abierta, en la URL, sin recargar la página.
@@ -813,6 +871,7 @@ export function ShipmentsBoard({
               storeName={storeName}
               onOpen={setOpenId}
               highlightedId={recentlyUpdatedId}
+              cursorId={cursorId}
               claimedBy={claimedBy}
               sort={sort}
               onSort={toggleSort}
@@ -1028,17 +1087,25 @@ export function ShipmentsBoard({
               {view === "pendiente" && (
                 <>
                   {/* La regla vivía en un `title`: con teclado o en táctil no
-                      existía. El nombre del chip la dice, y el detalle completo
-                      queda en `aria-describedby` + texto visible al activarlo. */}
+                      existía. El nombre la resume y `aria-describedby` la dice
+                      entera, en un texto que también se ve al activar el chip. */}
                   <label className="flex items-center gap-1.5 text-xs text-slate-600">
                     <input
                       type="checkbox"
                       checked={soloPorRecuperar}
                       onChange={(e) => setSoloPorRecuperar(e.target.checked)}
+                      aria-describedby="filtro-por-recuperar"
                       className="rounded border-slate-300"
                     />
                     Por recuperar (cerradas sin entregar)
                   </label>
+                  <span
+                    id="filtro-por-recuperar"
+                    className={cn("text-xs text-slate-500", !soloPorRecuperar && "sr-only")}
+                  >
+                    Aliclik las cerró sin entregar y el pedido sigue en ventana de recuperación: admite
+                    una salida Swayp. Las vencidas y las descartadas ya no están en esta cola.
+                  </span>
                   <label className="flex items-center gap-1.5 text-xs text-slate-600">
                     <input
                       type="checkbox"
@@ -1046,7 +1113,7 @@ export function ShipmentsBoard({
                       onChange={(e) => setUncontactedTodayOnly(e.target.checked)}
                       className="rounded border-slate-300"
                     />
-                    Sin contactar hoy
+                    Sin contactar hoy (vuelven mañana)
                   </label>
                   <label className="flex items-center gap-1.5 text-xs text-slate-600">
                     <input
@@ -1055,7 +1122,7 @@ export function ShipmentsBoard({
                       onChange={(e) => setUncontactedOnly(e.target.checked)}
                       className="rounded border-slate-300"
                     />
-                    Nunca contactadas
+                    Nunca contactadas (sin una sola llamada)
                   </label>
                 </>
               )}
@@ -1089,10 +1156,15 @@ export function ShipmentsBoard({
                   Limpiar filtros
                 </button>
               )}
-              <span className="self-center text-xs text-slate-500 md:ml-auto">
-                Mostrando {filtered.length} de {shipments.length}
-              </span>
             </div>
+          )}
+          {/* El tamaño de la cola vivía dentro del bloque de filtros, que en
+              teléfono está plegado: se trabajaba sin saber cuántas quedaban.
+              Va fuera y en una región viva, para que filtrar se anuncie. */}
+          {view !== "revision" && (
+            <p role="status" className="text-xs text-slate-500">
+              Mostrando {filtered.length} de {shipments.length}
+            </p>
           )}
           {fenixExportError && (
             <div
@@ -1133,6 +1205,7 @@ export function ShipmentsBoard({
                   storeName={storeName}
                   onOpen={setOpenId}
                   highlightedId={recentlyUpdatedId}
+                  cursorId={cursorId}
                   claimedBy={claimedBy}
                   sort={sort}
                   onSort={toggleSort}
@@ -1188,6 +1261,7 @@ const ShipmentTable = memo(function ShipmentTable({
   storeName,
   onOpen,
   highlightedId,
+  cursorId,
   claimedBy,
   sort,
   onSort,
@@ -1199,6 +1273,8 @@ const ShipmentTable = memo(function ShipmentTable({
   storeName: (id: string) => string;
   onOpen: (id: string) => void;
   highlightedId?: string | null;
+  /** La fila señalada por el teclado (`j`/`k`). */
+  cursorId?: string | null;
   /** Quién tiene tomada cada guía, para no abrir una que ya está ocupada. */
   claimedBy: (row: ShipmentRow) => string | null;
   sort: ShipmentSort;
@@ -1253,9 +1329,18 @@ const ShipmentTable = memo(function ShipmentTable({
           {shownRows.map((s) => (
             <tr
               key={s.id}
-              onClick={() => onOpen(s.id)}
+              id={`shipment-row-${s.id}`}
+              // SELECCIONAR UN TELÉFONO NO DEBE ABRIR —Y RESERVAR— LA GUÍA. El
+              // clic en la fila la abre y la toma diez minutos; arrastrar para
+              // copiar un número terminaba el gesto en un clic y bloqueaba la
+              // guía para el resto del equipo sin que nadie quisiera abrirla.
+              onClick={() => {
+                if (window.getSelection()?.toString()) return;
+                onOpen(s.id);
+              }}
               className={cn(
                 "cursor-pointer border-b border-slate-100 transition-colors duration-500 last:border-0",
+                cursorId === s.id && "ring-2 ring-inset ring-brand-400",
                 highlightedId === s.id ? "bg-emerald-50" : "hover:bg-slate-50",
               )}
             >
@@ -1841,8 +1926,12 @@ function ShipmentDrawer({
     });
   }
 
-  const programDateInvalid =
-    disposition === "programar" && (!nextDate || nextDate <= localDateInputValue());
+  // Tanto «programar» como «confirma» necesitan una fecha FUTURA: la primera
+  // agenda una llamada, la segunda estampa la fecha en el número de la guía
+  // nueva y programa el despacho. Un `<input type=date>` con `min` no basta:
+  // se puede teclear la fecha a mano y el atributo no lo impide.
+  const dateNeedsFuture = disposition === "programar" || disposition === "confirma";
+  const programDateInvalid = dateNeedsFuture && (!nextDate || nextDate <= localDateInputValue());
   // «Cliente cancela / anula» cierra la venta: pide un segundo clic que la
   // nombre, igual que el descarte de la recuperación.
   const cancelNeedsConfirm = disposition === "cancela";
@@ -2002,9 +2091,16 @@ function ShipmentDrawer({
         ) : !detail ? (
           <p className="text-sm text-slate-500">Cargando…</p>
         ) : (
+          /* LA TAREA DEL MOMENTO VA ARRIBA. Las secciones estaban en el orden en
+             que se escribieron —datos, destino con lat/long, ítems de Shopify y
+             recién entonces el formulario de llamada— así que cada guía costaba
+             un scroll antes de poder trabajar. El orden VISUAL se decide acá con
+             `order-*` en vez de mover el JSX: así el orden del DOM (y con él el
+             recorrido de Tab y la lectura de pantalla) sigue siendo el de
+             siempre, de lo general a lo particular. */
           <div
             aria-busy={reloading}
-            className={cn("space-y-2.5 transition-opacity", reloading && "opacity-60")}
+            className={cn("flex flex-col gap-2.5 transition-opacity", reloading && "opacity-60")}
           >
             {/* La cabecera queda fija: en teléfono el cajón es la pantalla entera
                 y «Cerrar» no puede irse con el scroll. */}
@@ -2111,7 +2207,26 @@ function ShipmentDrawer({
                 {claimState === "mine" ? (
                   <><b>Reservado para ti.</b> Se liberará automáticamente al cerrar este panel.</>
                 ) : claimState === "blocked" ? (
-                  <><b>{claimMessage ?? "Otro asesor está atendiendo este envío."}</b> Puedes consultar la información, pero no modificarla.</>
+                  <>
+                    <b>{claimMessage ?? "Otro asesor está atendiendo este envío."}</b> Puedes consultar la
+                    información, pero no modificarla.
+                    {/* LA NOTA NO SE ENTIERRA VIVA. Cuando la reserva vence o la
+                        toma otra persona, el `fieldset` se deshabilita y el texto
+                        recién escrito queda atrapado en un textarea inerte: antes
+                        el aviso solo decía «cierra y vuelve a abrir», y al cerrar
+                        se perdía. Ahora se ofrece copiarlo primero. */}
+                    {hasDraft && (
+                      <>
+                        {" "}
+                        <b>Tienes texto sin registrar.</b>{" "}
+                        <CopyButton
+                          value={draftFields.filter((v) => v.trim()).join("\n\n")}
+                          label="Copiar lo que escribiste"
+                        />{" "}
+                        antes de cerrar.
+                      </>
+                    )}
+                  </>
                 ) : (
                   "Reservando este envío…"
                 )}
@@ -2120,7 +2235,9 @@ function ShipmentDrawer({
 
             <fieldset disabled={claimState !== "mine"} className="contents">
 
-            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            {/* A quién se llama: queda arriba porque es lo que se lee mientras
+                se marca. Es corto; lo que se plegó es el destino y el pedido. */}
+            <section className="order-1 overflow-hidden rounded-xl border border-slate-200 bg-white">
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 px-3 py-2.5 text-sm">
                 <Field label="Cliente" value={detail.shipment.customer_name} />
                 <Field label="Teléfono" value={detail.shipment.customer_phone} />
@@ -2147,11 +2264,11 @@ function ShipmentDrawer({
                   value={
                     detail.shipment.aliclik_attempts == null
                       ? "Sin dato"
-                      : `${detail.shipment.aliclik_attempts} / 3`
+                      : `${detail.shipment.aliclik_attempts} / ${ALICLIK_MAX_INTENTOS}`
                   }
                 />
                 <CompactMetric label="Fecha Aliclik" value={fmtAliclikDate(detail.shipment.aliclik_service_date)} />
-                <CompactMetric label="Llamadas" value={`${detail.shipment.reroute_attempts} / 7`} />
+                <CompactMetric label="Llamadas" value={`${detail.shipment.reroute_attempts} / ${MAX_INTENTOS}`} />
                 <CompactMetric
                   label="Swayp"
                   value={
@@ -2202,8 +2319,18 @@ function ShipmentDrawer({
               )}
             </section>
 
-            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-              <div className="space-y-2 p-3">
+            {/* Destino y pedido: consulta, no acción. Plegados, porque entre los
+                dos traen dirección, referencia, lat/long y los ítems de Shopify,
+                y empujaban el formulario de llamada fuera de la pantalla. El
+                resumen de la línea de arriba dice si hace falta abrirlos. */}
+            <details className="order-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium text-slate-700 marker:text-slate-500">
+                Destino y pedido
+                <span className="ml-1.5 font-normal text-slate-500">
+                  · {[detail.shipment.district, detail.shipment.city].filter(Boolean).join(", ") || "sin destino"}
+                </span>
+              </summary>
+              <div className="space-y-2 border-t border-slate-100 p-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -2412,10 +2539,10 @@ function ShipmentDrawer({
                   </p>
                 ))}
               </div>
-            </section>
+            </details>
 
             {detail.shipment.delivery_status === "anulado" && (
-              <section className="space-y-2.5 rounded-xl border border-rose-200 bg-white p-3">
+              <section className="order-2 space-y-2.5 rounded-xl border border-rose-200 bg-white p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     {/* En recuperación, reenviar es la acción NORMAL (MOM §11), no
@@ -2529,7 +2656,7 @@ function ShipmentDrawer({
                 lo que pasó con la clienta y, si no quiere, cierra la recuperación
                 con motivo. Es lo que faltaba: 0 llamadas sobre 920 pedidos. */}
             {enRecuperacion && (
-              <section className="space-y-1.5 rounded-xl border border-slate-200 bg-white p-2.5">
+              <section className="order-2 space-y-1.5 rounded-xl border border-brand-300 bg-white p-2.5 shadow-sm">
                 <h3 className="text-sm font-semibold text-slate-900">Registrar o programar llamada</h3>
                 <p className="text-xs leading-relaxed text-slate-500">
                   Sobre el pedido, no sobre la guía: sigue «Anulado · Reproprovincia» hasta que se reenvíe, se descarte o venza la ventana.
@@ -2678,7 +2805,7 @@ function ShipmentDrawer({
                 before any customer call or reprogramming can be registered. */}
             {detail.shipment.courier === "fenix" && detail.shipment.delivery_status !== "anulado" && (
               detail.shipment.delivery_status === "transferido" ? (
-                <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <section className="order-2 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Guía reemplazada</p>
                   <h3 className="text-sm font-semibold text-slate-900">Continúa en la guía Swayp activa</h3>
                   <p className="text-xs leading-relaxed text-slate-600">
@@ -2701,7 +2828,7 @@ function ShipmentDrawer({
                   )}
                 </section>
               ) : fenixReadyForCustomerManagement && !showCourierCorrection ? (
-                <section className="flex items-start justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                <section className="order-2 flex items-start justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">Resultado del courier registrado</p>
                     <p className="mt-0.5 text-sm font-semibold text-emerald-900">Pendiente de gestión con el cliente</p>
@@ -2718,7 +2845,7 @@ function ShipmentDrawer({
                   </button>
                 </section>
               ) : (
-                <section className="space-y-2.5 rounded-xl border border-slate-200 bg-white p-3">
+                <section className="order-2 space-y-2.5 rounded-xl border border-brand-300 bg-white p-3 shadow-sm">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.12em] text-orange-700">
@@ -2782,6 +2909,8 @@ function ShipmentDrawer({
                         type="date"
                         value={courierDate}
                         onChange={(e) => setCourierDate(e.target.value)}
+                        // Hoy vale, ayer no: el servidor aplica la misma regla.
+                        min={localDateInputValue()}
                         className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm"
                       />
                     </label>
@@ -2856,7 +2985,7 @@ function ShipmentDrawer({
             {/* claim + re-route call — hidden once the shipment is terminal (entregado/
                 anulado/transferido) so a stray "no contesta" can't reopen a closed guide */}
             {isCallable(detail.shipment.delivery_status) && !fenixAwaitingCourierResult && (
-              <section className="space-y-1.5 rounded-xl border border-slate-200 bg-white p-2.5">
+              <section className="order-2 space-y-1.5 rounded-xl border border-brand-300 bg-white p-2.5 shadow-sm">
                 <h3 className="text-sm font-semibold text-slate-900">Registrar o programar llamada</h3>
                 <label className="block text-xs font-medium text-slate-600">
                   Resultado de la llamada
@@ -3009,7 +3138,16 @@ function ShipmentDrawer({
                     type="date"
                     value={nextDate}
                     onChange={(e) => setNextDate(e.target.value)}
-                    min={disposition === "programar" ? tomorrowDateInputValue() : undefined}
+                    // UNA REPROGRAMACIÓN CONFIRMADA NO PUEDE SER DE AYER. El
+                    // `min` solo cubría «programar», y ni el botón ni el
+                    // servidor exigían futuro para «confirma»: se emitía una
+                    // guía Swayp con la fecha pasada ESTAMPADA EN SU NÚMERO
+                    // (`rescheduleGuideCode`) y un despacho imposible agendado.
+                    min={
+                      disposition === "programar" || disposition === "confirma"
+                        ? tomorrowDateInputValue()
+                        : undefined
+                    }
                     className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
                   />
                 </label>
@@ -3131,13 +3269,13 @@ function ShipmentDrawer({
               <button
                 type="button"
                 onClick={() => setShowManualGuide(true)}
-                className="text-xs font-medium text-brand-700 hover:underline"
+                className="order-4 self-start text-xs font-medium text-brand-700 hover:underline"
               >
                 Ingresar una guía Swayp a mano
               </button>
             )}
             {detail.shipment.delivery_status === "pendiente" && (showManualGuide || !!detail.shipment.fenix_shipment_id) && (
-              <section className="space-y-1.5 rounded-xl border border-slate-200 bg-white p-2.5">
+              <section className="order-4 space-y-1.5 rounded-xl border border-slate-200 bg-white p-2.5">
               <div className="flex items-start justify-between gap-3">
                 <h3 className="text-sm font-semibold text-slate-900">Guía Swayp (antes Fénix) a mano</h3>
                 {!detail.shipment.fenix_shipment_id && (
@@ -3212,7 +3350,7 @@ function ShipmentDrawer({
 
             {/* El historial va DENTRO del bloqueo: con la guía reservada por otra
                 persona, «no modificarla» incluye sus notas. */}
-            <ShipmentGuideHistory guides={detail.guideHistory} onSaved={refresh} />
+            <ShipmentGuideHistory guides={detail.guideHistory} onSaved={refresh} className="order-5" />
 
             </fieldset>
 
@@ -3258,15 +3396,39 @@ function ShipmentDrawer({
   );
 }
 
+/** «Cargando…» o el error con reintento, para los tres bloques del modal. */
+function ReprogramLoadState({
+  error,
+  onRetry,
+  small,
+}: {
+  error: string | null;
+  onRetry: () => void;
+  small?: boolean;
+}) {
+  const size = small ? "text-xs" : "text-sm";
+  if (!error) return <p className={cn(size, "text-slate-500")}>Cargando…</p>;
+  return (
+    <p role="alert" className={cn(size, "text-rose-700")}>
+      {error}{" "}
+      <button type="button" onClick={onRetry} className="font-semibold underline">
+        Reintentar
+      </button>
+    </p>
+  );
+}
+
 function ShipmentGuideHistory({
   guides,
   onSaved,
+  className,
 }: {
   guides: ShipmentHistoryGuide[];
   onSaved: () => void;
+  className?: string;
 }) {
   return (
-    <section className="space-y-2.5 rounded-xl border border-slate-200 bg-white p-2.5">
+    <section className={cn("space-y-2.5 rounded-xl border border-slate-200 bg-white p-2.5", className)}>
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-slate-900">Historial desde el origen</h3>
@@ -3411,7 +3573,7 @@ function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: ()
             className="w-full rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 focus:border-brand-400 focus:outline-none"
             placeholder="Nota de la gestión…"
           />
-          {error && <p className="text-xs text-red-600">{error}</p>}
+          {error && <p role="alert" className="text-xs text-rose-700">{error}</p>}
           <div className="flex items-center gap-2">
             <button
               onClick={save}
@@ -3786,19 +3948,33 @@ function ReprogramModal({
   const weekLabel = (start: string) => `${start.slice(8, 10)}/${start.slice(5, 7)}`;
 
   const [data, setData] = useState<{ rows: ReprogramChildRow[]; asesorNames: Record<string, string> } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
   const [preset, setPreset] = useState<ReprogramPreset>("hoy");
   const today = limaTodayKey();
   const [custom, setCustom] = useState({ from: today, to: today });
 
   useEffect(() => {
     let alive = true;
-    loadReprogramData().then((d) => {
-      if (alive) setData(d);
-    });
+    setLoadError(null);
+    // Sin `catch`, una carga fallida dejaba «Cargando…» para siempre en los tres
+    // bloques del modal, sin decir qué pasó ni permitir reintentar.
+    loadReprogramData()
+      .then((d) => {
+        if (alive) setData(d);
+      })
+      .catch(() => {
+        if (alive) setLoadError("No pudimos cargar el detalle. Revisa la conexión e inténtalo de nuevo.");
+      });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [retryKey]);
+
+  function retry() {
+    setData(null);
+    setRetryKey((k) => k + 1);
+  }
 
   // Mismo teclado que el cajón de la guía: una sola función (`useDialogKeys`).
   const panelRef = useRef<HTMLDivElement>(null);
@@ -3885,7 +4061,7 @@ function ReprogramModal({
               c={ranged.counts}
             />
           ) : (
-            <p className="text-sm text-slate-500">Cargando…</p>
+            <ReprogramLoadState error={loadError} onRetry={retry} />
           )}
           <ReprogramCountsRow label="Histórico" c={stats.historico} />
         </div>
@@ -3927,7 +4103,7 @@ function ReprogramModal({
               <p className="text-xs text-slate-500">Sin reprogramaciones en este rango.</p>
             )
           ) : (
-            <p className="text-xs text-slate-500">Cargando…</p>
+            <ReprogramLoadState error={loadError} onRetry={retry} small />
           )}
         </div>
 
@@ -3950,7 +4126,7 @@ function ReprogramModal({
               <p className="text-xs text-slate-500">Sin reprogramaciones en este rango.</p>
             )
           ) : (
-            <p className="text-xs text-slate-500">Cargando…</p>
+            <ReprogramLoadState error={loadError} onRetry={retry} small />
           )}
         </div>
 
