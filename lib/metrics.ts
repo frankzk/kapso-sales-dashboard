@@ -17,6 +17,12 @@ import type {
   OrderRow,
 } from "@/lib/types";
 import { prettyAdName, type AdMeta } from "@/lib/meta-ads";
+import {
+  atribuyePedidoWeb,
+  construyeCatalogo,
+  type AnuncioMeta,
+  type WebAdOrder,
+} from "@/lib/cod-cart-attribution";
 
 // ---------------------------------------------------------------------------
 // Timezone-aware bucketing
@@ -807,9 +813,15 @@ export interface CampaignStat {
   leads: number;
   metaConversations: number;
   conversationCoverageRate: number | null;
+  /** Todos los pedidos del anuncio: los de WhatsApp y los del carrito COD. */
   pedidos: number;
+  /** Pedidos de lead partido por leads. NO cuenta los del carrito COD, que no
+   *  nacen de un lead: meterlos daría conversiones por encima del 100%. */
   conversion: number;
   ingresos: number;
+  /** De los de arriba, los que entraron por el formulario COD de la web. */
+  webPedidos: number;
+  webIngresos: number;
   promotedProductName: string | null;
   promotedSkus: string[];
   exactOrders: number;
@@ -1015,9 +1027,11 @@ export function campaignBreakdown(
   names: Record<string, AdMeta> = {},
   deliveries: CampaignDeliveryOutcome[] = [],
   performance: MetaAdPerformance[] = [],
+  webOrders: WebAdOrder[] = [],
+  metaAds: AnuncioMeta[] = [],
 ): CampaignStat[] {
   const adLeads = leads.filter((l) => l.source === "meta_ad" && (l.ad_id || l.ad_headline));
-  if (!adLeads.length && !performance.length) return [];
+  if (!adLeads.length && !performance.length && !webOrders.length) return [];
   const ordersById = new Map(orders.filter((o) => o.id).map((o) => [o.id!, o]));
   const deliveryByOrder = new Map(deliveries.map((outcome) => [outcome.orderId, outcome]));
   const performanceByAd = new Map<string, MetaAdPerformance & { currencyConflict?: boolean }>();
@@ -1063,6 +1077,34 @@ export function campaignBreakdown(
       ownerByOrder.set(lead.order_id, lead);
     }
   }
+  // LOS PEDIDOS DEL CARRITO COD DE LA WEB, que no llegan por ningún lead y por
+  // eso este panel no los veía. Se emparejan con su anuncio por los UTM que
+  // Shopify guardó en el pedido (lib/cod-cart-attribution.ts). Los que solo
+  // llegan a nivel de campaña o de conjunto NO se reparten entre los anuncios de
+  // esa campaña: se cuentan aparte y se enseñan aparte, porque repartirlos sería
+  // inventar de qué creatividad salió cada venta, que es justo lo que se decide
+  // mirando esta tabla.
+  const catalogo = construyeCatalogo(metaAds);
+  const webByAd = new Map<string, OrderRow[]>();
+  let webSinAnuncioPedidos = 0;
+  let webSinAnuncioIngresos = 0;
+  for (const { order, utm } of webOrders) {
+    if (!order.id) continue;
+    // Un pedido que YA tiene lead de anuncio se acredita por ahí y solo por
+    // ahí. Medido: pasa en 6 de 591, pero contarlo dos veces subiría el ROAS
+    // del anuncio sin que nada lo delate.
+    if (ownerByOrder.has(order.id)) continue;
+    const adId = atribuyePedidoWeb(utm, catalogo)?.adId ?? null;
+    if (adId) {
+      const previos = webByAd.get(adId) ?? [];
+      previos.push(order);
+      webByAd.set(adId, previos);
+      continue;
+    }
+    webSinAnuncioPedidos += 1;
+    webSinAnuncioIngresos += round2(Number(order.total_amount ?? 0) - Number(order.total_refunded ?? 0));
+  }
+
   const m = new Map<string, { headline: string | null; adId: string | null; leads: LeadRow[] }>();
   for (const l of adLeads) {
     const key = l.ad_id || l.ad_headline!;
@@ -1077,6 +1119,11 @@ export function campaignBreakdown(
     if (!m.has(insight.adId)) {
       m.set(insight.adId, { headline: null, adId: insight.adId, leads: [] });
     }
+  }
+  // Un anuncio que solo vende por la web no tiene ni un lead ni —si su cuenta
+  // no está sincronizada— una fila de gasto, y sin esto no tendría fila.
+  for (const adId of webByAd.keys()) {
+    if (!m.has(adId)) m.set(adId, { headline: null, adId, leads: [] });
   }
   const rows = [...m.entries()].map(([adId, b]) => {
       const meta = names[adId] ?? null;
@@ -1120,6 +1167,44 @@ export function campaignBreakdown(
             : null,
         });
       }
+      const leadPedidos = details.length;
+      const leadIngresos = ingresos;
+      // Los del carrito COD entran a la MISMA lista: el producto, la entrega y
+      // el ticket se calculan igual, y el gasto del anuncio compró las dos
+      // ventas. Lo único que no comparten es el lead: no lo tienen, y por eso
+      // la conversión de más abajo se queda con los de arriba.
+      for (const order of webByAd.get(adId) ?? []) {
+        if (!order.id) continue;
+        const total = round2(Number(order.total_amount ?? 0) - Number(order.total_refunded ?? 0));
+        const outcome = deliveryByOrder.get(order.id);
+        ingresos += total;
+        if (campaignDeliveryBucket(outcome) === "delivered") deliveredRevenue += total;
+        for (const item of order.line_items ?? []) {
+          const key = `${item.sku ?? ""}|${item.title}`;
+          const product = mix.get(key) ?? { title: item.title, sku: item.sku, orders: 0, units: 0 };
+          product.orders += 1;
+          product.units += Number(item.quantity ?? 0);
+          mix.set(key, product);
+        }
+        details.push({
+          orderId: order.id,
+          code: order.name,
+          createdAt: order.created_at,
+          // El carrito COD no pasa por conversación, así que no hay nombre de
+          // lead que poner. El del pedido vive en `order_master`, no aquí.
+          customerName: null,
+          total,
+          products: (order.line_items ?? []).map((item) => ({ title: item.title, sku: item.sku, quantity: Number(item.quantity ?? 0) })),
+          match: campaignProductMatch(order, promotedProductName, promotedSkus),
+          deliveryStatus: outcome?.deliveryStatus ?? null,
+          statusCategory: outcome?.statusCategory ?? null,
+          // Sin lead no hay «cuánto tardó desde que escribió»: el cliente no
+          // escribió.
+          timeToOrderHours: null,
+        });
+      }
+      const webPedidos = details.length - leadPedidos;
+      const webIngresos = round2(ingresos - leadIngresos);
       const exactOrders = details.filter((order) => order.match === "exact").length;
       const mixedOrders = details.filter((order) => order.match === "mixed").length;
       const crossSellOrders = details.filter((order) => order.match === "cross_sell").length;
@@ -1130,7 +1215,7 @@ export function campaignBreakdown(
       const inRouteOrders = details.filter((order) => campaignDeliveryBucket(deliveryByOrder.get(order.orderId)) === "in_route").length;
       const shipmentKnown = details.filter((order) => !!order.deliveryStatus || !!order.statusCategory).length;
       const pedidos = details.length;
-      const conversion = b.leads.length ? pedidos / b.leads.length : 0;
+      const conversion = b.leads.length ? leadPedidos / b.leads.length : 0;
       const spend = round2(insight?.spend ?? 0);
       const metaConversations = Math.max(0, Math.trunc(insight?.metaConversations ?? 0));
       const impressions = insight?.impressions ?? 0;
@@ -1152,6 +1237,8 @@ export function campaignBreakdown(
         pedidos,
         conversion,
         ingresos: round2(ingresos),
+        webPedidos,
+        webIngresos,
         promotedProductName,
         promotedSkus,
         exactOrders,
@@ -1166,7 +1253,7 @@ export function campaignBreakdown(
         logisticsCoverageRate: pedidos ? shipmentKnown / pedidos : null,
         deliveryRate: shipmentKnown ? deliveredOrders / shipmentKnown : null,
         deliveredRevenue: round2(deliveredRevenue),
-        revenuePerLead: b.leads.length ? round2(ingresos / b.leads.length) : 0,
+        revenuePerLead: b.leads.length ? round2(leadIngresos / b.leads.length) : 0,
         avgTicket: pedidos ? round2(ingresos / pedidos) : 0,
         metaCurrency: insight?.currency ?? null,
         spend,
@@ -1193,9 +1280,21 @@ export function campaignBreakdown(
       };
     });
   const totalLeads = rows.reduce((sum, row) => sum + row.leads, 0);
-  const baseline = totalLeads ? rows.reduce((sum, row) => sum + row.pedidos, 0) / totalLeads : 0;
+  // El promedio contra el que se compara la conversión sale SOLO de los pedidos
+  // de lead. Meter los del carrito COD —que no tienen lead— inflaría el divisor
+  // de todos y haría parecer flojo a un anuncio que vende igual que siempre.
+  const baseline = totalLeads
+    ? rows.reduce((sum, row) => sum + row.pedidos - row.webPedidos, 0) / totalLeads
+    : 0;
+  // El anuncio que solo vende por la web no tiene conversión que comparar: no
+  // genera leads. Su vara es el ROAS, y el promedio del panel es la referencia
+  // honesta —la misma idea que el baseline de arriba— con un suelo en 1, que es
+  // donde el anuncio ni siquiera devuelve lo que costó.
+  const totalSpend = rows.reduce((sum, row) => sum + row.spend, 0);
+  const roasBaseline = totalSpend ? rows.reduce((sum, row) => sum + row.ingresos, 0) / totalSpend : 0;
   for (const row of rows) {
-    if (row.spend > 0 && row.leads === 0) {
+    const webSolo = row.leads === 0 && row.webPedidos > 0;
+    if (row.spend > 0 && row.leads === 0 && row.pedidos === 0) {
       row.decision = "no_attribution";
       row.decisionReason = "Meta registra inversión, pero no hay leads internos vinculados al anuncio.";
     } else if (row.productMatchRate != null && row.pedidos >= 5 && row.productMatchRate < 0.5) {
@@ -1209,6 +1308,21 @@ export function campaignBreakdown(
       row.decisionReason = row.currencyConflict
         ? "El anuncio presenta más de una moneda; no se mezclan costos."
         : "No hay gasto histórico con moneda verificable para calcular una recomendación económica.";
+    } else if (webSolo && row.pedidos < 10) {
+      row.decision = "insufficient";
+      row.decisionReason = `Muestra baja: ${row.pedidos}/10 pedidos web mínimos.`;
+    } else if (webSolo && row.roas != null && row.roas >= Math.max(1, roasBaseline * 1.25)) {
+      row.decision = "scale";
+      row.decisionReason = "Vende por la web sin pasar por WhatsApp, con ROAS por encima del promedio del panel.";
+    } else if (webSolo && row.roas != null && row.roas >= Math.max(1, roasBaseline)) {
+      row.decision = "promising";
+      row.decisionReason = "Vende por la web sin pasar por WhatsApp, con ROAS igual o superior al promedio del panel.";
+    } else if (webSolo) {
+      row.decision = "review_close";
+      row.decisionReason =
+        row.roas != null && row.roas < 1
+          ? "Vende por la web, pero no devuelve ni lo que costó el anuncio."
+          : "Vende por la web, pero por debajo del promedio del panel.";
     } else if (row.leads < 20) {
       row.decision = "insufficient";
       row.decisionReason = `Muestra baja: ${row.leads}/20 leads mínimos.`;
@@ -1227,6 +1341,40 @@ export function campaignBreakdown(
     }
   }
   return rows.sort((a, b) => b.ingresos - a.ingresos || b.leads - a.leads);
+}
+
+/**
+ * Lo que el carrito COD vendió y NO se pudo colgar de un anuncio. PURA.
+ *
+ * Existe para que ese dinero se vea en vez de desaparecer: la tabla es por
+ * anuncio, y repartir entre los anuncios de una campaña un pedido que solo
+ * llegó a nivel de campaña sería inventar de qué creatividad salió. Medido
+ * sobre 30 días: 153 pedidos y S/25.017, casi todos de las cuentas cuya
+ * plantilla de URL manda nombres en vez de `{{ad.id}}`. El número es el que
+ * dice cuánto se gana arreglando esa plantilla en Meta.
+ */
+export function webNoAtribuido(
+  leads: LeadRow[],
+  webOrders: WebAdOrder[],
+  metaAds: AnuncioMeta[],
+): { pedidos: number; ingresos: number } {
+  const catalogo = construyeCatalogo(metaAds);
+  // Un pedido que ya tiene lead de anuncio SÍ está atribuido, aunque sus UTM no
+  // resuelvan: se acredita por el lead, igual que en `campaignBreakdown`.
+  const acreditados = new Set(
+    leads
+      .filter((l) => l.source === "meta_ad" && (l.ad_id || l.ad_headline) && l.order_id)
+      .map((l) => l.order_id!),
+  );
+  let pedidos = 0;
+  let ingresos = 0;
+  for (const { order, utm } of webOrders) {
+    if (!order.id || acreditados.has(order.id)) continue;
+    if (atribuyePedidoWeb(utm, catalogo)?.adId) continue;
+    pedidos += 1;
+    ingresos += round2(Number(order.total_amount ?? 0) - Number(order.total_refunded ?? 0));
+  }
+  return { pedidos, ingresos: round2(ingresos) };
 }
 
 export interface CampaignTrend {

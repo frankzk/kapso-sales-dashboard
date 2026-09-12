@@ -313,4 +313,6 @@
 \ir migrations/0154_tanders_operation_number_normalize.sql
 \echo 'Applying 0155_lead_insights_rollup.sql'
 \ir migrations/0155_lead_insights_rollup.sql
+\echo 'Applying 0156_orders_utm_meta.sql'
+\ir migrations/0156_orders_utm_meta.sql
 \echo 'Done.'

@@ -37,6 +37,7 @@ import {
   type ClienteParaVenta,
 } from "@/app/dashboard/leads/venta-telefonica-actions";
 import { cuandoLabel, RIESGO_TITULO, type AvisoDuplicado } from "@/lib/pedido-duplicado";
+import { etiquetaCandidato, ordenarCandidatos } from "@/lib/lead-sin-numero";
 
 const TONO: Record<string, string> = {
   duplicado: "border-red-200 bg-red-50 text-red-800",
@@ -114,7 +115,7 @@ export function VentaTelefonica({
     const token = ++consultaRef.current;
     setConsultando(true);
     try {
-      const r = await consultarClientePorTelefono(storeId, phone);
+      const r = await consultarClientePorTelefono(storeId, phone, nombre);
       if (consultaRef.current === token) setRes(r);
     } finally {
       if (consultaRef.current === token) setConsultando(false);
@@ -254,6 +255,43 @@ export function VentaTelefonica({
           {res.nombre ? ` como ${res.nombre}` : ""}. Se abre su ficha en vez de crear otra.
         </p>
       )}
+      {/* ¿Es alguno de estos? Un cliente que escribió con nombre de usuario de
+          WhatsApp no trae teléfono, así que la búsqueda por número NO lo
+          encuentra y seguir de largo crearía un segundo lead: el cliente queda
+          partido en dos y la venta se le quita al anuncio que lo trajo (ver
+          lib/lead-sin-numero.ts). Se ofrece antes de crear nada. */}
+      {res?.ok && !res.existia && (res.candidatos?.length ?? 0) > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+          <p className="text-xs font-semibold text-amber-900">
+            Ese número no está en la cola. ¿Es alguna de estas conversaciones?
+          </p>
+          <p className="mt-0.5 text-xs text-amber-800">
+            Escribieron con nombre de usuario, así que WhatsApp no nos dio su celular. Si abres la
+            suya, la venta se queda con su anuncio y su historial.
+          </p>
+          <div className="mt-2 flex flex-col gap-1">
+            {ordenarCandidatos(res.candidatos ?? [], nombre).map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                disabled={abriendo}
+                onClick={() => {
+                  void (async () => {
+                    if (await onAbrir(c.id)) cerrar();
+                  })();
+                }}
+                className="flex items-center justify-between gap-2 rounded-md border border-amber-300 bg-white px-2.5 py-1.5 text-left text-xs hover:bg-amber-100 disabled:opacity-60"
+              >
+                <span className="truncate font-medium text-slate-800">{etiquetaCandidato(c)}</span>
+                <span className="shrink-0 text-amber-700">
+                  {c.adHeadline ? `${c.adHeadline} · ` : ""}abrir →
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {res?.aviso && <Aviso aviso={res.aviso} />}
     </Card>
   );
