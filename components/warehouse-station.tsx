@@ -105,7 +105,7 @@ export function WarehouseStation({
           <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">Almacén</h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-500">Escanea el rótulo cuando el pedido esté completo, rotulado y dentro de su caja. Eso lo deja listo para despacho; la ruta se decide después, en la mesa.</p>
         </div>
-        <Link href="/dashboard/pedidos/despacho" className="min-h-11 rounded-xl border border-slate-300 px-5 text-sm font-semibold leading-[2.75rem] text-slate-700 hover:bg-slate-50">Mesa de despacho →</Link>
+        <div className="flex flex-wrap gap-3"><Link href="/dashboard/pedidos/despacho" className="min-h-11 rounded-xl border border-slate-300 px-5 text-sm font-semibold leading-[2.75rem] text-slate-700 hover:bg-slate-50">Entregas a couriers →</Link><Link href="/dashboard/courier/rutas" className="min-h-11 rounded-xl border border-slate-300 px-5 text-sm font-semibold leading-[2.75rem] text-slate-700 hover:bg-slate-50">Cajas de Grupo GF →</Link></div>
       </header>
 
       <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">

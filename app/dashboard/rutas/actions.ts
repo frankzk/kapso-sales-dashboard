@@ -248,6 +248,17 @@ export async function closeRoute(
   const { route, stops } = detail;
   if (route.status === "cerrada") return { ok: false, error: "La ruta ya está cerrada." };
 
+  const { data: gfLoads, error: loadsError } = await g.admin.from("dispatch_manifests")
+    .select("id,state").eq("delivery_route_id", routeId).eq("courier", "propio").neq("state", "cancelled");
+  if (loadsError) return { ok: false, error: "No se pudo comprobar la recepción de las cargas." };
+  if (gfLoads?.length) {
+    if (gfLoads.some((load) => load.state !== "in_custody")) return { ok: false, error: "Hay una carga pendiente de recibir. Complétala o cancélala con motivo antes de liquidar." };
+    if (stops.some((stop) => stop.status === "pendiente")) return { ok: false, error: "Grupo GF: todas las paradas deben tener reporte. No se permite forzar el cierre." };
+    if (stops.some((stop) => (stop.status === "entregado" || stop.outcome_reason === "rechazado") && !stop.photo_path)) {
+      return { ok: false, error: "Falta evidencia de entrega o rechazo. Completa el reporte antes de liquidar." };
+    }
+  }
+
   const totals = routeTotals(stops);
   if (!totals.completa && !opts.force) {
     return {

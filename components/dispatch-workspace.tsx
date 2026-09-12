@@ -41,6 +41,7 @@ import {
 } from "@/lib/couriers/catalog";
 import { routeKindForCourier } from "@/lib/dispatch-routing";
 import type { StoreSummary } from "@/lib/types";
+import { nextDispatchMode } from "@/lib/courier-flow";
 
 /**
  * Los tres momentos de una RUTA, en orden (MOM Fase 2).
@@ -71,14 +72,12 @@ function isArmed(shipment: { preparation_state: string } | null | undefined): bo
 function routeHeading(manifest: DispatchManifest): { title: string; subtitle: string } {
   const who = manifest.received_by ?? manifest.driver_name;
   const courier = courierLabelFor(manifest.courier);
-  return who ? { title: who, subtitle: courier } : { title: courier, subtitle: "Courier" };
+  return who ? { title: who, subtitle: `${courier}${manifest.courier === "propio" ? ` · Carga ${manifest.load_number ?? 1}` : ""}` } : { title: courier, subtitle: "Courier" };
 }
 
 /** En qué paso conviene abrir una ruta según cómo esté. */
 function modeForManifest(manifest: DispatchManifest): Mode {
-  if (manifest.state === "draft") return "build";
-  if (manifest.state === "office_check") return "office";
-  return needsRiderCheck(manifest.kind) ? "pickup" : "office";
+  return nextDispatchMode(manifest, true);
 }
 
 const STATE_TONE: Record<DispatchManifestState, string> = {
@@ -122,6 +121,7 @@ export function DispatchWorkspace({
   canPrepare,
   canManage,
   canPickup,
+  surface = "warehouse",
 }: {
   initialData: DispatchWorkspaceData;
   initialSelectedId?: string | null;
@@ -130,14 +130,19 @@ export function DispatchWorkspace({
   canPrepare: boolean;
   canManage: boolean;
   canPickup: boolean;
+  surface?: "warehouse" | "gf";
 }) {
-  const [data, setData] = useState(initialData);
-  const defaultMode: Mode = canManage ? "build" : "pickup";
+  const scopeData = (value: DispatchWorkspaceData): DispatchWorkspaceData => ({ ...value,
+    manifests: value.manifests.filter((manifest) => (courierKey(manifest.courier) === "propio") === (surface === "gf")),
+    assignableShipments: value.assignableShipments.filter((shipment) => surface === "gf" ? courierKey(shipment.courier) === "propio" : courierKey(shipment.courier) !== "propio"),
+  });
+  const [data, setData] = useState(() => scopeData(initialData));
+  const initialManifest = data.manifests.find((manifest) => manifest.id === initialSelectedId)
+    ?? data.manifests.find((manifest) => !["in_custody", "cancelled"].includes(manifest.state)) ?? null;
+  const defaultMode: Mode = nextDispatchMode(initialManifest, canManage);
   const [mode, setMode] = useState<Mode>(defaultMode);
   const [selectedId, setSelectedId] = useState<string | null>(
-    initialData.manifests.some((manifest) => manifest.id === initialSelectedId)
-      ? initialSelectedId ?? null
-      : initialData.manifests.find((manifest) => !["in_custody", "cancelled"].includes(manifest.state))?.id ?? null,
+    initialManifest?.id ?? null,
   );
   const [scan, setScan] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -155,7 +160,7 @@ export function DispatchWorkspace({
 
   async function refresh(preferId?: string) {
     const fresh = await loadDispatchWorkspace();
-    setData(fresh);
+    setData(scopeData(fresh));
     if (preferId) setSelectedId(preferId);
   }
 
@@ -209,17 +214,18 @@ export function DispatchWorkspace({
     <div className="mx-auto max-w-[1500px] space-y-5 pb-24">
       <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div>
-          <Link href="/dashboard/pedidos" className="text-xs font-medium text-slate-500 hover:text-slate-900">← Master de Pedidos</Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">Mesa de despacho</h1>
+          <Link href={surface === "gf" ? "/dashboard/courier?tab=routes" : "/dashboard/pedidos/almacen"} className="text-xs font-medium text-slate-500 hover:text-slate-900">{surface === "gf" ? "← Grupo GF Courier · Rutas" : "← Almacén"}</Link>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{surface === "gf" ? "Grupo GF Courier · Verificar y recibir" : "Almacén · Entregas a couriers"}</h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-500">Primero se asigna la ruta, después se coteja. La custodia cambia solo cuando el motorizado recibe el 100 % — o, si no hay motorizado, cuando se anota quién recoge.</p>
         </div>
         <div className="flex items-center gap-3">
           {canPrepare && (
             <Link href="/dashboard/pedidos/almacen" className="min-h-11 rounded-xl border border-slate-300 px-5 text-sm font-semibold leading-[2.75rem] text-slate-700 hover:bg-slate-50">← Almacén</Link>
           )}
-          {canManage && (
+          {canManage && surface !== "gf" && (
             <button onClick={() => setShowCreate(true)} className="min-h-11 rounded-xl bg-slate-950 px-5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">+ Nueva ruta</button>
           )}
+          {surface === "gf" && <Link href="/dashboard/courier" className="rounded-lg border px-4 py-3 text-sm font-semibold">Tomar y asignar pedidos</Link>}
         </div>
       </header>
 
@@ -250,9 +256,9 @@ export function DispatchWorkspace({
 
         <main className="order-1 min-w-0 space-y-4 xl:order-2">
           <div className="grid grid-cols-3 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
-            <ModeButton active={mode === "build"} disabled={!canManage} onClick={() => setMode("build")} number="1" label="Asignar a ruta" />
-            <ModeButton active={mode === "office"} disabled={!canManage} onClick={() => setMode("office")} number="2" label="Cotejar oficina" />
-            <ModeButton active={mode === "pickup"} disabled={!canPickup || (!!selected && !needsRiderCheck(selected.kind))} onClick={() => setMode("pickup")} number="3" label="Recibir" />
+            <ModeButton active={mode === "build"} disabled={!canManage} onClick={() => setMode("build")} number="1" label="Agregar pedidos" />
+            <ModeButton active={mode === "office"} disabled={!canManage} onClick={() => setMode("office")} number="2" label="Verificar caja" />
+            <ModeButton active={mode === "pickup"} disabled={!canPickup || (!!selected && !needsRiderCheck(selected.kind))} onClick={() => setMode("pickup")} number="3" label="Recibir carga" />
           </div>
 
           <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
@@ -267,8 +273,13 @@ export function DispatchWorkspace({
               </div>
 
               {selected && (
-                <RouteTarget manifest={selected} manifests={activeManifests} onSelect={(id) => setSelectedId(id)} />
+                <RouteTarget manifest={selected} manifests={activeManifests} onSelect={(id) => { setSelectedId(id); setMode(nextDispatchMode(data.manifests.find((manifest) => manifest.id === id) ?? null, canManage)); }} />
               )}
+              {surface === "gf" && selected && <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
+                <span>Carga {selected.load_number ?? 1} · {activeDispatchItems(selected.items).length} paquetes</span>
+                {selected.delivery_route_id && selected.state === "in_custody" && <Link href={`/dashboard/rutas?id=${selected.delivery_route_id}`} className="font-semibold text-brand-700">Ver reparto y liquidación →</Link>}
+                {selected.state === "in_custody" && <Link href="/dashboard/courier" className="font-semibold text-brand-700">Agregar una carga a la misma ruta →</Link>}
+              </div>}
 
               {mode !== "build" && (
               <form onSubmit={submitScan} className="mt-6 flex flex-col gap-3 sm:flex-row">
@@ -293,7 +304,9 @@ export function DispatchWorkspace({
             </div>
 
             {mode === "build" ? (
-              selected ? (
+              surface === "gf" ? (
+                <div className="p-6 text-sm"><p>Los pedidos se toman y asignan desde la bandeja del courier. Esta caja conserva su lista y sus cotejos.</p><Link href="/dashboard/courier" className="mt-3 inline-block font-semibold text-brand-700">Ir a tomar y asignar pedidos →</Link></div>
+              ) : selected ? (
                 <BuildRoute
                   // Cambiar de ruta descarta la selección: arrastrarla al
                   // destino nuevo es exactamente el cruce que hay que evitar.
@@ -389,7 +402,7 @@ function RouteTarget({
           >
             {manifests.map((option) => (
               <option key={option.id} value={option.id} className="text-slate-950">
-                {routeName(option)}
+                {routeName(option)}{option.courier === "propio" ? ` · Carga ${option.load_number ?? 1}` : ""}
               </option>
             ))}
           </select>
@@ -715,7 +728,7 @@ function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchR
   const [routeDate, setRouteDate] = useState(todayLima());
   const [busy, setBusy] = useState(false);
 
-  const { own, couriers } = useMemo(() => routeChoices(riders), [riders]);
+  const { couriers } = useMemo(() => routeChoices(riders), [riders]);
   const choice = useMemo(() => routeChoiceByValue(riders, selection), [riders, selection]);
 
   return (
@@ -739,7 +752,7 @@ function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchR
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-xl font-semibold text-slate-950">Nueva ruta</h2>
-            <p className="text-sm text-slate-500">Una ruta al día por motorizado, y una por courier.</p>
+            <p className="text-sm text-slate-500">Una entrega diaria por courier. Los motorizados de Grupo GF se organizan en su módulo.</p>
           </div>
           <button type="button" onClick={onClose} className="grid size-10 place-items-center rounded-full bg-slate-100 text-lg">×</button>
         </div>
@@ -756,13 +769,6 @@ function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchR
                 className="h-11 w-full rounded-xl border border-slate-200 px-3"
               >
                 <option value="">Elige con quién sale</option>
-                <optgroup label="Grupo GF Courier">
-                  {own.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </optgroup>
                 <optgroup label="Couriers">
                   {couriers.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -797,4 +803,3 @@ function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchR
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-600">{label}</span>{children}</label>;
 }
-

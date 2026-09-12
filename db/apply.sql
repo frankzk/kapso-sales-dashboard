@@ -319,4 +319,6 @@
 \ir migrations/0157_order_master_payment_check.sql
 \echo 'Applying 0158_order_payments_cobro_courier.sql'
 \ir migrations/0158_order_payments_cobro_courier.sql
+\echo 'Applying 0159_gf_route_loads.sql'
+\ir migrations/0159_gf_route_loads.sql
 \echo 'Done.'

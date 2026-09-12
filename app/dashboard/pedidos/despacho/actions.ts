@@ -261,6 +261,7 @@ export async function createDispatchManifest(input: z.input<typeof createManifes
   if (!perms.can("dispatch.manage")) return { error: "No tienes permiso para crear rutas." };
   const parsed = createManifestSchema.safeParse(input);
   if (!parsed.success) return { error: "Completa el courier y la fecha de la ruta." };
+  if (courierKey(parsed.data.courier) === "propio") return { error: "Las rutas de Grupo GF se crean al tomar y asignar pedidos desde Grupo GF Courier." };
   const { sb, user } = await currentUser();
   const { data: store } = await sb.from("stores").select("org_id").limit(1).maybeSingle();
   if (!store?.org_id) return { error: "No tienes una organización disponible." };
@@ -346,6 +347,7 @@ export async function addShipmentToManifest(manifestId: string, code: string): P
   if (!perms.can("dispatch.manage")) return { error: "No tienes permiso para organizar rutas." };
   const [manifest, candidates] = await Promise.all([visibleManifest(manifestId), findScanCandidates(code)]);
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
+  if (courierKey(manifest.courier) === "propio") return { error: "Agrega los pedidos desde Grupo GF Courier para conservar la solicitud y la tarifa." };
   const pick = pickDispatchScanTarget(candidates);
   if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
   if (pick.kind === "ambigua") return { error: ambiguousScanError(pick.options) };

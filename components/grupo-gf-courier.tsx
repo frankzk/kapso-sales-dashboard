@@ -11,6 +11,7 @@ import {
   saveDistrictTariff,
   setDistrictAvailability,
   takeGroupGfCourierOrders,
+  takeAndAssignGroupGfCourierOrders,
   type CourierActionResult,
   type CourierConfigSnapshot,
   type CourierAgreementRow,
@@ -44,7 +45,10 @@ export function GrupoGfCourierBoard({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const [tab, setTab] = useState<"available" | "preparation" | "routes" | "tariffs">("available");
+  const searchParams = useSearchParams();
+  const [tab, setTab] = useState<"available" | "preparation" | "routes" | "tariffs">(
+    searchParams.get("tab") === "routes" ? "routes" : "available",
+  );
 
   function run(action: () => Promise<CourierActionResult>) {
     startTransition(async () => {
@@ -128,7 +132,7 @@ export function GrupoGfCourierBoard({
           active={tab === "routes"}
           onClick={() => setTab("routes")}
           label="Rutas operativas"
-          count={snapshot.operations.routes.length}
+          count={new Set(snapshot.operations.routes.map((route) => `${route.riderId}:${route.routeDate}`)).size}
         />
         <CourierTab
           active={tab === "tariffs"}
@@ -146,6 +150,8 @@ export function GrupoGfCourierBoard({
           orders={snapshot.operations.available}
           blockedCount={snapshot.operations.blockedCount}
           sourceCount={snapshot.operations.sourceCount}
+          riders={snapshot.operations.riders}
+          canManageDispatch={snapshot.canManageDispatch}
           pending={pending}
           run={run}
         />
@@ -222,6 +228,8 @@ function AvailableOrders({
   orders,
   blockedCount,
   sourceCount,
+  riders,
+  canManageDispatch,
   pending,
   run,
 }: {
@@ -229,6 +237,8 @@ function AvailableOrders({
   orders: CourierAvailableOrder[];
   blockedCount: number;
   sourceCount: number;
+  riders: CourierRiderOption[];
+  canManageDispatch: boolean;
   pending: boolean;
   run: (action: () => Promise<CourierActionResult>) => void;
 }) {
@@ -240,6 +250,8 @@ function AvailableOrders({
     requestedOrder?.hasPriorDispatch ? "prior_dispatch" : "never_dispatched",
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [riderId, setRiderId] = useState("");
+  const [page, setPage] = useState(0);
   const segmentCounts = useMemo(() => ({
     neverDispatched: orders.filter((order) => !order.hasPriorDispatch).length,
     priorDispatch: orders.filter((order) => order.hasPriorDispatch).length,
@@ -257,7 +269,9 @@ function AvailableOrders({
           .includes(needle);
     });
   }, [orders, query, segment]);
-  const visibleIds = filtered.map((order) => order.orderId);
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(filtered.length / 50) - 1));
+  const visible = filtered.slice(currentPage * 50, currentPage * 50 + 50);
+  const visibleIds = visible.map((order) => order.orderId);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
 
   function toggle(orderId: string) {
@@ -272,7 +286,31 @@ function AvailableOrders({
   function take(ids: string[]) {
     if (!ids.length) return;
     setSelected(new Set());
-    run(() => takeGroupGfCourierOrders(orgId, ids));
+    run(async () => {
+      const messages: string[] = [];
+      const errors: string[] = [];
+      for (let offset = 0; offset < ids.length; offset += 50) {
+        const result = await takeGroupGfCourierOrders(orgId, ids.slice(offset, offset + 50));
+        if (result.notice) messages.push(result.notice);
+        errors.push(...result.failed.map((item) => `${item.orderId}: ${item.error}`));
+        if (result.error && !result.failed.length) errors.push(result.error);
+      }
+      return { notice: [...messages, ...errors].join(" ") };
+    });
+  }
+
+  function takeAndAssign() {
+    if (!riderId || !selected.size) return;
+    const ids = [...selected];
+    run(async () => {
+      const messages: string[] = [];
+      for (let offset = 0; offset < ids.length; offset += 50) {
+        const result = await takeAndAssignGroupGfCourierOrders(orgId, riderId, ids.slice(offset, offset + 50));
+        messages.push(result.error ?? result.notice ?? "");
+      }
+      setSelected(new Set());
+      return { notice: messages.join(" ") };
+    });
   }
 
   return (
@@ -285,11 +323,9 @@ function AvailableOrders({
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
             Puedes tomarlos antes, durante o después del armado. Almacén siempre los prepara; tomar solo reserva el servicio y la tarifa.
           </p>
-          {sourceCount > 300 && (
-            <p className="mt-1 text-xs text-slate-500">
-              Hay {sourceCount.toLocaleString("es-PE")} pedidos en la cola fuente. Se muestran los 300 más recientes; al tomar una tanda entran los siguientes.
-            </p>
-          )}
+          <p className="mt-1 text-xs text-slate-500">
+            {orders.length.toLocaleString("es-PE")} disponibles de {sourceCount.toLocaleString("es-PE")} pedidos revisados. La búsqueda cubre toda la bandeja, sin aprobación adicional del Master.
+          </p>
           {blockedCount > 0 && (
             <p className="mt-1 text-xs text-amber-700">
               {blockedCount} pedido{blockedCount === 1 ? "" : "s"} no aparece{blockedCount === 1 ? "" : "n"} por tarifa faltante, distrito inválido o servicio pausado.
@@ -300,7 +336,7 @@ function AvailableOrders({
           Buscar
           <input
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => { setQuery(event.target.value); setPage(0); setSelected(new Set()); }}
             placeholder="Pedido, cliente, teléfono o distrito"
             className="mt-1 block h-10 w-full min-w-72 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
           />
@@ -315,6 +351,7 @@ function AvailableOrders({
             count={segmentCounts.neverDispatched}
             onClick={() => {
               setSegment("never_dispatched");
+              setPage(0);
               setSelected(new Set());
             }}
           />
@@ -324,6 +361,7 @@ function AvailableOrders({
             count={segmentCounts.priorDispatch}
             onClick={() => {
               setSegment("prior_dispatch");
+              setPage(0);
               setSelected(new Set());
             }}
           />
@@ -345,7 +383,16 @@ function AvailableOrders({
           <p className="text-sm font-semibold text-brand-950">
             {selected.size} pedido{selected.size === 1 ? "" : "s"} seleccionado{selected.size === 1 ? "" : "s"}
           </p>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {canManageDispatch && <>
+              <select aria-label="Motorizado para tomar y asignar" value={riderId} onChange={(event) => setRiderId(event.target.value)} disabled={pending} className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm">
+                <option value="">Elegir motorizado</option>
+                {riders.map((rider) => <option key={rider.id} value={rider.id}>{rider.fullName}</option>)}
+              </select>
+              <button type="button" disabled={pending || !riderId} onClick={takeAndAssign} className="h-10 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white disabled:opacity-50">
+                {pending ? "Procesando…" : "Tomar y asignar"}
+              </button>
+            </>}
             <button
               type="button"
               onClick={() => setSelected(new Set())}
@@ -359,7 +406,7 @@ function AvailableOrders({
               onClick={() => take([...selected])}
               className="h-9 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white transition hover:bg-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:opacity-50"
             >
-              {pending ? "Tomando pedidos…" : `Tomar ${selected.size} pedido${selected.size === 1 ? "" : "s"}`}
+              {pending ? "Tomando pedidos…" : "Tomar sin asignar"}
             </button>
           </div>
         </div>
@@ -394,7 +441,7 @@ function AvailableOrders({
             </tr>
           </thead>
           <tbody>
-            {filtered.map((order) => (
+            {visible.map((order) => (
               <tr key={order.orderId} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/70">
                 <td className="px-4 py-3">
                   <input
@@ -459,6 +506,13 @@ function AvailableOrders({
             )}
           </tbody>
         </table>
+      </div>
+      <div className="flex items-center justify-between gap-3 text-sm" aria-label="Paginación de pedidos disponibles">
+        <span>{filtered.length} resultados · Página {currentPage + 1} de {Math.max(1, Math.ceil(filtered.length / 50))}</span>
+        <div className="flex gap-2">
+          <button disabled={currentPage === 0 || pending} onClick={() => setPage(currentPage - 1)} className="rounded-lg border px-3 py-2 disabled:opacity-40">Anterior</button>
+          <button disabled={(currentPage + 1) * 50 >= filtered.length || pending} onClick={() => setPage(currentPage + 1)} className="rounded-lg border px-3 py-2 disabled:opacity-40">Siguiente</button>
+        </div>
       </div>
     </section>
   );
@@ -565,7 +619,7 @@ function AcceptedOrders({
       <div>
         <h2 id="accepted-orders-title" className="text-base font-semibold text-slate-950">Pedidos tomados</h2>
         <p className="mt-1 max-w-4xl text-sm leading-6 text-slate-600">
-          Asigna desde ahora qué pedidos irán en la caja de cada motorizado. Almacén puede seguir armándolos en paralelo; el cotejo físico se hace después, frente a la caja lista, en Mesa de despacho.
+          Asigna qué pedidos llevará cada motorizado. Almacén arma en paralelo; abre la caja desde Rutas operativas para verificarla y recibirla aquí, en Grupo GF Courier.
         </p>
       </div>
 
@@ -690,7 +744,7 @@ function AcceptedOrders({
                         <p className="text-sm font-semibold text-slate-900">{order.route.riderName}</p>
                         <p className="mt-0.5 text-xs text-slate-500">Caja del {formatDate(order.route.routeDate)}</p>
                         <Link
-                          href={`/dashboard/pedidos/despacho?manifiesto=${encodeURIComponent(order.route.manifestId)}`}
+                          href={`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(order.route.manifestId)}`}
                           className="mt-1 inline-flex text-xs font-semibold text-brand-700 hover:underline"
                         >
                           Abrir caja y cotejar →
@@ -745,7 +799,7 @@ function CourierRoutes({
         <div>
           <h2 id="courier-routes-title" className="text-base font-semibold text-slate-950">Rutas y cajas operativas</h2>
           <p className="mt-1 max-w-4xl text-sm leading-6 text-slate-600">
-            Cada fila es la caja diaria de un motorizado. Asignar planifica; Almacén arma; el cotejo confirma físicamente qué paquetes quedaron dentro.
+            Una ruta al día por motorizado. Cada fila es una carga de esa ruta; las recogidas adicionales conservan el mismo reparto y sus cotejos independientes.
           </p>
         </div>
         {unassignedCount > 0 && (
@@ -782,7 +836,7 @@ function CourierRoutes({
                 <tr key={route.manifestId} className="border-b border-slate-100 last:border-0">
                   <td className="px-4 py-3">
                     <p className="font-semibold text-slate-950">{route.riderName}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">Caja del {formatDate(route.routeDate)}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">{formatDate(route.routeDate)} · Carga {route.loadNumber ?? 1}</p>
                   </td>
                   <td className="px-3 py-3">
                     <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
@@ -810,11 +864,12 @@ function CourierRoutes({
                   </td>
                   <td className="px-4 py-3 text-right">
                     <Link
-                      href={`/dashboard/pedidos/despacho?manifiesto=${encodeURIComponent(route.manifestId)}`}
+                      href={`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(route.manifestId)}`}
                       className="inline-flex h-9 items-center rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2"
                     >
                       Abrir caja
                     </Link>
+                    {route.deliveryRouteId && route.state === "in_custody" && <Link href={`/dashboard/rutas?id=${route.deliveryRouteId}`} className="mt-2 block text-xs font-semibold text-brand-700">Ver reparto y liquidación</Link>}
                   </td>
                 </tr>
               );
