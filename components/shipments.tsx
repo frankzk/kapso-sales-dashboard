@@ -314,6 +314,9 @@ export function ShipmentsBoard({
   const [fenixExportError, setFenixExportError] = useState<string | null>(null);
   const [directGuideOpen, setDirectGuideOpen] = useState(false);
   const [directGuideCreatedId, setDirectGuideCreatedId] = useState<string | null>(null);
+  // En teléfono los diez filtros se pliegan detrás de un botón; en escritorio
+  // van siempre a la vista.
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   // global search (across all tabs, server-side)
   const [search, setSearch] = useState("");
@@ -469,6 +472,20 @@ export function ShipmentsBoard({
   );
 
   const searchActive = search.trim().length >= 2;
+  // Cuántos filtros se apartan del valor por defecto: es lo que el botón de
+  // filtros muestra en teléfono para que no se olvide uno puesto.
+  const activeFilters =
+    (storeFilter.size > 0 ? 1 : 0) +
+    (departmentFilter.size > 0 ? 1 : 0) +
+    (districtFilter.size > 0 ? 1 : 0) +
+    (dateFilter ? 1 : 0) +
+    (unmatchedOnly ? 1 : 0) +
+    (soloPorRecuperar ? 1 : 0) +
+    (uncontactedOnly ? 1 : 0) +
+    (uncontactedTodayOnly !== (view === "pendiente") ? 1 : 0) +
+    (fenixFilter !== "all" ? 1 : 0) +
+    (aliclikRouteFilter !== "all" ? 1 : 0) +
+    (reprogFilter !== "all" ? 1 : 0);
 
   function go(params: Record<string, string>) {
     const sp = new URLSearchParams({ view, ...params });
@@ -580,9 +597,11 @@ export function ShipmentsBoard({
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-semibold text-slate-900">Repro Provincia</h1>
-        <div className="flex items-center gap-2">
+        {/* En teléfono la búsqueda ocupa el ancho entero y las acciones bajan a
+            su propia fila; en escritorio todo cabe en una línea. */}
+        <div className="flex w-full flex-wrap items-center gap-2 md:w-auto">
           {/* global search */}
-          <div className="relative">
+          <div className="relative w-full md:w-auto">
             <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500">
               <IconSearch />
             </span>
@@ -592,7 +611,7 @@ export function ShipmentsBoard({
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar guía, pedido, guía Fenix, celular…"
               aria-label="Buscar guía, pedido, guía Fenix o celular"
-              className="w-64 rounded-lg border border-slate-200 py-1.5 pl-8 pr-7 text-sm"
+              className="w-full rounded-lg border border-slate-200 py-1.5 pl-8 pr-7 text-sm md:w-64"
             />
             {search && (
               <button
@@ -656,14 +675,15 @@ export function ShipmentsBoard({
         </Card>
       ) : (
         <>
-          {/* tabs */}
-          <div className="flex flex-wrap gap-1.5">
+          {/* tabs: en teléfono una tira que se desliza con el pulgar (seis
+              pestañas no caben en 360 px sin partirse en tres filas). */}
+          <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 md:mx-0 md:flex-wrap md:overflow-visible md:px-0">
             {SHIPMENT_VIEWS.map((v) => (
               <button
                 key={v.key}
                 onClick={() => go({ view: v.key })}
                 className={cn(
-                  "rounded-lg px-3 py-1.5 text-sm font-medium transition",
+                  "shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition",
                   v.key === view ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50",
                 )}
               >
@@ -675,7 +695,22 @@ export function ShipmentsBoard({
 
           {/* filters: store chips + district multi-select + programación date */}
           {view !== "revision" && (
-            <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setFiltersOpen((v) => !v)}
+              aria-expanded={filtersOpen}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 md:hidden"
+            >
+              {filtersOpen ? "Ocultar filtros" : "Filtros"}
+              {activeFilters > 0 && (
+                <span className="ml-1.5 rounded-full bg-brand-50 px-1.5 text-xs font-semibold text-brand-700">
+                  {activeFilters}
+                </span>
+              )}
+            </button>
+          )}
+          {view !== "revision" && (
+            <div className={cn("flex-wrap items-center gap-2", filtersOpen ? "flex" : "hidden md:flex")}>
               {stores.length > 1 && (
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-slate-500">Tienda:</span>
@@ -1020,7 +1055,8 @@ const ShipmentTable = memo(function ShipmentTable({
     // vuelve el encabezado fijo (ver TABLE_WRAP_FROM en ui.tsx). Y por debajo
     // de `xl`, Producto y Última entrega Aliclik —que el cajón muestra enteras—
     // se esconden para que la cola quepa con menos scroll.
-    <div className={TABLE_WRAP_FROM[1800]}>
+    <div>
+    <div className={cn("hidden md:block", TABLE_WRAP_FROM[1800])}>
       <table className="w-full min-w-[1100px] text-sm xl:min-w-[1400px]">
         <thead>
           <tr className={cn(STICKY_HEAD, "text-xs text-slate-500")}>
@@ -1134,6 +1170,72 @@ const ShipmentTable = memo(function ShipmentTable({
           ))}
         </tbody>
       </table>
+    </div>
+
+      {/* EN TELÉFONO LA COLA SON TARJETAS, no una tabla de once columnas
+          apretada. Cada tarjeta lleva lo que hace falta para decidir a quién
+          llamar —guía, estado, cliente, destino, reprogramación, ruta— y un
+          botón «Llamar» con `tel:` al alcance del pulgar: en el celular la
+          llamada se hace desde el mismo aparato. Misma ventana de 200 filas y
+          mismo orden que la tabla; solo cambia la forma. */}
+      <ul className="divide-y divide-slate-100 md:hidden">
+        {shownRows.map((s) => {
+          const gestion = fmtLastGestion(s.last_gestion_at);
+          return (
+            <li
+              key={s.id}
+              className={cn(
+                "flex items-start gap-3 px-4 py-3",
+                highlightedId === s.id ? "bg-emerald-50" : "",
+              )}
+            >
+              <button
+                type="button"
+                onClick={() => onOpen(s.id)}
+                className="min-w-0 flex-1 rounded-md text-left"
+              >
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="font-mono text-sm text-slate-800">{s.guide_code}</span>
+                  {s.courier === "fenix" && (
+                    <span className="rounded bg-orange-50 px-1 text-xs text-orange-700">Fenix</span>
+                  )}
+                  {s.created_via === "fenix_directo" && (
+                    <span className="rounded bg-indigo-50 px-1 text-xs text-indigo-700">Directa</span>
+                  )}
+                  <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
+                </span>
+                <span className="mt-1 block text-sm text-slate-800">{s.customer_name ?? "—"}</span>
+                <span className="block text-xs text-slate-500">
+                  {[s.district, s.city].filter(Boolean).join(" · ") || "—"}
+                  <FenixAvailabilityInline shipment={s} />
+                </span>
+                <span className="mt-1 block text-xs tabular-nums text-slate-500">
+                  Reprogramación {fmtReprogram(s.next_followup_at)}
+                  {gestion.days != null && (
+                    <span className={gestion.days >= 7 ? "font-semibold text-amber-700" : ""}>
+                      {" · "}última gestión {gestion.days === 0 ? "hoy" : `hace ${gestion.days} d`}
+                    </span>
+                  )}
+                  {highlightedId === s.id && (
+                    <span className="ml-2 font-semibold text-emerald-700">Actualizado</span>
+                  )}
+                </span>
+                <span className="mt-1 block text-xs">
+                  <AliclikRouteCell shipment={s} />
+                </span>
+              </button>
+              {s.customer_phone && (
+                <a
+                  href={`tel:${s.customer_phone.replace(/[^\d+]/g, "")}`}
+                  className="inline-flex shrink-0 items-center rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700"
+                >
+                  Llamar
+                </a>
+              )}
+            </li>
+          );
+        })}
+      </ul>
       {hiddenCount > 0 && (
         <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500">
           <span>
@@ -1626,7 +1728,7 @@ function ShipmentDrawer({
         aria-modal="true"
         aria-labelledby="shipment-drawer-title"
         tabIndex={-1}
-        className="h-full w-full max-w-[34rem] overflow-y-auto bg-white p-3.5 shadow-xl outline-none sm:p-4"
+        className="h-full w-full max-w-[34rem] overflow-y-auto bg-white p-3.5 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-xl outline-none sm:p-4 sm:pb-[max(1rem,env(safe-area-inset-bottom))]"
         onClick={(e) => e.stopPropagation()}
       >
         {detail && "error" in detail ? (
@@ -1649,7 +1751,9 @@ function ShipmentDrawer({
           <p className="text-sm text-slate-500">Cargando…</p>
         ) : (
           <div className="space-y-2.5">
-            <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-2.5">
+            {/* La cabecera queda fija: en teléfono el cajón es la pantalla entera
+                y «Cerrar» no puede irse con el scroll. */}
+            <div className="sticky top-0 z-10 -mx-3.5 -mt-3.5 flex items-start justify-between gap-3 border-b border-slate-100 bg-white px-3.5 pb-2.5 pt-3.5 sm:-mx-4 sm:-mt-4 sm:px-4 sm:pt-4">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 id="shipment-drawer-title" className="font-mono text-base font-semibold text-slate-900">

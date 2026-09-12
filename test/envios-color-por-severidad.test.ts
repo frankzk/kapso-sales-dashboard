@@ -45,8 +45,9 @@ describe("las secciones del cajón son neutras", () => {
         expect(allowed.has(line.trim()), line.trim()).toBe(true);
       }
     }
-    // Indigo solo en la etiqueta «Directa»: fondo y texto, en la tabla y en el cajón.
-    expect(src.match(/indigo-[0-9]/g)?.length).toBe(4);
+    // Indigo solo en la etiqueta «Directa»: fondo y texto, en la tabla, en las
+    // tarjetas de teléfono y en el cajón.
+    expect(src.match(/indigo-[0-9]/g)?.length).toBe(6);
   });
 });
 

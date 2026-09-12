@@ -18,7 +18,7 @@ const css = readFileSync(resolve(process.cwd(), "app/globals.css"), "utf8");
 
 describe("la tabla entra en el portátil", () => {
   it("tiene ancho propio y el contenedor scrollea hasta que entra de verdad", () => {
-    expect(src).toContain("<div className={TABLE_WRAP_FROM[1800]}>");
+    expect(src).toContain('<div className={cn("hidden md:block", TABLE_WRAP_FROM[1800])}>');
     expect(src).toContain('<table className="w-full min-w-[1100px] text-sm xl:min-w-[1400px]">');
     expect(src).not.toContain("className={TABLE_WRAP}");
   });
