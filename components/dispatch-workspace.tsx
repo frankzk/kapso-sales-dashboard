@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { DispatchScanner } from "@/components/dispatch-scanner";
 import { DispatchCamera } from "@/components/dispatch-camera";
 import { cn } from "@/components/ui";
 import { isCourierTbd } from "@/lib/shipment-output";
@@ -75,11 +76,6 @@ function routeHeading(manifest: DispatchManifest): { title: string; subtitle: st
   return who ? { title: who, subtitle: `${courier}${manifest.courier === "propio" ? ` · Carga ${manifest.load_number ?? 1}` : ""}` } : { title: courier, subtitle: "Courier" };
 }
 
-/** En qué paso conviene abrir una ruta según cómo esté. */
-function modeForManifest(manifest: DispatchManifest): Mode {
-  return nextDispatchMode(manifest, true);
-}
-
 const STATE_TONE: Record<DispatchManifestState, string> = {
   draft: "bg-slate-100 text-slate-700",
   office_check: "bg-amber-100 text-amber-800",
@@ -139,17 +135,21 @@ export function DispatchWorkspace({
   const [data, setData] = useState(() => scopeData(initialData));
   const initialManifest = data.manifests.find((manifest) => manifest.id === initialSelectedId)
     ?? data.manifests.find((manifest) => !["in_custody", "cancelled"].includes(manifest.state)) ?? null;
-  const defaultMode: Mode = nextDispatchMode(initialManifest, canManage);
+  function modeForAccess(manifest: DispatchManifest | null): Mode {
+    const next = nextDispatchMode(manifest, canManage);
+    return next === "pickup" && !canPickup && canManage ? "office" : next;
+  }
+  const defaultMode: Mode = modeForAccess(initialManifest);
   const [mode, setMode] = useState<Mode>(defaultMode);
   const [selectedId, setSelectedId] = useState<string | null>(
     initialManifest?.id ?? null,
   );
-  const [scan, setScan] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const scanLock = useRef(false);
+  const closeCamera = useCallback(() => setCameraOpen(false), []);
 
   const selected = useMemo(
     () => data.manifests.find((manifest) => manifest.id === selectedId) ?? null,
@@ -170,9 +170,11 @@ export function DispatchWorkspace({
 
   const executeScan = useCallback(async (raw: string) => {
     const value = raw.trim();
-    if (!value || busy) return;
+    if (!value || scanLock.current) return;
+    scanLock.current = true;
     setBusy(true);
     setMessage(null);
+    try {
     let result: DispatchActionResult;
     if (!selected) {
       result = { error: "Elige una ruta antes de escanear." };
@@ -183,16 +185,11 @@ export function DispatchWorkspace({
       result = await scanManifestItem(selected.id, value, mode === "office" ? "office" : "pickup");
     }
     showResult(result);
-    setScan("");
     await refresh(selected?.id);
-    setBusy(false);
-    requestAnimationFrame(() => inputRef.current?.focus());
+    } catch {
+      setMessage({ tone: "error", text: "No se pudo confirmar la respuesta. Revisa la conexión y vuelve a escanear el mismo paquete; no se duplicará." });
+    } finally { setBusy(false); scanLock.current = false; }
   }, [busy, mode, selected]);
-
-  function submitScan(event: FormEvent) {
-    event.preventDefault();
-    void executeScan(scan);
-  }
 
   const onCameraScan = useCallback((value: string) => {
     void executeScan(value);
@@ -209,16 +206,20 @@ export function DispatchWorkspace({
       transferred: data.manifests.filter((m) => m.state === "in_custody" && m.route_date === todayLima()).length,
     };
   }, [data]);
+  const progress = selected ? dispatchProgress(selected.items) : null;
+  const checkComplete = selected?.state !== "cancelled" && !!progress && (mode === "office" ? progress.officeComplete : progress.pickupComplete);
+  const scanAllowed = !!selected && !["cancelled", "in_custody"].includes(selected.state)
+    && (mode === "office" ? canManage : canPickup && !!progress?.officeComplete);
 
   return (
-    <div className="mx-auto max-w-[1500px] space-y-5 pb-24">
+    <div className="mx-auto max-w-[1500px] space-y-4 pb-12">
       <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div>
           <Link href={surface === "gf" ? "/dashboard/courier?tab=routes" : "/dashboard/pedidos/almacen"} className="text-xs font-medium text-slate-500 hover:text-slate-900">{surface === "gf" ? "← Grupo GF Courier · Rutas" : "← Almacén"}</Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{surface === "gf" ? "Grupo GF Courier · Verificar y recibir" : "Almacén · Entregas a couriers"}</h1>
-          <p className="mt-1 max-w-2xl text-sm text-slate-500">Primero se asigna la ruta, después se coteja. La custodia cambia solo cuando el motorizado recibe el 100 % — o, si no hay motorizado, cuando se anota quién recoge.</p>
+          <h1 className="mt-2 text-xl font-semibold tracking-tight text-slate-950 sm:text-2xl">{surface === "gf" ? "Verificar y recibir" : "Almacén · Entregas a couriers"}</h1>
+          <p className="mt-1 hidden max-w-2xl text-sm text-slate-500 sm:block">{surface === "gf" ? "Verifica la caja y luego registra la recepción del motorizado. La custodia cambia al recibir el 100 %." : "Primero se asigna la ruta, después se coteja. La custodia cambia solo cuando el motorizado recibe el 100 % — o, si no hay motorizado, cuando se anota quién recoge."}</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className={cn("items-center gap-3", surface === "gf" ? "hidden sm:flex" : "flex")}>
           {canPrepare && (
             <Link href="/dashboard/pedidos/almacen" className="min-h-11 rounded-xl border border-slate-300 px-5 text-sm font-semibold leading-[2.75rem] text-slate-700 hover:bg-slate-50">← Almacén</Link>
           )}
@@ -229,7 +230,7 @@ export function DispatchWorkspace({
         </div>
       </header>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="hidden grid-cols-2 gap-3 sm:grid lg:grid-cols-4">
         <Metric label="Armados sin ruta" value={stats.ready} tone="slate" />
         <Metric label="Por armar en almacén" value={stats.pending} tone="amber" />
         <Metric label="Listas para recojo" value={stats.officeReady} tone="blue" />
@@ -237,7 +238,7 @@ export function DispatchWorkspace({
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="order-2 space-y-3 xl:order-1">
+        <aside inert={busy} className="order-2 space-y-3 xl:order-1">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Rutas recientes</h2>
             <span className="text-xs text-slate-400">{activeManifests.length}</span>
@@ -248,59 +249,53 @@ export function DispatchWorkspace({
                 key={manifest.id}
                 manifest={manifest}
                 active={selectedId === manifest.id}
-                onClick={() => { setSelectedId(manifest.id); setMode(modeForManifest(manifest)); }}
+                onClick={() => { setMessage(null); setSelectedId(manifest.id); setMode(modeForAccess(manifest)); }}
               />
             )) : <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">Aún no hay rutas. Crea una para comenzar.</div>}
           </div>
         </aside>
 
-        <main className="order-1 min-w-0 space-y-4 xl:order-2">
-          <div className="grid grid-cols-3 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
+        <div className="order-1 min-w-0 space-y-4 xl:order-2">
+          <div inert={busy} className="grid grid-cols-3 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
             <ModeButton active={mode === "build"} disabled={!canManage} onClick={() => setMode("build")} number="1" label="Agregar pedidos" />
             <ModeButton active={mode === "office"} disabled={!canManage} onClick={() => setMode("office")} number="2" label="Verificar caja" />
             <ModeButton active={mode === "pickup"} disabled={!canPickup || (!!selected && !needsRiderCheck(selected.kind))} onClick={() => setMode("pickup")} number="3" label="Recibir carga" />
           </div>
 
-          <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 p-5 sm:p-7">
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 p-4 sm:p-7">
               <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-600">{`Paso ${MODE_STEP[mode]} de 3`}</p>
-                  <h2 className="mt-1 text-xl font-semibold text-slate-950">{MODE_TITLES[mode]}</h2>
-                  <p className="mt-1 text-sm text-slate-500">{MODE_HINTS[mode]}</p>
+                  <h2 className="text-lg font-semibold text-slate-950">{MODE_TITLES[mode]}</h2>
+                  <p className="mt-1 text-sm leading-5 text-slate-600">{MODE_HINTS[mode]}</p>
                 </div>
                 {selected && <StateBadge state={selected.state} />}
               </div>
 
               {selected && (
-                <RouteTarget manifest={selected} manifests={activeManifests} onSelect={(id) => { setSelectedId(id); setMode(nextDispatchMode(data.manifests.find((manifest) => manifest.id === id) ?? null, canManage)); }} />
+                <RouteTarget mode={mode} disabled={busy} manifest={selected} manifests={activeManifests} onSelect={(id) => { setMessage(null); setSelectedId(id); setMode(modeForAccess(data.manifests.find((manifest) => manifest.id === id) ?? null)); }} />
               )}
               {surface === "gf" && selected && <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
-                <span>Carga {selected.load_number ?? 1} · {activeDispatchItems(selected.items).length} paquetes</span>
+                <span>{activeDispatchItems(selected.items).length} paquete{activeDispatchItems(selected.items).length === 1 ? "" : "s"} en esta carga</span>
                 {selected.delivery_route_id && selected.state === "in_custody" && <Link href={`/dashboard/rutas?id=${selected.delivery_route_id}`} className="font-semibold text-brand-700">Ver reparto y liquidación →</Link>}
                 {selected.state === "in_custody" && <Link href="/dashboard/courier" className="font-semibold text-brand-700">Agregar una carga a la misma ruta →</Link>}
               </div>}
 
-              {mode !== "build" && (
-              <form onSubmit={submitScan} className="mt-6 flex flex-col gap-3 sm:flex-row">
-                <label className="relative min-w-0 flex-1">
-                  <span className="sr-only">Código QR, guía o número de pedido</span>
-                  <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-xl text-slate-400">⌁</span>
-                  <input
-                    ref={inputRef}
-                    autoFocus
-                    value={scan}
-                    onChange={(event) => setScan(event.target.value)}
-                    disabled={busy || !selected}
-                    placeholder="Escanea el rótulo o escribe la guía"
-                    className="h-14 w-full rounded-2xl border-2 border-slate-200 bg-slate-50 pl-12 pr-4 text-base font-medium outline-none transition focus:border-slate-950 focus:bg-white disabled:opacity-50"
-                  />
-                </label>
-                <button type="button" onClick={() => setCameraOpen(true)} disabled={busy || !selected} className="h-14 rounded-2xl border border-slate-300 px-5 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Abrir cámara</button>
-                <button disabled={busy || !scan.trim() || !selected} className="h-14 rounded-2xl bg-slate-950 px-7 font-semibold text-white hover:bg-slate-800 disabled:opacity-40">{busy ? "Procesando…" : "Confirmar"}</button>
-              </form>
+              {mode !== "build" && checkComplete && selected ? (
+                <div className="mt-4 rounded-xl bg-emerald-50 p-4" role="status">
+                  <p className="font-semibold text-emerald-900">{mode === "office" ? "Caja verificada" : "Carga recibida"} · {progress?.total} de {progress?.total}</p>
+                  <p className="mt-1 text-sm text-emerald-800">{selected.state === "in_custody" ? "La entrega de esta carga quedó registrada." : needsRiderCheck(selected.kind) ? "Oficina terminó. Falta que el motorizado reciba cada paquete." : "Oficina terminó. Registra quién recoge para entregar al courier."}</p>
+                  {mode === "office" && selected.state !== "in_custody" && needsRiderCheck(selected.kind) && (canPickup ?
+                    <button type="button" onClick={() => { setMode("pickup"); setMessage(null); }} className="mt-3 min-h-12 w-full rounded-xl bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700">Continuar a recepción</button>
+                    : <p className="mt-2 text-sm font-medium text-emerald-900">El motorizado continúa desde su acceso a Reparto.</p>)}
+                </div>
+              ) : mode !== "build" && (
+                <>
+                  {mode === "pickup" && selected && !progress?.officeComplete && <p className="mt-3 text-sm text-amber-800">Primero completa la verificación de oficina.</p>}
+                  <DispatchScanner key={`${selectedId}:${mode}`} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
+                </>
               )}
-              {message && <div className={cn("mt-4 rounded-xl px-4 py-3 text-sm font-medium", message.tone === "error" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800")}>{message.text}</div>}
+              {message && <div role={message.tone === "error" ? "alert" : "status"} className={cn("mt-4 rounded-xl px-4 py-3 text-sm font-medium", message.tone === "error" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800")}>{message.text}</div>}
             </div>
 
             {mode === "build" ? (
@@ -325,10 +320,10 @@ export function DispatchWorkspace({
               <div className="p-12 text-center text-sm text-slate-500">Elige una ruta de la lista o crea una nueva.</div>
             )}
           </section>
-        </main>
+        </div>
       </div>
 
-      <DispatchCamera open={cameraOpen} onClose={() => setCameraOpen(false)} onScan={onCameraScan} />
+      <DispatchCamera open={cameraOpen} onClose={closeCamera} onScan={onCameraScan} />
       {showCreate && <CreateManifestModal riders={riders} onClose={() => setShowCreate(false)} onCreated={async (result) => { showResult(result); if (result.manifestId) { await refresh(result.manifestId); setSelectedId(result.manifestId); setMode("build"); } setShowCreate(false); }} />}
     </div>
   );
@@ -343,10 +338,14 @@ export function DispatchWorkspace({
  * pegado a la acción e incluye su propio selector para no depender de la lista.
  */
 function RouteTarget({
+  mode,
+  disabled,
   manifest,
   manifests,
   onSelect,
 }: {
+  mode: Mode;
+  disabled: boolean;
   manifest: DispatchManifest;
   manifests: DispatchManifest[];
   onSelect: (id: string) => void;
@@ -358,15 +357,15 @@ function RouteTarget({
   const officeChecked = progress.officeChecked;
   const officeComplete = progress.officeComplete;
   return (
-    <div className="mt-5 rounded-2xl bg-slate-950 p-4 text-white sm:p-5">
+    <div className="mt-4 rounded-xl bg-slate-950 p-3 text-white sm:p-4">
       <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-        {rider ? "Estás asignando a la ruta de" : "Estás preparando la entrega de"}
+        {mode === "build" ? (rider ? "Estás asignando a la ruta de" : "Estás preparando la entrega de") : "Caja seleccionada"}
       </p>
       {/* Quién se lleva la caja y qué día: es lo único que distingue dos rutas
           del mismo día. Debajo, de qué se trata esa ruta. */}
       <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-xl font-semibold sm:text-2xl">{title}</span>
-        <span className="text-lg font-semibold text-slate-300">
+        <span className="text-lg font-semibold">{title}</span>
+        <span className="text-sm font-medium text-slate-300">
           {routeDayLong(manifest.route_date)}
         </span>
       </div>
@@ -393,12 +392,15 @@ function RouteTarget({
         </div>
       )}
       {manifests.length > 1 && (
-        <label className="mt-3 block">
+        <details className="mt-2">
+          <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium text-slate-200">Cambiar de caja</summary>
+        <label className="block">
           <span className="sr-only">Cambiar de ruta</span>
           <select
+            disabled={disabled}
             value={manifest.id}
             onChange={(event) => onSelect(event.target.value)}
-            className="h-10 w-full rounded-xl border border-white/20 bg-white/10 px-3 text-sm font-medium text-white outline-none sm:max-w-md"
+            className="min-h-12 w-full rounded-xl border border-white/20 bg-white/10 px-3 text-base font-medium text-white sm:max-w-md"
           >
             {manifests.map((option) => (
               <option key={option.id} value={option.id} className="text-slate-950">
@@ -407,12 +409,11 @@ function RouteTarget({
             ))}
           </select>
         </label>
+        </details>
       )}
     </div>
   );
 }
-
-const MODE_STEP: Record<Mode, number> = { build: 1, office: 2, pickup: 3 };
 
 const MODE_TITLES: Record<Mode, string> = {
   build: "Asignar paquetes a la ruta",
@@ -423,7 +424,7 @@ const MODE_TITLES: Record<Mode, string> = {
 const MODE_HINTS: Record<Mode, string> = {
   build:
     "Decide aquí qué va con quién, sin escanear. Almacén puede seguir armando: el cotejo verificará después que cada caja entró de verdad.",
-  office: "Escanea cada paquete que entra en la caja. Solo confirma lo asignado: lo que no esté en la ruta se avisa, no se agrega.",
+  office: "Escanea los paquetes de esta caja. Un paquete de otra ruta no se agrega.",
   pickup: "El propio motorizado escanea cada paquete que recibe. Al llegar al 100 %, la custodia cambia automáticamente.",
 };
 
@@ -715,12 +716,44 @@ function ManifestDetail({ manifest, mode, canManage, onChanged, showResult }: { 
           .some((field) => String(field).toLowerCase().includes(needle)),
       )
     : active;
-  return <div className="p-5 sm:p-7"><div className="grid gap-3 sm:grid-cols-[1fr_auto]"><div><div className="flex items-end justify-between text-sm"><span className="font-medium text-slate-700">{mode === "office" ? "Cotejo de oficina" : "Recepción del motorizado"}</span><span className="font-semibold tabular-nums text-slate-950">{checked} de {progress.total}</span></div><div className="mt-2 h-3 overflow-hidden rounded-full bg-slate-100"><div className={cn("h-full rounded-full transition-all", mode === "office" ? "bg-blue-600" : "bg-emerald-600")} style={{ width: `${progress.total ? (checked / progress.total) * 100 : 0}%` }} /></div></div>{manifest.driver_name && <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm"><span className="text-slate-500">{needsRiderCheck(manifest.kind) ? "Motorizado" : "Contacto"}</span><p className="font-semibold text-slate-900">{manifest.driver_name}</p></div>}</div>{!needsRiderCheck(manifest.kind) && manifest.state !== "in_custody" && canManage && <HandOverPanel manifest={manifest} onDone={async (r) => { showResult(r); await onChanged(); }} />}{active.length > 8 && <label className="relative mt-6 block"><span className="sr-only">Buscar en la ruta</span><span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar en esta ruta por código, pedido, cliente o distrito" className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm outline-none focus:border-slate-950 focus:bg-white" /></label>}<div className="mt-6 space-y-2">{shownItems.length ? shownItems.map((item) => <PackageRow key={item.id} item={item} mode={mode} canRemove={canManage && manifest.state !== "in_custody"} onRemoved={async (reason) => { showResult(await removeManifestItem(manifest.id, item.shipment_id, reason)); await onChanged(); }} />) : <div className="rounded-2xl border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500">{needle ? `Ningún paquete de esta ruta coincide con «${query.trim()}».` : "Aún no hay paquetes asignados. Vuelve al paso 2 para asignarlos."}</div>}</div>{removed.length > 0 && <details className="mt-5 rounded-2xl bg-slate-50 p-4"><summary className="cursor-pointer text-sm font-medium text-slate-600">Retirados de esta ruta ({removed.length})</summary><div className="mt-3 space-y-2">{removed.map((item) => <div key={item.id} className="flex justify-between gap-3 text-xs text-slate-500"><span>{packageCode(item.shipment)}</span><span>{item.removal_reason}</span></div>)}</div></details>}{canManage && !["in_custody", "cancelled"].includes(manifest.state) && <button onClick={async () => { const reason = window.prompt("Motivo de cancelación de la ruta"); if (!reason) return; showResult(await cancelDispatchManifest(manifest.id, reason)); await onChanged(); }} className="mt-6 text-xs font-medium text-red-600 hover:underline">Cancelar esta ruta</button>}</div>;
+  return <div className="p-4 sm:p-7">
+    <div className="flex items-end justify-between gap-3 text-sm">
+      <span className="font-medium text-slate-700">{mode === "office" ? "Paquetes verificados" : "Paquetes recibidos"}</span>
+      <span className="font-semibold tabular-nums text-slate-950">{checked} de {progress.total}</span>
+    </div>
+    <progress aria-label={mode === "office" ? "Cotejo de oficina" : "Recepción del motorizado"} value={checked} max={progress.total || 1} className="mt-2 h-2 w-full accent-brand-600" />
+    {!needsRiderCheck(manifest.kind) && manifest.state !== "in_custody" && canManage && <HandOverPanel manifest={manifest} onDone={async (r) => { showResult(r); await onChanged(); }} />}
+    {active.length > 8 && <label className="mt-4 block text-sm font-medium text-slate-700">
+      Buscar en esta caja
+      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Código, cliente o distrito" className="mt-1 min-h-12 w-full rounded-xl border border-slate-200 px-3 text-base focus-visible:ring-2 focus-visible:ring-brand-500" />
+    </label>}
+    <div className="mt-4 space-y-2">{shownItems.length ? shownItems.map((item) =>
+      <PackageRow key={item.id} item={item} mode={mode} canRemove={false} onRemoved={async () => {}} />
+    ) : <p className="py-6 text-sm text-slate-600">{needle ? `Ningún paquete coincide con «${query.trim()}».` : "Aún no hay paquetes asignados. Agrégalos antes de verificar esta caja."}</p>}</div>
+    {removed.length > 0 && <details className="mt-4 border-t border-slate-200 pt-2">
+      <summary className="min-h-12 cursor-pointer py-3 text-sm font-medium text-slate-600">Paquetes retirados ({removed.length})</summary>
+      <div className="space-y-2">{removed.map((item) => <div key={item.id} className="text-sm text-slate-600"><span className="font-medium">{packageCode(item.shipment)}</span> · {item.removal_reason}</div>)}</div>
+    </details>}
+    {canManage && !["in_custody", "cancelled"].includes(manifest.state) && <details className="mt-5 border-t border-slate-200 pt-2">
+      <summary className="min-h-12 cursor-pointer py-3 text-sm font-medium text-slate-600">Corregir contenido de la caja</summary>
+      <p className="mb-3 text-sm text-slate-600">Retirar un paquete o cancelar requiere un motivo y queda en el historial.</p>
+      <div className="space-y-2">{active.map((item) => <PackageRow key={item.id} item={item} mode={mode} canRemove onRemoved={async (reason) => { showResult(await removeManifestItem(manifest.id, item.shipment_id, reason)); await onChanged(); }} />)}</div>
+      <button type="button" onClick={async () => { const reason = window.prompt("Motivo de cancelación de la ruta"); if (!reason) return; showResult(await cancelDispatchManifest(manifest.id, reason)); await onChanged(); }} className="mt-4 min-h-12 rounded-lg px-3 text-sm font-medium text-red-700 hover:bg-red-50">Cancelar esta ruta</button>
+    </details>}
+  </div>;
 }
 
 function PackageRow({ item, mode, canRemove, onRemoved }: { item: DispatchManifestItem; mode: Mode; canRemove: boolean; onRemoved: (reason: string) => Promise<void> }) {
   const checked = mode === "office" ? item.office_checked_at : item.pickup_checked_at;
-  return <div className={cn("flex items-center gap-3 rounded-2xl border p-3.5", checked ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-white")}><span className={cn("grid size-9 shrink-0 place-items-center rounded-full text-sm font-bold", checked ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-400")}>{checked ? "✓" : "·"}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-baseline gap-x-2"><p className="font-semibold text-slate-950">{packageCode(item.shipment)}</p><span className="text-[11px] font-semibold uppercase text-slate-400">{item.shipment?.courier}</span></div><p className="truncate text-xs text-slate-500">{item.shipment?.customer_name ?? "Cliente"} · {item.shipment?.district ?? item.shipment?.province ?? "Sin distrito"}</p></div>{canRemove && <button onClick={async () => { const reason = window.prompt("¿Por qué se retira este paquete de la ruta?"); if (reason) await onRemoved(reason); }} className="shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50">Retirar</button>}</div>;
+  const [removing, setRemoving] = useState(false);
+  return <div className={cn("flex items-start gap-3 rounded-xl border p-3", checked ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-white")}>
+    <span aria-label={checked ? "Verificado" : "Pendiente"} className={cn("mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-sm font-bold", checked ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-500")}>{checked ? "✓" : "·"}</span>
+    <div className="min-w-0 flex-1">
+      <p className="break-words text-sm font-semibold text-slate-950">{packageCode(item.shipment)}</p>
+      <p className="mt-1 break-words text-sm leading-5 text-slate-600">{item.shipment?.customer_name ?? "Cliente"} · {item.shipment?.district ?? item.shipment?.province ?? "Sin distrito"}</p>
+    </div>
+    {canRemove && <button type="button" disabled={removing} onClick={async () => { const reason = window.prompt("¿Por qué se retira este paquete de la ruta?"); if (!reason) return; setRemoving(true); try { await onRemoved(reason); } finally { setRemoving(false); } }} className="min-h-12 shrink-0 rounded-lg px-3 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">{removing ? "Retirando…" : "Retirar"}</button>}
+  </div>;
 }
 
 function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchRider[]; onClose: () => void; onCreated: (result: DispatchActionResult) => void }) {

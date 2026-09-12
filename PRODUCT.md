@@ -9,6 +9,9 @@ product
 Equipos internos de confirmación, almacén, seguimiento logístico, reprogramación,
 liquidaciones y dirección. Trabajan principalmente desde una computadora durante
 la jornada y necesitan resolver muchos pedidos sin perder el contexto operativo.
+Almacén y Grupo GF Courier también trabajan de pie, con una caja delante y un
+celular en la mano: necesitan escanear y encontrar la siguiente acción sin
+desplazamiento horizontal ni teclado abierto por defecto.
 Shopify es una herramienta cotidiana y constituye la fuente de verdad comercial.
 
 ## Product Purpose
@@ -47,5 +50,7 @@ ni burocrática.
 
 Objetivo WCAG 2.1 AA: contraste suficiente, foco visible, navegación por teclado,
 etiquetas que no dependan solo del color y movimiento reducido o prescindible.
-La implementación actual prioriza escritorio; el flujo específico de escaneo y
-motorizados en celular se diseñará como una etapa posterior.
+El cotejo prioriza cámara en celular e ingreso por lector en escritorio.
+Los controles principales tienen al menos 48 px; la navegación y los datos
+secundarios se despliegan bajo demanda. El aumento de texto no debe ocultar
+acciones ni depender de gestos horizontales.
