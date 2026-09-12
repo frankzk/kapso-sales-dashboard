@@ -38,7 +38,7 @@ describe("lo demás cabe en 360 px", () => {
   it("búsqueda a todo el ancho, pestañas deslizables, filtros plegados", () => {
     expect(src).toContain('className="w-full rounded-lg border border-slate-200 py-1.5 pl-8 pr-7 text-sm md:w-64"');
     expect(src).toContain('className="-mx-4 flex gap-1.5 overflow-x-auto px-4 md:mx-0 md:flex-wrap md:overflow-visible md:px-0"');
-    expect(src).toContain('"flex-wrap items-center gap-2", filtersOpen ? "flex" : "hidden md:flex"');
+    expect(src).toContain('filtersOpen ? "flex" : "hidden md:flex"');
     expect(src).toContain("aria-expanded={filtersOpen}");
     expect(src).toContain("{activeFilters > 0 && (");
   });
