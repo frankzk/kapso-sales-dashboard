@@ -25,6 +25,9 @@
 # rechaza los de relleno (con sonda@example.com devuelve HTTP 400 y no crea la
 # orden).
 #
+# Contra producción (los IDs del panel solo existen ahí), con -Yes:
+#   .\scripts\flow-probe.ps1 -Prod -Yes -Amount 1 -Email 'tucorreo@real.com'
+#
 # Opcionales:
 #   .\scripts\flow-probe.ps1 -Amount 20 -Methods '9,170,152,169'
 
@@ -46,6 +49,12 @@ param(
   # «One Shot» no se puede responder en otro sitio. Crea órdenes PENDIENTES
   # —no mueven plata mientras nadie las pague— y pide confirmación.
   [switch]$Prod,
+  # Confirma -Prod. Es una bandera y no una pregunta interactiva a propósito:
+  # un Read-Host se COME la siguiente línea cuando alguien pega varios comandos
+  # de golpe —pasó: el «git pull» de después acabó contestando al prompt y la
+  # corrida se canceló sola—. Una bandera se ve en el comando, no depende del
+  # portapapeles y sigue siendo igual de deliberada.
+  [switch]$Yes,
   # Solo diagnostica a qué ambiente pertenece la credencial. No crea nada: son
   # GETs. Es lo primero que hay que correr ante un «apiKey not found».
   [switch]$Check
@@ -100,7 +109,9 @@ if ($Prod) {
   $cuantas = ($Methods -split ',').Count
   Write-Host ("PRODUCCION: se van a crear {0} órdenes reales de S/ {1}." -f $cuantas, $Amount) -ForegroundColor Yellow
   Write-Host ("Quedan PENDIENTES y caducan en {0} s. No completes el pago al abrir los links." -f $Timeout) -ForegroundColor Yellow
-  if ((Read-Host "Escribe PRODUCCION para continuar") -ne "PRODUCCION") { throw "Cancelado." }
+  if (-not $Yes) {
+    throw "Falta -Yes para confirmar. Repite el comando con -Yes al final."
+  }
   $env:FLOWCL_API_BASE = "https://www.flow.cl/api"
   $env:FLOWCL_ALLOW_PROD = "1"
 } else {
