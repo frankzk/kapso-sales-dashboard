@@ -119,6 +119,7 @@ describe("rellenar decide el courier, no deshace el trabajo del almacén", () =>
   // La caja ya existe: lo nuevo es quién la lleva. Lo que el almacén hizo sobre
   // ella —y la identidad con la que se rotuló— sobrevive al relleno.
   const fila = {
+    id: "uuid-nuevo-que-solo-corresponde-al-insert",
     courier: "shalom",
     guide_code: "92084077",
     created_via: "shalom_pro_manual",
@@ -157,9 +158,19 @@ describe("rellenar decide el courier, no deshace el trabajo del almacén", () =>
     // El rótulo ya está pegado a la caja: cambiarle el QR o el consecutivo a
     // mitad de camino deja un papel que apunta a otra cosa.
     const out = stripKeys(fila);
+    expect(out).not.toHaveProperty("id");
     expect(out).not.toHaveProperty("qr_token");
     expect(out).not.toHaveProperty("output_number");
     expect(out).not.toHaveProperty("output_code");
+  });
+
+  it("un UUID preparado para INSERT no cambia la caja que ya existe", () => {
+    // #AUR176840 ya tenía eventos de creado y package_ready. El UPDATE intentó
+    // cambiar su PK por este UUID nuevo; la FK lo rechazó y la solicitud quedó
+    // observada, aunque la caja seguía perfectamente disponible.
+    const out = stripKeys(fila);
+    expect(out).not.toHaveProperty("id");
+    expect(fila.id).toBe("uuid-nuevo-que-solo-corresponde-al-insert");
   });
 
   it("tampoco se mueve de tienda ni de pedido", () => {
