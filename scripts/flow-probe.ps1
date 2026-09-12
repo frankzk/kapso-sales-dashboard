@@ -1,4 +1,12 @@
-# Corre la sonda de Flow.cl desde Windows.
+﻿# Corre la sonda de Flow.cl desde Windows.
+#
+# ESTE FICHERO EMPIEZA CON UN BOM UTF-8 Y TIENE QUE SEGUIR ASÍ. Windows
+# PowerShell 5.1 —la consola azul, no pwsh 7— lee los .ps1 como Windows-1252
+# salvo que haya BOM. Sin él, «PRODUCCIÓN» llega al parser como «PRODUCCIÃ“N»,
+# y ese 0x93 es la comilla tipográfica de apertura: PowerShell las acepta como
+# delimitador, abre una cadena que nunca cierra y suelta un ParserError que
+# señala una línea inocente varias más abajo. Lo mismo hace la raya «—» (su
+# tercer byte es 0x94). Si tu editor guarda «UTF-8 sin BOM», rompe el fichero.
 #
 # Existe por lo mismo que `shalom-probe.ps1`: PowerShell no entiende el
 # `VAR=valor comando` de bash. Ahí `FLOWCL_API_KEY='...' node ...` se interpreta
@@ -79,13 +87,14 @@ if ($Check) {
 Remove-Item Env:\FLOWCL_CHECK -ErrorAction SilentlyContinue
 
 if ($Prod) {
-  # El conteo se calcula ANTES y aparte. Windows PowerShell 5.1 se pierde con
-  # comillas simples dentro de un $() dentro de una cadena de comillas dobles:
-  # da por abierta una cadena que nunca cierra y el error sale líneas más
-  # abajo, señalando a una línea inocente. Fuera de la cadena no hay nada que
-  # confundir, y de paso se lee mejor.
+  # «PRODUCCION» va SIN tilde a propósito, y no es dejadez: la Ó es el carácter
+  # que rompió este fichero (ver la cabecera). El BOM ya lo arregla, pero esta
+  # línea es además la palabra que el usuario teclea abajo para confirmar, así
+  # que sin tilde en los dos sitios es una cosa menos que pueda desalinearse.
+  #
+  # El conteo, fuera de la cadena y con -f, como el resto del fichero.
   $cuantas = ($Methods -split ',').Count
-  Write-Host ("PRODUCCIÓN: se van a crear {0} órdenes reales de S/ {1}." -f $cuantas, $Amount) -ForegroundColor Yellow
+  Write-Host ("PRODUCCION: se van a crear {0} órdenes reales de S/ {1}." -f $cuantas, $Amount) -ForegroundColor Yellow
   Write-Host ("Quedan PENDIENTES y caducan en {0} s. No completes el pago al abrir los links." -f $Timeout) -ForegroundColor Yellow
   if ((Read-Host "Escribe PRODUCCION para continuar") -ne "PRODUCCION") { throw "Cancelado." }
   $env:FLOWCL_API_BASE = "https://www.flow.cl/api"
