@@ -206,6 +206,13 @@ export function limaCalendarDayBounds(now: Date = new Date()): {
   };
 }
 
+/**
+ * Intentos que Aliclik admite antes de que la reprogramación tenga que salir por
+ * Swayp. Estaba cableado como `3` acá y como texto «/ 3» en la métrica del
+ * cajón: dos sitios que podían discrepar sin que nada fallara.
+ */
+export const ALICLIK_MAX_INTENTOS = 3;
+
 export type AliclikRescheduleReason =
   | "eligible"
   | "not_aliclik"
@@ -255,7 +262,7 @@ export function evaluateAliclikReschedule(
     return result(false, "not_aliclik");
   }
   if (input.attempts == null) return result(false, "missing_attempts");
-  if (input.attempts >= 3) return result(false, "three_attempts");
+  if (input.attempts >= ALICLIK_MAX_INTENTOS) return result(false, "three_attempts");
   if (!input.serviceDate || !/^\d{4}-\d{2}-\d{2}$/.test(input.serviceDate)) {
     return result(false, "missing_service_date");
   }
@@ -357,6 +364,21 @@ export function isFutureShipmentFollowup(
 ): boolean {
   const selected = selectedUtcDateKey(nextFollowupAt);
   return !!selected && selected > dateKeyInTimeZone(now, "America/Lima");
+}
+
+/**
+ * Una fecha de entrega informada por el courier no puede ser de AYER.
+ *
+ * A diferencia de una llamada programada, HOY sí vale: el motorizado puede
+ * reprogramar para más tarde el mismo día. Lo que no vale es el pasado, que es
+ * lo que el formulario aceptaba sin decir nada.
+ */
+export function isTodayOrLaterDelivery(
+  deliveryDate: string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  const selected = selectedUtcDateKey(deliveryDate);
+  return !!selected && selected >= dateKeyInTimeZone(now, "America/Lima");
 }
 
 /** Build equivalent phone tokens for the Envíos global search. Shipment phones
