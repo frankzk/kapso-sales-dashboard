@@ -41,9 +41,21 @@ describe("el cajón y el modal son diálogos", () => {
     }
     expect(src.match(/role="dialog"/g)?.length).toBe(2);
     expect(src.match(/aria-modal="true"/g)?.length).toBe(2);
-    expect(src.match(/panelRef\.current\?\.focus\(\);/g)?.length).toBe(2);
-    expect(src.match(/if \(e\.key !== "Escape" \|\| e\.defaultPrevented\) return;/g)?.length).toBe(2);
-    expect(src.match(/opener\?\.focus\(\);/g)?.length).toBe(2);
+    // Una sola función para los dos diálogos (`useDialogKeys`): el foco entra,
+    // Escape cierra, Tab no se escapa y al cerrar el foco vuelve.
+    expect(src).toContain("function useDialogKeys(");
+    expect(src).toContain("panelRef.current?.focus();");
+    expect(src).toContain('if (e.key === "Escape") {');
+    expect(src).toContain("opener?.focus();");
+    expect(src.match(/useDialogKeys\(panelRef, /g)?.length).toBe(2);
+  });
+
+  it("el foco no se escapa al tablero de atrás", () => {
+    const hook = between("function useDialogKeys(", "const SIN_DISTRITO");
+    expect(hook).toContain('if (e.key !== "Tab") return;');
+    expect(hook).toContain("panel.querySelectorAll<HTMLElement>(");
+    expect(hook).toContain("first.focus();");
+    expect(hook).toContain("last.focus();");
   });
 
   it("Escape cierra por la misma puerta que el botón «Cerrar» (suelta la reserva)", () => {

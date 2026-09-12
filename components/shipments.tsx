@@ -13,6 +13,8 @@ import {
   isShipmentReadyForContact,
   isShipmentReadyForContactToday,
   labelOf,
+  CLAIM_TTL_MINUTES,
+  MAX_INTENTOS,
   matchesAliclikRouteFilter,
   normalizeCity,
   reprogramCourierOf,
@@ -268,6 +270,64 @@ function StatusBadge({
   );
 }
 
+/**
+ * Teclado de un diálogo: entra el foco, Escape cierra, Tab no se escapa, y al
+ * cerrar el foco vuelve a donde estaba.
+ *
+ * POR QUÉ COMPARTIDO. El cajón de la guía y el modal de reprogramaciones tenían
+ * cada uno su copia de Escape y su `panelRef.current?.focus()`, y la trampa de
+ * foco faltaba en los dos: el panel tenía rol de diálogo y era modal, pero
+ * Tab seguía recorriendo el tablero de atrás. Con teclado se terminaba
+ * escribiendo en los filtros de una cola que el cajón estaba tapando.
+ */
+function useDialogKeys(
+  panelRef: React.RefObject<HTMLDivElement | null>,
+  onRequestClose: () => void,
+) {
+  const closeRef = useRef(onRequestClose);
+  closeRef.current = onRequestClose;
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panelRef.current?.focus();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const focusables = [
+        ...panel.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ].filter((el) => el.offsetParent !== null);
+      if (!focusables.length) {
+        e.preventDefault();
+        panel.focus();
+        return;
+      }
+      const first = focusables[0]!;
+      const last = focusables[focusables.length - 1]!;
+      const active = document.activeElement;
+      if (!e.shiftKey && (active === last || !panel.contains(active))) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && (active === first || active === panel || !panel.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      opener?.focus();
+    };
+  }, [panelRef]);
+}
+
 const SIN_DISTRITO = "(sin distrito)";
 const SIN_DEPARTAMENTO = "(sin departamento)";
 
@@ -460,6 +520,77 @@ export function ShipmentsBoard({
     aliclikRouteFilter,
   ]);
 
+  const searchActive = search.trim().length >= 2;
+
+  // EL ORDEN DE LA COLA VIVE ACÁ, no dentro de la tabla. La pantalla es una
+  // cola, pero cada ciclo terminaba en la misma guía: cerrar, buscar la fila,
+  // volver a abrir. Para ofrecer «Siguiente» hay que saber cuál es, y eso
+  // depende del orden que la persona está viendo — así que el orden sube al
+  // tablero y la tabla lo recibe ya resuelto.
+  const [sort, setSort] = useState<ShipmentSort>(null);
+  const toggleSort = useCallback((key: ShipmentSortKey) => {
+    setSort((current) => ({
+      key,
+      direction: current?.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+  }, []);
+  const queueOrder = useMemo(
+    () => (sort ? sortShipmentRows(filtered, sort.key, sort.direction, storeName) : filtered),
+    [filtered, sort, storeName],
+  );
+  const searchOrder = useMemo(
+    () => (results && sort ? sortShipmentRows(results, sort.key, sort.direction, storeName) : results),
+    [results, sort, storeName],
+  );
+
+  /**
+   * La guía siguiente a la abierta, en el orden que se está viendo.
+   *
+   * Si la guía abierta ya no está en la lista —se cerró y salió de la vista, que
+   * es lo normal tras registrar— se ofrece la PRIMERA, que es la que ocupó su
+   * lugar en la cola.
+   */
+  const visibleOrder = searchActive ? (searchOrder ?? []) : queueOrder;
+  const nextInQueue = (() => {
+    if (!openId) return null;
+    const i = visibleOrder.findIndex((r) => r.id === openId);
+    if (i === -1) return visibleOrder[0]?.id ?? null;
+    return visibleOrder[i + 1]?.id ?? null;
+  })();
+
+  /**
+   * Quién tiene tomada una guía, para no abrirla y descubrirlo recién dentro.
+   *
+   * Solo el HECHO, no el nombre: la fila trae `claimed_by` (un id) y no el
+   * nombre de la asesora. Se respeta el mismo TTL que el servidor, y la guía
+   * abierta en este momento no se marca: es la propia.
+   */
+  const claimedBy = useCallback(
+    (row: ShipmentRow) => {
+      if (!row.claimed_by || row.id === openId) return null;
+      const since = row.claimed_at ? Date.parse(row.claimed_at) : NaN;
+      if (Number.isNaN(since) || Date.now() - since > CLAIM_TTL_MINUTES * 60_000) return null;
+      return "Tomada";
+    },
+    [openId],
+  );
+
+  /**
+   * La guía abierta, en la URL, sin recargar la página.
+   *
+   * `initialOpenId` ya existía —la página lee `?open=`— pero abrir una guía no
+   * lo escribía: no había forma de compartir «mira esta guía» ni de recuperarla
+   * tras un F5. Va por `replaceState` y no por `router.push` a propósito: un
+   * push revalida la ruta y el servidor volvería a mandar la vista entera (3 MB
+   * en Entregado) por abrir un cajón.
+   */
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (openId) url.searchParams.set("open", openId);
+    else url.searchParams.delete("open");
+    window.history.replaceState(window.history.state, "", url);
+  }, [openId]);
+
   // "Reprogramado por": conteos sobre la vista cargada (independiente de los
   // demás filtros) para etiquetar las opciones. Solo tiene sentido donde
   // conviven guías reprogramadas (En ruta y Entregado).
@@ -474,7 +605,6 @@ export function ShipmentsBoard({
     { aliclik: 0, fenix: 0 },
   );
 
-  const searchActive = search.trim().length >= 2;
   // Cuántos filtros se apartan del valor por defecto: es lo que el botón de
   // filtros muestra en teléfono para que no se olvide uno puesto.
   const activeFilters =
@@ -582,7 +712,7 @@ export function ShipmentsBoard({
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `fenix_programacion_${dateFilter}.xlsx`;
+      link.download = `swayp_programacion_${dateFilter}.xlsx`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -678,11 +808,14 @@ export function ShipmentsBoard({
             <p className="p-5 text-sm text-slate-500">Buscando…</p>
           ) : results && results.length > 0 ? (
             <ShipmentTable
-              rows={results}
+              rows={searchOrder ?? results}
               stores={stores}
               storeName={storeName}
               onOpen={setOpenId}
               highlightedId={recentlyUpdatedId}
+              claimedBy={claimedBy}
+              sort={sort}
+              onSort={toggleSort}
             />
           ) : (
             <p className="p-5 text-sm text-slate-500">Sin coincidencias.</p>
@@ -697,6 +830,9 @@ export function ShipmentsBoard({
               <button
                 key={v.key}
                 onClick={() => go({ view: v.key })}
+                // La pestaña activa se señalaba solo con color: un lector de
+                // pantalla leía seis botones iguales.
+                aria-current={v.key === view ? "page" : undefined}
                 className={cn(
                   "shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition",
                   v.key === view ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50",
@@ -725,16 +861,33 @@ export function ShipmentsBoard({
             </button>
           )}
           {view !== "revision" && (
-            <div className={cn("flex-wrap items-center gap-2", filtersOpen ? "flex" : "hidden md:flex")}>
+            /* ONCE CONTROLES EN UNA SOLA FILA no eran once filtros: eran una
+               pared. Van en dos grupos con nombre —«Alcance» (qué guías entran)
+               y «Gestión» (en qué punto están)— porque son dos preguntas
+               distintas, y las acciones (Excel, limpiar) quedan aparte. */
+            <div
+              className={cn(
+                "flex-col gap-2 md:flex-row md:flex-wrap md:items-start",
+                filtersOpen ? "flex" : "hidden md:flex",
+              )}
+            >
+            <fieldset className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-1.5">
+              <legend className="px-1 text-xs font-medium text-slate-500">Alcance</legend>
               {stores.length > 1 && (
                 <div className="flex items-center gap-1.5">
-                  <span className="text-xs text-slate-500">Tienda:</span>
+                  <span className="text-xs text-slate-500">
+                    Tienda{storeFilter.size === 0 ? " (todas)" : ""}:
+                  </span>
                   {stores.map((s) => {
                     const active = storeFilter.size === 0 || storeFilter.has(s.id);
                     return (
                       <button
                         key={s.id}
                         onClick={() => toggleStore(s.id)}
+                        // Un chip que se enciende y apaga es un interruptor, y
+                        // así hay que anunciarlo: antes la selección vivía solo
+                        // en el color.
+                        aria-pressed={active}
                         className={cn(
                           "rounded-full border px-2.5 py-1 text-xs font-medium transition",
                           active
@@ -773,6 +926,10 @@ export function ShipmentsBoard({
                   className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
                 />
               </label>
+            </fieldset>
+
+            <fieldset className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-1.5">
+              <legend className="px-1 text-xs font-medium text-slate-500">Gestión</legend>
               {view === "en_ruta" && (
                 <button
                   type="button"
@@ -870,17 +1027,17 @@ export function ShipmentsBoard({
               </label>
               {view === "pendiente" && (
                 <>
-                  <label
-                    className="flex items-center gap-1.5 text-xs text-slate-600"
-                    title="Aliclik las cerró sin entregar y el pedido sigue en ventana de recuperación: admite una salida Swayp. Las vencidas y las descartadas ya no están en esta cola."
-                  >
+                  {/* La regla vivía en un `title`: con teclado o en táctil no
+                      existía. El nombre del chip la dice, y el detalle completo
+                      queda en `aria-describedby` + texto visible al activarlo. */}
+                  <label className="flex items-center gap-1.5 text-xs text-slate-600">
                     <input
                       type="checkbox"
                       checked={soloPorRecuperar}
                       onChange={(e) => setSoloPorRecuperar(e.target.checked)}
                       className="rounded border-slate-300"
                     />
-                    Por recuperar
+                    Por recuperar (cerradas sin entregar)
                   </label>
                   <label className="flex items-center gap-1.5 text-xs text-slate-600">
                     <input
@@ -889,7 +1046,7 @@ export function ShipmentsBoard({
                       onChange={(e) => setUncontactedTodayOnly(e.target.checked)}
                       className="rounded border-slate-300"
                     />
-                    Solo sin contactar hoy
+                    Sin contactar hoy
                   </label>
                   <label className="flex items-center gap-1.5 text-xs text-slate-600">
                     <input
@@ -898,10 +1055,12 @@ export function ShipmentsBoard({
                       onChange={(e) => setUncontactedOnly(e.target.checked)}
                       className="rounded border-slate-300"
                     />
-                    Solo sin contactar
+                    Nunca contactadas
                   </label>
                 </>
               )}
+            </fieldset>
+
               {(storeFilter.size > 0 ||
                 departmentFilter.size > 0 ||
                 districtFilter.size > 0 ||
@@ -925,12 +1084,12 @@ export function ShipmentsBoard({
                     setReprogFilter("all");
                     setFenixFilter("all");
                   }}
-                  className="text-xs text-slate-500 hover:underline"
+                  className="self-center text-xs text-slate-500 hover:underline"
                 >
                   Limpiar filtros
                 </button>
               )}
-              <span className="ml-auto text-xs text-slate-500">
+              <span className="self-center text-xs text-slate-500 md:ml-auto">
                 Mostrando {filtered.length} de {shipments.length}
               </span>
             </div>
@@ -969,11 +1128,14 @@ export function ShipmentsBoard({
                 </p>
               ) : (
                 <ShipmentTable
-                  rows={filtered}
+                  rows={queueOrder}
                   stores={stores}
                   storeName={storeName}
                   onOpen={setOpenId}
                   highlightedId={recentlyUpdatedId}
+                  claimedBy={claimedBy}
+                  sort={sort}
+                  onSort={toggleSort}
                 />
               )}
             </Card>
@@ -987,6 +1149,7 @@ export function ShipmentsBoard({
           onClose={() => setOpenId(null)}
           onOpenShipment={setOpenId}
           onShipmentUpdated={handleShipmentUpdated}
+          nextShipmentId={nextInQueue}
         />
       )}
 
@@ -1015,36 +1178,38 @@ export function ShipmentsBoard({
  */
 const VISIBLE_STEP = 200;
 
+export type ShipmentSort = { key: ShipmentSortKey; direction: ShipmentSortDirection } | null;
+
 // Memoizada: con `rows` y `storeName` estables, escribir en el buscador, abrir
 // el cajón o renovar la reserva ya no repinta la tabla.
 const ShipmentTable = memo(function ShipmentTable({
-  rows,
+  rows: sortedRows,
   stores,
   storeName,
   onOpen,
   highlightedId,
+  claimedBy,
+  sort,
+  onSort,
 }: {
+  /** YA ORDENADAS. El orden lo decide el tablero, que es quien sabe cuál es la
+   *  «siguiente» guía de la cola (ver `queueOrder`). */
   rows: ShipmentRow[];
   stores: StoreSummary[];
   storeName: (id: string) => string;
   onOpen: (id: string) => void;
   highlightedId?: string | null;
+  /** Quién tiene tomada cada guía, para no abrir una que ya está ocupada. */
+  claimedBy: (row: ShipmentRow) => string | null;
+  sort: ShipmentSort;
+  onSort: (key: ShipmentSortKey) => void;
 }) {
-  const [sort, setSort] = useState<{
-    key: ShipmentSortKey;
-    direction: ShipmentSortDirection;
-  } | null>(null);
-  const sortedRows = useMemo(
-    () => sort ? sortShipmentRows(rows, sort.key, sort.direction, storeName) : rows,
-    [rows, sort, storeName],
-  );
-
   // La ventana vuelve al principio cuando cambian las filas (otro filtro, otra
   // pestaña, una recarga): lo que se pidió ver fue de ESE conjunto.
   const [visibleCount, setVisibleCount] = useState(VISIBLE_STEP);
-  const [windowFor, setWindowFor] = useState(rows);
-  if (windowFor !== rows) {
-    setWindowFor(rows);
+  const [windowFor, setWindowFor] = useState(sortedRows);
+  if (windowFor !== sortedRows) {
+    setWindowFor(sortedRows);
     setVisibleCount(VISIBLE_STEP);
   }
   // La fila recién actualizada se ve aunque caiga fuera de la ventana: es la
@@ -1053,13 +1218,7 @@ const ShipmentTable = memo(function ShipmentTable({
   const shownCount = Math.min(sortedRows.length, Math.max(visibleCount, highlightedIndex + 1));
   const shownRows = shownCount < sortedRows.length ? sortedRows.slice(0, shownCount) : sortedRows;
   const hiddenCount = sortedRows.length - shownRows.length;
-
-  function toggleSort(key: ShipmentSortKey) {
-    setSort((current) => ({
-      key,
-      direction: current?.key === key && current.direction === "asc" ? "desc" : "asc",
-    }));
-  }
+  const toggleSort = onSort;
 
   return (
     // ONCE COLUMNAS NO ENTRAN EN UN PORTÁTIL. Con la barra lateral y el cajón
@@ -1148,6 +1307,11 @@ const ShipmentTable = memo(function ShipmentTable({
               </td>
               <td className="px-4 py-2.5">
                 <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
+                {/* Quién la tiene, antes de abrirla: se descubría al entrar, con
+                    el cajón ya bloqueado. */}
+                {claimedBy(s) && (
+                  <span className="mt-0.5 block text-xs font-medium text-amber-700">{claimedBy(s)}</span>
+                )}
               </td>
               <td className={cn(SECONDARY_COLUMN, "px-4 py-2.5 whitespace-nowrap text-slate-700 tabular-nums")}>
                 {fmtAliclikDate(s.aliclik_service_date)}
@@ -1218,6 +1382,9 @@ const ShipmentTable = memo(function ShipmentTable({
                     <span className="rounded bg-indigo-50 px-1 text-xs text-indigo-700">Directa</span>
                   )}
                   <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
+                  {claimedBy(s) && (
+                    <span className="text-xs font-medium text-amber-700">{claimedBy(s)}</span>
+                  )}
                 </span>
                 <span className="mt-1 block text-sm text-slate-800">{s.customer_name ?? "—"}</span>
                 <span className="block text-xs text-slate-500">
@@ -1306,7 +1473,6 @@ function SortableShipmentHeader({
       <button
         type="button"
         onClick={() => onSort(sortKey)}
-        title={`Ordenar por ${label}`}
         className={cn(
           // hover un tono por encima del fondo del encabezado (slate-100), que
           // si no el estado no se notaría.
@@ -1385,11 +1551,14 @@ function ShipmentDrawer({
   onClose,
   onOpenShipment,
   onShipmentUpdated,
+  nextShipmentId,
 }: {
   shipmentId: string;
   onClose: () => void;
   onOpenShipment: (id: string) => void;
   onShipmentUpdated: (id: string) => void | Promise<void>;
+  /** La siguiente guía en el orden que se está viendo, para no volver a la tabla. */
+  nextShipmentId?: string | null;
 }) {
   // Se DERIVA de la acción del servidor en vez de reescribirla a mano. Estaba
   // copiada campo por campo, así que un dato nuevo en `loadShipmentDetail`
@@ -1415,6 +1584,11 @@ function ShipmentDrawer({
   // se abría detrás del foco y no había forma de salir.
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<() => void>(() => undefined);
+  /** La guía cuyo detalle está pintado: distingue «otra guía» de «la misma, recargada». */
+  const loadedIdRef = useRef<string | null>(null);
+  const [reloading, setReloading] = useState(false);
+  /** El aviso de la última acción, para llevarle el foco cuando aparece. */
+  const feedbackRef = useRef<HTMLParagraphElement>(null);
 
   // form state
   const [disposition, setDisposition] = useState<RerouteDisposition>("confirma");
@@ -1448,6 +1622,11 @@ function ShipmentDrawer({
   const [recoveryNote, setRecoveryNote] = useState("");
   // Segundo paso del descarte: nombra el pedido antes de cerrarlo.
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // Segundo paso de «Cliente cancela / anula»: cierra la venta.
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  // Salida pedida (cerrar o saltar a otra guía) que espera confirmación porque
+  // hay texto sin registrar.
+  const [pendingExit, setPendingExit] = useState<{ kind: "close" } | { kind: "open"; id: string } | null>(null);
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -1523,32 +1702,41 @@ function ShipmentDrawer({
     setFeedback(null);
   }, [shipmentId]);
 
+  // Al aparecer un aviso, el foco va a él: se ve esté donde esté el scroll y un
+  // lector de pantalla lo lee sin que la persona lo busque.
   useEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    panelRef.current?.focus();
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      e.preventDefault();
-      closeRef.current();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      opener?.focus();
-    };
-  }, []);
+    if (!feedback) return;
+    feedbackRef.current?.focus();
+  }, [feedback]);
+
+  useDialogKeys(panelRef, () => closeRef.current());
 
   useEffect(() => {
     let alive = true;
-    setDetail(null);
-    setShowAddressEditor(false);
+    // RECARGAR NO ES VOLVER A EMPEZAR. Tras cada acción, `refresh()` ponía
+    // `detail` en null y el cajón entero se reemplazaba por «Cargando…»: el
+    // formulario que la asesora acababa de enviar desaparecía y volvía vacío,
+    // sin decir si se había guardado. Al recargar la MISMA guía se conserva lo
+    // que hay, atenuado, hasta que llega el dato nuevo.
+    const sameGuide = loadedIdRef.current === shipmentId;
+    if (sameGuide) {
+      setReloading(true);
+    } else {
+      setDetail(null);
+      setShowAddressEditor(false);
+    }
+    setPendingExit(null);
+    setConfirmCancel(false);
+    setConfirmDiscard(false);
     loadShipmentDetail(shipmentId)
       .catch(() => ({
         error: "No pudimos cargar este envío. Revisa la conexión e inténtalo de nuevo.",
       }))
       .then((d) => {
       if (!alive) return;
+      loadedIdRef.current = shipmentId;
       setDetail(d);
+      setReloading(false);
       if (d && !("error" in d)) {
         setCourierResult("");
         setCourierDate("");
@@ -1584,7 +1772,6 @@ function ShipmentDrawer({
   }, [shipmentId, reloadKey]);
 
   function refresh() {
-    setDetail(null);
     setReloadKey((k) => k + 1);
   }
 
@@ -1595,15 +1782,38 @@ function ShipmentDrawer({
     void releaseShipment(session.shipmentId).catch(() => undefined);
   }
 
-  function handleClose() {
+  /**
+   * Lo que se perdería al cerrar: texto escrito que todavía no se registró.
+   *
+   * El cajón se cerraba con un clic en el fondo o con Escape y se llevaba la
+   * nota a medio escribir sin preguntar. En una cola de llamadas eso es lo que
+   * la asesora acaba de oír por teléfono.
+   */
+  const draftFields = [note, courierNote, recoveryNote, cancelledExceptionNote, fenixGuide];
+  const hasDraft = draftFields.some((v) => v.trim().length > 0) || showAddressEditor;
+
+  /** Salir del cajón: cerrarlo, o saltar a otra guía. Las dos pierden el borrador. */
+  function requestExit(exit: { kind: "close" } | { kind: "open"; id: string }) {
+    if (hasDraft) {
+      setPendingExit(exit);
+      panelRef.current?.focus();
+      return;
+    }
+    doExit(exit);
+  }
+  function doExit(exit: { kind: "close" } | { kind: "open"; id: string }) {
     releaseCurrentClaim();
-    onClose();
+    if (exit.kind === "open") onOpenShipment(exit.id);
+    else onClose();
+  }
+
+  function handleClose() {
+    requestExit({ kind: "close" });
   }
   closeRef.current = handleClose;
 
   function handleOpenShipment(id: string) {
-    releaseCurrentClaim();
-    onOpenShipment(id);
+    requestExit({ kind: "open", id });
   }
 
   function run(
@@ -1633,7 +1843,16 @@ function ShipmentDrawer({
 
   const programDateInvalid =
     disposition === "programar" && (!nextDate || nextDate <= localDateInputValue());
+  // «Cliente cancela / anula» cierra la venta: pide un segundo clic que la
+  // nombre, igual que el descarte de la recuperación.
+  const cancelNeedsConfirm = disposition === "cancela";
   const shipment = detail && !("error" in detail) ? detail.shipment : null;
+  // Con los intentos agotados, un «No contesta» más anula la guía
+  // (`nextShipmentTransition`). El cajón lo dice antes de registrarlo.
+  const lastAttemptWillCancel =
+    disposition === "no_contesta" &&
+    shipment?.delivery_status === "pendiente" &&
+    (shipment.reroute_attempts ?? 0) >= MAX_INTENTOS;
   const fenixReason = shipment ? currentFenixReason(shipment) : null;
   const fenixDeliverySchedule = shipment
     ? getFenixDeliverySchedule(shipment.city, shipment.district)
@@ -1783,7 +2002,10 @@ function ShipmentDrawer({
         ) : !detail ? (
           <p className="text-sm text-slate-500">Cargando…</p>
         ) : (
-          <div className="space-y-2.5">
+          <div
+            aria-busy={reloading}
+            className={cn("space-y-2.5 transition-opacity", reloading && "opacity-60")}
+          >
             {/* La cabecera queda fija: en teléfono el cajón es la pantalla entera
                 y «Cerrar» no puede irse con el scroll. */}
             <div className="sticky top-0 z-10 -mx-3.5 -mt-3.5 flex items-start justify-between gap-3 border-b border-slate-100 bg-white px-3.5 pb-2.5 pt-3.5 sm:-mx-4 sm:-mt-4 sm:px-4 sm:pt-4">
@@ -1815,10 +2037,54 @@ function ShipmentDrawer({
                   return since ? <p className="mt-0.5 text-xs text-slate-500">Desde {since}</p> : null;
                 })()}
               </div>
-              <button onClick={handleClose} className="text-sm text-slate-500 hover:text-slate-700">
-                Cerrar
-              </button>
+              {/* EL CICLO TERMINA EN LA SIGUIENTE GUÍA, no en esta. La pantalla
+                  es una cola y cada vuelta acababa en «Cerrar» y buscar otra vez
+                  la fila. «Siguiente» libera la reserva de esta y toma la que
+                  viene, sin pasar por la tabla. */}
+              <div className="flex shrink-0 items-center gap-3">
+                {nextShipmentId && (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenShipment(nextShipmentId)}
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-slate-50"
+                  >
+                    Siguiente →
+                  </button>
+                )}
+                <button onClick={handleClose} className="text-sm text-slate-500 hover:text-slate-700">
+                  Cerrar
+                </button>
+              </div>
             </div>
+
+            {/* Cerrar con texto sin registrar: se avisa en vez de perderlo. Va
+                bajo la cabecera fija, donde la persona está mirando. */}
+            {pendingExit && (
+              <div
+                role="alert"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900"
+              >
+                <span>
+                  Escribiste algo que todavía no se registró. Si {pendingExit.kind === "open" ? "pasas a la siguiente" : "cierras"}, se descarta.
+                </span>
+                <span className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPendingExit(null)}
+                    className="font-semibold text-amber-900 hover:underline"
+                  >
+                    Seguir aquí
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => doExit(pendingExit)}
+                    className="rounded-lg bg-amber-900 px-2.5 py-1 font-medium text-white"
+                  >
+                    {pendingExit.kind === "open" ? "Descartar y seguir" : "Descartar y cerrar"}
+                  </button>
+                </span>
+              </div>
+            )}
 
             <div
               role="status"
@@ -1998,7 +2264,7 @@ function ShipmentDrawer({
                       rel="noreferrer"
                       className="inline-flex text-xs font-medium text-brand-700 hover:underline"
                     >
-                      Abrir ubicación en Google Maps ↗
+                      Abrir ubicación en Google Maps
                     </a>
                   )}
                 </div>
@@ -2147,20 +2413,6 @@ function ShipmentDrawer({
                 ))}
               </div>
             </section>
-
-            {feedback && (
-              <p
-                role={feedback.kind === "error" ? "alert" : "status"}
-                className={cn(
-                  "break-words rounded-lg border px-2.5 py-1.5 text-sm",
-                  feedback.kind === "error"
-                    ? "border-rose-200 bg-rose-50 text-rose-800"
-                    : "border-emerald-200 bg-emerald-50 text-emerald-800",
-                )}
-              >
-                {feedback.text}
-              </p>
-            )}
 
             {detail.shipment.delivery_status === "anulado" && (
               <section className="space-y-2.5 rounded-xl border border-rose-200 bg-white p-3">
@@ -2610,7 +2862,10 @@ function ShipmentDrawer({
                   Resultado de la llamada
                   <select
                     value={disposition}
-                    onChange={(e) => setDisposition(e.target.value as RerouteDisposition)}
+                    onChange={(e) => {
+                      setDisposition(e.target.value as RerouteDisposition);
+                      setConfirmCancel(false);
+                    }}
                     className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
                   >
                     {DISPOSITIONS.map((d) => (
@@ -2654,6 +2909,8 @@ function ShipmentDrawer({
                           setForceAliclik(false);
                         }}
                         disabled={!aliclikDecision.eligible}
+                        // La ruta elegida se veía solo por el borde de color.
+                        aria-pressed={reprogramProvider === "aliclik" && !forceAliclik}
                         className={cn(
                           "rounded-lg border px-2.5 py-2 text-left text-xs transition",
                           reprogramProvider === "aliclik" && !forceAliclik
@@ -2672,6 +2929,7 @@ function ShipmentDrawer({
                           setForceAliclik(false);
                         }}
                         disabled={!fenixRouteAvailable}
+                        aria-pressed={reprogramProvider === "fenix"}
                         className={cn(
                           "rounded-lg border px-2.5 py-2 text-left text-xs transition",
                           reprogramProvider === "fenix"
@@ -2746,7 +3004,7 @@ function ShipmentDrawer({
                       : "Fecha de reprogramación (va en la nueva guía Swayp)"
                     : disposition === "programar"
                       ? "Fecha de próxima llamada"
-                      : "Próximo intento"}
+                      : "Próximo intento (opcional)"}
                   <input
                     type="date"
                     value={nextDate}
@@ -2765,37 +3023,98 @@ function ShipmentDrawer({
                     rows={2}
                   />
                 </label>
-                <button
-                  onClick={() =>
-                    run(() =>
-                      registerRerouteCall(shipmentId, {
-                        disposition,
-                        note,
-                        nextFollowupAt: nextDate ? new Date(nextDate).toISOString() : null,
-                        reprogramProvider,
-                        forceAliclik,
-                      }),
-                    )
-                  }
-                  disabled={pending || requiredDateMissing}
-                  className="w-full rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-                >
-                  {disposition === "confirma" && !nextDate
-                    ? "Elige la fecha para confirmar"
-                    : fenixAutoUnavailable
-                      ? "Swayp no disponible; usa una excepción manual"
-                    : overrideNoteMissing
-                      ? "Explica el motivo de la excepción"
-                    : programDateInvalid
-                      ? "Elige una fecha futura"
-                      : disposition === "programar"
-                        ? "Programar llamada"
-                        : disposition === "confirma" && reprogramProvider === "aliclik"
-                          ? "Confirmar reprogramación Aliclik"
-                          : disposition === "confirma"
-                            ? "Crear guía Swayp y confirmar"
-                            : "Registrar llamada"}
-                </button>
+                {/* EL ÚLTIMO INTENTO CIERRA LA VENTA, Y ANTES NO LO DECÍA. Con
+                    los intentos agotados, un «No contesta» más anula la guía
+                    (`nextShipmentTransition`): el cajón mostraba «Llamadas 7 / 7»
+                    y nada más, y la guía se cerraba sin que nadie lo hubiera
+                    pedido. */}
+                {lastAttemptWillCancel && (
+                  <p className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs leading-relaxed text-amber-900">
+                    <b>Es el último intento.</b> Con {MAX_INTENTOS} llamadas sin respuesta, registrar este
+                    «No contesta» <b>anula la guía</b> y el pedido pasa a cierre.
+                  </p>
+                )}
+                {/* ANULAR LA VENTA SE CONFIRMA, COMO EL DESCARTE. «Cliente
+                    cancela» cerraba el pedido con el mismo botón genérico que un
+                    «No contesta». */}
+                {cancelNeedsConfirm && confirmCancel ? (
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmCancel(false)}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        run(() =>
+                          registerRerouteCall(shipmentId, {
+                            disposition,
+                            note,
+                            nextFollowupAt: null,
+                            reprogramProvider,
+                            forceAliclik,
+                          }),
+                        )
+                      }
+                      disabled={pending}
+                      className="flex-1 rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+                    >
+                      {pending
+                        ? "Anulando…"
+                        : `Sí, anular la guía ${detail.shipment.guide_code}${
+                            detail.shipment.order_name ? ` del pedido ${detail.shipment.order_name}` : ""
+                          }`}
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => {
+                      if (cancelNeedsConfirm) {
+                        setConfirmCancel(true);
+                        return;
+                      }
+                      run(() =>
+                        registerRerouteCall(shipmentId, {
+                          disposition,
+                          note,
+                          nextFollowupAt: nextDate ? new Date(nextDate).toISOString() : null,
+                          reprogramProvider,
+                          forceAliclik,
+                        }),
+                      );
+                    }}
+                    disabled={pending || requiredDateMissing}
+                    className={cn(
+                      "w-full rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50",
+                      cancelNeedsConfirm || lastAttemptWillCancel
+                        ? "bg-rose-600 hover:bg-rose-700"
+                        : "bg-brand-600 hover:bg-brand-700",
+                    )}
+                  >
+                    {disposition === "confirma" && !nextDate
+                      ? "Elige la fecha para confirmar"
+                      : fenixAutoUnavailable
+                        ? "Swayp no disponible; usa una excepción manual"
+                      : overrideNoteMissing
+                        ? "Explica el motivo de la excepción"
+                      : programDateInvalid
+                        ? "Elige una fecha futura"
+                        : disposition === "programar"
+                          ? "Programar llamada"
+                          : disposition === "confirma" && reprogramProvider === "aliclik"
+                            ? "Confirmar reprogramación Aliclik"
+                            : disposition === "confirma"
+                              ? "Crear guía Swayp y confirmar"
+                              : cancelNeedsConfirm
+                                ? "Anular la guía…"
+                                : lastAttemptWillCancel
+                                  ? "Registrar y anular la guía"
+                                  : "Registrar llamada"}
+                  </button>
+                )}
               </section>
             )}
 
@@ -2896,6 +3215,28 @@ function ShipmentDrawer({
             <ShipmentGuideHistory guides={detail.guideHistory} onSaved={refresh} />
 
             </fieldset>
+
+            {/* EL AVISO VA AL PIE Y SE QUEDA PEGADO. Estaba arriba, encima de
+                todos los formularios: al registrar algo desde el formulario de
+                llamada —abajo, en un cajón de 34 rem— el error aparecía fuera
+                de la pantalla y parecía que no había pasado nada. Pegado al pie
+                se ve desde cualquier punto del scroll, y al aparecer se lleva
+                el foco para que un lector de pantalla lo anuncie. */}
+            {feedback && (
+              <p
+                ref={feedbackRef}
+                tabIndex={-1}
+                role={feedback.kind === "error" ? "alert" : "status"}
+                className={cn(
+                  "sticky bottom-0 -mx-3.5 break-words border-t px-3.5 py-2 text-sm outline-none sm:-mx-4 sm:px-4",
+                  feedback.kind === "error"
+                    ? "border-rose-200 bg-rose-50 text-rose-800"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-800",
+                )}
+              >
+                {feedback.text}
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -3032,7 +3373,11 @@ function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: ()
     if (!call.id) return;
     setSaving(true);
     setError(null);
-    const res = await updateShipmentCallNote(call.id, draft);
+    // Sin `catch`, una acción que LANZA (red caída, sesión vencida) dejaba
+    // «Guardando…» puesto para siempre y la nota sin avisar de nada.
+    const res = await updateShipmentCallNote(call.id, draft).catch(() => ({
+      error: "No se pudo guardar la nota. Revisa la conexión e inténtalo de nuevo.",
+    }));
     setSaving(false);
     if (res.error) {
       setError(res.error);
@@ -3129,7 +3474,6 @@ function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: ()
   );
 }
 
-/** Generic checklist filter. Empty selection means no restriction. */
 function Field({
   label,
   value,
@@ -3456,25 +3800,9 @@ function ReprogramModal({
     };
   }, []);
 
-  // Diálogo de verdad: el foco entra, Escape cierra, el foco vuelve al botón
-  // que lo abrió. Misma regla que el cajón de la guía.
+  // Mismo teclado que el cajón de la guía: una sola función (`useDialogKeys`).
   const panelRef = useRef<HTMLDivElement>(null);
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-  useEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    panelRef.current?.focus();
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      e.preventDefault();
-      closeRef.current();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      opener?.focus();
-    };
-  }, []);
+  useDialogKeys(panelRef, onClose);
 
   const { from, to } = reprogramPresetRange(preset, custom);
   const asesorNames = data?.asesorNames ?? stats.asesorNames;

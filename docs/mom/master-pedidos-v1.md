@@ -2224,9 +2224,32 @@ cancela / anula**.
 
 Dos reglas más del mismo cajón, por la misma razón (no preguntar lo que ya
 está decidido): si «Ruta sugerida» deja una sola ruta posible, la llamada no
-pide elegir entre Aliclik y Fenix, lo dice; y el formulario manual de guía
-Fenix, con fecha propia, queda plegado salvo cuando el envío no tiene número
+pide elegir entre Aliclik y Swayp, lo dice; y el formulario manual de guía
+Swayp, con fecha propia, queda plegado salvo cuando el envío no tiene número
 de pedido, único caso en que es el camino obligado.
+
+### 11.5 Lo que cierra una venta se confirma, y se avisa antes
+
+Tres salidas del cajón de Envíos terminan una venta. Las tres piden la misma
+ceremonia, porque el coste de equivocarse es el mismo:
+
+- **Cliente cancela / anula** pide un segundo clic que nombra la guía y el
+  pedido («Sí, anular la guía AUR5X… del pedido #KP…»), con Cancelar al lado.
+  Antes se registraba con el mismo botón «Registrar llamada» que un «No
+  contesta».
+- **El último intento.** Con los {MAX_INTENTOS} intentos agotados, registrar un
+  «No contesta» más **anula la guía** (`nextShipmentTransition`). El cajón lo
+  dice antes, en ámbar, y el botón pasa a «Registrar y anular la guía»: la
+  guía se cerraba en silencio mientras la pantalla solo mostraba «Llamadas
+  7 / 7».
+- **Descartar la recuperación** ya lo hacía (§11 y `lib/recovery-discard.ts`):
+  motivo de 8 caracteres como mínimo, visible junto al campo, y segundo clic
+  que nombra el pedido.
+
+Y lo que **no** es terminal pero se perdía igual: al cerrar el cajón o saltar a
+otra guía con una nota a medio escribir, el texto se descartaba sin preguntar.
+Ahora se avisa y se puede volver. En una cola de llamadas, ese texto es lo que
+la asesora acaba de oír por teléfono.
 
 ## 12. Agencia: Shalom y Olva
 
@@ -3768,6 +3791,36 @@ externa, para no mantener un segundo flujo especial de «propios».
 
 ### 29.2 Alcance inicial
 
+#### Recorrido unificado aprobado el 12-09-2026
+
+Master representa a la tienda; Almacén prepara y entrega; Grupo GF Courier
+planifica, recibe, reparte y liquida. Los pedidos elegibles de Aurela/Kenku se
+ofrecen automáticamente, sin una segunda aprobación en Master. La búsqueda y
+la paginación cubren todo el universo elegible, nunca solo los primeros 300.
+Se mantienen confirmación, cobertura, tarifa, disponibilidad y exclusividad.
+
+El camino rápido es **Tomar y asignar**: una selección, un motorizado, las fechas
+previstas visibles. Se conservan dos hechos auditados aunque haya un solo gesto.
+**Tomar sin asignar** sigue disponible. Almacén trabaja en paralelo; no se exige
+su escaneo para admitir ni planificar. Verificar físicamente el paquete puede
+registrar su armado cuando todavía no estaba marcado, sin un tercer escaneo.
+
+Los cotejos de GF viven en **Grupo GF Courier → Rutas**, sobre la caja exacta:
+verificar caja, recibir carga y consultar reparto. Abrir una caja con pedidos
+va al siguiente control pendiente, no vuelve a pedir asignarlos. Agregar pedidos
+es una acción secundaria. El escaneo confirma solo lo previamente asignado.
+Oficina y motorizado conservan autores independientes y permisos separados.
+
+Almacén conserva **Entregas a couriers** para los demás operadores. Los enlaces
+antiguos de GF redirigen a su módulo sin cambiar ids, QR ni historial.
+
+Una ruta diaria de reparto puede tener varias cargas/manifiestos vinculados.
+Una carga adicional solo se abre después de recibir íntegramente la anterior;
+no reabre ni modifica sus cotejos. Cada nueva carga exige ambos controles.
+Al completar recepción se incorporan automáticamente las paradas a la misma
+ruta de reparto. Una ruta liquidada no admite cargas; no se recrean rutas ni
+se sustituyen paradas ya reportadas. Finanzas conserva aprobación humana.
+
 - Cobertura: Lima Metropolitana y Callao.
 - Punto de operación: un único almacén de Grupo GF.
 - Corte para salida el mismo día: **11:30**.
@@ -3797,7 +3850,8 @@ prepara, hayan sido tomados o no. La bandeja del courier muestra
 nunca como candado para admitir la solicitud. El operador del courier no debe
 entrar a la pantalla de Almacén para hacer avanzar el pedido.
 
-**Tomar, asignar y cotejar tampoco son el mismo gesto.** Desde `Pedidos tomados`,
+**Tomar, asignar y cotejar son hechos distintos.** El camino rápido combina
+tomar y asignar en un gesto, pero nunca combina asignar con cotejar. Desde `Pedidos tomados`,
 Grupo GF Courier puede seleccionar solicitudes y asignarlas a la ruta diaria de
 un motorizado aunque Almacén todavía no haya terminado de armarlas. La asignación
 reutiliza la única ruta de ese motorizado para la fecha prevista y coloca cada
@@ -3807,8 +3861,8 @@ motorizado con todos los pedidos que alcanzaron a preparar. El **cotejo de
 oficina** ocurre frente a esa caja: se escanea cada paquete armado y solo se
 confirma lo que ya estaba asignado. Un pedido pendiente de armado puede figurar
 en la ruta planificada, pero no puede superar el cotejo ni transferir custodia
-hasta existir físicamente. La bandeja enlaza directamente la ruta/caja en la Mesa
-de despacho para continuar ese cotejo sin volver a seleccionar los pedidos.
+hasta existir físicamente. La bandeja abre la caja dentro de Grupo GF Courier
+para continuar ese cotejo sin volver a seleccionar los pedidos.
 
 La operación se lee en dos niveles. `Pedidos tomados` separa **Sin ruta**,
 **Asignados**, **Pendientes de armado** y **Listos para cotejo** sin duplicar
@@ -3816,7 +3870,7 @@ estados persistidos. `Rutas operativas` agrupa por manifiesto/motorizado y fecha
 y muestra cuatro contadores distintos: asignados, armados por Almacén, cotejados
 en oficina y recibidos por el motorizado. El porcentaje visible corresponde al
 primer cotejo físico, no al mero armado ni a la planificación. Desde cada fila
-se abre el manifiesto exacto en Mesa de despacho.
+se abre el manifiesto exacto dentro de Grupo GF Courier.
 
 `Tomar pedidos` crea o reutiliza una **solicitud logística** idempotente, congela
 contrato, tarifa, distrito y fecha prevista, y recién entonces crea la salida.
@@ -3924,11 +3978,11 @@ tienda/fecha; el courier se decide en despacho, no durante el armado.
   por separado `motorizado_responsable` y `reportado_por`, con motivo, fecha y
   evidencia. Nadie suplanta al motorizado.
 
-Los dos modelos técnicos actuales —`delivery_routes` para `/rutas` y `/reparto`,
-y `dispatch_manifests` para la Mesa de despacho— deben converger en un ciclo
-canónico. Hasta completar la migración no se borra historial ni se duplica una
-custodia. El destino es una ruta diaria con cargas/manifiestos vinculados, paradas
-y eventos append-only.
+Para Grupo GF, `delivery_routes` representa la ruta diaria y cada
+`dispatch_manifests` vinculado representa una carga numerada. Completar la
+recepción incorpora automáticamente sus paradas a `/reparto`, dentro de la misma
+transacción que transfiere custodia. Los otros couriers conservan sus manifiestos
+diarios actuales. Nunca se borran historiales ni se sustituyen paradas reportadas.
 
 ### 29.6 Agenda y cambios posteriores al corte
 
@@ -4082,4 +4136,3 @@ El orden obligatorio evita reescribir las pantallas sobre identidades ambiguas:
 
 Cada fase debe ser compatible con Aurela y Kenku y no debe convertir una
 solicitud logística externa en un pedido comercial de Shopify.
-

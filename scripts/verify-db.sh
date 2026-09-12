@@ -156,5 +156,8 @@ echo "▶ doble cotejo de despacho"
 $PSQL -f "$ROOT/scripts/sql/dispatch_smoke.sql"
 echo "  ✅ la custodia solo cambia después de cotejar el 100 % dos veces"
 
+echo "▶ GF: cargas adicionales, recepción por usuario y ruta de reparto única"
+$PSQL -f "$ROOT/scripts/sql/gf_route_loads_smoke.sql"
+
 echo ""
 echo "✅ DB verification passed."
