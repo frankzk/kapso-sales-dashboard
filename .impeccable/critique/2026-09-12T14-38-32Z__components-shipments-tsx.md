@@ -10,6 +10,7 @@ target_fingerprint: "sha256:66da608779aa8e3a620849835692cef868a17507a92267025bf8
 target_path: /home/user/kapso-sales-dashboard/components/shipments.tsx
 timestamp: 2026-09-12T14-38-32Z
 slug: components-shipments-tsx
+closed: true
 ---
 Method: dual-agent (A: revisión de diseño · B: detector mecánico). Sin inspección en navegador: sin .env ni dev server en el sandbox.
 

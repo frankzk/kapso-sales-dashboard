@@ -523,19 +523,23 @@ export function ShipmentsBoard({
         <div className="flex items-center gap-2">
           {/* global search */}
           <div className="relative">
-            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400">
+            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500">
               🔍
             </span>
             <input
+              type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar guía, pedido, guía Fenix, celular…"
+              aria-label="Buscar guía, pedido, guía Fenix o celular"
               className="w-64 rounded-lg border border-slate-200 py-1.5 pl-8 pr-7 text-sm"
             />
             {search && (
               <button
+                type="button"
                 onClick={() => setSearch("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                aria-label="Limpiar búsqueda"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-800"
               >
                 ✕
               </button>
@@ -577,7 +581,7 @@ export function ShipmentsBoard({
             </button>
           </div>
           {searching ? (
-            <p className="p-5 text-sm text-slate-400">Buscando…</p>
+            <p className="p-5 text-sm text-slate-500">Buscando…</p>
           ) : results && results.length > 0 ? (
             <ShipmentTable
               rows={results}
@@ -587,7 +591,7 @@ export function ShipmentsBoard({
               highlightedId={recentlyUpdatedId}
             />
           ) : (
-            <p className="p-5 text-sm text-slate-400">Sin coincidencias.</p>
+            <p className="p-5 text-sm text-slate-500">Sin coincidencias.</p>
           )}
         </Card>
       ) : (
@@ -604,7 +608,7 @@ export function ShipmentsBoard({
                 )}
               >
                 {v.label}
-                <span className="ml-1.5 text-xs text-slate-400">{counts[v.key]}</span>
+                <span className="ml-1.5 text-xs text-slate-500">{counts[v.key]}</span>
               </button>
             ))}
           </div>
@@ -614,7 +618,7 @@ export function ShipmentsBoard({
             <div className="flex flex-wrap items-center gap-2">
               {stores.length > 1 && (
                 <div className="flex items-center gap-1.5">
-                  <span className="text-xs text-slate-400">Tienda:</span>
+                  <span className="text-xs text-slate-500">Tienda:</span>
                   {stores.map((s) => {
                     const active = storeFilter.size === 0 || storeFilter.has(s.id);
                     return (
@@ -625,7 +629,7 @@ export function ShipmentsBoard({
                           "rounded-full border px-2.5 py-1 text-xs font-medium transition",
                           active
                             ? "border-brand-200 bg-brand-50 text-brand-700"
-                            : "border-slate-200 bg-white text-slate-400",
+                            : "border-slate-200 bg-white text-slate-500",
                         )}
                       >
                         {s.name}
@@ -650,7 +654,7 @@ export function ShipmentsBoard({
                   onChange={setDistrictFilter}
                 />
               )}
-              <label className="flex items-center gap-1.5 text-xs text-slate-400">
+              <label className="flex items-center gap-1.5 text-xs text-slate-500">
                 Programación:
                 <input
                   type="date"
@@ -682,7 +686,7 @@ export function ShipmentsBoard({
                 </button>
               )}
               {view === "pendiente" && (
-                <label className="flex items-center gap-1.5 text-xs text-slate-400">
+                <label className="flex items-center gap-1.5 text-xs text-slate-500">
                   Gestión:
                   <select
                     value={aliclikRouteFilter}
@@ -706,7 +710,7 @@ export function ShipmentsBoard({
                   </select>
                 </label>
               )}
-              <label className="flex items-center gap-1.5 text-xs text-slate-400">
+              <label className="flex items-center gap-1.5 text-xs text-slate-500">
                 Fenix:
                 <select
                   value={fenixFilter}
@@ -726,7 +730,7 @@ export function ShipmentsBoard({
                 </select>
               </label>
               {showReprogFilter && (
-                <label className="flex items-center gap-1.5 text-xs text-slate-400">
+                <label className="flex items-center gap-1.5 text-xs text-slate-500">
                   Reprogramado por:
                   <select
                     value={reprogFilter}
@@ -817,7 +821,7 @@ export function ShipmentsBoard({
                   Limpiar filtros
                 </button>
               )}
-              <span className="ml-auto text-xs text-slate-400">
+              <span className="ml-auto text-xs text-slate-500">
                 Mostrando {filtered.length} de {shipments.length}
               </span>
             </div>
@@ -851,7 +855,7 @@ export function ShipmentsBoard({
           ) : (
             <Card className="p-0">
               {filtered.length === 0 ? (
-                <p className="p-5 text-sm text-slate-400">
+                <p className="p-5 text-sm text-slate-500">
                   {shipments.length === 0 ? "Sin envíos en esta vista." : "Ningún envío con esos filtros."}
                 </p>
               ) : (
@@ -952,7 +956,19 @@ function ShipmentTable({
               )}
             >
               <td className="px-4 py-2.5 font-mono text-xs text-slate-700">
-                {s.guide_code}
+                {/* La fila entera abre con el ratón; el código es lo que abre
+                    con el teclado. Sin este botón la cola no se podía trabajar
+                    sin ratón: ninguna guía era alcanzable con Tab. */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpen(s.id);
+                  }}
+                  className="rounded-sm font-mono text-slate-800 underline-offset-2 hover:underline"
+                >
+                  {s.guide_code}
+                </button>
                 {s.courier === "fenix" && (
                   <span className="ml-1 rounded bg-orange-50 px-1 text-[10px] text-orange-700">Fenix</span>
                 )}
@@ -968,7 +984,7 @@ function ShipmentTable({
               </td>
               <td className="px-4 py-2.5 text-slate-700">
                 {s.customer_name ?? "—"}
-                <span className="block text-xs text-slate-400">{s.customer_phone ?? ""}</span>
+                <span className="block text-xs text-slate-500">{s.customer_phone ?? ""}</span>
               </td>
               <td className="w-44 max-w-44 px-3 py-2.5 align-middle">
                 <span
@@ -980,7 +996,7 @@ function ShipmentTable({
               </td>
               <td className="px-4 py-2.5 text-slate-700">
                 {s.district ?? "—"}
-                <span className="block text-xs capitalize text-slate-400">
+                <span className="block text-xs capitalize text-slate-500">
                   {s.city ?? ""}
                   <FenixAvailabilityInline shipment={s} />
                 </span>
@@ -996,14 +1012,14 @@ function ShipmentTable({
                   const g = fmtLastGestion(s.last_gestion_at);
                   return (
                     <>
-                      <span className={g.days == null ? "text-slate-400" : "text-slate-700"}>
+                      <span className={g.days == null ? "text-slate-500" : "text-slate-700"}>
                         {g.label}
                       </span>
                       {g.days != null && (
                         <span
                           className={cn(
                             "block text-[10px]",
-                            g.days >= 7 ? "font-semibold text-amber-600" : "text-slate-400",
+                            g.days >= 7 ? "font-semibold text-amber-600" : "text-slate-500",
                           )}
                         >
                           {g.days === 0 ? "hoy" : `hace ${g.days} d`}
@@ -1072,7 +1088,7 @@ function SortableShipmentHeader({
 
 function AliclikRouteCell({ shipment }: { shipment: ShipmentRow }) {
   if (shipment.courier !== "aliclik" || shipment.status_category !== "pending") {
-    return <span className="text-slate-400">—</span>;
+    return <span className="text-slate-500">—</span>;
   }
   const decision = evaluateAliclikReschedule({
     courier: shipment.courier,
@@ -1151,6 +1167,11 @@ function ShipmentDrawer({
     shipmentId: string;
     shouldRelease: boolean;
   } | null>(null);
+  // Semántica de diálogo: el foco entra al abrir, Escape cierra y el foco
+  // vuelve a donde estaba (la fila) al cerrar. Sin esto, con teclado el panel
+  // se abría detrás del foco y no había forma de salir.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<() => void>(() => undefined);
 
   // form state
   const [disposition, setDisposition] = useState<RerouteDisposition>("confirma");
@@ -1255,6 +1276,21 @@ function ShipmentDrawer({
   }, [shipmentId]);
 
   useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panelRef.current?.focus();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      closeRef.current();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      opener?.focus();
+    };
+  }, []);
+
+  useEffect(() => {
     let alive = true;
     setDetail(null);
     setShowAddressEditor(false);
@@ -1311,6 +1347,7 @@ function ShipmentDrawer({
     releaseCurrentClaim();
     onClose();
   }
+  closeRef.current = handleClose;
 
   function handleOpenShipment(id: string) {
     releaseCurrentClaim();
@@ -1458,7 +1495,12 @@ function ShipmentDrawer({
   return (
     <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={handleClose}>
       <div
-        className="h-full w-full max-w-[34rem] overflow-y-auto bg-white p-3.5 shadow-xl sm:p-4"
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shipment-drawer-title"
+        tabIndex={-1}
+        className="h-full w-full max-w-[34rem] overflow-y-auto bg-white p-3.5 shadow-xl outline-none sm:p-4"
         onClick={(e) => e.stopPropagation()}
       >
         {detail && "error" in detail ? (
@@ -1478,13 +1520,15 @@ function ShipmentDrawer({
             </div>
           </div>
         ) : !detail ? (
-          <p className="text-sm text-slate-400">Cargando…</p>
+          <p className="text-sm text-slate-500">Cargando…</p>
         ) : (
           <div className="space-y-2.5">
             <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-2.5">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <p className="font-mono text-sm font-semibold text-slate-800">{detail.shipment.guide_code}</p>
+                  <h2 id="shipment-drawer-title" className="font-mono text-sm font-semibold text-slate-800">
+                    {detail.shipment.guide_code}
+                  </h2>
                   {detail.shipment.created_via === "fenix_directo" && (
                     <span
                       className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700"
@@ -1508,7 +1552,7 @@ function ShipmentDrawer({
                   return since ? <p className="mt-0.5 text-[11px] text-slate-500">Desde {since}</p> : null;
                 })()}
               </div>
-              <button onClick={handleClose} className="text-sm text-slate-400 hover:text-slate-700">
+              <button onClick={handleClose} className="text-sm text-slate-500 hover:text-slate-700">
                 Cerrar
               </button>
             </div>
@@ -1531,7 +1575,7 @@ function ShipmentDrawer({
                     ? "bg-emerald-500"
                     : claimState === "blocked"
                       ? "bg-amber-500"
-                      : "animate-pulse bg-slate-400",
+                      : "animate-pulse bg-slate-400 motion-reduce:animate-none",
                 )}
               />
               <span>
@@ -1635,7 +1679,7 @@ function ShipmentDrawer({
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <p className="text-sm font-semibold text-teal-950">Destino de entrega</p>
+                    <h3 className="text-sm font-semibold text-teal-950">Destino de entrega</h3>
                     {detail.shipment.address_override && (
                       <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700">
                         Modificado
@@ -1658,7 +1702,7 @@ function ShipmentDrawer({
               {!showAddressEditor ? (
                 <div className="space-y-2">
                   <div>
-                    <p className="text-xs text-slate-400">Dirección completa</p>
+                    <p className="text-xs text-slate-500">Dirección completa</p>
                     <p className="text-sm leading-snug text-slate-800">
                       {deliveryAddress ?? "No informada en Aliclik ni Shopify."}
                     </p>
@@ -1673,13 +1717,13 @@ function ShipmentDrawer({
                   </div>
                   <div className="grid grid-cols-2 gap-3 border-t border-slate-200 pt-2">
                     <div>
-                      <p className="text-[10px] uppercase tracking-wide text-slate-400">Latitud</p>
+                      <p className="text-[10px] uppercase tracking-wide text-slate-500">Latitud</p>
                       <p className="select-all font-mono text-xs text-slate-700">
                         {detail.shipment.latitude ?? "—"}
                       </p>
                     </div>
                     <div>
-                      <p className="text-[10px] uppercase tracking-wide text-slate-400">Longitud</p>
+                      <p className="text-[10px] uppercase tracking-wide text-slate-500">Longitud</p>
                       <p className="select-all font-mono text-xs text-slate-700">
                         {detail.shipment.longitude ?? "—"}
                       </p>
@@ -1835,7 +1879,7 @@ function ShipmentDrawer({
                 (detail.order ? (
                   <ShipmentOrderItems order={detail.order} />
                 ) : (
-                  <p className="border-t border-slate-100 pt-2 text-xs text-slate-400">
+                  <p className="border-t border-slate-100 pt-2 text-xs text-slate-500">
                     No se encontró el detalle sincronizado de Shopify.
                   </p>
                 ))}
@@ -1866,9 +1910,9 @@ function ShipmentDrawer({
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-rose-700">
                       {enRecuperacion ? "Reproprovincia" : "Excepción auditada"}
                     </p>
-                    <p className="mt-0.5 text-sm font-semibold text-rose-950">
+                    <h3 className="mt-0.5 text-sm font-semibold text-rose-950">
                       {enRecuperacion ? "Reenviar por Fenix / Swayp" : "Reprogramar un pedido anulado"}
-                    </p>
+                    </h3>
                   </div>
                   {!showCancelledException && (
                     <button
@@ -1972,21 +2016,24 @@ function ShipmentDrawer({
                 con motivo. Es lo que faltaba: 0 llamadas sobre 920 pedidos. */}
             {enRecuperacion && (
               <section className="space-y-1.5 rounded-xl border border-amber-200 bg-amber-50/45 p-2.5 shadow-[0_1px_0_rgba(245,158,11,0.08)]">
-                <p className="text-sm font-semibold text-amber-950">Registrar o programar llamada</p>
+                <h3 className="text-sm font-semibold text-amber-950">Registrar o programar llamada</h3>
                 <p className="text-xs text-amber-900/80">
                   Sobre el pedido, no sobre la guía: sigue «Anulado · Reproprovincia» hasta que se reenvíe, se descarte o venza la ventana.
                 </p>
-                <select
-                  value={recoveryDisposition}
-                  onChange={(e) => setRecoveryDisposition(e.target.value as RecoveryCallDisposition)}
-                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-                >
-                  {RECOVERY_CALL_DISPOSITIONS.map((d) => (
-                    <option key={d.key} value={d.key}>
-                      {d.label}
-                    </option>
-                  ))}
-                </select>
+                <label className="block text-xs text-slate-500">
+                  Resultado de la llamada
+                  <select
+                    value={recoveryDisposition}
+                    onChange={(e) => setRecoveryDisposition(e.target.value as RecoveryCallDisposition)}
+                    className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
+                  >
+                    {RECOVERY_CALL_DISPOSITIONS.map((d) => (
+                      <option key={d.key} value={d.key}>
+                        {d.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 {recoveryDisposition === "no_quiere" && (
                   <p className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs text-rose-800">
                     El pedido pasa a cierre con el motivo escrito y la guía sale de la cola. No se toca la guía de Aliclik ni el inventario.
@@ -2004,17 +2051,20 @@ function ShipmentDrawer({
                     />
                   </label>
                 )}
-                <textarea
-                  value={recoveryNote}
-                  onChange={(e) => setRecoveryNote(e.target.value)}
-                  placeholder={
-                    recoveryDisposition === "no_quiere"
-                      ? "Motivo (obligatorio): p. ej. la clienta ya no quiere el producto"
-                      : "Nota de la llamada…"
-                  }
-                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-                  rows={2}
-                />
+                <label className="block text-xs text-slate-500">
+                  {recoveryDisposition === "no_quiere" ? "Motivo (obligatorio)" : "Nota de la llamada"}
+                  <textarea
+                    value={recoveryNote}
+                    onChange={(e) => setRecoveryNote(e.target.value)}
+                    placeholder={
+                      recoveryDisposition === "no_quiere"
+                        ? "P. ej. la clienta ya no quiere el producto"
+                        : "Qué dijo la clienta…"
+                    }
+                    className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
+                    rows={2}
+                  />
+                </label>
                 <button
                   onClick={() =>
                     run(
@@ -2057,7 +2107,7 @@ function ShipmentDrawer({
               detail.shipment.delivery_status === "transferido" ? (
                 <section className="space-y-2 rounded-xl border border-sky-200 bg-sky-50 p-3">
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600">Guía reemplazada</p>
-                  <p className="text-sm font-semibold text-sky-900">Continúa en la guía Fenix activa</p>
+                  <h3 className="text-sm font-semibold text-sky-900">Continúa en la guía Fenix activa</h3>
                   <p className="text-xs leading-relaxed text-sky-800">
                     “Transferido” lo asigna Kapta automáticamente; no es un resultado del motorizado.
                   </p>
@@ -2101,13 +2151,13 @@ function ShipmentDrawer({
                       <p className="text-[10px] font-semibold uppercase tracking-wide text-orange-700">
                         {fenixAwaitingCourierResult ? "Etapa 1 · obligatoria" : "Corrección del reporte"}
                       </p>
-                      <p className="mt-0.5 text-sm font-semibold text-slate-900">Registrar resultado del courier</p>
+                      <h3 className="mt-0.5 text-sm font-semibold text-slate-900">Registrar resultado del courier</h3>
                       <p className="mt-0.5 font-mono text-xs font-semibold text-orange-800">
                         {detail.shipment.guide_code}
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className="text-[10px] uppercase tracking-wide text-slate-400">Estado actual</p>
+                      <p className="text-[10px] uppercase tracking-wide text-slate-500">Estado actual</p>
                       <StatusBadge
                         category={detail.shipment.status_category}
                         status={detail.shipment.delivery_status}
@@ -2140,7 +2190,7 @@ function ShipmentDrawer({
 
                   {courierResultDefinition && (
                     <div className="rounded-lg border border-slate-200 bg-white p-2.5">
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Qué sucederá</p>
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Qué sucederá</p>
                       <p className="mt-0.5 text-xs leading-relaxed text-slate-700">
                         {courierResultDefinition.effect}
                       </p>
@@ -2185,7 +2235,7 @@ function ShipmentDrawer({
                         className="mt-1 w-full rounded-lg border border-orange-200 bg-white px-2.5 py-2 text-sm"
                       />
                       {courierResult === "no_contesta" && (
-                        <span className="mt-1 block text-[10px] font-normal leading-relaxed text-slate-400">
+                        <span className="mt-1 block text-[10px] font-normal leading-relaxed text-slate-500">
                           Se guardará en el historial junto al cambio No contesta → Pendiente.
                         </span>
                       )}
@@ -2234,18 +2284,21 @@ function ShipmentDrawer({
                 anulado/transferido) so a stray "no contesta" can't reopen a closed guide */}
             {isCallable(detail.shipment.delivery_status) && !fenixAwaitingCourierResult && (
               <section className="space-y-1.5 rounded-xl border border-amber-200 bg-amber-50/45 p-2.5 shadow-[0_1px_0_rgba(245,158,11,0.08)]">
-                <p className="text-sm font-semibold text-amber-950">Registrar o programar llamada</p>
-                <select
-                  value={disposition}
-                  onChange={(e) => setDisposition(e.target.value as RerouteDisposition)}
-                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-                >
-                  {DISPOSITIONS.map((d) => (
-                    <option key={d.key} value={d.key}>
-                      {d.label}
-                    </option>
-                  ))}
-                </select>
+                <h3 className="text-sm font-semibold text-amber-950">Registrar o programar llamada</h3>
+                <label className="block text-xs text-slate-500">
+                  Resultado de la llamada
+                  <select
+                    value={disposition}
+                    onChange={(e) => setDisposition(e.target.value as RerouteDisposition)}
+                    className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
+                  >
+                    {DISPOSITIONS.map((d) => (
+                      <option key={d.key} value={d.key}>
+                        {d.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 {disposition === "confirma" && aliclikDecision && (
                   <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
                     <div>
@@ -2364,13 +2417,16 @@ function ShipmentDrawer({
                     className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
                   />
                 </label>
-                <textarea
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="Nota de la llamada…"
-                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-                  rows={2}
-                />
+                <label className="block text-xs text-slate-500">
+                  Nota de la llamada
+                  <textarea
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    placeholder="Qué dijo la clienta…"
+                    className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
+                    rows={2}
+                  />
+                </label>
                 <button
                   onClick={() =>
                     run(() =>
@@ -2410,7 +2466,7 @@ function ShipmentDrawer({
                 without an order name, or to type a specific Fenix code. */}
             {detail.shipment.delivery_status === "pendiente" && (
               <section className="space-y-1.5 rounded-xl border border-orange-200 bg-orange-50/45 p-2.5 shadow-[0_1px_0_rgba(249,115,22,0.08)]">
-              <p className="text-sm font-semibold text-orange-950">Generar guía Fenix (manual)</p>
+              <h3 className="text-sm font-semibold text-orange-950">Generar guía Fenix (manual)</h3>
               {detail.shipment.fenix_shipment_id ? (
                 <p className="text-xs text-emerald-700">Ya tiene guía Fenix vinculada.</p>
               ) : (
@@ -2508,7 +2564,7 @@ function ShipmentGuideHistory({
     <section className="space-y-2.5 rounded-xl border border-violet-200 bg-violet-50/45 p-2.5">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-violet-950">Historial desde el origen</p>
+          <h3 className="text-sm font-semibold text-violet-950">Historial desde el origen</h3>
           <p className="text-[11px] text-violet-600">Todas las guías de esta reprogramación</p>
         </div>
         <span className="rounded-full border border-violet-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-violet-700">
@@ -2578,7 +2634,7 @@ function ShipmentGuideHistory({
               </header>
 
               {guide.calls.length === 0 ? (
-                <p className="px-3 py-2.5 text-xs text-slate-400">Sin gestiones registradas en esta guía.</p>
+                <p className="px-3 py-2.5 text-xs text-slate-500">Sin gestiones registradas en esta guía.</p>
               ) : (
                 <ul className="divide-y divide-slate-100">
                   {guide.calls.map((call, callIndex) => (
@@ -2629,7 +2685,7 @@ function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: ()
           {shipmentHistoryLabel(call)}
           {call.new_status ? ` → ${labelOf(call.new_status)}` : ""}
         </span>
-        <span className="shrink-0 text-right text-[10px] leading-tight text-slate-400">
+        <span className="shrink-0 text-right text-[10px] leading-tight text-slate-500">
           {occurredAt && <span className="block">{occurredAt}</span>}
           {call.agent_name && <span className="block">{call.agent_name}</span>}
         </span>
@@ -2642,6 +2698,7 @@ function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: ()
             onChange={(e) => setDraft(e.target.value)}
             rows={2}
             autoFocus
+            aria-label="Nota de la gestión"
             className="w-full rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 focus:border-violet-400 focus:outline-none"
             placeholder="Nota de la gestión…"
           />
@@ -2670,7 +2727,7 @@ function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: ()
       ) : (
         <div className="mt-0.5 flex items-start justify-between gap-2">
           <p className="leading-relaxed text-slate-600">
-            {call.note || <span className="italic text-slate-400">Sin nota</span>}
+            {call.note || <span className="italic text-slate-500">Sin nota</span>}
           </p>
           {call.id && (
             <button
@@ -2688,7 +2745,7 @@ function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: ()
       )}
 
       {call.note_edited_at && !editing && (
-        <p className="mt-0.5 text-[10px] italic text-slate-400">
+        <p className="mt-0.5 text-[10px] italic text-slate-500">
           editada
           {call.note_editor_name ? ` por ${call.note_editor_name}` : ""}
           {editedAt ? ` · ${editedAt}` : ""}
@@ -2723,7 +2780,7 @@ function Field({
 }) {
   return (
     <div>
-      <dt className="text-xs text-slate-400">{label}</dt>
+      <dt className="text-xs text-slate-500">{label}</dt>
       <dd className={cn("text-slate-700", clamp && "line-clamp-2")} title={clamp ? (value ?? undefined) : undefined}>
         {value || "—"}
       </dd>
@@ -2742,7 +2799,7 @@ function CompactMetric({
 }) {
   return (
     <div className="min-w-0 px-2.5 py-2">
-      <dt className="text-[10px] font-medium uppercase leading-tight tracking-wide text-slate-400">
+      <dt className="text-[10px] font-medium uppercase leading-tight tracking-wide text-slate-500">
         {label}
       </dt>
       <dd
@@ -2772,7 +2829,7 @@ function CompactMetric({
  */
 function OrderNameLabel({ name, matched }: { name: string | null; matched: boolean }) {
   if (matched && name) return <>{name}</>;
-  return <span className="text-slate-400">—</span>;
+  return <span className="text-slate-500">—</span>;
 }
 
 function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
@@ -2786,7 +2843,7 @@ function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs font-medium text-slate-600">Productos de Shopify</p>
         {order.line_items.length > 0 && (
-          <p className="shrink-0 text-xs tabular-nums text-slate-400">
+          <p className="shrink-0 text-xs tabular-nums text-slate-500">
             {order.line_items.length} {order.line_items.length === 1 ? "producto" : "productos"}
             {" · "}
             {units} {units === 1 ? "unidad" : "unidades"}
@@ -2795,7 +2852,7 @@ function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
       </div>
 
       {order.line_items.length === 0 ? (
-        <p className="mt-1.5 text-xs text-slate-400">Shopify no devolvió productos para este pedido.</p>
+        <p className="mt-1.5 text-xs text-slate-500">Shopify no devolvió productos para este pedido.</p>
       ) : (
         <ul className="mt-1.5 divide-y divide-slate-100">
           {order.line_items.map((item, index) => (
@@ -2810,7 +2867,7 @@ function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
                 <p className="text-sm leading-5 text-slate-700">
                   {item.title || "Producto sin nombre"}
                 </p>
-                {item.sku && <p className="mt-0.5 text-xs text-slate-400">SKU {item.sku}</p>}
+                {item.sku && <p className="mt-0.5 text-xs text-slate-500">SKU {item.sku}</p>}
               </div>
             </li>
           ))}
@@ -2854,11 +2911,11 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
     <div className="rounded-xl border border-slate-200 bg-white">
       <div className="flex items-center gap-2 px-3 py-2 text-xs">
         <span className="font-semibold text-slate-800">📸 Hoy por asesora</span>
-        <span className="capitalize text-slate-400">{hoy}</span>
-        <span className="ml-auto text-slate-400">Gestión de hoy en Repro Provincia</span>
+        <span className="capitalize text-slate-500">{hoy}</span>
+        <span className="ml-auto text-slate-500">Gestión de hoy en Repro Provincia</span>
       </div>
       {rows.length === 0 ? (
-        <p className="px-3 pb-3 text-xs text-slate-400">Aún no hay gestión registrada hoy.</p>
+        <p className="px-3 pb-3 text-xs text-slate-500">Aún no hay gestión registrada hoy.</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -2924,7 +2981,7 @@ function ReprogramStrip({ stats, stores }: { stats: ReprogramStats; stores: Stor
     <>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
         <span className="font-semibold text-slate-800">🔁 Reprogramados en Kapso</span>
-        <span className="text-slate-400">últimos 30 días:</span>
+        <span className="text-slate-500">últimos 30 días:</span>
         <span className="font-semibold text-slate-800" title="Reprogramaciones confirmadas (Aliclik + Fénix)">
           {c.total}
         </span>
@@ -3039,6 +3096,26 @@ function ReprogramModal({
     };
   }, []);
 
+  // Diálogo de verdad: el foco entra, Escape cierra, el foco vuelve al botón
+  // que lo abrió. Misma regla que el cajón de la guía.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panelRef.current?.focus();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      closeRef.current();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      opener?.focus();
+    };
+  }, []);
+
   const { from, to } = reprogramPresetRange(preset, custom);
   const asesorNames = data?.asesorNames ?? stats.asesorNames;
   const ranged = data
@@ -3051,12 +3128,24 @@ function ReprogramModal({
   return (
     <div className="fixed inset-0 z-30 grid place-items-center bg-slate-900/30 p-4" onClick={onClose}>
       <div
-        className="max-h-[85vh] w-full max-w-lg overflow-auto rounded-2xl bg-white p-5 shadow-xl"
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reprogram-modal-title"
+        tabIndex={-1}
+        className="max-h-[85vh] w-full max-w-lg overflow-auto rounded-2xl bg-white p-5 shadow-xl outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-slate-900">🔁 Reprogramaciones (Aliclik + Fénix)</h2>
-          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600">
+          <h2 id="reprogram-modal-title" className="text-base font-semibold text-slate-900">
+            🔁 Reprogramaciones (Aliclik + Fénix)
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Cerrar"
+            className="text-slate-500 hover:text-slate-800"
+          >
             ✕
           </button>
         </div>
@@ -3108,14 +3197,14 @@ function ReprogramModal({
               c={ranged.counts}
             />
           ) : (
-            <p className="text-sm text-slate-400">Cargando…</p>
+            <p className="text-sm text-slate-500">Cargando…</p>
           )}
           <ReprogramCountsRow label="Histórico" c={stats.historico} />
         </div>
 
         {/* Tendencia semanal (semana = lunes local). Barra = reprogramados; el
             segmento verde son los que YA terminaron entregados. */}
-        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-400 uppercase">Últimas 8 semanas</p>
+        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">Últimas 8 semanas</p>
         <div className="flex items-end gap-1.5">
           {stats.semanas.map((w) => {
             const h = Math.round((w.total / maxWeek) * 64);
@@ -3131,13 +3220,13 @@ function ReprogramModal({
                   <div className="w-full bg-slate-300" style={{ height: Math.max(0, h - hOk) }} />
                   <div className="w-full bg-emerald-500" style={{ height: hOk }} />
                 </div>
-                <span className="text-[10px] text-slate-400">{weekLabel(w.start)}</span>
+                <span className="text-[10px] text-slate-500">{weekLabel(w.start)}</span>
               </div>
             );
           })}
         </div>
 
-        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-400 uppercase">
+        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
           Por tienda ({presetLabel(preset)})
         </p>
         <div className="space-y-1.5">
@@ -3147,14 +3236,14 @@ function ReprogramModal({
                 .sort((a, b) => b[1].total - a[1].total)
                 .map(([sid, c]) => <ReprogramCountsRow key={sid} label={storeName(sid)} c={c} />)
             ) : (
-              <p className="text-xs text-slate-400">Sin reprogramaciones en este rango.</p>
+              <p className="text-xs text-slate-500">Sin reprogramaciones en este rango.</p>
             )
           ) : (
-            <p className="text-xs text-slate-400">Cargando…</p>
+            <p className="text-xs text-slate-500">Cargando…</p>
           )}
         </div>
 
-        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-400 uppercase">
+        <p className="mt-4 mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
           Por asesor ({presetLabel(preset)})
         </p>
         <div className="space-y-1.5">
@@ -3170,14 +3259,14 @@ function ReprogramModal({
                   />
                 ))
             ) : (
-              <p className="text-xs text-slate-400">Sin reprogramaciones en este rango.</p>
+              <p className="text-xs text-slate-500">Sin reprogramaciones en este rango.</p>
             )
           ) : (
-            <p className="text-xs text-slate-400">Cargando…</p>
+            <p className="text-xs text-slate-500">Cargando…</p>
           )}
         </div>
 
-        <p className="mt-4 text-[11px] leading-snug text-slate-400">
+        <p className="mt-4 text-[11px] leading-snug text-slate-500">
           Universo: reprogramaciones confirmadas en el dashboard — <b>Aliclik</b> (la guía sigue en Aliclik) y{" "}
           <b>Fénix</b> (se creó una guía Fénix); las entregas de primer intento no entran. <b>🔁 por Fénix</b> es el
           subconjunto de entregados que salió por una guía Fénix. Los cortes por rango usan la fecha en que se confirmó
