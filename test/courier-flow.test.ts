@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { allCourierRows, courierRowsByIds, nextDispatchMode } from "../lib/courier-flow";
 
 describe("next task, not repeated assignment", () => {
+  it("preserves load membership and custody against legacy route actions", () => {
+    const source = readFileSync(new URL("../app/dashboard/rutas/actions.ts", import.meta.url), "utf8");
+    for (const name of ["addStops", "removeStop", "startRoute"]) {
+      const body = source.split("export async function " + name)[1].split("export async function ")[0];
+      expect(body).toContain("await gfPlanningBlocker(");
+      expect(body).toContain("if (gfBlocker) return");
+    }
+  });
   it("opens an assigned draft directly in office verification", () => {
     expect(nextDispatchMode({ state: "draft", kind: "reparto", items: [{}] }, true)).toBe("office");
   });

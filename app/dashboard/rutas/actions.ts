@@ -49,6 +49,14 @@ async function guard() {
   return { user, admin: createAdminSupabase() };
 }
 
+/** GF membership and custody are owned by its verified loads, not legacy planning. */
+async function gfPlanningBlocker(admin: ReturnType<typeof createAdminSupabase>, routeId: string) {
+  const { count, error } = await admin.from("dispatch_manifests").select("id", { count: "exact", head: true })
+    .eq("delivery_route_id", routeId).eq("courier", "propio");
+  if (error) return "No se pudo comprobar el origen de la ruta. Reintenta.";
+  return count ? "Gestiona esta ruta desde Grupo GF Courier. Los paquetes ingresan al reparto al recibir su carga." : null;
+}
+
 /**
  * Crea la ruta del día de un motorizado, o devuelve la que ya tiene. Es
  * idempotente por (tienda, motorizado, día): añadir paradas dos veces no crea
@@ -126,6 +134,8 @@ export async function addStops(routeId: string, orderIds: string[]): Promise<Rou
   const g = await guard();
   if ("error" in g) return { ok: false, error: g.error };
   if (!orderIds.length) return { ok: false, error: "No elegiste ningún pedido." };
+  const gfBlocker = await gfPlanningBlocker(g.admin, routeId);
+  if (gfBlocker) return { ok: false, error: gfBlocker };
 
   const { data: route } = await g.admin
     .from("delivery_routes")
@@ -189,8 +199,10 @@ export async function removeStop(stopId: string): Promise<RouteActionResult> {
     .select("id,status,route_id")
     .eq("id", stopId)
     .maybeSingle();
-  const s = stop as { status?: string } | null;
+  const s = stop as { status?: string; route_id: string } | null;
   if (!s) return { ok: false, error: "Parada inexistente." };
+  const gfBlocker = await gfPlanningBlocker(g.admin, s.route_id);
+  if (gfBlocker) return { ok: false, error: gfBlocker };
   if (s.status !== "pendiente") {
     return {
       ok: false,
@@ -208,6 +220,8 @@ export async function removeStop(stopId: string): Promise<RouteActionResult> {
 export async function startRoute(routeId: string): Promise<RouteActionResult> {
   const g = await guard();
   if ("error" in g) return { ok: false, error: g.error };
+  const gfBlocker = await gfPlanningBlocker(g.admin, routeId);
+  if (gfBlocker) return { ok: false, error: gfBlocker };
 
   const detail = await getRouteDetail(routeId);
   if (!detail) return { ok: false, error: "Ruta inexistente o sin acceso." };
