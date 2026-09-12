@@ -321,4 +321,8 @@
 \ir migrations/0158_order_payments_cobro_courier.sql
 \echo 'Applying 0159_gf_route_loads.sql'
 \ir migrations/0159_gf_route_loads.sql
+\echo 'Applying 0160_flowcl_payment_links.sql'
+\ir migrations/0160_flowcl_payment_links.sql
+\echo 'Applying 0161_flowcl_store_credentials.sql'
+\ir migrations/0161_flowcl_store_credentials.sql
 \echo 'Done.'

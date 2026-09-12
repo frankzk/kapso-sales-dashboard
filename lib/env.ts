@@ -161,6 +161,21 @@ export const env = {
   metaAppSecret: () => (process.env.META_APP_SECRET ?? "").trim(),
   metaWebhookVerifyToken: () => (process.env.META_WEBHOOK_VERIFY_TOKEN ?? "").trim(),
 
+  // --- Flow.cl: pasarela de pagos (cobro del adelanto por link) ---
+  //
+  // AQUÍ NO HAY SECRETOS, Y NO POR DESCUIDO. La apiKey y el secretKey de Flow
+  // viven en `stores` cifrados (migración 0161), como los de Shopify y Kapso.
+  // Una cuenta de Flow no es configuración: es dónde CAE EL DINERO —está atada
+  // a un RUC y a una cuenta bancaria—, así que dos tiendas de distinto titular
+  // no pueden compartirla. Una variable global aquí sería una invitación a que
+  // una tienda nueva cobrara en el banco de otra sin que nadie se entere.
+  //
+  // Solo queda la base del API, que no es secreta. El sandbox es una CUENTA
+  // distinta con credenciales distintas, no un modo: apuntar aquí al sandbox
+  // con llaves de producción da «apiKey not found».
+  flowclApiBase: () =>
+    (process.env.FLOWCL_API_BASE ?? "https://www.flow.cl/api").trim().replace(/\/$/, ""),
+
   // --- Shopify OAuth app (optional; enables "Install on Shopify") ---
   shopifyAppApiKey: () => process.env.SHOPIFY_APP_API_KEY ?? "",
   shopifyAppApiSecret: () => process.env.SHOPIFY_APP_API_SECRET ?? "",

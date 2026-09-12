@@ -76,6 +76,10 @@ export interface StoreCreds {
   kapso_api_key: string | null;
   flow_webhook_secret: string | null;
   kapso_webhook_secret: string | null;
+  /** Flow.cl (pasarela). OJO: `flow_webhook_secret` de arriba es Shopify Flow. */
+  flowcl_api_key: string | null;
+  flowcl_secret_key: string | null;
+  flowcl_webhook_secret: string | null;
   whatsapp_phone_number_id: string | null;
   currency: string;
   timezone: string;
@@ -171,6 +175,9 @@ export async function getStoreCreds(
     kapso_api_key: decryptOrNull(data.kapso_api_key_enc),
     flow_webhook_secret: decryptOrNull(data.flow_webhook_secret_enc),
     kapso_webhook_secret: decryptOrNull(data.kapso_webhook_secret_enc),
+    flowcl_api_key: decryptOrNull(data.flowcl_api_key_enc),
+    flowcl_secret_key: decryptOrNull(data.flowcl_secret_key_enc),
+    flowcl_webhook_secret: decryptOrNull(data.flowcl_webhook_secret_enc),
     whatsapp_phone_number_id: data.whatsapp_phone_number_id ?? null,
     currency: data.currency ?? "PEN",
     timezone: data.timezone ?? "America/Lima",

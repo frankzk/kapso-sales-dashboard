@@ -65,6 +65,9 @@ export interface StoreSettingsInput {
   kapso_api_key?: string;
   flow_webhook_secret?: string;
   kapso_webhook_secret?: string;
+  flowcl_api_key?: string;
+  flowcl_secret_key?: string;
+  flowcl_webhook_secret?: string;
   telegram_bot_token?: string;
   meta_access_token?: string;
   /** API key de Anthropic de esta tienda (lectura de comprobantes Yape). */
@@ -255,6 +258,15 @@ export function buildStoreUpdate(
   if (flow) patch.flow_webhook_secret_enc = encrypt(flow, keyOverride);
   const kapsoWebhook = clean(input.kapso_webhook_secret);
   if (kapsoWebhook) patch.kapso_webhook_secret_enc = encrypt(kapsoWebhook, keyOverride);
+  // Flow.cl (0161): la cuenta de la pasarela es POR TIENDA porque decide en
+  // qué banco cae el dinero. En blanco = no la cambies, como el resto.
+  const flowclKey = clean(input.flowcl_api_key);
+  if (flowclKey) patch.flowcl_api_key_enc = encrypt(flowclKey, keyOverride);
+  const flowclSecret = clean(input.flowcl_secret_key);
+  if (flowclSecret) patch.flowcl_secret_key_enc = encrypt(flowclSecret, keyOverride);
+  const flowclHook = clean(input.flowcl_webhook_secret);
+  if (flowclHook) patch.flowcl_webhook_secret_enc = encrypt(flowclHook, keyOverride);
+
   const tgToken = clean(input.telegram_bot_token);
   if (tgToken) patch.telegram_bot_token_enc = encrypt(tgToken, keyOverride);
   const metaTok = clean(input.meta_access_token);
