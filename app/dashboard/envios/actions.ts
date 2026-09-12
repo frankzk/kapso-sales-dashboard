@@ -26,6 +26,7 @@ import {
   evaluateAliclikReschedule,
   getFenixDeliverySchedule,
   isFutureShipmentFollowup,
+  isTodayOrLaterDelivery,
   isCallable,
   isFenixCity,
   isValidStatus,
@@ -100,6 +101,40 @@ import type {
 export interface ShipmentActionState {
   error?: string;
   notice?: string;
+}
+
+/**
+ * El mensaje que LEE una persona cuando la base falla.
+ *
+ * Devolvíamos `error.message` de Postgres tal cual al pie del cajón. «duplicate
+ * key value violates unique constraint "shipments_guide_code_courier_key"» no
+ * le dice a una asesora qué hacer, y de paso publica nombres de tablas y de
+ * restricciones en la pantalla. El detalle va al log del servidor, que es donde
+ * sirve; la persona recibe qué falló y qué puede hacer.
+ *
+ * `accion` se escribe en infinitivo y en el vocabulario del panel («registrar la
+ * llamada»), porque entra en la frase: «No se pudo registrar la llamada.»
+ */
+function errorDeBase(
+  error: { message?: string; code?: string } | null | undefined,
+  accion: string,
+): string {
+  console.error(`[envios] ${accion}:`, error?.message ?? error);
+  const code = error?.code ?? "";
+  const raw = error?.message ?? "";
+  if (code === "23505" || /duplicate key/i.test(raw)) {
+    return `Ya existe un registro igual, así que no se pudo ${accion}. Actualiza el panel y revisa antes de reintentar.`;
+  }
+  if (code === "23503" || /foreign key/i.test(raw)) {
+    return `No se pudo ${accion}: falta un dato relacionado. Actualiza el panel e inténtalo de nuevo.`;
+  }
+  if (code.startsWith("42") || /permission denied|row-level security/i.test(raw)) {
+    return `No tienes permiso para ${accion}. Pide acceso o avisa a soporte.`;
+  }
+  if (/fetch failed|timeout|ETIMEDOUT|ECONNRESET/i.test(raw)) {
+    return `No se pudo ${accion}: la conexión falló. Inténtalo de nuevo.`;
+  }
+  return `No se pudo ${accion}. Inténtalo de nuevo; si vuelve a pasar, avisa a soporte.`;
 }
 
 /** Filas crudas de reprogramaciones (guías Swayp hijas) + nombres de asesor,
@@ -342,7 +377,7 @@ export async function updateShipmentCallNote(
       note_edited_by: ctx.userId,
     })
     .eq("id", callId);
-  if (error) return { error: error.message };
+  if (error) return { error: errorDeBase(error, "guardar la nota") };
 
   revalidatePath("/dashboard/envios");
   return { notice: "Nota actualizada." };
@@ -381,7 +416,7 @@ export async function claimShipment(shipmentId: string): Promise<ShipmentActionS
     .or(`claimed_by.is.null,claimed_by.eq.${ctx.userId},claimed_at.lt.${cutoff}`)
     .select("id")
     .maybeSingle();
-  if (error) return { error: error.message };
+  if (error) return { error: errorDeBase(error, "reservar el envío") };
   if (!data) {
     const { data: held } = await admin
       .from("shipments")
@@ -407,7 +442,7 @@ export async function renewShipmentClaim(shipmentId: string): Promise<ShipmentAc
     .eq("claimed_by", ctx.userId)
     .select("id")
     .maybeSingle();
-  if (error) return { error: error.message };
+  if (error) return { error: errorDeBase(error, "renovar la reserva") };
   if (!data) return { error: "La reserva de este envío ya no está activa." };
   return { notice: "Reserva renovada." };
 }
@@ -521,6 +556,12 @@ export async function registerRerouteCall(
   if (input.disposition === "confirma" && !input.nextFollowupAt) {
     return { error: "Elige la fecha de reprogramación para confirmar." };
   }
+  // Y TIENE QUE SER FUTURA. El `min` del input es una sugerencia del navegador:
+  // la fecha se puede teclear. Sin esta puerta se emitía una guía Swayp con una
+  // fecha pasada estampada en su número y un despacho agendado para ayer.
+  if (input.disposition === "confirma" && !isFutureShipmentFollowup(input.nextFollowupAt)) {
+    return { error: "La fecha de reprogramación tiene que ser futura." };
+  }
   if (
     input.disposition === "programar" &&
     !isFutureShipmentFollowup(input.nextFollowupAt)
@@ -565,7 +606,7 @@ export async function registerRerouteCall(
         reroute_outcome: decision.eligible ? "reprogramado_aliclik" : "reprogramado_aliclik_manual",
       })
       .eq("id", shipmentId);
-    if (updateError) return { error: updateError.message };
+    if (updateError) return { error: errorDeBase(updateError, "reprogramar en Aliclik") };
 
     await admin.from("shipment_calls").insert({
       shipment_id: shipmentId,
@@ -672,7 +713,7 @@ export async function registerRerouteCall(
       ...(t.closed ? { claimed_by: null, claimed_at: null } : {}),
     })
     .eq("id", shipmentId);
-  if (updErr) return { error: updErr.message };
+  if (updErr) return { error: errorDeBase(updErr, "registrar la llamada") };
 
   await admin.from("shipment_calls").insert({
     shipment_id: shipmentId,
@@ -973,7 +1014,7 @@ export async function updateShipmentDeliveryAddress(
     updateResult = await admin.from("shipments").update(legacyUpdate).in("id", targetIds);
   }
   const updateError = updateResult.error;
-  if (updateError) return { error: updateError.message };
+  if (updateError) return { error: errorDeBase(updateError, "guardar el destino") };
 
   await admin.from("shipment_calls").insert({
     shipment_id: shipmentId,
@@ -1017,6 +1058,10 @@ export async function registerCourierReportResult(
     if (!input.deliveryDate) return { error: "Elige la nueva fecha de entrega." };
     const parsed = new Date(input.deliveryDate);
     if (Number.isNaN(parsed.getTime())) return { error: "La fecha de entrega no es válida." };
+    // Hoy vale (el motorizado puede reprogramar para más tarde); ayer no.
+    if (!isTodayOrLaterDelivery(parsed.toISOString())) {
+      return { error: "La nueva fecha de entrega no puede ser anterior a hoy." };
+    }
     deliveryDate = parsed.toISOString();
   }
 
@@ -1065,7 +1110,7 @@ export async function registerCourierReportResult(
       claimed_at: null,
     })
     .eq("id", shipmentId);
-  if (error) return { error: error.message };
+  if (error) return { error: errorDeBase(error, "registrar el resultado del courier") };
 
   const auditNote = [
     `Resultado Swayp: ${definition.label}.`,
@@ -1109,7 +1154,7 @@ export async function setShipmentStatus(
     .from("shipments")
     .update({ delivery_status: status, status_category: categoryOf(status) })
     .eq("id", shipmentId);
-  if (error) return { error: error.message };
+  if (error) return { error: errorDeBase(error, "cambiar el estado de la guía") };
   await admin.from("shipment_calls").insert({
     shipment_id: shipmentId,
     store_id: ctx.storeId,
@@ -1660,7 +1705,7 @@ export async function previewDirectFenixGuide(input: {
     const { error: upsertErr } = await admin
       .from("orders")
       .upsert([order], { onConflict: "store_id,shopify_order_id" });
-    if (upsertErr) return { error: upsertErr.message };
+    if (upsertErr) return { error: errorDeBase(upsertErr, "preparar la guía Swayp directa") };
     const { data: row } = await admin
       .from("orders")
       .select("id")
@@ -2211,7 +2256,7 @@ export async function resolveShipmentMatch(
         match_method: "manual",
       })
       .eq("id", shipmentId);
-    if (error) return { error: error.message };
+    if (error) return { error: errorDeBase(error, "vincular el pedido") };
     await syncMasterForShipment(admin, shipmentId);
     revalidatePath("/dashboard/envios");
     return { notice: "Pedido vinculado." };
@@ -2222,7 +2267,7 @@ export async function resolveShipmentMatch(
     .from("shipments")
     .update({ match_method: "dismissed" })
     .eq("id", shipmentId);
-  if (error) return { error: error.message };
+  if (error) return { error: errorDeBase(error, "vincular el pedido") };
   revalidatePath("/dashboard/envios");
   return { notice: "Marcado sin pedido." };
 }
@@ -2322,7 +2367,7 @@ export async function linkShipmentToShopifyOrder(
   const { error: upsertErr } = await admin
     .from("orders")
     .upsert([order], { onConflict: "store_id,shopify_order_id" });
-  if (upsertErr) return { error: upsertErr.message };
+  if (upsertErr) return { error: errorDeBase(upsertErr, "vincular el pedido de Shopify") };
 
   const { data: row } = await admin
     .from("orders")
@@ -2380,7 +2425,7 @@ export async function clearShipmentSuggestion(shipmentId: string): Promise<Shipm
     .from("shipments")
     .update({ suggested_order_gid: null, suggested_store_id: null, suggested_order_name: null })
     .eq("id", shipmentId);
-  if (error) return { error: error.message };
+  if (error) return { error: errorDeBase(error, "descartar la sugerencia") };
   revalidatePath("/dashboard/envios");
   return { notice: "Sugerencia descartada." };
 }
@@ -2500,7 +2545,7 @@ export async function upsertFenixStock(input: {
 export async function deleteFenixStock(id: string): Promise<ShipmentActionState> {
   const sb = await createServerSupabase();
   const { error } = await sb.from("fenix_stock").delete().eq("id", id);
-  if (error) return { error: error.message };
+  if (error) return { error: errorDeBase(error, "borrar el stock Swayp") };
   const sync = await recomputeFenixEligibility();
   revalidatePath("/dashboard/envios/stock");
   revalidatePath("/dashboard/envios");
@@ -2626,7 +2671,7 @@ export async function recomputeFenixEligibility(): Promise<
     .from("fenix_stock")
     .select("city,product,sku,quantity")
     .eq("org_id", adminOrg.org_id);
-  if (stockError) return { error: stockError.message };
+  if (stockError) return { error: errorDeBase(stockError, "consultar el stock Swayp") };
   const stockRows = (stock as FenixStockRow[]) ?? [];
 
   // Only pending guides carry eligibility; re-evaluate each and flip the ones
@@ -2647,7 +2692,7 @@ export async function recomputeFenixEligibility(): Promise<
       .in("store_id", storeIds)
       .eq("status_category", "pending")
       .range(from, from + pageSize - 1);
-    if (rowsError) return { error: rowsError.message };
+    if (rowsError) return { error: errorDeBase(rowsError, "leer las guías") };
     const page = (rows as PendingShipment[]) ?? [];
     shipments.push(...page);
     if (page.length < pageSize) break;
@@ -2663,7 +2708,7 @@ export async function recomputeFenixEligibility(): Promise<
       .from("orders")
       .select("id,line_items")
       .in("id", orderIds.slice(i, i + 300));
-    if (ordersError) return { error: ordersError.message };
+    if (ordersError) return { error: errorDeBase(ordersError, "leer los pedidos") };
     for (const o of (orders as { id: string; line_items: { title?: string | null; sku?: string | null }[] | null }[]) ?? []) {
       productsByOrder.set(
         o.id,
@@ -2692,7 +2737,7 @@ export async function recomputeFenixEligibility(): Promise<
         .from("shipments")
         .update({ fenix_eligible: eligible })
         .in("id", ids.slice(i, i + 150));
-      if (updateError) return { error: updateError.message };
+      if (updateError) return { error: errorDeBase(updateError, "recalcular la cobertura Swayp") };
     }
   }
   const updated = toEligible.length + toIneligible.length;
