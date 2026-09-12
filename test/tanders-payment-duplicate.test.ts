@@ -11,6 +11,10 @@ import { formatDuplicateAlert } from "@/lib/tanders/duplicate-alert";
 
 const h = vi.hoisted(() => ({
   avisos: [] as unknown[][],
+  /** Fichas ya existentes en «Validar pagos». */
+  enLaCola: [] as { id: string }[],
+  /** Avisos de duplicado ya emitidos para esta guía. */
+  yaAvisado: [] as { id: string }[],
   checksPrevios: [] as { shipment_id: string }[],
   /** Estado de la guía con la que se choca. Por defecto, una que no se cobró. */
   chocada: { payment_check_state: null, delivery_status: "en_ruta" } as Record<string, unknown>,
@@ -80,10 +84,11 @@ function adminFalso() {
     buscadoPor: [] as unknown[][],
     insertado: [] as Record<string, unknown>[],
     updates: [] as Record<string, unknown>[],
+    encolados: [] as Record<string, unknown>[],
   };
   function cadena(filas: unknown[]) {
     const q: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "in", "or", "limit"]) q[m] = () => q;
+    for (const m of ["select", "eq", "in", "or", "limit", "contains"]) q[m] = () => q;
     q.order = () => q;
     q.neq = (...a: unknown[]) => {
       visto.neq.push(a);
@@ -94,6 +99,9 @@ function adminFalso() {
     return q;
   }
   const admin = {
+    storage: {
+      from: () => ({ upload: async () => ({ error: null }) }),
+    },
     from(tabla: string) {
       if (tabla === "stores") {
         return {
@@ -111,11 +119,31 @@ function adminFalso() {
           }),
         };
       }
+      if (tabla === "order_payments") {
+        return {
+          // La cola de «Validar pagos». Vacía por defecto: lo que se prueba
+          // acá es el barrido, no la cola.
+          select: () => {
+            const q: Record<string, unknown> = {};
+            for (const m of ["eq", "neq", "limit"]) q[m] = () => q;
+            q.then = (ok: (v: unknown) => unknown) =>
+              Promise.resolve({ data: h.enLaCola, error: null }).then(ok);
+            return q;
+          },
+          insert: async (fila: Record<string, unknown>) => {
+            visto.encolados.push(fila);
+            return { error: null };
+          },
+        };
+      }
       if (tabla === "tanders_payment_checks") {
         return {
+          // Dos consultas distintas sobre la misma tabla: la búsqueda del nº
+          // repetido pide `shipment_id`; la de «¿ya se avisó?» pide `id`.
           select: (...a: unknown[]) => {
             visto.buscadoPor.push(a);
-            return cadena(h.checksPrevios);
+            const cols = String(a[0] ?? "");
+            return cadena(cols === "shipment_id" ? h.checksPrevios : h.yaAvisado);
           },
           insert: async (fila: Record<string, unknown>) => {
             visto.insertado.push(fila);
@@ -149,6 +177,8 @@ function adminFalso() {
 
 beforeEach(() => {
   h.avisos.length = 0;
+  h.enLaCola = [];
+  h.yaAvisado = [];
   h.checksPrevios.length = 0;
   h.chocada = { payment_check_state: null, delivery_status: "en_ruta" };
   vi.mocked(alertDuplicatePayments).mockClear();

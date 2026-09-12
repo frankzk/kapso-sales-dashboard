@@ -56,6 +56,18 @@ describe("findDuplicate — identificadores fuertes", () => {
     expect(normalizeOperationNumber(" 1234-5678 ")).toBe("12345678");
   });
 
+  it("una lectura truncada no se convierte en llave", () => {
+    // Casos reales de las constancias de Tanders (10-09-2026): el modelo elidió
+    // el medio del número en vez de devolver null. Quitarle los puntos daría
+    // «202609495099», un número que no existe — y como esta llave es un índice
+    // único GLOBAL, ese invento puede tanto bloquear un pago bueno como dejar
+    // pasar el repetido de verdad.
+    expect(normalizeOperationNumber("202609...495099")).toBeNull();
+    expect(normalizeOperationNumber("2026…675")).toBeNull();
+    // Un punto suelto entre dígitos SÍ es separador, no elisión.
+    expect(normalizeOperationNumber("784.444.034.2156")).toBe("7844440342156");
+  });
+
   it("no trata el monto ni el código de seguridad como nº de operación", () => {
     expect(normalizeOperationNumber("30")).toBeNull();
     expect(normalizeOperationNumber("551")).toBeNull();

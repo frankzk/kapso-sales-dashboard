@@ -3319,6 +3319,28 @@ function OrderDrawer({
                   ))}
                 </ul>
               )}
+              {/* El cobro del courier lo confirma una PERSONA en Validar
+                  pagos: el lector de imágenes prepara la ficha, pero valida una
+                  imagen, no un depósito. Desde acá se llega de un clic en vez
+                  de buscar el pedido en la otra pantalla. */}
+              {detail.row.payment_check_state && (
+                <p className="mt-3 text-xs text-slate-500">
+                  Cobro del courier:{" "}
+                  <strong className="text-slate-700">
+                    {PAYMENT_CHECK_OPTIONS.find((o) => o.value === detail.row.payment_check_state)
+                      ?.label ?? detail.row.payment_check_state}
+                  </strong>
+                  .{" "}
+                  <a
+                    href="/dashboard/pagos"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium text-slate-700 underline"
+                  >
+                    Confirmarlo en Validar pagos
+                  </a>
+                </p>
+              )}
               {detail.guides.some((guide) => guide.courier === "shalom") && (
                 <ShalomPickupKeyPanel orderId={orderId} onChanged={onSaved} />
               )}

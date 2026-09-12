@@ -59,34 +59,18 @@ export const METHOD_LABEL: Record<PaymentCheckInput["voucher"]["method"], string
 export const AMOUNT_TOLERANCE = 0.5;
 
 /**
- * El nº de operación, listo para comparar: solo letras y dígitos, en
- * mayúsculas.
+ * El nº de operación normalizado. VIVE EN lib/yape-dedup.ts, no acá.
  *
- * SE GUARDA ASÍ, no solo se compara así. Es la clave con la que se detecta un
- * comprobante reusado, y dos transcripciones del mismo pago («86 480 816» y
- * «864-808-16») tienen que colisionar o la detección no sirve.
- *
- * NUNCA como número: Yape los emite con ceros a la izquierda («06420756») y
- * convertirlos a entero los perdería, haciendo colisionar operaciones
- * distintas y —peor— dejando pasar la de verdad repetida.
- *
- * Su LÍMITE: quita separadores, no etiquetas. Si el lector devolviera «N°
- * 86480816» quedaría «N86480816» y no chocaría con «86480816». No se arregla
- * acá a propósito —recortar letras del principio rompería un código BCP
- * alfanumérico legítimo— sino en el origen: el prompt le pide explícitamente
- * el código a secas. Ver lib/tanders/payment-vision.ts.
+ * Se reexporta para no tener dos normalizaciones del mismo dato: ese módulo ya
+ * lo usa como llave del índice único GLOBAL de `order_payments`, y dos reglas
+ * distintas para la misma llave es como se cuela un duplicado. La versión
+ * compartida trae además una guarda que a esta le faltaba —un número de menos
+ * de seis caracteres leído por OCR no se acepta, porque Yape muestra al lado un
+ * código de seguridad de tres dígitos y el monto—, y se le añadió la de acá: una
+ * lectura truncada («202609...495099») devuelve null en vez de un número
+ * inventado.
  */
-export function normalizeOperationNumber(raw: string | null | undefined): string | null {
-  const texto = raw ?? "";
-  // UNA LECTURA TRUNCADA NO ES UNA CLAVE. En las constancias reales aparecieron
-  // «202609...495099» y «2026...675»: el modelo elidió el medio en vez de
-  // devolver null. Quitarle los puntos daría «202609495099», un número que no
-  // existe — y compararlo podría tanto acusar en falso como tapar el duplicado
-  // de verdad. Vale más no tener dato que tener uno inventado.
-  if (/…|\.{2,}/.test(texto)) return null;
-  const clean = texto.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  return clean || null;
-}
+export { normalizeOperationNumber } from "@/lib/yape-dedup";
 
 export interface PaymentCheckInput {
   /**
