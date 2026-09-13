@@ -1501,6 +1501,27 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
   no la solución — pero es la red que cubre el caso mientras no se toque su
   contrato (cambiarlo a ciegas es el fallo que documenta la 0060).
 
+## 5u. Cómo se cobró el pedido, en el Master — y el drawer «No encontrado»
+
+- **Requiere migración 0128** (`order_master.financial_status`,
+  `order_master.total_refunded`). **Aplícala ANTES de desplegar**, no después.
+- **Qué pasa si se despliega el código sin ella.** `getOrderMasterDetail` pide
+  esas dos columnas en su `select`. Si no existen, PostgREST responde `42703` y
+  el drawer de CUALQUIER pedido queda en blanco. Se vio en producción el 24/08:
+  la migración salió detrás del código y el panel decía **«No encontrado.»** sobre
+  pedidos que la tabla de atrás seguía enseñando en la misma pantalla.
+- El mensaje engañaba porque el `error` de PostgREST se descartaba y un `data`
+  en null se leía como «este pedido no existe». Ya no: la lectura que falla
+  lanza `OrderMasterReadError` y el drawer enseña el error de la base con su
+  código, que es lo que distingue una migración pendiente de un permiso o de un
+  corte de red. Un `null` sin error —el único caso que sí es un pedido que no
+  está— sigue diciendo «No encontrado.».
+- **Comprobación después de aplicarla**: abre un pedido cualquiera desde el
+  Master. Si el drawer carga, la columna está. Si enseña un texto con un código
+  entre corchetes, ese código dice exactamente qué falta.
+- **Sin backfill a propósito**: las filas viejas quedan en `financial_status`
+  NULL, que no cuenta como pagado, y el barrido las va poniendo al día.
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle
