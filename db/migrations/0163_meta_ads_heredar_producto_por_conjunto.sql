@@ -1,4 +1,13 @@
--- 0162 — Un conjunto de anuncios promociona un solo producto.
+-- 0163 — Un conjunto de anuncios promociona un solo producto.
+--
+-- NACIÓ COMO 0162 Y SE RENUMERÓ. La 0162 ya estaba ocupada por
+-- `0162_rider_daily_pay.sql`, que entró a `main` en el #604, antes que esta en
+-- el #605. Dos ramas abiertas en paralelo eligieron el mismo número sin verse.
+-- Renumerar es seguro porque nada registra las migraciones aplicadas por
+-- nombre: `verify-db.sh` las aplica todas desde una base vacía y el orden entre
+-- estas dos es indiferente —una rellena `meta_ads.promoted_product_name`, la
+-- otra crea las tablas de pago del rider, y no se tocan—. Contra producción ya
+-- están aplicadas las dos; el renombre no cambia nada allí.
 --
 -- El conjunto es la unidad de prueba de la cuenta: mismo público, mismo
 -- presupuesto, mismo producto; lo que cambia entre sus anuncios es el creativo.

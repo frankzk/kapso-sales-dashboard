@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -16,8 +16,17 @@ import { describe, expect, it } from "vitest";
 
 const server = readFileSync(resolve(process.cwd(), "app/dashboard/actions.ts"), "utf8");
 const ui = readFileSync(resolve(process.cwd(), "components/campaign-table.tsx"), "utf8");
+// Se busca por el NOMBRE, no por el número. Esta migración nació 0162 y se
+// renumeró a 0163 porque `0162_rider_daily_pay.sql` ya ocupaba ese número: dos
+// ramas en paralelo lo eligieron sin verse. Anclar el número aquí convertía un
+// renombre legítimo en una prueba roja, que es ruido y no una señal.
+const MIGRACION = "_meta_ads_heredar_producto_por_conjunto.sql";
+const nombreMigracion = readdirSync(resolve(process.cwd(), "db/migrations")).find((f) =>
+  f.endsWith(MIGRACION),
+);
+if (!nombreMigracion) throw new Error(`No existe ninguna migración *${MIGRACION}`);
 const migracion = readFileSync(
-  resolve(process.cwd(), "db/migrations/0162_meta_ads_heredar_producto_por_conjunto.sql"),
+  resolve(process.cwd(), "db/migrations", nombreMigracion),
   "utf8",
 );
 
