@@ -163,8 +163,15 @@ describe("buildSwaypGuideInput", () => {
     });
 
     it("una bodega configurada para una ciudad que Swayp no cubre NO va por API", () => {
-      // Configurar Lima en el JSON no la habilita: el ubigeo de bodega manda.
-      expect(esCiudadPorApiSwayp("lima", { lima: SENDER })).toBe(false);
+      // Configurar Tacna en el JSON no la habilita: el ubigeo de bodega manda.
+      expect(esCiudadPorApiSwayp("tacna", { tacna: SENDER })).toBe(false);
+    });
+
+    it("Lima y Callao van por API con su remitente; el Callao usa la bodega de Lima", () => {
+      expect(esCiudadPorApiSwayp("lima", { lima: SENDER })).toBe(true);
+      expect(esCiudadPorApiSwayp("callao", { callao: SENDER })).toBe(true);
+      // El remitente se busca por la ciudad del envío: sin clave `callao` no sale.
+      expect(esCiudadPorApiSwayp("callao", { lima: SENDER })).toBe(false);
     });
   });
 
