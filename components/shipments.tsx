@@ -36,6 +36,7 @@ import {
   type RerouteDisposition,
 } from "@/lib/shipments";
 import { motivoDelCourier } from "@/lib/aliclik-status";
+import { normalizeDepartment } from "@/lib/peru-departamentos";
 import type {
   LinkedShipmentSummary,
   ShipmentCallRow,
@@ -356,8 +357,14 @@ const SIN_DEPARTAMENTO = "(sin departamento)";
 
 // Departamento del reporte de Aliclik (columna DEPARTAMENTO → region). Se usa el
 // departamento, no la provincia, para agrupar el filtro superior.
+//
+// Se normaliza AL AGRUPAR y no solo al importar, porque las filas viejas ya
+// están guardadas con su grafía: medidas el 14-09-2026 había 77 valores
+// distintos para 25 departamentos, así que el desplegable ofrecía «Junín» (501
+// filas) y «Junin» (125) como si fueran dos sitios, y elegir uno escondía el
+// otro. Las tres Limas siguen separadas a propósito: ver `peru-departamentos`.
 function shipmentDepartment(shipment: Pick<ShipmentRow, "region">): string {
-  return shipment.region?.trim() || SIN_DEPARTAMENTO;
+  return normalizeDepartment(shipment.region) || SIN_DEPARTAMENTO;
 }
 
 export function ShipmentsBoard({

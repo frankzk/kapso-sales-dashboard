@@ -78,7 +78,31 @@ const SHIPMENT_COLUMNS =
 const LEGACY_SHIPMENT_COLUMNS =
   "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,fenix_eligible,fenix_shipment_id,delivered_source,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,reported_status,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
 
-const SHIPMENT_LIST_COLUMNS = `${SHIPMENT_COLUMNS},shipment_calls(count)`;
+/**
+ * LO QUE LA COLA NECESITA, QUE NO ES TODO LO QUE TRAÍA.
+ *
+ * `SHIPMENT_COLUMNS` son las 47 columnas del expediente y se usan donde hay que
+ * mostrarlo entero: el cajón, con `loadShipmentDetail`, de una guía a la vez.
+ * La LISTA traía las mismas 47 para cada una de sus miles de filas, y medido
+ * contra producción el 14-09-2026 eso son 11 MB por recorrer las cinco
+ * pestañas, de los cuales **4.483 kB (38,2%) son columnas que la tabla no
+ * pinta**: la dirección y sus coordenadas, quién la corrigió y cuándo, las
+ * sugerencias de vinculación de la pantalla de Revisión, y los rastros de
+ * importación. Nada de eso se lee sin abrir el cajón, y el cajón las pide
+ * aparte.
+ *
+ * `withEnhancementDefaults` las repone en nulo, así que el tipo no cambia; lo
+ * que cambia es que ya no viajan. Si mañana la tabla necesita una, se añade
+ * ACÁ y no en `SHIPMENT_COLUMNS`, que es la lista del expediente.
+ */
+const SHIPMENT_QUEUE_COLUMNS =
+  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,order_name," +
+  "customer_name,customer_phone,product,district,province,city,region," +
+  "fenix_eligible,fenix_shipment_id,swayp_guide,swayp_state,created_via,delivered_source," +
+  "aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome," +
+  "claimed_by,claimed_at,next_followup_at,reported_status,closed_at,returned_at,updated_at";
+
+const SHIPMENT_LIST_COLUMNS = `${SHIPMENT_QUEUE_COLUMNS},shipment_calls(count)`;
 // Lo mínimo para DECIDIR una recuperable sin traer la fila entera: lo que mira
 // `withRecoveryState`. El contador del chip pasa por la misma decisión que la
 // lista, así que necesita las mismas columnas.
@@ -108,6 +132,16 @@ function withEnhancementDefaults(row: Partial<ShipmentRow>): ShipmentRow {
     aliclik_service_date: null,
     last_gestion_at: null,
     created_via: null,
+    // La cola no las pide (ver SHIPMENT_QUEUE_COLUMNS). Van explícitas y no por
+    // el `as` de abajo: un campo ausente y uno nulo se comportan distinto, y el
+    // tipo dice que existen.
+    match_method: null,
+    source_batch_id: null,
+    last_report_at: null,
+    created_at: null,
+    suggested_order_gid: null,
+    suggested_store_id: null,
+    suggested_order_name: null,
     ...row,
     province: row.province ?? row.region ?? null,
   } as ShipmentRow;

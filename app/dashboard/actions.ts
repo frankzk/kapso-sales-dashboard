@@ -38,7 +38,8 @@ export async function saveAdPromotedProduct(input: {
   adId: string;
   productName: string;
   skus: string[];
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+  /** Cuántos anuncios del mismo conjunto heredaron la asignación. */
+}): Promise<{ ok: true; heredados: number } | { ok: false; error: string }> {
   await requireUser();
   const adId = input.adId.trim();
   const productName = input.productName.trim();
@@ -90,12 +91,13 @@ export async function saveAdPromotedProduct(input: {
   }
   if (!authorized) return { ok: false, error: "No tienes acceso a este anuncio." };
 
+  const now = new Date().toISOString();
   const { error } = await admin.from("meta_ads").upsert(
     {
       ad_id: adId,
       promoted_product_name: productName,
       promoted_skus: skus,
-      promoted_product_updated_at: new Date().toISOString(),
+      promoted_product_updated_at: now,
     },
     { onConflict: "ad_id" },
   );
@@ -105,8 +107,62 @@ export async function saveAdPromotedProduct(input: {
       : "";
     return { ok: false, error: `No se pudo guardar el producto.${migrationHint}` };
   }
+
+  const heredados = await heredarAlConjunto(admin, adId, productName, skus, now);
   revalidatePath("/dashboard");
-  return { ok: true };
+  return { ok: true, heredados };
+}
+
+/**
+ * UN CONJUNTO DE ANUNCIOS PROMOCIONA UN SOLO PRODUCTO.
+ *
+ * Es como se arma la cuenta: el conjunto es la unidad de prueba —mismo público,
+ * mismo presupuesto, mismo producto— y lo que cambia entre sus anuncios es el
+ * creativo. Por eso asignar uno y dejar los otros treinta «Por mapear» no es
+ * información que falte: es la misma información sin copiar.
+ *
+ * Medido el 14-09-2026: 5.213 anuncios, 68 asignados a mano, y **cero conjuntos
+ * con dos productos distintos asignados** — la regla ya se cumplía a mano. Esas
+ * 68 asignaciones alcanzan a **523 anuncios** por herencia.
+ *
+ * Se hereda solo hacia los que NO tienen producto. Una asignación existente
+ * nunca se pisa: si alguien mapeó un anuncio a otra cosa a propósito, esa
+ * decisión gana, y el conjunto queda con dos productos (lo que hoy no pasa)
+ * sin que este código lo «arregle» por su cuenta.
+ *
+ * La campaña NO sirve para esto: en la de «Cayenne Pepper 0608» conviven 23
+ * conjuntos, y el producto se decide por conjunto.
+ */
+async function heredarAlConjunto(
+  admin: ReturnType<typeof createAdminSupabase>,
+  adId: string,
+  productName: string,
+  skus: string[],
+  now: string,
+): Promise<number> {
+  const { data: origen } = await admin
+    .from("meta_ads")
+    .select("adset_id")
+    .eq("ad_id", adId)
+    .maybeSingle();
+  const adsetId = (origen as { adset_id?: string | null } | null)?.adset_id ?? null;
+  if (!adsetId) return 0;
+
+  const { data: hermanos, error } = await admin
+    .from("meta_ads")
+    .update({
+      promoted_product_name: productName,
+      promoted_skus: skus,
+      promoted_product_updated_at: now,
+    })
+    .eq("adset_id", adsetId)
+    .neq("ad_id", adId)
+    .is("promoted_product_name", null)
+    .select("ad_id");
+  // Best-effort: el anuncio que se pidió ya quedó guardado. Si la herencia
+  // falla, se informa cero y la próxima asignación en ese conjunto lo reintenta.
+  if (error) return 0;
+  return hermanos?.length ?? 0;
 }
 
 export interface PromotedProductSuggestion {

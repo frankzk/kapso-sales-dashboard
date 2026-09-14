@@ -3186,6 +3186,40 @@ el guardarraíl de ambigüedad, la que busca dentro del texto y la que rompe la
 rama sin región— y los caza los cuatro. Una prueba que no falla ante ninguno de
 esos no habría estado protegiendo nada.
 
+### 19.0.1 La ortografía del departamento se unifica; el matiz de Lima no
+
+Medido el 14-09-2026: `shipments.region` tenía **77 valores distintos para 25
+departamentos**. El filtro de la cola de Envíos agrupa por esa columna, así que
+el desplegable ofrecía «Junín» (501 filas) y «Junin» (125) como si fueran dos
+sitios, y elegir uno escondía el otro. Lo mismo con Áncash, Huánuco, Apurímac,
+San Martín, Cusco/Cuzco e Ica.
+
+`normalizeDepartment` (`lib/peru-departamentos.ts`) canoniza la grafía al
+importar y al agrupar —las dos, porque las filas ya guardadas no se reimportan—.
+Es **seguro para la cobertura por construcción**: `normalizeCoverageLabel` ya
+compara sin tildes y en minúsculas, así que arreglar la ortografía no cambia
+ninguna decisión de courier. Hay una prueba que lo fija recorriendo las grafías
+reales y exigiendo que `limaRegionKind` dé lo mismo antes y después.
+
+**Lo que NO se unifica, y es la parte que importa: las tres Limas.**
+
+| Valor | Qué es | `limaRegionKind` |
+|---|---|---|
+| `Lima (provincia)` · `Lima Metropolitana` | la ciudad | `metropolitana` |
+| `Lima (departamento)` · `Región Lima` | el resto del departamento | `departamento` |
+| `Lima` a secas | no consta cuál | `lima` |
+
+Parecen la misma etiqueta mal escrita y no lo son. Los distritos lo confirman:
+en «(provincia)» están Miraflores, Surco y Puente Piedra; en «(departamento)»
+están Barranca, Cañete, Canta y Sayán, que son otras provincias del mismo
+departamento y otra cobertura. Fusionarlas —que es lo que parece el arreglo
+obvio mirando el desplegable— habría roto el ruteo de 113 envíos.
+
+Y **un distrito suelto en la columna se deja como vino**. Entran «Trujillo»,
+«Chorrillos», «Av Mariátegui mercado orizonte». Adivinarles el departamento es
+inventar: un dato sucio que se ve es mejor que uno limpio que miente, y §19.0
+ya fija el mismo criterio para los nombres ambiguos.
+
 ### 19.0.2 «No hay dato» no es «no hay cobertura»
 
 La cobertura Fenix/Swayp de un envío se decide por su ciudad. La columna `city`
