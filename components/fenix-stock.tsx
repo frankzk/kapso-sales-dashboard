@@ -9,6 +9,7 @@ import type { FenixStockRowDb, StoreSummary } from "@/lib/types";
 import {
   deleteFenixStock,
   getFenixStockMovements,
+  importarInventarioSwayp,
   recomputeFenixEligibility,
   recordFenixStockMovement,
   searchStockProducts,
@@ -106,6 +107,8 @@ export function FenixStockEditor({
           </p>
         </Card>
       )}
+
+      {canEdit && <ImportarDeSwayp onDone={(m) => setMsg(m)} />}
 
       {canEdit && (
         <Card className="space-y-3">
@@ -291,6 +294,72 @@ const DEMAND_LABEL: Record<string, string> = {
  * doubles as the "prepare & send" checklist. Recomputed on every page load, so
  * it tracks the queue as order states change.
  */
+/**
+ * Subir el "Inventario por bodega" que exporta Swayp y dejar esa ciudad igual
+ * que allá.
+ *
+ * VA ARRIBA DEL FORMULARIO MANUAL a propósito: el conteo de Swayp es la verdad
+ * y la carga a mano el parche. Cuando el orden era al revés, la tabla se llenaba
+ * a mano y nadie importaba nada.
+ *
+ * La ciudad NO se elige acá: sale de la columna «Bodega» del propio archivo.
+ * Un selector sería una forma de equivocarse —importar Trujillo sobre Juliaca
+ * pone a cero toda una ciudad— y el dato ya viene en el Excel.
+ */
+function ImportarDeSwayp({ onDone }: { onDone: (msg: string | null) => void }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [archivo, setArchivo] = useState<File | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function subir() {
+    if (!archivo) return;
+    start(async () => {
+      const fd = new FormData();
+      fd.set("archivo", archivo);
+      const r = await importarInventarioSwayp(fd);
+      onDone(r.error ?? r.notice ?? null);
+      if (!r.error) {
+        setArchivo(null);
+        if (inputRef.current) inputRef.current.value = "";
+        router.refresh();
+      }
+    });
+  }
+
+  return (
+    <Card className="space-y-3">
+      <div>
+        <p className="text-sm font-medium text-slate-800">Importar el conteo de Swayp</p>
+        <p className="mt-0.5 text-xs text-slate-500">
+          En Swayp: <span className="font-medium">Stock → Inventario</span>, elige la bodega y
+          «Enviar a Excel». Un archivo por bodega. La ciudad sale del propio archivo.
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".xlsx,.csv"
+          onChange={(e) => setArchivo(e.target.files?.[0] ?? null)}
+          className="text-xs text-slate-600 file:mr-2 file:rounded-lg file:border file:border-slate-200 file:bg-white file:px-2.5 file:py-1.5 file:text-xs file:text-slate-700 hover:file:bg-slate-50"
+        />
+        <button
+          onClick={subir}
+          disabled={pending || !archivo}
+          className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+        >
+          {pending ? "Importando…" : "Importar"}
+        </button>
+      </div>
+      <p className="text-xs text-amber-700">
+        Los productos que Swayp no lista quedan en 0: si esa bodega no lo tiene, no se puede
+        prometer. Sólo se toca la ciudad del archivo.
+      </p>
+    </Card>
+  );
+}
+
 function DemandReport({ demand }: { demand: DemandRow[] }) {
   const [deptFilter, setDeptFilter] = useState<string | null>(null); // null = todos
 
