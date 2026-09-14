@@ -19,12 +19,38 @@ export interface FenixStockRow {
 }
 
 /**
+ * Ciudades que NO llevan control de cantidad: todo producto anotado ahí vale
+ * como disponible, sin marcar nada por renglón.
+ *
+ * Lima desde el 14-09-2026: su bodega repone sola y lo que importa es QUÉ
+ * despacha. Se decidió por ciudad y no por renglón porque la carga de Lima
+ * son decenas de productos y una casilla por producto es una forma de
+ * olvidarse una — y un renglón olvidado es un pedido que la reja rechaza por
+ * «sin stock» en una ciudad donde el stock no se cuenta.
+ *
+ * Se compara con la clave de almacén, así que el Callao (que se sirve desde
+ * Lima) entra solo. La marca por renglón (`unlimited`) sigue existiendo para
+ * la excepción inversa: un producto sin control en una ciudad que sí cuenta.
+ */
+export const CIUDADES_SIN_CONTROL_DE_CANTIDAD: ReadonlySet<string> = new Set(["lima"]);
+
+/** ¿Esta ciudad no cuenta unidades? (por clave de almacén: Callao → Lima) */
+export function ciudadSinControl(city: string | null | undefined): boolean {
+  return CIUDADES_SIN_CONTROL_DE_CANTIDAD.has(fenixStockCityKey(city));
+}
+
+/** ¿Este renglón no lleva control de cantidad? Por ciudad o por marca propia. */
+export function sinControlDeCantidad(r: Pick<FenixStockRow, "city" | "unlimited">): boolean {
+  return r.unlimited === true || ciudadSinControl(r.city);
+}
+
+/**
  * ¿Este renglón puede respaldar una guía? Es LA definición de «hay stock» y
  * la usan las dos rejas (reprogramación y guía directa), para que no puedan
  * discrepar. Un renglón sin control cuenta aunque su cantidad sea 0.
  */
 export function stockDisponible(r: FenixStockRow): boolean {
-  return r.unlimited === true || r.quantity > 0;
+  return sinControlDeCantidad(r) || r.quantity > 0;
 }
 
 /** A product to check against stock — from the linked Shopify order's line

@@ -57,6 +57,7 @@ import {
   coverageInputOf,
   evaluateDirectFenixStock,
   evaluateFenix,
+  ciudadSinControl,
   FENIX_COVERAGE_COLUMNS,
   type FenixCoverageRow,
   type FenixEligibility,
@@ -2558,7 +2559,9 @@ export async function upsertFenixStock(input: {
         product,
         sku: input.sku?.trim() || null,
         quantity: targetQty,
-        unlimited: input.unlimited === true,
+        // En una ciudad sin control (Lima) la marca va sola: el renglón queda
+        // consistente con la regla aunque nadie haya tocado la casilla.
+        unlimited: input.unlimited === true || ciudadSinControl(city),
         updated_by: user.id,
       },
       { onConflict: "org_id,city,product" },
@@ -2572,7 +2575,7 @@ export async function upsertFenixStock(input: {
   // ese balance_after (no vuelve a aplicar el delta). Sin control de cantidad
   // no hay kardex: el número no significa nada.
   const delta = targetQty - oldQty;
-  if (delta !== 0 && !input.unlimited) {
+  if (delta !== 0 && !input.unlimited && !ciudadSinControl(city)) {
     await admin.from("fenix_stock_movements").insert({
       org_id: adminOrg.org_id,
       fenix_stock_id: (row as { id: string }).id,
@@ -2697,13 +2700,14 @@ export async function importarInventarioSwayp(
     if (!etiquetaPorSku.has(k)) etiquetaPorSku.set(k, r.product);
   }
 
-  const plan = planearImportacion(
-    ciudad,
-    lectura.entradas,
-    (stockData as FilaStock[]) ?? [],
-    skusPorCodbar,
-    etiquetaPorSku,
+  // En una ciudad sin control (Lima) el Excel no gobierna cantidades: ningún
+  // renglón se ajusta ni se pone en 0. Sirve igual para dar de alta lo que
+  // Swayp tiene y acá no está anotado — que es lo único que importa ahí.
+  const sinControl = ciudadSinControl(ciudad);
+  const filasStock = ((stockData as FilaStock[]) ?? []).map((f) =>
+    sinControl ? { ...f, unlimited: true } : f,
   );
+  const plan = planearImportacion(ciudad, lectura.entradas, filasStock, skusPorCodbar, etiquetaPorSku);
 
   // Las altas primero: crear el renglón y dejar su entrada en el kardex, para
   // que el saldo nazca con historial igual que los demás.
@@ -2718,6 +2722,7 @@ export async function importarInventarioSwayp(
           product: a.product,
           sku: a.sku,
           quantity: 0,
+          unlimited: sinControl,
           updated_by: user.id,
         },
         { onConflict: "org_id,city,product" },
@@ -2725,6 +2730,9 @@ export async function importarInventarioSwayp(
       .select("id")
       .single();
     if (error || !creado) continue;
+    altas++;
+    // Sin control no hay saldo que arrancar: el alta ya dice todo.
+    if (sinControl) continue;
     await recordStockMovement(admin, {
       orgId: adminOrg.org_id,
       stockId: (creado as { id: string }).id,
@@ -2735,7 +2743,6 @@ export async function importarInventarioSwayp(
       note: `Alta desde el inventario de ${nombreBodega} (${a.codbar})`,
       createdBy: user.id,
     });
-    altas++;
   }
 
   let aplicados = 0;
@@ -2823,6 +2830,9 @@ export async function recordFenixStockMovement(input: {
     unlimited: boolean;
   } | null;
   if (!s || !adminOrgs.includes(s.org_id)) return { error: "Renglón de stock no encontrado o sin acceso." };
+  if (ciudadSinControl(s.city)) {
+    return { error: `${s.city} no lleva control de cantidad: no hay saldo que mover.` };
+  }
   if (s.unlimited) {
     return {
       error:

@@ -7,6 +7,7 @@ import { FENIX_CITIES } from "@/lib/shipments";
 import type { DemandRow } from "@/lib/fenix-demand";
 import type { FenixStockRowDb, StoreSummary } from "@/lib/types";
 import type { BodegaSwaypResumen } from "@/lib/swayp-guide";
+import { ciudadSinControl, sinControlDeCantidad } from "@/lib/fenix";
 import {
   deleteFenixStock,
   getFenixStockMovements,
@@ -53,12 +54,13 @@ export function FenixStockEditor({
 
   function add() {
     start(async () => {
+      const libre = unlimited || ciudadSinControl(city);
       const r = await upsertFenixStock({
         city,
         product,
-        quantity: unlimited ? 0 : Number(quantity) || 0,
+        quantity: libre ? 0 : Number(quantity) || 0,
         sku,
-        unlimited,
+        unlimited: libre,
       });
       setMsg(r.error ?? r.notice ?? null);
       if (!r.error) {
@@ -171,24 +173,29 @@ export function FenixStockEditor({
               <input
                 type="number"
                 min={0}
-                value={unlimited ? "" : quantity}
-                placeholder={unlimited ? "∞" : undefined}
-                disabled={unlimited}
+                value={unlimited || ciudadSinControl(city) ? "" : quantity}
+                placeholder={unlimited || ciudadSinControl(city) ? "∞" : undefined}
+                disabled={unlimited || ciudadSinControl(city)}
                 onChange={(e) => setQuantity(e.target.value)}
                 className="w-24 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm disabled:bg-slate-50 disabled:text-slate-400"
               />
             </div>
             <label
               className="flex items-center gap-1.5 self-end pb-1.5 text-xs text-slate-600"
-              title="El producto existe en la bodega y no se cuenta: siempre disponible, la entrega no descuenta y el Excel no lo toca."
+              title={
+                ciudadSinControl(city)
+                  ? `${city} no lleva control de cantidad: todo producto anotado vale como disponible.`
+                  : "El producto existe en la bodega y no se cuenta: siempre disponible, la entrega no descuenta y el Excel no lo toca."
+              }
             >
               <input
                 type="checkbox"
-                checked={unlimited}
+                checked={unlimited || ciudadSinControl(city)}
+                disabled={ciudadSinControl(city)}
                 onChange={(e) => setUnlimited(e.target.checked)}
                 className="rounded border-slate-300"
               />
-              Sin control de cantidad
+              {ciudadSinControl(city) ? "Sin control de cantidad (regla de la ciudad)" : "Sin control de cantidad"}
             </label>
             <button
               onClick={add}
@@ -239,9 +246,9 @@ export function FenixStockEditor({
                 ))}
                 <span className="ml-auto text-xs text-slate-400">
                   {visibleRows.length} producto(s) ·{" "}
-                  {visibleRows.filter((r) => !r.unlimited).reduce((n, r) => n + r.quantity, 0)} u.
-                  {visibleRows.some((r) => r.unlimited) &&
-                    ` · ${visibleRows.filter((r) => r.unlimited).length} sin control`}
+                  {visibleRows.filter((r) => !sinControlDeCantidad(r)).reduce((n, r) => n + r.quantity, 0)} u.
+                  {visibleRows.some(sinControlDeCantidad) &&
+                    ` · ${visibleRows.filter(sinControlDeCantidad).length} sin control`}
                 </span>
               </div>
             )}
@@ -263,15 +270,15 @@ export function FenixStockEditor({
                     <td
                       className={cn(
                         "px-4 py-2.5 text-right font-medium tabular-nums",
-                        r.unlimited ? "text-slate-400" : r.quantity < 0 ? "text-rose-600" : "text-slate-700",
+                        sinControlDeCantidad(r) ? "text-slate-400" : r.quantity < 0 ? "text-rose-600" : "text-slate-700",
                       )}
-                      title={r.unlimited ? "Sin control de cantidad" : undefined}
+                      title={sinControlDeCantidad(r) ? "Sin control de cantidad" : undefined}
                     >
-                      {r.unlimited ? "∞" : r.quantity}
+                      {sinControlDeCantidad(r) ? "∞" : r.quantity}
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       <div className="flex justify-end gap-3">
-                        {!r.unlimited && (
+                        {!sinControlDeCantidad(r) && (
                           <button
                             onClick={() => setKardexRow(r)}
                             className="text-xs text-brand-700 hover:underline"
