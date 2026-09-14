@@ -23,6 +23,15 @@ describe("buildFenixDemand", () => {
     expect(row.unlimited).toBe(true);
   });
 
+  it("en Lima ningún renglón falta aunque no tenga la marca: es regla de la ciudad", () => {
+    const lima: FenixStockRow[] = [{ city: "lima", product: "Mushroom Coffee", sku: "MC-1", quantity: 0 }];
+    const ships: DemandShipment[] = [{ city: "Lima", product: "Mushroom Coffee" }];
+    const row = buildFenixDemand(lima, ships).find((r) => r.city === "lima")!;
+    expect(row.status).toBe("ok");
+    expect(row.shortfall).toBe(0);
+    expect(row.unlimited).toBe(true);
+  });
+
   it("flags shortfall when demand exceeds stock in a covered city", () => {
     const ships: DemandShipment[] = [
       { city: "Cusco", product: "Mushroom Coffee 180g" },

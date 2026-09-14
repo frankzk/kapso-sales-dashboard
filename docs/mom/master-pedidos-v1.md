@@ -2112,9 +2112,16 @@ parche: la fuente es el conteo de Swayp.
 
 Lima entró a cobertura el 14-09-2026 y la operación decidió **no contar
 unidades** ahí: la bodega de Lima repone sola y lo que importa es *qué*
-productos despacha, no cuántos hay. Un renglón marcado «sin control de
-cantidad» (`fenix_stock.unlimited`) dice «este producto existe en esa bodega» y
-nada más:
+productos despacha, no cuántos hay. **Es una regla de la ciudad**
+(`CIUDADES_SIN_CONTROL_DE_CANTIDAD` en `lib/fenix.ts`): todo producto anotado
+en Lima —y en el Callao, que se sirve desde esa bodega— vale como disponible
+sin que nadie marque nada. Se decidió por ciudad y no por renglón porque la
+carga de Lima son decenas de productos y una casilla por producto es una forma
+de olvidarse una; un renglón olvidado es un pedido rechazado por «sin stock» en
+una ciudad donde el stock no se cuenta. La marca por renglón
+(`fenix_stock.unlimited`) queda para la excepción inversa: un producto sin
+control en una ciudad que sí cuenta. En cualquiera de los dos casos, el renglón
+dice «este producto existe en esa bodega» y nada más:
 
 - las dos rejas —reprogramación y guía directa— lo dan por disponible sin mirar
   la cantidad (una sola definición, `stockDisponible`, para que no discrepen);
@@ -2129,9 +2136,8 @@ pasar la reja: para despachar por API hay que dar de alta el producto en Stock
 Swayp con la marca puesta (y vincularlo en Catálogo de productos, como en
 cualquier ciudad). Lo que se ahorra es el conteo, no el catálogo.
 
-**Es por renglón y no por ciudad** a propósito: mañana un producto de Lima puede
-pasar a contarse sin tocar a los demás, y una ciudad contada puede tener un
-producto que no se cuenta.
+Si un día Lima pasa a contarse, se la quita del conjunto y sus renglones vuelven
+a regirse por la cantidad y por la marca propia de cada uno.
 
 Stock objetivo:
 

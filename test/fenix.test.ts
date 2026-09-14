@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  ciudadSinControl,
   coverageInputOf,
   currentFenixReason,
   evaluateDirectFenixStock,
@@ -7,6 +8,7 @@ import {
   FENIX_COVERAGE_COLUMNS,
   fenixStockCityKey,
   matchesFenixAvailability,
+  sinControlDeCantidad,
   type FenixStockRow,
 } from "@/lib/fenix";
 
@@ -36,10 +38,17 @@ describe("stock sin control de cantidad (Lima)", () => {
     expect(r.ok).toBe(true);
   });
 
-  it("un renglón contado en 0 sigue siendo sin_stock: la marca es por producto, no por ciudad", () => {
-    const r = evaluateFenix({ city: "Lima", product: "Mushroom Coffee" }, lima);
+  it("en una ciudad CONTADA, la marca es por producto: el renglón sin marca en 0 sigue siendo sin_stock", () => {
+    // Trujillo cuenta unidades. Un producto con la marca vale aunque esté en 0;
+    // el de al lado, sin marca y en 0, no — en las dos rejas.
+    const trujillo: FenixStockRow[] = [
+      { city: "trujillo", product: "Nails Repairing – Sérum para Uñas", sku: "818531465", quantity: 0, unlimited: true },
+      { city: "trujillo", product: "Mushroom Coffee", sku: "MC-1", quantity: 0 },
+    ];
+    expect(evaluateFenix({ city: "Trujillo", product: "Nails Repairing" }, trujillo).reason).toBe("ok");
+    const r = evaluateFenix({ city: "Trujillo", product: "Mushroom Coffee" }, trujillo);
     expect(r.reason).toBe("sin_stock");
-    const d = evaluateDirectFenixStock("Lima", lima, [{ title: "Mushroom Coffee", sku: "MC-1", quantity: 1 }]);
+    const d = evaluateDirectFenixStock("Trujillo", trujillo, [{ title: "Mushroom Coffee", sku: "MC-1", quantity: 1 }]);
     expect(d.ok).toBe(false);
     if (!d.ok) expect(d.uncovered).toEqual(["Mushroom Coffee"]);
   });
@@ -47,6 +56,29 @@ describe("stock sin control de cantidad (Lima)", () => {
   it("un producto que no está anotado en Lima tampoco pasa: infinito no es «todo»", () => {
     const r = evaluateFenix({ city: "Lima", product: "Producto que nadie anotó" }, lima);
     expect(r.reason).toBe("sin_stock");
+  });
+
+  it("en Lima la regla es de la CIUDAD: un renglón sin marca y en 0 vale igual", () => {
+    // Decidido por ciudad y no por casilla: la carga de Lima son decenas de
+    // productos y una casilla olvidada es un pedido rechazado por «sin stock»
+    // donde el stock no se cuenta.
+    const sinMarca: FenixStockRow[] = [{ city: "lima", product: "Mushroom Coffee", sku: "MC-1", quantity: 0 }];
+    expect(ciudadSinControl("Lima")).toBe(true);
+    expect(sinControlDeCantidad(sinMarca[0]!)).toBe(true);
+    expect(evaluateFenix({ city: "Lima", product: "Mushroom Coffee" }, sinMarca).reason).toBe("ok");
+    expect(evaluateDirectFenixStock("Lima", sinMarca, [{ title: "Mushroom Coffee", sku: "MC-1", quantity: 2 }]).ok).toBe(true);
+  });
+
+  it("el Callao hereda la regla de Lima, porque se sirve desde esa bodega", () => {
+    expect(ciudadSinControl("Callao")).toBe(true);
+    const fila: FenixStockRow[] = [{ city: "lima", product: "Nails Repairing", sku: "818531465", quantity: 0 }];
+    expect(evaluateFenix({ city: "Callao", product: "Nails Repairing" }, fila).reason).toBe("ok");
+  });
+
+  it("una ciudad contada no hereda nada: en 0 sigue siendo sin_stock", () => {
+    expect(ciudadSinControl("Trujillo")).toBe(false);
+    const fila: FenixStockRow[] = [{ city: "trujillo", product: "Mushroom Coffee", quantity: 0 }];
+    expect(evaluateFenix({ city: "Trujillo", product: "Mushroom Coffee" }, fila).reason).toBe("sin_stock");
   });
 });
 
