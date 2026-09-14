@@ -329,4 +329,6 @@
 \ir migrations/0162_rider_daily_pay.sql
 \echo 'Applying 0163_meta_ads_heredar_producto_por_conjunto.sql'
 \ir migrations/0163_meta_ads_heredar_producto_por_conjunto.sql
+\echo 'Applying 0164_shopify_product_images.sql'
+\ir migrations/0164_shopify_product_images.sql
 \echo 'Done.'
