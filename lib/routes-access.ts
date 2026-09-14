@@ -14,6 +14,7 @@ import type { CostTariff } from "@/lib/costs";
 
 export interface RouteRow {
   id: string;
+  org_id?: string;
   store_id: string;
   rider_id: string;
   route_date: string;
@@ -50,7 +51,7 @@ export interface StopWithOrder extends RouteStop {
 }
 
 const ROUTE_COLUMNS =
-  "id,store_id,rider_id,route_date,status,settlement_id,note,started_at,closed_at";
+  "id,org_id,store_id,rider_id,route_date,status,settlement_id,note,started_at,closed_at";
 const STOP_COLUMNS =
   "id,order_id,store_id,seq,status,payment_method,collected_amount,outcome_reason,note," +
   "photo_path,voucher_path,reported_at";

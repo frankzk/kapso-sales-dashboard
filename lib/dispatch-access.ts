@@ -43,6 +43,8 @@ export interface DispatchManifestItem {
 
 export interface DispatchManifest {
   id: string;
+  delivery_route_id?: string | null;
+  load_number?: number;
   org_id: string;
   courier: string;
   /** `reparto` (motorizado, doble cotejo) o `entrega_courier` (Aliclik/agencia). */
@@ -84,14 +86,14 @@ export const DISPATCH_SHIPMENT_COLUMNS =
   "customer_phone,district,province,product";
 
 const MANIFEST_COLUMNS =
-  "id,org_id,courier,kind,route_date,route_label,driver_name,received_by,state,created_by," +
+  "id,org_id,courier,kind,route_date,route_label,driver_name,received_by,state,created_by,delivery_route_id,load_number," +
   "office_completed_at,custody_completed_at,cancellation_reason,created_at";
 
 const ITEM_COLUMNS =
   "id,manifest_id,shipment_id,store_id,added_by,added_at,office_checked_by," +
   "office_checked_at,pickup_checked_by,pickup_checked_at,removed_by,removed_at,removal_reason";
 
-export async function getDispatchWorkspaceData(): Promise<DispatchWorkspaceData> {
+export async function getDispatchWorkspaceData(requestedId?: string | null): Promise<DispatchWorkspaceData> {
   const sb = await createServerSupabase();
   const [activeManifestRes, historyManifestRes, readyRes, warehouse] = await Promise.all([
     sb
@@ -129,6 +131,11 @@ export async function getDispatchWorkspaceData(): Promise<DispatchWorkspaceData>
     ...((activeManifestRes.data ?? []) as unknown as Omit<DispatchManifest, "items">[]),
     ...((historyManifestRes.data ?? []) as unknown as Omit<DispatchManifest, "items">[]),
   ];
+  if (requestedId && !rawManifests.some((manifest) => manifest.id === requestedId)) {
+    const { data, error } = await sb.from("dispatch_manifests").select(MANIFEST_COLUMNS).eq("id", requestedId).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (data) rawManifests.unshift(data as unknown as Omit<DispatchManifest, "items">);
+  }
   const manifestIds = rawManifests.map((manifest) => manifest.id);
   let rawItems: Omit<DispatchManifestItem, "shipment">[] = [];
   if (manifestIds.length) {

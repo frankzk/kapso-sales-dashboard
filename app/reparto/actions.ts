@@ -1,12 +1,12 @@
 "use server";
 
-// Lo que el motorizado hace desde su teléfono. Poco y muy acotado: reportar una
-// parada suya. Nada más.
+// Reportes del motorizado o de coordinación autorizada. El actor es siempre
+// quien inició sesión, nunca el usuario del motorizado responsable.
 //
 // Tres barreras, a propósito redundantes:
 //
-//   1. El permiso `routes.deliver` (rol motorizado).
-//   2. La comprobación explícita de que la parada es de SU ruta en curso.
+//   1. routes.deliver para la ruta propia; routes.report_others para terceros.
+//   2. Propiedad o concesión en la organización exacta de la ruta en curso.
 //   3. Las políticas RLS de 0056, que filtran por `riders.user_id = auth.uid()`.
 //
 // La tercera es la que de verdad manda: si mañana alguien añade otra ruta de
@@ -17,6 +17,7 @@ import { revalidatePath } from "next/cache";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
+import { routeReportAccess } from "@/lib/route-report-access";
 import {
   isNonDeliveryReason,
   isPaymentMethod,
@@ -41,6 +42,7 @@ export interface ReportStopInput {
   /** Rutas en el bucket privado, ya subidas por /api/reparto/foto. */
   photoPath: string | null;
   voucherPath: string | null;
+  reportReason?: string | null;
 }
 
 /**
@@ -56,7 +58,7 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
   if (!user) return { ok: false, error: "No autenticado." };
 
   const perms = await getMasterPermissions();
-  if (!perms.can("routes.deliver") && !perms.can("routes.manage")) {
+  if (!perms.can("routes.deliver") && !perms.can("routes.report_others")) {
     return { ok: false, error: "Tu rol no permite reportar entregas." };
   }
 
@@ -71,6 +73,21 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
   if (!stopRow) return { ok: false, error: "Esa parada no es tuya o ya no está disponible." };
 
   const stop = stopRow as { id: string; route_id: string; photo_path: string | null; voucher_path: string | null };
+  const access = await routeReportAccess(stop.route_id);
+  if (!access) return { ok: false, error: "No tienes permiso para reportar esta ruta o ya no está en curso." };
+  const reasonForReport = input.reportReason?.trim();
+  if (access.delegated && !reasonForReport) {
+    return { ok: false, error: "Indica por qué reportas por el motorizado." };
+  }
+  const reportNote = access.delegated
+    ? `Registrado por ${access.actorLabel} en nombre de ${access.riderName}. Motivo: ${reasonForReport}. ${input.note?.trim() ?? ""}`.trim()
+    : input.note?.trim() || null;
+  // Only proofs uploaded for this exact stop may be attached to its report.
+  for (const path of [input.photoPath, input.voucherPath]) {
+    if (path && (!path.startsWith(`${stop.route_id}/${stop.id}/`) || path.includes(".."))) {
+      return { ok: false, error: "La evidencia no pertenece a esta parada." };
+    }
+  }
 
   const { data: routeRow } = await sb
     .from("delivery_routes")
@@ -94,6 +111,9 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
   // vuelve a adjuntarlas.
   const photoPath = input.photoPath ?? stop.photo_path;
   const voucherPath = input.voucherPath ?? stop.voucher_path;
+  if (access.delegated && !photoPath) {
+    return { ok: false, error: "Adjunta la evidencia del reporte por el motorizado." };
+  }
 
   const validation = validateStopReport({
     status: input.status,
@@ -118,7 +138,7 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
       payment_method: input.status === "entregado" ? method : null,
       collected_amount: input.status === "entregado" ? input.collectedAmount : null,
       outcome_reason: input.status === "no_entregado" ? reason : null,
-      note: input.note?.trim() || null,
+      note: reportNote,
       photo_path: photoPath,
       voucher_path: voucherPath,
       reported_at: now,
@@ -138,7 +158,7 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
       payment_method: input.status === "entregado" ? method : null,
       collected_amount: input.status === "entregado" ? input.collectedAmount : null,
       outcome_reason: input.status === "no_entregado" ? reason : null,
-      note: input.note?.trim() || null,
+      note: reportNote,
       actor: user.id,
     })
     .then(
@@ -147,6 +167,8 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
     );
 
   revalidatePath("/reparto");
+  revalidatePath("/dashboard/rutas");
+  revalidatePath("/dashboard/courier");
   return {
     ok: true,
     message: input.status === "entregado" ? "Entrega registrada." : "Reportado como no entregado.",

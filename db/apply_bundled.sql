@@ -12377,3 +12377,317 @@ alter table order_payments add constraint order_payments_kind_check
 
 comment on column order_payments.kind is
   'adelanto | diferencia | total (los paga la clienta) | cobro_courier (lo cobró el motorizado y lo remitió a Grupo GF SAC).';
+
+-- ---- 0159 ----
+-- MOM §29: one daily delivery route, multiple independently checked loads.
+-- No shipment, QR, receipt or delivery report is replaced.
+alter table dispatch_manifests
+  add column if not exists delivery_route_id uuid references delivery_routes(id),
+  add column if not exists load_number integer not null default 1 check (load_number > 0);
+alter table delivery_stops
+  add column if not exists shipment_id uuid references shipments(id),
+  add column if not exists dispatch_manifest_id uuid references dispatch_manifests(id);
+
+drop index if exists dispatch_manifest_rider_day_uniq;
+create unique index dispatch_manifest_rider_day_uniq
+  on dispatch_manifests(org_id, route_date, rider_id, load_number)
+  where rider_id is not null and state <> 'cancelled';
+create unique index if not exists delivery_stop_shipment_uniq
+  on delivery_stops(shipment_id) where shipment_id is not null;
+
+create or replace function public.gf_dispatch_load(p_org_id uuid, p_rider_id uuid, p_day date, p_actor uuid)
+returns uuid language plpgsql set search_path = public as $$
+declare
+  v_rider riders%rowtype;
+  v_route delivery_routes%rowtype;
+  v_load dispatch_manifests%rowtype;
+  v_number integer;
+begin
+  -- Serialize even the first creation; the route row does not exist yet.
+  perform pg_advisory_xact_lock(hashtextextended(p_org_id::text || p_rider_id::text || p_day::text, 0));
+  select * into v_rider from riders where id = p_rider_id and org_id = p_org_id and active;
+  if not found or lower(trim(coalesce(v_rider.courier, ''))) not in
+    ('', 'propio', 'motorizado propio', 'grupo gf courier') then
+    raise exception 'Motorizado de Grupo GF no disponible.';
+  end if;
+  insert into delivery_routes(org_id, rider_id, route_date, status, created_by)
+  values (p_org_id, p_rider_id, p_day, 'planificada', p_actor)
+  on conflict (org_id, rider_id, route_date) do nothing;
+  select * into v_route from delivery_routes
+    where org_id = p_org_id and rider_id = p_rider_id and route_date = p_day for update;
+  if v_route.status = 'cerrada' then raise exception 'La ruta diaria ya está liquidada.'; end if;
+  select * into v_load from dispatch_manifests
+    where org_id = p_org_id and rider_id = p_rider_id and route_date = p_day and state <> 'cancelled'
+    order by load_number desc limit 1 for update;
+  if found then
+    if v_load.courier <> 'propio' then raise exception 'La ruta pertenece a otro operador.'; end if;
+    update dispatch_manifests set delivery_route_id = v_route.id where id = v_load.id;
+    if v_load.state = 'draft' then return v_load.id; end if;
+    if v_load.state <> 'in_custody' then
+      raise exception 'Termina de verificar y recibir la carga actual antes de agregar otra.';
+    end if;
+  end if;
+  select coalesce(max(load_number), 0) + 1 into v_number from dispatch_manifests
+    where org_id = p_org_id and rider_id = p_rider_id and route_date = p_day;
+  insert into dispatch_manifests(org_id, courier, kind, route_date, route_label, rider_id,
+    driver_name, created_by, delivery_route_id, load_number)
+  values (p_org_id, 'propio', 'reparto', p_day, v_rider.full_name, p_rider_id,
+    v_rider.full_name, p_actor, v_route.id, v_number) returning * into v_load;
+  insert into dispatch_events(org_id, manifest_id, actor, kind, payload)
+  values (p_org_id, v_load.id, p_actor, 'manifest_created',
+    jsonb_build_object('source', 'grupo_gf_courier', 'delivery_route_id', v_route.id, 'load_number', v_number));
+  return v_load.id;
+end;
+$$;
+revoke all on function public.gf_dispatch_load(uuid, uuid, date, uuid) from public, anon, authenticated;
+grant execute on function public.gf_dispatch_load(uuid, uuid, date, uuid) to service_role;
+
+-- The existing atomic finalizer still owns custody. This trigger runs IN that
+-- transaction: if linking the route fails, custody does not partially change.
+create or replace function public.gf_received_load_to_delivery()
+returns trigger language plpgsql set search_path = public as $$
+declare
+  v_route delivery_routes%rowtype;
+  v_item record;
+  v_existing delivery_stops%rowtype;
+  v_seq integer;
+begin
+  if new.courier <> 'propio' or new.rider_id is null or new.state <> 'in_custody'
+    or old.state = 'in_custody' then return new; end if;
+  perform pg_advisory_xact_lock(hashtextextended(new.org_id::text || new.rider_id::text || new.route_date::text, 0));
+  insert into delivery_routes(org_id, rider_id, route_date, status, created_by)
+    values(new.org_id, new.rider_id, new.route_date, 'planificada', new.created_by)
+    on conflict (org_id, rider_id, route_date) do nothing;
+  select * into v_route from delivery_routes where org_id = new.org_id
+    and rider_id = new.rider_id and route_date = new.route_date for update;
+  if v_route.status = 'cerrada' then raise exception 'La ruta diaria ya está liquidada.'; end if;
+  select coalesce(max(seq), 0) into v_seq from delivery_stops where route_id = v_route.id;
+  for v_item in select i.*, s.order_id from dispatch_manifest_items i
+    join shipments s on s.id = i.shipment_id where i.manifest_id = new.id and i.removed_at is null
+  loop
+    if v_item.order_id is null then raise exception 'Un paquete no tiene pedido para reparto.'; end if;
+    select * into v_existing from delivery_stops where route_id = v_route.id and order_id = v_item.order_id;
+    if found then
+      if v_existing.shipment_id is distinct from v_item.shipment_id then
+        raise exception 'El pedido ya tiene una parada previa; revisa su identidad antes de recibir.';
+      end if;
+    else
+      v_seq := v_seq + 1;
+      insert into delivery_stops(route_id, order_id, store_id, seq, shipment_id, dispatch_manifest_id)
+        values(v_route.id, v_item.order_id, v_item.store_id, v_seq, v_item.shipment_id, new.id);
+    end if;
+  end loop;
+  update delivery_routes set status = 'en_curso', started_at = coalesce(started_at, now()) where id = v_route.id;
+  new.delivery_route_id := v_route.id;
+  return new;
+end;
+$$;
+drop trigger if exists gf_received_load_to_delivery on dispatch_manifests;
+create trigger gf_received_load_to_delivery before update of state on dispatch_manifests
+  for each row execute function public.gf_received_load_to_delivery();
+
+-- Serialize assignment and scans on the same manifest lock as finalization.
+-- Once checks start, the planned membership cannot silently grow.
+create or replace function public.gf_guard_load_items()
+returns trigger language plpgsql set search_path = public as $$
+declare v_manifest dispatch_manifests%rowtype;
+begin
+  select * into v_manifest from dispatch_manifests where id = new.manifest_id for update;
+  if v_manifest.courier = 'propio' then
+    if tg_op = 'INSERT' and (v_manifest.state <> 'draft' or exists (
+      select 1 from dispatch_manifest_items where manifest_id = new.manifest_id and removed_at is null
+      and (office_checked_at is not null or pickup_checked_at is not null)
+    )) then
+      raise exception 'La carga ya inició el cotejo; no se pueden agregar paquetes.';
+    end if;
+    if tg_op = 'UPDATE' and v_manifest.state in ('in_custody', 'cancelled') then
+      raise exception 'La carga ya está cerrada; sus cotejos son históricos.';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists gf_guard_load_items on dispatch_manifest_items;
+create trigger gf_guard_load_items before insert or update on dispatch_manifest_items
+  for each row execute function public.gf_guard_load_items();
+
+create or replace function public.gf_rider_receive(p_manifest_id uuid, p_code text, p_actor uuid)
+returns uuid[] language plpgsql set search_path = public as $$
+declare v_manifest dispatch_manifests%rowtype; v_item uuid; v_count integer;
+begin
+  select * into v_manifest from dispatch_manifests where id = p_manifest_id for update;
+  if not found or v_manifest.courier <> 'propio' or not exists (
+    select 1 from riders where id = v_manifest.rider_id and user_id = p_actor and active
+  ) then raise exception 'La carga no pertenece a tu cuenta.'; end if;
+  if v_manifest.state not in ('ready_for_pickup', 'pickup_check') then
+    raise exception 'La oficina debe completar primero la verificación de la caja.';
+  end if;
+  if exists(select 1 from dispatch_manifest_items where manifest_id = p_manifest_id
+    and removed_at is null and office_checked_at is null) then
+    raise exception 'La caja todavía tiene paquetes sin verificar.';
+  end if;
+  select count(*), (array_agg(i.id))[1] into v_count, v_item
+    from dispatch_manifest_items i join shipments s on s.id = i.shipment_id
+    where i.manifest_id = p_manifest_id and i.removed_at is null and (
+      s.qr_token::text = p_code or lower(s.output_code) = lower(p_code)
+      or lower(s.guide_code) = lower(p_code)
+      or lower(ltrim(s.order_name, '#')) = lower(ltrim(p_code, '#')));
+  if v_count <> 1 then raise exception 'Escanea el QR de un paquete de esta carga.'; end if;
+  if exists(select 1 from dispatch_manifest_items where id = v_item and pickup_checked_at is null) then
+    update dispatch_manifest_items set pickup_checked_at = now(), pickup_checked_by = p_actor where id = v_item;
+    insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind)
+      select v_manifest.org_id, p_manifest_id, shipment_id, p_actor, 'pickup_checked'
+      from dispatch_manifest_items where id = v_item;
+  end if;
+  update dispatch_manifests set state = 'pickup_check' where id = p_manifest_id;
+  if not exists(select 1 from dispatch_manifest_items where manifest_id = p_manifest_id
+    and removed_at is null and pickup_checked_at is null) then
+    return public.finalize_dispatch_manifest(p_manifest_id, p_actor);
+  end if;
+  return '{}'::uuid[];
+end;
+$$;
+revoke all on function public.gf_rider_receive(uuid, text, uuid) from public, anon, authenticated;
+grant execute on function public.gf_rider_receive(uuid, text, uuid) to service_role;
+
+-- ---- 0160 ----
+-- 0160_flowcl_payment_links.sql — los links de cobro de Flow.cl (pasarela).
+--
+-- QUÉ ES. Cuando el asesor genera un link de pago desde el drawer, Flow crea
+-- una orden y nos devuelve un token. Esta tabla guarda ese hecho: a qué pedido
+-- pertenece, por cuánto, y qué pasó después. El webhook de Flow
+-- (app/api/webhooks/flowcl) llega con el token y de aquí saca el pedido.
+--
+-- POR QUÉ UNA TABLA APARTE Y NO COLUMNAS EN `order_payments`. Porque un link
+-- generado NO es dinero, y `order_payments` significa dinero. La diferencia
+-- tiene consecuencia inmediata: `order_payments_kind_uniq` permite UN SOLO
+-- adelanto vivo por pedido. Si el link se guardara ahí, generar un link que la
+-- clienta no paga dejaría el sitio del adelanto ocupado para siempre — no
+-- podría subir un comprobante de Yape ni el asesor generar otro link. El
+-- pedido quedaría bloqueado por un cobro que nunca existió.
+--
+-- Separarlos también deja ver algo que hoy no se puede: cuántos links se
+-- mandan y cuántos se pagan. Un link generado y nunca pagado es un hecho
+-- operativo, no un vacío.
+--
+-- `commerce_order` ES LA LLAVE DE IDEMPOTENCIA. Es el identificador que
+-- viaja a Flow y el que Flow nos devuelve. Único: dos filas con el mismo
+-- commerce_order significarían dos links cobrables por el mismo concepto, que
+-- es un cliente pagando dos veces.
+
+create table if not exists flowcl_payment_links (
+  id                uuid primary key default gen_random_uuid(),
+  store_id          uuid not null references stores(id) on delete cascade,
+  order_id          uuid not null references orders(id) on delete cascade,
+
+  -- Lo que se le mandó a Flow como `commerceOrder`.
+  commerce_order    text not null unique,
+  -- Qué comprobante sería este cobro si se paga. Mismos valores que
+  -- order_payments.kind: el MOM ya define cuál cabe en cada momento.
+  kind              text not null check (kind in ('adelanto', 'diferencia', 'total')),
+  amount            numeric(12, 2) not null,
+  currency          text not null default 'PEN',
+  -- Identificador del medio de pago en Flow (170 = Yape One Shot).
+  payment_method    integer,
+
+  -- Lo que devolvió Flow al crear la orden.
+  flow_token        text,
+  flow_order        bigint,
+  link              text,
+  expires_at        timestamptz,
+
+  -- Nuestro estado, no el de Flow. `creado` es un link vivo sin pagar.
+  status            text not null default 'creado'
+                      check (status in ('creado', 'pagado', 'rechazado', 'anulado', 'expirado')),
+  -- El `status` numérico que dijo Flow la última vez (1..4). Se guarda crudo
+  -- para poder auditar por qué decidimos lo que decidimos.
+  flow_status       integer,
+  paid_at           timestamptz,
+
+  -- El comprobante que este cobro creó, si llegó a crearlo. Nulo mientras no
+  -- esté pagado, y nulo también si el pago entró pero el comprobante no se
+  -- pudo registrar: en ese caso el dinero consta AQUÍ y hay que mirarlo.
+  payment_id        uuid references order_payments(id) on delete set null,
+  -- Por qué no se pudo registrar el comprobante, si pasó.
+  register_error    text,
+
+  -- La última respuesta de payment/getStatus, entera. Es la prueba de qué dijo
+  -- Flow: el medio real, la comisión, el saldo a depositar.
+  last_status       jsonb not null default '{}'::jsonb,
+
+  created_by        uuid references auth.users(id) on delete set null,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+
+-- El webhook llega con el token y con nada más: es su única vía de entrada.
+create unique index if not exists flowcl_links_token_uniq
+  on flowcl_payment_links (flow_token)
+  where flow_token is not null;
+
+create index if not exists flowcl_links_order_idx on flowcl_payment_links (order_id);
+-- Para el panel: links vivos de una tienda, y los pagados sin comprobante.
+create index if not exists flowcl_links_store_status_idx
+  on flowcl_payment_links (store_id, status);
+
+alter table flowcl_payment_links enable row level security;
+
+drop policy if exists flowcl_payment_links_select on flowcl_payment_links;
+create policy flowcl_payment_links_select on flowcl_payment_links for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+-- Escribe el servidor (el botón del drawer y el webhook), con service-role.
+-- No hay policy de insert/update para `authenticated` a propósito: un link de
+-- cobro no se crea desde el browser.
+
+comment on table flowcl_payment_links is
+  'Links de cobro generados contra Flow.cl. Un link NO es dinero: el dinero '
+  'aparece en order_payments solo cuando Flow confirma el pago.';
+comment on column flowcl_payment_links.commerce_order is
+  'El commerceOrder enviado a Flow. Llave de idempotencia: único en la tabla.';
+comment on column flowcl_payment_links.payment_id is
+  'El order_payments que creó este cobro. Nulo y con register_error relleno = '
+  'el dinero entró pero el comprobante no se pudo registrar; requiere revisión.';
+
+-- ---- 0161 ----
+-- 0161_flowcl_store_credentials.sql — las credenciales de Flow.cl, por tienda.
+--
+-- POR QUÉ SE MUEVEN DEL ENTORNO. La 0160 las dejó en variables de entorno con
+-- este argumento: Aurela y Kenku comparten UNA cuenta de Flow, y duplicar la
+-- misma llave en dos filas garantiza que algún día se rote en una y se olvide
+-- en la otra. El argumento era correcto y la conclusión no.
+--
+-- Una cuenta de Flow NO es configuración: es DÓNDE CAE EL DINERO. Está atada a
+-- un RUC y a una cuenta bancaria. En cuanto venda una tienda que no sea de
+-- Grupo GF, no puede compartir esa cuenta — sus cobros entrarían al banco de
+-- otro. Eso no es una preferencia a futuro, es un límite duro, y conviene
+-- cruzarlo antes de que exista la primera tienda de un tercero y no después.
+--
+-- SIN RESPALDO AL ENTORNO, A PROPÓSITO. Lo cómodo sería: si la tienda no tiene
+-- llave, usa la global. Eso significa que una tienda nueva mal configurada
+-- cobraría EN SILENCIO a la cuenta de Grupo GF. Sin respaldo, una tienda sin
+-- credenciales simplemente no puede cobrar por pasarela y el botón no aparece:
+-- el fallo es ruidoso y aburrido en vez de silencioso y caro.
+--
+-- El coste aceptado es el del argumento original: Aurela y Kenku llevarán la
+-- misma llave en dos filas y alguien puede rotar una sola. Ese fallo se ve —los
+-- cobros de la otra empiezan a dar 401— y se arregla en dos minutos. Cambiar
+-- un 401 por plata mal enrutada es un buen trato.
+--
+-- El secreto del webhook también va por tienda, como flow_webhook_secret_enc
+-- (Shopify Flow), kapso_webhook_secret_enc y aliclik_webhook_secret_enc:
+-- `urlConfirmation` se elige en CADA cobro, así que nada obliga a compartirlo.
+
+alter table stores
+  add column if not exists flowcl_api_key_enc        text,
+  add column if not exists flowcl_secret_key_enc     text,
+  add column if not exists flowcl_webhook_secret_enc text;
+
+comment on column stores.flowcl_api_key_enc is
+  'apiKey de Flow.cl de ESTA tienda, cifrada. Identifica la cuenta de comercio '
+  'donde cae el dinero: no se comparte entre tiendas de distinto titular.';
+comment on column stores.flowcl_secret_key_enc is
+  'secretKey de Flow.cl de esta tienda, cifrada. Firma cada petición (HMAC-SHA256).';
+comment on column stores.flowcl_webhook_secret_enc is
+  'Secreto que viaja en la urlConfirmation de esta tienda. Flow no firma sus '
+  'avisos; el aviso solo dice "mira otra vez" y la verdad se relee con getStatus.';

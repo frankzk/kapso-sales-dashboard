@@ -54,6 +54,8 @@ import {
   type AliclikCourierQuote,
   type AliclikOrder,
 } from "@/lib/aliclik";
+import { shouldRetryQuote } from "@/lib/aliclik-health";
+import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import {
   isCompatibleManualPortalGuide,
   selectExistingAliclikOrder,
@@ -859,12 +861,21 @@ export async function previewAliclikGuide(
     });
   }
 
+  let outageNote: string | null = null;
   if (!quote) {
     const preferred = candidates[0] ?? quotedWarehouse;
     const allTransient =
       failures.length > 0 &&
       failures.every((failure) => failure.status == null || failure.status >= 500);
-    if (allTransient) {
+    // La sonda se consulta AQUÍ y no antes: en el camino feliz no hace falta, y
+    // esto solo se recorre cuando ya falló todo. Va por el cliente de servicio
+    // porque la salud es de la ORG y el acceso a este pedido ya se autorizó
+    // arriba; leerla no descubre nada que esta pantalla no pueda ver.
+    const plan = allTransient
+      ? shouldRetryQuote((await loadAliclikHealthState(admin, ctx.storeId)).quote, true)
+      : { retry: false, note: null };
+    outageNote = plan.note;
+    if (plan.retry) {
       const retried = await quoteShippingCost(ctx.client, {
         warehouseId: preferred.id,
         lat,
@@ -894,6 +905,10 @@ export async function previewAliclikGuide(
       return {
         ok: false,
         error:
+          // El aviso de caída va PRIMERO: es lo único accionable de todo el
+          // mensaje. Detrás siguen el error crudo y las referencias, que son lo
+          // que se le reenvía a Aliclik.
+          (outageNote ? `${outageNote} ` : "") +
           `${failures.at(-1)?.error ?? "Aliclik no respondió."} ` +
           `Almacén(es) compatibles probados: ${attempted || resolved.warehouseId}.` +
           (refs ? ` Referencia(s): ${refs}.` : ""),

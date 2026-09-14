@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { courierKey } from "@/lib/dispatch";
 import { getAccessibleStores } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { getDispatchWorkspaceData, getDispatchRiders } from "@/lib/dispatch-access";
@@ -31,7 +33,10 @@ export default async function DispatchPage({
       </EmptyState>
     );
   }
-  const [data, riders] = await Promise.all([getDispatchWorkspaceData(), getDispatchRiders()]);
+  const [data, riders] = await Promise.all([getDispatchWorkspaceData(requestedManifestId), getDispatchRiders()]);
+  if (requestedManifestId && data.manifests.some((manifest) => manifest.id === requestedManifestId && courierKey(manifest.courier) === "propio")) {
+    redirect(`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(requestedManifestId)}`);
+  }
   return (
     <DispatchWorkspace
       initialData={data}

@@ -81,6 +81,7 @@ export function RoutesBoard({
   assignable,
   retries,
   day,
+  canReport = false,
 }: {
   stores: StoreOpt[];
   riders: RiderRow[];
@@ -89,6 +90,7 @@ export function RoutesBoard({
   assignable: Assignable[];
   retries: RetryItem[];
   day: string;
+  canReport?: boolean;
 }) {
   const router = useRouter();
   const [msg, setMsg] = useState<string | null>(null);
@@ -189,6 +191,7 @@ export function RoutesBoard({
           storeName={storeName}
           disabled={pending}
           onRun={run}
+          canReport={canReport}
         />
       )}
     </div>
@@ -342,6 +345,7 @@ function RouteDetail({
   storeName,
   disabled,
   onRun,
+  canReport,
 }: {
   detail: { route: RouteRow; stops: StopWithOrder[] };
   assignable: Assignable[];
@@ -350,6 +354,7 @@ function RouteDetail({
   storeName: (id: string | null) => string;
   disabled: boolean;
   onRun: (fn: () => Promise<{ ok: boolean; error?: string; message?: string }>) => void;
+  canReport?: boolean;
 }) {
   const { route, stops } = detail;
   const totals = useMemo(() => routeTotals(stops), [stops]);
@@ -408,6 +413,7 @@ function RouteDetail({
           {riderName} · {route.route_date}
         </h3>
         <div className="flex flex-wrap items-center gap-2">
+          {canReport && route.status === "en_curso" && <a href={`/reparto?ruta=${route.id}&modo=coordinacion`} className="inline-flex min-h-12 items-center rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white">Reportar entregas</a>}
           {planning && (
             <button
               disabled={disabled || !stops.length}

@@ -729,7 +729,7 @@ export function OrdersMasterBoard({
               className="inline-flex min-h-9 items-center gap-2 rounded-lg bg-slate-900 px-3 text-sm font-medium text-white transition hover:bg-slate-700"
             >
               <span aria-hidden="true">▦</span>
-              Mesa de despacho
+              Almacén · Entregas a couriers
             </Link>
           )}
           <MasterSearchInput value={filters.search} onCommit={commitSearch} />

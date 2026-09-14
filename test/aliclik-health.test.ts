@@ -5,6 +5,8 @@ import {
   resolveAliclikHealth,
   resolveAliclikCreateHealth,
   describeAliclikHealth,
+  shouldRetryQuote,
+  ALICLIK_QUOTE_OUTAGE_NOTE,
   HEALTH_FRESHNESS_MS,
 } from "@/lib/aliclik-health";
 
@@ -130,6 +132,73 @@ describe("describeAliclikHealth", () => {
 
   it("sin sonda fresca es gris aunque no haya fallos de creación", () => {
     expect(describeAliclikHealth({ quote: "sin_monitoreo", create: "ok" }).tone).toBe("gris");
+  });
+});
+
+// Medido sobre 10 días de sonda: 98 rachas de caída, el 11% del tiempo, y
+// NINGUNA baja de ~5 minutos (76 de 98 duran ~10-15 min, la peor 50). Con eso
+// delante, una ventana de reintentos de 34 segundos no puede sobrevivir a una
+// caída jamás: solo convierte un fallo de 9 s en uno de 34 con la clienta al
+// teléfono.
+describe("cuándo dejar de insistir al cotizar", () => {
+  it("con la sonda diciendo que está caída, no se reintenta y se avisa", () => {
+    expect(shouldRetryQuote("fallos", true)).toEqual({
+      retry: false,
+      note: ALICLIK_QUOTE_OUTAGE_NOTE,
+    });
+  });
+
+  it("con la API sana se reintenta como siempre", () => {
+    // Es el caso para el que se puso el reintento: un 500 suelto con el resto
+    // funcionando. Sale 1 de cada 320 sondas, pero sale.
+    expect(shouldRetryQuote("operativo", true)).toEqual({ retry: true, note: null });
+  });
+
+  // `sin_monitoreo` NO es una caída: es no saber. Rendirse ahí convertiría un
+  // fallo del monitor en una negativa a trabajar.
+  it("sin monitoreo se reintenta, porque no saber no es estar caído", () => {
+    expect(shouldRetryQuote("sin_monitoreo", true)).toEqual({ retry: true, note: null });
+  });
+
+  // Un 4xx —sin cobertura, token malo— no mejora repitiéndolo, y encima el
+  // aviso de caída sería mentira: la API está respondiendo perfectamente.
+  it("un fallo que no es pasajero no se reintenta ni se disfraza de caída", () => {
+    for (const salud of ["fallos", "operativo", "sin_monitoreo"] as const) {
+      expect(shouldRetryQuote(salud, false)).toEqual({ retry: false, note: null });
+    }
+  });
+
+  // El aviso tiene que servir para DECIDIR, no solo para informar: nombrar a
+  // Aliclik descarta el pin, y la duración convierte «error» en «espera».
+  it("el aviso nombra a Aliclik y dice cuánto suele durar", () => {
+    expect(ALICLIK_QUOTE_OUTAGE_NOTE).toContain("Aliclik");
+    expect(ALICLIK_QUOTE_OUTAGE_NOTE).toContain("diez minutos");
+    expect(ALICLIK_QUOTE_OUTAGE_NOTE).toContain("no es el pin");
+  });
+});
+
+// La regla puede estar bien y no llegar a ninguna parte.
+describe("la regla llega al flujo de cotización", () => {
+  const actions = readFileSync(
+    resolve(process.cwd(), "app/dashboard/pedidos/aliclik-actions.ts"),
+    "utf8",
+  );
+
+  it("la pasada de reintentos pasa por shouldRetryQuote", () => {
+    expect(actions).toContain("shouldRetryQuote(");
+    expect(actions).toContain("if (plan.retry) {");
+  });
+
+  // La vuelta por los OTROS almacenes se conserva: la sonda varía la coordenada
+  // con un almacén fijo, así que prueba que el fallo no es del pin, pero no dice
+  // nada sobre si un almacén puede caerse mientras otro cotiza.
+  it("pero la vuelta por los otros almacenes NO se toca", () => {
+    expect(actions).toContain("for (const candidate of candidates) {");
+    expect(actions).toContain("{ retry: false }");
+  });
+
+  it("y el aviso llega al mensaje que ve la operadora", () => {
+    expect(actions).toContain("outageNote ? `${outageNote} ` : \"\"");
   });
 });
 

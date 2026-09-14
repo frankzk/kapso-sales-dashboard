@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useRef,
   useState,
   type ComponentType,
   type SVGProps,
@@ -128,6 +129,9 @@ export function Sidebar({
   const pathname = usePathname();
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
   const items = navItems(isVendedoraOnly, canValidatePayments, canManageLogistics);
   const pendingPath = pendingHref?.split("?", 1)[0] ?? null;
   const displayPath = pendingPath ?? pathname;
@@ -332,14 +336,17 @@ export function Sidebar({
       </aside>
 
       {/* Mobile top bar */}
-      <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur md:hidden">
-        <div className="flex items-center justify-between gap-3 px-4 py-3">
-          <Brand />
-          <form action={signOut}>
-            <button className="text-sm text-slate-500 hover:text-slate-900">Salir</button>
-          </form>
+      <header className="relative z-30 border-b border-slate-200 bg-white md:hidden" onKeyDown={(event) => {
+        if (event.key === "Escape" && mobileOpen) { setMobileOpen(false); menuButton.current?.focus(); }
+      }}>
+        <div className="flex min-h-14 items-center justify-between gap-3 px-4">
+          <span className="min-w-0 text-sm font-semibold text-slate-900">{items.find((item) => item.href === activeHref)?.label ?? "Kapso Sales"}</span>
+          <button ref={menuButton} type="button" aria-expanded={mobileOpen} aria-controls="mobile-navigation" onClick={() => setMobileOpen(!mobileOpen)} className="flex min-h-12 shrink-0 items-center gap-2 rounded-lg px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-brand-500">
+            <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d={mobileOpen ? "m6 6 12 12M6 18 18 6" : "M4 6h16M4 12h16M4 18h16"} /></svg>
+            {mobileOpen ? "Cerrar" : "Menú"}
+          </button>
         </div>
-        <nav className="flex items-center gap-1 overflow-x-auto px-3 pb-2 text-sm">
+        <nav id="mobile-navigation" aria-label="Navegación principal" hidden={!mobileOpen} className="border-t border-slate-100 px-3 pb-4 text-sm">
           {items.map((it) => {
             const active = it.href === activeHref;
             return (
@@ -350,17 +357,20 @@ export function Sidebar({
                 onPointerEnter={() => prepare(it.href)}
                 onFocus={() => prepare(it.href)}
                 onTouchStart={() => prepare(it.href)}
-                onClick={(event) => beginNavigation(event, it.href)}
+                onClick={(event) => { beginNavigation(event, it.href); if (!event.metaKey && !event.ctrlKey) setMobileOpen(false); }}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "shrink-0 rounded-lg px-3 py-1.5 font-medium transition",
+                  "flex min-h-12 items-center gap-3 rounded-lg px-3 py-3 font-medium transition",
                   active ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50",
                 )}
               >
-                {it.label}
+                <it.icon aria-hidden="true" className="size-5 shrink-0" />{it.label}
               </Link>
             );
           })}
+          <form action={signOut} className="mt-3 border-t border-slate-200 pt-3">
+            <button className="min-h-12 rounded-lg px-3 text-sm font-medium text-slate-600">Salir de la cuenta</button>
+          </form>
         </nav>
       </header>
     </>

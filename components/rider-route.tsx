@@ -45,11 +45,15 @@ export function RiderRouteScreen({
   routes,
   route,
   stops,
+  coordinator,
+  routeLabels,
 }: {
   riderName: string;
   routes: RouteRow[];
   route: RouteRow | null;
   stops: StopWithOrder[];
+  coordinator?: string;
+  routeLabels?: Record<string, string>;
 }) {
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(null);
@@ -78,12 +82,13 @@ export function RiderRouteScreen({
           {routes.length > 1 ? (
             <select
               value={route.id}
-              onChange={(e) => router.push(`/reparto?ruta=${e.target.value}`)}
+              onChange={(e) => router.push(`/reparto?ruta=${e.target.value}${coordinator ? "&modo=coordinacion" : ""}`)}
+              aria-label="Ruta a reportar"
               className="rounded-lg border border-slate-300 px-2 py-1 text-xs text-slate-600"
             >
               {routes.map((r) => (
                 <option key={r.id} value={r.id}>
-                  {r.route_date}
+                  {routeLabels?.[r.id] ?? r.route_date}
                   {r.status === "cerrada" ? " (cerrada)" : ""}
                 </option>
               ))}
@@ -92,6 +97,7 @@ export function RiderRouteScreen({
             <span className="text-xs text-slate-500">{route.route_date}</span>
           )}
         </div>
+        {coordinator && <p className="mt-2 text-sm text-slate-600">Reportas como <strong>{coordinator}</strong> por el motorizado. Tu usuario quedará registrado. <a className="underline" href="/dashboard/rutas">Volver a Rutas</a></p>}
         <div className="mt-2 flex gap-3 text-xs">
           <Pill label="Por entregar" value={totals.pendientes} tone="pend" />
           <Pill label="Entregados" value={totals.entregados} tone="ok" />
@@ -99,7 +105,7 @@ export function RiderRouteScreen({
         </div>
         {totals.efectivo > 0 && (
           <p className="mt-2 text-xs text-slate-500">
-            Efectivo en tu mano:{" "}
+            {coordinator ? "Efectivo reportado por la ruta:" : "Efectivo en tu mano:"}{" "}
             <strong className="text-slate-800">{money(totals.efectivo)}</strong>
             {totals.yape > 0 && <> · Yape {money(totals.yape)}</>}
             {totals.pos > 0 && <> · POS {money(totals.pos)}</>}
@@ -119,6 +125,7 @@ export function RiderRouteScreen({
               stop={stop}
               open={openId === stop.id}
               readOnly={closed}
+              delegated={Boolean(coordinator)}
               onToggle={() => setOpenId(openId === stop.id ? null : stop.id)}
               onDone={() => {
                 setOpenId(null);
@@ -134,7 +141,7 @@ export function RiderRouteScreen({
         )}
       </ul>
 
-      {totals.completa && !closed && (
+      {totals.completa && !closed && !coordinator && (
         <div className="fixed inset-x-0 bottom-0 mx-auto max-w-md border-t border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-sm text-emerald-800">
           Terminaste tus {totals.total} paradas. Ya puedes entregar{" "}
           <strong>{money(totals.efectivo)}</strong> en efectivo.
@@ -163,12 +170,14 @@ function StopCard({
   stop,
   open,
   readOnly,
+  delegated = false,
   onToggle,
   onDone,
 }: {
   stop: StopWithOrder;
   open: boolean;
   readOnly: boolean;
+  delegated?: boolean;
   onToggle: () => void;
   onDone: () => void;
 }) {
@@ -244,7 +253,7 @@ function StopCard({
               {done ? "Ya reportada." : "Sin reportar."} La ruta está cerrada.
             </p>
           ) : (
-            <ReportForm stop={stop} onDone={onDone} />
+            <ReportForm stop={stop} onDone={onDone} delegated={delegated} />
           )}
         </div>
       )}
@@ -252,7 +261,7 @@ function StopCard({
   );
 }
 
-function ReportForm({ stop, onDone }: { stop: StopWithOrder; onDone: () => void }) {
+export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWithOrder; onDone: () => void; delegated?: boolean }) {
   const [pending, start] = useTransition();
   const [status, setStatus] = useState<StopStatus>(
     stop.status === "pendiente" ? "entregado" : stop.status,
@@ -268,6 +277,7 @@ function ReportForm({ stop, onDone }: { stop: StopWithOrder; onDone: () => void 
   const [photoPath, setPhotoPath] = useState<string | null>(stop.photo_path);
   const [voucherPath, setVoucherPath] = useState<string | null>(stop.voucher_path);
   const [err, setErr] = useState<string | null>(null);
+  const [reportReason, setReportReason] = useState("");
   const [uploading, setUploading] = useState<string | null>(null);
 
   const photoRef = useRef<HTMLInputElement>(null);
@@ -296,6 +306,14 @@ function ReportForm({ stop, onDone }: { stop: StopWithOrder; onDone: () => void 
   }
 
   function submit() {
+    if (delegated && !reportReason.trim()) {
+      setErr("Indica por qué reportas por el motorizado.");
+      return;
+    }
+    if (delegated && !photoPath) {
+      setErr("Adjunta la evidencia del reporte por el motorizado.");
+      return;
+    }
     // Se valida con la MISMA función que el servidor, para avisarle antes de
     // gastarle datos en una petición que va a rebotar igual.
     const check = validateStopReport({
@@ -313,23 +331,31 @@ function ReportForm({ stop, onDone }: { stop: StopWithOrder; onDone: () => void 
     }
     start(async () => {
       setErr(null);
-      const res = await reportStop({
-        stopId: stop.id,
-        status,
-        paymentMethod: status === "entregado" ? method : null,
-        collectedAmount: status === "entregado" ? (numericAmount ?? null) : null,
-        outcomeReason: status === "no_entregado" ? reason || null : null,
-        note: note.trim() || null,
-        photoPath,
-        voucherPath,
-      });
-      if (!res.ok) setErr(res.error ?? "No se pudo guardar.");
-      else onDone();
+      try {
+        const res = await reportStop({
+          stopId: stop.id,
+          status,
+          paymentMethod: status === "entregado" ? method : null,
+          collectedAmount: status === "entregado" ? (numericAmount ?? null) : null,
+          outcomeReason: status === "no_entregado" ? reason || null : null,
+          note: note.trim() || null,
+          photoPath,
+          voucherPath,
+          reportReason: delegated ? reportReason : null,
+        });
+        if (!res.ok) setErr(res.error ?? "No se pudo guardar.");
+        else onDone();
+      } catch {
+        setErr("No se pudo confirmar el guardado. Revisa tu conexión y actualiza la ruta antes de reintentar.");
+      }
     });
   }
 
   return (
     <div className="space-y-3">
+      {delegated && <label className="block text-sm text-slate-700">Motivo del reporte por el motorizado
+        <input required value={reportReason} onChange={(e) => setReportReason(e.target.value)} placeholder="Ej. Roy envió la evidencia y está sin conexión" className="mt-1 min-h-12 w-full rounded-lg border border-slate-300 px-3 text-base" />
+      </label>}
       <div className="grid grid-cols-2 gap-2">
         <button
           onClick={() => setStatus("entregado")}
@@ -416,6 +442,13 @@ function ReportForm({ stop, onDone }: { stop: StopWithOrder; onDone: () => void 
         </select>
       )}
 
+      {status === "no_entregado" && delegated && <PhotoField
+        label="Evidencia del reporte"
+        path={photoPath}
+        busy={uploading === "entrega"}
+        inputRef={photoRef}
+        onPick={(f) => upload("entrega", f)}
+      />}
       <textarea
         value={note}
         onChange={(e) => setNote(e.target.value)}

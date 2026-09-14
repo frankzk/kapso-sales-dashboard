@@ -94,6 +94,9 @@ export interface StoreSettingsData {
     kapsoKey: boolean;
     flowSecret: boolean;
     kapsoWebhookSecret: boolean;
+    flowclApiKey: boolean;
+    flowclSecretKey: boolean;
+    flowclWebhookSecret: boolean;
     telegramToken: boolean;
     metaToken: boolean;
     anthropicKey: boolean;
@@ -1517,6 +1520,47 @@ function SettingsForm({
               <option value="false">Deshabilitado</option>
               <option value="true">Habilitado</option>
             </select>
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Cobro por link (Flow.cl)
+          </legend>
+          <p className="text-xs text-slate-500">
+            Credenciales de <strong>Flow.cl</strong> de esta tienda, para cobrar el adelanto con un
+            link de Yape One Shot. Son <strong>por tienda y no se comparten</strong>: la cuenta de
+            Flow decide en qué banco cae el dinero, así que la de una tienda no sirve para otra de
+            distinto titular. Sin ellas, el botón de cobro no aparece — no hay respaldo a una cuenta
+            global, a propósito.
+          </p>
+          <SecretField
+            name="flowcl_api_key"
+            label="apiKey de Flow.cl"
+            set={data.has.flowclApiKey}
+          />
+          <SecretField
+            name="flowcl_secret_key"
+            label="secretKey de Flow.cl (firma cada cobro)"
+            set={data.has.flowclSecretKey}
+          />
+          <SecretField
+            name="flowcl_webhook_secret"
+            label="Secreto de la url de confirmación"
+            set={data.has.flowclWebhookSecret}
+          />
+          <div className="rounded-lg bg-slate-50 p-3">
+            <span className="block text-xs font-medium text-slate-600">
+              Url de confirmación que se le manda a Flow en cada cobro
+            </span>
+            <code className="mt-1 block break-all text-xs text-slate-500">
+              {data.siteUrl}/api/webhooks/flowcl/{s.id}?secret=&lt;el secreto de arriba&gt;
+            </code>
+            <span className="mt-1 block text-xs text-slate-400">
+              No hay que configurarla en ningún panel: viaja en cada petición. Flow no firma sus
+              avisos, así que el secreto es una puerta y no la cerradura — lo que se registra sale
+              de volver a consultarle el estado a Flow, firmado.
+            </span>
           </div>
         </fieldset>
 
