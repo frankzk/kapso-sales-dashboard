@@ -237,16 +237,22 @@ export interface SwaypCreateGuideInput {
   // pedido
   contenido: string;
   /**
-   * Los productos como arreglo estructurado. Swayp lo describió por escrito
-   * —`[{ codbar, cantidad, nombre }]`— pero NO está en su documentación, y al
-   * preguntar por el catálogo su desarrollador respondió que «esa funcionalidad
-   * no está disponible para consumir por API». Esa respuesta era sobre el
-   * endpoint de LECTURA, no sobre este campo, así que la duda sigue abierta.
+   * Los productos como arreglo estructurado, que es como Swayp descuenta el
+   * stock por CÓDIGO y no buscando por nombre.
    *
-   * Hoy no se manda: un campo que quizá no procesan puede devolver 400 y dejar
-   * al envío sin guía. Mientras tanto los códigos viajan dentro de `contenido`
-   * como «2 x AURE001», que es el formato que sí pidieron por escrito. Cuando
-   * confirmen que esto funciona, volver a mandarlo es una línea.
+   * Estuvo sin mandarse un tiempo: no figura en su documentación, y al
+   * preguntar por el catálogo su desarrollador respondió que «esa
+   * funcionalidad no está disponible para consumir por API» —una frase sobre el
+   * endpoint de LECTURA que dejaba la duda abierta sobre este campo—. Mandar un
+   * campo que quizá no procesan podía devolver 400 y dejar al envío sin guía.
+   *
+   * El 14-09-2026 mandaron un `curl` de ejemplo, suyo, que lo incluye:
+   * `"productos": [ { "codbar": "ABC123", "cantidad": 1, "nombre": "…" } ]`.
+   * Con eso deja de ser una apuesta y se manda siempre que el pedido esté
+   * vinculado en Catálogo de productos.
+   *
+   * `contenido` sigue viajando con los mismos códigos («2 x AURE001»): es
+   * obligatorio y es lo que el mensajero lee.
    */
   productos?: Array<{ codbar: string; cantidad: number; nombre: string }>;
   idBusiness?: number;

@@ -27,6 +27,7 @@ import {
   contenidoDeProductos,
   juntaObservaciones,
   resumenLegible,
+  type SwaypProducto,
 } from "@/lib/swayp-productos";
 
 /** Dimensiones por defecto. La base no guarda peso ni medidas por producto, y
@@ -41,7 +42,18 @@ export const PLACEHOLDER_NIT = "00000000";
 
 const senderSchema = z.object({
   nombre: z.string().min(1),
-  nit: z.string().min(1),
+  /**
+   * RUC del remitente. OPCIONAL y puede ir vacío: el `curl` de ejemplo que
+   * mandó Swayp el 14-09-2026 lleva `"nitRemitente": ""`, así que exigirlo era
+   * una regla nuestra y no de ellos.
+   *
+   * Importa porque `parseSenders` valida ciudad por ciudad y descarta en
+   * silencio la que no pase: una bodega escrita sin RUC quedaba fuera, y el
+   * aviso decía «No hay bodega Swayp configurada para …» sin insinuar que el
+   * problema era este campo. Una ciudad perdida por una regla inventada es
+   * peor que un RUC vacío que a Swayp no le molesta.
+   */
+  nit: z.string().default(""),
   direccion: z.string().min(5),
   telefono: z.string().min(1),
   /** Teléfono con el que el mensajero coordina la recogida; por defecto el mismo. */
@@ -223,19 +235,24 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
   const telefono = (b.customerPhone ?? "").trim();
   if (!telefono) return { ok: false, error: "El envío no tiene teléfono del destinatario." };
 
-  // Los productos por CÓDIGO, dentro de `contenido`.
+  // Los productos por CÓDIGO: en `productos[]` y también dentro de `contenido`.
   //
-  // POR QUÉ NO EN `productos[]`. Su desarrollador respondió que listar el
-  // inventario «no está disponible para consumir por API, hay que ponerlo en
-  // cola de desarrollo». Esa respuesta era sobre el endpoint de LECTURA, pero
-  // ante la duda no se manda un campo que quizá no procesan: un 400 dejaría al
-  // envío sin guía. Cuando confirmen que `productos[]` funciona, volver a
-  // mandarlo es añadir una línea — el mapeo y la reja ya están.
+  // LOS DOS, y no uno u otro. `contenido` es obligatorio y es el texto que el
+  // mensajero lee en la guía; `productos[]` es lo que Swayp usa para descontar
+  // el stock por código en vez de buscar por nombre —«tiende a ser inestable
+  // porque se busca por nombre y no por código», dicho por ellos—.
   //
-  // El formato es el que pidieron por escrito: «CANTIDAD X SKU … con el match
-  // exacto del sku». Nada más, porque no conocemos la gramática de su buscador.
+  // `productos[]` estuvo sin mandarse mientras hubo duda de si lo procesaban:
+  // no está en su documentación, y un 400 por un campo desconocido dejaría al
+  // envío sin guía. El 14-09-2026 mandaron un `curl` suyo que lo incluye, así
+  // que la duda se cerró. Ver `SwaypCreateGuideInput.productos`.
+  //
+  // El formato de `contenido` es el que pidieron por escrito: «CANTIDAD X SKU
+  // … con el match exacto del sku». Nada más, porque no conocemos la gramática
+  // de su buscador.
   let contenido: string;
   let resumen: string | null = null;
+  let productos: SwaypProducto[] | null = null;
   if (b.skuMap && b.skuMap.size > 0) {
     const armados = buildProductos(b.lineItems, b.skuMap);
     if (!armados.ok) {
@@ -250,6 +267,7 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
     }
     contenido = contenidoDeProductos(armados.productos);
     resumen = resumenLegible(armados.productos);
+    productos = armados.productos;
   } else {
     // Sin mapeo se sigue mandando el título, como hasta hoy. Es la vía que su
     // propio desarrollador llama inestable —«se busca por nombre y no por
@@ -289,6 +307,7 @@ export function buildSwaypGuideInput(b: BuildGuideInput): BuildGuideResult {
       ciudadDestinatario: destino.code,
 
       contenido,
+      ...(productos?.length ? { productos } : {}),
       ...(sender.idWarehouse ? { idWarehouse: sender.idWarehouse } : {}),
       ...(Number.isFinite(b.idBusiness) && Number(b.idBusiness) > 0
         ? { idBusiness: Number(b.idBusiness) }
