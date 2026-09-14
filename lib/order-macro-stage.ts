@@ -18,6 +18,12 @@ import {
 } from "@/lib/order-confirmation";
 import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovincia";
 
+// v1.12: el candado del cambio manual cede ante una guía registrada DESPUÉS
+// (lib/order-status.ts). Cambia el resultado de filas que nadie tocó —31 con
+// registro posterior al override, de las que 11 son de Agencia con S/ 1.062
+// recogidos y sin cobrar que el candado escondía—, así que la versión sube para
+// que el cron las reconcilie.
+//
 // v1.10: Reproprovincia. Un pedido cuya guía Aliclik terminó sin entregar —con
 // el paquete ya fuera— deja de caer en «Por cerrar» como si la venta hubiera
 // muerto: mientras dure la ventana (`return_recovery_max_days`) va a «En curso ·
@@ -42,7 +48,7 @@ import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovi
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.11" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.12" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

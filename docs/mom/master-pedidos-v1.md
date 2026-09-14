@@ -429,6 +429,20 @@ Registro:
   suelta. Sin esto, en #KP126722 un «Pendiente · no responde» del 12/08 mantuvo
   en la cola operativa —llamable y despachable— un pedido de S/ 99 que en Shopify
   ya no tenía ni productos.
+- **Registrar una salida también lo decide alguien**, así que cede igual. Una
+  guía registrada **después** del cambio manual lo deja sin efecto; registrada
+  antes, el cambio manual sigue mandando. Lo que NO suelta el candado es el
+  reporte de un courier (`courier_status`): es exactamente de lo que protege, y
+  la diferencia no es de criterio sino de dato —los `guide_registered` y
+  `guide_created` llevan actor los 3.672 de los últimos 30 días, y los 15.969
+  `courier_status` no lo llevan ni uno—.
+  Sin esto, ocho pedidos de Agencia marcados a mano «disponible para recojo» y
+  con su guía Shalom registrada días después seguían figurando como «En curso ·
+  recibido por courier» estando recogidos: el estado legado se quedaba en
+  `en_proceso` y `recogido_sin_pago_completo` (§6.5) exige `entregado`, así que
+  la alerta crítica no llegaba a encenderse. Medido el 14-09-2026: **11 pedidos,
+  S/ 2.054, de los que S/ 1.062 estaban recogidos y sin cobrar**, escondidos
+  detrás del candado desde el 4 de agosto.
 - La subetapa y el conteo de días se derivan de esos hechos. No hay un contador
   que alguien tenga que mantener.
 
