@@ -19,9 +19,12 @@ describe("«Siguiente» sin pasar por la tabla", () => {
     expect(ui).toContain("const queueOrder = useMemo(");
     expect(ui).toContain("const visibleOrder = searchActive ? (searchOrder ?? []) : queueOrder;");
     expect(ui).toContain("const nextInQueue = (() => {");
-    // Si la guía abierta ya salió de la vista, la siguiente es la primera.
-    expect(ui).toContain("if (i === -1) return visibleOrder[0]?.id ?? null;");
-    expect(ui).toContain("return visibleOrder[i + 1]?.id ?? null;");
+    // Si la guía abierta ya salió de la vista —lo normal tras registrar— se
+    // ofrece la sucesora anotada mientras todavía estaba, NO la primera: la
+    // fila 1 nunca ocupó el lugar de la fila 80.
+    expect(ui).toContain("if (openIndex !== -1) return visibleOrder[openIndex + 1]?.id ?? null;");
+    expect(ui).toContain("remembered?.openId === openId &&");
+    expect(ui).not.toContain("if (i === -1) return visibleOrder[0]?.id ?? null;");
   });
 
   it("la tabla recibe el orden resuelto y el tablero manda el sort", () => {

@@ -11,6 +11,8 @@ import { chunk } from "@/lib/access";
 import { SUBETAPAS_ASIGNABLES_A_RUTA } from "@/lib/order-macro-stage";
 import type { RouteStop } from "@/lib/routes";
 import type { CostTariff } from "@/lib/costs";
+import { loadRouteCollectionBalances } from "@/lib/route-collection-access";
+import type { CollectionBalance } from "@/lib/route-collection";
 
 export interface RouteRow {
   id: string;
@@ -27,6 +29,7 @@ export interface RouteRow {
 
 /** Una parada con lo que el motorizado necesita ver para tocar el timbre. */
 export interface StopWithOrder extends RouteStop {
+  collection?: CollectionBalance;
   seq: number;
   /** Tienda del pedido (0057). Es lo que agrupa las liquidaciones cuando una
    *  ruta mezcla tiendas en el mismo viaje. */
@@ -132,9 +135,10 @@ export async function getRouteDetail(
     }
   }
 
+  const balances = await loadRouteCollectionBalances(orderIds);
   return {
     route,
-    stops: stops.map((s) => ({ ...s, order: byOrder.get(s.order_id) ?? null })),
+    stops: stops.map((s) => ({ ...s, order: byOrder.get(s.order_id) ?? null, collection: balances.get(s.order_id) })),
   };
 }
 

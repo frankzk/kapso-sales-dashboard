@@ -25,10 +25,12 @@ describe("la tabla entra en el portátil", () => {
 
   it("las dos columnas que el cajón ya muestra enteras se esconden por debajo de xl", () => {
     expect(src).toContain('const SECONDARY_COLUMN = "hidden xl:table-cell";');
-    // Encabezado y celda, las dos veces: Producto y Última entrega Aliclik.
+    // Encabezado y celda, las dos veces. «Producto» se cambió por «Motivo
+    // anterior» (MOM §11.7): es lo que decide si se reenvía, y el producto
+    // sigue entero en el cajón.
     expect(src.match(/className=\{SECONDARY_COLUMN\}/g)?.length).toBe(2);
     expect(src.match(/cn\(SECONDARY_COLUMN, /g)?.length).toBe(2);
-    const header = src.slice(src.indexOf('label="Producto"'), src.indexOf('label="Producto"') + 140);
+    const header = src.slice(src.indexOf('label="Motivo anterior"'), src.indexOf('label="Motivo anterior"') + 160);
     expect(header).toContain("className={SECONDARY_COLUMN}");
   });
 

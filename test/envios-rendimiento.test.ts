@@ -56,7 +56,7 @@ describe("se pintan 200 filas, no 4.000", () => {
   });
 
   it("nada se esconde: el pie dice cuántas hay y ofrece más o todas", () => {
-    expect(src).toContain("Se muestran {shownRows.length} de {sortedRows.length}.");
+    expect(src).toContain("Cargadas las primeras {shownRows.length} de {sortedRows.length} filas.");
     expect(src).toContain("Mostrar {Math.min(VISIBLE_STEP, hiddenCount)} más");
     expect(src).toContain("onClick={() => setVisibleCount(sortedRows.length)}");
   });

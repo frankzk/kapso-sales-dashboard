@@ -15,6 +15,7 @@ import { NON_DELIVERY_REASONS, PAYMENT_METHODS, routeTotals } from "@/lib/routes
 import { RISK_LABELS, type RiskAssessment } from "@/lib/retries";
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import type { RiderRow } from "@/lib/settlements-access";
+import { RiderPayPanel } from "@/components/rider-pay-panel";
 import {
   addStops,
   closeRoute,
@@ -183,6 +184,7 @@ export function RoutesBoard({
       </Card>
 
       {detail && (
+        <>
         <RouteDetail
           detail={detail}
           assignable={assignable}
@@ -193,6 +195,8 @@ export function RoutesBoard({
           onRun={run}
           canReport={canReport}
         />
+        <RiderPayPanel key={detail.route.id} routeId={detail.route.id} />
+        </>
       )}
     </div>
   );
@@ -430,7 +434,7 @@ function RouteDetail({
                 onClick={() => onRun(() => closeRoute(route.id))}
                 className="rounded-lg bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-900 disabled:opacity-50"
               >
-                Cerrar y liquidar
+                Terminar ruta operativa
               </button>
               {totals.pendientes > 0 && (
                 <button

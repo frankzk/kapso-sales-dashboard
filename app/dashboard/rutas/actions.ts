@@ -15,11 +15,9 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import {
   getAssignableOrders,
   getRouteDetail,
-  getRouteTariffs,
   type AssignableOrder,
 } from "@/lib/routes-access";
 import {
-  computeRoutePayout,
   groupByStore,
   masterEffects,
   routeTotals,
@@ -408,22 +406,11 @@ export async function closeRoute(
     })
     .eq("id", routeId);
 
-  const tariffs = await getRouteTariffs();
-  const payout = computeRoutePayout(
-    stops,
-    tariffs,
-    { storeId: byStore.keys().next().value as string, courier: null, region: null, province: null, district: null },
-    route.route_date,
-  );
-
   revalidatePath("/dashboard/rutas");
   revalidatePath("/dashboard/liquidaciones");
   revalidatePath("/dashboard/pedidos");
 
-  const pago =
-    payout.missingTariffs > 0
-      ? " Falta definir la tarifa de entrega del motorizado en Costos para poder fijar su pago."
-      : ` Le corresponden S/ ${payout.amount.toFixed(2)} por ${payout.entregas} entrega(s).`;
+  const pago = " Revisa Ganancia y saldo del motorizado en esta ruta: el cálculo financiero aún requiere aprobación. No se registró ningún pago ni depósito.";
 
   return {
     ok: true,
