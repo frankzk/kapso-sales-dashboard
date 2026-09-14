@@ -1036,6 +1036,24 @@ sin tope de antigüedad. Reglas:
     la imagen contra el monto de la guía y el nombre de Grupo GF SAC: que el
     courier se dé por pagado a sí mismo no es constancia de que el dinero
     llegó a nuestra cuenta.
+  - **VALIDAR EL COBRO CIERRA EL PEDIDO.** Al validarlo en «Validar pagos» se
+    emite `liquidation_closed` —el MISMO evento que el cierre manual del
+    drawer—, así que el pedido sale de «Por cerrar · Pendiente de liquidación»
+    y pasa a Finalizado sin que la macroetapa necesite saber nada nuevo.
+    - **Por qué hacía falta.** Esa subetapa espera un `liquidation_closed` que
+      el 12-09-2026 **no existía ni una sola vez** en toda la historia de la
+      base: 4.204 pedidos parados (Aliclik 3.843, Tanders 201, Fenix 12), con
+      el propio código admitiéndolo — «el repositorio auditado todavía no
+      contiene la fuente de liquidaciones». Ahora la fuente existe, y por
+      pedido en vez de en bloque: alguien miró el comprobante del motorizado y
+      firmó. Eso es exactamente lo que una liquidación pretende demostrar.
+    - **Se puede deshacer.** Rechazar u observar después un cobro ya validado
+      emite `liquidation_observed`, que reabre el cierre. Un pedido no puede
+      quedarse finalizado por una firma que luego se retiró.
+    - **Solo el cobro del courier liquida.** Validar un adelanto de la clienta
+      no cierra nada: el courier sigue debiendo el efectivo que cobró.
+    - Aliclik y los motorizados propios siguen esperando su propia fuente de
+      liquidación: se liquidan en bloque y eso es otro trabajo.
   - **QUIEN DA EL DINERO POR RECIBIDO ES UNA PERSONA** (0158). El lector de
     imágenes valida **una imagen, no un depósito**: no detecta una captura
     editada, ni un comprobante real de otra transferencia. Mientras no haya

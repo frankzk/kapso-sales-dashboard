@@ -30,6 +30,7 @@ import {
 } from "@/lib/yape-recipient";
 import { normalizePhone } from "@/lib/phone";
 import { typedTheOperationNumber } from "@/lib/payment-review";
+import { COURIER_COLLECTION_KIND } from "@/lib/tanders/collection-payment";
 import {
   canRevealPickupKey,
   describeBlockers,
@@ -726,6 +727,45 @@ async function loadPayment(paymentId: string) {
     | null;
 }
 
+/**
+ * Validar el cobro del courier CIERRA LA LIQUIDACIÓN del pedido.
+ *
+ * POR QUÉ. Un pedido contraentrega entregado se queda en «Por cerrar ·
+ * Pendiente de liquidación» hasta que exista un evento `liquidation_closed`
+ * (lib/order-macro-stage.ts). La regla es correcta —no declarar un cierre
+ * financiero que nadie respalda— pero el 12-09-2026 no había NI UN evento así
+ * en toda la historia de la base: 4.204 pedidos esperando una firma que nadie
+ * daba. El propio código lo admitía: «el repositorio auditado todavía no
+ * contiene la fuente de liquidaciones».
+ *
+ * Ahora sí la hay, y por pedido en vez de en bloque: alguien miró el
+ * comprobante del motorizado al lado de lo que leyó el modelo y dijo que el
+ * dinero llegó. Eso es exactamente lo que una liquidación pretende demostrar.
+ * Se emite el MISMO evento que emitiría a mano desde el cierre del drawer, así
+ * que la macroetapa no necesita saber nada nuevo.
+ *
+ * Y se puede deshacer: rechazar u observar después un cobro ya validado emite
+ * `liquidation_observed`, que reabre el cierre. Un pedido no puede quedarse
+ * finalizado por una firma que luego se retiró.
+ */
+async function ajustarLiquidacionDelCobro(
+  admin: ReturnType<typeof createAdminSupabase>,
+  ctx: { storeId: string; userId: string },
+  payment: { order_id: string; kind: string },
+  cerrada: boolean,
+  note: string,
+): Promise<void> {
+  if (payment.kind !== COURIER_COLLECTION_KIND) return;
+  await admin.from("order_events").insert({
+    store_id: ctx.storeId,
+    order_id: payment.order_id,
+    kind: cerrada ? "liquidation_closed" : "liquidation_observed",
+    actor: ctx.userId,
+    source: "manual",
+    note,
+  });
+}
+
 /** Marca un pago como validado. Es lo que habilita la clave, así que va aparte. */
 export async function validatePayment(paymentId: string): Promise<PaymentActionState> {
   const payment = await loadPayment(paymentId);
@@ -798,6 +838,13 @@ export async function validatePayment(paymentId: string): Promise<PaymentActionS
     new_status: "validado",
     note: `Yape de ${payment.kind} validado.`,
   });
+  await ajustarLiquidacionDelCobro(
+    admin,
+    ctx,
+    payment,
+    true,
+    "Cobro del courier validado: el dinero de este pedido está confirmado.",
+  );
   // El pago suele ser la ÚLTIMA de las tres piezas: el DNI y la agencia ya
   // estaban apuntados desde que se registró el cobro. Se pregunta antes de
   // recalcular para que la macroetapa se resuelva ya con el hecho escrito y el
@@ -860,6 +907,17 @@ export async function observePayment(
     reason: motive,
     note: `Yape de ${payment.kind} enviado a observación.`,
   });
+  // Poner en duda un cobro ya validado reabre el cierre, igual que rechazarlo:
+  // «tengo dudas» no puede convivir con un pedido dado por liquidado.
+  if (payment.validation_status === "validado") {
+    await ajustarLiquidacionDelCobro(
+      admin,
+      ctx,
+      payment,
+      false,
+      `Cobro del courier en observación: ${motive}`,
+    );
+  }
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   revalidatePath(MASTER_PATH);
   revalidatePath(PAYMENT_REVIEW_PATH);
@@ -906,6 +964,18 @@ export async function rejectPayment(
     reason: motive,
     note: `Yape de ${payment.kind} rechazado.`,
   });
+  // Si este cobro ya había cerrado la liquidación, retirar la firma tiene que
+  // reabrirla: un pedido no puede quedarse finalizado por un cobro que después
+  // resultó no serlo.
+  if (payment.validation_status === "validado") {
+    await ajustarLiquidacionDelCobro(
+      admin,
+      ctx,
+      payment,
+      false,
+      `Se retiró la validación del cobro del courier: ${motive}`,
+    );
+  }
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   revalidatePath(MASTER_PATH);
   revalidatePath(PAYMENT_REVIEW_PATH);
