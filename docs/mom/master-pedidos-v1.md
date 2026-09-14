@@ -1615,8 +1615,8 @@ sale, porque invita a pulsar el botón que deja el pedido bloqueado.
 #### Guardar la fila es lo último que puede fallar
 
 La guía ya existe en Aliclik cuando llega el momento de escribir nuestra fila.
-Por eso esa escritura —`writeCourierGuide`, que comparten Aliclik, Shalom y
-Tanders— tiene que ser **la más difícil de romper del sistema**, no la más
+Por eso esa escritura —`writeCourierGuide`, que comparten Grupo GF, Aliclik,
+Shalom, Tanders y Swayp— tiene que ser **la más difícil de romper del sistema**, no la más
 frágil: cualquier cosa que la tumbe deja un paquete vivo del otro lado que aquí
 no existe, y un pedido que se muestra SIN guía es una invitación a emitir una
 segunda por la misma caja.
@@ -2266,6 +2266,20 @@ La asimetría no es gratuita y por eso está probada: el camino de guías anulad
 se quedó sin API durante semanas cuando se conectó la primera vez, y nadie lo
 notó porque la guía seguía saliendo con código local, que es lo que salía antes.
 Una vía que nunca se entera de una regla nueva no parece rota.
+
+**La guía directa RELLENA la salida «por definir» en vez de exigir que la
+anulen.** Swayp era el único courier fuera de `writeCourierGuide`: su guardián
+de «este pedido ya tiene una guía activa» contaba la salida por definir como
+estorbo, y el único camino era anularla — lo que arrastra el pedido a `anulado`
+(#KP127639), que es exactamente el rodeo que ese mecanismo vino a cerrar. Ahora
+una salida por definir no bloquea: el modal la nombra («la salida KP132394-S01
+está por definir: la guía se le escribe encima») y el aviso posterior dice sobre
+cuál se escribió. La caja conserva su consecutivo, su rótulo, su QR y su avance
+de preparación, porque rellenar decide el courier de un bulto que ya existe, no
+rehace el trabajo del almacén.
+
+Lo que **sí** sigue bloqueando es una guía de verdad activa —de Swayp o de
+Aliclik—, porque ahí hay dos paquetes en juego y no uno.
 
 **El destino lo pone la GUÍA, no el pedido.** Al reprogramar, la salida ya
 existe y su destino es mejor dato que el del pedido por tres razones: es el que
