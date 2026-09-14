@@ -27,7 +27,7 @@ async function context(routeId: string) {
   return { route, user, canConfigure, canApprove, admin: createAdminSupabase() };
 }
 function refresh() {
-  revalidatePath("/dashboard/rutas");
+  revalidatePath("/dashboard/courier/reparto");
   revalidatePath("/dashboard/liquidaciones");
 }
 

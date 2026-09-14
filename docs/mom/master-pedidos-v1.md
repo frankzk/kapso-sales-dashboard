@@ -3867,6 +3867,16 @@ No cambian elegibilidad, tarifas, identidad de salidas ni reglas de liquidación
 
 #### Recorrido unificado aprobado el 12-09-2026
 
+**Unificación de navegación, 13-09-2026.** La entrada independiente «Rutas»
+se retira del menú: el reparto y su cierre financiero pertenecen a **Grupo GF
+Courier → Rutas → Reparto y cierre diario**. «Cajas y cotejos» conserva los
+controles físicos. La URL canónica del reparto es `/dashboard/courier/reparto`;
+`/dashboard/rutas` redirige conservando id, fecha y demás parámetros.
+No se recrean rutas, paradas, salidas ni liquidaciones. Se conservan permisos:
+mostrar la entrada al módulo no concede administración logística a quien solo
+puede gestionar rutas o cotejar. La planificación rápida sigue en «Tomar y
+asignar», no en un segundo formulario de creación de rutas.
+
 Master representa a la tienda; Almacén prepara y entrega; Grupo GF Courier
 planifica, recibe, reparte y liquida. Los pedidos elegibles de Aurela/Kenku se
 ofrecen automáticamente, sin una segunda aprobación en Master. La búsqueda y

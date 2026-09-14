@@ -15,7 +15,7 @@ export async function CoordinatorReport({ routeId, email }: { routeId?: string; 
   if (!detail) return <div className="mx-auto max-w-md space-y-3 p-6">
     <h1 className="text-lg font-semibold">Reportar entregas de rutas</h1>
     <p>{routeId ? "Esta ruta no está en curso o no tienes permiso para reportarla." : "No hay rutas en curso disponibles para reportar."}</p>
-    <a className="inline-flex min-h-12 items-center underline" href="/dashboard/rutas">Volver a Rutas</a>
+    <a className="inline-flex min-h-12 items-center underline" href="/dashboard/courier/reparto">Volver a Rutas</a>
   </div>;
   const name = (id: string) => riders.find((r) => r.id === id)?.full_name ?? "Motorizado";
   return <RiderRouteScreen key={detail.route.id} coordinator={email} riderName={name(detail.route.rider_id)} routes={routes} route={detail.route} stops={detail.stops}

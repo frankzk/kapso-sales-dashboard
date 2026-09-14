@@ -22,14 +22,16 @@ async function CourierContent() {
     getMasterPermissions(),
     getAdminOrgs(),
   ]);
-  if (!memberships.length) redirect("/login");
   if (!permissions.can("logistics.manage")) {
+    if (permissions.can("routes.manage")) redirect("/dashboard/courier/reparto");
+    if (permissions.can("dispatch.manage") || permissions.can("dispatch.pickup")) redirect("/dashboard/courier/rutas");
     return (
       <EmptyState title="Acceso restringido">
         Frankz puede habilitarte “Administrar Grupo GF Courier” desde Equipo.
       </EmptyState>
     );
   }
+  if (!memberships.length) redirect("/login");
   const orgId = memberships[0]!.org_id;
   const snapshot = await loadCourierConfig(orgId);
   return <GrupoGfCourierBoard orgId={orgId} snapshot={snapshot} />;

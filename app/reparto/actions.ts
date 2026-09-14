@@ -180,7 +180,7 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
     );
 
   revalidatePath("/reparto");
-  revalidatePath("/dashboard/rutas");
+  revalidatePath("/dashboard/courier/reparto");
   revalidatePath("/dashboard/courier");
   return {
     ok: true,

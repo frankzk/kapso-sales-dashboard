@@ -97,7 +97,7 @@ export async function ensureRoute(input: {
     .single();
   if (error || !data?.id) return { ok: false, error: error?.message ?? "No se pudo crear la ruta." };
 
-  revalidatePath("/dashboard/rutas");
+  revalidatePath("/dashboard/courier/reparto");
   return { ok: true, routeId: data.id as string, message: "Ruta creada." };
 }
 
@@ -183,7 +183,7 @@ export async function addStops(routeId: string, orderIds: string[]): Promise<Rou
     .upsert(rows, { onConflict: "route_id,order_id", ignoreDuplicates: true });
   if (error) return { ok: false, error: error.message };
 
-  revalidatePath("/dashboard/rutas");
+  revalidatePath("/dashboard/courier/reparto");
   return { ok: true, message: `${rows.length} parada(s) añadida(s).` };
 }
 
@@ -210,7 +210,7 @@ export async function removeStop(stopId: string): Promise<RouteActionResult> {
 
   const { error } = await g.admin.from("delivery_stops").delete().eq("id", stopId);
   if (error) return { ok: false, error: error.message };
-  revalidatePath("/dashboard/rutas");
+  revalidatePath("/dashboard/courier/reparto");
   return { ok: true, message: "Parada quitada." };
 }
 
@@ -235,7 +235,7 @@ export async function startRoute(routeId: string): Promise<RouteActionResult> {
     .update({ status: "en_curso", started_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq("id", routeId);
   if (error) return { ok: false, error: error.message };
-  revalidatePath("/dashboard/rutas");
+  revalidatePath("/dashboard/courier/reparto");
   return { ok: true, message: "Ruta entregada. Ya le aparece en su teléfono." };
 }
 
@@ -406,7 +406,7 @@ export async function closeRoute(
     })
     .eq("id", routeId);
 
-  revalidatePath("/dashboard/rutas");
+  revalidatePath("/dashboard/courier/reparto");
   revalidatePath("/dashboard/liquidaciones");
   revalidatePath("/dashboard/pedidos");
 
@@ -498,6 +498,6 @@ export async function linkRiderAccount(
     return { ok: false, error: msg };
   }
 
-  revalidatePath("/dashboard/rutas");
+  revalidatePath("/dashboard/courier/reparto");
   return { ok: true, message: `${r.full_name} ya puede entrar a /reparto.${notice}` };
 }

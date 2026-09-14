@@ -31,7 +31,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       roleLabel={roleLabel}
       yapeAlertsEnabled={roles.includes("vendedora")}
       canValidatePayments={canValidatePayments}
-      canManageLogistics={permissions.can("logistics.manage")}
+      canManageLogistics={permissions.can("logistics.manage") || permissions.can("routes.manage") || permissions.can("dispatch.manage") || permissions.can("dispatch.pickup")}
     >
       {children}
     </DashboardShell>
