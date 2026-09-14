@@ -427,6 +427,11 @@ export const FENIX_CITIES = [
   "piura",
   "chimbote",
   "chiclayo",
+  // Al final, como manda el comentario de arriba. `lima` antes que `callao`
+  // por la misma razón que `juliaca` va antes que `puno`: «Lima - Callao»
+  // tiene que resolver a lima.
+  "lima",
+  "callao",
 ];
 
 /**
@@ -453,6 +458,10 @@ export const FENIX_CITY_ALIASES: Record<string, string> = {
   puno: "juliaca",
   chupaca: "huancayo",
   "san roman": "juliaca",
+  // Swayp tiene UNA bodega en Lima y ninguna en el Callao: el Callao se
+  // despacha desde ahí, con el stock de ahí. El destino sí es propio (tabla
+  // `callao` en ubigeo.ts), como pasa con Puno.
+  callao: "lima",
 };
 
 /** Normalize a raw city/district label to a coverage key (lowercase, no accents). */

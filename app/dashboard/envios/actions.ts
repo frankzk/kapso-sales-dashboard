@@ -71,6 +71,14 @@ import {
   type StockMovementKind,
   type StockMovementRow,
 } from "@/lib/fenix-ledger";
+import { readUpload } from "@/lib/courier-upload";
+import {
+  ciudadDeBodega,
+  leerExcelSwayp,
+  planearImportacion,
+  resumenDelPlan,
+  type FilaStock,
+} from "@/lib/swayp-inventario";
 import { resolveEmails } from "@/lib/productivity";
 import {
   reprogramDestination,
@@ -175,7 +183,7 @@ async function resolveCurrentFenixEligibility(
 
   const stockPromise = admin
     .from("fenix_stock")
-    .select("city,product,sku,quantity")
+    .select("city,product,sku,quantity,unlimited")
     .eq("org_id", (store as { org_id: string }).org_id);
   const orderPromise = shipment.order_id
     ? admin.from("orders").select("line_items").eq("id", shipment.order_id).maybeSingle()
@@ -980,7 +988,7 @@ export async function updateShipmentDeliveryAddress(
   if (orgId) {
     const { data: stock } = await admin
       .from("fenix_stock")
-      .select("city,product,sku,quantity")
+      .select("city,product,sku,quantity,unlimited")
       .eq("org_id", orgId);
     fenixEligible = evaluateFenix(
       { city, product: current.product },
@@ -1236,8 +1244,8 @@ export async function reprogramCancelledShipmentException(
     linkedOrderName = (linked as { name: string | null } | null)?.name ?? null;
   }
   const orderName = effectiveOrderName(current.order_name, linkedOrderName);
-  const guideCode = rescheduleGuideCode(orderName, input.nextFollowupAt);
-  if (!guideCode) {
+  const localCode = rescheduleGuideCode(orderName, input.nextFollowupAt);
+  if (!localCode) {
     return { error: "Este envío no tiene N° de pedido para generar automáticamente la nueva guía Swayp." };
   }
 
@@ -1261,11 +1269,39 @@ export async function reprogramCancelledShipmentException(
     };
   }
 
+  // El número lo emite Swayp, igual que en la reprogramación normal. Este camino
+  // se quedó fuera cuando se conectó la API (#512) y era un olvido, no una
+  // decisión: recuperar un pedido devuelto termina igual que reprogramar uno
+  // pendiente —una guía nueva a una fecha nueva— y no hay razón para que una
+  // nazca en Swayp y la otra haya que cargarla a mano al Excel.
+  //
+  // Va DESPUÉS de la reja de stock a propósito: pedirle un número a Swayp para
+  // un envío que vamos a rechazar por falta de inventario dejaría una guía
+  // huérfana en su sistema, y la API no tiene forma de deshacerla.
+  const viaApi = await swaypGuideForReprogram(
+    admin,
+    shipmentId,
+    current.order_id,
+    input.nextFollowupAt,
+    note,
+  );
+  const guideCode = viaApi.ok ? String(viaApi.guia) : localCode;
+  const swaypNotice = viaApi.ok
+    ? " Emitida por Swayp."
+    : env.swaypEnabled()
+      ? ` Swayp no la emitió (${viaApi.reason}); quedó con código manual.`
+      : "";
+
   const auditNote = `Excepción sobre guía anulada ${current.guide_code}. Motivo: ${note}`;
   const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode, {
     childNextFollowupAt: input.nextFollowupAt,
     expectedSourceStatus: "anulado",
     parentAuditNote: `${auditNote}. Nueva guía Swayp: ${guideCode}.`,
+    // Sin esto la hija tendría el número correcto en `guide_code` y
+    // `swayp_guide` nulo — y el webhook busca por esa columna, así que el envío
+    // se quedaría En ruta para siempre por más que el mensajero reportara.
+    swaypGuide: viaApi.ok ? String(viaApi.guia) : null,
+    swaypState: viaApi.ok ? viaApi.idEstado : null,
   });
   if ("error" in spun) return { error: spun.error };
 
@@ -1281,7 +1317,9 @@ export async function reprogramCancelledShipmentException(
 
   revalidatePath("/dashboard/envios");
   return {
-    notice: `Excepción registrada. La guía anulada quedó en el historial y se creó ${spun.guideCode} para la nueva fecha.`,
+    notice:
+      `Excepción registrada. La guía anulada quedó en el historial y se creó ` +
+      `${spun.guideCode} para la nueva fecha.${swaypNotice}`,
   };
 }
 
@@ -1749,7 +1787,7 @@ export async function previewDirectFenixGuide(input: {
   if (!orgId) return { error: "No se encontró la organización de la tienda." };
   const { data: stock, error: stockError } = await admin
     .from("fenix_stock")
-    .select("city,product,sku,quantity")
+    .select("city,product,sku,quantity,unlimited")
     .eq("org_id", orgId);
   if (stockError) return { error: `No se pudo consultar el stock Swayp: ${stockError.message}` };
 
@@ -1978,7 +2016,7 @@ async function swaypGuideForReprogram(
   if (!orgId) return { ok: false, reason: "no se encontró la organización de la tienda" };
   const { data: stock, error: stockError } = await admin
     .from("fenix_stock")
-    .select("city,product,sku,quantity")
+    .select("city,product,sku,quantity,unlimited")
     .eq("org_id", orgId);
   if (stockError) return { ok: false, reason: `no se pudo consultar el stock: ${stockError.message}` };
   const check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
@@ -2070,7 +2108,7 @@ export async function createDirectFenixGuide(input: {
   // Stock gate: EVERY line item must have stock in the destination city.
   const { data: stock, error: stockError } = await admin
     .from("fenix_stock")
-    .select("city,product,sku,quantity")
+    .select("city,product,sku,quantity,unlimited")
     .eq("org_id", orgId);
   if (stockError) return { error: `No se pudo consultar el stock Swayp: ${stockError.message}` };
   const lineItems = (order.line_items ?? []).map((li) => ({
@@ -2479,6 +2517,8 @@ export async function upsertFenixStock(input: {
   product: string;
   quantity: number;
   sku?: string | null;
+  /** Sin control de cantidad: siempre disponible, `quantity` se ignora. */
+  unlimited?: boolean;
 }): Promise<ShipmentActionState> {
   const sb = await createServerSupabase();
   const {
@@ -2518,19 +2558,21 @@ export async function upsertFenixStock(input: {
         product,
         sku: input.sku?.trim() || null,
         quantity: targetQty,
+        unlimited: input.unlimited === true,
         updated_by: user.id,
       },
       { onConflict: "org_id,city,product" },
     )
     .select("id")
     .single();
-  if (error || !row) return { error: error?.message ?? "No se pudo guardar." };
+  if (error || !row) return { error: errorDeBase(error, "guardar el stock Swayp") };
 
   // Kardex: alta con cantidad → entrada; editar la cantidad → ajuste. El saldo
   // ya quedó en targetQty por el upsert, así que el movimiento lo registra con
-  // ese balance_after (no vuelve a aplicar el delta).
+  // ese balance_after (no vuelve a aplicar el delta). Sin control de cantidad
+  // no hay kardex: el número no significa nada.
   const delta = targetQty - oldQty;
-  if (delta !== 0) {
+  if (delta !== 0 && !input.unlimited) {
     await admin.from("fenix_stock_movements").insert({
       org_id: adminOrg.org_id,
       fenix_stock_id: (row as { id: string }).id,
@@ -2549,6 +2591,182 @@ export async function upsertFenixStock(input: {
   return "error" in sync
     ? { notice: `Stock actualizado. No se pudo sincronizar las guías: ${sync.error}` }
     : { notice: `Stock actualizado — ${sync.updated} guías sincronizadas.` };
+}
+
+/**
+ * Importa el "Inventario por bodega" que exporta el panel de Swayp y deja el
+ * stock de ESA ciudad igual al de ellos.
+ *
+ * Reemplaza la carga a mano, que se había separado de la realidad: medido el
+ * 14-09-2026, Trujillo tenía 25 referencias / 177 unidades acá contra 17 / 116
+ * allá, y Juliaca 19 / 185 contra 7 / 165. Como esta tabla es la reja que
+ * decide si el botón deja crear la guía, cada unidad fantasma es una guía que
+ * Swayp rebota por falta de inventario con el pedido ya prometido.
+ *
+ * Todo pasa por el kardex (`ajuste`), no por un UPDATE a secas: el saldo queda
+ * con su historial y se puede responder «¿por qué bajó esto?» después.
+ *
+ * El plan lo arma `planearImportacion` (puro y probado); acá sólo se lee, se
+ * escribe y se cuenta.
+ */
+export async function importarInventarioSwayp(
+  formData: FormData,
+): Promise<ShipmentActionState> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  const { data: mem } = await sb.from("memberships").select("org_id,role");
+  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
+    (m) => m.role === "owner" || m.role === "admin",
+  );
+  if (!adminOrg) return { error: "Solo un administrador puede importar el stock." };
+
+  const file = formData.get("archivo");
+  if (!(file instanceof File) || file.size === 0) {
+    return { error: "Elige el Excel que exporta Swayp en Stock → Inventario." };
+  }
+
+  let filas: Record<string, string>[];
+  try {
+    filas = (await readUpload(file)).rows;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo leer el archivo." };
+  }
+
+  const lectura = leerExcelSwayp(filas);
+  if (!lectura.entradas.length) {
+    return {
+      error:
+        "El archivo no tiene ninguna fila con código de barras. ¿Es la exportación de Stock → Inventario de Swayp?",
+    };
+  }
+  // Un archivo por bodega, como lo exporta el panel. Mezclar dos en uno dejaría
+  // la mitad de una ciudad puesta a cero por filas que eran de la otra.
+  if (lectura.bodegas.length > 1) {
+    return {
+      error: `El archivo mezcla ${lectura.bodegas.length} bodegas (${lectura.bodegas.join(", ")}). Exporta una por vez desde Swayp.`,
+    };
+  }
+  const nombreBodega = lectura.bodegas[0] ?? "";
+  const ciudad = ciudadDeBodega(nombreBodega);
+  if (!ciudad) {
+    return {
+      error: nombreBodega
+        ? `No sé a qué ciudad corresponde «${nombreBodega}». Avisa para agregarla.`
+        : "El archivo no trae la columna Bodega, así que no sé de qué ciudad es.",
+    };
+  }
+
+  const admin = createAdminSupabase();
+  const { data: stockData, error: stockError } = await admin
+    .from("fenix_stock")
+    .select("id,city,product,sku,quantity,unlimited")
+    .eq("org_id", adminOrg.org_id)
+    .eq("city", ciudad);
+  if (stockError) return { error: errorDeBase(stockError, "leer el stock Swayp") };
+
+  // El mapa codbar→SKU se guarda por tienda y la organización tiene varias, así
+  // que se juntan todas: el stock es de la organización, no de una tienda.
+  const { data: tiendas } = await admin
+    .from("stores")
+    .select("id")
+    .eq("org_id", adminOrg.org_id);
+  const skusPorCodbar = new Map<string, string[]>();
+  for (const t of (tiendas as { id: string }[]) ?? []) {
+    for (const [sku, { codbar }] of await loadSwaypSkuMap(admin, t.id)) {
+      const ya = skusPorCodbar.get(codbar.toUpperCase()) ?? [];
+      if (!ya.includes(sku)) ya.push(sku);
+      skusPorCodbar.set(codbar.toUpperCase(), ya);
+    }
+  }
+
+  // Etiqueta canónica por SKU, tomada de CUALQUIER ciudad: con ella se pueden
+  // dar de alta los productos que Swayp tiene en esa bodega y esta ciudad no
+  // tenía anotados, sin inventarles un nombre que después no matchee ninguna
+  // guía. Ver `etiquetaPorSku` en lib/swayp-inventario.ts.
+  const { data: todoElStock } = await admin
+    .from("fenix_stock")
+    .select("sku,product")
+    .eq("org_id", adminOrg.org_id)
+    .not("sku", "is", null);
+  const etiquetaPorSku = new Map<string, string>();
+  for (const r of (todoElStock as { sku: string; product: string }[]) ?? []) {
+    const k = r.sku.trim().toUpperCase();
+    if (!etiquetaPorSku.has(k)) etiquetaPorSku.set(k, r.product);
+  }
+
+  const plan = planearImportacion(
+    ciudad,
+    lectura.entradas,
+    (stockData as FilaStock[]) ?? [],
+    skusPorCodbar,
+    etiquetaPorSku,
+  );
+
+  // Las altas primero: crear el renglón y dejar su entrada en el kardex, para
+  // que el saldo nazca con historial igual que los demás.
+  let altas = 0;
+  for (const a of plan.altas) {
+    const { data: creado, error } = await admin
+      .from("fenix_stock")
+      .upsert(
+        {
+          org_id: adminOrg.org_id,
+          city: ciudad,
+          product: a.product,
+          sku: a.sku,
+          quantity: 0,
+          updated_by: user.id,
+        },
+        { onConflict: "org_id,city,product" },
+      )
+      .select("id")
+      .single();
+    if (error || !creado) continue;
+    await recordStockMovement(admin, {
+      orgId: adminOrg.org_id,
+      stockId: (creado as { id: string }).id,
+      city: ciudad,
+      product: a.product,
+      kind: "entrada",
+      delta: a.cantidad,
+      note: `Alta desde el inventario de ${nombreBodega} (${a.codbar})`,
+      createdBy: user.id,
+    });
+    altas++;
+  }
+
+  let aplicados = 0;
+  for (const a of plan.ajustes) {
+    const saldo = await recordStockMovement(admin, {
+      orgId: adminOrg.org_id,
+      stockId: a.id,
+      city: ciudad,
+      product: a.product,
+      kind: "ajuste",
+      delta: a.cantidadNueva - a.cantidadAnterior,
+      note: a.codbar
+        ? `Conteo de Swayp (${a.codbar}) importado de ${nombreBodega}`
+        : `No figura en el inventario de ${nombreBodega}`,
+      createdBy: user.id,
+    });
+    if (saldo !== null) aplicados++;
+  }
+
+  const sync = await recomputeFenixEligibility();
+  revalidatePath("/dashboard/envios/stock");
+  revalidatePath("/dashboard/envios");
+
+  const fallidos = plan.ajustes.length - aplicados + (plan.altas.length - altas);
+  return {
+    notice:
+      resumenDelPlan(plan) +
+      (fallidos ? ` ${fallidos} no se pudieron aplicar.` : "") +
+      (lectura.sinCodbar ? ` ${lectura.sinCodbar} filas sin código de barras, ignoradas.` : "") +
+      ("error" in sync ? ` No se pudo sincronizar las guías: ${sync.error}.` : ` ${sync.updated} guías sincronizadas.`),
+  };
 }
 
 /** Delete a Swayp stock row (admin). */
@@ -2593,11 +2811,24 @@ export async function recordFenixStockMovement(input: {
   const admin = createAdminSupabase();
   const { data: stock } = await admin
     .from("fenix_stock")
-    .select("id, org_id, city, product, quantity")
+    .select("id, org_id, city, product, quantity, unlimited")
     .eq("id", input.stockId)
     .maybeSingle();
-  const s = stock as { id: string; org_id: string; city: string; product: string; quantity: number } | null;
+  const s = stock as {
+    id: string;
+    org_id: string;
+    city: string;
+    product: string;
+    quantity: number;
+    unlimited: boolean;
+  } | null;
   if (!s || !adminOrgs.includes(s.org_id)) return { error: "Renglón de stock no encontrado o sin acceso." };
+  if (s.unlimited) {
+    return {
+      error:
+        "Este producto no lleva control de cantidad: no hay saldo que mover. Si querés empezar a contarlo, editalo y quitale la marca.",
+    };
+  }
 
   const qty = Math.max(0, Math.trunc(input.quantity));
   const note = input.note?.trim() || null;
@@ -2679,7 +2910,7 @@ export async function recomputeFenixEligibility(): Promise<
   const admin = createAdminSupabase();
   const { data: stock, error: stockError } = await admin
     .from("fenix_stock")
-    .select("city,product,sku,quantity")
+    .select("city,product,sku,quantity,unlimited")
     .eq("org_id", adminOrg.org_id);
   if (stockError) return { error: errorDeBase(stockError, "consultar el stock Swayp") };
   const stockRows = (stock as FenixStockRow[]) ?? [];

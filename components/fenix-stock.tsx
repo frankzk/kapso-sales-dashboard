@@ -6,9 +6,11 @@ import { Card, cn, OVER_TABLE_Z, STICKY_HEAD, TABLE_WRAP } from "@/components/ui
 import { FENIX_CITIES } from "@/lib/shipments";
 import type { DemandRow } from "@/lib/fenix-demand";
 import type { FenixStockRowDb, StoreSummary } from "@/lib/types";
+import type { BodegaSwaypResumen } from "@/lib/swayp-guide";
 import {
   deleteFenixStock,
   getFenixStockMovements,
+  importarInventarioSwayp,
   recomputeFenixEligibility,
   recordFenixStockMovement,
   searchStockProducts,
@@ -23,11 +25,13 @@ export function FenixStockEditor({
   canEdit,
   stores,
   demand = [],
+  bodegas = [],
 }: {
   rows: FenixStockRowDb[];
   canEdit: boolean;
   stores: StoreSummary[];
   demand?: DemandRow[];
+  bodegas?: BodegaSwaypResumen[];
 }) {
   const router = useRouter();
   const [storeId, setStoreId] = useState<string>(stores[0]?.id ?? "");
@@ -35,6 +39,9 @@ export function FenixStockEditor({
   const [product, setProduct] = useState("");
   const [sku, setSku] = useState<string | null>(null);
   const [quantity, setQuantity] = useState("0");
+  // Sin control de cantidad (Lima): el producto existe en la bodega y no se
+  // cuenta. Se recuerda entre altas porque se cargan de a muchos.
+  const [unlimited, setUnlimited] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const [cityFilter, setCityFilter] = useState<string | null>(null); // null = todas
@@ -49,8 +56,9 @@ export function FenixStockEditor({
       const r = await upsertFenixStock({
         city,
         product,
-        quantity: Number(quantity) || 0,
+        quantity: unlimited ? 0 : Number(quantity) || 0,
         sku,
+        unlimited,
       });
       setMsg(r.error ?? r.notice ?? null);
       if (!r.error) {
@@ -107,6 +115,10 @@ export function FenixStockEditor({
         </Card>
       )}
 
+      {canEdit && <BodegasSwayp bodegas={bodegas} />}
+
+      {canEdit && <ImportarDeSwayp onDone={(m) => setMsg(m)} />}
+
       {canEdit && (
         <Card className="space-y-3">
           <p className="text-sm font-medium text-slate-800">Agregar / actualizar</p>
@@ -159,11 +171,25 @@ export function FenixStockEditor({
               <input
                 type="number"
                 min={0}
-                value={quantity}
+                value={unlimited ? "" : quantity}
+                placeholder={unlimited ? "∞" : undefined}
+                disabled={unlimited}
                 onChange={(e) => setQuantity(e.target.value)}
-                className="w-24 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+                className="w-24 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm disabled:bg-slate-50 disabled:text-slate-400"
               />
             </div>
+            <label
+              className="flex items-center gap-1.5 self-end pb-1.5 text-xs text-slate-600"
+              title="El producto existe en la bodega y no se cuenta: siempre disponible, la entrega no descuenta y el Excel no lo toca."
+            >
+              <input
+                type="checkbox"
+                checked={unlimited}
+                onChange={(e) => setUnlimited(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              Sin control de cantidad
+            </label>
             <button
               onClick={add}
               disabled={pending || !product.trim()}
@@ -212,7 +238,10 @@ export function FenixStockEditor({
                   </button>
                 ))}
                 <span className="ml-auto text-xs text-slate-400">
-                  {visibleRows.length} producto(s) · {visibleRows.reduce((n, r) => n + r.quantity, 0)} u.
+                  {visibleRows.length} producto(s) ·{" "}
+                  {visibleRows.filter((r) => !r.unlimited).reduce((n, r) => n + r.quantity, 0)} u.
+                  {visibleRows.some((r) => r.unlimited) &&
+                    ` · ${visibleRows.filter((r) => r.unlimited).length} sin control`}
                 </span>
               </div>
             )}
@@ -234,19 +263,22 @@ export function FenixStockEditor({
                     <td
                       className={cn(
                         "px-4 py-2.5 text-right font-medium tabular-nums",
-                        r.quantity < 0 ? "text-rose-600" : "text-slate-700",
+                        r.unlimited ? "text-slate-400" : r.quantity < 0 ? "text-rose-600" : "text-slate-700",
                       )}
+                      title={r.unlimited ? "Sin control de cantidad" : undefined}
                     >
-                      {r.quantity}
+                      {r.unlimited ? "∞" : r.quantity}
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       <div className="flex justify-end gap-3">
-                        <button
-                          onClick={() => setKardexRow(r)}
-                          className="text-xs text-brand-700 hover:underline"
-                        >
-                          Movimientos
-                        </button>
+                        {!r.unlimited && (
+                          <button
+                            onClick={() => setKardexRow(r)}
+                            className="text-xs text-brand-700 hover:underline"
+                          >
+                            Movimientos
+                          </button>
+                        )}
                         {canEdit && (
                           <button
                             onClick={() => remove(r.id)}
@@ -291,6 +323,137 @@ const DEMAND_LABEL: Record<string, string> = {
  * doubles as the "prepare & send" checklist. Recomputed on every page load, so
  * it tracks the queue as order states change.
  */
+/**
+ * Qué bodegas ve la app en `SWAYP_SENDERS`, ciudad por ciudad.
+ *
+ * La variable es Secret en Vercel —de sólo escritura— y una ciudad mal escrita
+ * se descarta en silencio. Sin este cuadro, la única forma de saber qué había
+ * configurado era editar a ciegas y ver si Arequipa seguía emitiendo. Muestra
+ * los datos completos porque son los de nuestras bodegas, no credenciales: es
+ * exactamente lo que hay que copiar para reescribir la variable sin perder
+ * nada.
+ */
+function BodegasSwayp({ bodegas }: { bodegas: BodegaSwaypResumen[] }) {
+  if (!bodegas.length) return null;
+  const porApi = bodegas.filter((b) => b.porApi).length;
+  return (
+    <Card className="space-y-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-sm font-medium text-slate-800">Bodegas Swayp configuradas</p>
+        <p className="text-xs text-slate-500">
+          {porApi} de {bodegas.length} ciudades emiten por API
+        </p>
+      </div>
+      <div className={TABLE_WRAP}>
+        <table className="w-full text-xs">
+          <thead className={STICKY_HEAD}>
+            <tr className="text-left text-slate-500">
+              <th className="py-1 pr-3 font-medium">Ciudad</th>
+              <th className="py-1 pr-3 font-medium">Estado</th>
+              <th className="py-1 pr-3 font-medium">Nombre</th>
+              <th className="py-1 pr-3 font-medium">Dirección</th>
+              <th className="py-1 pr-3 font-medium">Teléfono</th>
+              <th className="py-1 pr-3 font-medium">Email</th>
+              <th className="py-1 pr-3 font-medium">RUC</th>
+              <th className="py-1 font-medium">idWarehouse</th>
+            </tr>
+          </thead>
+          <tbody>
+            {bodegas.map((b) => (
+              <tr key={b.city} className="border-t border-slate-100">
+                <td className="py-1 pr-3 font-medium capitalize text-slate-800">{b.city}</td>
+                <td className="py-1 pr-3">
+                  {b.porApi ? (
+                    <span className="text-emerald-700">por API</span>
+                  ) : b.configurada ? (
+                    <span className="text-amber-700">configurada, sin ubigeo</span>
+                  ) : (
+                    <span className="text-slate-400">sin bodega → Excel</span>
+                  )}
+                </td>
+                <td className="py-1 pr-3 text-slate-700">{b.nombre ?? "—"}</td>
+                <td className="py-1 pr-3 text-slate-700">{b.direccion ?? "—"}</td>
+                <td className="py-1 pr-3 font-mono text-slate-700">{b.telefono ?? "—"}</td>
+                <td className="py-1 pr-3 text-slate-700">{b.email ?? "—"}</td>
+                <td className="py-1 pr-3 font-mono text-slate-700">
+                  {b.nit === null ? "—" : b.nit === "" ? <span className="text-slate-400">vacío</span> : b.nit}
+                </td>
+                <td className="py-1 font-mono text-slate-700">{b.idWarehouse ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * Subir el "Inventario por bodega" que exporta Swayp y dejar esa ciudad igual
+ * que allá.
+ *
+ * VA ARRIBA DEL FORMULARIO MANUAL a propósito: el conteo de Swayp es la verdad
+ * y la carga a mano el parche. Cuando el orden era al revés, la tabla se llenaba
+ * a mano y nadie importaba nada.
+ *
+ * La ciudad NO se elige acá: sale de la columna «Bodega» del propio archivo.
+ * Un selector sería una forma de equivocarse —importar Trujillo sobre Juliaca
+ * pone a cero toda una ciudad— y el dato ya viene en el Excel.
+ */
+function ImportarDeSwayp({ onDone }: { onDone: (msg: string | null) => void }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [archivo, setArchivo] = useState<File | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function subir() {
+    if (!archivo) return;
+    start(async () => {
+      const fd = new FormData();
+      fd.set("archivo", archivo);
+      const r = await importarInventarioSwayp(fd);
+      onDone(r.error ?? r.notice ?? null);
+      if (!r.error) {
+        setArchivo(null);
+        if (inputRef.current) inputRef.current.value = "";
+        router.refresh();
+      }
+    });
+  }
+
+  return (
+    <Card className="space-y-3">
+      <div>
+        <p className="text-sm font-medium text-slate-800">Importar el conteo de Swayp</p>
+        <p className="mt-0.5 text-xs text-slate-500">
+          En Swayp: <span className="font-medium">Stock → Inventario</span>, elige la bodega y
+          «Enviar a Excel». Un archivo por bodega. La ciudad sale del propio archivo.
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".xlsx,.csv"
+          onChange={(e) => setArchivo(e.target.files?.[0] ?? null)}
+          className="text-xs text-slate-600 file:mr-2 file:rounded-lg file:border file:border-slate-200 file:bg-white file:px-2.5 file:py-1.5 file:text-xs file:text-slate-700 hover:file:bg-slate-50"
+        />
+        <button
+          onClick={subir}
+          disabled={pending || !archivo}
+          className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+        >
+          {pending ? "Importando…" : "Importar"}
+        </button>
+      </div>
+      <p className="text-xs text-amber-700">
+        Los productos que Swayp no lista quedan en 0: si esa bodega no lo tiene, no se puede
+        prometer. Sólo se toca la ciudad del archivo.
+      </p>
+    </Card>
+  );
+}
+
 function DemandReport({ demand }: { demand: DemandRow[] }) {
   const [deptFilter, setDeptFilter] = useState<string | null>(null); // null = todos
 

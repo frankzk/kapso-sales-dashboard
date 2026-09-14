@@ -593,7 +593,7 @@ async function fetchOrgFenixStock(admin: SupabaseClient, storeId: string): Promi
   const { data: store } = await admin.from("stores").select("org_id").eq("id", storeId).maybeSingle();
   const orgId = (store as { org_id?: string } | null)?.org_id;
   if (!orgId) return [];
-  const { data } = await admin.from("fenix_stock").select("city,product,quantity").eq("org_id", orgId);
+  const { data } = await admin.from("fenix_stock").select("city,product,quantity,unlimited").eq("org_id", orgId);
   return (data as FenixStockRow[]) ?? [];
 }
 

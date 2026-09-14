@@ -186,6 +186,72 @@ export const UBIGEO_BY_CITY: Record<string, Record<string, string>> = {
     "pucala": "140119",
     "tuman": "140120",
   },
+  // Lima y Callao se transcribieron del mismo padrón INEI, validado de nuevo
+  // el 14-09-2026 contra las 149 entradas que ya estaban acá: coincidió código
+  // por código (0 fallas) y clave por clave (148 de 149; la distinta es el alias
+  // deliberado «26 de octubre» de Piura). Lima tiene 44 filas y no 43 porque
+  // Santa María de Huachipa (150144) se creó en 2023 y el padrón ya lo trae.
+  //
+  // CALLAO ES SU PROPIA TABLA DE DESTINO pero se despacha desde la bodega de
+  // Lima: `FENIX_CITY_ALIASES` lo manda a `lima` para el almacén y el stock,
+  // igual que Puno se sirve desde Juliaca. Un destino del Callao con ubigeo de
+  // Lima sería un distrito equivocado sin aviso; un origen del Callao sería
+  // una bodega que no existe.
+  lima: {
+    "lima": "150101",
+    "ancon": "150102",
+    "ate": "150103",
+    "barranco": "150104",
+    "brena": "150105",
+    "carabayllo": "150106",
+    "chaclacayo": "150107",
+    "chorrillos": "150108",
+    "cieneguilla": "150109",
+    "comas": "150110",
+    "el agustino": "150111",
+    "independencia": "150112",
+    "jesus maria": "150113",
+    "la molina": "150114",
+    "la victoria": "150115",
+    "lince": "150116",
+    "los olivos": "150117",
+    "lurigancho": "150118",
+    "lurin": "150119",
+    "magdalena del mar": "150120",
+    "pueblo libre": "150121",
+    "miraflores": "150122",
+    "pachacamac": "150123",
+    "pucusana": "150124",
+    "puente piedra": "150125",
+    "punta hermosa": "150126",
+    "punta negra": "150127",
+    "rimac": "150128",
+    "san bartolo": "150129",
+    "san borja": "150130",
+    "san isidro": "150131",
+    "san juan de lurigancho": "150132",
+    "san juan de miraflores": "150133",
+    "san luis": "150134",
+    "san martin de porres": "150135",
+    "san miguel": "150136",
+    "santa anita": "150137",
+    "santa maria del mar": "150138",
+    "santa rosa": "150139",
+    "santiago de surco": "150140",
+    "surquillo": "150141",
+    "villa el salvador": "150142",
+    "villa maria del triunfo": "150143",
+    "santa maria de huachipa": "150144",
+  },
+  callao: {
+    "callao": "070101",
+    "bellavista": "070102",
+    "carmen de la legua reynoso": "070103",
+    "la perla": "070104",
+    "la punta": "070105",
+    "ventanilla": "070106",
+    "mi peru": "070107",
+  },
   puno: {
     "puno": "210101",
     "acora": "210102",
@@ -226,6 +292,13 @@ const DISTRICT_ALIASES: Record<string, string> = {
   "veintiseis de octubre": "26 de octubre", // Piura
   "puerto eten": "eten puerto", // Chiclayo — el padrón lo invierte
   "zana": "sana", // Chiclayo — Zaña/Saña
+  // Lima. Nadie escribe «Santiago de Surco» en una dirección: la calle dice
+  // «Surco», y como no es prefijo de la clave no resolvía. Es inequívoco — no
+  // hay otro distrito «surco» en el padrón — y sin él se rechazaría la guía de
+  // uno de los distritos que más compra.
+  "surco": "santiago de surco",
+  "cercado de lima": "lima",
+  "lima cercado": "lima",
 };
 
 export interface UbigeoMatch {

@@ -414,7 +414,7 @@ async function swaypRouteCheck(
 
   const { data, error } = await sb
     .from("fenix_stock")
-    .select("city,product,sku,quantity")
+    .select("city,product,sku,quantity,unlimited")
     .eq("org_id", orgId);
   if (error) return { known: false };
 

@@ -5,6 +5,7 @@ import {
   esCiudadPorApiSwayp,
   parseSenders,
   PLACEHOLDER_NIT,
+  resumenDeBodegas,
   type SwaypSender,
 } from "@/lib/swayp-guide";
 
@@ -162,8 +163,15 @@ describe("buildSwaypGuideInput", () => {
     });
 
     it("una bodega configurada para una ciudad que Swayp no cubre NO va por API", () => {
-      // Configurar Lima en el JSON no la habilita: el ubigeo de bodega manda.
-      expect(esCiudadPorApiSwayp("lima", { lima: SENDER })).toBe(false);
+      // Configurar Tacna en el JSON no la habilita: el ubigeo de bodega manda.
+      expect(esCiudadPorApiSwayp("tacna", { tacna: SENDER })).toBe(false);
+    });
+
+    it("Lima y Callao van por API con su remitente; el Callao usa la bodega de Lima", () => {
+      expect(esCiudadPorApiSwayp("lima", { lima: SENDER })).toBe(true);
+      expect(esCiudadPorApiSwayp("callao", { callao: SENDER })).toBe(true);
+      // El remitente se busca por la ciudad del envío: sin clave `callao` no sale.
+      expect(esCiudadPorApiSwayp("callao", { lima: SENDER })).toBe(false);
     });
   });
 
@@ -223,10 +231,36 @@ describe("buildSwaypGuideInput", () => {
       expect(r.input.observaciones).toContain("Entregar por la tarde");
     });
 
-    it("NO se manda `productos[]` mientras Swayp no lo confirme", () => {
-      // Un campo que quizá no procesan puede devolver 400 y dejar al envío sin
-      // guía. Los códigos ya viajan en `contenido`.
+    it("se manda `productos[]` estructurado, que es como descuentan por código", () => {
+      // Estuvo sin mandarse mientras hubo duda de si lo procesaban. El
+      // 14-09-2026 Swayp mandó un `curl` suyo que lo incluye, y con eso dejó de
+      // ser una apuesta: buscar por nombre «tiende a ser inestable», dicho por
+      // ellos, y una tilde distinta deja de descontar sin error ni aviso.
       const r = buildSwaypGuideInput({ ...base, lineItems: conSku, skuMap: mapa });
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.input.productos).toEqual([
+          { codbar: "AURE001", cantidad: 2, nombre: "CANDIDA CLEANSE" },
+        ]);
+      }
+    });
+
+    it("y `contenido` viaja IGUAL, no se reemplaza por `productos[]`", () => {
+      // `contenido` es obligatorio y es el texto que el mensajero lee en la
+      // guía. Mandar uno en vez del otro deja media guía sin su mitad.
+      const r = buildSwaypGuideInput({ ...base, lineItems: conSku, skuMap: mapa });
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.input.contenido).toBe("2 x AURE001");
+        expect(r.input.productos).toHaveLength(1);
+      }
+    });
+
+    it("sin mapa no se inventa `productos[]` con el código vacío", () => {
+      // Sin vínculo en Catálogo no hay codbar que mandar. Un arreglo con
+      // `codbar: ""` haría que Swayp no encuentre el producto y no descuente,
+      // en silencio — peor que no mandar el campo.
+      const r = buildSwaypGuideInput({ ...base, lineItems: conSku });
       expect(r.ok).toBe(true);
       if (r.ok) expect(r.input).not.toHaveProperty("productos");
     });
@@ -362,6 +396,42 @@ describe("idWarehouse", () => {
   });
 });
 
+describe("resumenDeBodegas — el cuadro que reemplaza editar a ciegas", () => {
+  it("lista TODAS las ciudades de cobertura, configuradas o no", () => {
+    // La ausencia es el dato: «juliaca: sin bodega → Excel».
+    const r = resumenDeBodegas({ arequipa: SENDER }, ["arequipa", "juliaca"]);
+    expect(r.map((b) => [b.city, b.configurada, b.porApi])).toEqual([
+      ["arequipa", true, true],
+      ["juliaca", false, false],
+    ]);
+  });
+
+  it("muestra los datos completos, que es lo que hay que copiar para reescribir la variable", () => {
+    const [aqp] = resumenDeBodegas({ arequipa: SENDER }, ["arequipa"]);
+    expect(aqp).toMatchObject({
+      nombre: SENDER.nombre,
+      direccion: SENDER.direccion,
+      telefono: SENDER.telefono,
+      email: SENDER.email,
+    });
+  });
+
+  it("distingue RUC vacío de RUC ausente", () => {
+    const [con] = resumenDeBodegas({ arequipa: { ...SENDER, nit: "" } }, ["arequipa"]);
+    const [sin] = resumenDeBodegas({}, ["arequipa"]);
+    expect(con!.nit).toBe("");
+    expect(sin!.nit).toBeNull();
+  });
+
+  it("una ciudad configurada que no está en la cobertura también aparece", () => {
+    // Un dedazo («arequipaa») no debe desaparecer del cuadro: verlo es la
+    // forma de notarlo.
+    const r = resumenDeBodegas({ arequipaa: SENDER }, ["arequipa"]);
+    expect(r.map((b) => b.city).sort()).toEqual(["arequipa", "arequipaa"]);
+    expect(r.find((b) => b.city === "arequipaa")?.porApi).toBe(false);
+  });
+});
+
 describe("parseSenders", () => {
   it("parses a valid map", () => {
     const p = parseSenders(JSON.stringify({ arequipa: SENDER }));
@@ -382,6 +452,20 @@ describe("parseSenders", () => {
       }),
     );
     expect(Object.keys(p).sort()).toEqual(["arequipa", "piura"]);
+  });
+
+  it("una bodega SIN RUC se configura igual, no se descarta", () => {
+    // El `curl` de ejemplo de Swayp lleva `"nitRemitente": ""`, así que exigir
+    // el RUC era una regla nuestra. Y como una ciudad inválida se cae sola y en
+    // silencio, esa regla inventada perdía la bodega entera: el aviso decía «No
+    // hay bodega Swayp configurada para juliaca» sin insinuar cuál era el campo.
+    const sinRuc = { ...SENDER, nit: "" };
+    const p = parseSenders(JSON.stringify({ juliaca: sinRuc }));
+    expect(p.juliaca?.nit).toBe("");
+
+    // Y omitirlo del todo tampoco la descarta.
+    const { nit: _omitido, ...sinElCampo } = SENDER;
+    expect(parseSenders(JSON.stringify({ juliaca: sinElCampo })).juliaca?.nit).toBe("");
   });
 
   it("returns {} for blank, malformed JSON or an invalid shape", () => {

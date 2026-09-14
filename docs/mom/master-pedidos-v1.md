@@ -2020,7 +2020,17 @@ Kapta no envía datos bancarios—. De ahí en adelante el circuito de adelanto,
 comprobante y clave de recojo (§12) ya existe y no cambia.
 
 Ciudades con stock/operación conocidas: Arequipa, Huancayo, Juliaca/Puno,
-Cusco, Trujillo, Ica, Piura, Chimbote, Chiclayo.
+Cusco, Trujillo, Ica, Piura, Chimbote, Chiclayo, Lima/Callao.
+
+**Lima y Callao** entraron el 14-09-2026, cuando la bodega de Lima de Swayp pasó
+a despachar pedidos desde el sistema. Lima provincia son 44 distritos (el padrón
+ya trae Santa María de Huachipa, `150144`, creado en 2023) y Callao 7. **El
+Callao es destino propio pero se despacha desde la bodega de Lima**, con el
+stock de Lima — el mismo arreglo que Puno con Juliaca: tabla de ubigeo aparte
+para no mandar el paquete a un distrito equivocado, y alias al almacén para no
+inventar una bodega que no existe. En `SWAYP_SENDERS` van las dos claves,
+`lima` y `callao`, porque el envío llega con su ciudad y el remitente se busca
+por ella.
 
 Estar en la lista habilita la ciudad para cargarle stock; **no** la vuelve
 elegible por sí sola. La elegibilidad exige cobertura **y** stock del producto
@@ -2044,6 +2054,84 @@ operativa, no código.
 Una salida Swayp puede coexistir con la devolución Aliclik. En Reproprovincia
 Swayp se puede repetir, siempre con una salida, guía y QR nuevos, dentro del
 máximo global.
+
+### De dónde sale el stock: el conteo de Swayp, no la carga a mano
+
+`fenix_stock` se llenaba a mano y se fue separando de la realidad sin que nada
+avisara. Medido el 14-09-2026 contra dos exportaciones reales del panel:
+
+| ciudad | referencias nuestras | de Swayp | unidades nuestras | de Swayp |
+| --- | --- | --- | --- | --- |
+| Trujillo | 25 | 17 | 177 | 116 |
+| Juliaca | 19 | 7 | 185 | 165 |
+
+Esa tabla es la reja que decide si el botón deja crear la guía, así que un saldo
+fantasma no es un número feo en una pantalla: **autoriza guías que Swayp después
+rebota por falta de inventario** (su motivo 18), con el pedido ya prometido al
+cliente. El caso que lo destapó fue #KP123585, Ethiopian Oil en Juliaca: nuestra
+tabla decía 25 unidades y esa bodega no tiene el producto.
+
+La fuente pasa a ser la exportación de Swayp (**Stock → Inventario**, elegir
+bodega, «Enviar a Excel»), que se sube en Stock Swayp. Reglas:
+
+- **Un archivo por bodega**, y la ciudad sale de la columna `Bodega` del propio
+  archivo. No hay selector: elegir la ciudad a mano es la forma de importar
+  Trujillo sobre Juliaca y poner a cero una ciudad entera.
+- **Sólo se toca la ciudad del archivo.** Nuestra tabla cubre nueve ciudades y
+  Swayp tiene cinco bodegas: Cusco, Huancayo, Ica, Chiclayo y Chimbote se
+  abastecen de otra forma y un importador que «limpiara lo que no vino» las
+  vaciaría de un plumazo.
+- **Lo que Swayp no lista queda en 0**, no se borra el renglón. La exportación de
+  una bodega es su inventario completo; si una referencia no aparece, esa bodega
+  no la tiene. El producto sigue existiendo y mañana puede reponerse.
+- **Lo que Swayp tiene y la ciudad no tenía anotado se da de alta**, copiando la
+  etiqueta con la que ya nombramos ese SKU en otra ciudad. Sin esto se perdían
+  34 unidades reales sólo en Trujillo (AURE008 y AURE014). La etiqueta se copia y
+  no se inventa porque `product` es lo que se cruza contra `shipments.product`:
+  un renglón llamado «SUPER HUMAN FOCUS» sería stock que existe y nunca se
+  encuentra.
+- **El emparejamiento es por `codbar` vía Catálogo de productos**, nunca por
+  nombre. Los títulos de Shopify y los de Swayp no coinciden («SUPER HUMAN
+  Ethiopian Black Seed Oil – Aceite…» contra «ETHIOPIAN OIL»). Un código sin
+  vincular se reporta con su nombre; no se adivina.
+- **Se toma la columna `Disponible`**, no `En bodega`: la segunda incluye lo
+  reservado para guías ya emitidas, que no se puede volver a prometer.
+- Todo pasa por el kardex como `ajuste` (o `entrada` en las altas), así que el
+  saldo conserva su historial y se puede responder «¿por qué bajó esto?».
+
+**Juliaca y Puno comparten una sola bodega** (ubigeo `211101`) y el importador la
+escribe sólo en `juliaca`. Poner las mismas unidades también en `puno` haría que
+un mismo frasco habilite dos guías en dos ciudades — el sobreprometer que esto
+viene a cerrar. Servir Puno desde esa bodega necesita que la tabla tenga concepto
+de **bodega** y no de ciudad; hasta entonces no se inventa.
+
+La carga a mano sigue existiendo para lo que el Excel no cubre, pero es el
+parche: la fuente es el conteo de Swayp.
+
+### Stock sin control de cantidad (Lima)
+
+Lima entró a cobertura el 14-09-2026 y la operación decidió **no contar
+unidades** ahí: la bodega de Lima repone sola y lo que importa es *qué*
+productos despacha, no cuántos hay. Un renglón marcado «sin control de
+cantidad» (`fenix_stock.unlimited`) dice «este producto existe en esa bodega» y
+nada más:
+
+- las dos rejas —reprogramación y guía directa— lo dan por disponible sin mirar
+  la cantidad (una sola definición, `stockDisponible`, para que no discrepen);
+- la entrega no lo descuenta, porque no hay saldo que llevar;
+- el reporte de demanda nunca lo marca como faltante y la pantalla muestra ∞;
+- el importador del Excel de Swayp **no lo toca**: ni lo ajusta ni lo pone en 0
+  por no venir en el archivo;
+- el kardex manual lo rechaza: mover un saldo que no significa nada sería ruido.
+
+**Infinito no es «todo».** Un producto que no esté anotado en Lima sigue sin
+pasar la reja: para despachar por API hay que dar de alta el producto en Stock
+Swayp con la marca puesta (y vincularlo en Catálogo de productos, como en
+cualquier ciudad). Lo que se ahorra es el conteo, no el catálogo.
+
+**Es por renglón y no por ciudad** a propósito: mañana un producto de Lima puede
+pasar a contarse sin tocar a los demás, y una ciudad contada puede tener un
+producto que no se cuenta.
 
 Stock objetivo:
 
@@ -2152,6 +2240,23 @@ bodega, Swayp recibiría una guía que su almacén no puede armar. Si falta
 cualquier ítem, el envío cae al código local con el motivo —no se bloquea la
 reprogramación, que antes de esto no validaba nada—.
 
+**Los TRES caminos que crean una guía Swayp, y cuál pide número.** Reprogramar
+un envío pendiente y recuperar uno anulado o devuelto terminan igual —una guía
+nueva a una fecha nueva—, así que los dos le piden el número a Swayp. El tercero,
+el alta manual, NO: ahí el operador pega un código que ya generó en el panel de
+Swayp, y pedir otro crearía un segundo paquete.
+
+| Camino | ¿Pide número a Swayp? |
+| --- | --- |
+| Reprogramar un envío pendiente | Sí |
+| Recuperar una guía anulada o devuelta | Sí |
+| Alta manual con código escrito a mano | No — ya existe |
+
+La asimetría no es gratuita y por eso está probada: el camino de guías anuladas
+se quedó sin API durante semanas cuando se conectó la primera vez, y nadie lo
+notó porque la guía seguía saliendo con código local, que es lo que salía antes.
+Una vía que nunca se entera de una regla nueva no parece rota.
+
 **El destino lo pone la GUÍA, no el pedido.** Al reprogramar, la salida ya
 existe y su destino es mejor dato que el del pedido por tres razones: es el que
 el courier usó, es el que la operadora ve en el drawer, y es el que ella puede
@@ -2171,9 +2276,22 @@ descarta una ella misma:
 
 | Forma | Qué es |
 | --- | --- |
-| `contenido: "2 x AURE001"` | **La que usamos.** Texto con el CÓDIGO, el formato que pidieron: *«CANTIDAD X SKU … con el match exacto del sku»* |
-| `contenido: "2 x NOMBRE EXACTO"` | Texto con el nombre. *«Tiende a ser inestable porque se busca por nombre y no por código»* — Swayp |
-| `productos: [{codbar, cantidad, nombre}]` | Estructurada. Nos la describieron por escrito, pero **no está en su documentación** y al preguntar por el catálogo respondieron que «no está disponible para consumir por API». La duda sigue abierta, así que no se manda: un campo que quizá no procesan puede devolver 400 y dejar al envío sin guía |
+| `productos: [{codbar, cantidad, nombre}]` | **La que usamos.** Estructurada: es con la que Swayp descuenta por código |
+| `contenido: "2 x AURE001"` | **También la usamos.** Es obligatoria y es el texto que el mensajero lee. Lleva el CÓDIGO, el formato que pidieron: *«CANTIDAD X SKU … con el match exacto del sku»* |
+| `contenido: "2 x NOMBRE EXACTO"` | Texto con el nombre. *«Tiende a ser inestable porque se busca por nombre y no por código»* — Swayp. Es el respaldo para una tienda sin nada vinculado |
+
+Se mandan **las dos**, no una en vez de la otra: `contenido` es obligatorio y es
+lo que se imprime; `productos[]` es lo que descuenta el inventario.
+
+`productos[]` estuvo sin mandarse un tiempo y conviene saber por qué, porque el
+razonamiento sigue valiendo para el próximo campo no documentado: no figura en
+su documentación, y al preguntar por el catálogo su desarrollador respondió que
+«esa funcionalidad no está disponible para consumir por API» —una frase sobre el
+endpoint de LECTURA que dejaba la duda abierta sobre este campo—. Mandar algo
+que quizá no procesan podía devolver 400 y dejar al envío sin guía, así que se
+esperó. El **14-09-2026** mandaron un `curl` de ejemplo, suyo, que lo incluye:
+`"productos": [ { "codbar": "ABC123", "cantidad": 1, "nombre": "…" } ]`. Con eso
+dejó de ser una apuesta.
 
 Vamos por `codbar`. Buscar por nombre ata el descuento de stock a que su
 catálogo y el nuestro escriban igual un producto: cambian una tilde y las guías
@@ -2205,13 +2323,21 @@ manda el ítem con el código vacío ni se aproxima por nombre: eso dejaría una
 guías descontando stock y otras no, sin que se note — la misma razón por la que
 un ubigeo aproximado se rechaza (§11.3).
 
-**La bodega de origen se nombra, no se deduce.** Swayp opera cuatro bodegas
-—Arequipa, Trujillo, Juliaca-Puno y Piura— y el campo `idWarehouse` dice de cuál
-sale el paquete. Sin él lo decide Swayp: si acierta no nos enteramos, y si se
-equivoca descuenta del inventario de otra ciudad. **Juliaca y Puno comparten
-bodega**, así que el ubigeo de origen no basta para distinguirlas. El id va
-junto al remitente de esa ciudad en `SWAYP_SENDERS`, porque el remitente ya ES
-la bodega y separarlos dejaría dos sitios que pueden discrepar.
+**La bodega de origen: la nombra `ciudadRemitente`, y `idWarehouse` la confirma.**
+Swayp opera cinco bodegas —Arequipa, Trujillo, Juliaca-Puno, Piura y Lima— y el
+origen viaja como el **ubigeo** en `ciudadRemitente`. El `curl` de ejemplo que
+mandaron el 14-09-2026 no lleva `idWarehouse` en absoluto, y las guías de
+Arequipa salen sin él: **no es obligatorio para habilitar una ciudad**. El campo
+existe para no dejarle la elección a Swayp cuando el ubigeo no alcance; va junto
+al remitente de esa ciudad en `SWAYP_SENDERS`, porque el remitente ya ES la
+bodega y separarlos dejaría dos sitios que pueden discrepar.
+
+**El RUC del remitente puede ir vacío.** El mismo `curl` lleva
+`"nitRemitente": ""`. Exigirlo era una regla nuestra, y era cara: `parseSenders`
+valida ciudad por ciudad y descarta **en silencio** la que no pase, así que una
+bodega escrita sin RUC quedaba fuera y el aviso decía «No hay bodega Swayp
+configurada para …» sin insinuar cuál era el campo. Una ciudad perdida por una
+regla inventada es peor que un RUC vacío que a Swayp no le molesta.
 
 **El `idBusiness` deja de ser opcional en la práctica.** Swayp valida los
 productos contra un id único de tienda, así que sin ese campo es Swayp quien
