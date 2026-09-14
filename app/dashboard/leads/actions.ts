@@ -8,6 +8,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
+import { resolveAgentName, resolveAgentNames } from "@/lib/agent-names";
 import {
   getCustomerHistory,
   getLeadQueueSnapshot,
@@ -85,30 +86,6 @@ import {
 } from "@/lib/whatsapp-outbox";
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import { normalizePhone, peruMobileProblem } from "@/lib/phone";
-
-// Process-level cache of vendedora id → display name (emails ~never change).
-const agentNameCache = new Map<string, string>();
-
-/**
- * Resolve a vendedora's display name (email local-part), cached process-wide.
- * Returns null if the lookup fails (left uncached so it retries next time) —
- * same semantics the call-history resolver has always used.
- */
-async function resolveAgentName(
-  userId: string,
-  admin: SupabaseClient = createAdminSupabase(),
-): Promise<string | null> {
-  if (agentNameCache.has(userId)) return agentNameCache.get(userId)!;
-  try {
-    const { data } = await admin.auth.admin.getUserById(userId);
-    const email = data?.user?.email ?? null;
-    const name = email ? email.split("@")[0]! : userId.slice(0, 8);
-    agentNameCache.set(userId, name);
-    return name;
-  } catch {
-    return null; // leave unresolved — retried next call
-  }
-}
 
 export interface LeadActionState {
   error?: string;
@@ -223,14 +200,12 @@ export async function loadLeadDetail(
   const detail = await getLeadWithCalls(leadId);
   if (!detail) return { error: "No encontrado." };
 
-  const ids = [...new Set(detail.calls.map((c) => c.vendedora).filter(Boolean))] as string[];
-  if (ids.length) {
-    const admin = createAdminSupabase();
-    await Promise.all(ids.map((id) => resolveAgentName(id, admin)));
-  }
+  const names = await resolveAgentNames(
+    detail.calls.map((c) => c.vendedora).filter((id): id is string => !!id),
+  );
   const calls = detail.calls.map((c) => ({
     ...c,
-    vendedora_name: c.vendedora ? (agentNameCache.get(c.vendedora) ?? null) : null,
+    vendedora_name: c.vendedora ? (names[c.vendedora] ?? null) : null,
   }));
   return { lead: detail.lead, calls };
 }
@@ -666,20 +641,8 @@ export async function listStoreVendedoras(storeId: string): Promise<{ id: string
   const ids = ((acc as { user_id: string }[] | null) ?? [])
     .map((a) => a.user_id)
     .filter((id) => vendIds.has(id));
-  const out: { id: string; name: string }[] = [];
-  for (const id of ids) {
-    if (!agentNameCache.has(id)) {
-      try {
-        const { data } = await admin.auth.admin.getUserById(id);
-        const email = data?.user?.email ?? null;
-        agentNameCache.set(id, email ? email.split("@")[0]! : id.slice(0, 8));
-      } catch {
-        agentNameCache.set(id, id.slice(0, 8));
-      }
-    }
-    out.push({ id, name: agentNameCache.get(id)! });
-  }
-  return out;
+  const names = await resolveAgentNames(ids, admin);
+  return ids.map((id) => ({ id, name: names[id] ?? id.slice(0, 8) }));
 }
 
 /** Register a call: log it, apply the new status, set the next follow-up. */

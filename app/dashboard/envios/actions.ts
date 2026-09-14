@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
+import { resolveAgentName, resolveAgentNames } from "@/lib/agent-names";
 import { recomputeOrderMasterForShipmentsSafe } from "@/lib/order-master";
 import {
   getReprogramRows,
@@ -201,25 +202,6 @@ async function resolveCurrentFenixEligibility(
   return evaluateFenix(coverageInputOf(shipment), (stock as FenixStockRow[]) ?? [], lineItems);
 }
 
-// Process-level cache of agent id → display name (email local-part).
-const agentNameCache = new Map<string, string>();
-
-async function resolveAgentName(
-  userId: string,
-  admin: SupabaseClient = createAdminSupabase(),
-): Promise<string | null> {
-  if (agentNameCache.has(userId)) return agentNameCache.get(userId)!;
-  try {
-    const { data } = await admin.auth.admin.getUserById(userId);
-    const email = data?.user?.email ?? null;
-    const name = email ? email.split("@")[0]! : userId.slice(0, 8);
-    agentNameCache.set(userId, name);
-    return name;
-  } catch {
-    return null;
-  }
-}
-
 /** Authorize the caller against a shipment via RLS (must see its store). */
 /**
  * Refresca el Master de Pedidos tras tocar una guía: lo que cambia aquí cambia
@@ -286,13 +268,11 @@ export async function loadShipmentDetail(
       historyCalls.flatMap((c) => [c.agent, c.note_edited_by]).filter(Boolean),
     ),
   ] as string[];
-  if (ids.length) {
-    await Promise.all(ids.map((id) => resolveAgentName(id, admin)));
-  }
+  const names = await resolveAgentNames(ids, admin);
   const withNames = (c: ShipmentCallRow): ShipmentCallRow => ({
     ...c,
-    agent_name: c.agent ? (agentNameCache.get(c.agent) ?? null) : null,
-    note_editor_name: c.note_edited_by ? (agentNameCache.get(c.note_edited_by) ?? null) : null,
+    agent_name: c.agent ? (names[c.agent] ?? null) : null,
+    note_editor_name: c.note_edited_by ? (names[c.note_edited_by] ?? null) : null,
   });
   const calls = detail.calls.map(withNames);
   const guideHistory = detail.guideHistory.map((guide) => ({
