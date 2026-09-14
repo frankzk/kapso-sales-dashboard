@@ -106,7 +106,7 @@ describe("títulos de sección semánticos", () => {
       "Registrar o programar llamada",
       "Continúa en la guía Swayp activa",
       "Registrar resultado del courier",
-      "Guía Swayp (antes Fénix) a mano",
+      "Guía Swayp a mano",
       "Historial desde el origen",
     ]) {
       expect(src, title).toMatch(new RegExp(`<h3[^>]*>${title.replace(/[()]/g, "\\$&")}</h3>`));
