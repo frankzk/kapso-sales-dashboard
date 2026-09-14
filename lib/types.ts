@@ -457,6 +457,8 @@ export interface FenixStockRowDb {
   product: string;
   sku: string | null;
   quantity: number;
+  /** Sin control de cantidad: siempre disponible, `quantity` se ignora. */
+  unlimited: boolean;
   updated_by: string | null;
   updated_at?: string;
   created_at?: string;

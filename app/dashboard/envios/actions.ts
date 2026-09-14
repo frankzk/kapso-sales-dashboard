@@ -183,7 +183,7 @@ async function resolveCurrentFenixEligibility(
 
   const stockPromise = admin
     .from("fenix_stock")
-    .select("city,product,sku,quantity")
+    .select("city,product,sku,quantity,unlimited")
     .eq("org_id", (store as { org_id: string }).org_id);
   const orderPromise = shipment.order_id
     ? admin.from("orders").select("line_items").eq("id", shipment.order_id).maybeSingle()
@@ -988,7 +988,7 @@ export async function updateShipmentDeliveryAddress(
   if (orgId) {
     const { data: stock } = await admin
       .from("fenix_stock")
-      .select("city,product,sku,quantity")
+      .select("city,product,sku,quantity,unlimited")
       .eq("org_id", orgId);
     fenixEligible = evaluateFenix(
       { city, product: current.product },
@@ -1787,7 +1787,7 @@ export async function previewDirectFenixGuide(input: {
   if (!orgId) return { error: "No se encontró la organización de la tienda." };
   const { data: stock, error: stockError } = await admin
     .from("fenix_stock")
-    .select("city,product,sku,quantity")
+    .select("city,product,sku,quantity,unlimited")
     .eq("org_id", orgId);
   if (stockError) return { error: `No se pudo consultar el stock Swayp: ${stockError.message}` };
 
@@ -2016,7 +2016,7 @@ async function swaypGuideForReprogram(
   if (!orgId) return { ok: false, reason: "no se encontró la organización de la tienda" };
   const { data: stock, error: stockError } = await admin
     .from("fenix_stock")
-    .select("city,product,sku,quantity")
+    .select("city,product,sku,quantity,unlimited")
     .eq("org_id", orgId);
   if (stockError) return { ok: false, reason: `no se pudo consultar el stock: ${stockError.message}` };
   const check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
@@ -2108,7 +2108,7 @@ export async function createDirectFenixGuide(input: {
   // Stock gate: EVERY line item must have stock in the destination city.
   const { data: stock, error: stockError } = await admin
     .from("fenix_stock")
-    .select("city,product,sku,quantity")
+    .select("city,product,sku,quantity,unlimited")
     .eq("org_id", orgId);
   if (stockError) return { error: `No se pudo consultar el stock Swayp: ${stockError.message}` };
   const lineItems = (order.line_items ?? []).map((li) => ({
@@ -2517,6 +2517,8 @@ export async function upsertFenixStock(input: {
   product: string;
   quantity: number;
   sku?: string | null;
+  /** Sin control de cantidad: siempre disponible, `quantity` se ignora. */
+  unlimited?: boolean;
 }): Promise<ShipmentActionState> {
   const sb = await createServerSupabase();
   const {
@@ -2556,19 +2558,21 @@ export async function upsertFenixStock(input: {
         product,
         sku: input.sku?.trim() || null,
         quantity: targetQty,
+        unlimited: input.unlimited === true,
         updated_by: user.id,
       },
       { onConflict: "org_id,city,product" },
     )
     .select("id")
     .single();
-  if (error || !row) return { error: error?.message ?? "No se pudo guardar." };
+  if (error || !row) return { error: errorDeBase(error, "guardar el stock Swayp") };
 
   // Kardex: alta con cantidad → entrada; editar la cantidad → ajuste. El saldo
   // ya quedó en targetQty por el upsert, así que el movimiento lo registra con
-  // ese balance_after (no vuelve a aplicar el delta).
+  // ese balance_after (no vuelve a aplicar el delta). Sin control de cantidad
+  // no hay kardex: el número no significa nada.
   const delta = targetQty - oldQty;
-  if (delta !== 0) {
+  if (delta !== 0 && !input.unlimited) {
     await admin.from("fenix_stock_movements").insert({
       org_id: adminOrg.org_id,
       fenix_stock_id: (row as { id: string }).id,
@@ -2658,7 +2662,7 @@ export async function importarInventarioSwayp(
   const admin = createAdminSupabase();
   const { data: stockData, error: stockError } = await admin
     .from("fenix_stock")
-    .select("id,city,product,sku,quantity")
+    .select("id,city,product,sku,quantity,unlimited")
     .eq("org_id", adminOrg.org_id)
     .eq("city", ciudad);
   if (stockError) return { error: errorDeBase(stockError, "leer el stock Swayp") };
@@ -2807,11 +2811,24 @@ export async function recordFenixStockMovement(input: {
   const admin = createAdminSupabase();
   const { data: stock } = await admin
     .from("fenix_stock")
-    .select("id, org_id, city, product, quantity")
+    .select("id, org_id, city, product, quantity, unlimited")
     .eq("id", input.stockId)
     .maybeSingle();
-  const s = stock as { id: string; org_id: string; city: string; product: string; quantity: number } | null;
+  const s = stock as {
+    id: string;
+    org_id: string;
+    city: string;
+    product: string;
+    quantity: number;
+    unlimited: boolean;
+  } | null;
   if (!s || !adminOrgs.includes(s.org_id)) return { error: "Renglón de stock no encontrado o sin acceso." };
+  if (s.unlimited) {
+    return {
+      error:
+        "Este producto no lleva control de cantidad: no hay saldo que mover. Si querés empezar a contarlo, editalo y quitale la marca.",
+    };
+  }
 
   const qty = Math.max(0, Math.trunc(input.quantity));
   const note = input.note?.trim() || null;
@@ -2893,7 +2910,7 @@ export async function recomputeFenixEligibility(): Promise<
   const admin = createAdminSupabase();
   const { data: stock, error: stockError } = await admin
     .from("fenix_stock")
-    .select("city,product,sku,quantity")
+    .select("city,product,sku,quantity,unlimited")
     .eq("org_id", adminOrg.org_id);
   if (stockError) return { error: errorDeBase(stockError, "consultar el stock Swayp") };
   const stockRows = (stock as FenixStockRow[]) ?? [];

@@ -129,6 +129,22 @@ describe("el plan de importación", () => {
     expect(cero).toMatchObject({ cantidadAnterior: 25, cantidadNueva: 0 });
   });
 
+  it("un renglón SIN CONTROL de cantidad no se toca: ni se ajusta ni se pone en 0", () => {
+    // Lima no cuenta unidades. Si alguien sube el Excel de Bodega Lima igual,
+    // los renglones sin control no son conteos y no se gobiernan por él:
+    // ponerlos en 0 por «no venir» dejaría a Lima sin poder despachar.
+    const filas = [
+      stock({ id: "libre", city: "lima", sku: "765545233", quantity: 0, unlimited: true }),
+      stock({ id: "contado", city: "lima", sku: "745675633", product: "Shampoo", quantity: 7 }),
+    ];
+    // El Excel trae el «libre» con 3 y no trae el «contado».
+    const plan = planearImportacion("lima", leerExcelSwayp([fila({ Disponible: "3" })]).entradas, filas, mapa, etiquetas);
+    expect(plan.ajustes.map((a) => a.id)).toEqual(["contado"]); // sólo el contado baja a 0
+    expect(plan.ajustes[0]).toMatchObject({ cantidadNueva: 0 });
+    expect(plan.sinControl).toBe(1);
+    expect(resumenDelPlan(plan)).toContain("1 sin control de cantidad, no se tocan");
+  });
+
   it("un renglón que ya estaba en 0 y tampoco vino no cuenta como ajuste", () => {
     const plan = planearImportacion(
       "trujillo",

@@ -16,6 +16,40 @@ const stock: FenixStockRow[] = [
   { city: "trujillo", product: "Mushroom Coffee", quantity: 3 },
 ];
 
+describe("stock sin control de cantidad (Lima)", () => {
+  // Lima entró a cobertura el 14-09-2026 sin contar unidades: su bodega
+  // repone sola y lo que importa es qué productos despacha. Un renglón
+  // `unlimited` con cantidad 0 tiene que valer como disponible en LAS DOS
+  // rejas, o la cola diría «hay» y el botón de guía directa «no hay».
+  const lima: FenixStockRow[] = [
+    { city: "lima", product: "Nails Repairing – Sérum para Uñas", sku: "818531465", quantity: 0, unlimited: true },
+    { city: "lima", product: "Mushroom Coffee", sku: "MC-1", quantity: 0 }, // contado, y en 0
+  ];
+
+  it("la reja de reprogramación lo da por disponible aunque la cantidad sea 0", () => {
+    const r = evaluateFenix({ city: "Lima", product: "Nails Repairing" }, lima);
+    expect(r).toEqual({ eligible: true, reason: "ok", city: "lima" });
+  });
+
+  it("y la reja de guía directa también, por SKU", () => {
+    const r = evaluateDirectFenixStock("Lima", lima, [{ title: "Nails", sku: "818531465", quantity: 3 }]);
+    expect(r.ok).toBe(true);
+  });
+
+  it("un renglón contado en 0 sigue siendo sin_stock: la marca es por producto, no por ciudad", () => {
+    const r = evaluateFenix({ city: "Lima", product: "Mushroom Coffee" }, lima);
+    expect(r.reason).toBe("sin_stock");
+    const d = evaluateDirectFenixStock("Lima", lima, [{ title: "Mushroom Coffee", sku: "MC-1", quantity: 1 }]);
+    expect(d.ok).toBe(false);
+    if (!d.ok) expect(d.uncovered).toEqual(["Mushroom Coffee"]);
+  });
+
+  it("un producto que no está anotado en Lima tampoco pasa: infinito no es «todo»", () => {
+    const r = evaluateFenix({ city: "Lima", product: "Producto que nadie anotó" }, lima);
+    expect(r.reason).toBe("sin_stock");
+  });
+});
+
 describe("evaluateFenix", () => {
   it("eligible when city is covered and product has stock (loose match)", () => {
     const r = evaluateFenix({ city: "Cusco", product: "SUPER HUMAN Ethiopian Black Seed Oil (60 caps)" }, stock);

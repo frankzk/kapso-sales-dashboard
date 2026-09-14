@@ -10,6 +10,21 @@ export interface FenixStockRow {
   product: string;
   sku?: string | null; // exact catalog key when available
   quantity: number;
+  /**
+   * Sin control de cantidad: el producto existe en esa bodega y se considera
+   * siempre disponible; `quantity` se ignora. Lima trabaja así desde el
+   * 14-09-2026 — su bodega repone sola y lo que importa es qué despacha.
+   */
+  unlimited?: boolean;
+}
+
+/**
+ * ¿Este renglón puede respaldar una guía? Es LA definición de «hay stock» y
+ * la usan las dos rejas (reprogramación y guía directa), para que no puedan
+ * discrepar. Un renglón sin control cuenta aunque su cantidad sea 0.
+ */
+export function stockDisponible(r: FenixStockRow): boolean {
+  return r.unlimited === true || r.quantity > 0;
 }
 
 /** A product to check against stock — from the linked Shopify order's line
@@ -184,7 +199,8 @@ export function stockCoversRef(stock: FenixStockRow, ref: ProductRef): boolean {
  * Evaluate whether a shipment can be re-routed to Fenix.
  *   - city must be in the covered set (a fenix_stock row for that city exists,
  *     or it's a known FENIX_CITY), AND
- *   - some stock row for that city covers the product with quantity > 0.
+ *   - some stock row for that city covers the product and is available
+ *     (`stockDisponible`: quantity > 0, or the row is marked unlimited).
  *
  * When the guide is linked to a Shopify order, pass its line items as
  * `orderProducts`: the stock sheet is keyed on the Shopify catalog (title +
@@ -221,7 +237,7 @@ export function evaluateFenix(
       ? orderProducts
       : [{ title: shipment.product ?? null, sku: null }];
   const hasStock = cityRows.some(
-    (r) => r.quantity > 0 && refs.some((ref) => stockCoversRef(r, ref)),
+    (r) => stockDisponible(r) && refs.some((ref) => stockCoversRef(r, ref)),
   );
   if (!hasStock) {
     return { eligible: false, reason: "sin_stock", city };
@@ -268,7 +284,7 @@ export function evaluateDirectFenixStock(
   }
 
   const refs: DirectStockItem[] = items.length ? items : [{ title: null, sku: null, quantity: 1 }];
-  const available = cityRows.filter((r) => r.quantity > 0);
+  const available = cityRows.filter(stockDisponible);
   const uncovered: string[] = [];
   for (const item of refs) {
     const ref: ProductRef = { title: item.title ?? null, sku: item.sku ?? null };
