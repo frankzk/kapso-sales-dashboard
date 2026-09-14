@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { motivoDelCourier } from "@/lib/aliclik-status";
+import { motivoDelCourier, motivoParaMostrar } from "@/lib/aliclik-status";
 
 /**
  * MOM §11.7: el motivo anterior se ve antes de llamar, y su ausencia también.
@@ -44,6 +44,55 @@ describe("la lectura del motivo, pura", () => {
     expect(m.consta).toBe(true);
     expect(m.vioElProducto).toBe(false);
     expect(m.texto).toBe("ALGO_NUEVO · OTRA_COSA");
+  });
+});
+
+describe("CUÁNDO se ve: la regla, no el texto que la nombra", () => {
+  /**
+   * La versión anterior de este archivo solo comprobaba que ciertas frases
+   * existieran en el fuente, y pasó en verde sobre una rama muerta: las tres
+   * pantallas guardaban con `status_category !== "cancelled"`, y esa categoría
+   * NO EXISTE —son `pending | in_route | delivered | closed | transferred`—,
+   * así que la condición era siempre verdadera y la regla del §11.7 no se
+   * imprimía nunca. Una prueba que ancla texto no puede atrapar eso. Estas
+   * ejercitan la decisión.
+   */
+  const cerrada = { status_category: "closed" };
+  const pendiente = { status_category: "pending" };
+
+  it("con motivo informado se muestra, esté la guía donde esté", () => {
+    for (const donde of [cerrada, pendiente, { status_category: "delivered" }]) {
+      const m = motivoParaMostrar({ ...donde, reported_status: "REFUSED · RETURNED" });
+      expect(m, JSON.stringify(donde)).not.toBeNull();
+      expect(m!.vioElProducto).toBe(true);
+    }
+  });
+
+  it("sin motivo, la AUSENCIA se escribe en una guía cerrada sin entregar", () => {
+    const m = motivoParaMostrar({ ...cerrada, reported_status: null });
+    expect(m).not.toBeNull();
+    expect(m!.consta).toBe(false);
+    expect(m!.texto).toBe("sin motivo del courier · no consta si la rechazó en la puerta");
+  });
+
+  it("pero NO en una guía que todavía no salió: ahí no hay nada anterior", () => {
+    // Una guía Swayp nativa recién creada mostraba «no consta si la rechazó en
+    // la puerta» bajo una columna titulada «Motivo anterior». No hubo intento
+    // anterior ni hubo puerta.
+    for (const donde of [pendiente, { status_category: "in_route" }, { status_category: "transferred" }]) {
+      expect(motivoParaMostrar({ ...donde, reported_status: null }), JSON.stringify(donde)).toBeNull();
+    }
+  });
+
+  it("la categoría inexistente no vuelve a aparecer en el componente", () => {
+    expect(ui).not.toContain('"cancelled"');
+  });
+
+  it("las tres pantallas deciden con la MISMA función", () => {
+    // Tenían tres criterios distintos y dos estaban mal. Uno solo, o vuelven a
+    // divergir: la celda de escritorio no tenía criterio ninguno.
+    expect(ui.match(/motivoParaMostrar\(/g)?.length).toBe(3);
+    expect(ui).not.toContain("motivoDelCourier(");
   });
 });
 

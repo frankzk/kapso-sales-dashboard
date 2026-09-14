@@ -35,7 +35,7 @@ import {
   type CourierReportResult,
   type RerouteDisposition,
 } from "@/lib/shipments";
-import { motivoDelCourier } from "@/lib/aliclik-status";
+import { motivoParaMostrar } from "@/lib/aliclik-status";
 import { normalizeDepartment } from "@/lib/peru-departamentos";
 import type {
   LinkedShipmentSummary,
@@ -1321,6 +1321,27 @@ export function ShipmentsBoard({
 
       {openId && (
         <ShipmentDrawer
+          /**
+           * UNA GUÍA, UN CAJÓN. La `key` no es una optimización: es lo que
+           * impide que el expediente de una clienta se cuele en el de la
+           * siguiente.
+           *
+           * Sin ella React reutilizaba la misma instancia al cambiar de guía y
+           * los 39 `useState` sobrevivían. `note` y `nextDate` no se limpian en
+           * ningún sitio del archivo —nunca se limpiaron, lo confirma
+           * `git log -S`— así que la guía B abría con la nota de A en el
+           * textarea, la fecha de A en el campo y el botón habilitado: un clic
+           * escribía la llamada de A en el expediente de B y la despachaba con
+           * la fecha de A. Peor aún, el aviso de «tienes texto sin registrar»
+           * saltaba en cada «Siguiente» del camino feliz, enseñando a
+           * descartarlo sin leer.
+           *
+           * Remontar por `key` lo arregla POR CONSTRUCCIÓN: el siguiente estado
+           * que alguien añada al cajón no puede filtrarse aunque olvide su
+           * reseteo. Recargar la MISMA guía no remonta —la key no cambia—, así
+           * que el cajón atenuado de `sameGuide` sigue funcionando igual.
+           */
+          key={openId}
           shipmentId={openId}
           onClose={() => setOpenId(null)}
           onOpenShipment={setOpenId}
@@ -1488,7 +1509,8 @@ const ShipmentTable = memo(function ShipmentTable({
               </td>
               <td className={cn(SECONDARY_COLUMN, "w-44 max-w-44 px-3 py-2.5 align-middle")}>
                 {(() => {
-                  const m = motivoDelCourier(s.reported_status);
+                  const m = motivoParaMostrar(s);
+                  if (!m) return <span className="text-xs text-slate-500">—</span>;
                   return (
                     <span
                       className={cn(
@@ -1602,8 +1624,8 @@ const ShipmentTable = memo(function ShipmentTable({
                   <FenixAvailabilityInline shipment={s} />
                 </span>
                 {(() => {
-                  const m = motivoDelCourier(s.reported_status);
-                  if (!m.consta && s.status_category !== "cancelled") return null;
+                  const m = motivoParaMostrar(s);
+                  if (!m) return null;
                   return (
                     <span
                       className={cn(
@@ -2498,8 +2520,8 @@ function ShipmentDrawer({
                     producto y aun así lo rechazó, normalmente no reenviar.»
                     Va en la ficha que se lee mientras suena el teléfono. */}
                 {(() => {
-                  const m = motivoDelCourier(detail.shipment.reported_status);
-                  if (!m.consta && detail.shipment.status_category !== "cancelled") return null;
+                  const m = motivoParaMostrar(detail.shipment);
+                  if (!m) return null;
                   return (
                     <div className="col-span-2">
                       <dt className="text-xs text-slate-500">Cómo terminó el intento anterior</dt>
@@ -3273,14 +3295,24 @@ function ShipmentDrawer({
                     <button
                       type="button"
                       onClick={() =>
-                        run(() =>
-                          registerRerouteCall(shipmentId, {
-                            disposition,
-                            note,
-                            nextFollowupAt: null,
-                            reprogramProvider,
-                            forceAliclik,
-                          }),
+                        run(
+                          () =>
+                            registerRerouteCall(shipmentId, {
+                              disposition,
+                              note,
+                              nextFollowupAt: null,
+                              reprogramProvider,
+                              forceAliclik,
+                            }),
+                          // El confirmar de «Cliente cancela» es la SEGUNDA
+                          // llamada a esta acción y también se olvidaba de
+                          // limpiar. Anular es terminal: la guía sale de la
+                          // vista, pero la nota se quedaba viva en el cajón.
+                          () => {
+                            setNote("");
+                            setNextDate("");
+                            setConfirmCancel(false);
+                          },
                         )
                       }
                       disabled={pending}
@@ -3306,14 +3338,24 @@ function ShipmentDrawer({
                         setConfirmCancel(true);
                         return;
                       }
-                      run(() =>
-                        registerRerouteCall(shipmentId, {
-                          disposition,
-                          note,
-                          nextFollowupAt: nextDate ? new Date(nextDate).toISOString() : null,
-                          reprogramProvider,
-                          forceAliclik,
-                        }),
+                      run(
+                        () =>
+                          registerRerouteCall(shipmentId, {
+                            disposition,
+                            note,
+                            nextFollowupAt: nextDate ? new Date(nextDate).toISOString() : null,
+                            reprogramProvider,
+                            forceAliclik,
+                          }),
+                        // Era la ÚNICA acción del cajón sin reseteo —las otras
+                        // cuatro sí lo tenían—, así que un segundo «Registrar
+                        // llamada» en la misma guía reenviaba la nota anterior,
+                        // y el aviso de borrador sin registrar saltaba después
+                        // de haber registrado.
+                        () => {
+                          setNote("");
+                          setNextDate("");
+                        },
                       );
                     }}
                     disabled={pending || requiredDateMissing}
@@ -3647,11 +3689,19 @@ function ShipmentDrawer({
                   </p>
                   <button
                     onClick={() =>
-                      run(() =>
-                        createFenixGuide(shipmentId, {
-                          guideCode: fenixGuide,
-                          nextFollowupAt: manualGuideDate ? new Date(manualGuideDate).toISOString() : null,
-                        }),
+                      run(
+                        () =>
+                          createFenixGuide(shipmentId, {
+                            guideCode: fenixGuide,
+                            nextFollowupAt: manualGuideDate ? new Date(manualGuideDate).toISOString() : null,
+                          }),
+                        // Un número de guía ya usado no se puede volver a
+                        // enviar: si se queda en el campo, el segundo intento
+                        // choca contra el duplicado en la base.
+                        () => {
+                          setFenixGuide("");
+                          setManualGuideDate("");
+                        },
                       )
                     }
                     disabled={pending || !fenixGuide.trim() || manualGuideDateInvalid}
