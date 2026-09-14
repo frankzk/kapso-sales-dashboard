@@ -2253,25 +2253,63 @@ la asesora acaba de oír por teléfono.
 
 ### 11.6 Una reprogramación confirmada no puede ser de ayer
 
-La fecha que acompaña a **Cliente confirma reprogramación** tiene que ser
-futura, y se valida en los dos lados:
+La regla es de la **fecha que se estampa en una guía Swayp**, no de un
+formulario: toda fecha que llegue a `rescheduleGuideCode` tiene que ser futura.
 
-- En el formulario, el `min` del campo y la etiqueta del botón («Elige una
-  fecha futura»), igual que para «Programar próxima llamada».
+Hay **dos puertas** que acuñan una guía con esa función, y las dos se validan en
+los dos lados:
+
+1. **Cliente confirma reprogramación**, el camino normal.
+2. **Guía Swayp a mano**, el formulario manual del cajón — el que se despliega
+   solo cuando el envío no tiene N° de pedido, o sea el camino obligado cuando
+   la autogeneración no es posible.
+
+En los dos casos:
+
+- En el formulario, el `min` del campo y la fecha dentro de la condición del
+  botón, con el motivo escrito **al lado** del botón y no dentro de su etiqueta
+  (un `<button disabled>` está fuera del orden de tabulación: quien navega con
+  lector de pantalla no lo alcanza).
 - En el servidor, `isFutureShipmentFollowup`, porque el `min` de un
   `<input type="date">` es una sugerencia del navegador: la fecha se puede
-  teclear. Hasta el 12-09-2026 ninguno de los dos lo exigía para «confirma»
-  —solo que la fecha existiera— y se emitía una guía Swayp con la fecha pasada
-  **estampada en su número** (`rescheduleGuideCode`) y un despacho agendado para
-  un día que ya había pasado. Es la acción más frecuente de la pantalla.
+  teclear.
+
+Hasta el 12-09-2026 ninguno de los dos lados lo exigía para «confirma» —solo que
+la fecha existiera— y se emitía una guía Swayp con la fecha pasada **estampada en
+su número** y un despacho agendado para un día que ya había pasado. El 14-09-2026
+se descubrió que el arreglo había cubierto una puerta de dos: la manual seguía
+sin `min`, sin la fecha en el `disabled` y sin guarda en `createFenixGuide`. La
+lección se escribe acá porque es la que se repite: **la regla pertenece a la
+función que acuña, no a la pantalla desde la que se llegó**, y se valida en cada
+sitio que la llame.
 
 La **fecha de entrega informada por el courier** («Reprogramado por Swayp») sigue
 otra regla, porque es otro hecho: **hoy sí vale** —el motorizado puede
 reprogramar para más tarde el mismo día—, ayer no (`isTodayOrLaterDelivery`).
 
 Y los topes de intentos se leen de una constante, no de un texto: la métrica del
-cajón muestra `MAX_INTENTOS` (7 llamadas) y `ALICLIK_MAX_INTENTOS` (3 intentos de
-Aliclik), las mismas que aplican la transición y la ventana de reprogramación.
+cajón, la columna de la cola y los mensajes del servidor muestran `MAX_INTENTOS`
+(7 llamadas) y `ALICLIK_MAX_INTENTOS` (3 intentos de Aliclik), las mismas que
+aplican la transición y la ventana de reprogramación. El mínimo del motivo de
+descarte sale igual de `DISCARD_REASON_MIN`.
+
+### 11.7 El motivo anterior se ve antes de llamar, y su ausencia también
+
+§11 manda revisar cómo terminó el intento anterior antes de reenviar: «si el
+cliente vio el producto y aun así lo rechazó, normalmente no reenviar». Esa
+etiqueta es `reported_status`, y hasta el 14-09-2026 **no se pintaba en ninguna
+pantalla**: estaba en la fila, tipada y usada por la elegibilidad de
+recuperación, y la asesora llamaba a ciegas. Ahora sale en la cola y en la ficha
+del cliente del cajón —la que se lee mientras suena el teléfono—, con la lectura
+en castellano (`motivoDelCourier`).
+
+Cuando el rechazo consta, la frase va **destacada**: es la que cambia la
+decisión.
+
+Donde no hay motivo **no va un guion**. Un guion se lee «no hay nada que decir»,
+y lo que pasa es otra cosa: de 130 devoluciones candidatas medidas el 2026-08-10,
+100 no traían motivo alguno. Va escrito «sin motivo del courier · no consta si la
+rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
 
 ## 12. Agencia: Shalom y Olva
 
