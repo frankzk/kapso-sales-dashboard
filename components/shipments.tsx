@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { cn, Card, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { CopyButton } from "@/components/copy-button";
+import { OrderLineItems } from "@/components/order-line-items";
 // El mínimo del motivo de descarte lo define el servidor: acá se lee, no se
 // repite. Estaba escrito «8» a mano en cuatro sitios contra una constante que
 // ya existía, así que subirlo en `lib/` habría dejado la pantalla mintiendo.
@@ -4087,28 +4088,10 @@ function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
         )}
       </div>
 
-      {order.line_items.length === 0 ? (
-        <p className="mt-1.5 text-xs text-slate-500">Shopify no devolvió productos para este pedido.</p>
-      ) : (
-        <ul className="mt-1.5 divide-y divide-slate-100">
-          {order.line_items.map((item, index) => (
-            <li
-              key={`${item.variant_id ?? item.sku ?? item.title}-${index}`}
-              className="flex items-start gap-2.5 py-2 first:pt-1 last:pb-0"
-            >
-              <span className="inline-flex h-6 min-w-8 shrink-0 items-center justify-center rounded-md bg-slate-100 px-1.5 text-xs font-semibold tabular-nums text-slate-700">
-                {item.quantity}×
-              </span>
-              <div className="min-w-0">
-                <p className="text-sm leading-5 text-slate-700">
-                  {item.title || "Producto sin nombre"}
-                </p>
-                {item.sku && <p className="mt-0.5 text-xs text-slate-500">SKU {item.sku}</p>}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+      {/* Mismo bloque que el Master de Pedidos. Estaba escrito dos veces, las
+          dos sin variante ni precio, y divergiendo: acá se mostraba el SKU y
+          allá no. Uno solo, o vuelven a separarse. */}
+      <OrderLineItems items={order.line_items} className="mt-1.5" />
     </div>
   );
 }
