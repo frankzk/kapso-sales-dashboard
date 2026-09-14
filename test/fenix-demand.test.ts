@@ -47,9 +47,10 @@ describe("buildFenixDemand", () => {
   });
 
   it("ignores guides in uncovered cities", () => {
-    const ships: DemandShipment[] = [{ city: "Lima", product: "Mushroom Coffee" }];
+    // Tacna y no Lima: Lima entró a cobertura el 14-09-2026.
+    const ships: DemandShipment[] = [{ city: "Tacna", product: "Mushroom Coffee" }];
     const rows = buildFenixDemand(stock, ships);
-    expect(rows.every((r) => r.city !== "lima")).toBe(true);
+    expect(rows.every((r) => r.city !== "tacna")).toBe(true);
     expect(rows.find((r) => r.product === "Mushroom Coffee")!.demand).toBe(0);
   });
 

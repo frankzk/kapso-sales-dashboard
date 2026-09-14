@@ -304,8 +304,16 @@ describe("normalizeCity", () => {
   });
   it("knows the Fenix coverage set", () => {
     for (const c of FENIX_CITIES) expect(isFenixCity(c)).toBe(true);
-    expect(isFenixCity("Lima")).toBe(false);
+    expect(isFenixCity("Tacna")).toBe(false);
     expect(isFenixCity(null)).toBe(false);
+  });
+  it("Lima y Callao entraron el 14-09-2026; el Callao se sirve desde Lima", () => {
+    expect(isFenixCity("Lima")).toBe(true);
+    expect(isFenixCity("Callao")).toBe(true);
+    expect(normalizeCity("Callao")).toBe("callao");
+    expect(fenixWarehouseKey("Callao")).toBe("lima");
+    // «Lima - Callao» resuelve a lima, como «Juliaca/Puno» a juliaca.
+    expect(normalizeCity("Lima - Callao")).toBe("lima");
   });
   it("reconoce las ciudades del norte y del sur chico", () => {
     expect(normalizeCity("Ica")).toBe("ica");
@@ -343,7 +351,7 @@ describe("normalizeCity", () => {
     expect(isFenixCity(deriveFenixCoverageCity("Yanacancha", "Chupaca"))).toBe(true);
   });
   it("lo que la operación descartó no entra por parecido ni por cercanía", () => {
-    for (const c of ["Jauja", "Chepén", "Chala", "Lima", "Tacna"]) {
+    for (const c of ["Jauja", "Chepén", "Chala", "Tacna", "Iquitos"]) {
       expect(isFenixCity(c)).toBe(false);
     }
   });
@@ -384,7 +392,13 @@ describe("deriveFenixCoverageCity (destino de un pedido Shopify)", () => {
     expect(deriveFenixCoverageCity("Juliaca", "Puno")).toBe("juliaca");
   });
   it("cae al distrito normalizado cuando no hay ciudad Fenix en el combinado", () => {
-    expect(deriveFenixCoverageCity("Miraflores", "Lima")).toBe("miraflores");
+    expect(deriveFenixCoverageCity("Pocollay", "Tacna")).toBe("pocollay");
+  });
+  it("un distrito de Lima con departamento Lima resuelve a lima desde el 14-09-2026", () => {
+    // Antes de esa fecha este mismo par caía a «miraflores» porque Lima no
+    // era ciudad Fenix. Ahora el departamento manda, como en las demás.
+    expect(deriveFenixCoverageCity("Miraflores", "Lima")).toBe("lima");
+    expect(deriveFenixCoverageCity("Ventanilla", "Callao")).toBe("callao");
   });
   it("vacío cuando el pedido no tiene distrito ni departamento", () => {
     expect(deriveFenixCoverageCity(null, null)).toBe("");

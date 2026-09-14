@@ -31,7 +31,8 @@ describe("evaluateFenix", () => {
   });
 
   it("sin_cobertura when the city is not covered", () => {
-    const r = evaluateFenix({ city: "Lima", product: "Mushroom Coffee" }, stock);
+    // Tacna y no Lima: Lima entró a cobertura el 14-09-2026.
+    const r = evaluateFenix({ city: "Tacna", product: "Mushroom Coffee" }, stock);
     expect(r.eligible).toBe(false);
     expect(r.reason).toBe("sin_cobertura");
   });
@@ -75,11 +76,13 @@ describe("evaluateFenix", () => {
     });
 
     it("cuando `city` viene cargada manda ella: derivar taparía localityMismatch", () => {
+      // Tacna (fuera de cobertura) con distrito de Cusco: si se derivara del
+      // distrito, saldría cusco y taparía el desajuste.
       const r = evaluateFenix(
-        { city: "Lima", district: "Cusco", province: "Cusco", product: "SUPER HUMAN Ethiopian Black Seed Oil" },
+        { city: "Tacna", district: "Cusco", province: "Cusco", product: "SUPER HUMAN Ethiopian Black Seed Oil" },
         stock,
       );
-      expect(r.city).toBe("lima");
+      expect(r.city).toBe("tacna");
       expect(r.reason).toBe("sin_cobertura");
     });
   });

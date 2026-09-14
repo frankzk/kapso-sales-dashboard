@@ -2020,7 +2020,17 @@ Kapta no envía datos bancarios—. De ahí en adelante el circuito de adelanto,
 comprobante y clave de recojo (§12) ya existe y no cambia.
 
 Ciudades con stock/operación conocidas: Arequipa, Huancayo, Juliaca/Puno,
-Cusco, Trujillo, Ica, Piura, Chimbote, Chiclayo.
+Cusco, Trujillo, Ica, Piura, Chimbote, Chiclayo, Lima/Callao.
+
+**Lima y Callao** entraron el 14-09-2026, cuando la bodega de Lima de Swayp pasó
+a despachar pedidos desde el sistema. Lima provincia son 44 distritos (el padrón
+ya trae Santa María de Huachipa, `150144`, creado en 2023) y Callao 7. **El
+Callao es destino propio pero se despacha desde la bodega de Lima**, con el
+stock de Lima — el mismo arreglo que Puno con Juliaca: tabla de ubigeo aparte
+para no mandar el paquete a un distrito equivocado, y alias al almacén para no
+inventar una bodega que no existe. En `SWAYP_SENDERS` van las dos claves,
+`lima` y `callao`, porque el envío llega con su ciudad y el remitente se busca
+por ella.
 
 Estar en la lista habilita la ciudad para cargarle stock; **no** la vuelve
 elegible por sí sola. La elegibilidad exige cobertura **y** stock del producto
