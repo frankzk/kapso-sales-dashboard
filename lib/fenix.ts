@@ -19,14 +19,15 @@ export interface FenixStockRow {
 }
 
 /**
- * Ciudades que NO llevan control de cantidad: todo producto anotado ahí vale
- * como disponible, sin marcar nada por renglón.
+ * Ciudades que NO llevan control de cantidad: la tabla de stock no gobierna
+ * nada ahí. TODO producto pasa la reja, sin anotar renglones.
  *
  * Lima desde el 14-09-2026: su bodega repone sola y lo que importa es QUÉ
- * despacha. Se decidió por ciudad y no por renglón porque la carga de Lima
- * son decenas de productos y una casilla por producto es una forma de
- * olvidarse una — y un renglón olvidado es un pedido que la reja rechaza por
- * «sin stock» en una ciudad donde el stock no se cuenta.
+ * despacha — y eso ya lo dice el vínculo en Catálogo de productos, que se
+ * exige al crear la guía por API («Falta vincular a Swayp: …»). Exigir además
+ * un renglón por producto en Stock Swayp era una segunda lista que mantener
+ * para decir lo mismo; se probó y la primera guía de Lima salió rechazada por
+ * «sin stock» con la tabla vacía.
  *
  * Se compara con la clave de almacén, así que el Callao (que se sirve desde
  * Lima) entra solo. La marca por renglón (`unlimited`) sigue existiendo para
@@ -258,6 +259,12 @@ export function evaluateFenix(
   if (!city || !covered) {
     return { eligible: false, reason: "sin_cobertura", city };
   }
+  // Ciudad sin control de cantidad (Lima, Callao): la tabla de stock no
+  // gobierna nada. Todo producto pasa; el vínculo en Catálogo se exige donde
+  // importa, al crear la guía por API («Falta vincular a Swayp: …»).
+  if (ciudadSinControl(city)) {
+    return { eligible: true, reason: "ok", city };
+  }
   const refs: ProductRef[] =
     orderProducts && orderProducts.length
       ? orderProducts
@@ -307,6 +314,10 @@ export function evaluateDirectFenixStock(
   const covered = isFenixCity(normalized) || cityRows.length > 0;
   if (!normalized || !covered) {
     return { ok: false, reason: "sin_cobertura", city: normalized, uncovered: [] };
+  }
+  // Misma regla que evaluateFenix: sin control de cantidad, todo producto pasa.
+  if (ciudadSinControl(normalized)) {
+    return { ok: true, city: normalized, uncovered: [] };
   }
 
   const refs: DirectStockItem[] = items.length ? items : [{ title: null, sku: null, quantity: 1 }];

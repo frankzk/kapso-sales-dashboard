@@ -8,19 +8,31 @@ const stock: FenixStockRow[] = [
 ];
 
 describe("buildFenixDemand", () => {
-  it("un renglón sin control de cantidad nunca falta, por mucha demanda que haya", () => {
+  it("un renglón con marca propia nunca falta, por mucha demanda que haya (ciudad contada)", () => {
+    // Trujillo cuenta unidades; este renglón en particular no. La demanda se
+    // sigue contando —es útil saber cuántos piden— pero el faltante es 0.
     const sinControl: FenixStockRow[] = [
-      { city: "lima", product: "Nails Repairing", sku: "818531465", quantity: 0, unlimited: true },
+      { city: "trujillo", product: "Nails Repairing", sku: "818531465", quantity: 0, unlimited: true },
     ];
     const ships: DemandShipment[] = Array.from({ length: 50 }, () => ({
-      city: "Lima",
+      city: "Trujillo",
       product: "Nails Repairing – Sérum para Uñas",
     }));
-    const row = buildFenixDemand(sinControl, ships).find((r) => r.city === "lima")!;
+    const row = buildFenixDemand(sinControl, ships).find((r) => r.city === "trujillo")!;
     expect(row.demand).toBe(50);
     expect(row.shortfall).toBe(0);
     expect(row.status).toBe("ok");
     expect(row.unlimited).toBe(true);
+  });
+
+  it("un pedido pendiente de Lima sin ningún renglón NO aparece como «sin stock»", () => {
+    // La reja lo deja pasar; el reporte no puede decir lo contrario.
+    const ships: DemandShipment[] = [
+      { city: "Lima", product: "Ethiopian Black Seed Oil" },
+      { city: "Callao", product: "Nails Repairing" },
+    ];
+    const rows = buildFenixDemand([], ships);
+    expect(rows.filter((r) => r.city === "lima" || r.city === "callao")).toEqual([]);
   });
 
   it("en Lima ningún renglón falta aunque no tenga la marca: es regla de la ciudad", () => {

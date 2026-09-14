@@ -205,6 +205,13 @@ export function FenixStockEditor({
               Guardar
             </button>
           </div>
+          {ciudadSinControl(city) && (
+            <p className="text-xs text-amber-700">
+              <span className="capitalize">{city}</span> no usa esta tabla: todo producto pasa la reja de
+              stock, y el vínculo en Catálogo de productos se exige al crear la guía. Anotar renglones acá
+              es opcional y sólo informativo.
+            </p>
+          )}
           {msg && <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">{msg}</p>}
         </Card>
       )}

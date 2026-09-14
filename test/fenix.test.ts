@@ -53,9 +53,14 @@ describe("stock sin control de cantidad (Lima)", () => {
     if (!d.ok) expect(d.uncovered).toEqual(["Mushroom Coffee"]);
   });
 
-  it("un producto que no está anotado en Lima tampoco pasa: infinito no es «todo»", () => {
-    const r = evaluateFenix({ city: "Lima", product: "Producto que nadie anotó" }, lima);
-    expect(r.reason).toBe("sin_stock");
+  it("en Lima TODO producto pasa, aunque la tabla de stock esté vacía", () => {
+    // La primera guía real de Lima (#KP131993, Ethiopian) salió rechazada por
+    // «sin stock» con la tabla en cero. Exigir un renglón por producto era una
+    // segunda lista para decir lo que ya dice el vínculo en Catálogo, que se
+    // exige al crear la guía. Acá no se anota nada.
+    expect(evaluateFenix({ city: "Lima", product: "Producto que nadie anotó" }, []).reason).toBe("ok");
+    const d = evaluateDirectFenixStock("Lima", [], [{ title: "Ethiopian Black Seed Oil", sku: "PRUEBA-ETHIOPIAN", quantity: 1 }]);
+    expect(d).toEqual({ ok: true, city: "lima", uncovered: [] });
   });
 
   it("en Lima la regla es de la CIUDAD: un renglón sin marca y en 0 vale igual", () => {
@@ -71,8 +76,8 @@ describe("stock sin control de cantidad (Lima)", () => {
 
   it("el Callao hereda la regla de Lima, porque se sirve desde esa bodega", () => {
     expect(ciudadSinControl("Callao")).toBe(true);
-    const fila: FenixStockRow[] = [{ city: "lima", product: "Nails Repairing", sku: "818531465", quantity: 0 }];
-    expect(evaluateFenix({ city: "Callao", product: "Nails Repairing" }, fila).reason).toBe("ok");
+    expect(evaluateFenix({ city: "Callao", product: "Nails Repairing" }, []).reason).toBe("ok");
+    expect(evaluateDirectFenixStock("Callao", [], [{ title: "Nails", sku: "818531465", quantity: 1 }]).ok).toBe(true);
   });
 
   it("una ciudad contada no hereda nada: en 0 sigue siendo sin_stock", () => {

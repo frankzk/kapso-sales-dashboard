@@ -2131,10 +2131,14 @@ dice «este producto existe en esa bodega» y nada más:
   por no venir en el archivo;
 - el kardex manual lo rechaza: mover un saldo que no significa nada sería ruido.
 
-**Infinito no es «todo».** Un producto que no esté anotado en Lima sigue sin
-pasar la reja: para despachar por API hay que dar de alta el producto en Stock
-Swayp con la marca puesta (y vincularlo en Catálogo de productos, como en
-cualquier ciudad). Lo que se ahorra es el conteo, no el catálogo.
+**En Lima y Callao la tabla de stock no gobierna nada: todo producto pasa la
+reja.** No hay que anotar renglones. Lo que sí se exige es el **vínculo en
+Catálogo de productos** (`codbar`), y se exige donde importa: al crear la guía
+por API, con el aviso «Falta vincular a Swayp: …». Se probó la alternativa
+—exigir además un renglón por producto en Stock Swayp— y la primera guía real de
+Lima (#KP131993) salió rechazada por «sin stock» con la tabla vacía: era una
+segunda lista que mantener para decir lo mismo que ya dice el Catálogo. Anotar
+renglones en Lima queda como opcional e informativo.
 
 Si un día Lima pasa a contarse, se la quita del conjunto y sus renglones vuelven
 a regirse por la cantidad y por la marca propia de cada uno.
