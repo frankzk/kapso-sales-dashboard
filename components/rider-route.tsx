@@ -267,10 +267,10 @@ export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWith
     stop.status === "pendiente" ? "entregado" : stop.status,
   );
   const [method, setMethod] = useState<PaymentMethod | null>(
-    (stop.payment_method as PaymentMethod | null) ?? "efectivo",
+    (stop.payment_method as PaymentMethod | null) ?? null,
   );
   const [amount, setAmount] = useState(
-    stop.collected_amount != null ? String(stop.collected_amount) : String(stop.order?.total ?? ""),
+    stop.collected_amount != null ? String(stop.collected_amount) : String(stop.collection?.remaining ?? ""),
   );
   const [reason, setReason] = useState(stop.outcome_reason ?? "");
   const [note, setNote] = useState(stop.note ?? "");
@@ -319,7 +319,7 @@ export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWith
     const check = validateStopReport({
       status,
       paymentMethod: status === "entregado" ? method : null,
-      collectedAmount: status === "entregado" ? (numericAmount ?? null) : null,
+      collectedAmount: status === "entregado" ? (method === "sin_cobro" ? 0 : numericAmount) : null,
       outcomeReason: status === "no_entregado" ? reason || null : null,
       note,
       hasPhoto: Boolean(photoPath),
@@ -336,7 +336,7 @@ export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWith
           stopId: stop.id,
           status,
           paymentMethod: status === "entregado" ? method : null,
-          collectedAmount: status === "entregado" ? (numericAmount ?? null) : null,
+          collectedAmount: status === "entregado" ? (method === "sin_cobro" ? 0 : numericAmount) : null,
           outcomeReason: status === "no_entregado" ? reason || null : null,
           note: note.trim() || null,
           photoPath,
@@ -383,13 +383,22 @@ export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWith
 
       {status === "entregado" && (
         <>
+          <div className="space-y-1 rounded-lg bg-slate-50 p-3 text-sm">
+            <p className="font-semibold">Saldo por cobrar: {stop.collection?.remaining == null ? "No disponible, actualiza la ruta" : money(stop.collection.remaining)}</p>
+            {!!stop.collection?.validated && <p>Pagos previos validados: {money(stop.collection.validated)}</p>}
+            {!!stop.collection?.pending && <p className="text-amber-800">Hay {money(stop.collection.pending)} pendientes de validar. Consulta a coordinación antes de volver a cobrar.</p>}
+          </div>
+          <p className="text-sm font-medium">¿Cómo se pagó esta entrega? Elige una opción.</p>
           <div className="flex flex-wrap gap-1.5">
             {PAYMENT_METHODS.map((m) => (
               <button
                 key={m.code}
+                type="button"
+                aria-pressed={method === m.code}
+                disabled={pending}
                 onClick={() => setMethod(m.code)}
                 className={cn(
-                  "rounded-lg px-2.5 py-2 text-xs font-medium",
+                  "min-h-12 rounded-lg px-3 py-2 text-sm font-medium disabled:opacity-50",
                   method === m.code
                     ? "bg-slate-800 text-white"
                     : "border border-slate-300 text-slate-700",
@@ -399,15 +408,19 @@ export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWith
               </button>
             ))}
           </div>
-          {method !== "sin_cobro" && (
+          {method && method !== "sin_cobro" && (
+            <label className="block text-sm font-medium">Importe cobrado en esta entrega
             <input
               inputMode="decimal"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               placeholder="¿Cuánto cobraste?"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base"
+              className="mt-1 min-h-12 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base"
             />
+            </label>
           )}
+          {method === "sin_cobro" && <p className="text-sm">Se registrará S/ 0.00. Si queda saldo, explica el motivo en la nota.</p>}
+          {method === "yape" && <p className="text-sm text-slate-600">Yape reportado a la empresa. La captura no equivale a validación bancaria.</p>}
           <PhotoField
             label="Foto de la entrega"
             path={photoPath}
@@ -450,6 +463,7 @@ export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWith
         onPick={(f) => upload("entrega", f)}
       />}
       <textarea
+        aria-label="Nota del reporte"
         value={note}
         onChange={(e) => setNote(e.target.value)}
         placeholder="Nota (opcional)"
@@ -457,11 +471,11 @@ export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWith
         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
       />
 
-      {err && <p className="text-sm text-red-600">{err}</p>}
+      {err && <p role="alert" className="text-sm text-red-600">{err}</p>}
 
       <button
         onClick={submit}
-        disabled={pending || uploading !== null}
+        disabled={pending || uploading !== null || (status === "entregado" && (method === null || stop.collection?.remaining == null))}
         className="w-full rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
       >
         {pending ? "Guardando…" : stop.status === "pendiente" ? "Guardar" : "Corregir"}
