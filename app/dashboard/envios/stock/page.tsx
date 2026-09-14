@@ -14,7 +14,7 @@ export default async function FenixStockPage() {
   const sb = await createServerSupabase();
   const { data } = await sb
     .from("fenix_stock")
-    .select("id,org_id,city,product,sku,quantity,updated_by,updated_at,created_at")
+    .select("id,org_id,city,product,sku,quantity,unlimited,updated_by,updated_at,created_at")
     .order("city")
     .order("product");
   const rows = (data as FenixStockRowDb[]) ?? [];

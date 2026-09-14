@@ -39,6 +39,9 @@ export function FenixStockEditor({
   const [product, setProduct] = useState("");
   const [sku, setSku] = useState<string | null>(null);
   const [quantity, setQuantity] = useState("0");
+  // Sin control de cantidad (Lima): el producto existe en la bodega y no se
+  // cuenta. Se recuerda entre altas porque se cargan de a muchos.
+  const [unlimited, setUnlimited] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const [cityFilter, setCityFilter] = useState<string | null>(null); // null = todas
@@ -53,8 +56,9 @@ export function FenixStockEditor({
       const r = await upsertFenixStock({
         city,
         product,
-        quantity: Number(quantity) || 0,
+        quantity: unlimited ? 0 : Number(quantity) || 0,
         sku,
+        unlimited,
       });
       setMsg(r.error ?? r.notice ?? null);
       if (!r.error) {
@@ -167,11 +171,25 @@ export function FenixStockEditor({
               <input
                 type="number"
                 min={0}
-                value={quantity}
+                value={unlimited ? "" : quantity}
+                placeholder={unlimited ? "∞" : undefined}
+                disabled={unlimited}
                 onChange={(e) => setQuantity(e.target.value)}
-                className="w-24 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+                className="w-24 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm disabled:bg-slate-50 disabled:text-slate-400"
               />
             </div>
+            <label
+              className="flex items-center gap-1.5 self-end pb-1.5 text-xs text-slate-600"
+              title="El producto existe en la bodega y no se cuenta: siempre disponible, la entrega no descuenta y el Excel no lo toca."
+            >
+              <input
+                type="checkbox"
+                checked={unlimited}
+                onChange={(e) => setUnlimited(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              Sin control de cantidad
+            </label>
             <button
               onClick={add}
               disabled={pending || !product.trim()}
@@ -220,7 +238,10 @@ export function FenixStockEditor({
                   </button>
                 ))}
                 <span className="ml-auto text-xs text-slate-400">
-                  {visibleRows.length} producto(s) · {visibleRows.reduce((n, r) => n + r.quantity, 0)} u.
+                  {visibleRows.length} producto(s) ·{" "}
+                  {visibleRows.filter((r) => !r.unlimited).reduce((n, r) => n + r.quantity, 0)} u.
+                  {visibleRows.some((r) => r.unlimited) &&
+                    ` · ${visibleRows.filter((r) => r.unlimited).length} sin control`}
                 </span>
               </div>
             )}
@@ -242,19 +263,22 @@ export function FenixStockEditor({
                     <td
                       className={cn(
                         "px-4 py-2.5 text-right font-medium tabular-nums",
-                        r.quantity < 0 ? "text-rose-600" : "text-slate-700",
+                        r.unlimited ? "text-slate-400" : r.quantity < 0 ? "text-rose-600" : "text-slate-700",
                       )}
+                      title={r.unlimited ? "Sin control de cantidad" : undefined}
                     >
-                      {r.quantity}
+                      {r.unlimited ? "∞" : r.quantity}
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       <div className="flex justify-end gap-3">
-                        <button
-                          onClick={() => setKardexRow(r)}
-                          className="text-xs text-brand-700 hover:underline"
-                        >
-                          Movimientos
-                        </button>
+                        {!r.unlimited && (
+                          <button
+                            onClick={() => setKardexRow(r)}
+                            className="text-xs text-brand-700 hover:underline"
+                          >
+                            Movimientos
+                          </button>
+                        )}
                         {canEdit && (
                           <button
                             onClick={() => remove(r.id)}

@@ -422,7 +422,7 @@ async function withCurrentFenixEligibility(
 
   const stockPromise = sb
     .from("fenix_stock")
-    .select("org_id,city,product,sku,quantity")
+    .select("org_id,city,product,sku,quantity,unlimited")
     .in("org_id", orgIds);
   const orderIds = Array.from(
     new Set(rows.map((s) => s.order_id).filter((id): id is string => !!id)),

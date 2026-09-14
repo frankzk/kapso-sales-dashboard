@@ -8,6 +8,21 @@ const stock: FenixStockRow[] = [
 ];
 
 describe("buildFenixDemand", () => {
+  it("un renglón sin control de cantidad nunca falta, por mucha demanda que haya", () => {
+    const sinControl: FenixStockRow[] = [
+      { city: "lima", product: "Nails Repairing", sku: "818531465", quantity: 0, unlimited: true },
+    ];
+    const ships: DemandShipment[] = Array.from({ length: 50 }, () => ({
+      city: "Lima",
+      product: "Nails Repairing – Sérum para Uñas",
+    }));
+    const row = buildFenixDemand(sinControl, ships).find((r) => r.city === "lima")!;
+    expect(row.demand).toBe(50);
+    expect(row.shortfall).toBe(0);
+    expect(row.status).toBe("ok");
+    expect(row.unlimited).toBe(true);
+  });
+
   it("flags shortfall when demand exceeds stock in a covered city", () => {
     const ships: DemandShipment[] = [
       { city: "Cusco", product: "Mushroom Coffee 180g" },

@@ -126,7 +126,7 @@ export async function consumeFenixStockOnDelivery(
   const city = fenixStockCityKey(s.city);
   const { data: stock } = await admin
     .from("fenix_stock")
-    .select("id, city, product, sku, quantity")
+    .select("id, city, product, sku, quantity, unlimited")
     .eq("org_id", orgId);
   const cityRows = ((stock as (FenixStockRow & { id: string })[]) ?? []).filter(
     (r) => fenixStockCityKey(r.city) === city,
@@ -144,6 +144,9 @@ export async function consumeFenixStockOnDelivery(
   }
   const match = cityRows.find((r) => refs.some((ref) => stockCoversRef(r, ref)));
   if (!match) return;
+  // Sin control de cantidad no hay saldo que llevar: descontar dejaría un
+  // número negativo sin significado en el kardex.
+  if (match.unlimited) return;
 
   await recordStockMovement(admin, {
     stockId: match.id,

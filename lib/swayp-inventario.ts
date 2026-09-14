@@ -34,6 +34,8 @@ export interface FilaStock {
   product: string;
   sku: string | null;
   quantity: number;
+  /** Sin control de cantidad: el importador no lo toca. */
+  unlimited?: boolean;
 }
 
 /**
@@ -188,6 +190,8 @@ export interface PlanImportacion {
   altas: Alta[];
   /** Renglones que ya coincidían: nada que escribir. */
   sinCambio: number;
+  /** Renglones sin control de cantidad: el Excel no los gobierna. */
+  sinControl: number;
   /** Productos del Excel que no tienen dónde aterrizar. */
   huerfanos: Huerfano[];
   totalSwayp: number;
@@ -254,6 +258,17 @@ export function planearImportacion(
   let sinCambio = 0;
   let totalSwayp = 0;
 
+  // Un renglón sin control de cantidad no se ajusta ni se pone en 0: no es un
+  // conteo, es una declaración de que el producto existe en esa bodega. Se
+  // marca como tocado para que el barrido final tampoco lo baje.
+  let sinControl = 0;
+  for (const f of filasDeLaCiudad) {
+    if (f.unlimited) {
+      tocados.add(f.id);
+      sinControl++;
+    }
+  }
+
   for (const e of entradas) {
     totalSwayp += e.disponible;
     const skus = skusPorCodbar.get(e.codbar) ?? [];
@@ -282,6 +297,7 @@ export function planearImportacion(
       }
       continue;
     }
+    if (fila.unlimited) continue; // ya contado en sinControl; el Excel no lo gobierna
     tocados.add(fila.id);
     if (fila.quantity === e.disponible) {
       sinCambio++;
@@ -319,6 +335,7 @@ export function planearImportacion(
     ajustes,
     altas,
     sinCambio,
+    sinControl,
     huerfanos,
     totalSwayp,
     totalNuestro: filasDeLaCiudad.reduce((a, f) => a + f.quantity, 0),
@@ -346,6 +363,7 @@ export function resumenDelPlan(plan: PlanImportacion): string {
   }
   partes.push(`${plan.totalNuestro} → ${plan.totalSwayp} unidades`);
   if (plan.sinCambio) partes.push(`${plan.sinCambio} sin cambio`);
+  if (plan.sinControl) partes.push(`${plan.sinControl} sin control de cantidad, no se tocan`);
 
   if (plan.huerfanos.length) {
     const nombres = plan.huerfanos.slice(0, 5).map((h) => h.codbar);

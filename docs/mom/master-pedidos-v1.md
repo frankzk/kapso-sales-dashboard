@@ -2108,6 +2108,31 @@ de **bodega** y no de ciudad; hasta entonces no se inventa.
 La carga a mano sigue existiendo para lo que el Excel no cubre, pero es el
 parche: la fuente es el conteo de Swayp.
 
+### Stock sin control de cantidad (Lima)
+
+Lima entró a cobertura el 14-09-2026 y la operación decidió **no contar
+unidades** ahí: la bodega de Lima repone sola y lo que importa es *qué*
+productos despacha, no cuántos hay. Un renglón marcado «sin control de
+cantidad» (`fenix_stock.unlimited`) dice «este producto existe en esa bodega» y
+nada más:
+
+- las dos rejas —reprogramación y guía directa— lo dan por disponible sin mirar
+  la cantidad (una sola definición, `stockDisponible`, para que no discrepen);
+- la entrega no lo descuenta, porque no hay saldo que llevar;
+- el reporte de demanda nunca lo marca como faltante y la pantalla muestra ∞;
+- el importador del Excel de Swayp **no lo toca**: ni lo ajusta ni lo pone en 0
+  por no venir en el archivo;
+- el kardex manual lo rechaza: mover un saldo que no significa nada sería ruido.
+
+**Infinito no es «todo».** Un producto que no esté anotado en Lima sigue sin
+pasar la reja: para despachar por API hay que dar de alta el producto en Stock
+Swayp con la marca puesta (y vincularlo en Catálogo de productos, como en
+cualquier ciudad). Lo que se ahorra es el conteo, no el catálogo.
+
+**Es por renglón y no por ciudad** a propósito: mañana un producto de Lima puede
+pasar a contarse sin tocar a los demás, y una ciudad contada puede tener un
+producto que no se cuenta.
+
 Stock objetivo:
 
 ```text

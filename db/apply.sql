@@ -331,4 +331,6 @@
 \ir migrations/0163_meta_ads_heredar_producto_por_conjunto.sql
 \echo 'Applying 0164_shopify_product_images.sql'
 \ir migrations/0164_shopify_product_images.sql
+\echo 'Applying 0165_fenix_stock_unlimited.sql'
+\ir migrations/0165_fenix_stock_unlimited.sql
 \echo 'Done.'
