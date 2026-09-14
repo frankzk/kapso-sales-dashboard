@@ -12,6 +12,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyOrderNote, shopifyShippingAddress } from "@/lib/shopify-address";
+import { orderTotals, type OrderTotals } from "@/lib/order-totals";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
@@ -353,6 +354,13 @@ export interface OrderMasterDetail {
   guides: ShipmentRow[];
   timeline: TimelineEntry[];
   lineItems: OrderLineItem[];
+  /**
+   * Los importes del pedido tal como los manda Shopify (subtotal, descuento,
+   * envío, total). Se leen de `orders.raw` y NO se recalculan sumando líneas:
+   * un descuento por línea o un redondeo haría que Kapta diga un número y
+   * Shopify otro, y ante esa discrepancia la operación no sabe a cuál creerle.
+   */
+  totals: OrderTotals;
   address: ReturnType<typeof shopifyShippingAddress>;
   /** La nota que alguien escribió en el pedido de Shopify, tal cual. Suele
    *  llevar lo que Shopify no tiene dónde guardar —el DNI del destinatario, la
@@ -618,6 +626,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     guides,
     timeline,
     lineItems,
+    totals: orderTotals(orderRow?.raw, row.order_total),
     aliclikHealth,
     tasks,
     address: shopifyShippingAddress(orderRow?.raw),

@@ -81,6 +81,7 @@ import {
   type MasterSortKey,
 } from "@/lib/order-master-filters";
 import { buildMasterQuery } from "@/lib/master-query";
+import { OrderLineItems } from "@/components/order-line-items";
 import {
   ORDER_COVERAGE_LABEL,
   type OrderCoverage,
@@ -3133,19 +3134,16 @@ function OrderDrawer({
                 data-drawer-section="productos"
                 className="order-3 scroll-mt-28 rounded-xl border border-slate-200 bg-white p-4"
               >
-                <h3 className="mb-2 text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
-                  Productos
-                </h3>
-                <ul className="divide-y divide-slate-100 text-sm text-slate-700">
-                  {detail.lineItems.map((li, i) => (
-                    <li key={i} className="flex justify-between gap-3 py-2 first:pt-0 last:pb-0">
-                      <span className="min-w-0">{li.title}</span>
-                      <span className="shrink-0 rounded-md bg-slate-100 px-2 py-0.5 font-medium text-slate-600">
-                        ×{li.quantity}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+                <div className="mb-2 flex items-baseline justify-between gap-3">
+                  <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+                    Productos
+                  </h3>
+                  <p className="shrink-0 text-xs tabular-nums text-slate-500">
+                    {detail.lineItems.length}{" "}
+                    {detail.lineItems.length === 1 ? "producto" : "productos"}
+                  </p>
+                </div>
+                <OrderLineItems items={detail.lineItems} totals={detail.totals} />
               </section>
             )}
 
