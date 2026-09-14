@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { createClient } from "@supabase/supabase-js";
 import { campaignBreakdown, campaignDailyTrend, webNoAtribuido } from "@/lib/metrics";
 import type { AdMeta } from "@/lib/meta-ads";
+import { filtroCampanaEnUtm } from "@/lib/cod-cart-attribution";
 import type { AnuncioMeta, WebAdOrder } from "@/lib/cod-cart-attribution";
 import type { LeadRow, MetaAdPerformance, OrderRow } from "@/lib/types";
 
@@ -550,8 +552,35 @@ describe("el anuncio que solo vende por la web sigue siendo editable", () => {
   // A nivel de CAMPAÑA porque es lo que el pedido guarda (`utm_id`); el anuncio
   // concreto se deduce después y no siempre se puede.
   it("y añade el nuevo: un pedido mío cita su campaña", () => {
-    expect(bloque).toContain('.contains("utm_meta", [{ name: "utm_id", value: campaignId }])');
+    expect(bloque).toContain('.contains("utm_meta", filtroCampanaEnUtm(campaignId))');
     expect(bloque).toContain('.select("campaign_id")');
+  });
+
+  // ESTA ES LA PRUEBA QUE FALTABA. La de arriba comprueba que la línea existe;
+  // esta comprueba lo que la línea PRODUCE. La primera versión pasaba el array
+  // de JS, salió a producción, y las guardas de fuente la dieron por buena
+  // mientras la autorización fallaba para todo el mundo.
+  it("el filtro sale a PostgREST como contención jsonb, no como array", () => {
+    const sb = createClient("http://local", "anon");
+    const q = sb
+      .from("orders")
+      .select("id")
+      .contains("utm_meta", filtroCampanaEnUtm("120245666582420066")) as unknown as { url: URL };
+    expect(decodeURIComponent(q.url.searchParams.get("utm_meta")!)).toBe(
+      'cs.[{"name":"utm_id","value":"120245666582420066"}]',
+    );
+  });
+
+  // Y la trampa, escrita: `supabase-js` elige la sintaxis por el TIPO. Con el
+  // array de JS, `join(",")` sobre objetos da un filtro VÁLIDO que no casa con
+  // nada — cero filas, y quien la usa concluye que no hay permiso.
+  it("pasarle el array de JS lo rompe EN SILENCIO, y por eso va una cadena", () => {
+    const sb = createClient("http://local", "anon");
+    const q = sb
+      .from("orders")
+      .select("id")
+      .contains("utm_meta", [{ name: "utm_id", value: "120245666582420066" }]) as unknown as { url: URL };
+    expect(decodeURIComponent(q.url.searchParams.get("utm_meta")!)).toBe("cs.{[object Object]}");
   });
 
   // La RLS sigue siendo la frontera: la consulta de pedidos va por el cliente
