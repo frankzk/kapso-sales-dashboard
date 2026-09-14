@@ -2241,9 +2241,22 @@ descarta una ella misma:
 
 | Forma | Qué es |
 | --- | --- |
-| `contenido: "2 x AURE001"` | **La que usamos.** Texto con el CÓDIGO, el formato que pidieron: *«CANTIDAD X SKU … con el match exacto del sku»* |
-| `contenido: "2 x NOMBRE EXACTO"` | Texto con el nombre. *«Tiende a ser inestable porque se busca por nombre y no por código»* — Swayp |
-| `productos: [{codbar, cantidad, nombre}]` | Estructurada. Nos la describieron por escrito, pero **no está en su documentación** y al preguntar por el catálogo respondieron que «no está disponible para consumir por API». La duda sigue abierta, así que no se manda: un campo que quizá no procesan puede devolver 400 y dejar al envío sin guía |
+| `productos: [{codbar, cantidad, nombre}]` | **La que usamos.** Estructurada: es con la que Swayp descuenta por código |
+| `contenido: "2 x AURE001"` | **También la usamos.** Es obligatoria y es el texto que el mensajero lee. Lleva el CÓDIGO, el formato que pidieron: *«CANTIDAD X SKU … con el match exacto del sku»* |
+| `contenido: "2 x NOMBRE EXACTO"` | Texto con el nombre. *«Tiende a ser inestable porque se busca por nombre y no por código»* — Swayp. Es el respaldo para una tienda sin nada vinculado |
+
+Se mandan **las dos**, no una en vez de la otra: `contenido` es obligatorio y es
+lo que se imprime; `productos[]` es lo que descuenta el inventario.
+
+`productos[]` estuvo sin mandarse un tiempo y conviene saber por qué, porque el
+razonamiento sigue valiendo para el próximo campo no documentado: no figura en
+su documentación, y al preguntar por el catálogo su desarrollador respondió que
+«esa funcionalidad no está disponible para consumir por API» —una frase sobre el
+endpoint de LECTURA que dejaba la duda abierta sobre este campo—. Mandar algo
+que quizá no procesan podía devolver 400 y dejar al envío sin guía, así que se
+esperó. El **14-09-2026** mandaron un `curl` de ejemplo, suyo, que lo incluye:
+`"productos": [ { "codbar": "ABC123", "cantidad": 1, "nombre": "…" } ]`. Con eso
+dejó de ser una apuesta.
 
 Vamos por `codbar`. Buscar por nombre ata el descuento de stock a que su
 catálogo y el nuestro escriban igual un producto: cambian una tilde y las guías
@@ -2275,13 +2288,21 @@ manda el ítem con el código vacío ni se aproxima por nombre: eso dejaría una
 guías descontando stock y otras no, sin que se note — la misma razón por la que
 un ubigeo aproximado se rechaza (§11.3).
 
-**La bodega de origen se nombra, no se deduce.** Swayp opera cuatro bodegas
-—Arequipa, Trujillo, Juliaca-Puno y Piura— y el campo `idWarehouse` dice de cuál
-sale el paquete. Sin él lo decide Swayp: si acierta no nos enteramos, y si se
-equivoca descuenta del inventario de otra ciudad. **Juliaca y Puno comparten
-bodega**, así que el ubigeo de origen no basta para distinguirlas. El id va
-junto al remitente de esa ciudad en `SWAYP_SENDERS`, porque el remitente ya ES
-la bodega y separarlos dejaría dos sitios que pueden discrepar.
+**La bodega de origen: la nombra `ciudadRemitente`, y `idWarehouse` la confirma.**
+Swayp opera cinco bodegas —Arequipa, Trujillo, Juliaca-Puno, Piura y Lima— y el
+origen viaja como el **ubigeo** en `ciudadRemitente`. El `curl` de ejemplo que
+mandaron el 14-09-2026 no lleva `idWarehouse` en absoluto, y las guías de
+Arequipa salen sin él: **no es obligatorio para habilitar una ciudad**. El campo
+existe para no dejarle la elección a Swayp cuando el ubigeo no alcance; va junto
+al remitente de esa ciudad en `SWAYP_SENDERS`, porque el remitente ya ES la
+bodega y separarlos dejaría dos sitios que pueden discrepar.
+
+**El RUC del remitente puede ir vacío.** El mismo `curl` lleva
+`"nitRemitente": ""`. Exigirlo era una regla nuestra, y era cara: `parseSenders`
+valida ciudad por ciudad y descarta **en silencio** la que no pase, así que una
+bodega escrita sin RUC quedaba fuera y el aviso decía «No hay bodega Swayp
+configurada para …» sin insinuar cuál era el campo. Una ciudad perdida por una
+regla inventada es peor que un RUC vacío que a Swayp no le molesta.
 
 **El `idBusiness` deja de ser opcional en la práctica.** Swayp valida los
 productos contra un id único de tienda, así que sin ese campo es Swayp quien

@@ -6,6 +6,7 @@ import { Card, cn, OVER_TABLE_Z, STICKY_HEAD, TABLE_WRAP } from "@/components/ui
 import { FENIX_CITIES } from "@/lib/shipments";
 import type { DemandRow } from "@/lib/fenix-demand";
 import type { FenixStockRowDb, StoreSummary } from "@/lib/types";
+import type { BodegaSwaypResumen } from "@/lib/swayp-guide";
 import {
   deleteFenixStock,
   getFenixStockMovements,
@@ -24,11 +25,13 @@ export function FenixStockEditor({
   canEdit,
   stores,
   demand = [],
+  bodegas = [],
 }: {
   rows: FenixStockRowDb[];
   canEdit: boolean;
   stores: StoreSummary[];
   demand?: DemandRow[];
+  bodegas?: BodegaSwaypResumen[];
 }) {
   const router = useRouter();
   const [storeId, setStoreId] = useState<string>(stores[0]?.id ?? "");
@@ -107,6 +110,8 @@ export function FenixStockEditor({
           </p>
         </Card>
       )}
+
+      {canEdit && <BodegasSwayp bodegas={bodegas} />}
 
       {canEdit && <ImportarDeSwayp onDone={(m) => setMsg(m)} />}
 
@@ -294,6 +299,71 @@ const DEMAND_LABEL: Record<string, string> = {
  * doubles as the "prepare & send" checklist. Recomputed on every page load, so
  * it tracks the queue as order states change.
  */
+/**
+ * Qué bodegas ve la app en `SWAYP_SENDERS`, ciudad por ciudad.
+ *
+ * La variable es Secret en Vercel —de sólo escritura— y una ciudad mal escrita
+ * se descarta en silencio. Sin este cuadro, la única forma de saber qué había
+ * configurado era editar a ciegas y ver si Arequipa seguía emitiendo. Muestra
+ * los datos completos porque son los de nuestras bodegas, no credenciales: es
+ * exactamente lo que hay que copiar para reescribir la variable sin perder
+ * nada.
+ */
+function BodegasSwayp({ bodegas }: { bodegas: BodegaSwaypResumen[] }) {
+  if (!bodegas.length) return null;
+  const porApi = bodegas.filter((b) => b.porApi).length;
+  return (
+    <Card className="space-y-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-sm font-medium text-slate-800">Bodegas Swayp configuradas</p>
+        <p className="text-xs text-slate-500">
+          {porApi} de {bodegas.length} ciudades emiten por API
+        </p>
+      </div>
+      <div className={TABLE_WRAP}>
+        <table className="w-full text-xs">
+          <thead className={STICKY_HEAD}>
+            <tr className="text-left text-slate-500">
+              <th className="py-1 pr-3 font-medium">Ciudad</th>
+              <th className="py-1 pr-3 font-medium">Estado</th>
+              <th className="py-1 pr-3 font-medium">Nombre</th>
+              <th className="py-1 pr-3 font-medium">Dirección</th>
+              <th className="py-1 pr-3 font-medium">Teléfono</th>
+              <th className="py-1 pr-3 font-medium">Email</th>
+              <th className="py-1 pr-3 font-medium">RUC</th>
+              <th className="py-1 font-medium">idWarehouse</th>
+            </tr>
+          </thead>
+          <tbody>
+            {bodegas.map((b) => (
+              <tr key={b.city} className="border-t border-slate-100">
+                <td className="py-1 pr-3 font-medium capitalize text-slate-800">{b.city}</td>
+                <td className="py-1 pr-3">
+                  {b.porApi ? (
+                    <span className="text-emerald-700">por API</span>
+                  ) : b.configurada ? (
+                    <span className="text-amber-700">configurada, sin ubigeo</span>
+                  ) : (
+                    <span className="text-slate-400">sin bodega → Excel</span>
+                  )}
+                </td>
+                <td className="py-1 pr-3 text-slate-700">{b.nombre ?? "—"}</td>
+                <td className="py-1 pr-3 text-slate-700">{b.direccion ?? "—"}</td>
+                <td className="py-1 pr-3 font-mono text-slate-700">{b.telefono ?? "—"}</td>
+                <td className="py-1 pr-3 text-slate-700">{b.email ?? "—"}</td>
+                <td className="py-1 pr-3 font-mono text-slate-700">
+                  {b.nit === null ? "—" : b.nit === "" ? <span className="text-slate-400">vacío</span> : b.nit}
+                </td>
+                <td className="py-1 font-mono text-slate-700">{b.idWarehouse ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
 /**
  * Subir el "Inventario por bodega" que exporta Swayp y dejar esa ciudad igual
  * que allá.

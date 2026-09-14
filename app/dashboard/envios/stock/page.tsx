@@ -3,6 +3,9 @@ import { getAccessibleStores, getAdminOrgs } from "@/lib/access";
 import { EmptyState } from "@/components/ui";
 import { FenixStockEditor } from "@/components/fenix-stock";
 import { buildFenixDemand, type DemandShipment } from "@/lib/fenix-demand";
+import { env } from "@/lib/env";
+import { FENIX_CITIES } from "@/lib/shipments";
+import { parseSenders, resumenDeBodegas } from "@/lib/swayp-guide";
 import type { FenixStockRowDb, OrderLineItem } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -60,5 +63,19 @@ export default async function FenixStockPage() {
     demand = buildFenixDemand(rows, demandShipments);
   }
 
-  return <FenixStockEditor rows={rows} canEdit={canEdit} stores={stores} demand={demand} />;
+  // Qué bodegas ve la app en SWAYP_SENDERS. Sólo para admins: es la única
+  // forma de leer una variable Secret de Vercel sin editarla a ciegas.
+  const bodegas = canEdit
+    ? resumenDeBodegas(parseSenders(env.swaypSenders()), FENIX_CITIES)
+    : [];
+
+  return (
+    <FenixStockEditor
+      rows={rows}
+      canEdit={canEdit}
+      stores={stores}
+      demand={demand}
+      bodegas={bodegas}
+    />
+  );
 }
