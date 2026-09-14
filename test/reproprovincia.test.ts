@@ -274,9 +274,11 @@ describe("y la macroetapa la aplica IGUAL", () => {
   });
 
   it("la versión del MOM sube, para que el cron reconcilie el histórico", () => {
-    // v1.11 (10-09-2026): «pagado por web» pasó a ser solo la pasarela
-    // confirmada del checkout; el histórico se reconcilia con el bump.
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.11");
+    // Esta guarda se reescribe con CADA cambio que mueva filas que nadie tocó:
+    // no prueba comportamiento, avisa de que hay que subir la versión.
+    // v1.12 (14-09-2026): el candado del cambio manual cede ante una guía
+    // registrada después, y eso recoloca 31 pedidos sin que nada los toque.
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.12");
   });
 });
 

@@ -278,6 +278,12 @@ function wasDispatched(g: GuideSnapshot): boolean {
 
 const AGENCY_COURIERS = new Set(["shalom", "olva"]);
 
+/** Eventos de salida que SIEMPRE los escribe una persona, y por eso pueden
+ *  vencer a un override anterior. Medido sobre 30 días: los 2.589
+ *  `guide_registered` y los 1.083 `guide_created` llevan actor; los 15.969
+ *  `courier_status` —el camino automático— no lo llevan nunca. */
+const HUMAN_GUIDE_EVENTS = new Set(["guide_registered", "guide_created"]);
+
 export function isAgencyCourier(courier: string | null | undefined): boolean {
   return AGENCY_COURIERS.has((courier ?? "").toLowerCase());
 }
@@ -506,7 +512,40 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
   const cancelledAfterOverride = Boolean(
     override && order.cancelled_at && order.cancelled_at > override.occurred_at,
   );
-  if (override && !cancelledAfterOverride) {
+  // Y REGISTRAR UNA SALIDA, por el mismo argumento (2026-09-14).
+  //
+  // El candado cedía ante la anulación en Shopify y ante nada más. Registrar la
+  // guía también lo hace una PERSONA: los `guide_registered` y `guide_created`
+  // de los últimos 30 días llevan actor los 3.672, y los 15.969 `courier_status`
+  // —el camino automático, que es del que protege el candado— no lo llevan ni
+  // uno. El `kind` ya distingue lo que hay que distinguir.
+  //
+  // QUÉ PASABA SIN ESTO. Ocho pedidos de Agencia se marcaron a mano
+  // «disponible para recojo» y días después se les registró la guía Shalom. El
+  // candado congelaba el estado legado en `en_proceso`, y como
+  // `recogido_sin_pago_completo` exige `legacy.general === "entregado"`
+  // (order-macro-stage.ts), figuraban como «En curso · recibido por courier»
+  // estando recogidos. Medido: 11 pedidos, S/2.054, de los que S/1.062 estaban
+  // recogidos y SIN COBRAR, escondidos detrás del candado. El más viejo llevaba
+  // así desde el 4 de agosto.
+  //
+  // ALCANCE MEDIDO antes de tocarlo: de 1.418 pedidos con override, 472 tienen
+  // registro de guía y solo 31 lo tienen POSTERIOR. De esos 31, el único cuyo
+  // estado manual se pierde de verdad es #AUR174133 —marcado «devuelto» a las
+  // 16:56 y con la guía de Aliclik registrada a las 20:15 del mismo día, que
+  // acabó entregada y sin retorno—: el manual era prematuro y ceder es lo
+  // correcto. Los demás o no cambian o pasan a lo que dice su guía.
+  //
+  // No gana un privilegio nuevo: el override deja de tapar, y el pedido baja por
+  // la cadena normal — «entregado es pegajoso» y «devuelto exige evidencia»
+  // siguen por delante, igual que en el caso de la anulación.
+  const guideRegisteredAfterOverride = Boolean(
+    override &&
+      events.some(
+        (event) => HUMAN_GUIDE_EVENTS.has(event.kind) && event.occurred_at > override.occurred_at,
+      ),
+  );
+  if (override && !cancelledAfterOverride && !guideRegisteredAfterOverride) {
     return {
       ...rollup,
       general: override.general_status,
