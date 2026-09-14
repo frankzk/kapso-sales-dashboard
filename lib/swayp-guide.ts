@@ -189,6 +189,55 @@ export function esCiudadPorApiSwayp(
   return !!senders[city] && !!warehouseUbigeo(city);
 }
 
+/** Una fila del cuadro «Bodegas Swayp» de la pantalla de Stock. */
+export interface BodegaSwaypResumen {
+  city: string;
+  /** Hay remitente válido en `SWAYP_SENDERS`. */
+  configurada: boolean;
+  /** Configurada Y con ubigeo de bodega: la ciudad emite por API. */
+  porApi: boolean;
+  nombre: string | null;
+  direccion: string | null;
+  telefono: string | null;
+  email: string | null;
+  nit: string | null;
+  idWarehouse: number | null;
+}
+
+/**
+ * Qué bodegas están configuradas y con qué datos, ciudad por ciudad.
+ *
+ * PARA QUÉ. `SWAYP_SENDERS` vive en Vercel como variable **Secret**: de sólo
+ * escritura, no se puede volver a leer. Y `parseSenders` descarta en silencio
+ * la ciudad que no valide. Juntas, esas dos cosas hacían que la única forma de
+ * saber qué había configurado fuera romperlo: editar la variable a ciegas y
+ * mirar si Arequipa seguía emitiendo. Este cuadro lee lo que la app realmente
+ * ve, que es lo único que cuenta.
+ *
+ * Devuelve TODAS las ciudades de la cobertura, no sólo las configuradas: la
+ * ausencia es el dato («Juliaca: sin bodega → Excel»).
+ */
+export function resumenDeBodegas(
+  senders: Record<string, SwaypSender>,
+  ciudades: readonly string[],
+): BodegaSwaypResumen[] {
+  const todas = [...new Set([...ciudades, ...Object.keys(senders)])];
+  return todas.map((city) => {
+    const s = senders[city];
+    return {
+      city,
+      configurada: !!s,
+      porApi: esCiudadPorApiSwayp(city, senders),
+      nombre: s?.nombre ?? null,
+      direccion: s?.direccion ?? null,
+      telefono: s?.telefono ?? null,
+      email: s?.email ?? null,
+      nit: s ? s.nit : null,
+      idWarehouse: s?.idWarehouse ?? null,
+    };
+  });
+}
+
 /**
  * Arma el payload de creación, o explica por qué no se puede.
  *

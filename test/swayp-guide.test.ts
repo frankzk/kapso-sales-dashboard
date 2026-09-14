@@ -5,6 +5,7 @@ import {
   esCiudadPorApiSwayp,
   parseSenders,
   PLACEHOLDER_NIT,
+  resumenDeBodegas,
   type SwaypSender,
 } from "@/lib/swayp-guide";
 
@@ -385,6 +386,42 @@ describe("idWarehouse", () => {
       expect(j.input.ciudadRemitente).toBe(pu.input.ciudadRemitente); // misma bodega
       expect(j.input.ciudadDestinatario).not.toBe(pu.input.ciudadDestinatario); // distinto destino
     }
+  });
+});
+
+describe("resumenDeBodegas — el cuadro que reemplaza editar a ciegas", () => {
+  it("lista TODAS las ciudades de cobertura, configuradas o no", () => {
+    // La ausencia es el dato: «juliaca: sin bodega → Excel».
+    const r = resumenDeBodegas({ arequipa: SENDER }, ["arequipa", "juliaca"]);
+    expect(r.map((b) => [b.city, b.configurada, b.porApi])).toEqual([
+      ["arequipa", true, true],
+      ["juliaca", false, false],
+    ]);
+  });
+
+  it("muestra los datos completos, que es lo que hay que copiar para reescribir la variable", () => {
+    const [aqp] = resumenDeBodegas({ arequipa: SENDER }, ["arequipa"]);
+    expect(aqp).toMatchObject({
+      nombre: SENDER.nombre,
+      direccion: SENDER.direccion,
+      telefono: SENDER.telefono,
+      email: SENDER.email,
+    });
+  });
+
+  it("distingue RUC vacío de RUC ausente", () => {
+    const [con] = resumenDeBodegas({ arequipa: { ...SENDER, nit: "" } }, ["arequipa"]);
+    const [sin] = resumenDeBodegas({}, ["arequipa"]);
+    expect(con!.nit).toBe("");
+    expect(sin!.nit).toBeNull();
+  });
+
+  it("una ciudad configurada que no está en la cobertura también aparece", () => {
+    // Un dedazo («arequipaa») no debe desaparecer del cuadro: verlo es la
+    // forma de notarlo.
+    const r = resumenDeBodegas({ arequipaa: SENDER }, ["arequipa"]);
+    expect(r.map((b) => b.city).sort()).toEqual(["arequipa", "arequipaa"]);
+    expect(r.find((b) => b.city === "arequipaa")?.porApi).toBe(false);
   });
 });
 
