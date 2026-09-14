@@ -21,6 +21,8 @@ import {
 import {
   AUTO_FOLLOWUP_STATUSES,
   CLAIM_TTL_MINUTES,
+  MAX_OPEN_LEADS,
+  claimsBlocking,
   canDispositionLead,
   categoryOf,
   defaultFollowupAt,
@@ -431,6 +433,33 @@ export async function claimLead(leadId: string): Promise<LeadActionState> {
 
   const admin = createAdminSupabase();
   const cutoff = new Date(Date.now() - CLAIM_TTL_MINUTES * 60_000).toISOString();
+
+  // EL TOPE: MAX_OPEN_LEADS reservas vivas por asesora. Se cuentan las suyas
+  // dentro del TTL, sin la de este lead —reabrir uno propio no cuenta— y con
+  // nombre, para que el aviso diga cuáles tiene que soltar y no solo «no».
+  //
+  // Es leer-y-luego-escribir, no atómico: dos pestañas que tomen a la vez
+  // pueden quedar en tres. La ventana es de milisegundos, el daño dura lo que
+  // el TTL, y cerrarlo del todo exigiría una función en la base para un tope
+  // que es de cortesía. Se acepta y se deja escrito.
+  const { data: mine } = await admin
+    .from("leads")
+    .select("id,name,phone,claimed_by,claimed_at")
+    .eq("claimed_by", ctx.userId)
+    .gt("claimed_at", cutoff)
+    .neq("id", leadId);
+  type Mine = { id: string; name: string | null; phone: string | null; claimed_by: string | null; claimed_at: string | null };
+  // La consulta ya filtra por asesora, TTL y lead; `claimsBlocking` vuelve a
+  // aplicar la misma regla en memoria para que la prueba pura y la acción no
+  // puedan discrepar.
+  const abiertos = claimsBlocking((mine ?? []) as Mine[], ctx.userId, leadId);
+  if (abiertos.length >= MAX_OPEN_LEADS) {
+    const nombres = abiertos.map((l) => l.name?.trim() || l.phone || "un lead").join(" y ");
+    return {
+      error: `Ya tienes ${abiertos.length} leads abiertos (${nombres}). Cierra uno para tomar este.`,
+    };
+  }
+
   // NOTE: keep this update on the CORE columns only. Opening any lead calls
   // claimLead, so it must never depend on the Yape-routing columns (a lead that
   // gets claimed leaves the rotation anyway — listYapeAlerts/reconcile exclude
