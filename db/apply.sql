@@ -327,4 +327,6 @@
 \ir migrations/0161_flowcl_store_credentials.sql
 \echo 'Applying 0162_rider_daily_pay.sql'
 \ir migrations/0162_rider_daily_pay.sql
+\echo 'Applying 0163_meta_ads_heredar_producto_por_conjunto.sql'
+\ir migrations/0163_meta_ads_heredar_producto_por_conjunto.sql
 \echo 'Done.'
