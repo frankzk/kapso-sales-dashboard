@@ -10,6 +10,7 @@ import {
   type StoreScope,
 } from "@/lib/leads-access";
 import {
+  activeClaimHolders,
   isLeadGestion,
   isLeadSegment,
   isQueueState,
@@ -20,6 +21,7 @@ import {
 } from "@/lib/leads";
 import { EmptyState } from "@/components/ui";
 import { getAdProductMap } from "@/lib/ad-products-access";
+import { resolveAgentNames } from "@/lib/agent-names";
 import { LeadsBoard } from "@/components/leads";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
@@ -135,13 +137,18 @@ async function LeadsContent({
   const adProductsPromise = leadsPromise.then((rows) =>
     getAdProductMap(scope, rows.map((l) => l.ad_id)),
   );
-  const [snapshot, leads, user, adNames, waNumbers, adProductMap] = await Promise.all([
+  // Quién tiene tomado qué. La fila trae `claimed_by` (un id) y la etiqueta
+  // «Tomado» sola obligaba a abrir el lead para descubrir a quién preguntarle.
+  // Solo se resuelven las reservas vivas: una decena de asesoras, no la cola.
+  const agentNamesPromise = leadsPromise.then((rows) => resolveAgentNames(activeClaimHolders(rows)));
+  const [snapshot, leads, user, adNames, waNumbers, adProductMap, agentNames] = await Promise.all([
     snapshotPromise,
     leadsPromise,
     userPromise,
     adNamesPromise,
     waNumbersPromise,
     adProductsPromise,
+    agentNamesPromise,
   ]);
 
   return (
@@ -157,6 +164,7 @@ async function LeadsContent({
       leads={leads}
       adNames={adNames}
       waNumbers={waNumbers}
+      agentNames={agentNames}
       adDeclarations={Object.fromEntries(adProductMap)}
       currency={currency}
       timezone={timezone}

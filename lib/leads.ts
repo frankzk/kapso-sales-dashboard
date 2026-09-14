@@ -849,6 +849,24 @@ export function claimsBlocking<T extends ClaimLike>(
   );
 }
 
+/**
+ * Quiénes tienen una reserva viva en esta lista, sin repetir.
+ *
+ * Es lo único que la cola necesita resolver a nombre: son a lo sumo tantas
+ * asesoras como hay conectadas (una decena), nunca los ~2.500 leads. Las
+ * reservas vencidas no cuentan, igual que no marcan la fila como tomada.
+ */
+export function activeClaimHolders(
+  claims: Iterable<Pick<ClaimLike, "claimed_by" | "claimed_at">>,
+  now: Date = new Date(),
+): string[] {
+  const ids = new Set<string>();
+  for (const c of claims) {
+    if (c.claimed_by && isClaimActive(c.claimed_at, now)) ids.add(c.claimed_by);
+  }
+  return [...ids];
+}
+
 /** ¿El tope impide tomar `leadId`? */
 export function claimBlockedByCap(
   claims: ClaimLike[],
