@@ -2045,6 +2045,59 @@ Una salida Swayp puede coexistir con la devolución Aliclik. En Reproprovincia
 Swayp se puede repetir, siempre con una salida, guía y QR nuevos, dentro del
 máximo global.
 
+### De dónde sale el stock: el conteo de Swayp, no la carga a mano
+
+`fenix_stock` se llenaba a mano y se fue separando de la realidad sin que nada
+avisara. Medido el 14-09-2026 contra dos exportaciones reales del panel:
+
+| ciudad | referencias nuestras | de Swayp | unidades nuestras | de Swayp |
+| --- | --- | --- | --- | --- |
+| Trujillo | 25 | 17 | 177 | 116 |
+| Juliaca | 19 | 7 | 185 | 165 |
+
+Esa tabla es la reja que decide si el botón deja crear la guía, así que un saldo
+fantasma no es un número feo en una pantalla: **autoriza guías que Swayp después
+rebota por falta de inventario** (su motivo 18), con el pedido ya prometido al
+cliente. El caso que lo destapó fue #KP123585, Ethiopian Oil en Juliaca: nuestra
+tabla decía 25 unidades y esa bodega no tiene el producto.
+
+La fuente pasa a ser la exportación de Swayp (**Stock → Inventario**, elegir
+bodega, «Enviar a Excel»), que se sube en Stock Swayp. Reglas:
+
+- **Un archivo por bodega**, y la ciudad sale de la columna `Bodega` del propio
+  archivo. No hay selector: elegir la ciudad a mano es la forma de importar
+  Trujillo sobre Juliaca y poner a cero una ciudad entera.
+- **Sólo se toca la ciudad del archivo.** Nuestra tabla cubre nueve ciudades y
+  Swayp tiene cinco bodegas: Cusco, Huancayo, Ica, Chiclayo y Chimbote se
+  abastecen de otra forma y un importador que «limpiara lo que no vino» las
+  vaciaría de un plumazo.
+- **Lo que Swayp no lista queda en 0**, no se borra el renglón. La exportación de
+  una bodega es su inventario completo; si una referencia no aparece, esa bodega
+  no la tiene. El producto sigue existiendo y mañana puede reponerse.
+- **Lo que Swayp tiene y la ciudad no tenía anotado se da de alta**, copiando la
+  etiqueta con la que ya nombramos ese SKU en otra ciudad. Sin esto se perdían
+  34 unidades reales sólo en Trujillo (AURE008 y AURE014). La etiqueta se copia y
+  no se inventa porque `product` es lo que se cruza contra `shipments.product`:
+  un renglón llamado «SUPER HUMAN FOCUS» sería stock que existe y nunca se
+  encuentra.
+- **El emparejamiento es por `codbar` vía Catálogo de productos**, nunca por
+  nombre. Los títulos de Shopify y los de Swayp no coinciden («SUPER HUMAN
+  Ethiopian Black Seed Oil – Aceite…» contra «ETHIOPIAN OIL»). Un código sin
+  vincular se reporta con su nombre; no se adivina.
+- **Se toma la columna `Disponible`**, no `En bodega`: la segunda incluye lo
+  reservado para guías ya emitidas, que no se puede volver a prometer.
+- Todo pasa por el kardex como `ajuste` (o `entrada` en las altas), así que el
+  saldo conserva su historial y se puede responder «¿por qué bajó esto?».
+
+**Juliaca y Puno comparten una sola bodega** (ubigeo `211101`) y el importador la
+escribe sólo en `juliaca`. Poner las mismas unidades también en `puno` haría que
+un mismo frasco habilite dos guías en dos ciudades — el sobreprometer que esto
+viene a cerrar. Servir Puno desde esa bodega necesita que la tabla tenga concepto
+de **bodega** y no de ciudad; hasta entonces no se inventa.
+
+La carga a mano sigue existiendo para lo que el Excel no cubre, pero es el
+parche: la fuente es el conteo de Swayp.
+
 Stock objetivo:
 
 ```text
