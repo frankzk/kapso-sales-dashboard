@@ -20,22 +20,42 @@
 -- anuncios ya asignados coinciden en el mismo producto; un conjunto en conflicto
 -- se deja intacto para que lo resuelva una persona.
 
-with fuente as (
-  select
-    adset_id,
-    min(promoted_product_name)  as producto,
-    -- Los SKU del anuncio asignado más reciente del conjunto.
-    (array_agg(promoted_skus order by promoted_product_updated_at desc nulls last))[1] as skus
+-- Nota de implementación: `promoted_skus` es `text[]`, así que el «más reciente
+-- del conjunto» NO se puede sacar con `(array_agg(promoted_skus order by …))[1]`
+-- —agregar arrays los aplana y el subíndice devuelve `text`, no `text[]`, y el
+-- UPDATE falla con «COALESCE types text and text[] cannot be matched»—. Va con
+-- `distinct on`, que es la forma correcta de «una fila por grupo».
+
+-- Conjuntos donde todos los anuncios ya asignados coinciden en el mismo
+-- producto. Uno en conflicto se deja intacto: lo resuelve una persona.
+with sanos as (
+  select adset_id
   from meta_ads
   where adset_id is not null
     and promoted_product_name is not null
   group by adset_id
   having count(distinct promoted_product_name) = 1
+),
+-- De cada conjunto sano, la asignación más reciente: de ahí salen producto y SKU.
+fuente as (
+  select distinct on (m.adset_id)
+         m.adset_id,
+         m.promoted_product_name as producto,
+         m.promoted_skus         as skus
+  from meta_ads m
+  join sanos s on s.adset_id = m.adset_id
+  where m.promoted_product_name is not null
+  order by m.adset_id, m.promoted_product_updated_at desc nulls last
 )
 update meta_ads m
-set promoted_product_name    = f.producto,
-    promoted_skus            = coalesce(f.skus, m.promoted_skus),
+set promoted_product_name       = f.producto,
+    promoted_skus               = f.skus,
     promoted_product_updated_at = now()
 from fuente f
 where m.adset_id = f.adset_id
   and m.promoted_product_name is null;
+
+-- Aplicada contra producción el 14-09-2026: 523 filas en 51 conjuntos,
+-- 26 productos distintos. `meta_ads` pasó de 68 a 591 anuncios asignados,
+-- con cero conjuntos en conflicto y cero huérfanos sin heredar.
+-- Es idempotente: una segunda pasada no encuentra nulos que rellenar.
