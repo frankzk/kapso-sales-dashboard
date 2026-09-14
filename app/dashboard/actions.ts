@@ -44,12 +44,51 @@ export async function saveAdPromotedProduct(input: {
   const skus = [...new Set(input.skus.map((sku) => sku.trim().toUpperCase()).filter(Boolean))];
   if (!adId || !productName) return { ok: false, error: "Indica el anuncio y el producto promovido." };
 
-  // Authorization is established through a lead visible under the caller's RLS.
+  // AUTORIZACIÓN POR DOS CAMINOS, y el segundo no es un añadido: sin él este
+  // formulario es inusable para 3.314 de los 3.594 anuncios de las campañas que
+  // venden.
+  //
+  // El de siempre es «un lead MÍO cita este anuncio», y era prueba suficiente
+  // cuando toda fila del panel nacía de una conversación de WhatsApp. Los
+  // anuncios que venden por el carrito COD de la web no producen NINGÚN lead
+  // (lib/cod-cart-attribution.ts), así que desde que esas filas aparecen en el
+  // panel —con sus pedidos y su ROAS— el guardado les contestaba «No tienes
+  // acceso a este anuncio», que además es falso: son suyos.
+  //
+  // El segundo camino es el mismo estándar aplicado al canal nuevo: «un PEDIDO
+  // mío cita su campaña». Va a nivel de campaña porque es lo que el pedido
+  // guarda (`utm_id`); el anuncio concreto se deduce después y no siempre. Sigue
+  // acotado por la RLS del llamante igual que el primero.
   const sb = await createServerSupabase();
-  const { data: visibleLead } = await sb.from("leads").select("id").eq("ad_id", adId).limit(1).maybeSingle();
-  if (!visibleLead) return { ok: false, error: "No tienes acceso a este anuncio." };
-
   const admin = createAdminSupabase();
+  const { data: visibleLead } = await sb.from("leads").select("id").eq("ad_id", adId).limit(1).maybeSingle();
+  let authorized = Boolean(visibleLead);
+  if (!authorized) {
+    // `meta_ads` no es legible bajo RLS (0034), así que la campaña del anuncio
+    // se busca con el cliente de servicio. No descubre nada: el ad_id lo trajo
+    // el llamante, y lo único que se hace con la campaña es interrogar SUS
+    // pedidos.
+    const { data: ad } = await admin
+      .from("meta_ads")
+      .select("campaign_id")
+      .eq("ad_id", adId)
+      .maybeSingle();
+    const campaignId = (ad as { campaign_id?: string | null } | null)?.campaign_id ?? null;
+    if (campaignId) {
+      const { data: visibleOrder } = await sb
+        .from("orders")
+        .select("id")
+        // `utm_meta is not null` lo implica el contains, pero es lo que lleva la
+        // consulta al índice parcial de la 0156 en vez de a un recorrido entero.
+        .not("utm_meta", "is", null)
+        .contains("utm_meta", [{ name: "utm_id", value: campaignId }])
+        .limit(1)
+        .maybeSingle();
+      authorized = Boolean(visibleOrder);
+    }
+  }
+  if (!authorized) return { ok: false, error: "No tienes acceso a este anuncio." };
+
   const { error } = await admin.from("meta_ads").upsert(
     {
       ad_id: adId,
