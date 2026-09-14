@@ -24,6 +24,7 @@
       "path": "/api/cron/aliclik-catalog",
       "schedule": "0 9 * * *"
     },
+    { "path": "/api/cron/shopify-product-images", "schedule": "30 9 * * *" },
     {
       "path": "/api/cron/aliclik-reconcile",
       "schedule": "*/20 * * * *"

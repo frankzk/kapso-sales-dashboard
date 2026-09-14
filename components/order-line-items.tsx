@@ -17,10 +17,10 @@ import type { OrderLineItem } from "@/lib/types";
  * variante es un detalle que aparece cuando existe y no una línea fija que
  * quedaría vacía en cuatro de cada cinco filas.
  *
- * LA MINIATURA ES UN HUECO A PROPÓSITO. Shopify no manda imagen en el line item
- * —0 de 15.726— y no hay tabla de productos que la guarde, así que hoy se pinta
- * un marcador con la inicial. El hueco se dibuja igual para que traer la imagen
- * mañana sea un cambio de datos y no un rediseño de la fila.
+ * LA MINIATURA viene del espejo `shopify_product_images` (migración 0164):
+ * Shopify no manda imagen en el line item —0 de 15.726— así que se espeja el
+ * catálogo aparte y se adjunta al leer el pedido. Cuando no hay foto, la fila
+ * degrada a la inicial del producto sin cambiar de forma.
  */
 
 /** Todos los pedidos son PEN (19.553 de 19.553 en 90 días). */
@@ -30,18 +30,39 @@ function soles(value: number | null): string {
 }
 
 /**
- * El marcador de la foto que todavía no tenemos.
+ * La miniatura, y su respaldo.
  *
- * No es un icono genérico repetido: lleva la inicial del producto, así que dos
- * líneas distintas se distinguen de un vistazo aunque ninguna tenga imagen —que
- * es exactamente para lo que sirve una miniatura en una lista.
+ * La foto viene del espejo `shopify_product_images` (migración 0164), porque
+ * Shopify no la manda en el line item del pedido. Tres casos distintos caen en
+ * el mismo respaldo y está bien: un producto sin foto de catálogo, uno borrado
+ * del catálogo, y uno que el cron todavía no espejó.
+ *
+ * El respaldo no es un icono genérico repetido: lleva la inicial del producto,
+ * así que dos líneas se distinguen de un vistazo aunque ninguna tenga imagen —
+ * que es exactamente para lo que sirve una miniatura en una lista.
  */
-function Thumb({ title }: { title: string }) {
+function Thumb({ title, src }: { title: string; src?: string | null }) {
   const initial = title.trim().charAt(0).toUpperCase() || "?";
+  if (src) {
+    return (
+      // Sin `next/image` a propósito: exigiría declarar el dominio del CDN de
+      // Shopify en la configuración, y acá no hay nada que optimizar —la imagen
+      // ya viene servida y se pinta a 44 px.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={src}
+        // La foto REPITE el título que está al lado; anunciarla sería leerlo dos
+        // veces. Decorativa para el lector de pantalla, útil para el ojo.
+        alt=""
+        loading="lazy"
+        className="h-11 w-11 shrink-0 rounded-lg border border-slate-200 bg-white object-cover"
+      />
+    );
+  }
   return (
     <span
       aria-hidden="true"
-      className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-400"
+      className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-500"
     >
       {initial}
     </span>
@@ -84,7 +105,7 @@ export function OrderLineItems({
               key={`${item.variant_id ?? item.sku ?? item.title}-${index}`}
               className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0"
             >
-              <Thumb title={item.title || "?"} />
+              <Thumb title={item.title || "?"} src={item.image_url} />
 
               <div className="min-w-0 flex-1">
                 <p className="text-sm leading-5 text-slate-800">
