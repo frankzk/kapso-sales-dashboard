@@ -851,7 +851,9 @@ describe("los DOS botones de guía Fenix resuelven el nombre igual", () => {
   it("el servidor hace la MISMA resolución, no solo el botón", () => {
     // Un botón habilitado que el servidor rechaza es peor que un botón apagado.
     const server = readFileSync(resolve(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8");
-    const i = server.indexOf("const guideCode = rescheduleGuideCode(");
+    // El nombre de la variable cambió a `localCode` cuando la guía pasó a poder
+    // venir de Swayp; lo que se fija acá es el argumento, no el nombre.
+    const i = server.indexOf("rescheduleGuideCode(orderName,");
     expect(i).toBeGreaterThan(-1);
     expect(server.slice(Math.max(0, i - 700), i)).toContain("effectiveOrderName(");
   });

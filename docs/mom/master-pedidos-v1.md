@@ -2152,6 +2152,23 @@ bodega, Swayp recibiría una guía que su almacén no puede armar. Si falta
 cualquier ítem, el envío cae al código local con el motivo —no se bloquea la
 reprogramación, que antes de esto no validaba nada—.
 
+**Los TRES caminos que crean una guía Swayp, y cuál pide número.** Reprogramar
+un envío pendiente y recuperar uno anulado o devuelto terminan igual —una guía
+nueva a una fecha nueva—, así que los dos le piden el número a Swayp. El tercero,
+el alta manual, NO: ahí el operador pega un código que ya generó en el panel de
+Swayp, y pedir otro crearía un segundo paquete.
+
+| Camino | ¿Pide número a Swayp? |
+| --- | --- |
+| Reprogramar un envío pendiente | Sí |
+| Recuperar una guía anulada o devuelta | Sí |
+| Alta manual con código escrito a mano | No — ya existe |
+
+La asimetría no es gratuita y por eso está probada: el camino de guías anuladas
+se quedó sin API durante semanas cuando se conectó la primera vez, y nadie lo
+notó porque la guía seguía saliendo con código local, que es lo que salía antes.
+Una vía que nunca se entera de una regla nueva no parece rota.
+
 **El destino lo pone la GUÍA, no el pedido.** Al reprogramar, la salida ya
 existe y su destino es mejor dato que el del pedido por tres razones: es el que
 el courier usó, es el que la operadora ve en el drawer, y es el que ella puede

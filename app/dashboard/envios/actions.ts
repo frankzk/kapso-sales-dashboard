@@ -1236,8 +1236,8 @@ export async function reprogramCancelledShipmentException(
     linkedOrderName = (linked as { name: string | null } | null)?.name ?? null;
   }
   const orderName = effectiveOrderName(current.order_name, linkedOrderName);
-  const guideCode = rescheduleGuideCode(orderName, input.nextFollowupAt);
-  if (!guideCode) {
+  const localCode = rescheduleGuideCode(orderName, input.nextFollowupAt);
+  if (!localCode) {
     return { error: "Este envío no tiene N° de pedido para generar automáticamente la nueva guía Swayp." };
   }
 
@@ -1261,11 +1261,39 @@ export async function reprogramCancelledShipmentException(
     };
   }
 
+  // El número lo emite Swayp, igual que en la reprogramación normal. Este camino
+  // se quedó fuera cuando se conectó la API (#512) y era un olvido, no una
+  // decisión: recuperar un pedido devuelto termina igual que reprogramar uno
+  // pendiente —una guía nueva a una fecha nueva— y no hay razón para que una
+  // nazca en Swayp y la otra haya que cargarla a mano al Excel.
+  //
+  // Va DESPUÉS de la reja de stock a propósito: pedirle un número a Swayp para
+  // un envío que vamos a rechazar por falta de inventario dejaría una guía
+  // huérfana en su sistema, y la API no tiene forma de deshacerla.
+  const viaApi = await swaypGuideForReprogram(
+    admin,
+    shipmentId,
+    current.order_id,
+    input.nextFollowupAt,
+    note,
+  );
+  const guideCode = viaApi.ok ? String(viaApi.guia) : localCode;
+  const swaypNotice = viaApi.ok
+    ? " Emitida por Swayp."
+    : env.swaypEnabled()
+      ? ` Swayp no la emitió (${viaApi.reason}); quedó con código manual.`
+      : "";
+
   const auditNote = `Excepción sobre guía anulada ${current.guide_code}. Motivo: ${note}`;
   const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode, {
     childNextFollowupAt: input.nextFollowupAt,
     expectedSourceStatus: "anulado",
     parentAuditNote: `${auditNote}. Nueva guía Swayp: ${guideCode}.`,
+    // Sin esto la hija tendría el número correcto en `guide_code` y
+    // `swayp_guide` nulo — y el webhook busca por esa columna, así que el envío
+    // se quedaría En ruta para siempre por más que el mensajero reportara.
+    swaypGuide: viaApi.ok ? String(viaApi.guia) : null,
+    swaypState: viaApi.ok ? viaApi.idEstado : null,
   });
   if ("error" in spun) return { error: spun.error };
 
@@ -1281,7 +1309,9 @@ export async function reprogramCancelledShipmentException(
 
   revalidatePath("/dashboard/envios");
   return {
-    notice: `Excepción registrada. La guía anulada quedó en el historial y se creó ${spun.guideCode} para la nueva fecha.`,
+    notice:
+      `Excepción registrada. La guía anulada quedó en el historial y se creó ` +
+      `${spun.guideCode} para la nueva fecha.${swaypNotice}`,
   };
 }
 
