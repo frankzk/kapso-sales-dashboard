@@ -1044,6 +1044,25 @@ export function LeadsBoard({
     })();
   }
 
+  // Si la pestaña se cierra o se recarga con el cajón abierto, `closeDrawer`
+  // nunca corre y la reserva quedaba viva hasta agotar el TTL (459 vencidas sin
+  // soltar contra 11 vivas, medido el 14-09-2026). Con el tope de
+  // MAX_OPEN_LEADS eso ya no es inofensivo: dos pestañas cerradas a lo bruto
+  // bloquearían a la asesora diez minutos. `sendBeacon` sobrevive a la
+  // descarga; una acción de servidor, no. Mismo mecanismo que Envíos.
+  useEffect(() => {
+    const onPageHide = () => {
+      const leadId = activeLeadIdRef.current;
+      if (!leadId) return;
+      navigator.sendBeacon?.(
+        "/api/leads/release-claim",
+        new Blob([JSON.stringify({ leadId })], { type: "application/json" }),
+      );
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, []);
+
   function closeDrawer() {
     const leadId = selected?.id;
     activeLeadIdRef.current = null;
