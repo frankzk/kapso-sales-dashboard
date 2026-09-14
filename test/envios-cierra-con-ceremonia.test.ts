@@ -29,8 +29,10 @@ describe("«Cliente cancela / anula» pide un segundo clic que nombra el pedido"
     expect(ui).toContain("`Sí, anular la guía ${detail.shipment.guide_code}");
     expect(ui).toContain("del pedido ${detail.shipment.order_name}");
     expect(ui).toContain('"Anular la guía…"');
-    // El primer clic no registra: solo abre la confirmación.
-    const button = between("if (cancelNeedsConfirm) {", "run(() =>");
+    // El primer clic no registra: solo abre la confirmación. El `run(` ahora
+    // lleva un segundo argumento que limpia la nota, así que la llamada quedó
+    // en varias líneas y el ancla es la apertura, no su forma de una línea.
+    const button = between("if (cancelNeedsConfirm) {", "registerRerouteCall(shipmentId, {");
     expect(button).toContain("setConfirmCancel(true);");
     expect(button).toContain("return;");
   });

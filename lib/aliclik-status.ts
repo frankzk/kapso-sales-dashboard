@@ -463,6 +463,38 @@ const MOTIVO_POR_DESPACHO: Record<string, string> = {
  * 2026-08-10, 100 no traían motivo —guías importadas del Excel que nunca
  * pasaron por la API—. Ausencia de motivo no equivale a recuperable.
  */
+/**
+ * EL MOTIVO QUE TOCA MOSTRAR, O NADA.
+ *
+ * Las tres pantallas que lo pintan —la celda de escritorio, la tarjeta de
+ * teléfono y la ficha del cajón— tenían tres criterios distintos, y dos de
+ * ellos estaban mal:
+ *
+ *   * El cajón y la tarjeta preguntaban `status_category !== "cancelled"`.
+ *     Esa categoría NO EXISTE: son `pending | in_route | delivered | closed |
+ *     transferred` (ver `DELIVERY_STATUSES`). La condición era siempre
+ *     verdadera, la rama estaba muerta, y la regla del MOM §11.7 —«donde no hay
+ *     motivo se escribe que no consta»— no se imprimía nunca.
+ *   * La celda de escritorio no tenía criterio ninguno, así que una guía Swayp
+ *     nativa recién creada, sin intento previo, mostraba bajo una columna
+ *     titulada «Motivo anterior» la frase «no consta si la rechazó en la
+ *     puerta». No hubo intento anterior ni hubo puerta.
+ *
+ * La regla, en un solo sitio: si el courier informó algo, se muestra siempre.
+ * Si no informó nada, se escribe la ausencia SOLO donde debería haber un
+ * motivo, que es una guía cerrada sin entregar (`closed`) — las devoluciones y
+ * anulaciones de §11.1. En una guía que todavía no salió, no hay nada anterior
+ * de lo que hablar, y ahí `null` significa «no aplica», no «no consta».
+ */
+export function motivoParaMostrar(shipment: {
+  reported_status?: string | null;
+  status_category?: string | null;
+}): MotivoDelCourier | null {
+  const m = motivoDelCourier(shipment.reported_status);
+  if (m.consta) return m;
+  return shipment.status_category === "closed" ? m : null;
+}
+
 export function motivoDelCourier(reportedStatus: string | null | undefined): MotivoDelCourier {
   const [rawStatus = "", rawDispatch = ""] = (reportedStatus ?? "").split(" · ");
   const status = norm(rawStatus);
