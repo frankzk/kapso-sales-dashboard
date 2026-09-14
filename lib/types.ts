@@ -45,6 +45,14 @@ export interface OrderLineItem {
   product_id: string | null;
   variant_id: string | null;
   price: number | null;
+  /**
+   * Foto de catálogo, del espejo `shopify_product_images` (migración 0164).
+   * Shopify no la manda en el line item —0 de 15.726 ítems—, así que se adjunta
+   * al leer el pedido. Sigue siendo opcional a propósito: un producto sin foto,
+   * uno borrado del catálogo y uno todavía sin espejar son todos casos reales,
+   * y la miniatura degrada a la inicial del producto en los tres.
+   */
+  image_url?: string | null;
 }
 
 /** Shopify order fields shown inside the shipment drawer. */

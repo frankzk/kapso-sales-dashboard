@@ -36,6 +36,7 @@ import { derivedGuideDates, type GuideCallLike } from "@/lib/guide-dates";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { productImagesFor } from "@/lib/shopify-product-images";
 import {
   buildShipmentLineage,
   type ShipmentLineageNode,
@@ -985,10 +986,22 @@ export async function getShipmentWithCalls(
           };
         }
       }
+      // La foto no viene en el line item de Shopify: se adjunta desde el espejo
+      // (migración 0164), igual que en el Master de Pedidos. Sin espejo, la
+      // miniatura degrada a la inicial y el cajón carga igual.
+      const rawItems = orderRow.line_items ?? [];
+      const images = await productImagesFor(
+        sb,
+        shipmentRow.store_id,
+        rawItems.map((i) => i.product_id),
+      );
       order = {
         name: orderRow.name,
         shopify_order_id: orderRow.shopify_order_id,
-        line_items: orderRow.line_items ?? [],
+        line_items: rawItems.map((item) => ({
+          ...item,
+          image_url: item.product_id ? images.get(item.product_id) ?? null : null,
+        })),
         shipping_address: shippingAddress,
       };
     }

@@ -13,6 +13,7 @@ import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyOrderNote, shopifyShippingAddress } from "@/lib/shopify-address";
 import { orderTotals, type OrderTotals } from "@/lib/order-totals";
+import { productImagesFor } from "@/lib/shopify-product-images";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
@@ -615,7 +616,15 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
   }));
 
   const orderRow = orderRes.data as { line_items?: OrderLineItem[]; raw?: unknown } | null;
-  const lineItems = orderRow?.line_items ?? [];
+  const rawItems = orderRow?.line_items ?? [];
+  // La foto no viene en el line item de Shopify: se adjunta desde el espejo
+  // (migración 0164). Sin espejo, la miniatura degrada a la inicial y el pedido
+  // carga igual.
+  const images = await productImagesFor(sb, row.store_id, rawItems.map((i) => i.product_id));
+  const lineItems: OrderLineItem[] = rawItems.map((item) => ({
+    ...item,
+    image_url: item.product_id ? images.get(item.product_id) ?? null : null,
+  }));
   const [swayp, aliclikHealth, grupoGfCourier] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
