@@ -52,10 +52,11 @@ export function GrupoGfCourierBoard({
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const searchParams = useSearchParams();
+  const requestedTab = searchParams.get("tab");
   const [tab, setTab] = useState<"available" | "preparation" | "routes" | "tariffs">(
-    readCourierTab(searchParams.get("tab")),
+    readCourierTab(requestedTab),
   );
-  useEffect(() => { setTab(readCourierTab(searchParams.get("tab"))); }, [searchParams]);
+  useEffect(() => { setTab(readCourierTab(requestedTab)); }, [requestedTab]);
 
   function run(action: () => Promise<CourierActionResult>) {
     startTransition(async () => {
