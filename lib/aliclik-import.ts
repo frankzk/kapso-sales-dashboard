@@ -7,6 +7,7 @@
 import { normalizePhone } from "./phone";
 import { isFenixCity, normalizeCity } from "./shipments";
 import { mapAliclikStatus } from "./aliclik-status";
+import { normalizeDepartment } from "./peru-departamentos";
 
 export interface ParsedShipmentRow {
   guide_code: string | null; // AUR5X… (required to be a real row)
@@ -464,7 +465,10 @@ export function parseAliclikRow(
     district: district || null,
     province: province || null,
     city: city || null,
-    region: department || null,
+    // La grafía se canoniza AL ENTRAR: si «Junín» y «Junin» se guardan como
+    // dos cosas, el filtro de la cola los muestra como dos departamentos y
+    // elegir uno esconde el otro. No toca el matiz de Lima, que sí significa.
+    region: normalizeDepartment(department),
     delivery_address: pick(map, ADDRESS_KEYS),
     delivery_reference: pick(map, REFERENCE_KEYS),
     latitude: parseAliclikCoordinate(pick(map, LATITUDE_KEYS), "latitude"),
