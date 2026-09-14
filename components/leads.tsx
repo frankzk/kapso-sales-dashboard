@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
 import type { AdMeta } from "@/lib/meta-ads";
+import { IconAlert } from "@/components/icons";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import {
   ALL_STORES,
@@ -1044,6 +1045,22 @@ export function LeadsBoard({
     })();
   }
 
+  // El popup del aviso de reserva: al aparecer, el foco va a su botón —así un
+  // lector de pantalla lo lee y Enter lo cierra— y Escape lo descarta.
+  const bannerDismissRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!banner) return;
+    bannerDismissRef.current?.focus();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setBanner(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [banner]);
+
   // Si la pestaña se cierra o se recarga con el cajón abierto, `closeDrawer`
   // nunca corre y la reserva quedaba viva hasta agotar el TTL (459 vencidas sin
   // soltar contra 11 vivas, medido el 14-09-2026). Con el tope de
@@ -1883,6 +1900,45 @@ export function LeadsBoard({
       {banner && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
           {banner}
+        </div>
+      )}
+
+      {/* EL MISMO AVISO, FLOTANDO. El banner de arriba es el registro, pero
+          vive en la cabecera de la lista: quien pincha una fila cincuenta más
+          abajo no lo ve, y solo nota que el cajón no se abrió. El tope de
+          MAX_OPEN_LEADS lo hizo evidente —«¿ya funciona?»— y vale igual para
+          «X está atendiendo este lead». Misma cáscara que el aviso de Yape,
+          para que sean el mismo objeto a la vista. Se va con «Entendido»,
+          con Escape, o al abrir el siguiente lead. */}
+      {banner && (
+        <div
+          className="pointer-events-none fixed inset-x-0 top-0 z-50 flex justify-center p-4"
+          role="alertdialog"
+          aria-live="assertive"
+          aria-labelledby="lead-claim-refused-title"
+          aria-describedby="lead-claim-refused-text"
+        >
+          <div className="pointer-events-auto w-full max-w-md overflow-hidden rounded-2xl border-2 border-red-300 bg-white shadow-2xl ring-4 ring-red-500/10">
+            <div className="flex items-center gap-2 bg-red-600 px-4 py-2 text-white">
+              <IconAlert className="h-5 w-5 shrink-0" aria-hidden="true" />
+              <span id="lead-claim-refused-title" className="text-sm font-semibold">
+                No se pudo tomar el lead
+              </span>
+            </div>
+            <div className="px-4 py-3">
+              <p id="lead-claim-refused-text" className="text-sm text-slate-800">
+                {banner}
+              </p>
+              <button
+                ref={bannerDismissRef}
+                type="button"
+                onClick={() => setBanner(null)}
+                className="mt-3 w-full rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
