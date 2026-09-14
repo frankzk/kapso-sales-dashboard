@@ -11,6 +11,7 @@ import {
   searchCatalogProducts,
 } from "@/lib/shopify";
 import { getStoreCreds, runStoreSync } from "@/lib/ingest";
+import { filtroCampanaEnUtm } from "@/lib/cod-cart-attribution";
 import { env } from "@/lib/env";
 
 export interface ActionState {
@@ -82,7 +83,7 @@ export async function saveAdPromotedProduct(input: {
         // `utm_meta is not null` lo implica el contains, pero es lo que lleva la
         // consulta al índice parcial de la 0156 en vez de a un recorrido entero.
         .not("utm_meta", "is", null)
-        .contains("utm_meta", [{ name: "utm_id", value: campaignId }])
+        .contains("utm_meta", filtroCampanaEnUtm(campaignId))
         .limit(1)
         .maybeSingle();
       authorized = Boolean(visibleOrder);

@@ -481,6 +481,9 @@ export async function closeSettlement(
   if (detail.settlement.status === "cerrada") {
     return { ok: false, error: "Ya estaba cerrada." };
   }
+  if (detail.settlement.source === "ruta" && detail.settlement.route_id) {
+    return { ok: false, error: "El pago de este motorizado se revisa y aprueba una sola vez en Rutas → Ganancia y saldo, no por tienda. El lote conserva el reporte para conciliación." };
+  }
 
   const { totals } = detail.reconciled;
   if (!totals.balanced) {

@@ -92,7 +92,7 @@ describe("validateStopReport", () => {
   it("un pedido ya pagado se entrega sin monto", () => {
     // "sin_cobro" es el caso del pedido prepagado: hay entrega, no hay plata.
     const v = validateStopReport(
-      report({ paymentMethod: "sin_cobro", collectedAmount: null }),
+      report({ paymentMethod: "sin_cobro", collectedAmount: 0 }),
     );
     expect(v.ok).toBe(true);
   });

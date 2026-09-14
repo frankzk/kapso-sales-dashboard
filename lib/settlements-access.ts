@@ -24,6 +24,7 @@ export interface RiderRow {
 }
 
 export interface SettlementRow {
+  route_id?: string | null;
   id: string;
   store_id: string;
   rider_id: string | null;
@@ -44,7 +45,7 @@ export interface SettlementRow {
 }
 
 const SETTLEMENT_COLUMNS =
-  "id,store_id,rider_id,rider_name_raw,settlement_date,source,file_path," +
+  "id,route_id,store_id,rider_id,rider_name_raw,settlement_date,source,file_path," +
   "declared_cash,declared_yape,direct_collected,status,courier,pos_fee,payout_amount,note,created_at,closed_at";
 
 const LINE_COLUMNS =

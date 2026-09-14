@@ -3901,6 +3901,16 @@ No cambian elegibilidad, tarifas, identidad de salidas ni reglas de liquidación
 
 #### Recorrido unificado aprobado el 12-09-2026
 
+**Unificación de navegación, 13-09-2026.** La entrada independiente «Rutas»
+se retira del menú: el reparto y su cierre financiero pertenecen a **Grupo GF
+Courier → Rutas → Reparto y cierre diario**. «Cajas y cotejos» conserva los
+controles físicos. La URL canónica del reparto es `/dashboard/courier/reparto`;
+`/dashboard/rutas` redirige conservando id, fecha y demás parámetros.
+No se recrean rutas, paradas, salidas ni liquidaciones. Se conservan permisos:
+mostrar la entrada al módulo no concede administración logística a quien solo
+puede gestionar rutas o cotejar. La planificación rápida sigue en «Tomar y
+asignar», no en un segundo formulario de creación de rutas.
+
 Master representa a la tienda; Almacén prepara y entrega; Grupo GF Courier
 planifica, recibe, reparte y liquida. Los pedidos elegibles de Aurela/Kenku se
 ofrecen automáticamente, sin una segunda aprobación en Master. La búsqueda y
@@ -4226,6 +4236,39 @@ completa permanece abierta. Las correcciones conservan lo declarado, el valor
 anterior, actor, motivo y fecha como ya exige §14.
 
 ### 29.10 Acceso y administración
+
+#### Acuerdo 13-09-2026: cobro en puerta y ganancia del motorizado
+
+- Reportar una entrega exige elegir el medio de pago, sin efectivo preseleccionado.
+  El importe sugerido es el saldo después de pagos validados o prepago checkout,
+  nunca el total si ya hubo adelanto. Pagos pendientes se muestran como pendientes,
+  no se descuentan como validados. Si el saldo no puede comprobarse no se inventa.
+- `Sin cobro` guarda exactamente cero, tanto en la parada como en su historial.
+  El monto reportado no equivale a ingreso bancario validado.
+- La tarifa que Grupo GF cobra a la tienda es independiente de la ganancia del
+  motorizado. El tarifario personal usa ficha estable del motorizado, distrito
+  canónico opcional y vigencia. La excepción de distrito gana a su tarifa general.
+  Entregado y rechazado por el cliente pagan el mismo importe por punto; los demás
+  intentos no pagan automáticamente. Roy acordó S/8.50 por entrega o rechazo.
+  No se asigna una tarifa por coincidencia de nombre ni se modifica historia.
+- En Rutas se configuran tarifas personales con `costs.manage` en la organización
+  correspondiente. Una nueva tarifa crea una versión y exige motivo. Sin tarifa
+  personal aplicable, el pago queda pendiente, no cero ni tarifa del courier.
+- Un adicional por espera, retorno u otra excepción se aprueba explícitamente con
+  `settlements.close`, importe positivo y motivo. Se liga a la ruta y al punto,
+  identifica al aprobador y no sobrescribe la tarifa. Su anulación es otro evento.
+- La liquidación del motorizado es una por ruta diaria, aunque mezcle tiendas o
+  cargas. Muestra por punto tarifa y versión, adicional/motivo/aprobador, ganancia,
+  efectivo reportado y cobros directos reportados separados. El neto de efectivo
+  es efectivo menos ganancia: positivo entrega el motorizado, negativo paga GF.
+- Terminar la ruta es un cierre operativo. Aprobar el cálculo diario es un acto
+  financiero distinto con `settlements.close`: congela el desglose y exige ruta
+  terminada, evidencia, tarifas y confirmación de la versión vista. No registra
+  automáticamente un depósito, un pago al motorizado ni validación bancaria.
+  Los lotes por tienda originados en ruta no vuelven a generar un pago personal
+  con el motor antiguo; se remiten a este cierre diario para evitar duplicarlo.
+- Las rutas y reportes históricos no se corrigen automáticamente. En particular,
+  el caso Roy/AUR176840 requiere verificar Efectivo/Yape antes de aprobar cifras.
 
 - Daysi administra tiendas cliente, motorizados, capacidad, asignaciones, rutas,
   contratos y tarifas de Grupo GF Courier.

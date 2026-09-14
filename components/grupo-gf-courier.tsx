@@ -2,7 +2,7 @@
 
 import mobile from "./courier-mobile.module.css";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
@@ -36,6 +36,10 @@ function money(value: number): string {
   return `S/ ${value.toFixed(2)}`;
 }
 
+function readCourierTab(value: string | null): "available" | "preparation" | "routes" | "tariffs" {
+  return value === "preparation" || value === "routes" || value === "tariffs" ? value : "available";
+}
+
 export function GrupoGfCourierBoard({
   orgId,
   snapshot,
@@ -48,9 +52,11 @@ export function GrupoGfCourierBoard({
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const searchParams = useSearchParams();
+  const requestedTab = searchParams.get("tab");
   const [tab, setTab] = useState<"available" | "preparation" | "routes" | "tariffs">(
-    searchParams.get("tab") === "routes" ? "routes" : "available",
+    readCourierTab(requestedTab),
   );
+  useEffect(() => { setTab(readCourierTab(requestedTab)); }, [requestedTab]);
 
   function run(action: () => Promise<CourierActionResult>) {
     startTransition(async () => {
@@ -135,7 +141,7 @@ export function GrupoGfCourierBoard({
         <CourierTab
           active={tab === "routes"}
           onClick={() => setTab("routes")}
-          label="Rutas operativas"
+          label="Rutas"
           shortLabel="Rutas"
           count={new Set(snapshot.operations.routes.map((route) => `${route.riderId}:${route.routeDate}`)).size}
         />
@@ -802,6 +808,10 @@ function CourierRoutes({
 }) {
   return (
     <section aria-labelledby="courier-routes-title" className="space-y-4">
+      <nav aria-label="Trabajo de rutas" className="flex flex-wrap gap-2 text-sm">
+        <span className="inline-flex min-h-12 items-center rounded-lg bg-brand-50 px-3 font-medium text-brand-700" aria-current="page">Cajas y cotejos</span>
+        <Link href="/dashboard/courier/reparto" className="inline-flex min-h-12 items-center rounded-lg px-3 font-medium text-slate-600 hover:bg-slate-100">Reparto y cierre diario</Link>
+      </nav>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 id="courier-routes-title" className="text-base font-semibold text-slate-950">Rutas y cajas operativas</h2>
@@ -836,7 +846,7 @@ function CourierRoutes({
           <Link href={`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(route.manifestId)}`} className="mt-3 flex min-h-12 items-center justify-center rounded-xl bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2">
             {route.state === "in_custody" ? "Ver caja recibida" : route.state === "ready_for_pickup" || route.state === "pickup_check" ? "Recibir carga" : "Verificar caja"}
           </Link>
-          {route.deliveryRouteId && route.state === "in_custody" && <Link href={`/dashboard/rutas?id=${route.deliveryRouteId}`} className="mt-2 flex min-h-12 items-center justify-center text-sm font-semibold text-brand-700">Ver reparto y liquidación</Link>}
+          {route.deliveryRouteId && route.state === "in_custody" && <Link href={`/dashboard/courier/reparto?id=${route.deliveryRouteId}`} className="mt-2 flex min-h-12 items-center justify-center text-sm font-semibold text-brand-700">Ver reparto y liquidación</Link>}
         </article>)}
         {!routes.length && <p className="rounded-xl border border-dashed border-slate-300 p-5 text-sm text-slate-600">Todavía no hay rutas. Asigna pedidos a un motorizado desde Pedidos tomados.</p>}
       </div>
@@ -896,7 +906,7 @@ function CourierRoutes({
                     >
                       Abrir caja
                     </Link>
-                    {route.deliveryRouteId && route.state === "in_custody" && <Link href={`/dashboard/rutas?id=${route.deliveryRouteId}`} className="mt-2 block text-xs font-semibold text-brand-700">Ver reparto y liquidación</Link>}
+                    {route.deliveryRouteId && route.state === "in_custody" && <Link href={`/dashboard/courier/reparto?id=${route.deliveryRouteId}`} className="mt-2 block text-xs font-semibold text-brand-700">Ver reparto y liquidación</Link>}
                   </td>
                 </tr>
               );

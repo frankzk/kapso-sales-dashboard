@@ -15,6 +15,7 @@ import { NON_DELIVERY_REASONS, PAYMENT_METHODS, routeTotals } from "@/lib/routes
 import { RISK_LABELS, type RiskAssessment } from "@/lib/retries";
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import type { RiderRow } from "@/lib/settlements-access";
+import { RiderPayPanel } from "@/components/rider-pay-panel";
 import {
   addStops,
   closeRoute,
@@ -117,17 +118,19 @@ export function RoutesBoard({
     <div className="space-y-6">
       <Section title="Rutas de reparto">
         <p className="text-sm text-slate-500">
-          Arma la ruta del día de cada motorizado y entrégasela: le aparece en su teléfono, reporta
-          cada entrega con su foto, y al cerrar el día la liquidación sale sola y ya cuadrada.
+          Consulta las entregas y revisa la ganancia de cada motorizado. Terminar la ruta
+          y aprobar su cálculo financiero son pasos distintos; ninguno registra un depósito.
         </p>
       </Section>
 
       {msg && <Card className="border-brand-200 bg-brand-50 p-3 text-sm text-brand-800">{msg}</Card>}
       {err && <Card className="border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</Card>}
 
-      <NewRoute stores={stores} riders={riders} day={day} disabled={pending} onRun={run} />
-
-      <RidersAccess riders={riders} disabled={pending} onRun={run} />
+      <a href="/dashboard/courier?tab=available" className="inline-flex min-h-12 items-center rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white">Tomar y asignar pedidos</a>
+      <details className="border-b border-slate-200 pb-3">
+        <summary className="min-h-12 cursor-pointer py-3 text-sm font-medium text-slate-600">Accesos de motorizados</summary>
+        <RidersAccess riders={riders} disabled={pending} onRun={run} />
+      </details>
 
       <Card className="p-0">
         <div className={TABLE_WRAP_FROM[980]}>
@@ -145,7 +148,7 @@ export function RoutesBoard({
                 <tr>
                   <td colSpan={4} className="px-4 py-10">
                     <EmptyState title="Todavía no hay rutas">
-                      Arma la primera arriba, eligiendo motorizado y día.
+                      Toma y asigna pedidos desde Grupo GF Courier para comenzar.
                     </EmptyState>
                   </td>
                 </tr>
@@ -157,7 +160,7 @@ export function RoutesBoard({
                   <tr
                     key={r.id}
                     onClick={() =>
-                      router.push(open ? "/dashboard/rutas" : `/dashboard/rutas?id=${r.id}&dia=${r.route_date}`)
+                      router.push(open ? "/dashboard/courier/reparto" : `/dashboard/courier/reparto?id=${r.id}&dia=${r.route_date}`)
                     }
                     className={cn(
                       "cursor-pointer border-b border-slate-100 hover:bg-slate-50",
@@ -183,6 +186,7 @@ export function RoutesBoard({
       </Card>
 
       {detail && (
+        <>
         <RouteDetail
           detail={detail}
           assignable={assignable}
@@ -193,6 +197,8 @@ export function RoutesBoard({
           onRun={run}
           canReport={canReport}
         />
+        <RiderPayPanel key={detail.route.id} routeId={detail.route.id} />
+        </>
       )}
     </div>
   );
@@ -263,7 +269,7 @@ function NewRoute({
               onRun(async () => {
                 const res = await ensureRoute({ storeId, riderId, routeDate: date });
                 if (res.ok && res.routeId) {
-                  router.push(`/dashboard/rutas?id=${res.routeId}&dia=${date}`);
+                  router.push(`/dashboard/courier/reparto?id=${res.routeId}&dia=${date}`);
                 }
                 return res;
               })
@@ -430,7 +436,7 @@ function RouteDetail({
                 onClick={() => onRun(() => closeRoute(route.id))}
                 className="rounded-lg bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-900 disabled:opacity-50"
               >
-                Cerrar y liquidar
+                Terminar ruta operativa
               </button>
               {totals.pendientes > 0 && (
                 <button
