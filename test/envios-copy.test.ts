@@ -33,9 +33,13 @@ describe("Swayp es el nombre vigente", () => {
     for (const [name, src] of [["ui", ui], ["lib", lib], ["server", server]] as const) {
       expect(visibleText(src), name).not.toMatch(/\bFenix\b/);
     }
-    expect(ui).toContain("Guía Swayp (antes Fénix) a mano");
-    expect(ui).toContain("¿Qué informó Swayp (antes Fénix)?");
-    expect(ui).toContain("Reprogramaciones (Aliclik + Swayp, antes Fénix)");
+    // El renombre se explica UNA vez, en la nota que ya explica el resto.
+    // Estaba incrustado en tres etiquetas de formulario que se leen doscientas
+    // veces al día: un aviso de renombre no es parte del nombre de un campo.
+    expect(ui).toContain("Guía Swayp a mano");
+    expect(ui).toContain("¿Qué informó Swayp?");
+    expect(ui).toContain("(antes Fénix; se creó una guía Swayp)");
+    expect(ui.match(/antes Fénix/g)?.length).toBe(1);
   });
 
   it("el código no cambió de nombre", () => {
@@ -64,8 +68,13 @@ describe("palabras de la asesora, no del sistema", () => {
 });
 
 describe("descartar la recuperación se confirma nombrando el pedido", () => {
-  it("regla de 8 caracteres visible junto al campo, y segundo paso con Cancelar", () => {
-    expect(ui).toContain("`Mínimo 8 caracteres · faltan ${8 - recoveryNote.trim().length}`");
+  it("la regla del mínimo es visible junto al campo, y el segundo paso trae Cancelar", () => {
+    // El «8» estaba a mano en cuatro sitios contra `DISCARD_REASON_MIN`, que ya
+    // existía y el componente ni importaba: subirlo en `lib/` habría dejado la
+    // pantalla diciendo un número y el servidor exigiendo otro.
+    expect(ui).toContain('import { DISCARD_REASON_MIN } from "@/lib/recovery-discard";');
+    expect(ui).toContain("`Mínimo ${DISCARD_REASON_MIN} caracteres · faltan ${DISCARD_REASON_MIN - recoveryNote.trim().length}`");
+    expect(ui).not.toMatch(/trim\(\)\.length < 8\b/);
     expect(ui).toContain('recoveryDisposition === "no_quiere" && confirmDiscard ? (');
     expect(ui).toContain("`Sí, descartar ${detail.shipment.order_name ? `el pedido ${detail.shipment.order_name}` : \"este pedido\"}`");
     expect(ui).toContain('"Descartar la recuperación…"');

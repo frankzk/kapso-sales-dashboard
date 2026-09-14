@@ -21,6 +21,7 @@ import {
   COURIER_REPORT_RESULTS,
   attemptLabel,
   categoryOf,
+  ALICLIK_MAX_INTENTOS,
   courierReportTransition,
   deriveFenixCoverageCity,
   evaluateAliclikReschedule,
@@ -584,7 +585,7 @@ export async function registerRerouteCall(
       return { error: "Esta ya no es una guía Aliclik; corresponde continuar con Swayp." };
     }
     if (decision.reason === "three_attempts") {
-      return { error: "Aliclik ya registra 3 intentos o más; solo corresponde continuar con Swayp." };
+      return { error: aliclikDecisionMessage(decision) };
     }
     if (!decision.eligible && !input.forceAliclik) {
       return { error: aliclikDecisionMessage(decision) };
@@ -859,7 +860,7 @@ function aliclikDecisionMessage(
   decision: ReturnType<typeof evaluateAliclikReschedule>,
 ): string {
   if (decision.reason === "three_attempts") {
-    return "Aliclik ya registra 3 intentos o más; solo corresponde continuar con Swayp.";
+    return `Aliclik ya registra ${ALICLIK_MAX_INTENTOS} intentos o más; solo corresponde continuar con Swayp.`;
   }
   if (decision.reason === "outside_week") {
     return `La fecha de Aliclik está fuera de la ventana ${decision.cutoffDate}–${decision.today}. Continúa con Swayp o usa la excepción manual.`;
@@ -1439,6 +1440,15 @@ export async function createFenixGuide(
 ): Promise<ShipmentActionState> {
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso." };
+
+  // MOM §11.6, la segunda puerta. Esta ruta acuña por la misma
+  // `rescheduleGuideCode` que «confirma» —la fecha queda ESTAMPADA en el número
+  // de la guía— y no validaba nada: ni `min` en el input, ni la fecha en el
+  // botón, ni acá. Se emitían guías fechadas ayer, para un despacho que ya pasó.
+  if (!isFutureShipmentFollowup(input.nextFollowupAt ?? null)) {
+    return { error: "La fecha de reprogramación tiene que ser futura." };
+  }
+
   const admin = createAdminSupabase();
 
   // carry the reprogramación date onto the new Swayp guide (same as the

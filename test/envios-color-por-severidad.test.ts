@@ -57,8 +57,9 @@ describe("un solo acento de acción", () => {
     expect(src.match(/bg-brand-600/g)?.length).toBeGreaterThan(4);
     // Rose queda en lo irreversible: crear la guía de excepción, «no quiere»
     // (primer clic y confirmación), «Cliente cancela» (primer clic y
-    // confirmación) y resolver la novedad de Swayp.
-    expect(src.match(/(?<!hover:)bg-rose-(600|700)/g)?.length).toBe(6);
+    // confirmación), resolver la novedad de Swayp y —desde la cuarta crítica—
+    // el resultado del courier que anula la guía, que también cierra la venta.
+    expect(src.match(/(?<!hover:)bg-rose-(600|700)/g)?.length).toBe(7);
   });
 
   it("los filtros activos y la ruta elegida usan el acento, no el color del courier", () => {

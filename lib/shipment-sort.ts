@@ -1,3 +1,4 @@
+import { motivoDelCourier } from "./aliclik-status";
 import { evaluateAliclikReschedule, labelOf, normalizeCity } from "./shipments";
 import type { ShipmentRow } from "./types";
 
@@ -7,6 +8,7 @@ export type ShipmentSortKey =
   | "order"
   | "customer"
   | "product"
+  | "reason"
   | "location"
   | "status"
   | "lastDelivery"
@@ -44,6 +46,11 @@ function sortValue(
       return shipment.customer_name || shipment.customer_phone;
     case "product":
       return shipment.product;
+    case "reason":
+      // Agrupa por cómo terminó el intento anterior: las que la clienta rechazó
+      // en la puerta juntas, y las que no traen motivo también juntas, que es la
+      // distinción que el MOM §11 manda hacer antes de reenviar.
+      return motivoDelCourier(shipment.reported_status).texto;
     case "location":
       return [shipment.district, normalizeCity(shipment.city)].filter(Boolean).join(" ");
     case "status":
