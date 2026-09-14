@@ -48,7 +48,6 @@ function navItems(
       { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
       { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
       { href: "/dashboard/envios/recuperacion", label: "Recuperar devueltos", icon: IconChat },
-      { href: "/dashboard/rutas", label: "Rutas", icon: IconTruck },
       { href: "/dashboard/liquidaciones", label: "Liquidaciones", icon: IconMoney },
       // Modo solo: la página filtra server-side a la fila propia — una
       // vendedora nunca ve los resultados del resto del equipo.
@@ -70,7 +69,6 @@ function navItems(
     // Primer contacto con la clienta cuya guía volvió (MOM §11.1). Va acá y no
     // dentro de Envíos porque es una COLA que se drena, no una vista de guías.
     { href: "/dashboard/envios/recuperacion", label: "Recuperar devueltos", icon: IconChat },
-    { href: "/dashboard/rutas", label: "Rutas", icon: IconTruck },
     // Dato maestro de la integración con Aliclik: se configura una vez por
     // tienda, no pedido a pedido. Sin el mapeo SKU→EAN no se crea ninguna guía.
     { href: "/dashboard/envios/aliclik", label: "Catálogo de productos", icon: IconPlug },

@@ -45,7 +45,7 @@ describe("supervisor report", () => {
     expect(mock.update).toHaveBeenCalledWith(expect.objectContaining({ reported_by: "chief", status: "entregado", note: expect.stringContaining("Roy sin conexión") }));
     expect(mock.update.mock.calls[0]![0]).not.toHaveProperty("rider_id");
     expect(mock.event).toHaveBeenCalledWith(expect.objectContaining({ actor: "chief", status: "entregado", note: expect.stringContaining("chief@example.test") }));
-    expect(mock.revalidate).toHaveBeenCalledWith("/dashboard/rutas");
+    expect(mock.revalidate).toHaveBeenCalledWith("/dashboard/courier/reparto");
   });
   it("records non delivery and still requires an outcome reason", async () => {
     expect((await reportStop({ ...input, status: "no_entregado", outcomeReason: null })).ok).toBe(false);

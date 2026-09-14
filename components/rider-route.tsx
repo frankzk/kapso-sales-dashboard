@@ -97,7 +97,7 @@ export function RiderRouteScreen({
             <span className="text-xs text-slate-500">{route.route_date}</span>
           )}
         </div>
-        {coordinator && <p className="mt-2 text-sm text-slate-600">Reportas como <strong>{coordinator}</strong> por el motorizado. Tu usuario quedará registrado. <a className="underline" href="/dashboard/rutas">Volver a Rutas</a></p>}
+        {coordinator && <p className="mt-2 text-sm text-slate-600">Reportas como <strong>{coordinator}</strong> por el motorizado. Tu usuario quedará registrado. <a className="underline" href="/dashboard/courier/reparto">Volver a Rutas</a></p>}
         <div className="mt-2 flex gap-3 text-xs">
           <Pill label="Por entregar" value={totals.pendientes} tone="pend" />
           <Pill label="Entregados" value={totals.entregados} tone="ok" />

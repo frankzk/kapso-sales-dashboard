@@ -390,7 +390,7 @@ function SettlementDetailPanel({
       />
       {settlement.source === "ruta" && settlement.route_id && <p className="rounded-lg bg-sky-50 p-3 text-sm">
         Este lote conserva el reporte por tienda. La ganancia y el saldo neto del motorizado se aprueban una sola vez en su ruta diaria: {" "}
-        <a className="inline-flex min-h-11 items-center font-semibold underline" href={`/dashboard/rutas?id=${settlement.route_id}&dia=${settlement.settlement_date}`}>Ver ganancia y saldo del motorizado</a>.
+        <a className="inline-flex min-h-11 items-center font-semibold underline" href={`/dashboard/courier/reparto?id=${settlement.route_id}&dia=${settlement.settlement_date}`}>Ver ganancia y saldo del motorizado</a>.
       </p>}
 
       {err && <p className="text-sm text-red-600">{err}</p>}
@@ -535,7 +535,7 @@ function SettlementDetailPanel({
                 disabled={pending}
                 onClick={() =>
                   settlement.source === "ruta" && settlement.route_id
-                    ? router.push(`/dashboard/rutas?id=${settlement.route_id}&dia=${settlement.settlement_date}`)
+                    ? router.push(`/dashboard/courier/reparto?id=${settlement.route_id}&dia=${settlement.settlement_date}`)
                     : run(() => closeSettlement(settlement.id, { deductShortfall: deduct }))
                 }
                 className="rounded-lg bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-900 disabled:opacity-50"
