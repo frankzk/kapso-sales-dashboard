@@ -551,3 +551,97 @@ describe("helpers", () => {
     expect(defaultOperationalFor("devuelto")).toBe("devuelto_al_origen");
   });
 });
+
+describe("resolveOrderState — registrar la guía DESPUÉS del cambio manual", () => {
+  // Los ocho pedidos de Agencia que nos dieron la lata. Se marcaron a mano
+  // «disponible para recojo» y días después se les registró la guía Shalom. El
+  // candado congelaba el estado legado en `en_proceso`, y como
+  // `recogido_sin_pago_completo` exige `legacy.general === "entregado"`,
+  // figuraban como «En curso · recibido por courier» estando recogidos.
+  //
+  // Medido: 11 pedidos, S/2.054, de los que S/1.062 estaban recogidos y SIN
+  // COBRAR, escondidos detrás del candado desde el 4 de agosto.
+  //
+  // Es el mismo argumento que la anulación: registrar una guía lo hace una
+  // PERSONA. Medido sobre 30 días, los 2.589 `guide_registered` y los 1.083
+  // `guide_created` llevan actor; los 15.969 `courier_status` —el camino
+  // automático, del que protege el candado— no lo llevan ni uno.
+
+  const ANTES = "2026-08-20T12:21:00.000Z";
+  const DESPUES = "2026-09-10T16:19:00.000Z";
+  const disponible = {
+    general_status: "en_proceso" as const,
+    operational_status: "disponible_para_recojo",
+    occurred_at: ANTES,
+  };
+  const registro = {
+    kind: "guide_registered",
+    occurred_at: DESPUES,
+    courier: "shalom",
+    new_status: null,
+    new_operational: null,
+  };
+
+  it("la guía registrada después gana al cambio manual anterior", () => {
+    const s = resolveOrderState({
+      order: order(),
+      guides: [
+        guide("1", {
+          courier: "shalom",
+          delivery_status: "entregado",
+          closed_at: DESPUES,
+        }),
+      ],
+      events: [registro],
+      override: disponible,
+      now: NOW,
+    });
+    expect(s.general).toBe("entregado");
+    // Agencia: entregado se llama «recogido», que es lo que destapa la alerta.
+    expect(s.operational).toBe("recogido");
+    expect(s.overrideApplied).toBe(false);
+  });
+
+  it("un cambio manual POSTERIOR al registro sigue mandando", () => {
+    // El caso legítimo: se registró la guía y después una persona decidió otra
+    // cosa. Invertir la prioridad sin mirar fechas lo rompería.
+    const s = resolveOrderState({
+      order: order(),
+      guides: [guide("1", { courier: "shalom", delivery_status: "entregado", closed_at: ANTES })],
+      events: [{ ...registro, occurred_at: ANTES }],
+      override: { ...disponible, occurred_at: DESPUES },
+      now: NOW,
+    });
+    expect(s.source).toBe("manual");
+    expect(s.overrideApplied).toBe(true);
+  });
+
+  // LA LÍNEA QUE SEPARA las dos cosas: el candado existe justo para que el
+  // reporte de un courier no pise a una persona. Si `courier_status` valiera,
+  // el candado no serviría para nada.
+  it("un reporte del courier NO suelta el candado", () => {
+    const s = resolveOrderState({
+      order: order(),
+      guides: [guide("1", { courier: "shalom", delivery_status: "entregado", closed_at: DESPUES })],
+      events: [
+        { kind: "courier_status", occurred_at: DESPUES, courier: "shalom", new_status: null, new_operational: null },
+      ],
+      override: disponible,
+      now: NOW,
+    });
+    expect(s.source).toBe("manual");
+    expect(s.overrideApplied).toBe(true);
+  });
+
+  it("sin registro posterior, el cambio manual manda como siempre", () => {
+    const s = resolveOrderState({
+      order: order(),
+      guides: [],
+      events: [],
+      override: disponible,
+      now: NOW,
+    });
+    expect(s.general).toBe("en_proceso");
+    expect(s.overrideApplied).toBe(true);
+  });
+});
