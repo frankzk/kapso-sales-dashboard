@@ -28,6 +28,7 @@ const SET_KEYS: { param: string; field: keyof MasterFilters }[] = [
   { param: "d", field: "districts" },
   { param: "cv", field: "coverages" },
   { param: "pk", field: "pickupStates" },
+  { param: "gd", field: "managementDays" },
 ];
 
 const DATE_KEYS: { param: string; field: keyof MasterFilters }[] = [
