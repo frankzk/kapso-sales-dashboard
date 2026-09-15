@@ -1,4 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+
+// El ticket baja de Shalom y se firma en Storage: se simulan los dos para que
+// la prueba no dependa de ninguna red.
+vi.mock("@/lib/shalom/label-cache", () => ({
+  shalomVoucherPdf: vi.fn(async () => new Uint8Array([0x25])),
+  signedDocUrl: vi.fn(async () => "https://storage/signed/ticket.pdf"),
+}));
+vi.mock("@/lib/shalom/session", () => ({
+  loadStoreShalom: vi.fn(async () => ({ shalom_pro_email: "x@y.z" })),
+}));
+
 import {
   buildButtonReply,
   handleInboundMessage,
@@ -94,6 +105,7 @@ function fakeAdmin(
     /** Lo que hay HOY en el pedido: de aquí sale el saldo, recalculado. */
     master?: any;
     payments?: any[];
+    shipment?: any;
   } = {},
 ) {
   const inserts: { table: string; row: any }[] = [];
@@ -122,7 +134,17 @@ function fakeAdmin(
         order: () => chain,
         limit: () => chain,
         maybeSingle: () => {
-          if (table === "shalom_transit_notifications") return Promise.resolve({ data: opts.lastNotification ?? null });
+          if (table === "shalom_transit_notifications") {
+            return Promise.resolve({
+              data:
+                "lastNotification" in opts
+                  ? opts.lastNotification
+                  : { id: "notif-1", order_id: "ord-1", shipment_id: "ship-1", ticket_sent_at: null },
+            });
+          }
+          if (table === "shipments") {
+            return Promise.resolve({ data: opts.shipment ?? { shalom_ose_id: 584210, guide_code: "95451003" } });
+          }
           if (table === "order_master") {
             return Promise.resolve({
               data: opts.master ?? { order_name: "#KP133540", order_total: 89.1 },
@@ -162,8 +184,11 @@ describe("handleInboundMessage", () => {
   it("contesta el botón de Yape por el MISMO número por el que entró, y lo registra", async () => {
     const admin = fakeAdmin();
     const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.OUT" });
-    const res = await handleInboundMessage(admin, "store", CREDS, buttonEvent("Pagar con Yape"), { sendText: send });
-    expect(res.reason).toBe("replied:yape");
+    const res = await handleInboundMessage(admin, "store", CREDS, buttonEvent("Pagar con Yape"), {
+      sendText: send,
+      sendDocument: vi.fn().mockResolvedValue({ ok: true, id: "wamid.DOC" }),
+    });
+    expect(res.reason).toBe("replied:yape;ticket:enviado");
     expect(send).toHaveBeenCalledWith(
       { apiKey: "k" },
       { phoneNumberId: "PN-451", to: "51987654321", body: "YAPE GRUPO GF SAC 930 555 309" },
@@ -173,11 +198,95 @@ describe("handleInboundMessage", () => {
       table: "wa_auto_replies",
       row: { inbound_message_id: "wamid.BTN1", trigger: "yape", phone: "51987654321" },
     });
-    // …y se cerró con lo que se dijo.
-    expect(admin.updates.at(-1)).toMatchObject({
-      table: "wa_auto_replies",
+    // …y se cerró con lo que se dijo. Se busca la escritura de `wa_auto_replies`
+    // en vez de la última: detrás va el sello del ticket, que es de otra tabla.
+    expect(admin.updates.find((u: any) => u.table === "wa_auto_replies")).toMatchObject({
       patch: { ok: true, body: "YAPE GRUPO GF SAC 930 555 309", provider_message_id: "wamid.OUT" },
     });
+  });
+
+  it("detrás del texto manda el ticket PDF de la guía, una sola vez", async () => {
+    // Es la idea que reemplaza a la plantilla con cabecera de documento: el
+    // botón abre la ventana de 24 h, así que el PDF sale como mensaje normal,
+    // sin plantilla que aprobar en Meta.
+    const admin = fakeAdmin();
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.OUT" });
+    const sendDoc = vi.fn().mockResolvedValue({ ok: true, id: "wamid.DOC" });
+    const res = await handleInboundMessage(admin, "store", CREDS, buttonEvent("Pagar con Yape"), {
+      sendText: send,
+      sendDocument: sendDoc,
+      nowIso: "2026-09-15T16:00:00Z",
+    });
+    expect(res.reason).toBe("replied:yape;ticket:enviado");
+    expect(sendDoc).toHaveBeenCalledWith(
+      { apiKey: "k" },
+      {
+        phoneNumberId: "PN-451",
+        to: "51987654321",
+        documentUrl: "https://storage/signed/ticket.pdf",
+        filename: "ticket-shalom-95451003.pdf",
+        caption: "📄 Este es el ticket de tu envío por Shalom. Guía 95451003.",
+      },
+    );
+    // El sello vive en la fila del AVISO, que es única por guía.
+    expect(admin.updates.at(-1)).toMatchObject({
+      table: "shalom_transit_notifications",
+      patch: { ticket_sent_at: "2026-09-15T16:00:00Z", ticket_error: null },
+    });
+  });
+
+  it("quien pulsa un segundo botón no recibe el ticket otra vez", async () => {
+    const admin = fakeAdmin({
+      lastNotification: { id: "notif-1", order_id: "ord-1", shipment_id: "ship-1", ticket_sent_at: "2026-09-15T15:00:00Z" },
+    });
+    const sendDoc = vi.fn();
+    const res = await handleInboundMessage(admin, "store", CREDS, buttonEvent("Transferencia Depósito"), {
+      sendText: vi.fn().mockResolvedValue({ ok: true, id: "x" }),
+      sendDocument: sendDoc,
+    });
+    expect(res.reason).toBe("replied:transferencia");
+    expect(sendDoc).not.toHaveBeenCalled();
+  });
+
+  it("una guía sin OSE ID no tiene ticket, y el texto con las cuentas sale igual", async () => {
+    // Las que llegaron por el reporte Excel. Que no haya PDF no puede costarle
+    // a la clienta el mensaje que sí le sirve para pagar.
+    const admin = fakeAdmin({ shipment: { shalom_ose_id: null, guide_code: "95451003" } });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.OUT" });
+    const sendDoc = vi.fn();
+    const res = await handleInboundMessage(admin, "store", CREDS, buttonEvent("Pagar con Yape"), {
+      sendText: send,
+      sendDocument: sendDoc,
+    });
+    expect(res.reason).toBe("replied:yape;ticket:sin_ose_id");
+    expect(send).toHaveBeenCalled();
+    expect(sendDoc).not.toHaveBeenCalled();
+    expect(admin.updates.at(-1)!.patch.ticket_error).toMatch(/OSE ID/);
+  });
+
+  it("si el ticket lo rechaza Meta, el texto ya salió y solo queda el motivo", async () => {
+    const admin = fakeAdmin();
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.OUT" });
+    const sendDoc = vi.fn().mockResolvedValue({ ok: false, error: "media download failed" });
+    const res = await handleInboundMessage(admin, "store", CREDS, buttonEvent("Pagar con Yape"), {
+      sendText: send,
+      sendDocument: sendDoc,
+    });
+    expect(res.reason).toBe("replied:yape;ticket:rechazado");
+    expect(admin.updates.at(-1)!.patch).toMatchObject({ ticket_error: "media download failed" });
+  });
+
+  it("sin aviso previo se contesta igual, pero no hay guía a la que pedirle ticket", async () => {
+    const admin = fakeAdmin({ lastNotification: null });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.OUT" });
+    const sendDoc = vi.fn();
+    const res = await handleInboundMessage(admin, "store", CREDS, buttonEvent("Pagar con Yape"), {
+      sendText: send,
+      sendDocument: sendDoc,
+    });
+    expect(res.reason).toBe("replied:yape");
+    expect(send).toHaveBeenCalled();
+    expect(sendDoc).not.toHaveBeenCalled();
   });
 
   it("un webhook reintentado por Kapso no contesta dos veces", async () => {
