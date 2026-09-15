@@ -567,6 +567,17 @@ Reglas:
   preparación (`preparation_state`).
 - Estos avances son monotónicos: un reporte atrasado de Aliclik no puede deshacer
   un escaneo local ni devolver ficticiamente la custodia desde el courier.
+- **Cada cambio de etiqueta deja un evento en el pedido**, aunque el estado
+  traducido no cambie. `TO_PREPARE → PREPARED → IN_TRANSIT → IN_AGENCY → PICKED`
+  se traducen casi todos a `en_ruta`, y mirando solo el estado nuestro la
+  Actividad enseñaba un «en ruta» y nada más mientras el panel de Aliclik
+  mostraba Preparado, Recolectado, En agencia y Validado con su hora
+  (`AUR5X250809378012`, 15-09-2026). La API trae cada paso; ahora cada uno queda
+  registrado, fechado con el `updatedAt` de Aliclik y con la etiqueta cruda en
+  la nota. No es ruido: un snapshot igual al último aplicado se despacha antes
+  sin dejar evento (solo sellos de lectura), así que una etiqueta distinta de la
+  guardada es siempre un cambio real. La granularidad es la del barrido (20
+  minutos), no la del panel.
 - **Reporte Excel de Aliclik.** Mientras la API no esté conectada, el estado
   llega por el Excel del panel de Aliclik. El importador deriva el
   `delivery_status` de la guía combinando las columnas **ESTADO ENTREGA** y

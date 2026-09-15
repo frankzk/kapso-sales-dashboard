@@ -358,11 +358,21 @@ export async function applyAliclikSnapshot(
   // escribir en cada pasada llenaría el historial de líneas idénticas y lo haría
   // ilegible, que es la otra forma de perder la información.
   //
+  // Y TRANSICIÓN ES TAMBIÉN LA DE LA ETIQUETA, no solo la del estado nuestro.
+  // `TO_PREPARE → PREPARED → IN_TRANSIT → IN_AGENCY → PICKED` se traducen casi
+  // todos a `en_ruta`, así que mirando solo el estado la Actividad mostraba un
+  // «en ruta» el 11-09 y nada más, mientras el panel de Aliclik enseñaba
+  // Preparado, Recolectado, En agencia y Validado con su hora (AUR5X250809378012).
+  // La API sí trae cada paso; lo que faltaba era registrarlo. No es ruido: un
+  // snapshot idéntico ya se fue arriba por `cambiosMateriales` sin llegar aquí,
+  // así que si la etiqueta difiere de la guardada es porque Aliclik la cambió.
+  //
   // La nota lleva la etiqueta CRUDA de Aliclik además del estado nuestro, porque
   // el motivo vive ahí: «anulado» a secas no distingue quién lo anuló ni por qué,
   // y `ANNULLED` en el tercer campo dice que fue su llamada y no su reparto.
-  if (shipment.order_id && next !== shipment.delivery_status) {
-    const etiqueta = aliclikStatusLabel(order).trim();
+  const etiqueta = aliclikStatusLabel(order).trim();
+  const etiquetaCambio = etiqueta !== (shipment.reported_status ?? "").trim();
+  if (shipment.order_id && (next !== shipment.delivery_status || etiquetaCambio)) {
     await admin.from("order_events").insert({
       store_id: shipment.store_id,
       order_id: shipment.order_id,
