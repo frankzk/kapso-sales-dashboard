@@ -1371,6 +1371,12 @@ function SettingsForm({
                 <code>total</code>, <code>adelanto</code>, <code>saldo</code>, <code>yape</code>. El
                 de <code>guias_shalom</code> es el que sale de ejemplo.
               </p>
+              <p className="mt-1 text-xs text-amber-700">
+                Los importes van <strong>sin «S/»</strong> —«89.10»— porque la plantilla ya lo
+                escribe (<code>Monto total del pedido: S/ {"{{6}}"}</code>). Y si la plantilla trae
+                el Yape fijo en el cuerpo en vez de como variable, quita <code>yape</code> de la
+                lista: sobra un parámetro y Meta rechaza el envío.
+              </p>
             </div>
             <div>
               <label className={labelCls} htmlFor="shalom_transit_attach_ticket">Ticket de Shalom en cabecera</label>

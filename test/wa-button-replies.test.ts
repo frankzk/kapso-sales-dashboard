@@ -86,7 +86,16 @@ function buttonEvent(text: string, id = "wamid.BTN1") {
   };
 }
 
-function fakeAdmin(opts: { methods?: any[]; duplicate?: boolean; lastNotification?: any } = {}) {
+function fakeAdmin(
+  opts: {
+    methods?: any[];
+    duplicate?: boolean;
+    lastNotification?: any;
+    /** Lo que hay HOY en el pedido: de aquí sale el saldo, recalculado. */
+    master?: any;
+    payments?: any[];
+  } = {},
+) {
   const inserts: { table: string; row: any }[] = [];
   const updates: { table: string; patch: any }[] = [];
   const anomalies: any[] = [];
@@ -114,29 +123,31 @@ function fakeAdmin(opts: { methods?: any[]; duplicate?: boolean; lastNotificatio
         limit: () => chain,
         maybeSingle: () => {
           if (table === "shalom_transit_notifications") return Promise.resolve({ data: opts.lastNotification ?? null });
-          if (table === "order_master") return Promise.resolve({ data: { order_name: "#KP133540" } });
+          if (table === "order_master") {
+            return Promise.resolve({
+              data: opts.master ?? { order_name: "#KP133540", order_total: 89.1 },
+            });
+          }
           return Promise.resolve({ data: null });
         },
         then(res: any, rej: any) {
-          if (table === "store_payment_methods") {
-            return Promise.resolve({
-              data:
-                opts.methods ??
-                METHODS.map((m) => ({
-                  id: m.id,
-                  kind: m.kind,
-                  label: m.label,
-                  holder: m.holder,
-                  account: m.account,
-                  detail: m.detail,
-                  primary_yape: m.primaryYape,
-                  active: m.active,
-                  sort: m.sort,
-                })),
-              error: null,
-            }).then(res, rej);
-          }
-          return Promise.resolve({ data: null, error: null }).then(res, rej);
+          const lists: Record<string, any[]> = {
+            store_payment_methods:
+              opts.methods ??
+              METHODS.map((m) => ({
+                id: m.id,
+                kind: m.kind,
+                label: m.label,
+                holder: m.holder,
+                account: m.account,
+                detail: m.detail,
+                primary_yape: m.primaryYape,
+                active: m.active,
+                sort: m.sort,
+              })),
+            order_payments: opts.payments ?? [{ amount: 30, validation_status: "validado" }],
+          };
+          return Promise.resolve({ data: lists[table] ?? null, error: null }).then(res, rej);
         },
       };
       return chain;
@@ -208,16 +219,56 @@ describe("handleInboundMessage", () => {
     expect(admin.anomalies[0]).toMatchObject({ p_reason: "sin_cuentas_de_cobro" });
   });
 
-  it("«Link de pago» habla del último aviso enviado a ese celular", async () => {
-    const admin = fakeAdmin({
-      lastNotification: { order_id: "ord-1", params: ["Armando", "95451003", "PMC3", "1× Zapatilla", "ESPINAR", "S/ 89.10", "S/ 30.00", "S/ 59.10", "930 555 309"] },
-    });
+  it("«Link de pago» habla del pedido del último aviso, con el saldo de HOY", async () => {
+    // Pedido de S/ 89.10 con S/ 30 validados ⇒ debe S/ 59.10. El importe aquí
+    // SÍ lleva «S/»: es texto libre nuestro, no un parámetro de plantilla.
+    const admin = fakeAdmin({ lastNotification: { order_id: "ord-1" } });
     const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.L" });
     await handleInboundMessage(
       admin,
       "store",
       { ...CREDS, shalom_transit_payment_link: "Saldo {saldo} del {pedido}" },
       buttonEvent("Link de pago", "wamid.BTN2"),
+      { sendText: send },
+    );
+    expect(send.mock.calls[0]![1].body).toBe("Saldo S/ 59.10 del #KP133540");
+  });
+
+  it("si pagó entre el aviso y el botón, el link dice el saldo NUEVO", async () => {
+    // El aviso decía S/ 59.10; mientras tanto se validó el resto. Leer el
+    // parámetro guardado le habría cobrado dos veces.
+    const admin = fakeAdmin({
+      lastNotification: { order_id: "ord-1" },
+      payments: [
+        { amount: 30, validation_status: "validado" },
+        { amount: 59.1, validation_status: "validado" },
+      ],
+    });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.L" });
+    await handleInboundMessage(
+      admin,
+      "store",
+      { ...CREDS, shalom_transit_payment_link: "Saldo {saldo} del {pedido}" },
+      buttonEvent("Link de pago", "wamid.BTN3"),
+      { sendText: send },
+    );
+    expect(send.mock.calls[0]![1].body).toBe("Saldo S/ 0.00 del #KP133540");
+  });
+
+  it("un comprobante en revisión todavía no descuenta", async () => {
+    const admin = fakeAdmin({
+      lastNotification: { order_id: "ord-1" },
+      payments: [
+        { amount: 30, validation_status: "validado" },
+        { amount: 59.1, validation_status: "pendiente_revision" },
+      ],
+    });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.L" });
+    await handleInboundMessage(
+      admin,
+      "store",
+      { ...CREDS, shalom_transit_payment_link: "Saldo {saldo} del {pedido}" },
+      buttonEvent("Link de pago", "wamid.BTN4"),
       { sendText: send },
     );
     expect(send.mock.calls[0]![1].body).toBe("Saldo S/ 59.10 del #KP133540");

@@ -2646,6 +2646,19 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
   - **El adelanto que se le dice es lo validado**, no lo cargado. Un comprobante
     en revisión todavía no es dinero, y decirle que ya cuenta es prometer una
     clave que no se va a liberar.
+  - **Los importes van al parámetro sin «S/».** Las plantillas aprobadas ya lo
+    escriben —«Monto total del pedido: S/ {{6}}»—, así que mandar «S/ 89.10»
+    imprimía «S/ S/ 89.10». Kapta pone el dato, la plantilla la presentación.
+    El texto libre que escribe Kapta —la respuesta al botón «Link de pago»— sí
+    lo lleva, porque ahí no hay plantilla que lo ponga.
+  - **El saldo del «Link de pago» se recalcula al pulsar**, no se lee del aviso:
+    entre el aviso y el botón puede haber pagado y alguien haberlo validado, y
+    cobrarle el saldo viejo sería cobrar dos veces.
+  - Si la plantilla trae el Yape **fijo en el cuerpo** en vez de como variable
+    —la variante con el ticket en PDF—, el token `yape` sobra y hay que quitarlo
+    del orden configurado: un parámetro de más y Meta rechaza el envío. Y el
+    número escrito a mano en una plantilla es justo lo que no puede desalinearse
+    de las cuentas de cobro: si se puede, va como variable.
   - **La clave de recojo nunca va en el mensaje.** Guía, código y agencia sin la
     clave no abren nada; la clave se entrega desde la salida, con el cobro
     validado y con auditoría. Esta regla no cambia.
