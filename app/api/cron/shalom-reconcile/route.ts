@@ -11,6 +11,7 @@ import {
   shalomTrackingChanged,
   type ShalomTrackingStatus,
 } from "@/lib/shalom/tracking";
+import { enqueueTransitNotification, processTransitNotifications } from "@/lib/shalom/transit-notify";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -103,6 +104,7 @@ export async function GET(req: NextRequest) {
   const live = ((data as LiveGuide[]) ?? []).filter((g) => shalomNeedsTracking(g.delivery_status));
   if (!live.length) return NextResponse.json({ ok: true, scanned: 0, applied: 0 });
 
+  const startedAt = Date.now();
   const client = publicClient();
   const byId = new Map(live.map((g) => [g.id, g]));
   const touchedOrders = new Set<string>();
@@ -110,6 +112,7 @@ export async function GET(req: NextRequest) {
   let applied = 0;
   let failed = 0;
   let reported = 0;
+  let queued = 0;
   /** Motivo de rechazo → cuántas y una guía de muestra para ir a comprobarla. */
   const rejected = new Map<string, { count: number; ejemplo: string | null }>();
 
@@ -218,6 +221,20 @@ export async function GET(req: NextRequest) {
           new_operational: next.pickupState,
           note: `Shalom: ${next.pickupState}${next.delayed ? " (con demora declarada)" : ""}.`,
         });
+
+        // El paquete salió de viaje: es el momento de avisarle a la clienta
+        // (MOM §12). Se ENCOLA nada más; el envío va aparte, abajo, porque
+        // puede tardar y puede fallar, y esta transición no se repite. Una
+        // guía que ya estaba en tránsito antes de que existiera esto no entra:
+        // el cron solo ve el cambio.
+        if (next.pickupState === "en_transito") {
+          const ok = await enqueueTransitNotification(admin, {
+            storeId: guide.store_id,
+            shipmentId: guide.id,
+            orderId: guide.order_id,
+          });
+          if (ok) queued += 1;
+        }
       }
     }
 
@@ -245,9 +262,21 @@ export async function GET(req: NextRequest) {
 
   if (touchedOrders.size) await recomputeOrderMasterSafe(admin, [...touchedOrders]);
 
+  // Drenar la cola de avisos con lo que quede de presupuesto. Corre después
+  // del rastreo a propósito: el rastreo es lo que no puede esperar, y un
+  // aviso que se queda en cola sale en la pasada siguiente, media hora después.
+  const elapsed = Date.now() - startedAt;
+  const avisos = await processTransitNotifications(admin, {
+    budgetMs: Math.max(20_000, 240_000 - elapsed),
+  });
+  errors.push(...avisos.errors);
+
   return NextResponse.json({
     ok: true,
     scanned: live.length,
+    // Avisos de tránsito: cuántos entraron a la cola en esta pasada y cómo
+    // quedó la cola tras drenarla.
+    avisos: { encolados: queued, ...avisos },
     // `reported` = Shalom contestó. `applied` = además cambió algo. Separarlos
     // es lo que hace legible una corrida a mano: reported>0 y applied=0 significa
     // "todo bien, sin novedad", que antes se leía igual que "no corrió".

@@ -219,3 +219,42 @@ describe("buildStoreUpdate — Flow.cl (0158)", () => {
     expect(decrypt(patch.flowcl_webhook_secret_enc as string, KEY)).toBe("de-la-pasarela");
   });
 });
+
+describe("aviso de guía Shalom en tránsito (0166)", () => {
+  it("el interruptor y el ticket son toggles reales: se pueden APAGAR", () => {
+    const patch = buildStoreUpdate(
+      { shalom_transit_template_enabled: "false", shalom_transit_attach_ticket: "false" },
+      KEY,
+    );
+    expect(patch).toMatchObject({
+      shalom_transit_template_enabled: false,
+      shalom_transit_attach_ticket: false,
+    });
+  });
+
+  it("nombre, idioma y orden siguen la convención vacío = no lo cambies", () => {
+    const patch = buildStoreUpdate(
+      { shalom_transit_template_name: " guias_shalom ", shalom_transit_template_language: "", shalom_transit_params: "" },
+      KEY,
+    );
+    expect(patch).toEqual({ shalom_transit_template_name: "guias_shalom" });
+  });
+
+  it("el número propio y el link de pago son VACIABLES", () => {
+    // Hay que poder volver al número de la clienta, y quitar el link si deja de
+    // existir; con la convención de arriba no se podrían quitar nunca.
+    const patch = buildStoreUpdate(
+      { shalom_transit_phone_number_id: "  ", shalom_transit_payment_link: "" },
+      KEY,
+    );
+    expect(patch).toEqual({ shalom_transit_phone_number_id: null, shalom_transit_payment_link: null });
+  });
+
+  it("las horas solo entran en rango", () => {
+    expect(buildStoreUpdate({ shalom_transit_hour_start: "8", shalom_transit_hour_end: "21" }, KEY)).toEqual({
+      shalom_transit_hour_start: 8,
+      shalom_transit_hour_end: 21,
+    });
+    expect(buildStoreUpdate({ shalom_transit_hour_start: "25", shalom_transit_hour_end: "0" }, KEY)).toEqual({});
+  });
+});

@@ -338,6 +338,11 @@ reparto a domicilio.
   pasada tocaría cada fila, ensuciaría el `updated_at` que el Master usa para
   ordenar por movimiento, y llenaría la línea de tiempo de eventos idénticos.
 - Techo de 20 batches (1.000 guías) por pasada, porque el cupo es compartido.
+- **Cuando una guía pasa a `transito`, encola el aviso por WhatsApp a la
+  clienta** (`lib/shalom/transit-notify.ts`, MOM §12) y, al terminar el
+  rastreo, drena la cola con el tiempo que le quede. Encolar y enviar van
+  separados a propósito: el envío puede tardar (baja el ticket) y puede fallar,
+  y esa transición solo se ve una vez. El informe lo cuenta en `avisos`.
 
 Forzarlo a mano:
 

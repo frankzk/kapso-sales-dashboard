@@ -6,6 +6,7 @@ import { getAccessibleStores, getAdminOrgs, getUserRoleSummary } from "@/lib/acc
 import { env } from "@/lib/env";
 import { normalizeMetaAdAccounts } from "@/lib/meta-marketing";
 import { confirmationCycleDays } from "@/lib/order-confirmation";
+import { PAYMENT_METHOD_COLUMNS } from "@/lib/payment-methods";
 import { EmptyState } from "@/components/ui";
 import { StoreSettings, type StoreSettingsData } from "@/components/store-settings";
 
@@ -79,6 +80,9 @@ export default async function StoreSettingsPage({
     // Pre-0121 la tabla no existe ⇒ `error` y lista vacía, que es además el
     // estado normal: la tabla solo guarda excepciones.
     { data: districtCoverage },
+    // Pre-0166 la tabla no existe ⇒ `error` y lista vacía: sin cuentas no se
+    // contesta ningún botón, que es el lado seguro.
+    { data: paymentMethods },
   ] = await Promise.all([
     admin.from("stores").select("*").eq("id", storeId).single(),
     admin
@@ -111,6 +115,12 @@ export default async function StoreSettingsPage({
       .select("id,store_id,district,coverage,note,updated_at")
       .or(`store_id.is.null,store_id.eq.${storeId}`)
       .order("district", { ascending: true }),
+    admin
+      .from("store_payment_methods")
+      .select(PAYMENT_METHOD_COLUMNS)
+      .eq("store_id", storeId)
+      .order("sort", { ascending: true })
+      .order("created_at", { ascending: true }),
   ]);
 
   const data: StoreSettingsData = {
@@ -168,6 +178,16 @@ export default async function StoreSettingsPage({
       shalom_origin_terminal_id: full.shalom_origin_terminal_id ?? null,
       shalom_origin_terminal_name: full.shalom_origin_terminal_name ?? null,
       shalom_default_product_id: full.shalom_default_product_id ?? null,
+      // Pre-0166 las columnas no existen ⇒ aviso apagado, defaults de la migración.
+      shalom_transit_template_enabled: full.shalom_transit_template_enabled ?? false,
+      shalom_transit_template_name: full.shalom_transit_template_name ?? null,
+      shalom_transit_template_language: full.shalom_transit_template_language ?? null,
+      shalom_transit_params: full.shalom_transit_params ?? null,
+      shalom_transit_attach_ticket: full.shalom_transit_attach_ticket ?? false,
+      shalom_transit_phone_number_id: full.shalom_transit_phone_number_id ?? null,
+      shalom_transit_hour_start: full.shalom_transit_hour_start ?? 8,
+      shalom_transit_hour_end: full.shalom_transit_hour_end ?? 21,
+      shalom_transit_payment_link: full.shalom_transit_payment_link ?? null,
       meta_ad_accounts: normalizeMetaAdAccounts(
         full.meta_ad_accounts,
         full.meta_ad_account_id,
@@ -199,6 +219,7 @@ export default async function StoreSettingsPage({
     webhookEvents: (events as StoreSettingsData["webhookEvents"]) ?? [],
     replyTemplates: (replyTemplates as StoreSettingsData["replyTemplates"]) ?? [],
     districtCoverage: (districtCoverage as StoreSettingsData["districtCoverage"]) ?? [],
+    paymentMethods: (paymentMethods as StoreSettingsData["paymentMethods"]) ?? [],
   };
 
   const banner = sp.installed

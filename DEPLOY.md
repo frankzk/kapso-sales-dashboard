@@ -1522,6 +1522,45 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
 - **Sin backfill a propósito**: las filas viejas quedan en `financial_status`
   NULL, que no cuenta como pagado, y el barrido las va poniendo al día.
 
+## 5v. Aviso de guía Shalom en tránsito por WhatsApp — y las cuentas que ve el cliente
+
+Cuando el rastreo de Shalom registra `en_transito`, Kapta manda la plantilla
+aprobada (`guias_shalom`) con guía, código, agencia, producto y resumen de pago,
+y contesta sola los tres botones con las cuentas de la tienda (MOM §12). Nace
+**apagado** por tienda.
+
+1. **Migración `0166_shalom_transit_whatsapp.sql`**, a mano, antes del código
+   (§2). Crea las columnas `shalom_transit_*` en `stores`, la tabla
+   `store_payment_methods` (con las siete cuentas de hoy sembradas en cada
+   tienda), la cola `shalom_transit_notifications` y `wa_auto_replies`. Sin
+   ella el cron sigue funcionando: la cola falla en silencio hacia el informe
+   (`avisos.errors`) y no se manda nada.
+2. **Kapso tiene que entregar `whatsapp.message.received` al webhook de la
+   tienda** (`/api/webhooks/kapso/<storeId>`), además de los eventos de
+   conversación y de estado que ya manda. Hasta ahora ese evento se descartaba;
+   sin él, los botones no llegan y la clienta pulsa al vacío. Comprobarlo
+   pulsando un botón de prueba y mirando `wa_auto_replies`: si no aparece fila
+   ni anomalía `inbound_message`, el evento no está llegando.
+3. **Ajustes → Aviso de guía Shalom en tránsito**: nombre de la plantilla
+   (`guias_shalom`), idioma, orden de variables (el de ejemplo es el aprobado),
+   horario, y encender. «Ticket de Shalom en cabecera» solo con una plantilla
+   aprobada con cabecera de documento (`guias_shalom_imagen`); con la de texto,
+   Meta rechaza el envío.
+4. **Ajustes → Cuentas de cobro que ve el cliente**: revisar la semilla y
+   marcar el Yape principal. Conviene que sea una de las cuentas contra las que
+   se verifican comprobantes (0126), o el pago quedará en revisión.
+
+**Qué mirar después.** El informe de `/api/cron/shalom-reconcile` trae
+`avisos: { encolados, sent, failed, skipped, deferred, errors }`. `skipped`
+con la tienda apagada es lo esperado; `failed` trae el motivo en la fila
+(`shalom_transit_notifications.error`). En el pedido, el envío aparece en la
+línea de tiempo como `whatsapp_template`.
+
+**El bot de Kapso NO debe contestar esos botones.** Las cuentas viven ahora en
+Kapta; si el bot también responde a «Pagar con Yape» con una cuenta escrita a
+mano, la clienta recibe dos mensajes y, el día que la cuenta cambie, uno de los
+dos estará mal. Ver `docs/kapso-functions/README.md`.
+
 ## 7. Post-deploy verification
 
 ### WhatsApp delivery lifecycle
