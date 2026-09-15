@@ -70,13 +70,33 @@ export function parseTransitParams(raw: string | null | undefined): TransitToken
 }
 
 /**
- * «S/ 89.00». A diferencia de `amountLabel` de la recuperación, CERO es un
- * valor válido: un adelanto de S/ 0.00 o un saldo de S/ 0.00 son datos ciertos
- * que la clienta tiene que ver, no un hueco.
+ * «89.10» — el importe SIN el símbolo, que es lo que va en un parámetro de la
+ * plantilla.
+ *
+ * POR QUÉ SIN «S/». Las dos plantillas aprobadas ya lo escriben ellas:
+ *
+ *     💰 Monto total del pedido: S/ {{6}}
+ *
+ * así que mandar «S/ 89.10» en `{{6}}` le enseña a la clienta «S/ S/ 89.10».
+ * La línea es esa: Kapta pone el DATO y la plantilla pone la presentación. Si
+ * algún día se aprueba una plantilla que no escriba el símbolo, se añade el
+ * token que lo lleve — no se cambia este, o vuelve el doble prefijo.
+ *
+ * CERO es un valor válido: un adelanto de S/ 0.00 o un saldo de S/ 0.00 son
+ * datos ciertos que la clienta tiene que ver, no un hueco.
+ */
+export function amountValue(amount: number | null | undefined): string {
+  if (amount == null || !Number.isFinite(amount) || amount < 0) return "";
+  return Number(amount).toFixed(2);
+}
+
+/**
+ * «S/ 89.10» — con el símbolo, para el TEXTO LIBRE que escribe Kapta (la
+ * respuesta al botón «Link de pago»). Ahí no hay plantilla que lo ponga.
  */
 export function moneyLabel(amount: number | null | undefined): string {
-  if (amount == null || !Number.isFinite(amount) || amount < 0) return "";
-  return `S/ ${Number(amount).toFixed(2)}`;
+  const v = amountValue(amount);
+  return v ? `S/ ${v}` : "";
 }
 
 /**
@@ -106,6 +126,17 @@ export interface TransitFacts {
   yapeNumber: string | null;
 }
 
+/** El saldo pendiente: total menos lo VALIDADO, nunca negativo. `null` cuando
+ *  no se sabe el total. Pura — la usan la plantilla y la respuesta al botón. */
+export function pendingBalance(
+  orderTotal: number | null | undefined,
+  validatedAmount: number | null | undefined,
+): number | null {
+  if (orderTotal == null || !Number.isFinite(orderTotal)) return null;
+  const validated = Number(validatedAmount) || 0;
+  return Math.max(0, Math.round((orderTotal - validated) * 100) / 100);
+}
+
 /**
  * Resuelve los parámetros del cuerpo, en el orden configurado. Devuelve el
  * motivo cuando alguno queda vacío: es la última red antes de gastar un envío
@@ -118,7 +149,7 @@ export function transitBodyParams(
 ): { ok: true; params: string[] } | { ok: false; missing: TransitToken[] } {
   const total = f.orderTotal ?? null;
   const validated = f.validatedAmount ?? 0;
-  const saldo = total == null ? null : Math.max(0, Math.round((total - validated) * 100) / 100);
+  const saldo = pendingBalance(total, validated);
   const values = tokens.map((t): string => {
     switch (t) {
       case "nombre":
@@ -131,12 +162,13 @@ export function transitBodyParams(
         return productsLabel(f.lineItems);
       case "agencia":
         return sanitizeTemplateParam(f.agencyName);
+      // Sin «S/»: lo escribe la plantilla. Ver `amountValue`.
       case "total":
-        return total != null && total > 0 ? moneyLabel(total) : "";
+        return total != null && total > 0 ? amountValue(total) : "";
       case "adelanto":
-        return moneyLabel(validated);
+        return amountValue(validated);
       case "saldo":
-        return moneyLabel(saldo);
+        return amountValue(saldo);
       case "yape":
         return sanitizeTemplateParam(f.yapeNumber);
     }

@@ -28,6 +28,7 @@ import {
   yapeQuickReply,
   type PaymentMethod,
 } from "@/lib/payment-methods";
+import { moneyLabel, pendingBalance } from "@/lib/shalom/transit-notify";
 
 export type PaymentButton = "yape" | "transferencia" | "link_pago";
 
@@ -69,7 +70,8 @@ export function matchPaymentButton(
   return null;
 }
 
-/** Lo que el link de pago puede interpolar. */
+/** Lo que el link de pago puede interpolar. `saldo` ya viene con «S/»: acá no
+ *  hay plantilla que lo escriba, es texto libre nuestro. */
 export interface LinkContext {
   saldo: string | null;
   pedido: string | null;
@@ -225,34 +227,37 @@ async function latestTransitContext(
 ): Promise<{ ctx: LinkContext; orderId: string | null }> {
   const { data } = await admin
     .from("shalom_transit_notifications")
-    .select("order_id,params,template_name")
+    .select("order_id")
     .eq("store_id", storeId)
     .eq("phone", phone)
     .eq("status", "sent")
     .order("sent_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  const row = (data ?? null) as { order_id: string | null; params: unknown } | null;
-  if (!row) return { ctx: { saldo: null, pedido: null }, orderId: null };
+  const row = (data ?? null) as { order_id: string | null } | null;
+  if (!row?.order_id) return { ctx: { saldo: null, pedido: null }, orderId: null };
 
-  let saldo: string | null = null;
-  let pedido: string | null = null;
-  if (row.order_id) {
-    const { data: m } = await admin
-      .from("order_master")
-      .select("order_name")
-      .eq("order_id", row.order_id)
-      .maybeSingle();
-    pedido = ((m ?? null) as { order_name: string | null } | null)?.order_name ?? null;
-  }
-  // El saldo tal como se le DIJO en el aviso —el último parámetro con forma de
-  // importe antes del Yape— y no uno recalculado: si pagó entre medias, la
-  // asesora valida y el siguiente mensaje ya lo refleja.
-  const params = Array.isArray(row.params) ? (row.params as unknown[]).map(String) : [];
-  const amounts = params.filter((p) => /^S\/ \d/.test(p));
-  if (amounts.length) saldo = amounts[amounts.length - 1] ?? null;
+  // El saldo se RECALCULA, no se lee del aviso. Entre el aviso y el botón puede
+  // haber pagado y alguien haberlo validado, y lo que la clienta quiere pagar
+  // ahora es lo que debe ahora. (Antes se sacaba del parámetro con forma de
+  // importe; con los importes ya sin «S/» —los escribe la plantilla— ese truco
+  // dejó de funcionar, y recalcular es además la respuesta correcta.)
+  const [master, payments] = await Promise.all([
+    admin.from("order_master").select("order_name,order_total").eq("order_id", row.order_id).maybeSingle(),
+    admin.from("order_payments").select("amount,validation_status").eq("order_id", row.order_id),
+  ]);
+  const m = (master.data ?? null) as { order_name: string | null; order_total: number | null } | null;
+  const validated = ((payments.data ?? []) as { amount: number | null; validation_status: string }[])
+    .filter((p) => p.validation_status === "validado")
+    .reduce((s, p) => s + (Number(p.amount) || 0), 0);
 
-  return { ctx: { saldo, pedido }, orderId: row.order_id };
+  return {
+    ctx: {
+      saldo: moneyLabel(pendingBalance(m?.order_total ?? null, validated)),
+      pedido: m?.order_name ?? null,
+    },
+    orderId: row.order_id,
+  };
 }
 
 function sampleOf(body: unknown): Record<string, unknown> | null {

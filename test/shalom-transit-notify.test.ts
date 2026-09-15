@@ -13,9 +13,11 @@ vi.mock("@/lib/shalom/session", () => ({
 import {
   TRANSIT_DEFAULT_PARAMS,
   TRANSIT_MAX_ATTEMPTS,
+  amountValue,
   enqueueTransitNotification,
   moneyLabel,
   parseTransitParams,
+  pendingBalance,
   processTransitNotifications,
   productsLabel,
   resolveSenderNumber,
@@ -52,12 +54,28 @@ describe("parseTransitParams", () => {
   });
 });
 
-describe("moneyLabel", () => {
-  it("cero es un importe válido: un saldo de S/ 0.00 es un dato, no un hueco", () => {
-    expect(moneyLabel(0)).toBe("S/ 0.00");
-    expect(moneyLabel(89.1)).toBe("S/ 89.10");
+describe("importes", () => {
+  // La plantilla aprobada YA escribe el símbolo: «Monto total del pedido: S/
+  // {{6}}». Mandar «S/ 89.10» en {{6}} le enseñaba a la clienta «S/ S/ 89.10».
+  it("el parámetro de la plantilla va SIN «S/»: lo pone la plantilla", () => {
+    expect(amountValue(89.1)).toBe("89.10");
+    expect(amountValue(0)).toBe("0.00");
+    expect(amountValue(null)).toBe("");
+    expect(amountValue(-1)).toBe("");
+  });
+
+  it("el texto libre que escribe Kapta sí lo lleva", () => {
+    expect(moneyLabel(59.1)).toBe("S/ 59.10");
     expect(moneyLabel(null)).toBe("");
-    expect(moneyLabel(-1)).toBe("");
+  });
+});
+
+describe("pendingBalance", () => {
+  it("es el total menos lo validado, y nunca negativo", () => {
+    expect(pendingBalance(89.1, 30)).toBe(59.1);
+    expect(pendingBalance(89.1, 0)).toBe(89.1);
+    expect(pendingBalance(89.1, 200)).toBe(0);
+    expect(pendingBalance(null, 30)).toBeNull();
   });
 });
 
@@ -84,23 +102,39 @@ describe("transitBodyParams", () => {
         "PMC3",
         "1× Zapatilla Runner (39-40)",
         "CUSCO / ESPINAR / YAURI ( ESPINAR ) / ESPINAR",
-        "S/ 89.10",
-        "S/ 30.00",
-        "S/ 59.10",
+        "89.10",
+        "30.00",
+        "59.10",
         "930 555 309",
       ],
     });
   });
 
-  it("sin adelanto validado el adelanto es S/ 0.00 y el saldo es el total", () => {
+  it("ningún importe lleva «S/»: la plantilla ya lo escribe", () => {
+    const r = transitBodyParams(ALL, facts());
+    expect(r.ok && r.params.some((p) => p.includes("S/"))).toBe(false);
+  });
+
+  // La variante con el ticket en PDF trae el Yape fijo en el cuerpo, así que
+  // son OCHO parámetros y el token `yape` sobra.
+  it("acepta la configuración de ocho de guias_shalom_imagen", () => {
+    const ocho = parseTransitParams("nombre,guia,codigo,producto,agencia,total,adelanto,saldo");
+    const r = transitBodyParams(ocho, facts({ yapeNumber: null }));
+    expect(r).toEqual({
+      ok: true,
+      params: ["Armando", "95451003", "PMC3", "1× Zapatilla Runner (39-40)", "CUSCO / ESPINAR / YAURI ( ESPINAR ) / ESPINAR", "89.10", "30.00", "59.10"],
+    });
+  });
+
+  it("sin adelanto validado el adelanto es 0.00 y el saldo es el total", () => {
     const r = transitBodyParams(ALL, facts({ validatedAmount: 0 }));
-    expect(r.ok && r.params[6]).toBe("S/ 0.00");
-    expect(r.ok && r.params[7]).toBe("S/ 89.10");
+    expect(r.ok && r.params[6]).toBe("0.00");
+    expect(r.ok && r.params[7]).toBe("89.10");
   });
 
   it("un sobrepago no deja el saldo en negativo", () => {
     const r = transitBodyParams(ALL, facts({ validatedAmount: 200 }));
-    expect(r.ok && r.params[7]).toBe("S/ 0.00");
+    expect(r.ok && r.params[7]).toBe("0.00");
   });
 
   it("nombra QUÉ falta en vez de mandar un parámetro vacío que Meta rechaza", () => {
@@ -307,7 +341,7 @@ describe("processTransitNotifications", () => {
         phoneNumberId: "PN-lead",
         to: "51929098849",
         templateName: "guias_shalom",
-        bodyParams: ["Armando", "95451003", "PMC3", "1× Zapatilla Runner (39-40)", "CUSCO / ESPINAR / YAURI ( ESPINAR ) / ESPINAR", "S/ 89.10", "S/ 30.00", "S/ 59.10", "930 555 309"],
+        bodyParams: ["Armando", "95451003", "PMC3", "1× Zapatilla Runner (39-40)", "CUSCO / ESPINAR / YAURI ( ESPINAR ) / ESPINAR", "89.10", "30.00", "59.10", "930 555 309"],
       }),
     );
     // Sin ticket no va cabecera.
