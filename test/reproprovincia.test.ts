@@ -278,7 +278,7 @@ describe("y la macroetapa la aplica IGUAL", () => {
     // no prueba comportamiento, avisa de que hay que subir la versión.
     // v1.12 (14-09-2026): el candado del cambio manual cede ante una guía
     // registrada después, y eso recoloca 31 pedidos sin que nada los toque.
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.12");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.13");
   });
 });
 

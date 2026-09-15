@@ -460,9 +460,11 @@ Registro:
   con su guía Shalom registrada días después seguían figurando como «En curso ·
   recibido por courier» estando recogidos: el estado legado se quedaba en
   `en_proceso` y `recogido_sin_pago_completo` (§6.5) exige `entregado`, así que
-  la alerta crítica no llegaba a encenderse. Medido el 14-09-2026: **11 pedidos,
-  S/ 2.054, de los que S/ 1.062 estaban recogidos y sin cobrar**, escondidos
-  detrás del candado desde el 4 de agosto.
+  la alerta crítica no llegaba a encenderse. Medido sobre el resultado ya
+  recalculado: **31 pedidos con guía posterior al candado, de los que 8
+  (S/ 1.439) aparecieron en la alerta de cobro**. La estimación previa al cambio
+  decía «11 pedidos y S/ 1.062» y salió mal en las dos direcciones; queda escrita
+  la medida, no la estimación.
 - La subetapa y el conteo de días se derivan de esos hechos. No hay un contador
   que alguien tenga que mantener.
 
@@ -722,7 +724,21 @@ Motivos simultáneos posibles:
 - `salida_adicional_activa`.
 - `devolucion_fisica_pendiente`.
 - `devolucion_pendiente_inventario`.
-- `recogido_sin_pago_completo` — alerta crítica.
+- `recogido_sin_pago_completo` — alerta crítica. **Qué cuenta como cobrado**: el
+  comprobante Yape completo, o `financial_status = 'paid'` en Shopify sin
+  reembolso. Lo segundo hace falta porque en Agencia la clienta paga en el
+  mostrador, que no deja ni comprobante ni pasarela: mirando solo los dos
+  primeros canales la alerta se encendía sobre pedidos ya cobrados. Medido el
+  14-09-2026: de **651 pedidos y S/ 111.707** en la alerta, **569 (S/ 96.497)
+  estaban `paid`**; sin rastro de cobro quedan **80 (S/ 15.022)** y 2 anulados
+  (S/ 188). Que `financial_status` vale como prueba de cobro en Agencia está
+  medido y no supuesto: lo tiene el 87,7 % de los recogidos por cerrar y el
+  89,4 % de los recogidos finalizados, contra **0 % de los 1.642 anulados o
+  devueltos**, y solo el 9-10 % de los pedidos de cada mes.
+  **Esta regla laxa no se extiende** a cuánto cobra el courier en la puerta
+  (`expectedCollectAmount`) ni al abono que Agencia exige para pasar a
+  Preparación (§6.1): ahí el pedido aún no se ha recogido y equivocarse cuesta
+  dinero, no una llamada de más.
 - `indemnizacion_pendiente`.
 - `merma_pendiente`.
 - `reembolso_pendiente`.

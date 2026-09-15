@@ -154,3 +154,36 @@ describe("el detector deja de ser ciego al prepago", () => {
     expect(m?.message).toContain("paga dos veces");
   });
 });
+
+/**
+ * LA FRONTERA ENTRE LAS DOS PREGUNTAS (14-09-2026, mom-v1.13).
+ *
+ * «Recogido sin pago completo» aprendió a aceptar `financial_status = 'paid'`
+ * como rastro de cobro, porque en Agencia el dinero entra por el mostrador de
+ * Shalom y no deja ni comprobante Yape ni pasarela. Esa alerta puede permitirse
+ * el error: perseguir a quien ya pagó molesta, no cuesta.
+ *
+ * ESTA pregunta no puede. `expectedCollectAmount` decide cuánto cobra el
+ * repartidor en la puerta, y aflojarla manda a cobrar S/ 0 de algo impago: el
+ * dinero no vuelve. Estas pruebas existen para que las dos no se confundan
+ * nunca — si alguien «unifica» ambas reglas por simetría, revientan acá.
+ */
+describe("la regla laxa de la alerta NO contagia a la del motorizado", () => {
+  const PAGADO_EN_SHOPIFY_SIN_PASARELA = { financialStatus: "paid", paymentGateway: null };
+
+  it("`paid` sin pasarela NO pone la guía en 0: el motorizado sigue cobrando el total", () => {
+    expect(expectedCollectAmount(PAGADO_EN_SHOPIFY_SIN_PASARELA, 149)).toBe(149);
+    expect(orderFullyPaid(PAGADO_EN_SHOPIFY_SIN_PASARELA)).toBe(false);
+    expect(isWebPrepaid(PAGADO_EN_SHOPIFY_SIN_PASARELA)).toBe(false);
+  });
+
+  it("marcarlo a mano en Shopify tampoco basta", () => {
+    const aMano = { financialStatus: "paid", paymentGateway: "manual" as const };
+    expect(expectedCollectAmount(aMano, 298)).toBe(298);
+  });
+
+  it("lo que sí pone la guía en 0 sigue siendo la pasarela o el Yape completo", () => {
+    expect(expectedCollectAmount(WEB, 456.3)).toBe(0);
+    expect(expectedCollectAmount(YAPE_COMPLETO, 456.3)).toBe(0);
+  });
+});

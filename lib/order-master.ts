@@ -1049,6 +1049,7 @@ export async function recomputeOrderMaster(
           confirmationActivationByStore.get(order.store_id) ?? "2026-06-01",
         cancelled_at: order.cancelled_at,
         financial_status: order.financial_status,
+        total_refunded: order.total_refunded,
         shipping_mode: order.shipping_mode,
         coverage: resolvedCoverage,
         region,
