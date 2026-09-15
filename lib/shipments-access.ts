@@ -564,14 +564,22 @@ async function guiasPorRecuperar(
   const desdeIso = new Date(
     Date.now() - RECOVERY_DEFAULT_MAX_DAYS * 2 * 86_400_000,
   ).toISOString();
-  const { data, error } = await sb
+  let query = sb
     .from("shipments")
     .select(columns)
     .in("store_id", storeIds)
     .eq("status_category", "closed")
     .eq("courier", "aliclik")
-    .gte("updated_at", desdeIso)
-    .eq("shipment_calls.kind", "call")
+    .gte("updated_at", desdeIso);
+  // El filtro solo tiene sentido si las columnas TRAEN el embebido: acota qué
+  // llamadas entran en `shipment_calls(count)`. Pedido sobre unas columnas que
+  // no lo embeben, PostgREST responde 400 y esta función devolvía [] en
+  // silencio — que es lo que pasaba con `RECUPERAR_COUNT_COLUMNS`, dejando el
+  // chip de Pendiente sin su mitad «Por recuperar» (visto en los logs del
+  // 15-09-2026). El contador y la lista salen de aquí, así que el número y las
+  // filas tienen que venir de la misma consulta o vuelven a discrepar.
+  if (columns.includes("shipment_calls")) query = query.eq("shipment_calls.kind", "call");
+  const { data, error } = await query
     .order("updated_at", { ascending: false })
     .limit(PAGE);
   if (error) return [];
@@ -632,19 +640,27 @@ export async function getStoreShipments(
   // Reproprovincia / Recuperación vencida / Descartada»). Se calcula sobre las
   // filas propias de la vista ANTES de anexar las recuperables, que ya vienen
   // decididas de `guiasPorRecuperar` — la misma función, sin pasar dos veces.
-  const decididas = await withRecoveryState(sb, out);
-  out.length = 0;
-  out.push(...decididas);
+  //
+  // EL RESULTADO VA A UN ARRAY NUEVO, Y NO ES UN DETALLE DE ESTILO. Antes esto
+  // era `out.length = 0; out.push(...decididas)`, y `withRecoveryState` tiene un
+  // atajo: cuando ninguna fila es candidata a recuperación devuelve EL MISMO
+  // array que recibió. Entonces `decididas === out`, vaciar `out` vaciaba
+  // también a `decididas` y el push no reponía nada: la vista entera se perdía.
+  // Y el atajo se toma justo en las vistas que no tienen ninguna cerrada de
+  // Aliclik —En ruta, Entregado, Transferido—, así que se perdían siempre
+  // (#KP132394: «En ruta 591» con la tabla vacía). El contador venía de otra
+  // consulta y seguía diciendo la verdad, que es lo que lo volvió invisible.
+  const filas = [...(await withRecoveryState(sb, out))];
   // Las cerradas SIN entregar entran a la misma cola (MOM §11), no a una
   // pestaña aparte: son la misma pregunta —«¿a quién hay que llamar?»— y el
   // documento las lista junto a las demás entradas. Se distinguen con el chip
   // «Por recuperar», no partiendo la cola en dos.
   if (esColaDeReprogramacion(cats)) {
-    out.push(...(await guiasPorRecuperar(sb, storeIds, SHIPMENT_LIST_COLUMNS)).map(withContactCount));
+    filas.push(...(await guiasPorRecuperar(sb, storeIds, SHIPMENT_LIST_COLUMNS)).map(withContactCount));
   }
   // "Última gestión" applies to every view (how long a guide has gone without
   // our team touching it).
-  const out2 = await withLastGestion(sb, out, storeIds);
+  const out2 = await withLastGestion(sb, filas, storeIds);
 
   // La elegibilidad Fenix se recalcula en TODAS las vistas, no solo en
   // Pendiente. Antes las demás devolvían el flag GUARDADO, que envejece en

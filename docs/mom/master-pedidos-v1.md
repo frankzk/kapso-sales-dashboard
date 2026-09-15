@@ -2047,6 +2047,15 @@ aproximado: un ubigeo equivocado desvía el paquete sin avisar.
 
 Los códigos son INEI, nunca RENIEC — numeran distinto los mismos distritos.
 
+«Exacto» es sobre el DISTRITO, no sobre cómo se escribe. El nombre llega del
+campo *city* de la dirección de Shopify, que usa el nombre oficial completo, y
+el padrón a veces usa el corto: «Lurigancho-Chosica» contra «Lurigancho». El
+guion, la barra y la coma se leen como separador, y las grafías conocidas
+—«Surco», «Cercado de Lima», «Chosica»— tienen alias. Lo que sigue sin resolver
+se rechaza: un nombre ambiguo como «San Juan» o «Huachipa» no se adivina.
+Esto vino de #KP132394, donde la cobertura aceptaba la guía y el ubigeo la
+negaba —comparaban distinto— y la salida se creó con código manual.
+
 Falta la configuración de bodega Swayp (`senders`) de las cuatro ciudades
 nuevas; sin ella la guía se niega aunque el ubigeo resuelva. Es configuración
 operativa, no código.
