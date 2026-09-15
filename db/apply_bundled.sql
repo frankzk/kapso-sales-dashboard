@@ -12691,3 +12691,351 @@ comment on column stores.flowcl_secret_key_enc is
 comment on column stores.flowcl_webhook_secret_enc is
   'Secreto que viaja en la urlConfirmation de esta tienda. Flow no firma sus '
   'avisos; el aviso solo dice "mira otra vez" y la verdad se relee con getStatus.';
+
+-- ---- 0162 ----
+-- MOM 29.9: personal rider earnings, never the courier's selling price.
+-- No historical updates and no name-based Roy seed. Configure the exact rider ID.
+create table rider_pay_rates (
+  id uuid primary key default gen_random_uuid(),
+  rider_id uuid not null references riders(id),
+  district_key text references peru_districts(district_key),
+  amount numeric(12,2) not null check (amount >= 0 and amount < 100000),
+  effective_from date not null,
+  reason text not null check (length(trim(reason)) >= 3),
+  created_by uuid not null references auth.users(id),
+  created_at timestamptz not null default clock_timestamp()
+);
+create index rider_pay_rates_lookup on rider_pay_rates(rider_id, effective_from desc, created_at desc);
+
+create table rider_pay_adjustments (
+  id uuid primary key default gen_random_uuid(),
+  route_id uuid not null references delivery_routes(id),
+  stop_id uuid not null references delivery_stops(id),
+  amount numeric(12,2) not null check (amount <> 0 and abs(amount) < 100000),
+  reason text not null check (length(trim(reason)) >= 3),
+  reverses_id uuid unique references rider_pay_adjustments(id),
+  approved_by uuid not null references auth.users(id),
+  approved_at timestamptz not null default clock_timestamp(),
+  check ((reverses_id is null and amount > 0) or (reverses_id is not null and amount < 0))
+);
+create index rider_pay_adjustments_route on rider_pay_adjustments(route_id);
+
+create table rider_daily_pay_closures (
+  route_id uuid primary key references delivery_routes(id),
+  snapshot jsonb not null,
+  approved_by uuid not null references auth.users(id),
+  approved_at timestamptz not null default clock_timestamp()
+);
+
+-- All writes through service-only RPCs with exact-organization permissions.
+alter table rider_pay_rates enable row level security;
+alter table rider_pay_adjustments enable row level security;
+alter table rider_daily_pay_closures enable row level security;
+revoke all on rider_pay_rates, rider_pay_adjustments, rider_daily_pay_closures from anon, authenticated;
+grant select, insert on rider_pay_rates, rider_pay_adjustments, rider_daily_pay_closures to service_role;
+
+create function rider_pay_immutable() returns trigger language plpgsql as $$
+begin raise exception 'El historial de ganancia es inmutable; registra una nueva versión o contrapartida.'; end $$;
+create trigger rider_pay_rates_immutable before update or delete on rider_pay_rates for each row execute function rider_pay_immutable();
+create trigger rider_pay_adjustments_immutable before update or delete on rider_pay_adjustments for each row execute function rider_pay_immutable();
+create trigger rider_daily_pay_immutable before update or delete on rider_daily_pay_closures for each row execute function rider_pay_immutable();
+
+create function rider_pay_allowed(p_org uuid, p_actor uuid, p_permission text)
+returns boolean language sql stable set search_path = public as $$
+  select coalesce((select coalesce(
+    (select granted from user_permissions where org_id = p_org and user_id = p_actor and permission = p_permission),
+    m.role in ('owner', 'admin') or (m.role = 'vendedora' and p_permission = 'routes.manage'))
+    from memberships m where m.org_id = p_org and m.user_id = p_actor), false);
+$$;
+revoke all on function rider_pay_allowed(uuid,uuid,text) from public, anon, authenticated;
+grant execute on function rider_pay_allowed(uuid,uuid,text) to service_role;
+
+create function rider_pay_save_rate(p_rider uuid, p_district text, p_amount numeric, p_from date, p_reason text, p_actor uuid)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_org uuid; v_id uuid;
+begin
+  select org_id into v_org from riders where id = p_rider for update;
+  if not rider_pay_allowed(v_org, p_actor, 'costs.manage') then raise exception 'Sin permiso para configurar tarifas personales.'; end if;
+  if p_amount is null or p_amount::text = 'NaN' or p_amount <> round(p_amount,2) then raise exception 'Importe inválido.'; end if;
+  insert into rider_pay_rates(rider_id,district_key,amount,effective_from,reason,created_by)
+    values(p_rider,nullif(p_district,''),p_amount,p_from,trim(p_reason),p_actor) returning id into v_id;
+  return v_id;
+end $$;
+
+create function rider_pay_add_adjustment(p_route uuid, p_stop uuid, p_amount numeric, p_reason text, p_actor uuid, p_request uuid, p_reverse uuid default null)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_route delivery_routes; v_original rider_pay_adjustments; v_id uuid;
+begin
+  select * into v_route from delivery_routes where id = p_route for update;
+  if not rider_pay_allowed(v_route.org_id,p_actor,'settlements.close') then raise exception 'Sin permiso para aprobar adicionales.'; end if;
+  if exists(select 1 from rider_pay_adjustments where id=p_request and route_id=p_route and stop_id=p_stop and approved_by=p_actor and reason=trim(p_reason)) then return p_request; end if;
+  if exists(select 1 from rider_daily_pay_closures where route_id=p_route) then raise exception 'La liquidación diaria ya está aprobada.'; end if;
+  if not exists(select 1 from delivery_stops where id=p_stop and route_id=p_route) then raise exception 'Punto ajeno a la ruta.'; end if;
+  if p_reverse is not null then
+    select * into v_original from rider_pay_adjustments where id=p_reverse and route_id=p_route and stop_id=p_stop and reverses_id is null;
+    if not found then raise exception 'Adicional no encontrado.'; end if;
+    p_amount := -v_original.amount;
+  end if;
+  if p_amount is null or p_amount::text = 'NaN' or p_amount <> round(p_amount,2) then raise exception 'Importe inválido.'; end if;
+  insert into rider_pay_adjustments(id,route_id,stop_id,amount,reason,reverses_id,approved_by)
+    values(p_request,p_route,p_stop,p_amount,trim(p_reason),p_reverse,p_actor) returning id into v_id;
+  return v_id;
+end $$;
+
+-- One authoritative calculation for both the on-screen draft and approval.
+create function rider_pay_preview(p_route uuid, p_actor uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_route delivery_routes; v_rows jsonb; v_adjustments jsonb; v_cash numeric; v_direct numeric;
+  v_base numeric; v_extra numeric; v_missing int; v_pending int; v_evidence int; v_conflicts int;
+begin
+  select * into v_route from delivery_routes where id=p_route;
+  if not (rider_pay_allowed(v_route.org_id,p_actor,'routes.manage') or rider_pay_allowed(v_route.org_id,p_actor,'settlements.close')) then
+    raise exception 'Sin acceso al cálculo de esta ruta.';
+  end if;
+  select coalesce(jsonb_agg(to_jsonb(x) order by x.seq,x.stop_id),'[]'::jsonb) into v_rows from (
+    select s.id stop_id,s.order_id,s.store_id,s.seq,s.status,s.outcome_reason,s.payment_method,
+      s.collected_amount,s.reported_at,s.photo_path,s.voucher_path,
+      om.order_name,om.district,
+      t.id rate_id,t.effective_from,t.amount configured_rate,
+      case when s.status='entregado' or (s.status='no_entregado' and s.outcome_reason='rechazado') then t.amount else 0 end base,
+      coalesce((select sum(a.amount) from rider_pay_adjustments a where a.stop_id=s.id and a.route_id=p_route),0) extra
+    from delivery_stops s
+    left join order_master om on om.order_id=s.order_id
+    left join lateral (
+      select r.* from rider_pay_rates r where r.rider_id=v_route.rider_id and r.effective_from<=v_route.route_date
+      and (r.district_key is null or r.district_key=case when resolve_lima_district(om.district,true)='lurigancho chosica' then 'lurigancho' else resolve_lima_district(om.district,true) end)
+      order by (r.district_key is not null) desc,r.effective_from desc,r.created_at desc,r.id desc limit 1
+    ) t on true
+    where s.route_id=p_route
+  ) x;
+  select coalesce(jsonb_agg(jsonb_build_object('id',a.id,'stop_id',a.stop_id,'amount',a.amount,'reason',a.reason,
+    'approved_by',a.approved_by,'approved_at',a.approved_at,'approved_label',coalesce(u.email,a.approved_by::text),
+    'reverses_id',a.reverses_id) order by a.approved_at,a.id),'[]'::jsonb)
+    into v_adjustments from rider_pay_adjustments a left join auth.users u on u.id=a.approved_by where a.route_id=p_route;
+  select coalesce(sum(case when x->>'status'='entregado' and x->>'payment_method'='efectivo' then (x->>'collected_amount')::numeric else 0 end),0),
+    coalesce(sum(case when x->>'status'='entregado' and x->>'payment_method' in ('yape','pos') then (x->>'collected_amount')::numeric else 0 end),0),
+    coalesce(sum((x->>'base')::numeric),0),coalesce(sum((x->>'extra')::numeric),0),
+    count(*) filter(where x->>'base' is null),count(*) filter(where x->>'status'='pendiente'),
+    count(*) filter(where ((x->>'status'='entregado' or x->>'outcome_reason'='rechazado') and coalesce(x->>'photo_path','')='')
+      or (x->>'status'='entregado' and x->>'payment_method'='yape' and coalesce(x->>'voucher_path','')='')),
+    count(*) filter(where (x->>'status'='entregado' and coalesce(x->>'payment_method','') not in ('efectivo','yape','pos','sin_cobro'))
+      or (x->>'status'='entregado' and x->>'payment_method'='sin_cobro' and coalesce((x->>'collected_amount')::numeric,0)<>0)
+      or (x->>'status'='entregado' and x->>'payment_method' in ('efectivo','yape','pos') and coalesce((x->>'collected_amount')::numeric,0)<=0)
+      or (x->>'status'='no_entregado' and coalesce((x->>'collected_amount')::numeric,0)<>0))
+    into v_cash,v_direct,v_base,v_extra,v_missing,v_pending,v_evidence,v_conflicts from jsonb_array_elements(v_rows) x;
+  return jsonb_build_object('route_id',p_route,'rider_id',v_route.rider_id,'day',v_route.route_date,'route_status',v_route.status,
+    'rider_name',(select full_name from riders where id=v_route.rider_id),'rows',v_rows,'adjustments',v_adjustments,
+    'cash',v_cash,'direct',v_direct,'base',v_base,'extra',v_extra,'earned',v_base+v_extra,
+    'net_cash',case when v_missing=0 then v_cash-v_base-v_extra else null end,
+    'missing',v_missing,'pending',v_pending,'evidence_missing',v_evidence,'conflicts',v_conflicts);
+end $$;
+
+create function rider_pay_approve(p_route uuid, p_expected jsonb, p_actor uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_route delivery_routes; v_snapshot jsonb; v_existing jsonb;
+begin
+  select * into v_route from delivery_routes where id=p_route for update;
+  if not rider_pay_allowed(v_route.org_id,p_actor,'settlements.close') then raise exception 'Sin permiso para aprobar la liquidación.'; end if;
+  select snapshot into v_existing from rider_daily_pay_closures where route_id=p_route;
+  if found then return v_existing; end if;
+  -- Same lock as tariff creation, so a new version cannot enter halfway through approval.
+  perform 1 from riders where id=v_route.rider_id for update;
+  perform 1 from delivery_stops where route_id=p_route for update;
+  if v_route.status <> 'cerrada' then raise exception 'Primero termina la ruta operativa.'; end if;
+  v_snapshot := rider_pay_preview(p_route,p_actor);
+  if p_expected is distinct from v_snapshot then raise exception 'El cálculo cambió. Actualiza y revisa el desglose antes de aprobar.'; end if;
+  if jsonb_array_length(v_snapshot->'rows')=0 or (v_snapshot->>'missing')::int>0 or (v_snapshot->>'pending')::int>0
+    or (v_snapshot->>'evidence_missing')::int>0 or (v_snapshot->>'conflicts')::int>0 then
+    raise exception 'Revisa tarifas, reportes y evidencia antes de aprobar.';
+  end if;
+  if exists(select 1 from rider_settlements where route_id=p_route and status='cerrada') then
+    raise exception 'Ya existe un cierre financiero anterior por tienda. Requiere conciliación, no otro pago.';
+  end if;
+  insert into rider_daily_pay_closures(route_id,snapshot,approved_by) values(p_route,v_snapshot,p_actor);
+  return v_snapshot;
+end $$;
+
+-- Once frozen no parallel/stale report can change the facts used in the closure.
+create function rider_pay_protect_report() returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  -- Check both routes: moving a stop away must not bypass an approved snapshot.
+  perform 1 from delivery_routes where id in (new.route_id,old.route_id) order by id for update;
+  if exists(select 1 from rider_daily_pay_closures where route_id in (new.route_id,old.route_id)) then
+    raise exception 'Ruta liquidada: conserva el historial y solicita una corrección financiera.';
+  end if;
+  if tg_op='DELETE' then return old; end if;
+  return new;
+end $$;
+create trigger rider_pay_protect_report before insert or update or delete on delivery_stops for each row execute function rider_pay_protect_report();
+
+revoke all on function rider_pay_save_rate(uuid,text,numeric,date,text,uuid) from public,anon,authenticated;
+revoke all on function rider_pay_add_adjustment(uuid,uuid,numeric,text,uuid,uuid,uuid) from public,anon,authenticated;
+revoke all on function rider_pay_preview(uuid,uuid) from public,anon,authenticated;
+revoke all on function rider_pay_approve(uuid,jsonb,uuid) from public,anon,authenticated;
+grant execute on function rider_pay_save_rate(uuid,text,numeric,date,text,uuid) to service_role;
+grant execute on function rider_pay_add_adjustment(uuid,uuid,numeric,text,uuid,uuid,uuid) to service_role;
+grant execute on function rider_pay_preview(uuid,uuid) to service_role;
+grant execute on function rider_pay_approve(uuid,jsonb,uuid) to service_role;
+
+-- ---- 0163 ----
+-- 0163 — Un conjunto de anuncios promociona un solo producto.
+--
+-- NACIÓ COMO 0162 Y SE RENUMERÓ. La 0162 ya estaba ocupada por
+-- `0162_rider_daily_pay.sql`, que entró a `main` en el #604, antes que esta en
+-- el #605. Dos ramas abiertas en paralelo eligieron el mismo número sin verse.
+-- Renumerar es seguro porque nada registra las migraciones aplicadas por
+-- nombre: `verify-db.sh` las aplica todas desde una base vacía y el orden entre
+-- estas dos es indiferente —una rellena `meta_ads.promoted_product_name`, la
+-- otra crea las tablas de pago del rider, y no se tocan—. Contra producción ya
+-- están aplicadas las dos; el renombre no cambia nada allí.
+--
+-- El conjunto es la unidad de prueba de la cuenta: mismo público, mismo
+-- presupuesto, mismo producto; lo que cambia entre sus anuncios es el creativo.
+-- Asignar uno a mano y dejar los otros treinta en «Por mapear» no es información
+-- que falte, es la misma información sin copiar.
+--
+-- Medido el 14-09-2026 contra producción:
+--   * 5.213 anuncios en `meta_ads`, 68 con producto asignado a mano.
+--   * CERO conjuntos con dos productos distintos asignados — la regla ya se
+--     cumplía a mano, esto solo deja de exigir el trabajo manual.
+--   * Esas 68 asignaciones alcanzan a 523 anuncios por herencia.
+--
+-- De aquí en adelante la herencia la hace `saveAdPromotedProduct` al guardar.
+-- Esta migración es el una-sola-vez sobre lo que ya estaba.
+--
+-- SEGURIDAD: solo escribe donde `promoted_product_name IS NULL`. Una asignación
+-- existente no se pisa nunca — si alguien mapeó un anuncio a otra cosa a
+-- propósito, esa decisión gana. Y solo hereda desde conjuntos donde TODOS los
+-- anuncios ya asignados coinciden en el mismo producto; un conjunto en conflicto
+-- se deja intacto para que lo resuelva una persona.
+
+-- Nota de implementación: `promoted_skus` es `text[]`, así que el «más reciente
+-- del conjunto» NO se puede sacar con `(array_agg(promoted_skus order by …))[1]`
+-- —agregar arrays los aplana y el subíndice devuelve `text`, no `text[]`, y el
+-- UPDATE falla con «COALESCE types text and text[] cannot be matched»—. Va con
+-- `distinct on`, que es la forma correcta de «una fila por grupo».
+
+-- Conjuntos donde todos los anuncios ya asignados coinciden en el mismo
+-- producto. Uno en conflicto se deja intacto: lo resuelve una persona.
+with sanos as (
+  select adset_id
+  from meta_ads
+  where adset_id is not null
+    and promoted_product_name is not null
+  group by adset_id
+  having count(distinct promoted_product_name) = 1
+),
+-- De cada conjunto sano, la asignación más reciente: de ahí salen producto y SKU.
+fuente as (
+  select distinct on (m.adset_id)
+         m.adset_id,
+         m.promoted_product_name as producto,
+         m.promoted_skus         as skus
+  from meta_ads m
+  join sanos s on s.adset_id = m.adset_id
+  where m.promoted_product_name is not null
+  order by m.adset_id, m.promoted_product_updated_at desc nulls last
+)
+update meta_ads m
+set promoted_product_name       = f.producto,
+    promoted_skus               = f.skus,
+    promoted_product_updated_at = now()
+from fuente f
+where m.adset_id = f.adset_id
+  and m.promoted_product_name is null;
+
+-- Aplicada contra producción el 14-09-2026: 523 filas en 51 conjuntos,
+-- 26 productos distintos. `meta_ads` pasó de 68 a 591 anuncios asignados,
+-- con cero conjuntos en conflicto y cero huérfanos sin heredar.
+-- Es idempotente: una segunda pasada no encuentra nulos que rellenar.
+
+-- ---- 0164 ----
+-- 0164_shopify_product_images.sql — el espejo de la imagen del producto.
+--
+-- POR QUÉ UNA TABLA Y NO UNA LLAMADA EN VIVO. El desglose de productos (0163 y
+-- el PR que lo rehízo) dibuja el hueco de una miniatura que hoy no existe:
+-- Shopify NO manda imagen en el line item —0 de 15.726 ítems medidos el
+-- 14-09-2026— y el pedido guardado tampoco la trae. Las dos salidas eran pedirla
+-- a Shopify al abrir cada cajón, o espejarla.
+--
+-- Gana el espejo por una razón de tamaño: en 180 días los pedidos citan **331
+-- productos distintos** sobre 21.789 ítems. Es un catálogo diminuto que cambia
+-- poco, consultado desde una pantalla que se abre cientos de veces al día. Pedir
+-- en vivo sería una llamada de red por apertura de cajón, con su latencia y su
+-- modo de fallo, para releer 331 valores casi siempre iguales.
+--
+-- LA CLAVE ES (store_id, product_id) Y NO product_id A SECAS. El id de producto
+-- es único dentro de una tienda, no entre tiendas: Aurela y Kenku son dos
+-- Shopify distintas y nada impide que repitan un número. Sin el store_id, la
+-- foto de un producto de una tienda podría aparecer en el pedido de la otra.
+--
+-- `product_id` se guarda tal como viene en `orders.line_items`: el id numérico
+-- de la API REST («10020077175079»), que es la forma en que ya está escrito en
+-- 21.789 ítems. Convertirlo al `gid://shopify/Product/...` de GraphQL es cosa
+-- del sincronizador, no del almacenamiento: la tabla habla el idioma del dato
+-- que ya tenemos, para que el JOIN sea directo y no haya que traducir al leer.
+
+create table if not exists shopify_product_images (
+  store_id     uuid        not null references stores(id) on delete cascade,
+  -- Id numérico REST, como lo escribe Shopify en los line items del pedido.
+  product_id   text        not null,
+  -- URL del CDN de Shopify. Puede ser null: un producto sin foto es un dato
+  -- válido y distinto de «todavía no lo hemos sincronizado» (esa es la fila
+  -- ausente). Guardar el null evita volver a preguntar por él en cada pasada.
+  image_url    text,
+  -- Alternativo de la imagen tal como lo escribió quien cargó el producto.
+  image_alt    text,
+  -- El título del producto en el catálogo, que puede diferir del que quedó
+  -- congelado en el pedido si alguien lo renombró después de la venta. No
+  -- reemplaza al del pedido: sirve para saber si el espejo sigue apuntando a
+  -- lo mismo.
+  catalog_title text,
+  synced_at    timestamptz not null default now(),
+  primary key (store_id, product_id)
+);
+
+comment on table shopify_product_images is
+  'Espejo de la foto de catálogo por producto y tienda. Lo llena /api/cron/shopify-product-images; se lee al armar el desglose de productos de un pedido.';
+
+-- Se lee siempre por tienda + lote de ids (el desglose de UN pedido pide entre
+-- uno y cinco), y eso ya lo sirve la clave primaria. El índice por antigüedad
+-- es para el sincronizador, que busca lo más viejo para refrescarlo primero.
+create index if not exists shopify_product_images_synced_idx
+  on shopify_product_images (store_id, synced_at);
+
+alter table shopify_product_images enable row level security;
+
+-- Misma forma que `orders`, `shipments` y el resto de lo ingestado: lectura
+-- para la sesión, acotada a las tiendas que esa persona alcanza, y escritura
+-- solo por el rol de servicio (el cron). `auth_store_ids()` es la función que
+-- ya resuelve ese alcance en todo el esquema; duplicar su lógica acá sería
+-- plantar la próxima divergencia.
+drop policy if exists shopify_product_images_select on shopify_product_images;
+create policy shopify_product_images_select on shopify_product_images
+  for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+-- ---- 0165 ----
+-- ============================================================================
+-- 0165_fenix_stock_unlimited.sql — stock SIN CONTROL DE CANTIDAD por renglón.
+--
+-- Lima entró a la cobertura Swayp el 14-09-2026 y la operación decidió no
+-- contar unidades ahí: la bodega de Lima repone sola y lo que importa es QUÉ
+-- productos despacha, no cuántos hay. Un renglón con `unlimited = true` dice
+-- «este producto existe en esa bodega» y nada más:
+--
+--   - la reja de elegibilidad lo trata como disponible sin mirar `quantity`;
+--   - la entrega no lo descuenta (no hay saldo que llevar);
+--   - el reporte de demanda nunca lo marca como faltante;
+--   - el importador del Excel de Swayp no lo pisa ni lo pone en 0.
+--
+-- Es por renglón y no por ciudad a propósito: mañana un producto de Lima puede
+-- pasar a contarse sin tocar a los demás, y una ciudad contada puede tener un
+-- producto que no se cuenta.
+-- ============================================================================
+
+alter table fenix_stock
+  add column if not exists unlimited boolean not null default false;
+
+comment on column fenix_stock.unlimited is
+  'Sin control de cantidad: el producto existe en la bodega y se considera siempre disponible. quantity se ignora.';

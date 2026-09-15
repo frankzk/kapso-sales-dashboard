@@ -29,7 +29,7 @@ export const PAYMENT_METHODS: { code: PaymentMethod; label: string }[] = [
   { code: "efectivo", label: "Efectivo" },
   { code: "yape", label: "Yape" },
   { code: "pos", label: "POS / tarjeta" },
-  { code: "sin_cobro", label: "Sin cobro (ya pagado)" },
+  { code: "sin_cobro", label: "Sin cobro" },
 ];
 
 /** Motivos de no entrega. Cerrados a propósito: un catálogo fijo se puede
@@ -95,8 +95,11 @@ export function validateStopReport(report: StopReport): ReportValidation {
       report.paymentMethod === "efectivo" ||
       report.paymentMethod === "yape" ||
       report.paymentMethod === "pos";
-    if (needsAmount && (report.collectedAmount === null || report.collectedAmount <= 0)) {
+    if (needsAmount && (report.collectedAmount === null || !Number.isFinite(report.collectedAmount) || report.collectedAmount <= 0)) {
       errors.push("Escribe cuánto cobraste.");
+    }
+    if (report.paymentMethod === "sin_cobro" && report.collectedAmount !== 0) {
+      errors.push("Sin cobro debe registrar S/ 0.00.");
     }
     if (report.paymentMethod === "yape" && !report.hasVoucher) {
       errors.push("Adjunta la captura del Yape.");
@@ -244,7 +247,7 @@ export function stopsToSettlementLines(
       declared_status: s.status === "entregado" ? "entregado" : "no entregado",
       // Una no-entrega declara cero, no null: el motorizado SÍ reportó, y dijo
       // que no cobró nada. Es distinto de "no lo declaró".
-      declared_amount: s.status === "entregado" ? round2(Math.max(0, s.collected_amount ?? 0)) : 0,
+      declared_amount: s.status === "entregado" && s.payment_method !== "sin_cobro" ? round2(Math.max(0, s.collected_amount ?? 0)) : 0,
       match_status: "ok" as const,
       raw: {
         origen: "ruta",

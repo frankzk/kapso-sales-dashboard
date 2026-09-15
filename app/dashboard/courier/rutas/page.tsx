@@ -3,6 +3,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { getDispatchWorkspaceData, getDispatchRiders } from "@/lib/dispatch-access";
 import { DispatchWorkspace } from "@/components/dispatch-workspace";
 import { EmptyState } from "@/components/ui";
+import { CourierRouteNav } from "@/components/courier-route-nav";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,6 @@ export default async function CourierDispatchPage({ searchParams }: { searchPara
   const canPickup = permissions.can("dispatch.pickup");
   if (!stores.length || (!canManage && !canPickup)) return <EmptyState title="No tienes permiso para cotejar cargas." />;
   const [data, riders] = await Promise.all([getDispatchWorkspaceData(params.manifiesto), getDispatchRiders()]);
-  return <DispatchWorkspace initialData={data} initialSelectedId={params.manifiesto} stores={stores} riders={riders}
-    canPrepare={permissions.can("warehouse.prepare")} canManage={canManage} canPickup={canPickup} surface="gf" />;
+  return <div className="space-y-5"><CourierRouteNav current="cajas" /><DispatchWorkspace initialData={data} initialSelectedId={params.manifiesto} stores={stores} riders={riders}
+    canPrepare={permissions.can("warehouse.prepare")} canManage={canManage} canPickup={canPickup} surface="gf" /></div>;
 }

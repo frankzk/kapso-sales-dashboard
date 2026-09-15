@@ -40,7 +40,7 @@ describe("una sola escala", () => {
 
 describe("el mismo rol, el mismo tratamiento", () => {
   it("el título del cajón pesa más que sus secciones", () => {
-    expect(src).toContain('id="shipment-drawer-title" className="font-mono text-base font-semibold text-slate-900"');
+    expect(src).toContain('id="shipment-drawer-title" className="text-base font-semibold text-slate-900"');
   });
 
   it("las etiquetas de formulario del cajón comparten peso y tono", () => {

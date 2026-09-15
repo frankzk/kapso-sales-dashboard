@@ -421,3 +421,105 @@ export function etiquetaDiceTerminoSinEntregar(reportedStatus: string | null | u
   const [status = "", dispatchStatus = ""] = (reportedStatus ?? "").split(" · ");
   return aliclikTerminoSinEntregar({ status, dispatchStatus });
 }
+
+/** Cómo terminó el intento anterior, en castellano, para leerlo antes de llamar. */
+export interface MotivoDelCourier {
+  /** Frase corta para la cola. */
+  texto: string;
+  /** `false` cuando no hay dato: la ausencia NO es «no lo rechazó». */
+  consta: boolean;
+  /** `true` cuando la clienta llegó a ver el producto y aun así no quedó. */
+  vioElProducto: boolean;
+}
+
+const MOTIVO_POR_STATUS: Record<string, { texto: string; vioElProducto: boolean }> = {
+  REFUSED: { texto: "lo rechazó en la puerta", vioElProducto: true },
+  NOT_RESPOND: { texto: "no contestó al motorizado", vioElProducto: false },
+  RESCHEDULED: { texto: "pidió reprogramar al motorizado", vioElProducto: false },
+  CANCEL: { texto: "cancelado", vioElProducto: false },
+  ANNULLED: { texto: "anulado", vioElProducto: false },
+  DELIVERED: { texto: "entregado", vioElProducto: true },
+  PENDING_DELIVERY: { texto: "pendiente de entrega", vioElProducto: false },
+};
+
+const MOTIVO_POR_DESPACHO: Record<string, string> = {
+  RETURNED: "devuelto al almacén",
+  TO_RETURN: "en devolución",
+  IN_AGENCY: "quedó en agencia",
+  LEFT_IN_WAREHOUSE: "quedó en almacén",
+};
+
+/**
+ * MOM §11.1: LA COLA ESCRIBE EL MOTIVO, Y ESCRIBE TAMBIÉN SU AUSENCIA.
+ *
+ * `reported_status` es la única etiqueta que distingue una guía cerrada porque
+ * la entrega FALLÓ de una cerrada por decisión nuestra, y el MOM manda revisarla
+ * antes de reenviar: «si el cliente vio el producto y aun así lo rechazó,
+ * normalmente no reenviar». Estaba en la fila, tipada y usada por la
+ * elegibilidad de recuperación, y no se pintaba en ninguna parte.
+ *
+ * Donde no hay dato NO va un guion. Un guion se lee «no hay nada que decir», y
+ * lo que pasa es otra cosa: de 130 devoluciones candidatas medidas el
+ * 2026-08-10, 100 no traían motivo —guías importadas del Excel que nunca
+ * pasaron por la API—. Ausencia de motivo no equivale a recuperable.
+ */
+/**
+ * EL MOTIVO QUE TOCA MOSTRAR, O NADA.
+ *
+ * Las tres pantallas que lo pintan —la celda de escritorio, la tarjeta de
+ * teléfono y la ficha del cajón— tenían tres criterios distintos, y dos de
+ * ellos estaban mal:
+ *
+ *   * El cajón y la tarjeta preguntaban `status_category !== "cancelled"`.
+ *     Esa categoría NO EXISTE: son `pending | in_route | delivered | closed |
+ *     transferred` (ver `DELIVERY_STATUSES`). La condición era siempre
+ *     verdadera, la rama estaba muerta, y la regla del MOM §11.7 —«donde no hay
+ *     motivo se escribe que no consta»— no se imprimía nunca.
+ *   * La celda de escritorio no tenía criterio ninguno, así que una guía Swayp
+ *     nativa recién creada, sin intento previo, mostraba bajo una columna
+ *     titulada «Motivo anterior» la frase «no consta si la rechazó en la
+ *     puerta». No hubo intento anterior ni hubo puerta.
+ *
+ * La regla, en un solo sitio: si el courier informó algo, se muestra siempre.
+ * Si no informó nada, se escribe la ausencia SOLO donde debería haber un
+ * motivo, que es una guía cerrada sin entregar (`closed`) — las devoluciones y
+ * anulaciones de §11.1. En una guía que todavía no salió, no hay nada anterior
+ * de lo que hablar, y ahí `null` significa «no aplica», no «no consta».
+ */
+export function motivoParaMostrar(shipment: {
+  reported_status?: string | null;
+  status_category?: string | null;
+}): MotivoDelCourier | null {
+  const m = motivoDelCourier(shipment.reported_status);
+  if (m.consta) return m;
+  return shipment.status_category === "closed" ? m : null;
+}
+
+export function motivoDelCourier(reportedStatus: string | null | undefined): MotivoDelCourier {
+  const [rawStatus = "", rawDispatch = ""] = (reportedStatus ?? "").split(" · ");
+  const status = norm(rawStatus);
+  const dispatch = norm(rawDispatch);
+
+  if (!status && !dispatch) {
+    return {
+      texto: "sin motivo del courier · no consta si la rechazó en la puerta",
+      consta: false,
+      vioElProducto: false,
+    };
+  }
+
+  const porStatus = MOTIVO_POR_STATUS[status];
+  const porDespacho = MOTIVO_POR_DESPACHO[dispatch];
+
+  if (!porStatus && !porDespacho) {
+    // Etiqueta que existe pero no sabemos leer: se muestra cruda antes que
+    // inventarle un significado.
+    return { texto: [rawStatus, rawDispatch].filter(Boolean).join(" · "), consta: true, vioElProducto: false };
+  }
+
+  return {
+    texto: [porStatus?.texto, porDespacho].filter(Boolean).join(" · "),
+    consta: true,
+    vioElProducto: porStatus?.vioElProducto ?? false,
+  };
+}

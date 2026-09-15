@@ -52,8 +52,67 @@ describe("resolveUbigeo", () => {
   });
 
   it("returns null for a city outside coverage", () => {
-    expect(resolveUbigeo("Lima", "Miraflores")).toBeNull();
+    // Lima dejó de ser el ejemplo el 14-09-2026, cuando entró a cobertura.
+    expect(resolveUbigeo("Tacna", "Pocollay")).toBeNull();
     expect(resolveUbigeo("", "")).toBeNull();
+  });
+
+  it("resuelve Lima y Callao con ubigeo exacto", () => {
+    // Surquillo (150141) es el distrito del `curl` de ejemplo que mandó Swayp.
+    expect(resolveUbigeo("Lima", "Surquillo")).toEqual({ code: "150141", district: "surquillo", exact: true });
+    expect(resolveUbigeo("Lima", "Miraflores")?.code).toBe("150122");
+    expect(resolveUbigeo("Lima", "San Isidro")?.code).toBe("150131");
+    expect(resolveUbigeo("Lima", "San Juan de Lurigancho")?.code).toBe("150132");
+    // Distrito creado en 2023: el padrón viejo no lo traía.
+    expect(resolveUbigeo("Lima", "Santa María de Huachipa")?.code).toBe("150144");
+    expect(resolveUbigeo("Callao", "Ventanilla")?.code).toBe("070106");
+    expect(resolveUbigeo("Callao", "Mi Perú")?.code).toBe("070107");
+  });
+
+  it("«Surco» y «Cercado de Lima» son lo que escribe la calle", () => {
+    // «Surco» no es prefijo de «santiago de surco», así que sin alias la guía
+    // de uno de los distritos que más compra se rechazaba.
+    expect(resolveUbigeo("Lima", "Surco")).toEqual({ code: "150140", district: "santiago de surco", exact: true });
+    expect(resolveUbigeo("Lima", "Santiago de Surco")?.code).toBe("150140");
+    expect(resolveUbigeo("Lima", "Cercado de Lima")?.code).toBe("150101");
+    expect(resolveUbigeo("Lima", "Lima")?.code).toBe("150101");
+    // Y un alias sigue acotado a su ciudad.
+    expect(resolveUbigeo("Chiclayo", "Surco")?.exact).toBe(false);
+  });
+
+  it("el nombre doble con guion que manda Shopify resuelve igual que el simple", () => {
+    // #KP132394: Shopify manda «Lurigancho-Chosica» y la tabla dice
+    // «lurigancho». La cobertura lo aceptaba y el ubigeo no, así que la salida
+    // se creaba pero Swayp no emitía la guía. Las dos mitades, juntas o solas.
+    const lurigancho = { code: "150118", district: "lurigancho", exact: true };
+    expect(resolveUbigeo("Lima", "Lurigancho-Chosica")).toEqual(lurigancho);
+    expect(resolveUbigeo("Lima", "Lurigancho - Chosica")).toEqual(lurigancho);
+    expect(resolveUbigeo("Lima", "Lurigancho/Chosica")).toEqual(lurigancho);
+    expect(resolveUbigeo("Lima", "Lurigancho")).toEqual(lurigancho);
+    expect(resolveUbigeo("Lima", "Chosica")).toEqual(lurigancho);
+    // Y el guion no arrastra al distrito parecido: son códigos distintos.
+    expect(resolveUbigeo("Lima", "San Juan de Lurigancho")?.code).toBe("150132");
+  });
+
+  it("el separador no inventa un distrito donde el nombre es ambiguo", () => {
+    // Aflojar el guion no puede convertirse en adivinar: «San Juan» solo no
+    // distingue Lurigancho de Miraflores, y un ubigeo aproximado desvía la caja.
+    expect(resolveUbigeo("Lima", "San Juan - Lima")?.exact).toBe(false);
+    // Huachipa está repartido entre Lurigancho y Santa María de Huachipa.
+    expect(resolveUbigeo("Lima", "Huachipa")?.exact).toBe(false);
+    // Un distrito con la ciudad pegada detrás sí es inequívoco.
+    expect(resolveUbigeo("Lima", "Chorrillos - Lima")?.code).toBe("150108");
+  });
+
+  it("nombres repetidos entre Lima y otras ciudades resuelven por ciudad", () => {
+    // Santa Rosa, San Miguel y La Victoria existen en Lima y en otra ciudad de
+    // la cobertura: la ciudad acota, el nombre solo no basta.
+    expect(resolveUbigeo("Lima", "Santa Rosa")?.code).toBe("150139");
+    expect(resolveUbigeo("Chiclayo", "Santa Rosa")?.code).toBe("140114");
+    expect(resolveUbigeo("Lima", "San Miguel")?.code).toBe("150136");
+    expect(resolveUbigeo("Juliaca", "San Miguel")?.code).toBe("211105");
+    expect(resolveUbigeo("Lima", "La Victoria")?.code).toBe("150115");
+    expect(resolveUbigeo("Chiclayo", "La Victoria")?.code).toBe("140106");
   });
 
   it("keeps Puno and Juliaca as distinct destinations", () => {
@@ -76,7 +135,15 @@ describe("warehouseUbigeo", () => {
   });
 
   it("returns null outside coverage", () => {
-    expect(warehouseUbigeo("Lima")).toBeNull();
+    expect(warehouseUbigeo("Tacna")).toBeNull();
+  });
+
+  it("el Callao se despacha desde la bodega de Lima, como Puno desde Juliaca", () => {
+    // Swayp tiene una bodega en Lima y ninguna en el Callao. El destino es
+    // propio (tabla `callao`); el origen y el stock son los de Lima.
+    expect(warehouseUbigeo("Lima")).toBe("150101");
+    expect(warehouseUbigeo("Callao")).toBe("150101");
+    expect(resolveUbigeo("Callao", "Callao")?.code).toBe("070101");
   });
 });
 
@@ -96,11 +163,14 @@ describe("coverage table", () => {
     expect(warehouseUbigeo("Chiclayo")).toBe("140101");
   });
 
-  it("trae las cuatro provincias completas, no solo el cercado", () => {
+  it("trae las provincias completas, no solo el cercado", () => {
     expect(Object.keys(UBIGEO_BY_CITY.ica!)).toHaveLength(14);
     expect(Object.keys(UBIGEO_BY_CITY.piura!)).toHaveLength(10);
     expect(Object.keys(UBIGEO_BY_CITY.chimbote!)).toHaveLength(9);
     expect(Object.keys(UBIGEO_BY_CITY.chiclayo!)).toHaveLength(20);
+    // 44 y no 43: Santa María de Huachipa (150144) se creó en 2023.
+    expect(Object.keys(UBIGEO_BY_CITY.lima!)).toHaveLength(44);
+    expect(Object.keys(UBIGEO_BY_CITY.callao!)).toHaveLength(7);
   });
 
   it("resuelve los distritos grandes de cada provincia nueva", () => {

@@ -18,6 +18,8 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { routeReportAccess } from "@/lib/route-report-access";
+import { reportedCollection } from "@/lib/route-collection";
+import { loadRouteCollectionBalances } from "@/lib/route-collection-access";
 import {
   isNonDeliveryReason,
   isPaymentMethod,
@@ -67,12 +69,12 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
   const sb = await createServerSupabase();
   const { data: stopRow } = await sb
     .from("delivery_stops")
-    .select("id,route_id,photo_path,voucher_path")
+    .select("id,order_id,route_id,photo_path,voucher_path")
     .eq("id", input.stopId)
     .maybeSingle();
   if (!stopRow) return { ok: false, error: "Esa parada no es tuya o ya no está disponible." };
 
-  const stop = stopRow as { id: string; route_id: string; photo_path: string | null; voucher_path: string | null };
+  const stop = stopRow as { id: string; order_id: string; route_id: string; photo_path: string | null; voucher_path: string | null };
   const access = await routeReportAccess(stop.route_id);
   if (!access) return { ok: false, error: "No tienes permiso para reportar esta ruta o ya no está en curso." };
   const reasonForReport = input.reportReason?.trim();
@@ -106,6 +108,17 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
   }
 
   const method = isPaymentMethod(input.paymentMethod) ? input.paymentMethod : null;
+  const collected = reportedCollection(method, input.collectedAmount);
+  if (input.status === "entregado") {
+    const balance = (await loadRouteCollectionBalances([stop.order_id])).get(stop.order_id);
+    if (balance?.remaining == null) return { ok: false, error: "No se pudo comprobar el saldo. Actualiza antes de reportar." };
+    if (method !== "sin_cobro" && collected !== null && collected > balance.remaining) {
+      return { ok: false, error: `El saldo actual es S/ ${balance.remaining.toFixed(2)}. Revisa los pagos antes de registrar un cobro mayor.` };
+    }
+    if (method === "sin_cobro" && balance.remaining > 0 && !input.note?.trim()) {
+      return { ok: false, error: "Explica por qué no se cobró el saldo pendiente. Esto no lo marcará como pagado." };
+    }
+  }
   const reason = isNonDeliveryReason(input.outcomeReason) ? input.outcomeReason : null;
   // Se conservan las fotos ya subidas cuando el reporte es una corrección que no
   // vuelve a adjuntarlas.
@@ -118,7 +131,7 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
   const validation = validateStopReport({
     status: input.status,
     paymentMethod: method,
-    collectedAmount: input.collectedAmount,
+    collectedAmount: collected,
     outcomeReason: reason,
     note: input.note,
     hasPhoto: Boolean(photoPath),
@@ -136,7 +149,7 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
     .update({
       status: input.status,
       payment_method: input.status === "entregado" ? method : null,
-      collected_amount: input.status === "entregado" ? input.collectedAmount : null,
+      collected_amount: input.status === "entregado" ? collected : null,
       outcome_reason: input.status === "no_entregado" ? reason : null,
       note: reportNote,
       photo_path: photoPath,
@@ -156,7 +169,7 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
       stop_id: input.stopId,
       status: input.status,
       payment_method: input.status === "entregado" ? method : null,
-      collected_amount: input.status === "entregado" ? input.collectedAmount : null,
+      collected_amount: input.status === "entregado" ? collected : null,
       outcome_reason: input.status === "no_entregado" ? reason : null,
       note: reportNote,
       actor: user.id,
@@ -167,7 +180,7 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
     );
 
   revalidatePath("/reparto");
-  revalidatePath("/dashboard/rutas");
+  revalidatePath("/dashboard/courier/reparto");
   revalidatePath("/dashboard/courier");
   return {
     ok: true,

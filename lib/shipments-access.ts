@@ -36,6 +36,7 @@ import { derivedGuideDates, type GuideCallLike } from "@/lib/guide-dates";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { productImagesFor } from "@/lib/shopify-product-images";
 import {
   buildShipmentLineage,
   type ShipmentLineageNode,
@@ -78,7 +79,31 @@ const SHIPMENT_COLUMNS =
 const LEGACY_SHIPMENT_COLUMNS =
   "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,city,region,fenix_eligible,fenix_shipment_id,delivered_source,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,reported_status,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
 
-const SHIPMENT_LIST_COLUMNS = `${SHIPMENT_COLUMNS},shipment_calls(count)`;
+/**
+ * LO QUE LA COLA NECESITA, QUE NO ES TODO LO QUE TRAÍA.
+ *
+ * `SHIPMENT_COLUMNS` son las 47 columnas del expediente y se usan donde hay que
+ * mostrarlo entero: el cajón, con `loadShipmentDetail`, de una guía a la vez.
+ * La LISTA traía las mismas 47 para cada una de sus miles de filas, y medido
+ * contra producción el 14-09-2026 eso son 11 MB por recorrer las cinco
+ * pestañas, de los cuales **4.483 kB (38,2%) son columnas que la tabla no
+ * pinta**: la dirección y sus coordenadas, quién la corrigió y cuándo, las
+ * sugerencias de vinculación de la pantalla de Revisión, y los rastros de
+ * importación. Nada de eso se lee sin abrir el cajón, y el cajón las pide
+ * aparte.
+ *
+ * `withEnhancementDefaults` las repone en nulo, así que el tipo no cambia; lo
+ * que cambia es que ya no viajan. Si mañana la tabla necesita una, se añade
+ * ACÁ y no en `SHIPMENT_COLUMNS`, que es la lista del expediente.
+ */
+const SHIPMENT_QUEUE_COLUMNS =
+  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,order_name," +
+  "customer_name,customer_phone,product,district,province,city,region," +
+  "fenix_eligible,fenix_shipment_id,swayp_guide,swayp_state,created_via,delivered_source," +
+  "aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome," +
+  "claimed_by,claimed_at,next_followup_at,reported_status,closed_at,returned_at,updated_at";
+
+const SHIPMENT_LIST_COLUMNS = `${SHIPMENT_QUEUE_COLUMNS},shipment_calls(count)`;
 // Lo mínimo para DECIDIR una recuperable sin traer la fila entera: lo que mira
 // `withRecoveryState`. El contador del chip pasa por la misma decisión que la
 // lista, así que necesita las mismas columnas.
@@ -108,6 +133,16 @@ function withEnhancementDefaults(row: Partial<ShipmentRow>): ShipmentRow {
     aliclik_service_date: null,
     last_gestion_at: null,
     created_via: null,
+    // La cola no las pide (ver SHIPMENT_QUEUE_COLUMNS). Van explícitas y no por
+    // el `as` de abajo: un campo ausente y uno nulo se comportan distinto, y el
+    // tipo dice que existen.
+    match_method: null,
+    source_batch_id: null,
+    last_report_at: null,
+    created_at: null,
+    suggested_order_gid: null,
+    suggested_store_id: null,
+    suggested_order_name: null,
     ...row,
     province: row.province ?? row.region ?? null,
   } as ShipmentRow;
@@ -387,7 +422,7 @@ async function withCurrentFenixEligibility(
 
   const stockPromise = sb
     .from("fenix_stock")
-    .select("org_id,city,product,sku,quantity")
+    .select("org_id,city,product,sku,quantity,unlimited")
     .in("org_id", orgIds);
   const orderIds = Array.from(
     new Set(rows.map((s) => s.order_id).filter((id): id is string => !!id)),
@@ -529,14 +564,22 @@ async function guiasPorRecuperar(
   const desdeIso = new Date(
     Date.now() - RECOVERY_DEFAULT_MAX_DAYS * 2 * 86_400_000,
   ).toISOString();
-  const { data, error } = await sb
+  let query = sb
     .from("shipments")
     .select(columns)
     .in("store_id", storeIds)
     .eq("status_category", "closed")
     .eq("courier", "aliclik")
-    .gte("updated_at", desdeIso)
-    .eq("shipment_calls.kind", "call")
+    .gte("updated_at", desdeIso);
+  // El filtro solo tiene sentido si las columnas TRAEN el embebido: acota qué
+  // llamadas entran en `shipment_calls(count)`. Pedido sobre unas columnas que
+  // no lo embeben, PostgREST responde 400 y esta función devolvía [] en
+  // silencio — que es lo que pasaba con `RECUPERAR_COUNT_COLUMNS`, dejando el
+  // chip de Pendiente sin su mitad «Por recuperar» (visto en los logs del
+  // 15-09-2026). El contador y la lista salen de aquí, así que el número y las
+  // filas tienen que venir de la misma consulta o vuelven a discrepar.
+  if (columns.includes("shipment_calls")) query = query.eq("shipment_calls.kind", "call");
+  const { data, error } = await query
     .order("updated_at", { ascending: false })
     .limit(PAGE);
   if (error) return [];
@@ -597,19 +640,27 @@ export async function getStoreShipments(
   // Reproprovincia / Recuperación vencida / Descartada»). Se calcula sobre las
   // filas propias de la vista ANTES de anexar las recuperables, que ya vienen
   // decididas de `guiasPorRecuperar` — la misma función, sin pasar dos veces.
-  const decididas = await withRecoveryState(sb, out);
-  out.length = 0;
-  out.push(...decididas);
+  //
+  // EL RESULTADO VA A UN ARRAY NUEVO, Y NO ES UN DETALLE DE ESTILO. Antes esto
+  // era `out.length = 0; out.push(...decididas)`, y `withRecoveryState` tiene un
+  // atajo: cuando ninguna fila es candidata a recuperación devuelve EL MISMO
+  // array que recibió. Entonces `decididas === out`, vaciar `out` vaciaba
+  // también a `decididas` y el push no reponía nada: la vista entera se perdía.
+  // Y el atajo se toma justo en las vistas que no tienen ninguna cerrada de
+  // Aliclik —En ruta, Entregado, Transferido—, así que se perdían siempre
+  // (#KP132394: «En ruta 591» con la tabla vacía). El contador venía de otra
+  // consulta y seguía diciendo la verdad, que es lo que lo volvió invisible.
+  const filas = [...(await withRecoveryState(sb, out))];
   // Las cerradas SIN entregar entran a la misma cola (MOM §11), no a una
   // pestaña aparte: son la misma pregunta —«¿a quién hay que llamar?»— y el
   // documento las lista junto a las demás entradas. Se distinguen con el chip
   // «Por recuperar», no partiendo la cola en dos.
   if (esColaDeReprogramacion(cats)) {
-    out.push(...(await guiasPorRecuperar(sb, storeIds, SHIPMENT_LIST_COLUMNS)).map(withContactCount));
+    filas.push(...(await guiasPorRecuperar(sb, storeIds, SHIPMENT_LIST_COLUMNS)).map(withContactCount));
   }
   // "Última gestión" applies to every view (how long a guide has gone without
   // our team touching it).
-  const out2 = await withLastGestion(sb, out, storeIds);
+  const out2 = await withLastGestion(sb, filas, storeIds);
 
   // La elegibilidad Fenix se recalcula en TODAS las vistas, no solo en
   // Pendiente. Antes las demás devolvían el flag GUARDADO, que envejece en
@@ -951,10 +1002,22 @@ export async function getShipmentWithCalls(
           };
         }
       }
+      // La foto no viene en el line item de Shopify: se adjunta desde el espejo
+      // (migración 0164), igual que en el Master de Pedidos. Sin espejo, la
+      // miniatura degrada a la inicial y el cajón carga igual.
+      const rawItems = orderRow.line_items ?? [];
+      const images = await productImagesFor(
+        sb,
+        shipmentRow.store_id,
+        rawItems.map((i) => i.product_id),
+      );
       order = {
         name: orderRow.name,
         shopify_order_id: orderRow.shopify_order_id,
-        line_items: orderRow.line_items ?? [],
+        line_items: rawItems.map((item) => ({
+          ...item,
+          image_url: item.product_id ? images.get(item.product_id) ?? null : null,
+        })),
         shipping_address: shippingAddress,
       };
     }

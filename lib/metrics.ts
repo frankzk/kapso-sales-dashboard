@@ -1226,7 +1226,18 @@ export function campaignBreakdown(
         rowKey: `${insight?.storeId ?? b.leads[0]?.store_id ?? "unknown"}:${adId}`,
         adId,
         metaAdId: b.adId,
-        storeIds: [...new Set(b.leads.map((lead) => lead.store_id).filter(Boolean))],
+        // Las tiendas de los pedidos web TAMBIÉN. Sin ellas, un anuncio que solo
+        // vende por la web salía con la lista vacía y el buscador de producto
+        // caía a «todas las tiendas del tablero» en vez de al catálogo de la
+        // suya — que es de donde salió la venta que tiene delante.
+        storeIds: [
+          ...new Set(
+            [
+              ...b.leads.map((lead) => lead.store_id),
+              ...(webByAd.get(adId) ?? []).map((order) => order.store_id),
+            ].filter(Boolean),
+          ),
+        ],
         label: meta?.adName || b.headline || adId,
         headline: b.headline,
         resolved: Boolean(meta?.adName),

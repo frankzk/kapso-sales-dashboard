@@ -8,6 +8,42 @@ const stock: FenixStockRow[] = [
 ];
 
 describe("buildFenixDemand", () => {
+  it("un renglón con marca propia nunca falta, por mucha demanda que haya (ciudad contada)", () => {
+    // Trujillo cuenta unidades; este renglón en particular no. La demanda se
+    // sigue contando —es útil saber cuántos piden— pero el faltante es 0.
+    const sinControl: FenixStockRow[] = [
+      { city: "trujillo", product: "Nails Repairing", sku: "818531465", quantity: 0, unlimited: true },
+    ];
+    const ships: DemandShipment[] = Array.from({ length: 50 }, () => ({
+      city: "Trujillo",
+      product: "Nails Repairing – Sérum para Uñas",
+    }));
+    const row = buildFenixDemand(sinControl, ships).find((r) => r.city === "trujillo")!;
+    expect(row.demand).toBe(50);
+    expect(row.shortfall).toBe(0);
+    expect(row.status).toBe("ok");
+    expect(row.unlimited).toBe(true);
+  });
+
+  it("un pedido pendiente de Lima sin ningún renglón NO aparece como «sin stock»", () => {
+    // La reja lo deja pasar; el reporte no puede decir lo contrario.
+    const ships: DemandShipment[] = [
+      { city: "Lima", product: "Ethiopian Black Seed Oil" },
+      { city: "Callao", product: "Nails Repairing" },
+    ];
+    const rows = buildFenixDemand([], ships);
+    expect(rows.filter((r) => r.city === "lima" || r.city === "callao")).toEqual([]);
+  });
+
+  it("en Lima ningún renglón falta aunque no tenga la marca: es regla de la ciudad", () => {
+    const lima: FenixStockRow[] = [{ city: "lima", product: "Mushroom Coffee", sku: "MC-1", quantity: 0 }];
+    const ships: DemandShipment[] = [{ city: "Lima", product: "Mushroom Coffee" }];
+    const row = buildFenixDemand(lima, ships).find((r) => r.city === "lima")!;
+    expect(row.status).toBe("ok");
+    expect(row.shortfall).toBe(0);
+    expect(row.unlimited).toBe(true);
+  });
+
   it("flags shortfall when demand exceeds stock in a covered city", () => {
     const ships: DemandShipment[] = [
       { city: "Cusco", product: "Mushroom Coffee 180g" },
@@ -47,9 +83,10 @@ describe("buildFenixDemand", () => {
   });
 
   it("ignores guides in uncovered cities", () => {
-    const ships: DemandShipment[] = [{ city: "Lima", product: "Mushroom Coffee" }];
+    // Tacna y no Lima: Lima entró a cobertura el 14-09-2026.
+    const ships: DemandShipment[] = [{ city: "Tacna", product: "Mushroom Coffee" }];
     const rows = buildFenixDemand(stock, ships);
-    expect(rows.every((r) => r.city !== "lima")).toBe(true);
+    expect(rows.every((r) => r.city !== "tacna")).toBe(true);
     expect(rows.find((r) => r.product === "Mushroom Coffee")!.demand).toBe(0);
   });
 

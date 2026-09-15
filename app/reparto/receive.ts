@@ -15,6 +15,6 @@ export async function receiveMyGfPackage(manifestId: string, rawCode: string): P
   const { data, error } = await admin.rpc("gf_rider_receive", { p_manifest_id: manifestId, p_code: code, p_actor: user.id });
   if (error) return { error: error.message };
   await recomputeOrderMasterSafe(admin, (data ?? []) as string[]);
-  for (const path of ["/reparto", "/dashboard/courier/rutas", "/dashboard/courier", "/dashboard/rutas"]) revalidatePath(path);
+  for (const path of ["/reparto", "/dashboard/courier/rutas", "/dashboard/courier", "/dashboard/courier/reparto"]) revalidatePath(path);
   return { notice: data?.length ? "Carga recibida. Ya está en tu reparto." : "Paquete recibido." };
 }

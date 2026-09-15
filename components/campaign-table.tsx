@@ -10,6 +10,7 @@ import {
   formatPct,
 } from "@/lib/metrics";
 import { adObjectiveLabel, adsManagerUrl, prettyAdName } from "@/lib/meta-ads";
+import { CopyButton } from "@/components/copy-button";
 import {
   saveAdPromotedProduct,
   searchPromotedProducts,
@@ -183,6 +184,20 @@ function ProductEditor({ row, fallbackStoreIds }: { row: CampaignStat; fallbackS
         <div>
           <h4 className="font-semibold text-slate-800">Producto anunciado</h4>
           <p className="text-xs text-slate-500">Mapeo manual auditable para comparar anuncio y compra real.</p>
+          {/* EL ID Y EL CONJUNTO, A LA VISTA. El id es con lo que se busca el
+              anuncio en Ads Manager y con lo que se reporta un cruce dudoso; se
+              usaba para guardar y no se mostraba en ningún sitio. El conjunto
+              va al lado porque es la unidad que hereda: lo que se guarde acá
+              alcanza a los anuncios sin asignar de ESE conjunto. */}
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500">
+            <span className="font-mono">{row.metaAdId}</span>
+            <CopyButton value={row.metaAdId} label="Copiar ID" />
+            {row.meta?.adsetName && (
+              <span>
+                · Conjunto: <span className="font-medium text-slate-600">{row.meta.adsetName}</span>
+              </span>
+            )}
+          </p>
         </div>
         {suggestion && !row.promotedProductName && (
           <button type="button" onClick={() => { setProduct(suggestion.title); setSkus(suggestion.sku ?? ""); }} className="rounded-md border border-indigo-200 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50">
@@ -283,7 +298,16 @@ function ProductEditor({ row, fallbackStoreIds }: { row: CampaignStat; fallbackS
           onClick={() => startTransition(async () => {
             setMessage(null);
             const result = await saveAdPromotedProduct({ adId: row.metaAdId!, productName: product, skus: skus.split(",") });
-            setMessage(result.ok ? "Producto guardado." : result.error);
+            // La herencia se DICE. Es un cambio que la persona no pidió
+            // explícitamente y que toca filas que no tiene delante: callarlo
+            // sería que el panel se moviera solo.
+            setMessage(
+              !result.ok
+                ? result.error
+                : result.heredados > 0
+                  ? `Producto guardado. Se aplicó también a ${result.heredados} ${result.heredados === 1 ? "anuncio" : "anuncios"} del mismo conjunto que estaban sin asignar.`
+                  : "Producto guardado.",
+            );
             if (result.ok) router.refresh();
           })}
           className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"

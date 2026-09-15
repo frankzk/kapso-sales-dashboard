@@ -799,6 +799,21 @@ export function countGestiones(leads: { status: string }[]): Record<LeadGestion,
 
 export const CLAIM_TTL_MINUTES = 10;
 
+/**
+ * CUÁNTOS LEADS PUEDE TENER TOMADOS UNA ASESORA A LA VEZ.
+ *
+ * Decidido el 14-09-2026 con estos números detrás (461 reservas, 15 asesoras):
+ * el promedio de reservas simultáneas es 1,18, la mediana 1 y el p95 2; el pico
+ * fue 5 y lo alcanzan tres personas. El 87,4% de las reservas son de una sola.
+ * Un tope de 2 deja en paz a ese 87% y frena las rachas de 3, 4 y 5, que son
+ * 17 reservas de 462.
+ *
+ * Lo que el tope NO arregla, y conviene tenerlo presente: el 35% de las
+ * reservas no tiene ninguna llamada registrada detrás, y eso pasa igual
+ * tomando de a uno. Ese es el problema grande de esta pantalla y es otro.
+ */
+export const MAX_OPEN_LEADS = 2;
+
 /** A claim is active while it's fresh (within the TTL). */
 export function isClaimActive(
   claimedAt: string | Date | null | undefined,
@@ -807,6 +822,60 @@ export function isClaimActive(
   if (!claimedAt) return false;
   const t = typeof claimedAt === "string" ? new Date(claimedAt) : claimedAt;
   return now.getTime() - t.getTime() < CLAIM_TTL_MINUTES * 60_000;
+}
+
+export interface ClaimLike {
+  id: string;
+  claimed_by: string | null;
+  claimed_at: string | null;
+}
+
+/**
+ * Las reservas vivas de una asesora QUE ESTORBAN para tomar `leadId`.
+ *
+ * Excluye el propio `leadId`: volver a abrir un lead que ya es suyo no cuenta
+ * contra el tope, y volver a abrir uno de los dos que tiene tampoco (queda uno
+ * ajeno y cabe). Solo cuentan las reservas dentro del TTL: una pestaña cerrada
+ * sin soltar deja de estorbar a los diez minutos, igual que hoy.
+ */
+export function claimsBlocking<T extends ClaimLike>(
+  claims: T[],
+  userId: string,
+  leadId: string,
+  now: Date = new Date(),
+): T[] {
+  return claims.filter(
+    (c) => c.id !== leadId && c.claimed_by === userId && isClaimActive(c.claimed_at, now),
+  );
+}
+
+/**
+ * Quiénes tienen una reserva viva en esta lista, sin repetir.
+ *
+ * Es lo único que la cola necesita resolver a nombre: son a lo sumo tantas
+ * asesoras como hay conectadas (una decena), nunca los ~2.500 leads. Las
+ * reservas vencidas no cuentan, igual que no marcan la fila como tomada.
+ */
+export function activeClaimHolders(
+  claims: Iterable<Pick<ClaimLike, "claimed_by" | "claimed_at">>,
+  now: Date = new Date(),
+): string[] {
+  const ids = new Set<string>();
+  for (const c of claims) {
+    if (c.claimed_by && isClaimActive(c.claimed_at, now)) ids.add(c.claimed_by);
+  }
+  return [...ids];
+}
+
+/** ¿El tope impide tomar `leadId`? */
+export function claimBlockedByCap(
+  claims: ClaimLike[],
+  userId: string,
+  leadId: string,
+  now: Date = new Date(),
+  max: number = MAX_OPEN_LEADS,
+): boolean {
+  return claimsBlocking(claims, userId, leadId, now).length >= max;
 }
 
 // ---------------------------------------------------------------------------

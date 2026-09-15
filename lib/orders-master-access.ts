@@ -12,6 +12,8 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyOrderNote, shopifyShippingAddress } from "@/lib/shopify-address";
+import { orderTotals, type OrderTotals } from "@/lib/order-totals";
+import { productImagesFor } from "@/lib/shopify-product-images";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
@@ -76,6 +78,26 @@ export const MASTER_VIEWS: readonly { key: MasterView; label: string }[] = [
 
 export function isMasterView(v: string | undefined | null): v is MasterView {
   return !!v && MASTER_VIEWS.some((s) => s.key === v);
+}
+
+/**
+ * La lectura del Master no pudo hacerse. Distinto de "no hay fila": esto es la
+ * base diciendo que NO PUDO responder, y quien lo reciba tiene que enseñarlo tal
+ * cual en vez de inventar una conclusión sobre el pedido.
+ *
+ * El mensaje lleva el código de PostgREST porque es lo único que distingue de un
+ * vistazo una columna que falta (42703, migración sin aplicar) de un permiso
+ * (42501) o de un corte de red — y quien mira el drawer no tiene los logs.
+ */
+export class OrderMasterReadError extends Error {
+  readonly code: string | null;
+
+  constructor(what: string, cause: { message: string; code?: string | null }) {
+    const code = cause.code ?? null;
+    super(`No se pudo leer ${what}: ${cause.message}${code ? ` [${code}]` : ""}`);
+    this.name = "OrderMasterReadError";
+    this.code = code;
+  }
 }
 
 // Columnas del LISTADO. Deliberadamente más cortas que la fila completa: en un
@@ -333,6 +355,13 @@ export interface OrderMasterDetail {
   guides: ShipmentRow[];
   timeline: TimelineEntry[];
   lineItems: OrderLineItem[];
+  /**
+   * Los importes del pedido tal como los manda Shopify (subtotal, descuento,
+   * envío, total). Se leen de `orders.raw` y NO se recalculan sumando líneas:
+   * un descuento por línea o un redondeo haría que Kapta diga un número y
+   * Shopify otro, y ante esa discrepancia la operación no sabe a cuál creerle.
+   */
+  totals: OrderTotals;
   address: ReturnType<typeof shopifyShippingAddress>;
   /** La nota que alguien escribió en el pedido de Shopify, tal cual. Suele
    *  llevar lo que Shopify no tiene dónde guardar —el DNI del destinatario, la
@@ -385,7 +414,7 @@ async function swaypRouteCheck(
 
   const { data, error } = await sb
     .from("fenix_stock")
-    .select("city,product,sku,quantity")
+    .select("city,product,sku,quantity,unlimited")
     .eq("org_id", orgId);
   if (error) return { known: false };
 
@@ -442,11 +471,18 @@ function withRuntimeCoverage(row: OrderMasterRow): OrderMasterRow {
 export async function getOrderMasterDetail(orderId: string): Promise<OrderMasterDetail | null> {
   const sb = await createServerSupabase();
 
-  const { data: rowData } = await sb
+  const { data: rowData, error: rowError } = await sb
     .from("order_master")
     .select(MASTER_DETAIL_COLUMNS)
     .eq("order_id", orderId)
     .maybeSingle();
+  // Una consulta QUE FALLA no es un pedido que no existe. Ignorar este `error`
+  // costó una tarde: la 0128 añade `financial_status` y `total_refunded` a este
+  // select, el código salió a producción antes que la migración, y PostgREST
+  // devolvía 42703 con `rowData` en null. El drawer traducía ese null a "No
+  // encontrado" sobre un pedido que estaba ahí, visible en la tabla de atrás,
+  // sin una sola pista de que el problema era la columna que faltaba.
+  if (rowError) throw new OrderMasterReadError("order_master", rowError);
   if (!rowData) return null;
   const row = withRuntimeCoverage(rowData as unknown as OrderMasterRow);
 
@@ -580,7 +616,15 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
   }));
 
   const orderRow = orderRes.data as { line_items?: OrderLineItem[]; raw?: unknown } | null;
-  const lineItems = orderRow?.line_items ?? [];
+  const rawItems = orderRow?.line_items ?? [];
+  // La foto no viene en el line item de Shopify: se adjunta desde el espejo
+  // (migración 0164). Sin espejo, la miniatura degrada a la inicial y el pedido
+  // carga igual.
+  const images = await productImagesFor(sb, row.store_id, rawItems.map((i) => i.product_id));
+  const lineItems: OrderLineItem[] = rawItems.map((item) => ({
+    ...item,
+    image_url: item.product_id ? images.get(item.product_id) ?? null : null,
+  }));
   const [swayp, aliclikHealth, grupoGfCourier] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
@@ -591,6 +635,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     guides,
     timeline,
     lineItems,
+    totals: orderTotals(orderRow?.raw, row.order_total),
     aliclikHealth,
     tasks,
     address: shopifyShippingAddress(orderRow?.raw),

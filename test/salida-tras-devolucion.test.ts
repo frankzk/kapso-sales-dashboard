@@ -137,7 +137,7 @@ describe("las cerradas por recuperar entran a la cola de Pendiente", () => {
   it("el chip va en Pendiente, no en una pestaña nueva", () => {
     const s = src(BOARD);
     expect(s).toContain("Por recuperar");
-    expect(s).toContain("(!soloPorRecuperar || esPorRecuperar(s))");
+    expect(s).toContain('(!soloPorRecuperar || view !== "pendiente" || esPorRecuperar(s))');
     // Si apareciera una vista nueva, sería la pestaña que decidimos NO hacer.
     expect(src(ACCESS)).not.toContain('"por_recuperar"');
   });

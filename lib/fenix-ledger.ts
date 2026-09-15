@@ -4,7 +4,13 @@
 // automáticamente cuando una guía Fénix se entrega. Ver 0041_fenix_stock_movements.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { fenixStockCityKey, stockCoversRef, type FenixStockRow, type ProductRef } from "./fenix";
+import {
+  fenixStockCityKey,
+  sinControlDeCantidad,
+  stockCoversRef,
+  type FenixStockRow,
+  type ProductRef,
+} from "./fenix";
 
 export type StockMovementKind = "entrada" | "salida_entrega" | "salida_merma" | "ajuste";
 
@@ -126,7 +132,7 @@ export async function consumeFenixStockOnDelivery(
   const city = fenixStockCityKey(s.city);
   const { data: stock } = await admin
     .from("fenix_stock")
-    .select("id, city, product, sku, quantity")
+    .select("id, city, product, sku, quantity, unlimited")
     .eq("org_id", orgId);
   const cityRows = ((stock as (FenixStockRow & { id: string })[]) ?? []).filter(
     (r) => fenixStockCityKey(r.city) === city,
@@ -144,6 +150,9 @@ export async function consumeFenixStockOnDelivery(
   }
   const match = cityRows.find((r) => refs.some((ref) => stockCoversRef(r, ref)));
   if (!match) return;
+  // Sin control de cantidad —por marca o por ciudad (Lima)— no hay saldo que
+  // llevar: descontar dejaría un número negativo sin significado en el kardex.
+  if (sinControlDeCantidad(match)) return;
 
   await recordStockMovement(admin, {
     stockId: match.id,

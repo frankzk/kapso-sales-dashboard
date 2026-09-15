@@ -277,7 +277,7 @@ export function DispatchWorkspace({
               )}
               {surface === "gf" && selected && <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
                 <span>{activeDispatchItems(selected.items).length} paquete{activeDispatchItems(selected.items).length === 1 ? "" : "s"} en esta carga</span>
-                {selected.delivery_route_id && selected.state === "in_custody" && <Link href={`/dashboard/rutas?id=${selected.delivery_route_id}`} className="font-semibold text-brand-700">Ver reparto y liquidación →</Link>}
+                {selected.delivery_route_id && selected.state === "in_custody" && <Link href={`/dashboard/courier/reparto?id=${selected.delivery_route_id}`} className="font-semibold text-brand-700">Ver reparto y liquidación →</Link>}
                 {selected.state === "in_custody" && <Link href="/dashboard/courier" className="font-semibold text-brand-700">Agregar una carga a la misma ruta →</Link>}
               </div>}
 

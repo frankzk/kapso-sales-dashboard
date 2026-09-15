@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { LeadCallRow, LeadRow, StoreSummary } from "@/lib/types";
 import type { AdMeta } from "@/lib/meta-ads";
+import { IconAlert } from "@/components/icons";
 import { waKindLabel, waLabel, type WaNumber } from "@/lib/wa-numbers";
 import {
   ALL_STORES,
@@ -618,6 +619,7 @@ export function LeadsBoard({
   adNames,
   adDeclarations,
   waNumbers,
+  agentNames,
   currency,
   timezone,
   insights,
@@ -650,6 +652,9 @@ export function LeadsBoard({
   /** `tienda::anuncio → declaraciones con fecha` (ver lib/ad-products.ts). */
   adDeclarations?: Record<string, AdDeclaration[]>;
   waNumbers?: Record<string, WaNumber>;
+  /** Id de asesora → nombre, solo para quienes tienen una reserva viva en la
+   *  lista. Con esto la etiqueta «Tomado» dice por quién. */
+  agentNames?: Record<string, string>;
   currency: string;
   timezone: string;
   insights: LeadsInsights | null;
@@ -1043,6 +1048,41 @@ export function LeadsBoard({
       router.refresh(); // reflect status/queue changes in the list + counts
     })();
   }
+
+  // El popup del aviso de reserva: al aparecer, el foco va a su botón —así un
+  // lector de pantalla lo lee y Enter lo cierra— y Escape lo descarta.
+  const bannerDismissRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!banner) return;
+    bannerDismissRef.current?.focus();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setBanner(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [banner]);
+
+  // Si la pestaña se cierra o se recarga con el cajón abierto, `closeDrawer`
+  // nunca corre y la reserva quedaba viva hasta agotar el TTL (459 vencidas sin
+  // soltar contra 11 vivas, medido el 14-09-2026). Con el tope de
+  // MAX_OPEN_LEADS eso ya no es inofensivo: dos pestañas cerradas a lo bruto
+  // bloquearían a la asesora diez minutos. `sendBeacon` sobrevive a la
+  // descarga; una acción de servidor, no. Mismo mecanismo que Envíos.
+  useEffect(() => {
+    const onPageHide = () => {
+      const leadId = activeLeadIdRef.current;
+      if (!leadId) return;
+      navigator.sendBeacon?.(
+        "/api/leads/release-claim",
+        new Blob([JSON.stringify({ leadId })], { type: "application/json" }),
+      );
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, []);
 
   function closeDrawer() {
     const leadId = selected?.id;
@@ -1867,6 +1907,45 @@ export function LeadsBoard({
         </div>
       )}
 
+      {/* EL MISMO AVISO, FLOTANDO. El banner de arriba es el registro, pero
+          vive en la cabecera de la lista: quien pincha una fila cincuenta más
+          abajo no lo ve, y solo nota que el cajón no se abrió. El tope de
+          MAX_OPEN_LEADS lo hizo evidente —«¿ya funciona?»— y vale igual para
+          «X está atendiendo este lead». Misma cáscara que el aviso de Yape,
+          para que sean el mismo objeto a la vista. Se va con «Entendido»,
+          con Escape, o al abrir el siguiente lead. */}
+      {banner && (
+        <div
+          className="pointer-events-none fixed inset-x-0 top-0 z-50 flex justify-center p-4"
+          role="alertdialog"
+          aria-live="assertive"
+          aria-labelledby="lead-claim-refused-title"
+          aria-describedby="lead-claim-refused-text"
+        >
+          <div className="pointer-events-auto w-full max-w-md overflow-hidden rounded-2xl border-2 border-red-300 bg-white shadow-2xl ring-4 ring-red-500/10">
+            <div className="flex items-center gap-2 bg-red-600 px-4 py-2 text-white">
+              <IconAlert className="h-5 w-5 shrink-0" aria-hidden="true" />
+              <span id="lead-claim-refused-title" className="text-sm font-semibold">
+                No se pudo tomar el lead
+              </span>
+            </div>
+            <div className="px-4 py-3">
+              <p id="lead-claim-refused-text" className="text-sm text-slate-800">
+                {banner}
+              </p>
+              <button
+                ref={bannerDismissRef}
+                type="button"
+                onClick={() => setBanner(null)}
+                className="mt-3 w-full rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* AQUÍ NO VA NINGUNA MARCA DEL EXPERIMENTO, y es a propósito.
           Se probaron las dos formas de señalarlo en la cola y las dos salieron
           al revés: el empujón (mediana 47 min hasta la llamada contra 14 del
@@ -1988,6 +2067,10 @@ export function LeadsBoard({
             {visibleLeads.map((lead) => {
               const locked =
                 !!lead.claimed_by && isClaimActive(lead.claimed_at) && lead.claimed_by !== currentUserId;
+              // Quién la tiene. Puede faltar (la reserva nació después de que
+              // cargó la página, o el correo no se pudo leer): entonces la
+              // etiqueta vuelve a decir solo «Tomado», nunca un id a medias.
+              const lockedBy = locked ? (agentNames?.[lead.claimed_by!] ?? null) : null;
               const g = gestionOf(lead.status);
               const gd = g
                 ? GESTION_DISPLAY[g]
@@ -2073,14 +2156,24 @@ export function LeadsBoard({
                     )}
                     {locked && (
                       <span
-                        title="Tomado por otro vendedor"
-                        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-brand-100 px-2 py-0.5 text-[11px] font-semibold text-brand-700"
+                        title={
+                          lockedBy ? `${lockedBy} está atendiendo este lead` : "Tomado por otra asesora"
+                        }
+                        className="inline-flex max-w-[180px] shrink-0 items-center gap-1 rounded-full bg-brand-100 px-2 py-0.5 text-[11px] font-semibold text-brand-700"
                       >
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" className="shrink-0">
                           <rect x="5" y="11" width="14" height="9" rx="2" />
                           <path d="M8 11V8a4 4 0 0 1 8 0v3" />
                         </svg>
                         Tomado
+                        {lockedBy && (
+                          <>
+                            <span aria-hidden="true" className="text-brand-400">
+                              ·
+                            </span>
+                            <span className="truncate font-medium">{lockedBy}</span>
+                          </>
+                        )}
                       </span>
                     )}
                     {hasMultiNumbers && lead.wa_phone_number_id && (

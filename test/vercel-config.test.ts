@@ -65,9 +65,13 @@ describe("vercel.json", () => {
     expect(cfg.regions).toEqual(["gru1"]);
   });
 
-  it("mantiene los catorce crons con expresiones válidas de 5 campos", () => {
+  it("mantiene los crons con expresiones válidas de 5 campos", () => {
     const crons = cfg.crons as { path: string; schedule: string }[];
-    expect(crons).toHaveLength(14);
+    // El conteo es el guardarraíl contra un borrado accidental, y sube cuando se
+    // añade uno a propósito: 14 hasta el 14-09-2026, 15 desde el espejo de fotos
+    // de producto. Que la ruta exista lo comprueba la última prueba de este
+    // archivo; no hace falta repetirlo acá.
+    expect(crons).toHaveLength(15);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

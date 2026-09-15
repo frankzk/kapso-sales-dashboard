@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { createClient } from "@supabase/supabase-js";
 import { campaignBreakdown, campaignDailyTrend, webNoAtribuido } from "@/lib/metrics";
 import type { AdMeta } from "@/lib/meta-ads";
+import { filtroCampanaEnUtm } from "@/lib/cod-cart-attribution";
 import type { AnuncioMeta, WebAdOrder } from "@/lib/cod-cart-attribution";
 import type { LeadRow, MetaAdPerformance, OrderRow } from "@/lib/types";
 
@@ -508,11 +511,90 @@ describe("los pedidos del carrito COD de la web", () => {
     expect(fila.decisionReason).toContain("Conversión");
   });
 
+  // Sin esto, un anuncio que solo vende por la web salía con la lista vacía y el
+  // buscador de producto caía a «todas las tiendas del tablero» en vez de al
+  // catálogo de la suya — la tienda de donde salió la venta que tiene delante.
+  it("las tiendas de la fila incluyen las de los pedidos web", () => {
+    const web = [pedidoWeb("w1", 150, { utmId: CAMP, utmContent: AD })];
+    web[0]!.order.store_id = "store-kenku";
+    const [fila] = campaignBreakdown([], [], {}, [], [], web, catalogo);
+    expect(fila!.storeIds).toEqual(["store-kenku"]);
+  });
+
   it("el resumen de lo no atribuido no cuenta lo que ya acreditó un lead", () => {
     const leadsAd = [
       { store_id: "s1", phone: "1", source: "meta_ad", ad_id: AD, ad_headline: "H", order_id: "w1" },
     ] as unknown as LeadRow[];
     const web = [pedidoWeb("w1", 300, { utmId: CAMP, utmSource: "facebook" })];
     expect(webNoAtribuido(leadsAd, web, catalogo)).toEqual({ pedidos: 0, ingresos: 0 });
+  });
+});
+
+// Los anuncios que venden por el carrito COD no producen NINGÚN lead, y la
+// autorización del mapeo de producto se apoyaba solo en eso. Medido: 3.314 de
+// los 3.594 anuncios de campañas con venta web no tienen ni un lead, así que
+// para todos ellos el formulario contestaba «No tienes acceso a este anuncio»
+// —que además es falso: son suyos—.
+describe("el anuncio que solo vende por la web sigue siendo editable", () => {
+  const actions = readFileSync(
+    new URL("../app/dashboard/actions.ts", import.meta.url),
+    "utf8",
+  );
+  const bloque = actions.slice(
+    actions.indexOf("export async function saveAdPromotedProduct"),
+    actions.indexOf("export interface PromotedProductSuggestion"),
+  );
+
+  it("conserva el camino de siempre: un lead mío cita el anuncio", () => {
+    expect(bloque).toContain('.from("leads").select("id").eq("ad_id", adId)');
+  });
+
+  // A nivel de CAMPAÑA porque es lo que el pedido guarda (`utm_id`); el anuncio
+  // concreto se deduce después y no siempre se puede.
+  it("y añade el nuevo: un pedido mío cita su campaña", () => {
+    expect(bloque).toContain('.contains("utm_meta", filtroCampanaEnUtm(campaignId))');
+    expect(bloque).toContain('.select("campaign_id")');
+  });
+
+  // ESTA ES LA PRUEBA QUE FALTABA. La de arriba comprueba que la línea existe;
+  // esta comprueba lo que la línea PRODUCE. La primera versión pasaba el array
+  // de JS, salió a producción, y las guardas de fuente la dieron por buena
+  // mientras la autorización fallaba para todo el mundo.
+  it("el filtro sale a PostgREST como contención jsonb, no como array", () => {
+    const sb = createClient("http://local", "anon");
+    const q = sb
+      .from("orders")
+      .select("id")
+      .contains("utm_meta", filtroCampanaEnUtm("120245666582420066")) as unknown as { url: URL };
+    expect(decodeURIComponent(q.url.searchParams.get("utm_meta")!)).toBe(
+      'cs.[{"name":"utm_id","value":"120245666582420066"}]',
+    );
+  });
+
+  // Y la trampa, escrita: `supabase-js` elige la sintaxis por el TIPO. Con el
+  // array de JS, `join(",")` sobre objetos da un filtro VÁLIDO que no casa con
+  // nada — cero filas, y quien la usa concluye que no hay permiso.
+  it("pasarle el array de JS lo rompe EN SILENCIO, y por eso va una cadena", () => {
+    const sb = createClient("http://local", "anon");
+    const q = sb
+      .from("orders")
+      .select("id")
+      .contains("utm_meta", [{ name: "utm_id", value: "120245666582420066" }]) as unknown as { url: URL };
+    expect(decodeURIComponent(q.url.searchParams.get("utm_meta")!)).toBe("cs.{[object Object]}");
+  });
+
+  // La RLS sigue siendo la frontera: la consulta de pedidos va por el cliente
+  // del usuario. Con el de servicio, cualquiera podría editar cualquier anuncio.
+  it("el pedido se busca con el cliente del USUARIO, no con el de servicio", () => {
+    const consulta = bloque.slice(
+      bloque.indexOf("const { data: visibleOrder }"),
+      bloque.indexOf("authorized = Boolean(visibleOrder)"),
+    );
+    expect(consulta).toContain("await sb");
+    expect(consulta).not.toContain("admin");
+  });
+
+  it("sin ninguno de los dos caminos sigue negándose", () => {
+    expect(bloque).toContain('if (!authorized) return { ok: false, error: "No tienes acceso a este anuncio." };');
   });
 });

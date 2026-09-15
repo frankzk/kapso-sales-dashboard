@@ -27,7 +27,7 @@ function between(start: string, end: string): string {
 describe("la respuesta de una acción se queda hasta la siguiente", () => {
   it("solo se limpia al cambiar de guía, no en cada recarga del detalle", () => {
     // El efecto que limpia depende SOLO de shipmentId…
-    expect(src).toContain("setFeedback(null);\n  }, [shipmentId]);");
+    expect(src).toContain("setFeedback(null);\n    setClaimRequested(false);");
     // …y el efecto de carga (shipmentId + reloadKey) ya no la toca.
     const loadEffect = between("loadShipmentDetail(shipmentId)", "}, [shipmentId, reloadKey]);");
     expect(loadEffect).not.toContain("setFeedback(null)");
@@ -65,7 +65,10 @@ describe("una carga fallida no deja «Cargando…» para siempre", () => {
 describe("lo que no se ve no se puede corregir", () => {
   it("el historial queda dentro del bloqueo de reserva", () => {
     const history = src.indexOf("<ShipmentGuideHistory guides={detail.guideHistory}");
-    const fieldsetOpen = src.indexOf('<fieldset disabled={claimState !== "mine"}');
+    // El `fieldset` ya no se apaga por «no es mía»: en solo lectura queda
+    // habilitado a propósito, que es lo que permite pedir la reserva al tocar
+    // un control. Lo que lo apaga es que otra persona la tenga tomada.
+    const fieldsetOpen = src.indexOf('disabled={claimState === "blocked" || (eagerClaim && claimState !== "mine")}');
     const fieldsetClose = src.indexOf("</fieldset>", history);
     expect(fieldsetOpen).toBeGreaterThan(-1);
     expect(fieldsetOpen).toBeLessThan(history);

@@ -11,6 +11,7 @@ import {
   searchCatalogProducts,
 } from "@/lib/shopify";
 import { getStoreCreds, runStoreSync } from "@/lib/ingest";
+import { filtroCampanaEnUtm } from "@/lib/cod-cart-attribution";
 import { env } from "@/lib/env";
 
 export interface ActionState {
@@ -37,25 +38,66 @@ export async function saveAdPromotedProduct(input: {
   adId: string;
   productName: string;
   skus: string[];
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+  /** Cuántos anuncios del mismo conjunto heredaron la asignación. */
+}): Promise<{ ok: true; heredados: number } | { ok: false; error: string }> {
   await requireUser();
   const adId = input.adId.trim();
   const productName = input.productName.trim();
   const skus = [...new Set(input.skus.map((sku) => sku.trim().toUpperCase()).filter(Boolean))];
   if (!adId || !productName) return { ok: false, error: "Indica el anuncio y el producto promovido." };
 
-  // Authorization is established through a lead visible under the caller's RLS.
+  // AUTORIZACIÓN POR DOS CAMINOS, y el segundo no es un añadido: sin él este
+  // formulario es inusable para 3.314 de los 3.594 anuncios de las campañas que
+  // venden.
+  //
+  // El de siempre es «un lead MÍO cita este anuncio», y era prueba suficiente
+  // cuando toda fila del panel nacía de una conversación de WhatsApp. Los
+  // anuncios que venden por el carrito COD de la web no producen NINGÚN lead
+  // (lib/cod-cart-attribution.ts), así que desde que esas filas aparecen en el
+  // panel —con sus pedidos y su ROAS— el guardado les contestaba «No tienes
+  // acceso a este anuncio», que además es falso: son suyos.
+  //
+  // El segundo camino es el mismo estándar aplicado al canal nuevo: «un PEDIDO
+  // mío cita su campaña». Va a nivel de campaña porque es lo que el pedido
+  // guarda (`utm_id`); el anuncio concreto se deduce después y no siempre. Sigue
+  // acotado por la RLS del llamante igual que el primero.
   const sb = await createServerSupabase();
-  const { data: visibleLead } = await sb.from("leads").select("id").eq("ad_id", adId).limit(1).maybeSingle();
-  if (!visibleLead) return { ok: false, error: "No tienes acceso a este anuncio." };
-
   const admin = createAdminSupabase();
+  const { data: visibleLead } = await sb.from("leads").select("id").eq("ad_id", adId).limit(1).maybeSingle();
+  let authorized = Boolean(visibleLead);
+  if (!authorized) {
+    // `meta_ads` no es legible bajo RLS (0034), así que la campaña del anuncio
+    // se busca con el cliente de servicio. No descubre nada: el ad_id lo trajo
+    // el llamante, y lo único que se hace con la campaña es interrogar SUS
+    // pedidos.
+    const { data: ad } = await admin
+      .from("meta_ads")
+      .select("campaign_id")
+      .eq("ad_id", adId)
+      .maybeSingle();
+    const campaignId = (ad as { campaign_id?: string | null } | null)?.campaign_id ?? null;
+    if (campaignId) {
+      const { data: visibleOrder } = await sb
+        .from("orders")
+        .select("id")
+        // `utm_meta is not null` lo implica el contains, pero es lo que lleva la
+        // consulta al índice parcial de la 0156 en vez de a un recorrido entero.
+        .not("utm_meta", "is", null)
+        .contains("utm_meta", filtroCampanaEnUtm(campaignId))
+        .limit(1)
+        .maybeSingle();
+      authorized = Boolean(visibleOrder);
+    }
+  }
+  if (!authorized) return { ok: false, error: "No tienes acceso a este anuncio." };
+
+  const now = new Date().toISOString();
   const { error } = await admin.from("meta_ads").upsert(
     {
       ad_id: adId,
       promoted_product_name: productName,
       promoted_skus: skus,
-      promoted_product_updated_at: new Date().toISOString(),
+      promoted_product_updated_at: now,
     },
     { onConflict: "ad_id" },
   );
@@ -65,8 +107,62 @@ export async function saveAdPromotedProduct(input: {
       : "";
     return { ok: false, error: `No se pudo guardar el producto.${migrationHint}` };
   }
+
+  const heredados = await heredarAlConjunto(admin, adId, productName, skus, now);
   revalidatePath("/dashboard");
-  return { ok: true };
+  return { ok: true, heredados };
+}
+
+/**
+ * UN CONJUNTO DE ANUNCIOS PROMOCIONA UN SOLO PRODUCTO.
+ *
+ * Es como se arma la cuenta: el conjunto es la unidad de prueba —mismo público,
+ * mismo presupuesto, mismo producto— y lo que cambia entre sus anuncios es el
+ * creativo. Por eso asignar uno y dejar los otros treinta «Por mapear» no es
+ * información que falte: es la misma información sin copiar.
+ *
+ * Medido el 14-09-2026: 5.213 anuncios, 68 asignados a mano, y **cero conjuntos
+ * con dos productos distintos asignados** — la regla ya se cumplía a mano. Esas
+ * 68 asignaciones alcanzan a **523 anuncios** por herencia.
+ *
+ * Se hereda solo hacia los que NO tienen producto. Una asignación existente
+ * nunca se pisa: si alguien mapeó un anuncio a otra cosa a propósito, esa
+ * decisión gana, y el conjunto queda con dos productos (lo que hoy no pasa)
+ * sin que este código lo «arregle» por su cuenta.
+ *
+ * La campaña NO sirve para esto: en la de «Cayenne Pepper 0608» conviven 23
+ * conjuntos, y el producto se decide por conjunto.
+ */
+async function heredarAlConjunto(
+  admin: ReturnType<typeof createAdminSupabase>,
+  adId: string,
+  productName: string,
+  skus: string[],
+  now: string,
+): Promise<number> {
+  const { data: origen } = await admin
+    .from("meta_ads")
+    .select("adset_id")
+    .eq("ad_id", adId)
+    .maybeSingle();
+  const adsetId = (origen as { adset_id?: string | null } | null)?.adset_id ?? null;
+  if (!adsetId) return 0;
+
+  const { data: hermanos, error } = await admin
+    .from("meta_ads")
+    .update({
+      promoted_product_name: productName,
+      promoted_skus: skus,
+      promoted_product_updated_at: now,
+    })
+    .eq("adset_id", adsetId)
+    .neq("ad_id", adId)
+    .is("promoted_product_name", null)
+    .select("ad_id");
+  // Best-effort: el anuncio que se pidió ya quedó guardado. Si la herencia
+  // falla, se informa cero y la próxima asignación en ese conjunto lo reintenta.
+  if (error) return 0;
+  return hermanos?.length ?? 0;
 }
 
 export interface PromotedProductSuggestion {

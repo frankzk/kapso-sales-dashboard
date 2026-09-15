@@ -429,6 +429,20 @@ Registro:
   suelta. Sin esto, en #KP126722 un «Pendiente · no responde» del 12/08 mantuvo
   en la cola operativa —llamable y despachable— un pedido de S/ 99 que en Shopify
   ya no tenía ni productos.
+- **Registrar una salida también lo decide alguien**, así que cede igual. Una
+  guía registrada **después** del cambio manual lo deja sin efecto; registrada
+  antes, el cambio manual sigue mandando. Lo que NO suelta el candado es el
+  reporte de un courier (`courier_status`): es exactamente de lo que protege, y
+  la diferencia no es de criterio sino de dato —los `guide_registered` y
+  `guide_created` llevan actor los 3.672 de los últimos 30 días, y los 15.969
+  `courier_status` no lo llevan ni uno—.
+  Sin esto, ocho pedidos de Agencia marcados a mano «disponible para recojo» y
+  con su guía Shalom registrada días después seguían figurando como «En curso ·
+  recibido por courier» estando recogidos: el estado legado se quedaba en
+  `en_proceso` y `recogido_sin_pago_completo` (§6.5) exige `entregado`, así que
+  la alerta crítica no llegaba a encenderse. Medido el 14-09-2026: **11 pedidos,
+  S/ 2.054, de los que S/ 1.062 estaban recogidos y sin cobrar**, escondidos
+  detrás del candado desde el 4 de agosto.
 - La subetapa y el conteo de días se derivan de esos hechos. No hay un contador
   que alguien tenga que mantener.
 
@@ -1619,8 +1633,8 @@ sale, porque invita a pulsar el botón que deja el pedido bloqueado.
 #### Guardar la fila es lo último que puede fallar
 
 La guía ya existe en Aliclik cuando llega el momento de escribir nuestra fila.
-Por eso esa escritura —`writeCourierGuide`, que comparten Aliclik, Shalom y
-Tanders— tiene que ser **la más difícil de romper del sistema**, no la más
+Por eso esa escritura —`writeCourierGuide`, que comparten Grupo GF, Aliclik,
+Shalom, Tanders y Swayp— tiene que ser **la más difícil de romper del sistema**, no la más
 frágil: cualquier cosa que la tumbe deja un paquete vivo del otro lado que aquí
 no existe, y un pedido que se muestra SIN guía es una invitación a emitir una
 segunda por la misma caja.
@@ -2024,7 +2038,17 @@ Kapta no envía datos bancarios—. De ahí en adelante el circuito de adelanto,
 comprobante y clave de recojo (§12) ya existe y no cambia.
 
 Ciudades con stock/operación conocidas: Arequipa, Huancayo, Juliaca/Puno,
-Cusco, Trujillo, Ica, Piura, Chimbote, Chiclayo.
+Cusco, Trujillo, Ica, Piura, Chimbote, Chiclayo, Lima/Callao.
+
+**Lima y Callao** entraron el 14-09-2026, cuando la bodega de Lima de Swayp pasó
+a despachar pedidos desde el sistema. Lima provincia son 44 distritos (el padrón
+ya trae Santa María de Huachipa, `150144`, creado en 2023) y Callao 7. **El
+Callao es destino propio pero se despacha desde la bodega de Lima**, con el
+stock de Lima — el mismo arreglo que Puno con Juliaca: tabla de ubigeo aparte
+para no mandar el paquete a un distrito equivocado, y alias al almacén para no
+inventar una bodega que no existe. En `SWAYP_SENDERS` van las dos claves,
+`lima` y `callao`, porque el envío llega con su ciudad y el remitente se busca
+por ella.
 
 Estar en la lista habilita la ciudad para cargarle stock; **no** la vuelve
 elegible por sí sola. La elegibilidad exige cobertura **y** stock del producto
@@ -2041,6 +2065,15 @@ aproximado: un ubigeo equivocado desvía el paquete sin avisar.
 
 Los códigos son INEI, nunca RENIEC — numeran distinto los mismos distritos.
 
+«Exacto» es sobre el DISTRITO, no sobre cómo se escribe. El nombre llega del
+campo *city* de la dirección de Shopify, que usa el nombre oficial completo, y
+el padrón a veces usa el corto: «Lurigancho-Chosica» contra «Lurigancho». El
+guion, la barra y la coma se leen como separador, y las grafías conocidas
+—«Surco», «Cercado de Lima», «Chosica»— tienen alias. Lo que sigue sin resolver
+se rechaza: un nombre ambiguo como «San Juan» o «Huachipa» no se adivina.
+Esto vino de #KP132394, donde la cobertura aceptaba la guía y el ubigeo la
+negaba —comparaban distinto— y la salida se creó con código manual.
+
 Falta la configuración de bodega Swayp (`senders`) de las cuatro ciudades
 nuevas; sin ella la guía se niega aunque el ubigeo resuelva. Es configuración
 operativa, no código.
@@ -2048,6 +2081,94 @@ operativa, no código.
 Una salida Swayp puede coexistir con la devolución Aliclik. En Reproprovincia
 Swayp se puede repetir, siempre con una salida, guía y QR nuevos, dentro del
 máximo global.
+
+### De dónde sale el stock: el conteo de Swayp, no la carga a mano
+
+`fenix_stock` se llenaba a mano y se fue separando de la realidad sin que nada
+avisara. Medido el 14-09-2026 contra dos exportaciones reales del panel:
+
+| ciudad | referencias nuestras | de Swayp | unidades nuestras | de Swayp |
+| --- | --- | --- | --- | --- |
+| Trujillo | 25 | 17 | 177 | 116 |
+| Juliaca | 19 | 7 | 185 | 165 |
+
+Esa tabla es la reja que decide si el botón deja crear la guía, así que un saldo
+fantasma no es un número feo en una pantalla: **autoriza guías que Swayp después
+rebota por falta de inventario** (su motivo 18), con el pedido ya prometido al
+cliente. El caso que lo destapó fue #KP123585, Ethiopian Oil en Juliaca: nuestra
+tabla decía 25 unidades y esa bodega no tiene el producto.
+
+La fuente pasa a ser la exportación de Swayp (**Stock → Inventario**, elegir
+bodega, «Enviar a Excel»), que se sube en Stock Swayp. Reglas:
+
+- **Un archivo por bodega**, y la ciudad sale de la columna `Bodega` del propio
+  archivo. No hay selector: elegir la ciudad a mano es la forma de importar
+  Trujillo sobre Juliaca y poner a cero una ciudad entera.
+- **Sólo se toca la ciudad del archivo.** Nuestra tabla cubre nueve ciudades y
+  Swayp tiene cinco bodegas: Cusco, Huancayo, Ica, Chiclayo y Chimbote se
+  abastecen de otra forma y un importador que «limpiara lo que no vino» las
+  vaciaría de un plumazo.
+- **Lo que Swayp no lista queda en 0**, no se borra el renglón. La exportación de
+  una bodega es su inventario completo; si una referencia no aparece, esa bodega
+  no la tiene. El producto sigue existiendo y mañana puede reponerse.
+- **Lo que Swayp tiene y la ciudad no tenía anotado se da de alta**, copiando la
+  etiqueta con la que ya nombramos ese SKU en otra ciudad. Sin esto se perdían
+  34 unidades reales sólo en Trujillo (AURE008 y AURE014). La etiqueta se copia y
+  no se inventa porque `product` es lo que se cruza contra `shipments.product`:
+  un renglón llamado «SUPER HUMAN FOCUS» sería stock que existe y nunca se
+  encuentra.
+- **El emparejamiento es por `codbar` vía Catálogo de productos**, nunca por
+  nombre. Los títulos de Shopify y los de Swayp no coinciden («SUPER HUMAN
+  Ethiopian Black Seed Oil – Aceite…» contra «ETHIOPIAN OIL»). Un código sin
+  vincular se reporta con su nombre; no se adivina.
+- **Se toma la columna `Disponible`**, no `En bodega`: la segunda incluye lo
+  reservado para guías ya emitidas, que no se puede volver a prometer.
+- Todo pasa por el kardex como `ajuste` (o `entrada` en las altas), así que el
+  saldo conserva su historial y se puede responder «¿por qué bajó esto?».
+
+**Juliaca y Puno comparten una sola bodega** (ubigeo `211101`) y el importador la
+escribe sólo en `juliaca`. Poner las mismas unidades también en `puno` haría que
+un mismo frasco habilite dos guías en dos ciudades — el sobreprometer que esto
+viene a cerrar. Servir Puno desde esa bodega necesita que la tabla tenga concepto
+de **bodega** y no de ciudad; hasta entonces no se inventa.
+
+La carga a mano sigue existiendo para lo que el Excel no cubre, pero es el
+parche: la fuente es el conteo de Swayp.
+
+### Stock sin control de cantidad (Lima)
+
+Lima entró a cobertura el 14-09-2026 y la operación decidió **no contar
+unidades** ahí: la bodega de Lima repone sola y lo que importa es *qué*
+productos despacha, no cuántos hay. **Es una regla de la ciudad**
+(`CIUDADES_SIN_CONTROL_DE_CANTIDAD` en `lib/fenix.ts`): todo producto anotado
+en Lima —y en el Callao, que se sirve desde esa bodega— vale como disponible
+sin que nadie marque nada. Se decidió por ciudad y no por renglón porque la
+carga de Lima son decenas de productos y una casilla por producto es una forma
+de olvidarse una; un renglón olvidado es un pedido rechazado por «sin stock» en
+una ciudad donde el stock no se cuenta. La marca por renglón
+(`fenix_stock.unlimited`) queda para la excepción inversa: un producto sin
+control en una ciudad que sí cuenta. En cualquiera de los dos casos, el renglón
+dice «este producto existe en esa bodega» y nada más:
+
+- las dos rejas —reprogramación y guía directa— lo dan por disponible sin mirar
+  la cantidad (una sola definición, `stockDisponible`, para que no discrepen);
+- la entrega no lo descuenta, porque no hay saldo que llevar;
+- el reporte de demanda nunca lo marca como faltante y la pantalla muestra ∞;
+- el importador del Excel de Swayp **no lo toca**: ni lo ajusta ni lo pone en 0
+  por no venir en el archivo;
+- el kardex manual lo rechaza: mover un saldo que no significa nada sería ruido.
+
+**En Lima y Callao la tabla de stock no gobierna nada: todo producto pasa la
+reja.** No hay que anotar renglones. Lo que sí se exige es el **vínculo en
+Catálogo de productos** (`codbar`), y se exige donde importa: al crear la guía
+por API, con el aviso «Falta vincular a Swayp: …». Se probó la alternativa
+—exigir además un renglón por producto en Stock Swayp— y la primera guía real de
+Lima (#KP131993) salió rechazada por «sin stock» con la tabla vacía: era una
+segunda lista que mantener para decir lo mismo que ya dice el Catálogo. Anotar
+renglones en Lima queda como opcional e informativo.
+
+Si un día Lima pasa a contarse, se la quita del conjunto y sus renglones vuelven
+a regirse por la cantidad y por la marca propia de cada uno.
 
 Stock objetivo:
 
@@ -2156,6 +2277,37 @@ bodega, Swayp recibiría una guía que su almacén no puede armar. Si falta
 cualquier ítem, el envío cae al código local con el motivo —no se bloquea la
 reprogramación, que antes de esto no validaba nada—.
 
+**Los TRES caminos que crean una guía Swayp, y cuál pide número.** Reprogramar
+un envío pendiente y recuperar uno anulado o devuelto terminan igual —una guía
+nueva a una fecha nueva—, así que los dos le piden el número a Swayp. El tercero,
+el alta manual, NO: ahí el operador pega un código que ya generó en el panel de
+Swayp, y pedir otro crearía un segundo paquete.
+
+| Camino | ¿Pide número a Swayp? |
+| --- | --- |
+| Reprogramar un envío pendiente | Sí |
+| Recuperar una guía anulada o devuelta | Sí |
+| Alta manual con código escrito a mano | No — ya existe |
+
+La asimetría no es gratuita y por eso está probada: el camino de guías anuladas
+se quedó sin API durante semanas cuando se conectó la primera vez, y nadie lo
+notó porque la guía seguía saliendo con código local, que es lo que salía antes.
+Una vía que nunca se entera de una regla nueva no parece rota.
+
+**La guía directa RELLENA la salida «por definir» en vez de exigir que la
+anulen.** Swayp era el único courier fuera de `writeCourierGuide`: su guardián
+de «este pedido ya tiene una guía activa» contaba la salida por definir como
+estorbo, y el único camino era anularla — lo que arrastra el pedido a `anulado`
+(#KP127639), que es exactamente el rodeo que ese mecanismo vino a cerrar. Ahora
+una salida por definir no bloquea: el modal la nombra («la salida KP132394-S01
+está por definir: la guía se le escribe encima») y el aviso posterior dice sobre
+cuál se escribió. La caja conserva su consecutivo, su rótulo, su QR y su avance
+de preparación, porque rellenar decide el courier de un bulto que ya existe, no
+rehace el trabajo del almacén.
+
+Lo que **sí** sigue bloqueando es una guía de verdad activa —de Swayp o de
+Aliclik—, porque ahí hay dos paquetes en juego y no uno.
+
 **El destino lo pone la GUÍA, no el pedido.** Al reprogramar, la salida ya
 existe y su destino es mejor dato que el del pedido por tres razones: es el que
 el courier usó, es el que la operadora ve en el drawer, y es el que ella puede
@@ -2175,9 +2327,22 @@ descarta una ella misma:
 
 | Forma | Qué es |
 | --- | --- |
-| `contenido: "2 x AURE001"` | **La que usamos.** Texto con el CÓDIGO, el formato que pidieron: *«CANTIDAD X SKU … con el match exacto del sku»* |
-| `contenido: "2 x NOMBRE EXACTO"` | Texto con el nombre. *«Tiende a ser inestable porque se busca por nombre y no por código»* — Swayp |
-| `productos: [{codbar, cantidad, nombre}]` | Estructurada. Nos la describieron por escrito, pero **no está en su documentación** y al preguntar por el catálogo respondieron que «no está disponible para consumir por API». La duda sigue abierta, así que no se manda: un campo que quizá no procesan puede devolver 400 y dejar al envío sin guía |
+| `productos: [{codbar, cantidad, nombre}]` | **La que usamos.** Estructurada: es con la que Swayp descuenta por código |
+| `contenido: "2 x AURE001"` | **También la usamos.** Es obligatoria y es el texto que el mensajero lee. Lleva el CÓDIGO, el formato que pidieron: *«CANTIDAD X SKU … con el match exacto del sku»* |
+| `contenido: "2 x NOMBRE EXACTO"` | Texto con el nombre. *«Tiende a ser inestable porque se busca por nombre y no por código»* — Swayp. Es el respaldo para una tienda sin nada vinculado |
+
+Se mandan **las dos**, no una en vez de la otra: `contenido` es obligatorio y es
+lo que se imprime; `productos[]` es lo que descuenta el inventario.
+
+`productos[]` estuvo sin mandarse un tiempo y conviene saber por qué, porque el
+razonamiento sigue valiendo para el próximo campo no documentado: no figura en
+su documentación, y al preguntar por el catálogo su desarrollador respondió que
+«esa funcionalidad no está disponible para consumir por API» —una frase sobre el
+endpoint de LECTURA que dejaba la duda abierta sobre este campo—. Mandar algo
+que quizá no procesan podía devolver 400 y dejar al envío sin guía, así que se
+esperó. El **14-09-2026** mandaron un `curl` de ejemplo, suyo, que lo incluye:
+`"productos": [ { "codbar": "ABC123", "cantidad": 1, "nombre": "…" } ]`. Con eso
+dejó de ser una apuesta.
 
 Vamos por `codbar`. Buscar por nombre ata el descuento de stock a que su
 catálogo y el nuestro escriban igual un producto: cambian una tilde y las guías
@@ -2201,6 +2366,18 @@ una regla: el mismo producto es `765545233` en Shopify y `AURE001` en Swayp. El
 mapeo vive en `swayp_sku_map` y se edita en **Catálogo de productos**, junto al
 de Aliclik — la unidad de trabajo es el producto, no el courier.
 
+**El vínculo es de la ORGANIZACIÓN, no de la tienda.** Se guarda por tienda
+porque el catálogo se gestiona desde una, pero se lee juntando todas las de la
+organización: el codbar es un hecho del producto en Swayp, y Aurela y Kenku Perú
+despachan de la misma bodega. Vincular en una vale para las dos, y desvincular
+borra en las dos — si no, quitar el vínculo lo dejaría vivo por la hermana y la
+pantalla mentiría. Cuando las dos tienen el mismo SKU en codbar distintos manda
+el de la tienda desde la que se opera, y si no, el más reciente; la guía no se
+detiene por eso, pero la discrepancia es un error de captura que hay que
+corregir. Acotarlo a la tienda costó 18 de 19 productos invisibles para Aurela,
+con sus pedidos rechazados por «Falta vincular» teniendo el codbar escrito
+(15-09-2026). El importador de inventario ya leía así.
+
 **El mapa es el interruptor.** Una tienda sin ninguna vinculación crea guías
 como hasta hoy, sin `productos`: nadie deja de despachar el día del despliegue.
 Con al menos una vinculación la función está en marcha, y entonces **un producto
@@ -2209,13 +2386,21 @@ manda el ítem con el código vacío ni se aproxima por nombre: eso dejaría una
 guías descontando stock y otras no, sin que se note — la misma razón por la que
 un ubigeo aproximado se rechaza (§11.3).
 
-**La bodega de origen se nombra, no se deduce.** Swayp opera cuatro bodegas
-—Arequipa, Trujillo, Juliaca-Puno y Piura— y el campo `idWarehouse` dice de cuál
-sale el paquete. Sin él lo decide Swayp: si acierta no nos enteramos, y si se
-equivoca descuenta del inventario de otra ciudad. **Juliaca y Puno comparten
-bodega**, así que el ubigeo de origen no basta para distinguirlas. El id va
-junto al remitente de esa ciudad en `SWAYP_SENDERS`, porque el remitente ya ES
-la bodega y separarlos dejaría dos sitios que pueden discrepar.
+**La bodega de origen: la nombra `ciudadRemitente`, y `idWarehouse` la confirma.**
+Swayp opera cinco bodegas —Arequipa, Trujillo, Juliaca-Puno, Piura y Lima— y el
+origen viaja como el **ubigeo** en `ciudadRemitente`. El `curl` de ejemplo que
+mandaron el 14-09-2026 no lleva `idWarehouse` en absoluto, y las guías de
+Arequipa salen sin él: **no es obligatorio para habilitar una ciudad**. El campo
+existe para no dejarle la elección a Swayp cuando el ubigeo no alcance; va junto
+al remitente de esa ciudad en `SWAYP_SENDERS`, porque el remitente ya ES la
+bodega y separarlos dejaría dos sitios que pueden discrepar.
+
+**El RUC del remitente puede ir vacío.** El mismo `curl` lleva
+`"nitRemitente": ""`. Exigirlo era una regla nuestra, y era cara: `parseSenders`
+valida ciudad por ciudad y descarta **en silencio** la que no pase, así que una
+bodega escrita sin RUC quedaba fuera y el aviso decía «No hay bodega Swayp
+configurada para …» sin insinuar cuál era el campo. Una ciudad perdida por una
+regla inventada es peor que un RUC vacío que a Swayp no le molesta.
 
 **El `idBusiness` deja de ser opcional en la práctica.** Swayp valida los
 productos contra un id único de tienda, así que sin ese campo es Swayp quien
@@ -2271,25 +2456,63 @@ la asesora acaba de oír por teléfono.
 
 ### 11.6 Una reprogramación confirmada no puede ser de ayer
 
-La fecha que acompaña a **Cliente confirma reprogramación** tiene que ser
-futura, y se valida en los dos lados:
+La regla es de la **fecha que se estampa en una guía Swayp**, no de un
+formulario: toda fecha que llegue a `rescheduleGuideCode` tiene que ser futura.
 
-- En el formulario, el `min` del campo y la etiqueta del botón («Elige una
-  fecha futura»), igual que para «Programar próxima llamada».
+Hay **dos puertas** que acuñan una guía con esa función, y las dos se validan en
+los dos lados:
+
+1. **Cliente confirma reprogramación**, el camino normal.
+2. **Guía Swayp a mano**, el formulario manual del cajón — el que se despliega
+   solo cuando el envío no tiene N° de pedido, o sea el camino obligado cuando
+   la autogeneración no es posible.
+
+En los dos casos:
+
+- En el formulario, el `min` del campo y la fecha dentro de la condición del
+  botón, con el motivo escrito **al lado** del botón y no dentro de su etiqueta
+  (un `<button disabled>` está fuera del orden de tabulación: quien navega con
+  lector de pantalla no lo alcanza).
 - En el servidor, `isFutureShipmentFollowup`, porque el `min` de un
   `<input type="date">` es una sugerencia del navegador: la fecha se puede
-  teclear. Hasta el 12-09-2026 ninguno de los dos lo exigía para «confirma»
-  —solo que la fecha existiera— y se emitía una guía Swayp con la fecha pasada
-  **estampada en su número** (`rescheduleGuideCode`) y un despacho agendado para
-  un día que ya había pasado. Es la acción más frecuente de la pantalla.
+  teclear.
+
+Hasta el 12-09-2026 ninguno de los dos lados lo exigía para «confirma» —solo que
+la fecha existiera— y se emitía una guía Swayp con la fecha pasada **estampada en
+su número** y un despacho agendado para un día que ya había pasado. El 14-09-2026
+se descubrió que el arreglo había cubierto una puerta de dos: la manual seguía
+sin `min`, sin la fecha en el `disabled` y sin guarda en `createFenixGuide`. La
+lección se escribe acá porque es la que se repite: **la regla pertenece a la
+función que acuña, no a la pantalla desde la que se llegó**, y se valida en cada
+sitio que la llame.
 
 La **fecha de entrega informada por el courier** («Reprogramado por Swayp») sigue
 otra regla, porque es otro hecho: **hoy sí vale** —el motorizado puede
 reprogramar para más tarde el mismo día—, ayer no (`isTodayOrLaterDelivery`).
 
 Y los topes de intentos se leen de una constante, no de un texto: la métrica del
-cajón muestra `MAX_INTENTOS` (7 llamadas) y `ALICLIK_MAX_INTENTOS` (3 intentos de
-Aliclik), las mismas que aplican la transición y la ventana de reprogramación.
+cajón, la columna de la cola y los mensajes del servidor muestran `MAX_INTENTOS`
+(7 llamadas) y `ALICLIK_MAX_INTENTOS` (3 intentos de Aliclik), las mismas que
+aplican la transición y la ventana de reprogramación. El mínimo del motivo de
+descarte sale igual de `DISCARD_REASON_MIN`.
+
+### 11.7 El motivo anterior se ve antes de llamar, y su ausencia también
+
+§11 manda revisar cómo terminó el intento anterior antes de reenviar: «si el
+cliente vio el producto y aun así lo rechazó, normalmente no reenviar». Esa
+etiqueta es `reported_status`, y hasta el 14-09-2026 **no se pintaba en ninguna
+pantalla**: estaba en la fila, tipada y usada por la elegibilidad de
+recuperación, y la asesora llamaba a ciegas. Ahora sale en la cola y en la ficha
+del cliente del cajón —la que se lee mientras suena el teléfono—, con la lectura
+en castellano (`motivoDelCourier`).
+
+Cuando el rechazo consta, la frase va **destacada**: es la que cambia la
+decisión.
+
+Donde no hay motivo **no va un guion**. Un guion se lee «no hay nada que decir»,
+y lo que pasa es otra cosa: de 130 devoluciones candidatas medidas el 2026-08-10,
+100 no traían motivo alguno. Va escrito «sin motivo del courier · no consta si la
+rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
 
 ## 12. Agencia: Shalom y Olva
 
@@ -3166,6 +3389,40 @@ el guardarraíl de ambigüedad, la que busca dentro del texto y la que rompe la
 rama sin región— y los caza los cuatro. Una prueba que no falla ante ninguno de
 esos no habría estado protegiendo nada.
 
+### 19.0.1 La ortografía del departamento se unifica; el matiz de Lima no
+
+Medido el 14-09-2026: `shipments.region` tenía **77 valores distintos para 25
+departamentos**. El filtro de la cola de Envíos agrupa por esa columna, así que
+el desplegable ofrecía «Junín» (501 filas) y «Junin» (125) como si fueran dos
+sitios, y elegir uno escondía el otro. Lo mismo con Áncash, Huánuco, Apurímac,
+San Martín, Cusco/Cuzco e Ica.
+
+`normalizeDepartment` (`lib/peru-departamentos.ts`) canoniza la grafía al
+importar y al agrupar —las dos, porque las filas ya guardadas no se reimportan—.
+Es **seguro para la cobertura por construcción**: `normalizeCoverageLabel` ya
+compara sin tildes y en minúsculas, así que arreglar la ortografía no cambia
+ninguna decisión de courier. Hay una prueba que lo fija recorriendo las grafías
+reales y exigiendo que `limaRegionKind` dé lo mismo antes y después.
+
+**Lo que NO se unifica, y es la parte que importa: las tres Limas.**
+
+| Valor | Qué es | `limaRegionKind` |
+|---|---|---|
+| `Lima (provincia)` · `Lima Metropolitana` | la ciudad | `metropolitana` |
+| `Lima (departamento)` · `Región Lima` | el resto del departamento | `departamento` |
+| `Lima` a secas | no consta cuál | `lima` |
+
+Parecen la misma etiqueta mal escrita y no lo son. Los distritos lo confirman:
+en «(provincia)» están Miraflores, Surco y Puente Piedra; en «(departamento)»
+están Barranca, Cañete, Canta y Sayán, que son otras provincias del mismo
+departamento y otra cobertura. Fusionarlas —que es lo que parece el arreglo
+obvio mirando el desplegable— habría roto el ruteo de 113 envíos.
+
+Y **un distrito suelto en la columna se deja como vino**. Entran «Trujillo»,
+«Chorrillos», «Av Mariátegui mercado orizonte». Adivinarles el departamento es
+inventar: un dato sucio que se ve es mejor que uno limpio que miente, y §19.0
+ya fija el mismo criterio para los nombres ambiguos.
+
 ### 19.0.2 «No hay dato» no es «no hay cobertura»
 
 La cobertura Fenix/Swayp de un envío se decide por su ciudad. La columna `city`
@@ -3847,6 +4104,16 @@ No cambian elegibilidad, tarifas, identidad de salidas ni reglas de liquidación
 
 #### Recorrido unificado aprobado el 12-09-2026
 
+**Unificación de navegación, 13-09-2026.** La entrada independiente «Rutas»
+se retira del menú: el reparto y su cierre financiero pertenecen a **Grupo GF
+Courier → Rutas → Reparto y cierre diario**. «Cajas y cotejos» conserva los
+controles físicos. La URL canónica del reparto es `/dashboard/courier/reparto`;
+`/dashboard/rutas` redirige conservando id, fecha y demás parámetros.
+No se recrean rutas, paradas, salidas ni liquidaciones. Se conservan permisos:
+mostrar la entrada al módulo no concede administración logística a quien solo
+puede gestionar rutas o cotejar. La planificación rápida sigue en «Tomar y
+asignar», no en un segundo formulario de creación de rutas.
+
 Master representa a la tienda; Almacén prepara y entrega; Grupo GF Courier
 planifica, recibe, reparte y liquida. Los pedidos elegibles de Aurela/Kenku se
 ofrecen automáticamente, sin una segunda aprobación en Master. La búsqueda y
@@ -4172,6 +4439,39 @@ completa permanece abierta. Las correcciones conservan lo declarado, el valor
 anterior, actor, motivo y fecha como ya exige §14.
 
 ### 29.10 Acceso y administración
+
+#### Acuerdo 13-09-2026: cobro en puerta y ganancia del motorizado
+
+- Reportar una entrega exige elegir el medio de pago, sin efectivo preseleccionado.
+  El importe sugerido es el saldo después de pagos validados o prepago checkout,
+  nunca el total si ya hubo adelanto. Pagos pendientes se muestran como pendientes,
+  no se descuentan como validados. Si el saldo no puede comprobarse no se inventa.
+- `Sin cobro` guarda exactamente cero, tanto en la parada como en su historial.
+  El monto reportado no equivale a ingreso bancario validado.
+- La tarifa que Grupo GF cobra a la tienda es independiente de la ganancia del
+  motorizado. El tarifario personal usa ficha estable del motorizado, distrito
+  canónico opcional y vigencia. La excepción de distrito gana a su tarifa general.
+  Entregado y rechazado por el cliente pagan el mismo importe por punto; los demás
+  intentos no pagan automáticamente. Roy acordó S/8.50 por entrega o rechazo.
+  No se asigna una tarifa por coincidencia de nombre ni se modifica historia.
+- En Rutas se configuran tarifas personales con `costs.manage` en la organización
+  correspondiente. Una nueva tarifa crea una versión y exige motivo. Sin tarifa
+  personal aplicable, el pago queda pendiente, no cero ni tarifa del courier.
+- Un adicional por espera, retorno u otra excepción se aprueba explícitamente con
+  `settlements.close`, importe positivo y motivo. Se liga a la ruta y al punto,
+  identifica al aprobador y no sobrescribe la tarifa. Su anulación es otro evento.
+- La liquidación del motorizado es una por ruta diaria, aunque mezcle tiendas o
+  cargas. Muestra por punto tarifa y versión, adicional/motivo/aprobador, ganancia,
+  efectivo reportado y cobros directos reportados separados. El neto de efectivo
+  es efectivo menos ganancia: positivo entrega el motorizado, negativo paga GF.
+- Terminar la ruta es un cierre operativo. Aprobar el cálculo diario es un acto
+  financiero distinto con `settlements.close`: congela el desglose y exige ruta
+  terminada, evidencia, tarifas y confirmación de la versión vista. No registra
+  automáticamente un depósito, un pago al motorizado ni validación bancaria.
+  Los lotes por tienda originados en ruta no vuelven a generar un pago personal
+  con el motor antiguo; se remiten a este cierre diario para evitar duplicarlo.
+- Las rutas y reportes históricos no se corrigen automáticamente. En particular,
+  el caso Roy/AUR176840 requiere verificar Efectivo/Yape antes de aprobar cifras.
 
 - Daysi administra tiendas cliente, motorizados, capacidad, asignaciones, rutas,
   contratos y tarifas de Grupo GF Courier.
