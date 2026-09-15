@@ -60,6 +60,7 @@ import type {
 import {
   AGENCY_AVAILABLE_STATES,
   emptyFilters,
+  MANAGEMENT_DAY_STEPS,
   PAYMENT_CHECK_NONE,
   type AgencySummary,
   type MasterFilters,
@@ -815,8 +816,14 @@ function searchTerm(f: MasterFilters): string {
  *
  * `now` se pasa desde fuera para que "vence pronto" y "sin movimiento" sean
  * reproducibles y no dependan del reloj del servidor a mitad de una petición.
+ *
+ * Se EXPORTA para poder probar la URL que produce. Un filtro mal serializado no
+ * falla ruidosamente: PostgREST devuelve un error de tipo y la pantalla de
+ * trabajo diaria se queda en blanco, o —peor— el filtro es válido y no casa con
+ * nada, que se lee como «no hay pedidos». Comprobar la cadena es la única forma
+ * de ver eso antes de producción.
  */
-function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
+export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
   // El tipo del query builder de PostgREST es encadenado; se trabaja sobre una
   // referencia suelta para no pelearse con los genéricos en cada línea.
   let q = query as any;
@@ -830,6 +837,18 @@ function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T {
   if (f.districts.size) q = q.in("district", [...f.districts]);
   if (f.coverages.size) q = q.in("coverage", [...f.coverages]);
   if (f.pickupStates.size) q = q.in("pickup_state", [...f.pickupStates]);
+
+  // Días con gestión. La columna es un entero y el filtro viaja por la URL como
+  // texto, así que se convierte ACÁ y se descarta lo que no sea un entero: un
+  // `?gd=abc` a mano metería un NaN en el `in(...)` y PostgREST devolvería un
+  // error en vez de un listado. La regla del códec es que lo que no se entiende
+  // se ignora, y esta es la otra mitad de esa regla.
+  if (f.managementDays.size) {
+    const steps = [...f.managementDays]
+      .map((v) => Number(v))
+      .filter((n) => Number.isInteger(n) && n >= 0);
+    if (steps.length) q = q.in("confirmation_day_count", steps);
+  }
 
   // La verificación del cobro del courier. `sin` es la columna en NULL —un
   // courier que no sube constancia por guía— y en PostgREST hay que pedirlo
@@ -1019,6 +1038,62 @@ export async function getConfirmationDueCounts(
   ]);
 
   return { all, vencido, hoy, proximo };
+}
+
+/**
+ * Cuántos pedidos hay en cada paso de la escalera de gestión.
+ *
+ * MISMA REGLA QUE LOS CHIPS DE «FECHA PACTADA», y por el mismo motivo: se cuenta
+ * sobre la consulta vigente —con la tienda, la subetapa y el plazo que estén
+ * puestos—, no sobre las 100 filas visibles, y el propio filtro de gestión se
+ * quita antes de contar para que los ocho pasos sigan enseñando su universo
+ * completo aunque uno esté seleccionado. Si no, elegir «2/7 días» dejaría los
+ * otros siete en cero y el desplegable se volvería inútil justo después de
+ * usarlo.
+ *
+ * Son ocho conteos en paralelo, como los siete de `getOrderMasterCounts` y los
+ * cuatro de aquí arriba: `head: true` no trae filas, solo el `count` de la
+ * cabecera, y se apoyan en el índice por tienda y macroetapa que ya existe.
+ *
+ * Se acota a «Por confirmar» porque es donde la columna Gestión se muestra y
+ * donde el filtro se ofrece. Contar fuera de ahí sería inventar un número que
+ * nadie puede ver ni usar.
+ */
+export async function getManagementDayCounts(
+  storeIds: string[],
+  params: {
+    substage?: MacroSubstage | null;
+    filters: MasterFilters;
+    now?: Date;
+  },
+): Promise<Record<number, number>> {
+  const empty: Record<number, number> = {};
+  for (const step of MANAGEMENT_DAY_STEPS) empty[step] = 0;
+  if (!storeIds.length) return empty;
+
+  const sb = await createServerSupabase();
+  const now = params.now ?? new Date();
+  const baseFilters: MasterFilters = { ...params.filters, managementDays: new Set() };
+
+  const countFor = async (step: number): Promise<number> => {
+    let query = sb
+      .from("order_master")
+      .select("id", { count: "exact", head: true })
+      .in("store_id", storeIds)
+      .eq("macro_stage", "por_confirmar")
+      .eq("confirmation_day_count", step);
+    if (params.substage) query = query.eq("macro_substage", params.substage);
+
+    const { count, error } = await applyServerFilters(query, baseFilters, now);
+    return error ? 0 : (count ?? 0);
+  };
+
+  const counts = await Promise.all(MANAGEMENT_DAY_STEPS.map((step) => countFor(step)));
+  const out: Record<number, number> = {};
+  MANAGEMENT_DAY_STEPS.forEach((step, i) => {
+    out[step] = counts[i] ?? 0;
+  });
+  return out;
 }
 
 /**

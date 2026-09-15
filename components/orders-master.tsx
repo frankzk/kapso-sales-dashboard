@@ -76,6 +76,8 @@ import {
   agencyHasActivity,
   emptyFilters,
   hasActiveFilters,
+  MANAGEMENT_DAY_STEPS,
+  managementDayLabel,
   PAYMENT_CHECK_OPTIONS,
   type AgencySummary,
   type MasterFilters,
@@ -500,6 +502,7 @@ export function OrdersMasterBoard({
   counts,
   substageCounts,
   confirmationDueCounts,
+  managementDayCounts,
   confirmationCycles,
   rows,
   total,
@@ -524,6 +527,11 @@ export function OrdersMasterBoard({
   counts: MasterCounts;
   substageCounts: Partial<Record<MacroSubstage, number>>;
   confirmationDueCounts: ConfirmationDueCounts;
+  /**
+   * Pedidos en cada paso de la escalera de gestión, contados sobre la consulta
+   * vigente. Vacío fuera de «Por confirmar», que es donde el filtro se ofrece.
+   */
+  managementDayCounts: Record<number, number>;
   /** Ciclo de recontacto por tienda (§6.1). Vacío fuera de «Por confirmar». */
   confirmationCycles: ConfirmationCycleOption[];
   /** UNA página ya filtrada y ordenada por la base. Antes llegaban las ~10.000
@@ -1071,6 +1079,20 @@ export function OrdersMasterBoard({
                 selected={filters.pickupStates}
                 onChange={(pickupStates) => patch({ pickupStates })}
                 capitalize={false}
+              />
+            )}
+            {/* Solo donde la columna Gestión se ve. Un filtro por una columna
+                que no está en pantalla filtraría a ciegas: el usuario vería la
+                lista encogerse sin nada que se lo explique. */}
+            {view === "por_confirmar" && (
+              <ChecklistFilter
+                label="Gestión"
+                options={MANAGEMENT_DAY_STEPS.map(String)}
+                selected={filters.managementDays}
+                onChange={(managementDays) => patch({ managementDays })}
+                capitalize={false}
+                optionLabel={managementDayLabel}
+                counts={managementDayCounts}
               />
             )}
 

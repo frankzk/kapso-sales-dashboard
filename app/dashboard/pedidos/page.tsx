@@ -7,6 +7,7 @@ import {
   getAgencySummaryCached,
   getConfirmationCycleDays,
   getConfirmationDueCounts,
+  getManagementDayCounts,
   getMasterFacetsCached,
   getOrderMasterMomCounts,
   getOrderMasterPage,
@@ -78,7 +79,15 @@ async function PedidosContent({
   // El ciclo de recontacto se muestra junto a los chips de «Fecha pactada», así
   // que solo hace falta en esa vista.
   const showConfirmation = view === "por_confirmar";
-  const [momCounts, pageData, facets, agency, confirmationDueCounts, cycleDays] = await Promise.all([
+  const [
+    momCounts,
+    pageData,
+    facets,
+    agency,
+    confirmationDueCounts,
+    managementDayCounts,
+    cycleDays,
+  ] = await Promise.all([
     getOrderMasterMomCounts(storeIds),
     getOrderMasterPage(storeIds, { view, substage, filters, sortKey: "created", page }),
     // Cacheadas: no dependen de lo que se esté filtrando ni buscando.
@@ -87,6 +96,11 @@ async function PedidosContent({
     showConfirmationDue
       ? getConfirmationDueCounts(storeIds, { substage, filters })
       : Promise.resolve({ all: 0, vencido: 0, hoy: 0, proximo: 0 }),
+    // Solo donde el filtro de Gestión se ofrece: fuera de «Por confirmar» serían
+    // ocho consultas por carga para un desplegable que nadie ve.
+    showConfirmation
+      ? getManagementDayCounts(storeIds, { substage, filters })
+      : Promise.resolve({} as Record<number, number>),
     showConfirmation
       ? getConfirmationCycleDays(storeIds)
       : Promise.resolve({} as Record<string, number>),
@@ -114,6 +128,7 @@ async function PedidosContent({
       counts={momCounts.stages}
       substageCounts={momCounts.substages}
       confirmationDueCounts={confirmationDueCounts}
+      managementDayCounts={managementDayCounts}
       confirmationCycles={confirmationCycles}
       rows={pageData.rows}
       total={pageData.total}

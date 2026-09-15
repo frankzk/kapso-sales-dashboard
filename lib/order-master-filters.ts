@@ -52,6 +52,33 @@ export interface MasterFilters {
   search: string;
   /** Cola de Volver a contactar: vencido | hoy | proximo. */
   confirmationDue: "" | "vencido" | "hoy" | "proximo";
+  /**
+   * Días distintos con gestión (`confirmation_day_count`), como cadenas «0»…«7».
+   *
+   * Sirve para atacar por profundidad de gestión: los de 1 día son los que
+   * todavía no se han trabajado y los de 4+ son los que llevan media escalera
+   * gastada sin cerrar. Son dos colas distintas y antes no había forma de
+   * separarlas — la columna se veía pero no se podía filtrar por ella.
+   */
+  managementDays: Set<string>;
+}
+
+/**
+ * La escalera de gestión, de 0 a 7 días distintos con llamada.
+ *
+ * Es una lista FIJA, no una faceta, por el mismo motivo que «Cobro del
+ * courier»: que hoy no haya ningún pedido en «6/7 días» es justo lo que uno
+ * quiere poder comprobar. Medido el 15-09-2026 en «Por confirmar»: 0→5, 1→137,
+ * 2→139, 3→75, 4→7 y nadie más arriba.
+ */
+export const MANAGEMENT_DAY_STEPS = [0, 1, 2, 3, 4, 5, 6, 7] as const;
+
+/** El denominador que se enseña junto al paso: «3/7 días». */
+export const MANAGEMENT_DAYS_TOTAL = 7;
+
+/** Etiqueta del paso, la MISMA que pinta la columna Gestión de la tabla. */
+export function managementDayLabel(step: number | string): string {
+  return `${step}/${MANAGEMENT_DAYS_TOTAL} días`;
 }
 
 export function emptyFilters(): MasterFilters {
@@ -82,6 +109,7 @@ export function emptyFilters(): MasterFilters {
     expiringSoon: false,
     search: "",
     confirmationDue: "",
+    managementDays: new Set(),
   };
 }
 
@@ -110,6 +138,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.expiringSoon ||
     f.search.trim().length > 0
     || Boolean(f.confirmationDue)
+    || f.managementDays.size > 0
   );
 }
 
@@ -208,6 +237,11 @@ export function matchesFilters(
     const last = row.last_movement_at ? Date.parse(row.last_movement_at) : null;
     if (last !== null && Number.isFinite(last) && last > cutoff) return false;
   }
+
+  // La columna pinta `confirmation_day_count ?? 0`, así que el filtro tiene que
+  // leer lo mismo: un pedido sin gestiones se ve como «0/7 días» y pedir el 0
+  // tiene que traerlo, no dejarlo fuera por ser nulo.
+  if (!inSet(f.managementDays, String(row.confirmation_day_count ?? 0))) return false;
 
   const q = f.search.trim().toLowerCase().replace(/^#/, "");
   if (q && !haystack(row).includes(q)) return false;

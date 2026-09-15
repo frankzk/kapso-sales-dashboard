@@ -19,6 +19,7 @@ export function ChecklistFilter({
   onChange,
   capitalize = true,
   optionLabel,
+  counts,
 }: {
   label: string;
   options: string[];
@@ -27,6 +28,14 @@ export function ChecklistFilter({
   /** Las etiquetas de código (estados) se muestran tal cual, no capitalizadas. */
   capitalize?: boolean;
   optionLabel?: (option: string) => string;
+  /**
+   * Cuántas filas hay detrás de cada opción, para poder atacar por tamaño sin
+   * probar una por una. Opcional: quien no lo pase se comporta igual que antes.
+   *
+   * Un cero SE ENSEÑA en vez de esconder la opción — saber que nadie está en un
+   * paso es información, y esconderlo haría creer que el paso no existe.
+   */
+  counts?: Record<string, number>;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -114,6 +123,11 @@ export function ChecklistFilter({
                     className="h-3.5 w-3.5"
                   />
                   <span className="text-slate-700">{optionLabel?.(option) ?? option}</span>
+                  {counts && (
+                    <span className="ml-auto shrink-0 tabular-nums text-xs text-slate-500">
+                      {counts[option] ?? 0} {(counts[option] ?? 0) === 1 ? "pedido" : "pedidos"}
+                    </span>
+                  )}
                 </label>
               </li>
             ))}
