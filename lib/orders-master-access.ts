@@ -255,22 +255,73 @@ export async function getOrderMasterMomCounts(storeIds: string[]): Promise<Maste
   return { stages: await getOrderMasterCounts(storeIds), substages: {} };
 }
 
-/** Búsqueda global (código, guía, teléfono, cliente), fuera de la pestaña activa. */
+/**
+ * Búsqueda global (código, guía, teléfono, cliente), fuera de la pestaña activa.
+ *
+ * LA GUÍA SE BUSCA EN `shipments`, NO SOLO EN `order_master`. La columna
+ * `guide_code` del Master es la guía ACTUAL del pedido, una sola; un pedido con
+ * historia tiene varias —#KP129183 acumula cuatro: la de Aliclik, una interna y
+ * dos de Swayp— y de esas solo la última era buscable. Medido el 15-09-2026:
+ * **538 guías existían en la base y no devolvían nada**, que es justo cuando uno
+ * busca por guía — con el número de un courier en la mano, viniendo de su panel
+ * o de un reclamo, para saber de qué pedido hablamos.
+ *
+ * Se busca también por `swayp_guide` porque en una guía Swayp emitida por API
+ * ese es el número que ellos imprimen y el que aparece en su panel; en las
+ * rellenadas coincide con `guide_code`, pero no hay que apostar a que siempre.
+ *
+ * Las dos consultas van en paralelo y se unen por `order_id`: una sola no se
+ * puede, porque PostgREST no filtra la tabla padre por una condición sobre la
+ * hija sin `!inner`, y con `!inner` se perderían los pedidos SIN guía, que es
+ * media búsqueda por nombre o teléfono.
+ */
 export async function searchOrderMaster(query: string, limit = 50): Promise<OrderMasterRow[]> {
   const q = query.trim().replace(/^#/, "");
   if (q.length < 2) return [];
   const sb = await createServerSupabase();
   const like = `%${q}%`;
-  const { data, error } = await sb
+
+  const [directas, porGuia] = await Promise.all([
+    sb
+      .from("order_master")
+      .select(MASTER_COLUMNS)
+      .or(
+        `order_name.ilike.${like},guide_code.ilike.${like},customer_phone.ilike.${like},customer_name.ilike.${like}`,
+      )
+      .order("last_movement_at", { ascending: false })
+      .limit(limit),
+    sb
+      .from("shipments")
+      .select("order_id")
+      .or(`guide_code.ilike.${like},swayp_guide.ilike.${like}`)
+      .not("order_id", "is", null)
+      .limit(limit),
+  ]);
+  if (directas.error) return [];
+
+  const encontrados = (directas.data ?? []) as unknown as OrderMasterRow[];
+  const yaEstan = new Set(encontrados.map((row) => row.order_id));
+  // Un fallo leyendo las guías no puede vaciar la búsqueda: se devuelve lo que
+  // sí se pudo resolver, que es la conducta de antes, no una peor.
+  const ids = Array.from(
+    new Set(
+      (((porGuia.data ?? []) as { order_id: string | null }[]) ?? [])
+        .map((row) => row.order_id)
+        .filter((id): id is string => !!id && !yaEstan.has(id)),
+    ),
+  );
+  if (!ids.length) return encontrados;
+
+  const { data: porSalida } = await sb
     .from("order_master")
     .select(MASTER_COLUMNS)
-    .or(
-      `order_name.ilike.${like},guide_code.ilike.${like},customer_phone.ilike.${like},customer_name.ilike.${like}`,
-    )
+    .in("order_id", ids)
     .order("last_movement_at", { ascending: false })
     .limit(limit);
-  if (error) return [];
-  return (data ?? []) as unknown as OrderMasterRow[];
+  const extra = ((porSalida ?? []) as unknown as OrderMasterRow[]) ?? [];
+  // El tope es del resultado, no de cada mitad: pedir 50 y recibir 100 sería
+  // otra forma de mentir sobre cuántos hay.
+  return [...encontrados, ...extra].slice(0, limit);
 }
 
 // ---------------------------------------------------------------------------
