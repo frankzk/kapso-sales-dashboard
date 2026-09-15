@@ -3235,6 +3235,7 @@ function OrderDrawer({
               <OrderRouteDesk
                 plan={detail.routePlan}
                 gate={detail.routeGate}
+                onJump={jumpTo}
                 actionEnabled={routeEnabled}
                 onSelect={selectRoute}
               />

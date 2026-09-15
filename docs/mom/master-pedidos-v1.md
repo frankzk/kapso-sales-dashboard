@@ -1023,6 +1023,11 @@ Reglas:
 - El motivo se muestra **antes** de los botones, no solo como una etiqueta
   apagada encima de ellos, y se muestra aunque algún botón siga encendido — el
   hecho es cierto igual.
+- **Y lleva atajo, no solo el nombre del panel.** Los dos sitios viven al fondo
+  de la pestaña Operar, detrás de «Salidas y guías», y quien lee el aviso está
+  arriba del todo: con #AUR176830 hicieron falta dos rondas para encontrarlo
+  teniendo la instrucción delante. Cada motivo lleva su botón al panel que le
+  toca, como ya hacía «Abrir Mesa de cierre ↓».
 - El motivo nombra **dónde se arregla**, porque hay dos «reabrir» y no sirven
   para lo mismo: el del expediente vive en la **Mesa de cierre** y el del estado
   en **Gestión manual → Registrar estado**. Un aviso que manda a un panel
