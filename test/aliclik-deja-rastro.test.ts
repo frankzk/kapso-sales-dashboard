@@ -38,12 +38,28 @@ describe("cada transición deja un evento en el pedido", () => {
     expect(body).toContain('courier: "aliclik"');
   });
 
-  it("SOLO cuando el estado cambia de verdad", () => {
+  it("SOLO cuando el estado o la etiqueta cambian de verdad", () => {
     // El barrido relee las mismas guías cada pocos minutos. Sin esta condición
     // el historial se llenaría de líneas idénticas, que es la otra forma de
     // perder la información.
+    //
+    // Y la etiqueta cuenta como cambio: `IN_TRANSIT → IN_AGENCY → PICKED` se
+    // traducen todos a `en_ruta`, y mirando solo el estado nuestro la Actividad
+    // se perdía Recolectado, En agencia y Validado (AUR5X250809378012, 15-09-2026).
     const body = cuerpoDelApply();
-    expect(body).toContain("if (shipment.order_id && next !== shipment.delivery_status) {");
+    expect(body).toContain(
+      "if (shipment.order_id && (next !== shipment.delivery_status || etiquetaCambio)) {",
+    );
+    expect(body).toContain('const etiquetaCambio = etiqueta !== (shipment.reported_status ?? "").trim();');
+  });
+
+  it("y NUNCA por un snapshot idéntico: `cambiosMateriales` lo despacha antes de llegar al evento", () => {
+    // Un snapshot igual al último aplicado escribe solo los sellos de lectura y
+    // sale; el evento por cambio de etiqueta vive DESPUÉS de esa salida, así que
+    // una etiqueta distinta de la guardada es siempre un cambio real de Aliclik.
+    const body = cuerpoDelApply();
+    expect(body.indexOf("cambiosMateriales(patch")).toBeGreaterThan(0);
+    expect(body.indexOf("cambiosMateriales(patch")).toBeLessThan(body.indexOf("const etiquetaCambio"));
   });
 
   it("y solo si la guía está vinculada a un pedido", () => {
