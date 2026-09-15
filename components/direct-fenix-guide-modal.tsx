@@ -414,6 +414,17 @@ export function DirectFenixGuideModal({
                 <p className="mt-1 font-sans">Gestiónala o anúlala antes de crear una guía directa.</p>
               </div>
             )}
+            {/* Una salida «por definir» NO bloquea: la guía se le escribe
+                encima, sin abrir otra ni gastar una del presupuesto de cinco.
+                Se dice en azul y no en rojo porque no hay nada que resolver, y
+                se nombra la salida porque quien arma la caja tiene ese rótulo
+                delante. */}
+            {preview.fillableOutputCode && !blockedByGuide && !blockedByOrder && (
+              <p className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs text-sky-800">
+                La salida <span className="font-mono">{preview.fillableOutputCode}</span> está por
+                definir: la guía se le escribe encima, sin anularla ni abrir otra.
+              </p>
+            )}
             {preview.warnings.length > 0 && !blockedByGuide && !blockedByOrder && (
               <ul className="space-y-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
                 {preview.warnings.map((w, i) => (

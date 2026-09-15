@@ -73,6 +73,8 @@ import {
   type StockMovementKind,
   type StockMovementRow,
 } from "@/lib/fenix-ledger";
+import { writeCourierGuide } from "@/lib/route-output-fill";
+import { isFillableRouteOutput, pickFillableRouteOutput } from "@/lib/shipment-output";
 import { readUpload } from "@/lib/courier-upload";
 import {
   ciudadDeBodega,
@@ -1591,6 +1593,35 @@ interface DirectGuideExisting {
   guide_code: string;
   courier: string;
   delivery_status: string;
+  // Lo que hace falta para saber si es una salida «por definir» rellenable, en
+  // vez de una guía que de verdad estorba. Ver `esRellenable`.
+  created_via?: string | null;
+  custody_state?: string | null;
+  custody_transferred_at?: string | null;
+  output_number?: number | null;
+  output_code?: string | null;
+}
+
+/**
+ * ¿Esta salida se RELLENA con la guía de Swayp en vez de estorbarla?
+ *
+ * Una salida «por definir» es una caja armada y rotulada esperando courier. Las
+ * guías de Grupo GF, Tanders, Aliclik y Shalom le escriben el courier encima
+ * (`writeCourierGuide`); Swayp era el único que no, así que pedía anularla
+ * primero — y anular arrastra el pedido a `anulado` (#KP127639), que es
+ * exactamente el rodeo que ese mecanismo vino a cerrar.
+ *
+ * Delega en `isFillableRouteOutput`: dos definiciones de «rellenable» harían
+ * que el aviso de la mesa prometiera una cosa y el servidor hiciera otra.
+ */
+function esRellenable(g: DirectGuideExisting): boolean {
+  return isFillableRouteOutput({
+    courier: g.courier,
+    created_via: g.created_via ?? null,
+    delivery_status: g.delivery_status,
+    custody_state: g.custody_state ?? null,
+    custody_transferred_at: g.custody_transferred_at ?? null,
+  });
 }
 
 /** Every guide already tied to the order (by FK or by carried order name). */
@@ -1598,7 +1629,8 @@ async function findGuidesOfOrder(
   admin: SupabaseClient,
   order: { id: string; store_id: string; name: string | null },
 ): Promise<DirectGuideExisting[]> {
-  const cols = "id,guide_code,courier,delivery_status";
+  const cols =
+    "id,guide_code,courier,delivery_status,created_via,custody_state,custody_transferred_at,output_number,output_code";
   const { data: byOrder } = await admin.from("shipments").select(cols).eq("order_id", order.id).limit(50);
   let byName: DirectGuideExisting[] = [];
   if (order.name) {
@@ -1642,6 +1674,12 @@ export interface DirectFenixGuidePreview {
   uncovered: string[];
   activeGuides: DirectGuideExisting[];
   closedGuidesCount: number;
+  /**
+   * `KP123-S01` de la salida «por definir» que la guía va a rellenar, si la
+   * hay. No bloquea: se dice para que quien arma la caja sepa que no se abre
+   * una segunda fila ni se gasta una salida del presupuesto de cinco.
+   */
+  fillableOutputCode?: string | null;
   warnings: string[];
 }
 
@@ -1780,8 +1818,13 @@ export async function previewDirectFenixGuide(input: {
   const check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
 
   const guides = await findGuidesOfOrder(admin, order);
-  const activeGuides = guides.filter((g) => DIRECT_GUIDE_ACTIVE_STATUSES.has(g.delivery_status));
-  const closedGuidesCount = guides.length - activeGuides.length;
+  // Una salida «por definir» no estorba: la guía se le escribe encima. Se
+  // separa de las que sí bloquean para no pedir que anulen algo que se va a
+  // aprovechar — y para nombrar cuál se va a rellenar.
+  const activas = guides.filter((g) => DIRECT_GUIDE_ACTIVE_STATUSES.has(g.delivery_status));
+  const activeGuides = activas.filter((g) => !esRellenable(g));
+  const rellenable = pickFillableRouteOutput(activas);
+  const closedGuidesCount = guides.length - activas.length;
 
   const totalRefunded = order.total_refunded ?? 0;
   const refundedTotal = (order.total_amount ?? 0) > 0 && totalRefunded >= (order.total_amount ?? 0);
@@ -1829,6 +1872,7 @@ export async function previewDirectFenixGuide(input: {
     uncovered: check.uncovered,
     activeGuides,
     closedGuidesCount,
+    fillableOutputCode: rellenable?.output_code ?? null,
     warnings,
   };
 }
@@ -2078,7 +2122,10 @@ export async function createDirectFenixGuide(input: {
 
   // Duplicate gate: an active guide (either courier) already covers this order.
   const guides = await findGuidesOfOrder(admin, order);
-  const active = guides.find((g) => DIRECT_GUIDE_ACTIVE_STATUSES.has(g.delivery_status));
+  // Igual que en el preview: una salida «por definir» no estorba, se rellena.
+  const active = guides.find(
+    (g) => DIRECT_GUIDE_ACTIVE_STATUSES.has(g.delivery_status) && !esRellenable(g),
+  );
   if (active) {
     const courierLabel = active.courier === "fenix" ? "Swayp" : "Aliclik";
     return {
@@ -2183,35 +2230,26 @@ export async function createDirectFenixGuide(input: {
     fenix_eligible: true,
     created_via: "fenix_directo",
   };
-  let insertResult = await admin.from("shipments").insert(insertRow).select("id").single();
-  if (
-    insertResult.error &&
-    (insertResult.error.code === "PGRST204" ||
-      insertResult.error.code === "42703" ||
-      insertResult.error.message.toLowerCase().includes("created_via") ||
-      insertResult.error.message.toLowerCase().includes("swayp"))
-  ) {
-    // 0043/0045 may land moments after the app deploy — keep the flow alive
-    // without the origin marker or the Swayp ids rather than failing every
-    // direct guide. The guide still exists in Swayp; only the local link is
-    // missing until the migration runs.
-    const {
-      created_via: _createdVia,
-      swayp_guide: _swaypGuide,
-      swayp_state: _swaypState,
-      ...legacyRow
-    } = insertRow;
-    insertResult = await admin.from("shipments").insert(legacyRow).select("id").single();
-  }
-  if (insertResult.error || !insertResult.data) {
-    const dup = insertResult.error?.code === "23505";
+  // RELLENA la salida «por definir» si la hay, y si no crea una nueva. Es el
+  // mismo camino que Grupo GF, Tanders, Aliclik y Shalom: sin esto, Swayp era
+  // el único courier que obligaba a anular la salida para poder emitir, y
+  // anularla arrastra el pedido a `anulado` (#KP127639).
+  //
+  // Se queda además con el reintento por columna faltante que la inserción a
+  // mano traía suelto, pero con una diferencia que importa: `created_via` es
+  // esencial y ya no se suelta. Rellenar sin él dejaría la salida marcada como
+  // ruta manual, con «Anular salida» ofreciéndose sobre una guía que ya existe
+  // en Swayp — anularla de nuestro lado la dejaría viva del otro (MOM §4).
+  const written = await writeCourierGuide(admin, order.id, insertRow);
+  if ("error" in written) {
+    const dup = written.error.includes("23505") || written.error.toLowerCase().includes("duplicate");
     return {
       error: dup
         ? `Ya existe una guía Swayp con el código ${code}. Cambia la fecha o edita el código.`
-        : (insertResult.error?.message ?? "No se pudo crear la guía Swayp."),
+        : written.error,
     };
   }
-  const childId = (insertResult.data as { id: string }).id;
+  const childId = written.shipmentId;
 
   // Gestión del día de quien la creó (kind reroute + new_status null: cuenta
   // como gestión sin inflar "reprogramadas", y la guía —sin madre— queda fuera
@@ -2239,8 +2277,13 @@ export async function createDirectFenixGuide(input: {
   // El id vuelve al cliente para que el tablero salte a "En ruta" —donde nace la
   // guía— y la resalte: creándola desde "Pendiente" el refresco no muestra nada
   // porque la guía nueva no pertenece a esa lista.
+  // Se dice cuándo se RELLENÓ una salida y cuál: quien arma la caja tiene el
+  // rótulo delante y necesita saber que es ese bulto y no uno nuevo.
+  const relleno = written.filled
+    ? ` Se escribió sobre la salida ${written.outputCode ?? "por definir"}, sin abrir otra.`
+    : "";
   return {
-    notice: `Guía Swayp directa ${code} creada — En ruta, despacho ${fecha}.${swaypNotice}`,
+    notice: `Guía Swayp directa ${code} creada — En ruta, despacho ${fecha}.${relleno}${swaypNotice}`,
     shipmentId: childId,
   };
 }

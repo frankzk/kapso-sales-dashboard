@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   isFillableRouteOutput,
   pickFillableRouteOutput,
@@ -379,5 +381,55 @@ describe("deshacer el relleno cuando se anula la guía del courier", () => {
     expect(manualRouteGuideCode(null, "abcdef12-0000-0000-0000-000000000000")).toBe(
       "MOM-ABCDEF12-POR_DEFINIR-ABCDEF12",
     );
+  });
+});
+
+/**
+ * TODOS los couriers rellenan. Swayp no lo hacía, y el hueco no se veía desde
+ * ninguna prueba: cada camino funcionaba, sólo que el suyo pedía anular la
+ * salida primero — el rodeo exacto que `writeCourierGuide` vino a cerrar, y que
+ * arrastra el pedido a `anulado` (#KP127639).
+ *
+ * Se lee el fuente porque lo que falla acá no es un cálculo sino un CABLE: el
+ * que falta no rompe nada, sólo deja al courier fuera del mecanismo.
+ */
+describe("ningún courier se queda fuera del relleno", () => {
+  const CAMINOS = [
+    "app/dashboard/courier/actions.ts", // Grupo GF
+    "app/dashboard/pedidos/tanders-actions.ts",
+    "app/dashboard/pedidos/aliclik-actions.ts",
+    "app/dashboard/pedidos/shalom-actions.ts",
+    "app/dashboard/envios/actions.ts", // Swayp
+  ];
+
+  it.each(CAMINOS)("%s escribe la guía con writeCourierGuide", (archivo) => {
+    const src = readFileSync(resolve(process.cwd(), archivo), "utf8");
+    expect(src).toContain("writeCourierGuide(");
+  });
+
+  it("la guía directa de Swayp NO inserta la fila por su cuenta", () => {
+    // Un INSERT suelto se saltaría el relleno sin que nada avise: la guía
+    // saldría bien y la salida «por definir» quedaría huérfana al lado.
+    const src = readFileSync(resolve(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8");
+    const i = src.indexOf("export async function createDirectFenixGuide");
+    const cuerpo = src.slice(i, src.indexOf("\nfunction labelOfStatus", i));
+    expect(cuerpo).toContain("writeCourierGuide(");
+    expect(cuerpo).not.toMatch(/from\("shipments"\)\s*\.insert\(/);
+  });
+
+  it("una salida por definir no cuenta como guía que estorba", () => {
+    // El guardián de «ya tiene una guía activa» es lo que pedía anularla.
+    const src = readFileSync(resolve(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8");
+    // La exclusión puede ir en la misma expresión o en la siguiente —el
+    // preview separa «activas» de «las que estorban» para poder nombrar la
+    // rellenable—, así que se mira el entorno inmediato y no la línea sola.
+    const usos = [...src.matchAll(/DIRECT_GUIDE_ACTIVE_STATUSES\.has\(/g)];
+    expect(usos.length).toBeGreaterThan(0);
+    for (const m of usos) {
+      const entorno = src.slice(m.index!, m.index! + 300);
+      expect(entorno, `sin excluir las rellenables cerca de: ${entorno.slice(0, 80)}`).toContain(
+        "esRellenable",
+      );
+    }
   });
 });
