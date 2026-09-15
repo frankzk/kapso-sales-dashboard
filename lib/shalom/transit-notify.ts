@@ -25,7 +25,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { StoreCreds } from "@/lib/ingest";
 import { getStoreCreds } from "@/lib/ingest";
-import { sendWhatsappTemplate, type WhatsappSendResult } from "@/lib/kapso";
+import { sendWhatsappDocument, sendWhatsappTemplate, type WhatsappSendResult } from "@/lib/kapso";
 import { isSendablePhone, sanitizeTemplateParam } from "@/lib/leads-ingest";
 import { parseLabelLineItems } from "@/lib/labels/line-items";
 import { tzParts } from "@/lib/metrics";
@@ -604,6 +604,83 @@ async function sendOne(
     });
   }
   return "sent";
+}
+
+/**
+ * Manda el ticket PDF de Shalom por la guía de un aviso ya enviado, cuando la
+ * clienta contesta (ver 0167).
+ *
+ * VA AQUÍ Y NO EN LA PLANTILLA porque el botón abre la ventana de 24 h: dentro
+ * de ella un documento sale como mensaje normal, sin plantilla que aprobar en
+ * Meta y sin número de Yape escrito a mano que pueda desalinearse.
+ *
+ * UNA VEZ POR GUÍA: el sello `ticket_sent_at` vive en la fila del aviso, que es
+ * única por guía. Quien pulsa dos botones no recibe dos tickets.
+ *
+ * NUNCA LANZA y nunca es un fallo del que dependa nada: el texto con las
+ * cuentas ya salió antes. Una guía sin `ose_id` —llegó por el Excel— o Shalom
+ * caído dejan el motivo escrito y ya está.
+ */
+export async function sendTransitTicket(
+  admin: SupabaseClient,
+  input: {
+    notificationId: string;
+    shipmentId: string;
+    storeId: string;
+    phone: string;
+    phoneNumberId: string;
+    apiKey: string;
+    guideCode?: string | null;
+  },
+  opts: { sendDocument?: typeof sendWhatsappDocument; nowIso?: string } = {},
+): Promise<{ sent: boolean; reason?: string }> {
+  const nowIso = opts.nowIso ?? new Date().toISOString();
+  const sendDoc = opts.sendDocument ?? sendWhatsappDocument;
+
+  const stamp = async (patch: Record<string, unknown>) => {
+    await admin.from("shalom_transit_notifications").update(patch).eq("id", input.notificationId);
+  };
+
+  try {
+    const { data } = await admin
+      .from("shipments")
+      .select("shalom_ose_id,guide_code")
+      .eq("id", input.shipmentId)
+      .maybeSingle();
+    const sh = (data ?? null) as { shalom_ose_id: number | null; guide_code: string | null } | null;
+    const oseId = sh?.shalom_ose_id ?? null;
+    if (!oseId) {
+      await stamp({ ticket_error: "la guía no se creó por API (sin OSE ID): no hay ticket que mandar" });
+      return { sent: false, reason: "sin_ose_id" };
+    }
+
+    const link = await ticketLink(admin, input.storeId, oseId);
+    if (!link) {
+      await stamp({ ticket_error: "no se pudo obtener el ticket de Shalom" });
+      return { sent: false, reason: "sin_ticket" };
+    }
+
+    const guia = input.guideCode ?? sh?.guide_code ?? String(oseId);
+    const res = await sendDoc(
+      { apiKey: input.apiKey },
+      {
+        phoneNumberId: input.phoneNumberId,
+        to: input.phone,
+        documentUrl: link,
+        filename: `ticket-shalom-${guia}.pdf`,
+        caption: `📄 Este es el ticket de tu envío por Shalom. Guía ${guia}.`,
+      },
+    );
+    if (!res.ok) {
+      await stamp({ ticket_error: res.error ?? "envío del ticket rechazado" });
+      return { sent: false, reason: "rechazado" };
+    }
+    await stamp({ ticket_sent_at: nowIso, ticket_error: null });
+    return { sent: true };
+  } catch (e) {
+    await stamp({ ticket_error: e instanceof Error ? e.message : String(e) }).catch(() => {});
+    return { sent: false, reason: "error" };
+  }
 }
 
 /** URL firmada del ticket, bajándolo si todavía no está en caché. `null` si

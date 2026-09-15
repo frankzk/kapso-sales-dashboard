@@ -2654,6 +2654,15 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
   - **El saldo del «Link de pago» se recalcula al pulsar**, no se lee del aviso:
     entre el aviso y el botón puede haber pagado y alguien haberlo validado, y
     cobrarle el saldo viejo sería cobrar dos veces.
+  - **El ticket PDF de Shalom se manda cuando la clienta CONTESTA**, detrás del
+    texto con las cuentas, y no dentro del aviso (0167). El botón abre la
+    ventana de 24 h, así que el documento sale como mensaje normal: sin
+    plantilla que aprobar en Meta y sin número escrito a mano que pueda
+    desalinearse de las cuentas de cobro. **Una vez por guía**: quien pulsa dos
+    botones no lo recibe dos veces. Y nunca puede tumbar el texto — lo que la
+    clienta necesita para pagar son las cuentas; el ticket es el respaldo. Una
+    guía sin `ose_id` (llegó por el Excel) no tiene ticket que mandar y se anota
+    el motivo.
   - Si la plantilla trae el Yape **fijo en el cuerpo** en vez de como variable
     —la variante con el ticket en PDF—, el token `yape` sobra y hay que quitarlo
     del orden configurado: un parámetro de más y Meta rechaza el envío. Y el
