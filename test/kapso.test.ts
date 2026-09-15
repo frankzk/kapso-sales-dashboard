@@ -21,6 +21,7 @@ import {
   findConversationIdByPhone,
   listConversationsByPhone,
   classifyKapsoEvent,
+  parseInboundMessage,
   type KapsoClientOpts,
   type ParsedMsg,
   FIRST_INBOUND_TEXT_MAX,
@@ -776,9 +777,20 @@ describe("classifyKapsoEvent (webhook routing)", () => {
     expect(classifyKapsoEvent("whatsapp.conversation.created", {})).toBe("conversation");
   });
 
-  it("skips message events", () => {
-    expect(classifyKapsoEvent("whatsapp.message.received", {})).toBe("skip");
+  it("routes inbound messages to the button auto-replies, statuses to the outbox", () => {
+    // Hasta el 15-09-2026 `received` se descartaba: un botón pulsado por la
+    // clienta no llegaba a ninguna parte.
+    expect(classifyKapsoEvent("whatsapp.message.received", {})).toBe("inbound_message");
     expect(classifyKapsoEvent("whatsapp.message.delivered", {})).toBe("message_status");
+    // Otros eventos de mensaje siguen fuera.
+    expect(classifyKapsoEvent("whatsapp.message.updated", {})).toBe("skip");
+  });
+
+  it("sin cabecera, un mensaje solo es entrante si Kapso lo declara: un aviso de estado también trae id y from", () => {
+    const inbound = { message: { id: "wamid.1", from: "51987654321", type: "text", text: { body: "hola" }, kapso: { direction: "inbound" } } };
+    expect(classifyKapsoEvent(null, inbound)).toBe("inbound_message");
+    const status = { message: { id: "wamid.1", from: "51987654321", status: "delivered" } };
+    expect(classifyKapsoEvent(null, status)).not.toBe("inbound_message");
   });
 
   it("falls back to payload shape when no event header", () => {
@@ -789,7 +801,52 @@ describe("classifyKapsoEvent (webhook routing)", () => {
 
   it("reads the event from the payload body when present", () => {
     expect(classifyKapsoEvent(null, { event: "whatsapp.conversation.ended" })).toBe("conversation");
-    expect(classifyKapsoEvent(null, { type: "whatsapp.message.received", batch: true, data: [] })).toBe("skip");
+    expect(classifyKapsoEvent(null, { type: "whatsapp.message.received", batch: true, data: [] })).toBe("inbound_message");
+  });
+
+  it("parseInboundMessage lee la forma REAL de Kapso: botón rápido e interactivo", () => {
+    // Copiado de la API de Kapso el 15-09-2026 (GET /whatsapp/messages, type=button).
+    const quick = parseInboundMessage({
+      event: "whatsapp.message.received",
+      message: {
+        button: { text: "No, gracias", payload: "No, gracias" },
+        from: "51987654321",
+        id: "wamid.QUICK",
+        kapso: { direction: "inbound", phone_number_id: "PN-451", whatsapp_conversation_id: "conv-1", content: "No, gracias" },
+        type: "button",
+      },
+    });
+    expect(quick).toMatchObject({
+      id: "wamid.QUICK",
+      from: "51987654321",
+      phoneNumberId: "PN-451",
+      conversationId: "conv-1",
+      direction: "inbound",
+      type: "button",
+      buttonText: "No, gracias",
+      buttonPayload: "No, gracias",
+    });
+
+    const interactive = parseInboundMessage({
+      message: {
+        from: "+51 987 654 321",
+        id: "wamid.INT",
+        interactive: { type: "button_reply", button_reply: { id: "loc_provincia", title: "Provincia" } },
+        kapso: { direction: "inbound", phone_number_id: "PN-451" },
+        type: "interactive",
+      },
+    });
+    expect(interactive).toMatchObject({ from: "51987654321", buttonText: "Provincia", buttonPayload: "loc_provincia" });
+
+    // La forma de Meta Cloud, por si el webhook llega sin aplanar.
+    const cloud = parseInboundMessage({
+      entry: [{ changes: [{ value: { metadata: { phone_number_id: "PN-META" }, messages: [{ id: "wamid.C", from: "51900000000", type: "text", text: { body: "hola" } }] } }] }],
+    });
+    expect(cloud).toMatchObject({ id: "wamid.C", from: "51900000000", phoneNumberId: "PN-META", text: "hola" });
+
+    // Sin id o sin remitente no hay mensaje que atender.
+    expect(parseInboundMessage({ message: { type: "button" } })).toBeNull();
+    expect(parseInboundMessage({})).toBeNull();
   });
 
   it("parseHandoffPayload pulls reason/context/phone (validacion_logistica)", () => {

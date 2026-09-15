@@ -333,4 +333,6 @@
 \ir migrations/0164_shopify_product_images.sql
 \echo 'Applying 0165_fenix_stock_unlimited.sql'
 \ir migrations/0165_fenix_stock_unlimited.sql
+\echo 'Applying 0166_shalom_transit_whatsapp.sql'
+\ir migrations/0166_shalom_transit_whatsapp.sql
 \echo 'Done.'

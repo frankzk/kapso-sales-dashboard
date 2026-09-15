@@ -8,10 +8,14 @@ import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import { STORE_STATUSES } from "@/lib/store-settings";
 import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
+  addPaymentMethod,
   addReplyTemplate,
   backfillStoreMetaInsights,
+  deletePaymentMethod,
   deleteReplyTemplate,
   deleteDistrictCoverage,
+  setPaymentMethodActive,
+  setPrimaryYape,
   saveDistrictCoverage,
   generateAliclikWebhookSecret,
   generateKapsoWebhookSecret,
@@ -86,6 +90,16 @@ export interface StoreSettingsData {
     shalom_origin_terminal_id: number | null;
     shalom_origin_terminal_name: string | null;
     shalom_default_product_id: number | null;
+    /** Aviso de guía en tránsito (0166). */
+    shalom_transit_template_enabled: boolean;
+    shalom_transit_template_name: string | null;
+    shalom_transit_template_language: string | null;
+    shalom_transit_params: string | null;
+    shalom_transit_attach_ticket: boolean;
+    shalom_transit_phone_number_id: string | null;
+    shalom_transit_hour_start: number;
+    shalom_transit_hour_end: number;
+    shalom_transit_payment_link: string | null;
     meta_ad_accounts: StoreMetaAdAccount[];
   };
   has: {
@@ -126,6 +140,18 @@ export interface StoreSettingsData {
   }>;
   /** Catálogo de plantillas que el asesor puede enviar con la ventana cerrada
    *  (0113). Vacío mientras la migración no esté aplicada. */
+  /** Cuentas de cobro que se le enseñan al cliente (0166). */
+  paymentMethods: Array<{
+    id: string;
+    kind: string;
+    label: string;
+    holder: string;
+    account: string;
+    detail: string | null;
+    primary_yape: boolean;
+    active: boolean;
+    sort: number;
+  }>;
   replyTemplates: Array<{
     id: string;
     label: string;
@@ -250,6 +276,7 @@ export function StoreSettings({
       <SettingsForm data={data} shalomProducts={shalomTest.shalomProducts} />
 
       <ReplyTemplatesSection storeId={s.id} rows={data.replyTemplates} />
+      <PaymentMethodsSection storeId={s.id} rows={data.paymentMethods} />
       <DistrictCoverageSection storeId={s.id} rows={data.districtCoverage} />
 
       <div className="-mt-2">
@@ -1286,6 +1313,139 @@ function SettingsForm({
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
           <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Aviso de guía Shalom en tránsito (WhatsApp)
+          </legend>
+          <p className="text-xs text-slate-500">
+            Cuando Shalom mueve una guía a <strong>en tránsito</strong>, se le manda a la clienta la
+            plantilla aprobada con la guía, el código, la agencia, el producto y el resumen de pago
+            (total, adelanto validado y saldo). Los tres botones —Yape, transferencia y link— los
+            contesta Kapta sola con las <strong>cuentas de cobro</strong> de abajo. Sale{" "}
+            <strong>una sola vez por guía</strong>, dentro del horario, y nunca lleva la clave de
+            recojo: esa se entrega con el cobro validado, desde la salida.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className={labelCls} htmlFor="shalom_transit_template_enabled">Aviso</label>
+              <select
+                id="shalom_transit_template_enabled"
+                name="shalom_transit_template_enabled"
+                defaultValue={s.shalom_transit_template_enabled ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">Apagado</option>
+                <option value="true">Encendido</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="shalom_transit_template_name">Plantilla · nombre</label>
+              <input
+                id="shalom_transit_template_name"
+                name="shalom_transit_template_name"
+                defaultValue={s.shalom_transit_template_name ?? ""}
+                placeholder="guias_shalom"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="shalom_transit_template_language">Plantilla · idioma</label>
+              <input
+                id="shalom_transit_template_language"
+                name="shalom_transit_template_language"
+                defaultValue={s.shalom_transit_template_language ?? ""}
+                placeholder="es"
+                className={inputCls}
+              />
+            </div>
+            <div className="sm:col-span-3">
+              <label className={labelCls} htmlFor="shalom_transit_params">Orden de las variables</label>
+              <input
+                id="shalom_transit_params"
+                name="shalom_transit_params"
+                defaultValue={s.shalom_transit_params ?? ""}
+                placeholder="nombre,guia,codigo,producto,agencia,total,adelanto,saldo,yape"
+                className={inputCls}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Uno por cada {"{{n}}"} de la plantilla, en orden. Disponibles: <code>nombre</code>,{" "}
+                <code>guia</code>, <code>codigo</code>, <code>producto</code>, <code>agencia</code>,{" "}
+                <code>total</code>, <code>adelanto</code>, <code>saldo</code>, <code>yape</code>. El
+                de <code>guias_shalom</code> es el que sale de ejemplo.
+              </p>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="shalom_transit_attach_ticket">Ticket de Shalom en cabecera</label>
+              <select
+                id="shalom_transit_attach_ticket"
+                name="shalom_transit_attach_ticket"
+                defaultValue={s.shalom_transit_attach_ticket ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">No</option>
+                <option value="true">Sí (plantilla con documento)</option>
+              </select>
+              <p className="mt-1 text-xs text-slate-500">
+                Solo con una plantilla aprobada con cabecera de documento (<code>guias_shalom_imagen</code>).
+                Con la plantilla de texto, déjalo en No o Meta la rechaza.
+              </p>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="shalom_transit_hour_start">Enviar desde (hora local)</label>
+              <input
+                id="shalom_transit_hour_start"
+                name="shalom_transit_hour_start"
+                type="number"
+                min={0}
+                max={23}
+                defaultValue={s.shalom_transit_hour_start}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="shalom_transit_hour_end">Enviar hasta (hora local)</label>
+              <input
+                id="shalom_transit_hour_end"
+                name="shalom_transit_hour_end"
+                type="number"
+                min={1}
+                max={24}
+                defaultValue={s.shalom_transit_hour_end}
+                className={inputCls}
+              />
+            </div>
+            <div className="sm:col-span-3">
+              <label className={labelCls} htmlFor="shalom_transit_phone_number_id">
+                Enviar desde otro número (opcional)
+              </label>
+              <input
+                id="shalom_transit_phone_number_id"
+                name="shalom_transit_phone_number_id"
+                defaultValue={s.shalom_transit_phone_number_id ?? ""}
+                placeholder="Vacío = el número por el que escribió la clienta, o el de la tienda"
+                className={inputCls}
+              />
+            </div>
+            <div className="sm:col-span-3">
+              <label className={labelCls} htmlFor="shalom_transit_payment_link">
+                Respuesta al botón «Link de pago»
+              </label>
+              <textarea
+                id="shalom_transit_payment_link"
+                name="shalom_transit_payment_link"
+                rows={3}
+                defaultValue={s.shalom_transit_payment_link ?? ""}
+                placeholder={"Paga tu saldo de {saldo} del pedido {pedido} aquí: https://…"}
+                className={inputCls}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Texto libre; se sustituyen <code>{"{saldo}"}</code>, <code>{"{pedido}"}</code> y{" "}
+                <code>{"{yape}"}</code>. Vacío = se contesta con el Yape principal.
+              </p>
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
             Resumen diario por Telegram
           </legend>
           <p className="text-xs text-slate-500">
@@ -1919,6 +2079,166 @@ function ReplyTemplatesSection({
  * Marca lo que hay EN LA BASE, así que sigue diciendo «guardado» mientras
  * editas encima; lo que confirma el guardado es el aviso del botón.
  */
+/**
+ * Cuentas de cobro que se le ENSEÑAN al cliente: lo que contestan los botones
+ * del aviso de guía en tránsito. Lista por tienda, como las plantillas de
+ * respuesta. No son las cuentas contra las que se VERIFICA un comprobante.
+ */
+function PaymentMethodsSection({
+  storeId,
+  rows,
+}: {
+  storeId: string;
+  rows: StoreSettingsData["paymentMethods"];
+}) {
+  const [state, formAction, pending] = useActionState(addPaymentMethod, initial);
+  const [rowPending, startRowTransition] = useTransition();
+  const [rowMsg, setRowMsg] = useState<string | null>(null);
+
+  function run(fn: () => Promise<SettingsState>) {
+    startRowTransition(async () => {
+      const res = await fn();
+      setRowMsg(res.error ?? res.notice ?? null);
+    });
+  }
+
+  const KIND_LABEL: Record<string, string> = {
+    yape: "Yape",
+    plin: "Plin",
+    banco: "Banco",
+    billetera: "Billetera",
+  };
+
+  return (
+    <Section
+      title="Cuentas de cobro que ve el cliente"
+      subtitle="Lo que Kapta contesta cuando la clienta pulsa «Pagar con Yape» o «Transferencia Depósito» en el aviso de guía en tránsito."
+    >
+      <Card>
+        <p className="text-xs text-slate-500">
+          El <strong>Yape principal</strong> contesta al botón de Yape y rellena la variable{" "}
+          <code>yape</code> de la plantilla; la transferencia lista <strong>todas</strong> las
+          cuentas activas, en este orden. No confundir con las cuentas contra las que se verifica
+          un comprobante: conviene que el Yape principal sea una de ellas, o el pago quedará en
+          revisión.
+        </p>
+
+        {rows.length > 0 && (
+          <ul className="mt-4 divide-y divide-slate-200 rounded-xl border border-slate-200">
+            {rows.map((m) => (
+              <li key={m.id} className="flex flex-wrap items-start gap-3 px-3 py-2.5">
+                <div className="min-w-0 grow">
+                  <p className="text-sm font-medium text-slate-800">
+                    {m.label}
+                    <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
+                      {KIND_LABEL[m.kind] ?? m.kind}
+                    </span>
+                    {m.primary_yape && (
+                      <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] text-emerald-700">
+                        Yape principal
+                      </span>
+                    )}
+                    {!m.active && (
+                      <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
+                        retirada
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    A nombre de {m.holder}
+                    {m.detail ? ` · ${m.detail}` : ""} · <code>{m.account}</code>
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  {m.kind === "yape" && m.active && !m.primary_yape && (
+                    <button
+                      type="button"
+                      onClick={() => run(() => setPrimaryYape(storeId, m.id))}
+                      disabled={rowPending}
+                      className="rounded-lg border border-emerald-200 px-2.5 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
+                    >
+                      Hacer principal
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => run(() => setPaymentMethodActive(storeId, m.id, !m.active))}
+                    disabled={rowPending}
+                    className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    {m.active ? "Retirar" : "Activar"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!confirm(`¿Eliminar la cuenta «${m.label}»?`)) return;
+                      run(() => deletePaymentMethod(storeId, m.id));
+                    }}
+                    disabled={rowPending}
+                    className="rounded-lg border border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-60"
+                  >
+                    Eliminar
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {rowMsg && <p className="mt-2 text-sm text-slate-600">{rowMsg}</p>}
+
+        <form action={formAction} className="mt-4 space-y-4 rounded-xl border border-slate-200 p-4">
+          <input type="hidden" name="store_id" value={storeId} />
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className={labelCls} htmlFor="pm_kind">Tipo</label>
+              <select id="pm_kind" name="kind" defaultValue="banco" className={inputCls}>
+                <option value="banco">Banco</option>
+                <option value="yape">Yape</option>
+                <option value="plin">Plin</option>
+                <option value="billetera">Billetera (Lukita, Agora…)</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="pm_label">Nombre</label>
+              <input id="pm_label" name="label" placeholder="BCP, YAPE 1, INTERBANK…" className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="pm_holder">A nombre de</label>
+              <input id="pm_holder" name="holder" placeholder="Grupo GF SAC" className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="pm_account">Número</label>
+              <input id="pm_account" name="account" placeholder="191-2434540-0-12 o 930555309" className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="pm_detail">Detalle (opcional)</label>
+              <input id="pm_detail" name="detail" placeholder="CUENTA CORRIENTE BCP SOLES" className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="pm_primary">Yape principal</label>
+              <select id="pm_primary" name="primary_yape" defaultValue="false" className={inputCls}>
+                <option value="false">No</option>
+                <option value="true">Sí (solo tipo Yape)</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="submit"
+              disabled={pending}
+              className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
+            >
+              {pending ? "Guardando…" : "Agregar cuenta"}
+            </button>
+            {state.error && <p className="text-sm text-red-600">{state.error}</p>}
+            {state.notice && <p className="text-sm text-emerald-700">{state.notice}</p>}
+          </div>
+        </form>
+      </Card>
+    </Section>
+  );
+}
+
 function SavedMark({ set }: { set: boolean }) {
   return (
     <span className={`ml-1 text-xs ${set ? "text-emerald-600" : "text-slate-400"}`}>

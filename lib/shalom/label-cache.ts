@@ -54,6 +54,31 @@ export function labelPath(oseId: number, kind: ShalomDocKind = "label"): string 
   return kind === "label" ? `${oseId}.pdf` : `${kind}/${oseId}.pdf`;
 }
 
+/**
+ * Una URL firmada al documento YA cacheado, para que un tercero lo baje sin
+ * pasar por nuestra sesión — Meta, al mandar una plantilla con el ticket en
+ * cabecera. El bucket es privado a propósito (nombre y dirección de una
+ * persona), y esto es la única puerta: dura `seconds` y apunta a un solo
+ * archivo. `null` si el documento no está cacheado o el firmado falla; quien
+ * llama decide si eso impide el envío.
+ */
+export async function signedDocUrl(
+  admin: SupabaseClient,
+  oseId: number,
+  kind: ShalomDocKind,
+  seconds: number,
+): Promise<string | null> {
+  try {
+    const { data, error } = await admin.storage
+      .from(BUCKET)
+      .createSignedUrl(labelPath(oseId, kind), seconds);
+    if (error || !data?.signedUrl) return null;
+    return data.signedUrl;
+  } catch {
+    return null;
+  }
+}
+
 /** El PDF guardado, o `null` si no está. Nunca lanza. */
 export async function readCachedLabel(
   admin: SupabaseClient,

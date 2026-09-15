@@ -308,11 +308,36 @@ export async function sendWhatsappTemplate(
     templateName: string;
     language: string;
     bodyParams?: string[];
+    /**
+     * Documento (PDF) para una plantilla aprobada con cabecera de tipo
+     * documento — el ticket de Shalom en `guias_shalom_imagen`. Meta lo baja
+     * de `link` al enviar, así que tiene que ser una URL pública o firmada y
+     * viva en ese momento. `filename` es lo que ve el cliente.
+     */
+    headerDocument?: { link: string; filename?: string };
   },
 ): Promise<WhatsappSendResult> {
-  const components = params.bodyParams?.length
-    ? [{ type: "body", parameters: params.bodyParams.map((text) => ({ type: "text", text })) }]
-    : [];
+  const components: Record<string, unknown>[] = [];
+  if (params.headerDocument) {
+    components.push({
+      type: "header",
+      parameters: [
+        {
+          type: "document",
+          document: {
+            link: params.headerDocument.link,
+            ...(params.headerDocument.filename ? { filename: params.headerDocument.filename } : {}),
+          },
+        },
+      ],
+    });
+  }
+  if (params.bodyParams?.length) {
+    components.push({
+      type: "body",
+      parameters: params.bodyParams.map((text) => ({ type: "text", text })),
+    });
+  }
   return postWhatsappMessage(opts, params.phoneNumberId, {
     messaging_product: "whatsapp",
     recipient_type: "individual",
@@ -1411,11 +1436,14 @@ export interface HandoffInfo {
  * systems that can target the same endpoint:
  *   - Platform webhooks → `workflow.execution.handoff` (hot lead).
  *   - WhatsApp webhooks  → `whatsapp.conversation.ended` / `.inactive` (abandono).
- * Delivery-status message events update the reliable outbox; inbound message
- * events are acknowledged without a second ingestion path. Routing prefers the
- * `X-Webhook-Event` header (passed in as `event`) and falls back to the shape.
+ * Delivery-status message events update the reliable outbox. An inbound
+ * message (`whatsapp.message.received`) is routed to the button auto-replies
+ * (lib/wa-button-replies.ts); everything else it may carry is still ignored —
+ * the lead transcript comes from the periodic sync, not from here. Routing
+ * prefers the `X-Webhook-Event` header (passed in as `event`) and falls back to
+ * the shape.
  */
-export type KapsoEventKind = "handoff" | "conversation" | "message_status" | "skip";
+export type KapsoEventKind = "handoff" | "conversation" | "message_status" | "inbound_message" | "skip";
 
 export function classifyKapsoEvent(event: string | null | undefined, body: any): KapsoEventKind {
   const e = (event ?? body?.event ?? body?.type ?? "").toString().toLowerCase();
@@ -1430,6 +1458,18 @@ export function classifyKapsoEvent(event: string | null | undefined, body: any):
   ) {
     return "message_status";
   }
+  // Lo que escribió (o pulsó) el cliente. Se distingue por el nombre del evento
+  // o, si el nombre no lo dice, por la dirección que Kapso pone en el mensaje.
+  if (
+    e.startsWith("whatsapp.message.") &&
+    (e.endsWith(".received") ||
+      e.endsWith(".inbound") ||
+      [body?.message?.kapso?.direction, body?.data?.message?.kapso?.direction, body?.kapso?.direction].some(
+        (d) => String(d ?? "").toLowerCase() === "inbound",
+      ))
+  ) {
+    return "inbound_message";
+  }
   if (e.startsWith("whatsapp.message.")) return "skip";
   // No/unknown event header — infer from payload shape.
   if (
@@ -1441,6 +1481,9 @@ export function classifyKapsoEvent(event: string | null | undefined, body: any):
     return "handoff";
   }
   if (body?.conversation != null) return "conversation";
+  // Sin cabecera solo cuenta si Kapso DICE que es entrante: un aviso de estado
+  // también trae `id` y `from`, y tomarlo por un mensaje contestaría al aire.
+  if (parseInboundMessage(body)?.direction === "inbound") return "inbound_message";
   if (
     Array.isArray(body?.statuses) ||
     Array.isArray(body?.data?.statuses) ||
@@ -1451,6 +1494,104 @@ export function classifyKapsoEvent(event: string | null | undefined, body: any):
     return "message_status";
   }
   return "skip";
+}
+
+/**
+ * Un mensaje ENTRANTE normalizado: quién lo mandó, por qué número entró y, si
+ * fue un botón, qué botón.
+ */
+export interface InboundMessage {
+  /** `wamid.…`. Es la clave de deduplicación: Kapso reintenta los webhooks. */
+  id: string;
+  /** Celular del cliente, solo dígitos. */
+  from: string;
+  /** El número de la tienda por el que entró. Por ESE se contesta. */
+  phoneNumberId: string | null;
+  conversationId: string | null;
+  /** Lo que Kapso declara. `null` cuando el payload no lo trae. */
+  direction: "inbound" | "outbound" | null;
+  type: string;
+  /** Texto del mensaje, o el rótulo del botón pulsado. */
+  text: string;
+  /** Rótulo del botón (quick reply o interactivo), si lo hubo. */
+  buttonText: string | null;
+  /** Payload / id del botón, si lo hubo. */
+  buttonPayload: string | null;
+}
+
+/**
+ * Lee un mensaje entrante del webhook de Kapso. Pura y defensiva, como
+ * `parseWhatsappStatusEvents`: el mensaje puede venir plano, bajo `message`,
+ * bajo `data.message`, o en la forma de Meta Cloud (`entry[].changes[].value.
+ * messages[]`). Los campos siguen la forma REAL que devuelve la API de Kapso:
+ *
+ *   { type: "button", button: { text, payload }, from, id,
+ *     kapso: { direction: "inbound", phone_number_id, whatsapp_conversation_id } }
+ *   { type: "interactive", interactive: { type: "button_reply",
+ *     button_reply: { id, title } }, … }
+ *
+ * Devuelve `null` si no hay ni id ni remitente: sin eso no se puede contestar
+ * ni deduplicar, y adivinar es peor que registrar la anomalía.
+ */
+export function parseInboundMessage(body: any): InboundMessage | null {
+  let m: any = body?.message ?? body?.data?.message ?? null;
+  let metadataPhoneNumberId: string | null = null;
+  if (!m && Array.isArray(body?.entry)) {
+    for (const entry of body.entry) {
+      for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
+        const first = change?.value?.messages?.[0];
+        if (first) {
+          m = first;
+          metadataPhoneNumberId = change?.value?.metadata?.phone_number_id ?? null;
+          break;
+        }
+      }
+      if (m) break;
+    }
+  }
+  if (!m && (body?.type || body?.from)) m = body;
+  if (!m || typeof m !== "object") return null;
+
+  const id = m.id != null ? String(m.id) : null;
+  const rawFrom = m.from ?? m.kapso?.phone_number ?? m.phone_number ?? body?.phone_number ?? null;
+  const from = rawFrom != null ? String(rawFrom).replace(/\D/g, "") : "";
+  if (!id || !from) return null;
+
+  const type = String(m.type ?? "").toLowerCase() || "unknown";
+  const buttonText: string | null =
+    (typeof m.button?.text === "string" && m.button.text) ||
+    (typeof m.interactive?.button_reply?.title === "string" && m.interactive.button_reply.title) ||
+    (typeof m.interactive?.list_reply?.title === "string" && m.interactive.list_reply.title) ||
+    null;
+  const buttonPayload: string | null =
+    (typeof m.button?.payload === "string" && m.button.payload) ||
+    (typeof m.interactive?.button_reply?.id === "string" && m.interactive.button_reply.id) ||
+    (typeof m.interactive?.list_reply?.id === "string" && m.interactive.list_reply.id) ||
+    null;
+  const text = msgText(m) || buttonText || "";
+
+  const pnId =
+    m.kapso?.phone_number_id ??
+    m.phone_number_id ??
+    body?.phone_number_id ??
+    body?.data?.phone_number_id ??
+    metadataPhoneNumberId ??
+    null;
+  const convId = m.kapso?.whatsapp_conversation_id ?? m.conversation_id ?? body?.conversation?.id ?? null;
+
+  const dir = msgDirection(m);
+
+  return {
+    id,
+    from,
+    phoneNumberId: pnId != null ? String(pnId) : null,
+    conversationId: convId != null ? String(convId) : null,
+    direction: dir,
+    type,
+    text,
+    buttonText,
+    buttonPayload,
+  };
 }
 
 /**

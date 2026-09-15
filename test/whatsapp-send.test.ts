@@ -90,6 +90,35 @@ describe("sendWhatsappTemplate", () => {
     });
   });
 
+  it("pone el documento de cabecera ANTES del cuerpo cuando la plantilla lo lleva", async () => {
+    // `guias_shalom_imagen`: el ticket de Shalom va en la cabecera. Meta exige
+    // el componente header con el link; el orden header→body es el suyo.
+    let seen: { url: string; init: any } | null = null;
+    await sendWhatsappTemplate(
+      { apiKey: "k", baseUrl: base, fetchImpl: fakeFetch(200, { messages: [{ id: "x" }] }, (url, init) => {
+        seen = { url, init };
+      }) },
+      {
+        phoneNumberId: "123",
+        to: "51999",
+        templateName: "guias_shalom_imagen",
+        language: "es",
+        bodyParams: ["Armando"],
+        headerDocument: { link: "https://storage/signed/ticket.pdf", filename: "ticket-shalom-95451003.pdf" },
+      },
+    );
+    const body = JSON.parse(seen!.init.body);
+    expect(body.template.components).toEqual([
+      {
+        type: "header",
+        parameters: [
+          { type: "document", document: { link: "https://storage/signed/ticket.pdf", filename: "ticket-shalom-95451003.pdf" } },
+        ],
+      },
+      { type: "body", parameters: [{ type: "text", text: "Armando" }] },
+    ]);
+  });
+
   it("omits the body component when there are no params", async () => {
     let seen: { url: string; init: any } | null = null;
     await sendWhatsappTemplate(

@@ -38,6 +38,7 @@ import {
   tzParts,
 } from "@/lib/metrics";
 import { applyWhatsappStatusEvents, parseWhatsappStatusEvents } from "@/lib/whatsapp-outbox";
+import { handleInboundMessage } from "@/lib/wa-button-replies";
 import {
   applyHandoff,
   archiveStaleLeads,
@@ -130,6 +131,18 @@ export interface StoreCreds {
   /** Interruptor por tienda de la creación de guías. */
   aliclik_enabled: boolean;
   meta_ad_accounts: StoreMetaAdAccount[];
+  /** Aviso por WhatsApp cuando la guía de Shalom sale en tránsito (0166).
+   *  Ver lib/shalom/transit-notify.ts. Nace apagado. */
+  shalom_transit_template_enabled: boolean;
+  shalom_transit_template_name: string | null;
+  shalom_transit_template_language: string | null;
+  shalom_transit_params: string | null;
+  shalom_transit_attach_ticket: boolean;
+  shalom_transit_phone_number_id: string | null;
+  shalom_transit_hour_start: number;
+  shalom_transit_hour_end: number;
+  /** Respuesta al botón «Link de pago», con {saldo}, {pedido} y {yape}. */
+  shalom_transit_payment_link: string | null;
 }
 
 /**
@@ -234,6 +247,16 @@ export async function getStoreCreds(
       data.meta_ad_account_id,
       data.meta_ad_account_name,
     ),
+    // Pre-0166 las columnas no existen (select * → undefined) ⇒ aviso apagado.
+    shalom_transit_template_enabled: data.shalom_transit_template_enabled ?? false,
+    shalom_transit_template_name: data.shalom_transit_template_name ?? null,
+    shalom_transit_template_language: data.shalom_transit_template_language ?? null,
+    shalom_transit_params: data.shalom_transit_params ?? null,
+    shalom_transit_attach_ticket: data.shalom_transit_attach_ticket ?? false,
+    shalom_transit_phone_number_id: data.shalom_transit_phone_number_id ?? null,
+    shalom_transit_hour_start: data.shalom_transit_hour_start ?? 8,
+    shalom_transit_hour_end: data.shalom_transit_hour_end ?? 21,
+    shalom_transit_payment_link: data.shalom_transit_payment_link ?? null,
   };
 }
 
@@ -622,6 +645,12 @@ export async function processKapsoWebhook(
     const events = parseWhatsappStatusEvents(params.body, params.eventHeader);
     const updated = await applyWhatsappStatusEvents(admin, params.storeId, events);
     return { status: "ok", kind, reason: `statuses:${events.length};updated:${updated}` };
+  }
+  if (kind === "inbound_message") {
+    // Solo los botones del aviso de guía en tránsito; cualquier otro mensaje
+    // entrante se ignora aquí igual que antes (el transcript viene del sync).
+    const res = await handleInboundMessage(admin, params.storeId, creds, params.body);
+    return { status: "ok", kind, reason: res.reason };
   }
   return { status: "ok", kind, reason: "skipped" };
 }

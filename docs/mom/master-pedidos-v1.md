@@ -2620,6 +2620,42 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
 - La clave pertenece a la salida Shalom: se registra, consulta y entrega desde
   **Salidas y guías**, no desde el formulario de comprobantes. El pago solo
   gobierna si la credencial puede revelarse.
+- **Aviso al cliente cuando la guía sale en tránsito** (migración 0166). En el
+  instante en que el rastreo de Shalom registra `en_transito` —el mismo
+  `courier_status` que ya se escribe en la línea de tiempo— Kapta le manda a la
+  clienta la plantilla aprobada (`guias_shalom`, o `guias_shalom_imagen` con el
+  ticket de Shalom en cabecera) con guía, código, producto, agencia de recojo y
+  el resumen de pago: total, **adelanto validado** y saldo. Se vio en #KP133540:
+  el tránsito se registró el 11/09 a las 11:46 y el saldo lo cobró una asesora
+  a mano el 15/09; con esto, el mensaje habría salido a las 11:46.
+  - **Una sola vez por guía.** El tránsito se ENCOLA cuando ocurre y se ENVÍA
+    aparte, con reintentos: el envío puede fallar por Meta o por Shalom y esa
+    transición no se repite. Una fila por guía en `shalom_transit_notifications`
+    es la garantía; un envío que Meta aceptó cierra la fila.
+  - **El adelanto que se le dice es lo validado**, no lo cargado. Un comprobante
+    en revisión todavía no es dinero, y decirle que ya cuenta es prometer una
+    clave que no se va a liberar.
+  - **La clave de recojo nunca va en el mensaje.** Guía, código y agencia sin la
+    clave no abren nada; la clave se entrega desde la salida, con el cobro
+    validado y con auditoría. Esta regla no cambia.
+  - Sale dentro del horario configurado de la tienda y por el número por el que
+    la clienta escribió (su lead), o por el de la tienda; nace **apagado** y se
+    enciende en Ajustes. Encender el aviso no dispara los avisos de guías que ya
+    estaban en tránsito: solo entra lo que cambia desde entonces.
+  - **Los tres botones los contesta Kapta**, no el bot: «Pagar con Yape» con la
+    cuenta Yape principal en una línea (`YAPE GRUPO GF SAC 930 555 309`),
+    «Transferencia Depósito» con todas las cuentas activas, y «Link de pago» con
+    el texto configurado (`{saldo}`, `{pedido}`, `{yape}`) o, sin configurar, con
+    el Yape. Las cuentas viven en **Ajustes → Cuentas de cobro que ve el
+    cliente** (`store_payment_methods`), una lista por tienda: **un solo sitio
+    donde cambiarlas**. No son las cuentas contra las que se verifica un
+    comprobante (`store_collection_accounts`); conviene que el Yape principal
+    sea una de ellas, o el pago quedará en revisión.
+  - Solo reacciona a un **botón pulsado**, nunca a texto libre que mencione el
+    medio: un «ya te hice el yape» sigue con el bot y la asesora, como siempre.
+    Cada botón se contesta una sola vez aunque Kapso reintente el webhook.
+  - Todo queda en la línea de tiempo del pedido (`whatsapp_template`) y en las
+    tablas de la cola y de respuestas, con el motivo cuando no salió.
 - Seguimiento comienza desde la constancia del adelanto y se intensifica cuando
   el paquete llega a destino.
 - Plazo: 28 días desde que está disponible en agencia destino.

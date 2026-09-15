@@ -94,6 +94,18 @@ export interface StoreSettingsInput {
   shalom_origin_terminal_id?: string;
   shalom_origin_terminal_name?: string;
   shalom_default_product_id?: string;
+  // Aviso por WhatsApp cuando la guía de Shalom sale en tránsito (0166). Misma
+  // convención que la recuperación de devueltos: el toggle es real, el resto
+  // en blanco = no lo cambies, y el número propio y el link son VACIABLES.
+  shalom_transit_template_enabled?: string | boolean;
+  shalom_transit_template_name?: string;
+  shalom_transit_template_language?: string;
+  shalom_transit_params?: string;
+  shalom_transit_attach_ticket?: string | boolean;
+  shalom_transit_phone_number_id?: string;
+  shalom_transit_hour_start?: string;
+  shalom_transit_hour_end?: string;
+  shalom_transit_payment_link?: string;
 }
 
 function clean(v: string | undefined): string | null {
@@ -340,6 +352,32 @@ export function buildStoreUpdate(
   if (originTerminalName !== null) patch.shalom_origin_terminal_name = originTerminalName;
   const defaultProduct = positiveId(input.shalom_default_product_id);
   if (defaultProduct !== null) patch.shalom_default_product_id = defaultProduct;
+
+  // Aviso de guía en tránsito (0166).
+  for (const k of ["shalom_transit_template_enabled", "shalom_transit_attach_ticket"] as const) {
+    if (input[k] !== undefined) patch[k] = input[k] === true || input[k] === "true";
+  }
+  for (const k of [
+    "shalom_transit_template_name",
+    "shalom_transit_template_language",
+    "shalom_transit_params",
+  ] as const) {
+    const v = clean(input[k]);
+    if (v !== null) patch[k] = v;
+  }
+  // Vaciables, como el número propio de la recuperación: hay que poder volver
+  // al número de la clienta, y quitar el link de pago si deja de existir.
+  if (input.shalom_transit_phone_number_id !== undefined) {
+    patch.shalom_transit_phone_number_id = clean(input.shalom_transit_phone_number_id);
+  }
+  if (input.shalom_transit_payment_link !== undefined) {
+    const v = typeof input.shalom_transit_payment_link === "string" ? input.shalom_transit_payment_link.trim() : "";
+    patch.shalom_transit_payment_link = v || null;
+  }
+  const stStart = intField(input.shalom_transit_hour_start, 0, 23);
+  if (stStart !== null) patch.shalom_transit_hour_start = stStart;
+  const stEnd = intField(input.shalom_transit_hour_end, 1, 24);
+  if (stEnd !== null) patch.shalom_transit_hour_end = stEnd;
 
   return patch;
 }

@@ -22,6 +22,7 @@ import { listProducts } from "@/lib/aliclik";
 import { syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { env } from "@/lib/env";
 import { REPLY_TOKENS } from "@/lib/wa-reply-templates";
+import { PAYMENT_METHOD_KINDS } from "@/lib/payment-methods";
 import { normalizeDistrictKey, type DistrictCoverageValue } from "@/lib/district-coverage";
 import { saveDistrictCoverageRow } from "@/lib/district-coverage-access";
 import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
@@ -155,6 +156,16 @@ export async function updateStore(
     shalom_origin_terminal_id: get("shalom_origin_terminal_id"),
     shalom_origin_terminal_name: get("shalom_origin_terminal_name"),
     shalom_default_product_id: get("shalom_default_product_id"),
+    // Aviso de guía en tránsito (0166).
+    shalom_transit_template_enabled: get("shalom_transit_template_enabled"),
+    shalom_transit_template_name: get("shalom_transit_template_name"),
+    shalom_transit_template_language: get("shalom_transit_template_language"),
+    shalom_transit_params: get("shalom_transit_params"),
+    shalom_transit_attach_ticket: get("shalom_transit_attach_ticket"),
+    shalom_transit_phone_number_id: get("shalom_transit_phone_number_id"),
+    shalom_transit_hour_start: get("shalom_transit_hour_start"),
+    shalom_transit_hour_end: get("shalom_transit_hour_end"),
+    shalom_transit_payment_link: get("shalom_transit_payment_link"),
     // Estos dos existían en el formulario pero no se leían acá, así que la
     // clave de Anthropic por tienda (5l del DEPLOY) nunca llegaba a guardarse.
     anthropic_api_key: get("anthropic_api_key"),
@@ -804,6 +815,136 @@ export async function deleteReplyTemplate(storeId: string, id: string): Promise<
   if (error) return { error: error.message };
   revalidatePath(`/dashboard/${storeId}/settings`);
   return { notice: "Plantilla eliminada ✓" };
+}
+
+// ---------------------------------------------------------------------------
+// Cuentas de cobro que ve el cliente (0166)
+// ---------------------------------------------------------------------------
+//
+// Lo que se contesta a los botones del aviso de guía en tránsito («Pagar con
+// Yape», «Transferencia Depósito») y lo que rellena {{yape}} en la plantilla.
+// Es una lista por tienda, como las plantillas de respuesta: N cuentas que
+// cambian sin desplegar. NO es `store_collection_accounts`, que sirve para
+// verificar comprobantes — ver lib/payment-methods.ts.
+
+export async function addPaymentMethod(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso para editar esta tienda." };
+
+  const kind = String(formData.get("kind") ?? "").trim().toLowerCase();
+  const label = String(formData.get("label") ?? "").trim();
+  const holder = String(formData.get("holder") ?? "").trim();
+  const account = String(formData.get("account") ?? "").trim();
+  const detail = String(formData.get("detail") ?? "").trim();
+  const primaryYape = String(formData.get("primary_yape") ?? "") === "true";
+
+  if (!(PAYMENT_METHOD_KINDS as readonly string[]).includes(kind)) {
+    return { error: `Tipo desconocido. Válidos: ${PAYMENT_METHOD_KINDS.join(", ")}.` };
+  }
+  if (!label || label.length > 40) return { error: "Ponle un nombre corto (máx. 40): BCP, YAPE 1…" };
+  if (!holder || holder.length > 80) return { error: "Falta a nombre de quién está la cuenta." };
+  // Dígitos, guiones y espacios: es lo que el cliente va a teclear en su app.
+  if (!/^[0-9][0-9 -]{4,40}$/.test(account)) {
+    return { error: "El número solo lleva dígitos, guiones y espacios." };
+  }
+  if (primaryYape && kind !== "yape") {
+    return { error: "El Yape principal tiene que ser de tipo Yape." };
+  }
+
+  // Un solo Yape principal por tienda: si este lo es, el anterior deja de serlo.
+  if (primaryYape) {
+    await ctx.admin
+      .from("store_payment_methods")
+      .update({ primary_yape: false, updated_at: new Date().toISOString() })
+      .eq("store_id", storeId)
+      .eq("primary_yape", true);
+  }
+
+  const { error } = await ctx.admin.from("store_payment_methods").insert({
+    store_id: storeId,
+    kind,
+    label,
+    holder,
+    account,
+    detail: detail || null,
+    primary_yape: primaryYape,
+  });
+  if (error) {
+    if (error.code === "23505") return { error: "Ya hay una cuenta con ese nombre en esta tienda." };
+    return { error: error.message };
+  }
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: `Cuenta «${label}» agregada ✓` };
+}
+
+/** Retirar sin borrar: una cuenta que dejó de usarse sigue nombrada en
+ *  respuestas ya enviadas. */
+export async function setPaymentMethodActive(
+  storeId: string,
+  id: string,
+  active: boolean,
+): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const { error } = await ctx.admin
+    .from("store_payment_methods")
+    // Al retirar el Yape principal deja de serlo: el índice parcial solo mira
+    // los activos, pero el botón no debe contestar una cuenta retirada.
+    .update({ active, ...(active ? {} : { primary_yape: false }), updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("store_id", storeId);
+  if (error) return { error: error.message };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: active ? "Cuenta activada ✓" : "Cuenta retirada ✓" };
+}
+
+/** La cuenta que contesta a «Pagar con Yape» y rellena {{yape}}. Una sola. */
+export async function setPrimaryYape(storeId: string, id: string): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const { data: row } = await ctx.admin
+    .from("store_payment_methods")
+    .select("kind,active")
+    .eq("id", id)
+    .eq("store_id", storeId)
+    .maybeSingle();
+  const r = (row ?? null) as { kind: string; active: boolean } | null;
+  if (!r) return { error: "No se encontró la cuenta." };
+  if (r.kind !== "yape") return { error: "El Yape principal tiene que ser de tipo Yape." };
+  if (!r.active) return { error: "Activa la cuenta antes de hacerla principal." };
+
+  const now = new Date().toISOString();
+  const cleared = await ctx.admin
+    .from("store_payment_methods")
+    .update({ primary_yape: false, updated_at: now })
+    .eq("store_id", storeId)
+    .eq("primary_yape", true);
+  if (cleared.error) return { error: cleared.error.message };
+  const { error } = await ctx.admin
+    .from("store_payment_methods")
+    .update({ primary_yape: true, updated_at: now })
+    .eq("id", id)
+    .eq("store_id", storeId);
+  if (error) return { error: error.message };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: "Yape principal actualizado ✓" };
+}
+
+export async function deletePaymentMethod(storeId: string, id: string): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const { error } = await ctx.admin
+    .from("store_payment_methods")
+    .delete()
+    .eq("id", id)
+    .eq("store_id", storeId);
+  if (error) return { error: error.message };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: "Cuenta eliminada ✓" };
 }
 
 // ---------------------------------------------------------------------------

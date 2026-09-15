@@ -20,7 +20,9 @@ export type AnomalySource =
   | "conversation_event"
   | "lead_enrich"
   | "won_sources"
-  | "chatby_webhook";
+  | "chatby_webhook"
+  /** Mensajes entrantes por el webhook de Kapso que no se pudieron atender. */
+  | "inbound_message";
 
 export interface AnomalyInput {
   storeId: string;

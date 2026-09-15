@@ -176,28 +176,41 @@ where started_at > now() - interval '30 days'
 group by 1 order by 2 desc;
 ```
 
-## Lo que falta del lado del bot: la cuenta bancaria
+## La cuenta bancaria: dónde vive y quién la dice
+
+**Desde el 15-09-2026 las cuentas de cobro viven en Kapta**, en Ajustes →
+«Cuentas de cobro que ve el cliente» (`store_payment_methods`, migración 0166).
+Es UN sitio donde cambiarlas. Lo que el bot tenga escrito a mano en sus
+funciones es una copia que va a quedar vieja el día que una cuenta cambie.
+
+Hoy las contesta Kapta en un caso concreto: los tres **botones** del aviso de
+guía Shalom en tránsito (`guias_shalom`) — «Pagar con Yape», «Transferencia
+Depósito», «Link de pago» — que llegan por `whatsapp.message.received` al
+webhook de la tienda y se atienden en `lib/wa-button-replies.ts`. Solo un botón
+pulsado, con esos rótulos exactos; texto libre («ya te hice el yape») sigue con
+el bot y la asesora, como siempre.
+
+**Lo que el bot NO debe hacer:** contestar también a esos botones con una cuenta
+propia. La clienta recibiría dos mensajes, y uno de los dos estará mal en cuanto
+la cuenta cambie. Si el bot tiene una regla que reacciona al texto «Pagar con
+Yape» o parecidos, hay que quitarla o acotarla a texto que no venga de un botón.
+
+### Lo que sigue pendiente: la recuperación de devueltos
 
 La recuperación de pedidos devueltos (MOM §11.1) manda desde el dashboard la
 plantilla `recuperacion_pedido_retornado`, que le propone a la clienta reenviar
-por agencia con adelanto. **Ahí termina lo que hace este repo.** Cuando la
-clienta contesta que sí, quien tiene que mandarle el número de cuenta es el bot
-— y ese paso vive acá, en Kapso, no en el dashboard.
-
-Por qué de este lado:
-
-- La respuesta llega a la conversación que el bot ya sostiene. Meterse en medio
-  desde el dashboard obligaría a clasificar «sí quiero» contra «¿por qué tengo
-  que adelantar?» con el bot contestando en paralelo, cada uno sin saber del
-  otro.
-- El número de cuenta ya lo dice el bot en otros flujos. Duplicarlo en el
-  dashboard crearía dos sitios donde cambiarlo, y el día que cambie se va a
-  cambiar en uno solo.
+por agencia con adelanto. Cuando la clienta contesta que **sí** —texto libre,
+no un botón— quien le manda la cuenta sigue siendo el bot, por las razones de
+siempre: la respuesta llega a la conversación que el bot ya sostiene, y
+clasificar «sí quiero» contra «¿por qué tengo que adelantar?» desde el
+dashboard con el bot contestando en paralelo es tener dos voces sin saber la
+una de la otra.
 
 Qué reconocer: la conversación viene de un mensaje saliente de plantilla con
-`template.name = "recuperacion_pedido_retornado"`, que es lo que la distingue de
-cualquier otra. La cuenta receptora es la de siempre — `Grupo GF S.A.C.`,
-celular terminado en `309` (§12) — porque es la que el circuito de validación de
+`template.name = "recuperacion_pedido_retornado"`. Qué cuenta mandar: **la que
+diga Kapta**, no una escrita en la función — leerla del dashboard es lo que
+falta cablear. Mientras tanto, la de siempre: `Grupo GF S.A.C.`, celular
+terminado en `309` (§12), porque es la que el circuito de validación de
 comprobantes sabe verificar. Mandar otra deja el pago en revisión y bloquea la
 clave de recojo.
 
