@@ -21,6 +21,7 @@ import {
   normalizeSku,
   syncAliclikCatalog,
 } from "@/lib/aliclik-catalog";
+import { cargarMapaSwayp, tiendasDeLaOrg } from "@/lib/swayp-sku-map";
 
 const PATH = "/dashboard/envios/aliclik";
 
@@ -198,14 +199,20 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
     ),
     loadAllAliclikSkus(storeId, admin),
     admin.from("aliclik_sku_map").select("shopify_sku,ean,source").eq("store_id", storeId),
-    admin.from("swayp_sku_map").select("shopify_sku,codbar,nombre").eq("store_id", storeId),
+    // POR ORGANIZACIÓN, igual que la creación de la guía. La pantalla decía
+    // «sin vincular» para un producto que la otra tienda de la misma
+    // organización ya tenía vinculado — y al revés, desde el 15-09-2026 la guía
+    // sí lo encuentra. Dos respuestas distintas a «¿está vinculado?» es cómo se
+    // acaba mapeando dos veces el mismo frasco.
+    cargarMapaSwayp(admin, storeId),
   ]);
 
   const byEan = new Map(skus.map((s) => [s.ean, s]));
   const swaypMap = new Map(
-    ((swaypRes.data ?? []) as { shopify_sku: string; codbar: string; nombre: string | null }[]).map(
-      (m) => [m.shopify_sku, m],
-    ),
+    Array.from(swaypRes, ([sku, v]) => [
+      sku,
+      { shopify_sku: sku, codbar: v.codbar, nombre: v.nombre },
+    ]),
   );
   const mapping = new Map(
     ((mapRes.data ?? []) as { shopify_sku: string; ean: string; source: string }[]).map((m) => [
@@ -229,7 +236,9 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
       const shopifySku = shopifyProduct.shopifySku;
       const { title, variantTitle } = shopifyProduct;
       const m = shopifySku ? mapping.get(shopifySku) : undefined;
-      const sw = shopifySku ? swaypMap.get(shopifySku) : undefined;
+      // La clave del mapa viene normalizada (mayúsculas, sin espacios), así que
+      // la de búsqueda también: un SKU en minúsculas se leía como «sin vincular».
+      const sw = shopifySku ? swaypMap.get(normalizeSku(shopifySku)) : undefined;
       const hit = m ? byEan.get(m.ean) : undefined;
       const suggestedEan = m ? null : (byName.get(normalizeProductName(title)) ?? null);
       const suggested = suggestedEan ? byEan.get(suggestedEan) : undefined;
@@ -386,10 +395,13 @@ export async function unmapSwaypCodbar(
   const ctx = await authorize(storeId);
   if (!ctx) return { error: "Tu rol no permite gestionar el catálogo." };
 
+  // BORRA EN TODA LA ORGANIZACIÓN, porque así es como se lee. Acotado a la
+  // tienda, desvincular dejaba vivo el vínculo de la tienda hermana: la
+  // pantalla decía «desvinculado» y la guía seguía saliendo con ese codbar.
   const { error } = await ctx.admin
     .from("swayp_sku_map")
     .delete()
-    .eq("store_id", storeId)
+    .in("store_id", await tiendasDeLaOrg(ctx.admin, storeId))
     .eq("shopify_sku", shopifySku);
   if (error) return { error: explicaError(error.message, "swayp_sku_map", "0151") };
 

@@ -99,6 +99,7 @@ import {
 } from "@/lib/swayp";
 import { buildSwaypGuideInput, esCiudadPorApiSwayp, parseSenders } from "@/lib/swayp-guide";
 import { normalizeSku } from "@/lib/swayp-productos";
+import { cargarMapaSwayp, cargarMapaSwaypDeOrg } from "@/lib/swayp-sku-map";
 import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import type {
@@ -1884,33 +1885,26 @@ export async function previewDirectFenixGuide(input: {
  * courier='fenix' row — En ruta, sin guía madre, marcada created_via='fenix_directo'.
  */
 /**
- * El mapa SKU de Shopify → codbar de Swayp de una tienda.
+ * El mapa SKU de Shopify → codbar de Swayp, de toda la ORGANIZACIÓN.
  *
- * Vacío cuando la tienda no ha vinculado nada, y eso APAGA la función: la guía
- * sale como hasta hoy, sin `productos`. Ver `BuildGuideInput.skuMap` para por
- * qué el mapa es el interruptor.
+ * El alcance es de la organización y no de la tienda porque el codbar es un
+ * hecho del producto en Swayp: el mismo frasco tiene el mismo código lo venda
+ * Aurela o Kenku Peru, que comparten bodega. Acotado a la tienda, 18 de los 19
+ * productos vinculados eran invisibles para la otra y sus pedidos morían en
+ * «Falta vincular a Swayp» con el codbar ya escrito (15-09-2026). La regla vive
+ * en lib/swayp-sku-map.ts, que es la que leen también el catálogo y el
+ * importador — tres lectores, una definición.
  *
- * Ante un error de lectura devuelve el mapa vacío en vez de lanzar. Es la misma
- * elección que el resto de este camino: no conseguir el dato no bloquea una
- * operación viva. La contrapartida —una guía sin `productos` en vez de un
- * rechazo— es la conducta de hoy, no una peor.
+ * Vacío cuando no hay nada vinculado, y eso APAGA la función: la guía sale como
+ * hasta hoy, sin `productos`. Ver `BuildGuideInput.skuMap` para por qué el mapa
+ * es el interruptor. Ante un error de lectura devuelve vacío en vez de lanzar:
+ * no conseguir el dato no bloquea una operación viva.
  */
 async function loadSwaypSkuMap(
   admin: SupabaseClient,
   storeId: string,
 ): Promise<Map<string, { codbar: string; nombre?: string | null }>> {
-  const { data, error } = await admin
-    .from("swayp_sku_map")
-    .select("shopify_sku,codbar,nombre")
-    .eq("store_id", storeId);
-  if (error) {
-    console.error("[swayp] no se pudo leer swayp_sku_map:", error.message);
-    return new Map();
-  }
-  const rows = (data as { shopify_sku: string; codbar: string; nombre: string | null }[]) ?? [];
-  return new Map(
-    rows.map((r) => [normalizeSku(r.shopify_sku), { codbar: r.codbar, nombre: r.nombre }]),
-  );
+  return cargarMapaSwayp(admin, storeId);
 }
 
 /**
@@ -2693,19 +2687,15 @@ export async function importarInventarioSwayp(
     .eq("city", ciudad);
   if (stockError) return { error: errorDeBase(stockError, "leer el stock Swayp") };
 
-  // El mapa codbar→SKU se guarda por tienda y la organización tiene varias, así
-  // que se juntan todas: el stock es de la organización, no de una tienda.
-  const { data: tiendas } = await admin
-    .from("stores")
-    .select("id")
-    .eq("org_id", adminOrg.org_id);
+  // El mapa codbar→SKU ya viene de toda la organización —el stock es de la
+  // organización, no de una tienda—, así que se lee una vez. Antes esto
+  // recorría tienda por tienda porque el lector estaba acotado a una; ahora esa
+  // regla vive en lib/swayp-sku-map.ts y la comparte con la creación de guías.
   const skusPorCodbar = new Map<string, string[]>();
-  for (const t of (tiendas as { id: string }[]) ?? []) {
-    for (const [sku, { codbar }] of await loadSwaypSkuMap(admin, t.id)) {
-      const ya = skusPorCodbar.get(codbar.toUpperCase()) ?? [];
-      if (!ya.includes(sku)) ya.push(sku);
-      skusPorCodbar.set(codbar.toUpperCase(), ya);
-    }
+  for (const [sku, { codbar }] of await cargarMapaSwaypDeOrg(admin, adminOrg.org_id)) {
+    const ya = skusPorCodbar.get(codbar.toUpperCase()) ?? [];
+    if (!ya.includes(sku)) ya.push(sku);
+    skusPorCodbar.set(codbar.toUpperCase(), ya);
   }
 
   // Etiqueta canónica por SKU, tomada de CUALQUIER ciudad: con ella se pueden

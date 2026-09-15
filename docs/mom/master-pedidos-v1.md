@@ -2348,6 +2348,18 @@ una regla: el mismo producto es `765545233` en Shopify y `AURE001` en Swayp. El
 mapeo vive en `swayp_sku_map` y se edita en **Catálogo de productos**, junto al
 de Aliclik — la unidad de trabajo es el producto, no el courier.
 
+**El vínculo es de la ORGANIZACIÓN, no de la tienda.** Se guarda por tienda
+porque el catálogo se gestiona desde una, pero se lee juntando todas las de la
+organización: el codbar es un hecho del producto en Swayp, y Aurela y Kenku Perú
+despachan de la misma bodega. Vincular en una vale para las dos, y desvincular
+borra en las dos — si no, quitar el vínculo lo dejaría vivo por la hermana y la
+pantalla mentiría. Cuando las dos tienen el mismo SKU en codbar distintos manda
+el de la tienda desde la que se opera, y si no, el más reciente; la guía no se
+detiene por eso, pero la discrepancia es un error de captura que hay que
+corregir. Acotarlo a la tienda costó 18 de 19 productos invisibles para Aurela,
+con sus pedidos rechazados por «Falta vincular» teniendo el codbar escrito
+(15-09-2026). El importador de inventario ya leía así.
+
 **El mapa es el interruptor.** Una tienda sin ninguna vinculación crea guías
 como hasta hoy, sin `productos`: nadie deja de despachar el día del despliegue.
 Con al menos una vinculación la función está en marcha, y entonces **un producto
