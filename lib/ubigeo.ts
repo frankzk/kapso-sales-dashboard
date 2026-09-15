@@ -299,6 +299,10 @@ const DISTRICT_ALIASES: Record<string, string> = {
   "surco": "santiago de surco",
   "cercado de lima": "lima",
   "lima cercado": "lima",
+  // El padrón dice «Lurigancho»; la calle, Shopify y el propio distrito dicen
+  // «Chosica». Con el guion ya resuelve por prefijo, pero quien escribe solo la
+  // mitad conocida no tenía cómo — y no hay otro «Chosica» en el padrón.
+  "chosica": "lurigancho",
 };
 
 export interface UbigeoMatch {
@@ -315,10 +319,27 @@ export interface UbigeoMatch {
   exact: boolean;
 }
 
-/** Strip the "(cercado)" / "cercado de X" decorations operators type in. */
-function stripCercado(district: string): string {
+/**
+ * Deja el nombre del distrito en palabras sueltas: sin el «(cercado)» que
+ * teclean las operadoras y sin los guiones, barras y comas con que vienen las
+ * direcciones.
+ *
+ * LO DEL GUION ES UN FALLO REAL, EL 15-09-2026 (#KP132394). Shopify escribe el
+ * distrito con su nombre doble oficial —«Lurigancho-Chosica»— y la tabla lo
+ * tiene como «lurigancho». La cobertura lo aceptaba, porque `isFenixDistrict`
+ * compara sin límite de palabra; el ubigeo lo rechazaba, porque el prefijo de
+ * aquí abajo sí exige un espacio. Resultado: se creó la salida pero Swayp no
+ * emitió la guía, y quedó con código manual — la peor de las dos respuestas,
+ * porque la operadora ya no sabe si el paquete está o no en el courier.
+ *
+ * Tratar el separador como espacio alinea las dos comparaciones. No afloja
+ * nada: lo que decide sigue siendo la tabla, y un prefijo ambiguo sigue sin
+ * resolver.
+ */
+function bareDistrict(district: string): string {
   return district
     .replace(/\(.*?\)/g, " ")
+    .replace(/[-/,]+/g, " ")
     .replace(/\bcercado de\b/g, " ")
     .replace(/\bcercado\b/g, " ")
     .replace(/\s+/g, " ")
@@ -355,7 +376,7 @@ export function resolveUbigeo(
   const direct = table[raw];
   if (direct) return { code: direct, district: raw, exact: true };
 
-  const bare = stripCercado(raw);
+  const bare = bareDistrict(raw);
   if (!bare) return fallback;
   const byBare = table[bare];
   if (byBare) return { code: byBare, district: bare, exact: true };

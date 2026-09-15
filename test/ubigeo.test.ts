@@ -80,6 +80,30 @@ describe("resolveUbigeo", () => {
     expect(resolveUbigeo("Chiclayo", "Surco")?.exact).toBe(false);
   });
 
+  it("el nombre doble con guion que manda Shopify resuelve igual que el simple", () => {
+    // #KP132394: Shopify manda «Lurigancho-Chosica» y la tabla dice
+    // «lurigancho». La cobertura lo aceptaba y el ubigeo no, así que la salida
+    // se creaba pero Swayp no emitía la guía. Las dos mitades, juntas o solas.
+    const lurigancho = { code: "150118", district: "lurigancho", exact: true };
+    expect(resolveUbigeo("Lima", "Lurigancho-Chosica")).toEqual(lurigancho);
+    expect(resolveUbigeo("Lima", "Lurigancho - Chosica")).toEqual(lurigancho);
+    expect(resolveUbigeo("Lima", "Lurigancho/Chosica")).toEqual(lurigancho);
+    expect(resolveUbigeo("Lima", "Lurigancho")).toEqual(lurigancho);
+    expect(resolveUbigeo("Lima", "Chosica")).toEqual(lurigancho);
+    // Y el guion no arrastra al distrito parecido: son códigos distintos.
+    expect(resolveUbigeo("Lima", "San Juan de Lurigancho")?.code).toBe("150132");
+  });
+
+  it("el separador no inventa un distrito donde el nombre es ambiguo", () => {
+    // Aflojar el guion no puede convertirse en adivinar: «San Juan» solo no
+    // distingue Lurigancho de Miraflores, y un ubigeo aproximado desvía la caja.
+    expect(resolveUbigeo("Lima", "San Juan - Lima")?.exact).toBe(false);
+    // Huachipa está repartido entre Lurigancho y Santa María de Huachipa.
+    expect(resolveUbigeo("Lima", "Huachipa")?.exact).toBe(false);
+    // Un distrito con la ciudad pegada detrás sí es inequívoco.
+    expect(resolveUbigeo("Lima", "Chorrillos - Lima")?.code).toBe("150108");
+  });
+
   it("nombres repetidos entre Lima y otras ciudades resuelven por ciudad", () => {
     // Santa Rosa, San Miguel y La Victoria existen en Lima y en otra ciudad de
     // la cobertura: la ciudad acota, el nombre solo no basta.
