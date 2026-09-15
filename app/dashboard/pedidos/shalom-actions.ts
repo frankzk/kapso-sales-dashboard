@@ -41,6 +41,7 @@ import {
   ROUTE_OUTPUT_FILLED,
 } from "@/lib/shipment-output";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { terminalOrderBlocker } from "@/lib/order-status";
 import { registrarConfirmacionExpresaDeAgencia } from "@/lib/confirmacion-agencia-access";
 import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
 import {
@@ -299,9 +300,10 @@ export async function loadShalomDraft(
     );
   }
 
-  if (["entregado", "devuelto", "anulado"].includes(row.general_status)) {
-    contingencyBlockers.push(`El pedido está ${row.general_status.replace("_", " ")}.`);
-  }
+  // Misma frase que Tanders y que la mesa de ruta: el hecho es el mismo y el
+  // sitio donde se reabre también. Ver `terminalOrderBlocker`.
+  const terminal = terminalOrderBlocker(row.general_status);
+  if (terminal) contingencyBlockers.push(terminal);
 
   // Todo lo que impide la contingencia impide con más razón crear por API.
   blockers.push(...contingencyBlockers);

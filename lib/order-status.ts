@@ -125,6 +125,43 @@ export function operationalStatusesFor(general: GeneralStatus): OperationalStatu
   return OPERATIONAL_STATUSES.filter((s) => s.general === general);
 }
 
+/**
+ * DÓNDE se reabre un pedido cerrado, dicho con el nombre que tiene en pantalla.
+ *
+ * Está aquí, en una constante compartida, porque cada modal escribía su propia
+ * versión de la misma frase y la de Tanders mandaba a «Estado del pedido» — un
+ * panel que no existe con ese nombre. El que sí existe es «Gestión manual →
+ * Registrar estado», al final de la pestaña Operar del pedido. Mandar a alguien a
+ * un sitio inexistente es peor que no decirle nada: se pasa el rato buscándolo.
+ */
+export const REOPEN_HINT =
+  "Vuelve a abrirlo en «Gestión manual → Registrar estado», al final de la pestaña Operar del pedido.";
+
+/**
+ * Por qué un pedido cerrado no admite una salida nueva, y qué hacer.
+ *
+ * Devuelve null si el pedido no está cerrado. La comparte la mesa de ruta —que
+ * apaga los botones— con los modales de Tanders y Shalom, que antes cada uno
+ * decía una cosa distinta sobre el mismo hecho.
+ */
+export function terminalOrderBlocker(general: string): string | null {
+  if (!isTerminalGeneral(general)) return null;
+  if (general === "anulado") {
+    // El caso más probable es que quien lee esto ACABE de anular la salida para
+    // cambiar de courier. Decirle solo «está anulado» lo manda a corregir a mano
+    // un estado que se arregla solo en cuanto exista otra salida viva.
+    return (
+      "El pedido está anulado. Si acabas de anular su salida para cambiar de courier, el estado se " +
+      `recalcula solo y vuelve a Preparación; si lo anuló Shopify o el courier, ${lowerFirst(REOPEN_HINT)}`
+    );
+  }
+  return `El pedido está ${generalLabel(general).toLowerCase()}. ${REOPEN_HINT}`;
+}
+
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
 // ---------------------------------------------------------------------------
 // Entradas
 // ---------------------------------------------------------------------------

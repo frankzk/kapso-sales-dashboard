@@ -1,6 +1,7 @@
 import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import type { OperationKind } from "@/lib/order-macro-stage";
 import type { GroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier";
+import { terminalOrderBlocker } from "@/lib/order-status";
 import {
   MAX_OUTPUTS_PER_ORDER,
   canRepeatCourier,
@@ -109,6 +110,80 @@ export interface OrderRoutePlanInput {
   grupoGfCourier?: GroupGfCourierRouteCheck | null;
   now?: Date;
 }
+
+export interface RouteDeskGate {
+  /** Lo que hay que contar arriba, con el sitio donde se arregla. */
+  blockers: string[];
+  /** Las modalidades que además NO van a poder ejecutarse. */
+  blockedActions: RouteAction[];
+}
+
+/**
+ * Qué impide crear una salida, y a CUÁLES de las modalidades.
+ *
+ * Existe porque la mesa y los modales medían «cerrado» con reglas distintas. La
+ * mesa solo se apagaba con la macroetapa en `finalizado`; los modales de Tanders
+ * y Shalom rechazan además cualquier estado general terminal. Con el expediente
+ * reabierto y el pedido todavía `anulado` —#AUR176830— la mesa pintaba «Crear en
+ * Tanders» en negro, recomendado, y la negativa aparecía recién dentro del
+ * modal, después de cargar el borrador entero.
+ *
+ * NO ES UN INTERRUPTOR ÚNICO, y esa fue la primera versión equivocada de este
+ * arreglo. Cada modalidad tiene su propio guarda en el servidor y no dicen lo
+ * mismo:
+ *
+ *   - Tanders y Shalom rechazan cualquier estado terminal, sin excepción.
+ *   - La salida manual lo rechaza SALVO cuando el pedido se cerró porque la
+ *     entrega falló: el MOM §11 nombra «guía cancelada por courier y devolución»
+ *     como entrada elegible a Reproprovincia, y son 844 guías sobre 842 pedidos.
+ *     Apagarle el botón a ese caso sería romper el flujo que lo justifica.
+ *   - Aliclik y Swayp no miran el estado general del pedido.
+ *
+ * Apagarlas todas por igual mentiría en tres de las cinco. Apagar solo la
+ * macroetapa mentía en dos. Así que se pregunta por modalidad, y el aviso de
+ * arriba cuenta el hecho aunque algún botón siga encendido.
+ */
+export function routeDeskGate(order: {
+  macroStage?: string | null;
+  generalStatus?: string | null;
+  /**
+   * ¿Se cerró porque la entrega falló? Lo dice la etiqueta que el courier puso
+   * en la guía, no el estado del pedido: `anulado` cubre tanto «lo canceló el
+   * courier» como «lo cancelamos nosotros». Misma pregunta que hace
+   * `createManualRouteOutput` antes de dejar crear la salida.
+   */
+  closedByFailedDelivery?: boolean;
+}): RouteDeskGate {
+  const blockers: string[] = [];
+  const blockedActions = new Set<RouteAction>();
+
+  if (order.macroStage === "finalizado") {
+    blockers.push(
+      "El expediente está finalizado. Reábrelo en la Mesa de cierre antes de crear una salida.",
+    );
+    // El cierre exige que no queden salidas activas: mientras esté finalizado no
+    // entra ninguna, venga por donde venga.
+    for (const action of ALL_ROUTE_ACTIONS) blockedActions.add(action);
+  }
+
+  const terminal = terminalOrderBlocker(order.generalStatus ?? "");
+  if (terminal) {
+    blockers.push(terminal);
+    blockedActions.add("tanders");
+    blockedActions.add("shalom");
+    if (!order.closedByFailedDelivery) blockedActions.add("manual");
+  }
+
+  return { blockers, blockedActions: [...blockedActions] };
+}
+
+const ALL_ROUTE_ACTIONS: readonly RouteAction[] = [
+  "aliclik",
+  "swayp",
+  "shalom",
+  "tanders",
+  "manual",
+];
 
 const LABELS: Record<RouteKey, string> = {
   aliclik: "Aliclik",

@@ -40,9 +40,10 @@ import { markTandersLabelGenerated } from "@/app/dashboard/pedidos/tanders-actio
 import { ShalomGuideModal } from "@/components/shalom-guide-modal";
 import { cancelShalomGuide } from "@/app/dashboard/pedidos/shalom-actions";
 import { shalomGuideIsCancelable } from "@/lib/shalom/draft";
-import { manualOutputIsCancelable } from "@/lib/shipment-output";
+import { fenixOutputIsCancelable, manualOutputIsCancelable } from "@/lib/shipment-output";
 import {
   addOrderComment,
+  cancelFenixOutput,
   cancelManualRouteOutput,
   clearOrderGeo,
   createManualRouteOutputsBulk,
@@ -281,6 +282,85 @@ function ShalomCancelButton({
           setConfirming(false);
           if ("error" in res) setError(res.error);
           else onDone(res.notice);
+        }}
+        className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-800"
+      >
+        Sí, anular
+      </button>
+      <button
+        type="button"
+        onClick={() => setConfirming(false)}
+        className="text-xs font-medium text-slate-600 hover:underline"
+      >
+        Cancelar
+      </button>
+    </span>
+  );
+}
+
+/**
+ * Anular la guía de Swayp de una salida, también en dos pasos.
+ *
+ * El texto de confirmación cambia según lo que vaya a pasar, porque son dos
+ * cosas distintas: si la salida era una «por definir» rellenada, la caja se
+ * queda —sigue armada y rotulada— y solo deja de tener courier; si nació como
+ * guía Swayp directa, la salida se anula. Prometer lo que no es haría que la
+ * operadora dudara justo en el clic que no se deshace.
+ */
+function FenixCancelButton({
+  shipmentId,
+  guideCode,
+  wasFilled,
+  onDone,
+}: {
+  shipmentId: string;
+  guideCode: string | null;
+  /** ¿La salida nació «por definir» y se le escribió la guía encima? */
+  wasFilled: boolean;
+  onDone: (notice: string) => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (busy) return <span className="text-xs text-slate-500">Anulando…</span>;
+
+  if (!confirming) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            setError(null);
+            setConfirming(true);
+          }}
+          className="text-xs font-medium text-red-700 hover:underline"
+        >
+          Anular guía Swayp
+        </button>
+        {error && <span className="w-full text-xs text-red-700">{error}</span>}
+      </>
+    );
+  }
+
+  return (
+    <span className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-red-50 px-2 py-1.5">
+      <span className="text-xs text-red-800">
+        ¿Anular la guía <strong>{guideCode ?? "—"}</strong>?{" "}
+        {wasFilled
+          ? "La caja se queda como está y la salida vuelve a quedar sin courier, lista para otra guía."
+          : "La salida queda anulada."}{" "}
+        Solo si el paquete sigue en almacén.
+      </span>
+      <button
+        type="button"
+        onClick={async () => {
+          setBusy(true);
+          const res = await cancelFenixOutput(shipmentId);
+          setBusy(false);
+          setConfirming(false);
+          if (res.error) setError(res.error);
+          else onDone(res.notice ?? "Guía Swayp anulada.");
         }}
         className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-800"
       >
@@ -3154,7 +3234,7 @@ function OrderDrawer({
             >
               <OrderRouteDesk
                 plan={detail.routePlan}
-                closed={detail.row.macro_stage === "finalizado"}
+                gate={detail.routeGate}
                 actionEnabled={routeEnabled}
                 onSelect={selectRoute}
               />
@@ -3303,6 +3383,22 @@ function OrderDrawer({
                           shipmentId={g.id}
                           guideCode={g.guide_code}
                           codigo={g.shalom_codigo ?? null}
+                          onDone={(msg) => {
+                            setNotice(msg);
+                            void reload();
+                            onSaved();
+                          }}
+                        />
+                      )}
+                      {/* El botón que faltaba para Swayp. Rellenar la salida le
+                          cambia la vía, así que «Anular salida» deja de
+                          ofrecerse —bien: la guía ya existe del otro lado— y sin
+                          esto no quedaba ninguno. Ver `cancelFenixOutput`. */}
+                      {canEdit && fenixOutputIsCancelable(g) && (
+                        <FenixCancelButton
+                          shipmentId={g.id}
+                          guideCode={g.guide_code}
+                          wasFilled={detail.filledOutputIds.includes(g.id)}
                           onDone={(msg) => {
                             setNotice(msg);
                             void reload();

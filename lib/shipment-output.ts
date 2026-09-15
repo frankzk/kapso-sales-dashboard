@@ -61,6 +61,54 @@ export function manualOutputIsCancelable(output: {
   return !output.custody_transferred_at;
 }
 
+/** `created_via` de la guía Swayp emitida desde un pedido, sin madre de Aliclik. */
+export const FENIX_DIRECT_CREATED_VIA = "fenix_directo";
+
+/**
+ * ¿Se puede anular esta guía de Swayp desde el Master?
+ *
+ * EXISTE POR UN AGUJERO MEDIDO, y el pedido #AUR176830 lo enseña entero. Su
+ * salida nació «por definir», se le escribió encima la guía de Swayp, y cuando
+ * hubo que cambiar de courier no había dónde deshacerlo: el Master solo pinta
+ * «Anular» para Shalom y «Anular salida» para la ruta manual, y rellenar la
+ * salida le cambia la vía, así que las dos desaparecen. El único botón alcanzable
+ * era el de Envíos, cuya disposición «cancela» significa OTRA COSA —la clienta
+ * canceló la venta— y por tanto cierra el pedido. Se registró eso, el pedido cayó
+ * a `anulado` por ser su única salida real, y Tanders se negó a emitir la guía
+ * siguiente. La misma forma de #KP127639, llegando por una tercera puerta.
+ *
+ * El MOM ya lo daba por resuelto: «esa guía ya existe del otro lado y se anula
+ * desde su propio botón» (§4). Para Swayp ese botón no existía. Esto es el
+ * predicado que lo pinta; el servidor revalida lo mismo.
+ *
+ * SOLO LAS DIRECTAS. Una guía Swayp hija de una reprogramación
+ * (`spinOffFenixGuide`) no entra: esa nace de un intento fallido de Aliclik y su
+ * cancelación es un hecho de reproprovincia (§11), no un cambio de courier.
+ *
+ * Que haya que avisar a Swayp o no lo decide el servidor mirando `swayp_guide`:
+ * una guía que Swayp nunca emitió es un registro nuestro y se corrige sola; una
+ * que sí, se cancela allá PRIMERO y solo entonces acá, porque marcarla anulada de
+ * este lado dejándola viva del otro es la peor de las dos mentiras.
+ */
+export function fenixOutputIsCancelable(output: {
+  courier: string;
+  created_via?: string | null;
+  delivery_status: string;
+  dispatched_at?: string | null;
+  custody_state?: string | null;
+  custody_transferred_at?: string | null;
+}): boolean {
+  if (output.courier !== "fenix") return false;
+  if (output.created_via !== FENIX_DIRECT_CREATED_VIA) return false;
+  // Una guía Swayp directa nace `en_ruta` con su fecha de despacho, así que
+  // `pendiente` no alcanza como filtro —dejaría fuera justo el caso normal—.
+  // Lo que sí cierra la puerta es que la caja ya se haya movido.
+  if (!["pendiente", "en_ruta"].includes(output.delivery_status)) return false;
+  if (output.dispatched_at) return false;
+  if ((output.custody_state ?? "empresa") !== "empresa") return false;
+  return !output.custody_transferred_at;
+}
+
 /**
  * ¿Esta salida se puede RELLENAR con la guía de un courier?
  *
