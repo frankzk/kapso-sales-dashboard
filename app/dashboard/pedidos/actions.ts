@@ -45,13 +45,20 @@ import {
 } from "@/lib/order-confirmation";
 import {
   COURIER_TBD,
+  FENIX_DIRECT_CREATED_VIA,
   MANUAL_ROUTE_CREATED_VIA,
   MAX_OUTPUTS_PER_ORDER,
+  ROUTE_OUTPUT_FILLED,
   canRepeatCourier,
+  fenixOutputIsCancelable,
+  filledShipmentIds,
   manualRouteGuideCode,
   manualOutputIsCancelable,
   normalizeOrderCode,
+  restoredRouteOutputPatch,
 } from "@/lib/shipment-output";
+import { cancelGuides, swaypOptsFromEnv } from "@/lib/swayp";
+import { env } from "@/lib/env";
 import {
   decideLabelAction,
   listNames,
@@ -640,6 +647,184 @@ export async function cancelManualRouteOutput(
   revalidatePath("/dashboard/pedidos/despacho");
   return {
     notice: `${label} anulada. El pedido ya puede recibir otra salida.${eventError ? ` Aviso: no se pudo escribir el evento de auditoría (${eventError}).` : ""}`,
+  };
+}
+
+/**
+ * Anula la guía de Swayp de una salida que todavía no salió de la empresa, y si
+ * esa salida era una «por definir» rellenada, la DEVUELVE a por definir.
+ *
+ * EL BOTÓN QUE FALTABA, y el pedido #AUR176830 lo enseña completo. Su salida
+ * nació sin courier, se le escribió encima la guía de Swayp y al querer cambiar
+ * de courier no había dónde deshacerlo: rellenar la salida le cambia la vía, así
+ * que «Anular salida» deja de ofrecerse (§4, y con razón: una guía que ya existe
+ * en el courier no se mata sólo de nuestro lado), y «Anular» es de Shalom. El
+ * único botón alcanzable era el de Envíos, cuya disposición «cancela» significa
+ * que LA CLIENTA canceló la venta — así que cerró el pedido, y Tanders se negó a
+ * emitir la guía siguiente. La misma forma de #KP127639 por una tercera puerta.
+ *
+ * QUÉ HACE, según lo que encuentre:
+ *
+ *  - Si la salida fue rellenada (evento `route_output_filled`), se DESHACE el
+ *    relleno: vuelve a `por definir`, `pendiente`, con su código interno
+ *    reconstruido. La caja sigue armada, rotulada y en el almacén; lo único que
+ *    dejó de ser cierto es quién la lleva. Ver `restoredRouteOutputPatch`.
+ *  - Si nació como guía Swayp directa, se marca `anulado`, que es lo que es.
+ *
+ * Y SI SWAYP LA EMITIÓ DE VERDAD, se cancela allá PRIMERO. Marcarla anulada
+ * acá dejándola viva del otro lado es la peor de las dos mentiras; es la misma
+ * regla que sigue `cancelShalomGuide`. Una guía con código local —Swayp no la
+ * emitió— es un registro nuestro y no hay a quién avisar.
+ */
+export async function cancelFenixOutput(
+  shipmentId: string,
+  input: { note?: string } = {},
+): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  // Mismo permiso que crear y anular una salida de ruta manual: no hay permiso
+  // propio de Swayp porque las guías Swayp se crean desde Envíos, con acceso al
+  // envío. Lo que se decide acá es el registro de la salida en el Master.
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite anular salidas." };
+
+  const admin = createAdminSupabase();
+  const { data: shipmentRow, error: shipmentError } = await admin
+    .from("shipments")
+    .select(
+      "id,order_id,order_name,courier,guide_code,output_code,delivery_status,created_via,custody_state,custody_transferred_at,dispatched_at,swayp_guide,fenix_shipment_id",
+    )
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (shipmentError) return { error: `No se pudo leer la salida: ${shipmentError.message}` };
+  if (!shipmentRow) return { error: "No se encontró la salida." };
+  const output = shipmentRow as {
+    id: string;
+    order_id: string | null;
+    order_name: string | null;
+    courier: string;
+    guide_code: string | null;
+    output_code: string | null;
+    delivery_status: string;
+    created_via: string | null;
+    custody_state: string | null;
+    custody_transferred_at: string | null;
+    dispatched_at: string | null;
+    swayp_guide: string | null;
+    fenix_shipment_id: string | null;
+  };
+  if (!output.order_id) return { error: "Esa salida no está vinculada a ningún pedido." };
+
+  const ctx = await authorizeOrder(output.order_id);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  // Se revalida acá y no solo en la interfaz: un botón que no se pinta no es una
+  // autorización, y entre que se abrió el drawer y se confirmó la caja pudo
+  // haber salido con el motorizado.
+  if (output.created_via !== FENIX_DIRECT_CREATED_VIA || output.courier !== "fenix") {
+    return {
+      error:
+        "Esa salida no es una guía Swayp directa. Las de Aliclik, Shalom y Tanders se anulan desde su propio botón, y las de ruta manual desde «Anular salida».",
+    };
+  }
+  if (!fenixOutputIsCancelable(output)) {
+    return {
+      error:
+        output.dispatched_at || output.custody_transferred_at
+          ? "La caja ya salió con el motorizado. Recibe su retorno en vez de anular la guía."
+          : `La salida está ${output.delivery_status.replace("_", " ")}: ya no es una guía por corregir.`,
+    };
+  }
+
+  // Swayp solo deja cancelar en estado 1 (Generada); más allá el camino es la
+  // devolución. Si dice que no, se para acá: la mentira que hay que evitar es
+  // una guía viva en Swayp y anulada en el panel.
+  if (output.swayp_guide && env.swaypEnabled()) {
+    try {
+      const [outcome] = await cancelGuides(swaypOptsFromEnv(), [output.swayp_guide]);
+      if (outcome && !outcome.ok) {
+        return { error: `Swayp no canceló la guía ${output.swayp_guide}: ${outcome.message}` };
+      }
+    } catch (err) {
+      return {
+        error: `No se pudo avisar a Swayp para cancelar ${output.swayp_guide}: ${
+          err instanceof Error ? err.message : "error desconocido"
+        }. La guía sigue viva allá, así que no se tocó acá.`,
+      };
+    }
+  }
+
+  // ¿Esta fila fue antes una salida «por definir»? Se pregunta por el EVENTO y
+  // no por la forma: una fila rellenada y una creada de cero acaban idénticas, y
+  // deducirlo es lo que `cancelledAsRecordCorrection` documenta como peligroso.
+  const { data: filledEvents } = await admin
+    .from("order_events")
+    .select("kind,shipment_id")
+    .eq("order_id", output.order_id)
+    .eq("kind", ROUTE_OUTPUT_FILLED);
+  const wasFilled = filledShipmentIds(
+    (filledEvents ?? []) as { kind: string; shipment_id: string | null }[],
+  ).has(shipmentId);
+
+  const label = output.output_code ?? output.guide_code ?? shipmentId.slice(0, 8).toUpperCase();
+  const note = input.note?.trim() ?? "";
+  if (note.length > 2000) return { error: "La nota es demasiado larga (máx. 2000)." };
+  const occurredAt = new Date().toISOString();
+
+  const { error: updateError } = await admin
+    .from("shipments")
+    .update(
+      wasFilled
+        ? {
+            ...restoredRouteOutputPatch(output.order_name, shipmentId),
+            // Los del courier los limpia quien los escribió: si quedaran, la
+            // salida diría que tiene guía de Swayp sin tenerla.
+            swayp_guide: null,
+            swayp_state: null,
+            fenix_shipment_id: null,
+            next_followup_at: null,
+            updated_at: occurredAt,
+          }
+        : {
+            delivery_status: "anulado",
+            status_category: "closed",
+            pickup_state: null,
+            next_followup_at: null,
+            updated_at: occurredAt,
+          },
+    )
+    .eq("id", shipmentId)
+    // Repite en la ESCRITURA lo que se comprobó al leer: si otra pestaña despachó
+    // la caja en el medio, no la pisa.
+    .eq("created_via", FENIX_DIRECT_CREATED_VIA)
+    .is("dispatched_at", null)
+    .is("custody_transferred_at", null);
+  if (updateError) return { error: `No se pudo anular la guía: ${updateError.message}` };
+
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "guide_cancelled",
+    source: "manual",
+    courier: "fenix",
+    guideCode: output.guide_code,
+    shipmentId,
+    reason: note || null,
+    note:
+      `Guía Swayp ${output.guide_code ?? label} anulada.` +
+      (wasFilled ? " La salida vuelve a quedar sin courier definido; la caja no se movió." : "") +
+      (note ? ` Motivo: ${note}` : ""),
+    occurredAt,
+    payload: {
+      outputCode: output.output_code,
+      restoredToTbd: wasFilled,
+      swaypGuide: output.swayp_guide,
+    },
+  });
+
+  await recomputeOrderMasterSafe(admin, [output.order_id]);
+  revalidatePath(MASTER_PATH);
+  revalidatePath("/dashboard/envios");
+  return {
+    notice: wasFilled
+      ? `${label} vuelve a estar sin courier definido. La caja no se movió y el pedido ya puede recibir otra guía.${eventError ? ` Aviso: no se pudo escribir el evento de auditoría (${eventError}).` : ""}`
+      : `Guía Swayp ${output.guide_code ?? label} anulada.${eventError ? ` Aviso: no se pudo escribir el evento de auditoría (${eventError}).` : ""}`,
   };
 }
 

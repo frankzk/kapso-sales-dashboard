@@ -11,6 +11,7 @@
 // confirma el operador. Ver lib/geo-link.ts.
 
 import { shopifyOrderNote } from "@/lib/shopify-address";
+import { terminalOrderBlocker } from "@/lib/order-status";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
@@ -230,16 +231,14 @@ export async function loadTandersDraft(
     );
   }
 
-  if (["entregado", "devuelto", "anulado"].includes(row.general_status)) {
-    // Decir solo «está anulado» deja al operador sin salida: no dice quién lo
-    // anuló ni cómo revertirlo, y el motivo más probable es que él mismo acabe
-    // de anular la salida para poder llegar hasta aquí.
-    blockers.push(
-      row.general_status === "anulado"
-        ? "El pedido está anulado. Si acabas de anular su salida para cambiar de courier, el estado se recalcula solo y vuelve a Preparación; si lo anuló Shopify o el courier, reábrelo desde Estado del pedido antes de crear la guía."
-        : `El pedido está ${row.general_status.replace("_", " ")}.`,
-    );
-  }
+  // Decir solo «está anulado» deja al operador sin salida: no dice quién lo
+  // anuló ni cómo revertirlo, y el motivo más probable es que él mismo acabe de
+  // anular la salida para poder llegar hasta aquí. La frase la escribe
+  // `terminalOrderBlocker`, compartida con Shalom y con la mesa de ruta: cuando
+  // cada uno tenía la suya, la de aquí mandaba a un panel llamado «Estado del
+  // pedido» que no existe.
+  const terminal = terminalOrderBlocker(row.general_status);
+  if (terminal) blockers.push(terminal);
 
   // El punto no se inventa: si no hay, el operador lo pega. Ver lib/geo-link.ts.
   if (row.latitude == null || row.longitude == null) {

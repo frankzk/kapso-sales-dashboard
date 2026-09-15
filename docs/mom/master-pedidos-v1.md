@@ -154,6 +154,26 @@ Reglas:
 - Las salidas con API propia (Aliclik, Shalom, Tanders) no se anulan por esta
   vía: tienen la suya, que además avisa al courier. Marcarlas anuladas solo de
   nuestro lado dejaría la guía viva en el courier.
+- **Cada courier al que se le pueda escribir una guía tiene que tener su propio
+  botón de anular, y la ausencia de uno no es un hueco cosmético: cierra ventas.**
+  Swayp no lo tenía. Su guía directa se escribe sobre la salida `por definir`
+  como las demás, y al rellenarla dejan de ofrecerse los dos botones que existían
+  —«Anular salida» porque cambió la vía, «Anular» porque es de Shalom—, así que
+  no quedaba ninguno. El único alcanzable era el de Envíos, cuya disposición
+  «cancela» significa otra cosa: **que la clienta canceló la venta**. Registrado
+  eso, el pedido cae a `anulado` por ser su única salida real y el courier
+  siguiente se niega a emitir. Es la forma de #KP127639 llegando por una tercera
+  puerta, y le pasó a #AUR176830 el 15-09-2026.
+- **Anular la guía de una salida RELLENADA la devuelve a `por definir`; no la
+  anula.** La caja sigue armada, rotulada y en el almacén: lo único que dejó de
+  ser cierto es quién la lleva. Conserva su consecutivo, su QR y su avance de
+  preparación, y el pedido queda listo para recibir otra guía sin gastar una de
+  las cinco salidas. Si la guía nació directa —sin salida previa que rellenar—,
+  anularla sí cierra la salida, que es lo que es. Se distingue por el EVENTO de
+  relleno, nunca deduciéndolo de la forma de la fila.
+- Cuando el courier **sí tiene la guía**, se cancela allá primero y solo entonces
+  acá. Una guía viva en el courier y anulada en el panel es la peor de las dos
+  mentiras: nadie la busca y el paquete sale igual.
 - El courier y la fecha son metadatos visibles; no forman parte del token QR.
 - El código de guía externa se conserva separado.
 - El límite global acordado es cinco salidas por pedido.
@@ -969,6 +989,50 @@ mostrar la razón de la sugerencia y permitir que Daysi elija otra ruta válida.
 La entrevista menciona como posibilidad volver a enviar por Swayp. Esto queda
 registrado como discrepancia operativa, pero no modifica la política del owner
 hasta que Frankz la cambie expresamente.
+
+#### Un pedido cerrado se dice igual en todas las pantallas, y con el sitio donde se abre
+
+Un pedido `entregado`, `anulado` o `devuelto` no admite otra salida. Eso ya lo
+sabían los modales de cada courier, pero **la mesa de ruta medía otra cosa**:
+solo se apagaba con la macroetapa en `finalizado`. Con el expediente reabierto y
+el pedido todavía `anulado` —#AUR176830— la mesa pintaba «Crear en Tanders» en
+negro y recomendado, y la negativa aparecía recién dentro del modal.
+
+Reglas:
+
+- Las dos condiciones —expediente finalizado y estado general terminal— son
+  independientes y pueden darse a la vez. Reabrir el expediente no levanta el
+  estado, ni al revés, y el aviso cuenta las dos.
+- **El botón se apaga por modalidad, no por pedido entero**, porque los guardas
+  del servidor no dicen lo mismo y un interruptor único mentiría en tres de las
+  cinco:
+
+  | Modalidad | Con el pedido en estado terminal |
+  | --- | --- |
+  | Tanders, Shalom | Se niegan siempre |
+  | Salida manual | Se niega, salvo si se cerró por una entrega fallida (§11) |
+  | Aliclik, Swayp | No miran el estado general del pedido |
+
+  La excepción de la salida manual no es teórica: son 844 guías sobre 842
+  pedidos, y apagarle el botón habría roto la entrada a Reproprovincia que el
+  §11 define. Se decide por la **etiqueta que el courier puso en la guía**, no
+  por el estado del pedido: `anulado` cubre tanto «lo canceló el courier» como
+  «lo cancelamos nosotros», y solo la etiqueta los separa.
+- Con el **expediente finalizado** sí se apagan todas, sin excepción: el cierre
+  exige que no queden salidas activas.
+- El motivo se muestra **antes** de los botones, no solo como una etiqueta
+  apagada encima de ellos, y se muestra aunque algún botón siga encendido — el
+  hecho es cierto igual.
+- El motivo nombra **dónde se arregla**, porque hay dos «reabrir» y no sirven
+  para lo mismo: el del expediente vive en la **Mesa de cierre** y el del estado
+  en **Gestión manual → Registrar estado**. Un aviso que manda a un panel
+  inexistente es peor que no decir nada — el de Tanders mandaba a «Estado del
+  pedido», que no existe con ese nombre.
+- La frase la escribe una sola función para las tres pantallas. Cuando cada una
+  tenía la suya, decían tres cosas distintas del mismo hecho.
+- Si alguien acaba de anular la salida para cambiar de courier, el aviso lo dice:
+  ese estado **se recalcula solo** en cuanto exista otra salida viva y no hace
+  falta corregirlo a mano.
 
 ### 9.4 Reportes, pagos y devoluciones físicas de Lima
 

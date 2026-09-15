@@ -30,6 +30,7 @@ import {
   type PriorOrderSnapshot,
 } from "@/lib/order-confirmation-brief";
 import { parseLabelLineItems } from "@/lib/labels/line-items";
+import { filledShipmentIds } from "@/lib/shipment-output";
 // Las etiquetas de estado de LEAD son otra tabla que las del Master. Se importa
 // la del dominio de Leads para no reescribirla acá y que las dos se separen.
 import { labelOf as leadStatusLabel } from "@/lib/leads";
@@ -43,9 +44,12 @@ import { evaluateDirectFenixStock, type FenixStockRow } from "@/lib/fenix";
 import { deriveFenixCoverageCity } from "@/lib/shipments";
 import {
   buildOrderRoutePlan,
+  routeDeskGate,
   type OrderRoutePlan,
+  type RouteDeskGate,
   type SwaypRouteCheck,
 } from "@/lib/order-route-plan";
+import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import type {
   OrderEventRow,
   OrderLineItem,
@@ -367,7 +371,26 @@ export interface OrderMasterDetail {
    *  llevar lo que Shopify no tiene dónde guardar —el DNI del destinatario, la
    *  agencia— y hasta ahora solo se veía entrando al admin de Shopify. */
   shopifyNote: string | null;
+  /**
+   * Salidas que nacieron «por definir» y a las que se les escribió encima la
+   * guía de un courier (evento `route_output_filled`).
+   *
+   * Va en el detalle porque la interfaz tiene que PROMETER lo correcto antes de
+   * un clic que no se deshace: anular la guía de una salida rellenada deja la
+   * caja intacta y sin courier, y anular la de una directa cierra la salida. Se
+   * pregunta por el evento y no por la forma de la fila — deducirlo es lo que
+   * `cancelledAsRecordCorrection` documenta como peligroso.
+   */
+  filledOutputIds: string[];
   routePlan: OrderRoutePlan;
+  /**
+   * Qué impide crear una salida y a cuáles de las modalidades (`routeDeskGate`).
+   *
+   * Se resuelve en el servidor porque la excepción de «se cerró porque la
+   * entrega falló» se lee de la etiqueta que el courier puso en la guía, y esa
+   * columna no tenía por qué viajar al navegador solo para esto.
+   */
+  routeGate: RouteDeskGate;
   /** Foco de salud de la API de Aliclik, para el panel de crear guía. */
   aliclikHealth: AliclikHealthState;
   tasks: OrderTaskSummary[];
@@ -389,6 +412,9 @@ const GUIDE_COLUMNS =
   "match_method,order_name,customer_name,customer_phone,product,district,province,city,region," +
   "delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at," +
   "address_updated_by,fenix_eligible,fenix_shipment_id,created_via,delivered_source," +
+  // `swayp_guide` y `dispatched_at` deciden si la guía Swayp se puede anular
+  // desde el drawer y si hay que avisarle a Swayp antes (ver `cancelFenixOutput`).
+  "swayp_guide,swayp_state,dispatched_at,reported_status," +
   "shalom_codigo,shalom_ose_id,shalom_order_id,shalom_serie,shalom_raw," +
   "aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at," +
   "next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id," +
@@ -640,6 +666,17 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     tasks,
     address: shopifyShippingAddress(orderRow?.raw),
     shopifyNote: shopifyOrderNote(orderRow?.raw),
+    filledOutputIds: [...filledShipmentIds(events)],
+    // MISMA pregunta que hace `createManualRouteOutput` antes de dejar crear la
+    // salida, y por eso el mismo ayudante: el estado del pedido no distingue
+    // «lo canceló el courier» de «lo cancelamos nosotros», la etiqueta sí.
+    routeGate: routeDeskGate({
+      macroStage: row.macro_stage,
+      generalStatus: row.general_status,
+      closedByFailedDelivery: guides.some((guide) =>
+        etiquetaDiceTerminoSinEntregar(guide.reported_status),
+      ),
+    }),
     routePlan: buildOrderRoutePlan({
       operation: operationOf(row, guides),
       paymentState: row.payment_state,

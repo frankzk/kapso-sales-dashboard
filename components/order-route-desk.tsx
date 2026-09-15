@@ -2,7 +2,12 @@
 
 import { cn } from "@/components/ui";
 import { operationalLabel } from "@/lib/order-status";
-import type { OrderRoutePlan, RouteCandidate, RouteAction } from "@/lib/order-route-plan";
+import type {
+  OrderRoutePlan,
+  RouteCandidate,
+  RouteAction,
+  RouteDeskGate,
+} from "@/lib/order-route-plan";
 
 const STATUS_TONE = {
   available: "border-slate-200 bg-white",
@@ -20,15 +25,25 @@ const ACTION_LABEL: Record<RouteAction, string> = {
 
 export function OrderRouteDesk({
   plan,
-  closed = false,
+  gate,
   actionEnabled,
   onSelect,
 }: {
   plan: OrderRoutePlan;
-  closed?: boolean;
+  /**
+   * Qué impide crear una salida y a cuáles de las modalidades. Lo calcula
+   * `routeDeskGate`.
+   *
+   * Antes era un `closed` booleano que solo miraba la macroetapa, así que un
+   * pedido `anulado` con el expediente reabierto pintaba el botón recomendado en
+   * negro y la negativa salía recién dentro del modal.
+   */
+  gate?: RouteDeskGate;
   actionEnabled: (route: RouteCandidate) => boolean;
   onSelect: (route: RouteCandidate) => void;
 }) {
+  const blockers = gate?.blockers ?? [];
+  const blockedActions = new Set(gate?.blockedActions ?? []);
   return (
     <section className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50/70">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
@@ -51,6 +66,21 @@ export function OrderRouteDesk({
         </div>
       </div>
 
+      {/* El motivo va ARRIBA y con el sitio donde se arregla. Un botón apagado
+          que dice «Reabrir primero» no basta: hay dos «reabrir» en este drawer
+          —el del expediente, en la Mesa de cierre, y el del estado, en Gestión
+          manual— y solo uno sirve para cada caso. Sin decir cuál, la operadora
+          prueba el que tiene más cerca y vuelve a chocar con el modal. */}
+      {blockers.length > 0 && (
+        <div className="space-y-1 border-b border-red-200 bg-red-50 px-4 py-2.5">
+          {blockers.map((blocker) => (
+            <p key={blocker} className="text-xs leading-5 text-red-900">
+              {blocker}
+            </p>
+          ))}
+        </div>
+      )}
+
       {plan.warnings.length > 0 && (
         <div className="space-y-1 border-b border-amber-200 bg-amber-50 px-4 py-2.5">
           {plan.warnings.map((warning) => (
@@ -61,6 +91,11 @@ export function OrderRouteDesk({
 
       <div className="grid gap-2 p-3 sm:grid-cols-2">
         {plan.candidates.map((route) => {
+          // Por MODALIDAD, no por pedido: con el pedido cerrado, Tanders y
+          // Shalom se niegan siempre, la salida manual solo si no se cerró por
+          // una entrega fallida, y Aliclik y Swayp ni miran el estado. Ver
+          // `routeDeskGate`.
+          const closed = blockedActions.has(route.action);
           const enabled = !closed && route.availability !== "blocked" && actionEnabled(route);
           return (
             <article
