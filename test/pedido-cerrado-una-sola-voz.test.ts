@@ -52,23 +52,40 @@ describe("routeDeskGate: las dos puertas son independientes", () => {
   it("el pedido de #AUR176830 — expediente reabierto, estado todavía anulado", () => {
     const { blockers } = routeDeskGate({ macroStage: "por_cerrar", generalStatus: "anulado" });
     expect(blockers).toHaveLength(1);
-    expect(blockers[0]).toContain("Gestión manual");
+    expect(blockers[0]!.text).toContain("Gestión manual");
     // Y el que NO aplica no se inventa.
-    expect(blockers[0]).not.toContain("Mesa de cierre");
+    expect(blockers[0]!.text).not.toContain("Mesa de cierre");
   });
 
   it("expediente finalizado con el pedido entregado: se dicen las dos", () => {
     const { blockers } = routeDeskGate({ macroStage: "finalizado", generalStatus: "entregado" });
     expect(blockers).toHaveLength(2);
-    expect(blockers[0]).toContain("Mesa de cierre");
-    expect(blockers[1]).toContain("Gestión manual");
+    expect(blockers[0]!.text).toContain("Mesa de cierre");
+    expect(blockers[1]!.text).toContain("Gestión manual");
   });
 
   it("finalizado con el pedido vivo: solo la del expediente", () => {
     const { blockers } = routeDeskGate({ macroStage: "finalizado", generalStatus: "en_proceso" });
     expect(blockers).toEqual([
-      "El expediente está finalizado. Reábrelo en la Mesa de cierre antes de crear una salida.",
+      {
+        text: "El expediente está finalizado. Reábrelo en la Mesa de cierre antes de crear una salida.",
+        target: "cierre",
+        cta: "Ir a la Mesa de cierre ↓",
+      },
     ]);
+  });
+
+  /**
+   * NOMBRAR EL PANEL NO BASTÓ. #AUR176830 se quedó dos rondas sin encontrarlo
+   * con la instrucción delante: los dos sitios viven al fondo de la pestaña
+   * Operar, detrás de «Salidas y guías», y quien lee el aviso está arriba.
+   */
+  it("cada motivo lleva su atajo, y cada uno al panel que le toca", () => {
+    const cerrado = routeDeskGate({ macroStage: "finalizado", generalStatus: "anulado" });
+    expect(cerrado.blockers.map((b) => b.target)).toEqual(["cierre", "acciones"]);
+    for (const blocker of cerrado.blockers) {
+      expect(blocker.cta).toBeTruthy();
+    }
   });
 
   it("un pedido operable no bloquea nada", () => {

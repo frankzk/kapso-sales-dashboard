@@ -6,6 +6,7 @@ import type {
   OrderRoutePlan,
   RouteCandidate,
   RouteAction,
+  RouteDeskBlocker,
   RouteDeskGate,
 } from "@/lib/order-route-plan";
 
@@ -26,6 +27,7 @@ const ACTION_LABEL: Record<RouteAction, string> = {
 export function OrderRouteDesk({
   plan,
   gate,
+  onJump,
   actionEnabled,
   onSelect,
 }: {
@@ -39,6 +41,8 @@ export function OrderRouteDesk({
    * negro y la negativa salía recién dentro del modal.
    */
   gate?: RouteDeskGate;
+  /** Lleva a la sección del drawer que levanta el bloqueo. */
+  onJump?: (target: RouteDeskBlocker["target"]) => void;
   actionEnabled: (route: RouteCandidate) => boolean;
   onSelect: (route: RouteCandidate) => void;
 }) {
@@ -72,11 +76,23 @@ export function OrderRouteDesk({
           manual— y solo uno sirve para cada caso. Sin decir cuál, la operadora
           prueba el que tiene más cerca y vuelve a chocar con el modal. */}
       {blockers.length > 0 && (
-        <div className="space-y-1 border-b border-red-200 bg-red-50 px-4 py-2.5">
+        <div className="space-y-2 border-b border-red-200 bg-red-50 px-4 py-2.5">
           {blockers.map((blocker) => (
-            <p key={blocker} className="text-xs leading-5 text-red-900">
-              {blocker}
-            </p>
+            <div key={blocker.text}>
+              <p className="text-xs leading-5 text-red-900">{blocker.text}</p>
+              {/* El atajo, no solo el nombre del panel. Los dos viven al fondo
+                  de la pestaña, detrás de «Salidas y guías», y quien lee esto
+                  está arriba del todo. */}
+              {onJump && (
+                <button
+                  type="button"
+                  onClick={() => onJump(blocker.target)}
+                  className="mt-1 rounded-md border border-red-300 bg-white px-2 py-1 text-xs font-semibold text-red-800 hover:bg-red-100"
+                >
+                  {blocker.cta}
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}

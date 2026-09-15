@@ -111,9 +111,21 @@ export interface OrderRoutePlanInput {
   now?: Date;
 }
 
+export interface RouteDeskBlocker {
+  text: string;
+  /**
+   * Adónde lleva el atajo. Nombrar el panel no bastó: los dos viven al fondo de
+   * la pestaña Operar, detrás de «Salidas y guías», y quien lee el aviso está
+   * arriba del todo. #AUR176830 se quedó dos rondas sin encontrarlo aun con la
+   * instrucción delante, que es la señal de que faltaba el atajo y no la frase.
+   */
+  target: "cierre" | "acciones";
+  cta: string;
+}
+
 export interface RouteDeskGate {
   /** Lo que hay que contar arriba, con el sitio donde se arregla. */
-  blockers: string[];
+  blockers: RouteDeskBlocker[];
   /** Las modalidades que además NO van a poder ejecutarse. */
   blockedActions: RouteAction[];
 }
@@ -154,13 +166,15 @@ export function routeDeskGate(order: {
    */
   closedByFailedDelivery?: boolean;
 }): RouteDeskGate {
-  const blockers: string[] = [];
+  const blockers: RouteDeskBlocker[] = [];
   const blockedActions = new Set<RouteAction>();
 
   if (order.macroStage === "finalizado") {
-    blockers.push(
-      "El expediente está finalizado. Reábrelo en la Mesa de cierre antes de crear una salida.",
-    );
+    blockers.push({
+      text: "El expediente está finalizado. Reábrelo en la Mesa de cierre antes de crear una salida.",
+      target: "cierre",
+      cta: "Ir a la Mesa de cierre ↓",
+    });
     // El cierre exige que no queden salidas activas: mientras esté finalizado no
     // entra ninguna, venga por donde venga.
     for (const action of ALL_ROUTE_ACTIONS) blockedActions.add(action);
@@ -168,7 +182,7 @@ export function routeDeskGate(order: {
 
   const terminal = terminalOrderBlocker(order.generalStatus ?? "");
   if (terminal) {
-    blockers.push(terminal);
+    blockers.push({ text: terminal, target: "acciones", cta: "Ir a Registrar estado ↓" });
     blockedActions.add("tanders");
     blockedActions.add("shalom");
     if (!order.closedByFailedDelivery) blockedActions.add("manual");
