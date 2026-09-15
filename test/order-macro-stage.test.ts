@@ -437,6 +437,43 @@ describe("resolveMacroStage — Por cerrar y Finalizado", () => {
     expect(state).toMatchObject({ stage: "por_cerrar", substage: "recogido_sin_pago_completo" });
   });
 
+  // El dinero de Agencia entra por el mostrador de Shalom, que no es ni Yape ni
+  // la pasarela del checkout. Sin esto la alerta se encendía sobre pedidos
+  // cobrados: 569 de los 651 que tenía (S/ 96.497 de S/ 111.707) están `paid`.
+  it("Agencia recogida SIN comprobantes pero pagada en Shopify no enciende la alerta", () => {
+    const state = resolve({
+      order: order({ shipping_mode: "agency", financial_status: "paid" }),
+      guides: [guide({ courier: "shalom", delivery_status: "entregado", pickup_state: "recogido" })],
+      legacy: { general: "entregado", operational: "recogido", since: CREATED },
+      paymentState: null,
+    });
+    expect(state).toMatchObject({ stage: "finalizado", substage: "recogido_cerrado" });
+    expect(state.reasons).not.toContain("recogido_sin_pago_completo");
+  });
+
+  // La cobranza de verdad: 80 pedidos y S/ 15.022 sin rastro en ningún sitio.
+  it("Agencia recogida sin comprobantes Y sin cobro en Shopify sí enciende la alerta", () => {
+    const state = resolve({
+      order: order({ shipping_mode: "agency", financial_status: "pending" }),
+      guides: [guide({ courier: "shalom", delivery_status: "entregado", pickup_state: "recogido" })],
+      legacy: { general: "entregado", operational: "recogido", since: CREATED },
+      paymentState: null,
+    });
+    expect(state).toMatchObject({ stage: "por_cerrar", substage: "recogido_sin_pago_completo" });
+  });
+
+  // Hoy no hay ni un reembolso en la base, pero si el dinero volvió el pedido
+  // vuelve a estar por cobrar — que es exactamente lo que esta alerta dice.
+  it("un reembolso deshace el cobro y la alerta vuelve a encenderse", () => {
+    const state = resolve({
+      order: order({ shipping_mode: "agency", financial_status: "paid", total_refunded: 149 }),
+      guides: [guide({ courier: "shalom", delivery_status: "entregado", pickup_state: "recogido" })],
+      legacy: { general: "entregado", operational: "recogido", since: CREATED },
+      paymentState: null,
+    });
+    expect(state).toMatchObject({ stage: "por_cerrar", substage: "recogido_sin_pago_completo" });
+  });
+
   it("Shopify anulado sin despacho finaliza", () => {
     const state = resolve({
       order: order({ cancelled_at: "2026-07-04T10:00:00.000Z" }),

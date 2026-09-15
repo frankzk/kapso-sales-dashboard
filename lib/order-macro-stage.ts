@@ -18,11 +18,19 @@ import {
 } from "@/lib/order-confirmation";
 import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovincia";
 
+// v1.13: «Recogido sin pago completo» acepta el cobro que Shopify sí registra.
+// La alerta preguntaba «¿está pagado?» mirando SOLO comprobantes Yape y la
+// pasarela del checkout, y en Agencia el dinero entra por el mostrador de
+// Shalom, que no es ninguno de los dos. Medido: 651 pedidos y S/ 111.707 en la
+// alerta, de los que 569 (S/ 96.497) están `paid` en Shopify. La versión sube
+// para que el cron los reconcilie.
+//
 // v1.12: el candado del cambio manual cede ante una guía registrada DESPUÉS
 // (lib/order-status.ts). Cambia el resultado de filas que nadie tocó —31 con
-// registro posterior al override, de las que 11 son de Agencia con S/ 1.062
-// recogidos y sin cobrar que el candado escondía—, así que la versión sube para
-// que el cron las reconcilie.
+// registro posterior al override—, así que la versión sube para que el cron las
+// reconcilie. La cifra que aquí decía «11 de Agencia con S/ 1.062 recogidos y
+// sin cobrar» era una estimación previa al cambio y salió mal: medido sobre el
+// resultado real, son 8 pedidos y S/ 1.439.
 //
 // v1.10: Reproprovincia. Un pedido cuya guía Aliclik terminó sin entregar —con
 // el paquete ya fuera— deja de caer en «Por cerrar» como si la venta hubiera
@@ -48,7 +56,7 @@ import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovi
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.12" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.13" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -276,6 +284,8 @@ export interface MacroOrderSnapshot {
   confirmation_activation_date?: string | null;
   cancelled_at: string | null;
   financial_status: string | null;
+  /** `orders.total_refunded`. Un reembolso deshace el cobro. */
+  total_refunded?: number | null;
   shipping_mode: string | null;
   /** Clasificación operativa materializada por la matriz de cobertura. */
   coverage?: string | null;
@@ -532,6 +542,61 @@ function hasPaymentComplete(paymentState: string | null | undefined): boolean {
 }
 
 /**
+ * ¿Hay ALGÚN rastro de que el dinero entró? Deliberadamente más laxo que
+ * `hasPaymentComplete`, y solo para la alerta de cobranza.
+ *
+ * NO ES LA MISMA PREGUNTA que «cuánto cobra el motorizado en la puerta», que
+ * contesta `expectedCollectAmount` (lib/order-paid.ts) y que NO se toca. Esa es
+ * estricta a propósito desde el 10-09-2026 —solo la pasarela confirmada del
+ * checkout cuenta— porque equivocarse allí manda al repartidor a cobrar S/ 0 de
+ * algo impago y el dinero no vuelve. Acá el error es al revés y cuesta mucho
+ * menos: perseguir a una clienta que ya pagó. Por eso las dos preguntas pueden
+ * —y deben— contestarse distinto.
+ *
+ * QUÉ PASABA. La alerta miraba SOLO los comprobantes Yape (`order_payments`) y
+ * la pasarela. En Agencia la clienta paga en el mostrador de Shalom: ni Yape ni
+ * pasarela. Ese dinero no tenía por dónde entrar, así que la alerta se encendía
+ * sobre pedidos cobrados y llevaba meses siendo casi todo ruido.
+ *
+ * MEDIDO CONTRA PRODUCCIÓN (14-09-2026). 651 pedidos en la alerta por S/ 111.707,
+ * de los que 569 (S/ 96.497) están `paid` en Shopify. Sin rastro de cobro en
+ * ningún sitio quedan 80 (S/ 15.022) y 2 `voided` (S/ 188).
+ *
+ * POR QUÉ `financial_status` VALE ACÁ, y no es una corazonada. En Agencia el
+ * campo sigue al recojo casi perfectamente:
+ *
+ *     recogido · por cerrar      722 pedidos → 633 `paid`   87,7 %
+ *     recogido · finalizado      556 pedidos → 497 `paid`   89,4 %
+ *     NO entregado · finalizado 1.642 pedidos →   0 `paid`    0,0 %
+ *     NO entregado · en curso     323 pedidos →  19 `paid`    5,9 %
+ *     NO entregado · por confirmar 200 pedidos →  8 `paid`    4,0 %
+ *
+ * Cero en los 1.642 anulados o devueltos. Y `paid` no es el valor por defecto:
+ * solo el 9-10 % de los pedidos de cada mes lo tiene. En esta operación ese
+ * campo ES el registro de que el dinero entró al recoger.
+ *
+ * EL REEMBOLSO SE GUARDA aunque hoy no haya ninguno en la base (medido: cero
+ * filas con `total_refunded > 0`). Si el dinero volvió, el pedido vuelve a estar
+ * por cobrar, que es justo lo que esta alerta existe para decir.
+ *
+ * DÓNDE NO SE USA, Y NO ES UN OLVIDO. `agencyPaymentReady` —el abono que exige
+ * Agencia para pasar a Preparación, §6.1— sigue con `hasPaymentComplete` a
+ * secas. Ahí el pedido todavía NO se ha recogido, así que `paid` no puede
+ * significar «lo cobró el mostrador»; de hecho el 46,8 % de los pedidos de
+ * Agencia en Preparación ya están `paid` por otras vías. Aflojarla dejaría salir
+ * a despacho pedidos sin el abono exigido, que es lo contrario de lo que hace.
+ */
+function hasCollectionEvidence(
+  paymentState: string | null | undefined,
+  order: Pick<MacroOrderSnapshot, "financial_status" | "total_refunded">,
+): boolean {
+  if (hasPaymentComplete(paymentState)) return true;
+  if (normalize(order.financial_status) !== "paid") return false;
+  const refunded = order.total_refunded ?? 0;
+  return !(Number.isFinite(refunded) && refunded > 0);
+}
+
+/**
  * ¿El abono exigido por Agencia deja pasar al pedido? (§6.1: «Agencia queda
  * confirmada solo cuando el pago exigido ha sido validado»).
  *
@@ -591,7 +656,7 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   if (
     legacy.general === "entregado" &&
     operation === "agencia" &&
-    !hasPaymentComplete(paymentState)
+    !hasCollectionEvidence(paymentState, input.order)
   ) {
     reasons.push("recogido_sin_pago_completo");
   }
@@ -875,10 +940,15 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
         operation,
       );
     }
+    // La MISMA pregunta que la alerta de `closingReasons`, y por eso la misma
+    // función. Tenerla en dos sitios con dos criterios es cómo un pedido acaba
+    // sin alerta y sin poder cerrar a la vez: se le apaga el motivo de cobro y
+    // cae en `validacion_cierre_pendiente`, que para quien mira la pantalla es
+    // el mismo pedido atascado con otro nombre.
     if (
       input.legacy.general === "entregado" &&
       operation === "agencia" &&
-      hasPaymentComplete(input.paymentState)
+      hasCollectionEvidence(input.paymentState, input.order)
     ) {
       return result("finalizado", "recogido_cerrado", input.legacy.since, operation);
     }
