@@ -2654,8 +2654,12 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
   - **El saldo del «Link de pago» se recalcula al pulsar**, no se lee del aviso:
     entre el aviso y el botón puede haber pagado y alguien haberlo validado, y
     cobrarle el saldo viejo sería cobrar dos veces.
-  - **El ticket PDF de Shalom se manda cuando la clienta CONTESTA**, detrás del
-    texto con las cuentas, y no dentro del aviso (0167). El botón abre la
+  - **El ticket PDF de Shalom llega por una de dos vías, nunca por las dos.**
+    Si la plantilla tiene cabecera de documento y la tienda tiene el adjunto
+    encendido, viaja EN el aviso; si no, se manda **cuando la clienta contesta**,
+    detrás del texto con las cuentas (0167). Las dos sellan el mismo
+    `ticket_sent_at` a propósito: la pregunta que contesta es «¿esta guía ya
+    tiene su ticket?», no por dónde llegó. El botón abre la
     ventana de 24 h, así que el documento sale como mensaje normal: sin
     plantilla que aprobar en Meta y sin número escrito a mano que pueda
     desalinearse de las cuentas de cobro. **Una vez por guía**: quien pulsa dos

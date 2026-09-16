@@ -583,6 +583,11 @@ async function sendOne(
       error: null,
       error_code: null,
       updated_at: ctx.nowIso,
+      // El ticket ya viajó EN LA CABECERA, así que esta guía ya lo recibió: se
+      // sella aquí para que al pulsar un botón no se le mande otra vez (0167).
+      // Las dos vías escriben el mismo sello a propósito — la pregunta que
+      // contesta es «¿esta guía ya tiene su ticket?», no por dónde llegó.
+      ...(headerDocument ? { ticket_sent_at: ctx.nowIso } : {}),
     })
     .eq("id", row.id);
 
