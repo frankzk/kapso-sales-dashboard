@@ -98,7 +98,7 @@ import {
   swaypOptsFromEnv,
 } from "@/lib/swayp";
 import { buildSwaypGuideInput, esCiudadPorApiSwayp, parseSenders } from "@/lib/swayp-guide";
-import { normalizeSku } from "@/lib/swayp-productos";
+import { normalizeSku, productosSinVinculo } from "@/lib/swayp-productos";
 import { cargarMapaSwayp, cargarMapaSwaypDeOrg } from "@/lib/swayp-sku-map";
 import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
 import { getMasterPermissions } from "@/lib/permissions-access";
@@ -1673,6 +1673,21 @@ export interface DirectFenixGuidePreview {
   stockOk: boolean;
   stockReason: "sin_cobertura" | "sin_stock" | null;
   uncovered: string[];
+  /**
+   * Productos del pedido que Swayp no conoce: sin vínculo en `swayp_sku_map`.
+   *
+   * Va aparte de `uncovered` porque son dos hechos distintos y se arreglan en
+   * sitios distintos. «Sin stock» es inventario y se corrige en Stock Swayp;
+   * «sin vínculo» es catálogo y se corrige en Catálogo de productos. Mezclarlos
+   * mandaría a la operadora a la pantalla equivocada.
+   *
+   * En Lima esto es LO ÚNICO que se comprueba de verdad: la ciudad no lleva
+   * control de cantidad, así que el stock siempre dice que sí.
+   */
+  unlinked: string[];
+  /** ¿Llegó a comprobarse el vínculo? Falso si la tienda no ha mapeado nada
+   *  todavía — ahí la función está apagada y no se puede afirmar nada. */
+  linkChecked: boolean;
   activeGuides: DirectGuideExisting[];
   closedGuidesCount: number;
   /**
@@ -1817,6 +1832,11 @@ export async function previewDirectFenixGuide(input: {
     sku: li.sku ?? null,
   }));
   const check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
+  // El vínculo con el catálogo de Swayp, que en Lima es la única comprobación
+  // que dice algo: la ciudad no lleva control de cantidad, así que el stock
+  // siempre sale en verde. Ver `productosSinVinculo`.
+  const mapaSwayp = await cargarMapaSwayp(admin, order.store_id);
+  const unlinked = productosSinVinculo(lineItems, mapaSwayp);
 
   const guides = await findGuidesOfOrder(admin, order);
   // Una salida «por definir» no estorba: la guía se le escribe encima. Se
@@ -1871,6 +1891,8 @@ export async function previewDirectFenixGuide(input: {
     stockOk: check.ok,
     stockReason: check.ok ? null : check.reason ?? null,
     uncovered: check.uncovered,
+    unlinked,
+    linkChecked: mapaSwayp.size > 0,
     activeGuides,
     closedGuidesCount,
     fillableOutputCode: rellenable?.output_code ?? null,
@@ -2146,6 +2168,24 @@ export async function createDirectFenixGuide(input: {
       };
     }
     return { error: `Swayp no tiene cobertura en ${district || "el destino del pedido"}.` };
+  }
+
+  // REJA DEL VÍNCULO. Sin esto, un producto que Swayp no conoce llegaba hasta la
+  // llamada a la API, esta fallaba con «Falta vincular a Swayp», y el flujo caía
+  // al código local y CREABA LA GUÍA IGUAL: una caja despachada contra un número
+  // que Swayp nunca emitió, con el fallo contado en un aviso al final.
+  //
+  // El respaldo del código local sigue vivo para lo que de verdad es una
+  // limitación de Swayp —una ciudad que su API no atiende—. Un vínculo que falta
+  // es un hueco NUESTRO, se arregla en dos minutos y no puede despachar una caja
+  // mientras tanto.
+  const sinVinculo = productosSinVinculo(lineItems, await cargarMapaSwayp(admin, order.store_id));
+  if (sinVinculo.length) {
+    return {
+      error:
+        `Swayp no conoce ${sinVinculo.length === 1 ? "este producto" : "estos productos"}: ${sinVinculo.join(", ")}. ` +
+        `${sinVinculo.length === 1 ? "Vincúlalo" : "Vincúlalos"} en Catálogo de productos antes de crear la guía.`,
+    };
   }
 
   // Dispatch date: required, from tomorrow (Lima) onward — the day's Excel is

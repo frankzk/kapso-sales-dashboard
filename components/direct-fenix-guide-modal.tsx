@@ -152,11 +152,17 @@ export function DirectFenixGuideModal({
   const blockedByGuide = !!preview && preview.activeGuides.length > 0;
   const blockedByOrder = !!preview && (preview.cancelled || preview.refundedTotal);
   const blockedByStock = !!preview && !preview.stockOk;
+  // El vínculo con el catálogo de Swayp. En Lima es LA comprobación que dice
+  // algo: la ciudad no lleva control de cantidad, así que el stock siempre sale
+  // en verde y este panel anunciaba «disponible para todo el pedido» sobre un
+  // producto que Swayp no conoce (#KP134541, 15-09-2026).
+  const blockedByLink = !!preview && preview.unlinked.length > 0;
   const canCreate =
     !!preview &&
     !blockedByGuide &&
     !blockedByOrder &&
     !blockedByStock &&
+    !blockedByLink &&
     !!dispatchDate &&
     dispatchDate >= earliestDispatchDate();
   // Ojo: NO se exige `guideCode`. Exigirlo era la otra mitad del bloqueo —el
@@ -358,13 +364,25 @@ export function DirectFenixGuideModal({
                   const missing =
                     preview.stockReason === "sin_stock" &&
                     preview.uncovered.includes(li.title.trim() || "(producto sin nombre)");
+                  // Sin vínculo manda sobre el stock: es lo que de verdad
+                  // impide la guía, y en Lima lo otro nunca dice que no.
+                  const sinVinculo = preview.unlinked.includes(
+                    li.title.trim() || (li.sku ?? "").trim() || "(producto sin nombre)",
+                  );
                   return (
                     <li key={i} className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm">
                       <span className="min-w-0 flex-1 truncate text-slate-700" title={li.title}>
                         {li.title || "—"}
                         {li.quantity > 1 && <span className="text-xs text-slate-400"> ×{li.quantity}</span>}
                       </span>
-                      {preview.stockOk ? (
+                      {sinVinculo ? (
+                        <span
+                          className="shrink-0 text-xs font-medium text-rose-600"
+                          title="Swayp no tiene este producto en su catálogo: falta vincularlo en Catálogo de productos."
+                        >
+                          ✗ sin vínculo Swayp
+                        </span>
+                      ) : preview.stockOk ? (
                         <span className="text-xs font-medium text-emerald-600">✓ stock</span>
                       ) : missing ? (
                         <span className="text-xs font-medium text-rose-600">✗ sin stock</span>
@@ -380,19 +398,47 @@ export function DirectFenixGuideModal({
               <p
                 className={cn(
                   "border-t px-3 py-1.5 text-xs font-medium",
-                  preview.stockOk
+                  preview.stockOk && !blockedByLink
                     ? "border-emerald-100 bg-emerald-50/70 text-emerald-700"
                     : "border-rose-100 bg-rose-50/70 text-rose-700",
                 )}
               >
-                {preview.stockOk
-                  ? "Stock Swayp disponible para todo el pedido."
-                  : preview.stockReason === "sin_cobertura"
-                    ? "Swayp no tiene cobertura en este destino."
-                    : "Falta stock Swayp para parte del pedido. Actualiza Stock Swayp e intenta de nuevo."}
+                {/* El vínculo se dice PRIMERO: es lo que bloquea, y manda a otra
+                    pantalla que el stock. «Sin stock» se arregla en Stock Swayp;
+                    «sin vínculo» en Catálogo de productos. */}
+                {blockedByLink
+                  ? `Swayp no tiene ${preview.unlinked.length === 1 ? "este producto" : "estos productos"} en su catálogo: ${preview.unlinked.join(", ")}.`
+                  : preview.stockOk
+                    ? "Stock Swayp disponible para todo el pedido."
+                    : preview.stockReason === "sin_cobertura"
+                      ? "Swayp no tiene cobertura en este destino."
+                      : "Falta stock Swayp para parte del pedido. Actualiza Stock Swayp e intenta de nuevo."}
               </p>
             </section>
 
+            {/* La alerta, aparte del renglón por producto: sin esto el único
+                aviso era una columna a la derecha de una lista, y el botón se
+                apagaba sin decir por qué. Dice qué falta y dónde se arregla. */}
+            {blockedByLink && (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs text-rose-800">
+                <p className="font-semibold">
+                  {preview.unlinked.length === 1
+                    ? "Este producto no está en el inventario de Swayp"
+                    : "Estos productos no están en el inventario de Swayp"}
+                </p>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                  {preview.unlinked.map((nombre) => (
+                    <li key={nombre}>{nombre}</li>
+                  ))}
+                </ul>
+                <p className="mt-1.5">
+                  Sin el vínculo, Swayp no emite la guía y la caja saldría con un número que ellos
+                  no conocen.{" "}
+                  {preview.unlinked.length === 1 ? "Vincúlalo" : "Vincúlalos"} en Catálogo de
+                  productos y vuelve a abrir esta ventana.
+                </p>
+              </div>
+            )}
             {blockedByOrder && (
               <p className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">
                 {preview.cancelled

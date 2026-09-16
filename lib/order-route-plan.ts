@@ -71,6 +71,14 @@ export interface SwaypRouteCheck {
   covered?: boolean;
   stockOk?: boolean;
   uncovered?: string[];
+  /**
+   * Productos que Swayp no tiene en su catálogo (`swayp_sku_map`).
+   *
+   * Separado de `uncovered` porque son hechos distintos que se arreglan en
+   * pantallas distintas, y porque en Lima es el único que dice algo: la ciudad
+   * no lleva control de cantidad, así que `stockOk` sale siempre en cierto.
+   */
+  unlinked?: string[];
 }
 
 export interface RouteCandidate {
@@ -441,6 +449,20 @@ function swaypCandidate(input: OrderRoutePlanInput, recommended: boolean): Route
       recommended: false,
       availability: "blocked",
       reason: "Swayp no tiene cobertura local en este destino.",
+    };
+  }
+  // El vínculo ANTES que el stock: en Lima el stock nunca dice que no —la ciudad
+  // no lleva control de cantidad— y la tarjeta prometía «hay cobertura y stock»
+  // sobre un producto que Swayp no conoce (#KP134541).
+  const sinVinculo = check.unlinked?.filter(Boolean) ?? [];
+  if (sinVinculo.length) {
+    return {
+      ...base,
+      recommended: false,
+      availability: "blocked",
+      reason:
+        `Swayp no tiene en su catálogo: ${sinVinculo.join(", ")}. ` +
+        `${sinVinculo.length === 1 ? "Vincúlalo" : "Vincúlalos"} en Catálogo de productos.`,
     };
   }
   if (!check.stockOk) {

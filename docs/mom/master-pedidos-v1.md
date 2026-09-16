@@ -2256,12 +2256,49 @@ dice «este producto existe en esa bodega» y nada más:
 
 **En Lima y Callao la tabla de stock no gobierna nada: todo producto pasa la
 reja.** No hay que anotar renglones. Lo que sí se exige es el **vínculo en
-Catálogo de productos** (`codbar`), y se exige donde importa: al crear la guía
-por API, con el aviso «Falta vincular a Swayp: …». Se probó la alternativa
-—exigir además un renglón por producto en Stock Swayp— y la primera guía real de
-Lima (#KP131993) salió rechazada por «sin stock» con la tabla vacía: era una
-segunda lista que mantener para decir lo mismo que ya dice el Catálogo. Anotar
-renglones en Lima queda como opcional e informativo.
+Catálogo de productos** (`codbar`). Se probó la alternativa —exigir además un
+renglón por producto en Stock Swayp— y la primera guía real de Lima (#KP131993)
+salió rechazada por «sin stock» con la tabla vacía: era una segunda lista que
+mantener para decir lo mismo que ya dice el Catálogo. Anotar renglones en Lima
+queda como opcional e informativo.
+
+#### El vínculo se comprueba ANTES, no dentro de la llamada a Swayp
+
+Que la reja de Lima sea el vínculo tiene una consecuencia que al principio se
+pasó por alto: **si nadie lo pregunta hasta el final, la pantalla miente todo el
+rato**. El panel de guía directa anunciaba «Stock Swayp disponible para todo el
+pedido» —cierto según la regla de la ciudad— sobre un producto que Swayp no
+tiene en su catálogo. Pasó con #KP134541 el 15-09-2026: la Pulsera Magnética de
+Cobre Saludable entró con el SKU `5463456456`, y el vínculo existía para otra
+variante (`64565434`).
+
+Y lo que venía después era peor que un aviso tardío: al crear la guía, la llamada
+a Swayp fallaba con «Falta vincular a Swayp», el flujo caía al código local y
+**la guía se creaba igual**. Una caja despachada contra un número que Swayp nunca
+emitió, con el fallo contado en un aviso al final.
+
+Reglas:
+
+- El vínculo se comprueba en los **tres sitios**, con una sola función
+  (`productosSinVinculo`): la tarjeta de Swayp en la mesa de ruta, el panel de
+  guía directa y la reja del servidor al crear. Una copia del bucle por sitio
+  acabaría nombrando productos distintos en el aviso y en el rechazo.
+- El panel **nombra los productos** que faltan y **apaga el botón**. Marcarlos
+  solo en una columna a la derecha de la lista no basta.
+- **«Sin stock» y «sin vínculo» son hechos distintos y no se mezclan**: el
+  primero se arregla en Stock Swayp, el segundo en Catálogo de productos.
+  Juntarlos manda a la operadora a la pantalla equivocada. En Lima el primero
+  nunca dice que no, así que el aviso que se lee es siempre el segundo.
+- **Un vínculo que falta rechaza la guía; no cae al código local.** El respaldo
+  del código local sigue vivo para lo que sí es una limitación de Swayp —una
+  ciudad que su API no atiende—. Un hueco nuestro se arregla en dos minutos y no
+  puede despachar una caja mientras tanto. Alcance medido antes de ponerlo: de
+  141 guías Swayp directas en 60 días, 4 habrían quedado frenadas, que son
+  exactamente las que habrían salido con un número que Swayp no conoce.
+- **Mapa vacío = función apagada**, el mismo interruptor que ya gobernaba
+  `buildProductos`: una tienda que todavía no vinculó nada no se queda sin poder
+  crear guías el día del despliegue. Con al menos una entrada, un hueco es un
+  hueco.
 
 Si un día Lima pasa a contarse, se la quita del conjunto y sus renglones vuelven
 a regirse por la cantidad y por la marca propia de cada uno.
