@@ -4647,3 +4647,99 @@ El orden obligatorio evita reescribir las pantallas sobre identidades ambiguas:
 
 Cada fase debe ser compatible con Aurela y Kenku y no debe convertir una
 solicitud logística externa en un pedido comercial de Shopify.
+
+## 30. Liquidaciones 2 — hojas por dominio
+
+Plan y hallazgos en `docs/plan/liquidaciones-2.md`. Base en la migración 0167;
+código en `lib/sheets/`, `app/dashboard/liquidaciones-2/` y
+`components/sheets-board.tsx`.
+
+### 30.1 Qué es y de dónde viene
+
+El cierre de Lima vivía en un Google Sheet («MASTER KEY 2.0»): una hoja por
+repartidor, una por courier, dos hojas consolidadas por tienda con una columna
+por repartidor y un resolver de estatus hecho con COUNTIFS. El cruce del
+16-09-2026 contra la base mostró que los pedidos y montos de Shopify coinciden
+casi al 100 %, pero que **Lima vivía en la hoja y Provincia en Kapta**: de
+4.764 pedidos entregados por repartidor según la hoja, Kapta no tenía ninguno
+como entregado por repartidor; y 2.563 entregas de Provincia que Kapta conoce
+por las APIs estaban «Pendiente» en la hoja. Liquidaciones 2 junta las dos
+verdades en hojas configurables dentro de Kapta.
+
+### 30.2 Dominio, hoja y columna
+
+- **Dominio**: el grupo que define el contrato. Clave de fila (pedido, guía,
+  punto de ruta, valor de catálogo, periodo), vocabulario de estados con su
+  equivalencia en Kapta y plantilla de columnas. Son seis: Pedidos, Catálogos,
+  Reparto propio, Courier externo, Consolidado e Indicadores.
+- **Hoja**: instancia del dominio (Roy, Aliclik Lima, Consolidado · Aurela).
+  Hereda la plantilla y puede añadir columnas manuales; no puede romper el
+  contrato. Las de Pedidos y Consolidado se crean una por tienda.
+- **Columna**: cuatro tipos y nada más. `campo` lee del pedido y es de solo
+  lectura; `manual` se teclea y deja historial; `lookup` busca en otra hoja;
+  `derivada` aplica una regla con nombre. No existe un motor de fórmulas: lo que
+  en la hoja era una fórmula por fila aquí es una regla probada.
+- Alexis y Urpi son **couriers externos** aunque en el Excel tuvieran hoja de
+  puntos. Reparto propio son los motorizados de Grupo GF Courier.
+
+### 30.3 Estados por dominio y equivalencia con Kapta
+
+Cada dominio tiene una lista cerrada de estados. Cada estado equivale a **un
+estado operativo** de Kapta (§6) —el general se deriva de ahí— y declara su
+efecto sobre el pedido:
+
+| Efecto | Qué hace | Aporte al Consolidado |
+| --- | --- | --- |
+| informa | No cierra nada; registra el intento o el avance | T |
+| entrega | Propone el cierre como entregado, con la fila como evidencia | E |
+| devolucion | Propone el cierre como devuelto | D |
+| anulacion | El courier lo da por cancelado. **No anula el pedido Shopify** (§9.4) | T |
+
+Reglas:
+
+1. Lo que llega de una hoja o de un archivo se normaliza (mayúsculas, sin
+   acentos, sin puntuación final) y se busca entre los **alias de la hoja**. Cada
+   hoja tiene los suyos porque Roy no escribe como Aliclik.
+2. Un valor sin equivalente **no se adivina**: se guarda como alias sin
+   equivalente, la fila queda a revisión y el alias aparece en la configuración
+   con una sugerencia que nadie aplica sola. Es la misma disciplina que Tanders.
+3. Mapear a `entrega` no cierra el pedido por sí solo. El cierre pasa por la
+   puerta única a entregado (§11.4). Un pedido entregado por el repartidor y
+   anulado en Shopify queda como observación abierta, nunca se resuelve solo.
+4. Las equivalencias se editan desde la pantalla por quien tiene
+   `sheets.manage`. La semilla (lib/sheets/statuses.ts) es el vocabulario real
+   del Excel más lo que ya traducen los adaptadores de Aliclik, Shalom y
+   Tanders; una vez sembrada, manda la base.
+
+### 30.4 El Consolidado
+
+Una fila por pedido de la tienda. Cada hoja de Reparto propio o Courier externo
+aporta una marca por pedido —E entregado, T en tránsito o con intento, D
+devuelto, 0 nada— y el Estatus se resuelve con la precedencia de la hoja
+«Revisar»: **Entregado > Devuelto > Anulado > Tránsito > Pendiente**, con una
+diferencia deliberada: «Anulado» solo lo pone Shopify. Lo que Kapta ya sabe del
+pedido (su estado general, que integra las APIs de Provincia) entra como un
+aporte más, así que Provincia está cubierta desde el primer día.
+
+Columnas derivadas: zona (catálogo por distrito; si el distrito no está, la
+cobertura de Kapta decide), «# Motos Lima» (intentos, solo en pedidos abiertos
+de Lima), «Entregado por» y «Diferencia», que dice cuando la hoja y el Master no
+coinciden. La diferencia se muestra; no se corrige sola.
+
+### 30.5 Observaciones de cuadre
+
+Cuando un valor externo no coincide con el de Kapta —monto, estado, pedido,
+courier— se abre una observación con la hoja y fila de origen, el pedido, los
+dos valores, la diferencia, un motivo del catálogo y una nota. Resolver exige
+motivo; con «Otro», exige nota. El catálogo inicial sale de lo que mostraron
+los datos: descuento en puerta, cobro parcial con adelanto, producto adicional
+o faltante, redondeo del courier, delivery cobrado aparte, anulado en Shopify
+tras entregar, error de transcripción, estado sin equivalente, pedido no
+encontrado, otro.
+
+### 30.6 Historial y permisos
+
+Cada celda manual deja una fila append-only en `sheet_cell_history` con valor
+anterior, nuevo, actor y motivo. `sheets.edit` (vendedora, admin, owner)
+escribe celdas y abre o resuelve observaciones; `sheets.manage` (admin, owner)
+configura dominios, hojas, columnas, estados y alias. Un viewer solo lee.

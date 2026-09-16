@@ -1,0 +1,4897 @@
+[
+{
+"distrito": "San Borja",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "CERCADO DE LIMA",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "El Agustino",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Jesús Maria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "la Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Victoria",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Los olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Borja",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Luis",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santiago de Surco.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "ate vitarte",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Cercado de Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "los olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": ". Del. Agustino",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": ". San Borja.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": ". San isidro.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": ". San Juan de Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": ". San Luis",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": ".El Agustíno",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": ".Santiago de Surc",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": ".Santiago de Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "' ' San Juan De Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "' San Juan De Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "'Lima/Lima/Miraflores'",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "'lima/lima/san Miguel'",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "'Lima/Lima/Santiago de surco'",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "(SMP)San martin de porras",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": ") Santiago de Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "2 san juan de Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "2 San Miguel",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "5 Lurigancho Chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "9 la victoria",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "9 Pueblo Libre",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "A Una Cuadra Del Ovalo Santa Anita",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "a victoria",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Aa Hh San Miguel Sjl",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Aan juan Miraflores",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Abancay",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Abancay Con Leticia",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Abancay. Yparuro",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "ACerro Coloradorequipa",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Agustin",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Agustino",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Al Costado Del Reservorio De Agua Potable De La Trinchera Alta Moyopampa Chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ancon",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate Salamanca",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate Vitarte",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate Ate LMA Perú",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate huaycan",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "al costado de plaza lima sur",
+"region": "",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate santa clara",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate valdiviezo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Até vetarte",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate vitare",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "ate vitarte ceres",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate Vitarte Salamanca",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate vitarte santa clara",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate vitarye",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate-vitarte",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate. Vitarte",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Aurora Miraflores",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Ate-lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Av circunvalasion Huachipa",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Av Higuereta Con Caminos Del Inca Y Velasco Astete",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Av Los Frutales 853 Recidencial Monterroso La Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Av Pedro Venturo 195 Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Av. Benavides 525 Miraflores",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Av. Juan de Aliaga 702 Dpt. 1201",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Av. Pezet 131 San Isidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Av. Victor Malasquez Km.8 Pachacamac",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Av.23 de diciembre #109 Villa el Carmen distrito Independencia",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "B m t",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Barramca",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Barranca",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Aurora- Miraflores- Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Barranca provincia Barranca",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Barrancas",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Barranco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Barranca - Lima",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Barranco* estoy mañana- oago con 100 para el vuelto.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Breña",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Breña.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Bteña",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Calle jose olaya 740 chorrillos",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Calle La Esparceta 115 surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Calle Lido- 325 Sol de la Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Calle Los Olivos 160- La Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Campoy",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Canete",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Canta",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Cañete - imperial",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Cañete imperial",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Cañete san vicente",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Carabahllo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Carabaillo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Carabaylllo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Carabayllo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Carabayllo.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Caraybllo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "CARBAYLLO",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Barranco Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Cañete- dpto Lima",
+"region": "Cañete- dpto Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Cecado de lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "centro d lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "centro de lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Centro de Lima-",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Centro lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "centro lima.. e",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Cercado",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Cercada de lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Cercadi de lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "cercado de Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "cercado de lima .",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Cercado De Lima jiron Leticia cuadra 9 nro 961",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "cercado de lima-",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Cercado de lima.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Cercadodelima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "cercado de Lima..",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Cerro azul",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Cerro Azul cañete",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "CHACARILLA SURCO",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Chacarilla - Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Chacarilla- SAN BORJA",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Chacarilla. Santiago De Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Chacarrila",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Chaclacayo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Chalon Chancay",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Chancay",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Chancay Huaral",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Cercado de limas",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Chiclayo",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Chilca.Cañete",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Chorillos",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Chorriillos",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "chorrillo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Chorrillos",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Chorrillos Al Costado Del Colegico Reyes Rojos",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Chorrillos La Campiña",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "cercado lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Chorrillos.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Chorrios",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Chosica lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Chosica luringancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Chosica-Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Cieneguilla",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "cineguilla",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Comad",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Comadh",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Comas",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Comas (necesito talla 42)",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Comas Alt Mega 80 Frente A Pizza Raúl Casa De 2 Pisos Color Marrón Con Anaranjado Y Puertas Negras",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "comas Collique",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Cercdo de Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Comas no",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Corpac Saun Isidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Corrillos",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Dan Isidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Dan juan de miraflores",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Dan Martin de Porres",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Dantiago de Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Distrito de Ate",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Distrito el agustino",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Distrito Mala Agencia Shalom",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Distrito: San Miguel",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "E SAN MARTIN DE PORRES-",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "El agustini",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "El Agustino",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Chancay-Huaral-Lima",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Chorrillos- Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "el Agustino.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "El rimac",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "El sgustino",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "huachipa",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Comas Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Huacho",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Huacho Provincia: Huaura",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "El Agustino - Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Huaral",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "El Agustino Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Huaraz",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Huarochiri",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Huachipa lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "huaycan",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "i el agustino",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ia molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Ica",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "illa maría del trinfo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Independecia",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Independemcia",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Independencia",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "HUACHO/ HUAURA/ LIMA",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Independencia tahuantinsuyo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "iSan Borja",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Jeais Maria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Jesus Maria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Huaral Huaral Lima",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Jesús Maria- Lims",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Jesús Maria.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Jesus Marialima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Jesus Maris",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "jesusmaria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Jicamarca anexo 22",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Huarochiri Santa Eulalia Región Lima",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "L A VICTORIA",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "l Los Olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "l los olivos -",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "LA MOLINA.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La victoria",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "La Boriosedad pro los olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Mo|ina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "la molina -",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Independencia - Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Molina Calle Río Urubamba Mz I- Lote 11 Urb El Valle.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Jesus Maria / Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Jr Las Sensitivas 531 Urbanización Las Flores De Lima Distrito San Juan De Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "La Molina Vieja",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Molina - Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Molina La Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "la Molina Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La molina8",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La molinq",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Molins",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La planicie La Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La punta",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La vicroria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Victiria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La victori",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Molina Vieja - Lima -peru",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Molina- Lima- Perú",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "la victoria _ santa Catalina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Victoria Auascalientes",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Molina-lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Victoria Sta Catalina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Victoria- Apolo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Victoria.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Victoriajesus Maria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Victorua",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Viñas Atras De Las Crucetas",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "la visctoria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La vixtoria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La vuctoria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La. Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La.Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Victoria Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La victoria _ lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Chorrillos",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima Miraflores",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima _ Cercado",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima _ Chorrillos",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "LIMA - BARRANCO",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima - Chorrillos",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "LIMA - Huaral",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Lima - La Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima - Los Olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima - Miraflores",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima - Puente Piedra",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima - San Isidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima - San Martín De Porres",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima - San Miguel",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima - Santiago De Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima - Stgo de Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima - Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima - Villa El Salvador",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima -carabayllo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima ..villa María Del Triunfo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima (La Molina)",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima / Cañete / Imperial / Cañete Imperial",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Lima / Cañete / Mala / Mala",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Lima / Huaral / Chancay / Chancay",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Lima / Huaura / Huacho / Huacho Co",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Lima / San Luis",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima /barranco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Ate",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima ate-huaycan",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima Barranco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Breña",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Callao",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Carayllo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima centro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Cercado",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima cercado de lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Cercado.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Cercado. Referencia Entre Av Abancay Y Jr Varlos Zavala.3 Ra Cuadra Deav Grau Costado De Hisp Emergrnvias De Essalud",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Cetcado",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Chacarilla San Borja",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima chaclacayo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima Chorrillo San Genaro Manz M1 Lote 3 Av Principal",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima Comas",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Distrito S.m.p",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Distrito De La Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima distrito san juan de Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima distrito santa anita",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima El Agustino",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima La Victoria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Limalurigancho chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima Lince",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima los Olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Lurigancho chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima Lurin",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima Magdalena",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Pueblo Libre",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Puente Piedra",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima Rímac",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima S.m.p",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima San Borja",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima San Borja Norte",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima San Isidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima san juan de lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima San Martin De Porras",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima San Miguel",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Santa Anita",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima Santiago Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Santiago De Ssurco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Santiago De Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima SMP",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Surcosurco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima Villa El Salvador",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima Villa María Del Tfo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima villa María del triunfo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima- Miraflores",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima- ate",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima- Carabayllo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima- Comas",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima- Jesús María",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima- la Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima- Lurin",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima- Magdalena del Mar",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima- San Borja",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima- San Isidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima- San Juan De Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima- San. Juan de Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima- Santiago De Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima- Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima-los Olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima-san juan de miraflores",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima-san Martin De Porres",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima-Villa El Salvador",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima. Comas",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima. La Victoria",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima. Sjl",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima..la Victoria",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima..Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima/ Puente Piedra",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima/jesús Maria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima/la Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima/Lima/Ate",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima/Lima/Comas",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima&lima&los Olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Limacomad",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Limacomas",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "LimaLince",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Limapunta Hermosa",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Limq",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lims",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lims /villa Maria Del Triunfo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Limsanta anitaa",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "lince",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lince Calla Garcilaso De La Vega 2088",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "LimaSan Isidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lios olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lisa Miguel ma",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Llima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lod Olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Loma",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Los 0livos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Los Olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Los alivios",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "los alivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Limasanta anita",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Los olivos de pro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "LimaSurco.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Los Olivos tercera etapa el Trebol",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Los Olivos-",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "los Olivos.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Los olivosl",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Los Olvos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Los. Olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Los. Olivos De",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lpachacamac",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lps olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lssn Martín de Porres",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lueigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Luma",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lunahuana Cañete",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Luri",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lurigancho - Chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lurigancho (Chosica)",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lurigancho chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lurigancho Chosica A 5 Cuadras Del Parque Central Lurigancho Chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lurigancho Chosica.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lurigancho- chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lurigancho-Chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lurigancho.chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "lurigancho/chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "lurin",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lurín - km. 40",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lurín de",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Magadelena del Mar",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Magdalena",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Magdalena de mar",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Magdalena del mar",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lince Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "magdalena del mar-",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Magdalena Del Mar.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Los Olivos - Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Los Olivos Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Magdalena-del Mar",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Magdalena.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Magdalena(entre Sucre Y Junin)",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Mala",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Manchay",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Mandalena",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miaflores",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflires",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflore",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflore color gris 40-41",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflore Color Gris 42-43",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflored",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflores",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Magdalena del mar Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Magdalena Del Mar. Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflores Alt 20 De Benavides",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflores l",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Magdalena Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflores - Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflores -Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflores.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflores Lima Perú",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflores9",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflorez",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflorred",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miraflorss",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miralfores",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Miralores",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Mireflores",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Mirsflores",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Monterrico",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Monterrico Norte San Borja",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Monterrico Norte. San Borja",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Monterrico SURCO",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "n pueblo libre",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "n san Juan de Luriganch",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Olivos",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Ovalo Del Valle",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Oyon",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Pachacamac",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Pachacámac -manchay",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Miraflores- Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Pachacamac manchay mzx lt 7 pedregal",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Pachacamacn",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Pachacamc",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Miraflores-lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Perla Callao",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Piente piedra",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Prolongación Cangallo 670 La Victoria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "MIRAFLORES. LIMA",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Provincia cañete distrito San vicwnte",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Provincia HUAURA - Distrito Huacho",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Pachacamac lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Provincial Cañete Distrito Imperial",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Pte piedra",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Pedro Tejada 122 Villa Maria Del Triunfo. Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Publo Libre",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Pueblo Libre",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Prov. HUAURA - Distrito Huacho- Dpto.Lima",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Pueblo Libre.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Pueblo LibreAltura De La 3 De La Bolivar",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Pueblo Librr",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Pueblo Librw",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Pueblo Lubre",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Pueblo. Libre",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Puente piedra",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Provincia Lima Distrito San Isidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Puente piedra zapallal",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "puente piedra.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Puerto Supe. Provincia Barranca",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Puno",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Punta Hemosa",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Punta hermosa",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Punta Negra",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Rimac",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Rimac el bosque",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Pte Piedra Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Pueblo Libre- Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Puente piedra lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "S J L",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "S J L.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "S J.lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "S M P",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "S-J-L",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "S. J. L.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "S. M. P",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "S. M. P.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Rimac lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "S.j de lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "S.J.l",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "S.J.L-",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "S.J.L.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "s.j.m",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "s.j.miraflores",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "S.m. p",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "S.M.P",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "S.M.P.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "S08antiago de surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sa Juan De Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Salamanca",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Salamanca ate",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Salamanca de Monterrico ( Ate)",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Salamanca monterrico",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Salamanca-ATE",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Salamanca(Ate)",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sam Borja",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sam Juan de lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sam Martín de Porres",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Samtiago de Surco-",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Juan De Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Martin de Porres",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Miguel",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San - Borga",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San anita",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Antonio de Chaclla",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "San Antonio de Huarochiri",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "San Bartolo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "SAN BOJA",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Borja .",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "SAN BORJA .QUIERO DOS SOMBREROS UN BEIIGS Y UN COLOR NEGRO.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Borja Dejar al Guardián el tienen el dinero",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Rímac- Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Rimac-lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San borja norte",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Borja Sur",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "san borja-",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "S. M. P. Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Borja-sur",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Borja.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Borjs",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San cosme la victoria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San de lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Iaidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Ididro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Iisdro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isdro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "SAN ISIDRI",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isidrio",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Borja Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isidro 15036",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isidro Jesús maria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isidro lilit/l",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Borja Lima.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isidro por el golf",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isidro San Isidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Borja- Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isidro - Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isidro.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isidroda",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San isidrono",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isidto",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "san isisdro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isisro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Isudro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San juan de Miraflores",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San juan d lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan de luriganho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan de de Miraflores",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan de lurgancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Isidro Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Juan de lurigancho 2 canto grande",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan De Lurigancho Bcp",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan De Lurigancho Chosica",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan de Lurigancho Jicamarca",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Isidro Urb.limatambo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Juan de Lurigancho.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San juan de lurigancho.... Zárate",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan de Luriganchoa",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San juan de lurigancjo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "SAN JUAN DE LURIGANGNCHO.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan De Lurijancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San juan de lurugancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan de meraflores",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San juan de mifaflores",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San juan de miraflore",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan de Miraflores ..",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "SAN JUAN DE MIRAFLORES A",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan de Miraflores.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan De Miraflores. Frente Al Cementerio Pnp-pte Alipio Ponce",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan de Miraflors",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan de miraglores",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan de murigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan del hurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan delurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan miraflores",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Luis",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Isidro- Lima- Perú.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Luis Canadá con Rosa toro Jr Murcia 359",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan De Lurigancho - Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan De Lurigancho Lima San Juan De Lurigancho Lima Lima San Juan De Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Martin de Porras",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Martín de. Porres",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Martín d Porres",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Martin de",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San martin de porras (SMP)",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Luis . Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Martin De Porras.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San luis Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Martin De Porres.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "san Martin de Porres|",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Martín de Porresefectivo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Martín Límite Con Callao",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Martin porras",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Martin Porres",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Martin se porras",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San meguiel",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Miguel maranga",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Luis. Lima.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Miguel.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San muguel",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San niguel",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Norja",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Usidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Usudro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Vicente",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "San Vicente Cañete",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "San Vicente De Cañete",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "SAN VICENTE DE CAÑETE.",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "San Vicente del Caguán",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "SAN. BORJA",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San.juande Lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sanborja",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "SanBorja Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sanborja Norte",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sangiago De Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sanguan de lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sanjuan de luricancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sanjuan de lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "SANJUAN DE MORAFLORES",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sanluis",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "SanMartin de Porres",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sanmiguel",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santa anita",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Martin De Porras Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "santa Anita.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santa Anitac",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santa Beatriz",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Martin De Porres-lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santa catalina - la victoria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santa María - huacho",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Santa María de Huachipa",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santa maría del mar",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santa Maria huacho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santa Patricia segunda Etapa. La. Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santa Rosa Callao",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santa Rosa ancón",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santa rosa de ancon",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "santa rosa de Quives",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santa Rosafrente A La Pi",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "SANTAANITA",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santamaría Huacho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santanita",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santiago De Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santiago de aurco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santiago De Durco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San Miguel_ Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santiago De Surco 15023",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "santa Anita Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santiago De Surco Por Las Dunas Mercado",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santiago De Surco Viejo Entre El Cruce Vicus Y Doña Delmira",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santiago de Surco-",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santiago de Surco.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santiago de Surgo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santiago de Survo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santiago Fe Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santiago surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santiagodesurco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santigo de surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sat anita",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sector 1grupo 18 Mz C Lote 18",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sector 3 Grupo 28 Mz L Lote 2 Villa El Salvador",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sgo de Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Si San Isidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sigo.de surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sirquillo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "sjl",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sjl Mz C-7 Lte 27",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "SJL-",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "SJL.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sjlurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "sjm",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Smp",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Smp con av peru",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Smp en color beyge porf",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "SMP y/o CALLAO",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "SMP.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santa Beatriz cercado de lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Smplima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sn Isidro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sn juan d lurigancho",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Snatiago de surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sol De La Molina Wong La Planicie",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Ssntiago De Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "STA anita",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santiago De Surco - Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sta clara",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Stg de Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "stgo de surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Stgo. de Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sto. De Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Supe",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Supe pueblo",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Supe Puerto",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Supe Puerto.",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "Surc",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surco .",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santiago de surco Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Smp. Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surco /Chacarilla",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surco Altura Puente Amauta",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surco Chacarilla",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surco Chacarilla del Estanque",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surco higuereta",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surco monterrico",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surco pueblo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surco Viejo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surco- Chacarilla",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surco.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surco.....color de cartera guienda",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surcosurco",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surgo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surquillo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surquillo jirón",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surqullio",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Surqullo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Suwuillo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Tahuantinsuyo- Independencia",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "v m t",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "V. M. T.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "V.M.T",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "V.m.t tablada",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "v.m.t.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Vegueta",
+"region": "Lima",
+"zona": "Provincia"
+},
+{
+"distrito": "ventanilla",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ventanilla - Callao",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ventanilla- Callao",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "VES",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Victoria",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Vila el salvador",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "VILLA MARIA DEL TRIUNFO",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa salvador",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa del Salvador",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa El Salbador",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa el salvador",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa el salvador .",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa el Salvador i",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sta beatriz Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Villa El Salvador.",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "villa el salvadro",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa el. Salvador",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa Las Flores Mz I Lote 9",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa maria -tablada de lurin",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa Maria De Triunfo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa María del Trinfo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa Maria del Triunfo cercado",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa María del triunfo José Gálvez",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa María del Triunfo-",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "villa maria del. triunfo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa María Tf",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa Maria Triunfo- San Gabriel",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa Marria del Triunfo",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "villa salvaador",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villas El Salvador",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Virtarte",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Vitarte",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Vitatarte",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "VMT",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Zárate",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Zárate- SJL",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Surco - Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Santa Rosa",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Amazonas",
+"region": "Amazonas",
+"zona": "Provincia"
+},
+{
+"distrito": "Áncash",
+"region": "Áncash",
+"zona": "Provincia"
+},
+{
+"distrito": "Apurímac",
+"region": "Apurímac",
+"zona": "Provincia"
+},
+{
+"distrito": "Arequipa",
+"region": "Arequipa",
+"zona": "Provincia COD"
+},
+{
+"distrito": "Ayacucho",
+"region": "Ayacucho",
+"zona": "Provincia"
+},
+{
+"distrito": "Cajamarca",
+"region": "Cajamarca",
+"zona": "Provincia"
+},
+{
+"distrito": "Cuzco",
+"region": "Cuzco",
+"zona": "Provincia"
+},
+{
+"distrito": "Huancavelica",
+"region": "Huancavelica",
+"zona": "Provincia"
+},
+{
+"distrito": "Huánuco",
+"region": "Huánuco",
+"zona": "Provincia"
+},
+{
+"distrito": "Junín",
+"region": "Junín",
+"zona": "Provincia"
+},
+{
+"distrito": "La Libertad",
+"region": "La Libertad",
+"zona": "Provincia"
+},
+{
+"distrito": "Lambayeque",
+"region": "Lambayeque",
+"zona": "Provincia"
+},
+{
+"distrito": "Loreto",
+"region": "Loreto",
+"zona": "Provincia"
+},
+{
+"distrito": "Madre de Dios",
+"region": "Madre de Dios",
+"zona": "Provincia"
+},
+{
+"distrito": "Moquegua",
+"region": "Moquegua",
+"zona": "Provincia"
+},
+{
+"distrito": "Pasco",
+"region": "Pasco",
+"zona": "Provincia"
+},
+{
+"distrito": "Piura",
+"region": "Piura",
+"zona": "Provincia"
+},
+{
+"distrito": "San Martín",
+"region": "San Martín",
+"zona": "Provincia"
+},
+{
+"distrito": "Tacna",
+"region": "Tacna",
+"zona": "Provincia"
+},
+{
+"distrito": "Tumbes",
+"region": "Tumbes",
+"zona": "Provincia"
+},
+{
+"distrito": "Ucayali",
+"region": "Ucayali",
+"zona": "Provincia"
+},
+{
+"distrito": "Cusco",
+"region": "Cusco",
+"zona": "Provincia"
+},
+{
+"distrito": "Mariscal Cáceres",
+"region": "Mariscal Cáceres",
+"zona": "Provincia"
+},
+{
+"distrito": "Callao",
+"region": "Callao",
+"zona": "Provincia"
+},
+{
+"distrito": "Satipo- Junín",
+"region": "Satipo- Junín",
+"zona": "Provincia"
+},
+{
+"distrito": "Yauli",
+"region": "Yauli",
+"zona": "Provincia"
+},
+{
+"distrito": "Chupaca",
+"region": "Chupaca",
+"zona": "Provincia"
+},
+{
+"distrito": "Por segunda entrada Palao",
+"region": "Por segunda entrada Palao",
+"zona": "Provincia"
+},
+{
+"distrito": "Ilo",
+"region": "Ilo",
+"zona": "Provincia"
+},
+{
+"distrito": "Cutervo",
+"region": "Cutervo",
+"zona": "Provincia"
+},
+{
+"distrito": "Sanignacio",
+"region": "Sanignacio",
+"zona": "Provincia"
+},
+{
+"distrito": "Chachapoyas",
+"region": "Chachapoyas",
+"zona": "Provincia"
+},
+{
+"distrito": "trujillo",
+"region": "trujillo",
+"zona": "Provincia"
+},
+{
+"distrito": "Surco / Lima",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Huancayo",
+"region": "Huancayo",
+"zona": "Provincia"
+},
+{
+"distrito": "San Román",
+"region": "San Román",
+"zona": "Provincia"
+},
+{
+"distrito": "Pisco",
+"region": "Pisco",
+"zona": "Provincia"
+},
+{
+"distrito": "Del Santa",
+"region": "Del Santa",
+"zona": "Provincia"
+},
+{
+"distrito": "Huamanga",
+"region": "Huamanga",
+"zona": "Provincia"
+},
+{
+"distrito": "Villa El Salvador Lima",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Angaraes",
+"region": "Angaraes",
+"zona": "Provincia"
+},
+{
+"distrito": "Quispicanchis",
+"region": "Quispicanchis",
+"zona": "Provincia"
+},
+{
+"distrito": "Constitucional del Callao",
+"region": "Constitucional del Callao",
+"zona": "Provincia"
+},
+{
+"distrito": "Manantay",
+"region": "Manantay",
+"zona": "Provincia"
+},
+{
+"distrito": "Jaén",
+"region": "Jaén",
+"zona": "Provincia"
+},
+{
+"distrito": "Provincia Constitucional del Callao",
+"region": "Provincia Constitucional del Callao",
+"zona": "Provincia"
+},
+{
+"distrito": "Satipo",
+"region": "Satipo",
+"zona": "Provincia"
+},
+{
+"distrito": "Hualmay",
+"region": "",
+"zona": "Provincia"
+},
+{
+"distrito": "Huaura",
+"region": "",
+"zona": "Provincia"
+},
+{
+"distrito": "Av Pachacutec pasando TOTUS de tablada",
+"region": "",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Espalda de tottux- Dela Pachacútec distrito Villa maria",
+"region": "",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Oracio Ceballos",
+"region": "",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "cercado d Lima",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Entre Rosa Toro y Canadá",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": ". Ref.altura de las cuadras 16 y 17 Av.Angamos Surquillo.",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "altura de la 40 de la Avda Aviación",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Villa El Salvador- entre Avenida Modelo y El Álamo",
+"region": "",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Entre Washington y av. Wilson",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "real plaza de pro",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "ALTURA DE CUADRA 25 DE AV . LA MARINA",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Av Emilio Cavenecia 151 Ofic 511 Santa Cruz Miraflores",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Urb Las Acacias La Molina",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sayan",
+"region": "",
+"zona": "Provincia"
+},
+{
+"distrito": "Nuevo Imperial",
+"region": "",
+"zona": "Provincia"
+},
+{
+"distrito": "San juandelurigancho",
+"region": "",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San juan de lurigan cho",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": ". El agustino",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "ate vitartes",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate.vitarte",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ate/Santa Clara",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Campiña- Chorrillos",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Cercado LIMA.",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Distrito: manchay-pachacamac- Lima",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Choriillos",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Chorrilos",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Jesús María - Lima",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Esta entre la av colectora con la av metropolitana en santa anita",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Jockey Plaza",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Calera Surquillo",
+"region": "Lima",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La campiña chorrillos",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La molina la Planixie",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Perla",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "la Vitoria",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Mayorazgo IV etapa Ate",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Mi Peru",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Mi Perú ventanilla",
+"region": "Lima Callao",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Mirafflores",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Mz 159 lt 32 AAHH smp los olivos",
+"region": "Lima (departamento)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Pachamac",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Pueblo Libre Lima Perú",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "punte piedra",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Purblo libre",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "S.J L",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Martin de portes",
+"region": "Lima (departamento)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "SJ.L",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Surco-",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Tablada dr lurin",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ventanilla Callao",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa El Salvador - Lima",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "villa el triunfo",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa María",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa María del triunfo.",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "villas de Ancón",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "z San Isidro",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Urbanización. SanJuan Masias CLlao",
+"region": "Callao",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "",
+"region": "Callao",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Perla.",
+"region": "Callao",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Mi Perú-Ventanilla",
+"region": "Callao",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Reynoso Carmen de la Legua",
+"region": "Callao",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Carmen de la Lengua",
+"region": "Callao",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "ate-Vitarte",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "puente piedra",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "villa maría del triunfo",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "el agustino",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "6 pueblo libre",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "are Vitarte",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Barrranco",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Calllao",
+"region": "Lima (departamento)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Carabaillo Kilómetros 22",
+"region": "Lima",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Carabayllo. Partir Del Km .22.de Tupac Amaru",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "centro de limaa",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Chorillos Lima",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Chosica- Lurigancho",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Cieneguilla Gmail",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Cienguilla",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Distrito de comas",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Distrito san Miguel Jr libertad 1642",
+"region": "Lima (departamento)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "e san juan de lurigancho",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Frente Al Hospital.maria Axiliadora Sjm Jusn De Miraflores",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "huaycan ate",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Jesús María Lima de",
+"region": "Lima (departamento)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "jeuss María",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "jicamarca",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima -ate",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima Sercado",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima-la Molina",
+"region": "Lima (departamento)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Limalurigancho chosica",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "LuLurin",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lutigancho-chosica",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Miraflores Altura 10 Y11 Av Pardo",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "P pirdrs",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Puente pidra",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Puente puedra",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Punta Negra- Perú",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Boeja",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "San del lurigancho",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan de Lurigancho-",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San Juan De Lurigancho- Lima.",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "San juan delugancho",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "san Luis.",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sanj De Lurigancho Altura Metro1 Santa Rosa La",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Sanjuan delurigancho",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santa Anita Por El Colegio Daco Oliveros",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Santa María",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Servando de Lima",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Sta. Anita",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Ventanilla Pachacutec",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Victoria Lima",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Villa el salcador",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "villa Maria t.",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Zapallal",
+"region": "Lima (departamento)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Carmen de la legua",
+"region": "Callao",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima",
+"region": "Lima (departamento)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "La Convencion",
+"region": "Lima (provincia)",
+"zona": "Provincia COD"
+},
+{
+"distrito": "Lima / Cañete / San Vicente De Canet / Cañete Co San Vicente",
+"region": "Lima (departamento)",
+"zona": "Provincia COD"
+},
+{
+"distrito": "Cajatambo",
+"region": "Lima (departamento)",
+"zona": "Provincia sin COD"
+},
+{
+"distrito": "Pucusana",
+"region": "Lima (departamento)",
+"zona": "Provincia COD"
+},
+{
+"distrito": "huaraz _ ancash",
+"region": "Lima (provincia)",
+"zona": "Provincia COD"
+},
+{
+"distrito": "Lima / Huaura / Huacho / Salaverry Huacho Co",
+"region": "Lima (departamento)",
+"zona": "Provincia COD"
+},
+{
+"distrito": "Yauyos",
+"region": "Lima (departamento)",
+"zona": "Provincia sin COD"
+},
+{
+"distrito": "Tarapoto",
+"region": "Lima (provincia)",
+"zona": "Provincia COD"
+},
+{
+"distrito": "Chancay-Huaral - Lima",
+"region": "Lima (departamento)",
+"zona": "Provincia COD"
+},
+{
+"distrito": "Lima lima lima",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima-callao- callao",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Ate vitarte -huaycan",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Lima / Barranca / Paramonga / Paramonga",
+"region": "Lima (departamento)",
+"zona": "Provincia COD"
+},
+{
+"distrito": "6 la victoria",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "cercadoLima",
+"region": "Lima (provincia)",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Zúñiga",
+"region": "Lima (departamento)",
+"zona": "Provincia sin COD"
+},
+{
+"distrito": "o Ate vitarte",
+"region": "Lima (provincia)",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Quinta",
+"region": "Lima (departamento)",
+"zona": "Provincia sin COD"
+},
+{
+"distrito": "Medellin",
+"region": "Callao",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Bellavista",
+"region": "Callao",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Lima _Callao _villa Mercedes sarita colonia",
+"region": "Callao",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Carmen De La Legua Reynoso",
+"region": "Callao",
+"zona": "Lima Centrico"
+},
+{
+"distrito": "Pachacútec - ventanilla",
+"region": "Callao",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "Oquendo",
+"region": "Callao",
+"zona": "Lima Periferica"
+},
+{
+"distrito": "La perla alta",
+"region": "Callao",
+"zona": "Lima Centrico"
+}
+]

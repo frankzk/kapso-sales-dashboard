@@ -685,6 +685,27 @@ Excel/CSV**, y las dos entran por el mismo sitio.
 - Subir dos veces el mismo archivo **no duplica nada**: se corta por hash y
   devuelve la liquidación que ya existía.
 
+## 5k-bis-2. Liquidaciones 2 (hojas por dominio)
+
+`/dashboard/liquidaciones-2`. Hojas configurables sobre los pedidos, con
+dominios (Pedidos, Catálogos, Reparto propio, Courier externo, Consolidado,
+Indicadores), estados por dominio con equivalencia a los estados de Kapta,
+historial por celda y observaciones de cuadre. Plan e iteraciones en
+`docs/plan/liquidaciones-2.md`; reglas en el MOM §30.
+
+1. **Migración `0167_liquidaciones2_hojas.sql`**, a mano, antes del código.
+   Crea nueve tablas nuevas y no toca ninguna existente.
+2. La primera visita de un admin/owner siembra la organización: dominios,
+   estados, el catálogo de zonas (979 distritos del Excel) y una hoja de
+   Pedidos y de Consolidado por tienda. Idempotente: el botón «Crear hojas que
+   falten» repite lo mismo para una tienda conectada después.
+3. **Permisos**: `sheets.edit` (vendedora, admin, owner) edita celdas y
+   observaciones; `sheets.manage` (admin, owner) configura hojas, columnas,
+   estados y alias.
+4. Las hojas de Pedidos y Consolidado se leen con el service role de
+   `order_master` (0053) filtrando por las tiendas accesibles; el resto de
+   tablas tiene RLS propia.
+
 ## 5k-ter. Rutas de reparto (motorizados propios)
 
 Sección propia (`/dashboard/rutas`) para el coordinador y una pantalla aparte
