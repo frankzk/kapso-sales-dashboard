@@ -90,7 +90,7 @@ export const PERMISSIONS = [
   // Liquidaciones de motorizados
   "settlements.manage", // cargar liquidaciones y corregir vínculos
   "settlements.close", // congelar el pago al motorizado: no se deshace
-  // Liquidaciones 2 (0167, MOM §30). `sheets.edit` escribe celdas manuales y
+  // Liquidaciones 2 (0168, MOM §30). `sheets.edit` escribe celdas manuales y
   // abre/resuelve observaciones de cuadre; `sheets.manage` configura dominios,
   // hojas, columnas y equivalencias de estado. Configurar cambia lo que ven y
   // calculan todas las hojas, por eso queda en admin/owner.

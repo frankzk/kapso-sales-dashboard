@@ -80,7 +80,7 @@ function navItems(
     { href: "/dashboard/productividad", label: "Productividad", icon: IconHeadset },
     { href: "/dashboard/stores", label: "Tiendas", icon: IconStore },
     { href: "/dashboard/liquidaciones", label: "Liquidaciones", icon: IconMoney },
-    // Hojas por dominio sobre los pedidos (0167, MOM §30): el cierre de Lima que
+    // Hojas por dominio sobre los pedidos (0168, MOM §30): el cierre de Lima que
     // vivía en el Excel «MASTER KEY 2.0», con historial y observaciones de cuadre.
     { href: "/dashboard/liquidaciones-2", label: "Liquidaciones 2", icon: IconGrid },
     { href: "/dashboard/costos", label: "Costos", icon: IconMoney },

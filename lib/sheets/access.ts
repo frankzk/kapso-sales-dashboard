@@ -3,7 +3,7 @@
 // Todo lo que toca order_master va con el service role: 0053 le quitó a
 // `authenticated` la lectura directa de esa tabla, y aquí la tienda ya viene
 // filtrada por getAccessibleStores() (RLS sobre stores). Las tablas de hojas
-// sí tienen RLS propia (0167) y se leen con el cliente de sesión.
+// sí tienen RLS propia (0168) y se leen con el cliente de sesión.
 
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import type { SupabaseClient } from "@supabase/supabase-js";

@@ -80,7 +80,7 @@ Alexis hay que darlo de alta). Couriers en Kapta: Aliclik 7.232 envíos, Shalom
 Observaciones: no existía una entidad que explique una diferencia entre un
 valor externo y el de Kapta. Las correcciones de liquidación (0093) solo cubren
 monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
-`sheet_observations` (0167).
+`sheet_observations` (0168).
 
 ## 3. Modelo
 
@@ -101,7 +101,7 @@ monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
 
 ## 4. Iteraciones
 
-1. **Cimientos** (esta rama). Migración 0167, dominios y estados sembrados,
+1. **Cimientos** (esta rama). Migración 0168, dominios y estados sembrados,
    Catálogo de zonas con los 979 distritos del Excel, hojas Pedidos y
    Consolidado por tienda, grid virtualizado con configuración de columnas,
    edición de celdas manuales con historial, panel de estados y alias, panel de

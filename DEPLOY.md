@@ -693,7 +693,7 @@ Indicadores), estados por dominio con equivalencia a los estados de Kapta,
 historial por celda y observaciones de cuadre. Plan e iteraciones en
 `docs/plan/liquidaciones-2.md`; reglas en el MOM §30.
 
-1. **Migración `0167_liquidaciones2_hojas.sql`**, a mano, antes del código.
+1. **Migración `0168_liquidaciones2_hojas.sql`**, a mano, antes del código.
    Crea nueve tablas nuevas y no toca ninguna existente.
 2. La primera visita de un admin/owner siembra la organización: dominios,
    estados, el catálogo de zonas (979 distritos del Excel) y una hoja de

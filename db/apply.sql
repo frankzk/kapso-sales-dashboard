@@ -335,6 +335,8 @@
 \ir migrations/0165_fenix_stock_unlimited.sql
 \echo 'Applying 0166_shalom_transit_whatsapp.sql'
 \ir migrations/0166_shalom_transit_whatsapp.sql
-\echo 'Applying 0167_liquidaciones2_hojas.sql'
-\ir migrations/0167_liquidaciones2_hojas.sql
+\echo 'Applying 0167_transit_ticket_on_reply.sql'
+\ir migrations/0167_transit_ticket_on_reply.sql
+\echo 'Applying 0168_liquidaciones2_hojas.sql'
+\ir migrations/0168_liquidaciones2_hojas.sql
 \echo 'Done.'
