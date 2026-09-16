@@ -28,7 +28,8 @@ import {
   yapeQuickReply,
   type PaymentMethod,
 } from "@/lib/payment-methods";
-import { moneyLabel, pendingBalance } from "@/lib/shalom/transit-notify";
+import { moneyLabel, pendingBalance, sendTransitTicket } from "@/lib/shalom/transit-notify";
+import type { sendWhatsappDocument } from "@/lib/kapso";
 
 export type PaymentButton = "yape" | "transferencia" | "link_pago";
 
@@ -128,7 +129,11 @@ export async function handleInboundMessage(
   storeId: string,
   creds: StoreCreds,
   body: unknown,
-  opts: { sendText?: typeof sendWhatsappText; nowIso?: string } = {},
+  opts: {
+    sendText?: typeof sendWhatsappText;
+    sendDocument?: typeof sendWhatsappDocument;
+    nowIso?: string;
+  } = {},
 ): Promise<InboundResult> {
   const msg = parseInboundMessage(body);
   if (!msg) {
@@ -153,7 +158,11 @@ async function replyToButton(
   creds: StoreCreds,
   msg: InboundMessage,
   button: PaymentButton,
-  opts: { sendText?: typeof sendWhatsappText; nowIso?: string },
+  opts: {
+    sendText?: typeof sendWhatsappText;
+    sendDocument?: typeof sendWhatsappDocument;
+    nowIso?: string;
+  },
 ): Promise<InboundResult> {
   const send = opts.sendText ?? sendWhatsappText;
 
@@ -213,29 +222,84 @@ async function replyToButton(
   }
 
   await finish({ order_id: link.orderId, body: text, ok, error, provider_message_id: providerId });
-  return { reason: ok ? `replied:${button}` : `reply_failed:${error}` };
+  if (!ok) return { reason: `reply_failed:${error}` };
+
+  // Y el ticket de Shalom detrás, una sola vez por guía. Va DESPUÉS del texto y
+  // sin poder tumbarlo: lo que la clienta necesita para pagar son las cuentas;
+  // el ticket es el respaldo. Si falla —guía sin OSE ID, Shalom caído— queda el
+  // motivo en la fila del aviso y el mensaje útil ya salió.
+  let ticket = "";
+  if (link.notificationId && link.shipmentId && !link.ticketAlreadySent) {
+    const res = await sendTransitTicket(
+      admin,
+      {
+        notificationId: link.notificationId,
+        shipmentId: link.shipmentId,
+        storeId,
+        phone: msg.from,
+        phoneNumberId,
+        apiKey: creds.kapso_api_key,
+      },
+      { sendDocument: opts.sendDocument, nowIso: opts.nowIso },
+    );
+    ticket = res.sent ? ";ticket:enviado" : `;ticket:${res.reason}`;
+  }
+
+  return { reason: `replied:${button}${ticket}` };
 }
+
+/** Lo que hace falta del último aviso: de qué pedido habla, qué saldo debe hoy,
+ *  y si a esa guía ya se le mandó su ticket. */
+interface TransitContext {
+  ctx: LinkContext;
+  orderId: string | null;
+  notificationId: string | null;
+  shipmentId: string | null;
+  ticketAlreadySent: boolean;
+}
+
+const SIN_AVISO: TransitContext = {
+  ctx: { saldo: null, pedido: null },
+  orderId: null,
+  notificationId: null,
+  shipmentId: null,
+  ticketAlreadySent: false,
+};
 
 /**
  * El último aviso enviado a este celular, para que «Link de pago» sepa de qué
- * pedido y qué saldo habla. Sin aviso previo se contesta igual, sin cifras.
+ * pedido y qué saldo habla, y para saber a qué guía mandarle el ticket. Sin
+ * aviso previo se contesta igual, sin cifras y sin ticket — el botón pudo venir
+ * de otra conversación.
  */
 async function latestTransitContext(
   admin: SupabaseClient,
   storeId: string,
   phone: string,
-): Promise<{ ctx: LinkContext; orderId: string | null }> {
+): Promise<TransitContext> {
   const { data } = await admin
     .from("shalom_transit_notifications")
-    .select("order_id")
+    .select("id,order_id,shipment_id,ticket_sent_at")
     .eq("store_id", storeId)
     .eq("phone", phone)
     .eq("status", "sent")
     .order("sent_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  const row = (data ?? null) as { order_id: string | null } | null;
-  if (!row?.order_id) return { ctx: { saldo: null, pedido: null }, orderId: null };
+  const row = (data ?? null) as {
+    id: string;
+    order_id: string | null;
+    shipment_id: string;
+    ticket_sent_at: string | null;
+  } | null;
+  if (!row) return SIN_AVISO;
+  const base = {
+    orderId: row.order_id,
+    notificationId: row.id,
+    shipmentId: row.shipment_id,
+    ticketAlreadySent: Boolean(row.ticket_sent_at),
+  };
+  if (!row.order_id) return { ...base, ctx: { saldo: null, pedido: null } };
 
   // El saldo se RECALCULA, no se lee del aviso. Entre el aviso y el botón puede
   // haber pagado y alguien haberlo validado, y lo que la clienta quiere pagar
@@ -252,11 +316,11 @@ async function latestTransitContext(
     .reduce((s, p) => s + (Number(p.amount) || 0), 0);
 
   return {
+    ...base,
     ctx: {
       saldo: moneyLabel(pendingBalance(m?.order_total ?? null, validated)),
       pedido: m?.order_name ?? null,
     },
-    orderId: row.order_id,
   };
 }
 

@@ -441,6 +441,11 @@ describe("processTransitNotifications", () => {
       link: "https://storage/signed/voucher.pdf",
       filename: "ticket-shalom-95451003.pdf",
     });
+    // Y NO queda sellado, aunque el ticket haya viajado en la cabecera: encima
+    // de un mensaje de quince líneas el adjunto se pierde, así que se reenvía
+    // con la primera respuesta. El sello lo pone esa vía.
+    expect(admin.updates.at(-1)!.patch).toMatchObject({ status: "sent" });
+    expect(admin.updates.at(-1)!.patch.ticket_sent_at).toBeUndefined();
   });
 
   it("con el ticket pedido y una guía sin OSE ID no se puede: falla en seco y lo dice", async () => {
