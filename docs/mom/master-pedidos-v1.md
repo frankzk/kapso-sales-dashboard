@@ -2656,19 +2656,32 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
     cobrarle el saldo viejo sería cobrar dos veces.
   - **El ticket PDF de Shalom se manda al contestar, aunque ya haya ido en la
     cabecera del aviso** (0167). Si la plantilla lleva cabecera de documento,
-    viaja ahí; y se **reenvía igual** con la primera respuesta, porque encima de
-    un mensaje de quince líneas el adjunto queda arriba del todo y pasa
+    viaja ahí; y se **reenvía igual** con la respuesta, porque encima de un
+    mensaje de quince líneas el adjunto queda arriba del todo y pasa
     desapercibido justo cuando la clienta baja a los botones. Se comprobó en el
-    chat real. **A partir del segundo botón ya no se repite**: el sello
-    `ticket_sent_at` lo pone esa primera respuesta, y quien pulsa los tres
-    botones recibe el ticket dos veces —cabecera y respuesta—, no cuatro. El botón abre la
-    ventana de 24 h, así que el documento sale como mensaje normal: sin
+    chat real. **Se repite con CADA botón, no solo con el primero**: quien pulsa
+    «Transferencia» después de «Yape» está mirando esa segunda respuesta, y el
+    ticket que llegó con la primera ya quedó fuera de pantalla — es el mismo
+    problema que resolvió sacarlo de la cabecera, así que la misma respuesta.
+    Cuesta poco: el PDF sale de la caché de Storage, sin otra llamada a Shalom.
+    El sello `ticket_sent_at` guarda el último envío, no una reja. El botón abre
+    la ventana de 24 h, así que el documento sale como mensaje normal: sin
     plantilla que aprobar en Meta y sin número escrito a mano que pueda
-    desalinearse de las cuentas de cobro. **Una vez por guía**: quien pulsa dos
-    botones no lo recibe dos veces. Y nunca puede tumbar el texto — lo que la
-    clienta necesita para pagar son las cuentas; el ticket es el respaldo. Una
-    guía sin `ose_id` (llegó por el Excel) no tiene ticket que mandar y se anota
-    el motivo.
+    desalinearse de las cuentas de cobro. Nunca puede tumbar el texto — lo que
+    la clienta necesita para pagar son las cuentas; el ticket es el respaldo.
+    Una guía sin `ose_id` (llegó por el Excel) no tiene ticket que mandar y se
+    anota el motivo.
+  - **La respuesta a cada botón empieza por el saldo**: `💵 Saldo pendiente:
+    S/ 119.00` y debajo la cuenta. El importe ya iba en el aviso, pero la
+    clienta pulsa el botón horas después, con ese mensaje fuera de pantalla: la
+    cifra tiene que estar pegada a la cuenta a la que va a pagar, no quince
+    líneas más arriba. Se recalcula al pulsar, igual que el «Link de pago». Sin
+    saldo conocido no se inventa ninguna cifra y la respuesta sale como antes.
+  - **A quien ya no debe nada no se le enseña ninguna cuenta.** Si al pulsar el
+    saldo recalculado es cero —pagó entre el aviso y el botón y alguien lo
+    validó—, se contesta que el pedido está pagado y que solo tiene que
+    recogerlo. Darle el número de Yape ahí es invitarla a pagar dos veces, y esa
+    devolución la paga la operación.
   - Si la plantilla trae el Yape **fijo en el cuerpo** en vez de como variable
     —la variante con el ticket en PDF—, el token `yape` sobra y hay que quitarlo
     del orden configurado: un parámetro de más y Meta rechaza el envío. Y el
@@ -2681,8 +2694,8 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
     la clienta escribió (su lead), o por el de la tienda; nace **apagado** y se
     enciende en Ajustes. Encender el aviso no dispara los avisos de guías que ya
     estaban en tránsito: solo entra lo que cambia desde entonces.
-  - **Los tres botones los contesta Kapta**, no el bot: «Pagar con Yape» con la
-    cuenta Yape principal en una línea (`YAPE GRUPO GF SAC 930 555 309`),
+  - **Los tres botones los contesta Kapta**, no el bot: «Pagar con Yape» con el
+    saldo y la cuenta Yape principal en una línea (`YAPE GRUPO GF SAC 930 555 309`),
     «Transferencia Depósito» con todas las cuentas activas, y «Link de pago» con
     el texto configurado (`{saldo}`, `{pedido}`, `{yape}`) o, sin configurar, con
     el Yape. Las cuentas viven en **Ajustes → Cuentas de cobro que ve el

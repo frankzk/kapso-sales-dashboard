@@ -71,12 +71,38 @@ export function matchPaymentButton(
   return null;
 }
 
-/** Lo que el link de pago puede interpolar. `saldo` ya viene con «S/»: acá no
- *  hay plantilla que lo escriba, es texto libre nuestro. */
+/** Lo que sabemos del pedido al contestar. `saldo` ya viene con «S/»: acá no
+ *  hay plantilla que lo escriba, es texto libre nuestro. `saldoValue` es el
+ *  mismo número sin formato, porque cero hay que poder distinguirlo. */
 export interface LinkContext {
   saldo: string | null;
+  saldoValue: number | null;
   pedido: string | null;
 }
+
+/**
+ * La primera línea de la respuesta: cuánto debe.
+ *
+ * POR QUÉ SE REPITE. El importe ya iba en el aviso, pero la clienta pulsa el
+ * botón minutos u horas después, con el mensaje largo ya fuera de pantalla. La
+ * cifra tiene que estar pegada a la cuenta a la que va a pagar, no quince
+ * líneas más arriba.
+ *
+ * Y SE RECALCULA: si pagó entre medias y alguien lo validó, aquí ya no debe
+ * nada — y entonces enseñarle una cuenta es invitarla a pagar dos veces. Ese
+ * caso se contesta con la buena noticia y sin números de cuenta.
+ */
+export function balanceHeader(link: LinkContext): { paid: boolean; line: string | null } {
+  if (link.saldoValue == null || !link.saldo) return { paid: false, line: null };
+  if (link.saldoValue <= 0) return { paid: true, line: null };
+  return { paid: false, line: `💵 Saldo pendiente: ${link.saldo}` };
+}
+
+/** Lo que se contesta a quien ya no debe nada. Sin cuentas: dárselas sería
+ *  invitarla a pagar de nuevo algo que ya pagó. */
+export const ALREADY_PAID_REPLY =
+  "✅ Tu pedido ya está pagado por completo, no tienes saldo pendiente. " +
+  "Cuando llegue a la agencia solo tienes que acercarte a recogerlo.";
 
 /**
  * El texto que se contesta a cada botón. Pura: recibe las cuentas y la config.
@@ -94,17 +120,25 @@ export function buildButtonReply(
   button: PaymentButton,
   methods: readonly PaymentMethod[],
   cfg: { paymentLinkTemplate: string | null | undefined },
-  link: LinkContext = { saldo: null, pedido: null },
+  link: LinkContext = { saldo: null, saldoValue: null, pedido: null },
 ): string | null {
   const yape = yapeQuickReply(methods);
+  const saldo = balanceHeader(link);
+  // Ya no debe nada: se le dice, y no se le enseña ninguna cuenta.
+  if (saldo.paid) return ALREADY_PAID_REPLY;
+  /** El saldo primero y la cuenta debajo, separados, para que se copie limpio. */
+  const conSaldo = (cuerpo: string | null): string | null =>
+    cuerpo ? [saldo.line, cuerpo].filter(Boolean).join("\n\n") : null;
+
   switch (button) {
     case "yape":
-      return yape;
+      return conSaldo(yape);
     case "transferencia":
-      return formatTransferAccounts(methods);
+      return conSaldo(formatTransferAccounts(methods));
     case "link_pago": {
       const tpl = String(cfg.paymentLinkTemplate ?? "").trim();
-      if (!tpl) return yape;
+      // Sin link configurado se cae al Yape, con su saldo delante igual.
+      if (!tpl) return conSaldo(yape);
       return tpl
         .replace(/\{saldo\}/gi, link.saldo ?? "")
         .replace(/\{pedido\}/gi, link.pedido ?? "")
@@ -224,12 +258,19 @@ async function replyToButton(
   await finish({ order_id: link.orderId, body: text, ok, error, provider_message_id: providerId });
   if (!ok) return { reason: `reply_failed:${error}` };
 
-  // Y el ticket de Shalom detrás, una sola vez por guía. Va DESPUÉS del texto y
-  // sin poder tumbarlo: lo que la clienta necesita para pagar son las cuentas;
-  // el ticket es el respaldo. Si falla —guía sin OSE ID, Shalom caído— queda el
-  // motivo en la fila del aviso y el mensaje útil ya salió.
+  // Y el ticket de Shalom detrás, CON CADA BOTÓN y no solo con el primero.
+  //
+  // POR QUÉ SE REPITE. Quien pulsa «Transferencia» después de «Yape» está
+  // mirando esa segunda respuesta, y el ticket que llegó con la primera ya
+  // quedó arriba. Es el mismo documento puesto donde se está mirando, que es
+  // justo el problema que resolvió sacarlo de la cabecera del aviso.
+  //
+  // Va DESPUÉS del texto y sin poder tumbarlo: lo que la clienta necesita para
+  // pagar son las cuentas; el ticket es el respaldo. Si falla —guía sin OSE ID,
+  // Shalom caído— queda el motivo en la fila del aviso y el mensaje útil ya
+  // salió. El PDF sale de la caché, así que repetirlo no cuesta otra llamada.
   let ticket = "";
-  if (link.notificationId && link.shipmentId && !link.ticketAlreadySent) {
+  if (link.notificationId && link.shipmentId) {
     const res = await sendTransitTicket(
       admin,
       {
@@ -248,22 +289,22 @@ async function replyToButton(
   return { reason: `replied:${button}${ticket}` };
 }
 
-/** Lo que hace falta del último aviso: de qué pedido habla, qué saldo debe hoy,
- *  y si a esa guía ya se le mandó su ticket. */
+/** Lo que hace falta del último aviso: de qué pedido habla, cuánto debe HOY y a
+ *  qué guía pedirle el ticket. */
 interface TransitContext {
   ctx: LinkContext;
   orderId: string | null;
   notificationId: string | null;
   shipmentId: string | null;
-  ticketAlreadySent: boolean;
 }
 
+const SIN_SALDO: LinkContext = { saldo: null, saldoValue: null, pedido: null };
+
 const SIN_AVISO: TransitContext = {
-  ctx: { saldo: null, pedido: null },
+  ctx: SIN_SALDO,
   orderId: null,
   notificationId: null,
   shipmentId: null,
-  ticketAlreadySent: false,
 };
 
 /**
@@ -279,7 +320,7 @@ async function latestTransitContext(
 ): Promise<TransitContext> {
   const { data } = await admin
     .from("shalom_transit_notifications")
-    .select("id,order_id,shipment_id,ticket_sent_at")
+    .select("id,order_id,shipment_id")
     .eq("store_id", storeId)
     .eq("phone", phone)
     .eq("status", "sent")
@@ -290,16 +331,14 @@ async function latestTransitContext(
     id: string;
     order_id: string | null;
     shipment_id: string;
-    ticket_sent_at: string | null;
   } | null;
   if (!row) return SIN_AVISO;
   const base = {
     orderId: row.order_id,
     notificationId: row.id,
     shipmentId: row.shipment_id,
-    ticketAlreadySent: Boolean(row.ticket_sent_at),
   };
-  if (!row.order_id) return { ...base, ctx: { saldo: null, pedido: null } };
+  if (!row.order_id) return { ...base, ctx: SIN_SALDO };
 
   // El saldo se RECALCULA, no se lee del aviso. Entre el aviso y el botón puede
   // haber pagado y alguien haberlo validado, y lo que la clienta quiere pagar
@@ -315,12 +354,10 @@ async function latestTransitContext(
     .filter((p) => p.validation_status === "validado")
     .reduce((s, p) => s + (Number(p.amount) || 0), 0);
 
+  const saldo = pendingBalance(m?.order_total ?? null, validated);
   return {
     ...base,
-    ctx: {
-      saldo: moneyLabel(pendingBalance(m?.order_total ?? null, validated)),
-      pedido: m?.order_name ?? null,
-    },
+    ctx: { saldo: moneyLabel(saldo), saldoValue: saldo, pedido: m?.order_name ?? null },
   };
 }
 

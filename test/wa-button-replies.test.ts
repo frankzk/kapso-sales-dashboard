@@ -62,7 +62,7 @@ describe("buildButtonReply", () => {
       "link_pago",
       METHODS,
       { paymentLinkTemplate: "Paga tu saldo de {saldo} del pedido {pedido}: https://pago.x/{yape}" },
-      { saldo: "S/ 59.10", pedido: "#KP133540" },
+      { saldo: "S/ 59.10", saldoValue: 59.1, pedido: "#KP133540" },
     );
     expect(out).toBe("Paga tu saldo de S/ 59.10 del pedido #KP133540: https://pago.x/930 555 309");
   });
@@ -76,6 +76,35 @@ describe("buildButtonReply", () => {
   it("sin cuentas no hay nada verdadero que decir", () => {
     expect(buildButtonReply("yape", [], { paymentLinkTemplate: null })).toBeNull();
     expect(buildButtonReply("transferencia", [], { paymentLinkTemplate: null })).toBeNull();
+  });
+
+  it("el saldo va DELANTE de la cuenta, en los dos botones", () => {
+    // El importe ya iba en el aviso, pero al pulsar el botón ese mensaje quedó
+    // arriba: la cifra tiene que estar pegada a la cuenta a la que va a pagar.
+    const link = { saldo: "S/ 119.00", saldoValue: 119, pedido: "#KP133540" };
+    expect(buildButtonReply("yape", METHODS, { paymentLinkTemplate: null }, link)).toBe(
+      "💵 Saldo pendiente: S/ 119.00\n\nYAPE GRUPO GF SAC 930 555 309",
+    );
+    const t = buildButtonReply("transferencia", METHODS, { paymentLinkTemplate: null }, link)!;
+    expect(t.startsWith("💵 Saldo pendiente: S/ 119.00\n\n")).toBe(true);
+    expect(t).toContain("191-2434540-0-12");
+  });
+
+  it("sin saldo conocido se contesta como siempre, sin inventar una cifra", () => {
+    expect(
+      buildButtonReply("yape", METHODS, { paymentLinkTemplate: null }, { saldo: null, saldoValue: null, pedido: null }),
+    ).toBe("YAPE GRUPO GF SAC 930 555 309");
+  });
+
+  it("a quien ya no debe nada no se le enseña ninguna cuenta", () => {
+    // Darle el número a quien ya pagó es invitarla a pagar dos veces.
+    const pagado = { saldo: "S/ 0.00", saldoValue: 0, pedido: "#KP133540" };
+    for (const b of ["yape", "transferencia", "link_pago"] as const) {
+      const out = buildButtonReply(b, METHODS, { paymentLinkTemplate: "Paga {saldo}" }, pagado)!;
+      expect(out).toContain("ya está pagado");
+      expect(out).not.toContain("930 555 309");
+      expect(out).not.toContain("191-2434540-0-12");
+    }
   });
 });
 
@@ -180,6 +209,10 @@ function fakeAdmin(
 
 const CREDS = { kapso_api_key: "k", whatsapp_phone_number_id: "PN-store", shalom_transit_payment_link: null } as any;
 
+/** Lo que sale por defecto con el pedido de `fakeAdmin`: S/ 89.10 con S/ 30
+ *  validados ⇒ debe S/ 59.10, y esa cifra encabeza la respuesta. */
+const YAPE_CON_SALDO = "💵 Saldo pendiente: S/ 59.10\n\nYAPE GRUPO GF SAC 930 555 309";
+
 describe("handleInboundMessage", () => {
   it("contesta el botón de Yape por el MISMO número por el que entró, y lo registra", async () => {
     const admin = fakeAdmin();
@@ -191,7 +224,7 @@ describe("handleInboundMessage", () => {
     expect(res.reason).toBe("replied:yape;ticket:enviado");
     expect(send).toHaveBeenCalledWith(
       { apiKey: "k" },
-      { phoneNumberId: "PN-451", to: "51987654321", body: "YAPE GRUPO GF SAC 930 555 309" },
+      { phoneNumberId: "PN-451", to: "51987654321", body: YAPE_CON_SALDO },
     );
     // Se reservó ANTES de contestar (la unique es la deduplicación)…
     expect(admin.inserts[0]).toMatchObject({
@@ -201,7 +234,7 @@ describe("handleInboundMessage", () => {
     // …y se cerró con lo que se dijo. Se busca la escritura de `wa_auto_replies`
     // en vez de la última: detrás va el sello del ticket, que es de otra tabla.
     expect(admin.updates.find((u: any) => u.table === "wa_auto_replies")).toMatchObject({
-      patch: { ok: true, body: "YAPE GRUPO GF SAC 930 555 309", provider_message_id: "wamid.OUT" },
+      patch: { ok: true, body: YAPE_CON_SALDO, provider_message_id: "wamid.OUT" },
     });
   });
 
@@ -235,17 +268,23 @@ describe("handleInboundMessage", () => {
     });
   });
 
-  it("quien pulsa un segundo botón no recibe el ticket otra vez", async () => {
+  it("quien pulsa un SEGUNDO botón recibe el ticket otra vez, debajo de la respuesta", async () => {
+    // El ticket del primer botón ya quedó fuera de pantalla. Repetirlo es
+    // ponerlo donde la clienta está mirando —el problema que resolvió sacarlo
+    // de la cabecera del aviso— y sale de la caché, sin llamada extra a Shalom.
     const admin = fakeAdmin({
       lastNotification: { id: "notif-1", order_id: "ord-1", shipment_id: "ship-1", ticket_sent_at: "2026-09-15T15:00:00Z" },
     });
-    const sendDoc = vi.fn();
+    const sendText = vi.fn().mockResolvedValue({ ok: true, id: "x" });
+    const sendDoc = vi.fn().mockResolvedValue({ ok: true, id: "wamid.DOC" });
     const res = await handleInboundMessage(admin, "store", CREDS, buttonEvent("Transferencia Depósito"), {
-      sendText: vi.fn().mockResolvedValue({ ok: true, id: "x" }),
+      sendText,
       sendDocument: sendDoc,
     });
-    expect(res.reason).toBe("replied:transferencia");
-    expect(sendDoc).not.toHaveBeenCalled();
+    expect(res.reason).toBe("replied:transferencia;ticket:enviado");
+    expect(sendDoc).toHaveBeenCalledTimes(1);
+    // Y el saldo encabeza también la lista de cuentas.
+    expect(sendText.mock.calls[0]![1].body.startsWith("💵 Saldo pendiente: S/ 59.10\n\n")).toBe(true);
   });
 
   it("una guía sin OSE ID no tiene ticket, y el texto con las cuentas sale igual", async () => {
@@ -343,9 +382,10 @@ describe("handleInboundMessage", () => {
     expect(send.mock.calls[0]![1].body).toBe("Saldo S/ 59.10 del #KP133540");
   });
 
-  it("si pagó entre el aviso y el botón, el link dice el saldo NUEVO", async () => {
+  it("si pagó entre el aviso y el botón, no se le vuelve a cobrar", async () => {
     // El aviso decía S/ 59.10; mientras tanto se validó el resto. Leer el
-    // parámetro guardado le habría cobrado dos veces.
+    // parámetro guardado le habría pedido pagar dos veces; recalculando, lo que
+    // sale es la buena noticia y ninguna cuenta.
     const admin = fakeAdmin({
       lastNotification: { order_id: "ord-1" },
       payments: [
@@ -361,7 +401,8 @@ describe("handleInboundMessage", () => {
       buttonEvent("Link de pago", "wamid.BTN3"),
       { sendText: send },
     );
-    expect(send.mock.calls[0]![1].body).toBe("Saldo S/ 0.00 del #KP133540");
+    expect(send.mock.calls[0]![1].body).toContain("ya está pagado");
+    expect(send.mock.calls[0]![1].body).not.toContain("930 555 309");
   });
 
   it("un comprobante en revisión todavía no descuenta", async () => {
