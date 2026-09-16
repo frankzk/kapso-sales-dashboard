@@ -583,11 +583,12 @@ async function sendOne(
       error: null,
       error_code: null,
       updated_at: ctx.nowIso,
-      // El ticket ya viajó EN LA CABECERA, así que esta guía ya lo recibió: se
-      // sella aquí para que al pulsar un botón no se le mande otra vez (0167).
-      // Las dos vías escriben el mismo sello a propósito — la pregunta que
-      // contesta es «¿esta guía ya tiene su ticket?», no por dónde llegó.
-      ...(headerDocument ? { ticket_sent_at: ctx.nowIso } : {}),
+      // Aquí NO se sella `ticket_sent_at`, aunque el ticket haya viajado en la
+      // cabecera. Medido en el chat real: encima de un mensaje de quince líneas
+      // el adjunto queda arriba del todo y pasa desapercibido justo cuando la
+      // clienta baja a los botones. Así que se reenvía con la primera respuesta,
+      // que es donde ella está mirando. El sello lo pone esa vía y es lo que
+      // evita el tercer y cuarto envío a quien pulsa los tres botones.
     })
     .eq("id", row.id);
 

@@ -441,15 +441,10 @@ describe("processTransitNotifications", () => {
       link: "https://storage/signed/voucher.pdf",
       filename: "ticket-shalom-95451003.pdf",
     });
-    // Y queda sellado: el ticket ya viajó, así que al pulsar un botón no se le
-    // manda otra vez (0167).
-    expect(admin.updates.at(-1)!.patch).toMatchObject({ status: "sent", ticket_sent_at: NOW });
-  });
-
-  it("sin cabecera NO se sella el ticket: ese lo manda la respuesta al botón", async () => {
-    const admin = fakeAdmin();
-    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.T" });
-    await processTransitNotifications(admin, { nowIso: NOW, sendTemplate: send, loadCreds: async () => CREDS });
+    // Y NO queda sellado, aunque el ticket haya viajado en la cabecera: encima
+    // de un mensaje de quince líneas el adjunto se pierde, así que se reenvía
+    // con la primera respuesta. El sello lo pone esa vía.
+    expect(admin.updates.at(-1)!.patch).toMatchObject({ status: "sent" });
     expect(admin.updates.at(-1)!.patch.ticket_sent_at).toBeUndefined();
   });
 
