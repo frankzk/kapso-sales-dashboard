@@ -1685,9 +1685,6 @@ export interface DirectFenixGuidePreview {
    * control de cantidad, así que el stock siempre dice que sí.
    */
   unlinked: string[];
-  /** ¿Llegó a comprobarse el vínculo? Falso si la tienda no ha mapeado nada
-   *  todavía — ahí la función está apagada y no se puede afirmar nada. */
-  linkChecked: boolean;
   activeGuides: DirectGuideExisting[];
   closedGuidesCount: number;
   /**
@@ -1856,6 +1853,15 @@ export async function previewDirectFenixGuide(input: {
     );
   }
   warnings.push("El pedido no tiene coordenadas GPS; el Excel de programación saldrá sin ubicación.");
+  // Mapa vacío = reja del vínculo apagada (mismo interruptor que `buildProductos`).
+  // No se bloquea —una tienda recién configurada no puede quedarse sin guías— pero
+  // tampoco se calla: sin vínculos, Swayp busca los productos POR NOMBRE, que es
+  // la vía que su propio desarrollador llama inestable.
+  if (mapaSwayp.size === 0) {
+    warnings.push(
+      "Esta tienda no tiene ningún producto vinculado a Swayp; la guía saldrá declarando los productos por nombre, que es la vía inestable. Vincúlalos en Catálogo de productos.",
+    );
+  }
   if (!refundedTotal && totalRefunded > 0) {
     warnings.push("El pedido tiene un reembolso parcial en Shopify; verifica el monto a cobrar.");
   }
@@ -1892,7 +1898,6 @@ export async function previewDirectFenixGuide(input: {
     stockReason: check.ok ? null : check.reason ?? null,
     uncovered: check.uncovered,
     unlinked,
-    linkChecked: mapaSwayp.size > 0,
     activeGuides,
     closedGuidesCount,
     fillableOutputCode: rellenable?.output_code ?? null,

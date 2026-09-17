@@ -154,6 +154,12 @@ describe("el servidor no se fía del modal", () => {
 
   it("la vista previa trae el vínculo resuelto", () => {
     expect(src).toContain("const unlinked = productosSinVinculo(lineItems, mapaSwayp);");
-    expect(src).toContain("linkChecked: mapaSwayp.size > 0");
+  });
+
+  it("una tienda sin ningún vínculo no se bloquea, pero se avisa", () => {
+    // La reja está apagada ahí, y callarlo dejaría a Swayp buscando los
+    // productos por nombre sin que nadie lo sepa.
+    expect(src).toContain("if (mapaSwayp.size === 0)");
+    expect(src).toContain("la vía inestable");
   });
 });
