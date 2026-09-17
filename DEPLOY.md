@@ -717,6 +717,17 @@ historial por celda y observaciones de cuadre. Plan e iteraciones en
    motorizado (misma ruta y mismo script, claves `courier_alexis` y
    `courier_urpi`) pero con el vocabulario de estados del courier.
 
+7. **Pantalla del motorizado** (`/reparto/cuaderno`, MOM §30.9). Migración
+   `0171_sheets_rider_rls.sql` a mano antes del código: acota la lectura de
+   las tablas de hojas a la propia cuando el único rol es `motorizado`. Alta de
+   un motorizado: ficha en Liquidaciones → Motorizados con su correo; invitación
+   desde Equipo con rol `motorizado` (o membresía a mano); `riders.user_id`
+   atado a ese usuario; y su hoja de Reparto propio creada con «Crear hojas que
+   falten» en Liquidaciones 2 (la crea por ficha). Entra con Google o enlace por
+   correo, igual que el equipo; no hay contraseña. Un usuario solo motorizado
+   que abra `/dashboard` va a parar a su cuaderno. La foto del comprobante va al
+   bucket privado `delivery-proofs`, ruta `cuaderno/<hoja>/<fila>/`.
+
 ## 5k-ter. Rutas de reparto (motorizados propios)
 
 Sección propia (`/dashboard/rutas`) para el coordinador y una pantalla aparte

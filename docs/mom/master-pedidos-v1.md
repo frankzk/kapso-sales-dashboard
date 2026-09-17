@@ -4837,3 +4837,32 @@ tecleado se guarda tal cual, el grupo se deriva con los mismos alias que usa
 la importación, y si no resuelve la fila queda a revisión con el alias sin
 equivalente a la vista para asignarlo una vez. Cambiar a qué equivale un alias
 cambia el grupo de todas sus filas sin tocar lo que decían.
+
+### 30.9 La pantalla del motorizado
+
+`/reparto/cuaderno`. Vive fuera del panel, para el teléfono, y es la misma hoja
+de Reparto propio que ve quien liquida: el motorizado escribe en su cuaderno
+y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
+
+- **Qué ve.** Su nombre, el día (hoy por defecto, se puede ir a ayer u otro),
+  y un punto por tarjeta: pedido, cliente, distrito y dirección si el pedido
+  está en Kapta, el monto de Kapta, y lo que él ya reportó. Si hay ruta de
+  despacho para ese día, un botón trae los paquetes que falten; si no, añade
+  los puntos a mano buscando el pedido por número o por nombre, o escribiendo
+  un punto ajeno a Shopify (Kast).
+- **Qué escribe.** Estado en texto libre con sugerencias, como en el cuaderno
+  de papel; a cobrar, precargado con el monto de Kapta; efectivo; método de
+  pago de la lista cerrada; observación; y la foto del comprobante cuando el
+  pago fue digital. Todo entra por las mismas reglas que una importación:
+  alias, revisión, historial por celda.
+- **El motivo es obligatorio.** Si el estado significa entrega y cobró distinto
+  al monto de Kapta en más de S/ 0.50, no puede guardar sin elegir un motivo
+  del catálogo y, con «Otro», una nota. Eso abre o actualiza la observación de
+  monto de esa fila, con su nombre en la nota. Es lo que después lee y acepta
+  quien liquida antes de aplicar al Master (§30.8): el motivo lo escribe quien
+  repartió; aceptarlo es de quien liquida.
+- **Solo ve su hoja.** Un usuario cuyo único rol es `motorizado` solo puede
+  entrar a `/reparto`; el panel lo redirige. En la base (0171), sus lecturas
+  de hojas, filas, alias, observaciones e historial quedan acotadas a la hoja
+  cuyo `rider_id` es su ficha. Los dominios y sus estados siguen legibles
+  porque son vocabulario, no datos de nadie.

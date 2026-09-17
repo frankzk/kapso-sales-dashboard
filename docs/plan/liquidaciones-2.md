@@ -133,6 +133,15 @@ monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
 4. **Cierre por pedido.** Contraste hoja ↔ Master por fila, propuesta de cierre
    por la puerta única a entregado (MOM §11.4), observaciones automáticas al
    importar cuando el monto o el estado no coinciden.
+4b. **Pantalla del motorizado** (rama `feature/reparto-cuaderno`, pendiente
+   de merge a `delivery-lima`; MOM §30.9). `/reparto/cuaderno`: su hoja de
+   Reparto propio un día a la vez, puntos desde el manifiesto de despacho o a
+   mano, estado en texto libre con sugerencias, monto precargado desde Kapta,
+   motivo obligatorio cuando cobra distinto, foto del comprobante para pagos
+   digitales, y RLS (0171) que acota su lectura a su propia hoja. Llena
+   `sheet_observations.reason_code` + `note`, que es lo que acepta quien
+   liquida antes de aplicar al Master.
+
 5. **Indicadores.** KPI Lima (tasas por zona y día, semana pasada, 15 días,
    por mes), efectividad por repartidor y mes, ventas contra meta. El estado de
    resultados queda al final porque depende de Gasto Ads y Provincia.

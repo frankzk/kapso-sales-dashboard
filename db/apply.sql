@@ -341,4 +341,6 @@
 \ir migrations/0168_liquidaciones2_hojas.sql
 \echo 'Applying 0169_sheet_status_effect_sin_salida.sql'
 \ir migrations/0169_sheet_status_effect_sin_salida.sql
+\echo 'Applying 0171_sheets_rider_rls.sql'
+\ir migrations/0171_sheets_rider_rls.sql
 \echo 'Done.'
