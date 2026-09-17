@@ -24,6 +24,7 @@ import {
   reRegisterWebhooks,
   saveMetaAdAccounts,
   sendTelegramTest,
+  sendTransitQueueNow,
   testFlowclLink,
   syncAliclikCatalogNow,
   syncNow,
@@ -792,6 +793,7 @@ function SettingsForm({
   // dentro de otro no es HTML válido; esto es la forma de React 19 de tener
   // dos botones con dos acciones en el mismo formulario.
   const [flowProbe, flowProbeAction, flowProbePending] = useActionState(testFlowclLink, initial);
+  const [colaAviso, colaAvisoAction, colaAvisoPending] = useActionState(sendTransitQueueNow, initial);
   const router = useRouter();
   const s = data.store;
   // Controlado a propósito: React vacía los campos NO controlados al terminar
@@ -1464,6 +1466,24 @@ function SettingsForm({
                 configura en <strong>Cobro por link (Flow.cl)</strong>, más abajo). Vacío = el link
                 de Flow si lo hay, y si no el Yape principal.
               </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 p-3 sm:col-span-3">
+              <button
+                type="submit"
+                formAction={colaAvisoAction}
+                formNoValidate
+                disabled={colaAvisoPending}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                {colaAvisoPending ? "Enviando…" : "Enviar ahora los avisos en cola"}
+              </button>
+              <p className="mt-2 text-xs text-slate-400">
+                El cron drena la cola cada 30 minutos; esto lo hace ya. No fuerza nada: manda lo que
+                está pendiente y le toca. Sigue respetando el horario, los reintentos y el
+                interruptor de arriba.
+              </p>
+              {colaAviso.error && <p className="mt-2 text-sm text-red-600">{colaAviso.error}</p>}
+              {colaAviso.notice && <p className="mt-2 text-sm text-emerald-600">{colaAviso.notice}</p>}
             </div>
           </div>
 

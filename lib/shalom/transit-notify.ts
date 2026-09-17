@@ -393,6 +393,8 @@ export async function processTransitNotifications(
     budgetMs?: number;
     sendTemplate?: SendTemplate;
     loadCreds?: (storeId: string) => Promise<StoreCreds | null>;
+    /** Solo esta tienda. El cron drena todas; el botón de Ajustes, la suya. */
+    storeId?: string;
   } = {},
 ): Promise<TransitReport> {
   const report: TransitReport = { sent: 0, failed: 0, skipped: 0, deferred: 0, errors: [] };
@@ -402,11 +404,13 @@ export async function processTransitNotifications(
   const send = opts.sendTemplate ?? sendWhatsappTemplate;
   const loadCreds = opts.loadCreds ?? ((id: string) => getStoreCreds(id, admin));
 
-  const { data, error } = await admin
+  let query = admin
     .from("shalom_transit_notifications")
     .select("id,store_id,shipment_id,order_id,attempts")
     .eq("status", "pending")
-    .lte("next_attempt_at", nowIso)
+    .lte("next_attempt_at", nowIso);
+  if (opts.storeId) query = query.eq("store_id", opts.storeId);
+  const { data, error } = await query
     .order("created_at", { ascending: true })
     .limit(opts.limit ?? TRANSIT_BATCH_CAP);
   if (error) {
