@@ -4837,3 +4837,36 @@ tecleado se guarda tal cual, el grupo se deriva con los mismos alias que usa
 la importación, y si no resuelve la fila queda a revisión con el alias sin
 equivalente a la vista para asignarlo una vez. Cambiar a qué equivale un alias
 cambia el grupo de todas sus filas sin tocar lo que decían.
+
+### 30.8 Cierre por pedido desde la hoja
+
+**Qué aplica.** Desde una hoja cuaderno, una fila vinculada a un pedido de
+Kapta cuyo estado tiene efecto *entrega* puede marcar ese pedido como
+entregado en el Master. Va por la **misma puerta que Liquidaciones**
+(`applySettlementToMaster`): un evento `status_override` con fuente
+`liquidacion`, el courier de la hoja (el de `config.courier` para un courier
+externo, `propio` con el nombre del motorizado para Reparto propio), la fecha
+de la ruta y el operativo por defecto de «entregado»; después se recalcula el
+Master. No hay otro camino a entregado, a propósito (§11.4). Se aplica fila a
+fila o todas las del periodo de una vez, con confirmación que dice cuántas.
+
+**Qué nunca aplica.** Un pedido anulado en Kapta no se marca entregado: vive
+como observación «anulado tras entregar». Un pedido que Kapta ya tiene
+entregado no se vuelve a escribir. Una fila sin pedido en Kapta no puede
+cruzar. No existe camino de devolución desde una hoja, ni en Liquidaciones ni
+en Rutas: las filas con efecto *devolución* se cuentan y se dejan como están
+hasta que exista una puerta propia. **Una fila con observación abierta no
+cruza al Master: alguien lee el motivo del motorizado y lo acepta primero.**
+El motivo lo escribe quien repartió; aceptarlo es de quien liquida
+(`sheets.edit`); aplicar al Master exige `master.edit`.
+
+**Observaciones automáticas.** Al importar un cuaderno y al editar a mano el
+estado, el monto o el pedido de una fila, cada fila que declara entrega se
+contrasta con Kapta (§30.5): un «a cobrar» que difiere del total del pedido
+en más de S/ 0,50 abre una observación de monto con la diferencia firmada;
+un pedido anulado o devuelto en Kapta abre una de estado; un cobro por Yape,
+Plin, link o transferencia sin comprobante validado en Kapta ni pedido pagado
+en Shopify abre una de pago (motivo «pago sin comprobante», 0170). Nunca dos
+abiertas para la misma fila y campo; una resuelta con el mismo valor externo
+no se reabre. Al editar un monto que no cuadra, la propia fila pide el motivo en
+línea; cerrar sin motivo deja la observación abierta sin motivo.

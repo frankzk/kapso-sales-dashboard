@@ -152,11 +152,17 @@ export const CUADERNO_COLUMNS: readonly ColumnTemplate[] = [
   manual("cliente", "Nombre del cliente", { width: 200 }),
   manual("pedido", "# Pedido", { required: true, width: 120 }),
   derivada("vinculado", "En Kapta", "vinculado", { data_type: "boolean", width: 80 }),
+  // Estado general del pedido vinculado, para ver de un vistazo qué falta por
+  // aplicar al Master (MOM §30.8). Lo etiqueta la pantalla.
+  derivada("estado_kapta_pedido", "Estado en Kapta", "estado_kapta_pedido", { data_type: "status", width: 130 }),
   manual("estado", "Estado", { data_type: "status", width: 150 }),
   manual("estado_reportado", "Estado escrito", { width: 150, visible: false }),
   manual("reprogramar_para", "Reprogramar para", { data_type: "date", width: 120 }),
   manual("efectivo", "Efectivo", { data_type: "number", width: 90 }),
   manual("a_cobrar", "A cobrar", { data_type: "number", width: 90 }),
+  // Total del pedido en Kapta, al lado de lo que cobró el motorizado: la
+  // diferencia se ve en la fila y abre observación (MOM §30.5).
+  derivada("monto_kapta", "Monto Kapta", "monto_kapta", { data_type: "number", width: 100 }),
   manual("metodo_pago", "Método de pago", { data_type: "select", options: REPARTO_PAYMENT_METHODS, width: 140 }),
   manual("metodo_pago_reportado", "Método escrito", { width: 150, visible: false }),
   manual("observacion_1", "Observación 1", { width: 180 }),

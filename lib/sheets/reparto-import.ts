@@ -164,15 +164,94 @@ export function puntoRowKey(fecha: string | null, pedido: string | null, cliente
   return `${day}#${who}`;
 }
 
+/** Lo que necesita una fila para construirse, venga de la matriz o de la foto. */
+export interface PuntoInput {
+  fecha: string | null;
+  punto: string | null;
+  tienda: string | null;
+  cliente: string | null;
+  pedidoRaw: string | null;
+  estadoRaw: string | null;
+  efectivoRaw: string | null;
+  aCobrarRaw: string | null;
+  metodoRaw: string | null;
+  observacion_1: string | null;
+  observacion_2: string | null;
+  /** Nº de fila de origen (matriz) o correlativo (foto). */
+  source_row: number;
+}
+
+/** Estado acumulado durante una lectura: claves vistas y vocabulario desconocido. */
+export interface PuntoBuildContext {
+  lookup: StatusLookup;
+  seen: Map<string, number>;
+  unknownStatuses: Map<string, number>;
+  unknownPayments: Map<string, number>;
+}
+
+export function newBuildContext(lookup: StatusLookup): PuntoBuildContext {
+  return { lookup, seen: new Map(), unknownStatuses: new Map(), unknownPayments: new Map() };
+}
+
+/**
+ * Construye una fila de cuaderno a partir de sus celdas. Devuelve null si no
+ * hay nada que guardar (punto vacío al final del bloque). La misma función
+ * sirve para la matriz del Excel y para las líneas leídas de una foto: así
+ * las dos entradas siguen las mismas reglas de estado, monto y revisión.
+ */
+export function buildPuntoRow(input: PuntoInput, ctx: PuntoBuildContext): ParsedPuntoRow | null {
+  const pedidoRaw = (input.pedidoRaw ?? "").trim();
+  const pedido = normalizeOrderCode(pedidoRaw);
+  const cliente = input.cliente?.trim() || null;
+  if (!pedido && !pedidoRaw && !cliente) return null;
+
+  const review: string[] = [];
+  if (!input.fecha) review.push("sin_fecha");
+  const status = interpretStatus(input.estadoRaw, input.fecha, ctx.lookup);
+  if (status.unknown) {
+    review.push("estado_sin_equivalente");
+    ctx.unknownStatuses.set(status.unknown, (ctx.unknownStatuses.get(status.unknown) ?? 0) + 1);
+  }
+  const pay = resolvePayment(input.metodoRaw);
+  if (pay.reported && !pay.method) {
+    ctx.unknownPayments.set(pay.reported, (ctx.unknownPayments.get(pay.reported) ?? 0) + 1);
+  }
+  if (!pedido && pedidoRaw) review.push("pedido_no_shopify");
+
+  const baseKey = puntoRowKey(input.fecha, pedido ?? (pedidoRaw ? normalizeAlias(pedidoRaw).toLowerCase() : null), cliente, input.source_row);
+  const n = (ctx.seen.get(baseKey) ?? 0) + 1;
+  ctx.seen.set(baseKey, n);
+  if (n > 1) review.push("pedido_repetido_en_el_dia");
+
+  return {
+    row_key: n > 1 ? `${baseKey}#${n}` : baseKey,
+    fecha: input.fecha,
+    punto: input.punto?.trim() || null,
+    tienda: normalizeStore(input.tienda),
+    cliente,
+    pedido: pedido ?? (pedidoRaw || null),
+    pedido_shopify: Boolean(pedido),
+    estado: status.estado,
+    estado_reportado: input.estadoRaw?.trim() || null,
+    reprogramar_para: status.reprogramar_para,
+    efectivo: parseMoney(input.efectivoRaw),
+    a_cobrar: parseMoney(input.aCobrarRaw),
+    metodo_pago: pay.method,
+    metodo_pago_reportado: pay.reported,
+    observacion_1: input.observacion_1?.trim() || null,
+    observacion_2: input.observacion_2?.trim() || null,
+    review,
+    source_row: input.source_row,
+  };
+}
+
 /**
  * Lee la matriz de una hoja de motorizado. `lookup` trae el vocabulario del
  * dominio más los alias de la hoja.
  */
 export function parseRepartoMatrix(matrix: readonly (readonly string[])[], lookup: StatusLookup): ParsedReparto {
   const rows: ParsedPuntoRow[] = [];
-  const unknownStatuses = new Map<string, number>();
-  const unknownPayments = new Map<string, number>();
-  const seen = new Map<string, number>();
+  const ctx = newBuildContext(lookup);
   let fecha: string | null = null;
   let blocks = 0;
   let skipped = 0;
@@ -194,58 +273,78 @@ export function parseRepartoMatrix(matrix: readonly (readonly string[])[], looku
 
     const pedidoRaw = col(3);
     const isPunto = /^PUNTO\b/.test(aNorm) || /^PTO\b/.test(aNorm);
-    const pedido = normalizeOrderCode(pedidoRaw);
-    if (!isPunto && !pedido) {
+    if (!isPunto && !normalizeOrderCode(pedidoRaw)) {
       skipped += 1;
       return;
     }
-    const cliente = col(2) || null;
-    if (!pedido && !pedidoRaw && !cliente) {
+    const row = buildPuntoRow(
+      {
+        fecha,
+        punto: a || null,
+        tienda: col(1) || null,
+        cliente: col(2) || null,
+        pedidoRaw,
+        estadoRaw: col(4) || null,
+        efectivoRaw: col(5) || null,
+        aCobrarRaw: col(6) || null,
+        metodoRaw: col(7) || null,
+        observacion_1: col(8) || null,
+        observacion_2: col(9) || null,
+        source_row: index + 1,
+      },
+      ctx,
+    );
+    if (!row) {
       skipped += 1; // «Punto 88» vacío al final del bloque
       return;
     }
-
-    const review: string[] = [];
-    if (!fecha) review.push("sin_fecha");
-    const status = interpretStatus(col(4), fecha, lookup);
-    if (status.unknown) {
-      review.push("estado_sin_equivalente");
-      unknownStatuses.set(status.unknown, (unknownStatuses.get(status.unknown) ?? 0) + 1);
-    }
-    const pay = resolvePayment(col(7));
-    if (pay.reported && !pay.method) {
-      unknownPayments.set(pay.reported, (unknownPayments.get(pay.reported) ?? 0) + 1);
-    }
-    if (!pedido && pedidoRaw) review.push("pedido_no_shopify");
-
-    const baseKey = puntoRowKey(fecha, pedido ?? (pedidoRaw ? normalizeAlias(pedidoRaw).toLowerCase() : null), cliente, index + 1);
-    const n = (seen.get(baseKey) ?? 0) + 1;
-    seen.set(baseKey, n);
-    if (n > 1) review.push("pedido_repetido_en_el_dia");
-
-    rows.push({
-      row_key: n > 1 ? `${baseKey}#${n}` : baseKey,
-      fecha,
-      punto: a || null,
-      tienda: normalizeStore(col(1)),
-      cliente,
-      pedido: pedido ?? (pedidoRaw || null),
-      pedido_shopify: Boolean(pedido),
-      estado: status.estado,
-      estado_reportado: col(4) || null,
-      reprogramar_para: status.reprogramar_para,
-      efectivo: parseMoney(col(5)),
-      a_cobrar: parseMoney(col(6)),
-      metodo_pago: pay.method,
-      metodo_pago_reportado: pay.reported,
-      observacion_1: col(8) || null,
-      observacion_2: col(9) || null,
-      review,
-      source_row: index + 1,
-    });
+    rows.push(row);
   });
 
-  return { rows, blocks, unknownStatuses, unknownPayments, skipped };
+  return { rows, blocks, unknownStatuses: ctx.unknownStatuses, unknownPayments: ctx.unknownPayments, skipped };
+}
+
+/** Una línea tal como la devuelve la lectura por visión (lib/settlement-vision). */
+export interface VisionLineInput {
+  order_name: string | null;
+  customer_name: string | null;
+  declared_status: string | null;
+  declared_amount: number | null;
+  payment_method?: string | null;
+  store_hint?: string | null;
+}
+
+/**
+ * Las líneas leídas de una FOTO del cuaderno, como filas de una sola ruta.
+ * `fecha` es la que leyó la visión o la que tecleó quien subió la foto; sin
+ * fecha las filas quedan a revisión igual que un bloque ilegible del Excel.
+ */
+export function parsedFromVisionLines(lines: readonly VisionLineInput[], fecha: string | null, lookup: StatusLookup): ParsedReparto {
+  const ctx = newBuildContext(lookup);
+  const rows: ParsedPuntoRow[] = [];
+  let skipped = 0;
+  lines.forEach((line, i) => {
+    const row = buildPuntoRow(
+      {
+        fecha,
+        punto: `Punto ${String(i + 1).padStart(2, "0")}`,
+        tienda: line.store_hint ?? null,
+        cliente: line.customer_name,
+        pedidoRaw: line.order_name,
+        estadoRaw: line.declared_status,
+        efectivoRaw: null,
+        aCobrarRaw: line.declared_amount === null || line.declared_amount === undefined ? null : String(line.declared_amount),
+        metodoRaw: line.payment_method ?? null,
+        observacion_1: null,
+        observacion_2: null,
+        source_row: i + 1,
+      },
+      ctx,
+    );
+    if (row) rows.push(row);
+    else skipped += 1;
+  });
+  return { rows, blocks: 1, unknownStatuses: ctx.unknownStatuses, unknownPayments: ctx.unknownPayments, skipped };
 }
 
 /** Los valores que se guardan en `sheet_rows.values` para una fila leída. */

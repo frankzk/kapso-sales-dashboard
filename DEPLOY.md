@@ -717,6 +717,21 @@ historial por celda y observaciones de cuadre. Plan e iteraciones en
    motorizado (misma ruta y mismo script, claves `courier_alexis` y
    `courier_urpi`) pero con el vocabulario de estados del courier.
 
+7. **Cierre por pedido** (MOM §30.8). Desde una hoja cuaderno, «Aplicar» por
+   fila o «Aplicar entregas del periodo al Master» escribe `order_events`
+   `status_override` con `source = liquidacion` y recalcula el Master, igual
+   que Liquidaciones. Exige `master.edit`. Filas con observación abierta,
+   pedidos anulados o ya entregados no se tocan. Sin camino de devolución.
+8. **Observaciones automáticas** al importar y al editar: monto que difiere del
+   total en más de S/ 0,50, pedido anulado/devuelto en Kapta, o cobro digital
+   (Yape, Plin, link, transferencia) sin comprobante validado ni pedido pagado
+   en Shopify. Nunca dos abiertas por fila y campo. **Migración
+   `0170_sheet_observation_reason_pago.sql`** añade el motivo al catálogo; a
+   mano, antes del código.
+9. **Foto del cuaderno**: `/api/sheets/import` acepta jpeg/png/webp/gif hasta
+   8 MB y usa la misma visión que Liquidaciones (clave de la tienda o
+   `ANTHROPIC_API_KEY`). Si la foto no trae fecha, la pantalla la pide.
+
 ## 5k-ter. Rutas de reparto (motorizados propios)
 
 Sección propia (`/dashboard/rutas`) para el coordinador y una pantalla aparte

@@ -13,6 +13,7 @@ import {
   loadContributions,
   loadObservations,
   loadOrderFacts,
+  loadOrderFactsByIds,
   loadStoredRows,
   loadStoredRowsByMonth,
   loadStoredRowsFor,
@@ -113,7 +114,12 @@ async function Liquidaciones2Content({ searchParams }: { searchParams: Promise<S
       const filtered = search
         ? stored.filter((r) => JSON.stringify(r.values).toLowerCase().includes(search.toLowerCase()))
         : stored;
-      rows = computeRows({ rowKey: domain.row_key, columns: sheet.columns, stored: filtered, lookups });
+      // En cuaderno, el pedido vinculado se lee para «Estado en Kapta» y
+      // «Monto Kapta» (MOM §30.8): lo que decide qué falta por aplicar.
+      const linkedFacts = isCuadernoSheet(sheet, domain)
+        ? await loadOrderFactsByIds(filtered.map((r) => r.order_id).filter((id): id is string => Boolean(id)))
+        : undefined;
+      rows = computeRows({ rowKey: domain.row_key, columns: sheet.columns, stored: filtered, lookups, linkedFacts });
     }
   }
 
@@ -140,6 +146,7 @@ async function Liquidaciones2Content({ searchParams }: { searchParams: Promise<S
       lastImport={(sheet?.config as { last_import?: Record<string, unknown> } | undefined)?.last_import ?? null}
       canEdit={canEdit}
       canManage={canManage}
+      canApplyMaster={perms.can("master.edit")}
       panel={sp.panel ?? null}
     />
   );

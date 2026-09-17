@@ -11,13 +11,16 @@
 //     guarda (la historia de Aurela anterior a junio 2026 no está en Kapta).
 //   * Los estados sin equivalente se registran como alias de la hoja con
 //     `status_code = null` para que aparezcan en la configuración.
-//   * No se abren observaciones aquí (iteración 4): el resumen dice cuántas
-//     filas quedaron a revisión y por qué.
+//   * Tras guardar, cada fila vinculada que declara ENTREGA se contrasta con
+//     Kapta y las diferencias abren observaciones (lib/sheets/reconcile.ts):
+//     monto distinto al del pedido, o pedido anulado/devuelto en Kapta. Nunca
+//     se corrige nada en silencio; el resumen dice cuántas se abrieron.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { lookupFromTemplates, normalizeAlias, type StatusLookup } from "./statuses";
 import { parseRepartoMatrix, puntoRowValues, type ParsedReparto } from "./reparto-import";
-import type { DomainStatusRow, StatusAliasRow } from "./types";
+import { countByField, planObservations, type ExistingObservation, type ReconcileOrder, type ReconcileRow } from "./reconcile";
+import type { CellValue, DomainStatusRow, StatusAliasRow, StatusEffect } from "./types";
 
 export interface RepartoImportSummary {
   sheet: string;
@@ -32,6 +35,16 @@ export interface RepartoImportSummary {
   unknownStatuses: [string, number][];
   unknownPayments: [string, number][];
   skipped: number;
+  /** Observaciones de cuadre abiertas por esta carga, por campo. */
+  observations: Record<string, number>;
+}
+
+export interface SheetRef {
+  id: string;
+  org_id: string;
+  domain_id: string;
+  key: string;
+  name: string;
 }
 
 export async function statusLookupForSheet(
@@ -52,6 +65,12 @@ export async function statusLookupForSheet(
   // Los códigos del dominio también valen como alias de sí mismos.
   if (!codes.size) return lookupFromTemplates([]);
   return { codes, aliases: aliasMap };
+}
+
+/** Efecto de cada estado del dominio de la hoja: qué aporta al Consolidado. */
+export async function effectsForDomain(admin: SupabaseClient, domainId: string): Promise<Map<string, StatusEffect>> {
+  const { data } = await admin.from("sheet_domain_statuses").select("code,effect").eq("domain_id", domainId);
+  return new Map(((data ?? []) as { code: string; effect: StatusEffect }[]).map((s) => [s.code, s.effect]));
 }
 
 async function resolveOrderIds(
@@ -76,9 +95,106 @@ async function resolveOrderIds(
   return out;
 }
 
+/**
+ * Contrasta filas guardadas de una hoja cuaderno con Kapta y abre las
+ * observaciones que falten (MOM §30.5). Se llama tras importar y tras editar
+ * a mano el estado o el monto de una fila. Devuelve cuántas abrió por campo.
+ */
+export async function reconcileSheetRows(
+  admin: SupabaseClient,
+  sheet: SheetRef,
+  rowKeys: readonly string[],
+  note: string,
+): Promise<Record<string, number>> {
+  if (!rowKeys.length) return {};
+  const rows: ReconcileRow[] = [];
+  for (let i = 0; i < rowKeys.length; i += 250) {
+    const { data, error } = await admin
+      .from("sheet_rows")
+      .select("id,row_key,order_id,values")
+      .eq("sheet_id", sheet.id)
+      .in("row_key", rowKeys.slice(i, i + 250))
+      .not("order_id", "is", null);
+    if (error) throw new Error(`No se pudieron leer las filas para el cuadre: ${error.message}`);
+    for (const r of (data ?? []) as { id: string; row_key: string; order_id: string | null; values: Record<string, CellValue> }[]) {
+      rows.push({ row_id: r.id, row_key: r.row_key, order_id: r.order_id, values: r.values ?? {} });
+    }
+  }
+  if (!rows.length) return {};
+
+  const orderIds = [...new Set(rows.map((r) => r.order_id!).filter(Boolean))];
+  const orders = new Map<string, ReconcileOrder>();
+  // Comprobantes validados: la prueba de un cobro digital (0170).
+  const validated = new Set<string>();
+  for (let i = 0; i < orderIds.length; i += 200) {
+    const { data, error } = await admin
+      .from("order_payments")
+      .select("order_id")
+      .eq("validation_status", "validado")
+      .in("order_id", orderIds.slice(i, i + 200));
+    if (error) throw new Error(`No se pudieron leer los comprobantes para el cuadre: ${error.message}`);
+    for (const p of (data ?? []) as { order_id: string }[]) validated.add(p.order_id);
+  }
+  for (let i = 0; i < orderIds.length; i += 200) {
+    const { data, error } = await admin
+      .from("order_master")
+      .select("order_id,general_status,order_total,orders(total_amount,cancelled_at,financial_status)")
+      .in("order_id", orderIds.slice(i, i + 200));
+    if (error) throw new Error(`No se pudieron leer los pedidos para el cuadre: ${error.message}`);
+    for (const o of (data ?? []) as unknown as {
+      order_id: string;
+      general_status: string;
+      order_total: number | null;
+      orders: { total_amount: number | string | null; cancelled_at: string | null; financial_status: string | null } | null;
+    }[]) {
+      const total = o.orders?.total_amount ?? o.order_total;
+      orders.set(o.order_id, {
+        order_id: o.order_id,
+        total_amount: total === null || total === undefined ? null : Number(total),
+        general_status: o.general_status,
+        cancelled_at: o.orders?.cancelled_at ?? null,
+        paid: validated.has(o.order_id) || o.orders?.financial_status === "paid",
+      });
+    }
+  }
+
+  const rowIds = rows.map((r) => r.row_id);
+  const existing: ExistingObservation[] = [];
+  for (let i = 0; i < rowIds.length; i += 250) {
+    const { data, error } = await admin
+      .from("sheet_observations")
+      .select("row_id,field,status,external_value")
+      .eq("sheet_id", sheet.id)
+      .in("row_id", rowIds.slice(i, i + 250));
+    if (error) throw new Error(`No se pudieron leer las observaciones: ${error.message}`);
+    existing.push(...((data ?? []) as ExistingObservation[]));
+  }
+
+  const effects = await effectsForDomain(admin, sheet.domain_id);
+  const plans = planObservations(rows, orders, effects, existing, note);
+  for (let i = 0; i < plans.length; i += 400) {
+    const { error } = await admin.from("sheet_observations").insert(
+      plans.slice(i, i + 400).map((p) => ({
+        org_id: sheet.org_id,
+        sheet_id: sheet.id,
+        row_id: p.row_id,
+        order_id: p.order_id,
+        field: p.field,
+        external_value: p.external_value,
+        kapta_value: p.kapta_value,
+        difference: p.difference,
+        reason_code: p.reason_code,
+        note: p.note,
+      })),
+    );
+    if (error) throw new Error(`No se pudieron abrir las observaciones: ${error.message}`);
+  }
+  return countByField(plans);
+}
+
 export async function applyRepartoImport(
   admin: SupabaseClient,
-  sheet: { id: string; org_id: string; domain_id: string; key: string; name: string },
+  sheet: SheetRef,
   parsed: ParsedReparto,
   opts: { userId: string | null; filename: string | null },
 ): Promise<RepartoImportSummary> {
@@ -105,6 +221,7 @@ export async function applyRepartoImport(
   let linked = 0;
   const review: Record<string, number> = {};
   const toUpsert: Record<string, unknown>[] = [];
+  const writtenKeys: string[] = [];
   for (const row of parsed.rows) {
     const source = existingSource.get(row.row_key);
     if (source === "manual") {
@@ -116,6 +233,7 @@ export async function applyRepartoImport(
     for (const reason of row.review) review[reason] = (review[reason] ?? 0) + 1;
     if (source) updated += 1;
     else inserted += 1;
+    writtenKeys.push(row.row_key);
     toUpsert.push({
       sheet_id: sheet.id,
       row_key: row.row_key,
@@ -138,6 +256,13 @@ export async function applyRepartoImport(
     if (error) throw new Error(`No se pudieron registrar los alias: ${error.message}`);
   }
 
+  const observations = await reconcileSheetRows(
+    admin,
+    sheet,
+    writtenKeys,
+    `Importación ${new Date().toISOString().slice(0, 10)} · ${sheet.name}`,
+  );
+
   const summary: RepartoImportSummary = {
     sheet: sheet.name,
     blocks: parsed.blocks,
@@ -151,6 +276,7 @@ export async function applyRepartoImport(
     unknownStatuses: [...parsed.unknownStatuses].sort((a, b) => b[1] - a[1]),
     unknownPayments: [...parsed.unknownPayments].sort((a, b) => b[1] - a[1]),
     skipped: parsed.skipped,
+    observations,
   };
 
   const { data: current } = await admin.from("sheets").select("config").eq("id", sheet.id).maybeSingle();
@@ -170,7 +296,7 @@ export async function applyRepartoImport(
 /** Lee y aplica en un paso: lo que usan la ruta de subida y el script. */
 export async function importRepartoMatrix(
   admin: SupabaseClient,
-  sheet: { id: string; org_id: string; domain_id: string; key: string; name: string },
+  sheet: SheetRef,
   matrix: readonly (readonly string[])[],
   opts: { userId: string | null; filename: string | null },
 ): Promise<RepartoImportSummary> {

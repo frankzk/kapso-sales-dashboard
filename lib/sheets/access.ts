@@ -430,6 +430,29 @@ export async function loadOrderFacts(q: FactsQuery): Promise<OrderFacts[]> {
   }));
 }
 
+/** Hechos de pedidos concretos (los vinculados a filas de un cuaderno). */
+export async function loadOrderFactsByIds(orderIds: readonly string[]): Promise<Map<string, OrderFacts>> {
+  const out = new Map<string, OrderFacts>();
+  const ids = [...new Set(orderIds.filter(Boolean))];
+  if (!ids.length) return out;
+  const admin = createAdminSupabase();
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await admin.from("order_master").select(FACT_COLUMNS).in("order_id", ids.slice(i, i + 200));
+    if (error) throw new Error(`No se pudieron leer los pedidos vinculados: ${error.message}`);
+    for (const { orders, ...rest } of (data ?? []) as unknown as (Omit<OrderFacts, "cancelled_at" | "cancel_reason"> & {
+      orders: { cancelled_at: string | null; cancel_reason: string | null } | null;
+    })[]) {
+      out.set(rest.order_id, {
+        ...rest,
+        attempt_count: rest.attempt_count ?? 0,
+        cancelled_at: orders?.cancelled_at ?? null,
+        cancel_reason: orders?.cancel_reason ?? null,
+      });
+    }
+  }
+  return out;
+}
+
 export async function loadStoredRows(sheetId: string, limit = 5000): Promise<StoredRow[]> {
   const sb = await createServerSupabase();
   const { data, error } = await sb

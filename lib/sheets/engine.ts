@@ -50,6 +50,9 @@ export interface EngineInput {
   lookups?: readonly LookupSheet[];
   /** Aportes de otras hojas por nº de pedido (iteraciones 2 y 3). */
   contributions?: ReadonlyMap<string, readonly Contribution[]>;
+  /** Hechos de los pedidos VINCULADOS a filas guardadas (hojas cuaderno), por
+   *  `order_id`: alimentan las reglas que miran al pedido desde la fila. */
+  linkedFacts?: ReadonlyMap<string, OrderFacts>;
 }
 
 /** Índice de una hoja consultable: columna → valor normalizado → fila. */
@@ -122,9 +125,10 @@ export function computeRows(input: EngineInput): ComputedRow[] {
     const cancelled = Boolean(facts?.cancelled_at) || facts?.general_status === "anulado";
     const resolution = facts ? resolveConsolidado(contributions, cancelled) : null;
 
+    const linked = stored?.order_id ? (input.linkedFacts?.get(stored.order_id) ?? null) : null;
     for (const c of derivadas) {
       const rule = (c.source as { rule?: string }).rule ?? "";
-      cells[c.key] = applyRule(rule, { facts, cells, resolution, zonaCatalog, contributions, stored });
+      cells[c.key] = applyRule(rule, { facts, cells, resolution, zonaCatalog, contributions, stored, linked });
     }
     return { row_key: rowKey, order_id: facts?.order_id ?? stored?.order_id ?? null, stored_id: stored?.id ?? null, cells };
   };
@@ -149,6 +153,8 @@ interface RuleContext {
   zonaCatalog: (districtKey: string) => string | null;
   contributions: readonly Contribution[];
   stored: StoredRow | null;
+  /** Pedido vinculado a la fila guardada (cuaderno), si se cargó. */
+  linked: OrderFacts | null;
 }
 
 /** Reglas con nombre. Añadir una es añadir un caso aquí y una prueba. */
@@ -164,6 +170,8 @@ export const RULES = [
   "diferencia_estatus",
   "aportes",
   "vinculado",
+  "estado_kapta_pedido",
+  "monto_kapta",
 ] as const;
 
 function applyRule(rule: string, ctx: RuleContext): CellValue {
@@ -194,6 +202,11 @@ function applyRule(rule: string, ctx: RuleContext): CellValue {
         : null;
     case "vinculado":
       return ctx.stored ? Boolean(ctx.stored.order_id) : null;
+    case "estado_kapta_pedido":
+      // Código del estado general del pedido vinculado; la pantalla lo etiqueta.
+      return ctx.linked ? ctx.linked.general_status : null;
+    case "monto_kapta":
+      return ctx.linked?.order_total ?? null;
     case "diferencia_estatus": {
       if (!facts || !resolution) return null;
       const kapta = facts.general_status;

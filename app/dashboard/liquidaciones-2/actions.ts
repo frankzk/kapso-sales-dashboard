@@ -18,6 +18,9 @@ import { normalizeOrderCode, puntoRowKey } from "@/lib/sheets/reparto-import";
 import { isCuadernoSheet } from "@/lib/sheets/templates";
 import { statusLookupForSheet } from "@/lib/sheets/reparto-import-db";
 import { applyWrittenPayment, applyWrittenStatus } from "@/lib/sheets/written-status";
+import { effectsForDomain, reconcileSheetRows, type SheetRef } from "@/lib/sheets/reparto-import-db";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { defaultOperationalFor } from "@/lib/order-status";
 import type { CellValue, ColumnDataType, StatusEffect } from "@/lib/sheets/types";
 
 export interface SheetActionResult {
@@ -47,6 +50,49 @@ async function guard(permission: Permission) {
 async function sheetOrg(admin: ReturnType<typeof createAdminSupabase>, sheetId: string) {
   const { data } = await admin.from("sheets").select("id,org_id,domain_id,key").eq("id", sheetId).maybeSingle();
   return (data as { id: string; org_id: string; domain_id: string; key: string } | null) ?? null;
+}
+
+/** La hoja con nombre, config y clave de fila del dominio: lo que piden el cuadre y el cierre. */
+async function sheetFull(admin: ReturnType<typeof createAdminSupabase>, sheetId: string) {
+  const { data } = await admin
+    .from("sheets")
+    .select("id,org_id,domain_id,key,name,config,sheet_domains!inner(key,row_key)")
+    .eq("id", sheetId)
+    .maybeSingle();
+  if (!data) return null;
+  const d = data as unknown as {
+    id: string; org_id: string; domain_id: string; key: string; name: string;
+    config: Record<string, unknown> | null;
+    sheet_domains: { key: string; row_key: "pedido" | "guia" | "punto" | "valor" | "periodo" };
+  };
+  return {
+    ref: { id: d.id, org_id: d.org_id, domain_id: d.domain_id, key: d.key, name: d.name } satisfies SheetRef,
+    config: d.config ?? {},
+    domainKey: d.sheet_domains.key,
+    cuaderno: isCuadernoSheet({ config: d.config }, { row_key: d.sheet_domains.row_key }),
+  };
+}
+
+/** Columnas de una fila cuaderno que, al cambiar, obligan a contrastar con Kapta. */
+const RECONCILE_COLUMNS = new Set(["estado", "a_cobrar", "pedido", "metodo_pago"]);
+
+/**
+ * Tras editar una fila de cuaderno: si el cambio toca estado, monto o
+ * pedido, se contrasta con Kapta y se abren las observaciones que falten
+ * (MOM §30.5). Devuelve un texto para la pantalla o null si no abrió nada.
+ */
+async function reconcileAfterEdit(
+  admin: ReturnType<typeof createAdminSupabase>,
+  sheetId: string,
+  rowKey: string,
+  columnKey: string,
+): Promise<string | null> {
+  if (!RECONCILE_COLUMNS.has(columnKey)) return null;
+  const full = await sheetFull(admin, sheetId);
+  if (!full || !full.cuaderno) return null;
+  const opened = await reconcileSheetRows(admin, full.ref, [rowKey], `Edición ${new Date().toISOString().slice(0, 10)} · ${full.ref.name}`);
+  const parts = Object.entries(opened).map(([field, n]) => `${n} de ${field}`);
+  return parts.length ? `Se abrió una observación (${parts.join(", ")}): el valor no coincide con Kapta.` : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -235,8 +281,9 @@ export async function setCell(input: {
     actor: g.user.id,
   });
   if (hErr) return { ok: false, error: `Se guardó la celda pero no el historial: ${hErr.message}` };
+  const opened = await reconcileAfterEdit(g.admin, input.sheetId, rowKey, input.columnKey);
   revalidatePath(PATH);
-  return { ok: true };
+  return opened ? { ok: true, message: opened } : { ok: true };
 }
 
 /**
@@ -308,10 +355,12 @@ async function setWrittenCell(
       .from("sheet_status_aliases")
       .upsert({ sheet_id: input.sheetId, alias: unknownAlias, status_code: null, seen_count: 1 }, { onConflict: "sheet_id,alias", ignoreDuplicates: true });
   }
+  const opened = await reconcileAfterEdit(g.admin, input.sheetId, rowKey, input.columnKey);
   revalidatePath(PATH);
-  return unknownAlias
-    ? { ok: true, message: `«${text}» no tiene equivalente todavía: la fila queda a revisión. Asígnalo en «Estados y alias».` }
-    : { ok: true };
+  if (unknownAlias) {
+    return { ok: true, message: `«${text}» no tiene equivalente todavía: la fila queda a revisión. Asígnalo en «Estados y alias».` };
+  }
+  return opened ? { ok: true, message: opened } : { ok: true };
 }
 
 /** Convierte lo tecleado al tipo de la columna. `undefined` = inválido. */
@@ -410,8 +459,9 @@ export async function addSheetRow(sheetId: string, values: Record<string, CellVa
   await g.admin.from("sheet_cell_history").insert(
     Object.entries(clean).map(([column_key, new_value]) => ({ row_id: data.id, column_key, previous_value: null, new_value, actor: g.user.id })),
   );
+  const opened = cuaderno ? await reconcileAfterEdit(g.admin, sheetId, rowKey, "estado") : null;
   revalidatePath(PATH);
-  return { ok: true, message: "Fila guardada." };
+  return { ok: true, message: opened ? `Fila guardada. ${opened}` : "Fila guardada." };
 }
 
 // ---------------------------------------------------------------------------
@@ -579,4 +629,222 @@ export async function resolveObservation(id: string, reasonCode: string, resolut
   if (error) return { ok: false, error: error.message };
   revalidatePath(PATH);
   return { ok: true, message: "Observación resuelta." };
+}
+
+// ---------------------------------------------------------------------------
+// Cierre por pedido desde la hoja (MOM §30.8)
+// ---------------------------------------------------------------------------
+export interface ApplyMasterSummary {
+  aplicados: number;
+  yaEstaban: number;
+  saltadosAnulado: number;
+  sinVinculo: number;
+  sinEfecto: number;
+  /** Filas con efecto devolución: no hay camino al Master para devolver desde una hoja. */
+  devolucionesSinCamino: number;
+  /** Filas con una observación abierta: alguien tiene que leer y aceptar el motivo antes (§30.8). */
+  conObservacionAbierta: number;
+}
+
+/**
+ * Marca como entregados en el Master los pedidos de filas de una hoja
+ * cuaderno cuyo estado declara entrega. Es EL MISMO camino que usa
+ * Liquidaciones (`applySettlementToMaster`): un `order_events` de tipo
+ * `status_override` con `source = "liquidacion"` y el operativo por defecto,
+ * seguido del recálculo del Master. No hay otro camino, a propósito (§11.4).
+ *
+ * Nunca toca un pedido anulado: ese caso vive como observación. Y no existe
+ * camino de devolución desde una hoja (ni en Liquidaciones ni en Rutas), así
+ * que las filas con efecto devolución se cuentan y se dejan como están.
+ *
+ * Una fila con observación ABIERTA tampoco cruza: el motivo lo escribe quien
+ * repartió, lo acepta quien liquida (resuelve la observación) y solo entonces
+ * la fila puede ir al Master (§30.8).
+ */
+export async function applyCuadernoRowsToMaster(sheetId: string, rowKeys: string[]): Promise<SheetActionResult & { summary?: ApplyMasterSummary }> {
+  const g = await guard("master.edit");
+  if ("error" in g) return { ok: false, error: g.error };
+  const full = await sheetFull(g.admin, sheetId);
+  if (!full || !g.orgIds.has(full.ref.org_id)) return { ok: false, error: "Hoja fuera de tu acceso." };
+  if (!full.cuaderno) return { ok: false, error: "Solo se aplica al Master desde una hoja cuaderno." };
+  const keys = [...new Set(rowKeys.map((k) => k.trim()).filter(Boolean))];
+  if (!keys.length) return { ok: false, error: "No hay filas que aplicar." };
+
+  const effects = await effectsForDomain(g.admin, full.ref.domain_id);
+  type Row = { id: string; row_key: string; order_id: string | null; values: Record<string, CellValue> };
+  const rows: Row[] = [];
+  for (let i = 0; i < keys.length; i += 250) {
+    const { data, error } = await g.admin
+      .from("sheet_rows")
+      .select("id,row_key,order_id,values")
+      .eq("sheet_id", sheetId)
+      .in("row_key", keys.slice(i, i + 250));
+    if (error) return { ok: false, error: error.message };
+    rows.push(...((data ?? []) as Row[]));
+  }
+
+  const summary: ApplyMasterSummary = { aplicados: 0, yaEstaban: 0, saltadosAnulado: 0, sinVinculo: 0, sinEfecto: 0, devolucionesSinCamino: 0, conObservacionAbierta: 0 };
+  const withOpen = new Set<string>();
+  const rowIds = rows.map((r) => r.id);
+  for (let i = 0; i < rowIds.length; i += 250) {
+    const { data, error } = await g.admin
+      .from("sheet_observations")
+      .select("row_id")
+      .eq("sheet_id", sheetId)
+      .eq("status", "abierta")
+      .in("row_id", rowIds.slice(i, i + 250));
+    if (error) return { ok: false, error: error.message };
+    for (const o of (data ?? []) as { row_id: string | null }[]) if (o.row_id) withOpen.add(o.row_id);
+  }
+  const candidates: Row[] = [];
+  for (const row of rows) {
+    if (!row.order_id) {
+      summary.sinVinculo += 1;
+      continue;
+    }
+    if (withOpen.has(row.id)) {
+      summary.conObservacionAbierta += 1;
+      continue;
+    }
+    const estado = typeof row.values.estado === "string" ? row.values.estado : null;
+    const effect = estado ? effects.get(estado) : undefined;
+    if (effect === "devolucion") {
+      summary.devolucionesSinCamino += 1;
+      continue;
+    }
+    if (effect !== "entrega") {
+      summary.sinEfecto += 1;
+      continue;
+    }
+    candidates.push(row);
+  }
+
+  const orderIds = [...new Set(candidates.map((r) => r.order_id!))];
+  const master = new Map<string, { store_id: string; general_status: string; cancelled_at: string | null }>();
+  for (let i = 0; i < orderIds.length; i += 200) {
+    const { data, error } = await g.admin
+      .from("order_master")
+      .select("order_id,store_id,general_status,orders(cancelled_at)")
+      .in("order_id", orderIds.slice(i, i + 200));
+    if (error) return { ok: false, error: error.message };
+    for (const m of (data ?? []) as unknown as { order_id: string; store_id: string; general_status: string; orders: { cancelled_at: string | null } | null }[]) {
+      master.set(m.order_id, { store_id: m.store_id, general_status: m.general_status, cancelled_at: m.orders?.cancelled_at ?? null });
+    }
+  }
+
+  const courier = typeof full.config.courier === "string" && full.config.courier ? full.config.courier : "propio";
+  const riderName = typeof full.config.rider_name === "string" ? full.config.rider_name : full.ref.name;
+  const who = courier === "propio" ? `${riderName} (Grupo GF Courier)` : full.ref.name;
+  const now = new Date().toISOString();
+  const seen = new Set<string>();
+  const events: Record<string, unknown>[] = [];
+  for (const row of candidates) {
+    const orderId = row.order_id!;
+    if (seen.has(orderId)) continue;
+    const m = master.get(orderId);
+    if (!m) {
+      summary.sinVinculo += 1;
+      continue;
+    }
+    if (m.general_status === "anulado" || m.cancelled_at) {
+      summary.saltadosAnulado += 1;
+      continue;
+    }
+    if (m.general_status === "entregado") {
+      summary.yaEstaban += 1;
+      continue;
+    }
+    seen.add(orderId);
+    const fecha = typeof row.values.fecha === "string" ? row.values.fecha : null;
+    const written = typeof row.values.estado_reportado === "string" && row.values.estado_reportado ? row.values.estado_reportado : "entregado";
+    events.push({
+      store_id: m.store_id,
+      order_id: orderId,
+      kind: "status_override",
+      // Mediodía de Lima del día de la ruta: la hora exacta no se anotó en el cuaderno.
+      occurred_at: fecha ? `${fecha}T17:00:00.000Z` : now,
+      actor: g.user.id,
+      source: "liquidacion",
+      courier,
+      new_status: "entregado",
+      new_operational: defaultOperationalFor("entregado"),
+      reason: `Entregado según el cuaderno de ${who} (${written}).`,
+      payload: { sheet_id: sheetId, sheet_key: full.ref.key, row_key: row.row_key, row_id: row.id },
+    });
+  }
+
+  if (events.length) {
+    const { error } = await g.admin.from("order_events").insert(events);
+    if (error) return { ok: false, error: `No se pudo registrar la entrega: ${error.message}` };
+    await recomputeOrderMasterSafe(g.admin, events.map((e) => e.order_id as string));
+    summary.aplicados = events.length;
+  }
+  revalidatePath(PATH);
+  revalidatePath("/dashboard/pedidos");
+  const parts = [
+    `${summary.aplicados} aplicado(s)`,
+    summary.yaEstaban ? `${summary.yaEstaban} ya estaban entregados` : null,
+    summary.saltadosAnulado ? `${summary.saltadosAnulado} anulados en Kapta, no se tocan` : null,
+    summary.sinVinculo ? `${summary.sinVinculo} sin pedido en Kapta` : null,
+    summary.sinEfecto ? `${summary.sinEfecto} sin entrega declarada` : null,
+    summary.devolucionesSinCamino ? `${summary.devolucionesSinCamino} devoluciones sin camino al Master` : null,
+    summary.conObservacionAbierta ? `${summary.conObservacionAbierta} con observación pendiente de aceptar` : null,
+  ].filter(Boolean);
+  return { ok: true, message: `Master: ${parts.join(" · ")}.`, summary };
+}
+
+/**
+ * Pone motivo y nota a la observación abierta de una fila y campo (la que
+ * abrió el cuadre automático al editar). Si no había ninguna, la crea con el
+ * motivo. Es lo que confirma el mini-formulario en línea tras editar un monto.
+ */
+export async function setObservationReason(input: {
+  sheetId: string;
+  rowKey: string;
+  field: string;
+  reasonCode: string;
+  note: string;
+  externalValue?: string | null;
+  kaptaValue?: string | null;
+  difference?: number | null;
+}): Promise<SheetActionResult> {
+  const g = await guard("sheets.edit");
+  if ("error" in g) return { ok: false, error: g.error };
+  const sheet = await sheetOrg(g.admin, input.sheetId);
+  if (!sheet || !g.orgIds.has(sheet.org_id)) return { ok: false, error: "Hoja fuera de tu acceso." };
+  if (!input.reasonCode) return { ok: false, error: "Elige un motivo." };
+  const { data: row } = await g.admin.from("sheet_rows").select("id,order_id").eq("sheet_id", input.sheetId).eq("row_key", input.rowKey).maybeSingle();
+  if (!row) return { ok: false, error: "La fila no existe." };
+  const { data: open } = await g.admin
+    .from("sheet_observations")
+    .select("id")
+    .eq("sheet_id", input.sheetId)
+    .eq("row_id", row.id)
+    .eq("field", input.field)
+    .eq("status", "abierta")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const note = input.note.trim() || null;
+  if (open) {
+    const { error } = await g.admin.from("sheet_observations").update({ reason_code: input.reasonCode, note }).eq("id", open.id);
+    if (error) return { ok: false, error: error.message };
+  } else {
+    const { error } = await g.admin.from("sheet_observations").insert({
+      org_id: sheet.org_id,
+      sheet_id: input.sheetId,
+      row_id: row.id,
+      order_id: row.order_id,
+      field: input.field,
+      external_value: input.externalValue ?? null,
+      kapta_value: input.kaptaValue ?? null,
+      difference: input.difference ?? null,
+      reason_code: input.reasonCode,
+      note,
+      created_by: g.user.id,
+    });
+    if (error) return { ok: false, error: error.message };
+  }
+  revalidatePath(PATH);
+  return { ok: true, message: "Motivo guardado en la observación." };
 }

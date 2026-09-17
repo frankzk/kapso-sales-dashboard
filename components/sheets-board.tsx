@@ -11,11 +11,12 @@
 // Consolidado de un mes trae 1.000–3.000 filas y el Excel del que venimos
 // llegaba a 8.000: pintar todas es lo que hacía lento al Sheet.
 
-import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Card, EmptyState, cn } from "@/components/ui";
-import { OPERATIONAL_STATUSES, operationalLabel } from "@/lib/order-status";
+import { OPERATIONAL_STATUSES, generalLabel, operationalLabel } from "@/lib/order-status";
+import { amountDifference } from "@/lib/sheets/reconcile";
 import { suggestStatus } from "@/lib/sheets/statuses";
 import { REPARTO_PAYMENT_ALIASES, REPARTO_PAYMENT_METHODS, isCuadernoSheet } from "@/lib/sheets/templates";
 import type { DomainWithStatuses, SheetWithColumns } from "@/lib/sheets/access";
@@ -33,6 +34,7 @@ import type {
 import {
   addSheetRow,
   addManualColumn,
+  applyCuadernoRowsToMaster,
   createObservation,
   initializeSheets,
   removeStatusAlias,
@@ -40,6 +42,7 @@ import {
   saveColumnLayout,
   seedAliasesFromTemplate,
   setCell,
+  setObservationReason,
   setStatusAlias,
   upsertDomainStatus,
   type ColumnLayoutItem,
@@ -63,6 +66,8 @@ interface Props {
   filters: { month: string; search: string };
   canEdit: boolean;
   canManage: boolean;
+  /** `master.edit`: puede aplicar entregas del cuaderno al Master (MOM §30.8). */
+  canApplyMaster: boolean;
   panel: string | null;
   lastImport: Record<string, unknown> | null;
 }
@@ -152,6 +157,50 @@ interface GridContext {
   aliasSuggestions: string[];
   canManage: boolean;
   openStatuses: () => void;
+  /** Cierre por pedido: quién puede y cómo se pide (MOM §30.8). */
+  canApplyMaster: boolean;
+  applyToMaster: (rowKeys: string[]) => void;
+  /** Motivos del catálogo, para el mini-formulario tras editar un monto. */
+  reasons: ObservationReason[];
+  /** Observaciones abiertas por `stored_id` de la fila: bloquean el cruce al Master. */
+  openByRowId: Map<string, ObservationRow[]>;
+  /** Aceptar el motivo escrito por quien repartió = resolver la observación. */
+  acceptObservation: (observationId: string, reasonCode: string, note: string) => void;
+  canEdit: boolean;
+}
+
+/** ¿La fila declara entrega de un pedido de Kapta que todavía no está entregado ni anulado? */
+function declaresPendingDelivery(row: ComputedRow, statusByCode: Map<string, DomainStatusRow>): boolean {
+  if (row.cells.vinculado !== true) return false;
+  const code = typeof row.cells.estado === "string" ? row.cells.estado : null;
+  if (!code || statusByCode.get(code)?.effect !== "entrega") return false;
+  const kapta = typeof row.cells.estado_kapta_pedido === "string" ? row.cells.estado_kapta_pedido : null;
+  return kapta !== "entregado" && kapta !== "anulado";
+}
+
+/** Lista para el Master: declara entrega pendiente y no tiene observación abierta (§30.8). */
+function canApplyRow(row: ComputedRow, statusByCode: Map<string, DomainStatusRow>, openByRowId: Map<string, ObservationRow[]>): boolean {
+  if (!declaresPendingDelivery(row, statusByCode)) return false;
+  return !(row.stored_id && openByRowId.get(row.stored_id)?.length);
+}
+
+/** Diferencia entre lo cobrado y el monto Kapta cuando la fila declara entrega. */
+function rowAmountDifference(row: ComputedRow, statusByCode: Map<string, DomainStatusRow>): number | null {
+  const code = typeof row.cells.estado === "string" ? row.cells.estado : null;
+  if (!code || statusByCode.get(code)?.effect !== "entrega") return null;
+  return amountDifference(row.cells.a_cobrar ?? null, row.cells.monto_kapta ?? null);
+}
+
+/** El mini-formulario en línea: pide motivo tras editar un monto que no
+ *  cuadra, o para aceptar una observación que llegó sin motivo. */
+interface ReasonPrompt {
+  rowKey: string;
+  external: number | null;
+  kapta: number | null;
+  difference: number | null;
+  /** Si viene, confirmar RESUELVE esta observación en vez de ponerle motivo. */
+  observationId?: string;
+  title?: string;
 }
 
 const BTN = "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors";
@@ -194,6 +243,11 @@ export function SheetsBoard(props: Props) {
   };
 
   const cuaderno = Boolean(sheet && domain && isCuadernoSheet(sheet, domain));
+  const [reasonPrompt, setReasonPrompt] = useState<ReasonPrompt | null>(null);
+  const applyToMaster = (rowKeys: string[]) => {
+    if (!sheet) return;
+    run(() => applyCuadernoRowsToMaster(sheet.id, rowKeys));
+  };
   const gridContext: GridContext = useMemo(
     () => ({
       cuaderno,
@@ -206,8 +260,22 @@ export function SheetsBoard(props: Props) {
       ],
       canManage,
       openStatuses: () => setPanel("estados"),
+      canApplyMaster: props.canApplyMaster,
+      applyToMaster,
+      reasons: props.reasons,
+      openByRowId: (() => {
+        const m = new Map<string, ObservationRow[]>();
+        for (const o of props.observations) {
+          if (!o.row_id || o.status !== "abierta") continue;
+          m.set(o.row_id, [...(m.get(o.row_id) ?? []), o]);
+        }
+        return m;
+      })(),
+      acceptObservation: (id, reasonCode, note) => run(() => resolveObservation(id, reasonCode, note)),
+      canEdit,
     }),
-    [cuaderno, domain, props.aliases, canManage],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cuaderno, domain, props.aliases, canManage, props.canApplyMaster, props.reasons, props.observations, canEdit, sheet?.id],
   );
 
   return (
@@ -282,7 +350,11 @@ export function SheetsBoard(props: Props) {
               sheet={sheet}
               rows={rows}
               statusByCode={gridContext.statusByCode}
+              openByRowId={gridContext.openByRowId}
               canEdit={canEdit}
+              canApplyMaster={props.canApplyMaster}
+              pending={pending}
+              onApply={applyToMaster}
               lastImport={props.lastImport}
               onImported={() => router.refresh()}
             />
@@ -296,8 +368,43 @@ export function SheetsBoard(props: Props) {
             rows={rows}
             context={gridContext}
             canEdit={canEdit}
-            onEdit={(row, column, value) =>
-              run(() => setCell({ sheetId: sheet.id, rowKey: row.row_key, orderId: row.order_id, columnKey: column.key, value }))
+            onEdit={(row, column, value) => {
+              // Un monto que deja de cuadrar con Kapta pide motivo en la misma
+              // fila, sin modal. La observación ya la abre el servidor; aquí
+              // solo se completa el porqué (MOM §30.5).
+              const code = typeof row.cells.estado === "string" ? row.cells.estado : null;
+              const entrega = Boolean(code && gridContext.statusByCode.get(code)?.effect === "entrega");
+              const kapta = typeof row.cells.monto_kapta === "number" ? row.cells.monto_kapta : null;
+              const diff = cuaderno && column.key === "a_cobrar" && entrega ? amountDifference(value, kapta) : null;
+              run(
+                () => setCell({ sheetId: sheet.id, rowKey: row.row_key, orderId: row.order_id, columnKey: column.key, value }),
+                () => {
+                  if (diff !== null && kapta !== null && typeof value === "number") {
+                    setReasonPrompt({ rowKey: row.row_key, external: value, kapta, difference: diff });
+                  }
+                },
+              );
+            }}
+            reasonPrompt={reasonPrompt}
+            onReasonDone={() => setReasonPrompt(null)}
+            onReasonPrompt={setReasonPrompt}
+            onReasonSubmit={(prompt, reasonCode, note) =>
+              run(
+                () =>
+                  prompt.observationId
+                    ? resolveObservation(prompt.observationId, reasonCode, note)
+                    : setObservationReason({
+                        sheetId: sheet.id,
+                        rowKey: prompt.rowKey,
+                        field: "monto",
+                        reasonCode,
+                        note,
+                        externalValue: prompt.external === null ? null : prompt.external.toFixed(2),
+                        kaptaValue: prompt.kapta === null ? null : prompt.kapta.toFixed(2),
+                        difference: prompt.difference,
+                      }),
+                () => setReasonPrompt(null),
+              )
             }
             onFlag={
               canEdit
@@ -465,13 +572,30 @@ function CuadernoBar(props: {
   sheet: SheetWithColumns;
   rows: ComputedRow[];
   statusByCode: Map<string, DomainStatusRow>;
+  openByRowId: Map<string, ObservationRow[]>;
   canEdit: boolean;
+  canApplyMaster: boolean;
+  pending: boolean;
+  onApply: (rowKeys: string[]) => void;
   lastImport: Record<string, unknown> | null;
   onImported: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Una foto sin fecha legible: se guarda el archivo y se pide la fecha.
+  const [pendingPhoto, setPendingPhoto] = useState<{ file: File; lines: number } | null>(null);
+  const [photoDate, setPhotoDate] = useState("");
+  const { applicable, blocked } = useMemo(() => {
+    const applicable: string[] = [];
+    let blocked = 0;
+    for (const r of props.rows) {
+      if (!declaresPendingDelivery(r, props.statusByCode)) continue;
+      if (canApplyRow(r, props.statusByCode, props.openByRowId)) applicable.push(r.row_key);
+      else blocked += 1;
+    }
+    return { applicable, blocked };
+  }, [props.rows, props.statusByCode, props.openByRowId]);
 
   const totals = useMemo(() => {
     let entregados = 0;
@@ -499,25 +623,37 @@ function CuadernoBar(props: {
     return { entregados, efectivo, aCobrar, revision, vinculados, porMetodo };
   }, [props.rows, props.statusByCode]);
 
-  const upload = async (file: File) => {
+  const upload = async (file: File, fecha?: string) => {
     setBusy(true);
     setResult(null);
     try {
       const fd = new FormData();
       fd.set("file", file);
       fd.set("sheetId", props.sheet.id);
+      if (fecha) fd.set("fecha", fecha);
       const res = await fetch("/api/sheets/import", { method: "POST", body: fd });
-      const json = (await res.json()) as Record<string, unknown> & { error?: string };
+      const json = (await res.json()) as Record<string, unknown> & { error?: string; needs_date?: boolean; lines?: number };
+      if (res.status === 422 && json.needs_date) {
+        setPendingPhoto({ file, lines: Number(json.lines ?? 0) });
+        setResult({ ok: false, text: `La foto se leyó (${json.lines ?? 0} filas) pero no trae fecha. Indica la fecha de la ruta y reintenta.` });
+        return;
+      }
       if (!res.ok) {
         setResult({ ok: false, text: json.error ?? "No se pudo importar." });
         return;
       }
+      setPendingPhoto(null);
       const unknown = Array.isArray(json.unknownStatuses) ? (json.unknownStatuses as [string, number][]).length : 0;
+      const obs = (json.observations as Record<string, number> | undefined) ?? {};
+      const obsText = Object.entries(obs)
+        .map(([f, n]) => `${n} de ${f}`)
+        .join(", ");
       setResult({
         ok: true,
         text:
           `Importado «${String(json.worksheet ?? file.name)}»: ${json.rows} filas en ${json.blocks} rutas · ${json.inserted} nuevas, ${json.updated} actualizadas, ${json.keptManual} respetadas por edición manual · ${json.linked} vinculadas a un pedido de Kapta` +
-          (unknown ? ` · ${unknown} estados sin equivalente: revísalos en «Estados y alias»` : ""),
+          (unknown ? ` · ${unknown} estados sin equivalente: revísalos en «Estados y alias»` : "") +
+          (obsText ? ` · observaciones abiertas: ${obsText}` : " · sin diferencias con Kapta"),
       });
       props.onImported();
     } finally {
@@ -546,21 +682,42 @@ function CuadernoBar(props: {
           {tile("En Kapta", `${totals.vinculados.toLocaleString("es-PE")} de ${props.rows.length.toLocaleString("es-PE")}`, "muted")}
           {tile("A revisión", totals.revision.toLocaleString("es-PE"), totals.revision ? "amber" : "muted")}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {li && typeof li.at === "string" && (
             <span className="text-xs text-slate-400" title={String(li.filename ?? "")}>
               Última importación {li.at.slice(0, 10)}
             </span>
           )}
+          {props.canApplyMaster && (
+            <button
+              type="button"
+              className={applicable.length ? BTN_PRIMARY : BTN_QUIET}
+              disabled={props.pending || !applicable.length}
+              title={applicable.length ? "Marca como entregados en el Master los pedidos que el cuaderno da por entregados y Kapta aún no" : "No hay entregas pendientes de aplicar en este periodo"}
+              onClick={() => {
+                if (!applicable.length) return;
+                if (
+                  window.confirm(
+                    `${applicable.length} lista(s) para aplicar · ${blocked} con observación pendiente de aceptar.\n\nSe marcarán como entregados en el Master con el courier de esta hoja y la fecha de cada ruta. Los anulados en Kapta y las filas con observación abierta no se tocan. ¿Continuar?`,
+                  )
+                ) {
+                  props.onApply(applicable);
+                }
+              }}
+            >
+              Aplicar entregas del periodo al Master{applicable.length ? ` · ${applicable.length}` : ""}
+              {blocked ? <span className="ml-1 opacity-70">({blocked} con observación)</span> : null}
+            </button>
+          )}
           {props.canEdit && (
             <label className={cn("cursor-pointer", busy ? `${BTN} border-slate-200 text-slate-400` : BTN_OUTLINE)}>
-              {busy ? "Importando…" : "Importar Excel/CSV"}
+              {busy ? "Importando…" : "Importar Excel/CSV/foto"}
               <input
                 ref={fileRef}
                 type="file"
-                accept=".xlsx,.xlsm,.csv"
+                accept=".xlsx,.xlsm,.csv,image/jpeg,image/png,image/webp,image/gif"
                 className="hidden"
-                aria-label="Archivo del cuaderno"
+                aria-label="Archivo o foto del cuaderno"
                 disabled={busy}
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -587,6 +744,18 @@ function CuadernoBar(props: {
           {result.text}
         </p>
       )}
+      {pendingPhoto && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <span>Fecha de la ruta de «{pendingPhoto.file.name}»:</span>
+          <input type="date" aria-label="Fecha de la ruta de la foto" className={INPUT_XS} value={photoDate} onChange={(e) => setPhotoDate(e.target.value)} />
+          <button type="button" className={BTN_PRIMARY} disabled={busy || !photoDate} onClick={() => void upload(pendingPhoto.file, photoDate)}>
+            Importar la foto con esa fecha
+          </button>
+          <button type="button" className="underline" onClick={() => setPendingPhoto(null)}>
+            Cancelar
+          </button>
+        </div>
+      )}
     </section>
   );
 }
@@ -601,8 +770,14 @@ function Grid(props: {
   canEdit: boolean;
   onEdit: (row: ComputedRow, column: SheetColumnRow, value: CellValue) => void;
   onFlag: ((row: ComputedRow) => void) | null;
+  reasonPrompt?: ReasonPrompt | null;
+  onReasonDone?: () => void;
+  onReasonPrompt?: (prompt: ReasonPrompt) => void;
+  onReasonSubmit?: (prompt: ReasonPrompt, reasonCode: string, note: string) => void;
 }) {
   const { sheet, rows, context } = props;
+  const showApply = context.cuaderno && context.canApplyMaster;
+  const extraCols = (props.onFlag ? 1 : 0) + (showApply ? 1 : 0);
   const columns = useMemo(
     () =>
       [...sheet.columns]
@@ -669,20 +844,30 @@ function Grid(props: {
                 Obs.
               </th>
             )}
+            {showApply && (
+              <th scope="col" className="whitespace-nowrap border-b border-slate-200 px-2 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500" title="Cierre por pedido: marca la entrega en el Master">
+                Master
+              </th>
+            )}
           </tr>
         </thead>
         <tbody>
           {start > 0 && (
             <tr style={{ height: start * ROW_HEIGHT }}>
-              <td colSpan={columns.length + 1} />
+              <td colSpan={columns.length + extraCols} />
             </tr>
           )}
           {slice.map((row, i) => {
             const review = typeof row.cells.revision === "string" && row.cells.revision ? row.cells.revision : null;
             const zebra = (start + i) % 2 === 1;
             const rowBg = review ? "bg-amber-50/60" : zebra ? "bg-slate-50/60" : "bg-white";
+            const prompt = props.reasonPrompt && props.reasonPrompt.rowKey === row.row_key ? props.reasonPrompt : null;
             return (
-              <tr key={row.row_key} style={{ height: ROW_HEIGHT }} className={cn(rowBg, "hover:bg-brand-50/40")} title={review ? `A revisión: ${reviewLabel(review)}` : undefined}>
+              <Fragment key={row.row_key}>
+              {prompt && props.onReasonSubmit && (
+                <ReasonPromptRow prompt={prompt} reasons={context.reasons} colSpan={columns.length + extraCols} onSubmit={props.onReasonSubmit} onClose={() => props.onReasonDone?.()} />
+              )}
+              <tr style={{ height: ROW_HEIGHT }} className={cn(rowBg, "hover:bg-brand-50/40")} title={review ? `A revisión: ${reviewLabel(review)}` : undefined}>
                 {columns.map((c) => {
                   const value = row.cells[c.key] ?? null;
                   const isEditing = editing?.rowKey === row.row_key && editing.columnKey === c.key;
@@ -731,17 +916,137 @@ function Grid(props: {
                     </button>
                   </td>
                 )}
+                {showApply && (
+                  <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1 text-center">
+                    <MasterCell row={row} context={context} onPrompt={props.onReasonPrompt} />
+                  </td>
+                )}
               </tr>
+              </Fragment>
             );
           })}
           {end < rows.length && (
             <tr style={{ height: (rows.length - end) * ROW_HEIGHT }}>
-              <td colSpan={columns.length + 1} />
+              <td colSpan={columns.length + extraCols} />
             </tr>
           )}
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * Celda «Master» de una fila cuaderno (MOM §30.8): o el botón para aplicar la
+ * entrega, o el motivo que dejó quien repartió y el botón para aceptarlo. Una
+ * observación abierta bloquea el cruce hasta que alguien la lee y la acepta.
+ */
+function MasterCell({ row, context, onPrompt }: { row: ComputedRow; context: GridContext; onPrompt?: (prompt: ReasonPrompt) => void }) {
+  const open = row.stored_id ? (context.openByRowId.get(row.stored_id) ?? []) : [];
+  if (open.length) {
+    const first = open[0]!;
+    const reason = context.reasons.find((r) => r.code === first.reason_code);
+    const accept = () => {
+      if (first.reason_code) {
+        context.acceptObservation(first.id, first.reason_code, first.note ?? "");
+      } else {
+        onPrompt?.({
+          rowKey: row.row_key,
+          external: first.external_value !== null && Number.isFinite(Number(first.external_value)) ? Number(first.external_value) : null,
+          kapta: first.kapta_value !== null && Number.isFinite(Number(first.kapta_value)) ? Number(first.kapta_value) : null,
+          difference: first.difference === null ? null : Number(first.difference),
+          observationId: first.id,
+          title: `Observación de ${first.field} sin motivo todavía: ${first.external_value ?? "—"} frente a Kapta ${first.kapta_value ?? "—"}.`,
+        });
+      }
+    };
+    return (
+      <span className="inline-flex max-w-[260px] items-center gap-1.5 text-left text-[11px]">
+        <span className="truncate text-amber-800" title={`${first.field}: ${first.external_value ?? "—"} · Kapta ${first.kapta_value ?? "—"}${first.note ? ` · ${first.note}` : ""}`}>
+          {reason ? reason.label : <i>Sin motivo todavía</i>}
+          {first.note ? <span className="text-amber-700/80"> · {first.note}</span> : null}
+          {open.length > 1 ? <span className="text-amber-700/80"> (+{open.length - 1})</span> : null}
+        </span>
+        {context.canEdit && (
+          <button
+            type="button"
+            className="shrink-0 rounded border border-amber-400 px-1.5 py-0.5 font-medium text-amber-800 hover:bg-amber-100"
+            title={first.reason_code ? "Aceptar el motivo y cerrar la observación" : "Ponerle motivo y cerrar la observación"}
+            onClick={(e) => {
+              e.stopPropagation();
+              accept();
+            }}
+          >
+            Aceptar motivo
+          </button>
+        )}
+      </span>
+    );
+  }
+  if (canApplyRow(row, context.statusByCode, context.openByRowId)) {
+    return (
+      <button
+        type="button"
+        className="rounded border border-brand-700 px-2 py-0.5 text-[11px] font-medium text-brand-700 hover:bg-brand-50"
+        title="Marcar este pedido como entregado en el Master, con el courier de la hoja y la fecha de la ruta"
+        onClick={(e) => {
+          e.stopPropagation();
+          context.applyToMaster([row.row_key]);
+        }}
+      >
+        Aplicar
+      </button>
+    );
+  }
+  if (row.cells.estado_kapta_pedido === "entregado") {
+    return <span className="text-[11px] text-emerald-700" title="Kapta ya lo tiene entregado">✓</span>;
+  }
+  return null;
+}
+
+/**
+ * Fila en línea, bajo la editada, que pide el motivo de un monto que no
+ * cuadra. Cerrar sin motivo no borra nada: la observación queda abierta sin
+ * motivo, como manda la regla del cuadre (MOM §30.5).
+ */
+function ReasonPromptRow(props: {
+  prompt: ReasonPrompt;
+  reasons: ObservationReason[];
+  colSpan: number;
+  onSubmit: (prompt: ReasonPrompt, reasonCode: string, note: string) => void;
+  onClose: () => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
+  const { prompt } = props;
+  return (
+    <tr className="bg-amber-50">
+      <td colSpan={props.colSpan} className="border-b border-amber-200 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-amber-900">
+          <span>
+            {prompt.title ??
+              `«A cobrar» ${prompt.external === null ? "—" : money(prompt.external)} no cuadra con Kapta ${prompt.kapta === null ? "—" : money(prompt.kapta)}${
+                prompt.difference === null ? "" : ` (diferencia ${prompt.difference > 0 ? "+" : ""}${money(prompt.difference)})`
+              }. Se abrió una observación: ¿por qué?`}
+          </span>
+          <select aria-label="Motivo de la diferencia" className={INPUT_XS} value={reason} onChange={(e) => setReason(e.target.value)}>
+            <option value="">Motivo…</option>
+            {props.reasons.map((r) => (
+              <option key={r.code} value={r.code} title={r.description ?? undefined}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+          <input aria-label="Nota" className={cn(INPUT_XS, "w-56")} placeholder="Nota (opcional)" value={note} onChange={(e) => setNote(e.target.value)} />
+          <button type="button" className={BTN_PRIMARY} disabled={!reason} onClick={() => props.onSubmit(prompt, reason, note)}>
+            {prompt.observationId ? "Aceptar y cerrar" : "Guardar motivo"}
+          </button>
+          <button type="button" className="underline" onClick={props.onClose} title="La observación queda abierta sin motivo">
+            Ahora no
+          </button>
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -837,6 +1142,31 @@ function CellView({ column, row, context }: { column: SheetColumnRow; row: Compu
             Fuera de lista
           </Chip>
         ) : null}
+      </span>
+    );
+  }
+
+  if (context.cuaderno && column.key === "estado_kapta_pedido") {
+    if (!value) return <span className="text-slate-300" title="Sin pedido vinculado en Kapta">—</span>;
+    const code = String(value);
+    const label = generalLabel(code);
+    return (
+      <Chip tone={toneForLabel(label)} title="Estado general del pedido en Kapta">
+        {label}
+      </Chip>
+    );
+  }
+  if (context.cuaderno && column.key === "a_cobrar") {
+    const diff = rowAmountDifference(row, context.statusByCode);
+    const text = formatCell(value, column.data_type);
+    if (diff === null) return <span title={text || undefined}>{text || <span className="text-slate-300">—</span>}</span>;
+    const kapta = typeof row.cells.monto_kapta === "number" ? row.cells.monto_kapta : null;
+    return (
+      <span
+        className="rounded bg-amber-100 px-1 font-medium text-amber-800"
+        title={`Kapta: ${kapta === null ? "—" : money(kapta)} · diferencia ${diff > 0 ? "+" : ""}${money(diff)}`}
+      >
+        {text}
       </span>
     );
   }
@@ -941,16 +1271,26 @@ function CellEditor(props: { column: SheetColumnRow; row: ComputedRow; context: 
       </select>
     );
   }
+  const moneyHelp = context.cuaderno && (column.key === "a_cobrar" || column.key === "efectivo") && props.row.cells.vinculado === true;
+  const kaptaAmount = typeof props.row.cells.monto_kapta === "number" ? props.row.cells.monto_kapta : null;
   return (
-    <input
-      ref={ref as React.RefObject<HTMLInputElement>}
-      type={column.data_type === "number" ? "number" : column.data_type === "date" ? "date" : "text"}
-      step={column.data_type === "number" ? "0.01" : undefined}
-      aria-label={column.label}
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      {...common}
-    />
+    <span className="block">
+      <input
+        ref={ref as React.RefObject<HTMLInputElement>}
+        type={column.data_type === "number" ? "number" : column.data_type === "date" ? "date" : "text"}
+        step={column.data_type === "number" ? "0.01" : undefined}
+        aria-label={column.label}
+        placeholder={moneyHelp && kaptaAmount !== null ? `Kapta ${money(kaptaAmount)}` : undefined}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        {...common}
+      />
+      {moneyHelp && (
+        <span className="pointer-events-none absolute z-40 mt-0.5 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-white shadow">
+          antes {initial === null || initial === undefined ? "—" : money(Number(initial))} · Kapta {kaptaAmount === null ? "—" : money(kaptaAmount)}
+        </span>
+      )}
+    </span>
   );
 }
 

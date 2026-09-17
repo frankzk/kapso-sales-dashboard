@@ -341,4 +341,6 @@
 \ir migrations/0168_liquidaciones2_hojas.sql
 \echo 'Applying 0169_sheet_status_effect_sin_salida.sql'
 \ir migrations/0169_sheet_status_effect_sin_salida.sql
+\echo 'Applying 0170_sheet_observation_reason_pago.sql'
+\ir migrations/0170_sheet_observation_reason_pago.sql
 \echo 'Done.'

@@ -130,9 +130,19 @@ monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
    archivos: Swayp Lima, Aliclik Lima, Aliclik provincia, Dropi, Shalom, Olva,
    Axel y Tanders con formato «reporte» por guía y mapeo de columnas por hoja;
    hacia adelante se llenan desde `shipments`.
-4. **Cierre por pedido.** Contraste hoja ↔ Master por fila, propuesta de cierre
-   por la puerta única a entregado (MOM §11.4), observaciones automáticas al
-   importar cuando el monto o el estado no coinciden.
+4. **Cierre por pedido** (hecho el 17-09-2026, MOM §30.8). Observaciones
+   automáticas al importar y al editar (monto que difiere en más de S/ 0,50;
+   pedido anulado o devuelto en Kapta), columnas «Estado en Kapta» y «Monto
+   Kapta» en el cuaderno, «A cobrar» en ámbar cuando no cuadra, mini-formulario
+   de motivo en la fila al editar un monto, aplicar al Master fila a fila o por
+   periodo por la misma puerta que Liquidaciones (`status_override`, fuente
+   `liquidacion`), y foto del cuaderno con la visión de Liquidaciones. Una fila
+   con observación abierta no cruza al Master hasta que quien liquida acepta el
+   motivo. Fuera: no hay camino de devolución al Master desde una hoja (no
+   existe en Kapta; se cuenta y se deja).
+   **Pendiente, iteración aparte:** la interfaz del motorizado para explicar
+   una diferencia. El dato que llenará es `sheet_observations.reason_code` y
+   `note` de la fila; Liquidaciones 2 ya lo lee, lo muestra y lo acepta.
 5. **Indicadores.** KPI Lima (tasas por zona y día, semana pasada, 15 días,
    por mes), efectividad por repartidor y mes, ventas contra meta. El estado de
    resultados queda al final porque depende de Gasto Ads y Provincia.
