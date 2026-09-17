@@ -30,6 +30,7 @@ import { describeShalomError, describeShalomProbeFailure } from "@/lib/shalom/cl
 import { clientFor, loadStoreShalom, mintSession, publicClient } from "@/lib/shalom/session";
 import { FlowClient } from "@/lib/flow/client";
 import { confirmationUrl } from "@/lib/flow/link";
+import { processTransitNotifications } from "@/lib/shalom/transit-notify";
 
 export interface SettingsState {
   error?: string;
@@ -531,6 +532,45 @@ export async function sendTelegramTest(
     return {
       notice: `Resumen de ${date} enviado a Telegram ✓ — ${res.sent}/${res.total} destinatario(s), ${summary.totalOrders} pedidos${extra}.`,
     };
+  } catch (e) {
+    return { error: errMsg(e) };
+  }
+}
+
+/**
+ * «Enviar ahora los avisos en cola»: drena la cola de esta tienda sin esperar
+ * al cron.
+ *
+ * POR QUÉ EXISTE. El cron corre cada 30 minutos, y cuando se acaba de encender
+ * el aviso —o de reactivar unas filas a mano— media hora a ciegas es media hora
+ * sin saber si la plantilla tiene bien los parámetros. Con esto se ve al
+ * momento, que es cuando se puede corregir.
+ *
+ * NO FUERZA NADA: manda lo que YA está en `pending` y le toca. El horario, los
+ * reintentos y el interruptor de la tienda siguen mandando igual — un botón que
+ * se saltara el horario mandaría WhatsApps a las tres de la mañana.
+ */
+export async function sendTransitQueueNow(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+
+  try {
+    // Presupuesto corto: hay alguien mirando la pantalla. Lo que no quepa se
+    // queda en la cola y lo toma el cron.
+    const r = await processTransitNotifications(ctx.admin, { storeId, budgetMs: 45_000 });
+    revalidatePath(`/dashboard/${storeId}/settings`);
+    const partes = [
+      `${r.sent} enviado(s)`,
+      r.failed ? `${r.failed} fallido(s)` : null,
+      r.skipped ? `${r.skipped} descartado(s)` : null,
+      r.deferred ? `${r.deferred} para más tarde` : null,
+    ].filter(Boolean);
+    const motivos = r.errors.length ? ` — ${r.errors.slice(0, 3).join(" · ")}` : "";
+    return { notice: `Cola de avisos: ${partes.join(", ")}.${motivos}` };
   } catch (e) {
     return { error: errMsg(e) };
   }
