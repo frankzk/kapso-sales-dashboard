@@ -286,15 +286,6 @@ export function StoreSettings({
 
       <div className="-mt-2">
         <ActionButton
-          action={testFlowclLink}
-          storeId={s.id}
-          label="Probar cobro por Flow.cl"
-          help="Crea una orden de prueba de S/ 1.10 con las credenciales de arriba y te devuelve el link. Caduca en 30 minutos y no hace falta pagarla; sirve para ver que la firma vale y que Flow acepta importes con céntimos."
-        />
-      </div>
-
-      <div className="-mt-2">
-        <ActionButton
           action={sendTelegramTest}
           storeId={s.id}
           label="Enviar resumen de prueba (Telegram)"
@@ -795,6 +786,12 @@ function SettingsForm({
   shalomProducts?: SettingsState["shalomProducts"];
 }) {
   const [state, action, pending] = useActionState(updateStore, initial);
+  // La sonda de Flow vive DENTRO de este formulario —es donde se buscan las
+  // credenciales que prueba— pero es otra acción: su `dispatch` va como
+  // `formAction` del botón, y su resultado se pinta ahí mismo. Un <form>
+  // dentro de otro no es HTML válido; esto es la forma de React 19 de tener
+  // dos botones con dos acciones en el mismo formulario.
+  const [flowProbe, flowProbeAction, flowProbePending] = useActionState(testFlowclLink, initial);
   const router = useRouter();
   const s = data.store;
 
@@ -1458,83 +1455,13 @@ function SettingsForm({
               />
               <p className="mt-1 text-xs text-slate-500">
                 Texto libre; se sustituyen <code>{"{saldo}"}</code>, <code>{"{pedido}"}</code>,{" "}
-                <code>{"{yape}"}</code> y <code>{"{link}"}</code> (el cobro de Flow, si está
-                encendido abajo). Vacío = el link de Flow si lo hay, y si no el Yape principal.
+                <code>{"{yape}"}</code> y <code>{"{link}"}</code> (el cobro de Flow, que se
+                configura en <strong>Cobro por link (Flow.cl)</strong>, más abajo). Vacío = el link
+                de Flow si lo hay, y si no el Yape principal.
               </p>
             </div>
           </div>
 
-          <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
-              Cobro por Flow.cl en el botón «Link de pago»
-            </p>
-            <p className="text-xs text-slate-500">
-              Encendido, ese botón <strong>crea un cobro real por el saldo de ese momento</strong> y
-              manda el link que lo cobra. El pago vuelve solo y aparece como comprobante pendiente de
-              revisión. Hace falta la <strong>cuenta de Flow.cl</strong> configurada más abajo (API
-              key, secret key y secreto del webhook): sin ella el botón contesta como siempre.
-            </p>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div>
-                <label className={labelCls} htmlFor="flowcl_link_enabled">Cobro por Flow</label>
-                <select
-                  id="flowcl_link_enabled"
-                  name="flowcl_link_enabled"
-                  defaultValue={s.flowcl_link_enabled ? "true" : "false"}
-                  className={inputCls}
-                >
-                  <option value="false">Apagado</option>
-                  <option value="true">Encendido</option>
-                </select>
-              </div>
-              <div>
-                <label className={labelCls} htmlFor="flowcl_link_ttl_hours">El link vence en (horas)</label>
-                <input
-                  id="flowcl_link_ttl_hours"
-                  name="flowcl_link_ttl_hours"
-                  type="number"
-                  min={1}
-                  max={720}
-                  defaultValue={s.flowcl_link_ttl_hours ?? 48}
-                  className={inputCls}
-                />
-              </div>
-              <div>
-                <label className={labelCls} htmlFor="flowcl_link_yape_only">Medio de pago</label>
-                <select
-                  id="flowcl_link_yape_only"
-                  name="flowcl_link_yape_only"
-                  defaultValue={s.flowcl_link_yape_only ? "true" : "false"}
-                  className={inputCls}
-                >
-                  <option value="false">Todos (Flow enseña la selección)</option>
-                  <option value="true">Solo Yape (One Shot)</option>
-                </select>
-              </div>
-              <div className="sm:col-span-3">
-                <label className={labelCls} htmlFor="flowcl_link_email">Email de respaldo del cobro</label>
-                <input
-                  id="flowcl_link_email"
-                  name="flowcl_link_email"
-                  type="email"
-                  defaultValue={s.flowcl_link_email ?? ""}
-                  placeholder="cobros@tutienda.com"
-                  className={inputCls}
-                />
-                <p className="mt-1 text-xs text-slate-500">
-                  Flow exige un email del pagador y casi ningún pedido de WhatsApp trae uno. Cuando
-                  el pedido lo tiene se usa el suyo; si no, éste. <strong>Sin email de respaldo el
-                  cobro no se puede crear</strong> y el botón cae al Yape.
-                </p>
-                <p className="mt-1 text-xs text-amber-700">
-                  Un link vivo cobra el importe con el que nació. Si la clienta paga parte por Yape,
-                  el link viejo se deja de ofrecer y se crea uno nuevo por lo que falta — pero el
-                  que ya está en su chat sigue cobrando el importe viejo hasta que vence. Por eso
-                  las horas de arriba: cuanto más largas, más tiempo vive ese riesgo.
-                </p>
-              </div>
-            </div>
-          </div>
         </fieldset>
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
@@ -1814,6 +1741,118 @@ function SettingsForm({
               avisos, así que el secreto es una puerta y no la cerradura — lo que se registra sale
               de volver a consultarle el estado a Flow, firmado.
             </span>
+          </div>
+
+          <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+              Cobro por Flow.cl en el botón «Link de pago»
+            </p>
+            <p className="text-xs text-slate-500">
+              Encendido, ese botón <strong>crea un cobro real por el saldo de ese momento</strong> y
+              manda el link que lo cobra. El pago vuelve solo y aparece como comprobante pendiente de
+              revisión. Hace falta la cuenta de Flow.cl de arriba: sin ella el botón contesta como
+              siempre, con el Yape.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <label className={labelCls} htmlFor="flowcl_link_enabled">Cobro por Flow</label>
+                <select
+                  id="flowcl_link_enabled"
+                  name="flowcl_link_enabled"
+                  defaultValue={s.flowcl_link_enabled ? "true" : "false"}
+                  className={inputCls}
+                >
+                  <option value="false">Apagado</option>
+                  <option value="true">Encendido</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelCls} htmlFor="flowcl_link_ttl_hours">El link vence en (horas)</label>
+                <input
+                  id="flowcl_link_ttl_hours"
+                  name="flowcl_link_ttl_hours"
+                  type="number"
+                  min={1}
+                  max={720}
+                  defaultValue={s.flowcl_link_ttl_hours ?? 48}
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className={labelCls} htmlFor="flowcl_link_yape_only">Medio de pago</label>
+                <select
+                  id="flowcl_link_yape_only"
+                  name="flowcl_link_yape_only"
+                  defaultValue={s.flowcl_link_yape_only ? "true" : "false"}
+                  className={inputCls}
+                >
+                  <option value="false">Todos (Flow enseña la selección)</option>
+                  <option value="true">Solo Yape (One Shot)</option>
+                </select>
+              </div>
+              <div className="sm:col-span-3">
+                <label className={labelCls} htmlFor="flowcl_link_email">Email de respaldo del cobro</label>
+                <input
+                  id="flowcl_link_email"
+                  name="flowcl_link_email"
+                  type="email"
+                  defaultValue={s.flowcl_link_email ?? ""}
+                  placeholder="cobros@tutienda.com"
+                  className={inputCls}
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  Flow exige un email del pagador y casi ningún pedido de WhatsApp trae uno. Cuando
+                  el pedido lo tiene se usa el suyo; si no, éste. <strong>Sin email de respaldo el
+                  cobro no se puede crear</strong> y el botón cae al Yape.
+                </p>
+                <p className="mt-1 text-xs text-amber-700">
+                  Un link vivo cobra el importe con el que nació. Si la clienta paga parte por Yape,
+                  el link viejo se deja de ofrecer y se crea uno nuevo por lo que falta — pero el
+                  que ya está en su chat sigue cobrando el importe viejo hasta que vence. Por eso
+                  las horas de arriba: cuanto más largas, más tiempo vive ese riesgo.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-200 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-sm text-slate-600" htmlFor="flowcl_probe_amount">
+                Probar un cobro de S/
+              </label>
+              <input
+                id="flowcl_probe_amount"
+                name="amount"
+                type="number"
+                step="0.10"
+                min="1"
+                max="500"
+                defaultValue="20"
+                className="w-24 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+              <button
+                type="submit"
+                formAction={flowProbeAction}
+                formNoValidate
+                disabled={flowProbePending}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                {flowProbePending ? "Creando…" : "Crear cobro de prueba"}
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-slate-400">
+              Guarda primero las credenciales. Crea una orden <strong>real</strong> y te devuelve el
+              link: sirve para ver que la firma vale, que la url de confirmación se arma bien y que
+              Flow acepta importes con céntimos. Caduca en 30 minutos.
+            </p>
+            <p className="mt-1 text-xs text-amber-700">
+              Si la pagas, el dinero entra de verdad en tu cuenta de Flow y{" "}
+              <strong>no queda colgado de ningún pedido</strong>: no hay pedido al que atarla, así
+              que el webhook la dará por desconocida.
+            </p>
+            {flowProbe.error && <p className="mt-2 text-sm text-red-600">{flowProbe.error}</p>}
+            {flowProbe.notice && (
+              <p className="mt-2 text-sm break-all text-emerald-600">{flowProbe.notice}</p>
+            )}
           </div>
         </fieldset>
 
