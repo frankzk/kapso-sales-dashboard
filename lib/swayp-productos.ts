@@ -83,6 +83,24 @@ export function productosSinVinculo(
   return faltan;
 }
 
+/**
+ * El aviso que se enseña cuando falta el vínculo. Uno solo, para que la mesa de
+ * ruta, el panel de guía directa, el cajón de Envíos y las rejas del servidor
+ * digan lo mismo.
+ *
+ * Vive AQUÍ y no junto a las acciones porque un archivo `"use server"` solo
+ * puede exportar funciones async: sacar de allí una función pura rompe el build
+ * —y lo rompe en `next build`, no en `tsc`, así que no se ve hasta el
+ * despliegue—.
+ */
+export function avisoSinVinculoSwayp(faltan: readonly string[]): string {
+  return (
+    `Swayp no tiene ${faltan.length === 1 ? "este producto" : "estos productos"} en su catálogo: ` +
+    `${faltan.join(", ")}. ${faltan.length === 1 ? "Vincúlalo" : "Vincúlalos"} en Catálogo de productos ` +
+    `(Ajustes → Catálogo) y vuelve a intentarlo.`
+  );
+}
+
 /** Cómo se nombra una línea sin vínculo. El título es lo que la operadora
  *  reconoce; el SKU es el respaldo cuando el pedido llegó sin título. */
 function nombreParaElOperador(line: OrderLine): string {

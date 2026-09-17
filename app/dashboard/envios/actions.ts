@@ -103,7 +103,7 @@ import {
   esNumeroDeGuiaSwayp,
   parseSenders,
 } from "@/lib/swayp-guide";
-import { normalizeSku, productosSinVinculo } from "@/lib/swayp-productos";
+import { avisoSinVinculoSwayp, normalizeSku, productosSinVinculo } from "@/lib/swayp-productos";
 import { cargarMapaSwayp, cargarMapaSwaypDeOrg } from "@/lib/swayp-sku-map";
 import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
 import { getMasterPermissions } from "@/lib/permissions-access";
@@ -2094,16 +2094,6 @@ async function swaypSinVinculo(
   }));
   if (!lineItems.length) return [];
   return productosSinVinculo(lineItems, await cargarMapaSwayp(admin, storeId));
-}
-
-/** El aviso que se enseña cuando falta el vínculo. Uno solo, para que la mesa,
- *  el panel y las rejas del servidor digan lo mismo. */
-export function avisoSinVinculoSwayp(faltan: readonly string[]): string {
-  return (
-    `Swayp no tiene ${faltan.length === 1 ? "este producto" : "estos productos"} en su catálogo: ` +
-    `${faltan.join(", ")}. ${faltan.length === 1 ? "Vincúlalo" : "Vincúlalos"} en Catálogo de productos ` +
-    `(Ajustes → Catálogo) y vuelve a intentarlo.`
-  );
 }
 
 async function swaypGuideForReprogram(

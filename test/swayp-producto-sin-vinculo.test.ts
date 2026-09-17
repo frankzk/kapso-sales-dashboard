@@ -151,10 +151,20 @@ describe("las tres puertas de Envíos", () => {
     expect(bloque.slice(0, 2000)).toContain("const sinCodbar = await swaypSinVinculo(");
   });
 
-  it("el aviso lo escribe una sola función para todas las pantallas", () => {
-    expect(src).toContain("export function avisoSinVinculoSwayp(");
-    expect(src).toContain("Catálogo de productos");
+  /**
+   * El aviso vive en `lib/`, NO junto a las acciones: un archivo `"use server"`
+   * solo puede exportar funciones async, y una función pura exportada desde
+   * ahí rompe `next build` —no `tsc`, así que el fallo no aparece hasta el
+   * despliegue—. Pasó en el commit 232c80d.
+   */
+  it("el aviso lo escribe una sola función, y vive fuera de las acciones", () => {
+    const lib = readFileSync(resolve(process.cwd(), "lib/swayp-productos.ts"), "utf8");
+    expect(lib).toContain("export function avisoSinVinculoSwayp(");
+    expect(lib).toContain("Catálogo de productos");
+    expect(src).not.toContain("export function avisoSinVinculoSwayp(");
+    expect(src).toContain('avisoSinVinculoSwayp, normalizeSku, productosSinVinculo } from "@/lib/swayp-productos"');
   });
+
 
   it("el drawer recibe los productos que faltan", () => {
     expect(src).toContain("swaypUnlinked: await swaypSinVinculo(");
