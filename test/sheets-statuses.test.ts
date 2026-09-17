@@ -11,7 +11,7 @@ import {
   resolveStatus,
   suggestStatus,
 } from "@/lib/sheets/statuses";
-import { DOMAIN_TEMPLATES } from "@/lib/sheets/templates";
+import { DOMAIN_TEMPLATES, isCuadernoSheet } from "@/lib/sheets/templates";
 import { PERMISSIONS, permissionsFor } from "@/lib/permissions";
 
 describe("normalizeAlias", () => {
@@ -101,6 +101,27 @@ describe("resolveStatus", () => {
   it("los alias de la hoja mandan sobre la plantilla", () => {
     const custom = { codes: lookup.codes, aliases: new Map([["OK", "reprogramado"]]) };
     expect(resolveStatus("ok", custom)).toMatchObject({ kind: "ok", code: "reprogramado" });
+  });
+});
+
+describe("courier externo con cuaderno (Alexis, Urpi)", () => {
+  const l = lookupFromTemplates(COURIER_EXTERNO_STATUSES);
+
+  it("lee lo que escriben Alexis y Urpi con el vocabulario del courier", () => {
+    expect(resolveStatus("CAIDA", l)).toMatchObject({ kind: "ok", code: "cancelado" });
+    expect(resolveStatus("CNELADO", l)).toMatchObject({ kind: "ok", code: "cancelado" });
+    expect(resolveStatus("RETIRADO", l)).toMatchObject({ kind: "ok", code: "retirado" });
+    expect(resolveStatus("PROGRAMADO", l)).toMatchObject({ kind: "ok", code: "pendiente" });
+    expect(resolveStatus("NO RECIBE", l)).toMatchObject({ kind: "ok", code: "no_contesta" });
+    expect(resolveStatus("RE PRO", l)).toMatchObject({ kind: "ok", code: "reprogramado" });
+  });
+
+  it("una hoja es cuaderno si su dominio es de puntos o si su config lo declara", () => {
+    expect(isCuadernoSheet({ config: {} }, { row_key: "punto" })).toBe(true);
+    expect(isCuadernoSheet({ config: { layout: "cuaderno" } }, { row_key: "guia" })).toBe(true);
+    expect(isCuadernoSheet({ config: {} }, { row_key: "guia" })).toBe(false);
+    expect(isCuadernoSheet({ config: null }, { row_key: "pedido" })).toBe(false);
+    expect(isCuadernoSheet(null, null)).toBe(false);
   });
 });
 

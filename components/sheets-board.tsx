@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation";
 import { Card, EmptyState, cn } from "@/components/ui";
 import { OPERATIONAL_STATUSES } from "@/lib/order-status";
 import { suggestStatus } from "@/lib/sheets/statuses";
+import { isCuadernoSheet } from "@/lib/sheets/templates";
 import type { DomainWithStatuses, SheetWithColumns } from "@/lib/sheets/access";
 import type {
   CellValue,
@@ -221,8 +222,8 @@ export function SheetsBoard(props: Props) {
             setPanel={setPanel}
             canManage={canManage}
             hrefFor={hrefFor}
-            showMonth={domain.row_key === "pedido" || domain.row_key === "punto"}
-            allowAllMonths={domain.row_key === "punto"}
+            showMonth={domain.row_key === "pedido" || isCuadernoSheet(sheet, domain)}
+            allowAllMonths={isCuadernoSheet(sheet, domain)}
           />
 
           {panel === "columnas" && canManage && (
@@ -243,10 +244,10 @@ export function SheetsBoard(props: Props) {
               onClose={() => setPanel(null)}
             />
           )}
-          {domain.row_key === "punto" && (
+          {isCuadernoSheet(sheet, domain) && (
             <RepartoBar sheet={sheet} rows={rows} canEdit={canEdit} lastImport={props.lastImport} onImported={() => router.refresh()} />
           )}
-          {(domain.row_key === "valor" || domain.row_key === "punto") && canEdit && (
+          {(domain.row_key === "valor" || isCuadernoSheet(sheet, domain)) && canEdit && (
             <AddRowForm sheet={sheet} domain={domain} run={run} pending={pending} />
           )}
 

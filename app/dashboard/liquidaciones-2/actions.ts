@@ -15,6 +15,7 @@ import { isOperationalCode, normalizeAlias } from "@/lib/sheets/statuses";
 import { ensureSheetsInitialized, seedSheetAliases } from "@/lib/sheets/access";
 import { districtKey } from "@/lib/sheets/resolver";
 import { normalizeOrderCode, puntoRowKey } from "@/lib/sheets/reparto-import";
+import { isCuadernoSheet } from "@/lib/sheets/templates";
 import type { CellValue, ColumnDataType, StatusEffect } from "@/lib/sheets/types";
 
 export interface SheetActionResult {
@@ -270,10 +271,13 @@ export async function addSheetRow(sheetId: string, values: Record<string, CellVa
     if (c.required && (v === null || v === "")) return { ok: false, error: `Falta «${c.key}».` };
     clean[c.key] = v;
   }
-  const { data: domain } = await g.admin.from("sheet_domains").select("row_key").eq("id", sheet.domain_id).maybeSingle();
+  const [{ data: domain }, { data: sheetCfg }] = await Promise.all([
+    g.admin.from("sheet_domains").select("row_key").eq("id", sheet.domain_id).maybeSingle(),
+    g.admin.from("sheets").select("config").eq("id", sheetId).maybeSingle(),
+  ]);
   let rowKey: string;
   let orderId: string | null = null;
-  if (domain?.row_key === "punto") {
+  if (domain && isCuadernoSheet({ config: (sheetCfg?.config as Record<string, unknown>) ?? null }, { row_key: domain.row_key })) {
     const fecha = typeof clean.fecha === "string" ? clean.fecha : null;
     const pedido = normalizeOrderCode(typeof clean.pedido === "string" ? clean.pedido : null);
     if (!fecha) return { ok: false, error: "La fila de reparto necesita fecha." };

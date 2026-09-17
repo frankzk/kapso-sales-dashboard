@@ -46,7 +46,8 @@ describe("piezas del lector", () => {
   it("traduce el método de pago a la lista cerrada y guarda lo escrito", () => {
     expect(resolvePayment("YAPE GF")).toEqual({ method: "Yape Grupo GF", reported: "YAPE GF" });
     expect(resolvePayment("efectivo")).toEqual({ method: "Efectivo", reported: "EFECTIVO" });
-    expect(resolvePayment("VENDE MAS")).toEqual({ method: null, reported: "VENDE MAS" });
+    expect(resolvePayment("VENDE MAS")).toEqual({ method: "Link de pago", reported: "VENDE MAS" });
+    expect(resolvePayment("FP")).toEqual({ method: null, reported: "FP" });
     expect(resolvePayment("")).toEqual({ method: null, reported: null });
   });
 
@@ -82,7 +83,7 @@ const SHEET: string[][] = [
   ["", "Vendedor", "Nombre del cliente", "# de Pedido", "A cobrar", "Efectivo", "A cobrar", "Método de Pago", "Observación 1", "Observación 2", "Fecha"],
   ["Punto 01", "KAST", "Carlos Valencia", "#FLEX", "ENTREGADO", "", "SOLO ENTREGAR", "", "", "", "2026-09-15"],
   ["Punto 02", "AURELA", "Liliana", "#AUR169171", "JUEVES", "39", "59.0", "YAPE GF", "20 soles por POS", "", "2026-09-15"],
-  ["Punto 03", "AURELA", "Rocío", "#AUR169171", "ENTREGADO", "59", "59.0", "VENDE MAS", "", "", "2026-09-15"],
+  ["Punto 03", "AURELA", "Rocío", "#AUR169171", "ENTREGADO", "59", "59.0", "FP", "", "", "2026-09-15"],
   ["Punto 04", "", "", "", "", "", "", "", "", "", ""],
 ];
 
@@ -122,8 +123,8 @@ describe("parseRepartoMatrix", () => {
     const jueves = parsed.rows[3]!;
     expect(jueves).toMatchObject({ estado: "reprogramado", reprogramar_para: "2026-09-17", metodo_pago: "Yape Grupo GF", observacion_1: "20 soles por POS" });
     const vende = parsed.rows[4]!;
-    expect(vende).toMatchObject({ metodo_pago: null, metodo_pago_reportado: "VENDE MAS" });
-    expect(parsed.unknownPayments.get("VENDE MAS")).toBe(1);
+    expect(vende).toMatchObject({ metodo_pago: null, metodo_pago_reportado: "FP" });
+    expect(parsed.unknownPayments.get("FP")).toBe(1);
   });
 
   it("el mismo pedido dos veces el mismo día conserva las dos filas y avisa", () => {

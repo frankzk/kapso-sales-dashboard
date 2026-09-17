@@ -126,6 +126,9 @@ export const REPARTO_PAYMENT_ALIASES: Record<string, (typeof REPARTO_PAYMENT_MET
   "LINK": "Link de pago",
   "LINK PAGO": "Link de pago",
   "LINK DE PAGO": "Link de pago",
+  // «Vende Más» es una app de cobro por link, según la operación (16-09-2026).
+  "VENDE MAS": "Link de pago",
+  "VENDEMAS": "Link de pago",
   "PAGADO": "Pagado antes",
   "YA PAGO": "Pagado antes",
   // «OK» en el cuaderno: cruce del 16-09-2026, 91 de 106 pedidos vinculados
@@ -135,6 +138,52 @@ export const REPARTO_PAYMENT_ALIASES: Record<string, (typeof REPARTO_PAYMENT_MET
   "SIN COBRO": "Sin cobro",
   "SOLO ENTREGAR": "Sin cobro",
 };
+
+/**
+ * Columnas del CUADERNO de ruta: una fila por punto, con fecha, tienda,
+ * cliente, pedido, estado, lo cobrado y cómo. Las usan las hojas de Reparto
+ * propio y también las de Courier externo que llevan cuaderno (Alexis, Urpi):
+ * mismo formato de bloques por fecha, mismo lector (lib/sheets/reparto-import).
+ */
+export const CUADERNO_COLUMNS: readonly ColumnTemplate[] = [
+  manual("fecha", "Fecha", { data_type: "date", required: true, pinned: true, width: 110 }),
+  manual("punto", "Punto", { width: 80 }),
+  manual("tienda", "Tienda", { data_type: "select", options: REPARTO_STORES, width: 90 }),
+  manual("cliente", "Nombre del cliente", { width: 200 }),
+  manual("pedido", "# Pedido", { required: true, width: 120 }),
+  derivada("vinculado", "En Kapta", "vinculado", { data_type: "boolean", width: 80 }),
+  manual("estado", "Estado", { data_type: "status", width: 150 }),
+  manual("estado_reportado", "Estado escrito", { width: 150, visible: false }),
+  manual("reprogramar_para", "Reprogramar para", { data_type: "date", width: 120 }),
+  manual("efectivo", "Efectivo", { data_type: "number", width: 90 }),
+  manual("a_cobrar", "A cobrar", { data_type: "number", width: 90 }),
+  manual("metodo_pago", "Método de pago", { data_type: "select", options: REPARTO_PAYMENT_METHODS, width: 140 }),
+  manual("metodo_pago_reportado", "Método escrito", { width: 150, visible: false }),
+  manual("observacion_1", "Observación 1", { width: 180 }),
+  manual("observacion_2", "Observación 2", { width: 180 }),
+  manual("revision", "Revisión", { width: 200 }),
+];
+
+/**
+ * Couriers externos que reportan con cuaderno de puntos, no con reporte por
+ * guía (decisión del 16-09-2026: Alexis y Urpi son couriers, no motorizados
+ * propios, aunque el Excel les diera hoja de puntos). Liquidan como courier.
+ */
+export const COURIER_CUADERNO_SHEETS = [
+  { name: "Alexis", courier: "alexis" },
+  { name: "Urpi", courier: "urpi" },
+] as const;
+
+/** ¿La hoja se lee y se pinta como cuaderno de puntos? Reparto propio siempre;
+ *  Courier externo solo si su config lo declara. */
+export function isCuadernoSheet(
+  sheet: { config?: Record<string, unknown> | null } | null | undefined,
+  domain: { row_key: SheetRowKey } | null | undefined,
+): boolean {
+  if (!domain) return false;
+  if (domain.row_key === "punto") return true;
+  return (sheet?.config as { layout?: unknown } | null | undefined)?.layout === "cuaderno";
+}
 
 /** Columnas comunes a toda hoja con clave «pedido»: el pedido y su ficha. */
 const PEDIDO_BASE: readonly ColumnTemplate[] = [
@@ -185,24 +234,7 @@ export const DOMAIN_TEMPLATES: readonly DomainTemplate[] = [
       "Una fila por punto de ruta de un motorizado: tienda, cliente, pedido, estado, lo cobrado y cómo. Aporta E/T/D al Consolidado.",
     statuses: REPARTO_PROPIO_STATUSES,
     perStore: false,
-    columns: [
-      manual("fecha", "Fecha", { data_type: "date", required: true, pinned: true, width: 110 }),
-      manual("punto", "Punto", { width: 80 }),
-      manual("tienda", "Tienda", { data_type: "select", options: REPARTO_STORES, width: 90 }),
-      manual("cliente", "Nombre del cliente", { width: 200 }),
-      manual("pedido", "# Pedido", { required: true, width: 120 }),
-      derivada("vinculado", "En Kapta", "vinculado", { data_type: "boolean", width: 80 }),
-      manual("estado", "Estado", { data_type: "status", width: 150 }),
-      manual("estado_reportado", "Estado escrito", { width: 150, visible: false }),
-      manual("reprogramar_para", "Reprogramar para", { data_type: "date", width: 120 }),
-      manual("efectivo", "Efectivo", { data_type: "number", width: 90 }),
-      manual("a_cobrar", "A cobrar", { data_type: "number", width: 90 }),
-      manual("metodo_pago", "Método de pago", { data_type: "select", options: REPARTO_PAYMENT_METHODS, width: 140 }),
-      manual("metodo_pago_reportado", "Método escrito", { width: 150, visible: false }),
-      manual("observacion_1", "Observación 1", { width: 180 }),
-      manual("observacion_2", "Observación 2", { width: 180 }),
-      manual("revision", "Revisión", { width: 200 }),
-    ],
+    columns: CUADERNO_COLUMNS,
   },
   {
     key: "courier_externo",

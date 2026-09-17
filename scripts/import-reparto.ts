@@ -51,21 +51,25 @@ async function main() {
     .from("sheets")
     .select("id,org_id,domain_id,key,name,config,sheet_domains!inner(key)")
     .eq("org_id", orgId)
-    .eq("sheet_domains.key", "reparto_propio");
-  const names = only.length ? only : ["Roy", "Yhoni", "DUGLAS", "Yukio", "Gera", "Marcos"];
+    .in("sheet_domains.key", ["reparto_propio", "courier_externo"]);
+  const names = only.length ? only : ["Roy", "Yhoni", "DUGLAS", "Yukio", "Gera", "Marcos", "Alexis", "URPI"];
   for (const name of names) {
     const file = join(dir, `matrix_${name}.json`);
     if (!existsSync(file)) {
       console.warn(`- ${name}: no hay ${file}, se salta`);
       continue;
     }
-    const key = `reparto_${slugify(name)}`;
-    const sheet = (sheets ?? []).find((s: { key: string }) => s.key === key);
+    // Reparto propio (`reparto_<slug>`) o courier con cuaderno (`courier_<slug>`).
+    const slug = slugify(name);
+    const sheet = (sheets ?? []).find((s: { key: string }) => s.key === `reparto_${slug}` || s.key === `courier_${slug}`) as
+      | { id: string; org_id: string; domain_id: string; key: string; name: string; sheet_domains: { key: string } | { key: string }[] }
+      | undefined;
     if (!sheet) {
-      console.warn(`- ${name}: no existe la hoja ${key}, se salta`);
+      console.warn(`- ${name}: no existe la hoja reparto_${slug} ni courier_${slug}, se salta`);
       continue;
     }
-    await seedSheetAliases(sheet.id, "reparto_propio");
+    const domainKey = Array.isArray(sheet.sheet_domains) ? sheet.sheet_domains[0]?.key : sheet.sheet_domains?.key;
+    await seedSheetAliases(sheet.id, domainKey ?? "reparto_propio");
     const matrix = JSON.parse(readFileSync(file, "utf8")) as string[][];
     const summary = await importRepartoMatrix(
       admin,

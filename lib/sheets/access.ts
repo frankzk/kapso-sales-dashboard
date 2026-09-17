@@ -11,6 +11,8 @@ import type { StoreSummary } from "@/lib/types";
 import { districtKey, limaMonthRange } from "./resolver";
 import {
   CATALOGO_ZONAS_KEY,
+  COURIER_CUADERNO_SHEETS,
+  CUADERNO_COLUMNS,
   DOMAIN_TEMPLATES,
   FIXED_SHEETS,
   perStoreSheetKey,
@@ -247,6 +249,23 @@ export async function ensureSheetsInitialized(
     }
   }
 
+  // Courier externo con cuaderno (Alexis, Urpi): mismas columnas y mismo
+  // lector que el reparto propio, pero vocabulario y liquidación de courier.
+  if (domainIds.get("courier_externo")) {
+    for (const entry of COURIER_CUADERNO_SHEETS) {
+      const key = `courier_${slugify(entry.name)}`;
+      if (sheetKeys.has(key)) continue;
+      const id = await createSheet(key, entry.name, "courier_externo", null, CUADERNO_COLUMNS, position++);
+      if (id) {
+        await admin
+          .from("sheets")
+          .update({ config: { courier: entry.courier, layout: "cuaderno" } })
+          .eq("id", id);
+        await seedSheetAliases(id, "courier_externo");
+      }
+    }
+  }
+
   // Columnas y estados de plantilla que se añadieron después de crear la
   // hoja o el dominio: se agregan sin tocar lo que ya está (orden, ancho,
   // equivalencias corregidas a mano).
@@ -283,7 +302,7 @@ async function syncTemplateStatuses(admin: SupabaseClient, domainIds: Map<string
 const HISTORIC_RIDERS = ["Gera", "Marcos"] as const;
 
 async function syncTemplateColumns(admin: SupabaseClient, orgId: string, domainIds: Map<string, string>) {
-  const { data: sheets } = await admin.from("sheets").select("id,key,domain_id").eq("org_id", orgId);
+  const { data: sheets } = await admin.from("sheets").select("id,key,domain_id,config").eq("org_id", orgId);
   const { data: columns } = await admin
     .from("sheet_columns")
     .select("sheet_id,key,position,sheets!inner(org_id)")
@@ -296,11 +315,12 @@ async function syncTemplateColumns(admin: SupabaseClient, orgId: string, domainI
     bySheet.set(c.sheet_id, entry);
   }
   const domainKeyById = new Map([...domainIds].map(([k, v]) => [v, k]));
-  for (const sheet of (sheets ?? []) as { id: string; key: string; domain_id: string }[]) {
+  for (const sheet of (sheets ?? []) as { id: string; key: string; domain_id: string; config: Record<string, unknown> | null }[]) {
     const domainKey = domainKeyById.get(sheet.domain_id);
     const tpl = domainKey ? DOMAIN_TEMPLATES.find((d) => d.key === domainKey) : null;
     const fixed = FIXED_SHEETS.find((f) => f.key === sheet.key);
-    const templateColumns = fixed?.columns ?? tpl?.columns ?? [];
+    const cuaderno = (sheet.config as { layout?: unknown } | null)?.layout === "cuaderno";
+    const templateColumns = fixed?.columns ?? (cuaderno ? CUADERNO_COLUMNS : tpl?.columns) ?? [];
     if (!templateColumns.length) continue;
     const entry = bySheet.get(sheet.id) ?? { keys: new Set<string>(), max: -1 };
     const missing = templateColumns.filter((c) => !entry.keys.has(c.key));

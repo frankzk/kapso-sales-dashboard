@@ -4816,4 +4816,14 @@ así (definidos por la operación el 16-09-2026):
 «OK» como método de pago significa **pagado antes por Shopify**: el cruce del
 16-09-2026 encontró 91 de 106 pedidos vinculados con checkout pagado.
 
-Alexis y Urpi no son Reparto propio: son couriers externos con hoja de puntos.
+**Courier externo con cuaderno.** Alexis y Urpi no son Reparto propio: son
+couriers externos que reportan con el mismo cuaderno de puntos que los
+motorizados. Sus hojas viven en el dominio Courier externo con formato
+«cuaderno» (`config.layout`): mismas columnas y mismo lector de bloques por
+fecha, pero el vocabulario de estados es el del courier (cancelado, no
+contesta, reprogramado, retirado…) y **la unidad de liquidación es el courier,
+no la persona que reparte**. Los demás couriers (Swayp, Aliclik, Shalom, Olva,
+Axel, Tanders) usan el formato «reporte» por guía.
+
+«VENDE MÁS» como método de pago es una app de cobro por link (operación,
+16-09-2026): se lee como «Link de pago».

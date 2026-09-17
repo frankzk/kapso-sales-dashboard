@@ -117,13 +117,19 @@ monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
    alta de filas a mano, barra de totales del mes, y el aporte E/T/D al
    Consolidado con la columna «Aportes». Historia importada: 13.843 puntos en
    737 rutas. Los estados LO DEJA, DESARMAR, DICE QUE RECIBIÓ y REPETIDO ya
-   están definidos (MOM §30.7) y «OK» es pagado por Shopify. Pendiente de la
-   operación: los métodos de pago VENDE MÁS, YAPE/PLIN GCC y FP. La foto queda para la iteración 4, junto con
+   están definidos (MOM §30.7), «OK» es pagado por Shopify y «VENDE MÁS» es
+   una app de cobro por link. Pendiente de la operación: los métodos de pago
+   YAPE/PLIN GCC y FP. La foto queda para la iteración 4, junto con
    las observaciones automáticas.
-3. **Courier externo.** Hojas por servicio: Alexis, Urpi, Swayp Lima, Aliclik
-   Lima, Aliclik provincia, Dropi, Shalom, Olva, Axel, Tanders. Mapeo de
-   importación por hoja (qué columna es guía, pedido, estado) y alias. Hacia
-   adelante se llenan desde `shipments`.
+3. **Courier externo** (parcial, 16-09-2026). Hechos Alexis y Urpi: hojas
+   con formato «cuaderno» (`config.layout`), las mismas columnas y el mismo
+   lector que Reparto propio, pero con el vocabulario y la liquidación del
+   courier. Historia importada desde el Excel. Alexis **no está** en el
+   catálogo de couriers del Master (`lib/couriers/catalog.ts`): darlo de alta
+   es una decisión del Master, no de estas hojas. Pendiente, a la espera de
+   archivos: Swayp Lima, Aliclik Lima, Aliclik provincia, Dropi, Shalom, Olva,
+   Axel y Tanders con formato «reporte» por guía y mapeo de columnas por hoja;
+   hacia adelante se llenan desde `shipments`.
 4. **Cierre por pedido.** Contraste hoja ↔ Master por fila, propuesta de cierre
    por la puerta única a entregado (MOM §11.4), observaciones automáticas al
    importar cuando el monto o el estado no coinciden.

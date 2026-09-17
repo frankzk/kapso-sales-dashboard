@@ -712,6 +712,10 @@ historial por celda y observaciones de cuadre. Plan e iteraciones en
    tiene un `matrix_<Hoja>.json` por hoja (volcado con openpyxl, porque el
    libro completo pesa 30 MB). Idempotente. La historia del Excel se cargó el
    16-09-2026.
+6. **Courier externo con cuaderno.** Alexis y Urpi tienen hoja en el dominio
+   Courier externo con `config.layout = "cuaderno"`: se importan igual que un
+   motorizado (misma ruta y mismo script, claves `courier_alexis` y
+   `courier_urpi`) pero con el vocabulario de estados del courier.
 
 ## 5k-ter. Rutas de reparto (motorizados propios)
 

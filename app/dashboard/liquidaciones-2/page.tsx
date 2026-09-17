@@ -17,7 +17,7 @@ import {
   loadStoredRowsByMonth,
   loadStoredRowsFor,
 } from "@/lib/sheets/access";
-import { CATALOGO_ZONAS_KEY } from "@/lib/sheets/templates";
+import { CATALOGO_ZONAS_KEY, isCuadernoSheet } from "@/lib/sheets/templates";
 import type { Contribution, StoredRow } from "@/lib/sheets/types";
 
 export const dynamic = "force-dynamic";
@@ -106,7 +106,7 @@ async function Liquidaciones2Content({ searchParams }: { searchParams: Promise<S
     } else {
       // Las hojas de reparto se miran por mes (columna `fecha`); los catálogos, enteros.
       const stored =
-        domain.row_key === "punto" && month && !search
+        isCuadernoSheet(sheet, domain) && month && !search
           ? await loadStoredRowsByMonth(sheet.id, month, 10000)
           : await loadStoredRows(sheet.id, 10000);
       truncated = stored.length >= 10000;

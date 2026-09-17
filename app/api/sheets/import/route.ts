@@ -6,6 +6,7 @@ import { parseWorkbookMatrices } from "@/lib/xlsx";
 import { parseCsvRows } from "@/lib/csv-parse";
 import { importRepartoMatrix } from "@/lib/sheets/reparto-import-db";
 import { normalizeAlias } from "@/lib/sheets/statuses";
+import { isCuadernoSheet } from "@/lib/sheets/templates";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,8 +57,14 @@ export async function POST(req: NextRequest) {
   if (!sheet || !orgIds.has(sheet.org_id)) {
     return NextResponse.json({ error: "Hoja fuera de tu acceso." }, { status: 403 });
   }
-  if (domainKey !== "reparto_propio") {
-    return NextResponse.json({ error: "Por ahora solo se importan hojas de Reparto propio." }, { status: 400 });
+  const cuaderno =
+    domainKey === "reparto_propio" ||
+    (domainKey === "courier_externo" && isCuadernoSheet({ config: sheet.config as Record<string, unknown> }, { row_key: "guia" }));
+  if (!cuaderno) {
+    return NextResponse.json(
+      { error: "Por ahora solo se importan cuadernos de ruta: Reparto propio y los couriers con cuaderno (Alexis, Urpi)." },
+      { status: 400 },
+    );
   }
 
   const bytes = Buffer.from(await file.arrayBuffer());
