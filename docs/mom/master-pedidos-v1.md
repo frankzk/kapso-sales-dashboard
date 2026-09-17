@@ -4771,3 +4771,36 @@ Cada celda manual deja una fila append-only en `sheet_cell_history` con valor
 anterior, nuevo, actor y motivo. `sheets.edit` (vendedora, admin, owner)
 escribe celdas y abre o resuelve observaciones; `sheets.manage` (admin, owner)
 configura dominios, hojas, columnas, estados y alias. Un viewer solo lee.
+
+### 30.7 Reparto propio: la hoja de ruta y su importación
+
+Una hoja por motorizado, con clave de fila **fecha#pedido**: un mismo pedido
+puede salir varios días (cada salida es una fila) y dos veces el mismo día se
+conserva con sufijo y aviso. Las columnas son las del cuaderno: fecha, punto,
+tienda, cliente, pedido, estado, efectivo, a cobrar, método de pago y dos
+observaciones, más las que Kapta añade: «En Kapta» (si el pedido existe),
+«Reprogramar para», los valores escritos tal cual y «Revisión».
+
+Reglas del lector, que es el mismo para el archivo subido desde la pantalla y
+para la importación histórica:
+
+1. La hoja se lee por bloques de fecha. Un bloque cuya fecha no se entiende
+   deja sus filas **sin fecha y a revisión**; no se toma la del bloque vecino.
+2. El estado escrito se normaliza y se busca en los alias de la hoja. Los días
+   de la semana, «hoy» y «mañana» son **reprogramado** con la fecha calculada
+   a partir del día de la ruta. Lo que no está en el vocabulario se guarda
+   literal, la fila queda a revisión y el alias aparece en la configuración
+   con una sugerencia que nadie aplica sola.
+3. Un monto que no es número queda vacío, nunca cero. Un método de pago fuera
+   de la lista cerrada se guarda literal en «Método escrito».
+4. El pedido se vincula por número dentro de las tiendas de la organización.
+   Sin pedido en Kapta la fila igual se guarda: la historia anterior a la
+   conexión de la tienda no está en Kapta y sigue valiendo para liquidar.
+5. Re-importar actualiza lo importado y **respeta lo editado a mano**.
+6. Los puntos ajenos a Shopify (tienda Kast) se conservan sin vínculo.
+
+Aporte al Consolidado: cada fila vinculada aporta la marca del efecto de su
+estado (entrega → E, devolución → D, informa o cancelación → T). Una fila con
+estado sin equivalente aporta T: existe, luego el pedido salió a ruta.
+
+Alexis y Urpi no son Reparto propio: son couriers externos con hoja de puntos.

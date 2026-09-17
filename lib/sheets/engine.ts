@@ -124,7 +124,7 @@ export function computeRows(input: EngineInput): ComputedRow[] {
 
     for (const c of derivadas) {
       const rule = (c.source as { rule?: string }).rule ?? "";
-      cells[c.key] = applyRule(rule, { facts, cells, resolution, zonaCatalog });
+      cells[c.key] = applyRule(rule, { facts, cells, resolution, zonaCatalog, contributions, stored });
     }
     return { row_key: rowKey, order_id: facts?.order_id ?? stored?.order_id ?? null, stored_id: stored?.id ?? null, cells };
   };
@@ -147,6 +147,8 @@ interface RuleContext {
   cells: Record<string, CellValue>;
   resolution: ReturnType<typeof resolveConsolidado> | null;
   zonaCatalog: (districtKey: string) => string | null;
+  contributions: readonly Contribution[];
+  stored: StoredRow | null;
 }
 
 /** Reglas con nombre. Añadir una es añadir un caso aquí y una prueba. */
@@ -160,6 +162,8 @@ export const RULES = [
   "estatus_por",
   "intentos_lima",
   "diferencia_estatus",
+  "aportes",
+  "vinculado",
 ] as const;
 
 function applyRule(rule: string, ctx: RuleContext): CellValue {
@@ -184,6 +188,12 @@ function applyRule(rule: string, ctx: RuleContext): CellValue {
       const zona = cells.zona;
       return intentosLima(resolution.status, typeof zona === "string" ? zona : null, resolution.transitCount);
     }
+    case "aportes":
+      return ctx.contributions.length
+        ? ctx.contributions.map((c) => `${contributorLabel(c.sheet_key)}: ${c.mark}`).join(" · ")
+        : null;
+    case "vinculado":
+      return ctx.stored ? Boolean(ctx.stored.order_id) : null;
     case "diferencia_estatus": {
       if (!facts || !resolution) return null;
       const kapta = facts.general_status;

@@ -14,6 +14,7 @@ import type { Permission } from "@/lib/permissions";
 import { isOperationalCode, normalizeAlias } from "@/lib/sheets/statuses";
 import { ensureSheetsInitialized, seedSheetAliases } from "@/lib/sheets/access";
 import { districtKey } from "@/lib/sheets/resolver";
+import { normalizeOrderCode, puntoRowKey } from "@/lib/sheets/reparto-import";
 import type { CellValue, ColumnDataType, StatusEffect } from "@/lib/sheets/types";
 
 export interface SheetActionResult {
@@ -247,8 +248,11 @@ function coerce(value: CellValue, type: ColumnDataType, options: string[]): Cell
   }
 }
 
-/** Fila nueva en una hoja de catálogo (clave «valor»). */
-export async function addCatalogRow(sheetId: string, values: Record<string, CellValue>): Promise<SheetActionResult> {
+/**
+ * Fila nueva tecleada en una hoja de catálogo (clave «valor»: la primera
+ * columna identifica la fila) o de reparto (clave «punto»: fecha#pedido).
+ */
+export async function addSheetRow(sheetId: string, values: Record<string, CellValue>): Promise<SheetActionResult> {
   const g = await guard("sheets.edit");
   if ("error" in g) return { ok: false, error: g.error };
   const sheet = await sheetOrg(g.admin, sheetId);
@@ -266,13 +270,28 @@ export async function addCatalogRow(sheetId: string, values: Record<string, Cell
     if (c.required && (v === null || v === "")) return { ok: false, error: `Falta «${c.key}».` };
     clean[c.key] = v;
   }
-  const first = (columns ?? [])[0] as { key: string } | undefined;
-  const rowKey = districtKey(String(clean[first?.key ?? ""] ?? ""));
-  if (!rowKey) return { ok: false, error: "La primera columna identifica la fila y no puede ir vacía." };
+  const { data: domain } = await g.admin.from("sheet_domains").select("row_key").eq("id", sheet.domain_id).maybeSingle();
+  let rowKey: string;
+  let orderId: string | null = null;
+  if (domain?.row_key === "punto") {
+    const fecha = typeof clean.fecha === "string" ? clean.fecha : null;
+    const pedido = normalizeOrderCode(typeof clean.pedido === "string" ? clean.pedido : null);
+    if (!fecha) return { ok: false, error: "La fila de reparto necesita fecha." };
+    if (pedido) {
+      clean.pedido = pedido;
+      const { data: order } = await g.admin.from("orders").select("id").eq("name", pedido).limit(1).maybeSingle();
+      orderId = order?.id ?? null;
+    }
+    rowKey = puntoRowKey(fecha, pedido ?? (typeof clean.pedido === "string" ? clean.pedido.toLowerCase() : null), typeof clean.cliente === "string" ? clean.cliente : null, 0);
+  } else {
+    const first = (columns ?? [])[0] as { key: string } | undefined;
+    rowKey = districtKey(String(clean[first?.key ?? ""] ?? ""));
+    if (!rowKey) return { ok: false, error: "La primera columna identifica la fila y no puede ir vacía." };
+  }
   const { data, error } = await g.admin
     .from("sheet_rows")
     .upsert(
-      { sheet_id: sheetId, row_key: rowKey, values: clean, source: "manual", created_by: g.user.id, updated_at: new Date().toISOString() },
+      { sheet_id: sheetId, row_key: rowKey, order_id: orderId, values: clean, source: "manual", created_by: g.user.id, updated_at: new Date().toISOString() },
       { onConflict: "sheet_id,row_key" },
     )
     .select("id")

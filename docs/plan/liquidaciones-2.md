@@ -108,10 +108,18 @@ monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
    observaciones. El Consolidado ya resuelve Estatus con lo que Kapta sabe
    (Provincia cubierta desde el día uno). Permisos `sheets.edit` y
    `sheets.manage`. Pruebas del vocabulario, el resolver y el motor.
-2. **Reparto propio.** Hojas por motorizado (Roy, Yhoni, Duglas, Yukio; Gera y
-   Marcos si siguen activos) con las once columnas del Excel, carga manual, por
-   Excel/CSV y por foto (reutiliza la visión actual), bloque de totales, y su
-   aporte E/T/D al Consolidado. Importación de la historia de Lima.
+2. **Reparto propio** (hecho el 16-09-2026). Una hoja por motorizado: Roy,
+   Yhoni, Duglas y Yukio desde la ficha de Kapta, y Gera y Marcos como
+   históricas. Columnas del Excel más «En Kapta», «Reprogramar para»,
+   «Estado escrito», «Método escrito» y «Revisión». Lector de bloques por
+   fecha (`lib/sheets/reparto-import.ts`), importación por archivo desde la
+   pantalla (`/api/sheets/import`) y por script (`scripts/import-reparto.ts`),
+   alta de filas a mano, barra de totales del mes, y el aporte E/T/D al
+   Consolidado con la columna «Aportes». Historia importada: 13.843 puntos en
+   737 rutas. Pendiente de la operación: el significado de LO DEJA, DESARMAR,
+   DICE QUE RECIBIÓ / YA RECIBIÓ y REPETIDO, y de los métodos de pago OK,
+   VENDE MÁS, YAPE/PLIN GCC y FP. La foto queda para la iteración 4, junto con
+   las observaciones automáticas.
 3. **Courier externo.** Hojas por servicio: Alexis, Urpi, Swayp Lima, Aliclik
    Lima, Aliclik provincia, Dropi, Shalom, Olva, Axel, Tanders. Mapeo de
    importación por hoja (qué columna es guía, pedido, estado) y alias. Hacia
@@ -127,8 +135,9 @@ monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
 
 ## 5. Archivos que hay que pedir
 
-Para la iteración 2 (historia completa, sin meses recortados): hojas Roy,
-Yhoni, DUGLAS, Yukio, Gera y Marcos del Sheet original.
+Iteración 2: ya recibido (archivo del 16-09-2026 con las hojas de reparto
+completas; los huecos de meses que quedan son reales, confirmado por la
+operación).
 
 Para la iteración 3: hojas Alexis, URPI y Fenix Lima del Sheet original, más
 las fuentes de los IMPORTRANGE:

@@ -61,3 +61,30 @@ export async function parseSheet(buffer: ArrayBuffer | Buffer): Promise<Record<s
   }
   return out;
 }
+
+/**
+ * Todas las hojas de un libro como matrices de texto (fila → celdas), con el
+ * nombre de la hoja como clave. Para formatos que NO son una tabla con
+ * cabecera —la hoja de ruta de un motorizado, que va por bloques de fecha— y
+ * que necesitan mirar la posición de cada celda. Las fechas se devuelven en
+ * ISO, los números como texto tal cual.
+ */
+export async function parseWorkbookMatrices(
+  buffer: ArrayBuffer | Buffer,
+): Promise<Map<string, string[][]>> {
+  const wb = new ExcelJS.Workbook();
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(new Uint8Array(buffer as ArrayBuffer));
+  await wb.xlsx.load(buf as unknown as Parameters<typeof wb.xlsx.load>[0]);
+  const out = new Map<string, string[][]>();
+  for (const ws of wb.worksheets) {
+    const rows: string[][] = [];
+    ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+      const values = row.values as ExcelJS.CellValue[];
+      const cells: string[] = [];
+      for (let c = 1; c < values.length; c++) cells[c - 1] = cellText(values[c] ?? null).trim();
+      rows[rowNumber - 1] = cells;
+    });
+    out.set(ws.name, rows.map((r) => r ?? []));
+  }
+  return out;
+}

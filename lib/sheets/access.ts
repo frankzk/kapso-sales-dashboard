@@ -14,11 +14,13 @@ import {
   DOMAIN_TEMPLATES,
   FIXED_SHEETS,
   perStoreSheetKey,
+  slugify,
   type ColumnTemplate,
 } from "./templates";
-import { normalizeAlias } from "./statuses";
+import { markForEffect, normalizeAlias } from "./statuses";
 import seedZonas from "./seed-zonas.json";
 import type {
+  Contribution,
   DomainRow,
   DomainStatusRow,
   ObservationReason,
@@ -203,9 +205,111 @@ export async function ensureSheetsInitialized(
     }
   }
 
-  // Alias de plantilla para las hojas de dominios con vocabulario: se siembran
-  // por hoja porque cada hoja puede desviarse (Roy no escribe como Aliclik).
+  // Reparto propio: una hoja por motorizado. Los de la ficha de Kapta (riders)
+  // más los históricos del Excel que ya no reparten, para que la historia y
+  // los indicadores viejos cuadren. Alexis y Urpi NO van aquí: son couriers
+  // externos (decisión del 16-09-2026).
+  const repartoDomain = domainIds.get("reparto_propio");
+  const repartoTpl = DOMAIN_TEMPLATES.find((d) => d.key === "reparto_propio");
+  if (repartoDomain && repartoTpl) {
+    const { data: riders } = await admin
+      .from("riders")
+      .select("id,full_name,active")
+      .eq("org_id", orgId)
+      .order("full_name");
+    const riderRows = ((riders ?? []) as { id: string; full_name: string; active: boolean }[]).map((r) => ({
+      id: r.id as string | null,
+      name: r.full_name,
+      active: r.active,
+    }));
+    const known = new Set(riderRows.map((r) => normalizeAlias(r.name)));
+    for (const name of HISTORIC_RIDERS) {
+      if (!known.has(normalizeAlias(name))) riderRows.push({ id: null, name, active: false });
+    }
+    for (const rider of riderRows) {
+      const key = `reparto_${slugify(rider.name)}`;
+      if (sheetKeys.has(key)) continue;
+      const id = await createSheet(
+        key,
+        rider.active ? rider.name : `${rider.name} (histórico)`,
+        "reparto_propio",
+        null,
+        repartoTpl.columns,
+        position++,
+      );
+      if (id) {
+        await admin
+          .from("sheets")
+          .update({ config: { rider_id: rider.id, rider_name: rider.name, historic: !rider.active } })
+          .eq("id", id);
+        await seedSheetAliases(id, "reparto_propio");
+      }
+    }
+  }
+
+  // Columnas y estados de plantilla que se añadieron después de crear la
+  // hoja o el dominio: se agregan sin tocar lo que ya está (orden, ancho,
+  // equivalencias corregidas a mano).
+  await syncTemplateColumns(admin, orgId, domainIds);
+  await syncTemplateStatuses(admin, domainIds);
+
   return { domains: createdDomains, sheets: createdSheets };
+}
+
+async function syncTemplateStatuses(admin: SupabaseClient, domainIds: Map<string, string>) {
+  for (const tpl of DOMAIN_TEMPLATES) {
+    const domainId = domainIds.get(tpl.key);
+    if (!domainId || !tpl.statuses.length) continue;
+    const { data: current } = await admin.from("sheet_domain_statuses").select("code,position").eq("domain_id", domainId);
+    const have = new Set(((current ?? []) as { code: string }[]).map((s) => s.code));
+    const max = Math.max(-1, ...((current ?? []) as { position: number }[]).map((s) => s.position));
+    const missing = tpl.statuses.filter((s) => !have.has(s.code));
+    if (!missing.length) continue;
+    const { error } = await admin.from("sheet_domain_statuses").insert(
+      missing.map((s, i) => ({
+        domain_id: domainId,
+        code: s.code,
+        label: s.label,
+        operational_status: s.operational_status,
+        effect: s.effect,
+        position: max + 1 + i,
+      })),
+    );
+    if (error) throw new Error(`No se pudieron sincronizar los estados de ${tpl.key}: ${error.message}`);
+  }
+}
+
+/** Motorizados que están en el Excel y ya no reparten: hoja histórica. */
+const HISTORIC_RIDERS = ["Gera", "Marcos"] as const;
+
+async function syncTemplateColumns(admin: SupabaseClient, orgId: string, domainIds: Map<string, string>) {
+  const { data: sheets } = await admin.from("sheets").select("id,key,domain_id").eq("org_id", orgId);
+  const { data: columns } = await admin
+    .from("sheet_columns")
+    .select("sheet_id,key,position,sheets!inner(org_id)")
+    .eq("sheets.org_id", orgId);
+  const bySheet = new Map<string, { keys: Set<string>; max: number }>();
+  for (const c of (columns ?? []) as { sheet_id: string; key: string; position: number }[]) {
+    const entry = bySheet.get(c.sheet_id) ?? { keys: new Set<string>(), max: -1 };
+    entry.keys.add(c.key);
+    entry.max = Math.max(entry.max, c.position);
+    bySheet.set(c.sheet_id, entry);
+  }
+  const domainKeyById = new Map([...domainIds].map(([k, v]) => [v, k]));
+  for (const sheet of (sheets ?? []) as { id: string; key: string; domain_id: string }[]) {
+    const domainKey = domainKeyById.get(sheet.domain_id);
+    const tpl = domainKey ? DOMAIN_TEMPLATES.find((d) => d.key === domainKey) : null;
+    const fixed = FIXED_SHEETS.find((f) => f.key === sheet.key);
+    const templateColumns = fixed?.columns ?? tpl?.columns ?? [];
+    if (!templateColumns.length) continue;
+    const entry = bySheet.get(sheet.id) ?? { keys: new Set<string>(), max: -1 };
+    const missing = templateColumns.filter((c) => !entry.keys.has(c.key));
+    if (!missing.length) continue;
+    const { error } = await admin
+      .from("sheet_columns")
+      .insert(missing.map((c, i) => columnInsert(sheet.id, c, entry.max + 1 + i)));
+    if (error) throw new Error(`No se pudieron sincronizar las columnas de ${sheet.key}: ${error.message}`);
+  }
 }
 
 /** El catálogo de zonas del Excel: 979 distritos ya decididos por la operación. */
@@ -249,14 +353,20 @@ export async function seedSheetAliases(sheetId: string, domainKey: string): Prom
   if (!tpl) return 0;
   const admin = createAdminSupabase();
   const rows = tpl.statuses.flatMap((s) =>
-    s.aliases.map((alias) => ({ sheet_id: sheetId, alias: normalizeAlias(alias), status_code: s.code })),
+    s.aliases.map((alias) => ({ sheet_id: sheetId, alias: normalizeAlias(alias), status_code: s.code, updated_at: new Date().toISOString() })),
   );
   if (!rows.length) return 0;
-  const { error } = await admin
-    .from("sheet_status_aliases")
-    .upsert(rows, { onConflict: "sheet_id,alias", ignoreDuplicates: true });
+  // Un alias que alguien asignó a mano desde la pantalla gana sobre la
+  // plantilla; uno que quedó «sin equivalente» tras una importación se rellena.
+  const { data: current } = await admin.from("sheet_status_aliases").select("alias,status_code").eq("sheet_id", sheetId);
+  const manual = new Set(
+    ((current ?? []) as { alias: string; status_code: string | null }[]).filter((a) => a.status_code).map((a) => a.alias),
+  );
+  const toWrite = rows.filter((r) => !manual.has(r.alias));
+  if (!toWrite.length) return 0;
+  const { error } = await admin.from("sheet_status_aliases").upsert(toWrite, { onConflict: "sheet_id,alias" });
   if (error) throw new Error(error.message);
-  return rows.length;
+  return toWrite.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -343,4 +453,63 @@ export async function loadObservations(orgId: string, sheetId: string | null, st
   if (status) q = q.eq("status", status);
   const { data } = await q;
   return (data ?? []) as ObservationRow[];
+}
+
+/** Filas de una hoja con clave «punto» (o cualquier hoja con columna `fecha`)
+ *  de un mes de Lima: `2026/9` → fechas que empiezan por `2026-09`. */
+export async function loadStoredRowsByMonth(sheetId: string, month: string, limit = 5000): Promise<StoredRow[]> {
+  const m = /^(\d{4})\/(\d{1,2})$/.exec(month);
+  if (!m) return loadStoredRows(sheetId, limit);
+  const prefix = `${m[1]}-${String(Number(m[2])).padStart(2, "0")}`;
+  const sb = await createServerSupabase();
+  const { data, error } = await sb
+    .from("sheet_rows")
+    .select("id,sheet_id,order_id,row_key,values,source,updated_at")
+    .eq("sheet_id", sheetId)
+    .like("values->>fecha", `${prefix}%`)
+    .order("row_key", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`No se pudieron leer las filas: ${error.message}`);
+  return (data ?? []) as StoredRow[];
+}
+
+/**
+ * Aportes de las hojas de Reparto propio y Courier externo a los pedidos
+ * dados (MOM §30.4): por cada fila vinculada al pedido, la marca que sale del
+ * efecto de su estado. Un estado sin equivalente cuenta como T: la fila
+ * existe, luego el pedido salió a ruta. Devuelve por `order_id`.
+ */
+export async function loadContributions(orgId: string, orderIds: readonly string[]): Promise<Map<string, Contribution[]>> {
+  const out = new Map<string, Contribution[]>();
+  if (!orderIds.length) return out;
+  const sb = await createServerSupabase();
+  const { data: statuses } = await sb
+    .from("sheet_domain_statuses")
+    .select("domain_id,code,effect,sheet_domains!inner(org_id)")
+    .eq("sheet_domains.org_id", orgId);
+  const effectByDomainCode = new Map<string, Contribution["mark"]>();
+  for (const s of (statuses ?? []) as { domain_id: string; code: string; effect: "informa" | "entrega" | "devolucion" | "anulacion" }[]) {
+    effectByDomainCode.set(`${s.domain_id}:${s.code}`, markForEffect(s.effect));
+  }
+  for (let i = 0; i < orderIds.length; i += 300) {
+    const { data, error } = await sb
+      .from("sheet_rows")
+      .select("order_id,values,sheet:sheets!inner(key,name,domain_id,domain:sheet_domains!inner(key))")
+      .in("order_id", orderIds.slice(i, i + 300))
+      .in("sheet.domain.key", ["reparto_propio", "courier_externo"]);
+    if (error) throw new Error(`No se pudieron leer los aportes: ${error.message}`);
+    for (const row of (data ?? []) as unknown as {
+      order_id: string;
+      values: Record<string, unknown>;
+      sheet: { key: string; name: string; domain_id: string } | null;
+    }[]) {
+      if (!row.sheet || !row.order_id) continue;
+      const estado = typeof row.values.estado === "string" ? row.values.estado : null;
+      const mark = estado ? (effectByDomainCode.get(`${row.sheet.domain_id}:${estado}`) ?? "T") : "T";
+      const list = out.get(row.order_id) ?? [];
+      list.push({ sheet_key: row.sheet.name, mark });
+      out.set(row.order_id, list);
+    }
+  }
+  return out;
 }

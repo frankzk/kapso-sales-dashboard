@@ -73,6 +73,65 @@ const manual = (key: string, label: string, extra: Partial<ColumnTemplate> = {})
   ...extra,
 });
 
+/** Tiendas que puede declarar una fila de reparto. «Kast» son puntos ajenos a
+ *  Shopify que los motorizados llevan en la misma ruta. */
+export const REPARTO_STORES = ["Aurela", "Kenku", "Kast", "Otra"] as const;
+
+/** Métodos de pago, lista cerrada. Sale del vocabulario de jul-sep 2026. */
+export const REPARTO_PAYMENT_METHODS = [
+  "Efectivo",
+  "Yape Grupo GF",
+  "Yape/Plin Frankz",
+  "Yape/Plin Gabriela",
+  "Izipay",
+  "Link de pago",
+  "Transferencia",
+  "Pagado antes",
+  "Sin cobro",
+] as const;
+
+/** Lo que escriben → método. Normalizado con normalizeAlias. Lo que no está
+ *  aquí ni en la lista se guarda literal en `metodo_pago_reportado`. */
+export const REPARTO_PAYMENT_ALIASES: Record<string, (typeof REPARTO_PAYMENT_METHODS)[number]> = {
+  "EFECTIVO": "Efectivo",
+  "CASH": "Efectivo",
+  "YAPE GF": "Yape Grupo GF",
+  "YAPEGF": "Yape Grupo GF",
+  "YAPE G F": "Yape Grupo GF",
+  "YAPEW GF": "Yape Grupo GF",
+  "YAPE GRUPO GF": "Yape Grupo GF",
+  "YAPE GRUPO GF SAC": "Yape Grupo GF",
+  "BCP GRUPO GF SAC": "Transferencia",
+  "PLIN FRANKZ KASTNER": "Yape/Plin Frankz",
+  "YAPE FRANKZ KASTNER": "Yape/Plin Frankz",
+  "PLIN FK": "Yape/Plin Frankz",
+  "YAPE FK": "Yape/Plin Frankz",
+  "INTERBANK FRANKZ KASTNER": "Transferencia",
+  "YAPE GABRIELA REANO": "Yape/Plin Gabriela",
+  "PLIN GABRIELA REANO": "Yape/Plin Gabriela",
+  "YAPE GABY": "Yape/Plin Gabriela",
+  "PLIN GABY": "Yape/Plin Gabriela",
+  "YPE GF": "Yape Grupo GF",
+  "YAE GF": "Yape Grupo GF",
+  "YAPE.GF": "Yape Grupo GF",
+  "YAPE GFF": "Yape Grupo GF",
+  "BCP GF": "Transferencia",
+  "BCP": "Transferencia",
+  "IBK FK": "Transferencia",
+  "BBVA FK": "Transferencia",
+  "SCOTIA FK": "Transferencia",
+  "IZIPAY": "Izipay",
+  "IZIPZAY": "Izipay",
+  "POS": "Izipay",
+  "LINK": "Link de pago",
+  "LINK PAGO": "Link de pago",
+  "LINK DE PAGO": "Link de pago",
+  "PAGADO": "Pagado antes",
+  "YA PAGO": "Pagado antes",
+  "SIN COBRO": "Sin cobro",
+  "SOLO ENTREGAR": "Sin cobro",
+};
+
 /** Columnas comunes a toda hoja con clave «pedido»: el pedido y su ficha. */
 const PEDIDO_BASE: readonly ColumnTemplate[] = [
   campo("pedido", "# Pedido", "order_name", { pinned: true, width: 120 }),
@@ -125,19 +184,20 @@ export const DOMAIN_TEMPLATES: readonly DomainTemplate[] = [
     columns: [
       manual("fecha", "Fecha", { data_type: "date", required: true, pinned: true, width: 110 }),
       manual("punto", "Punto", { width: 80 }),
-      manual("tienda", "Tienda", { data_type: "select", options: ["Aurela", "Kenku", "Kast", "Otra"], width: 90 }),
+      manual("tienda", "Tienda", { data_type: "select", options: REPARTO_STORES, width: 90 }),
       manual("cliente", "Nombre del cliente", { width: 200 }),
       manual("pedido", "# Pedido", { required: true, width: 120 }),
-      manual("estado", "Estado", { data_type: "status", required: true, width: 130 }),
+      derivada("vinculado", "En Kapta", "vinculado", { data_type: "boolean", width: 80 }),
+      manual("estado", "Estado", { data_type: "status", width: 150 }),
+      manual("estado_reportado", "Estado escrito", { width: 150, visible: false }),
+      manual("reprogramar_para", "Reprogramar para", { data_type: "date", width: 120 }),
       manual("efectivo", "Efectivo", { data_type: "number", width: 90 }),
       manual("a_cobrar", "A cobrar", { data_type: "number", width: 90 }),
-      manual("metodo_pago", "Método de pago", {
-        data_type: "select",
-        options: ["Efectivo", "Yape", "Plin", "POS", "Izipay", "Link", "Sin cobro"],
-        width: 120,
-      }),
+      manual("metodo_pago", "Método de pago", { data_type: "select", options: REPARTO_PAYMENT_METHODS, width: 140 }),
+      manual("metodo_pago_reportado", "Método escrito", { width: 150, visible: false }),
       manual("observacion_1", "Observación 1", { width: 180 }),
       manual("observacion_2", "Observación 2", { width: 180 }),
+      manual("revision", "Revisión", { width: 200 }),
     ],
   },
   {
@@ -173,6 +233,7 @@ export const DOMAIN_TEMPLATES: readonly DomainTemplate[] = [
       derivada("zona", "Zona", "zona", { width: 130 }),
       derivada("estatus", "Estatus", "estatus_consolidado", { data_type: "status", pinned: false, width: 110 }),
       derivada("entregado_por", "Entregado por", "estatus_por", { width: 150 }),
+      derivada("aportes", "Aportes", "aportes", { width: 220 }),
       derivada("intentos_lima", "# Motos Lima", "intentos_lima", { data_type: "number", width: 100 }),
       derivada("estado_kapta", "Estado Kapta", "estado_kapta", { data_type: "status", width: 110 }),
       derivada("diferencia", "Diferencia", "diferencia_estatus", { width: 120 }),

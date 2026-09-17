@@ -10,13 +10,15 @@ import {
   ensureSheetsInitialized,
   getSheetWorkspace,
   loadAliases,
+  loadContributions,
   loadObservations,
   loadOrderFacts,
   loadStoredRows,
+  loadStoredRowsByMonth,
   loadStoredRowsFor,
 } from "@/lib/sheets/access";
 import { CATALOGO_ZONAS_KEY } from "@/lib/sheets/templates";
-import type { StoredRow } from "@/lib/sheets/types";
+import type { Contribution, StoredRow } from "@/lib/sheets/types";
 
 export const dynamic = "force-dynamic";
 
@@ -75,7 +77,7 @@ async function Liquidaciones2Content({ searchParams }: { searchParams: Promise<S
     workspace.sheets.find((s) => s.key === sp.hoja) ?? consolidado ?? workspace.sheets[0] ?? null;
   const domain = sheet ? workspace.domains.find((d) => d.id === sheet.domain_id) ?? null : null;
 
-  const month = sp.q ? null : (sp.mes?.trim() || limaMonthKey(new Date().toISOString()));
+  const month = sp.q ? null : sp.mes?.trim() === "todos" ? null : (sp.mes?.trim() || limaMonthKey(new Date().toISOString()));
   const search = sp.q?.trim() || null;
 
   let rows: ReturnType<typeof computeRows> = [];
@@ -90,13 +92,24 @@ async function Liquidaciones2Content({ searchParams }: { searchParams: Promise<S
     if (domain.row_key === "pedido" && sheet.store_id) {
       const facts = await loadOrderFacts({ storeId: sheet.store_id, month, search, limit: LIMIT });
       truncated = facts.length >= LIMIT;
-      const stored = await loadStoredRowsFor(
-        sheet.id,
-        facts.map((f) => f.order_name ?? f.order_id),
-      );
-      rows = computeRows({ rowKey: "pedido", columns: sheet.columns, facts, stored, lookups });
+      const [stored, byOrderId] = await Promise.all([
+        loadStoredRowsFor(sheet.id, facts.map((f) => f.order_name ?? f.order_id)),
+        domain.key === "consolidado" ? loadContributions(orgId, facts.map((f) => f.order_id)) : Promise.resolve(new Map<string, Contribution[]>()),
+      ]);
+      // El motor indexa los aportes por nº de pedido, que es lo que ve la gente.
+      const contributions = new Map<string, Contribution[]>();
+      for (const f of facts) {
+        const list = byOrderId.get(f.order_id);
+        if (list && f.order_name) contributions.set(f.order_name, list);
+      }
+      rows = computeRows({ rowKey: "pedido", columns: sheet.columns, facts, stored, lookups, contributions });
     } else {
-      const stored = await loadStoredRows(sheet.id, 10000);
+      // Las hojas de reparto se miran por mes (columna `fecha`); los catálogos, enteros.
+      const stored =
+        domain.row_key === "punto" && month && !search
+          ? await loadStoredRowsByMonth(sheet.id, month, 10000)
+          : await loadStoredRows(sheet.id, 10000);
+      truncated = stored.length >= 10000;
       const filtered = search
         ? stored.filter((r) => JSON.stringify(r.values).toLowerCase().includes(search.toLowerCase()))
         : stored;
@@ -123,7 +136,8 @@ async function Liquidaciones2Content({ searchParams }: { searchParams: Promise<S
       observations={observations}
       reasons={workspace.reasons}
       openObservations={workspace.openObservations}
-      filters={{ month: month ?? "", search: search ?? "" }}
+      filters={{ month: month ?? (sp.mes?.trim() === "todos" ? "todos" : ""), search: search ?? "" }}
+      lastImport={(sheet?.config as { last_import?: Record<string, unknown> } | undefined)?.last_import ?? null}
       canEdit={canEdit}
       canManage={canManage}
       panel={sp.panel ?? null}

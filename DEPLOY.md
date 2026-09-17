@@ -705,6 +705,13 @@ historial por celda y observaciones de cuadre. Plan e iteraciones en
 4. Las hojas de Pedidos y Consolidado se leen con el service role de
    `order_master` (0053) filtrando por las tiendas accesibles; el resto de
    tablas tiene RLS propia.
+5. **Reparto propio.** Una hoja por motorizado de `riders` más las históricas
+   (Gera, Marcos). Importación desde la pantalla (`/api/sheets/import`, xlsx o
+   csv en el formato de bloques del Excel, hasta 25 MB) o por script:
+   `pnpm tsx scripts/import-reparto.ts <org_id> <dir> [Roy …]`, donde `<dir>`
+   tiene un `matrix_<Hoja>.json` por hoja (volcado con openpyxl, porque el
+   libro completo pesa 30 MB). Idempotente. La historia del Excel se cargó el
+   16-09-2026.
 
 ## 5k-ter. Rutas de reparto (motorizados propios)
 

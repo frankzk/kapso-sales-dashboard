@@ -25,7 +25,7 @@ import type {
   StatusEffect,
 } from "@/lib/sheets/types";
 import {
-  addCatalogRow,
+  addSheetRow,
   addManualColumn,
   createObservation,
   initializeSheets,
@@ -58,6 +58,7 @@ interface Props {
   canEdit: boolean;
   canManage: boolean;
   panel: string | null;
+  lastImport: Record<string, unknown> | null;
 }
 
 const ROW_HEIGHT = 34;
@@ -219,7 +220,8 @@ export function SheetsBoard(props: Props) {
             setPanel={setPanel}
             canManage={canManage}
             hrefFor={hrefFor}
-            showMonth={domain.row_key === "pedido"}
+            showMonth={domain.row_key === "pedido" || domain.row_key === "punto"}
+            allowAllMonths={domain.row_key === "punto"}
           />
 
           {panel === "columnas" && canManage && (
@@ -240,8 +242,11 @@ export function SheetsBoard(props: Props) {
               onClose={() => setPanel(null)}
             />
           )}
-          {domain.row_key === "valor" && canEdit && (
-            <CatalogRowForm sheet={sheet} run={run} pending={pending} />
+          {domain.row_key === "punto" && (
+            <RepartoBar sheet={sheet} rows={rows} canEdit={canEdit} lastImport={props.lastImport} onImported={() => router.refresh()} />
+          )}
+          {(domain.row_key === "valor" || domain.row_key === "punto") && canEdit && (
+            <AddRowForm sheet={sheet} domain={domain} run={run} pending={pending} />
           )}
 
           <Grid
@@ -282,6 +287,7 @@ function Toolbar(props: {
   canManage: boolean;
   hrefFor: (key: string, extra?: Record<string, string>) => string;
   showMonth: boolean;
+  allowAllMonths?: boolean;
 }) {
   const { sheet, domain, filters, panel, setPanel } = props;
   const toggle = (p: string) => setPanel(panel === p ? null : p);
@@ -308,11 +314,12 @@ function Toolbar(props: {
             className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
             onChange={(e) => e.currentTarget.form?.requestSubmit()}
           >
-            {monthOptions(filters.month).map((m) => (
+            {monthOptions(filters.month === "todos" ? "" : filters.month).map((m) => (
               <option key={m.key} value={m.key}>
                 {m.label}
               </option>
             ))}
+            {props.allowAllMonths && <option value="todos">Todos los meses</option>}
           </select>
         )}
         <input
@@ -909,25 +916,46 @@ function ObservationsPanel(props: {
 }
 
 // ---------------------------------------------------------------------------
-// Fila nueva de catálogo
+// Fila nueva tecleada (catálogos y reparto)
 // ---------------------------------------------------------------------------
-function CatalogRowForm(props: { sheet: SheetWithColumns; run: (a: () => Promise<SheetActionResult>, after?: () => void) => void; pending: boolean }) {
-  const columns = [...props.sheet.columns].filter((c) => c.kind === "manual").sort((a, b) => a.position - b.position);
+function AddRowForm(props: {
+  sheet: SheetWithColumns;
+  domain: DomainWithStatuses;
+  run: (a: () => Promise<SheetActionResult>, after?: () => void) => void;
+  pending: boolean;
+}) {
+  const columns = [...props.sheet.columns]
+    .filter((c) => c.kind === "manual" && c.visible && !["estado_reportado", "metodo_pago_reportado", "revision"].includes(c.key))
+    .sort((a, b) => a.position - b.position);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <button type="button" className="text-xs font-medium text-brand-700 underline" onClick={() => setOpen(true)}>
+        + Añadir fila a mano
+      </button>
+    );
+  }
   return (
     <div className="flex flex-wrap items-end gap-2 rounded-lg border border-dashed border-slate-200 bg-white p-3 text-xs">
       {columns.map((c) => (
         <label key={c.key} className="flex flex-col gap-1">
           <span className="text-slate-500">{c.label}{c.required ? " *" : ""}</span>
-          {c.data_type === "select" ? (
+          {c.data_type === "select" || c.data_type === "status" ? (
             <select value={values[c.key] ?? ""} onChange={(e) => setValues({ ...values, [c.key]: e.target.value })} className="rounded border border-slate-200 px-2 py-1">
               <option value="">—</option>
-              {c.options.map((o) => (
-                <option key={o} value={o}>{o}</option>
+              {(c.data_type === "status" ? props.domain.statuses.filter((s) => s.active).map((s) => ({ v: s.code, l: s.label })) : c.options.map((o) => ({ v: o, l: o }))).map((o) => (
+                <option key={o.v} value={o.v}>{o.l}</option>
               ))}
             </select>
           ) : (
-            <input value={values[c.key] ?? ""} onChange={(e) => setValues({ ...values, [c.key]: e.target.value })} className="rounded border border-slate-200 px-2 py-1" />
+            <input
+              type={c.data_type === "number" ? "number" : c.data_type === "date" ? "date" : "text"}
+              step={c.data_type === "number" ? "0.01" : undefined}
+              value={values[c.key] ?? ""}
+              onChange={(e) => setValues({ ...values, [c.key]: e.target.value })}
+              className="w-36 rounded border border-slate-200 px-2 py-1"
+            />
           )}
         </label>
       ))}
@@ -935,10 +963,109 @@ function CatalogRowForm(props: { sheet: SheetWithColumns; run: (a: () => Promise
         type="button"
         disabled={props.pending}
         className="rounded bg-brand-700 px-3 py-1.5 font-medium text-white"
-        onClick={() => props.run(() => addCatalogRow(props.sheet.id, values), () => setValues({}))}
+        onClick={() => props.run(() => addSheetRow(props.sheet.id, values), () => setValues({}))}
       >
         Guardar fila
       </button>
+      <button type="button" className="text-slate-500 underline" onClick={() => setOpen(false)}>Cerrar</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Barra de una hoja de reparto: totales del periodo e importación de archivo
+// ---------------------------------------------------------------------------
+function RepartoBar(props: {
+  sheet: SheetWithColumns;
+  rows: ComputedRow[];
+  canEdit: boolean;
+  lastImport: Record<string, unknown> | null;
+  onImported: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const totals = useMemo(() => {
+    let entregados = 0;
+    let efectivo = 0;
+    let aCobrar = 0;
+    let revision = 0;
+    let vinculados = 0;
+    const porMetodo = new Map<string, number>();
+    for (const r of props.rows) {
+      if (r.cells.estado === "entregado") entregados += 1;
+      if (typeof r.cells.efectivo === "number") efectivo += r.cells.efectivo;
+      if (typeof r.cells.a_cobrar === "number" && r.cells.estado === "entregado") aCobrar += r.cells.a_cobrar;
+      if (r.cells.revision) revision += 1;
+      if (r.cells.vinculado === true) vinculados += 1;
+      const m = typeof r.cells.metodo_pago === "string" && r.cells.metodo_pago ? r.cells.metodo_pago : null;
+      if (m && r.cells.estado === "entregado") porMetodo.set(m, (porMetodo.get(m) ?? 0) + 1);
+    }
+    return { entregados, efectivo, aCobrar, revision, vinculados, porMetodo };
+  }, [props.rows]);
+
+  const upload = async (file: File) => {
+    setBusy(true);
+    setResult(null);
+    try {
+      const fd = new FormData();
+      fd.set("file", file);
+      fd.set("sheetId", props.sheet.id);
+      const res = await fetch("/api/sheets/import", { method: "POST", body: fd });
+      const json = (await res.json()) as Record<string, unknown> & { error?: string };
+      if (!res.ok) {
+        setResult(json.error ?? "No se pudo importar.");
+        return;
+      }
+      const unknown = Array.isArray(json.unknownStatuses) ? (json.unknownStatuses as [string, number][]).length : 0;
+      setResult(
+        `Importado «${String(json.worksheet ?? file.name)}»: ${json.rows} filas en ${json.blocks} rutas · ${json.inserted} nuevas, ${json.updated} actualizadas, ${json.keptManual} respetadas por edición manual · ${json.linked} vinculadas a un pedido de Kapta` +
+          (unknown ? ` · ${unknown} estados sin equivalente: revísalos en «Estados y alias»` : ""),
+      );
+      props.onImported();
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const money = (n: number) => `S/ ${n.toFixed(2)}`;
+  const li = props.lastImport;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-4">
+        <span><b>{props.rows.length}</b> puntos</span>
+        <span><b>{totals.entregados}</b> entregados</span>
+        <span>a cobrar entregado <b>{money(totals.aCobrar)}</b></span>
+        <span>efectivo <b>{money(totals.efectivo)}</b></span>
+        {[...totals.porMetodo].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([m, n]) => (
+          <span key={m} className="text-slate-500">{m} {n}</span>
+        ))}
+        <span className={totals.revision ? "font-medium text-amber-700" : "text-slate-400"}>{totals.revision} a revisión</span>
+        <span className="text-slate-500">{totals.vinculados} en Kapta</span>
+      </div>
+      <div className="flex items-center gap-2">
+        {li && typeof li.at === "string" && (
+          <span className="text-slate-400" title={String(li.filename ?? "")}>última importación {li.at.slice(0, 10)}</span>
+        )}
+        {props.canEdit && (
+          <label className={cn("cursor-pointer rounded-lg border px-3 py-1.5 font-medium", busy ? "border-slate-200 text-slate-400" : "border-brand-700 text-brand-700 hover:bg-brand-50")}>
+            {busy ? "Importando…" : "Importar Excel/CSV"}
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".xlsx,.xlsm,.csv"
+              className="hidden"
+              disabled={busy}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void upload(f);
+              }}
+            />
+          </label>
+        )}
+      </div>
+      {result && <p className="w-full text-slate-700">{result}</p>}
     </div>
   );
 }
