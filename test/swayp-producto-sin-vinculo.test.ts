@@ -169,7 +169,7 @@ describe("las tres puertas de Envíos", () => {
     // …el reenvío de una anulada…
     expect(ui).toContain('const cancelledExceptionUnavailable = fenixReason !== "ok" || swaypSinCodbar;');
     // …y el alta a mano.
-    expect(ui).toContain("|| swaypSinCodbar}");
+    expect(ui).toContain("swaypSinCodbar ||");
   });
 
   it("y DICE por qué, en vez de solo apagarse", () => {
@@ -201,13 +201,14 @@ describe("el servidor no se fía del modal", () => {
 
   /**
    * Lo que pasaba sin la reja: la API fallaba con «Falta vincular a Swayp», el
-   * flujo caía al código local y la guía se creaba igual. El respaldo del código
-   * local sigue vivo para lo que sí es una limitación de Swayp —una ciudad que
-   * su API no atiende—; un vínculo que falta es un hueco nuestro.
+   * flujo caía al código local y la guía se creaba igual.
+   *
+   * El 16-09-2026 ese respaldo se retiró del todo —ver `swayp-caminos-api`—, así
+   * que ahora un vínculo que falta y una ciudad sin bodega acaban igual: sin
+   * guía y con el motivo dicho. Aquí se fija que no vuelva a colarse.
    */
-  it("el respaldo del código local sigue existiendo para el otro caso", () => {
-    expect(src).toContain("swaypNotice");
-    expect(src).toContain("quedó con código manual");
+  it("ya no queda ningún respaldo de código local", () => {
+    expect(src).not.toContain("quedó con código manual");
   });
 
   it("la vista previa trae el vínculo resuelto", () => {

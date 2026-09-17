@@ -23,24 +23,33 @@ describe("la puerta manual, en el cliente", () => {
     expect(bloque.slice(0, 500)).toContain("min={tomorrowDateInputValue()}");
   });
 
-  it("la fecha entra en la condición del botón, y en la de «Autogenerar»", () => {
+  it("la fecha entra en la condición del botón", () => {
     expect(ui).toContain("const manualGuideDateInvalid = !manualGuideDate || manualGuideDate <= localDateInputValue();");
-    // `swaypSinCodbar` se sumó después: sin vínculo no hay guía ni escrita a
-    // mano. La fecha sigue siendo condición, que es lo que esta prueba cuida.
-    expect(ui).toContain(
-      "disabled={pending || !fenixGuide.trim() || manualGuideDateInvalid || swaypSinCodbar}",
-    );
-    expect(ui).toContain("disabled={!drawerOrderName || manualGuideDateInvalid}");
+    // Se le sumaron dos condiciones después —sin codbar no hay guía, y el
+    // número tiene que ser de Swayp—. La fecha sigue siendo una de ellas, que
+    // es lo que esta prueba cuida.
+    expect(ui).toContain("manualGuideDateInvalid ||");
+    expect(ui).toContain("swaypSinCodbar ||");
+    expect(ui).toContain("numeroManualNoEsDeSwayp");
+  });
+
+  it("el botón «Autogenerar» ya no existe: acuñaba un número que Swayp no conoce", () => {
+    // Se busca el BOTÓN, no la palabra: el comentario que explica por qué se
+    // quitó la menciona, y borrar la explicación para que pase una prueba sería
+    // justo al revés de lo que esta prueba quiere conseguir.
+    expect(ui).not.toMatch(/>\s*Autogenerar\s*</);
+    expect(ui).not.toContain("disabled={!drawerOrderName || manualGuideDateInvalid}");
   });
 });
 
 describe("la puerta manual, en el servidor", () => {
   it("`createFenixGuide` valida antes de tocar la base", () => {
     const accion = server.slice(server.indexOf("export async function createFenixGuide"));
-    const cuerpo = accion.slice(0, 1200);
+    const cuerpo = accion.slice(0, 2400);
     expect(cuerpo).toContain("if (!isFutureShipmentFollowup(input.nextFollowupAt ?? null)) {");
-    // La guarda va ANTES de crear el cliente admin y de acuñar.
+    // Las guardas van ANTES de crear el cliente admin y de acuñar.
     expect(cuerpo.indexOf("isFutureShipmentFollowup")).toBeLessThan(cuerpo.indexOf("spinOffFenixGuide"));
+    expect(cuerpo.indexOf("esNumeroDeGuiaSwayp")).toBeLessThan(cuerpo.indexOf("spinOffFenixGuide"));
   });
 });
 

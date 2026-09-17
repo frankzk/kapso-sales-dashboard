@@ -9,6 +9,7 @@ import { OrderLineItems } from "@/components/order-line-items";
 // repite. Estaba escrito «8» a mano en cuatro sitios contra una constante que
 // ya existía, así que subirlo en `lib/` habría dejado la pantalla mintiendo.
 import { DISCARD_REASON_MIN } from "@/lib/recovery-discard";
+import { esNumeroDeGuiaSwayp } from "@/lib/swayp-guide";
 import {
   COURIER_REPORT_RESULTS,
   attemptLabel,
@@ -2133,6 +2134,9 @@ function ShipmentDrawer({
   // §11.6, y era la que el cajón abre a la fuerza cuando el envío no tiene N° de
   // pedido —justo cuando nadie mira con cuidado.
   const manualGuideDateInvalid = !manualGuideDate || manualGuideDate <= localDateInputValue();
+  // MISMA función que la reja del servidor, para que el botón no invite a algo
+  // que la acción va a rechazar.
+  const numeroManualNoEsDeSwayp = !!fenixGuide.trim() && !esNumeroDeGuiaSwayp(fenixGuide);
   // «Cliente cancela / anula» cierra la venta: pide un segundo clic que la
   // nombre, igual que el descarte de la recuperación.
   const cancelNeedsConfirm = disposition === "cancela";
@@ -2276,12 +2280,11 @@ function ShipmentDrawer({
     shipment?.order_name,
     detail && !("error" in detail) ? detail.order?.name : null,
   );
-  const cancelledExceptionGuide = shipment
-    ? rescheduleGuideCode(
-        drawerOrderName,
-        cancelledExceptionDate ? new Date(cancelledExceptionDate).toISOString() : null,
-      )
-    : "";
+  // El reenvío exige N° de pedido porque el servidor lo necesita para pedirle la
+  // guía a Swayp. Ya no se acuña ningún código con él —eso lo hacía
+  // `rescheduleGuideCode`, y el número que salía Swayp no lo conocía— pero su
+  // ausencia sigue siendo un bloqueo.
+  const cancelledExceptionTienePedido = !!shipment && !!drawerOrderName;
   const cancelledExceptionDateInvalid =
     !cancelledExceptionDate || cancelledExceptionDate <= localDateInputValue();
   // Sin vínculo de codbar no hay guía, así que el reenvío tampoco: si no, el
@@ -2297,7 +2300,7 @@ function ShipmentDrawer({
   const showRouteChooser =
     canForceAliclik || (!!aliclikDecision?.eligible && fenixRouteAvailable);
   const cancelledExceptionReady =
-    !!cancelledExceptionGuide &&
+    cancelledExceptionTienePedido &&
     !cancelledExceptionDateInvalid &&
     !!cancelledExceptionNote.trim() &&
     !cancelledExceptionUnavailable;
@@ -2684,15 +2687,14 @@ function ShipmentDrawer({
                       />
                     </label>
 
-                    {cancelledExceptionGuide ? (
-                      <p className="rounded-md bg-slate-50 px-2 py-1.5 text-xs text-slate-600">
-                        Nueva guía: <b className="font-mono text-slate-800">{cancelledExceptionGuide}</b>
-                      </p>
-                    ) : (
-                      <p className="rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
-                        Falta vincular un N° de pedido para autogenerar la guía Swayp.
-                      </p>
-                    )}
+                    {/* Antes se prometía aquí el número que la app iba a acuñar
+                        (`#KP…`). Ya no lo acuña nadie: el número lo emite Swayp
+                        al registrar el reenvío, así que prometer uno concreto
+                        sería enseñar un número que no va a existir. */}
+                    <p className="rounded-md bg-slate-50 px-2 py-1.5 text-xs text-slate-600">
+                      El número de la nueva guía <b>lo emite Swayp</b> al registrar el reenvío. Si
+                      Swayp no responde, el reenvío no se registra y el aviso dice por qué.
+                    </p>
 
                     {swaypSinCodbarAviso && (
                       <p className="rounded-md bg-rose-50 px-2 py-1.5 text-xs text-rose-800">
@@ -3240,14 +3242,14 @@ function ShipmentDrawer({
                         <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs leading-relaxed text-slate-600">
                           Se generará una <b>nueva guía Swayp</b> con la fecha elegida y{" "}
                           <b>el número lo emite Swayp</b>: quedará creada en su sistema, sin
-                          cargarla al Excel. Si Swayp no responde, queda con código local y el
-                          aviso te dice por qué.
+                          cargarla al Excel. Si Swayp no responde, la reprogramación{" "}
+                          <b>no se registra</b> y el aviso te dice por qué.
                         </p>
                       ) : (
-                        <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs leading-relaxed text-slate-600">
-                          Se generará una <b>nueva guía Swayp</b> con la fecha elegida{" "}
-                          <b>con código local</b>: este destino todavía no emite por API, así que
-                          hay que cargarla en el Excel de programación.
+                        <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs leading-relaxed text-amber-900">
+                          Este destino <b>no tiene bodega Swayp configurada</b>, así que Swayp no
+                          puede emitir el número y la guía no se creará. Configúrala en Ajustes o
+                          elige otro courier.
                         </p>
                       )
                     ) : (
@@ -3682,30 +3684,19 @@ function ShipmentDrawer({
                       className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
                     />
                   </label>
-                  <div className="flex gap-2">
-                    <input
-                      value={fenixGuide}
-                      onChange={(e) => setFenixGuide(e.target.value)}
-                      aria-label="N° de guía Swayp"
-                      placeholder="N° de guía Swayp"
-                      className="flex-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-                    />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setFenixGuide(
-                          rescheduleGuideCode(
-                            drawerOrderName,
-                            manualGuideDate ? new Date(manualGuideDate).toISOString() : null,
-                          ),
-                        )
-                      }
-                      disabled={!drawerOrderName || manualGuideDateInvalid}
-                      className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                    >
-                      Autogenerar
-                    </button>
-                  </div>
+                  {/* «Autogenerar» estaba aquí y se quitó el 16-09-2026: armaba
+                      el número con el pedido y la fecha —`#KP13166415092026`—, o
+                      sea acuñaba un código que Swayp no conoce. Esta puerta es
+                      para REGISTRAR el número que Swayp ya dio, no para
+                      inventarlo. */}
+                  <input
+                    value={fenixGuide}
+                    onChange={(e) => setFenixGuide(e.target.value)}
+                    inputMode="numeric"
+                    aria-label="N° de guía Swayp"
+                    placeholder="N° de guía Swayp, p. ej. 50000132589"
+                    className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+                  />
                   {/* El motivo del bloqueo se dice acá, en texto visible y
                       enlazado al botón. Dentro de un botón `disabled` no lo
                       alcanza ni el tabulador ni el lector de pantalla. */}
@@ -3717,11 +3708,11 @@ function ShipmentDrawer({
                         mano, porque Swayp no sabría qué descontar. */}
                     {swaypSinCodbarAviso
                       ? swaypSinCodbarAviso
-                      : !drawerOrderName
-                        ? "Este envío no tiene N° de pedido, así que la guía no se puede autogenerar: escríbela a mano."
-                        : manualGuideDateInvalid
-                          ? "Elige la fecha de despacho —de mañana en adelante—: va estampada en el número de la guía."
-                          : "«Autogenerar» arma el número con el pedido y esa fecha."}
+                      : manualGuideDateInvalid
+                        ? "Elige la fecha de despacho, de mañana en adelante."
+                        : numeroManualNoEsDeSwayp
+                          ? "Ese número no es de Swayp: los suyos son solo dígitos, como 50000132589. Cópialo de su panel."
+                          : "Pega aquí el número que te dio el panel de Swayp. Si aún no la creaste allá, ciérralo y confirma la reprogramación: Swayp la emite sola."}
                   </p>
                   <button
                     onClick={() =>
@@ -3740,7 +3731,13 @@ function ShipmentDrawer({
                         },
                       )
                     }
-                    disabled={pending || !fenixGuide.trim() || manualGuideDateInvalid || swaypSinCodbar}
+                    disabled={
+                      pending ||
+                      !fenixGuide.trim() ||
+                      manualGuideDateInvalid ||
+                      swaypSinCodbar ||
+                      numeroManualNoEsDeSwayp
+                    }
                     aria-describedby="guia-manual-motivo"
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                   >

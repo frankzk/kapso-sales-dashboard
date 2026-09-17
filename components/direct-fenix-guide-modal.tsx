@@ -11,7 +11,8 @@ import {
   type ShopifyOrderCandidate,
 } from "@/app/dashboard/envios/actions";
 import type { OrderLinkCandidate } from "@/lib/shipments-access";
-import { limaTodayKey, rescheduleGuideCode } from "@/lib/shipments";
+import { limaTodayKey } from "@/lib/shipments";
+import { esNumeroDeGuiaSwayp } from "@/lib/swayp-guide";
 
 /** El despacho más pronto es mañana (Lima): el Excel del día ya suele estar
  *  enviado, así que una guía de hoy nunca llegaría a Fenix. */
@@ -101,11 +102,12 @@ export function DirectFenixGuideModal({
   // autorrelleno, ese campo nunca llegaba vacío, así que la guía por API era
   // inalcanzable desde esta pantalla: se creó en el #294 y nunca se ejecutó.
   //
-  // Vacío no significa quedarse sin código: si Swayp responde, manda SU número;
-  // y si la integración está apagada, el servidor genera el mismo código local
-  // que se generaba acá (rescheduleGuideCode, con los mismos argumentos). El
-  // botón «Autogenerar» sigue disponible para el caso que lo justifica: que
-  // Swayp haya entregado un código propio y haya que escribirlo.
+  // Vacío es además lo NORMAL desde el 16-09-2026: el número lo emite Swayp y
+  // punto. Si Swayp no responde, la guía no se crea — antes se caía a un código
+  // nuestro (`#KP…`) que Swayp no reconoce, y por eso se retiró junto con el
+  // botón «Autogenerar» que lo acuñaba. Escribir algo aquí solo vale para
+  // registrar una guía que YA existe en el panel de Swayp, y entonces tiene que
+  // ser su número: solo dígitos.
 
   async function searchShopify() {
     const term = q.trim();
@@ -157,7 +159,11 @@ export function DirectFenixGuideModal({
   // en verde y este panel anunciaba «disponible para todo el pedido» sobre un
   // producto que Swayp no conoce (#KP134541, 15-09-2026).
   const blockedByLink = !!preview && preview.unlinked.length > 0;
+  // MISMA función que la reja del servidor: el número escrito a mano tiene que
+  // ser uno de Swayp, no uno nuestro.
+  const numeroNoEsDeSwayp = !!guideCode.trim() && !esNumeroDeGuiaSwayp(guideCode);
   const canCreate =
+    !numeroNoEsDeSwayp &&
     !!preview &&
     !blockedByGuide &&
     !blockedByOrder &&
@@ -492,33 +498,28 @@ export function DirectFenixGuideModal({
               </label>
               <label className="block text-xs text-slate-500">
                 N° de guía Swayp
-                <div className="mt-0.5 flex gap-2">
-                  <input
-                    value={guideCode}
-                    onChange={(e) => setGuideCode(e.target.value)}
-                    placeholder="Vacío: lo asigna Swayp"
-                    className="w-full flex-1 rounded-lg border border-slate-200 px-2.5 py-1.5 font-mono text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setGuideCode(
-                        rescheduleGuideCode(
-                          preview.orderName,
-                          dispatchDate ? new Date(dispatchDate).toISOString() : null,
-                        ),
-                      );
-                    }}
-                    disabled={!preview.orderName}
-                    className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    Autogenerar
-                  </button>
-                </div>
-                <span className="mt-1 block text-[11px] text-slate-400">
-                  Déjalo vacío y el número lo emite Swayp. Escribe uno solo si la guía
-                  <strong> ya existe</strong> en el panel de Swayp: con el campo lleno no se le pide,
-                  para no duplicar el paquete.
+                {/* «Autogenerar» estaba aquí y se quitó el 16-09-2026: armaba el
+                    número con el pedido y la fecha —`#KP13166415092026`—, que es
+                    justo el código que Swayp no reconoce. */}
+                <input
+                  value={guideCode}
+                  onChange={(e) => setGuideCode(e.target.value)}
+                  inputMode="numeric"
+                  placeholder="Vacío: lo emite Swayp"
+                  className={cn(
+                    "mt-0.5 w-full rounded-lg border px-2.5 py-1.5 font-mono text-xs",
+                    numeroNoEsDeSwayp ? "border-rose-300 bg-rose-50" : "border-slate-200",
+                  )}
+                />
+                <span
+                  className={cn(
+                    "mt-1 block text-[11px]",
+                    numeroNoEsDeSwayp ? "text-rose-700" : "text-slate-400",
+                  )}
+                >
+                  {numeroNoEsDeSwayp
+                    ? "Ese número no es de Swayp: los suyos son solo dígitos, como 50000132589."
+                    : "Déjalo vacío y el número lo emite Swayp. Escríbelo solo si la guía ya existe en su panel: con el campo lleno no se le pide, para no duplicar el paquete."}
                 </span>
               </label>
             </div>

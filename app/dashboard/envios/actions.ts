@@ -97,7 +97,12 @@ import {
   swaypAuthErrorHint,
   swaypOptsFromEnv,
 } from "@/lib/swayp";
-import { buildSwaypGuideInput, esCiudadPorApiSwayp, parseSenders } from "@/lib/swayp-guide";
+import {
+  buildSwaypGuideInput,
+  esCiudadPorApiSwayp,
+  esNumeroDeGuiaSwayp,
+  parseSenders,
+} from "@/lib/swayp-guide";
 import { normalizeSku, productosSinVinculo } from "@/lib/swayp-productos";
 import { cargarMapaSwayp, cargarMapaSwaypDeOrg } from "@/lib/swayp-sku-map";
 import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
@@ -659,11 +664,10 @@ export async function registerRerouteCall(
     reprogramProvider === "fenix" &&
     !cur.fenix_shipment_id
   ) {
-    // Se le pide el número a Swayp; si la ciudad no está habilitada por API
-    // —hoy sólo Arequipa— se cae al código local, que es el flujo por Excel de
-    // siempre. Un solo intento: `createGuide` no reintenta a propósito, porque
-    // la API no acepta clave de idempotencia y un POST repetido tras un timeout
-    // crearía una segunda guía y un segundo paquete.
+    // El número lo emite Swayp, siempre. Un solo intento: `createGuide` no
+    // reintenta a propósito, porque la API no acepta clave de idempotencia y un
+    // POST repetido tras un timeout crearía una segunda guía y un segundo
+    // paquete.
     const viaApi = await swaypGuideForReprogram(
       admin,
       shipmentId,
@@ -671,20 +675,22 @@ export async function registerRerouteCall(
       input.nextFollowupAt,
       input.note,
     );
-    const localCode = rescheduleGuideCode(cur.order_name, input.nextFollowupAt);
-    const guideCode = viaApi.ok ? String(viaApi.guia) : localCode;
-    // El operador tiene que enterarse de que la guía NO existe en Swayp: es la
-    // única señal de que hay que cargarla a mano por el Excel.
-    const swaypNotice =
-      !viaApi.ok && env.swaypEnabled()
-        ? ` Swayp no la emitió (${viaApi.reason}); quedó con código manual.`
-        : "";
+    // SIN NÚMERO DE SWAYP NO HAY GUÍA (16-09-2026). Antes se caía al código
+    // Kapta —`<pedido><DDMMYYYY>`— y la guía se creaba igual, con la operadora
+    // enterándose por un aviso al final. Ese número Swayp no lo conoce: no
+    // aparece en su panel, no descuenta su stock y no rastrea. Ahora el fallo
+    // PARA la gestión y dice el motivo que dio Swayp, que hasta hoy quedaba
+    // enterrado en el aviso.
+    if (!viaApi.ok) {
+      return { error: `Swayp no emitió la guía: ${viaApi.reason}. La reprogramación no se registró.` };
+    }
+    const guideCode = String(viaApi.guia);
     if (guideCode) {
       // carry the reprogramación date onto the new active guide at insert time
       const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode, {
         childNextFollowupAt: input.nextFollowupAt,
-        swaypGuide: viaApi.ok ? String(viaApi.guia) : null,
-        swaypState: viaApi.ok ? viaApi.idEstado : null,
+        swaypGuide: String(viaApi.guia),
+        swaypState: viaApi.idEstado,
       });
       // A failure here (e.g. the code was already used) is surfaced rather than
       // falling back to En ruta — that would re-activate the old, unusable guide.
@@ -702,9 +708,7 @@ export async function registerRerouteCall(
       await syncMasterForShipment(admin, shipmentId, spun.childId);
       revalidatePath("/dashboard/envios");
       return {
-        notice:
-          `Confirmado — nueva guía Swayp ${spun.guideCode} (En ruta).` +
-          (viaApi.ok ? " Emitida por Swayp." : swaypNotice),
+        notice: `Confirmado — nueva guía Swayp ${spun.guideCode} (En ruta). Emitida por Swayp.`,
       };
     }
   }
@@ -1246,10 +1250,12 @@ export async function reprogramCancelledShipmentException(
       .maybeSingle();
     linkedOrderName = (linked as { name: string | null } | null)?.name ?? null;
   }
-  const orderName = effectiveOrderName(current.order_name, linkedOrderName);
-  const localCode = rescheduleGuideCode(orderName, input.nextFollowupAt);
-  if (!localCode) {
-    return { error: "Este envío no tiene N° de pedido para generar automáticamente la nueva guía Swayp." };
+  // El N° de pedido sigue siendo obligatorio, pero ya no porque se acuñe un
+  // código con él: hace falta para pedirle la guía a Swayp, que declara los
+  // productos del pedido. Antes esto se comprobaba acuñando el código local y
+  // mirando si salía vacío, un rodeo que dejaba de tener sentido al retirarlo.
+  if (!effectiveOrderName(current.order_name, linkedOrderName)?.trim()) {
+    return { error: "Este envío no tiene N° de pedido, así que Swayp no puede emitir la nueva guía." };
   }
 
   // Never use the cached flag for this exception: inventory may have changed
@@ -1288,12 +1294,12 @@ export async function reprogramCancelledShipmentException(
     input.nextFollowupAt,
     note,
   );
-  const guideCode = viaApi.ok ? String(viaApi.guia) : localCode;
-  const swaypNotice = viaApi.ok
-    ? " Emitida por Swayp."
-    : env.swaypEnabled()
-      ? ` Swayp no la emitió (${viaApi.reason}); quedó con código manual.`
-      : "";
+  // Sin número de Swayp no hay guía: ver la reja gemela en `registerRerouteCall`.
+  if (!viaApi.ok) {
+    return { error: `Swayp no emitió la guía: ${viaApi.reason}. El reenvío no se registró.` };
+  }
+  const guideCode = String(viaApi.guia);
+  const swaypNotice = " Emitida por Swayp.";
 
   const auditNote = `Excepción sobre guía anulada ${current.guide_code}. Motivo: ${note}`;
   const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode, {
@@ -1303,8 +1309,8 @@ export async function reprogramCancelledShipmentException(
     // Sin esto la hija tendría el número correcto en `guide_code` y
     // `swayp_guide` nulo — y el webhook busca por esa columna, así que el envío
     // se quedaría En ruta para siempre por más que el mensajero reportara.
-    swaypGuide: viaApi.ok ? String(viaApi.guia) : null,
-    swaypState: viaApi.ok ? viaApi.idEstado : null,
+    swaypGuide: String(viaApi.guia),
+    swaypState: viaApi.idEstado,
   });
   if ("error" in spun) return { error: spun.error };
 
@@ -1501,18 +1507,36 @@ export async function createFenixGuide(
     return { error: "La fecha de reprogramación tiene que ser futura." };
   }
 
+  // EL NÚMERO TIENE QUE SER DE SWAYP. Esta puerta existe para registrar una guía
+  // que la operadora YA creó en el panel de Swayp; hasta hoy también aceptaba el
+  // código que «Autogenerar» acuñaba con el pedido y la fecha, y ese número Swayp
+  // no lo conoce. Ver `esNumeroDeGuiaSwayp`.
+  const escrito = input.guideCode?.trim().toUpperCase() ?? "";
+  if (!esNumeroDeGuiaSwayp(escrito)) {
+    return {
+      error: escrito
+        ? `«${escrito}» no es un número de guía de Swayp: los suyos son solo dígitos, como 50000132589. Cópialo de su panel.`
+        : "Escribe el número de guía que te dio Swayp.",
+    };
+  }
+
   const admin = createAdminSupabase();
 
   // carry the reprogramación date onto the new Swayp guide (same as the
   // automatic confirma flow) so it isn't left En ruta without a dispatch date
-  const r = await spinOffFenixGuide(admin, ctx, shipmentId, input.guideCode, {
+  //
+  // `swaypGuide` se rellena con el mismo número: la guía existe en Swayp —la
+  // creó la operadora allá— y sin esa columna el webhook nunca la encontraría y
+  // el envío se quedaría En ruta para siempre.
+  const r = await spinOffFenixGuide(admin, ctx, shipmentId, escrito, {
     childNextFollowupAt: input.nextFollowupAt ?? null,
+    swaypGuide: escrito,
   });
   if ("error" in r) return { error: r.error };
 
   await syncMasterForShipment(admin, shipmentId, r.childId);
   revalidatePath("/dashboard/envios");
-  return { notice: `Guía Swayp ${r.guideCode} creada.` };
+  return { notice: `Guía Swayp ${r.guideCode} registrada.` };
 }
 
 // ── Guía Swayp DIRECTA: desde un pedido, sin guía Aliclik madre ──────────────
@@ -2279,7 +2303,7 @@ export async function createDirectFenixGuide(input: {
   // guide_code — el punto de todo esto es dejar de inventarlo localmente.
   let swaypGuide: string | null = null;
   let swaypState: number | null = null;
-  let swaypNotice = "";
+  const swaypNotice = "";
   if (!input.guideCode?.trim()) {
     const viaApi = await createFenixGuideViaApi({
       admin,
@@ -2295,21 +2319,28 @@ export async function createDirectFenixGuide(input: {
       dispatchDateIso: input.dispatchDateIso,
       observaciones: input.note?.trim() || null,
     });
-    if (viaApi.ok) {
-      swaypGuide = viaApi.guia;
-      swaypState = viaApi.idEstado;
-    } else if (env.swaypEnabled()) {
-      // El operador tiene que enterarse de que la guía NO existe en Swayp: es
-      // la única señal de que hay que cargarla a mano allá.
-      swaypNotice = ` Swayp no la emitió (${viaApi.reason}); quedó con código manual.`;
+    // Sin número de Swayp no hay guía. Ver la reja gemela en `registerRerouteCall`.
+    if (!viaApi.ok) {
+      return { error: `Swayp no emitió la guía: ${viaApi.reason}. No se creó ninguna salida.` };
     }
+    swaypGuide = viaApi.guia;
+    swaypState = viaApi.idEstado;
   }
 
-  const code =
-    swaypGuide ??
-    (input.guideCode?.trim().toUpperCase() || rescheduleGuideCode(order.name, input.dispatchDateIso)).trim();
+  // El código escrito a mano tiene que SER de Swayp. Autogenerarlo con el
+  // pedido y la fecha era acuñar un número que Swayp no conoce, que es
+  // justamente lo que esta regla cierra.
+  const escrito = input.guideCode?.trim().toUpperCase() ?? "";
+  if (escrito && !esNumeroDeGuiaSwayp(escrito)) {
+    return {
+      error:
+        `«${escrito}» no es un número de guía de Swayp: los suyos son solo dígitos, como 50000132589. ` +
+        `Cópialo de su panel, o deja el campo vacío para que Swayp lo emita.`,
+    };
+  }
+  const code = swaypGuide ?? escrito;
   if (!code) {
-    return { error: "El pedido no tiene número para autogenerar; ingresa el código de guía manualmente." };
+    return { error: "Swayp no devolvió número de guía. Vuelve a intentarlo." };
   }
 
   const insertRow = {

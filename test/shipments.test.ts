@@ -864,11 +864,13 @@ describe("los DOS botones de guía Fenix resuelven el nombre igual", () => {
 
   it("el servidor hace la MISMA resolución, no solo el botón", () => {
     // Un botón habilitado que el servidor rechaza es peor que un botón apagado.
+    //
+    // La comprobación era «acuñar el código local y ver si sale vacío». Al
+    // retirar el código local (16-09-2026) pasó a ser directa sobre el nombre,
+    // pero la resolución sigue siendo la compartida y eso es lo que se fija.
     const server = readFileSync(resolve(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8");
-    // El nombre de la variable cambió a `localCode` cuando la guía pasó a poder
-    // venir de Swayp; lo que se fija acá es el argumento, no el nombre.
-    const i = server.indexOf("rescheduleGuideCode(orderName,");
-    expect(i).toBeGreaterThan(-1);
-    expect(server.slice(Math.max(0, i - 700), i)).toContain("effectiveOrderName(");
+    expect(server).toContain(
+      'if (!effectiveOrderName(current.order_name, linkedOrderName)?.trim()) {',
+    );
   });
 });
