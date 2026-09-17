@@ -537,7 +537,8 @@ export async function sendTelegramTest(
 }
 
 /**
- * «Probar cobro por Flow»: crea una orden de S/ 1.10 y devuelve el link.
+ * «Probar cobro por Flow»: crea una orden real por el importe que se le dé y
+ * devuelve el link.
  *
  * POR QUÉ UNA ORDEN DE VERDAD. Flow no tiene un endpoint de prueba, y lo que
  * hay que comprobar es justo lo que solo se ve cobrando: que la firma con el
@@ -547,8 +548,13 @@ export async function sendTelegramTest(
  * descubrirlo con la primera clienta es descubrirlo tarde.
  *
  * ES UNA SONDA, NO UN COBRO NUESTRO: no se escribe en `flowcl_payment_links`
- * porque no hay pedido al que colgarla, y caduca en 30 minutos. Si alguien la
- * paga, el webhook no la reconoce y contesta «desconocido», que es la verdad.
+ * porque no hay pedido al que colgarla, y caduca en 30 minutos.
+ *
+ * SI SE PAGA, EL DINERO ES REAL Y NO SE CUELGA DE NINGÚN PEDIDO. El webhook
+ * busca el token en `flowcl_payment_links`, no lo encuentra y contesta
+ * «desconocido», que es la verdad: entró plata en la cuenta de Flow y Kapta no
+ * sabe de quién es. Por eso el importe por omisión es pequeño y el aviso está
+ * escrito al lado del botón, no enterrado aquí.
  */
 export async function testFlowclLink(
   _prev: SettingsState,
@@ -574,6 +580,16 @@ export async function testFlowclLink(
     };
   }
 
+  // El importe lo pone quien prueba: 1.10 sirve para ver que la firma vale,
+  // pero Yape y las tarjetas tienen mínimos propios, y para probar un cobro de
+  // punta a punta hace falta uno que se pueda pagar de verdad.
+  const pedido = Number(String(formData.get("amount") ?? "").replace(",", "."));
+  const monto = Number.isFinite(pedido) && pedido > 0 ? pedido : 20;
+  if (monto > 500) {
+    return { error: "Para una prueba, 500 es más que suficiente. Si necesitas más, dilo a mano." };
+  }
+  const amount = (Math.round(monto * 100) / 100).toFixed(2);
+
   const site = env.siteUrl();
   if (!/^https:\/\//i.test(site)) {
     return {
@@ -590,17 +606,19 @@ export async function testFlowclLink(
     const pago = await client.createPayment({
       commerceOrder: `PRUEBA-${randomBytes(4).toString("hex")}`,
       subject: "Prueba de configuración (no hace falta pagarla)",
-      amount: "1.10",
+      amount,
       currency: creds.currency ?? "PEN",
       email,
       urlConfirmation: confirmationUrl(site, storeId, creds.flowcl_webhook_secret),
       urlReturn: `${site.replace(/\/$/, "")}/pago/gracias`,
       timeout: 1800,
     });
+    const decimales = amount.endsWith(".00") ? "" : " (con céntimos)";
     return {
       notice:
-        `Flow aceptó un cobro de S/ 1.10 (con decimales) ✓ — orden ${pago.flowOrder}. ` +
-        `Ábrelo para ver el checkout; caduca en 30 minutos y no hace falta pagarlo: ${pago.link}`,
+        `Flow aceptó un cobro de S/ ${amount}${decimales} ✓ — orden ${pago.flowOrder}. ` +
+        `Caduca en 30 minutos. Si lo pagas, el dinero entra de verdad y NO queda ` +
+        `colgado de ningún pedido: ${pago.link}`,
     };
   } catch (e) {
     return { error: `Flow rechazó la prueba: ${errMsg(e)}` };
