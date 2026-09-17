@@ -80,20 +80,10 @@ describe("planObservations", () => {
     expect(planObservations(rows, conAnulado, effects, abierta, NOTE).map((p) => p.field)).toEqual(["estado"]);
   });
 
-  it("abre «pago» cuando el cobro es digital y Kapta no tiene comprobante validado ni pedido pagado", () => {
+  it("un cobro digital sin comprobante en Kapta NO abre observación (causa retirada el 17-09-2026)", () => {
     const yape = row({ values: { estado: "entregado", a_cobrar: 89, metodo_pago: "Yape Grupo GF", metodo_pago_reportado: "YAPE GF" } });
-    const sinPago = new Map([["o1", order({ paid: false })]]);
-    expect(planObservations([yape], sinPago, effects, [], NOTE)).toEqual([
-      { row_id: "r1", order_id: "o1", field: "pago", external_value: "YAPE GF", kapta_value: "sin comprobante validado", difference: null, reason_code: "pago_sin_comprobante", note: NOTE },
-    ]);
-    const conPago = new Map([["o1", order({ paid: true })]]);
-    expect(planObservations([yape], conPago, effects, [], NOTE)).toEqual([]);
-    const efectivo = row({ values: { estado: "entregado", a_cobrar: 89, metodo_pago: "Efectivo" } });
-    expect(planObservations([efectivo], sinPago, effects, [], NOTE)).toEqual([]);
-    const noEntregado = row({ values: { estado: "no_responde", metodo_pago: "Yape Grupo GF" } });
-    expect(planObservations([noEntregado], sinPago, effects, [], NOTE)).toEqual([]);
-    const abierta: ExistingObservation[] = [{ row_id: "r1", field: "pago", status: "abierta", external_value: "YAPE GF" }];
-    expect(planObservations([yape], sinPago, effects, abierta, NOTE)).toEqual([]);
+    const orders = new Map([["o1", order({ paid: false })]]);
+    expect(planObservations([yape], orders, effects, [], NOTE)).toEqual([]);
   });
 
   it("cuenta por campo para el resumen", () => {

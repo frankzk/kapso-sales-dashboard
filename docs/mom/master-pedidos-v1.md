@@ -4864,9 +4864,12 @@ El motivo lo escribe quien repartió; aceptarlo es de quien liquida
 estado, el monto o el pedido de una fila, cada fila que declara entrega se
 contrasta con Kapta (§30.5): un «a cobrar» que difiere del total del pedido
 en más de S/ 0,50 abre una observación de monto con la diferencia firmada;
-un pedido anulado o devuelto en Kapta abre una de estado; un cobro por Yape,
-Plin, link o transferencia sin comprobante validado en Kapta ni pedido pagado
-en Shopify abre una de pago (motivo «pago sin comprobante», 0170). Nunca dos
+un pedido anulado o devuelto en Kapta abre una de estado; **No se
+observa el comprobante**: la causa «pago digital sin comprobante validado» se
+retiró el 17-09-2026 porque ese dato vive en Validar pagos, no en la hoja, y
+para todo lo anterior al cuaderno en Kapta significaba «no lo sé», no «no se
+pagó»; las 1.542 que abrió la carga histórica se cerraron en bloque con ese
+motivo (0170, que queda en el catálogo). Nunca dos
 abiertas para la misma fila y campo; una resuelta con el mismo valor externo
 no se reabre. Al editar un monto que no cuadra, la propia fila pide el motivo en
 línea; cerrar sin motivo deja la observación abierta sin motivo.

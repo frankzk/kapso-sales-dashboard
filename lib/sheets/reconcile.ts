@@ -7,9 +7,12 @@
 //   * monto: «a cobrar» difiere del total del pedido en más de S/ 0,50.
 //   * estado: Kapta tiene el pedido anulado (motivo «anulado_tras_entrega») o
 //     devuelto (sin motivo: lo pone quien revise).
-//   * pago: cobrado por un medio digital (Yape, Plin, link, transferencia) y
-//     Kapta no tiene comprobante validado ni el pedido pagado en Shopify
-//     (motivo «pago_sin_comprobante», 0170).
+//   * (retirada el 17-09-2026) pago: cobrado por un medio digital sin
+//     comprobante validado en Kapta. La operación decidió no controlar el
+//     comprobante desde la hoja: ese dato lo tiene Validar pagos, y para todo
+//     lo anterior al cuaderno en Kapta era «no lo sé», no «no se pagó». El
+//     motivo `pago_sin_comprobante` (0170) queda en el catálogo por la
+//     historia; `DIGITAL_PAYMENT_METHODS` se conserva para la pantalla.
 // Nunca dos observaciones abiertas para la misma (fila, campo). Una resuelta
 // no bloquea, salvo que el valor externo sea el mismo que ya se resolvió: así
 // re-importar el mismo cuaderno no reabre lo que ya se explicó.
@@ -136,13 +139,6 @@ export function planObservations(
       }
     }
 
-    const metodo = typeof row.values.metodo_pago === "string" ? row.values.metodo_pago : null;
-    if (metodo && DIGITAL_PAYMENT_METHODS.has(metodo) && order.paid !== true) {
-      const externalPago = typeof row.values.metodo_pago_reportado === "string" && row.values.metodo_pago_reportado ? row.values.metodo_pago_reportado : metodo;
-      if (!blocked(row.row_id, "pago", externalPago)) {
-        out.push({ row_id: row.row_id, order_id: row.order_id, field: "pago", external_value: externalPago, kapta_value: "sin comprobante validado", difference: null, reason_code: "pago_sin_comprobante", note });
-      }
-    }
   }
   return out;
 }

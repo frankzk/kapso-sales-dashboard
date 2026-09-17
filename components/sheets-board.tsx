@@ -810,14 +810,15 @@ function Grid(props: {
   const widthOf = (c: SheetColumnRow) => c.width ?? (c.data_type === "number" ? 100 : c.data_type === "status" ? 220 : 140);
   const pinnedOffsets = useMemo(() => {
     const out = new Map<string, number>();
-    let acc = 0;
+    // Master y Obs. van fijas a la izquierda; las fijadas del usuario, después.
+    let acc = (showApply ? 150 : 0) + (props.onFlag ? 44 : 0);
     for (const c of columns) {
       if (!c.pinned) break;
       out.set(c.key, acc);
       acc += widthOf(c);
     }
     return out;
-  }, [columns]);
+  }, [columns, showApply, props.onFlag]);
 
   if (!columns.length) return <EmptyState title="Esta hoja no tiene columnas visibles" />;
   if (!rows.length) return <EmptyState title="Sin filas para este filtro" />;
@@ -827,6 +828,16 @@ function Grid(props: {
       <table className="min-w-full border-separate border-spacing-0 text-sm">
         <thead className="sticky top-0 z-20 bg-slate-50">
           <tr>
+            {showApply && (
+              <th scope="col" style={{ left: 0, width: 150, minWidth: 150 }} className="sticky z-30 whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500" title="Cierre por pedido: marca la entrega en el Master">
+                Master
+              </th>
+            )}
+            {props.onFlag && (
+              <th scope="col" style={{ left: showApply ? 150 : 0, width: 44, minWidth: 44 }} className="sticky z-30 whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Obs.
+              </th>
+            )}
             {columns.map((c) => (
               <th
                 key={c.key}
@@ -842,16 +853,6 @@ function Grid(props: {
                 {c.label}
               </th>
             ))}
-            {props.onFlag && (
-              <th scope="col" className="whitespace-nowrap border-b border-slate-200 px-2 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Obs.
-              </th>
-            )}
-            {showApply && (
-              <th scope="col" className="whitespace-nowrap border-b border-slate-200 px-2 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500" title="Cierre por pedido: marca la entrega en el Master">
-                Master
-              </th>
-            )}
           </tr>
         </thead>
         <tbody>
@@ -871,6 +872,24 @@ function Grid(props: {
                 <ReasonPromptRow prompt={prompt} reasons={context.reasons} colSpan={columns.length + extraCols} onSubmit={props.onReasonSubmit} onClose={() => props.onReasonDone?.()} />
               )}
               <tr style={{ height: ROW_HEIGHT }} className={cn(rowBg, "hover:bg-brand-50/40")} title={review ? `A revisión: ${reviewLabel(review)}` : undefined}>
+                {showApply && (
+                  <td style={{ left: 0, width: 150, minWidth: 150 }} className="sticky z-10 whitespace-nowrap border-b border-slate-100 bg-white px-2 py-1">
+                    <MasterCell row={row} context={context} onPrompt={props.onReasonPrompt} />
+                  </td>
+                )}
+                {props.onFlag && (
+                  <td style={{ left: showApply ? 150 : 0, width: 44, minWidth: 44 }} className="sticky z-10 border-b border-slate-100 bg-white px-2 py-1 text-center">
+                    <button
+                      type="button"
+                      title="Abrir observación para esta fila"
+                      aria-label="Abrir observación para esta fila"
+                      className="text-slate-300 hover:text-amber-600"
+                      onClick={() => props.onFlag?.(row)}
+                    >
+                      ⚑
+                    </button>
+                  </td>
+                )}
                 {columns.map((c) => {
                   const value = row.cells[c.key] ?? null;
                   const isEditing = editing?.rowKey === row.row_key && editing.columnKey === c.key;
@@ -906,24 +925,6 @@ function Grid(props: {
                     </td>
                   );
                 })}
-                {props.onFlag && (
-                  <td className="border-b border-slate-100 px-2 py-1 text-center">
-                    <button
-                      type="button"
-                      title="Abrir observación para esta fila"
-                      aria-label="Abrir observación para esta fila"
-                      className="text-slate-300 hover:text-amber-600"
-                      onClick={() => props.onFlag?.(row)}
-                    >
-                      ⚑
-                    </button>
-                  </td>
-                )}
-                {showApply && (
-                  <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1 text-center">
-                    <MasterCell row={row} context={context} onPrompt={props.onReasonPrompt} />
-                  </td>
-                )}
               </tr>
               </Fragment>
             );

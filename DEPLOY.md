@@ -723,11 +723,10 @@ historial por celda y observaciones de cuadre. Plan e iteraciones en
    que Liquidaciones. Exige `master.edit`. Filas con observación abierta,
    pedidos anulados o ya entregados no se tocan. Sin camino de devolución.
 8. **Observaciones automáticas** al importar y al editar: monto que difiere del
-   total en más de S/ 0,50, pedido anulado/devuelto en Kapta, o cobro digital
-   (Yape, Plin, link, transferencia) sin comprobante validado ni pedido pagado
-   en Shopify. Nunca dos abiertas por fila y campo. **Migración
-   `0170_sheet_observation_reason_pago.sql`** añade el motivo al catálogo; a
-   mano, antes del código.
+   total en más de S/ 0,50 y pedido anulado/devuelto en Kapta. Nunca dos
+   abiertas por fila y campo. La causa «cobro digital sin comprobante validado»
+   existió un día y se retiró (MOM §30.8); la **migración
+   `0170_sheet_observation_reason_pago.sql`** deja su motivo en el catálogo.
 9. **Foto del cuaderno**: `/api/sheets/import` acepta jpeg/png/webp/gif hasta
    8 MB y usa la misma visión que Liquidaciones (clave de la tienda o
    `ANTHROPIC_API_KEY`). Si la foto no trae fecha, la pantalla la pide.
