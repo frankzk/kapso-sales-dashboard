@@ -2703,6 +2703,29 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
     donde cambiarlas**. No son las cuentas contra las que se verifica un
     comprobante (`store_collection_accounts`); conviene que el Yape principal
     sea una de ellas, o el pago quedará en revisión.
+  - **«Link de pago» puede cobrar de verdad, por Flow.cl** (0168). Con el
+    interruptor encendido y la cuenta configurada, ese botón crea una orden de
+    cobro **por el saldo de ese momento** y manda el link; el pago vuelve por el
+    webhook de la 0160/0161 y entra como comprobante `diferencia` pendiente de
+    revisión, igual que un Yape. Reglas que son de dinero, no de estilo:
+    - **Nunca dos cobros vivos por el mismo saldo.** Si ya hay un link vivo por
+      el mismo importe se reenvía ese; solo un importe distinto justifica otro,
+      y el anterior se deja de ofrecer. Pulsar el botón dos veces no puede
+      acabar en dos órdenes cobrables.
+    - **Los otros dos botones no crean cobros.** Emitir una orden es un efecto,
+      y no se dispara por pulsar «Yape».
+    - **La fila se escribe antes de llamar a Flow**, y `payment/create` no se
+      reintenta: un reintento a ciegas deja dos links vivos y la clienta puede
+      pagar los dos.
+    - **Un link vivo cobra el importe con el que nació.** Si paga parte por Yape
+      el siguiente botón crea uno nuevo por lo que falta, pero el viejo sigue en
+      su chat hasta que caduca. Por eso caduca: 48 h por omisión.
+    - **Si la pasarela falla, la clienta recibe el Yape igual.** Que Flow esté
+      caído no puede dejarla sin forma de pagar; queda la anomalía.
+    - Flow exige un email del pagador y **el 95 % de los pedidos no trae uno**
+      (340 de 7.585 en 30 días): se usa el del cliente si existe y, si no, el
+      buzón de la tienda configurado en Ajustes. Sin ninguno de los dos, no hay
+      cobro que crear y el botón contesta como antes.
   - Solo reacciona a un **botón pulsado**, nunca a texto libre que mencione el
     medio: un «ya te hice el yape» sigue con el bot y la asesora, como siempre.
     Cada botón se contesta una sola vez aunque Kapso reintente el webhook.

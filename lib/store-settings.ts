@@ -106,6 +106,11 @@ export interface StoreSettingsInput {
   shalom_transit_hour_start?: string;
   shalom_transit_hour_end?: string;
   shalom_transit_payment_link?: string;
+  /** Cobro por Flow.cl desde el botón «Link de pago» (0168). */
+  flowcl_link_enabled?: string | boolean;
+  flowcl_link_email?: string;
+  flowcl_link_ttl_hours?: string;
+  flowcl_link_yape_only?: string | boolean;
 }
 
 function clean(v: string | undefined): string | null {
@@ -378,6 +383,18 @@ export function buildStoreUpdate(
   if (stStart !== null) patch.shalom_transit_hour_start = stStart;
   const stEnd = intField(input.shalom_transit_hour_end, 1, 24);
   if (stEnd !== null) patch.shalom_transit_hour_end = stEnd;
+
+  // Cobro por Flow.cl desde el botón «Link de pago» (0168).
+  for (const k of ["flowcl_link_enabled", "flowcl_link_yape_only"] as const) {
+    if (input[k] !== undefined) patch[k] = input[k] === true || input[k] === "true";
+  }
+  // Vaciable: quitar el email de respaldo apaga el cobro de los pedidos que no
+  // traen uno, y eso tiene que poder hacerse desde el formulario.
+  if (input.flowcl_link_email !== undefined) {
+    patch.flowcl_link_email = clean(input.flowcl_link_email);
+  }
+  const ttl = intField(input.flowcl_link_ttl_hours, 1, 720);
+  if (ttl !== null) patch.flowcl_link_ttl_hours = ttl;
 
   return patch;
 }

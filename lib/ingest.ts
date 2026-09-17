@@ -81,6 +81,11 @@ export interface StoreCreds {
   flowcl_api_key: string | null;
   flowcl_secret_key: string | null;
   flowcl_webhook_secret: string | null;
+  /** El botón «Link de pago» cobra de verdad por Flow.cl (0168). */
+  flowcl_link_enabled: boolean;
+  flowcl_link_email: string | null;
+  flowcl_link_ttl_hours: number;
+  flowcl_link_yape_only: boolean;
   whatsapp_phone_number_id: string | null;
   currency: string;
   timezone: string;
@@ -191,6 +196,10 @@ export async function getStoreCreds(
     flowcl_api_key: decryptOrNull(data.flowcl_api_key_enc),
     flowcl_secret_key: decryptOrNull(data.flowcl_secret_key_enc),
     flowcl_webhook_secret: decryptOrNull(data.flowcl_webhook_secret_enc),
+    flowcl_link_enabled: data.flowcl_link_enabled ?? false,
+    flowcl_link_email: data.flowcl_link_email ?? null,
+    flowcl_link_ttl_hours: data.flowcl_link_ttl_hours ?? 48,
+    flowcl_link_yape_only: data.flowcl_link_yape_only ?? false,
     whatsapp_phone_number_id: data.whatsapp_phone_number_id ?? null,
     currency: data.currency ?? "PEN",
     timezone: data.timezone ?? "America/Lima",

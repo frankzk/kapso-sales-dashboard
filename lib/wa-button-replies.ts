@@ -29,6 +29,9 @@ import {
   type PaymentMethod,
 } from "@/lib/payment-methods";
 import { moneyLabel, pendingBalance, sendTransitTicket } from "@/lib/shalom/transit-notify";
+import { FlowClient } from "@/lib/flow/client";
+import { ensureFlowPaymentLink } from "@/lib/flow/link";
+import { env } from "@/lib/env";
 import type { sendWhatsappDocument } from "@/lib/kapso";
 
 export type PaymentButton = "yape" | "transferencia" | "link_pago";
@@ -73,11 +76,30 @@ export function matchPaymentButton(
 
 /** Lo que sabemos del pedido al contestar. `saldo` ya viene con «S/»: acá no
  *  hay plantilla que lo escriba, es texto libre nuestro. `saldoValue` es el
- *  mismo número sin formato, porque cero hay que poder distinguirlo. */
+ *  mismo número sin formato, porque cero hay que poder distinguirlo.
+ *  `payLink` es el cobro de Flow.cl por ese saldo, cuando la tienda lo tiene
+ *  encendido y la pasarela lo creó. */
 export interface LinkContext {
   saldo: string | null;
   saldoValue: number | null;
   pedido: string | null;
+  payLink?: string | null;
+  /** Horas hasta que caduca el cobro, para decírselo en el mensaje. */
+  payLinkHours?: number | null;
+}
+
+/**
+ * El mensaje con el link de cobro, cuando no hay texto configurado en Ajustes.
+ *
+ * Dice cuándo caduca porque un link vencido sin aviso previo parece un error
+ * nuestro, y porque es lo que empuja a pagar hoy. Pura.
+ */
+export function defaultPayLinkBody(link: string, hours: number | null | undefined): string {
+  const vence =
+    hours && hours > 0
+      ? `\n\n⏱️ El link vence en ${hours === 1 ? "1 hora" : `${hours} horas`}.`
+      : "";
+  return `Puedes pagar aquí, con Yape o tarjeta:\n${link}${vence}`;
 }
 
 /**
@@ -137,12 +159,18 @@ export function buildButtonReply(
       return conSaldo(formatTransferAccounts(methods));
     case "link_pago": {
       const tpl = String(cfg.paymentLinkTemplate ?? "").trim();
-      // Sin link configurado se cae al Yape, con su saldo delante igual.
-      if (!tpl) return conSaldo(yape);
+      const cobro = link.payLink ?? null;
+      // Sin texto configurado: el cobro de Flow si lo hay, y si no el Yape.
+      // Nunca el silencio — un botón que no contesta parece un chat roto.
+      if (!tpl) return conSaldo(cobro ? defaultPayLinkBody(cobro, link.payLinkHours) : yape);
+      // Un texto que pide `{link}` y no tiene link no se manda a medias: sería
+      // mandarle una frase que promete un enlace que no está.
+      if (/\{link\}/i.test(tpl) && !cobro) return conSaldo(yape);
       return tpl
         .replace(/\{saldo\}/gi, link.saldo ?? "")
         .replace(/\{pedido\}/gi, link.pedido ?? "")
         .replace(/\{yape\}/gi, yapeNumberParam(methods) ?? "")
+        .replace(/\{link\}/gi, cobro ?? "")
         .replace(/[ \t]+\n/g, "\n")
         .trim();
     }
@@ -166,6 +194,7 @@ export async function handleInboundMessage(
   opts: {
     sendText?: typeof sendWhatsappText;
     sendDocument?: typeof sendWhatsappDocument;
+    ensureLink?: typeof ensureFlowPaymentLink;
     nowIso?: string;
   } = {},
 ): Promise<InboundResult> {
@@ -195,6 +224,7 @@ async function replyToButton(
   opts: {
     sendText?: typeof sendWhatsappText;
     sendDocument?: typeof sendWhatsappDocument;
+    ensureLink?: typeof ensureFlowPaymentLink;
     nowIso?: string;
   },
 ): Promise<InboundResult> {
@@ -231,7 +261,11 @@ async function replyToButton(
 
   const methods = await loadStorePaymentMethods(admin, storeId);
   const link = await latestTransitContext(admin, storeId, msg.from);
-  const text = buildButtonReply(button, methods, { paymentLinkTemplate: creds.shalom_transit_payment_link }, link.ctx);
+  // El cobro por pasarela se crea SOLO para el botón que lo pide: crear una
+  // orden cobrable es un efecto, y no se dispara por pulsar «Yape».
+  const ctx: LinkContext =
+    button === "link_pago" ? { ...link.ctx, ...(await resolvePayLink(admin, storeId, creds, link, opts)) } : link.ctx;
+  const text = buildButtonReply(button, methods, { paymentLinkTemplate: creds.shalom_transit_payment_link }, ctx);
   if (!text) {
     await finish({ order_id: link.orderId, error: "la tienda no tiene cuentas de cobro configuradas" });
     await noteAnomaly(admin, {
@@ -287,6 +321,89 @@ async function replyToButton(
   }
 
   return { reason: `replied:${button}${ticket}` };
+}
+
+/**
+ * El cobro de Flow.cl por el saldo de HOY, para el botón «Link de pago».
+ *
+ * TODO ES UN «NO» SILENCIOSO salvo el camino bueno: sin interruptor, sin
+ * credenciales, sin pedido, sin saldo o con la pasarela caída, se devuelve
+ * `null` y la respuesta cae al Yape. Una clienta que pulsa un botón tiene que
+ * recibir algo con lo que pagar; que la pasarela falle no puede costarle eso.
+ * Lo que sí queda es la anomalía, para que se vea al día siguiente.
+ */
+async function resolvePayLink(
+  admin: SupabaseClient,
+  storeId: string,
+  creds: StoreCreds,
+  ctx: TransitContext,
+  opts: { ensureLink?: typeof ensureFlowPaymentLink; nowIso?: string },
+): Promise<{ payLink: string | null; payLinkHours: number | null }> {
+  const NADA = { payLink: null, payLinkHours: null };
+  if (!creds.flowcl_link_enabled) return NADA;
+  if (!creds.flowcl_api_key || !creds.flowcl_secret_key || !creds.flowcl_webhook_secret) {
+    await noteAnomaly(admin, {
+      storeId,
+      source: "inbound_message",
+      reason: "flowcl_sin_credenciales",
+      sample: { orderId: ctx.orderId },
+    });
+    return NADA;
+  }
+  const saldo = ctx.ctx.saldoValue;
+  if (!ctx.orderId || saldo == null || !(saldo > 0)) return NADA;
+
+  const email = (await customerEmail(admin, ctx.orderId)) ?? creds.flowcl_link_email ?? "";
+  const ensure = opts.ensureLink ?? ensureFlowPaymentLink;
+  const res = await ensure(
+    admin,
+    {
+      storeId,
+      orderId: ctx.orderId,
+      orderName: ctx.ctx.pedido,
+      // Es el saldo de un pedido ya despachado: lo que falta, no un adelanto.
+      kind: "diferencia",
+      amount: saldo,
+      email,
+      ttlHours: creds.flowcl_link_ttl_hours,
+      yapeOnly: creds.flowcl_link_yape_only,
+      subject: `Saldo del pedido ${ctx.ctx.pedido ?? ""}`.trim(),
+      currency: creds.currency,
+    },
+    {
+      client: new FlowClient({
+        apiKey: creds.flowcl_api_key,
+        secretKey: creds.flowcl_secret_key,
+        baseUrl: env.flowclApiBase(),
+      }),
+      siteUrl: env.siteUrl(),
+      webhookSecret: creds.flowcl_webhook_secret,
+      nowIso: opts.nowIso,
+    },
+  );
+  if (!res.ok) {
+    await noteAnomaly(admin, {
+      storeId,
+      source: "inbound_message",
+      reason: "flowcl_link_fallido",
+      sample: { orderId: ctx.orderId, motivo: res.reason },
+    });
+    return NADA;
+  }
+  return { payLink: res.link, payLinkHours: creds.flowcl_link_ttl_hours };
+}
+
+/** El email del pedido, si lo trae. Casi nunca: los pedidos entran por
+ *  WhatsApp y ahí nadie pide un correo. Por eso hay uno de respaldo. */
+async function customerEmail(admin: SupabaseClient, orderId: string): Promise<string | null> {
+  const { data } = await admin
+    .from("orders")
+    .select("contacto:raw->>contact_email,cliente:raw->customer->>email")
+    .eq("id", orderId)
+    .maybeSingle();
+  const row = (data ?? null) as { contacto: string | null; cliente: string | null } | null;
+  const email = (row?.contacto ?? row?.cliente ?? "").trim();
+  return email || null;
 }
 
 /** Lo que hace falta del último aviso: de qué pedido habla, cuánto debe HOY y a

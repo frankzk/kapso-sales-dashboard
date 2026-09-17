@@ -337,4 +337,6 @@
 \ir migrations/0166_shalom_transit_whatsapp.sql
 \echo 'Applying 0167_transit_ticket_on_reply.sql'
 \ir migrations/0167_transit_ticket_on_reply.sql
+\echo 'Applying 0168_flowcl_link_settings.sql'
+\ir migrations/0168_flowcl_link_settings.sql
 \echo 'Done.'
