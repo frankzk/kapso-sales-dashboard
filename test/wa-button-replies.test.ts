@@ -96,6 +96,41 @@ describe("buildButtonReply", () => {
     ).toBe("YAPE GRUPO GF SAC 930 555 309");
   });
 
+  it("con cobro de Flow y sin texto configurado, manda el link y cuándo vence", () => {
+    const out = buildButtonReply(
+      "link_pago",
+      METHODS,
+      { paymentLinkTemplate: null },
+      { saldo: "S/ 119.00", saldoValue: 119, pedido: "#KP1", payLink: "https://flow/pay?token=T", payLinkHours: 48 },
+    );
+    expect(out).toBe(
+      "💵 Saldo pendiente: S/ 119.00\n\nPuedes pagar aquí, con Yape o tarjeta:\nhttps://flow/pay?token=T\n\n⏱️ El link vence en 48 horas.",
+    );
+  });
+
+  it("el texto configurado puede poner el link donde quiera con {link}", () => {
+    expect(
+      buildButtonReply(
+        "link_pago",
+        METHODS,
+        { paymentLinkTemplate: "Paga {saldo} del {pedido}: {link}" },
+        { saldo: "S/ 119.00", saldoValue: 119, pedido: "#KP1", payLink: "https://flow/pay?token=T" },
+      ),
+    ).toBe("Paga S/ 119.00 del #KP1: https://flow/pay?token=T");
+  });
+
+  it("un texto que promete {link} sin link cae al Yape, no se manda a medias", () => {
+    // Mandar «Paga aquí: » con el hueco vacío es peor que no mandar el link.
+    expect(
+      buildButtonReply(
+        "link_pago",
+        METHODS,
+        { paymentLinkTemplate: "Paga aquí: {link}" },
+        { saldo: "S/ 119.00", saldoValue: 119, pedido: "#KP1", payLink: null },
+      ),
+    ).toBe("💵 Saldo pendiente: S/ 119.00\n\nYAPE GRUPO GF SAC 930 555 309");
+  });
+
   it("a quien ya no debe nada no se le enseña ninguna cuenta", () => {
     // Darle el número a quien ya pagó es invitarla a pagar dos veces.
     const pagado = { saldo: "S/ 0.00", saldoValue: 0, pedido: "#KP133540" };
@@ -403,6 +438,76 @@ describe("handleInboundMessage", () => {
     );
     expect(send.mock.calls[0]![1].body).toContain("ya está pagado");
     expect(send.mock.calls[0]![1].body).not.toContain("930 555 309");
+  });
+
+  it("con Flow encendido, «Link de pago» crea el cobro por el saldo de HOY", async () => {
+    const admin = fakeAdmin({ lastNotification: { order_id: "ord-1" } });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.L" });
+    const ensureLink = vi.fn().mockResolvedValue({
+      ok: true,
+      link: "https://www.flow.cl/app/web/pay.php?token=TOK",
+      reused: false,
+      id: "l1",
+      expiresAt: null,
+    });
+    await handleInboundMessage(
+      admin,
+      "store",
+      { ...CREDS, flowcl_link_enabled: true, flowcl_api_key: "a", flowcl_secret_key: "s", flowcl_webhook_secret: "h", flowcl_link_email: "cobros@x.pe", flowcl_link_ttl_hours: 48, flowcl_link_yape_only: false, currency: "PEN" },
+      buttonEvent("Link de pago", "wamid.BTN5"),
+      { sendText: send, ensureLink },
+    );
+    // S/ 89.10 con S/ 30 validados: el cobro es por S/ 59.10, no por el total.
+    expect(ensureLink.mock.calls[0]![1]).toMatchObject({
+      orderId: "ord-1",
+      kind: "diferencia",
+      amount: 59.1,
+      email: "cobros@x.pe",
+    });
+    expect(send.mock.calls[0]![1].body).toContain("https://www.flow.cl/app/web/pay.php?token=TOK");
+    expect(send.mock.calls[0]![1].body).toContain("💵 Saldo pendiente: S/ 59.10");
+  });
+
+  it("los otros botones NO crean cobros: pulsar «Yape» no emite una orden", async () => {
+    const admin = fakeAdmin();
+    const ensureLink = vi.fn();
+    await handleInboundMessage(
+      admin,
+      "store",
+      { ...CREDS, flowcl_link_enabled: true, flowcl_api_key: "a", flowcl_secret_key: "s", flowcl_webhook_secret: "h" },
+      buttonEvent("Pagar con Yape", "wamid.BTN6"),
+      { sendText: vi.fn().mockResolvedValue({ ok: true, id: "x" }), sendDocument: vi.fn().mockResolvedValue({ ok: true, id: "d" }), ensureLink },
+    );
+    expect(ensureLink).not.toHaveBeenCalled();
+  });
+
+  it("si la pasarela falla, la clienta recibe el Yape igual y queda la anomalía", async () => {
+    // Que Flow esté caído no puede dejarla sin forma de pagar.
+    const admin = fakeAdmin({ lastNotification: { order_id: "ord-1" } });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.L" });
+    const ensureLink = vi.fn().mockResolvedValue({ ok: false, reason: "flow_rechazo:timeout" });
+    await handleInboundMessage(
+      admin,
+      "store",
+      { ...CREDS, flowcl_link_enabled: true, flowcl_api_key: "a", flowcl_secret_key: "s", flowcl_webhook_secret: "h", flowcl_link_email: "cobros@x.pe" },
+      buttonEvent("Link de pago", "wamid.BTN7"),
+      { sendText: send, ensureLink },
+    );
+    expect(send.mock.calls[0]![1].body).toContain("YAPE GRUPO GF SAC 930 555 309");
+    expect(admin.anomalies.at(-1)).toMatchObject({ p_reason: "flowcl_link_fallido" });
+  });
+
+  it("con el cobro apagado el botón contesta como siempre", async () => {
+    const admin = fakeAdmin({ lastNotification: { order_id: "ord-1" } });
+    const ensureLink = vi.fn();
+    await handleInboundMessage(
+      admin,
+      "store",
+      { ...CREDS, shalom_transit_payment_link: "Saldo {saldo} del {pedido}" },
+      buttonEvent("Link de pago", "wamid.BTN8"),
+      { sendText: vi.fn().mockResolvedValue({ ok: true, id: "x" }), ensureLink },
+    );
+    expect(ensureLink).not.toHaveBeenCalled();
   });
 
   it("un comprobante en revisión todavía no descuenta", async () => {

@@ -166,6 +166,10 @@ export async function updateStore(
     shalom_transit_hour_start: get("shalom_transit_hour_start"),
     shalom_transit_hour_end: get("shalom_transit_hour_end"),
     shalom_transit_payment_link: get("shalom_transit_payment_link"),
+    flowcl_link_enabled: get("flowcl_link_enabled"),
+    flowcl_link_email: get("flowcl_link_email"),
+    flowcl_link_ttl_hours: get("flowcl_link_ttl_hours"),
+    flowcl_link_yape_only: get("flowcl_link_yape_only"),
     // Estos dos existían en el formulario pero no se leían acá, así que la
     // clave de Anthropic por tienda (5l del DEPLOY) nunca llegaba a guardarse.
     anthropic_api_key: get("anthropic_api_key"),

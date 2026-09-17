@@ -100,6 +100,10 @@ export interface StoreSettingsData {
     shalom_transit_hour_start: number;
     shalom_transit_hour_end: number;
     shalom_transit_payment_link: string | null;
+    flowcl_link_enabled: boolean;
+    flowcl_link_email: string | null;
+    flowcl_link_ttl_hours: number;
+    flowcl_link_yape_only: boolean;
     meta_ad_accounts: StoreMetaAdAccount[];
   };
   has: {
@@ -1443,9 +1447,82 @@ function SettingsForm({
                 className={inputCls}
               />
               <p className="mt-1 text-xs text-slate-500">
-                Texto libre; se sustituyen <code>{"{saldo}"}</code>, <code>{"{pedido}"}</code> y{" "}
-                <code>{"{yape}"}</code>. Vacío = se contesta con el Yape principal.
+                Texto libre; se sustituyen <code>{"{saldo}"}</code>, <code>{"{pedido}"}</code>,{" "}
+                <code>{"{yape}"}</code> y <code>{"{link}"}</code> (el cobro de Flow, si está
+                encendido abajo). Vacío = el link de Flow si lo hay, y si no el Yape principal.
               </p>
+            </div>
+          </div>
+
+          <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+              Cobro por Flow.cl en el botón «Link de pago»
+            </p>
+            <p className="text-xs text-slate-500">
+              Encendido, ese botón <strong>crea un cobro real por el saldo de ese momento</strong> y
+              manda el link que lo cobra. El pago vuelve solo y aparece como comprobante pendiente de
+              revisión. Hace falta la <strong>cuenta de Flow.cl</strong> configurada más abajo (API
+              key, secret key y secreto del webhook): sin ella el botón contesta como siempre.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <label className={labelCls} htmlFor="flowcl_link_enabled">Cobro por Flow</label>
+                <select
+                  id="flowcl_link_enabled"
+                  name="flowcl_link_enabled"
+                  defaultValue={s.flowcl_link_enabled ? "true" : "false"}
+                  className={inputCls}
+                >
+                  <option value="false">Apagado</option>
+                  <option value="true">Encendido</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelCls} htmlFor="flowcl_link_ttl_hours">El link vence en (horas)</label>
+                <input
+                  id="flowcl_link_ttl_hours"
+                  name="flowcl_link_ttl_hours"
+                  type="number"
+                  min={1}
+                  max={720}
+                  defaultValue={s.flowcl_link_ttl_hours ?? 48}
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className={labelCls} htmlFor="flowcl_link_yape_only">Medio de pago</label>
+                <select
+                  id="flowcl_link_yape_only"
+                  name="flowcl_link_yape_only"
+                  defaultValue={s.flowcl_link_yape_only ? "true" : "false"}
+                  className={inputCls}
+                >
+                  <option value="false">Todos (Flow enseña la selección)</option>
+                  <option value="true">Solo Yape (One Shot)</option>
+                </select>
+              </div>
+              <div className="sm:col-span-3">
+                <label className={labelCls} htmlFor="flowcl_link_email">Email de respaldo del cobro</label>
+                <input
+                  id="flowcl_link_email"
+                  name="flowcl_link_email"
+                  type="email"
+                  defaultValue={s.flowcl_link_email ?? ""}
+                  placeholder="cobros@tutienda.com"
+                  className={inputCls}
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  Flow exige un email del pagador y casi ningún pedido de WhatsApp trae uno. Cuando
+                  el pedido lo tiene se usa el suyo; si no, éste. <strong>Sin email de respaldo el
+                  cobro no se puede crear</strong> y el botón cae al Yape.
+                </p>
+                <p className="mt-1 text-xs text-amber-700">
+                  Un link vivo cobra el importe con el que nació. Si la clienta paga parte por Yape,
+                  el link viejo se deja de ofrecer y se crea uno nuevo por lo que falta — pero el
+                  que ya está en su chat sigue cobrando el importe viejo hasta que vence. Por eso
+                  las horas de arriba: cuanto más largas, más tiempo vive ese riesgo.
+                </p>
+              </div>
             </div>
           </div>
         </fieldset>

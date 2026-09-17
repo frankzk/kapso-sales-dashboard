@@ -188,6 +188,10 @@ export default async function StoreSettingsPage({
       shalom_transit_hour_start: full.shalom_transit_hour_start ?? 8,
       shalom_transit_hour_end: full.shalom_transit_hour_end ?? 21,
       shalom_transit_payment_link: full.shalom_transit_payment_link ?? null,
+      flowcl_link_enabled: full.flowcl_link_enabled ?? false,
+      flowcl_link_email: full.flowcl_link_email ?? null,
+      flowcl_link_ttl_hours: full.flowcl_link_ttl_hours ?? 48,
+      flowcl_link_yape_only: full.flowcl_link_yape_only ?? false,
       meta_ad_accounts: normalizeMetaAdAccounts(
         full.meta_ad_accounts,
         full.meta_ad_account_id,
