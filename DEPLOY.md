@@ -1571,7 +1571,15 @@ la 0160/0161 y aparece como comprobante `diferencia` pendiente de revisión.
    Solo añade columnas a `stores` y un índice: no toca ningún cobro existente.
 2. **Ajustes → Flow.cl (pasarela)**: API key, secret key y **secreto del
    webhook** de la tienda. El secreto no se configura en el panel de Flow —
-   viaja en `urlConfirmation` de cada cobro—, así que basta con inventarlo aquí.
+   viaja en `urlConfirmation` de cada cobro—, así que basta con inventarlo aquí:
+   `crypto.randomUUID()` en la consola del navegador sirve.
+
+   > **El secreto no se rota a media tarde.** Queda grabado dentro de la
+   > `urlConfirmation` de cada cobro EN EL MOMENTO DE CREARLO. Cambiarlo deja a
+   > todos los links vivos avisando con el secreto viejo: el webhook los
+   > rechaza con 401, el dinero entra en Flow y no aparece en el pedido. Si hay
+   > que cambiarlo, primero se deja vencer lo vivo (`flowcl_payment_links` con
+   > `status='creado'` y `expires_at` en el futuro).
 3. **`NEXT_PUBLIC_SITE_URL` tiene que ser la URL pública real.** De ahí salen
    `urlConfirmation` y `urlReturn`. Con el valor por omisión
    (`http://localhost:3000`) el cobro se crea y el pago no vuelve nunca.
