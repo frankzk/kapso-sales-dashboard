@@ -11,6 +11,16 @@
 // genera; el comprobante en `order_payments` solo cuando Flow confirma que
 // está pagado. Un link es una intención, un `order_payment` es plata.
 //
+// POR QUÉ ENTRA YA VALIDADO, A DIFERENCIA DE UN YAPE. Un Yape es la foto de
+// una pantalla: puede estar editada, ser de otro pedido o de otro día, y por
+// eso alguien tiene que mirarla. Un cobro de Flow no es una foto — es la
+// pasarela diciendo, con la respuesta firmada de `payment/getStatus`, que el
+// dinero entró en la cuenta del comercio. No hay nada que revisar, y dejarlo
+// pendiente tiene un costo real: el saldo se calcula solo con pagos validados,
+// así que la clienta seguiría viendo una deuda que ya pagó y la clave de
+// recojo no se liberaría hasta que una persona hiciera clic. `validated_by`
+// queda en NULL a propósito: no lo validó nadie, lo validó la pasarela.
+//
 // QUÉ PASA SI EL COMPROBANTE NO SE PUEDE REGISTRAR. Existe un índice único
 // —`order_payments_kind_uniq`— que permite un solo adelanto vivo por pedido.
 // Si ya hay uno (un Yape que alguien subió mientras tanto), el insert falla. El
@@ -56,6 +66,9 @@ export interface ConfirmResult {
   message: string;
   paymentId?: string;
   linkId?: string;
+  /** El pedido al que entró el dinero: la ruta lo usa para recalcular el
+   *  Master, que es donde se ve el saldo nuevo. */
+  orderId?: string;
 }
 
 /** El `status` de Flow traducido al nuestro. */
@@ -102,6 +115,7 @@ export function describeFlowPayment(status: FlowPaymentStatus): string {
 export interface ConfirmDeps {
   admin: SupabaseClient;
   client: FlowClient;
+  nowIso?: string;
 }
 
 /**
@@ -110,7 +124,7 @@ export interface ConfirmDeps {
  */
 export async function confirmFlowPayment(
   token: string,
-  { admin, client }: ConfirmDeps,
+  { admin, client, nowIso = new Date().toISOString() }: ConfirmDeps,
 ): Promise<ConfirmResult> {
   if (!token) return { outcome: "desconocido", message: "El aviso llegó sin token." };
 
@@ -168,10 +182,10 @@ export async function confirmFlowPayment(
       kind: row.kind,
       amount,
       paid_at: paidAt,
-      // Se deja `validation_status` en su valor por omisión
-      // (`pendiente_revision`): un cobro por pasarela entra a la cola como
-      // cualquier comprobante, que es como se decidió empezar. No hay imagen
-      // que mirar, así que el drawer enseña estos datos en su lugar.
+      // Validado por la pasarela, no por una persona (ver cabecera).
+      validation_status: "validado",
+      validated_at: nowIso,
+      // No hay imagen que mirar, así que el drawer enseña estos datos.
       notes: describeFlowPayment(status),
     })
     .select("id")
@@ -208,10 +222,23 @@ export async function confirmFlowPayment(
     })
     .eq("id", row.id);
 
+  // La línea de tiempo del pedido tiene que poder explicar por qué un pago
+  // aparece validado sin que nadie lo validara. `actor` va en NULL: no hubo
+  // persona.
+  await admin.from("order_events").insert({
+    store_id: row.store_id,
+    order_id: row.order_id,
+    kind: "payment",
+    source: "system",
+    new_status: "validado",
+    note: `${describeFlowPayment(status)}. Validado por la pasarela: el dinero está confirmado en la cuenta.`,
+  });
+
   return {
     outcome: "registrado",
-    message: "Comprobante registrado, pendiente de revisión.",
+    message: "Comprobante registrado y validado por la pasarela.",
     paymentId: (pago as { id: string }).id,
     linkId: row.id,
+    orderId: row.order_id,
   };
 }

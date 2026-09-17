@@ -1754,9 +1754,10 @@ function SettingsForm({
             </p>
             <p className="text-xs text-slate-500">
               Encendido, ese botón <strong>crea un cobro real por el saldo de ese momento</strong> y
-              manda el link que lo cobra. El pago vuelve solo y aparece como comprobante pendiente de
-              revisión. Hace falta la cuenta de Flow.cl de arriba: sin ella el botón contesta como
-              siempre, con el Yape.
+              manda el link que lo cobra. El pago vuelve solo y entra <strong>ya validado</strong>:
+              lo confirma la pasarela con su respuesta firmada, no la foto de una pantalla, así que
+              el saldo baja al momento y nadie tiene que revisarlo. Hace falta la cuenta de Flow.cl
+              de arriba: sin ella el botón contesta como siempre, con el Yape.
             </p>
             <div className="grid gap-4 sm:grid-cols-3">
               <div>
