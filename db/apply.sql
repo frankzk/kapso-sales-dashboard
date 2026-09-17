@@ -339,4 +339,6 @@
 \ir migrations/0167_transit_ticket_on_reply.sql
 \echo 'Applying 0168_liquidaciones2_hojas.sql'
 \ir migrations/0168_liquidaciones2_hojas.sql
+\echo 'Applying 0169_sheet_status_effect_sin_salida.sql'
+\ir migrations/0169_sheet_status_effect_sin_salida.sql
 \echo 'Done.'

@@ -58,25 +58,36 @@ export const REPARTO_PROPIO_STATUSES: readonly StatusTemplate[] = [
   { code: "en_ruta", label: "En ruta", operational_status: "en_reparto", effect: "informa",
     aliases: ["EN RUTA", "EN REPARTO", "SALIO"] },
   { code: "no_responde", label: "No responde", operational_status: "intento_de_entrega", effect: "informa",
-    aliases: ["NO RESPONDE", "NO CONTESTA", "NO RESPONDIO", "NO CONTESTO", "APAGADO", "CEL APAGADO", "NO ESTABA", "BUZON", "BUZON/NR", "NR"] },
+    aliases: ["NO RESPONDE", "NO CONTESTA", "NO RESPONDIO", "NO CONTESTO", "NO RESPOND", "APAGADO", "CEL APAGADO", "NO ESTABA", "NO ESTA", "NP ESTABA", "BUZON", "BUZON/NR", "BUZON NR", "NR", "NO RESPONDE /BUZON", "NHO RESPONDE"] },
   { code: "no_recibe", label: "No recibe", operational_status: "intento_de_entrega", effect: "informa",
     aliases: ["NO RECIBE", "NO RECIBIO", "NADIE EN CASA", "AUSENTE"] },
   { code: "no_confirmo", label: "No confirmó", operational_status: "espera_respuesta_cliente", effect: "informa",
     aliases: ["NO CONFIRMO", "NO CONFRIMO", "SIN CONFIRMAR", "NO CONFIRMA"] },
   { code: "en_espera_cliente", label: "En espera del cliente", operational_status: "espera_respuesta_cliente", effect: "informa",
-    aliases: ["DE VIAJE", "FUERA DE LIMA", "AVISARA", "AVISA", "LLAMARA", "SIN DINERO", "CUELGA LLAMADA", "RECHAZA LLAMADA", "CORTA LLAMADA", "COORDINAR", "POR COORDINAR"] },
+    aliases: ["DE VIAJE", "FUERA DE LIMA", "AVISARA", "AVISA", "LLAMARA", "SIN DINERO", "NO TIENE DINERO", "CUELGA LLAMADA", "RECHAZA LLAMADA", "CORTA LLAMADA", "COORDINAR", "COODINAR", "POR COORDINAR", "DESEA PROVINCIA", "DESEA PROVICNIA", "DESEA CAMBIO", "PROVINCIA"] },
   { code: "dato_errado", label: "Dato errado (celular o dirección)", operational_status: "detenido_sin_informacion", effect: "informa",
-    aliases: ["CEL ERRADO", "CELULAR ERRADO", "NUMERO ERRADO", "FALTA DIRECCION", "SIN DIRECCION", "NR/SIN DIRECCION", "NR/FALTA DIRECCION", "NR/SIN WHATSAPP", "NR/CEL SIN WHATSAPP", "NO ES LA PERSONA", "DIRECCION ERRADA"] },
+    aliases: ["CEL ERRADO", "CELULAR ERRADO", "NUMERO ERRADO", "FALTA DIRECCION", "SIN DIRECCION", "DIRECCION", "UBICACION", "NO RESPONDE /DIRECCION", "NO RESPONDE /SIN SERVICIO", "NR/SIN DIRECCION", "NR/FALTA DIRECCION", "NR/SIN WHATSAPP", "NR/CEL SIN WHATSAPP", "NO ES LA PERSONA", "DIRECCION ERRADA"] },
   { code: "reprogramado", label: "Reprogramado", operational_status: "reprogramado", effect: "informa",
-    aliases: ["REPROGRAMADO", "REPRO", "REPROGRAMAR", "REPROGRAMA", "MAÑANA", "MANANA", "OTRO DIA", "PARA MAÑANA", "PROX SEMANA", "PROXIMA SEMANA", "PROX LUNES", "PROX MARTES", "PROX MIERCOLES", "PROX JUEVES", "PROX VIERNES", "PROX SABADO", "VIENRES", "LUMES", "REPRO HOY", "PROGRAMADO"] },
+    aliases: ["REPROGRAMADO", "REPRO", "REPROGRAMAR", "REPROGRAMA", "MAÑANA", "MANANA", "OTRO DIA", "PARA MAÑANA", "PROX SEMANA", "PROXIMA SEMANA", "PROX LUNES", "PROX MARTES", "PROX MIERCOLES", "PROX JUEVES", "PROX VIERNES", "PROX SABADO", "VIENRES", "LUMES", "REPRO HOY", "REWPRO", "PROGRAMADO", "POSTERGADO", "MAS TARDE", "FIN DE MES", "SEMANA QUE VIENE", "DESEA 5PM", "DESEA 6PM", "DESEA 4PM", "DESEA 7PM", "EN LA TARDE", "EN LA NOCHE"] },
   { code: "retirado", label: "Retirado de la ruta", operational_status: "pendiente_nuevo_courier", effect: "informa",
     aliases: ["RETIRADO", "RETIRADA", "SE RETIRO", "VUELVE A OFICINA", "PASAR ALEXIS", "PASA A ALEXIS", "CON ALEXIS", "REPRO ALEXIS", "REPRO CON ALEXIS", "MANANA ALEXIS", "MANANA CON ALEXIS", "MANANA/ALEXIS", "ALEXIS", "ROY", "YHONI", "DUGLAS", "FENIX"] },
   { code: "rechazado", label: "Rechazado por el cliente", operational_status: "en_seguimiento", effect: "anulacion",
-    aliases: ["RECHAZADO", "RECHAZA", "NO QUIERE", "NO LO QUIERE", "CAIDA", "CAIDO", "CAYO", "NO DESEA", "NO HIZO PEDIDO", "NO HA PEDIDO", "NO PIDIO"] },
+    aliases: ["RECHAZADO", "RECHAZA", "NO QUIERE", "NO LO QUIERE", "CAIDA", "CAIDO", "CAYO", "NO DESEA", "NO DESEA AVISA", "NO HIZO PEDIDO", "NO HA PEDIDO", "NO PIDIO", "DICE QUE NO PIDIO", "NO SABE DEL PEDIDO"] },
   { code: "cancelado", label: "Cancelado por el cliente", operational_status: "en_seguimiento", effect: "anulacion",
-    aliases: ["CANCELADO", "CANCELO", "CANCELA", "ANULADO", "ANULO", "CLIENTE ANULA", "CNCELADO"] },
+    aliases: ["CANCELADO", "CANCELO", "CANCELA", "ANULADO", "ANULO", "CLIENTE ANULA", "CNCELADO", "ANULA", "ANULADO SOLO PTO", "ANULADO//", "ANULADO MANANA"] },
   { code: "devuelto", label: "Devuelto a oficina", operational_status: "devuelto_al_origen", effect: "devolucion",
     aliases: ["DEVUELTO", "DEVOLUCION", "DEVUELTA", "RETORNADO"] },
+  // Los cuatro que explicó la operación el 16-09-2026 tras la importación
+  // histórica. Son el DETALLE de por qué no se entregó, no estados nuevos de
+  // Kapta: por eso su equivalente es un operativo que ya existe.
+  { code: "no_salio", label: "No salió a reparto (quedó en almacén)", operational_status: "nunca_salio_a_reparto", effect: "sin_salida",
+    aliases: ["LO DEJA", "LO DEJO", "LO DEJ", "LO DEJA/MANANA", "SE QUEDO EN ALMACEN", "QUEDA EN ALMACEN", "DEJA EN ALMACEN", "NO SALIO", "NO SALE", "NO LO LLEVO"] },
+  { code: "desarmar", label: "Desarmar en almacén: no se entregó", operational_status: "devuelto_al_origen", effect: "devolucion",
+    aliases: ["DESARMAR", "PARA DESARMAR", "DESARMAR/ALEXIS", "DESARMAR ROY", "DESARMAR/ROY", "DESARMAR/ALICLICK", "DESARMADO"] },
+  { code: "ya_recibio", label: "Cliente dice que ya recibió (otro delivery)", operational_status: "intento_de_entrega", effect: "informa",
+    aliases: ["DICE QUE RECIBIO", "DICE QUE RECIBIBO", "DICE QUE RECIBIIO", "QUE YA RECIBIO", "YA RECIBIO", "YA LO RECIBIO", "YA LE LLEGO", "YA LO TIENE", "YA TIENE EL PEDIDO"] },
+  { code: "repetido", label: "Pedido repetido: no se entregó", operational_status: "intento_de_entrega", effect: "informa",
+    aliases: ["REPETIDO", "PEDIDO REPETIDO", "DUPLICADO", "MISMO CLIENTE", "MISMO CLIENTE PTO", "MISMO CLIENTE #", "MSIMO CLIENTE PTO"] },
 ];
 
 // ---------------------------------------------------------------------------
@@ -134,6 +145,9 @@ export function markForEffect(effect: StatusEffect): ContributionMark {
       // Un cancelado del courier no cierra nada: el pedido sigue vivo hasta
       // que Shopify lo anule. Para el Consolidado cuenta como intento.
       return "T";
+    case "sin_salida":
+      // El paquete no salió del almacén: no hubo intento (0169).
+      return "0";
   }
 }
 

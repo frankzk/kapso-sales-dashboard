@@ -6,7 +6,7 @@
 export type SheetRowKey = "pedido" | "guia" | "punto" | "valor" | "periodo";
 
 /** Efecto de un estado del dominio sobre el pedido (MOM §30.3). */
-export type StatusEffect = "informa" | "entrega" | "devolucion" | "anulacion";
+export type StatusEffect = "informa" | "entrega" | "devolucion" | "anulacion" | "sin_salida";
 
 export type ColumnKind = "campo" | "manual" | "lookup" | "derivada";
 export type ColumnDataType = "text" | "number" | "date" | "select" | "boolean" | "status";

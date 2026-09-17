@@ -69,6 +69,7 @@ const EFFECT_LABEL: Record<StatusEffect, string> = {
   entrega: "Entrega",
   devolucion: "Devolución",
   anulacion: "Cancelación del courier",
+  sin_salida: "No salió (sin intento)",
 };
 
 const STATUS_STYLE: Record<string, string> = {

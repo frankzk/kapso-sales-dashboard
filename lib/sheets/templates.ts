@@ -128,6 +128,10 @@ export const REPARTO_PAYMENT_ALIASES: Record<string, (typeof REPARTO_PAYMENT_MET
   "LINK DE PAGO": "Link de pago",
   "PAGADO": "Pagado antes",
   "YA PAGO": "Pagado antes",
+  // «OK» en el cuaderno: cruce del 16-09-2026, 91 de 106 pedidos vinculados
+  // estaban `paid` en Shopify por checkout (tarjeta, transferencia, cuotas).
+  "OK": "Pagado antes",
+  "PAGADO SHOPIFY": "Pagado antes",
   "SIN COBRO": "Sin cobro",
   "SOLO ENTREGAR": "Sin cobro",
 };

@@ -58,7 +58,10 @@ describe("piezas del lector", () => {
     expect(interpretStatus("MAÑANA", "2026-09-15", lookup)).toEqual({ estado: "reprogramado", reprogramar_para: "2026-09-16", unknown: null });
     expect(interpretStatus("HOY", "2026-09-15", lookup)).toEqual({ estado: "reprogramado", reprogramar_para: "2026-09-15", unknown: null });
     expect(interpretStatus("NO DESEA", "2026-09-15", lookup)).toMatchObject({ estado: "rechazado" });
-    expect(interpretStatus("LO DEJA", "2026-09-15", lookup)).toEqual({ estado: null, reprogramar_para: null, unknown: "LO DEJA" });
+    expect(interpretStatus("LO DEJA", "2026-09-15", lookup)).toMatchObject({ estado: "no_salio" });
+    expect(interpretStatus("MISMO CLIENTE PTO 37", "2026-09-15", lookup)).toMatchObject({ estado: "repetido" });
+    expect(interpretStatus("ANULADO SOLO PTO 10", "2026-09-15", lookup)).toMatchObject({ estado: "cancelado" });
+    expect(interpretStatus("ZZZ SIN SENTIDO", "2026-09-15", lookup)).toEqual({ estado: null, reprogramar_para: null, unknown: "ZZZ SIN SENTIDO" });
   });
 });
 
@@ -68,7 +71,7 @@ const SHEET: string[][] = [
   [],
   ["", "Vendedor", "Nombre del cliente", "# de Pedido", "A cobrar", "Efectivo", "A cobrar", "Método de Pago", "Observación 1", "Observación 2", "Fecha"],
   ["punto 1", "Aurela", "Juan Navarro", "#AUR167846", "ENTREGADO", "89", "89.0", "EFECTIVO", "", "", "ROY"],
-  ["punto 2", "Kenku", "Adela", "#KP94649", "LO DEJA", "", "69.0", "", "portería", "", "ROY"],
+  ["punto 2", "Kenku", "Adela", "#KP94649", "COSA RARA", "", "69.0", "", "portería", "", "ROY"],
   [],
   ["SUBTOTAL", "1 ENTREGADOS", "", "", "89", "89"],
   ["TOTAL A PAGAR A roy", "", "", "", "", "-631.6", "", "KAST YAP/PLN/ETC FK"],
@@ -103,9 +106,9 @@ describe("parseRepartoMatrix", () => {
   it("un estado desconocido se guarda literal, la fila queda a revisión y el alias se cuenta", () => {
     const second = parsed.rows[1]!;
     expect(second.estado).toBeNull();
-    expect(second.estado_reportado).toBe("LO DEJA");
+    expect(second.estado_reportado).toBe("COSA RARA");
     expect(second.review).toContain("estado_sin_equivalente");
-    expect(parsed.unknownStatuses.get("LO DEJA")).toBe(1);
+    expect(parsed.unknownStatuses.get("COSA RARA")).toBe(1);
   });
 
   it("un punto ajeno a Shopify se conserva pero no se vincula; el monto en texto queda vacío", () => {
@@ -132,7 +135,7 @@ describe("parseRepartoMatrix", () => {
   it("los valores guardados llevan la revisión como texto legible", () => {
     const values = puntoRowValues(parsed.rows[1]!);
     expect(values.revision).toBe("sin_fecha, estado_sin_equivalente");
-    expect(values.estado_reportado).toBe("LO DEJA");
+    expect(values.estado_reportado).toBe("COSA RARA");
     expect(puntoRowValues(parsed.rows[3]!).revision).toBeNull();
   });
 });

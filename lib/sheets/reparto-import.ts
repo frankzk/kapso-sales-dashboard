@@ -150,6 +150,11 @@ export function interpretStatus(
   }
   const res = resolveStatus(alias, lookup);
   if (res.kind === "ok") return { estado: res.code, reprogramar_para: null, unknown: null };
+  // «MISMO CLIENTE PTO 37», «ANULADO SOLO PTO 10»: el número es del día, no del estado.
+  if (word !== alias) {
+    const again = resolveStatus(word, lookup);
+    if (again.kind === "ok") return { estado: again.code, reprogramar_para: null, unknown: null };
+  }
   return { estado: null, reprogramar_para: null, unknown: alias };
 }
 

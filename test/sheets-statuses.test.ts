@@ -52,6 +52,20 @@ describe("vocabularios de plantilla", () => {
     expect(markForEffect("devolucion")).toBe("D");
     expect(markForEffect("informa")).toBe("T");
     expect(markForEffect("anulacion")).toBe("T");
+    expect(markForEffect("sin_salida")).toBe("0");
+  });
+
+  it("los cuatro estados que explicó la operación son detalle de una no entrega", () => {
+    const l = lookupFromTemplates(REPARTO_PROPIO_STATUSES);
+    expect(resolveStatus("LO DEJA", l)).toMatchObject({ kind: "ok", code: "no_salio" });
+    expect(resolveStatus("DESARMAR/ALEXIS", l)).toMatchObject({ kind: "ok", code: "desarmar" });
+    expect(resolveStatus("dice que recibió", l)).toMatchObject({ kind: "ok", code: "ya_recibio" });
+    expect(resolveStatus("REPETIDO", l)).toMatchObject({ kind: "ok", code: "repetido" });
+    const by = (code: string) => REPARTO_PROPIO_STATUSES.find((s) => s.code === code)!;
+    expect(by("no_salio").effect).toBe("sin_salida");
+    expect(by("desarmar").effect).toBe("devolucion");
+    expect(by("ya_recibio").effect).toBe("informa");
+    expect(by("repetido").effect).toBe("informa");
   });
 
   it("los seis dominios del Excel existen y los de vocabulario lo traen", () => {

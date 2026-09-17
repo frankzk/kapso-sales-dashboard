@@ -4803,4 +4803,17 @@ Aporte al Consolidado: cada fila vinculada aporta la marca del efecto de su
 estado (entrega → E, devolución → D, informa o cancelación → T). Una fila con
 estado sin equivalente aporta T: existe, luego el pedido salió a ruta.
 
+Cuatro estados del cuaderno son el **detalle de una no entrega** y se leen
+así (definidos por la operación el 16-09-2026):
+
+| Escrito | Estado | Equivalente Kapta | Efecto |
+| --- | --- | --- | --- |
+| LO DEJA | No salió a reparto: se puso en la caja del motorizado pero quedó en almacén | nunca_salio_a_reparto | sin_salida (aporta 0, no cuenta como intento) |
+| DESARMAR | No se entregó y el paquete se desarma en almacén | devuelto_al_origen | devolucion (D) |
+| DICE QUE RECIBIÓ / YA RECIBIÓ | No se entregó: la clienta dice que ya lo recibió por otro delivery | intento_de_entrega | informa (T) |
+| REPETIDO | No se entregó: el pedido estaba repetido | intento_de_entrega | informa (T) |
+
+«OK» como método de pago significa **pagado antes por Shopify**: el cruce del
+16-09-2026 encontró 91 de 106 pedidos vinculados con checkout pagado.
+
 Alexis y Urpi no son Reparto propio: son couriers externos con hoja de puntos.

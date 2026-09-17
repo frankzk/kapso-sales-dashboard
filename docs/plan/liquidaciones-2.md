@@ -116,9 +116,9 @@ monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
    pantalla (`/api/sheets/import`) y por script (`scripts/import-reparto.ts`),
    alta de filas a mano, barra de totales del mes, y el aporte E/T/D al
    Consolidado con la columna «Aportes». Historia importada: 13.843 puntos en
-   737 rutas. Pendiente de la operación: el significado de LO DEJA, DESARMAR,
-   DICE QUE RECIBIÓ / YA RECIBIÓ y REPETIDO, y de los métodos de pago OK,
-   VENDE MÁS, YAPE/PLIN GCC y FP. La foto queda para la iteración 4, junto con
+   737 rutas. Los estados LO DEJA, DESARMAR, DICE QUE RECIBIÓ y REPETIDO ya
+   están definidos (MOM §30.7) y «OK» es pagado por Shopify. Pendiente de la
+   operación: los métodos de pago VENDE MÁS, YAPE/PLIN GCC y FP. La foto queda para la iteración 4, junto con
    las observaciones automáticas.
 3. **Courier externo.** Hojas por servicio: Alexis, Urpi, Swayp Lima, Aliclik
    Lima, Aliclik provincia, Dropi, Shalom, Olva, Axel, Tanders. Mapeo de

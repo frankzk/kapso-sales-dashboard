@@ -324,7 +324,7 @@ export async function upsertDomainStatus(input: {
   if (!isOperationalCode(input.operational_status)) {
     return { ok: false, error: "El equivalente debe ser un estado operativo de Kapta." };
   }
-  if (!["informa", "entrega", "devolucion", "anulacion"].includes(input.effect)) {
+  if (!["informa", "entrega", "devolucion", "anulacion", "sin_salida"].includes(input.effect)) {
     return { ok: false, error: "Efecto no válido." };
   }
   const { data: existing } = await g.admin
