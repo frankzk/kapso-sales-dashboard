@@ -63,6 +63,8 @@ interface Props {
   observations: ObservationRow[];
   reasons: ObservationReason[];
   openObservations: number;
+  /** Abiertas de la hoja actual, contadas sin tope. */
+  sheetOpenObservations: number;
   filters: { month: string; search: string };
   canEdit: boolean;
   canManage: boolean;
@@ -319,7 +321,7 @@ export function SheetsBoard(props: Props) {
             filters={props.filters}
             rowCount={rows.length}
             truncated={props.truncated}
-            openObservations={props.observations.length}
+            openObservations={props.sheetOpenObservations}
             panel={panel}
             setPanel={setPanel}
             canManage={canManage}
@@ -336,6 +338,7 @@ export function SheetsBoard(props: Props) {
             <ObservationsPanel
               sheet={sheet}
               observations={props.observations}
+              total={props.sheetOpenObservations}
               reasons={props.reasons}
               rows={rows}
               canEdit={canEdit}
@@ -1616,6 +1619,8 @@ function StatusesPanel(props: {
 function ObservationsPanel(props: {
   sheet: SheetWithColumns;
   observations: ObservationRow[];
+  /** Abiertas reales de la hoja: la lista viene con tope. */
+  total: number;
   reasons: ObservationReason[];
   rows: ComputedRow[];
   canEdit: boolean;
@@ -1655,7 +1660,7 @@ function ObservationsPanel(props: {
   return (
     <Card className="space-y-4">
       <PanelHeader
-        title={`Observaciones abiertas de «${sheet.name}»`}
+        title={`Observaciones abiertas de «${sheet.name}» · ${props.total.toLocaleString("es-PE")}${props.total > props.observations.length ? ` (se muestran las ${props.observations.length} más recientes)` : ""}`}
         subtitle="Una diferencia entre lo externo y Kapta se anota con los dos valores y se resuelve con un motivo. Nunca se corrige en silencio."
         onClose={props.onClose}
       />

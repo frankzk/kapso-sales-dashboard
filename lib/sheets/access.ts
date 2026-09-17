@@ -556,3 +556,15 @@ export async function loadContributions(orgId: string, orderIds: readonly string
   }
   return out;
 }
+
+/** Observaciones abiertas de UNA hoja, contadas de verdad (la lista se carga
+ *  con tope; el contador no debe heredar ese tope). */
+export async function countOpenObservations(sheetId: string): Promise<number> {
+  const sb = await createServerSupabase();
+  const { count } = await sb
+    .from("sheet_observations")
+    .select("id", { count: "exact", head: true })
+    .eq("sheet_id", sheetId)
+    .eq("status", "abierta");
+  return count ?? 0;
+}

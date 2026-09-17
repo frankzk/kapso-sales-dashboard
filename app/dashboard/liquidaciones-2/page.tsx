@@ -7,6 +7,7 @@ import { SheetsBoard } from "@/components/sheets-board";
 import { computeRows } from "@/lib/sheets/engine";
 import { limaMonthKey } from "@/lib/sheets/resolver";
 import {
+  countOpenObservations,
   ensureSheetsInitialized,
   getSheetWorkspace,
   loadAliases,
@@ -123,9 +124,9 @@ async function Liquidaciones2Content({ searchParams }: { searchParams: Promise<S
     }
   }
 
-  const [aliases, observations] = sheet
-    ? await Promise.all([loadAliases(sheet.id), loadObservations(orgId, sheet.id, "abierta")])
-    : [[], []];
+  const [aliases, observations, sheetOpenObservations] = sheet
+    ? await Promise.all([loadAliases(sheet.id), loadObservations(orgId, sheet.id, "abierta"), countOpenObservations(sheet.id)])
+    : [[], [], 0];
 
   return (
     <SheetsBoard
@@ -142,6 +143,7 @@ async function Liquidaciones2Content({ searchParams }: { searchParams: Promise<S
       observations={observations}
       reasons={workspace.reasons}
       openObservations={workspace.openObservations}
+      sheetOpenObservations={sheetOpenObservations}
       filters={{ month: month ?? (sp.mes?.trim() === "todos" ? "todos" : ""), search: search ?? "" }}
       lastImport={(sheet?.config as { last_import?: Record<string, unknown> } | undefined)?.last_import ?? null}
       canEdit={canEdit}
