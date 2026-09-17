@@ -5,6 +5,7 @@ import { env } from "@/lib/env";
 import { getStoreCreds } from "@/lib/ingest";
 import { FlowClient } from "@/lib/flow/client";
 import { confirmFlowPayment } from "@/lib/flow/confirm";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
 
 // Receptor de las confirmaciones de pago de Flow.cl.
 //
@@ -96,6 +97,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ storeId: s
       "[flowcl-webhook]",
       JSON.stringify({ storeId, outcome: result.outcome, linkId: result.linkId ?? null }),
     );
+
+    // El saldo del pedido cambió: hay que recalcular el Master para que se vea.
+    // Si esto falla, el dinero YA está registrado y validado — el barrido lo
+    // pone al día después, así que no se convierte en un 5xx que haga a Flow
+    // reintentar un aviso ya procesado.
+    if (result.outcome === "registrado" && result.orderId) {
+      try {
+        await recomputeOrderMasterSafe(createAdminSupabase(), [result.orderId]);
+      } catch (e) {
+        console.error("[flowcl-webhook] recompute", e instanceof Error ? e.message : e);
+      }
+    }
 
     switch (result.outcome) {
       case "registrado":

@@ -66,16 +66,25 @@ function fakeAdmin(opts: { link?: Record<string, unknown> | null; insertError?: 
         return { error: null };
       },
     }),
-    insert: (row: Record<string, unknown>) => ({
-      select: () => ({
-        single: async () => {
+    insert: (row: Record<string, unknown>) => {
+      // `order_events` se inserta sin `.select()`, así que la cadena tiene que
+      // ser además «esperable».
+      const chain: any = {
+        select: () => ({
+          single: async () => {
+            inserts.push({ table, row });
+            return opts.insertError
+              ? { data: null, error: { message: opts.insertError } }
+              : { data: { id: "pago-1" }, error: null };
+          },
+        }),
+        then: (res: any, rej: any) => {
           inserts.push({ table, row });
-          return opts.insertError
-            ? { data: null, error: { message: opts.insertError } }
-            : { data: { id: "pago-1" }, error: null };
+          return Promise.resolve({ error: null }).then(res, rej);
         },
-      }),
-    }),
+      };
+      return chain;
+    },
   });
 
   return { admin: { from } as unknown as SupabaseClient, updates, inserts };
@@ -164,10 +173,12 @@ describe("cuando Flow confirma el pago", () => {
     const { admin, inserts, updates } = fakeAdmin({ link: link() });
     const { client } = fakeClient(statusPagado());
 
-    const res = await confirmFlowPayment("TOK", { admin, client });
+    const res = await confirmFlowPayment("TOK", { admin, client, nowIso: "2026-09-17T12:00:00Z" });
 
     expect(res.outcome).toBe("registrado");
     expect(res.paymentId).toBe("pago-1");
+    // La ruta lo necesita para recalcular el Master: es donde se ve el saldo.
+    expect(res.orderId).toBe("order-1");
 
     const pago = inserts[0]!;
     expect(pago.table).toBe("order_payments");
@@ -178,10 +189,13 @@ describe("cuando Flow confirma el pago", () => {
       amount: 20,
       paid_at: "2026-09-12 15:03:11",
     });
-    // NO se fija `validation_status`: se queda en `pendiente_revision`, que es
-    // el valor por omisión de la tabla. Un cobro por pasarela entra a la cola
-    // como cualquier otro comprobante.
-    expect(pago.row).not.toHaveProperty("validation_status");
+    // ENTRA YA VALIDADO, y esto es lo que lo distingue de un Yape: un Yape es
+    // la foto de una pantalla y hay que mirarla; esto es la pasarela diciendo
+    // con firma que el dinero entró. `validated_by` va en NULL porque no lo
+    // validó ninguna persona.
+    expect(pago.row.validation_status).toBe("validado");
+    expect(pago.row.validated_at).toBe("2026-09-17T12:00:00Z");
+    expect(pago.row).not.toHaveProperty("validated_by");
     // Sin imagen que mirar, el drawer necesita leer de dónde salió.
     expect(String(pago.row.notes)).toMatch(/Flow.*181182854/);
 
@@ -189,6 +203,13 @@ describe("cuando Flow confirma el pago", () => {
     expect(patch.status).toBe("pagado");
     expect(patch.payment_id).toBe("pago-1");
     expect(patch.register_error).toBeNull();
+
+    // Y la línea de tiempo tiene que poder explicar por qué aparece validado
+    // sin que nadie lo validara.
+    const evento = inserts.find((i) => i.table === "order_events")!;
+    expect(evento.row).toMatchObject({ order_id: "order-1", kind: "payment", new_status: "validado" });
+    expect(String(evento.row.note)).toMatch(/Validado por la pasarela/);
+    expect(evento.row.actor).toBeUndefined();
   });
 
   it("registra lo que se PAGÓ, no lo que pedimos", async () => {

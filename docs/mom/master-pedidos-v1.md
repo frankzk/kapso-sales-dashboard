@@ -2706,8 +2706,18 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
   - **«Link de pago» puede cobrar de verdad, por Flow.cl** (0168). Con el
     interruptor encendido y la cuenta configurada, ese botón crea una orden de
     cobro **por el saldo de ese momento** y manda el link; el pago vuelve por el
-    webhook de la 0160/0161 y entra como comprobante `diferencia` pendiente de
-    revisión, igual que un Yape. Reglas que son de dinero, no de estilo:
+    webhook de la 0160/0161 y entra como comprobante `diferencia`. Reglas que
+    son de dinero, no de estilo:
+    - **Un cobro confirmado por la pasarela entra YA VALIDADO**, y es la única
+      excepción a que todo comprobante pase por revisión. Un Yape es la foto de
+      una pantalla: puede estar editada, ser de otro pedido o de otro día, y por
+      eso alguien la mira. Un cobro de Flow no es una foto — es la pasarela
+      diciendo, con la respuesta firmada de `payment/getStatus`, que el dinero
+      entró en la cuenta. No hay nada que revisar, y dejarlo pendiente tiene un
+      costo: el saldo se calcula solo con lo validado, así que la clienta
+      seguiría viendo una deuda que ya pagó y la clave de recojo esperaría a que
+      una persona hiciera clic. `validated_by` queda en **NULL**: no lo validó
+      nadie, lo validó la pasarela, y la línea de tiempo lo dice.
     - **Nunca dos cobros vivos por el mismo saldo.** Si ya hay un link vivo por
       el mismo importe se reenvía ese; solo un importe distinto justifica otro,
       y el anterior se deja de ofrecer. Pulsar el botón dos veces no puede

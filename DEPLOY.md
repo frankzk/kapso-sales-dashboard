@@ -1565,7 +1565,10 @@ dos estará mal. Ver `docs/kapso-functions/README.md`.
 
 Encendido, ese botón crea una orden de cobro en Flow.cl **por el saldo del
 momento** y manda el link. El pago vuelve por el webhook que ya existía desde
-la 0160/0161 y aparece como comprobante `diferencia` pendiente de revisión.
+la 0160/0161 y aparece como comprobante `diferencia` **ya validado** — la
+única excepción a que todo comprobante pase por revisión, porque aquí la
+evidencia es la respuesta firmada de la pasarela y no la foto de una
+pantalla. `validated_by` queda en NULL y la línea de tiempo lo explica.
 
 1. **Migración `0168_flowcl_link_settings.sql`**, a mano, antes del código.
    Solo añade columnas a `stores` y un índice: no toca ningún cobro existente.
