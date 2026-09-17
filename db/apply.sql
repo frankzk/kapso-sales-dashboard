@@ -343,4 +343,6 @@
 \ir migrations/0169_sheet_status_effect_sin_salida.sql
 \echo 'Applying 0170_sheet_observation_reason_pago.sql'
 \ir migrations/0170_sheet_observation_reason_pago.sql
+\echo 'Applying 0171_sheets_rider_rls.sql'
+\ir migrations/0171_sheets_rider_rls.sql
 \echo 'Done.'

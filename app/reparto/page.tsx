@@ -57,7 +57,11 @@ export default async function RepartoPage({
   const detail = routeId ? await getRouteDetail(routeId) : null;
 
   return (
-    <><GfRiderReceipt loads={loads} /><RiderRouteScreen
+    <><nav className="mx-auto max-w-md px-4 pt-3">
+        <a href="/reparto/cuaderno" className="block rounded-xl border border-brand-700 bg-white px-4 py-3 text-center text-sm font-medium text-brand-700">
+          Mi cuaderno del día
+        </a>
+      </nav><GfRiderReceipt loads={loads} /><RiderRouteScreen
       riderName={rider.full_name}
       routes={routes}
       route={detail?.route ?? null}

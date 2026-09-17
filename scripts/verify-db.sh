@@ -92,6 +92,9 @@ for f in $(ls "$ROOT"/db/migrations/*.sql | sort); do
   $PSQL -f "$f" >/dev/null
 done
 echo "  ✅ all migrations apply on a fresh database"
+echo "▶ Liquidaciones 2: un motorizado solo ve su hoja (0171)"
+$PSQL -f "$ROOT/scripts/sql/sheets_rider_smoke.sql"
+echo "  ✅ motorizado acotado a su hoja; owner y viewer ven las de su org"
 
 # La cobertura COD se decide por coordenada además de por nombre (0100). Es
 # lógica geoespacial hecha a mano (haversine, sin PostGIS): esta prueba fija que

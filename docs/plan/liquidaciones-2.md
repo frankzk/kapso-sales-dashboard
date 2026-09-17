@@ -140,9 +140,14 @@ monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
    con observación abierta no cruza al Master hasta que quien liquida acepta el
    motivo. Fuera: no hay camino de devolución al Master desde una hoja (no
    existe en Kapta; se cuenta y se deja).
-   **Pendiente, iteración aparte:** la interfaz del motorizado para explicar
-   una diferencia. El dato que llenará es `sheet_observations.reason_code` y
-   `note` de la fila; Liquidaciones 2 ya lo lee, lo muestra y lo acepta.
+4b. **Pantalla del motorizado** (hecha el 17-09-2026, mergeada a `delivery-lima`; MOM §30.9). MOM §30.9). `/reparto/cuaderno`: su hoja de
+   Reparto propio un día a la vez, puntos desde el manifiesto de despacho o a
+   mano, estado en texto libre con sugerencias, monto precargado desde Kapta,
+   motivo obligatorio cuando cobra distinto, foto del comprobante para pagos
+   digitales, y RLS (0171) que acota su lectura a su propia hoja. Llena
+   `sheet_observations.reason_code` + `note`, que es lo que acepta quien
+   liquida antes de aplicar al Master.
+
 5. **Indicadores.** KPI Lima (tasas por zona y día, semana pasada, 15 días,
    por mes), efectividad por repartidor y mes, ventas contra meta. El estado de
    resultados queda al final porque depende de Gasto Ads y Provincia.
