@@ -4827,3 +4827,13 @@ Axel, Tanders) usan el formato «reporte» por guía.
 
 «VENDE MÁS» como método de pago es una app de cobro por link (operación,
 16-09-2026): se lee como «Link de pago».
+
+**Tres niveles, y el detalle nunca se pierde.** El estado escrito es el dato
+y no se normaliza en la base; el estado del grupo es una lectura por alias; el
+estado de Kapta es una lectura del grupo. La pantalla muestra primero lo
+escrito («CEL APAGADO») y al lado la etiqueta del grupo («No responde»).
+Editar a mano es texto libre, nunca un desplegable que pierda el detalle: lo
+tecleado se guarda tal cual, el grupo se deriva con los mismos alias que usa
+la importación, y si no resuelve la fila queda a revisión con el alias sin
+equivalente a la vista para asignarlo una vez. Cambiar a qué equivale un alias
+cambia el grupo de todas sus filas sin tocar lo que decían.

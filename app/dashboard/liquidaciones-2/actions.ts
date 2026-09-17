@@ -16,6 +16,8 @@ import { ensureSheetsInitialized, seedSheetAliases } from "@/lib/sheets/access";
 import { districtKey } from "@/lib/sheets/resolver";
 import { normalizeOrderCode, puntoRowKey } from "@/lib/sheets/reparto-import";
 import { isCuadernoSheet } from "@/lib/sheets/templates";
+import { statusLookupForSheet } from "@/lib/sheets/reparto-import-db";
+import { applyWrittenPayment, applyWrittenStatus } from "@/lib/sheets/written-status";
 import type { CellValue, ColumnDataType, StatusEffect } from "@/lib/sheets/types";
 
 export interface SheetActionResult {
@@ -160,6 +162,21 @@ export async function setCell(input: {
   if ("error" in g) return { ok: false, error: g.error };
   const sheet = await sheetOrg(g.admin, input.sheetId);
   if (!sheet || !g.orgIds.has(sheet.org_id)) return { ok: false, error: "Hoja fuera de tu acceso." };
+
+  // En una hoja cuaderno, «Estado» y «Método de pago» se escriben libres: lo
+  // tecleado se guarda tal cual y el grupo se deriva por alias (MOM §30.7).
+  if (input.columnKey === "estado" || input.columnKey === "metodo_pago") {
+    const { data: meta } = await g.admin
+      .from("sheets")
+      .select("config, sheet_domains!inner(row_key)")
+      .eq("id", input.sheetId)
+      .maybeSingle();
+    const domainRowKey = (meta as { sheet_domains?: { row_key?: string } } | null)?.sheet_domains?.row_key;
+    if (isCuadernoSheet({ config: (meta?.config as Record<string, unknown>) ?? null }, domainRowKey ? { row_key: domainRowKey as "punto" } : null)) {
+      return setWrittenCell(g, sheet, input);
+    }
+  }
+
   const { data: column } = await g.admin
     .from("sheet_columns")
     .select("kind,data_type,options,required")
@@ -222,6 +239,81 @@ export async function setCell(input: {
   return { ok: true };
 }
 
+/**
+ * Estado o método de pago tecleado en una hoja cuaderno. Guarda el texto
+ * literal, deriva el grupo, deja historial de cada celda que cambia y, si el
+ * estado no resuelve, registra el alias sin equivalente en la hoja.
+ */
+async function setWrittenCell(
+  g: { user: { id: string }; admin: ReturnType<typeof createAdminSupabase> },
+  sheet: { id: string; domain_id: string },
+  input: { sheetId: string; rowKey: string; orderId: string | null; columnKey: string; value: CellValue; reason?: string },
+): Promise<SheetActionResult> {
+  const rowKey = input.rowKey.trim();
+  if (!rowKey) return { ok: false, error: "Fila sin clave." };
+  const text = input.value === null || input.value === undefined ? "" : String(input.value);
+  const { data: existing } = await g.admin
+    .from("sheet_rows")
+    .select("id,values")
+    .eq("sheet_id", input.sheetId)
+    .eq("row_key", rowKey)
+    .maybeSingle();
+  const current = ((existing?.values as Record<string, CellValue> | undefined) ?? {});
+
+  let changes: Record<string, CellValue>;
+  let unknownAlias: string | null = null;
+  if (input.columnKey === "estado") {
+    const lookup = await statusLookupForSheet(g.admin, sheet);
+    const res = applyWrittenStatus(current, text, lookup);
+    changes = res.changes;
+    unknownAlias = res.unknownAlias;
+  } else {
+    changes = applyWrittenPayment(text);
+  }
+  const changed = Object.entries(changes).filter(([k, v]) => (current[k] ?? null) !== v);
+  if (existing && !changed.length) return { ok: true };
+
+  let rowId = existing?.id as string | undefined;
+  const merged = { ...current, ...changes };
+  if (existing) {
+    const { error } = await g.admin
+      .from("sheet_rows")
+      .update({ values: merged, updated_at: new Date().toISOString() })
+      .eq("id", existing.id);
+    if (error) return { ok: false, error: error.message };
+  } else {
+    const { data, error } = await g.admin
+      .from("sheet_rows")
+      .insert({ sheet_id: input.sheetId, row_key: rowKey, order_id: input.orderId, values: merged, source: "manual", created_by: g.user.id })
+      .select("id")
+      .single();
+    if (error || !data) return { ok: false, error: error?.message ?? "No se pudo crear la fila." };
+    rowId = data.id;
+  }
+  if (changed.length) {
+    const { error: hErr } = await g.admin.from("sheet_cell_history").insert(
+      changed.map(([column_key, new_value]) => ({
+        row_id: rowId,
+        column_key,
+        previous_value: current[column_key] ?? null,
+        new_value,
+        reason: input.reason?.trim() || null,
+        actor: g.user.id,
+      })),
+    );
+    if (hErr) return { ok: false, error: `Se guardó la celda pero no el historial: ${hErr.message}` };
+  }
+  if (unknownAlias) {
+    await g.admin
+      .from("sheet_status_aliases")
+      .upsert({ sheet_id: input.sheetId, alias: unknownAlias, status_code: null, seen_count: 1 }, { onConflict: "sheet_id,alias", ignoreDuplicates: true });
+  }
+  revalidatePath(PATH);
+  return unknownAlias
+    ? { ok: true, message: `«${text}» no tiene equivalente todavía: la fila queda a revisión. Asígnalo en «Estados y alias».` }
+    : { ok: true };
+}
+
 /** Convierte lo tecleado al tipo de la columna. `undefined` = inválido. */
 function coerce(value: CellValue, type: ColumnDataType, options: string[]): CellValue | undefined {
   if (value === null || value === "") return null;
@@ -264,20 +356,24 @@ export async function addSheetRow(sheetId: string, values: Record<string, CellVa
     .eq("sheet_id", sheetId)
     .eq("kind", "manual")
     .order("position");
-  const clean: Record<string, CellValue> = {};
-  for (const c of (columns ?? []) as { key: string; data_type: ColumnDataType; options: string[]; required: boolean }[]) {
-    const v = coerce(values[c.key] ?? null, c.data_type, c.options ?? []);
-    if (v === undefined) return { ok: false, error: `Valor no válido en «${c.key}».` };
-    if (c.required && (v === null || v === "")) return { ok: false, error: `Falta «${c.key}».` };
-    clean[c.key] = v;
-  }
   const [{ data: domain }, { data: sheetCfg }] = await Promise.all([
     g.admin.from("sheet_domains").select("row_key").eq("id", sheet.domain_id).maybeSingle(),
     g.admin.from("sheets").select("config").eq("id", sheetId).maybeSingle(),
   ]);
+  const cuaderno = Boolean(domain && isCuadernoSheet({ config: (sheetCfg?.config as Record<string, unknown>) ?? null }, { row_key: domain.row_key }));
+  const clean: Record<string, CellValue> = {};
+  for (const c of (columns ?? []) as { key: string; data_type: ColumnDataType; options: string[]; required: boolean }[]) {
+    // En cuaderno, Estado y Método son texto libre: se resuelven más abajo.
+    const free = cuaderno && (c.key === "estado" || c.key === "metodo_pago");
+    const raw = values[c.key] ?? null;
+    const v = free ? (typeof raw === "string" && raw.trim() ? raw.trim() : null) : coerce(raw, c.data_type, c.options ?? []);
+    if (v === undefined) return { ok: false, error: `Valor no válido en «${c.key}».` };
+    if (c.required && (v === null || v === "")) return { ok: false, error: `Falta «${c.key}».` };
+    clean[c.key] = v;
+  }
   let rowKey: string;
   let orderId: string | null = null;
-  if (domain && isCuadernoSheet({ config: (sheetCfg?.config as Record<string, unknown>) ?? null }, { row_key: domain.row_key })) {
+  if (cuaderno) {
     const fecha = typeof clean.fecha === "string" ? clean.fecha : null;
     const pedido = normalizeOrderCode(typeof clean.pedido === "string" ? clean.pedido : null);
     if (!fecha) return { ok: false, error: "La fila de reparto necesita fecha." };
@@ -287,6 +383,16 @@ export async function addSheetRow(sheetId: string, values: Record<string, CellVa
       orderId = order?.id ?? null;
     }
     rowKey = puntoRowKey(fecha, pedido ?? (typeof clean.pedido === "string" ? clean.pedido.toLowerCase() : null), typeof clean.cliente === "string" ? clean.cliente : null, 0);
+    // Estado y método se escriben libres: lo tecleado queda tal cual y el
+    // grupo se deriva por alias (MOM §30.7), igual que al editar una celda.
+    const lookup = await statusLookupForSheet(g.admin, sheet);
+    const written = applyWrittenStatus(clean, typeof clean.estado === "string" ? clean.estado : null, lookup);
+    Object.assign(clean, written.changes, applyWrittenPayment(typeof clean.metodo_pago === "string" ? clean.metodo_pago : null));
+    if (written.unknownAlias) {
+      await g.admin
+        .from("sheet_status_aliases")
+        .upsert({ sheet_id: sheetId, alias: written.unknownAlias, status_code: null, seen_count: 1 }, { onConflict: "sheet_id,alias", ignoreDuplicates: true });
+    }
   } else {
     const first = (columns ?? [])[0] as { key: string } | undefined;
     rowKey = districtKey(String(clean[first?.key ?? ""] ?? ""));
