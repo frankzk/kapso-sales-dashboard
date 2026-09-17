@@ -2189,8 +2189,21 @@ function ShipmentDrawer({
     reprogramProvider === "fenix" &&
     shipment?.courier === "aliclik" &&
     !shipment.fenix_eligible;
+  /**
+   * Productos sin vínculo de codbar con Swayp. Sin vínculo no hay guía (regla de
+   * la operación, 16-09-2026), así que apagan TODOS los botones que paren una:
+   * la reprogramación confirmada, el reenvío de una guía anulada y el alta con
+   * número escrito a mano. El servidor vuelve a comprobarlo en
+   * `spinOffFenixGuide`; esto es para que nadie lo descubra con la clienta al
+   * teléfono.
+   */
+  const swaypUnlinked = detail && !("error" in detail) ? detail.swaypUnlinked : [];
+  const swaypSinCodbar = swaypUnlinked.length > 0;
+  const swaypSinCodbarAviso = swaypSinCodbar
+    ? `Swayp no tiene ${swaypUnlinked.length === 1 ? "este producto" : "estos productos"} en su catálogo: ${swaypUnlinked.join(", ")}. ${swaypUnlinked.length === 1 ? "Vincúlalo" : "Vincúlalos"} en Catálogo de productos para poder emitir la guía.`
+    : null;
   const fenixRouteAvailable =
-    !!shipment && (shipment.courier !== "aliclik" || shipment.fenix_eligible);
+    !!shipment && (shipment.courier !== "aliclik" || shipment.fenix_eligible) && !swaypSinCodbar;
   const requiredDateMissing =
     (disposition === "confirma" && !nextDate) ||
     programDateInvalid ||
@@ -2206,7 +2219,9 @@ function ShipmentDrawer({
    * y el botón lo nombra con `aria-describedby`; la etiqueta vuelve a decir la
    * acción, que es lo que un botón debe decir.
    */
-  const gestionBlockReason = fenixAutoUnavailable
+  const gestionBlockReason = swaypSinCodbarAviso && reprogramProvider === "fenix"
+    ? swaypSinCodbarAviso
+    : fenixAutoUnavailable
     ? "Swayp no tiene cobertura o stock para este envío: registra la reprogramación como excepción manual."
     : overrideNoteMissing
       ? "Explica el motivo de la excepción antes de registrarla."
@@ -2269,7 +2284,9 @@ function ShipmentDrawer({
     : "";
   const cancelledExceptionDateInvalid =
     !cancelledExceptionDate || cancelledExceptionDate <= localDateInputValue();
-  const cancelledExceptionUnavailable = fenixReason !== "ok";
+  // Sin vínculo de codbar no hay guía, así que el reenvío tampoco: si no, el
+  // botón invita y el servidor rechaza.
+  const cancelledExceptionUnavailable = fenixReason !== "ok" || swaypSinCodbar;
   // ¿Hay de verdad dos rutas entre las que elegir? La excepción manual de
   // Aliclik cuenta como elección: hay que tomarla a sabiendas.
   const canForceAliclik =
@@ -2677,7 +2694,12 @@ function ShipmentDrawer({
                       </p>
                     )}
 
-                    {cancelledExceptionUnavailable && (
+                    {swaypSinCodbarAviso && (
+                      <p className="rounded-md bg-rose-50 px-2 py-1.5 text-xs text-rose-800">
+                        {swaypSinCodbarAviso}
+                      </p>
+                    )}
+                    {cancelledExceptionUnavailable && !swaypSinCodbar && (
                       <p className="rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
                         {fenixReason === "sin_stock"
                           ? `Swayp no tiene stock para este pedido en ${detail.shipment.city ?? "la ciudad indicada"}.`
@@ -3177,7 +3199,13 @@ function ShipmentDrawer({
                         )}
                       >
                         <span className="block font-semibold">Swayp</span>
-                        <span>{fenixRouteAvailable ? "Nueva guía" : "Sin stock/cobertura"}</span>
+                        <span>
+                          {fenixRouteAvailable
+                            ? "Nueva guía"
+                            : swaypSinCodbar
+                              ? "Sin vínculo de codbar"
+                              : "Sin stock/cobertura"}
+                        </span>
                       </button>
                     </div>
                     )}
@@ -3681,12 +3709,19 @@ function ShipmentDrawer({
                   {/* El motivo del bloqueo se dice acá, en texto visible y
                       enlazado al botón. Dentro de un botón `disabled` no lo
                       alcanza ni el tabulador ni el lector de pantalla. */}
-                  <p id="guia-manual-motivo" className="text-xs text-slate-500">
-                    {!drawerOrderName
-                      ? "Este envío no tiene N° de pedido, así que la guía no se puede autogenerar: escríbela a mano."
-                      : manualGuideDateInvalid
-                        ? "Elige la fecha de despacho —de mañana en adelante—: va estampada en el número de la guía."
-                        : "«Autogenerar» arma el número con el pedido y esa fecha."}
+                  <p
+                    id="guia-manual-motivo"
+                    className={cn("text-xs", swaypSinCodbar ? "text-rose-700" : "text-slate-500")}
+                  >
+                    {/* El codbar manda: sin vínculo la guía no sale ni escrita a
+                        mano, porque Swayp no sabría qué descontar. */}
+                    {swaypSinCodbarAviso
+                      ? swaypSinCodbarAviso
+                      : !drawerOrderName
+                        ? "Este envío no tiene N° de pedido, así que la guía no se puede autogenerar: escríbela a mano."
+                        : manualGuideDateInvalid
+                          ? "Elige la fecha de despacho —de mañana en adelante—: va estampada en el número de la guía."
+                          : "«Autogenerar» arma el número con el pedido y esa fecha."}
                   </p>
                   <button
                     onClick={() =>
@@ -3705,7 +3740,7 @@ function ShipmentDrawer({
                         },
                       )
                     }
-                    disabled={pending || !fenixGuide.trim() || manualGuideDateInvalid}
+                    disabled={pending || !fenixGuide.trim() || manualGuideDateInvalid || swaypSinCodbar}
                     aria-describedby="guia-manual-motivo"
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                   >

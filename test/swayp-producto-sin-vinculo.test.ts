@@ -126,6 +126,64 @@ describe("el modal avisa y apaga el botón", () => {
   });
 });
 
+/**
+ * LA REGLA, dicha por la operación el 16-09-2026: sin vínculo de codbar no se
+ * genera guía Swayp, y el botón tiene que decir por qué está apagado.
+ *
+ * Son TRES puertas que paren una guía —la reprogramación confirmada, el reenvío
+ * de una anulada y el alta con número a mano— y todas pasan por
+ * `spinOffFenixGuide`. La reja vive ahí para que una cuarta puerta no nazca sin
+ * ella.
+ */
+describe("las tres puertas de Envíos", () => {
+  const src = readFileSync(resolve(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8");
+  const ui = readFileSync(resolve(process.cwd(), "components/shipments.tsx"), "utf8");
+
+  it("la reja está en el cuello por el que pasan las tres", () => {
+    const fn = src.slice(src.indexOf("async function spinOffFenixGuide"));
+    const cuerpo = fn.slice(0, fn.indexOf('.from("shipments")\n    .insert('));
+    expect(cuerpo).toContain("const faltan = await swaypSinVinculo(");
+    expect(cuerpo).toContain("if (faltan.length) return { error: avisoSinVinculoSwayp(faltan) };");
+  });
+
+  it("la reprogramación lo comprueba antes, junto al stock", () => {
+    const bloque = src.slice(src.indexOf('input.disposition === "confirma" && reprogramProvider === "fenix"'));
+    expect(bloque.slice(0, 2000)).toContain("const sinCodbar = await swaypSinVinculo(");
+  });
+
+  it("el aviso lo escribe una sola función para todas las pantallas", () => {
+    expect(src).toContain("export function avisoSinVinculoSwayp(");
+    expect(src).toContain("Catálogo de productos");
+  });
+
+  it("el drawer recibe los productos que faltan", () => {
+    expect(src).toContain("swaypUnlinked: await swaypSinVinculo(");
+    expect(ui).toContain('const swaypUnlinked = detail && !("error" in detail) ? detail.swaypUnlinked : [];');
+  });
+
+  it("apaga las tres puertas de la interfaz", () => {
+    // Reprogramación: la ruta Swayp deja de ofrecerse…
+    expect(ui).toContain(
+      'const fenixRouteAvailable =\n    !!shipment && (shipment.courier !== "aliclik" || shipment.fenix_eligible) && !swaypSinCodbar;',
+    );
+    // …el reenvío de una anulada…
+    expect(ui).toContain('const cancelledExceptionUnavailable = fenixReason !== "ok" || swaypSinCodbar;');
+    // …y el alta a mano.
+    expect(ui).toContain("|| swaypSinCodbar}");
+  });
+
+  it("y DICE por qué, en vez de solo apagarse", () => {
+    expect(ui).toContain("const swaypSinCodbarAviso = swaypSinCodbar");
+    // El motivo manda sobre los demás en el bloque de gestión…
+    expect(ui).toContain("const gestionBlockReason = swaypSinCodbarAviso");
+    // …la etiqueta del botón lo nombra…
+    expect(ui).toContain('"Sin vínculo de codbar"');
+    // …y el reenvío y el alta a mano lo enseñan como texto.
+    expect(ui).toContain("{swaypSinCodbarAviso}");
+    expect(ui).toContain("{swaypSinCodbarAviso\n                      ? swaypSinCodbarAviso");
+  });
+});
+
 describe("el servidor no se fía del modal", () => {
   const src = readFileSync(resolve(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8");
 

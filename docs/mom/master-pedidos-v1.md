@@ -2279,12 +2279,20 @@ emitió, con el fallo contado en un aviso al final.
 
 Reglas:
 
-- El vínculo se comprueba en los **tres sitios**, con una sola función
-  (`productosSinVinculo`): la tarjeta de Swayp en la mesa de ruta, el panel de
-  guía directa y la reja del servidor al crear. Una copia del bucle por sitio
-  acabaría nombrando productos distintos en el aviso y en el rechazo.
-- El panel **nombra los productos** que faltan y **apaga el botón**. Marcarlos
-  solo en una columna a la derecha de la lista no basta.
+- **Sin vínculo de codbar no se genera guía Swayp. Ninguna, por ninguna puerta.**
+  No es solo la guía directa: son las cuatro que paren una guía —guía directa,
+  reprogramación confirmada, reenvío de una guía anulada y alta con número
+  escrito a mano—. En Kapta las tres últimas pasan por `spinOffFenixGuide`, y la
+  reja vive **ahí**, en el cuello, para que la quinta puerta que alguien añada no
+  nazca sin ella.
+- El vínculo se comprueba con una sola función (`productosSinVinculo`) y el aviso
+  lo escribe una sola (`avisoSinVinculoSwayp`). Una copia por pantalla acabaría
+  nombrando productos distintos en el aviso y en el rechazo.
+- **El botón se apaga Y dice por qué.** Un botón apagado sin motivo manda a
+  adivinar; y peor, un botón encendido que el servidor rechaza deja a la asesora
+  descubriéndolo con la clienta al teléfono. El motivo nombra los productos y la
+  pantalla donde se arregla. Marcarlos solo en una columna a la derecha de una
+  lista no basta.
 - **«Sin stock» y «sin vínculo» son hechos distintos y no se mezclan**: el
   primero se arregla en Stock Swayp, el segundo en Catálogo de productos.
   Juntarlos manda a la operadora a la pantalla equivocada. En Lima el primero
@@ -2292,9 +2300,18 @@ Reglas:
 - **Un vínculo que falta rechaza la guía; no cae al código local.** El respaldo
   del código local sigue vivo para lo que sí es una limitación de Swayp —una
   ciudad que su API no atiende—. Un hueco nuestro se arregla en dos minutos y no
-  puede despachar una caja mientras tanto. Alcance medido antes de ponerlo: de
-  141 guías Swayp directas en 60 días, 4 habrían quedado frenadas, que son
-  exactamente las que habrían salido con un número que Swayp no conoce.
+  puede despachar una caja mientras tanto.
+
+  Alcance medido antes de ponerlo, sobre 60 días:
+
+  | Puerta | Guías | Sin codbar |
+  | --- | --- | --- |
+  | Guía directa | 143 | 4 |
+  | Reprogramación y reenvío | 418 | 41 |
+
+  Son unas cinco por semana en la puerta de reprogramación, con la asesora al
+  teléfono. Se acepta a sabiendas: son exactamente las guías que Swayp no
+  reconocería, y el minuto que cuesta vincular el producto se paga una vez.
 - **Mapa vacío = función apagada**, el mismo interruptor que ya gobernaba
   `buildProductos`: una tienda que todavía no vinculó nada no se queda sin poder
   crear guías el día del despliegue. Con al menos una entrada, un hueco es un

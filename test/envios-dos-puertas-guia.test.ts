@@ -25,7 +25,11 @@ describe("la puerta manual, en el cliente", () => {
 
   it("la fecha entra en la condición del botón, y en la de «Autogenerar»", () => {
     expect(ui).toContain("const manualGuideDateInvalid = !manualGuideDate || manualGuideDate <= localDateInputValue();");
-    expect(ui).toContain("disabled={pending || !fenixGuide.trim() || manualGuideDateInvalid}");
+    // `swaypSinCodbar` se sumó después: sin vínculo no hay guía ni escrita a
+    // mano. La fecha sigue siendo condición, que es lo que esta prueba cuida.
+    expect(ui).toContain(
+      "disabled={pending || !fenixGuide.trim() || manualGuideDateInvalid || swaypSinCodbar}",
+    );
     expect(ui).toContain("disabled={!drawerOrderName || manualGuideDateInvalid}");
   });
 });
@@ -44,10 +48,10 @@ describe("el motivo del bloqueo se puede leer con teclado", () => {
   it("no vive dentro de la etiqueta de un botón deshabilitado", () => {
     // Un `<button disabled>` está fuera del orden de tabulación: quien navega
     // con lector de pantalla recorría el formulario y nada le decía qué faltaba.
-    expect(ui).toContain("const gestionBlockReason = fenixAutoUnavailable");
+    expect(ui).toContain("const gestionBlockReason = swaypSinCodbarAviso");
     expect(ui).toContain('aria-describedby={gestionBlockReason ? "gestion-motivo" : undefined}');
     expect(ui).toContain('<p id="gestion-motivo" role="status"');
-    expect(ui).toContain('<p id="guia-manual-motivo"');
+    expect(ui).toContain('id="guia-manual-motivo"');
     // Las etiquetas del botón vuelven a decir la acción.
     expect(ui).not.toContain('"Elige la fecha para confirmar"');
     expect(ui).not.toContain('"Swayp no disponible; usa una excepción manual"');
