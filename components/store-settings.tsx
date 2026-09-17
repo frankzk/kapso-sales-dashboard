@@ -794,6 +794,11 @@ function SettingsForm({
   const [flowProbe, flowProbeAction, flowProbePending] = useActionState(testFlowclLink, initial);
   const router = useRouter();
   const s = data.store;
+  // Controlado a propósito: React vacía los campos NO controlados al terminar
+  // cualquier acción del formulario, y la sonda de Flow es una acción. Sin
+  // esto, escribir el email y pulsar «Crear cobro de prueba» lo borraba en el
+  // mismo clic — el usuario veía «falta el email» con el email recién escrito.
+  const [flowEmail, setFlowEmail] = useState(s.flowcl_link_email ?? "");
 
   // Server actions reset uncontrolled form fields to their previous defaults.
   // Refresh the server component after a successful save so toggles and secret
@@ -1796,7 +1801,8 @@ function SettingsForm({
                   id="flowcl_link_email"
                   name="flowcl_link_email"
                   type="email"
-                  defaultValue={s.flowcl_link_email ?? ""}
+                  value={flowEmail}
+                  onChange={(e) => setFlowEmail(e.target.value)}
                   placeholder="cobros@tutienda.com"
                   className={inputCls}
                 />
@@ -1840,9 +1846,11 @@ function SettingsForm({
               </button>
             </div>
             <p className="mt-2 text-xs text-slate-400">
-              Guarda primero las credenciales. Crea una orden <strong>real</strong> y te devuelve el
-              link: sirve para ver que la firma vale, que la url de confirmación se arma bien y que
-              Flow acepta importes con céntimos. Caduca en 30 minutos.
+              Las <strong>credenciales</strong> tienen que estar guardadas (son secretos cifrados);
+              el email de arriba vale tal como esté escrito, aunque no lo hayas guardado todavía.
+              Crea una orden <strong>real</strong> y te devuelve el link: sirve para ver que la firma
+              vale, que la url de confirmación se arma bien y que Flow acepta importes con céntimos.
+              Caduca en 30 minutos.
             </p>
             <p className="mt-1 text-xs text-amber-700">
               Si la pagas, el dinero entra de verdad en tu cuenta de Flow y{" "}

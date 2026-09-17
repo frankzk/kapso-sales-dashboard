@@ -571,12 +571,19 @@ export async function testFlowclLink(
   if (!creds.flowcl_webhook_secret) {
     return { error: "Falta el secreto de la url de confirmación (y guardar)." };
   }
-  const email = (creds.flowcl_link_email ?? "").trim();
+  // EL EMAIL SE LEE DE LA PANTALLA, no de la base. El botón de la sonda envía
+  // este mismo formulario a otra acción, así que lo que el usuario acaba de
+  // escribir viaja aquí — pero NO queda guardado, y React vacía el campo al
+  // terminar. Exigir que estuviera guardado convertía al botón en una trampa:
+  // se escribe el email justo encima, se pulsa, y contesta que falta el email
+  // que se acaba de escribir. Las credenciales sí tienen que estar guardadas,
+  // porque son secretos cifrados y el formulario no las trae en claro.
+  const email = (String(formData.get("flowcl_link_email") ?? "") || creds.flowcl_link_email || "").trim();
   if (!email) {
     return {
       error:
-        "Falta el email de respaldo del cobro: Flow exige un email del pagador y casi ningún " +
-        "pedido trae uno.",
+        "Escribe el email de respaldo del cobro aquí arriba: Flow exige un email del pagador y " +
+        "casi ningún pedido trae uno.",
     };
   }
 
@@ -614,11 +621,15 @@ export async function testFlowclLink(
       timeout: 1800,
     });
     const decimales = amount.endsWith(".00") ? "" : " (con céntimos)";
+    const sinGuardar =
+      email !== (creds.flowcl_link_email ?? "").trim()
+        ? " Ojo: ese email todavía no está guardado — dale a «Guardar cambios» si lo quieres dejar."
+        : "";
     return {
       notice:
         `Flow aceptó un cobro de S/ ${amount}${decimales} ✓ — orden ${pago.flowOrder}. ` +
         `Caduca en 30 minutos. Si lo pagas, el dinero entra de verdad y NO queda ` +
-        `colgado de ningún pedido: ${pago.link}`,
+        `colgado de ningún pedido: ${pago.link}${sinGuardar}`,
     };
   } catch (e) {
     return { error: `Flow rechazó la prueba: ${errMsg(e)}` };
