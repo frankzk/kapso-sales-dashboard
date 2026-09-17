@@ -24,6 +24,7 @@ import {
   reRegisterWebhooks,
   saveMetaAdAccounts,
   sendTelegramTest,
+  testFlowclLink,
   syncAliclikCatalogNow,
   syncNow,
   testAliclikConnection,
@@ -282,6 +283,15 @@ export function StoreSettings({
       <ReplyTemplatesSection storeId={s.id} rows={data.replyTemplates} />
       <PaymentMethodsSection storeId={s.id} rows={data.paymentMethods} />
       <DistrictCoverageSection storeId={s.id} rows={data.districtCoverage} />
+
+      <div className="-mt-2">
+        <ActionButton
+          action={testFlowclLink}
+          storeId={s.id}
+          label="Probar cobro por Flow.cl"
+          help="Crea una orden de prueba de S/ 1.10 con las credenciales de arriba y te devuelve el link. Caduca en 30 minutos y no hace falta pagarla; sirve para ver que la firma vale y que Flow acepta importes con céntimos."
+        />
+      </div>
 
       <div className="-mt-2">
         <ActionButton

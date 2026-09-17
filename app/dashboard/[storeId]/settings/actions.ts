@@ -28,6 +28,8 @@ import { saveDistrictCoverageRow } from "@/lib/district-coverage-access";
 import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
 import { describeShalomError, describeShalomProbeFailure } from "@/lib/shalom/client";
 import { clientFor, loadStoreShalom, mintSession, publicClient } from "@/lib/shalom/session";
+import { FlowClient } from "@/lib/flow/client";
+import { confirmationUrl } from "@/lib/flow/link";
 
 export interface SettingsState {
   error?: string;
@@ -531,6 +533,77 @@ export async function sendTelegramTest(
     };
   } catch (e) {
     return { error: errMsg(e) };
+  }
+}
+
+/**
+ * «Probar cobro por Flow»: crea una orden de S/ 1.10 y devuelve el link.
+ *
+ * POR QUÉ UNA ORDEN DE VERDAD. Flow no tiene un endpoint de prueba, y lo que
+ * hay que comprobar es justo lo que solo se ve cobrando: que la firma con el
+ * secretKey vale, que la cuenta acepta la moneda, y —lo que no estaba
+ * comprobado contra la API real— QUE ADMITE IMPORTES CON DECIMALES. Por eso el
+ * importe lleva céntimos: un saldo de verdad casi siempre los tiene, y
+ * descubrirlo con la primera clienta es descubrirlo tarde.
+ *
+ * ES UNA SONDA, NO UN COBRO NUESTRO: no se escribe en `flowcl_payment_links`
+ * porque no hay pedido al que colgarla, y caduca en 30 minutos. Si alguien la
+ * paga, el webhook no la reconoce y contesta «desconocido», que es la verdad.
+ */
+export async function testFlowclLink(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+
+  const creds = await getStoreCreds(storeId, ctx.admin);
+  if (!creds?.flowcl_api_key || !creds.flowcl_secret_key) {
+    return { error: "Configura primero la apiKey y la secretKey de Flow.cl (y guarda)." };
+  }
+  if (!creds.flowcl_webhook_secret) {
+    return { error: "Falta el secreto de la url de confirmación (y guardar)." };
+  }
+  const email = (creds.flowcl_link_email ?? "").trim();
+  if (!email) {
+    return {
+      error:
+        "Falta el email de respaldo del cobro: Flow exige un email del pagador y casi ningún " +
+        "pedido trae uno.",
+    };
+  }
+
+  const site = env.siteUrl();
+  if (!/^https:\/\//i.test(site)) {
+    return {
+      error: `NEXT_PUBLIC_SITE_URL es «${site}»: con eso el cobro se crea pero el pago no vuelve nunca.`,
+    };
+  }
+
+  try {
+    const client = new FlowClient({
+      apiKey: creds.flowcl_api_key,
+      secretKey: creds.flowcl_secret_key,
+      baseUrl: env.flowclApiBase(),
+    });
+    const pago = await client.createPayment({
+      commerceOrder: `PRUEBA-${randomBytes(4).toString("hex")}`,
+      subject: "Prueba de configuración (no hace falta pagarla)",
+      amount: "1.10",
+      currency: creds.currency ?? "PEN",
+      email,
+      urlConfirmation: confirmationUrl(site, storeId, creds.flowcl_webhook_secret),
+      urlReturn: `${site.replace(/\/$/, "")}/pago/gracias`,
+      timeout: 1800,
+    });
+    return {
+      notice:
+        `Flow aceptó un cobro de S/ 1.10 (con decimales) ✓ — orden ${pago.flowOrder}. ` +
+        `Ábrelo para ver el checkout; caduca en 30 minutos y no hace falta pagarlo: ${pago.link}`,
+    };
+  } catch (e) {
+    return { error: `Flow rechazó la prueba: ${errMsg(e)}` };
   }
 }
 
