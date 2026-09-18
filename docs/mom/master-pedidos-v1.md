@@ -2957,8 +2957,19 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   asesor.
 - Solo Frankz ejecuta reembolsos.
 - Un sobrepago puede devolverse después de validación.
-- Pendiente de decisión formal: si el adelanto de S/30 se considera no
-  reembolsable para cubrir logística cuando el cliente rechaza el saldo.
+- **El adelanto NO se reembolsa cuando el cliente rechaza el saldo.** Decidido
+  el 18-09-2026; estuvo meses como «pendiente de decisión formal» y esa
+  indefinición impedía decirle nada a la clienta. Cubre la logística ya
+  gastada: la guía se pagó, el paquete viajó y el retorno también cuesta.
+  - Es **rechazo del saldo**, no cualquier no-entrega. Un paquete que no llega
+    por culpa del courier, un producto equivocado o un pedido que la tienda
+    cancela no son rechazo: ahí el adelanto se devuelve como siempre.
+  - **Se le dice antes, no al final.** Una política que la clienta descubre el
+    día que pierde su dinero es una discusión perdida aunque se tenga razón, y
+    una devolución de tarjeta reclamada después cuesta más que los S/ 30. Va en
+    el aviso de cobro y tiene que estar también donde compra.
+  - Lo ejecuta Frankz, como todo reembolso: la regla dice qué se devuelve y qué
+    no, no automatiza la caja.
 
 ## 13. Devoluciones, inventario y reclamos
 
