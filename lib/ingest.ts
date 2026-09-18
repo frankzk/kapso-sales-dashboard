@@ -148,6 +148,11 @@ export interface StoreCreds {
   shalom_transit_hour_end: number;
   /** Respuesta al botón «Link de pago», con {saldo}, {pedido} y {yape}. */
   shalom_transit_payment_link: string | null;
+  /** Aviso de «ya llegó a la agencia» (0169). Comparte número y horario. */
+  shalom_arrival_template_enabled: boolean;
+  shalom_arrival_template_name: string | null;
+  shalom_arrival_params: string | null;
+  shalom_arrival_attach_ticket: boolean;
 }
 
 /**
@@ -266,6 +271,10 @@ export async function getStoreCreds(
     shalom_transit_hour_start: data.shalom_transit_hour_start ?? 8,
     shalom_transit_hour_end: data.shalom_transit_hour_end ?? 21,
     shalom_transit_payment_link: data.shalom_transit_payment_link ?? null,
+    shalom_arrival_template_enabled: data.shalom_arrival_template_enabled ?? false,
+    shalom_arrival_template_name: data.shalom_arrival_template_name ?? null,
+    shalom_arrival_params: data.shalom_arrival_params ?? null,
+    shalom_arrival_attach_ticket: data.shalom_arrival_attach_ticket ?? false,
   };
 }
 

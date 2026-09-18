@@ -2687,6 +2687,26 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
     del orden configurado: un parámetro de más y Meta rechaza el envío. Y el
     número escrito a mano en una plantilla es justo lo que no puede desalinearse
     de las cuentas de cobro: si se puede, va como variable.
+  - **Hay DOS avisos, y el segundo es el que cobra de verdad** (0169). El de
+    tránsito dice «va en camino, llega en 2 a 5 días hábiles». El de llegada
+    dice «ya está en tu agencia, tienes hasta el <fecha> para recogerlo». Son
+    momentos distintos y textos distintos, y confundirlos es mandarle a esperar
+    a quien ya tiene el paquete esperándola a ella.
+    - **La fecha límite son 28 días desde que llegó**, la misma regla de plazo
+      de esta sección, y va como una FECHA («16 de octubre») y no como «te
+      quedan 12 días»: el WhatsApp se queda en el chat y un contador relativo
+      envejece mal. Sin fecha de llegada registrada **no se inventa un plazo**:
+      el aviso no sale y queda escrito que faltaba `vence`.
+    - **Una fila por guía y por tipo.** La unique pasó de `shipment_id` a
+      `(shipment_id, kind)`: una misma guía recibe el de tránsito y, días
+      después, el de llegada — pero ninguno de los dos dos veces.
+    - **Interruptores separados, número compartido.** Encender uno no enciende
+      el otro, porque cada plantilla se aprueba aparte en Meta. El número, el
+      horario y las cuentas de cobro son de la tienda y valen para los dos.
+    - Por qué importa: al 18-09-2026 había **213 guías esperando en el mostrador
+      con saldo** (173 de Kenku y 40 de Aurela, ~S/ 34.000) a las que nunca se
+      les escribió, porque llegaron antes de que esto existiera o su tránsito
+      ocurrió con el aviso apagado. Ese es el hueco que cierra el segundo aviso.
   - **La clave de recojo nunca va en el mensaje.** Guía, código y agencia sin la
     clave no abren nada; la clave se entrega desde la salida, con el cobro
     validado y con auditoría. Esta regla no cambia.
