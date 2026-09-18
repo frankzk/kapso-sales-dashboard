@@ -1353,6 +1353,36 @@ Cómo se clasifica una guía que llega por reporte Excel:
   posibilidad que alguien tenga que activar.
 - Solo Aliclik tiene proceso de indemnización formal.
 
+#### Un distrito que Aliclik no tiene en su tabla no es un problema de almacén
+
+A la cotización solo se le mandan `warehouseId`, `lat` y `lng`: **el distrito lo
+deduce Aliclik del pin**. Cuando su tabla de ubigeo no lo tiene, responde «No se
+encontró el distrito en ubigeo para …» nombrando el distrito que acaba de
+reconocer.
+
+Nuestro aviso le pegaba detrás «Almacén(es) compatibles probados: …», así que el
+mensaje entero se leía como un fallo de almacén y mandaba a buscar por donde no
+era. Pasó con #AUR177131 (18-09-2026), cuyo pin cae en **San Miguel (San Román,
+Puno)**, distrito separado de Juliaca en 2019 por la Ley 30927. Nuestra tabla sí
+lo tiene (`211105`); la que no lo tiene es la de Aliclik.
+
+Reglas:
+
+- Cuando el fallo sea de ubigeo, el aviso **no nombra el almacén**. Dice el
+  distrito, dice que la tabla es de Aliclik y dice explícitamente que el almacén
+  está bien.
+- Las salidas son tres, y el aviso las da: revisar el pin en «Ubicación y
+  cobertura» por si la dirección es de otro distrito, despachar por otro courier,
+  o pedirle a Aliclik que agregue el distrito. **Kapta no mueve el pin sola**: el
+  pin decide a dónde va el paquete, así que acercarlo a Juliaca para que la
+  cotización pase es una decisión de una persona mirando la dirección.
+- Las referencias de la petición se conservan: son lo que se le reenvía a
+  Aliclik para que lo corrijan de su lado.
+
+Alcance medido: de 828 pedidos de San Román en 90 días, 165 llevan San Miguel en
+el distrito —uno de cada cinco— y además cualquier pin que caiga en esa zona
+falla aunque la dirección diga Juliaca, que es justo lo que pasó con #AUR177131.
+
 ### 10.1 Qué fuente manda: la API sobre el Excel
 
 El estado de una guía Aliclik llega por dos vías, y **no valen lo mismo**:
