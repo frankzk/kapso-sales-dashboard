@@ -1362,26 +1362,41 @@ reconocer.
 
 Nuestro aviso le pegaba detrás «Almacén(es) compatibles probados: …», así que el
 mensaje entero se leía como un fallo de almacén y mandaba a buscar por donde no
-era. Pasó con #AUR177131 (18-09-2026), cuyo pin cae en **San Miguel (San Román,
-Puno)**, distrito separado de Juliaca en 2019 por la Ley 30927. Nuestra tabla sí
-lo tiene (`211105`); la que no lo tiene es la de Aliclik.
+era. Pasó con #AUR177131 y #KP135145 (18-09-2026).
+
+**La causa costó dos intentos y las dos primeras explicaciones eran falsas.** Se
+dejan escritas porque son las que uno vuelve a proponer:
+
+1. «Su tabla no tiene el distrito porque es nuevo» (San Miguel, Ley 30927 de
+   2019). La tiró abajo el segundo caso: **Callería** es el distrito de Pucallpa
+   y no tiene nada de nuevo.
+2. «El almacén no cubre esa zona». También falsa: los dos pedidos van al almacén
+   **133 (GRUPO GF)** y de ese mismo almacén salieron 267 envíos a Puno y 96 a
+   Ucayali en 30 días.
+
+**Lo que encaja con todo: las dos mitades de Aliclik no se entienden.** Su
+geolocalizador devuelve el nombre OFICIAL del distrito y su tabla de ubigeo está
+indexada por el COMERCIAL. Los envíos que sí salen llevan `juliaca` (328),
+`pucallpa` (121), `puno` (118) y `yarinacocha` (33) — y «Pucallpa» ni siquiera es
+un distrito: la ciudad está en Callería. Cuando el pin cae donde los dos nombres
+difieren, una mitad lo reconoce y la otra dice que no existe.
+
+Eso además explica por qué el fallo parece aleatorio: depende de dónde cae el
+pin, no del pedido ni del producto.
 
 Reglas:
 
-- Cuando el fallo sea de ubigeo, el aviso **no nombra el almacén**. Dice el
-  distrito, dice que la tabla es de Aliclik y dice explícitamente que el almacén
-  está bien.
-- Las salidas son tres, y el aviso las da: revisar el pin en «Ubicación y
-  cobertura» por si la dirección es de otro distrito, despachar por otro courier,
-  o pedirle a Aliclik que agregue el distrito. **Kapta no mueve el pin sola**: el
-  pin decide a dónde va el paquete, así que acercarlo a Juliaca para que la
-  cotización pase es una decisión de una persona mirando la dirección.
+- Cuando el fallo sea de ubigeo, el aviso **no nombra el almacén**, y descarta
+  de frente las dos pistas falsas: no es el almacén ni el stock. Dice el
+  distrito y explica que Aliclik lo llama de dos maneras.
+- Las salidas son dos, y el aviso las da: revisar el pin en «Ubicación y
+  cobertura» por si la dirección es de otro distrito, o despachar por otro
+  courier y pasarle a Aliclik la referencia para que lo arreglen de su lado.
+  **Kapta no mueve el pin sola**: el pin decide a dónde va el paquete, así que
+  acercarlo al centro de Juliaca o Pucallpa para que la cotización pase es una
+  decisión de una persona mirando la dirección.
 - Las referencias de la petición se conservan: son lo que se le reenvía a
   Aliclik para que lo corrijan de su lado.
-
-Alcance medido: de 828 pedidos de San Román en 90 días, 165 llevan San Miguel en
-el distrito —uno de cada cinco— y además cualquier pin que caiga en esa zona
-falla aunque la dirección diga Juliaca, que es justo lo que pasó con #AUR177131.
 
 ### 10.1 Qué fuente manda: la API sobre el Excel
 
