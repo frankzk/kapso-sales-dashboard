@@ -2689,14 +2689,18 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
     de las cuentas de cobro: si se puede, va como variable.
   - **Hay DOS avisos, y el segundo es el que cobra de verdad** (0169). El de
     tránsito dice «va en camino, llega en 2 a 5 días hábiles». El de llegada
-    dice «ya está en tu agencia, tienes hasta el <fecha> para recogerlo». Son
-    momentos distintos y textos distintos, y confundirlos es mandarle a esperar
-    a quien ya tiene el paquete esperándola a ella.
-    - **La fecha límite son 28 días desde que llegó**, la misma regla de plazo
-      de esta sección, y va como una FECHA («16 de octubre») y no como «te
-      quedan 12 días»: el WhatsApp se queda en el chat y un contador relativo
-      envejece mal. Sin fecha de llegada registrada **no se inventa un plazo**:
-      el aviso no sale y queda escrito que faltaba `vence`.
+    dice «ya está en tu agencia, recógelo cuanto antes». Son momentos distintos
+    y textos distintos, y confundirlos es mandarle a esperar a quien ya tiene el
+    paquete esperándola a ella. **Los ocho parámetros son los mismos**: cambia
+    el texto, no los datos.
+    - **El aviso de llegada NO lleva fecha límite**, y es una decisión, no un
+      olvido: «puedes recogerlo hasta el 16 de octubre» es un permiso a 28 días
+      vista, y lo que provoca es dejarlo para después. Urge sin fecha y sin
+      amenaza — «recógelo lo antes posible» y, sobre todo, «paga ahora y al
+      llegar solo retiras», que es urgencia que le sirve A ELLA: con el cobro
+      validado, la clave está lista cuando llegue al mostrador. El token
+      `vence` existe en el código por si algún día hace falta (un recordatorio
+      cerca del plazo), pero no entra en el orden por omisión.
     - **Una fila por guía y por tipo.** La unique pasó de `shipment_id` a
       `(shipment_id, kind)`: una misma guía recibe el de tránsito y, días
       después, el de llegada — pero ninguno de los dos dos veces.

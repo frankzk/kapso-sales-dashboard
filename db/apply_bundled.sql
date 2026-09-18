@@ -13390,13 +13390,14 @@ alter table stores
   add column if not exists shalom_arrival_template_enabled boolean not null default false,
   add column if not exists shalom_arrival_template_name    text,
   add column if not exists shalom_arrival_params           text
-    not null default 'nombre,guia,codigo,producto,agencia,total,adelanto,saldo,vence',
+    not null default 'nombre,guia,codigo,producto,agencia,total,adelanto,saldo',
   add column if not exists shalom_arrival_attach_ticket    boolean not null default false;
 
 comment on column stores.shalom_arrival_template_enabled is
   'Aviso de «ya llegó a la agencia». Independiente del de tránsito: encender '
   'uno no enciende el otro.';
 comment on column stores.shalom_arrival_params is
-  'Orden de variables de la plantilla de llegada. Incluye `vence`, la fecha '
-  'límite de recojo (28 días desde la llegada, MOM §12), que es lo que '
-  'distingue este mensaje de un recordatorio más.';
+  'Orden de variables de la plantilla de llegada. Las mismas ocho del aviso de '
+  'tránsito: el texto cambia, los datos no. El token `vence` (fecha límite de '
+  'recojo) existe y NO se usa por omisión — se decidió urgir sin poner fecha, '
+  'porque una fecha a 28 días invita a dejarlo para después.';
