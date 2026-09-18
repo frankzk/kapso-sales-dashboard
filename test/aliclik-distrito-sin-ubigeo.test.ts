@@ -51,9 +51,19 @@ describe("el aviso dice la causa y descarta la pista falsa", () => {
     expect(aviso).toContain("su tabla de ubigeo");
   });
 
-  it("dice explícitamente que NO es el almacén", () => {
-    // Es la frase que ahorra la media hora que costó descubrirlo la primera vez.
-    expect(aviso).toContain("No es el almacén");
+  /**
+   * Las dos pistas falsas que se persiguieron antes de dar con esto, descartadas
+   * en el propio aviso para que nadie las vuelva a perseguir: el almacén 133
+   * despachó 267 envíos a Puno y 96 a Ucayali en 30 días.
+   */
+  it("descarta el almacén y el stock, que fue lo que se persiguió dos veces", () => {
+    expect(aviso).toContain("No es el almacén ni el stock");
+  });
+
+  it("y explica la causa real: los dos nombres del distrito", () => {
+    // Su geolocalizador devuelve el oficial y su tabla usa el comercial.
+    expect(aviso).toContain("nombre oficial del distrito");
+    expect(aviso).toContain("Callería/Pucallpa");
   });
 
   it("manda a un panel que existe de verdad", () => {
