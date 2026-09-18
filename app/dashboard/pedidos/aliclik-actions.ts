@@ -61,7 +61,12 @@ import {
   isCompatibleManualPortalGuide,
   selectExistingAliclikOrder,
 } from "@/lib/aliclik-existing-guide";
-import { aliclikStatusLabel, mapAliclikStatus } from "@/lib/aliclik-status";
+import {
+  aliclikStatusLabel,
+  avisoDistritoQueAliclikNoTiene,
+  distritoQueAliclikNoTiene,
+  mapAliclikStatus,
+} from "@/lib/aliclik-status";
 import { lockedIntentMessage, type LockedIntent } from "@/lib/aliclik-orphan-expiry";
 import {
   loadCatalogFor,
@@ -911,6 +916,22 @@ export async function previewAliclikGuide(
             .filter((ref): ref is string => Boolean(ref)),
         ),
       ].join(", ");
+      const ultimo = failures.at(-1)?.error ?? "Aliclik no respondió.";
+      // CUANDO EL PROBLEMA ES EL DISTRITO, EL ALMACÉN NO SE NOMBRA. Añadirle
+      // «Almacén(es) compatibles probados: …» a un fallo de ubigeo mandaba a
+      // buscar por donde no era — pasó con #AUR177131, y la conclusión de quien
+      // lo leyó fue «es imposible que no haya almacenes compatibles», que es
+      // cierta. Ver `distritoQueAliclikNoTiene`.
+      const distritoDesconocido = distritoQueAliclikNoTiene(ultimo);
+      if (distritoDesconocido) {
+        return {
+          ok: false,
+          error:
+            avisoDistritoQueAliclikNoTiene(distritoDesconocido) +
+            (refs ? ` Referencia(s): ${refs}.` : ""),
+          coordinate: { lat, lng },
+        };
+      }
       return {
         ok: false,
         error:
@@ -918,7 +939,7 @@ export async function previewAliclikGuide(
           // mensaje. Detrás siguen el error crudo y las referencias, que son lo
           // que se le reenvía a Aliclik.
           (outageNote ? `${outageNote} ` : "") +
-          `${failures.at(-1)?.error ?? "Aliclik no respondió."} ` +
+          `${ultimo} ` +
           `Almacén(es) compatibles probados: ${attempted || resolved.warehouseId}.` +
           (refs ? ` Referencia(s): ${refs}.` : ""),
         coordinate: { lat, lng },

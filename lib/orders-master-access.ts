@@ -50,6 +50,8 @@ import {
   type SwaypRouteCheck,
 } from "@/lib/order-route-plan";
 import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
+import { cargarMapaSwayp } from "@/lib/swayp-sku-map";
+import { productosSinVinculo } from "@/lib/swayp-productos";
 import type {
   OrderEventRow,
   OrderLineItem,
@@ -512,6 +514,11 @@ async function swaypRouteCheck(
     covered: check.reason !== "sin_cobertura",
     stockOk: check.ok,
     uncovered: check.uncovered,
+    // Lo que de verdad decide en Lima. Ver `productosSinVinculo`.
+    unlinked: productosSinVinculo(
+      lineItems.map((item) => ({ title: item.title, quantity: item.quantity, sku: item.sku ?? null })),
+      await cargarMapaSwayp(createAdminSupabase(), row.store_id),
+    ),
   };
 }
 

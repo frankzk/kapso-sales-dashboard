@@ -182,6 +182,25 @@ export function buildContenido(lineItems: Array<{ title: string; quantity: numbe
  *
  * `test/swayp-guide.test.ts` fija que las dos funciones no puedan discrepar.
  */
+/**
+ * ¿Este número tiene la forma de una guía EMITIDA POR SWAYP?
+ *
+ * Swayp numera con dígitos —hoy la serie `5000…`— y es el único número que su
+ * panel reconoce. Los que acuñábamos nosotros son `<pedido><DDMMYYYY>`, o sea
+ * `#KP13166415092026`, y llevan el `#` del nombre del pedido delante.
+ *
+ * Medido sobre 90 días antes de exigirlo: 62 guías con forma Swayp (todas
+ * `5000…`), 598 con forma nuestra (`#…`) y 3 de julio con `KP…` sin almohadilla.
+ * Un `^\d{6,}$` separa las dos familias sin tocar ninguna guía buena.
+ *
+ * NO valida que la guía exista en Swayp —eso solo lo sabe Swayp— sino que el
+ * número no sea uno de los nuestros. Sirve para la puerta donde la operadora
+ * escribe a mano el número que sacó de su panel.
+ */
+export function esNumeroDeGuiaSwayp(code: string | null | undefined): boolean {
+  return /^\d{6,}$/.test((code ?? "").trim());
+}
+
 export function esCiudadPorApiSwayp(
   city: string,
   senders: Record<string, SwaypSender>,

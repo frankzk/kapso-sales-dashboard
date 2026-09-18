@@ -523,3 +523,55 @@ export function motivoDelCourier(reportedStatus: string | null | undefined): Mot
     vioElProducto: porStatus?.vioElProducto ?? false,
   };
 }
+
+// ---------------------------------------------------------------------------
+// El distrito que Aliclik no tiene en su tabla
+// ---------------------------------------------------------------------------
+
+/**
+ * ¿Aliclik rechazó la cotización porque SU tabla de ubigeo no tiene el distrito?
+ *
+ * Devuelve el distrito tal como lo nombró Aliclik, o null si el error es otro.
+ *
+ * EL CASO REAL, #AUR177131 (18-09-2026). La cotización devolvía «No se encontró
+ * el distrito en ubigeo para SAN MIGUEL (SAN ROMAN, PUNO)» y nuestro aviso le
+ * pegaba detrás «Almacén(es) compatibles probados: 133», así que se leía como si
+ * el problema fuera el almacén. No lo era, y perseguirlo por ahí no lleva a
+ * ningún sitio.
+ *
+ * QUÉ PASA DE VERDAD. A la cotización solo le mandamos `warehouseId`, `lat` y
+ * `lng`: el distrito lo deduce Aliclik del pin. San Miguel se separó de Juliaca
+ * en 2019 (Ley 30927) y la tabla de Aliclik no lo tiene, así que reconoce el
+ * punto, lo nombra y acto seguido dice que no lo encuentra. Nuestra propia tabla
+ * sí lo tiene (`211105`), o sea que la diferencia es suya, no nuestra.
+ *
+ * NO SE ARREGLA DESDE ACÁ, y conviene decirlo: mover el pin unos metros para
+ * que caiga en Juliaca haría pasar la cotización, pero el pin es lo que decide
+ * a dónde va el paquete, así que eso lo decide una persona mirando la dirección,
+ * nunca el código por su cuenta.
+ *
+ * Alcance medido antes de escribir esto: de 828 pedidos de San Román en 90 días,
+ * 165 llevan San Miguel en el distrito — uno de cada cinco—, y además cualquier
+ * pin que caiga en esa zona falla aunque la dirección diga Juliaca, que es
+ * justo lo que le pasó a #AUR177131.
+ */
+export function distritoQueAliclikNoTiene(error: string | null | undefined): string | null {
+  const texto = (error ?? "").trim();
+  if (!texto) return null;
+  const m = /no se encontr[oó] el distrito en ubigeo para\s+(.+?)\s*(?:\.|$)/i.exec(texto);
+  const distrito = m?.[1]?.trim();
+  return distrito ? distrito : null;
+}
+
+/**
+ * Qué se le dice al operador cuando pasa eso. Nombra la causa, descarta la
+ * pista falsa —el almacén— y da las dos salidas reales.
+ */
+export function avisoDistritoQueAliclikNoTiene(distrito: string): string {
+  return (
+    `Aliclik ubicó el punto en ${distrito} y ese distrito no está en su tabla de ubigeo, ` +
+    `así que no puede cotizar. No es el almacén: el almacén está bien. ` +
+    `Verifica el punto en «Ubicación y cobertura» —si la dirección es de otro distrito, corrígelo— ` +
+    `o despacha este pedido por otro courier. Si el punto es correcto, hay que pedirle a Aliclik que agregue el distrito.`
+  );
+}
