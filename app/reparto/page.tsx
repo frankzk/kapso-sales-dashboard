@@ -3,7 +3,8 @@ import { getCurrentUser } from "@/lib/access";
 import { getMyRider, getRouteDetail, getRoutes } from "@/lib/routes-access";
 import { RiderRouteScreen } from "@/components/rider-route";
 import { RiderReceiveBox } from "@/components/rider-receive-box";
-import { getMyGfLoads } from "@/lib/gf-rider-loads";
+import { getMyGfLoads, getMyPickupCheckRequired } from "@/lib/gf-rider-loads";
+import { riderScreenFor } from "@/lib/grupo-gf-courier";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { getRiderSheet, loadRiderVocabulary } from "@/lib/sheets/rider-access";
 import { limaDate } from "@/lib/sheets/resolver";
@@ -65,7 +66,8 @@ export default async function RepartoPage({
   // Primero la caja, después la ruta (MOM §29.13): mientras haya una carga
   // cotejada por oficina y no recibida, el motorizado verifica sus paquetes y
   // dice cuáles no recoge. La ruta se muestra recién con la custodia cambiada.
-  if (loads.some((load) => load.state === "ready_for_pickup" || load.state === "pickup_check")) {
+  const pickupRequired = await getMyPickupCheckRequired();
+  if (riderScreenFor(pickupRequired, loads.map((load) => load.state)) === "recibir_caja") {
     return <RiderReceiveBox riderName={rider.full_name} loads={loads} />;
   }
   return (

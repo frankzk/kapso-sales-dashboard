@@ -2301,6 +2301,7 @@ const TIMELINE_LABEL: Record<string, string> = {
   pickup_checked: "Recibido por el motorizado",
   pickup_declined: "No recogido por el motorizado",
   handed_to_courier: "Entregado al courier",
+  custody_transferred: "Custodia entregada al motorizado",
   manifest_created: "Caja abierta",
   manifest_cancelled: "Caja cancelada",
   import: "Reporte importado",

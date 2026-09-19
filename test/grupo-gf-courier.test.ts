@@ -207,3 +207,19 @@ describe("cashLimitVerdict (MOM §29.9)", () => {
     expect(cashLimitVerdict({ currentCod: 9000, addingCod: 1, warningAmount: null, limitAmount: null }).status).toBe("ok");
   });
 });
+
+import { custodyOnAssign, riderScreenFor } from "@/lib/grupo-gf-courier";
+
+describe("verificación del motorizado como flag (0175, MOM §29.13)", () => {
+  it("con el flag activado, una carga cotejada y sin custodia manda a «Recibir mi caja»", () => {
+    expect(riderScreenFor(true, ["ready_for_pickup"])).toBe("recibir_caja");
+    expect(riderScreenFor(true, ["pickup_check", "in_custody"])).toBe("recibir_caja");
+    expect(riderScreenFor(true, ["in_custody"])).toBe("ruta");
+    expect(riderScreenFor(true, [])).toBe("ruta");
+  });
+  it("con el flag desactivado nunca ve «Recibir mi caja» y la custodia pasa al asignar", () => {
+    expect(riderScreenFor(false, ["ready_for_pickup", "pickup_check"])).toBe("ruta");
+    expect(custodyOnAssign(false)).toBe(true);
+    expect(custodyOnAssign(true)).toBe(false);
+  });
+});

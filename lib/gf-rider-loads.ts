@@ -1,5 +1,6 @@
 import { createAdminSupabase } from "@/lib/db";
 import { getMyRider } from "@/lib/routes-access";
+import { riderPickupCheckRequired } from "@/lib/grupo-gf-courier-route-access";
 
 export interface RiderLoadItem {
   id: string;
@@ -75,4 +76,14 @@ export async function getMyGfLoads(): Promise<RiderLoad[]> {
       items,
     };
   }));
+}
+
+/** Si el motorizado debe verificar su caja (0175): se lee por la organización de su ficha. */
+export async function getMyPickupCheckRequired(): Promise<boolean> {
+  const rider = await getMyRider();
+  if (!rider) return true;
+  const admin = createAdminSupabase();
+  const { data } = await admin.from("riders").select("org_id").eq("id", rider.id).maybeSingle();
+  if (!data?.org_id) return true;
+  return riderPickupCheckRequired(admin, data.org_id as string);
 }

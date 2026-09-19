@@ -4769,6 +4769,28 @@ paradas se crean solo para lo aceptado. La ruta aparece recién con la custodia
 cambiada. Un paquete ya recibido no se rechaza desde el teléfono: lo retira el
 supervisor.
 
+**La verificación del motorizado es opcional, y se decide en datos.** El flag
+`logistics_providers.rider_pickup_check_required` (0175) gobierna el paso
+«Recibir mi caja». En `true`, todo como se describe arriba: oficina coteja, el
+motorizado escanea y la custodia cambia al 100 % de los aceptados. En `false`,
+la verificación queda **separada del flujo**: basta con asignar. En cuanto el
+supervisor pone paquetes en la caja del día —desde la lista o escaneando— la
+custodia pasa al motorizado en el acto (`gf_assign_custody`, actor el
+supervisor, evento `custody_transferred` con la nota «Custodia al asignar:
+verificación del motorizado desactivada»), el trigger crea las paradas y
+`/reparto` le muestra su ruta para que empiece. El cotejo de oficina y la
+recepción del motorizado quedan como pasos opcionales que no bloquean nada: si
+se hacen, se registran igual (un cotejo sobre una caja ya en custodia se acepta
+como «registro opcional»); lo que no se admite es alterar la pertenencia de una
+caja que ya salió. El motorizado nunca ve «Recibir mi caja» con el flag en
+`false`. El valor de producción quedó en **`false`** por decisión de la
+operación (19-09-2026). Se cambia sin desplegar:
+
+```sql
+update logistics_providers set rider_pickup_check_required = true  where code = 'grupo-gf-courier'; -- volver a exigir la verificación
+update logistics_providers set rider_pickup_check_required = false where code = 'grupo-gf-courier'; -- basta con asignar
+```
+
 **El gesto único.** Escanear o fotografiar es un solo componente
 (`ScanAction`) y el contexto lo fija la pantalla, nunca el usuario:
 `supervisor_asignacion` → tomar + asignar + `office_checked`;

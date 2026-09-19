@@ -65,6 +65,9 @@ paquete); el motorizado deja de ver la ruta hasta que aceptó su caja.
   (`removed_at` con motivo «No recogido por X: …») para que la custodia pase con
   los aceptados y el paquete quede libre para otra ruta; la solicitud
   logística vuelve a `accepted` con observación. RPC `gf_rider_decline`.
+- `logistics_providers.rider_pickup_check_required` (0175): la verificación
+  del motorizado es un flag. En `false` (producción), asignar entrega la
+  custodia (`gf_assign_custody`) y el cotejo/recepción son opcionales.
 - `dispatch_route_reassigned` (order_events): mover un paquete de la caja de
   un motorizado a la de otro en el mismo día, con origen y destino.
 - `scanAssignToRider` (courier/actions): un QR = tomar + asignar + cotejar,

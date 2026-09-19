@@ -218,3 +218,17 @@ export async function loadGroupGfCourierRouteCheck(
     sameDayCutoff,
   };
 }
+
+/**
+ * El único sitio que lee el flag `rider_pickup_check_required` (0175). Sin
+ * proveedor o sin fila, se asume `true`: el comportamiento de siempre.
+ */
+export async function riderPickupCheckRequired(sb: SupabaseClient, orgId: string): Promise<boolean> {
+  const { data } = await sb
+    .from("logistics_providers")
+    .select("rider_pickup_check_required")
+    .eq("org_id", orgId)
+    .eq("code", "grupo-gf-courier")
+    .maybeSingle();
+  return (data as { rider_pickup_check_required?: boolean | null } | null)?.rider_pickup_check_required ?? true;
+}

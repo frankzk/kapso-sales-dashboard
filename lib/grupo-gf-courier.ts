@@ -267,3 +267,25 @@ export function cashLimitVerdict(input: {
   }
   return { status: "ok", total, message: null };
 }
+
+// ---------------------------------------------------------------------------
+// Verificación de la caja por el motorizado: un flag en la base (0175, §29.13)
+// ---------------------------------------------------------------------------
+
+export type RiderScreen = "recibir_caja" | "ruta";
+
+/**
+ * Qué ve el motorizado al abrir /reparto. Con la verificación activada, una
+ * carga cotejada por oficina y sin custodia lo manda a «Recibir mi caja»; con
+ * la verificación desactivada nunca ve esa pantalla: la custodia ya cambió al
+ * asignar y lo que tiene es su ruta.
+ */
+export function riderScreenFor(pickupCheckRequired: boolean, loadStates: readonly string[]): RiderScreen {
+  if (!pickupCheckRequired) return "ruta";
+  return loadStates.some((state) => state === "ready_for_pickup" || state === "pickup_check") ? "recibir_caja" : "ruta";
+}
+
+/** Si al asignar hay que entregar la custodia en el acto (flag en false). */
+export function custodyOnAssign(pickupCheckRequired: boolean): boolean {
+  return !pickupCheckRequired;
+}

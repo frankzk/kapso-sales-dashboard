@@ -6,6 +6,7 @@ import { z } from "zod";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { riderPickupCheckRequired } from "@/lib/grupo-gf-courier-route-access";
 import { isCourierTbd } from "@/lib/shipment-output";
 import {
   courierKey,
@@ -555,7 +556,12 @@ export async function scanManifestItem(
   const [manifest, candidates] = await Promise.all([visibleManifest(manifestId), findScanCandidates(code)]);
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
   if (!candidates.length) return { error: SCAN_NOT_FOUND };
-  if (["in_custody", "cancelled"].includes(manifest.state)) return { error: "Esa ruta ya está cerrada." };
+  if (manifest.state === "cancelled") return { error: "Esa ruta ya está cerrada." };
+  // Con la verificación del motorizado desactivada (0175), un cotejo sobre una
+  // caja ya en custodia es un registro opcional, no un error.
+  const optionalCheck = manifest.state === "in_custody" && courierKey(manifest.courier) === "propio"
+    && !(await riderPickupCheckRequired(createAdminSupabase(), manifest.org_id));
+  if (manifest.state === "in_custody" && !optionalCheck) return { error: "Esa ruta ya está cerrada." };
   if (stage === "pickup" && !needsRiderCheck(manifest.kind)) {
     return { error: "Esta ruta no tiene motorizado que coteje: se cierra anotando quién recoge." };
   }
@@ -608,7 +614,7 @@ export async function scanManifestItem(
       .eq("custody_state", "empresa");
   }
 
-  const state = await recalculateManifest(manifestId, user.id);
+  const state = optionalCheck ? ("in_custody" as DispatchManifestState) : await recalculateManifest(manifestId, user.id);
   await auditDispatch({
     orgId: manifest.org_id,
     manifestId,
@@ -619,6 +625,7 @@ export async function scanManifestItem(
   });
 
   let notice = stage === "office" ? "Paquete cotejado por oficina." : "Paquete recibido por el motorizado.";
+  if (optionalCheck) notice += " (registro opcional: la caja ya estaba en poder del motorizado)";
   if (stage === "pickup" && state === "pickup_check") {
     const { data: remaining } = await admin
       .from("dispatch_manifest_items")

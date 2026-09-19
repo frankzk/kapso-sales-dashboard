@@ -178,6 +178,7 @@ export function GrupoGfCourierBoard({
           riders={snapshot.operations.riders}
           manifests={manifests}
           canManageDispatch={snapshot.canManageDispatch}
+          riderPickupCheckRequired={provider.rider_pickup_check_required ?? true}
           pending={pending}
           run={run}
         />

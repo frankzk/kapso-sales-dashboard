@@ -21,6 +21,7 @@ import { manualRouteGuideCode, pickFillableRouteOutput } from "@/lib/shipment-ou
 import { courierKey, normalizeDispatchScan } from "@/lib/dispatch";
 import { lookupDispatchShipment, scanManifestItem } from "@/app/dashboard/pedidos/despacho/actions";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
+import { custodyOnAssign } from "@/lib/grupo-gf-courier";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 
 const COURIER_PATH = "/dashboard/courier";
@@ -40,6 +41,8 @@ export interface CourierProviderRow {
   same_day_cutoff: string;
   cash_warning_amount: number;
   cash_limit_amount: number;
+  /** 0175: el motorizado verifica su caja (true) o la custodia pasa al asignar (false). */
+  rider_pickup_check_required: boolean;
 }
 
 export interface CourierAgreementRow {
@@ -573,7 +576,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
   const [{ data: providerData }, districtsResult] = await Promise.all([
     sb
       .from("logistics_providers")
-      .select("id,org_id,code,name,status,same_day_cutoff,cash_warning_amount,cash_limit_amount")
+      .select("id,org_id,code,name,status,same_day_cutoff,cash_warning_amount,cash_limit_amount,rider_pickup_check_required")
       .eq("org_id", orgId)
       .eq("code", "grupo-gf-courier")
       .maybeSingle(),
@@ -1037,7 +1040,7 @@ export async function assignGroupGfCourierRoute(
   const [{ data: provider }, { data: rider }] = await Promise.all([
     admin
       .from("logistics_providers")
-      .select("id,cash_warning_amount,cash_limit_amount")
+      .select("id,cash_warning_amount,cash_limit_amount,rider_pickup_check_required")
       .eq("org_id", orgId)
       .eq("code", "grupo-gf-courier")
       .eq("status", "active")
@@ -1173,7 +1176,7 @@ export async function assignGroupGfCourierRoute(
     }
     const manifest = { id: manifestId as string };
     manifestIds.push(manifest.id);
-
+    let insertedAny = false;
     for (const request of group) {
       const shipmentId = request.shipment_id as string;
       const inserted = await admin.from("dispatch_manifest_items").insert({
@@ -1228,6 +1231,18 @@ export async function assignGroupGfCourierRoute(
       ]);
       changedOrderIds.add(request.order_id);
       assigned += 1;
+      insertedAny = true;
+    }
+    // Verificación del motorizado desactivada (0175): la custodia pasa al
+    // asignar, el trigger crea las paradas y el motorizado ve su ruta.
+    if (insertedAny && custodyOnAssign(Boolean((provider as { rider_pickup_check_required?: boolean | null }).rider_pickup_check_required ?? true))) {
+      const { data: custodyOrders, error: custodyError } = await admin.rpc("gf_assign_custody", { p_manifest_id: manifest.id, p_actor: auth.userId });
+      if (custodyError) {
+        cashWarnings.push(`Asignados, pero la custodia no pasó sola: ${custodyError.message}`);
+      } else {
+        for (const id of (custodyOrders ?? []) as string[]) changedOrderIds.add(id);
+        cashWarnings.push(`Custodia entregada a ${rider.full_name}: sus paquetes ya están en su ruta.`);
+      }
     }
   }
 

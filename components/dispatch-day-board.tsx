@@ -37,6 +37,8 @@ interface Props {
   riders: CourierRiderOption[];
   manifests: DispatchManifest[];
   canManageDispatch: boolean;
+  /** 0175: si el motorizado verifica su caja o la custodia pasa al asignar. */
+  riderPickupCheckRequired: boolean;
   pending: boolean;
   run: (action: () => Promise<CourierActionResult>) => void;
 }
@@ -195,6 +197,9 @@ export function DispatchDayBoard(props: Props) {
           <span><b className="text-slate-900">{queue.length}</b> por asignar</span>
           <span><b className="text-slate-900">{boxes.length}</b> cajas hoy</span>
           <span><b className="text-slate-900">{dayCod}</b> paquetes en cajas</span>
+          <span className={cn("rounded-full px-2 py-0.5 font-medium", props.riderPickupCheckRequired ? "bg-sky-100 text-sky-800" : "bg-slate-100 text-slate-700")} title="Se cambia en la base: logistics_providers.rider_pickup_check_required">
+            verificación del motorizado: {props.riderPickupCheckRequired ? "activada" : "desactivada · la custodia pasa al asignar"}
+          </span>
           {declined.length > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-800">{declined.length} no recogidos</span>}
         </div>
       </div>
