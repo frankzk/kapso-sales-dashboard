@@ -18,7 +18,8 @@ import { resolveLimaDistrict } from "@/lib/order-coverage";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { manualRouteGuideCode, pickFillableRouteOutput } from "@/lib/shipment-output";
-import { courierKey } from "@/lib/dispatch";
+import { courierKey, normalizeDispatchScan } from "@/lib/dispatch";
+import { lookupDispatchShipment, scanManifestItem } from "@/app/dashboard/pedidos/despacho/actions";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 
@@ -685,6 +686,7 @@ const MAX_TAKE_ORDERS = 50;
 export async function takeGroupGfCourierOrders(
   orgId: string,
   orderIds: string[],
+  opts: { scheduledFor?: string | null } = {},
 ): Promise<TakeCourierOrdersResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return { ...auth, accepted: [], alreadyAccepted: [], failed: [] };
@@ -766,7 +768,10 @@ export async function takeGroupGfCourierOrders(
         continue;
       }
 
-      const scheduledFor = scheduledDay(check.sameDayCutoff);
+      // El corte (11:30) fija el primer día posible; el supervisor puede
+      // pedir uno posterior (modo escaneo, §29.13), nunca uno anterior.
+      const earliest = scheduledDay(check.sameDayCutoff);
+      const scheduledFor = opts.scheduledFor && DATE_RE.test(opts.scheduledFor) && opts.scheduledFor > earliest ? opts.scheduledFor : earliest;
       const requestId = randomUUID();
       const idempotencyKey = `kapta:${check.providerId}:${orderId}`;
       const requestInsert = await admin
@@ -971,14 +976,14 @@ export interface AssignCourierRouteResult extends CourierActionResult {
   cashWarning?: string;
 }
 
-export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[], opts: { overrideCash?: boolean } = {}): Promise<CourierActionResult> {
+export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[], opts: { overrideCash?: boolean; scheduledFor?: string | null } = {}): Promise<CourierActionResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   const admin = createAdminSupabase();
   const { data: rider } = await admin.from("riders").select("id,courier").eq("id", riderId).eq("org_id", orgId).eq("active", true).maybeSingle();
   if (!rider || !isGroupGfRiderCourier(rider.courier)) return { error: "Elige un motorizado activo de Grupo GF." };
-  const taken = await takeGroupGfCourierOrders(orgId, orderIds);
+  const taken = await takeGroupGfCourierOrders(orgId, orderIds, { scheduledFor: opts.scheduledFor ?? null });
   const acceptedIds = [...taken.accepted.map((item) => item.orderId), ...taken.alreadyAccepted];
   if (!acceptedIds.length) return { error: taken.error ?? "No se pudieron tomar los pedidos." };
   const { data: requests, error } = await admin.from("logistics_requests")
@@ -1752,4 +1757,123 @@ async function recalculateManifestState(admin: ReturnType<typeof createAdminSupa
     .from("dispatch_manifests")
     .update({ state: next, office_completed_at: officeComplete ? new Date().toISOString() : null, office_completed_by: officeComplete ? actor : null })
     .eq("id", manifestId);
+}
+
+// ---------------------------------------------------------------------------
+// Modo escaneo (MOM §29.13): un QR = tomar + asignar + cotejar en oficina.
+// ---------------------------------------------------------------------------
+
+export type ScanAssignStatus =
+  | "asignado_cotejado"
+  | "ya_en_caja"
+  | "en_otra_caja"
+  | "no_elegible"
+  | "bloqueado_efectivo"
+  | "desconocido";
+
+export interface ScanAssignLine {
+  code: string;
+  status: ScanAssignStatus;
+  orderId: string | null;
+  orderName: string | null;
+  shipmentId: string | null;
+  /** Caja donde quedó (o donde ya estaba). */
+  manifestId: string | null;
+  riderName: string | null;
+  amount: number | null;
+  message: string;
+  cashWarning?: string | null;
+}
+
+/**
+ * El supervisor tiene el paquete en la mano y lo escanea: ese gesto toma el
+ * pedido (si hace falta), lo pone en la caja del motorizado del día y lo deja
+ * cotejado por oficina. Reutiliza las tres acciones que ya existían, no las
+ * duplica. Devuelve una línea con el resultado para la lista viva.
+ */
+export async function scanAssignToRider(
+  orgId: string,
+  riderId: string,
+  rawCode: string,
+  opts: { overrideCash?: boolean; scheduledFor?: string | null } = {},
+): Promise<ScanAssignLine> {
+  const code = normalizeDispatchScan(rawCode).slice(0, 200);
+  const base: ScanAssignLine = { code, status: "desconocido", orderId: null, orderName: null, shipmentId: null, manifestId: null, riderName: null, amount: null, message: "" };
+  if (!code) return { ...base, message: "Escanea el QR o el código del paquete." };
+  const auth = await requireManager(orgId);
+  if ("error" in auth) return { ...base, status: "no_elegible", message: auth.error };
+  if (!auth.canManageDispatch) return { ...base, status: "no_elegible", message: "No tienes permiso para organizar rutas." };
+  const admin = createAdminSupabase();
+  const { data: rider } = await admin.from("riders").select("id,full_name,courier").eq("id", riderId).eq("org_id", orgId).eq("active", true).maybeSingle();
+  if (!rider || !isGroupGfRiderCourier(rider.courier)) return { ...base, status: "no_elegible", message: "Elige un motorizado activo de Grupo GF." };
+
+  // 1) ¿A qué pedido apunta el código? Primero como salida (QR, código de
+  // salida, guía); si no, como número de pedido de las tiendas de la org.
+  let orderId: string | null = null;
+  let shipmentId: string | null = null;
+  const found = await lookupDispatchShipment(code);
+  if (found.shipment) {
+    orderId = found.shipment.order_id;
+    shipmentId = found.shipment.id;
+  } else if (!found.error?.includes("salidas")) {
+    const name = code.replace(/^#/, "");
+    const { data: stores } = await admin.from("stores").select("id").eq("org_id", orgId);
+    const storeIds = ((stores ?? []) as { id: string }[]).map((s) => s.id);
+    const { data: orders } = await admin.from("orders").select("id,name").in("store_id", storeIds).or(`name.ilike.${name},name.ilike.#${name}`).limit(2);
+    if (orders?.length === 1) orderId = orders[0]!.id;
+  } else {
+    return { ...base, message: found.error ?? "Ese pedido tiene varias salidas: escanea el QR de la caja." };
+  }
+  if (!orderId) return { ...base, message: "No encontramos un pedido con ese QR, guía o número." };
+  const { data: om } = await admin.from("order_master").select("order_name,order_total,store_id").eq("order_id", orderId).maybeSingle();
+  const line: ScanAssignLine = { ...base, orderId, shipmentId, orderName: (om?.order_name as string | null) ?? null, amount: om?.order_total == null ? null : Number(om.order_total), riderName: rider.full_name };
+
+  // 2) ¿Ya está en una caja activa?
+  if (shipmentId) {
+    const { data: active } = await admin
+      .from("dispatch_manifest_items")
+      .select("manifest_id,office_checked_at,dispatch_manifests!inner(id,rider_id,driver_name,route_date,state)")
+      .eq("shipment_id", shipmentId)
+      .is("removed_at", null)
+      .maybeSingle();
+    const box = (active as { manifest_id: string; office_checked_at: string | null; dispatch_manifests: { rider_id: string | null; driver_name: string | null; route_date: string; state: string } } | null) ?? null;
+    if (box) {
+      if (box.dispatch_manifests.rider_id === rider.id) {
+        if (box.office_checked_at) return { ...line, status: "ya_en_caja", manifestId: box.manifest_id, message: `Ya estaba en la caja de ${rider.full_name}, cotejado.` };
+        const checked = await scanManifestItem(box.manifest_id, code, "office");
+        if (checked.error) return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: checked.error };
+        return { ...line, status: "asignado_cotejado", manifestId: box.manifest_id, message: `Ya estaba en la caja de ${rider.full_name}; quedó cotejado.` };
+      }
+      return { ...line, status: "en_otra_caja", manifestId: box.manifest_id, riderName: box.dispatch_manifests.driver_name ?? "otro motorizado", message: `Está en la caja de ${box.dispatch_manifests.driver_name ?? "otro motorizado"} del ${box.dispatch_manifests.route_date}.` };
+    }
+  }
+
+  // 3) Tomar (idempotente) y asignar.
+  const taken = await takeGroupGfCourierOrders(orgId, [orderId], { scheduledFor: opts.scheduledFor ?? null });
+  if (taken.failed.length) return { ...line, status: "no_elegible", message: taken.failed[0]!.error };
+  if (!taken.accepted.length && !taken.alreadyAccepted.length) return { ...line, status: "no_elegible", message: taken.error ?? "No se pudo tomar el pedido." };
+  const { data: provider } = await admin.from("logistics_providers").select("id").eq("org_id", orgId).eq("code", "grupo-gf-courier").maybeSingle();
+  const { data: requests } = await admin.from("logistics_requests").select("id").eq("order_id", orderId).eq("provider_id", provider?.id ?? "").in("status", ["accepted", "scheduled"]);
+  const requestIds = ((requests ?? []) as { id: string }[]).map((r) => r.id);
+  if (!requestIds.length) return { ...line, status: "no_elegible", message: "El pedido se tomó pero no se pudo asignar. Continúa desde la lista." };
+  const assigned = await assignGroupGfCourierRoute(orgId, rider.id, requestIds, { overrideCash: opts.overrideCash });
+  if (!assigned.assigned) {
+    const why = assigned.failed[0]?.error ?? assigned.error ?? "No se pudo asignar.";
+    return { ...line, status: /efectivo|límite/i.test(why) ? "bloqueado_efectivo" : "no_elegible", message: why };
+  }
+  const manifestId = assigned.manifestIds[0] ?? null;
+  // 4) Cotejar en oficina en el mismo gesto: el supervisor tiene la caja en la mano.
+  const shipmentCode = taken.accepted[0]?.outputCode ?? line.orderName ?? code;
+  const checked = manifestId ? await scanManifestItem(manifestId, shipmentCode, "office") : { error: "Sin caja." };
+  if (checked.error) {
+    return { ...line, status: "no_elegible", manifestId, message: `Asignado a ${rider.full_name}, pero no se pudo cotejar: ${checked.error}`, cashWarning: assigned.cashWarning ?? null };
+  }
+  return {
+    ...line,
+    status: "asignado_cotejado",
+    manifestId,
+    shipmentId: taken.accepted[0]?.shipmentId ?? shipmentId,
+    message: `Asignado a ${rider.full_name} y cotejado.`,
+    cashWarning: assigned.cashWarning ?? null,
+  };
 }

@@ -3,13 +3,15 @@
 // declara el contexto y esta tabla decide la acción y el evento. Puro,
 // probado en test/scan-action.test.ts.
 
-export type ScanContext = "oficina_cotejo" | "motorizado_recepcion" | "motorizado_entrega" | "supervisor_retiro";
+export type ScanContext = "oficina_cotejo" | "motorizado_recepcion" | "motorizado_entrega" | "supervisor_retiro" | "supervisor_asignacion";
 
 export interface ScanPlan {
   /** `scan`: lee un código (QR, guía, pedido). `photo`: toma una foto. */
   gesture: "scan" | "photo";
   /** Evento que queda en el pedido (`order_events.kind`). */
   eventKind: string;
+  /** Otros eventos que el mismo gesto deja cuando hace varias cosas a la vez. */
+  alsoEmits?: readonly string[];
   /** Etapa del cotejo cuando el gesto escribe en la caja. */
   stage: "office" | "pickup" | null;
   /** Hace falta un motivo escrito antes de ejecutar. */
@@ -47,6 +49,16 @@ export const SCAN_PLANS: Record<ScanContext, ScanPlan> = {
     actor: "motorizado",
     label: "Tomar foto",
     hint: "La foto de la entrega es la evidencia de la parada.",
+  },
+  supervisor_asignacion: {
+    gesture: "scan",
+    eventKind: "dispatch_route_assigned",
+    alsoEmits: ["logistics_request_accepted", "office_checked"],
+    stage: "office",
+    needsReason: false,
+    actor: "supervisor",
+    label: "Asignar y cotejar",
+    hint: "Con el paquete en la mano: cada QR lo toma, lo pone en la caja del motorizado y lo deja cotejado.",
   },
   supervisor_retiro: {
     gesture: "scan",

@@ -14,11 +14,14 @@ import { cn } from "@/components/ui";
 import { ScanAction } from "@/components/scan-action";
 import { activeDispatchItems } from "@/lib/dispatch";
 import { boxNextStep, dayBoxes, declinedPackages, splitAssignment, type DayManifest, type RiderBox } from "@/lib/dispatch-day";
+import { addToTray, removeFromTray, summarizeScans, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import {
   assignGroupGfCourierRoute,
   moveManifestItem,
+  scanAssignToRider,
   takeAndAssignGroupGfCourierOrders,
+  type ScanAssignLine,
   type CourierAcceptedOrder,
   type CourierActionResult,
   type CourierAvailableOrder,
@@ -67,6 +70,33 @@ export function DispatchDayBoard(props: Props) {
   const [district, setDistrict] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openBox, setOpenBox] = useState<string | null>(null);
+  // Modo escaneo (§29.13): la vía principal. Fecha de la caja, hoy por defecto.
+  const [scanDay, setScanDay] = useState(day);
+  const [lines, setLines] = useState<ScanAssignLine[]>([]);
+  const [tray, setTray] = useState<TrayEntry[]>([]);
+  const [draining, setDraining] = useState(false);
+  const summary = useMemo(() => summarizeScans(lines), [lines]);
+
+  function pushLine(line: ScanAssignLine) {
+    setLines((cur) => [line, ...cur].slice(0, 200));
+    if (line.status === "asignado_cotejado" || line.status === "ya_en_caja") router.refresh();
+  }
+
+  /** «Escanear primero»: al elegir motorizado, la bandeja se vacía en la caja de una vez. */
+  async function drainTray(targetRiderId: string) {
+    if (!targetRiderId || !tray.length || draining) return;
+    setDraining(true);
+    try {
+      for (const entry of tray) {
+        const line = await scanAssignToRider(orgId, targetRiderId, entry.code, { overrideCash, scheduledFor: scanDay });
+        setLines((cur) => [line, ...cur].slice(0, 200));
+        setTray((cur) => removeFromTray(cur, entry.code));
+      }
+      router.refresh();
+    } finally {
+      setDraining(false);
+    }
+  }
 
   const queue = useMemo<QueueRow[]>(() => {
     const taken: QueueRow[] = props.accepted
@@ -189,7 +219,94 @@ export function DispatchDayBoard(props: Props) {
         {/* ── 1 · Asignar ── */}
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 px-4 py-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">1 · Asignar</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">1 · Asignar escaneando</p>
+            <p className="mt-1 text-sm text-slate-600">Elige motorizado y escanea QR tras QR: cada lectura toma el pedido, lo pone en su caja y lo deja cotejado. Sin motorizado, los QR se guardan y se asignan todos al elegirlo.</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <select
+                value={riderId}
+                onChange={(e) => { setRiderId(e.target.value); if (tray.length) void drainTray(e.target.value); }}
+                aria-label="Motorizado para escanear"
+                className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm"
+              >
+                <option value="">Escanear primero, elegir después</option>
+                {riders.map((r) => <option key={r.id} value={r.id}>{r.fullName}</option>)}
+              </select>
+              <input type="date" value={scanDay} min={day} onChange={(e) => setScanDay(e.target.value || day)} aria-label="Día de la caja" className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm" />
+              <label className="flex items-center gap-1 text-xs text-slate-600" title="Límite de efectivo de la ruta (MOM §29.9)">
+                <input type="checkbox" checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} /> Autorizo superar el límite de efectivo
+              </label>
+            </div>
+            {canManageDispatch ? (
+              <ScanAction
+                context="supervisor_asignacion"
+                disabled={pending || draining}
+                assign={{ orgId, riderId, scheduledFor: scanDay, overrideCash }}
+                onQueue={(code) => setTray((cur) => addToTray(cur, code))}
+                onResult={(r) => { if (r.line) pushLine(r.line); }}
+              />
+            ) : (
+              <p className="mt-2 text-xs text-amber-700">Tu rol no organiza rutas: puedes mirar, no asignar.</p>
+            )}
+            {tray.length > 0 && (
+              <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50 p-2 text-sm text-sky-900">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span><b>{tray.length}</b> escaneados en espera de motorizado</span>
+                  <button type="button" disabled={!riderId || draining} onClick={() => void drainTray(riderId)} className="min-h-9 rounded-lg bg-sky-700 px-3 text-xs font-semibold text-white disabled:opacity-50">
+                    {draining ? "Asignando…" : riderId ? `Asignar los ${tray.length} a ${riderName}` : "Elige motorizado arriba"}
+                  </button>
+                </div>
+                <ul className="mt-1 flex flex-wrap gap-1">
+                  {tray.map((e) => (
+                    <li key={e.code} className="flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-xs">
+                      <span className="font-mono">{e.code}</span>
+                      <button type="button" aria-label={`Quitar ${e.code}`} onClick={() => setTray((cur) => removeFromTray(cur, e.code))} className="text-slate-400 hover:text-red-600">×</button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {lines.length > 0 && (
+              <div className="mt-3">
+                <div className="flex flex-wrap gap-3 text-xs text-slate-600">
+                  <span><b className="text-emerald-700">{summary.assigned}</b> en la caja</span>
+                  <span>efectivo previsto <b className="text-slate-900">{money(summary.cash)}</b></span>
+                  {summary.alreadyInBox > 0 && <span>{summary.alreadyInBox} ya estaban</span>}
+                  {summary.inOtherBox > 0 && <span className="text-amber-700">{summary.inOtherBox} en otra caja</span>}
+                  {summary.blocked > 0 && <span className="text-red-700">{summary.blocked} no elegibles</span>}
+                  {summary.unknown > 0 && <span className="text-red-700">{summary.unknown} desconocidos</span>}
+                  <button type="button" onClick={() => setLines([])} className="ml-auto underline">Limpiar</button>
+                </div>
+                <ul className="mt-2 max-h-72 divide-y divide-slate-100 overflow-auto rounded-lg border border-slate-200" aria-live="polite">
+                  {lines.map((l, i) => (
+                    <li key={`${l.code}:${i}`} className={cn("flex flex-wrap items-center gap-2 px-3 py-1.5 text-sm", l.status === "asignado_cotejado" ? "bg-emerald-50/60" : l.status === "ya_en_caja" ? "" : l.status === "en_otra_caja" ? "bg-amber-50/60" : "bg-red-50/60")}>
+                      <span className={cn("grid size-5 place-items-center rounded-full text-[11px] font-bold", l.status === "asignado_cotejado" ? "bg-emerald-600 text-white" : l.status === "ya_en_caja" ? "bg-slate-300 text-white" : l.status === "en_otra_caja" ? "bg-amber-500 text-white" : "bg-red-600 text-white")}>{l.status === "asignado_cotejado" ? "✓" : l.status === "en_otra_caja" ? "↔" : l.status === "ya_en_caja" ? "=" : "!"}</span>
+                      <span className="font-semibold text-slate-900">{l.orderName ?? l.code}</span>
+                      {l.amount != null && <span className="text-xs text-slate-500">{money(l.amount)}</span>}
+                      <span className="text-xs text-slate-600">{l.message}</span>
+                      {l.cashWarning && <span className="text-xs text-amber-700">{l.cashWarning}</span>}
+                      {l.status === "en_otra_caja" && l.manifestId && l.shipmentId && riderId && (
+                        <button
+                          type="button"
+                          disabled={pending || draining}
+                          onClick={() => run(async () => moveManifestItem(orgId, l.manifestId!, l.shipmentId!, riderId, `Escaneado en la caja de ${riderName}`))}
+                          className="min-h-8 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800 disabled:opacity-50"
+                        >
+                          Mover a {riderName}
+                        </button>
+                      )}
+                      {l.status === "bloqueado_efectivo" && !overrideCash && (
+                        <button type="button" onClick={() => setOverrideCash(true)} className="min-h-8 rounded-lg border border-red-300 px-2 text-xs font-medium text-red-800">Autorizar y volver a escanear</button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          <details className="group">
+          <summary className="cursor-pointer border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 hover:bg-slate-50">Asignar desde la lista <span className="font-normal normal-case text-slate-400">· vía secundaria, {queue.length} en cola</span></summary>
+          <div className="border-b border-slate-200 px-4 py-3">
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <input
                 value={query}
@@ -255,6 +372,7 @@ export function DispatchDayBoard(props: Props) {
             ))}
             {!visible.length && <li className="px-4 py-8 text-center text-sm text-slate-500">Nada por asignar con ese filtro.</li>}
           </ul>
+          </details>
         </div>
 
         {/* ── 2 · Cotejar por motorizado ── */}

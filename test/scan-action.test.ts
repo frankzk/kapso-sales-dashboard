@@ -8,6 +8,7 @@ describe("scanActionPlan", () => {
     expect(scanActionPlan("motorizado_recepcion")).toMatchObject({ gesture: "scan", eventKind: "pickup_checked", stage: "pickup", actor: "motorizado" });
     expect(scanActionPlan("motorizado_entrega")).toMatchObject({ gesture: "photo", eventKind: "delivered", stage: null, actor: "motorizado" });
     expect(scanActionPlan("supervisor_retiro")).toMatchObject({ gesture: "scan", eventKind: "package_removed", needsReason: true, actor: "supervisor" });
+    expect(scanActionPlan("supervisor_asignacion")).toMatchObject({ gesture: "scan", eventKind: "dispatch_route_assigned", stage: "office", actor: "supervisor", alsoEmits: ["logistics_request_accepted", "office_checked"] });
   });
 
   it("no hay dos contextos que dejen el mismo evento", () => {

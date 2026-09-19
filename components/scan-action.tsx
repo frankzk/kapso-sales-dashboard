@@ -15,12 +15,15 @@ import { DispatchCamera } from "@/components/dispatch-camera";
 import { scanActionPlan, type ScanContext } from "@/lib/scan-action";
 import { lookupDispatchShipment, removeManifestItem, scanManifestItem } from "@/app/dashboard/pedidos/despacho/actions";
 import { receiveMyGfPackage } from "@/app/reparto/receive";
+import { scanAssignToRider, type ScanAssignLine } from "@/app/dashboard/courier/actions";
 
 export interface ScanActionResult {
   error?: string;
   notice?: string;
   /** Solo en `motorizado_entrega`: la ruta de la foto ya subida. */
   path?: string;
+  /** Solo en `supervisor_asignacion`: la línea con el resultado del QR. */
+  line?: ScanAssignLine;
 }
 
 interface Props {
@@ -36,9 +39,13 @@ interface Props {
   label?: string;
   disabled?: boolean;
   onResult: (result: ScanActionResult) => void;
+  /** Solo en `supervisor_asignacion`. */
+  assign?: { orgId: string; riderId: string; scheduledFor?: string | null; overrideCash?: boolean };
+  /** Sin motorizado elegido, el QR se acumula en una bandeja en vez de ejecutarse. */
+  onQueue?: (code: string) => void;
 }
 
-export function ScanAction({ context, manifestId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult }: Props) {
+export function ScanAction({ context, manifestId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue }: Props) {
   const plan = scanActionPlan(context);
   const [busy, setBusy] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -57,6 +64,14 @@ export function ScanAction({ context, manifestId, stopId, photoKind = "entrega",
       } else if (context === "motorizado_recepcion") {
         if (!manifestId) return onResult({ error: "Falta la caja." });
         onResult(await receiveMyGfPackage(manifestId, code));
+      } else if (context === "supervisor_asignacion") {
+        if (!assign?.riderId) {
+          if (onQueue) onQueue(code);
+          else onResult({ error: "Elige un motorizado antes de escanear." });
+          return;
+        }
+        const line = await scanAssignToRider(assign.orgId, assign.riderId, code, { overrideCash: assign.overrideCash, scheduledFor: assign.scheduledFor ?? null });
+        onResult({ line, notice: line.message, error: line.status === "desconocido" || line.status === "no_elegible" || line.status === "bloqueado_efectivo" ? line.message : undefined });
       } else if (context === "supervisor_retiro") {
         if (!manifestId) return onResult({ error: "Falta la caja." });
         const found = await lookupDispatchShipment(code);

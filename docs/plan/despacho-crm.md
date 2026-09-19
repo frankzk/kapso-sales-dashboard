@@ -47,14 +47,16 @@ decide el evento por el contexto desde el que se abre.
 
 | Paso | Pantalla | Clics | Quién |
 | --- | --- | --- | --- |
-| Asignar | `/dashboard/courier` · «Despacho del día», columna izquierda: marcar pedidos (1 c/u) + «Asignar a Roy» (1). Tomar y asignar es una sola acción; fecha y límite de efectivo van dentro | 1 + N | Supervisor |
-| Cotejar | misma pantalla, columna derecha: abrir la caja de Roy (1) + un escaneo por paquete. Quitar o mover a otro motorizado desde la misma fila | 1 + N | Supervisor |
+| Asignar y cotejar (vía principal, modo escaneo) | `/dashboard/courier` · «Despacho del día»: elegir motorizado (1) + un escaneo por paquete. Cada QR toma el pedido, lo pone en la caja del día y lo deja cotejado por oficina en el mismo gesto; corte 11:30 y límite de efectivo van dentro. Variante «escanear primero»: los QR esperan en una bandeja y se asignan todos al elegir motorizado | 1 + N | Supervisor |
+| Asignar desde la lista (vía secundaria, plegada) | misma pantalla: marcar pedidos (1 c/u) + «Asignar a Roy» (1) | 1 + N | Supervisor |
+| Cotejar lo que faltara | misma pantalla, columna derecha: abrir la caja de Roy (1) + un escaneo por paquete. Quitar o mover a otro motorizado desde la misma fila | 1 + N | Supervisor |
 | Recibir | `/reparto` abre solo en «Recibir mi caja» mientras la carga esté cotejada y no recibida: un escaneo por paquete; «No lo recojo» + motivo (2) cuando aplica | N | Motorizado |
 | Reasignar lo no recogido | «Despacho del día», aviso «N no recogidos por Roy» → «Reasignar a…» (2) | 2 | Supervisor |
 | Reportar | `/reparto` (sin cambios de clics; la foto usa el gesto único) | 6-7 | Motorizado |
 
-Un pedido pasa de **3 pantallas y 9-10 clics a 1 pantalla y 2 + N clics** para
-el supervisor; el motorizado deja de ver la ruta hasta que aceptó su caja.
+Un pedido pasa de **3 pantallas y 9-10 clics a 1 pantalla y 1 clic + 1
+escaneo** para el supervisor (elegir motorizado una vez, escanear cada
+paquete); el motorizado deja de ver la ruta hasta que aceptó su caja.
 
 ## 3. Qué cambia en datos y código
 
@@ -65,8 +67,14 @@ el supervisor; el motorizado deja de ver la ruta hasta que aceptó su caja.
   logística vuelve a `accepted` con observación. RPC `gf_rider_decline`.
 - `dispatch_route_reassigned` (order_events): mover un paquete de la caja de
   un motorizado a la de otro en el mismo día, con origen y destino.
+- `scanAssignToRider` (courier/actions): un QR = tomar + asignar + cotejar,
+  reutilizando `takeGroupGfCourierOrders`, `assignGroupGfCourierRoute` y
+  `scanManifestItem`. La bandeja «escanear primero» y los contadores de la
+  lista viva son puros (`lib/dispatch-scan-tray.ts`).
 - `components/scan-action.tsx` + `lib/scan-action.ts`: el gesto único.
-  `context` decide acción y evento: `oficina_cotejo` → `office_checked`;
+  `context` decide acción y evento: `supervisor_asignacion` →
+  `logistics_request_accepted` + `dispatch_route_assigned` +
+  `office_checked`; `oficina_cotejo` → `office_checked`;
   `motorizado_recepcion` → `pickup_checked` / `pickup_declined`;
   `motorizado_entrega` → foto de la parada; `supervisor_retiro` → `package_removed`.
 - Pestaña «Despacho del día» (`components/dispatch-day-board.tsx`) sobre las

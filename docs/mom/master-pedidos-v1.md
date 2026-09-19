@@ -4734,13 +4734,24 @@ y dejaba tres huecos: el motorizado no podía decir «no lo recojo», mover un
 paquete entre cajas no dejaba evento, y el mismo gesto de escanear o
 fotografiar vivía en tres componentes que decidían por su cuenta.
 
-**Dos pasos para el supervisor, en una pantalla.** La pestaña «Despacho del
-día» de Grupo GF Courier tiene a la izquierda la cola de Lima (disponibles y
-tomados sin caja, con filtro por tienda y distrito) y un solo botón «Asignar a
-X» que toma y asigna en una acción, con el corte de las 11:30 y el límite de
-efectivo de §29.9 dentro. A la derecha, las cajas de hoy por motorizado con el
-cotejo de oficina en línea; desde la misma fila un paquete se **quita** (con
-motivo, `package_removed`) o se **mueve** a otro motorizado
+**Dos pasos para el supervisor, en una pantalla, con la pistola en la mano.**
+La pestaña «Despacho del día» de Grupo GF Courier abre en **modo escaneo**: el
+supervisor elige motorizado (y el día de la caja, hoy por defecto; nunca antes
+del que dicta el corte de las 11:30) y escanea QR tras QR. Cada lectura, en un
+solo gesto, **toma** el pedido si hacía falta, lo **pone en la caja** del
+motorizado del día y lo **deja cotejado por oficina**, porque es el propio
+supervisor quien tiene el paquete en la mano (`scanAssignToRider`, sobre las
+mismas acciones de tomar, asignar y cotejar; eventos
+`logistics_request_accepted`, `dispatch_route_assigned`, `office_checked`). El
+límite de efectivo de §29.9 se avisa en línea y bloquea salvo autorización
+explícita. La lista viva dice qué pasó con cada QR: asignado y cotejado; ya
+estaba en esa caja; está en la caja de otro motorizado (y ofrece moverlo); no
+elegible con el motivo; o QR desconocido. Sin motorizado elegido, los QR se
+guardan en una bandeja y se asignan todos al elegirlo («escanear primero»).
+La lista con selección múltiple queda plegada como vía secundaria. A la
+derecha, las cajas de hoy por motorizado con el cotejo de oficina en línea para
+lo que faltara; desde la misma fila un paquete se **quita** (con motivo,
+`package_removed`) o se **mueve** a otro motorizado
 (`dispatch_route_reassigned`, con origen y destino). Mover abre la carga del
 destino antes de retirar del origen: si el destino ya está en cotejo, no se
 toca nada, igual que al asignar (§29.5).
@@ -4760,6 +4771,7 @@ supervisor.
 
 **El gesto único.** Escanear o fotografiar es un solo componente
 (`ScanAction`) y el contexto lo fija la pantalla, nunca el usuario:
+`supervisor_asignacion` → tomar + asignar + `office_checked`;
 `oficina_cotejo` → `office_checked`; `motorizado_recepcion` →
 `pickup_checked` o `pickup_declined`; `motorizado_entrega` → foto de la
 parada; `supervisor_retiro` → `package_removed` con motivo. Cada uno deja su

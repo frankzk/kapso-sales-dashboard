@@ -776,9 +776,11 @@ MOM §29.13; auditoría en `docs/plan/despacho-crm.md`.
 1. **Migración `0174_manifest_item_not_picked.sql`**, a mano, antes del código:
    columnas `pickup_declined_*` en los ítems de la caja y el RPC
    `gf_rider_decline`. Smoke en `scripts/sql/gf_rider_decline_smoke.sql`.
-2. Pestaña «Despacho del día» en `/dashboard/courier` (predeterminada):
-   asignar en un paso (toma + asigna, con corte y límite de efectivo) y
-   cotejar por motorizado en la misma pantalla, con quitar y mover entre cajas
+2. Pestaña «Despacho del día» en `/dashboard/courier` (predeterminada), en
+   **modo escaneo**: motorizado + día de la caja y un QR por paquete que toma,
+   asigna y coteja en oficina de una vez (`scanAssignToRider`), con lista viva
+   y bandeja «escanear primero». La lista con selección múltiple queda plegada.
+   Cotejar por motorizado en la misma pantalla, con quitar y mover entre cajas
    (`moveManifestItem`, evento `dispatch_route_reassigned`). Las pestañas
    anteriores siguen disponibles.
 3. `/reparto` abre en «Recibir mi caja» mientras haya una carga cotejada y no
