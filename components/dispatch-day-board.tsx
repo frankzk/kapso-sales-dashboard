@@ -13,6 +13,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
+import { OrderLink } from "@/components/order-link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import { Hint } from "@/components/hint";
@@ -315,7 +316,7 @@ export function DispatchDayBoard(props: Props) {
               const reason = BLOCKED_REASON_LABEL[b.reason];
               return (
                 <li key={b.orderId} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1.5">
-                  <Link href={`/dashboard/pedidos?q=${encodeURIComponent(b.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">{b.orderName}</Link>
+                  <OrderLink orderId={b.orderId} className="font-semibold text-slate-950 hover:text-brand-700">{b.orderName}</OrderLink>
                   <span className="text-xs text-slate-500">{b.storeName} · {b.customerName} · {b.district}</span>
                   <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">{reason.label}</span>
                   {reason.fix === "tarifario" && <Link href="/dashboard/courier?tab=tariffs" className="text-[11px] text-brand-700 underline">Arreglar en Tarifario</Link>}
@@ -466,19 +467,19 @@ export function DispatchDayBoard(props: Props) {
                   <Sheet title="Filtros" onClose={() => setFiltersOpen(false)} anchored>
                     <div className="grid gap-3 text-sm">
                       <label className="grid gap-1 text-xs font-medium text-slate-600">Tienda
-                        <select value={filters.store} onChange={(e) => patchFilters({ store: e.target.value })} className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
+                        <select value={filters.store} onChange={(e) => patchFilters({ store: e.target.value })} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
                           <option value="">Todas</option>
                           {stores.map((st) => <option key={st} value={st}>{st}</option>)}
                         </select>
                       </label>
                       <label className="grid gap-1 text-xs font-medium text-slate-600">Distrito
-                        <select value={filters.district} onChange={(e) => patchFilters({ district: e.target.value })} className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
+                        <select value={filters.district} onChange={(e) => patchFilters({ district: e.target.value })} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
                           <option value="">Todos</option>
                           {districts.map((d) => <option key={d} value={d}>{d}</option>)}
                         </select>
                       </label>
                       <label className="grid gap-1 text-xs font-medium text-slate-600">Fecha de creación
-                        <select value={filters.created} onChange={(e) => patchFilters({ created: e.target.value as CreatedWindow })} className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
+                        <select value={filters.created} onChange={(e) => patchFilters({ created: e.target.value as CreatedWindow })} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
                           <option value="todo">Todo</option>
                           <option value="hoy">Hoy</option>
                           <option value="ayer">Ayer</option>
@@ -539,9 +540,9 @@ export function DispatchDayBoard(props: Props) {
                 <input type="checkbox" checked={selected.has(q.orderId)} onChange={() => toggle(q.orderId)} aria-label={`Marcar ${q.orderName}`} className="mt-1" />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Link href={`/dashboard/pedidos?q=${encodeURIComponent(q.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">{q.orderName}</Link>
+                    <OrderLink orderId={q.orderId} className="font-semibold text-slate-950 hover:text-brand-700">{q.orderName}</OrderLink>
                     <span className="text-xs text-slate-500">{q.storeName}</span>
-                    <Link href={`/dashboard/pedidos?q=${encodeURIComponent(q.orderName)}&abrir=${encodeURIComponent(q.orderId)}&seccion=historial`} className="text-[11px] text-brand-700 underline">Ver actividad</Link>
+                    <OrderLink orderId={q.orderId} section="historial" className="text-[11px] text-brand-700 underline">Ver actividad</OrderLink>
                     {q.taken && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">tomado · sin caja</span>}
                     {q.taken && q.armed && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">armado</span>}
                     {q.hasPriorDispatch && <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-800" title="Ya salió antes y volvió; decide con eso">2.º intento</span>}
@@ -736,7 +737,7 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
                         <div className="min-w-0 flex-1">
                           <p className="truncate font-medium text-slate-900">{s?.order_name ?? code} <span className="text-xs font-normal text-slate-500">{s?.customer_name} · {s?.district}</span></p>
                           <p className="flex flex-wrap gap-1 text-[11px]"><StageChip stage={packageStage(item)} confirmMode={confirmMode} />{confirmMode && m.state === "in_custody" && !item.pickup_checked_at && !item.pickup_declined_at && <span className="text-amber-700">por confirmar</span>}</p>
-                          {s?.order_name && <Link href={`/dashboard/pedidos?q=${encodeURIComponent(s.order_name)}&abrir=${encodeURIComponent(s.order_id ?? "")}&seccion=historial`} className="text-[11px] text-brand-700 underline">Ver actividad</Link>}
+                          {s?.order_id && <OrderLink orderId={s.order_id} section="historial" className="text-[11px] text-brand-700 underline">Ver actividad</OrderLink>}
                         </div>
                         {checkable && !item.office_checked_at && code && (
                           <button type="button" disabled={pending} onClick={() => scan(m.id, code)} className="min-h-9 rounded-lg border border-slate-300 px-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">Cotejar</button>
@@ -863,8 +864,11 @@ function Sheet({ title, onClose, children, anchored = false, wide = false }: { t
       role="dialog"
       aria-label={title}
       className={cn(
-        "fixed inset-x-3 bottom-3 z-50 max-h-[80vh] overflow-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-xl",
-        anchored ? "sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:mt-1 sm:w-80" : cn("sm:left-1/2 sm:top-24 sm:bottom-auto sm:right-auto sm:-translate-x-1/2", wide ? "sm:w-[42rem] sm:max-w-[calc(100vw-2rem)]" : "sm:w-96"),
+        "fixed inset-x-3 bottom-3 z-50 max-h-[80vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-xl",
+        // El popover tiene ancho fijo; sin `overflow-x-hidden` y sin `min-w-0`
+        // en los campos, un <select> con una opción larga se salía por la derecha.
+        "overflow-x-hidden sm:max-w-[calc(100vw-2rem)]",
+        anchored ? "sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:mt-1 sm:w-80" : cn("sm:left-1/2 sm:top-24 sm:bottom-auto sm:right-auto sm:-translate-x-1/2", wide ? "sm:w-[42rem]" : "sm:w-96"),
       )}
     >
       <div className="mb-2 flex items-center justify-between gap-2">

@@ -18,7 +18,7 @@ describe("admisión de pedidos de Grupo GF Courier", () => {
 
   it("toma pedidos desde la bandeja y no desde el modal manual del pedido", () => {
     const courier = readFileSync(resolve(root, "components/grupo-gf-courier.tsx"), "utf8");
-    const master = readFileSync(resolve(root, "components/orders-master.tsx"), "utf8");
+    const master = readFileSync(resolve(root, "components/order-drawer.tsx"), "utf8");
     expect(courier).toContain("Pedidos disponibles");
     expect(courier).toContain("takeGroupGfCourierOrders");
     expect(courier).toContain("Tomar pedido");

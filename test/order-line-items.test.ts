@@ -13,7 +13,8 @@ import { lineSubtotal, orderTotals, totalUnits, totalsWorthShowing } from "@/lib
  */
 
 const bloque = readFileSync(resolve(process.cwd(), "components/order-line-items.tsx"), "utf8");
-const pedidos = readFileSync(resolve(process.cwd(), "components/orders-master.tsx"), "utf8");
+// La ficha del pedido (antes dentro de orders-master.tsx) es quien pinta las líneas.
+const pedidos = readFileSync(resolve(process.cwd(), "components/order-drawer.tsx"), "utf8");
 const envios = readFileSync(resolve(process.cwd(), "components/shipments.tsx"), "utf8");
 
 describe("el subtotal de una línea es aritmética nuestra", () => {

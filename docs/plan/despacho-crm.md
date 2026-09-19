@@ -130,3 +130,18 @@ aportaban ya vive en Despacho del día:
   llevó, `packageStage`) y un filtro rápido Todos · Por armar · Listos para
   cotejo · Sin confirmar (`filterBoxItems`). «Sin ruta» sigue en la lista como
   «tomado · sin caja» y su filtro.
+
+## 5. La ficha del pedido se abre en el sitio (19-09-2026)
+
+«Ver actividad» en la cola y en las cajas, el número de pedido en la lista y en
+los excluidos, y los enlaces equivalentes de Rutas, Grupo GF Courier,
+Validación de pagos, Liquidaciones y Liquidaciones 2 ya no mandan al Master:
+abren la misma ficha encima de la pantalla actual (`?ficha=<pedido>`, MOM
+§25.1). El drawer salió de `orders-master.tsx` a `components/order-drawer.tsx`
+y lo monta una vez `app/dashboard/layout.tsx` (`order-drawer-host.tsx`) con los
+permisos del Master. La ficha lleva «Abrir en Master de Pedidos» para quien
+necesite la tabla. Cerrar conserva pestaña, motorizado y filtros de Despacho.
+
+Además, el popover «Filtros» de «Desde la lista» recorta en horizontal y sus
+`<select>` van a ancho completo: antes tomaban el ancho de su opción más larga
+y se salían del panel por la derecha.

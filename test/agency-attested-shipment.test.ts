@@ -135,7 +135,7 @@ describe("la regla se aplica en la pantalla y en el servidor", () => {
     new URL("../app/dashboard/pedidos/actions.ts", import.meta.url),
     "utf8",
   );
-  const ui = readFileSync(new URL("../components/orders-master.tsx", import.meta.url), "utf8");
+  const ui = readFileSync(new URL("../components/order-drawer.tsx", import.meta.url), "utf8");
 
   it("el servidor rechaza el marcado sin courier", () => {
     expect(actions).toContain("needsAttestedAgencyShipment({");

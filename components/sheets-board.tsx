@@ -13,6 +13,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
+import { OrderLink } from "@/components/order-link";
 import { useRouter } from "next/navigation";
 import { Card, EmptyState, cn } from "@/components/ui";
 import { OPERATIONAL_STATUSES, generalLabel, operationalLabel } from "@/lib/order-status";
@@ -1081,8 +1082,14 @@ function CellView({ column, row, context }: { column: SheetColumnRow; row: Compu
   const value = row.cells[column.key] ?? null;
 
   if (column.key === "pedido" && typeof value === "string" && value) {
-    return (
-      <Link href={`/dashboard/pedidos?q=${encodeURIComponent(value)}`} className="font-medium text-slate-900 hover:text-brand-700">
+    // Con el pedido vinculado, la ficha se abre encima de la hoja (MOM §25);
+    // una fila del cuaderno todavía sin vincular solo puede buscarse en el Master.
+    return row.order_id ? (
+      <OrderLink orderId={row.order_id} className="font-medium text-slate-900 hover:text-brand-700">
+        {value}
+      </OrderLink>
+    ) : (
+      <Link href={`/dashboard/pedidos?q=${encodeURIComponent(value)}`} className="font-medium text-slate-900 hover:text-brand-700" title="Buscar en Master de Pedidos">
         {value}
       </Link>
     );

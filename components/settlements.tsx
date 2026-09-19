@@ -10,6 +10,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { OrderLink } from "@/components/order-link";
 import { Card, EmptyState, Section, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { VERDICT_LABELS, type ReconciledSettlement, type SettlementVerdict } from "@/lib/settlements";
 import type { RiderPayout } from "@/lib/settlements";
@@ -425,7 +426,7 @@ function SettlementDetailPanel({
                 </td>
                 <td className="px-3 py-2 text-slate-700">
                   {r.line.order_id
-                    ? (orderNames[r.line.order_id] ?? r.line.order_name ?? "—")
+                    ? <OrderLink orderId={r.line.order_id} className="font-medium text-slate-900 hover:text-brand-700">{orderNames[r.line.order_id] ?? r.line.order_name ?? "—"}</OrderLink>
                     : (r.line.order_name ?? "—")}
                 </td>
                 <td className="px-3 py-2 text-slate-700">{money(r.declared)}</td>

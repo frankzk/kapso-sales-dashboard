@@ -10,6 +10,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { OrderLink } from "@/components/order-link";
 import { Card, EmptyState, Section, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { NON_DELIVERY_REASONS, PAYMENT_METHODS, routeTotals } from "@/lib/routes";
 import { RISK_LABELS, type RiskAssessment } from "@/lib/retries";
@@ -604,7 +605,7 @@ function RouteDetail({
                 <span className="flex-1 truncate text-slate-700">
                   {o.customer_name ?? "Sin nombre"}
                   <span className="ml-1.5 text-xs text-slate-400">
-                    {storeName(o.store_id)} · {o.district ?? "—"} · {o.order_name ?? "—"}
+                    {storeName(o.store_id)} · {o.district ?? "—"} · {o.order_name ? <OrderLink orderId={o.order_id} className="text-slate-500 underline decoration-slate-300 hover:text-brand-700" title="Abrir la ficha del pedido">{o.order_name}</OrderLink> : "—"}
                   </span>
                 </span>
                 <span className="text-slate-600">{money(o.order_total)}</span>
@@ -737,7 +738,7 @@ function RetryPanel({
                   {RISK_LABELS[r.risk.level]}
                 </span>
                 <span className="text-xs text-slate-400">
-                  {storeName(r.store_id)} · {r.district ?? "—"} · {r.order_name ?? "—"}
+                  {storeName(r.store_id)} · {r.district ?? "—"} · {r.order_name ? <OrderLink orderId={r.order_id} className="text-slate-500 underline decoration-slate-300 hover:text-brand-700" title="Abrir la ficha del pedido">{r.order_name}</OrderLink> : "—"}
                 </span>
               </div>
               <p className="text-[11px] text-slate-500">

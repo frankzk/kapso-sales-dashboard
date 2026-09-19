@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { OrderLink } from "@/components/order-link";
 import { useDeferredValue, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -128,12 +128,12 @@ function ReviewCard({ item, lane }: { item: PaymentReviewItem; lane: PaymentRevi
     <article className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm shadow-slate-900/[0.03]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <Link
-            href={`/dashboard/pedidos?q=${encodeURIComponent(item.orderName)}`}
+          <OrderLink
+            orderId={item.orderId}
             className="text-sm font-semibold text-slate-950 hover:text-brand-700 hover:underline"
           >
             {item.orderName}
-          </Link>
+          </OrderLink>
           <p className="mt-0.5 truncate text-xs text-slate-500">
             {item.customerName || "Cliente sin nombre"}
           </p>

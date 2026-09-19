@@ -286,7 +286,7 @@ describe("las piezas en el código", () => {
   const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
 
   it("la mesa de confirmación también se enseña en Reproprovincia: la gestión es por PEDIDO", () => {
-    const src = read("components/orders-master.tsx");
+    const src = read("components/order-drawer.tsx");
     expect(src).toContain('detail.row.macro_substage === "gestion_reproprovincia") &&');
     expect(src).toContain("<DescartarRecuperacion");
   });

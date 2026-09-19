@@ -4,6 +4,7 @@ import mobile from "./courier-mobile.module.css";
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
+import { OrderLink } from "@/components/order-link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { DispatchDayBoard } from "@/components/dispatch-day-board";
@@ -549,9 +550,9 @@ function AvailableOrders({
                   /></label>
                 </td>
                 <td className="px-3 py-3">
-                  <Link href={`/dashboard/pedidos?q=${encodeURIComponent(order.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">
+                  <OrderLink orderId={order.orderId} className="font-semibold text-slate-950 hover:text-brand-700">
                     {order.orderName}
-                  </Link>
+                  </OrderLink>
                   <p className="mt-0.5 text-xs text-slate-500">
                     {order.storeName}
                     {order.hasPriorDispatch && order.lastDispatchedAt
@@ -833,7 +834,7 @@ function AcceptedOrders({
                     /></label>
                   </td>
                   <td className="px-4 py-3">
-                    <Link href={`/dashboard/pedidos?q=${encodeURIComponent(order.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">{order.orderName}</Link>
+                    <OrderLink orderId={order.orderId} className="font-semibold text-slate-950 hover:text-brand-700">{order.orderName}</OrderLink>
                     <p className="mt-0.5 text-xs text-slate-500">{order.storeName} · {order.district}</p>
                   </td>
                   <td className="px-3 py-3 text-slate-700">{order.customerName}</td>

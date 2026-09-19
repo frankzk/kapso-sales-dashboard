@@ -3958,6 +3958,56 @@ Reglas de interfaz:
 - El flujo móvil de escaneo, cotejo y motorizados se diseña aparte. No se debe
   comprimir el drawer de escritorio y asumir que eso resuelve la operación móvil.
 
+### 25.1 La ficha se abre desde cualquier pantalla
+
+El drawer es **la ficha del pedido de todo el panel**, no una pieza del Master.
+Antes, «Ver actividad» en Despacho del día o el número de pedido en Grupo GF
+Courier mandaban al Master con `?q=…&abrir=…`: la persona perdía la cola, la
+ruta o la hoja en la que estaba trabajando y tenía que volver a buscarla.
+
+Reglas:
+
+- **Misma ficha en todas partes.** Despacho del día (cola, cajas, excluidos),
+  Rutas, Grupo GF Courier, Validación de pagos, Liquidaciones (conciliación) y
+  Liquidaciones 2 (columna Pedido) abren el mismo componente que el Master,
+  encima de la pantalla actual. No hay una «ficha resumida» distinta: lo que se
+  ve y lo que se puede hacer es idéntico, con los mismos permisos que en el
+  Master (`master.edit`, `master.override_status`, guías por courier y los
+  permisos de cierre). Quien no puede actuar en el Master tampoco puede desde
+  la ficha abierta en otra pantalla.
+- **La URL manda.** Fuera del Master la ficha se abre con
+  `?ficha=<pedido>&seccion=operar|informacion|historial` sobre la ruta actual,
+  conservando el resto de la query (pestaña, motorizado, mes, filtros). El
+  Master conserva su `?abrir=<pedido>&seccion=…`. La ficha global no actúa en
+  `/dashboard/pedidos`: ahí la abre el propio Master, y montar dos sería
+  enseñar dos paneles iguales. El parámetro no se llama `pedido` porque Grupo
+  GF Courier ya usa `?pedido=` para preseleccionar un pedido en su lista.
+- **Cerrar devuelve al mismo sitio.** Al cerrar solo desaparecen `ficha` y
+  `seccion`; la pantalla de atrás no se vuelve a pedir ni pierde sus filtros.
+  Un enlace que abre la ficha es un enlace de verdad: se puede abrir en otra
+  pestaña o copiar, y esa URL abre la ficha al cargar.
+- **Las acciones cuentan igual.** Registrar un pago, crear una guía, cambiar la
+  ruta o cerrar desde la ficha abierta en Despacho es la misma acción de
+  servidor que en el Master, con la misma autorización por tienda. Al terminar,
+  la ficha recarga su detalle y refresca la pantalla de atrás, para que la cola
+  o la hoja reflejen lo hecho.
+- **Enlace al Master.** La ficha abierta fuera del Master lleva «Abrir en
+  Master de Pedidos» en la cabecera: va a `/dashboard/pedidos?abrir=<pedido>`,
+  donde están la tabla, los filtros y las acciones en lote que la ficha sola
+  no trae.
+- **Móvil.** Fuera del Master la ficha ocupa la pantalla entera, con botón de
+  cerrar siempre a la vista en la cabecera fija y Escape en escritorio.
+- **Sección al abrir.** «Ver actividad» abre en `Actividad`; el número de pedido
+  abre en `Operar`. La pestaña inicial se respeta al montar (antes un reinicio
+  a «Operar» al cambiar de pedido pisaba la pestaña pedida).
+
+Implementación: `components/order-drawer.tsx` (la ficha),
+`components/order-master-shared.tsx` (formato, chapas y botones de anular que
+comparten Master y ficha), `components/order-drawer-host.tsx` (montada en
+`app/dashboard/layout.tsx`), `components/order-link.tsx` (`OrderLink`,
+`useOpenOrderDrawer`) y `lib/order-drawer-href.ts` (las URL; probado en
+`test/order-drawer-href.test.ts`).
+
 ## 26. Costo de producto (COGS)
 
 El módulo de Costos tiene tres ámbitos: costo logístico (§14), costo de producto
