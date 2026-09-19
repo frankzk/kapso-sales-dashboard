@@ -135,30 +135,17 @@ export function DispatchWorkspace({
   const [data, setData] = useState(() => scopeData(initialData));
   const initialManifest = data.manifests.find((manifest) => manifest.id === initialSelectedId)
     ?? data.manifests.find((manifest) => !["in_custody", "cancelled"].includes(manifest.state)) ?? null;
-  function modeForAccess(manifest: DispatchManifest | null): Mode {
-    const next = nextDispatchMode(manifest, canManage);
-    return next === "pickup" && !canPickup && canManage ? "office" : next;
-  }
-  const defaultMode: Mode = modeForAccess(initialManifest);
-  const [mode, setMode] = useState<Mode>(defaultMode);
   const [selectedId, setSelectedId] = useState<string | null>(
     initialManifest?.id ?? null,
   );
-  const [cameraOpen, setCameraOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const scanLock = useRef(false);
-  const closeCamera = useCallback(() => setCameraOpen(false), []);
 
-  const selected = useMemo(
-    () => data.manifests.find((manifest) => manifest.id === selectedId) ?? null,
-    [data.manifests, selectedId],
-  );
   const activeManifests = data.manifests.filter((manifest) => manifest.state !== "cancelled");
   const storeName = useMemo(() => new Map(stores.map((store) => [store.id, store.name])), [stores]);
 
-  async function refresh(preferId?: string) {
+  async function refresh(preferId?: string | null) {
     const fresh = await loadDispatchWorkspace(preferId ?? selectedId);
     setData(scopeData(fresh));
     if (preferId) setSelectedId(preferId);
@@ -167,33 +154,6 @@ export function DispatchWorkspace({
   function showResult(result: DispatchActionResult) {
     setMessage({ tone: result.error ? "error" : "ok", text: result.error ?? result.notice ?? "Listo." });
   }
-
-  const executeScan = useCallback(async (raw: string) => {
-    const value = raw.trim();
-    if (!value || scanLock.current) return;
-    scanLock.current = true;
-    setBusy(true);
-    setMessage(null);
-    try {
-    let result: DispatchActionResult;
-    if (!selected) {
-      result = { error: "Elige una ruta antes de escanear." };
-    } else {
-      // El cotejo SOLO confirma lo que ya se decidió al armar la ruta. Antes
-      // agregaba el paquete en el mismo gesto, así que un escaneo distraído
-      // metía una caja ajena a la ruta y la daba por cotejada.
-      result = await scanManifestItem(selected.id, value, mode === "office" ? "office" : "pickup");
-    }
-    showResult(result);
-    await refresh(selected?.id);
-    } catch {
-      setMessage({ tone: "error", text: "No se pudo confirmar la respuesta. Revisa la conexión y vuelve a escanear el mismo paquete; no se duplicará." });
-    } finally { setBusy(false); scanLock.current = false; }
-  }, [busy, mode, selected]);
-
-  const onCameraScan = useCallback((value: string) => {
-    void executeScan(value);
-  }, [executeScan]);
 
   const stats = useMemo(() => {
     const active = data.manifests.filter((m) => !["in_custody", "cancelled"].includes(m.state));
@@ -206,10 +166,6 @@ export function DispatchWorkspace({
       transferred: data.manifests.filter((m) => m.state === "in_custody" && m.route_date === todayLima()).length,
     };
   }, [data]);
-  const progress = selected ? dispatchProgress(selected.items) : null;
-  const checkComplete = selected?.state !== "cancelled" && !!progress && (mode === "office" ? progress.officeComplete : progress.pickupComplete);
-  const scanAllowed = !!selected && !["cancelled", "in_custody"].includes(selected.state)
-    && (mode === "office" ? canManage : canPickup && !!progress?.officeComplete);
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-4 pb-12">
@@ -249,13 +205,134 @@ export function DispatchWorkspace({
                 key={manifest.id}
                 manifest={manifest}
                 active={selectedId === manifest.id}
-                onClick={() => { setMessage(null); setSelectedId(manifest.id); setMode(modeForAccess(manifest)); }}
+                onClick={() => { setMessage(null); setSelectedId(manifest.id); }}
               />
             )) : <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">Aún no hay rutas. Crea una para comenzar.</div>}
           </div>
         </aside>
 
-        <div className="order-1 min-w-0 space-y-4 xl:order-2">
+        <div className="order-1 min-w-0 xl:order-2">
+          {/* La clave reinicia el paso al cambiar de caja: cada una arranca en
+              el paso que le toca. */}
+          <DispatchBoxPanel
+            key={selectedId ?? "none"}
+            data={data}
+            manifestId={selectedId}
+            manifests={activeManifests}
+            canManage={canManage}
+            canPickup={canPickup}
+            surface={surface}
+            storeName={storeName}
+            refresh={refresh}
+            onSelect={(id) => { setMessage(null); setSelectedId(id); }}
+            onBusy={setBusy}
+            message={message}
+            setMessage={setMessage}
+          />
+        </div>
+      </div>
+
+      {showCreate && <CreateManifestModal riders={riders} onClose={() => setShowCreate(false)} onCreated={async (result) => { showResult(result); if (result.manifestId) { await refresh(result.manifestId); setSelectedId(result.manifestId); } setShowCreate(false); }} />}
+    </div>
+  );
+}
+
+/**
+ * Los tres pasos de UNA caja: agregar, verificar, recibir.
+ *
+ * Es lo que la mesa de despacho enseña a la derecha de «Rutas recientes» y lo
+ * que la pestaña Rutas de Grupo GF Courier abre en el panel lateral
+ * (`courier-box-drawer.tsx`, MOM §29.14). El panel no sabe de listas ni de
+ * KPIs: recibe los datos, la caja elegida y cómo refrescar.
+ */
+export function DispatchBoxPanel({
+  data,
+  manifestId,
+  manifests,
+  canManage,
+  canPickup,
+  surface = "warehouse",
+  storeName,
+  refresh,
+  onSelect,
+  onBusy,
+  message: outerMessage,
+  setMessage: setOuterMessage,
+  showTarget = true,
+}: {
+  data: DispatchWorkspaceData;
+  manifestId: string | null;
+  /** Cajas entre las que se puede cambiar; con una sola no hay selector. */
+  manifests: DispatchManifest[];
+  canManage: boolean;
+  canPickup: boolean;
+  surface?: "warehouse" | "gf";
+  storeName: Map<string, string>;
+  refresh: (preferId?: string | null) => Promise<void>;
+  onSelect?: (id: string) => void;
+  onBusy?: (busy: boolean) => void;
+  /** Mensaje compartido con quien monta el panel (la mesa lo usa al crear rutas). */
+  message?: { tone: "ok" | "error"; text: string } | null;
+  setMessage?: (value: { tone: "ok" | "error"; text: string } | null) => void;
+  /** El bloque «Caja seleccionada»; sobra cuando el panel ya lleva cabecera propia. */
+  showTarget?: boolean;
+}) {
+  const selected = useMemo(
+    () => data.manifests.find((manifest) => manifest.id === manifestId) ?? null,
+    [data.manifests, manifestId],
+  );
+  function modeForAccess(manifest: DispatchManifest | null): Mode {
+    const next = nextDispatchMode(manifest, canManage);
+    return next === "pickup" && !canPickup && canManage ? "office" : next;
+  }
+  const [mode, setMode] = useState<Mode>(() => modeForAccess(selected));
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [busy, setBusyState] = useState(false);
+  const [ownMessage, setOwnMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const message = outerMessage === undefined ? ownMessage : outerMessage;
+  const setMessage = setOuterMessage ?? setOwnMessage;
+  const scanLock = useRef(false);
+  const closeCamera = useCallback(() => setCameraOpen(false), []);
+  const setBusy = useCallback((value: boolean) => { setBusyState(value); onBusy?.(value); }, [onBusy]);
+
+  function showResult(result: DispatchActionResult) {
+    setMessage({ tone: result.error ? "error" : "ok", text: result.error ?? result.notice ?? "Listo." });
+  }
+
+  const executeScan = useCallback(async (raw: string) => {
+    const value = raw.trim();
+    if (!value || scanLock.current) return;
+    scanLock.current = true;
+    setBusy(true);
+    setMessage(null);
+    try {
+    let result: DispatchActionResult;
+    if (!selected) {
+      result = { error: "Elige una ruta antes de escanear." };
+    } else {
+      // El cotejo SOLO confirma lo que ya se decidió al armar la ruta. Antes
+      // agregaba el paquete en el mismo gesto, así que un escaneo distraído
+      // metía una caja ajena a la ruta y la daba por cotejada.
+      result = await scanManifestItem(selected.id, value, mode === "office" ? "office" : "pickup");
+    }
+    showResult(result);
+    await refresh(selected?.id);
+    } catch {
+      setMessage({ tone: "error", text: "No se pudo confirmar la respuesta. Revisa la conexión y vuelve a escanear el mismo paquete; no se duplicará." });
+    } finally { setBusy(false); scanLock.current = false; }
+  }, [busy, mode, selected]);
+
+  const onCameraScan = useCallback((value: string) => {
+    void executeScan(value);
+  }, [executeScan]);
+
+  const progress = selected ? dispatchProgress(selected.items) : null;
+  const checkComplete = selected?.state !== "cancelled" && !!progress && (mode === "office" ? progress.officeComplete : progress.pickupComplete);
+  const scanAllowed = !!selected && !["cancelled", "in_custody"].includes(selected.state)
+    && (mode === "office" ? canManage : canPickup && !!progress?.officeComplete);
+
+  return (
+    <div className="min-w-0 space-y-4">
           <div inert={busy} className="grid grid-cols-3 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
             <ModeButton active={mode === "build"} disabled={!canManage} onClick={() => setMode("build")} number="1" label="Agregar pedidos" />
             <ModeButton active={mode === "office"} disabled={!canManage} onClick={() => setMode("office")} number="2" label="Verificar caja" />
@@ -272,8 +349,8 @@ export function DispatchWorkspace({
                 {selected && <StateBadge state={selected.state} />}
               </div>
 
-              {selected && (
-                <RouteTarget mode={mode} disabled={busy} manifest={selected} manifests={activeManifests} onSelect={(id) => { setMessage(null); setSelectedId(id); setMode(modeForAccess(data.manifests.find((manifest) => manifest.id === id) ?? null)); }} />
+              {selected && showTarget && (
+                <RouteTarget mode={mode} disabled={busy} manifest={selected} manifests={manifests} onSelect={(id) => { setMessage(null); onSelect?.(id); }} />
               )}
               {surface === "gf" && selected && <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
                 <span>{activeDispatchItems(selected.items).length} paquete{activeDispatchItems(selected.items).length === 1 ? "" : "s"} en esta carga</span>
@@ -292,7 +369,7 @@ export function DispatchWorkspace({
               ) : mode !== "build" && (
                 <>
                   {mode === "pickup" && selected && !progress?.officeComplete && <p className="mt-3 text-sm text-amber-800">Primero completa la verificación de oficina.</p>}
-                  <DispatchScanner key={`${selectedId}:${mode}`} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
+                  <DispatchScanner key={`${manifestId}:${mode}`} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
                 </>
               )}
               {message && <div role={message.tone === "error" ? "alert" : "status"} className={cn("mt-4 rounded-xl px-4 py-3 text-sm font-medium", message.tone === "error" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800")}>{message.text}</div>}
@@ -320,11 +397,8 @@ export function DispatchWorkspace({
               <div className="p-12 text-center text-sm text-slate-500">Elige una ruta de la lista o crea una nueva.</div>
             )}
           </section>
-        </div>
-      </div>
 
       <DispatchCamera open={cameraOpen} onClose={closeCamera} onScan={onCameraScan} />
-      {showCreate && <CreateManifestModal riders={riders} onClose={() => setShowCreate(false)} onCreated={async (result) => { showResult(result); if (result.manifestId) { await refresh(result.manifestId); setSelectedId(result.manifestId); setMode("build"); } setShowCreate(false); }} />}
     </div>
   );
 }

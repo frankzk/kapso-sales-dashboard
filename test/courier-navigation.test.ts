@@ -27,8 +27,15 @@ describe("Rutas pertenece a Grupo GF Courier", () => {
     expect(page).toContain('perms.can("routes.report_others")');
     expect(page).toContain("routeReportAccess(detail.route.id)");
   });
+  it("sin ruta abierta, Reparto manda a la lista única de Rutas (MOM §29.14)", () => {
+    const page = read("app/dashboard/courier/reparto/page.tsx");
+    expect(page).toContain('if (!sp.id) redirect("/dashboard/courier/rutas")');
+    expect(page).toContain("detailOnly");
+    expect(read("components/grupo-gf-courier.tsx")).not.toContain("Reparto y cierre diario");
+    expect(read("components/grupo-gf-courier.tsx")).not.toContain("Cajas y cotejos");
+  });
   it("enlaza a reparto y cierre desde las cajas y las liquidaciones", () => {
-    for (const path of ["components/grupo-gf-courier.tsx", "components/dispatch-workspace.tsx", "components/settlements.tsx"]) {
+    for (const path of ["components/courier-box-drawer.tsx", "components/dispatch-workspace.tsx", "components/settlements.tsx"]) {
       expect(read(path)).toContain("/dashboard/courier/reparto");
       expect(read(path)).not.toContain("`/dashboard/rutas?");
     }

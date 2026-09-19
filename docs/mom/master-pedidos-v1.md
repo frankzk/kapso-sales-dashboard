@@ -4919,6 +4919,54 @@ español todos los hitos del camino —tomado, asignado, cotejado en oficina,
 `order_events`; no hay otra línea de tiempo.
 «Ver actividad» desde Grupo GF Courier abre ese drawer en esa pestaña.
 
+### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
+
+**Antes** la pestaña «Rutas» tenía dos subpestañas —«Cajas y cotejos» (solo
+las cajas con pedidos tomados, y «Abrir caja» llevaba a otra pantalla con
+KPIs y una columna de «Rutas recientes») y «Reparto y cierre diario» (la tabla
+de `delivery_routes` de siempre)— y una misma ruta se veía en las dos con
+datos distintos.
+
+**Ahora** hay una sola lista, `getCourierRouteLedger`
+(`lib/courier-route-ledger.ts`): una fila por ruta de reparto —motorizado y
+día, `delivery_routes`— con su caja de despacho cuando la tiene
+(`dispatch_manifests` de courier propio; si hay varias cargas se enseña la
+última y se suman sus paquetes). Las rutas que trajo el cuaderno (§29.12) no
+tienen caja y aun así están. La lista se agrupa por fecha con la cabecera de
+cada día pegajosa, hoy primero y luego hacia atrás, y se filtra por motorizado
+y por fecha (Hoy · un día concreto · Todas) con el mismo picker de Despacho
+del día. «Hoy» y «Todas» filtran en el navegador sobre las últimas 150 rutas;
+un día concreto lo trae el servidor (`?dia=`), porque puede ser anterior.
+
+**Cada fila** dice motorizado y carga, la situación, asignados / armados /
+cotejados / recibidos, efectivo previsto (§29.9), avance y liquidación. La
+situación es una sola, del momento más temprano al más tardío: borrador →
+cotejo de oficina → lista para recojo → en poder del courier → en reparto →
+cerrada → liquidada (`ledgerSituation`); las tres primeras salen del estado
+de la caja, las tres últimas del estado de la ruta y de `rider_settlements`.
+Sin caja, armados/cotejados/recibidos van en «—» y el avance es lo ya
+reportado por el motorizado. El aviso «N pedidos sin ruta» sigue arriba y
+lleva a Despacho del día.
+
+**Clic en la fila** abre la caja a la derecha, como la ficha del pedido
+(§25.1): `?caja=<carga>` en la URL, o `?ruta=<ruta>` cuando no hay caja
+(`lib/courier-box-href.ts`, `components/courier-box-drawer.tsx`). Dentro van
+los tres pasos de la mesa de despacho —Agregar pedidos, Verificar caja,
+Recibir carga— con el mismo componente que usa Almacén (`DispatchBoxPanel`,
+extraído de `dispatch-workspace.tsx`), sin la columna de rutas recientes ni
+los KPIs, y el acceso a «Reparto y liquidación» de esa ruta. Una ruta sin
+caja lo dice y solo ofrece el reparto. Cerrar reemplaza la URL sin apilar
+historial y conserva pestaña y filtros; cada acción refresca la fila de
+atrás. En el teléfono el panel ocupa toda la pantalla.
+
+**Pantallas que quedan.** `/dashboard/courier/reparto?id=` sigue siendo el
+reparto y cierre de UNA ruta (paradas, reporte, cierre, pago del
+motorizado); sin `id` manda a la lista. `/dashboard/courier/rutas` es la
+misma lista y el mismo panel para quien coteja, recibe o arma rutas sin
+administrar el courier; quien administra cae en la pestaña. Los enlaces
+antiguos `?manifiesto=` abren esa caja en la pestaña (`legacyManifestHref`).
+Nada de esto cambia acciones de servidor ni la base.
+
 ## 30. Liquidaciones 2 — hojas por dominio
 
 Plan y hallazgos en `docs/plan/liquidaciones-2.md`. Base en la migración 0168;

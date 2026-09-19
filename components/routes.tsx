@@ -84,7 +84,10 @@ export function RoutesBoard({
   retries,
   day,
   canReport = false,
+  detailOnly = false,
 }: {
+  /** Solo el reparto y cierre de la ruta abierta: la lista vive en Grupo GF Courier · Rutas (MOM §29.14). */
+  detailOnly?: boolean;
   stores: StoreOpt[];
   riders: RiderRow[];
   routes: RouteRow[];
@@ -117,6 +120,7 @@ export function RoutesBoard({
 
   return (
     <div className="space-y-6">
+      {!detailOnly && <>
       <Section title="Rutas de reparto">
         <p className="text-sm text-slate-500">
           Consulta las entregas y revisa la ganancia de cada motorizado. Terminar la ruta
@@ -185,6 +189,10 @@ export function RoutesBoard({
           </table>
         </div>
       </Card>
+
+      </>}
+      {detailOnly && msg && <Card className="border-brand-200 bg-brand-50 p-3 text-sm text-brand-800">{msg}</Card>}
+      {detailOnly && err && <Card className="border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</Card>}
 
       {detail && (
         <>

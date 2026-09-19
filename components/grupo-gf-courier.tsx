@@ -8,7 +8,10 @@ import { OrderLink } from "@/components/order-link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { DispatchDayBoard } from "@/components/dispatch-day-board";
+import { CourierRoutesLedger } from "@/components/courier-routes-ledger";
+import { CourierBoxDrawer } from "@/components/courier-box-drawer";
 import type { DispatchManifest } from "@/lib/dispatch-access";
+import type { CourierLedgerRow } from "@/lib/courier-route-ledger";
 import { resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
 import {
   activateGroupGfCourier,
@@ -23,7 +26,6 @@ import {
   type CourierAvailableOrder,
   type CourierAcceptedOrder,
   type CourierRiderOption,
-  type CourierRouteSummary,
   type PeruDistrictRow,
 } from "@/app/dashboard/courier/actions";
 
@@ -54,6 +56,7 @@ export function GrupoGfCourierBoard({
   snapshot,
   manifests = [],
   today = "",
+  ledger = [],
 }: {
   orgId: string;
   snapshot: CourierConfigSnapshot;
@@ -61,6 +64,8 @@ export function GrupoGfCourierBoard({
   manifests?: DispatchManifest[];
   /** Hoy en Lima. */
   today?: string;
+  /** Rutas y cajas para la pestaña Rutas (MOM §29.14). */
+  ledger?: CourierLedgerRow[];
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -145,7 +150,7 @@ export function GrupoGfCourierBoard({
           onClick={() => setTab("routes")}
           label="Rutas"
           shortLabel="Rutas"
-          count={new Set(snapshot.operations.routes.map((route) => `${route.riderId}:${route.routeDate}`)).size}
+          count={ledger.filter((row) => row.routeDate === today).length}
         />
         <CourierTab
           active={tab === "tariffs"}
@@ -208,12 +213,15 @@ export function GrupoGfCourierBoard({
         />
       )}
       {tab === "routes" && (
-        <CourierRoutes
-          routes={snapshot.operations.routes}
+        <CourierRoutesLedger
+          rows={ledger}
+          riders={snapshot.operations.riders}
+          today={today}
           unassignedCount={snapshot.operations.accepted.filter((order) => !order.route).length}
-          onShowUnassigned={() => setTab("preparation")}
+          onShowUnassigned={() => setTab("dispatch")}
         />
       )}
+      <CourierBoxDrawer />
       {tab === "tariffs" && (
         <TariffMatrix
           orgId={orgId}
@@ -876,151 +884,6 @@ function AcceptedOrders({
           </tbody>
         </table>
       </div>
-    </section>
-  );
-}
-
-function routeStateLabel(state: string): string {
-  return ({
-    draft: "Planificada",
-    office_check: "Cotejo en almacén",
-    ready_for_pickup: "Caja lista",
-    pickup_check: "Recibiendo motorizado",
-    in_custody: "En reparto",
-  } as Record<string, string>)[state] ?? state;
-}
-
-function CourierRoutes({
-  routes,
-  unassignedCount,
-  onShowUnassigned,
-}: {
-  routes: CourierRouteSummary[];
-  unassignedCount: number;
-  onShowUnassigned: () => void;
-}) {
-  return (
-    <section aria-labelledby="courier-routes-title" className="space-y-4">
-      <nav aria-label="Trabajo de rutas" className="flex flex-wrap gap-2 text-sm">
-        <span className="inline-flex min-h-12 items-center rounded-lg bg-brand-50 px-3 font-medium text-brand-700" aria-current="page">Cajas y cotejos</span>
-        <Link href="/dashboard/courier/reparto" className="inline-flex min-h-12 items-center rounded-lg px-3 font-medium text-slate-600 hover:bg-slate-100">Reparto y cierre diario</Link>
-      </nav>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h2 id="courier-routes-title" className="text-base font-semibold text-slate-950">Rutas y cajas operativas</h2>
-          <p className="mt-1 max-w-4xl text-sm leading-6 text-slate-600">
-            Abre la caja del motorizado para verificar sus paquetes y registrar la recepción.
-          </p>
-        </div>
-        {unassignedCount > 0 && (
-          <button
-            type="button"
-            onClick={onShowUnassigned}
-            className="h-10 rounded-lg border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
-          >
-            {unassignedCount} pedido{unassignedCount === 1 ? "" : "s"} sin ruta →
-          </button>
-        )}
-      </div>
-
-      <div className="space-y-3 lg:hidden" aria-label="Cajas operativas">
-        {routes.map((route) => <article key={route.manifestId} className="rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div><h3 className="text-base font-semibold text-slate-950">{route.riderName}</h3><p className="mt-1 text-sm text-slate-600">{formatDate(route.routeDate)} · Carga {route.loadNumber ?? 1}</p></div>
-            <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">{routeStateLabel(route.state)}</span>
-          </div>
-          <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-            <div className="flex justify-between gap-2"><dt className="text-slate-600">Asignados</dt><dd className="font-semibold tabular-nums">{route.assignedCount}</dd></div>
-            <div className="flex justify-between gap-2"><dt className="text-slate-600">Armados</dt><dd className="font-semibold tabular-nums">{route.armedCount}</dd></div>
-            <div className="flex justify-between gap-2"><dt className="text-slate-600">Verificados</dt><dd className="font-semibold tabular-nums">{route.officeCheckedCount}</dd></div>
-            <div className="flex justify-between gap-2"><dt className="text-slate-600">Recibidos</dt><dd className="font-semibold tabular-nums">{route.pickupCheckedCount}</dd></div>
-            <div className="col-span-2 flex justify-between gap-2"><dt className="text-slate-600">Efectivo previsto</dt><dd className="font-semibold tabular-nums">{money(route.codAmount)}</dd></div>
-          </dl>
-          <progress aria-label={`Verificación de la caja de ${route.riderName}`} max={route.assignedCount || 1} value={route.officeCheckedCount} className="mt-3 h-2 w-full accent-brand-600" />
-          <Link href={`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(route.manifestId)}`} className="mt-3 flex min-h-12 items-center justify-center rounded-xl bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2">
-            {route.state === "in_custody" ? "Ver caja recibida" : route.state === "ready_for_pickup" || route.state === "pickup_check" ? "Recibir carga" : "Verificar caja"}
-          </Link>
-          {route.deliveryRouteId && route.state === "in_custody" && <Link href={`/dashboard/courier/reparto?id=${route.deliveryRouteId}`} className="mt-2 flex min-h-12 items-center justify-center text-sm font-semibold text-brand-700">Ver reparto y liquidación</Link>}
-        </article>)}
-        {!routes.length && <p className="rounded-xl border border-dashed border-slate-300 p-5 text-sm text-slate-600">Todavía no hay rutas. Asigna pedidos a un motorizado desde Pedidos tomados.</p>}
-      </div>
-      <div className={cn(TABLE_WRAP_FROM[980], "hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:block")}>
-        <table className="w-full min-w-[980px] text-sm">
-          <thead className={STICKY_HEAD}>
-            <tr className="text-left text-xs text-slate-500">
-              <th className="px-4 py-3 font-medium">Motorizado / caja</th>
-              <th className="px-3 py-3 font-medium">Situación</th>
-              <th className="px-3 py-3 text-center font-medium">Asignados</th>
-              <th className="px-3 py-3 text-center font-medium">Armados</th>
-              <th className="px-3 py-3 text-center font-medium">Cotejados</th>
-              <th className="px-3 py-3 text-center font-medium">Recibidos</th>
-              <th className="px-3 py-3 text-right font-medium">Efectivo previsto</th>
-              <th className="px-4 py-3 font-medium">Avance físico</th>
-              <th className="px-4 py-3 text-right font-medium">Acción</th>
-            </tr>
-          </thead>
-          <tbody>
-            {routes.map((route) => {
-              const progress = route.assignedCount
-                ? Math.round((route.officeCheckedCount / route.assignedCount) * 100)
-                : 0;
-              return (
-                <tr key={route.manifestId} className="border-b border-slate-100 last:border-0">
-                  <td className="px-4 py-3">
-                    <p className="font-semibold text-slate-950">{route.riderName}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">{formatDate(route.routeDate)} · Carga {route.loadNumber ?? 1}</p>
-                  </td>
-                  <td className="px-3 py-3">
-                    <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
-                      {routeStateLabel(route.state)}
-                    </span>
-                  </td>
-                  <td className="px-3 py-3 text-center font-semibold tabular-nums text-slate-900">{route.assignedCount}</td>
-                  <td className="px-3 py-3 text-center font-semibold tabular-nums text-sky-700">{route.armedCount}</td>
-                  <td className="px-3 py-3 text-center font-semibold tabular-nums text-emerald-700">{route.officeCheckedCount}</td>
-                  <td className="px-3 py-3 text-center font-semibold tabular-nums text-violet-700">{route.pickupCheckedCount}</td>
-                  <td className="px-3 py-3 text-right font-semibold tabular-nums text-slate-900">{money(route.codAmount)}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex min-w-44 items-center gap-3">
-                      <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
-                        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${progress}%` }} />
-                      </div>
-                      <span className="w-9 text-right text-xs font-semibold tabular-nums text-slate-600">{progress}%</span>
-                    </div>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {route.armedCount < route.assignedCount
-                        ? `${route.assignedCount - route.armedCount} por armar`
-                        : route.officeCheckedCount < route.assignedCount
-                          ? `${route.assignedCount - route.officeCheckedCount} por cotejar`
-                          : "Caja cotejada al 100 %"}
-                    </p>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <Link
-                      href={`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(route.manifestId)}`}
-                      className="inline-flex h-9 items-center rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2"
-                    >
-                      Abrir caja
-                    </Link>
-                    {route.deliveryRouteId && route.state === "in_custody" && <Link href={`/dashboard/courier/reparto?id=${route.deliveryRouteId}`} className="mt-2 block text-xs font-semibold text-brand-700">Ver reparto y liquidación</Link>}
-                  </td>
-                </tr>
-              );
-            })}
-            {!routes.length && (
-              <tr>
-                <td colSpan={8} className="px-6 py-16 text-center">
-                  <p className="font-medium text-slate-800">Todavía no hay rutas operativas.</p>
-                  <p className="mt-1 text-sm text-slate-500">Asigna pedidos desde “Pedidos tomados” para crear la caja diaria del motorizado.</p>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      <p className="text-xs leading-5 text-slate-500">
-        “Armado” viene de Almacén. “Cotejado” es el primer control físico de la caja; “Recibido” es el segundo control del motorizado.
-      </p>
     </section>
   );
 }

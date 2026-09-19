@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
-import { getAdminOrgs, getCurrentUser } from "@/lib/access";
+import { getAccessibleStores, getAdminOrgs, getCurrentUser } from "@/lib/access";
+import { getDispatchWorkspaceData, type DispatchWorkspaceData } from "@/lib/dispatch-access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import {
   resolveDistrictAvailability,
@@ -2003,5 +2004,93 @@ export async function scanAssignToRider(
     shipmentId: taken.accepted[0]?.shipmentId ?? shipmentId,
     message: `Asignado a ${rider.full_name} y cotejado.`,
     cashWarning: assigned.cashWarning ?? null,
+  };
+}
+
+/** Lo que el panel lateral de Rutas necesita para enseñar una caja (MOM §29.14). */
+export interface CourierBoxDetail {
+  data: DispatchWorkspaceData;
+  /** Caja elegida; null cuando la ruta no tiene caja (vino del cuaderno). */
+  manifestId: string | null;
+  route: {
+    id: string;
+    routeDate: string;
+    status: string;
+    riderName: string;
+    settlementStatus: string | null;
+  } | null;
+  stores: { id: string; name: string }[];
+  canManage: boolean;
+  canPickup: boolean;
+}
+
+/**
+ * Detalle de una caja o de una ruta para el panel lateral. Entra quien coteja
+ * (dispatch.manage), quien recibe (dispatch.pickup) o quien administra el
+ * courier; RLS acota lo demás.
+ */
+export async function loadCourierBox(request: { manifestId?: string | null; routeId?: string | null }): Promise<CourierBoxDetail | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+  const [permissions, stores] = await Promise.all([getMasterPermissions(), getAccessibleStores()]);
+  const canManage = permissions.can("dispatch.manage");
+  const canPickup = permissions.can("dispatch.pickup");
+  if (!canManage && !canPickup && !permissions.can("logistics.manage") && !permissions.can("routes.manage")) {
+    return { error: "Tu rol no abre cajas de despacho." };
+  }
+  const sb = await createServerSupabase();
+  let manifestId = request.manifestId?.trim() || null;
+  let routeId = request.routeId?.trim() || null;
+  if (manifestId && !routeId) {
+    const { data } = await sb.from("dispatch_manifests").select("delivery_route_id").eq("id", manifestId).maybeSingle();
+    routeId = (data?.delivery_route_id as string | null) ?? null;
+  }
+  if (!manifestId && routeId) {
+    // La última carga de la ruta: es la que se está trabajando.
+    const { data } = await sb
+      .from("dispatch_manifests")
+      .select("id")
+      .eq("delivery_route_id", routeId)
+      .eq("courier", "propio")
+      .neq("state", "cancelled")
+      .order("load_number", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    manifestId = (data?.id as string | undefined) ?? null;
+  }
+  if (!manifestId && !routeId) return { error: "No encontramos esa caja." };
+
+  let route: CourierBoxDetail["route"] = null;
+  if (routeId) {
+    const { data: routeRow } = await sb
+      .from("delivery_routes")
+      .select("id,route_date,status,rider_id,settlement_id")
+      .eq("id", routeId)
+      .maybeSingle();
+    if (routeRow) {
+      const r = routeRow as { id: string; route_date: string; status: string; rider_id: string; settlement_id: string | null };
+      const [{ data: rider }, { data: settlement }] = await Promise.all([
+        sb.from("riders").select("full_name").eq("id", r.rider_id).maybeSingle(),
+        r.settlement_id ? sb.from("rider_settlements").select("status").eq("id", r.settlement_id).maybeSingle() : Promise.resolve({ data: null as { status: string } | null }),
+      ]);
+      route = {
+        id: r.id,
+        routeDate: r.route_date,
+        status: r.status,
+        riderName: (rider?.full_name as string | undefined) ?? "Motorizado",
+        settlementStatus: (settlement?.status as string | undefined) ?? (r.settlement_id ? "borrador" : null),
+      };
+    }
+  }
+  const data = await getDispatchWorkspaceData(manifestId);
+  if (manifestId && !data.manifests.some((m) => m.id === manifestId)) return { error: "No encontramos esa caja." };
+  if (!manifestId && !route) return { error: "No encontramos esa ruta." };
+  return {
+    data,
+    manifestId,
+    route,
+    stores: stores.map((s) => ({ id: s.id, name: s.name })),
+    canManage,
+    canPickup,
   };
 }

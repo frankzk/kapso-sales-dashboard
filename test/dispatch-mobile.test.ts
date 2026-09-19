@@ -101,9 +101,12 @@ describe("mobile verification", () => {
     expect(workspace).toContain("scanLock.current");
     expect(workspace).toContain("finally { setBusy(false); scanLock.current = false; }");
   });
-  it("mobile routes expose their exact load link and all four counters", () => {
-    const source = readFileSync(new URL("../components/grupo-gf-courier.tsx", import.meta.url), "utf8");
-    const mobile = source.split('aria-label="Cajas operativas"')[1]?.split("TABLE_WRAP_FROM")[0] ?? "";
-    for (const key of ["route.assignedCount", "route.armedCount", "route.officeCheckedCount", "route.pickupCheckedCount", "encodeURIComponent(route.manifestId)"]) expect(mobile).toContain(key);
+  it("mobile routes cards open the box and carry all four counters", () => {
+    // La lista de Rutas (MOM §29.14): en el móvil cada tarjeta abre la caja
+    // al lado (`?caja=`) y lleva asignados, armados, cotejados y recibidos.
+    const source = readFileSync(new URL("../components/courier-routes-ledger.tsx", import.meta.url), "utf8");
+    const card = source.split("function LedgerCard(")[1] ?? "";
+    for (const key of ["row.assignedCount", "row.armedCount", "row.officeCheckedCount", "row.pickupCheckedCount", "href={href}"]) expect(card).toContain(key);
+    expect(source).toContain("courierBoxHref(r.manifestId, location)");
   });
 });

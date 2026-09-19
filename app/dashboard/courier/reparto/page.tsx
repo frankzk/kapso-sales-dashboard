@@ -14,7 +14,7 @@ import { RoutesBoard } from "@/components/routes";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import { redirect } from "next/navigation";
 import { routeReportAccess } from "@/lib/route-report-access";
-import { CourierRouteNav } from "@/components/courier-route-nav";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +45,9 @@ async function RutasContent({
     if (perms.can("routes.report_others")) redirect("/reparto");
     return <EmptyState title="Tu rol no permite armar rutas" />;
   }
+  // La lista de rutas vive en la pestaña Rutas de Grupo GF Courier (MOM
+  // §29.14); aquí queda solo el reparto y el cierre de UNA ruta.
+  if (!sp.id) redirect("/dashboard/courier/rutas");
 
   const day = /^\d{4}-\d{2}-\d{2}$/.test(sp.dia ?? "")
     ? sp.dia!
@@ -70,10 +73,15 @@ async function RutasContent({
     retryRaw.map((c) => ({ ...c, risk: assessRisk(c) })),
   );
 
+  if (!openId) redirect("/dashboard/courier/rutas");
   return (
     <div className="space-y-5">
-    <CourierRouteNav current="reparto" />
+    <header>
+      <Link href={`/dashboard/courier?tab=routes&ruta=${encodeURIComponent(openId)}`} className="text-xs font-medium text-slate-500 hover:text-slate-900">← Grupo GF Courier · Rutas</Link>
+      <h1 className="mt-1 text-xl font-semibold text-slate-950">Reparto y liquidación</h1>
+    </header>
     <RoutesBoard
+      detailOnly
       stores={stores}
       riders={riders}
       routes={routes}

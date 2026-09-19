@@ -6,6 +6,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { getDispatchWorkspaceData, getDispatchRiders } from "@/lib/dispatch-access";
 import { EmptyState } from "@/components/ui";
 import { DispatchWorkspace } from "@/components/dispatch-workspace";
+import { legacyManifestHref } from "@/lib/courier-box-href";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +36,7 @@ export default async function DispatchPage({
   }
   const [data, riders] = await Promise.all([getDispatchWorkspaceData(requestedManifestId), getDispatchRiders()]);
   if (requestedManifestId && data.manifests.some((manifest) => manifest.id === requestedManifestId && courierKey(manifest.courier) === "propio")) {
-    redirect(`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(requestedManifestId)}`);
+    redirect(legacyManifestHref(requestedManifestId));
   }
   return (
     <DispatchWorkspace

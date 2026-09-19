@@ -145,3 +145,36 @@ necesite la tabla. Cerrar conserva pestaña, motorizado y filtros de Despacho.
 Además, el popover «Filtros» de «Desde la lista» recorta en horizontal y sus
 `<select>` van a ancho completo: antes tomaban el ancho de su opción más larga
 y se salían del panel por la derecha.
+
+## 6. Rutas: una sola lista y la caja al lado (19-09-2026)
+
+Sergio pidió que las dos subpestañas de «Rutas» (Cajas y cotejos · Reparto y
+cierre diario) fueran una sola lista agrupada por fecha, con filtro por
+motorizado y por fecha, y que al pulsar una fila se abriera la caja del
+motorizado a la derecha, como la ficha del pedido, con sus tres pasos.
+
+Qué cambió (MOM §29.14):
+
+- `lib/courier-route-ledger.ts`: `getCourierRouteLedger` arma la fila por
+  ruta (`delivery_routes`) con su caja (`dispatch_manifests`), cuentas de la
+  caja, paradas reportadas, efectivo previsto y estado de liquidación;
+  `ledgerSituation` decide un solo estado por fila.
+- `components/courier-routes-ledger.tsx`: la lista con cabeceras de fecha
+  pegajosas y el picker de filtros compartido (`components/filter-sheet.tsx`,
+  sacado de Despacho del día). `?dia=` y `?motorizado=` viven en la URL.
+- `components/courier-box-drawer.tsx` + `lib/courier-box-href.ts`: el panel
+  lateral (`?caja=` / `?ruta=`), que carga por `loadCourierBox` y monta
+  `DispatchBoxPanel`, los tres pasos extraídos de `dispatch-workspace.tsx`
+  (Almacén sigue usando el mismo componente dentro de su mesa).
+- `app/dashboard/courier/rutas/page.tsx` ya no es «Verificar y recibir»: es
+  la misma lista para quien no administra el courier, y redirige a la pestaña
+  para quien sí. `app/dashboard/courier/reparto/page.tsx` sin `id` va a la
+  lista; con `id` enseña solo el reparto y cierre (`RoutesBoard detailOnly`).
+  `components/courier-route-nav.tsx` desapareció.
+- Tests: `test/courier-box-drawer.test.ts` (href, situación, estructura) y
+  ajustes en `courier-navigation` y `dispatch-mobile`.
+
+Límite conocido: el panel enseña la última carga de la ruta; si un día hay
+dos cargas para el mismo motorizado, la anterior se abre desde la mesa de
+despacho de Almacén o desde el enlace antiguo `?caja=<carga>`.
+
