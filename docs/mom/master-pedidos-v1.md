@@ -1398,6 +1398,49 @@ Reglas:
 - Las referencias de la petición se conservan: son lo que se le reenvía a
   Aliclik para que lo corrijan de su lado.
 
+#### Una cotización no es cobertura
+
+La cobertura de un pedido la decide la **matriz de costos**: si existe una tarifa
+de primer intento que alcance ese destino, es Provincia COD. Y un cron nocturno
+alimenta esa matriz cotizando los distritos de los pedidos pendientes. Juntas,
+las dos cosas hacían que **una cotización bastara para convertir un distrito de
+Agencia en Provincia COD**, sin que nadie hubiera entregado nunca ahí y sin que
+nadie se enterara.
+
+Lo destapó Caravelí (#AUR177128, 19-09-2026): tarifa creada por el sondeo el
+17-09, cero envíos de Aliclik en su historia, la entrega suya más cercana a 247
+km, y ocho envíos reales por Shalom.
+
+Reglas:
+
+- **El sondeo no cotiza lo que no es un distrito.** La clienta escribe la
+  referencia en ese campo y se llegaron a crear tarifas para «frente al grifo
+  amazonas» o «2do puente de la av. 28 de julio». Se descartan las cadenas con
+  palabras de referencia o tipos de vía. La lista es corta a propósito: «puente»
+  no entra, porque Puente Piedra es un distrito; y no se filtra por dígitos,
+  porque eso se llevaba por delante «26 de Octubre», distrito de Piura con 44
+  entregas reales.
+- **El sondeo no cotiza donde ya consta que Aliclik no entrega**: distritos con
+  entregas reales de agencia y cero envíos de Aliclik. Se mira la ENTREGA y no la
+  guía creada, porque una guía anulada no prueba cobertura — es lo que pasó con
+  Tumbes (§0149).
+- **Lo que se pierde está dicho**: si Aliclik abre cobertura en uno de esos
+  destinos, el sondeo no lo va a descubrir solo. Se registra con una fila en
+  `district_coverage` o una tarifa cargada a mano, que es el camino correcto para
+  una decisión comercial en vez de que la tome un cron de madrugada.
+- **Un texto igual no es un lugar igual.** Al buscar los afectados, el primer
+  análisis comparó la cadena del campo distrito y metió en la lista a Mariscal
+  Nieto, que sí tiene cobertura: sus 62 envíos de Aliclik están registrados con
+  distrito «moquegua», y las filas con el texto «mariscal nieto» son pedidos donde
+  alguien escribió la provincia ahí. La comprobación que vale es **geográfica**:
+  cuántas entregas reales de Aliclik hay a menos de 30 km de ese punto.
+
+Decidido el 19-09-2026 con estos números, por distancia a la entrega de Aliclik
+más cercana: Caravelí 247 km, Huaura 165, Olmos 81, Sicuani 79, Huancavelica 77,
+Canchis 77, Azángaro 60 — los seis lugares pasan a Agencia. Y con cobertura
+confirmada, que el primer análisis había marcado mal: La Unión (122 entregas a 30
+km), Mariscal Nieto (34) y Chincha (23).
+
 ### 10.1 Qué fuente manda: la API sobre el Excel
 
 El estado de una guía Aliclik llega por dos vías, y **no valen lo mismo**:
