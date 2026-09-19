@@ -209,6 +209,10 @@ export function RoutesBoard({
           disabled={pending}
           onRun={run}
           canReport={canReport}
+          // En el panel de Reparto y liquidación (detailOnly) no se añaden
+          // paradas: eso es de la caja (paso 1) y de Despacho del día. Aquí
+          // solo se reporta, se cierra y se liquida.
+          canAddStops={!detailOnly}
         />
         <RiderPayPanel key={detail.route.id} routeId={detail.route.id} />
         </>
@@ -365,6 +369,7 @@ function RouteDetail({
   disabled,
   onRun,
   canReport,
+  canAddStops = true,
 }: {
   detail: { route: RouteRow; stops: StopWithOrder[] };
   assignable: Assignable[];
@@ -374,6 +379,7 @@ function RouteDetail({
   disabled: boolean;
   onRun: (fn: () => Promise<{ ok: boolean; error?: string; message?: string }>) => void;
   canReport?: boolean;
+  canAddStops?: boolean;
 }) {
   const { route, stops } = detail;
   const totals = useMemo(() => routeTotals(stops), [stops]);
@@ -549,7 +555,7 @@ function RouteDetail({
         </table>
       </div>
 
-      {!closed && retries.length > 0 && (
+      {!closed && canAddStops && retries.length > 0 && (
         <RetryPanel
           retries={retries}
           storeName={storeName}
@@ -558,7 +564,7 @@ function RouteDetail({
         />
       )}
 
-      {!closed && (
+      {!closed && canAddStops && (
         <div className="space-y-2 border-t border-slate-100 pt-3">
           <div className="flex flex-wrap items-center gap-2">
             <h4 className="text-sm font-medium text-slate-700">Añadir paradas nuevas</h4>
