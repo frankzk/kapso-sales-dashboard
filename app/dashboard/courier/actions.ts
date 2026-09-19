@@ -1167,7 +1167,11 @@ export async function assignGroupGfCourierRoute(
       continue;
     }
     if (verdict.message) cashWarnings.push(verdict.status === "blocked" ? `${verdict.message} Autorizado por ${auth.userId}.` : verdict.message);
-    const { data: manifestId, error: loadError } = await admin.rpc("gf_dispatch_load", {
+    // Una carga por motorizado y día cuando la verificación está apagada
+    // (0176): gf_dispatch_load_open devuelve la del día aunque ya esté en
+    // custodia; con el flag encendido es gf_dispatch_load, sin cambios.
+    const custodyAtAssign = custodyOnAssign(Boolean((provider as { rider_pickup_check_required?: boolean | null }).rider_pickup_check_required ?? true));
+    const { data: manifestId, error: loadError } = await admin.rpc("gf_dispatch_load_open", {
       p_org_id: orgId, p_rider_id: rider.id, p_day: routeDate, p_actor: auth.userId,
     });
     if (loadError || !manifestId) {
@@ -1176,15 +1180,20 @@ export async function assignGroupGfCourierRoute(
     }
     const manifest = { id: manifestId as string };
     manifestIds.push(manifest.id);
+    const { data: manifestRow } = await admin.from("dispatch_manifests").select("state").eq("id", manifest.id).maybeSingle();
+    const loadInCustody = manifestRow?.state === "in_custody";
     let insertedAny = false;
     for (const request of group) {
       const shipmentId = request.shipment_id as string;
-      const inserted = await admin.from("dispatch_manifest_items").insert({
-        manifest_id: manifest.id,
-        shipment_id: shipmentId,
-        store_id: request.store_id,
-        added_by: auth.userId,
-      });
+      const inserted = custodyAtAssign && loadInCustody
+        // La caja ya salió: el paquete entra cotejado, en custodia y con su parada.
+        ? await admin.rpc("gf_add_item_in_custody", { p_manifest_id: manifest.id, p_shipment_id: shipmentId, p_store_id: request.store_id, p_actor: auth.userId })
+        : await admin.from("dispatch_manifest_items").insert({
+            manifest_id: manifest.id,
+            shipment_id: shipmentId,
+            store_id: request.store_id,
+            added_by: auth.userId,
+          });
       if (inserted.error) {
         failed.push({
           requestId: request.id,
@@ -1235,7 +1244,7 @@ export async function assignGroupGfCourierRoute(
     }
     // Verificación del motorizado desactivada (0175): la custodia pasa al
     // asignar, el trigger crea las paradas y el motorizado ve su ruta.
-    if (insertedAny && custodyOnAssign(Boolean((provider as { rider_pickup_check_required?: boolean | null }).rider_pickup_check_required ?? true))) {
+    if (insertedAny && custodyAtAssign && !loadInCustody) {
       const { data: custodyOrders, error: custodyError } = await admin.rpc("gf_assign_custody", { p_manifest_id: manifest.id, p_actor: auth.userId });
       if (custodyError) {
         cashWarnings.push(`Asignados, pero la custodia no pasó sola: ${custodyError.message}`);
@@ -1243,6 +1252,8 @@ export async function assignGroupGfCourierRoute(
         for (const id of (custodyOrders ?? []) as string[]) changedOrderIds.add(id);
         cashWarnings.push(`Custodia entregada a ${rider.full_name}: sus paquetes ya están en su ruta.`);
       }
+    } else if (insertedAny && custodyAtAssign && loadInCustody) {
+      cashWarnings.push(`Sumados a la ruta de hoy de ${rider.full_name}: ya están en su reparto.`);
     }
   }
 
@@ -1698,12 +1709,14 @@ export async function moveManifestItem(
 
   // 1) abrir (o reutilizar) la carga del destino ANTES de retirar: si el
   // destino no admite paquetes, el origen no se toca.
-  const { data: targetManifestId, error: loadError } = await admin.rpc("gf_dispatch_load", {
+  const { data: targetManifestId, error: loadError } = await admin.rpc("gf_dispatch_load_open", {
     p_org_id: orgId, p_rider_id: rider.id, p_day: manifest.route_date, p_actor: auth.userId,
   });
   if (loadError || !targetManifestId) {
     return { error: loadError?.message ?? "No se pudo abrir la caja del otro motorizado." };
   }
+  const { data: targetRow } = await admin.from("dispatch_manifests").select("state").eq("id", targetManifestId as string).maybeSingle();
+  const targetInCustody = targetRow?.state === "in_custody";
   const now = new Date().toISOString();
   const fromName = manifest.driver_name ?? "otro motorizado";
   // 2) retirar del origen con el rastro
@@ -1713,13 +1726,15 @@ export async function moveManifestItem(
     .eq("id", item.id)
     .is("removed_at", null);
   if (removeError) return { error: removeError.message };
-  // 3) meter en el destino
-  const { error: insertError } = await admin.from("dispatch_manifest_items").insert({
-    manifest_id: targetManifestId as string,
-    shipment_id: shipmentId,
-    store_id: item.store_id,
-    added_by: auth.userId,
-  });
+  // 3) meter en el destino (si ya salió y la verificación está apagada, entra en custodia con su parada)
+  const { error: insertError } = targetInCustody
+    ? await admin.rpc("gf_add_item_in_custody", { p_manifest_id: targetManifestId as string, p_shipment_id: shipmentId, p_store_id: item.store_id, p_actor: auth.userId })
+    : await admin.from("dispatch_manifest_items").insert({
+        manifest_id: targetManifestId as string,
+        shipment_id: shipmentId,
+        store_id: item.store_id,
+        added_by: auth.userId,
+      });
   if (insertError) {
     // Deshacer el retiro para no dejar el paquete en el limbo.
     await admin.from("dispatch_manifest_items").update({ removed_at: null, removed_by: null, removal_reason: null }).eq("id", item.id);

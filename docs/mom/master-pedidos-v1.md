@@ -4783,7 +4783,12 @@ recepción del motorizado quedan como pasos opcionales que no bloquean nada: si
 se hacen, se registran igual (un cotejo sobre una caja ya en custodia se acepta
 como «registro opcional»); lo que no se admite es alterar la pertenencia de una
 caja que ya salió. El motorizado nunca ve «Recibir mi caja» con el flag en
-`false`. El valor de producción quedó en **`false`** por decisión de la
+`false`. Y hay **una sola carga por motorizado y día** (0176): si vuelve a la
+oficina, los paquetes nuevos se suman a la misma carga y ruta del día aunque
+ya esté en custodia (`gf_dispatch_load_open` la reutiliza;
+`gf_add_item_in_custody` mete el paquete cotejado, en custodia y con su parada,
+sin duplicar), y el cierre es por día. Con el flag en `true` una carga en
+custodia sigue abriendo una carga adicional, como en §29.5. El valor de producción quedó en **`false`** por decisión de la
 operación (19-09-2026). Se cambia sin desplegar:
 
 ```sql

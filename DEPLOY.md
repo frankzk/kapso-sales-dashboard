@@ -794,6 +794,11 @@ MOM §29.13; auditoría en `docs/plan/despacho-crm.md`.
    `/reparto` muestra la ruta; «Recibir mi caja» no aparece. Para volver a
    exigir la verificación:
    `update logistics_providers set rider_pickup_check_required = true where code = 'grupo-gf-courier';`
+   **Migración `0176_gf_one_load_per_day.sql`** (a mano, antes del código):
+   con el flag apagado hay una sola carga por motorizado y día; las
+   asignaciones posteriores se suman a ella ya en custodia
+   (`gf_dispatch_load_open`, `gf_add_item_in_custody`). Smoke:
+   `scripts/sql/gf_one_load_smoke.sql`.
    Se lee en un solo sitio (`riderPickupCheckRequired`,
    `lib/grupo-gf-courier-route-access.ts`); la cabecera de «Despacho del día»
    lo muestra. Smoke: `scripts/sql/gf_assign_custody_smoke.sql`.

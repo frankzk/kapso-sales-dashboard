@@ -68,6 +68,9 @@ paquete); el motorizado deja de ver la ruta hasta que aceptó su caja.
 - `logistics_providers.rider_pickup_check_required` (0175): la verificación
   del motorizado es un flag. En `false` (producción), asignar entrega la
   custodia (`gf_assign_custody`) y el cotejo/recepción son opcionales.
+- Una carga por motorizado y día con el flag apagado (0176):
+  `gf_dispatch_load_open` + `gf_add_item_in_custody`; el efectivo previsto y el
+  límite se calculan sobre la ruta completa del día.
 - `dispatch_route_reassigned` (order_events): mover un paquete de la caja de
   un motorizado a la de otro en el mismo día, con origen y destino.
 - `scanAssignToRider` (courier/actions): un QR = tomar + asignar + cotejar,
