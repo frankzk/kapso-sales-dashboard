@@ -8,7 +8,8 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ScanAction } from "@/components/scan-action";
-import { DECLINE_REASONS, declineMyGfPackage, receiveMyGfPackage } from "@/app/reparto/receive";
+import { declineMyGfPackage, receiveMyGfPackage } from "@/app/reparto/receive";
+import { DECLINE_REASONS } from "@/lib/rider-decline-reasons";
 import type { RiderLoad, RiderLoadItem } from "@/lib/gf-rider-loads";
 
 function cn(...parts: Array<string | false | null | undefined>): string {

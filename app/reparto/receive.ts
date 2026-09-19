@@ -4,6 +4,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { normalizeDispatchScan } from "@/lib/dispatch";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { revalidatePath } from "next/cache";
+import { DECLINE_REASONS } from "@/lib/rider-decline-reasons";
 
 const PATHS = ["/reparto", "/dashboard/courier/rutas", "/dashboard/courier", "/dashboard/courier/reparto"];
 
@@ -20,14 +21,6 @@ export async function receiveMyGfPackage(manifestId: string, rawCode: string): P
   for (const path of PATHS) revalidatePath(path);
   return { notice: data?.length ? "Carga recibida. Ya está en tu reparto." : "Paquete recibido." };
 }
-
-/** Motivos cortos de «no lo recojo». Cerrados para poder contarlos por motorizado. */
-export const DECLINE_REASONS = [
-  { code: "no_esta", label: "No está en la caja" },
-  { code: "danado", label: "Está dañado" },
-  { code: "no_cabe", label: "No cabe en la moto" },
-  { code: "otro", label: "Otro" },
-] as const;
 
 /**
  * «No lo recojo» (0174, MOM §29.13): el motorizado rechaza un paquete de su

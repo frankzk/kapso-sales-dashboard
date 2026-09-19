@@ -23,7 +23,8 @@ import {
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import { addManualStop, addSheetOnlyPoint, reportStop, searchOrdersForRider } from "@/app/reparto/actions";
 import { ScanAction } from "@/components/scan-action";
-import { confirmMyGfPickup, declineMyGfPackage, DECLINE_REASONS } from "@/app/reparto/receive";
+import { confirmMyGfPickup, declineMyGfPackage } from "@/app/reparto/receive";
+import { DECLINE_REASONS } from "@/lib/rider-decline-reasons";
 import { riderStopDecision, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import type { RiderOrderCandidate, RiderVocabulary } from "@/lib/sheets/rider-access";
 import { resolveWrittenForStop } from "@/lib/sheets/stop-bridge";
