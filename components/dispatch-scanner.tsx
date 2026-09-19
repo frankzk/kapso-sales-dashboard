@@ -33,12 +33,19 @@ export function DispatchScanner({ busy, disabled, onScan, onCamera, compact = fa
         <svg aria-hidden="true" className="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M8 5 6 8H3v12h18V8h-3l-2-3Z"/><circle cx="12" cy="13" r="3"/></svg>
         {busy ? "Verificando…" : (buttonLabel ?? "Escanear")}
       </button>
-      <form onSubmit={(event) => { event.preventDefault(); if (code.trim()) { onScan(code); setCode(""); } }}>
+      {/* En el teléfono no hay tecla Enter a la vista: el teclado muestra «Ir»
+          (enterKeyHint) y además hay un botón visible al lado del campo. Con
+          una pistola lectora, el lector escribe el código y manda el Enter. */}
+      <form className="flex items-stretch gap-2" onSubmit={(event) => { event.preventDefault(); if (code.trim()) { onScan(code); setCode(""); } }}>
         <input ref={input} value={code} onChange={(event) => setCode(event.target.value)} disabled={busy || disabled}
-          autoComplete="off" autoCapitalize="characters" spellCheck={false} enterKeyHint="go"
+          autoComplete="off" autoCapitalize="characters" autoCorrect="off" spellCheck={false} enterKeyHint="go" inputMode="text"
           aria-label="Código del paquete: QR, guía o número de pedido" placeholder="QR, guía o pedido"
-          className="min-h-12 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-50 sm:min-h-10 sm:text-sm" />
-        <button type="submit" className="sr-only" disabled={busy || disabled || !code.trim()}>Confirmar código</button>
+          className="min-h-12 w-full min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-50 sm:min-h-10 sm:text-sm" />
+        <button type="submit" disabled={busy || disabled || !code.trim()}
+          className="min-h-12 shrink-0 rounded-xl border border-slate-300 px-4 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40 sm:min-h-10 sm:sr-only sm:focus:not-sr-only"
+          title="También vale la tecla Ir del teclado o el Enter del lector">
+          Añadir
+        </button>
       </form>
     </div>;
   }
