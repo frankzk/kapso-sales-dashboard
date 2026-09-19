@@ -149,7 +149,9 @@ export function CourierRoutesLedger({
             {dayMode === "hoy" ? "Hoy no hay rutas todavía. Asigna pedidos desde Despacho del día." : "No hay rutas con esos filtros."}
           </p>
         )}
-        {/* Desktop: tabla con una cabecera por fecha. */}
+        {/* Desktop: tabla con una cabecera por fecha. Sin filas no se pinta:
+            la cabecera de columnas debajo del aviso vacío desconcertaba. */}
+        {groups.length > 0 && (
         <table className="hidden w-full text-sm lg:table">
           <thead className="sticky top-0 z-10 bg-slate-50 text-left text-xs text-slate-500">
             <tr>
@@ -175,6 +177,7 @@ export function CourierRoutesLedger({
             </tbody>
           ))}
         </table>
+        )}
         {/* Móvil: tarjetas bajo cada fecha. */}
         <div className="lg:hidden">
           {groups.map(([day, list]) => (
