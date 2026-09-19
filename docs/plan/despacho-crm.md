@@ -194,6 +194,13 @@ Segunda ronda (19-09-2026, tras probar con Roy y Yhoni):
   modo del proveedor no es «exigir» (`pickupModeByOrg` en
   `lib/dispatch-access.ts`), con los textos de «sin confirmar por Roy».
 - Tests: `courier-box-drawer`, `courier-navigation`, `dispatch-mobile`.
+- El panel de reparto y liquidación no repite datos (19-09-2026): `RouteDetail`
+  (`components/routes.tsx`) funde los contadores y el saldo en una fila de
+  métricas y enseña una sola tabla de paradas con tarifa, adicional y ganancia
+  por parada; `RiderPayPanel` en modo `compact` entrega su cálculo por
+  `onDetail` y se queda solo con las acciones (tarifa, adicional con
+  `presetStopId` desde «+ adicional», aprobar). Sin cabecera interna en
+  `detailOnly`; sin reintentos ni «Añadir paradas nuevas» ahí.
 
 ## 7. El detalle de la parada, al lado de la lista (19-09-2026)
 

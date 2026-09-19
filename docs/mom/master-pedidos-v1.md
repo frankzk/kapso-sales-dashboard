@@ -4985,11 +4985,18 @@ código en `lib/sheets/`, `app/dashboard/liquidaciones-2/` y
 de la liquidación si ya existe— que abre a la derecha el reparto y el cierre
 de la ruta (`?reparto=<ruta>`, `components/courier-route-report-drawer.tsx`,
 datos por `loadCourierRouteReport`): paradas, «Terminar ruta operativa»,
-«Cerrar con paradas sin reportar», reintentos, añadir paradas y el pago del
-motorizado, el mismo `RoutesBoard` de antes. Solo hay un panel abierto a la
-vez: abrir el reparto cierra la caja y viceversa. La caja ya no lleva enlaces
-a esa pantalla; la página `/dashboard/courier/reparto?id=` redirige a la lista
-con ese panel abierto.
+«Cerrar con paradas sin reportar» y el pago del motorizado, el mismo
+`RoutesBoard` de antes. Solo hay un panel abierto a la vez: abrir el reparto
+cierra la caja y viceversa. La caja ya no lleva enlaces a esa pantalla; la
+página `/dashboard/courier/reparto?id=` redirige a la lista con ese panel
+abierto. Añadir paradas y los reintentos no van en ese panel: eso es de la
+caja (paso 1) y de Despacho del día. El panel no repite datos: una fila de
+métricas (paradas, efectivo en manos, Yape/POS, ganancia base, adicionales y
+saldo con su explicación) y UNA tabla de paradas con cliente, pedido, tienda,
+distrito, resultado, cobro, respaldo, tarifa, adicional y ganancia, con scroll
+horizontal en pantallas estrechas y el cliente fijo a la izquierda. Tarifa y
+adicional quedan como plegables al pie; «+ adicional» en la fila abre el
+formulario con ese punto elegido.
 
 **Agregar pedidos desde la caja.** El paso 1 del panel de la caja escanea
 sobre ESA caja (`components/gf-box-add-packages.tsx`, `scanAssignToRider`

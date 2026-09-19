@@ -16,7 +16,9 @@ import { NON_DELIVERY_REASONS, PAYMENT_METHODS, routeTotals } from "@/lib/routes
 import { RISK_LABELS, type RiskAssessment } from "@/lib/retries";
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import type { RiderRow } from "@/lib/settlements-access";
-import { RiderPayPanel } from "@/components/rider-pay-panel";
+import { Hint } from "@/components/hint";
+import { RIDER_PAY_BALANCE_HINT, RiderPayPanel, riderPayBalanceLabel } from "@/components/rider-pay-panel";
+import type { RiderPayDetail } from "@/lib/rider-pay";
 import {
   addStops,
   closeRoute,
@@ -104,6 +106,10 @@ export function RoutesBoard({
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  // El cálculo del motorizado lo carga RiderPayPanel; la tabla única de la
+  // ruta lo enseña por parada (tarifa, adicional, ganancia) y en las métricas.
+  const [pay, setPay] = useState<RiderPayDetail | null>(null);
+  const [extraStop, setExtraStop] = useState<string | null>(null);
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string; message?: string }>) =>
     start(async () => {
@@ -213,8 +219,11 @@ export function RoutesBoard({
           // paradas: eso es de la caja (paso 1) y de Despacho del día. Aquí
           // solo se reporta, se cierra y se liquida.
           canAddStops={!detailOnly}
+          compact={detailOnly}
+          pay={pay}
+          onExtra={detailOnly ? setExtraStop : undefined}
         />
-        <RiderPayPanel key={detail.route.id} routeId={detail.route.id} />
+        <RiderPayPanel key={detail.route.id} routeId={detail.route.id} compact={detailOnly} onDetail={setPay} presetStopId={extraStop} />
         </>
       )}
     </div>
@@ -370,6 +379,9 @@ function RouteDetail({
   onRun,
   canReport,
   canAddStops = true,
+  compact = false,
+  pay = null,
+  onExtra,
 }: {
   detail: { route: RouteRow; stops: StopWithOrder[] };
   assignable: Assignable[];
@@ -380,9 +392,18 @@ function RouteDetail({
   onRun: (fn: () => Promise<{ ok: boolean; error?: string; message?: string }>) => void;
   canReport?: boolean;
   canAddStops?: boolean;
+  /** Dentro del panel lateral: sin título propio (el panel ya lo lleva). */
+  compact?: boolean;
+  /** Cálculo del motorizado, para las columnas de tarifa y el saldo. */
+  pay?: RiderPayDetail | null;
+  /** «+ adicional» en la fila: abre el formulario con ese punto elegido. */
+  onExtra?: (stopId: string) => void;
 }) {
   const { route, stops } = detail;
   const totals = useMemo(() => routeTotals(stops), [stops]);
+  const payRow = useMemo(() => new Map((pay?.snapshot.rows ?? []).map((r) => [r.stop_id, r])), [pay]);
+  const snap = pay?.snapshot ?? null;
+  const canExtra = !!onExtra && !!pay && !pay.approved && pay.canApprove && !closedStatus(route.status);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
 
@@ -432,11 +453,13 @@ function RouteDetail({
   const visible = remoto ?? enMemoria;
 
   return (
-    <Card className="space-y-4 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-slate-800">
-          {riderName} · {route.route_date}
-        </h3>
+    <Card className={cn("space-y-4", compact ? "p-0 shadow-none border-0" : "p-4")}>
+      <div className={cn("flex flex-wrap items-center gap-2", compact ? "justify-end" : "justify-between")}>
+        {!compact && (
+          <h3 className="text-sm font-semibold text-slate-800">
+            {riderName} · {route.route_date}
+          </h3>
+        )}
         <div className="flex flex-wrap items-center gap-2">
           {canReport && route.status === "en_curso" && <a href={`/reparto?ruta=${route.id}&modo=coordinacion`} className="inline-flex min-h-12 items-center rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white">Reportar entregas</a>}
           {planning && (
@@ -479,45 +502,60 @@ function RouteDetail({
         </div>
       </div>
 
+      {/* Una sola fila de métricas: lo operativo (paradas y cobros) y lo del
+          pago del motorizado (ganancia y saldo), sin repetirlo más abajo. */}
       <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        <Tile label="Paradas" value={String(totals.total)} />
-        <Tile label="Entregadas" value={String(totals.entregados)} tone="good" />
-        <Tile label="No entregadas" value={String(totals.noEntregados)} tone="bad" />
-        <Tile label="Sin reportar" value={String(totals.pendientes)} />
-        <Tile label="Efectivo" value={money(totals.efectivo)} />
+        <Tile label="Paradas" value={String(totals.total)} sub={`${totals.entregados} entregadas · ${totals.noEntregados} no · ${totals.pendientes} sin reportar`} />
+        <Tile label="Efectivo en manos" value={money(totals.efectivo)} />
         <Tile label="Yape / POS" value={`${money(totals.yape)} / ${money(totals.pos)}`} />
+        <Tile label="Ganancia base" value={snap ? (snap.missing ? "Sin tarifa" : money(snap.base)) : "…"} sub={snap?.missing ? `${snap.missing} punto(s) sin tarifa` : undefined} />
+        <Tile label="Adicionales" value={snap ? money(snap.extra) : "…"} />
+        <Tile
+          label={snap ? riderPayBalanceLabel(snap.net_cash) : "Saldo"}
+          value={snap ? (snap.net_cash === null ? "—" : money(Math.abs(snap.net_cash))) : "…"}
+          highlight
+          hint={RIDER_PAY_BALANCE_HINT}
+        />
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-sm">
+      {/* Tabla única de paradas: en escritorio cabe; en pantallas estrechas se
+          desplaza en horizontal con el cliente fijo a la izquierda. */}
+      <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+        <table className="w-full min-w-[1040px] text-sm">
           <thead className="border-b border-slate-200 text-left text-xs text-slate-500">
             <tr>
-              <th className="px-3 py-2 font-medium">#</th>
-              <th className="px-3 py-2 font-medium">Cliente</th>
+              <th className="sticky left-0 z-[1] bg-white px-3 py-2 font-medium">Cliente</th>
+              <th className="px-3 py-2 font-medium">Pedido</th>
               <th className="px-3 py-2 font-medium">Tienda</th>
               <th className="px-3 py-2 font-medium">Distrito</th>
-              <th className="px-3 py-2 font-medium">Pedido</th>
               <th className="px-3 py-2 font-medium">Resultado</th>
               <th className="px-3 py-2 font-medium">Cobró</th>
               <th className="px-3 py-2 font-medium">Respaldo</th>
-              {planning && <th className="px-3 py-2 font-medium" />}
+              <th className="px-3 py-2 text-right font-medium">Tarifa</th>
+              <th className="px-3 py-2 text-right font-medium">Adicional</th>
+              <th className="px-3 py-2 text-right font-medium">Ganancia</th>
+              {(planning || canExtra) && <th className="px-3 py-2 font-medium" />}
             </tr>
           </thead>
           <tbody>
-            {stops.map((s) => (
-              <tr key={s.id} className="border-b border-slate-100">
-                <td className="px-3 py-2 text-slate-400">{s.seq}</td>
-                <td className="px-3 py-2 text-slate-700">{s.order?.customer_name ?? "—"}</td>
+            {stops.map((s) => {
+              const pr = payRow.get(s.id);
+              return (
+              <tr key={s.id} className="border-b border-slate-100 whitespace-nowrap">
+                <td className="sticky left-0 z-[1] bg-white px-3 py-2 text-slate-700">
+                  <span className="mr-1.5 text-xs tabular-nums text-slate-400">{s.seq}</span>
+                  {s.order?.customer_name ?? "—"}
+                </td>
+                <td className="px-3 py-2 text-slate-500">
+                  {s.order?.name ? <OrderLink orderId={s.order_id} className="underline decoration-slate-300 hover:text-brand-700" title="Abrir la ficha del pedido">{s.order.name}</OrderLink> : "—"}
+                </td>
                 <td className="px-3 py-2 text-slate-500">{storeName(s.store_id)}</td>
                 <td className="px-3 py-2 text-slate-500">{s.order?.district ?? "—"}</td>
-                <td className="px-3 py-2 text-slate-500">{s.order?.name ?? "—"}</td>
                 <td className="px-3 py-2">
                   {s.status === "pendiente" ? (
                     <span className="text-xs text-slate-400">Sin reportar</span>
                   ) : s.status === "entregado" ? (
-                    <span className="text-xs font-medium text-emerald-700">
-                      Entregado · {methodLabel(s.payment_method)}
-                    </span>
+                    <span className="text-xs font-medium text-emerald-700">Entregado</span>
                   ) : (
                     <span className="text-xs font-medium text-red-700">
                       No entregado · {reasonLabel(s.outcome_reason)}
@@ -526,28 +564,37 @@ function RouteDetail({
                   {s.note && <p className="text-[11px] text-slate-400">{s.note}</p>}
                 </td>
                 <td className="px-3 py-2 text-slate-700">
-                  {s.status === "entregado" ? money(s.collected_amount) : "—"}
+                  {s.status === "entregado" ? <>{methodLabel(s.payment_method)} · {money(s.collected_amount)}</> : "—"}
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-500">
                   {s.photo_path ? "📷" : "—"} {s.voucher_path ? "🧾" : ""}
                 </td>
-                {planning && (
+                <td className="px-3 py-2 text-right tabular-nums text-slate-700">{pr ? (pr.base === null ? <span className="text-xs text-amber-700">Sin tarifa</span> : money(pr.base)) : "—"}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-700">{pr ? money(pr.extra) : "—"}</td>
+                <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-900">{pr ? (pr.base === null ? "—" : money(pr.base + pr.extra)) : "—"}</td>
+                {(planning || canExtra) && (
                   <td className="px-3 py-2 text-right">
-                    <button
-                      disabled={disabled}
-                      onClick={() => onRun(() => removeStop(s.id))}
-                      className="text-xs text-slate-500 underline hover:text-red-600 disabled:opacity-50"
-                    >
-                      Quitar
-                    </button>
+                    {planning && (
+                      <button
+                        disabled={disabled}
+                        onClick={() => onRun(() => removeStop(s.id))}
+                        className="text-xs text-slate-500 underline hover:text-red-600 disabled:opacity-50"
+                      >
+                        Quitar
+                      </button>
+                    )}
+                    {canExtra && (
+                      <button type="button" onClick={() => onExtra?.(s.id)} className="text-xs text-brand-700 underline-offset-2 hover:underline" title="Aprobar un adicional para este punto">+ adicional</button>
+                    )}
                   </td>
                 )}
               </tr>
-            ))}
+              );
+            })}
             {stops.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-500">
-                  Esta ruta no tiene paradas. Añádelas abajo.
+                <td colSpan={11} className="px-3 py-6 text-center text-sm text-slate-500">
+                  {canAddStops ? "Esta ruta no tiene paradas. Añádelas abajo." : "Esta ruta no tiene paradas."}
                 </td>
               </tr>
             )}
@@ -646,18 +693,19 @@ function RouteDetail({
   );
 }
 
-function Tile({ label, value, tone }: { label: string; value: string; tone?: "good" | "bad" }) {
+function closedStatus(status: string): boolean {
+  return status === "cerrada";
+}
+
+function Tile({ label, value, sub, hint, highlight }: { label: string; value: string; sub?: string; hint?: string; highlight?: boolean }) {
   return (
-    <div className="rounded-lg border border-slate-200 p-2.5">
-      <p className="text-[11px] text-slate-500">{label}</p>
-      <p
-        className={cn(
-          "mt-0.5 text-sm font-semibold",
-          tone === "good" ? "text-emerald-700" : tone === "bad" ? "text-red-600" : "text-slate-800",
-        )}
-      >
-        {value}
+    <div className={cn("min-w-0 rounded-lg border p-2.5", highlight ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200")}>
+      <p className={cn("flex items-center gap-1 text-[11px]", highlight ? "text-slate-300" : "text-slate-500")}>
+        <span className="truncate">{label}</span>
+        {hint && <Hint text={hint} className={highlight ? "text-slate-300" : undefined} />}
       </p>
+      <p className={cn("mt-0.5 truncate text-sm font-semibold tabular-nums", highlight ? "text-white" : "text-slate-800")}>{value}</p>
+      {sub && <p className={cn("mt-0.5 truncate text-[11px]", highlight ? "text-slate-300" : "text-slate-500")}>{sub}</p>}
     </div>
   );
 }

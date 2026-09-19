@@ -105,4 +105,22 @@ describe("la caja se abre al lado de Rutas (MOM §29.14)", () => {
     expect(lib).toMatch(/chunked\(manifestIds, (\d|1\d|2[0-5]), \(ids\) =>\s*sb\.from\("dispatch_manifest_items"\)/);
     expect(lib).toContain("if (error) throw new Error(error.message);");
   });
+
+  it("Reparto y liquidación: una sola tabla y sin datos repetidos (19-09-2026)", () => {
+    const routes = readFileSync(resolve(process.cwd(), "components/routes.tsx"), "utf8");
+    const pay = readFileSync(resolve(process.cwd(), "components/rider-pay-panel.tsx"), "utf8");
+    // La tabla única lleva las columnas del pago y el cálculo viaja del panel de pago a la tabla.
+    for (const col of ["Tarifa", "Adicional", "Ganancia"]) expect(routes).toContain(`font-medium">${col}</th>`);
+    expect(routes).toContain("compact={detailOnly}");
+    expect(routes).toContain("onDetail={setPay}");
+    expect(routes).toContain("+ adicional");
+    // En el panel lateral no hay cabecera interna: el panel ya titula.
+    expect(routes).toContain("{!compact && (");
+    // El panel de pago en modo compacto no repite importes ni desglose.
+    expect(pay).toContain("{!compact && <dl");
+    expect(pay).toContain("presetStopId");
+    // Scroll horizontal con el cliente fijo.
+    expect(routes).toContain("overflow-x-auto");
+    expect(routes).toContain("sticky left-0");
+  });
 });
