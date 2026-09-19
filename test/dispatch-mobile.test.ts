@@ -81,12 +81,15 @@ describe("mobile verification", () => {
   it("in custody with pickup mode «confirmar», reception stays open for the unconfirmed packages (0177 fallback)", () => {
     // El motorizado no pudo confirmar desde su teléfono: el supervisor escanea aquí lo que sí lleva.
     const html = renderBox(manifest(true, false, "in_custody"), true, true, "confirmar");
-    expect(html).toContain("1 paquete sin confirmar por Roy");
+    // El respaldo va DEBAJO de la lista de paquetes, con su propio título.
+    expect(html).toContain("Confirmar por Roy");
+    expect(html).toContain("1 paquete sin confirmar");
+    expect(html.indexOf("Confirmar por Roy")).toBeGreaterThan(html.indexOf("Paquetes recibidos"));
     expect(html).toContain("Escanear con cámara");
     expect(html).not.toContain("La entrega de esta carga quedó registrada");
     // En «exigir» la carga en custodia sigue cerrada.
     const strict = renderBox(manifest(true, false, "in_custody"), true, true, "exigir");
-    expect(strict).not.toContain("sin confirmar por Roy");
+    expect(strict).not.toContain("Confirmar por Roy");
     // Y en oficina, con custodia, el escáner no vuelve: la caja ya salió.
     const office = renderBox(manifest(true, false, "in_custody"), true, false, "confirmar");
     expect(office).toContain("ya salió con Roy");

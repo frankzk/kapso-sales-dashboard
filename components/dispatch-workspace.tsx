@@ -382,10 +382,12 @@ export function DispatchBoxPanel({
               ) : mode !== "build" && (
                 <>
                   {mode === "pickup" && selected && !progress?.officeComplete && <p className="mt-3 text-sm text-amber-800">Primero completa la verificación de oficina.</p>}
-                  {mode === "pickup" && custodyPickupOpen && pickupPending > 0 && (
-                    <p className="mt-3 text-sm text-amber-800">{pickupPending} paquete{pickupPending === 1 ? "" : "s"} sin confirmar por {selected?.driver_name ?? "el motorizado"}. Si no puede confirmar desde su teléfono, escanea aquí los que sí lleva.</p>
+                  {/* Con la caja ya en poder del motorizado, confirmar por él es
+                      un respaldo: va DEBAJO de la lista, con su propio título,
+                      y no como el gesto principal del paso. */}
+                  {!(mode === "pickup" && custodyPickupOpen) && (
+                    <DispatchScanner key={`${manifestId}:${mode}`} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
                   )}
-                  <DispatchScanner key={`${manifestId}:${mode}`} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
                 </>
               )}
               {message && <div role={message.tone === "error" ? "alert" : "status"} className={cn("mt-4 rounded-xl px-4 py-3 text-sm font-medium", message.tone === "error" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800")}>{message.text}</div>}
@@ -410,7 +412,22 @@ export function DispatchBoxPanel({
                 <div className="p-12 text-center text-sm text-slate-500">Elige una ruta de la lista o crea una nueva.</div>
               )
             ) : selected ? (
-              <ManifestDetail manifest={selected} mode={mode} canManage={canManage} onChanged={() => refresh(selected.id)} showResult={showResult} />
+              <>
+                <ManifestDetail manifest={selected} mode={mode} canManage={canManage} onChanged={() => refresh(selected.id)} showResult={showResult} />
+                {mode === "pickup" && custodyPickupOpen && (
+                  <div className="border-t border-slate-200 p-4 sm:p-7">
+                    <p className="text-sm font-semibold text-slate-900">Confirmar por {selected.driver_name ?? "el motorizado"}</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      {pickupPending > 0
+                        ? `${pickupPending} paquete${pickupPending === 1 ? "" : "s"} sin confirmar. Si no puede hacerlo desde su teléfono, escanea aquí los que sí lleva; queda registrado con tu usuario.`
+                        : "Todos los paquetes están confirmados."}
+                    </p>
+                    {pickupPending > 0 && (
+                      <DispatchScanner key={`${manifestId}:${mode}:custodia`} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
+                    )}
+                  </div>
+                )}
+              </>
             ) : (
               <div className="p-12 text-center text-sm text-slate-500">Elige una ruta de la lista o crea una nueva.</div>
             )}
