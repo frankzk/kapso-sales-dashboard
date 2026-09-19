@@ -769,6 +769,27 @@ historial por celda y observaciones de cuadre. Plan e iteraciones en
     observación abierta, anulado en Shopify, parada no entregada. Fechas
     futuras del cuaderno se acotan a hoy. Primer lote corrido el 19-09-2026.
 
+## 5k-quater. Despacho en dos pasos (Grupo GF Courier)
+
+MOM §29.13; auditoría en `docs/plan/despacho-crm.md`.
+
+1. **Migración `0174_manifest_item_not_picked.sql`**, a mano, antes del código:
+   columnas `pickup_declined_*` en los ítems de la caja y el RPC
+   `gf_rider_decline`. Smoke en `scripts/sql/gf_rider_decline_smoke.sql`.
+2. Pestaña «Despacho del día» en `/dashboard/courier` (predeterminada):
+   asignar en un paso (toma + asigna, con corte y límite de efectivo) y
+   cotejar por motorizado en la misma pantalla, con quitar y mover entre cajas
+   (`moveManifestItem`, evento `dispatch_route_reassigned`). Las pestañas
+   anteriores siguen disponibles.
+3. `/reparto` abre en «Recibir mi caja» mientras haya una carga cotejada y no
+   recibida; «No lo recojo» exige motivo. El bloque «Recibir mi carga» de la
+   pantalla vieja desapareció.
+4. `components/scan-action.tsx` es el único gesto de escaneo/foto; la mesa de
+   despacho (`DispatchWorkspace`) y la estación de almacén conservan su escáner
+   propio por ahora.
+5. «Actividad» del Master etiqueta los hitos del despacho; `?abrir=<pedido>&seccion=historial`
+   abre el drawer en esa pestaña.
+
 ## 5k-ter. Rutas de reparto (motorizados propios)
 
 Sección propia (`/dashboard/rutas`) para el coordinador y una pantalla aparte

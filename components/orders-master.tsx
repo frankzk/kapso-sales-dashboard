@@ -576,7 +576,17 @@ export function OrdersMasterBoard({
   const [navigating, startNav] = useTransition();
   const [showMore, setShowMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [openWorkspace, setOpenWorkspace] = useState<DrawerWorkspaceView>("operar");
   const changeToken = useRef<string | null>(null);
+  // «Ver actividad» desde Grupo GF Courier llega con ?abrir=<pedido>&seccion=historial:
+  // abre el drawer en la pestaña Actividad sin que nadie tenga que buscar el pedido.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const abrir = params.get("abrir");
+    if (!abrir) return;
+    setOpenWorkspace(params.get("seccion") === "historial" ? "actividad" : "operar");
+    setOpenId(abrir);
+  }, []);
   // Selección para acciones en lote (hoy: imprimir rótulos).
   //
   // SOBREVIVE A LAS BÚSQUEDAS. La tanda de rótulos del día se arma buscando
@@ -1278,8 +1288,9 @@ export function OrdersMasterBoard({
           closurePermissions={closurePermissions}
           storeName={storeName}
           storeDomain={storeDomain}
-          onClose={() => setOpenId(null)}
+          onClose={() => { setOpenId(null); setOpenWorkspace("operar"); }}
           onSaved={() => router.refresh()}
+          initialWorkspace={openWorkspace}
         />
       )}
 
@@ -2278,6 +2289,20 @@ const TIMELINE_LABEL: Record<string, string> = {
   order_finalized: "Expediente finalizado",
   order_reopened: "Expediente reabierto",
   status_override: "Estado cambiado manualmente",
+  // Camino del pedido en Grupo GF Courier (MOM §29.13): lo que escriben la
+  // bandeja, la mesa de despacho, el teléfono del motorizado y Liquidaciones 2.
+  logistics_request_accepted: "Tomado por Grupo GF Courier",
+  dispatch_route_assigned: "Asignado a la caja del motorizado",
+  dispatch_route_reassigned: "Movido a la caja de otro motorizado",
+  package_ready: "Paquete armado en almacén",
+  package_added: "Paquete puesto en una caja",
+  package_removed: "Paquete retirado de la caja",
+  office_checked: "Cotejado en oficina",
+  pickup_checked: "Recibido por el motorizado",
+  pickup_declined: "No recogido por el motorizado",
+  handed_to_courier: "Entregado al courier",
+  manifest_created: "Caja abierta",
+  manifest_cancelled: "Caja cancelada",
   import: "Reporte importado",
   call: "Gestión con el cliente",
   state_change: "Cambio de estado",
@@ -2601,6 +2626,7 @@ function OrderDrawer({
   storeDomain,
   onClose,
   onSaved,
+  initialWorkspace,
 }: {
   orderId: string;
   canEdit: boolean;
@@ -2620,10 +2646,12 @@ function OrderDrawer({
   storeDomain: (id: string) => string | null;
   onClose: () => void;
   onSaved: () => void;
+  /** Con qué pestaña abre: «Ver actividad» desde Grupo GF Courier pide «actividad». */
+  initialWorkspace?: DrawerWorkspaceView;
 }) {
   const [detail, setDetail] = useState<OrderMasterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [workspace, setWorkspace] = useState<DrawerWorkspaceView>("operar");
+  const [workspace, setWorkspace] = useState<DrawerWorkspaceView>(initialWorkspace ?? "operar");
   const scrollRef = useRef<HTMLElement>(null);
 
   /**

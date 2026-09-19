@@ -240,6 +240,7 @@ export function DispatchDayBoard(props: Props) {
                   <div className="flex flex-wrap items-center gap-2">
                     <Link href={`/dashboard/pedidos?q=${encodeURIComponent(q.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">{q.orderName}</Link>
                     <span className="text-xs text-slate-500">{q.storeName}</span>
+                    <Link href={`/dashboard/pedidos?q=${encodeURIComponent(q.orderName)}&abrir=${encodeURIComponent(q.orderId)}&seccion=historial`} className="text-[11px] text-brand-700 underline">Ver actividad</Link>
                     {q.taken && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">tomado · sin caja</span>}
                     {q.taken && q.armed && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">armado</span>}
                     {q.observation && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800" title={q.observation}>observado</span>}

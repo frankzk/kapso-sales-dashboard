@@ -4726,6 +4726,51 @@ Reparto propio es una vista con vocabulario y cuadre encima de ella:
   entregada queda como `efectivo` en la parada (la parada lo exige) con
   `written_payment` null, para que se vea que no se escribió.
 
+### 29.13 Despacho en dos pasos y el gesto único (19-09-2026)
+
+Auditoría y rediseño en `docs/plan/despacho-crm.md`. Llevar un pedido de
+«disponible» a «en poder del motorizado» costaba 9-10 clics en tres pantallas
+y dejaba tres huecos: el motorizado no podía decir «no lo recojo», mover un
+paquete entre cajas no dejaba evento, y el mismo gesto de escanear o
+fotografiar vivía en tres componentes que decidían por su cuenta.
+
+**Dos pasos para el supervisor, en una pantalla.** La pestaña «Despacho del
+día» de Grupo GF Courier tiene a la izquierda la cola de Lima (disponibles y
+tomados sin caja, con filtro por tienda y distrito) y un solo botón «Asignar a
+X» que toma y asigna en una acción, con el corte de las 11:30 y el límite de
+efectivo de §29.9 dentro. A la derecha, las cajas de hoy por motorizado con el
+cotejo de oficina en línea; desde la misma fila un paquete se **quita** (con
+motivo, `package_removed`) o se **mueve** a otro motorizado
+(`dispatch_route_reassigned`, con origen y destino). Mover abre la carga del
+destino antes de retirar del origen: si el destino ya está en cotejo, no se
+toca nada, igual que al asignar (§29.5).
+
+**Un paso para el motorizado, antes de la ruta.** Mientras su carga esté
+cotejada por oficina y sin custodia, `/reparto` abre en «Recibir mi caja»: un
+escaneo por paquete y, por paquete, «No lo recojo» con un motivo corto (no
+está en la caja, dañado, no cabe, otro). El rechazo (0174, `gf_rider_decline`)
+retira el paquete de la carga con rastro «No recogido por X: motivo», deja
+`pickup_declined` en el pedido, devuelve la solicitud a `accepted` con
+observación —reaparece en «por asignar» y el supervisor la asigna a otro— y
+libera la salida para otra caja el mismo día. **El 100 % se calcula sobre los
+aceptados**: con lo demás recibido, la custodia pasa en el mismo acto y las
+paradas se crean solo para lo aceptado. La ruta aparece recién con la custodia
+cambiada. Un paquete ya recibido no se rechaza desde el teléfono: lo retira el
+supervisor.
+
+**El gesto único.** Escanear o fotografiar es un solo componente
+(`ScanAction`) y el contexto lo fija la pantalla, nunca el usuario:
+`oficina_cotejo` → `office_checked`; `motorizado_recepcion` →
+`pickup_checked` o `pickup_declined`; `motorizado_entrega` → foto de la
+parada; `supervisor_retiro` → `package_removed` con motivo. Cada uno deja su
+evento en el pedido y recalcula el Master.
+
+**Trazabilidad.** La pestaña «Actividad» del drawer del Master etiqueta en
+español todos los hitos del camino —tomado, asignado, cotejado en oficina,
+recibido, no recogido con motivo, movido, retirado, entregado, aplicado al
+Master— con actor y hora, sobre `order_events`; no hay otra línea de tiempo.
+«Ver actividad» desde Grupo GF Courier abre ese drawer en esa pestaña.
+
 ## 30. Liquidaciones 2 — hojas por dominio
 
 Plan y hallazgos en `docs/plan/liquidaciones-2.md`. Base en la migración 0168;
