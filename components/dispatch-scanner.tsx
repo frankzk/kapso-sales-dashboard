@@ -21,10 +21,30 @@ export function DispatchScanner({ busy, disabled, onScan, onCamera, compact = fa
   const [manual, setManual] = useState(false);
   const [code, setCode] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  // Sin autoenfoque al cargar: el halo de foco nada más abrir la página
+  // molesta. Una pistola lectora sigue funcionando sola: si empieza a
+  // escribir sin que haya un campo enfocado, el primer carácter enfoca este
+  // campo y no se pierde. Tras un escaneo (busy → libre) el foco vuelve aquí
+  // para encadenar lecturas.
+  const hadBusy = useRef(false);
   useEffect(() => {
-    if (!busy && !disabled && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+    if (busy) hadBusy.current = true;
+    else if (hadBusy.current && !disabled) {
+      hadBusy.current = false;
       input.current?.focus({ preventScroll: true });
     }
+  }, [busy, disabled]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (disabled || busy || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key.length !== 1) return;
+      const active = document.activeElement;
+      if (active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)) return;
+      if (active && (active as HTMLElement).isContentEditable) return;
+      input.current?.focus({ preventScroll: true });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, [busy, disabled]);
   if (compact) {
     return <div className="space-y-2" aria-busy={busy}>
