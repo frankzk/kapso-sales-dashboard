@@ -257,16 +257,25 @@ export function DispatchDayBoard(props: Props) {
     const split = splitAssignment(selected, props.available, props.accepted);
     setSelected(new Set());
     run(async () => {
-      const messages: string[] = [];
+      // Lo que falló se dice como error, en rojo y sin repetirse; lo demás
+      // como aviso. Antes todo salía junto en verde, también los rechazos.
+      const notices: string[] = [];
+      const errors: string[] = [];
       for (let i = 0; i < split.orderIds.length; i += 50) {
         const r = await takeAndAssignGroupGfCourierOrders(orgId, riderId, split.orderIds.slice(i, i + 50), { overrideCash });
-        messages.push(r.error ?? r.notice ?? "");
+        if (r.error) errors.push(r.error);
+        else if (r.notice) notices.push(r.notice);
       }
       if (split.requestIds.length) {
         const r = await assignGroupGfCourierRoute(orgId, riderId, split.requestIds, { overrideCash });
-        messages.push([r.notice, r.cashWarning, r.error, ...r.failed.map((f) => f.error)].filter(Boolean).join(" "));
+        if (r.notice) notices.push(r.notice);
+        if (r.cashWarning) notices.push(r.cashWarning);
+        if (r.error) errors.push(r.error);
+        for (const f of r.failed) errors.push(f.error);
       }
-      return { notice: messages.filter(Boolean).join(" ") || `Asignados a ${riderName}.` };
+      const unique = (list: string[]) => [...new Set(list.filter(Boolean))].join(" ");
+      if (errors.length) return { error: unique([...errors, ...notices]) };
+      return { notice: unique(notices) || `Asignados a ${riderName}.` };
     });
   }
 

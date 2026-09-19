@@ -4855,7 +4855,10 @@ y en uno en SQL (`gf_rider_pickup_mode`); sin proveedor se asume `exigir`.
   QR en serie. **«No lo llevo»** con motivo (`gf_rider_decline`, que en este
   modo admite la caja en custodia) retira el ítem, **borra su parada si sigue
   pendiente**, devuelve la custodia a la empresa y la solicitud vuelve a «por
-  asignar» con el evento `pickup_declined` («No lo llevó Roy: motivo»). Lo
+  asignar» con el evento `pickup_declined` («No lo llevó Roy: motivo»). Ese
+  paquete se puede volver a asignar a cualquier motorizado, incluida la misma
+  caja del mismo día: la fila retirada revive (0179) y el rechazo anterior
+  queda solo en el historial. Lo
   asignado y no confirmado es «no se lo llevó»: en «Despacho del día» cada caja
   muestra **confirmados/asignados** junto a los cotejados y un desplegable
   **«Sin confirmar por Roy · N»** con «Mover a…» y «Quitar»

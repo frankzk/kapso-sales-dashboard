@@ -359,4 +359,6 @@
 \ir migrations/0177_provider_rider_pickup_mode.sql
 \echo 'Applying 0178_order_master_rider_select.sql'
 \ir migrations/0178_order_master_rider_select.sql
+\echo 'Applying 0179_gf_readd_declined_item.sql'
+\ir migrations/0179_gf_readd_declined_item.sql
 \echo 'Done.'

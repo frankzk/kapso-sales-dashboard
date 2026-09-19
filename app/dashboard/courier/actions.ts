@@ -1276,17 +1276,27 @@ export async function assignGroupGfCourierRoute(
       const inserted = custodyAtAssign && loadInCustody
         // La caja ya salió: el paquete entra cotejado, en custodia y con su parada.
         ? await admin.rpc("gf_add_item_in_custody", { p_manifest_id: manifest.id, p_shipment_id: shipmentId, p_store_id: request.store_id, p_actor: auth.userId })
-        : await admin.from("dispatch_manifest_items").insert({
+        // Caja aún sin custodia: fila nueva, o la que el motorizado rechazó
+        // en esta misma caja y revive (0179), como al mover de caja.
+        : await admin.from("dispatch_manifest_items").upsert({
             manifest_id: manifest.id,
             shipment_id: shipmentId,
             store_id: request.store_id,
             added_by: auth.userId,
-          });
+            added_at: new Date().toISOString(),
+            removed_at: null,
+            removed_by: null,
+            removal_reason: null,
+            pickup_declined_at: null,
+            pickup_declined_by: null,
+            pickup_declined_reason: null,
+          }, { onConflict: "manifest_id,shipment_id" });
       if (inserted.error) {
         failed.push({
           requestId: request.id,
+          // Solo queda el índice de «un paquete activo a la vez»: está en otra caja.
           error: inserted.error.code === "23505"
-            ? "El paquete ya fue asignado a otra ruta."
+            ? "El paquete ya está en otra caja activa."
             : inserted.error.message,
         });
         continue;

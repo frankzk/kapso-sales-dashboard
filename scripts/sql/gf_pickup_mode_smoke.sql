@@ -75,6 +75,17 @@ begin
   if not exists (select 1 from order_events where order_id='17700000-0000-0000-0000-000000000005' and kind='pickup_declined' and note='No lo llevó Roy modo: no cabe en la moto') then raise exception 'no lo llevó event missing'; end if;
   if (select state from dispatch_manifests where id=v_load) <> 'in_custody' then raise exception 'load left custody'; end if;
 
+  -- Vuelve a la MISMA caja (0179): la fila retirada revive con parada y custodia;
+  -- se rechaza otra vez para dejar el resto del guion como estaba.
+  v_order := gf_add_item_in_custody(v_load,'17700000-0000-0000-0000-000000000007','17700000-0000-0000-0000-000000000002','17700000-0000-0000-0000-000000000009');
+  if v_order <> '17700000-0000-0000-0000-000000000005' then raise exception 'readd order not returned'; end if;
+  if (select count(*) from dispatch_manifest_items where manifest_id=v_load and shipment_id='17700000-0000-0000-0000-000000000007') <> 1 then raise exception 'readd duplicated the item'; end if;
+  if (select removed_at is null and pickup_declined_at is null and office_checked_at is not null from dispatch_manifest_items where id=v_item2) is not true then raise exception 'readded item not revived'; end if;
+  if not exists (select 1 from delivery_stops where route_id=v_route and shipment_id='17700000-0000-0000-0000-000000000007') then raise exception 'readded stop missing'; end if;
+  if (select custody_state from shipments where id='17700000-0000-0000-0000-000000000007') <> 'courier' then raise exception 'readded custody missing'; end if;
+  v_orders := gf_rider_decline(v_load,'17700000-0000-0000-0000-000000000007','no cabe en la moto','17700000-0000-0000-0000-000000000009');
+  if (select custody_state from shipments where id='17700000-0000-0000-0000-000000000007') <> 'empresa' then raise exception 'second decline custody not returned'; end if;
+
   -- Lo ya confirmado no se rechaza ni lo retira el supervisor.
   begin
     perform gf_rider_decline(v_load,'17700000-0000-0000-0000-000000000006','ya no','17700000-0000-0000-0000-000000000009');
