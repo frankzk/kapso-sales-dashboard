@@ -177,18 +177,34 @@ describe("la cola de confirmación", () => {
     expect(confirmationQueueBucket({ cycleDueOn: "2026-08-01" }, now)).toBe("hoy");
   });
 
-  it("el recordatorio de dos horas ordena su propio día", () => {
+  // «Hoy» es la lista que se lleva a cero. Cada llamada saca al pedido y el
+  // recordatorio lo devuelve cuando toca: antes de su hora es «todavía no»
+  // (Próximos), llegada su hora es «toca ahora» (Hoy). Nunca Vencidos.
+  it("el recordatorio manda a Próximos hasta su hora y a Hoy cuando llega", () => {
     const reminder = (iso: string) => confirmationQueueBucket({ reminderDueAt: iso }, now);
-    expect(reminder("2026-08-28T15:00:00.000Z")).toBe("vencido"); // 10:00 Lima, ya pasó
-    expect(reminder("2026-08-28T21:00:00.000Z")).toBe("hoy"); // 16:00 Lima, falta
-    expect(reminder("2026-08-29T15:00:00.000Z")).toBe("proximo");
+    expect(reminder("2026-08-28T21:00:00.000Z")).toBe("proximo"); // 16:00 Lima, falta
+    expect(reminder("2026-08-28T15:00:00.000Z")).toBe("hoy"); // 10:00 Lima, ya tocaba
+    expect(reminder("2026-08-29T15:00:00.000Z")).toBe("proximo"); // mañana
   });
 
-  it("un recordatorio de hace semanas ya no manda: lo coloca el ciclo", () => {
-    // Este es #KP126408. Antes se quedaba en «Vencidos» para siempre.
+  // Era la cinta de correr: llamar a la 1pm lo mandaba a Vencidos a las 3pm,
+  // rellamar lo mandaba a Vencidos a las 5pm, y el equipo leía «Vencidos»
+  // como «abandonados» encontrando dentro lo que acababa de llamar. Medido el
+  // 16-09-2026: 24 en Vencidos, los 24 por esto, cero por fecha pactada.
+  it("un recordatorio pasado NUNCA es Vencido: eso es solo la fecha pactada", () => {
+    expect(confirmationQueueBucket({ reminderDueAt: "2026-08-28T15:00:00.000Z" }, now)).not.toBe(
+      "vencido",
+    );
+    expect(confirmationQueueBucket({ nextContactOn: "2026-08-27" }, now)).toBe("vencido");
+  });
+
+  // Un reintento que nadie hizo el lunes es trabajo pendiente el martes, no el
+  // jueves. Antes cedía al ciclo y 111 reintentos olvidados vivían escondidos en
+  // Próximos. El ciclo aquí dice «proximo» a propósito: tiene que perder.
+  it("un reintento olvidado de días atrás sigue en Hoy aunque el ciclo diga Próximos", () => {
     expect(
       confirmationQueueBucket(
-        { reminderDueAt: "2026-08-05T15:00:00.000Z", cycleDueOn: "2026-08-08" },
+        { reminderDueAt: "2026-08-05T15:00:00.000Z", cycleDueOn: "2026-09-30" },
         now,
       ),
     ).toBe("hoy");

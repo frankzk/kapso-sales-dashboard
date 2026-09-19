@@ -359,17 +359,26 @@ Reglas:
   del Master (`confirmation_cycle_due_on`) y nunca sustituye a
   `confirmation_next_contact_on`, que es el hecho que alguien pactó en una
   llamada. Si el intento dejó fecha, manda la fecha y no hay ciclo.
-- **La fecha pactada vence; el ciclo no.** Una fecha pactada incumplida se queda
-  en `Vencidos` porque es una promesa al cliente que hay que ver. Un día de
-  ciclo que ya pasó significa «toca hoy»: el pedido aparece en `Hoy` y, al
-  registrarse el intento, el siguiente ciclo se cuenta desde ese contacto. Así
-  el pedido rota cada N días en vez de hundirse para siempre en `Vencidos`.
-- El recordatorio de dos horas ordena el trabajo **dentro de su día** y entra en
-  las colas según su vencimiento. Pasado ese día lo sustituye el ciclo: un
-  recordatorio de hace tres semanas ya no dice nada que la antigüedad no diga
-  mejor, y dejarlo mandando era lo que mantenía pedidos de veintitrés días con
-  un solo intento fuera de la cola de `Hoy`.
-- Orden de mando de la cola: **fecha pactada → recordatorio vigente → ciclo**.
+- **La fecha pactada vence; el ciclo y el recordatorio no.** Una fecha pactada
+  incumplida se queda en `Vencidos` porque es una promesa al cliente que hay que
+  ver, y es lo ÚNICO que hay en `Vencidos`. Un día de ciclo que ya pasó
+  significa «toca hoy»: el pedido aparece en `Hoy` y, al registrarse el
+  intento, el siguiente ciclo se cuenta desde ese contacto.
+- **`Hoy` es la lista que se lleva a cero.** Cada llamada saca al pedido de
+  `Hoy` y una regla de reencolamiento lo devuelve: `Sin respuesta` o `Se deja
+  mensaje` fijan el recordatorio de dos horas y el pedido pasa a `Próximos`
+  hasta esa hora; llegada la hora vuelve a `Hoy`. Pactar fecha lo manda a
+  `Próximos` hasta la fecha. Cualquier otro resultado sin fecha lo deja al
+  ciclo. `Próximos` es la fuente que alimenta a `Hoy`, no un cajón aparte.
+- **El recordatorio no vence.** Llegada su hora, el pedido está en `Hoy` —se
+  haya cumplido hace un minuto o hace tres semanas— y ahí se queda hasta que
+  alguien lo rellame. Un reintento que nadie hizo es trabajo pendiente, y el
+  sitio del trabajo pendiente es la lista que se trabaja, no `Vencidos` ni el
+  ciclo. Antes el recordatorio de hoy pasado caía en `Vencidos` y el de días
+  atrás cedía al ciclo: medido el 16-09-2026, los 24 de `Vencidos` eran
+  recordatorios de hoy de pedidos contactados hoy —cero fechas pactadas—, y
+  111 reintentos olvidados estaban escondidos en `Próximos` por el ciclo.
+- Orden de mando de la cola: **fecha pactada → recordatorio → ciclo**.
 - `Sin llamar` no entra en el ciclo: sin un solo contacto no hay desde cuándo
   contar, y su chip propio ya lo separa. Lo delata su antigüedad, no la cola.
 - El ciclo no gasta días de gestión ni acerca el `Último intento`: solo el
@@ -4101,10 +4110,14 @@ recoge; antes no lo recogía nadie.
 - Llamada, WhatsApp y mensaje del mismo día consumen un solo día de los siete,
   aunque cada intento queda auditado.
 - Un seguimiento exige fecha y nunca hora; la cola distingue vencidos, hoy y
-  próximos. Cada chip de Fecha pactada muestra el conteo exacto de su grupo
-  sobre todos los pedidos filtrados, no solamente sobre la página visible.
+  próximos. `Vencidos` es solo la fecha pactada incumplida; `Hoy` es lo que
+  toca llamar ahora y se lleva a cero; `Próximos` es lo que todavía no toca.
+  Cada chip de Fecha pactada muestra el conteo exacto de su grupo sobre todos
+  los pedidos filtrados, no solamente sobre la página visible.
 - `Sin respuesta` y `Se deja mensaje` generan un recordatorio a las dos horas
-  laborales dentro de 08:00–22:00 de Lima.
+  laborales dentro de 08:00–22:00 de Lima. Hasta esa hora el pedido está en
+  `Próximos`; llegada la hora vuelve a `Hoy` y no sale de ahí hasta que alguien
+  lo rellame.
 - El séptimo día sin confirmación crea una tarea manual de revisión en Shopify;
   no anula el pedido desde Kapta.
 - Un doble clic no duplica el día, los eventos ni la tarea.

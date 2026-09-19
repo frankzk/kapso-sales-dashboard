@@ -919,41 +919,32 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
       day: "2-digit",
     }).format(now);
     const nowIso = now.toISOString();
-    const todayStart = new Date(`${today}T05:00:00.000Z`);
-    const tomorrowStart = new Date(todayStart);
-    tomorrowStart.setUTCDate(tomorrowStart.getUTCDate() + 1);
-    const todayIso = todayStart.toISOString();
-    const tomorrowIso = tomorrowStart.toISOString();
 
     // Espejo en PostgREST de `confirmationQueueBucket` (lib/order-confirmation).
-    // Manda la fecha pactada; si no hay, el recordatorio de dos horas mientras
-    // sea de hoy o del futuro; y si tampoco, el ciclo automático. Cualquier
-    // cambio de prioridad allá tiene que bajar aquí, o los chips contarían una
-    // cosa y la tabla mostraría otra.
+    // Manda la fecha pactada; si no hay, el recordatorio; y si tampoco, el
+    // ciclo automático. Cualquier cambio de prioridad allá tiene que bajar
+    // aquí, o los chips contarían una cosa y la tabla mostraría otra.
+    //
+    // El recordatorio manda SIEMPRE que exista, sea de hoy o de hace días:
+    // futuro → Próximos, llegado → Hoy. No vence nunca. Vencidos es solo la
+    // fecha pactada incumplida.
     const noPacted = "confirmation_next_contact_on.is.null";
-    // Recordatorio vigente = el que todavía ordena el día. Uno de días atrás no
-    // entra en ninguna cola: su pedido lo coloca el ciclo.
-    const noLiveReminder = `or(confirmation_reminder_due_at.is.null,confirmation_reminder_due_at.lt.${todayIso})`;
+    const noReminder = "confirmation_reminder_due_at.is.null";
     if (f.confirmationDue === "vencido") {
-      // Vencido es solo lo pactado que se incumplió y el recordatorio de hoy que
-      // ya pasó de hora. El ciclo NO vence: reaparece en Hoy.
-      q = q.or(
-        `confirmation_next_contact_on.lt.${today},`
-        + `and(${noPacted},confirmation_reminder_due_at.gte.${todayIso},confirmation_reminder_due_at.lte.${nowIso})`,
-      );
+      q = q.lt("confirmation_next_contact_on", today);
     }
     if (f.confirmationDue === "hoy") {
       q = q.or(
         `confirmation_next_contact_on.eq.${today},`
-        + `and(${noPacted},confirmation_reminder_due_at.gt.${nowIso},confirmation_reminder_due_at.lt.${tomorrowIso}),`
-        + `and(${noPacted},${noLiveReminder},confirmation_cycle_due_on.lte.${today})`,
+        + `and(${noPacted},confirmation_reminder_due_at.lte.${nowIso}),`
+        + `and(${noPacted},${noReminder},confirmation_cycle_due_on.lte.${today})`,
       );
     }
     if (f.confirmationDue === "proximo") {
       q = q.or(
         `confirmation_next_contact_on.gt.${today},`
-        + `and(${noPacted},confirmation_reminder_due_at.gte.${tomorrowIso}),`
-        + `and(${noPacted},${noLiveReminder},confirmation_cycle_due_on.gt.${today})`,
+        + `and(${noPacted},confirmation_reminder_due_at.gt.${nowIso}),`
+        + `and(${noPacted},${noReminder},confirmation_cycle_due_on.gt.${today})`,
       );
     }
   }

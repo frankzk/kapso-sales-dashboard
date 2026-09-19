@@ -2054,7 +2054,10 @@ function NextContactCell({ row, now }: { row: OrderMasterRow; now?: string }) {
     return <>{fmtDate(`${row.confirmation_next_contact_on}T12:00:00.000Z`)}</>;
   }
   const reminder = row.confirmation_reminder_due_at;
-  if (reminder && limaDayKey(reminder) >= today) return <>{fmtDateTime(reminder)}</>;
+  // El recordatorio manda siempre que exista, también uno de días atrás: ese es
+  // un reintento que nadie hizo y su hora, ya pasada, es justo lo que hay que
+  // ver. La celda tiene que decir lo mismo que la cola (`confirmationQueueBucket`).
+  if (reminder) return <>{fmtDateTime(reminder)}</>;
   const cycle = row.confirmation_cycle_due_on;
   if (!cycle) return <>—</>;
   return (
