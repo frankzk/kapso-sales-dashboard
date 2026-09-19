@@ -94,7 +94,10 @@ const HELP_KEY = "kapta.despacho.ayuda-escaneo";
 export function DispatchDayBoard(props: Props) {
   const { orgId, day, riders, canManageDispatch, pending, run } = props;
   const router = useRouter();
-  const [riderId, setRiderId] = useState(riders[0]?.id ?? "");
+  // Sin motorizado preseleccionado: elegirlo es el primer gesto del supervisor.
+  // Preseleccionar al primero de la lista mandaba paquetes a la caja de quien
+  // tocara. Lo que se escanea antes de elegir espera en la bandeja.
+  const [riderId, setRiderId] = useState("");
   const [overrideCash, setOverrideCash] = useState(false);
   // Una sola fuente de verdad para el filtrado de la lista: el picker, los
   // chips y las tiles de métricas leen y escriben `filters`.
