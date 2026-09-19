@@ -1,4 +1,4 @@
--- 0169_shalom_arrival_notice.sql — el segundo aviso: «tu pedido YA LLEGÓ a la
+-- 0170_shalom_arrival_notice.sql — el segundo aviso: «tu pedido YA LLEGÓ a la
 -- agencia».
 --
 -- EL HUECO. El aviso de la 0166 sale cuando la guía pasa a `en_transito` y dice

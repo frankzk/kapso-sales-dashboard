@@ -11,7 +11,8 @@ import {
   type ShopifyOrderCandidate,
 } from "@/app/dashboard/envios/actions";
 import type { OrderLinkCandidate } from "@/lib/shipments-access";
-import { limaTodayKey, rescheduleGuideCode } from "@/lib/shipments";
+import { limaTodayKey } from "@/lib/shipments";
+import { esNumeroDeGuiaSwayp } from "@/lib/swayp-guide";
 
 /** El despacho más pronto es mañana (Lima): el Excel del día ya suele estar
  *  enviado, así que una guía de hoy nunca llegaría a Fenix. */
@@ -101,11 +102,12 @@ export function DirectFenixGuideModal({
   // autorrelleno, ese campo nunca llegaba vacío, así que la guía por API era
   // inalcanzable desde esta pantalla: se creó en el #294 y nunca se ejecutó.
   //
-  // Vacío no significa quedarse sin código: si Swayp responde, manda SU número;
-  // y si la integración está apagada, el servidor genera el mismo código local
-  // que se generaba acá (rescheduleGuideCode, con los mismos argumentos). El
-  // botón «Autogenerar» sigue disponible para el caso que lo justifica: que
-  // Swayp haya entregado un código propio y haya que escribirlo.
+  // Vacío es además lo NORMAL desde el 16-09-2026: el número lo emite Swayp y
+  // punto. Si Swayp no responde, la guía no se crea — antes se caía a un código
+  // nuestro (`#KP…`) que Swayp no reconoce, y por eso se retiró junto con el
+  // botón «Autogenerar» que lo acuñaba. Escribir algo aquí solo vale para
+  // registrar una guía que YA existe en el panel de Swayp, y entonces tiene que
+  // ser su número: solo dígitos.
 
   async function searchShopify() {
     const term = q.trim();
@@ -152,11 +154,21 @@ export function DirectFenixGuideModal({
   const blockedByGuide = !!preview && preview.activeGuides.length > 0;
   const blockedByOrder = !!preview && (preview.cancelled || preview.refundedTotal);
   const blockedByStock = !!preview && !preview.stockOk;
+  // El vínculo con el catálogo de Swayp. En Lima es LA comprobación que dice
+  // algo: la ciudad no lleva control de cantidad, así que el stock siempre sale
+  // en verde y este panel anunciaba «disponible para todo el pedido» sobre un
+  // producto que Swayp no conoce (#KP134541, 15-09-2026).
+  const blockedByLink = !!preview && preview.unlinked.length > 0;
+  // MISMA función que la reja del servidor: el número escrito a mano tiene que
+  // ser uno de Swayp, no uno nuestro.
+  const numeroNoEsDeSwayp = !!guideCode.trim() && !esNumeroDeGuiaSwayp(guideCode);
   const canCreate =
+    !numeroNoEsDeSwayp &&
     !!preview &&
     !blockedByGuide &&
     !blockedByOrder &&
     !blockedByStock &&
+    !blockedByLink &&
     !!dispatchDate &&
     dispatchDate >= earliestDispatchDate();
   // Ojo: NO se exige `guideCode`. Exigirlo era la otra mitad del bloqueo —el
@@ -358,13 +370,25 @@ export function DirectFenixGuideModal({
                   const missing =
                     preview.stockReason === "sin_stock" &&
                     preview.uncovered.includes(li.title.trim() || "(producto sin nombre)");
+                  // Sin vínculo manda sobre el stock: es lo que de verdad
+                  // impide la guía, y en Lima lo otro nunca dice que no.
+                  const sinVinculo = preview.unlinked.includes(
+                    li.title.trim() || (li.sku ?? "").trim() || "(producto sin nombre)",
+                  );
                   return (
                     <li key={i} className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm">
                       <span className="min-w-0 flex-1 truncate text-slate-700" title={li.title}>
                         {li.title || "—"}
                         {li.quantity > 1 && <span className="text-xs text-slate-400"> ×{li.quantity}</span>}
                       </span>
-                      {preview.stockOk ? (
+                      {sinVinculo ? (
+                        <span
+                          className="shrink-0 text-xs font-medium text-rose-600"
+                          title="Swayp no tiene este producto en su catálogo: falta vincularlo en Catálogo de productos."
+                        >
+                          ✗ sin vínculo Swayp
+                        </span>
+                      ) : preview.stockOk ? (
                         <span className="text-xs font-medium text-emerald-600">✓ stock</span>
                       ) : missing ? (
                         <span className="text-xs font-medium text-rose-600">✗ sin stock</span>
@@ -380,19 +404,47 @@ export function DirectFenixGuideModal({
               <p
                 className={cn(
                   "border-t px-3 py-1.5 text-xs font-medium",
-                  preview.stockOk
+                  preview.stockOk && !blockedByLink
                     ? "border-emerald-100 bg-emerald-50/70 text-emerald-700"
                     : "border-rose-100 bg-rose-50/70 text-rose-700",
                 )}
               >
-                {preview.stockOk
-                  ? "Stock Swayp disponible para todo el pedido."
-                  : preview.stockReason === "sin_cobertura"
-                    ? "Swayp no tiene cobertura en este destino."
-                    : "Falta stock Swayp para parte del pedido. Actualiza Stock Swayp e intenta de nuevo."}
+                {/* El vínculo se dice PRIMERO: es lo que bloquea, y manda a otra
+                    pantalla que el stock. «Sin stock» se arregla en Stock Swayp;
+                    «sin vínculo» en Catálogo de productos. */}
+                {blockedByLink
+                  ? `Swayp no tiene ${preview.unlinked.length === 1 ? "este producto" : "estos productos"} en su catálogo: ${preview.unlinked.join(", ")}.`
+                  : preview.stockOk
+                    ? "Stock Swayp disponible para todo el pedido."
+                    : preview.stockReason === "sin_cobertura"
+                      ? "Swayp no tiene cobertura en este destino."
+                      : "Falta stock Swayp para parte del pedido. Actualiza Stock Swayp e intenta de nuevo."}
               </p>
             </section>
 
+            {/* La alerta, aparte del renglón por producto: sin esto el único
+                aviso era una columna a la derecha de una lista, y el botón se
+                apagaba sin decir por qué. Dice qué falta y dónde se arregla. */}
+            {blockedByLink && (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs text-rose-800">
+                <p className="font-semibold">
+                  {preview.unlinked.length === 1
+                    ? "Este producto no está en el inventario de Swayp"
+                    : "Estos productos no están en el inventario de Swayp"}
+                </p>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                  {preview.unlinked.map((nombre) => (
+                    <li key={nombre}>{nombre}</li>
+                  ))}
+                </ul>
+                <p className="mt-1.5">
+                  Sin el vínculo, Swayp no emite la guía y la caja saldría con un número que ellos
+                  no conocen.{" "}
+                  {preview.unlinked.length === 1 ? "Vincúlalo" : "Vincúlalos"} en Catálogo de
+                  productos y vuelve a abrir esta ventana.
+                </p>
+              </div>
+            )}
             {blockedByOrder && (
               <p className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">
                 {preview.cancelled
@@ -446,33 +498,28 @@ export function DirectFenixGuideModal({
               </label>
               <label className="block text-xs text-slate-500">
                 N° de guía Swayp
-                <div className="mt-0.5 flex gap-2">
-                  <input
-                    value={guideCode}
-                    onChange={(e) => setGuideCode(e.target.value)}
-                    placeholder="Vacío: lo asigna Swayp"
-                    className="w-full flex-1 rounded-lg border border-slate-200 px-2.5 py-1.5 font-mono text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setGuideCode(
-                        rescheduleGuideCode(
-                          preview.orderName,
-                          dispatchDate ? new Date(dispatchDate).toISOString() : null,
-                        ),
-                      );
-                    }}
-                    disabled={!preview.orderName}
-                    className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    Autogenerar
-                  </button>
-                </div>
-                <span className="mt-1 block text-[11px] text-slate-400">
-                  Déjalo vacío y el número lo emite Swayp. Escribe uno solo si la guía
-                  <strong> ya existe</strong> en el panel de Swayp: con el campo lleno no se le pide,
-                  para no duplicar el paquete.
+                {/* «Autogenerar» estaba aquí y se quitó el 16-09-2026: armaba el
+                    número con el pedido y la fecha —`#KP13166415092026`—, que es
+                    justo el código que Swayp no reconoce. */}
+                <input
+                  value={guideCode}
+                  onChange={(e) => setGuideCode(e.target.value)}
+                  inputMode="numeric"
+                  placeholder="Vacío: lo emite Swayp"
+                  className={cn(
+                    "mt-0.5 w-full rounded-lg border px-2.5 py-1.5 font-mono text-xs",
+                    numeroNoEsDeSwayp ? "border-rose-300 bg-rose-50" : "border-slate-200",
+                  )}
+                />
+                <span
+                  className={cn(
+                    "mt-1 block text-[11px]",
+                    numeroNoEsDeSwayp ? "text-rose-700" : "text-slate-400",
+                  )}
+                >
+                  {numeroNoEsDeSwayp
+                    ? "Ese número no es de Swayp: los suyos son solo dígitos, como 50000132589."
+                    : "Déjalo vacío y el número lo emite Swayp. Escríbelo solo si la guía ya existe en su panel: con el campo lleno no se le pide, para no duplicar el paquete."}
                 </span>
               </label>
             </div>

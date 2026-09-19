@@ -42,16 +42,28 @@ describe("todos los caminos de reprogramación piden el número a Swayp", () => 
       expect(cuerpoDe(fn)).toContain("swaypGuide:");
     });
 
-    it(`${fn} cae al código local en vez de bloquear`, () => {
-      // No conseguir número de Swayp no es un error: es seguir por Excel. Dejar
-      // a la operadora bloqueada porque un courier no responde sería peor.
-      expect(cuerpoDe(fn)).toContain("rescheduleGuideCode(");
+    /**
+     * REGLA NUEVA (16-09-2026). Antes esta prueba exigía lo CONTRARIO: que no
+     * conseguir número de Swayp cayera al código local, porque «dejar a la
+     * operadora bloqueada porque un courier no responde sería peor». La
+     * operación decidió que es al revés. Ese código local —`#KP13166415092026`,
+     * el pedido más la fecha— Swayp no lo conoce: no sale en su panel, no
+     * descuenta su stock y no rastrea. Una guía así es una caja despachada
+     * contra un número que no existe para el courier que la lleva.
+     *
+     * Con las once bodegas configuradas, la API puede emitir en toda la
+     * cobertura, así que el respaldo dejó de pagar lo que costaba.
+     */
+    it(`${fn} NO cae al código local: sin número de Swayp no hay guía`, () => {
+      const body = cuerpoDe(fn);
+      expect(body).not.toContain("rescheduleGuideCode(");
+      expect(body).toContain("Swayp no emitió la guía:");
     });
 
-    it(`${fn} le dice a la operadora por cuál de los dos caminos salió`, () => {
-      const body = cuerpoDe(fn);
-      expect(body).toContain("Emitida por Swayp.");
-      expect(body).toContain("Swayp no la emitió");
+    it(`${fn} nombra el motivo que dio Swayp, en vez de enterrarlo en un aviso`, () => {
+      // El motivo era lo único que se perdía al caer al código local: quedaba
+      // en una frase al final que nadie relacionaba con nada.
+      expect(cuerpoDe(fn)).toContain("${viaApi.reason}");
     });
   }
 
@@ -61,6 +73,14 @@ describe("todos los caminos de reprogramación piden el número a Swayp", () => 
     // paquete. Es la misma regla que el alta directa: si hay código a mano, no
     // se llama a la API.
     expect(cuerpoDe("createFenixGuide")).not.toContain("swaypGuideForReprogram(");
+  });
+
+  it("pero el camino manual exige que ese número SEA de Swayp", () => {
+    // Aceptaba también el que «Autogenerar» acuñaba con el pedido y la fecha,
+    // que es exactamente el número que esta regla viene a prohibir.
+    const body = cuerpoDe("createFenixGuide");
+    expect(body).toContain("esNumeroDeGuiaSwayp(escrito)");
+    expect(body).toContain("swaypGuide: escrito");
   });
 
   it("no hay NINGÚN otro camino que cree una guía Swayp", () => {

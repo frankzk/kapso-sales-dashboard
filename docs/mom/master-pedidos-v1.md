@@ -1353,6 +1353,94 @@ Cómo se clasifica una guía que llega por reporte Excel:
   posibilidad que alguien tenga que activar.
 - Solo Aliclik tiene proceso de indemnización formal.
 
+#### Un distrito que Aliclik no tiene en su tabla no es un problema de almacén
+
+A la cotización solo se le mandan `warehouseId`, `lat` y `lng`: **el distrito lo
+deduce Aliclik del pin**. Cuando su tabla de ubigeo no lo tiene, responde «No se
+encontró el distrito en ubigeo para …» nombrando el distrito que acaba de
+reconocer.
+
+Nuestro aviso le pegaba detrás «Almacén(es) compatibles probados: …», así que el
+mensaje entero se leía como un fallo de almacén y mandaba a buscar por donde no
+era. Pasó con #AUR177131 y #KP135145 (18-09-2026).
+
+**La causa costó dos intentos y las dos primeras explicaciones eran falsas.** Se
+dejan escritas porque son las que uno vuelve a proponer:
+
+1. «Su tabla no tiene el distrito porque es nuevo» (San Miguel, Ley 30927 de
+   2019). La tiró abajo el segundo caso: **Callería** es el distrito de Pucallpa
+   y no tiene nada de nuevo.
+2. «El almacén no cubre esa zona». También falsa: los dos pedidos van al almacén
+   **133 (GRUPO GF)** y de ese mismo almacén salieron 267 envíos a Puno y 96 a
+   Ucayali en 30 días.
+
+**Lo que encaja con todo: las dos mitades de Aliclik no se entienden.** Su
+geolocalizador devuelve el nombre OFICIAL del distrito y su tabla de ubigeo está
+indexada por el COMERCIAL. Los envíos que sí salen llevan `juliaca` (328),
+`pucallpa` (121), `puno` (118) y `yarinacocha` (33) — y «Pucallpa» ni siquiera es
+un distrito: la ciudad está en Callería. Cuando el pin cae donde los dos nombres
+difieren, una mitad lo reconoce y la otra dice que no existe.
+
+Eso además explica por qué el fallo parece aleatorio: depende de dónde cae el
+pin, no del pedido ni del producto.
+
+Reglas:
+
+- Cuando el fallo sea de ubigeo, el aviso **no nombra el almacén**, y descarta
+  de frente las dos pistas falsas: no es el almacén ni el stock. Dice el
+  distrito y explica que Aliclik lo llama de dos maneras.
+- Las salidas son dos, y el aviso las da: revisar el pin en «Ubicación y
+  cobertura» por si la dirección es de otro distrito, o despachar por otro
+  courier y pasarle a Aliclik la referencia para que lo arreglen de su lado.
+  **Kapta no mueve el pin sola**: el pin decide a dónde va el paquete, así que
+  acercarlo al centro de Juliaca o Pucallpa para que la cotización pase es una
+  decisión de una persona mirando la dirección.
+- Las referencias de la petición se conservan: son lo que se le reenvía a
+  Aliclik para que lo corrijan de su lado.
+
+#### Una cotización no es cobertura
+
+La cobertura de un pedido la decide la **matriz de costos**: si existe una tarifa
+de primer intento que alcance ese destino, es Provincia COD. Y un cron nocturno
+alimenta esa matriz cotizando los distritos de los pedidos pendientes. Juntas,
+las dos cosas hacían que **una cotización bastara para convertir un distrito de
+Agencia en Provincia COD**, sin que nadie hubiera entregado nunca ahí y sin que
+nadie se enterara.
+
+Lo destapó Caravelí (#AUR177128, 19-09-2026): tarifa creada por el sondeo el
+17-09, cero envíos de Aliclik en su historia, la entrega suya más cercana a 247
+km, y ocho envíos reales por Shalom.
+
+Reglas:
+
+- **El sondeo no cotiza lo que no es un distrito.** La clienta escribe la
+  referencia en ese campo y se llegaron a crear tarifas para «frente al grifo
+  amazonas» o «2do puente de la av. 28 de julio». Se descartan las cadenas con
+  palabras de referencia o tipos de vía. La lista es corta a propósito: «puente»
+  no entra, porque Puente Piedra es un distrito; y no se filtra por dígitos,
+  porque eso se llevaba por delante «26 de Octubre», distrito de Piura con 44
+  entregas reales.
+- **El sondeo no cotiza donde ya consta que Aliclik no entrega**: distritos con
+  entregas reales de agencia y cero envíos de Aliclik. Se mira la ENTREGA y no la
+  guía creada, porque una guía anulada no prueba cobertura — es lo que pasó con
+  Tumbes (§0149).
+- **Lo que se pierde está dicho**: si Aliclik abre cobertura en uno de esos
+  destinos, el sondeo no lo va a descubrir solo. Se registra con una fila en
+  `district_coverage` o una tarifa cargada a mano, que es el camino correcto para
+  una decisión comercial en vez de que la tome un cron de madrugada.
+- **Un texto igual no es un lugar igual.** Al buscar los afectados, el primer
+  análisis comparó la cadena del campo distrito y metió en la lista a Mariscal
+  Nieto, que sí tiene cobertura: sus 62 envíos de Aliclik están registrados con
+  distrito «moquegua», y las filas con el texto «mariscal nieto» son pedidos donde
+  alguien escribió la provincia ahí. La comprobación que vale es **geográfica**:
+  cuántas entregas reales de Aliclik hay a menos de 30 km de ese punto.
+
+Decidido el 19-09-2026 con estos números, por distancia a la entrega de Aliclik
+más cercana: Caravelí 247 km, Huaura 165, Olmos 81, Sicuani 79, Huancavelica 77,
+Canchis 77, Azángaro 60 — los seis lugares pasan a Agencia. Y con cobertura
+confirmada, que el primer análisis había marcado mal: La Unión (122 entregas a 30
+km), Mariscal Nieto (34) y Chincha (23).
+
 ### 10.1 Qué fuente manda: la API sobre el Excel
 
 El estado de una guía Aliclik llega por dos vías, y **no valen lo mismo**:
@@ -2256,12 +2344,108 @@ dice «este producto existe en esa bodega» y nada más:
 
 **En Lima y Callao la tabla de stock no gobierna nada: todo producto pasa la
 reja.** No hay que anotar renglones. Lo que sí se exige es el **vínculo en
-Catálogo de productos** (`codbar`), y se exige donde importa: al crear la guía
-por API, con el aviso «Falta vincular a Swayp: …». Se probó la alternativa
-—exigir además un renglón por producto en Stock Swayp— y la primera guía real de
-Lima (#KP131993) salió rechazada por «sin stock» con la tabla vacía: era una
-segunda lista que mantener para decir lo mismo que ya dice el Catálogo. Anotar
-renglones en Lima queda como opcional e informativo.
+Catálogo de productos** (`codbar`). Se probó la alternativa —exigir además un
+renglón por producto en Stock Swayp— y la primera guía real de Lima (#KP131993)
+salió rechazada por «sin stock» con la tabla vacía: era una segunda lista que
+mantener para decir lo mismo que ya dice el Catálogo. Anotar renglones en Lima
+queda como opcional e informativo.
+
+#### El número de guía lo emite Swayp. Sin su número no hay guía
+
+Dos familias de número convivieron hasta el 16-09-2026:
+
+| Forma | Quién la emite | Ejemplo | `swayp_guide` |
+| --- | --- | --- | --- |
+| **Guía Swayp** | Swayp, por su API | `50000132589` | lleno |
+| **Código Kapta** | Kapta, `<pedido><DDMMYYYY>` | `#KP13166415092026` | vacío |
+
+El código Kapta era el respaldo: si la API no emitía —ciudad sin bodega
+configurada, producto sin codbar, error de Swayp— la guía se creaba igual con un
+número nuestro y se cargaba después a mano por el Excel de programación. En el
+código se llamaba «código local» en un sitio y «código manual» en otro.
+
+**Ese respaldo se retira.** Un número que Swayp no emitió no sale en su panel, no
+descuenta su stock y no rastrea: es una caja despachada contra un número que no
+existe para el courier que la lleva. Con las once bodegas configuradas
+(16-09-2026, todas menos Ica) la API puede emitir en toda la cobertura, así que
+el respaldo dejó de pagar lo que costaba.
+
+Reglas:
+
+- Las cuatro puertas que paren una guía Swayp —guía directa, reprogramación
+  confirmada, reenvío de una anulada y alta con número escrito a mano— exigen un
+  número emitido por Swayp.
+- Si la API no emite, **la gestión no se registra** y el aviso dice el motivo que
+  dio Swayp. Antes ese motivo quedaba enterrado en una frase al final que nadie
+  relacionaba con nada; era lo único que se perdía al caer al código Kapta.
+- El alta con número escrito a mano sigue existiendo, para registrar una guía que
+  la operadora ya creó en el panel de Swayp. Pero el número tiene que **ser de
+  Swayp**: solo dígitos. Medido sobre 90 días, `^\d{6,}$` separa las dos familias
+  sin tocar ninguna guía buena (62 con forma Swayp, 598 con forma nuestra, 3 de
+  julio con `KP…` sin almohadilla).
+- Los botones «Autogenerar» de las dos pantallas se retiran: acuñaban justo el
+  número que esta regla prohíbe.
+- **Ica queda fuera** mientras Swayp no tenga bodega allí; sin bodega no hay API
+  y sin API no hay guía, así que Ica no despacha por Swayp.
+
+El nombre queda fijado para no volver a tener dos: **guía Swayp** la que emite
+Swayp, **código Kapta** la que acuñábamos nosotros. No se usa «manual», que ya
+nombra la salida de ruta manual y la excepción manual de Aliclik.
+
+#### El vínculo se comprueba ANTES, no dentro de la llamada a Swayp
+
+Que la reja de Lima sea el vínculo tiene una consecuencia que al principio se
+pasó por alto: **si nadie lo pregunta hasta el final, la pantalla miente todo el
+rato**. El panel de guía directa anunciaba «Stock Swayp disponible para todo el
+pedido» —cierto según la regla de la ciudad— sobre un producto que Swayp no
+tiene en su catálogo. Pasó con #KP134541 el 15-09-2026: la Pulsera Magnética de
+Cobre Saludable entró con el SKU `5463456456`, y el vínculo existía para otra
+variante (`64565434`).
+
+Y lo que venía después era peor que un aviso tardío: al crear la guía, la llamada
+a Swayp fallaba con «Falta vincular a Swayp», el flujo caía al código local y
+**la guía se creaba igual**. Una caja despachada contra un número que Swayp nunca
+emitió, con el fallo contado en un aviso al final.
+
+Reglas:
+
+- **Sin vínculo de codbar no se genera guía Swayp. Ninguna, por ninguna puerta.**
+  No es solo la guía directa: son las cuatro que paren una guía —guía directa,
+  reprogramación confirmada, reenvío de una guía anulada y alta con número
+  escrito a mano—. En Kapta las tres últimas pasan por `spinOffFenixGuide`, y la
+  reja vive **ahí**, en el cuello, para que la quinta puerta que alguien añada no
+  nazca sin ella.
+- El vínculo se comprueba con una sola función (`productosSinVinculo`) y el aviso
+  lo escribe una sola (`avisoSinVinculoSwayp`). Una copia por pantalla acabaría
+  nombrando productos distintos en el aviso y en el rechazo.
+- **El botón se apaga Y dice por qué.** Un botón apagado sin motivo manda a
+  adivinar; y peor, un botón encendido que el servidor rechaza deja a la asesora
+  descubriéndolo con la clienta al teléfono. El motivo nombra los productos y la
+  pantalla donde se arregla. Marcarlos solo en una columna a la derecha de una
+  lista no basta.
+- **«Sin stock» y «sin vínculo» son hechos distintos y no se mezclan**: el
+  primero se arregla en Stock Swayp, el segundo en Catálogo de productos.
+  Juntarlos manda a la operadora a la pantalla equivocada. En Lima el primero
+  nunca dice que no, así que el aviso que se lee es siempre el segundo.
+- **Un vínculo que falta rechaza la guía; no cae al código local.** El respaldo
+  del código local sigue vivo para lo que sí es una limitación de Swayp —una
+  ciudad que su API no atiende—. Un hueco nuestro se arregla en dos minutos y no
+  puede despachar una caja mientras tanto.
+
+  Alcance medido antes de ponerlo, sobre 60 días:
+
+  | Puerta | Guías | Sin codbar |
+  | --- | --- | --- |
+  | Guía directa | 143 | 4 |
+  | Reprogramación y reenvío | 418 | 41 |
+
+  Son unas cinco por semana en la puerta de reprogramación, con la asesora al
+  teléfono. Se acepta a sabiendas: son exactamente las guías que Swayp no
+  reconocería, y el minuto que cuesta vincular el producto se paga una vez.
+- **Mapa vacío = función apagada**, el mismo interruptor que ya gobernaba
+  `buildProductos`: una tienda que todavía no vinculó nada no se queda sin poder
+  crear guías el día del despliegue. Con al menos una entrada, un hueco es un
+  hueco.
 
 Si un día Lima pasa a contarse, se la quita del conjunto y sus renglones vuelven
 a regirse por la cantidad y por la marca propia de cada uno.
@@ -2763,6 +2947,26 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
   - Solo reacciona a un **botón pulsado**, nunca a texto libre que mencione el
     medio: un «ya te hice el yape» sigue con el bot y la asesora, como siempre.
     Cada botón se contesta una sola vez aunque Kapso reintente el webhook.
+  - **Única excepción: un «ok» pelado.** No es texto que interpretar, es un
+    acuse de recibo: no pregunta nada ni aporta dato nuevo, y el bot de ventas
+    no tiene nada que hacer con él. Se vio en producción el 18-09-2026 — una
+    clienta contestó «Ok» al aviso y recibió «ya le paso tu consulta a una
+    asesora», una derivación por nada; otra contestó «ok» y no recibió nada.
+    A esos se les repite **el saldo y el Yape**, con dos rejas que es lo que lo
+    hace inofensivo: tiene que haber un aviso enviado a ese celular en las
+    **últimas 48 h**, y no habérsele contestado ya —ni por botón ni por otro
+    «ok»— desde ese aviso. Repetirle el número a cada «gracias» es acoso.
+    La lista de acuses es **cerrada**, igual que los rótulos de los botones:
+    «ok pero me llegó mal el producto» no está en ella y va a la asesora.
+    - **Esa lista y la del router del bot tienen que encajar.** El router del
+      workflow del 600 calla ante sus «triviales» y Kapta contesta ante sus
+      «acuses». Una frase trivial para el router y no para Kapta deja a la
+      clienta **sin ninguna respuesta**; al revés, recibe **dos**. Por eso se
+      comparan palabra a palabra con la misma mecánica y la lista de Kapta es
+      un subconjunto de la del router.
+    - **«no» no es un acuse en ninguna de las dos.** Después de pedir un saldo,
+      un «no» o un «no gracias» es un rechazo —abre devolución (§13)—, no un
+      recordatorio del Yape. Los dos callan y va a la asesora.
   - Todo queda en la línea de tiempo del pedido (`whatsapp_template`) y en las
     tablas de la cola y de respuestas, con el motivo cuando no salió.
 - Seguimiento comienza desde la constancia del adelanto y se intensifica cuando
