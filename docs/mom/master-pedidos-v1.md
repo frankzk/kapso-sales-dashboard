@@ -5191,7 +5191,13 @@ y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
 
 - **Qué ve.** Su nombre, el día (hoy por defecto, se puede ir a ayer u otro),
   y un punto por tarjeta: pedido, cliente, distrito y dirección si el pedido
-  está en Kapta, el monto de Kapta, y lo que él ya reportó. Si hay ruta de
+  está en Kapta, el monto de Kapta, y lo que él ya reportó. Al tocar un punto,
+  su detalle (dirección, mapa, llamar, «Lo llevo», reporte) se abre en un panel
+  al lado de la lista, no debajo de la tarjeta: en el teléfono cubre el ancho
+  de la lista y «←» o «atrás» del navegador vuelven a ella; en pantalla ancha
+  lista y detalle van en dos columnas. La parada abierta va en la URL
+  (`?parada=`), así un refresco vuelve al mismo sitio. Guardar o confirmar
+  cierra el panel y refresca la lista. Si hay ruta de
   despacho para ese día, un botón trae los paquetes que falten; si no, añade
   los puntos a mano buscando el pedido por número o por nombre, o escribiendo
   un punto ajeno a Shopify (Kast).

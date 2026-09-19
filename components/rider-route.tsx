@@ -10,8 +10,8 @@
 //   - la foto se sube aparte del reporte, así una caída de red no le borra lo
 //     que ya escribió.
 
-import { useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   NON_DELIVERY_REASONS,
   PAYMENT_METHODS,
@@ -48,17 +48,11 @@ function mapHref(stop: StopWithOrder): string {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts)}`;
 }
 
-export function RiderRouteScreen({
-  riderName,
-  routes,
-  route,
-  stops,
-  coordinator,
-  routeLabels,
-  vocabulary,
-  today,
-  pickupMode,
-}: {
+//   - el detalle de una parada se abre en un panel al lado (`?parada=`), no
+//     debajo de la tarjeta: en el teléfono cubre la lista y «atrás» lo cierra;
+//     en pantalla ancha, lista y detalle van en dos columnas.
+
+type RiderRouteScreenProps = {
   riderName: string;
   routes: RouteRow[];
   route: RouteRow | null;
@@ -71,9 +65,81 @@ export function RiderRouteScreen({
   today?: string;
   /** Modo de recojo (0177): en «confirmar» cada parada nace «por confirmar». */
   pickupMode?: RiderPickupMode;
-}) {
+};
+
+export function RiderRouteScreen(props: RiderRouteScreenProps) {
+  // `useSearchParams` pide un límite de Suspense por si la ruta se prerrenderiza.
+  return (
+    <Suspense fallback={null}>
+      <RiderRouteScreenInner {...props} />
+    </Suspense>
+  );
+}
+
+/** Parámetro de la parada abierta en la URL, como `?ficha=` en el panel. */
+const STOP_PARAM = "parada";
+
+function RiderRouteScreenInner({
+  riderName,
+  routes,
+  route,
+  stops,
+  coordinator,
+  routeLabels,
+  vocabulary,
+  today,
+  pickupMode,
+}: RiderRouteScreenProps) {
   const router = useRouter();
-  const [openId, setOpenId] = useState<string | null>(null);
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  // La parada abierta vive en la URL: «atrás» del navegador cierra el panel y
+  // un refresco vuelve al mismo sitio. Un id que ya no está en la ruta se
+  // ignora, así un enlace viejo no deja un panel vacío.
+  const wantedId = searchParams.get(STOP_PARAM);
+  const openStop = useMemo(() => (wantedId ? stops.find((s) => s.id === wantedId) ?? null : null), [stops, wantedId]);
+  const openId = openStop?.id ?? null;
+  const hrefWithStop = useCallback(
+    (stopId: string | null) => {
+      const next = new URLSearchParams(searchParams.toString());
+      if (stopId) next.set(STOP_PARAM, stopId);
+      else next.delete(STOP_PARAM);
+      const query = next.toString();
+      return query ? `${pathname}?${query}` : pathname;
+    },
+    [pathname, searchParams],
+  );
+  // Abrir apila historial (así «atrás» cierra); cerrar reemplaza, sin
+  // volver a pedir la página. Next sincroniza `useSearchParams` con ambos.
+  const openStopPanel = useCallback((stopId: string) => {
+    if (stopId === openId) return;
+    window.history.pushState(null, "", hrefWithStop(stopId));
+  }, [hrefWithStop, openId]);
+  const closeStopPanel = useCallback(() => {
+    window.history.replaceState(null, "", hrefWithStop(null));
+  }, [hrefWithStop]);
+  // Con el panel abierto en el teléfono, la página de atrás no hace scroll:
+  // el scroll es del panel. En pantalla ancha las dos columnas conviven.
+  useEffect(() => {
+    if (!openId) return;
+    const narrow = window.matchMedia("(max-width: 1023px)");
+    if (!narrow.matches) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [openId]);
+  // `router.refresh()` en el mismo tick que el replaceState pisaba la URL
+  // nueva con la vieja; diferido no compite.
+  const [refreshTick, setRefreshTick] = useState(0);
+  useEffect(() => {
+    if (refreshTick) router.refresh();
+  }, [refreshTick, router]);
+  const finishStop = useCallback(() => {
+    closeStopPanel();
+    setRefreshTick((n) => n + 1);
+  }, [closeStopPanel]);
   const [confirmAll, setConfirmAll] = useState(false);
   const [headerMessage, setHeaderMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const totals = useMemo(() => routeTotals(stops), [stops]);
@@ -100,7 +166,8 @@ export function RiderRouteScreen({
   }
 
   return (
-    <main className="mx-auto min-h-screen max-w-md bg-slate-50 pb-24">
+    <main className="mx-auto min-h-screen max-w-md bg-slate-50 lg:grid lg:max-w-3xl lg:grid-cols-[28rem_minmax(0,1fr)] lg:items-start">
+      <div className="min-w-0 pb-24 lg:min-h-screen lg:border-r lg:border-slate-200">
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-3">
         <div className="flex items-baseline justify-between">
           <h1 className="text-base font-semibold text-slate-900">{riderName}</h1>
@@ -173,16 +240,12 @@ export function RiderRouteScreen({
           <li key={stop.id}>
             <StopCard
               stop={stop}
-              open={openId === stop.id}
+              selected={openId === stop.id}
               readOnly={closed}
               delegated={Boolean(coordinator)}
-              vocabulary={vocabulary ?? null}
               pickupMode={mode}
-              onToggle={() => setOpenId(openId === stop.id ? null : stop.id)}
-              onDone={() => {
-                setOpenId(null);
-                router.refresh();
-              }}
+              onOpen={() => openStopPanel(stop.id)}
+              onDone={() => setRefreshTick((n) => n + 1)}
             />
           </li>
         ))}
@@ -200,12 +263,158 @@ export function RiderRouteScreen({
       )}
 
       {totals.completa && !closed && !coordinator && (
-        <div className="fixed inset-x-0 bottom-0 mx-auto max-w-md border-t border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-sm text-emerald-800">
+        <div className="fixed inset-x-0 bottom-0 mx-auto max-w-md border-t border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-sm text-emerald-800 lg:max-w-3xl">
           Terminaste tus {totals.total} paradas. Ya puedes entregar{" "}
           <strong>{money(totals.efectivo)}</strong> en efectivo.
         </div>
       )}
+      </div>
+
+      {openStop ? (
+        <StopPanel
+          key={openStop.id}
+          stop={openStop}
+          readOnly={closed}
+          delegated={Boolean(coordinator)}
+          vocabulary={vocabulary ?? null}
+          pickupMode={mode}
+          onClose={closeStopPanel}
+          onDone={finishStop}
+        />
+      ) : (
+        <aside aria-hidden="true" className="hidden lg:sticky lg:top-0 lg:flex lg:h-screen lg:items-center lg:justify-center lg:p-6">
+          <p className="text-sm text-slate-400">Toca una parada para ver su detalle.</p>
+        </aside>
+      )}
     </main>
+  );
+}
+
+/**
+ * El detalle de la parada, al lado de la lista. En el teléfono cubre el
+ * contenedor de la lista (mismo ancho, alto de pantalla) y se cierra con «←»
+ * o con «atrás»; en pantalla ancha es la columna derecha. El scroll es suyo.
+ */
+function StopPanel({
+  stop,
+  readOnly,
+  delegated,
+  vocabulary,
+  pickupMode,
+  onClose,
+  onDone,
+}: {
+  stop: StopWithOrder;
+  readOnly: boolean;
+  delegated: boolean;
+  vocabulary: RiderVocabulary | null;
+  pickupMode: RiderPickupMode;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const o = stop.order;
+  const done = stop.status !== "pendiente";
+  const decision = riderStopDecision(pickupMode, {
+    status: stop.status,
+    pickupCheckedAt: stop.pickup_checked_at,
+    hasManifestItem: Boolean(stop.manifest_item_id),
+    routeClosed: readOnly,
+  });
+  return (
+    <section
+      aria-label={`Parada de ${o?.customer_name ?? "sin nombre"}`}
+      className="fixed inset-y-0 left-1/2 z-20 flex w-full max-w-md -translate-x-1/2 flex-col bg-white shadow-xl lg:sticky lg:inset-y-auto lg:left-auto lg:top-0 lg:h-screen lg:max-w-none lg:translate-x-0 lg:shadow-none"
+    >
+      <header className="flex items-start gap-2 border-b border-slate-200 px-3 py-3">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Volver a la lista"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xl text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:border-brand-500 focus-visible:ring-4 focus-visible:ring-brand-500/15"
+        >
+          ←
+        </button>
+        <div className="min-w-0 flex-1 pt-1">
+          <p className="truncate text-base font-semibold text-slate-900">{o?.customer_name ?? "Sin nombre"}</p>
+          <p className="truncate text-xs text-slate-500">
+            {o?.district ?? "—"} · {o?.name ?? "—"}
+          </p>
+        </div>
+        <div className="shrink-0 pt-1 text-right">
+          <p className="text-sm font-semibold text-slate-800">{money(o?.total)}</p>
+          <StopStatusLine stop={stop} badge={decision.badge} />
+        </div>
+      </header>
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3 pb-8">
+        {!delegated && (decision.canConfirm || decision.canDecline) && (
+          <div className="-mx-4 lg:hidden">
+            <PickupConfirmBar stop={stop} onDone={onDone} />
+          </div>
+        )}
+        <div className="text-sm text-slate-700">
+          <p>{o?.address ?? "Sin dirección"}</p>
+          {o?.reference && <p className="text-xs text-slate-500">Ref: {o.reference}</p>}
+        </div>
+        <div className="flex gap-2">
+          <a
+            href={mapHref(stop)}
+            target="_blank"
+            rel="noreferrer"
+            className="flex-1 rounded-lg bg-slate-800 px-3 py-2.5 text-center text-sm font-medium text-white"
+          >
+            Abrir mapa
+          </a>
+          {o?.customer_phone && (
+            <a
+              href={`tel:${o.customer_phone}`}
+              className="flex-1 rounded-lg border border-slate-300 px-3 py-2.5 text-center text-sm font-medium text-slate-700"
+            >
+              Llamar
+            </a>
+          )}
+        </div>
+
+        {readOnly ? (
+          <p className="text-xs text-slate-500">
+            {done ? "Ya reportada." : "Sin reportar."} La ruta está cerrada.
+          </p>
+        ) : (
+          <ReportForm stop={stop} onDone={onDone} delegated={delegated} vocabulary={vocabulary} />
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** Lo que el motorizado ya reportó, en una línea: estado escrito o el de Kapta, y el recojo. */
+function StopStatusLine({ stop, badge }: { stop: StopWithOrder; badge: ReturnType<typeof riderStopDecision>["badge"] }) {
+  return (
+    <>
+      <p
+        className={cn(
+          "text-[11px]",
+          stop.status === "entregado" && "text-emerald-700",
+          stop.status === "no_entregado" && "text-red-700",
+          stop.status === "pendiente" && "text-slate-400",
+        )}
+      >
+        {stop.written_status
+          ? stop.written_status
+          : stop.status === "entregado"
+            ? "Entregado"
+            : stop.status === "no_entregado"
+              ? "No entregado"
+              : "Por entregar"}
+      </p>
+      {badge && (
+        <p className={cn("text-[11px] font-medium", badge === "lo_llevo" ? "text-emerald-700" : "text-amber-700")}>
+          {badge === "lo_llevo" ? "✓ Lo llevo" : "Por confirmar"}
+        </p>
+      )}
+      {stop.status === "entregado" && stop.pickup_confirmed === false && (
+        <p className="text-[11px] text-amber-700">sin confirmar recojo</p>
+      )}
+    </>
   );
 }
 
@@ -227,25 +436,22 @@ function Pill({ label, value, tone }: { label: string; value: number; tone: "pen
 
 function StopCard({
   stop,
-  open,
+  selected,
   readOnly,
   delegated = false,
-  vocabulary = null,
   pickupMode = "exigir",
-  onToggle,
+  onOpen,
   onDone,
 }: {
   stop: StopWithOrder;
-  open: boolean;
+  selected: boolean;
   readOnly: boolean;
   delegated?: boolean;
-  vocabulary?: RiderVocabulary | null;
   pickupMode?: RiderPickupMode;
-  onToggle: () => void;
+  onOpen: () => void;
   onDone: () => void;
 }) {
   const o = stop.order;
-  const done = stop.status !== "pendiente";
   // «Lo llevo» / «No lo llevo» (0177): solo en modo confirmar, sobre paradas
   // pendientes que salieron de una caja y que el motorizado aún no confirmó.
   const decision = riderStopDecision(pickupMode, {
@@ -262,9 +468,10 @@ function StopCard({
         stop.status === "entregado" && "border-emerald-200",
         stop.status === "no_entregado" && "border-red-200",
         stop.status === "pendiente" && "border-slate-200",
+        selected && "ring-4 ring-brand-500/15 border-brand-500",
       )}
     >
-      <button onClick={onToggle} className="w-full px-4 py-3 text-left">
+      <button type="button" onClick={onOpen} aria-current={selected ? "true" : undefined} className="w-full px-4 py-3 text-left focus-visible:outline-none focus-visible:bg-slate-50">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-slate-900">
@@ -276,70 +483,12 @@ function StopCard({
           </div>
           <div className="shrink-0 text-right">
             <p className="text-sm font-semibold text-slate-800">{money(o?.total)}</p>
-            <p
-              className={cn(
-                "text-[11px]",
-                stop.status === "entregado" && "text-emerald-700",
-                stop.status === "no_entregado" && "text-red-700",
-                stop.status === "pendiente" && "text-slate-400",
-              )}
-            >
-              {stop.written_status
-                ? stop.written_status
-                : stop.status === "entregado"
-                  ? "Entregado"
-                  : stop.status === "no_entregado"
-                    ? "No entregado"
-                    : "Por entregar"}
-            </p>
-            {decision.badge && (
-              <p className={cn("text-[11px] font-medium", decision.badge === "lo_llevo" ? "text-emerald-700" : "text-amber-700")}>
-                {decision.badge === "lo_llevo" ? "✓ Lo llevo" : "Por confirmar"}
-              </p>
-            )}
-            {stop.status === "entregado" && stop.pickup_confirmed === false && (
-              <p className="text-[11px] text-amber-700">sin confirmar recojo</p>
-            )}
+            <StopStatusLine stop={stop} badge={decision.badge} />
           </div>
         </div>
       </button>
       {!delegated && (decision.canConfirm || decision.canDecline) && (
         <PickupConfirmBar stop={stop} onDone={onDone} />
-      )}
-
-      {open && (
-        <div className="space-y-3 border-t border-slate-100 px-4 py-3">
-          <div className="text-sm text-slate-700">
-            <p>{o?.address ?? "Sin dirección"}</p>
-            {o?.reference && <p className="text-xs text-slate-500">Ref: {o.reference}</p>}
-          </div>
-          <div className="flex gap-2">
-            <a
-              href={mapHref(stop)}
-              target="_blank"
-              rel="noreferrer"
-              className="flex-1 rounded-lg bg-slate-800 px-3 py-2.5 text-center text-sm font-medium text-white"
-            >
-              Abrir mapa
-            </a>
-            {o?.customer_phone && (
-              <a
-                href={`tel:${o.customer_phone}`}
-                className="flex-1 rounded-lg border border-slate-300 px-3 py-2.5 text-center text-sm font-medium text-slate-700"
-              >
-                Llamar
-              </a>
-            )}
-          </div>
-
-          {readOnly ? (
-            <p className="text-xs text-slate-500">
-              {done ? "Ya reportada." : "Sin reportar."} La ruta está cerrada.
-            </p>
-          ) : (
-            <ReportForm stop={stop} onDone={onDone} delegated={delegated} vocabulary={vocabulary} />
-          )}
-        </div>
       )}
     </div>
   );

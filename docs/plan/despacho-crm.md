@@ -178,3 +178,28 @@ Límite conocido: el panel enseña la última carga de la ruta; si un día hay
 dos cargas para el mismo motorizado, la anterior se abre desde la mesa de
 despacho de Almacén o desde el enlace antiguo `?caja=<carga>`.
 
+## 7. El detalle de la parada, al lado de la lista (19-09-2026)
+
+Sergio, 19-09-2026: «en lugar de que el detalle salga abajo puede salir en
+el lado derecho como el detalle del pedido, pero no en el lado derecho de
+toda la web, sería en el lado derecho del contenedor de toda esa lista. Esto
+porque el motorizado normalmente abrirá la web desde móvil».
+
+- `components/rider-route.tsx`: `StopCard` es solo la fila (nombre, pedido,
+  monto, estado, y la barra «Lo llevo / No lo llevo»). El detalle vive en
+  `StopPanel`: cabecera fija con «←», cliente, pedido y monto; cuerpo con
+  scroll propio (dirección, mapa, llamar, reporte). En el teléfono el panel es
+  `fixed` centrado con el ancho del contenedor (`max-w-md`), no de toda la
+  web, y bloquea el scroll del cuerpo; desde `lg` el contenedor pasa a
+  `max-w-3xl` con dos columnas (lista de 28 rem y panel pegajoso a la
+  derecha). Sin parada abierta, la columna derecha solo dice qué hacer.
+- La parada abierta es `?parada=<stopId>`: abrir hace `pushState` (así
+  «atrás» cierra) y cerrar `replaceState` conservando el resto de la query,
+  como la ficha del pedido. Guardar o confirmar cierra el panel y refresca la
+  lista con `router.refresh()` diferido. Un id que ya no está en la ruta se
+  ignora.
+- Nada cambia en acciones ni datos: mismo `reportStop`, mismo vocabulario,
+  mismo «Lo llevo». La barra «Lo llevo» sigue en la fila y, solo en el
+  teléfono, también arriba del panel para no volver a la lista a confirmar.
+- Tests: `test/rider-stop-panel.test.ts` (estructura del panel y de la URL).
+
