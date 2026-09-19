@@ -279,7 +279,7 @@ export function DispatchDayBoard(props: Props) {
                   value={riderId}
                   onChange={(e) => { setRiderId(e.target.value); if (tray.length) void drainTray(e.target.value); }}
                   aria-label="¿Quién sale hoy?"
-                  className="min-h-14 w-full rounded-xl border border-slate-300 bg-white px-3 text-base font-medium text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:min-h-12 sm:text-sm"
+                  className="min-h-14 w-full rounded-xl border border-slate-300 bg-white px-3 text-base font-medium text-slate-900 focus-visible:outline-none focus-visible:border-brand-500 focus-visible:ring-4 focus-visible:ring-brand-500/15 sm:min-h-12 sm:text-sm"
                 >
                   <option value="">¿Quién sale hoy?</option>
                   {riders.map((r) => <option key={r.id} value={r.id}>{r.fullName}</option>)}
