@@ -43,9 +43,11 @@ interface Props {
   assign?: { orgId: string; riderId: string; scheduledFor?: string | null; overrideCash?: boolean };
   /** Sin motorizado elegido, el QR se acumula en una bandeja en vez de ejecutarse. */
   onQueue?: (code: string) => void;
+  /** Primera vista mínima: sin párrafo de ayuda (va al `title` del botón), campo siempre visible. */
+  compact?: boolean;
 }
 
-export function ScanAction({ context, manifestId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue }: Props) {
+export function ScanAction({ context, manifestId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, compact = false }: Props) {
   const plan = scanActionPlan(context);
   const [busy, setBusy] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -145,8 +147,8 @@ export function ScanAction({ context, manifestId, stopId, photoKind = "entrega",
 
   return (
     <div>
-      <p className="mt-3 text-xs text-slate-500">{plan.hint}</p>
-      <DispatchScanner busy={busy} disabled={disabled} onScan={(code) => void execute(code)} onCamera={() => setCameraOpen(true)} />
+      {!compact && <p className="mt-3 text-xs text-slate-500">{plan.hint}</p>}
+      <DispatchScanner busy={busy} disabled={disabled} onScan={(code) => void execute(code)} onCamera={() => setCameraOpen(true)} compact={compact} buttonLabel={compact ? (label ?? "Escanear") : undefined} hint={plan.hint} />
       <DispatchCamera open={cameraOpen} onClose={() => setCameraOpen(false)} onScan={(value) => void execute(value)} />
     </div>
   );

@@ -4,11 +4,19 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "@/components/ui";
 
 /** Camera first on touch devices. Desktop readers keep the keyboard workflow. */
-export function DispatchScanner({ busy, disabled, onScan, onCamera }: {
+export function DispatchScanner({ busy, disabled, onScan, onCamera, compact = false, buttonLabel, hint }: {
   busy: boolean;
   disabled: boolean;
   onScan: (code: string) => void;
   onCamera: () => void;
+  /**
+   * Primera vista mínima (Despacho del día): botón «Escanear» y el campo de
+   * código siempre visible, sin etiqueta aparte ni botón «Confirmar» (Enter o
+   * el lector confirman). La explicación va en el `title` del botón.
+   */
+  compact?: boolean;
+  buttonLabel?: string;
+  hint?: string;
 }) {
   const [manual, setManual] = useState(false);
   const [code, setCode] = useState("");
@@ -18,6 +26,22 @@ export function DispatchScanner({ busy, disabled, onScan, onCamera }: {
       input.current?.focus({ preventScroll: true });
     }
   }, [busy, disabled]);
+  if (compact) {
+    return <div className="space-y-2" aria-busy={busy}>
+      <button type="button" onClick={onCamera} disabled={busy || disabled} title={hint}
+        className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-brand-600 px-4 text-base font-semibold text-white hover:bg-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:opacity-50 sm:min-h-12 sm:w-auto sm:text-sm">
+        <svg aria-hidden="true" className="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M8 5 6 8H3v12h18V8h-3l-2-3Z"/><circle cx="12" cy="13" r="3"/></svg>
+        {busy ? "Verificando…" : (buttonLabel ?? "Escanear")}
+      </button>
+      <form onSubmit={(event) => { event.preventDefault(); if (code.trim()) { onScan(code); setCode(""); } }}>
+        <input ref={input} value={code} onChange={(event) => setCode(event.target.value)} disabled={busy || disabled}
+          autoComplete="off" autoCapitalize="characters" spellCheck={false} enterKeyHint="go"
+          aria-label="Código del paquete: QR, guía o número de pedido" placeholder="QR, guía o pedido"
+          className="min-h-12 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-50 sm:min-h-10 sm:text-sm" />
+        <button type="submit" className="sr-only" disabled={busy || disabled || !code.trim()}>Confirmar código</button>
+      </form>
+    </div>;
+  }
   return <div className="mt-4 space-y-2" aria-busy={busy}>
     <button type="button" onClick={onCamera} disabled={busy || disabled}
       className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-brand-600 px-4 py-3 text-base font-semibold text-white hover:bg-brand-700 focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:opacity-50 sm:w-auto">

@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { DispatchDayBoard } from "@/components/dispatch-day-board";
+import { Hint } from "@/components/hint";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import { resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
 import {
@@ -115,15 +116,23 @@ export function GrupoGfCourierBoard({
     <div className={cn("space-y-4", mobile.board)}>
       <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+          <p className="hidden text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 sm:block">
             Operación logística
           </p>
-          <h1 className="mt-1 text-xl font-semibold text-slate-950">Grupo GF Courier</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-lg font-semibold text-slate-950 sm:mt-1 sm:text-xl">Grupo GF Courier</h1>
+            {/* En el móvil la explicación y las condiciones caben en un ⓘ. */}
+            <Hint
+              className="sm:hidden"
+              label="Qué es y condiciones del servicio"
+              text={`Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega. Corte ${provider.same_day_cutoff.slice(0, 5)} · Yape ${snapshot.yapePercentage} % · efectivo máximo ${money(provider.cash_limit_amount)}.`}
+            />
+          </div>
           <p className="mt-1 hidden max-w-3xl text-sm text-slate-600 sm:block">
             Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega.
           </p>
         </div>
-        <details className="rounded-xl border border-slate-200 bg-white px-3 text-sm lg:min-w-80"><summary className="min-h-12 cursor-pointer py-3 font-medium text-slate-600">Condiciones del servicio</summary><div className="grid grid-cols-3 divide-x divide-slate-200 pb-3">
+        <details className="hidden rounded-xl border border-slate-200 bg-white px-3 text-sm sm:block lg:min-w-80"><summary className="min-h-12 cursor-pointer py-3 font-medium text-slate-600">Condiciones del servicio</summary><div className="grid grid-cols-3 divide-x divide-slate-200 pb-3">
           <Summary label="Corte" value={provider.same_day_cutoff.slice(0, 5)} />
           <Summary label="Yape" value={`${snapshot.yapePercentage} %`} />
           <Summary label="Efectivo máximo" value={money(provider.cash_limit_amount)} />
