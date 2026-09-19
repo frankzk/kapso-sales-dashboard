@@ -584,6 +584,7 @@ export const TIMELINE_LABEL: Record<string, string> = {
   // Camino del pedido en Grupo GF Courier (MOM §29.13): lo que escriben la
   // bandeja, la mesa de despacho, el teléfono del motorizado y Liquidaciones 2.
   logistics_request_accepted: "Tomado por Grupo GF Courier",
+  logistics_request_rescheduled: "Salida prevista movida al día de la caja",
   dispatch_route_assigned: "Asignado a la caja del motorizado",
   dispatch_route_reassigned: "Movido a la caja de otro motorizado",
   package_ready: "Paquete armado en almacén",

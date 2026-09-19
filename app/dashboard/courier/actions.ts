@@ -1066,7 +1066,7 @@ export async function assignGroupGfCourierRoute(
   orgId: string,
   riderId: string,
   requestIds: string[],
-  opts: { overrideCash?: boolean } = {},
+  opts: { overrideCash?: boolean; day?: string | null } = {},
 ): Promise<AssignCourierRouteResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return { ...auth, assigned: 0, manifestIds: [], failed: [] };
@@ -1172,6 +1172,8 @@ export async function assignGroupGfCourierRoute(
       .map((item) => [item.shipment_id, item.manifest_id]),
   );
 
+  const today = limaClock().day;
+  const boxDay = opts.day && DATE_RE.test(opts.day) && opts.day > today ? opts.day : today;
   const groups = new Map<string, AssignableRequest[]>();
   for (const request of requests) {
     if (!request.shipment_id) {
@@ -1199,7 +1201,36 @@ export async function assignGroupGfCourierRoute(
       failed.push({ requestId: request.id, error: "La fecha prevista no es válida." });
       continue;
     }
-    groups.set(request.scheduled_for, [...(groups.get(request.scheduled_for) ?? []), request]);
+    // La caja es de hoy o del día que eligió el supervisor, nunca de un día
+    // que ya pasó. Una solicitud tomada semanas atrás guarda su fecha prevista
+    // de entonces; agrupar por ella abría la carga de ese día, cuya ruta ya
+    // está liquidada, y el escaneo moría con «La ruta diaria ya está
+    // liquidada». La fecha se mueve al día de la caja y queda en el historial.
+    const routeDate = request.scheduled_for < boxDay ? boxDay : request.scheduled_for;
+    if (routeDate !== request.scheduled_for) {
+      const { error: moveError } = await admin
+        .from("logistics_requests")
+        .update({ scheduled_for: routeDate })
+        .eq("id", request.id);
+      if (moveError) {
+        failed.push({ requestId: request.id, error: moveError.message });
+        continue;
+      }
+      await admin.from("order_events").insert({
+        store_id: request.store_id,
+        order_id: request.order_id,
+        kind: "logistics_request_rescheduled",
+        occurred_at: new Date().toISOString(),
+        actor: auth.userId,
+        source: "grupo_gf_courier",
+        courier: "propio",
+        shipment_id: request.shipment_id,
+        note: `Salida prevista movida del ${request.scheduled_for} al ${routeDate}: el paquete entra hoy en la caja de ${rider.full_name}.`,
+        payload: { requestId: request.id, from: request.scheduled_for, to: routeDate },
+      });
+      request.scheduled_for = routeDate;
+    }
+    groups.set(routeDate, [...(groups.get(routeDate) ?? []), request]);
   }
 
   let assigned = 0;
@@ -1953,7 +1984,7 @@ export async function scanAssignToRider(
   const { data: requests } = await admin.from("logistics_requests").select("id").eq("order_id", orderId).eq("provider_id", provider?.id ?? "").in("status", ["accepted", "scheduled"]);
   const requestIds = ((requests ?? []) as { id: string }[]).map((r) => r.id);
   if (!requestIds.length) return { ...line, status: "no_elegible", message: "El pedido se tomó pero no se pudo asignar. Continúa desde la lista." };
-  const assigned = await assignGroupGfCourierRoute(orgId, rider.id, requestIds, { overrideCash: opts.overrideCash });
+  const assigned = await assignGroupGfCourierRoute(orgId, rider.id, requestIds, { overrideCash: opts.overrideCash, day: opts.scheduledFor ?? null });
   if (!assigned.assigned) {
     const why = assigned.failed[0]?.error ?? assigned.error ?? "No se pudo asignar.";
     return { ...line, status: /efectivo|límite/i.test(why) ? "bloqueado_efectivo" : "no_elegible", message: why };

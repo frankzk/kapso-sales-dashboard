@@ -31,6 +31,19 @@ describe("admisión de pedidos de Grupo GF Courier", () => {
     expect(body.slice(alreadyTaken, outputCheck)).toContain("alreadyAccepted.push(orderId)");
   });
 
+  it("una fecha prevista ya pasada se mueve al día de la caja antes de abrir la carga", () => {
+    // Solicitudes tomadas semanas atrás guardan su fecha de entonces; abrir la
+    // carga de ese día tropieza con una ruta liquidada. Se agrupa por el día
+    // de la caja y el cambio queda en el historial del pedido.
+    const src = readFileSync(resolve(root, "app/dashboard/courier/actions.ts"), "utf8");
+    const start = src.indexOf("export async function assignGroupGfCourierRoute(");
+    const body = src.slice(start, src.indexOf("\nexport ", start + 1));
+    expect(body).toContain("request.scheduled_for < boxDay ? boxDay : request.scheduled_for");
+    expect(body).toContain('kind: "logistics_request_rescheduled"');
+    expect(body.indexOf("groups.set(routeDate")).toBeGreaterThan(body.indexOf("logistics_request_rescheduled"));
+    expect(body).not.toContain("groups.set(request.scheduled_for");
+  });
+
   it("toma pedidos desde la bandeja y no desde el modal manual del pedido", () => {
     const courier = readFileSync(resolve(root, "components/grupo-gf-courier.tsx"), "utf8");
     const master = readFileSync(resolve(root, "components/order-drawer.tsx"), "utf8");

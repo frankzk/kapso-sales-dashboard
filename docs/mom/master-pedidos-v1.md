@@ -4801,7 +4801,11 @@ solo gesto, **toma** el pedido si hacía falta, lo **pone en la caja** del
 motorizado del día y lo **deja cotejado por oficina**, porque es el propio
 supervisor quien tiene el paquete en la mano (`scanAssignToRider`, sobre las
 mismas acciones de tomar, asignar y cotejar; eventos
-`logistics_request_accepted`, `dispatch_route_assigned`, `office_checked`). El
+`logistics_request_accepted`, `dispatch_route_assigned`, `office_checked`). Si
+el pedido se tomó días atrás y su fecha prevista ya pasó, la caja no es la de
+aquel día (cuya ruta está liquidada) sino la de hoy o la elegida: la fecha
+prevista se mueve hacia adelante y queda `logistics_request_rescheduled` en el
+historial. Nunca se mueve hacia atrás. El
 límite de efectivo de §29.9 se avisa en línea y bloquea salvo autorización
 explícita. La lista viva dice qué pasó con cada QR: asignado y cotejado; ya
 estaba en esa caja; está en la caja de otro motorizado (y ofrece moverlo); no
