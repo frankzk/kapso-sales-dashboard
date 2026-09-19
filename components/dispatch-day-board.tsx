@@ -389,8 +389,13 @@ export function DispatchDayBoard(props: Props) {
                   {districts.map((d) => <option key={d} value={d}>{d}</option>)}
                 </select>
               </div>
-              <span className="w-full text-xs text-slate-500 sm:w-auto">
+              <span className="flex w-full items-center gap-2 text-xs text-slate-500 sm:w-auto">
                 {filtered.length.toLocaleString("es-PE")} en cola{filtered.length > visible.length ? ` · se muestran ${visible.length}` : ""}
+                {filtered.length > visible.length && (
+                  <button type="button" onClick={() => setLimit((n) => n + 100)} className="min-h-8 rounded-lg border border-slate-300 px-2 font-medium text-slate-700 hover:bg-slate-50">
+                    Mostrar 100 más
+                  </button>
+                )}
               </span>
             </div>
           </div>
@@ -431,7 +436,7 @@ export function DispatchDayBoard(props: Props) {
                 </div>
                 <div className="text-right text-xs text-slate-600">
                   <p className="font-semibold text-slate-900">{money(q.orderTotal)}</p>
-                  <p>tarifa {money(q.tariffAmount)} · {formatDay(q.scheduledFor)}</p>
+                  <p title="Salida prevista: después del corte de las 11:30 el pedido sale al día siguiente">tarifa {money(q.tariffAmount)} · sale {formatDay(q.scheduledFor)}</p>
                 </div>
               </li>
             ))}
