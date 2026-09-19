@@ -6,6 +6,8 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
+import { DispatchDayBoard } from "@/components/dispatch-day-board";
+import type { DispatchManifest } from "@/lib/dispatch-access";
 import { resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
 import {
   activateGroupGfCourier,
@@ -36,16 +38,23 @@ function money(value: number): string {
   return `S/ ${value.toFixed(2)}`;
 }
 
-function readCourierTab(value: string | null): "available" | "preparation" | "routes" | "tariffs" {
-  return value === "preparation" || value === "routes" || value === "tariffs" ? value : "available";
+type CourierTabId = "dispatch" | "available" | "preparation" | "routes" | "tariffs";
+function readCourierTab(value: string | null): CourierTabId {
+  return value === "available" || value === "preparation" || value === "routes" || value === "tariffs" ? value : "dispatch";
 }
 
 export function GrupoGfCourierBoard({
   orgId,
   snapshot,
+  manifests = [],
+  today = "",
 }: {
   orgId: string;
   snapshot: CourierConfigSnapshot;
+  /** Cajas (manifiestos) visibles para «Despacho del día». */
+  manifests?: DispatchManifest[];
+  /** Hoy en Lima. */
+  today?: string;
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -53,9 +62,7 @@ export function GrupoGfCourierBoard({
   const [pending, startTransition] = useTransition();
   const searchParams = useSearchParams();
   const requestedTab = searchParams.get("tab");
-  const [tab, setTab] = useState<"available" | "preparation" | "routes" | "tariffs">(
-    readCourierTab(requestedTab),
-  );
+  const [tab, setTab] = useState<CourierTabId>(readCourierTab(requestedTab));
   useEffect(() => { setTab(readCourierTab(requestedTab)); }, [requestedTab]);
 
   function run(action: () => Promise<CourierActionResult>) {
@@ -123,7 +130,14 @@ export function GrupoGfCourierBoard({
         </div></details>
       </header>
 
-      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-4 gap-1 border-b border-slate-200 lg:flex">
+      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-5 gap-1 border-b border-slate-200 lg:flex">
+        <CourierTab
+          label="Despacho del día"
+          shortLabel="Despacho"
+          active={tab === "dispatch"}
+          onClick={() => setTab("dispatch")}
+          count={new Set(manifests.filter((m) => m.route_date === today && m.state !== "cancelled" && m.courier === "propio").map((m) => m.rider_id ?? m.driver_name)).size}
+        />
         <CourierTab
           active={tab === "available"}
           onClick={() => setTab("available")}
@@ -155,6 +169,19 @@ export function GrupoGfCourierBoard({
       {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
       {notice && <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}
 
+      {tab === "dispatch" && (
+        <DispatchDayBoard
+          orgId={orgId}
+          day={today}
+          available={snapshot.operations.available}
+          accepted={snapshot.operations.accepted}
+          riders={snapshot.operations.riders}
+          manifests={manifests}
+          canManageDispatch={snapshot.canManageDispatch}
+          pending={pending}
+          run={run}
+        />
+      )}
       {tab === "available" && (
         <AvailableOrders
           orgId={orgId}

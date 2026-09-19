@@ -1624,3 +1624,132 @@ export async function setDistrictAvailability(
         : "Distrito reactivado. Conserva la tarifa configurada.",
   };
 }
+
+// ---------------------------------------------------------------------------
+// Despacho del día (MOM §29.13): mover un paquete entre cajas del mismo día.
+// ---------------------------------------------------------------------------
+
+export interface MoveManifestItemResult extends CourierActionResult {
+  manifestId?: string;
+}
+
+/**
+ * Mueve un paquete de la caja de un motorizado a la de otro, el mismo día.
+ *
+ * Antes era: retirar desde la mesa (con motivo) → volver a «Tomados» →
+ * asignar al otro. Tres pantallas y ningún evento que dijera «pasó de Roy a
+ * Yhoni». Ahora es una acción: retira del manifiesto origen (queda el rastro
+ * con motivo), abre o reutiliza la carga del destino con `gf_dispatch_load`
+ * (misma regla que asignar: si el destino ya está en cotejo, no se puede
+ * meter nada hasta que reciba), inserta el paquete y deja un
+ * `dispatch_route_reassigned` en el pedido con origen y destino.
+ */
+export async function moveManifestItem(
+  orgId: string,
+  manifestId: string,
+  shipmentId: string,
+  targetRiderId: string,
+  reason: string,
+): Promise<MoveManifestItemResult> {
+  const auth = await requireManager(orgId);
+  if ("error" in auth) return auth;
+  if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
+  const cleanReason = reason.trim();
+  if (cleanReason.length < 3) return { error: "Escribe por qué cambia de motorizado." };
+  const admin = createAdminSupabase();
+  const [{ data: manifest }, { data: rider }, { data: item }] = await Promise.all([
+    admin.from("dispatch_manifests").select("id,org_id,courier,route_date,rider_id,driver_name,state").eq("id", manifestId).maybeSingle(),
+    admin.from("riders").select("id,full_name,courier").eq("id", targetRiderId).eq("org_id", orgId).eq("active", true).maybeSingle(),
+    admin.from("dispatch_manifest_items").select("id,shipment_id,store_id,removed_at").eq("manifest_id", manifestId).eq("shipment_id", shipmentId).is("removed_at", null).maybeSingle(),
+  ]);
+  if (!manifest || manifest.org_id !== orgId) return { error: "Caja no encontrada." };
+  if (manifest.courier !== "propio") return { error: "Solo se mueven paquetes entre motorizados de Grupo GF." };
+  if (["in_custody", "cancelled"].includes(String(manifest.state))) return { error: "Esa caja ya está cerrada." };
+  if (!rider || !isGroupGfRiderCourier(rider.courier)) return { error: "Elige un motorizado activo de Grupo GF." };
+  if (manifest.rider_id === rider.id) return { error: "El paquete ya está en la caja de ese motorizado." };
+  if (!item) return { error: "El paquete ya no está en esa caja." };
+  const { data: shipment } = await admin
+    .from("shipments")
+    .select("id,store_id,order_id,order_name,courier,guide_code,custody_state")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (!shipment) return { error: "Paquete no encontrado." };
+  if (shipment.custody_state !== "empresa") return { error: "El paquete ya no está en custodia de Grupo GF." };
+
+  // 1) abrir (o reutilizar) la carga del destino ANTES de retirar: si el
+  // destino no admite paquetes, el origen no se toca.
+  const { data: targetManifestId, error: loadError } = await admin.rpc("gf_dispatch_load", {
+    p_org_id: orgId, p_rider_id: rider.id, p_day: manifest.route_date, p_actor: auth.userId,
+  });
+  if (loadError || !targetManifestId) {
+    return { error: loadError?.message ?? "No se pudo abrir la caja del otro motorizado." };
+  }
+  const now = new Date().toISOString();
+  const fromName = manifest.driver_name ?? "otro motorizado";
+  // 2) retirar del origen con el rastro
+  const { error: removeError } = await admin
+    .from("dispatch_manifest_items")
+    .update({ removed_at: now, removed_by: auth.userId, removal_reason: `Movido a ${rider.full_name}: ${cleanReason}` })
+    .eq("id", item.id)
+    .is("removed_at", null);
+  if (removeError) return { error: removeError.message };
+  // 3) meter en el destino
+  const { error: insertError } = await admin.from("dispatch_manifest_items").insert({
+    manifest_id: targetManifestId as string,
+    shipment_id: shipmentId,
+    store_id: item.store_id,
+    added_by: auth.userId,
+  });
+  if (insertError) {
+    // Deshacer el retiro para no dejar el paquete en el limbo.
+    await admin.from("dispatch_manifest_items").update({ removed_at: null, removed_by: null, removal_reason: null }).eq("id", item.id);
+    return { error: insertError.code === "23505" ? "El paquete ya está en otra caja activa." : insertError.message };
+  }
+  await recalculateManifestState(admin, manifestId, auth.userId);
+  await Promise.all([
+    admin.from("dispatch_events").insert([
+      { org_id: orgId, manifest_id: manifestId, shipment_id: shipmentId, actor: auth.userId, kind: "package_removed", payload: { reason: cleanReason, moved_to: rider.id, moved_to_manifest: targetManifestId } },
+      { org_id: orgId, manifest_id: targetManifestId as string, shipment_id: shipmentId, actor: auth.userId, kind: "package_added", payload: { source: "grupo_gf_courier", moved_from: manifest.rider_id, moved_from_manifest: manifestId } },
+    ]),
+    shipment.order_id
+      ? admin.from("order_events").insert({
+          store_id: shipment.store_id,
+          order_id: shipment.order_id,
+          kind: "dispatch_route_reassigned",
+          occurred_at: now,
+          actor: auth.userId,
+          source: "grupo_gf_courier",
+          courier: "propio",
+          guide_code: shipment.guide_code,
+          shipment_id: shipment.id,
+          reason: cleanReason,
+          note: `Pasó de la caja de ${fromName} a la de ${rider.full_name}.`,
+          payload: { from_rider_id: manifest.rider_id, from_manifest_id: manifestId, to_rider_id: rider.id, to_manifest_id: targetManifestId, route_date: manifest.route_date },
+        })
+      : Promise.resolve(),
+    admin
+      .from("logistics_requests")
+      .update({ observation: null })
+      .eq("shipment_id", shipmentId)
+      .eq("provider_id", (await admin.from("logistics_providers").select("id").eq("org_id", orgId).eq("code", "grupo-gf-courier").maybeSingle()).data?.id ?? "00000000-0000-0000-0000-000000000000"),
+  ]);
+  if (shipment.order_id) await recomputeOrderMasterSafe(admin, [shipment.order_id]);
+  for (const path of ["/dashboard/courier", "/dashboard/courier/rutas", "/dashboard/pedidos"]) revalidatePath(path);
+  return { notice: `${shipment.order_name ?? "Paquete"} pasó a la caja de ${rider.full_name}.`, manifestId: targetManifestId as string };
+}
+
+/** Estado derivado del manifiesto tras tocar sus paquetes (misma regla que la mesa). */
+async function recalculateManifestState(admin: ReturnType<typeof createAdminSupabase>, manifestId: string, actor: string) {
+  const [{ data: manifest }, { data: items }] = await Promise.all([
+    admin.from("dispatch_manifests").select("state,kind").eq("id", manifestId).single(),
+    admin.from("dispatch_manifest_items").select("removed_at,office_checked_at,pickup_checked_at").eq("manifest_id", manifestId),
+  ]);
+  const { deriveDispatchManifestState } = await import("@/lib/dispatch");
+  const next = deriveDispatchManifestState(items ?? [], (manifest?.state ?? "draft") as never, (manifest?.kind ?? "reparto") as never);
+  const active = (items ?? []).filter((item) => !item.removed_at);
+  const officeComplete = active.length > 0 && active.every((item) => !!item.office_checked_at);
+  await admin
+    .from("dispatch_manifests")
+    .update({ state: next, office_completed_at: officeComplete ? new Date().toISOString() : null, office_completed_by: officeComplete ? actor : null })
+    .eq("id", manifestId);
+}

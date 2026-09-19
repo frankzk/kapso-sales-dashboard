@@ -45,6 +45,8 @@ export interface DispatchManifest {
   id: string;
   delivery_route_id?: string | null;
   load_number?: number;
+  /** Ficha del motorizado (0095); null en cajas de courier externo. */
+  rider_id?: string | null;
   org_id: string;
   courier: string;
   /** `reparto` (motorizado, doble cotejo) o `entrega_courier` (Aliclik/agencia). */
@@ -86,7 +88,7 @@ export const DISPATCH_SHIPMENT_COLUMNS =
   "customer_phone,district,province,product";
 
 const MANIFEST_COLUMNS =
-  "id,org_id,courier,kind,route_date,route_label,driver_name,received_by,state,created_by,delivery_route_id,load_number," +
+  "id,org_id,courier,kind,route_date,route_label,driver_name,received_by,state,created_by,delivery_route_id,load_number,rider_id," +
   "office_completed_at,custody_completed_at,cancellation_reason,created_at";
 
 const ITEM_COLUMNS =

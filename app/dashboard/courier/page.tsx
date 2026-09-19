@@ -6,6 +6,8 @@ import { getAdminOrgs } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { GrupoGfCourierBoard } from "@/components/grupo-gf-courier";
 import { loadCourierConfig } from "./actions";
+import { getDispatchWorkspaceData } from "@/lib/dispatch-access";
+import { limaDate } from "@/lib/sheets/resolver";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +35,8 @@ async function CourierContent() {
   }
   if (!memberships.length) redirect("/login");
   const orgId = memberships[0]!.org_id;
-  const snapshot = await loadCourierConfig(orgId);
-  return <GrupoGfCourierBoard orgId={orgId} snapshot={snapshot} />;
+  const [snapshot, dispatch] = await Promise.all([loadCourierConfig(orgId), getDispatchWorkspaceData()]);
+  const today = limaDate(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10);
+  return <GrupoGfCourierBoard orgId={orgId} snapshot={snapshot} manifests={dispatch.manifests} today={today} />;
 }
 
