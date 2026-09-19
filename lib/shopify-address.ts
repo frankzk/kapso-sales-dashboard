@@ -48,6 +48,38 @@ export function shopifyOrderNote(raw: unknown): string | null {
   return text(record(raw)?.note);
 }
 
+/**
+ * El departamento que la clienta ELIGIÓ en el desplegable del checkout, como
+ * código ISO 3166-2:PE («PE-PUN»).
+ *
+ * POR QUÉ VALE MÁS QUE EL RESTO DE LA DIRECCIÓN. Todo lo demás se escribe a
+ * mano y llega como llega; esto se elige de una lista cerrada. Es la única
+ * declaración del destino que no depende de que nadie teclee bien, y es lo que
+ * permite descubrir un pin puesto en otro departamento (ver
+ * `lib/pin-corroborado.ts`). Lo traen 14.770 de 23.034 pedidos.
+ *
+ * El formulario COD lo manda bajo la etiqueta «Provincia:», que en Perú es el
+ * departamento — la misma confusión de nombres que ya arrastra
+ * `shippingAddress.province`. Se acepta tanto la forma REST (`note_attributes`
+ * con `name`) como la de GraphQL (`customAttributes` con `key`).
+ *
+ * Devuelve el código en crudo. Traducirlo es trabajo de quien compara lugares.
+ */
+export function shopifyDepartamentoElegido(raw: unknown): string | null {
+  const source = record(raw);
+  const attrs = source?.customAttributes ?? source?.note_attributes;
+  if (!Array.isArray(attrs)) return null;
+  for (const attr of attrs) {
+    const entry = record(attr);
+    if (!entry) continue;
+    const key = text(entry.key) ?? text(entry.name);
+    if (!key || !/^provincia/i.test(key)) continue;
+    const value = text(entry.value);
+    if (value && /^PE-[A-Za-z]{3}$/.test(value)) return value.toUpperCase();
+  }
+  return null;
+}
+
 /** Extracts the delivery address from either REST or GraphQL Shopify payloads. */
 export function shopifyShippingAddress(raw: unknown): OrderShippingAddress | null {
   const source = record(raw);

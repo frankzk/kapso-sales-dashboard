@@ -11,7 +11,11 @@ import { unstable_cache } from "next/cache";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
-import { shopifyOrderNote, shopifyShippingAddress } from "@/lib/shopify-address";
+import {
+  shopifyDepartamentoElegido,
+  shopifyOrderNote,
+  shopifyShippingAddress,
+} from "@/lib/shopify-address";
 import { orderTotals, type OrderTotals } from "@/lib/order-totals";
 import { productImagesFor } from "@/lib/shopify-product-images";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
@@ -421,6 +425,13 @@ export interface OrderMasterDetail {
    */
   totals: OrderTotals;
   address: ReturnType<typeof shopifyShippingAddress>;
+  /**
+   * El departamento que la clienta eligió en el desplegable del checkout, como
+   * código ISO («PE-PUN»). Es la única declaración del destino que no se
+   * teclea, y con ella se descubre un pin puesto en otro departamento — ver
+   * `lib/pin-corroborado.ts` y el caso #KP133769.
+   */
+  departamentoElegido: string | null;
   /** La nota que alguien escribió en el pedido de Shopify, tal cual. Suele
    *  llevar lo que Shopify no tiene dónde guardar —el DNI del destinatario, la
    *  agencia— y hasta ahora solo se veía entrando al admin de Shopify. */
@@ -724,6 +735,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     aliclikHealth,
     tasks,
     address: shopifyShippingAddress(orderRow?.raw),
+    departamentoElegido: shopifyDepartamentoElegido(orderRow?.raw),
     shopifyNote: shopifyOrderNote(orderRow?.raw),
     filledOutputIds: [...filledShipmentIds(events)],
     // MISMA pregunta que hace `createManualRouteOutput` antes de dejar crear la

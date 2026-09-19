@@ -88,6 +88,7 @@ export function AliclikGuidePanel({
   const [transportId, setTransportId] = useState<number | null>(null);
   const [note, setNote] = useState("");
   const [riskExceptionReason, setRiskExceptionReason] = useState("");
+  const [pinExceptionReason, setPinExceptionReason] = useState("");
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
   /** Cuántas veces se ha reintentado por "pedido todavía sin dirección". */
@@ -112,7 +113,10 @@ export function AliclikGuidePanel({
     setBusy("quote");
     startTransition(async () => {
       try {
-      const res = await previewAliclikGuide(orderId, { coordinate: coordinate || null });
+      const res = await previewAliclikGuide(orderId, {
+        coordinate: coordinate || null,
+        pinExceptionReason: pinExceptionReason || null,
+      });
       setPreview(res);
       // Pedido recién creado desde Leads: la dirección viene del webhook de
       // Shopify unos segundos después. Se reintenta solo en vez de dejar a la
@@ -150,6 +154,7 @@ export function AliclikGuidePanel({
         // y aborta si cambió entre cotizar y pulsar.
         expectedCollectTotal: preview?.collectTotal ?? null,
         riskExceptionReason: riskExceptionReason || null,
+        pinExceptionReason: pinExceptionReason || null,
       });
       if (res.error) setMessage({ kind: "error", text: res.error });
       else {
@@ -300,6 +305,38 @@ export function AliclikGuidePanel({
           >
             {message.text}
           </p>
+        ) : null}
+
+        {/* EL PIN CONTRADICHO POR EL PEDIDO.
+            Va FUERA del bloque de cotización porque cuando salta, la cotización
+            devuelve `ok: false` y ahí dentro no se vería nunca. Y no es el aviso
+            de ubigeo, que es ámbar y sale en la mitad de los pedidos: aquí el
+            destino entero está en discusión, así que cierra la emisión hasta que
+            alguien escriba por qué el pin es el correcto. */}
+        {preview?.pinSinCorroborar ? (
+          <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-3 text-xs text-red-900">
+            <p className="font-semibold">El pedido no respalda este pin</p>
+            <p className="mt-1 leading-5">{preview.pinSinCorroborar}</p>
+            {preview.ok ? (
+              <p className="mt-2 font-medium">
+                Vas a emitir con la excepción que escribiste. Queda registrada en el pedido.
+              </p>
+            ) : (
+              <>
+                <label className="mt-3 block">
+                  <span className="font-semibold">Si el pin es el correcto, escribe por qué</span>
+                  <textarea
+                    value={pinExceptionReason}
+                    onChange={(event) => setPinExceptionReason(event.target.value)}
+                    rows={2}
+                    placeholder="Ej. La clienta eligió mal el departamento; confirmó por WhatsApp que vive en Pucallpa."
+                    className="mt-1 w-full rounded-lg border border-red-300 bg-white px-3 py-2 text-sm text-slate-900"
+                  />
+                </label>
+                <p className="mt-1">Queda registrado en el pedido. Vuelve a cotizar para continuar.</p>
+              </>
+            )}
+          </div>
         ) : null}
 
         {preview?.ok ? (
