@@ -263,9 +263,9 @@ export function DispatchDayBoard(props: Props) {
         </details>
       )}
 
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         {/* ── Asignar ── */}
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="px-4 py-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
               <div className="min-w-0 flex-1">
@@ -360,13 +360,13 @@ export function DispatchDayBoard(props: Props) {
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Pedido, cliente o distrito"
                 aria-label="Buscar en la cola"
-                className="min-h-10 w-52 rounded-lg border border-slate-300 px-3 text-sm"
+                className="min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-3 text-sm sm:w-52"
               />
-              <select value={store} onChange={(e) => setStore(e.target.value)} aria-label="Tienda" className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm">
+              <select value={store} onChange={(e) => setStore(e.target.value)} aria-label="Tienda" className="min-h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm sm:flex-none">
                 <option value="">Todas las tiendas</option>
                 {stores.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
-              <select value={district} onChange={(e) => setDistrict(e.target.value)} aria-label="Distrito" className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm">
+              <select value={district} onChange={(e) => setDistrict(e.target.value)} aria-label="Distrito" className="min-h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm sm:flex-none">
                 <option value="">Todos los distritos</option>
                 {districts.map((d) => <option key={d} value={d}>{d}</option>)}
               </select>
@@ -384,12 +384,12 @@ export function DispatchDayBoard(props: Props) {
               disabled={pending || !canManageDispatch || !riderId || !selected.size}
               onClick={assign}
               title={riderId ? undefined : "Elige el motorizado arriba"}
-              className="min-h-10 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+              className="min-h-10 max-w-full truncate rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
             >
               {pending ? "Asignando…" : `Asignar${selected.size ? ` ${selected.size}` : ""} a ${riderName || "…"}`}
             </button>
             <label className="flex items-center gap-1 text-xs text-slate-600" title="Límite de efectivo de la ruta (MOM §29.9)">
-              <input type="checkbox" checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} /> superar el límite de efectivo
+              <input type="checkbox" checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} /> <span className="whitespace-nowrap">superar el límite</span>
             </label>
           </div>
 
