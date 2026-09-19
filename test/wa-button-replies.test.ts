@@ -551,6 +551,26 @@ describe("isAcknowledgement", () => {
     expect(isAcknowledgement("🙏🙏")).toBe(true);
   });
 
+  it("«buenas noches» y «muy amable» también son cierres", () => {
+    // Están en la lista del router del bot, que ante ellos calla. Si nosotros
+    // no los reconociéramos, la clienta no recibiría NADA de nadie.
+    expect(isAcknowledgement("buenas noches")).toBe(true);
+    expect(isAcknowledgement("muy amable")).toBe(true);
+    expect(isAcknowledgement("mil gracias")).toBe(true);
+    expect(isAcknowledgement("de nada")).toBe(true);
+    expect(isAcknowledgement("de acuerdo")).toBe(true);
+  });
+
+  it("«no» NUNCA es un acuse, aunque sea cortito", () => {
+    // Después de pedirle un saldo, un «no» es un rechazo: abre devolución, no
+    // un recordatorio del Yape. Va a la asesora.
+    expect(isAcknowledgement("no")).toBe(false);
+    expect(isAcknowledgement("no gracias")).toBe(false);
+    expect(isAcknowledgement("ya no")).toBe(false);
+    expect(isAcknowledgement("quiero cancelar")).toBe(false);
+    expect(isAcknowledgement("devolver")).toBe(false);
+  });
+
   it("NO se traga una consulta de verdad", () => {
     // Éstas tienen que llegar a la asesora. Contestarles con un número de
     // Yape sería atropellar a quien está preguntando otra cosa.

@@ -2934,6 +2934,15 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
     «ok»— desde ese aviso. Repetirle el número a cada «gracias» es acoso.
     La lista de acuses es **cerrada**, igual que los rótulos de los botones:
     «ok pero me llegó mal el producto» no está en ella y va a la asesora.
+    - **Esa lista y la del router del bot tienen que encajar.** El router del
+      workflow del 600 calla ante sus «triviales» y Kapta contesta ante sus
+      «acuses». Una frase trivial para el router y no para Kapta deja a la
+      clienta **sin ninguna respuesta**; al revés, recibe **dos**. Por eso se
+      comparan palabra a palabra con la misma mecánica y la lista de Kapta es
+      un subconjunto de la del router.
+    - **«no» no es un acuse en ninguna de las dos.** Después de pedir un saldo,
+      un «no» o un «no gracias» es un rechazo —abre devolución (§13)—, no un
+      recordatorio del Yape. Los dos callan y va a la asesora.
   - Todo queda en la línea de tiempo del pedido (`whatsapp_template`) y en las
     tablas de la cola y de respuestas, con el motivo cuando no salió.
 - Seguimiento comienza desde la constancia del adelanto y se intensifica cuando
