@@ -201,8 +201,8 @@ export function DispatchDayBoard(props: Props) {
           label="Cómo funciona el despacho"
           text={
             props.riderPickupCheckRequired
-              ? "Elige motorizado y escanea: cada QR toma el pedido, lo pone en su caja y lo deja cotejado. Verificación del motorizado activada: recibe su caja desde el teléfono y solo entonces ve la ruta. Se cambia en la base (logistics_providers.rider_pickup_check_required)."
-              : "Elige motorizado y escanea: cada QR toma el pedido, lo pone en su caja y lo deja cotejado. Verificación del motorizado desactivada: la custodia pasa al asignar y ve la ruta al instante. Se cambia en la base (logistics_providers.rider_pickup_check_required)."
+              ? "Elige motorizado y escanea: cada QR toma el pedido, lo pone en su caja y lo deja cotejado. El motorizado recibe su caja desde el teléfono y solo entonces ve la ruta."
+              : "Elige motorizado y escanea: cada QR toma el pedido, lo pone en su caja y lo deja cotejado. El motorizado ve la ruta al instante."
           }
         />
         <dl className="ml-auto flex gap-3 text-xs text-slate-600">
@@ -297,7 +297,7 @@ export function DispatchDayBoard(props: Props) {
                     const detail = [l.message, l.cashWarning].filter(Boolean).join(" · ");
                     return (
                       <li key={`${l.code}:${i}`} className={cn("flex items-center gap-2 px-3 py-1.5 text-sm", tone === "ok" ? "bg-emerald-50/50" : tone === "warn" ? "bg-amber-50/50" : tone === "bad" ? "bg-red-50/50" : "")}>
-                        <Hint label={detail} text={detail} align="left">
+                        <Hint label={detail} text={detail}>
                           <span className={cn("grid size-5 place-items-center rounded-full text-[11px] font-bold", tone === "ok" ? "bg-emerald-600 text-white" : tone === "same" ? "bg-slate-300 text-white" : tone === "warn" ? "bg-amber-500 text-white" : "bg-red-600 text-white")}>{tone === "ok" ? "✓" : tone === "warn" ? "↔" : tone === "same" ? "=" : "!"}</span>
                         </Hint>
                         <span className="min-w-0 flex-1 truncate">
