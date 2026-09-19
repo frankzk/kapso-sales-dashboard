@@ -393,7 +393,6 @@ export function DispatchDayBoard(props: Props) {
           <details className="group">
           <summary className="cursor-pointer px-4 py-3 text-sm text-slate-600 hover:bg-slate-50">
             <span className="font-medium text-slate-800">Otra forma: asignar desde la lista</span>
-            <span className="ml-2 text-xs text-slate-500">sin escanear · no deja cotejado</span>
           </summary>
           <div className="border-b border-slate-200 px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
