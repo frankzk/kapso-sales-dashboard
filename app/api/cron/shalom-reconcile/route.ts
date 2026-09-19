@@ -227,11 +227,22 @@ export async function GET(req: NextRequest) {
         // puede tardar y puede fallar, y esta transición no se repite. Una
         // guía que ya estaba en tránsito antes de que existiera esto no entra:
         // el cron solo ve el cambio.
-        if (next.pickupState === "en_transito") {
+        // Dos momentos, dos avisos (0169). El de tránsito dice «va en camino»;
+        // el de llegada dice «ya está en la agencia, tienes hasta el día X».
+        // Son la misma cola y el mismo número, pero plantillas e interruptores
+        // distintos — y la unique es (shipment_id, kind), así que una guía
+        // recibe cada uno una sola vez.
+        const avisoDe: Record<string, "transito" | "disponible" | undefined> = {
+          en_transito: "transito",
+          disponible_para_recojo: "disponible",
+        };
+        const kind = avisoDe[next.pickupState];
+        if (kind) {
           const ok = await enqueueTransitNotification(admin, {
             storeId: guide.store_id,
             shipmentId: guide.id,
             orderId: guide.order_id,
+            kind,
           });
           if (ok) queued += 1;
         }

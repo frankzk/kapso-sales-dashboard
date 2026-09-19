@@ -18,6 +18,7 @@ import {
   moneyLabel,
   parseTransitParams,
   pendingBalance,
+  pickupDeadlineLabel,
   processTransitNotifications,
   productsLabel,
   resolveSenderNumber,
@@ -314,14 +315,28 @@ const CREDS = {
 const NOW = "2026-09-11T16:46:00Z";
 
 describe("enqueueTransitNotification", () => {
-  it("es idempotente por guía: la unique hace el trabajo", async () => {
+  it("es idempotente por guía Y POR TIPO de aviso: la unique hace el trabajo", async () => {
+    // La unique dejó de ser `shipment_id` a secas (0169): una misma guía tiene
+    // que poder recibir el aviso de tránsito y, días después, el de llegada.
+    // Lo que sigue garantizando es que ninguno de los dos se repita.
     const admin = fakeAdmin();
     await enqueueTransitNotification(admin, { storeId: "store", shipmentId: "ship-1", orderId: "ord-1" });
     expect(admin.upserts[0]).toMatchObject({
       table: "shalom_transit_notifications",
-      row: { shipment_id: "ship-1" },
-      opts: { onConflict: "shipment_id", ignoreDuplicates: true },
+      row: { shipment_id: "ship-1", kind: "transito" },
+      opts: { onConflict: "shipment_id,kind", ignoreDuplicates: true },
     });
+  });
+
+  it("sin decir el tipo, es el de tránsito: es el que ya existía", async () => {
+    const admin = fakeAdmin();
+    await enqueueTransitNotification(admin, {
+      storeId: "store",
+      shipmentId: "ship-2",
+      orderId: "ord-2",
+      kind: "disponible",
+    });
+    expect(admin.upserts[0]!.row).toMatchObject({ kind: "disponible" });
   });
 });
 
@@ -459,5 +474,106 @@ describe("processTransitNotifications", () => {
     expect(report.failed).toBe(1);
     expect(send).not.toHaveBeenCalled();
     expect(admin.updates.at(-1)!.patch.error).toMatch(/OSE ID/);
+  });
+});
+
+// ── El segundo aviso: «ya llegó a tu agencia» (0169) ────────────────────────
+
+describe("pickupDeadlineLabel", () => {
+  it("28 días desde que llegó, en hora de Lima", () => {
+    // Una FECHA y no «te quedan 12 días»: el WhatsApp se queda en el chat y un
+    // contador relativo envejece mal; una fecha sigue siendo cierta mañana.
+    expect(pickupDeadlineLabel("2026-09-18T15:00:00Z", "America/Lima")).toBe("16 de octubre");
+  });
+
+  it("sin fecha de llegada no se inventa un plazo", () => {
+    // Prometerle un día que no sabemos es peor que no decir nada: la clienta
+    // planifica su viaje a la agencia con eso.
+    expect(pickupDeadlineLabel(null, "America/Lima")).toBe("");
+    expect(pickupDeadlineLabel("no es una fecha", "America/Lima")).toBe("");
+  });
+});
+
+describe("transitConfig por tipo de aviso", () => {
+  const base = {
+    shalom_transit_template_enabled: true,
+    shalom_transit_template_name: "guias_shalom_imagen",
+    shalom_transit_template_language: "es",
+    shalom_transit_params: "nombre,guia,codigo,producto,agencia,total,adelanto,saldo",
+    shalom_transit_attach_ticket: true,
+    shalom_arrival_template_enabled: false,
+    shalom_arrival_template_name: null,
+    shalom_arrival_params: "nombre,guia,codigo,producto,agencia,total,adelanto,saldo,vence",
+    shalom_arrival_attach_ticket: false,
+    kapso_api_key: "k",
+    whatsapp_phone_number_id: "PN-store",
+    shalom_transit_phone_number_id: "PN-600",
+    shalom_transit_hour_start: 8,
+    shalom_transit_hour_end: 21,
+    timezone: "America/Lima",
+  } as any;
+
+  it("cada aviso trae su plantilla y sus variables", () => {
+    const creds = {
+      ...base,
+      shalom_arrival_template_enabled: true,
+      shalom_arrival_template_name: "guias_shalom_llegada",
+    };
+    const t = transitConfig(creds, "transito");
+    const d = transitConfig(creds, "disponible");
+    expect(t.cfg!.templateName).toBe("guias_shalom_imagen");
+    expect(t.cfg!.tokens).not.toContain("vence");
+    expect(d.cfg!.templateName).toBe("guias_shalom_llegada");
+    expect(d.cfg!.tokens).toContain("vence");
+  });
+
+  it("el número y el horario SÍ se comparten: son de la tienda, no del aviso", () => {
+    const creds = {
+      ...base,
+      shalom_arrival_template_enabled: true,
+      shalom_arrival_template_name: "guias_shalom_llegada",
+    };
+    const d = transitConfig(creds, "disponible").cfg!;
+    expect(d.phoneNumberId).toBe("PN-600");
+    expect(d.hourStart).toBe(8);
+    expect(d.hourEnd).toBe(21);
+  });
+
+  it("encender uno NO enciende el otro", () => {
+    // Con el de tránsito funcionando, el de llegada sigue apagado hasta que
+    // alguien lo encienda — y su motivo lo dice, para que no parezca un fallo.
+    expect(transitConfig(base, "transito").cfg).not.toBeNull();
+    const d = transitConfig(base, "disponible");
+    expect(d.cfg).toBeNull();
+    expect((d as { reason: string }).reason).toMatch(/aviso de llegada apagado/);
+  });
+});
+
+describe("transitBodyParams con `vence`", () => {
+  const facts = {
+    customerName: "Madeleine Rodríguez",
+    guideCode: "96028510",
+    shalomCodigo: "MHTT",
+    lineItems: [{ name: "Aceite de Semilla Negra", quantity: 1 }],
+    agencyName: "SAN MARTIN / TARAPOTO",
+    orderTotal: 89.1,
+    validatedAmount: 30,
+    yapeNumber: "930 555 309",
+    pickupDeadline: "16 de octubre",
+  };
+
+  it("la fecha límite viaja como un parámetro más", () => {
+    const r = transitBodyParams(
+      ["nombre", "guia", "codigo", "producto", "agencia", "total", "adelanto", "saldo", "vence"],
+      facts,
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.params.at(-1)).toBe("16 de octubre");
+  });
+
+  it("sin fecha límite el aviso NO sale, y se dice qué faltó", () => {
+    const r = transitBodyParams(["nombre", "guia", "vence"], { ...facts, pickupDeadline: "" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.missing).toEqual(["vence"]);
   });
 });

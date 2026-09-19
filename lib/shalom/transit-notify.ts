@@ -45,11 +45,45 @@ export const TRANSIT_TOKENS = [
   "adelanto",
   "saldo",
   "yape",
+  // Solo del aviso de llegada: la fecha límite de recojo.
+  "vence",
 ] as const;
 export type TransitToken = (typeof TRANSIT_TOKENS)[number];
 
+/** Qué aviso es. Comparten cola, número, horario y cuentas; el texto no. */
+export type NoticeKind = "transito" | "disponible";
+
 /** El orden de `guias_shalom` tal como se aprobó en Meta. */
-export const TRANSIT_DEFAULT_PARAMS = TRANSIT_TOKENS.join(",");
+export const TRANSIT_DEFAULT_PARAMS = TRANSIT_TOKENS.filter((t) => t !== "vence").join(",");
+
+/** Días que Shalom guarda el paquete antes de devolverlo (MOM §12). */
+export const PICKUP_WINDOW_DAYS = 28;
+
+/**
+ * «12 de octubre» — hasta cuándo puede recogerlo, en hora de Lima.
+ *
+ * POR QUÉ UNA FECHA Y NO «te quedan 12 días». La clienta lee el mensaje hoy y
+ * lo vuelve a mirar el jueves; un contador relativo envejece mal dentro de un
+ * WhatsApp que se queda en el chat. Una fecha sigue siendo cierta mañana.
+ *
+ * Devuelve «» si no se sabe cuándo llegó: sin ese dato no se inventa un plazo,
+ * y `transitBodyParams` nombrará el hueco antes de gastar el envío. Pura.
+ */
+export function pickupDeadlineLabel(
+  arrivedAtIso: string | null | undefined,
+  timeZone: string,
+  days: number = PICKUP_WINDOW_DAYS,
+): string {
+  if (!arrivedAtIso) return "";
+  const t = Date.parse(arrivedAtIso);
+  if (!Number.isFinite(t)) return "";
+  const limite = new Date(t + days * 24 * 3600 * 1000);
+  try {
+    return new Intl.DateTimeFormat("es-PE", { timeZone, day: "numeric", month: "long" }).format(limite);
+  } catch {
+    return "";
+  }
+}
 
 /** Cuántas veces se reintenta un envío antes de darlo por perdido. */
 export const TRANSIT_MAX_ATTEMPTS = 5;
@@ -124,6 +158,8 @@ export interface TransitFacts {
   orderTotal: number | null;
   validatedAmount: number | null;
   yapeNumber: string | null;
+  /** Ya formateada; solo la usa el aviso de llegada. */
+  pickupDeadline?: string | null;
 }
 
 /** El saldo pendiente: total menos lo VALIDADO, nunca negativo. `null` cuando
@@ -171,6 +207,8 @@ export function transitBodyParams(
         return amountValue(saldo);
       case "yape":
         return sanitizeTemplateParam(f.yapeNumber);
+      case "vence":
+        return sanitizeTemplateParam(f.pickupDeadline ?? null);
     }
   });
   const missing = tokens.filter((_, i) => !values[i]);
@@ -204,18 +242,32 @@ export interface TransitConfig {
   timezone: string;
 }
 
-export function transitConfig(creds: StoreCreds): { cfg: TransitConfig } | { cfg: null; reason: string } {
-  if (!creds.shalom_transit_template_enabled) return { cfg: null, reason: "aviso apagado en la tienda" };
-  if (!creds.shalom_transit_template_name) return { cfg: null, reason: "la tienda no tiene plantilla configurada" };
+export function transitConfig(
+  creds: StoreCreds,
+  kind: NoticeKind = "transito",
+): { cfg: TransitConfig } | { cfg: null; reason: string } {
+  // Lo que cambia por tipo de aviso es el TEXTO: plantilla, variables, ticket y
+  // su propio interruptor. El número, el horario y las cuentas son de la
+  // tienda y se comparten — encender el de llegada no puede obligar a
+  // reconfigurar por dónde sale.
+  const llegada = kind === "disponible";
+  const enabled = llegada ? creds.shalom_arrival_template_enabled : creds.shalom_transit_template_enabled;
+  const templateName = llegada ? creds.shalom_arrival_template_name : creds.shalom_transit_template_name;
+  const rawParams = llegada ? creds.shalom_arrival_params : creds.shalom_transit_params;
+  const attach = llegada ? creds.shalom_arrival_attach_ticket : creds.shalom_transit_attach_ticket;
+  const que = llegada ? "aviso de llegada" : "aviso";
+
+  if (!enabled) return { cfg: null, reason: `${que} apagado en la tienda` };
+  if (!templateName) return { cfg: null, reason: `la tienda no tiene plantilla de ${que} configurada` };
   if (!creds.kapso_api_key) return { cfg: null, reason: "la tienda no tiene API key de Kapso" };
-  const tokens = parseTransitParams(creds.shalom_transit_params);
+  const tokens = parseTransitParams(rawParams);
   if (!tokens.length) return { cfg: null, reason: "la tienda no tiene el orden de variables configurado" };
   return {
     cfg: {
-      templateName: creds.shalom_transit_template_name,
+      templateName,
       language: creds.shalom_transit_template_language ?? "es",
       tokens,
-      attachTicket: Boolean(creds.shalom_transit_attach_ticket),
+      attachTicket: Boolean(attach),
       phoneNumberId: creds.shalom_transit_phone_number_id?.trim() || null,
       storePhoneNumberId: creds.whatsapp_phone_number_id,
       apiKey: creds.kapso_api_key,
@@ -247,13 +299,14 @@ export function resolveSenderNumber(
  */
 export async function enqueueTransitNotification(
   admin: SupabaseClient,
-  input: { storeId: string; shipmentId: string; orderId: string | null },
+  input: { storeId: string; shipmentId: string; orderId: string | null; kind?: NoticeKind },
 ): Promise<boolean> {
+  const kind: NoticeKind = input.kind ?? "transito";
   const { error } = await admin
     .from("shalom_transit_notifications")
     .upsert(
-      { store_id: input.storeId, shipment_id: input.shipmentId, order_id: input.orderId },
-      { onConflict: "shipment_id", ignoreDuplicates: true },
+      { store_id: input.storeId, shipment_id: input.shipmentId, order_id: input.orderId, kind },
+      { onConflict: "shipment_id,kind", ignoreDuplicates: true },
     );
   if (error) {
     console.error(`aviso en tránsito: no se pudo encolar ${input.shipmentId} — ${error.message}`);
@@ -268,6 +321,7 @@ export interface TransitQueueRow {
   shipment_id: string;
   order_id: string | null;
   attempts: number;
+  kind?: NoticeKind | null;
 }
 
 export interface TransitReport {
@@ -298,8 +352,15 @@ async function gatherFacts(
   storeId: string,
   shipment: ShipmentRow,
   orderId: string | null,
-): Promise<{ facts: TransitFacts; phone: string | null; leadPhoneNumberId: string | null; orderName: string | null }> {
-  const [master, order, draft, payments, methods] = await Promise.all([
+): Promise<{
+  facts: TransitFacts;
+  phone: string | null;
+  leadPhoneNumberId: string | null;
+  orderName: string | null;
+  /** Cuándo quedó disponible en la agencia; de aquí sale la fecha límite. */
+  arrivedAt: string | null;
+}> {
+  const [master, order, draft, payments, methods, llegada] = await Promise.all([
     orderId
       ? admin
           .from("order_master")
@@ -317,6 +378,19 @@ async function gatherFacts(
       ? admin.from("order_payments").select("amount,validation_status").eq("order_id", orderId)
       : Promise.resolve({ data: [] as { amount: number | null; validation_status: string }[] }),
     loadStorePaymentMethods(admin, storeId),
+    // Cuándo llegó a la agencia. Sale de la línea de tiempo y no de un campo
+    // del envío porque es el mismo hecho que el rastreo ya escribe, y tenerlo
+    // en dos sitios es tenerlo mal en uno de los dos.
+    orderId
+      ? admin
+          .from("order_events")
+          .select("occurred_at")
+          .eq("order_id", orderId)
+          .eq("new_operational", "disponible_para_recojo")
+          .order("occurred_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
   ]);
 
   const m = (master.data ?? null) as {
@@ -373,6 +447,7 @@ async function gatherFacts(
     phone,
     leadPhoneNumberId,
     orderName: m?.order_name ?? o?.name ?? null,
+    arrivedAt: ((llegada.data ?? null) as { occurred_at: string } | null)?.occurred_at ?? null,
   };
 }
 
@@ -406,7 +481,7 @@ export async function processTransitNotifications(
 
   let query = admin
     .from("shalom_transit_notifications")
-    .select("id,store_id,shipment_id,order_id,attempts")
+    .select("id,store_id,shipment_id,order_id,attempts,kind")
     .eq("status", "pending")
     .lte("next_attempt_at", nowIso);
   if (opts.storeId) query = query.eq("store_id", opts.storeId);
@@ -421,6 +496,8 @@ export async function processTransitNotifications(
   if (!rows.length) return report;
 
   const credsByStore = new Map<string, StoreCreds | null>();
+  // Por tienda Y tipo: una tienda puede tener encendido el de tránsito y
+  // apagado el de llegada, que es justo como se van a estrenar.
   const configByStore = new Map<string, ReturnType<typeof transitConfig>>();
 
   for (const row of rows) {
@@ -429,12 +506,19 @@ export async function processTransitNotifications(
       continue;
     }
 
+    const kind: NoticeKind = row.kind === "disponible" ? "disponible" : "transito";
+    const claveCfg = `${row.store_id}:${kind}`;
     if (!credsByStore.has(row.store_id)) {
-      const creds = await loadCreds(row.store_id);
-      credsByStore.set(row.store_id, creds);
-      configByStore.set(row.store_id, creds ? transitConfig(creds) : { cfg: null, reason: "tienda no encontrada" });
+      credsByStore.set(row.store_id, await loadCreds(row.store_id));
     }
-    const resolved = configByStore.get(row.store_id)!;
+    if (!configByStore.has(claveCfg)) {
+      const creds = credsByStore.get(row.store_id) ?? null;
+      configByStore.set(
+        claveCfg,
+        creds ? transitConfig(creds, kind) : { cfg: null, reason: "tienda no encontrada" },
+      );
+    }
+    const resolved = configByStore.get(claveCfg)!;
 
     if (!resolved.cfg) {
       // Apagado o sin configurar NO es un fallo: es la tienda decidiendo. Se
@@ -505,7 +589,15 @@ async function sendOne(
   const shipment = (sh ?? null) as ShipmentRow | null;
   if (!shipment) return fail("la guía ya no existe", { retryable: false });
 
-  const { facts, phone, leadPhoneNumberId, orderName } = await gatherFacts(admin, row.store_id, shipment, row.order_id);
+  const { facts, phone, leadPhoneNumberId, orderName, arrivedAt } = await gatherFacts(
+    admin,
+    row.store_id,
+    shipment,
+    row.order_id,
+  );
+  // La fecha límite solo la pide el aviso de llegada; se calcula siempre
+  // porque cuesta nada y así `transitBodyParams` decide con el dato delante.
+  facts.pickupDeadline = pickupDeadlineLabel(arrivedAt, cfg.timezone);
 
   if (!phone || !isSendablePhone(phone)) {
     return fail(`sin celular peruano al que escribir (${phone ?? "vacío"})`, { retryable: false, patch: { phone } });

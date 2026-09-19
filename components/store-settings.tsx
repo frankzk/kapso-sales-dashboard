@@ -102,6 +102,10 @@ export interface StoreSettingsData {
     shalom_transit_hour_start: number;
     shalom_transit_hour_end: number;
     shalom_transit_payment_link: string | null;
+    shalom_arrival_template_enabled: boolean;
+    shalom_arrival_template_name: string | null;
+    shalom_arrival_params: string | null;
+    shalom_arrival_attach_ticket: boolean;
     flowcl_link_enabled: boolean;
     flowcl_link_email: string | null;
     flowcl_link_ttl_hours: number;
@@ -1466,6 +1470,69 @@ function SettingsForm({
                 configura en <strong>Cobro por link (Flow.cl)</strong>, más abajo). Vacío = el link
                 de Flow si lo hay, y si no el Yape principal.
               </p>
+            </div>
+            <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:col-span-3">
+              <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                Segundo aviso: «ya llegó a tu agencia»
+              </p>
+              <p className="text-xs text-slate-500">
+                El de arriba sale cuando el paquete <strong>va en camino</strong> y dice que llegará
+                en 2 a 5 días. Éste sale cuando <strong>ya llegó</strong> y le dice hasta qué día
+                puede recogerlo — 28 días desde que llegó, y después Shalom lo devuelve. Es otra
+                plantilla aprobada aparte, con su propio interruptor; el número, el horario y las
+                cuentas son los mismos de arriba.
+              </p>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className={labelCls} htmlFor="shalom_arrival_template_enabled">Aviso de llegada</label>
+                  <select
+                    id="shalom_arrival_template_enabled"
+                    name="shalom_arrival_template_enabled"
+                    defaultValue={s.shalom_arrival_template_enabled ? "true" : "false"}
+                    className={inputCls}
+                  >
+                    <option value="false">Apagado</option>
+                    <option value="true">Encendido</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls} htmlFor="shalom_arrival_template_name">Plantilla · nombre</label>
+                  <input
+                    id="shalom_arrival_template_name"
+                    name="shalom_arrival_template_name"
+                    defaultValue={s.shalom_arrival_template_name ?? ""}
+                    placeholder="guias_shalom_llegada"
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className={labelCls} htmlFor="shalom_arrival_attach_ticket">Ticket en cabecera</label>
+                  <select
+                    id="shalom_arrival_attach_ticket"
+                    name="shalom_arrival_attach_ticket"
+                    defaultValue={s.shalom_arrival_attach_ticket ? "true" : "false"}
+                    className={inputCls}
+                  >
+                    <option value="false">No</option>
+                    <option value="true">Sí</option>
+                  </select>
+                </div>
+                <div className="sm:col-span-3">
+                  <label className={labelCls} htmlFor="shalom_arrival_params">Orden de las variables</label>
+                  <input
+                    id="shalom_arrival_params"
+                    name="shalom_arrival_params"
+                    defaultValue={s.shalom_arrival_params ?? ""}
+                    placeholder="nombre,guia,codigo,producto,agencia,total,adelanto,saldo,vence"
+                    className={inputCls}
+                  />
+                  <p className="mt-1 text-xs text-slate-500">
+                    Las mismas de arriba más <code>vence</code>, la fecha límite de recojo. Sin
+                    fecha de llegada registrada no se inventa un plazo: el aviso se reintenta y
+                    queda escrito que faltaba <code>vence</code>.
+                  </p>
+                </div>
+              </div>
             </div>
             <div className="rounded-lg border border-slate-200 p-3 sm:col-span-3">
               <button

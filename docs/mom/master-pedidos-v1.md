@@ -2871,6 +2871,30 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
     del orden configurado: un parámetro de más y Meta rechaza el envío. Y el
     número escrito a mano en una plantilla es justo lo que no puede desalinearse
     de las cuentas de cobro: si se puede, va como variable.
+  - **Hay DOS avisos, y el segundo es el que cobra de verdad** (0169). El de
+    tránsito dice «va en camino, llega en 2 a 5 días hábiles». El de llegada
+    dice «ya está en tu agencia, recógelo cuanto antes». Son momentos distintos
+    y textos distintos, y confundirlos es mandarle a esperar a quien ya tiene el
+    paquete esperándola a ella. **Los ocho parámetros son los mismos**: cambia
+    el texto, no los datos.
+    - **El aviso de llegada NO lleva fecha límite**, y es una decisión, no un
+      olvido: «puedes recogerlo hasta el 16 de octubre» es un permiso a 28 días
+      vista, y lo que provoca es dejarlo para después. Urge sin fecha y sin
+      amenaza — «recógelo lo antes posible» y, sobre todo, «paga ahora y al
+      llegar solo retiras», que es urgencia que le sirve A ELLA: con el cobro
+      validado, la clave está lista cuando llegue al mostrador. El token
+      `vence` existe en el código por si algún día hace falta (un recordatorio
+      cerca del plazo), pero no entra en el orden por omisión.
+    - **Una fila por guía y por tipo.** La unique pasó de `shipment_id` a
+      `(shipment_id, kind)`: una misma guía recibe el de tránsito y, días
+      después, el de llegada — pero ninguno de los dos dos veces.
+    - **Interruptores separados, número compartido.** Encender uno no enciende
+      el otro, porque cada plantilla se aprueba aparte en Meta. El número, el
+      horario y las cuentas de cobro son de la tienda y valen para los dos.
+    - Por qué importa: al 18-09-2026 había **213 guías esperando en el mostrador
+      con saldo** (173 de Kenku y 40 de Aurela, ~S/ 34.000) a las que nunca se
+      les escribió, porque llegaron antes de que esto existiera o su tránsito
+      ocurrió con el aviso apagado. Ese es el hueco que cierra el segundo aviso.
   - **La clave de recojo nunca va en el mensaje.** Guía, código y agencia sin la
     clave no abren nada; la clave se entrega desde la salida, con el cobro
     validado y con auditoría. Esta regla no cambia.
@@ -3141,8 +3165,19 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   asesor.
 - Solo Frankz ejecuta reembolsos.
 - Un sobrepago puede devolverse después de validación.
-- Pendiente de decisión formal: si el adelanto de S/30 se considera no
-  reembolsable para cubrir logística cuando el cliente rechaza el saldo.
+- **El adelanto NO se reembolsa cuando el cliente rechaza el saldo.** Decidido
+  el 18-09-2026; estuvo meses como «pendiente de decisión formal» y esa
+  indefinición impedía decirle nada a la clienta. Cubre la logística ya
+  gastada: la guía se pagó, el paquete viajó y el retorno también cuesta.
+  - Es **rechazo del saldo**, no cualquier no-entrega. Un paquete que no llega
+    por culpa del courier, un producto equivocado o un pedido que la tienda
+    cancela no son rechazo: ahí el adelanto se devuelve como siempre.
+  - **Se le dice antes, no al final.** Una política que la clienta descubre el
+    día que pierde su dinero es una discusión perdida aunque se tenga razón, y
+    una devolución de tarjeta reclamada después cuesta más que los S/ 30. Va en
+    el aviso de cobro y tiene que estar también donde compra.
+  - Lo ejecuta Frankz, como todo reembolso: la regla dice qué se devuelve y qué
+    no, no automatiza la caja.
 
 ## 13. Devoluciones, inventario y reclamos
 
