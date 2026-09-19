@@ -5,9 +5,20 @@
 // Filtros de motorizado y fecha con el mismo picker que Despacho del día. La
 // fila abre la caja al lado (`?caja=` / `?ruta=`, courier-box-drawer.tsx).
 
-import Link from "next/link";
 import { useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import type { MouseEvent } from "react";
+
+// La fila abre el panel con `history.pushState`, que Next sincroniza con
+// `useSearchParams`, y no con un <Link>: navegar con el router vuelve a pedir
+// la pantalla entera de Grupo GF Courier al servidor (miles de pedidos) y el
+// panel tardaba segundos en aparecer. El `href` sigue siendo real: botón
+// central, «abrir en pestaña nueva» y copiar el enlace funcionan.
+function openInPlace(event: MouseEvent<HTMLAnchorElement>, href: string) {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  window.history.pushState(null, "", href);
+}
 import { cn } from "@/components/ui";
 import { Hint } from "@/components/hint";
 import { Chip, Sheet } from "@/components/filter-sheet";
@@ -216,7 +227,7 @@ function LedgerRow({ row, href }: { row: CourierLedgerRow; href: string }) {
   return (
     <tr className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
       <td className="px-4 py-2.5">
-        <Link href={href} className="font-semibold text-slate-950 hover:underline">{row.riderName}</Link>
+        <a href={href} onClick={(e) => openInPlace(e, href)} className="font-semibold text-slate-950 hover:underline">{row.riderName}</a>
         <p className="text-xs text-slate-500">{row.manifestId ? `Carga ${row.loadNumber ?? 1}` : "Sin caja"}</p>
       </td>
       <td className="px-3 py-2.5"><span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold", SITUATION_TONE[situation])}>{LEDGER_SITUATION_LABELS[situation]}</span></td>
@@ -242,7 +253,7 @@ function LedgerCard({ row, href }: { row: CourierLedgerRow; href: string }) {
   const progress = progressOf(row);
   return (
     <li>
-      <Link href={href} className="block px-4 py-3 hover:bg-slate-50">
+      <a href={href} onClick={(e) => openInPlace(e, href)} className="block px-4 py-3 hover:bg-slate-50">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <p className="font-semibold text-slate-950">{row.riderName}</p>
@@ -255,7 +266,7 @@ function LedgerCard({ row, href }: { row: CourierLedgerRow; href: string }) {
           <span className="text-xs tabular-nums text-slate-600">{progress.text}</span>
         </div>
         {row.manifestId && <p className="mt-1 text-xs text-slate-500">armados {row.armedCount} · cotejados {row.officeCheckedCount} · recibidos {row.pickupCheckedCount}{row.settlementStatus ? ` · liquidación ${settlementLabel(row.settlementStatus).toLowerCase()}` : ""}</p>}
-      </Link>
+      </a>
     </li>
   );
 }
