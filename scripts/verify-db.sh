@@ -161,6 +161,9 @@ echo "  ✅ la custodia solo cambia después de cotejar el 100 % dos veces"
 
 echo "▶ GF: cargas adicionales, recepción por usuario y ruta de reparto única"
 $PSQL -f "$ROOT/scripts/sql/gf_route_loads_smoke.sql"
+echo "▶ «No lo recojo» (0174): el rechazo sale de la carga y la custodia pasa con los aceptados"
+$PSQL -f "$ROOT/scripts/sql/gf_rider_decline_smoke.sql"
+echo "  ✅ rechazo con rastro, sin parada, salida libre para otra caja"
 
 echo ""
 echo "✅ DB verification passed."

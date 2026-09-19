@@ -38,6 +38,10 @@ export interface DispatchManifestItem {
   removed_by: string | null;
   removed_at: string | null;
   removal_reason: string | null;
+  /** 0174: «No lo recojo» del motorizado. */
+  pickup_declined_at?: string | null;
+  pickup_declined_reason?: string | null;
+  pickup_declined_by?: string | null;
   shipment: DispatchShipment | null;
 }
 
@@ -93,7 +97,8 @@ const MANIFEST_COLUMNS =
 
 const ITEM_COLUMNS =
   "id,manifest_id,shipment_id,store_id,added_by,added_at,office_checked_by," +
-  "office_checked_at,pickup_checked_by,pickup_checked_at,removed_by,removed_at,removal_reason";
+  "office_checked_at,pickup_checked_by,pickup_checked_at,removed_by,removed_at,removal_reason," +
+  "pickup_declined_at,pickup_declined_reason,pickup_declined_by";
 
 export async function getDispatchWorkspaceData(requestedId?: string | null): Promise<DispatchWorkspaceData> {
   const sb = await createServerSupabase();

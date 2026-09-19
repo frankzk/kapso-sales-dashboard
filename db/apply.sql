@@ -349,4 +349,6 @@
 \ir migrations/0172_stop_written_status.sql
 \echo 'Applying 0173_master_backfill_log.sql'
 \ir migrations/0173_master_backfill_log.sql
+\echo 'Applying 0174_manifest_item_not_picked.sql'
+\ir migrations/0174_manifest_item_not_picked.sql
 \echo 'Done.'

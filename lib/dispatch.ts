@@ -104,12 +104,17 @@ export interface DispatchProgressItem {
   removed_at?: string | null;
   office_checked_at?: string | null;
   pickup_checked_at?: string | null;
+  /** 0174: el motorizado no lo recogió. Va con `removed_at`, así que no cuenta
+   *  en el total; se cuenta aparte para decirlo en pantalla. */
+  pickup_declined_at?: string | null;
 }
 
 export interface DispatchProgress {
   total: number;
   officeChecked: number;
   pickupChecked: number;
+  /** Rechazados por el motorizado al recibir (fuera del total). */
+  declined: number;
   officeComplete: boolean;
   pickupComplete: boolean;
   percent: number;
@@ -124,10 +129,12 @@ export function dispatchProgress(items: readonly DispatchProgressItem[]): Dispat
   const total = active.length;
   const officeChecked = active.filter((item) => !!item.office_checked_at).length;
   const pickupChecked = active.filter((item) => !!item.pickup_checked_at).length;
+  const declined = items.filter((item) => !!item.pickup_declined_at).length;
   return {
     total,
     officeChecked,
     pickupChecked,
+    declined,
     officeComplete: total > 0 && officeChecked === total,
     pickupComplete: total > 0 && pickupChecked === total,
     percent: total ? Math.round((pickupChecked / total) * 100) : 0,

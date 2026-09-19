@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/access";
 import { getMyRider, getRouteDetail, getRoutes } from "@/lib/routes-access";
 import { RiderRouteScreen } from "@/components/rider-route";
-import { GfRiderReceipt } from "@/components/gf-rider-receipt";
+import { RiderReceiveBox } from "@/components/rider-receive-box";
 import { getMyGfLoads } from "@/lib/gf-rider-loads";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { getRiderSheet, loadRiderVocabulary } from "@/lib/sheets/rider-access";
@@ -62,8 +62,14 @@ export default async function RepartoPage({
   const detail = routeId ? await getRouteDetail(routeId) : null;
   const today = limaDate(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10);
 
+  // Primero la caja, después la ruta (MOM §29.13): mientras haya una carga
+  // cotejada por oficina y no recibida, el motorizado verifica sus paquetes y
+  // dice cuáles no recoge. La ruta se muestra recién con la custodia cambiada.
+  if (loads.some((load) => load.state === "ready_for_pickup" || load.state === "pickup_check")) {
+    return <RiderReceiveBox riderName={rider.full_name} loads={loads} />;
+  }
   return (
-    <><GfRiderReceipt loads={loads} /><RiderRouteScreen
+    <><RiderRouteScreen
       riderName={rider.full_name}
       routes={routes}
       route={detail?.route ?? null}
