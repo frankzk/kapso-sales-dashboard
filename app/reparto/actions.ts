@@ -90,6 +90,13 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
     }
   }
 
+  const { data: routeRow } = await sb
+    .from("delivery_routes")
+    .select("id,status")
+    .eq("id", stop.route_id)
+    .maybeSingle();
+  const routeStatus = (routeRow as { status?: string } | null)?.status;
+
   // La escritura va por el ÚNICO camino (lib/stop-report.ts): ruta en curso,
   // saldo real, evidencia y catálogo se comprueban ahí, para /reparto y para
   // Liquidaciones 2 por igual. El service role controla qué columnas se tocan.
@@ -108,7 +115,7 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
     writtenStatusCode: input.writtenStatusCode ?? null,
     writtenPayment: input.writtenPayment ?? null,
     delegated: access.delegated,
-  });
+  }, { stop, routeStatus });
   if (!written.ok) return { ok: false, error: written.error };
 
   // La hoja de Reparto propio del motorizado refleja la parada (MOM §29.12).

@@ -97,7 +97,13 @@ async function pushRowToStop(
   const estado = typeof merged.estado === "string" ? merged.estado : null;
   const effects = await effectsForDomain(admin, sheet.domain_id);
   const target = domainStatusToStop(estado, estado ? (effects.get(estado) ?? null) : null);
-  const { data: current } = await admin.from("delivery_stops").select("status,payment_method,collected_amount,outcome_reason").eq("id", stopId).maybeSingle();
+  const { data: current } = await admin
+    .from("delivery_stops")
+    .select("id,order_id,route_id,status,payment_method,collected_amount,outcome_reason,photo_path,voucher_path")
+    .eq("id", stopId)
+    .maybeSingle();
+  if (!current) return { ok: false, error: "La parada de esta fila ya no existe." };
+  const { data: route } = await admin.from("delivery_routes").select("status").eq("id", current.route_id as string).maybeSingle();
   const status = target?.status ?? ((current?.status as "pendiente" | "entregado" | "no_entregado" | undefined) ?? "pendiente");
   const metodo = typeof merged.metodo_pago === "string" ? merged.metodo_pago : null;
   const method = sheetPaymentToStop(metodo) ?? (current?.payment_method as string | null) ?? null;
@@ -116,6 +122,9 @@ async function pushRowToStop(
     writtenStatusCode: estado,
     writtenPayment: typeof merged.metodo_pago_reportado === "string" ? merged.metodo_pago_reportado : null,
     delegated: true,
+  }, {
+    stop: { id: current.id as string, order_id: current.order_id as string, route_id: current.route_id as string, photo_path: (current.photo_path as string | null) ?? null, voucher_path: (current.voucher_path as string | null) ?? null },
+    routeStatus: (route as { status?: string } | null)?.status,
   });
   if (!res.ok) return { ok: false, error: `Rutas no acepta el cambio: ${res.error}` };
   return { ok: true };

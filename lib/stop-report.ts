@@ -39,17 +39,15 @@ export type WriteStopReportResult =
   | { ok: true; orderId: string; routeId: string }
   | { ok: false; error: string };
 
-export async function writeStopReport(admin: SupabaseClient, input: WriteStopReportInput): Promise<WriteStopReportResult> {
-  const { data: stopRow } = await admin
-    .from("delivery_stops")
-    .select("id,order_id,route_id,photo_path,voucher_path")
-    .eq("id", input.stopId)
-    .maybeSingle();
-  if (!stopRow) return { ok: false, error: "La parada ya no está disponible." };
-  const stop = stopRow as { id: string; order_id: string; route_id: string; photo_path: string | null; voucher_path: string | null };
+/** Lo que quien llama ya leyó con SU cliente: en /reparto bajo RLS (si no la
+ *  ve, no existe); en Liquidaciones 2 con el service role tras sus guardas. */
+export interface StopReportContext {
+  stop: { id: string; order_id: string; route_id: string; photo_path: string | null; voucher_path: string | null };
+  routeStatus: string | null | undefined;
+}
 
-  const { data: routeRow } = await admin.from("delivery_routes").select("id,status").eq("id", stop.route_id).maybeSingle();
-  const routeStatus = (routeRow as { status?: string } | null)?.status;
+export async function writeStopReport(admin: SupabaseClient, input: WriteStopReportInput, ctx: StopReportContext): Promise<WriteStopReportResult> {
+  const { stop, routeStatus } = ctx;
   if (routeStatus !== "en_curso") {
     return {
       ok: false,
@@ -75,7 +73,7 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
   const reason = isNonDeliveryReason(input.outcomeReason) ? input.outcomeReason : null;
   const photoPath = input.photoPath ?? stop.photo_path;
   const voucherPath = input.voucherPath ?? stop.voucher_path;
-  if (input.delegated && input.status !== "pendiente" && !photoPath && !voucherPath) {
+  if (input.delegated && !photoPath) {
     return { ok: false, error: "Adjunta la evidencia del reporte por el motorizado." };
   }
 
