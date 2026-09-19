@@ -2923,6 +2923,17 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
   - Solo reacciona a un **botón pulsado**, nunca a texto libre que mencione el
     medio: un «ya te hice el yape» sigue con el bot y la asesora, como siempre.
     Cada botón se contesta una sola vez aunque Kapso reintente el webhook.
+  - **Única excepción: un «ok» pelado.** No es texto que interpretar, es un
+    acuse de recibo: no pregunta nada ni aporta dato nuevo, y el bot de ventas
+    no tiene nada que hacer con él. Se vio en producción el 18-09-2026 — una
+    clienta contestó «Ok» al aviso y recibió «ya le paso tu consulta a una
+    asesora», una derivación por nada; otra contestó «ok» y no recibió nada.
+    A esos se les repite **el saldo y el Yape**, con dos rejas que es lo que lo
+    hace inofensivo: tiene que haber un aviso enviado a ese celular en las
+    **últimas 48 h**, y no habérsele contestado ya —ni por botón ni por otro
+    «ok»— desde ese aviso. Repetirle el número a cada «gracias» es acoso.
+    La lista de acuses es **cerrada**, igual que los rótulos de los botones:
+    «ok pero me llegó mal el producto» no está en ella y va a la asesora.
   - Todo queda en la línea de tiempo del pedido (`whatsapp_template`) y en las
     tablas de la cola y de respuestas, con el motivo cuando no salió.
 - Seguimiento comienza desde la constancia del adelanto y se intensifica cuando
