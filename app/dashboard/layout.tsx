@@ -16,9 +16,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
   ]);
   // El motorizado entra al panel por costumbre o por un enlace viejo: se le
   // manda a su ruta en vez de enseñarle un panel al que RLS le vaciaría entero.
-  // Solo motorizado: su módulo es /reparto (ruta del día) y /reparto/cuaderno
-  // (Liquidaciones 2, MOM §30.9). El panel no es suyo.
-  if (isRiderOnly) redirect("/reparto/cuaderno");
+  // Solo motorizado: su módulo es /reparto, la ruta del día con el vocabulario
+  // de su cuaderno (MOM §29.12, §30.9). El panel no es suyo.
+  if (isRiderOnly) redirect("/reparto");
   const roleLabel = isVendedoraOnly
     ? "Vendedora"
     : roles.includes("owner") || roles.includes("admin")

@@ -5,6 +5,8 @@ import { RiderRouteScreen } from "@/components/rider-route";
 import { GfRiderReceipt } from "@/components/gf-rider-receipt";
 import { getMyGfLoads } from "@/lib/gf-rider-loads";
 import { getMasterPermissions } from "@/lib/permissions-access";
+import { getRiderSheet, loadRiderVocabulary } from "@/lib/sheets/rider-access";
+import { limaDate } from "@/lib/sheets/resolver";
 import { CoordinatorReport } from "./coordinacion";
 
 export const dynamic = "force-dynamic";
@@ -50,22 +52,24 @@ export default async function RepartoPage({
 
   // RLS solo devuelve las rutas ya entregadas al motorizado ('en_curso' o
   // 'cerrada'), así que no hay que filtrar por estado aquí.
-  const [routes, loads] = await Promise.all([getRoutes({ riderId: rider.id, limit: 30 }), getMyGfLoads()]);
+  // Una sola pantalla (MOM §29.12): la ruta es la verdad y el vocabulario de
+  // su hoja de Reparto propio viaja con ella para escribir como en el cuaderno.
+  const [routes, loads, sheet] = await Promise.all([getRoutes({ riderId: rider.id, limit: 30 }), getMyGfLoads(), getRiderSheet(rider.id)]);
+  const vocabulary = sheet ? await loadRiderVocabulary(sheet) : null;
   const active = routes.find((r) => r.status === "en_curso");
   const wanted = sp.ruta && routes.some((r) => r.id === sp.ruta) ? sp.ruta : null;
   const routeId = wanted ?? active?.id ?? routes[0]?.id ?? null;
   const detail = routeId ? await getRouteDetail(routeId) : null;
+  const today = limaDate(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10);
 
   return (
-    <><nav className="mx-auto max-w-md px-4 pt-3">
-        <a href="/reparto/cuaderno" className="block rounded-xl border border-brand-700 bg-white px-4 py-3 text-center text-sm font-medium text-brand-700">
-          Mi cuaderno del día
-        </a>
-      </nav><GfRiderReceipt loads={loads} /><RiderRouteScreen
+    <><GfRiderReceipt loads={loads} /><RiderRouteScreen
       riderName={rider.full_name}
       routes={routes}
       route={detail?.route ?? null}
       stops={detail?.stops ?? []}
+      vocabulary={vocabulary}
+      today={today}
     /></>
   );
 }

@@ -42,6 +42,8 @@ export interface RiderVocabulary {
   statuses: DomainStatusRow[];
   /** Sugerencias para el datalist: etiquetas del dominio y alias con equivalente. */
   suggestions: string[];
+  /** Alias normalizado → código del estado del dominio, para resolver en el teléfono. */
+  aliases: Record<string, string>;
   reasons: ObservationReason[];
 }
 
@@ -137,20 +139,24 @@ export async function loadRiderVocabulary(sheet: RiderSheet): Promise<RiderVocab
   const statusRows = (statuses ?? []) as DomainStatusRow[];
   const seen = new Set<string>();
   const suggestions: string[] = [];
+  const aliasMap: Record<string, string> = {};
   for (const s of statusRows) {
     const key = normalizeAlias(s.label);
+    aliasMap[key] = s.code;
+    aliasMap[normalizeAlias(s.code.replace(/_/g, " "))] = s.code;
     if (!seen.has(key)) {
       seen.add(key);
       suggestions.push(s.label);
     }
   }
   for (const a of (aliases ?? []) as StatusAliasRow[]) {
+    if (a.status_code) aliasMap[a.alias] = a.status_code;
     if (!seen.has(a.alias)) {
       seen.add(a.alias);
       suggestions.push(a.alias);
     }
   }
-  return { statuses: statusRows, suggestions, reasons: (reasons ?? []) as ObservationReason[] };
+  return { statuses: statusRows, suggestions, aliases: aliasMap, reasons: (reasons ?? []) as ObservationReason[] };
 }
 
 export interface RiderOrderCandidate {

@@ -19,6 +19,7 @@
 // escrito.
 
 import { NON_DELIVERY_REASONS, PAYMENT_METHODS, type PaymentMethod, type StopStatus } from "@/lib/routes";
+import { normalizeAlias } from "./statuses";
 import type { CellValue, StatusEffect } from "./types";
 
 export interface StopTarget {
@@ -185,4 +186,33 @@ export function stopToSheetValues(
     comprobante_path: stop.voucher_path ?? null,
     revision: review.length ? review.join(", ") : null,
   };
+}
+
+export interface WrittenResolution {
+  /** Lo escrito, tal cual. */
+  written: string;
+  code: string | null;
+  effect: StatusEffect | null;
+  label: string | null;
+  target: StopTarget | null;
+}
+
+/**
+ * Resuelve lo que el motorizado escribió con el vocabulario de su hoja
+ * (alias normalizado → código; código → efecto). Puro: vale en el teléfono
+ * para avisar y en el servidor para escribir. Sin equivalente devuelve
+ * `code: null` y la parada no se mueve por el texto.
+ */
+export function resolveWrittenForStop(
+  text: string | null | undefined,
+  vocabulary: { aliases: Record<string, string>; statuses: readonly { code: string; label: string; effect: StatusEffect }[] },
+): WrittenResolution {
+  const written = (text ?? "").trim();
+  const alias = normalizeAlias(written);
+  if (!alias) return { written, code: null, effect: null, label: null, target: null };
+  const byCode = vocabulary.statuses.find((s) => s.code === alias.toLowerCase().replace(/\s+/g, "_"));
+  const code = byCode?.code ?? vocabulary.aliases[alias] ?? null;
+  const status = code ? vocabulary.statuses.find((s) => s.code === code) ?? null : null;
+  const effect = status?.effect ?? null;
+  return { written, code, effect, label: status?.label ?? null, target: domainStatusToStop(code, effect) };
 }

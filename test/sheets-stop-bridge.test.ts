@@ -107,3 +107,19 @@ describe("stopToSheetValues", () => {
     expect(yape).toMatchObject({ estado: "entregado", efectivo: null, a_cobrar: 89, metodo_pago: "Yape Grupo GF", comprobante_path: "r/s5/yape.jpg" });
   });
 });
+
+describe("resolveWrittenForStop", () => {
+  const vocabulary = {
+    aliases: { "LO DEJA": "no_salio", "NO RESPONDE": "no_responde", ENTREGADO: "entregado" },
+    statuses: REPARTO_PROPIO_STATUSES.map((s) => ({ code: s.code, label: s.label, effect: s.effect })),
+  };
+  it("lo escrito manda: resuelve por alias y por código, y mueve la parada", async () => {
+    const { resolveWrittenForStop } = await import("@/lib/sheets/stop-bridge");
+    expect(resolveWrittenForStop("lo deja", vocabulary)).toMatchObject({ code: "no_salio", target: { status: "pendiente" } });
+    expect(resolveWrittenForStop("NO RESPONDE.", vocabulary)).toMatchObject({ code: "no_responde", target: { status: "no_entregado", outcome_reason: "no_contesta" } });
+    expect(resolveWrittenForStop("Entregado", vocabulary)).toMatchObject({ code: "entregado", target: { status: "entregado" } });
+    expect(resolveWrittenForStop("dato errado", vocabulary)).toMatchObject({ code: "dato_errado" });
+    expect(resolveWrittenForStop("COSA RARA", vocabulary)).toMatchObject({ written: "COSA RARA", code: null, target: null });
+    expect(resolveWrittenForStop("", vocabulary).code).toBeNull();
+  });
+});

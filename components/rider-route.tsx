@@ -21,7 +21,11 @@ import {
   type StopStatus,
 } from "@/lib/routes";
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
-import { reportStop } from "@/app/reparto/actions";
+import { addManualStop, addSheetOnlyPoint, reportStop, searchOrdersForRider } from "@/app/reparto/actions";
+import type { RiderOrderCandidate, RiderVocabulary } from "@/lib/sheets/rider-access";
+import { resolveWrittenForStop } from "@/lib/sheets/stop-bridge";
+import { montoDiffers } from "@/lib/sheets/rider-cuaderno";
+import { REPARTO_PAYMENT_METHODS } from "@/lib/sheets/templates";
 
 const money = (n: number | null | undefined) =>
   n === null || n === undefined ? "—" : `S/ ${n.toFixed(2)}`;
@@ -47,6 +51,8 @@ export function RiderRouteScreen({
   stops,
   coordinator,
   routeLabels,
+  vocabulary,
+  today,
 }: {
   riderName: string;
   routes: RouteRow[];
@@ -54,6 +60,10 @@ export function RiderRouteScreen({
   stops: StopWithOrder[];
   coordinator?: string;
   routeLabels?: Record<string, string>;
+  /** Vocabulario de su hoja de Reparto propio (MOM §30.9); ausente si no tiene hoja. */
+  vocabulary?: RiderVocabulary | null;
+  /** Hoy en Lima, para los puntos añadidos a mano. */
+  today?: string;
 }) {
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(null);
@@ -62,14 +72,15 @@ export function RiderRouteScreen({
 
   if (!route) {
     return (
-      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center p-6">
+      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 p-6">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center">
           <h1 className="text-lg font-semibold text-slate-900">Hola, {riderName}</h1>
           <p className="mt-2 text-sm text-slate-500">
             Todavía no tienes ninguna ruta asignada. Cuando el coordinador te la entregue, aparecerá
-            aquí.
+            aquí. Si ya saliste con paquetes, añádelos abajo.
           </p>
         </div>
+        {!coordinator && vocabulary && today && <AddPointPanel fecha={today} onDone={() => router.refresh()} />}
       </main>
     );
   }
@@ -126,6 +137,7 @@ export function RiderRouteScreen({
               open={openId === stop.id}
               readOnly={closed}
               delegated={Boolean(coordinator)}
+              vocabulary={vocabulary ?? null}
               onToggle={() => setOpenId(openId === stop.id ? null : stop.id)}
               onDone={() => {
                 setOpenId(null);
@@ -140,6 +152,12 @@ export function RiderRouteScreen({
           </li>
         )}
       </ul>
+
+      {!closed && !coordinator && vocabulary && (
+        <div className="px-3 pb-3">
+          <AddPointPanel fecha={route.route_date} onDone={() => router.refresh()} />
+        </div>
+      )}
 
       {totals.completa && !closed && !coordinator && (
         <div className="fixed inset-x-0 bottom-0 mx-auto max-w-md border-t border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-sm text-emerald-800">
@@ -171,6 +189,7 @@ function StopCard({
   open,
   readOnly,
   delegated = false,
+  vocabulary = null,
   onToggle,
   onDone,
 }: {
@@ -178,6 +197,7 @@ function StopCard({
   open: boolean;
   readOnly: boolean;
   delegated?: boolean;
+  vocabulary?: RiderVocabulary | null;
   onToggle: () => void;
   onDone: () => void;
 }) {
@@ -213,11 +233,13 @@ function StopCard({
                 stop.status === "pendiente" && "text-slate-400",
               )}
             >
-              {stop.status === "entregado"
-                ? "Entregado"
-                : stop.status === "no_entregado"
-                  ? "No entregado"
-                  : "Por entregar"}
+              {stop.written_status
+                ? stop.written_status
+                : stop.status === "entregado"
+                  ? "Entregado"
+                  : stop.status === "no_entregado"
+                    ? "No entregado"
+                    : "Por entregar"}
             </p>
           </div>
         </div>
@@ -253,7 +275,7 @@ function StopCard({
               {done ? "Ya reportada." : "Sin reportar."} La ruta está cerrada.
             </p>
           ) : (
-            <ReportForm stop={stop} onDone={onDone} delegated={delegated} />
+            <ReportForm stop={stop} onDone={onDone} delegated={delegated} vocabulary={vocabulary} />
           )}
         </div>
       )}
@@ -261,8 +283,15 @@ function StopCard({
   );
 }
 
-export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWithOrder; onDone: () => void; delegated?: boolean }) {
+export function ReportForm({ stop, onDone, delegated = false, vocabulary = null }: { stop: StopWithOrder; onDone: () => void; delegated?: boolean; vocabulary?: RiderVocabulary | null }) {
   const [pending, start] = useTransition();
+  // Lo que escribe el motorizado, tal cual (MOM §30.7): se guarda literal y se
+  // resuelve con el vocabulario de su hoja; si resuelve, mueve los botones.
+  const [written, setWritten] = useState(stop.written_status ?? "");
+  const [writtenPayment, setWrittenPayment] = useState(stop.written_payment ?? "");
+  const [reasonCode, setReasonCode] = useState("");
+  const [reasonNote, setReasonNote] = useState("");
+  const resolved = useMemo(() => (vocabulary ? resolveWrittenForStop(written, vocabulary) : null), [written, vocabulary]);
   const [status, setStatus] = useState<StopStatus>(
     stop.status === "pendiente" ? "entregado" : stop.status,
   );
@@ -284,6 +313,20 @@ export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWith
   const voucherRef = useRef<HTMLInputElement>(null);
 
   const numericAmount = amount.trim() ? Number(amount.replace(",", ".")) : null;
+  const collectedForReason = status === "entregado" ? (method === "sin_cobro" ? 0 : numericAmount) : null;
+  const mustExplain = status === "entregado" && Boolean(vocabulary) && montoDiffers(collectedForReason, stop.order?.total ?? null);
+
+  function applyWritten(text: string) {
+    setWritten(text);
+    if (!vocabulary) return;
+    const res = resolveWrittenForStop(text, vocabulary);
+    if (!res.target) return;
+    if (res.target.status === "entregado") setStatus("entregado");
+    else if (res.target.status === "no_entregado") {
+      setStatus("no_entregado");
+      setReason(res.target.outcome_reason ?? "");
+    }
+  }
 
   async function upload(kind: "entrega" | "yape", file: File) {
     setUploading(kind);
@@ -329,6 +372,14 @@ export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWith
       setErr(check.errors.join(" "));
       return;
     }
+    if (mustExplain && !reasonCode) {
+      setErr(`Cobraste ${money(collectedForReason)} y el pedido es de ${money(stop.order?.total)}. Elige por qué.`);
+      return;
+    }
+    if (mustExplain && reasonCode === "otro" && reasonNote.trim().length < 3) {
+      setErr("Con motivo «Otro», escribe una nota.");
+      return;
+    }
     start(async () => {
       setErr(null);
       try {
@@ -342,6 +393,11 @@ export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWith
           photoPath,
           voucherPath,
           reportReason: delegated ? reportReason : null,
+          writtenStatus: written.trim() || null,
+          writtenStatusCode: resolved?.code ?? null,
+          writtenPayment: writtenPayment.trim() || null,
+          reasonCode: mustExplain ? reasonCode : null,
+          reasonNote: mustExplain ? reasonNote.trim() || null : null,
         });
         if (!res.ok) setErr(res.error ?? "No se pudo guardar.");
         else onDone();
@@ -356,6 +412,29 @@ export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWith
       {delegated && <label className="block text-sm text-slate-700">Motivo del reporte por el motorizado
         <input required value={reportReason} onChange={(e) => setReportReason(e.target.value)} placeholder="Ej. Roy envió la evidencia y está sin conexión" className="mt-1 min-h-12 w-full rounded-lg border border-slate-300 px-3 text-base" />
       </label>}
+      {vocabulary && (
+        <label className="block text-sm text-slate-700">
+          ¿Qué pasó? Escríbelo como en tu cuaderno
+          <input
+            list={`estados-${stop.id}`}
+            value={written}
+            onChange={(e) => applyWritten(e.target.value)}
+            placeholder="ENTREGADO, NO RESPONDE, LO DEJA…"
+            className="mt-1 min-h-12 w-full rounded-lg border border-slate-300 px-3 text-base uppercase"
+            autoCapitalize="characters"
+          />
+          <datalist id={`estados-${stop.id}`}>
+            {vocabulary.suggestions.map((sug) => (
+              <option key={sug} value={sug} />
+            ))}
+          </datalist>
+          {written.trim() && (
+            <p className={cn("mt-1 text-xs", resolved?.code ? "text-emerald-700" : "text-amber-700")}>
+              {resolved?.code ? `Se entiende como «${resolved.label}».` : "Todavía no tiene equivalente: se guarda igual y alguien lo asignará."}
+            </p>
+          )}
+        </label>
+      )}
       <div className="grid grid-cols-2 gap-2">
         <button
           onClick={() => setStatus("entregado")}
@@ -418,6 +497,35 @@ export function ReportForm({ stop, onDone, delegated = false }: { stop: StopWith
               className="mt-1 min-h-12 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base"
             />
             </label>
+          )}
+          {vocabulary && method && method !== "sin_cobro" && (
+            <label className="block text-sm text-slate-700">Detalle del pago (a qué cuenta, como en el cuaderno)
+              <input
+                list={`pagos-${stop.id}`}
+                value={writtenPayment}
+                onChange={(e) => setWrittenPayment(e.target.value)}
+                placeholder="YAPE GF, PLIN FRANKZ, IZIPAY…"
+                className="mt-1 min-h-12 w-full rounded-lg border border-slate-300 px-3 text-base uppercase"
+                autoCapitalize="characters"
+              />
+              <datalist id={`pagos-${stop.id}`}>
+                {REPARTO_PAYMENT_METHODS.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+            </label>
+          )}
+          {mustExplain && vocabulary && (
+            <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+              <p className="font-medium text-amber-900">Cobraste {money(collectedForReason)} y el pedido es de {money(stop.order?.total)}. ¿Por qué?</p>
+              <select value={reasonCode} onChange={(e) => setReasonCode(e.target.value)} aria-label="Motivo de la diferencia" className="min-h-12 w-full rounded-lg border border-amber-300 bg-white px-3 text-base">
+                <option value="">Elige el motivo</option>
+                {vocabulary.reasons.map((r) => (
+                  <option key={r.code} value={r.code}>{r.label}</option>
+                ))}
+              </select>
+              <input value={reasonNote} onChange={(e) => setReasonNote(e.target.value)} placeholder="Nota (obligatoria con «Otro»)" aria-label="Nota del motivo" className="min-h-12 w-full rounded-lg border border-amber-300 bg-white px-3 text-base" />
+            </div>
           )}
           {method === "sin_cobro" && <p className="text-sm">Se registrará S/ 0.00. Si queda saldo, explica el motivo en la nota.</p>}
           {method === "yape" && <p className="text-sm text-slate-600">Yape reportado a la empresa. La captura no equivale a validación bancaria.</p>}
@@ -528,5 +636,94 @@ function PhotoField({
         }}
       />
     </div>
+  );
+}
+
+
+/**
+ * Puntos que no vienen de una carga: un pedido de Kapta se crea como PARADA en
+ * la ruta del día (la verdad, MOM §29.12); un punto sin pedido (Kast) vive
+ * solo en la hoja porque una parada exige pedido.
+ */
+function AddPointPanel({ fecha, onDone }: { fecha: string; onDone: () => void }) {
+  const [pending, start] = useTransition();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<RiderOrderCandidate[]>([]);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [kastName, setKastName] = useState("");
+
+  async function search() {
+    const q = query.trim();
+    if (q.length < 3) return;
+    const res = await searchOrdersForRider(q);
+    setResults(res.results);
+    if (!res.ok) setMsg({ ok: false, text: res.error ?? "No se pudo buscar." });
+  }
+  function add(orderId: string) {
+    start(async () => {
+      const res = await addManualStop({ orderId, fecha });
+      setMsg({ ok: res.ok, text: res.ok ? (res.message ?? "Añadido.") : (res.error ?? "No se pudo añadir.") });
+      if (res.ok) {
+        setResults([]);
+        setQuery("");
+        onDone();
+      }
+    });
+  }
+  function addKast() {
+    start(async () => {
+      const res = await addSheetOnlyPoint({ fecha, cliente: kastName, tienda: "Kast" });
+      setMsg({ ok: res.ok, text: res.ok ? (res.message ?? "Añadido.") : (res.error ?? "No se pudo añadir.") });
+      if (res.ok) setKastName("");
+    });
+  }
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="w-full rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-700">
+        + Añadir un punto que no está en mi ruta
+      </button>
+    );
+  }
+  return (
+    <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-4" aria-label="Añadir punto">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-slate-900">Añadir punto · {fecha}</h2>
+        <button type="button" onClick={() => setOpen(false)} className="text-xs text-slate-500 underline">Cerrar</button>
+      </div>
+      <div className="flex gap-2">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && void search()}
+          placeholder="Nº de pedido o nombre del cliente"
+          aria-label="Buscar pedido"
+          className="min-h-12 flex-1 rounded-lg border border-slate-300 px-3 text-base"
+        />
+        <button type="button" onClick={() => void search()} className="min-h-12 rounded-lg bg-slate-800 px-3 text-sm font-medium text-white">Buscar</button>
+      </div>
+      {results.length > 0 && (
+        <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+          {results.map((r) => (
+            <li key={r.order_id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+              <div className="min-w-0">
+                <p className="truncate font-medium text-slate-900">{r.order_name} · {r.customer_name ?? "Sin nombre"}</p>
+                <p className="truncate text-xs text-slate-500">{r.district ?? "—"} · {money(r.order_total)}</p>
+              </div>
+              <button type="button" disabled={pending} onClick={() => add(r.order_id)} className="rounded-lg bg-brand-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Añadir</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <details className="text-sm">
+        <summary className="cursor-pointer text-slate-600">Punto sin pedido de Kapta (Kast, encargo)</summary>
+        <div className="mt-2 flex gap-2">
+          <input value={kastName} onChange={(e) => setKastName(e.target.value)} placeholder="Nombre del cliente" aria-label="Cliente del punto sin pedido" className="min-h-12 flex-1 rounded-lg border border-slate-300 px-3 text-base" />
+          <button type="button" disabled={pending || !kastName.trim()} onClick={addKast} className="min-h-12 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700 disabled:opacity-50">Añadir</button>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">Queda solo en tu cuaderno: sin pedido no hay parada que cobrar en Kapta.</p>
+      </details>
+      {msg && <p role="status" className={cn("text-sm", msg.ok ? "text-emerald-700" : "text-red-600")}>{msg.text}</p>}
+    </section>
   );
 }

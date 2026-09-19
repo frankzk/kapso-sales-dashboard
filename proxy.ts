@@ -50,7 +50,7 @@ export async function proxy(request: NextRequest) {
     const roles = ((memberships as { role: string }[] | null) ?? []).map((m) => m.role);
     if (roles.length > 0 && roles.every((r) => r === "motorizado")) {
       const url = request.nextUrl.clone();
-      url.pathname = "/reparto/cuaderno";
+      url.pathname = "/reparto";
       url.search = "";
       return NextResponse.redirect(url);
     }

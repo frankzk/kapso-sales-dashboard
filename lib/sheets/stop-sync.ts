@@ -251,3 +251,44 @@ export async function syncRiderMonthStops(
   }
   return total;
 }
+
+/**
+ * Pone motivo y nota a la observación de monto de la fila de esta parada (la
+ * abre el cuadre de `syncStopsToSheet` cuando lo cobrado difiere del total).
+ * Si por lo que sea no hay observación abierta, la crea. Es lo que hace
+ * obligatorio el motivo desde el teléfono (MOM §30.9).
+ */
+export async function explainStopAmount(
+  admin: SupabaseClient,
+  opts: { stopId: string; reasonCode: string; note: string | null; actor: string; riderName: string; collected: number | null; total: number | null },
+): Promise<void> {
+  const { data: row } = await admin.from("sheet_rows").select("id,sheet_id,order_id,sheets(org_id)").eq("stop_id", opts.stopId).maybeSingle();
+  if (!row) return;
+  const r = row as unknown as { id: string; sheet_id: string; order_id: string | null; sheets: { org_id: string } | null };
+  const note = opts.note ? `${opts.riderName}: ${opts.note}` : `${opts.riderName} explicó desde su ruta`;
+  const { data: open } = await admin
+    .from("sheet_observations")
+    .select("id")
+    .eq("row_id", r.id)
+    .eq("field", "monto")
+    .eq("status", "abierta")
+    .maybeSingle();
+  if (open) {
+    await admin.from("sheet_observations").update({ reason_code: opts.reasonCode, note }).eq("id", open.id);
+    return;
+  }
+  if (!r.sheets?.org_id) return;
+  await admin.from("sheet_observations").insert({
+    org_id: r.sheets.org_id,
+    sheet_id: r.sheet_id,
+    row_id: r.id,
+    order_id: r.order_id,
+    field: "monto",
+    external_value: opts.collected === null ? null : opts.collected.toFixed(2),
+    kapta_value: opts.total === null ? null : opts.total.toFixed(2),
+    difference: opts.collected !== null && opts.total !== null ? Math.round((opts.collected - opts.total) * 100) / 100 : null,
+    reason_code: opts.reasonCode,
+    note,
+    created_by: opts.actor,
+  });
+}
