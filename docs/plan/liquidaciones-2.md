@@ -140,13 +140,15 @@ monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
    con observación abierta no cruza al Master hasta que quien liquida acepta el
    motivo. Fuera: no hay camino de devolución al Master desde una hoja (no
    existe en Kapta; se cuenta y se deja).
-4b. **Pantalla del motorizado** (hecha el 17-09-2026, mergeada a `delivery-lima`; MOM §30.9). MOM §30.9). `/reparto/cuaderno`: su hoja de
+4b. **Pantalla del motorizado** (hecha el 17-09-2026, mergeada a `delivery-lima`; MOM §30.9). `/reparto/cuaderno`: su hoja de
    Reparto propio un día a la vez, puntos desde el manifiesto de despacho o a
    mano, estado en texto libre con sugerencias, monto precargado desde Kapta,
    motivo obligatorio cuando cobra distinto, foto del comprobante para pagos
    digitales, y RLS (0171) que acota su lectura a su propia hoja. Llena
    `sheet_observations.reason_code` + `note`, que es lo que acepta quien
-   liquida antes de aplicar al Master.
+   liquida antes de aplicar al Master. Acceso con usuario y contraseña para
+   el motorizado sin correo (19-09-2026): `scripts/rider-user.ts` y el runbook
+   `docs/runbooks/motorizados-acceso.md`.
 
 4c. **Convergencia con Rutas** (hecha el 19-09-2026, MOM §29.12). Rutas
    manda: `delivery_stops` es la verdad con el estado escrito (0172); la hoja

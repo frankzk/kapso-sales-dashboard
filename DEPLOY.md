@@ -737,8 +737,15 @@ historial por celda y observaciones de cuadre. Plan e iteraciones en
    desde Equipo con rol `motorizado` (o membresía a mano); `riders.user_id`
    atado a ese usuario; y su hoja de Reparto propio creada con «Crear hojas que
    falten» en Liquidaciones 2 (la crea por ficha). Entra con Google o enlace por
-   correo, igual que el equipo; no hay contraseña. Un usuario solo motorizado
-   que abra `/dashboard` va a parar a su cuaderno. La foto del comprobante va al
+   correo, igual que el equipo, **o con usuario y contraseña** (19-09-2026):
+   para el motorizado sin correo se crea un usuario corto (`roy`, que Auth
+   guarda como `roy@motorizados.kapta.local`) con
+   `pnpm tsx scripts/rider-user.ts create <ficha> --usuario <u>`; ese comando
+   hace también la membresía y el atado de la ficha. Alta, cambio de
+   contraseña, baja y comprobación en
+   [`docs/runbooks/motorizados-acceso.md`](docs/runbooks/motorizados-acceso.md).
+   Requiere el proveedor Email activo en Supabase; no manda correos. Un
+   usuario solo motorizado que abra `/dashboard` va a parar a su cuaderno. La foto del comprobante va al
    bucket privado `delivery-proofs`, ruta `cuaderno/<hoja>/<fila>/`.
 
 11. **Convergencia con Rutas** (19-09-2026, MOM §29.12). **Migración
