@@ -345,4 +345,6 @@
 \ir migrations/0170_sheet_observation_reason_pago.sql
 \echo 'Applying 0171_sheets_rider_rls.sql'
 \ir migrations/0171_sheets_rider_rls.sql
+\echo 'Applying 0172_stop_written_status.sql'
+\ir migrations/0172_stop_written_status.sql
 \echo 'Done.'
