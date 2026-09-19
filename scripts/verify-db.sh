@@ -95,6 +95,9 @@ echo "  ✅ all migrations apply on a fresh database"
 echo "▶ Liquidaciones 2: un motorizado solo ve su hoja (0171)"
 $PSQL -f "$ROOT/scripts/sql/sheets_rider_smoke.sql"
 echo "  ✅ motorizado acotado a su hoja; owner y viewer ven las de su org"
+echo "▶ Master para el motorizado: solo los pedidos de sus rutas (0178)"
+$PSQL -f "$ROOT/scripts/sql/rider_master_smoke.sql"
+echo "  ✅ motorizado lee del Master solo sus paradas; owner sigue viendo todo"
 
 # La cobertura COD se decide por coordenada además de por nombre (0100). Es
 # lógica geoespacial hecha a mano (haversine, sin PostGIS): esta prueba fija que

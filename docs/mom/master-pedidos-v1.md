@@ -4086,6 +4086,11 @@ separada del usuario de acceso.
 - Vincular un usuario exige que ya sea miembro de la organización; un usuario se
   vincula a lo sumo a un motorizado. El vínculo es lo único que habilita
   `/reparto` (lo acota la RLS por `auth_rider_id()`), sin necesitar rol especial.
+- Un usuario cuyo único rol es `motorizado` no tiene tiendas, así que el Master
+  le abre solo los pedidos que son paradas de una ruta suya en curso o cerrada
+  (0178, `auth_rider_order_ids()`): lo que necesita para ver nombre, celular,
+  dirección y monto de cada parada, y nada de otros motorizados. La escritura
+  del Master sigue cerrada para él.
 
 ### Permisos
 
@@ -5149,4 +5154,5 @@ y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
   entrar a `/reparto`; el panel lo redirige. En la base (0171), sus lecturas
   de hojas, filas, alias, observaciones e historial quedan acotadas a la hoja
   cuyo `rider_id` es su ficha. Los dominios y sus estados siguen legibles
-  porque son vocabulario, no datos de nadie.
+  porque son vocabulario, no datos de nadie. Del Master lee solo los pedidos de
+  sus rutas (0178, §27).
