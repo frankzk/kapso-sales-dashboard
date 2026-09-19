@@ -7,7 +7,6 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { DispatchDayBoard } from "@/components/dispatch-day-board";
-import { Hint } from "@/components/hint";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import { resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
 import {
@@ -114,29 +113,17 @@ export function GrupoGfCourierBoard({
   const provider = snapshot.provider;
   return (
     <div className={cn("space-y-4", mobile.board)}>
-      <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+      {/* En el móvil la barra superior del panel ya dice «Grupo GF Courier»: la cabecera solo existe desde `sm`. */}
+      <header className="hidden sm:flex sm:flex-col sm:gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <p className="hidden text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 sm:block">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
             Operación logística
           </p>
-          <div className="flex items-center gap-2">
-            <h1 className="text-lg font-semibold text-slate-950 sm:mt-1 sm:text-xl">Grupo GF Courier</h1>
-            {/* En el móvil la explicación y las condiciones caben en un ⓘ. */}
-            <Hint
-              className="sm:hidden"
-              label="Qué es y condiciones del servicio"
-              text={`Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega. Corte ${provider.same_day_cutoff.slice(0, 5)} · Yape ${snapshot.yapePercentage} % · efectivo máximo ${money(provider.cash_limit_amount)}.`}
-            />
-          </div>
-          <p className="mt-1 hidden max-w-3xl text-sm text-slate-600 sm:block">
+          <h1 className="mt-1 text-xl font-semibold text-slate-950">Grupo GF Courier</h1>
+          <p className="mt-1 max-w-3xl text-sm text-slate-600">
             Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega.
           </p>
         </div>
-        <details className="hidden rounded-xl border border-slate-200 bg-white px-3 text-sm sm:block lg:min-w-80"><summary className="min-h-12 cursor-pointer py-3 font-medium text-slate-600">Condiciones del servicio</summary><div className="grid grid-cols-3 divide-x divide-slate-200 pb-3">
-          <Summary label="Corte" value={provider.same_day_cutoff.slice(0, 5)} />
-          <Summary label="Yape" value={`${snapshot.yapePercentage} %`} />
-          <Summary label="Efectivo máximo" value={money(provider.cash_limit_amount)} />
-        </div></details>
       </header>
 
       <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-5 gap-1 border-b border-slate-200 lg:flex">
@@ -188,6 +175,8 @@ export function GrupoGfCourierBoard({
           manifests={manifests}
           canManageDispatch={snapshot.canManageDispatch}
           riderPickupMode={provider.rider_pickup_mode ?? "exigir"}
+          cashWarning={provider.cash_warning_amount}
+          cashLimit={provider.cash_limit_amount}
           pending={pending}
           run={run}
         />
@@ -249,21 +238,23 @@ function CourierTab({
   count?: number;
   shortLabel?: string;
 }) {
+  // Sin badge cuando la activa está en 0; en el móvil solo la activa lleva número.
+  const showCount = count != null && !(active && count === 0);
   return (
     <button
       type="button"
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "relative flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 px-1 py-2 text-xs font-semibold lg:flex-row lg:px-3 lg:text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
+        "relative flex min-h-12 min-w-0 items-center justify-center gap-1 px-1 py-2 text-xs font-semibold lg:min-h-14 lg:px-3 lg:text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
         active ? "text-brand-700" : "text-slate-500 hover:text-slate-800",
       )}
     >
-      <span className={shortLabel ? "hidden lg:inline" : ""}>{label}</span>{shortLabel && <span className="lg:hidden">{shortLabel}</span>}
-      {count != null && (
+      <span className={cn("truncate", shortLabel ? "hidden lg:inline" : "")}>{label}</span>{shortLabel && <span className="truncate lg:hidden">{shortLabel}</span>}
+      {showCount && (
         <span className={cn(
-          "rounded-full px-1.5 py-0.5 text-xs tabular-nums sm:ml-1",
-          active ? "bg-brand-50 text-brand-700" : "bg-slate-100 text-slate-600",
+          "rounded-full px-1.5 py-0.5 text-[11px] tabular-nums",
+          active ? "bg-brand-50 text-brand-700" : "hidden bg-slate-100 text-slate-600 sm:inline",
         )}>
           {count}
         </span>
@@ -1027,6 +1018,15 @@ function TariffMatrix({
 
   return (
     <div className="space-y-5">
+      <details className="rounded-xl border border-slate-200 bg-white px-3 text-sm">
+        <summary className="min-h-12 cursor-pointer py-3 font-medium text-slate-600">Condiciones del servicio</summary>
+        <p className="pb-2 text-xs text-slate-500">Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega.</p>
+        <div className="grid grid-cols-3 divide-x divide-slate-200 pb-3">
+          <Summary label="Corte" value={provider.same_day_cutoff.slice(0, 5)} />
+          <Summary label="Yape" value={`${snapshot.yapePercentage} %`} />
+          <Summary label="Efectivo máximo" value={money(provider.cash_limit_amount)} />
+        </div>
+      </details>
       {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
       {notice && <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}
 
