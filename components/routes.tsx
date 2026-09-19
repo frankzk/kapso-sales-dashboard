@@ -126,7 +126,7 @@ export function RoutesBoard({
       {msg && <Card className="border-brand-200 bg-brand-50 p-3 text-sm text-brand-800">{msg}</Card>}
       {err && <Card className="border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</Card>}
 
-      <a href="/dashboard/courier?tab=available" className="inline-flex min-h-12 items-center rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white">Tomar y asignar pedidos</a>
+      <a href="/dashboard/courier" className="inline-flex min-h-12 items-center rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white">Tomar y asignar pedidos</a>
       <details className="border-b border-slate-200 pb-3">
         <summary className="min-h-12 cursor-pointer py-3 text-sm font-medium text-slate-600">Accesos de motorizados</summary>
         <RidersAccess riders={riders} disabled={pending} onRun={run} />

@@ -4822,6 +4822,24 @@ update logistics_providers set rider_pickup_mode = 'confirmar' where code = 'gru
 update logistics_providers set rider_pickup_mode = 'ninguno'   where code = 'grupo-gf-courier'; -- basta con asignar
 ```
 
+**Despacho absorbe las pestañas anteriores (19-09-2026).** «Pedidos
+disponibles» y «Pedidos tomados» salen de la barra de Grupo GF Courier y
+quedan como «vista anterior» bajo «⋯ Más vistas» (mismo `?tab=`, con una nota
+arriba). Lo que aportaban vive en Despacho del día: en la fila de «Desde la
+lista» el teléfono y la fecha de creación, la búsqueda por teléfono, la chapa
+«2.º intento» (salida previa) con su filtro; «N sin condiciones» junto al
+contador abre la lista de excluidos con el motivo de cada uno (tarifa
+faltante, distrito inválido, servicio pausado, ya en caja, sin salida
+armable) y enlace al Tarifario; un picker «Filtros» (tienda, distrito, 2.º
+intento, armados, tomados sin caja, fecha de creación) con chips; y tiles de
+métricas encima de Asignar, una por filtro con su cantidad, que abren la lista
+o las cajas ya filtradas. Los cuatro segmentos de «Pedidos tomados» siguen
+visibles en Cajas de hoy: cada caja dice «N paq. · armados · cotejados ·
+confirmados», cada paquete lleva su chapa de estado (por armar / armado /
+cotejado / confirmado / no lo llevó) y un filtro rápido Todos · Por armar ·
+Listos para cotejo · Sin confirmar; «Sin ruta» es «tomado · sin caja» en la
+lista. Nada de esto cambia acciones de servidor.
+
 **El gesto único.** Escanear o fotografiar es un solo componente
 (`ScanAction`) y el contexto lo fija la pantalla, nunca el usuario:
 `supervisor_asignacion` → tomar + asignar + `office_checked`;

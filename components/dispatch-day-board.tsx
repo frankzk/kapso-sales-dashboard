@@ -6,15 +6,49 @@
 //   2 · Cotejar: las cajas de hoy por motorizado, con el cotejo de oficina en
 //       línea, y quitar o mover un paquete desde la misma fila.
 // Antes esto eran tres pantallas y 9-10 clics (docs/plan/despacho-crm.md).
+// Absorbe lo que aportaban las pestañas «Pedidos disponibles» y «Pedidos
+// tomados» (retiradas): teléfono y fecha en la fila, «2.º intento», los
+// excluidos con motivo, el picker de filtros y los estados del paquete en
+// cada caja. Las tiles de métricas son esos mismos filtros con su cantidad.
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import { Hint } from "@/components/hint";
 import { ScanAction } from "@/components/scan-action";
 import { activeDispatchItems } from "@/lib/dispatch";
-import { boxNextStep, dayBoxes, declinedPackages, splitAssignment, type DayManifest, type RiderBox } from "@/lib/dispatch-day";
+import {
+  activeFilterCount,
+  BLOCKED_REASON_LABEL,
+  BOX_ITEM_FILTERS,
+  BOX_TILE_LABEL,
+  boxNextStep,
+  boxTileCounts,
+  CREATED_WINDOW_LABEL,
+  dayBoxes,
+  declinedPackages,
+  EMPTY_QUEUE_FILTERS,
+  filterBoxItems,
+  filterQueue,
+  limaDay,
+  PACKAGE_STAGE_LABEL,
+  packageStage,
+  QUEUE_TILE_LABEL,
+  queueTileActive,
+  queueTileCounts,
+  splitAssignment,
+  toggleBoxTile,
+  toggleQueueTile,
+  type BoxItemFilter,
+  type BoxTile,
+  type CreatedWindow,
+  type DayManifest,
+  type QueueFilters,
+  type QueueRow,
+  type QueueTile,
+  type RiderBox,
+} from "@/lib/dispatch-day";
 import { addToTray, removeFromTray, summarizeScans, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import type { RiderPickupMode } from "@/lib/grupo-gf-courier";
@@ -27,6 +61,7 @@ import {
   type CourierAcceptedOrder,
   type CourierActionResult,
   type CourierAvailableOrder,
+  type CourierBlockedOrder,
   type CourierRiderOption,
 } from "@/app/dashboard/courier/actions";
 import { removeManifestItem, scanManifestItem } from "@/app/dashboard/pedidos/despacho/actions";
@@ -36,6 +71,8 @@ interface Props {
   day: string;
   available: CourierAvailableOrder[];
   accepted: CourierAcceptedOrder[];
+  /** Pedidos de Lima que no entran en la cola, con su motivo («sin condiciones»). */
+  blocked: CourierBlockedOrder[];
   riders: CourierRiderOption[];
   manifests: DispatchManifest[];
   canManageDispatch: boolean;
@@ -53,37 +90,26 @@ const money = (n: number) => `S/ ${n.toFixed(2)}`;
 const moneyShort = (n: number) => `S/ ${Math.round(n).toLocaleString("es-PE")}`;
 const HELP_KEY = "kapta.despacho.ayuda-escaneo";
 
-interface QueueRow {
-  orderId: string;
-  orderName: string;
-  storeName: string;
-  customerName: string;
-  district: string;
-  orderTotal: number;
-  scheduledFor: string;
-  tariffAmount: number;
-  /** Ya tomado (solicitud sin ruta) o disponible. */
-  taken: boolean;
-  requestId: string | null;
-  /** Solo los tomados: si Almacén ya lo armó. */
-  armed: boolean | null;
-  observation: string | null;
-}
-
 export function DispatchDayBoard(props: Props) {
   const { orgId, day, riders, canManageDispatch, pending, run } = props;
   const router = useRouter();
   const [riderId, setRiderId] = useState(riders[0]?.id ?? "");
   const [overrideCash, setOverrideCash] = useState(false);
-  const [query, setQuery] = useState("");
+  // Una sola fuente de verdad para el filtrado de la lista: el picker, los
+  // chips y las tiles de métricas leen y escriben `filters`.
+  const [filters, setFilters] = useState<QueueFilters>(EMPTY_QUEUE_FILTERS);
   // La lista se pinta por tandas de 100 para no cargar 1.600 filas de golpe;
   // «Mostrar 100 más» amplía. Cambiar el filtro vuelve a la primera tanda.
   const [limit, setLimit] = useState(100);
+  const patchFilters = (patch: Partial<QueueFilters>) => { setFilters((cur) => ({ ...cur, ...patch })); setLimit(100); };
   // Dos formas de asignar, una a la vista: por QR (con el paquete en la mano)
   // o desde la lista. Abrir una pliega la otra; el motorizado es común.
   const [method, setMethod] = useState<"qr" | "lista">("qr");
-  const [store, setStore] = useState("");
-  const [district, setDistrict] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [blockedOpen, setBlockedOpen] = useState(false);
+  // Filtro rápido de las cajas (Todos · Por armar · Listos para cotejo · Sin
+  // confirmar): compartido por todas las cajas y por las tiles.
+  const [boxFilter, setBoxFilter] = useState<BoxItemFilter>("todos");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openBox, setOpenBox] = useState<string | null>(null);
   // Modo escaneo (§29.13): la vía principal. Fecha de la caja, hoy por defecto.
@@ -141,14 +167,17 @@ export function DispatchDayBoard(props: Props) {
         orderName: o.orderName,
         storeName: o.storeName,
         customerName: o.customerName,
+        customerPhone: o.customerPhone,
         district: o.district,
         orderTotal: o.orderTotal,
+        createdAt: o.orderCreatedAt,
         scheduledFor: o.scheduledFor,
         tariffAmount: o.tariffAmount,
         taken: true,
         requestId: o.requestId,
         armed: o.preparationState === "listo_despacho",
         observation: o.observation,
+        hasPriorDispatch: Boolean(o.hasPriorDispatch),
       }));
     const takenIds = new Set(taken.map((t) => t.orderId));
     const free: QueueRow[] = props.available
@@ -158,29 +187,25 @@ export function DispatchDayBoard(props: Props) {
         orderName: o.orderName,
         storeName: o.storeName,
         customerName: o.customerName,
+        customerPhone: o.customerPhone,
         district: o.district,
         orderTotal: o.orderTotal,
+        createdAt: o.orderCreatedAt,
         scheduledFor: o.scheduledFor,
         tariffAmount: o.tariffAmount,
         taken: false,
         requestId: null,
         armed: null,
         observation: null,
+        hasPriorDispatch: o.hasPriorDispatch,
       }));
     return [...taken, ...free];
   }, [props.accepted, props.available]);
 
   const stores = useMemo(() => [...new Set(queue.map((q) => q.storeName))].sort(), [queue]);
   const districts = useMemo(() => [...new Set(queue.map((q) => q.district))].sort((a, b) => a.localeCompare(b, "es")), [queue]);
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase("es");
-    return queue.filter((q) => {
-      if (store && q.storeName !== store) return false;
-      if (district && q.district !== district) return false;
-      if (!needle) return true;
-      return `${q.orderName} ${q.customerName} ${q.district} ${q.storeName}`.toLocaleLowerCase("es").includes(needle);
-    });
-  }, [queue, query, store, district]);
+  const filtered = useMemo(() => filterQueue(queue, filters, day), [queue, filters, day]);
+  const activeFilters = activeFilterCount(filters);
   const visible = filtered.slice(0, limit);
   const allVisibleSelected = visible.length > 0 && visible.every((q) => selected.has(q.orderId));
   const selectedTotal = queue.filter((q) => selected.has(q.orderId)).reduce((sum, q) => sum + q.orderTotal, 0);
@@ -198,6 +223,20 @@ export function DispatchDayBoard(props: Props) {
   }, [props.accepted, day]);
   const declined = useMemo(() => declinedPackages(boxes), [boxes]);
   const dayCod = boxes.reduce((sum, b) => sum + b.loads.reduce((s, l) => s + activeDispatchItems(l.items).length, 0), 0);
+  const queueTiles = useMemo(() => queueTileCounts(queue), [queue]);
+  const boxTiles = useMemo(() => boxTileCounts(boxes), [boxes]);
+  /** Tocar una tile de la cola: abre «Desde la lista» con ese filtro (o lo quita). */
+  const tapQueueTile = (tile: QueueTile) => {
+    setFilters((cur) => toggleQueueTile(cur, tile));
+    setLimit(100);
+    setMethod("lista");
+  };
+  /** Tocar una tile de cajas: abre «Cajas de hoy» con ese filtro rápido (o lo quita). */
+  const tapBoxTile = (tile: BoxTile) => {
+    setBoxFilter((cur) => toggleBoxTile(cur, tile));
+    setBoxesOpen(true);
+    if (!openBox && boxes[0]) setOpenBox(boxes[0].riderId ?? boxes[0].riderName);
+  };
 
   function toggle(id: string) {
     setSelected((cur) => {
@@ -241,6 +280,9 @@ export function DispatchDayBoard(props: Props) {
         <span className="min-w-0 truncate whitespace-nowrap" title={`${queue.length} por asignar${boxes.length ? ` · ${boxes.length} cajas · ${dayCod} paquetes` : ""}`}>
           <b className="text-slate-900">{scanDay === day ? `Hoy, ${formatDayShort(day)}` : formatDayShort(scanDay)}</b>
           {" · "}<span className="tabular-nums">{queue.length.toLocaleString("es-PE")}</span> por asignar
+          {props.blocked.length > 0 && (
+            <> · <button type="button" onClick={() => setBlockedOpen(true)} className="min-h-0 p-0 text-amber-700 underline-offset-2 hover:underline" title="Pedidos de Lima que no entran en la cola: tarifa faltante, distrito inválido, servicio pausado o sin salida armable"><span className="tabular-nums">{props.blocked.length.toLocaleString("es-PE")}</span> sin condiciones</button></>
+          )}
           {boxes.length > 0 && <> · <span className="tabular-nums">{boxes.length}</span> {boxes.length === 1 ? "caja" : "cajas"} · <span className="tabular-nums">{dayCod}</span> paq.</>}
         </span>
         <Hint label="Cómo funciona el despacho" text={helpText} />
@@ -253,6 +295,37 @@ export function DispatchDayBoard(props: Props) {
           <button type="button" onClick={() => setDayOpen(true)} className="ml-auto shrink-0 whitespace-nowrap text-slate-400 underline-offset-2 hover:text-slate-700 hover:underline" title="Por defecto la caja es de hoy, o del día que dicta el corte de las 11:30">cambiar día</button>
         )}
       </div>
+
+      {/* Tiles de métricas: cada una es un filtro con su cantidad (misma fuente de verdad que el picker). */}
+      <div role="group" aria-label="Métricas y filtros del día" className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-1 xl:mx-0 xl:grid xl:grid-cols-8 xl:overflow-visible xl:px-0">
+        {(Object.keys(QUEUE_TILE_LABEL) as QueueTile[]).map((tile) => (
+          <Tile key={tile} label={QUEUE_TILE_LABEL[tile].label} hint={QUEUE_TILE_LABEL[tile].hint} value={queueTiles[tile]} active={queueTileActive(filters, tile) && method === "lista"} onClick={() => tapQueueTile(tile)} />
+        ))}
+        <Tile label="Sin condiciones" hint="Pedidos de Lima que no entran en la cola: tarifa faltante, distrito inválido, servicio pausado o sin salida armable. Abre la lista con el motivo de cada uno." value={props.blocked.length} active={blockedOpen} tone="amber" onClick={() => setBlockedOpen((v) => !v)} />
+        {boxes.length > 0 && (Object.keys(BOX_TILE_LABEL) as BoxTile[]).map((tile) => (
+          <Tile key={tile} label={BOX_TILE_LABEL[tile].label} hint={BOX_TILE_LABEL[tile].hint} value={boxTiles[tile]} active={boxFilter === tile} onClick={() => tapBoxTile(tile)} />
+        ))}
+      </div>
+
+      {blockedOpen && (
+        <Sheet title={`${props.blocked.length.toLocaleString("es-PE")} sin condiciones para salir`} onClose={() => setBlockedOpen(false)} wide>
+          <p className="text-xs text-slate-500">No entran en la cola hasta que se arregle el motivo. Tarifa y pausa se corrigen en el Tarifario; el resto en el pedido o en la caja.</p>
+          <ul className="mt-2 max-h-[50vh] divide-y divide-slate-100 overflow-auto text-sm">
+            {props.blocked.map((b) => {
+              const reason = BLOCKED_REASON_LABEL[b.reason];
+              return (
+                <li key={b.orderId} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1.5">
+                  <Link href={`/dashboard/pedidos?q=${encodeURIComponent(b.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">{b.orderName}</Link>
+                  <span className="text-xs text-slate-500">{b.storeName} · {b.customerName} · {b.district}</span>
+                  <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">{reason.label}</span>
+                  {reason.fix === "tarifario" && <Link href="/dashboard/courier?tab=tariffs" className="text-[11px] text-brand-700 underline">Arreglar en Tarifario</Link>}
+                </li>
+              );
+            })}
+            {!props.blocked.length && <li className="py-4 text-center text-xs text-slate-500">Todos los pedidos de Lima tienen condiciones para salir.</li>}
+          </ul>
+        </Sheet>
+      )}
 
       {declined.length > 0 && (
         <details className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -373,21 +446,52 @@ export function DispatchDayBoard(props: Props) {
           <div className="border-b border-slate-200 px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <input
-                value={query}
-                onChange={(e) => { setQuery(e.target.value); setLimit(100); }}
-                placeholder="Pedido, cliente o distrito"
+                value={filters.query}
+                onChange={(e) => patchFilters({ query: e.target.value })}
+                placeholder="Pedido, cliente, distrito o teléfono"
                 aria-label="Buscar en la cola"
-                className="min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-3 text-sm sm:w-52"
+                className="min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-3 text-sm sm:w-56"
               />
-              <div className="flex w-full min-w-0 gap-2 sm:w-auto">
-                <select value={store} onChange={(e) => { setStore(e.target.value); setLimit(100); }} aria-label="Tienda" className="min-h-10 w-1/2 min-w-0 rounded-lg border border-slate-300 px-2 text-sm sm:w-auto">
-                  <option value="">Todas las tiendas</option>
-                  {stores.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
-                <select value={district} onChange={(e) => { setDistrict(e.target.value); setLimit(100); }} aria-label="Distrito" className="min-h-10 w-1/2 min-w-0 rounded-lg border border-slate-300 px-2 text-sm sm:w-auto">
-                  <option value="">Todos los distritos</option>
-                  {districts.map((d) => <option key={d} value={d}>{d}</option>)}
-                </select>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setFiltersOpen((v) => !v)}
+                  aria-expanded={filtersOpen}
+                  aria-haspopup="dialog"
+                  className={cn("min-h-10 rounded-lg border px-3 text-sm font-medium", activeFilters ? "border-brand-300 bg-brand-50 text-brand-800" : "border-slate-300 text-slate-700 hover:bg-slate-50")}
+                >
+                  Filtros{activeFilters ? ` · ${activeFilters}` : ""}
+                </button>
+                {filtersOpen && (
+                  <Sheet title="Filtros" onClose={() => setFiltersOpen(false)} anchored>
+                    <div className="grid gap-3 text-sm">
+                      <label className="grid gap-1 text-xs font-medium text-slate-600">Tienda
+                        <select value={filters.store} onChange={(e) => patchFilters({ store: e.target.value })} className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
+                          <option value="">Todas</option>
+                          {stores.map((st) => <option key={st} value={st}>{st}</option>)}
+                        </select>
+                      </label>
+                      <label className="grid gap-1 text-xs font-medium text-slate-600">Distrito
+                        <select value={filters.district} onChange={(e) => patchFilters({ district: e.target.value })} className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
+                          <option value="">Todos</option>
+                          {districts.map((d) => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                      </label>
+                      <label className="grid gap-1 text-xs font-medium text-slate-600">Fecha de creación
+                        <select value={filters.created} onChange={(e) => patchFilters({ created: e.target.value as CreatedWindow })} className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
+                          <option value="todo">Todo</option>
+                          <option value="hoy">Hoy</option>
+                          <option value="ayer">Ayer</option>
+                          <option value="7d">Últimos 7 días</option>
+                        </select>
+                      </label>
+                      <label className="flex min-h-10 items-center gap-2"><input type="checkbox" checked={filters.secondAttempt} onChange={(e) => patchFilters({ secondAttempt: e.target.checked })} /> Solo 2.º intento</label>
+                      <label className="flex min-h-10 items-center gap-2"><input type="checkbox" checked={filters.armedOnly} onChange={(e) => patchFilters({ armedOnly: e.target.checked })} /> Solo armados</label>
+                      <label className="flex min-h-10 items-center gap-2"><input type="checkbox" checked={filters.takenOnly} onChange={(e) => patchFilters({ takenOnly: e.target.checked })} /> Solo tomados sin caja</label>
+                      {activeFilters > 0 && <button type="button" onClick={() => patchFilters({ ...EMPTY_QUEUE_FILTERS, query: filters.query })} className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700">Quitar filtros</button>}
+                    </div>
+                  </Sheet>
+                )}
               </div>
               <span className="flex w-full items-center gap-2 text-xs text-slate-500 sm:w-auto">
                 {filtered.length.toLocaleString("es-PE")} en cola{filtered.length > visible.length ? ` · se muestran ${visible.length}` : ""}
@@ -398,6 +502,16 @@ export function DispatchDayBoard(props: Props) {
                 )}
               </span>
             </div>
+            {activeFilters > 0 && (
+              <ul className="mt-2 flex flex-wrap gap-1.5 text-xs" aria-label="Filtros activos">
+                {filters.store && <Chip onRemove={() => patchFilters({ store: "" })}>{filters.store}</Chip>}
+                {filters.district && <Chip onRemove={() => patchFilters({ district: "" })}>{filters.district}</Chip>}
+                {filters.created !== "todo" && <Chip onRemove={() => patchFilters({ created: "todo" })}>{CREATED_WINDOW_LABEL[filters.created]}</Chip>}
+                {filters.secondAttempt && <Chip onRemove={() => patchFilters({ secondAttempt: false })}>2.º intento</Chip>}
+                {filters.armedOnly && <Chip onRemove={() => patchFilters({ armedOnly: false })}>armados</Chip>}
+                {filters.takenOnly && <Chip onRemove={() => patchFilters({ takenOnly: false })}>tomados sin caja</Chip>}
+              </ul>
+            )}
           </div>
 
           <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2">
@@ -430,9 +544,11 @@ export function DispatchDayBoard(props: Props) {
                     <Link href={`/dashboard/pedidos?q=${encodeURIComponent(q.orderName)}&abrir=${encodeURIComponent(q.orderId)}&seccion=historial`} className="text-[11px] text-brand-700 underline">Ver actividad</Link>
                     {q.taken && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">tomado · sin caja</span>}
                     {q.taken && q.armed && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">armado</span>}
+                    {q.hasPriorDispatch && <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-800" title="Ya salió antes y volvió; decide con eso">2.º intento</span>}
                     {q.observation && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800" title={q.observation}>observado</span>}
                   </div>
                   <p className="truncate text-slate-600">{q.customerName} · {q.district}</p>
+                  <p className="truncate text-xs text-slate-500">{q.customerPhone ?? "sin teléfono"}{q.createdAt ? ` · creado ${formatDayNumeric(limaDay(q.createdAt))}` : ""}</p>
                 </div>
                 <div className="text-right text-xs text-slate-600">
                   <p className="font-semibold text-slate-900">{money(q.orderTotal)}</p>
@@ -479,6 +595,8 @@ export function DispatchDayBoard(props: Props) {
                   canManage={canManageDispatch}
                   onChanged={() => router.refresh()}
                   pickupMode={props.riderPickupMode}
+                  filter={boxFilter}
+                  onFilter={setBoxFilter}
                 />
               ))}
             </ul>
@@ -490,7 +608,7 @@ export function DispatchDayBoard(props: Props) {
   );
 }
 
-function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged, pickupMode }: {
+function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged, pickupMode, filter, onFilter }: {
   box: RiderBox;
   /** Efectivo previsto de la caja. */
   cash: number;
@@ -501,6 +619,9 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
   canManage: boolean;
   onChanged: () => void;
   pickupMode: RiderPickupMode;
+  /** Filtro rápido compartido: Todos · Por armar · Listos para cotejo · Sin confirmar. */
+  filter: BoxItemFilter;
+  onFilter: (next: BoxItemFilter) => void;
 }) {
   const [pending, start] = useTransition();
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -531,13 +652,14 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
     : [];
   return (
     <li>
-      <button type="button" onClick={onToggle} aria-expanded={open} title={`${boxNextStep(box)} · ${box.assigned} asignados · ${box.officeChecked} cotejados · ${box.pickupChecked} ${confirmMode ? "confirmados" : "recibidos"}${box.declined ? ` · ${box.declined} no recogidos` : ""}${box.loads.length > 1 ? ` · ${box.loads.length} cargas` : ""}`} className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-slate-50">
+      <button type="button" onClick={onToggle} aria-expanded={open} title={`${boxNextStep(box)} · ${box.assigned} paquetes · ${box.armed} armados por Almacén · ${box.officeChecked} cotejados en oficina · ${box.pickupChecked} ${confirmMode ? "confirmados con «Lo llevo»" : "recibidos por el motorizado"}${box.declined ? ` · ${box.declined} no los llevó` : ""}${box.loads.length > 1 ? ` · ${box.loads.length} cargas` : ""} · efectivo previsto ${money(cash)}`} className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-slate-50">
         <span className="min-w-0 flex-1 truncate whitespace-nowrap">
           <span className="font-semibold text-slate-950">{box.riderName}</span>
           <span className="text-slate-600"> · <span className="tabular-nums">{box.assigned}</span> paq. · <span className="tabular-nums">{moneyShort(cash)}</span></span>
-          {confirmMode
-            ? <span className={cn("text-xs tabular-nums", box.pickupChecked < box.assigned ? "text-amber-700" : "text-emerald-700")}> · conf. {box.pickupChecked}/{box.assigned}</span>
-            : <span className={cn("text-xs tabular-nums", load.state === "in_custody" ? "text-emerald-700" : box.officeChecked < box.assigned ? "text-amber-700" : "text-sky-700")}> · cot. {box.officeChecked}/{box.assigned}</span>}
+          {/* Cadena de estados del paquete: armado → cotejado → confirmado. */}
+          <span className={cn("text-xs tabular-nums", box.armed < box.assigned ? "text-amber-700" : "text-emerald-700")}> · {box.armed} armados</span>
+          <span className={cn("text-xs tabular-nums", load.state === "in_custody" ? "text-emerald-700" : box.officeChecked < box.assigned ? "text-amber-700" : "text-sky-700")}> · {box.officeChecked} cotejados</span>
+          <span className={cn("text-xs tabular-nums", box.pickupChecked < box.assigned ? "text-amber-700" : "text-emerald-700")}> · {box.pickupChecked} {confirmMode ? "confirmados" : "recibidos"}</span>
           {box.declined ? <span className="text-xs text-amber-700"> · {box.declined} no rec.</span> : null}
         </span>
         <span aria-hidden className="shrink-0 text-slate-400">{open ? "▾" : "▸"}</span>
@@ -545,6 +667,13 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
       {open && (
         <div className="space-y-3 border-t border-slate-100 bg-slate-50/60 px-4 py-3">
           {message && <p role="status" className={cn("rounded-lg px-3 py-2 text-sm", message.ok ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700")}>{message.text}</p>}
+          <div role="group" aria-label="Filtro rápido de la caja" className="flex flex-wrap gap-1 text-xs">
+            {BOX_ITEM_FILTERS.map((f) => (
+              <button key={f.id} type="button" onClick={() => onFilter(f.id)} aria-pressed={filter === f.id} className={cn("rounded-full px-3 py-1 font-medium", filter === f.id ? "bg-slate-900 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100")}>
+                {f.label}
+              </button>
+            ))}
+          </div>
           {confirmMode && unconfirmed.length > 0 && (
             <details className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               <summary className="cursor-pointer font-semibold">Sin confirmar por {box.riderName} · {unconfirmed.length}</summary>
@@ -578,7 +707,7 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
             </details>
           )}
           {box.loads.map((m) => {
-            const active = activeDispatchItems(m.items);
+            const active = filterBoxItems(m.items, filter);
             const removed = m.items.filter((i) => !!i.removed_at);
             const checkable = canCheck && !["in_custody", "cancelled"].includes(m.state);
             return (
@@ -606,8 +735,7 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
                         <span aria-label={item.office_checked_at ? "Cotejado" : "Pendiente"} className={cn("grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-bold", item.office_checked_at ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-600")}>{item.office_checked_at ? "✓" : "·"}</span>
                         <div className="min-w-0 flex-1">
                           <p className="truncate font-medium text-slate-900">{s?.order_name ?? code} <span className="text-xs font-normal text-slate-500">{s?.customer_name} · {s?.district}</span></p>
-                          {item.pickup_checked_at && <p className="text-[11px] text-emerald-700">{confirmMode ? "lo lleva" : "recibido por el motorizado"}</p>}
-                          {confirmMode && m.state === "in_custody" && !item.pickup_checked_at && <p className="text-[11px] text-amber-700">por confirmar</p>}
+                          <p className="flex flex-wrap gap-1 text-[11px]"><StageChip stage={packageStage(item)} confirmMode={confirmMode} />{confirmMode && m.state === "in_custody" && !item.pickup_checked_at && !item.pickup_declined_at && <span className="text-amber-700">por confirmar</span>}</p>
                           {s?.order_name && <Link href={`/dashboard/pedidos?q=${encodeURIComponent(s.order_name)}&abrir=${encodeURIComponent(s.order_id ?? "")}&seccion=historial`} className="text-[11px] text-brand-700 underline">Ver actividad</Link>}
                         </div>
                         {checkable && !item.office_checked_at && code && (
@@ -631,7 +759,7 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
                       </li>
                     );
                   })}
-                  {!active.length && <li className="px-3 py-4 text-center text-xs text-slate-500">Sin paquetes activos.</li>}
+                  {!active.length && <li className="px-3 py-4 text-center text-xs text-slate-500">{filter === "todos" ? "Sin paquetes activos." : "Nada con ese filtro en esta carga."}</li>}
                 </ul>
                 {removed.length > 0 && (
                   <details className="border-t border-slate-100 px-3 py-2 text-xs text-slate-600">
@@ -695,4 +823,86 @@ function scanRowPresentation(l: ScanAssignLine, riderName: string): { text: stri
     default:
       return { text: "QR desconocido", textClass: "text-red-700", rowClass: "bg-red-50/50" };
   }
+}
+
+/** Tile compacta de métrica: etiqueta pequeña, cifra grande; es un filtro. */
+function Tile({ label, hint, value, active, onClick, tone = "slate" }: { label: string; hint: string; value: number; active: boolean; onClick: () => void; tone?: "slate" | "amber" }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      title={hint}
+      className={cn(
+        "flex h-12 min-w-[7.5rem] shrink-0 snap-start flex-col justify-center rounded-xl border px-3 text-left leading-tight xl:min-w-0",
+        active ? "border-brand-500 bg-brand-50 text-brand-900 ring-1 ring-brand-500" : tone === "amber" ? "border-amber-200 bg-amber-50/60 text-amber-900 hover:bg-amber-50" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+      )}
+    >
+      <span className="truncate text-xs">{label}</span>
+      <span className="text-base font-semibold tabular-nums">{value.toLocaleString("es-PE")}</span>
+    </button>
+  );
+}
+
+/**
+ * Panel: popover bajo el disparador en escritorio, hoja inferior en el móvil.
+ * Sin dependencias; cierra con Escape o tocando fuera (patrón de `Hint`).
+ */
+function Sheet({ title, onClose, children, anchored = false, wide = false }: { title: string; onClose: () => void; children: ReactNode; anchored?: boolean; wide?: boolean }) {
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const close = (e: Event) => { if (root.current && !root.current.contains(e.target as Node)) onClose(); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", esc); };
+  }, [onClose]);
+  return (
+    <div
+      ref={root}
+      role="dialog"
+      aria-label={title}
+      className={cn(
+        "fixed inset-x-3 bottom-3 z-50 max-h-[80vh] overflow-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-xl",
+        anchored ? "sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:mt-1 sm:w-80" : cn("sm:left-1/2 sm:top-24 sm:bottom-auto sm:right-auto sm:-translate-x-1/2", wide ? "sm:w-[42rem] sm:max-w-[calc(100vw-2rem)]" : "sm:w-96"),
+      )}
+    >
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-sm font-semibold text-slate-900">{title}</p>
+        <button type="button" onClick={onClose} aria-label="Cerrar" className="min-h-8 rounded-lg px-2 text-sm text-slate-500 hover:bg-slate-100">×</button>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Chip({ children, onRemove }: { children: ReactNode; onRemove: () => void }) {
+  return (
+    <li className="flex items-center gap-1 rounded-full bg-brand-50 px-2 py-0.5 font-medium text-brand-800">
+      {children}
+      <button type="button" onClick={onRemove} aria-label="Quitar filtro" className="min-h-0 p-0 text-brand-500 hover:text-brand-900">×</button>
+    </li>
+  );
+}
+
+/** Chapa del estado del paquete en la caja: por armar · armado · cotejado · confirmado · no lo llevó. */
+function StageChip({ stage, confirmMode }: { stage: ReturnType<typeof packageStage>; confirmMode: boolean }) {
+  const text = stage === "confirmado" && !confirmMode ? "recibido" : PACKAGE_STAGE_LABEL[stage];
+  return (
+    <span className={cn(
+      "rounded-full px-2 py-0.5 font-medium",
+      stage === "por_armar" && "bg-amber-50 text-amber-800",
+      stage === "armado" && "bg-sky-50 text-sky-800",
+      stage === "cotejado" && "bg-emerald-50 text-emerald-700",
+      stage === "confirmado" && "bg-emerald-600 text-white",
+      stage === "no_lo_llevo" && "bg-red-50 text-red-700",
+    )}>{text}</span>
+  );
+}
+
+/** «19/09» desde YYYY-MM-DD; vacío si no hay fecha. */
+function formatDayNumeric(day: string | null): string {
+  if (!day) return "";
+  const [, m, d] = day.split("-");
+  return `${d}/${m}`;
 }

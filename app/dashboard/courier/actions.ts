@@ -22,6 +22,7 @@ import { courierKey, normalizeDispatchScan } from "@/lib/dispatch";
 import { lookupDispatchShipment, scanManifestItem } from "@/app/dashboard/pedidos/despacho/actions";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 import { custodyOnAssign, isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
+import type { BlockedReason } from "@/lib/dispatch-day";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
 
@@ -95,6 +96,8 @@ export interface CourierAcceptedOrder extends Omit<
   CourierAvailableOrder,
   "hasPriorDispatch" | "lastDispatchedAt"
 > {
+  /** Tuvo una salida física previa (se conoce solo si el pedido sigue en la cola de Lima). */
+  hasPriorDispatch?: boolean;
   requestId: string;
   requestStatus: string;
   shipmentId: string | null;
@@ -138,12 +141,24 @@ export interface CourierRiderOption {
   fullName: string;
 }
 
+/** Pedido de Lima que no entra en la cola de Despacho, con el porqué («sin condiciones»). */
+export interface CourierBlockedOrder {
+  orderId: string;
+  orderName: string;
+  storeName: string;
+  customerName: string;
+  district: string;
+  reason: BlockedReason;
+}
+
 export interface CourierOperationsSnapshot {
   available: CourierAvailableOrder[];
   accepted: CourierAcceptedOrder[];
   routes: CourierRouteSummary[];
   riders: CourierRiderOption[];
   blockedCount: number;
+  /** Los excluidos con su motivo; `blockedCount` es su tamaño. */
+  blocked: CourierBlockedOrder[];
   sourceCount: number;
 }
 
@@ -153,6 +168,7 @@ const EMPTY_OPERATIONS: CourierOperationsSnapshot = {
   routes: [],
   riders: [],
   blockedCount: 0,
+  blocked: [],
   sourceCount: 0,
 };
 
@@ -350,7 +366,19 @@ async function loadCourierOperations(
     ((requestRows ?? []) as { order_id: string }[]).map((request) => request.order_id),
   );
   let blockedCount = 0;
+  const blocked: CourierBlockedOrder[] = [];
   const available: CourierAvailableOrder[] = [];
+  const block = (order: QueueOrderRow, reason: BlockedReason) => {
+    blockedCount += 1;
+    blocked.push({
+      orderId: order.order_id,
+      orderName: order.order_name ?? "Pedido sin código",
+      storeName: storeName.get(order.store_id) ?? agreementByStore.get(order.store_id)?.client_label ?? "Tienda",
+      customerName: order.customer_name ?? "Cliente sin nombre",
+      district: order.district ?? "Sin distrito",
+      reason,
+    });
+  };
 
   for (const order of (queueRows ?? []) as QueueOrderRow[]) {
     if (activeOrderIds.has(order.order_id)) continue;
@@ -359,13 +387,13 @@ async function loadCourierOperations(
     const assigned = activeAssignedOutput(outputs, fillable?.id ?? null);
     const needsExistingBox = order.macro_substage !== "por_generar_rotulo";
     if (assigned || (needsExistingBox && !fillable)) {
-      blockedCount += 1;
+      block(order, assigned ? "ya_en_caja" : "sin_salida");
       continue;
     }
     const agreement = agreementByStore.get(order.store_id);
     const districtKey = canonicalDistrictKey(order.district);
     if (!agreement || !districtKey) {
-      blockedCount += 1;
+      block(order, "distrito_invalido");
       continue;
     }
     const tariff = resolveDistrictTariff(config.tariffs, {
@@ -381,7 +409,7 @@ async function loadCourierOperations(
       day,
     });
     if (tariff.kind === "missing" || availability.status === "paused") {
-      blockedCount += 1;
+      block(order, tariff.kind === "missing" ? "tarifa_faltante" : "servicio_pausado");
       continue;
     }
     available.push({
@@ -504,6 +532,7 @@ async function loadCourierOperations(
       preparationState: shipment?.preparation_state ?? null,
       acceptedAt: request.accepted_at,
       observation: request.observation,
+      hasPriorDispatch: lastDispatchByOrder.has(request.order_id),
       route: manifest
         ? {
             manifestId: manifest.id,
@@ -555,7 +584,7 @@ async function loadCourierOperations(
     b.routeDate.localeCompare(a.routeDate) || a.riderName.localeCompare(b.riderName, "es"),
   );
 
-  return { available, accepted, routes, riders, blockedCount, sourceCount: sourceCount ?? available.length };
+  return { available, accepted, routes, riders, blockedCount, blocked, sourceCount: sourceCount ?? available.length };
 }
 
 export async function loadCourierConfig(orgId: string): Promise<CourierConfigSnapshot> {

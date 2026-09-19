@@ -781,8 +781,12 @@ MOM §29.13; auditoría en `docs/plan/despacho-crm.md`.
    asigna y coteja en oficina de una vez (`scanAssignToRider`), con lista viva
    y bandeja «escanear primero». La lista con selección múltiple queda plegada.
    Cotejar por motorizado en la misma pantalla, con quitar y mover entre cajas
-   (`moveManifestItem`, evento `dispatch_route_reassigned`). Las pestañas
-   anteriores siguen disponibles.
+   (`moveManifestItem`, evento `dispatch_route_reassigned`). «Pedidos
+   disponibles» y «Pedidos tomados» salen de la barra y quedan bajo «⋯ Más
+   vistas» como vista anterior: Despacho trae teléfono y fecha en la fila,
+   búsqueda por teléfono, «2.º intento», los excluidos con motivo («sin
+   condiciones»), el picker de filtros, las tiles de métricas y los estados
+   de cada paquete en Cajas de hoy (`loadCourierOperations` expone `blocked`).
 3. `/reparto` abre en «Recibir mi caja» mientras haya una carga cotejada y no
    recibida; «No lo recojo» exige motivo. El bloque «Recibir mi carga» de la
    pantalla vieja desapareció.

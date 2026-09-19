@@ -1,6 +1,6 @@
 // Despacho del día (MOM §29.13): lo puro de la pantalla de dos pasos.
 import { describe, expect, it } from "vitest";
-import { boxNextStep, dayBoxes, declinedPackages, splitAssignment, type DayManifest } from "@/lib/dispatch-day";
+import { activeFilterCount, boxNextStep, boxTileCounts, queueTileActive, queueTileCounts, toggleBoxTile, toggleQueueTile, dayBoxes, declinedPackages, EMPTY_QUEUE_FILTERS, filterBoxItems, filterQueue, inCreatedWindow, packageStage, splitAssignment, type DayManifest, type QueueRow } from "@/lib/dispatch-day";
 
 const item = (over: Partial<DayManifest["items"][number]> = {}) => ({
   id: over.id ?? crypto.randomUUID(),
@@ -85,5 +85,124 @@ describe("boxNextStep", () => {
     expect(boxNextStep({ assigned: 5, officeChecked: 2, pickupChecked: 0, state: "office_check" })).toBe("Cotejar 3 en oficina");
     expect(boxNextStep({ assigned: 5, officeChecked: 5, pickupChecked: 1, state: "pickup_check" })).toBe("Esperando que el motorizado reciba 4");
     expect(boxNextStep({ assigned: 5, officeChecked: 5, pickupChecked: 5, state: "in_custody" })).toBe("En poder del motorizado");
+  });
+});
+
+describe("filterQueue (Desde la lista)", () => {
+  const row = (over: Partial<QueueRow>): QueueRow => ({
+    orderId: over.orderId ?? crypto.randomUUID(),
+    orderName: "#KP1",
+    storeName: "Aurela",
+    customerName: "Ana Pérez",
+    customerPhone: "+51 962 820 897",
+    district: "Surco",
+    orderTotal: 100,
+    createdAt: "2026-09-19T14:00:00Z",
+    scheduledFor: "2026-09-19",
+    tariffAmount: 10,
+    taken: false,
+    requestId: null,
+    armed: null,
+    observation: null,
+    hasPriorDispatch: false,
+    ...over,
+  });
+  const today = "2026-09-19";
+  const rows = [
+    row({ orderId: "a" }),
+    row({ orderId: "b", storeName: "Kenku", district: "Miraflores", hasPriorDispatch: true, customerPhone: "51999111222", createdAt: "2026-09-18T20:00:00Z" }),
+    row({ orderId: "c", taken: true, requestId: "r", armed: true, createdAt: "2026-09-10T10:00:00Z", customerName: "Luis" }),
+    row({ orderId: "d", taken: true, requestId: "r2", armed: false, createdAt: null }),
+  ];
+  const ids = (out: QueueRow[]) => out.map((r) => r.orderId);
+
+  it("tienda × distrito × 2.º intento × armados × tomados", () => {
+    expect(ids(filterQueue(rows, EMPTY_QUEUE_FILTERS, today))).toEqual(["a", "b", "c", "d"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, store: "Kenku" }, today))).toEqual(["b"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, district: "Surco" }, today))).toEqual(["a", "c", "d"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, secondAttempt: true }, today))).toEqual(["b"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, armedOnly: true }, today))).toEqual(["c"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, takenOnly: true }, today))).toEqual(["c", "d"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, takenOnly: true, district: "Miraflores" }, today))).toEqual([]);
+  });
+
+  it("fecha de creación: hoy, ayer, últimos 7 días; sin fecha solo entra en «todo»", () => {
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, created: "hoy" }, today))).toEqual(["a"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, created: "ayer" }, today))).toEqual(["b"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, created: "7d" }, today))).toEqual(["a", "b"]);
+    // 2026-09-19T03:00Z todavía es el 18 en Lima.
+    expect(inCreatedWindow("2026-09-19T03:00:00Z", "hoy", today)).toBe(false);
+    expect(inCreatedWindow("2026-09-19T03:00:00Z", "ayer", today)).toBe(true);
+    expect(inCreatedWindow(null, "todo", today)).toBe(true);
+  });
+
+  it("el texto busca pedido, cliente, distrito y teléfono (con o sin espacios y prefijo)", () => {
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, query: "962 820" }, today))).toEqual(["a", "c", "d"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, query: "999111222" }, today))).toEqual(["b"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, query: "luis" }, today))).toEqual(["c"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, query: "miraflores" }, today))).toEqual(["b"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, query: "kp1", store: "Kenku" }, today))).toEqual(["b"]);
+  });
+
+  it("cuenta los filtros activos sin contar el texto", () => {
+    expect(activeFilterCount(EMPTY_QUEUE_FILTERS)).toBe(0);
+    expect(activeFilterCount({ ...EMPTY_QUEUE_FILTERS, query: "x", store: "Aurela", created: "hoy", secondAttempt: true })).toBe(3);
+  });
+});
+
+describe("estado de cada paquete en la caja (segmentos de «Pedidos tomados»)", () => {
+  const armed = { order_id: "o", order_name: "#A", customer_name: "A", district: "D", output_code: "c", guide_code: "g", preparation_state: "listo_despacho" };
+  const raw = { ...armed, preparation_state: "en_armado" };
+  it("la etapa más avanzada manda, y «no lo llevó» sobre todo", () => {
+    expect(packageStage(item({ shipment: raw }))).toBe("por_armar");
+    expect(packageStage(item({ shipment: armed }))).toBe("armado");
+    expect(packageStage(item({ shipment: armed, office_checked_at: "x" }))).toBe("cotejado");
+    expect(packageStage(item({ shipment: armed, office_checked_at: "x", pickup_checked_at: "x" }))).toBe("confirmado");
+    expect(packageStage(item({ shipment: armed, pickup_checked_at: "x", pickup_declined_at: "x" }))).toBe("no_lo_llevo");
+  });
+  it("filtro rápido: por armar · listos para cotejo · sin confirmar, solo activos", () => {
+    const items = [
+      item({ id: "1", shipment: raw }),
+      item({ id: "2", shipment: armed }),
+      item({ id: "3", shipment: armed, office_checked_at: "x" }),
+      item({ id: "4", shipment: armed, office_checked_at: "x", pickup_checked_at: "x" }),
+      item({ id: "5", shipment: armed, removed_at: "x" }),
+    ];
+    const ids = (f: Parameters<typeof filterBoxItems>[1]) => filterBoxItems(items, f).map((i) => i.id);
+    expect(ids("todos")).toEqual(["1", "2", "3", "4"]);
+    expect(ids("por_armar")).toEqual(["1"]);
+    expect(ids("listos_cotejo")).toEqual(["2"]);
+    expect(ids("sin_confirmar")).toEqual(["1", "2", "3"]);
+  });
+  it("la caja cuenta armados además de cotejados y confirmados", () => {
+    const boxes = dayBoxes([manifest({ items: [item({ shipment: armed, office_checked_at: "x" }), item({ shipment_id: "s2", shipment: raw })] })], "2026-09-19");
+    expect(boxes[0]).toMatchObject({ assigned: 2, armed: 1, officeChecked: 1, pickupChecked: 0 });
+  });
+});
+
+describe("tiles de métricas → filtros", () => {
+  const row = (over: Partial<QueueRow>): QueueRow => ({
+    orderId: over.orderId ?? crypto.randomUUID(), orderName: "#K", storeName: "A", customerName: "C", customerPhone: null, district: "D",
+    orderTotal: 1, createdAt: null, scheduledFor: "2026-09-19", tariffAmount: 1, taken: false, requestId: null, armed: null, observation: null, hasPriorDispatch: false, ...over,
+  });
+  it("cuenta cada tile sobre la cola y sobre las cajas", () => {
+    const rows = [row({}), row({ taken: true, armed: true }), row({ taken: true, armed: false }), row({ hasPriorDispatch: true })];
+    expect(queueTileCounts(rows)).toEqual({ por_asignar: 4, tomados_sin_caja: 2, armados: 1, segundo_intento: 1 });
+    const armed = { order_id: "o", order_name: "#A", customer_name: "A", district: "D", output_code: "c", guide_code: "g", preparation_state: "listo_despacho" };
+    const boxes = dayBoxes([manifest({ items: [item({ shipment: armed }), item({ shipment_id: "s2", shipment: { ...armed, preparation_state: "en_armado" } }), item({ shipment_id: "s3", shipment: armed, office_checked_at: "x", pickup_checked_at: "x" })] })], "2026-09-19");
+    expect(boxTileCounts(boxes)).toEqual({ por_armar: 1, listos_cotejo: 1, sin_confirmar: 2 });
+  });
+  it("tocar enciende el filtro, volver a tocar lo apaga; «Por asignar» limpia todo menos el texto", () => {
+    const on = toggleQueueTile({ ...EMPTY_QUEUE_FILTERS, query: "ana", store: "A" }, "segundo_intento");
+    expect(on).toMatchObject({ secondAttempt: true, store: "A", query: "ana" });
+    expect(queueTileActive(on, "segundo_intento")).toBe(true);
+    expect(toggleQueueTile(on, "segundo_intento").secondAttempt).toBe(false);
+    expect(toggleQueueTile(on, "tomados_sin_caja")).toMatchObject({ takenOnly: true, secondAttempt: true });
+    expect(toggleQueueTile(toggleQueueTile(on, "armados"), "armados").armedOnly).toBe(false);
+    expect(toggleQueueTile(on, "por_asignar")).toEqual({ ...EMPTY_QUEUE_FILTERS, query: "ana" });
+    expect(queueTileActive(EMPTY_QUEUE_FILTERS, "por_asignar")).toBe(false);
+    expect(toggleBoxTile("todos", "por_armar")).toBe("por_armar");
+    expect(toggleBoxTile("por_armar", "por_armar")).toBe("todos");
+    expect(toggleBoxTile("por_armar", "sin_confirmar")).toBe("sin_confirmar");
   });
 });

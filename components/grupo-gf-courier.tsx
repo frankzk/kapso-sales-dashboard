@@ -2,7 +2,7 @@
 
 import mobile from "./courier-mobile.module.css";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
@@ -42,6 +42,11 @@ type CourierTabId = "dispatch" | "available" | "preparation" | "routes" | "tarif
 function readCourierTab(value: string | null): CourierTabId {
   return value === "available" || value === "preparation" || value === "routes" || value === "tariffs" ? value : "dispatch";
 }
+/** Vistas anteriores: fuera de la barra, accesibles desde «⋯». Despacho del día ya hace lo suyo en un paso. */
+const LEGACY_TABS: ReadonlyArray<{ id: CourierTabId; label: string }> = [
+  { id: "available", label: "Pedidos disponibles" },
+  { id: "preparation", label: "Pedidos tomados" },
+];
 
 export function GrupoGfCourierBoard({
   orgId,
@@ -126,27 +131,13 @@ export function GrupoGfCourierBoard({
         </div>
       </header>
 
-      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-5 gap-1 border-b border-slate-200 lg:flex">
+      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-[1fr_1fr_1fr_auto] gap-1 border-b border-slate-200 lg:flex">
         <CourierTab
           label="Despacho del día"
           shortLabel="Despacho"
           active={tab === "dispatch"}
           onClick={() => setTab("dispatch")}
           count={new Set(manifests.filter((m) => m.route_date === today && m.state !== "cancelled" && m.courier === "propio").map((m) => m.rider_id ?? m.driver_name)).size}
-        />
-        <CourierTab
-          active={tab === "available"}
-          onClick={() => setTab("available")}
-          label="Pedidos disponibles"
-          shortLabel="Disponibles"
-          count={snapshot.operations.available.length}
-        />
-        <CourierTab
-          active={tab === "preparation"}
-          onClick={() => setTab("preparation")}
-          label="Pedidos tomados"
-          shortLabel="Tomados"
-          count={snapshot.operations.accepted.length}
         />
         <CourierTab
           active={tab === "routes"}
@@ -160,7 +151,18 @@ export function GrupoGfCourierBoard({
           onClick={() => setTab("tariffs")}
           label="Tarifario"
         />
+        <MoreViewsMenu
+          active={LEGACY_TABS.some((t) => t.id === tab)}
+          items={LEGACY_TABS.map((t) => ({ ...t, count: t.id === "available" ? snapshot.operations.available.length : snapshot.operations.accepted.length }))}
+          onPick={(id) => setTab(id)}
+        />
       </nav>
+      {LEGACY_TABS.some((t) => t.id === tab) && (
+        <p className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
+          <span>Vista anterior · Despacho del día ya hace esto en un paso.</span>
+          <button type="button" onClick={() => setTab("dispatch")} className="min-h-0 p-0 font-medium text-brand-700 underline-offset-2 hover:underline">Ir a Despacho del día</button>
+        </p>
+      )}
 
       {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
       {notice && <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}
@@ -171,6 +173,7 @@ export function GrupoGfCourierBoard({
           day={today}
           available={snapshot.operations.available}
           accepted={snapshot.operations.accepted}
+          blocked={snapshot.operations.blocked}
           riders={snapshot.operations.riders}
           manifests={manifests}
           canManageDispatch={snapshot.canManageDispatch}
@@ -220,6 +223,59 @@ export function GrupoGfCourierBoard({
           onSave={(input) => run(() => saveDistrictTariff(input))}
           onAvailability={(input) => run(() => setDistrictAvailability(input))}
         />
+      )}
+    </div>
+  );
+}
+
+/** «⋯» al final de las pestañas: las vistas anteriores en un desplegable pequeño. Escape o clic fuera lo cierran. */
+function MoreViewsMenu({ active, items, onPick }: {
+  active: boolean;
+  items: ReadonlyArray<{ id: CourierTabId; label: string; count: number }>;
+  onPick: (id: CourierTabId) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => { if (root.current && !root.current.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  return (
+    <div ref={root} className="relative flex items-center justify-center lg:ml-auto">
+      <button
+        type="button"
+        aria-label="Más vistas"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "relative flex min-h-12 min-w-12 items-center justify-center rounded-lg px-2 text-lg leading-none lg:min-h-14 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
+          active ? "text-brand-700" : "text-slate-500 hover:text-slate-800",
+        )}
+      >
+        ⋯
+        {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-brand-600" />}
+      </button>
+      {open && (
+        <ul role="menu" className="absolute right-0 top-full z-30 mt-1 w-60 rounded-xl border border-slate-200 bg-white p-1 text-sm shadow-lg">
+          {items.map((item) => (
+            <li key={item.id} role="none">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => { onPick(item.id); setOpen(false); }}
+                className="flex min-h-10 w-full items-center justify-between gap-2 rounded-lg px-3 text-left text-slate-800 hover:bg-slate-50"
+              >
+                <span>{item.label}</span>
+                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[11px] tabular-nums text-slate-600">{item.count.toLocaleString("es-PE")}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

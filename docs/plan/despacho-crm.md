@@ -97,3 +97,36 @@ paquete); el motorizado deja de ver la ruta hasta que aceptó su caja.
 - La pestaña «Actividad» del Master etiqueta los hitos del despacho en español
   (tomado, asignado, cotejado, recibido, no recogido, reasignado, retirado) y
   `/dashboard/courier` enlaza «Ver actividad» por pedido.
+
+## 4. Despacho absorbe «Pedidos disponibles» y «Pedidos tomados» (19-09-2026)
+
+Las dos pestañas salen de la barra (quedan como «vista anterior» bajo el botón
+«⋯ Más vistas», con el mismo `?tab=` y una nota arriba) porque lo único que
+aportaban ya vive en Despacho del día:
+
+- **Fila de «Desde la lista»**: teléfono y fecha de creación en la línea
+  secundaria («51962820897 · creado 19/09»); el buscador acepta teléfono
+  (solo dígitos, con o sin prefijo) además de pedido, cliente y distrito.
+- **«2.º intento»**: chapa en la fila cuando el pedido tuvo una salida previa
+  (`hasPriorDispatch`, ahora también en los tomados), con tooltip «Ya salió
+  antes y volvió; decide con eso», y filtro.
+- **Excluidos**: «· N sin condiciones» junto al contador abre un panel con la
+  lista y el motivo de cada uno (tarifa faltante / distrito inválido /
+  servicio pausado / ya en caja / sin salida armable) y enlace al Tarifario.
+  `loadCourierOperations` expone `blocked[]` además de `blockedCount`.
+- **Picker de filtros**: un botón «Filtros · n» (popover en escritorio, hoja
+  inferior en móvil) con tienda, distrito, solo 2.º intento, solo armados,
+  solo tomados sin caja y fecha de creación (hoy / ayer / 7 días / todo);
+  chips con × bajo el buscador; cambiar un filtro vuelve a la primera tanda.
+  Filtrado puro en `filterQueue` (`lib/dispatch-day.ts`).
+- **Tiles de métricas** encima de Asignar: una por filtro con su cantidad
+  (Por asignar, Tomados sin caja, Armados, 2.º intento, Sin condiciones y, con
+  cajas, Por armar, Listos para cotejo, Sin confirmar). Tocarla abre la lista
+  o las cajas con ese filtro; volver a tocar lo quita. Misma fuente de verdad
+  que el picker (`toggleQueueTile`, `toggleBoxTile`).
+- **Segmentos de «Pedidos tomados» en Cajas de hoy**: cada caja muestra la
+  cadena «N paq. · armados · cotejados · confirmados» (+ «no rec.»), cada
+  paquete lleva su chapa (por armar / armado / cotejado / confirmado / no lo
+  llevó, `packageStage`) y un filtro rápido Todos · Por armar · Listos para
+  cotejo · Sin confirmar (`filterBoxItems`). «Sin ruta» sigue en la lista como
+  «tomado · sin caja» y su filtro.
