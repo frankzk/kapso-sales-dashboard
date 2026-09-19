@@ -189,6 +189,14 @@ export function buildButtonReply(
 /**
  * Los «ok» que no preguntan nada.
  *
+ * SE COMPARA PALABRA A PALABRA, y no la frase entera, por una razón que no es
+ * de estilo: el router del bot de Kapso en el 600 hace exactamente eso con su
+ * propia lista, y las dos tienen que encajar. Donde el router calla, nosotros
+ * contestamos; donde el router habla, nosotros callamos. Una frase que sea
+ * trivial para él y no para nosotros deja a la clienta sin NINGUNA respuesta;
+ * al revés, recibe dos. Esta lista es un subconjunto de la suya, salvo
+ * `NUNCA_ACK`, donde los dos tienen que callar y derivar.
+ *
  * POR QUÉ UNA LISTA CERRADA Y NO «cualquier texto». Interpretar texto libre es
  * justo lo que este módulo no hace: un «¿me llegó mal el producto?» tiene que
  * ir a la asesora, y contestarle con un número de Yape sería atropellarla.
@@ -198,35 +206,58 @@ export function buildButtonReply(
  * asesora», una derivación por nada—. Ahí el mensaje que sirve es el que ya
  * sabemos: cuánto debe y a dónde pagarlo.
  */
-const ACKS = new Set([
+const ACK_WORDS = new Set([
   "ok",
   "oka",
   "okey",
   "okay",
   "oki",
-  "ok gracias",
-  "okey gracias",
+  "okis",
   "ya",
-  "ya esta",
-  "ya ok",
+  "esta",
   "listo",
-  "listo gracias",
-  "bien",
-  "buenoentendido",
-  "entendido",
-  "entendido gracias",
-  "de acuerdo",
-  "perfecto",
-  "dale",
+  "lista",
   "gracias",
-  "muchas gracias",
-  "gracias ok",
+  "muchas",
+  "mil",
   "si",
-  "sí",
-  "si gracias",
+  "buenas",
+  "buenos",
+  "buen",
+  "buena",
+  "dia",
+  "dias",
+  "tardes",
+  "noches",
+  "de",
+  "nada",
+  "bien",
+  "bueno",
+  "vale",
+  "perfecto",
+  "entendido",
+  "amable",
+  "muy",
+  "ah",
+  "aah",
+  "genial",
+  "excelente",
   "correcto",
+  "claro",
+  "dale",
   "conforme",
+  "acuerdo",
 ]);
+
+/**
+ * «no» NO es un acuse, aunque lo parezca por lo corto.
+ *
+ * Después de pedirle un saldo, un «no» o un «no gracias» es una señal: está
+ * rechazando pagar, y eso abre el flujo de devolución (§13), no un recordatorio
+ * del número de Yape. Contestarle con una cuenta sería no haberla escuchado.
+ * Va a la asesora, como cualquier otra cosa que no entendamos.
+ */
+const NUNCA_ACK = new Set(["no", "nunca", "cancelar", "anular", "devolver"]);
 
 /**
  * ¿Es un acuse de recibo y nada más? Pura.
@@ -241,8 +272,10 @@ export function isAcknowledgement(text: string | null | undefined): boolean {
   // Un mensaje largo no es un «ok» aunque empiece por uno.
   if (raw.length > 40) return false;
   const k = key(raw);
-  if (!k) return true;
-  return ACKS.has(k);
+  if (!k) return true; // solo emojis o signos
+  const palabras = k.split(" ");
+  if (palabras.some((w) => NUNCA_ACK.has(w))) return false;
+  return palabras.every((w) => ACK_WORDS.has(w));
 }
 
 export interface InboundResult {
