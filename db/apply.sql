@@ -347,4 +347,6 @@
 \ir migrations/0171_sheets_rider_rls.sql
 \echo 'Applying 0172_stop_written_status.sql'
 \ir migrations/0172_stop_written_status.sql
+\echo 'Applying 0173_master_backfill_log.sql'
+\ir migrations/0173_master_backfill_log.sql
 \echo 'Done.'

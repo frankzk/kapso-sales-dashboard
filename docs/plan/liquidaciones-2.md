@@ -180,3 +180,16 @@ las fuentes de los IMPORTRANGE:
 | `1JDJOisx1acerm5Ew6OD703XZiqHmvW7J9VCyjQKDMlU` | 'AURELA/KENKO'!A11:S400 | Fenix Lima |
 
 Para la iteración 5: Gasto Ads Aurela y Gasto Ads Kenku Perú, si existen.
+
+## 6. Puesta al día del Master (19-09-2026)
+
+La carga histórica dejó Rutas y las hojas completas pero no tocó el Master, y
+la bandeja de Grupo GF Courier seguía mostrando 6.368 pedidos de Lima
+abiertos, 4.619 de ellos entregados según el cuaderno. Se aplicaron en bloque
+por la puerta única con bitácora reversible (0173,
+`scripts/apply-cuaderno-history-to-master.ts` y
+`scripts/rollback-master-backfill.ts`). Quedaron fuera a propósito: 101 con
+observación abierta, 120 anulados en Shopify, y 1.749 sin entrega en ninguna
+hoja, que hay que revisar aparte (reprogramados, retirados, o salidos por otro
+courier).
+

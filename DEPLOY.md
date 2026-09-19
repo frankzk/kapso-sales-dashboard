@@ -755,6 +755,20 @@ historial por celda y observaciones de cuadre. Plan e iteraciones en
    rutas cerradas y paradas desde las filas históricas con pedido de las hojas
    de Reparto propio (idempotente; no toca el Master). Corrido el 19-09-2026.
 
+13. **Ponerse al día con el Master en bloque, y poder deshacerlo.** Migración
+    `0173_master_backfill_log.sql` (bitácora). `pnpm tsx
+    scripts/apply-cuaderno-history-to-master.ts <org_id> <actor_user_id>
+    [--real]` aplica por la puerta única (`lib/master-door.ts`) las entregas
+    del cuaderno que Kapta aún tiene abiertas en Lima: sin `--real` es un
+    ensayo con conteo por hoja y mes. Con `--real` guarda antes, por pedido,
+    el estado previo del Master y el evento insertado, e imprime un
+    `batch_id`. `pnpm tsx scripts/rollback-master-backfill.ts <batch_id>
+    --real` borra los eventos del lote, recalcula y marca `reverted_at`,
+    avisando de los pedidos que no volvieron al estado previo porque otro
+    evento posterior los movió. Mismas guardas que el botón de la pantalla:
+    observación abierta, anulado en Shopify, parada no entregada. Fechas
+    futuras del cuaderno se acotan a hoy. Primer lote corrido el 19-09-2026.
+
 ## 5k-ter. Rutas de reparto (motorizados propios)
 
 Sección propia (`/dashboard/rutas`) para el coordinador y una pantalla aparte
