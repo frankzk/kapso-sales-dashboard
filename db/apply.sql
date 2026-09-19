@@ -339,4 +339,6 @@
 \ir migrations/0167_transit_ticket_on_reply.sql
 \echo 'Applying 0168_flowcl_link_settings.sql'
 \ir migrations/0168_flowcl_link_settings.sql
+\echo 'Applying 0169_aliclik_tariff_probes_sin_inventar_cobertura.sql'
+\ir migrations/0169_aliclik_tariff_probes_sin_inventar_cobertura.sql
 \echo 'Done.'
