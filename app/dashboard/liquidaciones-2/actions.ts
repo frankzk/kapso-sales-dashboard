@@ -19,8 +19,9 @@ import { isCuadernoSheet } from "@/lib/sheets/templates";
 import { statusLookupForSheet } from "@/lib/sheets/reparto-import-db";
 import { applyWrittenPayment, applyWrittenStatus } from "@/lib/sheets/written-status";
 import { effectsForDomain, reconcileSheetRows, type SheetRef } from "@/lib/sheets/reparto-import-db";
-import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import { defaultOperationalFor } from "@/lib/order-status";
+import { applyDeliveriesToMaster, type MasterDoorItem } from "@/lib/master-door";
+import { writeStopReport } from "@/lib/stop-report";
+import { domainStatusToStop, sheetPaymentToStop } from "@/lib/sheets/stop-bridge";
 import type { CellValue, ColumnDataType, StatusEffect } from "@/lib/sheets/types";
 
 export interface SheetActionResult {
@@ -75,6 +76,50 @@ async function sheetFull(admin: ReturnType<typeof createAdminSupabase>, sheetId:
 
 /** Columnas de una fila cuaderno que, al cambiar, obligan a contrastar con Kapta. */
 const RECONCILE_COLUMNS = new Set(["estado", "a_cobrar", "pedido", "metodo_pago"]);
+
+/** Columnas de una fila atada a una parada que se escriben TAMBIÉN en la parada. */
+const STOP_COLUMNS = new Set(["estado", "a_cobrar", "efectivo", "metodo_pago", "observacion_1"]);
+
+/**
+ * La parada es la verdad (MOM §29.12): una edición de la hoja sobre una fila
+ * con `stop_id` se escribe primero en la parada por el MISMO camino que
+ * /reparto (`writeStopReport`: ruta en curso, saldo real, evidencia,
+ * catálogo). Si Rutas rechaza, la edición falla con ese mensaje y la fila no
+ * se toca. Un estado sin equivalente no mueve la parada (queda a revisión).
+ */
+async function pushRowToStop(
+  admin: ReturnType<typeof createAdminSupabase>,
+  sheet: { id: string; domain_id: string },
+  stopId: string,
+  merged: Record<string, CellValue>,
+  actor: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const estado = typeof merged.estado === "string" ? merged.estado : null;
+  const effects = await effectsForDomain(admin, sheet.domain_id);
+  const target = domainStatusToStop(estado, estado ? (effects.get(estado) ?? null) : null);
+  const { data: current } = await admin.from("delivery_stops").select("status,payment_method,collected_amount,outcome_reason").eq("id", stopId).maybeSingle();
+  const status = target?.status ?? ((current?.status as "pendiente" | "entregado" | "no_entregado" | undefined) ?? "pendiente");
+  const metodo = typeof merged.metodo_pago === "string" ? merged.metodo_pago : null;
+  const method = sheetPaymentToStop(metodo) ?? (current?.payment_method as string | null) ?? null;
+  const aCobrar = typeof merged.a_cobrar === "number" ? merged.a_cobrar : null;
+  const efectivo = typeof merged.efectivo === "number" ? merged.efectivo : null;
+  const collected = method === "efectivo" ? (efectivo ?? aCobrar) : aCobrar;
+  const res = await writeStopReport(admin, {
+    stopId,
+    status,
+    paymentMethod: status === "entregado" ? method : null,
+    collectedAmount: status === "entregado" ? collected : null,
+    outcomeReason: target?.outcome_reason ?? (current?.outcome_reason as string | null) ?? null,
+    note: typeof merged.observacion_1 === "string" ? merged.observacion_1 : null,
+    actor,
+    writtenStatus: typeof merged.estado_reportado === "string" ? merged.estado_reportado : null,
+    writtenStatusCode: estado,
+    writtenPayment: typeof merged.metodo_pago_reportado === "string" ? merged.metodo_pago_reportado : null,
+    delegated: true,
+  });
+  if (!res.ok) return { ok: false, error: `Rutas no acepta el cambio: ${res.error}` };
+  return { ok: true };
+}
 
 /**
  * Tras editar una fila de cuaderno: si el cambio toca estado, monto o
@@ -239,12 +284,17 @@ export async function setCell(input: {
   if (!rowKey) return { ok: false, error: "Fila sin clave." };
   const { data: existing } = await g.admin
     .from("sheet_rows")
-    .select("id,values")
+    .select("id,values,stop_id")
     .eq("sheet_id", input.sheetId)
     .eq("row_key", rowKey)
     .maybeSingle();
   const previous = (existing?.values as Record<string, CellValue> | undefined)?.[input.columnKey] ?? null;
   if (existing && previous === value) return { ok: true };
+
+  if (existing?.stop_id && STOP_COLUMNS.has(input.columnKey)) {
+    const pushed = await pushRowToStop(g.admin, sheet, existing.stop_id as string, { ...(existing.values as Record<string, CellValue>), [input.columnKey]: value }, g.user.id);
+    if (!pushed.ok) return { ok: false, error: pushed.error };
+  }
 
   let rowId = existing?.id as string | undefined;
   if (existing) {
@@ -301,7 +351,7 @@ async function setWrittenCell(
   const text = input.value === null || input.value === undefined ? "" : String(input.value);
   const { data: existing } = await g.admin
     .from("sheet_rows")
-    .select("id,values")
+    .select("id,values,stop_id")
     .eq("sheet_id", input.sheetId)
     .eq("row_key", rowKey)
     .maybeSingle();
@@ -319,6 +369,11 @@ async function setWrittenCell(
   }
   const changed = Object.entries(changes).filter(([k, v]) => (current[k] ?? null) !== v);
   if (existing && !changed.length) return { ok: true };
+
+  if (existing?.stop_id && !unknownAlias) {
+    const pushed = await pushRowToStop(g.admin, sheet, existing.stop_id as string, { ...current, ...changes }, g.user.id);
+    if (!pushed.ok) return { ok: false, error: pushed.error };
+  }
 
   let rowId = existing?.id as string | undefined;
   const merged = { ...current, ...changes };
@@ -644,6 +699,8 @@ export interface ApplyMasterSummary {
   devolucionesSinCamino: number;
   /** Filas con una observación abierta: alguien tiene que leer y aceptar el motivo antes (§30.8). */
   conObservacionAbierta: number;
+  /** Filas atadas a una parada que Rutas no tiene como entregada con evidencia (MOM §29.12). */
+  paradaNoEntregada: number;
 }
 
 /**
@@ -671,19 +728,30 @@ export async function applyCuadernoRowsToMaster(sheetId: string, rowKeys: string
   if (!keys.length) return { ok: false, error: "No hay filas que aplicar." };
 
   const effects = await effectsForDomain(g.admin, full.ref.domain_id);
-  type Row = { id: string; row_key: string; order_id: string | null; values: Record<string, CellValue> };
+  type Row = { id: string; row_key: string; order_id: string | null; stop_id: string | null; values: Record<string, CellValue> };
   const rows: Row[] = [];
   for (let i = 0; i < keys.length; i += 250) {
     const { data, error } = await g.admin
       .from("sheet_rows")
-      .select("id,row_key,order_id,values")
+      .select("id,row_key,order_id,stop_id,values")
       .eq("sheet_id", sheetId)
       .in("row_key", keys.slice(i, i + 250));
     if (error) return { ok: false, error: error.message };
     rows.push(...((data ?? []) as Row[]));
   }
 
-  const summary: ApplyMasterSummary = { aplicados: 0, yaEstaban: 0, saltadosAnulado: 0, sinVinculo: 0, sinEfecto: 0, devolucionesSinCamino: 0, conObservacionAbierta: 0 };
+  // La parada es la verdad (MOM §29.12): para las filas atadas, la puerta
+  // exige parada entregada con evidencia. Las filas del Excel histórico no
+  // tienen parada y pasan con la guarda de observaciones, como hasta ahora.
+  const stopIds = rows.map((r) => r.stop_id).filter((id): id is string => Boolean(id));
+  const stops = new Map<string, { status: string; photo_path: string | null; voucher_path: string | null }>();
+  for (let i = 0; i < stopIds.length; i += 250) {
+    const { data, error } = await g.admin.from("delivery_stops").select("id,status,photo_path,voucher_path").in("id", stopIds.slice(i, i + 250));
+    if (error) return { ok: false, error: error.message };
+    for (const st of (data ?? []) as { id: string; status: string; photo_path: string | null; voucher_path: string | null }[]) stops.set(st.id, st);
+  }
+
+  const summary: ApplyMasterSummary = { aplicados: 0, yaEstaban: 0, saltadosAnulado: 0, sinVinculo: 0, sinEfecto: 0, devolucionesSinCamino: 0, conObservacionAbierta: 0, paradaNoEntregada: 0 };
   const withOpen = new Set<string>();
   const rowIds = rows.map((r) => r.id);
   for (let i = 0; i < rowIds.length; i += 250) {
@@ -737,7 +805,7 @@ export async function applyCuadernoRowsToMaster(sheetId: string, rowKeys: string
   const who = courier === "propio" ? `${riderName} (Grupo GF Courier)` : full.ref.name;
   const now = new Date().toISOString();
   const seen = new Set<string>();
-  const events: Record<string, unknown>[] = [];
+  const items: MasterDoorItem[] = [];
   for (const row of candidates) {
     const orderId = row.order_id!;
     if (seen.has(orderId)) continue;
@@ -757,27 +825,27 @@ export async function applyCuadernoRowsToMaster(sheetId: string, rowKeys: string
     seen.add(orderId);
     const fecha = typeof row.values.fecha === "string" ? row.values.fecha : null;
     const written = typeof row.values.estado_reportado === "string" && row.values.estado_reportado ? row.values.estado_reportado : "entregado";
-    events.push({
-      store_id: m.store_id,
-      order_id: orderId,
-      kind: "status_override",
-      // Mediodía de Lima del día de la ruta: la hora exacta no se anotó en el cuaderno.
-      occurred_at: fecha ? `${fecha}T17:00:00.000Z` : now,
-      actor: g.user.id,
+    const stop = row.stop_id ? stops.get(row.stop_id) ?? null : null;
+    items.push({
+      orderId,
+      storeId: m.store_id,
+      target: "entregado",
       source: "liquidacion",
       courier,
-      new_status: "entregado",
-      new_operational: defaultOperationalFor("entregado"),
+      // Mediodía de Lima del día de la ruta: la hora exacta no se anotó en el cuaderno.
+      occurredAt: fecha ? `${fecha}T17:00:00.000Z` : now,
+      actor: g.user.id,
       reason: `Entregado según el cuaderno de ${who} (${written}).`,
-      payload: { sheet_id: sheetId, sheet_key: full.ref.key, row_key: row.row_key, row_id: row.id },
+      payload: { sheet_id: sheetId, sheet_key: full.ref.key, row_key: row.row_key, row_id: row.id, stop_id: row.stop_id },
+      guard: stop ? { stop, requireEvidence: true, openObservations: 0 } : { openObservations: 0 },
     });
   }
 
-  if (events.length) {
-    const { error } = await g.admin.from("order_events").insert(events);
-    if (error) return { ok: false, error: `No se pudo registrar la entrega: ${error.message}` };
-    await recomputeOrderMasterSafe(g.admin, events.map((e) => e.order_id as string));
-    summary.aplicados = events.length;
+  if (items.length) {
+    const door = await applyDeliveriesToMaster(g.admin, items);
+    if (door.error) return { ok: false, error: `No se pudo registrar la entrega: ${door.error}` };
+    summary.aplicados = door.applied.length;
+    summary.paradaNoEntregada = door.rejected.length;
   }
   revalidatePath(PATH);
   revalidatePath("/dashboard/pedidos");
@@ -789,6 +857,7 @@ export async function applyCuadernoRowsToMaster(sheetId: string, rowKeys: string
     summary.sinEfecto ? `${summary.sinEfecto} sin entrega declarada` : null,
     summary.devolucionesSinCamino ? `${summary.devolucionesSinCamino} devoluciones sin camino al Master` : null,
     summary.conObservacionAbierta ? `${summary.conObservacionAbierta} con observación pendiente de aceptar` : null,
+    summary.paradaNoEntregada ? `${summary.paradaNoEntregada} cuya parada en Rutas no está entregada con evidencia` : null,
   ].filter(Boolean);
   return { ok: true, message: `Master: ${parts.join(" · ")}.`, summary };
 }

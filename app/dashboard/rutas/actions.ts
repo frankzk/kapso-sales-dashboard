@@ -23,9 +23,8 @@ import {
   routeTotals,
   stopsToSettlementLines,
 } from "@/lib/routes";
-import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { applyDeliveriesToMaster } from "@/lib/master-door";
 import { syncStopsToSheet } from "@/lib/sheets/stop-sync";
-import { defaultOperationalFor } from "@/lib/order-status";
 
 export interface RouteActionResult {
   ok: boolean;
@@ -374,28 +373,30 @@ export async function closeRoute(
   const effects = masterEffects(stops);
   let applied = 0;
   if (effects.length) {
-    const storeOf = new Map(stops.map((s) => [s.order_id, s.store_id]));
-    const events = effects.map((e) => ({
-      store_id: storeOf.get(e.order_id) ?? null,
-      order_id: e.order_id,
-      kind: "status_override",
-      occurred_at: new Date().toISOString(),
-      actor: g.user.id,
-      source: "ruta",
-      new_status: e.target,
-      new_operational: defaultOperationalFor(e.target),
-      reason: e.reason,
-      payload: { route_id: routeId },
-    }));
-    const { error: evErr } = await g.admin.from("order_events").insert(events);
-    if (evErr) problems.push(`No se pudo actualizar el Master: ${evErr.message}`);
-    else {
-      applied = effects.length;
-      await recomputeOrderMasterSafe(
-        g.admin,
-        effects.map((e) => e.order_id),
-      );
-    }
+    const stopOf = new Map(stops.map((s) => [s.order_id, s]));
+    const requireEvidence = Boolean(gfLoads?.length);
+    const door = await applyDeliveriesToMaster(
+      g.admin,
+      effects.map((e) => {
+        const stop = stopOf.get(e.order_id);
+        return {
+          orderId: e.order_id,
+          storeId: stop?.store_id ?? null,
+          target: e.target,
+          source: "ruta" as const,
+          courier: "propio",
+          actor: g.user.id,
+          reason: e.reason,
+          payload: { route_id: routeId },
+          guard: stop
+            ? { stop: { status: stop.status, photo_path: stop.photo_path, voucher_path: stop.voucher_path }, requireEvidence }
+            : undefined,
+        };
+      }),
+    );
+    if (door.error) problems.push(`No se pudo actualizar el Master: ${door.error}`);
+    applied = door.applied.length;
+    if (door.rejected.length) problems.push(`${door.rejected.length} pedido(s) no cruzaron al Master: ${door.rejected[0]!.reason}`);
   }
 
   await g.admin

@@ -18,15 +18,8 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { routeReportAccess } from "@/lib/route-report-access";
-import { reportedCollection } from "@/lib/route-collection";
-import { loadRouteCollectionBalances } from "@/lib/route-collection-access";
-import {
-  isNonDeliveryReason,
-  isPaymentMethod,
-  validateStopReport,
-  type PaymentMethod,
-  type StopStatus,
-} from "@/lib/routes";
+import type { StopStatus } from "@/lib/routes";
+import { writeStopReport } from "@/lib/stop-report";
 import { syncStopsToSheet } from "@/lib/sheets/stop-sync";
 
 export interface ReportResult {
@@ -46,6 +39,11 @@ export interface ReportStopInput {
   photoPath: string | null;
   voucherPath: string | null;
   reportReason?: string | null;
+  /** Lo que el motorizado escribió tal cual y su equivalente en el dominio
+   *  Reparto propio (0172, MOM §29.12). Opcionales: la pantalla vieja no los manda. */
+  writtenStatus?: string | null;
+  writtenStatusCode?: string | null;
+  writtenPayment?: string | null;
 }
 
 /**
@@ -92,93 +90,26 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
     }
   }
 
-  const { data: routeRow } = await sb
-    .from("delivery_routes")
-    .select("id,status")
-    .eq("id", stop.route_id)
-    .maybeSingle();
-  const routeStatus = (routeRow as { status?: string } | null)?.status;
-  if (routeStatus !== "en_curso") {
-    return {
-      ok: false,
-      error:
-        routeStatus === "cerrada"
-          ? "La ruta ya está cerrada. Avisa al coordinador si hay que corregir algo."
-          : "La ruta todavía no está en curso.",
-    };
-  }
-
-  const method = isPaymentMethod(input.paymentMethod) ? input.paymentMethod : null;
-  const collected = reportedCollection(method, input.collectedAmount);
-  if (input.status === "entregado") {
-    const balance = (await loadRouteCollectionBalances([stop.order_id])).get(stop.order_id);
-    if (balance?.remaining == null) return { ok: false, error: "No se pudo comprobar el saldo. Actualiza antes de reportar." };
-    if (method !== "sin_cobro" && collected !== null && collected > balance.remaining) {
-      return { ok: false, error: `El saldo actual es S/ ${balance.remaining.toFixed(2)}. Revisa los pagos antes de registrar un cobro mayor.` };
-    }
-    if (method === "sin_cobro" && balance.remaining > 0 && !input.note?.trim()) {
-      return { ok: false, error: "Explica por qué no se cobró el saldo pendiente. Esto no lo marcará como pagado." };
-    }
-  }
-  const reason = isNonDeliveryReason(input.outcomeReason) ? input.outcomeReason : null;
-  // Se conservan las fotos ya subidas cuando el reporte es una corrección que no
-  // vuelve a adjuntarlas.
-  const photoPath = input.photoPath ?? stop.photo_path;
-  const voucherPath = input.voucherPath ?? stop.voucher_path;
-  if (access.delegated && !photoPath) {
-    return { ok: false, error: "Adjunta la evidencia del reporte por el motorizado." };
-  }
-
-  const validation = validateStopReport({
-    status: input.status,
-    paymentMethod: method,
-    collectedAmount: collected,
-    outcomeReason: reason,
-    note: input.note,
-    hasPhoto: Boolean(photoPath),
-    hasVoucher: Boolean(voucherPath),
-  });
-  if (!validation.ok) return { ok: false, error: validation.errors.join(" ") };
-
-  const now = new Date().toISOString();
-  // La escritura va por el service role: la parada tiene columnas que el
-  // motorizado no debe poder mover (la ruta a la que pertenece, el pedido), y
-  // así se controla exactamente qué se escribe.
+  // La escritura va por el ÚNICO camino (lib/stop-report.ts): ruta en curso,
+  // saldo real, evidencia y catálogo se comprueban ahí, para /reparto y para
+  // Liquidaciones 2 por igual. El service role controla qué columnas se tocan.
   const admin = createAdminSupabase();
-  const { error } = await admin
-    .from("delivery_stops")
-    .update({
-      status: input.status,
-      payment_method: input.status === "entregado" ? method : null,
-      collected_amount: input.status === "entregado" ? collected : null,
-      outcome_reason: input.status === "no_entregado" ? reason : null,
-      note: reportNote,
-      photo_path: photoPath,
-      voucher_path: voucherPath,
-      reported_at: now,
-      reported_by: user.id,
-      updated_at: now,
-    })
-    .eq("id", input.stopId);
-  if (error) return { ok: false, error: error.message };
-
-  // El rastro de quién dijo qué. Best-effort: perder la bitácora no debe costar
-  // el reporte, pero se registra siempre que se pueda.
-  await admin
-    .from("delivery_stop_events")
-    .insert({
-      stop_id: input.stopId,
-      status: input.status,
-      payment_method: input.status === "entregado" ? method : null,
-      collected_amount: input.status === "entregado" ? collected : null,
-      outcome_reason: input.status === "no_entregado" ? reason : null,
-      note: reportNote,
-      actor: user.id,
-    })
-    .then(
-      () => undefined,
-      () => undefined,
-    );
+  const written = await writeStopReport(admin, {
+    stopId: input.stopId,
+    status: input.status,
+    paymentMethod: input.paymentMethod,
+    collectedAmount: input.collectedAmount,
+    outcomeReason: input.outcomeReason,
+    note: reportNote,
+    photoPath: input.photoPath,
+    voucherPath: input.voucherPath,
+    actor: user.id,
+    writtenStatus: input.writtenStatus ?? null,
+    writtenStatusCode: input.writtenStatusCode ?? null,
+    writtenPayment: input.writtenPayment ?? null,
+    delegated: access.delegated,
+  });
+  if (!written.ok) return { ok: false, error: written.error };
 
   // La hoja de Reparto propio del motorizado refleja la parada (MOM §29.12).
   // Best-effort: si la hoja no existe o falla el cuadre, el reporte ya quedó.
