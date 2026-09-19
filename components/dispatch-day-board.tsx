@@ -214,18 +214,20 @@ export function DispatchDayBoard(props: Props) {
   const visible = filtered.slice(0, limit);
   const allVisibleSelected = visible.length > 0 && visible.every((q) => selected.has(q.orderId));
   const selectedTotal = queue.filter((q) => selected.has(q.orderId)).reduce((sum, q) => sum + q.orderTotal, 0);
-  const boxes = useMemo(() => dayBoxes(props.manifests as unknown as DayManifest[], day), [props.manifests, day]);
+  // Las cajas siguen al día elegido arriba («cambiar día»): cambiar la fecha
+  // sin ver las cajas de ese día dejaba la impresión de que no se creó nada.
+  const boxes = useMemo(() => dayBoxes(props.manifests as unknown as DayManifest[], scanDay), [props.manifests, scanDay]);
   const riderName = riders.find((r) => r.id === riderId)?.fullName ?? "";
   const riderBoxCount = (id: string) => boxes.find((b) => b.riderId === id)?.assigned ?? 0;
   /** Efectivo previsto por motorizado hoy: suma de los pedidos tomados con ruta de ese día. */
   const boxCash = useMemo(() => {
     const out = new Map<string, number>();
     for (const o of props.accepted) {
-      if (!o.route || o.route.routeDate !== day || !o.route.riderId) continue;
+      if (!o.route || o.route.routeDate !== scanDay || !o.route.riderId) continue;
       out.set(o.route.riderId, (out.get(o.route.riderId) ?? 0) + o.orderTotal);
     }
     return out;
-  }, [props.accepted, day]);
+  }, [props.accepted, scanDay]);
   const declined = useMemo(() => declinedPackages(boxes), [boxes]);
   const dayCod = boxes.reduce((sum, b) => sum + b.loads.reduce((s, l) => s + activeDispatchItems(l.items).length, 0), 0);
   const queueTiles = useMemo(() => queueTileCounts(queue), [queue]);
@@ -284,7 +286,7 @@ export function DispatchDayBoard(props: Props) {
     : props.riderPickupMode === "confirmar"
       ? " Él confirma cada paquete al cargarlo en la moto («Lo llevo»)."
       : "";
-  const helpText = `Escanea con el paquete en la mano: entra a la caja del motorizado y a su ruta.${riderTail} Corte 11:30.`;
+  const helpText = `Escanea con el paquete en la mano: entra a la caja del motorizado y a su ruta del día elegido arriba.${riderTail}`;
 
   return (
     <section aria-labelledby="dispatch-day-title" className="space-y-3">
@@ -306,7 +308,7 @@ export function DispatchDayBoard(props: Props) {
             <button type="button" onClick={() => { setScanDay(day); setDayOpen(false); }} className="underline">hoy</button>
           </span>
         ) : (
-          <button type="button" onClick={() => setDayOpen(true)} className="ml-auto shrink-0 whitespace-nowrap text-slate-400 underline-offset-2 hover:text-slate-700 hover:underline" title="Por defecto la caja es de hoy, o del día que dicta el corte de las 11:30">cambiar día</button>
+          <button type="button" onClick={() => setDayOpen(true)} className="ml-auto shrink-0 whitespace-nowrap text-slate-400 underline-offset-2 hover:text-slate-700 hover:underline" title="Por defecto la caja es de hoy; elige otro día solo para adelantar cajas">cambiar día</button>
         )}
       </div>
 
@@ -592,7 +594,7 @@ export function DispatchDayBoard(props: Props) {
               aria-expanded={boxesOpen}
               className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold text-slate-900 xl:cursor-default"
             >
-              Cajas de hoy
+              {scanDay === day ? "Cajas de hoy" : `Cajas del ${formatDayShort(scanDay)}`}
               <span className="text-xs font-normal tabular-nums text-slate-500">{boxes.length} · {dayCod} paq.</span>
               <span aria-hidden className="ml-auto text-slate-400 xl:hidden">{boxesOpen ? "▾" : "▸"}</span>
             </button>
