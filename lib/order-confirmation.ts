@@ -353,18 +353,34 @@ export function confirmationCycleDueOn(
 
 /**
  * La posición en la cola de «Fecha pactada», con las tres fuentes en el orden
- * en que mandan: fecha pactada, ciclo automático y recordatorio de dos horas.
+ * en que mandan: fecha pactada, recordatorio y ciclo automático.
  *
- * La diferencia que importa: **la fecha pactada vence y se queda vencida** —es
- * una promesa al cliente que alguien incumplió y tiene que verse—, mientras que
- * **el ciclo no acumula vencimiento**. Un ciclo cuyo día ya pasó significa
- * «toca hoy», y al registrar el intento el siguiente ciclo se cuenta desde ese
- * contacto. Así el pedido rota cada N días en lugar de hundirse para siempre en
- * Vencidos, que es donde estaban los pedidos de veintitrés días con 1/7.
+ * LA REGLA QUE HACE DE «HOY» UNA LISTA QUE SE LLEVA A CERO (16-09-2026). Cada
+ * llamada saca el pedido de Hoy y una regla de reencolamiento lo devuelve:
  *
- * El recordatorio de dos horas ordena el trabajo DENTRO de su día; pasado ese
- * día lo sustituye el ciclo, porque un recordatorio de hace tres semanas ya no
- * dice nada que la antigüedad del pedido no diga mejor.
+ *   - No contestó → recordatorio a las dos horas → Próximos hasta esa hora, y
+ *     Hoy cuando llega. El recordatorio NO vence: llegado es «toca ahora», y
+ *     «toca ahora» es Hoy, se haya cumplido su hora hace un minuto o hace tres
+ *     semanas. Un reintento que nadie hizo es trabajo pendiente, y el sitio del
+ *     trabajo pendiente es la lista que se trabaja.
+ *   - Pactó fecha → manda la fecha. Es la ÚNICA que vence: una promesa al
+ *     cliente incumplida se queda en Vencidos porque tiene que verse.
+ *   - Cualquier otro resultado sin fecha → el ciclo de N días, que tampoco
+ *     vence: un día de ciclo que ya pasó es «toca hoy».
+ *
+ * LO QUE HABÍA, Y POR QUÉ SE CAMBIÓ. El recordatorio ponía el pedido en Hoy
+ * mientras faltaba para su hora y en Vencidos cuando la hora pasaba. Eso hacía
+ * de Vencidos una cinta de correr: llamar a la 1pm lo mandaba a Vencidos a las
+ * 3pm, rellamar a las 3pm lo mandaba a Vencidos a las 5pm, y la única salida
+ * era que el cliente contestara. Medido el 16-09-2026: 24 pedidos en Vencidos,
+ * los 24 por recordatorio de hoy pasado y los 24 contactados hoy; cero por
+ * fecha pactada. El equipo leía «Vencidos» como «abandonados» y encontraba
+ * dentro justo lo que acababa de llamar.
+ *
+ * Y el recordatorio de días atrás cedía al ciclo, así que un reintento
+ * olvidado el lunes reaparecía el jueves, no el martes. Medido: 149 reintentos
+ * olvidados, 111 de ellos escondidos en Próximos por el ciclo. Con esta regla
+ * salen a Hoy, que es donde están las cosas que no se hicieron.
  */
 export function confirmationQueueBucket(
   input: {
@@ -377,14 +393,8 @@ export function confirmationQueueBucket(
   const today = limaDayKey(nowIso);
   if (input.nextContactOn) return confirmationDueBucket(input.nextContactOn, nowIso);
   if (input.reminderDueAt) {
-    // El recordatorio manda mientras siga siendo de hoy o del futuro: es la cola
-    // de las dos horas laborales. Uno de días atrás ya no ordena nada y cede el
-    // turno al ciclo.
-    const day = limaDayKey(input.reminderDueAt);
-    if (day > today) return "proximo";
-    if (day === today) {
-      return Date.parse(input.reminderDueAt) <= Date.parse(nowIso) ? "vencido" : "hoy";
-    }
+    // Futuro → todavía no toca. Llegado → toca, sea de hoy o de hace días.
+    return Date.parse(input.reminderDueAt) > Date.parse(nowIso) ? "proximo" : "hoy";
   }
   if (input.cycleDueOn) return input.cycleDueOn > today ? "proximo" : "hoy";
   return null;
