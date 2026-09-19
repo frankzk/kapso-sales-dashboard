@@ -3,6 +3,7 @@ import { limaDateKey } from "@/lib/aliclik-geo";
 import { limaDayBounds } from "@/lib/daily-summary";
 import type { DispatchManifestState, DispatchRouteKind } from "@/lib/dispatch";
 import { warehouseBlocker } from "@/lib/warehouse-queue";
+import { isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 
 export interface DispatchShipment {
   id: string;
@@ -84,6 +85,12 @@ export interface DispatchWorkspaceData {
    * ya nadie va a armar— y las dos pantallas se contradecían.
    */
   warehousePending: number;
+  /**
+   * Modo de recojo de Grupo GF por organización (0177). En «confirmar» y
+   * «ninguno» el cotejo de recojo se admite con la carga ya en custodia: es el
+   * respaldo cuando el motorizado no puede confirmar desde su teléfono.
+   */
+  pickupModeByOrg: Record<string, RiderPickupMode>;
 }
 
 export const DISPATCH_SHIPMENT_COLUMNS =
@@ -178,7 +185,20 @@ export async function getDispatchWorkspaceData(requestedId?: string | null): Pro
   const activeShipmentIds = new Set(
     rawItems.filter((item) => !item.removed_at).map((item) => item.shipment_id),
   );
+  const orgIds = [...new Set(rawManifests.map((manifest) => manifest.org_id))];
+  const pickupModeByOrg: Record<string, RiderPickupMode> = {};
+  if (orgIds.length) {
+    const { data: providers } = await sb
+      .from("logistics_providers")
+      .select("org_id,rider_pickup_mode")
+      .eq("code", "grupo-gf-courier")
+      .in("org_id", orgIds);
+    for (const row of (providers ?? []) as { org_id: string; rider_pickup_mode: unknown }[]) {
+      pickupModeByOrg[row.org_id] = isRiderPickupMode(row.rider_pickup_mode) ? row.rider_pickup_mode : "exigir";
+    }
+  }
   return {
+    pickupModeByOrg,
     manifests: rawManifests.map((manifest) => ({
       ...manifest,
       items: itemsByManifest.get(manifest.id) ?? [],

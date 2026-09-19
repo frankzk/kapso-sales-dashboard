@@ -178,6 +178,23 @@ Límite conocido: el panel enseña la última carga de la ruta; si un día hay
 dos cargas para el mismo motorizado, la anterior se abre desde la mesa de
 despacho de Almacén o desde el enlace antiguo `?caja=<carga>`.
 
+Segunda ronda (19-09-2026, tras probar con Roy y Yhoni):
+
+- «Reparto y liquidación» sale del panel de la caja y pasa a la columna
+  «Liquidación» de la lista; abre su propio panel a la derecha
+  (`?reparto=<ruta>`, `components/courier-route-report-drawer.tsx`, acción
+  `loadCourierRouteReport`) con el `RoutesBoard detailOnly` de siempre y
+  `onChanged` para recargar tras cada acción. `lib/courier-box-href.ts` gana
+  `courierReportHref` / `legacyReportHref`; `app/dashboard/courier/reparto`
+  queda como redirección.
+- El paso 1 de la caja agrega pedidos escaneando sobre esa caja
+  (`components/gf-box-add-packages.tsx`, `ScanAction` en modo compacto con el
+  motorizado y el día de la caja), sin salir del panel.
+- El paso 3 admite el cotejo de recojo con la carga en custodia cuando el
+  modo del proveedor no es «exigir» (`pickupModeByOrg` en
+  `lib/dispatch-access.ts`), con los textos de «sin confirmar por Roy».
+- Tests: `courier-box-drawer`, `courier-navigation`, `dispatch-mobile`.
+
 ## 7. El detalle de la parada, al lado de la lista (19-09-2026)
 
 Sergio, 19-09-2026: «en lugar de que el detalle salga abajo puede salir en

@@ -4,9 +4,12 @@ import { describe, expect, it } from "vitest";
 import {
   closeCourierBoxHref,
   courierBoxHref,
+  courierReportHref,
   courierRouteDrawerHref,
   legacyManifestHref,
+  legacyReportHref,
   readCourierBoxRequest,
+  readCourierReportRequest,
 } from "@/lib/courier-box-href";
 import { ledgerSituation } from "@/lib/courier-route-ledger";
 
@@ -27,6 +30,31 @@ describe("la caja se abre al lado de Rutas (MOM §29.14)", () => {
     expect(href).toBe("/dashboard/courier?tab=routes&ruta=r1");
     expect(readCourierBoxRequest({ pathname: "/dashboard/courier", search: "tab=routes&ruta=r1" })).toEqual({ kind: "ruta", routeId: "r1" });
     expect(readCourierBoxRequest({ pathname: "/dashboard/courier", search: "tab=routes" })).toBeNull();
+  });
+  it("el reparto y la liquidación abren en su propio panel y nunca conviven con la caja", () => {
+    const at = { pathname: "/dashboard/courier", search: "?tab=routes&motorizado=roy&caja=m1" };
+    const href = courierReportHref("r1", at);
+    expect(href).toBe("/dashboard/courier?tab=routes&motorizado=roy&reparto=r1");
+    expect(readCourierReportRequest({ pathname: at.pathname, search: href.split("?")[1] })).toEqual({ routeId: "r1" });
+    expect(readCourierBoxRequest({ pathname: at.pathname, search: href.split("?")[1] })).toBeNull();
+    expect(courierBoxHref("m2", { pathname: at.pathname, search: href.split("?")[1] })).toBe("/dashboard/courier?tab=routes&motorizado=roy&caja=m2");
+    expect(closeCourierBoxHref({ pathname: at.pathname, search: href.split("?")[1] })).toBe("/dashboard/courier?tab=routes&motorizado=roy");
+    expect(legacyReportHref("r1")).toBe("/dashboard/courier?tab=routes&reparto=r1");
+    expect(legacyReportHref("r1", "/dashboard/courier/rutas")).toBe("/dashboard/courier/rutas?reparto=r1");
+    const drawer = read("components/courier-route-report-drawer.tsx");
+    expect(drawer).toContain("<RoutesBoard");
+    expect(drawer).toContain("detailOnly");
+    expect(drawer).toContain("max-w-[960px]");
+    expect(drawer).toContain("window.history.replaceState(null, \"\", closeCourierBoxHref(");
+    expect(read("components/grupo-gf-courier.tsx")).toContain("<CourierRouteReportDrawer />");
+    expect(read("app/dashboard/courier/rutas/page.tsx")).toContain("<CourierRouteReportDrawer />");
+  });
+  it("el paso 1 de la caja escanea sobre esa caja, sin elegir motorizado", () => {
+    const add = read("components/gf-box-add-packages.tsx");
+    expect(add).toContain('context="supervisor_asignacion"');
+    expect(add).toContain("riderId, scheduledFor: manifest.route_date, overrideCash");
+    expect(add).not.toContain("<select");
+    expect(read("components/dispatch-workspace.tsx")).toContain("<GfBoxAddPackages");
   });
   it("los enlaces antiguos a ?manifiesto= caen en la pestaña Rutas con la caja abierta", () => {
     expect(legacyManifestHref("m1")).toBe("/dashboard/courier?tab=routes&caja=m1");

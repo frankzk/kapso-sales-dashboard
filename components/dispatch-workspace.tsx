@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { DispatchScanner } from "@/components/dispatch-scanner";
 import { DispatchCamera } from "@/components/dispatch-camera";
+import { GfBoxAddPackages } from "@/components/gf-box-add-packages";
 import { cn } from "@/components/ui";
 import { isCourierTbd } from "@/lib/shipment-output";
 import { courierKey } from "@/lib/dispatch";
@@ -328,8 +329,17 @@ export function DispatchBoxPanel({
 
   const progress = selected ? dispatchProgress(selected.items) : null;
   const checkComplete = selected?.state !== "cancelled" && !!progress && (mode === "office" ? progress.officeComplete : progress.pickupComplete);
-  const scanAllowed = !!selected && !["cancelled", "in_custody"].includes(selected.state)
-    && (mode === "office" ? canManage : canPickup && !!progress?.officeComplete);
+  // Con la carga ya en custodia, el cotejo de oficina se cierra (la caja ya
+  // salió), pero el de recojo sigue abierto si el modo del proveedor no es
+  // «exigir» (0177): es el respaldo cuando el motorizado no puede confirmar
+  // desde su teléfono. El servidor (`scanManifestItem`) aplica la misma regla.
+  const pickupMode = selected ? (data.pickupModeByOrg?.[selected.org_id] ?? "exigir") : "exigir";
+  const custodyPickupOpen = !!selected && selected.state === "in_custody" && pickupMode !== "exigir";
+  const scanAllowed = !!selected && selected.state !== "cancelled"
+    && (mode === "office"
+      ? canManage && selected.state !== "in_custody"
+      : canPickup && !!progress?.officeComplete && (selected.state !== "in_custody" || custodyPickupOpen));
+  const pickupPending = progress ? progress.total - progress.pickupChecked : 0;
 
   return (
     <div className="min-w-0 space-y-4">
@@ -354,14 +364,17 @@ export function DispatchBoxPanel({
               )}
               {surface === "gf" && selected && <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
                 <span>{activeDispatchItems(selected.items).length} paquete{activeDispatchItems(selected.items).length === 1 ? "" : "s"} en esta carga</span>
-                {selected.delivery_route_id && selected.state === "in_custody" && <Link href={`/dashboard/courier/reparto?id=${selected.delivery_route_id}`} className="font-semibold text-brand-700">Ver reparto y liquidación →</Link>}
-                {selected.state === "in_custody" && <Link href="/dashboard/courier" className="font-semibold text-brand-700">Agregar una carga a la misma ruta →</Link>}
+                {selected.state === "in_custody" && pickupMode === "exigir" && <Link href="/dashboard/courier" className="font-semibold text-brand-700">Agregar una carga a la misma ruta →</Link>}
               </div>}
 
               {mode !== "build" && checkComplete && selected ? (
                 <div className="mt-4 rounded-xl bg-emerald-50 p-4" role="status">
                   <p className="font-semibold text-emerald-900">{mode === "office" ? "Caja verificada" : "Carga recibida"} · {progress?.total} de {progress?.total}</p>
-                  <p className="mt-1 text-sm text-emerald-800">{selected.state === "in_custody" ? "La entrega de esta carga quedó registrada." : needsRiderCheck(selected.kind) ? "Oficina terminó. Falta que el motorizado reciba cada paquete." : "Oficina terminó. Registra quién recoge para entregar al courier."}</p>
+                  <p className="mt-1 text-sm text-emerald-800">{selected.state === "in_custody"
+                    ? (progress?.pickupComplete
+                      ? "La entrega de esta carga quedó registrada."
+                      : `La caja ya salió con ${selected.driver_name ?? "el motorizado"}; ${pickupPending} sin confirmar. Se confirman en «Recibir carga».`)
+                    : needsRiderCheck(selected.kind) ? "Oficina terminó. Falta que el motorizado reciba cada paquete." : "Oficina terminó. Registra quién recoge para entregar al courier."}</p>
                   {mode === "office" && selected.state !== "in_custody" && needsRiderCheck(selected.kind) && (canPickup ?
                     <button type="button" onClick={() => { setMode("pickup"); setMessage(null); }} className="mt-3 min-h-12 w-full rounded-xl bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700">Continuar a recepción</button>
                     : <p className="mt-2 text-sm font-medium text-emerald-900">El motorizado continúa desde su acceso a Reparto.</p>)}
@@ -369,6 +382,9 @@ export function DispatchBoxPanel({
               ) : mode !== "build" && (
                 <>
                   {mode === "pickup" && selected && !progress?.officeComplete && <p className="mt-3 text-sm text-amber-800">Primero completa la verificación de oficina.</p>}
+                  {mode === "pickup" && custodyPickupOpen && pickupPending > 0 && (
+                    <p className="mt-3 text-sm text-amber-800">{pickupPending} paquete{pickupPending === 1 ? "" : "s"} sin confirmar por {selected?.driver_name ?? "el motorizado"}. Si no puede confirmar desde su teléfono, escanea aquí los que sí lleva.</p>
+                  )}
                   <DispatchScanner key={`${manifestId}:${mode}`} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
                 </>
               )}
@@ -377,7 +393,9 @@ export function DispatchBoxPanel({
 
             {mode === "build" ? (
               surface === "gf" ? (
-                <div className="p-6 text-sm"><p>Los pedidos se toman y asignan desde la bandeja del courier. Esta caja conserva su lista y sus cotejos.</p><Link href="/dashboard/courier" className="mt-3 inline-block font-semibold text-brand-700">Ir a tomar y asignar pedidos →</Link></div>
+                selected
+                  ? <GfBoxAddPackages manifest={selected} canManage={canManage} refresh={refresh} />
+                  : <p className="p-6 text-sm text-slate-600">Elige una caja.</p>
               ) : selected ? (
                 <BuildRoute
                   // Cambiar de ruta descarta la selección: arrastrarla al

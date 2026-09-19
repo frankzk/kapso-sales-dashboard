@@ -30,9 +30,9 @@ function manifest(office: boolean, received: boolean, state: DispatchManifest["s
     } satisfies DispatchManifestItem],
   };
 }
-function renderBox(box: DispatchManifest, canManage = true, canPickup = true) {
+function renderBox(box: DispatchManifest, canManage = true, canPickup = true, pickupMode: "exigir" | "confirmar" | "ninguno" = "exigir") {
   return renderToStaticMarkup(createElement(DispatchWorkspace, {
-    initialData: { manifests: [box], assignableShipments: [], warehousePending: 0 },
+    initialData: { manifests: [box], assignableShipments: [], warehousePending: 0, pickupModeByOrg: { org: pickupMode } },
     initialSelectedId: box.id, stores: [], riders: [], canPrepare: false,
     canManage, canPickup, surface: "gf",
   }));
@@ -77,6 +77,20 @@ describe("mobile verification", () => {
     expect(html).toContain("Carga recibida");
     expect(html).not.toContain("Escanear con cámara");
     expect(html).not.toContain("Corregir contenido");
+  });
+  it("in custody with pickup mode «confirmar», reception stays open for the unconfirmed packages (0177 fallback)", () => {
+    // El motorizado no pudo confirmar desde su teléfono: el supervisor escanea aquí lo que sí lleva.
+    const html = renderBox(manifest(true, false, "in_custody"), true, true, "confirmar");
+    expect(html).toContain("1 paquete sin confirmar por Roy");
+    expect(html).toContain("Escanear con cámara");
+    expect(html).not.toContain("La entrega de esta carga quedó registrada");
+    // En «exigir» la carga en custodia sigue cerrada.
+    const strict = renderBox(manifest(true, false, "in_custody"), true, true, "exigir");
+    expect(strict).not.toContain("sin confirmar por Roy");
+    // Y en oficina, con custodia, el escáner no vuelve: la caja ya salió.
+    const office = renderBox(manifest(true, false, "in_custody"), true, false, "confirmar");
+    expect(office).toContain("ya salió con Roy");
+    expect(office).not.toContain("Escanear con cámara");
   });
   it("office-only staff see completion without being sent to unauthorized receipt", () => {
     const html = renderBox(manifest(true, false, "ready_for_pickup"), true, false);

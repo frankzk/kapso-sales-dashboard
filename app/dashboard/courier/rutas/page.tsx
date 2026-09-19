@@ -9,10 +9,11 @@ import { limaDate } from "@/lib/sheets/resolver";
 import { EmptyState } from "@/components/ui";
 import { CourierRoutesLedger } from "@/components/courier-routes-ledger";
 import { CourierBoxDrawer } from "@/components/courier-box-drawer";
+import { CourierRouteReportDrawer } from "@/components/courier-route-report-drawer";
 
 export const dynamic = "force-dynamic";
 
-type SP = { manifiesto?: string; dia?: string; caja?: string; ruta?: string; motorizado?: string };
+type SP = { manifiesto?: string; dia?: string; caja?: string; ruta?: string; reparto?: string; motorizado?: string };
 
 /**
  * Rutas de Grupo GF Courier para quien no administra el courier (cotejo,
@@ -38,6 +39,7 @@ export default async function CourierDispatchPage({ searchParams }: { searchPara
       </header>
       <CourierRoutesLedger rows={rows} riders={riders.map((r) => ({ id: r.id, fullName: r.full_name }))} today={today} />
       <CourierBoxDrawer />
+      <CourierRouteReportDrawer />
     </div>
   );
 }

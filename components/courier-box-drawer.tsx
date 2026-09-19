@@ -4,11 +4,12 @@
 //
 // Mira la URL como la ficha del pedido (order-drawer-host.tsx): `?caja=` abre
 // una carga con sus tres pasos; `?ruta=` abre una ruta sin caja (las que
-// trajo el cuaderno) y lleva a su reparto. Cerrar reemplaza la URL sin apilar
+// trajo el cuaderno). El reparto y la liquidación de la ruta tienen su propio
+// panel (courier-route-report-drawer.tsx), abierto desde la columna
+// «Liquidación» de la lista. Cerrar reemplaza la URL sin apilar
 // historial y conserva los filtros de la lista. Tras cada acción se recarga
 // el detalle y se refresca la pantalla de atrás, para que la fila cambie.
 
-import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui";
@@ -109,12 +110,6 @@ function CourierBoxPanel({ request, onClose, onChanged }: { request: CourierBoxR
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-1">
-              {route && (
-                <Link href={`/dashboard/courier/reparto?id=${route.id}&dia=${route.routeDate}`} className="inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-sm font-medium text-brand-700 hover:bg-brand-50">
-                  Reparto y liquidación
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-                </Link>
-              )}
               <button type="button" onClick={onClose} aria-label="Cerrar" className="min-h-0 rounded-lg border-0 bg-transparent p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700">
                 <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" /></svg>
               </button>
@@ -141,7 +136,7 @@ function CourierBoxPanel({ request, onClose, onChanged }: { request: CourierBoxR
           {detail && !manifest && route && (
             <div className="rounded-2xl border border-dashed border-slate-300 p-5 text-sm text-slate-600">
               <p className="font-medium text-slate-800">Esta ruta no pasó por Despacho del día.</p>
-              <p className="mt-1">Sus paradas vienen del cuaderno del motorizado (Liquidaciones 2). Los tres pasos de la caja no aplican; el reparto y su cierre sí.</p>
+              <p className="mt-1">Sus paradas vienen del cuaderno del motorizado (Liquidaciones 2). Los tres pasos de la caja no aplican; el reparto y su cierre se abren desde «Liquidación» en la lista.</p>
             </div>
           )}
         </div>

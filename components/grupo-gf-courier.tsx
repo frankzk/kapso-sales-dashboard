@@ -10,6 +10,7 @@ import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { DispatchDayBoard } from "@/components/dispatch-day-board";
 import { CourierRoutesLedger } from "@/components/courier-routes-ledger";
 import { CourierBoxDrawer } from "@/components/courier-box-drawer";
+import { CourierRouteReportDrawer } from "@/components/courier-route-report-drawer";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import type { CourierLedgerRow } from "@/lib/courier-route-ledger";
 import { resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
@@ -222,6 +223,7 @@ export function GrupoGfCourierBoard({
         />
       )}
       <CourierBoxDrawer />
+      <CourierRouteReportDrawer />
       {tab === "tariffs" && (
         <TariffMatrix
           orgId={orgId}

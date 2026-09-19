@@ -4979,6 +4979,32 @@ Plan y hallazgos en `docs/plan/liquidaciones-2.md`. Base en la migración 0168;
 código en `lib/sheets/`, `app/dashboard/liquidaciones-2/` y
 `components/sheets-board.tsx`.
 
+
+**Reparto y liquidación, en el mismo panel (19-09-2026).** La columna
+«Liquidación» de cada fila es un enlace —«Reparto y liquidación» o el estado
+de la liquidación si ya existe— que abre a la derecha el reparto y el cierre
+de la ruta (`?reparto=<ruta>`, `components/courier-route-report-drawer.tsx`,
+datos por `loadCourierRouteReport`): paradas, «Terminar ruta operativa»,
+«Cerrar con paradas sin reportar», reintentos, añadir paradas y el pago del
+motorizado, el mismo `RoutesBoard` de antes. Solo hay un panel abierto a la
+vez: abrir el reparto cierra la caja y viceversa. La caja ya no lleva enlaces
+a esa pantalla; la página `/dashboard/courier/reparto?id=` redirige a la lista
+con ese panel abierto.
+
+**Agregar pedidos desde la caja.** El paso 1 del panel de la caja escanea
+sobre ESA caja (`components/gf-box-add-packages.tsx`, `scanAssignToRider`
+con el motorizado y el día de la caja): toma el pedido si hace falta, lo mete
+y lo deja cotejado, con la misma lista de resultados de Despacho del día
+(ya estaba, en otra caja → Mover, límite de efectivo → Autorizar, no
+elegible). No hay motorizado que elegir: la caja ya es de uno.
+
+**Recojo con la carga en custodia.** En modo «confirmar» o «ninguno» (0177)
+el paso 3 sigue abierto con la carga en custodia: «N paquetes sin confirmar
+por Roy» y el escáner activo para los que faltan; es el respaldo cuando el
+motorizado no puede confirmar desde su teléfono. «La entrega de esta carga
+quedó registrada» solo cuando todos están confirmados. El paso 2 con
+custodia queda cerrado: la caja ya salió. El modo viaja con los datos de la
+mesa (`DispatchWorkspaceData.pickupModeByOrg`).
 ### 30.1 Qué es y de dónde viene
 
 El cierre de Lima vivía en un Google Sheet («MASTER KEY 2.0»): una hoja por

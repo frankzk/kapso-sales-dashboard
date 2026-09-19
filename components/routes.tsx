@@ -85,7 +85,10 @@ export function RoutesBoard({
   day,
   canReport = false,
   detailOnly = false,
+  onChanged,
 }: {
+  /** Tras cada acción que salió bien (el panel lateral recarga su detalle). */
+  onChanged?: () => void;
   /** Solo el reparto y cierre de la ruta abierta: la lista vive en Grupo GF Courier · Rutas (MOM §29.14). */
   detailOnly?: boolean;
   stores: StoreOpt[];
@@ -110,6 +113,7 @@ export function RoutesBoard({
       else {
         setMsg(res.message ?? "Listo.");
         router.refresh();
+        onChanged?.();
       }
     });
 

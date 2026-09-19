@@ -22,7 +22,7 @@ function openInPlace(event: MouseEvent<HTMLAnchorElement>, href: string) {
 import { cn } from "@/components/ui";
 import { Hint } from "@/components/hint";
 import { Chip, Sheet } from "@/components/filter-sheet";
-import { courierBoxHref, courierRouteDrawerHref } from "@/lib/courier-box-href";
+import { courierBoxHref, courierReportHref, courierRouteDrawerHref } from "@/lib/courier-box-href";
 import { LEDGER_SITUATION_LABELS, ledgerSituation, type CourierLedgerRow, type CourierLedgerSituation } from "@/lib/courier-route-ledger";
 import { routeDayLong } from "@/lib/dispatch";
 
@@ -99,6 +99,8 @@ export function CourierRoutesLedger({
   const riderName = (id: string) => riders.find((r) => r.id === id)?.fullName ?? "";
   const location = { pathname, search };
   const rowHref = (r: CourierLedgerRow) => r.manifestId ? courierBoxHref(r.manifestId, location) : courierRouteDrawerHref(r.routeId, location);
+  // «Liquidación» abre el reparto y cierre de la ruta en el mismo panel lateral.
+  const reportHref = (r: CourierLedgerRow) => courierReportHref(r.routeId, location);
 
   return (
     <section aria-label="Rutas y cajas" className="space-y-3">
@@ -184,7 +186,7 @@ export function CourierRoutesLedger({
                   {day === today ? "Hoy · " : ""}{routeDayLong(day)}
                 </th>
               </tr>
-              {list.map((r) => <LedgerRow key={r.routeId} row={r} href={rowHref(r)} />)}
+              {list.map((r) => <LedgerRow key={r.routeId} row={r} href={rowHref(r)} reportHref={reportHref(r)} />)}
             </tbody>
           ))}
         </table>
@@ -195,7 +197,7 @@ export function CourierRoutesLedger({
             <div key={day}>
               <p className="sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">{day === today ? "Hoy · " : ""}{routeDayLong(day)}</p>
               <ul className="divide-y divide-slate-100">
-                {list.map((r) => <LedgerCard key={r.routeId} row={r} href={rowHref(r)} />)}
+                {list.map((r) => <LedgerCard key={r.routeId} row={r} href={rowHref(r)} reportHref={reportHref(r)} />)}
               </ul>
             </div>
           ))}
@@ -248,7 +250,18 @@ function settlementLabel(status: string | null): string {
   return status === "borrador" ? "Borrador" : status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-function LedgerRow({ row, href }: { row: CourierLedgerRow; href: string }) {
+/** Celda «Liquidación»: el estado si ya hay liquidación, o el acceso al reparto y cierre. */
+function ReportLink({ row, href, className }: { row: CourierLedgerRow; href: string; className?: string }) {
+  const label = row.settlementStatus ? settlementLabel(row.settlementStatus) : "Reparto y liquidación";
+  return (
+    <a href={href} onClick={(e) => openInPlace(e, href)} title="Paradas, cierre de la ruta y pago del motorizado" className={cn("inline-flex items-center gap-1 whitespace-nowrap font-medium text-brand-700 hover:underline", className)}>
+      {label}
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+    </a>
+  );
+}
+
+function LedgerRow({ row, href, reportHref }: { row: CourierLedgerRow; href: string; reportHref: string }) {
   const situation = ledgerSituation(row);
   const progress = progressOf(row);
   const dash = (n: number | null) => (n == null ? "—" : n);
@@ -265,12 +278,12 @@ function LedgerRow({ row, href }: { row: CourierLedgerRow; href: string }) {
       <td className="px-3 py-2.5 text-center tabular-nums text-violet-700">{dash(row.pickupCheckedCount)}</td>
       <td className="px-3 py-2.5 text-right tabular-nums text-slate-900">{money(row.codAmount)}</td>
       <td className="px-4 py-2.5"><ProgressBars bars={progress} /></td>
-      <td className="px-3 py-2.5 text-xs text-slate-600">{settlementLabel(row.settlementStatus)}</td>
+      <td className="px-3 py-2.5 text-xs"><ReportLink row={row} href={reportHref} /></td>
     </tr>
   );
 }
 
-function LedgerCard({ row, href }: { row: CourierLedgerRow; href: string }) {
+function LedgerCard({ row, href, reportHref }: { row: CourierLedgerRow; href: string; reportHref: string }) {
   const situation = ledgerSituation(row);
   const progress = progressOf(row);
   return (
@@ -284,8 +297,9 @@ function LedgerCard({ row, href }: { row: CourierLedgerRow; href: string }) {
           <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold", SITUATION_TONE[situation])}>{LEDGER_SITUATION_LABELS[situation]}</span>
         </div>
         <ProgressBars bars={progress} compact />
-        {row.manifestId && <p className="mt-1 text-xs text-slate-500">armados {row.armedCount} · cotejados {row.officeCheckedCount} · recibidos {row.pickupCheckedCount}{row.settlementStatus ? ` · liquidación ${settlementLabel(row.settlementStatus).toLowerCase()}` : ""}</p>}
+        {row.manifestId && <p className="mt-1 text-xs text-slate-500">armados {row.armedCount} · cotejados {row.officeCheckedCount} · recibidos {row.pickupCheckedCount}</p>}
       </a>
+      <div className="px-4 pb-3 text-xs"><ReportLink row={row} href={reportHref} /></div>
     </li>
   );
 }
