@@ -529,11 +529,12 @@ function RouteDetail({
       {/* Tabla única de paradas: en escritorio cabe; en pantallas estrechas se
           desplaza en horizontal con el cliente fijo a la izquierda. */}
       <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
-        <table className="w-full min-w-[1040px] text-sm">
+        <table className="w-full min-w-[1120px] text-sm">
           <thead className="border-b border-slate-200 text-left text-xs text-slate-500">
             <tr>
               <th className="sticky left-0 z-[1] bg-white px-3 py-2 font-medium">Cliente</th>
               <th className="px-3 py-2 font-medium">Pedido</th>
+              <th className="px-3 py-2 text-right font-medium">Monto</th>
               <th className="px-3 py-2 font-medium">Tienda</th>
               <th className="px-3 py-2 font-medium">Distrito</th>
               <th className="px-3 py-2 font-medium">Resultado</th>
@@ -557,6 +558,7 @@ function RouteDetail({
                 <td className="px-3 py-2 text-slate-500">
                   {s.order?.name ? <OrderLink orderId={s.order_id} className="underline decoration-slate-300 hover:text-brand-700" title="Abrir la ficha del pedido">{s.order.name}</OrderLink> : "—"}
                 </td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-700">{s.order?.total == null ? "—" : money(s.order.total)}</td>
                 <td className="px-3 py-2 text-slate-500">{storeName(s.store_id)}</td>
                 <td className="px-3 py-2 text-slate-500">{s.order?.district ?? "—"}</td>
                 <td className="px-3 py-2">
@@ -577,9 +579,18 @@ function RouteDetail({
                 <td className="px-3 py-2 text-xs text-slate-500">
                   {s.photo_path ? "📷" : "—"} {s.voucher_path ? "🧾" : ""}
                 </td>
-                <td className="px-3 py-2 text-right tabular-nums text-slate-700">{pr ? (pr.base === null ? <span className="text-xs text-amber-700">Sin tarifa</span> : money(pr.base)) : "—"}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-slate-700">{pr ? money(pr.extra) : "—"}</td>
-                <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-900">{pr ? (pr.base === null ? "—" : money(pr.base + pr.extra)) : "—"}</td>
+                {/* La tarifa solo se gana con la parada reportada (entregada o
+                    rechazada); antes de eso no es S/ 0,00, es «todavía no». Sin
+                    tarifa personal vigente se dice, para que se configure. */}
+                <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                  {!pr ? "—"
+                    : pr.configured_rate == null ? <span className="text-xs text-amber-700" title="Configura la tarifa del motorizado en «Tarifa de …», abajo">Sin tarifa</span>
+                    : s.status === "pendiente" ? <span className="text-xs text-slate-400" title={`${money(pr.configured_rate)} al reportar`}>—</span>
+                    : pr.base === null ? <span className="text-xs text-amber-700">Sin tarifa</span>
+                    : money(pr.base)}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-700">{pr && pr.extra ? money(pr.extra) : "—"}</td>
+                <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-900">{pr && pr.base !== null && pr.configured_rate != null && s.status !== "pendiente" ? money(pr.base + pr.extra) : "—"}</td>
                 {(planning || canExtra) && (
                   <td className="px-3 py-2 text-right">
                     {planning && (
