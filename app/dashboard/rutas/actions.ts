@@ -24,6 +24,7 @@ import {
   stopsToSettlementLines,
 } from "@/lib/routes";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { syncStopsToSheet } from "@/lib/sheets/stop-sync";
 import { defaultOperationalFor } from "@/lib/order-status";
 
 export interface RouteActionResult {
@@ -406,8 +407,22 @@ export async function closeRoute(
     })
     .eq("id", routeId);
 
+  // La hoja de Reparto propio del motorizado queda al día con la ruta cerrada
+  // (MOM §29.12). Best-effort: el cierre ya está hecho.
+  try {
+    await syncStopsToSheet(g.admin, {
+      orgId: route.org_id ?? stores.find((s) => s.id === route.store_id)?.org_id ?? "",
+      riderId: route.rider_id,
+      date: route.route_date,
+      actor: g.user.id,
+    });
+  } catch (e) {
+    problems.push(`La hoja del motorizado no se pudo sincronizar: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
   revalidatePath("/dashboard/courier/reparto");
   revalidatePath("/dashboard/liquidaciones");
+  revalidatePath("/dashboard/liquidaciones-2");
   revalidatePath("/dashboard/pedidos");
 
   const pago = " Revisa Ganancia y saldo del motorizado en esta ruta: el cálculo financiero aún requiere aprobación. No se registró ningún pago ni depósito.";

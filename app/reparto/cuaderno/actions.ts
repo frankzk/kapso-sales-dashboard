@@ -14,6 +14,7 @@ import { getCurrentUser } from "@/lib/access";
 import { getMyRider } from "@/lib/routes-access";
 import { statusLookupForSheet } from "@/lib/sheets/reparto-import-db";
 import { getRiderSheet, loadRiderManifestPackages, loadRiderOrders, searchRiderOrders, type RiderOrderCandidate } from "@/lib/sheets/rider-access";
+import { syncStopsToSheet } from "@/lib/sheets/stop-sync";
 import {
   buildNewPoint,
   buildRiderPointChanges,
@@ -286,33 +287,35 @@ export async function addRiderPoint(input: {
   return { ok: true, message: `${built.values.punto} añadido.` };
 }
 
-/** Crea las filas que falten con los paquetes del manifiesto de despacho del día. */
+/**
+ * Trae a la hoja las PARADAS del día (la verdad de Rutas, MOM §29.12). Si no
+ * hay paradas pero sí una carga de despacho que aún no se recibió, lo dice:
+ * las paradas nacen al recibir la carga, no antes.
+ */
 export async function pullManifestPackages(fecha: string): Promise<RiderActionResult> {
   const g = await guard();
   if ("error" in g) return { ok: false, error: g.error };
   if (!isDate(fecha)) return { ok: false, error: "Fecha no válida." };
-  const packages = await loadRiderManifestPackages(g.sheet.org_id, g.rider.id, fecha);
-  if (!packages.length) return { ok: true, message: "No hay ruta de despacho para ese día." };
-  const existing = await dayRows(g.admin, g.sheet.id, fecha);
-  const keys = new Set(existing.map((r) => r.row_key));
-  const puntos = existing.map((r) => r.values.punto as string | null);
-  const haveOrder = new Set(existing.map((r) => r.order_id).filter(Boolean));
-  let created = 0;
-  for (const p of packages) {
-    if (haveOrder.has(p.order_id)) continue;
-    const tienda = p.store_name?.toLowerCase().startsWith("aur") ? "Aurela" : p.store_name?.toLowerCase().startsWith("kenk") ? "Kenku" : null;
-    const built = buildNewPoint({ fecha, pedido: p.order_name, cliente: p.customer_name, tienda, a_cobrar: p.order_total, existingPuntos: puntos, existingKeys: keys });
-    const { data, error } = await g.admin
-      .from("sheet_rows")
-      .insert({ sheet_id: g.sheet.id, row_key: built.row_key, order_id: p.order_id, values: built.values, source: "sincronizacion", created_by: g.user.id })
-      .select("id")
-      .single();
-    if (error || !data) return { ok: false, error: error?.message ?? "No se pudo crear un punto." };
-    keys.add(built.row_key);
-    puntos.push(built.values.punto as string);
-    haveOrder.add(p.order_id);
-    created += 1;
+  let synced;
+  try {
+    synced = await syncStopsToSheet(g.admin, { orgId: g.sheet.org_id, riderId: g.rider.id, date: fecha, actor: g.user.id });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (!synced.stops) {
+    const packages = await loadRiderManifestPackages(g.sheet.org_id, g.rider.id, fecha);
+    if (packages.length) {
+      return { ok: false, error: `Tu carga de ese día tiene ${packages.length} paquetes pero todavía no la recibiste. Recíbela primero en «Cargas de Grupo GF»: las paradas nacen ahí.` };
+    }
+    return { ok: true, message: "No hay ruta ese día." };
   }
   revalidatePath(PATH);
-  return { ok: true, message: created ? `${created} paquetes traídos de tu ruta.` : "Tu cuaderno ya tenía todos los paquetes de la ruta." };
+  revalidatePath("/reparto");
+  const created = synced.created + synced.linked;
+  return {
+    ok: true,
+    message: created
+      ? `${created} paradas traídas de tu ruta${synced.updated ? `, ${synced.updated} actualizadas` : ""}.`
+      : "Tu cuaderno ya tenía todas las paradas de la ruta.",
+  };
 }

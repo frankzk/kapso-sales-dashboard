@@ -20,6 +20,8 @@ import {
   loadStoredRowsFor,
 } from "@/lib/sheets/access";
 import { CATALOGO_ZONAS_KEY, isCuadernoSheet } from "@/lib/sheets/templates";
+import { syncRiderMonthStops } from "@/lib/sheets/stop-sync";
+import { createAdminSupabase } from "@/lib/db";
 import type { Contribution, StoredRow } from "@/lib/sheets/types";
 
 export const dynamic = "force-dynamic";
@@ -107,6 +109,16 @@ async function Liquidaciones2Content({ searchParams }: { searchParams: Promise<S
       rows = computeRows({ rowKey: "pedido", columns: sheet.columns, facts, stored, lookups, contributions });
     } else {
       // Las hojas de reparto se miran por mes (columna `fecha`); los catálogos, enteros.
+      // La parada es la verdad (MOM §29.12): antes de pintar el mes, las paradas
+      // del motorizado que aún no tienen fila se traen a la hoja.
+      const riderId = typeof sheet.config.rider_id === "string" ? sheet.config.rider_id : null;
+      if (isCuadernoSheet(sheet, domain) && riderId && month && !search && canEdit) {
+        try {
+          await syncRiderMonthStops(createAdminSupabase(), { orgId, riderId, month, actor: user?.id ?? null });
+        } catch (e) {
+          console.error("[liquidaciones-2] sincronización de paradas", e instanceof Error ? e.message : e);
+        }
+      }
       const stored =
         isCuadernoSheet(sheet, domain) && month && !search
           ? await loadStoredRowsByMonth(sheet.id, month, 10000)

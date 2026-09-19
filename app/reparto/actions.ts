@@ -27,6 +27,7 @@ import {
   type PaymentMethod,
   type StopStatus,
 } from "@/lib/routes";
+import { syncStopsToSheet } from "@/lib/sheets/stop-sync";
 
 export interface ReportResult {
   ok: boolean;
@@ -179,11 +180,42 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
       () => undefined,
     );
 
+  // La hoja de Reparto propio del motorizado refleja la parada (MOM §29.12).
+  // Best-effort: si la hoja no existe o falla el cuadre, el reporte ya quedó.
+  await syncStopForRoute(admin, stop.route_id, input.stopId, user.id);
+
   revalidatePath("/reparto");
   revalidatePath("/dashboard/courier/reparto");
   revalidatePath("/dashboard/courier");
+  revalidatePath("/dashboard/liquidaciones-2");
   return {
     ok: true,
     message: input.status === "entregado" ? "Entrega registrada." : "Reportado como no entregado.",
   };
+}
+
+/** Lleva UNA parada a la hoja del motorizado de esa ruta. No lanza. */
+async function syncStopForRoute(
+  admin: ReturnType<typeof createAdminSupabase>,
+  routeId: string,
+  stopId: string,
+  actor: string,
+): Promise<void> {
+  try {
+    const { data: route } = await admin
+      .from("delivery_routes")
+      .select("org_id,rider_id,route_date")
+      .eq("id", routeId)
+      .maybeSingle();
+    if (!route) return;
+    await syncStopsToSheet(admin, {
+      orgId: route.org_id as string,
+      riderId: route.rider_id as string,
+      date: String(route.route_date),
+      stopIds: [stopId],
+      actor,
+    });
+  } catch (e) {
+    console.error("[reparto] no se pudo sincronizar la hoja del motorizado", e instanceof Error ? e.message : e);
+  }
 }
