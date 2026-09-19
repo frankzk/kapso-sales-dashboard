@@ -250,7 +250,9 @@ Reglas iniciales:
 - Las rutas con una condición pendiente, como falta de stock o pago, pueden
   mostrarse bloqueadas con una explicación.
 - Una inconsistencia entre distrito y coordenadas puede continuar con alerta y
-  justificación corta.
+  justificación corta. **Salvo cuando el pin señala otro departamento** y ni el
+  desplegable del checkout ni la ciudad escrita lo respaldan: ahí el pin es el
+  destino y la guía no sale sin una excepción escrita (§10).
 
 Fallback de Provincia:
 
@@ -1397,6 +1399,51 @@ Reglas:
   decisión de una persona mirando la dirección.
 - Las referencias de la petición se conservan: son lo que se le reenvía a
   Aliclik para que lo corrijan de su lado.
+
+#### El pin es el destino, y el pedido tiene que respaldarlo
+
+A Aliclik solo se le mandan `warehouseId`, `lat` y `lng`. **El pin decide a dónde
+va el paquete**; la dirección escrita viaja en la guía para que el motorizado la
+lea, pero no corrige el destino. Un pin equivocado no es un detalle de
+formulario: es otro destino.
+
+Lo destapó #KP133769 (11-09-2026). La clienta eligió Puno en el desplegable del
+checkout, escribió «Puno» como ciudad y «JR. Velasco Astete 191», y su checkout
+geocodificó el punto en Puno. La guía salió con el pin en **Santiago, Cusco**, a
+331 km. El paquete se fue a Cusco y volvió.
+
+**El aviso que ya existía no sirvió, y por una razón medible.** Comparaba solo el
+DISTRITO que Aliclik deduce del pin contra el nuestro, y eso salta en **1.958 de
+4.173 guías (47%)**: Cusco/Cuzco, Coronel Portillo/Pucallpa, el nombre oficial
+contra el comercial (ver arriba). Un aviso que sale en la mitad de los pedidos no
+lo lee nadie, y este salió ahí dentro.
+
+**Lo que sí discrimina son las dos declaraciones del pedido que no dependen del
+pin.** El departamento que la clienta ELIGIÓ en el desplegable del checkout
+—llega como código ISO 3166-2:PE, vocabulario cerrado, en 14.770 de 23.034
+pedidos y hasta ahora sin usar— y la ciudad que escribió en la dirección. El
+departamento del pin coincide con el del desplegable en el **99,9% de las guías
+entregadas** (1.388 de 1.390).
+
+Reglas:
+
+- **El pin necesita que UNA de las dos declaraciones lo respalde.** Si el
+  departamento del pin contradice al desplegable Y su distrito no es la ciudad
+  escrita, el pin está solo contra el pedido y **la guía no se emite**.
+- **La excepción se escribe, no se marca.** Existen casos reales en que quien se
+  equivocó fue la clienta al elegir el departamento: se emite dejando dicho por
+  qué, y queda registrado en el pedido (`aliclik_pin_exception`). Mismo trato que
+  la excepción de riesgo de pago.
+- **Sin código ISO no hay puerta.** Son 8.264 pedidos de 23.034; para ellos nada
+  cambia. Bloquear con una sola fuente sería el mismo error que esta regla evita.
+- **Kapta no mueve el pin sola**, aquí tampoco: acercarlo es decidir a dónde va
+  el paquete, y eso lo hace una persona mirando la dirección.
+
+Medido sobre las guías creadas por API, las 10 discrepancias existentes se parten
+limpiamente: 5 con el pin equivocado —#KP133769, #KP134170, #KP130297, #KP127265,
+#KP123779, **ninguna entregada**— y 4 con el desplegable equivocado y el pin bien,
+que la segunda declaración deja pasar (#KP126473 se entregó). Cinco bloqueos, los
+cinco reales, cero falsos positivos.
 
 #### Una cotización no es cobertura
 
