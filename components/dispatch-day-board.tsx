@@ -79,6 +79,9 @@ export function DispatchDayBoard(props: Props) {
   // La lista se pinta por tandas de 100 para no cargar 1.600 filas de golpe;
   // «Mostrar 100 más» amplía. Cambiar el filtro vuelve a la primera tanda.
   const [limit, setLimit] = useState(100);
+  // Dos formas de asignar, una a la vista: por QR (con el paquete en la mano)
+  // o desde la lista. Abrir una pliega la otra; el motorizado es común.
+  const [method, setMethod] = useState<"qr" | "lista">("qr");
   const [store, setStore] = useState("");
   const [district, setDistrict] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -270,7 +273,7 @@ export function DispatchDayBoard(props: Props) {
         {/* ── Asignar ── */}
         <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="px-4 py-3">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+            <div className="flex flex-col gap-2">
               <div className="min-w-0 flex-1">
                 <select
                   value={riderId}
@@ -285,7 +288,18 @@ export function DispatchDayBoard(props: Props) {
                   <p className="mt-1 truncate text-xs text-slate-500">{riderName} · {riderBoxCount(riderId)} en su caja</p>
                 )}
               </div>
-              <div className="sm:w-56">
+              <div role="tablist" aria-label="Forma de asignar" className="grid grid-cols-2 rounded-xl bg-slate-100 p-1 text-sm font-medium">
+                <button type="button" role="tab" aria-selected={method === "qr"} onClick={() => setMethod("qr")}
+                  className={cn("min-h-10 rounded-lg px-3", method === "qr" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800")}>
+                  Asignación por QR
+                </button>
+                <button type="button" role="tab" aria-selected={method === "lista"} onClick={() => setMethod("lista")}
+                  className={cn("min-h-10 rounded-lg px-3", method === "lista" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800")}>
+                  Desde la lista
+                </button>
+              </div>
+              {method === "qr" && (
+              <div>
                 {canManageDispatch ? (
                   <ScanAction
                     context="supervisor_asignacion"
@@ -299,15 +313,16 @@ export function DispatchDayBoard(props: Props) {
                   <p className="text-xs text-amber-700">Tu rol no organiza rutas: puedes mirar, no asignar.</p>
                 )}
               </div>
+              )}
             </div>
-            {!helpDismissed && canManageDispatch && (
+            {method === "qr" && !helpDismissed && canManageDispatch && (
               <p className="mt-2 flex items-center gap-2 text-xs text-slate-500">
                 <span className="min-w-0 flex-1">Cada escaneo toma el pedido, lo pone en la caja de {riderName || "quien elijas"} y lo deja cotejado.</span>
                 <button type="button" onClick={dismissHelp} aria-label="Cerrar ayuda" className="shrink-0 text-slate-400 hover:text-slate-700">×</button>
               </p>
             )}
 
-            {tray.length > 0 && (
+            {method === "qr" && tray.length > 0 && (
               <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-sky-50 px-2 py-1.5 text-xs text-sky-900">
                 <span><b>{tray.length}</b> en espera de motorizado</span>
                 {tray.map((e) => (
@@ -322,7 +337,7 @@ export function DispatchDayBoard(props: Props) {
               </div>
             )}
 
-            {lines.length > 0 && (
+            {method === "qr" && lines.length > 0 && (
               <div className="mt-3">
                 <ul className="max-h-72 divide-y divide-slate-100 overflow-auto rounded-xl border border-slate-200" aria-live="polite">
                   {lines.map((l, i) => {
@@ -353,47 +368,8 @@ export function DispatchDayBoard(props: Props) {
               </div>
             )}
           </div>
-        </div>
-
-        {/* ── Cajas de hoy: solo cuando hay cajas; plegadas en móvil, abiertas en escritorio ── */}
-        {boxes.length > 0 && (
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <button
-              type="button"
-              onClick={() => setBoxesOpen((v) => !v)}
-              aria-expanded={boxesOpen}
-              className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold text-slate-900 xl:cursor-default"
-            >
-              Cajas de hoy
-              <span className="text-xs font-normal tabular-nums text-slate-500">{boxes.length} · {dayCod} paq.</span>
-              <span aria-hidden className="ml-auto text-slate-400 xl:hidden">{boxesOpen ? "▾" : "▸"}</span>
-            </button>
-            <ul className={cn("divide-y divide-slate-100 border-t border-slate-100", boxesOpen ? "block" : "hidden", "xl:block")}>
-              {boxes.map((box) => (
-                <BoxRow
-                  key={box.riderId ?? box.riderName}
-                  box={box}
-                  cash={box.riderId ? (boxCash.get(box.riderId) ?? 0) : 0}
-                  riders={riders}
-                  orgId={orgId}
-                  open={openBox === (box.riderId ?? box.riderName)}
-                  onToggle={() => setOpenBox(openBox === (box.riderId ?? box.riderName) ? null : (box.riderId ?? box.riderName))}
-                  canManage={canManageDispatch}
-                  onChanged={() => router.refresh()}
-                  pickupMode={props.riderPickupMode}
-                />
-              ))}
-            </ul>
-          </div>
-        )}
-        {/* ── Otra forma de asignar: desde la lista, sin el paquete en la mano.
-            Tarjeta aparte para que se lea como un segundo método, no como
-            parte del escaneo. No deja cotejado: eso lo hace quien ve la caja. ── */}
-        <div className="min-w-0 overflow-hidden rounded-2xl border border-dashed border-slate-300 bg-white xl:col-span-2">
-          <details className="group">
-          <summary className="cursor-pointer px-4 py-3 text-sm text-slate-600 hover:bg-slate-50">
-            <span className="font-medium text-slate-800">Otra forma: asignar desde la lista</span>
-          </summary>
+          {method === "lista" && (
+          <div className="border-t border-slate-100">
           <div className="border-b border-slate-200 px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <input
@@ -468,8 +444,41 @@ export function DispatchDayBoard(props: Props) {
               </li>
             )}
           </ul>
-          </details>
+          </div>
+          )}
         </div>
+
+        {/* ── Cajas de hoy: solo cuando hay cajas; plegadas en móvil, abiertas en escritorio ── */}
+        {boxes.length > 0 && (
+          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <button
+              type="button"
+              onClick={() => setBoxesOpen((v) => !v)}
+              aria-expanded={boxesOpen}
+              className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold text-slate-900 xl:cursor-default"
+            >
+              Cajas de hoy
+              <span className="text-xs font-normal tabular-nums text-slate-500">{boxes.length} · {dayCod} paq.</span>
+              <span aria-hidden className="ml-auto text-slate-400 xl:hidden">{boxesOpen ? "▾" : "▸"}</span>
+            </button>
+            <ul className={cn("divide-y divide-slate-100 border-t border-slate-100", boxesOpen ? "block" : "hidden", "xl:block")}>
+              {boxes.map((box) => (
+                <BoxRow
+                  key={box.riderId ?? box.riderName}
+                  box={box}
+                  cash={box.riderId ? (boxCash.get(box.riderId) ?? 0) : 0}
+                  riders={riders}
+                  orgId={orgId}
+                  open={openBox === (box.riderId ?? box.riderName)}
+                  onToggle={() => setOpenBox(openBox === (box.riderId ?? box.riderName) ? null : (box.riderId ?? box.riderName))}
+                  canManage={canManageDispatch}
+                  onChanged={() => router.refresh()}
+                  pickupMode={props.riderPickupMode}
+                />
+              ))}
+            </ul>
+          </div>
+        )}
 
       </div>
     </section>
