@@ -3,7 +3,7 @@ import { getCurrentUser } from "@/lib/access";
 import { getMyRider, getRouteDetail, getRoutes } from "@/lib/routes-access";
 import { RiderRouteScreen } from "@/components/rider-route";
 import { RiderReceiveBox } from "@/components/rider-receive-box";
-import { getMyGfLoads, getMyPickupCheckRequired } from "@/lib/gf-rider-loads";
+import { getMyGfLoads, getMyPickupMode } from "@/lib/gf-rider-loads";
 import { riderScreenFor } from "@/lib/grupo-gf-courier";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { getRiderSheet, loadRiderVocabulary } from "@/lib/sheets/rider-access";
@@ -66,8 +66,10 @@ export default async function RepartoPage({
   // Primero la caja, después la ruta (MOM §29.13): mientras haya una carga
   // cotejada por oficina y no recibida, el motorizado verifica sus paquetes y
   // dice cuáles no recoge. La ruta se muestra recién con la custodia cambiada.
-  const pickupRequired = await getMyPickupCheckRequired();
-  if (riderScreenFor(pickupRequired, loads.map((load) => load.state)) === "recibir_caja") {
+  // En modo «confirmar» (0177) la ruta aparece al asignar y cada parada nace
+  // «por confirmar»: el motorizado dice «Lo llevo» al sacarla del almacén.
+  const pickupMode = await getMyPickupMode();
+  if (riderScreenFor(pickupMode, loads.map((load) => load.state)) === "recibir_caja") {
     return <RiderReceiveBox riderName={rider.full_name} loads={loads} />;
   }
   return (
@@ -78,6 +80,7 @@ export default async function RepartoPage({
       stops={detail?.stops ?? []}
       vocabulary={vocabulary}
       today={today}
+      pickupMode={pickupMode}
     /></>
   );
 }

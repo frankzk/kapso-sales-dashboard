@@ -355,4 +355,6 @@
 \ir migrations/0175_provider_rider_pickup_check.sql
 \echo 'Applying 0176_gf_one_load_per_day.sql'
 \ir migrations/0176_gf_one_load_per_day.sql
+\echo 'Applying 0177_provider_rider_pickup_mode.sql'
+\ir migrations/0177_provider_rider_pickup_mode.sql
 \echo 'Done.'

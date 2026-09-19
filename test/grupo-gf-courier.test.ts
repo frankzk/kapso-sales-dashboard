@@ -208,18 +208,37 @@ describe("cashLimitVerdict (MOM §29.9)", () => {
   });
 });
 
-import { custodyOnAssign, riderScreenFor } from "@/lib/grupo-gf-courier";
+import { custodyOnAssign, isRiderPickupMode, riderScreenFor, riderStopDecision } from "@/lib/grupo-gf-courier";
 
-describe("verificación del motorizado como flag (0175, MOM §29.13)", () => {
-  it("con el flag activado, una carga cotejada y sin custodia manda a «Recibir mi caja»", () => {
-    expect(riderScreenFor(true, ["ready_for_pickup"])).toBe("recibir_caja");
-    expect(riderScreenFor(true, ["pickup_check", "in_custody"])).toBe("recibir_caja");
-    expect(riderScreenFor(true, ["in_custody"])).toBe("ruta");
-    expect(riderScreenFor(true, [])).toBe("ruta");
+describe("modo de recojo del motorizado (0177, MOM §29.13)", () => {
+  it("solo «exigir» manda a «Recibir mi caja»; en los otros modos la custodia pasa al asignar", () => {
+    expect(riderScreenFor("exigir", ["ready_for_pickup"])).toBe("recibir_caja");
+    expect(riderScreenFor("exigir", ["pickup_check", "in_custody"])).toBe("recibir_caja");
+    expect(riderScreenFor("exigir", ["in_custody"])).toBe("ruta");
+    expect(riderScreenFor("exigir", [])).toBe("ruta");
+    expect(riderScreenFor("confirmar", ["ready_for_pickup", "pickup_check"])).toBe("ruta");
+    expect(riderScreenFor("ninguno", ["ready_for_pickup"])).toBe("ruta");
+    expect(custodyOnAssign("exigir")).toBe(false);
+    expect(custodyOnAssign("confirmar")).toBe(true);
+    expect(custodyOnAssign("ninguno")).toBe(true);
+    expect(isRiderPickupMode("confirmar")).toBe(true);
+    expect(isRiderPickupMode("true")).toBe(false);
   });
-  it("con el flag desactivado nunca ve «Recibir mi caja» y la custodia pasa al asignar", () => {
-    expect(riderScreenFor(false, ["ready_for_pickup", "pickup_check"])).toBe("ruta");
-    expect(custodyOnAssign(false)).toBe(true);
-    expect(custodyOnAssign(true)).toBe(false);
+
+  it("modo × estado → qué ve y puede hacer el motorizado con cada parada", () => {
+    const base = { status: "pendiente", pickupCheckedAt: null, hasManifestItem: true, routeClosed: false };
+    // confirmar: nace «por confirmar», puede decir lo llevo / no lo llevo, y entregar igual (con rastro).
+    expect(riderStopDecision("confirmar", base)).toEqual({ badge: "por_confirmar", canConfirm: true, canDecline: true, canReport: true, reportUnconfirmed: true });
+    // confirmado: solo entregar.
+    expect(riderStopDecision("confirmar", { ...base, pickupCheckedAt: "2026-09-19T10:00:00Z" })).toEqual({ badge: "lo_llevo", canConfirm: false, canDecline: false, canReport: true, reportUnconfirmed: false });
+    // ya reportada: nada más que hacer; la insignia se conserva.
+    expect(riderStopDecision("confirmar", { ...base, status: "entregado" })).toMatchObject({ badge: "por_confirmar", canConfirm: false, canDecline: false, canReport: false });
+    // ruta cerrada: solo lectura.
+    expect(riderStopDecision("confirmar", { ...base, routeClosed: true })).toMatchObject({ canConfirm: false, canDecline: false, canReport: false });
+    // parada añadida a mano (sin caja): el modo no aplica.
+    expect(riderStopDecision("confirmar", { ...base, hasManifestItem: false })).toEqual({ badge: null, canConfirm: false, canDecline: false, canReport: true, reportUnconfirmed: false });
+    // exigir y ninguno: la parada se entrega y no se pide nada.
+    expect(riderStopDecision("exigir", base)).toEqual({ badge: null, canConfirm: false, canDecline: false, canReport: true, reportUnconfirmed: false });
+    expect(riderStopDecision("ninguno", base)).toEqual({ badge: null, canConfirm: false, canDecline: false, canReport: true, reportUnconfirmed: false });
   });
 });

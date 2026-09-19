@@ -10,7 +10,7 @@ vi.mock("@/lib/permissions-access", () => ({ getMasterPermissions: async () => (
 vi.mock("@/lib/route-report-access", () => ({ routeReportAccess: mock.access }));
 vi.mock("@/lib/db", () => ({
   createServerSupabase: async () => ({ from: (table: string) => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: table === "delivery_stops" ? { id: "stop", route_id: "route", photo_path: null, voucher_path: null } : { id: "route", status: "en_curso" } }) }) }) }) }),
-  createAdminSupabase: () => ({ from: () => ({ update: mock.update, insert: mock.event }) }),
+  createAdminSupabase: () => ({ from: () => ({ update: mock.update, insert: mock.event, select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }) }) }),
 }));
 import { reportStop, type ReportStopInput } from "@/app/reparto/actions";
 import { ReportForm } from "@/components/rider-route";

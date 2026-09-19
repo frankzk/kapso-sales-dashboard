@@ -65,10 +65,17 @@ paquete); el motorizado deja de ver la ruta hasta que aceptó su caja.
   (`removed_at` con motivo «No recogido por X: …») para que la custodia pase con
   los aceptados y el paquete quede libre para otra ruta; la solicitud
   logística vuelve a `accepted` con observación. RPC `gf_rider_decline`.
-- `logistics_providers.rider_pickup_check_required` (0175): la verificación
-  del motorizado es un flag. En `false` (producción), asignar entrega la
-  custodia (`gf_assign_custody`) y el cotejo/recepción son opcionales.
-- Una carga por motorizado y día con el flag apagado (0176):
+- `logistics_providers.rider_pickup_mode` (0177, reemplaza el booleano de
+  0175): `exigir` (verifica su caja antes de la ruta), `confirmar` (producción:
+  asignar entrega la custodia y crea paradas «por confirmar»; el motorizado
+  dice «Lo llevo» con `gf_rider_confirm_pickup` o «No lo llevo» con
+  `gf_rider_decline`, que en custodia borra la parada pendiente y devuelve el
+  paquete a «por asignar»; el supervisor quita o mueve lo no confirmado con
+  `gf_supervisor_withdraw`; al entregar sin confirmar queda
+  `delivery_stops.pickup_confirmed = false` y el evento
+  `delivered_unconfirmed_pickup`) y `ninguno` (basta con asignar). Decisión
+  pura modo × parada en `riderStopDecision` (`lib/grupo-gf-courier.ts`).
+- Una carga por motorizado y día en `confirmar` y `ninguno` (0176):
   `gf_dispatch_load_open` + `gf_add_item_in_custody`; el efectivo previsto y el
   límite se calculan sobre la ruta completa del día.
 - `dispatch_route_reassigned` (order_events): mover un paquete de la caja de

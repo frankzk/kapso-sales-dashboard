@@ -21,8 +21,9 @@ import { manualRouteGuideCode, pickFillableRouteOutput } from "@/lib/shipment-ou
 import { courierKey, normalizeDispatchScan } from "@/lib/dispatch";
 import { lookupDispatchShipment, scanManifestItem } from "@/app/dashboard/pedidos/despacho/actions";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
-import { custodyOnAssign } from "@/lib/grupo-gf-courier";
+import { custodyOnAssign, isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
+import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
 
 const COURIER_PATH = "/dashboard/courier";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -41,8 +42,8 @@ export interface CourierProviderRow {
   same_day_cutoff: string;
   cash_warning_amount: number;
   cash_limit_amount: number;
-  /** 0175: el motorizado verifica su caja (true) o la custodia pasa al asignar (false). */
-  rider_pickup_check_required: boolean;
+  /** 0177: exigir (verifica su caja antes de la ruta) · confirmar («Lo llevo» por paquete) · ninguno. */
+  rider_pickup_mode: RiderPickupMode;
 }
 
 export interface CourierAgreementRow {
@@ -576,7 +577,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
   const [{ data: providerData }, districtsResult] = await Promise.all([
     sb
       .from("logistics_providers")
-      .select("id,org_id,code,name,status,same_day_cutoff,cash_warning_amount,cash_limit_amount,rider_pickup_check_required")
+      .select("id,org_id,code,name,status,same_day_cutoff,cash_warning_amount,cash_limit_amount,rider_pickup_mode")
       .eq("org_id", orgId)
       .eq("code", "grupo-gf-courier")
       .maybeSingle(),
@@ -1040,7 +1041,7 @@ export async function assignGroupGfCourierRoute(
   const [{ data: provider }, { data: rider }] = await Promise.all([
     admin
       .from("logistics_providers")
-      .select("id,cash_warning_amount,cash_limit_amount,rider_pickup_check_required")
+      .select("id,cash_warning_amount,cash_limit_amount,rider_pickup_mode")
       .eq("org_id", orgId)
       .eq("code", "grupo-gf-courier")
       .eq("status", "active")
@@ -1170,7 +1171,8 @@ export async function assignGroupGfCourierRoute(
     // Una carga por motorizado y día cuando la verificación está apagada
     // (0176): gf_dispatch_load_open devuelve la del día aunque ya esté en
     // custodia; con el flag encendido es gf_dispatch_load, sin cambios.
-    const custodyAtAssign = custodyOnAssign(Boolean((provider as { rider_pickup_check_required?: boolean | null }).rider_pickup_check_required ?? true));
+    const providerMode = (provider as { rider_pickup_mode?: string | null }).rider_pickup_mode;
+    const custodyAtAssign = custodyOnAssign(isRiderPickupMode(providerMode) ? providerMode : "exigir");
     const { data: manifestId, error: loadError } = await admin.rpc("gf_dispatch_load_open", {
       p_org_id: orgId, p_rider_id: rider.id, p_day: routeDate, p_actor: auth.userId,
     });
@@ -1695,7 +1697,11 @@ export async function moveManifestItem(
   ]);
   if (!manifest || manifest.org_id !== orgId) return { error: "Caja no encontrada." };
   if (manifest.courier !== "propio") return { error: "Solo se mueven paquetes entre motorizados de Grupo GF." };
-  if (["in_custody", "cancelled"].includes(String(manifest.state))) return { error: "Esa caja ya está cerrada." };
+  if (manifest.state === "cancelled") return { error: "Esa caja ya está cerrada." };
+  // Caja ya en custodia: solo en modo «confirmar» (0177) y solo lo que el
+  // motorizado no confirmó; el RPC retira, borra la parada y libera el paquete.
+  const sourceInCustody = manifest.state === "in_custody";
+  if (sourceInCustody && (await riderPickupMode(admin, orgId)) !== "confirmar") return { error: "Esa caja ya está en poder del motorizado." };
   if (!rider || !isGroupGfRiderCourier(rider.courier)) return { error: "Elige un motorizado activo de Grupo GF." };
   if (manifest.rider_id === rider.id) return { error: "El paquete ya está en la caja de ese motorizado." };
   if (!item) return { error: "El paquete ya no está en esa caja." };
@@ -1705,7 +1711,7 @@ export async function moveManifestItem(
     .eq("id", shipmentId)
     .maybeSingle();
   if (!shipment) return { error: "Paquete no encontrado." };
-  if (shipment.custody_state !== "empresa") return { error: "El paquete ya no está en custodia de Grupo GF." };
+  if (shipment.custody_state !== (sourceInCustody ? "courier" : "empresa")) return { error: "El paquete ya no está en custodia de Grupo GF." };
 
   // 1) abrir (o reutilizar) la carga del destino ANTES de retirar: si el
   // destino no admite paquetes, el origen no se toca.
@@ -1719,12 +1725,15 @@ export async function moveManifestItem(
   const targetInCustody = targetRow?.state === "in_custody";
   const now = new Date().toISOString();
   const fromName = manifest.driver_name ?? "otro motorizado";
-  // 2) retirar del origen con el rastro
-  const { error: removeError } = await admin
-    .from("dispatch_manifest_items")
-    .update({ removed_at: now, removed_by: auth.userId, removal_reason: `Movido a ${rider.full_name}: ${cleanReason}` })
-    .eq("id", item.id)
-    .is("removed_at", null);
+  // 2) retirar del origen con el rastro (en custodia, por el RPC que además
+  // borra la parada pendiente y devuelve la custodia a la empresa)
+  const { error: removeError } = sourceInCustody
+    ? await admin.rpc("gf_supervisor_withdraw", { p_manifest_id: manifestId, p_shipment_id: shipmentId, p_reason: cleanReason, p_actor: auth.userId, p_moved_to_rider: rider.id })
+    : await admin
+        .from("dispatch_manifest_items")
+        .update({ removed_at: now, removed_by: auth.userId, removal_reason: `Movido a ${rider.full_name}: ${cleanReason}` })
+        .eq("id", item.id)
+        .is("removed_at", null);
   if (removeError) return { error: removeError.message };
   // 3) meter en el destino (si ya salió y la verificación está apagada, entra en custodia con su parada)
   const { error: insertError } = targetInCustody
@@ -1736,11 +1745,15 @@ export async function moveManifestItem(
         added_by: auth.userId,
       });
   if (insertError) {
+    if (sourceInCustody) {
+      // El retiro ya quedó hecho por el RPC: el paquete está en «por asignar».
+      return { error: `${insertError.code === "23505" ? "El paquete ya está en otra caja activa." : insertError.message} Quedó fuera de la caja de ${fromName}, en «por asignar».` };
+    }
     // Deshacer el retiro para no dejar el paquete en el limbo.
     await admin.from("dispatch_manifest_items").update({ removed_at: null, removed_by: null, removal_reason: null }).eq("id", item.id);
     return { error: insertError.code === "23505" ? "El paquete ya está en otra caja activa." : insertError.message };
   }
-  await recalculateManifestState(admin, manifestId, auth.userId);
+  if (!sourceInCustody) await recalculateManifestState(admin, manifestId, auth.userId);
   await Promise.all([
     admin.from("dispatch_events").insert([
       { org_id: orgId, manifest_id: manifestId, shipment_id: shipmentId, actor: auth.userId, kind: "package_removed", payload: { reason: cleanReason, moved_to: rider.id, moved_to_manifest: targetManifestId } },

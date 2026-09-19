@@ -92,10 +92,15 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
 
   const now = new Date().toISOString();
   const delivered = input.status === "entregado";
+  // Modo «confirmar» (0177): al entregar se congela si el motorizado había
+  // dicho «Lo llevo». Null cuando la parada no salió de una caja de despacho.
+  const pickup = delivered ? await pickupConfirmationFor(admin, stop.id).catch(() => null) : null;
+  const unconfirmed = delivered && pickup?.confirmed === false;
   const { error } = await admin
     .from("delivery_stops")
     .update({
       status: input.status,
+      pickup_confirmed: delivered ? (pickup?.confirmed ?? null) : null,
       payment_method: delivered ? (method as PaymentMethod | null) : null,
       collected_amount: delivered ? collected : null,
       outcome_reason: input.status === "no_entregado" ? reason : null,
@@ -121,12 +126,64 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
       payment_method: delivered ? method : null,
       collected_amount: delivered ? collected : null,
       outcome_reason: input.status === "no_entregado" ? reason : null,
-      note: input.note,
+      note: unconfirmed ? [input.note, UNCONFIRMED_PICKUP_NOTE].filter(Boolean).join(" · ") : input.note,
       actor: input.actor,
     })
     .then(
       () => undefined,
       () => undefined,
     );
+  if (unconfirmed && pickup) {
+    // Rastro en el pedido (pestaña Actividad): entregado sin haber confirmado
+    // el recojo. No mueve el Master; es información.
+    await admin
+      .from("order_events")
+      .insert({
+        store_id: pickup.storeId,
+        order_id: stop.order_id,
+        kind: "delivered_unconfirmed_pickup",
+        actor: input.actor,
+        source: "reparto",
+        courier: "propio",
+        shipment_id: pickup.shipmentId,
+        note: UNCONFIRMED_PICKUP_NOTE,
+        payload: { stop_id: stop.id, route_id: stop.route_id, manifest_id: pickup.manifestId },
+      })
+      .then(
+        () => undefined,
+        () => undefined,
+      );
+  }
   return { ok: true, orderId: stop.order_id, routeId: stop.route_id };
+}
+
+export const UNCONFIRMED_PICKUP_NOTE = "Entregado sin confirmar recojo";
+
+/**
+ * Si el ítem de la caja que originó la parada tiene «Lo llevo»
+ * (`pickup_checked_at`). Null cuando la parada no viene de una caja o el ítem
+ * ya no está activo: entonces no hay nada que confirmar.
+ */
+async function pickupConfirmationFor(admin: SupabaseClient, stopId: string): Promise<{ confirmed: boolean; storeId: string; shipmentId: string; manifestId: string } | null> {
+  const { data: stop } = await admin
+    .from("delivery_stops")
+    .select("store_id,shipment_id,dispatch_manifest_id")
+    .eq("id", stopId)
+    .maybeSingle();
+  const row = stop as { store_id: string | null; shipment_id: string | null; dispatch_manifest_id: string | null } | null;
+  if (!row?.shipment_id || !row.dispatch_manifest_id || !row.store_id) return null;
+  const { data: item } = await admin
+    .from("dispatch_manifest_items")
+    .select("pickup_checked_at")
+    .eq("manifest_id", row.dispatch_manifest_id)
+    .eq("shipment_id", row.shipment_id)
+    .is("removed_at", null)
+    .maybeSingle();
+  if (!item) return null;
+  return {
+    confirmed: Boolean((item as { pickup_checked_at: string | null }).pickup_checked_at),
+    storeId: row.store_id,
+    shipmentId: row.shipment_id,
+    manifestId: row.dispatch_manifest_id,
+  };
 }

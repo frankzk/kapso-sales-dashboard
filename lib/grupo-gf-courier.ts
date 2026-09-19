@@ -269,23 +269,82 @@ export function cashLimitVerdict(input: {
 }
 
 // ---------------------------------------------------------------------------
-// Verificación de la caja por el motorizado: un flag en la base (0175, §29.13)
+// Modo de recojo del motorizado: tres valores en la base (0177, §29.13)
 // ---------------------------------------------------------------------------
+
+/**
+ * `logistics_providers.rider_pickup_mode`:
+ *   exigir    → oficina coteja, el motorizado recibe su caja al 100 % y recién
+ *               entonces ve la ruta (0159/0174).
+ *   confirmar → asignar entrega la custodia y crea las paradas; el motorizado
+ *               dice «Lo llevo» por paquete al sacarlo del almacén, o «No lo
+ *               llevo» con motivo. Nada bloquea la ruta.
+ *   ninguno   → basta con asignar; no se pide nada más (0175/0176).
+ */
+export type RiderPickupMode = "exigir" | "confirmar" | "ninguno";
+export const RIDER_PICKUP_MODES: readonly RiderPickupMode[] = ["exigir", "confirmar", "ninguno"];
+
+export function isRiderPickupMode(value: unknown): value is RiderPickupMode {
+  return typeof value === "string" && (RIDER_PICKUP_MODES as readonly string[]).includes(value);
+}
+
+export const RIDER_PICKUP_MODE_LABEL: Record<RiderPickupMode, string> = {
+  exigir: "verificación del motorizado antes de la ruta",
+  confirmar: "el motorizado confirma cada paquete al llevarlo",
+  ninguno: "sin verificación del motorizado",
+};
 
 export type RiderScreen = "recibir_caja" | "ruta";
 
 /**
- * Qué ve el motorizado al abrir /reparto. Con la verificación activada, una
- * carga cotejada por oficina y sin custodia lo manda a «Recibir mi caja»; con
- * la verificación desactivada nunca ve esa pantalla: la custodia ya cambió al
- * asignar y lo que tiene es su ruta.
+ * Qué ve el motorizado al abrir /reparto. Solo en `exigir` una carga cotejada
+ * por oficina y sin custodia lo manda a «Recibir mi caja»; en los otros modos
+ * la custodia ya cambió al asignar y lo que tiene es su ruta.
  */
-export function riderScreenFor(pickupCheckRequired: boolean, loadStates: readonly string[]): RiderScreen {
-  if (!pickupCheckRequired) return "ruta";
+export function riderScreenFor(mode: RiderPickupMode, loadStates: readonly string[]): RiderScreen {
+  if (mode !== "exigir") return "ruta";
   return loadStates.some((state) => state === "ready_for_pickup" || state === "pickup_check") ? "recibir_caja" : "ruta";
 }
 
-/** Si al asignar hay que entregar la custodia en el acto (flag en false). */
-export function custodyOnAssign(pickupCheckRequired: boolean): boolean {
-  return !pickupCheckRequired;
+/** Si al asignar hay que entregar la custodia en el acto (todo menos `exigir`). */
+export function custodyOnAssign(mode: RiderPickupMode): boolean {
+  return mode !== "exigir";
+}
+
+export interface RiderStopDecision {
+  /** Etiqueta bajo el estado de la parada; null si el modo no la pide. */
+  badge: "por_confirmar" | "lo_llevo" | null;
+  /** «Lo llevo» disponible (abre el gesto único `motorizado_recepcion`). */
+  canConfirm: boolean;
+  /** «No lo llevo» con motivo disponible. */
+  canDecline: boolean;
+  /** Se puede reportar la entrega (nunca se bloquea por confirmar). */
+  canReport: boolean;
+  /** Al entregar sin confirmar, el reporte deja «entregado sin confirmar recojo». */
+  reportUnconfirmed: boolean;
+}
+
+/**
+ * Modo × estado de la parada → qué ve y puede hacer el motorizado. Puro,
+ * probado en test/grupo-gf-courier.test.ts.
+ */
+export function riderStopDecision(mode: RiderPickupMode, stop: {
+  status: string;
+  /** null cuando la parada no viene de una caja de despacho. */
+  pickupCheckedAt: string | null | undefined;
+  hasManifestItem: boolean;
+  routeClosed: boolean;
+}): RiderStopDecision {
+  const pending = stop.status === "pendiente" && !stop.routeClosed;
+  const confirmed = Boolean(stop.pickupCheckedAt);
+  if (mode !== "confirmar" || !stop.hasManifestItem) {
+    return { badge: null, canConfirm: false, canDecline: false, canReport: pending, reportUnconfirmed: false };
+  }
+  return {
+    badge: confirmed ? "lo_llevo" : "por_confirmar",
+    canConfirm: pending && !confirmed,
+    canDecline: pending && !confirmed,
+    canReport: pending,
+    reportUnconfirmed: pending && !confirmed,
+  };
 }

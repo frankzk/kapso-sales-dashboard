@@ -17,6 +17,7 @@ import { activeDispatchItems } from "@/lib/dispatch";
 import { boxNextStep, dayBoxes, declinedPackages, splitAssignment, type DayManifest, type RiderBox } from "@/lib/dispatch-day";
 import { addToTray, removeFromTray, summarizeScans, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
+import { RIDER_PICKUP_MODE_LABEL, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import {
   assignGroupGfCourierRoute,
   moveManifestItem,
@@ -38,8 +39,8 @@ interface Props {
   riders: CourierRiderOption[];
   manifests: DispatchManifest[];
   canManageDispatch: boolean;
-  /** 0175: si el motorizado verifica su caja o la custodia pasa al asignar. */
-  riderPickupCheckRequired: boolean;
+  /** 0177: exigir (verifica su caja antes de la ruta) · confirmar («Lo llevo» por paquete) · ninguno. */
+  riderPickupMode: RiderPickupMode;
   pending: boolean;
   run: (action: () => Promise<CourierActionResult>) => void;
 }
@@ -187,9 +188,13 @@ export function DispatchDayBoard(props: Props) {
     });
   }
 
-  const scanning = riderId ? (props.riderPickupCheckRequired
-    ? "Con el paquete en la mano: cada QR lo toma, lo pone en la caja del motorizado y lo deja cotejado. El motorizado recibe su caja desde el teléfono y solo entonces ve la ruta."
-    : "Con el paquete en la mano: cada QR lo toma, lo pone en la caja del motorizado y lo deja cotejado. La custodia pasa al asignar: el motorizado ve la ruta al instante.")
+  const modeTail = props.riderPickupMode === "exigir"
+    ? "El motorizado recibe su caja desde el teléfono y solo entonces ve la ruta."
+    : props.riderPickupMode === "confirmar"
+      ? "El motorizado ve la ruta al instante y confirma «Lo llevo» por cada paquete al sacarlo del almacén; lo que no confirme vuelve a «por asignar» con «No lo llevo» o al quitarlo aquí."
+      : "La custodia pasa al asignar: el motorizado ve la ruta al instante.";
+  const scanning = riderId
+    ? `Con el paquete en la mano: cada QR lo toma, lo pone en la caja del motorizado y lo deja cotejado. ${modeTail}`
     : "Sin motorizado, los QR se guardan en una bandeja y se asignan todos al elegirlo.";
 
   return (
@@ -199,19 +204,15 @@ export function DispatchDayBoard(props: Props) {
         <h2 id="dispatch-day-title" className="text-base font-semibold text-slate-950">Despacho del día · {formatDay(day)}</h2>
         <Hint
           label="Cómo funciona el despacho"
-          text={
-            props.riderPickupCheckRequired
-              ? "Elige motorizado y escanea: cada QR toma el pedido, lo pone en su caja y lo deja cotejado. El motorizado recibe su caja desde el teléfono y solo entonces ve la ruta."
-              : "Elige motorizado y escanea: cada QR toma el pedido, lo pone en su caja y lo deja cotejado. El motorizado ve la ruta al instante."
-          }
+          text={`Elige motorizado y escanea: cada QR toma el pedido, lo pone en su caja y lo deja cotejado. ${modeTail}`}
         />
         <dl className="ml-auto flex gap-3 text-xs text-slate-600">
           <div title="Pedidos de Lima elegibles que todavía no están en ninguna caja"><dt className="sr-only">Por asignar</dt><dd><b className="text-slate-900 tabular-nums">{queue.length}</b> por asignar</dd></div>
           <div title="Motorizados con caja abierta hoy"><dt className="sr-only">Cajas</dt><dd><b className="text-slate-900 tabular-nums">{boxes.length}</b> cajas</dd></div>
           <div title="Paquetes activos en las cajas de hoy"><dt className="sr-only">Paquetes</dt><dd><b className="text-slate-900 tabular-nums">{dayCod}</b> paquetes</dd></div>
         </dl>
-        {props.riderPickupCheckRequired && (
-          <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-800" title="El motorizado escanea su caja antes de ver la ruta">verificación del motorizado activada</span>
+        {props.riderPickupMode !== "ninguno" && (
+          <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-800" title={modeTail}>{RIDER_PICKUP_MODE_LABEL[props.riderPickupMode]}</span>
         )}
       </div>
 
@@ -420,6 +421,7 @@ export function DispatchDayBoard(props: Props) {
                   onToggle={() => setOpenBox(openBox === (box.riderId ?? box.riderName) ? null : (box.riderId ?? box.riderName))}
                   canManage={canManageDispatch}
                   onChanged={() => router.refresh()}
+                  pickupMode={props.riderPickupMode}
                 />
               ))}
             </ul>
@@ -430,7 +432,7 @@ export function DispatchDayBoard(props: Props) {
   );
 }
 
-function BoxRow({ box, riders, orgId, open, onToggle, canManage, onChanged }: {
+function BoxRow({ box, riders, orgId, open, onToggle, canManage, onChanged, pickupMode }: {
   box: RiderBox;
   riders: CourierRiderOption[];
   orgId: string;
@@ -438,6 +440,7 @@ function BoxRow({ box, riders, orgId, open, onToggle, canManage, onChanged }: {
   onToggle: () => void;
   canManage: boolean;
   onChanged: () => void;
+  pickupMode: RiderPickupMode;
 }) {
   const [pending, start] = useTransition();
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -460,19 +463,59 @@ function BoxRow({ box, riders, orgId, open, onToggle, canManage, onChanged }: {
     start(async () => say(await moveManifestItem(orgId, manifestId, shipmentId, targetRiderId, reason)));
   };
   const pct = box.assigned ? Math.round((box.officeChecked / box.assigned) * 100) : 0;
+  // Modo «confirmar» (0177): lo asignado que el motorizado aún no confirmó con
+  // «Lo llevo». Se puede quitar o mover desde aquí; el RPC borra su parada.
+  const confirmMode = pickupMode === "confirmar";
+  const unconfirmed = confirmMode
+    ? box.loads.filter((m) => m.state === "in_custody").flatMap((m) => activeDispatchItems(m.items).filter((i) => !i.pickup_checked_at).map((i) => ({ manifestId: m.id, item: i })))
+    : [];
   return (
     <li>
       <button type="button" onClick={onToggle} aria-expanded={open} title={`${boxNextStep(box)} · ${box.assigned} asignados · ${box.officeChecked} cotejados · ${box.pickupChecked} recibidos${box.declined ? ` · ${box.declined} no recogidos` : ""}${box.loads.length > 1 ? ` · ${box.loads.length} cargas` : ""}`} className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-slate-50">
         <span className="font-semibold text-slate-950">{box.riderName}</span>
         <progress value={pct} max={100} aria-label={`Cotejo de ${box.riderName}: ${pct} %`} className="h-1.5 min-w-0 flex-1 accent-brand-600" />
         <span className={cn("text-xs tabular-nums", load.state === "in_custody" ? "text-emerald-700" : box.officeChecked < box.assigned ? "text-amber-700" : "text-sky-700")}>
-          {box.officeChecked}/{box.assigned}{box.declined ? <span className="text-amber-700"> · {box.declined} no rec.</span> : null}
+          {box.officeChecked}/{box.assigned}
+          {confirmMode && <span className={cn(box.pickupChecked < box.assigned ? "text-amber-700" : "text-emerald-700")} title="Confirmados con «Lo llevo» / asignados"> · {box.pickupChecked}/{box.assigned} conf.</span>}
+          {box.declined ? <span className="text-amber-700"> · {box.declined} no rec.</span> : null}
         </span>
         <span aria-hidden className="text-slate-400">{open ? "▾" : "▸"}</span>
       </button>
       {open && (
         <div className="space-y-3 border-t border-slate-100 bg-slate-50/60 px-4 py-3">
           {message && <p role="status" className={cn("rounded-lg px-3 py-2 text-sm", message.ok ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700")}>{message.text}</p>}
+          {confirmMode && unconfirmed.length > 0 && (
+            <details className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <summary className="cursor-pointer font-semibold">Sin confirmar por {box.riderName} · {unconfirmed.length}</summary>
+              <p className="mt-1 text-xs text-amber-800/80">Asignados que todavía no escaneó al sacarlos del almacén. Si no se los llevó, quítalos o muévelos: vuelven a «por asignar».</p>
+              <ul className="mt-1 divide-y divide-amber-100">
+                {unconfirmed.map(({ manifestId, item }) => {
+                  const s = item.shipment;
+                  const code = s?.output_code ?? s?.guide_code ?? s?.order_name ?? "";
+                  return (
+                    <li key={item.id} className="flex items-center gap-2 py-1.5">
+                      <span className="min-w-0 flex-1 truncate"><span className="font-medium">{s?.order_name ?? code}</span> <span className="text-xs text-amber-800/80">{s?.customer_name} · {s?.district}</span></span>
+                      {canManage && (
+                        <>
+                          <select
+                            aria-label={`Mover ${s?.order_name ?? code} a otro motorizado`}
+                            defaultValue=""
+                            disabled={pending}
+                            onChange={(e) => { const v = e.target.value; e.target.value = ""; if (v) move(manifestId, item.shipment_id, v); }}
+                            className="min-h-9 rounded-lg border border-amber-300 bg-white px-1 text-xs"
+                          >
+                            <option value="">Mover a…</option>
+                            {riders.filter((r) => r.id !== box.riderId).map((r) => <option key={r.id} value={r.id}>{r.fullName}</option>)}
+                          </select>
+                          <button type="button" disabled={pending} onClick={() => remove(manifestId, item.shipment_id)} className="min-h-9 rounded-lg px-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50">Quitar</button>
+                        </>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
+          )}
           {box.loads.map((m) => {
             const active = activeDispatchItems(m.items);
             const removed = m.items.filter((i) => !!i.removed_at);
@@ -502,7 +545,8 @@ function BoxRow({ box, riders, orgId, open, onToggle, canManage, onChanged }: {
                         <span aria-label={item.office_checked_at ? "Cotejado" : "Pendiente"} className={cn("grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-bold", item.office_checked_at ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-600")}>{item.office_checked_at ? "✓" : "·"}</span>
                         <div className="min-w-0 flex-1">
                           <p className="truncate font-medium text-slate-900">{s?.order_name ?? code} <span className="text-xs font-normal text-slate-500">{s?.customer_name} · {s?.district}</span></p>
-                          {item.pickup_checked_at && <p className="text-[11px] text-emerald-700">recibido por el motorizado</p>}
+                          {item.pickup_checked_at && <p className="text-[11px] text-emerald-700">{confirmMode ? "lo lleva" : "recibido por el motorizado"}</p>}
+                          {confirmMode && m.state === "in_custody" && !item.pickup_checked_at && <p className="text-[11px] text-amber-700">por confirmar</p>}
                           {s?.order_name && <Link href={`/dashboard/pedidos?q=${encodeURIComponent(s.order_name)}&abrir=${encodeURIComponent(s.order_id ?? "")}&seccion=historial`} className="text-[11px] text-brand-700 underline">Ver actividad</Link>}
                         </div>
                         {checkable && !item.office_checked_at && code && (

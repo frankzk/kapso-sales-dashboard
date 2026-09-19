@@ -23,6 +23,8 @@ import {
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import { addManualStop, addSheetOnlyPoint, reportStop, searchOrdersForRider } from "@/app/reparto/actions";
 import { ScanAction } from "@/components/scan-action";
+import { confirmMyGfPickup, declineMyGfPackage, DECLINE_REASONS } from "@/app/reparto/receive";
+import { riderStopDecision, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import type { RiderOrderCandidate, RiderVocabulary } from "@/lib/sheets/rider-access";
 import { resolveWrittenForStop } from "@/lib/sheets/stop-bridge";
 import { montoDiffers } from "@/lib/sheets/rider-cuaderno";
@@ -54,6 +56,7 @@ export function RiderRouteScreen({
   routeLabels,
   vocabulary,
   today,
+  pickupMode,
 }: {
   riderName: string;
   routes: RouteRow[];
@@ -65,11 +68,20 @@ export function RiderRouteScreen({
   vocabulary?: RiderVocabulary | null;
   /** Hoy en Lima, para los puntos añadidos a mano. */
   today?: string;
+  /** Modo de recojo (0177): en «confirmar» cada parada nace «por confirmar». */
+  pickupMode?: RiderPickupMode;
 }) {
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(null);
+  const [confirmAll, setConfirmAll] = useState(false);
+  const [headerMessage, setHeaderMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const totals = useMemo(() => routeTotals(stops), [stops]);
   const closed = route?.status === "cerrada";
+  const mode: RiderPickupMode = pickupMode ?? "exigir";
+  const unconfirmed = useMemo(
+    () => stops.filter((s) => riderStopDecision(mode, { status: s.status, pickupCheckedAt: s.pickup_checked_at, hasManifestItem: Boolean(s.manifest_item_id), routeClosed: closed }).canConfirm).length,
+    [stops, mode, closed],
+  );
 
   if (!route) {
     return (
@@ -110,11 +122,36 @@ export function RiderRouteScreen({
           )}
         </div>
         {coordinator && <p className="mt-2 text-sm text-slate-600">Reportas como <strong>{coordinator}</strong> por el motorizado. Tu usuario quedará registrado. <a className="underline" href="/dashboard/courier/reparto">Volver a Rutas</a></p>}
-        <div className="mt-2 flex gap-3 text-xs">
+        <div className="mt-2 flex flex-wrap gap-3 text-xs">
           <Pill label="Por entregar" value={totals.pendientes} tone="pend" />
           <Pill label="Entregados" value={totals.entregados} tone="ok" />
           <Pill label="No entregados" value={totals.noEntregados} tone="bad" />
+          {mode === "confirmar" && unconfirmed > 0 && <Pill label="por confirmar" value={unconfirmed} tone="warn" />}
         </div>
+        {mode === "confirmar" && unconfirmed > 0 && !coordinator && (
+          <div className="mt-2">
+            <button
+              type="button"
+              onClick={() => setConfirmAll((v) => !v)}
+              aria-expanded={confirmAll}
+              className="min-h-10 w-full rounded-lg border border-brand-300 bg-brand-50 px-3 text-sm font-semibold text-brand-800"
+            >
+              {confirmAll ? "Cerrar el escáner" : `Confirmar todos · escanea ${unconfirmed} ${unconfirmed === 1 ? "paquete" : "paquetes"}`}
+            </button>
+            {confirmAll && (
+              <ScanAction
+                context="motorizado_recepcion"
+                compact
+                label="Escanear «Lo llevo»"
+                onResult={(r) => {
+                  setHeaderMessage(r.error ? { ok: false, text: r.error } : { ok: true, text: r.notice ?? "Lo llevas." });
+                  if (!r.error) router.refresh();
+                }}
+              />
+            )}
+            {headerMessage && <p role="status" className={cn("mt-2 rounded-lg px-3 py-2 text-sm", headerMessage.ok ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700")}>{headerMessage.text}</p>}
+          </div>
+        )}
         {totals.efectivo > 0 && (
           <p className="mt-2 text-xs text-slate-500">
             {coordinator ? "Efectivo reportado por la ruta:" : "Efectivo en tu mano:"}{" "}
@@ -139,6 +176,7 @@ export function RiderRouteScreen({
               readOnly={closed}
               delegated={Boolean(coordinator)}
               vocabulary={vocabulary ?? null}
+              pickupMode={mode}
               onToggle={() => setOpenId(openId === stop.id ? null : stop.id)}
               onDone={() => {
                 setOpenId(null);
@@ -170,7 +208,7 @@ export function RiderRouteScreen({
   );
 }
 
-function Pill({ label, value, tone }: { label: string; value: number; tone: "pend" | "ok" | "bad" }) {
+function Pill({ label, value, tone }: { label: string; value: number; tone: "pend" | "ok" | "bad" | "warn" }) {
   return (
     <span
       className={cn(
@@ -178,6 +216,7 @@ function Pill({ label, value, tone }: { label: string; value: number; tone: "pen
         tone === "ok" && "bg-emerald-50 text-emerald-700",
         tone === "bad" && "bg-red-50 text-red-700",
         tone === "pend" && "bg-slate-100 text-slate-600",
+        tone === "warn" && "bg-amber-50 text-amber-800",
       )}
     >
       {value} {label}
@@ -191,6 +230,7 @@ function StopCard({
   readOnly,
   delegated = false,
   vocabulary = null,
+  pickupMode = "exigir",
   onToggle,
   onDone,
 }: {
@@ -199,11 +239,20 @@ function StopCard({
   readOnly: boolean;
   delegated?: boolean;
   vocabulary?: RiderVocabulary | null;
+  pickupMode?: RiderPickupMode;
   onToggle: () => void;
   onDone: () => void;
 }) {
   const o = stop.order;
   const done = stop.status !== "pendiente";
+  // «Lo llevo» / «No lo llevo» (0177): solo en modo confirmar, sobre paradas
+  // pendientes que salieron de una caja y que el motorizado aún no confirmó.
+  const decision = riderStopDecision(pickupMode, {
+    status: stop.status,
+    pickupCheckedAt: stop.pickup_checked_at,
+    hasManifestItem: Boolean(stop.manifest_item_id),
+    routeClosed: readOnly,
+  });
 
   return (
     <div
@@ -242,9 +291,20 @@ function StopCard({
                     ? "No entregado"
                     : "Por entregar"}
             </p>
+            {decision.badge && (
+              <p className={cn("text-[11px] font-medium", decision.badge === "lo_llevo" ? "text-emerald-700" : "text-amber-700")}>
+                {decision.badge === "lo_llevo" ? "✓ Lo llevo" : "Por confirmar"}
+              </p>
+            )}
+            {stop.status === "entregado" && stop.pickup_confirmed === false && (
+              <p className="text-[11px] text-amber-700">sin confirmar recojo</p>
+            )}
           </div>
         </div>
       </button>
+      {!delegated && (decision.canConfirm || decision.canDecline) && (
+        <PickupConfirmBar stop={stop} onDone={onDone} />
+      )}
 
       {open && (
         <div className="space-y-3 border-t border-slate-100 px-4 py-3">
@@ -280,6 +340,77 @@ function StopCard({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * «Lo llevo» abre el gesto único (`motorizado_recepcion`, sin caja: confirma
+ * el ítem de esta parada); «No lo llevo» pide un motivo corto y devuelve el
+ * paquete a «por asignar». Una parada sin confirmar se entrega igual.
+ */
+function PickupConfirmBar({ stop, onDone }: { stop: StopWithOrder; onDone: () => void }) {
+  const [pending, start] = useTransition();
+  const [panel, setPanel] = useState<"none" | "confirm" | "decline">("none");
+  const [reason, setReason] = useState<string>(DECLINE_REASONS[0].code);
+  const [note, setNote] = useState("");
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const say = (r: { error?: string; notice?: string }) => {
+    setMessage(r.error ? { ok: false, text: r.error } : { ok: true, text: r.notice ?? "Anotado." });
+    if (!r.error) onDone();
+  };
+  return (
+    <div className="border-t border-amber-100 bg-amber-50/50 px-4 py-2">
+      <div className="flex gap-2">
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => setPanel(panel === "confirm" ? "none" : "confirm")}
+          aria-expanded={panel === "confirm"}
+          className="min-h-11 flex-1 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          Lo llevo
+        </button>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => setPanel(panel === "decline" ? "none" : "decline")}
+          aria-expanded={panel === "decline"}
+          className="min-h-11 rounded-lg border border-amber-300 px-3 text-sm font-medium text-amber-800 disabled:opacity-50"
+        >
+          No lo llevo
+        </button>
+      </div>
+      {panel === "confirm" && (
+        <div className="mt-2 space-y-2">
+          <ScanAction context="motorizado_recepcion" itemId={stop.manifest_item_id} compact label="Escanear el paquete" disabled={pending} onResult={say} />
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => start(async () => say(await confirmMyGfPickup({ itemId: stop.manifest_item_id })))}
+            className="min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 disabled:opacity-50"
+          >
+            Sin escanear: confirmo que lo llevo
+          </button>
+        </div>
+      )}
+      {panel === "decline" && (
+        <div className="mt-2 space-y-2 rounded-lg bg-amber-50 p-2">
+          <select value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Por qué no lo llevas" className="min-h-11 w-full rounded-lg border border-amber-300 px-2 text-sm">
+            {DECLINE_REASONS.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
+          </select>
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={reason === "otro" ? "Di en una línea qué pasó" : "Detalle (opcional)"} aria-label="Detalle" className="min-h-11 w-full rounded-lg border border-amber-300 px-2 text-sm" />
+          <button
+            type="button"
+            disabled={pending || !stop.dispatch_manifest_id || !stop.shipment_id}
+            onClick={() => start(async () => say(await declineMyGfPackage(stop.dispatch_manifest_id ?? "", stop.shipment_id ?? "", reason, note)))}
+            className="min-h-11 w-full rounded-lg bg-amber-600 px-3 text-sm font-semibold text-white disabled:opacity-50"
+          >
+            Confirmar que no lo llevo
+          </button>
+        </div>
+      )}
+      {message && <p role="status" className={cn("mt-2 rounded-lg px-3 py-2 text-sm", message.ok ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700")}>{message.text}</p>}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { createAdminSupabase } from "@/lib/db";
 import { getMyRider } from "@/lib/routes-access";
-import { riderPickupCheckRequired } from "@/lib/grupo-gf-courier-route-access";
+import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
+import type { RiderPickupMode } from "@/lib/grupo-gf-courier";
 
 export interface RiderLoadItem {
   id: string;
@@ -78,12 +79,12 @@ export async function getMyGfLoads(): Promise<RiderLoad[]> {
   }));
 }
 
-/** Si el motorizado debe verificar su caja (0175): se lee por la organización de su ficha. */
-export async function getMyPickupCheckRequired(): Promise<boolean> {
+/** El modo de recojo del motorizado (0177): se lee por la organización de su ficha. */
+export async function getMyPickupMode(): Promise<RiderPickupMode> {
   const rider = await getMyRider();
-  if (!rider) return true;
+  if (!rider) return "exigir";
   const admin = createAdminSupabase();
   const { data } = await admin.from("riders").select("org_id").eq("id", rider.id).maybeSingle();
-  if (!data?.org_id) return true;
-  return riderPickupCheckRequired(admin, data.org_id as string);
+  if (!data?.org_id) return "exigir";
+  return riderPickupMode(admin, data.org_id as string);
 }

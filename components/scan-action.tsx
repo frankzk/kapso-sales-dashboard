@@ -5,7 +5,8 @@
 // La pantalla elige el contexto; el usuario solo hace el gesto.
 //
 //   oficina_cotejo        → scanManifestItem(…, "office")   → office_checked
-//   motorizado_recepcion  → receiveMyGfPackage(…)           → pickup_checked
+//   motorizado_recepcion  → receiveMyGfPackage(…) con caja   → pickup_checked
+//                           confirmMyGfPickup(…) sin caja    → pickup_checked («Lo llevo», 0177)
 //   motorizado_entrega    → foto a /api/reparto/foto         → evidencia de la parada
 //   supervisor_retiro     → lookup + removeManifestItem(…)  → package_removed
 
@@ -14,7 +15,7 @@ import { DispatchScanner } from "@/components/dispatch-scanner";
 import { DispatchCamera } from "@/components/dispatch-camera";
 import { scanActionPlan, type ScanContext } from "@/lib/scan-action";
 import { lookupDispatchShipment, removeManifestItem, scanManifestItem } from "@/app/dashboard/pedidos/despacho/actions";
-import { receiveMyGfPackage } from "@/app/reparto/receive";
+import { confirmMyGfPickup, receiveMyGfPackage } from "@/app/reparto/receive";
 import { scanAssignToRider, type ScanAssignLine } from "@/app/dashboard/courier/actions";
 
 export interface ScanActionResult {
@@ -30,6 +31,8 @@ interface Props {
   context: ScanContext;
   /** Caja sobre la que se coteja, recibe o retira. */
   manifestId?: string;
+  /** Solo en `motorizado_recepcion` sin caja: el ítem que se confirma («Lo llevo»). */
+  itemId?: string | null;
   /** Parada a la que pertenece la foto. */
   stopId?: string;
   /** `entrega` (foto de la entrega) o `yape` (captura del pago). */
@@ -47,7 +50,7 @@ interface Props {
   compact?: boolean;
 }
 
-export function ScanAction({ context, manifestId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, compact = false }: Props) {
+export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, compact = false }: Props) {
   const plan = scanActionPlan(context);
   const [busy, setBusy] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -64,8 +67,10 @@ export function ScanAction({ context, manifestId, stopId, photoKind = "entrega",
         const r = await scanManifestItem(manifestId, code, "office");
         onResult({ error: r.error, notice: r.notice });
       } else if (context === "motorizado_recepcion") {
-        if (!manifestId) return onResult({ error: "Falta la caja." });
-        onResult(await receiveMyGfPackage(manifestId, code));
+        // Con caja: «Recibir mi caja» (modo exigir). Sin caja: «Lo llevo» sobre
+        // la ruta ya en custodia (modo confirmar), acotado al ítem si se dio.
+        if (manifestId) onResult(await receiveMyGfPackage(manifestId, code));
+        else onResult(await confirmMyGfPickup({ itemId: itemId ?? null, code }));
       } else if (context === "supervisor_asignacion") {
         if (!assign?.riderId) {
           if (onQueue) onQueue(code);

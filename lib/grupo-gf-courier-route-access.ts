@@ -1,3 +1,4 @@
+import { isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   resolveDistrictAvailability,
@@ -220,15 +221,17 @@ export async function loadGroupGfCourierRouteCheck(
 }
 
 /**
- * El único sitio que lee el flag `rider_pickup_check_required` (0175). Sin
- * proveedor o sin fila, se asume `true`: el comportamiento de siempre.
+ * El único sitio en código que lee `rider_pickup_mode` (0177). Sin proveedor,
+ * sin fila o con un valor desconocido se asume `exigir`: el comportamiento de
+ * siempre, igual que `gf_rider_pickup_mode` en SQL.
  */
-export async function riderPickupCheckRequired(sb: SupabaseClient, orgId: string): Promise<boolean> {
+export async function riderPickupMode(sb: SupabaseClient, orgId: string): Promise<RiderPickupMode> {
   const { data } = await sb
     .from("logistics_providers")
-    .select("rider_pickup_check_required")
+    .select("rider_pickup_mode")
     .eq("org_id", orgId)
     .eq("code", "grupo-gf-courier")
     .maybeSingle();
-  return (data as { rider_pickup_check_required?: boolean | null } | null)?.rider_pickup_check_required ?? true;
+  const value = (data as { rider_pickup_mode?: string | null } | null)?.rider_pickup_mode;
+  return isRiderPickupMode(value) ? value : "exigir";
 }

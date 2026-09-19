@@ -50,3 +50,47 @@ export async function declineMyGfPackage(manifestId: string, shipmentId: string,
   for (const path of PATHS) revalidatePath(path);
   return { notice: data?.length ? "Anotado. Tu caja quedó recibida con lo demás y ya está en tu reparto." : "Anotado: el supervisor lo verá y lo asignará a otro." };
 }
+
+/**
+ * «Lo llevo» (0177, modo `confirmar`): el motorizado confirma un paquete de su
+ * caja ya en custodia al sacarlo del almacén. Por ítem (botón de la parada) o
+ * por código escaneado (gesto único, «Confirmar todos»); si vienen ambos, el
+ * código tiene que ser del mismo paquete. Idempotente.
+ */
+export async function confirmMyGfPickup(input: { itemId?: string | null; code?: string | null }): Promise<{ error?: string; notice?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Inicia sesión para confirmar tu carga." };
+  const admin = createAdminSupabase();
+  let itemId = input.itemId ?? null;
+  const code = normalizeDispatchScan(input.code ?? "").slice(0, 200);
+  if (!itemId && !code) return { error: "Escanea el QR del paquete." };
+  if (code) {
+    const { data: rider } = await admin.from("riders").select("id").eq("user_id", user.id).eq("active", true).maybeSingle();
+    if (!rider) return { error: "Tu usuario no tiene ficha de motorizado." };
+    const { data: loads } = await admin.from("dispatch_manifests").select("id").eq("rider_id", rider.id).eq("courier", "propio").eq("state", "in_custody")
+      .gte("route_date", new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10));
+    const manifestIds = (loads ?? []).map((l) => l.id as string);
+    if (!manifestIds.length) return { error: "No tienes una caja en tu poder." };
+    const { data: rows } = await admin
+      .from("dispatch_manifest_items")
+      .select("id,shipments!inner(qr_token,output_code,guide_code,order_name)")
+      .in("manifest_id", manifestIds)
+      .is("removed_at", null);
+    const wanted = code.toLowerCase().replace(/^#/, "");
+    const matches = ((rows ?? []) as unknown as Array<{ id: string; shipments: { qr_token: string | null; output_code: string | null; guide_code: string | null; order_name: string | null } | null }>)
+      .filter((row) => {
+        const sh = row.shipments;
+        if (!sh) return false;
+        return [sh.qr_token, sh.output_code, sh.guide_code, sh.order_name?.replace(/^#/, "")]
+          .some((v) => typeof v === "string" && v.toLowerCase() === wanted);
+      });
+    if (matches.length !== 1) return { error: matches.length ? "Ese código coincide con más de un paquete; usa el botón de la parada." : "Ese paquete no está en tu caja." };
+    if (itemId && matches[0]!.id !== itemId) return { error: "Ese QR es de otro paquete de tu caja." };
+    itemId = matches[0]!.id;
+  }
+  const { data, error } = await admin.rpc("gf_rider_confirm_pickup", { p_item_id: itemId, p_actor: user.id });
+  if (error) return { error: error.message };
+  if (data) await recomputeOrderMasterSafe(admin, [data as string]);
+  for (const path of PATHS) revalidatePath(path);
+  return { notice: "Lo llevas. Ya está confirmado en tu ruta." };
+}

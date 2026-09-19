@@ -170,6 +170,9 @@ echo "  ✅ flag true no entrega custodia al asignar; flag false sí, crea parad
 echo "▶ una carga por motorizado y día con el flag apagado (0176)"
 $PSQL -f "$ROOT/scripts/sql/gf_one_load_smoke.sql"
 echo "  ✅ dos asignaciones → una carga, una ruta, paradas sin duplicar; con el flag encendido, carga adicional"
+echo "▶ modo confirmar: «lo llevo» / «no lo llevo» sobre la caja en custodia (0177)"
+$PSQL -f "$ROOT/scripts/sql/gf_pickup_mode_smoke.sql"
+echo "  ✅ asignar da custodia con paradas por confirmar; confirmar marca el ítem; rechazar retira, borra la parada y libera el paquete; el supervisor quita solo lo no confirmado"
 
 echo ""
 echo "✅ DB verification passed."

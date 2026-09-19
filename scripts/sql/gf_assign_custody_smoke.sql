@@ -9,8 +9,8 @@ insert into stores(id,org_id,name,shopify_domain) values
 insert into auth.users(id) values ('17500000-0000-0000-0000-000000000009');
 insert into riders(id,org_id,full_name,courier,user_id) values
  ('17500000-0000-0000-0000-000000000003','17500000-0000-0000-0000-000000000001','Roy custody','Grupo GF Courier','17500000-0000-0000-0000-000000000009');
-insert into logistics_providers(id,org_id,code,name,status,same_day_cutoff,cash_warning_amount,cash_limit_amount,rider_pickup_check_required) values
- ('17500000-0000-0000-0000-000000000020','17500000-0000-0000-0000-000000000001','grupo-gf-courier','Grupo GF Courier','active','11:30',4000,5000,true);
+insert into logistics_providers(id,org_id,code,name,status,same_day_cutoff,cash_warning_amount,cash_limit_amount,rider_pickup_mode) values
+ ('17500000-0000-0000-0000-000000000020','17500000-0000-0000-0000-000000000001','grupo-gf-courier','Grupo GF Courier','active','11:30',4000,5000,'exigir');
 insert into orders(id,store_id,shopify_order_id,name) values
  ('17500000-0000-0000-0000-000000000004','17500000-0000-0000-0000-000000000002','gf-c-1','#GC1');
 insert into shipments(id,store_id,courier,guide_code,order_id,order_name,preparation_state,custody_state) values
@@ -28,7 +28,7 @@ begin
   exception when others then if sqlerrm like 'FAIL%' then raise; end if; end;
   if (select state from dispatch_manifests where id=v_load) <> 'draft' then raise exception 'state moved with flag on'; end if;
   -- flag = false: basta con asignar.
-  update logistics_providers set rider_pickup_check_required=false where id='17500000-0000-0000-0000-000000000020';
+  update logistics_providers set rider_pickup_mode='ninguno' where id='17500000-0000-0000-0000-000000000020';
   perform gf_assign_custody(v_load,'17500000-0000-0000-0000-000000000009');
   if (select state from dispatch_manifests where id=v_load) <> 'in_custody' then raise exception 'custody not granted with flag off'; end if;
   if (select custody_state from shipments where id='17500000-0000-0000-0000-000000000006') <> 'courier' then raise exception 'shipment custody not moved'; end if;

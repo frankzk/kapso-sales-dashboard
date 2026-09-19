@@ -6,7 +6,7 @@ import { z } from "zod";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import { riderPickupCheckRequired } from "@/lib/grupo-gf-courier-route-access";
+import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
 import { isCourierTbd } from "@/lib/shipment-output";
 import {
   courierKey,
@@ -557,10 +557,10 @@ export async function scanManifestItem(
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
   if (!candidates.length) return { error: SCAN_NOT_FOUND };
   if (manifest.state === "cancelled") return { error: "Esa ruta ya está cerrada." };
-  // Con la verificación del motorizado desactivada (0175), un cotejo sobre una
-  // caja ya en custodia es un registro opcional, no un error.
+  // Sin verificación previa del motorizado (modos confirmar y ninguno, 0177),
+  // un cotejo sobre una caja ya en custodia es un registro opcional, no un error.
   const optionalCheck = manifest.state === "in_custody" && courierKey(manifest.courier) === "propio"
-    && !(await riderPickupCheckRequired(createAdminSupabase(), manifest.org_id));
+    && (await riderPickupMode(createAdminSupabase(), manifest.org_id)) !== "exigir";
   if (manifest.state === "in_custody" && !optionalCheck) return { error: "Esa ruta ya está cerrada." };
   if (stage === "pickup" && !needsRiderCheck(manifest.kind)) {
     return { error: "Esta ruta no tiene motorizado que coteje: se cierra anotando quién recoge." };
@@ -658,8 +658,15 @@ export async function removeManifestItem(
   if (cleanReason.length < 3) return { error: "Escribe el motivo del retiro." };
   const manifest = await visibleManifest(manifestId);
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
-  if (["in_custody", "cancelled"].includes(manifest.state)) return { error: "Esa ruta ya está cerrada." };
+  if (manifest.state === "cancelled") return { error: "Esa ruta ya está cerrada." };
   const admin = createAdminSupabase();
+  // Caja en custodia: solo en modo «confirmar» (0177) y solo lo que el
+  // motorizado no confirmó. El RPC retira, borra la parada pendiente, devuelve
+  // la custodia a la empresa y deja el rastro; aquí no se toca nada más.
+  const inCustody = manifest.state === "in_custody";
+  if (inCustody && (courierKey(manifest.courier) !== "propio" || (await riderPickupMode(admin, manifest.org_id)) !== "confirmar")) {
+    return { error: "Esa ruta ya está cerrada." };
+  }
   const { data: shipment } = await admin
     .from("shipments")
     .select(DISPATCH_SHIPMENT_COLUMNS)
@@ -667,6 +674,14 @@ export async function removeManifestItem(
     .maybeSingle();
   if (!shipment) return { error: "Paquete no encontrado." };
   const { user } = await currentUser();
+  if (inCustody) {
+    const { data: orderId, error } = await admin.rpc("gf_supervisor_withdraw", { p_manifest_id: manifestId, p_shipment_id: shipmentId, p_reason: cleanReason, p_actor: user.id, p_moved_to_rider: null });
+    if (error) return { error: error.message };
+    if (orderId) await recomputeOrderMasterSafe(admin, [orderId as string]);
+    revalidatePath(DISPATCH_PATH);
+    for (const path of ["/dashboard/courier", "/dashboard/courier/rutas", "/reparto"]) revalidatePath(path);
+    return { notice: "Paquete retirado de la caja sin confirmar: vuelve a «por asignar»." };
+  }
   const { error } = await admin
     .from("dispatch_manifest_items")
     .update({ removed_at: new Date().toISOString(), removed_by: user.id, removal_reason: cleanReason })

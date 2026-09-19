@@ -8,8 +8,8 @@ insert into stores(id,org_id,name,shopify_domain) values
 insert into auth.users(id) values ('17600000-0000-0000-0000-000000000009');
 insert into riders(id,org_id,full_name,courier,user_id) values
  ('17600000-0000-0000-0000-000000000003','17600000-0000-0000-0000-000000000001','Roy oneload','Grupo GF Courier','17600000-0000-0000-0000-000000000009');
-insert into logistics_providers(id,org_id,code,name,status,same_day_cutoff,cash_warning_amount,cash_limit_amount,rider_pickup_check_required) values
- ('17600000-0000-0000-0000-000000000020','17600000-0000-0000-0000-000000000001','grupo-gf-courier','Grupo GF Courier','active','11:30',4000,5000,false);
+insert into logistics_providers(id,org_id,code,name,status,same_day_cutoff,cash_warning_amount,cash_limit_amount,rider_pickup_mode) values
+ ('17600000-0000-0000-0000-000000000020','17600000-0000-0000-0000-000000000001','grupo-gf-courier','Grupo GF Courier','active','11:30',4000,5000,'ninguno');
 insert into orders(id,store_id,shopify_order_id,name) values
  ('17600000-0000-0000-0000-000000000004','17600000-0000-0000-0000-000000000002','gf-o-1','#GO1'),
  ('17600000-0000-0000-0000-000000000005','17600000-0000-0000-0000-000000000002','gf-o-2','#GO2'),
@@ -44,7 +44,7 @@ begin
   -- El paquete sumado en custodia entra cotejado y recibido por el supervisor.
   if not exists (select 1 from dispatch_manifest_items where manifest_id=v_first and shipment_id='17600000-0000-0000-0000-000000000007' and office_checked_at is not null and pickup_checked_at is not null) then raise exception 'added item not marked as received'; end if;
   -- Flag encendido: comportamiento de siempre → carga adicional tras la custodia.
-  update logistics_providers set rider_pickup_check_required=true where id='17600000-0000-0000-0000-000000000020';
+  update logistics_providers set rider_pickup_mode='exigir' where id='17600000-0000-0000-0000-000000000020';
   v_second := gf_dispatch_load_open('17600000-0000-0000-0000-000000000001','17600000-0000-0000-0000-000000000003',current_date,'17600000-0000-0000-0000-000000000009');
   if v_second = v_first then raise exception 'flag on reused a load in custody'; end if;
   begin

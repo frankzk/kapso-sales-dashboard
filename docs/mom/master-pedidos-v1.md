@@ -4769,45 +4769,73 @@ paradas se crean solo para lo aceptado. La ruta aparece recién con la custodia
 cambiada. Un paquete ya recibido no se rechaza desde el teléfono: lo retira el
 supervisor.
 
-**La verificación del motorizado es opcional, y se decide en datos.** El flag
-`logistics_providers.rider_pickup_check_required` (0175) gobierna el paso
-«Recibir mi caja». En `true`, todo como se describe arriba: oficina coteja, el
-motorizado escanea y la custodia cambia al 100 % de los aceptados. En `false`,
-la verificación queda **separada del flujo**: basta con asignar. En cuanto el
-supervisor pone paquetes en la caja del día —desde la lista o escaneando— la
-custodia pasa al motorizado en el acto (`gf_assign_custody`, actor el
-supervisor, evento `custody_transferred` con la nota «Custodia al asignar:
-verificación del motorizado desactivada»), el trigger crea las paradas y
-`/reparto` le muestra su ruta para que empiece. El cotejo de oficina y la
-recepción del motorizado quedan como pasos opcionales que no bloquean nada: si
-se hacen, se registran igual (un cotejo sobre una caja ya en custodia se acepta
-como «registro opcional»); lo que no se admite es alterar la pertenencia de una
-caja que ya salió. El motorizado nunca ve «Recibir mi caja» con el flag en
-`false`. Y hay **una sola carga por motorizado y día** (0176): si vuelve a la
-oficina, los paquetes nuevos se suman a la misma carga y ruta del día aunque
-ya esté en custodia (`gf_dispatch_load_open` la reutiliza;
-`gf_add_item_in_custody` mete el paquete cotejado, en custodia y con su parada,
-sin duplicar), y el cierre es por día. Con el flag en `true` una carga en
-custodia sigue abriendo una carga adicional, como en §29.5. El valor de producción quedó en **`false`** por decisión de la
-operación (19-09-2026). Se cambia sin desplegar:
+**La verificación del motorizado tiene tres modos, y se deciden en datos.**
+`logistics_providers.rider_pickup_mode` (0177; reemplaza el booleano
+`rider_pickup_check_required` de 0175, migrado `true`→`exigir` y
+`false`→`ninguno`) gobierna qué hace el motorizado con su caja. Se lee en un
+solo sitio en código (`riderPickupMode`, `lib/grupo-gf-courier-route-access.ts`)
+y en uno en SQL (`gf_rider_pickup_mode`); sin proveedor se asume `exigir`.
+
+- **`exigir`**: todo como se describe arriba. Oficina coteja, el motorizado
+  escanea su caja desde «Recibir mi caja» y la custodia cambia al 100 % de los
+  aceptados; la ruta aparece recién entonces.
+- **`confirmar`** (valor de producción desde el 19-09-2026): **basta con
+  asignar y nada bloquea la ruta**, pero el motorizado dice **«Lo llevo»** por
+  cada pedido al sacarlo del almacén y meterlo en la caja de la moto. En cuanto
+  el supervisor pone paquetes en la caja del día, la custodia pasa
+  (`gf_assign_custody`, nota «Custodia al asignar: el motorizado confirma cada
+  paquete al llevarlo»), el trigger crea las paradas y `/reparto` muestra la
+  ruta con cada parada **«Por confirmar»**. En la parada, «Lo llevo» abre el
+  gesto único (`motorizado_recepcion` sin caja → `gf_rider_confirm_pickup`, que
+  marca `pickup_checked_at` y deja `pickup_checked` con la nota «Lo lleva
+  Roy»); «Confirmar todos» en la cabecera abre el mismo escáner para pasar los
+  QR en serie. **«No lo llevo»** con motivo (`gf_rider_decline`, que en este
+  modo admite la caja en custodia) retira el ítem, **borra su parada si sigue
+  pendiente**, devuelve la custodia a la empresa y la solicitud vuelve a «por
+  asignar» con el evento `pickup_declined` («No lo llevó Roy: motivo»). Lo
+  asignado y no confirmado es «no se lo llevó»: en «Despacho del día» cada caja
+  muestra **confirmados/asignados** junto a los cotejados y un desplegable
+  **«Sin confirmar por Roy · N»** con «Mover a…» y «Quitar»
+  (`gf_supervisor_withdraw`: mismo retiro, con `package_removed` «Retirado sin
+  confirmar…»); lo ya confirmado no se retira desde ahí. Una parada sin
+  confirmar **se entrega igual**: al reportarla, `delivery_stops.pickup_confirmed`
+  guarda si había «Lo llevo» en ese momento y, si no lo había, la bitácora de
+  la parada y el pedido (`delivered_unconfirmed_pickup`) dicen «Entregado sin
+  confirmar recojo». El paquete sumado a una caja ya en custodia
+  (`gf_add_item_in_custody`) también nace por confirmar.
+- **`ninguno`**: basta con asignar y no se pide nada más (lo que 0175/0176
+  llamaban «flag apagado»): custodia al asignar con la nota «verificación del
+  motorizado desactivada», paquetes sumados ya cotejados y recibidos, y ninguna
+  pertenencia se altera una vez que la caja salió.
+
+En `confirmar` y `ninguno` el cotejo de oficina posterior se registra como
+«registro opcional», y hay **una sola carga por motorizado y día** (0176): si
+vuelve a la oficina, los paquetes nuevos se suman a la misma carga y ruta
+(`gf_dispatch_load_open` la reutiliza; `gf_add_item_in_custody` mete el paquete
+con su parada sin duplicar) y el cierre es por día. En `exigir` una carga en
+custodia sigue abriendo una carga adicional, como en §29.5. El modo se cambia
+sin desplegar:
 
 ```sql
-update logistics_providers set rider_pickup_check_required = true  where code = 'grupo-gf-courier'; -- volver a exigir la verificación
-update logistics_providers set rider_pickup_check_required = false where code = 'grupo-gf-courier'; -- basta con asignar
+update logistics_providers set rider_pickup_mode = 'exigir'    where code = 'grupo-gf-courier'; -- verificación antes de la ruta
+update logistics_providers set rider_pickup_mode = 'confirmar' where code = 'grupo-gf-courier'; -- «lo llevo» por paquete (producción)
+update logistics_providers set rider_pickup_mode = 'ninguno'   where code = 'grupo-gf-courier'; -- basta con asignar
 ```
 
 **El gesto único.** Escanear o fotografiar es un solo componente
 (`ScanAction`) y el contexto lo fija la pantalla, nunca el usuario:
 `supervisor_asignacion` → tomar + asignar + `office_checked`;
 `oficina_cotejo` → `office_checked`; `motorizado_recepcion` →
-`pickup_checked` o `pickup_declined`; `motorizado_entrega` → foto de la
+`pickup_checked` o `pickup_declined` (con caja recibe; sin caja es «Lo llevo»
+sobre la ruta en custodia); `motorizado_entrega` → foto de la
 parada; `supervisor_retiro` → `package_removed` con motivo. Cada uno deja su
 evento en el pedido y recalcula el Master.
 
 **Trazabilidad.** La pestaña «Actividad» del drawer del Master etiqueta en
 español todos los hitos del camino —tomado, asignado, cotejado en oficina,
-recibido, no recogido con motivo, movido, retirado, entregado, aplicado al
-Master— con actor y hora, sobre `order_events`; no hay otra línea de tiempo.
+«Lo lleva Roy», «No lo llevó Roy: motivo», movido, retirado, entregado,
+«Entregado sin confirmar recojo», aplicado al Master— con actor y hora, sobre
+`order_events`; no hay otra línea de tiempo.
 «Ver actividad» desde Grupo GF Courier abre ese drawer en esa pestaña.
 
 ## 30. Liquidaciones 2 — hojas por dominio

@@ -793,15 +793,32 @@ MOM §29.13; auditoría en `docs/plan/despacho-crm.md`.
    operación) basta con asignar: la custodia pasa al motorizado en el acto y
    `/reparto` muestra la ruta; «Recibir mi caja» no aparece. Para volver a
    exigir la verificación:
-   `update logistics_providers set rider_pickup_check_required = true where code = 'grupo-gf-courier';`
+   (hoy el modo `exigir`, ver 3c).
    **Migración `0176_gf_one_load_per_day.sql`** (a mano, antes del código):
    con el flag apagado hay una sola carga por motorizado y día; las
    asignaciones posteriores se suman a ella ya en custodia
    (`gf_dispatch_load_open`, `gf_add_item_in_custody`). Smoke:
    `scripts/sql/gf_one_load_smoke.sql`.
-   Se lee en un solo sitio (`riderPickupCheckRequired`,
+   Se lee en un solo sitio (`riderPickupMode`,
    `lib/grupo-gf-courier-route-access.ts`); la cabecera de «Despacho del día»
    lo muestra. Smoke: `scripts/sql/gf_assign_custody_smoke.sql`.
+3c. **Migración `0177_provider_rider_pickup_mode.sql`**, a mano, antes del
+   código: reemplaza el booleano por `logistics_providers.rider_pickup_mode`
+   (`exigir` | `confirmar` | `ninguno`; migra `true`→`exigir`,
+   `false`→`ninguno`), añade `delivery_stops.pickup_confirmed`, los RPC
+   `gf_rider_confirm_pickup`, `gf_supervisor_withdraw` y
+   `gf_withdraw_in_custody`, y redefine `gf_assign_custody`,
+   `gf_dispatch_load_open`, `gf_add_item_in_custody`, `gf_rider_decline` y el
+   guard de ítems para los tres modos. **Producción quedó en `confirmar`**
+   (19-09-2026, decisión de la operación) con un UPDATE aparte tras la
+   migración. Cambiar de modo no requiere desplegar:
+   `update logistics_providers set rider_pickup_mode = 'exigir'    where code = 'grupo-gf-courier';`
+   `update logistics_providers set rider_pickup_mode = 'confirmar' where code = 'grupo-gf-courier';`
+   `update logistics_providers set rider_pickup_mode = 'ninguno'   where code = 'grupo-gf-courier';`
+   En `confirmar`, `/reparto` muestra cada parada «Por confirmar» con «Lo
+   llevo» / «No lo llevo» y «Confirmar todos» en la cabecera; «Despacho del
+   día» muestra confirmados/asignados y «Sin confirmar por Roy · N» con
+   quitar/mover. Smoke: `scripts/sql/gf_pickup_mode_smoke.sql`.
 4. `components/scan-action.tsx` es el único gesto de escaneo/foto; la mesa de
    despacho (`DispatchWorkspace`) y la estación de almacén conservan su escáner
    propio por ahora.
