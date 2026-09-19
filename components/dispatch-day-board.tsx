@@ -350,9 +350,48 @@ export function DispatchDayBoard(props: Props) {
               </div>
             )}
           </div>
+        </div>
 
-          <details className="group border-t border-slate-100">
-          <summary className="cursor-pointer px-4 py-2 text-xs text-slate-500 hover:bg-slate-50">Asignar desde la lista</summary>
+        {/* ── Cajas de hoy: solo cuando hay cajas; plegadas en móvil, abiertas en escritorio ── */}
+        {boxes.length > 0 && (
+          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <button
+              type="button"
+              onClick={() => setBoxesOpen((v) => !v)}
+              aria-expanded={boxesOpen}
+              className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold text-slate-900 xl:cursor-default"
+            >
+              Cajas de hoy
+              <span className="text-xs font-normal tabular-nums text-slate-500">{boxes.length} · {dayCod} paq.</span>
+              <span aria-hidden className="ml-auto text-slate-400 xl:hidden">{boxesOpen ? "▾" : "▸"}</span>
+            </button>
+            <ul className={cn("divide-y divide-slate-100 border-t border-slate-100", boxesOpen ? "block" : "hidden", "xl:block")}>
+              {boxes.map((box) => (
+                <BoxRow
+                  key={box.riderId ?? box.riderName}
+                  box={box}
+                  cash={box.riderId ? (boxCash.get(box.riderId) ?? 0) : 0}
+                  riders={riders}
+                  orgId={orgId}
+                  open={openBox === (box.riderId ?? box.riderName)}
+                  onToggle={() => setOpenBox(openBox === (box.riderId ?? box.riderName) ? null : (box.riderId ?? box.riderName))}
+                  canManage={canManageDispatch}
+                  onChanged={() => router.refresh()}
+                  pickupMode={props.riderPickupMode}
+                />
+              ))}
+            </ul>
+          </div>
+        )}
+        {/* ── Otra forma de asignar: desde la lista, sin el paquete en la mano.
+            Tarjeta aparte para que se lea como un segundo método, no como
+            parte del escaneo. No deja cotejado: eso lo hace quien ve la caja. ── */}
+        <div className="min-w-0 overflow-hidden rounded-2xl border border-dashed border-slate-300 bg-white xl:col-span-2">
+          <details className="group">
+          <summary className="cursor-pointer px-4 py-3 text-sm text-slate-600 hover:bg-slate-50">
+            <span className="font-medium text-slate-800">Otra forma: asignar desde la lista</span>
+            <span className="ml-2 text-xs text-slate-500">sin escanear · no deja cotejado</span>
+          </summary>
           <div className="border-b border-slate-200 px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <input
@@ -419,37 +458,6 @@ export function DispatchDayBoard(props: Props) {
           </details>
         </div>
 
-        {/* ── Cajas de hoy: solo cuando hay cajas; plegadas en móvil, abiertas en escritorio ── */}
-        {boxes.length > 0 && (
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <button
-              type="button"
-              onClick={() => setBoxesOpen((v) => !v)}
-              aria-expanded={boxesOpen}
-              className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold text-slate-900 xl:cursor-default"
-            >
-              Cajas de hoy
-              <span className="text-xs font-normal tabular-nums text-slate-500">{boxes.length} · {dayCod} paq.</span>
-              <span aria-hidden className="ml-auto text-slate-400 xl:hidden">{boxesOpen ? "▾" : "▸"}</span>
-            </button>
-            <ul className={cn("divide-y divide-slate-100 border-t border-slate-100", boxesOpen ? "block" : "hidden", "xl:block")}>
-              {boxes.map((box) => (
-                <BoxRow
-                  key={box.riderId ?? box.riderName}
-                  box={box}
-                  cash={box.riderId ? (boxCash.get(box.riderId) ?? 0) : 0}
-                  riders={riders}
-                  orgId={orgId}
-                  open={openBox === (box.riderId ?? box.riderName)}
-                  onToggle={() => setOpenBox(openBox === (box.riderId ?? box.riderName) ? null : (box.riderId ?? box.riderName))}
-                  canManage={canManageDispatch}
-                  onChanged={() => router.refresh()}
-                  pickupMode={props.riderPickupMode}
-                />
-              ))}
-            </ul>
-          </div>
-        )}
       </div>
     </section>
   );
