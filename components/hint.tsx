@@ -92,8 +92,11 @@ export function Hint({
         onFocus={() => setOpen(true)}
         onBlur={() => { if (!sheet) setOpen(false); }}
         className={cn(
-          "inline-flex shrink-0 items-center justify-center rounded-full leading-none text-slate-400 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500",
-          children ? "" : "h-5 w-5 border border-slate-300",
+          // Sin borde ni alto mínimo: el círculo lo dibuja el SVG. El estilo
+          // global de `button` (globals.css) impone min-height y padding, y
+          // eso era lo que estiraba el icono hasta parecer una píldora.
+          "inline-flex shrink-0 items-center justify-center rounded-full border-0 bg-transparent p-0 leading-none text-slate-400 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500",
+          children ? "" : "h-4 w-4 min-h-0 min-w-0 align-middle",
         )}
       >
         {children ?? (
