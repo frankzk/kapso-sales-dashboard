@@ -740,11 +740,36 @@ export async function takeGroupGfCourierOrders(
   const accepted: TakeCourierOrdersResult["accepted"] = [];
   const alreadyAccepted: string[] = [];
   const failed: TakeCourierOrdersResult["failed"] = [];
+  const { data: gfProvider } = await admin
+    .from("logistics_providers")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("code", "grupo-gf-courier")
+    .maybeSingle();
 
   // Secuencial a propósito: cada admisión vuelve a comprobar la configuración
   // vigente y deja su propio resultado. Un pedido inválido no tumba la tanda.
   for (const orderId of uniqueOrderIds) {
     try {
+      // Ya tomado por Grupo GF: cuenta como tal ANTES de mirar la salida. La
+      // salida que dejó esa toma ya lleva courier, así que las comprobaciones
+      // de abajo la leían como «asignada a otro courier» y el escaneo de
+      // Despacho del día rechazaba pedidos que el propio Grupo GF tenía
+      // aceptados desde hacía días (MOM §29.13: tomar es idempotente).
+      if (gfProvider?.id) {
+        const { data: existing } = await admin
+          .from("logistics_requests")
+          .select("id")
+          .eq("order_id", orderId)
+          .eq("provider_id", gfProvider.id)
+          .in("status", ["accepting", "accepted", "scheduled"])
+          .limit(1)
+          .maybeSingle();
+        if (existing) {
+          alreadyAccepted.push(orderId);
+          continue;
+        }
+      }
       const { data: orderMaster, error: orderError } = await admin
         .from("order_master")
         .select("*")

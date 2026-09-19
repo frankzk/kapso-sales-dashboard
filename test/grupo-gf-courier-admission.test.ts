@@ -16,6 +16,21 @@ describe("admisión de pedidos de Grupo GF Courier", () => {
     expect(sql).toContain("logistics_request_events");
   });
 
+  it("vuelve a tomar un pedido que Grupo GF ya tiene sin rechazarlo por su salida", () => {
+    // Al escanear en Despacho del día un pedido tomado días antes, la salida
+    // que dejó esa toma ya lleva courier; si la admisión mirara primero la
+    // salida, lo leería como «asignada a otro courier». Ya tomado se decide
+    // antes que cualquier comprobación de salidas.
+    const src = readFileSync(resolve(root, "app/dashboard/courier/actions.ts"), "utf8");
+    const start = src.indexOf("export async function takeGroupGfCourierOrders(");
+    const body = src.slice(start, src.indexOf("\nexport ", start + 1));
+    const alreadyTaken = body.indexOf('.in("status", ["accepting", "accepted", "scheduled"])');
+    const outputCheck = body.indexOf("activeAssignedOutput(outputs");
+    expect(alreadyTaken).toBeGreaterThan(0);
+    expect(outputCheck).toBeGreaterThan(alreadyTaken);
+    expect(body.slice(alreadyTaken, outputCheck)).toContain("alreadyAccepted.push(orderId)");
+  });
+
   it("toma pedidos desde la bandeja y no desde el modal manual del pedido", () => {
     const courier = readFileSync(resolve(root, "components/grupo-gf-courier.tsx"), "utf8");
     const master = readFileSync(resolve(root, "components/order-drawer.tsx"), "utf8");

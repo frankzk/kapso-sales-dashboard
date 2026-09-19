@@ -4428,6 +4428,10 @@ se conserva su QR; nunca se pega un segundo rótulo por elegir Grupo GF Courier.
 La acción vuelve a comprobar todas las reglas en el servidor, porque una tarifa,
 contrato o pausa puede cambiar mientras la bandeja está abierta. Un doble clic o
 dos operadores tomando el mismo pedido no pueden crear dos solicitudes activas.
+Volver a tomar un pedido que Grupo GF Courier ya tiene aceptado o programado
+—por ejemplo al escanearlo en Despacho del día días después de tomarlo— no lo
+rechaza por la salida que dejó esa toma: cuenta como ya tomado y sigue a la
+asignación.
 
 Las futuras tiendas externas pueden conservar asignación explícita según su
 contrato. La cola automática descrita arriba es el camino de mínima fricción
