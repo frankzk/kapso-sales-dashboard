@@ -20,8 +20,11 @@ describe("detalle de la parada en panel lateral", () => {
 
   it("en el teléfono cubre el contenedor de la lista, no toda la web", () => {
     const panel = src.slice(src.indexOf("function StopPanel("), src.indexOf("function StopStatusLine("));
-    expect(panel).toContain("fixed inset-y-0 left-1/2 z-20 flex w-full max-w-md -translate-x-1/2");
+    expect(panel).toContain("fixed inset-y-0 left-1/2 z-20 w-full max-w-md -translate-x-1/2 overflow-hidden");
     expect(panel).toContain("lg:sticky");
+    // Entra deslizándose desde la derecha; en pantalla ancha no anima.
+    expect(panel).toContain("animate-slide-in-right lg:animate-none");
+    expect(readFileSync(resolve(process.cwd(), "app/globals.css"), "utf8")).toContain("@keyframes slide-in-right");
     expect(panel).toContain('aria-label="Volver a la lista"');
     expect(panel).toContain("overflow-y-auto");
     // El cuerpo de atrás no hace scroll mientras el panel está abierto.

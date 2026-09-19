@@ -16,6 +16,9 @@
   --animate-fade-up: fade-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
   --animate-float: float 7s ease-in-out infinite;
   --animate-sheen: sheen 8s ease-in-out infinite;
+
+  /* /reparto: el detalle de la parada entra deslizándose desde la derecha. */
+  --animate-slide-in-right: slide-in-right 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 @keyframes pulse-dot {
@@ -56,6 +59,21 @@
   }
   50% {
     opacity: 0.9;
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-slide-in-right {
+    animation: none;
   }
 }
 

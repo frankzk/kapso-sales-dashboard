@@ -323,8 +323,11 @@ function StopPanel({
   return (
     <section
       aria-label={`Parada de ${o?.customer_name ?? "sin nombre"}`}
-      className="fixed inset-y-0 left-1/2 z-20 flex w-full max-w-md -translate-x-1/2 flex-col bg-white shadow-xl lg:sticky lg:inset-y-auto lg:left-auto lg:top-0 lg:h-screen lg:max-w-none lg:translate-x-0 lg:shadow-none"
+      className="fixed inset-y-0 left-1/2 z-20 w-full max-w-md -translate-x-1/2 overflow-hidden lg:sticky lg:inset-y-auto lg:left-auto lg:top-0 lg:h-screen lg:max-w-none lg:translate-x-0"
     >
+      {/* Capa interior: es la que se desliza desde la derecha en el teléfono
+          (la exterior ya usa translate para centrarse). En lg entra sin animar. */}
+      <div className="flex h-full flex-col bg-white shadow-xl animate-slide-in-right lg:animate-none lg:shadow-none">
       <header className="flex items-start gap-2 border-b border-slate-200 px-3 py-3">
         <button
           type="button"
@@ -381,6 +384,7 @@ function StopPanel({
         ) : (
           <ReportForm stop={stop} onDone={onDone} delegated={delegated} vocabulary={vocabulary} />
         )}
+      </div>
       </div>
     </section>
   );
