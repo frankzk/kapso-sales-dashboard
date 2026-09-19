@@ -21,7 +21,9 @@ export type MasterDoorTarget = "entregado" | "anulado";
 export type MasterDoorSource = "ruta" | "liquidacion";
 
 export interface MasterDoorGuard {
-  stop?: { status: string; photo_path: string | null; voucher_path: string | null } | null;
+  /** `reported_by` null = parada de backfill histórico (sin foto posible):
+   *  la evidencia no se le exige (MOM §29.12). */
+  stop?: { status: string; photo_path: string | null; voucher_path: string | null; reported_by?: string | null } | null;
   requireEvidence?: boolean;
   openObservations?: number;
 }
@@ -52,7 +54,8 @@ export function masterDoorVerdict(item: Pick<MasterDoorItem, "target" | "guard">
     if (g.stop.status !== "entregado") {
       return { ok: false, code: "sin_entrega_en_parada", reason: "La parada de Rutas no está reportada como entregada." };
     }
-    if (g.requireEvidence && !g.stop.photo_path && !g.stop.voucher_path) {
+    const realReport = g.stop.reported_by === undefined || Boolean(g.stop.reported_by);
+    if (g.requireEvidence && realReport && !g.stop.photo_path && !g.stop.voucher_path) {
       return { ok: false, code: "sin_evidencia", reason: "La parada no tiene foto de entrega ni captura del pago." };
     }
   }

@@ -148,6 +148,15 @@ monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
    `sheet_observations.reason_code` + `note`, que es lo que acepta quien
    liquida antes de aplicar al Master.
 
+4c. **Convergencia con Rutas** (hecha el 19-09-2026, MOM §29.12). Rutas
+   manda: `delivery_stops` es la verdad con el estado escrito (0172); la hoja
+   de Reparto propio es una vista sincronizada (`stop_id`); las ediciones de
+   la hoja pasan por `lib/stop-report.ts`; una sola puerta al Master en
+   `lib/master-door.ts`; una sola pantalla del motorizado en `/reparto`;
+   límites de efectivo activos; backfill de la historia a paradas con
+   `scripts/backfill-stops-from-sheets.ts`. Fuera: no hay camino de
+   devolución al Master desde la hoja; la asimetría de «rechazado» queda
+   documentada; los puntos sin pedido Shopify siguen solo en la hoja.
 5. **Indicadores.** KPI Lima (tasas por zona y día, semana pasada, 15 días,
    por mes), efectividad por repartidor y mes, ventas contra meta. El estado de
    resultados queda al final porque depende de Gasto Ads y Provincia.

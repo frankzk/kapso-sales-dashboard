@@ -4676,6 +4676,56 @@ El orden obligatorio evita reescribir las pantallas sobre identidades ambiguas:
 Cada fase debe ser compatible con Aurela y Kenku y no debe convertir una
 solicitud logística externa en un pedido comercial de Shopify.
 
+### 29.12 Convergencia con Liquidaciones 2: la parada es la verdad
+
+Decisión del 19-09-2026. El mismo hecho físico —el motorizado fue a la casa
+de la clienta y cobró— se escribía en dos modelos que no se hablaban: la
+parada de Rutas (`delivery_stops`: tipada, con evidencia obligatoria y
+validación contra el saldo real, la que este módulo ya usa) y la fila de la
+hoja cuaderno de Liquidaciones 2 (texto libre, alias, observaciones). Dos
+pantallas del motorizado y dos puertas al Master con guardas distintas.
+
+**Rutas manda.** La parada es el registro canónico del resultado; la hoja de
+Reparto propio es una vista con vocabulario y cuadre encima de ella:
+
+- La parada aprende lo que solo la hoja sabía decir (0172): `written_status`
+  (lo escrito, literal), `written_status_code` (el estado del dominio Reparto
+  propio al que resolvió; null = sin equivalente) y `written_payment`. El enum
+  de tres estados y el motivo del catálogo siguen mandando para el cierre de
+  ruta; el detalle («LO DEJA», «CEL APAGADO») ya no se pierde.
+- Cada fila de cuaderno apunta a su parada (`sheet_rows.stop_id`, única). La
+  sincronización parada → fila corre al reportar, al cerrar la ruta y al abrir
+  la hoja del mes; una fila editada a mano no se pisa. Las filas del Excel
+  histórico sin parada siguen valiendo tal cual.
+- Una edición de la hoja sobre una fila atada se escribe **primero en la
+  parada por el mismo camino que /reparto** (`lib/stop-report.ts`: ruta en
+  curso, saldo, evidencia, catálogo); si Rutas rechaza, la edición falla.
+- **Una sola puerta al Master** (`lib/master-door.ts`) para el cierre de
+  ruta, Liquidaciones 1 y Liquidaciones 2, con las guardas unidas: la parada
+  debe estar entregada; con evidencia cuando el reporte es real
+  (`reported_by` presente) y se exige, como en las cargas de Grupo GF; y sin
+  observación abierta en la fila. Las paradas de backfill histórico
+  (`reported_by` null, ruta con nota «Completada desde el cuaderno histórico»)
+  no pueden tener foto y no se les exige.
+- **Una sola pantalla del motorizado**, /reparto: escribe como en el cuaderno
+  (texto libre con sugerencias de su hoja), el detalle del pago, y el motivo
+  obligatorio cuando cobra distinto al total. Un pedido que lleva sin haber
+  pasado por despacho se añade como parada en su ruta del día; un punto sin
+  pedido Shopify (Kast) vive solo en la hoja, porque la parada exige pedido.
+  /reparto/cuaderno redirige.
+- **Asimetría documentada, no resuelta**: «rechazado» y «cancelado» del
+  cuaderno se traducen al motivo `rechazado` de Rutas, con el que el cierre de
+  ruta anula el pedido; desde la hoja, «Aplicar al Master» nunca anula (§30.3).
+- **Límites de efectivo (§29.9) activos**: al asignar a la ruta diaria se suma
+  el efectivo previsto (lo que ya lleva más lo nuevo, sin pedidos pagados en
+  Shopify); pasa del umbral → aviso; pasa del límite → rechazo salvo
+  autorización explícita de quien administra el operador.
+- **Backfill de la historia**: `scripts/backfill-stops-from-sheets.ts` crea
+  rutas cerradas y paradas a partir de las filas históricas con pedido, sin
+  tocar el Master ni las liquidaciones. Un pago sin dato en una fila
+  entregada queda como `efectivo` en la parada (la parada lo exige) con
+  `written_payment` null, para que se vea que no se escribió.
+
 ## 30. Liquidaciones 2 — hojas por dominio
 
 Plan y hallazgos en `docs/plan/liquidaciones-2.md`. Base en la migración 0168;
@@ -4772,7 +4822,13 @@ anterior, nuevo, actor y motivo. `sheets.edit` (vendedora, admin, owner)
 escribe celdas y abre o resuelve observaciones; `sheets.manage` (admin, owner)
 configura dominios, hojas, columnas, estados y alias. Un viewer solo lee.
 
-### 30.7 Reparto propio: la hoja de ruta y su importación
+### 30.7 Reparto propio: una vista con vocabulario sobre la parada
+
+Desde el 19-09-2026 (§29.12) la hoja de Reparto propio no es un segundo
+registro: cada fila con parada apunta a ella (`stop_id`) y se llena desde la
+parada; lo que sigue describe el vocabulario y la importación del Excel
+histórico, cuyas filas no tienen parada y siguen valiendo tal cual hasta que
+el backfill les crea una.
 
 Una hoja por motorizado, con clave de fila **fecha#pedido**: un mismo pedido
 puede salir varios días (cada salida es una fila) y dos veces el mismo día se
@@ -4840,6 +4896,12 @@ cambia el grupo de todas sus filas sin tocar lo que decían.
 
 ### 30.8 Cierre por pedido desde la hoja
 
+Desde el 19-09-2026 la puerta es `lib/master-door.ts`, compartida con el
+cierre de ruta y Liquidaciones 1 (§29.12): para una fila atada a su parada se
+exige parada entregada, con evidencia si el reporte es real, y sin
+observación abierta; una fila del Excel sin parada conserva solo la guarda de
+observaciones. Lo demás de esta sección sigue vigente.
+
 **Qué aplica.** Desde una hoja cuaderno, una fila vinculada a un pedido de
 Kapta cuyo estado tiene efecto *entrega* puede marcar ese pedido como
 entregado en el Master. Va por la **misma puerta que Liquidaciones**
@@ -4875,6 +4937,12 @@ no se reabre. Al editar un monto que no cuadra, la propia fila pide el motivo en
 línea; cerrar sin motivo deja la observación abierta sin motivo.
 
 ### 30.9 La pantalla del motorizado
+
+Desde el 19-09-2026 hay una sola pantalla, /reparto (§29.12): la ruta del
+día de Rutas con el vocabulario del cuaderno encima. Lo que sigue describe
+lo que esa pantalla conserva de la antigua /reparto/cuaderno: estado escrito
+con sugerencias, motivo obligatorio cuando cobra distinto, y que solo ve su
+hoja (0171). Las referencias a /reparto/cuaderno se leen como /reparto.
 
 `/reparto/cuaderno`. Vive fuera del panel, para el teléfono, y es la misma hoja
 de Reparto propio que ve quien liquida: el motorizado escribe en su cuaderno

@@ -741,6 +741,20 @@ historial por celda y observaciones de cuadre. Plan e iteraciones en
    que abra `/dashboard` va a parar a su cuaderno. La foto del comprobante va al
    bucket privado `delivery-proofs`, ruta `cuaderno/<hoja>/<fila>/`.
 
+11. **Convergencia con Rutas** (19-09-2026, MOM §29.12). **Migración
+   `0172_stop_written_status.sql`** a mano antes del código: `delivery_stops`
+   gana `written_status`, `written_status_code`, `written_payment`; `sheet_rows`
+   gana `stop_id`. La parada es la verdad: la hoja de Reparto propio se
+   sincroniza desde ella (al reportar, al cerrar ruta y al abrir la hoja del
+   mes), las ediciones de la hoja se escriben primero en la parada por
+   `lib/stop-report.ts`, y la única puerta al Master es `lib/master-door.ts`.
+   La pantalla del motorizado es solo `/reparto` (`/reparto/cuaderno`
+   redirige). Los límites de efectivo del proveedor ya rechazan asignaciones.
+12. **Backfill de la historia a Rutas**: `pnpm tsx
+   scripts/backfill-stops-from-sheets.ts <org_id> [--dry-run] [Roy …]` crea
+   rutas cerradas y paradas desde las filas históricas con pedido de las hojas
+   de Reparto propio (idempotente; no toca el Master). Corrido el 19-09-2026.
+
 ## 5k-ter. Rutas de reparto (motorizados propios)
 
 Sección propia (`/dashboard/rutas`) para el coordinador y una pantalla aparte

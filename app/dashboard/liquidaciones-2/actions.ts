@@ -753,11 +753,11 @@ export async function applyCuadernoRowsToMaster(sheetId: string, rowKeys: string
   // exige parada entregada con evidencia. Las filas del Excel histórico no
   // tienen parada y pasan con la guarda de observaciones, como hasta ahora.
   const stopIds = rows.map((r) => r.stop_id).filter((id): id is string => Boolean(id));
-  const stops = new Map<string, { status: string; photo_path: string | null; voucher_path: string | null }>();
+  const stops = new Map<string, { status: string; photo_path: string | null; voucher_path: string | null; reported_by: string | null }>();
   for (let i = 0; i < stopIds.length; i += 250) {
-    const { data, error } = await g.admin.from("delivery_stops").select("id,status,photo_path,voucher_path").in("id", stopIds.slice(i, i + 250));
+    const { data, error } = await g.admin.from("delivery_stops").select("id,status,photo_path,voucher_path,reported_by").in("id", stopIds.slice(i, i + 250));
     if (error) return { ok: false, error: error.message };
-    for (const st of (data ?? []) as { id: string; status: string; photo_path: string | null; voucher_path: string | null }[]) stops.set(st.id, st);
+    for (const st of (data ?? []) as { id: string; status: string; photo_path: string | null; voucher_path: string | null; reported_by: string | null }[]) stops.set(st.id, st);
   }
 
   const summary: ApplyMasterSummary = { aplicados: 0, yaEstaban: 0, saltadosAnulado: 0, sinVinculo: 0, sinEfecto: 0, devolucionesSinCamino: 0, conObservacionAbierta: 0, paradaNoEntregada: 0 };

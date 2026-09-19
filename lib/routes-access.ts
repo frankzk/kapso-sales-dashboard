@@ -39,6 +39,7 @@ export interface StopWithOrder extends RouteStop {
   photo_path: string | null;
   voucher_path: string | null;
   reported_at: string | null;
+  reported_by?: string | null;
   /** Lo escrito por el motorizado tal cual y su detalle de pago (0172). */
   written_status?: string | null;
   written_status_code?: string | null;
@@ -61,7 +62,7 @@ const ROUTE_COLUMNS =
   "id,org_id,store_id,rider_id,route_date,status,settlement_id,note,started_at,closed_at";
 const STOP_COLUMNS =
   "id,order_id,store_id,seq,status,payment_method,collected_amount,outcome_reason,note," +
-  "photo_path,voucher_path,reported_at,written_status,written_status_code,written_payment";
+  "photo_path,voucher_path,reported_at,reported_by,written_status,written_status_code,written_payment";
 
 /** La ficha del motorizado que corresponde al usuario de la petición, si la hay. */
 export async function getMyRider(): Promise<{ id: string; full_name: string } | null> {

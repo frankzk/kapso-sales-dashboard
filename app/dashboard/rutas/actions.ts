@@ -389,7 +389,7 @@ export async function closeRoute(
           reason: e.reason,
           payload: { route_id: routeId },
           guard: stop
-            ? { stop: { status: stop.status, photo_path: stop.photo_path, voucher_path: stop.voucher_path }, requireEvidence }
+            ? { stop: { status: stop.status, photo_path: stop.photo_path, voucher_path: stop.voucher_path, reported_by: stop.reported_by ?? null }, requireEvidence }
             : undefined,
         };
       }),

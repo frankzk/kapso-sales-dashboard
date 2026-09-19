@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { masterDoorVerdict } from "@/lib/master-door";
 
-const stop = (over: Partial<{ status: string; photo_path: string | null; voucher_path: string | null }> = {}) => ({
+const stop = (over: Partial<{ status: string; photo_path: string | null; voucher_path: string | null; reported_by: string | null }> = {}) => ({
   status: "entregado",
   photo_path: "r/s/foto.jpg",
   voucher_path: null,
@@ -25,6 +25,11 @@ describe("masterDoorVerdict", () => {
     expect(masterDoorVerdict({ target: "entregado", guard: { stop: stop({ photo_path: null }), requireEvidence: true } })).toMatchObject({ ok: false, code: "sin_evidencia" });
     expect(masterDoorVerdict({ target: "entregado", guard: { stop: stop({ photo_path: null, voucher_path: "r/s/yape.jpg" }), requireEvidence: true } })).toEqual({ ok: true });
     expect(masterDoorVerdict({ target: "entregado", guard: { stop: stop({ photo_path: null }), requireEvidence: false } })).toEqual({ ok: true });
+  });
+
+  it("una parada de backfill (sin reported_by) no exige evidencia; una reportada de verdad sí", () => {
+    expect(masterDoorVerdict({ target: "entregado", guard: { stop: stop({ photo_path: null, reported_by: null }), requireEvidence: true } })).toEqual({ ok: true });
+    expect(masterDoorVerdict({ target: "entregado", guard: { stop: stop({ photo_path: null, reported_by: "u1" }), requireEvidence: true } })).toMatchObject({ ok: false, code: "sin_evidencia" });
   });
 
   it("un rechazo (anulado) desde Rutas no exige que la parada esté entregada", () => {
