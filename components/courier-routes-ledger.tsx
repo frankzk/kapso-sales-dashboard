@@ -173,7 +173,7 @@ export function CourierRoutesLedger({
               <th className="px-3 py-2.5 text-center font-medium">Cotejados</th>
               <th className="px-3 py-2.5 text-center font-medium">Recibidos</th>
               <th className="px-3 py-2.5 text-right font-medium">Efectivo</th>
-              <th className="px-4 py-2.5 font-medium"><span className="inline-flex items-center gap-1">Avance <Hint text="Con caja: paquetes cotejados por oficina. Sin caja: paradas ya reportadas por el motorizado." /></span></th>
+              <th className="px-4 py-2.5 font-medium"><span className="inline-flex items-center gap-1">Avance <Hint text="Con caja, dos barras: verde, cotejados por oficina; morada, recibidos por el motorizado con «Lo llevo». Sin caja: paradas ya reportadas." /></span></th>
               <th className="px-3 py-2.5 font-medium">Liquidación</th>
             </tr>
           </thead>
@@ -205,14 +205,42 @@ export function CourierRoutesLedger({
   );
 }
 
-function progressOf(r: CourierLedgerRow): { pct: number; text: string } {
-  if (r.manifestId && r.officeCheckedCount != null) {
-    const pct = r.assignedCount ? Math.round((r.officeCheckedCount / r.assignedCount) * 100) : 0;
-    const left = r.assignedCount - r.officeCheckedCount;
-    return { pct, text: left > 0 ? `${left} por cotejar` : "Caja cotejada" };
+type Bar = { pct: number; text: string; tone: "emerald" | "violet" };
+
+/**
+ * Con caja, dos barras: el cotejo de oficina y lo que el motorizado ya
+ * recibió («Lo llevo»), que son los dos controles físicos de la caja. Sin
+ * caja (rutas del cuaderno), una sola: paradas ya reportadas.
+ */
+function progressOf(r: CourierLedgerRow): Bar[] {
+  if (r.manifestId && r.officeCheckedCount != null && r.pickupCheckedCount != null) {
+    const pct = (n: number) => (r.assignedCount ? Math.round((n / r.assignedCount) * 100) : 0);
+    const office = r.assignedCount - r.officeCheckedCount;
+    const pickup = r.assignedCount - r.pickupCheckedCount;
+    return [
+      { pct: pct(r.officeCheckedCount), text: office > 0 ? `${office} por cotejar` : "Caja cotejada", tone: "emerald" },
+      { pct: pct(r.pickupCheckedCount), text: pickup > 0 ? `${pickup} sin recibir` : "Recibida por el motorizado", tone: "violet" },
+    ];
   }
   const pct = r.assignedCount ? Math.round((r.reportedCount / r.assignedCount) * 100) : 0;
-  return { pct, text: `${r.deliveredCount} entregados · ${r.reportedCount - r.deliveredCount} no` };
+  return [{ pct, text: `${r.deliveredCount} entregados · ${r.reportedCount - r.deliveredCount} no`, tone: "emerald" }];
+}
+
+function ProgressBars({ bars, compact = false }: { bars: Bar[]; compact?: boolean }) {
+  return (
+    <div className={cn("space-y-1", compact ? "mt-2" : "min-w-[180px]")}>
+      {bars.map((bar) => (
+        <div key={bar.text + bar.tone} className="flex items-center gap-2">
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
+            <div className={cn("h-full rounded-full", bar.tone === "violet" ? "bg-violet-500" : "bg-emerald-500")} style={{ width: `${bar.pct}%` }} />
+          </div>
+          <span className="w-9 shrink-0 text-right text-xs tabular-nums text-slate-600">{bar.pct}%</span>
+          {compact && <span className="truncate text-xs text-slate-500">{bar.text}</span>}
+        </div>
+      ))}
+      {!compact && <p className="text-xs text-slate-500">{bars.map((b) => b.text).join(" · ")}</p>}
+    </div>
+  );
 }
 
 function settlementLabel(status: string | null): string {
@@ -236,13 +264,7 @@ function LedgerRow({ row, href }: { row: CourierLedgerRow; href: string }) {
       <td className="px-3 py-2.5 text-center tabular-nums text-emerald-700">{dash(row.officeCheckedCount)}</td>
       <td className="px-3 py-2.5 text-center tabular-nums text-violet-700">{dash(row.pickupCheckedCount)}</td>
       <td className="px-3 py-2.5 text-right tabular-nums text-slate-900">{money(row.codAmount)}</td>
-      <td className="px-4 py-2.5">
-        <div className="flex min-w-36 items-center gap-2">
-          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100" aria-hidden="true"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${progress.pct}%` }} /></div>
-          <span className="w-9 text-right text-xs tabular-nums text-slate-600">{progress.pct}%</span>
-        </div>
-        <p className="mt-0.5 text-xs text-slate-500">{progress.text}</p>
-      </td>
+      <td className="px-4 py-2.5"><ProgressBars bars={progress} /></td>
       <td className="px-3 py-2.5 text-xs text-slate-600">{settlementLabel(row.settlementStatus)}</td>
     </tr>
   );
@@ -261,10 +283,7 @@ function LedgerCard({ row, href }: { row: CourierLedgerRow; href: string }) {
           </div>
           <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold", SITUATION_TONE[situation])}>{LEDGER_SITUATION_LABELS[situation]}</span>
         </div>
-        <div className="mt-2 flex items-center gap-2">
-          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100" aria-hidden="true"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${progress.pct}%` }} /></div>
-          <span className="text-xs tabular-nums text-slate-600">{progress.text}</span>
-        </div>
+        <ProgressBars bars={progress} compact />
         {row.manifestId && <p className="mt-1 text-xs text-slate-500">armados {row.armedCount} · cotejados {row.officeCheckedCount} · recibidos {row.pickupCheckedCount}{row.settlementStatus ? ` · liquidación ${settlementLabel(row.settlementStatus).toLowerCase()}` : ""}</p>}
       </a>
     </li>

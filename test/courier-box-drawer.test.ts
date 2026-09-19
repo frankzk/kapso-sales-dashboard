@@ -64,4 +64,17 @@ describe("la caja se abre al lado de Rutas (MOM §29.14)", () => {
     expect(ledger).toContain("sticky top-[37px]");
     expect(ledger).toContain('<option value="">Todos</option>');
   });
+
+  it("Rutas: dos barras con caja (oficina y motorizado) y lotes pequeños en las consultas", () => {
+    const ledger = readFileSync(resolve(process.cwd(), "components/courier-routes-ledger.tsx"), "utf8");
+    expect(ledger).toContain("Recibida por el motorizado");
+    expect(ledger).toContain("sin recibir");
+    // PostgREST corta en 1.000 filas: paradas e ítems se piden por pocas rutas a la vez.
+    const lib = readFileSync(resolve(process.cwd(), "lib/courier-route-ledger.ts"), "utf8");
+    // Solo las consultas uno-a-muchos (paradas por ruta, ítems por caja); las de
+    // una fila por id pueden ir de 200 en 200.
+    expect(lib).toMatch(/chunked\(routeIds, (\d|1\d|2[0-5]), \(ids\) => sb\.from\("delivery_stops"\)/);
+    expect(lib).toMatch(/chunked\(manifestIds, (\d|1\d|2[0-5]), \(ids\) =>\s*sb\.from\("dispatch_manifest_items"\)/);
+    expect(lib).toContain("if (error) throw new Error(error.message);");
+  });
 });

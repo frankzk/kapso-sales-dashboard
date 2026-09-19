@@ -102,7 +102,10 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
 
   const [ridersRes, stopsRes, manifestsRes, settlementsRes] = await Promise.all([
     sb.from("riders").select("id,full_name").in("id", riderIds),
-    chunked(routeIds, 200, (ids) => sb.from("delivery_stops").select("route_id,order_id,status").in("route_id", ids)),
+    // Lotes pequeños a propósito: PostgREST corta cada respuesta en 1.000
+    // filas. Con 150 rutas de ~30 paradas en una sola consulta, las paradas
+    // de las rutas de hoy se quedaban fuera y la fila salía con S/ 0,00.
+    chunked(routeIds, 12, (ids) => sb.from("delivery_stops").select("route_id,order_id,status").in("route_id", ids)),
     chunked(routeIds, 200, (ids) =>
       sb.from("dispatch_manifests").select("id,delivery_route_id,load_number,state").eq("courier", "propio").neq("state", "cancelled").in("delivery_route_id", ids),
     ),
@@ -131,7 +134,7 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
   }
   const manifestIds = (manifestsRes as ManifestLite[]).map((m) => m.id);
   const items = manifestIds.length
-    ? await chunked(manifestIds, 200, (ids) =>
+    ? await chunked(manifestIds, 12, (ids) =>
         sb.from("dispatch_manifest_items").select("manifest_id,shipment_id,office_checked_at,pickup_checked_at,removed_at,pickup_declined_at").in("manifest_id", ids),
       )
     : [];
@@ -197,7 +200,8 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
 async function chunked<T>(ids: string[], size: number, run: (ids: string[]) => PromiseLike<{ data: unknown }>): Promise<T[]> {
   const out: T[] = [];
   for (let start = 0; start < ids.length; start += size) {
-    const { data } = await run(ids.slice(start, start + size));
+    const { data, error } = await (run(ids.slice(start, start + size)) as PromiseLike<{ data: unknown; error?: { message: string } | null }>);
+    if (error) throw new Error(error.message);
     out.push(...((data ?? []) as T[]));
   }
   return out;
