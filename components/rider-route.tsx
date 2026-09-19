@@ -10,7 +10,7 @@
 //   - la foto se sube aparte del reporte, así una caída de red no le borra lo
 //     que ya escribió.
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   NON_DELIVERY_REASONS,
@@ -22,6 +22,7 @@ import {
 } from "@/lib/routes";
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import { addManualStop, addSheetOnlyPoint, reportStop, searchOrdersForRider } from "@/app/reparto/actions";
+import { ScanAction } from "@/components/scan-action";
 import type { RiderOrderCandidate, RiderVocabulary } from "@/lib/sheets/rider-access";
 import { resolveWrittenForStop } from "@/lib/sheets/stop-bridge";
 import { montoDiffers } from "@/lib/sheets/rider-cuaderno";
@@ -307,10 +308,6 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
   const [voucherPath, setVoucherPath] = useState<string | null>(stop.voucher_path);
   const [err, setErr] = useState<string | null>(null);
   const [reportReason, setReportReason] = useState("");
-  const [uploading, setUploading] = useState<string | null>(null);
-
-  const photoRef = useRef<HTMLInputElement>(null);
-  const voucherRef = useRef<HTMLInputElement>(null);
 
   const numericAmount = amount.trim() ? Number(amount.replace(",", ".")) : null;
   const collectedForReason = status === "entregado" ? (method === "sin_cobro" ? 0 : numericAmount) : null;
@@ -325,26 +322,6 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
     else if (res.target.status === "no_entregado") {
       setStatus("no_entregado");
       setReason(res.target.outcome_reason ?? "");
-    }
-  }
-
-  async function upload(kind: "entrega" | "yape", file: File) {
-    setUploading(kind);
-    setErr(null);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("stopId", stop.id);
-      fd.append("kind", kind);
-      const res = await fetch("/api/reparto/foto", { method: "POST", body: fd });
-      const json = await res.json();
-      if (!res.ok) setErr(json.error ?? "No se pudo subir la foto.");
-      else if (kind === "entrega") setPhotoPath(json.path);
-      else setVoucherPath(json.path);
-    } catch {
-      setErr("No se pudo subir la foto. Revisa tu señal.");
-    } finally {
-      setUploading(null);
     }
   }
 
@@ -529,20 +506,22 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
           )}
           {method === "sin_cobro" && <p className="text-sm">Se registrará S/ 0.00. Si queda saldo, explica el motivo en la nota.</p>}
           {method === "yape" && <p className="text-sm text-slate-600">Yape reportado a la empresa. La captura no equivale a validación bancaria.</p>}
-          <PhotoField
+          <ScanAction
+            context="motorizado_entrega"
+            stopId={stop.id}
+            photoKind="entrega"
+            photoPath={photoPath}
             label="Foto de la entrega"
-            path={photoPath}
-            busy={uploading === "entrega"}
-            inputRef={photoRef}
-            onPick={(f) => upload("entrega", f)}
+            onResult={(r) => { if (r.error) setErr(r.error); else if (r.path) setPhotoPath(r.path); }}
           />
           {method === "yape" && (
-            <PhotoField
+            <ScanAction
+              context="motorizado_entrega"
+              stopId={stop.id}
+              photoKind="yape"
+              photoPath={voucherPath}
               label="Captura del Yape"
-              path={voucherPath}
-              busy={uploading === "yape"}
-              inputRef={voucherRef}
-              onPick={(f) => upload("yape", f)}
+              onResult={(r) => { if (r.error) setErr(r.error); else if (r.path) setVoucherPath(r.path); }}
             />
           )}
         </>
@@ -563,12 +542,13 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
         </select>
       )}
 
-      {status === "no_entregado" && delegated && <PhotoField
+      {status === "no_entregado" && delegated && <ScanAction
+        context="motorizado_entrega"
+        stopId={stop.id}
+        photoKind="entrega"
+        photoPath={photoPath}
         label="Evidencia del reporte"
-        path={photoPath}
-        busy={uploading === "entrega"}
-        inputRef={photoRef}
-        onPick={(f) => upload("entrega", f)}
+        onResult={(r) => { if (r.error) setErr(r.error); else if (r.path) setPhotoPath(r.path); }}
       />}
       <textarea
         aria-label="Nota del reporte"
@@ -583,7 +563,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
 
       <button
         onClick={submit}
-        disabled={pending || uploading !== null || (status === "entregado" && (method === null || stop.collection?.remaining == null))}
+        disabled={pending || (status === "entregado" && (method === null || stop.collection?.remaining == null))}
         className="w-full rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
       >
         {pending ? "Guardando…" : stop.status === "pendiente" ? "Guardar" : "Corregir"}
@@ -591,54 +571,6 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
     </div>
   );
 }
-
-function PhotoField({
-  label,
-  path,
-  busy,
-  inputRef,
-  onPick,
-}: {
-  label: string;
-  path: string | null;
-  busy: boolean;
-  inputRef: React.RefObject<HTMLInputElement | null>;
-  onPick: (file: File) => void;
-}) {
-  return (
-    <div className="rounded-lg border border-dashed border-slate-300 p-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-slate-600">
-          {label}
-          {path && <strong className="ml-1 text-emerald-700">✓ lista</strong>}
-        </span>
-        <button
-          onClick={() => inputRef.current?.click()}
-          disabled={busy}
-          className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 disabled:opacity-50"
-        >
-          {busy ? "Subiendo…" : path ? "Cambiar" : "Tomar foto"}
-        </button>
-      </div>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        // `capture` abre la cámara directamente en el móvil, que es lo que hace
-        // el 99 % de las veces; en escritorio el navegador lo ignora y abre el
-        // selector de archivos.
-        capture="environment"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onPick(f);
-          e.target.value = "";
-        }}
-      />
-    </div>
-  );
-}
-
 
 /**
  * Puntos que no vienen de una carga: un pedido de Kapta se crea como PARADA en

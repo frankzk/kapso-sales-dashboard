@@ -7,8 +7,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { DispatchScanner } from "@/components/dispatch-scanner";
-import { DispatchCamera } from "@/components/dispatch-camera";
+import { ScanAction } from "@/components/scan-action";
 import { DECLINE_REASONS, declineMyGfPackage, receiveMyGfPackage } from "@/app/reparto/receive";
 import type { RiderLoad, RiderLoadItem } from "@/lib/gf-rider-loads";
 
@@ -19,7 +18,6 @@ function cn(...parts: Array<string | false | null | undefined>): string {
 export function RiderReceiveBox({ riderName, loads }: { riderName: string; loads: RiderLoad[] }) {
   const router = useRouter();
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-  const [cameraFor, setCameraFor] = useState<string | null>(null);
   const [declining, setDeclining] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const busy = useRef(false);
@@ -65,7 +63,7 @@ export function RiderReceiveBox({ riderName, loads }: { riderName: string; loads
             <p className="text-sm tabular-nums text-slate-700"><b>{load.received}</b> de {load.total} recibidos{load.declined ? ` · ${load.declined} no recogidos` : ""}</p>
           </div>
           <progress value={load.received} max={load.total || 1} aria-label="Paquetes recibidos" className="mt-2 h-2 w-full accent-brand-600" />
-          <DispatchScanner busy={pending} disabled={false} onScan={(code) => receive(load.id, code)} onCamera={() => setCameraFor(load.id)} />
+          <ScanAction context="motorizado_recepcion" manifestId={load.id} disabled={pending} onResult={(r) => { setMessage(r.error ? { ok: false, text: r.error } : { ok: true, text: r.notice ?? "Paquete recibido." }); if (!r.error) router.refresh(); }} />
           <ul className="mt-4 space-y-2">
             {load.items.map((item) => (
               <ReceiveRow
@@ -81,7 +79,6 @@ export function RiderReceiveBox({ riderName, loads }: { riderName: string; loads
           </ul>
         </section>
       ))}
-      <DispatchCamera open={!!cameraFor} onClose={() => setCameraFor(null)} onScan={(value) => { if (cameraFor) receive(cameraFor, value); }} />
     </main>
   );
 }

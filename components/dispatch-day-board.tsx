@@ -11,8 +11,7 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
-import { DispatchScanner } from "@/components/dispatch-scanner";
-import { DispatchCamera } from "@/components/dispatch-camera";
+import { ScanAction } from "@/components/scan-action";
 import { activeDispatchItems } from "@/lib/dispatch";
 import { boxNextStep, dayBoxes, declinedPackages, splitAssignment, type DayManifest, type RiderBox } from "@/lib/dispatch-day";
 import type { DispatchManifest } from "@/lib/dispatch-access";
@@ -295,7 +294,7 @@ function BoxRow({ box, riders, orgId, open, onToggle, canManage, onChanged }: {
 }) {
   const [pending, start] = useTransition();
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-  const [cameraFor, setCameraFor] = useState<string | null>(null);
+  const [scanMode, setScanMode] = useState<"oficina_cotejo" | "supervisor_retiro">("oficina_cotejo");
   const load = box.loads[0]!;
   const canCheck = canManage && !["in_custody", "cancelled"].includes(load.state);
   const say = (r: { error?: string; notice?: string }) => {
@@ -341,8 +340,13 @@ function BoxRow({ box, riders, orgId, open, onToggle, canManage, onChanged }: {
                   <Link href={`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(m.id)}`} className="text-brand-700 underline">Abrir en la mesa</Link>
                 </div>
                 {checkable && (
-                  <div className="px-3">
-                    <DispatchScanner busy={pending} disabled={!checkable} onScan={(code) => scan(m.id, code)} onCamera={() => setCameraFor(m.id)} />
+                  <div className="px-3 pb-2">
+                    <div className="mt-2 flex gap-1 text-xs" role="group" aria-label="Qué hace el escaneo">
+                      {([["oficina_cotejo", "Cotejar"], ["supervisor_retiro", "Retirar"]] as const).map(([mode, text]) => (
+                        <button key={mode} type="button" onClick={() => setScanMode(mode)} aria-pressed={scanMode === mode} className={cn("rounded-full px-3 py-1 font-medium", scanMode === mode ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700")}>{text}</button>
+                      ))}
+                    </div>
+                    <ScanAction context={scanMode} manifestId={m.id} disabled={pending} onResult={(r) => say(r)} />
                   </div>
                 )}
                 <ul className="divide-y divide-slate-100">
@@ -393,7 +397,6 @@ function BoxRow({ box, riders, orgId, open, onToggle, canManage, onChanged }: {
           })}
         </div>
       )}
-      <DispatchCamera open={!!cameraFor} onClose={() => setCameraFor(null)} onScan={(value) => { if (cameraFor) scan(cameraFor, value); }} />
     </li>
   );
 }

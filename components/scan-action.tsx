@@ -1,0 +1,138 @@
+"use client";
+
+// El gesto único (MOM §29.13): un solo componente para escanear o fotografiar,
+// que decide qué acción de servidor llama y qué evento deja según `context`.
+// La pantalla elige el contexto; el usuario solo hace el gesto.
+//
+//   oficina_cotejo        → scanManifestItem(…, "office")   → office_checked
+//   motorizado_recepcion  → receiveMyGfPackage(…)           → pickup_checked
+//   motorizado_entrega    → foto a /api/reparto/foto         → evidencia de la parada
+//   supervisor_retiro     → lookup + removeManifestItem(…)  → package_removed
+
+import { useRef, useState } from "react";
+import { DispatchScanner } from "@/components/dispatch-scanner";
+import { DispatchCamera } from "@/components/dispatch-camera";
+import { scanActionPlan, type ScanContext } from "@/lib/scan-action";
+import { lookupDispatchShipment, removeManifestItem, scanManifestItem } from "@/app/dashboard/pedidos/despacho/actions";
+import { receiveMyGfPackage } from "@/app/reparto/receive";
+
+export interface ScanActionResult {
+  error?: string;
+  notice?: string;
+  /** Solo en `motorizado_entrega`: la ruta de la foto ya subida. */
+  path?: string;
+}
+
+interface Props {
+  context: ScanContext;
+  /** Caja sobre la que se coteja, recibe o retira. */
+  manifestId?: string;
+  /** Parada a la que pertenece la foto. */
+  stopId?: string;
+  /** `entrega` (foto de la entrega) o `yape` (captura del pago). */
+  photoKind?: "entrega" | "yape";
+  /** Ruta actual de la foto, para mostrar «lista» y permitir cambiarla. */
+  photoPath?: string | null;
+  label?: string;
+  disabled?: boolean;
+  onResult: (result: ScanActionResult) => void;
+}
+
+export function ScanAction({ context, manifestId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult }: Props) {
+  const plan = scanActionPlan(context);
+  const [busy, setBusy] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const inFlight = useRef(false);
+
+  async function execute(code: string) {
+    if (inFlight.current || !code.trim()) return;
+    inFlight.current = true;
+    setBusy(true);
+    try {
+      if (context === "oficina_cotejo") {
+        if (!manifestId) return onResult({ error: "Falta la caja." });
+        const r = await scanManifestItem(manifestId, code, "office");
+        onResult({ error: r.error, notice: r.notice });
+      } else if (context === "motorizado_recepcion") {
+        if (!manifestId) return onResult({ error: "Falta la caja." });
+        onResult(await receiveMyGfPackage(manifestId, code));
+      } else if (context === "supervisor_retiro") {
+        if (!manifestId) return onResult({ error: "Falta la caja." });
+        const found = await lookupDispatchShipment(code);
+        if (found.error || !found.shipment) return onResult({ error: found.error ?? "Paquete no encontrado." });
+        const reason = window.prompt(`¿Por qué se retira ${found.shipment.order_name ?? found.shipment.guide_code} de la caja?`);
+        if (!reason) return onResult({});
+        const r = await removeManifestItem(manifestId, found.shipment.id, reason);
+        onResult({ error: r.error, notice: r.notice });
+      }
+    } catch {
+      onResult({ error: "No se pudo registrar. Reintenta el mismo código; no se duplicará." });
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function uploadPhoto(file: File) {
+    if (!stopId) return onResult({ error: "Falta la parada." });
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("stopId", stopId);
+      fd.append("kind", photoKind);
+      const res = await fetch("/api/reparto/foto", { method: "POST", body: fd });
+      const json = (await res.json()) as { path?: string; error?: string };
+      if (!res.ok) onResult({ error: json.error ?? "No se pudo subir la foto." });
+      else onResult({ path: json.path, notice: "Foto lista." });
+    } catch {
+      onResult({ error: "No se pudo subir la foto. Revisa tu señal." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (plan.gesture === "photo") {
+    return (
+      <div className="rounded-lg border border-dashed border-slate-300 p-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-slate-600">
+            {label ?? plan.label}
+            {photoPath && <strong className="ml-1 text-emerald-700">✓ lista</strong>}
+          </span>
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={busy || disabled}
+            className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 disabled:opacity-50"
+          >
+            {busy ? "Subiendo…" : photoPath ? "Cambiar" : "Tomar foto"}
+          </button>
+        </div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          // `capture` abre la cámara en el móvil; en escritorio abre el selector.
+          capture="environment"
+          className="hidden"
+          aria-label={label ?? plan.label}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void uploadPhoto(f);
+            e.target.value = "";
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p className="mt-3 text-xs text-slate-500">{plan.hint}</p>
+      <DispatchScanner busy={busy} disabled={disabled} onScan={(code) => void execute(code)} onCamera={() => setCameraOpen(true)} />
+      <DispatchCamera open={cameraOpen} onClose={() => setCameraOpen(false)} onScan={(value) => void execute(value)} />
+    </div>
+  );
+}
