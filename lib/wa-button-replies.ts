@@ -16,6 +16,15 @@
 // los tres rótulos. Un cliente que escribe «yape» a mano sigue con el bot y la
 // asesora, como siempre — meterse ahí es justo el choque de dos voces que
 // docs/kapso-functions/README.md advierte.
+//
+// LA ÚNICA EXCEPCIÓN: un «ok» pelado. No es texto libre que interpretar, es un
+// acuse de recibo — no pregunta nada, no aporta dato nuevo, y el bot de ventas
+// no tiene nada que hacer con él. Se vio en producción: una clienta contestó
+// «Ok» al aviso y recibió «ya le paso tu consulta a una asesora», una
+// derivación por nada; otra contestó «ok» y no recibió nada. Ahí se le repite
+// el saldo y el Yape, una sola vez y dentro de las 48 h del aviso. La lista de
+// acuses es CERRADA (`ACKS`), igual que los rótulos de los botones: cualquier
+// frase fuera de ella sigue su camino hacia la asesora.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { StoreCreds } from "@/lib/ingest";
@@ -177,6 +186,65 @@ export function buildButtonReply(
   }
 }
 
+/**
+ * Los «ok» que no preguntan nada.
+ *
+ * POR QUÉ UNA LISTA CERRADA Y NO «cualquier texto». Interpretar texto libre es
+ * justo lo que este módulo no hace: un «¿me llegó mal el producto?» tiene que
+ * ir a la asesora, y contestarle con un número de Yape sería atropellarla.
+ * Pero un «ok» pelado no es una consulta: no lleva pregunta, no lleva dato
+ * nuevo, y el bot de ventas no tiene nada útil que hacer con él —se vio en el
+ * chat de Richard, que contestó «Ok» y recibió «ya le paso tu consulta a una
+ * asesora», una derivación por nada—. Ahí el mensaje que sirve es el que ya
+ * sabemos: cuánto debe y a dónde pagarlo.
+ */
+const ACKS = new Set([
+  "ok",
+  "oka",
+  "okey",
+  "okay",
+  "oki",
+  "ok gracias",
+  "okey gracias",
+  "ya",
+  "ya esta",
+  "ya ok",
+  "listo",
+  "listo gracias",
+  "bien",
+  "buenoentendido",
+  "entendido",
+  "entendido gracias",
+  "de acuerdo",
+  "perfecto",
+  "dale",
+  "gracias",
+  "muchas gracias",
+  "gracias ok",
+  "si",
+  "sí",
+  "si gracias",
+  "correcto",
+  "conforme",
+]);
+
+/**
+ * ¿Es un acuse de recibo y nada más? Pura.
+ *
+ * Un mensaje de solo emojis (👍, 🙏) cuenta: dice exactamente lo mismo que un
+ * «ok». `key()` se los come enteros, así que un texto que queda vacío después
+ * de normalizar —y no estaba vacío antes— es eso.
+ */
+export function isAcknowledgement(text: string | null | undefined): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  // Un mensaje largo no es un «ok» aunque empiece por uno.
+  if (raw.length > 40) return false;
+  const k = key(raw);
+  if (!k) return true;
+  return ACKS.has(k);
+}
+
 export interface InboundResult {
   reason: string;
 }
@@ -210,9 +278,96 @@ export async function handleInboundMessage(
   }
 
   const button = matchPaymentButton(msg.buttonText, msg.buttonPayload);
-  if (!button) return { reason: "not_a_payment_button" };
+  if (button) return replyToButton(admin, storeId, creds, msg, button, opts);
 
-  return replyToButton(admin, storeId, creds, msg, button, opts);
+  // Un «ok» después del aviso: se le repite lo que necesita para pagar.
+  if (!msg.buttonText && !msg.buttonPayload && isAcknowledgement(msg.text)) {
+    return replyToAck(admin, storeId, creds, msg, opts);
+  }
+
+  return { reason: "not_a_payment_button" };
+}
+
+/** Cuántas horas después del aviso un «ok» se sigue leyendo como respuesta a
+ *  ese aviso. Pasadas, es una conversación nueva y no nuestra. */
+const ACK_WINDOW_HOURS = 48;
+
+/**
+ * Contesta un «ok» con el saldo y el Yape, UNA sola vez por aviso.
+ *
+ * Las dos rejas son lo que lo hace inofensivo:
+ *
+ *  1. Tiene que haber un aviso enviado a ese celular en las últimas 48 h. Sin
+ *     eso, el «ok» es de otra conversación y no nos incumbe.
+ *  2. Y no haberle contestado ya —ni por botón ni por otro «ok»— desde ese
+ *     aviso. Repetirle el número de Yape a cada «gracias» es acoso, no ayuda.
+ */
+async function replyToAck(
+  admin: SupabaseClient,
+  storeId: string,
+  creds: StoreCreds,
+  msg: InboundMessage,
+  opts: { sendText?: typeof sendWhatsappText; nowIso?: string },
+): Promise<InboundResult> {
+  const nowIso = opts.nowIso ?? new Date().toISOString();
+  const link = await latestTransitContext(admin, storeId, msg.from);
+  if (!link.sentAt) return { reason: "ack_sin_aviso" };
+  if (Date.parse(nowIso) - Date.parse(link.sentAt) > ACK_WINDOW_HOURS * 3600 * 1000) {
+    return { reason: "ack_fuera_de_ventana" };
+  }
+
+  const { data: yaContestado } = await admin
+    .from("wa_auto_replies")
+    .select("id")
+    .eq("store_id", storeId)
+    .eq("phone", msg.from)
+    .eq("ok", true)
+    .gte("created_at", link.sentAt)
+    .limit(1)
+    .maybeSingle();
+  if (yaContestado) return { reason: "ack_ya_contestado" };
+
+  const send = opts.sendText ?? sendWhatsappText;
+  const phoneNumberId = msg.phoneNumberId ?? creds.whatsapp_phone_number_id;
+  if (!creds.kapso_api_key || !phoneNumberId) return { reason: "store_not_configured" };
+
+  const methods = await loadStorePaymentMethods(admin, storeId);
+  const text = buildButtonReply("yape", methods, { paymentLinkTemplate: null }, link.ctx);
+  if (!text) return { reason: "no_payment_methods" };
+
+  // La reserva va DESPUÉS de las rejas y antes de hablar, igual que en los
+  // botones: si Kapso reentrega el mismo `wamid`, la unique lo para.
+  const { error: claimError } = await admin.from("wa_auto_replies").insert({
+    store_id: storeId,
+    inbound_message_id: msg.id,
+    phone: msg.from,
+    phone_number_id: phoneNumberId,
+    trigger: "ack",
+    order_id: link.orderId,
+  });
+  if (claimError) {
+    if (claimError.code === "23505") return { reason: "duplicate_inbound" };
+    return { reason: `claim_failed:${claimError.message}` };
+  }
+
+  let ok = false;
+  let error: string | null = null;
+  let providerId: string | null = null;
+  try {
+    const res = await send({ apiKey: creds.kapso_api_key }, { phoneNumberId, to: msg.from, body: text });
+    ok = res.ok;
+    if (res.ok) providerId = res.id;
+    else error = res.error ?? "envío rechazado";
+  } catch (e) {
+    error = e instanceof Error ? e.message : String(e);
+  }
+  await admin
+    .from("wa_auto_replies")
+    .update({ body: text, ok, error, provider_message_id: providerId })
+    .eq("store_id", storeId)
+    .eq("inbound_message_id", msg.id);
+
+  return { reason: ok ? "replied:ack" : `reply_failed:${error}` };
 }
 
 async function replyToButton(
@@ -413,6 +568,8 @@ interface TransitContext {
   orderId: string | null;
   notificationId: string | null;
   shipmentId: string | null;
+  /** Cuándo salió ese aviso: la ventana del «ok» se mide desde aquí. */
+  sentAt: string | null;
 }
 
 const SIN_SALDO: LinkContext = { saldo: null, saldoValue: null, pedido: null };
@@ -422,6 +579,7 @@ const SIN_AVISO: TransitContext = {
   orderId: null,
   notificationId: null,
   shipmentId: null,
+  sentAt: null,
 };
 
 /**
@@ -437,7 +595,7 @@ async function latestTransitContext(
 ): Promise<TransitContext> {
   const { data } = await admin
     .from("shalom_transit_notifications")
-    .select("id,order_id,shipment_id")
+    .select("id,order_id,shipment_id,sent_at")
     .eq("store_id", storeId)
     .eq("phone", phone)
     .eq("status", "sent")
@@ -448,12 +606,14 @@ async function latestTransitContext(
     id: string;
     order_id: string | null;
     shipment_id: string;
+    sent_at: string | null;
   } | null;
   if (!row) return SIN_AVISO;
   const base = {
     orderId: row.order_id,
     notificationId: row.id,
     shipmentId: row.shipment_id,
+    sentAt: row.sent_at,
   };
   if (!row.order_id) return { ...base, ctx: SIN_SALDO };
 

@@ -13,6 +13,7 @@ vi.mock("@/lib/shalom/session", () => ({
 import {
   buildButtonReply,
   handleInboundMessage,
+  isAcknowledgement,
   matchPaymentButton,
 } from "@/lib/wa-button-replies";
 import type { PaymentMethod } from "@/lib/payment-methods";
@@ -170,6 +171,8 @@ function fakeAdmin(
     master?: any;
     payments?: any[];
     shipment?: any;
+    /** Una respuesta nuestra ya enviada desde el aviso (anti-repetición). */
+    yaContestado?: any;
   } = {},
 ) {
   const inserts: { table: string; row: any }[] = [];
@@ -195,9 +198,13 @@ function fakeAdmin(
         },
         select: () => chain,
         eq: () => chain,
+        gte: () => chain,
         order: () => chain,
         limit: () => chain,
         maybeSingle: () => {
+          if (table === "wa_auto_replies") {
+            return Promise.resolve({ data: opts.yaContestado ?? null });
+          }
           if (table === "shalom_transit_notifications") {
             return Promise.resolve({
               data:
@@ -527,5 +534,101 @@ describe("handleInboundMessage", () => {
       { sendText: send },
     );
     expect(send.mock.calls[0]![1].body).toBe("Saldo S/ 59.10 del #KP133540");
+  });
+});
+
+// ── El «ok» que no pregunta nada ────────────────────────────────────────────
+
+describe("isAcknowledgement", () => {
+  it("reconoce los acuses de recibo, con y sin tilde", () => {
+    for (const t of ["ok", "Ok", "OK", "okey", "listo", "gracias", "Muchas gracias", "ya", "sí", "perfecto"]) {
+      expect(isAcknowledgement(t)).toBe(true);
+    }
+  });
+
+  it("un mensaje de solo emojis dice lo mismo que un «ok»", () => {
+    expect(isAcknowledgement("👍")).toBe(true);
+    expect(isAcknowledgement("🙏🙏")).toBe(true);
+  });
+
+  it("NO se traga una consulta de verdad", () => {
+    // Éstas tienen que llegar a la asesora. Contestarles con un número de
+    // Yape sería atropellar a quien está preguntando otra cosa.
+    expect(isAcknowledgement("ok pero me llegó mal el producto")).toBe(false);
+    expect(isAcknowledgement("¿cuándo llega?")).toBe(false);
+    expect(isAcknowledgement("ya pagué, les mando la constancia")).toBe(false);
+    expect(isAcknowledgement("no lo quiero")).toBe(false);
+    expect(isAcknowledgement("")).toBe(false);
+  });
+});
+
+function textEvent(text: string, id = "wamid.TXT1") {
+  return {
+    event: "whatsapp.message.received",
+    message: {
+      id,
+      from: "51987654321",
+      type: "text",
+      text: { body: text },
+      kapso: { direction: "inbound", phone_number_id: "PN-451" },
+    },
+  };
+}
+
+describe("handleInboundMessage con un «ok»", () => {
+  it("le repite el saldo y el Yape", async () => {
+    const admin = fakeAdmin({ lastNotification: { id: "n1", order_id: "ord-1", shipment_id: "ship-1", sent_at: "2026-09-19T10:00:00Z" } });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.OUT" });
+    const res = await handleInboundMessage(admin, "store", CREDS, textEvent("ok"), {
+      sendText: send,
+      nowIso: "2026-09-19T11:00:00Z",
+    });
+    expect(res.reason).toBe("replied:ack");
+    expect(send.mock.calls[0]![1].body).toBe(YAPE_CON_SALDO);
+    expect(admin.inserts[0]).toMatchObject({ table: "wa_auto_replies", row: { trigger: "ack" } });
+  });
+
+  it("sin aviso previo, un «ok» no es nuestro", async () => {
+    const admin = fakeAdmin({ lastNotification: null });
+    const send = vi.fn();
+    const res = await handleInboundMessage(admin, "store", CREDS, textEvent("ok", "wamid.T2"), { sendText: send });
+    expect(res.reason).toBe("ack_sin_aviso");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("pasadas 48 h del aviso, ya es otra conversación", async () => {
+    const admin = fakeAdmin({ lastNotification: { id: "n1", order_id: "ord-1", shipment_id: "ship-1", sent_at: "2026-09-15T10:00:00Z" } });
+    const send = vi.fn();
+    const res = await handleInboundMessage(admin, "store", CREDS, textEvent("gracias", "wamid.T3"), {
+      sendText: send,
+      nowIso: "2026-09-19T11:00:00Z",
+    });
+    expect(res.reason).toBe("ack_fuera_de_ventana");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a un segundo «ok» ya no se le repite: eso es acoso, no ayuda", async () => {
+    const admin = fakeAdmin({
+      lastNotification: { id: "n1", order_id: "ord-1", shipment_id: "ship-1", sent_at: "2026-09-19T10:00:00Z" },
+      yaContestado: { id: "r1" },
+    });
+    const send = vi.fn();
+    const res = await handleInboundMessage(admin, "store", CREDS, textEvent("gracias", "wamid.T5"), {
+      sendText: send,
+      nowIso: "2026-09-19T11:00:00Z",
+    });
+    expect(res.reason).toBe("ack_ya_contestado");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("una consulta de verdad sigue su camino hacia la asesora", async () => {
+    const admin = fakeAdmin();
+    const send = vi.fn();
+    const res = await handleInboundMessage(admin, "store", CREDS, textEvent("¿me llegó mal el producto?", "wamid.T4"), {
+      sendText: send,
+    });
+    expect(res.reason).toBe("not_a_payment_button");
+    expect(send).not.toHaveBeenCalled();
+    expect(admin.inserts).toHaveLength(0);
   });
 });
