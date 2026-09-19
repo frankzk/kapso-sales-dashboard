@@ -454,14 +454,22 @@ function RouteDetail({
 
   return (
     <Card className={cn("space-y-4", compact ? "p-0 shadow-none border-0" : "p-4")}>
-      <div className={cn("flex flex-wrap items-center gap-2", compact ? "justify-end" : "justify-between")}>
-        {!compact && (
-          <h3 className="text-sm font-semibold text-slate-800">
-            {riderName} · {route.route_date}
-          </h3>
-        )}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {/* Izquierda: el título (vista completa) o «Reportar entregas», que es
+            el gesto del día a día y va discreto; derecha: cerrar la ruta. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {!compact && (
+            <h3 className="text-sm font-semibold text-slate-800">
+              {riderName} · {route.route_date}
+            </h3>
+          )}
+          {canReport && route.status === "en_curso" && (
+            <a href={`/reparto?ruta=${route.id}&modo=coordinacion`} className="inline-flex min-h-9 items-center rounded-lg border border-brand-200 bg-brand-50 px-3 text-sm font-medium text-brand-800 hover:bg-brand-100">
+              Reportar entregas
+            </a>
+          )}
+        </div>
         <div className="flex flex-wrap items-center gap-2">
-          {canReport && route.status === "en_curso" && <a href={`/reparto?ruta=${route.id}&modo=coordinacion`} className="inline-flex min-h-12 items-center rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white">Reportar entregas</a>}
           {planning && (
             <button
               disabled={disabled || !stops.length}
