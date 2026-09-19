@@ -76,6 +76,9 @@ export function DispatchDayBoard(props: Props) {
   const [riderId, setRiderId] = useState(riders[0]?.id ?? "");
   const [overrideCash, setOverrideCash] = useState(false);
   const [query, setQuery] = useState("");
+  // La lista se pinta por tandas de 100 para no cargar 1.600 filas de golpe;
+  // «Mostrar 100 más» amplía. Cambiar el filtro vuelve a la primera tanda.
+  const [limit, setLimit] = useState(100);
   const [store, setStore] = useState("");
   const [district, setDistrict] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -175,7 +178,7 @@ export function DispatchDayBoard(props: Props) {
       return `${q.orderName} ${q.customerName} ${q.district} ${q.storeName}`.toLocaleLowerCase("es").includes(needle);
     });
   }, [queue, query, store, district]);
-  const visible = filtered.slice(0, 100);
+  const visible = filtered.slice(0, limit);
   const allVisibleSelected = visible.length > 0 && visible.every((q) => selected.has(q.orderId));
   const selectedTotal = queue.filter((q) => selected.has(q.orderId)).reduce((sum, q) => sum + q.orderTotal, 0);
   const boxes = useMemo(() => dayBoxes(props.manifests as unknown as DayManifest[], day), [props.manifests, day]);
@@ -396,20 +399,24 @@ export function DispatchDayBoard(props: Props) {
             <div className="flex flex-wrap items-center gap-2">
               <input
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => { setQuery(e.target.value); setLimit(100); }}
                 placeholder="Pedido, cliente o distrito"
                 aria-label="Buscar en la cola"
                 className="min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-3 text-sm sm:w-52"
               />
-              <select value={store} onChange={(e) => setStore(e.target.value)} aria-label="Tienda" className="min-h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm sm:flex-none">
-                <option value="">Todas las tiendas</option>
-                {stores.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-              <select value={district} onChange={(e) => setDistrict(e.target.value)} aria-label="Distrito" className="min-h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm sm:flex-none">
-                <option value="">Todos los distritos</option>
-                {districts.map((d) => <option key={d} value={d}>{d}</option>)}
-              </select>
-              <span className="text-xs text-slate-500">{filtered.length} en cola{filtered.length > 100 ? " · se muestran 100" : ""}</span>
+              <div className="flex w-full min-w-0 gap-2 sm:w-auto">
+                <select value={store} onChange={(e) => { setStore(e.target.value); setLimit(100); }} aria-label="Tienda" className="min-h-10 w-1/2 min-w-0 rounded-lg border border-slate-300 px-2 text-sm sm:w-auto">
+                  <option value="">Todas las tiendas</option>
+                  {stores.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <select value={district} onChange={(e) => { setDistrict(e.target.value); setLimit(100); }} aria-label="Distrito" className="min-h-10 w-1/2 min-w-0 rounded-lg border border-slate-300 px-2 text-sm sm:w-auto">
+                  <option value="">Todos los distritos</option>
+                  {districts.map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+              <span className="w-full text-xs text-slate-500 sm:w-auto">
+                {filtered.length.toLocaleString("es-PE")} en cola{filtered.length > visible.length ? ` · se muestran ${visible.length}` : ""}
+              </span>
             </div>
           </div>
 
@@ -454,6 +461,13 @@ export function DispatchDayBoard(props: Props) {
               </li>
             ))}
             {!visible.length && <li className="px-4 py-8 text-center text-sm text-slate-500">Nada por asignar con ese filtro.</li>}
+            {filtered.length > visible.length && (
+              <li className="px-4 py-3 text-center">
+                <button type="button" onClick={() => setLimit((n) => n + 100)} className="min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                  Mostrar 100 más · quedan {(filtered.length - visible.length).toLocaleString("es-PE")}
+                </button>
+              </li>
+            )}
           </ul>
           </details>
         </div>
