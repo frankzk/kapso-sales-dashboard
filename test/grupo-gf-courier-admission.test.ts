@@ -31,6 +31,17 @@ describe("admisión de pedidos de Grupo GF Courier", () => {
     expect(body.slice(alreadyTaken, outputCheck)).toContain("alreadyAccepted.push(orderId)");
   });
 
+  it("el día de la mesa de despacho manda sobre el corte de las 11:30 al tomar", () => {
+    // Escanear a las 17:00 metía el paquete en la caja de MAÑANA (corte) aunque
+    // la pantalla dijera «Hoy». Con el paquete en la mano, el día es el elegido.
+    const src = readFileSync(resolve(root, "app/dashboard/courier/actions.ts"), "utf8");
+    const start = src.indexOf("export async function takeGroupGfCourierOrders(");
+    const body = src.slice(start, src.indexOf("\nexport ", start + 1));
+    expect(body).toContain("const scheduledFor = dispatchDay ?? (");
+    const scan = src.slice(src.indexOf("export async function scanAssignToRider("));
+    expect(scan).toContain("{ dispatchDay: opts.scheduledFor ?? limaClock().day }");
+  });
+
   it("una fecha prevista ya pasada se mueve al día de la caja antes de abrir la carga", () => {
     // Solicitudes tomadas semanas atrás guardan su fecha de entonces; abrir la
     // carga de ese día tropieza con una ruta liquidada. Se agrupa por el día
@@ -38,7 +49,9 @@ describe("admisión de pedidos de Grupo GF Courier", () => {
     const src = readFileSync(resolve(root, "app/dashboard/courier/actions.ts"), "utf8");
     const start = src.indexOf("export async function assignGroupGfCourierRoute(");
     const body = src.slice(start, src.indexOf("\nexport ", start + 1));
-    expect(body).toContain("request.scheduled_for < boxDay ? boxDay : request.scheduled_for");
+    expect(body).toContain("explicitDay ?? (request.scheduled_for < boxDay ? boxDay : request.scheduled_for)");
+    // Con el día elegido en la mesa de despacho, la caja es ese día para todos.
+    expect(body).toContain("const boxDay = explicitDay ?? today");
     expect(body).toContain('kind: "logistics_request_rescheduled"');
     expect(body.indexOf("groups.set(routeDate")).toBeGreaterThan(body.indexOf("logistics_request_rescheduled"));
     expect(body).not.toContain("groups.set(request.scheduled_for");

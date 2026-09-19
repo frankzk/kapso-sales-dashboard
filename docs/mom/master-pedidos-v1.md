@@ -4795,8 +4795,11 @@ fotografiar vivía en tres componentes que decidían por su cuenta.
 
 **Dos pasos para el supervisor, en una pantalla, con la pistola en la mano.**
 La pestaña «Despacho del día» de Grupo GF Courier abre en **modo escaneo**: el
-supervisor elige motorizado (y el día de la caja, hoy por defecto; nunca antes
-del que dicta el corte de las 11:30) y escanea QR tras QR. Cada lectura, en un
+supervisor elige motorizado (y el día de la caja, hoy por defecto, nunca un día
+ya pasado) y escanea QR tras QR. Ese día manda también después del corte de
+las 11:30: el corte rige lo que se toma sin despachar todavía, no a la mesa
+que ya tiene el paquete en la mano; si la solicitud estaba prevista para otro
+día, se mueve al de la caja con `logistics_request_rescheduled`. Cada lectura, en un
 solo gesto, **toma** el pedido si hacía falta, lo **pone en la caja** del
 motorizado del día y lo **deja cotejado por oficina**, porque es el propio
 supervisor quien tiene el paquete en la mano (`scanAssignToRider`, sobre las

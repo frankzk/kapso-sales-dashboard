@@ -262,12 +262,12 @@ export function DispatchDayBoard(props: Props) {
       const notices: string[] = [];
       const errors: string[] = [];
       for (let i = 0; i < split.orderIds.length; i += 50) {
-        const r = await takeAndAssignGroupGfCourierOrders(orgId, riderId, split.orderIds.slice(i, i + 50), { overrideCash });
+        const r = await takeAndAssignGroupGfCourierOrders(orgId, riderId, split.orderIds.slice(i, i + 50), { overrideCash, day: scanDay });
         if (r.error) errors.push(r.error);
         else if (r.notice) notices.push(r.notice);
       }
       if (split.requestIds.length) {
-        const r = await assignGroupGfCourierRoute(orgId, riderId, split.requestIds, { overrideCash });
+        const r = await assignGroupGfCourierRoute(orgId, riderId, split.requestIds, { overrideCash, day: scanDay });
         if (r.notice) notices.push(r.notice);
         if (r.cashWarning) notices.push(r.cashWarning);
         if (r.error) errors.push(r.error);

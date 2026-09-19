@@ -720,7 +720,7 @@ const MAX_TAKE_ORDERS = 50;
 export async function takeGroupGfCourierOrders(
   orgId: string,
   orderIds: string[],
-  opts: { scheduledFor?: string | null } = {},
+  opts: { scheduledFor?: string | null; dispatchDay?: string | null } = {},
 ): Promise<TakeCourierOrdersResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return { ...auth, accepted: [], alreadyAccepted: [], failed: [] };
@@ -830,7 +830,11 @@ export async function takeGroupGfCourierOrders(
       // El corte (11:30) fija el primer día posible; el supervisor puede
       // pedir uno posterior (modo escaneo, §29.13), nunca uno anterior.
       const earliest = scheduledDay(check.sameDayCutoff);
-      const scheduledFor = opts.scheduledFor && DATE_RE.test(opts.scheduledFor) && opts.scheduledFor > earliest ? opts.scheduledFor : earliest;
+      // `dispatchDay` viene de la mesa de despacho con el paquete en la mano
+      // (Despacho del día): ese día manda, también después del corte de las
+      // 11:30. El corte solo rige lo que se toma sin despachar todavía.
+      const dispatchDay = opts.dispatchDay && DATE_RE.test(opts.dispatchDay) && opts.dispatchDay >= limaClock().day ? opts.dispatchDay : null;
+      const scheduledFor = dispatchDay ?? (opts.scheduledFor && DATE_RE.test(opts.scheduledFor) && opts.scheduledFor > earliest ? opts.scheduledFor : earliest);
       const requestId = randomUUID();
       const idempotencyKey = `kapta:${check.providerId}:${orderId}`;
       const requestInsert = await admin
@@ -1035,14 +1039,14 @@ export interface AssignCourierRouteResult extends CourierActionResult {
   cashWarning?: string;
 }
 
-export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[], opts: { overrideCash?: boolean; scheduledFor?: string | null } = {}): Promise<CourierActionResult> {
+export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[], opts: { overrideCash?: boolean; scheduledFor?: string | null; day?: string | null } = {}): Promise<CourierActionResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   const admin = createAdminSupabase();
   const { data: rider } = await admin.from("riders").select("id,courier").eq("id", riderId).eq("org_id", orgId).eq("active", true).maybeSingle();
   if (!rider || !isGroupGfRiderCourier(rider.courier)) return { error: "Elige un motorizado activo de Grupo GF." };
-  const taken = await takeGroupGfCourierOrders(orgId, orderIds, { scheduledFor: opts.scheduledFor ?? null });
+  const taken = await takeGroupGfCourierOrders(orgId, orderIds, { scheduledFor: opts.scheduledFor ?? null, dispatchDay: opts.day ?? null });
   const acceptedIds = [...taken.accepted.map((item) => item.orderId), ...taken.alreadyAccepted];
   if (!acceptedIds.length) return { error: taken.error ?? "No se pudieron tomar los pedidos." };
   const { data: requests, error } = await admin.from("logistics_requests")
@@ -1174,7 +1178,11 @@ export async function assignGroupGfCourierRoute(
   );
 
   const today = limaClock().day;
-  const boxDay = opts.day && DATE_RE.test(opts.day) && opts.day > today ? opts.day : today;
+  // Con `day` explícito (la mesa de despacho eligió el día de la caja), la
+  // caja es ese día para todos, aunque la solicitud estuviera prevista para
+  // otro; sin él, la caja es hoy o la fecha prevista si es posterior.
+  const explicitDay = opts.day && DATE_RE.test(opts.day) && opts.day >= today ? opts.day : null;
+  const boxDay = explicitDay ?? today;
   const groups = new Map<string, AssignableRequest[]>();
   for (const request of requests) {
     if (!request.shipment_id) {
@@ -1207,7 +1215,7 @@ export async function assignGroupGfCourierRoute(
     // de entonces; agrupar por ella abría la carga de ese día, cuya ruta ya
     // está liquidada, y el escaneo moría con «La ruta diaria ya está
     // liquidada». La fecha se mueve al día de la caja y queda en el historial.
-    const routeDate = request.scheduled_for < boxDay ? boxDay : request.scheduled_for;
+    const routeDate = explicitDay ?? (request.scheduled_for < boxDay ? boxDay : request.scheduled_for);
     if (routeDate !== request.scheduled_for) {
       const { error: moveError } = await admin
         .from("logistics_requests")
@@ -1226,7 +1234,7 @@ export async function assignGroupGfCourierRoute(
         source: "grupo_gf_courier",
         courier: "propio",
         shipment_id: request.shipment_id,
-        note: `Salida prevista movida del ${request.scheduled_for} al ${routeDate}: el paquete entra hoy en la caja de ${rider.full_name}.`,
+        note: `Salida prevista movida del ${request.scheduled_for} al ${routeDate}: el paquete entra en la caja de ${rider.full_name} de ese día.`,
         payload: { requestId: request.id, from: request.scheduled_for, to: routeDate },
       });
       request.scheduled_for = routeDate;
@@ -1988,7 +1996,7 @@ export async function scanAssignToRider(
   }
 
   // 3) Tomar (idempotente) y asignar.
-  const taken = await takeGroupGfCourierOrders(orgId, [orderId], { scheduledFor: opts.scheduledFor ?? null });
+  const taken = await takeGroupGfCourierOrders(orgId, [orderId], { dispatchDay: opts.scheduledFor ?? limaClock().day });
   if (taken.failed.length) return { ...line, status: "no_elegible", message: taken.failed[0]!.error };
   if (!taken.accepted.length && !taken.alreadyAccepted.length) return { ...line, status: "no_elegible", message: taken.error ?? "No se pudo tomar el pedido." };
   const { data: provider } = await admin.from("logistics_providers").select("id").eq("org_id", orgId).eq("code", "grupo-gf-courier").maybeSingle();
