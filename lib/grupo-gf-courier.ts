@@ -228,3 +228,42 @@ export function merchantSettlement(input: {
     merchantNet: money(codCollected - logisticsFee - yapeFee),
   };
 }
+
+export type CashLimitStatus = "ok" | "warning" | "blocked";
+
+export interface CashLimitVerdict {
+  status: CashLimitStatus;
+  /** Efectivo previsto en la ruta tras asignar: lo que ya lleva más lo nuevo. */
+  total: number;
+  message: string | null;
+}
+
+/**
+ * Límites de efectivo de la ruta del día (MOM §29.9): el COD previsto no debe
+ * pasar de `cash_limit_amount`; desde `cash_warning_amount` se avisa. Puro:
+ * quien asigna suma lo que ya lleva la ruta y lo que quiere añadir.
+ */
+export function cashLimitVerdict(input: {
+  currentCod: number;
+  addingCod: number;
+  warningAmount: number | null;
+  limitAmount: number | null;
+}): CashLimitVerdict {
+  const total = Math.round((input.currentCod + input.addingCod) * 100) / 100;
+  const fmt = (n: number) => `S/ ${n.toFixed(2)}`;
+  if (input.limitAmount != null && input.limitAmount > 0 && total > input.limitAmount) {
+    return {
+      status: "blocked",
+      total,
+      message: `La ruta llevaría ${fmt(total)} en efectivo y el límite es ${fmt(input.limitAmount)}. Reparte los pedidos en otra ruta o autoriza superar el límite.`,
+    };
+  }
+  if (input.warningAmount != null && input.warningAmount > 0 && total > input.warningAmount) {
+    return {
+      status: "warning",
+      total,
+      message: `Ojo: la ruta llevará ${fmt(total)} en efectivo, por encima del aviso de ${fmt(input.warningAmount)}.`,
+    };
+  }
+  return { status: "ok", total, message: null };
+}

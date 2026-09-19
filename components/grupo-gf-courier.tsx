@@ -590,6 +590,7 @@ function AcceptedOrders({
   type AcceptedSegment = "unassigned" | "assigned" | "pending_arm" | "ready_check";
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [riderId, setRiderId] = useState(riders[0]?.id ?? "");
+  const [overrideCash, setOverrideCash] = useState(false);
   const [segment, setSegment] = useState<AcceptedSegment>("unassigned");
   const segmentCounts: Record<AcceptedSegment, number> = {
     unassigned: orders.filter((order) => !order.route).length,
@@ -624,7 +625,10 @@ function AcceptedOrders({
     if (!riderId || !selected.size) return;
     const requestIds = [...selected];
     setSelected(new Set());
-    run(() => assignGroupGfCourierRoute(orgId, riderId, requestIds));
+    run(async () => {
+      const result = await assignGroupGfCourierRoute(orgId, riderId, requestIds, { overrideCash });
+      return { ...result, notice: [result.notice, result.cashWarning].filter(Boolean).join(" ") || undefined };
+    });
   }
 
   return (
@@ -655,6 +659,10 @@ function AcceptedOrders({
               {!riders.length && <option value="">Sin motorizados disponibles</option>}
               {riders.map((rider) => <option key={rider.id} value={rider.id}>{rider.fullName}</option>)}
             </select>
+          </label>
+          <label className="flex items-center gap-2 text-xs text-slate-600">
+            <input type="checkbox" checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} disabled={pending} />
+            Autorizo superar el límite de efectivo de la ruta
           </label>
           <button
             type="button"
@@ -841,6 +849,7 @@ function CourierRoutes({
             <div className="flex justify-between gap-2"><dt className="text-slate-600">Armados</dt><dd className="font-semibold tabular-nums">{route.armedCount}</dd></div>
             <div className="flex justify-between gap-2"><dt className="text-slate-600">Verificados</dt><dd className="font-semibold tabular-nums">{route.officeCheckedCount}</dd></div>
             <div className="flex justify-between gap-2"><dt className="text-slate-600">Recibidos</dt><dd className="font-semibold tabular-nums">{route.pickupCheckedCount}</dd></div>
+            <div className="col-span-2 flex justify-between gap-2"><dt className="text-slate-600">Efectivo previsto</dt><dd className="font-semibold tabular-nums">{money(route.codAmount)}</dd></div>
           </dl>
           <progress aria-label={`Verificación de la caja de ${route.riderName}`} max={route.assignedCount || 1} value={route.officeCheckedCount} className="mt-3 h-2 w-full accent-brand-600" />
           <Link href={`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(route.manifestId)}`} className="mt-3 flex min-h-12 items-center justify-center rounded-xl bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2">
@@ -860,6 +869,7 @@ function CourierRoutes({
               <th className="px-3 py-3 text-center font-medium">Armados</th>
               <th className="px-3 py-3 text-center font-medium">Cotejados</th>
               <th className="px-3 py-3 text-center font-medium">Recibidos</th>
+              <th className="px-3 py-3 text-right font-medium">Efectivo previsto</th>
               <th className="px-4 py-3 font-medium">Avance físico</th>
               <th className="px-4 py-3 text-right font-medium">Acción</th>
             </tr>
@@ -884,6 +894,7 @@ function CourierRoutes({
                   <td className="px-3 py-3 text-center font-semibold tabular-nums text-sky-700">{route.armedCount}</td>
                   <td className="px-3 py-3 text-center font-semibold tabular-nums text-emerald-700">{route.officeCheckedCount}</td>
                   <td className="px-3 py-3 text-center font-semibold tabular-nums text-violet-700">{route.pickupCheckedCount}</td>
+                  <td className="px-3 py-3 text-right font-semibold tabular-nums text-slate-900">{money(route.codAmount)}</td>
                   <td className="px-4 py-3">
                     <div className="flex min-w-44 items-center gap-3">
                       <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100" aria-hidden="true">

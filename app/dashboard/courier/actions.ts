@@ -11,6 +11,7 @@ import {
   resolveDistrictTariff,
   type DistrictAvailabilityEventRow,
   type DistrictTariffRow,
+  cashLimitVerdict,
 } from "@/lib/grupo-gf-courier";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { resolveLimaDistrict } from "@/lib/order-coverage";
@@ -123,6 +124,8 @@ export interface CourierRouteSummary {
   armedCount: number;
   officeCheckedCount: number;
   pickupCheckedCount: number;
+  /** Efectivo previsto de la caja: suma de la venta de sus pedidos (MOM §29.9). */
+  codAmount: number;
 }
 
 export interface CourierRiderOption {
@@ -534,8 +537,10 @@ async function loadCourierOperations(
       armedCount: 0,
       officeCheckedCount: 0,
       pickupCheckedCount: 0,
+      codAmount: 0,
     };
     current.assignedCount += 1;
+    current.codAmount = Math.round((current.codAmount + (order.orderTotal ?? 0)) * 100) / 100;
     if (order.preparationState === "listo_despacho") current.armedCount += 1;
     if (order.route.officeCheckedAt) current.officeCheckedCount += 1;
     if (order.route.pickupCheckedAt) current.pickupCheckedCount += 1;
@@ -962,9 +967,11 @@ export interface AssignCourierRouteResult extends CourierActionResult {
   assigned: number;
   manifestIds: string[];
   failed: Array<{ requestId: string; error: string }>;
+  /** Aviso de efectivo (MOM §29.9) cuando la ruta pasa del umbral sin llegar al límite. */
+  cashWarning?: string;
 }
 
-export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[]): Promise<CourierActionResult> {
+export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[], opts: { overrideCash?: boolean } = {}): Promise<CourierActionResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
@@ -978,9 +985,9 @@ export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: 
     .select("id,logistics_providers!inner(org_id)").in("order_id", acceptedIds)
     .eq("logistics_providers.org_id", orgId).in("status", ["accepted", "scheduled"]);
   if (error) return { notice: taken.notice, error: "Se tomaron los pedidos, pero no se pudieron asignar. Continúa desde Pedidos tomados." };
-  const assigned = await assignGroupGfCourierRoute(orgId, riderId, (requests ?? []).map((request) => request.id));
+  const assigned = await assignGroupGfCourierRoute(orgId, riderId, (requests ?? []).map((request) => request.id), opts);
   const details = [...taken.failed.map((item) => `${item.orderId}: ${item.error}`), ...assigned.failed.map((item) => item.error)];
-  return { notice: [taken.notice, assigned.notice, assigned.error, ...details].filter(Boolean).join(" ") };
+  return { notice: [taken.notice, assigned.notice, assigned.cashWarning, assigned.error, ...details].filter(Boolean).join(" ") };
 }
 
 const MAX_ASSIGN_ORDERS = 100;
@@ -996,6 +1003,7 @@ export async function assignGroupGfCourierRoute(
   orgId: string,
   riderId: string,
   requestIds: string[],
+  opts: { overrideCash?: boolean } = {},
 ): Promise<AssignCourierRouteResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return { ...auth, assigned: 0, manifestIds: [], failed: [] };
@@ -1024,7 +1032,7 @@ export async function assignGroupGfCourierRoute(
   const [{ data: provider }, { data: rider }] = await Promise.all([
     admin
       .from("logistics_providers")
-      .select("id")
+      .select("id,cash_warning_amount,cash_limit_amount")
       .eq("org_id", orgId)
       .eq("code", "grupo-gf-courier")
       .eq("status", "active")
@@ -1134,7 +1142,23 @@ export async function assignGroupGfCourierRoute(
   let assigned = 0;
   const manifestIds: string[] = [];
   const changedOrderIds = new Set<string>();
+  const cashWarnings: string[] = [];
   for (const [routeDate, group] of groups) {
+    // Límites de efectivo de la ruta del día (MOM §29.9): lo que ya lleva el
+    // motorizado ese día más lo que se le añade. Solo cuenta lo que se cobra
+    // contra entrega (pedidos no pagados en Shopify).
+    const cash = await routeCashForecast(admin, orgId, rider.id, routeDate, group.map((request) => request.order_id));
+    const verdict = cashLimitVerdict({
+      currentCod: cash.current,
+      addingCod: cash.adding,
+      warningAmount: amount((provider as { cash_warning_amount?: unknown }).cash_warning_amount),
+      limitAmount: amount((provider as { cash_limit_amount?: unknown }).cash_limit_amount),
+    });
+    if (verdict.status === "blocked" && !opts.overrideCash) {
+      for (const request of group) failed.push({ requestId: request.id, error: verdict.message ?? "Límite de efectivo superado." });
+      continue;
+    }
+    if (verdict.message) cashWarnings.push(verdict.status === "blocked" ? `${verdict.message} Autorizado por ${auth.userId}.` : verdict.message);
     const { data: manifestId, error: loadError } = await admin.rpc("gf_dispatch_load", {
       p_org_id: orgId, p_rider_id: rider.id, p_day: routeDate, p_actor: auth.userId,
     });
@@ -1214,7 +1238,54 @@ export async function assignGroupGfCourierRoute(
     assigned,
     manifestIds: [...new Set(manifestIds)],
     failed,
+    cashWarning: cashWarnings.length ? [...new Set(cashWarnings)].join(" ") : undefined,
   };
+}
+
+/**
+ * Efectivo previsto de la ruta del motorizado en una fecha: suma del total de
+ * los pedidos contra entrega que ya están en sus cargas ese día, y de los que
+ * se quieren añadir. Un pedido pagado en Shopify no se cobra en la puerta.
+ */
+async function routeCashForecast(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orgId: string,
+  riderId: string,
+  routeDate: string,
+  addingOrderIds: string[],
+): Promise<{ current: number; adding: number }> {
+  const { data: manifests } = await admin
+    .from("dispatch_manifests")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("rider_id", riderId)
+    .eq("route_date", routeDate)
+    .neq("state", "cancelled");
+  const manifestIds = ((manifests ?? []) as { id: string }[]).map((m) => m.id);
+  let currentIds: string[] = [];
+  if (manifestIds.length) {
+    const { data: items } = await admin
+      .from("dispatch_manifest_items")
+      .select("shipments(order_id)")
+      .in("manifest_id", manifestIds)
+      .is("removed_at", null);
+    currentIds = ((items ?? []) as unknown as { shipments: { order_id: string | null } | null }[])
+      .map((i) => i.shipments?.order_id)
+      .filter((id): id is string => Boolean(id));
+  }
+  const adding = new Set(addingOrderIds);
+  const ids = [...new Set([...currentIds, ...adding])];
+  if (!ids.length) return { current: 0, adding: 0 };
+  const { data: orders } = await admin.from("orders").select("id,total_amount,financial_status").in("id", ids);
+  let current = 0;
+  let add = 0;
+  for (const o of (orders ?? []) as { id: string; total_amount: number | string | null; financial_status: string | null }[]) {
+    if (o.financial_status === "paid") continue;
+    const total = amount(o.total_amount) ?? 0;
+    if (adding.has(o.id)) add += total;
+    else if (currentIds.includes(o.id)) current += total;
+  }
+  return { current: Math.round(current * 100) / 100, adding: Math.round(add * 100) / 100 };
 }
 
 export async function activateGroupGfCourier(orgId: string): Promise<CourierActionResult> {

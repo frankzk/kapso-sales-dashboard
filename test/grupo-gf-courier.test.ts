@@ -196,3 +196,14 @@ describe("comisión Yape y liquidación de tienda", () => {
     });
   });
 });
+
+import { cashLimitVerdict } from "@/lib/grupo-gf-courier";
+
+describe("cashLimitVerdict (MOM §29.9)", () => {
+  it("avisa al pasar el umbral y bloquea al pasar el límite; sin límites no dice nada", () => {
+    expect(cashLimitVerdict({ currentCod: 1000, addingCod: 500, warningAmount: 4000, limitAmount: 5000 })).toMatchObject({ status: "ok", total: 1500, message: null });
+    expect(cashLimitVerdict({ currentCod: 3500, addingCod: 800, warningAmount: 4000, limitAmount: 5000 })).toMatchObject({ status: "warning", total: 4300 });
+    expect(cashLimitVerdict({ currentCod: 4800, addingCod: 300, warningAmount: 4000, limitAmount: 5000 })).toMatchObject({ status: "blocked", total: 5100 });
+    expect(cashLimitVerdict({ currentCod: 9000, addingCod: 1, warningAmount: null, limitAmount: null }).status).toBe("ok");
+  });
+});
