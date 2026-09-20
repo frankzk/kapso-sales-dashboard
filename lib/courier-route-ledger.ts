@@ -176,19 +176,23 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
       pickupChecked += active.filter((i) => i.pickup_checked_at).length;
     }
     const reported = stops.filter((s) => s.status !== "pendiente").length;
+    // Una caja sin paquetes activos no cuenta como caja: pasa con las rutas
+    // que vienen del cuaderno (las paradas existen, la caja no) y con la caja
+    // que quedó vacía tras un retiro. La fila enseña entonces el reparto.
+    const box = last && packages > 0 ? last : null;
     return {
       routeId: route.id,
       routeDate: route.route_date,
       routeStatus: route.status,
       riderId: route.rider_id,
       riderName: riderName.get(route.rider_id) ?? "Motorizado",
-      manifestId: last?.id ?? null,
-      loadNumber: last?.load_number ?? null,
-      manifestState: last?.state ?? null,
+      manifestId: box?.id ?? null,
+      loadNumber: box?.load_number ?? null,
+      manifestState: box?.state ?? null,
       assignedCount: stops.length || packages,
-      armedCount: last ? armedCount : null,
-      officeCheckedCount: last ? officeChecked : null,
-      pickupCheckedCount: last ? pickupChecked : null,
+      armedCount: box ? armedCount : null,
+      officeCheckedCount: box ? officeChecked : null,
+      pickupCheckedCount: box ? pickupChecked : null,
       reportedCount: reported,
       deliveredCount: stops.filter((s) => s.status === "entregado").length,
       codAmount: stops.reduce((sum, s) => sum + (total.get(s.order_id) ?? 0), 0),
