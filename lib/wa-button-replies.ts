@@ -194,8 +194,11 @@ export function buildButtonReply(
  * propia lista, y las dos tienen que encajar. Donde el router calla, nosotros
  * contestamos; donde el router habla, nosotros callamos. Una frase que sea
  * trivial para él y no para nosotros deja a la clienta sin NINGUNA respuesta;
- * al revés, recibe dos. Esta lista es un subconjunto de la suya, salvo
- * `NUNCA_ACK`, donde los dos tienen que callar y derivar.
+ * al revés, recibe dos. Un subconjunto NO basta —eso deja palabras que el
+ * router calla y nosotros también, y ahí no contesta nadie—: esta lista es
+ * IDÉNTICA a la del router, palabra por palabra. Las únicas diferencias
+ * deliberadas son `NUNCA_ACK`, donde los dos callan y derivan, y los mensajes
+ * de puros dígitos.
  *
  * POR QUÉ UNA LISTA CERRADA Y NO «cualquier texto». Interpretar texto libre es
  * justo lo que este módulo no hace: un «¿me llegó mal el producto?» tiene que
@@ -210,11 +213,9 @@ const ACK_WORDS = new Set([
   "ok",
   "oka",
   "okey",
-  "okay",
   "oki",
   "okis",
   "ya",
-  "esta",
   "listo",
   "lista",
   "gracias",
@@ -269,12 +270,15 @@ const NUNCA_ACK = new Set(["no", "nunca", "cancelar", "anular", "devolver"]);
 export function isAcknowledgement(text: string | null | undefined): boolean {
   const raw = String(text ?? "").trim();
   if (!raw) return false;
-  // Un mensaje largo no es un «ok» aunque empiece por uno.
-  if (raw.length > 40) return false;
   const k = key(raw);
-  if (!k) return true; // solo emojis o signos
+  // Solo emojis o signos: dice lo mismo que un «ok».
+  if (!k) return true;
   const palabras = k.split(" ");
   if (palabras.some((w) => NUNCA_ACK.has(w))) return false;
+  // Un mensaje de puros dígitos NO es un acuse: lo más probable es que sea el
+  // número de operación de un Yape que acaba de hacer. Eso es un dato, y va a
+  // quien pueda hacer algo con él.
+  if (palabras.every((w) => /^\d+$/.test(w))) return false;
   return palabras.every((w) => ACK_WORDS.has(w));
 }
 

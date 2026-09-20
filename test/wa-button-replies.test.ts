@@ -561,6 +561,20 @@ describe("isAcknowledgement", () => {
     expect(isAcknowledgement("de acuerdo")).toBe(true);
   });
 
+  it("un mensaje de puros dígitos NO es un acuse: suele ser el nº de operación", () => {
+    // El router del bot lo trata como trivial y calla. Nosotros también
+    // callamos, pero por el motivo contrario: es un DATO, y quien puede hacer
+    // algo con él es la asesora. Pedido al bot: que los mande a `texto`.
+    expect(isAcknowledgement("707784")).toBe(false);
+    expect(isAcknowledgement("6069")).toBe(false);
+  });
+
+  it("una frase larga de puros acuses sigue siendo un acuse", () => {
+    // Sin límite de longitud: el router no lo tiene, y ponerlo aquí dejaba
+    // frases que él calla y nosotros también. Ahí no contesta nadie.
+    expect(isAcknowledgement("buenos dias muchas gracias muy amable de nada")).toBe(true);
+  });
+
   it("«no» NUNCA es un acuse, aunque sea cortito", () => {
     // Después de pedirle un saldo, un «no» es un rechazo: abre devolución, no
     // un recordatorio del Yape. Va a la asesora.
