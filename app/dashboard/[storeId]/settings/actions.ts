@@ -31,6 +31,7 @@ import { clientFor, loadStoreShalom, mintSession, publicClient } from "@/lib/sha
 import { FlowClient } from "@/lib/flow/client";
 import { confirmationUrl } from "@/lib/flow/link";
 import { processTransitNotifications } from "@/lib/shalom/transit-notify";
+import { resolveAgentNames } from "@/lib/agent-names";
 
 export interface SettingsState {
   error?: string;
@@ -1227,4 +1228,96 @@ export async function deleteDistrictCoverage(
       "Excepción eliminada; ese distrito vuelve a la regla general." +
       (recomputed ? ` ${recomputed} pedido(s) abiertos reclasificados.` : ""),
   };
+}
+
+// ── La escalera de la cola de cobranza (0172) ───────────────────────────────
+
+/** Quién atiende, en qué orden y cuántos minutos espera cada uno. */
+export async function listEscalation(
+  storeId: string,
+): Promise<{ id: string; userId: string; name: string; minutes: number; sort: number }[]> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return [];
+  const { data } = await ctx.admin
+    .from("store_collection_escalation")
+    .select("id,user_id,minutes,sort")
+    .eq("store_id", storeId)
+    .order("sort", { ascending: true });
+  const rows = ((data ?? []) as { id: string; user_id: string; minutes: number; sort: number }[]);
+  if (!rows.length) return [];
+  const names = await resolveAgentNames(
+    rows.map((r) => r.user_id),
+    ctx.admin,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    userId: r.user_id,
+    name: names[r.user_id] ?? r.user_id.slice(0, 8),
+    minutes: r.minutes,
+    sort: r.sort,
+  }));
+}
+
+export async function addEscalationStep(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const userId = String(formData.get("user_id") ?? "").trim();
+  if (!userId) return { error: "Elige a quién añadir." };
+  const minutes = Math.max(1, Math.min(1440, Number(formData.get("minutes") ?? 30) || 30));
+
+  // Al final de la escalera: el que llega nuevo no le quita el turno a nadie.
+  const { data: last } = await ctx.admin
+    .from("store_collection_escalation")
+    .select("sort")
+    .eq("store_id", storeId)
+    .order("sort", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const sort = ((last as { sort?: number } | null)?.sort ?? 0) + 10;
+
+  const { error } = await ctx.admin
+    .from("store_collection_escalation")
+    .insert({ store_id: storeId, user_id: userId, minutes, sort });
+  if (error) {
+    if ((error as { code?: string }).code === "23505") return { error: "Esa persona ya está en la escalera." };
+    return { error: error.message };
+  }
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: "Añadido a la escalera ✓" };
+}
+
+export async function removeEscalationStep(storeId: string, id: string): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const { error } = await ctx.admin.from("store_collection_escalation").delete().eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: "Quitado de la escalera ✓" };
+}
+
+/** Mueve un escalón arriba o abajo intercambiando su `sort` con el vecino. */
+export async function moveEscalationStep(
+  storeId: string,
+  id: string,
+  direction: "up" | "down",
+): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const { data } = await ctx.admin
+    .from("store_collection_escalation")
+    .select("id,sort")
+    .eq("store_id", storeId)
+    .order("sort", { ascending: true });
+  const rows = ((data ?? []) as { id: string; sort: number }[]);
+  const i = rows.findIndex((r) => r.id === id);
+  const j = direction === "up" ? i - 1 : i + 1;
+  if (i < 0 || j < 0 || j >= rows.length) return { error: "Ya está en el extremo." };
+  await ctx.admin.from("store_collection_escalation").update({ sort: rows[j]!.sort }).eq("id", rows[i]!.id);
+  await ctx.admin.from("store_collection_escalation").update({ sort: rows[i]!.sort }).eq("id", rows[j]!.id);
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: "Orden actualizado ✓" };
 }
