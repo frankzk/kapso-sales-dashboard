@@ -35,6 +35,7 @@ import { fetchKapsoImageBase64, type InboundMessage } from "@/lib/kapso";
 import { analyzeYapeVoucherFromEnv, extractYapeVoucherFromEnv } from "@/lib/vision";
 import { VOUCHER_BUCKET } from "@/lib/voucher-inspect";
 import { findDuplicate, normalizeOperationNumber } from "@/lib/yape-dedup";
+import { raiseCollectionAlert } from "@/lib/collection-alerts-access";
 
 /** Un pedido al que este comprobante PODRÍA pertenecer. */
 export interface VoucherCandidate {
@@ -142,13 +143,25 @@ export async function handleInboundVoucher(
   const nowIso = deps.nowIso ?? new Date().toISOString();
   const fail = async (outcome: string, detail: string): Promise<IntakeResult> => {
     // Nunca se termina en silencio: si el dinero entró y no lo registramos,
-    // alguien tiene que poder enterarse sin leer los chats uno por uno.
+    // alguien tiene que poder enterarse sin leer los chats uno por uno. La
+    // anomalía deja el rastro agregado; la alerta le pone DUEÑO y reloj.
     await noteAnomaly(admin, {
       storeId,
       source: "inbound_voucher",
       reason: outcome,
       sample: { phone: msg.from, messageId: msg.id, detail },
     });
+    await raiseCollectionAlert(
+      admin,
+      {
+        storeId,
+        kind: "sin_atribuir",
+        phone: msg.from,
+        inboundMessageId: msg.id,
+        detail,
+      },
+      nowIso,
+    );
     return { outcome, detail };
   };
 
@@ -260,6 +273,23 @@ export async function handleInboundVoucher(
       `Comprobante recibido por WhatsApp y atribuido a este pedido por ${match.gate}. ` +
       `Pendiente de que una persona lo valide.`,
   });
+
+  // Registrado no es cobrado: alguien tiene que validarlo para que la clave se
+  // libere. Por eso también levanta alerta — con dueño, no en una bandeja.
+  await raiseCollectionAlert(
+    admin,
+    {
+      storeId,
+      kind: "registrado",
+      orderId: match.candidate.orderId,
+      paymentId: (pago as { id: string }).id,
+      phone: msg.from,
+      inboundMessageId: msg.id,
+      amount,
+      detail: `${match.candidate.orderName ?? ""} · atribuido por ${match.gate} · falta validar`.trim(),
+    },
+    nowIso,
+  );
 
   return {
     outcome: "registrado",

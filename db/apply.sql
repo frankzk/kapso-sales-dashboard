@@ -345,4 +345,6 @@
 \ir migrations/0170_shalom_arrival_notice.sql
 \echo 'Applying 0171_voucher_intake_switch.sql'
 \ir migrations/0171_voucher_intake_switch.sql
+\echo 'Applying 0172_collection_alerts.sql'
+\ir migrations/0172_collection_alerts.sql
 \echo 'Done.'
