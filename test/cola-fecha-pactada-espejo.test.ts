@@ -29,6 +29,14 @@ function url(due: MasterFilters["confirmationDue"]): URL {
 }
 
 describe("cola de Fecha pactada en PostgREST", () => {
+  // `cq` sobrevive al cambio de pestaña, y desde que «sin fechas» es Hoy, sin
+  // esta guarda «Hoy» en «Todos» traería cada pedido entregado de la base.
+  it("las tres colas se acotan a Por confirmar, igual que sus conteos", () => {
+    for (const due of ["vencido", "hoy", "proximo"] as const) {
+      expect(url(due).searchParams.get("macro_stage")).toBe("eq.por_confirmar");
+    }
+  });
+
   it("Vencidos es solo la fecha pactada incumplida: ni un recordatorio entra ahí", () => {
     const u = url("vencido");
     expect(u.searchParams.get("confirmation_next_contact_on")).toBe(`lt.${HOY}`);
@@ -36,7 +44,7 @@ describe("cola de Fecha pactada en PostgREST", () => {
     expect(u.searchParams.get("or")).toBeNull();
   });
 
-  it("Hoy: fecha pactada de hoy, recordatorio ya llegado, o ciclo vencido SIN recordatorio", () => {
+  it("Hoy: pactada de hoy, recordatorio llegado, ciclo vencido sin recordatorio, o NINGUNA fecha", () => {
     const or = decodeURIComponent(url("hoy").searchParams.get("or")!);
     expect(or).toContain(`confirmation_next_contact_on.eq.${HOY}`);
     // Llegado = su hora ya pasó, se compara contra AHORA y no contra el día:
@@ -44,16 +52,22 @@ describe("cola de Fecha pactada en PostgREST", () => {
     expect(or).toContain(`confirmation_reminder_due_at.lte.${AHORA.toISOString()}`);
     // El ciclo solo manda si no hay recordatorio, ninguno — ni uno viejo.
     expect(or).toContain(`confirmation_reminder_due_at.is.null,confirmation_cycle_due_on.lte.${HOY}`);
+    // Nunca llamado: sin pactada, sin recordatorio y sin ciclo. Toca hoy.
+    expect(or).toContain(
+      "confirmation_next_contact_on.is.null,confirmation_reminder_due_at.is.null,confirmation_cycle_due_on.is.null",
+    );
     // Y no queda rastro de la ventana «de hoy» que antes acotaba el recordatorio.
     expect(or).not.toContain("confirmation_reminder_due_at.gte.");
     expect(or).not.toContain("confirmation_reminder_due_at.lt.");
   });
 
-  it("Próximos: fecha pactada futura, recordatorio que aún no llega, o ciclo futuro sin recordatorio", () => {
+  it("Próximos: pactada futura, recordatorio que aún no llega, o ciclo futuro sin recordatorio", () => {
     const or = decodeURIComponent(url("proximo").searchParams.get("or")!);
     expect(or).toContain(`confirmation_next_contact_on.gt.${HOY}`);
     expect(or).toContain(`confirmation_reminder_due_at.gt.${AHORA.toISOString()}`);
     expect(or).toContain(`confirmation_reminder_due_at.is.null,confirmation_cycle_due_on.gt.${HOY}`);
+    // «Sin ninguna fecha» es Hoy, nunca Próximos.
+    expect(or).not.toContain("confirmation_cycle_due_on.is.null");
   });
 
   it("Hoy y Próximos parten el recordatorio exactamente en AHORA, sin hueco ni solape", () => {

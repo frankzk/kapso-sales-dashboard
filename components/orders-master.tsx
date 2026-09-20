@@ -2059,7 +2059,16 @@ function NextContactCell({ row, now }: { row: OrderMasterRow; now?: string }) {
   // ver. La celda tiene que decir lo mismo que la cola (`confirmationQueueBucket`).
   if (reminder) return <>{fmtDateTime(reminder)}</>;
   const cycle = row.confirmation_cycle_due_on;
-  if (!cycle) return <>—</>;
+  if (!cycle) {
+    // Sin fecha, sin recordatorio y sin ciclo: nunca se le ha llamado, y la
+    // primera llamada toca hoy. La celda dice lo mismo que la cola.
+    return (
+      <span className="inline-flex flex-col leading-tight">
+        <span>Hoy</span>
+        <span className="text-[11px] text-slate-400">primera llamada</span>
+      </span>
+    );
+  }
   return (
     <span className="inline-flex flex-col leading-tight">
       <span>{cycle <= today ? "Hoy" : fmtDate(`${cycle}T12:00:00.000Z`)}</span>

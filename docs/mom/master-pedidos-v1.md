@@ -380,9 +380,19 @@ Reglas:
   atrás cedía al ciclo: medido el 16-09-2026, los 24 de `Vencidos` eran
   recordatorios de hoy de pedidos contactados hoy —cero fechas pactadas—, y
   111 reintentos olvidados estaban escondidos en `Próximos` por el ciclo.
-- Orden de mando de la cola: **fecha pactada → recordatorio → ciclo**.
-- `Sin llamar` no entra en el ciclo: sin un solo contacto no hay desde cuándo
-  contar, y su chip propio ya lo separa. Lo delata su antigüedad, no la cola.
+- Orden de mando de la cola: **fecha pactada → recordatorio → ciclo → sin
+  ninguna, Hoy**.
+- `Sin llamar` no entra en el ciclo —sin un solo contacto no hay desde cuándo
+  contar— pero **sí está en `Hoy`**: la primera llamada es trabajo de hoy, y la
+  más importante. Su chip propio en SUBETAPAS sigue separándola para atacarla
+  aparte. Antes vivía fuera de las tres colas y la fila de Fecha pactada no
+  sumaba el total: medido el 20-09-2026, «Todos los plazos» 275 contra
+  0 + 172 + 11 = 183, y los 92 que faltaban eran exactamente los de `Sin
+  llamar`. Que `Hoy` llegue a cero tiene que significar que el día está hecho.
+- La cola de Fecha pactada es de `Por confirmar`. El filtro `cq` sobrevive al
+  cambio de pestaña, así que tanto el filtro como su espejo en la base lo acotan
+  a esa etapa: un pedido entregado tampoco tiene fechas de confirmación, y no
+  por eso «toca llamarlo hoy».
 - El ciclo no gasta días de gestión ni acerca el `Último intento`: solo el
   §6.1 —un día distinto CON gestión— gasta cupo. Un pedido puede rotar por
   ciclo muchas veces sin pasar de 1/7 si nadie lo llama, y eso es exactamente
