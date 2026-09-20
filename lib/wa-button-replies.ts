@@ -348,6 +348,9 @@ async function handleVoucherImage(
   msg: InboundMessage,
   opts: { nowIso?: string },
 ): Promise<InboundResult> {
+  // Nace apagado y se enciende por tienda (0171): esto escribe filas de DINERO
+  // sin que una persona haya mirado la imagen.
+  if (!creds.shalom_voucher_intake_enabled) return { reason: "voucher_intake_apagado" };
   const nowIso = opts.nowIso ?? new Date().toISOString();
   const link = await latestTransitContext(admin, storeId, msg.from);
   if (!link.sentAt) return { reason: "imagen_sin_aviso" };

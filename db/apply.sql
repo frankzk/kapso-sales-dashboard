@@ -343,4 +343,6 @@
 \ir migrations/0169_aliclik_tariff_probes_sin_inventar_cobertura.sql
 \echo 'Applying 0170_shalom_arrival_notice.sql'
 \ir migrations/0170_shalom_arrival_notice.sql
+\echo 'Applying 0171_voucher_intake_switch.sql'
+\ir migrations/0171_voucher_intake_switch.sql
 \echo 'Done.'

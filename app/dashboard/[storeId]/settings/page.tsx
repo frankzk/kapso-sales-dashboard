@@ -192,6 +192,7 @@ export default async function StoreSettingsPage({
       shalom_arrival_template_name: full.shalom_arrival_template_name ?? null,
       shalom_arrival_params: full.shalom_arrival_params ?? null,
       shalom_arrival_attach_ticket: full.shalom_arrival_attach_ticket ?? false,
+      shalom_voucher_intake_enabled: full.shalom_voucher_intake_enabled ?? false,
       flowcl_link_enabled: full.flowcl_link_enabled ?? false,
       flowcl_link_email: full.flowcl_link_email ?? null,
       flowcl_link_ttl_hours: full.flowcl_link_ttl_hours ?? 48,

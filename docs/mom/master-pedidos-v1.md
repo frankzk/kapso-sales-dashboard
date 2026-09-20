@@ -3052,6 +3052,11 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
       existen para evitar.
     - Lo que no pasa **queda como anomalía con su motivo** (`inbound_voucher`).
       El silencio es lo único inaceptable: la clienta ya pagó.
+    - **Interruptor propio y apagado de nacimiento** (0171), aparte del del
+      aviso: una tienda puede querer avisar sin querer que se le registren
+      pagos solos. Es el único sitio del Master donde una fila de dinero la
+      escribe algo que no es una persona mirando la imagen, y eso merece que se
+      encienda a mano, tienda por tienda.
   - Todo queda en la línea de tiempo del pedido (`whatsapp_template`) y en las
     tablas de la cola y de respuestas, con el motivo cuando no salió.
 - Seguimiento comienza desde la constancia del adelanto y se intensifica cuando

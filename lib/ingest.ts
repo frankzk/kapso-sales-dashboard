@@ -153,6 +153,8 @@ export interface StoreCreds {
   shalom_arrival_template_name: string | null;
   shalom_arrival_params: string | null;
   shalom_arrival_attach_ticket: boolean;
+  /** Registrar solos los comprobantes que llegan por WhatsApp (0171). */
+  shalom_voucher_intake_enabled: boolean;
 }
 
 /**
@@ -275,6 +277,7 @@ export async function getStoreCreds(
     shalom_arrival_template_name: data.shalom_arrival_template_name ?? null,
     shalom_arrival_params: data.shalom_arrival_params ?? null,
     shalom_arrival_attach_ticket: data.shalom_arrival_attach_ticket ?? false,
+    shalom_voucher_intake_enabled: data.shalom_voucher_intake_enabled ?? false,
   };
 }
 
