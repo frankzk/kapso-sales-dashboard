@@ -6,6 +6,7 @@
 // quien llama (routeReportAccess en /reparto; sheets.edit en Liquidaciones 2).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { NON_DELIVERY_REASONS } from "@/lib/routes";
 import { reportedCollection } from "@/lib/route-collection";
 import { loadRouteCollectionBalances } from "@/lib/route-collection-access";
 import {
@@ -133,6 +134,25 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
       () => undefined,
       () => undefined,
     );
+  // Rastro en el pedido (pestaña Actividad) de cada reporte: quién, qué
+  // resultado, cómo cobró y qué evidencia dejó. Es información: el Master
+  // sigue cambiando solo al cerrar la ruta (§29.9), por la puerta única.
+  if (input.status !== "pendiente") {
+    await writeStopReportedEvent(admin, {
+      stopId: stop.id,
+      routeId: stop.route_id,
+      orderId: stop.order_id,
+      actor: input.actor,
+      status: input.status,
+      method: delivered ? method : null,
+      collected: delivered ? collected : null,
+      reason: input.status === "no_entregado" ? reason : null,
+      note: input.note ?? null,
+      photoPath,
+      voucherPath,
+      delegated: Boolean(input.delegated),
+    }).catch(() => undefined);
+  }
   if (unconfirmed && pickup) {
     // Rastro en el pedido (pestaña Actividad): entregado sin haber confirmado
     // el recojo. No mueve el Master; es información.
@@ -186,4 +206,48 @@ async function pickupConfirmationFor(admin: SupabaseClient, stopId: string): Pro
     shipmentId: row.shipment_id,
     manifestId: row.dispatch_manifest_id,
   };
+}
+
+const METHOD_LABEL: Record<string, string> = { efectivo: "Efectivo", yape: "Yape", pos: "POS / tarjeta", sin_cobro: "Sin cobro" };
+
+async function writeStopReportedEvent(
+  admin: SupabaseClient,
+  ev: {
+    stopId: string; routeId: string; orderId: string; actor: string; status: string;
+    method: string | null; collected: number | null; reason: string | null; note: string | null;
+    photoPath: string | null; voucherPath: string | null; delegated: boolean;
+  },
+): Promise<void> {
+  const [{ data: stopRow }, { data: rider }] = await Promise.all([
+    admin.from("delivery_stops").select("store_id,shipment_id").eq("id", ev.stopId).maybeSingle(),
+    admin.from("riders").select("full_name").eq("user_id", ev.actor).limit(1).maybeSingle(),
+  ]);
+  if (!stopRow?.store_id) return;
+  const who = ev.delegated ? "Coordinación reportó por el motorizado" : rider?.full_name ? `${rider.full_name} reportó` : "Reporte";
+  const parts: string[] = [];
+  if (ev.status === "entregado") {
+    parts.push("Entregado");
+    if (ev.method) parts.push(`${METHOD_LABEL[ev.method] ?? ev.method}${ev.collected != null && ev.method !== "sin_cobro" ? ` S/ ${ev.collected.toFixed(2)}` : ""}`);
+  } else {
+    const reason = NON_DELIVERY_REASONS.find((r) => r.code === ev.reason)?.label ?? ev.reason ?? "sin motivo";
+    parts.push(`No entregado · ${reason}`);
+  }
+  const evidence = [ev.photoPath ? "foto" : null, ev.voucherPath ? "comprobante" : null].filter(Boolean).join(" y ");
+  if (evidence) parts.push(`con ${evidence}`);
+  if (ev.note?.trim()) parts.push(`«${ev.note.trim()}»`);
+  await admin.from("order_events").insert({
+    store_id: stopRow.store_id,
+    order_id: ev.orderId,
+    kind: "stop_reported",
+    occurred_at: new Date().toISOString(),
+    actor: ev.actor,
+    source: "reparto",
+    courier: "propio",
+    shipment_id: stopRow.shipment_id ?? null,
+    note: `${who}: ${parts.join(" · ")}.`,
+    payload: {
+      stop_id: ev.stopId, route_id: ev.routeId, status: ev.status, payment_method: ev.method,
+      collected_amount: ev.collected, outcome_reason: ev.reason, photo_path: ev.photoPath, voucher_path: ev.voucherPath,
+    },
+  });
 }

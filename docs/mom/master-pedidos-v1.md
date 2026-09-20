@@ -4752,6 +4752,11 @@ Reparto propio es una vista con vocabulario y cuadre encima de ella:
   propio al que resolvió; null = sin equivalente) y `written_payment`. El enum
   de tres estados y el motivo del catálogo siguen mandando para el cierre de
   ruta; el detalle («LO DEJA», «CEL APAGADO») ya no se pierde.
+- Cada reporte de parada deja `stop_reported` en la actividad del pedido:
+  quién reportó, resultado, medio y monto cobrado, evidencia y nota. Es
+  información: el Master sigue cambiando solo al cerrar la ruta, por la puerta
+  única. La foto y el comprobante se ven desde Reparto y liquidación
+  (`GET /api/reparto/foto`, solo para quien puede ver la parada).
 - Cada fila de cuaderno apunta a su parada (`sheet_rows.stop_id`, única). La
   sincronización parada → fila corre al reportar, al cerrar la ruta y al abrir
   la hoja del mes; una fila editada a mano no se pisa. Las filas del Excel

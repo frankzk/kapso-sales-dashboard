@@ -102,3 +102,37 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ ok: true, path, kind });
 }
+
+/**
+ * Enseña una foto de entrega o un comprobante ya subido.
+ *   GET /api/reparto/foto?path=<ruta en el bucket>
+ *
+ * La foto lleva casa, cara y montos: solo la ve quien puede ver la parada. La
+ * comprobación la hace la base (RLS de `delivery_stops`: tienda con acceso o
+ * la ruta del propio motorizado); el archivo se sirve desde aquí y no como
+ * enlace firmado, para que la URL no viaje ni se comparta.
+ */
+export async function GET(req: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "No autenticado." }, { status: 401 });
+  const path = (req.nextUrl.searchParams.get("path") ?? "").trim();
+  if (!path || path.includes("..")) return NextResponse.json({ error: "Falta la foto." }, { status: 400 });
+  const sb = await createServerSupabase();
+  const { data: stop } = await sb
+    .from("delivery_stops")
+    .select("id")
+    .or(`photo_path.eq.${JSON.stringify(path)},voucher_path.eq.${JSON.stringify(path)}`)
+    .limit(1)
+    .maybeSingle();
+  if (!stop) return NextResponse.json({ error: "Esa foto no es de una parada tuya." }, { status: 404 });
+  const admin = createAdminSupabase();
+  const { data, error } = await admin.storage.from(BUCKET).download(path);
+  if (error || !data) return NextResponse.json({ error: error?.message ?? "No se encontró la foto." }, { status: 404 });
+  return new NextResponse(data, {
+    headers: {
+      "content-type": data.type || "image/jpeg",
+      "cache-control": "private, max-age=300",
+      "content-disposition": `inline; filename="${path.split("/").pop() ?? "foto"}"`,
+    },
+  });
+}

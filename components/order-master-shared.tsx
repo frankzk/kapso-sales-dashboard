@@ -593,6 +593,7 @@ export const TIMELINE_LABEL: Record<string, string> = {
   office_checked: "Cotejado en oficina",
   pickup_checked: "Lo lleva el motorizado",
   pickup_declined: "No lo llevó el motorizado",
+  stop_reported: "Reporte del motorizado",
   delivered_unconfirmed_pickup: "Entregado sin confirmar recojo",
   handed_to_courier: "Entregado al courier",
   custody_transferred: "Custodia entregada al motorizado",

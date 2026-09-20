@@ -577,7 +577,11 @@ function RouteDetail({
                   {s.status === "entregado" ? <>{methodLabel(s.payment_method)} · {money(s.collected_amount)}</> : "—"}
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-500">
-                  {s.photo_path ? "📷" : "—"} {s.voucher_path ? "🧾" : ""}
+                  {/* Cada respaldo abre en grande en otra pestaña (GET /api/reparto/foto). */}
+                  {s.photo_path
+                    ? <a href={`/api/reparto/foto?path=${encodeURIComponent(s.photo_path)}`} target="_blank" rel="noreferrer" title="Ver la foto de la entrega" className="rounded px-1 text-base hover:bg-slate-100">📷</a>
+                    : "—"}
+                  {s.voucher_path && <a href={`/api/reparto/foto?path=${encodeURIComponent(s.voucher_path)}`} target="_blank" rel="noreferrer" title="Ver el comprobante de pago" className="ml-1 rounded px-1 text-base hover:bg-slate-100">🧾</a>}
                 </td>
                 {/* La tarifa solo se gana con la parada reportada (entregada o
                     rechazada); antes de eso no es S/ 0,00, es «todavía no». Sin
