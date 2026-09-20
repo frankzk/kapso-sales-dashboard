@@ -41,6 +41,7 @@ import { moneyLabel, pendingBalance, sendTransitTicket } from "@/lib/shalom/tran
 import { FlowClient } from "@/lib/flow/client";
 import { ensureFlowPaymentLink } from "@/lib/flow/link";
 import { env } from "@/lib/env";
+import { handleInboundVoucher, loadVoucherCandidates } from "@/lib/shalom/voucher-intake";
 import type { sendWhatsappDocument } from "@/lib/kapso";
 
 export type PaymentButton = "yape" | "transferencia" | "link_pago";
@@ -317,6 +318,11 @@ export async function handleInboundMessage(
   const button = matchPaymentButton(msg.buttonText, msg.buttonPayload);
   if (button) return replyToButton(admin, storeId, creds, msg, button, opts);
 
+  // Una foto después del aviso: casi siempre es el comprobante del saldo.
+  if (msg.mediaKind === "image") {
+    return handleVoucherImage(admin, storeId, creds, msg, opts);
+  }
+
   // Un «ok» después del aviso: se le repite lo que necesita para pagar.
   if (!msg.buttonText && !msg.buttonPayload && isAcknowledgement(msg.text)) {
     return replyToAck(admin, storeId, creds, msg, opts);
@@ -325,9 +331,33 @@ export async function handleInboundMessage(
   return { reason: "not_a_payment_button" };
 }
 
-/** Cuántas horas después del aviso un «ok» se sigue leyendo como respuesta a
- *  ese aviso. Pasadas, es una conversación nueva y no nuestra. */
+/** Cuántas horas después del aviso un «ok» —o una foto— se siguen leyendo como
+ *  respuesta a ese aviso. Pasadas, es una conversación nueva y no nuestra. */
 const ACK_WINDOW_HOURS = 48;
+
+/**
+ * Una imagen que llega tras el aviso: se intenta registrar como comprobante.
+ *
+ * La reja de las 48 h es la misma del «ok», y aquí además ahorra dinero: sin
+ * ella, cada selfie y cada foto de producto gastaría una llamada de visión.
+ */
+async function handleVoucherImage(
+  admin: SupabaseClient,
+  storeId: string,
+  creds: StoreCreds,
+  msg: InboundMessage,
+  opts: { nowIso?: string },
+): Promise<InboundResult> {
+  const nowIso = opts.nowIso ?? new Date().toISOString();
+  const link = await latestTransitContext(admin, storeId, msg.from);
+  if (!link.sentAt) return { reason: "imagen_sin_aviso" };
+  if (Date.parse(nowIso) - Date.parse(link.sentAt) > ACK_WINDOW_HOURS * 3600 * 1000) {
+    return { reason: "imagen_fuera_de_ventana" };
+  }
+  const candidatos = await loadVoucherCandidates(admin, storeId, msg.from);
+  const res = await handleInboundVoucher(admin, storeId, creds, msg, candidatos, { nowIso });
+  return { reason: `voucher:${res.outcome}` };
+}
 
 /**
  * Contesta un «ok» con el saldo y el Yape, UNA sola vez por aviso.
