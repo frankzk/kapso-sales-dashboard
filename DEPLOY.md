@@ -112,6 +112,8 @@ roles and the `auth` schema, so it just works.
    | `ALICLIK_WRITE_ENABLED` | `false` por defecto. `true` habilita CREAR guías en Aliclik |
    | `SHALOM_API_KEY` | API key (`sk_…`) del wrapper de Shalom. **Global: una para todas las tiendas.** Sin ella no aparece «+ Guía Shalom» (ver 5ñ) |
    | `SHALOM_API_BASE` | `https://api.shalom-api-peru.com` (optional). **El host a secas, sin `/v1`**: el cliente ya añade la ruta, y una base con `/v1` produce `/v1/v1/…` → 404. Si no existe la variable, el valor por defecto ya es el correcto |
+   | `OLVA_TRACKING_APIKEY` | La `apikey` con la que la página pública de Olva (`tracking.olvaexpress.pe`) llama a `reports.olvaexpress.pe/webservice/rest/getTrackingInformation`. **Es de Olva, no nuestra**: se captura en DevTools → Red al consultar un tracking, y la pueden rotar sin aviso. Sin ella el cron `olva-reconcile` se salta y los estados de Olva se marcan a mano (ver §12 del MOM) |
+   | `OLVA_TRACKING_API_BASE` | `https://reports.olvaexpress.pe` (optional) |
    | `CHATBY_WEBHOOK_SECRET` | Secreto del «Live Chat Webhook» de Chatby. **Lo elegís vos** (`openssl rand -hex 32`), no lo emite Chatby. Va también en Chatby → Integrations → Live Chat Support → Webhook, campo *Custom Header*: `X-Webhook-Secret: <valor>`. Sin él el receptor rechaza todo (ver 5q) |
    | `META_APP_SECRET` | *App Secret* de la app de Meta — **lo emite Meta**, es el mismo que ya usa la Marketing API. Con él se verifica la firma `X-Hub-Signature-256` de cada entrega del webhook de página/Instagram. Sin él el receptor rechaza todo (ver 5s) |
    | `META_WEBHOOK_VERIFY_TOKEN` | Token del apretón de manos del webhook de Meta. **Lo elegís vos** (`openssl rand -hex 32`) y lo tecleás en el panel de Meta al dar de alta la URL. Sin él Meta **nunca activa la suscripción** y no llega nada, sin error visible (ver 5s) |
@@ -1103,6 +1105,39 @@ todas las tiendas**.
 > `origen`, `destino`, `remitente`, `destinatario` y `comprobante` llegan vacíos
 > desde julio de 2026 — lo avisa el propio proveedor. No se pide: el estado sale
 > entero de `status`.
+
+### Los estados de Olva: `/api/cron/olva-reconcile`, cada 30 min
+
+Olva **no tiene API para clientes**. Lo que existe es la llamada que hace su
+página pública de seguimiento —un `GET` a
+`reports.olvaexpress.pe/webservice/rest/getTrackingInformation?tracking=…&emision=…&apikey=…&details=1`—
+con una apikey fija que la página publica en su JavaScript. `lib/olva/client.ts`
+repite exactamente esa llamada, con `Origin` y `Referer` de la página. La apikey
+va en `OLVA_TRACKING_APIKEY`; se captura desde DevTools → Red al consultar
+cualquier tracking en `tracking.olvaexpress.pe` (la petición
+`getTrackingInformation`, la de ~1,5 kB; la otra, `searchInfo`, no trae el
+historial).
+
+**Qué pasa cuando Olva la rote.** El cron empieza a recibir 401/403 —o un HTML
+en vez de JSON— y lo trata como «Olva cambió algo»: cuenta el fallo en
+`errors`, **no toca ningún estado** y el marcado a mano del drawer sigue
+mandando. Se captura la apikey nueva, se cambia la variable, y listo: no hay
+código que tocar.
+
+Solo entran las salidas de Olva **con tracking registrado** (columna
+`olva_tracking`, 0173): el número se pega en el drawer, en la salida, desde
+**Salidas y guías**. El mapeo de estados vive en `lib/olva/tracking.ts`, puro y
+probado con dos respuestas reales; **manda el estado que Olva declara vigente**
+(`nombre_estado_tracking`), no el hito más avanzado — en un envío real, un
+operador fue asignado antes de que el paquete se confirmara en la tienda de
+destino, y la escalera habría tapado tres días de mostrador. Un estado que Kapta
+no conoce se guarda crudo y sale en el informe como `estadosSinTraducir`, con un
+tracking de muestra para ir a mirarlo: es la lista de lo que hay que añadir al
+traductor.
+
+`CONFIRMACION EN TIENDA` fija `agency_arrived_at` y `agency_expires_at` a
+**6 días** (Olva devuelve a los 6, Shalom a los 28), con lo que «Próximo a
+vencer» funciona igual que para Shalom.
 
 ### Anular una guía
 

@@ -3132,6 +3132,54 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - Plazo: 6 días desde disponibilidad en agencia destino.
 - Gerardo también realiza seguimiento.
 
+#### El tracking de Olva y su rastreo (migración 0173, decidido el 20-09-2026)
+
+- **La salida de Olva guarda el tracking que emite Olva** («2552504-26»: el
+  número y los dos dígitos del año de emisión), aparte del `guide_code` interno
+  del rótulo, que no cambia. Se registra al crear la salida si ya se tiene, o
+  después desde **Salidas y guías** («Registrar tracking Olva»), que es el caso
+  normal: Olva lo emite en el mostrador y lo manda por el correo «Confirmación
+  de Envíos» —donde aparece como `26-2552504`— después de que la caja ya salió
+  con su rótulo. Se aceptan las dos escrituras y el número solo con el año
+  actual. **El mismo tracking no puede colgar de dos salidas**; corregirlo
+  escribe un evento con el valor anterior.
+- **Olva no tiene API para clientes.** El rastreo se hace con la misma llamada
+  que hace su página pública de seguimiento —`getTrackingInformation` con
+  `details=1` en `reports.olvaexpress.pe`, con la apikey fija que la propia
+  página publica en su JavaScript— desde el cron `olva-reconcile`, cada media
+  hora, sobre las salidas de Olva vivas que tengan tracking. Es lo que la
+  operación ya hacía a mano pegando el número en `tracking.olvaexpress.pe`.
+  La apikey es de Olva y la pueden rotar sin aviso: vive en el entorno
+  (`OLVA_TRACKING_APIKEY`) y, cuando falle, **el cron reporta y no toca
+  estados**; el marcado a mano sigue siendo el camino de respaldo.
+- **Manda el estado que Olva declara vigente** (`nombre_estado_tracking`), no el
+  hito «más avanzado» como en Shalom. Se comprobó en un envío real: asignado a
+  un operador el 09/09, confirmado en tienda el 10/09 y asignado de nuevo el
+  12/09; una escalera habría dicho «en reparto» durante tres días de mostrador.
+- Traducción de los estados conocidos (`lib/olva/tracking.ts`, con las dos
+  respuestas reales del 20-09-2026 como prueba):
+
+  | Olva dice | `pickup_state` | `delivery_status` |
+  |---|---|---|
+  | REGISTRADO, RECEPCION TIENDA, TRACKING EN GUIA, RECEPCION GUIA, PRE VALIJA, EN VALIJA | `registrado_en_agencia` | `pendiente` |
+  | DESPACHADO («En camino») | `en_transito` | `en_ruta` |
+  | CONFIRMACION EN TIENDA (oficina de destino) | `disponible_para_recojo` | `pendiente` |
+  | ASIGNADO (operador salió a entregar) | `en_reparto` | `en_ruta` |
+  | ENTREGADO | `entregado` si hubo operador asignado; `recogido` si no | `entregado` |
+
+  Un estado que no esté en la tabla **no se traduce**: se guarda crudo en
+  `olva_status`, se anota en la línea de tiempo sin mover el estado del Master y
+  el cron lo lista en `estadosSinTraducir` para añadirlo aquí con su
+  significado. Están pendientes de capturar los estados de **devolución** y de
+  **anulación**; hasta entonces `flg_devolucion` solo se anota en la nota.
+- **Llegar a la oficina de destino arranca los 6 días.** `CONFIRMACION EN
+  TIENDA` fija `agency_arrived_at` (solo la primera vez) y `agency_expires_at` a
+  6 días, con lo que «Próximo a vencer» y las alertas de vencimiento funcionan
+  igual que para Shalom. La oficina de destino se toma de la observación de ese
+  movimiento («Nombre Oficina : …») si la salida no la tenía.
+- Olva fecha los movimientos solo con el día; se anclan al mediodía de Lima
+  para que no caigan en la víspera al pasar a UTC.
+
 ### Pagos
 
 - **Un pedido pagado en el checkout no tiene cobro que gestionar.** Desde que
@@ -3741,6 +3789,8 @@ bloquea es la contradicción explícita.
   directa valida nuevamente cobertura, stock, pedido y salidas activas.
 - Shalom continúa por su API directa y Olva se registra como salida de agencia;
   ambas muestran el requisito de adelanto y el servidor exige S/ 20 validados.
+  La salida de Olva admite el tracking de Olva, y con él su estado se rastrea
+  solo (§12, 0173).
 - Axel, Urpi, motorizado propio y Olva generan una salida interna, un consecutivo
   `Sxx`, un QR opaco y un rótulo imprimible de Kapta.
 - Una salida manual nace como `rotulo_generado`, bajo custodia de la empresa. No
