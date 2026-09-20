@@ -210,8 +210,11 @@ describe("la cola de confirmación", () => {
     ).toBe("hoy");
   });
 
-  it("sin fecha, sin recordatorio y sin ciclo, el pedido no está en ninguna cola", () => {
-    expect(confirmationQueueBucket({}, now)).toBeNull();
+  // Nunca se le ha llamado: la primera llamada es trabajo de hoy. Antes no caía
+  // en ninguna cola y los 92 de «Sin llamar» vivían fuera de la lista del día
+  // (20-09-2026: «Todos los plazos» 275 contra 0 + 172 + 11 = 183).
+  it("sin fecha, sin recordatorio y sin ciclo, el pedido está en Hoy", () => {
+    expect(confirmationQueueBucket({}, now)).toBe("hoy");
   });
 });
 

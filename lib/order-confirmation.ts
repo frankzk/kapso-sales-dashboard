@@ -367,6 +367,16 @@ export function confirmationCycleDueOn(
  *     cliente incumplida se queda en Vencidos porque tiene que verse.
  *   - Cualquier otro resultado sin fecha → el ciclo de N días, que tampoco
  *     vence: un día de ciclo que ya pasó es «toca hoy».
+ *   - Sin ninguna de las tres —nunca se le ha llamado— → Hoy. La primera
+ *     llamada es trabajo de hoy, y la más importante. Antes no caía en ninguna
+ *     cola, y «Todos los plazos» sumaba 275 con los tres chips sumando 183: los
+ *     92 de «Sin llamar» vivían fuera de la lista del día. Que Hoy llegue a
+ *     cero tiene que significar que el día está hecho.
+ *
+ * LA COLA ES DE «POR CONFIRMAR». Quien la aplique a filas de otra etapa tiene
+ * que acotarla antes (`matchesFilters` y `applyServerFilters` lo hacen): un
+ * pedido entregado tampoco tiene fechas de confirmación, y no por eso «toca
+ * llamarlo hoy».
  *
  * LO QUE HABÍA, Y POR QUÉ SE CAMBIÓ. El recordatorio ponía el pedido en Hoy
  * mientras faltaba para su hora y en Vencidos cuando la hora pasaba. Eso hacía
@@ -397,7 +407,8 @@ export function confirmationQueueBucket(
     return Date.parse(input.reminderDueAt) > Date.parse(nowIso) ? "proximo" : "hoy";
   }
   if (input.cycleDueOn) return input.cycleDueOn > today ? "proximo" : "hoy";
-  return null;
+  // Sin fecha, sin recordatorio y sin ciclo: nunca se le ha llamado. Toca hoy.
+  return "hoy";
 }
 
 export interface ConfirmationEventLike {

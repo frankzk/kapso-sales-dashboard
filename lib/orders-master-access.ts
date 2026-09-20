@@ -939,9 +939,17 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
     //
     // El recordatorio manda SIEMPRE que exista, sea de hoy o de hace días:
     // futuro → Próximos, llegado → Hoy. No vence nunca. Vencidos es solo la
-    // fecha pactada incumplida.
+    // fecha pactada incumplida. Y sin ninguna de las tres fechas —nunca se le
+    // ha llamado— es Hoy: la primera llamada es trabajo de hoy.
+    //
+    // La cola es de Por confirmar y se acota ACÁ, no solo en la página: `cq`
+    // sobrevive al cambio de pestaña, y «sin fechas → Hoy» en «Todos» traería
+    // cada pedido entregado de la base. Es la misma guarda que ya hace
+    // `getConfirmationDueCounts` y la que hace `matchesFilters`.
     const noPacted = "confirmation_next_contact_on.is.null";
     const noReminder = "confirmation_reminder_due_at.is.null";
+    const noCycle = "confirmation_cycle_due_on.is.null";
+    q = q.eq("macro_stage", "por_confirmar");
     if (f.confirmationDue === "vencido") {
       q = q.lt("confirmation_next_contact_on", today);
     }
@@ -949,7 +957,8 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
       q = q.or(
         `confirmation_next_contact_on.eq.${today},`
         + `and(${noPacted},confirmation_reminder_due_at.lte.${nowIso}),`
-        + `and(${noPacted},${noReminder},confirmation_cycle_due_on.lte.${today})`,
+        + `and(${noPacted},${noReminder},confirmation_cycle_due_on.lte.${today}),`
+        + `and(${noPacted},${noReminder},${noCycle})`,
       );
     }
     if (f.confirmationDue === "proximo") {
