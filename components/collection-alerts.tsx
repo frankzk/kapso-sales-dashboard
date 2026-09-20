@@ -7,16 +7,20 @@
 // pedido y el importe delante, porque quien la atiende va a validar un pago
 // concreto, no a investigar quién escribió.
 //
+// NO PIDE GESTOS. Dice una sola cosa: esto está esperando, ve a hacerlo. Las
+// alertas se cierran con el HECHO que las resuelve —el pago validado, el
+// comprobante subido— y no con un clic de confirmación, que es el clic que se
+// deja de dar a la semana y deja la cola llena de trabajo ya hecho. El único
+// botón es «Descartar», para lo que nunca se va a resolver solo.
+//
 // Sondea cada 20 s y solo con la pestaña visible: es una cola de minutos, no
 // de segundos, y una pestaña de fondo no necesita gastar consultas.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  closeCollectionAlert,
-  forwardCollectionAlert,
+  discardCollectionAlert,
   listMyCollectionAlerts,
-  takeCollectionAlert,
   type CollectionAlertView,
 } from "@/app/dashboard/cobranza/actions";
 
@@ -102,31 +106,20 @@ export function CollectionAlerts({ enabled = true }: { enabled?: boolean }) {
                 Ir a validar
               </a>
             )}
-            {!a.mine && (
-              <button
-                type="button"
-                disabled={busy === a.id}
-                onClick={() => void run(a.id, () => takeCollectionAlert(a.id))}
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              >
-                Es mía
-              </button>
-            )}
+            {/* Lo único que se cierra a mano: lo que nunca se va a resolver
+                solo. El resto se cierra con el hecho —el pago validado, el
+                comprobante subido— sin pedir ningún clic de confirmación. */}
             <button
               type="button"
               disabled={busy === a.id}
-              onClick={() => void run(a.id, () => forwardCollectionAlert(a.id))}
+              onClick={() => {
+                const motivo = window.prompt("¿Por qué se descarta?", "no es un comprobante");
+                if (motivo === null) return;
+                void run(a.id, () => discardCollectionAlert(a.id, motivo));
+              }}
               className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-60"
             >
-              No es mía
-            </button>
-            <button
-              type="button"
-              disabled={busy === a.id}
-              onClick={() => void run(a.id, () => closeCollectionAlert(a.id, "atendida"))}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-60"
-            >
-              Ya está
+              Descartar
             </button>
           </div>
         </div>

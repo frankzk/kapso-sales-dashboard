@@ -74,24 +74,6 @@ export function nextOffer(
   return { offeredTo: siguiente.userId, passed: [...alert.passed, alert.offeredTo] };
 }
 
-/**
- * Lo mismo cuando alguien pulsa «no es mío»: sube ya, sin esperar sus minutos.
- * Si era el último, se queda con él — pasar de largo al final dejaría la
- * alerta sin dueño, que es peor que dejarla con quien no la quiere.
- */
-export function passToNext(
-  alert: AlertRouting,
-  ladder: readonly EscalationStep[],
-): OfferDecision | null {
-  if (!alert.offeredTo || !ladder.length) return null;
-  const idx = ladder.findIndex((s) => s.userId === alert.offeredTo);
-  const resto = idx < 0 ? ladder : ladder.slice(idx + 1);
-  const passed = [...alert.passed, alert.offeredTo];
-  const siguiente = resto.find((s) => !passed.includes(s.userId));
-  if (!siguiente) return null;
-  return { offeredTo: siguiente.userId, passed };
-}
-
 /** Cuánto lleva esperando, en minutos. Para pintarlo en la pantalla. */
 export function waitingMinutes(createdAt: string, nowMs: number): number {
   const t = Date.parse(createdAt);

@@ -4,12 +4,7 @@
 // que es puro. Aquí solo está lo que toca la base.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  nextOffer,
-  passToNext,
-  type AlertRouting,
-  type EscalationStep,
-} from "@/lib/collection-escalation";
+import { nextOffer, type AlertRouting, type EscalationStep } from "@/lib/collection-escalation";
 
 export type CollectionAlertKind = "registrado" | "sin_atribuir";
 
@@ -131,53 +126,6 @@ export async function reconcileCollectionOffers(
   return movidas;
 }
 
-/** «Es mía»: la reclama para que salga de la cola de los demás. */
-export async function claimCollectionAlert(
-  admin: SupabaseClient,
-  alertId: string,
-  userId: string,
-  nowIso: string = new Date().toISOString(),
-): Promise<boolean> {
-  const { error } = await admin
-    .from("collection_alerts")
-    .update({ claimed_by: userId, claimed_at: nowIso, updated_at: nowIso })
-    .eq("id", alertId)
-    .is("claimed_by", null); // atómico: el segundo que pulse no gana
-  return !error;
-}
-
-/** «No es mía»: sube ya al siguiente, sin esperar sus minutos. */
-export async function passCollectionAlert(
-  admin: SupabaseClient,
-  storeId: string,
-  alertId: string,
-  nowIso: string = new Date().toISOString(),
-): Promise<boolean> {
-  const ladder = await loadEscalation(admin, storeId);
-  const { data } = await admin
-    .from("collection_alerts")
-    .select("offered_to,offered_at,passed,claimed_by")
-    .eq("id", alertId)
-    .maybeSingle();
-  const r = data as {
-    offered_to: string | null;
-    offered_at: string | null;
-    passed: string[] | null;
-    claimed_by: string | null;
-  } | null;
-  if (!r) return false;
-  const decision = passToNext(
-    { offeredTo: r.offered_to, offeredAt: r.offered_at, passed: r.passed ?? [], claimedBy: r.claimed_by },
-    ladder,
-  );
-  if (!decision) return false;
-  const { error } = await admin
-    .from("collection_alerts")
-    .update({ offered_to: decision.offeredTo, offered_at: nowIso, passed: decision.passed, updated_at: nowIso })
-    .eq("id", alertId);
-  return !error;
-}
-
 /** Cerrarla: validada, subida a mano, o descartada con su motivo. */
 export async function resolveCollectionAlert(
   admin: SupabaseClient,
@@ -193,4 +141,56 @@ export async function resolveCollectionAlert(
     .eq("id", alertId)
     .eq("status", "abierta");
   return !error;
+}
+
+/**
+ * Cierra solas las alertas que un HECHO ya resolvió.
+ *
+ * POR QUÉ NO HAY UN BOTÓN «ya está». La alerta `registrado` existe porque hay
+ * un pago esperando validación: cuando alguien lo valida, el sistema ya sabe
+ * que se atendió. Pedirle además un clic de confirmación es hacerle repetir a
+ * mano algo que tenemos delante — y es el clic que se deja de dar a la semana,
+ * y entonces la cola se llena de alertas cerradas que figuran abiertas.
+ *
+ * `sin_atribuir` se cierra por el celular: cuando aparece un pago en algún
+ * pedido de esa clienta, es que alguien lo subió a mano, que era justo lo que
+ * la alerta pedía.
+ *
+ * Nunca lanza: cerrar una alerta no puede tumbar la validación de un pago.
+ */
+export async function closeAlertsResolvedBy(
+  admin: SupabaseClient,
+  input: { storeId: string; orderId?: string | null; paymentId?: string | null; phone?: string | null },
+  resolution: string,
+  nowIso: string = new Date().toISOString(),
+): Promise<void> {
+  const patch = { status: "atendida", resolution, resolved_at: nowIso, updated_at: nowIso };
+  try {
+    if (input.paymentId) {
+      await admin
+        .from("collection_alerts")
+        .update(patch)
+        .eq("status", "abierta")
+        .eq("payment_id", input.paymentId);
+    }
+    if (input.orderId) {
+      await admin
+        .from("collection_alerts")
+        .update(patch)
+        .eq("status", "abierta")
+        .eq("order_id", input.orderId);
+    }
+    // El pago apareció: lo que la alerta «no sé de qué pedido es» pedía ya está.
+    if (input.phone) {
+      await admin
+        .from("collection_alerts")
+        .update(patch)
+        .eq("status", "abierta")
+        .eq("kind", "sin_atribuir")
+        .eq("store_id", input.storeId)
+        .eq("phone", input.phone);
+    }
+  } catch {
+    /* mejor esfuerzo: la alerta vieja molesta, perder la validación duele */
+  }
 }

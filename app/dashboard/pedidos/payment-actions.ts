@@ -17,6 +17,7 @@ import { loadStoreCollectionAccounts } from "@/lib/collection-accounts";
 import { decryptOrNull, encrypt } from "@/lib/crypto";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { closeAlertsResolvedBy } from "@/lib/collection-alerts-access";
 import { registrarConfirmacionExpresaDeAgencia } from "@/lib/confirmacion-agencia-access";
 import {
   analyzeYapeVoucherFromEnv,
@@ -633,6 +634,25 @@ export async function registerPayment(
     return { error: error.message };
   }
 
+  // Alguien subió el comprobante a mano: si había una alerta de «llegó plata y
+  // no se supo de qué pedido es» para ese celular, ya está resuelta.
+  {
+    const { data: pedido } = await admin
+      .from("orders")
+      .select("customer_phone")
+      .eq("id", orderId)
+      .maybeSingle();
+    await closeAlertsResolvedBy(
+      admin,
+      {
+        storeId: ctx.storeId,
+        orderId,
+        phone: (pedido as { customer_phone?: string | null } | null)?.customer_phone ?? null,
+      },
+      "el comprobante se registró a mano",
+    );
+  }
+
   await admin.from("order_events").insert({
     store_id: ctx.storeId,
     order_id: orderId,
@@ -855,6 +875,14 @@ export async function validatePayment(paymentId: string): Promise<PaymentActionS
     ctx.storeId,
     ctx.userId,
   );
+  // La alerta de cobranza que pedía justo esto se cierra sola: el hecho ya
+  // ocurrió y pedir además un clic de confirmación es el clic que se deja de
+  // dar (lib/collection-alerts-access.ts).
+  await closeAlertsResolvedBy(
+    admin,
+    { storeId: ctx.storeId, orderId: payment.order_id, paymentId },
+    "el pago se revisó en Kapta",
+  );
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   revalidatePath(MASTER_PATH);
   revalidatePath(PAYMENT_REVIEW_PATH);
@@ -918,6 +946,14 @@ export async function observePayment(
       `Cobro del courier en observación: ${motive}`,
     );
   }
+  // La alerta de cobranza que pedía justo esto se cierra sola: el hecho ya
+  // ocurrió y pedir además un clic de confirmación es el clic que se deja de
+  // dar (lib/collection-alerts-access.ts).
+  await closeAlertsResolvedBy(
+    admin,
+    { storeId: ctx.storeId, orderId: payment.order_id, paymentId },
+    "el pago se revisó en Kapta",
+  );
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   revalidatePath(MASTER_PATH);
   revalidatePath(PAYMENT_REVIEW_PATH);
@@ -976,6 +1012,14 @@ export async function rejectPayment(
       `Se retiró la validación del cobro del courier: ${motive}`,
     );
   }
+  // La alerta de cobranza que pedía justo esto se cierra sola: el hecho ya
+  // ocurrió y pedir además un clic de confirmación es el clic que se deja de
+  // dar (lib/collection-alerts-access.ts).
+  await closeAlertsResolvedBy(
+    admin,
+    { storeId: ctx.storeId, orderId: payment.order_id, paymentId },
+    "el pago se revisó en Kapta",
+  );
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   revalidatePath(MASTER_PATH);
   revalidatePath(PAYMENT_REVIEW_PATH);
@@ -1268,6 +1312,14 @@ export async function completePaymentData(
     source: "manual",
     note: `Datos del ${payment.kind} completados a mano${operation ? ` (op. ${operation})` : ""}.`,
   });
+  // La alerta de cobranza que pedía justo esto se cierra sola: el hecho ya
+  // ocurrió y pedir además un clic de confirmación es el clic que se deja de
+  // dar (lib/collection-alerts-access.ts).
+  await closeAlertsResolvedBy(
+    admin,
+    { storeId: ctx.storeId, orderId: payment.order_id, paymentId },
+    "el pago se revisó en Kapta",
+  );
   await recomputeOrderMasterSafe(admin, [payment.order_id]);
   revalidatePath(MASTER_PATH);
   revalidatePath(PAYMENT_REVIEW_PATH);

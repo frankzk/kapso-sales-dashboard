@@ -3073,6 +3073,18 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
         no la quiere.
       - **Sin escalera configurada la alerta se crea igual**, sin dueño.
         Perderla porque nadie tocó Ajustes sería el peor de los dos errores.
+      - **Las alertas se cierran con el HECHO, no con un clic.** Cuando el pago
+        se valida o se rechaza, o cuando alguien sube el comprobante a mano, la
+        alerta se cierra sola: el sistema ya sabe que se atendió, y pedir
+        además una confirmación es el clic que se deja de dar a la semana — y
+        entonces la cola se llena de trabajo ya hecho que figura pendiente. Lo
+        único que se cierra a mano es **descartar**, con su motivo, para lo que
+        nunca se va a resolver solo (una foto que la visión confundió).
+      - **No hay «es mía» ni «no es mía».** Se copiaron del pop-up de asesoras,
+        donde varias compiten por un lead. Aquí la alerta se ofrece a UNA
+        persona a la vez, así que no hay con quién chocar — y reclamarla solo
+        habría servido para **parar el reloj**, que es justo la red de
+        seguridad que no se puede desactivar.
   - Todo queda en la línea de tiempo del pedido (`whatsapp_template`) y en las
     tablas de la cola y de respuestas, con el motivo cuando no salió.
 - Seguimiento comienza desde la constancia del adelanto y se intensifica cuando

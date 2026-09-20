@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   nextOffer,
-  passToNext,
   waitingMinutes,
   type AlertRouting,
   type EscalationStep,
@@ -80,18 +79,6 @@ describe("nextOffer", () => {
     const a = { ...nueva, offeredTo: GERARDO, offeredAt: "2026-09-20T15:00:00Z" };
     expect(nextOffer(a, rapida, min(9))).toBeNull();
     expect(nextOffer(a, rapida, min(11))?.offeredTo).toBe(YOHALIS);
-  });
-});
-
-describe("passToNext", () => {
-  it("«no es mío» sube ya, sin esperar los minutos", () => {
-    const a = { ...nueva, offeredTo: GERARDO, offeredAt: "2026-09-20T15:00:00Z" };
-    expect(passToNext(a, ESCALERA)).toEqual({ offeredTo: YOHALIS, passed: [GERARDO] });
-  });
-
-  it("el último no puede pasársela a nadie: se queda con ella", () => {
-    const a = { ...nueva, offeredTo: FRANK, offeredAt: "2026-09-20T15:00:00Z", passed: [GERARDO, YOHALIS] };
-    expect(passToNext(a, ESCALERA)).toBeNull();
   });
 });
 

@@ -10,12 +10,7 @@
 
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { resolveAgentNames } from "@/lib/agent-names";
-import {
-  claimCollectionAlert,
-  passCollectionAlert,
-  reconcileCollectionOffers,
-  resolveCollectionAlert,
-} from "@/lib/collection-alerts-access";
+import { reconcileCollectionOffers, resolveCollectionAlert } from "@/lib/collection-alerts-access";
 import { waitingMinutes } from "@/lib/collection-escalation";
 
 export interface CollectionAlertView {
@@ -29,8 +24,6 @@ export interface CollectionAlertView {
   amount: number | null;
   detail: string | null;
   waitingMinutes: number;
-  /** Ya la tomé yo; sigue abierta hasta que la cierre. */
-  mine: boolean;
   /** Por cuántas manos pasó antes de llegar aquí. */
   escalations: number;
 }
@@ -58,7 +51,7 @@ export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
 
   const { data } = await admin
     .from("collection_alerts")
-    .select("id,store_id,kind,order_id,phone,amount,detail,created_at,claimed_by,passed")
+    .select("id,store_id,kind,order_id,phone,amount,detail,created_at,passed")
     .in(
       "store_id",
       stores.map((s) => s.id),
@@ -76,7 +69,6 @@ export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
     amount: number | null;
     detail: string | null;
     created_at: string;
-    claimed_by: string | null;
     passed: string[] | null;
   }[]);
   if (!rows.length) return [];
@@ -101,7 +93,6 @@ export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
     amount: r.amount == null ? null : Number(r.amount),
     detail: r.detail,
     waitingMinutes: waitingMinutes(r.created_at, nowMs),
-    mine: r.claimed_by === user.id,
     escalations: (r.passed ?? []).length,
   }));
 }
@@ -119,28 +110,18 @@ async function authorize(alertId: string): Promise<{ userId: string; storeId: st
   return { userId: user.id, storeId: row.store_id };
 }
 
-export async function takeCollectionAlert(alertId: string): Promise<{ ok: boolean; error?: string }> {
-  const ctx = await authorize(alertId);
-  if (!ctx) return { ok: false, error: "Sin acceso a esta alerta." };
-  const ok = await claimCollectionAlert(createAdminSupabase(), alertId, ctx.userId);
-  // Perder la carrera no es un fallo: alguien más la está atendiendo, que es
-  // justo lo que queríamos.
-  return ok ? { ok: true } : { ok: false, error: "Otra persona la tomó primero." };
-}
-
-export async function forwardCollectionAlert(alertId: string): Promise<{ ok: boolean; error?: string }> {
-  const ctx = await authorize(alertId);
-  if (!ctx) return { ok: false, error: "Sin acceso a esta alerta." };
-  const ok = await passCollectionAlert(createAdminSupabase(), ctx.storeId, alertId);
-  return ok
-    ? { ok: true }
-    : { ok: false, error: "No hay a quién pasársela: eres el último de la escalera." };
-}
-
-export async function closeCollectionAlert(
+/**
+ * Descartar: lo único que una persona tiene que cerrar a mano.
+ *
+ * Las demás se cierran solas con el hecho que las resuelve —el pago validado,
+ * el comprobante subido— porque pedir un clic de confirmación de algo que el
+ * sistema ya sabe es el clic que se deja de dar a la semana. Esto es para lo
+ * que NUNCA se va a resolver solo: una foto de producto que la visión confundió
+ * con un Yape, o un comprobante de otra tienda.
+ */
+export async function discardCollectionAlert(
   alertId: string,
-  resolution: string,
-  descartar = false,
+  motivo: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const ctx = await authorize(alertId);
   if (!ctx) return { ok: false, error: "Sin acceso a esta alerta." };
@@ -148,8 +129,8 @@ export async function closeCollectionAlert(
     createAdminSupabase(),
     alertId,
     ctx.userId,
-    resolution.trim() || (descartar ? "descartada" : "atendida"),
-    descartar ? "descartada" : "atendida",
+    motivo.trim() || "descartada a mano",
+    "descartada",
   );
   return ok ? { ok: true } : { ok: false, error: "Ya estaba cerrada." };
 }
