@@ -4859,8 +4859,13 @@ y en uno en SQL (`gf_rider_pickup_mode`); sin proveedor se asume `exigir`.
   ruta con cada parada **«Por confirmar»**. En la parada, «Lo llevo» abre el
   gesto único (`motorizado_recepcion` sin caja → `gf_rider_confirm_pickup`, que
   marca `pickup_checked_at` y deja `pickup_checked` con la nota «Lo lleva
-  Roy»); «Confirmar todos» en la cabecera abre el mismo escáner para pasar los
-  QR en serie. **«No lo llevo»** con motivo (`gf_rider_decline`, que en este
+  Roy»); «Confirmar todos» en la cabecera abre el mismo escáner en **modo
+  continuo**: la cámara se queda abierta tras cada lectura, ignora el mismo QR
+  repetido seguido, muestra bajo el visor «Confirmados X de N · faltan Y» con
+  su barra y la última lectura (también los errores, sin cerrarse), y se
+  cierra con «Listo» o sola un segundo después de confirmar el último. El
+  escaneo de asignación de Despacho del día usa el mismo modo con «N en la
+  caja de Roy». **«No lo llevo»** con motivo (`gf_rider_decline`, que en este
   modo admite la caja en custodia) retira el ítem, **borra su parada si sigue
   pendiente**, devuelve la custodia a la empresa y la solicitud vuelve a «por
   asignar» con el evento `pickup_declined` («No lo llevó Roy: motivo»). Ese

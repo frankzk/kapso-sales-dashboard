@@ -227,3 +227,21 @@ porque el motorizado normalmente abrirá la web desde móvil».
   teléfono, también arriba del panel para no volver a la lista a confirmar.
 - Tests: `test/rider-stop-panel.test.ts` (estructura del panel y de la URL).
 
+## 8. Escaneo continuo con avance (19-09-2026)
+
+Pedido de los motorizados: al confirmar «Lo llevo» paquete por paquete, la
+cámara se cerraba con cada lectura y había que volver a abrirla.
+
+- `DispatchCamera` gana `continuous`, `progress` y `status`. En continuo, la
+  lectura no detiene ni cierra la cámara; el mismo QR repetido en menos de
+  2,5 s se ignora; bajo el visor va «Confirmados X de N · faltan Y» con barra
+  (`lib/scan-progress.ts`) y la última lectura, incluidos los errores; «Listo»
+  cierra, y con todo confirmado se cierra sola al segundo.
+- `ScanAction` reenvía `continuous`/`progress` y guarda la última lectura para
+  enseñarla dentro de la cámara. El gesto por parada («Lo llevo» en la fila y
+  en el panel) sigue en modo de una lectura.
+- `/reparto`: «Confirmar todos» usa el modo continuo. El avance suma lo
+  confirmado según el servidor y lo escaneado en la tanda que aún no volvió
+  con el `router.refresh()` diferido, para que la barra avance sin esperar a
+  la red. Despacho del día lo usa con «N en la caja de Roy».
+- Tests: `test/scan-progress.test.ts`.

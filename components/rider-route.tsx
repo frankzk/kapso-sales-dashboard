@@ -142,12 +142,21 @@ function RiderRouteScreenInner({
   }, [closeStopPanel]);
   const [confirmAll, setConfirmAll] = useState(false);
   const [headerMessage, setHeaderMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  // Avance del escaneo en serie: lo confirmado según el servidor más lo que se
+  // confirmó en esta tanda y aún no volvió con el refresh (el motorizado no
+  // espera a la red para ver que la barra avanza).
+  const [scanSession, setScanSession] = useState({ base: 0, scanned: 0 });
   const totals = useMemo(() => routeTotals(stops), [stops]);
   const closed = route?.status === "cerrada";
   const mode: RiderPickupMode = pickupMode ?? "exigir";
   const unconfirmed = useMemo(
     () => stops.filter((s) => riderStopDecision(mode, { status: s.status, pickupCheckedAt: s.pickup_checked_at, hasManifestItem: Boolean(s.manifest_item_id), routeClosed: closed }).canConfirm).length,
     [stops, mode, closed],
+  );
+  const confirmable = useMemo(() => stops.filter((s) => Boolean(s.manifest_item_id)).length, [stops]);
+  const confirmProgress = useMemo(
+    () => ({ done: Math.min(confirmable, Math.max(confirmable - unconfirmed, scanSession.base + scanSession.scanned)), total: confirmable }),
+    [confirmable, unconfirmed, scanSession],
   );
 
   if (!route) {
@@ -200,7 +209,7 @@ function RiderRouteScreenInner({
           <div className="mt-2">
             <button
               type="button"
-              onClick={() => setConfirmAll((v) => !v)}
+              onClick={() => { setScanSession({ base: confirmable - unconfirmed, scanned: 0 }); setConfirmAll((v) => !v); }}
               aria-expanded={confirmAll}
               className="min-h-10 w-full rounded-lg border border-brand-300 bg-brand-50 px-3 text-sm font-semibold text-brand-800"
             >
@@ -210,10 +219,15 @@ function RiderRouteScreenInner({
               <ScanAction
                 context="motorizado_recepcion"
                 compact
+                continuous
+                progress={confirmProgress}
                 label="Escanear «Lo llevo»"
                 onResult={(r) => {
                   setHeaderMessage(r.error ? { ok: false, text: r.error } : { ok: true, text: r.notice ?? "Lo llevas." });
-                  if (!r.error) router.refresh();
+                  if (!r.error) {
+                    setScanSession((c) => ({ ...c, scanned: c.scanned + 1 }));
+                    router.refresh();
+                  }
                 }}
               />
             )}

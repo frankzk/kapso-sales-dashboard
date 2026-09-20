@@ -17,6 +17,7 @@ import { scanActionPlan, type ScanContext } from "@/lib/scan-action";
 import { lookupDispatchShipment, removeManifestItem, scanManifestItem } from "@/app/dashboard/pedidos/despacho/actions";
 import { confirmMyGfPickup, receiveMyGfPackage } from "@/app/reparto/receive";
 import { scanAssignToRider, type ScanAssignLine } from "@/app/dashboard/courier/actions";
+import type { ScanProgress } from "@/lib/scan-progress";
 
 export interface ScanActionResult {
   error?: string;
@@ -48,12 +49,21 @@ interface Props {
   onQueue?: (code: string) => void;
   /** Primera vista mínima: sin párrafo de ayuda (va al `title` del botón), campo siempre visible. */
   compact?: boolean;
+  /** La cámara sigue abierta tras cada lectura (QR en serie) y enseña `progress`. */
+  continuous?: boolean;
+  progress?: ScanProgress;
 }
 
-export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, compact = false }: Props) {
+export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, compact = false, continuous = false, progress }: Props) {
   const plan = scanActionPlan(context);
   const [busy, setBusy] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
+  // Última lectura, para decirla dentro de la cámara sin cerrarla.
+  const [lastRead, setLastRead] = useState<{ ok: boolean; text: string } | null>(null);
+  const report = (r: ScanActionResult) => {
+    if (continuous) setLastRead(r.error ? { ok: false, text: r.error } : r.notice ? { ok: true, text: `✓ ${r.notice}` } : null);
+    onResult(r);
+  };
   const fileRef = useRef<HTMLInputElement>(null);
   const inFlight = useRef(false);
 
@@ -63,33 +73,33 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
     setBusy(true);
     try {
       if (context === "oficina_cotejo") {
-        if (!manifestId) return onResult({ error: "Falta la caja." });
+        if (!manifestId) return report({ error: "Falta la caja." });
         const r = await scanManifestItem(manifestId, code, "office");
-        onResult({ error: r.error, notice: r.notice });
+        report({ error: r.error, notice: r.notice });
       } else if (context === "motorizado_recepcion") {
         // Con caja: «Recibir mi caja» (modo exigir). Sin caja: «Lo llevo» sobre
         // la ruta ya en custodia (modo confirmar), acotado al ítem si se dio.
-        if (manifestId) onResult(await receiveMyGfPackage(manifestId, code));
-        else onResult(await confirmMyGfPickup({ itemId: itemId ?? null, code }));
+        if (manifestId) report(await receiveMyGfPackage(manifestId, code));
+        else report(await confirmMyGfPickup({ itemId: itemId ?? null, code }));
       } else if (context === "supervisor_asignacion") {
         if (!assign?.riderId) {
           if (onQueue) onQueue(code);
-          else onResult({ error: "Elige un motorizado antes de escanear." });
+          else report({ error: "Elige un motorizado antes de escanear." });
           return;
         }
         const line = await scanAssignToRider(assign.orgId, assign.riderId, code, { overrideCash: assign.overrideCash, scheduledFor: assign.scheduledFor ?? null });
-        onResult({ line, notice: line.message, error: line.status === "desconocido" || line.status === "no_elegible" || line.status === "bloqueado_efectivo" ? line.message : undefined });
+        report({ line, notice: line.message, error: line.status === "desconocido" || line.status === "no_elegible" || line.status === "bloqueado_efectivo" ? line.message : undefined });
       } else if (context === "supervisor_retiro") {
-        if (!manifestId) return onResult({ error: "Falta la caja." });
+        if (!manifestId) return report({ error: "Falta la caja." });
         const found = await lookupDispatchShipment(code);
-        if (found.error || !found.shipment) return onResult({ error: found.error ?? "Paquete no encontrado." });
+        if (found.error || !found.shipment) return report({ error: found.error ?? "Paquete no encontrado." });
         const reason = window.prompt(`¿Por qué se retira ${found.shipment.order_name ?? found.shipment.guide_code} de la caja?`);
-        if (!reason) return onResult({});
+        if (!reason) return report({});
         const r = await removeManifestItem(manifestId, found.shipment.id, reason);
-        onResult({ error: r.error, notice: r.notice });
+        report({ error: r.error, notice: r.notice });
       }
     } catch {
-      onResult({ error: "No se pudo registrar. Reintenta el mismo código; no se duplicará." });
+      report({ error: "No se pudo registrar. Reintenta el mismo código; no se duplicará." });
     } finally {
       inFlight.current = false;
       setBusy(false);
@@ -154,7 +164,14 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
     <div>
       {!compact && <p className="mt-3 text-xs text-slate-500">{plan.hint}</p>}
       <DispatchScanner busy={busy} disabled={disabled} onScan={(code) => void execute(code)} onCamera={() => setCameraOpen(true)} compact={compact} buttonLabel={compact ? (label ?? "Escanear") : undefined} hint={plan.hint} />
-      <DispatchCamera open={cameraOpen} onClose={() => setCameraOpen(false)} onScan={(value) => void execute(value)} />
+      <DispatchCamera
+        open={cameraOpen}
+        onClose={() => { setCameraOpen(false); setLastRead(null); }}
+        onScan={(value) => void execute(value)}
+        continuous={continuous}
+        progress={progress}
+        status={lastRead}
+      />
     </div>
   );
 }

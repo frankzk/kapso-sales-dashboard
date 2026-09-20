@@ -393,6 +393,8 @@ export function DispatchDayBoard(props: Props) {
                   <ScanAction
                     context="supervisor_asignacion"
                     compact
+                    continuous
+                    progress={riderId ? { done: riderBoxCount(riderId), label: `${riderBoxCount(riderId)} en la caja de ${riderName}` } : undefined}
                     disabled={pending || draining}
                     assign={{ orgId, riderId, scheduledFor: scanDay, overrideCash }}
                     onQueue={(code) => setTray((cur) => addToTray(cur, code))}
