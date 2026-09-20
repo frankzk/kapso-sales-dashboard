@@ -3018,8 +3018,13 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
       workflow del 600 calla ante sus «triviales» y Kapta contesta ante sus
       «acuses». Una frase trivial para el router y no para Kapta deja a la
       clienta **sin ninguna respuesta**; al revés, recibe **dos**. Por eso se
-      comparan palabra a palabra con la misma mecánica y la lista de Kapta es
-      un subconjunto de la del router.
+      comparan palabra a palabra con la misma mecánica y las dos listas son
+      **idénticas**. Un subconjunto no basta: una palabra que el router calla y
+      Kapta no reconoce deja a la clienta sin respuesta de nadie. Las únicas
+      diferencias deliberadas son `NUNCA_ACK` y los mensajes de puros dígitos.
+    - **Un mensaje de solo números no es un acuse.** Lo más probable es que sea
+      el número de operación de un Yape recién hecho — un dato, no un cierre.
+      Kapta calla porque no es suyo; el bot tiene que llevarlo a una persona.
     - **«no» no es un acuse en ninguna de las dos.** Después de pedir un saldo,
       un «no» o un «no gracias» es un rechazo —abre devolución (§13)—, no un
       recordatorio del Yape. Los dos callan y va a la asesora.
