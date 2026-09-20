@@ -106,6 +106,7 @@ export interface StoreSettingsData {
     shalom_arrival_template_name: string | null;
     shalom_arrival_params: string | null;
     shalom_arrival_attach_ticket: boolean;
+    shalom_voucher_intake_enabled: boolean;
     flowcl_link_enabled: boolean;
     flowcl_link_email: string | null;
     flowcl_link_ttl_hours: number;
@@ -1516,6 +1517,32 @@ function SettingsForm({
                     <option value="false">No</option>
                     <option value="true">Sí</option>
                   </select>
+                </div>
+                <div className="sm:col-span-3">
+                  <label className={labelCls} htmlFor="shalom_voucher_intake_enabled">
+                    Registrar solos los comprobantes que lleguen por WhatsApp
+                  </label>
+                  <select
+                    id="shalom_voucher_intake_enabled"
+                    name="shalom_voucher_intake_enabled"
+                    defaultValue={s.shalom_voucher_intake_enabled ? "true" : "false"}
+                    className={inputCls}
+                  >
+                    <option value="false">Apagado</option>
+                    <option value="true">Encendido</option>
+                  </select>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Cuando la clienta contesta el aviso con la captura de su Yape, se lee sola y
+                    entra a <strong>Revisión de pagos</strong> colgada de su pedido, sin validar.
+                    Solo pasa si el <strong>monto coincide exacto</strong> con el saldo o el total,
+                    o si escribió la <strong>guía</strong>. Lo demás queda como anomalía con su
+                    motivo, para subirlo a mano.
+                  </p>
+                  <p className="mt-1 text-xs text-amber-700">
+                    Escribe filas de dinero <strong>sin que una persona mire la imagen</strong>.
+                    Entran sin validar, así que un error puede ensuciar la cola de revisión — no
+                    soltar un paquete sin cobrar, que sigue necesitando validación humana.
+                  </p>
                 </div>
                 <div className="sm:col-span-3">
                   <label className={labelCls} htmlFor="shalom_arrival_params">Orden de las variables</label>

@@ -1517,6 +1517,11 @@ export interface InboundMessage {
   buttonText: string | null;
   /** Payload / id del botón, si lo hubo. */
   buttonPayload: string | null;
+  /** `image` | `document` | … cuando el mensaje trae un adjunto. */
+  mediaKind: MediaKind | null;
+  /** URL de Kapso para bajar el adjunto (autenticada, ver
+   *  `fetchKapsoImageBase64`). Nunca la de Meta: caduca. */
+  mediaUrl: string | null;
 }
 
 /**
@@ -1578,6 +1583,8 @@ export function parseInboundMessage(body: any): InboundMessage | null {
     metadataPhoneNumberId ??
     null;
   const convId = m.kapso?.whatsapp_conversation_id ?? m.conversation_id ?? body?.conversation?.id ?? null;
+  const mediaKind = msgMediaKind(m);
+  const mediaUrl = msgMediaUrl(m);
 
   const dir = msgDirection(m);
 
@@ -1591,6 +1598,8 @@ export function parseInboundMessage(body: any): InboundMessage | null {
     text,
     buttonText,
     buttonPayload,
+    mediaKind,
+    mediaUrl,
   };
 }
 

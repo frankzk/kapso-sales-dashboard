@@ -3028,6 +3028,35 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
     - **«no» no es un acuse en ninguna de las dos.** Después de pedir un saldo,
       un «no» o un «no gracias» es un rechazo —abre devolución (§13)—, no un
       recordatorio del Yape. Los dos callan y va a la asesora.
+  - **El comprobante que llega por ese número se registra solo**, con dos
+    puertas que evitan adivinar de qué pedido es. Antes moría en el chat: el
+    bot contestaba «tu pago pasa a revisión» y en Kapta no había nada. Medido
+    en #KP134340 el 20-09-2026: S/ 237 pagados y cero rastro.
+    - **Puerta 1, el monto.** El importe leído coincide exacto con el saldo
+      pendiente de un candidato, o con su total (paga todo de golpe ignorando
+      el adelanto).
+    - **Puerta 2, la guía escrita.** Nombró la guía o el código de Shalom junto
+      a la foto. Vale aunque el monto no cuadre, y **manda sobre el monto**:
+      nombrar la guía es decir de qué pedido habla.
+    - **Una puerta basta, pero tiene que señalar a UN candidato.** Dos
+      empatados es no saber, y no saber se resuelve con una persona. Registrar
+      la plata en el pedido equivocado le da la clave a quien no pagó y se la
+      niega a quien sí.
+    - **Un pago parcial no pasa** —debe S/ 237 y manda S/ 200— y es el caso más
+      frecuente de los que caen a mano. Es deliberado.
+    - **Entra sin validar**, como todo comprobante que no miró una persona. Un
+      error automático puede ensuciar la cola de revisión; no puede soltar un
+      paquete sin cobrar.
+    - Los candidatos se buscan **por celular**, no por el pedido del último
+      aviso: quedarse con el último sería justo la adivinanza que las puertas
+      existen para evitar.
+    - Lo que no pasa **queda como anomalía con su motivo** (`inbound_voucher`).
+      El silencio es lo único inaceptable: la clienta ya pagó.
+    - **Interruptor propio y apagado de nacimiento** (0171), aparte del del
+      aviso: una tienda puede querer avisar sin querer que se le registren
+      pagos solos. Es el único sitio del Master donde una fila de dinero la
+      escribe algo que no es una persona mirando la imagen, y eso merece que se
+      encienda a mano, tienda por tienda.
   - Todo queda en la línea de tiempo del pedido (`whatsapp_template`) y en las
     tablas de la cola y de respuestas, con el motivo cuando no salió.
 - Seguimiento comienza desde la constancia del adelanto y se intensifica cuando

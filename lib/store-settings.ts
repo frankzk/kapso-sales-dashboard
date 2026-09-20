@@ -111,6 +111,7 @@ export interface StoreSettingsInput {
   shalom_arrival_template_name?: string;
   shalom_arrival_params?: string;
   shalom_arrival_attach_ticket?: string | boolean;
+  shalom_voucher_intake_enabled?: string | boolean;
   flowcl_link_enabled?: string | boolean;
   flowcl_link_email?: string;
   flowcl_link_ttl_hours?: string;
@@ -389,7 +390,11 @@ export function buildStoreUpdate(
   if (stEnd !== null) patch.shalom_transit_hour_end = stEnd;
 
   // Aviso de llegada a la agencia (0169).
-  for (const k of ["shalom_arrival_template_enabled", "shalom_arrival_attach_ticket"] as const) {
+  for (const k of [
+    "shalom_arrival_template_enabled",
+    "shalom_arrival_attach_ticket",
+    "shalom_voucher_intake_enabled",
+  ] as const) {
     if (input[k] !== undefined) patch[k] = input[k] === true || input[k] === "true";
   }
   for (const k of ["shalom_arrival_template_name", "shalom_arrival_params"] as const) {
