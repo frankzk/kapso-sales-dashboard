@@ -1264,10 +1264,20 @@ async function attestAgencyShipment(
     store_id: ctx.storeId,
     order_id: ctx.row.order_id,
     courier,
-    // Sin código: la guía la tiene el mostrador de la agencia y aquí nadie la
-    // teclea. Un código inventado sería peor — se cotejaría contra el reporte del
-    // courier y no casaría nunca.
-    guide_code: null,
+    // EL CÓDIGO INTERNO, el mismo que usa `createManualRouteOutput`:
+    // `MOM-AUR176295-OLVA-54C05FD1`. Aquí decía `null` con la razón de que «la
+    // guía la tiene el mostrador y un código inventado se cotejaría contra el
+    // reporte del courier». La columna es NOT NULL, así que este camino NUNCA
+    // funcionó: cero salidas `agency_operator_attested` en toda la tabla desde
+    // que se estrenó el 09-09-2026, y cada intento devolvía «null value in
+    // column guide_code» — como valor, no como excepción, así que tampoco
+    // llegó al registro de errores. Lo destapó #AUR176295 el 20-09-2026.
+    //
+    // El prefijo `MOM-` es justo lo que evita el cotejo: ningún courier emite
+    // códigos así, y `match_method` ya dice que lo afirmó una persona. Que sea
+    // función pura del pedido y del id de la fila es lo que hace que quien
+    // audite pueda reconstruirlo, igual que en la salida «por definir».
+    guide_code: manualRouteGuideCode(ctx.row.order_name, shipmentId, courier),
     order_name: ctx.row.order_name,
     customer_name: ctx.row.customer_name,
     customer_phone: ctx.row.customer_phone,
