@@ -594,6 +594,7 @@ export const TIMELINE_LABEL: Record<string, string> = {
   pickup_checked: "Lo lleva el motorizado",
   pickup_declined: "No lo llevó el motorizado",
   stop_reported: "Reporte del motorizado",
+  route_reopened: "Ruta reabierta",
   delivered_unconfirmed_pickup: "Entregado sin confirmar recojo",
   handed_to_courier: "Entregado al courier",
   custody_transferred: "Custodia entregada al motorizado",

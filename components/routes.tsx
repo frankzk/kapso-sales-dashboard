@@ -22,6 +22,7 @@ import type { RiderPayDetail } from "@/lib/rider-pay";
 import {
   addStops,
   closeRoute,
+  reopenRoute,
   ensureRoute,
   linkRiderAccount,
   removeStop,
@@ -223,7 +224,10 @@ export function RoutesBoard({
           pay={pay}
           onExtra={detailOnly ? setExtraStop : undefined}
         />
-        <RiderPayPanel key={detail.route.id} routeId={detail.route.id} compact={detailOnly} onDetail={setPay} presetStopId={extraStop} />
+        {/* La clave lleva el estado: al terminar o reabrir la ruta el cálculo
+            se vuelve a pedir; si no, el checkbox seguía bloqueado por un
+            cálculo viejo que aún decía «termina la ruta». */}
+        <RiderPayPanel key={`${detail.route.id}:${detail.route.status}`} routeId={detail.route.id} compact={detailOnly} onDetail={setPay} presetStopId={extraStop} />
         </>
       )}
     </div>
@@ -704,7 +708,16 @@ function RouteDetail({
       )}
 
       {closed && (
-        <p className="border-t border-slate-100 pt-3 text-xs text-slate-500">
+        <p className="flex flex-wrap items-center gap-x-2 border-t border-slate-100 pt-3 text-xs text-slate-500">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => { if (window.confirm("¿Reabrir la ruta? Se descarta su liquidación en borrador; al volver a terminarla se crea de nuevo.")) onRun(() => reopenRoute(route.id)); }}
+            className="min-h-0 rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            title="Solo mientras la liquidación siga en borrador y el cálculo diario no esté aprobado"
+          >
+            Reabrir ruta
+          </button>
           Ruta cerrada. Su liquidación está en{" "}
           <a href="/dashboard/liquidaciones" className="font-medium text-brand-700 underline">
             Liquidaciones

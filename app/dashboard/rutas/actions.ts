@@ -517,3 +517,67 @@ export async function linkRiderAccount(
   revalidatePath("/dashboard/courier/reparto");
   return { ok: true, message: `${r.full_name} ya puede entrar a /reparto.${notice}` };
 }
+
+/**
+ * Reabre una ruta cerrada para corregir el reparto (MOM §29.14). Solo mientras
+ * su liquidación siga en borrador y el cálculo diario del motorizado no esté
+ * aprobado: lo aprobado no se deshace desde aquí. La liquidación en borrador
+ * que creó el cierre se descarta; volver a terminar la ruta la crea de nuevo y
+ * vuelve a cruzar al Master por la puerta única, así que el Master no se toca.
+ */
+export async function reopenRoute(routeId: string): Promise<RouteActionResult> {
+  const g = await guard();
+  if ("error" in g) return { ok: false, error: g.error };
+  const detail = await getRouteDetail(routeId);
+  if (!detail) return { ok: false, error: "Ruta inexistente o sin acceso." };
+  const { route, stops } = detail;
+  if (route.status !== "cerrada") return { ok: false, error: "La ruta no está cerrada." };
+
+  const { count: approvals } = await g.admin
+    .from("rider_daily_pay_closures")
+    .select("route_id", { count: "exact", head: true })
+    .eq("route_id", routeId);
+  if (approvals) return { ok: false, error: "El cálculo diario del motorizado ya está aprobado; no se puede reabrir la ruta." };
+
+  const { data: settlements, error: settlementsError } = await g.admin
+    .from("rider_settlements")
+    .select("id,status")
+    .eq("route_id", routeId)
+    .eq("source", "ruta");
+  if (settlementsError) return { ok: false, error: settlementsError.message };
+  const rows = (settlements ?? []) as { id: string; status: string }[];
+  if (rows.some((s) => s.status !== "borrador")) {
+    return { ok: false, error: "Su liquidación ya se revisó en Liquidaciones; no se puede reabrir la ruta." };
+  }
+  if (rows.length) {
+    const { error } = await g.admin.from("rider_settlements").delete().in("id", rows.map((s) => s.id));
+    if (error) return { ok: false, error: error.message };
+  }
+
+  const now = new Date().toISOString();
+  const { error: routeError } = await g.admin
+    .from("delivery_routes")
+    .update({ status: "en_curso", closed_at: null, updated_at: now })
+    .eq("id", routeId);
+  if (routeError) return { ok: false, error: routeError.message };
+
+  const events = stops
+    .filter((s) => s.store_id)
+    .map((s) => ({
+      store_id: s.store_id,
+      order_id: s.order_id,
+      kind: "route_reopened",
+      occurred_at: now,
+      actor: g.user.id,
+      source: "ruta",
+      courier: "propio",
+      note: "Ruta reabierta para corregir el reparto; la liquidación en borrador se descartó.",
+      payload: { route_id: routeId },
+    }));
+  if (events.length) await g.admin.from("order_events").insert(events).then(() => undefined, () => undefined);
+
+  revalidatePath("/dashboard/courier/reparto");
+  revalidatePath("/dashboard/courier");
+  revalidatePath("/dashboard/liquidaciones");
+  return { ok: true, message: "Ruta reabierta. Corrige las paradas y vuelve a terminarla." };
+}

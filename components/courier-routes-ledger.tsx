@@ -215,7 +215,9 @@ type Bar = { pct: number; text: string; tone: "emerald" | "violet" };
  * caja (rutas del cuaderno), una sola: paradas ya reportadas.
  */
 function progressOf(r: CourierLedgerRow): Bar[] {
-  if (r.manifestId && r.officeCheckedCount != null && r.pickupCheckedCount != null) {
+  // Con la ruta cerrada lo que importa es el resultado del reparto, no la
+  // caja: misma barra que las rutas históricas del cuaderno.
+  if (r.manifestId && r.routeStatus !== "cerrada" && r.officeCheckedCount != null && r.pickupCheckedCount != null) {
     const pct = (n: number) => (r.assignedCount ? Math.round((n / r.assignedCount) * 100) : 0);
     const office = r.assignedCount - r.officeCheckedCount;
     const pickup = r.assignedCount - r.pickupCheckedCount;

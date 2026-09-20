@@ -4990,7 +4990,7 @@ código en `lib/sheets/`, `app/dashboard/liquidaciones-2/` y
 de la liquidación si ya existe— que abre a la derecha el reparto y el cierre
 de la ruta (`?reparto=<ruta>`, `components/courier-route-report-drawer.tsx`,
 datos por `loadCourierRouteReport`): paradas, «Terminar ruta operativa»,
-«Cerrar con paradas sin reportar» y el pago del motorizado, el mismo
+«Cerrar con paradas sin reportar», «Reabrir ruta» y el pago del motorizado, el mismo
 `RoutesBoard` de antes. Solo hay un panel abierto a la vez: abrir el reparto
 cierra la caja y viceversa. La caja ya no lleva enlaces a esa pantalla; la
 página `/dashboard/courier/reparto?id=` redirige a la lista con ese panel
@@ -5002,6 +5002,15 @@ distrito, resultado, cobro, respaldo, tarifa, adicional y ganancia, con scroll
 horizontal en pantallas estrechas y el cliente fijo a la izquierda. Tarifa y
 adicional quedan como plegables al pie; «+ adicional» en la fila abre el
 formulario con ese punto elegido.
+
+**Reabrir ruta.** Una ruta cerrada vuelve a «en curso» (`reopenRoute`, permiso
+`routes.manage`) solo mientras su liquidación de origen `ruta` siga en
+borrador y el cálculo diario del motorizado no esté aprobado. Descarta esa
+liquidación en borrador, deja `route_reopened` en cada pedido de la ruta y no
+toca el Master: lo que se corrija cruza al volver a terminar la ruta, por la
+puerta única. En la lista de Rutas, una ruta cerrada muestra el resultado del
+reparto (entregados · no) en vez de las barras de la caja, y una ruta abierta
+sin paradas ni paquetes no se lista.
 
 **Agregar pedidos desde la caja.** El paso 1 del panel de la caja escanea
 sobre ESA caja (`components/gf-box-add-packages.tsx`, `scanAssignToRider`

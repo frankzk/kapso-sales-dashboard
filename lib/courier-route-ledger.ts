@@ -160,7 +160,7 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
     for (const o of rows as { order_id: string; order_total: number | null }[]) total.set(o.order_id, Number(o.order_total ?? 0));
   }
 
-  return routes.map((route) => {
+  const rows = routes.map((route) => {
     const stops = stopsByRoute.get(route.id) ?? [];
     const manifests = (manifestsByRoute.get(route.id) ?? []).sort((a, b) => (b.load_number ?? 0) - (a.load_number ?? 0));
     const last = manifests[0] ?? null;
@@ -195,6 +195,10 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
       settlementStatus: route.settlement_id ? (settlementStatus.get(route.settlement_id) ?? "borrador") : null,
     };
   });
+  // Una ruta abierta sin paradas ni paquetes no es una ruta: es la caja que
+  // quedó vacía tras «Quitar» o «No lo llevo». Las cerradas o liquidadas se
+  // conservan aunque queden en cero, porque son historia.
+  return rows.filter((r) => r.assignedCount > 0 || r.routeStatus === "cerrada" || r.settlementStatus != null);
 }
 
 async function chunked<T>(ids: string[], size: number, run: (ids: string[]) => PromiseLike<{ data: unknown }>): Promise<T[]> {
