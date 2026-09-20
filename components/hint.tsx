@@ -10,6 +10,7 @@
 // pantallas estrechas es una hoja inferior con botón «Cerrar».
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/components/ui";
 
 const SHEET_BREAKPOINT = 640;
@@ -36,6 +37,7 @@ export function Hint({
   const [style, setStyle] = useState<CSSProperties>({});
   const root = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLSpanElement>(null);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -67,7 +69,8 @@ export function Hint({
   useEffect(() => {
     if (!open) return;
     const close = (e: Event) => {
-      if (root.current && !root.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (root.current && !root.current.contains(t) && !(panel.current && panel.current.contains(t))) setOpen(false);
     };
     const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     document.addEventListener("pointerdown", close);
@@ -107,8 +110,12 @@ export function Hint({
           </svg>
         )}
       </button>
-      {open && (
+      {/* El panel vive en document.body (portal): dentro de una cabecera
+          pegajosa de tabla o de un contenedor con scroll quedaba recortado o
+          debajo de las filas, aunque fuera `position: fixed`. */}
+      {open && typeof document !== "undefined" && createPortal(
         <span
+          ref={panel}
           id={id}
           role="tooltip"
           style={sheet ? undefined : style}
@@ -123,7 +130,8 @@ export function Hint({
               Cerrar
             </button>
           )}
-        </span>
+        </span>,
+        document.body,
       )}
     </span>
   );
