@@ -26,12 +26,18 @@ export function DispatchScanner({ busy, disabled, onScan, onCamera, compact = fa
   // escribir sin que haya un campo enfocado, el primer carácter enfoca este
   // campo y no se pierde. Tras un escaneo (busy → libre) el foco vuelve aquí
   // para encadenar lecturas.
+  // Solo vuelve el foco al campo cuando la lectura salió DEL campo (pistola o
+  // teclado) y no hay pantalla táctil: tras un escaneo con la cámara del
+  // teléfono, enfocar el campo abría el teclado encima de la cámara.
   const hadBusy = useRef(false);
+  const fromField = useRef(false);
   useEffect(() => {
     if (busy) hadBusy.current = true;
     else if (hadBusy.current && !disabled) {
       hadBusy.current = false;
-      input.current?.focus({ preventScroll: true });
+      const touch = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
+      if (fromField.current && !touch) input.current?.focus({ preventScroll: true });
+      fromField.current = false;
     }
   }, [busy, disabled]);
   useEffect(() => {
@@ -56,7 +62,7 @@ export function DispatchScanner({ busy, disabled, onScan, onCamera, compact = fa
       {/* En el teléfono no hay tecla Enter a la vista: el teclado muestra «Ir»
           (enterKeyHint) y además hay un botón visible al lado del campo. Con
           una pistola lectora, el lector escribe el código y manda el Enter. */}
-      <form className="flex items-stretch gap-2" onSubmit={(event) => { event.preventDefault(); if (code.trim()) { onScan(code); setCode(""); } }}>
+      <form className="flex items-stretch gap-2" onSubmit={(event) => { event.preventDefault(); if (code.trim()) { fromField.current = true; onScan(code); setCode(""); } }}>
         <input ref={input} value={code} onChange={(event) => setCode(event.target.value)} disabled={busy || disabled}
           autoComplete="off" autoCapitalize="characters" autoCorrect="off" spellCheck={false} enterKeyHint="go" inputMode="text"
           aria-label="Código del paquete: QR, guía o número de pedido" placeholder="QR, guía o pedido"
@@ -80,7 +86,7 @@ export function DispatchScanner({ busy, disabled, onScan, onCamera, compact = fa
       className="min-h-12 w-full rounded-lg px-3 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 sm:hidden">
       {manual ? "Ocultar ingreso manual" : "Escribir código o usar lector"}
     </button>
-    <form id="dispatch-manual-code" onSubmit={(event) => { event.preventDefault(); if (code.trim()) { onScan(code); setCode(""); } }}
+    <form id="dispatch-manual-code" onSubmit={(event) => { event.preventDefault(); if (code.trim()) { fromField.current = true; onScan(code); setCode(""); } }}
       className={cn("gap-2 sm:flex sm:items-end", manual ? "flex flex-col" : "hidden")}>
       <label className="min-w-0 flex-1 text-sm font-medium text-slate-700">
         Código del paquete
