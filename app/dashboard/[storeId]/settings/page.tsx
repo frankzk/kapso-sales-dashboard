@@ -9,6 +9,8 @@ import { confirmationCycleDays } from "@/lib/order-confirmation";
 import { PAYMENT_METHOD_COLUMNS } from "@/lib/payment-methods";
 import { EmptyState } from "@/components/ui";
 import { StoreSettings, type StoreSettingsData } from "@/components/store-settings";
+import { listEscalation } from "./actions";
+import { listEscalationCandidates } from "@/app/dashboard/cobranza/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -123,6 +125,14 @@ export default async function StoreSettingsPage({
       .order("created_at", { ascending: true }),
   ]);
 
+  // La escalera de cobranza y quién puede entrar en ella (0172). Van aparte
+  // del Promise.all porque pasan por `requireStoreAdmin`, que ya comprueba
+  // permisos por su cuenta.
+  const [escalation, escalationCandidates] = await Promise.all([
+    listEscalation(storeId),
+    listEscalationCandidates(storeId),
+  ]);
+
   const data: StoreSettingsData = {
     store: {
       id: full.id,
@@ -229,6 +239,8 @@ export default async function StoreSettingsPage({
     replyTemplates: (replyTemplates as StoreSettingsData["replyTemplates"]) ?? [],
     districtCoverage: (districtCoverage as StoreSettingsData["districtCoverage"]) ?? [],
     paymentMethods: (paymentMethods as StoreSettingsData["paymentMethods"]) ?? [],
+    escalation,
+    escalationCandidates,
   };
 
   const banner = sp.installed

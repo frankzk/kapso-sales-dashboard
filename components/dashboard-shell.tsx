@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/sidebar";
 import { YapeAlerts } from "@/components/yape-alerts";
+import { CollectionAlerts } from "@/components/collection-alerts";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import { finishPanelNavigation } from "@/lib/client-performance";
 
@@ -64,6 +65,7 @@ export function DashboardShell({
         {routePending ? <DashboardRouteSkeleton /> : children}
       </main>
       <YapeAlerts enabled={yapeAlertsEnabled} />
+      <CollectionAlerts />
     </div>
   );
 }

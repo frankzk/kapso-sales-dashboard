@@ -24,6 +24,9 @@ import {
   reRegisterWebhooks,
   saveMetaAdAccounts,
   sendTelegramTest,
+  addEscalationStep,
+  moveEscalationStep,
+  removeEscalationStep,
   sendTransitQueueNow,
   testFlowclLink,
   syncAliclikCatalogNow,
@@ -163,6 +166,10 @@ export interface StoreSettingsData {
     active: boolean;
     sort: number;
   }>;
+  /** La escalera de la cola de cobranza (0172), en orden. */
+  escalation: Array<{ id: string; userId: string; name: string; minutes: number; sort: number }>;
+  /** Usuarios de la tienda que pueden entrar en la escalera. */
+  escalationCandidates: Array<{ id: string; name: string }>;
   replyTemplates: Array<{
     id: string;
     label: string;
@@ -288,6 +295,7 @@ export function StoreSettings({
 
       <ReplyTemplatesSection storeId={s.id} rows={data.replyTemplates} />
       <PaymentMethodsSection storeId={s.id} rows={data.paymentMethods} />
+      <EscalationSection storeId={s.id} rows={data.escalation} candidates={data.escalationCandidates} />
       <DistrictCoverageSection storeId={s.id} rows={data.districtCoverage} />
 
       <div className="-mt-2">
@@ -2339,6 +2347,126 @@ function ReplyTemplatesSection({
  * del aviso de guía en tránsito. Lista por tienda, como las plantillas de
  * respuesta. No son las cuentas contra las que se VERIFICA un comprobante.
  */
+function EscalationSection({
+  storeId,
+  rows,
+  candidates,
+}: {
+  storeId: string;
+  rows: StoreSettingsData["escalation"];
+  candidates: StoreSettingsData["escalationCandidates"];
+}) {
+  const [state, formAction, pending] = useActionState(addEscalationStep, initial);
+  const [rowPending, startRowTransition] = useTransition();
+  const [rowMsg, setRowMsg] = useState<string | null>(null);
+
+  function run(fn: () => Promise<SettingsState>) {
+    startRowTransition(async () => {
+      const res = await fn();
+      setRowMsg(res.error ?? res.notice ?? null);
+    });
+  }
+
+  const libres = candidates.filter((c) => !rows.some((r) => r.userId === c.id));
+
+  return (
+    <Section
+      title="Quién atiende la cobranza del número de Shalom"
+      subtitle="Cuando llega un comprobante por WhatsApp, la alerta se le ofrece al primero de la lista. Si no la atiende en sus minutos, sube al siguiente."
+    >
+      <Card>
+        {rows.length === 0 ? (
+          <p className="text-sm text-amber-700">
+            Nadie configurado todavía. Las alertas se crean igual y se ven en la cola de la tienda,
+            pero <strong>no le llegan a nadie</strong>.
+          </p>
+        ) : (
+          <ol className="space-y-2">
+            {rows.map((r, i) => (
+              <li
+                key={r.id}
+                className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 p-2 text-sm"
+              >
+                <span className="w-5 text-center text-xs text-slate-400">{i + 1}</span>
+                <span className="font-medium text-slate-800">{r.name}</span>
+                <span className="text-xs text-slate-500">
+                  {i === rows.length - 1 ? "es el último: aquí se queda" : `escala a los ${r.minutes} min`}
+                </span>
+                <span className="ml-auto flex gap-1">
+                  <button
+                    type="button"
+                    disabled={rowPending || i === 0}
+                    onClick={() => run(() => moveEscalationStep(storeId, r.id, "up"))}
+                    className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-40"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    disabled={rowPending || i === rows.length - 1}
+                    onClick={() => run(() => moveEscalationStep(storeId, r.id, "down"))}
+                    className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-40"
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    disabled={rowPending}
+                    onClick={() => run(() => removeEscalationStep(storeId, r.id))}
+                    className="rounded border border-slate-300 px-2 py-1 text-xs text-red-600 disabled:opacity-40"
+                  >
+                    Quitar
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+        {rowMsg && <p className="mt-2 text-sm text-slate-600">{rowMsg}</p>}
+
+        <form action={formAction} className="mt-4 flex flex-wrap items-end gap-2">
+          <input type="hidden" name="store_id" value={storeId} />
+          <div>
+            <label className={labelCls} htmlFor="escalation_user">Añadir a</label>
+            <select id="escalation_user" name="user_id" className={inputCls} defaultValue="">
+              <option value="">Elige…</option>
+              {libres.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={labelCls} htmlFor="escalation_minutes">Escala a los (min)</label>
+            <input
+              id="escalation_minutes"
+              name="minutes"
+              type="number"
+              min={1}
+              max={1440}
+              defaultValue={30}
+              className={`${inputCls} w-28`}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={pending || libres.length === 0}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          >
+            {pending ? "Añadiendo…" : "Añadir"}
+          </button>
+          {state.error && <p className="w-full text-sm text-red-600">{state.error}</p>}
+          {state.notice && <p className="w-full text-sm text-emerald-600">{state.notice}</p>}
+        </form>
+
+        <p className="mt-3 text-xs text-slate-500">
+          La espera <strong>no mira si está conectado</strong>: aguanta sus minutos aunque tenga el
+          navegador cerrado. Si saltara al desconectarse, todo acabaría siempre en el último.
+        </p>
+      </Card>
+    </Section>
+  );
+}
+
 function PaymentMethodsSection({
   storeId,
   rows,

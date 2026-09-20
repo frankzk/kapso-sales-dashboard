@@ -3057,6 +3057,22 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
       pagos solos. Es el único sitio del Master donde una fila de dinero la
       escribe algo que no es una persona mirando la imagen, y eso merece que se
       encienda a mano, tienda por tienda.
+    - **Cada comprobante levanta una alerta con DUEÑO y reloj** (0172), no una
+      fila en una bandeja que alguien mire cuando se acuerde. Dos tipos:
+      `registrado` —entró solo, falta validarlo para liberar la clave— y
+      `sin_atribuir` —llegó plata y no se supo de qué pedido es—.
+      - **La escalera se configura en Ajustes**, en orden y con minutos por
+        escalón. Escribir los nombres en el código costaría un despliegue cada
+        vez que alguien cambie de puesto.
+      - **No mira si está conectado**, a diferencia de la alerta de asesoras:
+        ahí compiten por atender primero, aquí hay un responsable. La oferta
+        aguanta sus minutos con el navegador cerrado; si saltara al
+        desconectarse, todo acabaría siempre en el último escalón.
+      - **El último escalón no escala.** Alguien tiene que ser el final; pasar
+        de largo dejaría la alerta sin dueño, que es peor que dejarla con quien
+        no la quiere.
+      - **Sin escalera configurada la alerta se crea igual**, sin dueño.
+        Perderla porque nadie tocó Ajustes sería el peor de los dos errores.
   - Todo queda en la línea de tiempo del pedido (`whatsapp_template`) y en las
     tablas de la cola y de respuestas, con el motivo cuando no salió.
 - Seguimiento comienza desde la constancia del adelanto y se intensifica cuando
