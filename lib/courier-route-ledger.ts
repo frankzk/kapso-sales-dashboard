@@ -168,8 +168,13 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
     let armedCount = 0;
     let officeChecked = 0;
     let pickupChecked = 0;
+    // Lo que estaba en la caja ESE día: un paquete que volvió al almacén y
+    // salió otro día se retira de la caja anterior al final de ese día
+    // (scripts/backfill-boxes-from-routes.ts), y aquí sigue contando para el
+    // día en que sí iba en la caja.
+    const dayEnd = `${route.route_date}T23:59:59`;
     for (const m of manifests) {
-      const active = activeDispatchItems(itemsByManifest.get(m.id) ?? []) as ItemLite[];
+      const active = (itemsByManifest.get(m.id) ?? []).filter((i) => !i.removed_at || i.removed_at > dayEnd) as ItemLite[];
       packages += active.length;
       armedCount += active.filter((i) => armed.has(i.shipment_id)).length;
       officeChecked += active.filter((i) => i.office_checked_at).length;

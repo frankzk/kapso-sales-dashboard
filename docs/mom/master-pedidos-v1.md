@@ -4757,6 +4757,13 @@ Reparto propio es una vista con vocabulario y cuadre encima de ella:
   información: el Master sigue cambiando solo al cerrar la ruta, por la puerta
   única. La foto y el comprobante se ven desde Reparto y liquidación
   (`GET /api/reparto/foto`, solo para quien puede ver la parada).
+- Una ruta que nace del cuaderno también recibe su **caja**
+  (`scripts/backfill-boxes-from-routes.ts`, runbook `docs/runbooks/cuaderno-a-rutas.md`):
+  un ítem por parada, cotejado y recibido a la hora del reporte, con la custodia
+  en el motorizado. Sin ese paso la ruta queda «sin caja» y el panel de la caja
+  abre vacío. Un paquete que sale varios días se retira de la caja del día
+  anterior al final de ese día si no se entregó; la lista de Rutas cuenta lo
+  que estaba en la caja ese día.
 - Cada fila de cuaderno apunta a su parada (`sheet_rows.stop_id`, única). La
   sincronización parada → fila corre al reportar, al cerrar la ruta y al abrir
   la hoja del mes; una fila editada a mano no se pisa. Las filas del Excel

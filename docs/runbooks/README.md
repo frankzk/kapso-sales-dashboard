@@ -10,3 +10,4 @@ deshacerlo.
 
 El despliegue y las migraciones siguen en [`DEPLOY.md`](../../DEPLOY.md); las
 reglas de negocio, en el MOM (`docs/mom/master-pedidos-v1.md`).
+- [Cargar el cuaderno en Rutas](cuaderno-a-rutas.md) — hoja → paradas → caja, en ese orden; qué hacer con los paquetes que salen varios días.
