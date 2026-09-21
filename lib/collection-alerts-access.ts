@@ -126,6 +126,76 @@ export async function reconcileCollectionOffers(
   return movidas;
 }
 
+/**
+ * Cierra las alertas cuyo trabajo YA está hecho, mirando el hecho en vez de
+ * esperar a que alguien lo empuje.
+ *
+ * POR QUÉ HACE FALTA, SI YA SE CIERRAN AL VALIDAR. Porque ese cierre es un
+ * empujón al final de `validatePayment`, y un empujón se puede perder: si algo
+ * entre medias falla, el pago queda validado —eso ya está escrito— y la alerta
+ * se queda abierta PARA SIEMPRE. Pasó el 20-09-2026 con #KP134730: pago
+ * validado a las 22:42 y su alerta seguía en la cola cinco horas después,
+ * pidiendo un trabajo hecho. Eso es exactamente lo que la cola no puede hacer:
+ * el día que enseña trabajo hecho, se deja de mirar.
+ *
+ * Así que «se cierran con el hecho» se comprueba AL LEER, que es cuando
+ * importa, y el empujón al validar pasa a ser una optimización en vez de la
+ * única vía. Barato: la cola abierta de una tienda son unas pocas filas.
+ */
+export async function sweepResolvedAlerts(
+  admin: SupabaseClient,
+  storeId: string,
+  nowIso: string = new Date().toISOString(),
+): Promise<number> {
+  const { data } = await admin
+    .from("collection_alerts")
+    .select("id,payment_id")
+    .eq("store_id", storeId)
+    .eq("status", "abierta")
+    .eq("kind", "registrado")
+    .not("payment_id", "is", null)
+    .limit(200);
+  const rows = (data ?? []) as { id: string; payment_id: string }[];
+  if (!rows.length) return 0;
+
+  const { data: pagos } = await admin
+    .from("order_payments")
+    .select("id,validation_status")
+    .in(
+      "id",
+      rows.map((r) => r.payment_id),
+    );
+  const estado = new Map(
+    ((pagos ?? []) as { id: string; validation_status: string }[]).map((p) => [
+      p.id,
+      p.validation_status,
+    ]),
+  );
+  // Pendiente de revisión o de completar datos = sigue esperando a una persona.
+  // Cualquier otra cosa —validado, rechazado, observado— es una decisión ya
+  // tomada, y la alerta no tiene nada más que pedir.
+  const resueltas = rows.filter((r) => {
+    const s = estado.get(r.payment_id);
+    return Boolean(s) && s !== "pendiente_revision" && s !== "info_incompleta";
+  });
+  if (!resueltas.length) return 0;
+
+  const { error } = await admin
+    .from("collection_alerts")
+    .update({
+      status: "atendida",
+      resolution: "el pago ya tiene decisión en Kapta",
+      resolved_at: nowIso,
+      updated_at: nowIso,
+    })
+    .in(
+      "id",
+      resueltas.map((r) => r.id),
+    )
+    .eq("status", "abierta");
+  return error ? 0 : resueltas.length;
+}
+
 /** Cerrarla: validada, subida a mano, o descartada con su motivo. */
 export async function resolveCollectionAlert(
   admin: SupabaseClient,

@@ -17,7 +17,7 @@
 // parpadear a vacío.
 
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Card, cn, EmptyState, STICKY_HEAD, TABLE_LAYER, TABLE_WRAP_PAGE_X } from "@/components/ui";
 import {
@@ -685,9 +685,27 @@ export function OrdersMasterBoard({
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [navigating, startNav] = useTransition();
   const [showMore, setShowMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+
+  // ABRIR UN PEDIDO DESDE FUERA. La cola de cobranza avisa de un comprobante
+  // que espera y tiene que llevar a donde SE HACE ese trabajo: el drawer del
+  // pedido, con la sección de Cobro delante. Llevaba a la bandeja de revisión,
+  // que es otra cosa —ahí se valida a secas, sin la clave— y obligaba a buscar
+  // el pedido a mano después de que el sistema ya supiera cuál era.
+  //
+  // El drawer carga el pedido por su id, así que no hace falta que la fila esté
+  // en la página ni tocar los filtros.
+  const abrir = searchParams.get("abrir");
+  const irA = searchParams.get("ir");
+  const focusSection = DRAWER_SECTION_IDS.includes(irA as DrawerSectionId)
+    ? (irA as DrawerSectionId)
+    : undefined;
+  useEffect(() => {
+    if (abrir) setOpenId(abrir);
+  }, [abrir]);
   const changeToken = useRef<string | null>(null);
   // Selección para acciones en lote (hoy: imprimir rótulos).
   //
@@ -1390,7 +1408,19 @@ export function OrdersMasterBoard({
           closurePermissions={closurePermissions}
           storeName={storeName}
           storeDomain={storeDomain}
-          onClose={() => setOpenId(null)}
+          focusSection={openId === abrir ? focusSection : undefined}
+          onClose={() => {
+            setOpenId(null);
+            // Se limpia la URL al cerrar: si no, recargar reabriría un pedido
+            // que ya se atendió, y el enlace de la alerta quedaría pegado.
+            if (abrir) {
+              const next = new URLSearchParams(searchParams.toString());
+              next.delete("abrir");
+              next.delete("ir");
+              const qs = next.toString();
+              router.replace(qs ? `${pathname}?${qs}` : pathname);
+            }
+          }}
           onSaved={() => router.refresh()}
         />
       )}
@@ -2431,6 +2461,21 @@ type DrawerSectionId =
   | "acciones"
   | "historial";
 
+/** Las mismas de arriba, para validar la sección que llega por la URL. */
+const DRAWER_SECTION_IDS: readonly DrawerSectionId[] = [
+  "resumen",
+  "confirmacion",
+  "ubicacion",
+  "productos",
+  "pagos",
+  "rutas",
+  "aliclik",
+  "guias",
+  "cierre",
+  "acciones",
+  "historial",
+];
+
 type DrawerWorkspaceView = "operar" | "informacion" | "actividad";
 
 interface DrawerNextAction {
@@ -2724,6 +2769,7 @@ function OrderDrawer({
   closurePermissions,
   storeName,
   storeDomain,
+  focusSection,
   onClose,
   onSaved,
 }: {
@@ -2743,6 +2789,8 @@ function OrderDrawer({
   };
   storeName: (id: string) => string;
   storeDomain: (id: string) => string | null;
+  /** Sección a la que saltar en cuanto el pedido cargue (llega por la URL). */
+  focusSection?: DrawerSectionId;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -2821,6 +2869,20 @@ function OrderDrawer({
     setWorkspace("operar");
     scrollRef.current?.scrollTo({ top: 0 });
   }, [orderId]);
+
+  // Cuando se llegó desde fuera pidiendo una sección —la cola de cobranza pide
+  // «pagos»—, se salta a ella en cuanto el pedido carga. UNA sola vez: después
+  // manda quien esté usando el drawer, no la URL con la que entró.
+  const salté = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusSection || !detail) return;
+    if (salté.current === orderId) return;
+    salté.current = orderId;
+    jumpTo(focusSection);
+    // `jumpTo` se redefine en cada render y meterlo en las dependencias
+    // relanzaría el salto contra el dedo de quien ya está mirando otra cosa.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusSection, detail, orderId]);
 
   function run(action: () => Promise<{ error?: string; notice?: string }>): Promise<boolean> {
     return new Promise((resolve) => {
