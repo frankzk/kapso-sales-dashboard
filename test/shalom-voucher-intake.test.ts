@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { matchCandidate, type VoucherCandidate } from "@/lib/shalom/voucher-intake";
+import { voucherReading } from "@/lib/voucher-inspect";
+import { yapeRecipientReadingFromVision, type CollectionAccount } from "@/lib/yape-recipient";
 
 /** El pedido de Jaime, el caso real que destapó todo esto. */
 const JAIME: VoucherCandidate = {
@@ -97,5 +99,67 @@ describe("puerta 2: la guía escrita", () => {
 
   it("texto sin guía cae a la puerta del monto, no rompe nada", () => {
     expect(matchCandidate([JAIME], 237, "ya le hice el yape señorita").ok).toBe(true);
+  });
+});
+
+describe("la auditoría que se guarda con el comprobante", () => {
+  // #KP134730 lo destapó: la ingesta escribía su propio objeto plano
+  // —`{recipient_name: "Grupo Gf S.a.c.", ...}`— en vez del jsonb que el drawer
+  // relee. El nombre del receptor estaba guardado y era el correcto, pero bajo
+  // otra llave, así que la pantalla decía «La cuenta receptora no pudo leerse»
+  // en TODOS los comprobantes que entran por WhatsApp. No es cosmético: ese
+  // renglón es el único control que dice si el dinero llegó a una cuenta
+  // nuestra, y estaba apagado justo donde nadie mira la imagen al recibirla.
+  const CUENTAS: CollectionAccount[] = [{ name: "Grupo GF S.A.C.", phoneLastDigits: "309" }];
+
+  const verdict = { isVoucher: true, indicators: {}, model: "claude-sonnet-5", ok: true };
+  const leido = {
+    operationNumber: "35514682",
+    operationLabel: "Nro. de operación",
+    amount: 119,
+    paidAt: "2026-09-19T15:07:00.000Z",
+    payerName: "Justina Rosa Carbajal",
+    recipientName: "Grupo Gf S.a.c.",
+    recipientPhoneLastDigits: "309",
+    ok: true,
+    model: "claude-sonnet-5",
+  };
+
+  it("el que escribe y el que lee hablan del mismo jsonb", () => {
+    const { payload } = voucherReading(verdict, leido, CUENTAS);
+    // La prueba que faltaba: no que el payload tenga tal forma, sino que el
+    // LECTOR del drawer saque de él la cuenta correcta.
+    expect(yapeRecipientReadingFromVision(payload, CUENTAS)).toMatchObject({
+      name: "Grupo Gf S.a.c.",
+      phoneLastDigits: "309",
+      status: "verified",
+    });
+  });
+
+  it("la procedencia del mensaje no pisa la lectura de la imagen", () => {
+    // La ingesta añade de dónde vino y por qué puerta pasó. Eso va FUERA de
+    // `extracted`, que es lo que el lector dijo de la imagen y nada más.
+    const { payload } = voucherReading(verdict, leido, CUENTAS);
+    const vision: Record<string, unknown> = {
+      ...payload,
+      source: "wa_cobranza_shalom",
+      gate: "monto",
+      phone: "51997684682",
+    };
+    expect(yapeRecipientReadingFromVision(vision, CUENTAS).status).toBe("verified");
+    expect((vision.extracted as Record<string, unknown>).recipient_name).toBe("Grupo Gf S.a.c.");
+  });
+
+  it("una lectura invertida se sigue corrigiendo al releerla", () => {
+    // El lector a veces cambia de sitio pagador y receptor. Se guarda lo que
+    // dijo, sin corregir, y la corrección se recalcula al mirarlo.
+    const { payload } = voucherReading(
+      verdict,
+      { ...leido, payerName: "Grupo Gf S.a.c.", recipientName: "Justina Rosa Carbajal" },
+      CUENTAS,
+    );
+    const r = yapeRecipientReadingFromVision(payload, CUENTAS);
+    expect(r.swapped).toBe(true);
+    expect(r.status).toBe("verified");
   });
 });

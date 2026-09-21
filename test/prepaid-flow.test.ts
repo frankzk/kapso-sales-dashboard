@@ -202,11 +202,15 @@ describe("el dato viaja hasta donde se decide", () => {
     expect(block.slice(0, 600)).toContain('"total_refunded"');
   });
 
-  it("la compuerta de la clave lo recibe", () => {
+  it("la compuerta de la clave lo recibe, en TODAS sus llamadas", () => {
     const source = read("app/dashboard/pedidos/payment-actions.ts");
-    // Las DOS llamadas: revelar la clave y el panel. Que una lo pase y la otra
-    // no dejaría la pantalla diciendo que se puede y el servidor negándolo.
-    expect((source.match(/paymentFacts: \{/g) ?? []).length).toBe(2);
+    // Se cuentan contra las llamadas y no contra un número fijo: cada sitio
+    // nuevo que decida sobre la clave —el panel, revelarla, el envío automático
+    // al validar— tiene que pasar el dato. Que uno lo pase y otro no deja la
+    // pantalla diciendo que se puede y el servidor negándolo.
+    const llamadas = (source.match(/canRevealPickupKey\(/g) ?? []).length;
+    expect(llamadas).toBeGreaterThanOrEqual(2);
+    expect((source.match(/paymentFacts: \{/g) ?? []).length).toBe(llamadas);
   });
 });
 

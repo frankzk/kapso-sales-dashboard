@@ -110,6 +110,7 @@ export interface StoreSettingsData {
     shalom_arrival_params: string | null;
     shalom_arrival_attach_ticket: boolean;
     shalom_voucher_intake_enabled: boolean;
+    shalom_pickup_key_autosend_enabled: boolean;
     flowcl_link_enabled: boolean;
     flowcl_link_email: string | null;
     flowcl_link_ttl_hours: number;
@@ -1550,6 +1551,33 @@ function SettingsForm({
                     Escribe filas de dinero <strong>sin que una persona mire la imagen</strong>.
                     Entran sin validar, así que un error puede ensuciar la cola de revisión — no
                     soltar un paquete sin cobrar, que sigue necesitando validación humana.
+                  </p>
+                </div>
+                <div className="sm:col-span-3">
+                  <label className={labelCls} htmlFor="shalom_pickup_key_autosend_enabled">
+                    Enviar la clave de recojo al validar el pago
+                  </label>
+                  <select
+                    id="shalom_pickup_key_autosend_enabled"
+                    name="shalom_pickup_key_autosend_enabled"
+                    defaultValue={s.shalom_pickup_key_autosend_enabled ? "true" : "false"}
+                    className={inputCls}
+                  >
+                    <option value="false">Apagado</option>
+                    <option value="true">Encendido</option>
+                  </select>
+                  <p className="mt-1 text-xs text-slate-500">
+                    En el comprobante que <strong>termina de cubrir el pedido</strong>, el botón
+                    pasa a decir «Validar y enviar la clave» y enseña el mensaje exacto antes de
+                    pulsarlo. El envío <strong>es</strong> el registro de la entrega: ya no hace
+                    falta anotarla aparte. Fuera de las 24 h desde el último mensaje de la clienta
+                    no se manda nada —WhatsApp no lo permite— y se avisa en pantalla.
+                  </p>
+                  <p className="mt-1 text-xs text-amber-700">
+                    Manda <strong>la llave del paquete</strong> sin que nadie vuelva a mirar
+                    después del clic. Las condiciones de siempre se comprueban otra vez en el
+                    servidor antes de descifrarla; validar desde la bandeja de revisión no envía
+                    nada.
                   </p>
                 </div>
                 <div className="sm:col-span-3">

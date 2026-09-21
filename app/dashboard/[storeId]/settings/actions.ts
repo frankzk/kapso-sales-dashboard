@@ -175,6 +175,7 @@ export async function updateStore(
     shalom_arrival_params: get("shalom_arrival_params"),
     shalom_arrival_attach_ticket: get("shalom_arrival_attach_ticket"),
     shalom_voucher_intake_enabled: get("shalom_voucher_intake_enabled"),
+    shalom_pickup_key_autosend_enabled: get("shalom_pickup_key_autosend_enabled"),
     flowcl_link_enabled: get("flowcl_link_enabled"),
     flowcl_link_email: get("flowcl_link_email"),
     flowcl_link_ttl_hours: get("flowcl_link_ttl_hours"),
