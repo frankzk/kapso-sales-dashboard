@@ -4267,6 +4267,10 @@ recoge; antes no lo recogía nadie.
 - Axel y motorizado propio pueden repetirse sin superar cinco salidas.
 - Shalom y Olva avisan que el adelanto debe validarse antes de crear la guía.
 - Olva no se crea con menos de S/ 20 validados aunque el navegador sea alterado.
+  **Salvo que el pedido ya esté cobrado**: pagado en el checkout o con
+  comprobantes que cubren el total (`orderFullyPaid`). Un pedido prepago no
+  tiene comprobantes que sumar, y exigírselos lo bloqueaba (#KP135087,
+  21-09-2026).
 - Dos salidas del mismo pedido reciben QR y código `Sxx` diferentes.
 - Con una salida activa, la salida adicional exige una justificación auditada.
 - **Una salida «por definir» no cuenta como salida que estorba.** Crear la guía
