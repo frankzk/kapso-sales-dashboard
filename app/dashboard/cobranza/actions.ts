@@ -14,6 +14,7 @@ import {
   reconcileCollectionOffers,
   resolveCollectionAlert,
   sweepResolvedAlerts,
+  sweepUnattributedAlerts,
 } from "@/lib/collection-alerts-access";
 import { waitingMinutes } from "@/lib/collection-escalation";
 
@@ -57,6 +58,7 @@ export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
     // escalera: al revés, una alerta resuelta podría escalar a otra persona
     // justo antes de retirarse, y ésa recibiría un aviso de trabajo hecho.
     await sweepResolvedAlerts(admin, s.id, nowIso);
+    await sweepUnattributedAlerts(admin, s.id, nowIso);
     await reconcileCollectionOffers(admin, s.id, nowMs);
   }
 

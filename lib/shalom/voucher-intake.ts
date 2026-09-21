@@ -35,7 +35,7 @@ import { fetchKapsoImageBase64, type InboundMessage } from "@/lib/kapso";
 import { analyzeYapeVoucherFromEnv, extractYapeVoucherFromEnv } from "@/lib/vision";
 import { VOUCHER_BUCKET, voucherReading } from "@/lib/voucher-inspect";
 import { loadStoreCollectionAccounts } from "@/lib/collection-accounts";
-import { findDuplicate, normalizeOperationNumber } from "@/lib/yape-dedup";
+import { describeDuplicate, findDuplicate, normalizeOperationNumber } from "@/lib/yape-dedup";
 import { raiseCollectionAlert } from "@/lib/collection-alerts-access";
 
 /** Un pedido al que este comprobante PODRÍA pertenecer. */
@@ -116,6 +116,24 @@ export function matchCandidate(
   return { ok: false, reason: `el monto no coincide con ningún saldo ni total (${saldos})` };
 }
 
+/**
+ * Qué hacer con un comprobante repetido. Pura, porque es la diferencia entre
+ * molestar a alguien y no molestarlo, y eso se prueba sin base.
+ *
+ * MISMO pedido no es un problema: la clienta mandó su Yape dos veces o el
+ * webhook reentregó el mensaje. Ya está registrado donde tiene que estar —a
+ * veces hasta validado y con la clave enviada—, así que queda el rastro y nadie
+ * recibe un aviso.
+ *
+ * OTRO pedido sí: es el mismo Yape cobrando dos pedidos, que es justo lo que la
+ * deduplicación existe para cazar.
+ */
+export function duplicateAction(sameOrder: boolean): { alert: boolean; outcome: string } {
+  return sameOrder
+    ? { alert: false, outcome: "duplicado" }
+    : { alert: true, outcome: "yape_de_otro_pedido" };
+}
+
 export interface IntakeResult {
   /** `registrado` | `sin_atribuir` | y los motivos por los que ni se intentó. */
   outcome: string;
@@ -142,6 +160,28 @@ export async function handleInboundVoucher(
   deps: IntakeDeps = {},
 ): Promise<IntakeResult> {
   const nowIso = deps.nowIso ?? new Date().toISOString();
+
+  /**
+   * Deja el rastro y NO levanta alerta: para lo que no le pide nada a nadie.
+   *
+   * El caso que lo motiva: la clienta manda su Yape dos veces, o el webhook
+   * reentrega el mismo mensaje. La deduplicación lo para —bien, el dinero no se
+   * cuenta dos veces— pero eso no es un problema que atender: el comprobante ya
+   * está registrado en su pedido, y a veces hasta validado y con la clave
+   * enviada. #KP134470 el 21-09-2026: Esmeralda recibió su clave a las 09:52 y
+   * a las 09:51 se había levantado una alerta diciendo «llegó un pago y no se
+   * sabe de qué pedido es». Era mentira, y encima escaló dos veces.
+   */
+  const noteOnly = async (outcome: string, detail: string): Promise<IntakeResult> => {
+    await noteAnomaly(admin, {
+      storeId,
+      source: "inbound_voucher",
+      reason: outcome,
+      sample: { phone: msg.from, messageId: msg.id, detail },
+    });
+    return { outcome, detail };
+  };
+
   const fail = async (outcome: string, detail: string): Promise<IntakeResult> => {
     // Nunca se termina en silencio: si el dinero entró y no lo registramos,
     // alguien tiene que poder enterarse sin leer los chats uno por uno. La
@@ -222,7 +262,27 @@ export async function handleInboundVoucher(
     },
     (choques ?? []) as never[],
   );
-  if (dup.duplicate) return fail("duplicado", "ese comprobante ya está registrado en otro pedido o en éste");
+  if (dup.duplicate) {
+    // MISMO pedido es «ya lo tenemos», no un problema: la clienta lo mandó dos
+    // veces o el webhook reentregó. Rastro y silencio.
+    //
+    // OTRO pedido sí es un hallazgo —el mismo Yape usado para cobrar dos
+    // pedidos— y ahí la alerta es lo que corresponde, con el pedido con el que
+    // choca escrito para que se pueda mirar sin investigar.
+    const accion = duplicateAction(dup.sameOrder);
+    if (!accion.alert) return noteOnly(accion.outcome, describeDuplicate(dup));
+    // Con qué pedido choca, por su nombre: «ya está registrado en #KP134470» se
+    // puede mirar; «en otro pedido» obliga a investigar antes de empezar.
+    if (dup.conflict) {
+      const { data: otro } = await admin
+        .from("orders")
+        .select("name")
+        .eq("id", dup.conflict.order_id)
+        .maybeSingle();
+      dup.conflict.order_name = (otro as { name: string | null } | null)?.name ?? null;
+    }
+    return fail(accion.outcome, describeDuplicate(dup));
+  }
 
   const ext = (img.contentType ?? "").includes("png") ? "png" : "jpg";
   const path = `${storeId}/${match.candidate.orderId}/wa-${msg.id.replace(/[^A-Za-z0-9]/g, "")}.${ext}`;

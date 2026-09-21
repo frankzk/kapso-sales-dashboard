@@ -26,9 +26,16 @@ import {
 
 const POLL_MS = 20_000;
 
+// El título dice lo que de verdad pasó, y `sin_atribuir` NO siempre es «no se
+// sabe de qué pedido es»: ese `kind` es el cajón de todo lo que no se pudo
+// registrar —la imagen que no se pudo bajar, el pago parcial, el Yape que ya se
+// usó en otro pedido—. Afirmar lo que no consta hace que se deje de creer al
+// aviso: en #KP134470 decía «no se sabe de qué pedido es» sobre un comprobante
+// ya registrado, validado y con la clave enviada. El motivo exacto va debajo,
+// en `detail`, que es donde puede ser específico.
 const TITULO: Record<CollectionAlertView["kind"], string> = {
   registrado: "Comprobante por validar",
-  sin_atribuir: "Llegó un pago y no se sabe de qué pedido es",
+  sin_atribuir: "Llegó un comprobante y no se pudo registrar",
 };
 
 export function CollectionAlerts({ enabled = true }: { enabled?: boolean }) {
@@ -86,11 +93,14 @@ export function CollectionAlerts({ enabled = true }: { enabled?: boolean }) {
             <span className="shrink-0 text-xs text-slate-400">{a.waitingMinutes} min</span>
           </div>
 
+          {/* Sin pedido, lo que identifica es el CELULAR, y va delante: con él
+              se busca la conversación. «Pedido sin identificar» ocupaba el
+              renglón principal para no decir nada. */}
           <p className="mt-1 text-sm text-slate-700">
-            {a.orderName ? <strong>{a.orderName}</strong> : "Pedido sin identificar"}
+            {a.orderName ? <strong>{a.orderName}</strong> : <strong>{a.phone ?? "Sin celular"}</strong>}
             {a.amount != null && <> · S/ {a.amount.toFixed(2)}</>}
           </p>
-          {a.phone && <p className="text-xs text-slate-500">{a.phone}</p>}
+          {a.orderName && a.phone && <p className="text-xs text-slate-500">{a.phone}</p>}
           {a.detail && <p className="mt-1 text-xs text-slate-500">{a.detail}</p>}
           <p className="mt-1 text-xs text-slate-400">
             {a.storeName}
