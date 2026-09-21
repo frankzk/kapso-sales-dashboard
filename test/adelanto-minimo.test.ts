@@ -98,6 +98,17 @@ describe("todo el mundo lo lee de ahí", () => {
     expect(read("app/dashboard/pedidos/actions.ts")).toContain("validated < ADELANTO_MINIMO");
     expect(read("lib/mom-owner-summary.ts")).toContain(">= ADELANTO_MINIMO");
   });
+
+  it("y Olva no pide adelanto a un pedido ya cobrado", () => {
+    // #KP135087: pagado entero en el checkout, sin filas en `order_payments`,
+    // y la salida de Olva decía «Hay S/ 0.00». El adelanto es un anticipo del
+    // cobro; a quien ya pagó no se le pide. La decisión es de `orderFullyPaid`,
+    // la misma que usan la guía Swayp y la clave de recojo.
+    const src = read("app/dashboard/pedidos/actions.ts");
+    const olvaCheck = src.slice(src.indexOf('input.courier === "olva" &&'), src.indexOf("validated < ADELANTO_MINIMO"));
+    expect(olvaCheck).toContain("!orderFullyPaid(");
+    expect(read("docs/mom/master-pedidos-v1.md")).toContain("Salvo que el pedido ya esté cobrado");
+  });
 });
 
 describe("y el sistema se comporta como dice", () => {

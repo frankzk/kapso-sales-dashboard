@@ -99,7 +99,7 @@ export function ManualRouteOutputModal({
             )}
             {route.key === "olva" && (
               <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900">
-                Antes de crear Olva Agencia, el adelanto validado acumulado debe llegar como mínimo a {ADELANTO_MINIMO_LABEL}.
+                Antes de crear Olva Agencia, el adelanto validado acumulado debe llegar como mínimo a {ADELANTO_MINIMO_LABEL}, salvo que el pedido ya esté pagado.
               </div>
             )}
             {route.key === "olva" && (

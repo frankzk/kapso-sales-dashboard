@@ -77,6 +77,7 @@ import type { RouteKey } from "@/lib/order-route-plan";
 import type { OrderMasterRow } from "@/lib/types";
 import { ADELANTO_MINIMO, ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import { formatOlvaTracking, parseOlvaTracking, type OlvaTrackingId } from "@/lib/olva/tracking";
+import { orderFullyPaid } from "@/lib/order-paid";
 import { discardRecovery, validarMotivoDescarte } from "@/lib/recovery-discard";
 
 export interface MasterActionState {
@@ -473,7 +474,22 @@ export async function createManualRouteOutput(
     }
   }
 
-  if (input.courier === "olva") {
+  // El adelanto de Olva. UN PEDIDO YA COBRADO NO DEBE ADELANTO: el que pagó en
+  // el checkout no tiene ni una fila en `order_payments`, así que sumar
+  // comprobantes validados daba «Hay S/ 0.00» y bloqueaba la salida de un
+  // pedido pagado entero (#KP135087, S/ 89,10 por pasarela). Es la misma regla
+  // de §12 —«un pedido pagado en el checkout no tiene cobro que gestionar»— y
+  // la misma que ya aplican la guía Swayp y la clave de recojo: `orderFullyPaid`
+  // decide, y los comprobantes solo se suman cuando el checkout no cobró.
+  if (
+    input.courier === "olva" &&
+    !orderFullyPaid({
+      financialStatus: ctx.row.financial_status,
+      totalRefunded: ctx.row.total_refunded,
+      paymentGateway: ctx.row.payment_gateway,
+      paymentState: ctx.row.payment_state,
+    })
+  ) {
     const { data: payments, error: paymentError } = await admin
       .from("order_payments")
       .select("amount")
