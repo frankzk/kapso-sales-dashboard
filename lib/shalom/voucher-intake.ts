@@ -33,7 +33,8 @@ import type { StoreCreds } from "@/lib/ingest";
 import { noteAnomaly } from "@/lib/ingest-anomalies";
 import { fetchKapsoImageBase64, type InboundMessage } from "@/lib/kapso";
 import { analyzeYapeVoucherFromEnv, extractYapeVoucherFromEnv } from "@/lib/vision";
-import { VOUCHER_BUCKET } from "@/lib/voucher-inspect";
+import { VOUCHER_BUCKET, voucherReading } from "@/lib/voucher-inspect";
+import { loadStoreCollectionAccounts } from "@/lib/collection-accounts";
 import { findDuplicate, normalizeOperationNumber } from "@/lib/yape-dedup";
 import { raiseCollectionAlert } from "@/lib/collection-alerts-access";
 
@@ -180,10 +181,17 @@ export async function handleInboundVoucher(
     anthropicApiKey: creds.anthropic_api_key,
     anthropicModel: creds.anthropic_model,
   };
-  const [verdict, fields] = await Promise.all([
+  const [verdict, leido, accounts] = await Promise.all([
     analyzeYapeVoucherFromEnv(img.base64, img.contentType, visionCreds),
     extractYapeVoucherFromEnv(img.base64, img.contentType, visionCreds),
+    loadStoreCollectionAccounts(admin, storeId),
   ]);
+  // La MISMA lectura que la carga a mano, con la misma forma de jsonb. No se
+  // arma aquí un objeto propio: el drawer contrasta la cuenta receptora leyendo
+  // `vision.extracted.*`, y un objeto plano apagaba ese control en silencio —
+  // decía «la cuenta receptora no pudo leerse» sobre lecturas perfectas.
+  const lectura = voucherReading(verdict, leido, accounts);
+  const fields = lectura.fields;
   // Una foto cualquiera —el producto, una selfie— no es un comprobante y no
   // puede crear una fila de plata.
   if (verdict.ok && !verdict.isVoucher) return { outcome: "no_es_comprobante" };
@@ -241,16 +249,16 @@ export async function handleInboundVoucher(
       validation_status: operation ? "pendiente_revision" : "info_incompleta",
       // `registered_by` en null a propósito: no lo registró una persona.
       notes: `Comprobante recibido por WhatsApp (cobranza Shalom). Atribuido por ${match.gate}.`,
+      // La auditoría de la lectura tal cual la escribe la carga a mano, más de
+      // dónde vino este comprobante y por qué puerta pasó. Lo de la procedencia
+      // va FUERA de `extracted`, que es lo que el lector dijo de la imagen.
       vision: {
+        ...lectura.payload,
         source: "wa_cobranza_shalom",
         gate: match.gate,
         message_id: msg.id,
         phone: msg.from,
         is_voucher: verdict.ok ? verdict.isVoucher : null,
-        model: verdict.model,
-        recipient_name: fields.recipientName ?? null,
-        amount,
-        operation_number: operation,
         saldo_esperado: match.candidate.saldo,
       },
     })
