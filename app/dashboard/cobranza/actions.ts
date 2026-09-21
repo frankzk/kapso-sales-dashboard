@@ -10,7 +10,11 @@
 
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { resolveAgentNames } from "@/lib/agent-names";
-import { reconcileCollectionOffers, resolveCollectionAlert } from "@/lib/collection-alerts-access";
+import {
+  reconcileCollectionOffers,
+  resolveCollectionAlert,
+  sweepResolvedAlerts,
+} from "@/lib/collection-alerts-access";
 import { waitingMinutes } from "@/lib/collection-escalation";
 
 export interface CollectionAlertView {
@@ -47,7 +51,14 @@ export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
 
   const admin = createAdminSupabase();
   const nowMs = Date.now();
-  for (const s of stores) await reconcileCollectionOffers(admin, s.id, nowMs);
+  const nowIso = new Date(nowMs).toISOString();
+  for (const s of stores) {
+    // Primero se retira lo que ya está hecho y después se hace avanzar la
+    // escalera: al revés, una alerta resuelta podría escalar a otra persona
+    // justo antes de retirarse, y ésa recibiría un aviso de trabajo hecho.
+    await sweepResolvedAlerts(admin, s.id, nowIso);
+    await reconcileCollectionOffers(admin, s.id, nowMs);
+  }
 
   const { data } = await admin
     .from("collection_alerts")

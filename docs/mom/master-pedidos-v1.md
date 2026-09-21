@@ -3100,6 +3100,22 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
         entonces la cola se llena de trabajo ya hecho que figura pendiente. Lo
         único que se cierra a mano es **descartar**, con su motivo, para lo que
         nunca se va a resolver solo (una foto que la visión confundió).
+        - **Y el hecho se comprueba AL LEER, no solo al escribir.** El cierre
+          dentro de `validatePayment` es un empujón al final de la acción, y un
+          empujón se puede perder: si algo entre medias falla, el pago queda
+          validado —eso ya está escrito— y la alerta se queda abierta para
+          siempre. Pasó con #KP134730 el 20-09-2026: validado a las 22:42, su
+          alerta seguía en la cola cinco horas después pidiendo trabajo hecho.
+          Así que al listar la cola se retiran primero las alertas cuyo pago ya
+          tiene decisión (`sweepResolvedAlerts`), y el empujón al validar pasa a
+          ser una optimización en vez de la única vía. Se barre **antes** de
+          escalar: al revés, una alerta ya resuelta podría subir a otra persona
+          justo antes de retirarse.
+      - **«Ir a validar» lleva al DRAWER del pedido**, con la sección de Cobro
+        delante (`/dashboard/pedidos?abrir=<id>&ir=pagos`), no a la bandeja de
+        revisión. Dos motivos: la bandeja valida a secas —el botón que además
+        manda la clave vive en el drawer— y llevar allí obligaba a buscar a
+        mano el pedido que el sistema ya sabía cuál era.
       - **Al validar el pago que cierra el pedido, la clave sale sola** (0173),
         en el mismo clic, y ese envío **es** el registro de la entrega.
         - **Por qué.** Medido el 21-09-2026: 786 pedidos pagados con clave
