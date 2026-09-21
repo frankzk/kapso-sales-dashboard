@@ -3132,7 +3132,7 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - Plazo: 6 días desde disponibilidad en agencia destino.
 - Gerardo también realiza seguimiento.
 
-#### El tracking de Olva y su rastreo (migración 0173, decidido el 20-09-2026)
+#### El tracking de Olva y su rastreo (migración 0174, decidido el 20-09-2026)
 
 - **La salida de Olva guarda el tracking que emite Olva** («2552504-26»: el
   número y los dos dígitos del año de emisión), aparte del `guide_code` interno
@@ -3790,7 +3790,7 @@ bloquea es la contradicción explícita.
 - Shalom continúa por su API directa y Olva se registra como salida de agencia;
   ambas muestran el requisito de adelanto y el servidor exige S/ 20 validados.
   La salida de Olva admite el tracking de Olva, y con él su estado se rastrea
-  solo (§12, 0173).
+  solo (§12, 0174).
 - Axel, Urpi, motorizado propio y Olva generan una salida interna, un consecutivo
   `Sxx`, un QR opaco y un rótulo imprimible de Kapta.
 - Una salida manual nace como `rotulo_generado`, bajo custodia de la empresa. No

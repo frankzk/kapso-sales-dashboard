@@ -347,6 +347,6 @@
 \ir migrations/0171_voucher_intake_switch.sql
 \echo 'Applying 0172_collection_alerts.sql'
 \ir migrations/0172_collection_alerts.sql
-\echo 'Applying 0173_olva_tracking.sql'
-\ir migrations/0173_olva_tracking.sql
+\echo 'Applying 0174_olva_tracking.sql'
+\ir migrations/0174_olva_tracking.sql
 \echo 'Done.'

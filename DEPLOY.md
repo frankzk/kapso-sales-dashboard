@@ -1125,7 +1125,7 @@ mandando. Se captura la apikey nueva, se cambia la variable, y listo: no hay
 código que tocar.
 
 Solo entran las salidas de Olva **con tracking registrado** (columna
-`olva_tracking`, 0173): el número se pega en el drawer, en la salida, desde
+`olva_tracking`, 0174): el número se pega en el drawer, en la salida, desde
 **Salidas y guías**. El mapeo de estados vive en `lib/olva/tracking.ts`, puro y
 probado con dos respuestas reales; **manda el estado que Olva declara vigente**
 (`nombre_estado_tracking`), no el hito más avanzado — en un envío real, un

@@ -481,7 +481,7 @@ const GUIDE_COLUMNS =
   // desde el drawer y si hay que avisarle a Swayp antes (ver `cancelFenixOutput`).
   "swayp_guide,swayp_state,dispatched_at,reported_status," +
   "shalom_codigo,shalom_ose_id,shalom_order_id,shalom_serie,shalom_raw," +
-  // 0173: el tracking de Olva y su último estado crudo. Sin ellos el drawer no
+  // 0174: el tracking de Olva y su último estado crudo. Sin ellos el drawer no
   // puede enseñar el número ni ofrecer registrarlo.
   "olva_tracking,olva_emision,olva_status," +
   "aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at," +

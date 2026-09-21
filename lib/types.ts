@@ -360,7 +360,7 @@ export interface ShipmentRow {
   shalom_ose_id?: number | null;
   /**
    * El número con el que Olva conoce el envío («2552504») y los dos dígitos
-   * del año de emisión («26») que su página exige junto a él (0173). El
+   * del año de emisión («26») que su página exige junto a él (0174). El
    * `guide_code` de una salida de Olva es el código interno del rótulo, no
    * este. `olva_status` es el último estado crudo que dijo Olva.
    */
