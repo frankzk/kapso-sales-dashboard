@@ -28,6 +28,7 @@ import {
   yapeRecipientReadingFromVision,
   type CollectionAccount,
   type YapeRecipientCheck,
+  motivoDelDesencuentro,
 } from "@/lib/yape-recipient";
 import { normalizePhone } from "@/lib/phone";
 import { typedTheOperationNumber } from "@/lib/payment-review";
@@ -851,10 +852,26 @@ async function ajustarLiquidacionDelCobro(
   });
 }
 
-/** Marca un pago como validado. Es lo que habilita la clave, así que va aparte. */
+/**
+ * Marca un pago como validado. Es lo que habilita la clave, así que va aparte.
+ *
+ * LA EXCEPCIÓN DE LA CUENTA RECEPTORA VIVE AQUÍ DENTRO, y no en una acción
+ * aparte, a propósito. `overridePaymentValidation` ya podía escribir
+ * `validation_status = 'validado'` a mano, pero por ese camino el pago quedaba
+ * sin `validated_by`, sin `validated_at`, sin el asiento de liquidación del
+ * cobro del courier y sin la confirmación expresa de agencia — y saltándose de
+ * paso las dos barreras que protegen el dinero: el nº de operación obligatorio
+ * y la regla de cuatro ojos. Un pago «validado» sin nada de eso es peor que el
+ * atasco que venía a resolver.
+ *
+ * Con la excepción aquí, el camino es UNO SOLO: todas las barreras se aplican
+ * igual, y lo único que cambia es que el desencuentro de la cuenta receptora
+ * deja de cerrar la puerta cuando un administrador escribe por qué. Las dos
+ * mitades no pueden separarse con el tiempo porque no hay dos mitades.
+ */
 export async function validatePayment(
   paymentId: string,
-  opts: { sendKey?: boolean } = {},
+  opts: { sendKey?: boolean; recipientExceptionReason?: string | null } = {},
 ): Promise<PaymentActionState> {
   const payment = await loadPayment(paymentId);
   if (!payment) return { error: "Pago no encontrado." };
@@ -896,15 +913,31 @@ export async function validatePayment(
   // cuenta destraba también lo que ya estaba cargado.
   const accounts = await loadStoreCollectionAccounts(admin, payment.store_id);
   const recipient = yapeRecipientReadingFromVision(payment.vision, accounts);
+  const recipientException = opts.recipientExceptionReason?.trim() || null;
   if (recipient.status === "mismatch") {
-    const cuentas = accounts.length
-      ? accounts.map((a) => `${a.name} · ···${a.phoneLastDigits}`).join(" / ")
-      : "ninguna cuenta de cobro configurada";
-    return {
-      error:
-        "No se puede validar: el destinatario o el celular receptor leído no coincide con " +
-        `${cuentas}. Revisa la imagen y rechaza el comprobante si fue enviado a otra cuenta.`,
-    };
+    // El aviso dice QUÉ señal falló. Antes decía «el destinatario o el celular
+    // no coincide» y ese «o» dejaba a quien revisa sin saber cuál mirar.
+    const motivo =
+      motivoDelDesencuentro(recipient, accounts) ??
+      "El destinatario leído no coincide con ninguna cuenta de cobro.";
+    if (!recipientException) {
+      return {
+        error:
+          `No se puede validar. ${motivo} ` +
+          "Si el dinero sí llegó a una cuenta nuestra, un administrador puede validarlo desde " +
+          "la bandeja de pagos dejando escrito por qué.",
+      };
+    }
+    // La excepción es de administrador. Quien valida a diario no puede levantar
+    // la única alarma que distingue un cobro nuestro de uno ajeno.
+    const perms = await getMasterPermissions();
+    if (!perms.can("shalom.override_payment_validation")) {
+      return {
+        error:
+          `No se puede validar. ${motivo} ` +
+          "Levantar este bloqueo es cosa de un administrador.",
+      };
+    }
   }
   const { error } = await admin
     .from("order_payments")
@@ -924,8 +957,30 @@ export async function validatePayment(
     source: "manual",
     previous_status: payment.validation_status,
     new_status: "validado",
-    note: `Yape de ${payment.kind} validado.`,
+    note: recipientException
+      ? `Yape de ${payment.kind} validado con excepción de cuenta receptora.`
+      : `Yape de ${payment.kind} validado.`,
   });
+  // La excepción va en SU PROPIO evento, no solo en la nota del anterior: es lo
+  // que hay que poder listar el día que alguien pregunte cuántos cobros se
+  // dieron por buenos sin que la cuenta cuadrara, y quién lo decidió. Se guarda
+  // la lectura que se saltó, para releerla sin reconstruirla.
+  if (recipientException) {
+    await admin.from("order_events").insert({
+      store_id: ctx.storeId,
+      order_id: payment.order_id,
+      kind: "payment_recipient_exception",
+      actor: ctx.userId,
+      source: "manual",
+      reason: recipientException,
+      note: `Cuenta receptora no verificada; validado igualmente por un administrador.`,
+      payload: {
+        nombre_leido: recipient.name,
+        celular_leido: recipient.phoneLastDigits,
+        cuentas: accounts.map((a) => `${a.name} · ···${a.phoneLastDigits}`),
+      },
+    });
+  }
   await ajustarLiquidacionDelCobro(
     admin,
     ctx,
@@ -980,11 +1035,14 @@ export async function validatePayment(
 
   revalidatePath(MASTER_PATH);
   revalidatePath(PAYMENT_REVIEW_PATH);
+  const conExcepcion = recipientException ? " Queda registrada la excepción de cuenta receptora." : "";
   return {
     notice:
       (confirmado
         ? "Pago validado. Con el documento y la agencia ya apuntados, el pedido queda confirmado y pasa a Preparación."
-        : "Pago validado.") + claveNota,
+        : "Pago validado.") +
+      conExcepcion +
+      claveNota,
   };
 }
 

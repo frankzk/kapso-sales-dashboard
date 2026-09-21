@@ -4,7 +4,7 @@ import { cache } from "react";
 import { getAccessibleStores } from "@/lib/access";
 import { loadCollectionAccounts } from "@/lib/collection-accounts";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
-import { hasOrgPermission } from "@/lib/permissions-access";
+import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import type { CollectionAccount } from "@/lib/yape-recipient";
 import {
   limaDayBounds,
@@ -74,6 +74,13 @@ export interface PaymentReviewItem {
 
 export interface PaymentReviewBoardData {
   date: string;
+  /**
+   * Quien mira la bandeja puede levantar el bloqueo de la cuenta receptora
+   * dejando escrito por qué. Se decide en el SERVIDOR y viaja con el tablero
+   * porque el permiso no existe en el navegador — y `validatePayment` lo vuelve
+   * a exigir de todos modos: esto solo decide si se dibuja la salida.
+   */
+  canOverrideRecipient: boolean;
   counts: Record<PaymentReviewLane, number>;
   lanes: Record<PaymentReviewLane, PaymentReviewItem[]>;
   truncated: Record<PaymentReviewLane, boolean>;
@@ -252,6 +259,7 @@ export async function getPaymentReviewBoard(): Promise<PaymentReviewBoardData | 
   };
   return {
     date: day.date,
+    canOverrideRecipient: (await getMasterPermissions()).can("shalom.override_payment_validation"),
     counts,
     lanes: {
       pending: laneRows.pending.map(toItem),

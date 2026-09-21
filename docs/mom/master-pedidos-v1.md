@@ -3560,8 +3560,36 @@ cuenta receptora leída, evidencia y progreso acumulado del pedido.
 - `Observar` exige motivo y mueve el comprobante a `revision_admin`.
 - `Rechazar` es una decisión definitiva desde Observados. No borra el pago: sale
   de la cola activa y queda preservado en el expediente y sus eventos.
-- `Validar` exige número de operación y bloquea una cuenta receptora incompatible
-  con Grupo GF S.A.C. / terminación 309.
+- `Validar` exige número de operación y bloquea una cuenta receptora
+  incompatible con las cuentas de cobro de la tienda (`store_collection_accounts`,
+  ya no una sola escrita a mano).
+
+#### Una cuenta receptora que no cuadra tiene que tener salida
+
+El bloqueo no tenía puerta trasera y por tanto atascaba para siempre. **#KP126085
+llevaba siete semanas** en la bandeja: el lector puso «Cerdo Gf S.a.c.» por
+«Grupo Gf S.a.c.» y eso basta para `mismatch`, aunque el celular receptor leído
+—···309— sea exactamente el de la cuenta de la empresa. Lo único que la pantalla
+ofrecía era `Rechazar`, que habría sido falso: el dinero llegó.
+
+- **El aviso dice QUÉ señal falló.** Decía «el destinatario o el celular receptor
+  no coincide», y ese «o» deja a quien revisa sin saber cuál mirar. Ahora
+  distingue los dos casos: celular nuestro con nombre que no encaja —casi siempre
+  lectura mala, pero también la forma que tendría un comprobante ajeno con
+  nuestro número delante— y celular que no es de ninguna cuenta, que es tajante.
+- **Un administrador puede validar dejando escrito por qué.** Queda en su propio
+  evento (`payment_recipient_exception`), con el nombre y el celular que se
+  leyeron, para poder listar después cuántos cobros se dieron por buenos sin que
+  la cuenta cuadrara y quién lo decidió.
+- **La excepción no afloja nada más.** Vive DENTRO de `validatePayment`, después
+  del nº de operación obligatorio y de la regla de cuatro ojos, así que no
+  alcanza a ninguna de las dos. Un camino aparte —escribir el estado a mano con
+  `overridePaymentValidation`— dejaba el pago sin validador, sin fecha, sin
+  asiento de liquidación y sin la confirmación de agencia: peor que el atasco.
+- **La regla NO se afloja por celular.** Lo tentador es dar por buena cualquier
+  lectura cuyo celular sea el nuestro. **#AUR177034** lo desmiente: celular ···309
+  y nombre «Rosa campos Mendoza». Las dos formas de fallar necesitan ojos, y por
+  eso la salida es una persona escribiendo el motivo y no una regla nueva.
 
 Mientras Kapta y el Excel convivan, validar un pago deja el comprobante listo
 para continuar y registra actor y fecha, pero **no cambia por sí solo la
