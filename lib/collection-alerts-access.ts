@@ -196,6 +196,90 @@ export async function sweepResolvedAlerts(
   return error ? 0 : resueltas.length;
 }
 
+/**
+ * Retira las alertas «no se pudo registrar» de un celular que YA NO DEBE NADA.
+ *
+ * Una `sin_atribuir` pide una cosa: que alguien averigüe de qué pedido es ese
+ * dinero y lo registre. Cuando los pedidos de ese celular están todos cubiertos
+ * —porque alguien lo subió a mano, o porque el comprobante bueno entró por otra
+ * vía— ya no queda nada que averiguar, y el aviso pasa a ser ruido que además
+ * escala de persona en persona. Le pasó a Esmeralda (#KP134470): pedido pagado,
+ * validado y con la clave enviada, y su alerta seguía dando vueltas.
+ *
+ * CONSERVADORA A PROPÓSITO: si de ese celular no consta NINGÚN pedido, la
+ * alerta se queda. Ése es el caso en que de verdad no se sabe quién pagó, que
+ * es justo para lo que la alerta existe.
+ */
+export async function sweepUnattributedAlerts(
+  admin: SupabaseClient,
+  storeId: string,
+  nowIso: string = new Date().toISOString(),
+): Promise<number> {
+  const { data } = await admin
+    .from("collection_alerts")
+    .select("id,phone")
+    .eq("store_id", storeId)
+    .eq("status", "abierta")
+    .eq("kind", "sin_atribuir")
+    .not("phone", "is", null)
+    .limit(100);
+  const rows = (data ?? []) as { id: string; phone: string }[];
+  if (!rows.length) return 0;
+
+  let cerradas = 0;
+  for (const phone of new Set(rows.map((r) => r.phone))) {
+    const { data: pedidos } = await admin
+      .from("orders")
+      .select("id,total_amount")
+      .eq("store_id", storeId)
+      .eq("customer_phone", phone)
+      .order("created_at", { ascending: false })
+      .limit(10);
+    const ordenes = (pedidos ?? []) as { id: string; total_amount: number | null }[];
+    if (!ordenes.length) continue; // de verdad no se sabe de quién es: se queda
+
+    const { data: pagos } = await admin
+      .from("order_payments")
+      .select("order_id,amount,validation_status")
+      .in(
+        "order_id",
+        ordenes.map((o) => o.id),
+      );
+    const cubierto = new Map<string, number>();
+    for (const p of (pagos ?? []) as {
+      order_id: string;
+      amount: number | null;
+      validation_status: string;
+    }[]) {
+      // Cuenta lo CARGADO y no solo lo validado: la alerta pide que el
+      // comprobante entre, no que se valide. Validarlo es otro trabajo, con su
+      // propia alerta.
+      if (p.validation_status === "rechazado") continue;
+      cubierto.set(p.order_id, (cubierto.get(p.order_id) ?? 0) + (Number(p.amount) || 0));
+    }
+    const algunoDebe = ordenes.some((o) => {
+      const total = o.total_amount == null ? null : Number(o.total_amount);
+      if (total == null || !(total > 0)) return false;
+      return Math.round((total - (cubierto.get(o.id) ?? 0)) * 100) > 0;
+    });
+    if (algunoDebe) continue;
+
+    const ids = rows.filter((r) => r.phone === phone).map((r) => r.id);
+    const { error } = await admin
+      .from("collection_alerts")
+      .update({
+        status: "atendida",
+        resolution: "ese celular ya no tiene saldo pendiente",
+        resolved_at: nowIso,
+        updated_at: nowIso,
+      })
+      .in("id", ids)
+      .eq("status", "abierta");
+    if (!error) cerradas += ids.length;
+  }
+  return cerradas;
+}
+
 /** Cerrarla: validada, subida a mano, o descartada con su motivo. */
 export async function resolveCollectionAlert(
   admin: SupabaseClient,

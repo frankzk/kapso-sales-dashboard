@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchCandidate, type VoucherCandidate } from "@/lib/shalom/voucher-intake";
+import { duplicateAction, matchCandidate, type VoucherCandidate } from "@/lib/shalom/voucher-intake";
 import { voucherReading } from "@/lib/voucher-inspect";
 import { yapeRecipientReadingFromVision, type CollectionAccount } from "@/lib/yape-recipient";
 
@@ -161,5 +161,21 @@ describe("la auditoría que se guarda con el comprobante", () => {
     const r = yapeRecipientReadingFromVision(payload, CUENTAS);
     expect(r.swapped).toBe(true);
     expect(r.status).toBe("verified");
+  });
+});
+
+describe("el comprobante repetido", () => {
+  // #KP134470, 21-09-2026: Esmeralda mandó su Yape, se registró, Gerardo lo
+  // validó y la clave salió a las 09:52. La imagen llegó otra vez y la cola
+  // levantó «llegó un pago y no se sabe de qué pedido es», que escaló dos
+  // veces. Era mentira: se sabía perfectamente de qué pedido era.
+  it("del MISMO pedido no avisa a nadie: ya está donde tiene que estar", () => {
+    expect(duplicateAction(true)).toEqual({ alert: false, outcome: "duplicado" });
+  });
+
+  it("de OTRO pedido sí avisa: es el mismo Yape cobrando dos pedidos", () => {
+    // Esto es justo lo que la deduplicación existe para cazar, y callarlo sería
+    // el error contrario —el caro—.
+    expect(duplicateAction(false)).toEqual({ alert: true, outcome: "yape_de_otro_pedido" });
   });
 });

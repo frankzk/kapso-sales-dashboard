@@ -3062,6 +3062,15 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
       existen para evitar.
     - Lo que no pasa **queda como anomalía con su motivo** (`inbound_voucher`).
       El silencio es lo único inaceptable: la clienta ya pagó.
+    - **El comprobante repetido del MISMO pedido no avisa a nadie.** Rastro y
+      silencio: la clienta mandó su Yape dos veces o el webhook reentregó, y ya
+      está registrado donde tiene que estar. A Esmeralda (#KP134470,
+      21-09-2026) le llegó su clave a las 09:52 y a las 09:51 se había
+      levantado una alerta diciendo «llegó un pago y no se sabe de qué pedido
+      es», que además escaló dos veces. Un aviso que miente se deja de leer.
+      - **Repetido en OTRO pedido sí avisa**, con el pedido con el que choca
+        escrito por su nombre: es el mismo Yape cobrando dos pedidos, que es
+        justo lo que la deduplicación existe para cazar.
     - **La lectura se guarda con la MISMA forma que la carga a mano**
       (`voucherReading`, en `lib/voucher-inspect.ts`), y esa forma es un
       contrato: el drawer relee `vision.extracted.*` para decir a qué cuenta
@@ -3111,6 +3120,20 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
           ser una optimización en vez de la única vía. Se barre **antes** de
           escalar: al revés, una alerta ya resuelta podría subir a otra persona
           justo antes de retirarse.
+        - **Y la `sin_atribuir` se retira cuando ese CELULAR ya no debe nada**
+          (`sweepUnattributedAlerts`): lo que pedía —que alguien averigüe de
+          qué pedido es y lo registre— ya está hecho. Cuenta lo **cargado**, no
+          solo lo validado, porque validar es el otro trabajo y tiene su propia
+          alerta. Si de ese celular no consta **ningún** pedido, se queda: ése
+          es el caso en que de verdad no se sabe quién pagó, que es para lo que
+          la alerta existe.
+      - **El título no afirma lo que no consta.** `sin_atribuir` es el cajón de
+        todo lo que no se pudo registrar —la imagen que no se pudo bajar, el
+        pago parcial, el Yape ya usado en otro pedido—, así que el pop-up dice
+        «Llegó un comprobante y no se pudo registrar» y dentro, en el detalle,
+        el motivo exacto. Decía «no se sabe de qué pedido es» sobre un
+        comprobante ya registrado y con la clave enviada. Sin pedido, lo que
+        identifica es el **celular**, y va delante: con él se busca el chat.
       - **«Ir a validar» lleva al DRAWER del pedido**, con la sección de Cobro
         delante (`/dashboard/pedidos?abrir=<id>&ir=pagos`), no a la bandeja de
         revisión. Dos motivos: la bandeja valida a secas —el botón que además
