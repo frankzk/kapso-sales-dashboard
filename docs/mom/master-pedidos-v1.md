@@ -3236,6 +3236,19 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   movimiento («Nombre Oficina : …») si la salida no la tenía.
 - Olva fecha los movimientos solo con el día; se anclan al mediodía de Lima
   para que no caigan en la víspera al pasar a UTC.
+- **Los dos avisos a la clienta, igual que Shalom** (migración 0175). Cuando el
+  rastreo pone la guía `en_transito` se encola el aviso de «va en camino», y
+  cuando la pone `disponible_para_recojo` el de «ya está en la oficina:
+  recógelo y paga el saldo». Es **la misma cola, el mismo envío, el mismo
+  horario, el mismo número y los mismos botones de cobro** que los avisos de
+  Shalom; una fila por guía y por tipo, con el courier marcado. Lo que es propio
+  de Olva: la **plantilla** (Meta aprueba cada texto aparte, y los de Shalom
+  nombran a Shalom), sus **variables** —las de Shalom sin `codigo`, y `guia` es
+  el tracking «2552504-26», que es lo que la clienta dice en el mostrador—, **sin
+  ticket** en cabecera ni detrás del botón, y `vence` a **6 días**. `agencia`
+  es la oficina que el rastreo apuntó al llegar. Los interruptores y las
+  plantillas de Olva se configuran en Ajustes, aparte de los de Shalom; con el
+  aviso apagado la cola cierra la fila como omitida y no manda nada.
 
 ### Pagos
 

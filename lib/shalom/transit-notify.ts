@@ -21,8 +21,15 @@
 // LO QUE NUNCA VA EN EL MENSAJE: la clave de recojo. Se entrega desde la
 // salida, con el cobro validado y con auditoría (§12). Este aviso da guía,
 // código y agencia, que sin la clave no abren nada.
+//
+// TAMBIÉN OLVA (0175). La cola, el envío, el horario, el número y los botones
+// de cobro son los mismos; lo que cambia por courier es la PLANTILLA —Meta
+// aprueba cada texto aparte— y los datos que la rellenan: la «guía» de Olva es
+// su tracking («2552504-26»), no tiene código corto ni ticket, y devuelve a los
+// 6 días y no a los 28. Por eso cada fila de la cola dice de qué courier es.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { OLVA_PICKUP_WINDOW_DAYS, formatOlvaTracking } from "@/lib/olva/tracking";
 import type { StoreCreds } from "@/lib/ingest";
 import { getStoreCreds } from "@/lib/ingest";
 import { sendWhatsappDocument, sendWhatsappTemplate, type WhatsappSendResult } from "@/lib/kapso";
@@ -53,11 +60,21 @@ export type TransitToken = (typeof TRANSIT_TOKENS)[number];
 /** Qué aviso es. Comparten cola, número, horario y cuentas; el texto no. */
 export type NoticeKind = "transito" | "disponible";
 
+/** De qué courier es la guía. Decide la plantilla y los datos; nada más. */
+export type NoticeCourier = "shalom" | "olva";
+
 /** El orden de `guias_shalom` tal como se aprobó en Meta. */
 export const TRANSIT_DEFAULT_PARAMS = TRANSIT_TOKENS.filter((t) => t !== "vence").join(",");
+/** El de Olva: lo mismo sin `codigo`, que Olva no tiene. */
+export const OLVA_TRANSIT_DEFAULT_PARAMS = TRANSIT_TOKENS.filter((t) => t !== "vence" && t !== "codigo").join(",");
 
 /** Días que Shalom guarda el paquete antes de devolverlo (MOM §12). */
 export const PICKUP_WINDOW_DAYS = 28;
+
+/** Cuántos días guarda el paquete cada courier (MOM §12). */
+export function pickupWindowDays(courier: NoticeCourier): number {
+  return courier === "olva" ? OLVA_PICKUP_WINDOW_DAYS : PICKUP_WINDOW_DAYS;
+}
 
 /**
  * «12 de octubre» — hasta cuándo puede recogerlo, en hora de Lima.
@@ -229,6 +246,7 @@ export function transitWithinHours(
 
 /** Config de envío resuelta desde la tienda, o `null` si le falta algo. */
 export interface TransitConfig {
+  courier: NoticeCourier;
   templateName: string;
   language: string;
   tokens: TransitToken[];
@@ -245,17 +263,26 @@ export interface TransitConfig {
 export function transitConfig(
   creds: StoreCreds,
   kind: NoticeKind = "transito",
+  courier: NoticeCourier = "shalom",
 ): { cfg: TransitConfig } | { cfg: null; reason: string } {
-  // Lo que cambia por tipo de aviso es el TEXTO: plantilla, variables, ticket y
-  // su propio interruptor. El número, el horario y las cuentas son de la
-  // tienda y se comparten — encender el de llegada no puede obligar a
-  // reconfigurar por dónde sale.
+  // Lo que cambia por tipo de aviso —y por courier— es el TEXTO: plantilla,
+  // variables, ticket y su propio interruptor. El número, el idioma, el horario
+  // y las cuentas son de la tienda y se comparten — encender el de llegada, o
+  // el de Olva, no puede obligar a reconfigurar por dónde sale.
   const llegada = kind === "disponible";
-  const enabled = llegada ? creds.shalom_arrival_template_enabled : creds.shalom_transit_template_enabled;
-  const templateName = llegada ? creds.shalom_arrival_template_name : creds.shalom_transit_template_name;
-  const rawParams = llegada ? creds.shalom_arrival_params : creds.shalom_transit_params;
-  const attach = llegada ? creds.shalom_arrival_attach_ticket : creds.shalom_transit_attach_ticket;
-  const que = llegada ? "aviso de llegada" : "aviso";
+  const olva = courier === "olva";
+  const enabled = olva
+    ? llegada ? creds.olva_arrival_template_enabled : creds.olva_transit_template_enabled
+    : llegada ? creds.shalom_arrival_template_enabled : creds.shalom_transit_template_enabled;
+  const templateName = olva
+    ? llegada ? creds.olva_arrival_template_name : creds.olva_transit_template_name
+    : llegada ? creds.shalom_arrival_template_name : creds.shalom_transit_template_name;
+  const rawParams = olva
+    ? llegada ? creds.olva_arrival_params : creds.olva_transit_params
+    : llegada ? creds.shalom_arrival_params : creds.shalom_transit_params;
+  // Olva no tiene ticket: su guía es un número y ya.
+  const attach = olva ? false : llegada ? creds.shalom_arrival_attach_ticket : creds.shalom_transit_attach_ticket;
+  const que = `${llegada ? "aviso de llegada" : "aviso"}${olva ? " de Olva" : ""}`;
 
   if (!enabled) return { cfg: null, reason: `${que} apagado en la tienda` };
   if (!templateName) return { cfg: null, reason: `la tienda no tiene plantilla de ${que} configurada` };
@@ -264,6 +291,7 @@ export function transitConfig(
   if (!tokens.length) return { cfg: null, reason: "la tienda no tiene el orden de variables configurado" };
   return {
     cfg: {
+      courier,
       templateName,
       language: creds.shalom_transit_template_language ?? "es",
       tokens,
@@ -299,13 +327,21 @@ export function resolveSenderNumber(
  */
 export async function enqueueTransitNotification(
   admin: SupabaseClient,
-  input: { storeId: string; shipmentId: string; orderId: string | null; kind?: NoticeKind },
+  input: {
+    storeId: string;
+    shipmentId: string;
+    orderId: string | null;
+    kind?: NoticeKind;
+    /** Sin decirlo es Shalom: es el que ya existía. */
+    courier?: NoticeCourier;
+  },
 ): Promise<boolean> {
   const kind: NoticeKind = input.kind ?? "transito";
+  const courier: NoticeCourier = input.courier ?? "shalom";
   const { error } = await admin
     .from("shalom_transit_notifications")
     .upsert(
-      { store_id: input.storeId, shipment_id: input.shipmentId, order_id: input.orderId, kind },
+      { store_id: input.storeId, shipment_id: input.shipmentId, order_id: input.orderId, kind, courier },
       { onConflict: "shipment_id,kind", ignoreDuplicates: true },
     );
   if (error) {
@@ -322,6 +358,7 @@ export interface TransitQueueRow {
   order_id: string | null;
   attempts: number;
   kind?: NoticeKind | null;
+  courier?: NoticeCourier | null;
 }
 
 export interface TransitReport {
@@ -338,11 +375,27 @@ interface ShipmentRow {
   guide_code: string | null;
   shalom_codigo: string | null;
   shalom_ose_id: number | null;
+  olva_tracking?: string | null;
+  olva_emision?: string | null;
   customer_name: string | null;
   customer_phone: string | null;
   agency_branch: string | null;
   province: string | null;
   district: string | null;
+}
+
+/**
+ * El número con el que el COURIER conoce la guía, que es el que la clienta va
+ * a decir en el mostrador. En Shalom es el nº de orden; en Olva, el tracking
+ * con su año («2552504-26»), no el código interno del rótulo de Kapta.
+ */
+export function noticeGuideCode(courier: NoticeCourier, shipment: ShipmentRow): string | null {
+  if (courier === "olva") {
+    return shipment.olva_tracking && shipment.olva_emision
+      ? formatOlvaTracking({ tracking: shipment.olva_tracking, emision: shipment.olva_emision })
+      : null;
+  }
+  return shipment.guide_code;
 }
 
 /** Lee todo lo que la plantilla necesita de un pedido. Ninguna lectura lanza:
@@ -352,6 +405,7 @@ async function gatherFacts(
   storeId: string,
   shipment: ShipmentRow,
   orderId: string | null,
+  courier: NoticeCourier = "shalom",
 ): Promise<{
   facts: TransitFacts;
   phone: string | null;
@@ -436,8 +490,8 @@ async function gatherFacts(
   return {
     facts: {
       customerName: m?.customer_name ?? shipment.customer_name ?? null,
-      guideCode: shipment.guide_code,
-      shalomCodigo: shipment.shalom_codigo,
+      guideCode: noticeGuideCode(courier, shipment),
+      shalomCodigo: courier === "shalom" ? shipment.shalom_codigo : null,
       lineItems: o?.line_items ?? [],
       agencyName,
       orderTotal: m?.order_total ?? o?.total_amount ?? null,
@@ -481,7 +535,7 @@ export async function processTransitNotifications(
 
   let query = admin
     .from("shalom_transit_notifications")
-    .select("id,store_id,shipment_id,order_id,attempts,kind")
+    .select("id,store_id,shipment_id,order_id,attempts,kind,courier")
     .eq("status", "pending")
     .lte("next_attempt_at", nowIso);
   if (opts.storeId) query = query.eq("store_id", opts.storeId);
@@ -507,7 +561,8 @@ export async function processTransitNotifications(
     }
 
     const kind: NoticeKind = row.kind === "disponible" ? "disponible" : "transito";
-    const claveCfg = `${row.store_id}:${kind}`;
+    const courier: NoticeCourier = row.courier === "olva" ? "olva" : "shalom";
+    const claveCfg = `${row.store_id}:${kind}:${courier}`;
     if (!credsByStore.has(row.store_id)) {
       credsByStore.set(row.store_id, await loadCreds(row.store_id));
     }
@@ -515,7 +570,7 @@ export async function processTransitNotifications(
       const creds = credsByStore.get(row.store_id) ?? null;
       configByStore.set(
         claveCfg,
-        creds ? transitConfig(creds, kind) : { cfg: null, reason: "tienda no encontrada" },
+        creds ? transitConfig(creds, kind, courier) : { cfg: null, reason: "tienda no encontrada" },
       );
     }
     const resolved = configByStore.get(claveCfg)!;
@@ -538,7 +593,7 @@ export async function processTransitNotifications(
       continue;
     }
 
-    const outcome = await sendOne(admin, row, cfg, { nowIso, send });
+    const outcome = await sendOne(admin, row, cfg, { nowIso, send, kind });
     if (outcome === "sent") report.sent += 1;
     else if (outcome === "failed") report.failed += 1;
     else if (outcome === "retry") report.deferred += 1;
@@ -557,9 +612,10 @@ async function sendOne(
   admin: SupabaseClient,
   row: TransitQueueRow,
   cfg: TransitConfig,
-  ctx: { nowIso: string; send: SendTemplate },
+  ctx: { nowIso: string; send: SendTemplate; kind?: NoticeKind },
 ): Promise<"sent" | "failed" | "retry"> {
   const attempts = (row.attempts ?? 0) + 1;
+  const courier = cfg.courier ?? "shalom";
 
   const fail = async (
     error: string,
@@ -583,7 +639,9 @@ async function sendOne(
 
   const { data: sh } = await admin
     .from("shipments")
-    .select("id,guide_code,shalom_codigo,shalom_ose_id,customer_name,customer_phone,agency_branch,province,district")
+    .select(
+      "id,guide_code,shalom_codigo,shalom_ose_id,olva_tracking,olva_emision,customer_name,customer_phone,agency_branch,province,district",
+    )
     .eq("id", row.shipment_id)
     .maybeSingle();
   const shipment = (sh ?? null) as ShipmentRow | null;
@@ -594,10 +652,12 @@ async function sendOne(
     row.store_id,
     shipment,
     row.order_id,
+    courier,
   );
   // La fecha límite solo la pide el aviso de llegada; se calcula siempre
   // porque cuesta nada y así `transitBodyParams` decide con el dato delante.
-  facts.pickupDeadline = pickupDeadlineLabel(arrivedAt, cfg.timezone);
+  // Con los días de CADA courier: Olva devuelve a los 6, Shalom a los 28.
+  facts.pickupDeadline = pickupDeadlineLabel(arrivedAt, cfg.timezone, pickupWindowDays(courier));
 
   if (!phone || !isSendablePhone(phone)) {
     return fail(`sin celular peruano al que escribir (${phone ?? "vacío"})`, { retryable: false, patch: { phone } });
@@ -691,16 +751,17 @@ async function sendOne(
   if (row.order_id) {
     // Queda en la línea de tiempo del pedido, al lado del `courier_status` que
     // lo disparó: quien mire el pedido tiene que ver que se avisó y con qué.
+    const que = ctx.kind === "disponible" ? "Aviso de llegada a la agencia" : "Aviso de guía en tránsito";
     await admin.from("order_events").insert({
       store_id: row.store_id,
       order_id: row.order_id,
       kind: "whatsapp_template",
       occurred_at: ctx.nowIso,
       actor: null,
-      source: "shalom_transit",
-      courier: "shalom",
+      source: `${courier}_transit`,
+      courier,
       guide_code: shipment.guide_code,
-      note: `📤 Aviso de guía en tránsito: plantilla «${cfg.templateName}» enviada${
+      note: `📤 ${que}: plantilla «${cfg.templateName}» enviada${
         orderName ? ` por ${orderName}` : ""
       }${headerDocument ? " con el ticket de Shalom" : ""}.`,
     });

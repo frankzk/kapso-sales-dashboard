@@ -11,14 +11,17 @@ vi.mock("@/lib/shalom/session", () => ({
 }));
 
 import {
+  OLVA_TRANSIT_DEFAULT_PARAMS,
   TRANSIT_DEFAULT_PARAMS,
   TRANSIT_MAX_ATTEMPTS,
   amountValue,
   enqueueTransitNotification,
   moneyLabel,
+  noticeGuideCode,
   parseTransitParams,
   pendingBalance,
   pickupDeadlineLabel,
+  pickupWindowDays,
   processTransitNotifications,
   productsLabel,
   resolveSenderNumber,
@@ -575,5 +578,174 @@ describe("transitBodyParams con `vence`", () => {
     const r = transitBodyParams(["nombre", "guia", "vence"], { ...facts, pickupDeadline: "" });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.missing).toEqual(["vence"]);
+  });
+});
+
+// ── Olva: misma cola, otra plantilla (0175) ─────────────────────────────────
+
+describe("avisos de Olva", () => {
+  const base = {
+    shalom_transit_template_enabled: true,
+    shalom_transit_template_name: "guias_shalom",
+    shalom_transit_template_language: "es",
+    shalom_transit_params: TRANSIT_DEFAULT_PARAMS,
+    shalom_transit_attach_ticket: true,
+    shalom_arrival_template_enabled: true,
+    shalom_arrival_template_name: "guias_shalom_llegada",
+    shalom_arrival_params: "nombre,guia,codigo,producto,agencia,total,adelanto,saldo",
+    shalom_arrival_attach_ticket: true,
+    olva_transit_template_enabled: false,
+    olva_transit_template_name: null,
+    olva_transit_params: OLVA_TRANSIT_DEFAULT_PARAMS,
+    olva_arrival_template_enabled: false,
+    olva_arrival_template_name: null,
+    olva_arrival_params: "nombre,guia,producto,agencia,total,adelanto,saldo",
+    kapso_api_key: "k",
+    whatsapp_phone_number_id: "PN-store",
+    shalom_transit_phone_number_id: "PN-600",
+    shalom_transit_hour_start: 0,
+    shalom_transit_hour_end: 24,
+    timezone: "America/Lima",
+  } as any;
+
+  it("las variables por omisión son las de Shalom sin `codigo`", () => {
+    expect(OLVA_TRANSIT_DEFAULT_PARAMS).toBe("nombre,guia,producto,agencia,total,adelanto,saldo,yape");
+  });
+
+  it("encender los de Shalom NO enciende los de Olva: cada courier tiene su interruptor", () => {
+    const t = transitConfig(base, "transito", "olva");
+    expect(t.cfg).toBeNull();
+    expect((t as { reason: string }).reason).toMatch(/aviso de Olva apagado/);
+    const d = transitConfig(base, "disponible", "olva");
+    expect((d as { reason: string }).reason).toMatch(/aviso de llegada de Olva apagado/);
+  });
+
+  it("con los suyos encendidos usa SU plantilla, sin ticket, y comparte número y horario", () => {
+    const creds = {
+      ...base,
+      olva_transit_template_enabled: true,
+      olva_transit_template_name: "guias_olva",
+      olva_arrival_template_enabled: true,
+      olva_arrival_template_name: "guias_olva_llegada",
+    };
+    const t = transitConfig(creds, "transito", "olva").cfg!;
+    expect(t.courier).toBe("olva");
+    expect(t.templateName).toBe("guias_olva");
+    expect(t.tokens).toEqual(["nombre", "guia", "producto", "agencia", "total", "adelanto", "saldo", "yape"]);
+    // Shalom tiene el ticket encendido; Olva no tiene ticket que adjuntar.
+    expect(t.attachTicket).toBe(false);
+    expect(t.phoneNumberId).toBe("PN-600");
+    expect(t.language).toBe("es");
+    const d = transitConfig(creds, "disponible", "olva").cfg!;
+    expect(d.templateName).toBe("guias_olva_llegada");
+    expect(d.tokens).not.toContain("codigo");
+  });
+
+  it("la guía de Olva es su tracking con el año, no el código interno del rótulo", () => {
+    const shipment = {
+      id: "s",
+      guide_code: "MOM-KP135087-OLVA-B68DB94F",
+      shalom_codigo: null,
+      shalom_ose_id: null,
+      olva_tracking: "2552504",
+      olva_emision: "26",
+      customer_name: null,
+      customer_phone: null,
+      agency_branch: null,
+      province: null,
+      district: null,
+    };
+    expect(noticeGuideCode("olva", shipment)).toBe("2552504-26");
+    expect(noticeGuideCode("shalom", { ...shipment, guide_code: "95451003" })).toBe("95451003");
+    // Sin tracking no hay guía que decir: el aviso lo nombrará como dato que falta.
+    expect(noticeGuideCode("olva", { ...shipment, olva_tracking: null })).toBeNull();
+  });
+
+  it("Olva devuelve a los 6 días; Shalom a los 28", () => {
+    expect(pickupWindowDays("olva")).toBe(6);
+    expect(pickupWindowDays("shalom")).toBe(28);
+    // 10/09 mediodía de Lima + 6 días = 16 de setiembre (así lo escribe es-PE).
+    expect(pickupDeadlineLabel("2026-09-10T17:00:00Z", "America/Lima", pickupWindowDays("olva"))).toMatch(
+      /^16 de (setiembre|septiembre)$/,
+    );
+  });
+
+  it("se encola con el courier marcado, y sin decirlo sigue siendo Shalom", async () => {
+    const admin = fakeAdmin();
+    await enqueueTransitNotification(admin, {
+      storeId: "store",
+      shipmentId: "ship-olva",
+      orderId: "ord-1",
+      kind: "disponible",
+      courier: "olva",
+    });
+    expect(admin.upserts[0]).toMatchObject({
+      table: "shalom_transit_notifications",
+      row: { shipment_id: "ship-olva", kind: "disponible", courier: "olva" },
+      opts: { onConflict: "shipment_id,kind", ignoreDuplicates: true },
+    });
+    await enqueueTransitNotification(admin, { storeId: "store", shipmentId: "ship-1", orderId: "ord-1" });
+    expect(admin.upserts[1]!.row.courier).toBe("shalom");
+  });
+
+  it("de punta a punta: la fila de Olva sale con la plantilla de Olva, el tracking y la oficina", async () => {
+    const admin = fakeAdmin({
+      pending: [{ id: "n-olva", store_id: "store", shipment_id: "ship-olva", order_id: "ord-1", attempts: 0, kind: "disponible", courier: "olva" }],
+      shipment: {
+        id: "ship-olva",
+        guide_code: "MOM-KP135087-OLVA-B68DB94F",
+        shalom_codigo: null,
+        shalom_ose_id: null,
+        olva_tracking: "2552504",
+        olva_emision: "26",
+        customer_name: null,
+        customer_phone: null,
+        agency_branch: "JAEN - CALLE MARISCAL CASTILLA 1250",
+        province: "Cajamarca",
+        district: "Jaén",
+      },
+      // Olva no tiene borrador de Shalom del que sacar la agencia.
+      draft: null,
+    });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.O" });
+    const report = await processTransitNotifications(admin, {
+      nowIso: NOW,
+      sendTemplate: send,
+      loadCreds: async () => ({
+        ...base,
+        olva_arrival_template_enabled: true,
+        olva_arrival_template_name: "guias_olva_llegada",
+      }),
+    });
+    expect(report).toMatchObject({ sent: 1, failed: 0, skipped: 0 });
+    expect(send).toHaveBeenCalledWith(
+      { apiKey: "k" },
+      expect.objectContaining({
+        templateName: "guias_olva_llegada",
+        bodyParams: ["Armando", "2552504-26", "1× Zapatilla Runner (39-40)", "JAEN - CALLE MARISCAL CASTILLA 1250", "89.10", "30.00", "59.10"],
+      }),
+    );
+    // Sin ticket en cabecera, aunque la tienda lo tenga encendido para Shalom.
+    expect(send.mock.calls[0]![1].headerDocument).toBeUndefined();
+    // Y en la línea de tiempo queda como aviso de Olva, de llegada.
+    expect(admin.inserts[0]).toMatchObject({
+      table: "order_events",
+      row: { kind: "whatsapp_template", source: "olva_transit", courier: "olva" },
+    });
+    expect(admin.inserts[0]!.row.note).toMatch(/Aviso de llegada a la agencia/);
+  });
+
+  it("una fila de Olva con los avisos de Olva apagados se omite, aunque Shalom esté encendido", async () => {
+    const admin = fakeAdmin({
+      pending: [{ id: "n-olva", store_id: "store", shipment_id: "ship-olva", order_id: "ord-1", attempts: 0, kind: "transito", courier: "olva" }],
+    });
+    const send = vi.fn();
+    const report = await processTransitNotifications(admin, { nowIso: NOW, sendTemplate: send, loadCreds: async () => base });
+    expect(report).toMatchObject({ sent: 0, skipped: 1 });
+    expect(send).not.toHaveBeenCalled();
+    expect(admin.updates.at(-1)).toMatchObject({
+      table: "shalom_transit_notifications",
+      patch: { status: "skipped", error: "aviso de Olva apagado en la tienda" },
+    });
   });
 });

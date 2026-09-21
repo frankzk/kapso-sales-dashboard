@@ -157,6 +157,14 @@ export interface StoreCreds {
   shalom_voucher_intake_enabled: boolean;
   /** Mandar la clave de recojo al validar el pago que cubre el pedido (0173). */
   shalom_pickup_key_autosend_enabled: boolean;
+  /** Los dos avisos de Olva (0175). Comparten número, idioma, horario y
+   *  cuentas con los de Shalom; solo la plantilla y sus variables son propias. */
+  olva_transit_template_enabled: boolean;
+  olva_transit_template_name: string | null;
+  olva_transit_params: string | null;
+  olva_arrival_template_enabled: boolean;
+  olva_arrival_template_name: string | null;
+  olva_arrival_params: string | null;
 }
 
 /**
@@ -281,6 +289,12 @@ export async function getStoreCreds(
     shalom_arrival_attach_ticket: data.shalom_arrival_attach_ticket ?? false,
     shalom_voucher_intake_enabled: data.shalom_voucher_intake_enabled ?? false,
     shalom_pickup_key_autosend_enabled: data.shalom_pickup_key_autosend_enabled ?? false,
+    olva_transit_template_enabled: data.olva_transit_template_enabled ?? false,
+    olva_transit_template_name: data.olva_transit_template_name ?? null,
+    olva_transit_params: data.olva_transit_params ?? null,
+    olva_arrival_template_enabled: data.olva_arrival_template_enabled ?? false,
+    olva_arrival_template_name: data.olva_arrival_template_name ?? null,
+    olva_arrival_params: data.olva_arrival_params ?? null,
   };
 }
 

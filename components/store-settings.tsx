@@ -111,6 +111,13 @@ export interface StoreSettingsData {
     shalom_arrival_attach_ticket: boolean;
     shalom_voucher_intake_enabled: boolean;
     shalom_pickup_key_autosend_enabled: boolean;
+    /** Los dos avisos de Olva (0175). */
+    olva_transit_template_enabled: boolean;
+    olva_transit_template_name: string | null;
+    olva_transit_params: string | null;
+    olva_arrival_template_enabled: boolean;
+    olva_arrival_template_name: string | null;
+    olva_arrival_params: string | null;
     flowcl_link_enabled: boolean;
     flowcl_link_email: string | null;
     flowcl_link_ttl_hours: number;
@@ -1617,6 +1624,101 @@ function SettingsForm({
             </div>
           </div>
 
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Avisos de guía Olva (WhatsApp)
+          </legend>
+          <p className="text-xs text-slate-500">
+            Los mismos dos avisos que Shalom, para las salidas de Olva con tracking registrado:
+            uno cuando Olva la <strong>despacha</strong> («va en camino») y otro cuando{" "}
+            <strong>llega a la oficina</strong> de destino («recógelo y paga el saldo»). Salen por
+            el mismo número, en el mismo horario y con las mismas cuentas de cobro que los de
+            Shalom; los botones los contesta Kapta igual. Lo único propio es la{" "}
+            <strong>plantilla</strong>: Meta aprueba cada texto aparte, y los de Shalom nombran a
+            Shalom. Olva devuelve el paquete a los <strong>6 días</strong>, no a los 28.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className={labelCls} htmlFor="olva_transit_template_enabled">Aviso de tránsito</label>
+              <select
+                id="olva_transit_template_enabled"
+                name="olva_transit_template_enabled"
+                defaultValue={s.olva_transit_template_enabled ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">Apagado</option>
+                <option value="true">Encendido</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="olva_transit_template_name">Plantilla · nombre</label>
+              <input
+                id="olva_transit_template_name"
+                name="olva_transit_template_name"
+                defaultValue={s.olva_transit_template_name ?? ""}
+                placeholder="guias_olva"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="olva_transit_params">Orden de las variables</label>
+              <input
+                id="olva_transit_params"
+                name="olva_transit_params"
+                defaultValue={s.olva_transit_params ?? ""}
+                placeholder="nombre,guia,producto,agencia,total,adelanto,saldo,yape"
+                className={inputCls}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Los mismos tokens que Shalom sin <code>codigo</code>: Olva no tiene código corto.{" "}
+                <code>guia</code> es el tracking de Olva («2552504-26»), que es lo que la clienta
+                dice en el mostrador.
+              </p>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="olva_arrival_template_enabled">Aviso de llegada</label>
+              <select
+                id="olva_arrival_template_enabled"
+                name="olva_arrival_template_enabled"
+                defaultValue={s.olva_arrival_template_enabled ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">Apagado</option>
+                <option value="true">Encendido</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="olva_arrival_template_name">Plantilla · nombre</label>
+              <input
+                id="olva_arrival_template_name"
+                name="olva_arrival_template_name"
+                defaultValue={s.olva_arrival_template_name ?? ""}
+                placeholder="guias_olva_llegada"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="olva_arrival_params">Orden de las variables</label>
+              <input
+                id="olva_arrival_params"
+                name="olva_arrival_params"
+                defaultValue={s.olva_arrival_params ?? ""}
+                placeholder="nombre,guia,producto,agencia,total,adelanto,saldo"
+                className={inputCls}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                <code>agencia</code> es la oficina de Olva que el rastreo apuntó al llegar. Si se
+                usa <code>vence</code>, se calcula a 6 días.
+              </p>
+            </div>
+          </div>
+          <p className="text-xs text-amber-700">
+            Las dos plantillas tienen que estar <strong>aprobadas en Meta</strong> con ese nombre
+            y ese número de variables, en la WABA del número por el que salen. Hasta entonces, deja
+            el aviso apagado: la cola cierra las filas como «omitidas» y no se pierde nada.
+          </p>
         </fieldset>
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">

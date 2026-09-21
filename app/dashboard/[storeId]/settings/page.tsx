@@ -204,6 +204,13 @@ export default async function StoreSettingsPage({
       shalom_arrival_attach_ticket: full.shalom_arrival_attach_ticket ?? false,
       shalom_voucher_intake_enabled: full.shalom_voucher_intake_enabled ?? false,
       shalom_pickup_key_autosend_enabled: full.shalom_pickup_key_autosend_enabled ?? false,
+      // Pre-0175 las columnas no existen ⇒ avisos de Olva apagados.
+      olva_transit_template_enabled: full.olva_transit_template_enabled ?? false,
+      olva_transit_template_name: full.olva_transit_template_name ?? null,
+      olva_transit_params: full.olva_transit_params ?? null,
+      olva_arrival_template_enabled: full.olva_arrival_template_enabled ?? false,
+      olva_arrival_template_name: full.olva_arrival_template_name ?? null,
+      olva_arrival_params: full.olva_arrival_params ?? null,
       flowcl_link_enabled: full.flowcl_link_enabled ?? false,
       flowcl_link_email: full.flowcl_link_email ?? null,
       flowcl_link_ttl_hours: full.flowcl_link_ttl_hours ?? 48,
