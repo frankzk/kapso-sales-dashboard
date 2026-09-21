@@ -98,9 +98,15 @@ export function CollectionAlerts({ enabled = true }: { enabled?: boolean }) {
           </p>
 
           <div className="mt-2 flex flex-wrap gap-2">
+            {/* AL DRAWER DEL PEDIDO, no a la bandeja de revisión. La bandeja
+                valida a secas; el drawer es donde está el botón que valida Y
+                le manda la clave a la clienta en el mismo clic (0173), que es
+                el trabajo que esta alerta viene a pedir. Llevar a la bandeja
+                era además pedirle a quien atiende que buscara a mano el pedido
+                que el sistema ya sabía cuál era. */}
             {a.kind === "registrado" && a.orderId && (
               <a
-                href={`/dashboard/pagos?order=${a.orderId}`}
+                href={`/dashboard/pedidos?abrir=${a.orderId}&ir=pagos`}
                 className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700"
               >
                 Ir a validar
