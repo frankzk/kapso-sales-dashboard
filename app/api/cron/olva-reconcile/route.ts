@@ -4,6 +4,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { describeOlvaError, fetchOlvaTracking } from "@/lib/olva/client";
+import { enqueueTransitNotification, processTransitNotifications } from "@/lib/shalom/transit-notify";
 import {
   formatOlvaTracking,
   olvaNeedsTracking,
@@ -109,6 +110,7 @@ export async function GET(req: NextRequest) {
   let applied = 0;
   let failed = 0;
   let skippedByBudget = 0;
+  let queued = 0;
   /** Olva contestó, pero no reconoce la guía: motivo → cuántas y una de muestra. */
   const rejected = new Map<string, { count: number; ejemplo: string }>();
   /**
@@ -195,6 +197,29 @@ export async function GET(req: NextRequest) {
             }.`
           : `Olva informa «${next.rawStatus ?? "sin estado"}», un estado que Kapta todavía no traduce; el estado del Master no se movió.`,
       });
+
+      // Los dos avisos a la clienta (0175): «va en camino» al despachar y «ya
+      // está en la oficina» al llegar. Se ENCOLAN nada más; el envío va aparte,
+      // abajo, con reintentos. Misma cola que Shalom, con el courier marcado
+      // para que salga la plantilla de Olva. La unique (shipment_id, kind)
+      // garantiza uno de cada por guía.
+      if (next.known) {
+        const avisoDe: Record<string, "transito" | "disponible" | undefined> = {
+          en_transito: "transito",
+          disponible_para_recojo: "disponible",
+        };
+        const kind = avisoDe[next.pickupState];
+        if (kind) {
+          const ok = await enqueueTransitNotification(admin, {
+            storeId: guide.store_id,
+            shipmentId: guide.id,
+            orderId: guide.order_id,
+            kind,
+            courier: "olva",
+          });
+          if (ok) queued += 1;
+        }
+      }
     }
   }
 
@@ -219,6 +244,16 @@ export async function GET(req: NextRequest) {
 
   if (touchedOrders.size) await recomputeOrderMasterSafe(admin, [...touchedOrders]);
 
+  // Drenar la cola de avisos con lo que quede de presupuesto, después del
+  // rastreo: el rastreo es lo que no puede esperar, y un aviso que se queda en
+  // cola sale en la pasada siguiente. Drena la cola entera —también Shalom—,
+  // igual que el cron de Shalom drena la de Olva: es una sola cola.
+  const elapsed = Date.now() - startedAt;
+  const avisos = await processTransitNotifications(admin, {
+    budgetMs: Math.max(20_000, 270_000 - elapsed),
+  });
+  errors.push(...avisos.errors);
+
   const top = <T>(m: Map<string, T>) =>
     Object.fromEntries(
       [...m.entries()]
@@ -233,6 +268,8 @@ export async function GET(req: NextRequest) {
     reported: answered.length,
     applied,
     failed,
+    // Avisos por WhatsApp: cuántos entraron a la cola y cómo quedó tras drenarla.
+    avisos: { encolados: queued, ...avisos },
     ...(skippedByBudget ? { skippedByBudget } : {}),
     ...(rejected.size ? { rechazos: top(rejected) } : {}),
     // Si aparece algo aquí, hay que añadirlo al traductor con su significado.

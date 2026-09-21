@@ -666,3 +666,26 @@ describe("handleInboundMessage con un «ok»", () => {
     expect(admin.inserts).toHaveLength(0);
   });
 });
+
+// ── Olva (0175): mismos botones, sin ticket ─────────────────────────────────
+
+describe("botones tras un aviso de Olva", () => {
+  it("contesta con las cuentas y el saldo, y NO manda ningún ticket ni anota «sin OSE ID»", async () => {
+    const admin = fakeAdmin({
+      lastNotification: { id: "n-olva", order_id: "ord-1", shipment_id: "ship-olva", sent_at: "2026-09-19T10:00:00Z", courier: "olva" },
+    });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.OUT" });
+    const sendDoc = vi.fn();
+    const res = await handleInboundMessage(admin, "store", CREDS, buttonEvent("Pagar con Yape"), {
+      sendText: send,
+      sendDocument: sendDoc,
+    });
+    expect(res.reason).toBe("replied:yape");
+    expect(send).toHaveBeenCalledWith(
+      { apiKey: "k" },
+      { phoneNumberId: "PN-451", to: "51987654321", body: YAPE_CON_SALDO },
+    );
+    expect(sendDoc).not.toHaveBeenCalled();
+    expect(admin.updates.some((u: any) => u.table === "shalom_transit_notifications")).toBe(false);
+  });
+});

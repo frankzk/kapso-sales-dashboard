@@ -351,4 +351,6 @@
 \ir migrations/0173_pickup_key_autosend.sql
 \echo 'Applying 0174_olva_tracking.sql'
 \ir migrations/0174_olva_tracking.sql
+\echo 'Applying 0175_olva_notices.sql'
+\ir migrations/0175_olva_notices.sql
 \echo 'Done.'

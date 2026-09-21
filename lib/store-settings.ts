@@ -113,6 +113,12 @@ export interface StoreSettingsInput {
   shalom_arrival_attach_ticket?: string | boolean;
   shalom_voucher_intake_enabled?: string | boolean;
   shalom_pickup_key_autosend_enabled?: string | boolean;
+  olva_transit_template_enabled?: string | boolean;
+  olva_transit_template_name?: string;
+  olva_transit_params?: string;
+  olva_arrival_template_enabled?: string | boolean;
+  olva_arrival_template_name?: string;
+  olva_arrival_params?: string;
   flowcl_link_enabled?: string | boolean;
   flowcl_link_email?: string;
   flowcl_link_ttl_hours?: string;
@@ -400,6 +406,20 @@ export function buildStoreUpdate(
     if (input[k] !== undefined) patch[k] = input[k] === true || input[k] === "true";
   }
   for (const k of ["shalom_arrival_template_name", "shalom_arrival_params"] as const) {
+    const v = clean(input[k]);
+    if (v !== null) patch[k] = v;
+  }
+
+  // Los dos avisos de Olva (0175): mismas reglas que los de Shalom.
+  for (const k of ["olva_transit_template_enabled", "olva_arrival_template_enabled"] as const) {
+    if (input[k] !== undefined) patch[k] = input[k] === true || input[k] === "true";
+  }
+  for (const k of [
+    "olva_transit_template_name",
+    "olva_transit_params",
+    "olva_arrival_template_name",
+    "olva_arrival_params",
+  ] as const) {
     const v = clean(input[k]);
     if (v !== null) patch[k] = v;
   }

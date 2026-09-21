@@ -528,8 +528,10 @@ async function replyToButton(
   // pagar son las cuentas; el ticket es el respaldo. Si falla —guía sin OSE ID,
   // Shalom caído— queda el motivo en la fila del aviso y el mensaje útil ya
   // salió. El PDF sale de la caché, así que repetirlo no cuesta otra llamada.
+  // Solo Shalom tiene ticket: a un aviso de Olva no se le manda nada detrás,
+  // y no se anota ningún «sin OSE ID» que no es un fallo.
   let ticket = "";
-  if (link.notificationId && link.shipmentId) {
+  if (link.notificationId && link.shipmentId && link.courier !== "olva") {
     const res = await sendTransitTicket(
       admin,
       {
@@ -638,6 +640,8 @@ interface TransitContext {
   orderId: string | null;
   notificationId: string | null;
   shipmentId: string | null;
+  /** De qué courier era el aviso: solo Shalom tiene ticket que mandar (0175). */
+  courier: string | null;
   /** Cuándo salió ese aviso: la ventana del «ok» se mide desde aquí. */
   sentAt: string | null;
 }
@@ -649,6 +653,7 @@ const SIN_AVISO: TransitContext = {
   orderId: null,
   notificationId: null,
   shipmentId: null,
+  courier: null,
   sentAt: null,
 };
 
@@ -665,7 +670,7 @@ async function latestTransitContext(
 ): Promise<TransitContext> {
   const { data } = await admin
     .from("shalom_transit_notifications")
-    .select("id,order_id,shipment_id,sent_at")
+    .select("id,order_id,shipment_id,sent_at,courier")
     .eq("store_id", storeId)
     .eq("phone", phone)
     .eq("status", "sent")
@@ -677,12 +682,14 @@ async function latestTransitContext(
     order_id: string | null;
     shipment_id: string;
     sent_at: string | null;
+    courier?: string | null;
   } | null;
   if (!row) return SIN_AVISO;
   const base = {
     orderId: row.order_id,
     notificationId: row.id,
     shipmentId: row.shipment_id,
+    courier: row.courier ?? "shalom",
     sentAt: row.sent_at,
   };
   if (!row.order_id) return { ...base, ctx: SIN_SALDO };

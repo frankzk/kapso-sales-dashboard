@@ -176,6 +176,13 @@ export async function updateStore(
     shalom_arrival_attach_ticket: get("shalom_arrival_attach_ticket"),
     shalom_voucher_intake_enabled: get("shalom_voucher_intake_enabled"),
     shalom_pickup_key_autosend_enabled: get("shalom_pickup_key_autosend_enabled"),
+    // Los dos avisos de Olva (0175).
+    olva_transit_template_enabled: get("olva_transit_template_enabled"),
+    olva_transit_template_name: get("olva_transit_template_name"),
+    olva_transit_params: get("olva_transit_params"),
+    olva_arrival_template_enabled: get("olva_arrival_template_enabled"),
+    olva_arrival_template_name: get("olva_arrival_template_name"),
+    olva_arrival_params: get("olva_arrival_params"),
     flowcl_link_enabled: get("flowcl_link_enabled"),
     flowcl_link_email: get("flowcl_link_email"),
     flowcl_link_ttl_hours: get("flowcl_link_ttl_hours"),
