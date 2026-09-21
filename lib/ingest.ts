@@ -155,6 +155,8 @@ export interface StoreCreds {
   shalom_arrival_attach_ticket: boolean;
   /** Registrar solos los comprobantes que llegan por WhatsApp (0171). */
   shalom_voucher_intake_enabled: boolean;
+  /** Mandar la clave de recojo al validar el pago que cubre el pedido (0173). */
+  shalom_pickup_key_autosend_enabled: boolean;
 }
 
 /**
@@ -278,6 +280,7 @@ export async function getStoreCreds(
     shalom_arrival_params: data.shalom_arrival_params ?? null,
     shalom_arrival_attach_ticket: data.shalom_arrival_attach_ticket ?? false,
     shalom_voucher_intake_enabled: data.shalom_voucher_intake_enabled ?? false,
+    shalom_pickup_key_autosend_enabled: data.shalom_pickup_key_autosend_enabled ?? false,
   };
 }
 

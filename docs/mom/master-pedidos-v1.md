@@ -3100,6 +3100,37 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
         entonces la cola se llena de trabajo ya hecho que figura pendiente. Lo
         único que se cierra a mano es **descartar**, con su motivo, para lo que
         nunca se va a resolver solo (una foto que la visión confundió).
+      - **Al validar el pago que cierra el pedido, la clave sale sola** (0173),
+        en el mismo clic, y ese envío **es** el registro de la entrega.
+        - **Por qué.** Medido el 21-09-2026: 786 pedidos pagados con clave
+          registrada, **770** con la clave ya consultada por alguien y **3**
+          con la entrega registrada. La clave se entrega —si no, habría
+          cientos de reclamos— pero el segundo clic de «registrar que la
+          entregué» no lo da nadie, al 0,4 %. «Clave enviada al cliente» era
+          ficción, y «¿a esta clienta ya le dieron su clave?» no se podía
+          responder desde Kapta.
+        - **El listón sube respecto a `canRevealPickupKey`.** Esa regla abre la
+          clave con los comprobantes CARGADOS, y está bien: del otro lado hay
+          una persona que mira la imagen antes de dictarla. Para que salga
+          sola no basta — lo **validado** tiene que cubrir el pedido. Un
+          comprobante recién llegado por WhatsApp no manda ninguna clave.
+        - **Lo demás se comprueba con la misma función de siempre**, otra vez
+          en el servidor y con los datos frescos, después de validar: paquete
+          disponible en la agencia, clave registrada, pedido abierto, ningún
+          comprobante observado. El envío automático no puede soltar un
+          paquete que la pantalla no soltaría.
+        - **El botón lo dice antes de pulsarlo**: cambia a «Validar y enviar la
+          clave» solo en el comprobante que de verdad la libera, y enseña el
+          mensaje exacto que va a salir con la clave **tapada** —al navegador
+          no viaja nunca—. Validar desde la bandeja de revisión no habla con
+          nadie.
+        - **Fuera de las 24 h no se manda nada y se dice.** WhatsApp solo deja
+          texto libre dentro de esa ventana y no hay plantilla con la clave
+          dentro. Sin constancia de que la clienta escribiera, la ventana se da
+          por cerrada: dar por entregada una clave que nunca salió es peor que
+          no enviarla.
+        - **Interruptor por tienda, apagado de nacimiento.** Manda la llave del
+          paquete sin que nadie vuelva a mirar después del clic.
       - **No hay «es mía» ni «no es mía».** Se copiaron del pop-up de asesoras,
         donde varias compiten por un lead. Aquí la alerta se ofrece a UNA
         persona a la vez, así que no hay con quién chocar — y reclamarla solo

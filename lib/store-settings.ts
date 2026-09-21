@@ -112,6 +112,7 @@ export interface StoreSettingsInput {
   shalom_arrival_params?: string;
   shalom_arrival_attach_ticket?: string | boolean;
   shalom_voucher_intake_enabled?: string | boolean;
+  shalom_pickup_key_autosend_enabled?: string | boolean;
   flowcl_link_enabled?: string | boolean;
   flowcl_link_email?: string;
   flowcl_link_ttl_hours?: string;
@@ -394,6 +395,7 @@ export function buildStoreUpdate(
     "shalom_arrival_template_enabled",
     "shalom_arrival_attach_ticket",
     "shalom_voucher_intake_enabled",
+    "shalom_pickup_key_autosend_enabled",
   ] as const) {
     if (input[k] !== undefined) patch[k] = input[k] === true || input[k] === "true";
   }

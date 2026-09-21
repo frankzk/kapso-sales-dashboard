@@ -251,7 +251,7 @@ export function PickupKeyPanel({
             canValidate={panel.canValidate}
             canRegister={false}
             pending={pending}
-            onValidate={(id) => run(() => validatePayment(id))}
+            onValidate={(id, sendKey) => run(() => validatePayment(id, { sendKey }))}
             onReject={(id, reason) => run(() => rejectPayment(id, reason))}
             onComplete={(id, data) => run(() => completePaymentData(id, data))}
             canOverride={panel.canOverride}
@@ -310,13 +310,14 @@ export function PickupKeyPanel({
         canValidate={panel.canValidate}
         canRegister={panel.canRegister}
         pending={pending}
-        onValidate={(id) => run(() => validatePayment(id))}
+        onValidate={(id, sendKey) => run(() => validatePayment(id, { sendKey }))}
         onReject={(id, reason) => run(() => rejectPayment(id, reason))}
         onComplete={(id, data) => run(() => completePaymentData(id, data))}
         canOverride={panel.canOverride}
         onReassign={(id, targetOrderName, reason) =>
           run(() => overridePaymentValidation(id, { targetOrderName, reason }))
         }
+        keyAutosend={panel.keyAutosend}
       />
 
       {panel.canRegister && (
@@ -468,6 +469,7 @@ function PaymentList({
   onComplete,
   canOverride,
   onReassign,
+  keyAutosend,
 }: {
   payments: PaymentRow[];
   /** Las cuentas de cobro de la tienda, para juzgar el receptor de cada uno. */
@@ -475,12 +477,14 @@ function PaymentList({
   canValidate: boolean;
   canRegister: boolean;
   pending: boolean;
-  onValidate: (id: string) => void;
+  onValidate: (id: string, sendKey: boolean) => void;
   onReject: (id: string, reason: string) => void;
   onComplete: (id: string, data: { operationNumber: string; amount: number | null; paidAt: string | null }) => void;
   /** Mover el pago al pedido correcto. Solo para quien puede corregir. */
   canOverride: boolean;
   onReassign: (paymentId: string, targetOrderName: string, reason: string) => void;
+  /** El envío de la clave al validar (0173). Ausente = la tienda no lo tiene. */
+  keyAutosend?: PanelData["keyAutosend"];
 }) {
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [reason, setReason] = useState("");
@@ -548,22 +552,14 @@ function PaymentList({
             p.operation_number &&
             p.validation_status !== "validado" &&
             p.validation_status !== "rechazado" && (
-            <div className="mt-1.5 flex flex-wrap items-center gap-2">
-              <button
-                disabled={
-                  pending ||
-                  yapeRecipientReadingFromVision(p.vision, accounts).status === "mismatch"
-                }
-                onClick={() => onValidate(p.id)}
-                title={
-                  yapeRecipientReadingFromVision(p.vision, accounts).status === "mismatch"
-                    ? "El receptor leído no coincide con ninguna cuenta de cobro de la tienda"
-                    : "Validar comprobante"
-                }
-                className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-              >
-                Validar
-              </button>
+            <ValidateActions
+              payment={p}
+              accounts={accounts}
+              pending={pending}
+              onValidate={onValidate}
+              keyAutosend={keyAutosend}
+            >
+              {/* Rechazar vive dentro para quedar en la misma fila. */}
               {rejecting === p.id ? (
                 <>
                   <input
@@ -593,7 +589,7 @@ function PaymentList({
                   Rechazar
                 </button>
               )}
-            </div>
+            </ValidateActions>
           )}
           {/* Reasignar vive FUERA del bloque de validar/rechazar: un pago
               cargado en el pedido equivocado casi siempre se descubre DESPUÉS
@@ -606,6 +602,89 @@ function PaymentList({
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Validar, y —cuando ESTE comprobante es el que libera la clave— validar y
+ * mandársela a la clienta en el mismo clic (MOM §12, migración 0173).
+ *
+ * POR QUÉ UN BOTÓN DISTINTO Y NO UN AJUSTE SILENCIOSO. Medido el 21-09-2026:
+ * 786 pedidos pagados con clave, 770 con la clave ya consultada y 3 con la
+ * entrega registrada. La clave se entrega a mano y el registro se pierde. Esto
+ * junta las dos cosas, pero mandar la llave del paquete no puede ser un efecto
+ * secundario de un botón que dice «Validar»: el botón cambia de texto, enseña
+ * el mensaje exacto que va a salir —con la clave tapada, que nunca viaja al
+ * navegador— y solo aparece en el comprobante que de verdad libera.
+ *
+ * Validar desde la bandeja de revisión NO manda nada: allí no hay este botón.
+ */
+function ValidateActions({
+  payment,
+  accounts,
+  pending,
+  onValidate,
+  keyAutosend,
+  children,
+}: {
+  payment: PaymentRow;
+  accounts: CollectionAccount[];
+  pending: boolean;
+  onValidate: (id: string, sendKey: boolean) => void;
+  keyAutosend?: PanelData["keyAutosend"];
+  children: React.ReactNode;
+}) {
+  const [verPrevia, setVerPrevia] = useState(false);
+  const mismatch = yapeRecipientReadingFromVision(payment.vision, accounts).status === "mismatch";
+  const libera = Boolean(keyAutosend?.enabled && keyAutosend.unlocks.includes(payment.id));
+  // Liberar la clave y poder escribirle son dos cosas distintas: fuera de las
+  // 24 h el botón vuelve a ser «Validar» y se dice por qué, en vez de prometer
+  // un envío que WhatsApp va a rechazar.
+  const enviará = libera && Boolean(keyAutosend?.windowOpen);
+
+  return (
+    <div className="mt-1.5 space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          disabled={pending || mismatch}
+          onClick={() => onValidate(payment.id, enviará)}
+          title={
+            mismatch
+              ? "El receptor leído no coincide con ninguna cuenta de cobro de la tienda"
+              : enviará
+                ? "Validar y mandarle la clave de recojo por WhatsApp"
+                : "Validar comprobante"
+          }
+          className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+        >
+          {enviará ? "Validar y enviar la clave" : "Validar"}
+        </button>
+        {children}
+      </div>
+
+      {enviará && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5">
+          <button
+            type="button"
+            onClick={() => setVerPrevia((v) => !v)}
+            className="text-[11px] font-medium text-emerald-800 underline-offset-2 hover:underline"
+          >
+            {verPrevia ? "Ocultar el mensaje" : "Ver el mensaje que se enviará"}
+          </button>
+          {verPrevia && (
+            <pre className="mt-1 whitespace-pre-wrap font-sans text-[11px] leading-snug text-emerald-900">
+              {keyAutosend?.preview}
+            </pre>
+          )}
+        </div>
+      )}
+      {libera && !enviará && (
+        <p className="text-[11px] text-amber-700">
+          La clave no saldrá sola: la clienta no escribe hace más de 24 h y WhatsApp no deja
+          mandarle texto libre fuera de esa ventana. Entrégasela tú y regístralo.
+        </p>
+      )}
+    </div>
   );
 }
 
