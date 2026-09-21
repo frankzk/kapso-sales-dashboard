@@ -46,6 +46,7 @@ import {
   cancelFenixOutput,
   cancelManualRouteOutput,
   clearOrderGeo,
+  setOlvaTracking,
   createManualRouteOutputsBulk,
   getOrderMasterChangeToken,
   loadOrderDetail,
@@ -145,6 +146,7 @@ import {
   type PriorOutcome,
 } from "@/lib/order-confirmation-brief";
 import { outputDisplayCode } from "@/lib/shipment-output";
+import { formatOlvaTracking, OLVA_TRACKING_URL } from "@/lib/olva/tracking";
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, StoreSummary } from "@/lib/types";
@@ -390,6 +392,116 @@ function FenixCancelButton({
  * confirmación habla de la caja, que es lo que la operadora tiene delante: si el
  * paquete ya salió, el camino es el retorno y no esto.
  */
+/**
+ * El tracking de Olva de una salida: se enseña con enlace al seguimiento
+ * público, y se registra o corrige en línea. Sin él el cron no tiene qué
+ * preguntar, y por eso el hueco se pinta como una invitación y no como un
+ * silencio: «Registrar tracking».
+ */
+function OlvaTrackingField({
+  shipmentId,
+  current,
+  rawStatus,
+  onDone,
+}: {
+  shipmentId: string;
+  current: string | null;
+  rawStatus: string | null;
+  onDone: (notice: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(current ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (busy) return <span className="text-xs text-slate-500">Guardando tracking…</span>;
+
+  if (!editing) {
+    return (
+      <>
+        {current ? (
+          <a
+            href={OLVA_TRACKING_URL}
+            target="_blank"
+            rel="noreferrer"
+            title="Abre el seguimiento de Olva; pega ahí el número"
+            className="rounded bg-amber-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100"
+          >
+            Olva {current}
+          </a>
+        ) : null}
+        {current && rawStatus && (
+          <span className="text-xs text-slate-500" title="Último estado que dijo Olva">
+            {rawStatus.toLowerCase()}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => {
+            setError(null);
+            setValue(current ?? "");
+            setEditing(true);
+          }}
+          className="text-xs font-medium text-sky-700 hover:underline"
+        >
+          {current ? "Corregir tracking" : "Registrar tracking Olva"}
+        </button>
+        {error && <span className="w-full text-xs text-red-700">{error}</span>}
+      </>
+    );
+  }
+
+  return (
+    <form
+      className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-2 py-1.5"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setBusy(true);
+        const res = await setOlvaTracking(shipmentId, { tracking: value });
+        setBusy(false);
+        if (res.error) {
+          setError(res.error);
+          return;
+        }
+        setEditing(false);
+        setError(null);
+        onDone(res.notice ?? "Tracking registrado.");
+      }}
+    >
+      <input
+        type="text"
+        inputMode="numeric"
+        autoFocus
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        placeholder="2552504-26"
+        className="w-36 rounded border border-amber-200 bg-white px-2 py-1 font-mono text-xs text-slate-900"
+      />
+      <button
+        type="submit"
+        disabled={!value.trim()}
+        className="rounded bg-slate-950 px-2 py-1 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+      >
+        Guardar
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setEditing(false);
+          setError(null);
+        }}
+        className="text-xs font-medium text-slate-600 hover:underline"
+      >
+        Cancelar
+      </button>
+      <span className="w-full text-[11px] text-amber-900">
+        Como lo trae el correo de Olva («26-2552504») o su página («2552504 - 26»).
+      </span>
+      {error && <span className="w-full text-xs text-red-700">{error}</span>}
+    </form>
+  );
+}
+
 function ManualOutputCancelButton({
   shipmentId,
   label,
@@ -2261,6 +2373,7 @@ const TIMELINE_LABEL: Record<string, string> = {
   guide_registered: "Guía registrada",
   route_output_created: "Salida y rótulo creados",
   route_output_cancelled: "Salida anulada",
+  olva_tracking_linked: "Tracking de Olva registrado",
   route_output_filled: "Courier decidido sobre la salida",
   dispatched: "Pedido despachado",
   out_for_delivery: "Salida a reparto",
@@ -3434,6 +3547,26 @@ function OrderDrawer({
                           shipmentId={g.id}
                           guideCode={g.guide_code}
                           wasFilled={detail.filledOutputIds.includes(g.id)}
+                          onDone={(msg) => {
+                            setNotice(msg);
+                            void reload();
+                            onSaved();
+                          }}
+                        />
+                      )}
+                      {/* El número con el que Olva conoce el envío, y con el
+                          que Kapta le pregunta el estado cada media hora (§12).
+                          Llega por correo después de crear la salida, así que
+                          se registra —o se corrige— desde aquí. */}
+                      {canEdit && g.courier.trim().toLowerCase() === "olva" && (
+                        <OlvaTrackingField
+                          shipmentId={g.id}
+                          current={
+                            g.olva_tracking && g.olva_emision
+                              ? formatOlvaTracking({ tracking: g.olva_tracking, emision: g.olva_emision })
+                              : null
+                          }
+                          rawStatus={g.olva_status ?? null}
                           onDone={(msg) => {
                             setNotice(msg);
                             void reload();

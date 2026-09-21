@@ -25,6 +25,7 @@ export function ManualRouteOutputModal({
 }) {
   const [dispatchDate, setDispatchDate] = useState(limaTodayKey());
   const [note, setNote] = useState("");
+  const [olvaTracking, setOlvaTracking] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<{
     notice: string;
@@ -39,6 +40,7 @@ export function ManualRouteOutputModal({
         courier: route.key,
         dispatchDate,
         note,
+        ...(route.key === "olva" && olvaTracking.trim() ? { olvaTracking: olvaTracking.trim() } : {}),
       });
       if (result.error) {
         setError(result.error);
@@ -99,6 +101,26 @@ export function ManualRouteOutputModal({
               <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900">
                 Antes de crear Olva Agencia, el adelanto validado acumulado debe llegar como mínimo a {ADELANTO_MINIMO_LABEL}.
               </div>
+            )}
+            {route.key === "olva" && (
+              // El tracking lo emite Olva en el mostrador y llega por correo,
+              // casi siempre DESPUÉS de armar la caja: por eso es opcional aquí
+              // y se puede registrar luego desde Salidas y guías. Con él, Kapta
+              // consulta el estado en Olva sola (§12).
+              <label className="block text-xs font-medium text-slate-600">
+                Tracking de Olva (opcional, si ya lo tienes)
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={olvaTracking}
+                  onChange={(event) => setOlvaTracking(event.target.value)}
+                  placeholder="2552504-26"
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm text-slate-900"
+                />
+                <span className="mt-1 block text-[11px] font-normal text-slate-500">
+                  Como lo trae el correo de Olva («26-2552504») o su página («2552504 - 26»). Se puede registrar después.
+                </span>
+              </label>
             )}
             <label className="block text-xs font-medium text-slate-600">
               Fecha prevista de salida
