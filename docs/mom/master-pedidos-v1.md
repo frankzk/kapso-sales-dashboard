@@ -3062,6 +3062,16 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
       existen para evitar.
     - Lo que no pasa **queda como anomalía con su motivo** (`inbound_voucher`).
       El silencio es lo único inaceptable: la clienta ya pagó.
+    - **La lectura se guarda con la MISMA forma que la carga a mano**
+      (`voucherReading`, en `lib/voucher-inspect.ts`), y esa forma es un
+      contrato: el drawer relee `vision.extracted.*` para decir a qué cuenta
+      llegó el dinero. La ingesta nació escribiendo un objeto plano propio y el
+      resultado fue que **todos** sus comprobantes mostraban «La cuenta
+      receptora no pudo leerse» teniendo el nombre correcto guardado dos llaves
+      más arriba (#KP134730, 20-09-2026). Un control de dinero apagado en
+      silencio, justo en la puerta donde nadie mira la imagen al recibirla. De
+      dónde vino el mensaje —número, `message_id`, puerta, saldo esperado— va
+      **fuera** de `extracted`, que es solo lo que el lector dijo de la imagen.
     - **Interruptor propio y apagado de nacimiento** (0171), aparte del del
       aviso: una tienda puede querer avisar sin querer que se le registren
       pagos solos. Es el único sitio del Master donde una fila de dinero la
