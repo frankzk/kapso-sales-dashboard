@@ -8,7 +8,7 @@ import { createPortal } from "react-dom";
 import { cn } from "@/components/ui";
 
 const SHEET_BREAKPOINT = 640;
-const ANCHORED_WIDTH = 320;
+const ANCHORED_WIDTH = 360;
 const MARGIN = 12;
 
 export function Sheet({ title, onClose, children, anchored = false, wide = false, anchorRef }: {

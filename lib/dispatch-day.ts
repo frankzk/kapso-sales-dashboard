@@ -189,6 +189,8 @@ export interface QueueFilters {
   armedOnly: boolean;
   takenOnly: boolean;
   created: CreatedWindow;
+  /** Macroetapas del MOM encendidas (cualquiera de ellas); vacío es «todas». */
+  stages: readonly string[];
   /** Subetapas del MOM encendidas (cualquiera de ellas); vacío es «todas». */
   substages: readonly string[];
   /** Plazos de la fecha pactada encendidos (cualquiera de ellos); vacío es «todos». */
@@ -203,15 +205,22 @@ export const EMPTY_QUEUE_FILTERS: QueueFilters = {
   armedOnly: false,
   takenOnly: false,
   created: "todo",
+  stages: [],
   substages: [],
   due: [],
 };
 
 /** Clave de la subetapa de una fila; sin dato en el Master, «sin_subetapa». */
 export const NO_SUBSTAGE = "sin_subetapa";
+/** Clave de la macroetapa de una fila; sin dato en el Master, «sin_etapa». */
+export const NO_STAGE = "sin_etapa";
 
 export function rowSubstage(row: Pick<QueueRow, "macroSubstage">): string {
   return row.macroSubstage || NO_SUBSTAGE;
+}
+
+export function rowStage(row: Pick<QueueRow, "macroStage">): string {
+  return row.macroStage || NO_STAGE;
 }
 
 /**
@@ -284,6 +293,7 @@ export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, to
     if (filters.armedOnly && !q.armed) return false;
     if (filters.takenOnly && !q.taken) return false;
     if (!inCreatedWindow(q.createdAt, filters.created, today)) return false;
+    if (filters.stages.length && !filters.stages.includes(rowStage(q))) return false;
     if (filters.substages.length && !filters.substages.includes(rowSubstage(q))) return false;
     if (filters.due.length && !filters.due.includes(scheduledBucket(q.scheduledFor, today))) return false;
     if (!needle) return true;
@@ -294,13 +304,14 @@ export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, to
 
 /** Cuántos filtros están activos (el texto no cuenta: tiene su propio campo). Cada grupo de chips cuenta una vez. */
 export function activeFilterCount(filters: QueueFilters): number {
-  return [filters.store, filters.district, filters.secondAttempt, filters.armedOnly, filters.takenOnly, filters.created !== "todo", filters.substages.length > 0, filters.due.length > 0].filter(Boolean).length;
+  return [filters.store, filters.district, filters.secondAttempt, filters.armedOnly, filters.takenOnly, filters.created !== "todo", filters.stages.length > 0, filters.substages.length > 0, filters.due.length > 0].filter(Boolean).length;
 }
 
 // ---------------------------------------------------------------------------
-// Chips de subetapa y de fecha pactada sobre la lista, como en el Master.
-// La cola solo admite tres subetapas (Preparación · por generar rótulo / por
-// armar, Por despachar · listo para asignar); lo demás vive en el Master.
+// Chips de etapa, subetapa y fecha pactada en el picker de Filtros, como en
+// el Master. La cola solo admite tres subetapas (Preparación · por generar
+// rótulo / por armar, Por despachar · listo para asignar); las otras cuatro
+// etapas se listan para que se vea que están en cero, y viven en el Master.
 // Cada chip lleva su cantidad facetada: cuántas filas quedarían al tocarlo
 // con el resto de filtros tal como están, sin contar los chips de su propio
 // grupo. Así el número de un chip encendido coincide con «N en cola».
@@ -337,6 +348,8 @@ export function queueSubstageOptions(rows: readonly QueueRow[]): QueueSubstageOp
 }
 
 export interface QueueFacetCounts {
+  /** Filas que cumplen todo menos el grupo de etapas, por macroetapa. */
+  stage: Record<string, number>;
   /** Filas que cumplen todo menos el grupo de subetapas; es el «Todas» del grupo. */
   substageTotal: number;
   substage: Record<string, number>;
@@ -346,6 +359,11 @@ export interface QueueFacetCounts {
 }
 
 export function queueFacetCounts(rows: readonly QueueRow[], filters: QueueFilters, today: string): QueueFacetCounts {
+  const stage: Record<string, number> = {};
+  for (const row of filterQueue(rows, { ...filters, stages: [] }, today)) {
+    const key = rowStage(row);
+    stage[key] = (stage[key] ?? 0) + 1;
+  }
   const forSubstage = filterQueue(rows, { ...filters, substages: [] }, today);
   const substage: Record<string, number> = {};
   for (const row of forSubstage) {
@@ -355,7 +373,7 @@ export function queueFacetCounts(rows: readonly QueueRow[], filters: QueueFilter
   const forDue = filterQueue(rows, { ...filters, due: [] }, today);
   const due: Record<ScheduledBucket, number> = { vencido: 0, hoy: 0, proximo: 0 };
   for (const row of forDue) due[scheduledBucket(row.scheduledFor, today)] += 1;
-  return { substageTotal: forSubstage.length, substage, dueTotal: forDue.length, due };
+  return { stage, substageTotal: forSubstage.length, substage, dueTotal: forDue.length, due };
 }
 
 export const CREATED_WINDOW_LABEL: Record<CreatedWindow, string> = {

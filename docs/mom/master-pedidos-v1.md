@@ -4921,29 +4921,28 @@ intento, armados, tomados sin caja, fecha de creación) con chips; y tiles de
 métricas encima de Asignar, una por filtro con su cantidad, que abren la lista
 o las cajas ya filtradas.
 
-**Subetapas y fecha pactada sobre la lista (22-09-2026).** Bajo la búsqueda,
-la línea «N en cola» lleva un desplegable **«Subetapas y fecha pactada»**
-(abierto por defecto, porque las cantidades son lo que se quiere ver de un
-vistazo, y el navegador recuerda si se cierra: en la columna de Asignar la
-lista aparecía tras cuatro filas de controles). Abierto muestra dos grupos de
-chips con un solo lenguaje visual, como los del Master (§6), que saltan de
-línea en vez de recortarse: **Subetapas** —las tres que la cola admite, en el
-orden del MOM: Por generar rótulo, Por armar, Listo para asignar; la
-macroetapa va en el `title`; si un tomado sin caja trae otra subetapa porque
-el Master lo movió, aparece detrás con su nombre— y **Plazo** (fecha pactada)
-—Vencidos, Hoy, Próximos sobre la salida prevista: la de la solicitud tomada
-o, si el pedido sigue disponible, hoy o mañana según el corte de las 11:30;
-«vencido» es un tomado cuya salida ya pasó—. Dentro de cada grupo se
-encienden varios chips a la vez (basta con cumplir uno) y los dos grupos se
-combinan entre sí y con el picker, la búsqueda y las tiles; sin ningún chip
-encendido el grupo es «todas», y el total es «N en cola». **Cada chip lleva su
+**Etapa, subetapa y fecha pactada en el picker de Filtros (22-09-2026).** El
+flotante «Filtros» de «Desde la lista» abre con tres grupos de chips como los
+del Master (§6), antes de tienda, distrito y fecha de creación: un solo sitio
+para filtrar. **Etapa** —las seis macroetapas numeradas con «N pedidos»; las
+que la cola no admite (Por confirmar, En curso, Por cerrar, Finalizado) se
+listan en cero y apagadas, con la nota de que se consultan en el Master, para
+que se vea que no faltan sino que no pueden estar aquí por la regla de
+admisión de §29.2—, **Subetapas** —las tres que la cola admite, en el orden
+del MOM: Por generar rótulo, Por armar, Listo para asignar; la macroetapa va
+en el `title`; si un tomado sin caja trae otra subetapa porque el Master lo
+movió, aparece detrás con su nombre— y **Fecha pactada** —Vencidos, Hoy,
+Próximos sobre la salida prevista: la de la solicitud tomada o, si el pedido
+sigue disponible, hoy o mañana según el corte de las 11:30; «vencido» es un
+tomado cuya salida ya pasó—. Dentro de cada grupo se encienden varios chips a
+la vez (basta con cumplir uno) y los grupos se combinan entre sí y con el
+resto del picker, la búsqueda y las tiles; sin ningún chip encendido el grupo
+es «todas», y el total es «N en cola» bajo la búsqueda. **Cada chip lleva su
 cantidad facetada**: cuántas filas quedarían al tocarlo con el resto de
 filtros tal como están, sin contar los chips de su propio grupo, de modo que
 el número de un chip encendido coincide con «N en cola». Un chip en cero se
-muestra apagado; uno encendido se apaga tocándolo o desde «Filtros activos»,
-que lo lista también con el desplegable cerrado. Las etapas que no aparecen
-(Por confirmar, En curso, Por cerrar, Finalizado) no pueden estar en esta cola
-por la regla de admisión de §29.2; se consultan en el Master. Lógica pura en
+muestra apagado; uno encendido se apaga tocándolo o desde «Filtros activos»
+bajo la búsqueda, que lo lista con el flotante cerrado. Lógica pura en
 `lib/dispatch-day.ts` (`queueSubstageOptions`, `queueFacetCounts`,
 `scheduledBucket`), probada en `test/dispatch-day.test.ts`; la fila de la cola
 trae `macro_stage` y `macro_substage` del Master. Nada de esto cambia acciones

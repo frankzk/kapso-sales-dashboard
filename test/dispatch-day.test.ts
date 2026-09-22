@@ -150,6 +150,15 @@ describe("filterQueue (Desde la lista)", () => {
     expect(activeFilterCount(EMPTY_QUEUE_FILTERS)).toBe(0);
     expect(activeFilterCount({ ...EMPTY_QUEUE_FILTERS, query: "x", store: "Aurela", created: "hoy", secondAttempt: true })).toBe(3);
     expect(activeFilterCount({ ...EMPTY_QUEUE_FILTERS, substages: ["por_armar", "por_generar_rotulo"], due: ["hoy"] })).toBe(2);
+    expect(activeFilterCount({ ...EMPTY_QUEUE_FILTERS, stages: ["preparacion"] })).toBe(1);
+  });
+
+  it("etapas: cualquiera de las encendidas entra; se combina con subetapas y plazos", () => {
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, stages: ["por_despachar"] }, today))).toEqual(["c"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, stages: ["preparacion", "por_despachar"] }, today))).toEqual(["a", "b", "c", "d"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, stages: ["en_curso"] }, today))).toEqual([]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, stages: ["preparacion"], substages: ["por_armar"], due: ["hoy"] }, today))).toEqual(["d"]);
+    expect(ids(filterQueue([row({ orderId: "z", macroStage: null, macroSubstage: null })], { ...EMPTY_QUEUE_FILTERS, stages: ["sin_etapa"] }, today))).toEqual(["z"]);
   });
 
   it("subetapas: cualquiera de las encendidas entra; se combinan con el resto de filtros", () => {
@@ -191,6 +200,7 @@ describe("filterQueue (Desde la lista)", () => {
 
   it("cantidades facetadas: cada chip dice cuántas quedarían con el resto de filtros, sin contar su propio grupo", () => {
     const none = queueFacetCounts(rows, EMPTY_QUEUE_FILTERS, today);
+    expect(none.stage).toEqual({ preparacion: 3, por_despachar: 1 });
     expect(none.substageTotal).toBe(4);
     expect(none.substage).toEqual({ por_generar_rotulo: 2, por_armar: 1, listo_para_asignar: 1 });
     expect(none.dueTotal).toBe(4);
@@ -198,12 +208,18 @@ describe("filterQueue (Desde la lista)", () => {
     // Con «por armar» encendido, los plazos se cuentan solo sobre d; las
     // subetapas siguen contando sobre todo (su propio grupo no se aplica).
     const armed = queueFacetCounts(rows, { ...EMPTY_QUEUE_FILTERS, substages: ["por_armar"] }, today);
+    expect(armed.stage).toEqual({ preparacion: 1 });
     expect(armed.due).toEqual({ vencido: 0, hoy: 1, proximo: 0 });
     expect(armed.dueTotal).toBe(1);
     expect(armed.substage).toEqual({ por_generar_rotulo: 2, por_armar: 1, listo_para_asignar: 1 });
     // Y al revés: el plazo «hoy» reduce las subetapas a a y d.
     const due = queueFacetCounts(rows, { ...EMPTY_QUEUE_FILTERS, due: ["hoy"], store: "Aurela" }, today);
     expect(due.substage).toEqual({ por_generar_rotulo: 1, por_armar: 1 });
+    // Etapa encendida: el resto de grupos cuenta solo sobre ella; ella misma no se aplica a su grupo.
+    const staged = queueFacetCounts(rows, { ...EMPTY_QUEUE_FILTERS, stages: ["por_despachar"] }, today);
+    expect(staged.stage).toEqual({ preparacion: 3, por_despachar: 1 });
+    expect(staged.substage).toEqual({ listo_para_asignar: 1 });
+    expect(staged.due).toEqual({ vencido: 1, hoy: 0, proximo: 0 });
     expect(due.substageTotal).toBe(2);
     expect(due.due).toEqual({ vencido: 1, hoy: 2, proximo: 0 });
   });
