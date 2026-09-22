@@ -2,6 +2,7 @@
 // Sin base ni React, probado en test/dispatch-day.test.ts.
 
 import { courierKey, dispatchProgress } from "@/lib/dispatch";
+import { MACRO_SUBSTAGES_BY_STAGE, ORDER_MACRO_STAGES, type OrderMacroStage } from "@/lib/order-macro-stage";
 
 export interface DayItem {
   id: string;
@@ -174,6 +175,23 @@ export interface QueueRow {
   /** Macroetapa y subetapa del MOM en el Master (`order_master`); null si no se conoce. */
   macroStage: string | null;
   macroSubstage: string | null;
+  /**
+   * Si se puede asignar desde la lista (disponible o tomado sin caja). Los
+   * demás son pedidos de Grupo GF que ya salieron: se listan para seguimiento
+   * cuando se elige su etapa, sin casilla.
+   */
+  assignable: boolean;
+  /** La caja del motorizado, para los que ya salieron. */
+  route: QueueRoute | null;
+}
+
+export interface QueueRoute {
+  riderName: string;
+  routeDate: string;
+  loadNumber: number;
+  state: string;
+  officeCheckedAt: string | null;
+  pickupCheckedAt: string | null;
 }
 
 export type CreatedWindow = "hoy" | "ayer" | "7d" | "todo";
@@ -278,15 +296,22 @@ export function inCreatedWindow(createdAt: string | null | undefined, window: Cr
 }
 
 /**
- * Tienda × distrito × salida previa × armados × tomados × fecha × subetapas ×
- * plazo × texto (pedido, cliente, distrito o teléfono). Dentro de un grupo de
- * chips (subetapas, plazos) basta con cumplir uno; entre grupos se exigen todos.
+ * Tienda × distrito × salida previa × armados × tomados × fecha × etapas ×
+ * subetapas × plazo × texto (pedido, cliente, distrito o teléfono). Dentro de
+ * un grupo de chips basta con cumplir uno; entre grupos se exigen todos.
+ *
+ * Sin ninguna etapa elegida la lista es la cola de asignación (solo
+ * `assignable`): es para lo que está la pantalla. Elegir una etapa abre esa
+ * etapa entera, también los pedidos que ya salieron, para seguimiento.
+ * `includeTracked` fuerza mirar todos, para contar las etapas.
  */
-export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, today: string): QueueRow[] {
+export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, today: string, opts: { includeTracked?: boolean } = {}): QueueRow[] {
   const needle = filters.query.trim().toLocaleLowerCase("es");
   const digits = phoneDigits(needle);
   const byPhone = digits.length >= 4 && digits.length === needle.replace(/[\s+\-().]/g, "").length;
+  const onlyAssignable = !filters.stages.length && !opts.includeTracked;
   return rows.filter((q) => {
+    if (onlyAssignable && !q.assignable) return false;
     if (filters.store && q.storeName !== filters.store) return false;
     if (filters.district && q.district !== filters.district) return false;
     if (filters.secondAttempt && !q.hasPriorDispatch) return false;
@@ -309,12 +334,11 @@ export function activeFilterCount(filters: QueueFilters): number {
 
 // ---------------------------------------------------------------------------
 // Chips de etapa, subetapa y fecha pactada en el picker de Filtros, como en
-// el Master. La cola solo admite tres subetapas (Preparación · por generar
-// rótulo / por armar, Por despachar · listo para asignar); las otras cuatro
-// etapas se listan para que se vea que están en cero, y viven en el Master.
-// Cada chip lleva su cantidad facetada: cuántas filas quedarían al tocarlo
-// con el resto de filtros tal como están, sin contar los chips de su propio
-// grupo. Así el número de un chip encendido coincide con «N en cola».
+// el Master. Etapa cuenta TODOS los pedidos de Grupo GF (la cola más los que
+// ya salieron); las subetapas solo aparecen con una etapa elegida y son las
+// de esa etapa. Cada chip lleva su cantidad facetada: cuántas filas quedarían
+// al tocarlo con el resto de filtros tal como están, sin contar los chips de
+// su propio grupo. Así el número de un chip encendido coincide con «N en cola».
 // ---------------------------------------------------------------------------
 
 /** Subetapas que la cola admite, en el orden del MOM. */
@@ -330,14 +354,24 @@ export interface QueueSubstageOption {
 }
 
 /**
- * Las subetapas a mostrar: las de admisión siempre (aunque estén en cero) y,
- * detrás, cualquier otra que traiga una fila (un tomado que el Master movió).
+ * Las subetapas a mostrar: ninguna sin etapa elegida; con etapas, las del
+ * MOM de cada una en su orden (aunque estén en cero) y, detrás, cualquier
+ * otra que traiga una fila de esa etapa (un dato viejo del Master).
  */
-export function queueSubstageOptions(rows: readonly QueueRow[]): QueueSubstageOption[] {
-  const out: QueueSubstageOption[] = QUEUE_ADMISSION_SUBSTAGES.map((s) => ({ ...s }));
-  const seen = new Set(out.map((s) => s.substage));
+export function queueSubstageOptions(rows: readonly QueueRow[], stages: readonly string[]): QueueSubstageOption[] {
+  if (!stages.length) return [];
+  const out: QueueSubstageOption[] = [];
+  const seen = new Set<string>();
+  for (const stage of ORDER_MACRO_STAGES) {
+    if (!stages.includes(stage.code)) continue;
+    for (const substage of MACRO_SUBSTAGES_BY_STAGE[stage.code]) {
+      out.push({ stage: stage.code, substage });
+      seen.add(substage);
+    }
+  }
   const extra: QueueSubstageOption[] = [];
   for (const row of rows) {
+    if (!stages.includes(rowStage(row))) continue;
     const key = rowSubstage(row);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -345,6 +379,22 @@ export function queueSubstageOptions(rows: readonly QueueRow[]): QueueSubstageOp
   }
   extra.sort((a, b) => a.substage.localeCompare(b.substage, "es"));
   return [...out, ...extra];
+}
+
+/**
+ * Cambiar las etapas encendidas apaga las subetapas que ya no están a la
+ * vista: un chip encendido que no se ve no se puede apagar.
+ */
+export function setStages(filters: QueueFilters, stages: readonly string[]): QueueFilters {
+  const canonical = new Set<string>();
+  for (const stage of stages) {
+    for (const substage of MACRO_SUBSTAGES_BY_STAGE[stage as OrderMacroStage] ?? []) canonical.add(substage);
+  }
+  const known = new Set<string>(Object.values(MACRO_SUBSTAGES_BY_STAGE).flat());
+  const substages = stages.length
+    ? filters.substages.filter((code) => canonical.has(code) || !known.has(code))
+    : [];
+  return { ...filters, stages: [...stages], substages };
 }
 
 export interface QueueFacetCounts {
@@ -360,7 +410,8 @@ export interface QueueFacetCounts {
 
 export function queueFacetCounts(rows: readonly QueueRow[], filters: QueueFilters, today: string): QueueFacetCounts {
   const stage: Record<string, number> = {};
-  for (const row of filterQueue(rows, { ...filters, stages: [] }, today)) {
+  // Etapa cuenta sobre todos los pedidos de Grupo GF, no solo la cola.
+  for (const row of filterQueue(rows, { ...filters, stages: [] }, today, { includeTracked: true })) {
     const key = rowStage(row);
     stage[key] = (stage[key] ?? 0) + 1;
   }

@@ -1,6 +1,6 @@
 // Despacho del día (MOM §29.13): lo puro de la pantalla de dos pasos.
 import { describe, expect, it } from "vitest";
-import { activeFilterCount, boxNextStep, boxTileCounts, queueFacetCounts, queueSubstageOptions, queueTileActive, queueTileCounts, scheduledBucket, toggleBoxTile, toggleInList, toggleQueueTile, dayBoxes, declinedPackages, EMPTY_QUEUE_FILTERS, filterBoxItems, filterQueue, inCreatedWindow, packageStage, splitAssignment, type DayManifest, type QueueRow } from "@/lib/dispatch-day";
+import { activeFilterCount, boxNextStep, boxTileCounts, queueFacetCounts, queueSubstageOptions, queueTileActive, queueTileCounts, scheduledBucket, setStages, toggleBoxTile, toggleInList, toggleQueueTile, dayBoxes, declinedPackages, EMPTY_QUEUE_FILTERS, filterBoxItems, filterQueue, inCreatedWindow, packageStage, splitAssignment, type DayManifest, type QueueRow } from "@/lib/dispatch-day";
 
 const item = (over: Partial<DayManifest["items"][number]> = {}) => ({
   id: over.id ?? crypto.randomUUID(),
@@ -107,6 +107,8 @@ describe("filterQueue (Desde la lista)", () => {
     hasPriorDispatch: false,
     macroStage: "preparacion",
     macroSubstage: "por_generar_rotulo",
+    assignable: true,
+    route: null,
     ...over,
   });
   const today = "2026-09-19";
@@ -186,16 +188,49 @@ describe("filterQueue (Desde la lista)", () => {
     expect(base).toEqual(["a"]);
   });
 
-  it("las opciones de subetapa: las tres de admisión siempre, y detrás lo raro que traiga una fila", () => {
-    expect(queueSubstageOptions(rows).map((o) => o.substage)).toEqual(["por_generar_rotulo", "por_armar", "listo_para_asignar"]);
-    const moved = [...rows, row({ orderId: "m", macroStage: "por_cerrar", macroSubstage: "pendiente_liquidacion" }), row({ orderId: "n", macroStage: null, macroSubstage: null })];
-    expect(queueSubstageOptions(moved)).toEqual([
-      { stage: "preparacion", substage: "por_generar_rotulo" },
-      { stage: "preparacion", substage: "por_armar" },
-      { stage: "por_despachar", substage: "listo_para_asignar" },
-      { stage: "por_cerrar", substage: "pendiente_liquidacion" },
-      { stage: null, substage: "sin_subetapa" },
-    ]);
+  it("las opciones de subetapa: ninguna sin etapa; con etapa, las del MOM de esa etapa y detrás lo raro que traiga una fila", () => {
+    expect(queueSubstageOptions(rows, [])).toEqual([]);
+    expect(queueSubstageOptions(rows, ["preparacion"]).map((o) => o.substage)).toEqual(["por_generar_rotulo", "por_armar", "incidencia_preparacion"]);
+    expect(queueSubstageOptions(rows, ["por_despachar", "preparacion"]).map((o) => o.stage)).toEqual(["preparacion", "preparacion", "preparacion", "por_despachar", "por_despachar", "por_despachar", "por_despachar", "por_despachar", "por_despachar"]);
+    const moved = [...rows, row({ orderId: "m", macroStage: "por_despachar", macroSubstage: "raro" }), row({ orderId: "n", macroStage: null, macroSubstage: null })];
+    const opts = queueSubstageOptions(moved, ["por_despachar"]);
+    expect(opts[opts.length - 1]).toEqual({ stage: "por_despachar", substage: "raro" });
+    expect(opts.some((o) => o.substage === "sin_subetapa")).toBe(false);
+    expect(queueSubstageOptions(moved, ["sin_etapa"])).toEqual([{ stage: null, substage: "sin_subetapa" }]);
+  });
+
+  it("cambiar de etapa apaga las subetapas que dejan de verse", () => {
+    const on = { ...EMPTY_QUEUE_FILTERS, stages: ["preparacion"], substages: ["por_armar", "raro"] };
+    expect(setStages(on, ["por_despachar"])).toMatchObject({ stages: ["por_despachar"], substages: ["raro"] });
+    expect(setStages(on, ["por_despachar", "preparacion"]).substages).toEqual(["por_armar", "raro"]);
+    expect(setStages(on, []).substages).toEqual([]);
+  });
+
+  describe("los que ya salieron (seguimiento)", () => {
+    const out = [
+      row({ orderId: "r1", macroStage: "en_curso", macroSubstage: "en_reparto", assignable: false, taken: true, route: { riderName: "Roy", routeDate: "2026-09-19", loadNumber: 1, state: "in_custody", officeCheckedAt: "x", pickupCheckedAt: "x" } }),
+      row({ orderId: "r2", macroStage: "por_cerrar", macroSubstage: "pendiente_liquidacion", assignable: false, taken: true, route: { riderName: "Roy", routeDate: "2026-09-18", loadNumber: 1, state: "in_custody", officeCheckedAt: "x", pickupCheckedAt: "x" } }),
+    ];
+    const all = [...rows, ...out];
+    it("sin etapa elegida la lista es la cola de asignación", () => {
+      expect(ids(filterQueue(all, EMPTY_QUEUE_FILTERS, today))).toEqual(["a", "b", "c", "d"]);
+      expect(ids(filterQueue(all, { ...EMPTY_QUEUE_FILTERS, query: "kp1" }, today))).toEqual(["a", "b", "c", "d"]);
+    });
+    it("elegir una etapa abre esa etapa entera, incluidos los que ya salieron", () => {
+      expect(ids(filterQueue(all, { ...EMPTY_QUEUE_FILTERS, stages: ["en_curso"] }, today))).toEqual(["r1"]);
+      expect(ids(filterQueue(all, { ...EMPTY_QUEUE_FILTERS, stages: ["en_curso", "por_cerrar"], substages: ["pendiente_liquidacion"] }, today))).toEqual(["r2"]);
+      expect(ids(filterQueue(all, { ...EMPTY_QUEUE_FILTERS, stages: ["preparacion"] }, today))).toEqual(["a", "b", "d"]);
+    });
+    it("Etapa cuenta todos los pedidos de Grupo GF; los demás grupos cuentan lo que se ve", () => {
+      const none = queueFacetCounts(all, EMPTY_QUEUE_FILTERS, today);
+      expect(none.stage).toEqual({ preparacion: 3, por_despachar: 1, en_curso: 1, por_cerrar: 1 });
+      expect(none.substageTotal).toBe(4);
+      const inCourse = queueFacetCounts(all, { ...EMPTY_QUEUE_FILTERS, stages: ["en_curso"] }, today);
+      expect(inCourse.substage).toEqual({ en_reparto: 1 });
+      expect(inCourse.due).toEqual({ vencido: 0, hoy: 1, proximo: 0 });
+      // Las tiles siguen contando solo la cola.
+      expect(queueTileCounts(all.filter((r) => r.assignable)).por_asignar).toBe(4);
+    });
   });
 
   it("cantidades facetadas: cada chip dice cuántas quedarían con el resto de filtros, sin contar su propio grupo", () => {
@@ -258,7 +293,7 @@ describe("estado de cada paquete en la caja (segmentos de «Pedidos tomados»)",
 describe("tiles de métricas → filtros", () => {
   const row = (over: Partial<QueueRow>): QueueRow => ({
     orderId: over.orderId ?? crypto.randomUUID(), orderName: "#K", storeName: "A", customerName: "C", customerPhone: null, district: "D",
-    orderTotal: 1, createdAt: null, scheduledFor: "2026-09-19", tariffAmount: 1, taken: false, requestId: null, armed: null, observation: null, hasPriorDispatch: false, macroStage: "preparacion", macroSubstage: "por_armar", ...over,
+    orderTotal: 1, createdAt: null, scheduledFor: "2026-09-19", tariffAmount: 1, taken: false, requestId: null, armed: null, observation: null, hasPriorDispatch: false, macroStage: "preparacion", macroSubstage: "por_armar", assignable: true, route: null, ...over,
   });
   it("cuenta cada tile sobre la cola y sobre las cajas", () => {
     const rows = [row({}), row({ taken: true, armed: true }), row({ taken: true, armed: false }), row({ hasPriorDispatch: true })];

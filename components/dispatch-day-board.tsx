@@ -43,6 +43,7 @@ import {
   queueTileCounts,
   SCHEDULED_BUCKET_LABEL,
   SCHEDULED_BUCKETS,
+  setStages,
   splitAssignment,
   toggleBoxTile,
   toggleInList,
@@ -191,6 +192,8 @@ export function DispatchDayBoard(props: Props) {
         hasPriorDispatch: Boolean(o.hasPriorDispatch),
         macroStage: o.macroStage,
         macroSubstage: o.macroSubstage,
+        assignable: true,
+        route: null,
       }));
     const takenIds = new Set(taken.map((t) => t.orderId));
     const free: QueueRow[] = props.available
@@ -213,21 +216,59 @@ export function DispatchDayBoard(props: Props) {
         hasPriorDispatch: o.hasPriorDispatch,
         macroStage: o.macroStage,
         macroSubstage: o.macroSubstage,
+        assignable: true,
+        route: null,
       }));
     return [...taken, ...free];
   }, [props.accepted, props.available]);
+  // Los que ya salieron con Grupo GF (tienen caja): no se asignan desde aquí,
+  // pero cuentan en Etapa y se listan para seguimiento al elegir la suya.
+  const tracked = useMemo<QueueRow[]>(() => props.accepted
+    .filter((o) => o.route)
+    .map((o) => ({
+      orderId: o.orderId,
+      orderName: o.orderName,
+      storeName: o.storeName,
+      customerName: o.customerName,
+      customerPhone: o.customerPhone,
+      district: o.district,
+      orderTotal: o.orderTotal,
+      createdAt: o.orderCreatedAt,
+      scheduledFor: o.scheduledFor,
+      tariffAmount: o.tariffAmount,
+      taken: true,
+      requestId: o.requestId,
+      armed: o.preparationState === "listo_despacho",
+      observation: o.observation,
+      hasPriorDispatch: Boolean(o.hasPriorDispatch),
+      macroStage: o.macroStage,
+      macroSubstage: o.macroSubstage,
+      assignable: false,
+      route: o.route && {
+        riderName: o.route.riderName,
+        routeDate: o.route.routeDate,
+        loadNumber: o.route.loadNumber,
+        state: o.route.state,
+        officeCheckedAt: o.route.officeCheckedAt,
+        pickupCheckedAt: o.route.pickupCheckedAt,
+      },
+    })), [props.accepted]);
+  const allRows = useMemo(() => [...queue, ...tracked], [queue, tracked]);
 
   const stores = useMemo(() => [...new Set(queue.map((q) => q.storeName))].sort(), [queue]);
   const districts = useMemo(() => [...new Set(queue.map((q) => q.district))].sort((a, b) => a.localeCompare(b, "es")), [queue]);
-  const filtered = useMemo(() => filterQueue(queue, filters, day), [queue, filters, day]);
-  // Chips de subetapa y de fecha pactada con su cantidad facetada (cuántas
-  // quedarían al tocarlo con el resto de filtros como están).
-  const substageOptions = useMemo(() => queueSubstageOptions(queue), [queue]);
-  const facets = useMemo(() => queueFacetCounts(queue, filters, day), [queue, filters, day]);
+  const filtered = useMemo(() => filterQueue(allRows, filters, day), [allRows, filters, day]);
+  // Chips de etapa, subetapa y fecha pactada con su cantidad facetada (cuántas
+  // quedarían al tocarlo con el resto de filtros como están). Las subetapas
+  // son las de la etapa elegida; sin etapa no se muestran.
+  const substageOptions = useMemo(() => queueSubstageOptions(allRows, filters.stages), [allRows, filters.stages]);
+  const facets = useMemo(() => queueFacetCounts(allRows, filters, day), [allRows, filters, day]);
+  const tracking = filters.stages.length > 0;
   const activeFilters = activeFilterCount(filters);
   const filtersButton = useRef<HTMLButtonElement>(null);
   const visible = filtered.slice(0, limit);
-  const allVisibleSelected = visible.length > 0 && visible.every((q) => selected.has(q.orderId));
+  const visibleAssignable = visible.filter((q) => q.assignable);
+  const allVisibleSelected = visibleAssignable.length > 0 && visibleAssignable.every((q) => selected.has(q.orderId));
   const selectedTotal = queue.filter((q) => selected.has(q.orderId)).reduce((sum, q) => sum + q.orderTotal, 0);
   // Las cajas siguen al día elegido arriba («cambiar día»): cambiar la fecha
   // sin ver las cajas de ese día dejaba la impresión de que no se creó nada.
@@ -501,9 +542,10 @@ export function DispatchDayBoard(props: Props) {
                     <div className="grid gap-3 text-sm">
                       {/* Etapa, subetapa y fecha pactada como en el Master, dentro
                           del mismo flotante que tienda y distrito: un solo sitio
-                          para filtrar. Cada chip lleva su cantidad facetada; las
-                          etapas que la cola no admite se listan en cero para que
-                          se vea que no faltan, sino que viven en el Master. */}
+                          para filtrar. Etapa cuenta todos los pedidos de Grupo GF;
+                          elegir una que no se asigna (En curso, Por cerrar…) lista
+                          esos pedidos para seguimiento. Las subetapas aparecen
+                          solo con una etapa elegida. */}
                       <div role="group" aria-label="Etapa" className="grid gap-1">
                         <span className="text-xs font-medium text-slate-600">Etapa</span>
                         <div className="grid grid-cols-2 gap-1">
@@ -516,8 +558,8 @@ export function DispatchDayBoard(props: Props) {
                                 type="button"
                                 aria-pressed={active}
                                 disabled={count === 0 && !active}
-                                onClick={() => patchFilters({ stages: toggleInList(filters.stages, stage.code) })}
-                                title={count === 0 ? "Esta cola no admite esa etapa; se consulta en el Master de Pedidos" : undefined}
+                                onClick={() => patchFilters(setStages(filters, toggleInList(filters.stages, stage.code)))}
+                                title={count === 0 ? "Ningún pedido de Grupo GF en esta etapa" : ["preparacion", "por_despachar"].includes(stage.code) ? undefined : "Ya salieron con Grupo GF: se listan para seguimiento, sin asignar"}
                                 className={cn(
                                   "flex min-h-10 items-center gap-2 rounded-lg border px-2 text-left transition",
                                   active ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-700 hover:border-slate-300",
@@ -534,6 +576,7 @@ export function DispatchDayBoard(props: Props) {
                           })}
                         </div>
                       </div>
+                      {substageOptions.length > 0 && (
                       <div role="group" aria-label="Subetapas" className="grid gap-1">
                         <span className="text-xs font-medium text-slate-600">Subetapas</span>
                         <div className="flex flex-wrap gap-1.5">
@@ -549,6 +592,7 @@ export function DispatchDayBoard(props: Props) {
                           ))}
                         </div>
                       </div>
+                      )}
                       <div role="group" aria-label="Fecha pactada" className="grid gap-1">
                         <span className="flex items-center gap-1 text-xs font-medium text-slate-600">
                           Fecha pactada
@@ -590,7 +634,7 @@ export function DispatchDayBoard(props: Props) {
               </div>
             </div>
             <p className="mt-2 text-xs tabular-nums text-slate-500">
-              <b className="text-slate-900">{filtered.length.toLocaleString("es-PE")}</b> en cola{filtered.length > visible.length ? ` · se muestran ${visible.length}` : ""}
+              <b className="text-slate-900">{filtered.length.toLocaleString("es-PE")}</b> {tracking ? "pedidos en esa etapa" : "en cola"}{filtered.length > visible.length ? ` · se muestran ${visible.length}` : ""}
             </p>
             {activeFilters > 0 && (
               <ul className="mt-1 flex flex-wrap gap-1.5 text-xs" aria-label="Filtros activos">
@@ -609,7 +653,7 @@ export function DispatchDayBoard(props: Props) {
 
           <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2">
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={allVisibleSelected} onChange={() => setSelected(allVisibleSelected ? new Set() : new Set(visible.map((q) => q.orderId)))} aria-label="Marcar los visibles" />
+              <input type="checkbox" checked={allVisibleSelected} disabled={!visibleAssignable.length} onChange={() => setSelected(allVisibleSelected ? new Set() : new Set(visibleAssignable.map((q) => q.orderId)))} aria-label="Marcar los visibles" />
               <span className="font-medium text-slate-800">{selected.size ? `${selected.size} marcados · ${money(selectedTotal)}` : "Marca pedidos"}</span>
             </label>
             <button
@@ -629,27 +673,38 @@ export function DispatchDayBoard(props: Props) {
           <ul className="max-h-[60vh] divide-y divide-slate-100 overflow-auto">
             {visible.map((q) => (
               <li key={q.orderId} className={cn("flex items-start gap-3 px-4 py-2 text-sm hover:bg-slate-50", selected.has(q.orderId) && "bg-brand-50/60")}>
-                <input type="checkbox" checked={selected.has(q.orderId)} onChange={() => toggle(q.orderId)} aria-label={`Marcar ${q.orderName}`} className="mt-1" />
+                {q.assignable
+                  ? <input type="checkbox" checked={selected.has(q.orderId)} onChange={() => toggle(q.orderId)} aria-label={`Marcar ${q.orderName}`} className="mt-1" />
+                  : <span aria-hidden className="mt-1 inline-block h-4 w-4 shrink-0 rounded border border-dashed border-slate-300" title="Ya salió: se sigue, no se asigna" />}
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <OrderLink orderId={q.orderId} className="font-semibold text-slate-950 hover:text-brand-700">{q.orderName}</OrderLink>
                     <span className="text-xs text-slate-500">{q.storeName}</span>
                     <OrderLink orderId={q.orderId} section="historial" className="text-[11px] text-brand-700 underline">Ver actividad</OrderLink>
-                    {q.taken && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">tomado · sin caja</span>}
+                    {q.taken && !q.route && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">tomado · sin caja</span>}
+                    {!q.assignable && q.macroSubstage && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800" title={macroStageLabel(q.macroStage)}>{macroSubstageLabel(q.macroSubstage)}</span>}
                     {q.taken && q.armed && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">armado</span>}
                     {q.hasPriorDispatch && <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-800" title="Ya tuvo al menos una salida física y volvió; revísalo como reprogramación o recuperación">salida previa</span>}
                     {q.observation && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800" title={q.observation}>observado</span>}
                   </div>
                   <p className="truncate text-slate-600">{q.customerName} · {q.district}</p>
                   <p className="truncate text-xs text-slate-500">{q.customerPhone ?? "sin teléfono"}{q.createdAt ? ` · creado ${formatDayNumeric(limaDay(q.createdAt))}` : ""}</p>
+                  {q.route && (
+                    <p className="truncate text-xs text-slate-600">
+                      <b>{q.route.riderName}</b> · caja del {formatDayNumeric(q.route.routeDate)}{q.route.loadNumber > 1 ? ` · carga ${q.route.loadNumber}` : ""}
+                      {" · "}{q.route.pickupCheckedAt ? "lo lleva" : q.route.officeCheckedAt ? "cotejado · sin «Lo llevo»" : "en la caja · sin cotejar"}
+                    </p>
+                  )}
                 </div>
                 <div className="text-right text-xs text-slate-600">
                   <p className="font-semibold text-slate-900">{money(q.orderTotal)}</p>
-                  <p title="Salida prevista: después del corte de las 11:30 el pedido sale al día siguiente">tarifa {money(q.tariffAmount)} · sale {formatDay(q.scheduledFor)}</p>
+                  {q.route
+                    ? <p>tarifa {money(q.tariffAmount)}</p>
+                    : <p title="Salida prevista: después del corte de las 11:30 el pedido sale al día siguiente">tarifa {money(q.tariffAmount)} · sale {formatDay(q.scheduledFor)}</p>}
                 </div>
               </li>
             ))}
-            {!visible.length && <li className="px-4 py-8 text-center text-sm text-slate-500">Nada por asignar con ese filtro.</li>}
+            {!visible.length && <li className="px-4 py-8 text-center text-sm text-slate-500">{tracking ? "Ningún pedido de Grupo GF con ese filtro." : "Nada por asignar con ese filtro."}</li>}
             {filtered.length > visible.length && (
               <li className="px-4 py-3 text-center">
                 <button type="button" onClick={() => setLimit((n) => n + 100)} className="min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-medium text-slate-700 hover:bg-slate-50">

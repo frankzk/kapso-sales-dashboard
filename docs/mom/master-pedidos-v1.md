@@ -4934,29 +4934,34 @@ o las cajas ya filtradas.
 **Etapa, subetapa y fecha pactada en el picker de Filtros (22-09-2026).** El
 flotante «Filtros» de «Desde la lista» abre con tres grupos de chips como los
 del Master (§6), antes de tienda, distrito y fecha de creación: un solo sitio
-para filtrar. **Etapa** —las seis macroetapas numeradas con «N pedidos»; las
-que la cola no admite (Por confirmar, En curso, Por cerrar, Finalizado) se
-listan en cero y apagadas, con la nota de que se consultan en el Master, para
-que se vea que no faltan sino que no pueden estar aquí por la regla de
-admisión de §29.2—, **Subetapas** —las tres que la cola admite, en el orden
-del MOM: Por generar rótulo, Por armar, Listo para asignar; la macroetapa va
-en el `title`; si un tomado sin caja trae otra subetapa porque el Master lo
-movió, aparece detrás con su nombre— y **Fecha pactada** —Vencidos, Hoy,
-Próximos sobre la salida prevista: la de la solicitud tomada o, si el pedido
-sigue disponible, hoy o mañana según el corte de las 11:30; «vencido» es un
-tomado cuya salida ya pasó—. Dentro de cada grupo se encienden varios chips a
-la vez (basta con cumplir uno) y los grupos se combinan entre sí y con el
-resto del picker, la búsqueda y las tiles; sin ningún chip encendido el grupo
-es «todas», y el total es «N en cola» bajo la búsqueda. **Cada chip lleva su
-cantidad facetada**: cuántas filas quedarían al tocarlo con el resto de
-filtros tal como están, sin contar los chips de su propio grupo, de modo que
-el número de un chip encendido coincide con «N en cola». Un chip en cero se
-muestra apagado; uno encendido se apaga tocándolo o desde «Filtros activos»
-bajo la búsqueda, que lo lista con el flotante cerrado. Lógica pura en
-`lib/dispatch-day.ts` (`queueSubstageOptions`, `queueFacetCounts`,
-`scheduledBucket`), probada en `test/dispatch-day.test.ts`; la fila de la cola
-trae `macro_stage` y `macro_substage` del Master. Nada de esto cambia acciones
-de servidor. Los cuatro segmentos de «Pedidos tomados» siguen
+para filtrar. **Etapa** —las seis macroetapas numeradas con «N pedidos»,
+contadas sobre **todos los pedidos de Grupo GF**: la cola de asignación
+(Preparación · por generar rótulo / por armar, Por despachar · listo para
+asignar) más los que ya salieron con una caja del courier, en la etapa en que
+el Master los tenga (En curso, Por cerrar, Finalizado). Sin ninguna etapa
+elegida la lista es la cola de asignación, que es para lo que está la
+pantalla; elegir una etapa abre esa etapa entera, y los pedidos que ya
+salieron se listan **para seguimiento, sin casilla**: su subetapa del MOM, el
+motorizado, la caja del día y si «lo lleva», está cotejado o sigue sin
+cotejar—, **Subetapas** —solo con una etapa elegida, y son las de esa etapa en
+el orden del MOM (aunque estén en cero); si una fila trae otra por un dato
+viejo del Master, aparece detrás; cambiar de etapa apaga las subetapas que
+dejan de verse— y **Fecha pactada** —Vencidos, Hoy, Próximos sobre la salida
+prevista: la de la solicitud tomada o, si el pedido sigue disponible, hoy o
+mañana según el corte de las 11:30; «vencido» es un tomado cuya salida ya
+pasó—. Dentro de cada grupo se encienden varios chips a la vez (basta con
+cumplir uno) y los grupos se combinan entre sí y con el resto del picker, la
+búsqueda y las tiles; sin ningún chip encendido el grupo es «todas», y el
+total es «N en cola» (o «N pedidos en esa etapa») bajo la búsqueda. **Cada
+chip lleva su cantidad facetada**: cuántas filas quedarían al tocarlo con el
+resto de filtros tal como están, sin contar los chips de su propio grupo, de
+modo que el número de un chip encendido coincide con el total. Un chip en
+cero se muestra apagado; uno encendido se apaga tocándolo o desde «Filtros
+activos» bajo la búsqueda, que lo lista con el flotante cerrado. Las tiles de
+métricas siguen contando solo la cola. Lógica pura en `lib/dispatch-day.ts`
+(`queueSubstageOptions`, `setStages`, `queueFacetCounts`, `scheduledBucket`),
+probada en `test/dispatch-day.test.ts`; la fila de la cola trae `macro_stage`
+y `macro_substage` del Master. Nada de esto cambia acciones de servidor. Los cuatro segmentos de «Pedidos tomados» siguen
 visibles en Cajas de hoy: cada caja dice «N paq. · armados · cotejados ·
 confirmados», cada paquete lleva su chapa de estado (por armar / armado /
 cotejado / confirmado / no lo llevó) y un filtro rápido Todos · Por armar ·
