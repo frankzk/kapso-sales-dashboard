@@ -6,12 +6,15 @@ export interface ScanProgress {
   total?: number;
   /** Texto propio cuando no hay total. */
   label?: string;
+  /** Qué se cuenta: «Confirmados» por defecto, «Verificados» en oficina, «Recibidos» al recibir la caja. */
+  verb?: string;
 }
 
 export function scanProgressText(p: ScanProgress): string {
   if (p.total == null) return p.label ?? `${p.done} escaneados`;
   const left = Math.max(0, p.total - p.done);
-  return left === 0 ? `Confirmados ${p.done} de ${p.total} · listo` : `Confirmados ${p.done} de ${p.total} · faltan ${left}`;
+  const verb = p.verb ?? "Confirmados";
+  return left === 0 ? `${verb} ${p.done} de ${p.total} · listo` : `${verb} ${p.done} de ${p.total} · faltan ${left}`;
 }
 
 export function scanProgressDone(p: ScanProgress): boolean {

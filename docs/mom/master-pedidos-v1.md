@@ -4830,7 +4830,10 @@ control físico. Ahora asignar por QR y desde la lista es lo mismo, y alguien
 en oficina confirma después, en «Verificar caja», escaneando el QR o
 tecleando el código, que cada paquete está de verdad en la caja física del
 motorizado (`office_checked`). Con el modo `exigir` la caja no sale sin ese
-100 %. Si
+100 %. «Verificar caja», «Recibir carga» y «Recibir mi caja» usan la misma
+cámara en serie que la asignación: queda abierta tras cada lectura y debajo
+dice «Verificados 3 de 4 · faltan 1» (o «Recibidos …»), y se cierra con
+«Listo» o sola al completar la caja. Si
 el pedido se tomó días atrás y su fecha prevista ya pasó, la caja no es la de
 aquel día (cuya ruta está liquidada) sino la de hoy o la elegida: la fecha
 prevista se mueve hacia adelante y queda `logistics_request_rescheduled` en el

@@ -64,7 +64,7 @@ export function RiderReceiveBox({ riderName, loads }: { riderName: string; loads
             <p className="text-sm tabular-nums text-slate-700"><b>{load.received}</b> de {load.total} recibidos{load.declined ? ` · ${load.declined} no recogidos` : ""}</p>
           </div>
           <progress value={load.received} max={load.total || 1} aria-label="Paquetes recibidos" className="mt-2 h-2 w-full accent-brand-600" />
-          <ScanAction context="motorizado_recepcion" manifestId={load.id} disabled={pending} onResult={(r) => { setMessage(r.error ? { ok: false, text: r.error } : { ok: true, text: r.notice ?? "Paquete recibido." }); if (!r.error) router.refresh(); }} />
+          <ScanAction context="motorizado_recepcion" manifestId={load.id} disabled={pending} continuous progress={{ done: load.received, total: load.total, verb: "Recibidos" }} onResult={(r) => { setMessage(r.error ? { ok: false, text: r.error } : { ok: true, text: r.notice ?? "Paquete recibido." }); if (!r.error) router.refresh(); }} />
           <ul className="mt-4 space-y-2">
             {load.items.map((item) => (
               <ReceiveRow

@@ -433,7 +433,17 @@ export function DispatchBoxPanel({
             )}
           </section>
 
-      <DispatchCamera open={cameraOpen} onClose={closeCamera} onScan={onCameraScan} />
+      {/* Cámara en serie, como al asignar: queda abierta tras cada lectura y
+          debajo dice cuántos van («Verificados 3 de 4 · faltan 1»). Se cierra
+          con «Listo» o sola al completar la caja. */}
+      <DispatchCamera
+        open={cameraOpen}
+        onClose={closeCamera}
+        onScan={onCameraScan}
+        continuous
+        progress={progress ? { done: mode === "office" ? progress.officeChecked : progress.pickupChecked, total: progress.total, verb: mode === "office" ? "Verificados" : "Recibidos" } : undefined}
+        status={message ? { ok: message.tone !== "error", text: message.text } : null}
+      />
     </div>
   );
 }
