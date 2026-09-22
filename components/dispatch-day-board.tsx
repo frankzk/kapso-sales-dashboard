@@ -767,10 +767,10 @@ export function DispatchDayBoard(props: Props) {
           )}
           {method === "cajas" && (
           <div className="border-t border-slate-100">
-            <div className="flex items-center gap-2 px-4 py-3 text-sm font-semibold text-slate-900">
-              {scanDay === day ? "Cajas de hoy" : `Cajas del ${formatDayShort(scanDay)}`}
-              <span className="text-xs font-normal tabular-nums text-slate-500">{boxes.length} {boxes.length === 1 ? "caja" : "cajas"} · {dayCod} paq.</span>
-            </div>
+            {/* Sin título: la pestaña ya dice «Cajas de hoy». Solo el resumen. */}
+            {boxes.length > 0 && (
+              <p className="px-4 py-2 text-xs tabular-nums text-slate-500">{boxes.length} {boxes.length === 1 ? "caja" : "cajas"} · {dayCod} paq. · toca una caja para ver sus paquetes</p>
+            )}
             {boxes.length ? (
               <ul className="divide-y divide-slate-100 border-t border-slate-100">
                 {boxes.map((box) => (
@@ -791,7 +791,7 @@ export function DispatchDayBoard(props: Props) {
                 ))}
               </ul>
             ) : (
-              <p className="border-t border-slate-100 px-4 py-8 text-center text-sm text-slate-500">Todavía no hay cajas {scanDay === day ? "hoy" : "ese día"}: escanea o asigna desde la lista.</p>
+              <p className="px-4 py-8 text-center text-sm text-slate-500">Todavía no hay cajas {scanDay === day ? "hoy" : "ese día"}: escanea o asigna desde la lista.</p>
             )}
           </div>
           )}
