@@ -514,14 +514,14 @@ export function DispatchDayBoard(props: Props) {
               </div>
             )}
             {/* El total de la caja, del servidor: sobrevive a recargar la página
-                (la lista de escaneos de arriba es solo de esta sesión). Al doble
+                (la lista de escaneos de arriba es solo de esta sesión). Más grande
                 de tamaño para leerlo con la pistola en la mano. */}
             {method === "qr" && riderId && (riderBoxCount(riderId) > 0 || lines.length > 0) && (() => {
               const count = riderBoxCount(riderId);
               const cash = boxCash.get(riderId) ?? 0;
               return (
                 <div className={cn("mt-2 flex items-center gap-2", cash >= props.cashLimit ? "text-red-700" : cash >= props.cashWarning ? "text-amber-700" : "text-slate-800")}>
-                  <span className="min-w-0 truncate text-[24px] font-medium leading-tight" title={`${count} en la caja de ${riderName} · efectivo previsto ${money(cash)}${cash >= props.cashLimit ? " · supera el límite" : cash >= props.cashWarning ? " · cerca del límite" : ""}${overrideCash ? " · límite autorizado" : ""}`}>
+                  <span className="min-w-0 truncate text-[17px] font-medium leading-tight" title={`${count} en la caja de ${riderName} · efectivo previsto ${money(cash)}${cash >= props.cashLimit ? " · supera el límite" : cash >= props.cashWarning ? " · cerca del límite" : ""}${overrideCash ? " · límite autorizado" : ""}`}>
                     <b className="tabular-nums">{count}</b> en la caja de {riderName} · <b className="tabular-nums">{moneyShort(cash)}</b>
                   </span>
                   {lines.length > 0 && <button type="button" onClick={() => setLines([])} className="ml-auto shrink-0 text-xs text-slate-500 underline">Limpiar lista</button>}
