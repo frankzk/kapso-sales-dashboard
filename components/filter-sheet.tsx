@@ -109,22 +109,17 @@ export function Chip({ children, onRemove }: { children: ReactNode; onRemove: ()
 }
 
 /**
- * Chip de subetapa o plazo con su cantidad, al estilo del Master de Pedidos:
- * encendido con el color del grupo, apagado en gris, y en cero deshabilitado.
+ * Chip de subetapa o plazo con su cantidad, al estilo del Master de Pedidos.
+ * Un solo lenguaje visual: apagado en gris, encendido en brand, en cero
+ * deshabilitado. Los grupos se distinguen por su etiqueta, no por el color.
  */
-export function CountChip({ label, count, active, onClick, tone = "brand", title }: {
+export function CountChip({ label, count, active, onClick, title }: {
   label: string;
   count: number;
   active: boolean;
   onClick: () => void;
-  tone?: "brand" | "indigo" | "dark";
   title?: string;
 }) {
-  const on = tone === "dark"
-    ? "border-slate-950 bg-slate-950 text-white"
-    : tone === "indigo"
-      ? "border-indigo-600 bg-indigo-50 text-indigo-800"
-      : "border-brand-600 bg-brand-50 text-brand-700";
   return (
     <button
       type="button"
@@ -133,8 +128,8 @@ export function CountChip({ label, count, active, onClick, tone = "brand", title
       onClick={onClick}
       title={title}
       className={cn(
-        "min-h-8 shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs font-medium transition",
-        active ? on : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
+        "min-h-7 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium transition",
+        active ? "border-brand-600 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
         count === 0 && !active && "cursor-not-allowed opacity-40",
       )}
     >

@@ -97,6 +97,7 @@ const money = (n: number) => `S/ ${n.toFixed(2)}`;
 /** Sin decimales, para las líneas de una sola fila. */
 const moneyShort = (n: number) => `S/ ${Math.round(n).toLocaleString("es-PE")}`;
 const HELP_KEY = "kapta.despacho.ayuda-escaneo";
+const CHIPS_KEY = "kapta.despacho.subetapas-abiertas";
 
 export function DispatchDayBoard(props: Props) {
   const { orgId, day, riders, canManageDispatch, pending, run } = props;
@@ -143,6 +144,25 @@ export function DispatchDayBoard(props: Props) {
     } catch {
       /* sin almacenamiento: se cierra solo en esta vista */
     }
+  };
+  // Subetapas y fecha pactada van en un bloque plegable bajo la búsqueda,
+  // abierto por defecto (las cantidades son lo que se quiere ver de un
+  // vistazo) y recordado por navegador si se cierra: en la columna de 430 px
+  // la lista de pedidos aparecía tras cuatro filas de controles. Lo encendido
+  // se ve igual con el bloque cerrado, en los chips de «Filtros activos».
+  const [chipsOpen, setChipsOpen] = useState(true);
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(CHIPS_KEY) === "0") setChipsOpen(false);
+    } catch {
+      /* sin almacenamiento: abierto */
+    }
+  }, []);
+  const toggleChips = () => {
+    setChipsOpen((v) => {
+      try { window.localStorage.setItem(CHIPS_KEY, v ? "0" : "1"); } catch { /* sin almacenamiento */ }
+      return !v;
+    });
   };
   const [lines, setLines] = useState<ScanAssignLine[]>([]);
   const [tray, setTray] = useState<TrayEntry[]>([]);
@@ -225,6 +245,7 @@ export function DispatchDayBoard(props: Props) {
   const substageOptions = useMemo(() => queueSubstageOptions(queue), [queue]);
   const facets = useMemo(() => queueFacetCounts(queue, filters, day), [queue, filters, day]);
   const activeFilters = activeFilterCount(filters);
+  const groupFilters = filters.substages.length + filters.due.length;
   const filtersButton = useRef<HTMLButtonElement>(null);
   const visible = filtered.slice(0, limit);
   const allVisibleSelected = visible.length > 0 && visible.every((q) => selected.has(q.orderId));
@@ -477,13 +498,13 @@ export function DispatchDayBoard(props: Props) {
           {method === "lista" && (
           <div className="border-t border-slate-100">
           <div className="border-b border-slate-200 px-4 py-3">
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2">
               <input
                 value={filters.query}
                 onChange={(e) => patchFilters({ query: e.target.value })}
                 placeholder="Pedido, cliente, distrito o teléfono"
                 aria-label="Buscar en la cola"
-                className="min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-3 text-sm sm:w-56"
+                className="min-h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-3 text-sm"
               />
               <div className="relative">
                 <button
@@ -527,46 +548,55 @@ export function DispatchDayBoard(props: Props) {
                   </Sheet>
                 )}
               </div>
-              <span className="flex w-full items-center gap-2 text-xs text-slate-500 sm:w-auto">
-                {filtered.length.toLocaleString("es-PE")} en cola{filtered.length > visible.length ? ` · se muestran ${visible.length}` : ""}
-                {filtered.length > visible.length && (
-                  <button type="button" onClick={() => setLimit((n) => n + 100)} className="min-h-8 rounded-lg border border-slate-300 px-2 font-medium text-slate-700 hover:bg-slate-50">
-                    Mostrar 100 más
-                  </button>
-                )}
-              </span>
             </div>
-            {/* Subetapas del MOM y fecha pactada, como en el Master: chips con
-                cantidad, selección múltiple dentro del grupo y combinables con
-                el picker. La cola solo admite tres subetapas; el resto está en
-                el Master. */}
-            <div role="group" aria-label="Subetapas" className="-mx-1 mt-2 flex items-center gap-1.5 overflow-x-auto px-1 pb-1">
-              <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Subetapas</span>
-              <CountChip label="Todas" count={facets.substageTotal} active={!filters.substages.length} tone="dark" onClick={() => patchFilters({ substages: [] })} />
-              {substageOptions.map((opt, i) => {
-                const newStage = i === 0 || substageOptions[i - 1]!.stage !== opt.stage;
-                return (
-                  <span key={opt.substage} className="flex shrink-0 items-center gap-1.5">
-                    {newStage && opt.stage && <span className="ml-1 text-[11px] text-slate-400">{macroStageLabel(opt.stage)}:</span>}
+            {/* Una sola línea con el total y el desplegable. «Mostrar 100 más»
+                vive al pie de la lista, donde se acaban las filas. */}
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              <span className="tabular-nums">
+                <b className="text-slate-900">{filtered.length.toLocaleString("es-PE")}</b> en cola{filtered.length > visible.length ? ` · se muestran ${visible.length}` : ""}
+              </span>
+              <button
+                type="button"
+                onClick={toggleChips}
+                aria-expanded={chipsOpen}
+                aria-controls="dispatch-queue-chips"
+                className={cn("min-h-0 p-0 font-medium underline-offset-2 hover:underline", groupFilters ? "text-brand-700" : "text-slate-600")}
+              >
+                Subetapas y fecha pactada{groupFilters ? ` · ${groupFilters}` : ""} <span aria-hidden>{chipsOpen ? "▾" : "▸"}</span>
+              </button>
+            </div>
+            {/* Subetapas del MOM y fecha pactada, como en el Master, pero en un
+                solo lenguaje visual y con salto de línea en vez de scroll
+                horizontal: dos hileras cortadas por el borde y tres colores de
+                chip competían entre sí. La macroetapa va en el `title`; el total
+                de cada grupo es «N en cola» cuando nada está encendido, y un
+                chip encendido se apaga tocándolo o desde «Filtros activos». */}
+            {chipsOpen && (
+              <div id="dispatch-queue-chips" className="mt-2 grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-x-2 gap-y-1.5">
+                <span className="pt-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Subetapas</span>
+                <div role="group" aria-label="Subetapas" className="flex flex-wrap gap-1.5">
+                  {substageOptions.map((opt) => (
                     <CountChip
+                      key={opt.substage}
                       label={opt.substage === "sin_subetapa" ? "Sin subetapa" : macroSubstageLabel(opt.substage)}
                       count={facets.substage[opt.substage] ?? 0}
                       active={filters.substages.includes(opt.substage)}
                       title={opt.stage ? `${macroStageLabel(opt.stage)} · ${macroSubstageLabel(opt.substage)}` : undefined}
                       onClick={() => patchFilters({ substages: toggleInList(filters.substages, opt.substage) })}
                     />
-                  </span>
-                );
-              })}
-            </div>
-            <div role="group" aria-label="Fecha pactada" className="-mx-1 flex items-center gap-1.5 overflow-x-auto px-1 pb-1">
-              <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Fecha pactada</span>
-              <Hint label="Qué es la fecha pactada" text="Día previsto de salida: el de la solicitud ya tomada o, si el pedido sigue disponible, hoy o mañana según el corte de las 11:30. «Vencidos» son tomados cuya salida ya pasó." />
-              <CountChip label="Todos los plazos" count={facets.dueTotal} active={!filters.due.length} tone="indigo" onClick={() => patchFilters({ due: [] })} />
-              {SCHEDULED_BUCKETS.map((bucket) => (
-                <CountChip key={bucket} label={SCHEDULED_BUCKET_LABEL[bucket]} count={facets.due[bucket]} active={filters.due.includes(bucket)} tone="indigo" onClick={() => patchFilters({ due: toggleInList(filters.due, bucket) })} />
-              ))}
-            </div>
+                  ))}
+                </div>
+                <span className="flex items-center gap-1 pt-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
+                  Plazo
+                  <Hint label="Qué es la fecha pactada" text="Fecha pactada de salida: la de la solicitud ya tomada o, si el pedido sigue disponible, hoy o mañana según el corte de las 11:30. «Vencidos» son tomados cuya salida ya pasó." />
+                </span>
+                <div role="group" aria-label="Fecha pactada" className="flex flex-wrap gap-1.5">
+                  {SCHEDULED_BUCKETS.map((bucket) => (
+                    <CountChip key={bucket} label={SCHEDULED_BUCKET_LABEL[bucket]} count={facets.due[bucket]} active={filters.due.includes(bucket)} title="Fecha pactada de salida" onClick={() => patchFilters({ due: toggleInList(filters.due, bucket) })} />
+                  ))}
+                </div>
+              </div>
+            )}
             {activeFilters > 0 && (
               <ul className="mt-1 flex flex-wrap gap-1.5 text-xs" aria-label="Filtros activos">
                 {filters.store && <Chip onRemove={() => patchFilters({ store: "" })}>{filters.store}</Chip>}
