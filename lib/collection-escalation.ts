@@ -6,6 +6,14 @@
 // si en sus minutos no la atendió, sube a Yohalis; después a Frank. El último
 // escalón no escala más: no hay a quién avisar después.
 //
+// LA ESCALERA SUMA, NO TRASPASA. Escalar amplía quién la ve; no se la quita a
+// nadie. A Gerardo le queda delante hasta que se resuelva, y a los 30 minutos
+// le aparece ADEMÁS a Yohalis, y después a Frank: llegado ese punto la tienen
+// los tres a la vez. Quitársela al primero sería dar por hecho que ya no va a
+// atenderla —falso, suele estar a punto— y además le ocultaría el final de un
+// trabajo que empezó él. Sigue habiendo UN responsable de turno; lo que cambia
+// es que los anteriores no se quedan a ciegas.
+//
 // NO MIRA SI ESTÁ CONECTADO, y es deliberado. La oferta aguanta sus minutos
 // aunque tenga el navegador cerrado, porque es su trabajo y va a entrar. Si
 // saltara al desconectarse, en la práctica todo acabaría en el último escalón
@@ -31,7 +39,11 @@ export interface AlertRouting {
 
 export interface OfferDecision {
   offeredTo: string;
-  /** Quiénes quedan marcados como «dejaron pasar» después de este cambio. */
+  /**
+   * Quiénes ya la tienen delante además del de turno. Se llama `passed` porque
+   * nació como «dejaron pasar», pero desde que la escalera SUMA es la lista de
+   * quienes la recibieron antes — y la siguen viendo.
+   */
   passed: string[];
 }
 
@@ -72,6 +84,19 @@ export function nextOffer(
   const siguiente = ladder.slice(idx + 1).find((s) => !alert.passed.includes(s.userId));
   if (!siguiente) return null;
   return { offeredTo: siguiente.userId, passed: [...alert.passed, alert.offeredTo] };
+}
+
+/**
+ * ¿Esta alerta le sale a esta persona?
+ *
+ * A quien la tiene de turno y a TODOS los que ya la tuvieron antes. Es la regla
+ * de «la escalera suma»: escalar añade ojos, no traspasa el problema. Por eso
+ * se responde aquí y no con un `where offered_to = yo` suelto en una consulta —
+ * la definición de «me toca» tiene que estar en un sitio y poder probarse.
+ */
+export function alertVisibleTo(alert: AlertRouting, userId: string): boolean {
+  if (!userId) return false;
+  return alert.offeredTo === userId || alert.passed.includes(userId);
 }
 
 /** Cuánto lleva esperando, en minutos. Para pintarlo en la pantalla. */

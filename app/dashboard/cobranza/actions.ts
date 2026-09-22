@@ -16,7 +16,7 @@ import {
   sweepResolvedAlerts,
   sweepUnattributedAlerts,
 } from "@/lib/collection-alerts-access";
-import { waitingMinutes } from "@/lib/collection-escalation";
+import { alertVisibleTo, waitingMinutes } from "@/lib/collection-escalation";
 
 export interface CollectionAlertView {
   id: string;
@@ -31,11 +31,20 @@ export interface CollectionAlertView {
   waitingMinutes: number;
   /** Por cuántas manos pasó antes de llegar aquí. */
   escalations: number;
+  /** ¿Es MI turno, o me llegó porque escaló y sigo viéndola? */
+  mine: boolean;
+  /** Quién la tiene de turno ahora. Para saber a quién preguntar. */
+  ownerName: string | null;
 }
 
 /**
- * Las alertas que me tocan a MÍ ahora mismo, en las tiendas a las que tengo
- * acceso. Primero hace avanzar la escalera; después mira qué quedó en mi mano.
+ * Las alertas que me salen a MÍ, en las tiendas a las que tengo acceso.
+ * Primero hace avanzar la escalera; después mira cuáles me alcanzan.
+ *
+ * ME ALCANZAN LAS MÍAS Y LAS QUE TUVE ANTES. La escalera suma: si a Gerardo se
+ * le escaló a Yohalis, Gerardo la sigue viendo —con el aviso de a quién le toca
+ * ahora— hasta que se resuelva. Quitársela daría por hecho que ya no va a
+ * atenderla, y le ocultaría el final de un trabajo que empezó él.
  */
 export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
   const sb = await createServerSupabase();
@@ -62,17 +71,20 @@ export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
     await reconcileCollectionOffers(admin, s.id, nowMs);
   }
 
+  // Se traen las abiertas de sus tiendas y el filtro lo hace `alertVisibleTo`,
+  // que es donde vive la regla. Un `where offered_to = yo` en la consulta dejaba
+  // esa definición escrita en SQL, fuera del alcance de cualquier prueba, y es
+  // la regla que decide si alguien se entera o no de un cobro pendiente.
   const { data } = await admin
     .from("collection_alerts")
-    .select("id,store_id,kind,order_id,phone,amount,detail,created_at,passed")
+    .select("id,store_id,kind,order_id,phone,amount,detail,created_at,passed,offered_to")
     .in(
       "store_id",
       stores.map((s) => s.id),
     )
     .eq("status", "abierta")
-    .eq("offered_to", user.id)
     .order("created_at", { ascending: true })
-    .limit(50);
+    .limit(200);
   const rows = ((data ?? []) as {
     id: string;
     store_id: string;
@@ -83,7 +95,13 @@ export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
     detail: string | null;
     created_at: string;
     passed: string[] | null;
-  }[]);
+    offered_to: string | null;
+  }[]).filter((r) =>
+    alertVisibleTo(
+      { offeredTo: r.offered_to, offeredAt: null, passed: r.passed ?? [], claimedBy: null },
+      user.id,
+    ),
+  );
   if (!rows.length) return [];
 
   const orderIds = [...new Set(rows.map((r) => r.order_id).filter(Boolean))] as string[];
@@ -94,8 +112,15 @@ export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
     ((pedidos ?? []) as { id: string; name: string | null }[]).map((o) => [o.id, o.name]),
   );
   const tienda = new Map(stores.map((s) => [s.id, s.name]));
+  // Quién la tiene de turno, por su nombre: a Gerardo le sirve saber que ahora
+  // la mira Yohalis, y a Frank le sirve saber a quién preguntar antes de entrar.
+  const duenos = [...new Set(rows.map((r) => r.offered_to).filter(Boolean))] as string[];
+  const nombreDe = duenos.length ? await resolveAgentNames(duenos, admin) : {};
 
-  return rows.map((r) => ({
+  // Las MÍAS primero y, dentro de cada grupo, la que más lleva esperando. Con
+  // tres personas viendo la misma cola, lo que no puede pasar es que el trabajo
+  // de uno quede debajo del que solo está mirando.
+  const vista = rows.map((r) => ({
     id: r.id,
     storeId: r.store_id,
     storeName: tienda.get(r.store_id) ?? "Tienda",
@@ -107,7 +132,12 @@ export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
     detail: r.detail,
     waitingMinutes: waitingMinutes(r.created_at, nowMs),
     escalations: (r.passed ?? []).length,
+    mine: r.offered_to === user.id,
+    ownerName: r.offered_to ? (nombreDe[r.offered_to] ?? null) : null,
   }));
+  return vista.sort((a, b) =>
+    a.mine === b.mine ? b.waitingMinutes - a.waitingMinutes : a.mine ? -1 : 1,
+  );
 }
 
 async function authorize(alertId: string): Promise<{ userId: string; storeId: string } | null> {

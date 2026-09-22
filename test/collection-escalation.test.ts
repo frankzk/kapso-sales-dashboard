@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  alertVisibleTo,
   nextOffer,
   waitingMinutes,
   type AlertRouting,
@@ -86,5 +87,45 @@ describe("waitingMinutes", () => {
   it("cuenta lo que lleva esperando, para pintarlo", () => {
     expect(waitingMinutes("2026-09-20T15:00:00Z", min(47))).toBe(47);
     expect(waitingMinutes("no es fecha", min(47))).toBe(0);
+  });
+});
+
+describe("quién ve la alerta: la escalera SUMA", () => {
+  // Lo que se pidió el 22-09-2026: que a Gerardo no se le quite de delante
+  // cuando escala. Antes cambiaba de dueño y desaparecía de su pantalla, así
+  // que quien la había empezado dejaba de ver cómo acababa.
+  const enYohalis: AlertRouting = {
+    offeredTo: YOHALIS,
+    offeredAt: "2026-09-22T15:00:00Z",
+    passed: [GERARDO],
+    claimedBy: null,
+  };
+
+  it("la ve quien la tiene de turno", () => {
+    expect(alertVisibleTo(enYohalis, YOHALIS)).toBe(true);
+  });
+
+  it("y la sigue viendo quien la tuvo antes", () => {
+    expect(alertVisibleTo(enYohalis, GERARDO)).toBe(true);
+  });
+
+  it("pero NO quien todavía no la ha recibido", () => {
+    // Frank es el último escalón: hasta que no le llega, no le aparece. Si no,
+    // los tres verían todo desde el minuto cero y la escalera no serviría.
+    expect(alertVisibleTo(enYohalis, FRANK)).toBe(false);
+  });
+
+  it("al final del recorrido la tienen los tres a la vez", () => {
+    const enFrank: AlertRouting = { ...enYohalis, offeredTo: FRANK, passed: [GERARDO, YOHALIS] };
+    expect([GERARDO, YOHALIS, FRANK].map((u) => alertVisibleTo(enFrank, u))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  it("una alerta sin dueño no le sale a nadie por descuido", () => {
+    expect(alertVisibleTo({ ...nueva }, GERARDO)).toBe(false);
+    expect(alertVisibleTo(enYohalis, "")).toBe(false);
   });
 });
