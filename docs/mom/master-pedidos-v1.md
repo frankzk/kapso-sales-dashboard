@@ -2876,7 +2876,7 @@ hasta que el piloto de abajo se encienda por tienda.
 #### Qué es
 
 Un **agente de voz** —un modelo conversacional que habla por teléfono, hoy la
-Voice Agent API de Grok sobre telefonía Twilio, ambos reemplazables— llama a
+Voice Agent API de Grok sobre telefonía Zadarma, ambos reemplazables— llama a
 los pedidos en **gestión Reproprovincia activa** y les propone el reenvío desde
 la bodega Swayp de su ciudad. Es **un operador más**: lee la misma ficha, escribe
 los mismos hechos por la misma puerta que una asesora y no tiene ningún estado,
@@ -3034,6 +3034,13 @@ Reglas de esa tabla:
   tiempo del drawer lo muestra con actor **«Agente de voz»** y enlace a la
   transcripción. Un intento que no se puede leer después no es historial
   (§6.1).
+- **La llamada se ata al pedido ANTES de marcar, no durante.** Kapta escribe
+  la fila de `voice_calls` con pedido y teléfono, y solo entonces pide a la
+  telefonía que llame. Lo que el agente dice y registra se atribuye a esa fila,
+  nunca a un pedido buscado por el número que contesta: dos pedidos abiertos
+  del mismo teléfono (§8.1, duplicados) se resolverían al azar. Si al conectar
+  no se puede establecer a qué fila pertenece la llamada, el agente se despide
+  sin gestionar y la fila queda `sin_resultado`.
 
 **Descartar.** «Cliente no quiere» es la salida terminal de la recuperación
 (§11.5 le pide ceremonia). No está en la lista de lo que nunca se automatiza
@@ -3074,7 +3081,7 @@ línea base de cero llamadas:
 | Descartes propuestos que una persona rechazó | Si el agente entiende un «no» |
 | Motivos capturados sobre devoluciones sin motivo | El dato que §11.7 no tenía |
 | `recuperacion_vencida` por semana, antes y después | Lo que se pierde por no llamar |
-| Costo (Grok + Twilio) por pedido entregado | Contra el margen del pedido |
+| Costo (Grok + Zadarma, las dos patas) por pedido entregado | Contra el margen del pedido |
 
 Con los aceptados y las salidas se calcula lo mismo que la tabla de cierre de
 §11 mide para las llamadas humanas, con el mismo corte de 60 días, para poder

@@ -6,7 +6,7 @@
 
 ## Objetivo
 
-Que un agente de voz (Grok Voice Agent API sobre Twilio, ambos reemplazables)
+Que un agente de voz (Grok Voice Agent API sobre Zadarma, ambos reemplazables)
 llame a los pedidos en **Reproprovincia activa** que cumplen §11.8, les proponga
 el reenvío desde la bodega Swayp de su ciudad, y deje sobre el pedido **los
 mismos hechos que dejaría una asesora**, por la misma función y con la misma
@@ -29,44 +29,92 @@ idempotencia. Cero estados nuevos; una bitácora de llamadas nueva.
 
 ## Arquitectura
 
+**xAI no origina llamadas.** Su API SIP documenta recibir llamadas, transferir
+una activa y colgar; no hay «crear llamada saliente». Por eso la que marca es
+la telefonía: Zadarma tiene un número peruano (`+51 1 705 8243`) desviado al
+SIP de xAI, donde contesta el agente guardado en la consola (hoy «Akemi /
+Kenku Order Confirmation»; para Reproprovincia va un agente propio con el
+guion de §11.8), y un API de callback que llama primero al cliente y, cuando
+contesta, conecta la otra pata:
+
 ```
-Vercel (Next.js)                          Servicio «voice-bridge» (proceso vivo)
-────────────────────────────              ─────────────────────────────────────
-/api/cron/voice-recovery  ──POST /calls──▶  crea llamada Twilio saliente
-  elige elegibles (§11.8)                   mantiene la sesión WS con Grok
-  inserta voice_calls(queued)               (wss://api.x.ai/v1/realtime)
-                                            ejecuta las tools contra Kapta
-/api/voice/tools/[callId]  ◀──POST──────    registrar_resultado / derivar / no_llamar
-  valida token por llamada
+Kapta (Vercel)                     Zadarma                      xAI
+──────────────────────             ─────────────────            ───────────────
+/api/cron/voice-recovery
+  elige elegibles (§11.8)
+  inserta voice_calls(queued)
+  GET /v1/request/callback/  ───▶  llama al cliente (to)
+    from = +5117058243              cliente contesta
+    to   = +51 9…                   llama a +5117058243  ───▶  desvío SIP
+    predicted = 1                                              contesta el agente
+
+/api/voice/tools/…         ◀──────────────────────────────────  tools del agente
+  ata la llamada a su fila                                      (webhook HTTP)
   escribe por register_confirmation_attempt_v1
 
-/api/webhooks/voice        ◀──POST──────    fin de llamada: transcripción,
-  finaliza voice_calls                      grabación, duración, costo
-  idempotente por call_id
+/api/webhooks/voice        ◀──────────────────────────────────  fin de llamada,
+  finaliza voice_calls     ◀──  estadísticas / grabación        transcripción
 ```
 
-**Por qué hay un servicio aparte.** Una llamada de voz es una conexión
-WebSocket abierta durante minutos, tanto en la ruta SIP (`wss://api.x.ai/v1/realtime?call_id=…`
-se abre y se sostiene por llamada) como en la de Media Streams. Las funciones de
-Vercel duran como máximo 60 s en este proyecto y no sirven WebSockets
-entrantes. El bridge es pequeño (Node, un contenedor en Fly.io o Railway, misma
-región `gru1` que Vercel para latencia) y **no tiene lógica de negocio**: recibe
-de Kapta qué llamar y con qué prompt, y devuelve a Kapta lo que pasó. Toda
-decisión sobre el pedido vive en Kapta.
+`predicted=1` importa: sin él Zadarma llamaría primero al agente, que
+contestaría al instante y empezaría a saludar a un teléfono que todavía suena.
+Con él, el cliente contesta y **oye silencio o tono los segundos que tarde la
+segunda pata en conectar**; ese retraso se mide en la Fase 1 y, si pasa de dos
+o tres segundos, el saludo del agente lo absorbe («¿Aló? Buenas tardes, le
+habla…»).
 
-### Dos formas de conectar Twilio con Grok
+### El problema que esta arquitectura introduce: atar la llamada al pedido
 
-| | A · SIP trunk (`sip.voice.x.ai`) | B · Media Streams + bridge de audio |
-| --- | --- | --- |
-| Código de audio | Ninguno: Twilio entrega el audio a xAI por SIP | El bridge convierte μ-law 8 kHz ↔ PCM y reenvía frames |
-| Qué sostiene el bridge | Solo la sesión de control (`session.update`, tools) | Audio y control |
-| Riesgo | Hay que confirmar en docs.x.ai el flujo **saliente** (cómo se obtiene `call_id` al originar desde Twilio) | Más código, pero el flujo saliente es el conocido de Media Streams |
+Con un bridge propio, Kapta abría la sesión y le decía al modelo, por
+`session.update`, de qué pedido iba la llamada. Con el agente guardado en la
+consola de xAI, **cada llamada entra igual**: el agente no sabe a quién llamó
+Kapta. Hay que averiguarlo desde dentro de la llamada, y el MOM (§11.8, «La
+llamada se ata al pedido ANTES de marcar») exige que la atadura sea a la fila
+de `voice_calls` que Kapta escribió antes de pedir el callback, no a un pedido
+buscado por teléfono.
 
-Se empieza por **A** si la documentación confirma el saliente; si no, **B**. La
-API es compatible con el Realtime de OpenAI, así que un bridge B escrito para
-ese contrato migra cambiando base URL, clave y modelo. `docs.x.ai` no era
-alcanzable desde el entorno donde se escribió este plan: la verificación es la
-primera tarea de la Fase 1.
+Tres formas, de mejor a peor, y **cuál sirve lo decide una prueba, no este
+documento**:
+
+1. **El número del cliente llega a xAI como caller ID de la segunda pata.** Si
+   el desvío de Zadarma conserva el número de origen, la primera tool del
+   agente (`identificar_llamada`) manda ese número y Kapta devuelve la fila
+   `dialing` de ese teléfono y tienda, que es única porque el cron no encola
+   dos llamadas al mismo teléfono a la vez. La ficha del pedido vuelve en la
+   respuesta y el agente sigue el guion con ella.
+2. **Llega el número de Zadarma, no el del cliente.** Entonces todas las
+   llamadas se ven iguales y solo queda atar por tiempo: Kapta mantiene **una
+   llamada en curso por número de agente** (`dialing` → la única candidata), y
+   la tool devuelve esa. Sirve para el piloto (30 llamadas al día caben en
+   serie) y no escala; escalar sería un segundo número desviado o la opción 3.
+3. **Bridge propio con sesión por llamada.** Kapta pide a Zadarma que conecte
+   la segunda pata a un SIP nuestro en vez de al de xAI, y un servicio vivo
+   abre `wss://api.x.ai/v1/realtime?call_id=…` y manda `session.update` con la
+   ficha. Es el diseño anterior de este plan: más código y un proceso fuera de
+   Vercel, pero la atadura es exacta. Se cae aquí solo si 1 y 2 fallan o si
+   las tools del agente guardado no pueden llamar a un webhook nuestro.
+
+En las tres, si la tool no encuentra fila, el agente dice que hubo un error,
+se despide y no gestiona: la fila queda `sin_resultado` y el pedido sigue en
+la cola (§11.8).
+
+### Cómo vuelven los resultados
+
+También depende de lo que ofrezca el agente guardado:
+
+- **Tools por webhook** (lo que este plan asume): el agente llama
+  `registrar_resultado` y Kapta escribe en el acto. Es lo que hay que
+  confirmar en la consola de xAI antes de la Fase 2.
+- **Solo transcripción al final**: si el agente guardado no puede invocar
+  webhooks, Kapta recibe o consulta la transcripción al cerrar la llamada y un
+  segundo paso la clasifica en uno de los resultados de §11.8 antes de
+  escribir. Es peor —una capa más que puede equivocarse— y obligaría a que
+  «acepta» pase por revisión humana durante todo el piloto. Se documenta para
+  no descubrirlo tarde.
+
+Los datos de la llamada (duración, grabación, costo) los da Zadarma por su
+API de estadísticas y su notificación de fin de llamada; la transcripción, xAI.
+Las dos se cruzan por la fila de `voice_calls`.
 
 ## Modelo de datos (migración `0165_voice_calls.sql`)
 
@@ -82,7 +130,8 @@ alter table stores
   add column if not exists voice_recovery_hour_end     integer not null default 20,
   add column if not exists voice_recovery_greeting     text,          -- aviso legal aprobado; sin él no se llama
   add column if not exists voice_recovery_voice_id     text,          -- voz del proveedor
-  add column if not exists voice_recovery_caller_id    text;          -- número Twilio E.164
+  add column if not exists voice_recovery_caller_id    text,          -- número que ve el cliente (E.164)
+  add column if not exists voice_recovery_agent_number text;          -- número desviado a xAI (+5117058243)
 
 create table voice_calls (
   id               uuid primary key default gen_random_uuid(),
@@ -91,7 +140,7 @@ create table voice_calls (
   shipment_id      uuid references shipments(id) on delete set null,   -- la guía fallida que abrió la recuperación
   provider         text not null default 'grok',
   provider_call_id text,                                              -- call_id de xAI
-  twilio_call_sid  text,
+  telephony_call_id text,                                             -- id del callback / pbx_call_id de Zadarma
   phone            text not null,
   status           text not null check (status in ('queued','dialing','in_progress','completed','failed','no_answer','cancelled')),
   outcome          text check (outcome in ('sin_respuesta','se_deja_mensaje','volver_a_contactar','acepta','no_quiere','no_llamar','deriva','sin_resultado')),
@@ -137,42 +186,39 @@ del cron de backup; el enlace queda nulo y la transcripción sigue.
 
 `/api/cron/voice-recovery`, cada 20 minutos dentro del horario
 (`vercel.json`): por tienda con `voice_recovery_auto`, calcula la cola, toma
-hasta lo que quede del tope, inserta `voice_calls(queued)` con token por llamada
-y llama al bridge. En modo sombra (`VOICE_RECOVERY_DRY_RUN=1`) inserta con
-`status = 'cancelled'` y `error = 'dry_run'`: la cola se ve en el drawer sin
-que suene ningún teléfono.
+hasta lo que quede del tope, inserta `voice_calls(queued)` y pide el callback a
+Zadarma (`GET /v1/request/callback/` con `from` = número del agente, `to` =
+cliente, `predicted=1`, firmado con la clave de la tienda). Mientras la
+atadura sea por tiempo (opción 2 de la arquitectura), el cron **no encola una
+segunda llamada si hay una `dialing` o `in_progress` en esa tienda**. En modo
+sombra (`VOICE_RECOVERY_DRY_RUN=1`) inserta con `status = 'cancelled'` y
+`error = 'dry_run'`: la cola se ve en el drawer sin que suene ningún teléfono.
 
 El botón **«Llamar con el agente»** del drawer hace lo mismo para un pedido,
 con `triggered_by = usuario`, y solo con `voice_recovery_enabled`. Pasa por la
 misma elegibilidad: si el pedido no entra, el botón dice por qué.
 
-## Contrato con el bridge
+## Contrato con el agente guardado
 
-`POST {BRIDGE_URL}/calls` (cabecera `Authorization: Bearer VOICE_BRIDGE_SECRET`):
-
-```json
-{
-  "voice_call_id": "…",
-  "to": "+51…",
-  "from": "+51…",
-  "tool_token": "…",
-  "tools_url": "https://kapta…/api/voice/tools/{voice_call_id}",
-  "events_url": "https://kapta…/api/webhooks/voice",
-  "max_duration_s": 240,
-  "voice_id": "…",
-  "instructions": "…prompt compilado…",
-  "tools": [ …esquema de abajo… ]
-}
-```
-
-El bridge no guarda nada más allá de la llamada en curso. Si Kapta no responde
-a una tool, el agente lo dice («ahora mismo no puedo registrarlo») y la llamada
-termina como `sin_resultado`.
+El agente vive en la consola de xAI con el guion de abajo y estas tools
+apuntando a Kapta. Kapta no sostiene ninguna sesión: recibe llamadas HTTP del
+agente durante la conversación y una notificación al final. Si una tool no
+responde, el agente lo dice («ahora mismo no puedo registrarlo»), se despide y
+la llamada termina como `sin_resultado`.
 
 ### Tools que ve el modelo
 
+`identificar_llamada` va primero y es la que ata la llamada a su fila (ver
+arquitectura). Devuelve la ficha compilada —nombre, pedido de Shopify,
+producto, monto, dirección, ciudad— o `{"encontrada": false}`.
+
 ```json
 [
+  {
+    "name": "identificar_llamada",
+    "description": "Llamar al inicio, antes de hablar del pedido. Devuelve de qué pedido es esta llamada.",
+    "parameters": { "type": "object", "properties": { "numero_cliente": { "type": "string", "description": "Caller ID si lo tienes; vacío si no" } } }
+  },
   {
     "name": "registrar_resultado",
     "description": "Registra cómo terminó la llamada. Llamar UNA vez, al final.",
@@ -203,8 +249,10 @@ termina como `sin_resultado`.
 ]
 ```
 
-`/api/voice/tools/[voiceCallId]` valida el token (hash en `voice_calls`),
-que la llamada esté `in_progress`, y traduce a hechos según la tabla de §11.8:
+`/api/voice/tools/[tool]` valida la firma del agente (secreto compartido en
+cabecera, comparación en tiempo constante), resuelve la fila con
+`identificar_llamada` y la deja `in_progress`; las demás tools exigen una fila
+`in_progress` y traducen a hechos según la tabla de §11.8:
 
 | `resultado` | Escribe |
 | --- | --- |
@@ -220,10 +268,14 @@ segundo intento y no escribe dos veces.
 
 ### Fin de llamada
 
-`POST /api/webhooks/voice` (firma HMAC con `VOICE_BRIDGE_SECRET`): cierra la
-fila con transcripción, grabación, duración, costo y `status`. Si terminó sin
-que el modelo llamara `registrar_resultado`, `outcome = 'sin_resultado'` y **no
-se toca el pedido**. Idempotente por `provider_call_id`.
+`POST /api/webhooks/voice` recibe dos avisos y los cruza por la fila: el de
+xAI con la transcripción (si el agente guardado lo ofrece; si no, se consulta
+por API) y el de Zadarma (`NOTIFY_END`) con duración, grabación y costo. Si
+terminó sin que el modelo llamara `registrar_resultado`, `outcome =
+'sin_resultado'` y **no se toca el pedido**. Un cliente que no contestó llega
+solo por Zadarma (la segunda pata nunca se marcó): se registra
+`sin_respuesta` desde ahí, sin pasar por el agente. Idempotente por
+`telephony_call_id` y `provider_call_id`.
 
 ## El prompt (esqueleto)
 
@@ -259,21 +311,21 @@ información; menciones códigos de guía; llames "pedido devuelto" a nada — d
 
 ## Guardarraíles técnicos
 
-- **Secretos** en `lib/env.ts`: `XAI_API_KEY`, `TWILIO_ACCOUNT_SID`,
-  `TWILIO_AUTH_TOKEN`, `VOICE_BRIDGE_URL`, `VOICE_BRIDGE_SECRET`,
-  `VOICE_RECOVERY_DRY_RUN`. La clave de xAI vive **solo en el bridge**.
-- **Un token por llamada** para las tools, con hash en la fila y caducidad al
-  cerrar la llamada. El bridge nunca tiene credenciales de Kapta de largo
-  plazo.
+- **Secretos** en `lib/env.ts`: `ZADARMA_KEY`, `ZADARMA_SECRET`,
+  `VOICE_TOOLS_SECRET` (el que el agente manda en cada tool), `XAI_API_KEY`
+  (solo para leer transcripciones), `VOICE_RECOVERY_DRY_RUN`.
+- **Las tools solo escriben sobre una fila `in_progress`** y una fila solo pasa
+  a `in_progress` por `identificar_llamada`. Una llamada que xAI reciba fuera
+  de Kapta (alguien marca al número a mano) no encuentra fila y no escribe.
 - **Candado por pedido** al escribir: la RPC ya toma `pg_advisory_xact_lock`
   por `order_id`; el cron además no encola un pedido con una `voice_calls`
   abierta (`queued`, `dialing`, `in_progress`).
-- **Llamadas colgadas**: un barrido marca `failed` toda fila `in_progress` con
-  más de 10 minutos, sin tocar el pedido.
-- **Sin PII en logs**: los logs del bridge llevan `voice_call_id`, nunca
-  teléfono ni transcripción.
-- **Tope duro en el bridge**: `max_duration_s` corta la llamada aunque el modelo
-  no se despida.
+- **Llamadas colgadas**: un barrido marca `failed` toda fila `dialing` o
+  `in_progress` con más de 10 minutos, sin tocar el pedido.
+- **Sin PII en logs**: los logs llevan `voice_call_id`, nunca teléfono ni
+  transcripción.
+- **Tope duro de duración**: se configura en el agente de xAI y, por si acaso,
+  en el callback de Zadarma; el guion se despide a los tres minutos.
 
 ## Interfaz
 
@@ -294,9 +346,9 @@ información; menciones códigos de guía; llames "pedido devuelto" a nada — d
 
 | Fase | Entrega | Se puede desplegar sin llamar a nadie |
 | --- | --- | --- |
-| 1 · Verificación | Confirmar en docs.x.ai el flujo saliente SIP o elegir Media Streams; número Twilio peruano con bundle regulatorio; prueba de voz en español peruano con 10 llamadas internas; texto legal aprobado | sí (nada en el repo) |
+| 1 · Verificación | Las cinco pruebas de abajo, en orden; texto legal aprobado | sí (nada en el repo) |
 | 2 · Fundaciones | Migración 0165; `p_source` y `p_payload_extra` en la RPC; `lib/voice-recovery.ts` puro con pruebas; ajustes de tienda; cron en modo sombra; columna «Agente» leyendo `voice_calls` | sí, `DRY_RUN=1` |
-| 3 · Bridge | Servicio `voice-bridge` (repo aparte o `services/voice-bridge`), tools y webhook en Kapta, botón manual del drawer | sí, `enabled` apagado |
+| 3 · Integración | Cliente de Zadarma (callback firmado, notificación de fin, estadísticas), endpoints de tools y webhook, agente de Reproprovincia en la consola de xAI con el guion de abajo, botón manual del drawer | sí, `enabled` apagado |
 | 4 · Piloto semana 1 | Una tienda, `enabled` encendido, `auto` apagado; llamadas a mano desde el drawer; se escuchan todas | no |
 | 5 · Piloto semana 2 | `auto` encendido con tope 30; revisión diaria de descartes propuestos | no |
 | 6 · Decisión | Tabla de métricas de §11.8 contra la línea base; encender `can_discard` si procede; segunda tienda | — |
@@ -343,15 +395,50 @@ from voice_calls vc where vc.outcome = 'acepta';
 -- misma consulta con 24 h y con_salida = false y ended_at < now() - interval '24 hours'
 ```
 
-## Verificaciones pendientes antes de la Fase 2
+## Fase 1: las cinco pruebas, en orden
 
-1. Flujo saliente con SIP en docs.x.ai (cómo se obtiene `call_id` al originar
-   desde Twilio) y si xAI exige TLS/SRTP en el trunk.
-2. Caller ID peruano en Twilio: bundle regulatorio y tiempos.
-3. Precio por minuto de Grok voice y de Twilio Perú, para la última fila de la
-   tabla de métricas.
-4. Texto legal del saludo (grabación y tratamiento de datos) aprobado por el
-   owner.
-5. Si Grok no rinde en español de provincia: la misma arquitectura sirve para
-   ElevenLabs Agents u otro proveedor compatible con el contrato de tools; el
-   bridge cambia, Kapta no.
+Cada una responde una pregunta que decide el diseño. No se pasa a la siguiente
+sin anotar el resultado aquí.
+
+1. **¿Contesta el agente?** Llamar desde un celular al `01 705 8243`. Si
+   contesta el agente guardado con su saludo, Zadarma → desvío SIP → xAI está
+   bien. Anotar cuántos segundos tarda en contestar.
+2. **¿Funciona la llamada saliente?** Desde Postman o un script, pedir a
+   Zadarma `GET /v1/request/callback/` con `from` = `+5117058243`, `to` = tu
+   celular, `predicted=1`. Contestas tú y debe entrar el agente. Anotar el
+   **silencio entre que contestas y oyes al agente**: decide si el saludo
+   necesita absorber el retraso.
+3. **¿Qué número ve xAI?** En esa misma llamada, que el agente diga en voz
+   alta el caller ID que recibió, o leerlo de la transcripción/logs de xAI.
+   Si es tu celular, la atadura es la opción 1 de la arquitectura; si es el
+   número de Zadarma, la opción 2 (una llamada a la vez). Probar también qué
+   pasa si Zadarma tiene activado «mostrar número del que llama» en el desvío.
+4. **¿El agente guardado puede llamar a un webhook nuestro?** Configurar en la
+   consola de xAI una tool que apunte a un endpoint de prueba (un request bin
+   basta) y pedirle al agente que la use. Si no puede, el plan cae a «solo
+   transcripción al final» o al bridge propio; las dos están descritas arriba.
+5. **¿Cómo llega la transcripción y el fin de llamada?** Comprobar si xAI
+   manda webhook o hay que consultarla por API con el `call_id`, y activar en
+   Zadarma la notificación `NOTIFY_END` y la grabación hacia un endpoint de
+   prueba.
+
+Después de las cinco, además:
+
+- Precio por minuto de las dos patas de Zadarma (móvil peruano + fijo de Lima)
+  y de Grok voice, para la última fila de la tabla de métricas.
+- Texto legal del saludo (grabación y tratamiento de datos) aprobado por el
+  owner.
+- Si Grok no rinde en español de provincia: el mismo diseño sirve para
+  ElevenLabs Agents u otro proveedor que conteste por SIP y llame webhooks; el
+  desvío de Zadarma cambia de destino, Kapta no.
+
+## Lo que este diseño no resuelve todavía
+
+- **Buzón de voz.** Zadarma no distingue un buzón de una persona; el agente
+  hablará con la grabación del buzón hasta que note que nadie responde. El
+  guion le dice que corte a los diez segundos sin respuesta humana y registre
+  `sin_respuesta`; se mide en el piloto cuántas llamadas «contestadas» duran
+  menos de quince segundos, que es la firma de un buzón.
+- **Concurrencia.** Con la atadura por tiempo, una llamada a la vez por tienda.
+  Con 30 llamadas al día de tres minutos cabe de sobra; si se quiere más,
+  segundo número o bridge propio.
