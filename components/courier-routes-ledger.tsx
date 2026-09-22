@@ -5,7 +5,7 @@
 // Filtros de motorizado y fecha con el mismo picker que Despacho del día. La
 // fila abre la caja al lado (`?caja=` / `?ruta=`, courier-box-drawer.tsx).
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { MouseEvent } from "react";
 
@@ -72,15 +72,21 @@ export function CourierRoutesLedger({
   const specificDay = isDay(dayParam) ? dayParam : "";
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Motorizado y «hoy/todas» filtran en el navegador; una fecha concreta la
-  // trae el servidor (puede ser anterior a lo cargado), así que esa cambia
-  // la URL con el router. Los demás solo reescriben la barra.
-  function setParams(patch: { day?: string | null; rider?: string | null }, reload = false) {
+  // Motorizado, «hoy/todas» y cualquier día que ya esté cargado filtran en el
+  // navegador: solo se reescribe la barra. Al servidor se va únicamente por un
+  // día que no está en las filas (anterior a las últimas 150 rutas), y se
+  // avisa mientras tarda: la página entera se vuelve a calcular. Antes
+  // «Quitar filtros», la × del chip y elegir «Un día concreto» también iban al
+  // servidor, y el picker parecía no responder durante esos segundos.
+  const [navPending, startNav] = useTransition();
+  const loadedDays = useMemo(() => new Set(rows.map((r) => r.routeDate)), [rows]);
+  function setParams(patch: { day?: string | null; rider?: string | null }) {
     const params = new URLSearchParams(search);
     if (patch.day !== undefined) { if (patch.day) params.set(DAY_PARAM, patch.day); else params.delete(DAY_PARAM); }
     if (patch.rider !== undefined) { if (patch.rider) params.set(RIDER_PARAM, patch.rider); else params.delete(RIDER_PARAM); }
     const href = params.toString() ? `${pathname}?${params}` : pathname;
-    if (reload) router.replace(href);
+    const needsServer = isDay(patch.day) && !loadedDays.has(patch.day);
+    if (needsServer) startNav(() => router.replace(href));
     else window.history.replaceState(null, "", href);
   }
 
@@ -127,7 +133,7 @@ export function CourierRoutesLedger({
                   </select>
                 </label>
                 <label className="grid gap-1 text-xs font-medium text-slate-600">Fecha
-                  <select value={dayMode} onChange={(e) => { const v = e.target.value as DayMode; if (v === "hoy") setParams({ day: null }); else if (v === "todas") setParams({ day: "todas" }); else setParams({ day: today }, true); }} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
+                  <select value={dayMode} onChange={(e) => { const v = e.target.value as DayMode; if (v === "hoy") setParams({ day: null }); else if (v === "todas") setParams({ day: "todas" }); else setParams({ day: today }); }} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
                     <option value="hoy">Hoy</option>
                     <option value="fecha">Un día concreto</option>
                     <option value="todas">Todas</option>
@@ -135,10 +141,11 @@ export function CourierRoutesLedger({
                 </label>
                 {dayMode === "fecha" && (
                   <label className="grid gap-1 text-xs font-medium text-slate-600">Día
-                    <input type="date" value={specificDay} max={today} onChange={(e) => { if (isDay(e.target.value)) setParams({ day: e.target.value }, true); }} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900" />
+                    <input type="date" value={specificDay} max={today} onChange={(e) => { if (isDay(e.target.value)) setParams({ day: e.target.value }); }} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900" />
                   </label>
                 )}
-                {activeFilters > 0 && <button type="button" onClick={() => setParams({ day: null, rider: null }, dayMode === "fecha")} className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700">Quitar filtros</button>}
+                {navPending && <p className="text-xs text-slate-500">Cargando ese día…</p>}
+                {activeFilters > 0 && <button type="button" onClick={() => { setParams({ day: null, rider: null }); setFiltersOpen(false); }} className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700">Quitar filtros</button>}
               </div>
             </Sheet>
           )}
@@ -147,7 +154,7 @@ export function CourierRoutesLedger({
           <ul className="flex flex-wrap gap-1.5 text-xs" aria-label="Filtros activos">
             {riderParam && <Chip onRemove={() => setParams({ rider: null })}>{riderName(riderParam)}</Chip>}
             {dayMode === "todas" && <Chip onRemove={() => setParams({ day: null })}>todas las fechas</Chip>}
-            {dayMode === "fecha" && <Chip onRemove={() => setParams({ day: null }, true)}>{routeDayLong(specificDay)}</Chip>}
+            {dayMode === "fecha" && <Chip onRemove={() => setParams({ day: null })}>{routeDayLong(specificDay)}</Chip>}
           </ul>
         )}
         <span className="text-xs text-slate-500">{filtered.length} ruta{filtered.length === 1 ? "" : "s"}</span>
