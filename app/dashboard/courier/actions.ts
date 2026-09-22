@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
@@ -197,6 +198,39 @@ async function requireManager(
     return { error: "No perteneces a esta organización." };
   }
   return { userId: user.id, canManageDispatch: permissions.can("dispatch.manage") };
+}
+
+type ManagerAuth = { userId: string; canManageDispatch: boolean };
+
+/**
+ * Qué hace una acción al terminar. Desde la lista, recalcula el Master y
+ * refresca las páginas en el acto. Desde el escáner de asignación
+ * (`scanAssignToRider`) nada de eso bloquea la respuesta: refrescar la página
+ * de Grupo GF la reconstruía entera (≈1.700 pedidos) DENTRO del escaneo, dos
+ * veces, y cada QR tardaba 6-7 s. Ahí el recálculo va a `after()` y el
+ * navegador refresca una sola vez, tras el último escaneo.
+ */
+interface SideEffects {
+  recompute: (orderIds: string[]) => Promise<void>;
+  revalidate: boolean;
+}
+
+const IMMEDIATE_EFFECTS: SideEffects = {
+  recompute: async (orderIds) => { await recomputeOrderMasterSafe(createAdminSupabase(), orderIds); },
+  revalidate: true,
+};
+
+function deferredEffects(): SideEffects & { flush: () => void } {
+  const pending = new Set<string>();
+  return {
+    recompute: async (orderIds) => { for (const id of orderIds) pending.add(id); },
+    revalidate: false,
+    flush: () => {
+      if (!pending.size) return;
+      const ids = [...pending];
+      after(async () => { await recomputeOrderMasterSafe(createAdminSupabase(), ids); });
+    },
+  };
 }
 
 function amount(raw: unknown): number | null {
@@ -736,6 +770,16 @@ export async function takeGroupGfCourierOrders(
 ): Promise<TakeCourierOrdersResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return { ...auth, accepted: [], alreadyAccepted: [], failed: [] };
+  return takeOrdersCore(auth, orgId, orderIds, opts, IMMEDIATE_EFFECTS);
+}
+
+async function takeOrdersCore(
+  auth: ManagerAuth,
+  orgId: string,
+  orderIds: string[],
+  opts: { scheduledFor?: string | null; dispatchDay?: string | null },
+  fx: SideEffects,
+): Promise<TakeCourierOrdersResult> {
   const uniqueOrderIds = [...new Set(orderIds.filter(Boolean))];
   if (!uniqueOrderIds.length) {
     return { error: "Selecciona al menos un pedido.", accepted: [], alreadyAccepted: [], failed: [] };
@@ -1015,16 +1059,18 @@ export async function takeGroupGfCourierOrders(
           },
         }),
       ]);
-      await recomputeOrderMasterSafe(admin, [orderId]);
+      await fx.recompute([orderId]);
       accepted.push({ orderId, shipmentId: write.shipmentId, outputCode: outputCode ?? null });
     } catch (error) {
       failed.push({ orderId, error: error instanceof Error ? error.message : String(error) });
     }
   }
 
-  revalidatePath(COURIER_PATH);
-  revalidatePath("/dashboard/pedidos");
-  revalidatePath("/dashboard/pedidos/almacen");
+  if (fx.revalidate) {
+    revalidatePath(COURIER_PATH);
+    revalidatePath("/dashboard/pedidos");
+    revalidatePath("/dashboard/pedidos/almacen");
+  }
   const messages: string[] = [];
   if (accepted.length) {
     messages.push(
@@ -1087,6 +1133,17 @@ export async function assignGroupGfCourierRoute(
 ): Promise<AssignCourierRouteResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return { ...auth, assigned: 0, manifestIds: [], failed: [] };
+  return assignRouteCore(auth, orgId, riderId, requestIds, opts, IMMEDIATE_EFFECTS);
+}
+
+async function assignRouteCore(
+  auth: ManagerAuth,
+  orgId: string,
+  riderId: string,
+  requestIds: string[],
+  opts: { overrideCash?: boolean; day?: string | null },
+  fx: SideEffects,
+): Promise<AssignCourierRouteResult> {
   if (!auth.canManageDispatch) {
     return {
       error: "No tienes permiso para organizar rutas.",
@@ -1375,10 +1432,12 @@ export async function assignGroupGfCourierRoute(
     }
   }
 
-  if (changedOrderIds.size) await recomputeOrderMasterSafe(admin, [...changedOrderIds]);
-  revalidatePath(COURIER_PATH);
-  revalidatePath("/dashboard/pedidos/despacho");
-  revalidatePath("/dashboard/pedidos");
+  if (changedOrderIds.size) await fx.recompute([...changedOrderIds]);
+  if (fx.revalidate) {
+    revalidatePath(COURIER_PATH);
+    revalidatePath("/dashboard/pedidos/despacho");
+    revalidatePath("/dashboard/pedidos");
+  }
   return {
     notice: assigned
       ? `${assigned} pedido${assigned === 1 ? "" : "s"} asignado${assigned === 1 ? "" : "s"} a la ruta diaria de ${rider.full_name}. Almacén puede terminar el armado en paralelo.`
@@ -1924,6 +1983,8 @@ async function recalculateManifestState(admin: ReturnType<typeof createAdminSupa
 // ---------------------------------------------------------------------------
 
 export type ScanAssignStatus =
+  /** Solo en el navegador: el QR se leyó y espera respuesta del servidor. */
+  | "procesando"
   | "asignado"
   | "ya_en_caja"
   | "en_otra_caja"
@@ -2015,14 +2076,17 @@ export async function scanAssignToRider(
   }
 
   // 3) Tomar (idempotente) y asignar.
-  const taken = await takeGroupGfCourierOrders(orgId, [orderId], { dispatchDay: opts.scheduledFor ?? limaClock().day });
+  // Un solo control de permisos (arriba) y efectos diferidos: ver `SideEffects`.
+  const fx = deferredEffects();
+  try {
+  const taken = await takeOrdersCore(auth, orgId, [orderId], { dispatchDay: opts.scheduledFor ?? limaClock().day }, fx);
   if (taken.failed.length) return { ...line, status: "no_elegible", message: taken.failed[0]!.error };
   if (!taken.accepted.length && !taken.alreadyAccepted.length) return { ...line, status: "no_elegible", message: taken.error ?? "No se pudo tomar el pedido." };
   const { data: provider } = await admin.from("logistics_providers").select("id").eq("org_id", orgId).eq("code", "grupo-gf-courier").maybeSingle();
   const { data: requests } = await admin.from("logistics_requests").select("id").eq("order_id", orderId).eq("provider_id", provider?.id ?? "").in("status", ["accepted", "scheduled"]);
   const requestIds = ((requests ?? []) as { id: string }[]).map((r) => r.id);
   if (!requestIds.length) return { ...line, status: "no_elegible", message: "El pedido se tomó pero no se pudo asignar. Continúa desde la lista." };
-  const assigned = await assignGroupGfCourierRoute(orgId, rider.id, requestIds, { overrideCash: opts.overrideCash, day: opts.scheduledFor ?? null });
+  const assigned = await assignRouteCore(auth, orgId, rider.id, requestIds, { overrideCash: opts.overrideCash, day: opts.scheduledFor ?? null }, fx);
   if (!assigned.assigned) {
     const why = assigned.failed[0]?.error ?? assigned.error ?? "No se pudo asignar.";
     return { ...line, status: /efectivo|límite/i.test(why) ? "bloqueado_efectivo" : "no_elegible", message: why };
@@ -2036,6 +2100,9 @@ export async function scanAssignToRider(
     message: `Asignado a ${rider.full_name}. Falta verificarlo en oficina («Verificar caja»).`,
     cashWarning: assigned.cashWarning ?? null,
   };
+  } finally {
+    fx.flush();
+  }
 }
 
 /** Lo que el panel lateral de Rutas necesita para enseñar una caja (MOM §29.14). */

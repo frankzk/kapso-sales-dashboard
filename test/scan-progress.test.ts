@@ -38,7 +38,7 @@ describe("escaneo continuo con avance (MOM §30.9)", () => {
     expect(block).toContain("progress={confirmProgress}");
     expect(rider).toContain("scanSession.base + scanSession.scanned");
     const board = read("components/dispatch-day-board.tsx");
-    expect(board).toContain("en la caja de ${riderName}` } : undefined}");
+    expect(board).toContain("en la caja de ${riderName}${liveBox.pending ? ` · ${liveBox.pending} asignando…` : \"\"}` } : undefined}");
     const action = read("components/scan-action.tsx");
     expect(action).toContain("status={lastRead}");
   });

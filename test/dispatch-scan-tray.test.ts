@@ -1,6 +1,6 @@
 // Modo escaneo (MOM §29.13): bandeja temporal y contadores de la lista viva.
 import { describe, expect, it } from "vitest";
-import { addToTray, removeFromTray, summarizeScans } from "@/lib/dispatch-scan-tray";
+import { addToTray, optimisticBox, removeFromTray, summarizeScans } from "@/lib/dispatch-scan-tray";
 
 describe("bandeja «escanear primero»", () => {
   it("acumula códigos normalizados sin repetir y respeta el orden de escaneo", () => {
@@ -37,5 +37,37 @@ describe("asignar no coteja (22-09-2026)", () => {
     expect(body).not.toContain('"office"');
     expect(body).not.toContain("scanManifestItem(");
     expect(body).toContain("Falta verificarlo en oficina");
+  });
+});
+
+describe("asignar por QR sin esperar (22-09-2026)", () => {
+  it("el número de la caja sube en el mismo instante del QR y no cuenta dos veces", () => {
+    const box = { count: 4, cash: 400, orderIds: new Set(["o1", "o2", "o3", "o4"]) };
+    expect(optimisticBox([], box)).toEqual({ count: 4, cash: 400, pending: 0 });
+    // Uno en camino y uno ya asignado que la caja cargada todavía no trae.
+    expect(optimisticBox([{ status: "procesando", amount: null }, { status: "asignado", amount: 89, orderId: "o5" }], box)).toEqual({ count: 6, cash: 489, pending: 1 });
+    // Al refrescar la caja, o5 ya está dentro: deja de sumarse aparte.
+    expect(optimisticBox([{ status: "asignado", amount: 89, orderId: "o5" }], { ...box, count: 5, cash: 489, orderIds: new Set([...box.orderIds, "o5"]) })).toEqual({ count: 5, cash: 489, pending: 0 });
+    // Los que fallaron o ya estaban no suman; el mismo pedido dos veces, una.
+    expect(optimisticBox([{ status: "no_elegible", amount: 50 }, { status: "ya_en_caja", amount: 70, orderId: "o1" }, { status: "asignado", amount: 10, orderId: "o6" }, { status: "asignado", amount: 10, orderId: "o6" }], box)).toEqual({ count: 5, cash: 410, pending: 0 });
+  });
+
+  it("el escaneo no reconstruye la página: un control de permisos, recálculo diferido, refresco único", async () => {
+    const { readFileSync } = await import("node:fs");
+    const read = (f: string) => readFileSync(`${process.cwd()}/${f}`, "utf8");
+    const src = read("app/dashboard/courier/actions.ts");
+    const body = src.slice(src.indexOf("export async function scanAssignToRider("), src.indexOf("/** Lo que el panel lateral de Rutas"));
+    expect(body).toContain("const fx = deferredEffects();");
+    expect(body).toContain("takeOrdersCore(auth,");
+    expect(body).toContain("assignRouteCore(auth,");
+    expect(body).not.toContain("takeGroupGfCourierOrders(");
+    expect(src).toContain("after(async () => { await recomputeOrderMasterSafe(");
+    const scan = read("components/scan-action.tsx");
+    expect(scan).toContain("assignQueue.current.push(clean);");
+    expect(scan).toContain("onPending?.(clean);");
+    const board = read("components/dispatch-day-board.tsx");
+    expect(board).toContain("onPending={pendingLine}");
+    expect(board).toContain("scheduleRefresh()");
+    expect(board).not.toMatch(/line\.status === "ya_en_caja"\) router\.refresh\(\)/);
   });
 });

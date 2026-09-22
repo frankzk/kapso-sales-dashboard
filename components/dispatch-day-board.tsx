@@ -58,7 +58,7 @@ import {
   type RiderBox,
 } from "@/lib/dispatch-day";
 import { macroStageLabel, macroSubstageLabel, ORDER_MACRO_STAGES } from "@/lib/order-macro-stage";
-import { addToTray, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
+import { addToTray, optimisticBox, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import type { RiderPickupMode } from "@/lib/grupo-gf-courier";
 import {
@@ -150,9 +150,31 @@ export function DispatchDayBoard(props: Props) {
   const [tray, setTray] = useState<TrayEntry[]>([]);
   const [draining, setDraining] = useState(false);
 
-  function pushLine(line: ScanAssignLine) {
+  // Un solo refresco de la página, 2 s después del último resultado: refrescar
+  // tras cada QR reconstruía la pantalla entera por escaneo.
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function scheduleRefresh() {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => { refreshTimer.current = null; router.refresh(); }, 2000);
+  }
+  useEffect(() => () => { if (refreshTimer.current) clearTimeout(refreshTimer.current); }, []);
+
+  /** El QR se leyó: su línea aparece al instante, «asignando…». */
+  function pendingLine(code: string) {
+    const line: ScanAssignLine = { code, status: "procesando", orderId: null, orderName: null, shipmentId: null, manifestId: null, riderName: null, amount: null, message: "Asignando…" };
     setLines((cur) => [line, ...cur].slice(0, 200));
-    if (line.status === "asignado" || line.status === "ya_en_caja") router.refresh();
+  }
+
+  /** Llega el resultado: reemplaza su línea «asignando…» (o entra arriba). */
+  function pushLine(line: ScanAssignLine) {
+    setLines((cur) => {
+      const i = cur.findIndex((l) => l.status === "procesando" && l.code.toLowerCase() === line.code.toLowerCase());
+      if (i < 0) return [line, ...cur].slice(0, 200);
+      const next = [...cur];
+      next[i] = line;
+      return next;
+    });
+    if (line.status === "asignado" || line.status === "ya_en_caja") scheduleRefresh();
   }
 
   /** «Escanear primero»: al elegir motorizado, la bandeja se vacía en la caja de una vez. */
@@ -275,6 +297,16 @@ export function DispatchDayBoard(props: Props) {
   const boxes = useMemo(() => dayBoxes(props.manifests as unknown as DayManifest[], scanDay), [props.manifests, scanDay]);
   const riderName = riders.find((r) => r.id === riderId)?.fullName ?? "";
   const riderBoxCount = (id: string) => boxes.find((b) => b.riderId === id)?.assigned ?? 0;
+  // Lo que la caja del motorizado elegido tiene según la última carga, más lo
+  // leído que todavía no aparece: el número sube en el mismo instante del QR.
+  const liveBox = useMemo(() => {
+    const box = boxes.find((b) => b.riderId === riderId);
+    const orderIds = new Set<string>();
+    for (const load of box?.loads ?? []) for (const item of load.items) if (!item.removed_at && item.shipment?.order_id) orderIds.add(item.shipment.order_id);
+    let cash = 0;
+    for (const o of props.accepted) if (o.route && o.route.routeDate === scanDay && o.route.riderId === riderId) cash += o.orderTotal;
+    return optimisticBox(lines, { count: box?.assigned ?? 0, cash, orderIds });
+  }, [boxes, riderId, lines, props.accepted, scanDay]);
   /** Efectivo previsto por motorizado hoy: suma de los pedidos tomados con ruta de ese día. */
   const boxCash = useMemo(() => {
     const out = new Map<string, number>();
@@ -455,10 +487,11 @@ export function DispatchDayBoard(props: Props) {
                     context="supervisor_asignacion"
                     compact
                     continuous
-                    progress={riderId ? { done: riderBoxCount(riderId), label: `${riderBoxCount(riderId)} en la caja de ${riderName}` } : undefined}
-                    disabled={pending || draining}
+                    progress={riderId ? { done: liveBox.count, label: `${liveBox.count} en la caja de ${riderName}${liveBox.pending ? ` · ${liveBox.pending} asignando…` : ""}` } : undefined}
+                    disabled={draining}
                     assign={{ orgId, riderId, scheduledFor: scanDay, overrideCash }}
                     onQueue={(code) => setTray((cur) => addToTray(cur, code))}
+                    onPending={pendingLine}
                     onResult={(r) => { if (r.line) pushLine(r.line); }}
                   />
                 ) : (
@@ -516,14 +549,14 @@ export function DispatchDayBoard(props: Props) {
             {/* El total de la caja, del servidor: sobrevive a recargar la página
                 (la lista de escaneos de arriba es solo de esta sesión). Más grande
                 de tamaño para leerlo con la pistola en la mano. */}
-            {method === "qr" && riderId && (riderBoxCount(riderId) > 0 || lines.length > 0) && (() => {
-              const count = riderBoxCount(riderId);
-              const cash = boxCash.get(riderId) ?? 0;
+            {method === "qr" && riderId && (liveBox.count > 0 || lines.length > 0) && (() => {
+              const { count, cash, pending: inFlight } = liveBox;
               return (
                 <div className={cn("mt-2 flex items-center gap-2", cash >= props.cashLimit ? "text-red-700" : cash >= props.cashWarning ? "text-amber-700" : "text-slate-800")}>
                   <span className="min-w-0 truncate text-[17px] font-medium leading-tight" title={`${count} en la caja de ${riderName} · efectivo previsto ${money(cash)}${cash >= props.cashLimit ? " · supera el límite" : cash >= props.cashWarning ? " · cerca del límite" : ""}${overrideCash ? " · límite autorizado" : ""}`}>
                     <b className="tabular-nums">{count}</b> en la caja de {riderName} · <b className="tabular-nums">{moneyShort(cash)}</b>
                   </span>
+                  {inFlight > 0 && <span className="shrink-0 text-xs text-slate-500">{inFlight} asignando…</span>}
                   {lines.length > 0 && <button type="button" onClick={() => setLines([])} className="ml-auto shrink-0 text-xs text-slate-500 underline">Limpiar lista</button>}
                 </div>
               );
@@ -1011,6 +1044,8 @@ function formatDayShort(value: string): string {
  */
 function scanRowPresentation(l: ScanAssignLine, riderName: string): { text: string; textClass: string; rowClass: string } {
   switch (l.status) {
+    case "procesando":
+      return { text: "Asignando…", textClass: "text-slate-500", rowClass: "bg-slate-50" };
     case "asignado":
       return { text: `En la caja de ${l.riderName ?? riderName}`, textClass: "text-emerald-700", rowClass: "bg-emerald-50/50" };
     case "ya_en_caja":

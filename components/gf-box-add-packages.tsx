@@ -20,6 +20,8 @@ function money(value: number): string {
 
 function presentation(l: ScanAssignLine, riderName: string): { text: string; textClass: string; rowClass: string } {
   switch (l.status) {
+    case "procesando":
+      return { text: "Asignando…", textClass: "text-slate-500", rowClass: "bg-slate-50" };
     case "asignado":
       return { text: `En la caja de ${l.riderName ?? riderName}`, textClass: "text-emerald-700", rowClass: "bg-emerald-50/50" };
     case "ya_en_caja":

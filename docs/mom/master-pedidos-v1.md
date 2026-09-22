@@ -4830,7 +4830,15 @@ control físico. Ahora asignar por QR y desde la lista es lo mismo, y alguien
 en oficina confirma después, en «Verificar caja», escaneando el QR o
 tecleando el código, que cada paquete está de verdad en la caja física del
 motorizado (`office_checked`). Con el modo `exigir` la caja no sale sin ese
-100 %. «Verificar caja», «Recibir carga» y «Recibir mi caja» usan la misma
+100 %. El escaneo de asignación **no espera al servidor para responder**:
+cada QR aparece al instante como «asignando…», el número «N en la caja de
+Roy» sube en ese momento y la cámara acepta el siguiente; los QR se procesan
+en cola, en orden, sin descartar ninguno. En el servidor el escaneo hace un
+solo control de permisos, no reconstruye la página de Grupo GF y deja el
+recálculo del Master para después de responder (`after()`); el navegador
+refresca una sola vez, dos segundos después del último resultado. Antes cada
+QR tardaba 6-7 s porque la página entera (≈1.700 pedidos) se reconstruía
+tres veces por escaneo. «Verificar caja», «Recibir carga» y «Recibir mi caja» usan la misma
 cámara en serie que la asignación: queda abierta tras cada lectura y debajo
 dice «Verificados 3 de 4 · faltan 1» (o «Recibidos …»), y se cierra con
 «Listo» o sola al completar la caja. Si

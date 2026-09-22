@@ -23,8 +23,39 @@ export function removeFromTray(tray: readonly TrayEntry[], code: string): TrayEn
 }
 
 export interface ScanLineLike {
-  status: "asignado" | "ya_en_caja" | "en_otra_caja" | "no_elegible" | "bloqueado_efectivo" | "desconocido";
+  status: "procesando" | "asignado" | "ya_en_caja" | "en_otra_caja" | "no_elegible" | "bloqueado_efectivo" | "desconocido";
   amount: number | null;
+  orderId?: string | null;
+}
+
+/**
+ * «N en la caja de Roy · S/» sin esperar al servidor: lo que ya tiene la caja
+ * según la última carga, más lo leído que todavía no aparece en ella (en
+ * camino o ya asignado pero sin refrescar). Así el número sube en el mismo
+ * instante del escaneo; cuando llega la caja refrescada, lo asignado deja de
+ * sumarse aparte porque ya está en `boxOrderIds`.
+ */
+export function optimisticBox(
+  lines: readonly ScanLineLike[],
+  box: { count: number; cash: number; orderIds: ReadonlySet<string> },
+): { count: number; cash: number; pending: number } {
+  let count = box.count;
+  let cash = box.cash;
+  let pending = 0;
+  const seen = new Set<string>();
+  for (const line of lines) {
+    if (line.status === "procesando") {
+      count += 1;
+      pending += 1;
+      continue;
+    }
+    if (line.status !== "asignado" || !line.orderId) continue;
+    if (box.orderIds.has(line.orderId) || seen.has(line.orderId)) continue;
+    seen.add(line.orderId);
+    count += 1;
+    cash += line.amount ?? 0;
+  }
+  return { count, cash, pending };
 }
 
 export interface ScanSummary {

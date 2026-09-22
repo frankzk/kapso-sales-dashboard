@@ -47,6 +47,8 @@ interface Props {
   assign?: { orgId: string; riderId: string; scheduledFor?: string | null; overrideCash?: boolean };
   /** Sin motorizado elegido, el QR se acumula en una bandeja en vez de ejecutarse. */
   onQueue?: (code: string) => void;
+  /** Solo en `supervisor_asignacion`: el QR se leyó; su resultado llega después por `onResult`. */
+  onPending?: (code: string) => void;
   /** Primera vista mínima: sin párrafo de ayuda (va al `title` del botón), campo siempre visible. */
   compact?: boolean;
   /** La cámara sigue abierta tras cada lectura (QR en serie) y enseña `progress`. */
@@ -54,7 +56,7 @@ interface Props {
   progress?: ScanProgress;
 }
 
-export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, compact = false, continuous = false, progress }: Props) {
+export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, onPending, compact = false, continuous = false, progress }: Props) {
   const plan = scanActionPlan(context);
   const [busy, setBusy] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -67,7 +69,43 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
   const fileRef = useRef<HTMLInputElement>(null);
   const inFlight = useRef(false);
 
+  // Asignar por QR no descarta lecturas: cada QR entra a una cola, se anuncia
+  // al instante (`onPending`) y se procesa en orden. Antes, mientras el
+  // servidor respondía (varios segundos), los QR siguientes se perdían.
+  const assignQueue = useRef<string[]>([]);
+  const draining = useRef(false);
+  async function drainAssign() {
+    if (draining.current) return;
+    draining.current = true;
+    try {
+      while (assignQueue.current.length) {
+        const code = assignQueue.current[0]!;
+        try {
+          const line = await scanAssignToRider(assign!.orgId, assign!.riderId, code, { overrideCash: assign!.overrideCash, scheduledFor: assign!.scheduledFor ?? null });
+          report({ line, notice: line.message, error: line.status === "desconocido" || line.status === "no_elegible" || line.status === "bloqueado_efectivo" ? line.message : undefined });
+        } catch {
+          report({
+            line: { code, status: "no_elegible", orderId: null, orderName: null, shipmentId: null, manifestId: null, riderName: null, amount: null, message: "No se pudo registrar. Reintenta el mismo código; no se duplicará." },
+            error: "No se pudo registrar. Reintenta el mismo código; no se duplicará.",
+          });
+        } finally {
+          assignQueue.current.shift();
+        }
+      }
+    } finally {
+      draining.current = false;
+    }
+  }
+
   async function execute(code: string) {
+    if (context === "supervisor_asignacion" && assign?.riderId && code.trim()) {
+      const clean = code.trim();
+      if (assignQueue.current.some((c) => c.toLowerCase() === clean.toLowerCase())) return;
+      assignQueue.current.push(clean);
+      onPending?.(clean);
+      void drainAssign();
+      return;
+    }
     if (inFlight.current || !code.trim()) return;
     inFlight.current = true;
     setBusy(true);
