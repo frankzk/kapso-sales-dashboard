@@ -3093,6 +3093,22 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
       - **La escalera se configura en Ajustes**, en orden y con minutos por
         escalón. Escribir los nombres en el código costaría un despliegue cada
         vez que alguien cambie de puesto.
+      - **La escalera SUMA, no traspasa** (22-09-2026). Escalar amplía quién ve
+        la alerta; no se la quita a nadie. A Gerardo le queda delante hasta que
+        se resuelva, y a sus minutos le aparece **además** a Yohalis, y después
+        a Frank: llegado ese punto la tienen los tres a la vez. Antes cambiaba
+        de dueño y **desaparecía** de la pantalla del anterior, que es dar por
+        hecho que ya no va a atenderla —falso, suele estar a punto— y ocultarle
+        el final de un trabajo que empezó él.
+        - **Sigue habiendo un responsable de turno**, y la tarjeta lo dice: a
+          quien la mira sin ser suya le sale «Le toca ahora a Yohalis», en gris
+          y no en ámbar. Es lo que evita que dos la atiendan a la vez sin
+          saberlo.
+        - **Las propias van primero** en el pop-up. Con tres personas mirando la
+          misma cola, el trabajo de uno no puede quedar debajo del que solo
+          está mirando.
+        - **Quien no la ha recibido todavía NO la ve.** Si no, los tres verían
+          todo desde el minuto cero y la escalera no serviría de nada.
       - **No mira si está conectado**, a diferencia de la alerta de asesoras:
         ahí compiten por atender primero, aquí hay un responsable. La oferta
         aguanta sus minutos con el navegador cerrado; si saltara al

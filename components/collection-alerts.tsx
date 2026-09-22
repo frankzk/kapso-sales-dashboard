@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { cn } from "@/components/ui";
 import {
   discardCollectionAlert,
   listMyCollectionAlerts,
@@ -87,7 +88,16 @@ export function CollectionAlerts({ enabled = true }: { enabled?: boolean }) {
   return (
     <div className="fixed right-4 bottom-4 z-50 flex w-[22rem] max-w-[calc(100vw-2rem)] flex-col gap-2">
       {alerts.slice(0, 3).map((a) => (
-        <div key={a.id} className="rounded-xl border border-amber-300 bg-white p-3 shadow-lg">
+        <div
+          key={a.id}
+          className={cn(
+            "rounded-xl border bg-white p-3 shadow-lg",
+            // La que me toca, en ámbar; la que ya escaló y solo estoy mirando,
+            // apagada. Con tres personas viendo la misma alerta, lo primero que
+            // hay que poder distinguir de un vistazo es si la mía es mía.
+            a.mine ? "border-amber-300" : "border-slate-200",
+          )}
+        >
           <div className="flex items-start justify-between gap-2">
             <p className="text-sm font-semibold text-slate-900">{TITULO[a.kind]}</p>
             <span className="shrink-0 text-xs text-slate-400">{a.waitingMinutes} min</span>
@@ -106,6 +116,16 @@ export function CollectionAlerts({ enabled = true }: { enabled?: boolean }) {
             {a.storeName}
             {a.escalations > 0 && ` · escaló ${a.escalations} ${a.escalations === 1 ? "vez" : "veces"}`}
           </p>
+          {/* LA ESCALERA SUMA: al escalar no se le quita a nadie. Quien la tuvo
+              antes la sigue viendo hasta que se resuelva, y este renglón es lo
+              que evita que dos personas la atiendan a la vez sin saberlo:
+              siempre dice a quién le toca AHORA. */}
+          {!a.mine && (
+            <p className="mt-1 text-xs font-medium text-slate-500">
+              {a.ownerName ? `Le toca ahora a ${a.ownerName}` : "Sin responsable asignado"} · la
+              sigues viendo porque escaló
+            </p>
+          )}
 
           <div className="mt-2 flex flex-wrap gap-2">
             {/* AL DRAWER DEL PEDIDO, no a la bandeja de revisión. La bandeja
