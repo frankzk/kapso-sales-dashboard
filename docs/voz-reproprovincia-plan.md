@@ -377,6 +377,14 @@ respuesta JSON fija (dos minutos de configurar, y Make ya está en uso), o un
 request bin con respuesta personalizada. Cuando exista el endpoint de Kapta,
 se cambia la URL de la tool en la consola y nada más.
 
+El mock ya existe (22-09-2026): escenario de Make «Voz · identificar_llamada
+(mock Reproprovincia)» en el equipo My Team, webhook
+`https://hook.us1.make.com/yfoo4l15mlrvtwnarr2qcqxew6mblqg9`. Acepta cualquier
+método y cuerpo y responde siempre la ficha del pedido #KP135098 de Kenku
+(Cusco, Aceite de Semilla Negra x3, S/ 298) con `modo: "test"`. Para cambiar
+la ficha se edita el cuerpo del módulo «Webhook response»; para apagarlo se
+desactiva el escenario.
+
 Lo que se aprende con el mock: si el agente respeta «tool antes de hablar»,
 cuánto silencio añade, y cómo suena el saludo con un producto real en la
 boca. Lo que NO se aprende: la atadura por caller ID (prueba 3), que necesita
