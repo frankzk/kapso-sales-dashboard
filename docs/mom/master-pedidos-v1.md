@@ -4970,6 +4970,35 @@ español todos los hitos del camino —tomado, asignado, cotejado en oficina,
 `order_events`; no hay otra línea de tiempo.
 «Ver actividad» desde Grupo GF Courier abre ese drawer en esa pestaña.
 
+**La ficha dice quién tiene el paquete y en qué quedó (22-09-2026).** Hasta
+aquí «Salidas y guías» enseñaba de una salida propia lo mismo que de
+cualquier otra —courier, código y `delivery_status`— y la tarjeta «Revisar la
+salida activa» prometía un «último estado del courier» que no se veía: lo del
+motorizado solo estaba en «Actividad», como texto. Ahora el detalle del pedido
+lee, por cada salida de Grupo GF, la caja del motorizado
+(`dispatch_manifest_items` + `dispatch_manifests`) y la parada de su ruta
+(`delivery_stops` + `delivery_routes` + `riders`), y bajo la salida pinta una
+línea con lo más reciente, en este orden de precedencia: la parada reportada
+—**Entregado por Roy** · hora · cobro (Yape S/ 89 / sin cobro) · «entregado
+sin confirmar recojo» si no hubo «Lo llevo» · nota, con la foto y el
+comprobante (`GET /api/reparto/foto`); **Postergado por Roy** cuando el motivo
+es «reprogramado por el cliente» o «no estaba / volver luego»; **No entregado
+por Roy** con el resto de motivos—; si no, la caja: **No lo llevó Roy** ·
+motivo · «vuelve a por asignar»; **Retirado de la caja de Roy** · motivo;
+**Lo lleva Roy** · desde hora · caja del día (y carga si no es la primera) ·
+parada pendiente; **En la caja de Roy** · cotejado o sin cotejar · sin «Lo
+llevo»; y una parada del cuaderno sin caja se lee como **En la ruta de Roy**.
+Sin ficha de motorizado no se inventa un nombre («el motorizado»). La misma
+frase encabeza la tarjeta «Revisar la salida activa» en En curso. **Es
+información, no una regla nueva**: sigue vigente §29.12 —la parada es una
+declaración y el Master se mueve al cerrar la ruta—; cambiar la subetapa con
+«Lo llevo» o con el reporte de la parada es una decisión aparte que este
+apartado no toma. Lógica pura en `lib/gf-delivery.ts`, probada en
+`test/gf-delivery.test.ts`; lectura en `getOrderMasterDetail`
+(`loadGfDeliveries`, con service role porque las políticas de caja son del
+supervisor y las de parada de la tienda o del motorizado, y quien abre la
+ficha ya pasó el filtro de `order_master`).
+
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 
 **Antes** la pestaña «Rutas» tenía dos subpestañas —«Cajas y cotejos» (solo

@@ -17,6 +17,8 @@ import { productImagesFor } from "@/lib/shopify-product-images";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
+import { courierKey } from "@/lib/dispatch";
+import { pickLatestBox, pickLatestStop, type GfBoxItem, type GfDelivery, type GfStop } from "@/lib/gf-delivery";
 import { codCouriersFor, isNonMetroLimaLocation } from "@/lib/order-coverage";
 import { limaTodayKey } from "@/lib/shipments";
 import type { CostTariff } from "@/lib/costs";
@@ -446,6 +448,12 @@ export interface OrderMasterDetail {
   /** Foco de salud de la API de Aliclik, para el panel de crear guía. */
   aliclikHealth: AliclikHealthState;
   tasks: OrderTaskSummary[];
+  /**
+   * Grupo GF Courier (MOM §29.13): por cada salida propia, la caja del
+   * motorizado y la parada de su ruta, para que la ficha diga quién tiene el
+   * paquete y en qué quedó. Vacío si el pedido no pasó por una caja ni ruta.
+   */
+  gfDeliveries: GfDelivery[];
 }
 
 export interface OrderTaskSummary {
@@ -474,8 +482,110 @@ const GUIDE_COLUMNS =
   // el que sirve el rótulo PDF. Sin ellos el drawer no puede ni identificar el
   // envío en su panel ni ofrecer el rótulo.
   "suggested_order_name,output_number,output_code,qr_token,preparation_state,custody_state," +
+  // `pickup_state` lo lee la mesa de ruta (`pickupState`) para nombrar la
+  // salida de agencia que bloquea; sin pedirlo aquí llegaba siempre undefined.
+  "pickup_state," +
   "ready_at,ready_by,custody_transferred_at,custody_transferred_by,returned_at,label_url," +
   "created_at,updated_at";
+
+/**
+ * Caja y parada de cada salida de Grupo GF Courier. Se lee con el service
+ * role: las políticas de `dispatch_manifest_items` son del supervisor y las de
+ * `delivery_stops` de la tienda o del motorizado, y quien abre la ficha ya
+ * pasó el filtro de `order_master`. Un fallo aquí no tumba la ficha.
+ */
+async function loadGfDeliveries(orderId: string, guides: readonly ShipmentRow[]): Promise<GfDelivery[]> {
+  const own = guides.filter((g) => courierKey(g.courier) === "propio");
+  if (!own.length) return [];
+  const admin = createAdminSupabase();
+  const shipmentIds = own.map((g) => g.id);
+  const [itemsRes, stopsRes] = await Promise.all([
+    admin
+      .from("dispatch_manifest_items")
+      .select("manifest_id,shipment_id,added_at,office_checked_at,pickup_checked_at,pickup_declined_at,pickup_declined_reason,removed_at,removal_reason")
+      .in("shipment_id", shipmentIds),
+    admin
+      .from("delivery_stops")
+      .select("id,route_id,shipment_id,seq,status,outcome_reason,note,reported_at,payment_method,collected_amount,photo_path,voucher_path,pickup_confirmed")
+      .eq("order_id", orderId),
+  ]);
+  if (itemsRes.error || stopsRes.error) return [];
+  type ItemRow = { manifest_id: string; shipment_id: string; added_at: string | null; office_checked_at: string | null; pickup_checked_at: string | null; pickup_declined_at: string | null; pickup_declined_reason: string | null; removed_at: string | null; removal_reason: string | null };
+  type StopRow = { id: string; route_id: string; shipment_id: string | null; seq: number | null; status: GfStop["status"]; outcome_reason: string | null; note: string | null; reported_at: string | null; payment_method: string | null; collected_amount: number | string | null; photo_path: string | null; voucher_path: string | null; pickup_confirmed: boolean | null };
+  const items = (itemsRes.data ?? []) as ItemRow[];
+  const stops = (stopsRes.data ?? []) as StopRow[];
+  const manifestIds = [...new Set(items.map((i) => i.manifest_id))];
+  const routeIds = [...new Set(stops.map((st) => st.route_id))];
+  const [manifestsRes, routesRes] = await Promise.all([
+    manifestIds.length
+      ? admin.from("dispatch_manifests").select("id,route_date,load_number,state,driver_name,rider_id").in("id", manifestIds)
+      : Promise.resolve({ data: [] as unknown[] }),
+    routeIds.length
+      ? admin.from("delivery_routes").select("id,route_date,status,rider_id").in("id", routeIds)
+      : Promise.resolve({ data: [] as unknown[] }),
+  ]);
+  type ManifestRow = { id: string; route_date: string; load_number: number | null; state: string; driver_name: string | null; rider_id: string | null };
+  type RouteRow = { id: string; route_date: string; status: string; rider_id: string | null };
+  const manifests = new Map(((manifestsRes.data ?? []) as ManifestRow[]).map((m) => [m.id, m]));
+  const routes = new Map(((routesRes.data ?? []) as RouteRow[]).map((r) => [r.id, r]));
+  // Nombre del motorizado de la ruta: la caja ya trae `driver_name`; la
+  // parada solo trae el id de la ruta.
+  const riderIds = [...new Set([...routes.values()].map((r) => r.rider_id).filter((v): v is string => !!v))];
+  const riderNames = new Map<string, string>();
+  if (riderIds.length) {
+    const { data } = await admin.from("riders").select("id,full_name").in("id", riderIds);
+    for (const r of (data ?? []) as { id: string; full_name: string }[]) riderNames.set(r.id, r.full_name);
+  }
+  const boxesByShipment = new Map<string, GfBoxItem[]>();
+  for (const it of items) {
+    const m = manifests.get(it.manifest_id);
+    if (!m) continue;
+    const box: GfBoxItem = {
+      manifestId: m.id,
+      routeDate: m.route_date,
+      loadNumber: m.load_number,
+      boxState: m.state,
+      riderId: m.rider_id,
+      riderName: m.driver_name ?? "",
+      addedAt: it.added_at,
+      officeCheckedAt: it.office_checked_at,
+      pickupCheckedAt: it.pickup_checked_at,
+      pickupDeclinedAt: it.pickup_declined_at,
+      pickupDeclinedReason: it.pickup_declined_reason,
+      removedAt: it.removed_at,
+      removalReason: it.removal_reason,
+    };
+    boxesByShipment.set(it.shipment_id, [...(boxesByShipment.get(it.shipment_id) ?? []), box]);
+  }
+  const toStop = (st: StopRow): GfStop => {
+    const route = routes.get(st.route_id) ?? null;
+    return {
+      id: st.id,
+      status: st.status,
+      outcomeReason: st.outcome_reason,
+      note: st.note,
+      reportedAt: st.reported_at,
+      paymentMethod: st.payment_method,
+      collectedAmount: st.collected_amount == null ? null : Number(st.collected_amount),
+      photoPath: st.photo_path,
+      voucherPath: st.voucher_path,
+      pickupConfirmed: st.pickup_confirmed,
+      routeDate: route?.route_date ?? null,
+      routeStatus: route?.status ?? null,
+      riderName: route?.rider_id ? riderNames.get(route.rider_id) ?? null : null,
+      seq: st.seq,
+    };
+  };
+  // Las paradas del cuaderno no llevan `shipment_id`: se cuelgan de la única
+  // salida propia o, si hay varias, de la más reciente.
+  const orphanStops = stops.filter((st) => !st.shipment_id || !shipmentIds.includes(st.shipment_id)).map(toStop);
+  const fallbackId = own[own.length - 1]!.id;
+  return own.map((g) => {
+    const ownStops = stops.filter((st) => st.shipment_id === g.id).map(toStop);
+    const candidates = g.id === fallbackId ? [...ownStops, ...orphanStops] : ownStops;
+    return { shipmentId: g.id, box: pickLatestBox(boxesByShipment.get(g.id) ?? []), stop: pickLatestStop(candidates) };
+  }).filter((d) => d.box || d.stop);
+}
 
 async function swaypRouteCheck(
   sb: Awaited<ReturnType<typeof createServerSupabase>>,
@@ -703,10 +813,11 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     ...item,
     image_url: item.product_id ? images.get(item.product_id) ?? null : null,
   }));
-  const [swayp, aliclikHealth, grupoGfCourier] = await Promise.all([
+  const [swayp, aliclikHealth, grupoGfCourier, gfDeliveries] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
     loadGroupGfCourierRouteCheck(sb, row),
+    loadGfDeliveries(orderId, guides).catch(() => [] as GfDelivery[]),
   ]);
   return {
     row,
@@ -716,6 +827,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     totals: orderTotals(orderRow?.raw, row.order_total),
     aliclikHealth,
     tasks,
+    gfDeliveries,
     address: shopifyShippingAddress(orderRow?.raw),
     shopifyNote: shopifyOrderNote(orderRow?.raw),
     filledOutputIds: [...filledShipmentIds(events)],

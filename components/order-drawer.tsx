@@ -149,6 +149,7 @@ import {
   type PriorOutcome,
 } from "@/lib/order-confirmation-brief";
 import { outputDisplayCode } from "@/lib/shipment-output";
+import { gfDeliverySentence, gfDeliverySummary, type GfDelivery } from "@/lib/gf-delivery";
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, StoreSummary } from "@/lib/types";
@@ -231,7 +232,7 @@ const NEXT_ACTION_TONE: Record<DrawerNextAction["tone"], string> = {
  * pedido?». Las herramientas secundarias quedan más abajo como evidencia o
  * corrección.
  */
-function drawerNextAction(row: OrderMasterRow, showPayments: boolean): DrawerNextAction {
+function drawerNextAction(row: OrderMasterRow, showPayments: boolean, gfSentence: string | null = null): DrawerNextAction {
   const stage = row.macro_stage as OrderMacroStage | null | undefined;
   const substage = row.macro_substage as MacroSubstage | null | undefined;
 
@@ -342,10 +343,14 @@ function drawerNextAction(row: OrderMasterRow, showPayments: boolean): DrawerNex
         tone: "amber",
       };
     }
+    // Grupo GF (MOM §29.13): la tarjeta dice quién tiene el paquete y en qué
+    // quedó la parada, en vez de prometer un «último estado» que no se veía.
     return {
       eyebrow: "Seguimiento",
       title: "Revisar la salida activa",
-      description: "Confirma el último estado del courier y atiende cualquier intento o retorno pendiente.",
+      description: gfSentence
+        ? `${gfSentence}. Atiende lo que reporte el motorizado; el Master se mueve al cerrar la ruta.`
+        : "Confirma el último estado del courier y atiende cualquier intento o retorno pendiente.",
       cta: "Ver salidas y guías",
       target: "guias",
       tone: "emerald",
@@ -718,7 +723,9 @@ export function OrderDrawer({
       ? `${PAYMENT_GATEWAY_LABEL[detail.row.payment_gateway]}: no lo cobró el checkout. Para darlo por pagado, sube la constancia.`
       : null;
   const showPaymentPanel = paymentPanel?.show ?? false;
-  const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel) : null;
+  // La salida GF activa (o la última) para la tarjeta de acción.
+  const gfActive = detail?.gfDeliveries.length ? detail.gfDeliveries[detail.gfDeliveries.length - 1]! : null;
+  const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel, gfDeliverySentence(gfActive)) : null;
 
   return (
     <div
@@ -1226,6 +1233,11 @@ export function OrderDrawer({
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
                         {g.delivery_status}
                       </span>
+                      {/* Grupo GF: quién tiene el paquete y en qué quedó la parada. */}
+                      {(() => {
+                        const gf = detail.gfDeliveries.find((d) => d.shipmentId === g.id);
+                        return gf ? <GfDeliveryLine delivery={gf} /> : null;
+                      })()}
                       {(g.aliclik_attempts ?? g.reroute_attempts) > 0 && (
                         <span className="text-xs text-amber-700">
                           {g.aliclik_attempts ?? g.reroute_attempts} intento(s)
@@ -2769,3 +2781,32 @@ function DescartarRecuperacion({
   );
 }
 
+const GF_TONE: Record<string, string> = {
+  slate: "bg-slate-100 text-slate-700",
+  sky: "bg-sky-100 text-sky-800",
+  emerald: "bg-emerald-100 text-emerald-800",
+  amber: "bg-amber-100 text-amber-800",
+  red: "bg-red-100 text-red-800",
+};
+
+/**
+ * Una línea bajo la salida de Grupo GF (MOM §29.13): «Lo lleva Roy · desde
+ * 22/09 10:32 · caja del 22/09 · parada pendiente», y al reportar la parada
+ * «Entregado por Roy · 14:32 · Yape S/ 89» con la foto y el comprobante. Lo que
+ * antes solo se leía en «Actividad», como texto, o no se leía.
+ */
+function GfDeliveryLine({ delivery }: { delivery: GfDelivery }) {
+  const s = gfDeliverySummary(delivery);
+  if (!s) return null;
+  const photo = delivery.stop?.photoPath;
+  const voucher = delivery.stop?.voucherPath;
+  return (
+    <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 border-t border-slate-100 pt-1.5 text-xs">
+      <span className={cn("rounded-full px-2 py-0.5 font-semibold", GF_TONE[s.tone])}>{s.label}</span>
+      {s.detail && <span className="text-slate-600">{s.detail}</span>}
+      {/* Cada respaldo abre en grande en otra pestaña (GET /api/reparto/foto). */}
+      {photo && <a href={`/api/reparto/foto?path=${encodeURIComponent(photo)}`} target="_blank" rel="noreferrer" title="Ver la foto de la entrega" className="rounded px-1 text-base hover:bg-slate-100">📷</a>}
+      {voucher && <a href={`/api/reparto/foto?path=${encodeURIComponent(voucher)}`} target="_blank" rel="noreferrer" title="Ver el comprobante de pago" className="rounded px-1 text-base hover:bg-slate-100">🧾</a>}
+    </div>
+  );
+}
