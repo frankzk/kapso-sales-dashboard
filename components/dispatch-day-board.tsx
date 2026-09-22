@@ -15,7 +15,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { OrderLink } from "@/components/order-link";
 import { useRouter } from "next/navigation";
-import { cn } from "@/components/ui";
+import { cn, STICKY_HEAD } from "@/components/ui";
 import { Hint } from "@/components/hint";
 import { Chip, CountChip, Sheet } from "@/components/filter-sheet";
 import { ScanAction } from "@/components/scan-action";
@@ -116,7 +116,9 @@ export function DispatchDayBoard(props: Props) {
   const patchFilters = (patch: Partial<QueueFilters>) => { setFilters((cur) => ({ ...cur, ...patch })); setLimit(100); };
   // Dos formas de asignar, una a la vista: por QR (con el paquete en la mano)
   // o desde la lista. Abrir una pliega la otra; el motorizado es común.
-  const [method, setMethod] = useState<"qr" | "lista">("qr");
+  // Tres pestañas en una sola columna: QR, lista y cajas. Antes las cajas
+  // iban en una segunda columna y la lista se quedaba con media pantalla.
+  const [method, setMethod] = useState<"qr" | "lista" | "cajas">("qr");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [blockedOpen, setBlockedOpen] = useState(false);
   // Filtro rápido de las cajas (Todos · Por armar · Listos para cotejo · Sin
@@ -127,7 +129,6 @@ export function DispatchDayBoard(props: Props) {
   // Modo escaneo (§29.13): la vía principal. Fecha de la caja, hoy por defecto.
   const [scanDay, setScanDay] = useState(day);
   const [dayOpen, setDayOpen] = useState(false);
-  const [boxesOpen, setBoxesOpen] = useState(false);
   // Una línea de ayuda bajo el campo de código que se cierra y no vuelve.
   const [helpDismissed, setHelpDismissed] = useState(true);
   useEffect(() => {
@@ -297,7 +298,7 @@ export function DispatchDayBoard(props: Props) {
   /** Tocar una tile de cajas: abre «Cajas de hoy» con ese filtro rápido (o lo quita). */
   const tapBoxTile = (tile: BoxTile) => {
     setBoxFilter((cur) => toggleBoxTile(cur, tile));
-    setBoxesOpen(true);
+    setMethod("cajas");
     if (!openBox && boxes[0]) setOpenBox(boxes[0].riderId ?? boxes[0].riderName);
   };
 
@@ -414,8 +415,8 @@ export function DispatchDayBoard(props: Props) {
         </details>
       )}
 
-      <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        {/* ── Asignar ── */}
+      <div className="min-w-0">
+        {/* ── Asignar y cajas, en una sola tarjeta con tres pestañas ── */}
         <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="px-4 py-3">
             <div className="flex flex-col gap-2">
@@ -433,7 +434,7 @@ export function DispatchDayBoard(props: Props) {
                   <p className="mt-1 truncate text-xs text-slate-500">{riderName} · {riderBoxCount(riderId)} en su caja</p>
                 )}
               </div>
-              <div role="tablist" aria-label="Forma de asignar" className="grid grid-cols-2 rounded-xl bg-slate-100 p-1 text-sm font-medium">
+              <div role="tablist" aria-label="Forma de asignar" className="grid grid-cols-3 rounded-xl bg-slate-100 p-1 text-sm font-medium">
                 <button type="button" role="tab" aria-selected={method === "qr"} onClick={() => setMethod("qr")}
                   className={cn("min-h-10 rounded-lg px-3", method === "qr" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800")}>
                   Asignación por QR
@@ -441,6 +442,11 @@ export function DispatchDayBoard(props: Props) {
                 <button type="button" role="tab" aria-selected={method === "lista"} onClick={() => setMethod("lista")}
                   className={cn("min-h-10 rounded-lg px-3", method === "lista" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800")}>
                   Desde la lista
+                </button>
+                <button type="button" role="tab" aria-selected={method === "cajas"} onClick={() => setMethod("cajas")}
+                  className={cn("flex min-h-10 items-center justify-center gap-2 rounded-lg px-3", method === "cajas" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800")}>
+                  <span className="truncate">{scanDay === day ? "Cajas de hoy" : `Cajas del ${formatDayShort(scanDay)}`}</span>
+                  <span className={cn("grid h-5 min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-[11px] font-bold tabular-nums", dayCod ? "bg-brand-600 text-white" : "bg-slate-200 text-slate-600")} title={`${boxes.length} ${boxes.length === 1 ? "caja" : "cajas"} · ${dayCod} paquetes`}>{dayCod}</span>
                 </button>
               </div>
               {method === "qr" && (
@@ -670,87 +676,126 @@ export function DispatchDayBoard(props: Props) {
             </label>
           </div>
 
-          <ul className="max-h-[60vh] divide-y divide-slate-100 overflow-auto">
-            {visible.map((q) => (
-              <li key={q.orderId} className={cn("flex items-start gap-3 px-4 py-2 text-sm hover:bg-slate-50", selected.has(q.orderId) && "bg-brand-50/60")}>
-                {q.assignable
-                  ? <input type="checkbox" checked={selected.has(q.orderId)} onChange={() => toggle(q.orderId)} aria-label={`Marcar ${q.orderName}`} className="mt-1" />
-                  : <span aria-hidden className="mt-1 inline-block h-4 w-4 shrink-0 rounded border border-dashed border-slate-300" title="Ya salió: se sigue, no se asigna" />}
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <OrderLink orderId={q.orderId} className="font-semibold text-slate-950 hover:text-brand-700">{q.orderName}</OrderLink>
-                    <span className="text-xs text-slate-500">{q.storeName}</span>
-                    <OrderLink orderId={q.orderId} section="historial" className="text-[11px] text-brand-700 underline">Ver actividad</OrderLink>
-                    {q.taken && !q.route && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">tomado · sin caja</span>}
-                    {!q.assignable && q.macroSubstage && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800" title={macroStageLabel(q.macroStage)}>{macroSubstageLabel(q.macroSubstage)}</span>}
-                    {q.taken && q.armed && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">armado</span>}
-                    {q.hasPriorDispatch && <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-800" title="Ya tuvo al menos una salida física y volvió; revísalo como reprogramación o recuperación">salida previa</span>}
-                    {q.observation && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800" title={q.observation}>observado</span>}
-                  </div>
-                  <p className="truncate text-slate-600">{q.customerName} · {q.district}</p>
-                  <p className="truncate text-xs text-slate-500">{q.customerPhone ?? "sin teléfono"}{q.createdAt ? ` · creado ${formatDayNumeric(limaDay(q.createdAt))}` : ""}</p>
-                  {q.route && (
-                    <p className="truncate text-xs text-slate-600">
-                      <b>{q.route.riderName}</b> · caja del {formatDayNumeric(q.route.routeDate)}{q.route.loadNumber > 1 ? ` · carga ${q.route.loadNumber}` : ""}
-                      {" · "}{q.route.pickupCheckedAt ? "lo lleva" : q.route.officeCheckedAt ? "cotejado · sin «Lo llevo»" : "en la caja · sin cotejar"}
-                    </p>
-                  )}
-                </div>
-                <div className="text-right text-xs text-slate-600">
-                  <p className="font-semibold text-slate-900">{money(q.orderTotal)}</p>
-                  {q.route
-                    ? <p>tarifa {money(q.tariffAmount)}</p>
-                    : <p title="Salida prevista: después del corte de las 11:30 el pedido sale al día siguiente">tarifa {money(q.tariffAmount)} · sale {formatDay(q.scheduledFor)}</p>}
-                </div>
-              </li>
-            ))}
-            {!visible.length && <li className="px-4 py-8 text-center text-sm text-slate-500">{tracking ? "Ningún pedido de Grupo GF con ese filtro." : "Nada por asignar con ese filtro."}</li>}
-            {filtered.length > visible.length && (
-              <li className="px-4 py-3 text-center">
-                <button type="button" onClick={() => setLimit((n) => n + 100)} className="min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                  Mostrar 100 más · quedan {(filtered.length - visible.length).toLocaleString("es-PE")}
-                </button>
-              </li>
+          {/* Tabla de columnas, como el Master: anchos fijos para lo corto
+              (fechas, importes) y flexibles para pedido, cliente y estado. Lo
+              que se trunca lleva el texto completo en `title`. En pantallas
+              estrechas la tabla desplaza en horizontal. */}
+          <div className="max-h-[60vh] overflow-auto">
+            <table className={cn("w-full min-w-[880px] table-fixed border-collapse text-sm", STICKY_HEAD)}>
+              <colgroup>
+                <col className="w-9" />
+                <col className="w-[8.5rem]" />
+                <col className="w-[6.5rem]" />
+                <col />
+                <col className="w-[8rem]" />
+                <col />
+                <col className="w-[4.25rem]" />
+                <col className="w-[5rem]" />
+                <col className="w-[5.5rem]" />
+                <col className="w-[4.5rem]" />
+              </colgroup>
+              <thead>
+                <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="px-3 py-2"><span className="sr-only">Marcar</span></th>
+                  <th className="px-3 py-2">Pedido</th>
+                  <th className="px-3 py-2">Tienda</th>
+                  <th className="px-3 py-2">Cliente</th>
+                  <th className="px-3 py-2">Distrito</th>
+                  <th className="px-3 py-2">Estado</th>
+                  <th className="px-3 py-2">Creado</th>
+                  <th className="px-3 py-2" title="Salida prevista: después del corte de las 11:30 el pedido sale al día siguiente. Para los que ya salieron, el día de su caja.">Sale</th>
+                  <th className="px-3 py-2 text-right">Venta</th>
+                  <th className="px-3 py-2 text-right">Tarifa</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {visible.map((q) => (
+                  <tr key={q.orderId} className={cn("align-top hover:bg-slate-50", selected.has(q.orderId) && "bg-brand-50/60")}>
+                    <td className="px-3 py-2">
+                      {q.assignable
+                        ? <input type="checkbox" checked={selected.has(q.orderId)} onChange={() => toggle(q.orderId)} aria-label={`Marcar ${q.orderName}`} className="mt-0.5" />
+                        : <span aria-hidden className="mt-0.5 inline-block h-4 w-4 rounded border border-dashed border-slate-300" title="Ya salió: se sigue, no se asigna" />}
+                    </td>
+                    <td className="px-3 py-2">
+                      <OrderLink orderId={q.orderId} className="block truncate font-semibold text-slate-950 hover:text-brand-700" title={q.orderName}>{q.orderName}</OrderLink>
+                      <OrderLink orderId={q.orderId} section="historial" className="text-[11px] text-brand-700 underline">Ver actividad</OrderLink>
+                    </td>
+                    <td className="truncate px-3 py-2 text-xs text-slate-600" title={q.storeName}>{q.storeName}</td>
+                    <td className="px-3 py-2">
+                      <p className="truncate text-slate-800" title={q.customerName}>{q.customerName}</p>
+                      <p className="truncate text-xs text-slate-500" title={q.customerPhone ?? undefined}>{q.customerPhone ?? "sin teléfono"}</p>
+                    </td>
+                    <td className="truncate px-3 py-2 text-slate-700" title={q.district}>{q.district}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-1">
+                        {q.taken && !q.route && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">tomado · sin caja</span>}
+                        {!q.assignable && q.macroSubstage && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800" title={macroStageLabel(q.macroStage)}>{macroSubstageLabel(q.macroSubstage)}</span>}
+                        {q.taken && q.armed && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">armado</span>}
+                        {q.hasPriorDispatch && <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-800" title="Ya tuvo al menos una salida física y volvió; revísalo como reprogramación o recuperación">salida previa</span>}
+                        {q.observation && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800" title={q.observation}>observado</span>}
+                        {!q.taken && !q.hasPriorDispatch && !q.observation && <span className="text-xs text-slate-400">disponible</span>}
+                      </div>
+                      {q.route && (
+                        <p className="mt-0.5 truncate text-xs text-slate-600" title={`${q.route.riderName} · caja del ${formatDayNumeric(q.route.routeDate)}${q.route.loadNumber > 1 ? ` · carga ${q.route.loadNumber}` : ""}`}>
+                          <b>{q.route.riderName}</b>{q.route.loadNumber > 1 ? ` · carga ${q.route.loadNumber}` : ""}
+                          {" · "}{q.route.pickupCheckedAt ? "lo lleva" : q.route.officeCheckedAt ? "cotejado · sin «Lo llevo»" : "en la caja · sin cotejar"}
+                        </p>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-xs tabular-nums text-slate-600" title={q.createdAt ? `Creado el ${formatDay(limaDay(q.createdAt) ?? q.createdAt)}` : undefined}>{q.createdAt ? formatDayNumeric(limaDay(q.createdAt)) : "—"}</td>
+                    <td className="px-3 py-2 text-xs tabular-nums text-slate-600" title={q.route ? `Caja del ${formatDay(q.route.routeDate)}` : `Salida prevista: ${formatDay(q.scheduledFor)}`}>
+                      {q.route ? `caja ${formatDayNumeric(q.route.routeDate)}` : formatDayNumeric(q.scheduledFor)}
+                    </td>
+                    <td className="px-3 py-2 text-right text-xs font-semibold tabular-nums text-slate-900">{money(q.orderTotal)}</td>
+                    <td className="px-3 py-2 text-right text-xs tabular-nums text-slate-600">{money(q.tariffAmount)}</td>
+                  </tr>
+                ))}
+                {!visible.length && <tr><td colSpan={10} className="px-4 py-8 text-center text-sm text-slate-500">{tracking ? "Ningún pedido de Grupo GF con ese filtro." : "Nada por asignar con ese filtro."}</td></tr>}
+                {filtered.length > visible.length && (
+                  <tr>
+                    <td colSpan={10} className="px-4 py-3 text-center">
+                      <button type="button" onClick={() => setLimit((n) => n + 100)} className="min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                        Mostrar 100 más · quedan {(filtered.length - visible.length).toLocaleString("es-PE")}
+                      </button>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          </div>
+          )}
+          {method === "cajas" && (
+          <div className="border-t border-slate-100">
+            <div className="flex items-center gap-2 px-4 py-3 text-sm font-semibold text-slate-900">
+              {scanDay === day ? "Cajas de hoy" : `Cajas del ${formatDayShort(scanDay)}`}
+              <span className="text-xs font-normal tabular-nums text-slate-500">{boxes.length} {boxes.length === 1 ? "caja" : "cajas"} · {dayCod} paq.</span>
+            </div>
+            {boxes.length ? (
+              <ul className="divide-y divide-slate-100 border-t border-slate-100">
+                {boxes.map((box) => (
+                  <BoxRow
+                    key={box.riderId ?? box.riderName}
+                    box={box}
+                    cash={box.riderId ? (boxCash.get(box.riderId) ?? 0) : 0}
+                    riders={riders}
+                    orgId={orgId}
+                    open={openBox === (box.riderId ?? box.riderName)}
+                    onToggle={() => setOpenBox(openBox === (box.riderId ?? box.riderName) ? null : (box.riderId ?? box.riderName))}
+                    canManage={canManageDispatch}
+                    onChanged={() => router.refresh()}
+                    pickupMode={props.riderPickupMode}
+                    filter={boxFilter}
+                    onFilter={setBoxFilter}
+                  />
+                ))}
+              </ul>
+            ) : (
+              <p className="border-t border-slate-100 px-4 py-8 text-center text-sm text-slate-500">Todavía no hay cajas {scanDay === day ? "hoy" : "ese día"}: escanea o asigna desde la lista.</p>
             )}
-          </ul>
           </div>
           )}
         </div>
-
-        {/* ── Cajas de hoy: solo cuando hay cajas; plegadas en móvil, abiertas en escritorio ── */}
-        {boxes.length > 0 && (
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <button
-              type="button"
-              onClick={() => setBoxesOpen((v) => !v)}
-              aria-expanded={boxesOpen}
-              className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold text-slate-900 xl:cursor-default"
-            >
-              {scanDay === day ? "Cajas de hoy" : `Cajas del ${formatDayShort(scanDay)}`}
-              <span className="text-xs font-normal tabular-nums text-slate-500">{boxes.length} · {dayCod} paq.</span>
-              <span aria-hidden className="ml-auto text-slate-400 xl:hidden">{boxesOpen ? "▾" : "▸"}</span>
-            </button>
-            <ul className={cn("divide-y divide-slate-100 border-t border-slate-100", boxesOpen ? "block" : "hidden", "xl:block")}>
-              {boxes.map((box) => (
-                <BoxRow
-                  key={box.riderId ?? box.riderName}
-                  box={box}
-                  cash={box.riderId ? (boxCash.get(box.riderId) ?? 0) : 0}
-                  riders={riders}
-                  orgId={orgId}
-                  open={openBox === (box.riderId ?? box.riderName)}
-                  onToggle={() => setOpenBox(openBox === (box.riderId ?? box.riderName) ? null : (box.riderId ?? box.riderName))}
-                  canManage={canManageDispatch}
-                  onChanged={() => router.refresh()}
-                  pickupMode={props.riderPickupMode}
-                  filter={boxFilter}
-                  onFilter={setBoxFilter}
-                />
-              ))}
-            </ul>
-          </div>
-        )}
-
       </div>
     </section>
   );

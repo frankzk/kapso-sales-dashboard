@@ -4835,9 +4835,15 @@ explícita. La lista viva dice qué pasó con cada QR: asignado y cotejado; ya
 estaba en esa caja; está en la caja de otro motorizado (y ofrece moverlo); no
 elegible con el motivo; o QR desconocido. Sin motorizado elegido, los QR se
 guardan en una bandeja y se asignan todos al elegirlo («escanear primero»).
-La lista con selección múltiple queda plegada como vía secundaria. A la
-derecha, las cajas de hoy por motorizado con el cotejo de oficina en línea para
-lo que faltara; desde la misma fila un paquete se **quita** (con motivo,
+La lista con selección múltiple queda como vía secundaria. Desde el 22-09-2026
+las tres vistas van en **una sola columna con tres pestañas** —«Asignación por
+QR», «Desde la lista» y «Cajas de hoy» con el número de paquetes del día en un
+círculo— en vez de la lista a media pantalla y las cajas a la derecha; «Desde
+la lista» es una **tabla de columnas** (pedido, tienda, cliente, distrito,
+estado, creado, sale, venta, tarifa), con anchos fijos para lo corto y
+flexibles para el resto, y el texto que se trunca se lee entero al pasar el
+ratón. En «Cajas de hoy», las cajas por motorizado con el cotejo de oficina en
+línea para lo que faltara; desde la misma fila un paquete se **quita** (con motivo,
 `package_removed`) o se **mueve** a otro motorizado
 (`dispatch_route_reassigned`, con origen y destino). Mover abre la carga del
 destino antes de retirar del origen: si el destino ya está en cotejo, no se
