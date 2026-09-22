@@ -118,7 +118,7 @@ describe("filterQueue (Desde la lista)", () => {
   ];
   const ids = (out: QueueRow[]) => out.map((r) => r.orderId);
 
-  it("tienda × distrito × 2.º intento × armados × tomados", () => {
+  it("tienda × distrito × salida previa × armados × tomados", () => {
     expect(ids(filterQueue(rows, EMPTY_QUEUE_FILTERS, today))).toEqual(["a", "b", "c", "d"]);
     expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, store: "Kenku" }, today))).toEqual(["b"]);
     expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, district: "Surco" }, today))).toEqual(["a", "c", "d"]);

@@ -4913,11 +4913,12 @@ disponibles» y «Pedidos tomados» salen de la barra de Grupo GF Courier y
 quedan como «vista anterior» bajo «⋯ Más vistas» (mismo `?tab=`, con una nota
 arriba). Lo que aportaban vive en Despacho del día: en la fila de «Desde la
 lista» el teléfono y la fecha de creación, la búsqueda por teléfono, la chapa
-«2.º intento» (salida previa) con su filtro; «N sin condiciones» junto al
+«salida previa» —el mismo «Con salida previa» de la vista anterior; hasta el
+22-09-2026 decía «2.º intento»— con su filtro; «N sin condiciones» junto al
 contador abre la lista de excluidos con el motivo de cada uno (tarifa
 faltante, distrito inválido, servicio pausado, ya en caja, sin salida
-armable) y enlace al Tarifario; un picker «Filtros» (tienda, distrito, 2.º
-intento, armados, tomados sin caja, fecha de creación) con chips; y tiles de
+armable) y enlace al Tarifario; un picker «Filtros» (tienda, distrito, con
+salida previa, armados, tomados sin caja, fecha de creación) con chips; y tiles de
 métricas encima de Asignar, una por filtro con su cantidad, que abren la lista
 o las cajas ya filtradas.
 

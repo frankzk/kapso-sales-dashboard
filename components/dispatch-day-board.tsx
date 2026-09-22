@@ -580,7 +580,7 @@ export function DispatchDayBoard(props: Props) {
                           <option value="7d">Últimos 7 días</option>
                         </select>
                       </label>
-                      <label className="flex min-h-10 items-center gap-2"><input type="checkbox" checked={filters.secondAttempt} onChange={(e) => patchFilters({ secondAttempt: e.target.checked })} /> Solo 2.º intento</label>
+                      <label className="flex min-h-10 items-center gap-2"><input type="checkbox" checked={filters.secondAttempt} onChange={(e) => patchFilters({ secondAttempt: e.target.checked })} /> Solo con salida previa</label>
                       <label className="flex min-h-10 items-center gap-2"><input type="checkbox" checked={filters.armedOnly} onChange={(e) => patchFilters({ armedOnly: e.target.checked })} /> Solo armados</label>
                       <label className="flex min-h-10 items-center gap-2"><input type="checkbox" checked={filters.takenOnly} onChange={(e) => patchFilters({ takenOnly: e.target.checked })} /> Solo tomados sin caja</label>
                       {activeFilters > 0 && <button type="button" onClick={() => patchFilters({ ...EMPTY_QUEUE_FILTERS, query: filters.query })} className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700">Quitar filtros</button>}
@@ -597,7 +597,7 @@ export function DispatchDayBoard(props: Props) {
                 {filters.store && <Chip onRemove={() => patchFilters({ store: "" })}>{filters.store}</Chip>}
                 {filters.district && <Chip onRemove={() => patchFilters({ district: "" })}>{filters.district}</Chip>}
                 {filters.created !== "todo" && <Chip onRemove={() => patchFilters({ created: "todo" })}>{CREATED_WINDOW_LABEL[filters.created]}</Chip>}
-                {filters.secondAttempt && <Chip onRemove={() => patchFilters({ secondAttempt: false })}>2.º intento</Chip>}
+                {filters.secondAttempt && <Chip onRemove={() => patchFilters({ secondAttempt: false })}>con salida previa</Chip>}
                 {filters.armedOnly && <Chip onRemove={() => patchFilters({ armedOnly: false })}>armados</Chip>}
                 {filters.takenOnly && <Chip onRemove={() => patchFilters({ takenOnly: false })}>tomados sin caja</Chip>}
                 {filters.stages.map((code) => <Chip key={code} onRemove={() => patchFilters({ stages: toggleInList(filters.stages, code) })}>{code === "sin_etapa" ? "sin etapa" : macroStageLabel(code)}</Chip>)}
@@ -637,7 +637,7 @@ export function DispatchDayBoard(props: Props) {
                     <OrderLink orderId={q.orderId} section="historial" className="text-[11px] text-brand-700 underline">Ver actividad</OrderLink>
                     {q.taken && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">tomado · sin caja</span>}
                     {q.taken && q.armed && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">armado</span>}
-                    {q.hasPriorDispatch && <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-800" title="Ya salió antes y volvió; decide con eso">2.º intento</span>}
+                    {q.hasPriorDispatch && <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-800" title="Ya tuvo al menos una salida física y volvió; revísalo como reprogramación o recuperación">salida previa</span>}
                     {q.observation && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800" title={q.observation}>observado</span>}
                   </div>
                   <p className="truncate text-slate-600">{q.customerName} · {q.district}</p>

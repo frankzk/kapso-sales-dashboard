@@ -169,7 +169,7 @@ export interface QueueRow {
   /** Solo los tomados: si Almacén ya lo armó. */
   armed: boolean | null;
   observation: string | null;
-  /** Tuvo una salida física previa y volvió: «2.º intento». */
+  /** Tuvo una salida física previa y volvió: «Con salida previa». */
   hasPriorDispatch: boolean;
   /** Macroetapa y subetapa del MOM en el Master (`order_master`); null si no se conoce. */
   macroStage: string | null;
@@ -278,7 +278,7 @@ export function inCreatedWindow(createdAt: string | null | undefined, window: Cr
 }
 
 /**
- * Tienda × distrito × 2.º intento × armados × tomados × fecha × subetapas ×
+ * Tienda × distrito × salida previa × armados × tomados × fecha × subetapas ×
  * plazo × texto (pedido, cliente, distrito o teléfono). Dentro de un grupo de
  * chips (subetapas, plazos) basta con cumplir uno; entre grupos se exigen todos.
  */
@@ -455,7 +455,7 @@ export const QUEUE_TILE_LABEL: Record<QueueTile, { label: string; hint: string }
   por_asignar: { label: "Por asignar", hint: "Pedidos de Lima con condiciones para salir y sin caja: disponibles más tomados sin ruta. Quita los filtros de la lista." },
   tomados_sin_caja: { label: "Tomados sin caja", hint: "Ya tomados por Grupo GF (servicio y tarifa reservados) pero todavía sin motorizado." },
   armados: { label: "Armados", hint: "Tomados cuya salida ya armó Almacén (listo para despacho) y siguen sin caja." },
-  segundo_intento: { label: "2.º intento", hint: "Ya salieron antes y volvieron; decide con eso." },
+  segundo_intento: { label: "Con salida previa", hint: "Ya tuvieron al menos una salida física y volvieron: revísalos como reprogramaciones o recuperaciones antes de volver a tomarlos." },
 };
 
 export const BOX_TILE_LABEL: Record<BoxTile, { label: string; hint: string }> = {
