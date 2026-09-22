@@ -538,7 +538,7 @@ export function DispatchDayBoard(props: Props) {
                           <button type="button" disabled={pending || draining} onClick={() => run(async () => moveManifestItem(orgId, l.manifestId!, l.shipmentId!, riderId, `Escaneado en la caja de ${riderName}`))} className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800 disabled:opacity-50">Mover</button>
                         )}
                         {l.status === "bloqueado_efectivo" && !overrideCash && (
-                          <button type="button" onClick={() => setOverrideCash(true)} title="Autoriza superar el límite de efectivo de la ruta y vuelve a escanear" className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800">Autorizar</button>
+                          <button type="button" onClick={() => setOverrideCash(true)} title={`${cashOverrideHint(props.cashWarning, props.cashLimit)} Toca «Autorizar» y vuelve a escanear.`} className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800">Autorizar</button>
                         )}
                       </li>
                     );
@@ -712,7 +712,7 @@ export function DispatchDayBoard(props: Props) {
             >
               {pending ? "Asignando…" : `Asignar${selected.size ? ` ${selected.size}` : ""} a ${riderName || "…"}`}
             </button>
-            <label className="flex items-center gap-1 text-xs text-slate-600" title="Límite de efectivo de la ruta (MOM §29.9)">
+            <label className="flex items-center gap-1 text-xs text-slate-600" title={cashOverrideHint(props.cashWarning, props.cashLimit)}>
               <input type="checkbox" checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} /> <span className="whitespace-nowrap">superar el límite</span>
             </label>
           </div>
@@ -1104,4 +1104,13 @@ function formatDayNumeric(day: string | null): string {
   if (!day) return "";
   const [, m, d] = day.split("-");
   return `${d}/${m}`;
+}
+
+/**
+ * Qué hace «superar el límite», con los montos vigentes (MOM §29.9). Va en el
+ * `title`: se lee al pasar el ratón sin ocupar sitio en la barra.
+ */
+function cashOverrideHint(warning: number, limit: number): string {
+  const soles = (n: number) => `S/ ${n.toLocaleString("es-PE", { maximumFractionDigits: 0 })}`;
+  return `Límite de efectivo de la ruta: cada caja suma la venta de sus pedidos, que es lo que el motorizado cobrará en la calle. Desde ${soles(warning)} se avisa; desde ${soles(limit)} el pedido no entra en la caja. Marca esta casilla para autorizar que entre igual: queda registrado con tu usuario.`;
 }
