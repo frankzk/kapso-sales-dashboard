@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cameraErrorMessage } from "@/lib/camera-error";
 import { scanProgressDone, scanProgressText, type ScanProgress } from "@/lib/scan-progress";
+import { cn } from "@/components/ui";
 
 /** Un mismo QR leído dos veces seguidas en menos de esto se ignora. */
 const REPEAT_MS = 2500;
@@ -126,7 +127,8 @@ export function DispatchCamera({
         {continuous && progress && (
           <div className="px-5 py-3" aria-live="polite">
             <div className="flex items-center justify-between gap-3 text-sm">
-              <span className={finished ? "font-semibold text-emerald-700" : "font-medium text-slate-800"}>{finished ? "Todo confirmado" : scanProgressText(progress)}</span>
+              {/* Al doble (28 px): se lee de un vistazo con la pistola en la mano. */}
+              <span className={cn("text-[28px] leading-tight", finished ? "font-semibold text-emerald-700" : "font-medium text-slate-800")}>{finished ? "Todo confirmado" : scanProgressText(progress)}</span>
               {progress.total != null && <span className="text-xs tabular-nums text-slate-500">{Math.min(progress.done, progress.total)}/{progress.total}</span>}
             </div>
             {progress.total != null && (
