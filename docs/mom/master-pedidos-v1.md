@@ -801,6 +801,12 @@ Ejemplos:
 | Paquete escaneado | Por despachar | Listo para asignar |
 | Manifiesto cotejado por oficina | Por despachar | Listo para recojo |
 | Motorizado cotejó y recogió | En curso | Recibido por courier |
+| Motorizado propio asignado con custodia, sin «Lo llevo» | En curso | En tránsito |
+| Motorizado propio dijo «Lo llevo» | En curso | En reparto |
+| Motorizado propio reportó la parada entregada, ruta sin cerrar | Por cerrar | Validación de cierre pendiente |
+| Motorizado propio reportó reprogramado o «no estaba» | En curso | Por reprogramar Lima |
+| Motorizado propio reportó rechazado, dirección errada u otro | Por cerrar | Devolución física pendiente |
+| Ruta cerrada con la parada entregada, sin liquidar | Por cerrar | Pendiente de liquidación |
 | Aliclik retornando y Swayp repartiendo | En curso | En reparto |
 | Una salida entregó y otra sigue activa | Por cerrar | Salida adicional activa |
 | Entregado, courier aún no liquidó | Por cerrar | Pendiente de liquidación |
@@ -4753,10 +4759,13 @@ Reparto propio es una vista con vocabulario y cuadre encima de ella:
   de tres estados y el motivo del catálogo siguen mandando para el cierre de
   ruta; el detalle («LO DEJA», «CEL APAGADO») ya no se pierde.
 - Cada reporte de parada deja `stop_reported` en la actividad del pedido:
-  quién reportó, resultado, medio y monto cobrado, evidencia y nota. Es
-  información: el Master sigue cambiando solo al cerrar la ruta, por la puerta
-  única. La foto y el comprobante se ven desde Reparto y liquidación
-  (`GET /api/reparto/foto`, solo para quien puede ver la parada).
+  quién reportó, resultado, medio y monto cobrado, evidencia y nota. Hasta el
+  22-09-2026 era solo información y el Master cambiaba únicamente al cerrar la
+  ruta; desde v1.14 el resolver lee esa señal y mueve la etapa (§29.13, «La
+  etapa sigue al motorizado»). El cierre de la ruta sigue siendo lo que
+  liquida, por la puerta única. La foto y el comprobante se ven desde Reparto
+  y liquidación y desde la ficha del pedido (`GET /api/reparto/foto`, solo
+  para quien puede ver la parada).
 - Una ruta que nace del cuaderno también recibe su **caja**
   (`scripts/backfill-boxes-from-routes.ts`, runbook `docs/runbooks/cuaderno-a-rutas.md`):
   un ítem por parada, cotejado y recibido a la hora del reporte, con la custodia
@@ -4989,15 +4998,45 @@ motivo · «vuelve a por asignar»; **Retirado de la caja de Roy** · motivo;
 parada pendiente; **En la caja de Roy** · cotejado o sin cotejar · sin «Lo
 llevo»; y una parada del cuaderno sin caja se lee como **En la ruta de Roy**.
 Sin ficha de motorizado no se inventa un nombre («el motorizado»). La misma
-frase encabeza la tarjeta «Revisar la salida activa» en En curso. **Es
-información, no una regla nueva**: sigue vigente §29.12 —la parada es una
-declaración y el Master se mueve al cerrar la ruta—; cambiar la subetapa con
-«Lo llevo» o con el reporte de la parada es una decisión aparte que este
-apartado no toma. Lógica pura en `lib/gf-delivery.ts`, probada en
+frase encabeza la tarjeta «Revisar la salida activa» en En curso. Lógica pura
+en `lib/gf-delivery.ts`, probada en
 `test/gf-delivery.test.ts`; lectura en `getOrderMasterDetail`
 (`loadGfDeliveries`, con service role porque las políticas de caja son del
 supervisor y las de parada de la tienda o del motorizado, y quien abre la
 ficha ya pasó el filtro de `order_master`).
+
+**La etapa sigue al motorizado (v1.14, decisión del 22-09-2026).** Hasta aquí
+un pedido de Grupo GF quedaba en «En curso · En tránsito» desde que se
+asignaba con custodia hasta que se cerraba la ruta, aunque el motorizado ya lo
+hubiera entregado o postergado; §29.12 lo decía a propósito («la parada es una
+declaración»). Se aprueba cambiarlo: el resolver (`gfRiderSignal`,
+`lib/order-macro-stage.ts`) lee de `order_events` la **última** señal del
+motorizado sobre la salida propia vigente —`pickup_checked`, `stop_reported`,
+y `pickup_declined` o `package_removed`, que la anulan— y decide así:
+
+| Última señal del motorizado | Macroetapa | Subetapa |
+| --- | --- | --- |
+| Asignado con custodia, sin «Lo llevo» | En curso | En tránsito (como hasta ahora) |
+| «Lo llevo» (`pickup_checked`) | En curso | En reparto |
+| Parada **entregada** | Por cerrar | Validación de cierre pendiente |
+| Parada **no entregada** por «reprogramado por el cliente» o «no estaba / volver luego» | En curso | Por reprogramar Lima |
+| Parada **no entregada** por rechazado, dirección errada, no contesta, sin dinero u otro | Por cerrar | Devolución física pendiente |
+
+Las paradas del cuaderno, sin `shipment_id`, valen para la salida propia
+vigente. Una señal de otra salida o de un courier externo no cuenta. El
+`since` de la etapa es la hora de esa señal. **El cierre de la ruta no cambia
+de sitio**: sigue escribiendo por la puerta única (`applyDeliveriesToMaster`)
+y, cerrada, el pedido entregado pasa a «Pendiente de liquidación» y con la
+liquidación a «Finalizado · Entregado cerrado», como cualquier Lima. Para que
+eso ocurra, una salida propia cuya parada se reportó entregada **cuenta como
+entregada** en las obligaciones de cierre: nadie escribe
+`delivery_status = entregado` en esas salidas, y sin esta regla todo pedido de
+Grupo GF caía en «Devolución física pendiente» o «Salida adicional activa» al
+cerrar la ruta. Reasignar un paquete postergado deja un `pickup_checked`
+nuevo, más reciente, y el pedido vuelve a «En reparto». La versión del
+resolver sube a `mom-v1.14` para que el cron reconcilie el histórico. Pruebas
+en `test/order-macro-stage.test.ts` («motorizado propio: lo que reporta mueve
+la etapa»).
 
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 

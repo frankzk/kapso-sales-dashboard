@@ -6,8 +6,8 @@
 //     cotejado, «Lo llevo», «No lo llevo», retirado;
 //   · la parada de su ruta (`delivery_stops`): entregado / no entregado con
 //     motivo, cobro, foto y comprobante.
-// El Master NO cambia con esto (§29.12: la parada es una declaración; el
-// pedido lo mueve el cierre de la ruta). Aquí solo se cuenta lo que pasó.
+// La etapa del pedido la mueve el resolver con estas mismas señales (v1.14,
+// lib/order-macro-stage.ts `gfRiderSignal`); aquí solo se cuenta lo que pasó.
 
 import { DECLINE_REASONS } from "@/lib/rider-decline-reasons";
 import { NON_DELIVERY_REASONS, PAYMENT_METHODS, type PaymentMethod, type StopStatus } from "@/lib/routes";

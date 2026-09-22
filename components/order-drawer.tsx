@@ -345,11 +345,12 @@ function drawerNextAction(row: OrderMasterRow, showPayments: boolean, gfSentence
     }
     // Grupo GF (MOM §29.13): la tarjeta dice quién tiene el paquete y en qué
     // quedó la parada, en vez de prometer un «último estado» que no se veía.
+    // Desde v1.14 la etapa ya sigue lo que reporta el motorizado.
     return {
       eyebrow: "Seguimiento",
       title: "Revisar la salida activa",
       description: gfSentence
-        ? `${gfSentence}. Atiende lo que reporte el motorizado; el Master se mueve al cerrar la ruta.`
+        ? `${gfSentence}. La etapa sigue lo que reporte el motorizado; la ruta se liquida al cerrarla.`
         : "Confirma el último estado del courier y atiende cualquier intento o retorno pendiente.",
       cta: "Ver salidas y guías",
       target: "guias",
