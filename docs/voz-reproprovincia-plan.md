@@ -141,7 +141,8 @@ create table voice_calls (
   provider         text not null default 'grok',
   provider_call_id text,                                              -- call_id de xAI
   telephony_call_id text,                                             -- id del callback / pbx_call_id de Zadarma
-  phone            text not null,
+  mode             text not null default 'real' check (mode in ('real','test')),
+  phone            text not null,                                     -- en `test`, el del probador
   status           text not null check (status in ('queued','dialing','in_progress','completed','failed','no_answer','cancelled')),
   outcome          text check (outcome in ('sin_respuesta','se_deja_mensaje','volver_a_contactar','acepta','no_quiere','no_llamar','deriva','sin_resultado')),
   outcome_payload  jsonb not null default '{}'::jsonb,                -- dirección leída, fecha, motivo dicho, qué pidió
@@ -277,18 +278,52 @@ solo por Zadarma (la segunda pata nunca se marcó): se registra
 `sin_respuesta` desde ahí, sin pasar por el agente. Idempotente por
 `telephony_call_id` y `provider_call_id`.
 
-## El prompt (esqueleto)
+## El prompt: el saludo lleva el pedido, y el pedido lo trae la primera tool
 
-Se compila en `lib/voice-recovery-prompt.ts` desde la ficha; las pruebas fijan
-que nunca contiene el código de guía y siempre el nombre del pedido de Shopify.
+El agente guardado no sabe a quién llamó Kapta cuando descuelga. Para que el
+saludo sea «le llamo por su pedido de {producto}» y no «¿me dice su número de
+pedido?», el prompt le ordena **llamar a `identificar_llamada` antes de
+hablar** y saludar con lo que la tool devuelve. La ficha viaja en la respuesta
+de la tool, no en el prompt: el prompt es el mismo para todas las llamadas y
+vive en la consola de xAI.
+
+`identificar_llamada` devuelve, cuando encuentra la fila:
+
+```json
+{
+  "encontrada": true,
+  "nombre": "Wilfredo",
+  "pedido": "#KP126722",
+  "producto": "Set de Pelador de Verduras + Abridor Premium",
+  "cantidad": 1,
+  "monto": "S/ 99",
+  "distrito": "Callería",
+  "ciudad": "Pucallpa",
+  "direccion": "Jr. Los Pinos 123, frente al mercado",
+  "motivo_courier": "no contestó al motorizado",
+  "modo": "real"
+}
+```
+
+El costo de hacerlo así es un segundo de silencio más al descolgar, sumado al
+de la segunda pata del callback. Se mide en la prueba 2 de la Fase 1; si el
+total pasa de tres segundos, el saludo empieza con un «¿Aló?» que lo absorbe.
+
+Prompt del agente (en la consola de xAI, no en Kapta):
 
 ```
-Eres el asistente virtual de {tienda}. Hablas español de Perú, con trato de
-usted, frases cortas. Estás llamando a {nombre} por su pedido {pedido_shopify}
-({producto} x {cantidad}, S/ {monto}, contra entrega), que el courier no pudo
-entregar en {distrito}, {ciudad}.
+Eres Akemi, asistente virtual de {tienda}. Hablas español de Perú, con trato
+de usted, frases cortas. No finges ser una persona.
 
-Empieza EXACTAMENTE con: "{saludo_legal_aprobado}"
+AL CONECTAR, ANTES DE DECIR NADA, llama a identificar_llamada. No saludes
+hasta tener su respuesta.
+- Si devuelve encontrada = false: di "Disculpe, hubo un error de nuestro
+  lado, le escribiremos por WhatsApp. Que tenga buen día." y cuelga. No
+  registres nada.
+- Si devuelve la ficha, saluda EXACTAMENTE así, rellenando con la ficha:
+  "{saludo_legal_aprobado}. Le llamo por su pedido de {producto}, que el
+  courier no pudo entregar en {distrito}. Queremos reenviárselo desde
+  {ciudad}, contra entrega y sin costo adicional. ¿Todavía desea recibirlo?"
 
 Objetivo: saber si todavía quiere el pedido.
 - Si SÍ: lee la dirección registrada ("{direccion}") y pregunta si sigue
@@ -308,6 +343,44 @@ Nunca: pidas dinero, datos de tarjeta o Yape; prometas una hora; inventes
 información; menciones códigos de guía; llames "pedido devuelto" a nada — di
 "no se pudo entregar". Si a los 3 minutos no hay resultado, despídete y registra.
 ```
+
+## Modo prueba: un pedido real, tu teléfono, y nada se escribe
+
+Para ensayar la conversación hace falta un pedido con ficha de verdad, y el
+MOM prohíbe inventar pedidos (§2, principio 3). La solución es separar **de
+qué pedido habla el agente** de **a qué teléfono llama** y de **si escribe**:
+
+- `voice_calls.mode` toma `real` o `test`. En `test`, la fila apunta a un
+  pedido real en Reproprovincia (hay cientos) pero `phone` es el del probador,
+  y **las tools registran el resultado solo en `outcome` y `outcome_payload`
+  de la fila; no llaman a la RPC ni a `discardRecovery`**. El pedido no se
+  entera de que existió la llamada. La transcripción sí se guarda, que es lo
+  que se quiere revisar.
+- Se lanza con `POST /api/internal/voice/test-call` (secreto interno, como
+  `aliclik-egress`), cuerpo `{ order_id, phone }`. Inserta la fila en `test`,
+  pide el callback a Zadarma y devuelve el `voice_call_id`. El agente que
+  contesta, la tool que identifica y el webhook de fin son **los mismos** que
+  en producción: lo único distinto es el destinatario y que no se escribe.
+- La cola del drawer muestra las filas `test` con una etiqueta, y no cuentan
+  para el tope diario ni para las métricas.
+
+Este endpoint es de la Fase 2, antes que el cron. Es lo primero que se
+construye porque es lo que permite escuchar al agente con una ficha de verdad
+sin haber terminado nada más.
+
+### Ensayar antes de tener el endpoint
+
+Las pruebas 1 a 5 de la Fase 1 no necesitan Kapta. Para que el agente ya
+salude con un producto en esas pruebas, `identificar_llamada` puede apuntar
+a un **mock que devuelve siempre la misma ficha**: un webhook de Make con
+respuesta JSON fija (dos minutos de configurar, y Make ya está en uso), o un
+request bin con respuesta personalizada. Cuando exista el endpoint de Kapta,
+se cambia la URL de la tool en la consola y nada más.
+
+Lo que se aprende con el mock: si el agente respeta «tool antes de hablar»,
+cuánto silencio añade, y cómo suena el saludo con un producto real en la
+boca. Lo que NO se aprende: la atadura por caller ID (prueba 3), que necesita
+que la tool reciba el número y alguien lo mire.
 
 ## Guardarraíles técnicos
 
@@ -347,7 +420,7 @@ información; menciones códigos de guía; llames "pedido devuelto" a nada — d
 | Fase | Entrega | Se puede desplegar sin llamar a nadie |
 | --- | --- | --- |
 | 1 · Verificación | Las cinco pruebas de abajo, en orden; texto legal aprobado | sí (nada en el repo) |
-| 2 · Fundaciones | Migración 0165; `p_source` y `p_payload_extra` en la RPC; `lib/voice-recovery.ts` puro con pruebas; ajustes de tienda; cron en modo sombra; columna «Agente» leyendo `voice_calls` | sí, `DRY_RUN=1` |
+| 2 · Fundaciones | Migración 0165; `p_source` y `p_payload_extra` en la RPC; `lib/voice-recovery.ts` puro con pruebas; **`test-call` y las tools en modo `test`** (lo primero, para ensayar con ficha real); ajustes de tienda; cron en modo sombra; columna «Agente» leyendo `voice_calls` | sí, `DRY_RUN=1` |
 | 3 · Integración | Cliente de Zadarma (callback firmado, notificación de fin, estadísticas), endpoints de tools y webhook, agente de Reproprovincia en la consola de xAI con el guion de abajo, botón manual del drawer | sí, `enabled` apagado |
 | 4 · Piloto semana 1 | Una tienda, `enabled` encendido, `auto` apagado; llamadas a mano desde el drawer; se escuchan todas | no |
 | 5 · Piloto semana 2 | `auto` encendido con tope 30; revisión diaria de descartes propuestos | no |
@@ -363,8 +436,11 @@ aplica a mano antes del código que la necesita (`DEPLOY.md`).
 - `test/voice-recovery-outcomes.test.ts`: por cada `resultado` de la tool, qué
   llama y con qué; `sin_resultado` y resultado desconocido no llaman nada;
   `no_quiere` con y sin `can_discard`; fecha pasada rechazada.
-- `test/voice-recovery-prompt.test.ts`: nunca código de guía; siempre nombre de
-  Shopify; saludo legal al principio; sin saludo no compila.
+- `test/voice-recovery-prompt.test.ts`: la respuesta de `identificar_llamada`
+  nunca lleva código de guía y siempre el nombre de Shopify; sin saludo legal
+  configurado la tool devuelve `encontrada: false`.
+- Modo `test`: cada tool sobre una fila `test` deja `outcome` y no llama a la
+  RPC ni al descarte; una fila `test` no cuenta para el tope diario.
 - `test/reproprovincia.test.ts` (ampliar): `confirmed` con `source agente_voz`
   no cambia el resultado de `recoveryOutcome`.
 - `test/order-macro-stage.test.ts` (ampliar): ese mismo evento no mueve
