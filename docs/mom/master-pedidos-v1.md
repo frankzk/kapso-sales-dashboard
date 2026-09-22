@@ -2866,6 +2866,258 @@ y lo que pasa es otra cosa: de 130 devoluciones candidatas medidas el 2026-08-10
 100 no traían motivo alguno. Va escrito «sin motivo del courier · no consta si la
 rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
 
+### 11.8 Recuperación por agente de voz (v1.12, especificación aprobable)
+
+Estado: **especificado, no implementado.** El plan técnico vive en
+`docs/voz-reproprovincia-plan.md`. Esta sección define las reglas; el plan
+define cómo se construyen. Ninguna de las dos autoriza a llamar a un cliente
+hasta que el piloto de abajo se encienda por tienda.
+
+#### Qué es
+
+Un **agente de voz** —un modelo conversacional que habla por teléfono, hoy la
+Voice Agent API de Grok sobre telefonía Twilio, ambos reemplazables— llama a
+los pedidos en **gestión Reproprovincia activa** y les propone el reenvío desde
+la bodega Swayp de su ciudad. Es **un operador más**: lee la misma ficha, escribe
+los mismos hechos por la misma puerta que una asesora y no tiene ningún estado,
+subetapa ni motivo propio. Lo único nuevo que existe por él es su bitácora
+(`voice_calls`), que es un registro de llamadas, no un estado del pedido.
+
+#### Por qué empieza aquí y no en Por confirmar
+
+- **Nadie está llamando.** El ciclo de recuperación (§11) se midió con 920
+  pedidos en 60 días y **cero llamadas registradas**; 570 en ciudad con bodega
+  Swayp y 254 de la última semana todavía de camino de vuelta. El agente no
+  reemplaza a nadie ni le quita cola a nadie: la línea base es cero y todo lo
+  que recupere es incremental.
+- **Fallar cuesta poco.** En Por confirmar un falso «confirmó» quema flete de
+  Aliclik. Aquí el pedido ya se dio por perdido: una llamada mala lo deja donde
+  estaba.
+- **No toca la WABA.** La plantilla de recuperación (§11.1) pide dinero por
+  adelantado y un reporte de spam le cuesta la plantilla a toda la tienda. Una
+  llamada no pasa por Meta.
+- **Consigue el dato que falta.** 100 de 130 devoluciones no traen motivo del
+  courier (§11.7). El agente lo pregunta y lo deja escrito, y no pide plata para
+  averiguarlo.
+
+Por confirmar y Agencia con adelanto quedan **fuera** de esta versión: uno tiene
+equipo humano y coste de error alto; el otro exige negociar dinero, y eso no se
+delega (§2, principio 11, y §8).
+
+#### Quién entra a la cola del agente
+
+Todas las condiciones a la vez. La primera es la misma función que ya decide la
+recuperación; las demás recortan sobre ella. **Ninguna se calcula aparte**: si
+una condición existe en otra pantalla, se lee de la misma función.
+
+1. `recoveryOutcome` da **`activa`** (`lib/reproprovincia.ts`). Eso ya cubre
+   guía Aliclik fallida tras salir, sin guía viva, sin entrega previa, sin
+   descarte, dentro de la ventana y sin anulación en Shopify.
+2. La guía se cerró hace **`voice_recovery_max_age_days` días o menos** (7 por
+   defecto), contados desde el **mismo ancla** que la ventana de recuperación
+   (`closed_at`, o la última transición terminal cuando falta). Es la parte
+   caliente de la cola: el paquete está cerca de la clienta.
+3. **Hay stock Swayp del producto en la ciudad del pedido**, leído del conteo
+   de Swayp (§11, «De dónde sale el stock»). Sin stock el agente no tiene nada
+   que ofrecer: la única propuesta del guion es el reenvío local contra
+   entrega. Agencia con adelanto no es una oferta del agente.
+4. El motivo del courier **no es rechazo en puerta** (`REFUSED` y equivalentes
+   leídos por `motivoDelCourier`). **Sin motivo entra**: §11.7 dice que la
+   ausencia no equivale a recuperable, y la llamada es justamente el medio que
+   lo averigua sin pedir dinero.
+5. **Teléfono peruano válido.** Los leads identificados solo por BSUID (§8.1)
+   quedan fuera: no se pueden llamar.
+6. **Menos de dos antecedentes** (§8). Con dos o más, la conversación exige
+   adelanto, y el adelanto lo negocia una persona.
+7. **Sin gestión de hoy** de nadie —persona o agente— y **sin fecha pactada
+   futura**. Si `confirmation_next_contact_on` existe, manda la fecha (§6.1):
+   el agente respeta el compromiso que alguien tomó con la clienta.
+8. **Con cupo de gestión**: menos de siete días distintos con gestión (§6.1).
+   El agente hereda el tope de todos; un pedido sin cupo no se llama y se cuenta
+   (ver pendientes).
+9. El teléfono **no pidió que no lo llamen** (`no_llamar`, abajo) en esa
+   tienda.
+
+Orden de la cola: **fecha pactada por el propio agente → guía cerrada más
+reciente primero**. Lo mismo que §6.1 con la antigüedad invertida: aquí lo
+nuevo es lo caliente.
+
+#### Interruptores y topes por tienda
+
+Dos interruptores, como la plantilla de recuperación (§11.1) y por la misma
+razón: el primer lote de cada tienda se mira antes de soltarlo.
+
+- `voice_recovery_enabled`: la cola del agente existe y se ve; desde el drawer
+  se puede lanzar **«Llamar con el agente»** a un pedido concreto.
+- `voice_recovery_auto`: el barrido llama solo. Apagarlo es la marcha atrás.
+- `voice_recovery_daily_cap` (30 por defecto): llamadas salientes por tienda y
+  día de Lima. Se cuenta sobre `voice_calls`, no sobre un contador.
+- **Una llamada del agente por pedido y día**, y **`voice_recovery_max_attempts`**
+  (2 por defecto) llamadas del agente por pedido en total. Agotadas, el pedido
+  sigue en la cola de Reproprovincia para una persona, marcado «el agente ya
+  llamó N veces».
+- Horario `voice_recovery_hour_start`–`voice_recovery_hour_end` (09–20 de Lima
+  por defecto), más estrecho que el laboral de §6.1 a propósito: una llamada
+  automática a las 21:45 se recibe distinto que la de una asesora.
+- Lo mueve **owner o admin de la organización de esa tienda**, igual que el
+  ciclo de recontacto (§6.1): reparte llamadas y reputación de toda la tienda.
+
+#### El guion: qué dice y qué no
+
+El guion completo es del plan técnico; aquí van las reglas que no cambian con
+el redactado.
+
+- Se presenta **como asistente virtual de la tienda**, con el nombre de la
+  tienda, y dice desde el principio que la llamada se graba cuando se graba.
+  No finge ser una persona.
+- Nombra el pedido **por su nombre de Shopify** y el producto, nunca por el
+  código de guía (§11.1, `recoveryOrderName`): la clienta no ha visto ese
+  código nunca.
+- Pregunta **una cosa**: si todavía quiere el pedido. Si sí, **lee la dirección
+  de vuelta** y pide referencia y rango de día; propone el reenvío desde su
+  ciudad, contra entrega, sin costo adicional. Si no, pregunta por qué y
+  agradece.
+- **Nunca** pide dinero, datos de tarjeta ni Yape; **nunca** promete hora; no
+  ofrece descuentos ni cambia producto ni precio; no habla de otros pedidos del
+  mismo teléfono. Cualquiera de esas peticiones se **anota y se deriva**: el
+  pedido queda en la cola con la nota arriba para que una persona retome.
+- Si contesta otra persona, deja un mensaje breve y corta. Si sale buzón, corta
+  sin dejar audio largo.
+- Dura como máximo cuatro minutos. Pasado el límite, se despide y deriva.
+- Si la clienta pide que **no la llamen más**, el agente lo registra
+  (`no_llamar`) y se despide. Ese teléfono no vuelve a entrar a la cola del
+  agente en esa tienda; una persona puede seguir llamándolo si lo decide.
+
+#### Lo que escribe, y por dónde
+
+El agente escribe **por `register_confirmation_attempt_v1`** con canal
+`llamada` y `source = 'agente_voz'`, con `operation_id` igual al identificador
+de la llamada. Es la misma transacción atómica e idempotente de §6.1: un
+webhook repetido devuelve el resultado existente y no gasta un segundo día. La
+función gana el parámetro `p_source` (hoy escribe `manual` fijo); su valor por
+defecto sigue siendo `manual`, así que ninguna pantalla cambia.
+
+| Lo que pasó en la llamada | Hecho sobre el pedido | Día de gestión |
+| --- | --- | --- |
+| No contesta, buzón, ocupado | `confirmation_contact` · `sin_respuesta` | sí |
+| Contestó otra persona, se dejó recado | `confirmation_contact` · `se_deja_mensaje` | sí |
+| Pide que llamen otro día | `confirmation_contact` + `confirmation_followup` · `volver_a_contactar` con fecha | sí |
+| **Acepta el reenvío** | `confirmed` con la dirección leída, referencia y rango de día en `payload` | sí |
+| No quiere el producto | ver «Descartar», abajo | según el interruptor |
+| Pide no ser llamada | `no_llamar` solo en `voice_calls`; además el resultado que corresponda a lo hablado | según ese resultado |
+| Pide algo que el agente no puede dar (precio, cambio, pago, hora) | el resultado que corresponda + nota «deriva a persona» | sí |
+| Se cortó, error técnico, no se entendió | **nada sobre el pedido**; solo `voice_calls` | **no** |
+
+Reglas de esa tabla:
+
+- **El agente gasta días de gestión como cualquiera.** Un «no contesta» suyo
+  cuenta un día del §6.1 igual que el de una asesora. Contarlo distinto haría
+  que el número de días dijera cosas distintas según quién llamó, y el tope de
+  intentos del agente (arriba) es lo que evita que se coma el cupo entero.
+- **Una llamada sin resultado no es gestión.** No escribe nada sobre el pedido
+  y no gasta día. El pedido se queda en la cola, que es donde vive el trabajo
+  pendiente (§6.1), con la transcripción a un clic para quien retome.
+- **`confirmed` en Reproprovincia no mueve la macroetapa.** El pedido sigue en
+  **En curso · En gestión Reproprovincia** hasta que exista la salida Swayp:
+  el hecho que cierra la recuperación es la guía nueva, no la palabra de la
+  clienta (§11, «Sale por cuatro puertas»). El resolver lo ignora ahí y una
+  prueba lo fija.
+- **Aceptar no crea la guía.** Crear una salida Swayp valida stock, vínculo de
+  producto y ciudad, y la firma alguien de almacén (§11, «El vínculo se
+  comprueba ANTES»). El agente no tiene esa mano. Lo que sí hace es dejar el
+  pedido **primero en la cola de Reproprovincia** con la etiqueta «Acepta
+  reenvío · crear salida Swayp», derivada de «`confirmed` por `agente_voz` sin
+  salida posterior», no de un estado guardado. Un aceptado que a las 24 horas
+  sigue sin salida aparece en el resumen diario del owner (§17.1) como
+  **«aceptado sin salida»**: la llamada se hizo y alguien la dejó caer.
+- Todo hecho que escribe lleva en `payload` el `voice_call_id`, y la línea de
+  tiempo del drawer lo muestra con actor **«Agente de voz»** y enlace a la
+  transcripción. Un intento que no se puede leer después no es historial
+  (§6.1).
+
+**Descartar.** «Cliente no quiere» es la salida terminal de la recuperación
+(§11.5 le pide ceremonia). No está en la lista de lo que nunca se automatiza
+(§2, principio 11) y no es irreversible —sobre un pedido descartado se puede
+seguir creando una salida Swayp—, pero el piloto empieza sin delegarlo:
+
+- `voice_recovery_can_discard = false` (por defecto): el agente **propone**. La
+  llamada queda en `voice_calls` con resultado `no_quiere` y el motivo dicho
+  por la clienta; la cola muestra «El agente propone descartar: “…”» y el
+  descarte lo ejecuta una persona con la ceremonia de siempre. La llamada no
+  escribe `confirmation_contact` y no gasta día: es una asimetría conocida y
+  aceptada mientras el interruptor esté apagado.
+- `voice_recovery_can_discard = true`: escribe `recovery_discarded` con
+  `source = 'agente_voz'` y el motivo literal, por la misma función que Envíos
+  y el Master (`lib/recovery-discard.ts`). Se enciende cuando el piloto haya
+  escuchado los descartes propuestos y los dé por buenos.
+
+#### Lo que el agente nunca hace
+
+Crear guías. Tocar Shopify. Pedir o recibir pagos. Prometer hora. Llamar fuera
+de horario, por encima del tope o a quien pidió no ser llamado. Hablar de otro
+pedido. Y **no decide condiciones de pago**: si por antecedentes tocaría exigir
+adelanto, ese pedido no entró a su cola.
+
+#### Piloto y medida
+
+Una tienda, dos semanas, `voice_recovery_auto` apagado la primera semana (se
+lanza a mano desde el drawer) y encendido la segunda. Todas las transcripciones
+de la primera semana se escuchan. Se decide con estas cifras, comparadas con la
+línea base de cero llamadas:
+
+| Métrica | Qué delata |
+| --- | --- |
+| Llamadas contestadas / realizadas | Si el número, el horario o el caller ID están mal |
+| Aceptaron / contestadas | Si el guion convence |
+| Salidas Swayp creadas ≤ 48 h tras un aceptado, y entregadas | Si la aceptación se convierte en venta; **la que manda** |
+| Aceptados sin salida a las 24 h | Si almacén recoge lo que el agente deja |
+| Descartes propuestos que una persona rechazó | Si el agente entiende un «no» |
+| Motivos capturados sobre devoluciones sin motivo | El dato que §11.7 no tenía |
+| `recuperacion_vencida` por semana, antes y después | Lo que se pierde por no llamar |
+| Costo (Grok + Twilio) por pedido entregado | Contra el margen del pedido |
+
+Con los aceptados y las salidas se calcula lo mismo que la tabla de cierre de
+§11 mide para las llamadas humanas, con el mismo corte de 60 días, para poder
+poner las dos columnas una al lado de la otra.
+
+#### Criterios de aceptación
+
+- La elegibilidad es **una función pura** (`voiceRecoveryEligible`) que recibe
+  el resultado de `recoveryOutcome`, guías, eventos, stock, antecedentes y
+  ajustes de tienda, y cada una de las nueve condiciones tiene una prueba que
+  la excluye por separado.
+- El orden de la cola tiene prueba: fecha pactada por el agente primero, luego
+  cierre más reciente.
+- Cada fila de la tabla de resultados tiene prueba de **qué hechos escribe y
+  cuáles no**. Un resultado desconocido o una llamada sin resultado no escribe
+  nada sobre el pedido.
+- El mismo `voice_call_id` recibido dos veces produce **un** `confirmation_contact`,
+  un día y una tarea.
+- `confirmed` con `source = 'agente_voz'` sobre un pedido en Reproprovincia no
+  cambia `macro_stage` ni `macro_substage`, y la cola lo etiqueta «Acepta
+  reenvío».
+- Con `voice_recovery_auto` apagado el barrido no crea llamadas; con
+  `voice_recovery_enabled` apagado no existe la cola ni el botón.
+- El tope diario, el tope por pedido, el horario y `no_llamar` se prueban
+  cada uno con un caso que los cruza por una unidad.
+- `register_confirmation_attempt_v1` acepta `p_source` y sin él sigue
+  escribiendo `manual`.
+- La transcripción y la grabación se leen bajo RLS de la tienda, como la ficha
+  (§8.1).
+
+#### Pendientes de esta sección
+
+- **Pedidos sin cupo de gestión** (condición 8): contar cuántos recuperables
+  quedan fuera por haber gastado siete días en su confirmación original. Si son
+  muchos, decidir si la recuperación abre un cupo propio.
+- **Agencia con adelanto por voz** (§11.1): solo después del piloto, y solo
+  hasta `pendiente_de_abono`; el pago lo valida una persona.
+- **Por confirmar por voz** (§6.1): después de Reproprovincia, con la misma
+  arquitectura y una decisión aparte sobre falsos confirmados.
+- **Aviso legal de grabación y tratamiento de datos**: el texto exacto del
+  saludo lo aprueba el owner con quien asesore en protección de datos; el
+  agente no llama sin ese texto configurado por tienda.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom
@@ -4340,6 +4592,8 @@ recoge; antes no lo recogía nadie.
 - Regla exacta para pausar nuevas rutas Swayp por liquidación vencida.
 - Integración directa del resultado por lote del módulo de Liquidaciones con la
   obligación financiera por pedido de la Mesa de cierre.
+- Agente de voz fuera de Reproprovincia: Agencia con adelanto y Por confirmar
+  (§11.8, pendientes).
 
 ## 22. Criterios de aceptación de la Fase 2
 
