@@ -3,7 +3,7 @@
 // Paso 1 «Agregar pedidos» de la caja de Grupo GF, dentro del panel (MOM
 // §29.14): el mismo gesto de Despacho del día acotado a ESTA caja. Cada
 // escaneo toma el pedido si hace falta, lo mete en la caja de este motorizado
-// y este día, y lo deja cotejado (`scanAssignToRider`); con 0179 también
+// y este día, sin cotejarlo (`scanAssignToRider`: la verificación es aparte); con 0179 también
 // readmite un paquete que el motorizado rechazó. No hay motorizado que
 // elegir: la caja ya es de uno. Antes aquí solo había un enlace a otra
 // página.
@@ -20,7 +20,7 @@ function money(value: number): string {
 
 function presentation(l: ScanAssignLine, riderName: string): { text: string; textClass: string; rowClass: string } {
   switch (l.status) {
-    case "asignado_cotejado":
+    case "asignado":
       return { text: `En la caja de ${l.riderName ?? riderName}`, textClass: "text-emerald-700", rowClass: "bg-emerald-50/50" };
     case "ya_en_caja":
       return { text: "Ya estaba", textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
@@ -52,7 +52,7 @@ export function GfBoxAddPackages({ manifest, canManage, refresh }: {
 
   const push = (line: ScanAssignLine) => {
     setLines((cur) => [line, ...cur.filter((l) => l.code !== line.code)].slice(0, 30));
-    if (line.status === "asignado_cotejado" || line.status === "ya_en_caja") void refresh(manifest.id);
+    if (line.status === "asignado" || line.status === "ya_en_caja") void refresh(manifest.id);
   };
 
   return (
@@ -64,7 +64,7 @@ export function GfBoxAddPackages({ manifest, canManage, refresh }: {
         assign={{ orgId: manifest.org_id, riderId, scheduledFor: manifest.route_date, overrideCash }}
         onResult={(r) => { if (r.line) push(r.line); }}
       />
-      <p className="text-xs text-slate-500">Cada escaneo toma el pedido, lo pone en esta caja y lo deja cotejado.</p>
+      <p className="text-xs text-slate-500">Cada escaneo toma el pedido y lo pone en esta caja. Después se verifica en «Verificar caja».</p>
       {lines.length > 0 && (
         <ul className="max-h-72 divide-y divide-slate-100 overflow-auto rounded-xl border border-slate-200" aria-live="polite">
           {lines.map((l, i) => {
@@ -79,7 +79,7 @@ export function GfBoxAddPackages({ manifest, canManage, refresh }: {
                 {l.status === "en_otra_caja" && l.manifestId && l.shipmentId && (
                   <button type="button" disabled={pending} onClick={() => start(async () => {
                     const res = await moveManifestItem(manifest.org_id, l.manifestId!, l.shipmentId!, riderId, `Escaneado en la caja de ${riderName}`);
-                    push({ ...l, status: res.error ? "no_elegible" : "asignado_cotejado", riderName, message: res.error ?? "" });
+                    push({ ...l, status: res.error ? "no_elegible" : "asignado", riderName, message: res.error ?? "" });
                   })} className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800 disabled:opacity-50">Mover</button>
                 )}
                 {l.status === "bloqueado_efectivo" && !overrideCash && (

@@ -17,8 +17,8 @@ describe("summarizeScans", () => {
   it("cuenta por resultado y suma el efectivo solo de lo que entró en la caja", () => {
     expect(
       summarizeScans([
-        { status: "asignado_cotejado", amount: 89 },
-        { status: "asignado_cotejado", amount: 149.5 },
+        { status: "asignado", amount: 89 },
+        { status: "asignado", amount: 149.5 },
         { status: "ya_en_caja", amount: 99 },
         { status: "en_otra_caja", amount: 50 },
         { status: "no_elegible", amount: 20 },
@@ -26,5 +26,16 @@ describe("summarizeScans", () => {
         { status: "desconocido", amount: null },
       ]),
     ).toEqual({ total: 7, assigned: 2, alreadyInBox: 1, inOtherBox: 1, blocked: 2, unknown: 1, cash: 238.5 });
+  });
+});
+
+describe("asignar no coteja (22-09-2026)", () => {
+  it("el escaneo de asignación toma y asigna, pero la verificación de oficina queda aparte", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(`${process.cwd()}/app/dashboard/courier/actions.ts`, "utf8");
+    const body = src.slice(src.indexOf("export async function scanAssignToRider("), src.indexOf("/** Lo que el panel lateral de Rutas"));
+    expect(body).not.toContain('"office"');
+    expect(body).not.toContain("scanManifestItem(");
+    expect(body).toContain("Falta verificarlo en oficina");
   });
 });

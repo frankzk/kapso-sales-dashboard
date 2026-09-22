@@ -20,7 +20,7 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { manualRouteGuideCode, pickFillableRouteOutput } from "@/lib/shipment-output";
 import { courierKey, normalizeDispatchScan } from "@/lib/dispatch";
-import { lookupDispatchShipment, scanManifestItem } from "@/app/dashboard/pedidos/despacho/actions";
+import { lookupDispatchShipment } from "@/app/dashboard/pedidos/despacho/actions";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 import { custodyOnAssign, isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import type { BlockedReason } from "@/lib/dispatch-day";
@@ -1919,11 +1919,12 @@ async function recalculateManifestState(admin: ReturnType<typeof createAdminSupa
 }
 
 // ---------------------------------------------------------------------------
-// Modo escaneo (MOM §29.13): un QR = tomar + asignar + cotejar en oficina.
+// Modo escaneo (MOM §29.13): un QR = tomar + asignar. La verificación de
+// oficina es un paso aparte y obligatorio en «Verificar caja» (22-09-2026).
 // ---------------------------------------------------------------------------
 
 export type ScanAssignStatus =
-  | "asignado_cotejado"
+  | "asignado"
   | "ya_en_caja"
   | "en_otra_caja"
   | "no_elegible"
@@ -1945,10 +1946,12 @@ export interface ScanAssignLine {
 }
 
 /**
- * El supervisor tiene el paquete en la mano y lo escanea: ese gesto toma el
- * pedido (si hace falta), lo pone en la caja del motorizado del día y lo deja
- * cotejado por oficina. Reutiliza las tres acciones que ya existían, no las
- * duplica. Devuelve una línea con el resultado para la lista viva.
+ * El supervisor escanea el paquete: ese gesto toma el pedido (si hace falta)
+ * y lo pone en la caja del motorizado del día. NO lo coteja: desde el
+ * 22-09-2026 asignar por QR y desde la lista es lo mismo, y alguien en
+ * oficina verifica después, en «Verificar caja», que el paquete está de verdad
+ * en la caja física del motorizado. Antes el mismo escaneo dejaba el cotejo
+ * hecho y la caja se saltaba ese control. Devuelve una línea para la lista viva.
  */
 export async function scanAssignToRider(
   orgId: string,
@@ -1998,10 +2001,14 @@ export async function scanAssignToRider(
     const box = (active as { manifest_id: string; office_checked_at: string | null; dispatch_manifests: { rider_id: string | null; driver_name: string | null; route_date: string; state: string } } | null) ?? null;
     if (box) {
       if (box.dispatch_manifests.rider_id === rider.id) {
-        if (box.office_checked_at) return { ...line, status: "ya_en_caja", manifestId: box.manifest_id, message: `Ya estaba en la caja de ${rider.full_name}, cotejado.` };
-        const checked = await scanManifestItem(box.manifest_id, code, "office");
-        if (checked.error) return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: checked.error };
-        return { ...line, status: "asignado_cotejado", manifestId: box.manifest_id, message: `Ya estaba en la caja de ${rider.full_name}; quedó cotejado.` };
+        return {
+          ...line,
+          status: "ya_en_caja",
+          manifestId: box.manifest_id,
+          message: box.office_checked_at
+            ? `Ya estaba en la caja de ${rider.full_name}, verificado en oficina.`
+            : `Ya estaba en la caja de ${rider.full_name}; falta verificarlo en oficina.`,
+        };
       }
       return { ...line, status: "en_otra_caja", manifestId: box.manifest_id, riderName: box.dispatch_manifests.driver_name ?? "otro motorizado", message: `Está en la caja de ${box.dispatch_manifests.driver_name ?? "otro motorizado"} del ${box.dispatch_manifests.route_date}.` };
     }
@@ -2021,18 +2028,12 @@ export async function scanAssignToRider(
     return { ...line, status: /efectivo|límite/i.test(why) ? "bloqueado_efectivo" : "no_elegible", message: why };
   }
   const manifestId = assigned.manifestIds[0] ?? null;
-  // 4) Cotejar en oficina en el mismo gesto: el supervisor tiene la caja en la mano.
-  const shipmentCode = taken.accepted[0]?.outputCode ?? line.orderName ?? code;
-  const checked = manifestId ? await scanManifestItem(manifestId, shipmentCode, "office") : { error: "Sin caja." };
-  if (checked.error) {
-    return { ...line, status: "no_elegible", manifestId, message: `Asignado a ${rider.full_name}, pero no se pudo cotejar: ${checked.error}`, cashWarning: assigned.cashWarning ?? null };
-  }
   return {
     ...line,
-    status: "asignado_cotejado",
+    status: "asignado",
     manifestId,
     shipmentId: taken.accepted[0]?.shipmentId ?? shipmentId,
-    message: `Asignado a ${rider.full_name} y cotejado.`,
+    message: `Asignado a ${rider.full_name}. Falta verificarlo en oficina («Verificar caja»).`,
     cashWarning: assigned.cashWarning ?? null,
   };
 }

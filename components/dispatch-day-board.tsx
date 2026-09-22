@@ -153,7 +153,7 @@ export function DispatchDayBoard(props: Props) {
 
   function pushLine(line: ScanAssignLine) {
     setLines((cur) => [line, ...cur].slice(0, 200));
-    if (line.status === "asignado_cotejado" || line.status === "ya_en_caja") router.refresh();
+    if (line.status === "asignado" || line.status === "ya_en_caja") router.refresh();
   }
 
   /** «Escanear primero»: al elegir motorizado, la bandeja se vacía en la caja de una vez. */
@@ -470,7 +470,7 @@ export function DispatchDayBoard(props: Props) {
             </div>
             {method === "qr" && !helpDismissed && canManageDispatch && (
               <p className="mt-2 flex items-center gap-2 text-xs text-slate-500">
-                <span className="min-w-0 flex-1">Cada escaneo toma el pedido, lo pone en la caja de {riderName || "quien elijas"} y lo deja cotejado.</span>
+                <span className="min-w-0 flex-1">Cada escaneo toma el pedido y lo pone en la caja de {riderName || "quien elijas"}. Después, oficina lo verifica en «Verificar caja».</span>
                 <button type="button" onClick={dismissHelp} aria-label="Cerrar ayuda" className="shrink-0 text-slate-400 hover:text-slate-700">×</button>
               </p>
             )}
@@ -1003,7 +1003,7 @@ function formatDayShort(value: string): string {
  */
 function scanRowPresentation(l: ScanAssignLine, riderName: string): { text: string; textClass: string; rowClass: string } {
   switch (l.status) {
-    case "asignado_cotejado":
+    case "asignado":
       return { text: `En la caja de ${l.riderName ?? riderName}`, textClass: "text-emerald-700", rowClass: "bg-emerald-50/50" };
     case "ya_en_caja":
       return { text: "Ya estaba", textClass: "text-amber-700", rowClass: "bg-amber-50/40" };

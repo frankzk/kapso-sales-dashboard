@@ -23,7 +23,7 @@ export function removeFromTray(tray: readonly TrayEntry[], code: string): TrayEn
 }
 
 export interface ScanLineLike {
-  status: "asignado_cotejado" | "ya_en_caja" | "en_otra_caja" | "no_elegible" | "bloqueado_efectivo" | "desconocido";
+  status: "asignado" | "ya_en_caja" | "en_otra_caja" | "no_elegible" | "bloqueado_efectivo" | "desconocido";
   amount: number | null;
 }
 
@@ -43,7 +43,7 @@ export function summarizeScans(lines: readonly ScanLineLike[]): ScanSummary {
   const out: ScanSummary = { total: lines.length, assigned: 0, alreadyInBox: 0, inOtherBox: 0, blocked: 0, unknown: 0, cash: 0 };
   for (const line of lines) {
     switch (line.status) {
-      case "asignado_cotejado":
+      case "asignado":
         out.assigned += 1;
         out.cash += line.amount ?? 0;
         break;

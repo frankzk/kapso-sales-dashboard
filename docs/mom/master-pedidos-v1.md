@@ -4822,10 +4822,15 @@ las 11:30: el corte rige lo que se toma sin despachar todavía, no a la mesa
 que ya tiene el paquete en la mano; si la solicitud estaba prevista para otro
 día, se mueve al de la caja con `logistics_request_rescheduled`. Cada lectura, en un
 solo gesto, **toma** el pedido si hacía falta, lo **pone en la caja** del
-motorizado del día y lo **deja cotejado por oficina**, porque es el propio
-supervisor quien tiene el paquete en la mano (`scanAssignToRider`, sobre las
-mismas acciones de tomar, asignar y cotejar; eventos
-`logistics_request_accepted`, `dispatch_route_assigned`, `office_checked`). Si
+motorizado del día (`scanAssignToRider`, sobre las mismas acciones de tomar
+y asignar; eventos `logistics_request_accepted`, `dispatch_route_assigned`).
+**Asignar no coteja** (decisión del 22-09-2026): hasta esa fecha el mismo
+escaneo dejaba el paquete «cotejado por oficina» y la caja se saltaba el
+control físico. Ahora asignar por QR y desde la lista es lo mismo, y alguien
+en oficina confirma después, en «Verificar caja», escaneando el QR o
+tecleando el código, que cada paquete está de verdad en la caja física del
+motorizado (`office_checked`). Con el modo `exigir` la caja no sale sin ese
+100 %. Si
 el pedido se tomó días atrás y su fecha prevista ya pasó, la caja no es la de
 aquel día (cuya ruta está liquidada) sino la de hoy o la elegida: la fecha
 prevista se mueve hacia adelante y queda `logistics_request_rescheduled` en el
@@ -4872,7 +4877,8 @@ y en uno en SQL (`gf_rider_pickup_mode`); sin proveedor se asume `exigir`.
 - **`exigir`**: todo como se describe arriba. Oficina coteja, el motorizado
   escanea su caja desde «Recibir mi caja» y la custodia cambia al 100 % de los
   aceptados; la ruta aparece recién entonces.
-- **`confirmar`** (valor de producción desde el 19-09-2026): **basta con
+- **`confirmar`** (valor de producción del 19-09-2026 al 22-09-2026, que
+  vuelve a `exigir` para que oficina verifique toda caja antes de que salga): **basta con
   asignar y nada bloquea la ruta**, pero el motorizado dice **«Lo llevo»** por
   cada pedido al sacarlo del almacén y meterlo en la caja de la moto. En cuanto
   el supervisor pone paquetes en la caja del día, la custodia pasa
@@ -4976,7 +4982,7 @@ lista. Nada de esto cambia acciones de servidor.
 
 **El gesto único.** Escanear o fotografiar es un solo componente
 (`ScanAction`) y el contexto lo fija la pantalla, nunca el usuario:
-`supervisor_asignacion` → tomar + asignar + `office_checked`;
+`supervisor_asignacion` → tomar + asignar (sin `office_checked` desde el 22-09-2026);
 `oficina_cotejo` → `office_checked`; `motorizado_recepcion` →
 `pickup_checked` o `pickup_declined` (con caja recibe; sin caja es «Lo llevo»
 sobre la ruta en custodia); `motorizado_entrega` → foto de la
@@ -5133,8 +5139,8 @@ sin paradas ni paquetes no se lista.
 
 **Agregar pedidos desde la caja.** El paso 1 del panel de la caja escanea
 sobre ESA caja (`components/gf-box-add-packages.tsx`, `scanAssignToRider`
-con el motorizado y el día de la caja): toma el pedido si hace falta, lo mete
-y lo deja cotejado, con la misma lista de resultados de Despacho del día
+con el motorizado y el día de la caja): toma el pedido si hace falta y lo
+mete, sin cotejarlo (la verificación es el paso 2), con la misma lista de resultados de Despacho del día
 (ya estaba, en otra caja → Mover, límite de efectivo → Autorizar, no
 elegible). No hay motorizado que elegir: la caja ya es de uno.
 
