@@ -11,13 +11,13 @@
 // excluidos con motivo, el picker de filtros y los estados del paquete en
 // cada caja. Las tiles de métricas son esos mismos filtros con su cantidad.
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { OrderLink } from "@/components/order-link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import { Hint } from "@/components/hint";
-import { Chip, Sheet } from "@/components/filter-sheet";
+import { Chip, CountChip, Sheet } from "@/components/filter-sheet";
 import { ScanAction } from "@/components/scan-action";
 import { activeDispatchItems } from "@/lib/dispatch";
 import {
@@ -37,10 +37,15 @@ import {
   PACKAGE_STAGE_LABEL,
   packageStage,
   QUEUE_TILE_LABEL,
+  queueFacetCounts,
+  queueSubstageOptions,
   queueTileActive,
   queueTileCounts,
+  SCHEDULED_BUCKET_LABEL,
+  SCHEDULED_BUCKETS,
   splitAssignment,
   toggleBoxTile,
+  toggleInList,
   toggleQueueTile,
   type BoxItemFilter,
   type BoxTile,
@@ -51,6 +56,7 @@ import {
   type QueueTile,
   type RiderBox,
 } from "@/lib/dispatch-day";
+import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
 import { addToTray, removeFromTray, summarizeScans, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import type { RiderPickupMode } from "@/lib/grupo-gf-courier";
@@ -183,6 +189,8 @@ export function DispatchDayBoard(props: Props) {
         armed: o.preparationState === "listo_despacho",
         observation: o.observation,
         hasPriorDispatch: Boolean(o.hasPriorDispatch),
+        macroStage: o.macroStage,
+        macroSubstage: o.macroSubstage,
       }));
     const takenIds = new Set(taken.map((t) => t.orderId));
     const free: QueueRow[] = props.available
@@ -203,6 +211,8 @@ export function DispatchDayBoard(props: Props) {
         armed: null,
         observation: null,
         hasPriorDispatch: o.hasPriorDispatch,
+        macroStage: o.macroStage,
+        macroSubstage: o.macroSubstage,
       }));
     return [...taken, ...free];
   }, [props.accepted, props.available]);
@@ -210,7 +220,12 @@ export function DispatchDayBoard(props: Props) {
   const stores = useMemo(() => [...new Set(queue.map((q) => q.storeName))].sort(), [queue]);
   const districts = useMemo(() => [...new Set(queue.map((q) => q.district))].sort((a, b) => a.localeCompare(b, "es")), [queue]);
   const filtered = useMemo(() => filterQueue(queue, filters, day), [queue, filters, day]);
+  // Chips de subetapa y de fecha pactada con su cantidad facetada (cuántas
+  // quedarían al tocarlo con el resto de filtros como están).
+  const substageOptions = useMemo(() => queueSubstageOptions(queue), [queue]);
+  const facets = useMemo(() => queueFacetCounts(queue, filters, day), [queue, filters, day]);
   const activeFilters = activeFilterCount(filters);
+  const filtersButton = useRef<HTMLButtonElement>(null);
   const visible = filtered.slice(0, limit);
   const allVisibleSelected = visible.length > 0 && visible.every((q) => selected.has(q.orderId));
   const selectedTotal = queue.filter((q) => selected.has(q.orderId)).reduce((sum, q) => sum + q.orderTotal, 0);
@@ -472,6 +487,7 @@ export function DispatchDayBoard(props: Props) {
               />
               <div className="relative">
                 <button
+                  ref={filtersButton}
                   type="button"
                   onClick={() => setFiltersOpen((v) => !v)}
                   aria-expanded={filtersOpen}
@@ -481,7 +497,7 @@ export function DispatchDayBoard(props: Props) {
                   Filtros{activeFilters ? ` · ${activeFilters}` : ""}
                 </button>
                 {filtersOpen && (
-                  <Sheet title="Filtros" onClose={() => setFiltersOpen(false)} anchored>
+                  <Sheet title="Filtros" onClose={() => setFiltersOpen(false)} anchored anchorRef={filtersButton}>
                     <div className="grid gap-3 text-sm">
                       <label className="grid gap-1 text-xs font-medium text-slate-600">Tienda
                         <select value={filters.store} onChange={(e) => patchFilters({ store: e.target.value })} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
@@ -520,14 +536,47 @@ export function DispatchDayBoard(props: Props) {
                 )}
               </span>
             </div>
+            {/* Subetapas del MOM y fecha pactada, como en el Master: chips con
+                cantidad, selección múltiple dentro del grupo y combinables con
+                el picker. La cola solo admite tres subetapas; el resto está en
+                el Master. */}
+            <div role="group" aria-label="Subetapas" className="-mx-1 mt-2 flex items-center gap-1.5 overflow-x-auto px-1 pb-1">
+              <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Subetapas</span>
+              <CountChip label="Todas" count={facets.substageTotal} active={!filters.substages.length} tone="dark" onClick={() => patchFilters({ substages: [] })} />
+              {substageOptions.map((opt, i) => {
+                const newStage = i === 0 || substageOptions[i - 1]!.stage !== opt.stage;
+                return (
+                  <span key={opt.substage} className="flex shrink-0 items-center gap-1.5">
+                    {newStage && opt.stage && <span className="ml-1 text-[11px] text-slate-400">{macroStageLabel(opt.stage)}:</span>}
+                    <CountChip
+                      label={opt.substage === "sin_subetapa" ? "Sin subetapa" : macroSubstageLabel(opt.substage)}
+                      count={facets.substage[opt.substage] ?? 0}
+                      active={filters.substages.includes(opt.substage)}
+                      title={opt.stage ? `${macroStageLabel(opt.stage)} · ${macroSubstageLabel(opt.substage)}` : undefined}
+                      onClick={() => patchFilters({ substages: toggleInList(filters.substages, opt.substage) })}
+                    />
+                  </span>
+                );
+              })}
+            </div>
+            <div role="group" aria-label="Fecha pactada" className="-mx-1 flex items-center gap-1.5 overflow-x-auto px-1 pb-1">
+              <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Fecha pactada</span>
+              <Hint label="Qué es la fecha pactada" text="Día previsto de salida: el de la solicitud ya tomada o, si el pedido sigue disponible, hoy o mañana según el corte de las 11:30. «Vencidos» son tomados cuya salida ya pasó." />
+              <CountChip label="Todos los plazos" count={facets.dueTotal} active={!filters.due.length} tone="indigo" onClick={() => patchFilters({ due: [] })} />
+              {SCHEDULED_BUCKETS.map((bucket) => (
+                <CountChip key={bucket} label={SCHEDULED_BUCKET_LABEL[bucket]} count={facets.due[bucket]} active={filters.due.includes(bucket)} tone="indigo" onClick={() => patchFilters({ due: toggleInList(filters.due, bucket) })} />
+              ))}
+            </div>
             {activeFilters > 0 && (
-              <ul className="mt-2 flex flex-wrap gap-1.5 text-xs" aria-label="Filtros activos">
+              <ul className="mt-1 flex flex-wrap gap-1.5 text-xs" aria-label="Filtros activos">
                 {filters.store && <Chip onRemove={() => patchFilters({ store: "" })}>{filters.store}</Chip>}
                 {filters.district && <Chip onRemove={() => patchFilters({ district: "" })}>{filters.district}</Chip>}
                 {filters.created !== "todo" && <Chip onRemove={() => patchFilters({ created: "todo" })}>{CREATED_WINDOW_LABEL[filters.created]}</Chip>}
                 {filters.secondAttempt && <Chip onRemove={() => patchFilters({ secondAttempt: false })}>2.º intento</Chip>}
                 {filters.armedOnly && <Chip onRemove={() => patchFilters({ armedOnly: false })}>armados</Chip>}
                 {filters.takenOnly && <Chip onRemove={() => patchFilters({ takenOnly: false })}>tomados sin caja</Chip>}
+                {filters.substages.map((code) => <Chip key={code} onRemove={() => patchFilters({ substages: toggleInList(filters.substages, code) })}>{code === "sin_subetapa" ? "sin subetapa" : macroSubstageLabel(code).toLocaleLowerCase("es")}</Chip>)}
+                {filters.due.map((bucket) => <Chip key={bucket} onRemove={() => patchFilters({ due: toggleInList(filters.due, bucket) })}>salida: {SCHEDULED_BUCKET_LABEL[bucket].toLocaleLowerCase("es")}</Chip>)}
               </ul>
             )}
           </div>

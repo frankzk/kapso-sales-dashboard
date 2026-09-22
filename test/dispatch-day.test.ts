@@ -1,6 +1,6 @@
 // Despacho del día (MOM §29.13): lo puro de la pantalla de dos pasos.
 import { describe, expect, it } from "vitest";
-import { activeFilterCount, boxNextStep, boxTileCounts, queueTileActive, queueTileCounts, toggleBoxTile, toggleQueueTile, dayBoxes, declinedPackages, EMPTY_QUEUE_FILTERS, filterBoxItems, filterQueue, inCreatedWindow, packageStage, splitAssignment, type DayManifest, type QueueRow } from "@/lib/dispatch-day";
+import { activeFilterCount, boxNextStep, boxTileCounts, queueFacetCounts, queueSubstageOptions, queueTileActive, queueTileCounts, scheduledBucket, toggleBoxTile, toggleInList, toggleQueueTile, dayBoxes, declinedPackages, EMPTY_QUEUE_FILTERS, filterBoxItems, filterQueue, inCreatedWindow, packageStage, splitAssignment, type DayManifest, type QueueRow } from "@/lib/dispatch-day";
 
 const item = (over: Partial<DayManifest["items"][number]> = {}) => ({
   id: over.id ?? crypto.randomUUID(),
@@ -105,14 +105,16 @@ describe("filterQueue (Desde la lista)", () => {
     armed: null,
     observation: null,
     hasPriorDispatch: false,
+    macroStage: "preparacion",
+    macroSubstage: "por_generar_rotulo",
     ...over,
   });
   const today = "2026-09-19";
   const rows = [
     row({ orderId: "a" }),
-    row({ orderId: "b", storeName: "Kenku", district: "Miraflores", hasPriorDispatch: true, customerPhone: "51999111222", createdAt: "2026-09-18T20:00:00Z" }),
-    row({ orderId: "c", taken: true, requestId: "r", armed: true, createdAt: "2026-09-10T10:00:00Z", customerName: "Luis" }),
-    row({ orderId: "d", taken: true, requestId: "r2", armed: false, createdAt: null }),
+    row({ orderId: "b", storeName: "Kenku", district: "Miraflores", hasPriorDispatch: true, customerPhone: "51999111222", createdAt: "2026-09-18T20:00:00Z", scheduledFor: "2026-09-20" }),
+    row({ orderId: "c", taken: true, requestId: "r", armed: true, createdAt: "2026-09-10T10:00:00Z", customerName: "Luis", macroStage: "por_despachar", macroSubstage: "listo_para_asignar", scheduledFor: "2026-09-17" }),
+    row({ orderId: "d", taken: true, requestId: "r2", armed: false, createdAt: null, macroStage: "preparacion", macroSubstage: "por_armar" }),
   ];
   const ids = (out: QueueRow[]) => out.map((r) => r.orderId);
 
@@ -144,9 +146,66 @@ describe("filterQueue (Desde la lista)", () => {
     expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, query: "kp1", store: "Kenku" }, today))).toEqual(["b"]);
   });
 
-  it("cuenta los filtros activos sin contar el texto", () => {
+  it("cuenta los filtros activos sin contar el texto; cada grupo de chips cuenta una vez", () => {
     expect(activeFilterCount(EMPTY_QUEUE_FILTERS)).toBe(0);
     expect(activeFilterCount({ ...EMPTY_QUEUE_FILTERS, query: "x", store: "Aurela", created: "hoy", secondAttempt: true })).toBe(3);
+    expect(activeFilterCount({ ...EMPTY_QUEUE_FILTERS, substages: ["por_armar", "por_generar_rotulo"], due: ["hoy"] })).toBe(2);
+  });
+
+  it("subetapas: cualquiera de las encendidas entra; se combinan con el resto de filtros", () => {
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, substages: ["por_armar"] }, today))).toEqual(["d"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, substages: ["por_armar", "listo_para_asignar"] }, today))).toEqual(["c", "d"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, substages: ["por_generar_rotulo"], store: "Kenku" }, today))).toEqual(["b"]);
+    // Sin subetapa en el Master cae en «sin_subetapa».
+    expect(ids(filterQueue([row({ orderId: "z", macroStage: null, macroSubstage: null })], { ...EMPTY_QUEUE_FILTERS, substages: ["sin_subetapa"] }, today))).toEqual(["z"]);
+  });
+
+  it("fecha pactada: vencidos, hoy y próximos según la salida prevista; varios plazos suman", () => {
+    expect(scheduledBucket("2026-09-17", today)).toBe("vencido");
+    expect(scheduledBucket("2026-09-19", today)).toBe("hoy");
+    expect(scheduledBucket("2026-09-20", today)).toBe("proximo");
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, due: ["vencido"] }, today))).toEqual(["c"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, due: ["hoy"] }, today))).toEqual(["a", "d"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, due: ["vencido", "hoy"] }, today))).toEqual(["a", "c", "d"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, due: ["proximo"], substages: ["por_generar_rotulo"] }, today))).toEqual(["b"]);
+  });
+
+  it("toggleInList enciende y apaga sin mutar", () => {
+    const base = ["a"] as const;
+    expect(toggleInList(base, "b")).toEqual(["a", "b"]);
+    expect(toggleInList(base, "a")).toEqual([]);
+    expect(base).toEqual(["a"]);
+  });
+
+  it("las opciones de subetapa: las tres de admisión siempre, y detrás lo raro que traiga una fila", () => {
+    expect(queueSubstageOptions(rows).map((o) => o.substage)).toEqual(["por_generar_rotulo", "por_armar", "listo_para_asignar"]);
+    const moved = [...rows, row({ orderId: "m", macroStage: "por_cerrar", macroSubstage: "pendiente_liquidacion" }), row({ orderId: "n", macroStage: null, macroSubstage: null })];
+    expect(queueSubstageOptions(moved)).toEqual([
+      { stage: "preparacion", substage: "por_generar_rotulo" },
+      { stage: "preparacion", substage: "por_armar" },
+      { stage: "por_despachar", substage: "listo_para_asignar" },
+      { stage: "por_cerrar", substage: "pendiente_liquidacion" },
+      { stage: null, substage: "sin_subetapa" },
+    ]);
+  });
+
+  it("cantidades facetadas: cada chip dice cuántas quedarían con el resto de filtros, sin contar su propio grupo", () => {
+    const none = queueFacetCounts(rows, EMPTY_QUEUE_FILTERS, today);
+    expect(none.substageTotal).toBe(4);
+    expect(none.substage).toEqual({ por_generar_rotulo: 2, por_armar: 1, listo_para_asignar: 1 });
+    expect(none.dueTotal).toBe(4);
+    expect(none.due).toEqual({ vencido: 1, hoy: 2, proximo: 1 });
+    // Con «por armar» encendido, los plazos se cuentan solo sobre d; las
+    // subetapas siguen contando sobre todo (su propio grupo no se aplica).
+    const armed = queueFacetCounts(rows, { ...EMPTY_QUEUE_FILTERS, substages: ["por_armar"] }, today);
+    expect(armed.due).toEqual({ vencido: 0, hoy: 1, proximo: 0 });
+    expect(armed.dueTotal).toBe(1);
+    expect(armed.substage).toEqual({ por_generar_rotulo: 2, por_armar: 1, listo_para_asignar: 1 });
+    // Y al revés: el plazo «hoy» reduce las subetapas a a y d.
+    const due = queueFacetCounts(rows, { ...EMPTY_QUEUE_FILTERS, due: ["hoy"], store: "Aurela" }, today);
+    expect(due.substage).toEqual({ por_generar_rotulo: 1, por_armar: 1 });
+    expect(due.substageTotal).toBe(2);
+    expect(due.due).toEqual({ vencido: 1, hoy: 2, proximo: 0 });
   });
 });
 
@@ -183,7 +242,7 @@ describe("estado de cada paquete en la caja (segmentos de «Pedidos tomados»)",
 describe("tiles de métricas → filtros", () => {
   const row = (over: Partial<QueueRow>): QueueRow => ({
     orderId: over.orderId ?? crypto.randomUUID(), orderName: "#K", storeName: "A", customerName: "C", customerPhone: null, district: "D",
-    orderTotal: 1, createdAt: null, scheduledFor: "2026-09-19", tariffAmount: 1, taken: false, requestId: null, armed: null, observation: null, hasPriorDispatch: false, ...over,
+    orderTotal: 1, createdAt: null, scheduledFor: "2026-09-19", tariffAmount: 1, taken: false, requestId: null, armed: null, observation: null, hasPriorDispatch: false, macroStage: "preparacion", macroSubstage: "por_armar", ...over,
   });
   it("cuenta cada tile sobre la cola y sobre las cajas", () => {
     const rows = [row({}), row({ taken: true, armed: true }), row({ taken: true, armed: false }), row({ hasPriorDispatch: true })];

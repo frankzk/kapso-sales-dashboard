@@ -4919,7 +4919,28 @@ faltante, distrito inválido, servicio pausado, ya en caja, sin salida
 armable) y enlace al Tarifario; un picker «Filtros» (tienda, distrito, 2.º
 intento, armados, tomados sin caja, fecha de creación) con chips; y tiles de
 métricas encima de Asignar, una por filtro con su cantidad, que abren la lista
-o las cajas ya filtradas. Los cuatro segmentos de «Pedidos tomados» siguen
+o las cajas ya filtradas.
+
+**Subetapas y fecha pactada sobre la lista (22-09-2026).** Encima de la cola
+van dos hileras de chips como las del Master (§6): **Subetapas** —«Todas» y
+las tres que la cola admite, agrupadas por macroetapa: Preparación · Por
+generar rótulo / Por armar, Por despachar · Listo para asignar; si un tomado
+sin caja trae otra subetapa porque el Master lo movió, aparece detrás con su
+nombre— y **Fecha pactada** —«Todos los plazos», Vencidos, Hoy, Próximos sobre
+la salida prevista: la de la solicitud tomada o, si el pedido sigue
+disponible, hoy o mañana según el corte de las 11:30; «vencido» es un tomado
+cuya salida ya pasó—. Dentro de cada hilera se encienden varios chips a la vez
+(basta con cumplir uno) y las dos hileras se combinan entre sí y con el picker
+y las tiles. **Cada chip lleva su cantidad facetada**: cuántas filas quedarían
+al tocarlo con el resto de filtros tal como están, sin contar los chips de su
+propio grupo, de modo que el número de un chip encendido coincide con «N en
+cola». Un chip en cero se muestra apagado. Las etapas que no aparecen (Por
+confirmar, En curso, Por cerrar, Finalizado) no pueden estar en esta cola por
+la regla de admisión de §29.2; se consultan en el Master. Lógica pura en
+`lib/dispatch-day.ts` (`queueSubstageOptions`, `queueFacetCounts`,
+`scheduledBucket`), probada en `test/dispatch-day.test.ts`; la fila de la cola
+trae `macro_stage` y `macro_substage` del Master. Nada de esto cambia acciones
+de servidor. Los cuatro segmentos de «Pedidos tomados» siguen
 visibles en Cajas de hoy: cada caja dice «N paq. · armados · cotejados ·
 confirmados», cada paquete lleva su chapa de estado (por armar / armado /
 cotejado / confirmado / no lo llevó) y un filtro rápido Todos · Por armar ·

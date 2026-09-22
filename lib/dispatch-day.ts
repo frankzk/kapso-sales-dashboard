@@ -171,9 +171,15 @@ export interface QueueRow {
   observation: string | null;
   /** Tuvo una salida física previa y volvió: «2.º intento». */
   hasPriorDispatch: boolean;
+  /** Macroetapa y subetapa del MOM en el Master (`order_master`); null si no se conoce. */
+  macroStage: string | null;
+  macroSubstage: string | null;
 }
 
 export type CreatedWindow = "hoy" | "ayer" | "7d" | "todo";
+
+/** Plazo de la fecha pactada de salida respecto de hoy. */
+export type ScheduledBucket = "vencido" | "hoy" | "proximo";
 
 export interface QueueFilters {
   query: string;
@@ -183,6 +189,10 @@ export interface QueueFilters {
   armedOnly: boolean;
   takenOnly: boolean;
   created: CreatedWindow;
+  /** Subetapas del MOM encendidas (cualquiera de ellas); vacío es «todas». */
+  substages: readonly string[];
+  /** Plazos de la fecha pactada encendidos (cualquiera de ellos); vacío es «todos». */
+  due: readonly ScheduledBucket[];
 }
 
 export const EMPTY_QUEUE_FILTERS: QueueFilters = {
@@ -193,7 +203,40 @@ export const EMPTY_QUEUE_FILTERS: QueueFilters = {
   armedOnly: false,
   takenOnly: false,
   created: "todo",
+  substages: [],
+  due: [],
 };
+
+/** Clave de la subetapa de una fila; sin dato en el Master, «sin_subetapa». */
+export const NO_SUBSTAGE = "sin_subetapa";
+
+export function rowSubstage(row: Pick<QueueRow, "macroSubstage">): string {
+  return row.macroSubstage || NO_SUBSTAGE;
+}
+
+/**
+ * Vencido, hoy o próximo según la fecha pactada de salida (YYYY-MM-DD) frente
+ * al día de Lima. Un tomado días atrás cuya salida ya pasó es «vencido».
+ */
+export function scheduledBucket(scheduledFor: string, today: string): ScheduledBucket {
+  const day = scheduledFor.slice(0, 10);
+  if (day < today) return "vencido";
+  if (day === today) return "hoy";
+  return "proximo";
+}
+
+export const SCHEDULED_BUCKET_LABEL: Record<ScheduledBucket, string> = {
+  vencido: "Vencidos",
+  hoy: "Hoy",
+  proximo: "Próximos",
+};
+
+export const SCHEDULED_BUCKETS: readonly ScheduledBucket[] = ["vencido", "hoy", "proximo"];
+
+/** Enciende o apaga un valor en un grupo de chips de selección múltiple. */
+export function toggleInList<T>(list: readonly T[], value: T): T[] {
+  return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+}
 
 /** Solo dígitos, para comparar teléfonos escritos con espacios, «+» o guiones. */
 export function phoneDigits(value: string | null | undefined): string {
@@ -225,7 +268,11 @@ export function inCreatedWindow(createdAt: string | null | undefined, window: Cr
   return day >= shiftDay(today, -6) && day <= today;
 }
 
-/** Tienda × distrito × 2.º intento × armados × tomados × fecha × texto (pedido, cliente, distrito o teléfono). */
+/**
+ * Tienda × distrito × 2.º intento × armados × tomados × fecha × subetapas ×
+ * plazo × texto (pedido, cliente, distrito o teléfono). Dentro de un grupo de
+ * chips (subetapas, plazos) basta con cumplir uno; entre grupos se exigen todos.
+ */
 export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, today: string): QueueRow[] {
   const needle = filters.query.trim().toLocaleLowerCase("es");
   const digits = phoneDigits(needle);
@@ -237,15 +284,78 @@ export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, to
     if (filters.armedOnly && !q.armed) return false;
     if (filters.takenOnly && !q.taken) return false;
     if (!inCreatedWindow(q.createdAt, filters.created, today)) return false;
+    if (filters.substages.length && !filters.substages.includes(rowSubstage(q))) return false;
+    if (filters.due.length && !filters.due.includes(scheduledBucket(q.scheduledFor, today))) return false;
     if (!needle) return true;
     if (byPhone && phoneDigits(q.customerPhone).includes(digits)) return true;
     return `${q.orderName} ${q.customerName} ${q.district} ${q.storeName} ${q.customerPhone ?? ""}`.toLocaleLowerCase("es").includes(needle);
   });
 }
 
-/** Cuántos filtros están activos (el texto no cuenta: tiene su propio campo). */
+/** Cuántos filtros están activos (el texto no cuenta: tiene su propio campo). Cada grupo de chips cuenta una vez. */
 export function activeFilterCount(filters: QueueFilters): number {
-  return [filters.store, filters.district, filters.secondAttempt, filters.armedOnly, filters.takenOnly, filters.created !== "todo"].filter(Boolean).length;
+  return [filters.store, filters.district, filters.secondAttempt, filters.armedOnly, filters.takenOnly, filters.created !== "todo", filters.substages.length > 0, filters.due.length > 0].filter(Boolean).length;
+}
+
+// ---------------------------------------------------------------------------
+// Chips de subetapa y de fecha pactada sobre la lista, como en el Master.
+// La cola solo admite tres subetapas (Preparación · por generar rótulo / por
+// armar, Por despachar · listo para asignar); lo demás vive en el Master.
+// Cada chip lleva su cantidad facetada: cuántas filas quedarían al tocarlo
+// con el resto de filtros tal como están, sin contar los chips de su propio
+// grupo. Así el número de un chip encendido coincide con «N en cola».
+// ---------------------------------------------------------------------------
+
+/** Subetapas que la cola admite, en el orden del MOM. */
+export const QUEUE_ADMISSION_SUBSTAGES: readonly { stage: string; substage: string }[] = [
+  { stage: "preparacion", substage: "por_generar_rotulo" },
+  { stage: "preparacion", substage: "por_armar" },
+  { stage: "por_despachar", substage: "listo_para_asignar" },
+];
+
+export interface QueueSubstageOption {
+  stage: string | null;
+  substage: string;
+}
+
+/**
+ * Las subetapas a mostrar: las de admisión siempre (aunque estén en cero) y,
+ * detrás, cualquier otra que traiga una fila (un tomado que el Master movió).
+ */
+export function queueSubstageOptions(rows: readonly QueueRow[]): QueueSubstageOption[] {
+  const out: QueueSubstageOption[] = QUEUE_ADMISSION_SUBSTAGES.map((s) => ({ ...s }));
+  const seen = new Set(out.map((s) => s.substage));
+  const extra: QueueSubstageOption[] = [];
+  for (const row of rows) {
+    const key = rowSubstage(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    extra.push({ stage: row.macroStage, substage: key });
+  }
+  extra.sort((a, b) => a.substage.localeCompare(b.substage, "es"));
+  return [...out, ...extra];
+}
+
+export interface QueueFacetCounts {
+  /** Filas que cumplen todo menos el grupo de subetapas; es el «Todas» del grupo. */
+  substageTotal: number;
+  substage: Record<string, number>;
+  /** Filas que cumplen todo menos el grupo de plazos; es el «Todos los plazos». */
+  dueTotal: number;
+  due: Record<ScheduledBucket, number>;
+}
+
+export function queueFacetCounts(rows: readonly QueueRow[], filters: QueueFilters, today: string): QueueFacetCounts {
+  const forSubstage = filterQueue(rows, { ...filters, substages: [] }, today);
+  const substage: Record<string, number> = {};
+  for (const row of forSubstage) {
+    const key = rowSubstage(row);
+    substage[key] = (substage[key] ?? 0) + 1;
+  }
+  const forDue = filterQueue(rows, { ...filters, due: [] }, today);
+  const due: Record<ScheduledBucket, number> = { vencido: 0, hoy: 0, proximo: 0 };
+  for (const row of forDue) due[scheduledBucket(row.scheduledFor, today)] += 1;
+  return { substageTotal: forSubstage.length, substage, dueTotal: forDue.length, due };
 }
 
 export const CREATED_WINDOW_LABEL: Record<CreatedWindow, string> = {

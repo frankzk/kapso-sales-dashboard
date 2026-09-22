@@ -96,6 +96,9 @@ export interface CourierAvailableOrder {
   scheduledFor: string;
   hasPriorDispatch: boolean;
   lastDispatchedAt: string | null;
+  /** Macroetapa y subetapa del MOM en el Master, para los chips de «Desde la lista». */
+  macroStage: string | null;
+  macroSubstage: string | null;
 }
 
 export interface CourierAcceptedOrder extends Omit<
@@ -435,6 +438,8 @@ async function loadCourierOperations(
       scheduledFor: scheduledDay(config.provider.same_day_cutoff),
       hasPriorDispatch: lastDispatchByOrder.has(order.order_id),
       lastDispatchedAt: lastDispatchByOrder.get(order.order_id) ?? null,
+      macroStage: order.macro_stage ?? null,
+      macroSubstage: order.macro_substage ?? null,
     });
   }
 
@@ -461,7 +466,7 @@ async function loadCourierOperations(
     courierRowsByIds(requestOrderIds, (ids) => admin
           .from("order_master")
           .select(
-            "order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at",
+            "order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_stage,macro_substage",
           )
           .in("order_id", ids)),
     courierRowsByIds(shipmentIds, (ids) => admin
@@ -539,6 +544,8 @@ async function loadCourierOperations(
       acceptedAt: request.accepted_at,
       observation: request.observation,
       hasPriorDispatch: lastDispatchByOrder.has(request.order_id),
+      macroStage: order.macro_stage ?? null,
+      macroSubstage: order.macro_substage ?? null,
       route: manifest
         ? {
             manifestId: manifest.id,

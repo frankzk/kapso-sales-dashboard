@@ -5,7 +5,7 @@
 // Filtros de motorizado y fecha con el mismo picker que Despacho del día. La
 // fila abre la caja al lado (`?caja=` / `?ruta=`, courier-box-drawer.tsx).
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { MouseEvent } from "react";
 
@@ -96,6 +96,7 @@ export function CourierRoutesLedger({
   }, [filtered]);
 
   const activeFilters = (riderParam ? 1 : 0) + (dayMode !== "hoy" ? 1 : 0);
+  const filtersButton = useRef<HTMLButtonElement>(null);
   const riderName = (id: string) => riders.find((r) => r.id === id)?.fullName ?? "";
   const location = { pathname, search };
   const rowHref = (r: CourierLedgerRow) => r.manifestId ? courierBoxHref(r.manifestId, location) : courierRouteDrawerHref(r.routeId, location);
@@ -107,6 +108,7 @@ export function CourierRoutesLedger({
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative">
           <button
+            ref={filtersButton}
             type="button"
             onClick={() => setFiltersOpen((v) => !v)}
             aria-expanded={filtersOpen}
@@ -116,7 +118,7 @@ export function CourierRoutesLedger({
             Filtros{activeFilters ? ` · ${activeFilters}` : ""}
           </button>
           {filtersOpen && (
-            <Sheet title="Filtros" onClose={() => setFiltersOpen(false)} anchored>
+            <Sheet title="Filtros" onClose={() => setFiltersOpen(false)} anchored anchorRef={filtersButton}>
               <div className="grid gap-3 text-sm">
                 <label className="grid gap-1 text-xs font-medium text-slate-600">Motorizado
                   <select value={riderParam} onChange={(e) => setParams({ rider: e.target.value })} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
