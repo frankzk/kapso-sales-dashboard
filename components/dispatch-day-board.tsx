@@ -58,7 +58,7 @@ import {
   type RiderBox,
 } from "@/lib/dispatch-day";
 import { macroStageLabel, macroSubstageLabel, ORDER_MACRO_STAGES } from "@/lib/order-macro-stage";
-import { addToTray, removeFromTray, summarizeScans, type TrayEntry } from "@/lib/dispatch-scan-tray";
+import { addToTray, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import type { RiderPickupMode } from "@/lib/grupo-gf-courier";
 import {
@@ -149,7 +149,6 @@ export function DispatchDayBoard(props: Props) {
   const [lines, setLines] = useState<ScanAssignLine[]>([]);
   const [tray, setTray] = useState<TrayEntry[]>([]);
   const [draining, setDraining] = useState(false);
-  const summary = useMemo(() => summarizeScans(lines), [lines]);
 
   function pushLine(line: ScanAssignLine) {
     setLines((cur) => [line, ...cur].slice(0, 200));
@@ -512,14 +511,23 @@ export function DispatchDayBoard(props: Props) {
                     );
                   })}
                 </ul>
-                <div className={cn("sticky bottom-0 mt-1 flex items-center gap-2 bg-white py-1 text-xs", summary.cash >= props.cashLimit ? "text-red-700" : summary.cash >= props.cashWarning ? "text-amber-700" : "text-slate-700")}>
-                  <span className="min-w-0 truncate whitespace-nowrap" title={`${summary.assigned} en la caja · efectivo previsto ${money(summary.cash)}${summary.cash >= props.cashLimit ? " · supera el límite" : summary.cash >= props.cashWarning ? " · cerca del límite" : ""}${overrideCash ? " · límite autorizado" : ""}`}>
-                    <b className="tabular-nums">{summary.assigned}</b> en la caja{riderName ? ` de ${riderName}` : ""} · <b className="tabular-nums">{moneyShort(summary.cash)}</b>
-                  </span>
-                  <button type="button" onClick={() => setLines([])} className="ml-auto shrink-0 text-slate-500 underline">Limpiar</button>
-                </div>
               </div>
             )}
+            {/* El total de la caja, del servidor: sobrevive a recargar la página
+                (la lista de escaneos de arriba es solo de esta sesión). Al doble
+                de tamaño para leerlo con la pistola en la mano. */}
+            {method === "qr" && riderId && (riderBoxCount(riderId) > 0 || lines.length > 0) && (() => {
+              const count = riderBoxCount(riderId);
+              const cash = boxCash.get(riderId) ?? 0;
+              return (
+                <div className={cn("mt-2 flex items-center gap-2", cash >= props.cashLimit ? "text-red-700" : cash >= props.cashWarning ? "text-amber-700" : "text-slate-800")}>
+                  <span className="min-w-0 truncate text-[24px] font-medium leading-tight" title={`${count} en la caja de ${riderName} · efectivo previsto ${money(cash)}${cash >= props.cashLimit ? " · supera el límite" : cash >= props.cashWarning ? " · cerca del límite" : ""}${overrideCash ? " · límite autorizado" : ""}`}>
+                    <b className="tabular-nums">{count}</b> en la caja de {riderName} · <b className="tabular-nums">{moneyShort(cash)}</b>
+                  </span>
+                  {lines.length > 0 && <button type="button" onClick={() => setLines([])} className="ml-auto shrink-0 text-xs text-slate-500 underline">Limpiar lista</button>}
+                </div>
+              );
+            })()}
           </div>
           {method === "lista" && (
           <div className="border-t border-slate-100">
