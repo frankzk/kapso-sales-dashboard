@@ -508,6 +508,16 @@ from voice_calls vc where vc.outcome = 'acepta';
 Cada una responde una pregunta que decide el diseño. No se pasa a la siguiente
 sin anotar el resultado aquí.
 
+### Resultados
+
+| Prueba | Fecha | Resultado |
+| --- | --- | --- |
+| 1 · ¿Contesta el agente? | 22-09-2026 | **Sí.** Llamada directa desde un celular al 01 705 8243: la tool corre antes de hablar y el saludo sale con la ficha del mock. |
+| 3 · ¿Qué número ve xAI? | 22-09-2026 | **Ninguno, ni siquiera en llamada directa**, con «Know caller's phone number» encendido. Si el desvío de Zadarma no entrega el caller ID en una llamada directa, tampoco lo hará en el callback. Mientras no se resuelva, la atadura es la **opción 2: una llamada en curso por número de agente**. Pendiente: revisar en Make qué llegó en `numero_cliente` y si Zadarma tiene una opción para transmitir el número de origen en el desvío. |
+| 2 · ¿Funciona la saliente? | — | Pendiente. |
+| 4 · ¿Llama webhooks? | 22-09-2026 | **Sí.** Las dos tools llegan a Make en cada sesión de la consola. |
+| 5 · Transcripción y fin | — | Pendiente. |
+
 1. **¿Contesta el agente?** Llamar desde un celular al `01 705 8243`. Si
    contesta el agente guardado con su saludo, Zadarma → desvío SIP → xAI está
    bien. Anotar cuántos segundos tarda en contestar.
