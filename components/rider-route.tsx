@@ -483,11 +483,11 @@ function StopCard({
   return (
     <div
       className={cn(
-        // Fondo y franja izquierda por estado: el cambio se ve sin leer.
-        "overflow-hidden rounded-xl border border-l-[6px]",
-        stop.status === "entregado" && "border-emerald-300 border-l-emerald-600 bg-emerald-100",
-        stop.status === "no_entregado" && "border-red-300 border-l-red-600 bg-red-100",
-        stop.status === "pendiente" && "border-slate-200 border-l-slate-300 bg-white",
+        // Fondo por estado: el cambio se ve sin leer.
+        "overflow-hidden rounded-xl border",
+        stop.status === "entregado" && "border-emerald-300 bg-emerald-100",
+        stop.status === "no_entregado" && "border-red-300 bg-red-100",
+        stop.status === "pendiente" && "border-slate-200 bg-white",
         selected && "ring-4 ring-brand-500/15 border-brand-500",
       )}
     >
