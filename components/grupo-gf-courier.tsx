@@ -12,7 +12,7 @@ import { CourierRoutesLedger } from "@/components/courier-routes-ledger";
 import { CourierBoxDrawer } from "@/components/courier-box-drawer";
 import { CourierRouteReportDrawer } from "@/components/courier-route-report-drawer";
 import type { DispatchManifest } from "@/lib/dispatch-access";
-import type { CourierLedgerRow } from "@/lib/courier-route-ledger";
+import type { CourierLedgerRow, PendingReturn } from "@/lib/courier-route-ledger";
 import { resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
 import {
   activateGroupGfCourier,
@@ -58,6 +58,7 @@ export function GrupoGfCourierBoard({
   manifests = [],
   today = "",
   ledger = [],
+  pendingReturns = [],
 }: {
   orgId: string;
   snapshot: CourierConfigSnapshot;
@@ -67,6 +68,8 @@ export function GrupoGfCourierBoard({
   today?: string;
   /** Rutas y cajas para la pestaña Rutas (MOM §29.14). */
   ledger?: CourierLedgerRow[];
+  /** «No entregado» que siguen en una caja: habilitan «Recibir devoluciones». */
+  pendingReturns?: PendingReturn[];
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -220,6 +223,8 @@ export function GrupoGfCourierBoard({
           today={today}
           unassignedCount={snapshot.operations.accepted.filter((order) => !order.route).length}
           onShowUnassigned={() => setTab("dispatch")}
+          orgId={orgId}
+          pendingReturns={pendingReturns}
         />
       )}
       <CourierBoxDrawer />

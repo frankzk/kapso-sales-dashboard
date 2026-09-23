@@ -7,7 +7,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { GrupoGfCourierBoard } from "@/components/grupo-gf-courier";
 import { loadCourierConfig } from "./actions";
 import { getDispatchWorkspaceData } from "@/lib/dispatch-access";
-import { getCourierRouteLedger } from "@/lib/courier-route-ledger";
+import { getCourierRouteLedger, getPendingReturns } from "@/lib/courier-route-ledger";
 import { limaDate } from "@/lib/sheets/resolver";
 
 export const dynamic = "force-dynamic";
@@ -42,8 +42,8 @@ async function CourierContent({ searchParams }: { searchParams: Promise<SP> }) {
   // Una fecha concreta en la lista de Rutas la trae el servidor (puede ser
   // anterior a las últimas 150 rutas); «hoy» y «todas» filtran en el navegador.
   const day = /^\d{4}-\d{2}-\d{2}$/.test(sp.dia ?? "") ? sp.dia! : null;
-  const [snapshot, dispatch, ledger] = await Promise.all([loadCourierConfig(orgId), getDispatchWorkspaceData(), getCourierRouteLedger({ day })]);
+  const [snapshot, dispatch, ledger, pendingReturns] = await Promise.all([loadCourierConfig(orgId), getDispatchWorkspaceData(), getCourierRouteLedger({ day }), getPendingReturns().catch(() => [])]);
   const today = limaDate(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10);
-  return <GrupoGfCourierBoard orgId={orgId} snapshot={snapshot} manifests={dispatch.manifests} today={today} ledger={ledger} />;
+  return <GrupoGfCourierBoard orgId={orgId} snapshot={snapshot} manifests={dispatch.manifests} today={today} ledger={ledger} pendingReturns={pendingReturns} />;
 }
 

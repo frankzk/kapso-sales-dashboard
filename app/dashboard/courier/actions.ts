@@ -1148,8 +1148,35 @@ export async function returnUndeliveredToOffice(orgId: string, orderIds: string[
   revalidatePath(COURIER_PATH);
   revalidatePath("/dashboard/pedidos");
   if (!changed.length) return { error: [...new Set(errors)].join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
-  const done = `${changed.length} ${changed.length === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina: ${changed.length === 1 ? "vuelve" : "vuelven"} a «por asignar», en «Por reprogramar Lima».`;
+  const done = `${changed.length} ${changed.length === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina. Los no entregados vuelven a «por asignar» (Por reprogramar Lima); los rechazados quedan devueltos.`;
   return errors.length ? { error: `${done} ${[...new Set(errors)].join(" ")}` } : { notice: done };
+}
+
+/**
+ * «Recibir devoluciones» desde Rutas: el QR, la guía o el número de pedido de
+ * un paquete «No entregado» que el motorizado trae de vuelta. Misma regla que
+ * `returnUndeliveredToOffice` (0188/0189).
+ */
+export async function returnUndeliveredByCode(orgId: string, rawCode: string): Promise<CourierActionResult & { orderName?: string | null }> {
+  const code = normalizeDispatchScan(rawCode).slice(0, 200);
+  if (!code) return { error: "Escanea el QR o escribe el código del paquete." };
+  const auth = await requireManager(orgId);
+  if ("error" in auth) return auth;
+  const admin = createAdminSupabase();
+  let orderId: string | null = null;
+  const found = await lookupDispatchShipment(code);
+  if (found.shipment) orderId = found.shipment.order_id;
+  else {
+    const name = code.replace(/^#/, "");
+    const { data: stores } = await admin.from("stores").select("id").eq("org_id", orgId);
+    const storeIds = ((stores ?? []) as { id: string }[]).map((st) => st.id);
+    const { data: orders } = await admin.from("orders").select("id").in("store_id", storeIds).or(`name.ilike.${name},name.ilike.#${name}`).limit(2);
+    if (orders?.length === 1) orderId = orders[0]!.id as string;
+  }
+  if (!orderId) return { error: found.error ?? "No encontramos un pedido con ese QR, guía o número." };
+  const { data: om } = await admin.from("order_master").select("order_name").eq("order_id", orderId).maybeSingle();
+  const res = await returnUndeliveredToOffice(orgId, [orderId]);
+  return { ...res, orderName: (om?.order_name as string | null) ?? null };
 }
 
 export async function rescheduleGroupGfCourierOrders(

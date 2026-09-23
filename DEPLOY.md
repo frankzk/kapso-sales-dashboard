@@ -1947,3 +1947,10 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
    modo `exigir` y crea `gf_return_to_office`. Sin ella, «Recibir en oficina»
    responde que la función no existe.
 2. Resolver `mom-v1.15`: el cron reconcilia el histórico solo.
+
+### 22-09-2026 · Rechazo en puerta recibido en oficina (0189)
+
+1. **Migración `0189_gf_return_rejected.sql`**, a mano, antes del código.
+   Redefine `gf_return_to_office`: un rechazo queda devuelto y cancela la
+   solicitud en vez de volver a «por asignar».
+2. Resolver `mom-v1.16`: el cron reconcilia el histórico solo.

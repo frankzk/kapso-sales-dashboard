@@ -379,4 +379,6 @@
 \ir migrations/0187_gf_readd_declined_item.sql
 \echo 'Applying 0188_gf_return_to_office.sql'
 \ir migrations/0188_gf_return_to_office.sql
+\echo 'Applying 0189_gf_return_rejected.sql'
+\ir migrations/0189_gf_return_rejected.sql
 \echo 'Done.'

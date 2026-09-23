@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- 0188: «Recibir en oficina». Un paquete reportado «No entregado» sale de la
+-- 0188/0189: «Recibir en oficina». Un paquete reportado «No entregado» sale de la
 -- caja en custodia (también en modo 'exigir'), la custodia vuelve a la empresa,
 -- la solicitud a «por asignar» y la parada reportada se conserva.
 begin;
@@ -51,8 +51,16 @@ begin
   if (select custody_state from shipments where id='18800000-0000-0000-0000-000000000006') <> 'empresa' then raise exception 'custody not back'; end if;
   if (select status from delivery_stops where route_id=v_route and shipment_id='18800000-0000-0000-0000-000000000006') <> 'no_entregado' then raise exception 'stop evidence lost'; end if;
   if not exists (select 1 from order_events where order_id=v_order and kind='returned_to_office' and note like 'No entregado por Roy vuelta (direccion_errada)%') then raise exception 'event missing'; end if;
-  -- El otro paquete sigue en la caja.
+  -- El otro paquete sigue en la caja (hasta que se reporte y reciba abajo).
   if (select removed_at from dispatch_manifest_items where id=v_item2) is not null then raise exception 'other item touched'; end if;
+  -- 0189: un rechazo recibido en oficina queda devuelto, no vuelve a la cola.
+  update delivery_stops set status='no_entregado', outcome_reason='rechazado', reported_at=now()
+   where route_id=v_route and shipment_id='18800000-0000-0000-0000-000000000007';
+  perform gf_return_to_office(v_item2,'18800000-0000-0000-0000-000000000009');
+  if (select custody_state from shipments where id='18800000-0000-0000-0000-000000000007') <> 'devuelto' then raise exception 'rejected not marked returned'; end if;
+  if (select returned_at from shipments where id='18800000-0000-0000-0000-000000000007') is null then raise exception 'rejected without returned_at'; end if;
+  if not exists (select 1 from order_events where order_id='18800000-0000-0000-0000-000000000005' and kind='returned_to_office' and note like '%no se reprograma%') then raise exception 'rejected note missing'; end if;
+
   -- Dos veces: ya no está en la caja.
   begin
     perform gf_return_to_office(v_item1,'18800000-0000-0000-0000-000000000009');

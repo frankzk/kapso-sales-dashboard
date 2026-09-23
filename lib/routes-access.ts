@@ -51,6 +51,8 @@ export interface StopWithOrder extends RouteStop {
   pickup_confirmed?: boolean | null;
   manifest_item_id?: string | null;
   pickup_checked_at?: string | null;
+  /** «No entregado» que ya volvió a la oficina (`returned_to_office`, 0188). */
+  returned_at?: string | null;
   order: {
     name: string | null;
     customer_name: string | null;
@@ -148,7 +150,7 @@ export async function getRouteDetail(
     }
   }
 
-  const [balances, pickups] = await Promise.all([loadRouteCollectionBalances(orderIds), loadStopPickups(stops)]);
+  const [balances, pickups, returns] = await Promise.all([loadRouteCollectionBalances(orderIds), loadStopPickups(stops), loadStopReturns(stops)]);
   return {
     route,
     stops: stops.map((s) => ({
@@ -157,6 +159,7 @@ export async function getRouteDetail(
       collection: balances.get(s.order_id),
       manifest_item_id: pickups.get(pickupKey(s))?.id ?? null,
       pickup_checked_at: pickups.get(pickupKey(s))?.pickup_checked_at ?? null,
+      returned_at: returns.get(pickupKey(s)) ?? null,
     })),
   };
 }
@@ -171,6 +174,24 @@ function pickupKey(stop: { dispatch_manifest_id?: string | null; shipment_id?: s
  * del supervisor, y el motorizado solo recibe los de SUS paradas (ya
  * filtradas por RLS arriba).
  */
+/** Cuándo volvió a la oficina cada «No entregado» de una caja (0188). */
+async function loadStopReturns(stops: readonly StopWithOrder[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const failed = stops.filter((s) => s.status === "no_entregado" && s.dispatch_manifest_id && s.shipment_id);
+  if (!failed.length) return map;
+  const admin = createAdminSupabase();
+  const { data } = await admin
+    .from("dispatch_events")
+    .select("manifest_id,shipment_id,occurred_at")
+    .eq("kind", "returned_to_office")
+    .in("manifest_id", [...new Set(failed.map((s) => s.dispatch_manifest_id as string))])
+    .in("shipment_id", failed.map((s) => s.shipment_id as string));
+  for (const row of (data ?? []) as Array<{ manifest_id: string; shipment_id: string; occurred_at: string }>) {
+    map.set(`${row.manifest_id}:${row.shipment_id}`, row.occurred_at);
+  }
+  return map;
+}
+
 async function loadStopPickups(stops: readonly StopWithOrder[]): Promise<Map<string, { id: string; pickup_checked_at: string | null }>> {
   const map = new Map<string, { id: string; pickup_checked_at: string | null }>();
   const withBox = stops.filter((s) => s.dispatch_manifest_id && s.shipment_id);

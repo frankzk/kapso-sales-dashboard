@@ -22,6 +22,11 @@ function openInPlace(event: MouseEvent<HTMLAnchorElement>, href: string) {
 import { cn } from "@/components/ui";
 import { Hint } from "@/components/hint";
 import { Chip, Sheet } from "@/components/filter-sheet";
+import { DispatchScanner } from "@/components/dispatch-scanner";
+import { DispatchCamera } from "@/components/dispatch-camera";
+import { returnUndeliveredByCode, returnUndeliveredToOffice } from "@/app/dashboard/courier/actions";
+import { nonDeliveryReasonLabel } from "@/lib/gf-delivery";
+import type { PendingReturn } from "@/lib/courier-route-ledger";
 import { courierBoxHref, courierReportHref, courierRouteDrawerHref } from "@/lib/courier-box-href";
 import { LEDGER_SITUATION_LABELS, ledgerSituation, type CourierLedgerRow, type CourierLedgerSituation } from "@/lib/courier-route-ledger";
 import { routeDayLong } from "@/lib/dispatch";
@@ -55,13 +60,20 @@ export function CourierRoutesLedger({
   today,
   unassignedCount = 0,
   onShowUnassigned,
+  orgId,
+  pendingReturns = [],
 }: {
   rows: CourierLedgerRow[];
   riders: { id: string; fullName: string }[];
   today: string;
   unassignedCount?: number;
   onShowUnassigned?: () => void;
+  /** Para «Recibir devoluciones»: sin org no se ofrece. */
+  orgId?: string;
+  /** «No entregado» que siguen en una caja, de cualquier fecha. */
+  pendingReturns?: PendingReturn[];
 }) {
+  const [returnsOpen, setReturnsOpen] = useState(false);
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -158,12 +170,22 @@ export function CourierRoutesLedger({
           </ul>
         )}
         <span className="text-xs text-slate-500">{filtered.length} ruta{filtered.length === 1 ? "" : "s"}</span>
-        {unassignedCount > 0 && onShowUnassigned && (
-          <button type="button" onClick={onShowUnassigned} className="ml-auto min-h-10 rounded-lg border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-800 hover:bg-amber-100">
-            {unassignedCount} pedido{unassignedCount === 1 ? "" : "s"} sin ruta →
-          </button>
-        )}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {/* Solo con devoluciones pendientes, de cualquier fecha. */}
+          {orgId && pendingReturns.length > 0 && (
+            <button type="button" onClick={() => setReturnsOpen(true)} title="Paquetes «No entregado» que el motorizado tiene que traer de vuelta: escanéalos al recibirlos" className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 text-sm font-semibold text-red-800 hover:bg-red-100">
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7V4h3M17 4h3v3M20 17v3h-3M7 20H4v-3M7 12h10" /></svg>
+              Recibir devoluciones · {pendingReturns.length}
+            </button>
+          )}
+          {unassignedCount > 0 && onShowUnassigned && (
+            <button type="button" onClick={onShowUnassigned} className="min-h-10 rounded-lg border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-800 hover:bg-amber-100">
+              {unassignedCount} pedido{unassignedCount === 1 ? "" : "s"} sin ruta →
+            </button>
+          )}
+        </div>
       </div>
+      {returnsOpen && orgId && <ReturnsPanel orgId={orgId} pending={pendingReturns} onClose={() => setReturnsOpen(false)} />}
 
       <div className="max-h-[70vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
         {!groups.length && (
@@ -183,6 +205,7 @@ export function CourierRoutesLedger({
               <th className="px-3 py-2.5 text-center font-medium">Armados</th>
               <th className="px-3 py-2.5 text-center font-medium">Cotejados</th>
               <th className="px-3 py-2.5 text-center font-medium">Recibidos</th>
+              <th className="px-3 py-2.5 text-center font-medium"><span className="inline-flex items-center gap-1">Devolver <Hint text="No entregados que el motorizado tiene que traer de vuelta: devueltos / por devolver. Se reciben con «Recibir devoluciones»." /></span></th>
               <th className="px-3 py-2.5 text-right font-medium">Efectivo</th>
               <th className="px-4 py-2.5 font-medium"><span className="inline-flex items-center gap-1">Avance <Hint text="Con caja, dos barras: verde, cotejados por oficina; morada, recibidos por el motorizado con «Lo llevo». Sin caja: paradas ya reportadas." /></span></th>
               <th className="px-3 py-2.5 font-medium">Liquidación</th>
@@ -191,7 +214,7 @@ export function CourierRoutesLedger({
           {groups.map(([day, list]) => (
             <tbody key={day}>
               <tr>
-                <th colSpan={9} scope="rowgroup" className="sticky top-[37px] z-10 border-y border-slate-200 bg-white px-4 py-2 text-left text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
+                <th colSpan={10} scope="rowgroup" className="sticky top-[37px] z-10 border-y border-slate-200 bg-white px-4 py-2 text-left text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
                   {day === today ? "Hoy · " : ""}{routeDayLong(day)}
                 </th>
               </tr>
@@ -287,6 +310,7 @@ function LedgerRow({ row, href, reportHref }: { row: CourierLedgerRow; href: str
       <td className="px-3 py-2.5 text-center tabular-nums text-sky-700">{dash(row.armedCount)}</td>
       <td className="px-3 py-2.5 text-center tabular-nums text-emerald-700">{dash(row.officeCheckedCount)}</td>
       <td className="px-3 py-2.5 text-center tabular-nums text-violet-700">{dash(row.pickupCheckedCount)}</td>
+      <td className="px-3 py-2.5 text-center"><ReturnsBadge row={row} /></td>
       <td className="px-3 py-2.5 text-right tabular-nums text-slate-900">{money(row.codAmount)}</td>
       <td className="px-4 py-2.5"><ProgressBars bars={progress} /></td>
       <td className="px-3 py-2.5 text-xs"><ReportLink row={row} href={reportHref} /></td>
@@ -309,8 +333,104 @@ function LedgerCard({ row, href, reportHref }: { row: CourierLedgerRow; href: st
         </div>
         <ProgressBars bars={progress} compact />
         {row.manifestId && <p className="mt-1 text-xs text-slate-500">armados {row.armedCount} · cotejados {row.officeCheckedCount} · recibidos {row.pickupCheckedCount}</p>}
+        {row.returnsDue > 0 && <p className="mt-1 text-xs text-slate-600">Devolver <ReturnsBadge row={row} /></p>}
       </a>
       <div className="px-4 pb-3 text-xs"><ReportLink row={row} href={reportHref} /></div>
     </li>
+  );
+}
+
+/** «Devolver»: devueltos / por devolver; verde completo, rojo si falta alguno. */
+function ReturnsBadge({ row }: { row: CourierLedgerRow }) {
+  if (!row.returnsDue) return <span className="text-slate-400">—</span>;
+  const done = row.returnsDone >= row.returnsDue;
+  return (
+    <span
+      title={done ? "Todos los no entregados volvieron a la oficina" : `${row.returnsDue - row.returnsDone} por devolver`}
+      className={cn("inline-block rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums", done ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800")}
+    >
+      {row.returnsDone}/{row.returnsDue}
+    </span>
+  );
+}
+
+/**
+ * «Recibir devoluciones»: el supervisor escanea (o teclea) cada paquete «No
+ * entregado» que vuelve con el motorizado. Cámara en serie, como al asignar,
+ * con «Devueltos X de N». Cada lectura lo saca de la caja (0188/0189): un no
+ * entregado vuelve a «por asignar»; un rechazo queda devuelto.
+ */
+function ReturnsPanel({ orgId, pending, onClose }: { orgId: string; pending: PendingReturn[]; onClose: () => void }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [lines, setLines] = useState<{ code: string; ok: boolean; text: string }[]>([]);
+  const [returned, setReturned] = useState<Set<string>>(new Set());
+  // El total se fija al abrir: la lista se refresca y no debe cambiar la meta.
+  const [total] = useState(pending.length);
+  const left = pending.filter((p) => !returned.has(p.orderId));
+
+  async function run(code: string, orderId?: string) {
+    if (busy || !code.trim()) return;
+    setBusy(true);
+    try {
+      const res = orderId ? await returnUndeliveredToOffice(orgId, [orderId]) : await returnUndeliveredByCode(orgId, code);
+      const byCodeName = "orderName" in res && typeof res.orderName === "string" ? res.orderName : null;
+      const name: string = orderId ? pending.find((p) => p.orderId === orderId)?.orderName ?? code : byCodeName ?? code;
+      setLines((cur) => [{ code: name, ok: !res.error, text: res.error ?? "Devuelto a la oficina" }, ...cur].slice(0, 50));
+      if (!res.error) {
+        const hit = orderId ? orderId : pending.find((p) => p.orderName === name)?.orderId;
+        if (hit) setReturned((cur) => new Set(cur).add(hit));
+        router.refresh();
+      }
+    } catch {
+      setLines((cur) => [{ code, ok: false, text: "No se pudo registrar. Reintenta el mismo código; no se duplicará." }, ...cur]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const last = lines[0] ?? null;
+  return (
+    <Sheet title="Recibir devoluciones" onClose={onClose} wide>
+      <p className="text-xs text-slate-500">Escanea el QR o escribe el código de cada paquete que vuelve. Los no entregados vuelven a «por asignar» (Por reprogramar Lima); los rechazados quedan devueltos.</p>
+      <p className="mt-2 text-sm font-semibold text-slate-900">Devueltos {total - left.length} de {total}{left.length ? ` · faltan ${left.length}` : " · listo"}</p>
+      <div className="mt-2">
+        <DispatchScanner busy={busy} disabled={false} onScan={(code) => void run(code)} onCamera={() => setCameraOpen(true)} />
+      </div>
+      {lines.length > 0 && (
+        <ul className="mt-3 max-h-40 divide-y divide-slate-100 overflow-auto rounded-lg border border-slate-200 text-sm" aria-live="polite">
+          {lines.map((l, i) => (
+            <li key={`${l.code}:${i}`} className={cn("flex items-center gap-2 px-3 py-1.5", l.ok ? "bg-emerald-50/60" : "bg-red-50/60")}>
+              <span className="font-semibold text-slate-900">{l.code}</span>
+              <span className={cn("text-xs", l.ok ? "text-emerald-700" : "text-red-700")}>{l.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-4 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">Por devolver</p>
+      <ul className="mt-1 max-h-[40vh] divide-y divide-slate-100 overflow-auto rounded-lg border border-slate-200 text-sm">
+        {left.map((p) => (
+          <li key={p.orderId} className="flex items-center gap-2 px-3 py-2">
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-semibold text-slate-900" title={p.orderName}>{p.orderName} <span className="font-normal text-slate-500">· {p.customerName} · {p.district}</span></p>
+              <p className="truncate text-xs text-slate-500" title={`${p.riderName} · ${p.routeDate}`}>
+                {p.riderName} · caja del {p.routeDate.slice(8, 10)}/{p.routeDate.slice(5, 7)} · <span className={p.reason === "rechazado" ? "font-semibold text-red-700" : "text-red-700"}>{nonDeliveryReasonLabel(p.reason)}</span>
+              </p>
+            </div>
+            <button type="button" disabled={busy} onClick={() => void run(p.orderName, p.orderId)} className="min-h-9 shrink-0 rounded-lg border border-slate-300 px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">Recibir</button>
+          </li>
+        ))}
+        {!left.length && <li className="px-3 py-6 text-center text-sm text-emerald-700">Todas las devoluciones están en la oficina.</li>}
+      </ul>
+      <DispatchCamera
+        open={cameraOpen}
+        onClose={() => setCameraOpen(false)}
+        onScan={(value) => void run(value)}
+        continuous
+        progress={{ done: total - left.length, total, verb: "Devueltos" }}
+        status={last ? { ok: last.ok, text: `${last.code}: ${last.text}` } : null}
+      />
+    </Sheet>
   );
 }
