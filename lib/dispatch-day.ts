@@ -506,11 +506,12 @@ export function filterBoxItems<T extends Pick<DayItem, "removed_at" | "pickup_de
 // las cajas (`BoxItemFilter`); aquí solo se decide qué toca cada tile.
 // ---------------------------------------------------------------------------
 
-export type QueueTile = "por_asignar" | "tomados_sin_caja" | "armados" | "segundo_intento";
+export type QueueTile = "por_asignar" | "por_reprogramar" | "tomados_sin_caja" | "armados" | "segundo_intento";
 export type BoxTile = "por_armar" | "listos_cotejo" | "sin_confirmar";
 
 export const QUEUE_TILE_LABEL: Record<QueueTile, { label: string; hint: string }> = {
   por_asignar: { label: "Por asignar", hint: "Pedidos de Lima con condiciones para salir y sin caja: disponibles más tomados sin ruta. Quita los filtros de la lista." },
+  por_reprogramar: { label: "Por reprogramar", hint: "No entregados por el motorizado (En curso · Por reprogramar Lima): los que siguen en su caja se reciben en oficina; los que ya volvieron se asignan o se reprograman con el calendario." },
   tomados_sin_caja: { label: "Tomados sin caja", hint: "Ya tomados por Grupo GF (servicio y tarifa reservados) pero todavía sin motorizado." },
   armados: { label: "Armados", hint: "Tomados cuya salida ya armó Almacén (listo para despacho) y siguen sin caja." },
   segundo_intento: { label: "Con salida previa", hint: "Ya tuvieron al menos una salida física y volvieron: revísalos como reprogramaciones o recuperaciones antes de volver a tomarlos." },
@@ -522,9 +523,19 @@ export const BOX_TILE_LABEL: Record<BoxTile, { label: string; hint: string }> = 
   sin_confirmar: { label: "Sin confirmar", hint: "En una caja de hoy y el motorizado aún no dijo «Lo llevo»." },
 };
 
-export function queueTileCounts(rows: readonly QueueRow[]): Record<QueueTile, number> {
+/** Un pedido de Grupo GF en «En curso · Por reprogramar Lima». */
+export function isPorReprogramar(row: Pick<QueueRow, "macroStage" | "macroSubstage">): boolean {
+  return row.macroStage === "en_curso" && row.macroSubstage === "por_reprogramar_lima";
+}
+
+/**
+ * `rows` es la cola de asignación; `allRows` suma los que ya salieron, porque
+ * «Por reprogramar» cuenta también los no entregados que siguen en una caja.
+ */
+export function queueTileCounts(rows: readonly QueueRow[], allRows: readonly QueueRow[] = rows): Record<QueueTile, number> {
   return {
     por_asignar: rows.length,
+    por_reprogramar: allRows.filter(isPorReprogramar).length,
     tomados_sin_caja: rows.filter((q) => q.taken).length,
     armados: rows.filter((q) => q.armed).length,
     segundo_intento: rows.filter((q) => q.hasPriorDispatch).length,
@@ -543,6 +554,7 @@ export function boxTileCounts(boxes: readonly RiderBox[]): Record<BoxTile, numbe
 /** Si la tile está «encendida» con los filtros actuales. */
 export function queueTileActive(filters: QueueFilters, tile: QueueTile): boolean {
   if (tile === "por_asignar") return false;
+  if (tile === "por_reprogramar") return filters.stages.length === 1 && filters.stages[0] === "en_curso" && filters.substages.length === 1 && filters.substages[0] === "por_reprogramar_lima";
   if (tile === "tomados_sin_caja") return filters.takenOnly;
   if (tile === "armados") return filters.armedOnly;
   return filters.secondAttempt;
@@ -551,6 +563,11 @@ export function queueTileActive(filters: QueueFilters, tile: QueueTile): boolean
 /** Tocar una tile: enciende su filtro (o lo apaga si ya estaba); «Por asignar» limpia todos. */
 export function toggleQueueTile(filters: QueueFilters, tile: QueueTile): QueueFilters {
   if (tile === "por_asignar") return { ...EMPTY_QUEUE_FILTERS, query: filters.query };
+  if (tile === "por_reprogramar") {
+    return queueTileActive(filters, tile)
+      ? { ...filters, stages: [], substages: [] }
+      : { ...filters, stages: ["en_curso"], substages: ["por_reprogramar_lima"] };
+  }
   if (tile === "tomados_sin_caja") return { ...filters, takenOnly: !filters.takenOnly };
   if (tile === "armados") return { ...filters, armedOnly: !filters.armedOnly };
   return { ...filters, secondAttempt: !filters.secondAttempt };

@@ -5679,8 +5679,11 @@ Lima» hasta que se asigna a otra caja. Junto a «Asignar», el botón de
 calendario **reprograma** la fecha pactada de salida de los marcados
 (`rescheduleGroupGfCourierOrders`, evento `logistics_request_rescheduled`):
 un tomado mueve su solicitud, uno disponible se toma con esa fecha, y uno que
-ya está en la caja de un motorizado no se mueve. La versión del resolver sube
-a `mom-v1.15`.
+ya está en la caja de un motorizado no se mueve. La tarjeta **«Por
+reprogramar»**, antes de «Tomados sin caja», cuenta los pedidos de Grupo GF en
+«En curso · Por reprogramar Lima» (en una caja o ya en oficina) y al tocarla
+aplica ese filtro de etapa y subetapa. La versión del resolver sube a
+`mom-v1.15`.
 
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 

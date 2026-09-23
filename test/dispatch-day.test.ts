@@ -301,7 +301,11 @@ describe("tiles de métricas → filtros", () => {
   });
   it("cuenta cada tile sobre la cola y sobre las cajas", () => {
     const rows = [row({}), row({ taken: true, armed: true }), row({ taken: true, armed: false }), row({ hasPriorDispatch: true })];
-    expect(queueTileCounts(rows)).toEqual({ por_asignar: 4, tomados_sin_caja: 2, armados: 1, segundo_intento: 1 });
+    expect(queueTileCounts(rows)).toEqual({ por_asignar: 4, por_reprogramar: 0, tomados_sin_caja: 2, armados: 1, segundo_intento: 1 });
+    // «Por reprogramar» cuenta también los no entregados que siguen en una caja.
+    const out = row({ macroStage: "en_curso", macroSubstage: "por_reprogramar_lima", assignable: false });
+    const back = row({ macroStage: "en_curso", macroSubstage: "por_reprogramar_lima", taken: true });
+    expect(queueTileCounts([...rows, back], [...rows, back, out]).por_reprogramar).toBe(2);
     const armed = { order_id: "o", order_name: "#A", customer_name: "A", district: "D", output_code: "c", guide_code: "g", preparation_state: "listo_despacho" };
     const boxes = dayBoxes([manifest({ items: [item({ shipment: armed }), item({ shipment_id: "s2", shipment: { ...armed, preparation_state: "en_armado" } }), item({ shipment_id: "s3", shipment: armed, office_checked_at: "x", pickup_checked_at: "x" })] })], "2026-09-19");
     expect(boxTileCounts(boxes)).toEqual({ por_armar: 1, listos_cotejo: 1, sin_confirmar: 2 });
@@ -315,6 +319,10 @@ describe("tiles de métricas → filtros", () => {
     expect(toggleQueueTile(toggleQueueTile(on, "armados"), "armados").armedOnly).toBe(false);
     expect(toggleQueueTile(on, "por_asignar")).toEqual({ ...EMPTY_QUEUE_FILTERS, query: "ana" });
     expect(queueTileActive(EMPTY_QUEUE_FILTERS, "por_asignar")).toBe(false);
+    const re = toggleQueueTile({ ...EMPTY_QUEUE_FILTERS, query: "ana", store: "A" }, "por_reprogramar");
+    expect(re).toMatchObject({ stages: ["en_curso"], substages: ["por_reprogramar_lima"], store: "A", query: "ana" });
+    expect(queueTileActive(re, "por_reprogramar")).toBe(true);
+    expect(toggleQueueTile(re, "por_reprogramar")).toMatchObject({ stages: [], substages: [], store: "A" });
     expect(toggleBoxTile("todos", "por_armar")).toBe("por_armar");
     expect(toggleBoxTile("por_armar", "por_armar")).toBe("todos");
     expect(toggleBoxTile("por_armar", "sin_confirmar")).toBe("sin_confirmar");
