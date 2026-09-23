@@ -2866,10 +2866,10 @@ y lo que pasa es otra cosa: de 130 devoluciones candidatas medidas el 2026-08-10
 100 no traían motivo alguno. Va escrito «sin motivo del courier · no consta si la
 rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
 
-### 11.8 Recuperación por agente de voz (v1.12, especificación aprobable)
+### 11.8 Recuperación por agente de voz
 
 Estado: **construido, apagado por tienda (Fase 2).** Existen la bitácora
-(`voice_calls`, 0170), las dos tools del agente, la llamada de prueba, el
+(`voice_calls`, 0190), las dos tools del agente, la llamada de prueba, el
 barrido (`/api/cron/voice-recovery`), el panel del drawer y los ajustes de la
 tienda. Faltan la transcripción al cerrar la llamada, la etiqueta «Acepta
 reenvío · crear salida Swayp» en la cola y el renglón del resumen diario. El plan técnico vive en
@@ -3031,7 +3031,7 @@ el redactado.
 
 #### Lo que escribe, y por dónde
 
-El agente escribe **por `register_confirmation_attempt_v2`** (0170) con canal
+El agente escribe **por `register_confirmation_attempt_v2`** (0190) con canal
 `llamada` y `source = 'agente_voz'`, con `operation_id` igual al identificador
 de la llamada. Es la misma transacción atómica e idempotente de §6.1 —la v2 es
 una copia de la v1 con `p_source` y `p_payload_extra`—: un reintento del

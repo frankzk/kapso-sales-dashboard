@@ -174,7 +174,7 @@ export default async function StoreSettingsPage({
       return_recovery_hour_start: full.return_recovery_hour_start ?? 8,
       return_recovery_hour_end: full.return_recovery_hour_end ?? 21,
       return_recovery_max_days: full.return_recovery_max_days ?? 30,
-      // Pre-0170 las columnas no existen ⇒ agente de voz apagado.
+      // Pre-0190 las columnas no existen ⇒ agente de voz apagado.
       voice_recovery_enabled: full.voice_recovery_enabled ?? false,
       voice_recovery_auto: full.voice_recovery_auto ?? false,
       voice_recovery_can_discard: full.voice_recovery_can_discard ?? false,

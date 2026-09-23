@@ -1,6 +1,6 @@
 # Plan técnico — Agente de voz para Reproprovincia
 
-> **Estado: Fase 2 construida, apagada por tienda.** Migración 0170
+> **Estado: Fase 2 construida, apagada por tienda.** Migración 0190
 > (`voice_calls`, ajustes `voice_recovery_*`, `register_confirmation_attempt_v2`);
 > `lib/zadarma.ts`, `lib/voice-recovery.ts`, `lib/voice-recovery-queue.ts`
 > (elegibilidad), `lib/voice-recovery-server.ts`; tools
@@ -529,8 +529,10 @@ from voice_calls vc where vc.outcome = 'acepta';
    (`499499-104`) tiene caller ID `+5117058243`, y
    `from=17058243&sip=104&to=930555309` llama mostrando el número peruano. No
    usar la 103: es de la operación de Costa Rica.
-2. **Migración.** `psql "$DATABASE_URL" -f db/migrations/0170_voice_calls.sql`,
-   antes de desplegar (DEPLOY.md).
+2. **Migración. Aplicada en producción el 22-09-2026**, con el nombre
+   `0170_voice_calls` en el historial de Supabase: se escribió como 0170 y se
+   renumeró a 0190 al traer la rama de integración, que ya usaba 0170–0189 para
+   otras migraciones. El contenido es el mismo; no hay que volver a aplicarla.
 3. **Variables en Vercel.** `ZADARMA_KEY`, `ZADARMA_SECRET` (el secret nuevo,
    regenerado) y `VOICE_TOOLS_SECRET` (uno nuevo:
    `openssl rand -hex 32`).

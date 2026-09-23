@@ -11,6 +11,10 @@
 --      (0122) con dos parámetros más, `p_source` y `p_payload_extra`, para que
 --      los hechos del agente digan que los escribió el agente y lleven el id de
 --      su llamada. La v1 no se toca: todas las pantallas la siguen usando.
+--
+-- Se aplicó en producción el 22-09-2026 como `0170_voice_calls` (así figura en
+-- supabase_migrations) y se renumeró a 0190 al traer la rama de integración,
+-- que ya usaba 0170–0189. Es idempotente: volver a correrla no cambia nada.
 -- ============================================================================
 
 -- ── 1. Ajustes por tienda ───────────────────────────────────────────────────

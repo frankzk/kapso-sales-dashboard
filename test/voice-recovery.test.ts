@@ -231,7 +231,7 @@ describe("registrar_gestion: los hechos de cada disposition (§11.8)", () => {
 });
 
 describe("la migración", () => {
-  const sql = readFileSync("db/migrations/0170_voice_calls.sql", "utf8");
+  const sql = readFileSync("db/migrations/0190_voice_calls.sql", "utf8");
 
   it("una sola llamada abierta por número de agente", () => {
     expect(sql).toMatch(/create unique index if not exists voice_calls_one_open_per_agent\s+on voice_calls\(agent_number\)\s+where status in \('queued', 'dialing', 'in_progress'\)/);

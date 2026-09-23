@@ -53,7 +53,7 @@ export interface StoreSettingsInput {
   return_recovery_hour_start?: string;
   return_recovery_hour_end?: string;
   return_recovery_max_days?: string;
-  // Agente de voz para Reproprovincia (MOM §11.8, 0170).
+  // Agente de voz para Reproprovincia (MOM §11.8, 0190).
   voice_recovery_enabled?: string | boolean;
   voice_recovery_auto?: string | boolean;
   voice_recovery_can_discard?: string | boolean;
