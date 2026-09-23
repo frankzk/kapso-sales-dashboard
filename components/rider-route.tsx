@@ -485,13 +485,13 @@ function StopCard({
       className={cn(
         // Fondo y franja izquierda por estado: el cambio se ve sin leer.
         "overflow-hidden rounded-xl border border-l-[6px]",
-        stop.status === "entregado" && "border-emerald-300 border-l-emerald-600 bg-emerald-50",
-        stop.status === "no_entregado" && "border-red-300 border-l-red-600 bg-red-50",
+        stop.status === "entregado" && "border-emerald-300 border-l-emerald-600 bg-emerald-100",
+        stop.status === "no_entregado" && "border-red-300 border-l-red-600 bg-red-100",
         stop.status === "pendiente" && "border-slate-200 border-l-slate-300 bg-white",
         selected && "ring-4 ring-brand-500/15 border-brand-500",
       )}
     >
-      <button type="button" onClick={onOpen} aria-current={selected ? "true" : undefined} className="w-full px-4 py-3 text-left focus-visible:outline-none focus-visible:bg-slate-50">
+      <button type="button" onClick={onOpen} aria-current={selected ? "true" : undefined} className="w-full bg-transparent px-4 py-3 text-left focus-visible:outline-none focus-visible:bg-black/5">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-slate-900">
