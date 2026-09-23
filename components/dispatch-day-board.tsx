@@ -341,7 +341,7 @@ export function DispatchDayBoard(props: Props) {
   }, [props.accepted, scanDay]);
   const declined = useMemo(() => declinedPackages(boxes), [boxes]);
   const dayCod = boxes.reduce((sum, b) => sum + b.loads.reduce((s, l) => s + activeDispatchItems(l.items).length, 0), 0);
-  const queueTiles = useMemo(() => queueTileCounts(queue), [queue]);
+  const queueTiles = useMemo(() => queueTileCounts(queue, allRows), [queue, allRows]);
   const boxTiles = useMemo(() => boxTileCounts(boxes), [boxes]);
   /** Tocar una tile de la cola: abre «Desde la lista» con ese filtro (o lo quita). */
   const tapQueueTile = (tile: QueueTile) => {
@@ -424,7 +424,7 @@ export function DispatchDayBoard(props: Props) {
       </div>
 
       {/* Tiles de métricas: cada una es un filtro con su cantidad (misma fuente de verdad que el picker). */}
-      <div role="group" aria-label="Métricas y filtros del día" className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-1 xl:mx-0 xl:grid xl:grid-cols-8 xl:overflow-visible xl:px-0">
+      <div role="group" aria-label="Métricas y filtros del día" className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-1 xl:mx-0 xl:grid xl:grid-cols-9 xl:overflow-visible xl:px-0">
         {(Object.keys(QUEUE_TILE_LABEL) as QueueTile[]).map((tile) => (
           <Tile key={tile} label={QUEUE_TILE_LABEL[tile].label} hint={QUEUE_TILE_LABEL[tile].hint} value={queueTiles[tile]} active={queueTileActive(filters, tile) && method === "lista"} onClick={() => tapQueueTile(tile)} />
         ))}
