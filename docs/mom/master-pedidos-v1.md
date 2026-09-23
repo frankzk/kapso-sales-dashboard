@@ -3136,9 +3136,11 @@ adelanto, ese pedido no entró a su cola.
 
 #### Piloto y medida
 
-Una tienda, dos semanas, `voice_recovery_auto` apagado la primera semana (se
-lanza a mano desde el drawer) y encendido la segunda. Todas las transcripciones
-de la primera semana se escuchan. Se decide con estas cifras, comparadas con la
+Una tienda (Kenku), dos semanas. **Decisión del owner, 23-09-2026:** el
+automático se enciende desde el primer día con el tope de 30 llamadas diarias,
+en lugar de una semana a mano desde el drawer; el tope es la marcha atrás, y
+apagar `voice_recovery_auto` la detiene. Todas las transcripciones de la
+primera semana se escuchan. Se decide con estas cifras, comparadas con la
 línea base de cero llamadas:
 
 | Métrica | Qué delata |
