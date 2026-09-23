@@ -22,6 +22,7 @@ import { writeCourierGuide } from "@/lib/route-output-fill";
 import { manualRouteGuideCode, pickFillableRouteOutput } from "@/lib/shipment-output";
 import { courierKey, normalizeDispatchScan } from "@/lib/dispatch";
 import { lookupDispatchShipment } from "@/app/dashboard/pedidos/despacho/actions";
+import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 import { custodyOnAssign, isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import type { BlockedReason } from "@/lib/dispatch-day";
@@ -1177,6 +1178,54 @@ export async function returnUndeliveredByCode(orgId: string, rawCode: string): P
   const { data: om } = await admin.from("order_master").select("order_name").eq("order_id", orderId).maybeSingle();
   const res = await returnUndeliveredToOffice(orgId, [orderId]);
   return { ...res, orderName: (om?.order_name as string | null) ?? null };
+}
+
+/**
+ * Tarifario · pago por motorizado (0162, MOM §29.9): las versiones de la
+ * tarifa personal de un motorizado, generales y por distrito. El navegador
+ * resuelve cuál rige en cada distrito y día (`resolveRiderRate`).
+ */
+export async function loadRiderPayRates(orgId: string, riderId: string): Promise<{ rates: RiderRateVersion[]; error?: string }> {
+  const auth = await requireManager(orgId);
+  if ("error" in auth) return { rates: [], error: auth.error };
+  const admin = createAdminSupabase();
+  const { data: rider } = await admin.from("riders").select("id").eq("id", riderId).eq("org_id", orgId).maybeSingle();
+  if (!rider) return { rates: [], error: "Motorizado no encontrado." };
+  const { data, error } = await admin
+    .from("rider_pay_rates")
+    .select("district_key,amount,effective_from,created_at")
+    .eq("rider_id", riderId)
+    .order("effective_from", { ascending: false });
+  if (error) return { rates: [], error: error.message };
+  return { rates: ((data ?? []) as RiderRateVersion[]).map((r) => ({ ...r, amount: Number(r.amount) })) };
+}
+
+/**
+ * Registra una versión nueva de la tarifa personal del motorizado en un
+ * distrito, desde la fecha elegida. No sobrescribe: el historial es
+ * inmutable (0162) y la liquidación usa la vigente de cada día. El permiso
+ * lo decide la base (`costs.manage`).
+ */
+export async function saveRiderDistrictPay(orgId: string, input: { riderId: string; districtKey: string; amount: number; from: string }): Promise<CourierActionResult> {
+  const auth = await requireManager(orgId);
+  if ("error" in auth) return auth;
+  if (!DATE_RE.test(input.from)) return { error: "Elige la fecha desde la que rige." };
+  const value = amount(input.amount);
+  if (value == null) return { error: "Escribe un importe válido." };
+  const admin = createAdminSupabase();
+  const { data: rider } = await admin.from("riders").select("id,full_name").eq("id", input.riderId).eq("org_id", orgId).maybeSingle();
+  if (!rider) return { error: "Motorizado no encontrado." };
+  const { error } = await admin.rpc("rider_pay_save_rate", {
+    p_rider: input.riderId,
+    p_district: input.districtKey,
+    p_amount: value,
+    p_from: input.from,
+    p_reason: "Tarifario de Grupo GF: pago por distrito",
+    p_actor: auth.userId,
+  });
+  if (error) return { error: error.message };
+  revalidatePath(COURIER_PATH);
+  return { notice: `Pago de ${rider.full_name as string} guardado: S/ ${value.toFixed(2)} desde el ${input.from}.` };
 }
 
 export async function rescheduleGroupGfCourierOrders(

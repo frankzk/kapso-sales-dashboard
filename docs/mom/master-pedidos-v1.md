@@ -5271,6 +5271,17 @@ Si una fila no tiene tarifa, evidencia o resultado definitivo, la liquidación
 completa permanece abierta. Las correcciones conservan lo declarado, el valor
 anterior, actor, motivo y fecha como ya exige §14.
 
+**Pago por motorizado desde el Tarifario (22-09-2026).** La tabla de tarifas
+de Grupo GF suma una columna **«Pago a [motorizado]»**: el motorizado se
+elige en la cabecera y cada distrito muestra su tarifa personal vigente en la
+fecha de «Ver y registrar desde» —la propia del distrito o, en gris como
+sugerencia, la general del motorizado— y permite registrar una nueva. Escribe
+en `rider_pay_rates` (0162) con `rider_pay_save_rate`: agrega una versión
+desde esa fecha, nunca sobrescribe, y exige `costs.manage`. La liquidación del
+motorizado sigue resolviendo como siempre (la del distrito gana a la
+general). Es lo que se le paga al motorizado, no el precio que cobra Grupo GF
+a la tienda (la columna «Entrega o rechazo»).
+
 ### 29.10 Acceso y administración
 
 #### Acuerdo 13-09-2026: cobro en puerta y ganancia del motorizado
