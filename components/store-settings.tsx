@@ -82,6 +82,17 @@ export interface StoreSettingsData {
     return_recovery_hour_start: number;
     return_recovery_hour_end: number;
     return_recovery_max_days: number;
+    /** Agente de voz para Reproprovincia (MOM §11.8, migración 0170). */
+    voice_recovery_enabled: boolean;
+    voice_recovery_auto: boolean;
+    voice_recovery_can_discard: boolean;
+    voice_recovery_daily_cap: number;
+    voice_recovery_max_attempts: number;
+    voice_recovery_max_age_days: number;
+    voice_recovery_hour_start: number;
+    voice_recovery_hour_end: number;
+    voice_recovery_agent_number: string | null;
+    voice_recovery_zadarma_sip: string | null;
     /** Ciclo de recontacto en confirmación (MOM §6.1, migración 0133). */
     confirmation_cycle_days: number;
     telegram_chat_id: string | null;
@@ -1348,6 +1359,147 @@ function SettingsForm({
               </p>
             </div>
           </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Agente de voz · Reproprovincia
+          </legend>
+          <p className="text-xs text-slate-500">
+            Un agente de voz llama a los pedidos en <strong>gestión Reproprovincia</strong> y les
+            propone el reenvío desde la bodega Swayp de su ciudad (MOM §11.8). Escribe los mismos
+            hechos que una asesora y <strong>no crea guías</strong>: los «acepta» los atiende
+            almacén. Igual que la recuperación por WhatsApp, son <strong>dos interruptores</strong>:
+            el primero habilita la cola y el botón del drawer, el segundo deja que el barrido llame
+            solo.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className={labelCls} htmlFor="voice_recovery_enabled">Cola y botón</label>
+              <select
+                id="voice_recovery_enabled"
+                name="voice_recovery_enabled"
+                defaultValue={s.voice_recovery_enabled ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">Deshabilitado</option>
+                <option value="true">Habilitado</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="voice_recovery_auto">Llamadas automáticas</label>
+              <select
+                id="voice_recovery_auto"
+                name="voice_recovery_auto"
+                defaultValue={s.voice_recovery_auto ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">A mano</option>
+                <option value="true">Automático</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="voice_recovery_can_discard">«No lo quiere»</label>
+              <select
+                id="voice_recovery_can_discard"
+                name="voice_recovery_can_discard"
+                defaultValue={s.voice_recovery_can_discard ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">El agente propone; descarta una persona</option>
+                <option value="true">El agente descarta</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="voice_recovery_agent_number">Número del agente</label>
+              <input
+                id="voice_recovery_agent_number"
+                name="voice_recovery_agent_number"
+                defaultValue={s.voice_recovery_agent_number ?? ""}
+                placeholder="17058243"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="voice_recovery_zadarma_sip">
+                Extensión de Zadarma (caller ID)
+              </label>
+              <input
+                id="voice_recovery_zadarma_sip"
+                name="voice_recovery_zadarma_sip"
+                defaultValue={s.voice_recovery_zadarma_sip ?? ""}
+                placeholder="104"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="voice_recovery_daily_cap">Llamadas por día (tope)</label>
+              <input
+                id="voice_recovery_daily_cap"
+                name="voice_recovery_daily_cap"
+                type="number"
+                min={0}
+                max={500}
+                defaultValue={s.voice_recovery_daily_cap}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="voice_recovery_max_attempts">Intentos del agente por pedido</label>
+              <input
+                id="voice_recovery_max_attempts"
+                name="voice_recovery_max_attempts"
+                type="number"
+                min={1}
+                max={7}
+                defaultValue={s.voice_recovery_max_attempts}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="voice_recovery_max_age_days">
+                No llamar si la guía cerró hace más de (días)
+              </label>
+              <input
+                id="voice_recovery_max_age_days"
+                name="voice_recovery_max_age_days"
+                type="number"
+                min={1}
+                max={30}
+                defaultValue={s.voice_recovery_max_age_days}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="voice_recovery_hour_start">Llamar desde (hora de Lima)</label>
+              <input
+                id="voice_recovery_hour_start"
+                name="voice_recovery_hour_start"
+                type="number"
+                min={0}
+                max={23}
+                defaultValue={s.voice_recovery_hour_start}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="voice_recovery_hour_end">Llamar hasta (hora de Lima)</label>
+              <input
+                id="voice_recovery_hour_end"
+                name="voice_recovery_hour_end"
+                type="number"
+                min={1}
+                max={24}
+                defaultValue={s.voice_recovery_hour_end}
+                className={inputCls}
+              />
+            </div>
+          </div>
+          <p className="text-xs text-amber-700">
+            La extensión tiene que tener como caller ID un <strong>número peruano</strong>: sin
+            ella Kapta no llama, porque la clienta vería el número de EE. UU. de la cuenta de
+            Zadarma. Los domingos el agente no llama.
+          </p>
         </fieldset>
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">

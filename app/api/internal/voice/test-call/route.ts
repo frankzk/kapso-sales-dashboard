@@ -14,12 +14,11 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
-import { env } from "@/lib/env";
-import { requestCallback, zadarmaLocalPeru } from "@/lib/zadarma";
+import { zadarmaLocalPeru } from "@/lib/zadarma";
 import {
   internalAuthorized,
   loadStoreVoiceConfig,
-  sweepStaleCalls,
+  placeVoiceCall,
 } from "@/lib/voice-recovery-server";
 
 export const runtime = "nodejs";
@@ -71,57 +70,32 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  await sweepStaleCalls(admin, now);
-
-  const { data: inserted, error: insertError } = await admin
-    .from("voice_calls")
-    .insert({
-      store_id: order.store_id,
-      order_id: order.id,
-      mode: "test",
-      agent_number: agentNumber,
+  const placed = await placeVoiceCall(
+    admin,
+    {
+      storeId: order.store_id,
+      orderId: order.id,
       phone,
-      // Se marca `dialing` ANTES de pedir la llamada: el agente puede llamar a
-      // la tool en cuanto la clienta dice «¿Aló?», y la fila tiene que estar.
-      status: "dialing",
-      dialed_at: now.toISOString(),
-    })
-    .select("id")
-    .single();
-  if (insertError) {
-    const busy = insertError.code === "23505";
+      mode: "test",
+      triggeredBy: null,
+      agentNumber,
+      sip,
+    },
+    now,
+  );
+  if (!placed.ok) {
     return NextResponse.json(
-      {
-        ok: false,
-        error: busy
-          ? "Ya hay una llamada abierta con este número de agente. Espera a que termine o a que caduque (3 minutos marcando, 10 en curso)."
-          : insertError.message,
-      },
-      { status: busy ? 409 : 500 },
+      { ok: false, voice_call_id: placed.callId ?? null, error: placed.error },
+      { status: placed.status },
     );
   }
-  const callId = (inserted as { id: string }).id;
-
-  const result = await requestCallback(
-    { key: env.zadarmaKey(), secret: env.zadarmaSecret() },
-    { agentNumber, customerPhone: phone, sip },
-  );
-  if (!result.ok) {
-    await admin
-      .from("voice_calls")
-      .update({ status: "failed", error: result.error, telephony_response: result.response ?? null, ended_at: new Date().toISOString() })
-      .eq("id", callId);
-    return NextResponse.json({ ok: false, voice_call_id: callId, error: result.error }, { status: 502 });
-  }
-
-  await admin.from("voice_calls").update({ telephony_response: result.response }).eq("id", callId);
 
   return NextResponse.json({
     ok: true,
-    voice_call_id: callId,
+    voice_call_id: placed.callId,
     order: order.name,
-    from: result.from,
-    to: result.to,
+    from: placed.from,
+    to: placed.to,
     note: "Zadarma marca primero al agente y después a este teléfono. Nada se escribe sobre el pedido.",
   });
 }

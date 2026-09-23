@@ -53,6 +53,17 @@ export interface StoreSettingsInput {
   return_recovery_hour_start?: string;
   return_recovery_hour_end?: string;
   return_recovery_max_days?: string;
+  // Agente de voz para Reproprovincia (MOM §11.8, 0170).
+  voice_recovery_enabled?: string | boolean;
+  voice_recovery_auto?: string | boolean;
+  voice_recovery_can_discard?: string | boolean;
+  voice_recovery_daily_cap?: string;
+  voice_recovery_max_attempts?: string;
+  voice_recovery_max_age_days?: string;
+  voice_recovery_hour_start?: string;
+  voice_recovery_hour_end?: string;
+  voice_recovery_agent_number?: string;
+  voice_recovery_zadarma_sip?: string;
   /** Ciclo de recontacto en confirmación, en días (MOM §6.1). */
   confirmation_cycle_days?: string;
   // Telegram daily summary: chat id is plain, token is a secret.
@@ -267,6 +278,26 @@ export function buildStoreUpdate(
   if (rrEnd !== null) patch.return_recovery_hour_end = rrEnd;
   const rrDays = intField(input.return_recovery_max_days, 1, 365);
   if (rrDays !== null) patch.return_recovery_max_days = rrDays;
+
+  // Agente de voz (MOM §11.8). Los tres toggles tienen que poder APAGARSE, y
+  // el número del agente y la extensión son vaciables: sin ellos Kapta no
+  // llama, que es el estado seguro.
+  for (const k of ["voice_recovery_enabled", "voice_recovery_auto", "voice_recovery_can_discard"] as const) {
+    if (input[k] !== undefined) patch[k] = input[k] === true || input[k] === "true";
+  }
+  for (const k of ["voice_recovery_agent_number", "voice_recovery_zadarma_sip"] as const) {
+    if (input[k] !== undefined) patch[k] = clean(input[k]);
+  }
+  const vCap = intField(input.voice_recovery_daily_cap, 0, 500);
+  if (vCap !== null) patch.voice_recovery_daily_cap = vCap;
+  const vAttempts = intField(input.voice_recovery_max_attempts, 1, 7);
+  if (vAttempts !== null) patch.voice_recovery_max_attempts = vAttempts;
+  const vAge = intField(input.voice_recovery_max_age_days, 1, 30);
+  if (vAge !== null) patch.voice_recovery_max_age_days = vAge;
+  const vStart = intField(input.voice_recovery_hour_start, 0, 23);
+  if (vStart !== null) patch.voice_recovery_hour_start = vStart;
+  const vEnd = intField(input.voice_recovery_hour_end, 1, 24);
+  if (vEnd !== null) patch.voice_recovery_hour_end = vEnd;
   const cycle = intField(
     input.confirmation_cycle_days,
     CONFIRMATION_CYCLE_MIN_DAYS,

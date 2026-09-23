@@ -17,6 +17,20 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
+  VOICE_STORE_COLUMNS,
+  loadVoiceQueue,
+  placeVoiceCall,
+  realCallsToday,
+  type VoiceStoreSettings,
+} from "@/lib/voice-recovery-server";
+import {
+  VOICE_EXCLUSION_LABEL,
+  isLimaSunday,
+  withinVoiceHours,
+  type VoiceExclusion,
+} from "@/lib/voice-recovery-queue";
+import type { VoiceAgentPanelData } from "@/lib/voice-recovery-labels";
+import {
   getOrderConfirmationBrief,
   getOrderMasterDetail,
   OrderMasterReadError,
@@ -2254,4 +2268,145 @@ export async function clearOrderGeo(orderId: string): Promise<MasterActionState>
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
   return { notice: "Corrección retirada." };
+}
+
+/**
+ * Agente de voz (MOM §11.8) — panel del drawer en Reproprovincia.
+ *
+ * Tres acciones: leer el estado (si entra a la cola, por qué no, y sus
+ * llamadas), llamar a la clienta con el agente, y probar el agente con la
+ * ficha de ESTE pedido llamando a otro teléfono sin escribir nada sobre él.
+ * Las tres pasan por las mismas funciones que el barrido.
+ */
+export async function loadVoiceAgentPanel(
+  orderId: string,
+): Promise<{ data: VoiceAgentPanelData } | { error: string }> {
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const admin = createAdminSupabase();
+  const { data: storeRow } = await admin
+    .from("stores")
+    .select(VOICE_STORE_COLUMNS)
+    .eq("id", ctx.storeId)
+    .maybeSingle();
+  const store = storeRow as VoiceStoreSettings | null;
+  if (!store) return { error: "Tienda no encontrada." };
+
+  const [{ data: callRows }, queue] = await Promise.all([
+    admin
+      .from("voice_calls")
+      .select("id, mode, status, outcome, queued_at, outcome_payload, error")
+      .eq("order_id", orderId)
+      .order("queued_at", { ascending: false })
+      .limit(10),
+    loadVoiceQueue(admin, store, new Date(), orderId),
+  ]);
+  const reasonCode = queue.reasons[orderId] as VoiceExclusion | undefined;
+  return {
+    data: {
+      enabled: store.voice_recovery_enabled,
+      configured: Boolean(store.voice_recovery_agent_number?.trim() && store.voice_recovery_zadarma_sip?.trim()),
+      eligible: queue.candidates.some((c) => c.orderId === orderId),
+      reason: reasonCode ? VOICE_EXCLUSION_LABEL[reasonCode] : null,
+      calls: ((callRows ?? []) as {
+        id: string;
+        mode: "real" | "test";
+        status: string;
+        outcome: string | null;
+        queued_at: string;
+        outcome_payload: Record<string, unknown> | null;
+        error: string | null;
+      }[]).map((c) => ({
+        id: c.id,
+        mode: c.mode,
+        status: c.status,
+        outcome: c.outcome,
+        queued_at: c.queued_at,
+        resumen: typeof c.outcome_payload?.resumen === "string" ? c.outcome_payload.resumen : null,
+        no_llamar: c.outcome_payload?.no_llamar === true,
+        propone_descartar: c.outcome_payload?.accion === "propose_discard",
+        error: c.error,
+      })),
+    },
+  };
+}
+
+async function voiceStoreFor(storeId: string): Promise<VoiceStoreSettings | null> {
+  const { data } = await createAdminSupabase()
+    .from("stores")
+    .select(VOICE_STORE_COLUMNS)
+    .eq("id", storeId)
+    .maybeSingle();
+  return (data as VoiceStoreSettings | null) ?? null;
+}
+
+/** Llama a la clienta con el agente. Pasa por la misma cola que el barrido. */
+export async function llamarConAgente(orderId: string): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite llamar con el agente." };
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const store = await voiceStoreFor(ctx.storeId);
+  if (!store?.voice_recovery_enabled) {
+    return { error: "El agente de voz no está habilitado en esta tienda (Ajustes)." };
+  }
+  const now = new Date();
+  if (isLimaSunday(now) || !withinVoiceHours(now, store.voice_recovery_hour_start, store.voice_recovery_hour_end)) {
+    return {
+      error: `El agente llama de ${store.voice_recovery_hour_start}:00 a ${store.voice_recovery_hour_end}:00, de lunes a sábado.`,
+    };
+  }
+  const admin = createAdminSupabase();
+  if ((await realCallsToday(admin, store.id, now)) >= store.voice_recovery_daily_cap) {
+    return { error: "La tienda ya llegó al tope de llamadas del agente de hoy." };
+  }
+  const queue = await loadVoiceQueue(admin, store, now, orderId);
+  const candidate = queue.candidates.find((c) => c.orderId === orderId);
+  if (!candidate) {
+    const code = queue.reasons[orderId] as VoiceExclusion | undefined;
+    return { error: code ? VOICE_EXCLUSION_LABEL[code] : "Este pedido no está en gestión Reproprovincia." };
+  }
+  const placed = await placeVoiceCall(
+    admin,
+    {
+      storeId: store.id,
+      orderId,
+      phone: candidate.phone,
+      mode: "real",
+      triggeredBy: ctx.userId,
+      agentNumber: store.voice_recovery_agent_number ?? "",
+      sip: store.voice_recovery_zadarma_sip ?? "",
+    },
+    now,
+  );
+  if (!placed.ok) return { error: placed.error };
+  revalidatePath(MASTER_PATH);
+  return { notice: "Llamando. Zadarma conecta primero al agente y después a la clienta." };
+}
+
+/**
+ * Prueba el agente con la ficha de este pedido llamando a OTRO teléfono. Modo
+ * prueba: no escribe nada sobre el pedido (§11.8). No exige la cola encendida.
+ */
+export async function probarAgenteEnMiTelefono(
+  orderId: string,
+  phone: string,
+): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite probar el agente." };
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const store = await voiceStoreFor(ctx.storeId);
+  if (!store) return { error: "Tienda no encontrada." };
+  const placed = await placeVoiceCall(createAdminSupabase(), {
+    storeId: store.id,
+    orderId,
+    phone,
+    mode: "test",
+    triggeredBy: ctx.userId,
+    agentNumber: store.voice_recovery_agent_number ?? "",
+    sip: store.voice_recovery_zadarma_sip ?? "",
+  });
+  if (!placed.ok) return { error: placed.error };
+  return { notice: "Te estamos llamando. Es una prueba: nada se escribe sobre el pedido." };
 }

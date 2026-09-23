@@ -271,6 +271,11 @@ export type GestionAction =
 
 const clean = (s: string | null | undefined, max = 500) => String(s ?? "").trim().slice(0, max);
 
+/** «No me llamen», «que no la vuelvan a llamar», «no quiere que la llamen». */
+export function pideNoLlamar(text: string): boolean {
+  return /no\s+(quiere\s+que\s+)?(me|la|lo|le|nos)?\s*(vuelvan\s+a\s+|sigan\s+)?llam(en|ar|ando)/i.test(text);
+}
+
 /**
  * Traduce lo que manda el agente a los hechos de §11.8.
  *
@@ -297,6 +302,9 @@ export function translateGestion(
   const fecha = clean(input.fecha, 10);
   const fechaFutura = /^\d{4}-\d{2}-\d{2}$/.test(fecha) && fecha > opts.today ? fecha : null;
   const extra: Record<string, unknown> = { voice_call_id: opts.voiceCallId, voice_disposition: d };
+  // El prompt pide escribir textual «que no la llamen» en el resumen. Se
+  // marca para que el barrido no vuelva a llamar a ese teléfono (§11.8, cond. 9).
+  if (pideNoLlamar(`${resumen} ${clean(input.motivo)}`)) extra.no_llamar = true;
   const noteFor = (prefix: string) => ["Agente de voz", prefix, resumen].filter(Boolean).join(" · ");
 
   if (d === "confirma") {

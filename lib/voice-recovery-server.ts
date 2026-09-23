@@ -5,12 +5,16 @@ import { timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
+import type { FenixStockRow } from "@/lib/fenix";
 import {
   buildFicha,
   isStale,
+  voiceDates,
   type Ficha,
   type OpenCall,
 } from "@/lib/voice-recovery";
+import { compareVoiceCandidates, voiceRecoveryEligible } from "@/lib/voice-recovery-queue";
+import { requestCallback, zadarmaLocalPeru } from "@/lib/zadarma";
 
 const OPEN_STATUSES = ["queued", "dialing", "in_progress"] as const;
 
@@ -177,4 +181,335 @@ export async function loadStoreVoiceConfig(
     .eq("id", storeId)
     .maybeSingle();
   return (data as StoreVoiceConfig | null) ?? null;
+}
+
+// ── Lanzar una llamada ──────────────────────────────────────────────────────
+
+export interface PlaceCallInput {
+  storeId: string;
+  orderId: string;
+  /** Teléfono al que se llama: la clienta en `real`, quien prueba en `test`. */
+  phone: string;
+  mode: "real" | "test";
+  triggeredBy: string | null;
+  agentNumber: string;
+  sip: string;
+}
+
+export type PlaceCallResult =
+  | { ok: true; callId: string; from: string; to: string }
+  | { ok: false; status: number; error: string; callId?: string };
+
+/**
+ * Escribe la fila ANTES de marcar y luego pide el callback (MOM §11.8: la
+ * llamada se ata a la fila, no al teléfono que contesta). La usan la prueba,
+ * el botón del drawer y el barrido: una sola forma de llamar.
+ */
+export async function placeVoiceCall(
+  admin: SupabaseClient,
+  input: PlaceCallInput,
+  now: Date = new Date(),
+): Promise<PlaceCallResult> {
+  const phone = zadarmaLocalPeru(input.phone);
+  if (!phone) return { ok: false, status: 400, error: "El teléfono no es un número peruano válido." };
+  if (!input.agentNumber.trim() || !input.sip.trim()) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Falta el número del agente o la extensión de Zadarma con caller ID peruano en los ajustes de la tienda.",
+    };
+  }
+
+  await sweepStaleCalls(admin, now);
+
+  const { data: inserted, error: insertError } = await admin
+    .from("voice_calls")
+    .insert({
+      store_id: input.storeId,
+      order_id: input.orderId,
+      mode: input.mode,
+      agent_number: input.agentNumber.trim(),
+      phone,
+      // `dialing` ANTES de pedir la llamada: el agente puede llamar a la tool
+      // en cuanto la clienta dice «¿Aló?», y la fila tiene que estar.
+      status: "dialing",
+      dialed_at: now.toISOString(),
+      triggered_by: input.triggeredBy,
+    })
+    .select("id")
+    .single();
+  if (insertError) {
+    const busy = insertError.code === "23505";
+    return {
+      ok: false,
+      status: busy ? 409 : 500,
+      error: busy
+        ? "El agente ya está en otra llamada. Espera a que termine (o a que caduque: 3 minutos marcando, 10 en curso)."
+        : insertError.message,
+    };
+  }
+  const callId = (inserted as { id: string }).id;
+
+  const result = await requestCallback(
+    { key: env.zadarmaKey(), secret: env.zadarmaSecret() },
+    { agentNumber: input.agentNumber, customerPhone: phone, sip: input.sip },
+  );
+  if (!result.ok) {
+    await admin
+      .from("voice_calls")
+      .update({
+        status: "failed",
+        error: result.error,
+        telephony_response: result.response ?? null,
+        ended_at: new Date().toISOString(),
+      })
+      .eq("id", callId);
+    return { ok: false, status: 502, error: result.error, callId };
+  }
+  await admin.from("voice_calls").update({ telephony_response: result.response }).eq("id", callId);
+  return { ok: true, callId, from: result.from, to: result.to };
+}
+
+// ── La cola del barrido ─────────────────────────────────────────────────────
+
+export interface VoiceStoreSettings {
+  id: string;
+  name: string | null;
+  org_id: string | null;
+  return_recovery_max_days: number | null;
+  voice_recovery_enabled: boolean;
+  voice_recovery_auto: boolean;
+  voice_recovery_can_discard: boolean;
+  voice_recovery_daily_cap: number;
+  voice_recovery_max_attempts: number;
+  voice_recovery_max_age_days: number;
+  voice_recovery_hour_start: number;
+  voice_recovery_hour_end: number;
+  voice_recovery_agent_number: string | null;
+  voice_recovery_zadarma_sip: string | null;
+}
+
+export const VOICE_STORE_COLUMNS =
+  "id, name, org_id, return_recovery_max_days, voice_recovery_enabled, voice_recovery_auto, voice_recovery_can_discard, voice_recovery_daily_cap, voice_recovery_max_attempts, voice_recovery_max_age_days, voice_recovery_hour_start, voice_recovery_hour_end, voice_recovery_agent_number, voice_recovery_zadarma_sip";
+
+export interface VoiceCandidate {
+  orderId: string;
+  orderName: string | null;
+  phone: string;
+  closedAt: string;
+  dueByPact: boolean;
+}
+
+export interface VoiceQueue {
+  candidates: VoiceCandidate[];
+  excluded: Record<string, number>;
+  /** Por pedido, para explicar en el drawer por qué no entra. */
+  reasons: Record<string, string>;
+}
+
+const CHUNK = 200;
+function chunks<T>(list: readonly T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < list.length; i += CHUNK) out.push(list.slice(i, i + CHUNK));
+  return out;
+}
+
+async function selectIn<T>(
+  admin: SupabaseClient,
+  table: string,
+  columns: string,
+  column: string,
+  values: readonly string[],
+  extra?: (q: ReturnType<SupabaseClient["from"]>["select"] extends (...a: never[]) => infer R ? R : never) => unknown,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (const part of chunks(values)) {
+    let q = admin.from(table).select(columns).in(column, part);
+    if (extra) q = extra(q as never) as typeof q;
+    const { data, error } = await q;
+    if (error) throw new Error(`${table}: ${error.message}`);
+    rows.push(...((data ?? []) as T[]));
+  }
+  return rows;
+}
+
+/**
+ * Carga los hechos de los pedidos en Reproprovincia de una tienda y aplica
+ * `voiceRecoveryEligible`. Se parte de `order_master.macro_substage` porque
+ * es donde el Master ya decidió «En gestión Reproprovincia» (Lima tiene su
+ * propia subetapa y queda fuera); la elegibilidad vuelve a comprobar la
+ * recuperación con la misma función, así que un Master atrasado no cuela nada.
+ */
+export async function loadVoiceQueue(
+  admin: SupabaseClient,
+  store: VoiceStoreSettings,
+  now: Date,
+  onlyOrderId?: string,
+): Promise<VoiceQueue> {
+  const today = voiceDates(now).hoy;
+
+  let masterQuery = admin
+    .from("order_master")
+    .select("order_id, order_name, customer_phone, district, region, confirmation_next_contact_on")
+    .eq("store_id", store.id)
+    .eq("macro_substage", "gestion_reproprovincia");
+  if (onlyOrderId) masterQuery = masterQuery.eq("order_id", onlyOrderId);
+  const { data: masterRows, error: masterError } = await masterQuery.limit(2000);
+  if (masterError) throw new Error(`order_master: ${masterError.message}`);
+  const masters = (masterRows ?? []) as {
+    order_id: string;
+    order_name: string | null;
+    customer_phone: string | null;
+    district: string | null;
+    region: string | null;
+    confirmation_next_contact_on: string | null;
+  }[];
+  const excluded: Record<string, number> = {};
+  const reasons: Record<string, string> = {};
+  if (!masters.length) return { candidates: [], excluded, reasons };
+
+  const ids = masters.map((m) => m.order_id);
+  const phones = [...new Set(masters.map((m) => m.customer_phone).filter((p): p is string => Boolean(p)))];
+
+  type Guide = {
+    order_id: string;
+    courier: string;
+    delivery_status: string;
+    reported_status: string | null;
+    closed_at: string | null;
+    returned_at: string | null;
+    updated_at: string | null;
+  };
+  type Ev = { order_id: string; kind: string; occurred_at: string };
+  type OrderRow = { id: string; line_items: unknown };
+  type Prior = {
+    order_id: string;
+    order_name: string | null;
+    order_created_at: string | null;
+    general_status: string | null;
+    operational_status: string | null;
+    macro_stage: string | null;
+    order_total: number | null;
+    guide_code: string | null;
+    current_courier: string | null;
+    last_courier: string | null;
+    delivered_courier: string | null;
+    attempt_count: number | null;
+    customer_phone: string | null;
+  };
+  type Call = { order_id: string; queued_at: string };
+
+  const [guides, events, orders, priors, calls, stockRes, dnc] = await Promise.all([
+    selectIn<Guide>(
+      admin,
+      "shipments",
+      "order_id, courier, delivery_status, reported_status, closed_at, returned_at, updated_at",
+      "order_id",
+      ids,
+    ),
+    selectIn<Ev>(admin, "order_events", "order_id, kind, occurred_at", "order_id", ids, (q) =>
+      (q as unknown as { in: (c: string, v: string[]) => unknown }).in("kind", [
+        "recovery_discarded",
+        "confirmation_contact",
+        "contact_attempt",
+        "call",
+      ]),
+    ),
+    selectIn<OrderRow>(admin, "orders", "id, line_items", "id", ids),
+    phones.length
+      ? selectIn<Prior>(
+          admin,
+          "order_master",
+          "order_id, order_name, order_created_at, general_status, operational_status, macro_stage, order_total, guide_code, current_courier, last_courier, delivered_courier, attempt_count, customer_phone",
+          "customer_phone",
+          phones,
+          (q) => (q as unknown as { eq: (c: string, v: string) => unknown }).eq("store_id", store.id),
+        )
+      : Promise.resolve([] as Prior[]),
+    selectIn<Call>(admin, "voice_calls", "order_id, queued_at", "order_id", ids, (q) =>
+      (q as unknown as { eq: (c: string, v: string) => unknown }).eq("mode", "real"),
+    ),
+    store.org_id
+      ? admin.from("fenix_stock").select("city, product, sku, quantity, unlimited").eq("org_id", store.org_id)
+      : Promise.resolve({ data: [], error: null }),
+    admin
+      .from("voice_calls")
+      .select("phone")
+      .eq("store_id", store.id)
+      .eq("outcome_payload->>no_llamar", "true"),
+  ]);
+  const stock = ((stockRes as { data: unknown[] | null }).data ?? []) as FenixStockRow[];
+  const doNotCall = new Set(
+    ((dnc.data ?? []) as { phone: string }[]).map((r) => zadarmaLocalPeru(r.phone)).filter(Boolean),
+  );
+
+  const byOrder = <T extends { order_id: string }>(rows: T[]) => {
+    const m = new Map<string, T[]>();
+    for (const r of rows) m.set(r.order_id, [...(m.get(r.order_id) ?? []), r]);
+    return m;
+  };
+  const guidesBy = byOrder(guides);
+  const eventsBy = byOrder(events);
+  const callsBy = byOrder(calls);
+  const itemsBy = new Map(orders.map((o) => [o.id, Array.isArray(o.line_items) ? o.line_items : []]));
+  const priorsByPhone = new Map<string, Prior[]>();
+  for (const p of priors) {
+    if (!p.customer_phone) continue;
+    priorsByPhone.set(p.customer_phone, [...(priorsByPhone.get(p.customer_phone) ?? []), p]);
+  }
+
+  const candidates: VoiceCandidate[] = [];
+  for (const m of masters) {
+    const verdict = voiceRecoveryEligible({
+      now,
+      today,
+      guides: guidesBy.get(m.order_id) ?? [],
+      events: eventsBy.get(m.order_id) ?? [],
+      recoveryWindowDays: store.return_recovery_max_days ?? 30,
+      maxAgeDays: store.voice_recovery_max_age_days,
+      district: m.district,
+      region: m.region,
+      lineItems: (itemsBy.get(m.order_id) ?? []) as { title?: string; sku?: string; quantity?: number }[],
+      stock,
+      phone: m.customer_phone,
+      priors: (priorsByPhone.get(m.customer_phone ?? "") ?? []).filter((p) => p.order_id !== m.order_id) as never,
+      nextContactOn: m.confirmation_next_contact_on,
+      agentCalls: callsBy.get(m.order_id) ?? [],
+      maxAgentAttempts: store.voice_recovery_max_attempts,
+      doNotCall: doNotCall.has(zadarmaLocalPeru(m.customer_phone) ?? "-"),
+    });
+    if (verdict.eligible) {
+      candidates.push({
+        orderId: m.order_id,
+        orderName: m.order_name,
+        phone: m.customer_phone ?? "",
+        closedAt: verdict.closedAt,
+        dueByPact: verdict.dueByPact,
+      });
+    } else {
+      excluded[verdict.reason] = (excluded[verdict.reason] ?? 0) + 1;
+      reasons[m.order_id] = verdict.reason;
+    }
+  }
+  candidates.sort(compareVoiceCandidates);
+  return { candidates, excluded, reasons };
+}
+
+/** Llamadas reales de hoy (Lima) de una tienda: el tope diario se cuenta aquí. */
+export async function realCallsToday(admin: SupabaseClient, storeId: string, now: Date): Promise<number> {
+  const limaMidnightUtc = new Date(
+    Date.UTC(
+      new Date(now.getTime() - 5 * 3_600_000).getUTCFullYear(),
+      new Date(now.getTime() - 5 * 3_600_000).getUTCMonth(),
+      new Date(now.getTime() - 5 * 3_600_000).getUTCDate(),
+      5,
+    ),
+  );
+  const { count } = await admin
+    .from("voice_calls")
+    .select("id", { count: "exact", head: true })
+    .eq("store_id", storeId)
+    .eq("mode", "real")
+    .gte("queued_at", limaMidnightUtc.toISOString());
+  return count ?? 0;
 }

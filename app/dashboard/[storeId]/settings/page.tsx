@@ -174,6 +174,17 @@ export default async function StoreSettingsPage({
       return_recovery_hour_start: full.return_recovery_hour_start ?? 8,
       return_recovery_hour_end: full.return_recovery_hour_end ?? 21,
       return_recovery_max_days: full.return_recovery_max_days ?? 30,
+      // Pre-0170 las columnas no existen ⇒ agente de voz apagado.
+      voice_recovery_enabled: full.voice_recovery_enabled ?? false,
+      voice_recovery_auto: full.voice_recovery_auto ?? false,
+      voice_recovery_can_discard: full.voice_recovery_can_discard ?? false,
+      voice_recovery_daily_cap: full.voice_recovery_daily_cap ?? 30,
+      voice_recovery_max_attempts: full.voice_recovery_max_attempts ?? 2,
+      voice_recovery_max_age_days: full.voice_recovery_max_age_days ?? 7,
+      voice_recovery_hour_start: full.voice_recovery_hour_start ?? 9,
+      voice_recovery_hour_end: full.voice_recovery_hour_end ?? 20,
+      voice_recovery_agent_number: full.voice_recovery_agent_number ?? null,
+      voice_recovery_zadarma_sip: full.voice_recovery_zadarma_sip ?? null,
       // Pre-0133 la columna no existe ⇒ el ciclo por defecto del MOM.
       confirmation_cycle_days: confirmationCycleDays(full.confirmation_cycle_days),
       telegram_chat_id: full.telegram_chat_id ?? null,

@@ -1,13 +1,15 @@
 # Plan técnico — Agente de voz para Reproprovincia
 
-> **Estado: Fase 1 cerrada; Fase 2 en curso.** Construido: migración 0170
-> (`voice_calls`, ajustes `voice_recovery_*`, `register_confirmation_attempt_v2`),
-> `lib/zadarma.ts`, `lib/voice-recovery.ts`, las tools
-> `/api/voice/tools/identificar_llamada` y `/api/voice/tools/registrar_gestion`,
-> y `/api/internal/voice/test-call`. Falta: barrido automático, elegibilidad
-> contra datos reales, pantalla y fin de llamada con transcripción. Las reglas de negocio están en el MOM,
-> §11.8 (`docs/mom/master-pedidos-v1.md`). Este documento dice cómo se
-> construyen. Si algo de aquí contradice al MOM, manda el MOM y se corrige esto.
+> **Estado: Fase 2 construida, apagada por tienda.** Migración 0170
+> (`voice_calls`, ajustes `voice_recovery_*`, `register_confirmation_attempt_v2`);
+> `lib/zadarma.ts`, `lib/voice-recovery.ts`, `lib/voice-recovery-queue.ts`
+> (elegibilidad), `lib/voice-recovery-server.ts`; tools
+> `/api/voice/tools/identificar_llamada` y `registrar_gestion`;
+> `/api/internal/voice/test-call`; barrido `/api/cron/voice-recovery` (cada 5
+> min, `?dry=1` para medir la cola sin llamar); panel «Agente de voz» en el
+> drawer del Master (Reproprovincia) con «Llamar con el agente» y «Probar en mi
+> teléfono»; bloque en Ajustes de la tienda. Falta: transcripción al cerrar la
+> llamada, etiqueta «Acepta reenvío» en la cola y renglón del resumen diario.
 
 ## Objetivo
 
@@ -523,21 +525,21 @@ from voice_calls vc where vc.outcome = 'acepta';
 
 ## Cómo probar la Fase 2 (llamada de prueba con un pedido real)
 
-1. **Caller ID peruano.** En Zadarma, a una extensión de la centralita que no
-   use nadie más (no la 103, que es de la operación de Costa Rica), ponle como
-   caller ID el `+51 1 705 8243`. Pruébala a mano antes de tocar Kapta:
-   `from=17058243&sip=<extensión>&to=<tu celular sin 51>`. Si en tu celular
-   aparece el número peruano, sirve.
+1. **Caller ID peruano. Hecho el 22-09-2026:** la extensión **104**
+   (`499499-104`) tiene caller ID `+5117058243`, y
+   `from=17058243&sip=104&to=930555309` llama mostrando el número peruano. No
+   usar la 103: es de la operación de Costa Rica.
 2. **Migración.** `psql "$DATABASE_URL" -f db/migrations/0170_voice_calls.sql`,
    antes de desplegar (DEPLOY.md).
 3. **Variables en Vercel.** `ZADARMA_KEY`, `ZADARMA_SECRET` (el secret nuevo,
    regenerado) y `VOICE_TOOLS_SECRET` (uno nuevo:
    `openssl rand -hex 32`).
-4. **Ajustes de la tienda** (por SQL mientras no haya pantalla):
+4. **Ajustes de la tienda**, en Ajustes → «Agente de voz · Reproprovincia»
+   (o por SQL):
    ```sql
    update stores
       set voice_recovery_agent_number = '17058243',
-          voice_recovery_zadarma_sip  = '<extensión del paso 1>'
+          voice_recovery_zadarma_sip  = '104'
     where name = 'Kenku Peru';
    ```
 5. **Tools en la consola de xAI.** Cambiar las URLs del mock de Make por:
@@ -554,8 +556,17 @@ from voice_calls vc where vc.outcome = 'acepta';
    ```
    Te llama con el número peruano, el agente saluda con la ficha real de
    #KP135098 y lo que registres queda solo en `voice_calls` (modo prueba).
-7. **Revisar.** `select status, outcome, outcome_payload, error from voice_calls
+   O desde el Master: abre un pedido en Reproprovincia, panel «Agente de
+   voz», «Probar en mi teléfono».
+7. **Revisar.** El mismo panel lista las llamadas del pedido; o
+   `select status, outcome, outcome_payload, error from voice_calls
    order by queued_at desc limit 5;`
+8. **Medir la cola antes de encender el automático.**
+   `GET /api/cron/voice-recovery?dry=1` con `Authorization: Bearer <CRON_SECRET>`
+   devuelve por tienda cuántos pedidos entran y cuántos quedan fuera por cada
+   condición, sin llamar a nadie.
+9. **Encender.** Primero «Cola y botón» (llamadas a mano desde el drawer una
+   semana, escuchando todas), luego «Llamadas automáticas».
 
 ## Fase 1: las cinco pruebas, en orden
 

@@ -68,6 +68,8 @@ export async function POST(req: NextRequest) {
     ...body,
     accion: action.kind,
     resultado: action.kind === "attempt" ? action.result : null,
+    // El barrido lo lee para no volver a llamar a este teléfono (§11.8, cond. 9).
+    no_llamar: action.extra.no_llamar === true,
   };
   let writeError: string | null = null;
 

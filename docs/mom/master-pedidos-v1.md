@@ -2868,9 +2868,11 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
 
 ### 11.8 Recuperación por agente de voz (v1.12, especificación aprobable)
 
-Estado: **en construcción (Fase 2).** Existen la bitácora (`voice_calls`,
-0170), las dos tools del agente y la llamada de prueba; faltan el barrido
-automático y la pantalla. El plan técnico vive en
+Estado: **construido, apagado por tienda (Fase 2).** Existen la bitácora
+(`voice_calls`, 0170), las dos tools del agente, la llamada de prueba, el
+barrido (`/api/cron/voice-recovery`), el panel del drawer y los ajustes de la
+tienda. Faltan la transcripción al cerrar la llamada, la etiqueta «Acepta
+reenvío · crear salida Swayp» en la cola y el renglón del resumen diario. El plan técnico vive en
 `docs/voz-reproprovincia-plan.md`. Esta sección define las reglas; el plan
 define cómo se construyen. Ninguna de las dos autoriza a llamar a un cliente
 hasta que el piloto de abajo se encienda por tienda.
@@ -2960,7 +2962,9 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
   llamó N veces».
 - Horario `voice_recovery_hour_start`–`voice_recovery_hour_end` (09–20 de Lima
   por defecto), más estrecho que el laboral de §6.1 a propósito: una llamada
-  automática a las 21:45 se recibe distinto que la de una asesora.
+  automática a las 21:45 se recibe distinto que la de una asesora. **Los
+  domingos no llama**, ni el barrido ni el botón: tampoco ofrece entrega ese
+  día.
 - Lo mueve **owner o admin de la organización de esa tienda**, igual que el
   ciclo de recontacto (§6.1): reparte llamadas y reputación de toda la tienda.
 - **La clienta siempre ve un número peruano.** Kapta no pide una llamada sin
