@@ -36,3 +36,32 @@ export function riderPayBlockers(s: RiderPaySnapshot): string[] {
     s.conflicts ? `${s.conflicts} reporte(s) con medio e importe incompatibles.` : "",
   ].filter(Boolean);
 }
+
+/** Una versión de `rider_pay_rates` (0162): general (sin distrito) o de un distrito. */
+export interface RiderRateVersion {
+  district_key: string | null;
+  amount: number;
+  effective_from: string;
+  created_at: string;
+}
+
+/**
+ * La tarifa personal vigente de un motorizado en un distrito y día, con la
+ * misma precedencia que `rider_pay_preview` (0162): la del distrito gana a la
+ * general; entre iguales, la de vigencia más reciente y, a igualdad, la última
+ * registrada. Null si no hay ninguna vigente.
+ */
+export function resolveRiderRate(
+  rates: readonly RiderRateVersion[],
+  districtKey: string,
+  day: string,
+): { amount: number; source: "distrito" | "general"; effectiveFrom: string } | null {
+  let best: RiderRateVersion | null = null;
+  const rank = (r: RiderRateVersion) => `${r.district_key ? 1 : 0}|${r.effective_from}|${r.created_at}`;
+  for (const r of rates) {
+    if (r.effective_from > day) continue;
+    if (r.district_key && r.district_key !== districtKey) continue;
+    if (!best || rank(r) > rank(best)) best = r;
+  }
+  return best ? { amount: Number(best.amount), source: best.district_key ? "distrito" : "general", effectiveFrom: best.effective_from } : null;
+}

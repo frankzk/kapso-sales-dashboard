@@ -2,7 +2,7 @@
 
 import mobile from "./courier-mobile.module.css";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { OrderLink } from "@/components/order-link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -13,12 +13,15 @@ import { CourierBoxDrawer } from "@/components/courier-box-drawer";
 import { CourierRouteReportDrawer } from "@/components/courier-route-report-drawer";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import type { CourierLedgerRow, PendingReturn } from "@/lib/courier-route-ledger";
+import { resolveRiderRate, type RiderRateVersion } from "@/lib/rider-pay";
 import { resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
 import {
   activateGroupGfCourier,
   assignGroupGfCourierRoute,
   saveDistrictTariff,
   setDistrictAvailability,
+  loadRiderPayRates,
+  saveRiderDistrictPay,
   takeGroupGfCourierOrders,
   takeAndAssignGroupGfCourierOrders,
   type CourierActionResult,
@@ -525,7 +528,7 @@ function AvailableOrders({
       )}
 
       <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm", mobile.orders)}>
-        <table className="w-full min-w-[980px] text-sm">
+        <table className="w-full min-w-[1140px] text-sm">
           <thead className={STICKY_HEAD}>
             <tr className="text-left text-xs text-slate-500">
               <th className="w-12 px-4 py-3">
@@ -916,6 +919,32 @@ function TariffMatrix({
   const [query, setQuery] = useState("");
   const [effectiveFrom, setEffectiveFrom] = useState(today());
   const agreementId = scope === "general" ? null : scope;
+  // Pago por motorizado (0162): se elige en la cabecera de la columna y cada
+  // fila muestra y registra su tarifa personal en ese distrito.
+  const riders = snapshot.operations.riders;
+  const [payRider, setPayRider] = useState("");
+  const [riderRates, setRiderRates] = useState<RiderRateVersion[]>([]);
+  const [payMessage, setPayMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [paySaving, setPaySaving] = useState<string | null>(null);
+  useEffect(() => {
+    if (!payRider) { setRiderRates([]); return; }
+    let live = true;
+    void loadRiderPayRates(orgId, payRider).then((res) => {
+      if (!live) return;
+      setRiderRates(res.rates);
+      if (res.error) setPayMessage({ ok: false, text: res.error });
+    });
+    return () => { live = false; };
+  }, [orgId, payRider]);
+  async function saveRiderPay(districtKey: string, value: string) {
+    if (!payRider) return;
+    setPaySaving(districtKey);
+    setPayMessage(null);
+    const res = await saveRiderDistrictPay(orgId, { riderId: payRider, districtKey, amount: Number(value.replace(",", ".")), from: effectiveFrom });
+    setPayMessage(res.error ? { ok: false, text: res.error } : { ok: true, text: res.notice ?? "Guardado." });
+    if (!res.error) setRiderRates((await loadRiderPayRates(orgId, payRider)).rates);
+    setPaySaving(null);
+  }
   const districts = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("es");
     if (!needle) return snapshot.districts;
@@ -955,6 +984,7 @@ function TariffMatrix({
       </details>
       {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
       {notice && <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}
+      {payMessage && <p role={payMessage.ok ? undefined : "alert"} className={cn("rounded-xl px-4 py-3 text-sm", payMessage.ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700")}>{payMessage.text}</p>}
 
       <section aria-label="Filtros de tarifas" className="flex flex-col gap-3 border-y border-slate-200 py-4 md:flex-row md:items-end">
         <label className="text-xs font-medium text-slate-600">
@@ -1004,11 +1034,29 @@ function TariffMatrix({
               <th className="px-3 py-3 text-right font-medium">Entrega o rechazo</th>
               <th className="px-3 py-3 font-medium">Origen</th>
               <th className="px-4 py-3 text-right font-medium">Acción</th>
+              <th className="border-l border-slate-200 px-3 py-2 font-medium">
+                <label className="flex items-center gap-1.5" title="Lo que se le paga al motorizado por cada entrega en ese distrito (tarifa personal, MOM §29.9). Se registra desde la fecha de «Ver y registrar desde».">
+                  Pago a
+                  <select value={payRider} onChange={(e) => { setPayRider(e.target.value); setPayMessage(null); }} className="h-8 rounded-md border border-slate-300 bg-white px-1.5 text-xs font-medium text-slate-900">
+                    <option value="">motorizado…</option>
+                    {riders.map((r) => <option key={r.id} value={r.id}>{r.fullName}</option>)}
+                  </select>
+                </label>
+              </th>
             </tr>
           </thead>
           <tbody>
             {districts.map((district) => (
               <TariffRow
+                payCell={
+                  <RiderPayCell
+                    key={`${payRider}:${district.district_key}:${effectiveFrom}`}
+                    enabled={Boolean(payRider)}
+                    current={payRider ? resolveRiderRate(riderRates, district.district_key, effectiveFrom) : null}
+                    saving={paySaving === district.district_key}
+                    onSave={(value) => void saveRiderPay(district.district_key, value)}
+                  />
+                }
                 key={`${scope}:${district.district_key}:${effectiveFrom}`}
                 orgId={orgId}
                 providerId={provider.id}
@@ -1024,7 +1072,7 @@ function TariffMatrix({
               />
             ))}
             {!districts.length && (
-              <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-500">Ningún distrito coincide con la búsqueda.</td></tr>
+              <tr><td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">Ningún distrito coincide con la búsqueda.</td></tr>
             )}
           </tbody>
         </table>
@@ -1042,7 +1090,46 @@ function Summary({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * Celda «Pago a …»: la tarifa personal vigente del motorizado en el distrito
+ * (propia del distrito, o la general como sugerencia) y el campo para
+ * registrar una nueva desde la fecha elegida. No sobrescribe: agrega versión.
+ */
+function RiderPayCell({ enabled, current, saving, onSave }: {
+  enabled: boolean;
+  current: { amount: number; source: "distrito" | "general"; effectiveFrom: string } | null;
+  saving: boolean;
+  onSave: (value: string) => void;
+}) {
+  const own = current?.source === "distrito" ? current.amount.toFixed(2) : "";
+  const [value, setValue] = useState(own);
+  if (!enabled) return <span className="text-xs text-slate-400">Elige motorizado</span>;
+  const changed = value.trim() !== "" && Number(value.replace(",", ".")) !== (current?.source === "distrito" ? current.amount : NaN);
+  return (
+    <div className="flex items-center gap-1.5">
+      <label className="flex h-9 w-24 items-center rounded-lg border border-slate-300 bg-white px-2 focus-within:border-brand-500">
+        <span className="text-xs text-slate-400">S/</span>
+        <input
+          inputMode="decimal"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={current?.source === "general" ? current.amount.toFixed(2) : "0.00"}
+          aria-label="Pago al motorizado en este distrito"
+          className="w-full min-w-0 bg-transparent text-right text-sm tabular-nums outline-none"
+        />
+      </label>
+      <button type="button" disabled={!changed || saving} onClick={() => onSave(value)} className="h-9 rounded-lg px-2 text-xs font-semibold text-brand-700 hover:bg-brand-50 disabled:text-slate-300">
+        {saving ? "…" : "Guardar"}
+      </button>
+      <span className="text-[11px] text-slate-400" title={current ? `Vigente desde ${current.effectiveFrom}` : undefined}>
+        {current ? (current.source === "distrito" ? "propia" : "general") : "sin tarifa"}
+      </span>
+    </div>
+  );
+}
+
 function TariffRow({
+  payCell,
   orgId,
   providerId,
   agreementId,
@@ -1066,6 +1153,8 @@ function TariffRow({
   pending: boolean;
   onSave: (input: Parameters<typeof saveDistrictTariff>[0]) => void;
   onAvailability: (input: Parameters<typeof setDistrictAvailability>[0]) => void;
+  /** Celda «Pago a …» del motorizado elegido en la cabecera. */
+  payCell?: ReactNode;
 }) {
   const resolution = resolveDistrictTariff(tariffs, {
     providerId,
@@ -1180,10 +1269,11 @@ function TariffRow({
             {tariff && !inherited ? "Cambiar" : inherited ? "Crear excepción" : "Guardar"}
           </button>
         </td>
+        <td data-label="Pago al motorizado" className="border-l border-slate-100 px-3 py-3">{payCell}</td>
       </tr>
       {showPauseForm && availability.status === "available" && (
         <tr className="border-b border-amber-100 bg-amber-50/60">
-          <td colSpan={6} className="px-4 py-3">
+          <td colSpan={7} className="px-4 py-3">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
               <label className="min-w-0 flex-1 text-xs font-medium text-slate-700">
                 Motivo para pausar {district.district}
