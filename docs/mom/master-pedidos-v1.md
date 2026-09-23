@@ -2993,7 +2993,12 @@ el redactado.
   pedido queda en la cola con la nota arriba para que una persona retome.
 - Si contesta otra persona, deja un mensaje breve y corta. Si sale buzón, corta
   sin dejar audio largo.
-- Dura como máximo cuatro minutos. Pasado el límite, se despide y deriva.
+- **Dura lo menos posible: el costo es por llamada conectada.** La primera
+  prueba en la consola costó US$ 0,20 (22-09-2026). El guion apunta a cuatro
+  turnos —saludo con propuesta, respuesta, reconfirmación y cierre en una
+  sola frase, despedida— y un tope de dos minutos; pasado el tope, se despide
+  y registra lo que haya. La cifra que decide si compensa es el costo por
+  pedido entregado de la tabla del piloto, no el costo por llamada.
 - Si la clienta pide que **no la llamen más**, el agente lo registra
   (`no_llamar`) y se despide. Ese teléfono no vuelve a entrar a la cola del
   agente en esa tienda; una persona puede seguir llamándolo si lo decide.
