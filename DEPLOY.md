@@ -1938,3 +1938,12 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
   creado por API: hoy la reconciliación se apoya en teléfono + nº de pedido.
 - Si `products[].price` es unitario o subtotal de línea.
 - Límites de cuota, y si el webhook admite firma o IPs fijas.
+
+### 22-09-2026 · «Recibir en oficina» (0188)
+
+1. **Migración `0188_gf_return_to_office.sql`**, a mano, antes del código:
+   `psql "$DATABASE_URL" -f db/migrations/0188_gf_return_to_office.sql`.
+   Redefine el guard de ítems para admitir el retiro autorizado también en
+   modo `exigir` y crea `gf_return_to_office`. Sin ella, «Recibir en oficina»
+   responde que la función no existe.
+2. Resolver `mom-v1.15`: el cron reconcilia el histórico solo.

@@ -176,6 +176,9 @@ echo "  ✅ dos asignaciones → una carga, una ruta, paradas sin duplicar; con 
 echo "▶ modo confirmar: «lo llevo» / «no lo llevo» sobre la caja en custodia (0185)"
 $PSQL -f "$ROOT/scripts/sql/gf_pickup_mode_smoke.sql"
 echo "  ✅ asignar da custodia con paradas por confirmar; confirmar marca el ítem; rechazar retira, borra la parada y libera el paquete; el supervisor quita solo lo no confirmado"
+echo "▶ «Recibir en oficina» (0188): un no entregado sale de la caja en custodia, también en exigir"
+$PSQL -f "$ROOT/scripts/sql/gf_return_to_office_smoke.sql"
+echo "  ✅ sale con rastro, custodia a la empresa, solicitud a por asignar; la parada reportada se conserva"
 
 echo ""
 echo "✅ DB verification passed."

@@ -192,6 +192,13 @@ export interface QueueRoute {
   state: string;
   officeCheckedAt: string | null;
   pickupCheckedAt: string | null;
+  /** «No entregado» y todavía en la caja: se recibe en oficina para reprogramarlo. */
+  undeliveredReason?: string | null;
+}
+
+/** Un «No entregado» que sigue en la caja del motorizado: se ve en la cola para recibirlo en oficina. */
+export function isReturnable(row: Pick<QueueRow, "route">): boolean {
+  return Boolean(row.route?.undeliveredReason);
 }
 
 export type CreatedWindow = "hoy" | "ayer" | "7d" | "todo";
@@ -311,7 +318,7 @@ export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, to
   const byPhone = digits.length >= 4 && digits.length === needle.replace(/[\s+\-().]/g, "").length;
   const onlyAssignable = !filters.stages.length && !opts.includeTracked;
   return rows.filter((q) => {
-    if (onlyAssignable && !q.assignable) return false;
+    if (onlyAssignable && !q.assignable && !isReturnable(q)) return false;
     if (filters.store && q.storeName !== filters.store) return false;
     if (filters.district && q.district !== filters.district) return false;
     if (filters.secondAttempt && !q.hasPriorDispatch) return false;

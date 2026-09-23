@@ -377,4 +377,6 @@
 \ir migrations/0186_order_master_rider_select.sql
 \echo 'Applying 0187_gf_readd_declined_item.sql'
 \ir migrations/0187_gf_readd_declined_item.sql
+\echo 'Applying 0188_gf_return_to_office.sql'
+\ir migrations/0188_gf_return_to_office.sql
 \echo 'Done.'

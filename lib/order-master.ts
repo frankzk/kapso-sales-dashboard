@@ -205,6 +205,8 @@ interface EventRecord {
   new_status: string | null;
   new_operational: string | null;
   reason?: string | null;
+  /** Texto del hecho; el resolver lo lee solo para distinguir la custodia recibida por el motorizado. */
+  note?: string | null;
   payload?: Record<string, unknown> | null;
 }
 
@@ -421,7 +423,7 @@ async function fetchEvents(admin: SupabaseClient, ids: string[]): Promise<EventR
   for (const batch of chunk(ids, ID_BATCH)) {
     const { data, error } = await admin
       .from("order_events")
-      .select("order_id,shipment_id,kind,occurred_at,actor,courier,new_status,new_operational,reason,payload")
+      .select("order_id,shipment_id,kind,occurred_at,actor,courier,new_status,new_operational,reason,note,payload")
       .in("order_id", batch);
     if (error) throw new Error(`order_master: no se pudieron leer los eventos — ${error.message}`);
     out.push(...((data ?? []) as unknown as EventRecord[]));
@@ -1062,6 +1064,7 @@ export async function recomputeOrderMaster(
         occurred_at: event.occurred_at,
         shipment_id: event.shipment_id,
         reason: event.reason ?? null,
+        note: event.note ?? null,
         payload: event.payload ?? null,
       })),
       legacy: {

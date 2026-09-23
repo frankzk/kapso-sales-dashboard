@@ -18,6 +18,11 @@ import {
 } from "@/lib/order-confirmation";
 import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovincia";
 
+// v1.15: todo «No entregado» del motorizado propio es Por reprogramar Lima
+// salvo «Rechazó el pedido», y se queda ahí también después de volver a la
+// oficina (`returned_to_office`) hasta que el paquete vuelva a salir. La
+// recepción de la caja en modo `exigir` cuenta como «Lo llevo» (En reparto).
+//
 // v1.14: el motorizado de Grupo GF mueve la etapa con lo que reporta (MOM
 // §29.13, decisión del 22-09-2026). Hasta aquí un pedido propio quedaba en «En
 // curso · En tránsito» desde la asignación hasta el cierre de la ruta, aunque
@@ -65,7 +70,7 @@ import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovi
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.14" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.15" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -331,6 +336,7 @@ export interface MacroEventSnapshot {
   /** Salida física concreta a la que pertenece el hecho, cuando aplica. */
   shipment_id?: string | null;
   reason?: string | null;
+  note?: string | null;
   payload?: Record<string, unknown> | null;
 }
 
@@ -838,8 +844,19 @@ function isOwnCourier(courier: string | null | undefined): boolean {
 
 export type GfRiderSignal = "lo_lleva" | "entregado" | "postergado" | "no_entregado";
 
-/** Motivos de no entrega que dejan la parada para otro día (lib/routes.ts). */
-const GF_POSTPONED_REASONS = new Set(["reprogramado", "no_estaba"]);
+/**
+ * v1.15 (22-09-2026): todo «No entregado» es reprogramable salvo que el
+ * cliente rechazara el pedido — ese sí cierra la venta y va a devolución.
+ */
+const GF_CLOSING_REASONS = new Set(["rechazado"]);
+
+/**
+ * Custodia que el motorizado recibió escaneando su caja (modo `exigir`): es
+ * su «Lo llevo». La del modo `confirmar` pasa al asignar y no prueba nada.
+ */
+function isRiderReception(event: MacroEventSnapshot): boolean {
+  return event.kind === "custody_transferred" && (event.note ?? "").startsWith("Paquete cotejado y recibido");
+}
 
 /**
  * Lo último que dijo el motorizado de esta salida (v1.14, MOM §29.13): «Lo
@@ -854,9 +871,9 @@ export function gfRiderSignal(
   guide: MacroGuideSnapshot,
 ): { signal: GfRiderSignal; at: string } | null {
   if (!isOwnCourier(guide.courier)) return null;
-  const kinds = new Set(["pickup_checked", "stop_reported", "pickup_declined", "package_removed"]);
+  const kinds = new Set(["pickup_checked", "stop_reported", "pickup_declined", "package_removed", "returned_to_office", "custody_transferred"]);
   const mine = events
-    .filter((event) => kinds.has(event.kind) && (event.shipment_id === guide.id || (!event.shipment_id && event.kind === "stop_reported")))
+    .filter((event) => kinds.has(event.kind) && (event.kind !== "custody_transferred" || isRiderReception(event)) && (event.shipment_id === guide.id || (!event.shipment_id && event.kind === "stop_reported")))
     .sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : a.occurred_at > b.occurred_at ? -1 : 0));
   // Un reporte deshecho (`stop_reported` con estado «pendiente») anula los
   // reportes anteriores: manda lo que hubo antes de ellos («Lo llevo»).
@@ -871,13 +888,37 @@ export function gfRiderSignal(
     break;
   }
   if (!latest) return null;
-  if (latest.kind === "pickup_checked") return { signal: "lo_lleva", at: latest.occurred_at };
+  if (latest.kind === "pickup_checked" || isRiderReception(latest)) return { signal: "lo_lleva", at: latest.occurred_at };
   if (latest.kind !== "stop_reported") return null;
   const status = String(latest.payload?.status ?? "");
   if (status === "entregado") return { signal: "entregado", at: latest.occurred_at };
   if (status !== "no_entregado") return null;
   const reason = String(latest.payload?.outcome_reason ?? "");
-  return { signal: GF_POSTPONED_REASONS.has(reason) ? "postergado" : "no_entregado", at: latest.occurred_at };
+  return { signal: GF_CLOSING_REASONS.has(reason) ? "no_entregado" : "postergado", at: latest.occurred_at };
+}
+
+/** Hora del último «No entregado» reprogramable de la salida, si nada la ha vuelto a mover después. */
+function gfAwaitingRetry(events: readonly MacroEventSnapshot[], guide: MacroGuideSnapshot): string | null {
+  const moves = new Set(["dispatch_route_assigned", "pickup_checked", "custody_transferred", "delivered"]);
+  let failed: MacroEventSnapshot | null = null;
+  let moved: string | null = null;
+  let undoneAt: string | null = null;
+  for (const event of events) {
+    const mine = event.shipment_id === guide.id || (!event.shipment_id && event.kind === "stop_reported");
+    if (!mine) continue;
+    if (event.kind === "stop_reported") {
+      const status = String(event.payload?.status ?? "");
+      if (status === "pendiente") { if (!undoneAt || event.occurred_at > undoneAt) undoneAt = event.occurred_at; continue; }
+      if (!failed || event.occurred_at > failed.occurred_at) failed = event;
+    } else if (moves.has(event.kind)) {
+      if (!moved || event.occurred_at > moved) moved = event.occurred_at;
+    }
+  }
+  if (!failed || String(failed.payload?.status ?? "") !== "no_entregado") return null;
+  if (GF_CLOSING_REASONS.has(String(failed.payload?.outcome_reason ?? ""))) return null;
+  if (undoneAt && undoneAt > failed.occurred_at) return null;
+  if (moved && moved > failed.occurred_at) return null;
+  return failed.occurred_at;
 }
 
 function inCourseSubstage(
@@ -1101,6 +1142,14 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
         : maxIso(current.out_for_delivery_at, current.dispatched_at, current.assigned_at, input.legacy.since),
       operation,
     );
+  }
+
+  // v1.15: un «No entregado» que volvió a la oficina sigue en «Por reprogramar
+  // Lima» hasta que vuelva a salir (MOM §9): la parada fallida manda mientras
+  // no haya una asignación nueva después de ella.
+  const retry = input.guides.find((guide) => isOwnCourier(guide.courier) && isActiveGuide(guide) && gfAwaitingRetry(input.events, guide));
+  if (retry) {
+    return result("en_curso", operation === "lima" ? "por_reprogramar_lima" : "gestion_reproprovincia", gfAwaitingRetry(input.events, retry), operation);
   }
 
   const ready = input.guides.find(isReadyAtCompany);

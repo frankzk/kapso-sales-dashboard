@@ -278,7 +278,7 @@ describe("y la macroetapa la aplica IGUAL", () => {
     // no prueba comportamiento, avisa de que hay que subir la versión.
     // v1.14 (22-09-2026): lo que reporta el motorizado de Grupo GF mueve la
     // etapa antes del cierre de la ruta (MOM §29.13).
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.14");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.15");
   });
 });
 
