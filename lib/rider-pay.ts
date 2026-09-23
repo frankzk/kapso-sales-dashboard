@@ -1,3 +1,4 @@
+import { resolveLimaDistrict } from "@/lib/order-coverage";
 export interface RiderPayRow {
   stop_id: string; order_id: string; store_id: string | null; seq: number;
   order_name: string | null; district: string | null; status: string;
@@ -17,6 +18,7 @@ export interface RiderPaySnapshot {
 }
 export interface RiderPayRate {
   id: string; district_key: string | null; amount: number; effective_from: string; reason: string;
+  created_at?: string;
 }
 export interface RiderPayDetail {
   snapshot: RiderPaySnapshot;
@@ -64,4 +66,45 @@ export function resolveRiderRate(
     if (!best || rank(r) > rank(best)) best = r;
   }
   return best ? { amount: Number(best.amount), source: best.district_key ? "distrito" : "general", effectiveFrom: best.effective_from } : null;
+}
+
+/** Clave de distrito de Lima como la resuelve la base (`resolve_lima_district`, con Chosica → Lurigancho). */
+export function riderPayDistrictKey(raw: string | null | undefined): string | null {
+  const key = resolveLimaDistrict(raw, { searchInText: true });
+  return key === "lurigancho chosica" ? "lurigancho" : key;
+}
+
+export interface StopRateCheck {
+  /** De dónde sale la tarifa que rige hoy para esa parada. */
+  source: "distrito" | "general" | null;
+  /** La que rige hoy con las tarifas registradas. */
+  current: number | null;
+  /** Aviso para quien revisa, o null si todo cuadra. */
+  warning: string | null;
+}
+
+/**
+ * ¿La tarifa de la parada es la que corresponde a su distrito? Avisa cuando
+ * el distrito del pedido no se reconoce (se aplica la general sin decirlo) y
+ * cuando el monto calculado —o el aprobado y congelado— ya no es el que rige
+ * con las tarifas registradas (p. ej. se creó una tarifa del distrito después).
+ */
+export function checkStopRate(
+  row: Pick<RiderPayRow, "district" | "configured_rate">,
+  rates: readonly RiderPayRate[],
+  day: string,
+): StopRateCheck {
+  const versions: RiderRateVersion[] = rates.map((r) => ({ district_key: r.district_key, amount: Number(r.amount), effective_from: r.effective_from, created_at: r.created_at ?? r.effective_from }));
+  const key = riderPayDistrictKey(row.district);
+  const resolved = key ? resolveRiderRate(versions, key, day) : resolveRiderRate(versions.filter((v) => !v.district_key), "", day);
+  const current = resolved?.amount ?? null;
+  const source = resolved?.source ?? null;
+  const money = (n: number) => `S/ ${n.toFixed(2)}`;
+  if (!key) {
+    return { source, current, warning: `Distrito «${row.district ?? "sin distrito"}» no reconocido: se aplica la tarifa general.` };
+  }
+  if (current != null && row.configured_rate != null && Math.abs(current - Number(row.configured_rate)) > 0.004) {
+    return { source, current, warning: `Con las tarifas de hoy sería ${money(current)} (${source === "distrito" ? "tarifa del distrito" : "general"}).` };
+  }
+  return { source, current, warning: null };
 }

@@ -18,6 +18,7 @@ import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import type { RiderRow } from "@/lib/settlements-access";
 import { Hint } from "@/components/hint";
 import { RIDER_PAY_BALANCE_HINT, RiderPayPanel, riderPayBalanceLabel } from "@/components/rider-pay-panel";
+import { checkStopRate } from "@/lib/rider-pay";
 import type { RiderPayDetail } from "@/lib/rider-pay";
 import {
   addStops,
@@ -597,6 +598,17 @@ function RouteDetail({
                     rechazada); antes de eso no es S/ 0,00, es «todavía no». Sin
                     tarifa personal vigente se dice, para que se configure. */}
                 <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                  {pr && pay && (() => {
+                    // Tarifa del distrito o general, y aviso si no cuadra con
+                    // las tarifas registradas (MOM §29.9).
+                    const check = checkStopRate(pr, pay.rates, pay.snapshot.day);
+                    return (
+                      <>
+                        {check.warning && <p className="mb-0.5 max-w-[14rem] text-right text-[11px] leading-tight text-amber-700" title={check.warning}>⚠ {check.warning}</p>}
+                        {check.source && <span className="mr-1 rounded bg-slate-100 px-1 text-[10px] font-medium text-slate-500">{check.source === "distrito" ? "distrito" : "general"}</span>}
+                      </>
+                    );
+                  })()}
                   {!pr ? "—"
                     : pr.configured_rate == null ? <span className="text-xs text-amber-700" title="Configura la tarifa del motorizado en «Tarifa de …», abajo">Sin tarifa</span>
                     : s.status === "pendiente" ? <span className="text-xs text-slate-400" title={`${money(pr.configured_rate)} al reportar`}>—</span>
