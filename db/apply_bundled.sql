@@ -13762,3 +13762,1526 @@ comment on column stores.olva_transit_params is
 comment on column stores.olva_arrival_template_enabled is
   'Aviso de «ya llegó a la oficina» para guías de Olva. El plazo de Olva son 6 '
   'días, así que `vence` —si se usa— se calcula con 6 y no con 28.';
+
+-- ---- 0176 ----
+-- ============================================================================
+-- 0184_liquidaciones2_hojas.sql — Liquidaciones 2: dominios, hojas, columnas
+-- configurables, equivalencias de estado y observaciones de cuadre.
+--
+-- DE DÓNDE VIENE. La operación llevaba el cierre de Lima en un Google Sheet
+-- («MASTER KEY 2.0»): una hoja por motorizado, una por courier, dos hojas
+-- consolidadas por tienda con una columna por repartidor y un resolver de
+-- estatus en 400 mil COUNTIFS. El cruce del 16-09-2026 contra esta base dijo
+-- dos cosas: los pedidos y montos de Shopify coinciden casi al 100 %, pero de
+-- los 4.764 pedidos que los motorizados marcaron entregados en la hoja, Kapta
+-- no tenía NINGUNO como entregado por motorizado (rutas casi sin uso: 2 rutas,
+-- 1 parada). Y al revés: 2.563 entregas de Provincia que Kapta sí conoce por
+-- las APIs de Aliclik, Shalom y Tanders estaban «Pendiente» en la hoja. Lima
+-- vive en la hoja; Provincia vive en Kapta. Liquidaciones 2 junta las dos.
+--
+-- LA IDEA, en tres piezas:
+--   * DOMINIO: el grupo que define el contrato — clave de fila (pedido, guía,
+--     punto de ruta, valor de catálogo), vocabulario de estados y su
+--     equivalente en Kapta. Reparto propio, Courier externo, Consolidado…
+--   * HOJA: una instancia del dominio (Roy, Aliclik Lima, Revisar Aurela).
+--     Hereda la plantilla de columnas del dominio y puede añadir columnas
+--     manuales propias. No puede romper el contrato.
+--   * COLUMNA: cuatro tipos y nada más. `campo` lee del pedido (solo lectura),
+--     `manual` se teclea, `lookup` busca en otra hoja, `derivada` aplica una
+--     regla con nombre (el resolver de estatus, la zona, el mes). No hay motor
+--     de fórmulas: lo que en la hoja era COUNTIFS por fila aquí es una regla.
+--
+-- ESTADOS. Cada dominio tiene su lista cerrada de estados; cada estado mapea a
+-- un estado OPERATIVO de Kapta (el general se deriva de ahí, lib/order-status)
+-- y declara su efecto: `informa`, `entrega`, `devolucion` o `anulacion`. Un
+-- valor que llega y no está en la lista NO se inventa: se guarda literal como
+-- alias sin equivalente y la fila queda a revisión — la regla que ya aplica
+-- Tanders (MOM §9.4). Mapear a `entrega` no cierra el pedido por sí solo: crea
+-- la propuesta con la evidencia de la fila y el cierre pasa por la puerta
+-- única a entregado (MOM §11.4).
+--
+-- OBSERVACIONES. Cuando un valor externo no coincide con el de Kapta (monto,
+-- estado, pedido) se abre una observación con los dos valores, la diferencia y
+-- un motivo del catálogo. Nadie la resuelve sin motivo. Es la entidad que
+-- faltaba: las correcciones de liquidación (0093) solo cubren monto/comisión
+-- dentro de un lote, y las bitácoras (order_events, ingest_anomalies) no
+-- explican una diferencia.
+--
+-- HISTORIAL. Cada celda manual deja rastro en `sheet_cell_history`, que es
+-- APPEND-ONLY con el mismo patrón que order_events (0053): authenticated solo
+-- lee; service_role lee e inserta; nadie actualiza ni borra.
+-- ============================================================================
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Dominios
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists sheet_domains (
+  id           uuid primary key default gen_random_uuid(),
+  org_id       uuid not null references organizations(id) on delete cascade,
+  key          text not null,
+  name         text not null,
+  -- Qué identifica una fila dentro de las hojas del dominio.
+  row_key      text not null check (row_key in ('pedido', 'guia', 'punto', 'valor', 'periodo')),
+  description  text,
+  position     integer not null default 0,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  unique (org_id, key)
+);
+
+-- Vocabulario de estados del dominio y su equivalente en Kapta.
+create table if not exists sheet_domain_statuses (
+  id                  uuid primary key default gen_random_uuid(),
+  domain_id           uuid not null references sheet_domains(id) on delete cascade,
+  code                text not null,
+  label               text not null,
+  -- Estado operativo de Kapta (lib/order-status.ts OPERATIONAL_STATUSES).
+  operational_status  text not null,
+  -- Qué hace sobre el pedido: `informa` no cierra nada; `entrega` y
+  -- `devolucion` proponen el cierre; `anulacion` es del courier y NO anula el
+  -- pedido Shopify (MOM §9.4).
+  effect              text not null default 'informa'
+                        check (effect in ('informa', 'entrega', 'devolucion', 'anulacion')),
+  position            integer not null default 0,
+  active              boolean not null default true,
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now(),
+  unique (domain_id, code)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Hojas y columnas
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists sheets (
+  id          uuid primary key default gen_random_uuid(),
+  org_id      uuid not null references organizations(id) on delete cascade,
+  domain_id   uuid not null references sheet_domains(id) on delete cascade,
+  -- Tienda a la que pertenece la hoja cuando el dominio es por tienda
+  -- (Pedidos, Consolidado). Null para catálogos y hojas de repartidor.
+  store_id    uuid references stores(id) on delete cascade,
+  key         text not null,
+  name        text not null,
+  position    integer not null default 0,
+  active      boolean not null default true,
+  -- Configuración libre de la hoja: filtros por defecto, mapeo de importación…
+  config      jsonb not null default '{}'::jsonb,
+  created_by  uuid references auth.users(id) on delete set null,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  unique (org_id, key)
+);
+create index if not exists sheets_domain_idx on sheets(domain_id, position);
+create index if not exists sheets_store_idx on sheets(store_id) where store_id is not null;
+
+create table if not exists sheet_columns (
+  id          uuid primary key default gen_random_uuid(),
+  sheet_id    uuid not null references sheets(id) on delete cascade,
+  key         text not null,
+  label       text not null,
+  kind        text not null check (kind in ('campo', 'manual', 'lookup', 'derivada')),
+  data_type   text not null default 'text'
+                check (data_type in ('text', 'number', 'date', 'select', 'boolean', 'status')),
+  -- `campo`: {"field": "order_total"}; `lookup`: {"sheet": "catalogo_zonas",
+  -- "match": "distrito", "by": "district", "return": "zona"}; `derivada`:
+  -- {"rule": "estatus_consolidado"}. Lo interpreta lib/sheets/engine.ts.
+  source      jsonb not null default '{}'::jsonb,
+  -- Opciones de un `select`, en orden.
+  options     jsonb not null default '[]'::jsonb,
+  position    integer not null default 0,
+  width       integer,
+  visible     boolean not null default true,
+  pinned      boolean not null default false,
+  required    boolean not null default false,
+  -- Una columna de plantilla la define el dominio; una local la añadió la hoja.
+  from_template boolean not null default true,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  unique (sheet_id, key)
+);
+create index if not exists sheet_columns_sheet_idx on sheet_columns(sheet_id, position);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Filas, celdas e historial
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Una fila guarda SOLO los valores manuales e importados. Los `campo` se leen
+-- del pedido en cada consulta y los `derivada`/`lookup` se calculan: así un
+-- cambio en el Master se ve en la hoja sin recalcular nada.
+create table if not exists sheet_rows (
+  id               uuid primary key default gen_random_uuid(),
+  sheet_id         uuid not null references sheets(id) on delete cascade,
+  order_id         uuid references orders(id) on delete set null,
+  -- Clave según el dominio: nº de pedido, guía, «fecha#punto», valor de catálogo.
+  row_key          text not null,
+  values           jsonb not null default '{}'::jsonb,
+  source           text not null default 'manual'
+                     check (source in ('manual', 'importacion', 'sincronizacion')),
+  import_batch_id  uuid,
+  created_by       uuid references auth.users(id) on delete set null,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now(),
+  unique (sheet_id, row_key)
+);
+create index if not exists sheet_rows_order_idx on sheet_rows(order_id) where order_id is not null;
+
+create table if not exists sheet_cell_history (
+  id              uuid primary key default gen_random_uuid(),
+  row_id          uuid not null references sheet_rows(id) on delete cascade,
+  column_key      text not null,
+  previous_value  jsonb,
+  new_value       jsonb,
+  reason          text,
+  actor           uuid references auth.users(id) on delete set null,
+  created_at      timestamptz not null default now()
+);
+create index if not exists sheet_cell_history_row_idx on sheet_cell_history(row_id, created_at desc);
+
+-- Alias de importación por hoja: lo que escribe la gente o trae el archivo,
+-- normalizado (mayúsculas, sin acentos), y a qué estado del dominio equivale.
+-- `status_code` null = alias visto y todavía sin equivalente: la fila queda a
+-- revisión hasta que alguien lo asigne desde la configuración.
+create table if not exists sheet_status_aliases (
+  id           uuid primary key default gen_random_uuid(),
+  sheet_id     uuid not null references sheets(id) on delete cascade,
+  alias        text not null,
+  status_code  text,
+  seen_count   integer not null default 0,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  unique (sheet_id, alias)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Observaciones de cuadre
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists sheet_observation_reasons (
+  code         text primary key,
+  label        text not null,
+  description  text,
+  position     integer not null default 0
+);
+
+insert into sheet_observation_reasons (code, label, description, position) values
+  ('descuento_en_puerta',    'Descuento en puerta',            'El motorizado cobró menos porque la clienta negoció al recibir.', 10),
+  ('cobro_parcial_adelanto', 'Cobro parcial: hubo adelanto',   'Parte del monto ya se pagó por Yape/Plin antes de la entrega.', 20),
+  ('producto_adicional',     'Producto adicional o faltante',  'Se entregó un producto de más o de menos respecto al pedido.', 30),
+  ('redondeo_courier',       'Redondeo del courier',           'Diferencia de céntimos por cómo redondea el reporte del courier.', 40),
+  ('delivery_aparte',        'Delivery cobrado aparte',        'El costo de envío se cobró como línea separada.', 50),
+  ('anulado_tras_entrega',   'Anulado en Shopify tras entregar', 'El pedido figura anulado en Shopify pero el repartidor lo entregó.', 60),
+  ('error_transcripcion',    'Error de transcripción',         'El valor de la hoja está mal tecleado o mal leído.', 70),
+  ('estado_sin_equivalente', 'Estado sin equivalente',         'El estado reportado no está en el vocabulario del dominio.', 80),
+  ('pedido_no_encontrado',   'Pedido no encontrado',           'El código de la fila no corresponde a ningún pedido de Kapta.', 90),
+  ('otro',                   'Otro',                           'Motivo explicado en la nota.', 100)
+on conflict (code) do nothing;
+
+create table if not exists sheet_observations (
+  id               uuid primary key default gen_random_uuid(),
+  org_id           uuid not null references organizations(id) on delete cascade,
+  sheet_id         uuid not null references sheets(id) on delete cascade,
+  row_id           uuid references sheet_rows(id) on delete set null,
+  order_id         uuid references orders(id) on delete set null,
+  -- Qué se comparó: `monto`, `estado`, `pedido`, `courier`…
+  field            text not null,
+  external_value   text,
+  kapta_value      text,
+  difference       numeric(12, 2),
+  reason_code      text references sheet_observation_reasons(code),
+  note             text,
+  status           text not null default 'abierta' check (status in ('abierta', 'resuelta')),
+  created_by       uuid references auth.users(id) on delete set null,
+  created_at       timestamptz not null default now(),
+  resolved_by      uuid references auth.users(id) on delete set null,
+  resolved_at      timestamptz,
+  resolution_note  text,
+  -- Resolver exige motivo: es la regla de la entidad.
+  constraint sheet_observations_resolved_has_reason
+    check (status <> 'resuelta' or (reason_code is not null and resolved_at is not null))
+);
+create index if not exists sheet_observations_open_idx on sheet_observations(org_id, status, created_at desc);
+create index if not exists sheet_observations_sheet_idx on sheet_observations(sheet_id, status);
+create index if not exists sheet_observations_order_idx on sheet_observations(order_id) where order_id is not null;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- RLS. Lectura para miembros de la organización; escritura para owner/admin.
+-- Las ediciones de celda y las observaciones pasan por server actions con el
+-- service role y sus propias comprobaciones de permiso (sheets.edit).
+-- ─────────────────────────────────────────────────────────────────────────────
+alter table sheet_domains            enable row level security;
+alter table sheet_domain_statuses    enable row level security;
+alter table sheets                   enable row level security;
+alter table sheet_columns            enable row level security;
+alter table sheet_rows               enable row level security;
+alter table sheet_cell_history       enable row level security;
+alter table sheet_status_aliases     enable row level security;
+alter table sheet_observation_reasons enable row level security;
+alter table sheet_observations       enable row level security;
+
+drop policy if exists sheet_domains_select on sheet_domains;
+create policy sheet_domains_select on sheet_domains for select to authenticated
+  using (org_id in (select auth_org_ids()));
+drop policy if exists sheet_domains_write on sheet_domains;
+create policy sheet_domains_write on sheet_domains for all to authenticated
+  using (org_id in (select auth_admin_org_ids()))
+  with check (org_id in (select auth_admin_org_ids()));
+
+drop policy if exists sheet_domain_statuses_select on sheet_domain_statuses;
+create policy sheet_domain_statuses_select on sheet_domain_statuses for select to authenticated
+  using (domain_id in (select id from sheet_domains where org_id in (select auth_org_ids())));
+drop policy if exists sheet_domain_statuses_write on sheet_domain_statuses;
+create policy sheet_domain_statuses_write on sheet_domain_statuses for all to authenticated
+  using (domain_id in (select id from sheet_domains where org_id in (select auth_admin_org_ids())))
+  with check (domain_id in (select id from sheet_domains where org_id in (select auth_admin_org_ids())));
+
+drop policy if exists sheets_select on sheets;
+create policy sheets_select on sheets for select to authenticated
+  using (org_id in (select auth_org_ids()));
+drop policy if exists sheets_write on sheets;
+create policy sheets_write on sheets for all to authenticated
+  using (org_id in (select auth_admin_org_ids()))
+  with check (org_id in (select auth_admin_org_ids()));
+
+drop policy if exists sheet_columns_select on sheet_columns;
+create policy sheet_columns_select on sheet_columns for select to authenticated
+  using (sheet_id in (select id from sheets where org_id in (select auth_org_ids())));
+drop policy if exists sheet_columns_write on sheet_columns;
+create policy sheet_columns_write on sheet_columns for all to authenticated
+  using (sheet_id in (select id from sheets where org_id in (select auth_admin_org_ids())))
+  with check (sheet_id in (select id from sheets where org_id in (select auth_admin_org_ids())));
+
+drop policy if exists sheet_rows_select on sheet_rows;
+create policy sheet_rows_select on sheet_rows for select to authenticated
+  using (sheet_id in (select id from sheets where org_id in (select auth_org_ids())));
+drop policy if exists sheet_rows_write on sheet_rows;
+create policy sheet_rows_write on sheet_rows for all to authenticated
+  using (sheet_id in (select id from sheets where org_id in (select auth_admin_org_ids())))
+  with check (sheet_id in (select id from sheets where org_id in (select auth_admin_org_ids())));
+
+drop policy if exists sheet_cell_history_select on sheet_cell_history;
+create policy sheet_cell_history_select on sheet_cell_history for select to authenticated
+  using (row_id in (
+    select r.id from sheet_rows r join sheets s on s.id = r.sheet_id
+     where s.org_id in (select auth_org_ids())
+  ));
+
+drop policy if exists sheet_status_aliases_select on sheet_status_aliases;
+create policy sheet_status_aliases_select on sheet_status_aliases for select to authenticated
+  using (sheet_id in (select id from sheets where org_id in (select auth_org_ids())));
+drop policy if exists sheet_status_aliases_write on sheet_status_aliases;
+create policy sheet_status_aliases_write on sheet_status_aliases for all to authenticated
+  using (sheet_id in (select id from sheets where org_id in (select auth_admin_org_ids())))
+  with check (sheet_id in (select id from sheets where org_id in (select auth_admin_org_ids())));
+
+drop policy if exists sheet_observation_reasons_select on sheet_observation_reasons;
+create policy sheet_observation_reasons_select on sheet_observation_reasons for select to authenticated
+  using (true);
+
+drop policy if exists sheet_observations_select on sheet_observations;
+create policy sheet_observations_select on sheet_observations for select to authenticated
+  using (org_id in (select auth_org_ids()));
+drop policy if exists sheet_observations_write on sheet_observations;
+create policy sheet_observations_write on sheet_observations for all to authenticated
+  using (org_id in (select auth_admin_org_ids()))
+  with check (org_id in (select auth_admin_org_ids()));
+
+-- Append-only, mismo patrón que order_events (0053).
+revoke all on sheet_cell_history from anon, authenticated, service_role;
+grant select         on sheet_cell_history to authenticated;
+grant select, insert on sheet_cell_history to service_role;
+
+-- El catálogo de motivos es dato de aplicación: nadie lo edita desde la UI.
+revoke all on sheet_observation_reasons from anon, authenticated;
+grant select on sheet_observation_reasons to authenticated;
+
+-- ---- 0177 ----
+-- ============================================================================
+-- 0185_sheet_status_effect_sin_salida.sql — un efecto más para los estados de
+-- dominio de Liquidaciones 2: «sin_salida».
+--
+-- La operación explicó (16-09-2026) qué es «LO DEJA» en el cuaderno del
+-- motorizado: el paquete se puso en su caja de reparto pero se quedó en
+-- almacén, no salió. No es un intento de entrega, y contarlo como tal (efecto
+-- `informa` → marca T) inflaría «# Motos Lima». Por eso un efecto propio que
+-- aporta 0 al Consolidado y equivale al operativo `nunca_salio_a_reparto`.
+-- ============================================================================
+alter table sheet_domain_statuses drop constraint if exists sheet_domain_statuses_effect_check;
+alter table sheet_domain_statuses
+  add constraint sheet_domain_statuses_effect_check
+  check (effect in ('informa', 'entrega', 'devolucion', 'anulacion', 'sin_salida'));
+
+-- ---- 0178 ----
+-- ============================================================================
+-- 0186_sheet_observation_reason_pago.sql — cuarta causa de observación
+-- automática en Liquidaciones 2: pago digital sin comprobante validado.
+--
+-- Una fila del cuaderno que declara entrega cobrada por Yape, Plin, link o
+-- transferencia, cuyo pedido en Kapta no tiene ni un comprobante validado
+-- (order_payments.validation_status = 'validado') ni está pagado en Shopify
+-- (orders.financial_status = 'paid'), abre una observación «pago» con este
+-- motivo (MOM §30.8). Como toda observación abierta, bloquea el cruce al
+-- Master hasta que quien liquida la lea y la acepte.
+-- ============================================================================
+insert into sheet_observation_reasons (code, label, description, position) values
+  ('pago_sin_comprobante', 'Pago digital sin comprobante validado', 'La hoja dice Yape, Plin, link o transferencia, pero Kapta no tiene un comprobante validado ni el pedido pagado en Shopify.', 85)
+on conflict (code) do nothing;
+
+-- ---- 0179 ----
+-- ============================================================================
+-- 0187_sheets_rider_rls.sql — un motorizado solo lee SU hoja de Liquidaciones 2.
+--
+-- La pantalla del motorizado (/reparto/cuaderno, MOM §30.9) muestra su
+-- cuaderno del día: las filas de la hoja de Reparto propio cuyo
+-- `config->>'rider_id'` es su ficha. Hasta ahora las políticas de 0176 dejaban
+-- leer a cualquier miembro de la organización todas las hojas, y un
+-- motorizado es miembro (rol `motorizado`, 0066). Vería las hojas de sus
+-- compañeros, el Consolidado y las observaciones de todos.
+--
+-- Regla: si la ÚNICA membresía del usuario en la organización es
+-- `motorizado`, solo lee las hojas con su `rider_id` y lo que cuelga de ellas
+-- (columnas, filas, alias, observaciones, historial). Los demás roles siguen
+-- igual. La escritura ya pasa por server actions con guardas propias; las
+-- políticas de escritura de 0176 (owner/admin) no cambian.
+-- ============================================================================
+
+create or replace function public.auth_is_rider_only()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (select 1 from memberships where user_id = auth.uid())
+     and not exists (
+       select 1 from memberships where user_id = auth.uid() and role <> 'motorizado'
+     );
+$$;
+revoke all on function public.auth_is_rider_only() from public, anon;
+grant execute on function public.auth_is_rider_only() to authenticated;
+
+-- Hojas visibles: todas para miembros normales; solo la propia para el motorizado.
+create or replace function public.auth_sheet_ids()
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select s.id from sheets s
+   where s.org_id in (select auth_org_ids())
+     and (
+       not auth_is_rider_only()
+       or s.config->>'rider_id' = auth_rider_id()::text
+     );
+$$;
+revoke all on function public.auth_sheet_ids() from public, anon;
+grant execute on function public.auth_sheet_ids() to authenticated;
+
+drop policy if exists sheets_select on sheets;
+create policy sheets_select on sheets for select to authenticated
+  using (id in (select auth_sheet_ids()));
+
+drop policy if exists sheet_columns_select on sheet_columns;
+create policy sheet_columns_select on sheet_columns for select to authenticated
+  using (sheet_id in (select auth_sheet_ids()));
+
+drop policy if exists sheet_rows_select on sheet_rows;
+create policy sheet_rows_select on sheet_rows for select to authenticated
+  using (sheet_id in (select auth_sheet_ids()));
+
+drop policy if exists sheet_status_aliases_select on sheet_status_aliases;
+create policy sheet_status_aliases_select on sheet_status_aliases for select to authenticated
+  using (sheet_id in (select auth_sheet_ids()));
+
+drop policy if exists sheet_observations_select on sheet_observations;
+create policy sheet_observations_select on sheet_observations for select to authenticated
+  using (sheet_id in (select auth_sheet_ids()));
+
+drop policy if exists sheet_cell_history_select on sheet_cell_history;
+create policy sheet_cell_history_select on sheet_cell_history for select to authenticated
+  using (row_id in (select id from sheet_rows where sheet_id in (select auth_sheet_ids())));
+
+-- Los dominios y sus estados son vocabulario, no datos de nadie: el motorizado
+-- los necesita para el datalist de su pantalla. Siguen legibles por org.
+
+-- ---- 0180 ----
+-- ============================================================================
+-- 0180_stop_written_status.sql — la parada de reparto es la única verdad;
+-- la hoja de Reparto propio de Liquidaciones 2 pasa a ser una vista con
+-- vocabulario encima de ella.
+--
+-- POR QUÉ (informe del 19-09-2026, §5). El mismo hecho físico —«Roy fue a la
+-- casa de la clienta y cobró S/ 89»— se escribía dos veces en dos modelos que
+-- no se hablaban: `delivery_stops` (fila tipada con FK a `orders`, evidencia
+-- obligatoria y validación contra el saldo real, que es lo que Rutas y Grupo GF
+-- Courier ya usan) y `sheet_rows` de la hoja cuaderno (texto libre + alias +
+-- observaciones, que es lo que la operación sabe leer). Dos pantallas del
+-- motorizado en la misma URL base y dos puertas al Master con guardas
+-- distintas. La decisión: Rutas manda porque su lógica se usa; Liquidaciones 2
+-- es la capa de vocabulario, observaciones y cuadre ENCIMA, no una copia.
+--
+-- QUÉ CAMBIA AQUÍ.
+--   * `delivery_stops` aprende lo que solo la hoja sabía decir: el estado
+--     ESCRITO literal por el motorizado (`written_status`), el código del
+--     estado del dominio Reparto propio al que resolvió (`written_status_code`,
+--     null = sin equivalente, la fila queda a revisión) y el método de pago
+--     escrito (`written_payment`). El enum de tres estados y el motivo del
+--     catálogo siguen mandando para el cierre de ruta y el Master; el detalle
+--     («LO DEJA», «DESARMAR», «CEL APAGADO») ya no se pierde.
+--   * `sheet_rows.stop_id`: la fila del cuaderno apunta a su parada. Única por
+--     parada: una parada, una fila. Las filas importadas del Excel histórico
+--     no tienen parada y siguen valiendo tal cual (MOM §30.7).
+--   * `sheet_observation_gate` queda reservado (sin uso todavía) para marcar
+--     desde la parada que una observación abierta la retiene.
+-- ============================================================================
+
+alter table delivery_stops
+  add column if not exists written_status text,
+  add column if not exists written_status_code text,
+  add column if not exists written_payment text,
+  add column if not exists sheet_observation_gate boolean not null default false;
+
+alter table sheet_rows
+  add column if not exists stop_id uuid references delivery_stops(id) on delete set null;
+
+create unique index if not exists sheet_rows_stop_idx
+  on sheet_rows(stop_id) where stop_id is not null;
+
+-- ---- 0181 ----
+-- ============================================================================
+-- 0181_master_backfill_log.sql — bitácora reversible de las entregas que se
+-- aplican al Master en bloque desde la historia del cuaderno (Liquidaciones 2).
+--
+-- POR QUÉ. El 19-09-2026 la bandeja de Grupo GF Courier mostraba 6.368 pedidos
+-- de Lima «abiertos» de los que 4.619 ya estaban entregados según el cuaderno
+-- de los motorizados: la carga histórica llenó Rutas y las hojas, pero a
+-- propósito no tocó el Master (MOM §29.12). Aplicarlos en bloque es la única
+-- forma práctica de ponerse al día, y una operación de ese tamaño sobre
+-- producción exige poder deshacerse: esta tabla guarda, por pedido, cómo
+-- estaba el Master antes y qué evento se insertó, para que
+-- `scripts/rollback-master-backfill.ts` pueda retirar el lote entero.
+--
+-- Revertir = borrar los `order_events` del lote y recalcular: el Master vuelve
+-- a derivarse de los eventos que quedan. Las columnas «previous_*» sirven
+-- para comprobar que el recálculo devolvió lo mismo, no para escribirlas a
+-- mano.
+-- ============================================================================
+create table if not exists master_backfill_log (
+  id                    uuid primary key default gen_random_uuid(),
+  batch_id              uuid not null,
+  order_id              uuid not null references orders(id) on delete cascade,
+  store_id              uuid references stores(id) on delete set null,
+  sheet_id              uuid references sheets(id) on delete set null,
+  row_id                uuid references sheet_rows(id) on delete set null,
+  event_id              uuid references order_events(id) on delete set null,
+  previous_general      text,
+  previous_operational  text,
+  previous_source       text,
+  previous_locked       boolean,
+  previous_delivered_at timestamptz,
+  previous_courier      text,
+  previous_macro_stage  text,
+  previous_macro_substage text,
+  applied_status        text not null,
+  applied_courier       text,
+  applied_occurred_at   timestamptz,
+  applied_at            timestamptz not null default now(),
+  reverted_at           timestamptz,
+  note                  text
+);
+create index if not exists master_backfill_log_batch_idx on master_backfill_log(batch_id, applied_at);
+create index if not exists master_backfill_log_order_idx on master_backfill_log(order_id);
+
+alter table master_backfill_log enable row level security;
+drop policy if exists master_backfill_log_select on master_backfill_log;
+create policy master_backfill_log_select on master_backfill_log for select to authenticated
+  using (store_id in (select auth_store_ids()));
+-- Solo la escribe el service role (scripts). Nadie la edita desde la UI.
+revoke all on master_backfill_log from anon, authenticated;
+grant select on master_backfill_log to authenticated;
+grant all privileges on master_backfill_log to service_role;
+
+-- ---- 0182 ----
+-- ============================================================================
+-- 0182_manifest_item_not_picked.sql — «No lo recojo»: el motorizado rechaza un
+-- paquete de su caja al recibirla (MOM §29.13).
+--
+-- Antes la recepción era todo o nada: la carga pasaba a custodia solo con el
+-- 100 % de los paquetes escaneados por el motorizado, y si uno no estaba en la
+-- caja, estaba dañado o no cabía, el motorizado llamaba y el supervisor lo
+-- retiraba desde otra pantalla tecleando el motivo. El rastro decía «retirado»
+-- y no «el motorizado no lo recogió».
+--
+-- Ahora el motorizado lo dice desde su teléfono con un motivo corto. El rechazo
+-- se guarda en columnas propias (quién, cuándo, por qué) Y retira el paquete de
+-- la carga con `removed_at`, por dos razones: el finalizador y el trigger que
+-- crea las paradas ya cuentan solo lo activo (así el 100 % se calcula sobre lo
+-- aceptado sin tocar `finalize_dispatch_manifest`), y el índice único de
+-- salida activa se libera para que el supervisor lo asigne a otro motorizado
+-- el mismo día. La solicitud logística vuelve a `accepted` con observación:
+-- reaparece en «por asignar».
+-- ============================================================================
+alter table dispatch_manifest_items
+  add column if not exists pickup_declined_at     timestamptz,
+  add column if not exists pickup_declined_reason text,
+  add column if not exists pickup_declined_by     uuid references auth.users(id) on delete set null;
+
+create index if not exists dispatch_items_declined_idx
+  on dispatch_manifest_items(manifest_id) where pickup_declined_at is not null;
+
+create or replace function public.gf_rider_decline(p_manifest_id uuid, p_shipment_id uuid, p_reason text, p_actor uuid)
+returns uuid[] language plpgsql set search_path = public as $$
+declare
+  v_manifest dispatch_manifests%rowtype;
+  v_rider riders%rowtype;
+  v_item dispatch_manifest_items%rowtype;
+  v_shipment shipments%rowtype;
+  v_reason text := left(trim(coalesce(p_reason, '')), 200);
+  v_active integer;
+  v_pending integer;
+begin
+  if length(v_reason) < 2 then raise exception 'Di por qué no lo recoges.'; end if;
+  select * into v_manifest from dispatch_manifests where id = p_manifest_id for update;
+  if not found or v_manifest.courier <> 'propio' then raise exception 'La carga no pertenece a tu cuenta.'; end if;
+  select * into v_rider from riders where id = v_manifest.rider_id and user_id = p_actor and active;
+  if not found then raise exception 'La carga no pertenece a tu cuenta.'; end if;
+  if v_manifest.state not in ('ready_for_pickup', 'pickup_check') then
+    raise exception 'La oficina debe completar primero la verificación de la caja.';
+  end if;
+  select * into v_item from dispatch_manifest_items
+    where manifest_id = p_manifest_id and shipment_id = p_shipment_id and removed_at is null for update;
+  if not found then raise exception 'Ese paquete ya no está en tu caja.'; end if;
+  if v_item.pickup_checked_at is not null then raise exception 'Ya recibiste ese paquete; avisa al supervisor para retirarlo.'; end if;
+  select * into v_shipment from shipments where id = p_shipment_id;
+
+  update dispatch_manifest_items
+     set pickup_declined_at = now(), pickup_declined_by = p_actor, pickup_declined_reason = v_reason,
+         removed_at = now(), removed_by = p_actor,
+         removal_reason = 'No recogido por ' || v_rider.full_name || ': ' || v_reason
+   where id = v_item.id;
+
+  insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+  values (v_manifest.org_id, p_manifest_id, p_shipment_id, p_actor, 'pickup_declined',
+          jsonb_build_object('reason', v_reason, 'rider_id', v_rider.id));
+  if v_shipment.order_id is not null then
+    insert into order_events(store_id, order_id, kind, actor, source, courier, guide_code, shipment_id, reason, note, payload)
+    values (v_shipment.store_id, v_shipment.order_id, 'pickup_declined', p_actor, 'reparto', 'propio',
+            v_shipment.guide_code, p_shipment_id, v_reason,
+            'No recogido por ' || v_rider.full_name || ' al recibir su caja: ' || v_reason,
+            jsonb_build_object('manifest_id', p_manifest_id, 'rider_id', v_rider.id, 'route_date', v_manifest.route_date));
+  end if;
+  -- La solicitud vuelve a «por asignar» con la observación a la vista.
+  update logistics_requests
+     set status = 'accepted', observation = 'No recogido por ' || v_rider.full_name || ': ' || v_reason
+   where shipment_id = p_shipment_id and status = 'scheduled';
+
+  select count(*), count(*) filter (where pickup_checked_at is null)
+    into v_active, v_pending
+    from dispatch_manifest_items where manifest_id = p_manifest_id and removed_at is null;
+  if v_active = 0 then
+    -- Caja vacía tras rechazar todo: vuelve a borrador para que el supervisor la rearme o la cancele.
+    update dispatch_manifests set state = 'draft', office_completed_at = null, office_completed_by = null where id = p_manifest_id;
+    return '{}'::uuid[];
+  end if;
+  if v_pending = 0 then
+    return public.finalize_dispatch_manifest(p_manifest_id, p_actor);
+  end if;
+  return '{}'::uuid[];
+end;
+$$;
+revoke all on function public.gf_rider_decline(uuid, uuid, text, uuid) from public, anon, authenticated;
+grant execute on function public.gf_rider_decline(uuid, uuid, text, uuid) to service_role;
+
+-- ---- 0183 ----
+-- ============================================================================
+-- 0183_provider_rider_pickup_check.sql — la verificación de la caja por el
+-- motorizado es OPCIONAL, gobernada por un flag en la base (MOM §29.13).
+--
+-- `logistics_providers.rider_pickup_check_required`:
+--   true  = como hasta ahora: oficina coteja, el motorizado escanea su caja y
+--           la custodia cambia al 100 % de los aceptados (gf_rider_receive).
+--   false = basta con ASIGNAR. En cuanto el supervisor pone paquetes en la
+--           caja del día, la custodia pasa al motorizado (gf_assign_custody), el
+--           trigger crea las paradas y /reparto le muestra su ruta. El cotejo
+--           de oficina y la recepción del motorizado quedan como pasos
+--           opcionales que no bloquean nada: si se hacen, se registran igual
+--           (el guard de ítems los admite sobre una carga ya en custodia).
+--
+-- Se decide en datos y no en código ni en variables de entorno para poder
+-- encender o apagar la verificación sin desplegar:
+--   update logistics_providers set rider_pickup_check_required = true
+--    where code = 'grupo-gf-courier';
+-- El valor de arranque en producción quedó en FALSE por decisión de la
+-- operación el 19-09-2026 (la verificación queda separada del flujo).
+-- ============================================================================
+alter table logistics_providers
+  add column if not exists rider_pickup_check_required boolean not null default true;
+
+-- Custodia al asignar: el mismo cambio de custodia que finalize_dispatch_manifest
+-- (shipments a `courier`, manifiesto `in_custody`, eventos), sin exigir cotejos.
+create or replace function public.gf_assign_custody(p_manifest_id uuid, p_actor uuid)
+returns uuid[] language plpgsql set search_path = public as $$
+declare
+  v_manifest dispatch_manifests%rowtype;
+  v_required boolean;
+  v_total integer;
+  v_order_ids uuid[];
+  v_note text := 'Custodia al asignar: verificación del motorizado desactivada.';
+begin
+  select * into v_manifest from dispatch_manifests where id = p_manifest_id for update;
+  if not found then raise exception 'Caja no encontrada.'; end if;
+  if v_manifest.courier <> 'propio' or v_manifest.rider_id is null then
+    raise exception 'La custodia al asignar solo aplica a cajas de motorizados de Grupo GF.';
+  end if;
+  select rider_pickup_check_required into v_required from logistics_providers
+    where org_id = v_manifest.org_id and code = 'grupo-gf-courier';
+  if coalesce(v_required, true) then
+    raise exception 'La verificación del motorizado está activada: la custodia cambia al recibir la caja.';
+  end if;
+  if v_manifest.state = 'in_custody' then
+    return coalesce((select array_agg(distinct s.order_id) filter (where s.order_id is not null)
+      from dispatch_manifest_items i join shipments s on s.id = i.shipment_id
+      where i.manifest_id = p_manifest_id and i.removed_at is null), '{}'::uuid[]);
+  end if;
+  if v_manifest.state = 'cancelled' then raise exception 'La caja está cancelada.'; end if;
+  select count(*) into v_total from dispatch_manifest_items where manifest_id = p_manifest_id and removed_at is null;
+  if v_total = 0 then raise exception 'La caja no tiene paquetes.'; end if;
+
+  select coalesce(array_agg(distinct s.order_id) filter (where s.order_id is not null), '{}'::uuid[])
+    into v_order_ids
+    from dispatch_manifest_items i join shipments s on s.id = i.shipment_id
+   where i.manifest_id = p_manifest_id and i.removed_at is null;
+
+  update shipments s
+     set custody_state = 'courier', custody_transferred_at = now(), custody_transferred_by = p_actor,
+         dispatched_at = coalesce(s.dispatched_at, now())
+    from dispatch_manifest_items i
+   where i.manifest_id = p_manifest_id and i.removed_at is null and s.id = i.shipment_id;
+
+  update dispatch_manifests
+     set state = 'in_custody', custody_completed_at = now(), custody_completed_by = p_actor
+   where id = p_manifest_id;
+
+  insert into order_events (store_id, order_id, kind, occurred_at, actor, source, courier, guide_code, shipment_id, note, payload)
+  select s.store_id, s.order_id, 'custody_transferred', now(), p_actor, 'dispatch', s.courier, s.guide_code, s.id, v_note,
+         jsonb_build_object('manifest_id', p_manifest_id, 'route_label', v_manifest.route_label, 'route_date', v_manifest.route_date,
+                            'route_kind', v_manifest.kind, 'driver_name', v_manifest.driver_name, 'auto', true)
+    from dispatch_manifest_items i join shipments s on s.id = i.shipment_id
+   where i.manifest_id = p_manifest_id and i.removed_at is null and s.order_id is not null;
+
+  insert into dispatch_events (org_id, manifest_id, actor, kind, payload)
+  values (v_manifest.org_id, p_manifest_id, p_actor, 'custody_transferred',
+          jsonb_build_object('packages', v_total, 'route_kind', v_manifest.kind, 'driver_name', v_manifest.driver_name, 'auto', true, 'note', v_note));
+  return v_order_ids;
+end;
+$$;
+revoke all on function public.gf_assign_custody(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.gf_assign_custody(uuid, uuid) to service_role;
+
+-- Con la verificación desactivada, cotejar o recibir después de la custodia es
+-- un registro opcional: el guard lo admite en vez de decir «carga cerrada».
+create or replace function public.gf_guard_load_items()
+returns trigger language plpgsql set search_path = public as $$
+declare v_manifest dispatch_manifests%rowtype; v_required boolean;
+begin
+  select * into v_manifest from dispatch_manifests where id = new.manifest_id for update;
+  if v_manifest.courier = 'propio' then
+    if tg_op = 'INSERT' and (v_manifest.state <> 'draft' or exists (
+      select 1 from dispatch_manifest_items where manifest_id = new.manifest_id and removed_at is null
+      and (office_checked_at is not null or pickup_checked_at is not null)
+    )) then
+      raise exception 'La carga ya inició el cotejo; no se pueden agregar paquetes.';
+    end if;
+    if tg_op = 'UPDATE' and v_manifest.state in ('in_custody', 'cancelled') then
+      select rider_pickup_check_required into v_required from logistics_providers
+        where org_id = v_manifest.org_id and code = 'grupo-gf-courier';
+      if v_manifest.state = 'cancelled' or coalesce(v_required, true) then
+        raise exception 'La carga ya está cerrada; sus cotejos son históricos.';
+      end if;
+      -- Verificación desactivada: solo se admiten los cotejos, nunca alterar la
+      -- pertenencia de una carga ya en custodia.
+      if new.removed_at is distinct from old.removed_at or new.shipment_id <> old.shipment_id then
+        raise exception 'La carga ya está en poder del motorizado; sus paquetes no se retiran desde aquí.';
+      end if;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+-- ---- 0184 ----
+-- ============================================================================
+-- 0184_gf_one_load_per_day.sql — con la verificación del motorizado apagada,
+-- una sola carga por motorizado y día (MOM §29.13, corrección 19-09-2026).
+--
+-- Con `rider_pickup_check_required = false`, asignar entrega la custodia en el
+-- acto (0183). Tal como quedó, cada asignación posterior del mismo día abría
+-- una carga adicional, porque gf_dispatch_load no admite meter paquetes en una
+-- carga que ya inició cotejo o custodia. La operación quiere lo contrario: el
+-- motorizado vuelve a la oficina y se le SUMAN paquetes a la misma carga y
+-- ruta del día; el cierre es por día.
+--
+--   gf_dispatch_load_open   con el flag en false devuelve la carga del día
+--                           aunque esté en custodia (o la crea); con el flag
+--                           en true es gf_dispatch_load, sin cambios.
+--   gf_add_item_in_custody  añade UN paquete a una carga ya en custodia: el
+--                           ítem entra cotejado y recibido (actor supervisor,
+--                           «custodia al asignar»), la salida pasa a custodia
+--                           del courier y su parada se crea en la ruta del día
+--                           sin duplicar (misma lógica que el trigger
+--                           gf_received_load_to_delivery, para un solo ítem).
+--   gf_guard_load_items     admite el INSERT en una carga en custodia solo
+--                           cuando el proveedor tiene el flag en false.
+-- ============================================================================
+create or replace function public.gf_dispatch_load_open(p_org_id uuid, p_rider_id uuid, p_day date, p_actor uuid)
+returns uuid language plpgsql set search_path = public as $$
+declare v_required boolean; v_load dispatch_manifests%rowtype; v_route_status text;
+begin
+  select rider_pickup_check_required into v_required from logistics_providers
+    where org_id = p_org_id and code = 'grupo-gf-courier';
+  if coalesce(v_required, true) then
+    return public.gf_dispatch_load(p_org_id, p_rider_id, p_day, p_actor);
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(p_org_id::text || p_rider_id::text || p_day::text, 0));
+  select * into v_load from dispatch_manifests
+    where org_id = p_org_id and rider_id = p_rider_id and route_date = p_day
+      and courier = 'propio' and state <> 'cancelled'
+    order by load_number desc limit 1 for update;
+  if found then
+    select status into v_route_status from delivery_routes where id = v_load.delivery_route_id;
+    if v_route_status = 'cerrada' then raise exception 'La ruta diaria ya está liquidada.'; end if;
+    return v_load.id;
+  end if;
+  return public.gf_dispatch_load(p_org_id, p_rider_id, p_day, p_actor);
+end;
+$$;
+revoke all on function public.gf_dispatch_load_open(uuid, uuid, date, uuid) from public, anon, authenticated;
+grant execute on function public.gf_dispatch_load_open(uuid, uuid, date, uuid) to service_role;
+
+create or replace function public.gf_add_item_in_custody(p_manifest_id uuid, p_shipment_id uuid, p_store_id uuid, p_actor uuid)
+returns uuid language plpgsql set search_path = public as $$
+declare
+  v_manifest dispatch_manifests%rowtype;
+  v_required boolean;
+  v_shipment shipments%rowtype;
+  v_route delivery_routes%rowtype;
+  v_seq integer;
+  v_note text := 'Custodia al asignar: verificación del motorizado desactivada.';
+begin
+  select * into v_manifest from dispatch_manifests where id = p_manifest_id for update;
+  if not found or v_manifest.courier <> 'propio' or v_manifest.rider_id is null then
+    raise exception 'La caja no es de un motorizado de Grupo GF.';
+  end if;
+  if v_manifest.state <> 'in_custody' then raise exception 'La caja todavía no está en custodia: usa la asignación normal.'; end if;
+  select rider_pickup_check_required into v_required from logistics_providers
+    where org_id = v_manifest.org_id and code = 'grupo-gf-courier';
+  if coalesce(v_required, true) then
+    raise exception 'La verificación del motorizado está activada: abre una carga adicional.';
+  end if;
+  select * into v_shipment from shipments where id = p_shipment_id for update;
+  if not found then raise exception 'Paquete no encontrado.'; end if;
+  if v_shipment.custody_state <> 'empresa' then raise exception 'El paquete ya no está en custodia de Grupo GF.'; end if;
+
+  insert into dispatch_manifest_items(manifest_id, shipment_id, store_id, added_by,
+    office_checked_at, office_checked_by, pickup_checked_at, pickup_checked_by)
+  values (p_manifest_id, p_shipment_id, p_store_id, p_actor, now(), p_actor, now(), p_actor);
+
+  update shipments set custody_state = 'courier', custody_transferred_at = now(),
+    custody_transferred_by = p_actor, dispatched_at = coalesce(dispatched_at, now())
+   where id = p_shipment_id;
+
+  -- La ruta del día ya existe (la creó la primera custodia); si no, se abre.
+  perform pg_advisory_xact_lock(hashtextextended(v_manifest.org_id::text || v_manifest.rider_id::text || v_manifest.route_date::text, 0));
+  insert into delivery_routes(org_id, rider_id, route_date, status, created_by)
+    values (v_manifest.org_id, v_manifest.rider_id, v_manifest.route_date, 'planificada', p_actor)
+    on conflict (org_id, rider_id, route_date) do nothing;
+  select * into v_route from delivery_routes
+    where org_id = v_manifest.org_id and rider_id = v_manifest.rider_id and route_date = v_manifest.route_date for update;
+  if v_route.status = 'cerrada' then raise exception 'La ruta diaria ya está liquidada.'; end if;
+  if v_shipment.order_id is not null and not exists (
+    select 1 from delivery_stops where route_id = v_route.id and order_id = v_shipment.order_id
+  ) then
+    select coalesce(max(seq), 0) + 1 into v_seq from delivery_stops where route_id = v_route.id;
+    insert into delivery_stops(route_id, order_id, store_id, seq, shipment_id, dispatch_manifest_id)
+      values (v_route.id, v_shipment.order_id, p_store_id, v_seq, p_shipment_id, p_manifest_id);
+  end if;
+  update delivery_routes set status = 'en_curso', started_at = coalesce(started_at, now())
+    where id = v_route.id and status = 'planificada';
+  update dispatch_manifests set delivery_route_id = coalesce(delivery_route_id, v_route.id) where id = p_manifest_id;
+
+  insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+  values (v_manifest.org_id, p_manifest_id, p_shipment_id, p_actor, 'package_added',
+          jsonb_build_object('source', 'grupo_gf_courier', 'auto_custody', true, 'note', v_note));
+  if v_shipment.order_id is not null then
+    insert into order_events(store_id, order_id, kind, actor, source, courier, guide_code, shipment_id, note, payload)
+    values (v_shipment.store_id, v_shipment.order_id, 'custody_transferred', p_actor, 'dispatch', v_shipment.courier,
+            v_shipment.guide_code, p_shipment_id, v_note,
+            jsonb_build_object('manifest_id', p_manifest_id, 'route_label', v_manifest.route_label,
+                               'route_date', v_manifest.route_date, 'driver_name', v_manifest.driver_name, 'auto', true));
+  end if;
+  return v_shipment.order_id;
+end;
+$$;
+revoke all on function public.gf_add_item_in_custody(uuid, uuid, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.gf_add_item_in_custody(uuid, uuid, uuid, uuid) to service_role;
+
+create or replace function public.gf_guard_load_items()
+returns trigger language plpgsql set search_path = public as $$
+declare v_manifest dispatch_manifests%rowtype; v_required boolean;
+begin
+  select * into v_manifest from dispatch_manifests where id = new.manifest_id for update;
+  if v_manifest.courier = 'propio' then
+    select rider_pickup_check_required into v_required from logistics_providers
+      where org_id = v_manifest.org_id and code = 'grupo-gf-courier';
+    if tg_op = 'INSERT' then
+      -- Flag apagado y carga en custodia: gf_add_item_in_custody suma a la caja del día.
+      if v_manifest.state = 'in_custody' and not coalesce(v_required, true) then
+        return new;
+      end if;
+      if v_manifest.state <> 'draft' or exists (
+        select 1 from dispatch_manifest_items where manifest_id = new.manifest_id and removed_at is null
+        and (office_checked_at is not null or pickup_checked_at is not null)
+      ) then
+        raise exception 'La carga ya inició el cotejo; no se pueden agregar paquetes.';
+      end if;
+    end if;
+    if tg_op = 'UPDATE' and v_manifest.state in ('in_custody', 'cancelled') then
+      if v_manifest.state = 'cancelled' or coalesce(v_required, true) then
+        raise exception 'La carga ya está cerrada; sus cotejos son históricos.';
+      end if;
+      if new.removed_at is distinct from old.removed_at or new.shipment_id <> old.shipment_id then
+        raise exception 'La carga ya está en poder del motorizado; sus paquetes no se retiran desde aquí.';
+      end if;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+-- ---- 0185 ----
+-- ============================================================================
+-- 0185_provider_rider_pickup_mode.sql — «Lo llevo»: el motorizado confirma
+-- cada paquete al sacarlo del almacén, sin que nada lo bloquee (MOM §29.13).
+--
+-- El booleano de 0183 (`rider_pickup_check_required`) solo sabía decir «exigir
+-- la verificación antes de ver la ruta» o «nada». La operación necesita un
+-- tercer modo: el supervisor asigna y la ruta aparece al instante, pero el
+-- motorizado escanea cada pedido cuando lo mete en la caja de la moto («lo
+-- llevo»); lo asignado y no escaneado es «no se lo llevó» y el supervisor lo
+-- reasigna. Por eso el booleano se reemplaza por un texto de tres valores:
+--
+--   `logistics_providers.rider_pickup_mode`
+--     'exigir'    = como 0159/0174: oficina coteja, el motorizado recibe su
+--                   caja al 100 % de los aceptados y recién entonces ve la ruta.
+--     'confirmar' = asignar entrega la custodia y crea las paradas; cada parada
+--                   nace «por confirmar». El motorizado dice «Lo llevo»
+--                   (gf_rider_confirm_pickup → pickup_checked_at) o «No lo
+--                   llevo» con motivo (gf_rider_decline admite la caja en
+--                   custodia: retira el ítem, borra la parada pendiente y la
+--                   solicitud vuelve a «por asignar»). Una parada sin confirmar
+--                   se puede entregar igual: el reporte guarda
+--                   `delivery_stops.pickup_confirmed = false` y deja rastro.
+--                   El supervisor puede quitar o mover lo no confirmado
+--                   (gf_supervisor_withdraw).
+--     'ninguno'   = como 0183/0176 con el flag en false: basta con asignar y
+--                   no se pide nada más.
+--
+-- Migración de datos: true → 'exigir', false → 'ninguno'. Producción queda en
+-- 'confirmar' por decisión de la operación (19-09-2026), con un UPDATE aparte:
+--   update logistics_providers set rider_pickup_mode = 'confirmar' where code = 'grupo-gf-courier';
+--   update logistics_providers set rider_pickup_mode = 'exigir'    where code = 'grupo-gf-courier';
+--   update logistics_providers set rider_pickup_mode = 'ninguno'   where code = 'grupo-gf-courier';
+-- Se lee en un solo sitio en SQL (gf_rider_pickup_mode) y en uno en código
+-- (riderPickupMode, lib/grupo-gf-courier-route-access.ts).
+-- ============================================================================
+alter table logistics_providers
+  add column if not exists rider_pickup_mode text not null default 'confirmar';
+alter table logistics_providers drop constraint if exists logistics_providers_rider_pickup_mode_check;
+alter table logistics_providers
+  add constraint logistics_providers_rider_pickup_mode_check
+  check (rider_pickup_mode in ('exigir', 'confirmar', 'ninguno'));
+
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'logistics_providers'
+               and column_name = 'rider_pickup_check_required') then
+    update logistics_providers
+       set rider_pickup_mode = case when rider_pickup_check_required then 'exigir' else 'ninguno' end;
+    alter table logistics_providers drop column rider_pickup_check_required;
+  end if;
+end;
+$$;
+
+-- Si al reportar la entrega el motorizado había confirmado «lo llevo». Null en
+-- paradas sin caja de despacho o reportadas antes de 0185.
+alter table delivery_stops
+  add column if not exists pickup_confirmed boolean;
+comment on column delivery_stops.pickup_confirmed is
+  'Al reportar la entrega, si el ítem de la caja tenía pickup_checked_at (modo confirmar). Null: sin caja o anterior a 0185.';
+
+-- El único lector del modo en SQL. Sin proveedor se asume ''exigir'' (lo de
+-- siempre), igual que 0183 asumía true.
+create or replace function public.gf_rider_pickup_mode(p_org_id uuid)
+returns text language sql stable set search_path = public as $$
+  select coalesce((select rider_pickup_mode from logistics_providers
+                    where org_id = p_org_id and code = 'grupo-gf-courier'), 'exigir');
+$$;
+revoke all on function public.gf_rider_pickup_mode(uuid) from public, anon;
+
+-- ----------------------------------------------------------------------------
+-- Custodia al asignar (0183), ahora para 'confirmar' y 'ninguno'.
+-- ----------------------------------------------------------------------------
+create or replace function public.gf_assign_custody(p_manifest_id uuid, p_actor uuid)
+returns uuid[] language plpgsql set search_path = public as $$
+declare
+  v_manifest dispatch_manifests%rowtype;
+  v_mode text;
+  v_total integer;
+  v_order_ids uuid[];
+  v_note text;
+begin
+  select * into v_manifest from dispatch_manifests where id = p_manifest_id for update;
+  if not found then raise exception 'Caja no encontrada.'; end if;
+  if v_manifest.courier <> 'propio' or v_manifest.rider_id is null then
+    raise exception 'La custodia al asignar solo aplica a cajas de motorizados de Grupo GF.';
+  end if;
+  v_mode := public.gf_rider_pickup_mode(v_manifest.org_id);
+  if v_mode = 'exigir' then
+    raise exception 'La verificación del motorizado está activada: la custodia cambia al recibir la caja.';
+  end if;
+  v_note := case when v_mode = 'confirmar'
+    then 'Custodia al asignar: el motorizado confirma cada paquete al llevarlo.'
+    else 'Custodia al asignar: verificación del motorizado desactivada.' end;
+  if v_manifest.state = 'in_custody' then
+    return coalesce((select array_agg(distinct s.order_id) filter (where s.order_id is not null)
+      from dispatch_manifest_items i join shipments s on s.id = i.shipment_id
+      where i.manifest_id = p_manifest_id and i.removed_at is null), '{}'::uuid[]);
+  end if;
+  if v_manifest.state = 'cancelled' then raise exception 'La caja está cancelada.'; end if;
+  select count(*) into v_total from dispatch_manifest_items where manifest_id = p_manifest_id and removed_at is null;
+  if v_total = 0 then raise exception 'La caja no tiene paquetes.'; end if;
+
+  select coalesce(array_agg(distinct s.order_id) filter (where s.order_id is not null), '{}'::uuid[])
+    into v_order_ids
+    from dispatch_manifest_items i join shipments s on s.id = i.shipment_id
+   where i.manifest_id = p_manifest_id and i.removed_at is null;
+
+  update shipments s
+     set custody_state = 'courier', custody_transferred_at = now(), custody_transferred_by = p_actor,
+         dispatched_at = coalesce(s.dispatched_at, now())
+    from dispatch_manifest_items i
+   where i.manifest_id = p_manifest_id and i.removed_at is null and s.id = i.shipment_id;
+
+  update dispatch_manifests
+     set state = 'in_custody', custody_completed_at = now(), custody_completed_by = p_actor
+   where id = p_manifest_id;
+
+  insert into order_events (store_id, order_id, kind, occurred_at, actor, source, courier, guide_code, shipment_id, note, payload)
+  select s.store_id, s.order_id, 'custody_transferred', now(), p_actor, 'dispatch', s.courier, s.guide_code, s.id, v_note,
+         jsonb_build_object('manifest_id', p_manifest_id, 'route_label', v_manifest.route_label, 'route_date', v_manifest.route_date,
+                            'route_kind', v_manifest.kind, 'driver_name', v_manifest.driver_name, 'auto', true, 'pickup_mode', v_mode)
+    from dispatch_manifest_items i join shipments s on s.id = i.shipment_id
+   where i.manifest_id = p_manifest_id and i.removed_at is null and s.order_id is not null;
+
+  insert into dispatch_events (org_id, manifest_id, actor, kind, payload)
+  values (v_manifest.org_id, p_manifest_id, p_actor, 'custody_transferred',
+          jsonb_build_object('packages', v_total, 'route_kind', v_manifest.kind, 'driver_name', v_manifest.driver_name, 'auto', true, 'note', v_note, 'pickup_mode', v_mode));
+  return v_order_ids;
+end;
+$$;
+revoke all on function public.gf_assign_custody(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.gf_assign_custody(uuid, uuid) to service_role;
+
+-- ----------------------------------------------------------------------------
+-- Una carga por motorizado y día (0184), ahora para 'confirmar' y 'ninguno'.
+-- ----------------------------------------------------------------------------
+create or replace function public.gf_dispatch_load_open(p_org_id uuid, p_rider_id uuid, p_day date, p_actor uuid)
+returns uuid language plpgsql set search_path = public as $$
+declare v_load dispatch_manifests%rowtype; v_route_status text;
+begin
+  if public.gf_rider_pickup_mode(p_org_id) = 'exigir' then
+    return public.gf_dispatch_load(p_org_id, p_rider_id, p_day, p_actor);
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(p_org_id::text || p_rider_id::text || p_day::text, 0));
+  select * into v_load from dispatch_manifests
+    where org_id = p_org_id and rider_id = p_rider_id and route_date = p_day
+      and courier = 'propio' and state <> 'cancelled'
+    order by load_number desc limit 1 for update;
+  if found then
+    select status into v_route_status from delivery_routes where id = v_load.delivery_route_id;
+    if v_route_status = 'cerrada' then raise exception 'La ruta diaria ya está liquidada.'; end if;
+    return v_load.id;
+  end if;
+  return public.gf_dispatch_load(p_org_id, p_rider_id, p_day, p_actor);
+end;
+$$;
+revoke all on function public.gf_dispatch_load_open(uuid, uuid, date, uuid) from public, anon, authenticated;
+grant execute on function public.gf_dispatch_load_open(uuid, uuid, date, uuid) to service_role;
+
+-- En 'ninguno' el paquete sumado entra cotejado y recibido (como 0184); en
+-- 'confirmar' entra cotejado por oficina y «por confirmar» por el motorizado.
+create or replace function public.gf_add_item_in_custody(p_manifest_id uuid, p_shipment_id uuid, p_store_id uuid, p_actor uuid)
+returns uuid language plpgsql set search_path = public as $$
+declare
+  v_manifest dispatch_manifests%rowtype;
+  v_mode text;
+  v_shipment shipments%rowtype;
+  v_route delivery_routes%rowtype;
+  v_seq integer;
+  v_note text;
+begin
+  select * into v_manifest from dispatch_manifests where id = p_manifest_id for update;
+  if not found or v_manifest.courier <> 'propio' or v_manifest.rider_id is null then
+    raise exception 'La caja no es de un motorizado de Grupo GF.';
+  end if;
+  if v_manifest.state <> 'in_custody' then raise exception 'La caja todavía no está en custodia: usa la asignación normal.'; end if;
+  v_mode := public.gf_rider_pickup_mode(v_manifest.org_id);
+  if v_mode = 'exigir' then
+    raise exception 'La verificación del motorizado está activada: abre una carga adicional.';
+  end if;
+  v_note := case when v_mode = 'confirmar'
+    then 'Custodia al asignar: el motorizado confirma cada paquete al llevarlo.'
+    else 'Custodia al asignar: verificación del motorizado desactivada.' end;
+  select * into v_shipment from shipments where id = p_shipment_id for update;
+  if not found then raise exception 'Paquete no encontrado.'; end if;
+  if v_shipment.custody_state <> 'empresa' then raise exception 'El paquete ya no está en custodia de Grupo GF.'; end if;
+
+  insert into dispatch_manifest_items(manifest_id, shipment_id, store_id, added_by,
+    office_checked_at, office_checked_by, pickup_checked_at, pickup_checked_by)
+  values (p_manifest_id, p_shipment_id, p_store_id, p_actor, now(), p_actor,
+          case when v_mode = 'ninguno' then now() end, case when v_mode = 'ninguno' then p_actor end);
+
+  update shipments set custody_state = 'courier', custody_transferred_at = now(),
+    custody_transferred_by = p_actor, dispatched_at = coalesce(dispatched_at, now())
+   where id = p_shipment_id;
+
+  -- La ruta del día ya existe (la creó la primera custodia); si no, se abre.
+  perform pg_advisory_xact_lock(hashtextextended(v_manifest.org_id::text || v_manifest.rider_id::text || v_manifest.route_date::text, 0));
+  insert into delivery_routes(org_id, rider_id, route_date, status, created_by)
+    values (v_manifest.org_id, v_manifest.rider_id, v_manifest.route_date, 'planificada', p_actor)
+    on conflict (org_id, rider_id, route_date) do nothing;
+  select * into v_route from delivery_routes
+    where org_id = v_manifest.org_id and rider_id = v_manifest.rider_id and route_date = v_manifest.route_date for update;
+  if v_route.status = 'cerrada' then raise exception 'La ruta diaria ya está liquidada.'; end if;
+  if v_shipment.order_id is not null and not exists (
+    select 1 from delivery_stops where route_id = v_route.id and order_id = v_shipment.order_id
+  ) then
+    select coalesce(max(seq), 0) + 1 into v_seq from delivery_stops where route_id = v_route.id;
+    insert into delivery_stops(route_id, order_id, store_id, seq, shipment_id, dispatch_manifest_id)
+      values (v_route.id, v_shipment.order_id, p_store_id, v_seq, p_shipment_id, p_manifest_id);
+  end if;
+  update delivery_routes set status = 'en_curso', started_at = coalesce(started_at, now())
+    where id = v_route.id and status = 'planificada';
+  update dispatch_manifests set delivery_route_id = coalesce(delivery_route_id, v_route.id) where id = p_manifest_id;
+
+  insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+  values (v_manifest.org_id, p_manifest_id, p_shipment_id, p_actor, 'package_added',
+          jsonb_build_object('source', 'grupo_gf_courier', 'in_custody', true, 'note', v_note, 'pickup_mode', v_mode));
+  if v_shipment.order_id is not null then
+    insert into order_events(store_id, order_id, kind, occurred_at, actor, source, courier, guide_code, shipment_id, note, payload)
+    values (v_shipment.store_id, v_shipment.order_id, 'custody_transferred', now(), p_actor, 'dispatch', v_shipment.courier,
+            v_shipment.guide_code, p_shipment_id, v_note,
+            jsonb_build_object('manifest_id', p_manifest_id, 'route_date', v_manifest.route_date, 'route_kind', v_manifest.kind,
+                               'driver_name', v_manifest.driver_name, 'auto', true, 'added_in_custody', true, 'pickup_mode', v_mode));
+  end if;
+  return v_shipment.order_id;
+end;
+$$;
+revoke all on function public.gf_add_item_in_custody(uuid, uuid, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.gf_add_item_in_custody(uuid, uuid, uuid, uuid) to service_role;
+
+-- ----------------------------------------------------------------------------
+-- Guard de ítems: en 'confirmar' y 'ninguno' se admiten los cotejos sobre una
+-- caja en custodia; la pertenencia solo la cambian los RPC de retiro (marcan
+-- la transacción con gf.withdraw = on), nunca un UPDATE suelto.
+-- ----------------------------------------------------------------------------
+create or replace function public.gf_guard_load_items()
+returns trigger language plpgsql set search_path = public as $$
+declare v_manifest dispatch_manifests%rowtype; v_mode text;
+begin
+  select * into v_manifest from dispatch_manifests where id = new.manifest_id for update;
+  if v_manifest.courier = 'propio' then
+    v_mode := public.gf_rider_pickup_mode(v_manifest.org_id);
+    if tg_op = 'INSERT' then
+      if v_manifest.state = 'in_custody' and v_mode <> 'exigir' then
+        return new;
+      end if;
+      if v_manifest.state <> 'draft' or exists (
+        select 1 from dispatch_manifest_items where manifest_id = new.manifest_id and removed_at is null
+        and (office_checked_at is not null or pickup_checked_at is not null)
+      ) then
+        raise exception 'La carga ya inició el cotejo; no se pueden agregar paquetes.';
+      end if;
+    end if;
+    if tg_op = 'UPDATE' and v_manifest.state in ('in_custody', 'cancelled') then
+      if v_manifest.state = 'cancelled' or v_mode = 'exigir' then
+        raise exception 'La carga ya está cerrada; sus cotejos son históricos.';
+      end if;
+      if (new.removed_at is distinct from old.removed_at or new.shipment_id <> old.shipment_id)
+         and coalesce(current_setting('gf.withdraw', true), '') <> 'on' then
+        raise exception 'La carga ya está en poder del motorizado; sus paquetes no se retiran desde aquí.';
+      end if;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+-- ----------------------------------------------------------------------------
+-- Retiro de un paquete de una caja en custodia (modo 'confirmar'). Lo comparten
+-- «No lo llevo» del motorizado y «Quitar / Mover» del supervisor: el ítem sale
+-- con rastro, la custodia vuelve a la empresa, la parada pendiente se borra y
+-- la solicitud vuelve a «por asignar». Interno: sin grant.
+-- ----------------------------------------------------------------------------
+create or replace function public.gf_withdraw_in_custody(p_item_id uuid, p_reason text, p_actor uuid, p_kind text, p_note text, p_payload jsonb)
+returns uuid language plpgsql set search_path = public as $$
+declare
+  v_item dispatch_manifest_items%rowtype;
+  v_manifest dispatch_manifests%rowtype;
+  v_shipment shipments%rowtype;
+  v_stop_status text;
+begin
+  select * into v_item from dispatch_manifest_items where id = p_item_id for update;
+  if not found or v_item.removed_at is not null then raise exception 'Ese paquete ya no está en la caja.'; end if;
+  select * into v_manifest from dispatch_manifests where id = v_item.manifest_id for update;
+  if v_manifest.state <> 'in_custody' then raise exception 'La caja no está en custodia.'; end if;
+  if public.gf_rider_pickup_mode(v_manifest.org_id) <> 'confirmar' then
+    raise exception 'La caja ya está en poder del motorizado; sus paquetes no se retiran desde aquí.';
+  end if;
+  if v_item.pickup_checked_at is not null then
+    raise exception 'El motorizado ya confirmó que lo lleva; solo se puede reportar como parada.';
+  end if;
+  select * into v_shipment from shipments where id = v_item.shipment_id for update;
+
+  select status into v_stop_status from delivery_stops
+    where shipment_id = v_item.shipment_id and dispatch_manifest_id = v_item.manifest_id
+    limit 1 for update;
+  if v_stop_status is not null and v_stop_status <> 'pendiente' then
+    raise exception 'Esa parada ya fue reportada; no se puede retirar de la caja.';
+  end if;
+
+  perform set_config('gf.withdraw', 'on', true);
+  update dispatch_manifest_items
+     set removed_at = now(), removed_by = p_actor, removal_reason = left(p_reason, 300)
+   where id = p_item_id;
+  perform set_config('gf.withdraw', 'off', true);
+
+  delete from delivery_stops
+   where shipment_id = v_item.shipment_id and dispatch_manifest_id = v_item.manifest_id and status = 'pendiente';
+
+  update shipments
+     set custody_state = 'empresa', custody_transferred_at = null, custody_transferred_by = null, dispatched_at = null
+   where id = v_item.shipment_id;
+
+  update logistics_requests
+     set status = 'accepted', observation = left(p_reason, 300)
+   where shipment_id = v_item.shipment_id and status = 'scheduled';
+
+  insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+  values (v_manifest.org_id, v_item.manifest_id, v_item.shipment_id, p_actor, p_kind,
+          coalesce(p_payload, '{}'::jsonb) || jsonb_build_object('reason', p_reason, 'in_custody', true));
+  if v_shipment.order_id is not null then
+    insert into order_events(store_id, order_id, kind, actor, source, courier, guide_code, shipment_id, reason, note, payload)
+    values (v_shipment.store_id, v_shipment.order_id, p_kind, p_actor, 'dispatch', 'propio',
+            v_shipment.guide_code, v_item.shipment_id, p_reason, p_note,
+            coalesce(p_payload, '{}'::jsonb) || jsonb_build_object('manifest_id', v_item.manifest_id, 'rider_id', v_manifest.rider_id,
+                                                                    'route_date', v_manifest.route_date, 'in_custody', true));
+  end if;
+  return v_shipment.order_id;
+end;
+$$;
+revoke all on function public.gf_withdraw_in_custody(uuid, text, uuid, text, text, jsonb) from public, anon, authenticated;
+
+-- «Quitar» / «Mover a…» de un paquete sin confirmar desde Despacho del día.
+create or replace function public.gf_supervisor_withdraw(p_manifest_id uuid, p_shipment_id uuid, p_reason text, p_actor uuid, p_moved_to_rider uuid default null)
+returns uuid language plpgsql set search_path = public as $$
+declare v_item dispatch_manifest_items%rowtype; v_rider_name text; v_target_name text; v_reason text := left(trim(coalesce(p_reason, '')), 200);
+begin
+  if length(v_reason) < 3 then raise exception 'Escribe el motivo.'; end if;
+  select * into v_item from dispatch_manifest_items
+    where manifest_id = p_manifest_id and shipment_id = p_shipment_id and removed_at is null;
+  if not found then raise exception 'Ese paquete ya no está en la caja.'; end if;
+  select r.full_name into v_rider_name from dispatch_manifests m join riders r on r.id = m.rider_id where m.id = p_manifest_id;
+  if p_moved_to_rider is not null then
+    select full_name into v_target_name from riders where id = p_moved_to_rider;
+    return public.gf_withdraw_in_custody(v_item.id, 'Movido a ' || coalesce(v_target_name, 'otro motorizado') || ': ' || v_reason, p_actor,
+      'package_removed', 'Retirado sin confirmar de la caja de ' || coalesce(v_rider_name, 'el motorizado') || ' para moverlo a ' || coalesce(v_target_name, 'otro motorizado') || ': ' || v_reason,
+      jsonb_build_object('moved_to', p_moved_to_rider, 'unconfirmed', true));
+  end if;
+  return public.gf_withdraw_in_custody(v_item.id, v_reason, p_actor,
+    'package_removed', 'Retirado sin confirmar de la caja de ' || coalesce(v_rider_name, 'el motorizado') || ': ' || v_reason,
+    jsonb_build_object('unconfirmed', true));
+end;
+$$;
+revoke all on function public.gf_supervisor_withdraw(uuid, uuid, text, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.gf_supervisor_withdraw(uuid, uuid, text, uuid, uuid) to service_role;
+
+-- ----------------------------------------------------------------------------
+-- «Lo llevo»: el motorizado confirma un paquete de su caja en custodia.
+-- Idempotente. Devuelve el pedido para recalcular el Master.
+-- ----------------------------------------------------------------------------
+create or replace function public.gf_rider_confirm_pickup(p_item_id uuid, p_actor uuid)
+returns uuid language plpgsql set search_path = public as $$
+declare v_item dispatch_manifest_items%rowtype; v_manifest dispatch_manifests%rowtype; v_rider riders%rowtype; v_shipment shipments%rowtype;
+begin
+  select * into v_item from dispatch_manifest_items where id = p_item_id for update;
+  if not found or v_item.removed_at is not null then raise exception 'Ese paquete ya no está en tu caja.'; end if;
+  select * into v_manifest from dispatch_manifests where id = v_item.manifest_id for update;
+  if v_manifest.courier <> 'propio' then raise exception 'La caja no pertenece a tu cuenta.'; end if;
+  select * into v_rider from riders where id = v_manifest.rider_id and user_id = p_actor and active;
+  if not found then raise exception 'La caja no pertenece a tu cuenta.'; end if;
+  if v_manifest.state <> 'in_custody' then
+    raise exception 'Esta caja se recibe escaneando desde «Recibir mi caja».';
+  end if;
+  if public.gf_rider_pickup_mode(v_manifest.org_id) = 'exigir' then
+    raise exception 'Esta caja se recibe escaneando desde «Recibir mi caja».';
+  end if;
+  select * into v_shipment from shipments where id = v_item.shipment_id;
+  if v_item.pickup_checked_at is not null then return v_shipment.order_id; end if;
+
+  update dispatch_manifest_items set pickup_checked_at = now(), pickup_checked_by = p_actor where id = p_item_id;
+  insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+  values (v_manifest.org_id, v_item.manifest_id, v_item.shipment_id, p_actor, 'pickup_checked',
+          jsonb_build_object('rider_id', v_rider.id, 'in_custody', true));
+  if v_shipment.order_id is not null then
+    insert into order_events(store_id, order_id, kind, actor, source, courier, guide_code, shipment_id, note, payload)
+    values (v_shipment.store_id, v_shipment.order_id, 'pickup_checked', p_actor, 'reparto', 'propio',
+            v_shipment.guide_code, v_item.shipment_id, 'Lo lleva ' || v_rider.full_name || '.',
+            jsonb_build_object('manifest_id', v_item.manifest_id, 'rider_id', v_rider.id, 'route_date', v_manifest.route_date, 'in_custody', true));
+  end if;
+  return v_shipment.order_id;
+end;
+$$;
+revoke all on function public.gf_rider_confirm_pickup(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.gf_rider_confirm_pickup(uuid, uuid) to service_role;
+
+-- ----------------------------------------------------------------------------
+-- «No lo llevo» (0182) ahora también sobre la caja en custodia en 'confirmar'.
+-- ----------------------------------------------------------------------------
+create or replace function public.gf_rider_decline(p_manifest_id uuid, p_shipment_id uuid, p_reason text, p_actor uuid)
+returns uuid[] language plpgsql set search_path = public as $$
+declare
+  v_manifest dispatch_manifests%rowtype;
+  v_rider riders%rowtype;
+  v_item dispatch_manifest_items%rowtype;
+  v_shipment shipments%rowtype;
+  v_reason text := left(trim(coalesce(p_reason, '')), 200);
+  v_active integer;
+  v_pending integer;
+  v_order uuid;
+begin
+  if length(v_reason) < 2 then raise exception 'Di por qué no lo llevas.'; end if;
+  select * into v_manifest from dispatch_manifests where id = p_manifest_id for update;
+  if not found or v_manifest.courier <> 'propio' then raise exception 'La carga no pertenece a tu cuenta.'; end if;
+  select * into v_rider from riders where id = v_manifest.rider_id and user_id = p_actor and active;
+  if not found then raise exception 'La carga no pertenece a tu cuenta.'; end if;
+
+  -- Modo 'confirmar': la caja ya salió con custodia; «No lo llevo» retira el
+  -- paquete, borra su parada pendiente y lo devuelve a «por asignar».
+  if v_manifest.state = 'in_custody' then
+    if public.gf_rider_pickup_mode(v_manifest.org_id) <> 'confirmar' then
+      raise exception 'La caja ya está en tu poder; avisa al supervisor para retirar un paquete.';
+    end if;
+    select * into v_item from dispatch_manifest_items
+      where manifest_id = p_manifest_id and shipment_id = p_shipment_id and removed_at is null;
+    if not found then raise exception 'Ese paquete ya no está en tu caja.'; end if;
+    if v_item.pickup_checked_at is not null then raise exception 'Ya confirmaste que lo llevas; avisa al supervisor para retirarlo.'; end if;
+    update dispatch_manifest_items
+       set pickup_declined_at = now(), pickup_declined_by = p_actor, pickup_declined_reason = v_reason
+     where id = v_item.id;
+    v_order := public.gf_withdraw_in_custody(v_item.id, 'No lo llevó ' || v_rider.full_name || ': ' || v_reason, p_actor,
+      'pickup_declined', 'No lo llevó ' || v_rider.full_name || ': ' || v_reason,
+      jsonb_build_object('rider_id', v_rider.id, 'declined_reason', v_reason));
+    return case when v_order is null then '{}'::uuid[] else array[v_order] end;
+  end if;
+
+  if v_manifest.state not in ('ready_for_pickup', 'pickup_check') then
+    raise exception 'La oficina debe completar primero la verificación de la caja.';
+  end if;
+  select * into v_item from dispatch_manifest_items
+    where manifest_id = p_manifest_id and shipment_id = p_shipment_id and removed_at is null for update;
+  if not found then raise exception 'Ese paquete ya no está en tu caja.'; end if;
+  if v_item.pickup_checked_at is not null then raise exception 'Ya recibiste ese paquete; avisa al supervisor para retirarlo.'; end if;
+  select * into v_shipment from shipments where id = p_shipment_id;
+
+  update dispatch_manifest_items
+     set pickup_declined_at = now(), pickup_declined_by = p_actor, pickup_declined_reason = v_reason,
+         removed_at = now(), removed_by = p_actor,
+         removal_reason = 'No recogido por ' || v_rider.full_name || ': ' || v_reason
+   where id = v_item.id;
+
+  insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+  values (v_manifest.org_id, p_manifest_id, p_shipment_id, p_actor, 'pickup_declined',
+          jsonb_build_object('reason', v_reason, 'rider_id', v_rider.id));
+  if v_shipment.order_id is not null then
+    insert into order_events(store_id, order_id, kind, actor, source, courier, guide_code, shipment_id, reason, note, payload)
+    values (v_shipment.store_id, v_shipment.order_id, 'pickup_declined', p_actor, 'reparto', 'propio',
+            v_shipment.guide_code, p_shipment_id, v_reason,
+            'No lo llevó ' || v_rider.full_name || ' al recibir su caja: ' || v_reason,
+            jsonb_build_object('manifest_id', p_manifest_id, 'rider_id', v_rider.id, 'route_date', v_manifest.route_date));
+  end if;
+  update logistics_requests
+     set status = 'accepted', observation = 'No recogido por ' || v_rider.full_name || ': ' || v_reason
+   where shipment_id = p_shipment_id and status = 'scheduled';
+
+  select count(*), count(*) filter (where pickup_checked_at is null)
+    into v_active, v_pending
+    from dispatch_manifest_items where manifest_id = p_manifest_id and removed_at is null;
+  if v_active = 0 then
+    update dispatch_manifests set state = 'draft', office_completed_at = null, office_completed_by = null where id = p_manifest_id;
+    return '{}'::uuid[];
+  end if;
+  if v_pending = 0 then
+    return public.finalize_dispatch_manifest(p_manifest_id, p_actor);
+  end if;
+  return '{}'::uuid[];
+end;
+$$;
+revoke all on function public.gf_rider_decline(uuid, uuid, text, uuid) from public, anon, authenticated;
+grant execute on function public.gf_rider_decline(uuid, uuid, text, uuid) to service_role;
+
+-- ---- 0186 ----
+-- ============================================================================
+-- 0186_order_master_rider_select.sql — un motorizado lee del Master los
+-- pedidos de SUS rutas.
+--
+-- La pantalla del motorizado (/reparto, MOM §29.12) pinta cada parada con el
+-- nombre, el celular, la dirección y el monto del pedido, que salen de
+-- `order_master`. Esa tabla solo dejaba leer por tienda (`auth_store_ids()`),
+-- y un usuario cuyo único rol es `motorizado` (0066, 0179) no tiene acceso a
+-- ninguna tienda: veía sus paradas como «Sin nombre — · —». Mientras la ficha
+-- de Roy estuvo atada a un usuario owner no se notó.
+--
+-- Regla: además de lo que ya permite la política por tienda, un usuario lee
+-- las filas del Master cuyos pedidos son paradas de una ruta suya en curso o
+-- cerrada, lo mismo que ya le abre `delivery_stops_select` (0067). Nada más:
+-- ni pedidos de otros motorizados ni de otras rutas. La escritura del Master
+-- sigue cerrada; el motorizado reporta por `delivery_stops` y el RPC.
+--
+-- Las paradas se resuelven en una función SECURITY DEFINER, como
+-- `auth_sheet_ids()` (0179), para que la política no dependa de las políticas
+-- de rutas y paradas ni las evalúe fila a fila.
+-- ============================================================================
+
+create or replace function public.auth_rider_order_ids()
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select s.order_id
+    from delivery_stops s
+    join delivery_routes r on r.id = s.route_id
+   where r.rider_id = auth_rider_id()
+     and r.status in ('en_curso', 'cerrada')
+     and s.order_id is not null;
+$$;
+revoke all on function public.auth_rider_order_ids() from public, anon;
+grant execute on function public.auth_rider_order_ids() to authenticated;
+
+drop policy if exists order_master_select_rider on order_master;
+create policy order_master_select_rider on order_master for select to authenticated
+  using (order_id in (select auth_rider_order_ids()));
+
+-- ---- 0187 ----
+-- ============================================================================
+-- 0187_gf_readd_declined_item.sql — un paquete que el motorizado no llevó
+-- puede volver a la MISMA caja.
+--
+-- «No lo llevo» (0182/0177) retira el ítem de la caja: la fila se queda con
+-- `removed_at`, `pickup_declined_*` y el motivo, y la solicitud vuelve a
+-- «por asignar». Al asignarlo otra vez al mismo motorizado el mismo día,
+-- `gf_add_item_in_custody` insertaba una fila nueva en la misma caja y
+-- chocaba con la clave (manifest_id, shipment_id): la pantalla decía «El
+-- paquete ya fue asignado a otra ruta», que era falso.
+--
+-- Regla: si la caja ya tiene una fila retirada para ese paquete, esa fila
+-- revive (como hace mover de caja, `moveManifestItem`): vuelve a estar activa,
+-- cotejada por oficina ahora y sin rechazo pendiente. El rechazo anterior no
+-- se pierde: quedó en `dispatch_events` (`package_declined`) y en el
+-- historial del pedido (`pickup_declined`). Un paquete ACTIVO en otra caja
+-- sigue chocando con `dispatch_item_active_shipment_uniq`, que es lo que
+-- de verdad significa «ya está en otra caja».
+-- ============================================================================
+
+create or replace function public.gf_add_item_in_custody(p_manifest_id uuid, p_shipment_id uuid, p_store_id uuid, p_actor uuid)
+returns uuid language plpgsql set search_path = public as $$
+declare
+  v_manifest dispatch_manifests%rowtype;
+  v_mode text;
+  v_shipment shipments%rowtype;
+  v_route delivery_routes%rowtype;
+  v_seq integer;
+  v_note text;
+begin
+  select * into v_manifest from dispatch_manifests where id = p_manifest_id for update;
+  if not found or v_manifest.courier <> 'propio' or v_manifest.rider_id is null then
+    raise exception 'La caja no es de un motorizado de Grupo GF.';
+  end if;
+  if v_manifest.state <> 'in_custody' then raise exception 'La caja todavía no está en custodia: usa la asignación normal.'; end if;
+  v_mode := public.gf_rider_pickup_mode(v_manifest.org_id);
+  if v_mode = 'exigir' then
+    raise exception 'La verificación del motorizado está activada: abre una carga adicional.';
+  end if;
+  v_note := case when v_mode = 'confirmar'
+    then 'Custodia al asignar: el motorizado confirma cada paquete al llevarlo.'
+    else 'Custodia al asignar: verificación del motorizado desactivada.' end;
+  select * into v_shipment from shipments where id = p_shipment_id for update;
+  if not found then raise exception 'Paquete no encontrado.'; end if;
+  if v_shipment.custody_state <> 'empresa' then raise exception 'El paquete ya no está en custodia de Grupo GF.'; end if;
+
+  -- Fila nueva, o la retirada de esta misma caja que revive (0187). Revivirla
+  -- es un UPDATE de `removed_at` sobre una carga en custodia, que el guardián
+  -- de 0185 solo admite dentro de un retiro con `gf.withdraw = on`: aquí es el
+  -- movimiento inverso, dentro de la misma transacción y con el mismo pase.
+  perform set_config('gf.withdraw', 'on', true);
+  insert into dispatch_manifest_items(manifest_id, shipment_id, store_id, added_by,
+    office_checked_at, office_checked_by, pickup_checked_at, pickup_checked_by)
+  values (p_manifest_id, p_shipment_id, p_store_id, p_actor, now(), p_actor,
+          case when v_mode = 'ninguno' then now() end, case when v_mode = 'ninguno' then p_actor end)
+  on conflict (manifest_id, shipment_id) do update set
+    removed_at = null, removed_by = null, removal_reason = null,
+    pickup_declined_at = null, pickup_declined_by = null, pickup_declined_reason = null,
+    added_by = excluded.added_by, added_at = now(),
+    office_checked_at = excluded.office_checked_at, office_checked_by = excluded.office_checked_by,
+    pickup_checked_at = excluded.pickup_checked_at, pickup_checked_by = excluded.pickup_checked_by
+  where dispatch_manifest_items.removed_at is not null;
+  perform set_config('gf.withdraw', 'off', true);
+
+  update shipments set custody_state = 'courier', custody_transferred_at = now(),
+    custody_transferred_by = p_actor, dispatched_at = coalesce(dispatched_at, now())
+   where id = p_shipment_id;
+
+  -- La ruta del día ya existe (la creó la primera custodia); si no, se abre.
+  perform pg_advisory_xact_lock(hashtextextended(v_manifest.org_id::text || v_manifest.rider_id::text || v_manifest.route_date::text, 0));
+  insert into delivery_routes(org_id, rider_id, route_date, status, created_by)
+    values (v_manifest.org_id, v_manifest.rider_id, v_manifest.route_date, 'planificada', p_actor)
+    on conflict (org_id, rider_id, route_date) do nothing;
+  select * into v_route from delivery_routes
+    where org_id = v_manifest.org_id and rider_id = v_manifest.rider_id and route_date = v_manifest.route_date for update;
+  if v_route.status = 'cerrada' then raise exception 'La ruta diaria ya está liquidada.'; end if;
+  if v_shipment.order_id is not null and not exists (
+    select 1 from delivery_stops where route_id = v_route.id and order_id = v_shipment.order_id
+  ) then
+    select coalesce(max(seq), 0) + 1 into v_seq from delivery_stops where route_id = v_route.id;
+    insert into delivery_stops(route_id, order_id, store_id, seq, shipment_id, dispatch_manifest_id)
+      values (v_route.id, v_shipment.order_id, p_store_id, v_seq, p_shipment_id, p_manifest_id);
+  end if;
+  update delivery_routes set status = 'en_curso', started_at = coalesce(started_at, now())
+    where id = v_route.id and status = 'planificada';
+  update dispatch_manifests set delivery_route_id = coalesce(delivery_route_id, v_route.id) where id = p_manifest_id;
+
+  insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+  values (v_manifest.org_id, p_manifest_id, p_shipment_id, p_actor, 'package_added',
+          jsonb_build_object('source', 'grupo_gf_courier', 'in_custody', true, 'note', v_note, 'pickup_mode', v_mode));
+  if v_shipment.order_id is not null then
+    insert into order_events(store_id, order_id, kind, occurred_at, actor, source, courier, guide_code, shipment_id, note, payload)
+    values (v_shipment.store_id, v_shipment.order_id, 'custody_transferred', now(), p_actor, 'dispatch', v_shipment.courier,
+            v_shipment.guide_code, p_shipment_id, v_note,
+            jsonb_build_object('manifest_id', p_manifest_id, 'route_date', v_manifest.route_date, 'route_kind', v_manifest.kind,
+                               'driver_name', v_manifest.driver_name, 'auto', true, 'added_in_custody', true, 'pickup_mode', v_mode));
+  end if;
+  return v_shipment.order_id;
+end;
+$$;
+revoke all on function public.gf_add_item_in_custody(uuid, uuid, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.gf_add_item_in_custody(uuid, uuid, uuid, uuid) to service_role;

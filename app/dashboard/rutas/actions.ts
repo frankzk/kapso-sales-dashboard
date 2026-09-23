@@ -23,8 +23,8 @@ import {
   routeTotals,
   stopsToSettlementLines,
 } from "@/lib/routes";
-import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import { defaultOperationalFor } from "@/lib/order-status";
+import { applyDeliveriesToMaster } from "@/lib/master-door";
+import { syncStopsToSheet } from "@/lib/sheets/stop-sync";
 
 export interface RouteActionResult {
   ok: boolean;
@@ -373,28 +373,30 @@ export async function closeRoute(
   const effects = masterEffects(stops);
   let applied = 0;
   if (effects.length) {
-    const storeOf = new Map(stops.map((s) => [s.order_id, s.store_id]));
-    const events = effects.map((e) => ({
-      store_id: storeOf.get(e.order_id) ?? null,
-      order_id: e.order_id,
-      kind: "status_override",
-      occurred_at: new Date().toISOString(),
-      actor: g.user.id,
-      source: "ruta",
-      new_status: e.target,
-      new_operational: defaultOperationalFor(e.target),
-      reason: e.reason,
-      payload: { route_id: routeId },
-    }));
-    const { error: evErr } = await g.admin.from("order_events").insert(events);
-    if (evErr) problems.push(`No se pudo actualizar el Master: ${evErr.message}`);
-    else {
-      applied = effects.length;
-      await recomputeOrderMasterSafe(
-        g.admin,
-        effects.map((e) => e.order_id),
-      );
-    }
+    const stopOf = new Map(stops.map((s) => [s.order_id, s]));
+    const requireEvidence = Boolean(gfLoads?.length);
+    const door = await applyDeliveriesToMaster(
+      g.admin,
+      effects.map((e) => {
+        const stop = stopOf.get(e.order_id);
+        return {
+          orderId: e.order_id,
+          storeId: stop?.store_id ?? null,
+          target: e.target,
+          source: "ruta" as const,
+          courier: "propio",
+          actor: g.user.id,
+          reason: e.reason,
+          payload: { route_id: routeId },
+          guard: stop
+            ? { stop: { status: stop.status, photo_path: stop.photo_path, voucher_path: stop.voucher_path, reported_by: stop.reported_by ?? null }, requireEvidence }
+            : undefined,
+        };
+      }),
+    );
+    if (door.error) problems.push(`No se pudo actualizar el Master: ${door.error}`);
+    applied = door.applied.length;
+    if (door.rejected.length) problems.push(`${door.rejected.length} pedido(s) no cruzaron al Master: ${door.rejected[0]!.reason}`);
   }
 
   await g.admin
@@ -406,8 +408,22 @@ export async function closeRoute(
     })
     .eq("id", routeId);
 
+  // La hoja de Reparto propio del motorizado queda al día con la ruta cerrada
+  // (MOM §29.12). Best-effort: el cierre ya está hecho.
+  try {
+    await syncStopsToSheet(g.admin, {
+      orgId: route.org_id ?? stores.find((s) => s.id === route.store_id)?.org_id ?? "",
+      riderId: route.rider_id,
+      date: route.route_date,
+      actor: g.user.id,
+    });
+  } catch (e) {
+    problems.push(`La hoja del motorizado no se pudo sincronizar: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
   revalidatePath("/dashboard/courier/reparto");
   revalidatePath("/dashboard/liquidaciones");
+  revalidatePath("/dashboard/liquidaciones-2");
   revalidatePath("/dashboard/pedidos");
 
   const pago = " Revisa Ganancia y saldo del motorizado en esta ruta: el cálculo financiero aún requiere aprobación. No se registró ningún pago ni depósito.";
@@ -500,4 +516,68 @@ export async function linkRiderAccount(
 
   revalidatePath("/dashboard/courier/reparto");
   return { ok: true, message: `${r.full_name} ya puede entrar a /reparto.${notice}` };
+}
+
+/**
+ * Reabre una ruta cerrada para corregir el reparto (MOM §29.14). Solo mientras
+ * su liquidación siga en borrador y el cálculo diario del motorizado no esté
+ * aprobado: lo aprobado no se deshace desde aquí. La liquidación en borrador
+ * que creó el cierre se descarta; volver a terminar la ruta la crea de nuevo y
+ * vuelve a cruzar al Master por la puerta única, así que el Master no se toca.
+ */
+export async function reopenRoute(routeId: string): Promise<RouteActionResult> {
+  const g = await guard();
+  if ("error" in g) return { ok: false, error: g.error };
+  const detail = await getRouteDetail(routeId);
+  if (!detail) return { ok: false, error: "Ruta inexistente o sin acceso." };
+  const { route, stops } = detail;
+  if (route.status !== "cerrada") return { ok: false, error: "La ruta no está cerrada." };
+
+  const { count: approvals } = await g.admin
+    .from("rider_daily_pay_closures")
+    .select("route_id", { count: "exact", head: true })
+    .eq("route_id", routeId);
+  if (approvals) return { ok: false, error: "El cálculo diario del motorizado ya está aprobado; no se puede reabrir la ruta." };
+
+  const { data: settlements, error: settlementsError } = await g.admin
+    .from("rider_settlements")
+    .select("id,status")
+    .eq("route_id", routeId)
+    .eq("source", "ruta");
+  if (settlementsError) return { ok: false, error: settlementsError.message };
+  const rows = (settlements ?? []) as { id: string; status: string }[];
+  if (rows.some((s) => s.status !== "borrador")) {
+    return { ok: false, error: "Su liquidación ya se revisó en Liquidaciones; no se puede reabrir la ruta." };
+  }
+  if (rows.length) {
+    const { error } = await g.admin.from("rider_settlements").delete().in("id", rows.map((s) => s.id));
+    if (error) return { ok: false, error: error.message };
+  }
+
+  const now = new Date().toISOString();
+  const { error: routeError } = await g.admin
+    .from("delivery_routes")
+    .update({ status: "en_curso", closed_at: null, updated_at: now })
+    .eq("id", routeId);
+  if (routeError) return { ok: false, error: routeError.message };
+
+  const events = stops
+    .filter((s) => s.store_id)
+    .map((s) => ({
+      store_id: s.store_id,
+      order_id: s.order_id,
+      kind: "route_reopened",
+      occurred_at: now,
+      actor: g.user.id,
+      source: "ruta",
+      courier: "propio",
+      note: "Ruta reabierta para corregir el reparto; la liquidación en borrador se descartó.",
+      payload: { route_id: routeId },
+    }));
+  if (events.length) await g.admin.from("order_events").insert(events).then(() => undefined, () => undefined);
+
+  revalidatePath("/dashboard/courier/reparto");
+  revalidatePath("/dashboard/courier");
+  revalidatePath("/dashboard/liquidaciones");
+  return { ok: true, message: "Ruta reabierta. Corrige las paradas y vuelve a terminarla." };
 }

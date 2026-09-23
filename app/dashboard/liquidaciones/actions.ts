@@ -17,8 +17,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { relinkSettlementLine } from "@/lib/settlement-ingest";
 import { getRiderTariffs, getSettlementDetail } from "@/lib/settlements-access";
 import { computeRiderPayout, settlementMasterEffects, settlementStatus } from "@/lib/settlements";
-import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import { defaultOperationalFor } from "@/lib/order-status";
+import { applyDeliveriesToMaster } from "@/lib/master-door";
 import {
   directOrderSearchTerm,
   evaluateSettlementCandidateScope,
@@ -590,26 +589,21 @@ export async function applySettlementToMaster(settlementId: string): Promise<Act
       .filter((line) => line.facts)
       .map((line) => [line.facts!.order_id, line.facts!.store_id]),
   );
-  const events = pending.map((e) => ({
-    store_id: factStore.get(e.order_id) ?? reach.storeId,
-    order_id: e.order_id,
-    kind: "status_override",
-    occurred_at: new Date().toISOString(),
-    actor: g.user.id,
-    source: "liquidacion",
-    new_status: e.target,
-    new_operational: defaultOperationalFor(e.target),
-    reason: e.reason,
-    payload: { settlement_id: settlementId },
-  }));
-
-  const { error } = await g.admin.from("order_events").insert(events);
-  if (error) return { ok: false, error: error.message };
-
-  await recomputeOrderMasterSafe(
+  // Por la ÚNICA puerta al Master (lib/master-door.ts). Las líneas de una
+  // liquidación no tienen parada: pasan sin guarda de evidencia, como siempre.
+  const door = await applyDeliveriesToMaster(
     g.admin,
-    pending.map((e) => e.order_id),
+    pending.map((e) => ({
+      orderId: e.order_id,
+      storeId: factStore.get(e.order_id) ?? reach.storeId,
+      target: e.target,
+      source: "liquidacion" as const,
+      actor: g.user.id,
+      reason: e.reason,
+      payload: { settlement_id: settlementId },
+    })),
   );
+  if (door.error) return { ok: false, error: door.error };
 
   revalidatePath("/dashboard/liquidaciones");
   revalidatePath("/dashboard/pedidos");

@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { cn } from "@/components/ui";
 import {
   discardCollectionAlert,
   listMyCollectionAlerts,
@@ -26,9 +27,16 @@ import {
 
 const POLL_MS = 20_000;
 
+// El título dice lo que de verdad pasó, y `sin_atribuir` NO siempre es «no se
+// sabe de qué pedido es»: ese `kind` es el cajón de todo lo que no se pudo
+// registrar —la imagen que no se pudo bajar, el pago parcial, el Yape que ya se
+// usó en otro pedido—. Afirmar lo que no consta hace que se deje de creer al
+// aviso: en #KP134470 decía «no se sabe de qué pedido es» sobre un comprobante
+// ya registrado, validado y con la clave enviada. El motivo exacto va debajo,
+// en `detail`, que es donde puede ser específico.
 const TITULO: Record<CollectionAlertView["kind"], string> = {
   registrado: "Comprobante por validar",
-  sin_atribuir: "Llegó un pago y no se sabe de qué pedido es",
+  sin_atribuir: "Llegó un comprobante y no se pudo registrar",
 };
 
 export function CollectionAlerts({ enabled = true }: { enabled?: boolean }) {
@@ -80,22 +88,44 @@ export function CollectionAlerts({ enabled = true }: { enabled?: boolean }) {
   return (
     <div className="fixed right-4 bottom-4 z-50 flex w-[22rem] max-w-[calc(100vw-2rem)] flex-col gap-2">
       {alerts.slice(0, 3).map((a) => (
-        <div key={a.id} className="rounded-xl border border-amber-300 bg-white p-3 shadow-lg">
+        <div
+          key={a.id}
+          className={cn(
+            "rounded-xl border bg-white p-3 shadow-lg",
+            // La que me toca, en ámbar; la que ya escaló y solo estoy mirando,
+            // apagada. Con tres personas viendo la misma alerta, lo primero que
+            // hay que poder distinguir de un vistazo es si la mía es mía.
+            a.mine ? "border-amber-300" : "border-slate-200",
+          )}
+        >
           <div className="flex items-start justify-between gap-2">
             <p className="text-sm font-semibold text-slate-900">{TITULO[a.kind]}</p>
             <span className="shrink-0 text-xs text-slate-400">{a.waitingMinutes} min</span>
           </div>
 
+          {/* Sin pedido, lo que identifica es el CELULAR, y va delante: con él
+              se busca la conversación. «Pedido sin identificar» ocupaba el
+              renglón principal para no decir nada. */}
           <p className="mt-1 text-sm text-slate-700">
-            {a.orderName ? <strong>{a.orderName}</strong> : "Pedido sin identificar"}
+            {a.orderName ? <strong>{a.orderName}</strong> : <strong>{a.phone ?? "Sin celular"}</strong>}
             {a.amount != null && <> · S/ {a.amount.toFixed(2)}</>}
           </p>
-          {a.phone && <p className="text-xs text-slate-500">{a.phone}</p>}
+          {a.orderName && a.phone && <p className="text-xs text-slate-500">{a.phone}</p>}
           {a.detail && <p className="mt-1 text-xs text-slate-500">{a.detail}</p>}
           <p className="mt-1 text-xs text-slate-400">
             {a.storeName}
             {a.escalations > 0 && ` · escaló ${a.escalations} ${a.escalations === 1 ? "vez" : "veces"}`}
           </p>
+          {/* LA ESCALERA SUMA: al escalar no se le quita a nadie. Quien la tuvo
+              antes la sigue viendo hasta que se resuelva, y este renglón es lo
+              que evita que dos personas la atiendan a la vez sin saberlo:
+              siempre dice a quién le toca AHORA. */}
+          {!a.mine && (
+            <p className="mt-1 text-xs font-medium text-slate-500">
+              {a.ownerName ? `Le toca ahora a ${a.ownerName}` : "Sin responsable asignado"} · la
+              sigues viendo porque escaló
+            </p>
+          )}
 
           <div className="mt-2 flex flex-wrap gap-2">
             {/* AL DRAWER DEL PEDIDO, no a la bandeja de revisión. La bandeja

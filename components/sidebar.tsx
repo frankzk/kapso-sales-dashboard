@@ -48,7 +48,8 @@ function navItems(
       { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
       { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
       { href: "/dashboard/envios/recuperacion", label: "Recuperar devueltos", icon: IconChat },
-      { href: "/dashboard/liquidaciones", label: "Liquidaciones", icon: IconMoney },
+      // Liquidaciones y Liquidaciones 2 fuera del menú desde el 22-09-2026 (a
+      // pedido de operación); las páginas siguen en su URL.
       // Modo solo: la página filtra server-side a la fila propia — una
       // vendedora nunca ve los resultados del resto del equipo.
       { href: "/dashboard/productividad", label: "Mi productividad", icon: IconHeadset },
@@ -78,7 +79,10 @@ function navItems(
     { href: "/dashboard/leads/anuncios", label: "Producto por anuncio", icon: IconPlug },
     { href: "/dashboard/productividad", label: "Productividad", icon: IconHeadset },
     { href: "/dashboard/stores", label: "Tiendas", icon: IconStore },
-    { href: "/dashboard/liquidaciones", label: "Liquidaciones", icon: IconMoney },
+    // Liquidaciones (/dashboard/liquidaciones) y Liquidaciones 2
+    // (/dashboard/liquidaciones-2, hojas por dominio, 0176, MOM §30) fuera del
+    // menú desde el 22-09-2026 a pedido de operación. Las páginas siguen
+    // funcionando en su URL; para volver a mostrarlas, repón estas dos líneas.
     { href: "/dashboard/costos", label: "Costos", icon: IconMoney },
     ...(canManageLogistics
       ? [{ href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck }]

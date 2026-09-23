@@ -18,6 +18,15 @@ import {
 } from "@/lib/order-confirmation";
 import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovincia";
 
+// v1.14: el motorizado de Grupo GF mueve la etapa con lo que reporta (MOM
+// §29.13, decisión del 22-09-2026). Hasta aquí un pedido propio quedaba en «En
+// curso · En tránsito» desde la asignación hasta el cierre de la ruta, aunque
+// Roy ya lo hubiera entregado o postergado. Ahora «Lo llevo» → En reparto; la
+// parada entregada → Por cerrar · Validación de cierre pendiente; postergada
+// (reprogramado, no estaba) → Por reprogramar Lima; el resto de no entregados →
+// Por cerrar · Devolución física pendiente. La ruta se sigue liquidando al
+// cerrar. Cambia filas que nadie tocó, así que la versión sube.
+//
 // v1.13: «Recogido sin pago completo» acepta el cobro que Shopify sí registra.
 // La alerta preguntaba «¿está pagado?» mirando SOLO comprobantes Yape y la
 // pasarela del checkout, y en Agencia el dinero entra por el mostrador de
@@ -56,7 +65,7 @@ import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovi
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.13" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.14" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -642,13 +651,20 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   const { guides, events, legacy, paymentState } = input;
   const reasons: MacroSubstage[] = [];
   const operation = classifyOperation(input.order, guides);
-  const active = guides.filter(isActiveGuide);
-  const delivered = guides.some((guide) => guide.delivery_status === "entregado");
+  // Nadie escribe `delivery_status = entregado` en una salida de motorizado
+  // propio: su verdad es la parada. Si el motorizado la reportó entregada, la
+  // salida cuenta como entregada (v1.14): ni es «una salida adicional activa»
+  // ni un paquete «fuera sin cerrar». Sin esto, todo pedido de Grupo GF caía
+  // en Devolución física pendiente al cerrar la ruta.
+  const riderDelivered = (guide: MacroGuideSnapshot) => gfRiderSignal(events, guide)?.signal === "entregado";
+  const active = guides.filter((guide) => isActiveGuide(guide) && !riderDelivered(guide));
+  const delivered = guides.some((guide) => guide.delivery_status === "entregado" || riderDelivered(guide));
   const closedOutside = guides.filter(
     (guide) =>
       hasExternalCustody(guide) &&
       !hasReturned(guide) &&
-      guide.delivery_status !== "entregado",
+      guide.delivery_status !== "entregado" &&
+      !riderDelivered(guide),
   );
   const returnedGuides = guides.filter(hasReturned);
 
@@ -815,10 +831,60 @@ function dispatchSubstage(events: readonly MacroEventSnapshot[]): { substage: Ma
     : { substage: "listo_para_asignar", since: null };
 }
 
+/** Salida de motorizado propio (Grupo GF Courier). */
+function isOwnCourier(courier: string | null | undefined): boolean {
+  return (courier ?? "").trim().toLowerCase() === "propio";
+}
+
+export type GfRiderSignal = "lo_lleva" | "entregado" | "postergado" | "no_entregado";
+
+/** Motivos de no entrega que dejan la parada para otro día (lib/routes.ts). */
+const GF_POSTPONED_REASONS = new Set(["reprogramado", "no_estaba"]);
+
+/**
+ * Lo último que dijo el motorizado de esta salida (v1.14, MOM §29.13): «Lo
+ * llevo», o el reporte de su parada. Se lee de los eventos del pedido, que es
+ * donde el gesto único los deja; la señal más reciente manda, y un «No lo
+ * llevo» o un retiro de la caja posteriores la anulan (el paquete volvió a la
+ * empresa y ya no está bajo custodia externa). Las paradas del cuaderno no
+ * traen `shipment_id`: valen para la salida propia vigente.
+ */
+export function gfRiderSignal(
+  events: readonly MacroEventSnapshot[],
+  guide: MacroGuideSnapshot,
+): { signal: GfRiderSignal; at: string } | null {
+  if (!isOwnCourier(guide.courier)) return null;
+  const kinds = new Set(["pickup_checked", "stop_reported", "pickup_declined", "package_removed"]);
+  const mine = events
+    .filter((event) => kinds.has(event.kind) && (event.shipment_id === guide.id || (!event.shipment_id && event.kind === "stop_reported")))
+    .sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : a.occurred_at > b.occurred_at ? -1 : 0));
+  // Un reporte deshecho (`stop_reported` con estado «pendiente») anula los
+  // reportes anteriores: manda lo que hubo antes de ellos («Lo llevo»).
+  let undone = false;
+  let latest: MacroEventSnapshot | null = null;
+  for (const event of mine) {
+    if (event.kind === "stop_reported") {
+      if (String(event.payload?.status ?? "") === "pendiente") { undone = true; continue; }
+      if (undone) continue;
+    }
+    latest = event;
+    break;
+  }
+  if (!latest) return null;
+  if (latest.kind === "pickup_checked") return { signal: "lo_lleva", at: latest.occurred_at };
+  if (latest.kind !== "stop_reported") return null;
+  const status = String(latest.payload?.status ?? "");
+  if (status === "entregado") return { signal: "entregado", at: latest.occurred_at };
+  if (status !== "no_entregado") return null;
+  const reason = String(latest.payload?.outcome_reason ?? "");
+  return { signal: GF_POSTPONED_REASONS.has(reason) ? "postergado" : "no_entregado", at: latest.occurred_at };
+}
+
 function inCourseSubstage(
   input: ResolveMacroStageInput,
   current: MacroGuideSnapshot,
   operation: OperationKind,
+  rider: GfRiderSignal | null = null,
 ): MacroSubstage {
   if (
     current.custody_state === "retorno" ||
@@ -842,7 +908,10 @@ function inCourseSubstage(
       ? "disponible_para_recojo"
       : "pendiente_pago_diferencia";
   }
-  if (current.out_for_delivery_at) return "en_reparto";
+  // «Lo llevo» del motorizado propio es «en reparto» (v1.14); Grupo GF nunca
+  // escribe `out_for_delivery_at`. Una parada postergada manda sobre él
+  // (viene después) y se resuelve antes de llegar aquí.
+  if (current.out_for_delivery_at || rider === "lo_lleva") return "en_reparto";
   if (
     current.rescheduled_at ||
     current.attempts > 0 ||
@@ -1006,11 +1075,30 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
 
   const current = currentGuide(input.guides);
   if (current && hasExternalCustody(current)) {
-    const substage = inCourseSubstage(input, current, operation);
+    // v1.14 (MOM §29.13): lo que reporta el motorizado propio mueve la etapa
+    // antes del cierre de la ruta. La liquidación sigue siendo el cierre.
+    const rider = gfRiderSignal(input.events, current);
+    if (rider?.signal === "entregado") {
+      return result("por_cerrar", "validacion_cierre_pendiente", rider.at, operation, ["validacion_cierre_pendiente"]);
+    }
+    if (rider?.signal === "no_entregado") {
+      return result("por_cerrar", "devolucion_fisica_pendiente", rider.at, operation, ["devolucion_fisica_pendiente"]);
+    }
+    if (rider?.signal === "postergado") {
+      return result(
+        "en_curso",
+        operation === "lima" ? "por_reprogramar_lima" : "gestion_reproprovincia",
+        rider.at,
+        operation,
+      );
+    }
+    const substage = inCourseSubstage(input, current, operation, rider?.signal ?? null);
     return result(
       "en_curso",
       substage,
-      maxIso(current.out_for_delivery_at, current.dispatched_at, current.assigned_at, input.legacy.since),
+      rider?.signal === "lo_lleva"
+        ? rider.at
+        : maxIso(current.out_for_delivery_at, current.dispatched_at, current.assigned_at, input.legacy.since),
       operation,
     );
   }

@@ -21,15 +21,32 @@ describe("Rutas pertenece a Grupo GF Courier", () => {
   it("no ofrece una entrada Rutas independiente", () => {
     expect(read("components/sidebar.tsx")).not.toContain('href: "/dashboard/rutas"');
   });
-  it("conserva el control de permisos en la página nueva", () => {
+  it("conserva el control de permisos: la página redirige y la acción del panel vuelve a comprobar", () => {
     const page = read("app/dashboard/courier/reparto/page.tsx");
     expect(page).toContain('perms.can("routes.manage")');
     expect(page).toContain('perms.can("routes.report_others")');
-    expect(page).toContain("routeReportAccess(detail.route.id)");
+    const actions = read("app/dashboard/courier/actions.ts");
+    const report = actions.slice(actions.indexOf("export async function loadCourierRouteReport("));
+    expect(report).toContain('permissions.can("routes.manage")');
+    expect(report).toContain("routeReportAccess(id)");
   });
-  it("enlaza a reparto y cierre desde las cajas y las liquidaciones", () => {
-    for (const path of ["components/grupo-gf-courier.tsx", "components/dispatch-workspace.tsx", "components/settlements.tsx"]) {
-      expect(read(path)).toContain("/dashboard/courier/reparto");
+  it("sin ruta abierta, Reparto manda a la lista única de Rutas; con ruta, al panel lateral (MOM §29.14)", () => {
+    const page = read("app/dashboard/courier/reparto/page.tsx");
+    expect(page).toContain('if (!sp.id) redirect("/dashboard/courier/rutas")');
+    expect(page).toContain("legacyReportHref(sp.id");
+    expect(read("components/courier-route-report-drawer.tsx")).toContain("detailOnly");
+    expect(read("components/grupo-gf-courier.tsx")).not.toContain("Reparto y cierre diario");
+    expect(read("components/grupo-gf-courier.tsx")).not.toContain("Cajas y cotejos");
+  });
+  it("reparto y cierre se abre desde la columna Liquidación de la lista, no desde la caja", () => {
+    const ledger = read("components/courier-routes-ledger.tsx");
+    expect(ledger).toContain("courierReportHref(r.routeId, location)");
+    expect(ledger).toContain("Reparto y liquidación");
+    expect(read("components/courier-box-drawer.tsx")).not.toContain("Reparto y liquidación");
+    expect(read("components/dispatch-workspace.tsx")).not.toContain("Ver reparto y liquidación");
+    expect(read("components/dispatch-workspace.tsx")).not.toContain("Ir a tomar y asignar pedidos");
+    expect(read("components/settlements.tsx")).toContain("/dashboard/courier/reparto");
+    for (const path of ["components/courier-box-drawer.tsx", "components/dispatch-workspace.tsx", "components/settlements.tsx"]) {
       expect(read(path)).not.toContain("`/dashboard/rutas?");
     }
   });

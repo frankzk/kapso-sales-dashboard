@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { friendlyPasswordError, riderUsernameToEmail } from "@/lib/rider-auth";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 
 /** Map raw Supabase auth errors to clear, non-technical Spanish guidance. */
@@ -76,6 +77,15 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
   const [sent, setSent] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Tercera puerta, discreta: usuario y contraseña. La usan los motorizados,
+  // que no siempre tienen correo (docs/runbooks/motorizados-acceso.md). El
+  // usuario corto «roy» se convierte en roy@motorizados.kapta.local; un correo
+  // real con contraseña también vale.
+  const [withPassword, setWithPassword] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [pwErr, setPwErr] = useState<string | null>(null);
+  const [pwBusy, setPwBusy] = useState(false);
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
 
@@ -101,6 +111,27 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
     setBusy(false);
     if (error) setErr(friendlyAuthError(error.message, mode));
     else setSent(true);
+  }
+
+  async function signInWithPassword(e: React.FormEvent) {
+    e.preventDefault();
+    setPwErr(null);
+    const email = riderUsernameToEmail(username);
+    if (!email) {
+      setPwErr("Escribe tu usuario tal como te lo dieron (por ejemplo «roy»), sin espacios.");
+      return;
+    }
+    setPwBusy(true);
+    const supabase = createBrowserSupabase();
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      setPwBusy(false);
+      setPwErr(friendlyPasswordError(error.message));
+      return;
+    }
+    // Navegación completa para que el proxy vea la cookie recién puesta: a un
+    // motorizado lo manda a /reparto; a cualquier otro, al panel.
+    window.location.assign("/dashboard");
   }
 
   return (
@@ -159,6 +190,71 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
       {err && (
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
           {err}
+        </div>
+      )}
+
+      {mode === "login" && (
+        <div className="mt-5">
+          {withPassword ? (
+            <form onSubmit={signInWithPassword} className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3" aria-label="Entrar con usuario y contraseña">
+              <p className="text-xs text-slate-500">
+                Para motorizados: el usuario y la contraseña que te dio el coordinador.
+              </p>
+              <input
+                type="text"
+                required
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder="Usuario"
+                aria-label="Usuario"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+              />
+              <input
+                type="password"
+                required
+                autoComplete="current-password"
+                placeholder="Contraseña"
+                aria-label="Contraseña"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+              />
+              <button
+                type="submit"
+                disabled={pwBusy}
+                className="w-full rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-900 disabled:opacity-60"
+              >
+                {pwBusy ? "Entrando…" : "Entrar"}
+              </button>
+              {pwErr && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700" role="alert">
+                  {pwErr}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setWithPassword(false);
+                  setPwErr(null);
+                }}
+                className="block w-full text-center text-xs text-slate-500 underline"
+              >
+                Volver a Google o enlace por correo
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setWithPassword(true)}
+              className="block w-full text-center text-xs text-slate-500 underline hover:text-slate-700"
+            >
+              Entrar con usuario y contraseña
+            </button>
+          )}
         </div>
       )}
 

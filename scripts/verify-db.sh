@@ -92,6 +92,12 @@ for f in $(ls "$ROOT"/db/migrations/*.sql | sort); do
   $PSQL -f "$f" >/dev/null
 done
 echo "  ✅ all migrations apply on a fresh database"
+echo "▶ Liquidaciones 2: un motorizado solo ve su hoja (0179)"
+$PSQL -f "$ROOT/scripts/sql/sheets_rider_smoke.sql"
+echo "  ✅ motorizado acotado a su hoja; owner y viewer ven las de su org"
+echo "▶ Master para el motorizado: solo los pedidos de sus rutas (0186)"
+$PSQL -f "$ROOT/scripts/sql/rider_master_smoke.sql"
+echo "  ✅ motorizado lee del Master solo sus paradas; owner sigue viendo todo"
 
 # La cobertura COD se decide por coordenada además de por nombre (0100). Es
 # lógica geoespacial hecha a mano (haversine, sin PostGIS): esta prueba fija que
@@ -158,6 +164,18 @@ echo "  ✅ la custodia solo cambia después de cotejar el 100 % dos veces"
 
 echo "▶ GF: cargas adicionales, recepción por usuario y ruta de reparto única"
 $PSQL -f "$ROOT/scripts/sql/gf_route_loads_smoke.sql"
+echo "▶ «No lo recojo» (0182): el rechazo sale de la carga y la custodia pasa con los aceptados"
+$PSQL -f "$ROOT/scripts/sql/gf_rider_decline_smoke.sql"
+echo "  ✅ rechazo con rastro, sin parada, salida libre para otra caja"
+echo "▶ verificación del motorizado como flag (0183): con false basta con asignar"
+$PSQL -f "$ROOT/scripts/sql/gf_assign_custody_smoke.sql"
+echo "  ✅ flag true no entrega custodia al asignar; flag false sí, crea paradas y admite cotejo posterior"
+echo "▶ una carga por motorizado y día con el flag apagado (0184)"
+$PSQL -f "$ROOT/scripts/sql/gf_one_load_smoke.sql"
+echo "  ✅ dos asignaciones → una carga, una ruta, paradas sin duplicar; con el flag encendido, carga adicional"
+echo "▶ modo confirmar: «lo llevo» / «no lo llevo» sobre la caja en custodia (0185)"
+$PSQL -f "$ROOT/scripts/sql/gf_pickup_mode_smoke.sql"
+echo "  ✅ asignar da custodia con paradas por confirmar; confirmar marca el ítem; rechazar retira, borra la parada y libera el paquete; el supervisor quita solo lo no confirmado"
 
 echo ""
 echo "✅ DB verification passed."

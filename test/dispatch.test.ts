@@ -18,6 +18,20 @@ describe("dispatchProgress", () => {
   });
 });
 
+describe("dispatchProgress con «no lo recojo» (0182)", () => {
+  it("el rechazado sale del total y se cuenta aparte: el 100 % es sobre los aceptados", () => {
+    const progress = dispatchProgress([
+      { office_checked_at: "x", pickup_checked_at: "x" },
+      { office_checked_at: "x", pickup_checked_at: null, pickup_declined_at: "x", removed_at: "x" },
+    ]);
+    expect(progress).toMatchObject({ total: 1, pickupChecked: 1, pickupComplete: true, declined: 1, percent: 100 });
+    expect(deriveDispatchManifestState([
+      { office_checked_at: "x", pickup_checked_at: "x" },
+      { office_checked_at: "x", pickup_declined_at: "x", removed_at: "x" },
+    ], "pickup_check")).toBe("pickup_check");
+  });
+});
+
 describe("deriveDispatchManifestState", () => {
   it("no declara lista una ruta incompleta", () => {
     expect(

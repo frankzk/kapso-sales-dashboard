@@ -822,6 +822,12 @@ Ejemplos:
 | Paquete escaneado | Por despachar | Listo para asignar |
 | Manifiesto cotejado por oficina | Por despachar | Listo para recojo |
 | Motorizado cotejó y recogió | En curso | Recibido por courier |
+| Motorizado propio asignado con custodia, sin «Lo llevo» | En curso | En tránsito |
+| Motorizado propio dijo «Lo llevo» | En curso | En reparto |
+| Motorizado propio reportó la parada entregada, ruta sin cerrar | Por cerrar | Validación de cierre pendiente |
+| Motorizado propio reportó reprogramado o «no estaba» | En curso | Por reprogramar Lima |
+| Motorizado propio reportó rechazado, dirección errada u otro | Por cerrar | Devolución física pendiente |
+| Ruta cerrada con la parada entregada, sin liquidar | Por cerrar | Pendiente de liquidación |
 | Aliclik retornando y Swayp repartiendo | En curso | En reparto |
 | Una salida entregó y otra sigue activa | Por cerrar | Salida adicional activa |
 | Entregado, courier aún no liquidó | Por cerrar | Pendiente de liquidación |
@@ -3062,6 +3068,15 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
       existen para evitar.
     - Lo que no pasa **queda como anomalía con su motivo** (`inbound_voucher`).
       El silencio es lo único inaceptable: la clienta ya pagó.
+    - **El comprobante repetido del MISMO pedido no avisa a nadie.** Rastro y
+      silencio: la clienta mandó su Yape dos veces o el webhook reentregó, y ya
+      está registrado donde tiene que estar. A Esmeralda (#KP134470,
+      21-09-2026) le llegó su clave a las 09:52 y a las 09:51 se había
+      levantado una alerta diciendo «llegó un pago y no se sabe de qué pedido
+      es», que además escaló dos veces. Un aviso que miente se deja de leer.
+      - **Repetido en OTRO pedido sí avisa**, con el pedido con el que choca
+        escrito por su nombre: es el mismo Yape cobrando dos pedidos, que es
+        justo lo que la deduplicación existe para cazar.
     - **La lectura se guarda con la MISMA forma que la carga a mano**
       (`voucherReading`, en `lib/voucher-inspect.ts`), y esa forma es un
       contrato: el drawer relee `vision.extracted.*` para decir a qué cuenta
@@ -3084,6 +3099,22 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
       - **La escalera se configura en Ajustes**, en orden y con minutos por
         escalón. Escribir los nombres en el código costaría un despliegue cada
         vez que alguien cambie de puesto.
+      - **La escalera SUMA, no traspasa** (22-09-2026). Escalar amplía quién ve
+        la alerta; no se la quita a nadie. A Gerardo le queda delante hasta que
+        se resuelva, y a sus minutos le aparece **además** a Yohalis, y después
+        a Frank: llegado ese punto la tienen los tres a la vez. Antes cambiaba
+        de dueño y **desaparecía** de la pantalla del anterior, que es dar por
+        hecho que ya no va a atenderla —falso, suele estar a punto— y ocultarle
+        el final de un trabajo que empezó él.
+        - **Sigue habiendo un responsable de turno**, y la tarjeta lo dice: a
+          quien la mira sin ser suya le sale «Le toca ahora a Yohalis», en gris
+          y no en ámbar. Es lo que evita que dos la atiendan a la vez sin
+          saberlo.
+        - **Las propias van primero** en el pop-up. Con tres personas mirando la
+          misma cola, el trabajo de uno no puede quedar debajo del que solo
+          está mirando.
+        - **Quien no la ha recibido todavía NO la ve.** Si no, los tres verían
+          todo desde el minuto cero y la escalera no serviría de nada.
       - **No mira si está conectado**, a diferencia de la alerta de asesoras:
         ahí compiten por atender primero, aquí hay un responsable. La oferta
         aguanta sus minutos con el navegador cerrado; si saltara al
@@ -3111,6 +3142,20 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
           ser una optimización en vez de la única vía. Se barre **antes** de
           escalar: al revés, una alerta ya resuelta podría subir a otra persona
           justo antes de retirarse.
+        - **Y la `sin_atribuir` se retira cuando ese CELULAR ya no debe nada**
+          (`sweepUnattributedAlerts`): lo que pedía —que alguien averigüe de
+          qué pedido es y lo registre— ya está hecho. Cuenta lo **cargado**, no
+          solo lo validado, porque validar es el otro trabajo y tiene su propia
+          alerta. Si de ese celular no consta **ningún** pedido, se queda: ése
+          es el caso en que de verdad no se sabe quién pagó, que es para lo que
+          la alerta existe.
+      - **El título no afirma lo que no consta.** `sin_atribuir` es el cajón de
+        todo lo que no se pudo registrar —la imagen que no se pudo bajar, el
+        pago parcial, el Yape ya usado en otro pedido—, así que el pop-up dice
+        «Llegó un comprobante y no se pudo registrar» y dentro, en el detalle,
+        el motivo exacto. Decía «no se sabe de qué pedido es» sobre un
+        comprobante ya registrado y con la clave enviada. Sin pedido, lo que
+        identifica es el **celular**, y va delante: con él se busca el chat.
       - **«Ir a validar» lleva al DRAWER del pedido**, con la sección de Cobro
         delante (`/dashboard/pedidos?abrir=<id>&ir=pagos`), no a la bandeja de
         revisión. Dos motivos: la bandeja valida a secas —el botón que además
@@ -3537,8 +3582,36 @@ cuenta receptora leída, evidencia y progreso acumulado del pedido.
 - `Observar` exige motivo y mueve el comprobante a `revision_admin`.
 - `Rechazar` es una decisión definitiva desde Observados. No borra el pago: sale
   de la cola activa y queda preservado en el expediente y sus eventos.
-- `Validar` exige número de operación y bloquea una cuenta receptora incompatible
-  con Grupo GF S.A.C. / terminación 309.
+- `Validar` exige número de operación y bloquea una cuenta receptora
+  incompatible con las cuentas de cobro de la tienda (`store_collection_accounts`,
+  ya no una sola escrita a mano).
+
+#### Una cuenta receptora que no cuadra tiene que tener salida
+
+El bloqueo no tenía puerta trasera y por tanto atascaba para siempre. **#KP126085
+llevaba siete semanas** en la bandeja: el lector puso «Cerdo Gf S.a.c.» por
+«Grupo Gf S.a.c.» y eso basta para `mismatch`, aunque el celular receptor leído
+—···309— sea exactamente el de la cuenta de la empresa. Lo único que la pantalla
+ofrecía era `Rechazar`, que habría sido falso: el dinero llegó.
+
+- **El aviso dice QUÉ señal falló.** Decía «el destinatario o el celular receptor
+  no coincide», y ese «o» deja a quien revisa sin saber cuál mirar. Ahora
+  distingue los dos casos: celular nuestro con nombre que no encaja —casi siempre
+  lectura mala, pero también la forma que tendría un comprobante ajeno con
+  nuestro número delante— y celular que no es de ninguna cuenta, que es tajante.
+- **Un administrador puede validar dejando escrito por qué.** Queda en su propio
+  evento (`payment_recipient_exception`), con el nombre y el celular que se
+  leyeron, para poder listar después cuántos cobros se dieron por buenos sin que
+  la cuenta cuadrara y quién lo decidió.
+- **La excepción no afloja nada más.** Vive DENTRO de `validatePayment`, después
+  del nº de operación obligatorio y de la regla de cuatro ojos, así que no
+  alcanza a ninguna de las dos. Un camino aparte —escribir el estado a mano con
+  `overridePaymentValidation`— dejaba el pago sin validador, sin fecha, sin
+  asiento de liquidación y sin la confirmación de agencia: peor que el atasco.
+- **La regla NO se afloja por celular.** Lo tentador es dar por buena cualquier
+  lectura cuyo celular sea el nuestro. **#AUR177034** lo desmiente: celular ···309
+  y nombre «Rosa campos Mendoza». Las dos formas de fallar necesitan ojos, y por
+  eso la salida es una persona escribiendo el motivo y no una regla nueva.
 
 Mientras Kapta y el Excel convivan, validar un pago deja el comprobante listo
 para continuar y registra actor y fecha, pero **no cambia por sí solo la
@@ -4486,6 +4559,56 @@ Reglas de interfaz:
 - El flujo móvil de escaneo, cotejo y motorizados se diseña aparte. No se debe
   comprimir el drawer de escritorio y asumir que eso resuelve la operación móvil.
 
+### 25.1 La ficha se abre desde cualquier pantalla
+
+El drawer es **la ficha del pedido de todo el panel**, no una pieza del Master.
+Antes, «Ver actividad» en Despacho del día o el número de pedido en Grupo GF
+Courier mandaban al Master con `?q=…&abrir=…`: la persona perdía la cola, la
+ruta o la hoja en la que estaba trabajando y tenía que volver a buscarla.
+
+Reglas:
+
+- **Misma ficha en todas partes.** Despacho del día (cola, cajas, excluidos),
+  Rutas, Grupo GF Courier, Validación de pagos, Liquidaciones (conciliación) y
+  Liquidaciones 2 (columna Pedido) abren el mismo componente que el Master,
+  encima de la pantalla actual. No hay una «ficha resumida» distinta: lo que se
+  ve y lo que se puede hacer es idéntico, con los mismos permisos que en el
+  Master (`master.edit`, `master.override_status`, guías por courier y los
+  permisos de cierre). Quien no puede actuar en el Master tampoco puede desde
+  la ficha abierta en otra pantalla.
+- **La URL manda.** Fuera del Master la ficha se abre con
+  `?ficha=<pedido>&seccion=operar|informacion|historial` sobre la ruta actual,
+  conservando el resto de la query (pestaña, motorizado, mes, filtros). El
+  Master conserva su `?abrir=<pedido>&seccion=…`. La ficha global no actúa en
+  `/dashboard/pedidos`: ahí la abre el propio Master, y montar dos sería
+  enseñar dos paneles iguales. El parámetro no se llama `pedido` porque Grupo
+  GF Courier ya usa `?pedido=` para preseleccionar un pedido en su lista.
+- **Cerrar devuelve al mismo sitio.** Al cerrar solo desaparecen `ficha` y
+  `seccion`; la pantalla de atrás no se vuelve a pedir ni pierde sus filtros.
+  Un enlace que abre la ficha es un enlace de verdad: se puede abrir en otra
+  pestaña o copiar, y esa URL abre la ficha al cargar.
+- **Las acciones cuentan igual.** Registrar un pago, crear una guía, cambiar la
+  ruta o cerrar desde la ficha abierta en Despacho es la misma acción de
+  servidor que en el Master, con la misma autorización por tienda. Al terminar,
+  la ficha recarga su detalle y refresca la pantalla de atrás, para que la cola
+  o la hoja reflejen lo hecho.
+- **Enlace al Master.** La ficha abierta fuera del Master lleva «Abrir en
+  Master de Pedidos» en la cabecera: va a `/dashboard/pedidos?abrir=<pedido>`,
+  donde están la tabla, los filtros y las acciones en lote que la ficha sola
+  no trae.
+- **Móvil.** Fuera del Master la ficha ocupa la pantalla entera, con botón de
+  cerrar siempre a la vista en la cabecera fija y Escape en escritorio.
+- **Sección al abrir.** «Ver actividad» abre en `Actividad`; el número de pedido
+  abre en `Operar`. La pestaña inicial se respeta al montar (antes un reinicio
+  a «Operar» al cambiar de pedido pisaba la pestaña pedida).
+
+Implementación: `components/order-drawer.tsx` (la ficha),
+`components/order-master-shared.tsx` (formato, chapas y botones de anular que
+comparten Master y ficha), `components/order-drawer-host.tsx` (montada en
+`app/dashboard/layout.tsx`), `components/order-link.tsx` (`OrderLink`,
+`useOpenOrderDrawer`) y `lib/order-drawer-href.ts` (las URL; probado en
+`test/order-drawer-href.test.ts`).
+
 ## 26. Costo de producto (COGS)
 
 El módulo de Costos tiene tres ámbitos: costo logístico (§14), costo de producto
@@ -4564,6 +4687,11 @@ separada del usuario de acceso.
 - Vincular un usuario exige que ya sea miembro de la organización; un usuario se
   vincula a lo sumo a un motorizado. El vínculo es lo único que habilita
   `/reparto` (lo acota la RLS por `auth_rider_id()`), sin necesitar rol especial.
+- Un usuario cuyo único rol es `motorizado` no tiene tiendas, así que el Master
+  le abre solo los pedidos que son paradas de una ruta suya en curso o cerrada
+  (0186, `auth_rider_order_ids()`): lo que necesita para ver nombre, celular,
+  dirección y monto de cada parada, y nada de otros motorizados. La escritura
+  del Master sigue cerrada para él.
 
 ### Permisos
 
@@ -4901,6 +5029,10 @@ se conserva su QR; nunca se pega un segundo rótulo por elegir Grupo GF Courier.
 La acción vuelve a comprobar todas las reglas en el servidor, porque una tarifa,
 contrato o pausa puede cambiar mientras la bandeja está abierta. Un doble clic o
 dos operadores tomando el mismo pedido no pueden crear dos solicitudes activas.
+Volver a tomar un pedido que Grupo GF Courier ya tiene aceptado o programado
+—por ejemplo al escanearlo en Despacho del día días después de tomarlo— no lo
+rechaza por la salida que dejó esa toma: cuenta como ya tomado y sigue a la
+asignación.
 
 Las futuras tiendas externas pueden conservar asignación explícita según su
 contrato. La cola automática descrita arriba es el camino de mínima fricción
@@ -5203,3 +5335,675 @@ El orden obligatorio evita reescribir las pantallas sobre identidades ambiguas:
 
 Cada fase debe ser compatible con Aurela y Kenku y no debe convertir una
 solicitud logística externa en un pedido comercial de Shopify.
+
+### 29.12 Convergencia con Liquidaciones 2: la parada es la verdad
+
+Decisión del 19-09-2026. El mismo hecho físico —el motorizado fue a la casa
+de la clienta y cobró— se escribía en dos modelos que no se hablaban: la
+parada de Rutas (`delivery_stops`: tipada, con evidencia obligatoria y
+validación contra el saldo real, la que este módulo ya usa) y la fila de la
+hoja cuaderno de Liquidaciones 2 (texto libre, alias, observaciones). Dos
+pantallas del motorizado y dos puertas al Master con guardas distintas.
+
+**Rutas manda.** La parada es el registro canónico del resultado; la hoja de
+Reparto propio es una vista con vocabulario y cuadre encima de ella:
+
+- La parada aprende lo que solo la hoja sabía decir (0180): `written_status`
+  (lo escrito, literal), `written_status_code` (el estado del dominio Reparto
+  propio al que resolvió; null = sin equivalente) y `written_payment`. El enum
+  de tres estados y el motivo del catálogo siguen mandando para el cierre de
+  ruta; el detalle («LO DEJA», «CEL APAGADO») ya no se pierde.
+- Cada reporte de parada deja `stop_reported` en la actividad del pedido:
+  quién reportó, resultado, medio y monto cobrado, evidencia y nota. Hasta el
+  22-09-2026 era solo información y el Master cambiaba únicamente al cerrar la
+  ruta; desde v1.14 el resolver lee esa señal y mueve la etapa (§29.13, «La
+  etapa sigue al motorizado»). El cierre de la ruta sigue siendo lo que
+  liquida, por la puerta única. La foto y el comprobante se ven desde Reparto
+  y liquidación y desde la ficha del pedido (`GET /api/reparto/foto`, solo
+  para quien puede ver la parada).
+- Una ruta que nace del cuaderno también recibe su **caja**
+  (`scripts/backfill-boxes-from-routes.ts`, runbook `docs/runbooks/cuaderno-a-rutas.md`):
+  un ítem por parada, cotejado y recibido a la hora del reporte, con la custodia
+  en el motorizado. Sin ese paso la ruta queda «sin caja» y el panel de la caja
+  abre vacío. Un paquete que sale varios días se retira de la caja del día
+  anterior al final de ese día si no se entregó; la lista de Rutas cuenta lo
+  que estaba en la caja ese día.
+- Cada fila de cuaderno apunta a su parada (`sheet_rows.stop_id`, única). La
+  sincronización parada → fila corre al reportar, al cerrar la ruta y al abrir
+  la hoja del mes; una fila editada a mano no se pisa. Las filas del Excel
+  histórico sin parada siguen valiendo tal cual.
+- Una edición de la hoja sobre una fila atada se escribe **primero en la
+  parada por el mismo camino que /reparto** (`lib/stop-report.ts`: ruta en
+  curso, saldo, evidencia, catálogo); si Rutas rechaza, la edición falla.
+- **Una sola puerta al Master** (`lib/master-door.ts`) para el cierre de
+  ruta, Liquidaciones 1 y Liquidaciones 2, con las guardas unidas: la parada
+  debe estar entregada; con evidencia cuando el reporte es real
+  (`reported_by` presente) y se exige, como en las cargas de Grupo GF; y sin
+  observación abierta en la fila. Las paradas de backfill histórico
+  (`reported_by` null, ruta con nota «Completada desde el cuaderno histórico»)
+  no pueden tener foto y no se les exige.
+- **Una sola pantalla del motorizado**, /reparto: escribe como en el cuaderno
+  (texto libre con sugerencias de su hoja), el detalle del pago, y el motivo
+  obligatorio cuando cobra distinto al total. Un pedido que lleva sin haber
+  pasado por despacho se añade como parada en su ruta del día; un punto sin
+  pedido Shopify (Kast) vive solo en la hoja, porque la parada exige pedido.
+  /reparto/cuaderno redirige.
+- **Asimetría documentada, no resuelta**: «rechazado» y «cancelado» del
+  cuaderno se traducen al motivo `rechazado` de Rutas, con el que el cierre de
+  ruta anula el pedido; desde la hoja, «Aplicar al Master» nunca anula (§30.3).
+- **Límites de efectivo (§29.9) activos**: al asignar a la ruta diaria se suma
+  el efectivo previsto (lo que ya lleva más lo nuevo, sin pedidos pagados en
+  Shopify); pasa del umbral → aviso; pasa del límite → rechazo salvo
+  autorización explícita de quien administra el operador.
+- **Backfill de la historia**: `scripts/backfill-stops-from-sheets.ts` crea
+  rutas cerradas y paradas a partir de las filas históricas con pedido, sin
+  tocar el Master ni las liquidaciones. Un pago sin dato en una fila
+  entregada queda como `efectivo` en la parada (la parada lo exige) con
+  `written_payment` null, para que se vea que no se escribió.
+
+### 29.13 Despacho en dos pasos y el gesto único (19-09-2026)
+
+Auditoría y rediseño en `docs/plan/despacho-crm.md`. Llevar un pedido de
+«disponible» a «en poder del motorizado» costaba 9-10 clics en tres pantallas
+y dejaba tres huecos: el motorizado no podía decir «no lo recojo», mover un
+paquete entre cajas no dejaba evento, y el mismo gesto de escanear o
+fotografiar vivía en tres componentes que decidían por su cuenta.
+
+**Dos pasos para el supervisor, en una pantalla, con la pistola en la mano.**
+La pestaña «Despacho del día» de Grupo GF Courier abre en **modo escaneo**: el
+supervisor elige motorizado (y el día de la caja, hoy por defecto, nunca un día
+ya pasado) y escanea QR tras QR. Ese día manda también después del corte de
+las 11:30: el corte rige lo que se toma sin despachar todavía, no a la mesa
+que ya tiene el paquete en la mano; si la solicitud estaba prevista para otro
+día, se mueve al de la caja con `logistics_request_rescheduled`. Cada lectura, en un
+solo gesto, **toma** el pedido si hacía falta, lo **pone en la caja** del
+motorizado del día (`scanAssignToRider`, sobre las mismas acciones de tomar
+y asignar; eventos `logistics_request_accepted`, `dispatch_route_assigned`).
+**Asignar no coteja** (decisión del 22-09-2026): hasta esa fecha el mismo
+escaneo dejaba el paquete «cotejado por oficina» y la caja se saltaba el
+control físico. Ahora asignar por QR y desde la lista es lo mismo, y alguien
+en oficina confirma después, en «Verificar caja», escaneando el QR o
+tecleando el código, que cada paquete está de verdad en la caja física del
+motorizado (`office_checked`). Con el modo `exigir` la caja no sale sin ese
+100 %. El escaneo de asignación **no espera al servidor para responder**:
+cada QR aparece al instante como «asignando…», el número «N en la caja de
+Roy» sube en ese momento y la cámara acepta el siguiente; los QR se procesan
+en cola, en orden, sin descartar ninguno. En el servidor el escaneo hace un
+solo control de permisos, no reconstruye la página de Grupo GF y deja el
+recálculo del Master para después de responder (`after()`); el navegador
+refresca una sola vez, dos segundos después del último resultado. Antes cada
+QR tardaba 6-7 s porque la página entera (≈1.700 pedidos) se reconstruía
+tres veces por escaneo. «Verificar caja», «Recibir carga» y «Recibir mi caja» usan la misma
+cámara en serie que la asignación: queda abierta tras cada lectura y debajo
+dice «Verificados 3 de 4 · faltan 1» (o «Recibidos …»), y se cierra con
+«Listo» o sola al completar la caja. Si
+el pedido se tomó días atrás y su fecha prevista ya pasó, la caja no es la de
+aquel día (cuya ruta está liquidada) sino la de hoy o la elegida: la fecha
+prevista se mueve hacia adelante y queda `logistics_request_rescheduled` en el
+historial. Nunca se mueve hacia atrás. El
+límite de efectivo de §29.9 se avisa en línea y bloquea salvo autorización
+explícita. La lista viva dice qué pasó con cada QR: asignado y cotejado; ya
+estaba en esa caja; está en la caja de otro motorizado (y ofrece moverlo); no
+elegible con el motivo; o QR desconocido. Sin motorizado elegido, los QR se
+guardan en una bandeja y se asignan todos al elegirlo («escanear primero»).
+La lista con selección múltiple queda como vía secundaria. Desde el 22-09-2026
+las tres vistas van en **una sola columna con tres pestañas** —«Asignación por
+QR», «Desde la lista» y «Cajas de hoy» con el número de paquetes del día en un
+círculo— en vez de la lista a media pantalla y las cajas a la derecha; «Desde
+la lista» es una **tabla de columnas** (pedido, tienda, cliente, distrito,
+estado, creado, sale, venta, tarifa), con anchos fijos para lo corto y
+flexibles para el resto, y el texto que se trunca se lee entero al pasar el
+ratón. En «Cajas de hoy», las cajas por motorizado con el cotejo de oficina en
+línea para lo que faltara; desde la misma fila un paquete se **quita** (con motivo,
+`package_removed`) o se **mueve** a otro motorizado
+(`dispatch_route_reassigned`, con origen y destino). Mover abre la carga del
+destino antes de retirar del origen: si el destino ya está en cotejo, no se
+toca nada, igual que al asignar (§29.5).
+
+**Un paso para el motorizado, antes de la ruta.** Mientras su carga esté
+cotejada por oficina y sin custodia, `/reparto` abre en «Recibir mi caja»: un
+escaneo por paquete y, por paquete, «No lo recojo» con un motivo corto (no
+está en la caja, dañado, no cabe, otro). El rechazo (0182, `gf_rider_decline`)
+retira el paquete de la carga con rastro «No recogido por X: motivo», deja
+`pickup_declined` en el pedido, devuelve la solicitud a `accepted` con
+observación —reaparece en «por asignar» y el supervisor la asigna a otro— y
+libera la salida para otra caja el mismo día. **El 100 % se calcula sobre los
+aceptados**: con lo demás recibido, la custodia pasa en el mismo acto y las
+paradas se crean solo para lo aceptado. La ruta aparece recién con la custodia
+cambiada. Un paquete ya recibido no se rechaza desde el teléfono: lo retira el
+supervisor.
+
+**La verificación del motorizado tiene tres modos, y se deciden en datos.**
+`logistics_providers.rider_pickup_mode` (0185; reemplaza el booleano
+`rider_pickup_check_required` de 0183, migrado `true`→`exigir` y
+`false`→`ninguno`) gobierna qué hace el motorizado con su caja. Se lee en un
+solo sitio en código (`riderPickupMode`, `lib/grupo-gf-courier-route-access.ts`)
+y en uno en SQL (`gf_rider_pickup_mode`); sin proveedor se asume `exigir`.
+
+- **`exigir`**: todo como se describe arriba. Oficina coteja, el motorizado
+  escanea su caja desde «Recibir mi caja» y la custodia cambia al 100 % de los
+  aceptados; la ruta aparece recién entonces.
+- **`confirmar`** (valor de producción del 19-09-2026 al 22-09-2026, que
+  vuelve a `exigir` para que oficina verifique toda caja antes de que salga): **basta con
+  asignar y nada bloquea la ruta**, pero el motorizado dice **«Lo llevo»** por
+  cada pedido al sacarlo del almacén y meterlo en la caja de la moto. En cuanto
+  el supervisor pone paquetes en la caja del día, la custodia pasa
+  (`gf_assign_custody`, nota «Custodia al asignar: el motorizado confirma cada
+  paquete al llevarlo»), el trigger crea las paradas y `/reparto` muestra la
+  ruta con cada parada **«Por confirmar»**. En la parada, «Lo llevo» abre el
+  gesto único (`motorizado_recepcion` sin caja → `gf_rider_confirm_pickup`, que
+  marca `pickup_checked_at` y deja `pickup_checked` con la nota «Lo lleva
+  Roy»); «Confirmar todos» en la cabecera abre el mismo escáner en **modo
+  continuo**: la cámara se queda abierta tras cada lectura, ignora el mismo QR
+  repetido seguido, muestra bajo el visor «Confirmados X de N · faltan Y» con
+  su barra y la última lectura (también los errores, sin cerrarse), y se
+  cierra con «Listo» o sola un segundo después de confirmar el último. El
+  escaneo de asignación de Despacho del día usa el mismo modo con «N en la
+  caja de Roy». **«No lo llevo»** con motivo (`gf_rider_decline`, que en este
+  modo admite la caja en custodia) retira el ítem, **borra su parada si sigue
+  pendiente**, devuelve la custodia a la empresa y la solicitud vuelve a «por
+  asignar» con el evento `pickup_declined` («No lo llevó Roy: motivo»). Ese
+  paquete se puede volver a asignar a cualquier motorizado, incluida la misma
+  caja del mismo día: la fila retirada revive (0187) y el rechazo anterior
+  queda solo en el historial. Lo
+  asignado y no confirmado es «no se lo llevó»: en «Despacho del día» cada caja
+  muestra **confirmados/asignados** junto a los cotejados y un desplegable
+  **«Sin confirmar por Roy · N»** con «Mover a…» y «Quitar»
+  (`gf_supervisor_withdraw`: mismo retiro, con `package_removed` «Retirado sin
+  confirmar…»); lo ya confirmado no se retira desde ahí. Una parada sin
+  confirmar **se entrega igual**: al reportarla, `delivery_stops.pickup_confirmed`
+  guarda si había «Lo llevo» en ese momento y, si no lo había, la bitácora de
+  la parada y el pedido (`delivered_unconfirmed_pickup`) dicen «Entregado sin
+  confirmar recojo». El paquete sumado a una caja ya en custodia
+  (`gf_add_item_in_custody`) también nace por confirmar.
+- **`ninguno`**: basta con asignar y no se pide nada más (lo que 0183/0176
+  llamaban «flag apagado»): custodia al asignar con la nota «verificación del
+  motorizado desactivada», paquetes sumados ya cotejados y recibidos, y ninguna
+  pertenencia se altera una vez que la caja salió.
+
+En `confirmar` y `ninguno` el cotejo de oficina posterior se registra como
+«registro opcional», y hay **una sola carga por motorizado y día** (0184): si
+vuelve a la oficina, los paquetes nuevos se suman a la misma carga y ruta
+(`gf_dispatch_load_open` la reutiliza; `gf_add_item_in_custody` mete el paquete
+con su parada sin duplicar) y el cierre es por día. En `exigir` una carga en
+custodia sigue abriendo una carga adicional, como en §29.5. El modo se cambia
+sin desplegar:
+
+```sql
+update logistics_providers set rider_pickup_mode = 'exigir'    where code = 'grupo-gf-courier'; -- verificación antes de la ruta
+update logistics_providers set rider_pickup_mode = 'confirmar' where code = 'grupo-gf-courier'; -- «lo llevo» por paquete (producción)
+update logistics_providers set rider_pickup_mode = 'ninguno'   where code = 'grupo-gf-courier'; -- basta con asignar
+```
+
+**Despacho absorbe las pestañas anteriores (19-09-2026).** «Pedidos
+disponibles» y «Pedidos tomados» salen de la barra de Grupo GF Courier y
+quedan como «vista anterior» bajo «⋯ Más vistas» (mismo `?tab=`, con una nota
+arriba). Lo que aportaban vive en Despacho del día: en la fila de «Desde la
+lista» el teléfono y la fecha de creación, la búsqueda por teléfono, la chapa
+«salida previa» —el mismo «Con salida previa» de la vista anterior; hasta el
+22-09-2026 decía «2.º intento»— con su filtro; «N sin condiciones» junto al
+contador abre la lista de excluidos con el motivo de cada uno (tarifa
+faltante, distrito inválido, servicio pausado, ya en caja, sin salida
+armable) y enlace al Tarifario; un picker «Filtros» (tienda, distrito, con
+salida previa, armados, tomados sin caja, fecha de creación) con chips; y tiles de
+métricas encima de Asignar, una por filtro con su cantidad, que abren la lista
+o las cajas ya filtradas.
+
+**Etapa, subetapa y fecha pactada en el picker de Filtros (22-09-2026).** El
+flotante «Filtros» de «Desde la lista» abre con tres grupos de chips como los
+del Master (§6), antes de tienda, distrito y fecha de creación: un solo sitio
+para filtrar. **Etapa** —las seis macroetapas numeradas con «N pedidos»,
+contadas sobre **todos los pedidos de Grupo GF**: la cola de asignación
+(Preparación · por generar rótulo / por armar, Por despachar · listo para
+asignar) más los que ya salieron con una caja del courier, en la etapa en que
+el Master los tenga (En curso, Por cerrar, Finalizado). Sin ninguna etapa
+elegida la lista es la cola de asignación, que es para lo que está la
+pantalla; elegir una etapa abre esa etapa entera, y los pedidos que ya
+salieron se listan **para seguimiento, sin casilla**: su subetapa del MOM, el
+motorizado, la caja del día y si «lo lleva», está cotejado o sigue sin
+cotejar—, **Subetapas** —solo con una etapa elegida, y son las de esa etapa en
+el orden del MOM (aunque estén en cero); si una fila trae otra por un dato
+viejo del Master, aparece detrás; cambiar de etapa apaga las subetapas que
+dejan de verse— y **Fecha pactada** —Vencidos, Hoy, Próximos sobre la salida
+prevista: la de la solicitud tomada o, si el pedido sigue disponible, hoy o
+mañana según el corte de las 11:30; «vencido» es un tomado cuya salida ya
+pasó—. Dentro de cada grupo se encienden varios chips a la vez (basta con
+cumplir uno) y los grupos se combinan entre sí y con el resto del picker, la
+búsqueda y las tiles; sin ningún chip encendido el grupo es «todas», y el
+total es «N en cola» (o «N pedidos en esa etapa») bajo la búsqueda. **Cada
+chip lleva su cantidad facetada**: cuántas filas quedarían al tocarlo con el
+resto de filtros tal como están, sin contar los chips de su propio grupo, de
+modo que el número de un chip encendido coincide con el total. Un chip en
+cero se muestra apagado; uno encendido se apaga tocándolo o desde «Filtros
+activos» bajo la búsqueda, que lo lista con el flotante cerrado. Las tiles de
+métricas siguen contando solo la cola. Lógica pura en `lib/dispatch-day.ts`
+(`queueSubstageOptions`, `setStages`, `queueFacetCounts`, `scheduledBucket`),
+probada en `test/dispatch-day.test.ts`; la fila de la cola trae `macro_stage`
+y `macro_substage` del Master. Nada de esto cambia acciones de servidor. Los cuatro segmentos de «Pedidos tomados» siguen
+visibles en Cajas de hoy: cada caja dice «N paq. · armados · cotejados ·
+confirmados», cada paquete lleva su chapa de estado (por armar / armado /
+cotejado / confirmado / no lo llevó) y un filtro rápido Todos · Por armar ·
+Listos para cotejo · Sin confirmar; «Sin ruta» es «tomado · sin caja» en la
+lista. Nada de esto cambia acciones de servidor.
+
+**El gesto único.** Escanear o fotografiar es un solo componente
+(`ScanAction`) y el contexto lo fija la pantalla, nunca el usuario:
+`supervisor_asignacion` → tomar + asignar (sin `office_checked` desde el 22-09-2026);
+`oficina_cotejo` → `office_checked`; `motorizado_recepcion` →
+`pickup_checked` o `pickup_declined` (con caja recibe; sin caja es «Lo llevo»
+sobre la ruta en custodia); `motorizado_entrega` → foto de la
+parada; `supervisor_retiro` → `package_removed` con motivo. Cada uno deja su
+evento en el pedido y recalcula el Master.
+
+**Trazabilidad.** La pestaña «Actividad» del drawer del Master etiqueta en
+español todos los hitos del camino —tomado, asignado, cotejado en oficina,
+«Lo lleva Roy», «No lo llevó Roy: motivo», movido, retirado, entregado,
+«Entregado sin confirmar recojo», aplicado al Master— con actor y hora, sobre
+`order_events`; no hay otra línea de tiempo.
+«Ver actividad» desde Grupo GF Courier abre ese drawer en esa pestaña.
+
+**La ficha dice quién tiene el paquete y en qué quedó (22-09-2026).** Hasta
+aquí «Salidas y guías» enseñaba de una salida propia lo mismo que de
+cualquier otra —courier, código y `delivery_status`— y la tarjeta «Revisar la
+salida activa» prometía un «último estado del courier» que no se veía: lo del
+motorizado solo estaba en «Actividad», como texto. Ahora el detalle del pedido
+lee, por cada salida de Grupo GF, la caja del motorizado
+(`dispatch_manifest_items` + `dispatch_manifests`) y la parada de su ruta
+(`delivery_stops` + `delivery_routes` + `riders`), y bajo la salida pinta una
+línea con lo más reciente, en este orden de precedencia: la parada reportada
+—**Entregado por Roy** · hora · cobro (Yape S/ 89 / sin cobro) · «entregado
+sin confirmar recojo» si no hubo «Lo llevo» · nota, con la foto y el
+comprobante (`GET /api/reparto/foto`); **Postergado por Roy** cuando el motivo
+es «reprogramado por el cliente» o «no estaba / volver luego»; **No entregado
+por Roy** con el resto de motivos—; si no, la caja: **No lo llevó Roy** ·
+motivo · «vuelve a por asignar»; **Retirado de la caja de Roy** · motivo;
+**Lo lleva Roy** · desde hora · caja del día (y carga si no es la primera) ·
+parada pendiente; **En la caja de Roy** · cotejado o sin cotejar · sin «Lo
+llevo»; y una parada del cuaderno sin caja se lee como **En la ruta de Roy**.
+Sin ficha de motorizado no se inventa un nombre («el motorizado»). La misma
+frase encabeza la tarjeta «Revisar la salida activa» en En curso. Lógica pura
+en `lib/gf-delivery.ts`, probada en
+`test/gf-delivery.test.ts`; lectura en `getOrderMasterDetail`
+(`loadGfDeliveries`, con service role porque las políticas de caja son del
+supervisor y las de parada de la tienda o del motorizado, y quien abre la
+ficha ya pasó el filtro de `order_master`).
+
+**La etapa sigue al motorizado (v1.14, decisión del 22-09-2026).** Hasta aquí
+un pedido de Grupo GF quedaba en «En curso · En tránsito» desde que se
+asignaba con custodia hasta que se cerraba la ruta, aunque el motorizado ya lo
+hubiera entregado o postergado; §29.12 lo decía a propósito («la parada es una
+declaración»). Se aprueba cambiarlo: el resolver (`gfRiderSignal`,
+`lib/order-macro-stage.ts`) lee de `order_events` la **última** señal del
+motorizado sobre la salida propia vigente —`pickup_checked`, `stop_reported`,
+y `pickup_declined` o `package_removed`, que la anulan— y decide así:
+
+| Última señal del motorizado | Macroetapa | Subetapa |
+| --- | --- | --- |
+| Asignado con custodia, sin «Lo llevo» | En curso | En tránsito (como hasta ahora) |
+| «Lo llevo» (`pickup_checked`) | En curso | En reparto |
+| Parada **entregada** | Por cerrar | Validación de cierre pendiente |
+| Parada **no entregada** por «reprogramado por el cliente» o «no estaba / volver luego» | En curso | Por reprogramar Lima |
+| Parada **no entregada** por rechazado, dirección errada, no contesta, sin dinero u otro | Por cerrar | Devolución física pendiente |
+
+Cada reporte de parada **recalcula el Master en el acto** (`writeStopReport`),
+sin esperar al cron: el pedido entregado pasa a Por cerrar al momento.
+Deshacer un reporte (volver la parada a pendiente) deja su propio
+`stop_reported` con estado «pendiente», que anula los reportes anteriores y
+devuelve el pedido a lo que había antes («Lo llevo» → En reparto). Las
+paradas del cuaderno, sin `shipment_id`, valen para la salida propia
+vigente. Una señal de otra salida o de un courier externo no cuenta. El
+`since` de la etapa es la hora de esa señal. **El cierre de la ruta no cambia
+de sitio**: sigue escribiendo por la puerta única (`applyDeliveriesToMaster`)
+y, cerrada, el pedido entregado pasa a «Pendiente de liquidación» y con la
+liquidación a «Finalizado · Entregado cerrado», como cualquier Lima. Para que
+eso ocurra, una salida propia cuya parada se reportó entregada **cuenta como
+entregada** en las obligaciones de cierre: nadie escribe
+`delivery_status = entregado` en esas salidas, y sin esta regla todo pedido de
+Grupo GF caía en «Devolución física pendiente» o «Salida adicional activa» al
+cerrar la ruta. Reasignar un paquete postergado deja un `pickup_checked`
+nuevo, más reciente, y el pedido vuelve a «En reparto». La versión del
+resolver sube a `mom-v1.14` para que el cron reconcilie el histórico. Pruebas
+en `test/order-macro-stage.test.ts` («motorizado propio: lo que reporta mueve
+la etapa»).
+
+### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
+
+**Antes** la pestaña «Rutas» tenía dos subpestañas —«Cajas y cotejos» (solo
+las cajas con pedidos tomados, y «Abrir caja» llevaba a otra pantalla con
+KPIs y una columna de «Rutas recientes») y «Reparto y cierre diario» (la tabla
+de `delivery_routes` de siempre)— y una misma ruta se veía en las dos con
+datos distintos.
+
+**Ahora** hay una sola lista, `getCourierRouteLedger`
+(`lib/courier-route-ledger.ts`): una fila por ruta de reparto —motorizado y
+día, `delivery_routes`— con su caja de despacho cuando la tiene
+(`dispatch_manifests` de courier propio; si hay varias cargas se enseña la
+última y se suman sus paquetes). Las rutas que trajo el cuaderno (§29.12) no
+tienen caja y aun así están. La lista se agrupa por fecha con la cabecera de
+cada día pegajosa, hoy primero y luego hacia atrás, y se filtra por motorizado
+y por fecha (Hoy · un día concreto · Todas) con el mismo picker de Despacho
+del día. «Hoy» y «Todas» filtran en el navegador sobre las últimas 150 rutas;
+un día concreto lo trae el servidor (`?dia=`), porque puede ser anterior.
+
+**Cada fila** dice motorizado y carga, la situación, asignados / armados /
+cotejados / recibidos, efectivo previsto (§29.9), avance y liquidación. La
+situación es una sola, del momento más temprano al más tardío: borrador →
+cotejo de oficina → lista para recojo → en poder del courier → en reparto →
+cerrada → liquidada (`ledgerSituation`); las tres primeras salen del estado
+de la caja, las tres últimas del estado de la ruta y de `rider_settlements`.
+Sin caja, armados/cotejados/recibidos van en «—» y el avance es lo ya
+reportado por el motorizado. El aviso «N pedidos sin ruta» sigue arriba y
+lleva a Despacho del día.
+
+**Clic en la fila** abre la caja a la derecha, como la ficha del pedido
+(§25.1): `?caja=<carga>` en la URL, o `?ruta=<ruta>` cuando no hay caja
+(`lib/courier-box-href.ts`, `components/courier-box-drawer.tsx`). Dentro van
+los tres pasos de la mesa de despacho —Agregar pedidos, Verificar caja,
+Recibir carga— con el mismo componente que usa Almacén (`DispatchBoxPanel`,
+extraído de `dispatch-workspace.tsx`), sin la columna de rutas recientes ni
+los KPIs, y el acceso a «Reparto y liquidación» de esa ruta. Una ruta sin
+caja lo dice y solo ofrece el reparto. Cerrar reemplaza la URL sin apilar
+historial y conserva pestaña y filtros; cada acción refresca la fila de
+atrás. En el teléfono el panel ocupa toda la pantalla.
+
+**Pantallas que quedan.** `/dashboard/courier/reparto?id=` sigue siendo el
+reparto y cierre de UNA ruta (paradas, reporte, cierre, pago del
+motorizado); sin `id` manda a la lista. `/dashboard/courier/rutas` es la
+misma lista y el mismo panel para quien coteja, recibe o arma rutas sin
+administrar el courier; quien administra cae en la pestaña. Los enlaces
+antiguos `?manifiesto=` abren esa caja en la pestaña (`legacyManifestHref`).
+Nada de esto cambia acciones de servidor ni la base.
+
+## 30. Liquidaciones 2 — hojas por dominio
+
+Plan y hallazgos en `docs/plan/liquidaciones-2.md`. Base en la migración 0176;
+código en `lib/sheets/`, `app/dashboard/liquidaciones-2/` y
+`components/sheets-board.tsx`.
+
+
+**Reparto y liquidación, en el mismo panel (19-09-2026).** La columna
+«Liquidación» de cada fila es un enlace —«Reparto y liquidación» o el estado
+de la liquidación si ya existe— que abre a la derecha el reparto y el cierre
+de la ruta (`?reparto=<ruta>`, `components/courier-route-report-drawer.tsx`,
+datos por `loadCourierRouteReport`): paradas, «Terminar ruta operativa»,
+«Cerrar con paradas sin reportar», «Reabrir ruta» y el pago del motorizado, el mismo
+`RoutesBoard` de antes. Solo hay un panel abierto a la vez: abrir el reparto
+cierra la caja y viceversa. La caja ya no lleva enlaces a esa pantalla; la
+página `/dashboard/courier/reparto?id=` redirige a la lista con ese panel
+abierto. Añadir paradas y los reintentos no van en ese panel: eso es de la
+caja (paso 1) y de Despacho del día. El panel no repite datos: una fila de
+métricas (paradas, efectivo en manos, Yape/POS, ganancia base, adicionales y
+saldo con su explicación) y UNA tabla de paradas con cliente, pedido, tienda,
+distrito, resultado, cobro, respaldo, tarifa, adicional y ganancia, con scroll
+horizontal en pantallas estrechas y el cliente fijo a la izquierda. Tarifa y
+adicional quedan como plegables al pie; «+ adicional» en la fila abre el
+formulario con ese punto elegido.
+
+**Reabrir ruta.** Una ruta cerrada vuelve a «en curso» (`reopenRoute`, permiso
+`routes.manage`) solo mientras su liquidación de origen `ruta` siga en
+borrador y el cálculo diario del motorizado no esté aprobado. Descarta esa
+liquidación en borrador, deja `route_reopened` en cada pedido de la ruta y no
+toca el Master: lo que se corrija cruza al volver a terminar la ruta, por la
+puerta única. En la lista de Rutas, una ruta cerrada muestra el resultado del
+reparto (entregados · no) en vez de las barras de la caja, y una ruta abierta
+sin paradas ni paquetes no se lista.
+
+**Agregar pedidos desde la caja.** El paso 1 del panel de la caja escanea
+sobre ESA caja (`components/gf-box-add-packages.tsx`, `scanAssignToRider`
+con el motorizado y el día de la caja): toma el pedido si hace falta y lo
+mete, sin cotejarlo (la verificación es el paso 2), con la misma lista de resultados de Despacho del día
+(ya estaba, en otra caja → Mover, límite de efectivo → Autorizar, no
+elegible). No hay motorizado que elegir: la caja ya es de uno.
+
+**Recojo con la carga en custodia.** En modo «confirmar» o «ninguno» (0185)
+el paso 3 sigue abierto con la carga en custodia: «N paquetes sin confirmar
+por Roy» y el escáner activo para los que faltan; es el respaldo cuando el
+motorizado no puede confirmar desde su teléfono. «La entrega de esta carga
+quedó registrada» solo cuando todos están confirmados. El paso 2 con
+custodia queda cerrado: la caja ya salió. El modo viaja con los datos de la
+mesa (`DispatchWorkspaceData.pickupModeByOrg`).
+### 30.1 Qué es y de dónde viene
+
+El cierre de Lima vivía en un Google Sheet («MASTER KEY 2.0»): una hoja por
+repartidor, una por courier, dos hojas consolidadas por tienda con una columna
+por repartidor y un resolver de estatus hecho con COUNTIFS. El cruce del
+16-09-2026 contra la base mostró que los pedidos y montos de Shopify coinciden
+casi al 100 %, pero que **Lima vivía en la hoja y Provincia en Kapta**: de
+4.764 pedidos entregados por repartidor según la hoja, Kapta no tenía ninguno
+como entregado por repartidor; y 2.563 entregas de Provincia que Kapta conoce
+por las APIs estaban «Pendiente» en la hoja. Liquidaciones 2 junta las dos
+verdades en hojas configurables dentro de Kapta.
+
+### 30.2 Dominio, hoja y columna
+
+- **Dominio**: el grupo que define el contrato. Clave de fila (pedido, guía,
+  punto de ruta, valor de catálogo, periodo), vocabulario de estados con su
+  equivalencia en Kapta y plantilla de columnas. Son seis: Pedidos, Catálogos,
+  Reparto propio, Courier externo, Consolidado e Indicadores.
+- **Hoja**: instancia del dominio (Roy, Aliclik Lima, Consolidado · Aurela).
+  Hereda la plantilla y puede añadir columnas manuales; no puede romper el
+  contrato. Las de Pedidos y Consolidado se crean una por tienda.
+- **Columna**: cuatro tipos y nada más. `campo` lee del pedido y es de solo
+  lectura; `manual` se teclea y deja historial; `lookup` busca en otra hoja;
+  `derivada` aplica una regla con nombre. No existe un motor de fórmulas: lo que
+  en la hoja era una fórmula por fila aquí es una regla probada.
+- Alexis y Urpi son **couriers externos** aunque en el Excel tuvieran hoja de
+  puntos. Reparto propio son los motorizados de Grupo GF Courier.
+
+### 30.3 Estados por dominio y equivalencia con Kapta
+
+Cada dominio tiene una lista cerrada de estados. Cada estado equivale a **un
+estado operativo** de Kapta (§6) —el general se deriva de ahí— y declara su
+efecto sobre el pedido:
+
+| Efecto | Qué hace | Aporte al Consolidado |
+| --- | --- | --- |
+| informa | No cierra nada; registra el intento o el avance | T |
+| entrega | Propone el cierre como entregado, con la fila como evidencia | E |
+| devolucion | Propone el cierre como devuelto | D |
+| anulacion | El courier lo da por cancelado. **No anula el pedido Shopify** (§9.4) | T |
+
+Reglas:
+
+1. Lo que llega de una hoja o de un archivo se normaliza (mayúsculas, sin
+   acentos, sin puntuación final) y se busca entre los **alias de la hoja**. Cada
+   hoja tiene los suyos porque Roy no escribe como Aliclik.
+2. Un valor sin equivalente **no se adivina**: se guarda como alias sin
+   equivalente, la fila queda a revisión y el alias aparece en la configuración
+   con una sugerencia que nadie aplica sola. Es la misma disciplina que Tanders.
+3. Mapear a `entrega` no cierra el pedido por sí solo. El cierre pasa por la
+   puerta única a entregado (§11.4). Un pedido entregado por el repartidor y
+   anulado en Shopify queda como observación abierta, nunca se resuelve solo.
+4. Las equivalencias se editan desde la pantalla por quien tiene
+   `sheets.manage`. La semilla (lib/sheets/statuses.ts) es el vocabulario real
+   del Excel más lo que ya traducen los adaptadores de Aliclik, Shalom y
+   Tanders; una vez sembrada, manda la base.
+
+### 30.4 El Consolidado
+
+Una fila por pedido de la tienda. Cada hoja de Reparto propio o Courier externo
+aporta una marca por pedido —E entregado, T en tránsito o con intento, D
+devuelto, 0 nada— y el Estatus se resuelve con la precedencia de la hoja
+«Revisar»: **Entregado > Devuelto > Anulado > Tránsito > Pendiente**, con una
+diferencia deliberada: «Anulado» solo lo pone Shopify. Lo que Kapta ya sabe del
+pedido (su estado general, que integra las APIs de Provincia) entra como un
+aporte más, así que Provincia está cubierta desde el primer día.
+
+Columnas derivadas: zona (catálogo por distrito; si el distrito no está, la
+cobertura de Kapta decide), «# Motos Lima» (intentos, solo en pedidos abiertos
+de Lima), «Entregado por» y «Diferencia», que dice cuando la hoja y el Master no
+coinciden. La diferencia se muestra; no se corrige sola.
+
+### 30.5 Observaciones de cuadre
+
+Cuando un valor externo no coincide con el de Kapta —monto, estado, pedido,
+courier— se abre una observación con la hoja y fila de origen, el pedido, los
+dos valores, la diferencia, un motivo del catálogo y una nota. Resolver exige
+motivo; con «Otro», exige nota. El catálogo inicial sale de lo que mostraron
+los datos: descuento en puerta, cobro parcial con adelanto, producto adicional
+o faltante, redondeo del courier, delivery cobrado aparte, anulado en Shopify
+tras entregar, error de transcripción, estado sin equivalente, pedido no
+encontrado, otro.
+
+### 30.6 Historial y permisos
+
+Cada celda manual deja una fila append-only en `sheet_cell_history` con valor
+anterior, nuevo, actor y motivo. `sheets.edit` (vendedora, admin, owner)
+escribe celdas y abre o resuelve observaciones; `sheets.manage` (admin, owner)
+configura dominios, hojas, columnas, estados y alias. Un viewer solo lee.
+
+### 30.7 Reparto propio: una vista con vocabulario sobre la parada
+
+Desde el 19-09-2026 (§29.12) la hoja de Reparto propio no es un segundo
+registro: cada fila con parada apunta a ella (`stop_id`) y se llena desde la
+parada; lo que sigue describe el vocabulario y la importación del Excel
+histórico, cuyas filas no tienen parada y siguen valiendo tal cual hasta que
+el backfill les crea una.
+
+Una hoja por motorizado, con clave de fila **fecha#pedido**: un mismo pedido
+puede salir varios días (cada salida es una fila) y dos veces el mismo día se
+conserva con sufijo y aviso. Las columnas son las del cuaderno: fecha, punto,
+tienda, cliente, pedido, estado, efectivo, a cobrar, método de pago y dos
+observaciones, más las que Kapta añade: «En Kapta» (si el pedido existe),
+«Reprogramar para», los valores escritos tal cual y «Revisión».
+
+Reglas del lector, que es el mismo para el archivo subido desde la pantalla y
+para la importación histórica:
+
+1. La hoja se lee por bloques de fecha. Un bloque cuya fecha no se entiende
+   deja sus filas **sin fecha y a revisión**; no se toma la del bloque vecino.
+2. El estado escrito se normaliza y se busca en los alias de la hoja. Los días
+   de la semana, «hoy» y «mañana» son **reprogramado** con la fecha calculada
+   a partir del día de la ruta. Lo que no está en el vocabulario se guarda
+   literal, la fila queda a revisión y el alias aparece en la configuración
+   con una sugerencia que nadie aplica sola.
+3. Un monto que no es número queda vacío, nunca cero. Un método de pago fuera
+   de la lista cerrada se guarda literal en «Método escrito».
+4. El pedido se vincula por número dentro de las tiendas de la organización.
+   Sin pedido en Kapta la fila igual se guarda: la historia anterior a la
+   conexión de la tienda no está en Kapta y sigue valiendo para liquidar.
+5. Re-importar actualiza lo importado y **respeta lo editado a mano**.
+6. Los puntos ajenos a Shopify (tienda Kast) se conservan sin vínculo.
+
+Aporte al Consolidado: cada fila vinculada aporta la marca del efecto de su
+estado (entrega → E, devolución → D, informa o cancelación → T). Una fila con
+estado sin equivalente aporta T: existe, luego el pedido salió a ruta.
+
+Cuatro estados del cuaderno son el **detalle de una no entrega** y se leen
+así (definidos por la operación el 16-09-2026):
+
+| Escrito | Estado | Equivalente Kapta | Efecto |
+| --- | --- | --- | --- |
+| LO DEJA | No salió a reparto: se puso en la caja del motorizado pero quedó en almacén | nunca_salio_a_reparto | sin_salida (aporta 0, no cuenta como intento) |
+| DESARMAR | No se entregó y el paquete se desarma en almacén | devuelto_al_origen | devolucion (D) |
+| DICE QUE RECIBIÓ / YA RECIBIÓ | No se entregó: la clienta dice que ya lo recibió por otro delivery | intento_de_entrega | informa (T) |
+| REPETIDO | No se entregó: el pedido estaba repetido | intento_de_entrega | informa (T) |
+
+«OK» como método de pago significa **pagado antes por Shopify**: el cruce del
+16-09-2026 encontró 91 de 106 pedidos vinculados con checkout pagado.
+
+**Courier externo con cuaderno.** Alexis y Urpi no son Reparto propio: son
+couriers externos que reportan con el mismo cuaderno de puntos que los
+motorizados. Sus hojas viven en el dominio Courier externo con formato
+«cuaderno» (`config.layout`): mismas columnas y mismo lector de bloques por
+fecha, pero el vocabulario de estados es el del courier (cancelado, no
+contesta, reprogramado, retirado…) y **la unidad de liquidación es el courier,
+no la persona que reparte**. Los demás couriers (Swayp, Aliclik, Shalom, Olva,
+Axel, Tanders) usan el formato «reporte» por guía.
+
+«VENDE MÁS» como método de pago es una app de cobro por link (operación,
+16-09-2026): se lee como «Link de pago».
+
+**Tres niveles, y el detalle nunca se pierde.** El estado escrito es el dato
+y no se normaliza en la base; el estado del grupo es una lectura por alias; el
+estado de Kapta es una lectura del grupo. La pantalla muestra primero lo
+escrito («CEL APAGADO») y al lado la etiqueta del grupo («No responde»).
+Editar a mano es texto libre, nunca un desplegable que pierda el detalle: lo
+tecleado se guarda tal cual, el grupo se deriva con los mismos alias que usa
+la importación, y si no resuelve la fila queda a revisión con el alias sin
+equivalente a la vista para asignarlo una vez. Cambiar a qué equivale un alias
+cambia el grupo de todas sus filas sin tocar lo que decían.
+
+### 30.8 Cierre por pedido desde la hoja
+
+Desde el 19-09-2026 la puerta es `lib/master-door.ts`, compartida con el
+cierre de ruta y Liquidaciones 1 (§29.12): para una fila atada a su parada se
+exige parada entregada, con evidencia si el reporte es real, y sin
+observación abierta; una fila del Excel sin parada conserva solo la guarda de
+observaciones. Lo demás de esta sección sigue vigente.
+
+**Qué aplica.** Desde una hoja cuaderno, una fila vinculada a un pedido de
+Kapta cuyo estado tiene efecto *entrega* puede marcar ese pedido como
+entregado en el Master. Va por la **misma puerta que Liquidaciones**
+(`applySettlementToMaster`): un evento `status_override` con fuente
+`liquidacion`, el courier de la hoja (el de `config.courier` para un courier
+externo, `propio` con el nombre del motorizado para Reparto propio), la fecha
+de la ruta y el operativo por defecto de «entregado»; después se recalcula el
+Master. No hay otro camino a entregado, a propósito (§11.4). Se aplica fila a
+fila o todas las del periodo de una vez, con confirmación que dice cuántas.
+
+**Qué nunca aplica.** Un pedido anulado en Kapta no se marca entregado: vive
+como observación «anulado tras entregar». Un pedido que Kapta ya tiene
+entregado no se vuelve a escribir. Una fila sin pedido en Kapta no puede
+cruzar. No existe camino de devolución desde una hoja, ni en Liquidaciones ni
+en Rutas: las filas con efecto *devolución* se cuentan y se dejan como están
+hasta que exista una puerta propia. **Una fila con observación abierta no
+cruza al Master: alguien lee el motivo del motorizado y lo acepta primero.**
+El motivo lo escribe quien repartió; aceptarlo es de quien liquida
+(`sheets.edit`); aplicar al Master exige `master.edit`.
+
+**Observaciones automáticas.** Al importar un cuaderno y al editar a mano el
+estado, el monto o el pedido de una fila, cada fila que declara entrega se
+contrasta con Kapta (§30.5): un «a cobrar» que difiere del total del pedido
+en más de S/ 0,50 abre una observación de monto con la diferencia firmada;
+un pedido anulado o devuelto en Kapta abre una de estado; **No se
+observa el comprobante**: la causa «pago digital sin comprobante validado» se
+retiró el 17-09-2026 porque ese dato vive en Validar pagos, no en la hoja, y
+para todo lo anterior al cuaderno en Kapta significaba «no lo sé», no «no se
+pagó»; las 1.542 que abrió la carga histórica se cerraron en bloque con ese
+motivo (0178, que queda en el catálogo). Nunca dos
+abiertas para la misma fila y campo; una resuelta con el mismo valor externo
+no se reabre. Al editar un monto que no cuadra, la propia fila pide el motivo en
+línea; cerrar sin motivo deja la observación abierta sin motivo.
+
+### 30.9 La pantalla del motorizado
+
+Desde el 19-09-2026 hay una sola pantalla, /reparto (§29.12): la ruta del
+día de Rutas con el vocabulario del cuaderno encima. Lo que sigue describe
+lo que esa pantalla conserva de la antigua /reparto/cuaderno: estado escrito
+con sugerencias, motivo obligatorio cuando cobra distinto, y que solo ve su
+hoja (0179). Las referencias a /reparto/cuaderno se leen como /reparto.
+
+`/reparto/cuaderno`. Vive fuera del panel, para el teléfono, y es la misma hoja
+de Reparto propio que ve quien liquida: el motorizado escribe en su cuaderno
+y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
+
+- **Qué ve.** Su nombre, el día (hoy por defecto, se puede ir a ayer u otro),
+  y un punto por tarjeta: pedido, cliente, distrito y dirección si el pedido
+  está en Kapta, el monto de Kapta, y lo que él ya reportó. Al tocar un punto,
+  su detalle (dirección, mapa, llamar, «Lo llevo», reporte) se abre en un panel
+  al lado de la lista, no debajo de la tarjeta: en el teléfono entra deslizándose
+  desde la derecha, cubre el ancho de la lista y «←» o «atrás» del navegador vuelven a ella; en pantalla ancha
+  lista y detalle van en dos columnas. La parada abierta va en la URL
+  (`?parada=`), así un refresco vuelve al mismo sitio. Guardar o confirmar
+  cierra el panel y refresca la lista. Si hay ruta de
+  despacho para ese día, un botón trae los paquetes que falten; si no, añade
+  los puntos a mano buscando el pedido por número o por nombre, o escribiendo
+  un punto ajeno a Shopify (Kast).
+- **Qué escribe.** Estado en texto libre con sugerencias, como en el cuaderno
+  de papel; a cobrar, precargado con el monto de Kapta; efectivo; método de
+  pago de la lista cerrada; observación; y la foto del comprobante cuando el
+  pago fue digital. Todo entra por las mismas reglas que una importación:
+  alias, revisión, historial por celda.
+- **El motivo es obligatorio.** Si el estado significa entrega y cobró distinto
+  al monto de Kapta en más de S/ 0.50, no puede guardar sin elegir un motivo
+  del catálogo y, con «Otro», una nota. Eso abre o actualiza la observación de
+  monto de esa fila, con su nombre en la nota. Es lo que después lee y acepta
+  quien liquida antes de aplicar al Master (§30.8): el motivo lo escribe quien
+  repartió; aceptarlo es de quien liquida.
+- **Solo ve su hoja.** Un usuario cuyo único rol es `motorizado` solo puede
+  entrar a `/reparto`; el panel lo redirige. En la base (0179), sus lecturas
+  de hojas, filas, alias, observaciones e historial quedan acotadas a la hoja
+  cuyo `rider_id` es su ficha. Los dominios y sus estados siguen legibles
+  porque son vocabulario, no datos de nadie. Del Master lee solo los pedidos de
+  sus rutas (0186, §27).

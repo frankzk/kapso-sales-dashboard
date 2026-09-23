@@ -42,6 +42,19 @@ export async function proxy(request: NextRequest) {
     url.searchParams.set("redirectedFrom", path);
     return NextResponse.redirect(url);
   }
+  // Un usuario cuyo único rol es motorizado no tiene panel: su módulo es
+  // /reparto. El layout del dashboard también lo redirige; esto lo corta antes
+  // de renderizar nada. Una consulta pequeña a memberships bajo RLS.
+  if (path.startsWith("/dashboard") && isAuthenticated) {
+    const { data: memberships } = await supabase.from("memberships").select("role");
+    const roles = ((memberships as { role: string }[] | null) ?? []).map((m) => m.role);
+    if (roles.length > 0 && roles.every((r) => r === "motorizado")) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/reparto";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+  }
   if ((path === "/login" || path === "/signup") && isAuthenticated) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";

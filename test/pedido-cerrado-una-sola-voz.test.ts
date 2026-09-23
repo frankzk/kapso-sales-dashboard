@@ -157,7 +157,7 @@ describe("las tres pantallas usan la misma frase", () => {
   });
 
   it("la mesa de ruta recibe los motivos, ya no un booleano de macroetapa", () => {
-    const drawer = read("components/orders-master.tsx");
+    const drawer = read("components/order-drawer.tsx");
     expect(drawer).toContain("gate={detail.routeGate}");
     expect(drawer).not.toContain('closed={detail.row.macro_stage === "finalizado"}');
   });

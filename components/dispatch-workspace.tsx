@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { DispatchScanner } from "@/components/dispatch-scanner";
 import { DispatchCamera } from "@/components/dispatch-camera";
+import { GfBoxAddPackages } from "@/components/gf-box-add-packages";
 import { cn } from "@/components/ui";
 import { isCourierTbd } from "@/lib/shipment-output";
 import { courierKey } from "@/lib/dispatch";
@@ -135,30 +136,17 @@ export function DispatchWorkspace({
   const [data, setData] = useState(() => scopeData(initialData));
   const initialManifest = data.manifests.find((manifest) => manifest.id === initialSelectedId)
     ?? data.manifests.find((manifest) => !["in_custody", "cancelled"].includes(manifest.state)) ?? null;
-  function modeForAccess(manifest: DispatchManifest | null): Mode {
-    const next = nextDispatchMode(manifest, canManage);
-    return next === "pickup" && !canPickup && canManage ? "office" : next;
-  }
-  const defaultMode: Mode = modeForAccess(initialManifest);
-  const [mode, setMode] = useState<Mode>(defaultMode);
   const [selectedId, setSelectedId] = useState<string | null>(
     initialManifest?.id ?? null,
   );
-  const [cameraOpen, setCameraOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const scanLock = useRef(false);
-  const closeCamera = useCallback(() => setCameraOpen(false), []);
 
-  const selected = useMemo(
-    () => data.manifests.find((manifest) => manifest.id === selectedId) ?? null,
-    [data.manifests, selectedId],
-  );
   const activeManifests = data.manifests.filter((manifest) => manifest.state !== "cancelled");
   const storeName = useMemo(() => new Map(stores.map((store) => [store.id, store.name])), [stores]);
 
-  async function refresh(preferId?: string) {
+  async function refresh(preferId?: string | null) {
     const fresh = await loadDispatchWorkspace(preferId ?? selectedId);
     setData(scopeData(fresh));
     if (preferId) setSelectedId(preferId);
@@ -167,33 +155,6 @@ export function DispatchWorkspace({
   function showResult(result: DispatchActionResult) {
     setMessage({ tone: result.error ? "error" : "ok", text: result.error ?? result.notice ?? "Listo." });
   }
-
-  const executeScan = useCallback(async (raw: string) => {
-    const value = raw.trim();
-    if (!value || scanLock.current) return;
-    scanLock.current = true;
-    setBusy(true);
-    setMessage(null);
-    try {
-    let result: DispatchActionResult;
-    if (!selected) {
-      result = { error: "Elige una ruta antes de escanear." };
-    } else {
-      // El cotejo SOLO confirma lo que ya se decidió al armar la ruta. Antes
-      // agregaba el paquete en el mismo gesto, así que un escaneo distraído
-      // metía una caja ajena a la ruta y la daba por cotejada.
-      result = await scanManifestItem(selected.id, value, mode === "office" ? "office" : "pickup");
-    }
-    showResult(result);
-    await refresh(selected?.id);
-    } catch {
-      setMessage({ tone: "error", text: "No se pudo confirmar la respuesta. Revisa la conexión y vuelve a escanear el mismo paquete; no se duplicará." });
-    } finally { setBusy(false); scanLock.current = false; }
-  }, [busy, mode, selected]);
-
-  const onCameraScan = useCallback((value: string) => {
-    void executeScan(value);
-  }, [executeScan]);
 
   const stats = useMemo(() => {
     const active = data.manifests.filter((m) => !["in_custody", "cancelled"].includes(m.state));
@@ -206,10 +167,6 @@ export function DispatchWorkspace({
       transferred: data.manifests.filter((m) => m.state === "in_custody" && m.route_date === todayLima()).length,
     };
   }, [data]);
-  const progress = selected ? dispatchProgress(selected.items) : null;
-  const checkComplete = selected?.state !== "cancelled" && !!progress && (mode === "office" ? progress.officeComplete : progress.pickupComplete);
-  const scanAllowed = !!selected && !["cancelled", "in_custody"].includes(selected.state)
-    && (mode === "office" ? canManage : canPickup && !!progress?.officeComplete);
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-4 pb-12">
@@ -249,13 +206,143 @@ export function DispatchWorkspace({
                 key={manifest.id}
                 manifest={manifest}
                 active={selectedId === manifest.id}
-                onClick={() => { setMessage(null); setSelectedId(manifest.id); setMode(modeForAccess(manifest)); }}
+                onClick={() => { setMessage(null); setSelectedId(manifest.id); }}
               />
             )) : <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">Aún no hay rutas. Crea una para comenzar.</div>}
           </div>
         </aside>
 
-        <div className="order-1 min-w-0 space-y-4 xl:order-2">
+        <div className="order-1 min-w-0 xl:order-2">
+          {/* La clave reinicia el paso al cambiar de caja: cada una arranca en
+              el paso que le toca. */}
+          <DispatchBoxPanel
+            key={selectedId ?? "none"}
+            data={data}
+            manifestId={selectedId}
+            manifests={activeManifests}
+            canManage={canManage}
+            canPickup={canPickup}
+            surface={surface}
+            storeName={storeName}
+            refresh={refresh}
+            onSelect={(id) => { setMessage(null); setSelectedId(id); }}
+            onBusy={setBusy}
+            message={message}
+            setMessage={setMessage}
+          />
+        </div>
+      </div>
+
+      {showCreate && <CreateManifestModal riders={riders} onClose={() => setShowCreate(false)} onCreated={async (result) => { showResult(result); if (result.manifestId) { await refresh(result.manifestId); setSelectedId(result.manifestId); } setShowCreate(false); }} />}
+    </div>
+  );
+}
+
+/**
+ * Los tres pasos de UNA caja: agregar, verificar, recibir.
+ *
+ * Es lo que la mesa de despacho enseña a la derecha de «Rutas recientes» y lo
+ * que la pestaña Rutas de Grupo GF Courier abre en el panel lateral
+ * (`courier-box-drawer.tsx`, MOM §29.14). El panel no sabe de listas ni de
+ * KPIs: recibe los datos, la caja elegida y cómo refrescar.
+ */
+export function DispatchBoxPanel({
+  data,
+  manifestId,
+  manifests,
+  canManage,
+  canPickup,
+  surface = "warehouse",
+  storeName,
+  refresh,
+  onSelect,
+  onBusy,
+  message: outerMessage,
+  setMessage: setOuterMessage,
+  showTarget = true,
+}: {
+  data: DispatchWorkspaceData;
+  manifestId: string | null;
+  /** Cajas entre las que se puede cambiar; con una sola no hay selector. */
+  manifests: DispatchManifest[];
+  canManage: boolean;
+  canPickup: boolean;
+  surface?: "warehouse" | "gf";
+  storeName: Map<string, string>;
+  refresh: (preferId?: string | null) => Promise<void>;
+  onSelect?: (id: string) => void;
+  onBusy?: (busy: boolean) => void;
+  /** Mensaje compartido con quien monta el panel (la mesa lo usa al crear rutas). */
+  message?: { tone: "ok" | "error"; text: string } | null;
+  setMessage?: (value: { tone: "ok" | "error"; text: string } | null) => void;
+  /** El bloque «Caja seleccionada»; sobra cuando el panel ya lleva cabecera propia. */
+  showTarget?: boolean;
+}) {
+  const selected = useMemo(
+    () => data.manifests.find((manifest) => manifest.id === manifestId) ?? null,
+    [data.manifests, manifestId],
+  );
+  function modeForAccess(manifest: DispatchManifest | null): Mode {
+    const next = nextDispatchMode(manifest, canManage);
+    return next === "pickup" && !canPickup && canManage ? "office" : next;
+  }
+  const [mode, setMode] = useState<Mode>(() => modeForAccess(selected));
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [busy, setBusyState] = useState(false);
+  const [ownMessage, setOwnMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const message = outerMessage === undefined ? ownMessage : outerMessage;
+  const setMessage = setOuterMessage ?? setOwnMessage;
+  const scanLock = useRef(false);
+  const closeCamera = useCallback(() => setCameraOpen(false), []);
+  const setBusy = useCallback((value: boolean) => { setBusyState(value); onBusy?.(value); }, [onBusy]);
+
+  function showResult(result: DispatchActionResult) {
+    setMessage({ tone: result.error ? "error" : "ok", text: result.error ?? result.notice ?? "Listo." });
+  }
+
+  const executeScan = useCallback(async (raw: string) => {
+    const value = raw.trim();
+    if (!value || scanLock.current) return;
+    scanLock.current = true;
+    setBusy(true);
+    setMessage(null);
+    try {
+    let result: DispatchActionResult;
+    if (!selected) {
+      result = { error: "Elige una ruta antes de escanear." };
+    } else {
+      // El cotejo SOLO confirma lo que ya se decidió al armar la ruta. Antes
+      // agregaba el paquete en el mismo gesto, así que un escaneo distraído
+      // metía una caja ajena a la ruta y la daba por cotejada.
+      result = await scanManifestItem(selected.id, value, mode === "office" ? "office" : "pickup");
+    }
+    showResult(result);
+    await refresh(selected?.id);
+    } catch {
+      setMessage({ tone: "error", text: "No se pudo confirmar la respuesta. Revisa la conexión y vuelve a escanear el mismo paquete; no se duplicará." });
+    } finally { setBusy(false); scanLock.current = false; }
+  }, [busy, mode, selected]);
+
+  const onCameraScan = useCallback((value: string) => {
+    void executeScan(value);
+  }, [executeScan]);
+
+  const progress = selected ? dispatchProgress(selected.items) : null;
+  const checkComplete = selected?.state !== "cancelled" && !!progress && (mode === "office" ? progress.officeComplete : progress.pickupComplete);
+  // Con la carga ya en custodia, el cotejo de oficina se cierra (la caja ya
+  // salió), pero el de recojo sigue abierto si el modo del proveedor no es
+  // «exigir» (0185): es el respaldo cuando el motorizado no puede confirmar
+  // desde su teléfono. El servidor (`scanManifestItem`) aplica la misma regla.
+  const pickupMode = selected ? (data.pickupModeByOrg?.[selected.org_id] ?? "exigir") : "exigir";
+  const custodyPickupOpen = !!selected && selected.state === "in_custody" && pickupMode !== "exigir";
+  const scanAllowed = !!selected && selected.state !== "cancelled"
+    && (mode === "office"
+      ? canManage && selected.state !== "in_custody"
+      : canPickup && !!progress?.officeComplete && (selected.state !== "in_custody" || custodyPickupOpen));
+  const pickupPending = progress ? progress.total - progress.pickupChecked : 0;
+
+  return (
+    <div className="min-w-0 space-y-4">
           <div inert={busy} className="grid grid-cols-3 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
             <ModeButton active={mode === "build"} disabled={!canManage} onClick={() => setMode("build")} number="1" label="Agregar pedidos" />
             <ModeButton active={mode === "office"} disabled={!canManage} onClick={() => setMode("office")} number="2" label="Verificar caja" />
@@ -272,19 +359,22 @@ export function DispatchWorkspace({
                 {selected && <StateBadge state={selected.state} />}
               </div>
 
-              {selected && (
-                <RouteTarget mode={mode} disabled={busy} manifest={selected} manifests={activeManifests} onSelect={(id) => { setMessage(null); setSelectedId(id); setMode(modeForAccess(data.manifests.find((manifest) => manifest.id === id) ?? null)); }} />
+              {selected && showTarget && (
+                <RouteTarget mode={mode} disabled={busy} manifest={selected} manifests={manifests} onSelect={(id) => { setMessage(null); onSelect?.(id); }} />
               )}
               {surface === "gf" && selected && <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
                 <span>{activeDispatchItems(selected.items).length} paquete{activeDispatchItems(selected.items).length === 1 ? "" : "s"} en esta carga</span>
-                {selected.delivery_route_id && selected.state === "in_custody" && <Link href={`/dashboard/courier/reparto?id=${selected.delivery_route_id}`} className="font-semibold text-brand-700">Ver reparto y liquidación →</Link>}
-                {selected.state === "in_custody" && <Link href="/dashboard/courier" className="font-semibold text-brand-700">Agregar una carga a la misma ruta →</Link>}
+                {selected.state === "in_custody" && pickupMode === "exigir" && <Link href="/dashboard/courier" className="font-semibold text-brand-700">Agregar una carga a la misma ruta →</Link>}
               </div>}
 
               {mode !== "build" && checkComplete && selected ? (
                 <div className="mt-4 rounded-xl bg-emerald-50 p-4" role="status">
                   <p className="font-semibold text-emerald-900">{mode === "office" ? "Caja verificada" : "Carga recibida"} · {progress?.total} de {progress?.total}</p>
-                  <p className="mt-1 text-sm text-emerald-800">{selected.state === "in_custody" ? "La entrega de esta carga quedó registrada." : needsRiderCheck(selected.kind) ? "Oficina terminó. Falta que el motorizado reciba cada paquete." : "Oficina terminó. Registra quién recoge para entregar al courier."}</p>
+                  <p className="mt-1 text-sm text-emerald-800">{selected.state === "in_custody"
+                    ? (progress?.pickupComplete
+                      ? "La entrega de esta carga quedó registrada."
+                      : `La caja ya salió con ${selected.driver_name ?? "el motorizado"}; ${pickupPending} sin confirmar. Se confirman en «Recibir carga».`)
+                    : needsRiderCheck(selected.kind) ? "Oficina terminó. Falta que el motorizado reciba cada paquete." : "Oficina terminó. Registra quién recoge para entregar al courier."}</p>
                   {mode === "office" && selected.state !== "in_custody" && needsRiderCheck(selected.kind) && (canPickup ?
                     <button type="button" onClick={() => { setMode("pickup"); setMessage(null); }} className="mt-3 min-h-12 w-full rounded-xl bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700">Continuar a recepción</button>
                     : <p className="mt-2 text-sm font-medium text-emerald-900">El motorizado continúa desde su acceso a Reparto.</p>)}
@@ -292,7 +382,12 @@ export function DispatchWorkspace({
               ) : mode !== "build" && (
                 <>
                   {mode === "pickup" && selected && !progress?.officeComplete && <p className="mt-3 text-sm text-amber-800">Primero completa la verificación de oficina.</p>}
-                  <DispatchScanner key={`${selectedId}:${mode}`} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
+                  {/* Con la caja ya en poder del motorizado, confirmar por él es
+                      un respaldo: va DEBAJO de la lista, con su propio título,
+                      y no como el gesto principal del paso. */}
+                  {!(mode === "pickup" && custodyPickupOpen) && (
+                    <DispatchScanner key={`${manifestId}:${mode}`} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
+                  )}
                 </>
               )}
               {message && <div role={message.tone === "error" ? "alert" : "status"} className={cn("mt-4 rounded-xl px-4 py-3 text-sm font-medium", message.tone === "error" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800")}>{message.text}</div>}
@@ -300,7 +395,9 @@ export function DispatchWorkspace({
 
             {mode === "build" ? (
               surface === "gf" ? (
-                <div className="p-6 text-sm"><p>Los pedidos se toman y asignan desde la bandeja del courier. Esta caja conserva su lista y sus cotejos.</p><Link href="/dashboard/courier" className="mt-3 inline-block font-semibold text-brand-700">Ir a tomar y asignar pedidos →</Link></div>
+                selected
+                  ? <GfBoxAddPackages manifest={selected} canManage={canManage} refresh={refresh} />
+                  : <p className="p-6 text-sm text-slate-600">Elige una caja.</p>
               ) : selected ? (
                 <BuildRoute
                   // Cambiar de ruta descarta la selección: arrastrarla al
@@ -315,16 +412,38 @@ export function DispatchWorkspace({
                 <div className="p-12 text-center text-sm text-slate-500">Elige una ruta de la lista o crea una nueva.</div>
               )
             ) : selected ? (
-              <ManifestDetail manifest={selected} mode={mode} canManage={canManage} onChanged={() => refresh(selected.id)} showResult={showResult} />
+              <>
+                <ManifestDetail manifest={selected} mode={mode} canManage={canManage} onChanged={() => refresh(selected.id)} showResult={showResult} />
+                {mode === "pickup" && custodyPickupOpen && (
+                  <div className="border-t border-slate-200 p-4 sm:p-7">
+                    <p className="text-sm font-semibold text-slate-900">Confirmar por {selected.driver_name ?? "el motorizado"}</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      {pickupPending > 0
+                        ? `${pickupPending} paquete${pickupPending === 1 ? "" : "s"} sin confirmar. Si no puede hacerlo desde su teléfono, escanea aquí los que sí lleva; queda registrado con tu usuario.`
+                        : "Todos los paquetes están confirmados."}
+                    </p>
+                    {pickupPending > 0 && (
+                      <DispatchScanner key={`${manifestId}:${mode}:custodia`} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
+                    )}
+                  </div>
+                )}
+              </>
             ) : (
               <div className="p-12 text-center text-sm text-slate-500">Elige una ruta de la lista o crea una nueva.</div>
             )}
           </section>
-        </div>
-      </div>
 
-      <DispatchCamera open={cameraOpen} onClose={closeCamera} onScan={onCameraScan} />
-      {showCreate && <CreateManifestModal riders={riders} onClose={() => setShowCreate(false)} onCreated={async (result) => { showResult(result); if (result.manifestId) { await refresh(result.manifestId); setSelectedId(result.manifestId); setMode("build"); } setShowCreate(false); }} />}
+      {/* Cámara en serie, como al asignar: queda abierta tras cada lectura y
+          debajo dice cuántos van («Verificados 3 de 4 · faltan 1»). Se cierra
+          con «Listo» o sola al completar la caja. */}
+      <DispatchCamera
+        open={cameraOpen}
+        onClose={closeCamera}
+        onScan={onCameraScan}
+        continuous
+        progress={progress ? { done: mode === "office" ? progress.officeChecked : progress.pickupChecked, total: progress.total, verb: mode === "office" ? "Verificados" : "Recibidos" } : undefined}
+        status={message ? { ok: message.tone !== "error", text: message.text } : null}
+      />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sweepResolvedAlerts } from "@/lib/collection-alerts-access";
+import { sweepResolvedAlerts, sweepUnattributedAlerts } from "@/lib/collection-alerts-access";
 
 /**
  * El caso real: #KP134730, pago validado a las 22:42 del 20-09-2026 y su alerta
@@ -99,5 +99,95 @@ describe("la cola se limpia sola de trabajo ya hecho", () => {
     const admin = fakeAdmin([], {});
     expect(await sweepResolvedAlerts(admin, "store-1", "2026-09-21T03:00:00Z")).toBe(0);
     expect(admin.updates).toHaveLength(0);
+  });
+});
+
+/**
+ * El otro barrido: la alerta «no se pudo registrar» de un celular que ya no
+ * debe nada. Esmeralda (#KP134470) tenía el pedido pagado, validado y con la
+ * clave enviada, y su alerta seguía escalando de persona en persona.
+ */
+function fakeAdminSinAtribuir(
+  alertas: { id: string; phone: string }[],
+  pedidos: { id: string; total_amount: number | null }[],
+  pagos: { order_id: string; amount: number; validation_status: string }[],
+) {
+  const updates: { ids: string[]; patch: Record<string, unknown> }[] = [];
+  const admin: any = {
+    updates,
+    from(table: string) {
+      const chain: any = {
+        select: () => chain,
+        eq: () => chain,
+        not: () => chain,
+        order: () => chain,
+        limit: () =>
+          Promise.resolve({
+            data: table === "collection_alerts" ? alertas : pedidos,
+            error: null,
+          }),
+        in(ids: string[] | string, arg?: string[]) {
+          const lista = Array.isArray(ids) ? ids : (arg ?? []);
+          if (chain._patch) {
+            updates.push({ ids: lista, patch: chain._patch });
+            return chain;
+          }
+          return Promise.resolve({ data: pagos, error: null });
+        },
+        update(patch: Record<string, unknown>) {
+          chain._patch = patch;
+          return chain;
+        },
+        then(res: (v: { error: null }) => unknown) {
+          return Promise.resolve({ error: null }).then(res);
+        },
+      };
+      return chain;
+    },
+  };
+  return admin;
+}
+
+describe("la alerta «no se pudo registrar» de quien ya no debe nada", () => {
+  const ALERTA = [{ id: "al-1", phone: "51950636635" }];
+
+  it("se retira cuando el pedido de ese celular ya está cubierto", async () => {
+    const admin = fakeAdminSinAtribuir(ALERTA, [{ id: "ord-1", total_amount: 134.1 }], [
+      { order_id: "ord-1", amount: 30, validation_status: "validado" },
+      { order_id: "ord-1", amount: 104.1, validation_status: "validado" },
+    ]);
+    expect(await sweepUnattributedAlerts(admin, "store-1", "2026-09-21T16:00:00Z")).toBe(1);
+    expect(admin.updates[0].patch).toMatchObject({ status: "atendida" });
+  });
+
+  it("cuenta lo CARGADO, no solo lo validado: la alerta pedía que entrara", async () => {
+    const admin = fakeAdminSinAtribuir(ALERTA, [{ id: "ord-1", total_amount: 134.1 }], [
+      { order_id: "ord-1", amount: 30, validation_status: "validado" },
+      { order_id: "ord-1", amount: 104.1, validation_status: "pendiente_revision" },
+    ]);
+    expect(await sweepUnattributedAlerts(admin, "store-1", "2026-09-21T16:00:00Z")).toBe(1);
+  });
+
+  it("un comprobante RECHAZADO no cubre nada", async () => {
+    const admin = fakeAdminSinAtribuir(ALERTA, [{ id: "ord-1", total_amount: 134.1 }], [
+      { order_id: "ord-1", amount: 30, validation_status: "validado" },
+      { order_id: "ord-1", amount: 104.1, validation_status: "rechazado" },
+    ]);
+    expect(await sweepUnattributedAlerts(admin, "store-1", "2026-09-21T16:00:00Z")).toBe(0);
+  });
+
+  it("si todavía debe, se queda: es trabajo de verdad", async () => {
+    const admin = fakeAdminSinAtribuir(ALERTA, [{ id: "ord-1", total_amount: 134.1 }], [
+      { order_id: "ord-1", amount: 30, validation_status: "validado" },
+    ]);
+    expect(await sweepUnattributedAlerts(admin, "store-1", "2026-09-21T16:00:00Z")).toBe(0);
+    expect(admin.updates).toHaveLength(0);
+  });
+
+  it("sin NINGÚN pedido de ese celular se queda: ahí sí no se sabe quién pagó", async () => {
+    // Es el caso para el que la alerta existe. Barrerlo sería vaciar la cola
+    // justo de lo único que nadie puede resolver solo.
+    const admin = fakeAdminSinAtribuir(ALERTA, [], []);
+    expect(await sweepUnattributedAlerts(admin, "store-1", "2026-09-21T16:00:00Z")).toBe(0);
   });
 });

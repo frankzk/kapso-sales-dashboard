@@ -687,6 +687,157 @@ Excel/CSV**, y las dos entran por el mismo sitio.
 - Subir dos veces el mismo archivo **no duplica nada**: se corta por hash y
   devuelve la liquidación que ya existía.
 
+## 5k-bis-2. Liquidaciones 2 (hojas por dominio)
+
+`/dashboard/liquidaciones-2`. Hojas configurables sobre los pedidos, con
+dominios (Pedidos, Catálogos, Reparto propio, Courier externo, Consolidado,
+Indicadores), estados por dominio con equivalencia a los estados de Kapta,
+historial por celda y observaciones de cuadre. Plan e iteraciones en
+`docs/plan/liquidaciones-2.md`; reglas en el MOM §30.
+
+1. **Migración `0184_liquidaciones2_hojas.sql`**, a mano, antes del código.
+   Crea nueve tablas nuevas y no toca ninguna existente.
+2. La primera visita de un admin/owner siembra la organización: dominios,
+   estados, el catálogo de zonas (979 distritos del Excel) y una hoja de
+   Pedidos y de Consolidado por tienda. Idempotente: el botón «Crear hojas que
+   falten» repite lo mismo para una tienda conectada después.
+3. **Permisos**: `sheets.edit` (vendedora, admin, owner) edita celdas y
+   observaciones; `sheets.manage` (admin, owner) configura hojas, columnas,
+   estados y alias.
+4. Las hojas de Pedidos y Consolidado se leen con el service role de
+   `order_master` (0053) filtrando por las tiendas accesibles; el resto de
+   tablas tiene RLS propia.
+5. **Reparto propio.** Una hoja por motorizado de `riders` más las históricas
+   (Gera, Marcos). Importación desde la pantalla (`/api/sheets/import`, xlsx o
+   csv en el formato de bloques del Excel, hasta 25 MB) o por script:
+   `pnpm tsx scripts/import-reparto.ts <org_id> <dir> [Roy …]`, donde `<dir>`
+   tiene un `matrix_<Hoja>.json` por hoja (volcado con openpyxl, porque el
+   libro completo pesa 30 MB). Idempotente. La historia del Excel se cargó el
+   16-09-2026.
+6. **Courier externo con cuaderno.** Alexis y Urpi tienen hoja en el dominio
+   Courier externo con `config.layout = "cuaderno"`: se importan igual que un
+   motorizado (misma ruta y mismo script, claves `courier_alexis` y
+   `courier_urpi`) pero con el vocabulario de estados del courier.
+
+7. **Cierre por pedido** (MOM §30.8). Desde una hoja cuaderno, «Aplicar» por
+   fila o «Aplicar entregas del periodo al Master» escribe `order_events`
+   `status_override` con `source = liquidacion` y recalcula el Master, igual
+   que Liquidaciones. Exige `master.edit`. Filas con observación abierta,
+   pedidos anulados o ya entregados no se tocan. Sin camino de devolución.
+8. **Observaciones automáticas** al importar y al editar: monto que difiere del
+   total en más de S/ 0,50 y pedido anulado/devuelto en Kapta. Nunca dos
+   abiertas por fila y campo. La causa «cobro digital sin comprobante validado»
+   existió un día y se retiró (MOM §30.8); la **migración
+   `0186_sheet_observation_reason_pago.sql`** deja su motivo en el catálogo.
+9. **Foto del cuaderno**: `/api/sheets/import` acepta jpeg/png/webp/gif hasta
+   8 MB y usa la misma visión que Liquidaciones (clave de la tienda o
+   `ANTHROPIC_API_KEY`). Si la foto no trae fecha, la pantalla la pide.
+10. **Pantalla del motorizado** (`/reparto/cuaderno`, MOM §30.9). Migración
+   `0187_sheets_rider_rls.sql` a mano antes del código: acota la lectura de
+   las tablas de hojas a la propia cuando el único rol es `motorizado`. Alta de
+   un motorizado: ficha en Liquidaciones → Motorizados con su correo; invitación
+   desde Equipo con rol `motorizado` (o membresía a mano); `riders.user_id`
+   atado a ese usuario; y su hoja de Reparto propio creada con «Crear hojas que
+   falten» en Liquidaciones 2 (la crea por ficha). Entra con Google o enlace por
+   correo, igual que el equipo, **o con usuario y contraseña** (19-09-2026):
+   para el motorizado sin correo se crea un usuario corto (`roy`, que Auth
+   guarda como `roy@motorizados.kapta.local`) con
+   `pnpm tsx scripts/rider-user.ts create <ficha> --usuario <u>`; ese comando
+   hace también la membresía y el atado de la ficha. Alta, cambio de
+   contraseña, baja y comprobación en
+   [`docs/runbooks/motorizados-acceso.md`](docs/runbooks/motorizados-acceso.md).
+   Requiere el proveedor Email activo en Supabase; no manda correos. Un
+   usuario solo motorizado que abra `/dashboard` va a parar a su cuaderno. La foto del comprobante va al
+   bucket privado `delivery-proofs`, ruta `cuaderno/<hoja>/<fila>/`.
+
+11. **Convergencia con Rutas** (19-09-2026, MOM §29.12). **Migración
+   `0180_stop_written_status.sql`** a mano antes del código: `delivery_stops`
+   gana `written_status`, `written_status_code`, `written_payment`; `sheet_rows`
+   gana `stop_id`. La parada es la verdad: la hoja de Reparto propio se
+   sincroniza desde ella (al reportar, al cerrar ruta y al abrir la hoja del
+   mes), las ediciones de la hoja se escriben primero en la parada por
+   `lib/stop-report.ts`, y la única puerta al Master es `lib/master-door.ts`.
+   La pantalla del motorizado es solo `/reparto` (`/reparto/cuaderno`
+   redirige). Los límites de efectivo del proveedor ya rechazan asignaciones.
+12. **Backfill de la historia a Rutas**: `pnpm tsx
+   scripts/backfill-stops-from-sheets.ts <org_id> [--dry-run] [Roy …]` crea
+   rutas cerradas y paradas desde las filas históricas con pedido de las hojas
+   de Reparto propio (idempotente; no toca el Master). Corrido el 19-09-2026.
+
+13. **Ponerse al día con el Master en bloque, y poder deshacerlo.** Migración
+    `0181_master_backfill_log.sql` (bitácora). `pnpm tsx
+    scripts/apply-cuaderno-history-to-master.ts <org_id> <actor_user_id>
+    [--real]` aplica por la puerta única (`lib/master-door.ts`) las entregas
+    del cuaderno que Kapta aún tiene abiertas en Lima: sin `--real` es un
+    ensayo con conteo por hoja y mes. Con `--real` guarda antes, por pedido,
+    el estado previo del Master y el evento insertado, e imprime un
+    `batch_id`. `pnpm tsx scripts/rollback-master-backfill.ts <batch_id>
+    --real` borra los eventos del lote, recalcula y marca `reverted_at`,
+    avisando de los pedidos que no volvieron al estado previo porque otro
+    evento posterior los movió. Mismas guardas que el botón de la pantalla:
+    observación abierta, anulado en Shopify, parada no entregada. Fechas
+    futuras del cuaderno se acotan a hoy. Primer lote corrido el 19-09-2026.
+
+## 5k-quater. Despacho en dos pasos (Grupo GF Courier)
+
+MOM §29.13; auditoría en `docs/plan/despacho-crm.md`.
+
+1. **Migración `0182_manifest_item_not_picked.sql`**, a mano, antes del código:
+   columnas `pickup_declined_*` en los ítems de la caja y el RPC
+   `gf_rider_decline`. Smoke en `scripts/sql/gf_rider_decline_smoke.sql`.
+2. Pestaña «Despacho del día» en `/dashboard/courier` (predeterminada), en
+   **modo escaneo**: motorizado + día de la caja y un QR por paquete que toma,
+   asigna y coteja en oficina de una vez (`scanAssignToRider`), con lista viva
+   y bandeja «escanear primero». La lista con selección múltiple queda plegada.
+   Cotejar por motorizado en la misma pantalla, con quitar y mover entre cajas
+   (`moveManifestItem`, evento `dispatch_route_reassigned`). «Pedidos
+   disponibles» y «Pedidos tomados» salen de la barra y quedan bajo «⋯ Más
+   vistas» como vista anterior: Despacho trae teléfono y fecha en la fila,
+   búsqueda por teléfono, «2.º intento», los excluidos con motivo («sin
+   condiciones»), el picker de filtros, las tiles de métricas y los estados
+   de cada paquete en Cajas de hoy (`loadCourierOperations` expone `blocked`).
+3. `/reparto` abre en «Recibir mi caja» mientras haya una carga cotejada y no
+   recibida; «No lo recojo» exige motivo. El bloque «Recibir mi carga» de la
+   pantalla vieja desapareció.
+3b. **Migración `0183_provider_rider_pickup_check.sql`**, a mano, antes del
+   código: flag `logistics_providers.rider_pickup_check_required`, RPC
+   `gf_assign_custody` y guard de ítems relajado para el cotejo opcional. Con
+   el flag en `false` (valor de producción desde el 19-09-2026, pedido por la
+   operación) basta con asignar: la custodia pasa al motorizado en el acto y
+   `/reparto` muestra la ruta; «Recibir mi caja» no aparece. Para volver a
+   exigir la verificación:
+   (hoy el modo `exigir`, ver 3c).
+   **Migración `0184_gf_one_load_per_day.sql`** (a mano, antes del código):
+   con el flag apagado hay una sola carga por motorizado y día; las
+   asignaciones posteriores se suman a ella ya en custodia
+   (`gf_dispatch_load_open`, `gf_add_item_in_custody`). Smoke:
+   `scripts/sql/gf_one_load_smoke.sql`.
+   Se lee en un solo sitio (`riderPickupMode`,
+   `lib/grupo-gf-courier-route-access.ts`); la cabecera de «Despacho del día»
+   lo muestra. Smoke: `scripts/sql/gf_assign_custody_smoke.sql`.
+3c. **Migración `0185_provider_rider_pickup_mode.sql`**, a mano, antes del
+   código: reemplaza el booleano por `logistics_providers.rider_pickup_mode`
+   (`exigir` | `confirmar` | `ninguno`; migra `true`→`exigir`,
+   `false`→`ninguno`), añade `delivery_stops.pickup_confirmed`, los RPC
+   `gf_rider_confirm_pickup`, `gf_supervisor_withdraw` y
+   `gf_withdraw_in_custody`, y redefine `gf_assign_custody`,
+   `gf_dispatch_load_open`, `gf_add_item_in_custody`, `gf_rider_decline` y el
+   guard de ítems para los tres modos. **Producción quedó en `confirmar`**
+   (19-09-2026, decisión de la operación) con un UPDATE aparte tras la
+   migración. Cambiar de modo no requiere desplegar:
+   `update logistics_providers set rider_pickup_mode = 'exigir'    where code = 'grupo-gf-courier';`
+   `update logistics_providers set rider_pickup_mode = 'confirmar' where code = 'grupo-gf-courier';`
+   `update logistics_providers set rider_pickup_mode = 'ninguno'   where code = 'grupo-gf-courier';`
+   En `confirmar`, `/reparto` muestra cada parada «Por confirmar» con «Lo
+   llevo» / «No lo llevo» y «Confirmar todos» en la cabecera; «Despacho del
+   día» muestra confirmados/asignados y «Sin confirmar por Roy · N» con
+   quitar/mover. Smoke: `scripts/sql/gf_pickup_mode_smoke.sql`.
+4. `components/scan-action.tsx` es el único gesto de escaneo/foto; la mesa de
+   despacho (`DispatchWorkspace`) y la estación de almacén conservan su escáner
+   propio por ahora.
+5. «Actividad» del Master etiqueta los hitos del despacho; `?abrir=<pedido>&seccion=historial`
+   abre el drawer en esa pestaña.
+
 ## 5k-ter. Rutas de reparto (motorizados propios)
 
 Sección propia (`/dashboard/rutas`) para el coordinador y una pantalla aparte

@@ -16,6 +16,9 @@
   --animate-fade-up: fade-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
   --animate-float: float 7s ease-in-out infinite;
   --animate-sheen: sheen 8s ease-in-out infinite;
+
+  /* /reparto: el detalle de la parada entra deslizándose desde la derecha. */
+  --animate-slide-in-right: slide-in-right 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 @keyframes pulse-dot {
@@ -59,6 +62,21 @@
   }
 }
 
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-slide-in-right {
+    animation: none;
+  }
+}
+
 :root {
   color-scheme: light;
 }
@@ -94,3 +112,16 @@ body {
     min-height: 2.75rem;
   }
 }
+
+/*
+ * Pantalla del motorizado (/reparto): todo el texto un 30 % más grande, para
+ * leerlo en la calle con el teléfono en una mano. Se escala el texto, no el
+ * diseño: los utilitarios de tamaño se redefinen solo dentro de .rider-scale.
+ * Fuera de @layer para que ganen a los utilitarios de Tailwind.
+ */
+.rider-scale .text-\[10px\] { font-size: 13px; }
+.rider-scale .text-\[11px\] { font-size: 14.3px; }
+.rider-scale .text-xs { font-size: 15.6px; line-height: 1.35; }
+.rider-scale .text-sm { font-size: 18.2px; line-height: 1.4; }
+.rider-scale .text-base { font-size: 20.8px; line-height: 1.4; }
+.rider-scale .text-lg { font-size: 23.4px; line-height: 1.35; }

@@ -67,7 +67,8 @@ describe("el aviso dice la causa y descarta la pista falsa", () => {
   });
 
   it("manda a un panel que existe de verdad", () => {
-    const drawer = readFileSync(resolve(process.cwd(), "components/orders-master.tsx"), "utf8");
+    // El drawer vive en su propio archivo desde que salió del Master.
+    const drawer = readFileSync(resolve(process.cwd(), "components/order-drawer.tsx"), "utf8");
     expect(aviso).toContain("Ubicación y cobertura");
     expect(drawer).toContain("Ubicación y cobertura");
   });

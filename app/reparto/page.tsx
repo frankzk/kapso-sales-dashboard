@@ -2,9 +2,12 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/access";
 import { getMyRider, getRouteDetail, getRoutes } from "@/lib/routes-access";
 import { RiderRouteScreen } from "@/components/rider-route";
-import { GfRiderReceipt } from "@/components/gf-rider-receipt";
-import { getMyGfLoads } from "@/lib/gf-rider-loads";
+import { RiderReceiveBox } from "@/components/rider-receive-box";
+import { getMyGfLoads, getMyPickupMode } from "@/lib/gf-rider-loads";
+import { riderScreenFor } from "@/lib/grupo-gf-courier";
 import { getMasterPermissions } from "@/lib/permissions-access";
+import { getRiderSheet, loadRiderVocabulary } from "@/lib/sheets/rider-access";
+import { limaDate } from "@/lib/sheets/resolver";
 import { CoordinatorReport } from "./coordinacion";
 
 export const dynamic = "force-dynamic";
@@ -50,18 +53,34 @@ export default async function RepartoPage({
 
   // RLS solo devuelve las rutas ya entregadas al motorizado ('en_curso' o
   // 'cerrada'), así que no hay que filtrar por estado aquí.
-  const [routes, loads] = await Promise.all([getRoutes({ riderId: rider.id, limit: 30 }), getMyGfLoads()]);
+  // Una sola pantalla (MOM §29.12): la ruta es la verdad y el vocabulario de
+  // su hoja de Reparto propio viaja con ella para escribir como en el cuaderno.
+  const [routes, loads, sheet] = await Promise.all([getRoutes({ riderId: rider.id, limit: 30 }), getMyGfLoads(), getRiderSheet(rider.id)]);
+  const vocabulary = sheet ? await loadRiderVocabulary(sheet) : null;
   const active = routes.find((r) => r.status === "en_curso");
   const wanted = sp.ruta && routes.some((r) => r.id === sp.ruta) ? sp.ruta : null;
   const routeId = wanted ?? active?.id ?? routes[0]?.id ?? null;
   const detail = routeId ? await getRouteDetail(routeId) : null;
+  const today = limaDate(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10);
 
+  // Primero la caja, después la ruta (MOM §29.13): mientras haya una carga
+  // cotejada por oficina y no recibida, el motorizado verifica sus paquetes y
+  // dice cuáles no recoge. La ruta se muestra recién con la custodia cambiada.
+  // En modo «confirmar» (0185) la ruta aparece al asignar y cada parada nace
+  // «por confirmar»: el motorizado dice «Lo llevo» al sacarla del almacén.
+  const pickupMode = await getMyPickupMode();
+  if (riderScreenFor(pickupMode, loads.map((load) => load.state)) === "recibir_caja") {
+    return <RiderReceiveBox riderName={rider.full_name} loads={loads} />;
+  }
   return (
-    <><GfRiderReceipt loads={loads} /><RiderRouteScreen
+    <><RiderRouteScreen
       riderName={rider.full_name}
       routes={routes}
       route={detail?.route ?? null}
       stops={detail?.stops ?? []}
+      vocabulary={vocabulary}
+      today={today}
+      pickupMode={pickupMode}
     /></>
   );
 }

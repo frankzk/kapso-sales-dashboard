@@ -136,14 +136,16 @@ describe("la acción de servidor", () => {
 });
 
 describe("el drawer", () => {
-  const ui = readFileSync(resolve(process.cwd(), "components/orders-master.tsx"), "utf8");
+  const ui = readFileSync(resolve(process.cwd(), "components/order-drawer.tsx"), "utf8");
 
   it("ofrece el botón solo cuando la guía se puede anular", () => {
     expect(ui).toContain("canEdit && fenixOutputIsCancelable(g) && (");
   });
 
   it("promete lo que va a pasar de verdad, que son dos cosas distintas", () => {
-    const boton = ui.slice(ui.indexOf("function FenixCancelButton"));
+    // El botón es pieza compartida entre el Master y la ficha (order-master-shared.tsx).
+    const shared = readFileSync(resolve(process.cwd(), "components/order-master-shared.tsx"), "utf8");
+    const boton = shared.slice(shared.indexOf("function FenixCancelButton"));
     expect(boton.slice(0, 3000)).toContain("wasFilled");
     expect(boton.slice(0, 3000)).toContain(
       "La caja se queda como está y la salida vuelve a quedar sin courier",

@@ -123,7 +123,7 @@ describe("el dato viaja de Shopify al Master y a quien decide", () => {
     for (const f of [
       "app/dashboard/pedidos/payment-actions.ts",
       "app/dashboard/pedidos/aliclik-actions.ts",
-      "components/orders-master.tsx",
+      "components/order-drawer.tsx",
       "lib/collect-alert.ts",
       "app/api/pedidos/rotulos/route.ts",
     ]) {
@@ -165,6 +165,6 @@ describe("los pedidos pagados que siguen vivos van a buscar su pasarela", () => 
   it("y el Master reconcilia el histórico con el cambio de versión", () => {
     // La versión vigente, no la de este cambio: lo que se comprueba es que el
     // bump existe, y cualquiera posterior lo cumple igual.
-    expect(read("lib/order-macro-stage.ts")).toContain('MOM_RESOLUTION_VERSION = "mom-v1.13"');
+    expect(read("lib/order-macro-stage.ts")).toContain('MOM_RESOLUTION_VERSION = "mom-v1.14"');
   });
 });

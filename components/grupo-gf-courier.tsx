@@ -2,10 +2,17 @@
 
 import mobile from "./courier-mobile.module.css";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
+import { OrderLink } from "@/components/order-link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
+import { DispatchDayBoard } from "@/components/dispatch-day-board";
+import { CourierRoutesLedger } from "@/components/courier-routes-ledger";
+import { CourierBoxDrawer } from "@/components/courier-box-drawer";
+import { CourierRouteReportDrawer } from "@/components/courier-route-report-drawer";
+import type { DispatchManifest } from "@/lib/dispatch-access";
+import type { CourierLedgerRow } from "@/lib/courier-route-ledger";
 import { resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
 import {
   activateGroupGfCourier,
@@ -20,7 +27,6 @@ import {
   type CourierAvailableOrder,
   type CourierAcceptedOrder,
   type CourierRiderOption,
-  type CourierRouteSummary,
   type PeruDistrictRow,
 } from "@/app/dashboard/courier/actions";
 
@@ -36,16 +42,31 @@ function money(value: number): string {
   return `S/ ${value.toFixed(2)}`;
 }
 
-function readCourierTab(value: string | null): "available" | "preparation" | "routes" | "tariffs" {
-  return value === "preparation" || value === "routes" || value === "tariffs" ? value : "available";
+type CourierTabId = "dispatch" | "available" | "preparation" | "routes" | "tariffs";
+function readCourierTab(value: string | null): CourierTabId {
+  return value === "available" || value === "preparation" || value === "routes" || value === "tariffs" ? value : "dispatch";
 }
+/** Vistas anteriores: fuera de la barra, accesibles desde «⋯». Despacho del día ya hace lo suyo en un paso. */
+const LEGACY_TABS: ReadonlyArray<{ id: CourierTabId; label: string }> = [
+  { id: "available", label: "Pedidos disponibles" },
+  { id: "preparation", label: "Pedidos tomados" },
+];
 
 export function GrupoGfCourierBoard({
   orgId,
   snapshot,
+  manifests = [],
+  today = "",
+  ledger = [],
 }: {
   orgId: string;
   snapshot: CourierConfigSnapshot;
+  /** Cajas (manifiestos) visibles para «Despacho del día». */
+  manifests?: DispatchManifest[];
+  /** Hoy en Lima. */
+  today?: string;
+  /** Rutas y cajas para la pestaña Rutas (MOM §29.14). */
+  ledger?: CourierLedgerRow[];
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -53,9 +74,7 @@ export function GrupoGfCourierBoard({
   const [pending, startTransition] = useTransition();
   const searchParams = useSearchParams();
   const requestedTab = searchParams.get("tab");
-  const [tab, setTab] = useState<"available" | "preparation" | "routes" | "tariffs">(
-    readCourierTab(requestedTab),
-  );
+  const [tab, setTab] = useState<CourierTabId>(readCourierTab(requestedTab));
   useEffect(() => { setTab(readCourierTab(requestedTab)); }, [requestedTab]);
 
   function run(action: () => Promise<CourierActionResult>) {
@@ -106,55 +125,72 @@ export function GrupoGfCourierBoard({
   const provider = snapshot.provider;
   return (
     <div className={cn("space-y-4", mobile.board)}>
-      <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+      {/* En el móvil la barra superior del panel ya dice «Grupo GF Courier»: la cabecera solo existe desde `sm`. */}
+      <header className="hidden sm:flex sm:flex-col sm:gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
             Operación logística
           </p>
           <h1 className="mt-1 text-xl font-semibold text-slate-950">Grupo GF Courier</h1>
-          <p className="mt-1 hidden max-w-3xl text-sm text-slate-600 sm:block">
+          <p className="mt-1 max-w-3xl text-sm text-slate-600">
             Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega.
           </p>
         </div>
-        <details className="rounded-xl border border-slate-200 bg-white px-3 text-sm lg:min-w-80"><summary className="min-h-12 cursor-pointer py-3 font-medium text-slate-600">Condiciones del servicio</summary><div className="grid grid-cols-3 divide-x divide-slate-200 pb-3">
-          <Summary label="Corte" value={provider.same_day_cutoff.slice(0, 5)} />
-          <Summary label="Yape" value={`${snapshot.yapePercentage} %`} />
-          <Summary label="Efectivo máximo" value={money(provider.cash_limit_amount)} />
-        </div></details>
       </header>
 
-      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-4 gap-1 border-b border-slate-200 lg:flex">
+      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-[1fr_1fr_1fr_auto] gap-1 border-b border-slate-200 lg:flex">
         <CourierTab
-          active={tab === "available"}
-          onClick={() => setTab("available")}
-          label="Pedidos disponibles"
-          shortLabel="Disponibles"
-          count={snapshot.operations.available.length}
-        />
-        <CourierTab
-          active={tab === "preparation"}
-          onClick={() => setTab("preparation")}
-          label="Pedidos tomados"
-          shortLabel="Tomados"
-          count={snapshot.operations.accepted.length}
+          label="Despacho del día"
+          shortLabel="Despacho"
+          active={tab === "dispatch"}
+          onClick={() => setTab("dispatch")}
+          count={new Set(manifests.filter((m) => m.route_date === today && m.state !== "cancelled" && m.courier === "propio").map((m) => m.rider_id ?? m.driver_name)).size}
         />
         <CourierTab
           active={tab === "routes"}
           onClick={() => setTab("routes")}
           label="Rutas"
           shortLabel="Rutas"
-          count={new Set(snapshot.operations.routes.map((route) => `${route.riderId}:${route.routeDate}`)).size}
+          count={ledger.filter((row) => row.routeDate === today).length}
         />
         <CourierTab
           active={tab === "tariffs"}
           onClick={() => setTab("tariffs")}
           label="Tarifario"
         />
+        <MoreViewsMenu
+          active={LEGACY_TABS.some((t) => t.id === tab)}
+          items={LEGACY_TABS.map((t) => ({ ...t, count: t.id === "available" ? snapshot.operations.available.length : snapshot.operations.accepted.length }))}
+          onPick={(id) => setTab(id)}
+        />
       </nav>
+      {LEGACY_TABS.some((t) => t.id === tab) && (
+        <p className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
+          <span>Vista anterior · Despacho del día ya hace esto en un paso.</span>
+          <button type="button" onClick={() => setTab("dispatch")} className="min-h-0 p-0 font-medium text-brand-700 underline-offset-2 hover:underline">Ir a Despacho del día</button>
+        </p>
+      )}
 
       {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
       {notice && <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}
 
+      {tab === "dispatch" && (
+        <DispatchDayBoard
+          orgId={orgId}
+          day={today}
+          available={snapshot.operations.available}
+          accepted={snapshot.operations.accepted}
+          blocked={snapshot.operations.blocked}
+          riders={snapshot.operations.riders}
+          manifests={manifests}
+          canManageDispatch={snapshot.canManageDispatch}
+          riderPickupMode={provider.rider_pickup_mode ?? "exigir"}
+          cashWarning={provider.cash_warning_amount}
+          cashLimit={provider.cash_limit_amount}
+          pending={pending}
+          run={run}
+        />
+      )}
       {tab === "available" && (
         <AvailableOrders
           orgId={orgId}
@@ -178,12 +214,16 @@ export function GrupoGfCourierBoard({
         />
       )}
       {tab === "routes" && (
-        <CourierRoutes
-          routes={snapshot.operations.routes}
+        <CourierRoutesLedger
+          rows={ledger}
+          riders={snapshot.operations.riders}
+          today={today}
           unassignedCount={snapshot.operations.accepted.filter((order) => !order.route).length}
-          onShowUnassigned={() => setTab("preparation")}
+          onShowUnassigned={() => setTab("dispatch")}
         />
       )}
+      <CourierBoxDrawer />
+      <CourierRouteReportDrawer />
       {tab === "tariffs" && (
         <TariffMatrix
           orgId={orgId}
@@ -194,6 +234,59 @@ export function GrupoGfCourierBoard({
           onSave={(input) => run(() => saveDistrictTariff(input))}
           onAvailability={(input) => run(() => setDistrictAvailability(input))}
         />
+      )}
+    </div>
+  );
+}
+
+/** «⋯» al final de las pestañas: las vistas anteriores en un desplegable pequeño. Escape o clic fuera lo cierran. */
+function MoreViewsMenu({ active, items, onPick }: {
+  active: boolean;
+  items: ReadonlyArray<{ id: CourierTabId; label: string; count: number }>;
+  onPick: (id: CourierTabId) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => { if (root.current && !root.current.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  return (
+    <div ref={root} className="relative flex items-center justify-center lg:ml-auto">
+      <button
+        type="button"
+        aria-label="Más vistas"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "relative flex min-h-12 min-w-12 items-center justify-center rounded-lg px-2 text-lg leading-none lg:min-h-14 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
+          active ? "text-brand-700" : "text-slate-500 hover:text-slate-800",
+        )}
+      >
+        ⋯
+        {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-brand-600" />}
+      </button>
+      {open && (
+        <ul role="menu" className="absolute right-0 top-full z-30 mt-1 w-60 rounded-xl border border-slate-200 bg-white p-1 text-sm shadow-lg">
+          {items.map((item) => (
+            <li key={item.id} role="none">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => { onPick(item.id); setOpen(false); }}
+                className="flex min-h-10 w-full items-center justify-between gap-2 rounded-lg px-3 text-left text-slate-800 hover:bg-slate-50"
+              >
+                <span>{item.label}</span>
+                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[11px] tabular-nums text-slate-600">{item.count.toLocaleString("es-PE")}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
@@ -212,21 +305,23 @@ function CourierTab({
   count?: number;
   shortLabel?: string;
 }) {
+  // Sin badge cuando la activa está en 0; en el móvil solo la activa lleva número.
+  const showCount = count != null && !(active && count === 0);
   return (
     <button
       type="button"
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "relative flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 px-1 py-2 text-xs font-semibold lg:flex-row lg:px-3 lg:text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
+        "relative flex min-h-12 min-w-0 items-center justify-center gap-1 px-1 py-2 text-xs font-semibold lg:min-h-14 lg:px-3 lg:text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
         active ? "text-brand-700" : "text-slate-500 hover:text-slate-800",
       )}
     >
-      <span className={shortLabel ? "hidden lg:inline" : ""}>{label}</span>{shortLabel && <span className="lg:hidden">{shortLabel}</span>}
-      {count != null && (
+      <span className={cn("truncate", shortLabel ? "hidden lg:inline" : "")}>{label}</span>{shortLabel && <span className="truncate lg:hidden">{shortLabel}</span>}
+      {showCount && (
         <span className={cn(
-          "rounded-full px-1.5 py-0.5 text-xs tabular-nums sm:ml-1",
-          active ? "bg-brand-50 text-brand-700" : "bg-slate-100 text-slate-600",
+          "rounded-full px-1.5 py-0.5 text-[11px] tabular-nums",
+          active ? "bg-brand-50 text-brand-700" : "hidden bg-slate-100 text-slate-600 sm:inline",
         )}>
           {count}
         </span>
@@ -465,9 +560,9 @@ function AvailableOrders({
                   /></label>
                 </td>
                 <td className="px-3 py-3">
-                  <Link href={`/dashboard/pedidos?q=${encodeURIComponent(order.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">
+                  <OrderLink orderId={order.orderId} className="font-semibold text-slate-950 hover:text-brand-700">
                     {order.orderName}
-                  </Link>
+                  </OrderLink>
                   <p className="mt-0.5 text-xs text-slate-500">
                     {order.storeName}
                     {order.hasPriorDispatch && order.lastDispatchedAt
@@ -590,6 +685,7 @@ function AcceptedOrders({
   type AcceptedSegment = "unassigned" | "assigned" | "pending_arm" | "ready_check";
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [riderId, setRiderId] = useState(riders[0]?.id ?? "");
+  const [overrideCash, setOverrideCash] = useState(false);
   const [segment, setSegment] = useState<AcceptedSegment>("unassigned");
   const segmentCounts: Record<AcceptedSegment, number> = {
     unassigned: orders.filter((order) => !order.route).length,
@@ -624,7 +720,10 @@ function AcceptedOrders({
     if (!riderId || !selected.size) return;
     const requestIds = [...selected];
     setSelected(new Set());
-    run(() => assignGroupGfCourierRoute(orgId, riderId, requestIds));
+    run(async () => {
+      const result = await assignGroupGfCourierRoute(orgId, riderId, requestIds, { overrideCash });
+      return { ...result, notice: [result.notice, result.cashWarning].filter(Boolean).join(" ") || undefined };
+    });
   }
 
   return (
@@ -655,6 +754,10 @@ function AcceptedOrders({
               {!riders.length && <option value="">Sin motorizados disponibles</option>}
               {riders.map((rider) => <option key={rider.id} value={rider.id}>{rider.fullName}</option>)}
             </select>
+          </label>
+          <label className="flex items-center gap-2 text-xs text-slate-600">
+            <input type="checkbox" checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} disabled={pending} />
+            Autorizo superar el límite de efectivo de la ruta
           </label>
           <button
             type="button"
@@ -741,7 +844,7 @@ function AcceptedOrders({
                     /></label>
                   </td>
                   <td className="px-4 py-3">
-                    <Link href={`/dashboard/pedidos?q=${encodeURIComponent(order.orderName)}`} className="font-semibold text-slate-950 hover:text-brand-700">{order.orderName}</Link>
+                    <OrderLink orderId={order.orderId} className="font-semibold text-slate-950 hover:text-brand-700">{order.orderName}</OrderLink>
                     <p className="mt-0.5 text-xs text-slate-500">{order.storeName} · {order.district}</p>
                   </td>
                   <td className="px-3 py-3 text-slate-700">{order.customerName}</td>
@@ -783,148 +886,6 @@ function AcceptedOrders({
           </tbody>
         </table>
       </div>
-    </section>
-  );
-}
-
-function routeStateLabel(state: string): string {
-  return ({
-    draft: "Planificada",
-    office_check: "Cotejo en almacén",
-    ready_for_pickup: "Caja lista",
-    pickup_check: "Recibiendo motorizado",
-    in_custody: "En reparto",
-  } as Record<string, string>)[state] ?? state;
-}
-
-function CourierRoutes({
-  routes,
-  unassignedCount,
-  onShowUnassigned,
-}: {
-  routes: CourierRouteSummary[];
-  unassignedCount: number;
-  onShowUnassigned: () => void;
-}) {
-  return (
-    <section aria-labelledby="courier-routes-title" className="space-y-4">
-      <nav aria-label="Trabajo de rutas" className="flex flex-wrap gap-2 text-sm">
-        <span className="inline-flex min-h-12 items-center rounded-lg bg-brand-50 px-3 font-medium text-brand-700" aria-current="page">Cajas y cotejos</span>
-        <Link href="/dashboard/courier/reparto" className="inline-flex min-h-12 items-center rounded-lg px-3 font-medium text-slate-600 hover:bg-slate-100">Reparto y cierre diario</Link>
-      </nav>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h2 id="courier-routes-title" className="text-base font-semibold text-slate-950">Rutas y cajas operativas</h2>
-          <p className="mt-1 max-w-4xl text-sm leading-6 text-slate-600">
-            Abre la caja del motorizado para verificar sus paquetes y registrar la recepción.
-          </p>
-        </div>
-        {unassignedCount > 0 && (
-          <button
-            type="button"
-            onClick={onShowUnassigned}
-            className="h-10 rounded-lg border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
-          >
-            {unassignedCount} pedido{unassignedCount === 1 ? "" : "s"} sin ruta →
-          </button>
-        )}
-      </div>
-
-      <div className="space-y-3 lg:hidden" aria-label="Cajas operativas">
-        {routes.map((route) => <article key={route.manifestId} className="rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div><h3 className="text-base font-semibold text-slate-950">{route.riderName}</h3><p className="mt-1 text-sm text-slate-600">{formatDate(route.routeDate)} · Carga {route.loadNumber ?? 1}</p></div>
-            <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">{routeStateLabel(route.state)}</span>
-          </div>
-          <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-            <div className="flex justify-between gap-2"><dt className="text-slate-600">Asignados</dt><dd className="font-semibold tabular-nums">{route.assignedCount}</dd></div>
-            <div className="flex justify-between gap-2"><dt className="text-slate-600">Armados</dt><dd className="font-semibold tabular-nums">{route.armedCount}</dd></div>
-            <div className="flex justify-between gap-2"><dt className="text-slate-600">Verificados</dt><dd className="font-semibold tabular-nums">{route.officeCheckedCount}</dd></div>
-            <div className="flex justify-between gap-2"><dt className="text-slate-600">Recibidos</dt><dd className="font-semibold tabular-nums">{route.pickupCheckedCount}</dd></div>
-          </dl>
-          <progress aria-label={`Verificación de la caja de ${route.riderName}`} max={route.assignedCount || 1} value={route.officeCheckedCount} className="mt-3 h-2 w-full accent-brand-600" />
-          <Link href={`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(route.manifestId)}`} className="mt-3 flex min-h-12 items-center justify-center rounded-xl bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2">
-            {route.state === "in_custody" ? "Ver caja recibida" : route.state === "ready_for_pickup" || route.state === "pickup_check" ? "Recibir carga" : "Verificar caja"}
-          </Link>
-          {route.deliveryRouteId && route.state === "in_custody" && <Link href={`/dashboard/courier/reparto?id=${route.deliveryRouteId}`} className="mt-2 flex min-h-12 items-center justify-center text-sm font-semibold text-brand-700">Ver reparto y liquidación</Link>}
-        </article>)}
-        {!routes.length && <p className="rounded-xl border border-dashed border-slate-300 p-5 text-sm text-slate-600">Todavía no hay rutas. Asigna pedidos a un motorizado desde Pedidos tomados.</p>}
-      </div>
-      <div className={cn(TABLE_WRAP_FROM[980], "hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:block")}>
-        <table className="w-full min-w-[980px] text-sm">
-          <thead className={STICKY_HEAD}>
-            <tr className="text-left text-xs text-slate-500">
-              <th className="px-4 py-3 font-medium">Motorizado / caja</th>
-              <th className="px-3 py-3 font-medium">Situación</th>
-              <th className="px-3 py-3 text-center font-medium">Asignados</th>
-              <th className="px-3 py-3 text-center font-medium">Armados</th>
-              <th className="px-3 py-3 text-center font-medium">Cotejados</th>
-              <th className="px-3 py-3 text-center font-medium">Recibidos</th>
-              <th className="px-4 py-3 font-medium">Avance físico</th>
-              <th className="px-4 py-3 text-right font-medium">Acción</th>
-            </tr>
-          </thead>
-          <tbody>
-            {routes.map((route) => {
-              const progress = route.assignedCount
-                ? Math.round((route.officeCheckedCount / route.assignedCount) * 100)
-                : 0;
-              return (
-                <tr key={route.manifestId} className="border-b border-slate-100 last:border-0">
-                  <td className="px-4 py-3">
-                    <p className="font-semibold text-slate-950">{route.riderName}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">{formatDate(route.routeDate)} · Carga {route.loadNumber ?? 1}</p>
-                  </td>
-                  <td className="px-3 py-3">
-                    <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
-                      {routeStateLabel(route.state)}
-                    </span>
-                  </td>
-                  <td className="px-3 py-3 text-center font-semibold tabular-nums text-slate-900">{route.assignedCount}</td>
-                  <td className="px-3 py-3 text-center font-semibold tabular-nums text-sky-700">{route.armedCount}</td>
-                  <td className="px-3 py-3 text-center font-semibold tabular-nums text-emerald-700">{route.officeCheckedCount}</td>
-                  <td className="px-3 py-3 text-center font-semibold tabular-nums text-violet-700">{route.pickupCheckedCount}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex min-w-44 items-center gap-3">
-                      <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
-                        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${progress}%` }} />
-                      </div>
-                      <span className="w-9 text-right text-xs font-semibold tabular-nums text-slate-600">{progress}%</span>
-                    </div>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {route.armedCount < route.assignedCount
-                        ? `${route.assignedCount - route.armedCount} por armar`
-                        : route.officeCheckedCount < route.assignedCount
-                          ? `${route.assignedCount - route.officeCheckedCount} por cotejar`
-                          : "Caja cotejada al 100 %"}
-                    </p>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <Link
-                      href={`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(route.manifestId)}`}
-                      className="inline-flex h-9 items-center rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2"
-                    >
-                      Abrir caja
-                    </Link>
-                    {route.deliveryRouteId && route.state === "in_custody" && <Link href={`/dashboard/courier/reparto?id=${route.deliveryRouteId}`} className="mt-2 block text-xs font-semibold text-brand-700">Ver reparto y liquidación</Link>}
-                  </td>
-                </tr>
-              );
-            })}
-            {!routes.length && (
-              <tr>
-                <td colSpan={8} className="px-6 py-16 text-center">
-                  <p className="font-medium text-slate-800">Todavía no hay rutas operativas.</p>
-                  <p className="mt-1 text-sm text-slate-500">Asigna pedidos desde “Pedidos tomados” para crear la caja diaria del motorizado.</p>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      <p className="text-xs leading-5 text-slate-500">
-        “Armado” viene de Almacén. “Cotejado” es el primer control físico de la caja; “Recibido” es el segundo control del motorizado.
-      </p>
     </section>
   );
 }
@@ -979,6 +940,15 @@ function TariffMatrix({
 
   return (
     <div className="space-y-5">
+      <details className="rounded-xl border border-slate-200 bg-white px-3 text-sm">
+        <summary className="min-h-12 cursor-pointer py-3 font-medium text-slate-600">Condiciones del servicio</summary>
+        <p className="pb-2 text-xs text-slate-500">Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega.</p>
+        <div className="grid grid-cols-3 divide-x divide-slate-200 pb-3">
+          <Summary label="Corte" value={provider.same_day_cutoff.slice(0, 5)} />
+          <Summary label="Yape" value={`${snapshot.yapePercentage} %`} />
+          <Summary label="Efectivo máximo" value={money(provider.cash_limit_amount)} />
+        </div>
+      </details>
       {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
       {notice && <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}
 

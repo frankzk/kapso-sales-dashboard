@@ -6,7 +6,7 @@
 // `getRouteDetail` con el id de la ruta de otro recibe null. La seguridad no
 // depende de que la interfaz recuerde filtrar.
 
-import { createServerSupabase } from "@/lib/db";
+import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { SUBETAPAS_ASIGNABLES_A_RUTA } from "@/lib/order-macro-stage";
 import type { RouteStop } from "@/lib/routes";
@@ -39,6 +39,18 @@ export interface StopWithOrder extends RouteStop {
   photo_path: string | null;
   voucher_path: string | null;
   reported_at: string | null;
+  reported_by?: string | null;
+  /** Lo escrito por el motorizado tal cual y su detalle de pago (0180). */
+  written_status?: string | null;
+  written_status_code?: string | null;
+  written_payment?: string | null;
+  /** Caja de despacho de la que salió la parada (0159) y, en modo «confirmar»
+   *  (0185), si el motorizado dijo «Lo llevo» y si lo había dicho al entregar. */
+  shipment_id?: string | null;
+  dispatch_manifest_id?: string | null;
+  pickup_confirmed?: boolean | null;
+  manifest_item_id?: string | null;
+  pickup_checked_at?: string | null;
   order: {
     name: string | null;
     customer_name: string | null;
@@ -57,7 +69,8 @@ const ROUTE_COLUMNS =
   "id,org_id,store_id,rider_id,route_date,status,settlement_id,note,started_at,closed_at";
 const STOP_COLUMNS =
   "id,order_id,store_id,seq,status,payment_method,collected_amount,outcome_reason,note," +
-  "photo_path,voucher_path,reported_at";
+  "photo_path,voucher_path,reported_at,reported_by,written_status,written_status_code,written_payment," +
+  "shipment_id,dispatch_manifest_id,pickup_confirmed";
 
 /** La ficha del motorizado que corresponde al usuario de la petición, si la hay. */
 export async function getMyRider(): Promise<{ id: string; full_name: string } | null> {
@@ -135,11 +148,45 @@ export async function getRouteDetail(
     }
   }
 
-  const balances = await loadRouteCollectionBalances(orderIds);
+  const [balances, pickups] = await Promise.all([loadRouteCollectionBalances(orderIds), loadStopPickups(stops)]);
   return {
     route,
-    stops: stops.map((s) => ({ ...s, order: byOrder.get(s.order_id) ?? null, collection: balances.get(s.order_id) })),
+    stops: stops.map((s) => ({
+      ...s,
+      order: byOrder.get(s.order_id) ?? null,
+      collection: balances.get(s.order_id),
+      manifest_item_id: pickups.get(pickupKey(s))?.id ?? null,
+      pickup_checked_at: pickups.get(pickupKey(s))?.pickup_checked_at ?? null,
+    })),
   };
+}
+
+function pickupKey(stop: { dispatch_manifest_id?: string | null; shipment_id?: string | null }): string {
+  return `${stop.dispatch_manifest_id ?? ""}:${stop.shipment_id ?? ""}`;
+}
+
+/**
+ * «Lo llevo» de cada parada (0185): el ítem de la caja de despacho que la
+ * originó. Se lee con el service role porque las políticas de los ítems son
+ * del supervisor, y el motorizado solo recibe los de SUS paradas (ya
+ * filtradas por RLS arriba).
+ */
+async function loadStopPickups(stops: readonly StopWithOrder[]): Promise<Map<string, { id: string; pickup_checked_at: string | null }>> {
+  const map = new Map<string, { id: string; pickup_checked_at: string | null }>();
+  const withBox = stops.filter((s) => s.dispatch_manifest_id && s.shipment_id);
+  if (!withBox.length) return map;
+  const admin = createAdminSupabase();
+  const manifestIds = [...new Set(withBox.map((s) => s.dispatch_manifest_id as string))];
+  const { data } = await admin
+    .from("dispatch_manifest_items")
+    .select("id,manifest_id,shipment_id,pickup_checked_at")
+    .in("manifest_id", manifestIds)
+    .in("shipment_id", withBox.map((s) => s.shipment_id as string))
+    .is("removed_at", null);
+  for (const row of (data ?? []) as Array<{ id: string; manifest_id: string; shipment_id: string; pickup_checked_at: string | null }>) {
+    map.set(`${row.manifest_id}:${row.shipment_id}`, { id: row.id, pickup_checked_at: row.pickup_checked_at });
+  }
+  return map;
 }
 
 /** Tarifas de pago al motorizado. Se traen todas y `resolveTariff` elige. */

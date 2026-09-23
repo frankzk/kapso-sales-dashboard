@@ -669,3 +669,91 @@ describe("el sub-estado de agencia prueba custodia (v1.7)", () => {
     expect(state.stage).not.toBe("en_curso");
   });
 });
+
+describe("motorizado propio: lo que reporta mueve la etapa (v1.14, MOM §29.13)", () => {
+  const T = (h: string) => `2026-09-22T${h}:00.000Z`;
+  const own = () => guide({
+    id: "s-gf",
+    courier: "propio",
+    preparation_state: "listo_despacho",
+    custody_state: "courier",
+    dispatched_at: T("14:00"),
+  });
+  const gf = (over: Partial<ResolveMacroStageInput> = {}) => resolve({
+    order: order({ region: "Lima", province: "Lima", district: "Surco", coverage: "lima" }),
+    guides: [own()],
+    legacy: { general: "en_proceso", operational: "despachado", since: CREATED },
+    ...over,
+  });
+  const ev = (kind: string, at: string, extra: Partial<MacroEventSnapshot> = {}): MacroEventSnapshot => ({ kind, occurred_at: at, shipment_id: "s-gf", ...extra });
+  const stop = (status: string, at: string, outcome_reason: string | null = null, extra: Partial<MacroEventSnapshot> = {}) =>
+    ev("stop_reported", at, { payload: { status, outcome_reason }, ...extra });
+
+  it("asignado con custodia y sin «Lo llevo» sigue en tránsito", () => {
+    expect(gf()).toMatchObject({ stage: "en_curso", substage: "en_transito" });
+  });
+
+  it("«Lo llevo» pasa a En reparto, desde esa hora", () => {
+    expect(gf({ events: [ev("pickup_checked", T("15:32"))] })).toMatchObject({ stage: "en_curso", substage: "en_reparto", since: T("15:32") });
+  });
+
+  it("la parada entregada va a Por cerrar · Validación de cierre pendiente antes de cerrar la ruta", () => {
+    const state = gf({ events: [ev("pickup_checked", T("15:32")), stop("entregado", T("19:32"))] });
+    expect(state).toMatchObject({ stage: "por_cerrar", substage: "validacion_cierre_pendiente", since: T("19:32") });
+    expect(state.reasons).toContain("validacion_cierre_pendiente");
+  });
+
+  it("postergada (reprogramado o no estaba) vuelve a Por reprogramar Lima", () => {
+    expect(gf({ events: [ev("pickup_checked", T("15:32")), stop("no_entregado", T("19:00"), "reprogramado")] })).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima", since: T("19:00") });
+    expect(gf({ events: [stop("no_entregado", T("19:00"), "no_estaba")] })).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima" });
+  });
+
+  it("no entregada por otro motivo va a Por cerrar · Devolución física pendiente", () => {
+    for (const reason of ["rechazado", "direccion_errada", "no_contesta", "sin_dinero", "otro"]) {
+      expect(gf({ events: [stop("no_entregado", T("19:00"), reason)] })).toMatchObject({ stage: "por_cerrar", substage: "devolucion_fisica_pendiente" });
+    }
+  });
+
+  it("la señal más reciente manda: reasignado tras postergar vuelve a En reparto", () => {
+    expect(gf({ events: [stop("no_entregado", T("19:00"), "reprogramado"), ev("pickup_checked", "2026-09-23T14:10:00.000Z")] })).toMatchObject({ stage: "en_curso", substage: "en_reparto" });
+  });
+
+  it("deshacer el reporte vuelve a lo anterior: «Lo llevo» → En reparto", () => {
+    expect(gf({ events: [ev("pickup_checked", T("15:32")), stop("entregado", T("19:32")), stop("pendiente", T("19:40"))] })).toMatchObject({ stage: "en_curso", substage: "en_reparto" });
+    // Y un reporte nuevo después del deshacer vuelve a mandar.
+    expect(gf({ events: [ev("pickup_checked", T("15:32")), stop("entregado", T("19:32")), stop("pendiente", T("19:40")), stop("no_entregado", T("19:50"), "rechazado")] })).toMatchObject({ stage: "por_cerrar", substage: "devolucion_fisica_pendiente" });
+  });
+
+  it("una parada del cuaderno sin shipment_id vale para la salida propia vigente", () => {
+    expect(gf({ events: [stop("entregado", T("19:32"), null, { shipment_id: null })] })).toMatchObject({ stage: "por_cerrar", substage: "validacion_cierre_pendiente" });
+  });
+
+  it("las señales de otra salida no cuentan, y un courier externo tampoco", () => {
+    expect(gf({ events: [ev("pickup_checked", T("15:32"), { shipment_id: "otra" })] })).toMatchObject({ substage: "en_transito" });
+    const external = resolve({
+      order: order({ region: "Lima", province: "Lima", district: "Surco", coverage: "lima" }),
+      guides: [{ ...own(), id: "s-ext", courier: "aliclik" }],
+      events: [ev("stop_reported", T("19:32"), { shipment_id: "s-ext", payload: { status: "entregado" } })],
+      legacy: { general: "en_proceso", operational: "despachado", since: CREATED },
+    });
+    expect(external).toMatchObject({ stage: "en_curso", substage: "en_transito" });
+  });
+
+  it("al cerrar la ruta sigue el camino normal: Pendiente de liquidación y, liquidado, Finalizado", () => {
+    // La salida propia nunca recibe `delivery_status = entregado`: la parada
+    // entregada vale como entrega, y por eso no cae en «salida adicional
+    // activa» ni en «devolución física pendiente».
+    const closed = gf({
+      events: [stop("entregado", T("19:32")), ev("status_override", T("21:00"))],
+      legacy: { general: "entregado", operational: "entregado", since: T("21:00") },
+    });
+    expect(closed).toMatchObject({ stage: "por_cerrar", substage: "pendiente_liquidacion" });
+    expect(closed.reasons).not.toContain("salida_adicional_activa");
+    expect(closed.reasons).not.toContain("devolucion_fisica_pendiente");
+    const settled = gf({
+      events: [stop("entregado", T("19:32")), ev("liquidation_closed", T("22:00"))],
+      legacy: { general: "entregado", operational: "entregado", since: T("21:00") },
+    });
+    expect(settled).toMatchObject({ stage: "finalizado", substage: "entregado_cerrado" });
+  });
+});

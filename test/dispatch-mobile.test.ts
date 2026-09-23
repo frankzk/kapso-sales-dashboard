@@ -30,9 +30,9 @@ function manifest(office: boolean, received: boolean, state: DispatchManifest["s
     } satisfies DispatchManifestItem],
   };
 }
-function renderBox(box: DispatchManifest, canManage = true, canPickup = true) {
+function renderBox(box: DispatchManifest, canManage = true, canPickup = true, pickupMode: "exigir" | "confirmar" | "ninguno" = "exigir") {
   return renderToStaticMarkup(createElement(DispatchWorkspace, {
-    initialData: { manifests: [box], assignableShipments: [], warehousePending: 0 },
+    initialData: { manifests: [box], assignableShipments: [], warehousePending: 0, pickupModeByOrg: { org: pickupMode } },
     initialSelectedId: box.id, stores: [], riders: [], canPrepare: false,
     canManage, canPickup, surface: "gf",
   }));
@@ -78,6 +78,23 @@ describe("mobile verification", () => {
     expect(html).not.toContain("Escanear con cámara");
     expect(html).not.toContain("Corregir contenido");
   });
+  it("in custody with pickup mode «confirmar», reception stays open for the unconfirmed packages (0185 fallback)", () => {
+    // El motorizado no pudo confirmar desde su teléfono: el supervisor escanea aquí lo que sí lleva.
+    const html = renderBox(manifest(true, false, "in_custody"), true, true, "confirmar");
+    // El respaldo va DEBAJO de la lista de paquetes, con su propio título.
+    expect(html).toContain("Confirmar por Roy");
+    expect(html).toContain("1 paquete sin confirmar");
+    expect(html.indexOf("Confirmar por Roy")).toBeGreaterThan(html.indexOf("Paquetes recibidos"));
+    expect(html).toContain("Escanear con cámara");
+    expect(html).not.toContain("La entrega de esta carga quedó registrada");
+    // En «exigir» la carga en custodia sigue cerrada.
+    const strict = renderBox(manifest(true, false, "in_custody"), true, true, "exigir");
+    expect(strict).not.toContain("Confirmar por Roy");
+    // Y en oficina, con custodia, el escáner no vuelve: la caja ya salió.
+    const office = renderBox(manifest(true, false, "in_custody"), true, false, "confirmar");
+    expect(office).toContain("ya salió con Roy");
+    expect(office).not.toContain("Escanear con cámara");
+  });
   it("office-only staff see completion without being sent to unauthorized receipt", () => {
     const html = renderBox(manifest(true, false, "ready_for_pickup"), true, false);
     expect(html).toContain("Caja verificada");
@@ -90,16 +107,23 @@ describe("mobile verification", () => {
     expect(html).not.toContain("Carga recibida");
     expect(html).not.toContain("Continuar a recepción");
   });
-  it("touch focus is gated and requests release their lock on failure", () => {
+  it("no autofocus on load: the first typed character focuses the field, and requests release their lock on failure", () => {
     const scanner = readFileSync(new URL("../components/dispatch-scanner.tsx", import.meta.url), "utf8");
     const workspace = readFileSync(new URL("../components/dispatch-workspace.tsx", import.meta.url), "utf8");
-    expect(scanner).toContain('(hover: hover) and (pointer: fine)');
+    // fd1f878: sin halo de foco al abrir la página; una pistola lectora sigue
+    // funcionando porque el primer carácter enfoca el campo si nada lo tiene.
+    expect(scanner).not.toContain("autoFocus");
+    expect(scanner).toContain('window.addEventListener("keydown", onKey)');
+    expect(scanner).toContain("if (event.key.length !== 1) return;");
     expect(workspace).toContain("scanLock.current");
     expect(workspace).toContain("finally { setBusy(false); scanLock.current = false; }");
   });
-  it("mobile routes expose their exact load link and all four counters", () => {
-    const source = readFileSync(new URL("../components/grupo-gf-courier.tsx", import.meta.url), "utf8");
-    const mobile = source.split('aria-label="Cajas operativas"')[1]?.split("TABLE_WRAP_FROM")[0] ?? "";
-    for (const key of ["route.assignedCount", "route.armedCount", "route.officeCheckedCount", "route.pickupCheckedCount", "encodeURIComponent(route.manifestId)"]) expect(mobile).toContain(key);
+  it("mobile routes cards open the box and carry all four counters", () => {
+    // La lista de Rutas (MOM §29.14): en el móvil cada tarjeta abre la caja
+    // al lado (`?caja=`) y lleva asignados, armados, cotejados y recibidos.
+    const source = readFileSync(new URL("../components/courier-routes-ledger.tsx", import.meta.url), "utf8");
+    const card = source.split("function LedgerCard(")[1] ?? "";
+    for (const key of ["row.assignedCount", "row.armedCount", "row.officeCheckedCount", "row.pickupCheckedCount", "href={href}"]) expect(card).toContain(key);
+    expect(source).toContain("courierBoxHref(r.manifestId, location)");
   });
 });
