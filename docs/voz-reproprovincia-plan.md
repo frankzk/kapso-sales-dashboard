@@ -513,7 +513,7 @@ sin anotar el resultado aquí.
 | Prueba | Fecha | Resultado |
 | --- | --- | --- |
 | 1 · ¿Contesta el agente? | 22-09-2026 | **Sí.** Llamada directa desde un celular al 01 705 8243: la tool corre antes de hablar y el saludo sale con la ficha del mock. |
-| 3 · ¿Qué número ve xAI? | 22-09-2026 | **Ninguno, ni siquiera en llamada directa**, con «Know caller's phone number» encendido. Si el desvío de Zadarma no entrega el caller ID en una llamada directa, tampoco lo hará en el callback. Mientras no se resuelva, la atadura es la **opción 2: una llamada en curso por número de agente**. Pendiente: revisar en Make qué llegó en `numero_cliente` y si Zadarma tiene una opción para transmitir el número de origen en el desvío. |
+| 3 · ¿Qué número ve xAI? | 22-09-2026 | **xAI sí recibe el caller ID en llamada directa**: la pestaña Conversations del agente registra el celular de quien llamó como «Caller» y `+5117058243` como «Destination». Pero **el modelo no lo pasó a la tool**: `numero_cliente` no llegó a Make. Falta que el número llegue a la tool (parámetro obligatorio o variable del sistema en la configuración de la tool) y, sobre todo, ver qué «Caller» registra xAI en el callback de la prueba 2: si es el celular de la clienta, la atadura es la opción 1; si es el número de Zadarma, la opción 2. |
 | 2 · ¿Funciona la saliente? | — | Pendiente. |
 | 4 · ¿Llama webhooks? | 22-09-2026 | **Sí.** Las dos tools llegan a Make en cada sesión de la consola. |
 | 5 · Transcripción y fin | — | Pendiente. |
