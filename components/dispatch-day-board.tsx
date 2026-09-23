@@ -432,8 +432,10 @@ export function DispatchDayBoard(props: Props) {
 
       {/* Tiles de métricas: cada una es un filtro con su cantidad (misma fuente de
           verdad que el picker). Una sola fila con scroll horizontal en todo
-          ancho: con nueve tarjetas, la grilla partía la fila o cortaba etiquetas. */}
-      <div role="group" aria-label="Métricas y filtros del día" className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-2 [scrollbar-width:thin]">
+          ancho: con nueve tarjetas, la grilla partía la fila o cortaba etiquetas.
+          El padding arriba y a los lados deja ver el anillo de la tarjeta activa
+          y el de foco: un contenedor con scroll recorta lo que sobresale. */}
+      <div role="group" aria-label="Métricas y filtros del día" className="-mx-1.5 -mt-1 flex snap-x gap-2 overflow-x-auto px-1.5 pb-2 pt-1 [scrollbar-width:thin]">
         {(Object.keys(QUEUE_TILE_LABEL) as QueueTile[]).map((tile) => (
           <span key={tile} className="contents">
             <Tile label={QUEUE_TILE_LABEL[tile].label} hint={QUEUE_TILE_LABEL[tile].hint} value={queueTiles[tile]} active={queueTileActive(filters, tile) && method === "lista"} onClick={() => tapQueueTile(tile)} />

@@ -7,6 +7,7 @@ import { DispatchScanner } from "@/components/dispatch-scanner";
 import { DispatchCamera } from "@/components/dispatch-camera";
 import { returnUndeliveredByCode, returnUndeliveredToOffice } from "@/app/dashboard/courier/actions";
 import type { PendingReturn } from "@/lib/courier-route-ledger";
+import { nonDeliveryReasonLabel } from "@/lib/gf-delivery";
 
 /**
  * Devoluciones (Despacho del día): el supervisor escanea (o teclea) cada paquete «No
@@ -59,6 +60,45 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
           ))}
         </ul>
       )}
+      {/* Cuáles son: lo que falta devolver, del más antiguo al más reciente. */}
+      <div className="mt-4 max-h-[55vh] overflow-auto rounded-xl border border-slate-200">
+        <table className="w-full min-w-[720px] table-fixed text-sm">
+          <colgroup>
+            <col className="w-[8.5rem]" />
+            <col />
+            <col className="w-[7rem]" />
+            <col className="w-[5.5rem]" />
+            <col className="w-[11rem]" />
+            <col className="w-[6rem]" />
+          </colgroup>
+          <thead className="sticky top-0 z-10 bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="px-3 py-2">Pedido</th>
+              <th className="px-3 py-2">Cliente</th>
+              <th className="px-3 py-2">Motorizado</th>
+              <th className="px-3 py-2">Caja del</th>
+              <th className="px-3 py-2">Motivo</th>
+              <th className="px-3 py-2"><span className="sr-only">Recibir</span></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {left.map((p) => (
+              <tr key={p.orderId} className="align-top hover:bg-slate-50">
+                <td className="px-3 py-2">
+                  <p className="truncate font-semibold text-slate-900" title={p.orderName}>{p.orderName}</p>
+                  {p.code && <p className="truncate font-mono text-[11px] text-slate-500" title={p.code}>{p.code}</p>}
+                </td>
+                <td className="px-3 py-2"><p className="truncate text-slate-800" title={`${p.customerName} · ${p.district}`}>{p.customerName}</p><p className="truncate text-xs text-slate-500" title={p.district}>{p.district}</p></td>
+                <td className="truncate px-3 py-2 text-slate-700" title={p.riderName}>{p.riderName}</td>
+                <td className="px-3 py-2 tabular-nums text-slate-700">{p.routeDate ? `${p.routeDate.slice(8, 10)}/${p.routeDate.slice(5, 7)}` : "—"}</td>
+                <td className="px-3 py-2"><span className={cn("inline-block max-w-full truncate rounded-full px-2 py-0.5 text-[11px] font-medium", p.reason === "rechazado" ? "bg-red-600 text-white" : "bg-red-50 text-red-800")} title={nonDeliveryReasonLabel(p.reason)}>{nonDeliveryReasonLabel(p.reason)}</span></td>
+                <td className="px-3 py-2 text-right"><button type="button" disabled={busy} onClick={() => void run(p.orderName, p.orderId)} className="min-h-8 rounded-lg border border-slate-300 px-2.5 text-xs font-medium text-slate-700 hover:bg-white disabled:opacity-50">Recibir</button></td>
+              </tr>
+            ))}
+            {!left.length && <tr><td colSpan={6} className="px-3 py-8 text-center text-sm text-emerald-700">Todas las devoluciones están en la oficina.</td></tr>}
+          </tbody>
+        </table>
+      </div>
       <DispatchCamera
         open={cameraOpen}
         onClose={() => setCameraOpen(false)}
