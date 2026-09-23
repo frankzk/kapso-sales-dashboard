@@ -2993,8 +2993,11 @@ el redactado.
   pedido queda en la cola con la nota arriba para que una persona retome.
 - Si contesta otra persona, deja un mensaje breve y corta. Si sale buzón, corta
   sin dejar audio largo.
-- **Dura lo menos posible: el costo es por llamada conectada.** La primera
-  prueba en la consola costó US$ 0,20 (22-09-2026). El guion apunta a cuatro
+- **Dura lo menos posible: el costo es por segundo conectado.** xAI cobra el
+  agente de voz por duración, no por tokens: medido en su consola del 16 al
+  22-09-2026, 177 segundos costaron US$ 0,24, unos **US$ 0,08 por minuto**. El
+  largo del prompt no cambia el costo; lo cambian los segundos conectados,
+  incluidos silencios, buzones y la espera de la primera tool. El guion apunta a cuatro
   turnos —saludo con propuesta, respuesta, reconfirmación y cierre en una
   sola frase, despedida— y un tope de dos minutos; pasado el tope, se despide
   y registra lo que haya. La cifra que decide si compensa es el costo por

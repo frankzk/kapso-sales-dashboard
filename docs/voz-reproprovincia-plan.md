@@ -532,8 +532,9 @@ sin anotar el resultado aquí.
 
 Después de las cinco, además:
 
-- Precio por minuto de las dos patas de Zadarma (móvil peruano + fijo de Lima)
-  y de Grok voice, para la última fila de la tabla de métricas.
+- Precio por minuto de las dos patas de Zadarma (móvil peruano + fijo de Lima),
+  para la última fila de la tabla de métricas. El de Grok ya está medido:
+  unos US$ 0,08 por minuto, cobrado por duración (MOM §11.8).
 - Texto legal del saludo (grabación y tratamiento de datos) aprobado por el
   owner.
 - Si Grok no rinde en español de provincia: el mismo diseño sirve para
