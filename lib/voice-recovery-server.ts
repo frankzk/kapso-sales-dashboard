@@ -6,11 +6,17 @@ import type { NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
 import type { FenixStockRow } from "@/lib/fenix";
+import { confirmationReminderDueAt } from "@/lib/order-confirmation";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
+  VOICE_SOURCE,
   buildFicha,
   isStale,
+  staleCallResolution,
+  translateGestion,
   voiceDates,
   type Ficha,
+  type GestionAction,
   type OpenCall,
 } from "@/lib/voice-recovery";
 import { compareVoiceCandidates, voiceRecoveryEligible } from "@/lib/voice-recovery-queue";
@@ -66,28 +72,77 @@ export async function readToolBody(req: NextRequest): Promise<Record<string, str
   return out;
 }
 
+type AttemptAction = Extract<GestionAction, { kind: "attempt" }>;
+
+/**
+ * Escribe un intento del agente sobre el pedido, por la misma función que una
+ * asesora (§6.1), con el id de la llamada como operation_id: un reintento
+ * devuelve lo ya escrito y no gasta otro día. Devuelve el error, o null.
+ */
+export async function writeVoiceAttempt(
+  admin: SupabaseClient,
+  call: { id: string; store_id: string; order_id: string },
+  action: AttemptAction,
+  now: Date,
+): Promise<string | null> {
+  const reminder =
+    action.result === "sin_respuesta" || action.result === "se_deja_mensaje"
+      ? confirmationReminderDueAt(now.toISOString())
+      : null;
+  const { error } = await admin.rpc("register_confirmation_attempt_v2", {
+    p_store_id: call.store_id,
+    p_order_id: call.order_id,
+    p_actor: null,
+    p_operation_id: call.id,
+    p_result: action.result,
+    p_channel: "llamada",
+    p_note: action.note,
+    p_next_contact_on: action.nextContactOn,
+    p_occurred_at: now.toISOString(),
+    p_reminder_due_at: reminder,
+    p_source: VOICE_SOURCE,
+    p_payload_extra: action.extra,
+  });
+  return error?.message ?? null;
+}
+
 /**
  * Cierra las llamadas abiertas cuya ventana pasó. Sin esto, una llamada que
  * nunca conectó dejaría ocupado el número del agente para siempre (hay un
- * índice único de una abierta por número). No toca el pedido.
+ * índice único de una abierta por número). Una real que nunca llegó al agente
+ * es una clienta que no contestó, y se registra como tal
+ * (`staleCallResolution`).
  */
 export async function sweepStaleCalls(admin: SupabaseClient, now: Date): Promise<void> {
   const { data } = await admin
     .from("voice_calls")
-    .select("id, agent_number, phone, status, dialed_at, started_at")
+    .select("id, store_id, order_id, mode, agent_number, phone, status, dialed_at, started_at")
     .in("status", OPEN_STATUSES as unknown as string[]);
-  const stale = ((data ?? []) as OpenCall[]).filter((c) => isStale(c, now));
+  type Row = OpenCall & { store_id: string; order_id: string; mode: "real" | "test" };
+  const stale = ((data ?? []) as Row[]).filter((c) => isStale(c, now));
   for (const c of stale) {
-    await admin
+    const r = staleCallResolution(c);
+    // Se cierra ANTES de escribir y solo si seguía abierta: dos barridos a la
+    // vez no registran dos veces (y la v2 es idempotente por operation_id).
+    const { data: closed } = await admin
       .from("voice_calls")
-      .update({
-        status: "failed",
-        outcome: c.status === "in_progress" ? "sin_resultado" : null,
-        ended_at: now.toISOString(),
-        error: c.status === "in_progress" ? "sin registrar_gestion dentro de la ventana" : "no conectó",
-      })
+      .update({ status: r.status, outcome: r.outcome, ended_at: now.toISOString(), error: r.error })
       .eq("id", c.id)
-      .in("status", OPEN_STATUSES as unknown as string[]);
+      .in("status", OPEN_STATUSES as unknown as string[])
+      .select("id");
+    if (!r.registerNoAnswer || !closed?.length) continue;
+
+    const action = translateGestion(
+      { disposition: "no_contesta", resumen: "No contestó: la llamada no llegó al agente." },
+      { today: voiceDates(now).hoy, canDiscard: false, voiceCallId: c.id },
+    );
+    if (action.kind !== "attempt") continue;
+    const writeError = await writeVoiceAttempt(admin, c, action, now);
+    if (writeError) {
+      await admin.from("voice_calls").update({ status: "failed", error: writeError }).eq("id", c.id);
+    } else {
+      await recomputeOrderMasterSafe(admin, [c.order_id]);
+    }
   }
 }
 
@@ -220,6 +275,19 @@ export async function placeVoiceCall(
     };
   }
 
+  // Las credenciales se leen ANTES de escribir la fila: si faltan, se dice
+  // así, en vez de dejar una fila «marcando» que ocupa el número del agente.
+  let creds: { key: string; secret: string };
+  try {
+    creds = { key: env.zadarmaKey(), secret: env.zadarmaSecret() };
+  } catch {
+    return {
+      ok: false,
+      status: 500,
+      error: "Faltan las credenciales de Zadarma en el servidor (ZADARMA_KEY y ZADARMA_SECRET en Vercel).",
+    };
+  }
+
   await sweepStaleCalls(admin, now);
 
   const { data: inserted, error: insertError } = await admin
@@ -250,10 +318,11 @@ export async function placeVoiceCall(
   }
   const callId = (inserted as { id: string }).id;
 
-  const result = await requestCallback(
-    { key: env.zadarmaKey(), secret: env.zadarmaSecret() },
-    { agentNumber: input.agentNumber, customerPhone: phone, sip: input.sip },
-  );
+  const result = await requestCallback(creds, {
+    agentNumber: input.agentNumber,
+    customerPhone: phone,
+    sip: input.sip,
+  });
   if (!result.ok) {
     await admin
       .from("voice_calls")

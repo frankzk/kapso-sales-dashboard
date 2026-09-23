@@ -14,21 +14,16 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
-import { confirmationReminderDueAt } from "@/lib/order-confirmation";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { discardRecovery } from "@/lib/recovery-discard";
-import {
-  VOICE_SOURCE,
-  pickOpenCall,
-  translateGestion,
-  voiceDates,
-} from "@/lib/voice-recovery";
+import { pickOpenCall, translateGestion, voiceDates } from "@/lib/voice-recovery";
 import {
   loadCall,
   loadStoreVoiceConfig,
   openCalls,
   readToolBody,
   voiceToolAuthorized,
+  writeVoiceAttempt,
 } from "@/lib/voice-recovery-server";
 
 export const runtime = "nodejs";
@@ -75,25 +70,7 @@ export async function POST(req: NextRequest) {
 
   if (call.mode === "real") {
     if (action.kind === "attempt") {
-      const reminder =
-        action.result === "sin_respuesta" || action.result === "se_deja_mensaje"
-          ? confirmationReminderDueAt(now.toISOString())
-          : null;
-      const { error } = await admin.rpc("register_confirmation_attempt_v2", {
-        p_store_id: call.store_id,
-        p_order_id: call.order_id,
-        p_actor: null,
-        p_operation_id: call.id,
-        p_result: action.result,
-        p_channel: "llamada",
-        p_note: action.note,
-        p_next_contact_on: action.nextContactOn,
-        p_occurred_at: now.toISOString(),
-        p_reminder_due_at: reminder,
-        p_source: VOICE_SOURCE,
-        p_payload_extra: action.extra,
-      });
-      if (error) writeError = error.message;
+      writeError = await writeVoiceAttempt(admin, call, action, now);
     } else if (action.kind === "discard") {
       const { error } = await discardRecovery(admin, {
         storeId: call.store_id,

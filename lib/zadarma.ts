@@ -1,12 +1,20 @@
 // Cliente mínimo de la API de Zadarma para el agente de voz (MOM §11.8).
 //
-// Solo lo que la Fase 1 probó que funciona (docs/voz-reproprovincia-plan.md):
+// Solo lo que se probó que funciona (docs/voz-reproprovincia-plan.md):
 //
-//   GET /v1/request/callback/?from=17058243&sip=<ext>&to=930555309
+//   GET /v1/request/callback/?from=930555309&sip=<ext>&to=17058243
 //
-// - SIN `predicted`. Zadarma reproduce «espere a la conexión» a quien contesta
-//   primero y la API no deja apagarlo. Sin `predicted` contesta primero el
-//   agente (oye la locución y calla) y la clienta, al descolgar, oye al agente.
+// - LA CLIENTA PRIMERO (`from`), el agente después (`to`). Zadarma marca
+//   `from`, y solo cuando contesta marca `to`. Con el agente primero (Fase 1)
+//   xAI cobraba los ~30 s que tarda en timbrar el celular y el minuto entero
+//   de las que no contestan, y el agente saludaba a una línea que aún sonaba
+//   (23-09-2026). Así, una clienta que no contesta no cuesta agente.
+// - Lo que se paga: la clienta oye «Por favor, espere a que se realice la
+//   conexión» unos segundos antes de oír al agente. Zadarma lo reproduce a
+//   quien contesta primero y la API no deja apagarlo (tampoco `predicted`).
+// - `to` es el número del agente, que desvía a xAI. El tramo sale a la red
+//   telefónica y vuelve a entrar; una extensión con desvío a SIP URI no sirve
+//   de `from` ni de `to` en el callback (probado el 23-09-2026).
 // - Los números van SIN 51: la cuenta antepone el código de Perú, y con el 51
 //   el historial registraba `5151…` y `failed`.
 // - `sip` es obligatorio aquí aunque la API lo tenga opcional: es la extensión
@@ -66,9 +74,9 @@ export interface ZadarmaCredentials {
 }
 
 export interface CallbackRequest {
-  /** Número del agente (sin 51). Zadarma lo marca PRIMERO. */
+  /** Número del agente (sin 51). Zadarma lo marca cuando la clienta contesta. */
   agentNumber: string;
-  /** Teléfono de la clienta, en cualquier formato peruano. */
+  /** Teléfono de la clienta, en cualquier formato peruano. Se marca PRIMERO. */
   customerPhone: string;
   /** Extensión o SIP cuyo caller ID peruano ve la clienta. Obligatorio. */
   sip: string;
@@ -82,10 +90,10 @@ export type CallbackResult =
 export function buildCallbackParams(req: CallbackRequest):
   | { ok: true; params: { from: string; sip: string; to: string } }
   | { ok: false; error: string } {
-  const from = zadarmaLocalPeru(req.agentNumber);
-  if (!from) return { ok: false, error: "El número del agente no es un número peruano válido." };
-  const to = zadarmaLocalPeru(req.customerPhone);
-  if (!to) return { ok: false, error: "El teléfono de la clienta no es un número peruano válido." };
+  const from = zadarmaLocalPeru(req.customerPhone);
+  if (!from) return { ok: false, error: "El teléfono de la clienta no es un número peruano válido." };
+  const to = zadarmaLocalPeru(req.agentNumber);
+  if (!to) return { ok: false, error: "El número del agente no es un número peruano válido." };
   const sip = String(req.sip ?? "").trim();
   if (!sip) {
     return {

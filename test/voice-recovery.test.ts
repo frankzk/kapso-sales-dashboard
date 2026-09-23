@@ -7,6 +7,7 @@ import {
   pickOpenCall,
   primerNombre,
   productoCorto,
+  staleCallResolution,
   tiendaHablada,
   translateGestion,
   voiceDates,
@@ -174,6 +175,40 @@ describe("la atadura: la llamada se elige por la fila, no por el teléfono", () 
 
   it("registrar solo ve llamadas en curso; identificar solo las que marcan", () => {
     expect(pickOpenCall([call({})], "in_progress", { now: NOW })).toEqual({ error: "ninguna" });
+  });
+});
+
+describe("llamadas caducadas: la clienta se marca primero (§11.8)", () => {
+  it("una real que nunca llegó al agente es un «no contesta» y se registra", () => {
+    expect(staleCallResolution({ status: "dialing", mode: "real" })).toEqual({
+      status: "completed",
+      outcome: "no_contesta",
+      error: null,
+      registerNoAnswer: true,
+    });
+  });
+
+  it("en modo prueba se cierra igual, pero no escribe nada sobre el pedido", () => {
+    expect(staleCallResolution({ status: "dialing", mode: "test" })).toMatchObject({
+      outcome: "no_contesta",
+      registerNoAnswer: false,
+    });
+  });
+
+  it("una cortada a media conversación no es gestión: sin resultado y sin escribir", () => {
+    expect(staleCallResolution({ status: "in_progress", mode: "real" })).toMatchObject({
+      status: "failed",
+      outcome: "sin_resultado",
+      registerNoAnswer: false,
+    });
+  });
+
+  it("el no_contesta del barrido es el mismo hecho que el del agente: sin_respuesta", () => {
+    const a = translateGestion(
+      { disposition: "no_contesta", resumen: "No contestó: la llamada no llegó al agente." },
+      { today: "2026-09-23", canDiscard: false, voiceCallId: "vc-9" },
+    );
+    expect(a).toMatchObject({ kind: "attempt", result: "sin_respuesta", extra: { voice_call_id: "vc-9" } });
   });
 });
 
