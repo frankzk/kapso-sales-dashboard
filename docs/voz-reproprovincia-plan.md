@@ -128,7 +128,7 @@ alter table stores
   add column if not exists voice_recovery_max_age_days integer not null default 7,
   add column if not exists voice_recovery_hour_start   integer not null default 9,
   add column if not exists voice_recovery_hour_end     integer not null default 20,
-  add column if not exists voice_recovery_greeting     text,          -- aviso legal aprobado; sin él no se llama
+  add column if not exists voice_recovery_greeting     text,          -- aviso de grabación opcional (ver MOM §11.8, pendientes)
   add column if not exists voice_recovery_voice_id     text,          -- voz del proveedor
   add column if not exists voice_recovery_caller_id    text,          -- número que ve el cliente (E.164)
   add column if not exists voice_recovery_agent_number text;          -- número desviado a xAI (+5117058243)
@@ -435,8 +435,8 @@ que la tool reciba el número y alguien lo mire.
 ## Interfaz
 
 - **Ajustes de la tienda**: bloque «Agente de voz · Reproprovincia» con los
-  interruptores, topes, horario, voz, caller ID y el saludo legal. Sin saludo,
-  el interruptor `enabled` no se puede encender.
+  interruptores, topes, horario, voz, caller ID y, si se decide mantenerlo,
+  el aviso de grabación.
 - **Cola de Reproprovincia** (Master, chip «Por recuperar», y Envíos): columna
   «Agente» con el estado de la última llamada (`hoy 10:12 · no contestó`,
   `acepta reenvío · crear salida Swayp`, `propone descartar: “…”`,
@@ -469,8 +469,8 @@ aplica a mano antes del código que la necesita (`DEPLOY.md`).
   llama y con qué; `sin_resultado` y resultado desconocido no llaman nada;
   `no_quiere` con y sin `can_discard`; fecha pasada rechazada.
 - `test/voice-recovery-prompt.test.ts`: la respuesta de `identificar_llamada`
-  nunca lleva código de guía y siempre el nombre de Shopify; sin saludo legal
-  configurado la tool devuelve `encontrada: false`.
+  nunca lleva código de guía; `fecha_minima` es mañana en hora de Lima, o el
+  lunes si mañana es domingo, y `fecha_minima_dicho` dice «mañana …» o «el …».
 - Modo `test`: cada tool sobre una fila `test` deja `outcome` y no llama a la
   RPC ni al descarte; una fila `test` no cuenta para el tope diario.
 - `test/reproprovincia.test.ts` (ampliar): `confirmed` con `source agente_voz`

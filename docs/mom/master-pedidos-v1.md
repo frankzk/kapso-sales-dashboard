@@ -2967,16 +2967,26 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
 El guion completo es del plan técnico; aquí van las reglas que no cambian con
 el redactado.
 
-- Se presenta **como asistente virtual de la tienda**, con el nombre de la
-  tienda, y dice desde el principio que la llamada se graba cuando se graba.
-  No finge ser una persona.
-- Nombra el pedido **por su nombre de Shopify** y el producto, nunca por el
-  código de guía (§11.1, `recoveryOrderName`): la clienta no ha visto ese
-  código nunca.
-- Pregunta **una cosa**: si todavía quiere el pedido. Si sí, **lee la dirección
-  de vuelta** y pide referencia y rango de día; propone el reenvío desde su
-  ciudad, contra entrega, sin costo adicional. Si no, pregunta por qué y
-  agradece.
+- Se presenta **con su nombre y el de la tienda**, sin anunciar que es un
+  asistente virtual (decisión del owner, 23-09-2026: el anuncio alargaba el
+  saludo sin cambiar la conversación). **Si le preguntan si es una persona,
+  dice que es un asistente de IA. Nunca lo niega.**
+- **El aviso de grabación no va en el saludo** (misma decisión). Queda
+  pendiente confirmar con quien asesore en protección de datos si la
+  grabación puede seguir sin aviso o si hay que apagarla; ver pendientes.
+- Nombra el pedido **por su producto**, nunca por el código de guía (§11.1,
+  `recoveryOrderName`): la clienta no ha visto ese código nunca.
+- **Va directo a reprogramar.** El saludo dice que el courier no pudo
+  entregar y propone la entrega **mañana** (el primer día hábil si mañana es
+  domingo), contra entrega y sin costo adicional, y pregunta si le viene
+  bien. No pregunta primero qué pasó en el intento anterior (decisión del
+  owner, 23-09-2026). La consecuencia es aceptada: el motivo solo se
+  pregunta si la clienta dice que ya no lo quiere, así que la llamada captura
+  menos motivos de los que §11.7 echa en falta.
+- Si mañana no le viene bien, **negocia otra fecha futura**. Acordada,
+  reconfirma **en una sola frase** producto, cantidad, monto a pagar,
+  dirección y distrito. La referencia no se lee; se anota solo si la clienta
+  la corrige.
 - **Nunca** pide dinero, datos de tarjeta ni Yape; **nunca** promete hora; no
   ofrece descuentos ni cambia producto ni precio; no habla de otros pedidos del
   mismo teléfono. Cualquiera de esas peticiones se **anota y se deriva**: el
@@ -3121,9 +3131,10 @@ poner las dos columnas una al lado de la otra.
   hasta `pendiente_de_abono`; el pago lo valida una persona.
 - **Por confirmar por voz** (§6.1): después de Reproprovincia, con la misma
   arquitectura y una decisión aparte sobre falsos confirmados.
-- **Aviso legal de grabación y tratamiento de datos**: el texto exacto del
-  saludo lo aprueba el owner con quien asesore en protección de datos; el
-  agente no llama sin ese texto configurado por tienda.
+- **Grabación sin aviso en el saludo**: desde el 23-09-2026 el saludo no
+  anuncia la grabación. Antes del piloto con clientas reales, confirmar con
+  quien asesore en protección de datos si eso es aceptable; si no lo es, o se
+  apaga la grabación (queda la transcripción) o el aviso vuelve al saludo.
 
 ## 12. Agencia: Shalom y Olva
 
