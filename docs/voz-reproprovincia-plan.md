@@ -514,7 +514,7 @@ sin anotar el resultado aquí.
 | --- | --- | --- |
 | 1 · ¿Contesta el agente? | 22-09-2026 | **Sí.** Llamada directa desde un celular al 01 705 8243: la tool corre antes de hablar y el saludo sale con la ficha del mock. |
 | 3 · ¿Qué número ve xAI? | 22-09-2026 | **Llamada directa: resuelto.** xAI recibe el caller ID (pestaña Conversations) y, con «Know caller's phone number» encendido y publicado y `numero_cliente` exigido en el paso 0 del prompt, el agente lo manda a `identificar_llamada`. Falta lo que decide la atadura: qué «Caller» registra xAI en el **callback** de la prueba 2. Si es el celular de la clienta, opción 1; si es el número de Zadarma, opción 2. |
-| 2 · ¿Funciona la saliente? | — | Pendiente. |
+| 2 · ¿Funciona la saliente? | 22-09-2026 | **Zadarma acepta el pedido.** `GET /v1/request/callback/` con `from=5117058243` (el propio número virtual desviado a xAI), `predicted=1` y `to` un celular responde `status: success`; la firma HMAC y la consulta de saldo funcionan desde un script. Pendiente anotar: si sonó, el silencio al contestar y qué «Caller» registra xAI en esa llamada. |
 | 4 · ¿Llama webhooks? | 22-09-2026 | **Sí.** Las dos tools llegan a Make en cada sesión de la consola. |
 | 5 · Transcripción y fin | — | Pendiente. |
 
