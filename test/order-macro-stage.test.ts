@@ -725,6 +725,11 @@ describe("motorizado propio: lo que reporta mueve la etapa (v1.14, MOM §29.13)"
     const rejectedBack = { ...own(), custody_state: "devuelto", returned_at: T("20:00") };
     const rejected = gf({ guides: [rejectedBack], events: [stop("no_entregado", T("19:00"), "rechazado"), ev("returned_to_office", T("20:00"))] });
     expect(rejected).toMatchObject({ stage: "por_cerrar", substage: "devolucion_pendiente_inventario" });
+    // Inventario reingresado antes de cerrar la ruta: espera el cierre, no vuelve a En curso.
+    const reinventoried = gf({ guides: [rejectedBack], events: [stop("no_entregado", T("19:00"), "rechazado"), ev("returned_to_office", T("20:00")), { kind: "inventory_reconciled", occurred_at: T("20:30"), shipment_id: "s-gf" }] });
+    expect(reinventoried).toMatchObject({ stage: "por_cerrar", substage: "validacion_cierre_pendiente" });
+    // Ruta cerrada (anulado) e inventario resuelto: Finalizado · Anulado cerrado.
+    expect(gf({ guides: [rejectedBack], events: [stop("no_entregado", T("19:00"), "rechazado"), ev("returned_to_office", T("20:00")), { kind: "inventory_reconciled", occurred_at: T("20:30"), shipment_id: "s-gf" }], legacy: { general: "anulado", operational: "anulado", since: T("21:00") } })).toMatchObject({ stage: "finalizado", substage: "anulado_cerrado" });
     // Y con el pedido ya anulado al cerrar la ruta, sigue ahí hasta conciliar.
     expect(gf({ guides: [rejectedBack], events: [stop("no_entregado", T("19:00"), "rechazado"), ev("returned_to_office", T("20:00"))], legacy: { general: "anulado", operational: "anulado", since: T("21:00") } })).toMatchObject({ stage: "por_cerrar", substage: "devolucion_pendiente_inventario" });
   });
