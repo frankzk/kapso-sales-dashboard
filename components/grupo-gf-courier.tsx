@@ -192,6 +192,7 @@ export function GrupoGfCourierBoard({
           cashLimit={provider.cash_limit_amount}
           pending={pending}
           run={run}
+          pendingReturns={pendingReturns}
         />
       )}
       {tab === "available" && (
@@ -223,8 +224,6 @@ export function GrupoGfCourierBoard({
           today={today}
           unassignedCount={snapshot.operations.accepted.filter((order) => !order.route).length}
           onShowUnassigned={() => setTab("dispatch")}
-          orgId={orgId}
-          pendingReturns={pendingReturns}
         />
       )}
       <CourierBoxDrawer />

@@ -5688,11 +5688,12 @@ aplica ese filtro de etapa y subetapa. La versión del resolver sube a
 **Devoluciones en Rutas y el rechazo en puerta (v1.16, 22-09-2026).** Todo
 «No entregado» que salió en una caja tiene que volver físicamente. En Rutas,
 la columna **«Devolver»** dice devueltos / por devolver de cada ruta (verde
-completo, rojo si falta alguno), y el botón **«Recibir devoluciones · N»**, a
-la izquierda de «pedidos sin ruta», aparece solo si hay devoluciones
-pendientes de cualquier fecha: abre la lista de lo que falta (motorizado, día
-de la caja, motivo) con la cámara en serie («Devueltos X de N») o el código
-tecleado, y cada lectura hace «Recibir en oficina». En «Reparto y
+completo, rojo si falta alguno). En Despacho del día, la tarjeta
+**«Devoluciones»**, a la derecha de «Por reprogramar», cuenta las
+devoluciones pendientes de cualquier fecha; al tocarla, el recuadro de
+asignar muestra solo «Escanear» y el campo de código para confirmar que cada
+paquete llegó a la oficina (cámara en serie, «Devueltos X de N»), y cada
+lectura hace «Recibir en oficina». Tocarla otra vez vuelve a asignar. En «Reparto y
 liquidación», cada no entregado dice **«Devuelto · fecha hora»** o **«Por
 devolver»**. **«Rechazó el pedido» no se reprograma** (0189): mientras está en
 la caja va a «Por cerrar · Devolución física pendiente»; recibido en oficina,

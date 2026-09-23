@@ -77,9 +77,13 @@ describe("devoluciones en Rutas (22-09-2026)", () => {
     const { readFileSync } = await import("node:fs");
     const read = (f: string) => readFileSync(`${process.cwd()}/${f}`, "utf8");
     const ledger = read("components/courier-routes-ledger.tsx");
-    expect(ledger).toContain("orgId && pendingReturns.length > 0 && (");
     expect(ledger).toContain("<ReturnsBadge row={row} />");
-    expect(ledger).toContain('verb: "Devueltos"');
+    expect(ledger).not.toContain("Recibir devoluciones ·");
+    // La tarjeta «Devoluciones» en Despacho del día deja solo el escáner.
+    const board = read("components/dispatch-day-board.tsx");
+    expect(board).toContain('label="Devoluciones"');
+    expect(board).toContain("<ReturnsScanner");
+    expect(read("components/returns-scanner.tsx")).toContain('verb: "Devueltos"');
     expect(read("lib/courier-route-ledger.ts")).toContain('.eq("kind", "returned_to_office")');
     expect(read("components/routes.tsx")).toContain("s.returned_at");
     expect(read("db/migrations/0189_gf_return_rejected.sql")).toContain("if v_stop.outcome_reason = 'rechazado' then");

@@ -18,6 +18,8 @@ import { useRouter } from "next/navigation";
 import { cn, STICKY_HEAD } from "@/components/ui";
 import { Hint } from "@/components/hint";
 import { Chip, CountChip, Sheet } from "@/components/filter-sheet";
+import { ReturnsScanner } from "@/components/returns-scanner";
+import type { PendingReturn } from "@/lib/courier-route-ledger";
 import { ScanAction } from "@/components/scan-action";
 import { activeDispatchItems } from "@/lib/dispatch";
 import {
@@ -96,6 +98,8 @@ interface Props {
   cashLimit: number;
   pending: boolean;
   run: (action: () => Promise<CourierActionResult>) => void;
+  /** «No entregado» que siguen en una caja, de cualquier fecha: tarjeta «Devoluciones». */
+  pendingReturns?: PendingReturn[];
 }
 
 const money = (n: number) => `S/ ${n.toFixed(2)}`;
@@ -122,7 +126,10 @@ export function DispatchDayBoard(props: Props) {
   // o desde la lista. Abrir una pliega la otra; el motorizado es común.
   // Tres pestañas en una sola columna: QR, lista y cajas. Antes las cajas
   // iban en una segunda columna y la lista se quedaba con media pantalla.
-  const [method, setMethod] = useState<"qr" | "lista" | "cajas">("qr");
+  // «devoluciones» no es una pestaña: lo abre la tarjeta del mismo nombre y
+  // deja el recuadro solo con el escáner para confirmar lo que vuelve.
+  const [method, setMethod] = useState<"qr" | "lista" | "cajas" | "devoluciones">("qr");
+  const pendingReturns = props.pendingReturns ?? [];
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [blockedOpen, setBlockedOpen] = useState(false);
   // Filtro rápido de las cajas (Todos · Por armar · Listos para cotejo · Sin
@@ -428,7 +435,12 @@ export function DispatchDayBoard(props: Props) {
           ancho: con nueve tarjetas, la grilla partía la fila o cortaba etiquetas. */}
       <div role="group" aria-label="Métricas y filtros del día" className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-2 [scrollbar-width:thin]">
         {(Object.keys(QUEUE_TILE_LABEL) as QueueTile[]).map((tile) => (
-          <Tile key={tile} label={QUEUE_TILE_LABEL[tile].label} hint={QUEUE_TILE_LABEL[tile].hint} value={queueTiles[tile]} active={queueTileActive(filters, tile) && method === "lista"} onClick={() => tapQueueTile(tile)} />
+          <span key={tile} className="contents">
+            <Tile label={QUEUE_TILE_LABEL[tile].label} hint={QUEUE_TILE_LABEL[tile].hint} value={queueTiles[tile]} active={queueTileActive(filters, tile) && method === "lista"} onClick={() => tapQueueTile(tile)} />
+            {tile === "por_reprogramar" && (
+              <Tile label="Devoluciones" hint="No entregados que el motorizado tiene que traer de vuelta, de cualquier fecha. Toca para escanear y confirmar que llegaron a la oficina." value={pendingReturns.length} active={method === "devoluciones"} tone={pendingReturns.length ? "amber" : undefined} onClick={() => setMethod((m) => (m === "devoluciones" ? "qr" : "devoluciones"))} />
+            )}
+          </span>
         ))}
         <Tile label="Sin condiciones" hint="Pedidos de Lima que no entran en la cola: tarifa faltante, distrito inválido, servicio pausado o sin salida armable. Abre la lista con el motivo de cada uno." value={props.blocked.length} active={blockedOpen} tone="amber" onClick={() => setBlockedOpen((v) => !v)} />
         {boxes.length > 0 && (Object.keys(BOX_TILE_LABEL) as BoxTile[]).map((tile) => (
@@ -475,7 +487,18 @@ export function DispatchDayBoard(props: Props) {
         {/* ── Asignar y cajas, en una sola tarjeta con tres pestañas ── */}
         <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="px-4 py-3">
-            <div className="flex flex-col gap-2">
+            {method === "devoluciones" && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-semibold text-slate-900">Recibir devoluciones en oficina</p>
+                  <button type="button" onClick={() => setMethod("qr")} className="ml-auto text-xs text-slate-500 underline">Volver a asignar</button>
+                </div>
+                {canManageDispatch
+                  ? <ReturnsScanner key={pendingReturns.length ? "con" : "sin"} orgId={orgId} pending={pendingReturns} />
+                  : <p className="text-xs text-amber-700">Tu rol no organiza rutas: puedes mirar, no recibir.</p>}
+              </div>
+            )}
+            <div className={cn("flex flex-col gap-2", method === "devoluciones" && "hidden")}>
               <div className="min-w-0 flex-1">
                 <select
                   value={riderId}
