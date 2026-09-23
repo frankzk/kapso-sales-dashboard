@@ -855,12 +855,20 @@ export function gfRiderSignal(
 ): { signal: GfRiderSignal; at: string } | null {
   if (!isOwnCourier(guide.courier)) return null;
   const kinds = new Set(["pickup_checked", "stop_reported", "pickup_declined", "package_removed"]);
+  const mine = events
+    .filter((event) => kinds.has(event.kind) && (event.shipment_id === guide.id || (!event.shipment_id && event.kind === "stop_reported")))
+    .sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : a.occurred_at > b.occurred_at ? -1 : 0));
+  // Un reporte deshecho (`stop_reported` con estado «pendiente») anula los
+  // reportes anteriores: manda lo que hubo antes de ellos («Lo llevo»).
+  let undone = false;
   let latest: MacroEventSnapshot | null = null;
-  for (const event of events) {
-    if (!kinds.has(event.kind)) continue;
-    const mine = event.shipment_id === guide.id || (!event.shipment_id && event.kind === "stop_reported");
-    if (!mine) continue;
-    if (!latest || event.occurred_at > latest.occurred_at) latest = event;
+  for (const event of mine) {
+    if (event.kind === "stop_reported") {
+      if (String(event.payload?.status ?? "") === "pendiente") { undone = true; continue; }
+      if (undone) continue;
+    }
+    latest = event;
+    break;
   }
   if (!latest) return null;
   if (latest.kind === "pickup_checked") return { signal: "lo_lleva", at: latest.occurred_at };

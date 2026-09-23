@@ -11,7 +11,10 @@ describe("reporte de parada en la actividad del pedido (MOM §29.12)", () => {
     expect(writer).toContain('kind: "stop_reported"');
     expect(writer).toContain("writeStopReportedEvent(");
     // Solo reportes reales, no el «pendiente» que deshace un reporte.
-    expect(writer.indexOf('if (input.status !== "pendiente") {\n    await writeStopReportedEvent(')).toBeGreaterThan(0);
+    expect(writer.indexOf('} else {\n    await writeStopReportedEvent(')).toBeGreaterThan(0);
+    // Deshacer deja su propio rastro, y el reporte recalcula la etapa (mom-v1.14).
+    expect(writer).toContain("await writeStopUndoEvent(");
+    expect(writer).toContain("await recomputeOrderMasterSafe(admin, [stop.order_id])");
     expect(read("components/order-master-shared.tsx")).toContain('stop_reported: "Reporte del motorizado"');
   });
 

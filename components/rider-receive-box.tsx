@@ -51,7 +51,7 @@ export function RiderReceiveBox({ riderName, loads }: { riderName: string; loads
   }
 
   return (
-    <main className="mx-auto min-h-screen max-w-md bg-slate-50 pb-24">
+    <main className="rider-scale mx-auto min-h-screen max-w-md bg-slate-50 pb-24">
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-3">
         <h1 className="text-base font-semibold text-slate-900">Recibir mi caja</h1>
         <p className="text-xs text-slate-500">{riderName} · escanea cada paquete que te entregan. Si uno no está, está dañado o no cabe, márcalo como «No lo recojo».</p>

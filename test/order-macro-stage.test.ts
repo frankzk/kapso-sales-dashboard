@@ -718,6 +718,12 @@ describe("motorizado propio: lo que reporta mueve la etapa (v1.14, MOM §29.13)"
     expect(gf({ events: [stop("no_entregado", T("19:00"), "reprogramado"), ev("pickup_checked", "2026-09-23T14:10:00.000Z")] })).toMatchObject({ stage: "en_curso", substage: "en_reparto" });
   });
 
+  it("deshacer el reporte vuelve a lo anterior: «Lo llevo» → En reparto", () => {
+    expect(gf({ events: [ev("pickup_checked", T("15:32")), stop("entregado", T("19:32")), stop("pendiente", T("19:40"))] })).toMatchObject({ stage: "en_curso", substage: "en_reparto" });
+    // Y un reporte nuevo después del deshacer vuelve a mandar.
+    expect(gf({ events: [ev("pickup_checked", T("15:32")), stop("entregado", T("19:32")), stop("pendiente", T("19:40")), stop("no_entregado", T("19:50"), "rechazado")] })).toMatchObject({ stage: "por_cerrar", substage: "devolucion_fisica_pendiente" });
+  });
+
   it("una parada del cuaderno sin shipment_id vale para la salida propia vigente", () => {
     expect(gf({ events: [stop("entregado", T("19:32"), null, { shipment_id: null })] })).toMatchObject({ stage: "por_cerrar", substage: "validacion_cierre_pendiente" });
   });

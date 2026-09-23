@@ -161,7 +161,7 @@ function RiderRouteScreenInner({
 
   if (!route) {
     return (
-      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 p-6">
+      <main className="rider-scale mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 p-6">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center">
           <h1 className="text-lg font-semibold text-slate-900">Hola, {riderName}</h1>
           <p className="mt-2 text-sm text-slate-500">
@@ -175,7 +175,7 @@ function RiderRouteScreenInner({
   }
 
   return (
-    <main className="mx-auto min-h-screen max-w-md bg-slate-50 lg:grid lg:max-w-3xl lg:grid-cols-[28rem_minmax(0,1fr)] lg:items-start">
+    <main className="rider-scale mx-auto min-h-screen max-w-md bg-slate-50 lg:grid lg:max-w-3xl lg:grid-cols-[28rem_minmax(0,1fr)] lg:items-start">
       <div className="min-w-0 pb-24 lg:min-h-screen lg:border-r lg:border-slate-200">
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-3">
         <div className="flex items-baseline justify-between">
@@ -408,12 +408,13 @@ function StopPanel({
 function StopStatusLine({ stop, badge }: { stop: StopWithOrder; badge: ReturnType<typeof riderStopDecision>["badge"] }) {
   return (
     <>
+      {/* El estado como chapa de color lleno: se distingue de un vistazo. */}
       <p
         className={cn(
-          "text-[11px]",
-          stop.status === "entregado" && "text-emerald-700",
-          stop.status === "no_entregado" && "text-red-700",
-          stop.status === "pendiente" && "text-slate-400",
+          "mt-0.5 inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold",
+          stop.status === "entregado" && "bg-emerald-600 text-white",
+          stop.status === "no_entregado" && "bg-red-600 text-white",
+          stop.status === "pendiente" && "bg-slate-200 text-slate-700",
         )}
       >
         {stop.written_status
@@ -441,10 +442,10 @@ function Pill({ label, value, tone }: { label: string; value: number; tone: "pen
     <span
       className={cn(
         "rounded-full px-2 py-0.5 text-xs font-medium",
-        tone === "ok" && "bg-emerald-50 text-emerald-700",
-        tone === "bad" && "bg-red-50 text-red-700",
-        tone === "pend" && "bg-slate-100 text-slate-600",
-        tone === "warn" && "bg-amber-50 text-amber-800",
+        tone === "ok" && "bg-emerald-600 text-white",
+        tone === "bad" && "bg-red-600 text-white",
+        tone === "pend" && "bg-slate-200 text-slate-800",
+        tone === "warn" && "bg-amber-500 text-white",
       )}
     >
       {value} {label}
@@ -482,10 +483,11 @@ function StopCard({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border bg-white",
-        stop.status === "entregado" && "border-emerald-200",
-        stop.status === "no_entregado" && "border-red-200",
-        stop.status === "pendiente" && "border-slate-200",
+        // Fondo y franja izquierda por estado: el cambio se ve sin leer.
+        "overflow-hidden rounded-xl border border-l-[6px]",
+        stop.status === "entregado" && "border-emerald-300 border-l-emerald-600 bg-emerald-50",
+        stop.status === "no_entregado" && "border-red-300 border-l-red-600 bg-red-50",
+        stop.status === "pendiente" && "border-slate-200 border-l-slate-300 bg-white",
         selected && "ring-4 ring-brand-500/15 border-brand-500",
       )}
     >

@@ -5050,7 +5050,12 @@ y `pickup_declined` o `package_removed`, que la anulan— y decide así:
 | Parada **no entregada** por «reprogramado por el cliente» o «no estaba / volver luego» | En curso | Por reprogramar Lima |
 | Parada **no entregada** por rechazado, dirección errada, no contesta, sin dinero u otro | Por cerrar | Devolución física pendiente |
 
-Las paradas del cuaderno, sin `shipment_id`, valen para la salida propia
+Cada reporte de parada **recalcula el Master en el acto** (`writeStopReport`),
+sin esperar al cron: el pedido entregado pasa a Por cerrar al momento.
+Deshacer un reporte (volver la parada a pendiente) deja su propio
+`stop_reported` con estado «pendiente», que anula los reportes anteriores y
+devuelve el pedido a lo que había antes («Lo llevo» → En reparto). Las
+paradas del cuaderno, sin `shipment_id`, valen para la salida propia
 vigente. Una señal de otra salida o de un courier externo no cuenta. El
 `since` de la etapa es la hora de esa señal. **El cierre de la ruta no cambia
 de sitio**: sigue escribiendo por la puerta única (`applyDeliveriesToMaster`)

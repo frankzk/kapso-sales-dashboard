@@ -1001,8 +1001,17 @@ export function OrderDrawer({
             </section>
 
             {nextAction && workspace === "operar" && (
-              <div className="order-2">
+              <div className="order-2 space-y-2">
                 <DrawerNextActionCard action={nextAction} onJump={jumpTo} />
+                {/* Grupo GF: quién tiene el paquete y en qué quedó, arriba y en
+                    cualquier etapa (también Por cerrar), sin bajar hasta
+                    «Salidas y guías». */}
+                {gfActive && (
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">Motorizado Grupo GF</p>
+                    <GfDeliveryLine delivery={gfActive} />
+                  </div>
+                )}
               </div>
             )}
 

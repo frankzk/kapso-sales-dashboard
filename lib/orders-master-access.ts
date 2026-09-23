@@ -509,7 +509,10 @@ async function loadGfDeliveries(orderId: string, guides: readonly ShipmentRow[])
       .select("id,route_id,shipment_id,seq,status,outcome_reason,note,reported_at,payment_method,collected_amount,photo_path,voucher_path,pickup_confirmed")
       .eq("order_id", orderId),
   ]);
-  if (itemsRes.error || stopsRes.error) return [];
+  if (itemsRes.error || stopsRes.error) {
+    console.error("[order-detail] gf deliveries", orderId, itemsRes.error?.message ?? stopsRes.error?.message);
+    return [];
+  }
   type ItemRow = { manifest_id: string; shipment_id: string; added_at: string | null; office_checked_at: string | null; pickup_checked_at: string | null; pickup_declined_at: string | null; pickup_declined_reason: string | null; removed_at: string | null; removal_reason: string | null };
   type StopRow = { id: string; route_id: string; shipment_id: string | null; seq: number | null; status: GfStop["status"]; outcome_reason: string | null; note: string | null; reported_at: string | null; payment_method: string | null; collected_amount: number | string | null; photo_path: string | null; voucher_path: string | null; pickup_confirmed: boolean | null };
   const items = (itemsRes.data ?? []) as ItemRow[];
@@ -817,7 +820,12 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
     loadGroupGfCourierRouteCheck(sb, row),
-    loadGfDeliveries(orderId, guides).catch(() => [] as GfDelivery[]),
+    // Un fallo aquí no tumba la ficha, pero queda en el registro del servidor:
+    // tragarlo en silencio dejaba la ficha sin repartidor y sin pista del porqué.
+    loadGfDeliveries(orderId, guides).catch((cause) => {
+      console.error("[order-detail] loadGfDeliveries", orderId, cause);
+      return [] as GfDelivery[];
+    }),
   ]);
   return {
     row,

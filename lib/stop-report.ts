@@ -7,6 +7,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { NON_DELIVERY_REASONS } from "@/lib/routes";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { reportedCollection } from "@/lib/route-collection";
 import { loadRouteCollectionBalances } from "@/lib/route-collection-access";
 import {
@@ -135,9 +136,13 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
       () => undefined,
     );
   // Rastro en el pedido (pestaña Actividad) de cada reporte: quién, qué
-  // resultado, cómo cobró y qué evidencia dejó. Es información: el Master
-  // sigue cambiando solo al cerrar la ruta (§29.9), por la puerta única.
-  if (input.status !== "pendiente") {
+  // resultado, cómo cobró y qué evidencia dejó. Desde mom-v1.14 este evento
+  // mueve la etapa del pedido (§29.13), así que se recalcula el Master abajo.
+  if (input.status === "pendiente") {
+    // Deshacer un reporte también deja rastro: sin él, el resolver seguiría
+    // leyendo el «entregado» anterior como la última palabra del motorizado.
+    await writeStopUndoEvent(admin, stop.id, stop.route_id, stop.order_id, input.actor).catch(() => undefined);
+  } else {
     await writeStopReportedEvent(admin, {
       stopId: stop.id,
       routeId: stop.route_id,
@@ -174,7 +179,27 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
         () => undefined,
       );
   }
+  // La etapa sigue al motorizado (mom-v1.14): entregado → Por cerrar,
+  // postergado → Por reprogramar Lima, etc. Sin esto el pedido esperaba al
+  // cron y seguía «En curso» después de entregado.
+  await recomputeOrderMasterSafe(admin, [stop.order_id]).catch(() => undefined);
   return { ok: true, orderId: stop.order_id, routeId: stop.route_id };
+}
+
+async function writeStopUndoEvent(admin: SupabaseClient, stopId: string, routeId: string, orderId: string, actor: string): Promise<void> {
+  const { data: stopRow } = await admin.from("delivery_stops").select("store_id,shipment_id").eq("id", stopId).maybeSingle();
+  if (!stopRow?.store_id) return;
+  await admin.from("order_events").insert({
+    store_id: stopRow.store_id,
+    order_id: orderId,
+    kind: "stop_reported",
+    actor,
+    source: "reparto",
+    courier: "propio",
+    shipment_id: stopRow.shipment_id ?? null,
+    note: "Reporte de la parada deshecho: vuelve a pendiente.",
+    payload: { stop_id: stopId, route_id: routeId, status: "pendiente" },
+  });
 }
 
 export const UNCONFIRMED_PICKUP_NOTE = "Entregado sin confirmar recojo";

@@ -112,3 +112,16 @@ body {
     min-height: 2.75rem;
   }
 }
+
+/*
+ * Pantalla del motorizado (/reparto): todo el texto un 30 % más grande, para
+ * leerlo en la calle con el teléfono en una mano. Se escala el texto, no el
+ * diseño: los utilitarios de tamaño se redefinen solo dentro de .rider-scale.
+ * Fuera de @layer para que ganen a los utilitarios de Tailwind.
+ */
+.rider-scale .text-\[10px\] { font-size: 13px; }
+.rider-scale .text-\[11px\] { font-size: 14.3px; }
+.rider-scale .text-xs { font-size: 15.6px; line-height: 1.35; }
+.rider-scale .text-sm { font-size: 18.2px; line-height: 1.4; }
+.rider-scale .text-base { font-size: 20.8px; line-height: 1.4; }
+.rider-scale .text-lg { font-size: 23.4px; line-height: 1.35; }
