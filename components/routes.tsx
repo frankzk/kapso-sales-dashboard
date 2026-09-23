@@ -575,6 +575,12 @@ function RouteDetail({
                       No entregado · {reasonLabel(s.outcome_reason)}
                     </span>
                   )}
+                  {/* Todo no entregado vuelve físicamente a la oficina (0188/0189). */}
+                  {s.status === "no_entregado" && s.dispatch_manifest_id && (
+                    s.returned_at
+                      ? <p className="mt-0.5"><span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800" title={`Recibido en oficina el ${new Date(s.returned_at).toLocaleString("es-PE", { timeZone: "America/Lima" })}`}>Devuelto · {new Date(s.returned_at).toLocaleString("es-PE", { timeZone: "America/Lima", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></p>
+                      : <p className="mt-0.5"><span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-800">Por devolver</span></p>
+                  )}
                   {s.note && <p className="text-[11px] text-slate-400">{s.note}</p>}
                 </td>
                 <td className="px-3 py-2 text-slate-700">

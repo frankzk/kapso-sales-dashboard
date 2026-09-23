@@ -71,3 +71,17 @@ describe("asignar por QR sin esperar (22-09-2026)", () => {
     expect(board).not.toMatch(/line\.status === "ya_en_caja"\) router\.refresh\(\)/);
   });
 });
+
+describe("devoluciones en Rutas (22-09-2026)", () => {
+  it("la columna Devolver, el botón solo con pendientes y el Devuelto en la liquidación", async () => {
+    const { readFileSync } = await import("node:fs");
+    const read = (f: string) => readFileSync(`${process.cwd()}/${f}`, "utf8");
+    const ledger = read("components/courier-routes-ledger.tsx");
+    expect(ledger).toContain("orgId && pendingReturns.length > 0 && (");
+    expect(ledger).toContain("<ReturnsBadge row={row} />");
+    expect(ledger).toContain('verb: "Devueltos"');
+    expect(read("lib/courier-route-ledger.ts")).toContain('.eq("kind", "returned_to_office")');
+    expect(read("components/routes.tsx")).toContain("s.returned_at");
+    expect(read("db/migrations/0189_gf_return_rejected.sql")).toContain("if v_stop.outcome_reason = 'rechazado' then");
+  });
+});

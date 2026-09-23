@@ -5685,6 +5685,23 @@ reprogramar»**, antes de «Tomados sin caja», cuenta los pedidos de Grupo GF e
 aplica ese filtro de etapa y subetapa. La versión del resolver sube a
 `mom-v1.15`.
 
+**Devoluciones en Rutas y el rechazo en puerta (v1.16, 22-09-2026).** Todo
+«No entregado» que salió en una caja tiene que volver físicamente. En Rutas,
+la columna **«Devolver»** dice devueltos / por devolver de cada ruta (verde
+completo, rojo si falta alguno), y el botón **«Recibir devoluciones · N»**, a
+la izquierda de «pedidos sin ruta», aparece solo si hay devoluciones
+pendientes de cualquier fecha: abre la lista de lo que falta (motorizado, día
+de la caja, motivo) con la cámara en serie («Devueltos X de N») o el código
+tecleado, y cada lectura hace «Recibir en oficina». En «Reparto y
+liquidación», cada no entregado dice **«Devuelto · fecha hora»** o **«Por
+devolver»**. **«Rechazó el pedido» no se reprograma** (0189): mientras está en
+la caja va a «Por cerrar · Devolución física pendiente»; recibido en oficina,
+la salida queda devuelta (`custody_state = devuelto`, `returned_at`), la
+solicitud del courier se cancela y el pedido pasa a «Por cerrar · Devolución
+pendiente de inventario» (también después de anularse al cerrar la ruta),
+nunca a la cola. Los demás motivos vuelven a «por asignar» en «Por
+reprogramar Lima».
+
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 
 **Antes** la pestaña «Rutas» tenía dos subpestañas —«Cajas y cotejos» (solo

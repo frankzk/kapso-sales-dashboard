@@ -18,6 +18,9 @@ import {
 } from "@/lib/order-confirmation";
 import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovincia";
 
+// v1.16: un rechazo en puerta recibido en oficina (0189) queda en Por cerrar ·
+// Devolución pendiente de inventario: la venta terminó y no se reprograma.
+//
 // v1.15: todo «No entregado» del motorizado propio es Por reprogramar Lima
 // salvo «Rechazó el pedido», y se queda ahí también después de volver a la
 // oficina (`returned_to_office`) hasta que el paquete vuelva a salir. La
@@ -70,7 +73,7 @@ import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovi
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.15" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.16" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -897,6 +900,18 @@ export function gfRiderSignal(
   return { signal: GF_CLOSING_REASONS.has(reason) ? "no_entregado" : "postergado", at: latest.occurred_at };
 }
 
+/** Hora del último reporte de la salida si fue «Rechazó el pedido» (y no se deshizo). */
+function gfRejectedAt(events: readonly MacroEventSnapshot[], guide: MacroGuideSnapshot): string | null {
+  let last: MacroEventSnapshot | null = null;
+  for (const event of events) {
+    if (event.kind !== "stop_reported") continue;
+    if (!(event.shipment_id === guide.id || !event.shipment_id)) continue;
+    if (!last || event.occurred_at > last.occurred_at) last = event;
+  }
+  if (!last || String(last.payload?.status ?? "") !== "no_entregado") return null;
+  return GF_CLOSING_REASONS.has(String(last.payload?.outcome_reason ?? "")) ? last.occurred_at : null;
+}
+
 /** Hora del último «No entregado» reprogramable de la salida, si nada la ha vuelto a mover después. */
 function gfAwaitingRetry(events: readonly MacroEventSnapshot[], guide: MacroGuideSnapshot): string | null {
   const moves = new Set(["dispatch_route_assigned", "pickup_checked", "custody_transferred", "delivered"]);
@@ -1112,6 +1127,14 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
       operation,
       inventoryPending ? ["devolucion_pendiente_inventario"] : [],
     );
+  }
+
+  // Rechazado en puerta y ya devuelto a la oficina (0189): la venta terminó y
+  // el paquete volvió; queda conciliar el inventario. Va antes que la custodia
+  // porque la salida conserva `dispatched_at`.
+  const rejectedBack = input.guides.find((guide) => isOwnCourier(guide.courier) && hasReturned(guide) && gfRejectedAt(input.events, guide));
+  if (rejectedBack && !inventoryResolvedForGuide(rejectedBack, input.events)) {
+    return result("por_cerrar", "devolucion_pendiente_inventario", rejectedBack.returned_at ?? gfRejectedAt(input.events, rejectedBack), operation, ["devolucion_pendiente_inventario"]);
   }
 
   const current = currentGuide(input.guides);

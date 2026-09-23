@@ -6,7 +6,7 @@
 // tienen su carga (`dispatch_manifests`) con cotejos y recepción. Aquí se
 // juntan las dos vistas que antes vivían en pestañas distintas.
 
-import { createServerSupabase } from "@/lib/db";
+import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { activeDispatchItems } from "@/lib/dispatch";
 import type { DispatchManifestState } from "@/lib/dispatch";
 
@@ -33,6 +33,22 @@ export interface CourierLedgerRow {
   codAmount: number;
   /** `null` sin liquidación; si no, el estado de `rider_settlements`. */
   settlementStatus: string | null;
+  /** «No entregado» de una caja: paquetes que deben volver a la oficina. */
+  returnsDue: number;
+  /** De esos, los ya recibidos en oficina (`returned_to_office`, 0188). */
+  returnsDone: number;
+}
+
+/** Un «No entregado» que sigue en la caja del motorizado, esperando volver. */
+export interface PendingReturn {
+  orderId: string;
+  orderName: string;
+  customerName: string;
+  district: string;
+  riderName: string;
+  routeDate: string;
+  reason: string | null;
+  code: string | null;
 }
 
 export type CourierLedgerSituation =
@@ -105,7 +121,7 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
     // Lotes pequeños a propósito: PostgREST corta cada respuesta en 1.000
     // filas. Con 150 rutas de ~30 paradas en una sola consulta, las paradas
     // de las rutas de hoy se quedaban fuera y la fila salía con S/ 0,00.
-    chunked(routeIds, 12, (ids) => sb.from("delivery_stops").select("route_id,order_id,status").in("route_id", ids)),
+    chunked(routeIds, 12, (ids) => sb.from("delivery_stops").select("route_id,order_id,status,shipment_id,dispatch_manifest_id").in("route_id", ids)),
     chunked(routeIds, 200, (ids) =>
       sb.from("dispatch_manifests").select("id,delivery_route_id,load_number,state").eq("courier", "propio").neq("state", "cancelled").in("delivery_route_id", ids),
     ),
@@ -115,8 +131,9 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
   const riderName = new Map(((ridersRes.data ?? []) as { id: string; full_name: string }[]).map((r) => [r.id, r.full_name]));
   const settlementStatus = new Map(((settlementsRes.data ?? []) as { id: string; status: string }[]).map((s) => [s.id, s.status]));
 
-  const stopsByRoute = new Map<string, { order_id: string; status: string }[]>();
-  for (const stop of stopsRes as { route_id: string; order_id: string; status: string }[]) {
+  type StopLite = { route_id: string; order_id: string; status: string; shipment_id: string | null; dispatch_manifest_id: string | null };
+  const stopsByRoute = new Map<string, StopLite[]>();
+  for (const stop of stopsRes as StopLite[]) {
     const list = stopsByRoute.get(stop.route_id) ?? [];
     list.push(stop);
     stopsByRoute.set(stop.route_id, list);
@@ -144,6 +161,12 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
     const list = itemsByManifest.get(item.manifest_id) ?? [];
     list.push(item);
     itemsByManifest.set(item.manifest_id, list);
+  }
+  // Devoluciones recibidas en oficina (0188), por caja y paquete.
+  const returned = new Set<string>();
+  if (manifestIds.length) {
+    const rows = await chunked(manifestIds, 50, (ids) => sb.from("dispatch_events").select("manifest_id,shipment_id").eq("kind", "returned_to_office").in("manifest_id", ids));
+    for (const r of rows as { manifest_id: string; shipment_id: string }[]) returned.add(`${r.manifest_id}:${r.shipment_id}`);
   }
   const shipmentIds = [...new Set((items as ItemLite[]).filter((i) => !i.removed_at).map((i) => i.shipment_id))];
   const armed = new Set<string>();
@@ -181,6 +204,9 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
       pickupChecked += active.filter((i) => i.pickup_checked_at).length;
     }
     const reported = stops.filter((s) => s.status !== "pendiente").length;
+    // Todo «No entregado» que salió en una caja tiene que volver físicamente.
+    const toReturn = stops.filter((s) => s.status === "no_entregado" && s.dispatch_manifest_id && s.shipment_id);
+    const returnsDone = toReturn.filter((s) => returned.has(`${s.dispatch_manifest_id}:${s.shipment_id}`)).length;
     // Una caja sin paquetes activos no cuenta como caja: pasa con las rutas
     // que vienen del cuaderno (las paradas existen, la caja no) y con la caja
     // que quedó vacía tras un retiro. La fila enseña entonces el reparto.
@@ -202,12 +228,63 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
       deliveredCount: stops.filter((s) => s.status === "entregado").length,
       codAmount: stops.reduce((sum, s) => sum + (total.get(s.order_id) ?? 0), 0),
       settlementStatus: route.settlement_id ? (settlementStatus.get(route.settlement_id) ?? "borrador") : null,
+      returnsDue: toReturn.length,
+      returnsDone,
     };
   });
   // Una ruta abierta sin paradas ni paquetes no es una ruta: es la caja que
   // quedó vacía tras «Quitar» o «No lo llevo». Las cerradas o liquidadas se
   // conservan aunque queden en cero, porque son historia.
   return rows.filter((r) => r.assignedCount > 0 || r.routeStatus === "cerrada" || r.settlementStatus != null);
+}
+
+/**
+ * Los «No entregado» que siguen dentro de una caja, de cualquier fecha: son los
+ * paquetes que el motorizado tiene que traer de vuelta. Se leen con el service
+ * role porque las paradas y los ítems tienen políticas distintas; quien llama
+ * ya pasó el permiso de Grupo GF.
+ */
+export async function getPendingReturns(): Promise<PendingReturn[]> {
+  const admin = createAdminSupabase();
+  const stops: Array<{ order_id: string; shipment_id: string; dispatch_manifest_id: string; outcome_reason: string | null }> = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await admin
+      .from("delivery_stops")
+      .select("order_id,shipment_id,dispatch_manifest_id,outcome_reason")
+      .eq("status", "no_entregado")
+      .not("dispatch_manifest_id", "is", null)
+      .not("shipment_id", "is", null)
+      .range(from, from + 999);
+    if (error) throw new Error(error.message);
+    stops.push(...((data ?? []) as typeof stops));
+    if (!data || data.length < 1000) break;
+  }
+  if (!stops.length) return [];
+  const manifestIds = [...new Set(stops.map((s) => s.dispatch_manifest_id))];
+  const items = await chunked(manifestIds, 100, (ids) => admin.from("dispatch_manifest_items").select("manifest_id,shipment_id").in("manifest_id", ids).is("removed_at", null));
+  const inBox = new Set((items as { manifest_id: string; shipment_id: string }[]).map((i) => `${i.manifest_id}:${i.shipment_id}`));
+  const pending = stops.filter((s) => inBox.has(`${s.dispatch_manifest_id}:${s.shipment_id}`));
+  if (!pending.length) return [];
+  const [manifests, orders, shipments] = await Promise.all([
+    chunked([...new Set(pending.map((s) => s.dispatch_manifest_id))], 100, (ids) => admin.from("dispatch_manifests").select("id,driver_name,route_date").in("id", ids)),
+    chunked([...new Set(pending.map((s) => s.order_id))], 200, (ids) => admin.from("order_master").select("order_id,order_name,customer_name,district").in("order_id", ids)),
+    chunked([...new Set(pending.map((s) => s.shipment_id))], 200, (ids) => admin.from("shipments").select("id,output_code,guide_code").in("id", ids)),
+  ]);
+  const m = new Map((manifests as { id: string; driver_name: string | null; route_date: string }[]).map((x) => [x.id, x]));
+  const o = new Map((orders as { order_id: string; order_name: string | null; customer_name: string | null; district: string | null }[]).map((x) => [x.order_id, x]));
+  const sh = new Map((shipments as { id: string; output_code: string | null; guide_code: string | null }[]).map((x) => [x.id, x]));
+  return pending
+    .map((s) => ({
+      orderId: s.order_id,
+      orderName: o.get(s.order_id)?.order_name ?? "Pedido",
+      customerName: o.get(s.order_id)?.customer_name ?? "",
+      district: o.get(s.order_id)?.district ?? "",
+      riderName: m.get(s.dispatch_manifest_id)?.driver_name ?? "Motorizado",
+      routeDate: m.get(s.dispatch_manifest_id)?.route_date ?? "",
+      reason: s.outcome_reason,
+      code: sh.get(s.shipment_id)?.output_code ?? sh.get(s.shipment_id)?.guide_code ?? null,
+    }))
+    .sort((a, b) => (a.routeDate < b.routeDate ? -1 : a.routeDate > b.routeDate ? 1 : a.orderName.localeCompare(b.orderName)));
 }
 
 async function chunked<T>(ids: string[], size: number, run: (ids: string[]) => PromiseLike<{ data: unknown }>): Promise<T[]> {
