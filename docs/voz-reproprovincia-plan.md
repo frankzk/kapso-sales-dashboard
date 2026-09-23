@@ -381,9 +381,17 @@ El mock ya existe (22-09-2026): escenario de Make «Voz · identificar_llamada
 (mock Reproprovincia)» en el equipo My Team, webhook
 `https://hook.us1.make.com/yfoo4l15mlrvtwnarr2qcqxew6mblqg9`. Acepta cualquier
 método y cuerpo y responde siempre la ficha del pedido #KP135098 de Kenku
-(Cusco, Aceite de Semilla Negra x3, S/ 298) con `modo: "test"`. Para cambiar
-la ficha se edita el cuerpo del módulo «Webhook response»; para apagarlo se
-desactiva el escenario.
+(Cusco, Aceite de Semilla Negra x3, S/ 298) con `modo: "test"`, más
+`ventana_horaria`, `fecha_minima` y `dias_restantes` para el guion de
+reprogramación. Para cambiar la ficha se edita el cuerpo del módulo «Webhook
+response»; para apagarlo se desactiva el escenario.
+
+Hay un segundo mock para la tool de cierre, «Voz · registrar_gestion (mock)»,
+en `https://hook.us1.make.com/py1repp3lwe81n6m6dpjlw17p8vpr2tt`: acepta lo
+que el agente mande, responde `{"ok": true, "modo": "test"}` y **guarda cada
+petición en el historial del escenario**, que es donde se lee qué resultado y
+qué campos registró el agente en cada llamada de prueba (prueba 4 de la
+Fase 1).
 
 Lo que se aprende con el mock: si el agente respeta «tool antes de hablar»,
 cuánto silencio añade, y cómo suena el saludo con un producto real en la
