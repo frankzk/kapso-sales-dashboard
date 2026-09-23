@@ -423,8 +423,10 @@ export function DispatchDayBoard(props: Props) {
         )}
       </div>
 
-      {/* Tiles de métricas: cada una es un filtro con su cantidad (misma fuente de verdad que el picker). */}
-      <div role="group" aria-label="Métricas y filtros del día" className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-1 xl:mx-0 xl:grid xl:grid-cols-9 xl:overflow-visible xl:px-0">
+      {/* Tiles de métricas: cada una es un filtro con su cantidad (misma fuente de
+          verdad que el picker). Una sola fila con scroll horizontal en todo
+          ancho: con nueve tarjetas, la grilla partía la fila o cortaba etiquetas. */}
+      <div role="group" aria-label="Métricas y filtros del día" className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-2 [scrollbar-width:thin]">
         {(Object.keys(QUEUE_TILE_LABEL) as QueueTile[]).map((tile) => (
           <Tile key={tile} label={QUEUE_TILE_LABEL[tile].label} hint={QUEUE_TILE_LABEL[tile].hint} value={queueTiles[tile]} active={queueTileActive(filters, tile) && method === "lista"} onClick={() => tapQueueTile(tile)} />
         ))}
@@ -1132,7 +1134,7 @@ function Tile({ label, hint, value, active, onClick, tone = "slate" }: { label: 
       aria-pressed={active}
       title={hint}
       className={cn(
-        "flex h-12 min-w-[7.5rem] shrink-0 snap-start flex-col justify-center rounded-xl border px-3 text-left leading-tight xl:min-w-0",
+        "flex h-12 min-w-[8.5rem] flex-1 shrink-0 snap-start flex-col justify-center rounded-xl border px-3 text-left leading-tight",
         active ? "border-brand-500 bg-brand-50 text-brand-900 ring-1 ring-brand-500" : tone === "amber" ? "border-amber-200 bg-amber-50/60 text-amber-900 hover:bg-amber-50" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
       )}
     >
