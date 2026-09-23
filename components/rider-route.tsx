@@ -142,6 +142,10 @@ function RiderRouteScreenInner({
   }, [closeStopPanel]);
   const [confirmAll, setConfirmAll] = useState(false);
   const [headerMessage, setHeaderMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  // Los contadores de arriba son filtros: tocar uno deja solo esas paradas;
+  // tocarlo otra vez vuelve a mostrar todas.
+  const [statusFilter, setStatusFilter] = useState<"pendiente" | "entregado" | "no_entregado" | null>(null);
+  const toggleStatus = (s: "pendiente" | "entregado" | "no_entregado") => setStatusFilter((cur) => (cur === s ? null : s));
   // Avance del escaneo en serie: lo confirmado según el servidor más lo que se
   // confirmó en esta tanda y aún no volvió con el refresh (el motorizado no
   // espera a la red para ver que la barra avanza).
@@ -200,9 +204,9 @@ function RiderRouteScreenInner({
         </div>
         {coordinator && <p className="mt-2 text-sm text-slate-600">Reportas como <strong>{coordinator}</strong> por el motorizado. Tu usuario quedará registrado. <a className="underline" href="/dashboard/courier/reparto">Volver a Rutas</a></p>}
         <div className="mt-2 flex flex-wrap gap-3 text-xs">
-          <Pill label="Por entregar" value={totals.pendientes} tone="pend" />
-          <Pill label="Entregados" value={totals.entregados} tone="ok" />
-          <Pill label="No entregados" value={totals.noEntregados} tone="bad" />
+          <Pill label="Por entregar" value={totals.pendientes} tone="pend" active={statusFilter === "pendiente"} dimmed={statusFilter !== null && statusFilter !== "pendiente"} onClick={() => toggleStatus("pendiente")} />
+          <Pill label="Entregados" value={totals.entregados} tone="ok" active={statusFilter === "entregado"} dimmed={statusFilter !== null && statusFilter !== "entregado"} onClick={() => toggleStatus("entregado")} />
+          <Pill label="No entregados" value={totals.noEntregados} tone="bad" active={statusFilter === "no_entregado"} dimmed={statusFilter !== null && statusFilter !== "no_entregado"} onClick={() => toggleStatus("no_entregado")} />
           {mode === "confirmar" && unconfirmed > 0 && <Pill label="por confirmar" value={unconfirmed} tone="warn" />}
         </div>
         {mode === "confirmar" && unconfirmed > 0 && !coordinator && (
@@ -250,7 +254,13 @@ function RiderRouteScreenInner({
       </header>
 
       <ul className="space-y-2 p-3">
-        {stops.map((stop) => (
+        {statusFilter && (
+          <li className="flex items-center justify-between rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-700">
+            <span>Mostrando solo {statusFilter === "pendiente" ? "por entregar" : statusFilter === "entregado" ? "entregados" : "no entregados"}</span>
+            <button type="button" onClick={() => setStatusFilter(null)} className="font-semibold text-brand-700 underline">Ver todos</button>
+          </li>
+        )}
+        {stops.filter((stop) => !statusFilter || stop.status === statusFilter).map((stop) => (
           <li key={stop.id}>
             <StopCard
               stop={stop}
@@ -437,11 +447,16 @@ function StopStatusLine({ stop, badge }: { stop: StopWithOrder; badge: ReturnTyp
   );
 }
 
-function Pill({ label, value, tone }: { label: string; value: number; tone: "pend" | "ok" | "bad" | "warn" }) {
+function Pill({ label, value, tone, active = false, dimmed = false, onClick }: { label: string; value: number; tone: "pend" | "ok" | "bad" | "warn"; active?: boolean; dimmed?: boolean; onClick?: () => void }) {
+  const Tag = onClick ? "button" : "span";
   return (
-    <span
+    <Tag
+      {...(onClick ? { type: "button" as const, onClick, "aria-pressed": active } : {})}
       className={cn(
         "rounded-full px-2 py-0.5 text-xs font-medium",
+        onClick && "min-h-9 px-3",
+        active && "ring-2 ring-offset-2 ring-slate-900",
+        dimmed && "opacity-40",
         tone === "ok" && "bg-emerald-600 text-white",
         tone === "bad" && "bg-red-600 text-white",
         tone === "pend" && "bg-slate-200 text-slate-800",
@@ -449,7 +464,7 @@ function Pill({ label, value, tone }: { label: string; value: number; tone: "pen
       )}
     >
       {value} {label}
-    </span>
+    </Tag>
   );
 }
 
