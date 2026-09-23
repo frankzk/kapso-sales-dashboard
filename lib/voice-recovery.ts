@@ -211,6 +211,34 @@ export function isStale(call: OpenCall, now: Date): boolean {
   return now.getTime() - new Date(ref).getTime() > ttl * 60_000;
 }
 
+export interface StaleResolution {
+  status: "completed" | "failed";
+  outcome: "no_contesta" | "sin_resultado";
+  error: string | null;
+  /** Escribir sobre el pedido el `no_contesta` que el agente no pudo registrar. */
+  registerNoAnswer: boolean;
+}
+
+/**
+ * Qué se hace con una llamada caducada (MOM §11.8). Zadarma marca primero a la
+ * clienta y solo conecta al agente cuando ella contesta, así que una llamada
+ * que nunca pasó de `dialing` es una clienta que no contestó: el agente nunca
+ * se enteró y no pudo registrarlo. En modo real se escribe ese `no_contesta`,
+ * como lo habría hecho él. Una llamada `in_progress` sin registro se cortó a
+ * media conversación: eso no es gestión y no se escribe nada.
+ */
+export function staleCallResolution(call: Pick<OpenCall, "status"> & { mode: "real" | "test" }): StaleResolution {
+  if (call.status === "dialing") {
+    return { status: "completed", outcome: "no_contesta", error: null, registerNoAnswer: call.mode === "real" };
+  }
+  return {
+    status: "failed",
+    outcome: "sin_resultado",
+    error: call.status === "in_progress" ? "sin registrar_gestion dentro de la ventana" : "no se marcó",
+    registerNoAnswer: false,
+  };
+}
+
 /**
  * Elige la fila de la llamada en curso. MOM §11.8: la llamada se ata a la
  * fila que Kapta escribió ANTES de marcar, nunca a un pedido buscado por el

@@ -2381,7 +2381,7 @@ export async function llamarConAgente(orderId: string): Promise<MasterActionStat
   );
   if (!placed.ok) return { error: placed.error };
   revalidatePath(MASTER_PATH);
-  return { notice: "Llamando. Zadarma conecta primero al agente y después a la clienta." };
+  return { notice: "Llamando a la clienta. Cuando conteste, entra el agente." };
 }
 
 /**

@@ -1416,7 +1416,7 @@ function SettingsForm({
                 id="voice_recovery_agent_number"
                 name="voice_recovery_agent_number"
                 defaultValue={s.voice_recovery_agent_number ?? ""}
-                placeholder="17058243"
+                placeholder="Ej.: 17058243"
                 className={inputCls}
               />
             </div>
@@ -1428,7 +1428,7 @@ function SettingsForm({
                 id="voice_recovery_zadarma_sip"
                 name="voice_recovery_zadarma_sip"
                 defaultValue={s.voice_recovery_zadarma_sip ?? ""}
-                placeholder="104"
+                placeholder="Ej.: 104"
                 className={inputCls}
               />
             </div>

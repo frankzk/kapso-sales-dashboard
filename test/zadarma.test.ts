@@ -57,9 +57,9 @@ describe("números peruanos sin 51", () => {
 });
 
 describe("callback", () => {
-  it("va SIN predicted: la locución de espera la oye el agente, no la clienta", () => {
+  it("la clienta primero y el agente después: si no contesta, el agente no se paga", () => {
     const built = buildCallbackParams({ agentNumber: "+5117058243", customerPhone: "51930555309", sip: "100" });
-    expect(built).toEqual({ ok: true, params: { from: "17058243", sip: "100", to: "930555309" } });
+    expect(built).toEqual({ ok: true, params: { from: "930555309", sip: "100", to: "17058243" } });
     expect(built.ok && "predicted" in built.params).toBe(false);
   });
 
@@ -74,7 +74,7 @@ describe("callback", () => {
     const fake = (async (input: RequestInfo | URL, init?: RequestInit) => {
       url = String(input);
       auth = String((init?.headers as Record<string, string>).Authorization);
-      return new Response(JSON.stringify({ status: "success", from: 17058243, to: 930555309 }), { status: 200 });
+      return new Response(JSON.stringify({ status: "success", from: 930555309, to: 17058243 }), { status: 200 });
     }) as typeof fetch;
     const r = await requestCallback(
       { key: "clave", secret: "secreto-de-prueba" },
@@ -82,8 +82,8 @@ describe("callback", () => {
       fake,
     );
     expect(r.ok).toBe(true);
-    expect(url).toBe("https://api.zadarma.com/v1/request/callback/?from=17058243&sip=100&to=930555309");
-    expect(auth).toBe("clave:ZjE5ZGZiOGIzYzAxNWI2MWIxY2UyNTA5NmY0YzdhNDQ4MGUyODgxNA==");
+    expect(url).toBe("https://api.zadarma.com/v1/request/callback/?from=930555309&sip=100&to=17058243");
+    expect(auth).toBe("clave:MTM1MGY2MTI5MGQxNTc1Mjc5OGZlZmQxZmYyODUxNGEzODYxMDFjZQ==");
   });
 
   it("un rechazo de Zadarma no se da por llamada hecha", async () => {

@@ -2974,13 +2974,29 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
   clienta de provincia no contesta ese número, y la cuenta la comparte otra
   operación que llama a Costa Rica, así que el número se fija por extensión y
   no en la cuenta.
+- **La clienta se marca primero; el agente entra cuando ella contesta**
+  (decisión del owner, 23-09-2026). Con el agente primero, xAI cobraba los
+  ~30 segundos que tarda en timbrar el celular y el minuto entero de las que
+  no contestan —casi la mitad del gasto—, y el agente saludaba a una línea que
+  todavía sonaba. El precio aceptado: al contestar, la clienta oye unos
+  segundos la locución de Zadarma «Por favor, espere a que se realice la
+  conexión», que la API no deja apagar. El tramo del agente pasa por la red
+  telefónica (Zadarma llama al número del agente, que desvía a xAI) y el audio
+  llega algo más comprimido que en una llamada directa; una extensión con
+  desvío a SIP URI no sirve en el callback. Se mide en el piloto.
 - **Una llamada abierta por número de agente.** El agente no recibe el
   teléfono de la clienta —el callback le llega con el caller ID de la cuenta—,
   así que sabe de qué pedido habla porque es la única llamada abierta de su
-  número (índice único en `voice_calls`). Una llamada que no conecta en tres
-  minutos, o que no registra en diez, se da por caída y libera el número sin
-  tocar el pedido. Con 20 a 30 llamadas al día cabe de sobra; para más, otro
-  número de agente.
+  número (índice único en `voice_calls`). Con 20 a 30 llamadas al día cabe de
+  sobra; para más, otro número de agente.
+- **Llamadas caducadas.** Una llamada que en tres minutos no llegó al agente
+  es una clienta que **no contestó** (el agente solo entra cuando ella
+  contesta, así que nunca se enteró): el barrido la cierra y, en modo real,
+  escribe el mismo `sin_respuesta` que habría escrito el agente, con día de
+  gestión (`staleCallResolution`). Incluye, sin poder distinguirlos, los
+  pocos casos en que contestó pero el tramo del agente no conectó. Una
+  llamada que llegó al agente y en diez minutos no registró se cortó a media
+  conversación: queda `sin_resultado` y no toca el pedido.
 - **Modo prueba.** Una llamada en `mode = 'test'` usa la ficha de un pedido
   real, llama al teléfono de quien prueba y **no escribe nada sobre el
   pedido**: solo su fila. No cuenta para topes ni métricas.
@@ -3052,7 +3068,7 @@ de §6.1 (`lib/voice-recovery.ts`, `translateGestion`):
 
 | Lo que pasó en la llamada | Hecho sobre el pedido | Día de gestión |
 | --- | --- | --- |
-| No contesta, buzón, ocupado | `confirmation_contact` · `sin_respuesta` | sí |
+| No contesta, buzón, ocupado (lo registra el agente, o el barrido si no llegó al agente) | `confirmation_contact` · `sin_respuesta` | sí |
 | Contestó otra persona, se dejó recado | `confirmation_contact` · `se_deja_mensaje` | sí |
 | Pide que llamen otro día | `confirmation_contact` + `confirmation_followup` · `volver_a_contactar` con fecha | sí |
 | **Acepta el reenvío** | `confirmed` con la dirección leída, referencia y rango de día en `payload` | sí |
@@ -3120,9 +3136,11 @@ adelanto, ese pedido no entró a su cola.
 
 #### Piloto y medida
 
-Una tienda, dos semanas, `voice_recovery_auto` apagado la primera semana (se
-lanza a mano desde el drawer) y encendido la segunda. Todas las transcripciones
-de la primera semana se escuchan. Se decide con estas cifras, comparadas con la
+Una tienda (Kenku), dos semanas. **Decisión del owner, 23-09-2026:** el
+automático se enciende desde el primer día con el tope de 30 llamadas diarias,
+en lugar de una semana a mano desde el drawer; el tope es la marcha atrás, y
+apagar `voice_recovery_auto` la detiene. Todas las transcripciones de la
+primera semana se escuchan. Se decide con estas cifras, comparadas con la
 línea base de cero llamadas:
 
 | Métrica | Qué delata |
