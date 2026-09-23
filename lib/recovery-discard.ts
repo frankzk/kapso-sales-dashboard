@@ -31,14 +31,24 @@ export function validarMotivoDescarte(motivo: string | null | undefined): { reas
  */
 export async function discardRecovery(
   admin: SupabaseClient,
-  input: { storeId: string; orderId: string; actor: string; reason: string },
+  input: {
+    storeId: string;
+    orderId: string;
+    /** Nulo solo cuando descarta el agente de voz (MOM §11.8): no es un usuario. */
+    actor: string | null;
+    reason: string;
+    /** `manual` para personas; `agente_voz` para el agente (MOM §11.8). */
+    source?: "manual" | "agente_voz";
+    payload?: Record<string, unknown>;
+  },
 ): Promise<{ error?: string }> {
   const { error } = await admin.from("order_events").insert({
     store_id: input.storeId,
     order_id: input.orderId,
     kind: RECOVERY_DISCARDED_KIND,
     actor: input.actor,
-    source: "manual",
+    source: input.source ?? "manual",
+    ...(input.payload ? { payload: input.payload } : {}),
     reason: input.reason,
     note: `Recuperación de provincia descartada: ${input.reason}`,
   });

@@ -2868,7 +2868,9 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
 
 ### 11.8 Recuperación por agente de voz (v1.12, especificación aprobable)
 
-Estado: **especificado, no implementado.** El plan técnico vive en
+Estado: **en construcción (Fase 2).** Existen la bitácora (`voice_calls`,
+0170), las dos tools del agente y la llamada de prueba; faltan el barrido
+automático y la pantalla. El plan técnico vive en
 `docs/voz-reproprovincia-plan.md`. Esta sección define las reglas; el plan
 define cómo se construyen. Ninguna de las dos autoriza a llamar a un cliente
 hasta que el piloto de abajo se encienda por tienda.
@@ -2961,6 +2963,23 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
   automática a las 21:45 se recibe distinto que la de una asesora.
 - Lo mueve **owner o admin de la organización de esa tienda**, igual que el
   ciclo de recontacto (§6.1): reparte llamadas y reputación de toda la tienda.
+- **La clienta siempre ve un número peruano.** Kapta no pide una llamada sin
+  la extensión de Zadarma cuyo caller ID es peruano
+  (`voice_recovery_zadarma_sip`). Sin ella la cuenta llama con su número por
+  defecto, que es de EE. UU. (+1 202 773 4798, medido el 22-09-2026): una
+  clienta de provincia no contesta ese número, y la cuenta la comparte otra
+  operación que llama a Costa Rica, así que el número se fija por extensión y
+  no en la cuenta.
+- **Una llamada abierta por número de agente.** El agente no recibe el
+  teléfono de la clienta —el callback le llega con el caller ID de la cuenta—,
+  así que sabe de qué pedido habla porque es la única llamada abierta de su
+  número (índice único en `voice_calls`). Una llamada que no conecta en tres
+  minutos, o que no registra en diez, se da por caída y libera el número sin
+  tocar el pedido. Con 20 a 30 llamadas al día cabe de sobra; para más, otro
+  número de agente.
+- **Modo prueba.** Una llamada en `mode = 'test'` usa la ficha de un pedido
+  real, llama al teléfono de quien prueba y **no escribe nada sobre el
+  pedido**: solo su fila. No cuenta para topes ni métricas.
 
 #### El guion: qué dice y qué no
 
@@ -3008,12 +3027,24 @@ el redactado.
 
 #### Lo que escribe, y por dónde
 
-El agente escribe **por `register_confirmation_attempt_v1`** con canal
+El agente escribe **por `register_confirmation_attempt_v2`** (0170) con canal
 `llamada` y `source = 'agente_voz'`, con `operation_id` igual al identificador
-de la llamada. Es la misma transacción atómica e idempotente de §6.1: un
-webhook repetido devuelve el resultado existente y no gasta un segundo día. La
-función gana el parámetro `p_source` (hoy escribe `manual` fijo); su valor por
-defecto sigue siendo `manual`, así que ninguna pantalla cambia.
+de la llamada. Es la misma transacción atómica e idempotente de §6.1 —la v2 es
+una copia de la v1 con `p_source` y `p_payload_extra`—: un reintento del
+agente devuelve el resultado existente y no gasta un segundo día. La v1 no se
+toca, así que ninguna pantalla cambia.
+
+El agente registra con cuatro `disposition`, que se traducen a los resultados
+de §6.1 (`lib/voice-recovery.ts`, `translateGestion`):
+
+| `disposition` | Resultado de §6.1 |
+| --- | --- |
+| `confirma` con fecha futura | `confirmado`, con fecha, rango y dirección en el payload |
+| `confirma` sin fecha futura | `se_deja_mensaje` con la nota «revisar»: sin fecha no hay reprogramación (§11.6) |
+| `programar` con fecha | `volver_a_contactar` |
+| `programar` sin fecha | `se_deja_mensaje` |
+| `no_contesta` | `sin_respuesta` |
+| `cancela` | propuesta de descarte, o descarte si la tienda lo delega (abajo) |
 
 | Lo que pasó en la llamada | Hecho sobre el pedido | Día de gestión |
 | --- | --- | --- |
@@ -3125,8 +3156,10 @@ poner las dos columnas una al lado de la otra.
   `voice_recovery_enabled` apagado no existe la cola ni el botón.
 - El tope diario, el tope por pedido, el horario y `no_llamar` se prueban
   cada uno con un caso que los cruza por una unidad.
-- `register_confirmation_attempt_v1` acepta `p_source` y sin él sigue
-  escribiendo `manual`.
+- `register_confirmation_attempt_v2` escribe la procedencia que recibe y la
+  v1 no cambia.
+- Sin extensión con caller ID peruano configurada, Kapta no pide la llamada.
+- Una fila `test` no escribe nada sobre el pedido con ninguna `disposition`.
 - La transcripción y la grabación se leen bajo RLS de la tienda, como la ficha
   (§8.1).
 

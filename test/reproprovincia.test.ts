@@ -236,6 +236,18 @@ describe("y la macroetapa la aplica IGUAL", () => {
     expect(r.since).toBe(hace(5));
   });
 
+  it("el «acepta reenvío» del agente de voz NO mueve la etapa: la cierra la salida Swayp (§11.8)", () => {
+    // El agente escribe `confirmation_contact` y `confirmed` sobre el pedido.
+    // Si eso lo mandara a Preparación, saldría de la cola de Reproprovincia
+    // antes de que nadie creara la guía, y la llamada se perdería.
+    const r = resolverTodo([guia()], [macroGuia()], pedido(), [
+      { kind: "confirmation_contact", occurred_at: hace(1) },
+      { kind: "confirmed", occurred_at: hace(1) },
+    ]);
+    expect(r.stage).toBe("en_curso");
+    expect(r.substage).toBe("gestion_reproprovincia");
+  });
+
   it("el inventario del paquete devuelto CONVIVE como razón, no tapa la gestión", () => {
     const r = resolverTodo([guia({ returned_at: hace(2) })], [macroGuia({ returned_at: hace(2) })]);
     expect(r.stage).toBe("en_curso");
@@ -301,7 +313,10 @@ describe("las piezas en el código", () => {
     expect(body).not.toContain("status_override");
     const helper = read("lib/recovery-discard.ts");
     expect(helper).toContain("kind: RECOVERY_DISCARDED_KIND");
-    expect(helper).toContain('source: "manual"');
+    // Una persona descarta con `manual`; solo el agente de voz (§11.8) pasa
+    // `agente_voz`, y el Master no lo hace.
+    expect(helper).toContain('source: input.source ?? "manual"');
+    expect(body).not.toContain("agente_voz");
   });
 
   it("el barrido sella `closed_at` al anular, una sola vez", () => {

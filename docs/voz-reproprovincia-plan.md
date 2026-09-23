@@ -1,6 +1,11 @@
 # Plan técnico — Agente de voz para Reproprovincia
 
-> **Estado: DISEÑO, no implementado.** Las reglas de negocio están en el MOM,
+> **Estado: Fase 1 cerrada; Fase 2 en curso.** Construido: migración 0170
+> (`voice_calls`, ajustes `voice_recovery_*`, `register_confirmation_attempt_v2`),
+> `lib/zadarma.ts`, `lib/voice-recovery.ts`, las tools
+> `/api/voice/tools/identificar_llamada` y `/api/voice/tools/registrar_gestion`,
+> y `/api/internal/voice/test-call`. Falta: barrido automático, elegibilidad
+> contra datos reales, pantalla y fin de llamada con transcripción. Las reglas de negocio están en el MOM,
 > §11.8 (`docs/mom/master-pedidos-v1.md`). Este documento dice cómo se
 > construyen. Si algo de aquí contradice al MOM, manda el MOM y se corrige esto.
 
@@ -516,6 +521,42 @@ from voice_calls vc where vc.outcome = 'acepta';
 -- misma consulta con 24 h y con_salida = false y ended_at < now() - interval '24 hours'
 ```
 
+## Cómo probar la Fase 2 (llamada de prueba con un pedido real)
+
+1. **Caller ID peruano.** En Zadarma, a una extensión de la centralita que no
+   use nadie más (no la 103, que es de la operación de Costa Rica), ponle como
+   caller ID el `+51 1 705 8243`. Pruébala a mano antes de tocar Kapta:
+   `from=17058243&sip=<extensión>&to=<tu celular sin 51>`. Si en tu celular
+   aparece el número peruano, sirve.
+2. **Migración.** `psql "$DATABASE_URL" -f db/migrations/0170_voice_calls.sql`,
+   antes de desplegar (DEPLOY.md).
+3. **Variables en Vercel.** `ZADARMA_KEY`, `ZADARMA_SECRET` (el secret nuevo,
+   regenerado) y `VOICE_TOOLS_SECRET` (uno nuevo:
+   `openssl rand -hex 32`).
+4. **Ajustes de la tienda** (por SQL mientras no haya pantalla):
+   ```sql
+   update stores
+      set voice_recovery_agent_number = '17058243',
+          voice_recovery_zadarma_sip  = '<extensión del paso 1>'
+    where name = 'Kenku Peru';
+   ```
+5. **Tools en la consola de xAI.** Cambiar las URLs del mock de Make por:
+   - `POST https://<kapta>/api/voice/tools/identificar_llamada?agente=17058243`
+   - `POST https://<kapta>/api/voice/tools/registrar_gestion?agente=17058243`
+
+   con autenticación `Authorization: Bearer <VOICE_TOOLS_SECRET>` (o cabecera
+   `x-voice-secret`). Los parámetros no cambian.
+6. **Lanzar la llamada de prueba.**
+   ```powershell
+   Invoke-RestMethod -Method Post -Uri "https://<kapta>/api/internal/voice/test-call" `
+     -Headers @{ "x-internal-secret" = "<CRON_SECRET>" } -ContentType "application/json" `
+     -Body '{"order_name":"#KP135098","phone":"930555309"}'
+   ```
+   Te llama con el número peruano, el agente saluda con la ficha real de
+   #KP135098 y lo que registres queda solo en `voice_calls` (modo prueba).
+7. **Revisar.** `select status, outcome, outcome_payload, error from voice_calls
+   order by queued_at desc limit 5;`
+
 ## Fase 1: las cinco pruebas, en orden
 
 Cada una responde una pregunta que decide el diseño. No se pasa a la siguiente
@@ -526,7 +567,7 @@ sin anotar el resultado aquí.
 | Prueba | Fecha | Resultado |
 | --- | --- | --- |
 | 1 · ¿Contesta el agente? | 22-09-2026 | **Sí.** Llamada directa desde un celular al 01 705 8243: la tool corre antes de hablar y el saludo sale con la ficha del mock. |
-| 3 · ¿Qué número ve xAI? | 22-09-2026 | **Llamada directa: resuelto.** xAI recibe el caller ID (pestaña Conversations) y, con «Know caller's phone number» encendido y publicado y `numero_cliente` exigido en el paso 0 del prompt, el agente lo manda a `identificar_llamada`. Falta lo que decide la atadura: qué «Caller» registra xAI en el **callback** de la prueba 2. Si es el celular de la clienta, opción 1; si es el número de Zadarma, opción 2. |
+| 3 · ¿Qué número ve xAI? | 22-09-2026 | **En el callback, el de la cuenta (`+12027734798`), no el de la clienta.** En llamada directa sí llega el del que llama. Decisión: **opción 2**, una llamada abierta por número de agente, con el número del agente en la URL de cada tool (`?agente=17058243`). |
 | 2 · ¿Funciona la saliente? | 22-09-2026 | **Sí, sin `predicted`.** `from=17058243&to=930555309`: Zadarma llama primero al agente, que oye la locución de espera y calla; luego marca a la clienta, que contesta y el agente le responde sin locución ni silencio. Con `predicted` también conectaba, pero la clienta oía «espere a la conexión» y ~3 s de silencio. El caller ID que ve la clienta es el de EE. UU. de la cuenta (`+1 202 773 4798`); pendiente cambiarlo por extensión o con el parámetro `sip`, porque la cuenta es compartida. |
 | 4 · ¿Llama webhooks? | 22-09-2026 | **Sí.** Las dos tools llegan a Make en cada sesión de la consola. |
 | 5 · Transcripción y fin | — | Pendiente. |
