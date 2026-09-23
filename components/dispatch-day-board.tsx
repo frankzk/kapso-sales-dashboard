@@ -493,7 +493,7 @@ export function DispatchDayBoard(props: Props) {
               <div role="tablist" aria-label="Forma de asignar" className="grid grid-cols-3 rounded-xl bg-slate-100 p-1 text-sm font-medium">
                 <button type="button" role="tab" aria-selected={method === "qr"} onClick={() => setMethod("qr")}
                   className={cn("min-h-10 rounded-lg px-3", method === "qr" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800")}>
-                  Asignación por QR
+                  Por QR
                 </button>
                 <button type="button" role="tab" aria-selected={method === "lista"} onClick={() => setMethod("lista")}
                   className={cn("min-h-10 rounded-lg px-3", method === "lista" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800")}>
