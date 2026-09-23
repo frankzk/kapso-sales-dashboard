@@ -5716,7 +5716,10 @@ la caja va a «Por cerrar · Devolución física pendiente»; recibido en oficin
 la salida queda devuelta (`custody_state = devuelto`, `returned_at`), la
 solicitud del courier se cancela y el pedido pasa a «Por cerrar · Devolución
 pendiente de inventario» (también después de anularse al cerrar la ruta),
-nunca a la cola. Los demás motivos vuelven a «por asignar» en «Por
+nunca a la cola. Con «Reingresar a inventario» o «Merma» desde el cierre de
+la ficha pasa a **«Finalizado · Anulado cerrado»**; si eso ocurre antes de
+cerrar la ruta (el pedido aún no está anulado), espera en «Por cerrar ·
+Validación de cierre pendiente» hasta el cierre (v1.17). Los demás motivos vuelven a «por asignar» en «Por
 reprogramar Lima».
 
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)

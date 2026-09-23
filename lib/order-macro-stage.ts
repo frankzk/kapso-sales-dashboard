@@ -18,6 +18,10 @@ import {
 } from "@/lib/order-confirmation";
 import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovincia";
 
+// v1.17: un rechazo devuelto con el inventario ya resuelto y la ruta aún
+// abierta espera en Por cerrar · Validación de cierre pendiente (antes caía
+// en En curso por conservar `dispatched_at`).
+//
 // v1.16: un rechazo en puerta recibido en oficina (0189) queda en Por cerrar ·
 // Devolución pendiente de inventario: la venta terminó y no se reprograma.
 //
@@ -73,7 +77,7 @@ import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovi
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.16" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.17" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -1133,8 +1137,14 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
   // el paquete volvió; queda conciliar el inventario. Va antes que la custodia
   // porque la salida conserva `dispatched_at`.
   const rejectedBack = input.guides.find((guide) => isOwnCourier(guide.courier) && hasReturned(guide) && gfRejectedAt(input.events, guide));
-  if (rejectedBack && !inventoryResolvedForGuide(rejectedBack, input.events)) {
-    return result("por_cerrar", "devolucion_pendiente_inventario", rejectedBack.returned_at ?? gfRejectedAt(input.events, rejectedBack), operation, ["devolucion_pendiente_inventario"]);
+  if (rejectedBack) {
+    if (!inventoryResolvedForGuide(rejectedBack, input.events)) {
+      return result("por_cerrar", "devolucion_pendiente_inventario", rejectedBack.returned_at ?? gfRejectedAt(input.events, rejectedBack), operation, ["devolucion_pendiente_inventario"]);
+    }
+    // Inventario ya resuelto pero la ruta aún abierta: el pedido todavía no está
+    // anulado (lo anula el cierre de la ruta). Espera ahí, nunca vuelve a En
+    // curso; al anularse cae en Finalizado · Anulado cerrado por la rama de arriba.
+    return result("por_cerrar", "validacion_cierre_pendiente", rejectedBack.returned_at ?? input.legacy.since, operation, ["validacion_cierre_pendiente"]);
   }
 
   const current = currentGuide(input.guides);
