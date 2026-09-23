@@ -63,7 +63,7 @@ type RiderRouteScreenProps = {
   vocabulary?: RiderVocabulary | null;
   /** Hoy en Lima, para los puntos añadidos a mano. */
   today?: string;
-  /** Modo de recojo (0177): en «confirmar» cada parada nace «por confirmar». */
+  /** Modo de recojo (0185): en «confirmar» cada parada nace «por confirmar». */
   pickupMode?: RiderPickupMode;
 };
 
@@ -471,7 +471,7 @@ function StopCard({
   onDone: () => void;
 }) {
   const o = stop.order;
-  // «Lo llevo» / «No lo llevo» (0177): solo en modo confirmar, sobre paradas
+  // «Lo llevo» / «No lo llevo» (0185): solo en modo confirmar, sobre paradas
   // pendientes que salieron de una caja y que el motorizado aún no confirmó.
   const decision = riderStopDecision(pickupMode, {
     status: stop.status,

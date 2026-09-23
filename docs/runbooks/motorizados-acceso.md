@@ -21,7 +21,7 @@ motorizado en mano.
   entrar con Google: son dos puertas al mismo usuario solo si el correo
   coincide.
 - El usuario recibe una **membresía** con rol `motorizado` en la organización
-  de la ficha. Ese rol solo concede `routes.deliver`; la RLS de 0171
+  de la ficha. Ese rol solo concede `routes.deliver`; la RLS de 0179
   (`auth_is_rider_only()`) acota sus lecturas a su hoja cuando ese es su único
   rol. **Un motorizado no debe tener ningún otro rol**: el script lo rechaza.
 - En `/login` hay un enlace discreto «Entrar con usuario y contraseña»

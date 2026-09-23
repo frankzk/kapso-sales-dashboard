@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0168_liquidaciones2_hojas.sql — Liquidaciones 2: dominios, hojas, columnas
+-- 0184_liquidaciones2_hojas.sql — Liquidaciones 2: dominios, hojas, columnas
 -- configurables, equivalencias de estado y observaciones de cuadre.
 --
 -- DE DÓNDE VIENE. La operación llevaba el cierre de Lima en un Google Sheet

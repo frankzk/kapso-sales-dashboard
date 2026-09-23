@@ -4,7 +4,7 @@
  *   pnpm tsx scripts/rollback-master-backfill.ts <batch_id> [--real]
  *
  * Borra los `order_events` que el lote insertó (los de la bitácora
- * `master_backfill_log`, 0173), recalcula el Master de esos pedidos y marca
+ * `master_backfill_log`, 0181), recalcula el Master de esos pedidos y marca
  * `reverted_at`. Después compara el estado recalculado con `previous_general`
  * y avisa de los que no volvieron a lo mismo (porque otro evento posterior
  * los movió): esos se revisan a mano, no se fuerzan.

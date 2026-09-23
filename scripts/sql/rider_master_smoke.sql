@@ -1,4 +1,4 @@
--- Master para el motorizado (0178): un motorizado lee del Master solo los
+-- Master para el motorizado (0186): un motorizado lee del Master solo los
 -- pedidos que son paradas de SUS rutas en curso o cerradas. Reusa la org, las
 -- tiendas y los pedidos de rls_smoke.sql (A1, A2 en Store A) y los motorizados
 -- E y F de sheets_rider_smoke.sql.

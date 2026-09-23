@@ -188,38 +188,59 @@ describe("matchesFilters — banderas operativas", () => {
     expect(matchesFilters(row("3", { last_movement_at: null }), f, NOW)).toBe(true);
   });
 
-  it("agrupa seguimientos por fecha y recordatorios de dos horas en la misma cola", () => {
+  it("agrupa seguimientos por fecha y recordatorios en la misma cola", () => {
     const overdue = withFilter({ confirmationDue: "vencido" });
     const today = withFilter({ confirmationDue: "hoy" });
     const upcoming = withFilter({ confirmationDue: "proximo" });
-    expect(matchesFilters(row("1", { confirmation_next_contact_on: "2026-07-19" }), overdue, NOW)).toBe(true);
-    expect(matchesFilters(row("2", { confirmation_reminder_due_at: "2026-07-20T10:00:00.000Z" }), overdue, NOW)).toBe(true);
-    expect(matchesFilters(row("3", { confirmation_reminder_due_at: "2026-07-20T18:00:00.000Z" }), today, NOW)).toBe(true);
-    expect(matchesFilters(row("4", { confirmation_next_contact_on: "2026-07-21" }), upcoming, NOW)).toBe(true);
-    expect(matchesFilters(row("5"), today, NOW)).toBe(false);
+    // La cola es de Por confirmar; las filas de estas pruebas viven ahí.
+    const pc = (id: string, over: Partial<OrderMasterRow> = {}) =>
+      row(id, { macro_stage: "por_confirmar", ...over });
+    expect(matchesFilters(pc("1", { confirmation_next_contact_on: "2026-07-19" }), overdue, NOW)).toBe(true);
+    // Recordatorio ya llegado → «toca ahora» → Hoy. Nunca Vencidos: eso es
+    // solo la fecha pactada rota.
+    expect(matchesFilters(pc("2", { confirmation_reminder_due_at: "2026-07-20T10:00:00.000Z" }), today, NOW)).toBe(true);
+    expect(matchesFilters(pc("2", { confirmation_reminder_due_at: "2026-07-20T10:00:00.000Z" }), overdue, NOW)).toBe(false);
+    // Recordatorio que aún no llega → «todavía no» → Próximos, aunque sea de hoy.
+    expect(matchesFilters(pc("3", { confirmation_reminder_due_at: "2026-07-20T18:00:00.000Z" }), upcoming, NOW)).toBe(true);
+    expect(matchesFilters(pc("3", { confirmation_reminder_due_at: "2026-07-20T18:00:00.000Z" }), today, NOW)).toBe(false);
+    expect(matchesFilters(pc("4", { confirmation_next_contact_on: "2026-07-21" }), upcoming, NOW)).toBe(true);
+    // Sin ninguna fecha en Por confirmar: nunca llamado, toca hoy.
+    expect(matchesFilters(pc("5"), today, NOW)).toBe(true);
+    // La cola es de Por confirmar. `cq` sobrevive al cambio de pestaña, y un
+    // pedido entregado tampoco tiene fechas: sin esta guarda «Hoy» en «Todos»
+    // traería toda la base.
+    expect(matchesFilters(row("6", { macro_stage: "finalizado" }), today, NOW)).toBe(false);
+    expect(matchesFilters(row("7", { macro_stage: "en_curso", confirmation_reminder_due_at: "2026-07-20T10:00:00.000Z" }), today, NOW)).toBe(false);
   });
 
-  it("el ciclo automático devuelve a «Hoy» al pedido que nadie volvió a llamar", () => {
+  it("«Hoy» es la lista que se lleva a cero: cada llamada saca al pedido y el recordatorio lo devuelve", () => {
     const overdue = withFilter({ confirmationDue: "vencido" });
     const today = withFilter({ confirmationDue: "hoy" });
     const upcoming = withFilter({ confirmationDue: "proximo" });
-    // El caso real: un intento hace semanas, sin fecha pactada. Su recordatorio
-    // de dos horas venció el primer día y lo dejaba clavado en «Vencidos».
-    const abandoned = row("126408", {
+    const pc = (id: string, over: Partial<OrderMasterRow> = {}) =>
+      row(id, { macro_stage: "por_confirmar", ...over });
+    // Un reintento que nadie hizo hace semanas sigue siendo trabajo pendiente:
+    // está en Hoy por su propio recordatorio, y el ciclo —que aquí diría
+    // Próximos— no lo esconde. Antes cedía al ciclo y 111 así vivían ocultos.
+    const abandoned = pc("126408", {
       confirmation_reminder_due_at: "2026-07-05T15:00:00.000Z",
-      confirmation_cycle_due_on: "2026-07-08",
+      confirmation_cycle_due_on: "2026-07-23",
     });
     expect(matchesFilters(abandoned, today, NOW)).toBe(true);
     expect(matchesFilters(abandoned, overdue, NOW)).toBe(false);
-    // Recién gestionado: el ciclo lo saca de la cola hasta dentro de tres días.
-    const justWorked = row("126409", {
+    expect(matchesFilters(abandoned, upcoming, NOW)).toBe(false);
+    // Recién llamado sin respuesta: su recordatorio de las dos horas aún no
+    // llega, así que salió de Hoy y espera en Próximos. Eso es lo que vacía Hoy.
+    const justWorked = pc("126409", {
       confirmation_reminder_due_at: "2026-07-20T18:00:00.000Z",
       confirmation_cycle_due_on: "2026-07-23",
     });
-    expect(matchesFilters(justWorked, today, NOW)).toBe(true); // el recordatorio de hoy manda
-    expect(matchesFilters(row("126410", { confirmation_cycle_due_on: "2026-07-23" }), upcoming, NOW)).toBe(true);
+    expect(matchesFilters(justWorked, upcoming, NOW)).toBe(true);
+    expect(matchesFilters(justWorked, today, NOW)).toBe(false);
+    // Sin recordatorio, el ciclo manda.
+    expect(matchesFilters(pc("126410", { confirmation_cycle_due_on: "2026-07-23" }), upcoming, NOW)).toBe(true);
     // Con fecha pactada no hay ciclo que valga: manda el compromiso.
-    const promised = row("126411", {
+    const promised = pc("126411", {
       confirmation_next_contact_on: "2026-07-19",
       confirmation_cycle_due_on: "2026-07-23",
     });

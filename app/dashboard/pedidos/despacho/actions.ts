@@ -557,7 +557,7 @@ export async function scanManifestItem(
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
   if (!candidates.length) return { error: SCAN_NOT_FOUND };
   if (manifest.state === "cancelled") return { error: "Esa ruta ya está cerrada." };
-  // Sin verificación previa del motorizado (modos confirmar y ninguno, 0177),
+  // Sin verificación previa del motorizado (modos confirmar y ninguno, 0185),
   // un cotejo sobre una caja ya en custodia es un registro opcional, no un error.
   const optionalCheck = manifest.state === "in_custody" && courierKey(manifest.courier) === "propio"
     && (await riderPickupMode(createAdminSupabase(), manifest.org_id)) !== "exigir";
@@ -660,7 +660,7 @@ export async function removeManifestItem(
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
   if (manifest.state === "cancelled") return { error: "Esa ruta ya está cerrada." };
   const admin = createAdminSupabase();
-  // Caja en custodia: solo en modo «confirmar» (0177) y solo lo que el
+  // Caja en custodia: solo en modo «confirmar» (0185) y solo lo que el
   // motorizado no confirmó. El RPC retira, borra la parada pendiente, devuelve
   // la custodia a la empresa y deja el rastro; aquí no se toca nada más.
   const inCustody = manifest.state === "in_custody";

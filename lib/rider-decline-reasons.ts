@@ -1,4 +1,4 @@
-// Motivos cortos de «no lo recojo» (0174, MOM §29.13). Cerrados para poder
+// Motivos cortos de «no lo recojo» (0182, MOM §29.13). Cerrados para poder
 // contarlos por motorizado.
 //
 // Viven fuera de app/reparto/receive.ts a propósito: ese archivo es «use

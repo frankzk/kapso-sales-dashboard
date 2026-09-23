@@ -130,6 +130,18 @@ export const env = {
     (process.env.SHALOM_API_BASE ?? "https://api.shalom-api-peru.com").trim().replace(/\/$/, ""),
   shalomConfigured: () => Boolean((process.env.SHALOM_API_KEY ?? "").trim()),
 
+  // --- Olva: rastreo por la llamada de su página pública (lib/olva/client.ts) ---
+  //     Olva no tiene API para clientes. Su página de seguimiento llama a
+  //     `reports.olvaexpress.pe` con una apikey fija embebida en el JavaScript
+  //     que baja cualquier visitante. Es de Olva, no nuestra: la pueden rotar
+  //     sin avisar, y ese día el cron reporta 401/403 y no toca estados. Se
+  //     recorta por lo mismo que la de Shalom: un espacio pegado en Vercel es
+  //     un 401 indistinguible de una key rotada.
+  olvaTrackingApiKey: () => (process.env.OLVA_TRACKING_APIKEY ?? "").trim(),
+  olvaTrackingApiBase: () =>
+    (process.env.OLVA_TRACKING_API_BASE ?? "https://reports.olvaexpress.pe").trim().replace(/\/$/, ""),
+  olvaTrackingConfigured: () => Boolean((process.env.OLVA_TRACKING_APIKEY ?? "").trim()),
+
   // --- Chatby (white-label de uChat): "Live Chat Webhook" ---
   //     Secreto compartido que Chatby manda en la cabecera personalizada del
   //     webhook. Es UNO SOLO para las dos tiendas, y no por descuido: Chatby

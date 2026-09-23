@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0175_provider_rider_pickup_check.sql — la verificación de la caja por el
+-- 0183_provider_rider_pickup_check.sql — la verificación de la caja por el
 -- motorizado es OPCIONAL, gobernada por un flag en la base (MOM §29.13).
 --
 -- `logistics_providers.rider_pickup_check_required`:

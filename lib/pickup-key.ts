@@ -153,6 +153,12 @@ export interface PaymentSnapshot {
   validation_status: string;
   order_id: string;
   amount: number | null;
+  /**
+   * Opcional porque casi ningún cálculo de esta pieza necesita saber CUÁL
+   * comprobante es. Lo necesita `validationWouldUnlockKey`, que pregunta por
+   * uno en concreto.
+   */
+  id?: string;
 }
 
 export interface PickupKeyContext {
@@ -348,6 +354,35 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
   }
 
   return { allowed: blockers.length === 0, blockers };
+}
+
+/**
+ * ¿Validar ESTE comprobante es lo que hace que la clave pueda SALIR SOLA?
+ *
+ * PIDE MÁS QUE `canRevealPickupKey`, a propósito. Esa función abre la clave con
+ * los comprobantes CARGADOS —es correcta: del otro lado hay una persona que
+ * mira la imagen antes de dictarla, y exigirle además la validación dejaba
+ * paquetes parados por un trámite—. Pero un envío automático no tiene a esa
+ * persona después del clic, así que el listón sube al hecho más fuerte que
+ * existe: lo VALIDADO cubre el pedido. Un comprobante que acaba de llegar y
+ * nadie miró no manda nada.
+ *
+ * Lo demás se pregunta con la misma función de siempre, ya con este pago
+ * validado: el paquete tiene que estar en la agencia, la clave registrada, el
+ * pedido abierto y ningún comprobante observado. Así el envío automático nunca
+ * suelta un paquete que la pantalla no soltaría.
+ *
+ * Devuelve `false` si lo validado YA cubría el pedido: ahí este pago no cambia
+ * nada, y ofrecer «validar y enviar» sería mandar la clave por segunda vez.
+ */
+export function validationReleasesPickupKey(ctx: PickupKeyContext, paymentId: string): boolean {
+  if (!ctx.payments.some((p) => p.id === paymentId)) return false;
+  if (paymentProgress(ctx.payments, ctx.orderTotal).completeValidated) return false;
+  const after = ctx.payments.map((p) =>
+    p.id === paymentId ? { ...p, validation_status: "validado" } : p,
+  );
+  if (!paymentProgress(after, ctx.orderTotal).completeValidated) return false;
+  return canRevealPickupKey({ ...ctx, payments: after }).allowed;
 }
 
 /** Explicación lista para mostrar, sin construirla en la interfaz. */

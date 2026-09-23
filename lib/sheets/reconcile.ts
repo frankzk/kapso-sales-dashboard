@@ -11,7 +11,7 @@
 //     comprobante validado en Kapta. La operación decidió no controlar el
 //     comprobante desde la hoja: ese dato lo tiene Validar pagos, y para todo
 //     lo anterior al cuaderno en Kapta era «no lo sé», no «no se pagó». El
-//     motivo `pago_sin_comprobante` (0170) queda en el catálogo por la
+//     motivo `pago_sin_comprobante` (0178) queda en el catálogo por la
 //     historia; `DIGITAL_PAYMENT_METHODS` se conserva para la pantalla.
 // Nunca dos observaciones abiertas para la misma (fila, campo). Una resuelta
 // no bloquea, salvo que el valor externo sea el mismo que ya se resolvió: así

@@ -106,6 +106,23 @@ export interface StoreSettingsInput {
   shalom_transit_hour_start?: string;
   shalom_transit_hour_end?: string;
   shalom_transit_payment_link?: string;
+  /** Cobro por Flow.cl desde el botón «Link de pago» (0168). */
+  shalom_arrival_template_enabled?: string | boolean;
+  shalom_arrival_template_name?: string;
+  shalom_arrival_params?: string;
+  shalom_arrival_attach_ticket?: string | boolean;
+  shalom_voucher_intake_enabled?: string | boolean;
+  shalom_pickup_key_autosend_enabled?: string | boolean;
+  olva_transit_template_enabled?: string | boolean;
+  olva_transit_template_name?: string;
+  olva_transit_params?: string;
+  olva_arrival_template_enabled?: string | boolean;
+  olva_arrival_template_name?: string;
+  olva_arrival_params?: string;
+  flowcl_link_enabled?: string | boolean;
+  flowcl_link_email?: string;
+  flowcl_link_ttl_hours?: string;
+  flowcl_link_yape_only?: string | boolean;
 }
 
 function clean(v: string | undefined): string | null {
@@ -378,6 +395,46 @@ export function buildStoreUpdate(
   if (stStart !== null) patch.shalom_transit_hour_start = stStart;
   const stEnd = intField(input.shalom_transit_hour_end, 1, 24);
   if (stEnd !== null) patch.shalom_transit_hour_end = stEnd;
+
+  // Aviso de llegada a la agencia (0169).
+  for (const k of [
+    "shalom_arrival_template_enabled",
+    "shalom_arrival_attach_ticket",
+    "shalom_voucher_intake_enabled",
+    "shalom_pickup_key_autosend_enabled",
+  ] as const) {
+    if (input[k] !== undefined) patch[k] = input[k] === true || input[k] === "true";
+  }
+  for (const k of ["shalom_arrival_template_name", "shalom_arrival_params"] as const) {
+    const v = clean(input[k]);
+    if (v !== null) patch[k] = v;
+  }
+
+  // Los dos avisos de Olva (0175): mismas reglas que los de Shalom.
+  for (const k of ["olva_transit_template_enabled", "olva_arrival_template_enabled"] as const) {
+    if (input[k] !== undefined) patch[k] = input[k] === true || input[k] === "true";
+  }
+  for (const k of [
+    "olva_transit_template_name",
+    "olva_transit_params",
+    "olva_arrival_template_name",
+    "olva_arrival_params",
+  ] as const) {
+    const v = clean(input[k]);
+    if (v !== null) patch[k] = v;
+  }
+
+  // Cobro por Flow.cl desde el botón «Link de pago» (0168).
+  for (const k of ["flowcl_link_enabled", "flowcl_link_yape_only"] as const) {
+    if (input[k] !== undefined) patch[k] = input[k] === true || input[k] === "true";
+  }
+  // Vaciable: quitar el email de respaldo apaga el cobro de los pedidos que no
+  // traen uno, y eso tiene que poder hacerse desde el formulario.
+  if (input.flowcl_link_email !== undefined) {
+    patch.flowcl_link_email = clean(input.flowcl_link_email);
+  }
+  const ttl = intField(input.flowcl_link_ttl_hours, 1, 720);
+  if (ttl !== null) patch.flowcl_link_ttl_hours = ttl;
 
   return patch;
 }

@@ -124,7 +124,7 @@ export async function reconcileSheetRows(
 
   const orderIds = [...new Set(rows.map((r) => r.order_id!).filter(Boolean))];
   const orders = new Map<string, ReconcileOrder>();
-  // Comprobantes validados: la prueba de un cobro digital (0170).
+  // Comprobantes validados: la prueba de un cobro digital (0178).
   const validated = new Set<string>();
   for (let i = 0; i < orderIds.length; i += 200) {
     const { data, error } = await admin

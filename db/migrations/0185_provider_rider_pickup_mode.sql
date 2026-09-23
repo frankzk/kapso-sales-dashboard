@@ -1,8 +1,8 @@
 -- ============================================================================
--- 0177_provider_rider_pickup_mode.sql — «Lo llevo»: el motorizado confirma
+-- 0185_provider_rider_pickup_mode.sql — «Lo llevo»: el motorizado confirma
 -- cada paquete al sacarlo del almacén, sin que nada lo bloquee (MOM §29.13).
 --
--- El booleano de 0175 (`rider_pickup_check_required`) solo sabía decir «exigir
+-- El booleano de 0183 (`rider_pickup_check_required`) solo sabía decir «exigir
 -- la verificación antes de ver la ruta» o «nada». La operación necesita un
 -- tercer modo: el supervisor asigna y la ruta aparece al instante, pero el
 -- motorizado escanea cada pedido cuando lo mete en la caja de la moto («lo
@@ -22,7 +22,7 @@
 --                   `delivery_stops.pickup_confirmed = false` y deja rastro.
 --                   El supervisor puede quitar o mover lo no confirmado
 --                   (gf_supervisor_withdraw).
---     'ninguno'   = como 0175/0176 con el flag en false: basta con asignar y
+--     'ninguno'   = como 0183/0176 con el flag en false: basta con asignar y
 --                   no se pide nada más.
 --
 -- Migración de datos: true → 'exigir', false → 'ninguno'. Producción queda en
@@ -53,14 +53,14 @@ end;
 $$;
 
 -- Si al reportar la entrega el motorizado había confirmado «lo llevo». Null en
--- paradas sin caja de despacho o reportadas antes de 0177.
+-- paradas sin caja de despacho o reportadas antes de 0185.
 alter table delivery_stops
   add column if not exists pickup_confirmed boolean;
 comment on column delivery_stops.pickup_confirmed is
-  'Al reportar la entrega, si el ítem de la caja tenía pickup_checked_at (modo confirmar). Null: sin caja o anterior a 0177.';
+  'Al reportar la entrega, si el ítem de la caja tenía pickup_checked_at (modo confirmar). Null: sin caja o anterior a 0185.';
 
 -- El único lector del modo en SQL. Sin proveedor se asume ''exigir'' (lo de
--- siempre), igual que 0175 asumía true.
+-- siempre), igual que 0183 asumía true.
 create or replace function public.gf_rider_pickup_mode(p_org_id uuid)
 returns text language sql stable set search_path = public as $$
   select coalesce((select rider_pickup_mode from logistics_providers
@@ -69,7 +69,7 @@ $$;
 revoke all on function public.gf_rider_pickup_mode(uuid) from public, anon;
 
 -- ----------------------------------------------------------------------------
--- Custodia al asignar (0175), ahora para 'confirmar' y 'ninguno'.
+-- Custodia al asignar (0183), ahora para 'confirmar' y 'ninguno'.
 -- ----------------------------------------------------------------------------
 create or replace function public.gf_assign_custody(p_manifest_id uuid, p_actor uuid)
 returns uuid[] language plpgsql set search_path = public as $$
@@ -133,7 +133,7 @@ revoke all on function public.gf_assign_custody(uuid, uuid) from public, anon, a
 grant execute on function public.gf_assign_custody(uuid, uuid) to service_role;
 
 -- ----------------------------------------------------------------------------
--- Una carga por motorizado y día (0176), ahora para 'confirmar' y 'ninguno'.
+-- Una carga por motorizado y día (0184), ahora para 'confirmar' y 'ninguno'.
 -- ----------------------------------------------------------------------------
 create or replace function public.gf_dispatch_load_open(p_org_id uuid, p_rider_id uuid, p_day date, p_actor uuid)
 returns uuid language plpgsql set search_path = public as $$
@@ -158,7 +158,7 @@ $$;
 revoke all on function public.gf_dispatch_load_open(uuid, uuid, date, uuid) from public, anon, authenticated;
 grant execute on function public.gf_dispatch_load_open(uuid, uuid, date, uuid) to service_role;
 
--- En 'ninguno' el paquete sumado entra cotejado y recibido (como 0176); en
+-- En 'ninguno' el paquete sumado entra cotejado y recibido (como 0184); en
 -- 'confirmar' entra cotejado por oficina y «por confirmar» por el motorizado.
 create or replace function public.gf_add_item_in_custody(p_manifest_id uuid, p_shipment_id uuid, p_store_id uuid, p_actor uuid)
 returns uuid language plpgsql set search_path = public as $$
@@ -396,7 +396,7 @@ revoke all on function public.gf_rider_confirm_pickup(uuid, uuid) from public, a
 grant execute on function public.gf_rider_confirm_pickup(uuid, uuid) to service_role;
 
 -- ----------------------------------------------------------------------------
--- «No lo llevo» (0174) ahora también sobre la caja en custodia en 'confirmar'.
+-- «No lo llevo» (0182) ahora también sobre la caja en custodia en 'confirmar'.
 -- ----------------------------------------------------------------------------
 create or replace function public.gf_rider_decline(p_manifest_id uuid, p_shipment_id uuid, p_reason text, p_actor uuid)
 returns uuid[] language plpgsql set search_path = public as $$

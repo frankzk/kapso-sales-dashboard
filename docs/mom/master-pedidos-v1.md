@@ -250,7 +250,9 @@ Reglas iniciales:
 - Las rutas con una condición pendiente, como falta de stock o pago, pueden
   mostrarse bloqueadas con una explicación.
 - Una inconsistencia entre distrito y coordenadas puede continuar con alerta y
-  justificación corta.
+  justificación corta. **Salvo cuando el pin señala otro departamento** y ni el
+  desplegable del checkout ni la ciudad escrita lo respaldan: ahí el pin es el
+  destino y la guía no sale sin una excepción escrita (§10).
 
 Fallback de Provincia:
 
@@ -359,19 +361,38 @@ Reglas:
   del Master (`confirmation_cycle_due_on`) y nunca sustituye a
   `confirmation_next_contact_on`, que es el hecho que alguien pactó en una
   llamada. Si el intento dejó fecha, manda la fecha y no hay ciclo.
-- **La fecha pactada vence; el ciclo no.** Una fecha pactada incumplida se queda
-  en `Vencidos` porque es una promesa al cliente que hay que ver. Un día de
-  ciclo que ya pasó significa «toca hoy»: el pedido aparece en `Hoy` y, al
-  registrarse el intento, el siguiente ciclo se cuenta desde ese contacto. Así
-  el pedido rota cada N días en vez de hundirse para siempre en `Vencidos`.
-- El recordatorio de dos horas ordena el trabajo **dentro de su día** y entra en
-  las colas según su vencimiento. Pasado ese día lo sustituye el ciclo: un
-  recordatorio de hace tres semanas ya no dice nada que la antigüedad no diga
-  mejor, y dejarlo mandando era lo que mantenía pedidos de veintitrés días con
-  un solo intento fuera de la cola de `Hoy`.
-- Orden de mando de la cola: **fecha pactada → recordatorio vigente → ciclo**.
-- `Sin llamar` no entra en el ciclo: sin un solo contacto no hay desde cuándo
-  contar, y su chip propio ya lo separa. Lo delata su antigüedad, no la cola.
+- **La fecha pactada vence; el ciclo y el recordatorio no.** Una fecha pactada
+  incumplida se queda en `Vencidos` porque es una promesa al cliente que hay que
+  ver, y es lo ÚNICO que hay en `Vencidos`. Un día de ciclo que ya pasó
+  significa «toca hoy»: el pedido aparece en `Hoy` y, al registrarse el
+  intento, el siguiente ciclo se cuenta desde ese contacto.
+- **`Hoy` es la lista que se lleva a cero.** Cada llamada saca al pedido de
+  `Hoy` y una regla de reencolamiento lo devuelve: `Sin respuesta` o `Se deja
+  mensaje` fijan el recordatorio de dos horas y el pedido pasa a `Próximos`
+  hasta esa hora; llegada la hora vuelve a `Hoy`. Pactar fecha lo manda a
+  `Próximos` hasta la fecha. Cualquier otro resultado sin fecha lo deja al
+  ciclo. `Próximos` es la fuente que alimenta a `Hoy`, no un cajón aparte.
+- **El recordatorio no vence.** Llegada su hora, el pedido está en `Hoy` —se
+  haya cumplido hace un minuto o hace tres semanas— y ahí se queda hasta que
+  alguien lo rellame. Un reintento que nadie hizo es trabajo pendiente, y el
+  sitio del trabajo pendiente es la lista que se trabaja, no `Vencidos` ni el
+  ciclo. Antes el recordatorio de hoy pasado caía en `Vencidos` y el de días
+  atrás cedía al ciclo: medido el 16-09-2026, los 24 de `Vencidos` eran
+  recordatorios de hoy de pedidos contactados hoy —cero fechas pactadas—, y
+  111 reintentos olvidados estaban escondidos en `Próximos` por el ciclo.
+- Orden de mando de la cola: **fecha pactada → recordatorio → ciclo → sin
+  ninguna, Hoy**.
+- `Sin llamar` no entra en el ciclo —sin un solo contacto no hay desde cuándo
+  contar— pero **sí está en `Hoy`**: la primera llamada es trabajo de hoy, y la
+  más importante. Su chip propio en SUBETAPAS sigue separándola para atacarla
+  aparte. Antes vivía fuera de las tres colas y la fila de Fecha pactada no
+  sumaba el total: medido el 20-09-2026, «Todos los plazos» 275 contra
+  0 + 172 + 11 = 183, y los 92 que faltaban eran exactamente los de `Sin
+  llamar`. Que `Hoy` llegue a cero tiene que significar que el día está hecho.
+- La cola de Fecha pactada es de `Por confirmar`. El filtro `cq` sobrevive al
+  cambio de pestaña, así que tanto el filtro como su espejo en la base lo acotan
+  a esa etapa: un pedido entregado tampoco tiene fechas de confirmación, y no
+  por eso «toca llamarlo hoy».
 - El ciclo no gasta días de gestión ni acerca el `Último intento`: solo el
   §6.1 —un día distinto CON gestión— gasta cupo. Un pedido puede rotar por
   ciclo muchas veces sin pasar de 1/7 si nadie lo llama, y eso es exactamente
@@ -1359,6 +1380,139 @@ Cómo se clasifica una guía que llega por reporte Excel:
   posibilidad que alguien tenga que activar.
 - Solo Aliclik tiene proceso de indemnización formal.
 
+#### Un distrito que Aliclik no tiene en su tabla no es un problema de almacén
+
+A la cotización solo se le mandan `warehouseId`, `lat` y `lng`: **el distrito lo
+deduce Aliclik del pin**. Cuando su tabla de ubigeo no lo tiene, responde «No se
+encontró el distrito en ubigeo para …» nombrando el distrito que acaba de
+reconocer.
+
+Nuestro aviso le pegaba detrás «Almacén(es) compatibles probados: …», así que el
+mensaje entero se leía como un fallo de almacén y mandaba a buscar por donde no
+era. Pasó con #AUR177131 y #KP135145 (18-09-2026).
+
+**La causa costó dos intentos y las dos primeras explicaciones eran falsas.** Se
+dejan escritas porque son las que uno vuelve a proponer:
+
+1. «Su tabla no tiene el distrito porque es nuevo» (San Miguel, Ley 30927 de
+   2019). La tiró abajo el segundo caso: **Callería** es el distrito de Pucallpa
+   y no tiene nada de nuevo.
+2. «El almacén no cubre esa zona». También falsa: los dos pedidos van al almacén
+   **133 (GRUPO GF)** y de ese mismo almacén salieron 267 envíos a Puno y 96 a
+   Ucayali en 30 días.
+
+**Lo que encaja con todo: las dos mitades de Aliclik no se entienden.** Su
+geolocalizador devuelve el nombre OFICIAL del distrito y su tabla de ubigeo está
+indexada por el COMERCIAL. Los envíos que sí salen llevan `juliaca` (328),
+`pucallpa` (121), `puno` (118) y `yarinacocha` (33) — y «Pucallpa» ni siquiera es
+un distrito: la ciudad está en Callería. Cuando el pin cae donde los dos nombres
+difieren, una mitad lo reconoce y la otra dice que no existe.
+
+Eso además explica por qué el fallo parece aleatorio: depende de dónde cae el
+pin, no del pedido ni del producto.
+
+Reglas:
+
+- Cuando el fallo sea de ubigeo, el aviso **no nombra el almacén**, y descarta
+  de frente las dos pistas falsas: no es el almacén ni el stock. Dice el
+  distrito y explica que Aliclik lo llama de dos maneras.
+- Las salidas son dos, y el aviso las da: revisar el pin en «Ubicación y
+  cobertura» por si la dirección es de otro distrito, o despachar por otro
+  courier y pasarle a Aliclik la referencia para que lo arreglen de su lado.
+  **Kapta no mueve el pin sola**: el pin decide a dónde va el paquete, así que
+  acercarlo al centro de Juliaca o Pucallpa para que la cotización pase es una
+  decisión de una persona mirando la dirección.
+- Las referencias de la petición se conservan: son lo que se le reenvía a
+  Aliclik para que lo corrijan de su lado.
+
+#### El pin es el destino, y el pedido tiene que respaldarlo
+
+A Aliclik solo se le mandan `warehouseId`, `lat` y `lng`. **El pin decide a dónde
+va el paquete**; la dirección escrita viaja en la guía para que el motorizado la
+lea, pero no corrige el destino. Un pin equivocado no es un detalle de
+formulario: es otro destino.
+
+Lo destapó #KP133769 (11-09-2026). La clienta eligió Puno en el desplegable del
+checkout, escribió «Puno» como ciudad y «JR. Velasco Astete 191», y su checkout
+geocodificó el punto en Puno. La guía salió con el pin en **Santiago, Cusco**, a
+331 km. El paquete se fue a Cusco y volvió.
+
+**El aviso que ya existía no sirvió, y por una razón medible.** Comparaba solo el
+DISTRITO que Aliclik deduce del pin contra el nuestro, y eso salta en **1.958 de
+4.173 guías (47%)**: Cusco/Cuzco, Coronel Portillo/Pucallpa, el nombre oficial
+contra el comercial (ver arriba). Un aviso que sale en la mitad de los pedidos no
+lo lee nadie, y este salió ahí dentro.
+
+**Lo que sí discrimina son las dos declaraciones del pedido que no dependen del
+pin.** El departamento que la clienta ELIGIÓ en el desplegable del checkout
+—llega como código ISO 3166-2:PE, vocabulario cerrado, en 14.770 de 23.034
+pedidos y hasta ahora sin usar— y la ciudad que escribió en la dirección. El
+departamento del pin coincide con el del desplegable en el **99,9% de las guías
+entregadas** (1.388 de 1.390).
+
+Reglas:
+
+- **El pin necesita que UNA de las dos declaraciones lo respalde.** Si el
+  departamento del pin contradice al desplegable Y su distrito no es la ciudad
+  escrita, el pin está solo contra el pedido y **la guía no se emite**.
+- **La excepción se escribe, no se marca.** Existen casos reales en que quien se
+  equivocó fue la clienta al elegir el departamento: se emite dejando dicho por
+  qué, y queda registrado en el pedido (`aliclik_pin_exception`). Mismo trato que
+  la excepción de riesgo de pago.
+- **Sin código ISO no hay puerta.** Son 8.264 pedidos de 23.034; para ellos nada
+  cambia. Bloquear con una sola fuente sería el mismo error que esta regla evita.
+- **Kapta no mueve el pin sola**, aquí tampoco: acercarlo es decidir a dónde va
+  el paquete, y eso lo hace una persona mirando la dirección.
+
+Medido sobre las guías creadas por API, las 10 discrepancias existentes se parten
+limpiamente: 5 con el pin equivocado —#KP133769, #KP134170, #KP130297, #KP127265,
+#KP123779, **ninguna entregada**— y 4 con el desplegable equivocado y el pin bien,
+que la segunda declaración deja pasar (#KP126473 se entregó). Cinco bloqueos, los
+cinco reales, cero falsos positivos.
+
+#### Una cotización no es cobertura
+
+La cobertura de un pedido la decide la **matriz de costos**: si existe una tarifa
+de primer intento que alcance ese destino, es Provincia COD. Y un cron nocturno
+alimenta esa matriz cotizando los distritos de los pedidos pendientes. Juntas,
+las dos cosas hacían que **una cotización bastara para convertir un distrito de
+Agencia en Provincia COD**, sin que nadie hubiera entregado nunca ahí y sin que
+nadie se enterara.
+
+Lo destapó Caravelí (#AUR177128, 19-09-2026): tarifa creada por el sondeo el
+17-09, cero envíos de Aliclik en su historia, la entrega suya más cercana a 247
+km, y ocho envíos reales por Shalom.
+
+Reglas:
+
+- **El sondeo no cotiza lo que no es un distrito.** La clienta escribe la
+  referencia en ese campo y se llegaron a crear tarifas para «frente al grifo
+  amazonas» o «2do puente de la av. 28 de julio». Se descartan las cadenas con
+  palabras de referencia o tipos de vía. La lista es corta a propósito: «puente»
+  no entra, porque Puente Piedra es un distrito; y no se filtra por dígitos,
+  porque eso se llevaba por delante «26 de Octubre», distrito de Piura con 44
+  entregas reales.
+- **El sondeo no cotiza donde ya consta que Aliclik no entrega**: distritos con
+  entregas reales de agencia y cero envíos de Aliclik. Se mira la ENTREGA y no la
+  guía creada, porque una guía anulada no prueba cobertura — es lo que pasó con
+  Tumbes (§0149).
+- **Lo que se pierde está dicho**: si Aliclik abre cobertura en uno de esos
+  destinos, el sondeo no lo va a descubrir solo. Se registra con una fila en
+  `district_coverage` o una tarifa cargada a mano, que es el camino correcto para
+  una decisión comercial en vez de que la tome un cron de madrugada.
+- **Un texto igual no es un lugar igual.** Al buscar los afectados, el primer
+  análisis comparó la cadena del campo distrito y metió en la lista a Mariscal
+  Nieto, que sí tiene cobertura: sus 62 envíos de Aliclik están registrados con
+  distrito «moquegua», y las filas con el texto «mariscal nieto» son pedidos donde
+  alguien escribió la provincia ahí. La comprobación que vale es **geográfica**:
+  cuántas entregas reales de Aliclik hay a menos de 30 km de ese punto.
+
+Decidido el 19-09-2026 con estos números, por distancia a la entrega de Aliclik
+más cercana: Caravelí 247 km, Huaura 165, Olmos 81, Sicuani 79, Huancavelica 77,
+Canchis 77, Azángaro 60 — los seis lugares pasan a Agencia. Y con cobertura
+confirmada, que el primer análisis había marcado mal: La Unión (122 entregas a 30
+km), Mariscal Nieto (34) y Chincha (23).
+
 ### 10.1 Qué fuente manda: la API sobre el Excel
 
 El estado de una guía Aliclik llega por dos vías, y **no valen lo mismo**:
@@ -2262,12 +2416,108 @@ dice «este producto existe en esa bodega» y nada más:
 
 **En Lima y Callao la tabla de stock no gobierna nada: todo producto pasa la
 reja.** No hay que anotar renglones. Lo que sí se exige es el **vínculo en
-Catálogo de productos** (`codbar`), y se exige donde importa: al crear la guía
-por API, con el aviso «Falta vincular a Swayp: …». Se probó la alternativa
-—exigir además un renglón por producto en Stock Swayp— y la primera guía real de
-Lima (#KP131993) salió rechazada por «sin stock» con la tabla vacía: era una
-segunda lista que mantener para decir lo mismo que ya dice el Catálogo. Anotar
-renglones en Lima queda como opcional e informativo.
+Catálogo de productos** (`codbar`). Se probó la alternativa —exigir además un
+renglón por producto en Stock Swayp— y la primera guía real de Lima (#KP131993)
+salió rechazada por «sin stock» con la tabla vacía: era una segunda lista que
+mantener para decir lo mismo que ya dice el Catálogo. Anotar renglones en Lima
+queda como opcional e informativo.
+
+#### El número de guía lo emite Swayp. Sin su número no hay guía
+
+Dos familias de número convivieron hasta el 16-09-2026:
+
+| Forma | Quién la emite | Ejemplo | `swayp_guide` |
+| --- | --- | --- | --- |
+| **Guía Swayp** | Swayp, por su API | `50000132589` | lleno |
+| **Código Kapta** | Kapta, `<pedido><DDMMYYYY>` | `#KP13166415092026` | vacío |
+
+El código Kapta era el respaldo: si la API no emitía —ciudad sin bodega
+configurada, producto sin codbar, error de Swayp— la guía se creaba igual con un
+número nuestro y se cargaba después a mano por el Excel de programación. En el
+código se llamaba «código local» en un sitio y «código manual» en otro.
+
+**Ese respaldo se retira.** Un número que Swayp no emitió no sale en su panel, no
+descuenta su stock y no rastrea: es una caja despachada contra un número que no
+existe para el courier que la lleva. Con las once bodegas configuradas
+(16-09-2026, todas menos Ica) la API puede emitir en toda la cobertura, así que
+el respaldo dejó de pagar lo que costaba.
+
+Reglas:
+
+- Las cuatro puertas que paren una guía Swayp —guía directa, reprogramación
+  confirmada, reenvío de una anulada y alta con número escrito a mano— exigen un
+  número emitido por Swayp.
+- Si la API no emite, **la gestión no se registra** y el aviso dice el motivo que
+  dio Swayp. Antes ese motivo quedaba enterrado en una frase al final que nadie
+  relacionaba con nada; era lo único que se perdía al caer al código Kapta.
+- El alta con número escrito a mano sigue existiendo, para registrar una guía que
+  la operadora ya creó en el panel de Swayp. Pero el número tiene que **ser de
+  Swayp**: solo dígitos. Medido sobre 90 días, `^\d{6,}$` separa las dos familias
+  sin tocar ninguna guía buena (62 con forma Swayp, 598 con forma nuestra, 3 de
+  julio con `KP…` sin almohadilla).
+- Los botones «Autogenerar» de las dos pantallas se retiran: acuñaban justo el
+  número que esta regla prohíbe.
+- **Ica queda fuera** mientras Swayp no tenga bodega allí; sin bodega no hay API
+  y sin API no hay guía, así que Ica no despacha por Swayp.
+
+El nombre queda fijado para no volver a tener dos: **guía Swayp** la que emite
+Swayp, **código Kapta** la que acuñábamos nosotros. No se usa «manual», que ya
+nombra la salida de ruta manual y la excepción manual de Aliclik.
+
+#### El vínculo se comprueba ANTES, no dentro de la llamada a Swayp
+
+Que la reja de Lima sea el vínculo tiene una consecuencia que al principio se
+pasó por alto: **si nadie lo pregunta hasta el final, la pantalla miente todo el
+rato**. El panel de guía directa anunciaba «Stock Swayp disponible para todo el
+pedido» —cierto según la regla de la ciudad— sobre un producto que Swayp no
+tiene en su catálogo. Pasó con #KP134541 el 15-09-2026: la Pulsera Magnética de
+Cobre Saludable entró con el SKU `5463456456`, y el vínculo existía para otra
+variante (`64565434`).
+
+Y lo que venía después era peor que un aviso tardío: al crear la guía, la llamada
+a Swayp fallaba con «Falta vincular a Swayp», el flujo caía al código local y
+**la guía se creaba igual**. Una caja despachada contra un número que Swayp nunca
+emitió, con el fallo contado en un aviso al final.
+
+Reglas:
+
+- **Sin vínculo de codbar no se genera guía Swayp. Ninguna, por ninguna puerta.**
+  No es solo la guía directa: son las cuatro que paren una guía —guía directa,
+  reprogramación confirmada, reenvío de una guía anulada y alta con número
+  escrito a mano—. En Kapta las tres últimas pasan por `spinOffFenixGuide`, y la
+  reja vive **ahí**, en el cuello, para que la quinta puerta que alguien añada no
+  nazca sin ella.
+- El vínculo se comprueba con una sola función (`productosSinVinculo`) y el aviso
+  lo escribe una sola (`avisoSinVinculoSwayp`). Una copia por pantalla acabaría
+  nombrando productos distintos en el aviso y en el rechazo.
+- **El botón se apaga Y dice por qué.** Un botón apagado sin motivo manda a
+  adivinar; y peor, un botón encendido que el servidor rechaza deja a la asesora
+  descubriéndolo con la clienta al teléfono. El motivo nombra los productos y la
+  pantalla donde se arregla. Marcarlos solo en una columna a la derecha de una
+  lista no basta.
+- **«Sin stock» y «sin vínculo» son hechos distintos y no se mezclan**: el
+  primero se arregla en Stock Swayp, el segundo en Catálogo de productos.
+  Juntarlos manda a la operadora a la pantalla equivocada. En Lima el primero
+  nunca dice que no, así que el aviso que se lee es siempre el segundo.
+- **Un vínculo que falta rechaza la guía; no cae al código local.** El respaldo
+  del código local sigue vivo para lo que sí es una limitación de Swayp —una
+  ciudad que su API no atiende—. Un hueco nuestro se arregla en dos minutos y no
+  puede despachar una caja mientras tanto.
+
+  Alcance medido antes de ponerlo, sobre 60 días:
+
+  | Puerta | Guías | Sin codbar |
+  | --- | --- | --- |
+  | Guía directa | 143 | 4 |
+  | Reprogramación y reenvío | 418 | 41 |
+
+  Son unas cinco por semana en la puerta de reprogramación, con la asesora al
+  teléfono. Se acepta a sabiendas: son exactamente las guías que Swayp no
+  reconocería, y el minuto que cuesta vincular el producto se paga una vez.
+- **Mapa vacío = función apagada**, el mismo interruptor que ya gobernaba
+  `buildProductos`: una tienda que todavía no vinculó nada no se queda sin poder
+  crear guías el día del despliegue. Con al menos una entrada, un hueco es un
+  hueco.
 
 Si un día Lima pasa a contarse, se la quita del conjunto y sus renglones vuelven
 a regirse por la cantidad y por la marca propia de cada uno.
@@ -2693,6 +2943,30 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
     del orden configurado: un parámetro de más y Meta rechaza el envío. Y el
     número escrito a mano en una plantilla es justo lo que no puede desalinearse
     de las cuentas de cobro: si se puede, va como variable.
+  - **Hay DOS avisos, y el segundo es el que cobra de verdad** (0169). El de
+    tránsito dice «va en camino, llega en 2 a 5 días hábiles». El de llegada
+    dice «ya está en tu agencia, recógelo cuanto antes». Son momentos distintos
+    y textos distintos, y confundirlos es mandarle a esperar a quien ya tiene el
+    paquete esperándola a ella. **Los ocho parámetros son los mismos**: cambia
+    el texto, no los datos.
+    - **El aviso de llegada NO lleva fecha límite**, y es una decisión, no un
+      olvido: «puedes recogerlo hasta el 16 de octubre» es un permiso a 28 días
+      vista, y lo que provoca es dejarlo para después. Urge sin fecha y sin
+      amenaza — «recógelo lo antes posible» y, sobre todo, «paga ahora y al
+      llegar solo retiras», que es urgencia que le sirve A ELLA: con el cobro
+      validado, la clave está lista cuando llegue al mostrador. El token
+      `vence` existe en el código por si algún día hace falta (un recordatorio
+      cerca del plazo), pero no entra en el orden por omisión.
+    - **Una fila por guía y por tipo.** La unique pasó de `shipment_id` a
+      `(shipment_id, kind)`: una misma guía recibe el de tránsito y, días
+      después, el de llegada — pero ninguno de los dos dos veces.
+    - **Interruptores separados, número compartido.** Encender uno no enciende
+      el otro, porque cada plantilla se aprueba aparte en Meta. El número, el
+      horario y las cuentas de cobro son de la tienda y valen para los dos.
+    - Por qué importa: al 18-09-2026 había **213 guías esperando en el mostrador
+      con saldo** (173 de Kenku y 40 de Aurela, ~S/ 34.000) a las que nunca se
+      les escribió, porque llegaron antes de que esto existiera o su tránsito
+      ocurrió con el aviso apagado. Ese es el hueco que cierra el segundo aviso.
   - **La clave de recojo nunca va en el mensaje.** Guía, código y agencia sin la
     clave no abren nada; la clave se entrega desde la salida, con el cobro
     validado y con auditoría. Esta regla no cambia.
@@ -2709,9 +2983,220 @@ rechazó en la puerta», porque ausencia de motivo no equivale a recuperable.
     donde cambiarlas**. No son las cuentas contra las que se verifica un
     comprobante (`store_collection_accounts`); conviene que el Yape principal
     sea una de ellas, o el pago quedará en revisión.
+  - **«Link de pago» puede cobrar de verdad, por Flow.cl** (0168). Con el
+    interruptor encendido y la cuenta configurada, ese botón crea una orden de
+    cobro **por el saldo de ese momento** y manda el link; el pago vuelve por el
+    webhook de la 0160/0161 y entra como comprobante `diferencia`. Reglas que
+    son de dinero, no de estilo:
+    - **Un cobro confirmado por la pasarela entra YA VALIDADO**, y es la única
+      excepción a que todo comprobante pase por revisión. Un Yape es la foto de
+      una pantalla: puede estar editada, ser de otro pedido o de otro día, y por
+      eso alguien la mira. Un cobro de Flow no es una foto — es la pasarela
+      diciendo, con la respuesta firmada de `payment/getStatus`, que el dinero
+      entró en la cuenta. No hay nada que revisar, y dejarlo pendiente tiene un
+      costo: el saldo se calcula solo con lo validado, así que la clienta
+      seguiría viendo una deuda que ya pagó y la clave de recojo esperaría a que
+      una persona hiciera clic. `validated_by` queda en **NULL**: no lo validó
+      nadie, lo validó la pasarela, y la línea de tiempo lo dice.
+    - **Nunca dos cobros vivos por el mismo saldo.** Si ya hay un link vivo por
+      el mismo importe se reenvía ese; solo un importe distinto justifica otro,
+      y el anterior se deja de ofrecer. Pulsar el botón dos veces no puede
+      acabar en dos órdenes cobrables.
+    - **Los otros dos botones no crean cobros.** Emitir una orden es un efecto,
+      y no se dispara por pulsar «Yape».
+    - **La fila se escribe antes de llamar a Flow**, y `payment/create` no se
+      reintenta: un reintento a ciegas deja dos links vivos y la clienta puede
+      pagar los dos.
+    - **Un link vivo cobra el importe con el que nació.** Si paga parte por Yape
+      el siguiente botón crea uno nuevo por lo que falta, pero el viejo sigue en
+      su chat hasta que caduca. Por eso caduca: 48 h por omisión.
+    - **Si la pasarela falla, la clienta recibe el Yape igual.** Que Flow esté
+      caído no puede dejarla sin forma de pagar; queda la anomalía.
+    - Flow exige un email del pagador y **el 95 % de los pedidos no trae uno**
+      (340 de 7.585 en 30 días): se usa el del cliente si existe y, si no, el
+      buzón de la tienda configurado en Ajustes. Sin ninguno de los dos, no hay
+      cobro que crear y el botón contesta como antes.
   - Solo reacciona a un **botón pulsado**, nunca a texto libre que mencione el
     medio: un «ya te hice el yape» sigue con el bot y la asesora, como siempre.
     Cada botón se contesta una sola vez aunque Kapso reintente el webhook.
+  - **Única excepción: un «ok» pelado.** No es texto que interpretar, es un
+    acuse de recibo: no pregunta nada ni aporta dato nuevo, y el bot de ventas
+    no tiene nada que hacer con él. Se vio en producción el 18-09-2026 — una
+    clienta contestó «Ok» al aviso y recibió «ya le paso tu consulta a una
+    asesora», una derivación por nada; otra contestó «ok» y no recibió nada.
+    A esos se les repite **el saldo y el Yape**, con dos rejas que es lo que lo
+    hace inofensivo: tiene que haber un aviso enviado a ese celular en las
+    **últimas 48 h**, y no habérsele contestado ya —ni por botón ni por otro
+    «ok»— desde ese aviso. Repetirle el número a cada «gracias» es acoso.
+    La lista de acuses es **cerrada**, igual que los rótulos de los botones:
+    «ok pero me llegó mal el producto» no está en ella y va a la asesora.
+    - **Esa lista y la del router del bot tienen que encajar.** El router del
+      workflow del 600 calla ante sus «triviales» y Kapta contesta ante sus
+      «acuses». Una frase trivial para el router y no para Kapta deja a la
+      clienta **sin ninguna respuesta**; al revés, recibe **dos**. Por eso se
+      comparan palabra a palabra con la misma mecánica y las dos listas son
+      **idénticas**. Un subconjunto no basta: una palabra que el router calla y
+      Kapta no reconoce deja a la clienta sin respuesta de nadie. Las únicas
+      diferencias deliberadas son `NUNCA_ACK` y los mensajes de puros dígitos.
+    - **Un mensaje de solo números no es un acuse.** Lo más probable es que sea
+      el número de operación de un Yape recién hecho — un dato, no un cierre.
+      Kapta calla porque no es suyo; el bot tiene que llevarlo a una persona.
+    - **«no» no es un acuse en ninguna de las dos.** Después de pedir un saldo,
+      un «no» o un «no gracias» es un rechazo —abre devolución (§13)—, no un
+      recordatorio del Yape. Los dos callan y va a la asesora.
+  - **El comprobante que llega por ese número se registra solo**, con dos
+    puertas que evitan adivinar de qué pedido es. Antes moría en el chat: el
+    bot contestaba «tu pago pasa a revisión» y en Kapta no había nada. Medido
+    en #KP134340 el 20-09-2026: S/ 237 pagados y cero rastro.
+    - **Puerta 1, el monto.** El importe leído coincide exacto con el saldo
+      pendiente de un candidato, o con su total (paga todo de golpe ignorando
+      el adelanto).
+    - **Puerta 2, la guía escrita.** Nombró la guía o el código de Shalom junto
+      a la foto. Vale aunque el monto no cuadre, y **manda sobre el monto**:
+      nombrar la guía es decir de qué pedido habla.
+    - **Una puerta basta, pero tiene que señalar a UN candidato.** Dos
+      empatados es no saber, y no saber se resuelve con una persona. Registrar
+      la plata en el pedido equivocado le da la clave a quien no pagó y se la
+      niega a quien sí.
+    - **Un pago parcial no pasa** —debe S/ 237 y manda S/ 200— y es el caso más
+      frecuente de los que caen a mano. Es deliberado.
+    - **Entra sin validar**, como todo comprobante que no miró una persona. Un
+      error automático puede ensuciar la cola de revisión; no puede soltar un
+      paquete sin cobrar.
+    - Los candidatos se buscan **por celular**, no por el pedido del último
+      aviso: quedarse con el último sería justo la adivinanza que las puertas
+      existen para evitar.
+    - Lo que no pasa **queda como anomalía con su motivo** (`inbound_voucher`).
+      El silencio es lo único inaceptable: la clienta ya pagó.
+    - **El comprobante repetido del MISMO pedido no avisa a nadie.** Rastro y
+      silencio: la clienta mandó su Yape dos veces o el webhook reentregó, y ya
+      está registrado donde tiene que estar. A Esmeralda (#KP134470,
+      21-09-2026) le llegó su clave a las 09:52 y a las 09:51 se había
+      levantado una alerta diciendo «llegó un pago y no se sabe de qué pedido
+      es», que además escaló dos veces. Un aviso que miente se deja de leer.
+      - **Repetido en OTRO pedido sí avisa**, con el pedido con el que choca
+        escrito por su nombre: es el mismo Yape cobrando dos pedidos, que es
+        justo lo que la deduplicación existe para cazar.
+    - **La lectura se guarda con la MISMA forma que la carga a mano**
+      (`voucherReading`, en `lib/voucher-inspect.ts`), y esa forma es un
+      contrato: el drawer relee `vision.extracted.*` para decir a qué cuenta
+      llegó el dinero. La ingesta nació escribiendo un objeto plano propio y el
+      resultado fue que **todos** sus comprobantes mostraban «La cuenta
+      receptora no pudo leerse» teniendo el nombre correcto guardado dos llaves
+      más arriba (#KP134730, 20-09-2026). Un control de dinero apagado en
+      silencio, justo en la puerta donde nadie mira la imagen al recibirla. De
+      dónde vino el mensaje —número, `message_id`, puerta, saldo esperado— va
+      **fuera** de `extracted`, que es solo lo que el lector dijo de la imagen.
+    - **Interruptor propio y apagado de nacimiento** (0171), aparte del del
+      aviso: una tienda puede querer avisar sin querer que se le registren
+      pagos solos. Es el único sitio del Master donde una fila de dinero la
+      escribe algo que no es una persona mirando la imagen, y eso merece que se
+      encienda a mano, tienda por tienda.
+    - **Cada comprobante levanta una alerta con DUEÑO y reloj** (0172), no una
+      fila en una bandeja que alguien mire cuando se acuerde. Dos tipos:
+      `registrado` —entró solo, falta validarlo para liberar la clave— y
+      `sin_atribuir` —llegó plata y no se supo de qué pedido es—.
+      - **La escalera se configura en Ajustes**, en orden y con minutos por
+        escalón. Escribir los nombres en el código costaría un despliegue cada
+        vez que alguien cambie de puesto.
+      - **La escalera SUMA, no traspasa** (22-09-2026). Escalar amplía quién ve
+        la alerta; no se la quita a nadie. A Gerardo le queda delante hasta que
+        se resuelva, y a sus minutos le aparece **además** a Yohalis, y después
+        a Frank: llegado ese punto la tienen los tres a la vez. Antes cambiaba
+        de dueño y **desaparecía** de la pantalla del anterior, que es dar por
+        hecho que ya no va a atenderla —falso, suele estar a punto— y ocultarle
+        el final de un trabajo que empezó él.
+        - **Sigue habiendo un responsable de turno**, y la tarjeta lo dice: a
+          quien la mira sin ser suya le sale «Le toca ahora a Yohalis», en gris
+          y no en ámbar. Es lo que evita que dos la atiendan a la vez sin
+          saberlo.
+        - **Las propias van primero** en el pop-up. Con tres personas mirando la
+          misma cola, el trabajo de uno no puede quedar debajo del que solo
+          está mirando.
+        - **Quien no la ha recibido todavía NO la ve.** Si no, los tres verían
+          todo desde el minuto cero y la escalera no serviría de nada.
+      - **No mira si está conectado**, a diferencia de la alerta de asesoras:
+        ahí compiten por atender primero, aquí hay un responsable. La oferta
+        aguanta sus minutos con el navegador cerrado; si saltara al
+        desconectarse, todo acabaría siempre en el último escalón.
+      - **El último escalón no escala.** Alguien tiene que ser el final; pasar
+        de largo dejaría la alerta sin dueño, que es peor que dejarla con quien
+        no la quiere.
+      - **Sin escalera configurada la alerta se crea igual**, sin dueño.
+        Perderla porque nadie tocó Ajustes sería el peor de los dos errores.
+      - **Las alertas se cierran con el HECHO, no con un clic.** Cuando el pago
+        se valida o se rechaza, o cuando alguien sube el comprobante a mano, la
+        alerta se cierra sola: el sistema ya sabe que se atendió, y pedir
+        además una confirmación es el clic que se deja de dar a la semana — y
+        entonces la cola se llena de trabajo ya hecho que figura pendiente. Lo
+        único que se cierra a mano es **descartar**, con su motivo, para lo que
+        nunca se va a resolver solo (una foto que la visión confundió).
+        - **Y el hecho se comprueba AL LEER, no solo al escribir.** El cierre
+          dentro de `validatePayment` es un empujón al final de la acción, y un
+          empujón se puede perder: si algo entre medias falla, el pago queda
+          validado —eso ya está escrito— y la alerta se queda abierta para
+          siempre. Pasó con #KP134730 el 20-09-2026: validado a las 22:42, su
+          alerta seguía en la cola cinco horas después pidiendo trabajo hecho.
+          Así que al listar la cola se retiran primero las alertas cuyo pago ya
+          tiene decisión (`sweepResolvedAlerts`), y el empujón al validar pasa a
+          ser una optimización en vez de la única vía. Se barre **antes** de
+          escalar: al revés, una alerta ya resuelta podría subir a otra persona
+          justo antes de retirarse.
+        - **Y la `sin_atribuir` se retira cuando ese CELULAR ya no debe nada**
+          (`sweepUnattributedAlerts`): lo que pedía —que alguien averigüe de
+          qué pedido es y lo registre— ya está hecho. Cuenta lo **cargado**, no
+          solo lo validado, porque validar es el otro trabajo y tiene su propia
+          alerta. Si de ese celular no consta **ningún** pedido, se queda: ése
+          es el caso en que de verdad no se sabe quién pagó, que es para lo que
+          la alerta existe.
+      - **El título no afirma lo que no consta.** `sin_atribuir` es el cajón de
+        todo lo que no se pudo registrar —la imagen que no se pudo bajar, el
+        pago parcial, el Yape ya usado en otro pedido—, así que el pop-up dice
+        «Llegó un comprobante y no se pudo registrar» y dentro, en el detalle,
+        el motivo exacto. Decía «no se sabe de qué pedido es» sobre un
+        comprobante ya registrado y con la clave enviada. Sin pedido, lo que
+        identifica es el **celular**, y va delante: con él se busca el chat.
+      - **«Ir a validar» lleva al DRAWER del pedido**, con la sección de Cobro
+        delante (`/dashboard/pedidos?abrir=<id>&ir=pagos`), no a la bandeja de
+        revisión. Dos motivos: la bandeja valida a secas —el botón que además
+        manda la clave vive en el drawer— y llevar allí obligaba a buscar a
+        mano el pedido que el sistema ya sabía cuál era.
+      - **Al validar el pago que cierra el pedido, la clave sale sola** (0173),
+        en el mismo clic, y ese envío **es** el registro de la entrega.
+        - **Por qué.** Medido el 21-09-2026: 786 pedidos pagados con clave
+          registrada, **770** con la clave ya consultada por alguien y **3**
+          con la entrega registrada. La clave se entrega —si no, habría
+          cientos de reclamos— pero el segundo clic de «registrar que la
+          entregué» no lo da nadie, al 0,4 %. «Clave enviada al cliente» era
+          ficción, y «¿a esta clienta ya le dieron su clave?» no se podía
+          responder desde Kapta.
+        - **El listón sube respecto a `canRevealPickupKey`.** Esa regla abre la
+          clave con los comprobantes CARGADOS, y está bien: del otro lado hay
+          una persona que mira la imagen antes de dictarla. Para que salga
+          sola no basta — lo **validado** tiene que cubrir el pedido. Un
+          comprobante recién llegado por WhatsApp no manda ninguna clave.
+        - **Lo demás se comprueba con la misma función de siempre**, otra vez
+          en el servidor y con los datos frescos, después de validar: paquete
+          disponible en la agencia, clave registrada, pedido abierto, ningún
+          comprobante observado. El envío automático no puede soltar un
+          paquete que la pantalla no soltaría.
+        - **El botón lo dice antes de pulsarlo**: cambia a «Validar y enviar la
+          clave» solo en el comprobante que de verdad la libera, y enseña el
+          mensaje exacto que va a salir con la clave **tapada** —al navegador
+          no viaja nunca—. Validar desde la bandeja de revisión no habla con
+          nadie.
+        - **Fuera de las 24 h no se manda nada y se dice.** WhatsApp solo deja
+          texto libre dentro de esa ventana y no hay plantilla con la clave
+          dentro. Sin constancia de que la clienta escribiera, la ventana se da
+          por cerrada: dar por entregada una clave que nunca salió es peor que
+          no enviarla.
+        - **Interruptor por tienda, apagado de nacimiento.** Manda la llave del
+          paquete sin que nadie vuelva a mirar después del clic.
+      - **No hay «es mía» ni «no es mía».** Se copiaron del pop-up de asesoras,
+        donde varias compiten por un lead. Aquí la alerta se ofrece a UNA
+        persona a la vez, así que no hay con quién chocar — y reclamarla solo
+        habría servido para **parar el reloj**, que es justo la red de
+        seguridad que no se puede desactivar.
   - Todo queda en la línea de tiempo del pedido (`whatsapp_template`) y en las
     tablas de la cola y de respuestas, con el motivo cuando no salió.
 - Seguimiento comienza desde la constancia del adelanto y se intensifica cuando
@@ -2748,6 +3233,67 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - En el drawer se recomienda primero Shalom.
 - Plazo: 6 días desde disponibilidad en agencia destino.
 - Gerardo también realiza seguimiento.
+
+#### El tracking de Olva y su rastreo (migración 0174, decidido el 20-09-2026)
+
+- **La salida de Olva guarda el tracking que emite Olva** («2552504-26»: el
+  número y los dos dígitos del año de emisión), aparte del `guide_code` interno
+  del rótulo, que no cambia. Se registra al crear la salida si ya se tiene, o
+  después desde **Salidas y guías** («Registrar tracking Olva»), que es el caso
+  normal: Olva lo emite en el mostrador y lo manda por el correo «Confirmación
+  de Envíos» —donde aparece como `26-2552504`— después de que la caja ya salió
+  con su rótulo. Se aceptan las dos escrituras y el número solo con el año
+  actual. **El mismo tracking no puede colgar de dos salidas**; corregirlo
+  escribe un evento con el valor anterior.
+- **Olva no tiene API para clientes.** El rastreo se hace con la misma llamada
+  que hace su página pública de seguimiento —`getTrackingInformation` con
+  `details=1` en `reports.olvaexpress.pe`, con la apikey fija que la propia
+  página publica en su JavaScript— desde el cron `olva-reconcile`, cada media
+  hora, sobre las salidas de Olva vivas que tengan tracking. Es lo que la
+  operación ya hacía a mano pegando el número en `tracking.olvaexpress.pe`.
+  La apikey es de Olva y la pueden rotar sin aviso: vive en el entorno
+  (`OLVA_TRACKING_APIKEY`) y, cuando falle, **el cron reporta y no toca
+  estados**; el marcado a mano sigue siendo el camino de respaldo.
+- **Manda el estado que Olva declara vigente** (`nombre_estado_tracking`), no el
+  hito «más avanzado» como en Shalom. Se comprobó en un envío real: asignado a
+  un operador el 09/09, confirmado en tienda el 10/09 y asignado de nuevo el
+  12/09; una escalera habría dicho «en reparto» durante tres días de mostrador.
+- Traducción de los estados conocidos (`lib/olva/tracking.ts`, con las dos
+  respuestas reales del 20-09-2026 como prueba):
+
+  | Olva dice | `pickup_state` | `delivery_status` |
+  |---|---|---|
+  | REGISTRADO, RECEPCION TIENDA, TRACKING EN GUIA, RECEPCION GUIA, PRE VALIJA, EN VALIJA | `registrado_en_agencia` | `pendiente` |
+  | DESPACHADO («En camino») | `en_transito` | `en_ruta` |
+  | CONFIRMACION EN TIENDA (oficina de destino) | `disponible_para_recojo` | `pendiente` |
+  | ASIGNADO (operador salió a entregar) | `en_reparto` | `en_ruta` |
+  | ENTREGADO | `entregado` si hubo operador asignado; `recogido` si no | `entregado` |
+
+  Un estado que no esté en la tabla **no se traduce**: se guarda crudo en
+  `olva_status`, se anota en la línea de tiempo sin mover el estado del Master y
+  el cron lo lista en `estadosSinTraducir` para añadirlo aquí con su
+  significado. Están pendientes de capturar los estados de **devolución** y de
+  **anulación**; hasta entonces `flg_devolucion` solo se anota en la nota.
+- **Llegar a la oficina de destino arranca los 6 días.** `CONFIRMACION EN
+  TIENDA` fija `agency_arrived_at` (solo la primera vez) y `agency_expires_at` a
+  6 días, con lo que «Próximo a vencer» y las alertas de vencimiento funcionan
+  igual que para Shalom. La oficina de destino se toma de la observación de ese
+  movimiento («Nombre Oficina : …») si la salida no la tenía.
+- Olva fecha los movimientos solo con el día; se anclan al mediodía de Lima
+  para que no caigan en la víspera al pasar a UTC.
+- **Los dos avisos a la clienta, igual que Shalom** (migración 0175). Cuando el
+  rastreo pone la guía `en_transito` se encola el aviso de «va en camino», y
+  cuando la pone `disponible_para_recojo` el de «ya está en la oficina:
+  recógelo y paga el saldo». Es **la misma cola, el mismo envío, el mismo
+  horario, el mismo número y los mismos botones de cobro** que los avisos de
+  Shalom; una fila por guía y por tipo, con el courier marcado. Lo que es propio
+  de Olva: la **plantilla** (Meta aprueba cada texto aparte, y los de Shalom
+  nombran a Shalom), sus **variables** —las de Shalom sin `codigo`, y `guia` es
+  el tracking «2552504-26», que es lo que la clienta dice en el mostrador—, **sin
+  ticket** en cabecera ni detrás del botón, y `vence` a **6 días**. `agencia`
+  es la oficina que el rastreo apuntó al llegar. Los interruptores y las
+  plantillas de Olva se configuran en Ajustes, aparte de los de Shalom; con el
+  aviso apagado la cola cierra la fila como omitida y no manda nada.
 
 ### Pagos
 
@@ -2910,8 +3456,19 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   asesor.
 - Solo Frankz ejecuta reembolsos.
 - Un sobrepago puede devolverse después de validación.
-- Pendiente de decisión formal: si el adelanto de S/30 se considera no
-  reembolsable para cubrir logística cuando el cliente rechaza el saldo.
+- **El adelanto NO se reembolsa cuando el cliente rechaza el saldo.** Decidido
+  el 18-09-2026; estuvo meses como «pendiente de decisión formal» y esa
+  indefinición impedía decirle nada a la clienta. Cubre la logística ya
+  gastada: la guía se pagó, el paquete viajó y el retorno también cuesta.
+  - Es **rechazo del saldo**, no cualquier no-entrega. Un paquete que no llega
+    por culpa del courier, un producto equivocado o un pedido que la tienda
+    cancela no son rechazo: ahí el adelanto se devuelve como siempre.
+  - **Se le dice antes, no al final.** Una política que la clienta descubre el
+    día que pierde su dinero es una discusión perdida aunque se tenga razón, y
+    una devolución de tarjeta reclamada después cuesta más que los S/ 30. Va en
+    el aviso de cobro y tiene que estar también donde compra.
+  - Lo ejecuta Frankz, como todo reembolso: la regla dice qué se devuelve y qué
+    no, no automatiza la caja.
 
 ## 13. Devoluciones, inventario y reclamos
 
@@ -3025,8 +3582,36 @@ cuenta receptora leída, evidencia y progreso acumulado del pedido.
 - `Observar` exige motivo y mueve el comprobante a `revision_admin`.
 - `Rechazar` es una decisión definitiva desde Observados. No borra el pago: sale
   de la cola activa y queda preservado en el expediente y sus eventos.
-- `Validar` exige número de operación y bloquea una cuenta receptora incompatible
-  con Grupo GF S.A.C. / terminación 309.
+- `Validar` exige número de operación y bloquea una cuenta receptora
+  incompatible con las cuentas de cobro de la tienda (`store_collection_accounts`,
+  ya no una sola escrita a mano).
+
+#### Una cuenta receptora que no cuadra tiene que tener salida
+
+El bloqueo no tenía puerta trasera y por tanto atascaba para siempre. **#KP126085
+llevaba siete semanas** en la bandeja: el lector puso «Cerdo Gf S.a.c.» por
+«Grupo Gf S.a.c.» y eso basta para `mismatch`, aunque el celular receptor leído
+—···309— sea exactamente el de la cuenta de la empresa. Lo único que la pantalla
+ofrecía era `Rechazar`, que habría sido falso: el dinero llegó.
+
+- **El aviso dice QUÉ señal falló.** Decía «el destinatario o el celular receptor
+  no coincide», y ese «o» deja a quien revisa sin saber cuál mirar. Ahora
+  distingue los dos casos: celular nuestro con nombre que no encaja —casi siempre
+  lectura mala, pero también la forma que tendría un comprobante ajeno con
+  nuestro número delante— y celular que no es de ninguna cuenta, que es tajante.
+- **Un administrador puede validar dejando escrito por qué.** Queda en su propio
+  evento (`payment_recipient_exception`), con el nombre y el celular que se
+  leyeron, para poder listar después cuántos cobros se dieron por buenos sin que
+  la cuenta cuadrara y quién lo decidió.
+- **La excepción no afloja nada más.** Vive DENTRO de `validatePayment`, después
+  del nº de operación obligatorio y de la regla de cuatro ojos, así que no
+  alcanza a ninguna de las dos. Un camino aparte —escribir el estado a mano con
+  `overridePaymentValidation`— dejaba el pago sin validador, sin fecha, sin
+  asiento de liquidación y sin la confirmación de agencia: peor que el atasco.
+- **La regla NO se afloja por celular.** Lo tentador es dar por buena cualquier
+  lectura cuyo celular sea el nuestro. **#AUR177034** lo desmiente: celular ···309
+  y nombre «Rosa campos Mendoza». Las dos formas de fallar necesitan ojos, y por
+  eso la salida es una persona escribiendo el motivo y no una regla nueva.
 
 Mientras Kapta y el Excel convivan, validar un pago deja el comprobante listo
 para continuar y registra actor y fecha, pero **no cambia por sí solo la
@@ -3347,6 +3932,8 @@ bloquea es la contradicción explícita.
   directa valida nuevamente cobertura, stock, pedido y salidas activas.
 - Shalom continúa por su API directa y Olva se registra como salida de agencia;
   ambas muestran el requisito de adelanto y el servidor exige S/ 20 validados.
+  La salida de Olva admite el tracking de Olva, y con él su estado se rastrea
+  solo (§12, 0174).
 - Axel, Urpi, motorizado propio y Olva generan una salida interna, un consecutivo
   `Sxx`, un QR opaco y un rótulo imprimible de Kapta.
 - Una salida manual nace como `rotulo_generado`, bajo custodia de la empresa. No
@@ -3782,6 +4369,10 @@ recoge; antes no lo recogía nadie.
 - Axel y motorizado propio pueden repetirse sin superar cinco salidas.
 - Shalom y Olva avisan que el adelanto debe validarse antes de crear la guía.
 - Olva no se crea con menos de S/ 20 validados aunque el navegador sea alterado.
+  **Salvo que el pedido ya esté cobrado**: pagado en el checkout o con
+  comprobantes que cubren el total (`orderFullyPaid`). Un pedido prepago no
+  tiene comprobantes que sumar, y exigírselos lo bloqueaba (#KP135087,
+  21-09-2026).
 - Dos salidas del mismo pedido reciben QR y código `Sxx` diferentes.
 - Con una salida activa, la salida adicional exige una justificación auditada.
 - **Una salida «por definir» no cuenta como salida que estorba.** Crear la guía
@@ -3870,10 +4461,14 @@ recoge; antes no lo recogía nadie.
 - Llamada, WhatsApp y mensaje del mismo día consumen un solo día de los siete,
   aunque cada intento queda auditado.
 - Un seguimiento exige fecha y nunca hora; la cola distingue vencidos, hoy y
-  próximos. Cada chip de Fecha pactada muestra el conteo exacto de su grupo
-  sobre todos los pedidos filtrados, no solamente sobre la página visible.
+  próximos. `Vencidos` es solo la fecha pactada incumplida; `Hoy` es lo que
+  toca llamar ahora y se lleva a cero; `Próximos` es lo que todavía no toca.
+  Cada chip de Fecha pactada muestra el conteo exacto de su grupo sobre todos
+  los pedidos filtrados, no solamente sobre la página visible.
 - `Sin respuesta` y `Se deja mensaje` generan un recordatorio a las dos horas
-  laborales dentro de 08:00–22:00 de Lima.
+  laborales dentro de 08:00–22:00 de Lima. Hasta esa hora el pedido está en
+  `Próximos`; llegada la hora vuelve a `Hoy` y no sale de ahí hasta que alguien
+  lo rellame.
 - El séptimo día sin confirmación crea una tarea manual de revisión en Shopify;
   no anula el pedido desde Kapta.
 - Un doble clic no duplica el día, los eventos ni la tarea.
@@ -4094,7 +4689,7 @@ separada del usuario de acceso.
   `/reparto` (lo acota la RLS por `auth_rider_id()`), sin necesitar rol especial.
 - Un usuario cuyo único rol es `motorizado` no tiene tiendas, así que el Master
   le abre solo los pedidos que son paradas de una ruta suya en curso o cerrada
-  (0178, `auth_rider_order_ids()`): lo que necesita para ver nombre, celular,
+  (0186, `auth_rider_order_ids()`): lo que necesita para ver nombre, celular,
   dirección y monto de cada parada, y nada de otros motorizados. La escritura
   del Master sigue cerrada para él.
 
@@ -4753,7 +5348,7 @@ pantallas del motorizado y dos puertas al Master con guardas distintas.
 **Rutas manda.** La parada es el registro canónico del resultado; la hoja de
 Reparto propio es una vista con vocabulario y cuadre encima de ella:
 
-- La parada aprende lo que solo la hoja sabía decir (0172): `written_status`
+- La parada aprende lo que solo la hoja sabía decir (0180): `written_status`
   (lo escrito, literal), `written_status_code` (el estado del dominio Reparto
   propio al que resolvió; null = sin equivalente) y `written_payment`. El enum
   de tres estados y el motivo del catálogo siguen mandando para el cierre de
@@ -4868,7 +5463,7 @@ toca nada, igual que al asignar (§29.5).
 **Un paso para el motorizado, antes de la ruta.** Mientras su carga esté
 cotejada por oficina y sin custodia, `/reparto` abre en «Recibir mi caja»: un
 escaneo por paquete y, por paquete, «No lo recojo» con un motivo corto (no
-está en la caja, dañado, no cabe, otro). El rechazo (0174, `gf_rider_decline`)
+está en la caja, dañado, no cabe, otro). El rechazo (0182, `gf_rider_decline`)
 retira el paquete de la carga con rastro «No recogido por X: motivo», deja
 `pickup_declined` en el pedido, devuelve la solicitud a `accepted` con
 observación —reaparece en «por asignar» y el supervisor la asigna a otro— y
@@ -4879,8 +5474,8 @@ cambiada. Un paquete ya recibido no se rechaza desde el teléfono: lo retira el
 supervisor.
 
 **La verificación del motorizado tiene tres modos, y se deciden en datos.**
-`logistics_providers.rider_pickup_mode` (0177; reemplaza el booleano
-`rider_pickup_check_required` de 0175, migrado `true`→`exigir` y
+`logistics_providers.rider_pickup_mode` (0185; reemplaza el booleano
+`rider_pickup_check_required` de 0183, migrado `true`→`exigir` y
 `false`→`ninguno`) gobierna qué hace el motorizado con su caja. Se lee en un
 solo sitio en código (`riderPickupMode`, `lib/grupo-gf-courier-route-access.ts`)
 y en uno en SQL (`gf_rider_pickup_mode`); sin proveedor se asume `exigir`.
@@ -4909,7 +5504,7 @@ y en uno en SQL (`gf_rider_pickup_mode`); sin proveedor se asume `exigir`.
   pendiente**, devuelve la custodia a la empresa y la solicitud vuelve a «por
   asignar» con el evento `pickup_declined` («No lo llevó Roy: motivo»). Ese
   paquete se puede volver a asignar a cualquier motorizado, incluida la misma
-  caja del mismo día: la fila retirada revive (0179) y el rechazo anterior
+  caja del mismo día: la fila retirada revive (0187) y el rechazo anterior
   queda solo en el historial. Lo
   asignado y no confirmado es «no se lo llevó»: en «Despacho del día» cada caja
   muestra **confirmados/asignados** junto a los cotejados y un desplegable
@@ -4921,13 +5516,13 @@ y en uno en SQL (`gf_rider_pickup_mode`); sin proveedor se asume `exigir`.
   la parada y el pedido (`delivered_unconfirmed_pickup`) dicen «Entregado sin
   confirmar recojo». El paquete sumado a una caja ya en custodia
   (`gf_add_item_in_custody`) también nace por confirmar.
-- **`ninguno`**: basta con asignar y no se pide nada más (lo que 0175/0176
+- **`ninguno`**: basta con asignar y no se pide nada más (lo que 0183/0176
   llamaban «flag apagado»): custodia al asignar con la nota «verificación del
   motorizado desactivada», paquetes sumados ya cotejados y recibidos, y ninguna
   pertenencia se altera una vez que la caja salió.
 
 En `confirmar` y `ninguno` el cotejo de oficina posterior se registra como
-«registro opcional», y hay **una sola carga por motorizado y día** (0176): si
+«registro opcional», y hay **una sola carga por motorizado y día** (0184): si
 vuelve a la oficina, los paquetes nuevos se suman a la misma carga y ruta
 (`gf_dispatch_load_open` la reutiliza; `gf_add_item_in_custody` mete el paquete
 con su parada sin duplicar) y el cierre es por día. En `exigir` una carga en
@@ -5121,7 +5716,7 @@ Nada de esto cambia acciones de servidor ni la base.
 
 ## 30. Liquidaciones 2 — hojas por dominio
 
-Plan y hallazgos en `docs/plan/liquidaciones-2.md`. Base en la migración 0168;
+Plan y hallazgos en `docs/plan/liquidaciones-2.md`. Base en la migración 0176;
 código en `lib/sheets/`, `app/dashboard/liquidaciones-2/` y
 `components/sheets-board.tsx`.
 
@@ -5160,7 +5755,7 @@ mete, sin cotejarlo (la verificación es el paso 2), con la misma lista de resul
 (ya estaba, en otra caja → Mover, límite de efectivo → Autorizar, no
 elegible). No hay motorizado que elegir: la caja ya es de uno.
 
-**Recojo con la carga en custodia.** En modo «confirmar» o «ninguno» (0177)
+**Recojo con la carga en custodia.** En modo «confirmar» o «ninguno» (0185)
 el paso 3 sigue abierto con la carga en custodia: «N paquetes sin confirmar
 por Roy» y el escáner activo para los que faltan; es el respaldo cuando el
 motorizado no puede confirmar desde su teléfono. «La entrega de esta carga
@@ -5366,7 +5961,7 @@ observa el comprobante**: la causa «pago digital sin comprobante validado» se
 retiró el 17-09-2026 porque ese dato vive en Validar pagos, no en la hoja, y
 para todo lo anterior al cuaderno en Kapta significaba «no lo sé», no «no se
 pagó»; las 1.542 que abrió la carga histórica se cerraron en bloque con ese
-motivo (0170, que queda en el catálogo). Nunca dos
+motivo (0178, que queda en el catálogo). Nunca dos
 abiertas para la misma fila y campo; una resuelta con el mismo valor externo
 no se reabre. Al editar un monto que no cuadra, la propia fila pide el motivo en
 línea; cerrar sin motivo deja la observación abierta sin motivo.
@@ -5377,7 +5972,7 @@ Desde el 19-09-2026 hay una sola pantalla, /reparto (§29.12): la ruta del
 día de Rutas con el vocabulario del cuaderno encima. Lo que sigue describe
 lo que esa pantalla conserva de la antigua /reparto/cuaderno: estado escrito
 con sugerencias, motivo obligatorio cuando cobra distinto, y que solo ve su
-hoja (0171). Las referencias a /reparto/cuaderno se leen como /reparto.
+hoja (0179). Las referencias a /reparto/cuaderno se leen como /reparto.
 
 `/reparto/cuaderno`. Vive fuera del panel, para el teléfono, y es la misma hoja
 de Reparto propio que ve quien liquida: el motorizado escribe en su cuaderno
@@ -5407,8 +6002,8 @@ y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
   quien liquida antes de aplicar al Master (§30.8): el motivo lo escribe quien
   repartió; aceptarlo es de quien liquida.
 - **Solo ve su hoja.** Un usuario cuyo único rol es `motorizado` solo puede
-  entrar a `/reparto`; el panel lo redirige. En la base (0171), sus lecturas
+  entrar a `/reparto`; el panel lo redirige. En la base (0179), sus lecturas
   de hojas, filas, alias, observaciones e historial quedan acotadas a la hoja
   cuyo `rider_id` es su ficha. Los dominios y sus estados siguen legibles
   porque son vocabulario, no datos de nadie. Del Master lee solo los pedidos de
-  sus rutas (0178, §27).
+  sus rutas (0186, §27).

@@ -45,6 +45,69 @@ export function normalizeSku(sku: string | null | undefined): string {
 }
 
 /**
+ * Los productos del pedido que NO tienen vínculo con Swayp.
+ *
+ * Es la misma pregunta que `buildProductos` contesta al crear la guía, sacada
+ * aparte para poder hacerla ANTES: en el modal, en la mesa de ruta y en la reja
+ * del servidor. Hasta ahora solo se contestaba dentro de la llamada a la API, y
+ * eso llegaba tarde de dos maneras distintas.
+ *
+ * QUÉ PASABA. Lima no lleva control de cantidad (`CIUDADES_SIN_CONTROL_DE_CANTIDAD`),
+ * así que `evaluateDirectFenixStock` devuelve «hay stock» sin mirar ningún
+ * renglón — y con razón: la bodega repone sola y lo que importa es QUÉ despacha,
+ * que lo dice este vínculo. Pero nadie preguntaba por el vínculo hasta el final,
+ * así que el modal anunciaba «Stock Swayp disponible para todo el pedido» sobre
+ * un producto que Swayp no conoce. Pasó con #KP134541 el 15-09-2026: la Pulsera
+ * Magnética de Cobre Saludable (SKU 5463456456) no está en `swayp_sku_map` —sí
+ * lo está otra variante, la 64565434— y el pedido salía en verde.
+ *
+ * Y lo que venía después era peor que un aviso tardío: al crear la guía, la
+ * llamada a Swayp fallaba con «Falta vincular a Swayp», el flujo caía al código
+ * local y la guía se creaba igual. Una caja despachada contra un número que
+ * Swayp nunca emitió, con el fallo contado en un aviso al final.
+ *
+ * MAPA VACÍO = FUNCIÓN APAGADA, el mismo interruptor que usa `buildProductos`:
+ * una tienda que todavía no vinculó nada no tiene por qué quedarse sin poder
+ * crear guías. Con al menos una entrada, un hueco es un hueco.
+ */
+export function productosSinVinculo(
+  lines: OrderLine[],
+  map: Map<string, { codbar: string; nombre?: string | null }> | null | undefined,
+): string[] {
+  if (!map || map.size === 0) return [];
+  const faltan: string[] = [];
+  for (const line of lines) {
+    if (map.get(normalizeSku(line.sku))?.codbar) continue;
+    faltan.push(nombreParaElOperador(line));
+  }
+  return faltan;
+}
+
+/**
+ * El aviso que se enseña cuando falta el vínculo. Uno solo, para que la mesa de
+ * ruta, el panel de guía directa, el cajón de Envíos y las rejas del servidor
+ * digan lo mismo.
+ *
+ * Vive AQUÍ y no junto a las acciones porque un archivo `"use server"` solo
+ * puede exportar funciones async: sacar de allí una función pura rompe el build
+ * —y lo rompe en `next build`, no en `tsc`, así que no se ve hasta el
+ * despliegue—.
+ */
+export function avisoSinVinculoSwayp(faltan: readonly string[]): string {
+  return (
+    `Swayp no tiene ${faltan.length === 1 ? "este producto" : "estos productos"} en su catálogo: ` +
+    `${faltan.join(", ")}. ${faltan.length === 1 ? "Vincúlalo" : "Vincúlalos"} en Catálogo de productos ` +
+    `(Ajustes → Catálogo) y vuelve a intentarlo.`
+  );
+}
+
+/** Cómo se nombra una línea sin vínculo. El título es lo que la operadora
+ *  reconoce; el SKU es el respaldo cuando el pedido llegó sin título. */
+function nombreParaElOperador(line: OrderLine): string {
+  return (line.title ?? "").trim() || (line.sku ?? "").trim() || "(producto sin nombre)";
+}
+
+/**
  * Traduce las líneas del pedido a `productos[]`, o dice cuáles no puede.
  *
  * NO ADIVINA. Un producto sin mapeo no se manda con el codbar vacío ni se
@@ -65,16 +128,16 @@ export function buildProductos(
   lines: OrderLine[],
   map: Map<string, { codbar: string; nombre?: string | null }>,
 ): BuildProductosResult {
-  const faltan: string[] = [];
+  // La lista de faltantes la calcula `productosSinVinculo`, no una copia de su
+  // bucle: el modal y esta reja tienen que nombrar exactamente los mismos
+  // productos, o el aviso previo y el rechazo final dirían cosas distintas.
+  const faltan = productosSinVinculo(lines, map);
   const porCodbar = new Map<string, SwaypProducto>();
 
   for (const line of lines) {
     const titulo = (line.title ?? "").trim();
     const hit = map.get(normalizeSku(line.sku));
-    if (!hit?.codbar) {
-      faltan.push(titulo || (line.sku ?? "").trim() || "(producto sin nombre)");
-      continue;
-    }
+    if (!hit?.codbar) continue;
     // Al menos 1: un pedido con cantidad 0 o nula sigue siendo un paquete que
     // sale, y mandar 0 le diría a Swayp que no descuente nada.
     const cantidad = Math.max(1, Math.trunc(line.quantity ?? 1) || 1);

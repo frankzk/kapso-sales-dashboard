@@ -97,8 +97,13 @@ import {
   swaypAuthErrorHint,
   swaypOptsFromEnv,
 } from "@/lib/swayp";
-import { buildSwaypGuideInput, esCiudadPorApiSwayp, parseSenders } from "@/lib/swayp-guide";
-import { normalizeSku } from "@/lib/swayp-productos";
+import {
+  buildSwaypGuideInput,
+  esCiudadPorApiSwayp,
+  esNumeroDeGuiaSwayp,
+  parseSenders,
+} from "@/lib/swayp-guide";
+import { avisoSinVinculoSwayp, normalizeSku, productosSinVinculo } from "@/lib/swayp-productos";
 import { cargarMapaSwayp, cargarMapaSwaypDeOrg } from "@/lib/swayp-sku-map";
 import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
 import { getMasterPermissions } from "@/lib/permissions-access";
@@ -257,6 +262,15 @@ export async function loadShipmentDetail(
        * configuración del servidor; el drawer sólo lo pinta.
        */
       swaypApiCity: boolean;
+      /**
+       * Productos del pedido sin vínculo de codbar con Swayp. Vacío = se puede
+       * emitir.
+       *
+       * Viaja al drawer para que el botón se APAGUE y DIGA POR QUÉ, en vez de
+       * dejar que la asesora lo pulse y reciba la negativa con la clienta al
+       * teléfono. La reja de verdad sigue en `spinOffFenixGuide`.
+       */
+      swaypUnlinked: string[];
     }
   | { error: string }
 > {
@@ -333,6 +347,11 @@ export async function loadShipmentDetail(
     swaypApiCity:
       env.swaypEnabled() &&
       esCiudadPorApiSwayp(coverageCityOf(detail.shipment), parseSenders(env.swaypSenders())),
+    swaypUnlinked: await swaypSinVinculo(
+      admin,
+      detail.shipment.store_id,
+      detail.shipment.order_id,
+    ),
   };
 }
 
@@ -633,6 +652,11 @@ export async function registerRerouteCall(
           : `Swayp no tiene cobertura en ${currentFenix.city || cur.district || "la ciudad indicada"}.`,
       };
     }
+    // El codbar, junto al stock y con el mismo formato: son las dos condiciones
+    // que Swayp exige y conviene que se lean igual. `spinOffFenixGuide` la vuelve
+    // a comprobar; esta es para no gastar la llamada a la API ni el viaje.
+    const sinCodbar = await swaypSinVinculo(admin, ctx.storeId, cur.order_id);
+    if (sinCodbar.length) return { error: avisoSinVinculoSwayp(sinCodbar) };
   }
 
   if (
@@ -640,11 +664,10 @@ export async function registerRerouteCall(
     reprogramProvider === "fenix" &&
     !cur.fenix_shipment_id
   ) {
-    // Se le pide el número a Swayp; si la ciudad no está habilitada por API
-    // —hoy sólo Arequipa— se cae al código local, que es el flujo por Excel de
-    // siempre. Un solo intento: `createGuide` no reintenta a propósito, porque
-    // la API no acepta clave de idempotencia y un POST repetido tras un timeout
-    // crearía una segunda guía y un segundo paquete.
+    // El número lo emite Swayp, siempre. Un solo intento: `createGuide` no
+    // reintenta a propósito, porque la API no acepta clave de idempotencia y un
+    // POST repetido tras un timeout crearía una segunda guía y un segundo
+    // paquete.
     const viaApi = await swaypGuideForReprogram(
       admin,
       shipmentId,
@@ -652,20 +675,22 @@ export async function registerRerouteCall(
       input.nextFollowupAt,
       input.note,
     );
-    const localCode = rescheduleGuideCode(cur.order_name, input.nextFollowupAt);
-    const guideCode = viaApi.ok ? String(viaApi.guia) : localCode;
-    // El operador tiene que enterarse de que la guía NO existe en Swayp: es la
-    // única señal de que hay que cargarla a mano por el Excel.
-    const swaypNotice =
-      !viaApi.ok && env.swaypEnabled()
-        ? ` Swayp no la emitió (${viaApi.reason}); quedó con código manual.`
-        : "";
+    // SIN NÚMERO DE SWAYP NO HAY GUÍA (16-09-2026). Antes se caía al código
+    // Kapta —`<pedido><DDMMYYYY>`— y la guía se creaba igual, con la operadora
+    // enterándose por un aviso al final. Ese número Swayp no lo conoce: no
+    // aparece en su panel, no descuenta su stock y no rastrea. Ahora el fallo
+    // PARA la gestión y dice el motivo que dio Swayp, que hasta hoy quedaba
+    // enterrado en el aviso.
+    if (!viaApi.ok) {
+      return { error: `Swayp no emitió la guía: ${viaApi.reason}. La reprogramación no se registró.` };
+    }
+    const guideCode = String(viaApi.guia);
     if (guideCode) {
       // carry the reprogramación date onto the new active guide at insert time
       const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode, {
         childNextFollowupAt: input.nextFollowupAt,
-        swaypGuide: viaApi.ok ? String(viaApi.guia) : null,
-        swaypState: viaApi.ok ? viaApi.idEstado : null,
+        swaypGuide: String(viaApi.guia),
+        swaypState: viaApi.idEstado,
       });
       // A failure here (e.g. the code was already used) is surfaced rather than
       // falling back to En ruta — that would re-activate the old, unusable guide.
@@ -683,9 +708,7 @@ export async function registerRerouteCall(
       await syncMasterForShipment(admin, shipmentId, spun.childId);
       revalidatePath("/dashboard/envios");
       return {
-        notice:
-          `Confirmado — nueva guía Swayp ${spun.guideCode} (En ruta).` +
-          (viaApi.ok ? " Emitida por Swayp." : swaypNotice),
+        notice: `Confirmado — nueva guía Swayp ${spun.guideCode} (En ruta). Emitida por Swayp.`,
       };
     }
   }
@@ -1227,10 +1250,12 @@ export async function reprogramCancelledShipmentException(
       .maybeSingle();
     linkedOrderName = (linked as { name: string | null } | null)?.name ?? null;
   }
-  const orderName = effectiveOrderName(current.order_name, linkedOrderName);
-  const localCode = rescheduleGuideCode(orderName, input.nextFollowupAt);
-  if (!localCode) {
-    return { error: "Este envío no tiene N° de pedido para generar automáticamente la nueva guía Swayp." };
+  // El N° de pedido sigue siendo obligatorio, pero ya no porque se acuñe un
+  // código con él: hace falta para pedirle la guía a Swayp, que declara los
+  // productos del pedido. Antes esto se comprobaba acuñando el código local y
+  // mirando si salía vacío, un rodeo que dejaba de tener sentido al retirarlo.
+  if (!effectiveOrderName(current.order_name, linkedOrderName)?.trim()) {
+    return { error: "Este envío no tiene N° de pedido, así que Swayp no puede emitir la nueva guía." };
   }
 
   // Never use the cached flag for this exception: inventory may have changed
@@ -1269,12 +1294,12 @@ export async function reprogramCancelledShipmentException(
     input.nextFollowupAt,
     note,
   );
-  const guideCode = viaApi.ok ? String(viaApi.guia) : localCode;
-  const swaypNotice = viaApi.ok
-    ? " Emitida por Swayp."
-    : env.swaypEnabled()
-      ? ` Swayp no la emitió (${viaApi.reason}); quedó con código manual.`
-      : "";
+  // Sin número de Swayp no hay guía: ver la reja gemela en `registerRerouteCall`.
+  if (!viaApi.ok) {
+    return { error: `Swayp no emitió la guía: ${viaApi.reason}. El reenvío no se registró.` };
+  }
+  const guideCode = String(viaApi.guia);
+  const swaypNotice = " Emitida por Swayp.";
 
   const auditNote = `Excepción sobre guía anulada ${current.guide_code}. Motivo: ${note}`;
   const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode, {
@@ -1284,8 +1309,8 @@ export async function reprogramCancelledShipmentException(
     // Sin esto la hija tendría el número correcto en `guide_code` y
     // `swayp_guide` nulo — y el webhook busca por esa columna, así que el envío
     // se quedaría En ruta para siempre por más que el mensajero reportara.
-    swaypGuide: viaApi.ok ? String(viaApi.guia) : null,
-    swaypState: viaApi.ok ? viaApi.idEstado : null,
+    swaypGuide: String(viaApi.guia),
+    swaypState: viaApi.idEstado,
   });
   if ("error" in spun) return { error: spun.error };
 
@@ -1370,6 +1395,17 @@ async function spinOffFenixGuide(
   }
 
   const p = parent as unknown as Record<string, unknown>;
+
+  // LA REJA DEL CODBAR, en el único sitio por el que pasan las tres puertas que
+  // paren una guía Swayp: la reprogramación confirmada, el reenvío de una guía
+  // anulada y el alta con número escrito a mano. Ponerla en cada puerta habría
+  // dejado la cuarta sin ella el día que alguien añada una. Ver `swaypSinVinculo`.
+  const faltan = await swaypSinVinculo(
+    admin,
+    (p.store_id as string) ?? ctx.storeId,
+    (p.order_id as string | null) ?? null,
+  );
+  if (faltan.length) return { error: avisoSinVinculoSwayp(faltan) };
   const { data: child, error: insErr } = await admin
     .from("shipments")
     .insert({
@@ -1471,18 +1507,36 @@ export async function createFenixGuide(
     return { error: "La fecha de reprogramación tiene que ser futura." };
   }
 
+  // EL NÚMERO TIENE QUE SER DE SWAYP. Esta puerta existe para registrar una guía
+  // que la operadora YA creó en el panel de Swayp; hasta hoy también aceptaba el
+  // código que «Autogenerar» acuñaba con el pedido y la fecha, y ese número Swayp
+  // no lo conoce. Ver `esNumeroDeGuiaSwayp`.
+  const escrito = input.guideCode?.trim().toUpperCase() ?? "";
+  if (!esNumeroDeGuiaSwayp(escrito)) {
+    return {
+      error: escrito
+        ? `«${escrito}» no es un número de guía de Swayp: los suyos son solo dígitos, como 50000132589. Cópialo de su panel.`
+        : "Escribe el número de guía que te dio Swayp.",
+    };
+  }
+
   const admin = createAdminSupabase();
 
   // carry the reprogramación date onto the new Swayp guide (same as the
   // automatic confirma flow) so it isn't left En ruta without a dispatch date
-  const r = await spinOffFenixGuide(admin, ctx, shipmentId, input.guideCode, {
+  //
+  // `swaypGuide` se rellena con el mismo número: la guía existe en Swayp —la
+  // creó la operadora allá— y sin esa columna el webhook nunca la encontraría y
+  // el envío se quedaría En ruta para siempre.
+  const r = await spinOffFenixGuide(admin, ctx, shipmentId, escrito, {
     childNextFollowupAt: input.nextFollowupAt ?? null,
+    swaypGuide: escrito,
   });
   if ("error" in r) return { error: r.error };
 
   await syncMasterForShipment(admin, shipmentId, r.childId);
   revalidatePath("/dashboard/envios");
-  return { notice: `Guía Swayp ${r.guideCode} creada.` };
+  return { notice: `Guía Swayp ${r.guideCode} registrada.` };
 }
 
 // ── Guía Swayp DIRECTA: desde un pedido, sin guía Aliclik madre ──────────────
@@ -1673,6 +1727,18 @@ export interface DirectFenixGuidePreview {
   stockOk: boolean;
   stockReason: "sin_cobertura" | "sin_stock" | null;
   uncovered: string[];
+  /**
+   * Productos del pedido que Swayp no conoce: sin vínculo en `swayp_sku_map`.
+   *
+   * Va aparte de `uncovered` porque son dos hechos distintos y se arreglan en
+   * sitios distintos. «Sin stock» es inventario y se corrige en Stock Swayp;
+   * «sin vínculo» es catálogo y se corrige en Catálogo de productos. Mezclarlos
+   * mandaría a la operadora a la pantalla equivocada.
+   *
+   * En Lima esto es LO ÚNICO que se comprueba de verdad: la ciudad no lleva
+   * control de cantidad, así que el stock siempre dice que sí.
+   */
+  unlinked: string[];
   activeGuides: DirectGuideExisting[];
   closedGuidesCount: number;
   /**
@@ -1817,6 +1883,11 @@ export async function previewDirectFenixGuide(input: {
     sku: li.sku ?? null,
   }));
   const check = evaluateDirectFenixStock(city, (stock as FenixStockRow[]) ?? [], lineItems);
+  // El vínculo con el catálogo de Swayp, que en Lima es la única comprobación
+  // que dice algo: la ciudad no lleva control de cantidad, así que el stock
+  // siempre sale en verde. Ver `productosSinVinculo`.
+  const mapaSwayp = await cargarMapaSwayp(admin, order.store_id);
+  const unlinked = productosSinVinculo(lineItems, mapaSwayp);
 
   const guides = await findGuidesOfOrder(admin, order);
   // Una salida «por definir» no estorba: la guía se le escribe encima. Se
@@ -1836,6 +1907,15 @@ export async function previewDirectFenixGuide(input: {
     );
   }
   warnings.push("El pedido no tiene coordenadas GPS; el Excel de programación saldrá sin ubicación.");
+  // Mapa vacío = reja del vínculo apagada (mismo interruptor que `buildProductos`).
+  // No se bloquea —una tienda recién configurada no puede quedarse sin guías— pero
+  // tampoco se calla: sin vínculos, Swayp busca los productos POR NOMBRE, que es
+  // la vía que su propio desarrollador llama inestable.
+  if (mapaSwayp.size === 0) {
+    warnings.push(
+      "Esta tienda no tiene ningún producto vinculado a Swayp; la guía saldrá declarando los productos por nombre, que es la vía inestable. Vincúlalos en Catálogo de productos.",
+    );
+  }
   if (!refundedTotal && totalRefunded > 0) {
     warnings.push("El pedido tiene un reembolso parcial en Shopify; verifica el monto a cobrar.");
   }
@@ -1871,6 +1951,7 @@ export async function previewDirectFenixGuide(input: {
     stockOk: check.ok,
     stockReason: check.ok ? null : check.reason ?? null,
     uncovered: check.uncovered,
+    unlinked,
     activeGuides,
     closedGuidesCount,
     fillableOutputCode: rellenable?.output_code ?? null,
@@ -1979,6 +2060,42 @@ async function createFenixGuideViaApi(args: {
  * Devuelve el motivo en vez de lanzar: para el llamador, no conseguir número de
  * Swayp no es un error —es seguir por Excel, como hasta hoy.
  */
+/**
+ * Los productos de un pedido que Swayp NO tiene en su catálogo.
+ *
+ * LA REGLA, dicha por la operación el 16-09-2026: sin vínculo de codbar no se
+ * genera guía Swayp. En Lima es la única condición que gobierna —la ciudad no
+ * lleva control de cantidad a propósito— y en provincia se suma al stock.
+ *
+ * Una sola función para todas las puertas. Antes esto solo se preguntaba dentro
+ * de `buildSwaypGuide`, o sea con la llamada a la API ya en marcha: fallaba, el
+ * flujo caía al código local y la guía se creaba igual.
+ *
+ * Devuelve vacío cuando no hay nada que afirmar —pedido ilegible, o la tienda
+ * todavía no vinculó nada—: ese es el mismo interruptor que ya gobernaba
+ * `buildProductos`, y con él una tienda recién configurada no se queda sin poder
+ * emitir. Quien muestre esto avisa aparte de que la reja está apagada.
+ */
+async function swaypSinVinculo(
+  admin: SupabaseClient,
+  storeId: string,
+  orderId: string | null | undefined,
+): Promise<string[]> {
+  if (!orderId) return [];
+  const { data } = await admin
+    .from("orders")
+    .select("line_items")
+    .eq("id", orderId)
+    .maybeSingle();
+  const lineItems = ((data as { line_items?: OrderLineItem[] } | null)?.line_items ?? []).map((li) => ({
+    title: li.title ?? "",
+    quantity: li.quantity ?? 1,
+    sku: li.sku ?? null,
+  }));
+  if (!lineItems.length) return [];
+  return productosSinVinculo(lineItems, await cargarMapaSwayp(admin, storeId));
+}
+
 async function swaypGuideForReprogram(
   admin: SupabaseClient,
   shipmentId: string,
@@ -2148,6 +2265,18 @@ export async function createDirectFenixGuide(input: {
     return { error: `Swayp no tiene cobertura en ${district || "el destino del pedido"}.` };
   }
 
+  // REJA DEL VÍNCULO. Sin esto, un producto que Swayp no conoce llegaba hasta la
+  // llamada a la API, esta fallaba con «Falta vincular a Swayp», y el flujo caía
+  // al código local y CREABA LA GUÍA IGUAL: una caja despachada contra un número
+  // que Swayp nunca emitió, con el fallo contado en un aviso al final.
+  //
+  // El respaldo del código local sigue vivo para lo que de verdad es una
+  // limitación de Swayp —una ciudad que su API no atiende—. Un vínculo que falta
+  // es un hueco NUESTRO, se arregla en dos minutos y no puede despachar una caja
+  // mientras tanto.
+  const sinVinculo = productosSinVinculo(lineItems, await cargarMapaSwayp(admin, order.store_id));
+  if (sinVinculo.length) return { error: avisoSinVinculoSwayp(sinVinculo) };
+
   // Dispatch date: required, from tomorrow (Lima) onward — the day's Excel is
   // usually already sent, so a same-day guide would never reach Swayp.
   const dispatchDay = (input.dispatchDateIso || "").slice(0, 10);
@@ -2164,7 +2293,7 @@ export async function createDirectFenixGuide(input: {
   // guide_code — el punto de todo esto es dejar de inventarlo localmente.
   let swaypGuide: string | null = null;
   let swaypState: number | null = null;
-  let swaypNotice = "";
+  const swaypNotice = "";
   if (!input.guideCode?.trim()) {
     const viaApi = await createFenixGuideViaApi({
       admin,
@@ -2180,21 +2309,28 @@ export async function createDirectFenixGuide(input: {
       dispatchDateIso: input.dispatchDateIso,
       observaciones: input.note?.trim() || null,
     });
-    if (viaApi.ok) {
-      swaypGuide = viaApi.guia;
-      swaypState = viaApi.idEstado;
-    } else if (env.swaypEnabled()) {
-      // El operador tiene que enterarse de que la guía NO existe en Swayp: es
-      // la única señal de que hay que cargarla a mano allá.
-      swaypNotice = ` Swayp no la emitió (${viaApi.reason}); quedó con código manual.`;
+    // Sin número de Swayp no hay guía. Ver la reja gemela en `registerRerouteCall`.
+    if (!viaApi.ok) {
+      return { error: `Swayp no emitió la guía: ${viaApi.reason}. No se creó ninguna salida.` };
     }
+    swaypGuide = viaApi.guia;
+    swaypState = viaApi.idEstado;
   }
 
-  const code =
-    swaypGuide ??
-    (input.guideCode?.trim().toUpperCase() || rescheduleGuideCode(order.name, input.dispatchDateIso)).trim();
+  // El código escrito a mano tiene que SER de Swayp. Autogenerarlo con el
+  // pedido y la fecha era acuñar un número que Swayp no conoce, que es
+  // justamente lo que esta regla cierra.
+  const escrito = input.guideCode?.trim().toUpperCase() ?? "";
+  if (escrito && !esNumeroDeGuiaSwayp(escrito)) {
+    return {
+      error:
+        `«${escrito}» no es un número de guía de Swayp: los suyos son solo dígitos, como 50000132589. ` +
+        `Cópialo de su panel, o deja el campo vacío para que Swayp lo emita.`,
+    };
+  }
+  const code = swaypGuide ?? escrito;
   if (!code) {
-    return { error: "El pedido no tiene número para autogenerar; ingresa el código de guía manualmente." };
+    return { error: "Swayp no devolvió número de guía. Vuelve a intentarlo." };
   }
 
   const insertRow = {

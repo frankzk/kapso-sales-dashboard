@@ -1,8 +1,8 @@
 -- ============================================================================
--- 0179_gf_readd_declined_item.sql — un paquete que el motorizado no llevó
+-- 0187_gf_readd_declined_item.sql — un paquete que el motorizado no llevó
 -- puede volver a la MISMA caja.
 --
--- «No lo llevo» (0174/0177) retira el ítem de la caja: la fila se queda con
+-- «No lo llevo» (0182/0177) retira el ítem de la caja: la fila se queda con
 -- `removed_at`, `pickup_declined_*` y el motivo, y la solicitud vuelve a
 -- «por asignar». Al asignarlo otra vez al mismo motorizado el mismo día,
 -- `gf_add_item_in_custody` insertaba una fila nueva en la misma caja y
@@ -44,9 +44,9 @@ begin
   if not found then raise exception 'Paquete no encontrado.'; end if;
   if v_shipment.custody_state <> 'empresa' then raise exception 'El paquete ya no está en custodia de Grupo GF.'; end if;
 
-  -- Fila nueva, o la retirada de esta misma caja que revive (0179). Revivirla
+  -- Fila nueva, o la retirada de esta misma caja que revive (0187). Revivirla
   -- es un UPDATE de `removed_at` sobre una carga en custodia, que el guardián
-  -- de 0177 solo admite dentro de un retiro con `gf.withdraw = on`: aquí es el
+  -- de 0185 solo admite dentro de un retiro con `gf.withdraw = on`: aquí es el
   -- movimiento inverso, dentro de la misma transacción y con el mismo pase.
   perform set_config('gf.withdraw', 'on', true);
   insert into dispatch_manifest_items(manifest_id, shipment_id, store_id, added_by,

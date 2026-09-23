@@ -80,7 +80,7 @@ function navItems(
     { href: "/dashboard/productividad", label: "Productividad", icon: IconHeadset },
     { href: "/dashboard/stores", label: "Tiendas", icon: IconStore },
     // Liquidaciones (/dashboard/liquidaciones) y Liquidaciones 2
-    // (/dashboard/liquidaciones-2, hojas por dominio, 0168, MOM §30) fuera del
+    // (/dashboard/liquidaciones-2, hojas por dominio, 0176, MOM §30) fuera del
     // menú desde el 22-09-2026 a pedido de operación. Las páginas siguen
     // funcionando en su URL; para volver a mostrarlas, repón estas dos líneas.
     { href: "/dashboard/costos", label: "Costos", icon: IconMoney },

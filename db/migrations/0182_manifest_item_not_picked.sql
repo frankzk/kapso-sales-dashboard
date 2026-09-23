@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0174_manifest_item_not_picked.sql — «No lo recojo»: el motorizado rechaza un
+-- 0182_manifest_item_not_picked.sql — «No lo recojo»: el motorizado rechaza un
 -- paquete de su caja al recibirla (MOM §29.13).
 --
 -- Antes la recepción era todo o nada: la carga pasaba a custodia solo con el

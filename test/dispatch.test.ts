@@ -18,7 +18,7 @@ describe("dispatchProgress", () => {
   });
 });
 
-describe("dispatchProgress con «no lo recojo» (0174)", () => {
+describe("dispatchProgress con «no lo recojo» (0182)", () => {
   it("el rechazado sale del total y se cuenta aparte: el 100 % es sobre los aceptados", () => {
     const progress = dispatchProgress([
       { office_checked_at: "x", pickup_checked_at: "x" },

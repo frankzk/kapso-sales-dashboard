@@ -13,6 +13,7 @@ vi.mock("@/lib/shalom/session", () => ({
 import {
   buildButtonReply,
   handleInboundMessage,
+  isAcknowledgement,
   matchPaymentButton,
 } from "@/lib/wa-button-replies";
 import type { PaymentMethod } from "@/lib/payment-methods";
@@ -96,6 +97,41 @@ describe("buildButtonReply", () => {
     ).toBe("YAPE GRUPO GF SAC 930 555 309");
   });
 
+  it("con cobro de Flow y sin texto configurado, manda el link y cuándo vence", () => {
+    const out = buildButtonReply(
+      "link_pago",
+      METHODS,
+      { paymentLinkTemplate: null },
+      { saldo: "S/ 119.00", saldoValue: 119, pedido: "#KP1", payLink: "https://flow/pay?token=T", payLinkHours: 48 },
+    );
+    expect(out).toBe(
+      "💵 Saldo pendiente: S/ 119.00\n\nPuedes pagar aquí, con Yape o tarjeta:\nhttps://flow/pay?token=T\n\n⏱️ El link vence en 48 horas.",
+    );
+  });
+
+  it("el texto configurado puede poner el link donde quiera con {link}", () => {
+    expect(
+      buildButtonReply(
+        "link_pago",
+        METHODS,
+        { paymentLinkTemplate: "Paga {saldo} del {pedido}: {link}" },
+        { saldo: "S/ 119.00", saldoValue: 119, pedido: "#KP1", payLink: "https://flow/pay?token=T" },
+      ),
+    ).toBe("Paga S/ 119.00 del #KP1: https://flow/pay?token=T");
+  });
+
+  it("un texto que promete {link} sin link cae al Yape, no se manda a medias", () => {
+    // Mandar «Paga aquí: » con el hueco vacío es peor que no mandar el link.
+    expect(
+      buildButtonReply(
+        "link_pago",
+        METHODS,
+        { paymentLinkTemplate: "Paga aquí: {link}" },
+        { saldo: "S/ 119.00", saldoValue: 119, pedido: "#KP1", payLink: null },
+      ),
+    ).toBe("💵 Saldo pendiente: S/ 119.00\n\nYAPE GRUPO GF SAC 930 555 309");
+  });
+
   it("a quien ya no debe nada no se le enseña ninguna cuenta", () => {
     // Darle el número a quien ya pagó es invitarla a pagar dos veces.
     const pagado = { saldo: "S/ 0.00", saldoValue: 0, pedido: "#KP133540" };
@@ -135,6 +171,8 @@ function fakeAdmin(
     master?: any;
     payments?: any[];
     shipment?: any;
+    /** Una respuesta nuestra ya enviada desde el aviso (anti-repetición). */
+    yaContestado?: any;
   } = {},
 ) {
   const inserts: { table: string; row: any }[] = [];
@@ -160,9 +198,13 @@ function fakeAdmin(
         },
         select: () => chain,
         eq: () => chain,
+        gte: () => chain,
         order: () => chain,
         limit: () => chain,
         maybeSingle: () => {
+          if (table === "wa_auto_replies") {
+            return Promise.resolve({ data: opts.yaContestado ?? null });
+          }
           if (table === "shalom_transit_notifications") {
             return Promise.resolve({
               data:
@@ -405,6 +447,76 @@ describe("handleInboundMessage", () => {
     expect(send.mock.calls[0]![1].body).not.toContain("930 555 309");
   });
 
+  it("con Flow encendido, «Link de pago» crea el cobro por el saldo de HOY", async () => {
+    const admin = fakeAdmin({ lastNotification: { order_id: "ord-1" } });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.L" });
+    const ensureLink = vi.fn().mockResolvedValue({
+      ok: true,
+      link: "https://www.flow.cl/app/web/pay.php?token=TOK",
+      reused: false,
+      id: "l1",
+      expiresAt: null,
+    });
+    await handleInboundMessage(
+      admin,
+      "store",
+      { ...CREDS, flowcl_link_enabled: true, flowcl_api_key: "a", flowcl_secret_key: "s", flowcl_webhook_secret: "h", flowcl_link_email: "cobros@x.pe", flowcl_link_ttl_hours: 48, flowcl_link_yape_only: false, currency: "PEN" },
+      buttonEvent("Link de pago", "wamid.BTN5"),
+      { sendText: send, ensureLink },
+    );
+    // S/ 89.10 con S/ 30 validados: el cobro es por S/ 59.10, no por el total.
+    expect(ensureLink.mock.calls[0]![1]).toMatchObject({
+      orderId: "ord-1",
+      kind: "diferencia",
+      amount: 59.1,
+      email: "cobros@x.pe",
+    });
+    expect(send.mock.calls[0]![1].body).toContain("https://www.flow.cl/app/web/pay.php?token=TOK");
+    expect(send.mock.calls[0]![1].body).toContain("💵 Saldo pendiente: S/ 59.10");
+  });
+
+  it("los otros botones NO crean cobros: pulsar «Yape» no emite una orden", async () => {
+    const admin = fakeAdmin();
+    const ensureLink = vi.fn();
+    await handleInboundMessage(
+      admin,
+      "store",
+      { ...CREDS, flowcl_link_enabled: true, flowcl_api_key: "a", flowcl_secret_key: "s", flowcl_webhook_secret: "h" },
+      buttonEvent("Pagar con Yape", "wamid.BTN6"),
+      { sendText: vi.fn().mockResolvedValue({ ok: true, id: "x" }), sendDocument: vi.fn().mockResolvedValue({ ok: true, id: "d" }), ensureLink },
+    );
+    expect(ensureLink).not.toHaveBeenCalled();
+  });
+
+  it("si la pasarela falla, la clienta recibe el Yape igual y queda la anomalía", async () => {
+    // Que Flow esté caído no puede dejarla sin forma de pagar.
+    const admin = fakeAdmin({ lastNotification: { order_id: "ord-1" } });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.L" });
+    const ensureLink = vi.fn().mockResolvedValue({ ok: false, reason: "flow_rechazo:timeout" });
+    await handleInboundMessage(
+      admin,
+      "store",
+      { ...CREDS, flowcl_link_enabled: true, flowcl_api_key: "a", flowcl_secret_key: "s", flowcl_webhook_secret: "h", flowcl_link_email: "cobros@x.pe" },
+      buttonEvent("Link de pago", "wamid.BTN7"),
+      { sendText: send, ensureLink },
+    );
+    expect(send.mock.calls[0]![1].body).toContain("YAPE GRUPO GF SAC 930 555 309");
+    expect(admin.anomalies.at(-1)).toMatchObject({ p_reason: "flowcl_link_fallido" });
+  });
+
+  it("con el cobro apagado el botón contesta como siempre", async () => {
+    const admin = fakeAdmin({ lastNotification: { order_id: "ord-1" } });
+    const ensureLink = vi.fn();
+    await handleInboundMessage(
+      admin,
+      "store",
+      { ...CREDS, shalom_transit_payment_link: "Saldo {saldo} del {pedido}" },
+      buttonEvent("Link de pago", "wamid.BTN8"),
+      { sendText: vi.fn().mockResolvedValue({ ok: true, id: "x" }), ensureLink },
+    );
+    expect(ensureLink).not.toHaveBeenCalled();
+  });
+
   it("un comprobante en revisión todavía no descuenta", async () => {
     const admin = fakeAdmin({
       lastNotification: { order_id: "ord-1" },
@@ -422,5 +534,158 @@ describe("handleInboundMessage", () => {
       { sendText: send },
     );
     expect(send.mock.calls[0]![1].body).toBe("Saldo S/ 59.10 del #KP133540");
+  });
+});
+
+// ── El «ok» que no pregunta nada ────────────────────────────────────────────
+
+describe("isAcknowledgement", () => {
+  it("reconoce los acuses de recibo, con y sin tilde", () => {
+    for (const t of ["ok", "Ok", "OK", "okey", "listo", "gracias", "Muchas gracias", "ya", "sí", "perfecto"]) {
+      expect(isAcknowledgement(t)).toBe(true);
+    }
+  });
+
+  it("un mensaje de solo emojis dice lo mismo que un «ok»", () => {
+    expect(isAcknowledgement("👍")).toBe(true);
+    expect(isAcknowledgement("🙏🙏")).toBe(true);
+  });
+
+  it("«buenas noches» y «muy amable» también son cierres", () => {
+    // Están en la lista del router del bot, que ante ellos calla. Si nosotros
+    // no los reconociéramos, la clienta no recibiría NADA de nadie.
+    expect(isAcknowledgement("buenas noches")).toBe(true);
+    expect(isAcknowledgement("muy amable")).toBe(true);
+    expect(isAcknowledgement("mil gracias")).toBe(true);
+    expect(isAcknowledgement("de nada")).toBe(true);
+    expect(isAcknowledgement("de acuerdo")).toBe(true);
+  });
+
+  it("un mensaje de puros dígitos NO es un acuse: suele ser el nº de operación", () => {
+    // El router del bot lo trata como trivial y calla. Nosotros también
+    // callamos, pero por el motivo contrario: es un DATO, y quien puede hacer
+    // algo con él es la asesora. Pedido al bot: que los mande a `texto`.
+    expect(isAcknowledgement("707784")).toBe(false);
+    expect(isAcknowledgement("6069")).toBe(false);
+  });
+
+  it("una frase larga de puros acuses sigue siendo un acuse", () => {
+    // Sin límite de longitud: el router no lo tiene, y ponerlo aquí dejaba
+    // frases que él calla y nosotros también. Ahí no contesta nadie.
+    expect(isAcknowledgement("buenos dias muchas gracias muy amable de nada")).toBe(true);
+  });
+
+  it("«no» NUNCA es un acuse, aunque sea cortito", () => {
+    // Después de pedirle un saldo, un «no» es un rechazo: abre devolución, no
+    // un recordatorio del Yape. Va a la asesora.
+    expect(isAcknowledgement("no")).toBe(false);
+    expect(isAcknowledgement("no gracias")).toBe(false);
+    expect(isAcknowledgement("ya no")).toBe(false);
+    expect(isAcknowledgement("quiero cancelar")).toBe(false);
+    expect(isAcknowledgement("devolver")).toBe(false);
+  });
+
+  it("NO se traga una consulta de verdad", () => {
+    // Éstas tienen que llegar a la asesora. Contestarles con un número de
+    // Yape sería atropellar a quien está preguntando otra cosa.
+    expect(isAcknowledgement("ok pero me llegó mal el producto")).toBe(false);
+    expect(isAcknowledgement("¿cuándo llega?")).toBe(false);
+    expect(isAcknowledgement("ya pagué, les mando la constancia")).toBe(false);
+    expect(isAcknowledgement("no lo quiero")).toBe(false);
+    expect(isAcknowledgement("")).toBe(false);
+  });
+});
+
+function textEvent(text: string, id = "wamid.TXT1") {
+  return {
+    event: "whatsapp.message.received",
+    message: {
+      id,
+      from: "51987654321",
+      type: "text",
+      text: { body: text },
+      kapso: { direction: "inbound", phone_number_id: "PN-451" },
+    },
+  };
+}
+
+describe("handleInboundMessage con un «ok»", () => {
+  it("le repite el saldo y el Yape", async () => {
+    const admin = fakeAdmin({ lastNotification: { id: "n1", order_id: "ord-1", shipment_id: "ship-1", sent_at: "2026-09-19T10:00:00Z" } });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.OUT" });
+    const res = await handleInboundMessage(admin, "store", CREDS, textEvent("ok"), {
+      sendText: send,
+      nowIso: "2026-09-19T11:00:00Z",
+    });
+    expect(res.reason).toBe("replied:ack");
+    expect(send.mock.calls[0]![1].body).toBe(YAPE_CON_SALDO);
+    expect(admin.inserts[0]).toMatchObject({ table: "wa_auto_replies", row: { trigger: "ack" } });
+  });
+
+  it("sin aviso previo, un «ok» no es nuestro", async () => {
+    const admin = fakeAdmin({ lastNotification: null });
+    const send = vi.fn();
+    const res = await handleInboundMessage(admin, "store", CREDS, textEvent("ok", "wamid.T2"), { sendText: send });
+    expect(res.reason).toBe("ack_sin_aviso");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("pasadas 48 h del aviso, ya es otra conversación", async () => {
+    const admin = fakeAdmin({ lastNotification: { id: "n1", order_id: "ord-1", shipment_id: "ship-1", sent_at: "2026-09-15T10:00:00Z" } });
+    const send = vi.fn();
+    const res = await handleInboundMessage(admin, "store", CREDS, textEvent("gracias", "wamid.T3"), {
+      sendText: send,
+      nowIso: "2026-09-19T11:00:00Z",
+    });
+    expect(res.reason).toBe("ack_fuera_de_ventana");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a un segundo «ok» ya no se le repite: eso es acoso, no ayuda", async () => {
+    const admin = fakeAdmin({
+      lastNotification: { id: "n1", order_id: "ord-1", shipment_id: "ship-1", sent_at: "2026-09-19T10:00:00Z" },
+      yaContestado: { id: "r1" },
+    });
+    const send = vi.fn();
+    const res = await handleInboundMessage(admin, "store", CREDS, textEvent("gracias", "wamid.T5"), {
+      sendText: send,
+      nowIso: "2026-09-19T11:00:00Z",
+    });
+    expect(res.reason).toBe("ack_ya_contestado");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("una consulta de verdad sigue su camino hacia la asesora", async () => {
+    const admin = fakeAdmin();
+    const send = vi.fn();
+    const res = await handleInboundMessage(admin, "store", CREDS, textEvent("¿me llegó mal el producto?", "wamid.T4"), {
+      sendText: send,
+    });
+    expect(res.reason).toBe("not_a_payment_button");
+    expect(send).not.toHaveBeenCalled();
+    expect(admin.inserts).toHaveLength(0);
+  });
+});
+
+// ── Olva (0175): mismos botones, sin ticket ─────────────────────────────────
+
+describe("botones tras un aviso de Olva", () => {
+  it("contesta con las cuentas y el saldo, y NO manda ningún ticket ni anota «sin OSE ID»", async () => {
+    const admin = fakeAdmin({
+      lastNotification: { id: "n-olva", order_id: "ord-1", shipment_id: "ship-olva", sent_at: "2026-09-19T10:00:00Z", courier: "olva" },
+    });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.OUT" });
+    const sendDoc = vi.fn();
+    const res = await handleInboundMessage(admin, "store", CREDS, buttonEvent("Pagar con Yape"), {
+      sendText: send,
+      sendDocument: sendDoc,
+    });
+    expect(res.reason).toBe("replied:yape");
+    expect(send).toHaveBeenCalledWith(
+      { apiKey: "k" },
+      { phoneNumberId: "PN-451", to: "51987654321", body: YAPE_CON_SALDO },
+    );
+    expect(sendDoc).not.toHaveBeenCalled();
+    expect(admin.updates.some((u: any) => u.table === "shalom_transit_notifications")).toBe(false);
   });
 });

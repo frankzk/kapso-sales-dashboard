@@ -331,7 +331,7 @@ export function DispatchBoxPanel({
   const checkComplete = selected?.state !== "cancelled" && !!progress && (mode === "office" ? progress.officeComplete : progress.pickupComplete);
   // Con la carga ya en custodia, el cotejo de oficina se cierra (la caja ya
   // salió), pero el de recojo sigue abierto si el modo del proveedor no es
-  // «exigir» (0177): es el respaldo cuando el motorizado no puede confirmar
+  // «exigir» (0185): es el respaldo cuando el motorizado no puede confirmar
   // desde su teléfono. El servidor (`scanManifestItem`) aplica la misma regla.
   const pickupMode = selected ? (data.pickupModeByOrg?.[selected.org_id] ?? "exigir") : "exigir";
   const custodyPickupOpen = !!selected && selected.state === "in_custody" && pickupMode !== "exigir";

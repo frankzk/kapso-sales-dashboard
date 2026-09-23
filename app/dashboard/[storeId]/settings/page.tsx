@@ -9,6 +9,8 @@ import { confirmationCycleDays } from "@/lib/order-confirmation";
 import { PAYMENT_METHOD_COLUMNS } from "@/lib/payment-methods";
 import { EmptyState } from "@/components/ui";
 import { StoreSettings, type StoreSettingsData } from "@/components/store-settings";
+import { listEscalation } from "./actions";
+import { listEscalationCandidates } from "@/app/dashboard/cobranza/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -123,6 +125,14 @@ export default async function StoreSettingsPage({
       .order("created_at", { ascending: true }),
   ]);
 
+  // La escalera de cobranza y quién puede entrar en ella (0172). Van aparte
+  // del Promise.all porque pasan por `requireStoreAdmin`, que ya comprueba
+  // permisos por su cuenta.
+  const [escalation, escalationCandidates] = await Promise.all([
+    listEscalation(storeId),
+    listEscalationCandidates(storeId),
+  ]);
+
   const data: StoreSettingsData = {
     store: {
       id: full.id,
@@ -188,6 +198,23 @@ export default async function StoreSettingsPage({
       shalom_transit_hour_start: full.shalom_transit_hour_start ?? 8,
       shalom_transit_hour_end: full.shalom_transit_hour_end ?? 21,
       shalom_transit_payment_link: full.shalom_transit_payment_link ?? null,
+      shalom_arrival_template_enabled: full.shalom_arrival_template_enabled ?? false,
+      shalom_arrival_template_name: full.shalom_arrival_template_name ?? null,
+      shalom_arrival_params: full.shalom_arrival_params ?? null,
+      shalom_arrival_attach_ticket: full.shalom_arrival_attach_ticket ?? false,
+      shalom_voucher_intake_enabled: full.shalom_voucher_intake_enabled ?? false,
+      shalom_pickup_key_autosend_enabled: full.shalom_pickup_key_autosend_enabled ?? false,
+      // Pre-0175 las columnas no existen ⇒ avisos de Olva apagados.
+      olva_transit_template_enabled: full.olva_transit_template_enabled ?? false,
+      olva_transit_template_name: full.olva_transit_template_name ?? null,
+      olva_transit_params: full.olva_transit_params ?? null,
+      olva_arrival_template_enabled: full.olva_arrival_template_enabled ?? false,
+      olva_arrival_template_name: full.olva_arrival_template_name ?? null,
+      olva_arrival_params: full.olva_arrival_params ?? null,
+      flowcl_link_enabled: full.flowcl_link_enabled ?? false,
+      flowcl_link_email: full.flowcl_link_email ?? null,
+      flowcl_link_ttl_hours: full.flowcl_link_ttl_hours ?? 48,
+      flowcl_link_yape_only: full.flowcl_link_yape_only ?? false,
       meta_ad_accounts: normalizeMetaAdAccounts(
         full.meta_ad_accounts,
         full.meta_ad_account_id,
@@ -220,6 +247,8 @@ export default async function StoreSettingsPage({
     replyTemplates: (replyTemplates as StoreSettingsData["replyTemplates"]) ?? [],
     districtCoverage: (districtCoverage as StoreSettingsData["districtCoverage"]) ?? [],
     paymentMethods: (paymentMethods as StoreSettingsData["paymentMethods"]) ?? [],
+    escalation,
+    escalationCandidates,
   };
 
   const banner = sp.installed

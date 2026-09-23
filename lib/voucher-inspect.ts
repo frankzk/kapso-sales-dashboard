@@ -14,6 +14,8 @@ import { decryptOrNull } from "@/lib/crypto";
 import {
   analyzeYapeVoucherFromEnv,
   extractYapeVoucherFromEnv,
+  type YapeVisionResult,
+  type YapeVoucherFields,
 } from "@/lib/vision";
 import {
   readingLooksSwapped,
@@ -72,6 +74,82 @@ export const EMPTY_INSPECTION: VoucherInspection = {
 };
 
 /**
+ * Junta las dos respuestas de visión en UNA lectura, con la corrección de la
+ * inversión aplicada y el jsonb de auditoría ya armado.
+ *
+ * Es pura y está aquí, exportada, por una razón concreta: la forma de ese jsonb
+ * es un CONTRATO. `yapeRecipientReadingFromVision` lo relee en el drawer bajo
+ * `vision.extracted.*` para decir si el dinero llegó a una cuenta nuestra. Cada
+ * sitio que guarde un comprobante y escriba su propio objeto plano apaga ese
+ * control sin que salte nada: el nombre del receptor está guardado, pero nadie
+ * lo encuentra, y la pantalla dice «no pudo leerse» sobre una lectura perfecta.
+ * Pasó con la ingesta por WhatsApp (MOM §12), en todos sus comprobantes.
+ */
+export function voucherReading(
+  verdict: YapeVisionResult,
+  extracted: YapeVoucherFields,
+  accounts: CollectionAccount[],
+): VoucherInspection {
+  // El lector a veces devuelve el pagador y el receptor cambiados de sitio. Se
+  // corrige ANTES de juzgar: si no, un cobro impecable queda acusado de desvío
+  // por un nombre que ni siquiera es el del receptor.
+  const swapped = readingLooksSwapped(
+    extracted.payerName,
+    extracted.recipientPhoneLastDigits,
+    accounts,
+  );
+  const recipientName = swapped ? extracted.payerName : extracted.recipientName;
+  const recipient = verifyYapeRecipient(
+    recipientName,
+    extracted.recipientPhoneLastDigits,
+    accounts,
+  );
+  const recipientCheck = recipient.status;
+  return {
+    ok: verdict.ok,
+    isVoucher: verdict.isVoucher,
+    fields: {
+      operationNumber: extracted.operationNumber,
+      operationLabel: extracted.operationLabel,
+      amount: extracted.amount,
+      paidAt: extracted.paidAt,
+      payerName: swapped ? extracted.recipientName : extracted.payerName,
+      recipientName,
+      recipientPhoneLastDigits: extracted.recipientPhoneLastDigits,
+      recipientCheck,
+      recipientAccount: recipient.account,
+      recipientSwapped: swapped,
+    },
+    payload: {
+      indicators: verdict.indicators,
+      model: verdict.model,
+      ok: verdict.ok,
+      extracted: {
+        operation_number: extracted.operationNumber,
+        // El rótulo bajo el que se leyó el número: es lo único que dice de qué
+        // banco vino el comprobante. Sin esto, "distribución por banco" no se
+        // puede responder con los datos que guardamos.
+        operation_label: extracted.operationLabel,
+        amount: extracted.amount,
+        paid_at: extracted.paidAt,
+        // Se guarda lo que el lector DIJO, sin corregir: el jsonb es la
+        // auditoría de la lectura, y `yapeRecipientReadingFromVision` vuelve a
+        // aplicar la corrección cada vez que alguien mira el comprobante.
+        payer_name: extracted.payerName,
+        recipient_name: extracted.recipientName,
+        recipient_swapped: swapped,
+        recipient_phone_last_digits: extracted.recipientPhoneLastDigits,
+        recipient_check: recipientCheck,
+        // A qué cuenta de cobro llegó, cuando se pudo determinar. Con varias
+        // cuentas, "verificado" a secas ya no dice dónde está el dinero.
+        recipient_account: recipient.account?.name ?? null,
+        ok: extracted.ok,
+      },
+    },
+  };
+}
+
+/**
  * Lee una imagen del bucket y le hace las dos preguntas de visión: "¿es un
  * comprobante?" y "¿qué dice?". Nunca lanza.
  */
@@ -112,63 +190,7 @@ export async function inspectVoucher(
     // Las cuentas de cobro de ESTA tienda. Si no hay ninguna configurada, la
     // verificación cae en «no se puede contrastar», jamás en «se desvió».
     const accounts = await loadStoreCollectionAccounts(admin, storeId);
-    // El lector a veces devuelve el pagador y el receptor cambiados de sitio.
-    // Se corrige ANTES de juzgar: si no, un cobro impecable queda acusado de
-    // desvío por un nombre que ni siquiera es el del receptor.
-    const swapped = readingLooksSwapped(
-      extracted.payerName,
-      extracted.recipientPhoneLastDigits,
-      accounts,
-    );
-    const recipientName = swapped ? extracted.payerName : extracted.recipientName;
-    const recipient = verifyYapeRecipient(
-      recipientName,
-      extracted.recipientPhoneLastDigits,
-      accounts,
-    );
-    const recipientCheck = recipient.status;
-    return {
-      ok: verdict.ok,
-      isVoucher: verdict.isVoucher,
-      fields: {
-        operationNumber: extracted.operationNumber,
-        operationLabel: extracted.operationLabel,
-        amount: extracted.amount,
-        paidAt: extracted.paidAt,
-        payerName: swapped ? extracted.recipientName : extracted.payerName,
-        recipientName,
-        recipientPhoneLastDigits: extracted.recipientPhoneLastDigits,
-        recipientCheck,
-        recipientAccount: recipient.account,
-        recipientSwapped: swapped,
-      },
-      payload: {
-        indicators: verdict.indicators,
-        model: verdict.model,
-        ok: verdict.ok,
-        extracted: {
-          operation_number: extracted.operationNumber,
-          // El rótulo bajo el que se leyó el número: es lo único que dice de qué
-          // banco vino el comprobante. Sin esto, "distribución por banco" no se
-          // puede responder con los datos que guardamos.
-          operation_label: extracted.operationLabel,
-          amount: extracted.amount,
-          paid_at: extracted.paidAt,
-          // Se guarda lo que el lector DIJO, sin corregir: el jsonb es la
-          // auditoría de la lectura, y `yapeRecipientReadingFromVision` vuelve a
-          // aplicar la corrección cada vez que alguien mira el comprobante.
-          payer_name: extracted.payerName,
-          recipient_name: extracted.recipientName,
-          recipient_swapped: swapped,
-          recipient_phone_last_digits: extracted.recipientPhoneLastDigits,
-          recipient_check: recipientCheck,
-          // A qué cuenta de cobro llegó, cuando se pudo determinar. Con varias
-          // cuentas, "verificado" a secas ya no dice dónde está el dinero.
-          recipient_account: recipient.account?.name ?? null,
-          ok: extracted.ok,
-        },
-      },
-    };
+    return voucherReading(verdict, extracted, accounts);
   } catch {
     return EMPTY_INSPECTION;
   }

@@ -221,7 +221,7 @@ export async function loadGroupGfCourierRouteCheck(
 }
 
 /**
- * El único sitio en código que lee `rider_pickup_mode` (0177). Sin proveedor,
+ * El único sitio en código que lee `rider_pickup_mode` (0185). Sin proveedor,
  * sin fila o con un valor desconocido se asume `exigir`: el comportamiento de
  * siempre, igual que `gf_rider_pickup_mode` en SQL.
  */

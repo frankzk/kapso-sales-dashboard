@@ -344,3 +344,60 @@ export function yapeRecipientReadingFromVision(
     swapped,
   };
 }
+
+/**
+ * QUÉ señal desmintió la cuenta, dicho para quien tiene el comprobante delante.
+ *
+ * El aviso decía «el destinatario o el celular receptor leído no coincide», y
+ * ese «o» es el problema: quien revisa no sabe cuál de los dos mirar. En
+ * #KP126085 el celular ···309 SÍ era la cuenta de la empresa y lo único
+ * equivocado era una palabra —el lector puso «Cerdo Gf S.a.c.» por «Grupo Gf
+ * S.a.c.»—, pero el mensaje presentaba las dos señales como igual de dudosas.
+ * El comprobante llevaba siete semanas parado.
+ *
+ * Distinguirlo importa porque las dos formas de fallar son casos distintos:
+ *
+ *   · Celular nuestro y nombre que no encaja → casi siempre lectura mala, pero
+ *     también es la forma que tendría un comprobante ajeno con nuestro número
+ *     delante (#AUR177034: «Rosa campos Mendoza» con ···309). Hay que mirar.
+ *   · Celular que no es de ninguna cuenta → eso sí es tajante.
+ *
+ * Devuelve null cuando no hay nada que desmentir.
+ */
+export function motivoDelDesencuentro(
+  reading: YapeRecipientReading,
+  accounts: CollectionAccount[],
+): string | null {
+  if (reading.status !== "mismatch") return null;
+
+  const usable = accounts.filter((a) => a.name.trim() && /^\d{3}$/.test(a.phoneLastDigits));
+  const lista = usable.length
+    ? usable.map((a) => `${a.name} · ···${a.phoneLastDigits}`).join(" / ")
+    : "ninguna cuenta de cobro configurada";
+
+  const celularNuestro = usable.find(
+    (a) => reading.phoneLastDigits && reading.phoneLastDigits.endsWith(a.phoneLastDigits),
+  );
+
+  if (celularNuestro) {
+    return (
+      `El celular receptor ···${celularNuestro.phoneLastDigits} SÍ es el de ${celularNuestro.name}, ` +
+      `pero el nombre leído —«${reading.name ?? "sin nombre"}»— no encaja con esa cuenta. ` +
+      "Abre el comprobante: si el nombre en la imagen es el de la cuenta, fue una lectura mala del " +
+      "lector; si es el de otra persona, el comprobante no es nuestro."
+    );
+  }
+
+  if (reading.phoneLastDigits) {
+    return (
+      `El celular receptor leído termina en ···${reading.phoneLastDigits}, que no es de ninguna ` +
+      `cuenta de cobro (${lista}). Es la señal tajante: contrasta la imagen y rechaza si el dinero ` +
+      "se fue a otra cuenta."
+    );
+  }
+
+  return (
+    `El nombre leído —«${reading.name ?? "sin nombre"}»— no encaja con ${lista}, y el comprobante ` +
+    "no dejó ver el celular receptor para contrastarlo. Abre la imagen."
+  );
+}

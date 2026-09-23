@@ -39,7 +39,7 @@ export interface DispatchManifestItem {
   removed_by: string | null;
   removed_at: string | null;
   removal_reason: string | null;
-  /** 0174: «No lo recojo» del motorizado. */
+  /** 0182: «No lo recojo» del motorizado. */
   pickup_declined_at?: string | null;
   pickup_declined_reason?: string | null;
   pickup_declined_by?: string | null;
@@ -86,7 +86,7 @@ export interface DispatchWorkspaceData {
    */
   warehousePending: number;
   /**
-   * Modo de recojo de Grupo GF por organización (0177). En «confirmar» y
+   * Modo de recojo de Grupo GF por organización (0185). En «confirmar» y
    * «ninguno» el cotejo de recojo se admite con la carga ya en custodia: es el
    * respaldo cuando el motorizado no puede confirmar desde su teléfono.
    */

@@ -39,7 +39,7 @@ export interface GfStop {
   collectedAmount: number | null;
   photoPath: string | null;
   voucherPath: string | null;
-  /** 0177: si había «Lo llevo» cuando se reportó; null si no se ha reportado. */
+  /** 0185: si había «Lo llevo» cuando se reportó; null si no se ha reportado. */
   pickupConfirmed: boolean | null;
   routeDate: string | null;
   /** planificada · en_curso · cerrada */

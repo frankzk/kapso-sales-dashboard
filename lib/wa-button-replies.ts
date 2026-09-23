@@ -16,6 +16,15 @@
 // los tres rótulos. Un cliente que escribe «yape» a mano sigue con el bot y la
 // asesora, como siempre — meterse ahí es justo el choque de dos voces que
 // docs/kapso-functions/README.md advierte.
+//
+// LA ÚNICA EXCEPCIÓN: un «ok» pelado. No es texto libre que interpretar, es un
+// acuse de recibo — no pregunta nada, no aporta dato nuevo, y el bot de ventas
+// no tiene nada que hacer con él. Se vio en producción: una clienta contestó
+// «Ok» al aviso y recibió «ya le paso tu consulta a una asesora», una
+// derivación por nada; otra contestó «ok» y no recibió nada. Ahí se le repite
+// el saldo y el Yape, una sola vez y dentro de las 48 h del aviso. La lista de
+// acuses es CERRADA (`ACKS`), igual que los rótulos de los botones: cualquier
+// frase fuera de ella sigue su camino hacia la asesora.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { StoreCreds } from "@/lib/ingest";
@@ -29,6 +38,10 @@ import {
   type PaymentMethod,
 } from "@/lib/payment-methods";
 import { moneyLabel, pendingBalance, sendTransitTicket } from "@/lib/shalom/transit-notify";
+import { FlowClient } from "@/lib/flow/client";
+import { ensureFlowPaymentLink } from "@/lib/flow/link";
+import { env } from "@/lib/env";
+import { handleInboundVoucher, loadVoucherCandidates } from "@/lib/shalom/voucher-intake";
 import type { sendWhatsappDocument } from "@/lib/kapso";
 
 export type PaymentButton = "yape" | "transferencia" | "link_pago";
@@ -73,11 +86,30 @@ export function matchPaymentButton(
 
 /** Lo que sabemos del pedido al contestar. `saldo` ya viene con «S/»: acá no
  *  hay plantilla que lo escriba, es texto libre nuestro. `saldoValue` es el
- *  mismo número sin formato, porque cero hay que poder distinguirlo. */
+ *  mismo número sin formato, porque cero hay que poder distinguirlo.
+ *  `payLink` es el cobro de Flow.cl por ese saldo, cuando la tienda lo tiene
+ *  encendido y la pasarela lo creó. */
 export interface LinkContext {
   saldo: string | null;
   saldoValue: number | null;
   pedido: string | null;
+  payLink?: string | null;
+  /** Horas hasta que caduca el cobro, para decírselo en el mensaje. */
+  payLinkHours?: number | null;
+}
+
+/**
+ * El mensaje con el link de cobro, cuando no hay texto configurado en Ajustes.
+ *
+ * Dice cuándo caduca porque un link vencido sin aviso previo parece un error
+ * nuestro, y porque es lo que empuja a pagar hoy. Pura.
+ */
+export function defaultPayLinkBody(link: string, hours: number | null | undefined): string {
+  const vence =
+    hours && hours > 0
+      ? `\n\n⏱️ El link vence en ${hours === 1 ? "1 hora" : `${hours} horas`}.`
+      : "";
+  return `Puedes pagar aquí, con Yape o tarjeta:\n${link}${vence}`;
 }
 
 /**
@@ -137,16 +169,118 @@ export function buildButtonReply(
       return conSaldo(formatTransferAccounts(methods));
     case "link_pago": {
       const tpl = String(cfg.paymentLinkTemplate ?? "").trim();
-      // Sin link configurado se cae al Yape, con su saldo delante igual.
-      if (!tpl) return conSaldo(yape);
+      const cobro = link.payLink ?? null;
+      // Sin texto configurado: el cobro de Flow si lo hay, y si no el Yape.
+      // Nunca el silencio — un botón que no contesta parece un chat roto.
+      if (!tpl) return conSaldo(cobro ? defaultPayLinkBody(cobro, link.payLinkHours) : yape);
+      // Un texto que pide `{link}` y no tiene link no se manda a medias: sería
+      // mandarle una frase que promete un enlace que no está.
+      if (/\{link\}/i.test(tpl) && !cobro) return conSaldo(yape);
       return tpl
         .replace(/\{saldo\}/gi, link.saldo ?? "")
         .replace(/\{pedido\}/gi, link.pedido ?? "")
         .replace(/\{yape\}/gi, yapeNumberParam(methods) ?? "")
+        .replace(/\{link\}/gi, cobro ?? "")
         .replace(/[ \t]+\n/g, "\n")
         .trim();
     }
   }
+}
+
+/**
+ * Los «ok» que no preguntan nada.
+ *
+ * SE COMPARA PALABRA A PALABRA, y no la frase entera, por una razón que no es
+ * de estilo: el router del bot de Kapso en el 600 hace exactamente eso con su
+ * propia lista, y las dos tienen que encajar. Donde el router calla, nosotros
+ * contestamos; donde el router habla, nosotros callamos. Una frase que sea
+ * trivial para él y no para nosotros deja a la clienta sin NINGUNA respuesta;
+ * al revés, recibe dos. Un subconjunto NO basta —eso deja palabras que el
+ * router calla y nosotros también, y ahí no contesta nadie—: esta lista es
+ * IDÉNTICA a la del router, palabra por palabra. Las únicas diferencias
+ * deliberadas son `NUNCA_ACK`, donde los dos callan y derivan, y los mensajes
+ * de puros dígitos.
+ *
+ * POR QUÉ UNA LISTA CERRADA Y NO «cualquier texto». Interpretar texto libre es
+ * justo lo que este módulo no hace: un «¿me llegó mal el producto?» tiene que
+ * ir a la asesora, y contestarle con un número de Yape sería atropellarla.
+ * Pero un «ok» pelado no es una consulta: no lleva pregunta, no lleva dato
+ * nuevo, y el bot de ventas no tiene nada útil que hacer con él —se vio en el
+ * chat de Richard, que contestó «Ok» y recibió «ya le paso tu consulta a una
+ * asesora», una derivación por nada—. Ahí el mensaje que sirve es el que ya
+ * sabemos: cuánto debe y a dónde pagarlo.
+ */
+const ACK_WORDS = new Set([
+  "ok",
+  "oka",
+  "okey",
+  "oki",
+  "okis",
+  "ya",
+  "listo",
+  "lista",
+  "gracias",
+  "muchas",
+  "mil",
+  "si",
+  "buenas",
+  "buenos",
+  "buen",
+  "buena",
+  "dia",
+  "dias",
+  "tardes",
+  "noches",
+  "de",
+  "nada",
+  "bien",
+  "bueno",
+  "vale",
+  "perfecto",
+  "entendido",
+  "amable",
+  "muy",
+  "ah",
+  "aah",
+  "genial",
+  "excelente",
+  "correcto",
+  "claro",
+  "dale",
+  "conforme",
+  "acuerdo",
+]);
+
+/**
+ * «no» NO es un acuse, aunque lo parezca por lo corto.
+ *
+ * Después de pedirle un saldo, un «no» o un «no gracias» es una señal: está
+ * rechazando pagar, y eso abre el flujo de devolución (§13), no un recordatorio
+ * del número de Yape. Contestarle con una cuenta sería no haberla escuchado.
+ * Va a la asesora, como cualquier otra cosa que no entendamos.
+ */
+const NUNCA_ACK = new Set(["no", "nunca", "cancelar", "anular", "devolver"]);
+
+/**
+ * ¿Es un acuse de recibo y nada más? Pura.
+ *
+ * Un mensaje de solo emojis (👍, 🙏) cuenta: dice exactamente lo mismo que un
+ * «ok». `key()` se los come enteros, así que un texto que queda vacío después
+ * de normalizar —y no estaba vacío antes— es eso.
+ */
+export function isAcknowledgement(text: string | null | undefined): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  const k = key(raw);
+  // Solo emojis o signos: dice lo mismo que un «ok».
+  if (!k) return true;
+  const palabras = k.split(" ");
+  if (palabras.some((w) => NUNCA_ACK.has(w))) return false;
+  // Un mensaje de puros dígitos NO es un acuse: lo más probable es que sea el
+  // número de operación de un Yape que acaba de hacer. Eso es un dato, y va a
+  // quien pueda hacer algo con él.
+  if (palabras.every((w) => /^\d+$/.test(w))) return false;
+  return palabras.every((w) => ACK_WORDS.has(w));
 }
 
 export interface InboundResult {
@@ -166,6 +300,7 @@ export async function handleInboundMessage(
   opts: {
     sendText?: typeof sendWhatsappText;
     sendDocument?: typeof sendWhatsappDocument;
+    ensureLink?: typeof ensureFlowPaymentLink;
     nowIso?: string;
   } = {},
 ): Promise<InboundResult> {
@@ -181,9 +316,128 @@ export async function handleInboundMessage(
   }
 
   const button = matchPaymentButton(msg.buttonText, msg.buttonPayload);
-  if (!button) return { reason: "not_a_payment_button" };
+  if (button) return replyToButton(admin, storeId, creds, msg, button, opts);
 
-  return replyToButton(admin, storeId, creds, msg, button, opts);
+  // Una foto después del aviso: casi siempre es el comprobante del saldo.
+  if (msg.mediaKind === "image") {
+    return handleVoucherImage(admin, storeId, creds, msg, opts);
+  }
+
+  // Un «ok» después del aviso: se le repite lo que necesita para pagar.
+  if (!msg.buttonText && !msg.buttonPayload && isAcknowledgement(msg.text)) {
+    return replyToAck(admin, storeId, creds, msg, opts);
+  }
+
+  return { reason: "not_a_payment_button" };
+}
+
+/** Cuántas horas después del aviso un «ok» —o una foto— se siguen leyendo como
+ *  respuesta a ese aviso. Pasadas, es una conversación nueva y no nuestra. */
+const ACK_WINDOW_HOURS = 48;
+
+/**
+ * Una imagen que llega tras el aviso: se intenta registrar como comprobante.
+ *
+ * La reja de las 48 h es la misma del «ok», y aquí además ahorra dinero: sin
+ * ella, cada selfie y cada foto de producto gastaría una llamada de visión.
+ */
+async function handleVoucherImage(
+  admin: SupabaseClient,
+  storeId: string,
+  creds: StoreCreds,
+  msg: InboundMessage,
+  opts: { nowIso?: string },
+): Promise<InboundResult> {
+  // Nace apagado y se enciende por tienda (0171): esto escribe filas de DINERO
+  // sin que una persona haya mirado la imagen.
+  if (!creds.shalom_voucher_intake_enabled) return { reason: "voucher_intake_apagado" };
+  const nowIso = opts.nowIso ?? new Date().toISOString();
+  const link = await latestTransitContext(admin, storeId, msg.from);
+  if (!link.sentAt) return { reason: "imagen_sin_aviso" };
+  if (Date.parse(nowIso) - Date.parse(link.sentAt) > ACK_WINDOW_HOURS * 3600 * 1000) {
+    return { reason: "imagen_fuera_de_ventana" };
+  }
+  const candidatos = await loadVoucherCandidates(admin, storeId, msg.from);
+  const res = await handleInboundVoucher(admin, storeId, creds, msg, candidatos, { nowIso });
+  return { reason: `voucher:${res.outcome}` };
+}
+
+/**
+ * Contesta un «ok» con el saldo y el Yape, UNA sola vez por aviso.
+ *
+ * Las dos rejas son lo que lo hace inofensivo:
+ *
+ *  1. Tiene que haber un aviso enviado a ese celular en las últimas 48 h. Sin
+ *     eso, el «ok» es de otra conversación y no nos incumbe.
+ *  2. Y no haberle contestado ya —ni por botón ni por otro «ok»— desde ese
+ *     aviso. Repetirle el número de Yape a cada «gracias» es acoso, no ayuda.
+ */
+async function replyToAck(
+  admin: SupabaseClient,
+  storeId: string,
+  creds: StoreCreds,
+  msg: InboundMessage,
+  opts: { sendText?: typeof sendWhatsappText; nowIso?: string },
+): Promise<InboundResult> {
+  const nowIso = opts.nowIso ?? new Date().toISOString();
+  const link = await latestTransitContext(admin, storeId, msg.from);
+  if (!link.sentAt) return { reason: "ack_sin_aviso" };
+  if (Date.parse(nowIso) - Date.parse(link.sentAt) > ACK_WINDOW_HOURS * 3600 * 1000) {
+    return { reason: "ack_fuera_de_ventana" };
+  }
+
+  const { data: yaContestado } = await admin
+    .from("wa_auto_replies")
+    .select("id")
+    .eq("store_id", storeId)
+    .eq("phone", msg.from)
+    .eq("ok", true)
+    .gte("created_at", link.sentAt)
+    .limit(1)
+    .maybeSingle();
+  if (yaContestado) return { reason: "ack_ya_contestado" };
+
+  const send = opts.sendText ?? sendWhatsappText;
+  const phoneNumberId = msg.phoneNumberId ?? creds.whatsapp_phone_number_id;
+  if (!creds.kapso_api_key || !phoneNumberId) return { reason: "store_not_configured" };
+
+  const methods = await loadStorePaymentMethods(admin, storeId);
+  const text = buildButtonReply("yape", methods, { paymentLinkTemplate: null }, link.ctx);
+  if (!text) return { reason: "no_payment_methods" };
+
+  // La reserva va DESPUÉS de las rejas y antes de hablar, igual que en los
+  // botones: si Kapso reentrega el mismo `wamid`, la unique lo para.
+  const { error: claimError } = await admin.from("wa_auto_replies").insert({
+    store_id: storeId,
+    inbound_message_id: msg.id,
+    phone: msg.from,
+    phone_number_id: phoneNumberId,
+    trigger: "ack",
+    order_id: link.orderId,
+  });
+  if (claimError) {
+    if (claimError.code === "23505") return { reason: "duplicate_inbound" };
+    return { reason: `claim_failed:${claimError.message}` };
+  }
+
+  let ok = false;
+  let error: string | null = null;
+  let providerId: string | null = null;
+  try {
+    const res = await send({ apiKey: creds.kapso_api_key }, { phoneNumberId, to: msg.from, body: text });
+    ok = res.ok;
+    if (res.ok) providerId = res.id;
+    else error = res.error ?? "envío rechazado";
+  } catch (e) {
+    error = e instanceof Error ? e.message : String(e);
+  }
+  await admin
+    .from("wa_auto_replies")
+    .update({ body: text, ok, error, provider_message_id: providerId })
+    .eq("store_id", storeId)
+    .eq("inbound_message_id", msg.id);
+
+  return { reason: ok ? "replied:ack" : `reply_failed:${error}` };
 }
 
 async function replyToButton(
@@ -195,6 +449,7 @@ async function replyToButton(
   opts: {
     sendText?: typeof sendWhatsappText;
     sendDocument?: typeof sendWhatsappDocument;
+    ensureLink?: typeof ensureFlowPaymentLink;
     nowIso?: string;
   },
 ): Promise<InboundResult> {
@@ -231,7 +486,11 @@ async function replyToButton(
 
   const methods = await loadStorePaymentMethods(admin, storeId);
   const link = await latestTransitContext(admin, storeId, msg.from);
-  const text = buildButtonReply(button, methods, { paymentLinkTemplate: creds.shalom_transit_payment_link }, link.ctx);
+  // El cobro por pasarela se crea SOLO para el botón que lo pide: crear una
+  // orden cobrable es un efecto, y no se dispara por pulsar «Yape».
+  const ctx: LinkContext =
+    button === "link_pago" ? { ...link.ctx, ...(await resolvePayLink(admin, storeId, creds, link, opts)) } : link.ctx;
+  const text = buildButtonReply(button, methods, { paymentLinkTemplate: creds.shalom_transit_payment_link }, ctx);
   if (!text) {
     await finish({ order_id: link.orderId, error: "la tienda no tiene cuentas de cobro configuradas" });
     await noteAnomaly(admin, {
@@ -269,8 +528,10 @@ async function replyToButton(
   // pagar son las cuentas; el ticket es el respaldo. Si falla —guía sin OSE ID,
   // Shalom caído— queda el motivo en la fila del aviso y el mensaje útil ya
   // salió. El PDF sale de la caché, así que repetirlo no cuesta otra llamada.
+  // Solo Shalom tiene ticket: a un aviso de Olva no se le manda nada detrás,
+  // y no se anota ningún «sin OSE ID» que no es un fallo.
   let ticket = "";
-  if (link.notificationId && link.shipmentId) {
+  if (link.notificationId && link.shipmentId && link.courier !== "olva") {
     const res = await sendTransitTicket(
       admin,
       {
@@ -289,6 +550,89 @@ async function replyToButton(
   return { reason: `replied:${button}${ticket}` };
 }
 
+/**
+ * El cobro de Flow.cl por el saldo de HOY, para el botón «Link de pago».
+ *
+ * TODO ES UN «NO» SILENCIOSO salvo el camino bueno: sin interruptor, sin
+ * credenciales, sin pedido, sin saldo o con la pasarela caída, se devuelve
+ * `null` y la respuesta cae al Yape. Una clienta que pulsa un botón tiene que
+ * recibir algo con lo que pagar; que la pasarela falle no puede costarle eso.
+ * Lo que sí queda es la anomalía, para que se vea al día siguiente.
+ */
+async function resolvePayLink(
+  admin: SupabaseClient,
+  storeId: string,
+  creds: StoreCreds,
+  ctx: TransitContext,
+  opts: { ensureLink?: typeof ensureFlowPaymentLink; nowIso?: string },
+): Promise<{ payLink: string | null; payLinkHours: number | null }> {
+  const NADA = { payLink: null, payLinkHours: null };
+  if (!creds.flowcl_link_enabled) return NADA;
+  if (!creds.flowcl_api_key || !creds.flowcl_secret_key || !creds.flowcl_webhook_secret) {
+    await noteAnomaly(admin, {
+      storeId,
+      source: "inbound_message",
+      reason: "flowcl_sin_credenciales",
+      sample: { orderId: ctx.orderId },
+    });
+    return NADA;
+  }
+  const saldo = ctx.ctx.saldoValue;
+  if (!ctx.orderId || saldo == null || !(saldo > 0)) return NADA;
+
+  const email = (await customerEmail(admin, ctx.orderId)) ?? creds.flowcl_link_email ?? "";
+  const ensure = opts.ensureLink ?? ensureFlowPaymentLink;
+  const res = await ensure(
+    admin,
+    {
+      storeId,
+      orderId: ctx.orderId,
+      orderName: ctx.ctx.pedido,
+      // Es el saldo de un pedido ya despachado: lo que falta, no un adelanto.
+      kind: "diferencia",
+      amount: saldo,
+      email,
+      ttlHours: creds.flowcl_link_ttl_hours,
+      yapeOnly: creds.flowcl_link_yape_only,
+      subject: `Saldo del pedido ${ctx.ctx.pedido ?? ""}`.trim(),
+      currency: creds.currency,
+    },
+    {
+      client: new FlowClient({
+        apiKey: creds.flowcl_api_key,
+        secretKey: creds.flowcl_secret_key,
+        baseUrl: env.flowclApiBase(),
+      }),
+      siteUrl: env.siteUrl(),
+      webhookSecret: creds.flowcl_webhook_secret,
+      nowIso: opts.nowIso,
+    },
+  );
+  if (!res.ok) {
+    await noteAnomaly(admin, {
+      storeId,
+      source: "inbound_message",
+      reason: "flowcl_link_fallido",
+      sample: { orderId: ctx.orderId, motivo: res.reason },
+    });
+    return NADA;
+  }
+  return { payLink: res.link, payLinkHours: creds.flowcl_link_ttl_hours };
+}
+
+/** El email del pedido, si lo trae. Casi nunca: los pedidos entran por
+ *  WhatsApp y ahí nadie pide un correo. Por eso hay uno de respaldo. */
+async function customerEmail(admin: SupabaseClient, orderId: string): Promise<string | null> {
+  const { data } = await admin
+    .from("orders")
+    .select("contacto:raw->>contact_email,cliente:raw->customer->>email")
+    .eq("id", orderId)
+    .maybeSingle();
+  const row = (data ?? null) as { contacto: string | null; cliente: string | null } | null;
+  const email = (row?.contacto ?? row?.cliente ?? "").trim();
+  return email || null;
+}
+
 /** Lo que hace falta del último aviso: de qué pedido habla, cuánto debe HOY y a
  *  qué guía pedirle el ticket. */
 interface TransitContext {
@@ -296,6 +640,10 @@ interface TransitContext {
   orderId: string | null;
   notificationId: string | null;
   shipmentId: string | null;
+  /** De qué courier era el aviso: solo Shalom tiene ticket que mandar (0175). */
+  courier: string | null;
+  /** Cuándo salió ese aviso: la ventana del «ok» se mide desde aquí. */
+  sentAt: string | null;
 }
 
 const SIN_SALDO: LinkContext = { saldo: null, saldoValue: null, pedido: null };
@@ -305,6 +653,8 @@ const SIN_AVISO: TransitContext = {
   orderId: null,
   notificationId: null,
   shipmentId: null,
+  courier: null,
+  sentAt: null,
 };
 
 /**
@@ -320,7 +670,7 @@ async function latestTransitContext(
 ): Promise<TransitContext> {
   const { data } = await admin
     .from("shalom_transit_notifications")
-    .select("id,order_id,shipment_id")
+    .select("id,order_id,shipment_id,sent_at,courier")
     .eq("store_id", storeId)
     .eq("phone", phone)
     .eq("status", "sent")
@@ -331,12 +681,16 @@ async function latestTransitContext(
     id: string;
     order_id: string | null;
     shipment_id: string;
+    sent_at: string | null;
+    courier?: string | null;
   } | null;
   if (!row) return SIN_AVISO;
   const base = {
     orderId: row.order_id,
     notificationId: row.id,
     shipmentId: row.shipment_id,
+    courier: row.courier ?? "shalom",
+    sentAt: row.sent_at,
   };
   if (!row.order_id) return { ...base, ctx: SIN_SALDO };
 

@@ -24,6 +24,11 @@ import {
   reRegisterWebhooks,
   saveMetaAdAccounts,
   sendTelegramTest,
+  addEscalationStep,
+  moveEscalationStep,
+  removeEscalationStep,
+  sendTransitQueueNow,
+  testFlowclLink,
   syncAliclikCatalogNow,
   syncNow,
   testAliclikConnection,
@@ -100,6 +105,23 @@ export interface StoreSettingsData {
     shalom_transit_hour_start: number;
     shalom_transit_hour_end: number;
     shalom_transit_payment_link: string | null;
+    shalom_arrival_template_enabled: boolean;
+    shalom_arrival_template_name: string | null;
+    shalom_arrival_params: string | null;
+    shalom_arrival_attach_ticket: boolean;
+    shalom_voucher_intake_enabled: boolean;
+    shalom_pickup_key_autosend_enabled: boolean;
+    /** Los dos avisos de Olva (0175). */
+    olva_transit_template_enabled: boolean;
+    olva_transit_template_name: string | null;
+    olva_transit_params: string | null;
+    olva_arrival_template_enabled: boolean;
+    olva_arrival_template_name: string | null;
+    olva_arrival_params: string | null;
+    flowcl_link_enabled: boolean;
+    flowcl_link_email: string | null;
+    flowcl_link_ttl_hours: number;
+    flowcl_link_yape_only: boolean;
     meta_ad_accounts: StoreMetaAdAccount[];
   };
   has: {
@@ -152,6 +174,10 @@ export interface StoreSettingsData {
     active: boolean;
     sort: number;
   }>;
+  /** La escalera de la cola de cobranza (0172), en orden. */
+  escalation: Array<{ id: string; userId: string; name: string; minutes: number; sort: number }>;
+  /** Usuarios de la tienda que pueden entrar en la escalera. */
+  escalationCandidates: Array<{ id: string; name: string }>;
   replyTemplates: Array<{
     id: string;
     label: string;
@@ -277,6 +303,7 @@ export function StoreSettings({
 
       <ReplyTemplatesSection storeId={s.id} rows={data.replyTemplates} />
       <PaymentMethodsSection storeId={s.id} rows={data.paymentMethods} />
+      <EscalationSection storeId={s.id} rows={data.escalation} candidates={data.escalationCandidates} />
       <DistrictCoverageSection storeId={s.id} rows={data.districtCoverage} />
 
       <div className="-mt-2">
@@ -781,8 +808,20 @@ function SettingsForm({
   shalomProducts?: SettingsState["shalomProducts"];
 }) {
   const [state, action, pending] = useActionState(updateStore, initial);
+  // La sonda de Flow vive DENTRO de este formulario —es donde se buscan las
+  // credenciales que prueba— pero es otra acción: su `dispatch` va como
+  // `formAction` del botón, y su resultado se pinta ahí mismo. Un <form>
+  // dentro de otro no es HTML válido; esto es la forma de React 19 de tener
+  // dos botones con dos acciones en el mismo formulario.
+  const [flowProbe, flowProbeAction, flowProbePending] = useActionState(testFlowclLink, initial);
+  const [colaAviso, colaAvisoAction, colaAvisoPending] = useActionState(sendTransitQueueNow, initial);
   const router = useRouter();
   const s = data.store;
+  // Controlado a propósito: React vacía los campos NO controlados al terminar
+  // cualquier acción del formulario, y la sonda de Flow es una acción. Sin
+  // esto, escribir el email y pulsar «Crear cobro de prueba» lo borraba en el
+  // mismo clic — el usuario veía «falta el email» con el email recién escrito.
+  const [flowEmail, setFlowEmail] = useState(s.flowcl_link_email ?? "");
 
   // Server actions reset uncontrolled form fields to their previous defaults.
   // Refresh the server component after a successful save so toggles and secret
@@ -1443,11 +1482,243 @@ function SettingsForm({
                 className={inputCls}
               />
               <p className="mt-1 text-xs text-slate-500">
-                Texto libre; se sustituyen <code>{"{saldo}"}</code>, <code>{"{pedido}"}</code> y{" "}
-                <code>{"{yape}"}</code>. Vacío = se contesta con el Yape principal.
+                Texto libre; se sustituyen <code>{"{saldo}"}</code>, <code>{"{pedido}"}</code>,{" "}
+                <code>{"{yape}"}</code> y <code>{"{link}"}</code> (el cobro de Flow, que se
+                configura en <strong>Cobro por link (Flow.cl)</strong>, más abajo). Vacío = el link
+                de Flow si lo hay, y si no el Yape principal.
+              </p>
+            </div>
+            <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:col-span-3">
+              <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                Segundo aviso: «ya llegó a tu agencia»
+              </p>
+              <p className="text-xs text-slate-500">
+                El de arriba sale cuando el paquete <strong>va en camino</strong> y dice que llegará
+                en 2 a 5 días. Éste sale cuando <strong>ya llegó</strong> y le dice hasta qué día
+                puede recogerlo — 28 días desde que llegó, y después Shalom lo devuelve. Es otra
+                plantilla aprobada aparte, con su propio interruptor; el número, el horario y las
+                cuentas son los mismos de arriba.
+              </p>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className={labelCls} htmlFor="shalom_arrival_template_enabled">Aviso de llegada</label>
+                  <select
+                    id="shalom_arrival_template_enabled"
+                    name="shalom_arrival_template_enabled"
+                    defaultValue={s.shalom_arrival_template_enabled ? "true" : "false"}
+                    className={inputCls}
+                  >
+                    <option value="false">Apagado</option>
+                    <option value="true">Encendido</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls} htmlFor="shalom_arrival_template_name">Plantilla · nombre</label>
+                  <input
+                    id="shalom_arrival_template_name"
+                    name="shalom_arrival_template_name"
+                    defaultValue={s.shalom_arrival_template_name ?? ""}
+                    placeholder="guias_shalom_llegada"
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className={labelCls} htmlFor="shalom_arrival_attach_ticket">Ticket en cabecera</label>
+                  <select
+                    id="shalom_arrival_attach_ticket"
+                    name="shalom_arrival_attach_ticket"
+                    defaultValue={s.shalom_arrival_attach_ticket ? "true" : "false"}
+                    className={inputCls}
+                  >
+                    <option value="false">No</option>
+                    <option value="true">Sí</option>
+                  </select>
+                </div>
+                <div className="sm:col-span-3">
+                  <label className={labelCls} htmlFor="shalom_voucher_intake_enabled">
+                    Registrar solos los comprobantes que lleguen por WhatsApp
+                  </label>
+                  <select
+                    id="shalom_voucher_intake_enabled"
+                    name="shalom_voucher_intake_enabled"
+                    defaultValue={s.shalom_voucher_intake_enabled ? "true" : "false"}
+                    className={inputCls}
+                  >
+                    <option value="false">Apagado</option>
+                    <option value="true">Encendido</option>
+                  </select>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Cuando la clienta contesta el aviso con la captura de su Yape, se lee sola y
+                    entra a <strong>Revisión de pagos</strong> colgada de su pedido, sin validar.
+                    Solo pasa si el <strong>monto coincide exacto</strong> con el saldo o el total,
+                    o si escribió la <strong>guía</strong>. Lo demás queda como anomalía con su
+                    motivo, para subirlo a mano.
+                  </p>
+                  <p className="mt-1 text-xs text-amber-700">
+                    Escribe filas de dinero <strong>sin que una persona mire la imagen</strong>.
+                    Entran sin validar, así que un error puede ensuciar la cola de revisión — no
+                    soltar un paquete sin cobrar, que sigue necesitando validación humana.
+                  </p>
+                </div>
+                <div className="sm:col-span-3">
+                  <label className={labelCls} htmlFor="shalom_pickup_key_autosend_enabled">
+                    Enviar la clave de recojo al validar el pago
+                  </label>
+                  <select
+                    id="shalom_pickup_key_autosend_enabled"
+                    name="shalom_pickup_key_autosend_enabled"
+                    defaultValue={s.shalom_pickup_key_autosend_enabled ? "true" : "false"}
+                    className={inputCls}
+                  >
+                    <option value="false">Apagado</option>
+                    <option value="true">Encendido</option>
+                  </select>
+                  <p className="mt-1 text-xs text-slate-500">
+                    En el comprobante que <strong>termina de cubrir el pedido</strong>, el botón
+                    pasa a decir «Validar y enviar la clave» y enseña el mensaje exacto antes de
+                    pulsarlo. El envío <strong>es</strong> el registro de la entrega: ya no hace
+                    falta anotarla aparte. Fuera de las 24 h desde el último mensaje de la clienta
+                    no se manda nada —WhatsApp no lo permite— y se avisa en pantalla.
+                  </p>
+                  <p className="mt-1 text-xs text-amber-700">
+                    Manda <strong>la llave del paquete</strong> sin que nadie vuelva a mirar
+                    después del clic. Las condiciones de siempre se comprueban otra vez en el
+                    servidor antes de descifrarla; validar desde la bandeja de revisión no envía
+                    nada.
+                  </p>
+                </div>
+                <div className="sm:col-span-3">
+                  <label className={labelCls} htmlFor="shalom_arrival_params">Orden de las variables</label>
+                  <input
+                    id="shalom_arrival_params"
+                    name="shalom_arrival_params"
+                    defaultValue={s.shalom_arrival_params ?? ""}
+                    placeholder="nombre,guia,codigo,producto,agencia,total,adelanto,saldo,vence"
+                    className={inputCls}
+                  />
+                  <p className="mt-1 text-xs text-slate-500">
+                    Las mismas de arriba más <code>vence</code>, la fecha límite de recojo. Sin
+                    fecha de llegada registrada no se inventa un plazo: el aviso se reintenta y
+                    queda escrito que faltaba <code>vence</code>.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="rounded-lg border border-slate-200 p-3 sm:col-span-3">
+              <button
+                type="submit"
+                formAction={colaAvisoAction}
+                formNoValidate
+                disabled={colaAvisoPending}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                {colaAvisoPending ? "Enviando…" : "Enviar ahora los avisos en cola"}
+              </button>
+              <p className="mt-2 text-xs text-slate-400">
+                El cron drena la cola cada 30 minutos; esto lo hace ya. No fuerza nada: manda lo que
+                está pendiente y le toca. Sigue respetando el horario, los reintentos y el
+                interruptor de arriba.
+              </p>
+              {colaAviso.error && <p className="mt-2 text-sm text-red-600">{colaAviso.error}</p>}
+              {colaAviso.notice && <p className="mt-2 text-sm text-emerald-600">{colaAviso.notice}</p>}
+            </div>
+          </div>
+
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Avisos de guía Olva (WhatsApp)
+          </legend>
+          <p className="text-xs text-slate-500">
+            Los mismos dos avisos que Shalom, para las salidas de Olva con tracking registrado:
+            uno cuando Olva la <strong>despacha</strong> («va en camino») y otro cuando{" "}
+            <strong>llega a la oficina</strong> de destino («recógelo y paga el saldo»). Salen por
+            el mismo número, en el mismo horario y con las mismas cuentas de cobro que los de
+            Shalom; los botones los contesta Kapta igual. Lo único propio es la{" "}
+            <strong>plantilla</strong>: Meta aprueba cada texto aparte, y los de Shalom nombran a
+            Shalom. Olva devuelve el paquete a los <strong>6 días</strong>, no a los 28.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className={labelCls} htmlFor="olva_transit_template_enabled">Aviso de tránsito</label>
+              <select
+                id="olva_transit_template_enabled"
+                name="olva_transit_template_enabled"
+                defaultValue={s.olva_transit_template_enabled ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">Apagado</option>
+                <option value="true">Encendido</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="olva_transit_template_name">Plantilla · nombre</label>
+              <input
+                id="olva_transit_template_name"
+                name="olva_transit_template_name"
+                defaultValue={s.olva_transit_template_name ?? ""}
+                placeholder="guias_olva"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="olva_transit_params">Orden de las variables</label>
+              <input
+                id="olva_transit_params"
+                name="olva_transit_params"
+                defaultValue={s.olva_transit_params ?? ""}
+                placeholder="nombre,guia,producto,agencia,total,adelanto,saldo,yape"
+                className={inputCls}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Los mismos tokens que Shalom sin <code>codigo</code>: Olva no tiene código corto.{" "}
+                <code>guia</code> es el tracking de Olva («2552504-26»), que es lo que la clienta
+                dice en el mostrador.
+              </p>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="olva_arrival_template_enabled">Aviso de llegada</label>
+              <select
+                id="olva_arrival_template_enabled"
+                name="olva_arrival_template_enabled"
+                defaultValue={s.olva_arrival_template_enabled ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">Apagado</option>
+                <option value="true">Encendido</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="olva_arrival_template_name">Plantilla · nombre</label>
+              <input
+                id="olva_arrival_template_name"
+                name="olva_arrival_template_name"
+                defaultValue={s.olva_arrival_template_name ?? ""}
+                placeholder="guias_olva_llegada"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="olva_arrival_params">Orden de las variables</label>
+              <input
+                id="olva_arrival_params"
+                name="olva_arrival_params"
+                defaultValue={s.olva_arrival_params ?? ""}
+                placeholder="nombre,guia,producto,agencia,total,adelanto,saldo"
+                className={inputCls}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                <code>agencia</code> es la oficina de Olva que el rastreo apuntó al llegar. Si se
+                usa <code>vence</code>, se calcula a 6 días.
               </p>
             </div>
           </div>
+          <p className="text-xs text-amber-700">
+            Las dos plantillas tienen que estar <strong>aprobadas en Meta</strong> con ese nombre
+            y ese número de variables, en la WABA del número por el que salen. Hasta entonces, deja
+            el aviso apagado: la cola cierra las filas como «omitidas» y no se pierde nada.
+          </p>
         </fieldset>
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
@@ -1727,6 +1998,122 @@ function SettingsForm({
               avisos, así que el secreto es una puerta y no la cerradura — lo que se registra sale
               de volver a consultarle el estado a Flow, firmado.
             </span>
+          </div>
+
+          <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+              Cobro por Flow.cl en el botón «Link de pago»
+            </p>
+            <p className="text-xs text-slate-500">
+              Encendido, ese botón <strong>crea un cobro real por el saldo de ese momento</strong> y
+              manda el link que lo cobra. El pago vuelve solo y entra <strong>ya validado</strong>:
+              lo confirma la pasarela con su respuesta firmada, no la foto de una pantalla, así que
+              el saldo baja al momento y nadie tiene que revisarlo. Hace falta la cuenta de Flow.cl
+              de arriba: sin ella el botón contesta como siempre, con el Yape.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <label className={labelCls} htmlFor="flowcl_link_enabled">Cobro por Flow</label>
+                <select
+                  id="flowcl_link_enabled"
+                  name="flowcl_link_enabled"
+                  defaultValue={s.flowcl_link_enabled ? "true" : "false"}
+                  className={inputCls}
+                >
+                  <option value="false">Apagado</option>
+                  <option value="true">Encendido</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelCls} htmlFor="flowcl_link_ttl_hours">El link vence en (horas)</label>
+                <input
+                  id="flowcl_link_ttl_hours"
+                  name="flowcl_link_ttl_hours"
+                  type="number"
+                  min={1}
+                  max={720}
+                  defaultValue={s.flowcl_link_ttl_hours ?? 48}
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className={labelCls} htmlFor="flowcl_link_yape_only">Medio de pago</label>
+                <select
+                  id="flowcl_link_yape_only"
+                  name="flowcl_link_yape_only"
+                  defaultValue={s.flowcl_link_yape_only ? "true" : "false"}
+                  className={inputCls}
+                >
+                  <option value="false">Todos (Flow enseña la selección)</option>
+                  <option value="true">Solo Yape (One Shot)</option>
+                </select>
+              </div>
+              <div className="sm:col-span-3">
+                <label className={labelCls} htmlFor="flowcl_link_email">Email de respaldo del cobro</label>
+                <input
+                  id="flowcl_link_email"
+                  name="flowcl_link_email"
+                  type="email"
+                  value={flowEmail}
+                  onChange={(e) => setFlowEmail(e.target.value)}
+                  placeholder="cobros@tutienda.com"
+                  className={inputCls}
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  Flow exige un email del pagador y casi ningún pedido de WhatsApp trae uno. Cuando
+                  el pedido lo tiene se usa el suyo; si no, éste. <strong>Sin email de respaldo el
+                  cobro no se puede crear</strong> y el botón cae al Yape.
+                </p>
+                <p className="mt-1 text-xs text-amber-700">
+                  Un link vivo cobra el importe con el que nació. Si la clienta paga parte por Yape,
+                  el link viejo se deja de ofrecer y se crea uno nuevo por lo que falta — pero el
+                  que ya está en su chat sigue cobrando el importe viejo hasta que vence. Por eso
+                  las horas de arriba: cuanto más largas, más tiempo vive ese riesgo.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-200 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-sm text-slate-600" htmlFor="flowcl_probe_amount">
+                Probar un cobro de S/
+              </label>
+              <input
+                id="flowcl_probe_amount"
+                name="amount"
+                type="number"
+                step="0.10"
+                min="1"
+                max="500"
+                defaultValue="20"
+                className="w-24 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+              <button
+                type="submit"
+                formAction={flowProbeAction}
+                formNoValidate
+                disabled={flowProbePending}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                {flowProbePending ? "Creando…" : "Crear cobro de prueba"}
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-slate-400">
+              Las <strong>credenciales</strong> tienen que estar guardadas (son secretos cifrados);
+              el email de arriba vale tal como esté escrito, aunque no lo hayas guardado todavía.
+              Crea una orden <strong>real</strong> y te devuelve el link: sirve para ver que la firma
+              vale, que la url de confirmación se arma bien y que Flow acepta importes con céntimos.
+              Caduca en 30 minutos.
+            </p>
+            <p className="mt-1 text-xs text-amber-700">
+              Si la pagas, el dinero entra de verdad en tu cuenta de Flow y{" "}
+              <strong>no queda colgado de ningún pedido</strong>: no hay pedido al que atarla, así
+              que el webhook la dará por desconocida.
+            </p>
+            {flowProbe.error && <p className="mt-2 text-sm text-red-600">{flowProbe.error}</p>}
+            {flowProbe.notice && (
+              <p className="mt-2 text-sm break-all text-emerald-600">{flowProbe.notice}</p>
+            )}
           </div>
         </fieldset>
 
@@ -2090,6 +2477,126 @@ function ReplyTemplatesSection({
  * del aviso de guía en tránsito. Lista por tienda, como las plantillas de
  * respuesta. No son las cuentas contra las que se VERIFICA un comprobante.
  */
+function EscalationSection({
+  storeId,
+  rows,
+  candidates,
+}: {
+  storeId: string;
+  rows: StoreSettingsData["escalation"];
+  candidates: StoreSettingsData["escalationCandidates"];
+}) {
+  const [state, formAction, pending] = useActionState(addEscalationStep, initial);
+  const [rowPending, startRowTransition] = useTransition();
+  const [rowMsg, setRowMsg] = useState<string | null>(null);
+
+  function run(fn: () => Promise<SettingsState>) {
+    startRowTransition(async () => {
+      const res = await fn();
+      setRowMsg(res.error ?? res.notice ?? null);
+    });
+  }
+
+  const libres = candidates.filter((c) => !rows.some((r) => r.userId === c.id));
+
+  return (
+    <Section
+      title="Quién atiende la cobranza del número de Shalom"
+      subtitle="Cuando llega un comprobante por WhatsApp, la alerta se le ofrece al primero de la lista. Si no la atiende en sus minutos, sube al siguiente."
+    >
+      <Card>
+        {rows.length === 0 ? (
+          <p className="text-sm text-amber-700">
+            Nadie configurado todavía. Las alertas se crean igual y se ven en la cola de la tienda,
+            pero <strong>no le llegan a nadie</strong>.
+          </p>
+        ) : (
+          <ol className="space-y-2">
+            {rows.map((r, i) => (
+              <li
+                key={r.id}
+                className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 p-2 text-sm"
+              >
+                <span className="w-5 text-center text-xs text-slate-400">{i + 1}</span>
+                <span className="font-medium text-slate-800">{r.name}</span>
+                <span className="text-xs text-slate-500">
+                  {i === rows.length - 1 ? "es el último: aquí se queda" : `escala a los ${r.minutes} min`}
+                </span>
+                <span className="ml-auto flex gap-1">
+                  <button
+                    type="button"
+                    disabled={rowPending || i === 0}
+                    onClick={() => run(() => moveEscalationStep(storeId, r.id, "up"))}
+                    className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-40"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    disabled={rowPending || i === rows.length - 1}
+                    onClick={() => run(() => moveEscalationStep(storeId, r.id, "down"))}
+                    className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-40"
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    disabled={rowPending}
+                    onClick={() => run(() => removeEscalationStep(storeId, r.id))}
+                    className="rounded border border-slate-300 px-2 py-1 text-xs text-red-600 disabled:opacity-40"
+                  >
+                    Quitar
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+        {rowMsg && <p className="mt-2 text-sm text-slate-600">{rowMsg}</p>}
+
+        <form action={formAction} className="mt-4 flex flex-wrap items-end gap-2">
+          <input type="hidden" name="store_id" value={storeId} />
+          <div>
+            <label className={labelCls} htmlFor="escalation_user">Añadir a</label>
+            <select id="escalation_user" name="user_id" className={inputCls} defaultValue="">
+              <option value="">Elige…</option>
+              {libres.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={labelCls} htmlFor="escalation_minutes">Escala a los (min)</label>
+            <input
+              id="escalation_minutes"
+              name="minutes"
+              type="number"
+              min={1}
+              max={1440}
+              defaultValue={30}
+              className={`${inputCls} w-28`}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={pending || libres.length === 0}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          >
+            {pending ? "Añadiendo…" : "Añadir"}
+          </button>
+          {state.error && <p className="w-full text-sm text-red-600">{state.error}</p>}
+          {state.notice && <p className="w-full text-sm text-emerald-600">{state.notice}</p>}
+        </form>
+
+        <p className="mt-3 text-xs text-slate-500">
+          La espera <strong>no mira si está conectado</strong>: aguanta sus minutos aunque tenga el
+          navegador cerrado. Si saltara al desconectarse, todo acabaría siempre en el último.
+        </p>
+      </Card>
+    </Section>
+  );
+}
+
 function PaymentMethodsSection({
   storeId,
   rows,

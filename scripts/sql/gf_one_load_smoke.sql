@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- 0176: con el flag apagado, dos asignaciones el mismo día → una carga, una
+-- 0184: con el flag apagado, dos asignaciones el mismo día → una carga, una
 -- ruta, N paradas sin duplicar; con el flag encendido, carga adicional.
 begin;
 insert into organizations(id,name) values ('17600000-0000-0000-0000-000000000001','GF one-load smoke');

@@ -11,13 +11,17 @@ vi.mock("@/lib/shalom/session", () => ({
 }));
 
 import {
+  OLVA_TRANSIT_DEFAULT_PARAMS,
   TRANSIT_DEFAULT_PARAMS,
   TRANSIT_MAX_ATTEMPTS,
   amountValue,
   enqueueTransitNotification,
   moneyLabel,
+  noticeGuideCode,
   parseTransitParams,
   pendingBalance,
+  pickupDeadlineLabel,
+  pickupWindowDays,
   processTransitNotifications,
   productsLabel,
   resolveSenderNumber,
@@ -314,14 +318,28 @@ const CREDS = {
 const NOW = "2026-09-11T16:46:00Z";
 
 describe("enqueueTransitNotification", () => {
-  it("es idempotente por guía: la unique hace el trabajo", async () => {
+  it("es idempotente por guía Y POR TIPO de aviso: la unique hace el trabajo", async () => {
+    // La unique dejó de ser `shipment_id` a secas (0169): una misma guía tiene
+    // que poder recibir el aviso de tránsito y, días después, el de llegada.
+    // Lo que sigue garantizando es que ninguno de los dos se repita.
     const admin = fakeAdmin();
     await enqueueTransitNotification(admin, { storeId: "store", shipmentId: "ship-1", orderId: "ord-1" });
     expect(admin.upserts[0]).toMatchObject({
       table: "shalom_transit_notifications",
-      row: { shipment_id: "ship-1" },
-      opts: { onConflict: "shipment_id", ignoreDuplicates: true },
+      row: { shipment_id: "ship-1", kind: "transito" },
+      opts: { onConflict: "shipment_id,kind", ignoreDuplicates: true },
     });
+  });
+
+  it("sin decir el tipo, es el de tránsito: es el que ya existía", async () => {
+    const admin = fakeAdmin();
+    await enqueueTransitNotification(admin, {
+      storeId: "store",
+      shipmentId: "ship-2",
+      orderId: "ord-2",
+      kind: "disponible",
+    });
+    expect(admin.upserts[0]!.row).toMatchObject({ kind: "disponible" });
   });
 });
 
@@ -459,5 +477,275 @@ describe("processTransitNotifications", () => {
     expect(report.failed).toBe(1);
     expect(send).not.toHaveBeenCalled();
     expect(admin.updates.at(-1)!.patch.error).toMatch(/OSE ID/);
+  });
+});
+
+// ── El segundo aviso: «ya llegó a tu agencia» (0169) ────────────────────────
+
+describe("pickupDeadlineLabel", () => {
+  it("28 días desde que llegó, en hora de Lima", () => {
+    // Una FECHA y no «te quedan 12 días»: el WhatsApp se queda en el chat y un
+    // contador relativo envejece mal; una fecha sigue siendo cierta mañana.
+    expect(pickupDeadlineLabel("2026-09-18T15:00:00Z", "America/Lima")).toBe("16 de octubre");
+  });
+
+  it("sin fecha de llegada no se inventa un plazo", () => {
+    // Prometerle un día que no sabemos es peor que no decir nada: la clienta
+    // planifica su viaje a la agencia con eso.
+    expect(pickupDeadlineLabel(null, "America/Lima")).toBe("");
+    expect(pickupDeadlineLabel("no es una fecha", "America/Lima")).toBe("");
+  });
+});
+
+describe("transitConfig por tipo de aviso", () => {
+  const base = {
+    shalom_transit_template_enabled: true,
+    shalom_transit_template_name: "guias_shalom_imagen",
+    shalom_transit_template_language: "es",
+    shalom_transit_params: "nombre,guia,codigo,producto,agencia,total,adelanto,saldo",
+    shalom_transit_attach_ticket: true,
+    shalom_arrival_template_enabled: false,
+    shalom_arrival_template_name: null,
+    shalom_arrival_params: "nombre,guia,codigo,producto,agencia,total,adelanto,saldo,vence",
+    shalom_arrival_attach_ticket: false,
+    kapso_api_key: "k",
+    whatsapp_phone_number_id: "PN-store",
+    shalom_transit_phone_number_id: "PN-600",
+    shalom_transit_hour_start: 8,
+    shalom_transit_hour_end: 21,
+    timezone: "America/Lima",
+  } as any;
+
+  it("cada aviso trae su plantilla y sus variables", () => {
+    const creds = {
+      ...base,
+      shalom_arrival_template_enabled: true,
+      shalom_arrival_template_name: "guias_shalom_llegada",
+    };
+    const t = transitConfig(creds, "transito");
+    const d = transitConfig(creds, "disponible");
+    expect(t.cfg!.templateName).toBe("guias_shalom_imagen");
+    expect(t.cfg!.tokens).not.toContain("vence");
+    expect(d.cfg!.templateName).toBe("guias_shalom_llegada");
+    expect(d.cfg!.tokens).toContain("vence");
+  });
+
+  it("el número y el horario SÍ se comparten: son de la tienda, no del aviso", () => {
+    const creds = {
+      ...base,
+      shalom_arrival_template_enabled: true,
+      shalom_arrival_template_name: "guias_shalom_llegada",
+    };
+    const d = transitConfig(creds, "disponible").cfg!;
+    expect(d.phoneNumberId).toBe("PN-600");
+    expect(d.hourStart).toBe(8);
+    expect(d.hourEnd).toBe(21);
+  });
+
+  it("encender uno NO enciende el otro", () => {
+    // Con el de tránsito funcionando, el de llegada sigue apagado hasta que
+    // alguien lo encienda — y su motivo lo dice, para que no parezca un fallo.
+    expect(transitConfig(base, "transito").cfg).not.toBeNull();
+    const d = transitConfig(base, "disponible");
+    expect(d.cfg).toBeNull();
+    expect((d as { reason: string }).reason).toMatch(/aviso de llegada apagado/);
+  });
+});
+
+describe("transitBodyParams con `vence`", () => {
+  const facts = {
+    customerName: "Madeleine Rodríguez",
+    guideCode: "96028510",
+    shalomCodigo: "MHTT",
+    lineItems: [{ name: "Aceite de Semilla Negra", quantity: 1 }],
+    agencyName: "SAN MARTIN / TARAPOTO",
+    orderTotal: 89.1,
+    validatedAmount: 30,
+    yapeNumber: "930 555 309",
+    pickupDeadline: "16 de octubre",
+  };
+
+  it("la fecha límite viaja como un parámetro más", () => {
+    const r = transitBodyParams(
+      ["nombre", "guia", "codigo", "producto", "agencia", "total", "adelanto", "saldo", "vence"],
+      facts,
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.params.at(-1)).toBe("16 de octubre");
+  });
+
+  it("sin fecha límite el aviso NO sale, y se dice qué faltó", () => {
+    const r = transitBodyParams(["nombre", "guia", "vence"], { ...facts, pickupDeadline: "" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.missing).toEqual(["vence"]);
+  });
+});
+
+// ── Olva: misma cola, otra plantilla (0175) ─────────────────────────────────
+
+describe("avisos de Olva", () => {
+  const base = {
+    shalom_transit_template_enabled: true,
+    shalom_transit_template_name: "guias_shalom",
+    shalom_transit_template_language: "es",
+    shalom_transit_params: TRANSIT_DEFAULT_PARAMS,
+    shalom_transit_attach_ticket: true,
+    shalom_arrival_template_enabled: true,
+    shalom_arrival_template_name: "guias_shalom_llegada",
+    shalom_arrival_params: "nombre,guia,codigo,producto,agencia,total,adelanto,saldo",
+    shalom_arrival_attach_ticket: true,
+    olva_transit_template_enabled: false,
+    olva_transit_template_name: null,
+    olva_transit_params: OLVA_TRANSIT_DEFAULT_PARAMS,
+    olva_arrival_template_enabled: false,
+    olva_arrival_template_name: null,
+    olva_arrival_params: "nombre,guia,producto,agencia,total,adelanto,saldo",
+    kapso_api_key: "k",
+    whatsapp_phone_number_id: "PN-store",
+    shalom_transit_phone_number_id: "PN-600",
+    shalom_transit_hour_start: 0,
+    shalom_transit_hour_end: 24,
+    timezone: "America/Lima",
+  } as any;
+
+  it("las variables por omisión son las de Shalom sin `codigo`", () => {
+    expect(OLVA_TRANSIT_DEFAULT_PARAMS).toBe("nombre,guia,producto,agencia,total,adelanto,saldo,yape");
+  });
+
+  it("encender los de Shalom NO enciende los de Olva: cada courier tiene su interruptor", () => {
+    const t = transitConfig(base, "transito", "olva");
+    expect(t.cfg).toBeNull();
+    expect((t as { reason: string }).reason).toMatch(/aviso de Olva apagado/);
+    const d = transitConfig(base, "disponible", "olva");
+    expect((d as { reason: string }).reason).toMatch(/aviso de llegada de Olva apagado/);
+  });
+
+  it("con los suyos encendidos usa SU plantilla, sin ticket, y comparte número y horario", () => {
+    const creds = {
+      ...base,
+      olva_transit_template_enabled: true,
+      olva_transit_template_name: "guias_olva",
+      olva_arrival_template_enabled: true,
+      olva_arrival_template_name: "guias_olva_llegada",
+    };
+    const t = transitConfig(creds, "transito", "olva").cfg!;
+    expect(t.courier).toBe("olva");
+    expect(t.templateName).toBe("guias_olva");
+    expect(t.tokens).toEqual(["nombre", "guia", "producto", "agencia", "total", "adelanto", "saldo", "yape"]);
+    // Shalom tiene el ticket encendido; Olva no tiene ticket que adjuntar.
+    expect(t.attachTicket).toBe(false);
+    expect(t.phoneNumberId).toBe("PN-600");
+    expect(t.language).toBe("es");
+    const d = transitConfig(creds, "disponible", "olva").cfg!;
+    expect(d.templateName).toBe("guias_olva_llegada");
+    expect(d.tokens).not.toContain("codigo");
+  });
+
+  it("la guía de Olva es su tracking con el año, no el código interno del rótulo", () => {
+    const shipment = {
+      id: "s",
+      guide_code: "MOM-KP135087-OLVA-B68DB94F",
+      shalom_codigo: null,
+      shalom_ose_id: null,
+      olva_tracking: "2552504",
+      olva_emision: "26",
+      customer_name: null,
+      customer_phone: null,
+      agency_branch: null,
+      province: null,
+      district: null,
+    };
+    expect(noticeGuideCode("olva", shipment)).toBe("2552504-26");
+    expect(noticeGuideCode("shalom", { ...shipment, guide_code: "95451003" })).toBe("95451003");
+    // Sin tracking no hay guía que decir: el aviso lo nombrará como dato que falta.
+    expect(noticeGuideCode("olva", { ...shipment, olva_tracking: null })).toBeNull();
+  });
+
+  it("Olva devuelve a los 6 días; Shalom a los 28", () => {
+    expect(pickupWindowDays("olva")).toBe(6);
+    expect(pickupWindowDays("shalom")).toBe(28);
+    // 10/09 mediodía de Lima + 6 días = 16 de setiembre (así lo escribe es-PE).
+    expect(pickupDeadlineLabel("2026-09-10T17:00:00Z", "America/Lima", pickupWindowDays("olva"))).toMatch(
+      /^16 de (setiembre|septiembre)$/,
+    );
+  });
+
+  it("se encola con el courier marcado, y sin decirlo sigue siendo Shalom", async () => {
+    const admin = fakeAdmin();
+    await enqueueTransitNotification(admin, {
+      storeId: "store",
+      shipmentId: "ship-olva",
+      orderId: "ord-1",
+      kind: "disponible",
+      courier: "olva",
+    });
+    expect(admin.upserts[0]).toMatchObject({
+      table: "shalom_transit_notifications",
+      row: { shipment_id: "ship-olva", kind: "disponible", courier: "olva" },
+      opts: { onConflict: "shipment_id,kind", ignoreDuplicates: true },
+    });
+    await enqueueTransitNotification(admin, { storeId: "store", shipmentId: "ship-1", orderId: "ord-1" });
+    expect(admin.upserts[1]!.row.courier).toBe("shalom");
+  });
+
+  it("de punta a punta: la fila de Olva sale con la plantilla de Olva, el tracking y la oficina", async () => {
+    const admin = fakeAdmin({
+      pending: [{ id: "n-olva", store_id: "store", shipment_id: "ship-olva", order_id: "ord-1", attempts: 0, kind: "disponible", courier: "olva" }],
+      shipment: {
+        id: "ship-olva",
+        guide_code: "MOM-KP135087-OLVA-B68DB94F",
+        shalom_codigo: null,
+        shalom_ose_id: null,
+        olva_tracking: "2552504",
+        olva_emision: "26",
+        customer_name: null,
+        customer_phone: null,
+        agency_branch: "JAEN - CALLE MARISCAL CASTILLA 1250",
+        province: "Cajamarca",
+        district: "Jaén",
+      },
+      // Olva no tiene borrador de Shalom del que sacar la agencia.
+      draft: null,
+    });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.O" });
+    const report = await processTransitNotifications(admin, {
+      nowIso: NOW,
+      sendTemplate: send,
+      loadCreds: async () => ({
+        ...base,
+        olva_arrival_template_enabled: true,
+        olva_arrival_template_name: "guias_olva_llegada",
+      }),
+    });
+    expect(report).toMatchObject({ sent: 1, failed: 0, skipped: 0 });
+    expect(send).toHaveBeenCalledWith(
+      { apiKey: "k" },
+      expect.objectContaining({
+        templateName: "guias_olva_llegada",
+        bodyParams: ["Armando", "2552504-26", "1× Zapatilla Runner (39-40)", "JAEN - CALLE MARISCAL CASTILLA 1250", "89.10", "30.00", "59.10"],
+      }),
+    );
+    // Sin ticket en cabecera, aunque la tienda lo tenga encendido para Shalom.
+    expect(send.mock.calls[0]![1].headerDocument).toBeUndefined();
+    // Y en la línea de tiempo queda como aviso de Olva, de llegada.
+    expect(admin.inserts[0]).toMatchObject({
+      table: "order_events",
+      row: { kind: "whatsapp_template", source: "olva_transit", courier: "olva" },
+    });
+    expect(admin.inserts[0]!.row.note).toMatch(/Aviso de llegada a la agencia/);
+  });
+
+  it("una fila de Olva con los avisos de Olva apagados se omite, aunque Shalom esté encendido", async () => {
+    const admin = fakeAdmin({
+      pending: [{ id: "n-olva", store_id: "store", shipment_id: "ship-olva", order_id: "ord-1", attempts: 0, kind: "transito", courier: "olva" }],
+    });
+    const send = vi.fn();
+    const report = await processTransitNotifications(admin, { nowIso: NOW, sendTemplate: send, loadCreds: async () => base });
+    expect(report).toMatchObject({ sent: 0, skipped: 1 });
+    expect(send).not.toHaveBeenCalled();
+    expect(admin.updates.at(-1)).toMatchObject({
+      table: "shalom_transit_notifications",
+      patch: { status: "skipped", error: "aviso de Olva apagado en la tienda" },
+    });
   });
 });

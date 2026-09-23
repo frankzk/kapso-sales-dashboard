@@ -1,4 +1,4 @@
--- Liquidaciones 2 (0171): un motorizado ve solo su hoja; un owner ve todas.
+-- Liquidaciones 2 (0179): un motorizado ve solo su hoja; un owner ve todas.
 -- Reusa la org y los usuarios de rls_smoke.sql (C = owner, D = viewer sin
 -- grant) y añade dos motorizados con ficha y hoja propia.
 

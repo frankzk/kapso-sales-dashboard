@@ -247,6 +247,11 @@ export function matchesFilters(
   if (q && !haystack(row).includes(q)) return false;
 
   if (f.confirmationDue) {
+    // La cola de «Fecha pactada» es de Por confirmar. Fuera de esa etapa el
+    // filtro no casa con nada, y no es un detalle: `cq` sobrevive al cambio de
+    // pestaña, y desde que «sin ninguna fecha» significa Hoy, sin esta guarda
+    // «Hoy» en «Todos» traería cada pedido entregado o anulado de la base.
+    if (row.macro_stage !== "por_confirmar") return false;
     // Una sola definición de la cola, compartida con el drawer y con la consulta
     // del servidor: `confirmationQueueBucket` decide quién manda entre la fecha
     // pactada, el recordatorio de dos horas y el ciclo automático.

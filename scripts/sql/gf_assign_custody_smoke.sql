@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- 0175: la verificación del motorizado es un flag. Con true, la custodia solo
+-- 0183: la verificación del motorizado es un flag. Con true, la custodia solo
 -- cambia al recibir; con false, basta con asignar y el cotejo posterior se
 -- registra igual.
 begin;

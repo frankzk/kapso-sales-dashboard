@@ -2,7 +2,7 @@
 // hechos del pedido (Master), las filas guardadas (manuales) y las hojas que
 // se consultan por lookup, produce las filas listas para pintar.
 //
-// Cuatro tipos de columna y nada más (0168):
+// Cuatro tipos de columna y nada más (0176):
 //   campo     lee un campo del pedido. Solo lectura.
 //   manual    lo que se tecleó; vive en sheet_rows.values.
 //   lookup    busca en otra hoja por un valor y devuelve una columna.

@@ -29,7 +29,7 @@ export interface WriteStopReportInput {
   photoPath?: string | null;
   voucherPath?: string | null;
   actor: string;
-  /** Lo escrito literal y su código del dominio Reparto propio (0172). */
+  /** Lo escrito literal y su código del dominio Reparto propio (0180). */
   writtenStatus?: string | null;
   writtenStatusCode?: string | null;
   writtenPayment?: string | null;
@@ -94,7 +94,7 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
 
   const now = new Date().toISOString();
   const delivered = input.status === "entregado";
-  // Modo «confirmar» (0177): al entregar se congela si el motorizado había
+  // Modo «confirmar» (0185): al entregar se congela si el motorizado había
   // dicho «Lo llevo». Null cuando la parada no salió de una caja de despacho.
   const pickup = delivered ? await pickupConfirmationFor(admin, stop.id).catch(() => null) : null;
   const unconfirmed = delivered && pickup?.confirmed === false;

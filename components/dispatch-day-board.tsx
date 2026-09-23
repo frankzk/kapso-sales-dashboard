@@ -85,7 +85,7 @@ interface Props {
   riders: CourierRiderOption[];
   manifests: DispatchManifest[];
   canManageDispatch: boolean;
-  /** 0177: exigir (verifica su caja antes de la ruta) · confirmar («Lo llevo» por paquete) · ninguno. */
+  /** 0185: exigir (verifica su caja antes de la ruta) · confirmar («Lo llevo» por paquete) · ninguno. */
   riderPickupMode: RiderPickupMode;
   /** Umbrales de efectivo de la ruta (MOM §29.9): aviso y límite. */
   cashWarning: number;
@@ -878,7 +878,7 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
     start(async () => say(await moveManifestItem(orgId, manifestId, shipmentId, targetRiderId, reason)));
   };
   const pct = box.assigned ? Math.round((box.officeChecked / box.assigned) * 100) : 0;
-  // Modo «confirmar» (0177): lo asignado que el motorizado aún no confirmó con
+  // Modo «confirmar» (0185): lo asignado que el motorizado aún no confirmó con
   // «Lo llevo». Se puede quitar o mover desde aquí; el RPC borra su parada.
   const confirmMode = pickupMode === "confirmar";
   const unconfirmed = confirmMode

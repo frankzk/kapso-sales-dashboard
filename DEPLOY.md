@@ -112,6 +112,8 @@ roles and the `auth` schema, so it just works.
    | `ALICLIK_WRITE_ENABLED` | `false` por defecto. `true` habilita CREAR guías en Aliclik |
    | `SHALOM_API_KEY` | API key (`sk_…`) del wrapper de Shalom. **Global: una para todas las tiendas.** Sin ella no aparece «+ Guía Shalom» (ver 5ñ) |
    | `SHALOM_API_BASE` | `https://api.shalom-api-peru.com` (optional). **El host a secas, sin `/v1`**: el cliente ya añade la ruta, y una base con `/v1` produce `/v1/v1/…` → 404. Si no existe la variable, el valor por defecto ya es el correcto |
+   | `OLVA_TRACKING_APIKEY` | La `apikey` con la que la página pública de Olva (`tracking.olvaexpress.pe`) llama a `reports.olvaexpress.pe/webservice/rest/getTrackingInformation`. **Es de Olva, no nuestra**: se captura en DevTools → Red al consultar un tracking, y la pueden rotar sin aviso. Sin ella el cron `olva-reconcile` se salta y los estados de Olva se marcan a mano (ver §12 del MOM) |
+   | `OLVA_TRACKING_API_BASE` | `https://reports.olvaexpress.pe` (optional) |
    | `CHATBY_WEBHOOK_SECRET` | Secreto del «Live Chat Webhook» de Chatby. **Lo elegís vos** (`openssl rand -hex 32`), no lo emite Chatby. Va también en Chatby → Integrations → Live Chat Support → Webhook, campo *Custom Header*: `X-Webhook-Secret: <valor>`. Sin él el receptor rechaza todo (ver 5q) |
    | `META_APP_SECRET` | *App Secret* de la app de Meta — **lo emite Meta**, es el mismo que ya usa la Marketing API. Con él se verifica la firma `X-Hub-Signature-256` de cada entrega del webhook de página/Instagram. Sin él el receptor rechaza todo (ver 5s) |
    | `META_WEBHOOK_VERIFY_TOKEN` | Token del apretón de manos del webhook de Meta. **Lo elegís vos** (`openssl rand -hex 32`) y lo tecleás en el panel de Meta al dar de alta la URL. Sin él Meta **nunca activa la suscripción** y no llega nada, sin error visible (ver 5s) |
@@ -693,7 +695,7 @@ Indicadores), estados por dominio con equivalencia a los estados de Kapta,
 historial por celda y observaciones de cuadre. Plan e iteraciones en
 `docs/plan/liquidaciones-2.md`; reglas en el MOM §30.
 
-1. **Migración `0168_liquidaciones2_hojas.sql`**, a mano, antes del código.
+1. **Migración `0184_liquidaciones2_hojas.sql`**, a mano, antes del código.
    Crea nueve tablas nuevas y no toca ninguna existente.
 2. La primera visita de un admin/owner siembra la organización: dominios,
    estados, el catálogo de zonas (979 distritos del Excel) y una hoja de
@@ -726,12 +728,12 @@ historial por celda y observaciones de cuadre. Plan e iteraciones en
    total en más de S/ 0,50 y pedido anulado/devuelto en Kapta. Nunca dos
    abiertas por fila y campo. La causa «cobro digital sin comprobante validado»
    existió un día y se retiró (MOM §30.8); la **migración
-   `0170_sheet_observation_reason_pago.sql`** deja su motivo en el catálogo.
+   `0186_sheet_observation_reason_pago.sql`** deja su motivo en el catálogo.
 9. **Foto del cuaderno**: `/api/sheets/import` acepta jpeg/png/webp/gif hasta
    8 MB y usa la misma visión que Liquidaciones (clave de la tienda o
    `ANTHROPIC_API_KEY`). Si la foto no trae fecha, la pantalla la pide.
 10. **Pantalla del motorizado** (`/reparto/cuaderno`, MOM §30.9). Migración
-   `0171_sheets_rider_rls.sql` a mano antes del código: acota la lectura de
+   `0187_sheets_rider_rls.sql` a mano antes del código: acota la lectura de
    las tablas de hojas a la propia cuando el único rol es `motorizado`. Alta de
    un motorizado: ficha en Liquidaciones → Motorizados con su correo; invitación
    desde Equipo con rol `motorizado` (o membresía a mano); `riders.user_id`
@@ -749,7 +751,7 @@ historial por celda y observaciones de cuadre. Plan e iteraciones en
    bucket privado `delivery-proofs`, ruta `cuaderno/<hoja>/<fila>/`.
 
 11. **Convergencia con Rutas** (19-09-2026, MOM §29.12). **Migración
-   `0172_stop_written_status.sql`** a mano antes del código: `delivery_stops`
+   `0180_stop_written_status.sql`** a mano antes del código: `delivery_stops`
    gana `written_status`, `written_status_code`, `written_payment`; `sheet_rows`
    gana `stop_id`. La parada es la verdad: la hoja de Reparto propio se
    sincroniza desde ella (al reportar, al cerrar ruta y al abrir la hoja del
@@ -763,7 +765,7 @@ historial por celda y observaciones de cuadre. Plan e iteraciones en
    de Reparto propio (idempotente; no toca el Master). Corrido el 19-09-2026.
 
 13. **Ponerse al día con el Master en bloque, y poder deshacerlo.** Migración
-    `0173_master_backfill_log.sql` (bitácora). `pnpm tsx
+    `0181_master_backfill_log.sql` (bitácora). `pnpm tsx
     scripts/apply-cuaderno-history-to-master.ts <org_id> <actor_user_id>
     [--real]` aplica por la puerta única (`lib/master-door.ts`) las entregas
     del cuaderno que Kapta aún tiene abiertas en Lima: sin `--real` es un
@@ -780,7 +782,7 @@ historial por celda y observaciones de cuadre. Plan e iteraciones en
 
 MOM §29.13; auditoría en `docs/plan/despacho-crm.md`.
 
-1. **Migración `0174_manifest_item_not_picked.sql`**, a mano, antes del código:
+1. **Migración `0182_manifest_item_not_picked.sql`**, a mano, antes del código:
    columnas `pickup_declined_*` en los ítems de la caja y el RPC
    `gf_rider_decline`. Smoke en `scripts/sql/gf_rider_decline_smoke.sql`.
 2. Pestaña «Despacho del día» en `/dashboard/courier` (predeterminada), en
@@ -797,7 +799,7 @@ MOM §29.13; auditoría en `docs/plan/despacho-crm.md`.
 3. `/reparto` abre en «Recibir mi caja» mientras haya una carga cotejada y no
    recibida; «No lo recojo» exige motivo. El bloque «Recibir mi carga» de la
    pantalla vieja desapareció.
-3b. **Migración `0175_provider_rider_pickup_check.sql`**, a mano, antes del
+3b. **Migración `0183_provider_rider_pickup_check.sql`**, a mano, antes del
    código: flag `logistics_providers.rider_pickup_check_required`, RPC
    `gf_assign_custody` y guard de ítems relajado para el cotejo opcional. Con
    el flag en `false` (valor de producción desde el 19-09-2026, pedido por la
@@ -805,7 +807,7 @@ MOM §29.13; auditoría en `docs/plan/despacho-crm.md`.
    `/reparto` muestra la ruta; «Recibir mi caja» no aparece. Para volver a
    exigir la verificación:
    (hoy el modo `exigir`, ver 3c).
-   **Migración `0176_gf_one_load_per_day.sql`** (a mano, antes del código):
+   **Migración `0184_gf_one_load_per_day.sql`** (a mano, antes del código):
    con el flag apagado hay una sola carga por motorizado y día; las
    asignaciones posteriores se suman a ella ya en custodia
    (`gf_dispatch_load_open`, `gf_add_item_in_custody`). Smoke:
@@ -813,7 +815,7 @@ MOM §29.13; auditoría en `docs/plan/despacho-crm.md`.
    Se lee en un solo sitio (`riderPickupMode`,
    `lib/grupo-gf-courier-route-access.ts`); la cabecera de «Despacho del día»
    lo muestra. Smoke: `scripts/sql/gf_assign_custody_smoke.sql`.
-3c. **Migración `0177_provider_rider_pickup_mode.sql`**, a mano, antes del
+3c. **Migración `0185_provider_rider_pickup_mode.sql`**, a mano, antes del
    código: reemplaza el booleano por `logistics_providers.rider_pickup_mode`
    (`exigir` | `confirmar` | `ninguno`; migra `true`→`exigir`,
    `false`→`ninguno`), añade `delivery_stops.pickup_confirmed`, los RPC
@@ -1254,6 +1256,39 @@ todas las tiendas**.
 > `origen`, `destino`, `remitente`, `destinatario` y `comprobante` llegan vacíos
 > desde julio de 2026 — lo avisa el propio proveedor. No se pide: el estado sale
 > entero de `status`.
+
+### Los estados de Olva: `/api/cron/olva-reconcile`, cada 30 min
+
+Olva **no tiene API para clientes**. Lo que existe es la llamada que hace su
+página pública de seguimiento —un `GET` a
+`reports.olvaexpress.pe/webservice/rest/getTrackingInformation?tracking=…&emision=…&apikey=…&details=1`—
+con una apikey fija que la página publica en su JavaScript. `lib/olva/client.ts`
+repite exactamente esa llamada, con `Origin` y `Referer` de la página. La apikey
+va en `OLVA_TRACKING_APIKEY`; se captura desde DevTools → Red al consultar
+cualquier tracking en `tracking.olvaexpress.pe` (la petición
+`getTrackingInformation`, la de ~1,5 kB; la otra, `searchInfo`, no trae el
+historial).
+
+**Qué pasa cuando Olva la rote.** El cron empieza a recibir 401/403 —o un HTML
+en vez de JSON— y lo trata como «Olva cambió algo»: cuenta el fallo en
+`errors`, **no toca ningún estado** y el marcado a mano del drawer sigue
+mandando. Se captura la apikey nueva, se cambia la variable, y listo: no hay
+código que tocar.
+
+Solo entran las salidas de Olva **con tracking registrado** (columna
+`olva_tracking`, 0174): el número se pega en el drawer, en la salida, desde
+**Salidas y guías**. El mapeo de estados vive en `lib/olva/tracking.ts`, puro y
+probado con dos respuestas reales; **manda el estado que Olva declara vigente**
+(`nombre_estado_tracking`), no el hito más avanzado — en un envío real, un
+operador fue asignado antes de que el paquete se confirmara en la tienda de
+destino, y la escalera habría tapado tres días de mostrador. Un estado que Kapta
+no conoce se guarda crudo y sale en el informe como `estadosSinTraducir`, con un
+tracking de muestra para ir a mirarlo: es la lista de lo que hay que añadir al
+traductor.
+
+`CONFIRMACION EN TIENDA` fija `agency_arrived_at` y `agency_expires_at` a
+**6 días** (Olva devuelve a los 6, Shalom a los 28), con lo que «Próximo a
+vencer» funciona igual que para Shalom.
 
 ### Anular una guía
 
@@ -1711,6 +1746,50 @@ línea de tiempo como `whatsapp_template`.
 Kapta; si el bot también responde a «Pagar con Yape» con una cuenta escrita a
 mano, la clienta recibe dos mensajes y, el día que la cuenta cambie, uno de los
 dos estará mal. Ver `docs/kapso-functions/README.md`.
+
+### 5v.1 El botón «Link de pago» cobrando por Flow.cl
+
+Encendido, ese botón crea una orden de cobro en Flow.cl **por el saldo del
+momento** y manda el link. El pago vuelve por el webhook que ya existía desde
+la 0160/0161 y aparece como comprobante `diferencia` **ya validado** — la
+única excepción a que todo comprobante pase por revisión, porque aquí la
+evidencia es la respuesta firmada de la pasarela y no la foto de una
+pantalla. `validated_by` queda en NULL y la línea de tiempo lo explica.
+
+1. **Migración `0168_flowcl_link_settings.sql`**, a mano, antes del código.
+   Solo añade columnas a `stores` y un índice: no toca ningún cobro existente.
+2. **Ajustes → Flow.cl (pasarela)**: API key, secret key y **secreto del
+   webhook** de la tienda. El secreto no se configura en el panel de Flow —
+   viaja en `urlConfirmation` de cada cobro—, así que basta con inventarlo aquí:
+   `crypto.randomUUID()` en la consola del navegador sirve.
+
+   > **El secreto no se rota a media tarde.** Queda grabado dentro de la
+   > `urlConfirmation` de cada cobro EN EL MOMENTO DE CREARLO. Cambiarlo deja a
+   > todos los links vivos avisando con el secreto viejo: el webhook los
+   > rechaza con 401, el dinero entra en Flow y no aparece en el pedido. Si hay
+   > que cambiarlo, primero se deja vencer lo vivo (`flowcl_payment_links` con
+   > `status='creado'` y `expires_at` en el futuro).
+3. **`NEXT_PUBLIC_SITE_URL` tiene que ser la URL pública real.** De ahí salen
+   `urlConfirmation` y `urlReturn`. Con el valor por omisión
+   (`http://localhost:3000`) el cobro se crea y el pago no vuelve nunca.
+4. **Ajustes → Cobro por Flow.cl en el botón «Link de pago»**: email de
+   respaldo (obligatorio en la práctica: el 95 % de los pedidos no trae email),
+   horas de vencimiento y medio de pago. Encender al final.
+5. **Una prueba real con un importe pequeño antes de encenderlo del todo.** El
+   comportamiento de Flow ante importes con decimales no está comprobado contra
+   la API real (`lib/flow/client.ts` lo dice desde la sonda de 2026-09-12); el
+   saldo de un pedido casi siempre los tiene.
+
+**Qué mirar después.** `flowcl_payment_links`: un link por pulsación es
+esperado solo la primera vez —después se reenvía el mismo mientras el importe
+no cambie—. Filas en `anulado` con `last_status->>'create_error'` son cobros
+que Flow rechazó; con `status='pagado'` y `register_error` relleno, dinero que
+entró y no se pudo anotar como comprobante: eso hay que mirarlo a mano.
+
+**El riesgo que no desaparece.** Un link vivo cobra el importe con el que
+nació. Si la clienta paga parte por Yape, el siguiente botón crea uno nuevo por
+lo que falta, pero el viejo sigue en su chat hasta que vence. Las horas de
+vencimiento son lo único que lo acota.
 
 ## 7. Post-deploy verification
 

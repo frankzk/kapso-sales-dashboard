@@ -269,7 +269,7 @@ export function cashLimitVerdict(input: {
 }
 
 // ---------------------------------------------------------------------------
-// Modo de recojo del motorizado: tres valores en la base (0177, §29.13)
+// Modo de recojo del motorizado: tres valores en la base (0185, §29.13)
 // ---------------------------------------------------------------------------
 
 /**
@@ -279,7 +279,7 @@ export function cashLimitVerdict(input: {
  *   confirmar → asignar entrega la custodia y crea las paradas; el motorizado
  *               dice «Lo llevo» por paquete al sacarlo del almacén, o «No lo
  *               llevo» con motivo. Nada bloquea la ruta.
- *   ninguno   → basta con asignar; no se pide nada más (0175/0176).
+ *   ninguno   → basta con asignar; no se pide nada más (0183/0176).
  */
 export type RiderPickupMode = "exigir" | "confirmar" | "ninguno";
 export const RIDER_PICKUP_MODES: readonly RiderPickupMode[] = ["exigir", "confirmar", "ninguno"];

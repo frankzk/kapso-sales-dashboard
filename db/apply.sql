@@ -337,28 +337,44 @@
 \ir migrations/0166_shalom_transit_whatsapp.sql
 \echo 'Applying 0167_transit_ticket_on_reply.sql'
 \ir migrations/0167_transit_ticket_on_reply.sql
-\echo 'Applying 0168_liquidaciones2_hojas.sql'
-\ir migrations/0168_liquidaciones2_hojas.sql
-\echo 'Applying 0169_sheet_status_effect_sin_salida.sql'
-\ir migrations/0169_sheet_status_effect_sin_salida.sql
-\echo 'Applying 0170_sheet_observation_reason_pago.sql'
-\ir migrations/0170_sheet_observation_reason_pago.sql
-\echo 'Applying 0171_sheets_rider_rls.sql'
-\ir migrations/0171_sheets_rider_rls.sql
-\echo 'Applying 0172_stop_written_status.sql'
-\ir migrations/0172_stop_written_status.sql
-\echo 'Applying 0173_master_backfill_log.sql'
-\ir migrations/0173_master_backfill_log.sql
-\echo 'Applying 0174_manifest_item_not_picked.sql'
-\ir migrations/0174_manifest_item_not_picked.sql
-\echo 'Applying 0175_provider_rider_pickup_check.sql'
-\ir migrations/0175_provider_rider_pickup_check.sql
-\echo 'Applying 0176_gf_one_load_per_day.sql'
-\ir migrations/0176_gf_one_load_per_day.sql
-\echo 'Applying 0177_provider_rider_pickup_mode.sql'
-\ir migrations/0177_provider_rider_pickup_mode.sql
-\echo 'Applying 0178_order_master_rider_select.sql'
-\ir migrations/0178_order_master_rider_select.sql
-\echo 'Applying 0179_gf_readd_declined_item.sql'
-\ir migrations/0179_gf_readd_declined_item.sql
+\echo 'Applying 0168_flowcl_link_settings.sql'
+\ir migrations/0168_flowcl_link_settings.sql
+\echo 'Applying 0169_aliclik_tariff_probes_sin_inventar_cobertura.sql'
+\ir migrations/0169_aliclik_tariff_probes_sin_inventar_cobertura.sql
+\echo 'Applying 0170_shalom_arrival_notice.sql'
+\ir migrations/0170_shalom_arrival_notice.sql
+\echo 'Applying 0171_voucher_intake_switch.sql'
+\ir migrations/0171_voucher_intake_switch.sql
+\echo 'Applying 0172_collection_alerts.sql'
+\ir migrations/0172_collection_alerts.sql
+\echo 'Applying 0173_pickup_key_autosend.sql'
+\ir migrations/0173_pickup_key_autosend.sql
+\echo 'Applying 0174_olva_tracking.sql'
+\ir migrations/0174_olva_tracking.sql
+\echo 'Applying 0175_olva_notices.sql'
+\ir migrations/0175_olva_notices.sql
+\echo 'Applying 0176_liquidaciones2_hojas.sql'
+\ir migrations/0176_liquidaciones2_hojas.sql
+\echo 'Applying 0177_sheet_status_effect_sin_salida.sql'
+\ir migrations/0177_sheet_status_effect_sin_salida.sql
+\echo 'Applying 0178_sheet_observation_reason_pago.sql'
+\ir migrations/0178_sheet_observation_reason_pago.sql
+\echo 'Applying 0179_sheets_rider_rls.sql'
+\ir migrations/0179_sheets_rider_rls.sql
+\echo 'Applying 0180_stop_written_status.sql'
+\ir migrations/0180_stop_written_status.sql
+\echo 'Applying 0181_master_backfill_log.sql'
+\ir migrations/0181_master_backfill_log.sql
+\echo 'Applying 0182_manifest_item_not_picked.sql'
+\ir migrations/0182_manifest_item_not_picked.sql
+\echo 'Applying 0183_provider_rider_pickup_check.sql'
+\ir migrations/0183_provider_rider_pickup_check.sql
+\echo 'Applying 0184_gf_one_load_per_day.sql'
+\ir migrations/0184_gf_one_load_per_day.sql
+\echo 'Applying 0185_provider_rider_pickup_mode.sql'
+\ir migrations/0185_provider_rider_pickup_mode.sql
+\echo 'Applying 0186_order_master_rider_select.sql'
+\ir migrations/0186_order_master_rider_select.sql
+\echo 'Applying 0187_gf_readd_declined_item.sql'
+\ir migrations/0187_gf_readd_declined_item.sql
 \echo 'Done.'

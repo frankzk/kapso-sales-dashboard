@@ -76,6 +76,8 @@ import {
 import type { RouteKey } from "@/lib/order-route-plan";
 import type { OrderMasterRow } from "@/lib/types";
 import { ADELANTO_MINIMO, ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
+import { formatOlvaTracking, parseOlvaTracking, type OlvaTrackingId } from "@/lib/olva/tracking";
+import { orderFullyPaid } from "@/lib/order-paid";
 import { discardRecovery, validarMotivoDescarte } from "@/lib/recovery-discard";
 
 export interface MasterActionState {
@@ -306,6 +308,39 @@ export interface CreateManualRouteOutputInput {
   courier: RouteKey | ManualRouteCourier;
   dispatchDate: string;
   note?: string;
+  /**
+   * Solo Olva: el tracking que emite Olva («2552504-26»), si ya se tiene. Es
+   * opcional al crear —la guía suele emitirse en el mostrador, después del
+   * rótulo— y se puede completar luego con `setOlvaTracking` (§12).
+   */
+  olvaTracking?: string;
+}
+
+/** El año a dos dígitos que la página de Olva preselecciona como «emisión». */
+function olvaDefaultEmision(): string {
+  return limaTodayKey().slice(2, 4);
+}
+
+/**
+ * ¿Otra salida ya tiene este tracking? Es la misma regla que las guías de
+ * Shalom vinculadas a mano: un número, una salida. Se excluye la propia para
+ * que reenviar el formulario sea idempotente.
+ */
+async function olvaTrackingTakenBy(
+  admin: ReturnType<typeof createAdminSupabase>,
+  id: OlvaTrackingId,
+  exceptShipmentId: string | null,
+): Promise<{ error?: string; taken?: { id: string; order_name: string | null } | null }> {
+  let query = admin
+    .from("shipments")
+    .select("id,order_name")
+    .eq("olva_tracking", id.tracking)
+    .eq("olva_emision", id.emision)
+    .limit(1);
+  if (exceptShipmentId) query = query.neq("id", exceptShipmentId);
+  const { data, error } = await query.maybeSingle();
+  if (error) return { error: `No se pudo validar el tracking: ${error.message}` };
+  return { taken: (data as { id: string; order_name: string | null } | null) ?? null };
 }
 
 export interface CreateManualRouteOutputResult extends MasterActionState {
@@ -439,7 +474,22 @@ export async function createManualRouteOutput(
     }
   }
 
-  if (input.courier === "olva") {
+  // El adelanto de Olva. UN PEDIDO YA COBRADO NO DEBE ADELANTO: el que pagó en
+  // el checkout no tiene ni una fila en `order_payments`, así que sumar
+  // comprobantes validados daba «Hay S/ 0.00» y bloqueaba la salida de un
+  // pedido pagado entero (#KP135087, S/ 89,10 por pasarela). Es la misma regla
+  // de §12 —«un pedido pagado en el checkout no tiene cobro que gestionar»— y
+  // la misma que ya aplican la guía Swayp y la clave de recojo: `orderFullyPaid`
+  // decide, y los comprobantes solo se suman cuando el checkout no cobró.
+  if (
+    input.courier === "olva" &&
+    !orderFullyPaid({
+      financialStatus: ctx.row.financial_status,
+      totalRefunded: ctx.row.total_refunded,
+      paymentGateway: ctx.row.payment_gateway,
+      paymentState: ctx.row.payment_state,
+    })
+  ) {
     const { data: payments, error: paymentError } = await admin
       .from("order_payments")
       .select("amount")
@@ -455,6 +505,22 @@ export async function createManualRouteOutput(
         error: `Olva Agencia requiere al menos ${ADELANTO_MINIMO_LABEL} validados. Hay S/ ${validated.toFixed(2)}.`,
       };
     }
+  }
+
+  // El tracking de Olva, si ya se tiene al crear. Se valida ANTES de insertar:
+  // un número mal tecleado no puede dejar creada una salida a medias.
+  let olvaId: OlvaTrackingId | null = null;
+  if (input.courier === "olva" && (input.olvaTracking ?? "").trim()) {
+    const parsed = parseOlvaTracking(input.olvaTracking, olvaDefaultEmision());
+    if (!parsed.ok) return { error: parsed.error };
+    const dup = await olvaTrackingTakenBy(admin, parsed.value, null);
+    if (dup.error) return { error: dup.error };
+    if (dup.taken) {
+      return {
+        error: `El tracking ${formatOlvaTracking(parsed.value)} ya está en la salida de ${dup.taken.order_name ?? "otro pedido"}. Revisa el número.`,
+      };
+    }
+    olvaId = parsed.value;
   }
 
   const { data: order } = await admin
@@ -508,6 +574,7 @@ export async function createManualRouteOutput(
       created_via: MANUAL_ROUTE_CREATED_VIA,
       label_url: labelUrl,
       ...(input.courier === "olva" ? { pickup_state: "pendiente_de_envio" } : {}),
+      ...(olvaId ? { olva_tracking: olvaId.tracking, olva_emision: olvaId.emision } : {}),
     })
     .select("id,output_code")
     .single();
@@ -525,12 +592,15 @@ export async function createManualRouteOutput(
     reason: note || null,
     note: tbd
       ? `${outputCode} creada sin courier definido; se fijará al entrar a una ruta. Salida prevista ${dispatchDate}.`
-      : `${outputCode} creada para ${MANUAL_COURIER_LABEL[input.courier]}; salida prevista ${dispatchDate}.`,
+      : `${outputCode} creada para ${MANUAL_COURIER_LABEL[input.courier]}; salida prevista ${dispatchDate}.${
+          olvaId ? ` Tracking Olva ${formatOlvaTracking(olvaId)}.` : ""
+        }`,
     payload: {
       outputCode,
       dispatchDate,
       activeOutputsAtCreation: active.map((output) => output.id),
       labelUrl,
+      ...(olvaId ? { olvaTracking: formatOlvaTracking(olvaId) } : {}),
     },
   });
 
@@ -557,6 +627,107 @@ export async function createManualRouteOutput(
  *
  * Marca `anulado`; no borra. Ver `manualOutputIsCancelable`.
  */
+/**
+ * Registra —o corrige— el tracking de Olva de una salida que ya existe (§12).
+ *
+ * POR QUÉ APARTE DE CREAR LA SALIDA. La salida se crea al armar la caja, con el
+ * rótulo interno; el tracking lo emite Olva en el mostrador, después, y llega
+ * por el correo de confirmación. Casi siempre se conoce DESPUÉS de crearla.
+ *
+ * Es lo que hace posible el rastreo: sin tracking, el cron no tiene nada que
+ * preguntar y el estado de agencia se marca a mano —que es lo que se hacía—.
+ * Corregirlo escribe un evento con el valor anterior; no se borra nada.
+ */
+export async function setOlvaTracking(
+  shipmentId: string,
+  input: { tracking: string },
+): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite editar salidas." };
+
+  const parsed = parseOlvaTracking(input.tracking, olvaDefaultEmision());
+  if (!parsed.ok) return { error: parsed.error };
+  const id = parsed.value;
+
+  const admin = createAdminSupabase();
+  const { data: shipmentRow, error: shipmentError } = await admin
+    .from("shipments")
+    .select("id,order_id,courier,guide_code,output_code,delivery_status,olva_tracking,olva_emision")
+    .eq("id", shipmentId)
+    .maybeSingle();
+  if (shipmentError) return { error: `No se pudo leer la salida: ${shipmentError.message}` };
+  if (!shipmentRow) return { error: "No se encontró la salida." };
+  const output = shipmentRow as {
+    id: string;
+    order_id: string | null;
+    courier: string;
+    guide_code: string | null;
+    output_code: string | null;
+    delivery_status: string;
+    olva_tracking: string | null;
+    olva_emision: string | null;
+  };
+  if (!output.order_id) return { error: "Esa salida no está vinculada a ningún pedido." };
+  if (output.courier.trim().toLowerCase() !== "olva") {
+    return { error: "El tracking de Olva solo se registra en una salida de Olva." };
+  }
+
+  const ctx = await authorizeOrder(output.order_id);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  const previous =
+    output.olva_tracking && output.olva_emision
+      ? formatOlvaTracking({ tracking: output.olva_tracking, emision: output.olva_emision })
+      : null;
+  const next = formatOlvaTracking(id);
+  if (previous === next) return { notice: `El tracking ${next} ya estaba registrado.` };
+
+  const dup = await olvaTrackingTakenBy(admin, id, output.id);
+  if (dup.error) return { error: dup.error };
+  if (dup.taken) {
+    return {
+      error: `El tracking ${next} ya está en la salida de ${dup.taken.order_name ?? "otro pedido"}. Revisa el número.`,
+    };
+  }
+
+  const { error: updateError } = await admin
+    .from("shipments")
+    .update({
+      olva_tracking: id.tracking,
+      olva_emision: id.emision,
+      // Un tracking nuevo es otro envío para Olva: lo que se sabía del
+      // anterior no describe a este. El cron lo vuelve a leer en la siguiente
+      // pasada.
+      olva_status: null,
+      olva_raw: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", output.id);
+  if (updateError) {
+    if (/duplicate key|23505/i.test(updateError.message)) {
+      return { error: `El tracking ${next} fue registrado en otra salida mientras escribías. Revisa el número.` };
+    }
+    return { error: `No se pudo guardar el tracking: ${updateError.message}` };
+  }
+
+  await recordEvent(admin, ctx, {
+    kind: "olva_tracking_linked",
+    source: "olva",
+    courier: "olva",
+    guideCode: output.guide_code,
+    shipmentId: output.id,
+    note: previous
+      ? `Tracking Olva corregido en ${output.output_code ?? output.guide_code ?? "la salida"}: ${previous} → ${next}.`
+      : `Tracking Olva ${next} registrado en ${output.output_code ?? output.guide_code ?? "la salida"}.`,
+    payload: { olvaTracking: next, previousOlvaTracking: previous },
+  });
+
+  revalidatePath(MASTER_PATH);
+  return {
+    notice: `Tracking ${next} registrado. Kapta consultará su estado en Olva cada media hora.`,
+  };
+}
+
 export async function cancelManualRouteOutput(
   shipmentId: string,
   input: { note?: string } = {},
@@ -1264,10 +1435,20 @@ async function attestAgencyShipment(
     store_id: ctx.storeId,
     order_id: ctx.row.order_id,
     courier,
-    // Sin código: la guía la tiene el mostrador de la agencia y aquí nadie la
-    // teclea. Un código inventado sería peor — se cotejaría contra el reporte del
-    // courier y no casaría nunca.
-    guide_code: null,
+    // EL CÓDIGO INTERNO, el mismo que usa `createManualRouteOutput`:
+    // `MOM-AUR176295-OLVA-54C05FD1`. Aquí decía `null` con la razón de que «la
+    // guía la tiene el mostrador y un código inventado se cotejaría contra el
+    // reporte del courier». La columna es NOT NULL, así que este camino NUNCA
+    // funcionó: cero salidas `agency_operator_attested` en toda la tabla desde
+    // que se estrenó el 09-09-2026, y cada intento devolvía «null value in
+    // column guide_code» — como valor, no como excepción, así que tampoco
+    // llegó al registro de errores. Lo destapó #AUR176295 el 20-09-2026.
+    //
+    // El prefijo `MOM-` es justo lo que evita el cotejo: ningún courier emite
+    // códigos así, y `match_method` ya dice que lo afirmó una persona. Que sea
+    // función pura del pedido y del id de la fila es lo que hace que quien
+    // audite pueda reconstruirlo, igual que en la salida «por definir».
+    guide_code: manualRouteGuideCode(ctx.row.order_name, shipmentId, courier),
     order_name: ctx.row.order_name,
     customer_name: ctx.row.customer_name,
     customer_phone: ctx.row.customer_phone,

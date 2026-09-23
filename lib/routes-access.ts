@@ -40,12 +40,12 @@ export interface StopWithOrder extends RouteStop {
   voucher_path: string | null;
   reported_at: string | null;
   reported_by?: string | null;
-  /** Lo escrito por el motorizado tal cual y su detalle de pago (0172). */
+  /** Lo escrito por el motorizado tal cual y su detalle de pago (0180). */
   written_status?: string | null;
   written_status_code?: string | null;
   written_payment?: string | null;
   /** Caja de despacho de la que salió la parada (0159) y, en modo «confirmar»
-   *  (0177), si el motorizado dijo «Lo llevo» y si lo había dicho al entregar. */
+   *  (0185), si el motorizado dijo «Lo llevo» y si lo había dicho al entregar. */
   shipment_id?: string | null;
   dispatch_manifest_id?: string | null;
   pickup_confirmed?: boolean | null;
@@ -166,7 +166,7 @@ function pickupKey(stop: { dispatch_manifest_id?: string | null; shipment_id?: s
 }
 
 /**
- * «Lo llevo» de cada parada (0177): el ítem de la caja de despacho que la
+ * «Lo llevo» de cada parada (0185): el ítem de la caja de despacho que la
  * originó. Se lee con el service role porque las políticas de los ítems son
  * del supervisor, y el motorizado solo recibe los de SUS paradas (ya
  * filtradas por RLS arriba).

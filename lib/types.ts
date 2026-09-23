@@ -359,6 +359,15 @@ export interface ShipmentRow {
   /** Id con el que Shalom sirve el rótulo PDF. Solo en las creadas por API. */
   shalom_ose_id?: number | null;
   /**
+   * El número con el que Olva conoce el envío («2552504») y los dos dígitos
+   * del año de emisión («26») que su página exige junto a él (0174). El
+   * `guide_code` de una salida de Olva es el código interno del rótulo, no
+   * este. `olva_status` es el último estado crudo que dijo Olva.
+   */
+  olva_tracking?: string | null;
+  olva_emision?: string | null;
+  olva_status?: string | null;
+  /**
    * Estado del flujo de agencia de ESTA salida (§10). Es lo que el courier
    * reporta —«pendiente de envío», «disponible para recojo»— y no coincide con
    * `delivery_status`, que se queda en «pendiente» todo ese trayecto.

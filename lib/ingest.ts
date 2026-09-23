@@ -81,6 +81,11 @@ export interface StoreCreds {
   flowcl_api_key: string | null;
   flowcl_secret_key: string | null;
   flowcl_webhook_secret: string | null;
+  /** El botón «Link de pago» cobra de verdad por Flow.cl (0168). */
+  flowcl_link_enabled: boolean;
+  flowcl_link_email: string | null;
+  flowcl_link_ttl_hours: number;
+  flowcl_link_yape_only: boolean;
   whatsapp_phone_number_id: string | null;
   currency: string;
   timezone: string;
@@ -143,6 +148,23 @@ export interface StoreCreds {
   shalom_transit_hour_end: number;
   /** Respuesta al botón «Link de pago», con {saldo}, {pedido} y {yape}. */
   shalom_transit_payment_link: string | null;
+  /** Aviso de «ya llegó a la agencia» (0169). Comparte número y horario. */
+  shalom_arrival_template_enabled: boolean;
+  shalom_arrival_template_name: string | null;
+  shalom_arrival_params: string | null;
+  shalom_arrival_attach_ticket: boolean;
+  /** Registrar solos los comprobantes que llegan por WhatsApp (0171). */
+  shalom_voucher_intake_enabled: boolean;
+  /** Mandar la clave de recojo al validar el pago que cubre el pedido (0173). */
+  shalom_pickup_key_autosend_enabled: boolean;
+  /** Los dos avisos de Olva (0175). Comparten número, idioma, horario y
+   *  cuentas con los de Shalom; solo la plantilla y sus variables son propias. */
+  olva_transit_template_enabled: boolean;
+  olva_transit_template_name: string | null;
+  olva_transit_params: string | null;
+  olva_arrival_template_enabled: boolean;
+  olva_arrival_template_name: string | null;
+  olva_arrival_params: string | null;
 }
 
 /**
@@ -191,6 +213,10 @@ export async function getStoreCreds(
     flowcl_api_key: decryptOrNull(data.flowcl_api_key_enc),
     flowcl_secret_key: decryptOrNull(data.flowcl_secret_key_enc),
     flowcl_webhook_secret: decryptOrNull(data.flowcl_webhook_secret_enc),
+    flowcl_link_enabled: data.flowcl_link_enabled ?? false,
+    flowcl_link_email: data.flowcl_link_email ?? null,
+    flowcl_link_ttl_hours: data.flowcl_link_ttl_hours ?? 48,
+    flowcl_link_yape_only: data.flowcl_link_yape_only ?? false,
     whatsapp_phone_number_id: data.whatsapp_phone_number_id ?? null,
     currency: data.currency ?? "PEN",
     timezone: data.timezone ?? "America/Lima",
@@ -257,6 +283,18 @@ export async function getStoreCreds(
     shalom_transit_hour_start: data.shalom_transit_hour_start ?? 8,
     shalom_transit_hour_end: data.shalom_transit_hour_end ?? 21,
     shalom_transit_payment_link: data.shalom_transit_payment_link ?? null,
+    shalom_arrival_template_enabled: data.shalom_arrival_template_enabled ?? false,
+    shalom_arrival_template_name: data.shalom_arrival_template_name ?? null,
+    shalom_arrival_params: data.shalom_arrival_params ?? null,
+    shalom_arrival_attach_ticket: data.shalom_arrival_attach_ticket ?? false,
+    shalom_voucher_intake_enabled: data.shalom_voucher_intake_enabled ?? false,
+    shalom_pickup_key_autosend_enabled: data.shalom_pickup_key_autosend_enabled ?? false,
+    olva_transit_template_enabled: data.olva_transit_template_enabled ?? false,
+    olva_transit_template_name: data.olva_transit_template_name ?? null,
+    olva_transit_params: data.olva_transit_params ?? null,
+    olva_arrival_template_enabled: data.olva_arrival_template_enabled ?? false,
+    olva_arrival_template_name: data.olva_arrival_template_name ?? null,
+    olva_arrival_params: data.olva_arrival_params ?? null,
   };
 }
 

@@ -1,11 +1,11 @@
 -- ============================================================================
--- 0178_order_master_rider_select.sql — un motorizado lee del Master los
+-- 0186_order_master_rider_select.sql — un motorizado lee del Master los
 -- pedidos de SUS rutas.
 --
 -- La pantalla del motorizado (/reparto, MOM §29.12) pinta cada parada con el
 -- nombre, el celular, la dirección y el monto del pedido, que salen de
 -- `order_master`. Esa tabla solo dejaba leer por tienda (`auth_store_ids()`),
--- y un usuario cuyo único rol es `motorizado` (0066, 0171) no tiene acceso a
+-- y un usuario cuyo único rol es `motorizado` (0066, 0179) no tiene acceso a
 -- ninguna tienda: veía sus paradas como «Sin nombre — · —». Mientras la ficha
 -- de Roy estuvo atada a un usuario owner no se notó.
 --
@@ -16,7 +16,7 @@
 -- sigue cerrada; el motorizado reporta por `delivery_stops` y el RPC.
 --
 -- Las paradas se resuelven en una función SECURITY DEFINER, como
--- `auth_sheet_ids()` (0171), para que la política no dependa de las políticas
+-- `auth_sheet_ids()` (0179), para que la política no dependa de las políticas
 -- de rutas y paradas ni las evalúe fila a fila.
 -- ============================================================================
 

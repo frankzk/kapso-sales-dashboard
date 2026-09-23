@@ -3,7 +3,7 @@
 // Paso 1 «Agregar pedidos» de la caja de Grupo GF, dentro del panel (MOM
 // §29.14): el mismo gesto de Despacho del día acotado a ESTA caja. Cada
 // escaneo toma el pedido si hace falta, lo mete en la caja de este motorizado
-// y este día, sin cotejarlo (`scanAssignToRider`: la verificación es aparte); con 0179 también
+// y este día, sin cotejarlo (`scanAssignToRider`: la verificación es aparte); con 0187 también
 // readmite un paquete que el motorizado rechazó. No hay motorizado que
 // elegir: la caja ya es de uno. Antes aquí solo había un enlace a otra
 // página.

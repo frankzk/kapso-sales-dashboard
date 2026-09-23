@@ -11,7 +11,11 @@ import { unstable_cache } from "next/cache";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
-import { shopifyOrderNote, shopifyShippingAddress } from "@/lib/shopify-address";
+import {
+  shopifyDepartamentoElegido,
+  shopifyOrderNote,
+  shopifyShippingAddress,
+} from "@/lib/shopify-address";
 import { orderTotals, type OrderTotals } from "@/lib/order-totals";
 import { productImagesFor } from "@/lib/shopify-product-images";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
@@ -52,6 +56,8 @@ import {
   type SwaypRouteCheck,
 } from "@/lib/order-route-plan";
 import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
+import { cargarMapaSwayp } from "@/lib/swayp-sku-map";
+import { productosSinVinculo } from "@/lib/swayp-productos";
 import type {
   OrderEventRow,
   OrderLineItem,
@@ -421,6 +427,13 @@ export interface OrderMasterDetail {
    */
   totals: OrderTotals;
   address: ReturnType<typeof shopifyShippingAddress>;
+  /**
+   * El departamento que la clienta eligió en el desplegable del checkout, como
+   * código ISO («PE-PUN»). Es la única declaración del destino que no se
+   * teclea, y con ella se descubre un pin puesto en otro departamento — ver
+   * `lib/pin-corroborado.ts` y el caso #KP133769.
+   */
+  departamentoElegido: string | null;
   /** La nota que alguien escribió en el pedido de Shopify, tal cual. Suele
    *  llevar lo que Shopify no tiene dónde guardar —el DNI del destinatario, la
    *  agencia— y hasta ahora solo se veía entrando al admin de Shopify. */
@@ -476,6 +489,9 @@ const GUIDE_COLUMNS =
   // desde el drawer y si hay que avisarle a Swayp antes (ver `cancelFenixOutput`).
   "swayp_guide,swayp_state,dispatched_at,reported_status," +
   "shalom_codigo,shalom_ose_id,shalom_order_id,shalom_serie,shalom_raw," +
+  // 0174: el tracking de Olva y su último estado crudo. Sin ellos el drawer no
+  // puede enseñar el número ni ofrecer registrarlo.
+  "olva_tracking,olva_emision,olva_status," +
   "aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at," +
   "next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id," +
   // 0061: el código corto que Shalom muestra junto al nº de orden, y el id con
@@ -625,6 +641,11 @@ async function swaypRouteCheck(
     covered: check.reason !== "sin_cobertura",
     stockOk: check.ok,
     uncovered: check.uncovered,
+    // Lo que de verdad decide en Lima. Ver `productosSinVinculo`.
+    unlinked: productosSinVinculo(
+      lineItems.map((item) => ({ title: item.title, quantity: item.quantity, sku: item.sku ?? null })),
+      await cargarMapaSwayp(createAdminSupabase(), row.store_id),
+    ),
   };
 }
 
@@ -837,6 +858,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     tasks,
     gfDeliveries,
     address: shopifyShippingAddress(orderRow?.raw),
+    departamentoElegido: shopifyDepartamentoElegido(orderRow?.raw),
     shopifyNote: shopifyOrderNote(orderRow?.raw),
     filledOutputIds: [...filledShipmentIds(events)],
     // MISMA pregunta que hace `createManualRouteOutput` antes de dejar crear la
@@ -1032,41 +1054,41 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
       day: "2-digit",
     }).format(now);
     const nowIso = now.toISOString();
-    const todayStart = new Date(`${today}T05:00:00.000Z`);
-    const tomorrowStart = new Date(todayStart);
-    tomorrowStart.setUTCDate(tomorrowStart.getUTCDate() + 1);
-    const todayIso = todayStart.toISOString();
-    const tomorrowIso = tomorrowStart.toISOString();
 
     // Espejo en PostgREST de `confirmationQueueBucket` (lib/order-confirmation).
-    // Manda la fecha pactada; si no hay, el recordatorio de dos horas mientras
-    // sea de hoy o del futuro; y si tampoco, el ciclo automático. Cualquier
-    // cambio de prioridad allá tiene que bajar aquí, o los chips contarían una
-    // cosa y la tabla mostraría otra.
+    // Manda la fecha pactada; si no hay, el recordatorio; y si tampoco, el
+    // ciclo automático. Cualquier cambio de prioridad allá tiene que bajar
+    // aquí, o los chips contarían una cosa y la tabla mostraría otra.
+    //
+    // El recordatorio manda SIEMPRE que exista, sea de hoy o de hace días:
+    // futuro → Próximos, llegado → Hoy. No vence nunca. Vencidos es solo la
+    // fecha pactada incumplida. Y sin ninguna de las tres fechas —nunca se le
+    // ha llamado— es Hoy: la primera llamada es trabajo de hoy.
+    //
+    // La cola es de Por confirmar y se acota ACÁ, no solo en la página: `cq`
+    // sobrevive al cambio de pestaña, y «sin fechas → Hoy» en «Todos» traería
+    // cada pedido entregado de la base. Es la misma guarda que ya hace
+    // `getConfirmationDueCounts` y la que hace `matchesFilters`.
     const noPacted = "confirmation_next_contact_on.is.null";
-    // Recordatorio vigente = el que todavía ordena el día. Uno de días atrás no
-    // entra en ninguna cola: su pedido lo coloca el ciclo.
-    const noLiveReminder = `or(confirmation_reminder_due_at.is.null,confirmation_reminder_due_at.lt.${todayIso})`;
+    const noReminder = "confirmation_reminder_due_at.is.null";
+    const noCycle = "confirmation_cycle_due_on.is.null";
+    q = q.eq("macro_stage", "por_confirmar");
     if (f.confirmationDue === "vencido") {
-      // Vencido es solo lo pactado que se incumplió y el recordatorio de hoy que
-      // ya pasó de hora. El ciclo NO vence: reaparece en Hoy.
-      q = q.or(
-        `confirmation_next_contact_on.lt.${today},`
-        + `and(${noPacted},confirmation_reminder_due_at.gte.${todayIso},confirmation_reminder_due_at.lte.${nowIso})`,
-      );
+      q = q.lt("confirmation_next_contact_on", today);
     }
     if (f.confirmationDue === "hoy") {
       q = q.or(
         `confirmation_next_contact_on.eq.${today},`
-        + `and(${noPacted},confirmation_reminder_due_at.gt.${nowIso},confirmation_reminder_due_at.lt.${tomorrowIso}),`
-        + `and(${noPacted},${noLiveReminder},confirmation_cycle_due_on.lte.${today})`,
+        + `and(${noPacted},confirmation_reminder_due_at.lte.${nowIso}),`
+        + `and(${noPacted},${noReminder},confirmation_cycle_due_on.lte.${today}),`
+        + `and(${noPacted},${noReminder},${noCycle})`,
       );
     }
     if (f.confirmationDue === "proximo") {
       q = q.or(
         `confirmation_next_contact_on.gt.${today},`
-        + `and(${noPacted},confirmation_reminder_due_at.gte.${tomorrowIso}),`
-        + `and(${noPacted},${noLiveReminder},confirmation_cycle_due_on.gt.${today})`,
+        + `and(${noPacted},confirmation_reminder_due_at.gt.${nowIso}),`
+        + `and(${noPacted},${noReminder},confirmation_cycle_due_on.gt.${today})`,
       );
     }
   }

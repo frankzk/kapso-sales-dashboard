@@ -43,6 +43,7 @@ import {
 import { aliclikRiskGate } from "@/lib/order-confirmation-brief";
 import { classifyOperation } from "@/lib/order-macro-stage";
 import { normalizePhone } from "@/lib/phone";
+import { pinSinCorroborar } from "@/lib/pin-corroborado";
 import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
 import {
   cancelOrder,
@@ -61,7 +62,12 @@ import {
   isCompatibleManualPortalGuide,
   selectExistingAliclikOrder,
 } from "@/lib/aliclik-existing-guide";
-import { aliclikStatusLabel, mapAliclikStatus } from "@/lib/aliclik-status";
+import {
+  aliclikStatusLabel,
+  avisoDistritoQueAliclikNoTiene,
+  distritoQueAliclikNoTiene,
+  mapAliclikStatus,
+} from "@/lib/aliclik-status";
 import { lockedIntentMessage, type LockedIntent } from "@/lib/aliclik-orphan-expiry";
 import {
   loadCatalogFor,
@@ -629,6 +635,12 @@ export interface AliclikPreview {
   aliclikUbigeo?: { department: string | null; province: string | null; district: string | null };
   ourUbigeo?: { region: string | null; province: string | null; district: string | null };
   ubigeoMismatch?: boolean;
+  /**
+   * El pedido NO respalda el pin y por eso no se puede emitir: ni el
+   * departamento elegido en el checkout ni la ciudad escrita coinciden con lo
+   * que Aliclik deduce del pin. Texto ya redactado para enseñar.
+   */
+  pinSinCorroborar?: string;
   couriers?: (AliclikCourierQuote & { selectable: boolean; reason?: string })[];
   /** Nombre del pedido (#KP…). La operadora tiene que VER sobre cuál crea. */
   orderName?: string | null;
@@ -697,6 +709,14 @@ export async function previewAliclikGuide(
      * cerrado, así que lo peor que puede pasar es enterarse de un precio.
      */
     coverageProbe?: boolean;
+    /**
+     * Excepción auditada al respaldo del pin. Mismo patrón que
+     * `riskExceptionReason`: no se levanta la puerta con una casilla muda, se
+     * levanta escribiendo por qué el pin es correcto pese a contradecir al
+     * pedido. Esos casos existen —la clienta eligió mal el departamento— y son
+     * 4 de 2.878 guías medidas.
+     */
+    pinExceptionReason?: string | null;
   } = {},
 ): Promise<AliclikPreview> {
   const { ctx, error } = await authorize(orderId, "aliclik.create_guide", {
@@ -911,6 +931,22 @@ export async function previewAliclikGuide(
             .filter((ref): ref is string => Boolean(ref)),
         ),
       ].join(", ");
+      const ultimo = failures.at(-1)?.error ?? "Aliclik no respondió.";
+      // CUANDO EL PROBLEMA ES EL DISTRITO, EL ALMACÉN NO SE NOMBRA. Añadirle
+      // «Almacén(es) compatibles probados: …» a un fallo de ubigeo mandaba a
+      // buscar por donde no era — pasó con #AUR177131, y la conclusión de quien
+      // lo leyó fue «es imposible que no haya almacenes compatibles», que es
+      // cierta. Ver `distritoQueAliclikNoTiene`.
+      const distritoDesconocido = distritoQueAliclikNoTiene(ultimo);
+      if (distritoDesconocido) {
+        return {
+          ok: false,
+          error:
+            avisoDistritoQueAliclikNoTiene(distritoDesconocido) +
+            (refs ? ` Referencia(s): ${refs}.` : ""),
+          coordinate: { lat, lng },
+        };
+      }
       return {
         ok: false,
         error:
@@ -918,7 +954,7 @@ export async function previewAliclikGuide(
           // mensaje. Detrás siguen el error crudo y las referencias, que son lo
           // que se le reenvía a Aliclik.
           (outageNote ? `${outageNote} ` : "") +
-          `${failures.at(-1)?.error ?? "Aliclik no respondió."} ` +
+          `${ultimo} ` +
           `Almacén(es) compatibles probados: ${attempted || resolved.warehouseId}.` +
           (refs ? ` Referencia(s): ${refs}.` : ""),
         coordinate: { lat, lng },
@@ -936,12 +972,36 @@ export async function previewAliclikGuide(
     province: ctx.row.province ?? null,
     district: ctx.row.district ?? null,
   };
-  // Solo se compara el distrito, que es el nivel que decide tarifa y cobertura,
-  // y solo cuando conocemos ambos. Una discrepancia casi siempre significa que
-  // el pin está en otro sitio del que dice la dirección.
+  // Se compara el distrito, que es el nivel que decide tarifa y cobertura. Es
+  // un AVISO, no una puerta, y a propósito: salta en 1.958 de 4.173 guías (47%)
+  // y casi siempre por nada —Cusco/Cuzco, Coronel Portillo/Pucallpa, el nombre
+  // oficial contra el comercial (§10)—. Sirve para mirar, no para decidir.
   const ubigeoMismatch =
     Boolean(aliclikUbigeo.district && ourUbigeo.district) &&
     norm(aliclikUbigeo.district) !== norm(ourUbigeo.district);
+
+  // LA PUERTA ES OTRA: que el pedido respalde el pin. El pin decide a dónde va
+  // el paquete, así que un pin contradicho por el desplegable del checkout Y
+  // por la ciudad escrita no es una discrepancia de nombres, es otro destino.
+  // Eso fue #KP133769: Puno en las dos declaraciones, pin en Cusco, 331 km, y
+  // el paquete volvió. Ver lib/pin-corroborado.ts para la medición.
+  const pinDudoso = pinSinCorroborar({
+    departamentoDelPin: aliclikUbigeo.department,
+    distritoDelPin: aliclikUbigeo.district,
+    isoDelCheckout: detail.departamentoElegido,
+    ciudadEscrita: detail.address?.city,
+  });
+  if (pinDudoso && !input.pinExceptionReason?.trim()) {
+    return {
+      ok: false,
+      error: pinDudoso,
+      pinSinCorroborar: pinDudoso,
+      aliclikUbigeo,
+      ourUbigeo,
+      ubigeoMismatch,
+      coordinate: { lat, lng },
+    };
+  }
 
   const couriers = quote.data.couriers ?? [];
   if (!couriers.length) {
@@ -982,6 +1042,7 @@ export async function previewAliclikGuide(
     aliclikUbigeo,
     ourUbigeo,
     ubigeoMismatch,
+    pinSinCorroborar: pinDudoso ?? undefined,
     couriers: annotated,
     coordinate: { lat, lng },
     dispatch: dispatchOutlook(annotated),
@@ -1032,6 +1093,13 @@ export interface CreateGuideInput {
   expectedCollectTotal?: number | null;
   /** Excepción auditada a la regla de adelanto/pago del historial. */
   riskExceptionReason?: string | null;
+  /**
+   * Excepción auditada al respaldo del pin. Se exige por escrito porque emitir
+   * con un pin que el pedido contradice manda el paquete a otro departamento:
+   * es lo que le pasó a #KP133769. Si el pin es correcto y quien se equivocó
+   * fue el desplegable del checkout, aquí se deja dicho.
+   */
+  pinExceptionReason?: string | null;
 }
 
 /**
@@ -1102,6 +1170,7 @@ export async function createAliclikGuide(
   const riskExceptionReason = riskGate.requiresException
     ? input.riskExceptionReason?.trim() ?? null
     : null;
+  const pinExceptionReason = input.pinExceptionReason?.trim() || null;
 
   // El pedido no puede tener ya una guía activa. Mismo criterio que
   // `createDirectFenixGuide`: dos guías vivas para un pedido es un paquete
@@ -1132,7 +1201,11 @@ export async function createAliclikGuide(
   // Se REVALIDA todo en el servidor. Lo que mandó el navegador es una intención,
   // no un hecho: entre el preview y el clic pudo cambiar el stock, el catálogo o
   // la ventana express.
-  const preview = await previewAliclikGuide(orderId, { coordinate: input.coordinate, modality: "cod" });
+  const preview = await previewAliclikGuide(orderId, {
+    coordinate: input.coordinate,
+    modality: "cod",
+    pinExceptionReason: input.pinExceptionReason,
+  });
   if (!preview.ok || !preview.items || !preview.coordinate || !preview.warehouseId) {
     return { error: preview.error ?? "No se pudo validar el pedido." };
   }
@@ -1350,6 +1423,29 @@ export async function createAliclikGuide(
               requirement: confirmationBrief.risk.requirement,
               payment_state: ctx.row.payment_state,
               antecedents: confirmationBrief.risk.antecedents,
+            },
+          },
+        ]
+      : []),
+    // La excepción al pin se anota aparte y SIEMPRE que se usó: es el único
+    // rastro de que alguien emitió sabiendo que el pedido decía otro
+    // departamento, y el ubigeo del pin queda guardado al lado para poder
+    // releerlo cuando el paquete vuelva.
+    ...(pinExceptionReason
+      ? [
+          {
+            store_id: ctx.storeId,
+            order_id: orderId,
+            kind: "aliclik_pin_exception",
+            occurred_at: registeredAt,
+            actor: ctx.userId,
+            source: "manual",
+            courier: "aliclik",
+            guide_code: orderNumber,
+            reason: pinExceptionReason,
+            payload: {
+              ubigeo: preview.aliclikUbigeo,
+              aviso: preview.pinSinCorroborar ?? null,
             },
           },
         ]

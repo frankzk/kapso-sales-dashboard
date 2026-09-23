@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { manualRouteGuideCode } from "@/lib/shipment-output";
 import {
   AGENCY_ATTESTED_MATCH,
   AGENCY_COURIER_OPTIONS,
@@ -173,11 +174,33 @@ describe("la regla se aplica en la pantalla y en el servidor", () => {
     expect(AGENCY_ATTESTED_MATCH).not.toBe("manual");
   });
 
-  // Sin código de guía: la tiene el mostrador de la agencia. Uno inventado se
-  // cotejaría contra el reporte del courier y no casaría nunca.
-  it("no se inventa un código de guía", () => {
+  // LA PRUEBA QUE HABÍA AQUÍ FIJABA EL BUG. Decía «no se inventa un código de
+  // guía» y comprobaba `guide_code: null` en el fuente. La columna es NOT NULL:
+  // ese camino nunca funcionó ni una vez —cero salidas atestiguadas en toda la
+  // tabla desde el 09-09-2026— y la prueba estuvo verde todo ese tiempo, porque
+  // una guarda de fuente comprueba que la línea esté escrita, no lo que produce.
+  //
+  // `attestAgencyShipment` es privada de un fichero «use server» —exportarla la
+  // convertiría en un endpoint— así que la parte pura (el código) se prueba por
+  // comportamiento y el cableado por guarda, diciendo cuál es cuál.
+  it("la salida nace con el código interno del camino manual, nunca con null", () => {
     const bloque = actions.slice(actions.indexOf("async function attestAgencyShipment"));
-    expect(bloque).toContain("guide_code: null");
+    expect(bloque).toContain("guide_code: manualRouteGuideCode(ctx.row.order_name, shipmentId, courier)");
+    expect(bloque).not.toContain("guide_code: null");
+  });
+
+  it("el código interno de Olva y Shalom es MOM-<pedido>-<COURIER>-<id>, y nunca vacío", () => {
+    for (const { value } of AGENCY_COURIER_OPTIONS) {
+      const code = manualRouteGuideCode("#AUR176295", "54c05fd1-0000-4000-8000-000000000000", value);
+      expect(code).toBe(`MOM-AUR176295-${value.toUpperCase()}-54C05FD1`);
+      // Ningún courier emite códigos con este prefijo: no puede casar con un
+      // reporte por accidente, que era el miedo del `null`.
+      expect(code.startsWith("MOM-")).toBe(true);
+    }
+    // Sin nombre de pedido tampoco sale vacío: cae al id de la fila.
+    expect(manualRouteGuideCode(null, "54c05fd1-0000-4000-8000-000000000000", "olva")).toBe(
+      "MOM-54C05FD1-OLVA-54C05FD1",
+    );
   });
 
   it("la pantalla pregunta con la MISMA función pura, sin recopiarla", () => {

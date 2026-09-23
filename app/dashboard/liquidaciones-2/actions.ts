@@ -3,7 +3,7 @@
 // Liquidaciones 2 — acciones de servidor. Dos permisos (lib/permissions.ts):
 // `sheets.edit` escribe celdas y observaciones; `sheets.manage` configura.
 // Todo va con el service role tras comprobar el permiso y que la hoja
-// pertenece a una organización del usuario: la RLS de 0168 es la red de
+// pertenece a una organización del usuario: la RLS de 0176 es la red de
 // seguridad, no la única puerta.
 
 import { revalidatePath } from "next/cache";

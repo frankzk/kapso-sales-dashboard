@@ -38,6 +38,10 @@
       "schedule": "*/30 * * * *"
     },
     {
+      "path": "/api/cron/olva-reconcile",
+      "schedule": "15,45 * * * *"
+    },
+    {
       "path": "/api/cron/aliclik-tariffs",
       "schedule": "30 11 * * *"
     },

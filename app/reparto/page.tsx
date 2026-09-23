@@ -66,7 +66,7 @@ export default async function RepartoPage({
   // Primero la caja, después la ruta (MOM §29.13): mientras haya una carga
   // cotejada por oficina y no recibida, el motorizado verifica sus paquetes y
   // dice cuáles no recoge. La ruta se muestra recién con la custodia cambiada.
-  // En modo «confirmar» (0177) la ruta aparece al asignar y cada parada nace
+  // En modo «confirmar» (0185) la ruta aparece al asignar y cada parada nace
   // «por confirmar»: el motorizado dice «Lo llevo» al sacarla del almacén.
   const pickupMode = await getMyPickupMode();
   if (riderScreenFor(pickupMode, loads.map((load) => load.state)) === "recibir_caja") {

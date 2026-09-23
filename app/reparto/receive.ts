@@ -23,7 +23,7 @@ export async function receiveMyGfPackage(manifestId: string, rawCode: string): P
 }
 
 /**
- * «No lo recojo» (0174, MOM §29.13): el motorizado rechaza un paquete de su
+ * «No lo recojo» (0182, MOM §29.13): el motorizado rechaza un paquete de su
  * caja con motivo. El RPC lo retira de la carga con rastro, avisa al pedido,
  * devuelve la solicitud a «por asignar» y, si todo lo demás ya fue recibido,
  * pasa la custodia con los aceptados.
@@ -45,7 +45,7 @@ export async function declineMyGfPackage(manifestId: string, shipmentId: string,
 }
 
 /**
- * «Lo llevo» (0177, modo `confirmar`): el motorizado confirma un paquete de su
+ * «Lo llevo» (0185, modo `confirmar`): el motorizado confirma un paquete de su
  * caja ya en custodia al sacarlo del almacén. Por ítem (botón de la parada) o
  * por código escaneado (gesto único, «Confirmar todos»); si vienen ambos, el
  * código tiene que ser del mismo paquete. Idempotente.

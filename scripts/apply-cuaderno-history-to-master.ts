@@ -5,7 +5,7 @@
  *   pnpm tsx scripts/apply-cuaderno-history-to-master.ts <org_id> <actor_user_id> [--real]
  *
  * Sin `--real` es un ensayo: cuenta por hoja y mes y no escribe nada. Con
- * `--real` guarda primero en `master_backfill_log` (0173) cómo estaba cada
+ * `--real` guarda primero en `master_backfill_log` (0181) cómo estaba cada
  * pedido y después inserta los eventos; el `batch_id` que imprime es lo que
  * necesita `scripts/rollback-master-backfill.ts` para deshacerlo.
  *

@@ -31,7 +31,7 @@ export interface RiderLoad {
 /**
  * Las cargas que el motorizado tiene por recibir: cotejadas por oficina y
  * todavía sin custodia. Con sus paquetes, para que «Recibir mi caja» muestre
- * qué falta y permita decir «no lo recojo» (0174, MOM §29.13).
+ * qué falta y permita decir «no lo recojo» (0182, MOM §29.13).
  */
 export async function getMyGfLoads(): Promise<RiderLoad[]> {
   const rider = await getMyRider();
@@ -79,7 +79,7 @@ export async function getMyGfLoads(): Promise<RiderLoad[]> {
   }));
 }
 
-/** El modo de recojo del motorizado (0177): se lee por la organización de su ficha. */
+/** El modo de recojo del motorizado (0185): se lee por la organización de su ficha. */
 export async function getMyPickupMode(): Promise<RiderPickupMode> {
   const rider = await getMyRider();
   if (!rider) return "exigir";

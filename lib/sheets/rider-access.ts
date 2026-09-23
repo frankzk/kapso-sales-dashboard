@@ -1,6 +1,6 @@
 // Liquidaciones 2 — lecturas para la pantalla del motorizado (MOM §30.9).
 // Server-only. La hoja del motorizado se localiza por `sheets.config.rider_id`;
-// las filas y observaciones se leen con la sesión del usuario (RLS 0171 le
+// las filas y observaciones se leen con la sesión del usuario (RLS 0179 le
 // acota a su hoja) y los datos del pedido con el service role, acotados a los
 // pedidos de SUS filas.
 

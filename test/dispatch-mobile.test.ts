@@ -78,7 +78,7 @@ describe("mobile verification", () => {
     expect(html).not.toContain("Escanear con cámara");
     expect(html).not.toContain("Corregir contenido");
   });
-  it("in custody with pickup mode «confirmar», reception stays open for the unconfirmed packages (0177 fallback)", () => {
+  it("in custody with pickup mode «confirmar», reception stays open for the unconfirmed packages (0185 fallback)", () => {
     // El motorizado no pudo confirmar desde su teléfono: el supervisor escanea aquí lo que sí lleva.
     const html = renderBox(manifest(true, false, "in_custody"), true, true, "confirmar");
     // El respaldo va DEBAJO de la lista de paquetes, con su propio título.

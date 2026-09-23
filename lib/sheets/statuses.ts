@@ -150,7 +150,7 @@ export function markForEffect(effect: StatusEffect): ContributionMark {
       // que Shopify lo anule. Para el Consolidado cuenta como intento.
       return "T";
     case "sin_salida":
-      // El paquete no salió del almacén: no hubo intento (0169).
+      // El paquete no salió del almacén: no hubo intento (0177).
       return "0";
   }
 }

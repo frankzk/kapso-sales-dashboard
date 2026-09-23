@@ -6,7 +6,7 @@
 //
 //   oficina_cotejo        → scanManifestItem(…, "office")   → office_checked
 //   motorizado_recepcion  → receiveMyGfPackage(…) con caja   → pickup_checked
-//                           confirmMyGfPickup(…) sin caja    → pickup_checked («Lo llevo», 0177)
+//                           confirmMyGfPickup(…) sin caja    → pickup_checked («Lo llevo», 0185)
 //   motorizado_entrega    → foto a /api/reparto/foto         → evidencia de la parada
 //   supervisor_retiro     → lookup + removeManifestItem(…)  → package_removed
 

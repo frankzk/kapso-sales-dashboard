@@ -17,7 +17,7 @@
 // parpadear a vacío.
 
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Card, cn, EmptyState, STICKY_HEAD, TABLE_LAYER, TABLE_WRAP_PAGE_X } from "@/components/ui";
 import {
@@ -154,7 +154,7 @@ import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 // ---------------------------------------------------------------------------
 
 import { fmtDate, fmtDateTime, fmtAge, CoverageBadge, MacroStageBadge } from "@/components/order-master-shared";
-import { OrderDrawer, type DrawerWorkspaceView } from "@/components/order-drawer";
+import { DRAWER_SECTION_IDS, OrderDrawer, type DrawerSectionId, type DrawerWorkspaceView } from "@/components/order-drawer";
 import { workspaceForDrawerSection } from "@/lib/order-drawer-href";
 
 export function OrdersMasterBoard({
@@ -238,6 +238,19 @@ export function OrdersMasterBoard({
   const [navigating, startNav] = useTransition();
   const [showMore, setShowMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  // ABRIR UN PEDIDO DESDE FUERA. La cola de cobranza avisa de un comprobante
+  // que espera y tiene que llevar a donde SE HACE ese trabajo: el drawer del
+  // pedido, con la sección de Cobro delante. El drawer carga el pedido por su
+  // id, así que no hace falta que la fila esté en la página ni tocar filtros.
+  const abrir = searchParams.get("abrir");
+  const irA = searchParams.get("ir");
+  const focusSection = DRAWER_SECTION_IDS.includes(irA as DrawerSectionId)
+    ? (irA as DrawerSectionId)
+    : undefined;
+  useEffect(() => {
+    if (abrir) setOpenId(abrir);
+  }, [abrir]);
   const [openWorkspace, setOpenWorkspace] = useState<DrawerWorkspaceView>("operar");
   const changeToken = useRef<string | null>(null);
   // `?abrir=<pedido>&seccion=historial` abre el drawer en la pestaña Actividad
@@ -951,7 +964,20 @@ export function OrdersMasterBoard({
           closurePermissions={closurePermissions}
           storeName={storeName}
           storeDomain={storeDomain}
-          onClose={() => { setOpenId(null); setOpenWorkspace("operar"); }}
+          focusSection={openId === abrir ? focusSection : undefined}
+          onClose={() => {
+            setOpenId(null);
+            setOpenWorkspace("operar");
+            // Se limpia la URL al cerrar: si no, recargar reabriría un pedido
+            // que ya se atendió, y el enlace de la alerta quedaría pegado.
+            if (abrir) {
+              const next = new URLSearchParams(searchParams.toString());
+              next.delete("abrir");
+              next.delete("ir");
+              const qs = next.toString();
+              router.replace(qs ? `${pathname}?${qs}` : pathname);
+            }
+          }}
           onSaved={() => router.refresh()}
           initialWorkspace={openWorkspace}
         />
@@ -1685,9 +1711,21 @@ function NextContactCell({ row, now }: { row: OrderMasterRow; now?: string }) {
     return <>{fmtDate(`${row.confirmation_next_contact_on}T12:00:00.000Z`)}</>;
   }
   const reminder = row.confirmation_reminder_due_at;
-  if (reminder && limaDayKey(reminder) >= today) return <>{fmtDateTime(reminder)}</>;
+  // El recordatorio manda siempre que exista, también uno de días atrás: ese es
+  // un reintento que nadie hizo y su hora, ya pasada, es justo lo que hay que
+  // ver. La celda tiene que decir lo mismo que la cola (`confirmationQueueBucket`).
+  if (reminder) return <>{fmtDateTime(reminder)}</>;
   const cycle = row.confirmation_cycle_due_on;
-  if (!cycle) return <>—</>;
+  if (!cycle) {
+    // Sin fecha, sin recordatorio y sin ciclo: nunca se le ha llamado, y la
+    // primera llamada toca hoy. La celda dice lo mismo que la cola.
+    return (
+      <span className="inline-flex flex-col leading-tight">
+        <span>Hoy</span>
+        <span className="text-[11px] text-slate-400">primera llamada</span>
+      </span>
+    );
+  }
   return (
     <span className="inline-flex flex-col leading-tight">
       <span>{cycle <= today ? "Hoy" : fmtDate(`${cycle}T12:00:00.000Z`)}</span>

@@ -104,7 +104,7 @@ export interface DispatchProgressItem {
   removed_at?: string | null;
   office_checked_at?: string | null;
   pickup_checked_at?: string | null;
-  /** 0174: el motorizado no lo recogió. Va con `removed_at`, así que no cuenta
+  /** 0182: el motorizado no lo recogió. Va con `removed_at`, así que no cuenta
    *  en el total; se cuenta aparte para decirlo en pantalla. */
   pickup_declined_at?: string | null;
 }

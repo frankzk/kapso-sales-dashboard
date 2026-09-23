@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0169_sheet_status_effect_sin_salida.sql — un efecto más para los estados de
+-- 0185_sheet_status_effect_sin_salida.sql — un efecto más para los estados de
 -- dominio de Liquidaciones 2: «sin_salida».
 --
 -- La operación explicó (16-09-2026) qué es «LO DEJA» en el cuaderno del

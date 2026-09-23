@@ -11,7 +11,7 @@ export interface DayItem {
   removal_reason?: string | null;
   office_checked_at?: string | null;
   pickup_checked_at?: string | null;
-  /** 0174: el motorizado no lo recogió de su caja. */
+  /** 0182: el motorizado no lo recogió de su caja. */
   pickup_declined_at?: string | null;
   pickup_declined_reason?: string | null;
   shipment?: { order_id: string | null; order_name: string | null; customer_name: string | null; district: string | null; output_code: string | null; guide_code: string | null; preparation_state?: string | null } | null;

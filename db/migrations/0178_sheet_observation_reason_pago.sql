@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0170_sheet_observation_reason_pago.sql — cuarta causa de observación
+-- 0186_sheet_observation_reason_pago.sql — cuarta causa de observación
 -- automática en Liquidaciones 2: pago digital sin comprobante validado.
 --
 -- Una fila del cuaderno que declara entrega cobrada por Yape, Plin, link o

@@ -57,11 +57,11 @@ async function Liquidaciones2Content({ searchParams }: { searchParams: Promise<S
     try {
       await ensureSheetsInitialized(orgId, stores, user?.id ?? null);
     } catch (e) {
-      // Casi siempre es que la 0168 no está aplicada (DEPLOY.md): decirlo
+      // Casi siempre es que la 0176 no está aplicada (DEPLOY.md): decirlo
       // vale más que una pantalla rota.
       return (
         <EmptyState title="Liquidaciones 2 no pudo inicializarse">
-          {e instanceof Error ? e.message : String(e)}. Comprueba que la migración 0168 esté aplicada.
+          {e instanceof Error ? e.message : String(e)}. Comprueba que la migración 0176 esté aplicada.
         </EmptyState>
       );
     }

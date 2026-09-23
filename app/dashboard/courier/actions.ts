@@ -50,7 +50,7 @@ export interface CourierProviderRow {
   same_day_cutoff: string;
   cash_warning_amount: number;
   cash_limit_amount: number;
-  /** 0177: exigir (verifica su caja antes de la ruta) · confirmar («Lo llevo» por paquete) · ninguno. */
+  /** 0185: exigir (verifica su caja antes de la ruta) · confirmar («Lo llevo» por paquete) · ninguno. */
   rider_pickup_mode: RiderPickupMode;
 }
 
@@ -1332,7 +1332,7 @@ async function assignRouteCore(
     }
     if (verdict.message) cashWarnings.push(verdict.status === "blocked" ? `${verdict.message} Autorizado por ${auth.userId}.` : verdict.message);
     // Una carga por motorizado y día cuando la verificación está apagada
-    // (0176): gf_dispatch_load_open devuelve la del día aunque ya esté en
+    // (0184): gf_dispatch_load_open devuelve la del día aunque ya esté en
     // custodia; con el flag encendido es gf_dispatch_load, sin cambios.
     const providerMode = (provider as { rider_pickup_mode?: string | null }).rider_pickup_mode;
     const custodyAtAssign = custodyOnAssign(isRiderPickupMode(providerMode) ? providerMode : "exigir");
@@ -1354,7 +1354,7 @@ async function assignRouteCore(
         // La caja ya salió: el paquete entra cotejado, en custodia y con su parada.
         ? await admin.rpc("gf_add_item_in_custody", { p_manifest_id: manifest.id, p_shipment_id: shipmentId, p_store_id: request.store_id, p_actor: auth.userId })
         // Caja aún sin custodia: fila nueva, o la que el motorizado rechazó
-        // en esta misma caja y revive (0179), como al mover de caja.
+        // en esta misma caja y revive (0187), como al mover de caja.
         : await admin.from("dispatch_manifest_items").upsert({
             manifest_id: manifest.id,
             shipment_id: shipmentId,
@@ -1417,7 +1417,7 @@ async function assignRouteCore(
       assigned += 1;
       insertedAny = true;
     }
-    // Verificación del motorizado desactivada (0175): la custodia pasa al
+    // Verificación del motorizado desactivada (0183): la custodia pasa al
     // asignar, el trigger crea las paradas y el motorizado ve su ruta.
     if (insertedAny && custodyAtAssign && !loadInCustody) {
       const { data: custodyOrders, error: custodyError } = await admin.rpc("gf_assign_custody", { p_manifest_id: manifest.id, p_actor: auth.userId });
@@ -1873,7 +1873,7 @@ export async function moveManifestItem(
   if (!manifest || manifest.org_id !== orgId) return { error: "Caja no encontrada." };
   if (manifest.courier !== "propio") return { error: "Solo se mueven paquetes entre motorizados de Grupo GF." };
   if (manifest.state === "cancelled") return { error: "Esa caja ya está cerrada." };
-  // Caja ya en custodia: solo en modo «confirmar» (0177) y solo lo que el
+  // Caja ya en custodia: solo en modo «confirmar» (0185) y solo lo que el
   // motorizado no confirmó; el RPC retira, borra la parada y libera el paquete.
   const sourceInCustody = manifest.state === "in_custody";
   if (sourceInCustody && (await riderPickupMode(admin, orgId)) !== "confirmar") return { error: "Esa caja ya está en poder del motorizado." };

@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- 0177: modo 'confirmar'. Asignar entrega la custodia y crea paradas «por
+-- 0185: modo 'confirmar'. Asignar entrega la custodia y crea paradas «por
 -- confirmar»; «Lo llevo» marca pickup_checked_at; «No lo llevo» sobre la caja
 -- en custodia retira el ítem, borra la parada pendiente y devuelve la solicitud
 -- a «por asignar»; el supervisor quita solo lo no confirmado.
@@ -75,7 +75,7 @@ begin
   if not exists (select 1 from order_events where order_id='17700000-0000-0000-0000-000000000005' and kind='pickup_declined' and note='No lo llevó Roy modo: no cabe en la moto') then raise exception 'no lo llevó event missing'; end if;
   if (select state from dispatch_manifests where id=v_load) <> 'in_custody' then raise exception 'load left custody'; end if;
 
-  -- Vuelve a la MISMA caja (0179): la fila retirada revive con parada y custodia;
+  -- Vuelve a la MISMA caja (0187): la fila retirada revive con parada y custodia;
   -- se rechaza otra vez para dejar el resto del guion como estaba.
   v_order := gf_add_item_in_custody(v_load,'17700000-0000-0000-0000-000000000007','17700000-0000-0000-0000-000000000002','17700000-0000-0000-0000-000000000009');
   if v_order <> '17700000-0000-0000-0000-000000000005' then raise exception 'readd order not returned'; end if;

@@ -210,7 +210,7 @@ describe("cashLimitVerdict (MOM §29.9)", () => {
 
 import { custodyOnAssign, isRiderPickupMode, riderScreenFor, riderStopDecision } from "@/lib/grupo-gf-courier";
 
-describe("modo de recojo del motorizado (0177, MOM §29.13)", () => {
+describe("modo de recojo del motorizado (0185, MOM §29.13)", () => {
   it("solo «exigir» manda a «Recibir mi caja»; en los otros modos la custodia pasa al asignar", () => {
     expect(riderScreenFor("exigir", ["ready_for_pickup"])).toBe("recibir_caja");
     expect(riderScreenFor("exigir", ["pickup_check", "in_custody"])).toBe("recibir_caja");

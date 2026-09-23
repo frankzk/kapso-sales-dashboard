@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0172_stop_written_status.sql — la parada de reparto es la única verdad;
+-- 0180_stop_written_status.sql — la parada de reparto es la única verdad;
 -- la hoja de Reparto propio de Liquidaciones 2 pasa a ser una vista con
 -- vocabulario encima de ella.
 --

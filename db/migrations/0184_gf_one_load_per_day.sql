@@ -1,9 +1,9 @@
 -- ============================================================================
--- 0176_gf_one_load_per_day.sql — con la verificación del motorizado apagada,
+-- 0184_gf_one_load_per_day.sql — con la verificación del motorizado apagada,
 -- una sola carga por motorizado y día (MOM §29.13, corrección 19-09-2026).
 --
 -- Con `rider_pickup_check_required = false`, asignar entrega la custodia en el
--- acto (0175). Tal como quedó, cada asignación posterior del mismo día abría
+-- acto (0183). Tal como quedó, cada asignación posterior del mismo día abría
 -- una carga adicional, porque gf_dispatch_load no admite meter paquetes en una
 -- carga que ya inició cotejo o custodia. La operación quiere lo contrario: el
 -- motorizado vuelve a la oficina y se le SUMAN paquetes a la misma carga y

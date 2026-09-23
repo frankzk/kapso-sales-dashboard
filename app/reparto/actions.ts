@@ -44,7 +44,7 @@ export interface ReportStopInput {
   voucherPath: string | null;
   reportReason?: string | null;
   /** Lo que el motorizado escribió tal cual y su equivalente en el dominio
-   *  Reparto propio (0172, MOM §29.12). Opcionales: la pantalla vieja no los manda. */
+   *  Reparto propio (0180, MOM §29.12). Opcionales: la pantalla vieja no los manda. */
   writtenStatus?: string | null;
   writtenStatusCode?: string | null;
   writtenPayment?: string | null;

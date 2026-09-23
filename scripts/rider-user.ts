@@ -16,7 +16,7 @@
  * .env.local (NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY). Las
  * contraseñas se imprimen UNA sola vez: no se guardan en ningún sitio.
  *
- * Modelo (0064, 0066, 0171): ficha `riders` ↔ usuario Auth por
+ * Modelo (0064, 0066, 0179): ficha `riders` ↔ usuario Auth por
  * `riders.user_id`; el rol de membresía `motorizado` en la organización le da
  * solo `routes.deliver`; la RLS acota sus lecturas a su hoja cuando ese es
  * su único rol. Nunca se borran usuarios con historial: se desactivan.

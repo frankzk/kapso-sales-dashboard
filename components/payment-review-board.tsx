@@ -17,7 +17,7 @@ import {
   type PaymentReviewLane,
 } from "@/lib/payment-review";
 import type { PaymentReviewBoardData, PaymentReviewItem } from "@/lib/payment-review-access";
-import { yapeRecipientReadingFromVision } from "@/lib/yape-recipient";
+import { motivoDelDesencuentro, yapeRecipientReadingFromVision } from "@/lib/yape-recipient";
 
 const LANES: {
   key: PaymentReviewLane;
@@ -100,10 +100,20 @@ function RecipientSignal({ item }: { item: PaymentReviewItem }) {
   );
 }
 
-function ReviewCard({ item, lane }: { item: PaymentReviewItem; lane: PaymentReviewLane }) {
+function ReviewCard({
+  item,
+  lane,
+  canOverrideRecipient,
+}: {
+  item: PaymentReviewItem;
+  lane: PaymentReviewLane;
+  canOverrideRecipient: boolean;
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [mode, setMode] = useState<"observe" | "reject" | null>(null);
+  const [recipientReason, setRecipientReason] = useState("");
+  const [excepcionAbierta, setExcepcionAbierta] = useState(false);
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState<PaymentActionState | null>(null);
   const recipient = yapeRecipientReadingFromVision(item.vision, item.collectionAccounts);
@@ -232,10 +242,76 @@ function ReviewCard({ item, lane }: { item: PaymentReviewItem; lane: PaymentRevi
               }
             />
           )}
+          {/* EL BLOQUEO, DICHO ENTERO. Antes ponía «la cuenta receptora no
+              coincide» y ya: quien revisaba no sabía cuál de las dos señales
+              mirar, y el comprobante se quedaba ahí. #KP126085 llevaba siete
+              semanas con el celular receptor CORRECTO y una palabra mal leída. */}
           {!canApprove && item.operationNumber && (
-            <p className="text-xs font-medium text-red-700">
-              La cuenta receptora no coincide; no se puede validar.
-            </p>
+            <div className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-2">
+              <p className="text-xs font-medium leading-relaxed text-red-800">
+                {motivoDelDesencuentro(recipient, item.collectionAccounts) ??
+                  "La cuenta receptora no coincide; no se puede validar."}
+              </p>
+              {canOverrideRecipient ? (
+                excepcionAbierta ? (
+                  <div className="mt-2">
+                    <label
+                      className="text-xs font-semibold text-red-900"
+                      htmlFor={`recipient-${item.id}`}
+                    >
+                      Por qué el dinero sí llegó a una cuenta nuestra
+                    </label>
+                    <textarea
+                      id={`recipient-${item.id}`}
+                      value={recipientReason}
+                      onChange={(event) => setRecipientReason(event.target.value)}
+                      rows={2}
+                      autoFocus
+                      placeholder="Ej. el lector leyó «Cerdo» por «Grupo»; el celular ···309 es la cuenta de la empresa."
+                      className="mt-1.5 w-full resize-none rounded-lg border border-red-200 bg-white px-3 py-2 text-sm outline-none focus:border-red-400 focus:ring-2 focus:ring-red-100"
+                    />
+                    <div className="mt-2 flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExcepcionAbierta(false);
+                          setRecipientReason("");
+                        }}
+                        className="px-2 py-1 text-xs font-semibold text-red-700 hover:text-red-900"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        disabled={pending || !recipientReason.trim()}
+                        onClick={() =>
+                          run(() =>
+                            validatePayment(item.id, {
+                              recipientExceptionReason: recipientReason,
+                            }),
+                          )
+                        }
+                        className="rounded-lg bg-red-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-800 disabled:opacity-50"
+                      >
+                        Validar con excepción
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setExcepcionAbierta(true)}
+                    className="mt-2 text-xs font-semibold text-red-800 underline underline-offset-2 hover:text-red-950"
+                  >
+                    Validar igualmente, dejando escrito por qué
+                  </button>
+                )
+              ) : (
+                <p className="mt-1.5 text-xs text-red-700">
+                  Si el dinero sí llegó a una cuenta nuestra, un administrador puede validarlo.
+                </p>
+              )}
+            </div>
           )}
           <div className="flex gap-2">
             <button
@@ -372,7 +448,14 @@ export function PaymentReviewBoard({ data }: { data: PaymentReviewBoardData }) {
               </div>
 
               <div className="space-y-3">
-                {items.map((item) => <ReviewCard key={item.id} item={item} lane={lane.key} />)}
+                {items.map((item) => (
+                  <ReviewCard
+                    key={item.id}
+                    item={item}
+                    lane={lane.key}
+                    canOverrideRecipient={data.canOverrideRecipient}
+                  />
+                ))}
                 {!items.length && (
                   <div className="rounded-xl border border-dashed border-slate-300 bg-white/70 px-4 py-10 text-center">
                     <p className="text-sm font-semibold text-slate-700">

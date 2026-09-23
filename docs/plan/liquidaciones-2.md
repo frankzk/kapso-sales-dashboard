@@ -80,7 +80,7 @@ Alexis hay que darlo de alta). Couriers en Kapta: Aliclik 7.232 envíos, Shalom
 Observaciones: no existía una entidad que explique una diferencia entre un
 valor externo y el de Kapta. Las correcciones de liquidación (0093) solo cubren
 monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
-`sheet_observations` (0168).
+`sheet_observations` (0176).
 
 ## 3. Modelo
 
@@ -101,7 +101,7 @@ monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
 
 ## 4. Iteraciones
 
-1. **Cimientos** (esta rama). Migración 0168, dominios y estados sembrados,
+1. **Cimientos** (esta rama). Migración 0176, dominios y estados sembrados,
    Catálogo de zonas con los 979 distritos del Excel, hojas Pedidos y
    Consolidado por tienda, grid virtualizado con configuración de columnas,
    edición de celdas manuales con historial, panel de estados y alias, panel de
@@ -144,14 +144,14 @@ monto y comisión dentro de un lote; las bitácoras no explican nada. De ahí
    Reparto propio un día a la vez, puntos desde el manifiesto de despacho o a
    mano, estado en texto libre con sugerencias, monto precargado desde Kapta,
    motivo obligatorio cuando cobra distinto, foto del comprobante para pagos
-   digitales, y RLS (0171) que acota su lectura a su propia hoja. Llena
+   digitales, y RLS (0179) que acota su lectura a su propia hoja. Llena
    `sheet_observations.reason_code` + `note`, que es lo que acepta quien
    liquida antes de aplicar al Master. Acceso con usuario y contraseña para
    el motorizado sin correo (19-09-2026): `scripts/rider-user.ts` y el runbook
    `docs/runbooks/motorizados-acceso.md`.
 
 4c. **Convergencia con Rutas** (hecha el 19-09-2026, MOM §29.12). Rutas
-   manda: `delivery_stops` es la verdad con el estado escrito (0172); la hoja
+   manda: `delivery_stops` es la verdad con el estado escrito (0180); la hoja
    de Reparto propio es una vista sincronizada (`stop_id`); las ediciones de
    la hoja pasan por `lib/stop-report.ts`; una sola puerta al Master en
    `lib/master-door.ts`; una sola pantalla del motorizado en `/reparto`;
@@ -188,7 +188,7 @@ Para la iteración 5: Gasto Ads Aurela y Gasto Ads Kenku Perú, si existen.
 La carga histórica dejó Rutas y las hojas completas pero no tocó el Master, y
 la bandeja de Grupo GF Courier seguía mostrando 6.368 pedidos de Lima
 abiertos, 4.619 de ellos entregados según el cuaderno. Se aplicaron en bloque
-por la puerta única con bitácora reversible (0173,
+por la puerta única con bitácora reversible (0181,
 `scripts/apply-cuaderno-history-to-master.ts` y
 `scripts/rollback-master-backfill.ts`). Quedaron fuera a propósito: 101 con
 observación abierta, 120 anulados en Shopify, y 1.749 sin entrega en ninguna

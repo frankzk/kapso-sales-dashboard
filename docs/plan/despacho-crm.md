@@ -60,13 +60,13 @@ paquete); el motorizado deja de ver la ruta hasta que aceptó su caja.
 
 ## 3. Qué cambia en datos y código
 
-- `dispatch_manifest_items.pickup_declined_at / _reason / _by` (0174): el
+- `dispatch_manifest_items.pickup_declined_at / _reason / _by` (0182): el
   motorizado rechaza un paquete de su caja. El rechazo lo retira de la carga
   (`removed_at` con motivo «No recogido por X: …») para que la custodia pase con
   los aceptados y el paquete quede libre para otra ruta; la solicitud
   logística vuelve a `accepted` con observación. RPC `gf_rider_decline`.
-- `logistics_providers.rider_pickup_mode` (0177, reemplaza el booleano de
-  0175): `exigir` (verifica su caja antes de la ruta), `confirmar` (producción:
+- `logistics_providers.rider_pickup_mode` (0185, reemplaza el booleano de
+  0183): `exigir` (verifica su caja antes de la ruta), `confirmar` (producción:
   asignar entrega la custodia y crea paradas «por confirmar»; el motorizado
   dice «Lo llevo» con `gf_rider_confirm_pickup` o «No lo llevo» con
   `gf_rider_decline`, que en custodia borra la parada pendiente y devuelve el
@@ -75,7 +75,7 @@ paquete); el motorizado deja de ver la ruta hasta que aceptó su caja.
   `delivery_stops.pickup_confirmed = false` y el evento
   `delivered_unconfirmed_pickup`) y `ninguno` (basta con asignar). Decisión
   pura modo × parada en `riderStopDecision` (`lib/grupo-gf-courier.ts`).
-- Una carga por motorizado y día en `confirmar` y `ninguno` (0176):
+- Una carga por motorizado y día en `confirmar` y `ninguno` (0184):
   `gf_dispatch_load_open` + `gf_add_item_in_custody`; el efectivo previsto y el
   límite se calculan sobre la ruta completa del día.
 - `dispatch_route_reassigned` (order_events): mover un paquete de la caja de

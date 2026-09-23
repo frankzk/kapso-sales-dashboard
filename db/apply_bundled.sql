@@ -13271,8 +13271,501 @@ comment on column shalom_transit_notifications.ticket_sent_at is
   'Cuándo se envió el ticket PDF de Shalom, al contestar la clienta. Una vez por guía.';
 
 -- ---- 0168 ----
+-- 0168_flowcl_link_settings.sql — el «Link de pago» del aviso Shalom, cobrado
+-- de verdad por Flow.cl.
+--
+-- QUÉ CAMBIA. Hasta hoy el botón «Link de pago» contestaba con un texto fijo
+-- configurado a mano (`stores.shalom_transit_payment_link`), y si no había
+-- texto caía al número de Yape. Con esto, cuando la tienda tiene Flow.cl
+-- configurado, se crea una orden de cobro POR EL SALDO QUE DEBE EN ESE
+-- MOMENTO y se le manda el link que la cobra. El pago vuelve por el webhook
+-- que ya existe (`app/api/webhooks/flowcl`, 0160/0161) y aparece como
+-- comprobante en `order_payments`.
+--
+-- POR QUÉ UN INTERRUPTOR APARTE DE LAS CREDENCIALES. Tener la cuenta de Flow
+-- configurada no es lo mismo que querer que un robot emita cobros solo. El
+-- interruptor nace apagado; mientras lo esté, el botón contesta como hoy.
+--
+-- POR QUÉ UN EMAIL DE RESPALDO. `payment/create` exige un email del pagador y
+-- nuestros pedidos casi nunca lo traen: de los 7.585 de los últimos 30 días,
+-- 340 tenían email (4,5 %). El resto entra por WhatsApp, donde nadie pide un
+-- correo. Sin un email de la tienda al que mandar el comprobante, el 95 % de
+-- los cobros no se podría ni crear. Se usa el del cliente cuando existe.
+--
+-- POR QUÉ CADUCA. Un link vivo es una orden cobrable. Si la clienta paga
+-- S/ 50 por Yape y el saldo baja, el link viejo sigue cobrando el importe
+-- viejo: lo único que lo cierra es que caduque. 48 h por omisión — suficiente
+-- para quien paga al recibir el aviso, corto para que un link olvidado no
+-- cobre de más dentro de dos semanas.
+
+alter table stores
+  add column if not exists flowcl_link_enabled    boolean not null default false,
+  add column if not exists flowcl_link_email      text,
+  add column if not exists flowcl_link_ttl_hours  integer not null default 48,
+  add column if not exists flowcl_link_yape_only  boolean not null default false;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'stores_flowcl_link_ttl_hours_check'
+  ) then
+    alter table stores
+      add constraint stores_flowcl_link_ttl_hours_check
+      check (flowcl_link_ttl_hours between 1 and 720);
+  end if;
+end $$;
+
+comment on column stores.flowcl_link_enabled is
+  'Si el botón «Link de pago» del aviso Shalom crea un cobro real en Flow.cl. '
+  'Apagado: contesta con el texto configurado o con el Yape, como antes.';
+comment on column stores.flowcl_link_email is
+  'Email del pagador que se le manda a Flow cuando el pedido no trae uno '
+  '(el 95 % de los casos). Es el buzón de la tienda, no el del cliente.';
+comment on column stores.flowcl_link_ttl_hours is
+  'Horas hasta que la orden de Flow caduca. Un link vivo cobra el importe con '
+  'el que nació, aunque el saldo ya haya bajado.';
+comment on column stores.flowcl_link_yape_only is
+  'Forzar el medio 170 (Yape One Shot) en vez de enseñar la página de '
+  'selección de Flow. Ver FLOW_MEDIO_YAPE_ONE_SHOT en lib/flow/types.ts.';
+
+-- Buscar el link vivo de un pedido es lo que se hace en CADA pulsación del
+-- botón, y es lo que evita crear dos cobros por lo mismo.
+create index if not exists flowcl_links_order_live_idx
+  on flowcl_payment_links (order_id, kind, created_at desc)
+  where status = 'creado';
+
+-- ---- 0169 ----
+-- El sondeo de tarifas de Aliclik deja de inventar cobertura.
+--
+-- QUÉ PASABA. `aliclik_tariff_probes` elige distritos de pedidos pendientes, el
+-- cron les pide una cotización y, si Aliclik devuelve un precio, se escribe una
+-- tarifa. Pero la cobertura del pedido la decide esa misma matriz de tarifas
+-- (`order_coverage_for`), así que UNA COTIZACIÓN BASTABA PARA CONVERTIR UN
+-- DISTRITO DE AGENCIA EN PROVINCIA COD, sin que nadie hubiera entregado nunca
+-- ahí y sin que nadie se enterara.
+--
+-- Lo destapó Caravelí el 19-09-2026: tarifa creada por sondeo el 17-09, cero
+-- envíos de Aliclik en su historia, y la entrega de Aliclik más cercana a 247 km.
+-- Sus 8 envíos reales salieron por Shalom. Medido en ese momento, el mismo patrón
+-- alcanzaba a seis lugares (Caravelí, Huaura, Olmos, Sicuani/Canchis,
+-- Huancavelica y Azángaro) y a seis cadenas que ni siquiera son distritos.
+--
+-- DOS FILTROS, Y NINGUNO ADIVINA.
+--
+-- 1. LO QUE NO ES UN DISTRITO. La clienta escribe la referencia en ese campo y
+--    acabábamos cotizando «frente al grifo amazonas» o «2do puente de la av. 28
+--    de julio». Se descartan las cadenas con palabras de referencia o tipos de
+--    vía, que ningún distrito del Perú lleva en su nombre.
+--
+--    LA LISTA ES CORTA A PROPÓSITO, y dos ejemplos dicen por qué. «Puente» NO
+--    entra: Puente Piedra es un distrito de verdad. Y la primera versión de esto
+--    descartaba cualquier cadena con un dígito, hasta que la prueba contra los
+--    110 distritos con entrega real de Aliclik enseñó que se llevaba por delante
+--    «26 de Octubre», distrito de Piura con 44 entregas. Cambiar un error por
+--    otro no es arreglarlo.
+--
+--    Verificado al escribirlo: 0 de esos 110 distritos caen por este filtro.
+--
+-- 2. LO QUE YA SABEMOS QUE NO ATIENDE. Un distrito con entregas reales de
+--    agencia y CERO envíos de Aliclik no se sondea: su cotización no sería una
+--    novedad sino la repetición del error. Lo que se pierde con esto está dicho:
+--    si Aliclik abre cobertura ahí algún día, el sondeo no lo va a descubrir
+--    solo. Se arregla como se arregló Tumbes, con una fila en `district_coverage`
+--    o una tarifa cargada a mano — que es el camino correcto para una decisión
+--    comercial, en vez de que la tome un cron de madrugada.
+
+create or replace function aliclik_tariff_probes(p_store_id uuid, p_limit int)
+returns table (district text, lat double precision, lng double precision, pending bigint)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with pend as (
+    select om.district,
+           om.latitude,
+           om.longitude,
+           row_number() over (partition by om.district order by om.order_created_at desc) as rn,
+           count(*) over (partition by om.district) as pending
+    from order_master om
+    where om.store_id = p_store_id
+      and om.guide_code is null
+      and om.general_status in ('pendiente', 'en_proceso')
+      and om.district is not null
+      and om.latitude is not null
+      and om.longitude is not null
+      -- Filtro 1: esto no es un distrito, es un trozo de dirección.
+      and coverage_norm(om.district) !~
+        '(^| )(frente|grifo|cuadra|paradero|altura|costado|espalda|referencia|lote|mz|manzana|av|avenida|jr|jiron|calle|pasaje|psje)( |$)'
+  ),
+  -- Filtro 2: entregas reales por courier, para no sondear donde ya consta que
+  -- Aliclik no llega. Se mira la ENTREGA, no la guía creada: una guía anulada no
+  -- prueba cobertura (es lo que pasó con Tumbes, ver 0149).
+  entregas as (
+    select coverage_norm(sh.district) as district,
+           count(*) filter (where sh.courier = 'aliclik') as aliclik,
+           count(*) filter (where sh.courier <> 'aliclik' and sh.delivery_status = 'entregado') as agencia_entregados
+    from shipments sh
+    where sh.district is not null
+    group by 1
+  ),
+  quoted as (
+    select lower(btrim(t.district)) as district, max(t.effective_from) as last_quoted
+    from cost_tariffs t
+    where t.source = 'aliclik' and t.district is not null
+    group by 1
+  )
+  select p.district, p.latitude, p.longitude, p.pending
+  from pend p
+  left join quoted q on q.district = lower(btrim(p.district))
+  left join entregas e on e.district = coverage_norm(p.district)
+  where p.rn = 1
+    and not (coalesce(e.aliclik, 0) = 0 and coalesce(e.agencia_entregados, 0) > 0)
+  order by (q.last_quoted is not null), q.last_quoted asc nulls first, p.pending desc
+  limit p_limit;
+$$;
+
+revoke all on function aliclik_tariff_probes(uuid, int) from public, anon, authenticated;
+
+-- ---- 0170 ----
+-- 0170_shalom_arrival_notice.sql — el segundo aviso: «tu pedido YA LLEGÓ a la
+-- agencia».
+--
+-- EL HUECO. El aviso de la 0166 sale cuando la guía pasa a `en_transito` y dice
+-- «llegará en 2 a 5 días hábiles». Eso solo es verdad mientras el paquete viaja.
+-- A 18-09-2026 había **213 guías esperando en el mostrador con saldo** (173 de
+-- Kenku y 40 de Aurela, unos S/ 34.000) a las que nunca se les escribió: o
+-- llegaron antes de que esto existiera, o su tránsito ocurrió con el aviso
+-- apagado. Mandarles la plantilla de tránsito sería decirles que esperen un
+-- paquete que ya está esperándolas a ellas.
+--
+-- DOS AVISOS POR GUÍA, NO UNO. Hasta ahora `unique (shipment_id)` garantizaba
+-- «una vez por guía». Eso deja de valer: una misma guía tiene que poder
+-- recibir el de tránsito y, días después, el de llegada. La unique pasa a ser
+-- `(shipment_id, kind)`, que sigue garantizando lo mismo POR TIPO de aviso —
+-- que es la garantía que de verdad importaba: no repetirle a nadie el mismo
+-- mensaje.
+--
+-- POR QUÉ `kind` NACE EN 'transito'. Las 75 filas que ya existen son todas de
+-- tránsito. El default las deja correctas sin tocarlas y sin backfill.
+--
+-- PLANTILLA APARTE, INTERRUPTOR APARTE. El texto es otro y se aprueba aparte en
+-- Meta; y encender uno no puede encender el otro. Lo que SÍ se comparte es el
+-- número, el horario y las cuentas de cobro: son de la tienda, no del aviso.
+
+alter table shalom_transit_notifications
+  add column if not exists kind text not null default 'transito';
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'shalom_transit_notifications_kind_check'
+  ) then
+    alter table shalom_transit_notifications
+      add constraint shalom_transit_notifications_kind_check
+      check (kind in ('transito', 'disponible'));
+  end if;
+end $$;
+
+-- La unique vieja (una fila por guía) se sustituye por una por guía Y tipo.
+alter table shalom_transit_notifications
+  drop constraint if exists shalom_transit_notifications_shipment_id_key;
+drop index if exists shalom_transit_notifications_shipment_id_key;
+
+create unique index if not exists shalom_transit_notifications_shipment_kind_uniq
+  on shalom_transit_notifications (shipment_id, kind);
+
+comment on column shalom_transit_notifications.kind is
+  'Qué aviso es: transito (va en camino) o disponible (ya llegó a la agencia). '
+  'La unique es (shipment_id, kind): una guía recibe cada aviso una sola vez.';
+
+alter table stores
+  add column if not exists shalom_arrival_template_enabled boolean not null default false,
+  add column if not exists shalom_arrival_template_name    text,
+  add column if not exists shalom_arrival_params           text
+    not null default 'nombre,guia,codigo,producto,agencia,total,adelanto,saldo',
+  add column if not exists shalom_arrival_attach_ticket    boolean not null default false;
+
+comment on column stores.shalom_arrival_template_enabled is
+  'Aviso de «ya llegó a la agencia». Independiente del de tránsito: encender '
+  'uno no enciende el otro.';
+comment on column stores.shalom_arrival_params is
+  'Orden de variables de la plantilla de llegada. Las mismas ocho del aviso de '
+  'tránsito: el texto cambia, los datos no. El token `vence` (fecha límite de '
+  'recojo) existe y NO se usa por omisión — se decidió urgir sin poner fecha, '
+  'porque una fecha a 28 días invita a dejarlo para después.';
+
+-- ---- 0171 ----
+-- 0171_voucher_intake_switch.sql — el interruptor de la ingesta de comprobantes.
+--
+-- QUÉ ENCIENDE. Que una imagen llegada al número de cobranza, dentro de las
+-- 48 h de un aviso de Shalom, se intente registrar sola como comprobante en
+-- `order_payments` (ver lib/shalom/voucher-intake.ts).
+--
+-- POR QUÉ NACE APAGADO, Y POR QUÉ TIENE INTERRUPTOR PROPIO. Esto escribe filas
+-- de DINERO sin que una persona haya mirado la imagen, que es un control que
+-- hasta hoy tenía todo comprobante. El control que queda es que entra sin
+-- validar y que la clave sigue necesitando validación humana — suficiente para
+-- que un error no suelte un paquete, pero no para encenderlo en todas las
+-- tiendas a la vez y mirar después.
+--
+-- Es aparte del interruptor del aviso a propósito: una tienda puede querer
+-- avisar sin querer que se le registren pagos solos.
+
+alter table stores
+  add column if not exists shalom_voucher_intake_enabled boolean not null default false;
+
+comment on column stores.shalom_voucher_intake_enabled is
+  'Registrar solos los comprobantes que llegan por WhatsApp tras un aviso de '
+  'Shalom. Apagado: la imagen se queda en el chat, como antes. Nace apagado '
+  'porque escribe filas de dinero sin que una persona mire la imagen.';
+
+-- ---- 0172 ----
+-- 0172_collection_alerts.sql — la cola de cobranza del número de Shalom, con
+-- dueño y escalamiento.
+--
+-- EL HUECO. La ingesta (0171) ya registra sola el comprobante que llega por el
+-- 600, o anota por qué no pudo. Pero no avisa a NADIE: hay que entrar a
+-- Revisión de pagos o a Anomalías a mirar. Un proceso de cobranza sin dueño es
+-- un proceso que se atiende cuando alguien se acuerda.
+--
+-- POR QUÉ NO SE REUSA LA ALERTA DE LEADS. La de «Yape/Shalom por verificar»
+-- reparte entre las asesoras CONECTADAS, tipo ronda, y filtra `has_order =
+-- false`. Aquí es al revés en las dos cosas: hay pedido, y hay un responsable
+-- —no una competencia por atender primero—. Ofrecérsela a quien esté en línea
+-- convertiría una responsabilidad en una rifa.
+--
+-- POR QUÉ LA ESCALERA ES CONFIGURABLE. Escribir «Gerardo, luego Yohalis, luego
+-- Frank» en el código significa un despliegue el día que alguien cambie de
+-- puesto o se vaya de vacaciones. Vive en la base y se edita desde Ajustes.
+--
+-- LA ESPERA NO MIRA SI ESTÁ CONECTADO, a diferencia de la de asesoras: la
+-- oferta aguanta sus minutos aunque tenga el navegador cerrado. Si saltara al
+-- desconectarse, en la práctica todo acabaría en el último escalón.
+
+create table if not exists store_collection_escalation (
+  id          uuid primary key default gen_random_uuid(),
+  store_id    uuid not null references stores(id) on delete cascade,
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  -- El orden de la escalera: 1 es el responsable principal.
+  sort        integer not null default 100,
+  -- Minutos antes de pasar al siguiente. El ÚLTIMO escalón lo ignora: ahí se
+  -- queda, porque después de él no hay a quién avisar.
+  minutes     integer not null default 30 check (minutes between 1 and 1440),
+  created_at  timestamptz not null default now(),
+  unique (store_id, user_id)
+);
+
+create index if not exists store_collection_escalation_idx
+  on store_collection_escalation (store_id, sort);
+
+alter table store_collection_escalation enable row level security;
+drop policy if exists store_collection_escalation_select on store_collection_escalation;
+create policy store_collection_escalation_select on store_collection_escalation
+  for select to authenticated using (store_id in (select auth_store_ids()));
+
+create table if not exists collection_alerts (
+  id                  uuid primary key default gen_random_uuid(),
+  store_id            uuid not null references stores(id) on delete cascade,
+  -- `registrado`: entró solo y hay que validarlo.
+  -- `sin_atribuir`: llegó plata y no se supo de qué pedido es.
+  kind                text not null check (kind in ('registrado', 'sin_atribuir')),
+  order_id            uuid references orders(id) on delete set null,
+  payment_id          uuid references order_payments(id) on delete set null,
+  phone               text,
+  -- La deduplicación: Kapso reentrega webhooks, y dos alertas del mismo
+  -- comprobante son dos personas mirando lo mismo.
+  inbound_message_id  text,
+  amount              numeric(12, 2),
+  detail              text,
+
+  status              text not null default 'abierta'
+                        check (status in ('abierta', 'atendida', 'descartada')),
+
+  -- A quién le toca AHORA, y desde cuándo. De aquí sale el escalamiento.
+  offered_to          uuid references auth.users(id) on delete set null,
+  offered_at          timestamptz,
+  -- Quiénes ya dejaron pasar su turno (o lo rechazaron a mano).
+  passed              uuid[] not null default '{}',
+  claimed_by          uuid references auth.users(id) on delete set null,
+  claimed_at          timestamptz,
+
+  resolved_by         uuid references auth.users(id) on delete set null,
+  resolved_at         timestamptz,
+  resolution          text,
+
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now()
+);
+
+create unique index if not exists collection_alerts_inbound_uniq
+  on collection_alerts (store_id, inbound_message_id)
+  where inbound_message_id is not null;
+
+-- Las abiertas de una tienda, que es lo que se consulta en cada pasada.
+create index if not exists collection_alerts_open_idx
+  on collection_alerts (store_id, created_at) where status = 'abierta';
+-- Y las mías, que es lo que pinta la pantalla.
+create index if not exists collection_alerts_offered_idx
+  on collection_alerts (offered_to, status);
+
+alter table collection_alerts enable row level security;
+drop policy if exists collection_alerts_select on collection_alerts;
+create policy collection_alerts_select on collection_alerts for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+comment on table collection_alerts is
+  'Cobranza del número de Shalom: un comprobante que entró solo y hay que '
+  'validar, o plata que llegó y no se supo de qué pedido es. Tiene dueño y '
+  'escalamiento por tiempo (store_collection_escalation).';
+comment on column collection_alerts.passed is
+  'Quienes ya dejaron pasar su turno. Se les salta al recalcular la oferta.';
+comment on column collection_alerts.offered_to is
+  'A quién le toca ahora. NULL mientras no haya escalera configurada: la '
+  'alerta existe igual y se ve en la cola de la tienda.';
+
+-- ---- 0173 ----
+-- 0173_pickup_key_autosend.sql — enviar la clave de recojo al validar el pago.
+--
+-- QUÉ ENCIENDE. Que al validar el comprobante que termina de cubrir el pedido,
+-- Kapta le mande la clave de recojo a la clienta por WhatsApp, en el mismo
+-- clic, y registre la entrega (ver lib/pickup-key-message.ts y la acción
+-- `validatePayment` con `sendKey`).
+--
+-- POR QUÉ NACE. Medido el 21-09-2026: 786 pedidos pagados con clave registrada,
+-- 770 con la clave ya consultada por alguien y **3** con la entrega registrada.
+-- O sea que la clave se entrega —si no habría cientos de reclamos— pero el paso
+-- de «registrar que la entregué» es un clic que nadie da, al 0,4 %. El estado
+-- «Clave enviada al cliente» del Master era, en la práctica, ficción.
+--
+-- Mandarla al validar arregla las dos cosas a la vez: se ahorra el copiar y
+-- pegar, y el ENVÍO ES EL REGISTRO — no hay un segundo clic que olvidar.
+--
+-- POR QUÉ NACE APAGADO Y TIENE INTERRUPTOR PROPIO. Esto manda la llave del
+-- paquete sin que nadie vuelva a mirar nada después del clic. El control que
+-- queda es el de siempre —`canRevealPickupKey` se comprueba otra vez en el
+-- servidor, con los datos frescos, antes de descifrar— y que quien valida es
+-- una persona que tiene el comprobante delante. Suficiente para encenderlo
+-- donde se mira, no para encenderlo en todas las tiendas a la vez.
+
+alter table stores
+  add column if not exists shalom_pickup_key_autosend_enabled boolean not null default false;
+
+comment on column stores.shalom_pickup_key_autosend_enabled is
+  'Enviar la clave de recojo por WhatsApp al validar el pago que termina de '
+  'cubrir el pedido, y registrar esa entrega. Apagado: la clave se consulta y '
+  'se entrega a mano, como hasta ahora. Nace apagado porque manda la llave del '
+  'paquete sin que nadie vuelva a mirar después del clic.';
+
+-- ---- 0174 ----
+-- 0174_olva_tracking.sql — el número con el que Olva conoce el envío, y su
+-- último estado rastreado.
+--
+-- EL HUECO. La salida de Olva se crea desde el drawer (§4, §12) y nace con un
+-- `guide_code` INTERNO de Kapta: el número de tracking que Olva emite
+-- («2552504-26») no se guardaba en ninguna parte. Llegaba por correo a una
+-- persona y se quedaba ahí. Sin él no hay nada que consultar, y el estado de
+-- agencia se marcaba a mano cuando alguien se acordaba — Olva devuelve el
+-- paquete a los SEIS días de llegar a destino, no a los 28 de Shalom.
+--
+-- POR QUÉ COLUMNAS PROPIAS Y NO `guide_code`. El `guide_code` de una salida
+-- manual es lo que va impreso en el rótulo y en el QR que el almacén escanea;
+-- cambiarlo al enterarse del tracking desligaría la caja de su etiqueta. El
+-- tracking de Olva es otro identificador, del courier, igual que
+-- `shalom_codigo` lo es de Shalom (0061): se guarda al lado, no encima.
+--
+-- `emision` son los dos dígitos del año que Olva pide junto al número: el
+-- mismo número se repite entre años, así que solos no identifican nada.
+
+alter table shipments
+  add column if not exists olva_tracking text,
+  add column if not exists olva_emision  text,
+  -- El último `nombre_estado_tracking` tal como lo dijo Olva («DESPACHADO»,
+  -- «CONFIRMACION EN TIENDA»). Se guarda crudo porque la traducción a
+  -- `pickup_state` es con pérdida y porque los estados que Kapta todavía no
+  -- conoce tienen que poder verse para añadirlos.
+  add column if not exists olva_status   text,
+  -- El bloque `general` de la última respuesta, para auditar sin volver a
+  -- preguntar.
+  add column if not exists olva_raw      jsonb;
+
+-- El mismo tracking no puede colgar de dos salidas: es la regla que ya rige
+-- para las guías de Shalom vinculadas a mano (§12). Parcial: la inmensa
+-- mayoría de las filas no son de Olva y no tienen tracking.
+create unique index if not exists shipments_olva_tracking_uidx
+  on shipments (olva_emision, olva_tracking)
+  where olva_tracking is not null;
+
+-- El cron busca las salidas de Olva con tracking y vivas; sin esto recorre
+-- la tabla entera cada media hora.
+create index if not exists shipments_olva_live_idx
+  on shipments (courier, delivery_status)
+  where olva_tracking is not null;
+
+-- ---- 0175 ----
+-- 0175_olva_notices.sql — los dos avisos de WhatsApp de Olva: «va en camino» y
+-- «ya llegó a la oficina», con el saldo, igual que los de Shalom (0166, 0170).
+--
+-- EL HUECO. Desde la 0174 Kapta sabe cuándo un envío de Olva sale de Lima y
+-- cuándo llega a la oficina de destino. Lo sabía y no se lo decía a nadie: la
+-- clienta que dio S/ 20 de adelanto se enteraba de que su paquete estaba en la
+-- oficina cuando alguien se lo escribía a mano, y el saldo se cobraba chat por
+-- chat. Con Shalom eso ya lo hace la cola de avisos; Olva devuelve a los 6 días
+-- —no a los 28—, así que aquí urge más.
+--
+-- MISMA COLA, MISMO ENVÍO, MISMOS BOTONES. La cola `shalom_transit_notifications`
+-- gana una columna `courier`: la unique (shipment_id, kind) ya garantiza un
+-- aviso de cada tipo por guía, y una guía es de un solo courier. Lo que cambia
+-- por courier es la PLANTILLA —Meta aprueba cada texto por separado, y los de
+-- Shalom nombran a Shalom y llevan su código corto—, así que cada uno tiene
+-- nombre de plantilla, interruptor y orden de variables propios. El número, el
+-- idioma, el horario, las cuentas de cobro y la respuesta al «Link de pago»
+-- son de la tienda y se comparten con los avisos de Shalom.
+--
+-- OLVA NO TIENE CÓDIGO CORTO NI TICKET. Sus variables por omisión son las de
+-- Shalom sin `codigo`; el ticket en cabecera no existe para Olva.
+
+alter table shalom_transit_notifications
+  add column if not exists courier text not null default 'shalom';
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'shalom_transit_notifications_courier_check'
+  ) then
+    alter table shalom_transit_notifications
+      add constraint shalom_transit_notifications_courier_check
+      check (courier in ('shalom', 'olva'));
+  end if;
+end $$;
+
+comment on column shalom_transit_notifications.courier is
+  'De qué courier es la guía del aviso. Decide la plantilla; la cola, el envío '
+  'y los botones de cobro son los mismos.';
+
+alter table stores
+  add column if not exists olva_transit_template_enabled boolean not null default false,
+  add column if not exists olva_transit_template_name    text,
+  add column if not exists olva_transit_params           text
+    not null default 'nombre,guia,producto,agencia,total,adelanto,saldo,yape',
+  add column if not exists olva_arrival_template_enabled boolean not null default false,
+  add column if not exists olva_arrival_template_name    text,
+  add column if not exists olva_arrival_params           text
+    not null default 'nombre,guia,producto,agencia,total,adelanto,saldo';
+
+comment on column stores.olva_transit_template_enabled is
+  'Aviso de «va en camino» para guías de Olva. Independiente del de Shalom.';
+comment on column stores.olva_transit_params is
+  'Orden de variables de la plantilla de tránsito de Olva. Los mismos tokens '
+  'que Shalom menos `codigo`: Olva no tiene código corto. `guia` es el tracking '
+  'de Olva («2552504-26»).';
+comment on column stores.olva_arrival_template_enabled is
+  'Aviso de «ya llegó a la oficina» para guías de Olva. El plazo de Olva son 6 '
+  'días, así que `vence` —si se usa— se calcula con 6 y no con 28.';
+
+-- ---- 0176 ----
 -- ============================================================================
--- 0168_liquidaciones2_hojas.sql — Liquidaciones 2: dominios, hojas, columnas
+-- 0184_liquidaciones2_hojas.sql — Liquidaciones 2: dominios, hojas, columnas
 -- configurables, equivalencias de estado y observaciones de cuadre.
 --
 -- DE DÓNDE VIENE. La operación llevaba el cierre de Lima en un Google Sheet
@@ -13598,9 +14091,9 @@ grant select, insert on sheet_cell_history to service_role;
 revoke all on sheet_observation_reasons from anon, authenticated;
 grant select on sheet_observation_reasons to authenticated;
 
--- ---- 0169 ----
+-- ---- 0177 ----
 -- ============================================================================
--- 0169_sheet_status_effect_sin_salida.sql — un efecto más para los estados de
+-- 0185_sheet_status_effect_sin_salida.sql — un efecto más para los estados de
 -- dominio de Liquidaciones 2: «sin_salida».
 --
 -- La operación explicó (16-09-2026) qué es «LO DEJA» en el cuaderno del
@@ -13614,9 +14107,9 @@ alter table sheet_domain_statuses
   add constraint sheet_domain_statuses_effect_check
   check (effect in ('informa', 'entrega', 'devolucion', 'anulacion', 'sin_salida'));
 
--- ---- 0170 ----
+-- ---- 0178 ----
 -- ============================================================================
--- 0170_sheet_observation_reason_pago.sql — cuarta causa de observación
+-- 0186_sheet_observation_reason_pago.sql — cuarta causa de observación
 -- automática en Liquidaciones 2: pago digital sin comprobante validado.
 --
 -- Una fila del cuaderno que declara entrega cobrada por Yape, Plin, link o
@@ -13630,13 +14123,13 @@ insert into sheet_observation_reasons (code, label, description, position) value
   ('pago_sin_comprobante', 'Pago digital sin comprobante validado', 'La hoja dice Yape, Plin, link o transferencia, pero Kapta no tiene un comprobante validado ni el pedido pagado en Shopify.', 85)
 on conflict (code) do nothing;
 
--- ---- 0171 ----
+-- ---- 0179 ----
 -- ============================================================================
--- 0171_sheets_rider_rls.sql — un motorizado solo lee SU hoja de Liquidaciones 2.
+-- 0187_sheets_rider_rls.sql — un motorizado solo lee SU hoja de Liquidaciones 2.
 --
 -- La pantalla del motorizado (/reparto/cuaderno, MOM §30.9) muestra su
 -- cuaderno del día: las filas de la hoja de Reparto propio cuyo
--- `config->>'rider_id'` es su ficha. Hasta ahora las políticas de 0168 dejaban
+-- `config->>'rider_id'` es su ficha. Hasta ahora las políticas de 0176 dejaban
 -- leer a cualquier miembro de la organización todas las hojas, y un
 -- motorizado es miembro (rol `motorizado`, 0066). Vería las hojas de sus
 -- compañeros, el Consolidado y las observaciones de todos.
@@ -13645,7 +14138,7 @@ on conflict (code) do nothing;
 -- `motorizado`, solo lee las hojas con su `rider_id` y lo que cuelga de ellas
 -- (columnas, filas, alias, observaciones, historial). Los demás roles siguen
 -- igual. La escritura ya pasa por server actions con guardas propias; las
--- políticas de escritura de 0168 (owner/admin) no cambian.
+-- políticas de escritura de 0176 (owner/admin) no cambian.
 -- ============================================================================
 
 create or replace function public.auth_is_rider_only()
@@ -13708,9 +14201,9 @@ create policy sheet_cell_history_select on sheet_cell_history for select to auth
 -- Los dominios y sus estados son vocabulario, no datos de nadie: el motorizado
 -- los necesita para el datalist de su pantalla. Siguen legibles por org.
 
--- ---- 0172 ----
+-- ---- 0180 ----
 -- ============================================================================
--- 0172_stop_written_status.sql — la parada de reparto es la única verdad;
+-- 0180_stop_written_status.sql — la parada de reparto es la única verdad;
 -- la hoja de Reparto propio de Liquidaciones 2 pasa a ser una vista con
 -- vocabulario encima de ella.
 --
@@ -13751,9 +14244,9 @@ alter table sheet_rows
 create unique index if not exists sheet_rows_stop_idx
   on sheet_rows(stop_id) where stop_id is not null;
 
--- ---- 0173 ----
+-- ---- 0181 ----
 -- ============================================================================
--- 0173_master_backfill_log.sql — bitácora reversible de las entregas que se
+-- 0181_master_backfill_log.sql — bitácora reversible de las entregas que se
 -- aplican al Master en bloque desde la historia del cuaderno (Liquidaciones 2).
 --
 -- POR QUÉ. El 19-09-2026 la bandeja de Grupo GF Courier mostraba 6.368 pedidos
@@ -13805,9 +14298,9 @@ revoke all on master_backfill_log from anon, authenticated;
 grant select on master_backfill_log to authenticated;
 grant all privileges on master_backfill_log to service_role;
 
--- ---- 0174 ----
+-- ---- 0182 ----
 -- ============================================================================
--- 0174_manifest_item_not_picked.sql — «No lo recojo»: el motorizado rechaza un
+-- 0182_manifest_item_not_picked.sql — «No lo recojo»: el motorizado rechaza un
 -- paquete de su caja al recibirla (MOM §29.13).
 --
 -- Antes la recepción era todo o nada: la carga pasaba a custodia solo con el
@@ -13896,9 +14389,9 @@ $$;
 revoke all on function public.gf_rider_decline(uuid, uuid, text, uuid) from public, anon, authenticated;
 grant execute on function public.gf_rider_decline(uuid, uuid, text, uuid) to service_role;
 
--- ---- 0175 ----
+-- ---- 0183 ----
 -- ============================================================================
--- 0175_provider_rider_pickup_check.sql — la verificación de la caja por el
+-- 0183_provider_rider_pickup_check.sql — la verificación de la caja por el
 -- motorizado es OPCIONAL, gobernada por un flag en la base (MOM §29.13).
 --
 -- `logistics_providers.rider_pickup_check_required`:
@@ -14013,13 +14506,13 @@ begin
 end;
 $$;
 
--- ---- 0176 ----
+-- ---- 0184 ----
 -- ============================================================================
--- 0176_gf_one_load_per_day.sql — con la verificación del motorizado apagada,
+-- 0184_gf_one_load_per_day.sql — con la verificación del motorizado apagada,
 -- una sola carga por motorizado y día (MOM §29.13, corrección 19-09-2026).
 --
 -- Con `rider_pickup_check_required = false`, asignar entrega la custodia en el
--- acto (0175). Tal como quedó, cada asignación posterior del mismo día abría
+-- acto (0183). Tal como quedó, cada asignación posterior del mismo día abría
 -- una carga adicional, porque gf_dispatch_load no admite meter paquetes en una
 -- carga que ya inició cotejo o custodia. La operación quiere lo contrario: el
 -- motorizado vuelve a la oficina y se le SUMAN paquetes a la misma carga y
@@ -14162,12 +14655,12 @@ begin
 end;
 $$;
 
--- ---- 0177 ----
+-- ---- 0185 ----
 -- ============================================================================
--- 0177_provider_rider_pickup_mode.sql — «Lo llevo»: el motorizado confirma
+-- 0185_provider_rider_pickup_mode.sql — «Lo llevo»: el motorizado confirma
 -- cada paquete al sacarlo del almacén, sin que nada lo bloquee (MOM §29.13).
 --
--- El booleano de 0175 (`rider_pickup_check_required`) solo sabía decir «exigir
+-- El booleano de 0183 (`rider_pickup_check_required`) solo sabía decir «exigir
 -- la verificación antes de ver la ruta» o «nada». La operación necesita un
 -- tercer modo: el supervisor asigna y la ruta aparece al instante, pero el
 -- motorizado escanea cada pedido cuando lo mete en la caja de la moto («lo
@@ -14187,7 +14680,7 @@ $$;
 --                   `delivery_stops.pickup_confirmed = false` y deja rastro.
 --                   El supervisor puede quitar o mover lo no confirmado
 --                   (gf_supervisor_withdraw).
---     'ninguno'   = como 0175/0176 con el flag en false: basta con asignar y
+--     'ninguno'   = como 0183/0176 con el flag en false: basta con asignar y
 --                   no se pide nada más.
 --
 -- Migración de datos: true → 'exigir', false → 'ninguno'. Producción queda en
@@ -14218,14 +14711,14 @@ end;
 $$;
 
 -- Si al reportar la entrega el motorizado había confirmado «lo llevo». Null en
--- paradas sin caja de despacho o reportadas antes de 0177.
+-- paradas sin caja de despacho o reportadas antes de 0185.
 alter table delivery_stops
   add column if not exists pickup_confirmed boolean;
 comment on column delivery_stops.pickup_confirmed is
-  'Al reportar la entrega, si el ítem de la caja tenía pickup_checked_at (modo confirmar). Null: sin caja o anterior a 0177.';
+  'Al reportar la entrega, si el ítem de la caja tenía pickup_checked_at (modo confirmar). Null: sin caja o anterior a 0185.';
 
 -- El único lector del modo en SQL. Sin proveedor se asume ''exigir'' (lo de
--- siempre), igual que 0175 asumía true.
+-- siempre), igual que 0183 asumía true.
 create or replace function public.gf_rider_pickup_mode(p_org_id uuid)
 returns text language sql stable set search_path = public as $$
   select coalesce((select rider_pickup_mode from logistics_providers
@@ -14234,7 +14727,7 @@ $$;
 revoke all on function public.gf_rider_pickup_mode(uuid) from public, anon;
 
 -- ----------------------------------------------------------------------------
--- Custodia al asignar (0175), ahora para 'confirmar' y 'ninguno'.
+-- Custodia al asignar (0183), ahora para 'confirmar' y 'ninguno'.
 -- ----------------------------------------------------------------------------
 create or replace function public.gf_assign_custody(p_manifest_id uuid, p_actor uuid)
 returns uuid[] language plpgsql set search_path = public as $$
@@ -14298,7 +14791,7 @@ revoke all on function public.gf_assign_custody(uuid, uuid) from public, anon, a
 grant execute on function public.gf_assign_custody(uuid, uuid) to service_role;
 
 -- ----------------------------------------------------------------------------
--- Una carga por motorizado y día (0176), ahora para 'confirmar' y 'ninguno'.
+-- Una carga por motorizado y día (0184), ahora para 'confirmar' y 'ninguno'.
 -- ----------------------------------------------------------------------------
 create or replace function public.gf_dispatch_load_open(p_org_id uuid, p_rider_id uuid, p_day date, p_actor uuid)
 returns uuid language plpgsql set search_path = public as $$
@@ -14323,7 +14816,7 @@ $$;
 revoke all on function public.gf_dispatch_load_open(uuid, uuid, date, uuid) from public, anon, authenticated;
 grant execute on function public.gf_dispatch_load_open(uuid, uuid, date, uuid) to service_role;
 
--- En 'ninguno' el paquete sumado entra cotejado y recibido (como 0176); en
+-- En 'ninguno' el paquete sumado entra cotejado y recibido (como 0184); en
 -- 'confirmar' entra cotejado por oficina y «por confirmar» por el motorizado.
 create or replace function public.gf_add_item_in_custody(p_manifest_id uuid, p_shipment_id uuid, p_store_id uuid, p_actor uuid)
 returns uuid language plpgsql set search_path = public as $$
@@ -14561,7 +15054,7 @@ revoke all on function public.gf_rider_confirm_pickup(uuid, uuid) from public, a
 grant execute on function public.gf_rider_confirm_pickup(uuid, uuid) to service_role;
 
 -- ----------------------------------------------------------------------------
--- «No lo llevo» (0174) ahora también sobre la caja en custodia en 'confirmar'.
+-- «No lo llevo» (0182) ahora también sobre la caja en custodia en 'confirmar'.
 -- ----------------------------------------------------------------------------
 create or replace function public.gf_rider_decline(p_manifest_id uuid, p_shipment_id uuid, p_reason text, p_actor uuid)
 returns uuid[] language plpgsql set search_path = public as $$
@@ -14645,15 +15138,15 @@ $$;
 revoke all on function public.gf_rider_decline(uuid, uuid, text, uuid) from public, anon, authenticated;
 grant execute on function public.gf_rider_decline(uuid, uuid, text, uuid) to service_role;
 
--- ---- 0178 ----
+-- ---- 0186 ----
 -- ============================================================================
--- 0178_order_master_rider_select.sql — un motorizado lee del Master los
+-- 0186_order_master_rider_select.sql — un motorizado lee del Master los
 -- pedidos de SUS rutas.
 --
 -- La pantalla del motorizado (/reparto, MOM §29.12) pinta cada parada con el
 -- nombre, el celular, la dirección y el monto del pedido, que salen de
 -- `order_master`. Esa tabla solo dejaba leer por tienda (`auth_store_ids()`),
--- y un usuario cuyo único rol es `motorizado` (0066, 0171) no tiene acceso a
+-- y un usuario cuyo único rol es `motorizado` (0066, 0179) no tiene acceso a
 -- ninguna tienda: veía sus paradas como «Sin nombre — · —». Mientras la ficha
 -- de Roy estuvo atada a un usuario owner no se notó.
 --
@@ -14664,7 +15157,7 @@ grant execute on function public.gf_rider_decline(uuid, uuid, text, uuid) to ser
 -- sigue cerrada; el motorizado reporta por `delivery_stops` y el RPC.
 --
 -- Las paradas se resuelven en una función SECURITY DEFINER, como
--- `auth_sheet_ids()` (0171), para que la política no dependa de las políticas
+-- `auth_sheet_ids()` (0179), para que la política no dependa de las políticas
 -- de rutas y paradas ni las evalúe fila a fila.
 -- ============================================================================
 
@@ -14689,12 +15182,12 @@ drop policy if exists order_master_select_rider on order_master;
 create policy order_master_select_rider on order_master for select to authenticated
   using (order_id in (select auth_rider_order_ids()));
 
--- ---- 0179 ----
+-- ---- 0187 ----
 -- ============================================================================
--- 0179_gf_readd_declined_item.sql — un paquete que el motorizado no llevó
+-- 0187_gf_readd_declined_item.sql — un paquete que el motorizado no llevó
 -- puede volver a la MISMA caja.
 --
--- «No lo llevo» (0174/0177) retira el ítem de la caja: la fila se queda con
+-- «No lo llevo» (0182/0177) retira el ítem de la caja: la fila se queda con
 -- `removed_at`, `pickup_declined_*` y el motivo, y la solicitud vuelve a
 -- «por asignar». Al asignarlo otra vez al mismo motorizado el mismo día,
 -- `gf_add_item_in_custody` insertaba una fila nueva en la misma caja y
@@ -14736,9 +15229,9 @@ begin
   if not found then raise exception 'Paquete no encontrado.'; end if;
   if v_shipment.custody_state <> 'empresa' then raise exception 'El paquete ya no está en custodia de Grupo GF.'; end if;
 
-  -- Fila nueva, o la retirada de esta misma caja que revive (0179). Revivirla
+  -- Fila nueva, o la retirada de esta misma caja que revive (0187). Revivirla
   -- es un UPDATE de `removed_at` sobre una carga en custodia, que el guardián
-  -- de 0177 solo admite dentro de un retiro con `gf.withdraw = on`: aquí es el
+  -- de 0185 solo admite dentro de un retiro con `gf.withdraw = on`: aquí es el
   -- movimiento inverso, dentro de la misma transacción y con el mismo pase.
   perform set_config('gf.withdraw', 'on', true);
   insert into dispatch_manifest_items(manifest_id, shipment_id, store_id, added_by,

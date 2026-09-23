@@ -28,6 +28,10 @@ import { saveDistrictCoverageRow } from "@/lib/district-coverage-access";
 import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
 import { describeShalomError, describeShalomProbeFailure } from "@/lib/shalom/client";
 import { clientFor, loadStoreShalom, mintSession, publicClient } from "@/lib/shalom/session";
+import { FlowClient } from "@/lib/flow/client";
+import { confirmationUrl } from "@/lib/flow/link";
+import { processTransitNotifications } from "@/lib/shalom/transit-notify";
+import { resolveAgentNames } from "@/lib/agent-names";
 
 export interface SettingsState {
   error?: string;
@@ -166,6 +170,23 @@ export async function updateStore(
     shalom_transit_hour_start: get("shalom_transit_hour_start"),
     shalom_transit_hour_end: get("shalom_transit_hour_end"),
     shalom_transit_payment_link: get("shalom_transit_payment_link"),
+    shalom_arrival_template_enabled: get("shalom_arrival_template_enabled"),
+    shalom_arrival_template_name: get("shalom_arrival_template_name"),
+    shalom_arrival_params: get("shalom_arrival_params"),
+    shalom_arrival_attach_ticket: get("shalom_arrival_attach_ticket"),
+    shalom_voucher_intake_enabled: get("shalom_voucher_intake_enabled"),
+    shalom_pickup_key_autosend_enabled: get("shalom_pickup_key_autosend_enabled"),
+    // Los dos avisos de Olva (0175).
+    olva_transit_template_enabled: get("olva_transit_template_enabled"),
+    olva_transit_template_name: get("olva_transit_template_name"),
+    olva_transit_params: get("olva_transit_params"),
+    olva_arrival_template_enabled: get("olva_arrival_template_enabled"),
+    olva_arrival_template_name: get("olva_arrival_template_name"),
+    olva_arrival_params: get("olva_arrival_params"),
+    flowcl_link_enabled: get("flowcl_link_enabled"),
+    flowcl_link_email: get("flowcl_link_email"),
+    flowcl_link_ttl_hours: get("flowcl_link_ttl_hours"),
+    flowcl_link_yape_only: get("flowcl_link_yape_only"),
     // Estos dos existían en el formulario pero no se leían acá, así que la
     // clave de Anthropic por tienda (5l del DEPLOY) nunca llegaba a guardarse.
     anthropic_api_key: get("anthropic_api_key"),
@@ -527,6 +548,145 @@ export async function sendTelegramTest(
     };
   } catch (e) {
     return { error: errMsg(e) };
+  }
+}
+
+/**
+ * «Enviar ahora los avisos en cola»: drena la cola de esta tienda sin esperar
+ * al cron.
+ *
+ * POR QUÉ EXISTE. El cron corre cada 30 minutos, y cuando se acaba de encender
+ * el aviso —o de reactivar unas filas a mano— media hora a ciegas es media hora
+ * sin saber si la plantilla tiene bien los parámetros. Con esto se ve al
+ * momento, que es cuando se puede corregir.
+ *
+ * NO FUERZA NADA: manda lo que YA está en `pending` y le toca. El horario, los
+ * reintentos y el interruptor de la tienda siguen mandando igual — un botón que
+ * se saltara el horario mandaría WhatsApps a las tres de la mañana.
+ */
+export async function sendTransitQueueNow(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+
+  try {
+    // Presupuesto corto: hay alguien mirando la pantalla. Lo que no quepa se
+    // queda en la cola y lo toma el cron.
+    const r = await processTransitNotifications(ctx.admin, { storeId, budgetMs: 45_000 });
+    revalidatePath(`/dashboard/${storeId}/settings`);
+    const partes = [
+      `${r.sent} enviado(s)`,
+      r.failed ? `${r.failed} fallido(s)` : null,
+      r.skipped ? `${r.skipped} descartado(s)` : null,
+      r.deferred ? `${r.deferred} para más tarde` : null,
+    ].filter(Boolean);
+    const motivos = r.errors.length ? ` — ${r.errors.slice(0, 3).join(" · ")}` : "";
+    return { notice: `Cola de avisos: ${partes.join(", ")}.${motivos}` };
+  } catch (e) {
+    return { error: errMsg(e) };
+  }
+}
+
+/**
+ * «Probar cobro por Flow»: crea una orden real por el importe que se le dé y
+ * devuelve el link.
+ *
+ * POR QUÉ UNA ORDEN DE VERDAD. Flow no tiene un endpoint de prueba, y lo que
+ * hay que comprobar es justo lo que solo se ve cobrando: que la firma con el
+ * secretKey vale, que la cuenta acepta la moneda, y —lo que no estaba
+ * comprobado contra la API real— QUE ADMITE IMPORTES CON DECIMALES. Por eso el
+ * importe lleva céntimos: un saldo de verdad casi siempre los tiene, y
+ * descubrirlo con la primera clienta es descubrirlo tarde.
+ *
+ * ES UNA SONDA, NO UN COBRO NUESTRO: no se escribe en `flowcl_payment_links`
+ * porque no hay pedido al que colgarla, y caduca en 30 minutos.
+ *
+ * SI SE PAGA, EL DINERO ES REAL Y NO SE CUELGA DE NINGÚN PEDIDO. El webhook
+ * busca el token en `flowcl_payment_links`, no lo encuentra y contesta
+ * «desconocido», que es la verdad: entró plata en la cuenta de Flow y Kapta no
+ * sabe de quién es. Por eso el importe por omisión es pequeño y el aviso está
+ * escrito al lado del botón, no enterrado aquí.
+ */
+export async function testFlowclLink(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+
+  const creds = await getStoreCreds(storeId, ctx.admin);
+  if (!creds?.flowcl_api_key || !creds.flowcl_secret_key) {
+    return { error: "Configura primero la apiKey y la secretKey de Flow.cl (y guarda)." };
+  }
+  if (!creds.flowcl_webhook_secret) {
+    return { error: "Falta el secreto de la url de confirmación (y guardar)." };
+  }
+  // EL EMAIL SE LEE DE LA PANTALLA, no de la base. El botón de la sonda envía
+  // este mismo formulario a otra acción, así que lo que el usuario acaba de
+  // escribir viaja aquí — pero NO queda guardado, y React vacía el campo al
+  // terminar. Exigir que estuviera guardado convertía al botón en una trampa:
+  // se escribe el email justo encima, se pulsa, y contesta que falta el email
+  // que se acaba de escribir. Las credenciales sí tienen que estar guardadas,
+  // porque son secretos cifrados y el formulario no las trae en claro.
+  const email = (String(formData.get("flowcl_link_email") ?? "") || creds.flowcl_link_email || "").trim();
+  if (!email) {
+    return {
+      error:
+        "Escribe el email de respaldo del cobro aquí arriba: Flow exige un email del pagador y " +
+        "casi ningún pedido trae uno.",
+    };
+  }
+
+  // El importe lo pone quien prueba: 1.10 sirve para ver que la firma vale,
+  // pero Yape y las tarjetas tienen mínimos propios, y para probar un cobro de
+  // punta a punta hace falta uno que se pueda pagar de verdad.
+  const pedido = Number(String(formData.get("amount") ?? "").replace(",", "."));
+  const monto = Number.isFinite(pedido) && pedido > 0 ? pedido : 20;
+  if (monto > 500) {
+    return { error: "Para una prueba, 500 es más que suficiente. Si necesitas más, dilo a mano." };
+  }
+  const amount = (Math.round(monto * 100) / 100).toFixed(2);
+
+  const site = env.siteUrl();
+  if (!/^https:\/\//i.test(site)) {
+    return {
+      error: `NEXT_PUBLIC_SITE_URL es «${site}»: con eso el cobro se crea pero el pago no vuelve nunca.`,
+    };
+  }
+
+  try {
+    const client = new FlowClient({
+      apiKey: creds.flowcl_api_key,
+      secretKey: creds.flowcl_secret_key,
+      baseUrl: env.flowclApiBase(),
+    });
+    const pago = await client.createPayment({
+      commerceOrder: `PRUEBA-${randomBytes(4).toString("hex")}`,
+      subject: "Prueba de configuración (no hace falta pagarla)",
+      amount,
+      currency: creds.currency ?? "PEN",
+      email,
+      urlConfirmation: confirmationUrl(site, storeId, creds.flowcl_webhook_secret),
+      urlReturn: `${site.replace(/\/$/, "")}/pago/gracias`,
+      timeout: 1800,
+    });
+    const decimales = amount.endsWith(".00") ? "" : " (con céntimos)";
+    const sinGuardar =
+      email !== (creds.flowcl_link_email ?? "").trim()
+        ? " Ojo: ese email todavía no está guardado — dale a «Guardar cambios» si lo quieres dejar."
+        : "";
+    return {
+      notice:
+        `Flow aceptó un cobro de S/ ${amount}${decimales} ✓ — orden ${pago.flowOrder}. ` +
+        `Caduca en 30 minutos. Si lo pagas, el dinero entra de verdad y NO queda ` +
+        `colgado de ningún pedido: ${pago.link}${sinGuardar}`,
+    };
+  } catch (e) {
+    return { error: `Flow rechazó la prueba: ${errMsg(e)}` };
   }
 }
 
@@ -1076,4 +1236,96 @@ export async function deleteDistrictCoverage(
       "Excepción eliminada; ese distrito vuelve a la regla general." +
       (recomputed ? ` ${recomputed} pedido(s) abiertos reclasificados.` : ""),
   };
+}
+
+// ── La escalera de la cola de cobranza (0172) ───────────────────────────────
+
+/** Quién atiende, en qué orden y cuántos minutos espera cada uno. */
+export async function listEscalation(
+  storeId: string,
+): Promise<{ id: string; userId: string; name: string; minutes: number; sort: number }[]> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return [];
+  const { data } = await ctx.admin
+    .from("store_collection_escalation")
+    .select("id,user_id,minutes,sort")
+    .eq("store_id", storeId)
+    .order("sort", { ascending: true });
+  const rows = ((data ?? []) as { id: string; user_id: string; minutes: number; sort: number }[]);
+  if (!rows.length) return [];
+  const names = await resolveAgentNames(
+    rows.map((r) => r.user_id),
+    ctx.admin,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    userId: r.user_id,
+    name: names[r.user_id] ?? r.user_id.slice(0, 8),
+    minutes: r.minutes,
+    sort: r.sort,
+  }));
+}
+
+export async function addEscalationStep(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const userId = String(formData.get("user_id") ?? "").trim();
+  if (!userId) return { error: "Elige a quién añadir." };
+  const minutes = Math.max(1, Math.min(1440, Number(formData.get("minutes") ?? 30) || 30));
+
+  // Al final de la escalera: el que llega nuevo no le quita el turno a nadie.
+  const { data: last } = await ctx.admin
+    .from("store_collection_escalation")
+    .select("sort")
+    .eq("store_id", storeId)
+    .order("sort", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const sort = ((last as { sort?: number } | null)?.sort ?? 0) + 10;
+
+  const { error } = await ctx.admin
+    .from("store_collection_escalation")
+    .insert({ store_id: storeId, user_id: userId, minutes, sort });
+  if (error) {
+    if ((error as { code?: string }).code === "23505") return { error: "Esa persona ya está en la escalera." };
+    return { error: error.message };
+  }
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: "Añadido a la escalera ✓" };
+}
+
+export async function removeEscalationStep(storeId: string, id: string): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const { error } = await ctx.admin.from("store_collection_escalation").delete().eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: "Quitado de la escalera ✓" };
+}
+
+/** Mueve un escalón arriba o abajo intercambiando su `sort` con el vecino. */
+export async function moveEscalationStep(
+  storeId: string,
+  id: string,
+  direction: "up" | "down",
+): Promise<SettingsState> {
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const { data } = await ctx.admin
+    .from("store_collection_escalation")
+    .select("id,sort")
+    .eq("store_id", storeId)
+    .order("sort", { ascending: true });
+  const rows = ((data ?? []) as { id: string; sort: number }[]);
+  const i = rows.findIndex((r) => r.id === id);
+  const j = direction === "up" ? i - 1 : i + 1;
+  if (i < 0 || j < 0 || j >= rows.length) return { error: "Ya está en el extremo." };
+  await ctx.admin.from("store_collection_escalation").update({ sort: rows[j]!.sort }).eq("id", rows[i]!.id);
+  await ctx.admin.from("store_collection_escalation").update({ sort: rows[i]!.sort }).eq("id", rows[j]!.id);
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: "Orden actualizado ✓" };
 }

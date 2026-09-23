@@ -523,3 +523,67 @@ export function motivoDelCourier(reportedStatus: string | null | undefined): Mot
     vioElProducto: porStatus?.vioElProducto ?? false,
   };
 }
+
+// ---------------------------------------------------------------------------
+// El distrito que Aliclik no tiene en su tabla
+// ---------------------------------------------------------------------------
+
+/**
+ * ¿Aliclik rechazó la cotización porque SU tabla de ubigeo no tiene el distrito?
+ *
+ * Devuelve el distrito tal como lo nombró Aliclik, o null si el error es otro.
+ *
+ * EL CASO REAL, #AUR177131 (18-09-2026). La cotización devolvía «No se encontró
+ * el distrito en ubigeo para SAN MIGUEL (SAN ROMAN, PUNO)» y nuestro aviso le
+ * pegaba detrás «Almacén(es) compatibles probados: 133», así que se leía como si
+ * el problema fuera el almacén. No lo era, y perseguirlo por ahí no lleva a
+ * ningún sitio.
+ *
+ * QUÉ PASA DE VERDAD, y costó dos intentos averiguarlo. A la cotización solo le
+ * mandamos `warehouseId`, `lat` y `lng`: el distrito lo deduce Aliclik del pin.
+ *
+ * La primera explicación fue que su tabla no tenía San Miguel por ser un
+ * distrito nuevo (Ley 30927, 2019). La tiró abajo el segundo caso, #KP135145:
+ * CALLERIA (CORONEL PORTILLO, UCAYALI), que es el distrito de Pucallpa y no
+ * tiene nada de nuevo.
+ *
+ * La segunda fue que el almacén no cubría la zona. También falsa: los dos
+ * pedidos van al almacén 133 (GRUPO GF) y desde ese mismo almacén salieron 267
+ * envíos a Puno y 96 a Ucayali en 30 días.
+ *
+ * LO QUE QUEDA, y encaja con todo: las DOS MITADES DE ALICLIK NO SE ENTIENDEN.
+ * Su geolocalizador devuelve el nombre OFICIAL del distrito y su tabla de
+ * ubigeo está indexada por el COMERCIAL. Los envíos que sí salen llevan
+ * `juliaca` (328), `pucallpa` (121), `puno` (118) y `yarinacocha` (33) — y
+ * «Pucallpa» ni siquiera es un distrito: la ciudad está en Callería. Cuando el
+ * pin cae donde los dos nombres difieren, una mitad lo reconoce y la otra dice
+ * que no existe.
+ *
+ * NO SE ARREGLA DESDE ACÁ. Mover el pin hacia el centro de Juliaca o Pucallpa
+ * probablemente haría pasar la cotización, pero el pin es lo que decide a dónde
+ * va el paquete: eso lo decide una persona mirando la dirección, nunca el
+ * código por su cuenta.
+ */
+export function distritoQueAliclikNoTiene(error: string | null | undefined): string | null {
+  const texto = (error ?? "").trim();
+  if (!texto) return null;
+  const m = /no se encontr[oó] el distrito en ubigeo para\s+(.+?)\s*(?:\.|$)/i.exec(texto);
+  const distrito = m?.[1]?.trim();
+  return distrito ? distrito : null;
+}
+
+/**
+ * Qué se le dice al operador cuando pasa eso. Nombra la causa, descarta la
+ * pista falsa —el almacén— y da las dos salidas reales.
+ */
+export function avisoDistritoQueAliclikNoTiene(distrito: string): string {
+  return (
+    `Aliclik ubicó el punto en ${distrito} y ese nombre no está en su tabla de ubigeo, ` +
+    `aunque sí despacha en esa zona a diario. No es el almacén ni el stock: su geolocalizador ` +
+    `devuelve el nombre oficial del distrito y su tabla usa el comercial (Callería/Pucallpa, ` +
+    `San Miguel/Juliaca), así que las dos mitades no se entienden. ` +
+    `Revisa el punto en «Ubicación y cobertura»: si la dirección es de otro distrito, corrígelo. ` +
+    `Si el punto es correcto, despacha por otro courier y pásale a Aliclik la referencia de abajo ` +
+    `para que lo arreglen de su lado.`
+  );
+}

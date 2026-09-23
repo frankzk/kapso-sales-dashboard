@@ -1,4 +1,4 @@
-// Liquidaciones 2 — tipos compartidos entre la base (0168), el motor de
+// Liquidaciones 2 — tipos compartidos entre la base (0176), el motor de
 // columnas y la pantalla. Léelo junto con docs/plan/liquidaciones-2.md y el
 // MOM §30.
 

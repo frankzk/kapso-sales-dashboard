@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- 0174: «No lo recojo». Un rechazo retira el paquete de la carga, deja rastro,
+-- 0182: «No lo recojo». Un rechazo retira el paquete de la carga, deja rastro,
 -- libera la salida para otra caja y la custodia pasa con los aceptados.
 begin;
 insert into organizations(id,name) values ('17400000-0000-0000-0000-000000000001','GF decline smoke');
