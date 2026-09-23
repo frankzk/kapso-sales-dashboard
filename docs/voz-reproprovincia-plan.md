@@ -513,7 +513,7 @@ sin anotar el resultado aquí.
 | Prueba | Fecha | Resultado |
 | --- | --- | --- |
 | 1 · ¿Contesta el agente? | 22-09-2026 | **Sí.** Llamada directa desde un celular al 01 705 8243: la tool corre antes de hablar y el saludo sale con la ficha del mock. |
-| 3 · ¿Qué número ve xAI? | 22-09-2026 | **xAI sí recibe el caller ID en llamada directa**: la pestaña Conversations del agente registra el celular de quien llamó como «Caller» y `+5117058243` como «Destination». Pero **el modelo no lo pasó a la tool**: `numero_cliente` no llegó a Make. Falta que el número llegue a la tool (parámetro obligatorio o variable del sistema en la configuración de la tool) y, sobre todo, ver qué «Caller» registra xAI en el callback de la prueba 2: si es el celular de la clienta, la atadura es la opción 1; si es el número de Zadarma, la opción 2. |
+| 3 · ¿Qué número ve xAI? | 22-09-2026 | **Llamada directa: resuelto.** xAI recibe el caller ID (pestaña Conversations) y, con «Know caller's phone number» encendido y publicado y `numero_cliente` exigido en el paso 0 del prompt, el agente lo manda a `identificar_llamada`. Falta lo que decide la atadura: qué «Caller» registra xAI en el **callback** de la prueba 2. Si es el celular de la clienta, opción 1; si es el número de Zadarma, opción 2. |
 | 2 · ¿Funciona la saliente? | — | Pendiente. |
 | 4 · ¿Llama webhooks? | 22-09-2026 | **Sí.** Las dos tools llegan a Make en cada sesión de la consola. |
 | 5 · Transcripción y fin | — | Pendiente. |
