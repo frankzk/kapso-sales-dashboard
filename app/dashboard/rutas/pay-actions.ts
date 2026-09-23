@@ -37,7 +37,7 @@ export async function getRiderPayDetail(routeId: string): Promise<{ detail?: Rid
   const { admin, route, user } = ctx;
   const [closure, rates] = await Promise.all([
     admin.from("rider_daily_pay_closures").select("snapshot,approved_at,approved_by").eq("route_id", routeId).maybeSingle(),
-    admin.from("rider_pay_rates").select("id,district_key,amount,effective_from,reason").eq("rider_id", route.rider_id).order("effective_from", { ascending: false }).order("created_at", { ascending: false }).limit(500),
+    admin.from("rider_pay_rates").select("id,district_key,amount,effective_from,reason,created_at").eq("rider_id", route.rider_id).order("effective_from", { ascending: false }).order("created_at", { ascending: false }).limit(500),
   ]);
   // Schema intentionally gated: do not replace a missing migration with a zero payout.
   if (closure.error || rates.error) return { error: "Tarifas personales no disponibles. Falta aplicar la migración 0162 o revisar el acceso; no se calculará un pago en cero." };

@@ -5280,7 +5280,12 @@ en `rider_pay_rates` (0162) con `rider_pay_save_rate`: agrega una versión
 desde esa fecha, nunca sobrescribe, y exige `costs.manage`. La liquidación del
 motorizado sigue resolviendo como siempre (la del distrito gana a la
 general). Es lo que se le paga al motorizado, no el precio que cobra Grupo GF
-a la tienda (la columna «Entrega o rechazo»).
+a la tienda (la columna «Entrega o rechazo»). En «Reparto y liquidación», la
+tarifa de cada parada dice si viene del **distrito** o es la **general**, y
+avisa en ámbar cuando el distrito del pedido no se reconoce (se aplica la
+general) o cuando el monto calculado —o el aprobado y congelado— ya no es el
+que rige con las tarifas registradas (`checkStopRate`). Un cálculo aprobado no
+cambia solo: la diferencia se corrige con un adicional o reabriendo la ruta.
 
 ### 29.10 Acceso y administración
 
