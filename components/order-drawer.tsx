@@ -71,6 +71,7 @@ import {
   type MasterActionState,
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
+import { VoiceAgentPanel } from "@/components/voice-agent-panel";
 import { limaTodayKey } from "@/lib/shipments";
 import { COURIER_TBD } from "@/lib/shipment-output";
 import {
@@ -1077,10 +1078,14 @@ export function OrderDrawer({
                   }
                 />
                 {detail.row.macro_substage === "gestion_reproprovincia" && (
-                  <DescartarRecuperacion
-                    pending={pending}
-                    onDiscard={(motivo) => run(() => descartarRecuperacion(orderId, motivo))}
-                  />
+                  <>
+                    {/* MOM §11.8: el agente de voz llama a estos pedidos. */}
+                    <VoiceAgentPanel orderId={orderId} pending={pending} run={run} />
+                    <DescartarRecuperacion
+                      pending={pending}
+                      onDiscard={(motivo) => run(() => descartarRecuperacion(orderId, motivo))}
+                    />
+                  </>
                 )}
               </div>
             )}

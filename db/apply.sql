@@ -381,4 +381,6 @@
 \ir migrations/0188_gf_return_to_office.sql
 \echo 'Applying 0189_gf_return_rejected.sql'
 \ir migrations/0189_gf_return_rejected.sql
+\echo 'Applying 0190_voice_calls.sql'
+\ir migrations/0190_voice_calls.sql
 \echo 'Done.'

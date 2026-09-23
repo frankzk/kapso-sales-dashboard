@@ -69,9 +69,10 @@ describe("vercel.json", () => {
     const crons = cfg.crons as { path: string; schedule: string }[];
     // El conteo es el guardarraíl contra un borrado accidental, y sube cuando se
     // añade uno a propósito: 14 hasta el 14-09-2026, 15 desde el espejo de fotos
-    // de producto, 16 desde el rastreo de Olva (20-09-2026). Que la ruta exista
-    // lo comprueba la última prueba de este archivo; no hace falta repetirlo acá.
-    expect(crons).toHaveLength(16);
+    // de producto, 16 desde el rastreo de Olva (20-09-2026), 17 desde el barrido
+    // del agente de voz (MOM §11.8). Que la ruta exista lo comprueba la última
+    // prueba de este archivo; no hace falta repetirlo acá.
+    expect(crons).toHaveLength(17);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

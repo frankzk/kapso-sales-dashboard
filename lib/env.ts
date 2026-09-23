@@ -22,6 +22,15 @@ export const env = {
   encryptionKey: () => required("ENCRYPTION_KEY"),
   cronSecret: () => required("CRON_SECRET"),
 
+  // --- Agente de voz (MOM §11.8). La cuenta de Zadarma es una para todas las
+  //     tiendas; cada tienda elige su número de agente y su extensión en
+  //     `stores.voice_recovery_*`. `voiceToolsSecret` es el que el agente de
+  //     xAI manda en cada tool. Se recortan por lo mismo que SWAYP_TOKEN: un
+  //     espacio pegado en Vercel da 401 siempre y no se ve. ---
+  zadarmaKey: () => required("ZADARMA_KEY").trim(),
+  zadarmaSecret: () => required("ZADARMA_SECRET").trim(),
+  voiceToolsSecret: () => required("VOICE_TOOLS_SECRET").trim(),
+
   // --- non-secret runtime config ---
   shopifyApiVersion: () => process.env.SHOPIFY_API_VERSION ?? "2025-01",
   kapsoApiBase: () =>
