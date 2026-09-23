@@ -250,6 +250,22 @@ producto, monto, dirección, ciudad— o `{"encontrada": false}`.
 ]
 ```
 
+**El agente ya configurado en la consola (23-09-2026) usa `registrar_gestion`
+con cuatro `disposition`** en vez del esquema de arriba. El endpoint de Kapta
+acepta esos nombres y los traduce; no se reescribe el prompt:
+
+| `disposition` del agente | Resultado de §11.8 |
+| --- | --- |
+| `confirma` (con `fecha` y `rango`) | `acepta` |
+| `programar` (con `fecha` si se pactó) | `volver_a_contactar`; sin fecha, `se_deja_mensaje` si contestó otra persona |
+| `no_contesta` | `sin_respuesta` |
+| `cancela` (con `motivo`) | `no_quiere` |
+
+Campos adicionales del agente: `direccion_confirmada`, `referencia`,
+`motivo`, `resumen`. «Pide que no la llamen» viaja en `resumen` mientras el
+agente no tenga la tool `no_llamar`; el endpoint lo detecta por texto y lo
+marca, y en la Fase 3 se añade la tool.
+
 `/api/voice/tools/[tool]` valida la firma del agente (secreto compartido en
 cabecera, comparación en tiempo constante), resuelve la fila con
 `identificar_llamada` y la deja `in_progress`; las demás tools exigen una fila
