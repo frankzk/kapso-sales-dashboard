@@ -48,6 +48,7 @@ import {
   toggleBoxTile,
   toggleInList,
   toggleQueueTile,
+  isReturnable,
   type BoxItemFilter,
   type BoxTile,
   type CreatedWindow,
@@ -58,6 +59,7 @@ import {
   type RiderBox,
 } from "@/lib/dispatch-day";
 import { macroStageLabel, macroSubstageLabel, ORDER_MACRO_STAGES } from "@/lib/order-macro-stage";
+import { nonDeliveryReasonLabel } from "@/lib/gf-delivery";
 import { addToTray, optimisticBox, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import type { RiderPickupMode } from "@/lib/grupo-gf-courier";
@@ -66,6 +68,8 @@ import {
   moveManifestItem,
   scanAssignToRider,
   takeAndAssignGroupGfCourierOrders,
+  rescheduleGroupGfCourierOrders,
+  returnUndeliveredToOffice,
   type ScanAssignLine,
   type CourierAcceptedOrder,
   type CourierActionResult,
@@ -273,6 +277,7 @@ export function DispatchDayBoard(props: Props) {
         state: o.route.state,
         officeCheckedAt: o.route.officeCheckedAt,
         pickupCheckedAt: o.route.pickupCheckedAt,
+        undeliveredReason: o.route.undeliveredReason ?? null,
       },
     })), [props.accepted]);
   const allRows = useMemo(() => [...queue, ...tracked], [queue, tracked]);
@@ -289,7 +294,25 @@ export function DispatchDayBoard(props: Props) {
   const activeFilters = activeFilterCount(filters);
   const filtersButton = useRef<HTMLButtonElement>(null);
   const visible = filtered.slice(0, limit);
-  const visibleAssignable = visible.filter((q) => q.assignable);
+  const visibleAssignable = visible.filter((q) => q.assignable || isReturnable(q));
+  const selectedAssignable = allRows.filter((q) => q.assignable && selected.has(q.orderId)).map((q) => q.orderId);
+  const selectedReturnable = allRows.filter((q) => isReturnable(q) && selected.has(q.orderId)).map((q) => q.orderId);
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [rescheduleDay, setRescheduleDay] = useState("");
+  const rescheduleButton = useRef<HTMLButtonElement>(null);
+  function reschedule() {
+    if (!rescheduleDay || !selectedAssignable.length) return;
+    const ids = selectedAssignable;
+    setRescheduleOpen(false);
+    setSelected(new Set());
+    run(() => rescheduleGroupGfCourierOrders(orgId, ids, rescheduleDay));
+  }
+  function receiveInOffice() {
+    if (!selectedReturnable.length) return;
+    const ids = selectedReturnable;
+    setSelected(new Set());
+    run(() => returnUndeliveredToOffice(orgId, ids));
+  }
   const allVisibleSelected = visibleAssignable.length > 0 && visibleAssignable.every((q) => selected.has(q.orderId));
   const selectedTotal = queue.filter((q) => selected.has(q.orderId)).reduce((sum, q) => sum + q.orderTotal, 0);
   // Las cajas siguen al día elegido arriba («cambiar día»): cambiar la fecha
@@ -712,6 +735,44 @@ export function DispatchDayBoard(props: Props) {
             >
               {pending ? "Asignando…" : `Asignar${selected.size ? ` ${selected.size}` : ""} a ${riderName || "…"}`}
             </button>
+            {/* Reprogramar: cambia la fecha pactada de salida de los marcados. */}
+            <div className="relative">
+              <button
+                ref={rescheduleButton}
+                type="button"
+                disabled={pending || !canManageDispatch || !selectedAssignable.length}
+                onClick={() => { setRescheduleDay((d) => d || day); setRescheduleOpen((v) => !v); }}
+                aria-label="Reprogramar la salida de los marcados"
+                title={selectedAssignable.length ? `Reprogramar la salida de ${selectedAssignable.length} ${selectedAssignable.length === 1 ? "pedido" : "pedidos"}` : "Marca pedidos para reprogramar su fecha de salida"}
+                className="grid min-h-10 w-10 place-items-center rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2" /><path d="M3.5 10h17M8 3v4M16 3v4" /></svg>
+              </button>
+              {rescheduleOpen && (
+                <Sheet title="Reprogramar salida" onClose={() => setRescheduleOpen(false)} anchored anchorRef={rescheduleButton}>
+                  <div className="grid gap-3 text-sm">
+                    <p className="text-xs text-slate-500">{selectedAssignable.length} {selectedAssignable.length === 1 ? "pedido" : "pedidos"}. Cambia la fecha pactada de salida; un pedido disponible se toma con esa fecha. Los que ya están en la caja de un motorizado no se mueven.</p>
+                    <label className="grid gap-1 text-xs font-medium text-slate-600">Nueva fecha de salida
+                      <input type="date" value={rescheduleDay} min={day} onChange={(e) => setRescheduleDay(e.target.value)} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900" />
+                    </label>
+                    <button type="button" disabled={!rescheduleDay || pending} onClick={reschedule} className="min-h-10 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
+                      Reprogramar {selectedAssignable.length}
+                    </button>
+                  </div>
+                </Sheet>
+              )}
+            </div>
+            {selectedReturnable.length > 0 && (
+              <button
+                type="button"
+                disabled={pending || !canManageDispatch}
+                onClick={receiveInOffice}
+                title="El paquete volvió físicamente a la oficina: sale de la caja del motorizado y vuelve a «por asignar»"
+                className="min-h-10 rounded-lg border border-red-300 bg-red-50 px-3 text-sm font-semibold text-red-800 hover:bg-red-100 disabled:opacity-50"
+              >
+                Recibir en oficina {selectedReturnable.length}
+              </button>
+            )}
             <label className="flex items-center gap-1 text-xs text-slate-600" title={cashOverrideHint(props.cashWarning, props.cashLimit)}>
               <input type="checkbox" checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} /> <span className="whitespace-nowrap">superar el límite</span>
             </label>
@@ -753,7 +814,7 @@ export function DispatchDayBoard(props: Props) {
                 {visible.map((q) => (
                   <tr key={q.orderId} className={cn("align-top hover:bg-slate-50", selected.has(q.orderId) && "bg-brand-50/60")}>
                     <td className="px-3 py-2">
-                      {q.assignable
+                      {q.assignable || isReturnable(q)
                         ? <input type="checkbox" checked={selected.has(q.orderId)} onChange={() => toggle(q.orderId)} aria-label={`Marcar ${q.orderName}`} className="mt-0.5" />
                         : <span aria-hidden className="mt-0.5 inline-block h-4 w-4 rounded border border-dashed border-slate-300" title="Ya salió: se sigue, no se asigna" />}
                     </td>
@@ -769,6 +830,7 @@ export function DispatchDayBoard(props: Props) {
                     <td className="truncate px-3 py-2 text-slate-700" title={q.district}>{q.district}</td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap items-center gap-1">
+                        {q.route?.undeliveredReason && <span className="rounded-full bg-red-600 px-2 py-0.5 text-[11px] font-semibold text-white" title="Sigue en la caja del motorizado: márcalo y «Recibir en oficina» cuando vuelva el paquete">No entregado · {nonDeliveryReasonLabel(q.route.undeliveredReason)}</span>}
                         {q.taken && !q.route && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">tomado · sin caja</span>}
                         {!q.assignable && q.macroSubstage && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800" title={macroStageLabel(q.macroStage)}>{macroSubstageLabel(q.macroSubstage)}</span>}
                         {q.taken && q.armed && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">armado</span>}

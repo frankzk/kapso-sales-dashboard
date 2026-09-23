@@ -708,10 +708,28 @@ describe("motorizado propio: lo que reporta mueve la etapa (v1.14, MOM §29.13)"
     expect(gf({ events: [stop("no_entregado", T("19:00"), "no_estaba")] })).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima" });
   });
 
-  it("no entregada por otro motivo va a Por cerrar · Devolución física pendiente", () => {
-    for (const reason of ["rechazado", "direccion_errada", "no_contesta", "sin_dinero", "otro"]) {
-      expect(gf({ events: [stop("no_entregado", T("19:00"), reason)] })).toMatchObject({ stage: "por_cerrar", substage: "devolucion_fisica_pendiente" });
+  it("v1.15: todo «No entregado» es Por reprogramar Lima; solo «Rechazó el pedido» va a devolución", () => {
+    for (const reason of ["direccion_errada", "no_contesta", "sin_dinero", "otro", "reprogramado", "no_estaba"]) {
+      expect(gf({ events: [stop("no_entregado", T("19:00"), reason)] })).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima" });
     }
+    expect(gf({ events: [stop("no_entregado", T("19:00"), "rechazado")] })).toMatchObject({ stage: "por_cerrar", substage: "devolucion_fisica_pendiente" });
+  });
+
+  it("recibido en oficina sigue en Por reprogramar Lima hasta que vuelva a salir", () => {
+    const back = { ...own(), custody_state: "empresa", dispatched_at: null };
+    const events = [stop("no_entregado", T("19:00"), "direccion_errada"), ev("returned_to_office", T("20:00"))];
+    expect(gf({ guides: [back], events })).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima", since: T("19:00") });
+    // Asignado a una caja nueva: deja de estar por reprogramar.
+    expect(gf({ guides: [back], events: [...events, ev("dispatch_route_assigned", "2026-09-23T14:00:00.000Z")] }).substage).not.toBe("por_reprogramar_lima");
+    // Un rechazo que volvió a oficina no se reprograma.
+    expect(gf({ guides: [back], events: [stop("no_entregado", T("19:00"), "rechazado"), ev("returned_to_office", T("20:00"))] }).substage).not.toBe("por_reprogramar_lima");
+  });
+
+  it("modo exigir: la custodia recibida por el motorizado es «Lo llevo» → En reparto; la del asignar no", () => {
+    const received = { ...ev("custody_transferred", T("15:32")), note: "Paquete cotejado y recibido por el motorizado." };
+    expect(gf({ events: [received] })).toMatchObject({ stage: "en_curso", substage: "en_reparto" });
+    const atAssign = { ...ev("custody_transferred", T("15:32")), note: "Custodia al asignar: el motorizado confirma cada paquete al llevarlo." };
+    expect(gf({ events: [atAssign] })).toMatchObject({ stage: "en_curso", substage: "en_transito" });
   });
 
   it("la señal más reciente manda: reasignado tras postergar vuelve a En reparto", () => {

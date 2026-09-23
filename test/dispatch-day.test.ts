@@ -212,6 +212,10 @@ describe("filterQueue (Desde la lista)", () => {
       row({ orderId: "r2", macroStage: "por_cerrar", macroSubstage: "pendiente_liquidacion", assignable: false, taken: true, route: { riderName: "Roy", routeDate: "2026-09-18", loadNumber: 1, state: "in_custody", officeCheckedAt: "x", pickupCheckedAt: "x" } }),
     ];
     const all = [...rows, ...out];
+    it("un «No entregado» que sigue en la caja aparece en la cola para recibirlo en oficina", () => {
+      const back = row({ orderId: "nd", macroStage: "en_curso", macroSubstage: "por_reprogramar_lima", assignable: false, taken: true, route: { riderName: "Roy", routeDate: "2026-09-19", loadNumber: 1, state: "in_custody", officeCheckedAt: "x", pickupCheckedAt: "x", undeliveredReason: "direccion_errada" } });
+      expect(ids(filterQueue([...all, back], EMPTY_QUEUE_FILTERS, today))).toEqual(["a", "b", "c", "d", "nd"]);
+    });
     it("sin etapa elegida la lista es la cola de asignación", () => {
       expect(ids(filterQueue(all, EMPTY_QUEUE_FILTERS, today))).toEqual(["a", "b", "c", "d"]);
       expect(ids(filterQueue(all, { ...EMPTY_QUEUE_FILTERS, query: "kp1" }, today))).toEqual(["a", "b", "c", "d"]);

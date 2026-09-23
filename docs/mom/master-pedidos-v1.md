@@ -5640,10 +5640,10 @@ y `pickup_declined` o `package_removed`, que la anulan— y decide así:
 | Última señal del motorizado | Macroetapa | Subetapa |
 | --- | --- | --- |
 | Asignado con custodia, sin «Lo llevo» | En curso | En tránsito (como hasta ahora) |
-| «Lo llevo» (`pickup_checked`) | En curso | En reparto |
+| «Lo llevo» (`pickup_checked`), o la caja recibida por el motorizado en modo `exigir` (`custody_transferred` «Paquete cotejado y recibido…») | En curso | En reparto |
 | Parada **entregada** | Por cerrar | Validación de cierre pendiente |
-| Parada **no entregada** por «reprogramado por el cliente» o «no estaba / volver luego» | En curso | Por reprogramar Lima |
-| Parada **no entregada** por rechazado, dirección errada, no contesta, sin dinero u otro | Por cerrar | Devolución física pendiente |
+| Parada **no entregada** por cualquier motivo salvo «Rechazó el pedido» (v1.15) | En curso | Por reprogramar Lima |
+| Parada **no entregada** por «Rechazó el pedido» | Por cerrar | Devolución física pendiente |
 
 Cada reporte de parada **recalcula el Master en el acto** (`writeStopReport`),
 sin esperar al cron: el pedido entregado pasa a Por cerrar al momento.
@@ -5665,6 +5665,22 @@ nuevo, más reciente, y el pedido vuelve a «En reparto». La versión del
 resolver sube a `mom-v1.14` para que el cron reconcilie el histórico. Pruebas
 en `test/order-macro-stage.test.ts` («motorizado propio: lo que reporta mueve
 la etapa»).
+
+**No entregado → recibir en oficina → reprogramar (v1.15, 22-09-2026).** Todo
+«No entregado» es reprogramable salvo «Rechazó el pedido» (§9: un no
+entregado pasa a Por reprogramar Lima). El paquete sigue en la caja del
+motorizado hasta que vuelve físicamente: en «Desde la lista» aparece con la
+chapa roja «No entregado · motivo» y casilla; marcarlo y **«Recibir en
+oficina»** (`gf_return_to_office`, 0188) lo saca de la caja con rastro
+(`returned_to_office`), devuelve la custodia a la empresa y la solicitud a
+«por asignar». La parada reportada se conserva: es la evidencia del intento
+y cuenta en la liquidación del día. El pedido sigue en «Por reprogramar
+Lima» hasta que se asigna a otra caja. Junto a «Asignar», el botón de
+calendario **reprograma** la fecha pactada de salida de los marcados
+(`rescheduleGroupGfCourierOrders`, evento `logistics_request_rescheduled`):
+un tomado mueve su solicitud, uno disponible se toma con esa fecha, y uno que
+ya está en la caja de un motorizado no se mueve. La versión del resolver sube
+a `mom-v1.15`.
 
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 

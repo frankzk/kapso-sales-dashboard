@@ -128,6 +128,8 @@ export interface CourierRouteAssignment {
   state: string;
   officeCheckedAt: string | null;
   pickupCheckedAt: string | null;
+  /** El motorizado lo reportó «No entregado» y sigue en su caja: motivo del reporte. */
+  undeliveredReason?: string | null;
 }
 
 export interface CourierRouteSummary {
@@ -513,6 +515,18 @@ async function loadCourierOperations(
           .in("shipment_id", ids)
           .is("removed_at", null)),
   ]);
+  // Paradas «No entregado» de paquetes que siguen en una caja: se ofrecen para
+  // «Recibir en oficina» y así vuelven a la cola (0188).
+  const { data: undeliveredStops } = await courierRowsByIds(shipmentIds, (ids) => admin
+        .from("delivery_stops")
+        .select("shipment_id,dispatch_manifest_id,outcome_reason")
+        .in("shipment_id", ids)
+        .eq("status", "no_entregado"));
+  const undeliveredByBox = new Map(
+    ((undeliveredStops ?? []) as Array<{ shipment_id: string; dispatch_manifest_id: string | null; outcome_reason: string | null }>)
+      .filter((row) => row.dispatch_manifest_id)
+      .map((row) => [`${row.dispatch_manifest_id}:${row.shipment_id}`, row.outcome_reason ?? "sin motivo"]),
+  );
   const orderById = new Map(
     ((acceptedOrders ?? []) as QueueOrderRow[]).map((order) => [order.order_id, order]),
   );
@@ -591,6 +605,7 @@ async function loadCourierOperations(
             state: manifest.state,
             officeCheckedAt: manifestItem?.office_checked_at ?? null,
             pickupCheckedAt: manifestItem?.pickup_checked_at ?? null,
+            undeliveredReason: undeliveredByBox.get(`${manifest.id}:${request.shipment_id}`) ?? null,
           }
         : null,
     }];
@@ -1095,6 +1110,119 @@ export interface AssignCourierRouteResult extends CourierActionResult {
   failed: Array<{ requestId: string; error: string }>;
   /** Aviso de efectivo (MOM §29.9) cuando la ruta pasa del umbral sin llegar al límite. */
   cashWarning?: string;
+}
+
+/**
+ * Reprogramar la salida (22-09-2026): cambia la fecha pactada de salida de
+ * los pedidos marcados en «Desde la lista». Un pedido ya tomado mueve su
+ * solicitud (`logistics_requests.scheduled_for`) y deja
+ * `logistics_request_rescheduled`; uno todavía disponible se toma con esa
+ * fecha. Uno que ya está en la caja de un motorizado no se toca: primero se
+ * quita de la caja. La fecha no puede ser anterior a hoy.
+ */
+/**
+ * «Recibir en oficina» (0188, MOM §29.13): el paquete que el motorizado
+ * reportó «No entregado» sale de su caja con rastro, la custodia vuelve a la
+ * empresa y la solicitud a «por asignar». El pedido queda en «Por reprogramar
+ * Lima» hasta que se asigne otra vez.
+ */
+export async function returnUndeliveredToOffice(orgId: string, orderIds: string[]): Promise<CourierActionResult> {
+  const auth = await requireManager(orgId);
+  if ("error" in auth) return auth;
+  if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
+  const ids = [...new Set(orderIds.filter(Boolean))];
+  if (!ids.length) return { error: "Marca al menos un pedido." };
+  const admin = createAdminSupabase();
+  const { data: shipments } = await admin.from("shipments").select("id,order_id").in("order_id", ids).eq("courier", "propio");
+  const shipmentIds = ((shipments ?? []) as { id: string }[]).map((row) => row.id);
+  if (!shipmentIds.length) return { error: "Esos pedidos no tienen salida de Grupo GF." };
+  const { data: items } = await admin.from("dispatch_manifest_items").select("id,shipment_id").in("shipment_id", shipmentIds).is("removed_at", null);
+  const changed: string[] = [];
+  const errors: string[] = [];
+  for (const item of (items ?? []) as { id: string }[]) {
+    const { data, error } = await admin.rpc("gf_return_to_office", { p_item_id: item.id, p_actor: auth.userId });
+    if (error) errors.push(error.message);
+    else if (data) changed.push(data as string);
+  }
+  if (changed.length) await recomputeOrderMasterSafe(admin, changed);
+  revalidatePath(COURIER_PATH);
+  revalidatePath("/dashboard/pedidos");
+  if (!changed.length) return { error: [...new Set(errors)].join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
+  const done = `${changed.length} ${changed.length === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina: ${changed.length === 1 ? "vuelve" : "vuelven"} a «por asignar», en «Por reprogramar Lima».`;
+  return errors.length ? { error: `${done} ${[...new Set(errors)].join(" ")}` } : { notice: done };
+}
+
+export async function rescheduleGroupGfCourierOrders(
+  orgId: string,
+  orderIds: string[],
+  day: string,
+): Promise<CourierActionResult> {
+  const auth = await requireManager(orgId);
+  if ("error" in auth) return auth;
+  if (!DATE_RE.test(day)) return { error: "Elige una fecha válida." };
+  const today = limaClock().day;
+  if (day < today) return { error: "La nueva fecha no puede ser anterior a hoy." };
+  const ids = [...new Set(orderIds.filter(Boolean))];
+  if (!ids.length) return { error: "Marca al menos un pedido." };
+  const admin = createAdminSupabase();
+  const { data: provider } = await admin.from("logistics_providers").select("id").eq("org_id", orgId).eq("code", "grupo-gf-courier").maybeSingle();
+  if (!provider) return { error: "Grupo GF Courier no está activado." };
+  const { data: requestRows, error: readError } = await admin
+    .from("logistics_requests")
+    .select("id,order_id,store_id,shipment_id,status,scheduled_for")
+    .eq("provider_id", provider.id)
+    .in("order_id", ids)
+    .neq("status", "cancelled");
+  if (readError) return { error: readError.message };
+  const requests = (requestRows ?? []) as Array<{ id: string; order_id: string; store_id: string; shipment_id: string | null; status: string; scheduled_for: string }>;
+  const byOrder = new Map(requests.map((r) => [r.order_id, r]));
+  const label = new Intl.DateTimeFormat("es-PE", { weekday: "long", day: "2-digit", month: "2-digit", timeZone: "UTC" }).format(new Date(`${day}T12:00:00Z`));
+  let moved = 0;
+  const inBox: string[] = [];
+  const errors: string[] = [];
+  const changed: string[] = [];
+  for (const orderId of ids) {
+    const request = byOrder.get(orderId);
+    if (!request) continue;
+    if (request.status === "scheduled") { inBox.push(orderId); continue; }
+    if (request.scheduled_for === day) { moved += 1; continue; }
+    const { error } = await admin.from("logistics_requests").update({ scheduled_for: day }).eq("id", request.id);
+    if (error) { errors.push(error.message); continue; }
+    await admin.from("order_events").insert({
+      store_id: request.store_id,
+      order_id: request.order_id,
+      kind: "logistics_request_rescheduled",
+      occurred_at: new Date().toISOString(),
+      actor: auth.userId,
+      source: "grupo_gf_courier",
+      courier: "propio",
+      shipment_id: request.shipment_id,
+      note: `Salida reprogramada del ${request.scheduled_for} al ${day} (${label}).`,
+      payload: { requestId: request.id, from: request.scheduled_for, to: day, manual: true },
+    });
+    moved += 1;
+    changed.push(orderId);
+  }
+  // Los disponibles se toman ya con esa fecha.
+  const free = ids.filter((id) => !byOrder.has(id));
+  let taken = 0;
+  if (free.length) {
+    const res = await takeOrdersCore(auth, orgId, free, { scheduledFor: day }, IMMEDIATE_EFFECTS);
+    taken = res.accepted.length;
+    for (const f of res.failed) errors.push(f.error);
+    if (res.error && !res.accepted.length) errors.push(res.error);
+    // Si la fecha era hoy o mañana antes del corte, el corte manda.
+    const { data: after } = await admin.from("logistics_requests").select("order_id,scheduled_for").eq("provider_id", provider.id).in("order_id", res.accepted.map((a) => a.orderId)).neq("status", "cancelled");
+    const early = ((after ?? []) as { scheduled_for: string }[]).filter((r) => r.scheduled_for !== day).length;
+    if (early) errors.push(`${early} ${early === 1 ? "pedido salió" : "pedidos salieron"} para el primer día posible según el corte de las 11:30.`);
+  }
+  if (changed.length) await recomputeOrderMasterSafe(admin, changed);
+  revalidatePath(COURIER_PATH);
+  const parts: string[] = [];
+  if (moved + taken) parts.push(`${moved + taken} ${moved + taken === 1 ? "pedido reprogramado" : "pedidos reprogramados"} para el ${label}.`);
+  if (inBox.length) parts.push(`${inBox.length} ya ${inBox.length === 1 ? "está" : "están"} en la caja de un motorizado: quítalos de la caja para reprogramarlos.`);
+  if (!moved && !taken) return { error: [...parts, ...errors].join(" ") || "No se reprogramó ningún pedido." };
+  return errors.length ? { error: [...parts, ...errors].join(" ") } : { notice: parts.join(" ") };
 }
 
 export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[], opts: { overrideCash?: boolean; scheduledFor?: string | null; day?: string | null } = {}): Promise<CourierActionResult> {
