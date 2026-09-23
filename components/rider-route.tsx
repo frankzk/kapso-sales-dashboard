@@ -203,7 +203,8 @@ function RiderRouteScreenInner({
           )}
         </div>
         {coordinator && <p className="mt-2 text-sm text-slate-600">Reportas como <strong>{coordinator}</strong> por el motorizado. Tu usuario quedará registrado. <a className="underline" href="/dashboard/courier/reparto">Volver a Rutas</a></p>}
-        <div className="mt-2 flex flex-wrap gap-3 text-xs">
+        {/* Una sola fila en el teléfono: chapas compactas y separación corta. */}
+        <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
           <Pill label="Por entregar" value={totals.pendientes} tone="pend" active={statusFilter === "pendiente"} dimmed={statusFilter !== null && statusFilter !== "pendiente"} onClick={() => toggleStatus("pendiente")} />
           <Pill label="Entregados" value={totals.entregados} tone="ok" active={statusFilter === "entregado"} dimmed={statusFilter !== null && statusFilter !== "entregado"} onClick={() => toggleStatus("entregado")} />
           <Pill label="No entregados" value={totals.noEntregados} tone="bad" active={statusFilter === "no_entregado"} dimmed={statusFilter !== null && statusFilter !== "no_entregado"} onClick={() => toggleStatus("no_entregado")} />
@@ -453,8 +454,8 @@ function Pill({ label, value, tone, active = false, dimmed = false, onClick }: {
     <Tag
       {...(onClick ? { type: "button" as const, onClick, "aria-pressed": active } : {})}
       className={cn(
-        "rounded-full px-2 py-0.5 text-xs font-medium",
-        onClick && "min-h-9 px-3",
+        "whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium",
+        onClick && "min-h-8 px-2.5 text-[11px]",
         active && "ring-2 ring-offset-2 ring-slate-900",
         dimmed && "opacity-40",
         tone === "ok" && "bg-emerald-600 text-white",
