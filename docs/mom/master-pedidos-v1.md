@@ -3030,6 +3030,16 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
   así que sabe de qué pedido habla porque es la única llamada abierta de su
   número (índice único en `voice_calls`). Con 20 a 30 llamadas al día cabe de
   sobra; para más, otro número de agente.
+- **Quien devuelve la llamada no recibe la ficha ajena.** El agente manda a
+  `identificar_llamada` el número de quien habla. Si es un celular peruano y
+  no es el de ninguna llamada abierta, es otra persona marcando al número del
+  agente —típicamente una clienta que devuelve una perdida mientras el agente
+  llama a otra—: no se le entrega la ficha ni puede registrar sobre ese
+  pedido, y el agente la deriva a WhatsApp. El 24-09-2026, en pruebas, una
+  llamada entrante recibió la ficha de la llamada abierta y registró un
+  «confirma»; en modo prueba no escribió nada. Un número que no es celular
+  (el de la cuenta o el del propio agente) no decide y se usa la única
+  llamada abierta.
 - **Llamadas caducadas.** Una llamada que en tres minutos no pasó a «en
   curso» (el agente pide la ficha al oír a una persona) es una clienta que
   **no contestó**: el agente no pudo registrarlo, así que el barrido la cierra y, en modo real,
