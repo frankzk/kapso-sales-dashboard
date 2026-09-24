@@ -29,7 +29,7 @@ import {
 } from "@/lib/tanders/draft";
 import { getStoreCreds } from "@/lib/ingest";
 import { writeCourierGuide } from "@/lib/route-output-fill";
-import { isFillableRouteOutput } from "@/lib/shipment-output";
+import { puertaDeSalidaAdicional, type SalidaExistente } from "@/lib/shipment-output";
 import { fetchOrderById } from "@/lib/shopify";
 import { sweepTandersPayments, type SweepReport } from "@/lib/tanders/payment-sweep";
 import { sweepTandersStatus, type TandersStatusReport } from "@/lib/tanders/status-sweep";
@@ -37,9 +37,6 @@ import { TandersApiError } from "@/lib/tanders/types";
 import type { OrderMasterRow } from "@/lib/types";
 
 const MASTER_PATH = "/dashboard/pedidos";
-
-/** Guías que ya cubren el pedido: crear otra encima duplica el despacho. */
-const ACTIVE_STATUSES = new Set(["pendiente", "en_ruta", "por_preparar"]);
 
 export interface TandersDraftView {
   orderId: string;
@@ -60,6 +57,11 @@ export interface TandersDraftView {
   blockers: string[];
   /** Cosas que el operador debería mirar antes de confirmar. */
   warnings: string[];
+  /**
+   * Hay otra salida viva y en Lima eso no bloquea: pide motivo. Trae el texto
+   * que nombra las salidas vivas, o null si no hace falta motivo.
+   */
+  salidaAdicional: string | null;
 }
 
 interface StoreTanders {
@@ -106,26 +108,22 @@ async function loadStoreTanders(
  * de ella. Contarla obligaba a anularla para poder emitir la guía — y anularla
  * arrastraba al pedido a `anulado` (#KP127639).
  */
-async function activeGuides(
+/**
+ * TODAS las salidas del pedido, vivas o no. Quien decide si estorban es
+ * `puertaDeSalidaAdicional`: la repetición por courier cuenta también las
+ * cerradas, y el límite de cinco cuenta todas.
+ */
+async function salidasDelPedido(
   admin: ReturnType<typeof createAdminSupabase>,
   orderId: string,
-): Promise<{ courier: string; guide_code: string; delivery_status: string }[]> {
+): Promise<SalidaExistente[]> {
   const { data } = await admin
     .from("shipments")
     .select(
-      "courier,guide_code,delivery_status,created_via,custody_state,custody_transferred_at",
+      "courier,guide_code,output_code,delivery_status,created_via,custody_state,custody_transferred_at",
     )
     .eq("order_id", orderId);
-  const rows =
-    (data as {
-      courier: string;
-      guide_code: string;
-      delivery_status: string;
-      created_via: string | null;
-      custody_state: string | null;
-      custody_transferred_at: string | null;
-    }[]) ?? [];
-  return rows.filter((g) => ACTIVE_STATUSES.has(g.delivery_status) && !isFillableRouteOutput(g));
+  return (data as SalidaExistente[] | null) ?? [];
 }
 
 /**
@@ -225,10 +223,19 @@ export async function loadTandersDraft(
     );
   }
 
-  for (const g of await activeGuides(admin, orderId)) {
-    blockers.push(
-      `El pedido ya tiene una guía activa: ${g.guide_code} (${g.courier}, ${g.delivery_status}). Anúlala antes de crear otra.`,
-    );
+  // EN LIMA OTRA SALIDA VIVA NO BLOQUEA (MOM principio 7 y §9): pide motivo.
+  // Antes decía «anúlala antes de crear otra», y con la caja en la calle no hay
+  // cómo anularla — #KP134960 se quedó sin salida por eso.
+  const puerta = puertaDeSalidaAdicional({
+    courier: "tanders",
+    operation: "lima",
+    outputs: await salidasDelPedido(admin, orderId),
+    motivo: null,
+  });
+  let salidaAdicional: string | null = null;
+  if (!puerta.ok) {
+    if (puerta.pideMotivo) salidaAdicional = puerta.error;
+    else blockers.push(puerta.error);
   }
 
   // Decir solo «está anulado» deja al operador sin salida: no dice quién lo
@@ -271,6 +278,7 @@ export async function loadTandersDraft(
         paymentState: row.payment_state,
         orderTotal: row.order_total,
       }),
+      salidaAdicional,
       note: composeTandersNote({
         reference: row.reference,
         shopifyNote: await liveOrderNote(admin, orderId),
@@ -289,6 +297,11 @@ export interface CreateTandersInput {
   recipientPhone: string;
   collectionAmount: number;
   note?: string;
+  /**
+   * Motivo de la salida adicional cuando el pedido todavía tiene otra viva.
+   * En Lima eso no bloquea, pero exige justificación auditada (MOM §23).
+   */
+  motivoSalidaAdicional?: string | null;
 }
 
 export async function createTandersGuide(
@@ -320,10 +333,13 @@ export async function createTandersGuide(
 
   // Se revalida acá y no solo en el modal: entre que se abrió y se confirmó,
   // otro operador pudo haber creado una guía para el mismo pedido.
-  const [active] = await activeGuides(admin, orderId);
-  if (active) {
-    return { error: `El pedido ya tiene una guía activa: ${active.guide_code} (${active.courier}).` };
-  }
+  const puerta = puertaDeSalidaAdicional({
+    courier: "tanders",
+    operation: "lima",
+    outputs: await salidasDelPedido(admin, orderId),
+    motivo: input.motivoSalidaAdicional,
+  });
+  if (!puerta.ok) return { error: puerta.error };
 
   const store = await loadStoreTanders(admin, row.store_id);
   if (!store?.tanders_email || !store.tanders_password_enc) {
@@ -465,6 +481,31 @@ export async function createTandersGuide(
       labelUrl,
     },
   });
+
+  // La justificación auditada de la salida adicional (MOM §23): en su propio
+  // evento, con las salidas que seguían vivas, para poder listar después
+  // cuántos pedidos salieron dos veces a la vez y por qué.
+  if (puerta.motivo) {
+    await admin.from("order_events").insert({
+      store_id: row.store_id,
+      order_id: row.order_id,
+      kind: "additional_output_reason",
+      occurred_at: new Date().toISOString(),
+      actor: userId,
+      source: "tanders",
+      courier: "tanders",
+      guide_code: guideCode,
+      reason: puerta.motivo,
+      note: `Salida adicional por Tanders con ${puerta.estorban.length} salida(s) todavía viva(s).`,
+      payload: {
+        salidas_vivas: puerta.estorban.map((o) => ({
+          codigo: o.output_code ?? o.guide_code ?? null,
+          courier: o.courier,
+          estado: o.delivery_status,
+        })),
+      },
+    });
+  }
 
   await recomputeOrderMasterSafe(admin, [row.order_id]);
   revalidatePath(MASTER_PATH);

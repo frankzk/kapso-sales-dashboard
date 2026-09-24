@@ -243,7 +243,8 @@ function findAll(payments: readonly PaymentSnapshot[], kind: PaymentKind): Payme
  *   - ambos pagos del mismo pedido;
  *   - ningún comprobante asociado a otro pedido;
  *   - el pedido no anulado, entregado ni devuelto;
- *   - el paquete disponible para recojo, cuando esa información existe.
+ *   - el paquete disponible para recojo, cuando esa información existe —
+ *     SALVO que lo VALIDADO ya cubra el total (ver `paidInFull` abajo).
  */
 export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
   const blockers: PickupBlocker[] = [];
@@ -263,9 +264,8 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
   // —una captura subida por error, #KP132708— no vuelve a exigir el dinero.
   if (isWebPrepaid(ctx.paymentFacts ?? {})) {
     if (CLOSED_STATUSES.includes(ctx.generalStatus)) blockers.push("pedido_cerrado");
-    if (ctx.pickupState && !AVAILABLE_PICKUP_STATES.includes(ctx.pickupState)) {
-      blockers.push("paquete_no_disponible");
-    }
+    // Pagado en el checkout es pagado entero: no se espera a que llegue. Ver
+    // la regla de abajo, que es la misma.
     return { allowed: blockers.length === 0, blockers };
   }
 
@@ -346,10 +346,21 @@ export function canRevealPickupKey(ctx: PickupKeyContext): PickupKeyVerdict {
 
   if (CLOSED_STATUSES.includes(ctx.generalStatus)) blockers.push("pedido_cerrado");
 
-  // "cuando esa información esté disponible": si no sabemos dónde está el
-  // paquete no se bloquea por ello — se bloquearía todo pedido cuyo courier no
-  // reporte sub-estado.
-  if (ctx.pickupState && !AVAILABLE_PICKUP_STATES.includes(ctx.pickupState)) {
+  // PAGADO ENTERO NO ESPERA A QUE LLEGUE (decisión del 24-09-2026). Esperar a
+  // la agencia protegía de soltar un paquete sin cobrar; con lo VALIDADO
+  // cubriendo el total ese riesgo ya no existe, y retener la clave solo tenía
+  // costes. #KP135533: Alvina pagó los S/ 198 que faltaban por el 600 con el
+  // paquete todavía en tránsito, Gerardo validó, y la clave no salió porque el
+  // paquete llegaba al día siguiente. Tuvo que consultarla dos veces como
+  // excepción y dictarla a mano, y a la clienta se le pidió un saldo de S/ 0.00.
+  //
+  // Solo lo VALIDADO levanta esta condición, no lo cargado: un comprobante que
+  // nadie miró sigue esperando a que el paquete llegue, como antes.
+  //
+  // Y si no sabemos dónde está el paquete no se bloquea por ello — se
+  // bloquearía todo pedido cuyo courier no reporte sub-estado.
+  const paidInFull = paymentProgress(ctx.payments, ctx.orderTotal).completeValidated;
+  if (!paidInFull && ctx.pickupState && !AVAILABLE_PICKUP_STATES.includes(ctx.pickupState)) {
     blockers.push("paquete_no_disponible");
   }
 
@@ -383,6 +394,16 @@ export function validationReleasesPickupKey(ctx: PickupKeyContext, paymentId: st
   );
   if (!paymentProgress(after, ctx.orderTotal).completeValidated) return false;
   return canRevealPickupKey({ ...ctx, payments: after }).allowed;
+}
+
+/**
+ * ¿El paquete ya se puede recoger? Para decirle a la clienta si va a la agencia
+ * ahora o cuando llegue. Sin dato, se asume que sí: es lo que ya hacía la regla
+ * de la clave, y un mensaje que dice «cuando llegue» sobre un paquete que ya
+ * está en la agencia retrasa el recojo sin motivo.
+ */
+export function packageAtAgency(pickupState: string | null | undefined): boolean {
+  return !pickupState || AVAILABLE_PICKUP_STATES.includes(pickupState);
 }
 
 /** Explicación lista para mostrar, sin construirla en la interfaz. */

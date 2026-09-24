@@ -976,6 +976,34 @@ que nadie tenga que resumirla a mano:
 - Seguimiento Lima vuelve a llamar, elige otro courier permitido y solicita un
   nuevo armado si el paquete anterior todavía está con el courier.
 - No es obligatorio esperar la devolución anterior para crear otra salida.
+  Tampoco el reporte ni la liquidación de la ruta del otro courier: si Grupo GF
+  no entregó hoy, el pedido puede salir mañana por Tanders o Swayp con la caja
+  de Grupo GF todavía en la calle.
+
+#### Las guías con API también aceptan la salida adicional
+
+La mesa de ruta manual (Axel, Urpi, Grupo GF) ya lo cumplía: con otra salida viva
+pide el motivo y sigue. **Tanders y Swayp directa se negaban en seco** con «el
+pedido ya tiene una guía activa, anúlala antes de crear otra» — y una salida con
+la caja en la calle no se puede anular, así que el pedido quedaba sin ninguna
+acción posible. Pasó con #KP134960 (Tanders) y #KP134416 (Swayp) el 24-09-2026.
+
+Las dos pasan ahora por la misma regla, `puertaDeSalidaAdicional`:
+
+- **En Lima, otra salida viva pide motivo, no bloquea.** El motivo queda en su
+  propio evento (`additional_output_reason`) con las salidas que seguían vivas.
+- **No se afloja nada más**: el máximo de cinco salidas (§4) y la repetición por
+  courier —Swayp, Urpi y Tanders una sola vez por pedido en Lima (§9.3)— se
+  aplican igual, con `canRepeatCourier`, la misma que usa la mesa manual.
+- **Fuera de Lima no cambia**: Reproprovincia sigue exigiendo que no haya otra
+  salida viva antes de una Swayp directa (Fase 3).
+- **Lima se decide con `order_master.macro_operation`**, la misma fuente que la
+  mesa manual.
+- **El aviso nombra al courier de verdad.** El de Swayp directa elegía entre dos
+  nombres —`fenix` → Swayp, todo lo demás → Aliclik— y anunció como de Aliclik
+  una salida de Grupo GF, mandando a buscarla al panel equivocado.
+- Si una de las salidas entrega, las demás siguen vivas y hay que cancelarlas:
+  es la tarea urgente de §4.
 
 Responsable principal: Daysi. Diana apoya rutas y cotejo.
 
@@ -2974,24 +3002,28 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
   clienta de provincia no contesta ese número, y la cuenta la comparte otra
   operación que llama a Costa Rica, así que el número se fija por extensión y
   no en la cuenta.
-- **La clienta se marca primero; el agente entra cuando ella contesta**
-  (decisión del owner, 23-09-2026). Con el agente primero, xAI cobraba los
-  ~30 segundos que tarda en timbrar el celular y el minuto entero de las que
-  no contestan —casi la mitad del gasto—, y el agente saludaba a una línea que
-  todavía sonaba. El precio aceptado: al contestar, la clienta oye unos
-  segundos la locución de Zadarma «Por favor, espere a que se realice la
-  conexión», que la API no deja apagar. El tramo del agente pasa por la red
-  telefónica (Zadarma llama al número del agente, que desvía a xAI) y el audio
-  llega algo más comprimido que en una llamada directa; una extensión con
-  desvío a SIP URI no sirve en el callback. Se mide en el piloto.
+- **El agente entra por un escenario de la centralita, sin salir a la red
+  telefónica** (decisión del owner, 24-09-2026). El callback de Zadarma marca
+  primero `from` y luego `to`, y a quien contesta primero le reproduce «Por
+  favor, espere a que se realice la conexión». `from` es un escenario de un
+  menú de la centralita **sin números asignados** (`voice_recovery_agent_number`
+  = «menú-tecla», hoy `1-11`) que llama a la extensión desviada al SIP de xAI;
+  `to` es la clienta. Así la locución la oye el agente, la clienta contesta y
+  oye al agente sin locución ni tono, y el audio no da la vuelta por la red.
+  Se probaron y descartaron el 23-09-2026: el número del agente como `from`
+  (audio comprimido por la vuelta a la red) y como `to` con la clienta
+  primero (la clienta oía la locución y un tono antes del agente: «malísimo»,
+  en palabras del owner). El costo aceptado: el agente conecta antes que la
+  clienta, así que xAI cobra los segundos de timbre y las no contestadas
+  hasta el corte por silencio de la consola.
 - **Una llamada abierta por número de agente.** El agente no recibe el
   teléfono de la clienta —el callback le llega con el caller ID de la cuenta—,
   así que sabe de qué pedido habla porque es la única llamada abierta de su
   número (índice único en `voice_calls`). Con 20 a 30 llamadas al día cabe de
   sobra; para más, otro número de agente.
-- **Llamadas caducadas.** Una llamada que en tres minutos no llegó al agente
-  es una clienta que **no contestó** (el agente solo entra cuando ella
-  contesta, así que nunca se enteró): el barrido la cierra y, en modo real,
+- **Llamadas caducadas.** Una llamada que en tres minutos no pasó a «en
+  curso» (el agente pide la ficha al oír a una persona) es una clienta que
+  **no contestó**: el agente no pudo registrarlo, así que el barrido la cierra y, en modo real,
   escribe el mismo `sin_respuesta` que habría escrito el agente, con día de
   gestión (`staleCallResolution`). Incluye, sin poder distinguirlos, los
   pocos casos en que contestó pero el tramo del agente no conectó. Una
@@ -3282,6 +3314,18 @@ poner las dos columnas una al lado de la otra.
     y textos distintos, y confundirlos es mandarle a esperar a quien ya tiene el
     paquete esperándola a ella. **Los ocho parámetros son los mismos**: cambia
     el texto, no los datos.
+    - **Los dos son avisos de COBRO, y no salen a quien ya no debe nada ni a un
+      pedido cerrado** (anulado, entregado, devuelto). Se decide **al enviar**,
+      no al encolar: entre una cosa y otra la clienta puede haber pagado. La
+      fila queda `skipped` con el motivo. #KP135533: a Alvina se le mandó «ya
+      llegó a tu agencia» con saldo S/ 0.00 y los tres botones de pago, un día
+      después de pagar todo y con el pedido ya marcado Entregado. Pedirle
+      dinero a quien ya pagó es la forma más rápida de que deje de creerse los
+      mensajes que sí importan.
+      - Consecuencia asumida: quien pagó entero antes de que el paquete llegue
+        no recibe el aviso de llegada. Ya tiene su clave, y el mensaje de la
+        clave le dijo «cuando llegue, preséntala con tu DNI». Un «ya llegó» para
+        pagados necesitaría su propia plantilla, sin saldo ni botones de cobro.
     - **El aviso de llegada NO lleva fecha límite**, y es una decisión, no un
       olvido: «puedes recogerlo hasta el 16 de octubre» es un permiso a 28 días
       vista, y lo que provoca es dejarlo para después. Urge sin fecha y sin
@@ -3509,10 +3553,25 @@ poner las dos columnas una al lado de la otra.
           sola no basta — lo **validado** tiene que cubrir el pedido. Un
           comprobante recién llegado por WhatsApp no manda ninguna clave.
         - **Lo demás se comprueba con la misma función de siempre**, otra vez
-          en el servidor y con los datos frescos, después de validar: paquete
-          disponible en la agencia, clave registrada, pedido abierto, ningún
-          comprobante observado. El envío automático no puede soltar un
-          paquete que la pantalla no soltaría.
+          en el servidor y con los datos frescos, después de validar: clave
+          registrada, pedido abierto, ningún comprobante observado. El envío
+          automático no puede soltar un paquete que la pantalla no soltaría.
+        - **Pagado entero NO espera a que el paquete llegue** (decisión del
+          24-09-2026). Esperar a la agencia protegía de soltar un paquete sin
+          cobrar; con lo **validado** cubriendo el total ese riesgo ya no
+          existe, y retener la clave solo tenía costes. #KP135533: Alvina pagó
+          los S/ 198 que faltaban con el paquete en tránsito, se validó, y la
+          clave no salió porque llegaba al día siguiente — hubo que consultarla
+          dos veces como excepción y dictarla a mano. Además es el momento
+          bueno: al validar, la clienta acaba de escribir y la ventana de 24 h
+          está abierta; cuando el paquete llega suele estar cerrada.
+          - Con el paquete todavía en camino, el mensaje **no la manda a la
+            agencia**: *«Tu pedido va en camino a la agencia Shalom de Motupe.
+            Cuando llegue, preséntala con tu DNI para recogerlo.»*
+          - Solo levanta la espera lo **validado**. Con comprobantes cargados
+            sin validar, el paquete en tránsito sigue bloqueando la clave, como
+            antes. Vale igual para la pantalla y para el envío automático: una
+            sola regla, en `canRevealPickupKey`.
         - **El botón lo dice antes de pulsarlo**: cambia a «Validar y enviar la
           clave» solo en el comprobante que de verdad la libera, y enseña el
           mensaje exacto que va a salir con la clave **tapada** —al navegador
@@ -3656,8 +3715,10 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   - **La clave de recojo se entrega sin comprobantes.** Exigirlos a quien pagó
     con tarjeta la bloqueaba para siempre: no existe un Yape que cargar, así que
     «falta el adelanto» era cierto de forma permanente y el paquete se quedaba en
-    la agencia. Lo que NO se salta: que la clave exista, que el pedido no esté
-    cerrado y que el paquete esté disponible.
+    la agencia. Lo que NO se salta: que la clave exista y que el pedido no esté
+    cerrado. Que el paquete ya esté en la agencia tampoco se exige desde el
+    24-09-2026: pagado por web es pagado entero, la misma regla que para los
+    comprobantes validados que cubren el total.
   - La guía sale con **cobro 0** y el rótulo dice **PAGADO · NO COBRAR**, nunca
     «S/ 0»: cero es un importe, y un importe ambiguo se resuelve cobrando.
 - Cualquier asesor puede subir el comprobante.

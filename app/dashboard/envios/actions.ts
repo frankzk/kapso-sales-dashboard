@@ -74,7 +74,11 @@ import {
   type StockMovementRow,
 } from "@/lib/fenix-ledger";
 import { writeCourierGuide } from "@/lib/route-output-fill";
-import { isFillableRouteOutput, pickFillableRouteOutput } from "@/lib/shipment-output";
+import {
+  isFillableRouteOutput,
+  pickFillableRouteOutput,
+  puertaDeSalidaAdicional,
+} from "@/lib/shipment-output";
 import { readUpload } from "@/lib/courier-upload";
 import {
   ciudadDeBodega,
@@ -1704,6 +1708,24 @@ async function findGuidesOfOrder(
 
 const DIRECT_GUIDE_ACTIVE_STATUSES = new Set(["pendiente", "en_ruta", "por_preparar"]);
 
+/**
+ * Lima, provincia o agencia, leído de donde lo lee la mesa de ruta manual:
+ * `order_master.macro_operation`. Decide si otra salida viva bloquea (fuera de
+ * Lima) o solo pide motivo (en Lima). Ver `puertaDeSalidaAdicional`.
+ */
+async function operacionDelPedido(
+  admin: SupabaseClient,
+  orderId: string,
+): Promise<"lima" | "provincia_cod" | "agencia" | "desconocida"> {
+  const { data } = await admin
+    .from("order_master")
+    .select("macro_operation")
+    .eq("order_id", orderId)
+    .maybeSingle();
+  const op = (data as { macro_operation?: string | null } | null)?.macro_operation ?? "";
+  return op === "lima" || op === "provincia_cod" || op === "agencia" ? op : "desconocida";
+}
+
 export interface DirectFenixGuidePreview {
   orderId: string;
   storeId: string;
@@ -1740,6 +1762,12 @@ export interface DirectFenixGuidePreview {
    */
   unlinked: string[];
   activeGuides: DirectGuideExisting[];
+  /**
+   * Qué hacer con las salidas vivas. `bloqueo`: fuera de Lima, o por el límite
+   * de cinco o la repetición del courier — no se puede. `pideMotivo`: en Lima,
+   * se puede con motivo escrito. Null cuando no hay nada vivo que estorbe.
+   */
+  salidaAdicional: { tipo: "bloqueo" | "pideMotivo"; texto: string } | null;
   closedGuidesCount: number;
   /**
    * `KP123-S01` de la salida «por definir» que la guía va a rellenar, si la
@@ -1897,6 +1925,15 @@ export async function previewDirectFenixGuide(input: {
   const activeGuides = activas.filter((g) => !esRellenable(g));
   const rellenable = pickFillableRouteOutput(activas);
   const closedGuidesCount = guides.length - activas.length;
+  const puerta = puertaDeSalidaAdicional({
+    courier: "fenix",
+    operation: await operacionDelPedido(admin, order.id),
+    outputs: guides,
+    motivo: null,
+  });
+  const salidaAdicional = puerta.ok
+    ? null
+    : { tipo: puerta.pideMotivo ? ("pideMotivo" as const) : ("bloqueo" as const), texto: puerta.error };
 
   const totalRefunded = order.total_refunded ?? 0;
   const refundedTotal = (order.total_amount ?? 0) > 0 && totalRefunded >= (order.total_amount ?? 0);
@@ -1953,6 +1990,7 @@ export async function previewDirectFenixGuide(input: {
     uncovered: check.uncovered,
     unlinked,
     activeGuides,
+    salidaAdicional,
     closedGuidesCount,
     fillableOutputCode: rellenable?.output_code ?? null,
     warnings,
@@ -2187,6 +2225,8 @@ export async function createDirectFenixGuide(input: {
   dispatchDateIso: string;
   guideCode?: string;
   note?: string;
+  /** Motivo de la salida adicional en Lima, con otra salida todavía viva. */
+  motivoSalidaAdicional?: string | null;
 }): Promise<ShipmentActionState & { shipmentId?: string }> {
   const sb = await createServerSupabase();
   const {
@@ -2231,18 +2271,18 @@ export async function createDirectFenixGuide(input: {
   const orgId = (store as { org_id?: string } | null)?.org_id;
   if (!orgId) return { error: "No se encontró la organización de la tienda." };
 
-  // Duplicate gate: an active guide (either courier) already covers this order.
+  // Otra salida viva: fuera de Lima bloquea; en Lima pide motivo (MOM
+  // principio 7 y §9 — no hay que esperar el reporte del otro courier). Una
+  // «por definir» todavía en casa no cuenta: se rellena. Ver
+  // `puertaDeSalidaAdicional`, la misma regla que Tanders.
   const guides = await findGuidesOfOrder(admin, order);
-  // Igual que en el preview: una salida «por definir» no estorba, se rellena.
-  const active = guides.find(
-    (g) => DIRECT_GUIDE_ACTIVE_STATUSES.has(g.delivery_status) && !esRellenable(g),
-  );
-  if (active) {
-    const courierLabel = active.courier === "fenix" ? "Swayp" : "Aliclik";
-    return {
-      error: `Este pedido ya tiene una guía activa: ${active.guide_code} (${courierLabel}, ${labelOfStatus(active.delivery_status)}). Gestiónala o anúlala antes de crear una guía directa.`,
-    };
-  }
+  const puerta = puertaDeSalidaAdicional({
+    courier: "fenix",
+    operation: await operacionDelPedido(admin, order.id),
+    outputs: guides,
+    motivo: input.motivoSalidaAdicional,
+  });
+  if (!puerta.ok) return { error: puerta.error };
 
   // Stock gate: EVERY line item must have stock in the destination city.
   const { data: stock, error: stockError } = await admin
@@ -2395,6 +2435,31 @@ export async function createDirectFenixGuide(input: {
       .join(" "),
     next_followup_at: input.dispatchDateIso,
   });
+
+  // La justificación auditada de la salida adicional (MOM §23), en su propio
+  // evento y con las salidas que seguían vivas.
+  if (puerta.motivo) {
+    await admin.from("order_events").insert({
+      store_id: order.store_id,
+      order_id: order.id,
+      kind: "additional_output_reason",
+      occurred_at: new Date().toISOString(),
+      actor: user.id,
+      source: "fenix",
+      courier: "fenix",
+      guide_code: code,
+      shipment_id: childId,
+      reason: puerta.motivo,
+      note: `Salida adicional por Swayp con ${puerta.estorban.length} salida(s) todavía viva(s).`,
+      payload: {
+        salidas_vivas: puerta.estorban.map((o) => ({
+          codigo: o.output_code ?? o.guide_code ?? null,
+          courier: o.courier,
+          estado: o.delivery_status,
+        })),
+      },
+    });
+  }
 
   await syncMasterForShipment(admin, childId);
   revalidatePath("/dashboard/envios");

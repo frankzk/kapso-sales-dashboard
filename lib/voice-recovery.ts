@@ -220,12 +220,13 @@ export interface StaleResolution {
 }
 
 /**
- * Qué se hace con una llamada caducada (MOM §11.8). Zadarma marca primero a la
- * clienta y solo conecta al agente cuando ella contesta, así que una llamada
- * que nunca pasó de `dialing` es una clienta que no contestó: el agente nunca
- * se enteró y no pudo registrarlo. En modo real se escribe ese `no_contesta`,
- * como lo habría hecho él. Una llamada `in_progress` sin registro se cortó a
- * media conversación: eso no es gestión y no se escribe nada.
+ * Qué se hace con una llamada caducada (MOM §11.8). La fila pasa a
+ * `in_progress` recién cuando `identificar_llamada` corre, y el agente la
+ * llama al oír a una persona. Una llamada que nunca pasó de `dialing` es una
+ * clienta que no contestó (o cuya línea no dijo nada): el agente no pudo
+ * registrarlo. En modo real se escribe ese `no_contesta`, como lo habría
+ * hecho él. Una llamada `in_progress` sin registro se cortó a media
+ * conversación: eso no es gestión y no se escribe nada.
  */
 export function staleCallResolution(call: Pick<OpenCall, "status"> & { mode: "real" | "test" }): StaleResolution {
   if (call.status === "dialing") {

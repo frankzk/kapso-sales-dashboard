@@ -50,6 +50,7 @@ export function DirectFenixGuideModal({
   const [dispatchDate, setDispatchDate] = useState(earliestDispatchDate());
   const [guideCode, setGuideCode] = useState("");
   const [note, setNote] = useState("");
+  const [motivo, setMotivo] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [createdNotice, setCreatedNotice] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -129,6 +130,7 @@ export function DirectFenixGuideModal({
       }
       setPreview(r);
       setGuideCode("");
+      setMotivo("");
     });
   }
 
@@ -140,6 +142,7 @@ export function DirectFenixGuideModal({
         dispatchDateIso: new Date(dispatchDate).toISOString(),
         guideCode,
         note,
+        motivoSalidaAdicional: preview.salidaAdicional?.tipo === "pideMotivo" ? motivo : null,
       });
       if (r.error) {
         setMsg(r.error);
@@ -151,7 +154,11 @@ export function DirectFenixGuideModal({
     });
   }
 
-  const blockedByGuide = !!preview && preview.activeGuides.length > 0;
+  // Otra salida viva: fuera de Lima (o por el límite / la repetición) bloquea;
+  // en Lima solo pide el motivo. Lo decide el servidor con la misma regla que
+  // Tanders, `puertaDeSalidaAdicional`.
+  const blockedByGuide = preview?.salidaAdicional?.tipo === "bloqueo";
+  const faltaMotivo = preview?.salidaAdicional?.tipo === "pideMotivo" && !motivo.trim();
   const blockedByOrder = !!preview && (preview.cancelled || preview.refundedTotal);
   const blockedByStock = !!preview && !preview.stockOk;
   // El vínculo con el catálogo de Swayp. En Lima es LA comprobación que dice
@@ -166,6 +173,7 @@ export function DirectFenixGuideModal({
     !numeroNoEsDeSwayp &&
     !!preview &&
     !blockedByGuide &&
+    !faltaMotivo &&
     !blockedByOrder &&
     !blockedByStock &&
     !blockedByLink &&
@@ -452,18 +460,29 @@ export function DirectFenixGuideModal({
                   : "El pedido fue reembolsado por completo en Shopify; no se puede crear la guía."}
               </p>
             )}
-            {blockedByGuide && (
-              <div className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">
-                <p className="font-medium">Este pedido ya tiene una guía activa:</p>
-                {preview.activeGuides.map((g) => (
-                  <p key={g.id} className="mt-0.5 font-mono">
-                    {g.guide_code}{" "}
-                    <span className="font-sans">
-                      ({g.courier === "fenix" ? "Swayp" : "Aliclik"} · {g.delivery_status})
-                    </span>
-                  </p>
-                ))}
-                <p className="mt-1 font-sans">Gestiónala o anúlala antes de crear una guía directa.</p>
+            {/* El texto lo escribe el servidor y nombra al courier de verdad.
+                Antes se armaba aquí con «fenix → Swayp, todo lo demás →
+                Aliclik», y una salida de Grupo GF se anunciaba como de Aliclik
+                (#KP134416). */}
+            {blockedByGuide && preview.salidaAdicional && (
+              <p className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">
+                {preview.salidaAdicional.texto}
+              </p>
+            )}
+            {preview.salidaAdicional?.tipo === "pideMotivo" && !blockedByOrder && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-2 text-xs text-amber-900">
+                <p>{preview.salidaAdicional.texto}</p>
+                <textarea
+                  value={motivo}
+                  onChange={(e) => setMotivo(e.target.value)}
+                  rows={2}
+                  placeholder="Ej. Grupo GF no lo entregó; sale por Swayp sin esperar su reporte."
+                  className="mt-1.5 w-full rounded-md border border-amber-300 bg-white px-2 py-1.5 text-xs text-slate-900"
+                />
+                <p className="mt-1">
+                  Queda registrado en el pedido. Si la otra salida termina entregando, hay que
+                  cancelar esta.
+                </p>
               </div>
             )}
             {/* Una salida «por definir» NO bloquea: la guía se le escribe

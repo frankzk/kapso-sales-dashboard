@@ -2381,7 +2381,7 @@ export async function llamarConAgente(orderId: string): Promise<MasterActionStat
   );
   if (!placed.ok) return { error: placed.error };
   revalidatePath(MASTER_PATH);
-  return { notice: "Llamando a la clienta. Cuando conteste, entra el agente." };
+  return { notice: "Llamando. Cuando la clienta conteste, la atiende el agente." };
 }
 
 /**
