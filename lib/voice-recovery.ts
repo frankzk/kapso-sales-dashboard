@@ -250,13 +250,16 @@ export function staleCallResolution(call: Pick<OpenCall, "status"> & { mode: "re
  *   así que con él la elección es exacta.
  * - Sin él, se acepta solo si hay UNA llamada abierta en total.
  * - `customerPhone`, si llega y coincide con una fila, gana: es la atadura
- *   exacta para cuando el caller ID de la clienta llegue al agente.
+ *   exacta. Si es un celular peruano que no coincide con ninguna, es otra
+ *   persona llamando al número del agente y no se ata a nada. Un número que
+ *   no es celular (el de la cuenta, el del agente) no decide: se cae a la
+ *   única llamada abierta.
  */
 export function pickOpenCall(
   calls: readonly OpenCall[],
   wanted: "dialing" | "in_progress",
   opts: { now: Date; agentNumber?: string | null; customerPhone?: string | null },
-): { call: OpenCall } | { error: "ninguna" | "ambigua" } {
+): { call: OpenCall } | { error: "ninguna" | "ambigua" | "otro_numero" } {
   const live = calls.filter((c) => c.status === wanted && !isStale(c, opts.now));
   const agent = localDigits(opts.agentNumber);
   const scoped = agent ? live.filter((c) => localDigits(c.agent_number) === agent) : live;
@@ -264,6 +267,11 @@ export function pickOpenCall(
   if (phone) {
     const [only, ...rest] = scoped.filter((c) => localDigits(c.phone) === phone);
     if (only && rest.length === 0) return { call: only };
+    // Un celular peruano que no es el de ninguna llamada abierta es otra
+    // persona marcando al número del agente —típicamente una clienta que
+    // devuelve una perdida— mientras el agente llama a alguien. No recibe la
+    // ficha ajena ni puede registrar sobre ese pedido (24-09-2026).
+    if (zadarmaLocalPeru(opts.customerPhone)?.startsWith("9")) return { error: "otro_numero" };
   }
   const [single, ...others] = scoped;
   if (single && others.length === 0) return { call: single };

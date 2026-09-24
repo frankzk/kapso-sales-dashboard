@@ -2051,6 +2051,15 @@ demás entradas elegibles. Se acotan con el chip **«Por recuperar»** de la fil
 de filtros. Una pestaña más sería un balde más que nadie mira, que es el mismo
 motivo por el que los segmentos de leads se fusionaron.
 
+**La cola abre sin Lima.** Cada salida «por definir» de Lima nace pendiente y
+sin courier, así que también caía en Repro Provincia: medido el 24-09-2026, de
+la cola pendiente ~3.770 guías eran salidas de Lima contra ~200 de provincia.
+Lima se reprograma en su propia mesa (§9). El filtro **Cobertura** —la misma
+columna que filtra el Master, `order_master.coverage`— abre con todo marcado
+menos Lima; «Limpiar filtros» vuelve a eso y no a «todo», y quien necesite Lima
+la marca. Las guías sin pedido vinculado van aparte y se ven por defecto: no se
+esconde una guía por no saber su cobertura.
+
 **Envíos aplica la MISMA regla que el Master**, no una propia. Hasta la v1.10
 Envíos decidía «por recuperar» con dos condiciones —cerrada y etiqueta de
 intento fallido— y el Master con cuatro —más la ventana y el descarte—. Medido
@@ -3021,6 +3030,16 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
   así que sabe de qué pedido habla porque es la única llamada abierta de su
   número (índice único en `voice_calls`). Con 20 a 30 llamadas al día cabe de
   sobra; para más, otro número de agente.
+- **Quien devuelve la llamada no recibe la ficha ajena.** El agente manda a
+  `identificar_llamada` el número de quien habla. Si es un celular peruano y
+  no es el de ninguna llamada abierta, es otra persona marcando al número del
+  agente —típicamente una clienta que devuelve una perdida mientras el agente
+  llama a otra—: no se le entrega la ficha ni puede registrar sobre ese
+  pedido, y el agente la deriva a WhatsApp. El 24-09-2026, en pruebas, una
+  llamada entrante recibió la ficha de la llamada abierta y registró un
+  «confirma»; en modo prueba no escribió nada. Un número que no es celular
+  (el de la cuenta o el del propio agente) no decide y se usa la única
+  llamada abierta.
 - **Llamadas caducadas.** Una llamada que en tres minutos no pasó a «en
   curso» (el agente pide la ficha al oír a una persona) es una clienta que
   **no contestó**: el agente no pudo registrarlo, así que el barrido la cierra y, en modo real,
