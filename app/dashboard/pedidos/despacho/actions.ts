@@ -21,6 +21,7 @@ import {
 } from "@/lib/dispatch";
 import { operationFitsCourier, routeKindForCourier } from "@/lib/dispatch-routing";
 import { courierLabelFor } from "@/lib/couriers/catalog";
+import { decideReception } from "@/lib/returns-reception";
 import type { OperationKind } from "@/lib/order-macro-stage";
 import {
   DISPATCH_SHIPMENT_COLUMNS,
@@ -34,6 +35,8 @@ import {
 const DISPATCH_PATH = "/dashboard/pedidos/despacho";
 /** El armado vive en su propia pantalla: la mesa gestiona rutas, no cajas. */
 const WAREHOUSE_PATH = "/dashboard/pedidos/almacen";
+/** La recepción de devoluciones: mismo gesto, otro contexto (§29.13). */
+const RETURNS_PATH = "/dashboard/pedidos/devoluciones";
 
 /** Tope defensivo al armar una ruta de golpe: una tanda real son decenas. */
 const MAX_ROUTE_BATCH = 100;
@@ -245,6 +248,99 @@ export async function markShipmentReady(code: string): Promise<DispatchActionRes
   revalidatePath(DISPATCH_PATH);
   revalidatePath("/dashboard/pedidos");
   return { notice: `${dispatchScanLabel(shipment)} quedó listo para despacho.`, shipment };
+}
+
+/**
+ * Registra que una caja devuelta LLEGÓ al almacén. Es el escaneo de la pantalla
+ * de devoluciones, y vive acá —junto a `markShipmentReady`— porque usa el mismo
+ * buscador de escaneos y la misma auditoría: una sola forma de resolver un QR.
+ *
+ * NO reescribe el sello del courier. Si Tanders ya dio la guía por devuelta,
+ * su `returned_at` y su procedencia (`tanders_api`) se quedan como están
+ * (0118: la procedencia de una devolución no se pisa) y la llegada física se
+ * escribe como el evento canónico `return_received`, con la persona que la
+ * escaneó. Si el courier todavía no la había reportado, quien la tiene en la
+ * mano la sella — exactamente lo que hacía el botón manual del drawer.
+ *
+ * Por ahora solo Tanders: Aliclik y Shalom tienen su propia vía de sellado y
+ * su cola de recuperación, y mezclarlas acá sin medirlas sería un riesgo.
+ */
+export async function receiveReturnedPackage(code: string): Promise<DispatchActionResult> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("warehouse.prepare")) return { error: "No tienes permiso para recibir paquetes." };
+  const pick = pickDispatchScanTarget(
+    await findScanCandidates(code),
+    (candidate) => candidate.courier === "tanders",
+  );
+  if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
+  if (pick.kind === "ambigua") return { error: ambiguousScanError(pick.options) };
+  const shipment = pick.shipment;
+  if (shipment.courier !== "tanders") {
+    return { error: `${dispatchScanLabel(shipment)} no es de Tanders: su devolución se registra desde el Master.` };
+  }
+
+  const admin = createAdminSupabase();
+  const [{ data: guide }, { data: received }] = await Promise.all([
+    admin
+      .from("shipments")
+      .select("delivery_status,custody_state,returned_at")
+      .eq("id", shipment.id)
+      .maybeSingle(),
+    admin
+      .from("order_events")
+      .select("id")
+      .eq("shipment_id", shipment.id)
+      .eq("kind", "return_received")
+      .limit(1),
+  ]);
+  if (!guide) return { error: SCAN_NOT_FOUND };
+  const decision = decideReception(
+    guide as { delivery_status: string; custody_state: string | null; returned_at: string | null },
+    Boolean(received?.length),
+  );
+  if (!decision.ok) {
+    // «Ya recibida» no es un error de quien escanea: es la caja que pasó dos
+    // veces por el lector. Se avisa sin alarma.
+    return decision.reason === "ya_recibida"
+      ? { notice: `${dispatchScanLabel(shipment)}: ${decision.message}`, shipment }
+      : { error: `${dispatchScanLabel(shipment)}: ${decision.message}` };
+  }
+
+  const { user } = await currentUser();
+  const orgId = await orgForStore(shipment.store_id);
+  if (!orgId) return { error: "No pudimos identificar la organización de la salida." };
+  const now = new Date().toISOString();
+
+  if (decision.seal) {
+    const { error } = await admin
+      .from("shipments")
+      .update({
+        custody_state: "devuelto",
+        returned_at: now,
+        pickup_state: "devuelto",
+        returned_source: "manual",
+        returned_by: user.id,
+      })
+      .eq("id", shipment.id)
+      .is("returned_at", null);
+    if (error) return { error: error.message };
+  } else {
+    // El courier ya la selló: la custodia puede seguir en `retorno` si el
+    // último reporte fue RETURNING; con la caja acá, ya es nuestra.
+    await admin.from("shipments").update({ custody_state: "devuelto" }).eq("id", shipment.id);
+  }
+  await auditDispatch({
+    orgId,
+    shipment,
+    actor: user.id,
+    kind: "return_received",
+    orderNote: "Devolución recibida en almacén: la caja se escaneó al llegar.",
+    payload: { via: "escaneo", courier_ya_la_habia_sellado: !decision.seal },
+  });
+  if (shipment.order_id) await recomputeOrderMasterSafe(admin, [shipment.order_id]);
+  revalidatePath(RETURNS_PATH);
+  revalidatePath("/dashboard/pedidos");
+  return { notice: `${dispatchScanLabel(shipment)} recibida en almacén.`, shipment };
 }
 
 const createManifestSchema = z.object({
