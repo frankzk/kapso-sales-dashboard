@@ -1219,6 +1219,23 @@ sin tope de antigüedad. Reglas:
       no cierra nada: el courier sigue debiendo el efectivo que cobró.
     - Aliclik y los motorizados propios siguen esperando su propia fuente de
       liquidación: se liquidan en bloque y eso es otro trabajo.
+    - **LA FIRMA HUMANA MANDA TAMBIÉN SOBRE LA GUÍA** (0191). Validar el cobro
+      pasa la guía Tanders a `entregado` —si Tanders la da por entregada—, y
+      retirar esa validación la devuelve a `en_ruta`. Antes solo se emitía el
+      cierre de liquidación y la guía se quedaba donde la hubiera dejado el
+      MODELO: el 24-09-2026 había **49 pedidos validados por una persona y
+      atascados en «En tránsito»**, justo los que el lector había rechazado
+      (45) o no había podido leer (4). El cierre existía pero el pedido no
+      podía usarlo, porque para el Master nunca se había entregado. Dos
+      autoridades contradiciéndose sobre el mismo pedido.
+      - El estado del cobro queda en **`revisado`** cuando la persona corrigió
+        al lector, y en **`validado`** cuando los dos coincidían. Es la cifra
+        que interesa al auditar el lector.
+      - **El barrido ya no pisa a la persona.** Una guía cuyo cobro alguien
+        decidió —aunque lo rechazara— no se vuelve a leer: sin esto, el modelo
+        podía dar por bueno lo que una persona rechazó mirando la imagen y
+        devolverlo a `entregado` en la pasada siguiente, y volver a encolar el
+        mismo comprobante una y otra vez.
   - **QUIEN DA EL DINERO POR RECIBIDO ES UNA PERSONA** (0158). El lector de
     imágenes valida **una imagen, no un depósito**: no detecta una captura
     editada, ni un comprobante real de otra transferencia. Mientras no haya

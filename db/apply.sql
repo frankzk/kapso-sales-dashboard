@@ -383,4 +383,6 @@
 \ir migrations/0189_gf_return_rejected.sql
 \echo 'Applying 0190_voice_calls.sql'
 \ir migrations/0190_voice_calls.sql
+\echo 'Applying 0191_tanders_human_ruling_backfill.sql'
+\ir migrations/0191_tanders_human_ruling_backfill.sql
 \echo 'Done.'
