@@ -3002,24 +3002,28 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
   clienta de provincia no contesta ese número, y la cuenta la comparte otra
   operación que llama a Costa Rica, así que el número se fija por extensión y
   no en la cuenta.
-- **La clienta se marca primero; el agente entra cuando ella contesta**
-  (decisión del owner, 23-09-2026). Con el agente primero, xAI cobraba los
-  ~30 segundos que tarda en timbrar el celular y el minuto entero de las que
-  no contestan —casi la mitad del gasto—, y el agente saludaba a una línea que
-  todavía sonaba. El precio aceptado: al contestar, la clienta oye unos
-  segundos la locución de Zadarma «Por favor, espere a que se realice la
-  conexión», que la API no deja apagar. El tramo del agente pasa por la red
-  telefónica (Zadarma llama al número del agente, que desvía a xAI) y el audio
-  llega algo más comprimido que en una llamada directa; una extensión con
-  desvío a SIP URI no sirve en el callback. Se mide en el piloto.
+- **El agente entra por un escenario de la centralita, sin salir a la red
+  telefónica** (decisión del owner, 24-09-2026). El callback de Zadarma marca
+  primero `from` y luego `to`, y a quien contesta primero le reproduce «Por
+  favor, espere a que se realice la conexión». `from` es un escenario de un
+  menú de la centralita **sin números asignados** (`voice_recovery_agent_number`
+  = «menú-tecla», hoy `1-11`) que llama a la extensión desviada al SIP de xAI;
+  `to` es la clienta. Así la locución la oye el agente, la clienta contesta y
+  oye al agente sin locución ni tono, y el audio no da la vuelta por la red.
+  Se probaron y descartaron el 23-09-2026: el número del agente como `from`
+  (audio comprimido por la vuelta a la red) y como `to` con la clienta
+  primero (la clienta oía la locución y un tono antes del agente: «malísimo»,
+  en palabras del owner). El costo aceptado: el agente conecta antes que la
+  clienta, así que xAI cobra los segundos de timbre y las no contestadas
+  hasta el corte por silencio de la consola.
 - **Una llamada abierta por número de agente.** El agente no recibe el
   teléfono de la clienta —el callback le llega con el caller ID de la cuenta—,
   así que sabe de qué pedido habla porque es la única llamada abierta de su
   número (índice único en `voice_calls`). Con 20 a 30 llamadas al día cabe de
   sobra; para más, otro número de agente.
-- **Llamadas caducadas.** Una llamada que en tres minutos no llegó al agente
-  es una clienta que **no contestó** (el agente solo entra cuando ella
-  contesta, así que nunca se enteró): el barrido la cierra y, en modo real,
+- **Llamadas caducadas.** Una llamada que en tres minutos no pasó a «en
+  curso» (el agente pide la ficha al oír a una persona) es una clienta que
+  **no contestó**: el agente no pudo registrarlo, así que el barrido la cierra y, en modo real,
   escribe el mismo `sin_respuesta` que habría escrito el agente, con día de
   gestión (`staleCallResolution`). Incluye, sin poder distinguirlos, los
   pocos casos en que contestó pero el tramo del agente no conectó. Una

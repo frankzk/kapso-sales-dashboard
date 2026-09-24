@@ -2,19 +2,21 @@
 //
 // Solo lo que se probó que funciona (docs/voz-reproprovincia-plan.md):
 //
-//   GET /v1/request/callback/?from=930555309&sip=<ext>&to=17058243
+//   GET /v1/request/callback/?from=1-11&sip=<ext>&to=930555309
 //
-// - LA CLIENTA PRIMERO (`from`), el agente después (`to`). Zadarma marca
-//   `from`, y solo cuando contesta marca `to`. Con el agente primero (Fase 1)
-//   xAI cobraba los ~30 s que tarda en timbrar el celular y el minuto entero
-//   de las que no contestan, y el agente saludaba a una línea que aún sonaba
-//   (23-09-2026). Así, una clienta que no contesta no cuesta agente.
-// - Lo que se paga: la clienta oye «Por favor, espere a que se realice la
-//   conexión» unos segundos antes de oír al agente. Zadarma lo reproduce a
-//   quien contesta primero y la API no deja apagarlo (tampoco `predicted`).
-// - `to` es el número del agente, que desvía a xAI. El tramo sale a la red
-//   telefónica y vuelve a entrar; una extensión con desvío a SIP URI no sirve
-//   de `from` ni de `to` en el callback (probado el 23-09-2026).
+// - `from` es un ESCENARIO de la centralita («menú-tecla», p. ej. `1-11`: un
+//   menú sin números asignados cuyo escenario «sin pulsar» llama a una
+//   extensión desviada «siempre» al SIP URI de xAI). Zadarma marca `from`
+//   primero y, cuando contesta, marca `to`. Así el tramo del agente queda
+//   DENTRO de la centralita (probado el 24-09-2026): la locución «espere a
+//   la conexión» la oye el agente, la clienta no oye locución ni tono, y el
+//   audio no pasa por la red telefónica.
+// - Descartado: el número del agente como `from` o `to` (el tramo sale a la
+//   red y vuelve: audio comprimido; y como `to`, la clienta oía locución y
+//   tono) y una extensión suelta como `from`/`to` (el callback no aplica su
+//   desvío). Un número peruano como `from` sigue aceptado, por compatibilidad.
+// - Lo que se paga: el agente conecta antes que la clienta, así que xAI cobra
+//   los segundos de timbre y las que no contestan hasta el corte por silencio.
 // - Los números van SIN 51: la cuenta antepone el código de Perú, y con el 51
 //   el historial registraba `5151…` y `failed`.
 // - `sip` es obligatorio aquí aunque la API lo tenga opcional: es la extensión
@@ -68,15 +70,26 @@ export function zadarmaLocalPeru(raw: string | null | undefined): string | null 
   return null;
 }
 
+/** Escenario de la centralita en la forma «menú-tecla» (`1-11`), o null. */
+export function zadarmaScenario(raw: string | null | undefined): string | null {
+  const t = String(raw ?? "").trim();
+  return /^\d{1,3}-\d{1,3}$/.test(t) ? t : null;
+}
+
+/** Lo que va en `from`: un escenario tal cual, o un número peruano sin 51. */
+export function zadarmaAgentEndpoint(raw: string | null | undefined): string | null {
+  return zadarmaScenario(raw) ?? zadarmaLocalPeru(raw);
+}
+
 export interface ZadarmaCredentials {
   key: string;
   secret: string;
 }
 
 export interface CallbackRequest {
-  /** Número del agente (sin 51). Zadarma lo marca cuando la clienta contesta. */
+  /** Escenario de la centralita («menú-tecla») o número del agente. Se marca PRIMERO. */
   agentNumber: string;
-  /** Teléfono de la clienta, en cualquier formato peruano. Se marca PRIMERO. */
+  /** Teléfono de la clienta, en cualquier formato peruano. */
   customerPhone: string;
   /** Extensión o SIP cuyo caller ID peruano ve la clienta. Obligatorio. */
   sip: string;
@@ -90,10 +103,15 @@ export type CallbackResult =
 export function buildCallbackParams(req: CallbackRequest):
   | { ok: true; params: { from: string; sip: string; to: string } }
   | { ok: false; error: string } {
-  const from = zadarmaLocalPeru(req.customerPhone);
-  if (!from) return { ok: false, error: "El teléfono de la clienta no es un número peruano válido." };
-  const to = zadarmaLocalPeru(req.agentNumber);
-  if (!to) return { ok: false, error: "El número del agente no es un número peruano válido." };
+  const from = zadarmaAgentEndpoint(req.agentNumber);
+  if (!from) {
+    return {
+      ok: false,
+      error: "El agente debe ser un escenario de la centralita («menú-tecla», p. ej. 1-11) o un número peruano.",
+    };
+  }
+  const to = zadarmaLocalPeru(req.customerPhone);
+  if (!to) return { ok: false, error: "El teléfono de la clienta no es un número peruano válido." };
   const sip = String(req.sip ?? "").trim();
   if (!sip) {
     return {

@@ -1411,12 +1411,14 @@ function SettingsForm({
               </select>
             </div>
             <div>
-              <label className={labelCls} htmlFor="voice_recovery_agent_number">Número del agente</label>
+              <label className={labelCls} htmlFor="voice_recovery_agent_number">
+                Escenario de Zadarma del agente
+              </label>
               <input
                 id="voice_recovery_agent_number"
                 name="voice_recovery_agent_number"
                 defaultValue={s.voice_recovery_agent_number ?? ""}
-                placeholder="Ej.: 17058243"
+                placeholder="Ej.: 1-11"
                 className={inputCls}
               />
             </div>
