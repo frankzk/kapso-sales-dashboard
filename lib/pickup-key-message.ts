@@ -63,7 +63,9 @@ export function pickupKeyMessage(facts: PickupKeyMessageFacts, key: string): str
     "",
     facts.atAgency === false
       ? // Todavía en camino: se le da la clave ya, pero sin mandarla a una
-        // agencia donde el paquete no está. El aviso de llegada le dirá cuándo.
+        // agencia donde el paquete no está. OJO: el aviso de llegada NO le
+        // dirá cuándo llega — es de cobro y ya no debe nada, así que se salta
+        // (`noticeSkipReason`). Por eso este texto tiene que bastar solo.
         facts.agencyName
         ? `Tu pedido va en camino a la agencia Shalom de ${facts.agencyName}. Cuando llegue, preséntala con tu DNI para recogerlo.`
         : "Tu pedido va en camino a la agencia Shalom. Cuando llegue, preséntala con tu DNI para recogerlo."
