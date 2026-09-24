@@ -119,7 +119,7 @@ function adminFalso(candidatas: unknown[]) {
           // acá es el barrido, no la cola.
           select: () => {
             const q: Record<string, unknown> = {};
-            for (const m of ["eq", "neq", "limit"]) q[m] = () => q;
+            for (const m of ["eq", "neq", "or", "limit"]) q[m] = () => q;
             q.then = (ok: (v: unknown) => unknown) =>
               Promise.resolve({ data: h.enLaCola, error: null }).then(ok);
             return q;

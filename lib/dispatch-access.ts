@@ -4,6 +4,11 @@ import { limaDayBounds } from "@/lib/daily-summary";
 import type { DispatchManifestState, DispatchRouteKind } from "@/lib/dispatch";
 import { warehouseBlocker } from "@/lib/warehouse-queue";
 import { isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
+import {
+  bucketReturns,
+  type ReconciliationBuckets,
+  type ReconciliationRow,
+} from "@/lib/returns-reception";
 
 export interface DispatchShipment {
   id: string;
@@ -318,6 +323,45 @@ export async function getWarehouseStationData(): Promise<WarehouseStationData> {
     armedToday: (armedRes.data ?? []) as unknown as DispatchShipment[],
     pendingOmitted: omitted,
   };
+}
+
+/**
+ * El cuadre de devoluciones de Tanders: lo que el courier dice que devolvió
+ * frente a lo que una persona registró en almacén. Con el cliente del usuario
+ * (RLS), así cada uno ve solo sus tiendas.
+ *
+ * Entra toda guía Tanders que el courier dio por devuelta o que viene de
+ * vuelta, y que no está entregada. Sin tope de antigüedad a propósito: la caja
+ * que más importa es justo la que el courier dio por devuelta hace semanas y
+ * nunca apareció.
+ */
+export async function getReturnsReceptionData(): Promise<ReconciliationBuckets> {
+  const sb = await createServerSupabase();
+  const { data: guides } = await sb
+    .from("shipments")
+    .select("id,guide_code,order_name,reported_status,custody_state,returned_at,returned_source")
+    .eq("courier", "tanders")
+    .neq("delivery_status", "entregado")
+    .or("reported_status.in.(RETURNED,RETURNING),custody_state.in.(devuelto,retorno)")
+    .limit(2000);
+  const rows = (guides ?? []) as Omit<ReconciliationRow, "received_at">[];
+  if (!rows.length) return bucketReturns([]);
+
+  const received = new Map<string, string>();
+  // Por tandas: una lista `in.(…)` de cientos de uuids no cabe en una URL.
+  for (let i = 0; i < rows.length; i += 200) {
+    const ids = rows.slice(i, i + 200).map((r) => r.id);
+    const { data: events } = await sb
+      .from("order_events")
+      .select("shipment_id,occurred_at")
+      .eq("kind", "return_received")
+      .in("shipment_id", ids);
+    for (const e of (events ?? []) as { shipment_id: string; occurred_at: string }[]) {
+      const prev = received.get(e.shipment_id);
+      if (!prev || e.occurred_at < prev) received.set(e.shipment_id, e.occurred_at);
+    }
+  }
+  return bucketReturns(rows.map((r) => ({ ...r, received_at: received.get(r.id) ?? null })));
 }
 
 // Motorizados activos visibles para el usuario (RLS acota por organización).

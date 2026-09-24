@@ -181,12 +181,22 @@ async function desandarCobroDuplicado(
  */
 async function yaEnLaCola(admin: SupabaseClient, orderId: string | null): Promise<boolean> {
   if (!orderId) return false;
+  // Dos razones para saltarla, las dos de «esto ya lo tiene una persona»:
+  //  · la ficha sigue viva en la cola (no rechazada), o
+  //  · una persona YA DECIDIÓ sobre ella (`validated_by`), aunque la rechazara.
+  //
+  // La segunda es la que evita que el barrido PISE a la persona. Una guía cuyo
+  // cobro se rechazó a mano vuelve a `rechazado`, que es candidata; sin esto el
+  // barrido la releería, el modelo podría darla por buena y la devolvería a
+  // `entregado`, deshaciendo en dos horas lo que alguien decidió mirando la
+  // imagen. Y además volvería a encolar el mismo comprobante una y otra vez: un
+  // rechazo libera el índice único, así que nada lo pararía.
   const { data } = await admin
     .from("order_payments")
     .select("id")
     .eq("order_id", orderId)
     .eq("kind", COURIER_COLLECTION_KIND)
-    .neq("validation_status", "rechazado")
+    .or("validation_status.neq.rechazado,validated_by.not.is.null")
     .limit(1);
   return Boolean((data as { id: string }[] | null)?.length);
 }

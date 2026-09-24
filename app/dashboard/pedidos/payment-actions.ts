@@ -32,7 +32,10 @@ import {
 } from "@/lib/yape-recipient";
 import { normalizePhone } from "@/lib/phone";
 import { typedTheOperationNumber } from "@/lib/payment-review";
-import { COURIER_COLLECTION_KIND } from "@/lib/tanders/collection-payment";
+import {
+  applyHumanRulingToGuide,
+  COURIER_COLLECTION_KIND,
+} from "@/lib/tanders/collection-payment";
 import {
   canRevealPickupKey,
   describeBlockers,
@@ -838,7 +841,7 @@ async function loadPayment(paymentId: string) {
 async function ajustarLiquidacionDelCobro(
   admin: ReturnType<typeof createAdminSupabase>,
   ctx: { storeId: string; userId: string },
-  payment: { order_id: string; kind: string },
+  payment: { order_id: string; kind: string; vision?: unknown },
   cerrada: boolean,
   note: string,
 ): Promise<void> {
@@ -851,6 +854,13 @@ async function ajustarLiquidacionDelCobro(
     source: "manual",
     note,
   });
+  // Y la GUÍA sigue a la firma. Antes solo se emitía el cierre, y la guía se
+  // quedaba donde la hubiera dejado el MODELO: el 24-09-2026 había 49 pedidos
+  // que una persona había validado y que seguían «En tránsito», porque el
+  // lector los había rechazado y para el Master nunca se entregaron. El cierre
+  // de liquidación existía, pero el pedido no podía llegar a usarlo. Ver
+  // `guidePatchForHumanRuling`.
+  await applyHumanRulingToGuide(admin, payment, cerrada ? "validado" : "retirado");
 }
 
 /**

@@ -1219,6 +1219,23 @@ sin tope de antigüedad. Reglas:
       no cierra nada: el courier sigue debiendo el efectivo que cobró.
     - Aliclik y los motorizados propios siguen esperando su propia fuente de
       liquidación: se liquidan en bloque y eso es otro trabajo.
+    - **LA FIRMA HUMANA MANDA TAMBIÉN SOBRE LA GUÍA** (0191). Validar el cobro
+      pasa la guía Tanders a `entregado` —si Tanders la da por entregada—, y
+      retirar esa validación la devuelve a `en_ruta`. Antes solo se emitía el
+      cierre de liquidación y la guía se quedaba donde la hubiera dejado el
+      MODELO: el 24-09-2026 había **49 pedidos validados por una persona y
+      atascados en «En tránsito»**, justo los que el lector había rechazado
+      (45) o no había podido leer (4). El cierre existía pero el pedido no
+      podía usarlo, porque para el Master nunca se había entregado. Dos
+      autoridades contradiciéndose sobre el mismo pedido.
+      - El estado del cobro queda en **`revisado`** cuando la persona corrigió
+        al lector, y en **`validado`** cuando los dos coincidían. Es la cifra
+        que interesa al auditar el lector.
+      - **El barrido ya no pisa a la persona.** Una guía cuyo cobro alguien
+        decidió —aunque lo rechazara— no se vuelve a leer: sin esto, el modelo
+        podía dar por bueno lo que una persona rechazó mirando la imagen y
+        devolverlo a `entregado` en la pasada siguiente, y volver a encolar el
+        mismo comprobante una y otra vez.
   - **QUIEN DA EL DINERO POR RECIBIDO ES UNA PERSONA** (0158). El lector de
     imágenes valida **una imagen, no un depósito**: no detecta una captura
     editada, ni un comprobante real de otra transferencia. Mientras no haya
@@ -1290,6 +1307,27 @@ sin tope de antigüedad. Reglas:
       calle.
     - El sello lleva procedencia `tanders_api` (0118): quien decide pedir un
       adelanto ve si la devolución la reportó el courier o una persona.
+    - **QUE TANDERS DIGA `RETURNED` NO ES QUE LA CAJA ESTÉ EN EL ALMACÉN.** El
+      24-09-2026 había 108 guías selladas como devueltas por su API y **ninguna
+      confirmada físicamente** —el evento `return_received` no existía en toda
+      la base—; el botón manual del drawer estaba además bloqueado para ellas,
+      porque leía el sello del courier como «ya recibida». Se añade la
+      recepción física en **`/dashboard/pedidos/devoluciones`**: en almacén se
+      escanea el QR de Tanders (lleva literalmente el nº de seguimiento) y queda
+      el evento canónico `return_received` con la persona que la escaneó.
+      - **Sello del courier ≠ caja recibida.** «Ya recibida» es que una PERSONA
+        la registró. El sello de la API no se reescribe (0118); la llegada
+        física se escribe aparte. Si el courier aún no la había reportado
+        (RETURNING), quien la tiene en la mano la sella con procedencia
+        `manual`, igual que el botón del drawer.
+      - **El cuadre**: lo que Tanders dice que devolvió frente a lo recibido.
+        Lo que dio por devuelto y nadie escaneó es **lo que te debe**, ordenado
+        de lo más antiguo a lo más reciente — una caja que no aparece tras días
+        no es un retraso, es una pérdida.
+      - No se recibe como devolución una guía que el courier dio por ENTREGADA:
+        si esa caja está en el almacén es una incidencia que hay que escalar.
+      - Solo Tanders, por ahora: Aliclik y Shalom tienen su propia vía de
+        sellado y su cola de recuperación.
   - **EL MISMO COMPROBANTE NO COBRA DOS PEDIDOS.** Si el nº de operación ya
     quedó registrado en otra guía, la comprobación sale **`rechazado`** por
     `operacion_duplicada` aunque todo lo demás cuadre —buen medio, buena
