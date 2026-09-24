@@ -26,6 +26,13 @@ export interface PickupKeyMessageFacts {
   orderName: string | null;
   agencyName: string | null;
   guideCode: string | null;
+  /**
+   * ¿El paquete ya está en la agencia? Desde el 24-09-2026 la clave sale en
+   * cuanto lo validado cubre el total, aunque el paquete siga en camino, así
+   * que el mensaje tiene que decir si ir ahora o esperar. Ausente = ya llegó,
+   * que es lo que decía el mensaje antes.
+   */
+  atAgency?: boolean;
 }
 
 /** El primer nombre, que es como se saluda; sin nombre, no se saluda a nadie. */
@@ -54,9 +61,15 @@ export function pickupKeyMessage(facts: PickupKeyMessageFacts, key: string): str
     "",
     `Tu clave de recojo es: *${key}*`,
     "",
-    facts.agencyName
-      ? `Preséntala con tu DNI en la agencia Shalom de ${facts.agencyName} para recoger tu pedido.`
-      : "Preséntala con tu DNI en la agencia Shalom donde llegó tu pedido.",
+    facts.atAgency === false
+      ? // Todavía en camino: se le da la clave ya, pero sin mandarla a una
+        // agencia donde el paquete no está. El aviso de llegada le dirá cuándo.
+        facts.agencyName
+        ? `Tu pedido va en camino a la agencia Shalom de ${facts.agencyName}. Cuando llegue, preséntala con tu DNI para recogerlo.`
+        : "Tu pedido va en camino a la agencia Shalom. Cuando llegue, preséntala con tu DNI para recogerlo."
+      : facts.agencyName
+        ? `Preséntala con tu DNI en la agencia Shalom de ${facts.agencyName} para recoger tu pedido.`
+        : "Preséntala con tu DNI en la agencia Shalom donde llegó tu pedido.",
   ];
   if (facts.guideCode) lineas.push(`Guía: ${facts.guideCode}`);
   lineas.push("", "¡Gracias por tu compra! 💜");

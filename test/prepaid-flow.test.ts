@@ -46,17 +46,22 @@ describe("la clave de recojo de un pedido pagado por web", () => {
 
   it("pero sigue exigiendo lo que NO habla de dinero", () => {
     // Saltarse el cobro no es saltarse el resto: sin clave registrada no hay
-    // nada que enseñar, un pedido cerrado no se recoge, y un paquete que aún no
-    // llegó a la agencia tampoco.
+    // nada que enseñar y un pedido cerrado no se recoge.
     expect(canRevealPickupKey(ctx({ paymentFacts: PREPAID, hasKey: false })).blockers).toEqual([
       "sin_clave",
     ]);
     expect(
       canRevealPickupKey(ctx({ paymentFacts: PREPAID, generalStatus: "anulado" })).blockers,
     ).toContain("pedido_cerrado");
+  });
+
+  it("y como está pagado entero, NO espera a que el paquete llegue", () => {
+    // Decisión del 24-09-2026: esperar a la agencia protegía de soltar un
+    // paquete sin cobrar, y el checkout ya cobró. Es la misma regla que para
+    // los comprobantes validados que cubren el total.
     expect(
       canRevealPickupKey(ctx({ paymentFacts: PREPAID, pickupState: "en_transito" })).blockers,
-    ).toContain("paquete_no_disponible");
+    ).not.toContain("paquete_no_disponible");
   });
 
   it("un reembolso vuelve a bloquear la clave", () => {

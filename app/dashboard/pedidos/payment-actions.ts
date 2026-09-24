@@ -37,6 +37,7 @@ import {
   canRevealPickupKey,
   describeBlockers,
   paymentPlanProblem,
+  packageAtAgency,
   paymentState,
   validationReleasesPickupKey,
   type PaymentSnapshot,
@@ -328,7 +329,7 @@ export async function loadPaymentPanel(
   let keyWindowOpen = false;
   let keyPreview = "";
   if (unlocks.length) {
-    const delivery = await keyDeliveryContext(admin, ctx.storeId, orderId);
+    const delivery = await keyDeliveryContext(admin, ctx.storeId, orderId, ctx.row.pickup_state);
     const entrante = [
       delivery.lastInboundAt,
       // El propio comprobante que se va a validar, si llegó por WhatsApp: es el
@@ -1383,6 +1384,8 @@ async function keyDeliveryContext(
   admin: ReturnType<typeof createAdminSupabase>,
   storeId: string,
   orderId: string,
+  /** Dónde está el paquete: el mensaje dice «ve ahora» o «cuando llegue». */
+  pickupState: string | null,
 ): Promise<KeyDeliveryContext> {
   const [order, master, draft, shipment] = await Promise.all([
     admin.from("orders").select("name,customer_phone").eq("id", orderId).maybeSingle(),
@@ -1460,6 +1463,7 @@ async function keyDeliveryContext(
         [s?.province, s?.district].filter(Boolean).join(" / ") ||
         null,
       guideCode: s?.guide_code ?? null,
+      atAgency: packageAtAgency(pickupState),
     },
     phone,
     lastInboundAt: marcas.length
@@ -1525,7 +1529,7 @@ async function deliverPickupKeyByWhatsapp(input: {
       return { sent: false, note: `La clave no se envió: ${describeBlockers(verdict)}` };
     }
 
-    const delivery = await keyDeliveryContext(admin, input.storeId, input.orderId);
+    const delivery = await keyDeliveryContext(admin, input.storeId, input.orderId, ctx.row.pickup_state);
     if (!delivery.phone) {
       return { sent: false, note: "La clave no se envió: el pedido no tiene celular." };
     }

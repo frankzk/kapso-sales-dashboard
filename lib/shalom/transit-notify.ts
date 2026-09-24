@@ -413,12 +413,14 @@ async function gatherFacts(
   orderName: string | null;
   /** Cuándo quedó disponible en la agencia; de aquí sale la fecha límite. */
   arrivedAt: string | null;
+  /** Estado general del pedido: a uno cerrado no se le escribe. */
+  generalStatus: string | null;
 }> {
   const [master, order, draft, payments, methods, llegada] = await Promise.all([
     orderId
       ? admin
           .from("order_master")
-          .select("order_name,customer_name,customer_phone,order_total")
+          .select("order_name,customer_name,customer_phone,order_total,general_status")
           .eq("order_id", orderId)
           .maybeSingle()
       : Promise.resolve({ data: null }),
@@ -452,6 +454,7 @@ async function gatherFacts(
     customer_name: string | null;
     customer_phone: string | null;
     order_total: number | null;
+    general_status: string | null;
   } | null;
   const o = (order.data ?? null) as {
     name: string | null;
@@ -502,7 +505,36 @@ async function gatherFacts(
     leadPhoneNumberId,
     orderName: m?.order_name ?? o?.name ?? null,
     arrivedAt: ((llegada.data ?? null) as { occurred_at: string } | null)?.occurred_at ?? null,
+    generalStatus: m?.general_status ?? null,
   };
+}
+
+const CLOSED_ORDER_STATUSES = ["anulado", "entregado", "devuelto"];
+
+/**
+ * Por qué NO mandar este aviso, o `null` si hay que mandarlo. Pura.
+ *
+ * Los dos avisos son de COBRO: llevan el saldo y los botones para pagarlo. Así
+ * que no salen a quien ya no debe nada ni a un pedido cerrado. #KP135533: a
+ * Alvina se le mandó «ya llegó a tu agencia» con saldo S/ 0.00 y los tres
+ * botones de pago, un día después de pagar todo y con el pedido ya marcado
+ * Entregado. Pedirle dinero a quien ya pagó es la forma más rápida de que deje
+ * de creerse los mensajes que sí importan.
+ *
+ * Saldo desconocido (sin total) NO se salta aquí: ahí la plantilla ya se niega
+ * sola por falta de datos, con el motivo escrito.
+ */
+export function noticeSkipReason(input: {
+  generalStatus: string | null | undefined;
+  orderTotal: number | null | undefined;
+  validatedAmount: number | null | undefined;
+}): string | null {
+  if (input.generalStatus && CLOSED_ORDER_STATUSES.includes(input.generalStatus)) {
+    return `el pedido ya está ${input.generalStatus}`;
+  }
+  const saldo = pendingBalance(input.orderTotal, input.validatedAmount);
+  if (saldo === 0) return "ya pagó todo: no hay saldo que cobrar";
+  return null;
 }
 
 type SendTemplate = typeof sendWhatsappTemplate;
@@ -597,6 +629,7 @@ export async function processTransitNotifications(
     if (outcome === "sent") report.sent += 1;
     else if (outcome === "failed") report.failed += 1;
     else if (outcome === "retry") report.deferred += 1;
+    else if (outcome === "skipped") report.skipped += 1;
   }
 
   return report;
@@ -613,7 +646,7 @@ async function sendOne(
   row: TransitQueueRow,
   cfg: TransitConfig,
   ctx: { nowIso: string; send: SendTemplate; kind?: NoticeKind },
-): Promise<"sent" | "failed" | "retry"> {
+): Promise<"sent" | "failed" | "retry" | "skipped"> {
   const attempts = (row.attempts ?? 0) + 1;
   const courier = cfg.courier ?? "shalom";
 
@@ -647,13 +680,28 @@ async function sendOne(
   const shipment = (sh ?? null) as ShipmentRow | null;
   if (!shipment) return fail("la guía ya no existe", { retryable: false });
 
-  const { facts, phone, leadPhoneNumberId, orderName, arrivedAt } = await gatherFacts(
+  const { facts, phone, leadPhoneNumberId, orderName, arrivedAt, generalStatus } = await gatherFacts(
     admin,
     row.store_id,
     shipment,
     row.order_id,
     courier,
   );
+
+  // Se decide AL ENVIAR y no al encolar: entre una cosa y otra la clienta puede
+  // haber pagado, y lo que importa es si debe algo cuando el mensaje sale.
+  const noAvisar = noticeSkipReason({
+    generalStatus,
+    orderTotal: facts.orderTotal,
+    validatedAmount: facts.validatedAmount,
+  });
+  if (noAvisar) {
+    await admin
+      .from("shalom_transit_notifications")
+      .update({ status: "skipped", error: noAvisar, updated_at: ctx.nowIso })
+      .eq("id", row.id);
+    return "skipped";
+  }
   // La fecha límite solo la pide el aviso de llegada; se calcula siempre
   // porque cuesta nada y así `transitBodyParams` decide con el dato delante.
   // Con los días de CADA courier: Olva devuelve a los 6, Shalom a los 28.

@@ -18,6 +18,7 @@ import {
   enqueueTransitNotification,
   moneyLabel,
   noticeGuideCode,
+  noticeSkipReason,
   parseTransitParams,
   pendingBalance,
   pickupDeadlineLabel,
@@ -747,5 +748,32 @@ describe("avisos de Olva", () => {
       table: "shalom_transit_notifications",
       patch: { status: "skipped", error: "aviso de Olva apagado en la tienda" },
     });
+  });
+});
+
+describe("a quién NO se le manda el aviso de cobro", () => {
+  // #KP135533: a Alvina se le mandó «ya llegó a tu agencia» con saldo S/ 0.00 y
+  // los tres botones de pago, un día después de pagar todo y con el pedido ya
+  // marcado Entregado.
+  it("a quien ya pagó todo", () => {
+    expect(noticeSkipReason({ generalStatus: "en_proceso", orderTotal: 298, validatedAmount: 298 })).toBe(
+      "ya pagó todo: no hay saldo que cobrar",
+    );
+  });
+
+  it("a un pedido cerrado, deba lo que deba", () => {
+    for (const estado of ["entregado", "anulado", "devuelto"]) {
+      expect(noticeSkipReason({ generalStatus: estado, orderTotal: 298, validatedAmount: 100 })).toContain(
+        estado,
+      );
+    }
+  });
+
+  it("a quien debe algo, sí se le manda", () => {
+    expect(noticeSkipReason({ generalStatus: "en_proceso", orderTotal: 298, validatedAmount: 100 })).toBeNull();
+  });
+
+  it("sin total conocido no decide aquí: la plantilla ya se niega sola", () => {
+    expect(noticeSkipReason({ generalStatus: "en_proceso", orderTotal: null, validatedAmount: 0 })).toBeNull();
   });
 });
