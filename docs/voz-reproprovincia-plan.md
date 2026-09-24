@@ -50,11 +50,11 @@ Kapta (Vercel)                     Zadarma                      xAI
 /api/cron/voice-recovery
   elige elegibles (§11.8)
   inserta voice_calls(queued)
-  GET /v1/request/callback/  ───▶  llama a la clienta (from)
-    from = 9XXXXXXXX (sin 51)       contesta y oye «espere a la conexión»
-    sip  = 104 (caller ID +51)      llama a 017058243 (to) ───▶  desvío SIP
-    to   = 17058243  (sin 51)                                   contesta el agente:
-    sin predicted                                               «¿Aló?» y la ficha
+  GET /v1/request/callback/  ───▶  escenario 1-11 (from) ──▶ ext. 104 ──▶ SIP de xAI
+    from = 1-11 (menú-tecla)        (dentro de la centralita)  contesta el agente,
+    sip  = 104 (caller ID +51)      llama a la clienta (to)    oye la locución y calla
+    to   = 9XXXXXXXX (sin 51)       clienta contesta y dice «¿Aló?» ─▶ el agente saluda
+    sin predicted
 
 /api/voice/tools/…         ◀──────────────────────────────────  tools del agente
   ata la llamada a su fila                                      (webhook HTTP)
@@ -64,30 +64,28 @@ Kapta (Vercel)                     Zadarma                      xAI
   finaliza voice_calls     ◀──  estadísticas / grabación        transcripción
 ```
 
-**La clienta primero, decidido el 23-09-2026.** En la Fase 1 el agente iba
-primero (`from` = número del agente): la locución de Zadarma la oía el agente y
-la clienta no. Las pruebas del 23-09-2026 mostraron el costo de ese orden: el
-celular de la clienta tarda ~30 s en timbrar, xAI cobra esa espera y el minuto
-entero de las que no contestan, el agente saludaba a una línea que aún sonaba
-(el recordatorio de silencio de la consola lo empujaba a hablar) y, si algo
-atendía la línea sin que timbrara, la llamada quedaba abierta minutos. Con la
-clienta primero, el agente solo entra cuando ella contestó.
+**El agente por un escenario de la centralita, decidido el 24-09-2026.** El
+callback marca primero `from` y luego `to`, y a quien contesta primero le
+reproduce «Por favor, espere a que se realice la conexión» (la API no deja
+apagarlo). Lo que se probó:
 
-Lo aceptado: la clienta oye unos segundos «Por favor, espere a que se realice
-la conexión» (la API no deja apagarlo; `predicted` tampoco). En la consola de
-xAI el agente va con el «Welcome message» **encendido** en «¿Aló?»: cuando
-entra, la clienta ya está en línea y puede haber dicho su «Aló» durante la
-locución, así que el agente habla primero.
+| `from` → `to` | Qué oye la clienta | Audio | Veredicto |
+| --- | --- | --- | --- |
+| número del agente → clienta | al agente directo | comprimido: el tramo del agente sale a la red y vuelve | descartado |
+| clienta → número del agente | locución y un tono, luego el agente | algo mejor | descartado por la locución |
+| extensión con desvío a SIP URI (como `from` o `to`) | nada: no llega | — | el callback no aplica el desvío de una extensión |
+| **escenario `1-11` → clienta** | **al agente directo, sin locución ni tono** | sin vuelta por la red | **elegido** |
 
-**El audio.** El tramo del agente sale a la red telefónica (Zadarma llama al
-número del agente, que desvía a xAI) y vuelve a entrar; suena más comprimido
-que una llamada directa al número, que se oye clara. Una extensión de la
-centralita con desvío «siempre» al SIP URI de xAI **no sirve** en el callback,
-ni como `from` ni como `to`: Zadarma no aplica el desvío y la llamada no llega
-(probado el 23-09-2026). Si el audio pesa en el piloto, la salida es originar
-desde un proveedor que conecte directo al SIP URI (Twilio `<Dial><Sip>`): la
-comparación de costos del 23-09-2026 lo dejaba más barato que el agente
-primero y algo más caro que Zadarma con la clienta primero.
+El escenario vive en un menú **sin números asignados** («Menú 2», `menu_id` 1)
+para no tocar las llamadas entrantes de la otra operación de la cuenta; su
+escenario «sin pulsar» (tecla 11) llama a la extensión 104, desviada «siempre»
+al SIP URI de xAI. La 104 hace de caller ID (`sip`) y de puente al agente.
+`GET /v1/pbx/ivr/` y `GET /v1/pbx/ivr/scenario/?menu_id=1` lo muestran.
+
+Como el agente conecta primero, va con el «Welcome message» **apagado** y el
+prompt le ordena callar hasta oír a una persona e ignorar la locución. xAI
+cobra los segundos de timbre y las no contestadas hasta el corte por silencio
+de la consola (recordatorio a los 30 s, corte tras dos).
 
 Los dos números van **sin `51`**: la cuenta lo antepone sola, y con `51` el
 historial registraba `5151…` y `failed`.
@@ -217,8 +215,8 @@ del cron de backup; el enlace queda nulo y la transcripción sigue.
 `/api/cron/voice-recovery`, cada 20 minutos dentro del horario
 (`vercel.json`): por tienda con `voice_recovery_auto`, calcula la cola, toma
 hasta lo que quede del tope, inserta `voice_calls(queued)` y pide el callback a
-Zadarma (`GET /v1/request/callback/` con `from` = cliente, `to` = número del
-agente y `sip` = la extensión con caller ID peruano, los números sin `51`,
+Zadarma (`GET /v1/request/callback/` con `from` = escenario del agente,
+`to` = cliente y `sip` = la extensión con caller ID peruano, los números sin `51`,
 **sin `predicted`**, firmado con la clave de la cuenta). Mientras la
 atadura sea por tiempo (opción 2 de la arquitectura), el cron **no encola una
 segunda llamada si hay una `dialing` o `in_progress` en esa tienda**. En modo
@@ -537,9 +535,9 @@ from voice_calls vc where vc.outcome = 'acepta';
 
 1. **Caller ID peruano. Hecho el 22-09-2026:** la extensión **104**
    (`499499-104`) tiene caller ID `+5117058243`, y
-   `from=930555309&sip=104&to=17058243` llama a la clienta mostrando el número
-   peruano y, cuando contesta, conecta al agente. No usar la 103: es de la
-   operación de Costa Rica. La 104 va **sin desvío**: solo presta su caller ID.
+   `from=1-11&sip=104&to=930555309` conecta al agente por el escenario y llama
+   a la clienta mostrando el número peruano. No usar la 103: es de la
+   operación de Costa Rica. La 104 va con desvío «siempre» al SIP URI de xAI.
 2. **Migración. Aplicada en producción el 22-09-2026**, con el nombre
    `0170_voice_calls` en el historial de Supabase: se escribió como 0170 y se
    renumeró a 0190 al traer la rama de integración, que ya usaba 0170–0189 para
@@ -551,7 +549,7 @@ from voice_calls vc where vc.outcome = 'acepta';
    (o por SQL):
    ```sql
    update stores
-      set voice_recovery_agent_number = '17058243',
+      set voice_recovery_agent_number = '1-11',  -- escenario de la centralita
           voice_recovery_zadarma_sip  = '104'
     where name = 'Kenku Peru';
    ```
@@ -598,6 +596,7 @@ sin anotar el resultado aquí.
 | 6 · Llamada real desde Kapta | 23-09-2026 | **Sí.** «Probar en mi teléfono» sobre #KP135098: el agente saludó con la ficha, negoció la fecha y registró `confirma` (lunes 28 y jueves 24); 44 s de conversación. Ajustes de la consola que hicieron falta: sin la regla «cinco segundos de silencio → cuelga» (colgaba antes de que timbrara) y con los recordatorios de silencio más largos. |
 | 7 · Audio del callback | 23-09-2026 | **Comprimido con el agente primero; algo mejor con la clienta primero.** Directo al número: claro. La grabación de xAI suena bien: la pérdida está en la vuelta por la red telefónica. |
 | 8 · Extensión con desvío a SIP URI | 23-09-2026 | **No sirve en el callback**, ni como `from` ni como `to`: la llamada no llega al agente. |
+| 10 · Escenario de la centralita como `from` | 24-09-2026 | **Sí.** `from=1-11&sip=104&to=918100477`: la clienta contesta y oye al agente directo, sin locución ni tono. Es la ruta elegida. |
 | 9 · Líneas que «contestan» sin timbrar | 23-09-2026 | Un celular de prueba (918100477) no timbró en tres intentos y Zadarma los cobró como contestados (28 s, 6 min): los atendió la red del operador. Otro celular (930555309) sí timbró. Con clientas reales cuenta como «no contesta» aunque nunca vieran la llamada; se mide en el piloto. |
 
 1. **¿Contesta el agente?** Llamar desde un celular al `01 705 8243`. Si

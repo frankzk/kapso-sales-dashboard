@@ -39,6 +39,12 @@ import {
 } from "@/lib/shipments";
 import { motivoParaMostrar } from "@/lib/aliclik-status";
 import { normalizeDepartment } from "@/lib/peru-departamentos";
+import {
+  REPRO_COVERAGE_OPTIONS,
+  reproCoverageDefault,
+  reproCoverageKey,
+  reproCoverageLabel,
+} from "@/lib/order-coverage";
 import type {
   LinkedShipmentSummary,
   ShipmentCallRow,
@@ -357,6 +363,12 @@ function useDialogKeys(
 const SIN_DISTRITO = "(sin distrito)";
 const SIN_DEPARTAMENTO = "(sin departamento)";
 
+function sameSet(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const v of a) if (!b.has(v)) return false;
+  return true;
+}
+
 // Departamento del reporte de Aliclik (columna DEPARTAMENTO → region). Se usa el
 // departamento, no la provincia, para agrupar el filtro superior.
 //
@@ -394,6 +406,8 @@ export function ShipmentsBoard({
   // client-side filters over the loaded view. Empty set = "all".
   const [storeFilter, setStoreFilter] = useState<Set<string>>(new Set());
   const [departmentFilter, setDepartmentFilter] = useState<Set<string>>(new Set());
+  // Abre con TODO MENOS LIMA: ver `reproCoverageDefault`.
+  const [coverageFilter, setCoverageFilter] = useState<Set<string>>(reproCoverageDefault);
   const [districtFilter, setDistrictFilter] = useState<Set<string>>(new Set());
   const [dateFilter, setDateFilter] = useState(""); // YYYY-MM-DD on next_followup_at
   const [unmatchedOnly, setUnmatchedOnly] = useState(false);
@@ -495,6 +509,7 @@ export function ShipmentsBoard({
     const base = shipments.filter(
       (s) =>
         (storeFilter.size === 0 || storeFilter.has(s.store_id)) &&
+        (coverageFilter.size === 0 || coverageFilter.has(reproCoverageKey(s.order_coverage))) &&
         (departmentFilter.size === 0 || departmentFilter.has(shipmentDepartment(s))) &&
         (districtFilter.size === 0 || districtFilter.has(s.district || SIN_DISTRITO)) &&
         (!dateFilter || (s.next_followup_at ? s.next_followup_at.slice(0, 10) === dateFilter : false)) &&
@@ -546,6 +561,7 @@ export function ShipmentsBoard({
     shipments,
     view,
     storeFilter,
+    coverageFilter,
     departmentFilter,
     districtFilter,
     dateFilter,
@@ -758,6 +774,14 @@ export function ShipmentsBoard({
     // La tienda elegida sobrevive al cambio de pestaña: es con quién trabajas,
     // no qué estás mirando.
     { active: storeFilter.size > 0, reset: () => setStoreFilter(new Set()), survivesViewChange: true },
+    // Cobertura: «activo» es apartarse de TODO MENOS LIMA, que es como abre.
+    // Sobrevive al cambio de pestaña, como la tienda: es qué cola estás
+    // trabajando, no qué estás mirando.
+    {
+      active: !sameSet(coverageFilter, reproCoverageDefault()),
+      reset: () => setCoverageFilter(reproCoverageDefault()),
+      survivesViewChange: true,
+    },
     { active: departmentFilter.size > 0, reset: () => setDepartmentFilter(new Set()) },
     { active: districtFilter.size > 0, reset: () => setDistrictFilter(new Set()) },
     { active: Boolean(dateFilter), reset: () => setDateFilter("") },
@@ -1057,6 +1081,14 @@ export function ShipmentsBoard({
                   })}
                 </div>
               )}
+              <ChecklistFilter
+                label="Cobertura"
+                options={[...REPRO_COVERAGE_OPTIONS]}
+                selected={coverageFilter}
+                onChange={setCoverageFilter}
+                optionLabel={reproCoverageLabel}
+                capitalize={false}
+              />
               {departmentOptions.length > 1 && (
                 <ChecklistFilter
                   label="Departamento"

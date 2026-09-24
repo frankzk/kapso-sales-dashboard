@@ -484,3 +484,41 @@ export async function refreshOrderCoverage(
   await admin.rpc("refresh_aliclik_cod_points", { p_org_id: orgId });
   await admin.rpc("refresh_order_coverage", { p_org_id: orgId });
 }
+
+/**
+ * La cobertura de una guía para filtrar Repro Provincia: la de SU PEDIDO. Una
+ * guía sin pedido vinculado no tiene cobertura que leer y va aparte, para no
+ * esconderla dentro de ninguna otra.
+ */
+export const REPRO_SIN_PEDIDO = "sin_pedido";
+
+export const REPRO_COVERAGE_OPTIONS = [
+  "provincia_cod",
+  "agencia",
+  "por_revisar",
+  REPRO_SIN_PEDIDO,
+  "lima",
+] as const;
+
+export function reproCoverageLabel(key: string): string {
+  if (key === REPRO_SIN_PEDIDO) return "Sin pedido vinculado";
+  return ORDER_COVERAGE_LABEL[key as OrderCoverage] ?? key;
+}
+
+/** Clave de filtro de una guía, a partir de la cobertura de su pedido. */
+export function reproCoverageKey(coverage: string | null | undefined): string {
+  return coverage?.trim() || REPRO_SIN_PEDIDO;
+}
+
+/**
+ * Cómo abre el filtro: TODO MENOS LIMA.
+ *
+ * Repro Provincia es la cola de provincia, pero cada salida «por definir» de
+ * Lima también cae ahí, porque nace pendiente y sin courier. Medido el
+ * 24-09-2026: de la cola pendiente, ~3.770 guías eran salidas de Lima contra
+ * ~200 de provincia. Lima se reprograma en su propia mesa (MOM §9), así que
+ * aquí sobra por defecto; quien la necesite marca «Lima» en el filtro.
+ */
+export function reproCoverageDefault(): Set<string> {
+  return new Set(REPRO_COVERAGE_OPTIONS.filter((key) => key !== "lima"));
+}

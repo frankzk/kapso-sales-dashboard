@@ -315,6 +315,12 @@ export interface ShipmentRow {
   delivery_status: string; // see lib/shipments.ts
   status_category: string; // pending | in_route | delivered | closed
   order_id: string | null;
+  /**
+   * Cobertura del PEDIDO (`order_master.coverage`): lima, provincia_cod,
+   * agencia, por_revisar. Se añade al leer la cola de Envíos para poder sacar
+   * Lima de Repro Provincia; null sin pedido vinculado.
+   */
+  order_coverage?: string | null;
   matched: boolean;
   match_method: string | null; // order_name | phone | manual | none
   order_name: string | null;

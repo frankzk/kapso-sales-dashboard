@@ -166,6 +166,22 @@ describe("la atadura: la llamada se elige por la fila, no por el teléfono", () 
     });
   });
 
+  it("un celular peruano ajeno (una clienta que devuelve la llamada) no recibe la ficha abierta", () => {
+    expect(pickOpenCall([call({})], "dialing", { now: NOW, customerPhone: "+51 918 100 477" })).toEqual({
+      error: "otro_numero",
+    });
+    expect(pickOpenCall([call({ status: "in_progress", started_at: hace(1) })], "in_progress", {
+      now: NOW,
+      customerPhone: "918100477",
+    })).toEqual({ error: "otro_numero" });
+  });
+
+  it("el caller del callback (el número de la cuenta o del agente) no bloquea: se usa la única abierta", () => {
+    for (const caller of ["+442045775777", "+5117058243", "+12027734798", ""]) {
+      expect(pickOpenCall([call({})], "dialing", { now: NOW, customerPhone: caller })).toEqual({ call: call({}) });
+    }
+  });
+
   it("una llamada caducada no recibe nada: ni la ficha ni el registro", () => {
     expect(isStale(call({ dialed_at: hace(4) }), NOW)).toBe(true);
     expect(pickOpenCall([call({ dialed_at: hace(4) })], "dialing", { now: NOW })).toEqual({ error: "ninguna" });
