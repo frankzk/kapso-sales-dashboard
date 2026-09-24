@@ -139,10 +139,36 @@ describe("canRevealPickupKey — las seis condiciones", () => {
     }
   });
 
-  it("el paquete todavía en tránsito bloquea", () => {
-    expect(canRevealPickupKey(ctx({ pickupState: "en_transito" })).blockers).toContain(
-      "paquete_no_disponible",
+  it("pagado ENTERO y validado, la clave sale aunque el paquete siga en camino", () => {
+    // Decisión del 24-09-2026. Esperar a la agencia protegía de soltar un
+    // paquete sin cobrar; con lo validado cubriendo el total ese riesgo ya no
+    // existe. #KP135533: la clienta pagó con el paquete en tránsito y tuvieron
+    // que consultar la clave dos veces como excepción.
+    const v = canRevealPickupKey(ctx({ pickupState: "en_transito" }));
+    expect(v.allowed).toBe(true);
+  });
+
+  it("con lo cargado SIN validar, el paquete en tránsito sigue bloqueando", () => {
+    // Solo lo validado levanta la espera: un comprobante que nadie miró no es
+    // dinero confirmado, y ahí la regla de siempre sigue en pie.
+    const v = canRevealPickupKey(
+      ctx({
+        pickupState: "en_transito",
+        payments: [payment("adelanto"), payment("diferencia", "pendiente_revision")],
+      }),
     );
+    expect(v.blockers).toContain("paquete_no_disponible");
+  });
+
+  it("pagado por web tampoco espera a que llegue", () => {
+    const v = canRevealPickupKey(
+      ctx({
+        pickupState: "en_transito",
+        payments: [],
+        paymentFacts: { financialStatus: "paid", paymentGateway: "checkout" },
+      }),
+    );
+    expect(v.blockers).not.toContain("paquete_no_disponible");
   });
 
   it("sin información de dónde está el paquete NO se bloquea por ello", () => {

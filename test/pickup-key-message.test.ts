@@ -109,8 +109,11 @@ describe("qué comprobante hace que la clave pueda salir sola", () => {
     expect(validationReleasesPickupKey(sinValidar, "dif")).toBe(false);
   });
 
-  it("si el paquete no está en la agencia, no libera aunque el dinero esté", () => {
-    expect(validationReleasesPickupKey({ ...base, pickupState: "en_transito" }, "dif")).toBe(false);
+  it("con el paquete todavía en camino, TAMBIÉN libera: pagado entero no espera", () => {
+    // #KP135533: la clienta pagó el saldo con el paquete en tránsito, se validó
+    // y la clave no salió porque llegaba al día siguiente. Al validar, además,
+    // la clienta acaba de escribir: es cuando la ventana de 24 h está abierta.
+    expect(validationReleasesPickupKey({ ...base, pickupState: "en_transito" }, "dif")).toBe(true);
   });
 
   it("sin clave registrada no hay nada que enviar", () => {
@@ -136,5 +139,32 @@ describe("qué comprobante hace que la clave pueda salir sola", () => {
 
   it("un comprobante que no es de este pedido no decide nada", () => {
     expect(validationReleasesPickupKey(base, "otro-pago")).toBe(false);
+  });
+});
+
+describe("el mensaje cuando el paquete todavía va en camino", () => {
+  const facts = {
+    customerName: "Alvina Rodríguez",
+    orderName: "#KP135533",
+    agencyName: "Motupe",
+    guideCode: "96687586",
+  };
+
+  it("da la clave pero no la manda a una agencia donde el paquete aún no está", () => {
+    const texto = pickupKeyMessage({ ...facts, atAgency: false }, "1234");
+    expect(texto).toContain("*1234*");
+    expect(texto).toContain("va en camino a la agencia Shalom de Motupe");
+    expect(texto).toContain("Cuando llegue");
+    expect(texto).not.toContain("Preséntala con tu DNI en la agencia");
+  });
+
+  it("si ya llegó, dice que vaya", () => {
+    expect(pickupKeyMessage({ ...facts, atAgency: true }, "1234")).toContain(
+      "Preséntala con tu DNI en la agencia Shalom de Motupe para recoger tu pedido.",
+    );
+  });
+
+  it("sin saber dónde está, se asume que llegó: es lo que ya decía", () => {
+    expect(pickupKeyMessage(facts, "1234")).toContain("para recoger tu pedido.");
   });
 });
