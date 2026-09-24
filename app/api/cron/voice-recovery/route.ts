@@ -125,6 +125,9 @@ async function run(req: NextRequest) {
     }
   }
 
+  // Vercel no guarda la respuesta del cron: sin esta línea, «no llamó a nadie»
+  // no se puede distinguir de «cola vacía» ni de «todos excluidos por X».
+  console.log(`[voice-recovery] ${JSON.stringify({ dry, stores: reports })}`);
   return NextResponse.json({ ok: true, dry, at: now.toISOString(), stores: reports });
 }
 
