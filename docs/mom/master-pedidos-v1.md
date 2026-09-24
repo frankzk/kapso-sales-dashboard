@@ -976,6 +976,34 @@ que nadie tenga que resumirla a mano:
 - Seguimiento Lima vuelve a llamar, elige otro courier permitido y solicita un
   nuevo armado si el paquete anterior todavía está con el courier.
 - No es obligatorio esperar la devolución anterior para crear otra salida.
+  Tampoco el reporte ni la liquidación de la ruta del otro courier: si Grupo GF
+  no entregó hoy, el pedido puede salir mañana por Tanders o Swayp con la caja
+  de Grupo GF todavía en la calle.
+
+#### Las guías con API también aceptan la salida adicional
+
+La mesa de ruta manual (Axel, Urpi, Grupo GF) ya lo cumplía: con otra salida viva
+pide el motivo y sigue. **Tanders y Swayp directa se negaban en seco** con «el
+pedido ya tiene una guía activa, anúlala antes de crear otra» — y una salida con
+la caja en la calle no se puede anular, así que el pedido quedaba sin ninguna
+acción posible. Pasó con #KP134960 (Tanders) y #KP134416 (Swayp) el 24-09-2026.
+
+Las dos pasan ahora por la misma regla, `puertaDeSalidaAdicional`:
+
+- **En Lima, otra salida viva pide motivo, no bloquea.** El motivo queda en su
+  propio evento (`additional_output_reason`) con las salidas que seguían vivas.
+- **No se afloja nada más**: el máximo de cinco salidas (§4) y la repetición por
+  courier —Swayp, Urpi y Tanders una sola vez por pedido en Lima (§9.3)— se
+  aplican igual, con `canRepeatCourier`, la misma que usa la mesa manual.
+- **Fuera de Lima no cambia**: Reproprovincia sigue exigiendo que no haya otra
+  salida viva antes de una Swayp directa (Fase 3).
+- **Lima se decide con `order_master.macro_operation`**, la misma fuente que la
+  mesa manual.
+- **El aviso nombra al courier de verdad.** El de Swayp directa elegía entre dos
+  nombres —`fenix` → Swayp, todo lo demás → Aliclik— y anunció como de Aliclik
+  una salida de Grupo GF, mandando a buscarla al panel equivocado.
+- Si una de las salidas entrega, las demás siguen vivas y hay que cancelarlas:
+  es la tarea urgente de §4.
 
 Responsable principal: Daysi. Diana apoya rutas y cotejo.
 

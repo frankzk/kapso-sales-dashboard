@@ -365,3 +365,171 @@ export function canRepeatCourier(input: {
   // una política acordada; Fase 1 no debe inventar un bloqueo comercial.
   return { allowed: true, reason: "ok" };
 }
+
+/**
+ * El nombre de un courier tal como lo dice la operación.
+ *
+ * EXISTE POR UN AVISO QUE MANDABA A OTRO SITIO. La guía Swayp directa decía
+ * «ya tiene una guía activa: MOM-KP134416-PROPIO-… (Aliclik · pendiente)», y la
+ * salida era de Grupo GF Courier. El código elegía entre dos nombres —`fenix` →
+ * Swayp, todo lo demás → Aliclik— así que cualquier otro courier se anunciaba
+ * como Aliclik, y quien lo leía iba a buscar al panel de Aliclik una guía que
+ * no estaba ahí.
+ *
+ * Lo desconocido se devuelve tal cual: un id crudo es feo pero no miente.
+ */
+export function nombreDeCourier(courier: string | null | undefined): string {
+  const key = (courier ?? "").trim().toLowerCase();
+  const nombres: Record<string, string> = {
+    aliclik: "Aliclik",
+    fenix: "Swayp",
+    swayp: "Swayp",
+    tanders: "Tanders",
+    shalom: "Shalom",
+    olva: "Olva",
+    urpi: "Urpi",
+    axel: "Axel Courier",
+    "axel courier": "Axel Courier",
+    propio: "Grupo GF Courier",
+    "motorizado propio": "Grupo GF Courier",
+    [COURIER_TBD]: "Sin courier definido",
+  };
+  return nombres[key] ?? (courier?.trim() || "courier desconocido");
+}
+
+/** Lo mínimo de una salida existente para decidir si estorba a otra. */
+export interface SalidaExistente {
+  courier: string;
+  delivery_status: string;
+  guide_code?: string | null;
+  output_code?: string | null;
+  created_via?: string | null;
+  custody_state?: string | null;
+  custody_transferred_at?: string | null;
+}
+
+const ESTADOS_VIVOS = new Set(["pendiente", "en_ruta", "por_preparar"]);
+
+/**
+ * Las salidas que siguen vivas y que la guía nueva NO va a aprovechar.
+ *
+ * Una «por definir» todavía en casa no cuenta: la guía se le escribe encima.
+ * Una devuelta tampoco: ya volvió.
+ */
+export function salidasQueEstorban<T extends SalidaExistente>(outputs: readonly T[]): T[] {
+  return outputs.filter(
+    (o) =>
+      ESTADOS_VIVOS.has(o.delivery_status) &&
+      o.custody_state !== "devuelto" &&
+      !isFillableRouteOutput({
+        courier: o.courier,
+        created_via: o.created_via ?? null,
+        delivery_status: o.delivery_status,
+        custody_state: o.custody_state ?? null,
+        custody_transferred_at: o.custody_transferred_at ?? null,
+      }),
+  );
+}
+
+function describirSalida(o: SalidaExistente): string {
+  const codigo = o.output_code?.trim() || o.guide_code?.trim() || "sin código";
+  return `${codigo} (${nombreDeCourier(o.courier)}, ${o.delivery_status})`;
+}
+
+function mismoCourier(a: string, b: string): boolean {
+  const canon = (c: string) => {
+    const k = c.trim().toLowerCase();
+    if (k === "swayp") return "fenix";
+    if (k === "axel courier") return "axel";
+    if (k === "motorizado propio") return "propio";
+    return k;
+  };
+  return canon(a) === canon(b);
+}
+
+export type PuertaDeSalidaAdicional =
+  | { ok: true; estorban: SalidaExistente[]; motivo: string | null }
+  | { ok: false; error: string; estorban: SalidaExistente[]; pideMotivo: boolean };
+
+/**
+ * ¿Se puede emitir una guía de este courier con otra salida todavía viva?
+ *
+ * EN LIMA, SÍ. Es el principio 7 del MOM —«un pedido puede tener varias
+ * salidas físicas simultáneas»— y §9 lo concreta: «no es obligatorio esperar la
+ * devolución anterior para crear otra salida». Si Grupo GF no entregó hoy, no
+ * hay que esperar su reporte ni la liquidación de su ruta para mandarlo mañana
+ * por Tanders o por Swayp.
+ *
+ * La mesa de ruta manual (Axel, Urpi, Grupo GF) ya lo cumplía: con otra salida
+ * activa pide el motivo y sigue. Tanders y Swayp directa, en cambio, se negaban
+ * en seco con «el pedido ya tiene una guía activa, anúlala» — y anularla no es
+ * posible cuando la caja ya está en la calle. Eran callejones sin salida para
+ * #KP134960 y #KP134416 (24-09-2026).
+ *
+ * Lo que NO se afloja, porque también es del MOM:
+ *   · la salida adicional exige MOTIVO escrito (§23, «justificación auditada»);
+ *   · el máximo de cinco salidas por pedido (§4);
+ *   · la repetición por courier (§9.3): Swayp, Urpi y Tanders una sola vez por
+ *     pedido en Lima. Es `canRepeatCourier`, la misma que usa la mesa manual.
+ *
+ * FUERA DE LIMA NO CAMBIA NADA. Reproprovincia sigue exigiendo que no haya otra
+ * salida viva antes de una Swayp directa (Fase 3: «valida nuevamente … salidas
+ * activas»); solo que ahora el aviso nombra bien al courier.
+ */
+export function puertaDeSalidaAdicional(input: {
+  /** Courier de la guía que se quiere emitir: `tanders`, `fenix`… */
+  courier: string;
+  operation: "lima" | "provincia_cod" | "agencia" | "desconocida";
+  /** TODAS las salidas del pedido, vivas o no: la repetición cuenta todas. */
+  outputs: readonly SalidaExistente[];
+  motivo: string | null | undefined;
+}): PuertaDeSalidaAdicional {
+  const estorban = salidasQueEstorban(input.outputs);
+  const motivo = input.motivo?.trim() || null;
+  if (!estorban.length) return { ok: true, estorban, motivo: null };
+
+  const lista = estorban.map(describirSalida).join(", ");
+  const nombre = nombreDeCourier(input.courier);
+
+  if (input.operation !== "lima") {
+    return {
+      ok: false,
+      pideMotivo: false,
+      estorban,
+      error:
+        `Este pedido ya tiene una salida activa: ${lista}. ` +
+        "Fuera de Lima hay que gestionarla o anularla antes de emitir otra guía.",
+    };
+  }
+
+  const repeticion = canRepeatCourier({
+    courier: input.courier,
+    operation: input.operation,
+    priorOutputsWithCourier: input.outputs.filter((o) => mismoCourier(o.courier, input.courier)).length,
+    totalOutputs: input.outputs.length,
+  });
+  if (!repeticion.allowed) {
+    return {
+      ok: false,
+      pideMotivo: false,
+      estorban,
+      error:
+        repeticion.reason === "max_outputs"
+          ? `El pedido ya alcanzó el máximo de ${MAX_OUTPUTS_PER_ORDER} salidas.`
+          : `${nombre} ya se usó en este pedido y en Lima solo se permite una vez.`,
+    };
+  }
+
+  if (!motivo) {
+    return {
+      ok: false,
+      pideMotivo: true,
+      estorban,
+      error:
+        `Este pedido todavía tiene ${estorban.length === 1 ? "una salida activa" : `${estorban.length} salidas activas`}: ${lista}. ` +
+        `En Lima puedes sacarlo por ${nombre} sin esperar su reporte: escribe el motivo de la salida adicional.`,
+    };
+  }
+
+  return { ok: true, estorban, motivo };
+}

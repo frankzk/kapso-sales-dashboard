@@ -38,6 +38,7 @@ export function TandersGuideModal({
   const [phone, setPhone] = useState("");
   const [amount, setAmount] = useState("0");
   const [note, setNote] = useState("");
+  const [motivo, setMotivo] = useState("");
 
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<{ code: string; labelUrl?: string } | null>(null);
@@ -76,7 +77,11 @@ export function TandersGuideModal({
   const pointError = pasted && !pasted.ok ? pasted.error : null;
 
   const blocked = (draft?.blockers.length ?? 0) > 0;
-  const canSubmit = Boolean(draft && !blocked && point && !pointError && !pending && !created);
+  // Con otra salida viva, en Lima no se bloquea: se pide el motivo (MOM §23).
+  const faltaMotivo = Boolean(draft?.salidaAdicional) && !motivo.trim();
+  const canSubmit = Boolean(
+    draft && !blocked && !faltaMotivo && point && !pointError && !pending && !created,
+  );
 
   function submit() {
     start(async () => {
@@ -87,6 +92,7 @@ export function TandersGuideModal({
         recipientPhone: phone,
         collectionAmount: Number(amount) || 0,
         note,
+        motivoSalidaAdicional: draft?.salidaAdicional ? motivo : null,
       });
       if (res.error) {
         setError(res.error);
@@ -141,6 +147,27 @@ export function TandersGuideModal({
                 {w}
               </p>
             ))}
+
+            {/* OTRA SALIDA VIVA EN LIMA. No es un bloqueo: el MOM permite varias
+                salidas a la vez (principio 7, §9) y exige el motivo por escrito.
+                Antes decía «anúlala antes de crear otra», y con la caja en la
+                calle no había cómo. */}
+            {draft.salidaAdicional && !created && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+                <p>{draft.salidaAdicional}</p>
+                <textarea
+                  value={motivo}
+                  onChange={(e) => setMotivo(e.target.value)}
+                  rows={2}
+                  placeholder="Ej. Grupo GF no lo entregó hoy; sale mañana por Tanders sin esperar su reporte."
+                  className="mt-2 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900"
+                />
+                <p className="mt-1 text-xs text-amber-800">
+                  Queda registrado en el pedido. Si la otra salida termina entregando, hay que
+                  cancelar esta.
+                </p>
+              </div>
+            )}
 
             {created ? (
               <div className="space-y-2 rounded-lg bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
