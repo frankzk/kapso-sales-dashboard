@@ -2051,6 +2051,15 @@ demás entradas elegibles. Se acotan con el chip **«Por recuperar»** de la fil
 de filtros. Una pestaña más sería un balde más que nadie mira, que es el mismo
 motivo por el que los segmentos de leads se fusionaron.
 
+**La cola abre sin Lima.** Cada salida «por definir» de Lima nace pendiente y
+sin courier, así que también caía en Repro Provincia: medido el 24-09-2026, de
+la cola pendiente ~3.770 guías eran salidas de Lima contra ~200 de provincia.
+Lima se reprograma en su propia mesa (§9). El filtro **Cobertura** —la misma
+columna que filtra el Master, `order_master.coverage`— abre con todo marcado
+menos Lima; «Limpiar filtros» vuelve a eso y no a «todo», y quien necesite Lima
+la marca. Las guías sin pedido vinculado van aparte y se ven por defecto: no se
+esconde una guía por no saber su cobertura.
+
 **Envíos aplica la MISMA regla que el Master**, no una propia. Hasta la v1.10
 Envíos decidía «por recuperar» con dos condiciones —cerrada y etiqueta de
 intento fallido— y el Master con cuatro —más la ventana y el descarte—. Medido

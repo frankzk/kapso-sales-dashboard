@@ -667,13 +667,46 @@ export async function getStoreShipments(
   // cuanto entra o sale stock: una guía En ruta se listaba como "Sin stock
   // Fenix" mientras el drawer —que sí recalcula— decía "Fenix ok" para esa
   // misma guía. Dos respuestas distintas para la misma pregunta.
-  const withEligibility = await withCurrentFenixEligibility(sb, out2);
+  const withEligibility = await withOrderCoverage(sb, await withCurrentFenixEligibility(sb, out2));
   if (view !== "pendiente") return withEligibility;
 
   // "Contactos de hoy" sí es exclusivo de la cola de Pendiente. Va encadenado
   // (no en paralelo) sobre las filas ya recalculadas, así que arrastra la
   // elegibilidad fresca y no hace falta volver a fusionarla.
   return withTodayContactCount(sb, withEligibility, storeIds);
+}
+
+/**
+ * La cobertura del pedido de cada guía, para el filtro «Cobertura» de Envíos.
+ *
+ * Se lee de `order_master.coverage`, la definición canónica (`order_coverage_for`)
+ * — la misma columna que filtra el Master. Mejor esfuerzo: si la lectura falla,
+ * las filas vuelven sin cobertura y caen en «Sin pedido vinculado», que el
+ * filtro deja visible por defecto. Nunca se esconde una guía por no saber.
+ */
+async function withOrderCoverage(
+  sb: SupabaseClient,
+  rows: ShipmentRow[],
+): Promise<ShipmentRow[]> {
+  const orderIds = Array.from(
+    new Set(rows.map((r) => r.order_id).filter((id): id is string => !!id)),
+  );
+  if (!orderIds.length) return rows;
+  const byOrder = new Map<string, string | null>();
+  for (const part of chunk(orderIds, 300)) {
+    const { data, error } = await sb
+      .from("order_master")
+      .select("order_id,coverage")
+      .in("order_id", part);
+    if (error) return rows;
+    for (const r of (data ?? []) as { order_id: string; coverage: string | null }[]) {
+      byOrder.set(r.order_id, r.coverage);
+    }
+  }
+  return rows.map((row) => ({
+    ...row,
+    order_coverage: row.order_id ? byOrder.get(row.order_id) ?? null : null,
+  }));
 }
 
 /** Count of shipments matching a category set (exact, not row-capped). */
