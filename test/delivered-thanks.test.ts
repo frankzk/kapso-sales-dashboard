@@ -178,7 +178,7 @@ describe("una corrida del cron", () => {
       creds(),
       async (_o, p) => {
         llamadas.push(p);
-        return { ok: true };
+        return { ok: true, id: null };
       },
       NOW,
     );
@@ -201,7 +201,7 @@ describe("una corrida del cron", () => {
       creds(),
       async () => {
         envios += 1;
-        return { ok: true };
+        return { ok: true, id: null };
       },
       NOW,
     );
@@ -218,14 +218,14 @@ describe("una corrida del cron", () => {
       pedido({ order_id: `o${i}`, customer_phone: `519${String(i).padStart(8, "0")}` }),
     );
     const { admin } = fakeAdmin(muchos);
-    const r = await runDeliveredThanks(admin, "s1", creds(), async () => ({ ok: true }), NOW);
+    const r = await runDeliveredThanks(admin, "s1", creds(), async () => ({ ok: true, id: null }), NOW);
     expect(r.sent).toBe(THANKS_BATCH_CAP);
   });
 
   it("fuera de horario no envía nada", async () => {
     const { admin } = fakeAdmin([pedido()]);
     const madrugada = "2026-09-25T08:00:00.000Z"; // 03:00 en Lima
-    const r = await runDeliveredThanks(admin, "s1", creds(), async () => ({ ok: true }), madrugada);
+    const r = await runDeliveredThanks(admin, "s1", creds(), async () => ({ ok: true, id: null }), madrugada);
     expect(r).toEqual({ sent: 0, failed: 0, skipped: 0 });
   });
 
