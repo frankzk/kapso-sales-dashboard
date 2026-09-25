@@ -5603,6 +5603,14 @@ recepción incorpora automáticamente sus paradas a `/reparto`, dentro de la mis
 transacción que transfiere custodia. Los otros couriers conservan sus manifiestos
 diarios actuales. Nunca se borran historiales ni se sustituyen paradas reportadas.
 
+**Reintento con el mismo envío (25-09-2026, 0192):** un paquete «no entregado»
+vuelve a salir otro día con el mismo `shipment_id` (la guía y el QR no cambian).
+La recepción de la nueva caja le suma una parada nueva en la ruta del día; la
+parada anterior queda como historia. Lo único prohibido es que un envío tenga
+dos paradas **pendientes** a la vez (`delivery_stop_shipment_open_uniq`): el
+mismo paquete en dos rutas abiertas. Antes el índice cubría toda la historia y
+el último escaneo de «Recibir mi caja» fallaba con `delivery_stop_shipment_uniq`.
+
 ### 29.6 Agenda y cambios posteriores al corte
 
 - Una tienda puede pactar fecha y una franja amplia de aproximadamente cinco
