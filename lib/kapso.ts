@@ -315,6 +315,13 @@ export async function sendWhatsappTemplate(
      * viva en ese momento. `filename` es lo que ve el cliente.
      */
     headerDocument?: { link: string; filename?: string };
+    /**
+     * La parte variable de los botones de URL DINÁMICA, uno por botón y en el
+     * orden en que están en la plantilla. Meta solo deja una variable por
+     * botón y tiene que ir AL FINAL de la URL aprobada: la plantilla guarda
+     * `https://…/kenku-peru/?wa={{1}}` y acá va solo `51945425593`.
+     */
+    buttonUrlParams?: string[];
   },
 ): Promise<WhatsappSendResult> {
   const components: Record<string, unknown>[] = [];
@@ -338,6 +345,14 @@ export async function sendWhatsappTemplate(
       parameters: params.bodyParams.map((text) => ({ type: "text", text })),
     });
   }
+  (params.buttonUrlParams ?? []).forEach((text, index) => {
+    components.push({
+      type: "button",
+      sub_type: "url",
+      index: String(index),
+      parameters: [{ type: "text", text }],
+    });
+  });
   return postWhatsappMessage(opts, params.phoneNumberId, {
     messaging_product: "whatsapp",
     recipient_type: "individual",

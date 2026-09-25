@@ -6559,3 +6559,33 @@ y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
   cuyo `rider_id` es su ficha. Los dominios y sus estados siguen legibles
   porque son vocabulario, no datos de nadie. Del Master lee solo los pedidos de
   sus rutas (0186, §27).
+
+## 31. Agradecimiento con catálogo al entregar
+
+Cuando un pedido pasa a **entregado**, se le manda a la clienta una plantilla de
+WhatsApp: gracias por la compra y un botón al **catálogo privado** de su tienda,
+con los precios de descuento ya aplicados. El catálogo identifica a la clienta
+por su celular (`?wa=`), así que el botón es de **URL dinámica**: la plantilla
+aprobada guarda `https://…/kenku-peru/?wa={{1}}` y cada envío pone el número.
+
+- **Es una plantilla, y de Marketing.** La entrega llega días después de la
+  última conversación: la ventana de 24 h ya se cerró. Lleva una oferta, y Meta
+  reclasifica o rechaza una oferta presentada como Utilidad. Meta además no
+  entrega todas las de marketing a quien ya recibió muchas esa semana; que
+  algunas no lleguen es normal.
+- **Las 48 horas y el «único uso» del texto son un recurso de urgencia**, no
+  una restricción: el catálogo es una página estática y no caduca. Decidido así
+  por el owner el 25-09-2026.
+- **Una vez por pedido y una por clienta cada 7 días.** Quien recibe dos
+  pedidos el mismo día recibe un solo agradecimiento.
+- **Solo entregas recientes** (72 h por defecto). Muchas entregas se marcan en
+  bloque al importar un reporte de Aliclik, días después, y un «gracias» de
+  hace una semana suena a error.
+- **Tope de 25 por corrida y horario** (9 a 21 h por defecto). Una importación
+  que marca 200 entregas de golpe no puede convertirse en 200 plantillas de
+  marketing en un minuto: es lo que le baja la calidad al número.
+- **El celular del botón va en dígitos, sin «+»**: en una URL el «+» se lee como
+  un espacio.
+- **Nace apagado en todas las tiendas.** Se enciende en Ajustes de la tienda →
+  «Agradecer al entregar», con el nombre de la plantilla ya aprobada en la WABA
+  de esa tienda. Cada envío y cada rechazo quedan en `delivered_thanks_sends`.
