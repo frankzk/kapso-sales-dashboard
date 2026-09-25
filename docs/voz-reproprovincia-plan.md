@@ -8,8 +8,10 @@
 > `/api/internal/voice/test-call`; barrido `/api/cron/voice-recovery` (cada 5
 > min, `?dry=1` para medir la cola sin llamar); panel «Agente de voz» en el
 > drawer del Master (Reproprovincia) con «Llamar con el agente» y «Probar en mi
-> teléfono»; bloque en Ajustes de la tienda. Falta: transcripción al cerrar la
-> llamada, etiqueta «Acepta reenvío» en la cola y renglón del resumen diario.
+> teléfono»; bloque en Ajustes de la tienda. Desde el 25-09 un «confirma» crea
+> la salida Swayp por el mismo camino que «Reenviar por Swayp» (MOM §11.8).
+> Falta: transcripción al cerrar la llamada, etiqueta «Acepta reenvío · salida
+> no creada» en la cola y renglón del resumen diario.
 
 ## Objetivo
 

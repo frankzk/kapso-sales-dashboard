@@ -49,7 +49,10 @@ describe("esNumeroDeGuiaSwayp separa las dos familias", () => {
 });
 
 describe("las cuatro puertas exigen el número de Swayp", () => {
-  const server = readFileSync(resolve(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8");
+  // Las acciones de Envíos y el reenvío compartido con el agente de voz.
+  const server =
+    readFileSync(resolve(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8") +
+    readFileSync(resolve(process.cwd(), "lib/swayp-reenvio.ts"), "utf8");
 
   it("la guía directa no crea nada si Swayp no emitió", () => {
     expect(server).toContain("Swayp no emitió la guía: ${viaApi.reason}. No se creó ninguna salida.");

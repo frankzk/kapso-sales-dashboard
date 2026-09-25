@@ -140,7 +140,9 @@ describe("las tres puertas de Envíos", () => {
   const ui = readFileSync(resolve(process.cwd(), "components/shipments.tsx"), "utf8");
 
   it("la reja está en el cuello por el que pasan las tres", () => {
-    const fn = src.slice(src.indexOf("async function spinOffFenixGuide"));
+    // Vive en lib/swayp-reenvio.ts: la comparte el agente de voz (MOM §11.8).
+    const lib = readFileSync(resolve(process.cwd(), "lib/swayp-reenvio.ts"), "utf8");
+    const fn = lib.slice(lib.indexOf("async function spinOffFenixGuide"));
     const cuerpo = fn.slice(0, fn.indexOf('.from("shipments")\n    .insert('));
     expect(cuerpo).toContain("const faltan = await swaypSinVinculo(");
     expect(cuerpo).toContain("if (faltan.length) return { error: avisoSinVinculoSwayp(faltan) };");

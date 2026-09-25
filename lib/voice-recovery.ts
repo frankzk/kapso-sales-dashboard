@@ -401,3 +401,51 @@ export function translateGestion(
     ? { kind: "discard", disposition: "cancela", reason, note: noteFor("no quiere el pedido"), extra: { ...extra, motivo } }
     : { kind: "propose_discard", disposition: "cancela", reason, note: noteFor("propone descartar"), extra: { ...extra, motivo } };
 }
+
+// ── La dirección que confirmó la clienta ─────────────────────────────────────
+
+const NUMEROS_HABLADOS: Record<string, string> = {
+  uno: "1", una: "1", dos: "2", tres: "3", cuatro: "4", cinco: "5",
+  seis: "6", siete: "7", ocho: "8", nueve: "9", diez: "10",
+};
+const ABREVIATURAS: Record<string, string> = {
+  manzana: "mz", mza: "mz", lote: "lt", avenida: "av", jiron: "jr", calle: "ca",
+  urbanizacion: "urb", asentamiento: "aa", pasaje: "pj", numero: "n", nro: "n",
+};
+
+/** Letras y cifras en minúscula, sin tildes, con números dichos en cifras. */
+function direccionCompacta(s: string | null | undefined): string {
+  return String(s ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .map((w) => NUMEROS_HABLADOS[w] ?? ABREVIATURAS[w] ?? w)
+    .join("");
+}
+
+/**
+ * ¿La dirección que el agente dice confirmada es la que ya tiene el pedido?
+ * (MOM §11.8, salida por el agente.)
+ *
+ * El prompt pide `direccion_confirmada` solo si cambió, pero el agente la
+ * manda casi siempre, leyendo en voz alta la de la ficha: «Sorana los ángeles
+ * zona uno mzD lote 8». Se compara sin tildes, espacios ni signos y con los
+ * números dichos en cifras. Es la misma si una contiene a la otra, o si la
+ * dirección más la referencia de la ficha contienen lo que se dijo.
+ *
+ * Ante la duda, no es la misma: una salida a la dirección equivocada es un
+ * paquete perdido, y una no creada la crea después una persona.
+ */
+export function mismaDireccion(
+  confirmada: string | null | undefined,
+  direccion: string | null | undefined,
+  referencia?: string | null,
+): boolean {
+  const dicha = direccionCompacta(confirmada);
+  if (!dicha) return true;
+  const base = direccionCompacta(direccion);
+  if (!base) return false;
+  return dicha.includes(base) || base.includes(dicha) || (base + direccionCompacta(referencia)).includes(dicha);
+}

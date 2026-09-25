@@ -11,13 +11,16 @@
 //   POST https://<kapta>/api/voice/tools/registrar_gestion?agente=17058243
 //   Authorization: Bearer <VOICE_TOOLS_SECRET>
 //   { disposition, fecha?, rango?, direccion_confirmada?, referencia?, motivo?, resumen }
+//
+// Un «confirma» con fecha crea además la salida Swayp (`crearSalidaSwaypDelAgente`).
 
-import { NextResponse, type NextRequest } from "next/server";
+import { after, NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { discardRecovery } from "@/lib/recovery-discard";
 import { pickOpenCall, translateGestion, voiceDates } from "@/lib/voice-recovery";
 import {
+  crearSalidaSwaypDelAgente,
   loadCall,
   loadStoreVoiceConfig,
   openCalls,
@@ -28,7 +31,9 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+// La salida Swayp se pide después de responder (`after`) y cuenta contra este
+// tope: la API de Swayp puede tardar varios segundos.
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   if (!voiceToolAuthorized(req)) {
@@ -101,5 +106,20 @@ export async function POST(req: NextRequest) {
   // El prompt ordena no reintentar si falla: se responde el fallo tal cual y
   // la fila queda `failed` con la transcripción para que una persona retome.
   if (writeError) return NextResponse.json({ ok: false, error: "no se pudo registrar" });
+
+  // Aceptó el reenvío con fecha: el agente crea la salida Swayp por el mismo
+  // camino que «Reenviar por Swayp» (MOM §11.8, decisión del 25-09-2026).
+  // Va DESPUÉS de responder: la clienta sigue en línea y la API de Swayp puede
+  // tardar. Si una reja dice que no, el motivo queda en la llamada y en el log.
+  if (call.mode === "real" && action.kind === "attempt" && action.result === "confirmado") {
+    const fecha = String(action.extra.fecha_entrega ?? "");
+    after(() =>
+      crearSalidaSwaypDelAgente(admin, call, {
+        fecha,
+        direccionConfirmada: (action.extra.direccion_confirmada as string | null) ?? null,
+        resumen: String(body.resumen ?? ""),
+      }).then(() => undefined),
+    );
+  }
   return NextResponse.json({ ok: true, modo: call.mode });
 }

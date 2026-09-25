@@ -3152,7 +3152,7 @@ de §6.1 (`lib/voice-recovery.ts`, `translateGestion`):
 
 | `disposition` | Resultado de §6.1 |
 | --- | --- |
-| `confirma` con fecha futura | `confirmado`, con fecha, rango y dirección en el payload |
+| `confirma` con fecha futura | `confirmado`, con fecha, rango y dirección en el payload, y **crea la salida Swayp** (ver abajo) |
 | `confirma` sin fecha futura | `se_deja_mensaje` con la nota «revisar»: sin fecha no hay reprogramación (§11.6) |
 | `programar` con fecha | `volver_a_contactar` |
 | `programar` sin fecha | `se_deja_mensaje` |
@@ -3184,14 +3184,33 @@ Reglas de esa tabla:
   el hecho que cierra la recuperación es la guía nueva, no la palabra de la
   clienta (§11, «Sale por cuatro puertas»). El resolver lo ignora ahí y una
   prueba lo fija.
-- **Aceptar no crea la guía.** Crear una salida Swayp valida stock, vínculo de
-  producto y ciudad, y la firma alguien de almacén (§11, «El vínculo se
-  comprueba ANTES»). El agente no tiene esa mano. Lo que sí hace es dejar el
-  pedido **primero en la cola de Reproprovincia** con la etiqueta «Acepta
-  reenvío · crear salida Swayp», derivada de «`confirmed` por `agente_voz` sin
-  salida posterior», no de un estado guardado. Un aceptado que a las 24 horas
-  sigue sin salida aparece en el resumen diario del owner (§17.1) como
-  **«aceptado sin salida»**: la llamada se hizo y alguien la dejó caer.
+- **Aceptar crea la salida Swayp** (decisión del owner, 25-09-2026; antes el
+  agente solo dejaba el pedido marcado para que almacén la creara). Tras un
+  `confirma` con fecha futura, Kapta crea la salida por **el mismo camino que
+  «Reenviar por Swayp» de Envíos** (`reenviarGuiaAnulada`), con las mismas
+  rejas y sin atajos:
+  - cobertura y stock de hoy;
+  - stock ítem por ítem;
+  - vínculo de codbar (§11, «El vínculo se comprueba ANTES»);
+  - número emitido por Swayp.
+
+  La guía anulada queda como madre `transferido` y nace la hija Swayp En ruta
+  con la fecha que aceptó la clienta. El actor es nulo y la nota dice «Agente
+  de voz». Se pide **después de responder** a la tool, con la clienta todavía
+  en línea, y **una sola vez por llamada**. La fila se reclama antes de llamar
+  a Swayp porque su API no deshace una guía: un segundo POST sería un segundo
+  paquete.
+- **No crea la salida** si la dirección que dijo la clienta no es la del
+  pedido (`mismaDireccion`: se compara sin tildes, signos ni espacios y con
+  los números dichos en cifras). Ante la duda, no es la misma: una salida a la
+  dirección equivocada es un paquete perdido, y una salida no creada la crea
+  después una persona. Tampoco la crea si falla cualquier reja. En los dos
+  casos el motivo queda en `voice_calls.outcome_payload.salida_swayp` y en el
+  log, y el pedido sigue en **En gestión Reproprovincia** con su `confirmed`:
+  lo termina una persona con «Reenviar por Swayp».
+- Pendiente: la etiqueta «Acepta reenvío · salida no creada» en la cola y el
+  renglón **«aceptado sin salida»** del resumen diario del owner (§17.1), para
+  los aceptados cuya salida falló.
 - Todo hecho que escribe lleva en `payload` el `voice_call_id`, y la línea de
   tiempo del drawer lo muestra con actor **«Agente de voz»** y enlace a la
   transcripción. Un intento que no se puede leer después no es historial
