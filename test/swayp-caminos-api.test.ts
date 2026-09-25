@@ -19,7 +19,12 @@ import { describe, expect, it } from "vitest";
  * `swaypGuideForReprogram`, falla acá y no en producción seis semanas después.
  */
 const ACTIONS = "app/dashboard/envios/actions.ts";
-const source = readFileSync(resolve(process.cwd(), ACTIONS), "utf8");
+// El reenvío de una anulada vive en lib/swayp-reenvio.ts desde que lo comparte
+// el agente de voz (MOM §11.8). Las dos fuentes se leen juntas: un camino nuevo
+// en cualquiera de las dos tiene que aparecer clasificado abajo.
+const REENVIO = "lib/swayp-reenvio.ts";
+const source =
+  readFileSync(resolve(process.cwd(), ACTIONS), "utf8") + "\n" + readFileSync(resolve(process.cwd(), REENVIO), "utf8");
 
 /** El cuerpo de una función exportada, hasta su llave de cierre en columna 0. */
 function cuerpoDe(nombre: string): string {
@@ -28,7 +33,7 @@ function cuerpoDe(nombre: string): string {
   return source.slice(start, source.indexOf("\n}", start));
 }
 
-const CREAN_GUIA = ["registerRerouteCall", "reprogramCancelledShipmentException"];
+const CREAN_GUIA = ["registerRerouteCall", "reenviarGuiaAnulada"];
 
 describe("todos los caminos de reprogramación piden el número a Swayp", () => {
   for (const fn of CREAN_GUIA) {
@@ -66,6 +71,16 @@ describe("todos los caminos de reprogramación piden el número a Swayp", () => 
       expect(cuerpoDe(fn)).toContain("${viaApi.reason}");
     });
   }
+
+  it("el botón de Envíos y el agente de voz reenvían por el MISMO camino", () => {
+    // Dos puertas y una sola reja: si el agente tuviera su propia copia, el día
+    // que cambie una regla de stock o de vínculo se desincronizarían.
+    expect(cuerpoDe("reprogramCancelledShipmentException")).toContain("reenviarGuiaAnulada(");
+    const voz = readFileSync(resolve(process.cwd(), "lib/voice-recovery-server.ts"), "utf8");
+    const agente = voz.slice(voz.indexOf("export async function crearSalidaSwaypDelAgente("));
+    expect(agente).toContain("await reenviarGuiaAnulada(");
+    expect(agente).not.toContain("createGuide(");
+  });
 
   it("el camino MANUAL no pide número, y es correcto", () => {
     // `createFenixGuide` recibe el código que el operador ESCRIBIÓ porque ya

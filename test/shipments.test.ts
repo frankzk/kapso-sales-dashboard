@@ -868,7 +868,9 @@ describe("los DOS botones de guía Fenix resuelven el nombre igual", () => {
     // La comprobación era «acuñar el código local y ver si sale vacío». Al
     // retirar el código local (16-09-2026) pasó a ser directa sobre el nombre,
     // pero la resolución sigue siendo la compartida y eso es lo que se fija.
-    const server = readFileSync(resolve(process.cwd(), "app/dashboard/envios/actions.ts"), "utf8");
+    // El reenvío vive en lib/swayp-reenvio.ts desde que lo comparte el agente
+    // de voz (MOM §11.8).
+    const server = readFileSync(resolve(process.cwd(), "lib/swayp-reenvio.ts"), "utf8");
     expect(server).toContain(
       'if (!effectiveOrderName(current.order_name, linkedOrderName)?.trim()) {',
     );

@@ -12,6 +12,7 @@ import {
   VOICE_SOURCE,
   buildFicha,
   isStale,
+  mismaDireccion,
   staleCallResolution,
   translateGestion,
   voiceDates,
@@ -21,6 +22,7 @@ import {
 } from "@/lib/voice-recovery";
 import { compareVoiceCandidates, voiceRecoveryEligible } from "@/lib/voice-recovery-queue";
 import { requestCallback, zadarmaLocalPeru } from "@/lib/zadarma";
+import { reenviarGuiaAnulada } from "@/lib/swayp-reenvio";
 
 const OPEN_STATUSES = ["queued", "dialing", "in_progress"] as const;
 
@@ -607,4 +609,88 @@ export async function realCallsToday(admin: SupabaseClient, storeId: string, now
     .eq("mode", "real")
     .gte("queued_at", limaMidnightUtc.toISOString());
   return count ?? 0;
+}
+
+// ── La salida Swayp que crea el agente (MOM §11.8) ───────────────────────────
+
+export type SalidaSwaypAgente =
+  | { ok: true; guia: string; guia_anulada: string }
+  | { ok: false; motivo: string };
+
+/**
+ * Crea la salida Swayp de un pedido que la clienta aceptó por teléfono
+ * (decisión del owner, 25-09-2026). Usa el MISMO camino que «Reenviar por
+ * Swayp» de Envíos, `reenviarGuiaAnulada`: cobertura y stock de hoy, stock
+ * ítem por ítem, vínculo de codbar y número emitido por Swayp. Si una reja
+ * dice que no, no se crea nada y el motivo queda en la llamada.
+ *
+ * No crea la salida si la dirección que dijo la clienta no es la del pedido
+ * (`mismaDireccion`): esa la corrige una persona.
+ *
+ * Una sola vez por llamada. La fila se reclama antes de pedirle el número a
+ * Swayp, porque su API no deshace una guía y un segundo POST sería un segundo
+ * paquete.
+ */
+export async function crearSalidaSwaypDelAgente(
+  admin: SupabaseClient,
+  call: VoiceCallRow,
+  gestion: { fecha: string; direccionConfirmada: string | null; resumen: string },
+): Promise<SalidaSwaypAgente> {
+  const guardar = async (salida: SalidaSwaypAgente | { estado: "creando" }, soloSiLibre: boolean) => {
+    const { data: row } = await admin.from("voice_calls").select("outcome_payload").eq("id", call.id).maybeSingle();
+    const payload = ((row as { outcome_payload?: Record<string, unknown> } | null)?.outcome_payload ?? {}) as Record<
+      string,
+      unknown
+    >;
+    if (soloSiLibre && payload.salida_swayp) return false;
+    let q = admin
+      .from("voice_calls")
+      .update({ outcome_payload: { ...payload, salida_swayp: salida } })
+      .eq("id", call.id);
+    if (soloSiLibre) q = q.is("outcome_payload->salida_swayp", null);
+    const { data } = await q.select("id");
+    return Boolean(data?.length);
+  };
+
+  if (call.mode !== "real") return { ok: false, motivo: "llamada de prueba" };
+  if (!(await guardar({ estado: "creando" }, true))) {
+    return { ok: false, motivo: "esta llamada ya pidió su salida" };
+  }
+
+  const resultado = await (async (): Promise<SalidaSwaypAgente> => {
+    const { data: guias } = await admin
+      .from("shipments")
+      .select("id, guide_code, delivery_address, delivery_reference")
+      .eq("order_id", call.order_id)
+      .eq("delivery_status", "anulado")
+      .is("fenix_shipment_id", null)
+      .order("updated_at", { ascending: false })
+      .limit(1);
+    const anulada = (guias ?? [])[0] as
+      | { id: string; guide_code: string; delivery_address: string | null; delivery_reference: string | null }
+      | undefined;
+    if (!anulada) return { ok: false, motivo: "el pedido no tiene una guía anulada sin reemplazo" };
+
+    if (!mismaDireccion(gestion.direccionConfirmada, anulada.delivery_address, anulada.delivery_reference)) {
+      return {
+        ok: false,
+        motivo: `la clienta dio otra dirección («${gestion.direccionConfirmada}»): la corrige una persona antes de crear la salida`,
+      };
+    }
+
+    const r = await reenviarGuiaAnulada(admin, { userId: null, storeId: call.store_id }, anulada.id, {
+      nextFollowupAt: new Date(`${gestion.fecha}T00:00:00Z`).toISOString(),
+      note: `Agente de voz: la clienta aceptó el reenvío por teléfono. ${gestion.resumen}`.trim(),
+    });
+    if ("error" in r) return { ok: false, motivo: r.error };
+    return { ok: true, guia: r.guideCode, guia_anulada: r.sourceGuide };
+  })();
+
+  await guardar(resultado, false);
+  if (resultado.ok) {
+    await recomputeOrderMasterSafe(admin, [call.order_id]);
+  } else {
+    console.error(`[voice-recovery] salida Swayp no creada (llamada ${call.id}): ${resultado.motivo}`);
+  }
+  return resultado;
 }
