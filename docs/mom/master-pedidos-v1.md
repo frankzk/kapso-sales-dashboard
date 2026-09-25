@@ -3255,7 +3255,13 @@ adelanto, ese pedido no entró a su cola.
 Una tienda (Kenku), dos semanas. **Decisión del owner, 23-09-2026:** el
 automático se enciende desde el primer día con el tope de 30 llamadas diarias,
 en lugar de una semana a mano desde el drawer; el tope es la marcha atrás, y
-apagar `voice_recovery_auto` la detiene. Todas las transcripciones de la
+apagar `voice_recovery_auto` la detiene. **Ajuste del owner, 25-09-2026:**
+Kenku pasa a `voice_recovery_daily_cap = 80` y `voice_recovery_max_age_days =
+21`. El primer día el tope de 30 se agotó a las 11:45 con 37 pedidos todavía
+en cola, y el límite de 7 días dejaba fuera 817 pedidos, unos 300 de ellos con
+stock Swayp completo. Se mide la tasa de «confirma» por antigüedad de la guía
+(0–7, 8–14 y 15–21 días) para decidir si la parte tibia vale la llamada.
+Todas las transcripciones de la
 primera semana se escuchan. Se decide con estas cifras, comparadas con la
 línea base de cero llamadas:
 
