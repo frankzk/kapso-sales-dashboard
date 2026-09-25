@@ -358,6 +358,29 @@ describe("agencia (§10)", () => {
     expect(matchesFilters(agencyRow("4", { agency_expires_at: null }), f, NOW)).toBe(false);
   });
 
+  // #KP134959 (25-09-2026): Olva fija la fecha límite al llegar a la oficina y
+  // la deja puesta al entregar. El pedido salía en «Próximos a vencer» con el
+  // drawer diciendo «Entregado». Lo entregado, recogido o devuelto no vence.
+  it("lo ya recogido o entregado no está «por vencer» aunque conserve la fecha", () => {
+    const f = withFilter({ expiringSoon: true });
+    const vence = "2026-07-21T10:00:00.000Z";
+    for (const pickup_state of ["entregado", "recogido", "devuelto_al_origen", "retorno_iniciado", "en_transito"]) {
+      expect(matchesFilters(agencyRow("x", { pickup_state, agency_expires_at: vence }), f, NOW)).toBe(false);
+    }
+    for (const pickup_state of ["disponible_para_recojo", "cliente_notificado", "pendiente_de_recojo", "proximo_a_vencer"]) {
+      expect(matchesFilters(agencyRow("y", { pickup_state, agency_expires_at: vence }), f, NOW)).toBe(true);
+    }
+    // Y el contador de la tira dice lo mismo que el filtro.
+    const summary = agencySummary(
+      [
+        agencyRow("1", { pickup_state: "entregado", agency_expires_at: vence }),
+        agencyRow("2", { pickup_state: "disponible_para_recojo", agency_expires_at: vence }),
+      ],
+      NOW,
+    );
+    expect(summary.proximosAVencer).toBe(1);
+  });
+
   it("el resumen cuenta lo accionable y deja fuera a los devueltos", () => {
     const summary = agencySummary(
       [
