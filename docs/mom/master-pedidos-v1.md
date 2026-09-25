@@ -3084,8 +3084,12 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
   escribe el mismo `sin_respuesta` que habría escrito el agente, con día de
   gestión (`staleCallResolution`). Incluye, sin poder distinguirlos, los
   pocos casos en que contestó pero el tramo del agente no conectó. Una
-  llamada que llegó al agente y en diez minutos no registró se cortó a media
-  conversación: queda `sin_resultado` y no toca el pedido.
+  llamada que llegó al agente y en diez minutos no registró también se
+  cierra como **no contestó** y, en modo real, se escribe igual
+  (decisión del owner, 25-09-2026). En las pruebas fueron buzones que el
+  agente tomó por persona o clientas que colgaron antes de decidir. Si no se
+  escribiera, el pedido quedaría sin rastro y volvería a la cola el mismo
+  día. Solo una llamada que ni se llegó a marcar queda `sin_resultado`.
 - **Modo prueba.** Una llamada en `mode = 'test'` usa la ficha de un pedido
   real, llama al teléfono de quien prueba y **no escribe nada sobre el
   pedido**: solo su fila. No cuenta para topes ni métricas.

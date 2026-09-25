@@ -109,9 +109,9 @@ export async function writeVoiceAttempt(
 /**
  * Cierra las llamadas abiertas cuya ventana pasó. Sin esto, una llamada que
  * nunca conectó dejaría ocupado el número del agente para siempre (hay un
- * índice único de una abierta por número). Una real que nunca llegó al agente
- * es una clienta que no contestó, y se registra como tal
- * (`staleCallResolution`).
+ * índice único de una abierta por número). Una real que no terminó en
+ * gestión, porque nunca llegó al agente o porque se cortó sin registrar,
+ * se registra como «no contesta» (`staleCallResolution`).
  */
 export async function sweepStaleCalls(admin: SupabaseClient, now: Date): Promise<void> {
   const { data } = await admin
@@ -132,8 +132,12 @@ export async function sweepStaleCalls(admin: SupabaseClient, now: Date): Promise
       .select("id");
     if (!r.registerNoAnswer || !closed?.length) continue;
 
+    const resumen =
+      c.status === "in_progress"
+        ? "No contestó: la llamada llegó al agente pero se cortó sin gestión (buzón o cuelgue)."
+        : "No contestó: la llamada no llegó al agente.";
     const action = translateGestion(
-      { disposition: "no_contesta", resumen: "No contestó: la llamada no llegó al agente." },
+      { disposition: "no_contesta", resumen },
       { today: voiceDates(now).hoy, canDiscard: false, voiceCallId: c.id },
     );
     if (action.kind !== "attempt") continue;

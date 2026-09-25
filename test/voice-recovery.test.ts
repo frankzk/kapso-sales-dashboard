@@ -211,8 +211,18 @@ describe("llamadas caducadas: la clienta se marca primero (§11.8)", () => {
     });
   });
 
-  it("una cortada a media conversación no es gestión: sin resultado y sin escribir", () => {
-    expect(staleCallResolution({ status: "in_progress", mode: "real" })).toMatchObject({
+  it("una que llegó al agente y se cortó sin registrar también es «no contesta» y se registra", () => {
+    expect(staleCallResolution({ status: "in_progress", mode: "real" })).toEqual({
+      status: "completed",
+      outcome: "no_contesta",
+      error: "sin registrar_gestion dentro de la ventana",
+      registerNoAnswer: true,
+    });
+    expect(staleCallResolution({ status: "in_progress", mode: "test" })).toMatchObject({ registerNoAnswer: false });
+  });
+
+  it("una que ni se marcó queda sin resultado y no escribe", () => {
+    expect(staleCallResolution({ status: "queued", mode: "real" })).toMatchObject({
       status: "failed",
       outcome: "sin_resultado",
       registerNoAnswer: false,
