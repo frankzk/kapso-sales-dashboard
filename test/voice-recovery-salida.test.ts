@@ -74,3 +74,24 @@ describe("registrar_gestion crea la salida Swayp solo cuando corresponde (§11.8
     expect(agente).toContain("{ userId: null, storeId: call.store_id }");
   });
 });
+
+describe("el barrido recoge los aceptados sin salida pedida (§11.8)", () => {
+  const cron = readFileSync(resolve(process.cwd(), "app/api/cron/voice-recovery/route.ts"), "utf8");
+  const server = readFileSync(resolve(process.cwd(), "lib/voice-recovery-server.ts"), "utf8");
+  const pendientes = server.slice(server.indexOf("export async function salidasSwaypPendientes("));
+
+  it("solo llamadas reales, «confirma» con resultado confirmado, sin intento previo", () => {
+    expect(pendientes).toContain('.eq("mode", "real")');
+    expect(pendientes).toContain('.eq("outcome", "confirma")');
+    expect(pendientes).toContain('.is("outcome_payload->salida_swayp", null)');
+    expect(pendientes).toContain('p.resultado !== "confirmado"');
+  });
+
+  it("pasa por la misma función que el agente, con su reclamación de una sola vez", () => {
+    expect(pendientes).toContain("await crearSalidaSwaypDelAgente(admin, row,");
+  });
+
+  it("el modo de prueba (dry) no crea nada", () => {
+    expect(cron).toContain("const salidas = dry ? [] : await salidasSwaypPendientes(admin, now);");
+  });
+});

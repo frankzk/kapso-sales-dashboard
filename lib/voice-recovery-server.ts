@@ -694,3 +694,38 @@ export async function crearSalidaSwaypDelAgente(
   }
   return resultado;
 }
+
+/**
+ * Los «confirma» reales que todavía no pidieron su salida Swayp. El barrido los
+ * recoge (MOM §11.8). Cubre la llamada cuyo `after()` murió antes de pedirla y
+ * las aceptadas antes de que existiera la salida por el agente (25-09-2026).
+ * Una llamada que ya la intentó, con éxito o no, trae `salida_swayp` y no
+ * vuelve: un reintento lo decide una persona.
+ */
+export async function salidasSwaypPendientes(
+  admin: SupabaseClient,
+  now: Date,
+): Promise<{ llamada: string; resultado: SalidaSwaypAgente }[]> {
+  const desde = new Date(now.getTime() - 3 * 24 * 3600_000).toISOString();
+  const { data } = await admin
+    .from("voice_calls")
+    .select("id, store_id, order_id, mode, status, outcome_payload")
+    .eq("mode", "real")
+    .eq("outcome", "confirma")
+    .gte("queued_at", desde)
+    .is("outcome_payload->salida_swayp", null);
+  const out: { llamada: string; resultado: SalidaSwaypAgente }[] = [];
+  for (const row of (data ?? []) as (VoiceCallRow & { outcome_payload: Record<string, unknown> | null })[]) {
+    const p = row.outcome_payload ?? {};
+    // Solo un `confirmado` de verdad: un «confirma» sin fecha futura se tradujo a
+    // `se_deja_mensaje` y no tiene fecha de entrega.
+    if (p.resultado !== "confirmado" || typeof p.fecha !== "string") continue;
+    const resultado = await crearSalidaSwaypDelAgente(admin, row, {
+      fecha: p.fecha,
+      direccionConfirmada: typeof p.direccion_confirmada === "string" ? p.direccion_confirmada : null,
+      resumen: typeof p.resumen === "string" ? p.resumen : "",
+    });
+    out.push({ llamada: row.id, resultado });
+  }
+  return out;
+}

@@ -20,6 +20,7 @@ import {
   openCalls,
   placeVoiceCall,
   realCallsToday,
+  salidasSwaypPendientes,
   sweepStaleCalls,
   type VoiceStoreSettings,
 } from "@/lib/voice-recovery-server";
@@ -55,6 +56,9 @@ async function run(req: NextRequest) {
   const stores = (data ?? []) as VoiceStoreSettings[];
 
   if (!dry) await sweepStaleCalls(admin, now);
+  // Los aceptados sin salida Swayp pedida (MOM §11.8). Fuera del horario de
+  // llamadas también: la salida no molesta a nadie y la fecha ya está pactada.
+  const salidas = dry ? [] : await salidasSwaypPendientes(admin, now);
   const busyAgents = new Set((await openCalls(admin)).map((c) => c.agent_number));
 
   const reports: StoreReport[] = [];
@@ -127,8 +131,8 @@ async function run(req: NextRequest) {
 
   // Vercel no guarda la respuesta del cron: sin esta línea, «no llamó a nadie»
   // no se puede distinguir de «cola vacía» ni de «todos excluidos por X».
-  console.log(`[voice-recovery] ${JSON.stringify({ dry, stores: reports })}`);
-  return NextResponse.json({ ok: true, dry, at: now.toISOString(), stores: reports });
+  console.log(`[voice-recovery] ${JSON.stringify({ dry, stores: reports, salidas })}`);
+  return NextResponse.json({ ok: true, dry, at: now.toISOString(), stores: reports, salidas });
 }
 
 export const GET = run;
