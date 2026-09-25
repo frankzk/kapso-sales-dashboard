@@ -145,6 +145,26 @@ export function hasActiveFilters(f: MasterFilters): boolean {
 /** Margen con el que un recojo se considera "próximo a vencer": 3 días. */
 export const EXPIRING_WINDOW_MS = 3 * 86_400_000;
 
+/**
+ * Sub-estados en los que el paquete SIGUE ESPERANDO en la agencia y, por
+ * tanto, puede vencer. Un pedido ya recogido, entregado o devuelto conserva su
+ * `agency_expires_at` —es un hecho, no se borra— pero ya no tiene nada que
+ * vencer. Se vio con Olva (#KP134959, 25-09-2026): el rastreo fija la fecha
+ * al llegar a la oficina y la deja puesta al entregar, y el pedido salía en
+ * «Próximos a vencer» con el drawer diciendo «Entregado».
+ */
+const AWAITING_PICKUP_STATES = new Set([
+  "disponible_para_recojo",
+  "cliente_notificado",
+  "pendiente_de_recojo",
+  "proximo_a_vencer",
+]);
+
+/** ¿Puede vencer todavía? Solo si sigue esperando en la agencia. Pura. */
+export function canStillExpire(row: Pick<OrderMasterRow, "pickup_state" | "agency_expires_at">): boolean {
+  return Boolean(row.agency_expires_at) && AWAITING_PICKUP_STATES.has(row.pickup_state ?? "");
+}
+
 /** Valor con el que se pide «sin verificación de cobro» (la columna en null). */
 export const PAYMENT_CHECK_NONE = "sin";
 
@@ -224,9 +244,10 @@ export function matchesFilters(
 
   if (f.expiringSoon) {
     // "Próximo a vencer" es lo que hay que trabajar HOY para que el paquete no
-    // se devuelva: se incluye tanto lo que vence pronto como lo ya vencido.
-    if (!row.agency_expires_at) return false;
-    const left = Date.parse(row.agency_expires_at) - Date.parse(now);
+    // se devuelva: se incluye tanto lo que vence pronto como lo ya vencido —
+    // y solo lo que sigue en la agencia (ver `canStillExpire`).
+    if (!canStillExpire(row)) return false;
+    const left = Date.parse(row.agency_expires_at!) - Date.parse(now);
     if (!Number.isFinite(left) || left > EXPIRING_WINDOW_MS) return false;
   }
 
@@ -418,8 +439,8 @@ export function agencySummary(
     }
     if (r.pickup_state === "pendiente_de_envio") pendienteDeEnvio++;
     if (r.pickup_state === "en_transito") enTransito++;
-    if (r.agency_expires_at) {
-      const left = Date.parse(r.agency_expires_at) - nowMs;
+    if (canStillExpire(r)) {
+      const left = Date.parse(r.agency_expires_at!) - nowMs;
       if (Number.isFinite(left) && left <= EXPIRING_WINDOW_MS) proximosAVencer++;
     }
   }

@@ -3765,6 +3765,12 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   movimiento («Nombre Oficina : …») si la salida no la tenía.
 - Olva fecha los movimientos solo con el día; se anclan al mediodía de Lima
   para que no caigan en la víspera al pasar a UTC.
+- **La fecha de vencimiento se conserva al entregar, pero ya no vence.**
+  `agency_expires_at` es un hecho y no se borra; «Próximos a vencer», en la tira
+  y en el filtro, solo cuenta lo que **sigue esperando en la agencia**
+  (disponible, notificado, pendiente de recojo, próximo a vencer). Un pedido
+  recogido, entregado o devuelto con fecha puesta no cuenta (#KP134959,
+  25-09-2026).
 - **Los dos avisos a la clienta, igual que Shalom** (migración 0175). Cuando el
   rastreo pone la guía `en_transito` se encola el aviso de «va en camino», y
   cuando la pone `disponible_para_recojo` el de «ya está en la oficina:
