@@ -383,6 +383,26 @@ function chunks<T>(list: readonly T[]): T[][] {
   return out;
 }
 
+// PostgREST devuelve como máximo 1000 filas por llamada AUNQUE se pida un
+// .limit() mayor, y el recorte es silencioso. El 24-09-2026 la subetapa tenía
+// 1338 pedidos: llegaban 1000 viejos sin orden y la cola salía vacía todo el
+// día. Por eso toda lectura de aquí se drena por páginas, ordenadas por `id`.
+const PAGE = 1000;
+
+export async function drain<T>(
+  table: string,
+  page: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await page(from, from + PAGE - 1);
+    if (error) throw new Error(`${table}: ${error.message}`);
+    const batch = (data ?? []) as T[];
+    rows.push(...batch);
+    if (batch.length < PAGE) return rows;
+  }
+}
+
 async function selectIn<T>(
   admin: SupabaseClient,
   table: string,
@@ -393,11 +413,13 @@ async function selectIn<T>(
 ): Promise<T[]> {
   const rows: T[] = [];
   for (const part of chunks(values)) {
-    let q = admin.from(table).select(columns).in(column, part);
-    if (extra) q = extra(q as never) as typeof q;
-    const { data, error } = await q;
-    if (error) throw new Error(`${table}: ${error.message}`);
-    rows.push(...((data ?? []) as T[]));
+    // 200 pedidos pueden traer más de 1000 eventos: también se pagina.
+    const batch = await drain<T>(table, (from, to) => {
+      let q = admin.from(table).select(columns).in(column, part);
+      if (extra) q = extra(q as never) as typeof q;
+      return q.order("id").range(from, to);
+    });
+    rows.push(...batch);
   }
   return rows;
 }
@@ -417,22 +439,22 @@ export async function loadVoiceQueue(
 ): Promise<VoiceQueue> {
   const today = voiceDates(now).hoy;
 
-  let masterQuery = admin
-    .from("order_master")
-    .select("order_id, order_name, customer_phone, district, region, confirmation_next_contact_on")
-    .eq("store_id", store.id)
-    .eq("macro_substage", "gestion_reproprovincia");
-  if (onlyOrderId) masterQuery = masterQuery.eq("order_id", onlyOrderId);
-  const { data: masterRows, error: masterError } = await masterQuery.limit(2000);
-  if (masterError) throw new Error(`order_master: ${masterError.message}`);
-  const masters = (masterRows ?? []) as {
+  const masters = await drain<{
     order_id: string;
     order_name: string | null;
     customer_phone: string | null;
     district: string | null;
     region: string | null;
     confirmation_next_contact_on: string | null;
-  }[];
+  }>("order_master", (from, to) => {
+    let q = admin
+      .from("order_master")
+      .select("order_id, order_name, customer_phone, district, region, confirmation_next_contact_on")
+      .eq("store_id", store.id)
+      .eq("macro_substage", "gestion_reproprovincia");
+    if (onlyOrderId) q = q.eq("order_id", onlyOrderId);
+    return q.order("id").range(from, to);
+  });
   const excluded: Record<string, number> = {};
   const reasons: Record<string, string> = {};
   if (!masters.length) return { candidates: [], excluded, reasons };
