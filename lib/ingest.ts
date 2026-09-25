@@ -59,6 +59,7 @@ import {
 } from "@/lib/leads-ingest";
 import { runCartSequence } from "@/lib/cart-sequence";
 import { runReturnRecovery } from "@/lib/return-recovery";
+import { runDeliveredThanks } from "@/lib/delivered-thanks";
 import type { ConversationRow, DraftOrderRow, OrderRow } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -123,6 +124,16 @@ export interface StoreCreds {
   return_recovery_hour_start: number;
   return_recovery_hour_end: number;
   return_recovery_max_days: number;
+  /** Agradecimiento con catálogo al entregar (0193). Ver lib/delivered-thanks.ts. */
+  delivered_thanks_enabled: boolean;
+  delivered_thanks_template_name: string | null;
+  delivered_thanks_template_language: string | null;
+  delivered_thanks_params: string | null;
+  delivered_thanks_button_param: string | null;
+  delivered_thanks_phone_number_id: string | null;
+  delivered_thanks_hour_start: number;
+  delivered_thanks_hour_end: number;
+  delivered_thanks_max_hours: number;
   telegram_bot_token: string | null;
   telegram_chat_id: string | null;
   meta_access_token: string | null;
@@ -256,6 +267,16 @@ export async function getStoreCreds(
     return_recovery_hour_start: data.return_recovery_hour_start ?? 8,
     return_recovery_hour_end: data.return_recovery_hour_end ?? 21,
     return_recovery_max_days: data.return_recovery_max_days ?? 30,
+    // Pre-0193 las columnas no existen (select * → undefined) ⇒ apagado.
+    delivered_thanks_enabled: data.delivered_thanks_enabled ?? false,
+    delivered_thanks_template_name: data.delivered_thanks_template_name ?? null,
+    delivered_thanks_template_language: data.delivered_thanks_template_language ?? null,
+    delivered_thanks_params: data.delivered_thanks_params ?? null,
+    delivered_thanks_button_param: data.delivered_thanks_button_param ?? null,
+    delivered_thanks_phone_number_id: data.delivered_thanks_phone_number_id ?? null,
+    delivered_thanks_hour_start: data.delivered_thanks_hour_start ?? 9,
+    delivered_thanks_hour_end: data.delivered_thanks_hour_end ?? 21,
+    delivered_thanks_max_hours: data.delivered_thanks_max_hours ?? 72,
     telegram_bot_token: decryptOrNull(data.telegram_bot_token_enc),
     telegram_chat_id: data.telegram_chat_id ?? null,
     meta_access_token: decryptOrNull(data.meta_access_token_enc),
@@ -872,6 +893,7 @@ export interface SyncReport {
   dripSent: number; // plantillas de seguimiento enviadas esta corrida
   cartSeqSent: number; // plantillas de carrito abandonado enviadas esta corrida
   returnRecoverySent: number; // plantillas de recuperación de devueltos enviadas
+  deliveredThanksSent: number; // agradecimientos con catálogo al entregar
   requeued: number; // carritos reencolados con atención (olas, máx 2 por lead)
   orderMaster: number; // filas del Master reconciliadas en esta corrida
   errors: string[];
@@ -950,6 +972,7 @@ export async function runStoreSync(
     dripSent: 0,
     cartSeqSent: 0,
     returnRecoverySent: 0,
+    deliveredThanksSent: 0,
     requeued: 0,
     orderMaster: 0,
     errors: [],
@@ -1211,6 +1234,21 @@ export async function runStoreSync(
       if (rec.failed) report.errors.push(`return_recovery: ${rec.failed} envíos fallidos`);
     } catch (e: any) {
       report.errors.push(`return_recovery: ${e.message}`);
+    }
+  }
+
+  // 2c.58) Agradecimiento con catálogo al entregar: plantilla de marketing a
+  //         la clienta cuyo pedido acaba de pasar a entregado. Una vez por
+  //         pedido y por clienta cada 7 días, con tope por corrida y horario:
+  //         una importación que marca 200 entregas de golpe no puede volverse
+  //         200 plantillas en un minuto. Apagado por defecto. Best-effort.
+  if (creds.delivered_thanks_enabled) {
+    try {
+      const thanks = await runDeliveredThanks(admin, storeId, creds);
+      report.deliveredThanksSent = thanks.sent;
+      if (thanks.failed) report.errors.push(`delivered_thanks: ${thanks.failed} envíos fallidos`);
+    } catch (e: any) {
+      report.errors.push(`delivered_thanks: ${e.message}`);
     }
   }
 

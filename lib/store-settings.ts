@@ -53,6 +53,15 @@ export interface StoreSettingsInput {
   return_recovery_hour_start?: string;
   return_recovery_hour_end?: string;
   return_recovery_max_days?: string;
+  delivered_thanks_enabled?: string | boolean;
+  delivered_thanks_template_name?: string;
+  delivered_thanks_template_language?: string;
+  delivered_thanks_params?: string;
+  delivered_thanks_button_param?: string;
+  delivered_thanks_phone_number_id?: string;
+  delivered_thanks_hour_start?: string;
+  delivered_thanks_hour_end?: string;
+  delivered_thanks_max_hours?: string;
   // Agente de voz para Reproprovincia (MOM §11.8, 0190).
   voice_recovery_enabled?: string | boolean;
   voice_recovery_auto?: string | boolean;
@@ -278,6 +287,33 @@ export function buildStoreUpdate(
   if (rrEnd !== null) patch.return_recovery_hour_end = rrEnd;
   const rrDays = intField(input.return_recovery_max_days, 1, 365);
   if (rrDays !== null) patch.return_recovery_max_days = rrDays;
+
+  // Agradecimiento con catálogo al entregar (0193). El toggle tiene que poder
+  // APAGARSE; el nombre de la plantilla, el número propio y el token del botón
+  // son vaciables: vacío en el botón = la plantilla no lleva URL dinámica.
+  if (input.delivered_thanks_enabled !== undefined) {
+    patch.delivered_thanks_enabled =
+      input.delivered_thanks_enabled === true || input.delivered_thanks_enabled === "true";
+  }
+  for (const k of ["delivered_thanks_template_language", "delivered_thanks_params"] as const) {
+    const v = clean(input[k]);
+    if (v !== null) patch[k] = v;
+  }
+  for (const k of [
+    "delivered_thanks_template_name",
+    "delivered_thanks_phone_number_id",
+  ] as const) {
+    if (input[k] !== undefined) patch[k] = clean(input[k]);
+  }
+  if (input.delivered_thanks_button_param !== undefined) {
+    patch.delivered_thanks_button_param = clean(input.delivered_thanks_button_param) ?? "";
+  }
+  const dtStart = intField(input.delivered_thanks_hour_start, 0, 23);
+  if (dtStart !== null) patch.delivered_thanks_hour_start = dtStart;
+  const dtEnd = intField(input.delivered_thanks_hour_end, 1, 24);
+  if (dtEnd !== null) patch.delivered_thanks_hour_end = dtEnd;
+  const dtHours = intField(input.delivered_thanks_max_hours, 1, 720);
+  if (dtHours !== null) patch.delivered_thanks_max_hours = dtHours;
 
   // Agente de voz (MOM §11.8). Los tres toggles tienen que poder APAGARSE, y
   // el número del agente y la extensión son vaciables: sin ellos Kapta no
