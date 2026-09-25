@@ -224,20 +224,22 @@ export interface StaleResolution {
  * `in_progress` recién cuando `identificar_llamada` corre, y el agente la
  * llama al oír a una persona. Una llamada que nunca pasó de `dialing` es una
  * clienta que no contestó (o cuya línea no dijo nada): el agente no pudo
- * registrarlo. En modo real se escribe ese `no_contesta`, como lo habría
- * hecho él. Una llamada `in_progress` sin registro se cortó a media
- * conversación: eso no es gestión y no se escribe nada.
+ * registrarlo. Una llamada `in_progress` sin registro también cuenta como
+ * «no contesta» (decisión del owner, 25-09-2026). En la práctica es un buzón
+ * que el agente tomó por persona o una clienta que colgó antes de decidir.
+ * En modo real se escribe ese `no_contesta`, como lo habría hecho el agente.
+ * Solo una llamada que ni se marcó queda `sin_resultado`.
  */
 export function staleCallResolution(call: Pick<OpenCall, "status"> & { mode: "real" | "test" }): StaleResolution {
-  if (call.status === "dialing") {
-    return { status: "completed", outcome: "no_contesta", error: null, registerNoAnswer: call.mode === "real" };
+  if (call.status === "dialing" || call.status === "in_progress") {
+    return {
+      status: "completed",
+      outcome: "no_contesta",
+      error: call.status === "in_progress" ? "sin registrar_gestion dentro de la ventana" : null,
+      registerNoAnswer: call.mode === "real",
+    };
   }
-  return {
-    status: "failed",
-    outcome: "sin_resultado",
-    error: call.status === "in_progress" ? "sin registrar_gestion dentro de la ventana" : "no se marcó",
-    registerNoAnswer: false,
-  };
+  return { status: "failed", outcome: "sin_resultado", error: "no se marcó", registerNoAnswer: false };
 }
 
 /**
