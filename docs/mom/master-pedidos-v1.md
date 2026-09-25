@@ -3199,7 +3199,11 @@ Reglas de esa tabla:
   de voz». Se pide **después de responder** a la tool, con la clienta todavía
   en línea, y **una sola vez por llamada**. La fila se reclama antes de llamar
   a Swayp porque su API no deshace una guía: un segundo POST sería un segundo
-  paquete.
+  paquete. El barrido del cron (cada cinco minutos, a cualquier hora) recoge
+  los «confirma» reales de los últimos tres días que **todavía no intentaron**
+  su salida (`salidasSwaypPendientes`): una llamada cuyo `after()` murió, o las
+  aceptadas antes de este cambio (KP135055 y KP134986, 25-09). Una llamada que
+  ya lo intentó, con éxito o no, no vuelve: el reintento lo decide una persona.
 - **No crea la salida** si la dirección que dijo la clienta no es la del
   pedido (`mismaDireccion`: se compara sin tildes, signos ni espacios y con
   los números dichos en cifras). Ante la duda, no es la misma: una salida a la
