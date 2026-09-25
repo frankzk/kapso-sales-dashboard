@@ -189,6 +189,11 @@ describe("la atadura: la llamada se elige por la fila, no por el teléfono", () 
     expect(pickOpenCall([enCurso], "in_progress", { now: NOW })).toEqual({ error: "ninguna" });
   });
 
+  it("una llamada en curso caduca a los 5 minutos: no bloquea al agente más que eso", () => {
+    expect(isStale(call({ status: "in_progress", started_at: hace(6) }), NOW)).toBe(true);
+    expect(isStale(call({ status: "in_progress", started_at: hace(4) }), NOW)).toBe(false);
+  });
+
   it("registrar solo ve llamadas en curso; identificar solo las que marcan", () => {
     expect(pickOpenCall([call({})], "in_progress", { now: NOW })).toEqual({ error: "ninguna" });
   });

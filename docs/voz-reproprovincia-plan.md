@@ -455,8 +455,8 @@ que la tool reciba el número y alguien lo mire.
 - **Candado por pedido** al escribir: la RPC ya toma `pg_advisory_xact_lock`
   por `order_id`; el cron además no encola un pedido con una `voice_calls`
   abierta (`queued`, `dialing`, `in_progress`).
-- **Llamadas colgadas**: un barrido marca `failed` toda fila `dialing` o
-  `in_progress` con más de 10 minutos, sin tocar el pedido.
+- **Llamadas colgadas**: el barrido cierra como «no contesta» toda fila
+  `dialing` con más de 3 minutos o `in_progress` con más de 5 (MOM §11.8).
 - **Sin PII en logs**: los logs llevan `voice_call_id`, nunca teléfono ni
   transcripción.
 - **Tope duro de duración**: se configura en el agente de xAI y, por si acaso,

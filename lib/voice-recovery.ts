@@ -18,8 +18,13 @@ export const VOICE_DELIVERY_WINDOW = "de 9 de la mañana a 6 de la tarde";
 
 /** Minutos que una llamada puede estar marcando antes de darse por caída. */
 export const DIALING_TTL_MINUTES = 3;
-/** Minutos que una llamada puede estar en curso antes de darse por caída. */
-export const IN_PROGRESS_TTL_MINUTES = 10;
+/**
+ * Minutos que una llamada puede estar en curso antes de darse por caída. Eran
+ * 10; el owner lo bajó a 5 el 25-09-2026. Una conversación real dura menos de
+ * 3 minutos, y una llamada colgada ocupa la línea del agente: con 10 minutos,
+ * cada buzón mal leído costaba dos barridos sin llamar.
+ */
+export const IN_PROGRESS_TTL_MINUTES = 5;
 
 // ── Producto corto ──────────────────────────────────────────────────────────
 
