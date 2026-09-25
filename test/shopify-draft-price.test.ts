@@ -117,6 +117,69 @@ describe("el precio pactado se manda con priceOverride", () => {
   });
 });
 
+// EL CASO QUE ESTAS PRUEBAS NO CUBRÍAN. Todas las de arriba llevan `variantId`.
+// Una línea LIBRE —solo título, la asesora la escribe a mano— no tiene precio
+// de catálogo que sustituir, y Shopify le ignora `priceOverride` sin error ni
+// userError: la deja a S/ 0,00 y el pedido nace «pagado», porque S/ 0 ya está
+// pagado. Así salieron #AUR177106 y #AUR177461 (17/09 y 25/09: S/ 89 pactados,
+// S/ 0 facturados) desde que #552 mandó priceOverride a TODAS las líneas.
+// Hasta el 05/09 la línea libre iba con originalUnitPrice y salía bien
+// (#D104777 a S/ 89, #D93481 a S/ 99): de 4 líneas libres con precio creadas
+// por Kapta después del cambio, las 4 salieron a cero.
+describe("una línea libre no tiene catálogo: su precio va en originalUnitPrice", () => {
+  const LIBRE = { title: "CloudSlides™ - Sandalias 36-37 / CELESTE", quantity: 1, unitPrice: 89 };
+
+  it("sin variantId manda originalUnitPrice y NUNCA priceOverride (#AUR177461)", async () => {
+    const { fetchImpl, enviados } = espia([
+      draftOk([{ title: LIBRE.title, quantity: 1, amount: "89.00" }]),
+    ]);
+    await createDraftOrder({
+      domain: "x.myshopify.com",
+      token: "t",
+      input: { lineItems: [LIBRE], currencyCode: "PEN" },
+      fetchImpl,
+    });
+    const li = enviados[0].variables.input.lineItems[0];
+    expect(li.title).toBe(LIBRE.title);
+    expect(li.variantId).toBeUndefined();
+    expect(li.originalUnitPrice).toBe("89.00");
+    expect(li.priceOverride).toBeUndefined();
+  });
+
+  it("en un pedido mixto cada línea lleva SU campo: la variante priceOverride, la libre originalUnitPrice", async () => {
+    const { fetchImpl, enviados } = espia([
+      draftOk([
+        { title: "Cinturón", quantity: 1, amount: "99.00" },
+        { title: "KeyGrip", quantity: 1, amount: "0.00" },
+      ]),
+    ]);
+    await createDraftOrder({
+      domain: "x.myshopify.com",
+      token: "t",
+      input: {
+        lineItems: [
+          { variantId: "gid://shopify/ProductVariant/1", title: "Cinturón", quantity: 1, unitPrice: 99 },
+          { title: "KeyGrip", quantity: 1, unitPrice: 0 },
+        ],
+        currencyCode: "PEN",
+      },
+      fetchImpl,
+    });
+    const [variante, libre] = enviados[0].variables.input.lineItems;
+    expect(variante.priceOverride).toEqual({ amount: "99.00", currencyCode: "PEN" });
+    expect(variante.originalUnitPrice).toBeUndefined();
+    // El regalo libre a S/ 0 también viaja: 0 no es «sin precio».
+    expect(libre.originalUnitPrice).toBe("0.00");
+    expect(libre.priceOverride).toBeUndefined();
+  });
+
+  it("y el desajuste que producía el bug se detecta: pedido S/ 89, aplicado S/ 0", () => {
+    expect(priceMismatches([LIBRE], [{ title: LIBRE.title, quantity: 1, unitPrice: 0 }])).toEqual([
+      { title: LIBRE.title, pedido: 89, aplicado: 0 },
+    ]);
+  });
+});
+
 describe("respaldo: si Shopify no conoce priceOverride, se usa el campo viejo", () => {
   const noConoce = {
     errors: [{ message: "InputObject 'DraftOrderLineItemInput' doesn't accept argument 'priceOverride'" }],
