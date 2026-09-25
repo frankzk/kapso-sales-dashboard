@@ -82,6 +82,15 @@ export interface StoreSettingsData {
     return_recovery_hour_start: number;
     return_recovery_hour_end: number;
     return_recovery_max_days: number;
+    delivered_thanks_enabled: boolean;
+    delivered_thanks_template_name: string | null;
+    delivered_thanks_template_language: string | null;
+    delivered_thanks_params: string | null;
+    delivered_thanks_button_param: string | null;
+    delivered_thanks_phone_number_id: string | null;
+    delivered_thanks_hour_start: number;
+    delivered_thanks_hour_end: number;
+    delivered_thanks_max_hours: number;
     /** Agente de voz para Reproprovincia (MOM §11.8, migración 0190). */
     voice_recovery_enabled: boolean;
     voice_recovery_auto: boolean;
@@ -1214,6 +1223,134 @@ function SettingsForm({
                 name="cart_seq_template_2_language"
                 defaultValue={s.cart_seq_template_2_language ?? ""}
                 placeholder="es"
+                className={inputCls}
+              />
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Agradecer al entregar
+          </legend>
+          <p className="text-xs text-slate-500">
+            Cuando un pedido pasa a <strong>entregado</strong>, se le manda a la clienta una
+            plantilla de agradecimiento con el botón al <strong>catálogo privado</strong>. Una vez
+            por pedido y una por clienta cada 7 días, en el horario de abajo y como mucho 25 por
+            corrida. Lleva una oferta, así que la plantilla va aprobada en Meta como{" "}
+            <strong>Marketing</strong>.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className={labelCls} htmlFor="delivered_thanks_enabled">Envío</label>
+              <select
+                id="delivered_thanks_enabled"
+                name="delivered_thanks_enabled"
+                defaultValue={s.delivered_thanks_enabled ? "true" : "false"}
+                className={inputCls}
+              >
+                <option value="false">Apagado</option>
+                <option value="true">Encendido</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="delivered_thanks_template_name">Plantilla · nombre</label>
+              <input
+                id="delivered_thanks_template_name"
+                name="delivered_thanks_template_name"
+                defaultValue={s.delivered_thanks_template_name ?? ""}
+                placeholder="gracias_entrega_oferta"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="delivered_thanks_template_language">Plantilla · idioma</label>
+              <input
+                id="delivered_thanks_template_language"
+                name="delivered_thanks_template_language"
+                defaultValue={s.delivered_thanks_template_language ?? ""}
+                placeholder="es"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="delivered_thanks_params">Variables del texto</label>
+              <input
+                id="delivered_thanks_params"
+                name="delivered_thanks_params"
+                defaultValue={s.delivered_thanks_params ?? ""}
+                placeholder="nombre"
+                className={inputCls}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Una por cada {"{{n}}"} del texto, en orden. Disponibles: <code>nombre</code>,{" "}
+                <code>pedido</code>.
+              </p>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="delivered_thanks_button_param">Variable del botón</label>
+              <select
+                id="delivered_thanks_button_param"
+                name="delivered_thanks_button_param"
+                defaultValue={s.delivered_thanks_button_param ?? "telefono"}
+                className={inputCls}
+              >
+                <option value="telefono">Celular de la clienta</option>
+                <option value="pedido">Número de pedido</option>
+                <option value="">Sin botón dinámico</option>
+              </select>
+              <p className="mt-1 text-xs text-slate-500">
+                Lo que va al final de la URL del botón. El celular sale en dígitos y sin «+»
+                (<code>?wa=51945425593</code>): en una URL el «+» se lee como espacio.
+              </p>
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="delivered_thanks_max_hours">
+                No enviar si se entregó hace más de (horas)
+              </label>
+              <input
+                id="delivered_thanks_max_hours"
+                name="delivered_thanks_max_hours"
+                type="number"
+                min={1}
+                max={720}
+                defaultValue={s.delivered_thanks_max_hours}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="delivered_thanks_hour_start">Enviar desde (hora local)</label>
+              <input
+                id="delivered_thanks_hour_start"
+                name="delivered_thanks_hour_start"
+                type="number"
+                min={0}
+                max={23}
+                defaultValue={s.delivered_thanks_hour_start}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="delivered_thanks_hour_end">Enviar hasta (hora local)</label>
+              <input
+                id="delivered_thanks_hour_end"
+                name="delivered_thanks_hour_end"
+                type="number"
+                min={1}
+                max={24}
+                defaultValue={s.delivered_thanks_hour_end}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="delivered_thanks_phone_number_id">
+                Enviar desde otro número (opcional)
+              </label>
+              <input
+                id="delivered_thanks_phone_number_id"
+                name="delivered_thanks_phone_number_id"
+                defaultValue={s.delivered_thanks_phone_number_id ?? ""}
+                placeholder="Vacío = el número de la tienda"
                 className={inputCls}
               />
             </div>

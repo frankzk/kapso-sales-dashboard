@@ -174,6 +174,16 @@ export default async function StoreSettingsPage({
       return_recovery_hour_start: full.return_recovery_hour_start ?? 8,
       return_recovery_hour_end: full.return_recovery_hour_end ?? 21,
       return_recovery_max_days: full.return_recovery_max_days ?? 30,
+      // Pre-0193 las columnas no existen ⇒ agradecimiento apagado.
+      delivered_thanks_enabled: full.delivered_thanks_enabled ?? false,
+      delivered_thanks_template_name: full.delivered_thanks_template_name ?? null,
+      delivered_thanks_template_language: full.delivered_thanks_template_language ?? null,
+      delivered_thanks_params: full.delivered_thanks_params ?? null,
+      delivered_thanks_button_param: full.delivered_thanks_button_param ?? "telefono",
+      delivered_thanks_phone_number_id: full.delivered_thanks_phone_number_id ?? null,
+      delivered_thanks_hour_start: full.delivered_thanks_hour_start ?? 9,
+      delivered_thanks_hour_end: full.delivered_thanks_hour_end ?? 21,
+      delivered_thanks_max_hours: full.delivered_thanks_max_hours ?? 72,
       // Pre-0190 las columnas no existen ⇒ agente de voz apagado.
       voice_recovery_enabled: full.voice_recovery_enabled ?? false,
       voice_recovery_auto: full.voice_recovery_auto ?? false,

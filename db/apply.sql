@@ -387,4 +387,6 @@
 \ir migrations/0191_tanders_human_ruling_backfill.sql
 \echo 'Applying 0192_gf_stop_retry_same_shipment.sql'
 \ir migrations/0192_gf_stop_retry_same_shipment.sql
+\echo 'Applying 0193_delivered_thanks.sql'
+\ir migrations/0193_delivered_thanks.sql
 \echo 'Done.'
