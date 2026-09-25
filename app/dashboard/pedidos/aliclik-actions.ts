@@ -41,6 +41,7 @@ import {
   OrderMasterReadError,
 } from "@/lib/orders-master-access";
 import { aliclikRiskGate } from "@/lib/order-confirmation-brief";
+import { aliclikDoorBan } from "@/lib/door-rejection";
 import { classifyOperation } from "@/lib/order-macro-stage";
 import { normalizePhone } from "@/lib/phone";
 import { pinSinCorroborar } from "@/lib/pin-corroborado";
@@ -1160,6 +1161,23 @@ export async function createAliclikGuide(
     paymentGateway: ctx.row.payment_gateway,
   });
   if (prepaidBlock) return { error: prepaidBlock };
+
+  // El bloqueo por rechazo en la puerta va ANTES que el de plata, y no se
+  // parece a él: no pregunta cuánto hay que cobrar por adelantado sino si esta
+  // ruta sigue abierta para este cliente. No tiene excepción —ver
+  // `aliclikDoorBan`— así que tampoco lee `input`: no hay nada que escribir que
+  // lo levante.
+  if (confirmationBrief.doorRejections === null) {
+    // No se pudo leer el historial de guías. Cero y «no sé» se despachan
+    // distinto: lo segundo no autoriza nada.
+    return {
+      error:
+        "No se pudo verificar si este cliente tiene rechazos en la puerta. " +
+        "Vuelve a intentarlo; si sigue fallando, despáchalo por agencia o Swayp.",
+    };
+  }
+  const doorBan = aliclikDoorBan(confirmationBrief.doorRejections);
+  if (doorBan.banned) return { error: doorBan.message ?? "Aliclik está cerrado para este cliente." };
 
   const riskGate = aliclikRiskGate(
     confirmationBrief.risk.requirement,

@@ -35,6 +35,7 @@ import {
   type OutcomeCounts,
   type PriorOrderSnapshot,
 } from "@/lib/order-confirmation-brief";
+import { countDoorRejections, type DoorRejectionShipment } from "@/lib/door-rejection";
 import { parseLabelLineItems } from "@/lib/labels/line-items";
 import { filledShipmentIds } from "@/lib/shipment-output";
 // Las etiquetas de estado de LEAD son otra tabla que las del Master. Se importa
@@ -1486,6 +1487,14 @@ export interface OrderConfirmationBrief {
   priors: PriorOrderSnapshot[];
   counts: OutcomeCounts;
   risk: ConfirmationRisk;
+  /**
+   * Cuántos pedidos de este teléfono terminaron rechazados EN LA PUERTA,
+   * contando este. A partir de `DOOR_REJECTION_BAN_THRESHOLD` cierra Aliclik.
+   *
+   * `null` = no se pudo leer el historial de guías. No es cero: quien decide
+   * tiene que poder distinguir «no rechazó nunca» de «no lo sabemos».
+   */
+  doorRejections: number | null;
   /** Los que siguen abiertos y podrían ser este pedido otra vez. */
   duplicates: PriorOrderSnapshot[];
   /** Couriers con tarifa COD vigente para ese destino. Vacío = va por agencia. */
@@ -1567,6 +1576,26 @@ export async function getOrderConfirmationBrief(
 
   const counts = summarizeOutcomes(priors);
 
+  // Los rechazos en la puerta NO salen del master: `order_master` no guarda
+  // `reported_status`, y esa ausencia es exactamente lo que dejaba pasar la
+  // segunda guía (el porqué, en lib/door-rejection.ts). Se leen de `shipments`,
+  // bajo el cliente de sesión, cuya RLS es la misma del master
+  // (`store_id IN auth_store_ids()`), así que no amplía lo que nadie ve.
+  //
+  // `null` NO es cero: es «no se pudo verificar». Un fallo de lectura que
+  // devolviera 0 abriría la compuerta en silencio, que es como se pierden las
+  // guías. Quien decide lo trata como impedimento, no como vía libre.
+  let doorRejections: number | null = null;
+  {
+    const { data: guides, error } = await sb
+      .from("shipments")
+      .select("order_id,reported_status")
+      .in("order_id", wanted);
+    if (!error) {
+      doorRejections = countDoorRejections((guides ?? []) as DoorRejectionShipment[]);
+    }
+  }
+
   // Las tarifas se leen con el service role: `cost_tariffs` es configuración de
   // la organización, no un dato del pedido, y la cobertura ya se calcula con
   // ellas en el servidor. Sin tarifas aplicadas, la lista sale vacía y la ficha
@@ -1607,6 +1636,7 @@ export async function getOrderConfirmationBrief(
     priors,
     counts,
     risk: confirmationRisk(counts, priors),
+    doorRejections,
     duplicates: duplicateCandidates(priors),
     codCouriers,
     coverage: row.coverage,

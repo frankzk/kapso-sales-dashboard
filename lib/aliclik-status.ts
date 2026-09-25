@@ -422,6 +422,26 @@ export function etiquetaDiceTerminoSinEntregar(reportedStatus: string | null | u
   return aliclikTerminoSinEntregar({ status, dispatchStatus });
 }
 
+/**
+ * ¿La etiqueta dice que el cliente lo RECHAZÓ EN LA PUERTA?
+ *
+ * `REFUSED` es el único código de Aliclik que significa eso: el motorizado
+ * llegó, el cliente vio el producto y no lo quiso. `NOT_RESPOND` (no contestó),
+ * `CANCEL` y `ANNULLED` terminan igual de mal pero NO son lo mismo — a quien no
+ * contestó se le vuelve a intentar, a quien ya lo tuvo en la mano no.
+ *
+ * Se mira solo el PRIMER segmento del triple. Un `contains("REFUSED")` sobre la
+ * etiqueta entera es un error esperando: el despacho y la llamada tienen su
+ * propio vocabulario y nada impide que mañana traigan la palabra.
+ *
+ * Igual que `etiquetaDiceTerminoSinEntregar`, vive acá porque acá vive el
+ * separador: quien pregunta no tiene por qué saber cómo se arma la etiqueta.
+ */
+export function etiquetaDiceRechazoEnPuerta(reportedStatus: string | null | undefined): boolean {
+  const [status = ""] = (reportedStatus ?? "").split(" · ");
+  return status.trim().toUpperCase() === "REFUSED";
+}
+
 /** Cómo terminó el intento anterior, en castellano, para leerlo antes de llamar. */
 export interface MotivoDelCourier {
   /** Frase corta para la cola. */
