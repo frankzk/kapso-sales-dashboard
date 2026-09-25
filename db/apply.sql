@@ -385,4 +385,6 @@
 \ir migrations/0190_voice_calls.sql
 \echo 'Applying 0191_tanders_human_ruling_backfill.sql'
 \ir migrations/0191_tanders_human_ruling_backfill.sql
+\echo 'Applying 0192_gf_stop_retry_same_shipment.sql'
+\ir migrations/0192_gf_stop_retry_same_shipment.sql
 \echo 'Done.'
