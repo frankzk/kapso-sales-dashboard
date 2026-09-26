@@ -966,6 +966,53 @@ que nadie tenga que resumirla a mano:
 - La ficha se lee bajo RLS: el historial de un teléfono nunca cruza a una tienda
   que quien mira no puede ver.
 
+### 8.2 Dos rechazos en la puerta cierran Aliclik para siempre
+
+Un cliente cuyo teléfono acumula **dos o más pedidos rechazados en la puerta**
+no puede volver a salir por Aliclik. Nunca. **No se puede exceptuar**: ni
+vendedora, ni admin, ni owner pueden levantarlo desde la aplicación. Le quedan
+**Shalom, Olva o Swayp/Fénix**.
+
+«Rechazado en la puerta» es el código `REFUSED` de Aliclik y solo ese: el
+motorizado llegó, el cliente vio el producto y no lo quiso. `NOT_RESPOND`,
+`CANCEL` y `ANNULLED` terminan igual de mal pero no son lo mismo — a quien no
+contestó se le vuelve a intentar.
+
+**Por qué solo Aliclik.** Es la única ruta que cobra el intento fallido: el
+flete se paga aunque el paquete vuelva. El cliente puede seguir comprando, solo
+no por la ruta que nos cuesta cuando falla.
+
+**Por qué el segundo y no el primero.** Medido el 25-09-2026 sobre los reenvíos
+que siguieron a un rechazo: 12 en total, 4 entregados, 6 caídos por otra causa
+y 2 rechazados otra vez. Un tercio se recupera, así que el primer rechazo no
+cierra la ruta — ahí sigue mandando la escalera de adelanto del §8.
+
+**Es un eje distinto al del §8 y no se mezclan.** La escalera pregunta *cuánta
+plata* hay que exigir por adelantado y se exceptúa con justificación. Esta
+regla pregunta *por qué ruta* puede salir y no se exceptúa. Un cliente con el
+pago completo validado sigue sin poder ir por Aliclik.
+
+**La cuenta no espera a que el paquete vuelva.** Esto es lo que falló antes de
+la regla: la tabla de riesgo del §8 cuenta `anulado + devuelto` leyendo
+`general_status`, y 92 de las 133 guías con `REFUSED` estaban en `en_proceso`.
+Un rechazo no pesaba hasta que el paquete terminaba de volver, semanas después,
+y en esa ventana salieron las segundas guías de los dos únicos clientes que
+rechazaron dos veces (#AUR175450 → #KP131487 el 31-08; #KP128958 → #AUR177007
+el 15-09). El conteo del §8.2 mira la etiqueta del courier, que es el hecho: el
+cliente lo rechazó el día que lo rechazó.
+
+Se cuentan **pedidos, no guías**: un pedido reintentado arrastra la etiqueta a
+la guía nueva, y eso es una venta rechazada, no dos. Ante la duda la cuenta
+baja, porque el bloqueo no tiene marcha atrás.
+
+Si el historial de guías **no se puede leer**, eso no es cero: la creación de la
+guía Aliclik se rechaza con ese motivo. «No lo sabemos» no autoriza. El conteo
+se lee bajo la misma RLS que el resto de la ficha (`shipments`, por tienda).
+
+Corregir un bloqueo mal puesto se hace **sobre el dato** —la etiqueta de la
+guía— y no sobre el permiso. Es el precio de que la regla no se pueda ablandar
+a las 7 de la tarde con el pedido esperando.
+
 ## 9. Lima
 
 - Todos los pedidos entran directamente a Preparación.

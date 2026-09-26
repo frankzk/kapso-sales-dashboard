@@ -150,6 +150,7 @@ import {
   type PriorOrderSnapshot,
   type PriorOutcome,
 } from "@/lib/order-confirmation-brief";
+import { aliclikDoorBan, ROUTES_STILL_ALLOWED_LABEL } from "@/lib/door-rejection";
 import { outputDisplayCode } from "@/lib/shipment-output";
 import { formatOlvaTracking, OLVA_TRACKING_URL } from "@/lib/olva/tracking";
 import { gfDeliverySentence, gfDeliverySummary, type GfDelivery } from "@/lib/gf-delivery";
@@ -2135,7 +2136,9 @@ function PriorOrderRow({
 }
 
 function ConfirmationBrief({ brief }: { brief: OrderConfirmationBrief }) {
-  const { counts, risk, duplicates, codCouriers, priors, orderCreatedAt, products } = brief;
+  const { counts, risk, duplicates, codCouriers, priors, orderCreatedAt, products, doorRejections } =
+    brief;
+  const doorBan = doorRejections === null ? null : aliclikDoorBan(doorRejections);
   const known = priors.length;
   const later = countLaterOrders(priors, orderCreatedAt);
   const outcomes = (Object.keys(PRIOR_OUTCOME_LABEL) as PriorOutcome[]).filter(
@@ -2155,6 +2158,31 @@ function ConfirmationBrief({ brief }: { brief: OrderConfirmationBrief }) {
               (later > 0 ? ` · ${later} posterior${later === 1 ? "" : "es"} a este` : "")}
         </span>
       </div>
+
+      {/* EL RECHAZO EN LA PUERTA VA PRIMERO, ARRIBA DE TODO.
+          Es la única regla de esta ficha que no se puede exceptuar, así que se
+          lee antes que el desglose y antes que la escalera de adelanto: quien
+          llama tiene que saber que esta guía no va a salir por Aliclik ANTES de
+          prometerle al cliente una fecha. Ver lib/door-rejection.ts. */}
+      {doorBan?.banned && (
+        <div className="rounded-md border border-rose-400 bg-rose-50 px-2.5 py-2">
+          <p className="text-xs font-bold text-rose-900">
+            ⛔ Aliclik cerrado para este cliente · {doorBan.rejections} rechazos en la puerta
+          </p>
+          <p className="mt-0.5 text-[11px] leading-4 text-rose-900">
+            Ya tuvo el producto en la mano y lo devolvió {doorBan.rejections} veces. No se puede
+            exceptuar. Despáchalo por {ROUTES_STILL_ALLOWED_LABEL}.
+          </p>
+        </div>
+      )}
+      {doorRejections === null && (
+        <div className="rounded-md border border-slate-300 bg-slate-50 px-2.5 py-2">
+          <p className="text-[11px] leading-4 text-slate-700">
+            No se pudo verificar si este cliente tiene rechazos en la puerta. Vuelve a abrir el
+            pedido antes de crear una guía Aliclik.
+          </p>
+        </div>
+      )}
 
       {/* El desglose por desenlace, que es lo que la columna «Métricas» resume a
           mano. Los entregados van primero y bien visibles: son el argumento de
