@@ -36,7 +36,7 @@
 // una persona y gana. El paquete que vuelve sigue siendo inventario por
 // conciliar: ese motivo convive con la gestión, no la tapa.
 
-import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
+import { etiquetaDiceRechazoEnPuerta, etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
 
 /** Evento que cierra la recuperación a mano, con motivo. */
@@ -66,6 +66,15 @@ export interface RecoveryWindow {
   deadline: string;
   /** Si ya pasó: se enseña como vencida en Por cerrar, con la razón escrita. */
   expired: boolean;
+  /**
+   * Si el intento que abrió la ventana terminó en un RECHAZO EN LA PUERTA.
+   *
+   * No cambia nada mientras la ventana está abierta: el pedido sigue en gestión,
+   * porque de los reenvíos que siguieron a un rechazo un tercio se entregó
+   * (4 de 12, medido el 25-09-2026). Cambia cómo se CIERRA: ver
+   * `recoveryOutcome`.
+   */
+  doorRejection: boolean;
 }
 
 /**
@@ -144,7 +153,16 @@ export function recoveryWindow(
   }
   if (!closedAt) return null;
   const deadline = addDays(closedAt, windowDays);
-  return { guide, closedAt, deadline, expired: nowIso > deadline };
+  return {
+    guide,
+    closedAt,
+    deadline,
+    expired: nowIso > deadline,
+    // Decide la MISMA guía que ancla la ventana, la del último intento: si el
+    // cliente primero no contestó y después lo rechazó en la puerta, lo que
+    // cuenta es cómo terminó la última vez.
+    doorRejection: etiquetaDiceRechazoEnPuerta(guide.reported_status),
+  };
 }
 
 /** ¿Está en gestión ahora mismo? Azúcar para los dos resolvedores. */
@@ -170,12 +188,13 @@ export function recoveryActive(
  * `null` es «no aplica»: no hubo intento fallido tras salir, o hay una guía
  * viva que ya lleva la gestión. En ese caso el badge se queda en una mitad.
  */
-export type RecoveryKind = "activa" | "vencida" | "descartada";
+export type RecoveryKind = "activa" | "vencida" | "rechazo_no_reenviado" | "descartada";
 
 /** Segunda mitad del badge. UN texto por estado, para Envíos y para el Master. */
 export const RECOVERY_LABEL: Record<RecoveryKind, string> = {
   activa: "Reproprovincia",
   vencida: "Recuperación vencida",
+  rechazo_no_reenviado: "Rechazo no reenviado",
   descartada: "Descartada",
 };
 
@@ -210,5 +229,29 @@ export function recoveryOutcome(
   if (events.some((e) => e.kind === RECOVERY_DISCARDED_KIND)) return "descartada";
   const w = recoveryWindow(guides, events, nowIso, windowDays);
   if (!w) return null;
-  return w.expired ? "vencida" : "activa";
+  if (!w.expired) return "activa";
+  return expiredRecoveryKind(w);
+}
+
+/**
+ * CÓMO SE LLAMA UNA VENTANA QUE VENCIÓ.
+ *
+ * «Recuperación vencida» se definió como «fue recuperable y nadie lo trabajó»:
+ * la única forma de medir cuánto se pierde por no llamar (§11). Un rechazo en la
+ * puerta no encaja en esa definición. Lo recuperable en teoría lo es, pero los
+ * dos canales automáticos lo excluyen a propósito —el agente de voz
+ * (`rechazo_en_puerta`, lib/voice-recovery-queue.ts) y la plantilla de WhatsApp
+ * (lib/return-recovery.ts)— y la cola le dice a la vendedora «normalmente no se
+ * reenvía». Que venza sin gestión es la regla funcionando, no una pérdida.
+ *
+ * Medido el 26-09-2026: 36 de los 483 pedidos con `recuperacion_vencida` eran
+ * rechazos en la puerta, y 59 más estaban en camino, todos sin una sola llamada,
+ * plantilla ni descarte. Con la misma razón, la métrica los contaba como
+ * recuperaciones perdidas por no llamar.
+ *
+ * Un solo sitio para el nombre: el Master (`resolveMacroStage`) y Envíos
+ * (`recoveryOutcome`) lo leen de acá, así que no pueden separarse.
+ */
+export function expiredRecoveryKind(w: RecoveryWindow): "vencida" | "rechazo_no_reenviado" {
+  return w.doorRejection ? "rechazo_no_reenviado" : "vencida";
 }

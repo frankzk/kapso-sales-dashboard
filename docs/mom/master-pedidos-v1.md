@@ -2128,6 +2128,19 @@ La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
   `anulado`/`devuelto` y a Por cerrar, con la razón `recuperacion_vencida`
   escrita cuando fue recuperable y nadie lo trabajó — la única forma de medir
   cuánto se pierde por no llamar.
+- **Salvo que el último intento haya sido un rechazo en la puerta** (`REFUSED`):
+  entonces la razón es `rechazo_no_reenviado` («Anulado · Rechazo no
+  reenviado» en Envíos, la misma subetapa en el Master). Mientras la ventana
+  está abierta no cambia nada —sigue en gestión, porque 4 de 12 reenvíos tras
+  un rechazo se entregaron—; cambia solo el nombre con que se cierra. Los dos
+  canales automáticos excluyen el rechazo a propósito y la cola dice
+  «normalmente no se reenvía», así que dejarlo vencer es la regla funcionando,
+  no una pérdida. Con la misma razón, la métrica de lo que se pierde por no
+  llamar lo contaba igual: medido el 26-09-2026, 36 de las 483 vencidas eran
+  rechazos en la puerta y 59 más estaban en camino, todos sin gestión. Decide la
+  guía que ancla la ventana, la del **último** intento: si primero no contestó
+  y después lo rechazó, es rechazo; si lo rechazó, se reenvió y la última vez
+  no contestó, es `recuperacion_vencida`. Un descarte a mano sigue ganando.
 - **No gana** sobre una anulación en Shopify: esa la decide una persona.
 
 **Aparecen en la MISMA cola de Pendiente**, no en una pestaña propia: son la
@@ -2159,7 +2172,9 @@ tras un descarte diría lo de antes durante minutos.
 **El badge de Estado tiene dos mitades.** La primera es la guía —la verdad del
 courier, que no se falsea: sigue diciendo «Anulado»—; la segunda es en qué
 quedó el pedido: **«Anulado · Reproprovincia»** mientras se puede reenviar,
-**«Anulado · Recuperación vencida»** o **«Anulado · Descartada»** después. Es
+**«Anulado · Recuperación vencida»**, **«Anulado · Rechazo no reenviado»** (si
+el último intento fue un rechazo en la puerta) o **«Anulado · Descartada»**
+después. Es
 el mismo patrón de «Pendiente · Sin llamar» y «Entregado · por Swayp». Sin la
 segunda mitad, una guía viva para Swayp se veía igual que una muerta. Las
 vencidas y descartadas se quedan en la pestaña Anulado, que es el registro, con
@@ -3322,7 +3337,7 @@ línea base de cero llamadas:
 | Aceptados sin salida a las 24 h | Si almacén recoge lo que el agente deja |
 | Descartes propuestos que una persona rechazó | Si el agente entiende un «no» |
 | Motivos capturados sobre devoluciones sin motivo | El dato que §11.7 no tenía |
-| `recuperacion_vencida` por semana, antes y después | Lo que se pierde por no llamar |
+| `recuperacion_vencida` por semana, antes y después | Lo que se pierde por no llamar. Desde la v1.18 (26-09-2026) excluye los rechazos en la puerta, que pasan a `rechazo_no_reenviado`: el cron reescribe también el histórico, así que el antes y el después se comparan ya sin ellos — no es una caída que haya causado el agente |
 | Costo (Grok + Zadarma, las dos patas) por pedido entregado | Contra el margen del pedido |
 
 Con los aceptados y las salidas se calcula lo mismo que la tabla de cierre de
