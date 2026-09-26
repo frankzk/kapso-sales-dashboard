@@ -1288,20 +1288,19 @@ function SettingsForm({
               </p>
             </div>
             <div>
-              <label className={labelCls} htmlFor="delivered_thanks_button_param">Variable del botón</label>
-              <select
+              <label className={labelCls} htmlFor="delivered_thanks_button_param">Variables de los botones</label>
+              <input
                 id="delivered_thanks_button_param"
                 name="delivered_thanks_button_param"
-                defaultValue={s.delivered_thanks_button_param ?? "telefono"}
+                defaultValue={s.delivered_thanks_button_param ?? ""}
+                placeholder="telefono"
                 className={inputCls}
-              >
-                <option value="telefono">Celular de la clienta</option>
-                <option value="pedido">Número de pedido</option>
-                <option value="">Sin botón dinámico</option>
-              </select>
+              />
               <p className="mt-1 text-xs text-slate-500">
-                Lo que va al final de la URL del botón. El celular sale en dígitos y sin «+»
-                (<code>?wa=51945425593</code>): en una URL el «+» se lee como espacio.
+                Una por cada botón de URL dinámica, en orden. Con dos botones al catálogo
+                (Kenku y Aurela) va <code>telefono,telefono</code>. Disponibles:{" "}
+                <code>telefono</code>, <code>pedido</code>. Vacío = sin botones dinámicos. El
+                celular sale en dígitos y sin «+»: en una URL el «+» se lee como espacio.
               </p>
             </div>
             <div>

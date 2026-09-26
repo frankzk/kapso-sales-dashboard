@@ -6661,6 +6661,9 @@ aprobada guarda `https://…/kenku-peru/?wa={{1}}` y cada envío pone el número
   marketing en un minuto: es lo que le baja la calidad al número.
 - **El celular del botón va en dígitos, sin «+»**: en una URL el «+» se lee como
   un espacio.
+- **Un valor por cada botón dinámico.** La plantilla de Kenku lleva dos botones
+  —«Kenku» y «Aurela», cada uno a su catálogo— y Meta exige un valor para cada
+  uno o rechaza el envío entero. En Ajustes van en orden: `telefono,telefono`.
 - **Nace apagado en todas las tiendas.** Se enciende en Ajustes de la tienda →
   «Agradecer al entregar», con el nombre de la plantilla ya aprobada en la WABA
   de esa tienda. Cada envío y cada rechazo quedan en `delivered_thanks_sends`.

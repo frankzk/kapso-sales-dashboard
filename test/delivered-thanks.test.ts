@@ -3,7 +3,7 @@ import {
   THANKS_BATCH_CAP,
   THANKS_MAX_ATTEMPTS,
   parseThanksBodyParams,
-  parseThanksButtonParam,
+  parseThanksButtonParams,
   runDeliveredThanks,
   thanksBodyParams,
   thanksButtonParam,
@@ -113,8 +113,8 @@ describe("las variables de la plantilla", () => {
 
   it("los tokens desconocidos se ignoran y el botón vacío significa sin botón", () => {
     expect(parseThanksBodyParams("nombre, precio ,pedido")).toEqual(["nombre", "pedido"]);
-    expect(parseThanksButtonParam("")).toBeNull();
-    expect(parseThanksButtonParam("TELEFONO")).toBe("telefono");
+    expect(parseThanksButtonParams("")).toEqual([]);
+    expect(parseThanksButtonParams("TELEFONO")).toEqual(["telefono"]);
   });
 });
 
@@ -190,6 +190,43 @@ describe("una corrida del cron", () => {
       buttonUrlParams: ["51945425593"],
     });
     expect(inserted[0]).toMatchObject({ order_id: "o1", ok: true });
+  });
+
+  /**
+   * La plantilla de Kenku lleva DOS botones dinámicos —«Kenku» y «Aurela», cada
+   * uno a su catálogo— y Meta exige un valor para cada uno. Con uno solo,
+   * rechaza el envío entero.
+   */
+  it("con dos botones dinámicos manda el celular a los dos", async () => {
+    const { admin } = fakeAdmin([pedido()]);
+    const llamadas: { buttonUrlParams?: string[] }[] = [];
+    await runDeliveredThanks(
+      admin,
+      "s1",
+      creds({ delivered_thanks_button_param: "telefono,telefono" }),
+      async (_o, p) => {
+        llamadas.push(p);
+        return { ok: true, id: null };
+      },
+      NOW,
+    );
+    expect(llamadas[0]?.buttonUrlParams).toEqual(["51945425593", "51945425593"]);
+  });
+
+  it("sin botones dinámicos no manda parámetros de botón", async () => {
+    const { admin } = fakeAdmin([pedido()]);
+    const llamadas: { buttonUrlParams?: string[] }[] = [];
+    await runDeliveredThanks(
+      admin,
+      "s1",
+      creds({ delivered_thanks_button_param: "" }),
+      async (_o, p) => {
+        llamadas.push(p);
+        return { ok: true, id: null };
+      },
+      NOW,
+    );
+    expect(llamadas[0]?.buttonUrlParams).toBeUndefined();
   });
 
   it("dos pedidos de la misma clienta en el mismo lote: un solo agradecimiento", async () => {
