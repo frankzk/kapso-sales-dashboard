@@ -3279,6 +3279,13 @@ Reglas de esa tabla:
 - Pendiente: la etiqueta «Acepta reenvío · salida no creada» en la cola y el
   renglón **«aceptado sin salida»** del resumen diario del owner (§17.1), para
   los aceptados cuya salida falló.
+- Cada gestión del agente, y el «no contesta» que escribe el barrido, se anota
+  además como llamada (`shipment_calls`, actor nulo, nota «Agente de voz · …»)
+  en la guía anulada que muestra Envíos. Una fecha pactada va también a
+  `next_followup_at` de esa guía, como en «programar» a mano. El intento vive
+  en el pedido, pero «Historial desde el origen» se arma con la guía, y la
+  operadora veía «Sin gestiones registradas» en un pedido que el agente ya
+  había llamado (26-09-2026).
 - Todo hecho que escribe lleva en `payload` el `voice_call_id`, y la línea de
   tiempo del drawer lo muestra con actor **«Agente de voz»** y enlace a la
   transcripción. Un intento que no se puede leer después no es historial
