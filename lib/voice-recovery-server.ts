@@ -105,7 +105,57 @@ export async function writeVoiceAttempt(
     p_source: VOICE_SOURCE,
     p_payload_extra: action.extra,
   });
-  return error?.message ?? null;
+  if (error) return error.message;
+  await noteOnRecoveryGuide(admin, call, action.note, action.nextContactOn, now);
+  return null;
+}
+
+/**
+ * La misma gestión, anotada en la guía anulada que Envíos muestra (MOM §11.8).
+ *
+ * El intento vive en el pedido (`order_events`), que es lo que lee el Master.
+ * Pero el cajón de Envíos arma «Historial desde el origen» con `shipment_calls`
+ * de la guía, igual que registra `registerRecoveryCall` cuando llama una
+ * asesora. Sin esta fila, la operadora abría el pedido que el agente acababa de
+ * llamar y veía «Sin gestiones registradas» (26-09-2026).
+ *
+ * El actor es nulo y la nota empieza con «Agente de voz». Una fecha pactada va
+ * también a `next_followup_at` de la guía, como en «programar» a mano. Es
+ * best-effort: la gestión ya quedó escrita en el pedido, que es la fuente.
+ */
+async function noteOnRecoveryGuide(
+  admin: SupabaseClient,
+  call: { id: string; store_id: string; order_id: string },
+  note: string,
+  nextContactOn: string | null,
+  now: Date,
+): Promise<void> {
+  const { data } = await admin
+    .from("shipments")
+    .select("id")
+    .eq("order_id", call.order_id)
+    .eq("delivery_status", "anulado")
+    .is("fenix_shipment_id", null)
+    .order("updated_at", { ascending: false })
+    .limit(1);
+  const guia = (data ?? [])[0] as { id: string } | undefined;
+  if (!guia) return;
+  const followup = nextContactOn ? `${nextContactOn}T00:00:00Z` : null;
+  const { error } = await admin.from("shipment_calls").insert({
+    shipment_id: guia.id,
+    store_id: call.store_id,
+    agent: null,
+    kind: "call",
+    new_status: null,
+    note,
+    next_followup_at: followup,
+    occurred_at: now.toISOString(),
+  });
+  if (error) {
+    console.error(`[voice-recovery] nota en la guía no escrita (llamada ${call.id}): ${error.message}`);
+    return;
+  }
+  if (followup) await admin.from("shipments").update({ next_followup_at: followup }).eq("id", guia.id);
 }
 
 /**

@@ -95,3 +95,22 @@ describe("el barrido recoge los aceptados sin salida pedida (§11.8)", () => {
     expect(cron).toContain("const salidas = dry ? [] : await salidasSwaypPendientes(admin, now);");
   });
 });
+
+describe("la gestión del agente también queda en la guía que muestra Envíos (§11.8)", () => {
+  const server = readFileSync(resolve(process.cwd(), "lib/voice-recovery-server.ts"), "utf8");
+  const write = server.slice(server.indexOf("export async function writeVoiceAttempt("));
+  const nota = server.slice(server.indexOf("async function noteOnRecoveryGuide("));
+
+  it("después de escribir el intento en el pedido, y solo si se escribió", () => {
+    const cuerpo = write.slice(0, write.indexOf("\n}\n"));
+    expect(cuerpo.indexOf("if (error) return error.message;")).toBeLessThan(cuerpo.indexOf("noteOnRecoveryGuide("));
+  });
+
+  it("como una llamada sobre la guía anulada, sin actor humano y con fecha pactada si la hay", () => {
+    expect(nota).toContain('.eq("delivery_status", "anulado")');
+    expect(nota).toContain('from("shipment_calls").insert(');
+    expect(nota).toContain("agent: null");
+    expect(nota).toContain('kind: "call"');
+    expect(nota).toContain("next_followup_at: followup");
+  });
+});
