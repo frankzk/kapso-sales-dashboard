@@ -42,12 +42,15 @@ import { getStoreCreds } from "@/lib/ingest";
 import {
   completeDraftOrder,
   createDraftOrder,
+  deleteDraftOrder,
   extractNumericId,
   getCustomerRecentOrders,
   getDraftOrderForEdit,
+  priceMismatchRejection,
   resolveOrderDiscount,
   searchCatalogProducts,
   updateDraftOrder,
+  type PriceMismatchCleanup,
   type ProductSearchResult,
 } from "@/lib/shopify";
 import {
@@ -2362,6 +2365,8 @@ export async function generateOrder(
   const sclient = { domain: creds.shopify_domain, token: creds.shopify_token };
   const sourceDraftGid = l.draft_order_gid;
   let reuseExistingDraft = false;
+  // El nombre del borrador (#D…) solo sirve para NOMBRARLO en un rechazo.
+  let draftName: string | null = null;
 
   // "Generar nuevo pedido" is explicit: never mutate/re-complete the previous
   // draft. In the normal cart flow, only reuse it when Shopify confirms it is
@@ -2371,6 +2376,7 @@ export async function generateOrder(
     try {
       const liveDraft = await getDraftOrderForEdit({ ...sclient, gid: sourceDraftGid });
       reuseExistingDraft = liveDraft?.status === "open" || liveDraft?.status === "invoice_sent";
+      if (reuseExistingDraft) draftName = liveDraft?.name ?? null;
     } catch {
       reuseExistingDraft = false;
     }
@@ -2381,11 +2387,12 @@ export async function generateOrder(
   // is the retry path when Shopify rejects the phone ("Phone is invalid") — a bad
   // phone must never block the sale; the lead keeps the number anyway.
   // Precios que Shopify guardó distintos a los pactados. Se recogen aquí y se
-  // avisan abajo: durante meses Shopify ignoró el precio que mandábamos y
-  // facturó el de catálogo sin decir nada — así se perdieron los regalos de las
-  // promos (#AUR176302: papel de freidora de S/0 a S/79). Un pedido creado con
-  // otro precio del pactado no es un fallo que se pueda callar: es un rechazo en
-  // la puerta, porque se cobra contra entrega.
+  // RECHAZAN abajo, antes de completar el borrador: durante meses Shopify
+  // ignoró el precio que mandábamos y facturó el de catálogo sin decir nada —
+  // así se perdieron los regalos de las promos (#AUR176302: papel de freidora
+  // de S/0 a S/79)— y después dejó a S/ 0 las líneas libres (#AUR177461). Un
+  // pedido creado con otro precio del pactado no es un fallo que se pueda
+  // callar ni avisar: es un rechazo en la puerta, porque se cobra contra entrega.
   let desajustes: Awaited<ReturnType<typeof updateDraftOrder>>["priceMismatches"] = [];
   const runDraft = async (withPhone: boolean): Promise<string> => {
     const addr = { ...address, phone: withPhone ? phone : null };
@@ -2405,6 +2412,7 @@ export async function generateOrder(
       input: { ...base, lineItems: lineItemsInput, address: addr, phone: ph, tags: ["venta_manual"] },
     });
     desajustes = created.priceMismatches;
+    draftName = created.name;
     return created.gid;
   };
 
@@ -2426,6 +2434,37 @@ export async function generateOrder(
       } else {
         throw e;
       }
+    }
+    // EL PRECIO SE COMPRUEBA ANTES DE COMPLETAR, no después. Hasta hoy el
+    // desajuste se detectaba y se avisaba con el pedido YA creado: una frase al
+    // final de «Pedido generado ✓» que nadie leyó, y cuatro ventas salieron a
+    // S/ 0 (#AUR177461, #AUR177106, #KP133922, #KP134910). En contraentrega un
+    // pedido con otro precio del pactado no es un aviso: es un rechazo en la
+    // puerta o una venta regalada. Se rechaza aquí, se borra el borrador propio
+    // —el carrito del cliente se deja sin completar, que no es nuestro— y
+    // queda constancia en el lead, que es donde la asesora y el admin miran.
+    if (desajustes.length) {
+      let cleanup: PriceMismatchCleanup;
+      if (reuseExistingDraft) {
+        cleanup = "kept_cart";
+      } else {
+        try {
+          await deleteDraftOrder({ ...sclient, draftGid: draftGid! });
+          cleanup = "deleted";
+        } catch {
+          cleanup = "delete_failed";
+        }
+      }
+      const rechazo = priceMismatchRejection({ desajustes, currency, draftName, cleanup });
+      await admin.from("lead_calls").insert({
+        lead_id: leadId,
+        store_id: ctx.storeId,
+        vendedora: ctx.userId,
+        kind: "system",
+        new_status: null,
+        note: rechazo.note,
+      });
+      return { error: rechazo.error };
     }
     completed = await completeDraftOrder({ ...sclient, draftGid: draftGid!, paymentPending: true });
   } catch (e: any) {
@@ -2622,21 +2661,9 @@ export async function generateOrder(
   const phoneNote = phoneRejected
     ? ` · ⚠️ Shopify RECHAZÓ el celular ${phone ?? ""}: el pedido quedó sin teléfono. Corrígelo en Shopify.`
     : "";
-  // Shopify guardó un precio distinto al pactado. Se avisa con NOMBRE y las dos
-  // cifras porque el pedido ya existe y hay que corregirlo a mano antes de que
-  // salga: en contraentrega, cobrar de más en la puerta es un rechazo.
-  const precioNote = desajustes.length
-    ? ` · ⚠️ Shopify cambió ${desajustes.length === 1 ? "el precio" : "los precios"} de ` +
-      desajustes
-        .map(
-          (d) =>
-            `${d.title} (pediste ${currency} ${d.pedido.toFixed(2)}, quedó ` +
-            `${d.aplicado == null ? "sin precio" : `${currency} ${d.aplicado.toFixed(2)}`})`,
-        )
-        .join(", ") +
-      `. Corrígelo en Shopify ANTES de despachar.`
-    : "";
-  const notice = `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}${phoneNote}${precioNote}`;
+  // Un precio distinto al pactado ya no llega hasta aquí: se rechaza antes de
+  // completar el borrador, con el borrador borrado y la constancia en el lead.
+  const notice = `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}${phoneNote}`;
   const confirmationSent = confirmNote.toLowerCase().includes("enviada");
 
   revalidatePath("/dashboard/leads");
