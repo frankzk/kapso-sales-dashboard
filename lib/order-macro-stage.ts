@@ -16,8 +16,18 @@ import {
   limaDayKey,
   reachedLastAttempt,
 } from "@/lib/order-confirmation";
-import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovincia";
+import {
+  RECOVERY_LABEL,
+  expiredRecoveryKind,
+  recoveryActive,
+  recoveryWindow,
+} from "@/lib/reproprovincia";
 
+// v1.18: una ventana de Reproprovincia que vence sobre un rechazo en la puerta
+// cae a Por cerrar · Rechazo no reenviado, no a Recuperación vencida. La otra
+// razón se lee «se perdió por no llamar», y aquí no llamar era la regla (§11).
+// Mueve 36 pedidos ya vencidos de una razón a la otra, así que la versión sube.
+//
 // v1.17: un rechazo devuelto con el inventario ya resuelto y la ruta aún
 // abierta espera en Por cerrar · Validación de cierre pendiente (antes caía
 // en En curso por conservar `dispatched_at`).
@@ -77,7 +87,7 @@ import { RECOVERY_LABEL, recoveryActive, recoveryWindow } from "@/lib/reproprovi
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.17" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.18" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -143,6 +153,7 @@ export type MacroSubstage =
   | "devolucion_pendiente_inventario"
   | "recogido_sin_pago_completo"
   | "recuperacion_vencida"
+  | "rechazo_no_reenviado"
   | "indemnizacion_pendiente"
   | "merma_pendiente"
   | "reembolso_pendiente"
@@ -200,6 +211,7 @@ export const MACRO_SUBSTAGES_BY_STAGE: Record<
     "devolucion_pendiente_inventario",
     "recogido_sin_pago_completo",
     "recuperacion_vencida",
+    "rechazo_no_reenviado",
     "indemnizacion_pendiente",
     "merma_pendiente",
     "reembolso_pendiente",
@@ -250,6 +262,7 @@ export const MACRO_SUBSTAGE_LABEL: Record<MacroSubstage, string> = {
   devolucion_pendiente_inventario: "Devolución pendiente de inventario",
   recogido_sin_pago_completo: "Recogido sin pago completo",
   recuperacion_vencida: RECOVERY_LABEL.vencida,
+  rechazo_no_reenviado: RECOVERY_LABEL.rechazo_no_reenviado,
   indemnizacion_pendiente: "Indemnización pendiente",
   merma_pendiente: "Merma pendiente",
   reembolso_pendiente: "Reembolso pendiente",
@@ -704,7 +717,9 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   }
   // Fue recuperable y nadie lo trabajó a tiempo. Se escribe la razón para que
   // «Por cerrar» no sea el mismo balde que un pedido que jamás pudo reenviarse:
-  // es la única forma de medir cuánto se pierde por no llamar.
+  // es la única forma de medir cuánto se pierde por no llamar. Si el último
+  // intento fue un rechazo en la puerta, la razón es otra: no reenviarlo es la
+  // regla del §11, no una pérdida (`expiredRecoveryKind`).
   if (["anulado", "devuelto"].includes(legacy.general)) {
     const window = recoveryWindow(
       guides,
@@ -712,7 +727,13 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
       input.now ?? new Date().toISOString(),
       input.recoveryWindowDays,
     );
-    if (window?.expired) reasons.push("recuperacion_vencida");
+    if (window?.expired) {
+      reasons.push(
+        expiredRecoveryKind(window) === "rechazo_no_reenviado"
+          ? "rechazo_no_reenviado"
+          : "recuperacion_vencida",
+      );
+    }
   }
   if (isWorkflowOpen(events, ["liquidation_observed"], ["liquidation_closed"])) {
     reasons.push("liquidacion_observada");

@@ -266,6 +266,45 @@ describe("y la macroetapa la aplica IGUAL", () => {
     expect(MACRO_SUBSTAGES_BY_STAGE.por_cerrar).toContain("recuperacion_vencida");
   });
 
+  /**
+   * RECHAZO EN LA PUERTA (26-09-2026). «Recuperación vencida» se lee «se perdió
+   * por no llamar», y a quien rechazó en la puerta no se lo llama A PROPÓSITO:
+   * el agente de voz y la plantilla de WhatsApp lo excluyen, y la cola dice
+   * «normalmente no se reenvía». Medido: 36 de 483 vencidas eran rechazos, y 59
+   * más en camino, todos sin una sola gestión. Contaminaban la métrica.
+   */
+  const RECHAZO = "REFUSED · RETURNED · CONFIRMED";
+
+  it("rechazo en la puerta DENTRO de la ventana: sigue en gestión, igual que antes", () => {
+    // Un tercio de los reenvíos tras un rechazo se entregó (4 de 12): la
+    // ventana no se cierra antes, solo se nombra distinto al vencer.
+    const r = resolverTodo(
+      [guia({ reported_status: RECHAZO })],
+      [macroGuia({ reported_status: RECHAZO })],
+    );
+    expect(r.stage).toBe("en_curso");
+    expect(r.substage).toBe("gestion_reproprovincia");
+  });
+
+  it("rechazo en la puerta VENCIDO: «rechazo no reenviado», y NO «recuperación vencida»", () => {
+    const vencida = { closed_at: hace(31), returned_at: hace(20), reported_status: RECHAZO };
+    const r = resolverTodo([guia(vencida)], [macroGuia(vencida)]);
+    expect(r.stage).toBe("por_cerrar");
+    expect(r.reasons).toContain("rechazo_no_reenviado");
+    // Las dos a la vez sería contarlo como pérdida igual.
+    expect(r.reasons).not.toContain("recuperacion_vencida");
+    expect(MACRO_SUBSTAGES_BY_STAGE.por_cerrar).toContain("rechazo_no_reenviado");
+  });
+
+  it("los otros fallos siguen siendo «recuperación vencida»: no contestó NO es rechazo", () => {
+    for (const etiqueta of ["NOT_RESPOND · RETURNED · CONFIRMED", "CANCEL · PICKED · "]) {
+      const vencida = { closed_at: hace(31), returned_at: hace(20), reported_status: etiqueta };
+      const r = resolverTodo([guia(vencida)], [macroGuia(vencida)]);
+      expect(r.reasons, etiqueta).toContain("recuperacion_vencida");
+      expect(r.reasons, etiqueta).not.toContain("rechazo_no_reenviado");
+    }
+  });
+
   it("un override manual a «pendiente de nuevo courier» sin guía fallida NO fabrica una recuperación", () => {
     // Se aísla la rama nueva quitándole a la guía toda señal de custodia externa:
     // así la rama previa de «En curso» —que ya mapea ese operativo a
@@ -288,9 +327,9 @@ describe("y la macroetapa la aplica IGUAL", () => {
   it("la versión del MOM sube, para que el cron reconcilie el histórico", () => {
     // Esta guarda se reescribe con CADA cambio que mueva filas que nadie tocó:
     // no prueba comportamiento, avisa de que hay que subir la versión.
-    // v1.14 (22-09-2026): lo que reporta el motorizado de Grupo GF mueve la
-    // etapa antes del cierre de la ruta (MOM §29.13).
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.17");
+    // v1.18 (26-09-2026): una ventana que vence sobre un rechazo en la puerta
+    // cae a «Rechazo no reenviado», no a «Recuperación vencida».
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.18");
   });
 });
 
@@ -339,6 +378,7 @@ describe("las piezas en el código", () => {
     expect(mom).toContain("#### El ciclo de recuperación (v1.10)");
     expect(mom).toContain("`recovery_discarded`");
     expect(mom).toContain("`recuperacion_vencida`");
+    expect(mom).toContain("`rechazo_no_reenviado`");
   });
 });
 
@@ -379,13 +419,47 @@ describe("en qué quedó la recuperación, para enseñarlo", () => {
     expect(recoveryOutcome([guiaR(), swayp], [], NOW, 30)).toBeNull();
   });
 
-  it("los tres textos existen y el Master usa el MISMO para «vencida»", () => {
+  it("rechazo en la puerta: activa mientras dura, «rechazo no reenviado» al vencer", () => {
+    const rechazo = "REFUSED · TO_RETURN · CONFIRMED";
+    expect(recoveryOutcome([guiaR({ reported_status: rechazo })], [], NOW, 30)).toBe("activa");
+    expect(
+      recoveryOutcome(
+        [guiaR({ reported_status: rechazo, closed_at: hace(31), updated_at: hace(31) })],
+        [],
+        NOW,
+        30,
+      ),
+    ).toBe("rechazo_no_reenviado");
+  });
+
+  it("un rechazo descartado a mano sigue siendo «descartada»: el descarte gana", () => {
+    const evento = { kind: RECOVERY_DISCARDED_KIND, occurred_at: hace(1) };
+    const g = guiaR({ reported_status: "REFUSED · RETURNED · ", closed_at: hace(31), updated_at: hace(31) });
+    expect(recoveryOutcome([g], [evento], NOW, 30)).toBe("descartada");
+  });
+
+  it("manda el ÚLTIMO intento: primero no contestó, después lo rechazó ⇒ rechazo", () => {
+    const antes = guiaR({ id: "g1", reported_status: "NOT_RESPOND · RETURNED · ", closed_at: hace(45), updated_at: hace(45) });
+    const despues = guiaR({ id: "g2", reported_status: "REFUSED · RETURNED · ", closed_at: hace(35), updated_at: hace(35) });
+    expect(recoveryOutcome([antes, despues], [], NOW, 30)).toBe("rechazo_no_reenviado");
+    expect(recoveryWindow([antes, despues], [], NOW, 30)?.doorRejection).toBe(true);
+  });
+
+  it("…y al revés: lo rechazó, se reenvió y la última vez no contestó ⇒ vencida", () => {
+    // El último intento es el que dice cómo quedó la relación con el cliente.
+    const antes = guiaR({ id: "g1", reported_status: "REFUSED · RETURNED · ", closed_at: hace(45), updated_at: hace(45) });
+    const despues = guiaR({ id: "g2", reported_status: "NOT_RESPOND · RETURNED · ", closed_at: hace(35), updated_at: hace(35) });
+    expect(recoveryOutcome([antes, despues], [], NOW, 30)).toBe("vencida");
+  });
+
+  it("los cuatro textos existen y el Master usa los MISMOS", () => {
     expect(RECOVERY_LABEL.activa).toBe("Reproprovincia");
     expect(RECOVERY_LABEL.vencida).toBe("Recuperación vencida");
+    expect(RECOVERY_LABEL.rechazo_no_reenviado).toBe("Rechazo no reenviado");
     expect(RECOVERY_LABEL.descartada).toBe("Descartada");
-    expect(readFileSync(resolve(process.cwd(), "lib/order-macro-stage.ts"), "utf8")).toContain(
-      "recuperacion_vencida: RECOVERY_LABEL.vencida,",
-    );
+    const src = readFileSync(resolve(process.cwd(), "lib/order-macro-stage.ts"), "utf8");
+    expect(src).toContain("recuperacion_vencida: RECOVERY_LABEL.vencida,");
+    expect(src).toContain("rechazo_no_reenviado: RECOVERY_LABEL.rechazo_no_reenviado,");
   });
 });
 
