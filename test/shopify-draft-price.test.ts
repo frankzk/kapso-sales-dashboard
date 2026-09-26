@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import {
   createDraftOrder,
+  deleteDraftOrder,
   isUnknownFieldError,
+  priceMismatchRejection,
   priceMismatches,
   resetDraftPriceFieldMode,
   updateDraftOrder,
@@ -342,19 +344,103 @@ describe("updateDraftOrder también verifica", () => {
   });
 });
 
-// El desajuste puede detectarse perfectamente y no decírselo a nadie — que es
-// justo lo que pasaba antes, con la mutación respondiendo "ok".
-describe("la asesora se entera", () => {
-  const src = readFileSync(new URL("../app/dashboard/leads/actions.ts", import.meta.url), "utf8");
+// EL DESAJUSTE RECHAZA LA VENTA. Antes se avisaba con el pedido ya creado, en
+// una frase al final de «Pedido generado ✓» que nadie leyó: cuatro ventas
+// salieron a S/ 0 con el aviso puesto (#AUR177461, #AUR177106, #KP133922,
+// #KP134910). Un pedido con otro precio del pactado no se adorna: no se crea.
+describe("el rechazo dice qué pasó, con producto, cifras y borrador", () => {
+  const LIBRE = { title: "CloudSlides™ 36-37 / CELESTE", pedido: 89, aplicado: 0 };
 
-  it("el aviso nombra el producto y las dos cifras", () => {
-    expect(src).toContain("Shopify cambió ");
-    expect(src).toContain("pediste ${currency} ${d.pedido.toFixed(2)}");
-    expect(src).toContain("Corrígelo en Shopify ANTES de despachar.");
+  it("borrador propio borrado: error para la asesora y nota para el lead (#AUR177461)", () => {
+    const r = priceMismatchRejection({ desajustes: [LIBRE], currency: "PEN", draftName: "#D105703", cleanup: "deleted" });
+    expect(r.error).toMatch(/^Pedido NO generado: /);
+    expect(r.error).toContain("«CloudSlides™ 36-37 / CELESTE» (pediste PEN 89.00, Shopify guardó PEN 0.00)");
+    expect(r.error).toContain("El borrador #D105703 se eliminó.");
+    expect(r.error).toContain("vuelve a intentarlo");
+    expect(r.note).toMatch(/^⛔ Venta NO generada · /);
+    expect(r.note).toContain("pediste PEN 89.00, Shopify guardó PEN 0.00");
+    expect(r.note).toContain("El borrador #D105703 se eliminó.");
   });
 
-  it("el aviso llega al texto que ve la asesora", () => {
-    expect(src).toContain("${phoneNote}${precioNote}`");
+  it("el carrito del cliente no se borra: se deja sin completar", () => {
+    const r = priceMismatchRejection({ desajustes: [LIBRE], currency: "PEN", draftName: "#D9", cleanup: "kept_cart" });
+    expect(r.error).toContain("El carrito #D9 quedó sin completar.");
+    expect(r.error).not.toContain("se eliminó");
+  });
+
+  it("si el borrado falla, lo dice y pide borrarlo a mano", () => {
+    const r = priceMismatchRejection({ desajustes: [LIBRE], currency: "PEN", draftName: "#D9", cleanup: "delete_failed" });
+    expect(r.error).toContain("No se pudo eliminar el borrador #D9: bórralo en Shopify.");
+    expect(r.note).toContain("bórralo en Shopify");
+  });
+
+  it("varias líneas y una sin precio: todas nombradas", () => {
+    const r = priceMismatchRejection({
+      desajustes: [LIBRE, { title: "KeyGrip", pedido: 0, aplicado: null }],
+      currency: "PEN",
+      draftName: null,
+      cleanup: "deleted",
+    });
+    expect(r.error).toContain("(pediste PEN 89.00, Shopify guardó PEN 0.00); «KeyGrip» (pediste PEN 0.00, Shopify guardó sin precio)");
+    expect(r.error).toContain("El borrador de Shopify se eliminó.");
+  });
+});
+
+describe("deleteDraftOrder", () => {
+  it("manda la mutación de borrado con el id y devuelve el borrado", async () => {
+    const { fetchImpl, enviados } = espia([
+      { data: { draftOrderDelete: { deletedId: "gid://shopify/DraftOrder/5", userErrors: [] } } },
+    ]);
+    const r = await deleteDraftOrder({ domain: "x.myshopify.com", token: "t", draftGid: "gid://shopify/DraftOrder/5", fetchImpl });
+    expect(r).toBe("gid://shopify/DraftOrder/5");
+    expect(enviados).toHaveLength(1);
+    expect(enviados[0].query).toContain("draftOrderDelete(input: $input)");
+    expect(enviados[0].variables).toEqual({ input: { id: "gid://shopify/DraftOrder/5" } });
+  });
+
+  // Un borrador suelto con precio malo es la venta a S/ 0 de mañana si alguien
+  // lo completa desde el admin: quien llama tiene que saber que sigue ahí.
+  it("si Shopify se niega, lanza con el motivo", async () => {
+    const { fetchImpl } = espia([
+      { data: { draftOrderDelete: { deletedId: null, userErrors: [{ field: ["id"], message: "Draft order is completed" }] } } },
+    ]);
+    await expect(
+      deleteDraftOrder({ domain: "x.myshopify.com", token: "t", draftGid: "gid://shopify/DraftOrder/5", fetchImpl }),
+    ).rejects.toThrow(/Draft order is completed/);
+  });
+});
+
+// La regla puede estar bien escrita y no aplicarse: si la acción completa el
+// borrador antes de mirar el desajuste, el pedido a S/ 0 existe igual. Estas
+// guardas leen el fuente para probar que el rechazo LLEGA al flujo y en qué
+// orden; la parte pura está probada arriba por comportamiento.
+describe("el desajuste BLOQUEA la venta, no la adorna", () => {
+  const src = readFileSync(new URL("../app/dashboard/leads/actions.ts", import.meta.url), "utf8");
+  // Otra acción más arriba también completa borradores: se busca DESDE la venta
+  // manual, que es la que arma `runDraft`, y no desde el principio del fichero.
+  const venta = src.indexOf("const runDraft = async (withPhone: boolean)");
+  const inicio = src.indexOf("if (desajustes.length) {", venta);
+  const completar = src.indexOf("completed = await completeDraftOrder(", inicio);
+  const bloque = src.slice(inicio, completar);
+
+  it("se comprueba ANTES de completar el borrador", () => {
+    expect(venta).toBeGreaterThan(-1);
+    expect(inicio).toBeGreaterThan(venta);
+    expect(completar).toBeGreaterThan(inicio);
+  });
+
+  it("borra el borrador propio y deja el carrito del cliente sin completar", () => {
+    expect(bloque).toContain("deleteDraftOrder({ ...sclient, draftGid: draftGid! })");
+    expect(bloque).toContain('cleanup = "kept_cart"');
+    expect(bloque).toContain('cleanup = "delete_failed"');
+  });
+
+  it("queda constancia en el lead y la asesora recibe el ERROR, no un aviso", () => {
+    expect(bloque).toContain('kind: "system"');
+    expect(bloque).toContain("note: rechazo.note");
+    expect(bloque).toContain("return { error: rechazo.error }");
+    expect(src).not.toContain("precioNote");
+    expect(src).not.toContain("Corrígelo en Shopify ANTES de despachar.");
   });
 
   it("se le pasa la moneda a Shopify, que priceOverride necesita", () => {

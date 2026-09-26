@@ -979,6 +979,36 @@ export async function fetchDraftOrdersPage(
   };
 }
 
+const DRAFT_ORDER_DELETE_MUTATION = /* GraphQL */ `
+  mutation DraftOrderDelete($input: DraftOrderDeleteInput!) {
+    draftOrderDelete(input: $input) {
+      deletedId
+      userErrors { field message }
+    }
+  }
+`;
+
+/**
+ * Borra un borrador que NO debe convertirse en pedido. Lanza si Shopify se
+ * niega: un borrador suelto con un precio malo es la venta a S/ 0 de mañana
+ * si alguien lo completa desde el admin, así que quien llama tiene que saber
+ * que sigue ahí.
+ */
+export async function deleteDraftOrder(
+  opts: ShopifyClientOpts & { draftGid: string },
+): Promise<string | null> {
+  const data = await shopifyGraphQL<any>({
+    ...opts,
+    query: DRAFT_ORDER_DELETE_MUTATION,
+    variables: { input: { id: opts.draftGid } },
+  });
+  const errs = data?.draftOrderDelete?.userErrors ?? [];
+  if (errs.length) {
+    throw new Error(`draftOrderDelete: ${errs.map((e: any) => e.message).join("; ")}`);
+  }
+  return data?.draftOrderDelete?.deletedId ?? null;
+}
+
 const DRAFT_ORDER_COMPLETE_MUTATION = /* GraphQL */ `
   mutation DraftOrderComplete($id: ID!, $paymentPending: Boolean) {
     draftOrderComplete(id: $id, paymentPending: $paymentPending) {
@@ -1596,6 +1626,45 @@ export function priceMismatches(
     }
   }
   return out;
+}
+
+/** Qué se hizo con el borrador cuya venta se rechazó por precio. */
+export type PriceMismatchCleanup = "deleted" | "kept_cart" | "delete_failed";
+
+/**
+ * El rechazo de una venta cuyo precio Shopify no respetó. PURA.
+ *
+ * Devuelve dos textos: el ERROR que ve la asesora en el formulario y la NOTA
+ * que queda en el historial del lead. Los dos nombran el producto y las dos
+ * cifras, porque «Shopify cambió el precio» a secas no le dice a nadie qué
+ * corregir. Y los dos dicen qué pasó con el borrador: el propio se borra, el
+ * carrito del cliente se deja sin completar, y si el borrado falla se pide
+ * borrarlo a mano.
+ */
+export function priceMismatchRejection(input: {
+  desajustes: readonly PriceMismatch[];
+  currency: string;
+  draftName: string | null;
+  cleanup: PriceMismatchCleanup;
+}): { error: string; note: string } {
+  const money = (n: number | null) => (n == null ? "sin precio" : `${input.currency} ${n.toFixed(2)}`);
+  const detalle = input.desajustes
+    .map((d) => `«${d.title}» (pediste ${money(d.pedido)}, Shopify guardó ${money(d.aplicado)})`)
+    .join("; ");
+  const draft = input.draftName ?? "de Shopify";
+  const borrador =
+    input.cleanup === "deleted"
+      ? `El borrador ${draft} se eliminó.`
+      : input.cleanup === "kept_cart"
+        ? `El carrito ${draft} quedó sin completar.`
+        : `No se pudo eliminar el borrador ${draft}: bórralo en Shopify.`;
+  const causa = `Shopify no respetó el precio pactado en ${detalle}.`;
+  return {
+    error:
+      `Pedido NO generado: ${causa} ${borrador} Elige el producto desde el catálogo o revisa el ` +
+      `precio y vuelve a intentarlo; si se repite, avisa al administrador.`,
+    note: `⛔ Venta NO generada · ${causa} ${borrador}`,
+  };
 }
 
 // Qué campo de precio acepta esta tienda, descubierto en la primera mutación y
