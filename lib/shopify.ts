@@ -1408,6 +1408,12 @@ export async function updateOrderShippingAddress(
  * hacer nada y no lo sabíamos: cada regalo y cada precio pactado por teléfono
  * se convertía en precio de lista al llegar a Shopify (#AUR176302, papel de
  * freidora de S/0 a S/79).
+ *
+ * Y EL ESPEJO (25-09-2026): `priceOverride` solo sustituye el precio de
+ * catálogo de una VARIANTE. En una línea libre —solo título— Shopify lo
+ * ignora igual de callado y la deja a S/ 0. El campo elegido aquí decide cómo
+ * viaja la variante; la línea libre va siempre con `originalUnitPrice`, que
+ * es el que la fijaba bien antes de #552.
  */
 export type DraftPriceField = "priceOverride" | "originalUnitPrice";
 
@@ -1429,7 +1435,16 @@ function toGqlDraftInput(
       // —el regalo de una promo— así que la guarda compara contra null, no
       // contra falsy: un `if (li.unitPrice)` volvería a perder los regalos.
       if (li.unitPrice != null) {
-        if (priceField === "priceOverride") {
+        // DOS CAMPOS, UNO POR TIPO DE LÍNEA. `priceOverride` sustituye el
+        // precio de CATÁLOGO de una variante. Una línea libre —solo título, la
+        // que la asesora escribe a mano— no tiene catálogo que sustituir, y
+        // Shopify le ignora el override en silencio, sin error ni userError:
+        // la deja a S/ 0,00 y el pedido nace «pagado» porque S/ 0 ya está
+        // pagado. Así salieron #AUR177106 y #AUR177461 (S/ 89 pactados, S/ 0
+        // facturados) desde que #552 mandó priceOverride a TODAS las líneas.
+        // La libre lleva SIEMPRE `originalUnitPrice`, el campo que ya la
+        // fijaba bien antes (#D104777 a S/ 89, #D93481 a S/ 99).
+        if (priceField === "priceOverride" && li.variantId) {
           item.priceOverride = {
             amount: li.unitPrice.toFixed(2),
             currencyCode: input.currencyCode ?? "PEN",
