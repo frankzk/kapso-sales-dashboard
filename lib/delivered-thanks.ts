@@ -106,9 +106,20 @@ export function parseThanksBodyParams(raw: string | null | undefined): ThanksBod
     .filter((t): t is ThanksBodyToken => (THANKS_BODY_TOKENS as readonly string[]).includes(t));
 }
 
-export function parseThanksButtonParam(raw: string | null | undefined): ThanksButtonToken | null {
-  const t = String(raw ?? "").trim().toLowerCase();
-  return (THANKS_BUTTON_TOKENS as readonly string[]).includes(t) ? (t as ThanksButtonToken) : null;
+/**
+ * Un token por cada botón de URL DINÁMICA de la plantilla, en orden.
+ *
+ * ES UNA LISTA porque Meta exige un valor para CADA botón dinámico, y una
+ * plantilla puede tener varios: la de Kenku lleva dos —«Kenku» y «Aurela»,
+ * cada uno a su catálogo— y los dos esperan el celular. Con un solo valor,
+ * Meta rechaza el envío entero por número de parámetros. Vacío = la plantilla
+ * no lleva botones dinámicos. Los tokens desconocidos se descartan.
+ */
+export function parseThanksButtonParams(raw: string | null | undefined): ThanksButtonToken[] {
+  return String(raw ?? "")
+    .split(",")
+    .map((t) => t.trim().toLowerCase())
+    .filter((t): t is ThanksButtonToken => (THANKS_BUTTON_TOKENS as readonly string[]).includes(t));
 }
 
 /** «KP136564» — el nombre del pedido sin «#», que en una URL cortaría el link. */
@@ -141,7 +152,7 @@ export interface ThanksConfig {
   templateName: string;
   language: string;
   bodyTokens: ThanksBodyToken[];
-  buttonToken: ThanksButtonToken | null;
+  buttonTokens: ThanksButtonToken[];
   phoneNumberId: string;
   apiKey: string;
   hourStart: number;
@@ -161,7 +172,7 @@ export function thanksConfig(creds: StoreCreds): ThanksConfig | null {
     templateName,
     language: creds.delivered_thanks_template_language?.trim() || "es",
     bodyTokens: parseThanksBodyParams(creds.delivered_thanks_params),
-    buttonToken: parseThanksButtonParam(creds.delivered_thanks_button_param),
+    buttonTokens: parseThanksButtonParams(creds.delivered_thanks_button_param),
     phoneNumberId,
     apiKey: creds.kapso_api_key,
     hourStart: creds.delivered_thanks_hour_start ?? 9,
@@ -265,8 +276,8 @@ export async function runDeliveredThanks(
       continue;
     }
     const phone = (c.customer_phone ?? "").trim();
-    const buttonValue = cfg.buttonToken ? thanksButtonParam(cfg.buttonToken, c) : null;
-    if (cfg.buttonToken && !buttonValue) {
+    const buttonValues = cfg.buttonTokens.map((t) => thanksButtonParam(t, c));
+    if (buttonValues.some((v) => !v)) {
       report.skipped += 1;
       continue;
     }
@@ -283,7 +294,7 @@ export async function runDeliveredThanks(
           templateName: cfg.templateName,
           language: cfg.language,
           bodyParams: bodyParams ?? undefined,
-          buttonUrlParams: buttonValue ? [buttonValue] : undefined,
+          buttonUrlParams: buttonValues.length ? buttonValues : undefined,
         },
       );
       ok = res.ok;
