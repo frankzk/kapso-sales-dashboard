@@ -129,10 +129,20 @@ describe("horario del agente, en hora de Lima", () => {
     expect(withinVoiceHours(new Date("2026-09-23T01:00:00.000Z"), 9, 20)).toBe(false); // 20:00
   });
 
-  it("el domingo no se llama", () => {
+  it("el domingo se reconoce en hora de Lima", () => {
     expect(isLimaSunday(new Date("2026-09-27T15:00:00.000Z"))).toBe(true);
     // Sábado 22:00 en Lima = domingo 03:00 en UTC: sigue siendo sábado.
     expect(isLimaSunday(new Date("2026-09-27T03:00:00.000Z"))).toBe(false);
+  });
+
+  it("el domingo se llama, pero desde las 11:00 (decisión del owner, 26-09)", () => {
+    expect(withinVoiceHours(new Date("2026-09-27T14:00:00.000Z"), 9, 20)).toBe(false); // dom 09:00
+    expect(withinVoiceHours(new Date("2026-09-27T15:59:00.000Z"), 9, 20)).toBe(false); // dom 10:59
+    expect(withinVoiceHours(new Date("2026-09-27T16:00:00.000Z"), 9, 20)).toBe(true); // dom 11:00
+    expect(withinVoiceHours(new Date("2026-09-28T00:59:00.000Z"), 9, 20)).toBe(true); // dom 19:59
+    expect(withinVoiceHours(new Date("2026-09-28T01:00:00.000Z"), 9, 20)).toBe(false); // dom 20:00
+    // Un inicio de tienda más tardío manda también el domingo.
+    expect(withinVoiceHours(new Date("2026-09-27T16:00:00.000Z"), 12, 20)).toBe(false);
   });
 });
 

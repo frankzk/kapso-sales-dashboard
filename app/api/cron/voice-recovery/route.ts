@@ -24,7 +24,7 @@ import {
   sweepStaleCalls,
   type VoiceStoreSettings,
 } from "@/lib/voice-recovery-server";
-import { isLimaSunday, withinVoiceHours } from "@/lib/voice-recovery-queue";
+import { withinVoiceHours } from "@/lib/voice-recovery-queue";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -81,7 +81,7 @@ async function run(req: NextRequest) {
         report.action = "sin_configuracion";
         continue;
       }
-      if (isLimaSunday(now) || !withinVoiceHours(now, store.voice_recovery_hour_start, store.voice_recovery_hour_end)) {
+      if (!withinVoiceHours(now, store.voice_recovery_hour_start, store.voice_recovery_hour_end)) {
         report.action = "fuera_de_horario";
         continue;
       }
