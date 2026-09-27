@@ -3100,8 +3100,10 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
 - Horario `voice_recovery_hour_start`–`voice_recovery_hour_end` (09–20 de Lima
   por defecto), más estrecho que el laboral de §6.1 a propósito: una llamada
   automática a las 21:45 se recibe distinto que la de una asesora. **Los
-  domingos no llama**, ni el barrido ni el botón: tampoco ofrece entrega ese
-  día.
+  domingos llama desde las 11:00** (`VOICE_SUNDAY_START_HOUR`, o desde el
+  inicio de la tienda si es más tarde), el barrido y el botón por igual.
+  Decisión del owner, 26-09-2026; antes el domingo no llamaba. Lo que sigue
+  sin cambiar es la entrega: el agente nunca ofrece un domingo.
 - Lo mueve **owner o admin de la organización de esa tienda**, igual que el
   ciclo de recontacto (§6.1): reparte llamadas y reputación de toda la tienda.
 - **La clienta siempre ve un número peruano.** Kapta no pide una llamada sin

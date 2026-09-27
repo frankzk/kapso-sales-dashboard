@@ -25,7 +25,7 @@ import {
 } from "@/lib/voice-recovery-server";
 import {
   VOICE_EXCLUSION_LABEL,
-  isLimaSunday,
+  VOICE_SUNDAY_START_HOUR,
   withinVoiceHours,
   type VoiceExclusion,
 } from "@/lib/voice-recovery-queue";
@@ -2351,9 +2351,11 @@ export async function llamarConAgente(orderId: string): Promise<MasterActionStat
     return { error: "El agente de voz no está habilitado en esta tienda (Ajustes)." };
   }
   const now = new Date();
-  if (isLimaSunday(now) || !withinVoiceHours(now, store.voice_recovery_hour_start, store.voice_recovery_hour_end)) {
+  if (!withinVoiceHours(now, store.voice_recovery_hour_start, store.voice_recovery_hour_end)) {
     return {
-      error: `El agente llama de ${store.voice_recovery_hour_start}:00 a ${store.voice_recovery_hour_end}:00, de lunes a sábado.`,
+      error:
+        `El agente llama de ${store.voice_recovery_hour_start}:00 a ${store.voice_recovery_hour_end}:00; ` +
+        `los domingos, desde las ${Math.max(store.voice_recovery_hour_start, VOICE_SUNDAY_START_HOUR)}:00.`,
     };
   }
   const admin = createAdminSupabase();

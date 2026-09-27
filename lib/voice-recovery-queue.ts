@@ -150,13 +150,24 @@ export function compareVoiceCandidates(
   return b.closedAt.localeCompare(a.closedAt);
 }
 
-/** ¿Estamos dentro del horario del agente, en hora de Lima? */
+/**
+ * Hora de inicio los domingos. Decisión del owner, 26-09-2026: el agente llama
+ * también el domingo, pero desde las 11:00 y no desde las 9:00. La entrega que
+ * ofrece sigue sin caer en domingo (`voiceDates`).
+ */
+export const VOICE_SUNDAY_START_HOUR = 11;
+
+/**
+ * ¿Estamos dentro del horario del agente, en hora de Lima? El domingo empieza
+ * a las 11:00, o más tarde si la tienda tiene un inicio posterior.
+ */
 export function withinVoiceHours(now: Date, startHour: number, endHour: number): boolean {
   const limaHour = new Date(now.getTime() - 5 * 3_600_000).getUTCHours();
-  return limaHour >= startHour && limaHour < endHour;
+  const start = isLimaSunday(now) ? Math.max(startHour, VOICE_SUNDAY_START_HOUR) : startHour;
+  return limaHour >= start && limaHour < endHour;
 }
 
-/** Domingo no se llama: tampoco se ofrece entrega ese día. */
+/** ¿Es domingo en Lima? El agente llama, pero desde `VOICE_SUNDAY_START_HOUR`. */
 export function isLimaSunday(now: Date): boolean {
   return new Date(now.getTime() - 5 * 3_600_000).getUTCDay() === 0;
 }
