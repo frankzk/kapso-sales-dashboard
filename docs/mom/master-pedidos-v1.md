@@ -3332,9 +3332,13 @@ apagar `voice_recovery_auto` la detiene. **Ajuste del owner, 25-09-2026:**
 Kenku pasa a `voice_recovery_daily_cap = 80` y `voice_recovery_max_age_days =
 21`. El primer día el tope de 30 se agotó a las 11:45 con 37 pedidos todavía
 en cola, y el límite de 7 días dejaba fuera 817 pedidos, unos 300 de ellos con
-stock Swayp completo. Se mide la tasa de «confirma» por antigüedad de la guía
-(0–7, 8–14 y 15–21 días) para decidir si la parte tibia vale la llamada.
-Todas las transcripciones de la
+stock Swayp completo. **Segundo ajuste, 26-09-2026:** el owner
+sube Kenku a `voice_recovery_daily_cap = 130` y `voice_recovery_max_age_days
+= 30`, la misma ventana que la recuperación (`return_recovery_max_days`). Con
+una llamada cada cinco minutos, 130 es lo que cabe entre las 9:00 y las 20:00.
+Se mide la tasa de «confirma» por antigüedad de la guía (0–7, 8–14, 15–21 y
+22–30 días) para decidir si la parte tibia vale la llamada. Todas las
+transcripciones de la
 primera semana se escuchan. Se decide con estas cifras, comparadas con la
 línea base de cero llamadas:
 
