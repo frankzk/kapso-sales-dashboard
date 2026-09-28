@@ -184,6 +184,8 @@ export default async function StoreSettingsPage({
       delivered_thanks_hour_start: full.delivered_thanks_hour_start ?? 9,
       delivered_thanks_hour_end: full.delivered_thanks_hour_end ?? 21,
       delivered_thanks_max_hours: full.delivered_thanks_max_hours ?? 72,
+      delivered_thanks_pace_count: full.delivered_thanks_pace_count ?? 5,
+      delivered_thanks_pace_minutes: full.delivered_thanks_pace_minutes ?? 20,
       // Pre-0190 las columnas no existen ⇒ agente de voz apagado.
       voice_recovery_enabled: full.voice_recovery_enabled ?? false,
       voice_recovery_auto: full.voice_recovery_auto ?? false,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   THANKS_BATCH_CAP,
+  thanksPaceBudget,
   THANKS_MAX_ATTEMPTS,
   parseThanksBodyParams,
   parseThanksButtonParams,
@@ -135,6 +136,16 @@ const creds = (over: Partial<StoreCreds> = {}): StoreCreds =>
     ...over,
   }) as StoreCreds;
 
+describe("el ritmo", () => {
+  it("lo que queda en la ventana, nunca negativo y nunca sobre el techo", () => {
+    expect(thanksPaceBudget({ count: 5, minutes: 20, attemptsInWindow: 0 })).toBe(5);
+    expect(thanksPaceBudget({ count: 5, minutes: 20, attemptsInWindow: 3 })).toBe(2);
+    expect(thanksPaceBudget({ count: 5, minutes: 20, attemptsInWindow: 9 })).toBe(0);
+    expect(thanksPaceBudget({ count: 100, minutes: 20, attemptsInWindow: 0 })).toBe(THANKS_BATCH_CAP);
+    expect(thanksPaceBudget({ count: 0, minutes: 20, attemptsInWindow: 0 })).toBe(0);
+  });
+});
+
 describe("la config de la tienda", () => {
   it("apagada o sin nombre de plantilla, no hay config", () => {
     expect(thanksConfig(creds({ delivered_thanks_enabled: false }))).toBeNull();
@@ -250,12 +261,52 @@ describe("una corrida del cron", () => {
    * Una importación que marca 200 entregas de golpe no puede convertirse en 200
    * plantillas de marketing en un minuto.
    */
-  it("respeta el tope por corrida", async () => {
-    const muchos = Array.from({ length: 60 }, (_, i) =>
+  const muchos = () =>
+    Array.from({ length: 60 }, (_, i) =>
       pedido({ order_id: `o${i}`, customer_phone: `519${String(i).padStart(8, "0")}` }),
     );
-    const { admin } = fakeAdmin(muchos);
+
+  /**
+   * «5 mensajes cada 20 minutos.» Con ~170 entregas pendientes, la primera
+   * activación habría mandado 25 cada 5 minutos desde un número recién
+   * estrenado. Por defecto salen 5.
+   */
+  it("por defecto manda 5 por corrida, no 25", async () => {
+    const { admin } = fakeAdmin(muchos());
     const r = await runDeliveredThanks(admin, "s1", creds(), async () => ({ ok: true, id: null }), NOW);
+    expect(r.sent).toBe(5);
+  });
+
+  it("si la ventana ya tiene sus 5, no manda nada", async () => {
+    const yaEnviados = Array.from({ length: 5 }, (_, i) => ({
+      order_id: `previo${i}`,
+      ok: true,
+      phone: `51911111${String(i).padStart(3, "0")}`,
+    }));
+    const { admin } = fakeAdmin(muchos(), yaEnviados);
+    let envios = 0;
+    await runDeliveredThanks(
+      admin,
+      "s1",
+      creds(),
+      async () => {
+        envios += 1;
+        return { ok: true, id: null };
+      },
+      NOW,
+    );
+    expect(envios).toBe(0);
+  });
+
+  it("aunque el ritmo configurado sea alto, el techo por corrida sigue en 25", async () => {
+    const { admin } = fakeAdmin(muchos());
+    const r = await runDeliveredThanks(
+      admin,
+      "s1",
+      creds({ delivered_thanks_pace_count: 100 }),
+      async () => ({ ok: true, id: null }),
+      NOW,
+    );
     expect(r.sent).toBe(THANKS_BATCH_CAP);
   });
 

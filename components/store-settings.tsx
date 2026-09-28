@@ -91,6 +91,8 @@ export interface StoreSettingsData {
     delivered_thanks_hour_start: number;
     delivered_thanks_hour_end: number;
     delivered_thanks_max_hours: number;
+    delivered_thanks_pace_count: number;
+    delivered_thanks_pace_minutes: number;
     /** Agente de voz para Reproprovincia (MOM §11.8, migración 0190). */
     voice_recovery_enabled: boolean;
     voice_recovery_auto: boolean;
@@ -1238,8 +1240,7 @@ function SettingsForm({
           <p className="text-xs text-slate-500">
             Cuando un pedido pasa a <strong>entregado</strong>, se le manda a la clienta una
             plantilla de agradecimiento con el botón al <strong>catálogo privado</strong>. Una vez
-            por pedido y una por clienta cada 7 días, en el horario de abajo y como mucho 25 por
-            corrida. Lleva una oferta, así que la plantilla va aprobada en Meta como{" "}
+            por pedido y una por clienta cada 7 días, en el horario y al ritmo de abajo. Lleva una oferta, así que la plantilla va aprobada en Meta como{" "}
             <strong>Marketing</strong>.
           </p>
           <div className="grid gap-4 sm:grid-cols-3">
@@ -1342,6 +1343,38 @@ function SettingsForm({
                 defaultValue={s.delivered_thanks_hour_end}
                 className={inputCls}
               />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="delivered_thanks_pace_count">
+                Ritmo · mensajes
+              </label>
+              <input
+                id="delivered_thanks_pace_count"
+                name="delivered_thanks_pace_count"
+                type="number"
+                min={1}
+                max={25}
+                defaultValue={s.delivered_thanks_pace_count}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="delivered_thanks_pace_minutes">
+                Ritmo · cada (minutos)
+              </label>
+              <input
+                id="delivered_thanks_pace_minutes"
+                name="delivered_thanks_pace_minutes"
+                type="number"
+                min={5}
+                max={1440}
+                defaultValue={s.delivered_thanks_pace_minutes}
+                className={inputCls}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                5 cada 20 minutos = 15 por hora y hasta 180 al día de 9 a 21 h. Salen primero las
+                entregas más recientes.
+              </p>
             </div>
             <div>
               <label className={labelCls} htmlFor="delivered_thanks_phone_number_id">
