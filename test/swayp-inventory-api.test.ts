@@ -91,6 +91,11 @@ describe("searchInventory", () => {
     expect(call.headers.email).toBe("fkc@monono.pe");
     expect(call.headers.user).toBe("20610091823");
     expect(call.headers["x-country"]).toBe("PE");
+    // El host de inventario (Cloud Run) exige verse como navegador: sin estos
+    // headers devuelve 403 con un token válido.
+    expect(call.headers.Origin).toBe("https://ce.swayp.co");
+    expect(call.headers.Referer).toBe("https://ce.swayp.co/");
+    expect(call.headers["User-Agent"]).toContain("Chrome");
   });
 
   it("un 401 se reconoce como error de credencial", async () => {
