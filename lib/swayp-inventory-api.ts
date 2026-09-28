@@ -72,6 +72,20 @@ export function isInventoryAuthError(err: unknown): boolean {
  * Los headers que el panel adjunta a cada llamada. NUNCA se registran: el token
  * es un secreto de vida corta y no tiene por qué aparecer en un log.
  */
+// El User-Agent del panel (una petición real capturada). Sin un UA de navegador,
+// el host de inventario (Cloud Run) puede responder 403 aunque el token sea
+// válido — que es justo lo que pasó: bags (cloudfunctions) daba 200 y
+// inventory/search (run.app) daba 403 con el mismo token.
+const PANEL_USER_AGENT =
+  "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Mobile Safari/537.36";
+const PANEL_ORIGIN = "https://ce.swayp.co";
+
+/**
+ * Los headers que el panel adjunta a cada llamada, replicados TAL CUAL. Además
+ * de la credencial (Authorization + email/user/x-country), incluye los que un
+ * navegador manda solo —Origin, Referer, User-Agent— porque el host de
+ * inventario los exige: sin ellos devuelve 403 pese a un token bueno.
+ */
 function headersFor(creds: SwaypInventoryCreds): Record<string, string> {
   return {
     Authorization: `Bearer ${creds.token}`,
@@ -80,6 +94,10 @@ function headersFor(creds: SwaypInventoryCreds): Record<string, string> {
     "x-country": creds.country ?? "PE",
     "Content-Type": "application/json",
     Accept: "application/json",
+    "Access-Control-Allow-Origin": "*",
+    Origin: PANEL_ORIGIN,
+    Referer: `${PANEL_ORIGIN}/`,
+    "User-Agent": PANEL_USER_AGENT,
   };
 }
 
