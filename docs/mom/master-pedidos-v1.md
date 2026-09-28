@@ -6472,7 +6472,10 @@ monto), distrito (y su tienda), resultado, cobro y respaldo, y ganancia (con
 su tarifa y su adicional debajo), con scroll horizontal en pantallas medianas
 y el cliente fijo a la izquierda; en el teléfono las paradas van como lista.
 Tarifa y adicional quedan como plegables al pie; «+ adicional» en la fila de
-una parada reportada abre el formulario con ese punto elegido.
+una parada reportada abre el formulario con ese punto elegido. La ganancia de
+un no entregado que no es rechazo dice «No se paga · solo entrega o rechazo»,
+no «Sin tarifa»: ese punto no se paga con o sin tarifa (§29.10); «Sin tarifa»
+queda para la entrega o el rechazo sin tarifa personal vigente (28-09-2026).
 
 **Qué impide terminar la ruta, a la vista (28-09-2026).** Antes el
 coordinador pulsaba «Terminar ruta operativa», leía UN error («Grupo GF:

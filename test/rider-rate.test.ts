@@ -1,6 +1,8 @@
 // Tarifa personal del motorizado por distrito (0162), vista desde el Tarifario.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkStopRate, resolveRiderRate, type RiderPayRate, type RiderRateVersion } from "@/lib/rider-pay";
+import { checkStopRate, resolveRiderRate, stopEarnings, stopEarns, type RiderPayRate, type RiderRateVersion } from "@/lib/rider-pay";
 
 const v = (district_key: string | null, amount: number, effective_from: string, created_at = `${effective_from}T10:00:00Z`): RiderRateVersion => ({ district_key, amount, effective_from, created_at });
 
@@ -36,5 +38,49 @@ describe("checkStopRate: la tarifa de la parada frente a las registradas", () =>
     expect(checkStopRate({ district: "Pucallpa", configured_rate: 8.5 }, rates, "2026-09-22").warning).toBe("Distrito «Pucallpa» no reconocido: se aplica la tarifa general.");
     // «LIMA» a secas es el Cercado: sí se reconoce.
     expect(checkStopRate({ district: "LIMA", configured_rate: 8.5 }, rates, "2026-09-22").warning).toBeNull();
+  });
+});
+
+// Yhoni, 28/09: la columna «Ganancia» decía «Sin tarifa» también en los «no
+// estaba» y «no contesta», que no se pagan con o sin tarifa. Con la tarifa
+// puesta habrían dicho «Tarifa S/ 0.00». Ahora dicen «No se paga».
+describe("stopEarnings: qué dice la ganancia de una parada", () => {
+  const conTarifa = { configured_rate: 8.5, base: 8.5 };
+  const sinTarifa = { configured_rate: null, base: null };
+  const parada = (status: string, outcome_reason: string | null = null) => ({ status, outcome_reason });
+
+  it("solo la entrega y el rechazo se pagan", () => {
+    expect(stopEarns(parada("entregado"))).toBe(true);
+    expect(stopEarns(parada("no_entregado", "rechazado"))).toBe(true);
+    for (const motivo of ["no_contesta", "no_estaba", "reprogramado", "direccion_errada", "sin_dinero", "otro", null]) {
+      expect(stopEarns(parada("no_entregado", motivo)), String(motivo)).toBe(false);
+    }
+    expect(stopEarns(parada("pendiente"))).toBe(false);
+  });
+
+  it("un no entregado que no es rechazo no se paga, con o sin tarifa", () => {
+    expect(stopEarnings(parada("no_entregado", "no_estaba"), sinTarifa)).toEqual({ kind: "no_se_paga" });
+    expect(stopEarnings(parada("no_entregado", "no_contesta"), { configured_rate: 8.5, base: 0 })).toEqual({ kind: "no_se_paga" });
+  });
+
+  it("la entrega y el rechazo se ganan con tarifa, o piden tarifa", () => {
+    expect(stopEarnings(parada("entregado"), conTarifa)).toEqual({ kind: "ganada", base: 8.5 });
+    expect(stopEarnings(parada("no_entregado", "rechazado"), conTarifa)).toEqual({ kind: "ganada", base: 8.5 });
+    expect(stopEarnings(parada("entregado"), sinTarifa)).toEqual({ kind: "sin_tarifa" });
+    expect(stopEarnings(parada("no_entregado", "rechazado"), { configured_rate: 8.5, base: null })).toEqual({ kind: "sin_tarifa" });
+  });
+
+  it("sin reportar todavía no se sabe: dice la tarifa que tendría", () => {
+    expect(stopEarnings(parada("pendiente"), { configured_rate: 8.5, base: 0 })).toEqual({ kind: "pendiente", rate: 8.5 });
+    expect(stopEarnings(parada("pendiente"), sinTarifa)).toEqual({ kind: "pendiente", rate: null });
+  });
+
+  it("la misma regla que el cálculo de la base (rider_pay_preview) y la que usa la tabla", () => {
+    const sql = readFileSync(resolve(process.cwd(), "db/migrations/0197_rejection_photo_exemption.sql"), "utf8");
+    expect(sql).toContain("case when s.status='entregado' or (s.status='no_entregado' and s.outcome_reason='rechazado') then t.amount else 0 end base");
+    const tabla = readFileSync(resolve(process.cwd(), "components/routes.tsx"), "utf8");
+    expect(tabla).toContain("const state = pr ? stopEarnings(s, pr) : null;");
+    expect(tabla).toContain('<p className="text-xs font-medium text-slate-600">No se paga</p>');
+    expect(tabla).toContain("solo entrega o rechazo");
   });
 });

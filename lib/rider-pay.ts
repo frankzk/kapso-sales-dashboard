@@ -74,6 +74,41 @@ export function riderPayDistrictKey(raw: string | null | undefined): string | nu
   return key === "lurigancho chosica" ? "lurigancho" : key;
 }
 
+/**
+ * ¿El punto se le paga al motorizado? Solo la entrega y el rechazo del cliente
+ * (MOM §29.10, «los demás intentos no pagan automáticamente»), igual que
+ * `rider_pay_preview`: un «no estaba» o un «no contesta» no se paga, tenga o
+ * no tarifa. Un adicional aprobado sí se paga en cualquier punto.
+ */
+export function stopEarns(stop: { status: string; outcome_reason: string | null }): boolean {
+  return stop.status === "entregado" || (stop.status === "no_entregado" && stop.outcome_reason === "rechazado");
+}
+
+/**
+ * Qué dice la columna «Ganancia» de una parada:
+ *  - `pendiente`: sin reportar; se sabrá al reportar (con la tarifa, si la hay).
+ *  - `no_se_paga`: no entregado que no es rechazo. No es «Sin tarifa»: con o
+ *    sin tarifa, ese punto no se paga.
+ *  - `sin_tarifa`: se paga, pero el motorizado no tiene tarifa vigente.
+ *  - `ganada`: se paga con la tarifa vigente.
+ */
+export type StopEarnings =
+  | { kind: "pendiente"; rate: number | null }
+  | { kind: "no_se_paga" }
+  | { kind: "sin_tarifa" }
+  | { kind: "ganada"; base: number };
+
+export function stopEarnings(
+  stop: { status: string; outcome_reason: string | null },
+  row: Pick<RiderPayRow, "configured_rate" | "base">,
+): StopEarnings {
+  if (stop.status === "pendiente") return { kind: "pendiente", rate: row.configured_rate };
+  if (!stopEarns(stop)) return { kind: "no_se_paga" };
+  // En un punto que se paga, la base ES la tarifa vigente: sin tarifa, null.
+  if (row.base === null) return { kind: "sin_tarifa" };
+  return { kind: "ganada", base: row.base };
+}
+
 export interface StopRateCheck {
   /** De dónde sale la tarifa que rige hoy para esa parada. */
   source: "distrito" | "general" | null;

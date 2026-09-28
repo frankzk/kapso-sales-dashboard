@@ -32,7 +32,7 @@ import type { RiderRow } from "@/lib/settlements-access";
 import { Hint } from "@/components/hint";
 import { IconAlert, IconCamera, IconCheckCircle, IconClock, IconReceipt, IconTruck } from "@/components/icons";
 import { RIDER_PAY_BALANCE_HINT, RIDER_RATE_FORM_ID, RiderPayPanel, riderPayBalanceLabel } from "@/components/rider-pay-panel";
-import { checkStopRate } from "@/lib/rider-pay";
+import { checkStopRate, stopEarnings } from "@/lib/rider-pay";
 import type { RiderPayDetail } from "@/lib/rider-pay";
 import {
   addStops,
@@ -960,24 +960,32 @@ function StopEarnings({ stop: s, row: pr, pay, onExtra }: {
   onExtra?: (stopId: string) => void;
 }) {
   const check = pr && pay ? checkStopRate(pr, pay.rates, pay.snapshot.day) : null;
-  const earned = pr && pr.configured_rate != null && pr.base !== null && s.status !== "pendiente" ? pr.base : null;
-  const noRate = !!pr && (pr.configured_rate == null || (s.status !== "pendiente" && pr.base === null));
+  // Qué se muestra lo decide `stopEarnings` (lib/rider-pay.ts): un no entregado
+  // que no es rechazo dice «No se paga», no «Sin tarifa» (MOM §29.10).
+  const state = pr ? stopEarnings(s, pr) : null;
+  const earned = state?.kind === "ganada" ? state.base : null;
+  const noRateTitle = "Configura la tarifa del motorizado en «Tarifa de …», abajo";
   return (
     <div className="ml-auto min-w-[6.5rem] shrink-0 space-y-0.5 text-right">
-      {!pr ? <span className="text-slate-400">—</span>
+      {!pr || !state ? <span className="text-slate-400">—</span>
         : earned !== null ? <p className="font-semibold tabular-nums text-slate-900">{money(earned + pr.extra)}</p>
-        : noRate ? <p className="text-xs font-medium text-amber-800" title="Configura la tarifa del motorizado en «Tarifa de …», abajo">Sin tarifa</p>
+        : state.kind === "no_se_paga"
+          ? (pr.extra ? <p className="font-semibold tabular-nums text-slate-900">{money(pr.extra)}</p> : <p className="text-xs font-medium text-slate-600">No se paga</p>)
+        : state.kind === "sin_tarifa" ? <p className="text-xs font-medium text-amber-800" title={noRateTitle}>Sin tarifa</p>
         : <span className="text-slate-400">—</span>}
       {pr && earned !== null && (
         <p className="whitespace-nowrap text-xs tabular-nums text-slate-500">
           Tarifa {money(earned)}{check?.source ? ` · ${check.source === "distrito" ? "distrito" : "general"}` : ""}
         </p>
       )}
-      {pr && earned === null && !noRate && pr.configured_rate != null && (
-        <p className="whitespace-nowrap text-xs tabular-nums text-slate-500">{money(pr.configured_rate)} al reportar</p>
+      {state?.kind === "no_se_paga" && (
+        <p className={cn("text-xs text-slate-500", !pr?.extra && "whitespace-nowrap")}>{pr?.extra ? "El punto no se paga: " : ""}solo entrega o rechazo</p>
       )}
+      {state?.kind === "pendiente" && (state.rate != null
+        ? <p className="whitespace-nowrap text-xs tabular-nums text-slate-500">{money(state.rate)} al reportar</p>
+        : <p className="text-xs font-medium text-amber-800" title={noRateTitle}>Sin tarifa</p>)}
       {pr && pr.extra ? <p className="whitespace-nowrap text-xs tabular-nums text-slate-500">Adicional {money(pr.extra)}</p> : null}
-      {check?.warning && (
+      {check?.warning && state?.kind !== "no_se_paga" && (
         <p className="flex items-start justify-end gap-1 text-left text-xs leading-snug text-amber-800" title={check.warning}>
           <IconAlert aria-hidden="true" className="mt-px h-3.5 w-3.5 shrink-0" />
           <span className="max-w-[13rem]">{check.warning}</span>
