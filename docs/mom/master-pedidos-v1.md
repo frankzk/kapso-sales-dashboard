@@ -5560,11 +5560,36 @@ Almacén conserva **Entregas a couriers** para los demás operadores. Los enlace
 antiguos de GF redirigen a su módulo sin cambiar ids, QR ni historial.
 
 Una ruta diaria de reparto puede tener varias cargas/manifiestos vinculados.
-Una carga adicional solo se abre después de recibir íntegramente la anterior;
-no reabre ni modifica sus cotejos. Cada nueva carga exige ambos controles.
-Al completar recepción se incorporan automáticamente las paradas a la misma
-ruta de reparto. Una ruta liquidada no admite cargas; no se recrean rutas ni
-se sustituyen paradas ya reportadas. Finanzas conserva aprobación humana.
+Una carga adicional solo se abre cuando el motorizado ya salió con la
+anterior, es decir, con la custodia cambiada. Cada nueva carga exige ambos
+controles. Al completar recepción se incorporan automáticamente las paradas a
+la misma ruta de reparto. Una ruta liquidada no admite cargas; no se recrean
+rutas ni se sustituyen paradas ya reportadas. Finanzas conserva aprobación
+humana.
+
+**La caja sigue abierta mientras se coteja (28-09-2026, decisión de Frankz,
+0196).** Mientras la caja no sale, se le siguen sumando paquetes **en paralelo**
+al cotejo de oficina y a la recepción del motorizado. Al final todo debe quedar
+cotejado por los dos, o retirada la diferencia que no irá.
+
+- Un paquete nuevo entra sin cotejar. Si oficina ya había terminado, la caja
+  vuelve a «cotejo de oficina» solo por él; lo ya cotejado y recibido no se
+  toca.
+- El motorizado recibe cada paquete que oficina ya verificó, aunque queden
+  otros por verificar. Un paquete sin verificar no se recibe y se le dice por
+  qué.
+- La custodia, y con ella la ruta, pasa solo con el 100 % de los paquetes
+  activos cotejados dos veces. Lo que no irá se retira: oficina con «Retirar» o
+  el motorizado con «No lo recojo». Si con ese retiro lo que queda está
+  completo, la custodia pasa en el acto (`gf_finalize_if_complete`).
+
+Antes, desde el primer paquete cotejado por oficina, no se le podía sumar nada
+al motorizado hasta que recibiera la caja entera: «La carga ya inició el
+cotejo» y «Termina de verificar y recibir la carga actual antes de agregar
+otra». Medido del 23 al 26-09: ventanas de 9 a 74 minutos sin poder sumar. El
+25-09 lo escaneado para Yhoni a las 10:46 no salió con él. El 26-09 su carga 2
+se abrió cuando él ya salía, nunca la recibió y quedó vacía, bloqueando la
+liquidación del día.
 
 - Cobertura: Lima Metropolitana y Callao.
 - Punto de operación: un único almacén de Grupo GF.
@@ -5855,11 +5880,20 @@ rutas. Una parada pendiente bloquea la liquidación. Daysi o Frankz pueden
 completar el reporte faltante con la auditoría de §29.5; no existe cierre
 automático silencioso.
 
-El efectivo máximo planificado por motorizado es S/ 5,000 por ruta:
+El efectivo máximo planificado por motorizado es S/ 9,000 por ruta:
 
 - advertencia desde S/ 4,000;
-- bloqueo de nuevas asignaciones al superar S/ 5,000; y
+- bloqueo de nuevas asignaciones al superar S/ 9,000; y
 - Daysi o Frankz pueden autorizar una excepción con motivo auditado.
+
+**Límite subido de S/ 5,000 a S/ 9,000 (28-09-2026, decisión de Frankz).** Una
+ruta de Roy con 29 paquetes llegaba a S/ 5,363.10 y el escáner la bloqueaba en
+plena salida. Los dos montos viven en `logistics_providers`
+(`cash_warning_amount`, `cash_limit_amount`) y se leen en cada asignación, así
+que cambiarlos no requiere desplegar; se cambió con un UPDATE sobre la fila de
+Grupo GF, igual que el modo de recepción de §29.13. El aviso se quedó en
+S/ 4,000. Un operador nuevo sigue naciendo con S/ 4,000 / S/ 5,000, que son los
+valores por defecto de 0134.
 
 Neto de la tienda:
 
@@ -6079,10 +6113,12 @@ línea para lo que faltara; desde la misma fila un paquete se **quita** (con mot
 destino antes de retirar del origen: si el destino ya está en cotejo, no se
 toca nada, igual que al asignar (§29.5).
 
-**Un paso para el motorizado, antes de la ruta.** Mientras su carga esté
-cotejada por oficina y sin custodia, `/reparto` abre en «Recibir mi caja»: un
-escaneo por paquete y, por paquete, «No lo recojo» con un motivo corto (no
-está en la caja, dañado, no cabe, otro). El rechazo (0182, `gf_rider_decline`)
+**Un paso para el motorizado, antes de la ruta.** Mientras su carga tenga
+algo verificado por oficina y siga sin custodia, `/reparto` abre en «Recibir mi
+caja»: un escaneo por paquete y, por paquete, «No lo recojo» con un motivo
+corto (no está en la caja, dañado, no cabe, otro). Desde 0196 eso empieza con
+la caja todavía en cotejo: lo que oficina no verificó se ve «esperando a
+oficina» y no se recibe hasta que lo coteje. El rechazo (0182, `gf_rider_decline`)
 retira el paquete de la carga con rastro «No recogido por X: motivo», deja
 `pickup_declined` en el pedido, devuelve la solicitud a `accepted` con
 observación —reaparece en «por asignar» y el supervisor la asigna a otro— y

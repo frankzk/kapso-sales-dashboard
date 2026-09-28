@@ -2052,8 +2052,8 @@ export interface MoveManifestItemResult extends CourierActionResult {
  * asignar al otro. Tres pantallas y ningún evento que dijera «pasó de Roy a
  * Yhoni». Ahora es una acción: retira del manifiesto origen (queda el rastro
  * con motivo), abre o reutiliza la carga del destino con `gf_dispatch_load`
- * (misma regla que asignar: si el destino ya está en cotejo, no se puede
- * meter nada hasta que reciba), inserta el paquete y deja un
+ * (misma regla que asignar: desde 0196 la caja del destino admite paquetes
+ * mientras no haya salido, aunque se esté cotejando), inserta el paquete y deja un
  * `dispatch_route_reassigned` en el pedido con origen y destino.
  */
 export async function moveManifestItem(
@@ -2132,7 +2132,14 @@ export async function moveManifestItem(
     await admin.from("dispatch_manifest_items").update({ removed_at: null, removed_by: null, removal_reason: null }).eq("id", item.id);
     return { error: insertError.code === "23505" ? "El paquete ya está en otra caja activa." : insertError.message };
   }
-  if (!sourceInCustody) await recalculateManifestState(admin, manifestId, auth.userId);
+  if (!sourceInCustody) {
+    await recalculateManifestState(admin, manifestId, auth.userId);
+    // 0196: sacar el último pendiente puede dejar la caja de origen completa;
+    // entonces la custodia pasa y la ruta de ese motorizado aparece.
+    const { data: finalized, error: finalizeError } = await admin.rpc("gf_finalize_if_complete", { p_manifest_id: manifestId, p_actor: auth.userId });
+    if (finalizeError) console.error("[courier] no se pudo cerrar la caja de origen completa", finalizeError.message);
+    else if ((finalized ?? []).length) await recomputeOrderMasterSafe(admin, finalized as string[]);
+  }
   await Promise.all([
     admin.from("dispatch_events").insert([
       { org_id: orgId, manifest_id: manifestId, shipment_id: shipmentId, actor: auth.userId, kind: "package_removed", payload: { reason: cleanReason, moved_to: rider.id, moved_to_manifest: targetManifestId } },

@@ -297,13 +297,33 @@ export const RIDER_PICKUP_MODE_LABEL: Record<RiderPickupMode, string> = {
 export type RiderScreen = "recibir_caja" | "ruta";
 
 /**
- * Qué ve el motorizado al abrir /reparto. Solo en `exigir` una carga cotejada
- * por oficina y sin custodia lo manda a «Recibir mi caja»; en los otros modos
- * la custodia ya cambió al asignar y lo que tiene es su ruta.
+ * Qué ve el motorizado al abrir /reparto. Solo en `exigir` una carga sin
+ * custodia con algo que recibir lo manda a «Recibir mi caja»; en los otros
+ * modos la custodia ya cambió al asignar y lo que tiene es su ruta.
+ *
+ * Desde 0196 eso incluye una caja todavía en cotejo de oficina: se recibe cada
+ * paquete que oficina ya verificó mientras se le siguen sumando otros. Quién
+ * llega hasta aquí lo decide `riderLoadOpenToReceive`.
  */
 export function riderScreenFor(mode: RiderPickupMode, loadStates: readonly string[]): RiderScreen {
   if (mode !== "exigir") return "ruta";
-  return loadStates.some((state) => state === "ready_for_pickup" || state === "pickup_check") ? "recibir_caja" : "ruta";
+  return loadStates.some((state) => state === "office_check" || state === "ready_for_pickup" || state === "pickup_check")
+    ? "recibir_caja"
+    : "ruta";
+}
+
+/**
+ * ¿Esta carga va a «Recibir mi caja»? Lista o recibiéndose, siempre. En cotejo
+ * de oficina, solo si oficina ya verificó algún paquete activo: antes de eso el
+ * motorizado no tiene nada que escanear y su pantalla no debe cambiar.
+ */
+export function riderLoadOpenToReceive(
+  state: string,
+  items: readonly { removed_at?: string | null; office_checked_at?: string | null }[],
+): boolean {
+  if (state === "ready_for_pickup" || state === "pickup_check") return true;
+  if (state !== "office_check") return false;
+  return items.some((item) => !item.removed_at && !!item.office_checked_at);
 }
 
 /** Si al asignar hay que entregar la custodia en el acto (todo menos `exigir`). */

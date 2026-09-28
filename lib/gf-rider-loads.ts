@@ -1,7 +1,7 @@
 import { createAdminSupabase } from "@/lib/db";
 import { getMyRider } from "@/lib/routes-access";
 import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
-import type { RiderPickupMode } from "@/lib/grupo-gf-courier";
+import { riderLoadOpenToReceive, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 
 export interface RiderLoadItem {
   id: string;
@@ -12,6 +12,8 @@ export interface RiderLoadItem {
   district: string | null;
   output_code: string | null;
   guide_code: string | null;
+  /** Null: oficina todavía no lo verifica y no se puede recibir (0196). */
+  office_checked_at: string | null;
   pickup_checked_at: string | null;
   pickup_declined_at: string | null;
   pickup_declined_reason: string | null;
@@ -25,32 +27,39 @@ export interface RiderLoad {
   total: number;
   received: number;
   declined: number;
+  /** Activos sin verificar por oficina: se ven, pero todavía no se reciben. */
+  awaitingOffice: number;
   items: RiderLoadItem[];
 }
 
 /**
- * Las cargas que el motorizado tiene por recibir: cotejadas por oficina y
- * todavía sin custodia. Con sus paquetes, para que «Recibir mi caja» muestre
- * qué falta y permita decir «no lo recojo» (0182, MOM §29.13).
+ * Las cargas que el motorizado tiene por recibir: sin custodia y con algo que
+ * oficina ya verificó. Desde 0196 incluye la caja que oficina todavía coteja,
+ * porque se le siguen sumando paquetes en paralelo: el motorizado recibe lo
+ * verificado y ve lo demás «esperando a oficina». Con sus paquetes, para que
+ * «Recibir mi caja» muestre qué falta y permita decir «no lo recojo» (0182,
+ * MOM §29.13).
  */
 export async function getMyGfLoads(): Promise<RiderLoad[]> {
   const rider = await getMyRider();
   if (!rider) return [];
   const admin = createAdminSupabase();
   const { data, error } = await admin.from("dispatch_manifests").select("id,route_date,load_number,state")
-    .eq("rider_id", rider.id).eq("courier", "propio").in("state", ["ready_for_pickup", "pickup_check"])
+    .eq("rider_id", rider.id).eq("courier", "propio").in("state", ["office_check", "ready_for_pickup", "pickup_check"])
     .order("route_date", { ascending: false });
   if (error) throw new Error(error.message);
-  return Promise.all((data ?? []).map(async (load) => {
+  const loads = await Promise.all((data ?? []).map(async (load) => {
     const { data: rows, error: itemsError } = await admin.from("dispatch_manifest_items")
-      .select("id,shipment_id,pickup_checked_at,pickup_declined_at,pickup_declined_reason,removed_at,shipments(order_id,order_name,customer_name,district,output_code,guide_code)")
+      .select("id,shipment_id,office_checked_at,pickup_checked_at,pickup_declined_at,pickup_declined_reason,removed_at,shipments(order_id,order_name,customer_name,district,output_code,guide_code)")
       .eq("manifest_id", load.id)
       .order("added_at", { ascending: true });
     if (itemsError) throw new Error(itemsError.message);
-    const items: RiderLoadItem[] = ((rows ?? []) as unknown as Array<{
-      id: string; shipment_id: string; pickup_checked_at: string | null; pickup_declined_at: string | null; pickup_declined_reason: string | null; removed_at: string | null;
+    const typed = (rows ?? []) as unknown as Array<{
+      id: string; shipment_id: string; office_checked_at: string | null; pickup_checked_at: string | null; pickup_declined_at: string | null; pickup_declined_reason: string | null; removed_at: string | null;
       shipments: { order_id: string | null; order_name: string | null; customer_name: string | null; district: string | null; output_code: string | null; guide_code: string | null } | null;
-    }>)
+    }>;
+    if (!riderLoadOpenToReceive(String(load.state), typed)) return null;
+    const items: RiderLoadItem[] = typed
       // Los retirados por el supervisor no se muestran; los que el propio
       // motorizado rechazó sí, para que vea lo que dijo.
       .filter((row) => !row.removed_at || row.pickup_declined_at)
@@ -63,6 +72,7 @@ export async function getMyGfLoads(): Promise<RiderLoad[]> {
         district: row.shipments?.district ?? null,
         output_code: row.shipments?.output_code ?? null,
         guide_code: row.shipments?.guide_code ?? null,
+        office_checked_at: row.office_checked_at,
         pickup_checked_at: row.pickup_checked_at,
         pickup_declined_at: row.pickup_declined_at,
         pickup_declined_reason: row.pickup_declined_reason,
@@ -74,9 +84,11 @@ export async function getMyGfLoads(): Promise<RiderLoad[]> {
       total: active.length,
       received: active.filter((item) => item.pickup_checked_at).length,
       declined: items.length - active.length,
+      awaitingOffice: active.filter((item) => !item.office_checked_at && !item.pickup_checked_at).length,
       items,
     };
   }));
+  return loads.filter((load): load is RiderLoad => load !== null);
 }
 
 /** El modo de recojo del motorizado (0185): se lee por la organización de su ficha. */

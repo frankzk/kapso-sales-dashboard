@@ -25,10 +25,11 @@ begin
   exception when others then if sqlerrm like 'FAIL%' then raise; end if; end;
   update dispatch_manifest_items set office_checked_at=now() where manifest_id=v_first;
   update dispatch_manifests set state='ready_for_pickup' where id=v_first;
-  begin
-    perform gf_dispatch_load('15900000-0000-0000-0000-000000000001','15900000-0000-0000-0000-000000000003',current_date,null);
-    raise exception 'FAIL mixed unchecked load';
-  exception when others then if sqlerrm like 'FAIL%' then raise; end if; end;
+  -- 0196: con la caja verificada y todavía sin recibir, lo nuevo entra en la
+  -- MISMA caja; ya no se rechaza ni se abre otra carga.
+  if gf_dispatch_load('15900000-0000-0000-0000-000000000001','15900000-0000-0000-0000-000000000003',current_date,null) <> v_first then
+    raise exception 'FAIL box not reused while waiting for the rider';
+  end if;
   begin
     perform gf_rider_receive(v_first,'GF-SMOKE-1',null);
     raise exception 'FAIL accepted another user';

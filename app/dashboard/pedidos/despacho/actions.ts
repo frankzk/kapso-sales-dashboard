@@ -795,8 +795,38 @@ export async function removeManifestItem(
     payload: { reason: cleanReason },
     orderNote: `Paquete retirado de la ruta: ${cleanReason}`,
   });
+  // 0196: retirar la diferencia que no irá puede dejar la caja completa —todo
+  // lo que queda cotejado por oficina y recibido por el motorizado—. Sin esto
+  // nadie pasaba la custodia y la ruta del motorizado no aparecía.
+  const completed = await finalizeBoxIfComplete(admin, manifestId, user.id);
   revalidatePath(DISPATCH_PATH);
-  return { notice: "Paquete retirado expresamente de la ruta." };
+  return {
+    notice: completed
+      ? "Paquete retirado. Con eso la caja quedó completa y pasó al motorizado."
+      : "Paquete retirado expresamente de la ruta.",
+  };
+}
+
+/**
+ * Pasa la custodia de una caja de Grupo GF si ya está completa (0196). No hace
+ * nada con cualquier otra caja. Un fallo aquí no deshace el retiro, que ya
+ * quedó hecho: se avisa en el registro y la caja se cierra con el siguiente
+ * escaneo del motorizado.
+ */
+async function finalizeBoxIfComplete(
+  admin: ReturnType<typeof createAdminSupabase>,
+  manifestId: string,
+  actor: string,
+): Promise<boolean> {
+  const { data, error } = await admin.rpc("gf_finalize_if_complete", { p_manifest_id: manifestId, p_actor: actor });
+  if (error) {
+    console.error("[despacho] no se pudo cerrar la caja completa", error.message);
+    return false;
+  }
+  const orderIds = (data ?? []) as string[];
+  if (!orderIds.length) return false;
+  await recomputeOrderMasterSafe(admin, orderIds);
+  return true;
 }
 
 export async function cancelDispatchManifest(manifestId: string, reason: string): Promise<DispatchActionResult> {

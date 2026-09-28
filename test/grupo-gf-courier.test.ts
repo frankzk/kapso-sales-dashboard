@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   merchantSettlement,
@@ -206,15 +208,83 @@ describe("cashLimitVerdict (MOM §29.9)", () => {
     expect(cashLimitVerdict({ currentCod: 4800, addingCod: 300, warningAmount: 4000, limitAmount: 5000 })).toMatchObject({ status: "blocked", total: 5100 });
     expect(cashLimitVerdict({ currentCod: 9000, addingCod: 1, warningAmount: null, limitAmount: null }).status).toBe("ok");
   });
+
+  // 28-09-2026: la ruta de Roy con 29 paquetes llegaba a S/ 5,363.10 y el
+  // escáner la bloqueaba con el límite de S/ 5,000. Con el de S/ 9,000 entra,
+  // con el aviso de S/ 4,000 todavía encendido; el bloqueo pasa a S/ 9,000.
+  it("con el límite de S/ 9,000 la ruta de Roy entra con aviso, y se bloquea al pasar S/ 9,000", () => {
+    const vigente = { warningAmount: 4000, limitAmount: 9000 };
+    expect(cashLimitVerdict({ currentCod: 5000, addingCod: 363.1, ...vigente })).toMatchObject({ status: "warning", total: 5363.1 });
+    expect(cashLimitVerdict({ currentCod: 9000, addingCod: 0, ...vigente }).status).toBe("warning");
+    expect(cashLimitVerdict({ currentCod: 8900, addingCod: 100.01, ...vigente })).toMatchObject({
+      status: "blocked",
+      message: "La ruta llevaría S/ 9000.01 en efectivo y el límite es S/ 9000.00. Reparte los pedidos en otra ruta o autoriza superar el límite.",
+    });
+  });
+
+  it("el MOM dice el límite vigente en producción", () => {
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    expect(mom).toContain("El efectivo máximo planificado por motorizado es S/ 9,000 por ruta:");
+    expect(mom).toContain("- bloqueo de nuevas asignaciones al superar S/ 9,000; y");
+    expect(mom).toContain("**Límite subido de S/ 5,000 a S/ 9,000 (28-09-2026, decisión de Frankz).**");
+  });
 });
 
-import { custodyOnAssign, isRiderPickupMode, riderScreenFor, riderStopDecision } from "@/lib/grupo-gf-courier";
+import { custodyOnAssign, isRiderPickupMode, riderLoadOpenToReceive, riderScreenFor, riderStopDecision } from "@/lib/grupo-gf-courier";
+
+describe("caja abierta durante el cotejo (0196, MOM §29.2)", () => {
+  // A la caja se le siguen sumando paquetes mientras oficina la coteja. El
+  // motorizado recibe lo que oficina ya verificó; por eso una caja en cotejo
+  // de oficina ya va a «Recibir mi caja» en cuanto tiene algo verificado.
+  it("una caja en cotejo de oficina se recibe en cuanto oficina verificó algo activo", () => {
+    expect(riderLoadOpenToReceive("office_check", [{ office_checked_at: "x" }, { office_checked_at: null }])).toBe(true);
+    expect(riderLoadOpenToReceive("office_check", [{ office_checked_at: null }, { office_checked_at: null }])).toBe(false);
+    // Lo verificado que se retiró no cuenta: no queda nada que escanear.
+    expect(riderLoadOpenToReceive("office_check", [{ office_checked_at: "x", removed_at: "y" }, { office_checked_at: null }])).toBe(false);
+  });
+
+  it("lista o recibiéndose siempre va; borrador, custodia o cancelada nunca", () => {
+    expect(riderLoadOpenToReceive("ready_for_pickup", [])).toBe(true);
+    expect(riderLoadOpenToReceive("pickup_check", [])).toBe(true);
+    for (const state of ["draft", "in_custody", "cancelled"]) {
+      expect(riderLoadOpenToReceive(state, [{ office_checked_at: "x" }]), state).toBe(false);
+    }
+  });
+
+  it("la pantalla cambia a «Recibir mi caja» también con la caja en cotejo de oficina", () => {
+    expect(riderScreenFor("exigir", ["office_check"])).toBe("recibir_caja");
+    expect(riderScreenFor("confirmar", ["office_check"])).toBe("ruta");
+  });
+
+  // Las acciones de retiro son server actions con Supabase: lo que se puede
+  // probar por comportamiento está en scripts/sql/gf_parallel_box_smoke.sql
+  // (gf_finalize_if_complete). Estas guardas prueban que las dos acciones lo
+  // llaman después de retirar.
+  it("retirar la diferencia desde despacho o al mover de caja cierra la caja completa", () => {
+    const despacho = readFileSync(resolve(process.cwd(), "app/dashboard/pedidos/despacho/actions.ts"), "utf8");
+    const bloque = despacho.slice(despacho.indexOf("export async function removeManifestItem"), despacho.indexOf("async function finalizeBoxIfComplete"));
+    expect(bloque.indexOf("await recalculateManifest(manifestId, user.id);")).toBeGreaterThan(-1);
+    expect(bloque.indexOf("await finalizeBoxIfComplete(admin, manifestId, user.id)")).toBeGreaterThan(bloque.indexOf("await recalculateManifest(manifestId, user.id);"));
+    expect(despacho).toContain('admin.rpc("gf_finalize_if_complete", { p_manifest_id: manifestId, p_actor: actor })');
+    const courier = readFileSync(resolve(process.cwd(), "app/dashboard/courier/actions.ts"), "utf8");
+    const mover = courier.slice(courier.indexOf("export async function moveManifestItem"), courier.indexOf("async function recalculateManifestState"));
+    expect(mover).toContain('admin.rpc("gf_finalize_if_complete", { p_manifest_id: manifestId, p_actor: auth.userId })');
+  });
+
+  it("el MOM dice la regla y la prueba de base la ejerce en CI", () => {
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    expect(mom).toContain("**La caja sigue abierta mientras se coteja (28-09-2026, decisión de Frankz,\n0196).**");
+    expect(mom).not.toContain("Una carga adicional solo se abre después de recibir íntegramente la anterior;");
+    expect(readFileSync(resolve(process.cwd(), "scripts/verify-db.sh"), "utf8")).toContain('$PSQL -f "$ROOT/scripts/sql/gf_parallel_box_smoke.sql"');
+  });
+});
 
 describe("modo de recojo del motorizado (0185, MOM §29.13)", () => {
   it("solo «exigir» manda a «Recibir mi caja»; en los otros modos la custodia pasa al asignar", () => {
     expect(riderScreenFor("exigir", ["ready_for_pickup"])).toBe("recibir_caja");
     expect(riderScreenFor("exigir", ["pickup_check", "in_custody"])).toBe("recibir_caja");
     expect(riderScreenFor("exigir", ["in_custody"])).toBe("ruta");
+    expect(riderScreenFor("exigir", ["draft"])).toBe("ruta");
     expect(riderScreenFor("exigir", [])).toBe("ruta");
     expect(riderScreenFor("confirmar", ["ready_for_pickup", "pickup_check"])).toBe("ruta");
     expect(riderScreenFor("ninguno", ["ready_for_pickup"])).toBe("ruta");

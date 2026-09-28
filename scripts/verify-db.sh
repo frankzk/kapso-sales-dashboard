@@ -179,6 +179,9 @@ echo "  ✅ asignar da custodia con paradas por confirmar; confirmar marca el í
 echo "▶ «Recibir en oficina» (0188): un no entregado sale de la caja en custodia, también en exigir"
 $PSQL -f "$ROOT/scripts/sql/gf_return_to_office_smoke.sql"
 echo "  ✅ sale con rastro, custodia a la empresa, solicitud a por asignar; la parada se conserva; un rechazo queda devuelto (0189)"
+echo "▶ caja abierta durante el cotejo (0196): se suma en paralelo y sale al 100 % o con la diferencia retirada"
+$PSQL -f "$ROOT/scripts/sql/gf_parallel_box_smoke.sql"
+echo "  ✅ misma caja durante el cotejo; lo nuevo reabre oficina; se recibe lo verificado; custodia al 100 % o al retirar la diferencia; carga 2 solo tras la custodia"
 
 echo ""
 echo "✅ DB verification passed."
