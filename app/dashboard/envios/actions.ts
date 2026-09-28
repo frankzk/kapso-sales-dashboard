@@ -87,11 +87,12 @@ import {
   type PlanImportacion,
 } from "@/lib/swayp-inventario";
 import {
+  diagnoseInventoryAccess,
   inventoryToEntradasByCity,
-  isInventoryAuthError,
   listWarehouses,
   searchInventory,
   type SwaypInventoryCreds,
+  type SwaypProbe,
 } from "@/lib/swayp-inventory-api";
 import { resolveEmails } from "@/lib/productivity";
 import {
@@ -2417,7 +2418,7 @@ export async function swaypInventoryDryRun(input: {
   email: string;
   user: string;
   idCompany: string;
-}): Promise<DryRunResult | { error: string }> {
+}): Promise<DryRunResult | { error: string; diagnostico?: SwaypProbe[] }> {
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -2442,17 +2443,18 @@ export async function swaypInventoryDryRun(input: {
   let filas;
   try {
     [bodegas, filas] = await Promise.all([listWarehouses(creds), searchInventory(creds)]);
-  } catch (e) {
-    if (isInventoryAuthError(e)) {
-      return {
-        error:
-          "Swayp rechazó la credencial (401/403): el token está vencido o no tiene permiso de inventario. " +
-          "Genera uno nuevo desde el panel y vuelve a intentar.",
-      };
-    }
-    return {
-      error: `No se pudo leer el inventario de Swayp: ${e instanceof Error ? e.message : "error desconocido"}.`,
-    };
+  } catch {
+    // Falló alguna de las dos lecturas. En vez de un mensaje ciego, se corre el
+    // diagnóstico: tres llamadas separadas que dicen qué host respondió qué. Con
+    // eso se distingue un token vencido (falla hasta la de control) de un
+    // problema de contrato (la de control pasa y otra no).
+    const diagnostico = await diagnoseInventoryAccess(creds);
+    const control = diagnostico[0];
+    const msg =
+      control && control.ok
+        ? "El token es válido (la llamada de control pasó), pero una lectura de inventario falló. Revisa el detalle: puede ser que el host de inventario pida otra credencial."
+        : "Swayp rechazó la credencial: el token está vencido, es de otra sesión, o no tiene permiso. Genera uno nuevo desde el panel y vuelve a intentar.";
+    return { error: msg, diagnostico };
   }
 
   const { porCiudad, sinCiudad } = inventoryToEntradasByCity(filas, bodegas);

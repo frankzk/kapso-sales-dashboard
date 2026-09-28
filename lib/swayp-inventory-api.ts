@@ -102,6 +102,87 @@ async function post<T>(
   return (await res.json()) as T;
 }
 
+/**
+ * Resultado de una llamada de diagnóstico: qué endpoint, contra qué host, con
+ * qué status, y un pedazo del cuerpo. NUNCA lleva el token. Sirve para saber,
+ * ante un 401/403, si el problema es la credencial o el contrato (host/ruta).
+ */
+export interface SwaypProbe {
+  label: string;
+  host: string;
+  method: "GET" | "POST";
+  status: number;
+  ok: boolean;
+  /** Primeros caracteres de la respuesta: el mensaje de error de Swayp suele venir acá. */
+  body: string;
+}
+
+async function probeOnce(
+  creds: SwaypInventoryCreds,
+  label: string,
+  method: "GET" | "POST",
+  url: string,
+  body?: unknown,
+): Promise<SwaypProbe> {
+  const doFetch = creds.fetchImpl ?? fetch;
+  const host = (() => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return url;
+    }
+  })();
+  try {
+    const res = await doFetch(url, {
+      method,
+      headers: headersFor(creds),
+      body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
+      signal: AbortSignal.timeout(creds.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    });
+    const text = await res.text().catch(() => "");
+    return { label, host, method, status: res.status, ok: res.ok, body: text.slice(0, 240) };
+  } catch (e) {
+    return {
+      label,
+      host,
+      method,
+      status: 0,
+      ok: false,
+      body: e instanceof Error ? e.message : "error de red",
+    };
+  }
+}
+
+/**
+ * Tres llamadas para aislar un 401/403. La primera —«bags»— es la MISMA que la
+ * captura del usuario probó que funciona con un token válido: si esa da 200 y
+ * las otras no, el token sirve y el problema es de host/ruta; si esa también da
+ * 401, el token está vencido o es de otra sesión. Cada una reporta su host y su
+ * status por separado, porque el inventario vive en OTRO host que las bodegas y
+ * podría querer otra credencial.
+ */
+export async function diagnoseInventoryAccess(creds: SwaypInventoryCreds): Promise<SwaypProbe[]> {
+  const idc = encodeURIComponent(creds.idCompany);
+  return Promise.all([
+    probeOnce(
+      creds,
+      "bags (control, cloudfunctions)",
+      "GET",
+      `${SWAYP_PANEL_API_URL}v1/inventory/go/bags/partner/${idc}?requestingCompanyId=${idc}`,
+    ),
+    probeOnce(creds, "warehouses/byCompany (cloudfunctions)", "POST", `${SWAYP_PANEL_API_URL}v1/warehouses/byCompany`, {
+      idCompany: creds.idCompany,
+      company: creds.idCompany,
+      nit: creds.user,
+    }),
+    probeOnce(creds, "inventory/search (run.app)", "POST", `${SWAYP_INVENTORY_API_URL}inventory/search?includeReturns=true`, {
+      warehouse: "",
+      codbar: "",
+      idCompany: creds.idCompany,
+    }),
+  ]);
+}
+
 /** Una bodega de Swayp, ya normalizada a lo único que nos importa. */
 export interface SwaypWarehouse {
   id: string;

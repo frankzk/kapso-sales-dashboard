@@ -489,15 +489,21 @@ function DryRunSwayp() {
   const [idCompany, setIdCompany] = useState("IsjvRm8cEqQBFP4r0TxF");
   const [res, setRes] = useState<DryRunResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [diag, setDiag] = useState<
+    { label: string; host: string; method: string; status: number; ok: boolean; body: string }[] | null
+  >(null);
 
   function probar() {
     if (!token.trim()) return;
     setErr(null);
     setRes(null);
+    setDiag(null);
     start(async () => {
       const r = await swaypInventoryDryRun({ token, email, user: ruc, idCompany });
-      if ("error" in r) setErr(r.error);
-      else setRes(r);
+      if ("error" in r) {
+        setErr(r.error);
+        setDiag(r.diagnostico ?? null);
+      } else setRes(r);
     });
   }
 
@@ -565,6 +571,31 @@ function DryRunSwayp() {
           </button>
 
           {err && <p className="text-xs text-rose-700">{err}</p>}
+
+          {diag && (
+            <div className="space-y-1 rounded-lg border border-slate-200 bg-white p-2 text-xs">
+              <p className="font-medium text-slate-700">Diagnóstico por llamada:</p>
+              {diag.map((d, i) => (
+                <div key={i} className="flex flex-col border-t border-slate-100 py-1 first:border-0">
+                  <span className="flex items-center justify-between">
+                    <span className="text-slate-700">
+                      {d.method} {d.label}
+                    </span>
+                    <span
+                      className={cn(
+                        "font-medium",
+                        d.ok ? "text-emerald-700" : d.status === 0 ? "text-amber-700" : "text-rose-700",
+                      )}
+                    >
+                      {d.status === 0 ? "sin conexión" : d.status}
+                    </span>
+                  </span>
+                  <span className="text-slate-400">{d.host}</span>
+                  {d.body && <span className="mt-0.5 break-all text-slate-500">{d.body}</span>}
+                </div>
+              ))}
+            </div>
+          )}
 
           {res && (
             <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
