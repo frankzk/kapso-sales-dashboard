@@ -84,7 +84,15 @@ import {
   planearImportacion,
   resumenDelPlan,
   type FilaStock,
+  type PlanImportacion,
 } from "@/lib/swayp-inventario";
+import {
+  inventoryToEntradasByCity,
+  isInventoryAuthError,
+  listWarehouses,
+  searchInventory,
+  type SwaypInventoryCreds,
+} from "@/lib/swayp-inventory-api";
 import { resolveEmails } from "@/lib/productivity";
 import {
   shopifyShippingAddress,
@@ -2361,6 +2369,145 @@ export async function importarInventarioSwayp(
       (fallidos ? ` ${fallidos} no se pudieron aplicar.` : "") +
       (lectura.sinCodbar ? ` ${lectura.sinCodbar} filas sin código de barras, ignoradas.` : "") +
       ("error" in sync ? ` No se pudo sincronizar las guías: ${sync.error}.` : ` ${sync.updated} guías sincronizadas.`),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fase 1 · Dry run del sync de inventario por API (NO ESCRIBE NADA)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** El diff que dejaría el sync en UNA ciudad, sin aplicarlo. */
+export interface DryRunCiudad {
+  ciudad: string;
+  resumen: string;
+  totalSwayp: number;
+  totalNuestro: number;
+  ajustes: PlanImportacion["ajustes"];
+  altas: PlanImportacion["altas"];
+  huerfanos: PlanImportacion["huerfanos"];
+  sinCambio: number;
+  sinControl: number;
+}
+
+export interface DryRunResult {
+  ok: true;
+  ciudades: DryRunCiudad[];
+  /** Bodegas cuya ciudad no mapeamos (Cusco, Ica…): no se tocan, se informan. */
+  bodegasSinCiudad: { idWarehouse: string; nombre: string; filas: number }[];
+  bodegas: { id: string; name: string }[];
+  totalFilasInventario: number;
+  /** Muestra CRUDA de las primeras filas, para confirmar los nombres de campo. */
+  muestra: unknown[];
+}
+
+/**
+ * Trae el inventario de Swayp por API y muestra qué cambiaría, SIN escribir.
+ *
+ * Es la Fase 1 de reemplazar el Excel: valida el contrato (reversado, no
+ * oficial) y la autenticación con una lectura real, y deja cotejar el stock
+ * contra el panel. El token se recibe pegado a mano y NO se guarda ni se
+ * registra; la fuente definitiva del token se decide después de esta prueba.
+ *
+ * Reutiliza `planearImportacion` y las mismas lecturas de `fenix_stock` /
+ * `swayp_sku_map` que el importador de Excel, así que el diff que enseña es
+ * EXACTAMENTE el que aplicaría el sync — sólo que no lo aplica.
+ */
+export async function swaypInventoryDryRun(input: {
+  token: string;
+  email: string;
+  user: string;
+  idCompany: string;
+}): Promise<DryRunResult | { error: string }> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  const { data: mem } = await sb.from("memberships").select("org_id,role");
+  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
+    (m) => m.role === "owner" || m.role === "admin",
+  );
+  if (!adminOrg) return { error: "Solo un administrador puede sincronizar el stock." };
+
+  const token = input.token?.trim();
+  const email = input.email?.trim();
+  const ruc = input.user?.trim();
+  const idCompany = input.idCompany?.trim();
+  if (!token || !email || !ruc || !idCompany) {
+    return { error: "Faltan datos de conexión (token, correo, RUC o idCompany)." };
+  }
+  const creds: SwaypInventoryCreds = { token, email, user: ruc, idCompany, country: "PE" };
+
+  let bodegas;
+  let filas;
+  try {
+    [bodegas, filas] = await Promise.all([listWarehouses(creds), searchInventory(creds)]);
+  } catch (e) {
+    if (isInventoryAuthError(e)) {
+      return {
+        error:
+          "Swayp rechazó la credencial (401/403): el token está vencido o no tiene permiso de inventario. " +
+          "Genera uno nuevo desde el panel y vuelve a intentar.",
+      };
+    }
+    return {
+      error: `No se pudo leer el inventario de Swayp: ${e instanceof Error ? e.message : "error desconocido"}.`,
+    };
+  }
+
+  const { porCiudad, sinCiudad } = inventoryToEntradasByCity(filas, bodegas);
+
+  // Los mismos insumos que usa el importador de Excel, leídos una vez para toda
+  // la organización (Aurela y Kenku comparten inventario en Swayp).
+  const admin = createAdminSupabase();
+  const skusPorCodbar = new Map<string, string[]>();
+  for (const [sku, { codbar }] of await cargarMapaSwaypDeOrg(admin, adminOrg.org_id)) {
+    const ya = skusPorCodbar.get(codbar.toUpperCase()) ?? [];
+    if (!ya.includes(sku)) ya.push(sku);
+    skusPorCodbar.set(codbar.toUpperCase(), ya);
+  }
+  const { data: todoElStock } = await admin
+    .from("fenix_stock")
+    .select("id,city,product,sku,quantity,unlimited")
+    .eq("org_id", adminOrg.org_id);
+  const filasPorCiudad = new Map<string, FilaStock[]>();
+  const etiquetaPorSku = new Map<string, string>();
+  for (const r of (todoElStock as (FilaStock & { city: string })[]) ?? []) {
+    const lista = filasPorCiudad.get(r.city) ?? [];
+    lista.push(r);
+    filasPorCiudad.set(r.city, lista);
+    const k = (r.sku ?? "").trim().toUpperCase();
+    if (k && !etiquetaPorSku.has(k)) etiquetaPorSku.set(k, r.product);
+  }
+
+  const ciudades: DryRunCiudad[] = [];
+  for (const [ciudad, entradas] of porCiudad) {
+    const sinControl = ciudadSinControl(ciudad);
+    const filasStock = (filasPorCiudad.get(ciudad) ?? []).map((f) =>
+      sinControl ? { ...f, unlimited: true } : f,
+    );
+    const plan = planearImportacion(ciudad, entradas, filasStock, skusPorCodbar, etiquetaPorSku);
+    ciudades.push({
+      ciudad,
+      resumen: resumenDelPlan(plan),
+      totalSwayp: plan.totalSwayp,
+      totalNuestro: plan.totalNuestro,
+      ajustes: plan.ajustes,
+      altas: plan.altas,
+      huerfanos: plan.huerfanos,
+      sinCambio: plan.sinCambio,
+      sinControl: plan.sinControl,
+    });
+  }
+  ciudades.sort((a, b) => a.ciudad.localeCompare(b.ciudad));
+
+  return {
+    ok: true,
+    ciudades,
+    bodegasSinCiudad: sinCiudad,
+    bodegas: bodegas.map((w) => ({ id: w.id, name: w.name })),
+    totalFilasInventario: filas.length,
+    muestra: filas.slice(0, 2),
   };
 }
 

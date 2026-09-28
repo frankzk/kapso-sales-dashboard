@@ -15,7 +15,9 @@ import {
   recomputeFenixEligibility,
   recordFenixStockMovement,
   searchStockProducts,
+  swaypInventoryDryRun,
   upsertFenixStock,
+  type DryRunResult,
 } from "@/app/dashboard/envios/actions";
 import { STOCK_MOVEMENT_LABEL, type StockMovementKind } from "@/lib/fenix-ledger";
 
@@ -120,6 +122,7 @@ export function FenixStockEditor({
       {canEdit && <BodegasSwayp bodegas={bodegas} />}
 
       {canEdit && <ImportarDeSwayp onDone={(m) => setMsg(m)} />}
+      {canEdit && <DryRunSwayp />}
 
       {canEdit && (
         <Card className="space-y-3">
@@ -464,6 +467,162 @@ function ImportarDeSwayp({ onDone }: { onDone: (msg: string | null) => void }) {
         Los productos que Swayp no lista quedan en 0: si esa bodega no lo tiene, no se puede
         prometer. Sólo se toca la ciudad del archivo.
       </p>
+    </Card>
+  );
+}
+
+/**
+ * FASE 1 · Prueba de lectura del inventario por API, SIN escribir nada.
+ *
+ * Pega un token del panel de Swayp y muestra qué cambiaría en cada ciudad. No
+ * guarda el token ni toca la base: sirve para cotejar contra el panel y
+ * confirmar que el contrato (reversado) calza antes de automatizar el sync.
+ * `idCompany` viene precargado con el de la organización; el RUC y el correo
+ * también, para no teclearlos, pero se pueden cambiar.
+ */
+function DryRunSwayp() {
+  const [pending, start] = useTransition();
+  const [open, setOpen] = useState(false);
+  const [token, setToken] = useState("");
+  const [email, setEmail] = useState("fkc@monono.pe");
+  const [ruc, setRuc] = useState("20610091823");
+  const [idCompany, setIdCompany] = useState("IsjvRm8cEqQBFP4r0TxF");
+  const [res, setRes] = useState<DryRunResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  function probar() {
+    if (!token.trim()) return;
+    setErr(null);
+    setRes(null);
+    start(async () => {
+      const r = await swaypInventoryDryRun({ token, email, user: ruc, idCompany });
+      if ("error" in r) setErr(r.error);
+      else setRes(r);
+    });
+  }
+
+  return (
+    <Card className="space-y-3">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between text-left"
+      >
+        <span className="text-sm font-medium text-slate-800">
+          Sincronizar desde Swayp por API (prueba, no escribe)
+        </span>
+        <span className="text-xs text-slate-400">{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-500">
+            Trae el inventario de todas las bodegas y muestra qué cambiaría, sin tocar la base. El
+            token no se guarda. Sácalo del panel de Swayp (sesión iniciada) y pégalo acá.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="text-xs text-slate-600">
+              Token del panel
+              <input
+                type="password"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="Bearer …"
+                className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+              />
+            </label>
+            <label className="text-xs text-slate-600">
+              Correo
+              <input
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+              />
+            </label>
+            <label className="text-xs text-slate-600">
+              RUC (header user)
+              <input
+                value={ruc}
+                onChange={(e) => setRuc(e.target.value)}
+                className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+              />
+            </label>
+            <label className="text-xs text-slate-600">
+              idCompany
+              <input
+                value={idCompany}
+                onChange={(e) => setIdCompany(e.target.value)}
+                className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+              />
+            </label>
+          </div>
+          <button
+            onClick={probar}
+            disabled={pending || !token.trim()}
+            className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+          >
+            {pending ? "Leyendo…" : "Probar lectura"}
+          </button>
+
+          {err && <p className="text-xs text-rose-700">{err}</p>}
+
+          {res && (
+            <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs text-slate-600">
+                {res.totalFilasInventario} filas de inventario · {res.bodegas.length} bodegas.
+                {res.bodegasSinCiudad.length > 0 &&
+                  ` Sin ciudad mapeada (se saltan): ${res.bodegasSinCiudad
+                    .map((b) => b.nombre || b.idWarehouse)
+                    .join(", ")}.`}
+              </p>
+              {res.ciudades.map((c) => (
+                <div key={c.ciudad} className="rounded border border-slate-200 bg-white p-2">
+                  <p className="text-sm font-medium capitalize text-slate-800">{c.ciudad}</p>
+                  <p className="text-xs text-slate-600">{c.resumen}</p>
+                  {c.ajustes.length > 0 && (
+                    <table className="mt-1.5 w-full text-xs">
+                      <thead className="text-slate-400">
+                        <tr>
+                          <th className="text-left font-normal">Producto</th>
+                          <th className="text-right font-normal">Antes</th>
+                          <th className="text-right font-normal">Swayp</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {c.ajustes.slice(0, 40).map((a) => (
+                          <tr key={a.id}>
+                            <td className="py-0.5 text-slate-700">
+                              {a.codbar ? `${a.codbar} · ` : ""}
+                              {a.product}
+                            </td>
+                            <td className="text-right text-slate-500">{a.cantidadAnterior}</td>
+                            <td
+                              className={cn(
+                                "text-right font-medium",
+                                a.cantidadNueva < a.cantidadAnterior
+                                  ? "text-rose-700"
+                                  : "text-emerald-700",
+                              )}
+                            >
+                              {a.cantidadNueva}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              ))}
+              <details className="text-xs text-slate-500">
+                <summary className="cursor-pointer">Muestra cruda (para verificar campos)</summary>
+                <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all">
+                  {JSON.stringify(res.muestra, null, 2)}
+                </pre>
+              </details>
+            </div>
+          )}
+        </div>
+      )}
     </Card>
   );
 }
