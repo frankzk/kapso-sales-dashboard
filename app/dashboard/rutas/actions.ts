@@ -20,7 +20,9 @@ import {
 import {
   groupByStore,
   masterEffects,
+  missingEvidenceMessage,
   routeTotals,
+  stopsMissingEvidence,
   stopsToSettlementLines,
 } from "@/lib/routes";
 import { applyDeliveriesToMaster } from "@/lib/master-door";
@@ -266,9 +268,8 @@ export async function closeRoute(
   if (gfLoads?.length) {
     if (gfLoads.some((load) => load.state !== "in_custody")) return { ok: false, error: "Hay una carga pendiente de recibir. Complétala o cancélala con motivo antes de liquidar." };
     if (stops.some((stop) => stop.status === "pendiente")) return { ok: false, error: "Grupo GF: todas las paradas deben tener reporte. No se permite forzar el cierre." };
-    if (stops.some((stop) => (stop.status === "entregado" || stop.outcome_reason === "rechazado") && !stop.photo_path)) {
-      return { ok: false, error: "Falta evidencia de entrega o rechazo. Completa el reporte antes de liquidar." };
-    }
+    const sinEvidencia = stopsMissingEvidence(stops);
+    if (sinEvidencia.length) return { ok: false, error: missingEvidenceMessage(sinEvidencia) ?? "Falta la foto de una entrega o un rechazo." };
   }
 
   const totals = routeTotals(stops);

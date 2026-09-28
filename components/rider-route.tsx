@@ -15,6 +15,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   NON_DELIVERY_REASONS,
   PAYMENT_METHODS,
+  nonDeliveryNeedsPhoto,
   routeTotals,
   validateStopReport,
   type PaymentMethod,
@@ -859,12 +860,15 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
         </select>
       )}
 
-      {status === "no_entregado" && delegated && <ScanAction
+      {/* Un rechazo se cobra a la tienda: el motorizado lo fotografía en la
+          puerta, como una entrega. Cualquier otra no entrega solo lleva foto
+          cuando reporta otra persona por él. */}
+      {status === "no_entregado" && nonDeliveryNeedsPhoto(reason, delegated) && <ScanAction
         context="motorizado_entrega"
         stopId={stop.id}
         photoKind="entrega"
         photoPath={photoPath}
-        label="Evidencia del reporte"
+        label={delegated ? "Evidencia del reporte" : "Foto del rechazo"}
         onResult={(r) => { if (r.error) setErr(r.error); else if (r.path) setPhotoPath(r.path); }}
       />}
       <textarea
