@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   merchantSettlement,
@@ -205,6 +207,26 @@ describe("cashLimitVerdict (MOM §29.9)", () => {
     expect(cashLimitVerdict({ currentCod: 3500, addingCod: 800, warningAmount: 4000, limitAmount: 5000 })).toMatchObject({ status: "warning", total: 4300 });
     expect(cashLimitVerdict({ currentCod: 4800, addingCod: 300, warningAmount: 4000, limitAmount: 5000 })).toMatchObject({ status: "blocked", total: 5100 });
     expect(cashLimitVerdict({ currentCod: 9000, addingCod: 1, warningAmount: null, limitAmount: null }).status).toBe("ok");
+  });
+
+  // 28-09-2026: la ruta de Roy con 29 paquetes llegaba a S/ 5,363.10 y el
+  // escáner la bloqueaba con el límite de S/ 5,000. Con el de S/ 9,000 entra,
+  // con el aviso de S/ 4,000 todavía encendido; el bloqueo pasa a S/ 9,000.
+  it("con el límite de S/ 9,000 la ruta de Roy entra con aviso, y se bloquea al pasar S/ 9,000", () => {
+    const vigente = { warningAmount: 4000, limitAmount: 9000 };
+    expect(cashLimitVerdict({ currentCod: 5000, addingCod: 363.1, ...vigente })).toMatchObject({ status: "warning", total: 5363.1 });
+    expect(cashLimitVerdict({ currentCod: 9000, addingCod: 0, ...vigente }).status).toBe("warning");
+    expect(cashLimitVerdict({ currentCod: 8900, addingCod: 100.01, ...vigente })).toMatchObject({
+      status: "blocked",
+      message: "La ruta llevaría S/ 9000.01 en efectivo y el límite es S/ 9000.00. Reparte los pedidos en otra ruta o autoriza superar el límite.",
+    });
+  });
+
+  it("el MOM dice el límite vigente en producción", () => {
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    expect(mom).toContain("El efectivo máximo planificado por motorizado es S/ 9,000 por ruta:");
+    expect(mom).toContain("- bloqueo de nuevas asignaciones al superar S/ 9,000; y");
+    expect(mom).toContain("**Límite subido de S/ 5,000 a S/ 9,000 (28-09-2026, decisión de Frankz).**");
   });
 });
 

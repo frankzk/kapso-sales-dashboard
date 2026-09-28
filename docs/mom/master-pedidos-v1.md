@@ -5855,11 +5855,20 @@ rutas. Una parada pendiente bloquea la liquidación. Daysi o Frankz pueden
 completar el reporte faltante con la auditoría de §29.5; no existe cierre
 automático silencioso.
 
-El efectivo máximo planificado por motorizado es S/ 5,000 por ruta:
+El efectivo máximo planificado por motorizado es S/ 9,000 por ruta:
 
 - advertencia desde S/ 4,000;
-- bloqueo de nuevas asignaciones al superar S/ 5,000; y
+- bloqueo de nuevas asignaciones al superar S/ 9,000; y
 - Daysi o Frankz pueden autorizar una excepción con motivo auditado.
+
+**Límite subido de S/ 5,000 a S/ 9,000 (28-09-2026, decisión de Frankz).** Una
+ruta de Roy con 29 paquetes llegaba a S/ 5,363.10 y el escáner la bloqueaba en
+plena salida. Los dos montos viven en `logistics_providers`
+(`cash_warning_amount`, `cash_limit_amount`) y se leen en cada asignación, así
+que cambiarlos no requiere desplegar; se cambió con un UPDATE sobre la fila de
+Grupo GF, igual que el modo de recepción de §29.13. El aviso se quedó en
+S/ 4,000. Un operador nuevo sigue naciendo con S/ 4,000 / S/ 5,000, que son los
+valores por defecto de 0134.
 
 Neto de la tienda:
 
