@@ -88,9 +88,8 @@ import {
 } from "@/lib/swayp-inventario";
 import {
   diagnoseInventoryAccess,
-  inventoryToEntradasByCity,
+  fetchInventoryByCity,
   listWarehouses,
-  searchInventory,
   type SwaypInventoryCreds,
   type SwaypProbe,
 } from "@/lib/swayp-inventory-api";
@@ -2394,8 +2393,8 @@ export interface DryRunResult {
   ok: true;
   ciudades: DryRunCiudad[];
   /** Bodegas cuya ciudad no mapeamos (Cusco, Ica…): no se tocan, se informan. */
-  bodegasSinCiudad: { idWarehouse: string; nombre: string; filas: number }[];
-  bodegas: { id: string; name: string }[];
+  bodegasSinCiudad: { id: string; nombre: string; ciudadInei: string; direccion: string }[];
+  bodegas: { id: string; name: string; city: string | null }[];
   totalFilasInventario: number;
   /** Muestra CRUDA de las primeras filas, para confirmar los nombres de campo. */
   muestra: unknown[];
@@ -2440,24 +2439,25 @@ export async function swaypInventoryDryRun(input: {
   const creds: SwaypInventoryCreds = { token, email, user: ruc, idCompany, country: "PE" };
 
   let bodegas;
-  let filas;
+  let inv;
   try {
-    [bodegas, filas] = await Promise.all([listWarehouses(creds), searchInventory(creds)]);
+    bodegas = await listWarehouses(creds);
+    inv = await fetchInventoryByCity(creds, bodegas);
   } catch {
-    // Falló alguna de las dos lecturas. En vez de un mensaje ciego, se corre el
-    // diagnóstico: tres llamadas separadas que dicen qué host respondió qué. Con
-    // eso se distingue un token vencido (falla hasta la de control) de un
-    // problema de contrato (la de control pasa y otra no).
+    // Falló la lectura. En vez de un mensaje ciego, se corre el diagnóstico: dos
+    // llamadas separadas que dicen qué respondió cada una. Así se distingue un
+    // token vencido (falla la de bodegas, que es el control) de un problema de
+    // inventario (bodegas pasa, inventario no).
     const diagnostico = await diagnoseInventoryAccess(creds);
     const control = diagnostico[0];
     const msg =
       control && control.ok
-        ? "El token es válido (la llamada de control pasó), pero una lectura de inventario falló. Revisa el detalle: puede ser que el host de inventario pida otra credencial."
-        : "Swayp rechazó la credencial: el token está vencido, es de otra sesión, o no tiene permiso. Genera uno nuevo desde el panel y vuelve a intentar.";
+        ? "El token es válido (la lectura de bodegas pasó), pero la de inventario falló. Revisa el detalle."
+        : "Swayp rechazó la credencial: el token está vencido, es de otra sesión, o no tiene permiso. Pega uno recién copiado del panel (sin la palabra «Bearer»).";
     return { error: msg, diagnostico };
   }
 
-  const { porCiudad, sinCiudad } = inventoryToEntradasByCity(filas, bodegas);
+  const { porCiudad, sinCiudad, totalFilas, muestra } = inv;
 
   // Los mismos insumos que usa el importador de Excel, leídos una vez para toda
   // la organización (Aurela y Kenku comparten inventario en Swayp).
@@ -2507,9 +2507,9 @@ export async function swaypInventoryDryRun(input: {
     ok: true,
     ciudades,
     bodegasSinCiudad: sinCiudad,
-    bodegas: bodegas.map((w) => ({ id: w.id, name: w.name })),
-    totalFilasInventario: filas.length,
-    muestra: filas.slice(0, 2),
+    bodegas: bodegas.map((w) => ({ id: w.id, name: w.name, city: w.city })),
+    totalFilasInventario: totalFilas,
+    muestra,
   };
 }
 
