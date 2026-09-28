@@ -169,6 +169,84 @@ export function missingEvidenceMessage(stops: readonly EvidenceStop[]): string |
   return `Falta la foto en ${cuantas}: ${nombres.join(", ")}. Adjúntala con «Corregir» en la ruta del motorizado o desde «Reportar entregas», y vuelve a terminar la ruta.`;
 }
 
+/** Una carga de Grupo GF ligada a la ruta que todavía no pasó a custodia. */
+export interface OpenLoad {
+  id: string;
+  load_number: number;
+  state: string;
+  /** Paquetes activos. Una carga vacía no se recibe: se cancela con motivo. */
+  items: number;
+}
+
+/**
+ * Lo que impide terminar una ruta. `forceable` solo existe fuera de Grupo GF:
+ * ahí el coordinador puede cerrar con paradas sin reportar a conciencia.
+ */
+export type RouteCloseBlocker =
+  | { kind: "carga_sin_recibir"; loads: OpenLoad[] }
+  | { kind: "sin_paradas" }
+  | { kind: "sin_reportar"; stops: EvidenceStop[]; forceable: boolean }
+  | { kind: "sin_foto"; stops: EvidenceStop[] };
+
+/**
+ * Todo lo que impide terminar la ruta, en el orden en que lo comprueba el
+ * cierre. PURA. La usan el servidor —el primero que no se pueda forzar es el
+ * error— y el panel de la ruta, que los enseña TODOS antes de pulsar y con su
+ * arreglo. Antes el coordinador los descubría de a uno: pulsaba, leía un error,
+ * lo arreglaba, pulsaba otra vez y aparecía el siguiente.
+ */
+export function routeCloseBlockers(input: {
+  isGf: boolean;
+  openLoads: readonly OpenLoad[];
+  stops: readonly EvidenceStop[];
+}): RouteCloseBlocker[] {
+  const out: RouteCloseBlocker[] = [];
+  // En Grupo GF las paradas nacen al recibir la carga: con una carga abierta,
+  // «sin paradas» sería el síntoma y no la causa.
+  if (input.isGf && input.openLoads.length) {
+    out.push({ kind: "carga_sin_recibir", loads: [...input.openLoads].sort((a, b) => a.load_number - b.load_number) });
+  } else if (!input.stops.length) {
+    out.push({ kind: "sin_paradas" });
+  }
+  const pendientes = input.stops.filter((stop) => stop.status === "pendiente");
+  if (pendientes.length) out.push({ kind: "sin_reportar", stops: pendientes, forceable: !input.isGf });
+  if (input.isGf) {
+    const sinFoto = stopsMissingEvidence(input.stops);
+    if (sinFoto.length) out.push({ kind: "sin_foto", stops: sinFoto });
+  }
+  return out;
+}
+
+/** «#KP1, #KP2, #KP3, #KP4, #KP5 y 3 más»: cabe en una línea de error. */
+function orderList(stops: readonly EvidenceStop[], max = 5): string {
+  const names = stops.map((stop) => stop.order?.name ?? `parada ${stop.seq ?? "sin número"}`);
+  if (names.length <= max) return names.join(", ");
+  return `${names.slice(0, max).join(", ")} y ${names.length - max} más`;
+}
+
+/** El mensaje de UN bloqueo: qué pasa, con qué pedidos, y cómo se arregla. */
+export function routeCloseBlockerMessage(blocker: RouteCloseBlocker): string {
+  switch (blocker.kind) {
+    case "carga_sin_recibir":
+      return blocker.loads
+        .map((load) => load.items === 0
+          ? `La carga ${load.load_number} está abierta y vacía: cancélala con motivo.`
+          : `La carga ${load.load_number} tiene ${load.items === 1 ? "1 paquete" : `${load.items} paquetes`} sin recibir: que el motorizado la reciba o retira desde la caja los paquetes que no van.`)
+        .join(" ");
+    case "sin_paradas":
+      return "La ruta no tiene paradas: no hay nada que terminar ni liquidar.";
+    case "sin_reportar": {
+      const una = blocker.stops.length === 1;
+      const cuantas = una ? "1 parada" : `${blocker.stops.length} paradas`;
+      return blocker.forceable
+        ? `${una ? "Queda" : "Quedan"} ${cuantas} sin reportar. Espera a que las reporte o ciérrala igual a conciencia.`
+        : `${una ? "Falta" : "Faltan"} ${cuantas} por reportar: ${orderList(blocker.stops)}. Repórtalas en «Reportar entregas»; en Grupo GF no se cierra sin reporte.`;
+    }
+    case "sin_foto":
+      return missingEvidenceMessage(blocker.stops) ?? "Falta la foto de una entrega o un rechazo.";
+  }
+}
+
 /** Una parada tal como está guardada, para los totales de la ruta. */
 export interface RouteStop {
   id: string;

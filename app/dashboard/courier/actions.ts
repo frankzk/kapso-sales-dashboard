@@ -28,11 +28,10 @@ import { custodyOnAssign, isRiderPickupMode, type RiderPickupMode } from "@/lib/
 import type { BlockedReason } from "@/lib/dispatch-day";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
-import { getAssignableOrders, getRetryCandidates, getRouteDetail, type RouteRow, type StopWithOrder } from "@/lib/routes-access";
+import { getRouteDetail, type RouteRow, type StopWithOrder } from "@/lib/routes-access";
 import { getRiders, type RiderRow } from "@/lib/settlements-access";
-import { assessRisk, sortByAttention } from "@/lib/retries";
 import { routeReportAccess } from "@/lib/route-report-access";
-import type { RetryItem } from "@/components/routes";
+import { loadRouteCloseContext, type RouteCloseContext } from "@/lib/route-close";
 
 const COURIER_PATH = "/dashboard/courier";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -2408,16 +2407,23 @@ export interface CourierRouteReport {
   stores: { id: string; name: string }[];
   riders: RiderRow[];
   detail: { route: RouteRow; stops: StopWithOrder[] };
-  assignable: Awaited<ReturnType<typeof getAssignableOrders>>;
-  retries: RetryItem[];
   day: string;
   canReport: boolean;
+  /** Cargas de Grupo GF de la ruta, para decir qué impide terminarla ANTES de
+   *  pulsar. Null si no se pudo leer: el panel lo dice en vez de callarlo. */
+  closeContext: RouteCloseContext | null;
+  /** Cancela aquí mismo una carga abierta y vacía (dispatch.manage). */
+  canCancelLoads: boolean;
 }
 
 /**
  * Reparto y liquidación de una ruta para el panel lateral de Rutas (MOM
  * §29.14): lo que antes cargaba la página /dashboard/courier/reparto. Entra
  * quien arma rutas (routes.manage); RLS acota lo demás.
+ *
+ * El panel no añade paradas —eso es de la caja y de Despacho del día—, así que
+ * no carga la muestra de pedidos asignables (~1.800) ni la cola de reintentos:
+ * se pedían en cada apertura y no se enseñaban nunca.
  */
 export async function loadCourierRouteReport(routeId: string): Promise<CourierRouteReport | { error: string }> {
   const user = await getCurrentUser();
@@ -2430,20 +2436,18 @@ export async function loadCourierRouteReport(routeId: string): Promise<CourierRo
   const detail = await getRouteDetail(id);
   if (!detail) return { error: "No encontramos esa ruta." };
   const day = detail.route.route_date;
-  const storeIds = stores.map((s) => s.id);
-  const [riders, assignable, retryRaw, access] = await Promise.all([
+  const [riders, access, closeContext] = await Promise.all([
     getRiders(),
-    getAssignableOrders(storeIds, day),
-    getRetryCandidates(storeIds),
     routeReportAccess(id),
+    loadRouteCloseContext(createAdminSupabase(), id),
   ]);
   return {
     stores: stores.map((s) => ({ id: s.id, name: s.name })),
     riders,
     detail,
-    assignable,
-    retries: sortByAttention(retryRaw.map((c) => ({ ...c, risk: assessRisk(c) }))),
     day,
     canReport: Boolean(access),
+    closeContext,
+    canCancelLoads: permissions.can("dispatch.manage"),
   };
 }

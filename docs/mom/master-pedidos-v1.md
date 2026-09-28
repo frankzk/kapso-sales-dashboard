@@ -6448,11 +6448,42 @@ página `/dashboard/courier/reparto?id=` redirige a la lista con ese panel
 abierto. Añadir paradas y los reintentos no van en ese panel: eso es de la
 caja (paso 1) y de Despacho del día. El panel no repite datos: una fila de
 métricas (paradas, efectivo en manos, Yape/POS, ganancia base, adicionales y
-saldo con su explicación) y UNA tabla de paradas con cliente, pedido, tienda,
-distrito, resultado, cobro, respaldo, tarifa, adicional y ganancia, con scroll
-horizontal en pantallas estrechas y el cliente fijo a la izquierda. Tarifa y
-adicional quedan como plegables al pie; «+ adicional» en la fila abre el
-formulario con ese punto elegido.
+saldo con su explicación) y UNA tabla de paradas con cliente, pedido (y su
+monto), distrito (y su tienda), resultado, cobro y respaldo, y ganancia (con
+su tarifa y su adicional debajo), con scroll horizontal en pantallas medianas
+y el cliente fijo a la izquierda; en el teléfono las paradas van como lista.
+Tarifa y adicional quedan como plegables al pie; «+ adicional» en la fila de
+una parada reportada abre el formulario con ese punto elegido.
+
+**Qué impide terminar la ruta, a la vista (28-09-2026).** Antes el
+coordinador pulsaba «Terminar ruta operativa», leía UN error («Grupo GF:
+todas las paradas deben tener reporte»), lo arreglaba y volvía a pulsar para
+descubrir el siguiente: Roy, 19/09, tenía 8 paradas sin reportar, 8 entregas
+sin foto y 7 Yape sin captura. Ahora arriba del panel va «Para terminar la
+ruta», con TODO lo que el cierre va a rechazar y el arreglo de cada cosa al
+lado:
+
+- Una sola regla, `routeCloseBlockers` (`lib/routes.ts`), para el panel y
+  para `closeRoute`: carga de Grupo GF sin recibir (vacía o con paquetes),
+  ruta sin paradas, paradas sin reportar y, en Grupo GF, entregas y rechazos
+  sin foto. El servidor rechaza con el primero que no se pueda forzar y su
+  mensaje nombra los pedidos. Las cargas las lee `loadRouteCloseContext`
+  (`lib/route-close.ts`); si no se pueden leer, el cierre se niega y el panel
+  lo dice: «no lo sé» no es «no hay cargas».
+- «Terminar ruta operativa» se habilita solo cuando el cierre va a pasar.
+  «Cerrar con paradas sin reportar» existe solo fuera de Grupo GF y solo
+  cuando lo único pendiente son paradas sin reportar.
+- Cada bloqueo lleva su arreglo: «Reportar entregas» (modo coordinación, con
+  «Corregir» para adjuntar la foto), «Ver en la tabla» (filtra Sin reportar,
+  Sin foto o Yape sin captura), «Cancelar carga» con motivo para una carga
+  abierta y vacía (permiso `dispatch.manage`) y «Abrir la caja» para una con
+  paquetes sin recibir. «Volver a comprobar» relee paradas y cargas sin
+  cerrar el panel.
+- Debajo, lo que después frena APROBAR EL PAGO y ya se puede resolver: puntos
+  sin tarifa personal («Configurar tarifa» abre «Tarifa de …») y cobros Yape
+  sin captura.
+- El panel ya no carga la muestra de pedidos asignables ni la cola de
+  reintentos, que se pedían en cada apertura y no se enseñaban.
 
 **Reabrir ruta.** Una ruta cerrada vuelve a «en curso» (`reopenRoute`, permiso
 `routes.manage`) solo mientras su liquidación de origen `ruta` siga en
