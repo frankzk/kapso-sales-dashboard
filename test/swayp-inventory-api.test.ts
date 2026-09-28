@@ -3,6 +3,7 @@ import {
   ciudadDeWarehouse,
   diagnoseInventoryAccess,
   fetchInventoryByCity,
+  groupInventoryByCity,
   isInventoryAuthError,
   listWarehouses,
   normalizeInventoryRow,
@@ -142,35 +143,61 @@ describe("searchInventory", () => {
   });
 });
 
-describe("fetchInventoryByCity", () => {
-  it("pide el inventario POR bodega y agrupa por la ciudad ya resuelta", async () => {
-    const warehouses: SwaypWarehouse[] = [
-      { id: "194", name: "", ciudadInei: "040101", direccion: "…Arequipa", city: "arequipa" },
-      { id: "200", name: "BODEGA TRUJILLO", ciudadInei: "130101", direccion: "", city: "trujillo" },
-      { id: "300", name: "", ciudadInei: "999999", direccion: "Parque industrial", city: null }, // se salta
-    ];
-    // Responde distinto según el warehouse del cuerpo.
-    const fetchImpl = (async (_url: string, init: RequestInit) => {
-      const body = JSON.parse(init.body as string);
-      const data =
-        body.warehouse === "194"
-          ? [{ barCode: "AURE003", availableAmount: 75, name: "Ethiopian" }]
-          : [{ barCode: "AURE001", availableAmount: 3, name: "Candida" }];
-      return { ok: true, status: 200, json: async () => data } as Response;
-    }) as unknown as typeof fetch;
+const WAREHOUSES: SwaypWarehouse[] = [
+  { id: "194", name: "", ciudadInei: "040101", direccion: "…Arequipa", city: "arequipa" },
+  { id: "200", name: "BODEGA TRUJILLO", ciudadInei: "130101", direccion: "", city: "trujillo" },
+  { id: "300", name: "", ciudadInei: "080101", direccion: "Parque industrial", city: null },
+];
 
-    const { porCiudad, sinCiudad, totalFilas } = await fetchInventoryByCity(
-      { ...creds(fetchImpl) },
-      warehouses,
-    );
+describe("groupInventoryByCity", () => {
+  it("reparte por idWarehouse, suma lotes del mismo codbar y aparta lo que no mapea", () => {
+    const rows = [
+      { barCode: "AURE003", availableAmount: 70, name: "Ethiopian", idWarehouse: "194" },
+      { barCode: "AURE003", availableAmount: 5, name: "Ethiopian", idWarehouse: "194" }, // otro lote
+      { barCode: "AURE001", availableAmount: 3, name: "Candida", idWarehouse: "200" },
+      { barCode: "AURE001", availableAmount: 9, name: "Candida", idWarehouse: "300" }, // ciudad sin mapear
+      { barCode: "AURE001", availableAmount: 1, name: "Candida", idWarehouse: "999" }, // bodega fuera de la lista
+      { barCode: "AURE001", availableAmount: 1, name: "Candida", idWarehouse: "999" },
+    ].map(normalizeInventoryRow);
+
+    const { porCiudad, sinCiudad } = groupInventoryByCity(rows, WAREHOUSES);
     expect([...porCiudad.keys()].sort()).toEqual(["arequipa", "trujillo"]);
     expect(porCiudad.get("arequipa")).toEqual([
       { codbar: "AURE003", nombre: "Ethiopian", bodega: "arequipa", disponible: 75 },
     ]);
-    expect(porCiudad.get("trujillo")?.[0]!.disponible).toBe(3);
+    expect(porCiudad.get("trujillo")).toEqual([
+      { codbar: "AURE001", nombre: "Candida", bodega: "BODEGA TRUJILLO", disponible: 3 },
+    ]);
+    expect(sinCiudad).toEqual([
+      { idWarehouse: "300", nombre: "", ciudadInei: "080101", direccion: "Parque industrial", filas: 1 },
+      { idWarehouse: "999", nombre: "", ciudadInei: "", direccion: "", filas: 2 },
+    ]);
+  });
+});
+
+describe("fetchInventoryByCity", () => {
+  it("lee TODO en una sola llamada (warehouse vacío) y agrupa por ciudad", async () => {
+    const seen: { url: string; headers: Record<string, string>; body: unknown }[] = [];
+    const { porCiudad, totalFilas, muestra } = await fetchInventoryByCity(
+      creds(
+        fakeFetch(
+          {
+            "inventory/go/inventory/search": [
+              { barCode: "AURE003", availableAmount: 75, name: "Ethiopian", idWarehouse: "194" },
+              { barCode: "AURE001", availableAmount: 3, name: "Candida", idWarehouse: "200" },
+            ],
+          },
+          seen,
+        ),
+      ),
+      WAREHOUSES,
+    );
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toMatchObject({ warehouse: "" });
     expect(totalFilas).toBe(2);
-    // La bodega sin ciudad se informa, no se consulta ni se mezcla.
-    expect(sinCiudad).toEqual([{ id: "300", nombre: "", ciudadInei: "999999", direccion: "Parque industrial" }]);
+    expect(muestra).toHaveLength(2);
+    expect(porCiudad.get("arequipa")?.[0]!.disponible).toBe(75);
+    expect(porCiudad.get("trujillo")?.[0]!.disponible).toBe(3);
   });
 });
 

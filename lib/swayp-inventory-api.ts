@@ -334,9 +334,10 @@ export function normalizeInventoryRow(r: SwaypInventoryRowRaw): SwaypInventoryRo
 }
 
 /**
- * Trae el inventario de UNA bodega (por su id). Se pide por bodega y no todo de
- * golpe porque así cada fila queda atada a una bodega de ciudad conocida, sin
- * depender de que el `idWarehouse` de la fila cuadre con el id de la lista.
+ * Trae el inventario. Con `warehouse` vacío devuelve el de TODAS las bodegas en
+ * una sola llamada, y cada fila trae su `idWarehouse`. Es la forma probada en
+ * producción (28-09-2026): la llamada por bodega, en serie, fallaba o se comía
+ * el tiempo de la función; la de todas juntas respondía 200.
  */
 export async function searchInventory(
   creds: SwaypInventoryCreds,
@@ -351,42 +352,83 @@ export async function searchInventory(
   return (arr as SwaypInventoryRowRaw[]).map(normalizeInventoryRow).filter((r) => r.codbar);
 }
 
+/** Filas cuyo `idWarehouse` no cae en una bodega de ciudad conocida. */
+export interface SwaypFilasSinCiudad {
+  idWarehouse: string;
+  /** Lo que Swayp dice de esa bodega, si vino en la lista; vacío si no vino. */
+  nombre: string;
+  ciudadInei: string;
+  direccion: string;
+  filas: number;
+}
+
 /**
- * Recorre las bodegas y arma las `EntradaSwayp` por ciudad, que es lo que
- * `planearImportacion` consume. Pide el inventario POR bodega, así cada fila
- * hereda la ciudad ya resuelta de esa bodega. Las bodegas cuya ciudad no
- * conocemos —Cusco, Huancayo, Ica, Chimbote— se saltan y se informan, en vez de
- * mezclarse en una ciudad equivocada. Devuelve también una muestra cruda para
- * poder verificar los nombres de campo con la primera corrida real.
+ * Reparte un inventario leído de una sola vez entre nuestras ciudades, usando el
+ * `idWarehouse` de cada fila contra el `id` de la lista de bodegas. Pura: no
+ * toca la red. Las filas de bodegas cuya ciudad no conocemos —Cusco, Huancayo,
+ * Ica, Chimbote— o con un `idWarehouse` que no está en la lista se apartan y se
+ * informan, en vez de mezclarse en una ciudad equivocada. Un mismo codbar
+ * repetido en una ciudad (lotes) se suma, igual que el importador de Excel.
+ */
+export function groupInventoryByCity(
+  rows: SwaypInventoryRow[],
+  warehouses: SwaypWarehouse[],
+): {
+  porCiudad: Map<string, EntradaSwayp[]>;
+  sinCiudad: SwaypFilasSinCiudad[];
+} {
+  const bodegaPorId = new Map(warehouses.map((w) => [w.id, w]));
+  const porCiudad = new Map<string, Map<string, EntradaSwayp>>();
+  const sinCiudad = new Map<string, SwaypFilasSinCiudad>();
+
+  for (const r of rows) {
+    const w = bodegaPorId.get(r.idWarehouse);
+    if (!w?.city) {
+      const previa = sinCiudad.get(r.idWarehouse);
+      if (previa) previa.filas += 1;
+      else
+        sinCiudad.set(r.idWarehouse, {
+          idWarehouse: r.idWarehouse,
+          nombre: w?.name ?? "",
+          ciudadInei: w?.ciudadInei ?? "",
+          direccion: w?.direccion ?? "",
+          filas: 1,
+        });
+      continue;
+    }
+    const delaCiudad = porCiudad.get(w.city) ?? new Map<string, EntradaSwayp>();
+    const previa = delaCiudad.get(r.codbar);
+    if (previa) previa.disponible += r.disponible;
+    else
+      delaCiudad.set(r.codbar, {
+        codbar: r.codbar,
+        nombre: r.nombre,
+        bodega: w.name || w.city,
+        disponible: r.disponible,
+      });
+    porCiudad.set(w.city, delaCiudad);
+  }
+
+  return {
+    porCiudad: new Map([...porCiudad].map(([c, m]) => [c, [...m.values()]])),
+    sinCiudad: [...sinCiudad.values()],
+  };
+}
+
+/**
+ * Lee el inventario de TODAS las bodegas en una llamada y lo reparte por ciudad
+ * (ver `groupInventoryByCity`), que es lo que `planearImportacion` consume.
+ * Devuelve también una muestra cruda para verificar los campos con cada corrida.
  */
 export async function fetchInventoryByCity(
   creds: SwaypInventoryCreds,
   warehouses: SwaypWarehouse[],
 ): Promise<{
   porCiudad: Map<string, EntradaSwayp[]>;
-  sinCiudad: { id: string; nombre: string; ciudadInei: string; direccion: string }[];
+  sinCiudad: SwaypFilasSinCiudad[];
   totalFilas: number;
   muestra: SwaypInventoryRow[];
 }> {
-  const porCiudad = new Map<string, EntradaSwayp[]>();
-  const sinCiudad: { id: string; nombre: string; ciudadInei: string; direccion: string }[] = [];
-  let totalFilas = 0;
-  const muestra: SwaypInventoryRow[] = [];
-
-  for (const w of warehouses) {
-    if (!w.city) {
-      sinCiudad.push({ id: w.id, nombre: w.name, ciudadInei: w.ciudadInei, direccion: w.direccion });
-      continue;
-    }
-    const rows = await searchInventory(creds, { warehouse: w.id });
-    totalFilas += rows.length;
-    if (muestra.length < 3) muestra.push(...rows.slice(0, 3 - muestra.length));
-    const lista = porCiudad.get(w.city) ?? [];
-    for (const r of rows) {
-      lista.push({ codbar: r.codbar, nombre: r.nombre, bodega: w.name || w.city, disponible: r.disponible });
-    }
-    porCiudad.set(w.city, lista);
-  }
-
-  return { porCiudad, sinCiudad, totalFilas, muestra };
+  const rows = await searchInventory(creds);
+  return { ...groupInventoryByCity(rows, warehouses), totalFilas: rows.length, muestra: rows.slice(0, 3) };
 }

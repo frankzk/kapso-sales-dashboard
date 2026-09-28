@@ -90,6 +90,8 @@ import {
   diagnoseInventoryAccess,
   fetchInventoryByCity,
   listWarehouses,
+  SwaypInventoryError,
+  type SwaypFilasSinCiudad,
   type SwaypInventoryCreds,
   type SwaypProbe,
 } from "@/lib/swayp-inventory-api";
@@ -2389,11 +2391,18 @@ export interface DryRunCiudad {
   sinControl: number;
 }
 
+/** El error de una llamada a Swayp en una línea, sin el token: status + cuerpo, o el mensaje. */
+function describirErrorSwayp(e: unknown): string {
+  if (e instanceof SwaypInventoryError) return `HTTP ${e.status}${e.body ? ` — ${e.body.slice(0, 240)}` : ""}`;
+  if (e instanceof Error) return `${e.name}: ${e.message}`;
+  return String(e);
+}
+
 export interface DryRunResult {
   ok: true;
   ciudades: DryRunCiudad[];
-  /** Bodegas cuya ciudad no mapeamos (Cusco, Ica…): no se tocan, se informan. */
-  bodegasSinCiudad: { id: string; nombre: string; ciudadInei: string; direccion: string }[];
+  /** Filas de bodegas cuya ciudad no mapeamos (Cusco, Ica…): no se tocan, se informan. */
+  bodegasSinCiudad: SwaypFilasSinCiudad[];
   bodegas: { id: string; name: string; city: string | null }[];
   totalFilasInventario: number;
   /** Muestra CRUDA de las primeras filas, para confirmar los nombres de campo. */
@@ -2442,19 +2451,25 @@ export async function swaypInventoryDryRun(input: {
   let inv;
   try {
     bodegas = await listWarehouses(creds);
-    inv = await fetchInventoryByCity(creds, bodegas);
-  } catch {
-    // Falló la lectura. En vez de un mensaje ciego, se corre el diagnóstico: dos
-    // llamadas separadas que dicen qué respondió cada una. Así se distingue un
-    // token vencido (falla la de bodegas, que es el control) de un problema de
-    // inventario (bodegas pasa, inventario no).
+  } catch (e) {
+    // Falla la de bodegas, que es el control: la credencial no sirve.
     const diagnostico = await diagnoseInventoryAccess(creds);
-    const control = diagnostico[0];
-    const msg =
-      control && control.ok
-        ? "El token es válido (la lectura de bodegas pasó), pero la de inventario falló. Revisa el detalle."
-        : "Swayp rechazó la credencial: el token está vencido, es de otra sesión, o no tiene permiso. Pega uno recién copiado del panel (sin la palabra «Bearer»).";
-    return { error: msg, diagnostico };
+    return {
+      error: `Swayp rechazó la credencial (${describirErrorSwayp(e)}): el token está vencido, es de otra sesión, o no tiene permiso. Pega uno recién copiado del panel (sin la palabra «Bearer»).`,
+      diagnostico,
+    };
+  }
+  try {
+    inv = await fetchInventoryByCity(creds, bodegas);
+  } catch (e) {
+    // Bodegas pasó, así que el token es bueno: se muestra el error REAL de la
+    // lectura de inventario (status + cuerpo), no un diagnóstico aparte que
+    // puede dar 200 con otra petición y esconder el fallo.
+    const diagnostico = await diagnoseInventoryAccess(creds);
+    return {
+      error: `El token es válido (bodegas pasó), pero la lectura de inventario falló: ${describirErrorSwayp(e)}`,
+      diagnostico,
+    };
   }
 
   const { porCiudad, sinCiudad, totalFilas, muestra } = inv;

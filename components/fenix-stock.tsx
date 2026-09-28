@@ -606,7 +606,10 @@ function DryRunSwayp() {
                 {res.totalFilasInventario} filas de inventario · {res.bodegas.length} bodegas.
                 {res.bodegasSinCiudad.length > 0 &&
                   ` Sin ciudad mapeada (se saltan): ${res.bodegasSinCiudad
-                    .map((b) => b.nombre || b.direccion || b.ciudadInei || b.id)
+                    .map(
+                      (b) =>
+                        `${b.nombre || b.direccion || b.ciudadInei || `bodega ${b.idWarehouse || "sin id"}`} (${b.filas} filas)`,
+                    )
                     .join(", ")}.`}
               </p>
               {res.ciudades.map((c) => (
