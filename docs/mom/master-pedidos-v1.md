@@ -3288,6 +3288,12 @@ Reglas de esa tabla:
   en el pedido, pero «Historial desde el origen» se arma con la guía, y la
   operadora veía «Sin gestiones registradas» en un pedido que el agente ya
   había llamado (26-09-2026).
+- En **«Hoy por asesora»** (Envíos) esas filas cuentan como una asesora más,
+  **«Agente Daaph»** con la marca IA, siempre al final de la tabla y dentro
+  del total del equipo. Se reconocen por el actor nulo y la nota «Agente de
+  voz», o por ser un `reroute` sin actor (las dos filas de la salida Swayp que
+  crea el agente). Cada llamada suya es una gestión; su salida suma una
+  reprogramada. Otra fila sin actor no se atribuye a nadie (28-09-2026).
 - Todo hecho que escribe lleva en `payload` el `voice_call_id`, y la línea de
   tiempo del drawer lo muestra con actor **«Agente de voz»** y enlace a la
   transcripción. Un intento que no se puede leer después no es historial

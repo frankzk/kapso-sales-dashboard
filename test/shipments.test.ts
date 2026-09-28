@@ -12,6 +12,8 @@ import {
   matchesAliclikRouteFilter,
   reprogramCourierOf,
   aggregateReproDay,
+  reproDayActor,
+  VOICE_AGENT_KEY,
   type ReprogramChildRow,
   categoryOf,
   isCallable,
@@ -291,6 +293,27 @@ describe("aggregateReproDay (productividad de hoy por asesora)", () => {
       { agent: "b", kind: "reroute", newStatus: "en_ruta", shipmentId: "z" },
     ]);
     expect(out.map((r) => r.agent)).toEqual(["b", "a"]);
+  });
+
+  it("el agente de voz (actor nulo) cuenta como «Agente Daaph», al final de la tabla", () => {
+    const out = aggregateReproDay([
+      { agent: null, kind: "call", newStatus: null, shipmentId: "g1", note: "Agente de voz · No contestó" },
+      { agent: null, kind: "call", newStatus: null, shipmentId: "g2", note: "Agente de voz · acepta reenvío" },
+      // La salida Swayp que crea el agente: madre transferida + hija en ruta.
+      { agent: null, kind: "reroute", newStatus: "transferido", shipmentId: "g2", note: "Excepción sobre guía anulada" },
+      { agent: null, kind: "reroute", newStatus: "en_ruta", shipmentId: "h2", note: "Excepción sobre guía anulada" },
+      { agent: "u1", kind: "call", newStatus: null, shipmentId: "g3" },
+    ]);
+    expect(out).toEqual([
+      { agent: "u1", gestiones: 1, reprogramadas: 0, anuladas: 0, entregadas: 0, guias: 1 },
+      { agent: VOICE_AGENT_KEY, gestiones: 4, reprogramadas: 1, anuladas: 0, entregadas: 0, guias: 3 },
+    ]);
+  });
+
+  it("una fila sin actor que no es del agente no se atribuye a nadie", () => {
+    expect(reproDayActor({ agent: null, kind: "call", newStatus: null, shipmentId: "g", note: "Importado" })).toBeNull();
+    expect(reproDayActor({ agent: null, kind: "call", newStatus: null, shipmentId: "g" })).toBeNull();
+    expect(reproDayActor({ agent: "u1", kind: "call", newStatus: null, shipmentId: "g", note: "Agente de voz" })).toBe("u1");
   });
 });
 

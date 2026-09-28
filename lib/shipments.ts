@@ -1153,12 +1153,28 @@ export function rescheduleGuideCode(
 // día (hora Lima). Los dos caminos de reprogramación (Aliclik y Swayp) registran
 // kind='reroute'; las demás disposiciones (no contesta, cancela, programar)
 // registran kind='call'. Gestiones = ambas; Reprogramadas = solo las reroute.
+//
+// El agente de voz (MOM §11.8) escribe con actor nulo: sus notas empiezan con
+// «Agente de voz» y la salida Swayp que crea deja las dos filas `reroute` sin
+// asesora. Esas filas cuentan en una fila propia, «Agente Daaph», al final de
+// la tabla. Cualquier otra fila sin actor sigue fuera: no es de nadie.
+
+export const VOICE_AGENT_KEY = "agente_daaph";
+export const VOICE_AGENT_NAME = "Agente Daaph";
 
 export interface ReproDayCall {
   agent: string | null;
   kind: string;
   newStatus: string | null; // resultado de la gestión (delivery_status resultante)
   shipmentId: string | null;
+  note?: string | null;
+}
+
+/** Quién firma la gestión: la asesora, el agente de voz o nadie. */
+export function reproDayActor(c: ReproDayCall): string | null {
+  if (c.agent) return c.agent;
+  if (c.kind === "reroute" || (c.note ?? "").startsWith("Agente de voz")) return VOICE_AGENT_KEY;
+  return null;
 }
 
 export interface ReproDayAgentCount {
@@ -1172,22 +1188,23 @@ export interface ReproDayAgentCount {
 }
 
 /** Agrega las gestiones del día por asesor con el desglose de resultados.
- *  Pure (ordena por gestiones desc). */
+ *  Pure (ordena por gestiones desc; el agente de voz al final). */
 export function aggregateReproDay(calls: ReproDayCall[]): ReproDayAgentCount[] {
   type Acc = { gestiones: number; reprogramadas: number; anuladas: number; entregadas: number; guias: Set<string> };
   const map = new Map<string, Acc>();
   for (const c of calls) {
-    if (!c.agent) continue;
     if (c.kind !== "call" && c.kind !== "reroute") continue;
+    const actor = reproDayActor(c);
+    if (!actor) continue;
     const e =
-      map.get(c.agent) ??
+      map.get(actor) ??
       { gestiones: 0, reprogramadas: 0, anuladas: 0, entregadas: 0, guias: new Set<string>() };
     e.gestiones += 1;
     if (c.newStatus === "en_ruta") e.reprogramadas += 1;
     else if (c.newStatus === "anulado") e.anuladas += 1;
     else if (c.newStatus === "entregado") e.entregadas += 1;
     if (c.shipmentId) e.guias.add(c.shipmentId);
-    map.set(c.agent, e);
+    map.set(actor, e);
   }
   return [...map.entries()]
     .map(([agent, e]) => ({
@@ -1200,6 +1217,8 @@ export function aggregateReproDay(calls: ReproDayCall[]): ReproDayAgentCount[] {
     }))
     .sort(
       (a, b) =>
+        // El agente va último: llama a toda la cola y taparía a las asesoras.
+        Number(a.agent === VOICE_AGENT_KEY) - Number(b.agent === VOICE_AGENT_KEY) ||
         b.gestiones - a.gestiones ||
         b.reprogramadas - a.reprogramadas ||
         b.guias - a.guias ||
