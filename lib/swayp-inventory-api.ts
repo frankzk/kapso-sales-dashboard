@@ -8,33 +8,34 @@
 // (lib/swayp-inventario.ts), que recibe las mismas `EntradaSwayp` que produce el
 // Excel. Este módulo sólo cambia la FUENTE de esas entradas.
 //
-// EL CONTRATO SE OBTUVO DEL BUNDLE DEL PANEL Y DE UNA PETICIÓN REAL CAPTURADA
-// (28-09-2026). No está documentado por Swayp, así que es reversado, no oficial:
+// EL CONTRATO SE OBTUVO DEL BUNDLE DEL PANEL Y DE PETICIONES REALES CAPTURADAS
+// (28-09-2026). No está documentado por Swayp, así que es reversado, no oficial.
+// TODO va a UN SOLO host —cloudfunctions— con el token del panel:
 //   · warehouses/byCompany  → POST {API_URL}v1/warehouses/byCompany  {idCompany}
-//   · inventory/search      → POST {API_INVENTORY_URL}inventory/search?includeReturns=true
+//   · inventory/search      → POST {API_URL}v1/inventory/go/inventory/search?includeReturns=true
 //                             body {warehouse, codbar:"", idCompany}
-//   Son DOS HOSTS distintos (bodegas en cloudfunctions, inventario en run.app).
-//   Auth: Bearer <token del panel> + headers email/user/x-country, igual que las
-//   demás llamadas del panel. Por eso este módulo NO usa `swaypOptsFromEnv`: ese
-//   token es el de integración del API de guías, y el de inventario es el del
-//   login del panel (otro emisor). La Fase 1 (dry run) recibe el token pegado a
-//   mano y no lo guarda; la fuente definitiva del token se decide después.
+//   Auth: Bearer <token del panel> + headers email/user/x-country + headers de
+//   navegador (Origin/Referer/UA). El token es el del LOGIN del panel, no el de
+//   integración del API de guías (otro emisor), por eso no se usa `swaypOptsFromEnv`.
+//
+// OJO: el `environment` del bundle declara un `API_INVENTORY_URL` a un host
+// `run.app`, pero NINGÚN código lo usa —es config muerta—. Apuntar ahí devuelve
+// «Invalid or missing API Key» (es otro servicio, con otra auth). El inventario
+// que muestra el panel sale de `v1/inventory/go/inventory/search` en
+// cloudfunctions, con el mismo Bearer que las bodegas. Confirmado el 28-09-2026:
+// contra run.app daba 401; contra cloudfunctions, bodegas y bags daban 200.
 //
 // Este módulo es PURO respecto a la base: sólo habla con la red (con un
 // `fetchImpl` inyectable para las pruebas) y normaliza. No lee ni escribe Supabase.
 
 import { ciudadDeBodega } from "@/lib/swayp-inventario";
 import type { EntradaSwayp } from "@/lib/swayp-inventario";
+import { UBIGEO_BY_CITY } from "@/lib/ubigeo";
 
-/** Host del API general del panel (bodegas, login). Del `environment` del bundle. */
+/** Host del API del panel. Todo el inventario vive acá. Del `environment` del bundle. */
 export const SWAYP_PANEL_API_URL =
   process.env.SWAYP_PANEL_API_URL?.trim() ||
   "https://us-central1-swayp-co.cloudfunctions.net/api/";
-
-/** Host del API de inventario. Distinto del anterior — ver nota de arriba. */
-export const SWAYP_INVENTORY_API_URL =
-  process.env.SWAYP_INVENTORY_API_URL?.trim() ||
-  "https://swayp-inventory-95701915666.us-central1.run.app/api/v1/";
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 
@@ -171,29 +172,23 @@ async function probeOnce(
   }
 }
 
+/** URL del inventario, en cloudfunctions (NO run.app). Ver nota de arriba. */
+const INVENTORY_SEARCH_URL = `${SWAYP_PANEL_API_URL}v1/inventory/go/inventory/search?includeReturns=true`;
+
 /**
- * Tres llamadas para aislar un 401/403. La primera —«bags»— es la MISMA que la
- * captura del usuario probó que funciona con un token válido: si esa da 200 y
- * las otras no, el token sirve y el problema es de host/ruta; si esa también da
- * 401, el token está vencido o es de otra sesión. Cada una reporta su host y su
- * status por separado, porque el inventario vive en OTRO host que las bodegas y
- * podría querer otra credencial.
+ * Dos llamadas de diagnóstico para aislar un fallo, cada una con su host y su
+ * status por separado y sin lanzar. La de bodegas es el control (Bearer válido →
+ * 200); la de inventario es la que importa. Antes había una tercera contra
+ * run.app, que se quitó al confirmar que ese host es config muerta.
  */
 export async function diagnoseInventoryAccess(creds: SwaypInventoryCreds): Promise<SwaypProbe[]> {
-  const idc = encodeURIComponent(creds.idCompany);
   return Promise.all([
-    probeOnce(
-      creds,
-      "bags (control, cloudfunctions)",
-      "GET",
-      `${SWAYP_PANEL_API_URL}v1/inventory/go/bags/partner/${idc}?requestingCompanyId=${idc}`,
-    ),
     probeOnce(creds, "warehouses/byCompany (cloudfunctions)", "POST", `${SWAYP_PANEL_API_URL}v1/warehouses/byCompany`, {
       idCompany: creds.idCompany,
       company: creds.idCompany,
       nit: creds.user,
     }),
-    probeOnce(creds, "inventory/search (run.app)", "POST", `${SWAYP_INVENTORY_API_URL}inventory/search?includeReturns=true`, {
+    probeOnce(creds, "inventory/search (cloudfunctions)", "POST", INVENTORY_SEARCH_URL, {
       warehouse: "",
       codbar: "",
       idCompany: creds.idCompany,
@@ -201,21 +196,64 @@ export async function diagnoseInventoryAccess(creds: SwaypInventoryCreds): Promi
   ]);
 }
 
-/** Una bodega de Swayp, ya normalizada a lo único que nos importa. */
+// Código INEI de cada ciudad (su cercado) → nuestra clave de ciudad. Se usa para
+// resolver la bodega cuando su `nombre` viene vacío pero trae `ciudad` (ubigeo).
+// Puno y Juliaca comparten bodega: ambos códigos caen en `juliaca`, como en el
+// importador de Excel.
+const INEI_A_CIUDAD: Record<string, string> = (() => {
+  const map: Record<string, string> = {};
+  for (const [city, table] of Object.entries(UBIGEO_BY_CITY)) {
+    const cercado = table[city];
+    if (cercado) map[cercado] = city;
+  }
+  map["210101"] = "juliaca"; // Puno cercado → se sirve desde Juliaca
+  return map;
+})();
+
+/** Las ciudades que sabemos mapear, para buscarlas dentro de una dirección. */
+const CIUDADES_CONOCIDAS = Object.keys(UBIGEO_BY_CITY);
+
+/**
+ * A qué ciudad nuestra corresponde una bodega. Tres intentos, del más fiable al
+ * menos: el NOMBRE (por si trae «BODEGA TRUJILLO»), el código INEI de `ciudad`
+ * (exacto), y por último rastrear una ciudad conocida dentro de la `direccion`
+ * («Av. Ejército 1015, Cayma, Arequipa» → arequipa). null si ninguno acierta.
+ */
+export function ciudadDeWarehouse(w: {
+  name?: string | null;
+  ciudad?: string | null;
+  direccion?: string | null;
+}): string | null {
+  const porNombre = ciudadDeBodega(w.name);
+  if (porNombre) return porNombre;
+
+  const inei = String(w.ciudad ?? "").trim();
+  if (inei && INEI_A_CIUDAD[inei]) return INEI_A_CIUDAD[inei];
+
+  const dir = (w.direccion ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  if (dir) {
+    for (const ciudad of CIUDADES_CONOCIDAS) {
+      if (dir.includes(ciudad)) return ciudad === "puno" ? "juliaca" : ciudad;
+    }
+  }
+  return null;
+}
+
+/** Una bodega de Swayp, con su ciudad ya resuelta (o null si no la conocemos). */
 export interface SwaypWarehouse {
   id: string;
   name: string;
+  city: string | null;
+  /** Lo que dijo Swayp, para poder mostrarlo cuando la ciudad no resuelve. */
+  ciudadInei: string;
+  direccion: string;
 }
 
 /**
- * Lista las bodegas de la empresa. Necesaria porque las filas de inventario
- * traen `idWarehouse` (un id) y no el nombre, y la ciudad se deduce del NOMBRE
- * («BODEGA TRUJILLO» → trujillo). Se lee defensivamente: el panel devuelve el id
- * como `id`/`_id`/`idWarehouse` según la vista, y el nombre como `name`/`nombre`.
- *
- * El cuerpo manda un superconjunto (`idCompany`/`company`/`nit`) porque el bundle
- * arma el body desde una variable y no se ve el nombre exacto de la clave;
- * mandar las tres es inofensivo y evita fallar por una diferencia de nombre.
+ * Lista las bodegas de la empresa, con su ciudad resuelta. El panel devuelve el
+ * id como `idBodega` (a veces `id`/`_id`), el `nombre` PUEDE venir vacío, y la
+ * ciudad llega como código INEI en `ciudad` más el texto en `direccion` — por
+ * eso `ciudadDeWarehouse` mira los tres.
  */
 export async function listWarehouses(creds: SwaypInventoryCreds): Promise<SwaypWarehouse[]> {
   const raw = await post<unknown>(creds, `${SWAYP_PANEL_API_URL}v1/warehouses/byCompany`, {
@@ -223,12 +261,19 @@ export async function listWarehouses(creds: SwaypInventoryCreds): Promise<SwaypW
     company: creds.idCompany,
     nit: creds.user,
   });
-  const arr = Array.isArray(raw) ? raw : Array.isArray((raw as { data?: unknown })?.data) ? (raw as { data: unknown[] }).data : [];
+  const arr = Array.isArray(raw)
+    ? raw
+    : Array.isArray((raw as { data?: unknown })?.data)
+      ? (raw as { data: unknown[] }).data
+      : [];
   const out: SwaypWarehouse[] = [];
   for (const w of arr as Record<string, unknown>[]) {
-    const id = String(w.id ?? w._id ?? w.idWarehouse ?? "").trim();
-    const name = String(w.name ?? w.nombre ?? w.warehouse ?? "").trim();
-    if (id && name) out.push({ id, name });
+    const id = String(w.idBodega ?? w.id ?? w._id ?? w.idWarehouse ?? "").trim();
+    if (!id) continue;
+    const name = String(w.nombre ?? w.name ?? w.warehouse ?? "").trim();
+    const ciudadInei = String(w.ciudad ?? "").trim();
+    const direccion = String(w.direccion ?? "").trim();
+    out.push({ id, name, ciudadInei, direccion, city: ciudadDeWarehouse({ name, ciudad: ciudadInei, direccion }) });
   }
   return out;
 }
@@ -289,63 +334,59 @@ export function normalizeInventoryRow(r: SwaypInventoryRowRaw): SwaypInventoryRo
 }
 
 /**
- * Trae el inventario. Con `warehouse` vacío devuelve TODAS las bodegas en una
- * sola llamada (cada fila trae su `idWarehouse`), que es como conviene para el
- * sync. Se puede acotar a una bodega pasando su id.
+ * Trae el inventario de UNA bodega (por su id). Se pide por bodega y no todo de
+ * golpe porque así cada fila queda atada a una bodega de ciudad conocida, sin
+ * depender de que el `idWarehouse` de la fila cuadre con el id de la lista.
  */
 export async function searchInventory(
   creds: SwaypInventoryCreds,
   opts: { warehouse?: string } = {},
 ): Promise<SwaypInventoryRow[]> {
-  const raw = await post<unknown>(
-    creds,
-    `${SWAYP_INVENTORY_API_URL}inventory/search?includeReturns=true`,
-    { warehouse: opts.warehouse ?? "", codbar: "", idCompany: creds.idCompany },
-  );
-  const arr = Array.isArray(raw) ? raw : [];
-  return (arr as SwaypInventoryRowRaw[])
-    .map(normalizeInventoryRow)
-    .filter((r) => r.codbar);
+  const raw = await post<unknown>(creds, INVENTORY_SEARCH_URL, {
+    warehouse: opts.warehouse ?? "",
+    codbar: "",
+    idCompany: creds.idCompany,
+  });
+  const arr = Array.isArray(raw) ? raw : Array.isArray((raw as { data?: unknown })?.data) ? (raw as { data: unknown[] }).data : [];
+  return (arr as SwaypInventoryRowRaw[]).map(normalizeInventoryRow).filter((r) => r.codbar);
 }
 
 /**
- * Agrupa las filas de inventario en `EntradaSwayp[]` por CIUDAD, que es lo que
- * `planearImportacion` consume. Traduce `idWarehouse` → nombre (con la lista de
- * bodegas) → ciudad (con `ciudadDeBodega`). Las bodegas cuya ciudad no
- * conocemos —Cusco, Huancayo, Ica, Chimbote— se saltan y se cuentan aparte, en
- * vez de mezclarse en una ciudad equivocada.
+ * Recorre las bodegas y arma las `EntradaSwayp` por ciudad, que es lo que
+ * `planearImportacion` consume. Pide el inventario POR bodega, así cada fila
+ * hereda la ciudad ya resuelta de esa bodega. Las bodegas cuya ciudad no
+ * conocemos —Cusco, Huancayo, Ica, Chimbote— se saltan y se informan, en vez de
+ * mezclarse en una ciudad equivocada. Devuelve también una muestra cruda para
+ * poder verificar los nombres de campo con la primera corrida real.
  */
-export function inventoryToEntradasByCity(
-  rows: SwaypInventoryRow[],
+export async function fetchInventoryByCity(
+  creds: SwaypInventoryCreds,
   warehouses: SwaypWarehouse[],
-): { porCiudad: Map<string, EntradaSwayp[]>; sinCiudad: { idWarehouse: string; nombre: string; filas: number }[] } {
-  const nombrePorId = new Map(warehouses.map((w) => [w.id, w.name]));
+): Promise<{
+  porCiudad: Map<string, EntradaSwayp[]>;
+  sinCiudad: { id: string; nombre: string; ciudadInei: string; direccion: string }[];
+  totalFilas: number;
+  muestra: SwaypInventoryRow[];
+}> {
   const porCiudad = new Map<string, EntradaSwayp[]>();
-  const sinCiudadPorWh = new Map<string, { nombre: string; filas: number }>();
+  const sinCiudad: { id: string; nombre: string; ciudadInei: string; direccion: string }[] = [];
+  let totalFilas = 0;
+  const muestra: SwaypInventoryRow[] = [];
 
-  for (const r of rows) {
-    const nombreBodega = nombrePorId.get(r.idWarehouse) ?? "";
-    const ciudad = ciudadDeBodega(nombreBodega);
-    if (!ciudad) {
-      const prev = sinCiudadPorWh.get(r.idWarehouse) ?? { nombre: nombreBodega, filas: 0 };
-      prev.filas += 1;
-      sinCiudadPorWh.set(r.idWarehouse, prev);
+  for (const w of warehouses) {
+    if (!w.city) {
+      sinCiudad.push({ id: w.id, nombre: w.name, ciudadInei: w.ciudadInei, direccion: w.direccion });
       continue;
     }
-    const lista = porCiudad.get(ciudad) ?? [];
-    lista.push({
-      codbar: r.codbar,
-      nombre: r.nombre,
-      bodega: nombreBodega,
-      disponible: r.disponible,
-    });
-    porCiudad.set(ciudad, lista);
+    const rows = await searchInventory(creds, { warehouse: w.id });
+    totalFilas += rows.length;
+    if (muestra.length < 3) muestra.push(...rows.slice(0, 3 - muestra.length));
+    const lista = porCiudad.get(w.city) ?? [];
+    for (const r of rows) {
+      lista.push({ codbar: r.codbar, nombre: r.nombre, bodega: w.name || w.city, disponible: r.disponible });
+    }
+    porCiudad.set(w.city, lista);
   }
 
-  const sinCiudad = [...sinCiudadPorWh.entries()].map(([idWarehouse, v]) => ({
-    idWarehouse,
-    nombre: v.nombre,
-    filas: v.filas,
-  }));
-  return { porCiudad, sinCiudad };
+  return { porCiudad, sinCiudad, totalFilas, muestra };
 }

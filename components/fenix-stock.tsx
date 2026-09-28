@@ -498,8 +498,11 @@ function DryRunSwayp() {
     setErr(null);
     setRes(null);
     setDiag(null);
+    // Si pegan «Bearer <token>», se le quita el prefijo: el código ya lo agrega,
+    // y con doble «Bearer» el panel rechaza (403).
+    const limpio = token.trim().replace(/^Bearer\s+/i, "");
     start(async () => {
-      const r = await swaypInventoryDryRun({ token, email, user: ruc, idCompany });
+      const r = await swaypInventoryDryRun({ token: limpio, email, user: ruc, idCompany });
       if ("error" in r) {
         setErr(r.error);
         setDiag(r.diagnostico ?? null);
@@ -603,7 +606,7 @@ function DryRunSwayp() {
                 {res.totalFilasInventario} filas de inventario · {res.bodegas.length} bodegas.
                 {res.bodegasSinCiudad.length > 0 &&
                   ` Sin ciudad mapeada (se saltan): ${res.bodegasSinCiudad
-                    .map((b) => b.nombre || b.idWarehouse)
+                    .map((b) => b.nombre || b.direccion || b.ciudadInei || b.id)
                     .join(", ")}.`}
               </p>
               {res.ciudades.map((c) => (
