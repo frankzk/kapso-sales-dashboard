@@ -18,8 +18,7 @@ import {
   type YapeVoucherFields,
 } from "@/lib/vision";
 import {
-  readingLooksSwapped,
-  verifyYapeRecipient,
+  yapeRecipientReading,
   type CollectionAccount,
   type YapeRecipientCheck,
 } from "@/lib/yape-recipient";
@@ -49,6 +48,11 @@ export interface VoucherInspection {
     recipientCheck: YapeRecipientCheck;
     /** La lectura vino invertida y se corrigió antes de juzgarla. */
     recipientSwapped: boolean;
+    /**
+     * El nombre leído como receptor era el de la clienta —la nota del Yape— y
+     * no contó para juzgar la cuenta. `recipientName` queda en null.
+     */
+    recipientIgnoredName: string | null;
     /** Con qué cuenta de cobro encajó, si encajó con alguna. */
     recipientAccount: CollectionAccount | null;
   };
@@ -68,6 +72,7 @@ export const EMPTY_INSPECTION: VoucherInspection = {
     recipientPhoneLastDigits: null,
     recipientCheck: "missing",
     recipientSwapped: false,
+    recipientIgnoredName: null,
     recipientAccount: null,
   },
   payload: {},
@@ -89,21 +94,15 @@ export function voucherReading(
   verdict: YapeVisionResult,
   extracted: YapeVoucherFields,
   accounts: CollectionAccount[],
+  customerName?: string | null,
 ): VoucherInspection {
-  // El lector a veces devuelve el pagador y el receptor cambiados de sitio. Se
-  // corrige ANTES de juzgar: si no, un cobro impecable queda acusado de desvío
-  // por un nombre que ni siquiera es el del receptor.
-  const swapped = readingLooksSwapped(
-    extracted.payerName,
-    extracted.recipientPhoneLastDigits,
-    accounts,
-  );
-  const recipientName = swapped ? extracted.payerName : extracted.recipientName;
-  const recipient = verifyYapeRecipient(
-    recipientName,
-    extracted.recipientPhoneLastDigits,
-    accounts,
-  );
+  // La MISMA regla que relee la auditoría en cada pantalla, con sus dos
+  // correcciones: la lectura invertida —un cobro impecable acusado de desvío
+  // por un nombre que ni siquiera es el del receptor— y el nombre de la clienta
+  // tomado por receptor, que casi siempre es la nota que ella escribe en el Yape.
+  const recipient = yapeRecipientReading(extracted, accounts, customerName);
+  const swapped = recipient.swapped;
+  const recipientName = recipient.name;
   const recipientCheck = recipient.status;
   return {
     ok: verdict.ok,
@@ -119,6 +118,7 @@ export function voucherReading(
       recipientCheck,
       recipientAccount: recipient.account,
       recipientSwapped: swapped,
+      recipientIgnoredName: recipient.ignoredName,
     },
     payload: {
       indicators: verdict.indicators,
@@ -157,6 +157,8 @@ export async function inspectVoucher(
   admin: SupabaseClient,
   path: string | null,
   storeId: string,
+  /** La clienta del pedido: su nombre en la nota del Yape no es el receptor. */
+  customerName?: string | null,
 ): Promise<VoucherInspection> {
   if (!path) return EMPTY_INSPECTION;
   // Clave de visión de ESTA tienda (0052): el gasto cae en su propia cuenta de
@@ -190,7 +192,7 @@ export async function inspectVoucher(
     // Las cuentas de cobro de ESTA tienda. Si no hay ninguna configurada, la
     // verificación cae en «no se puede contrastar», jamás en «se desvió».
     const accounts = await loadStoreCollectionAccounts(admin, storeId);
-    return voucherReading(verdict, extracted, accounts);
+    return voucherReading(verdict, extracted, accounts, customerName);
   } catch {
     return EMPTY_INSPECTION;
   }

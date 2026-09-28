@@ -25,6 +25,7 @@ import {
 } from "@/lib/vision";
 import {
   checkYapeRecipient,
+  describeCollectionAccount,
   yapeRecipientReadingFromVision,
   type CollectionAccount,
   type YapeRecipientCheck,
@@ -157,6 +158,11 @@ export interface PickupKeyPanel {
    * lista no podría distinguir «otra cuenta» de «no sabemos cuál esperar».
    */
   collectionAccounts: CollectionAccount[];
+  /**
+   * La clienta del pedido. Viaja por la misma razón que las cuentas: su nombre
+   * leído como receptor —la nota que ella escribe en el Yape— no cuenta.
+   */
+  customerName: string | null;
   orderTotal: number | null;
   payments: PaymentRow[];
   paymentState: string;
@@ -351,6 +357,7 @@ export async function loadPaymentPanel(
     panel: {
       storeId: ctx.storeId,
       collectionAccounts,
+      customerName: ctx.row.customer_name,
       orderTotal: ctx.row.order_total,
       payments,
       paymentState: paymentState(snapshots, ctx.row.order_total),
@@ -423,6 +430,8 @@ export interface VoucherPrefillFields {
   recipientCheck: YapeRecipientCheck;
   /** La lectura vino invertida —pagador y receptor cambiados— y se corrigió. */
   recipientSwapped: boolean;
+  /** Nombre de la clienta leído como receptor (la nota del Yape); no contó. */
+  recipientIgnoredName: string | null;
 }
 
 /**
@@ -447,7 +456,12 @@ export async function readVoucherFields(
     return { error: "El comprobante no pertenece a este pedido." };
   }
 
-  const inspection = await inspectVoucher(createAdminSupabase(), path, ctx.storeId);
+  const inspection = await inspectVoucher(
+    createAdminSupabase(),
+    path,
+    ctx.storeId,
+    ctx.row.customer_name,
+  );
   if (!inspection.ok) {
     return {
       error:
@@ -511,7 +525,7 @@ export async function registerPayment(
   // Se lee la imagen ANTES de buscar duplicados: si el operador no tecleó el nº
   // de operación pero la imagen lo trae, ese dato entra en la comprobación. Sin
   // él, un mismo Yape recortado podría colarse en dos pedidos.
-  const vision = await inspectVoucher(admin, input.path, ctx.storeId);
+  const vision = await inspectVoucher(admin, input.path, ctx.storeId, ctx.row.customer_name);
   // Una operación escrita por una persona puede ser corta (p. ej. 5782).
   // El OCR mantiene el umbral estricto para no confundir el código de
   // seguridad de tres dígitos con el nº de operación.
@@ -923,7 +937,13 @@ export async function validatePayment(
   // `recipient_check` que quedó escrito el día de la carga: así, dar de alta una
   // cuenta destraba también lo que ya estaba cargado.
   const accounts = await loadStoreCollectionAccounts(admin, payment.store_id);
-  const recipient = yapeRecipientReadingFromVision(payment.vision, accounts);
+  // Con el nombre de la clienta: si el lector copió como receptor la nota que
+  // ella escribió en el Yape, ese nombre no cuenta (ver `nameIsTheCustomers`).
+  const recipient = yapeRecipientReadingFromVision(
+    payment.vision,
+    accounts,
+    ctx.row.customer_name,
+  );
   const recipientException = opts.recipientExceptionReason?.trim() || null;
   if (recipient.status === "mismatch") {
     // El aviso dice QUÉ señal falló. Antes decía «el destinatario o el celular
@@ -988,7 +1008,7 @@ export async function validatePayment(
       payload: {
         nombre_leido: recipient.name,
         celular_leido: recipient.phoneLastDigits,
-        cuentas: accounts.map((a) => `${a.name} · ···${a.phoneLastDigits}`),
+        cuentas: accounts.map(describeCollectionAccount),
       },
     });
   }

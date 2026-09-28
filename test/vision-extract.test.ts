@@ -300,6 +300,14 @@ describe("extractYapeVoucher", () => {
     expect(prompt).toContain("ARQC");
   });
 
+  it("el prompt avisa que el mensaje del Yape no es el receptor", async () => {
+    // #AUR177541: la clienta escribió su nombre en el mensaje del Yape y el
+    // lector lo copió como destinatario, acusando de desvío un cobro a ···309.
+    const prompt = await capturePrompt();
+    expect(prompt).toContain("EL MENSAJE DEL YAPE NO ES NINGÚN NOMBRE DEL PAGO");
+    expect(prompt).toContain("Pagado a");
+  });
+
   it("el prompt también enumera los rótulos que NO valen", async () => {
     const prompt = await capturePrompt();
     for (const label of NOT_OPERATION_NUMBER_LABELS) expect(prompt).toContain(label);
