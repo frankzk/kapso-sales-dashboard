@@ -182,6 +182,9 @@ echo "  ✅ sale con rastro, custodia a la empresa, solicitud a por asignar; la 
 echo "▶ caja abierta durante el cotejo (0196): se suma en paralelo y sale al 100 % o con la diferencia retirada"
 $PSQL -f "$ROOT/scripts/sql/gf_parallel_box_smoke.sql"
 echo "  ✅ misma caja durante el cotejo; lo nuevo reabre oficina; se recibe lo verificado; custodia al 100 % o al retirar la diferencia; carga 2 solo tras la custodia"
+echo "▶ pago del motorizado: el rechazo antes del 28/09 no exige foto (0197)"
+$PSQL -f "$ROOT/scripts/sql/rider_pay_rejection_photo_smoke.sql"
+echo "  ✅ rechazo del 27/09 sin foto no frena el pago; el del 28/09 sí; entrega sin foto y Yape sin captura cuentan siempre"
 
 echo ""
 echo "✅ DB verification passed."
