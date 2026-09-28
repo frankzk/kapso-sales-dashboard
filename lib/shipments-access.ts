@@ -15,6 +15,8 @@ import {
   ALICLIK_REPROGRAM_OUTCOMES,
   COURIERS_FUERA_DE_REPRO,
   aggregateReproDay,
+  VOICE_AGENT_KEY,
+  VOICE_AGENT_NAME,
   computeReprogramStats,
   limaCalendarDayBounds,
   shipmentSearchTerms,
@@ -1106,7 +1108,8 @@ export async function getReprogramStats(storeIds: string[]): Promise<ReprogramSt
 export type ReproDayAgentNamed = ReproDayAgentCount & { name: string };
 
 /** Productividad de hoy (día calendario Lima) por asesora en Repro Provincia:
- *  gestiones, reprogramaciones y guías distintas tocadas. Snapshot de fin de día. */
+ *  gestiones, reprogramaciones y guías distintas tocadas. Snapshot de fin de día.
+ *  Lee también las filas sin actor: las del agente de voz (`reproDayActor`). */
 export async function getReproTodayByAgent(storeIds: string[]): Promise<ReproDayAgentNamed[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
@@ -1116,26 +1119,34 @@ export async function getReproTodayByAgent(storeIds: string[]): Promise<ReproDay
   for (let from = 0; from < MAX_LIST * 4; from += PAGE) {
     const { data, error } = await sb
       .from("shipment_calls")
-      .select("agent, kind, new_status, shipment_id")
+      .select("agent, kind, new_status, shipment_id, note")
       .in("store_id", storeIds)
-      .not("agent", "is", null)
       .gte("occurred_at", startIso)
       .lt("occurred_at", endIso)
       .order("id", { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) break;
     const batch =
-      (data as { agent: string | null; kind: string; new_status: string | null; shipment_id: string | null }[]) ?? [];
+      (data as {
+        agent: string | null;
+        kind: string;
+        new_status: string | null;
+        shipment_id: string | null;
+        note: string | null;
+      }[]) ?? [];
     for (const r of batch) {
-      calls.push({ agent: r.agent, kind: r.kind, newStatus: r.new_status, shipmentId: r.shipment_id });
+      calls.push({ agent: r.agent, kind: r.kind, newStatus: r.new_status, shipmentId: r.shipment_id, note: r.note });
     }
     if (batch.length < PAGE) break;
   }
 
   const counts = aggregateReproDay(calls);
   if (!counts.length) return [];
-  const emails = await resolveEmails(counts.map((c) => c.agent));
-  return counts.map((c) => ({ ...c, name: emails.get(c.agent) ?? c.agent }));
+  const emails = await resolveEmails(counts.map((c) => c.agent).filter((a) => a !== VOICE_AGENT_KEY));
+  return counts.map((c) => ({
+    ...c,
+    name: c.agent === VOICE_AGENT_KEY ? VOICE_AGENT_NAME : (emails.get(c.agent) ?? c.agent),
+  }));
 }
 
 async function buildReprogramRows(

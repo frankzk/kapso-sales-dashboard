@@ -68,6 +68,7 @@ import {
 import {
   REPROGRAM_STALE_DAYS,
   REPROGRAM_UNASSIGNED,
+  VOICE_AGENT_KEY,
   limaRangeBounds,
   limaTodayKey,
   localityMismatch,
@@ -4225,7 +4226,14 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.agent} className="border-t border-slate-100">
-                  <td className="px-3 py-1.5 text-slate-700">{label(r.name)}</td>
+                  <td className="px-3 py-1.5 text-slate-700">
+                    {label(r.name)}
+                    {r.agent === VOICE_AGENT_KEY && (
+                      <span className="ml-1.5 rounded bg-sky-50 px-1 text-xs font-medium text-sky-700">
+                        IA
+                      </span>
+                    )}
+                  </td>
                   <td className="px-3 py-1.5 text-right font-semibold text-slate-800 tabular-nums">
                     {r.gestiones}
                   </td>
@@ -4252,7 +4260,7 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
           <p className="border-t border-slate-100 px-3 py-2 text-xs leading-relaxed text-slate-500">
             Gestiones: llamadas y reprogramaciones registradas hoy · Reprogramadas: confirmadas y en ruta ·
             Anuladas: la clienta canceló · Entregadas: cerradas por el resultado del courier · Guías: distintas
-            tocadas hoy.
+            tocadas hoy · Agente Daaph: el agente de voz IA; cada llamada suya es una gestión.
           </p>
         </div>
       )}
