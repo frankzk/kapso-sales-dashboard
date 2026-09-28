@@ -1,10 +1,15 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   computeRoutePayout,
   groupByStore,
   masterEffects,
+  missingEvidenceMessage,
+  nonDeliveryNeedsPhoto,
   stopEffect,
   routeTotals,
+  stopsMissingEvidence,
   stopsToSettlementLines,
   validateStopReport,
   type RouteStop,
@@ -114,6 +119,27 @@ describe("validateStopReport", () => {
       }),
     );
     expect(con.ok).toBe(true); // una no-entrega no exige foto
+  });
+
+  // 28-09-2026: de 204 rechazos, ninguno tenía foto. El teléfono no la pedía y
+  // la liquidación la exigía días después. Ahora se pide al reportar.
+  it("un rechazo exige la foto; las otras no entregas no", () => {
+    const rechazo = { status: "no_entregado" as const, paymentMethod: null, collectedAmount: null, outcomeReason: "rechazado" };
+    const sin = validateStopReport(report({ ...rechazo, hasPhoto: false }));
+    expect(sin.ok).toBe(false);
+    expect(sin.errors).toContain("Adjunta la foto del rechazo.");
+    expect(validateStopReport(report({ ...rechazo, hasPhoto: true })).ok).toBe(true);
+    for (const outcomeReason of ["no_contesta", "no_estaba", "reprogramado", "direccion_errada", "sin_dinero"]) {
+      expect(validateStopReport(report({ ...rechazo, outcomeReason, hasPhoto: false })).ok, outcomeReason).toBe(true);
+    }
+  });
+
+  it("el teléfono muestra el campo de foto en el rechazo, y en todo si reporta otra persona", () => {
+    expect(nonDeliveryNeedsPhoto("rechazado", false)).toBe(true);
+    expect(nonDeliveryNeedsPhoto("no_contesta", false)).toBe(false);
+    expect(nonDeliveryNeedsPhoto("", false)).toBe(false);
+    expect(nonDeliveryNeedsPhoto(null, false)).toBe(false);
+    expect(nonDeliveryNeedsPhoto("no_contesta", true)).toBe(true);
   });
 
   it("'otro' exige explicar en la nota", () => {
@@ -304,5 +330,57 @@ describe("groupByStore", () => {
     const grouped = groupByStore([{ store_id: null, id: "a" }, { store_id: "kenku", id: "b" }]);
     expect(grouped.size).toBe(1);
     expect(grouped.has("kenku")).toBe(true);
+  });
+});
+
+// La ruta de Yhoni del 23/09 no se podía liquidar por UNA parada: el rechazo de
+// #KP136057 sin foto. El error decía «Falta evidencia de entrega o rechazo» y
+// había que revisar las 19 filas para encontrarla.
+describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
+  const parada = (over: Partial<{ seq: number; status: string; outcome_reason: string | null; photo_path: string | null; name: string | null }>) => ({
+    seq: over.seq ?? 1,
+    status: over.status ?? "entregado",
+    outcome_reason: over.outcome_reason ?? null,
+    photo_path: over.photo_path ?? null,
+    order: { name: over.name === undefined ? "#KP1" : over.name },
+  });
+
+  it("cuenta las entregas y los rechazos sin foto, nada más", () => {
+    const stops = [
+      parada({ seq: 1, status: "entregado", photo_path: "f.jpg" }),
+      parada({ seq: 2, status: "entregado", name: "#KP2" }),
+      parada({ seq: 3, status: "no_entregado", outcome_reason: "rechazado", name: "#KP136057" }),
+      parada({ seq: 4, status: "no_entregado", outcome_reason: "no_contesta", name: "#KP4" }),
+      parada({ seq: 5, status: "no_entregado", outcome_reason: "rechazado", photo_path: "r.jpg", name: "#KP5" }),
+    ];
+    expect(stopsMissingEvidence(stops).map((s) => s.seq)).toEqual([2, 3]);
+  });
+
+  it("el mensaje nombra cada pedido y dice cómo arreglarlo", () => {
+    const una = missingEvidenceMessage([parada({ seq: 16, status: "no_entregado", outcome_reason: "rechazado", name: "#KP136057" })]);
+    expect(una).toBe("Falta la foto en 1 parada: #KP136057 (rechazó el pedido). Adjúntala con «Corregir» en la ruta del motorizado o desde «Reportar entregas», y vuelve a terminar la ruta.");
+    const dos = missingEvidenceMessage([
+      parada({ seq: 2, status: "entregado", name: "#KP2" }),
+      parada({ seq: 7, status: "no_entregado", outcome_reason: "rechazado", name: null }),
+    ]);
+    expect(dos).toContain("Falta la foto en 2 paradas: #KP2 (entregado), parada 7 (rechazó el pedido).");
+    expect(missingEvidenceMessage([])).toBeNull();
+  });
+
+  // closeRoute y la pantalla del motorizado son un server action y un
+  // componente: estas guardas prueban que usan las funciones de arriba.
+  it("liquidar y el teléfono usan esas mismas reglas", () => {
+    const rutas = readFileSync(resolve(process.cwd(), "app/dashboard/rutas/actions.ts"), "utf8");
+    expect(rutas).toContain("const sinEvidencia = stopsMissingEvidence(stops);");
+    expect(rutas).toContain("error: missingEvidenceMessage(sinEvidencia)");
+    expect(rutas).not.toContain("Falta evidencia de entrega o rechazo. Completa el reporte antes de liquidar.");
+    const telefono = readFileSync(resolve(process.cwd(), "components/rider-route.tsx"), "utf8");
+    expect(telefono).toContain('status === "no_entregado" && nonDeliveryNeedsPhoto(reason, delegated) && <ScanAction');
+    expect(telefono).toContain('label={delegated ? "Evidencia del reporte" : "Foto del rechazo"}');
+  });
+
+  it("y el MOM lo dice", () => {
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    expect(mom).toContain("**La foto del rechazo se pide al reportarlo, no al liquidar (28-09-2026,\ndecisión de Frankz).**");
   });
 });

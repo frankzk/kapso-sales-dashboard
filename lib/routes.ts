@@ -116,12 +116,57 @@ export function validateStopReport(report: StopReport): ReportValidation {
     if (report.outcomeReason === "otro" && !report.note?.trim()) {
       errors.push("Escribe en la nota qué pasó.");
     }
+    // Un rechazo se le cobra a la tienda como una entrega (MOM §29.7), y sin
+    // foto no hay cómo sostenerlo. Se pide AQUÍ, al reportar, porque es el único
+    // momento en que el motorizado está en la puerta: antes solo lo pedía la
+    // liquidación, días después, y de 204 rechazos ninguno tenía foto.
+    if (report.outcomeReason === "rechazado" && !report.hasPhoto) {
+      errors.push("Adjunta la foto del rechazo.");
+    }
     if ((report.collectedAmount ?? 0) > 0) {
       errors.push("Marcaste que no se entregó pero declaraste dinero cobrado.");
     }
   }
 
   return { ok: errors.length === 0, errors };
+}
+
+/**
+ * ¿El reporte de una no entrega lleva foto? El rechazo siempre, porque se
+ * cobra; cualquier otra no entrega solo cuando reporta otra persona por el
+ * motorizado. Es lo que decide si el teléfono muestra el campo de la foto.
+ */
+export function nonDeliveryNeedsPhoto(reason: string | null | undefined, delegated: boolean): boolean {
+  return delegated || reason === "rechazado";
+}
+
+/** Lo mínimo de una parada para saber si le falta la foto al liquidar. */
+export interface EvidenceStop {
+  seq?: number;
+  status: string;
+  outcome_reason: string | null;
+  photo_path: string | null;
+  order?: { name: string | null } | null;
+}
+
+/** Entregas y rechazos sin foto: lo que no deja liquidar (MOM §29.7). */
+export function stopsMissingEvidence<T extends EvidenceStop>(stops: readonly T[]): T[] {
+  return stops.filter((stop) => (stop.status === "entregado" || stop.outcome_reason === "rechazado") && !stop.photo_path);
+}
+
+/**
+ * El error de liquidación NOMBRA las paradas. «Falta evidencia» a secas
+ * obligaba a revisar las 19 filas de la ruta para encontrar el único rechazo
+ * sin foto (Yhoni, 23/09).
+ */
+export function missingEvidenceMessage(stops: readonly EvidenceStop[]): string | null {
+  if (!stops.length) return null;
+  const nombres = stops.map((stop) => {
+    const pedido = stop.order?.name ?? `parada ${stop.seq ?? "sin número"}`;
+    return `${pedido} (${stop.status === "entregado" ? "entregado" : "rechazó el pedido"})`;
+  });
+  const cuantas = stops.length === 1 ? "1 parada" : `${stops.length} paradas`;
+  return `Falta la foto en ${cuantas}: ${nombres.join(", ")}. Adjúntala con «Corregir» en la ruta del motorizado o desde «Reportar entregas», y vuelve a terminar la ruta.`;
 }
 
 /** Una parada tal como está guardada, para los totales de la ruta. */

@@ -5824,6 +5824,26 @@ Un rechazo exige motivo y evidencia. Si el cliente rechaza en días distintos,
 se cobra como máximo una vez en cada ruta/día. Otros intentos no entregados
 siguen sin costo aunque se repitan.
 
+**La foto del rechazo se pide al reportarlo, no al liquidar (28-09-2026,
+decisión de Frankz).** El teléfono pedía foto a la entrega pero no al
+rechazo: al marcar «No entregado» solo mostraba motivo y nota, y el campo de
+foto aparecía únicamente cuando otra persona reportaba por el motorizado. La
+exigencia vivía solo en la liquidación, días después, cuando ya no había
+puerta que fotografiar. Resultado: de 204 rechazos reportados en toda la
+historia, ninguno tenía foto, y el 28-09 siete rutas abiertas no se podían
+liquidar por eso.
+
+- Al marcar «Rechazó el pedido» el teléfono muestra «Foto del rechazo», y el
+  reporte no se guarda sin ella. La regla está en `validateStopReport`, que
+  usan el teléfono y el servidor.
+- El error de liquidación nombra cada parada sin foto con su pedido, en vez
+  de «Falta evidencia de entrega o rechazo» a secas.
+- Los rechazos anteriores sin foto se completan con «Corregir» en la ruta del
+  motorizado, que ahora sí muestra el campo, o desde «Reportar entregas». La
+  foto puede ser la del paquete devuelto.
+- No cambia qué es un rechazo ni cómo se cobra. Si una anulación de la tienda
+  debe dejar de reportarse como rechazo, es otra decisión.
+
 ### 29.8 Tarifas por distrito y comisión Yape
 
 Grupo GF Courier cobra una tarifa por distrito/zona que **incluye IGV**. Debe
