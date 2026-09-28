@@ -20,11 +20,12 @@ import {
 import {
   groupByStore,
   masterEffects,
-  missingEvidenceMessage,
+  routeCloseBlockerMessage,
+  routeCloseBlockers,
   routeTotals,
-  stopsMissingEvidence,
   stopsToSettlementLines,
 } from "@/lib/routes";
+import { loadRouteCloseContext } from "@/lib/route-close";
 import { applyDeliveriesToMaster } from "@/lib/master-door";
 import { syncStopsToSheet } from "@/lib/sheets/stop-sync";
 
@@ -262,23 +263,14 @@ export async function closeRoute(
   const { route, stops } = detail;
   if (route.status === "cerrada") return { ok: false, error: "La ruta ya está cerrada." };
 
-  const { data: gfLoads, error: loadsError } = await g.admin.from("dispatch_manifests")
-    .select("id,state").eq("delivery_route_id", routeId).eq("courier", "propio").neq("state", "cancelled");
-  if (loadsError) return { ok: false, error: "No se pudo comprobar la recepción de las cargas." };
-  if (gfLoads?.length) {
-    if (gfLoads.some((load) => load.state !== "in_custody")) return { ok: false, error: "Hay una carga pendiente de recibir. Complétala o cancélala con motivo antes de liquidar." };
-    if (stops.some((stop) => stop.status === "pendiente")) return { ok: false, error: "Grupo GF: todas las paradas deben tener reporte. No se permite forzar el cierre." };
-    const sinEvidencia = stopsMissingEvidence(stops);
-    if (sinEvidencia.length) return { ok: false, error: missingEvidenceMessage(sinEvidencia) ?? "Falta la foto de una entrega o un rechazo." };
-  }
-
-  const totals = routeTotals(stops);
-  if (!totals.completa && !opts.force) {
-    return {
-      ok: false,
-      error: `Quedan ${totals.pendientes} parada(s) sin reportar. Espera a que las cierre o ciérrala igual a conciencia.`,
-    };
-  }
+  // Los bloqueos salen de la MISMA regla que enseña el panel de la ruta antes
+  // de pulsar: el primero que no se pueda forzar es el error. Solo fuera de
+  // Grupo GF se puede cerrar con paradas sin reportar, y solo a conciencia.
+  const context = await loadRouteCloseContext(g.admin, routeId);
+  if (!context) return { ok: false, error: "No se pudo comprobar la recepción de las cargas." };
+  const bloqueo = routeCloseBlockers({ isGf: context.isGf, openLoads: context.openLoads, stops })
+    .find((blocker) => !(blocker.kind === "sin_reportar" && blocker.forceable && opts.force));
+  if (bloqueo) return { ok: false, error: routeCloseBlockerMessage(bloqueo) };
 
   const stores = await getAccessibleStores();
   const { data: rider } = await g.admin
@@ -375,7 +367,7 @@ export async function closeRoute(
   let applied = 0;
   if (effects.length) {
     const stopOf = new Map(stops.map((s) => [s.order_id, s]));
-    const requireEvidence = Boolean(gfLoads?.length);
+    const requireEvidence = context.isGf;
     const door = await applyDeliveriesToMaster(
       g.admin,
       effects.map((e) => {

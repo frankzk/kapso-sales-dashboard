@@ -7,11 +7,14 @@ import {
   masterEffects,
   missingEvidenceMessage,
   nonDeliveryNeedsPhoto,
+  routeCloseBlockerMessage,
+  routeCloseBlockers,
   stopEffect,
   routeTotals,
   stopsMissingEvidence,
   stopsToSettlementLines,
   validateStopReport,
+  type OpenLoad,
   type RouteStop,
   type StopReport,
 } from "@/lib/routes";
@@ -371,8 +374,14 @@ describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
   // componente: estas guardas prueban que usan las funciones de arriba.
   it("liquidar y el teléfono usan esas mismas reglas", () => {
     const rutas = readFileSync(resolve(process.cwd(), "app/dashboard/rutas/actions.ts"), "utf8");
-    expect(rutas).toContain("const sinEvidencia = stopsMissingEvidence(stops);");
-    expect(rutas).toContain("error: missingEvidenceMessage(sinEvidencia)");
+    // La foto que falta es un bloqueo más de `routeCloseBlockers` (sin_foto →
+    // missingEvidenceMessage), la misma regla que enseña el panel de la ruta.
+    expect(rutas).toContain("routeCloseBlockers({ isGf: context.isGf, openLoads: context.openLoads, stops })");
+    // Forzar solo salta lo forzable: en Grupo GF, nada.
+    expect(rutas).toContain('.find((blocker) => !(blocker.kind === "sin_reportar" && blocker.forceable && opts.force));');
+    expect(rutas).toContain('if (!context) return { ok: false, error: "No se pudo comprobar la recepción de las cargas." };');
+    expect(rutas).toContain("const requireEvidence = context.isGf;");
+    expect(rutas).toContain("error: routeCloseBlockerMessage(bloqueo)");
     expect(rutas).not.toContain("Falta evidencia de entrega o rechazo. Completa el reporte antes de liquidar.");
     const telefono = readFileSync(resolve(process.cwd(), "components/rider-route.tsx"), "utf8");
     expect(telefono).toContain('status === "no_entregado" && nonDeliveryNeedsPhoto(reason, delegated) && <ScanAction');
@@ -382,5 +391,121 @@ describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
   it("y el MOM lo dice", () => {
     const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
     expect(mom).toContain("**La foto del rechazo se pide al reportarlo, no al liquidar (28-09-2026,\ndecisión de Frankz).**");
+  });
+});
+
+// Roy, 19/09: el coordinador pulsaba «Terminar ruta operativa», leía UN error
+// («Grupo GF: todas las paradas deben tener reporte»), lo arreglaba y volvía a
+// pulsar para descubrir el siguiente —8 sin reportar, 8 sin foto—. Ahora una
+// sola regla dice TODO lo que impide terminar: el panel lo enseña antes de
+// pulsar y el servidor rechaza con el primero que no se pueda forzar.
+describe("qué impide terminar la ruta", () => {
+  const parada = (over: Partial<{ seq: number; status: string; outcome_reason: string | null; photo_path: string | null; name: string | null }>) => ({
+    seq: over.seq ?? 1,
+    status: over.status ?? "entregado",
+    outcome_reason: over.outcome_reason ?? null,
+    photo_path: over.photo_path === undefined ? "f.jpg" : over.photo_path,
+    order: { name: over.name === undefined ? `#KP${over.seq ?? 1}` : over.name },
+  });
+  const carga = (over: Partial<OpenLoad>): OpenLoad => ({ id: over.id ?? "m1", load_number: over.load_number ?? 1, state: over.state ?? "office_check", items: over.items ?? 0 });
+  // Lo que hace closeRoute: el primero que no se pueda forzar.
+  const cierre = (input: Parameters<typeof routeCloseBlockers>[0], force = false) =>
+    routeCloseBlockers(input).find((b) => !(b.kind === "sin_reportar" && b.forceable && force)) ?? null;
+
+  it("una ruta de Grupo GF reportada y con fotos está lista", () => {
+    const stops = [parada({ seq: 1 }), parada({ seq: 2, status: "no_entregado", outcome_reason: "rechazado" }), parada({ seq: 3, status: "no_entregado", outcome_reason: "no_contesta", photo_path: null })];
+    expect(routeCloseBlockers({ isGf: true, openLoads: [], stops })).toEqual([]);
+  });
+
+  it("Grupo GF: dice a la vez las sin reportar y las sin foto, y ninguna se fuerza", () => {
+    const stops = [
+      parada({ seq: 1, status: "pendiente", photo_path: null }),
+      parada({ seq: 2, photo_path: null }),
+      parada({ seq: 3, status: "no_entregado", outcome_reason: "rechazado", photo_path: null }),
+      parada({ seq: 4, status: "pendiente", photo_path: null }),
+    ];
+    const blockers = routeCloseBlockers({ isGf: true, openLoads: [], stops });
+    expect(blockers.map((b) => b.kind)).toEqual(["sin_reportar", "sin_foto"]);
+    expect(blockers[0]).toMatchObject({ kind: "sin_reportar", forceable: false });
+    expect(blockers[0]!.kind === "sin_reportar" && blockers[0]!.stops.map((s) => s.seq)).toEqual([1, 4]);
+    expect(blockers[1]!.kind === "sin_foto" && blockers[1]!.stops.map((s) => s.seq)).toEqual([2, 3]);
+    expect(cierre({ isGf: true, openLoads: [], stops }, true)?.kind).toBe("sin_reportar");
+  });
+
+  it("fuera de Grupo GF las sin reportar se pueden forzar y la foto no frena el cierre", () => {
+    const stops = [parada({ seq: 1, status: "pendiente", photo_path: null }), parada({ seq: 2, photo_path: null })];
+    const blockers = routeCloseBlockers({ isGf: false, openLoads: [], stops });
+    expect(blockers).toEqual([{ kind: "sin_reportar", stops: [stops[0]], forceable: true }]);
+    expect(cierre({ isGf: false, openLoads: [], stops })?.kind).toBe("sin_reportar");
+    expect(cierre({ isGf: false, openLoads: [], stops }, true)).toBeNull();
+  });
+
+  it("con una carga abierta la causa es la carga, no «sin paradas», y van en orden", () => {
+    const openLoads = [carga({ id: "b", load_number: 2 }), carga({ id: "a", load_number: 1, items: 3, state: "ready_for_pickup" })];
+    const blockers = routeCloseBlockers({ isGf: true, openLoads, stops: [] });
+    expect(blockers).toHaveLength(1);
+    expect(blockers[0]!.kind === "carga_sin_recibir" && blockers[0]!.loads.map((l) => l.load_number)).toEqual([1, 2]);
+    expect(openLoads.map((l) => l.load_number)).toEqual([2, 1]);
+    expect(routeCloseBlockerMessage(blockers[0]!)).toBe(
+      "La carga 1 tiene 3 paquetes sin recibir: que el motorizado la reciba o retira desde la caja los paquetes que no van. La carga 2 está abierta y vacía: cancélala con motivo.",
+    );
+  });
+
+  it("una carga abierta frena aunque todo lo demás esté listo", () => {
+    const blockers = routeCloseBlockers({ isGf: true, openLoads: [carga({ load_number: 2, items: 1 })], stops: [parada({ seq: 1 })] });
+    expect(blockers.map((b) => b.kind)).toEqual(["carga_sin_recibir"]);
+    expect(routeCloseBlockerMessage(blockers[0]!)).toContain("La carga 2 tiene 1 paquete sin recibir");
+  });
+
+  it("sin paradas no hay nada que terminar, sea o no de Grupo GF", () => {
+    for (const isGf of [true, false]) {
+      const blockers = routeCloseBlockers({ isGf, openLoads: [], stops: [] });
+      expect(blockers).toEqual([{ kind: "sin_paradas" }]);
+      expect(cierre({ isGf, openLoads: [], stops: [] }, true)?.kind).toBe("sin_paradas");
+      expect(routeCloseBlockerMessage(blockers[0]!)).toBe("La ruta no tiene paradas: no hay nada que terminar ni liquidar.");
+    }
+  });
+
+  it("los mensajes nombran los pedidos y concuerdan en número", () => {
+    const ocho = Array.from({ length: 8 }, (_, i) => parada({ seq: i + 1, status: "pendiente", name: `#KP13605${i}` }));
+    expect(routeCloseBlockerMessage({ kind: "sin_reportar", stops: ocho, forceable: false })).toBe(
+      "Faltan 8 paradas por reportar: #KP136050, #KP136051, #KP136052, #KP136053, #KP136054 y 3 más. Repórtalas en «Reportar entregas»; en Grupo GF no se cierra sin reporte.",
+    );
+    expect(routeCloseBlockerMessage({ kind: "sin_reportar", stops: [parada({ seq: 4, status: "pendiente", name: null })], forceable: false })).toBe(
+      "Falta 1 parada por reportar: parada 4. Repórtalas en «Reportar entregas»; en Grupo GF no se cierra sin reporte.",
+    );
+    expect(routeCloseBlockerMessage({ kind: "sin_reportar", stops: ocho.slice(0, 1), forceable: true })).toBe(
+      "Queda 1 parada sin reportar. Espera a que las reporte o ciérrala igual a conciencia.",
+    );
+    expect(routeCloseBlockerMessage({ kind: "sin_reportar", stops: ocho.slice(0, 2), forceable: true })).toMatch(/^Quedan 2 paradas sin reportar\./);
+    const sinFoto = [parada({ seq: 16, status: "no_entregado", outcome_reason: "rechazado", photo_path: null, name: "#KP136057" })];
+    expect(routeCloseBlockerMessage({ kind: "sin_foto", stops: sinFoto })).toBe(missingEvidenceMessage(sinFoto));
+  });
+
+  it("el panel de la ruta y el cierre usan la misma regla", () => {
+    const panel = readFileSync(resolve(process.cwd(), "components/routes.tsx"), "utf8");
+    expect(panel).toContain("routeCloseBlockers({ isGf: closeContext.isGf, openLoads: closeContext.openLoads, stops })");
+    // «Terminar» solo se habilita cuando el cierre va a pasar, y forzar solo
+    // existe fuera de Grupo GF (bloqueo forzable y nada más).
+    expect(panel).toContain("disabled={disabled || !ready}");
+    expect(panel).toContain("const canForce = known && hardBlockers.length === 0 && !!forceable;");
+    expect(panel).toContain("onRun(() => closeRoute(routeId, { force: true }))");
+    // Una carga vacía se cancela ahí mismo, con motivo y con el permiso de despacho.
+    expect(panel).toContain("cancelDispatchManifest(load.id, reason)");
+    const loader = readFileSync(resolve(process.cwd(), "app/dashboard/courier/actions.ts"), "utf8");
+    expect(loader).toContain("loadRouteCloseContext(createAdminSupabase(), id)");
+    expect(loader).toContain('canCancelLoads: permissions.can("dispatch.manage")');
+    const drawer = readFileSync(resolve(process.cwd(), "components/courier-route-report-drawer.tsx"), "utf8");
+    expect(drawer).toContain("closeContext={report.closeContext}");
+    // Leer las cargas y fallar no es «no hay cargas»: el cierre se niega.
+    const close = readFileSync(resolve(process.cwd(), "lib/route-close.ts"), "utf8");
+    expect(close).toContain("if (error) return null;");
+    expect(close).toContain("if (itemsError) return null;");
+  });
+
+  it("y el MOM lo dice", () => {
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    expect(mom).toContain("**Qué impide terminar la ruta, a la vista (28-09-2026).**");
+    expect(mom).toContain("- Una sola regla, `routeCloseBlockers` (`lib/routes.ts`), para el panel y\n  para `closeRoute`");
   });
 });

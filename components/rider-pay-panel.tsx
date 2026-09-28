@@ -11,6 +11,8 @@ export function riderPayBalanceLabel(netCash: number | null): string {
   return netCash === null ? "Saldo por calcular" : netCash > 0 ? "El motorizado debe entregar" : netCash < 0 ? "Grupo GF debe pagarle" : "Sin efectivo pendiente";
 }
 export const RIDER_PAY_BALANCE_HINT = "Efectivo menos ganancia base y adicionales. No incluye Yape/POS como efectivo del motorizado. Aprobar este cálculo no valida ingresos bancarios ni registra un pago o depósito.";
+/** Ancla de «Tarifa de …»: «Configurar tarifa» del panel de cierre la abre. */
+export const RIDER_RATE_FORM_ID = "tarifa-motorizado";
 const field = "mt-1 min-h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-base disabled:opacity-50";
 const button = "inline-flex min-h-12 items-center justify-center rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white disabled:opacity-50";
 
@@ -147,7 +149,7 @@ export function RiderPayPanel({ routeId, initialDetail, compact = false, onDetai
       </li>; })}
     </ul>}
 
-    {detail.canConfigure && <details className="border-t border-slate-200 pt-3"><summary className="min-h-12 cursor-pointer font-medium">{compact ? `Tarifa de ${s.rider_name}` : `Configurar tarifa de ${s.rider_name}`}</summary>
+    {detail.canConfigure && <details id={RIDER_RATE_FORM_ID} className="scroll-mt-24 border-t border-slate-200 pt-3"><summary className="min-h-12 cursor-pointer font-medium">{compact ? `Tarifa de ${s.rider_name}` : `Configurar tarifa de ${s.rider_name}`}</summary>
       <p className="mb-3 text-sm text-slate-600">Mismo importe por entrega o rechazo. Una excepción de distrito gana a la tarifa general. Los cierres aprobados no cambian.</p>
       <form className="grid gap-3 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); void run(() => saveRiderPayRate({ routeId, district: district || null, amount: Number(amount.replace(',','.')), from, reason })); }}>
         <label className="text-sm">Distrito<select className={field} value={district} onChange={(e) => setDistrict(e.target.value)} disabled={busy}><option value="">General del motorizado</option>{detail.districts.map((d) => <option key={d.district_key} value={d.district_key}>{d.name}</option>)}</select></label>

@@ -64,6 +64,18 @@ function CourierRouteReportPanel({ routeId, onClose, onChanged }: { routeId: str
 
   useEffect(() => load(), [load]);
 
+  // «Volver a comprobar» del panel de cierre: lo que el motorizado reportó
+  // desde su teléfono mientras el panel estaba abierto.
+  const recheck = useCallback(async () => {
+    try {
+      const res = await loadCourierRouteReport(routeId);
+      if ("error" in res) setError(res.error);
+      else { setError(null); setReport(res); }
+    } catch {
+      setError("No se pudo comprobar de nuevo. Revisa la conexión.");
+    }
+  }, [routeId]);
+
   useEffect(() => {
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", esc);
@@ -110,11 +122,14 @@ function CourierRouteReportPanel({ routeId, onClose, onChanged }: { routeId: str
               riders={report.riders}
               routes={[report.detail.route]}
               detail={report.detail}
-              assignable={report.assignable}
-              retries={report.retries}
+              assignable={[]}
+              retries={[]}
               day={report.day}
               canReport={report.canReport}
+              closeContext={report.closeContext}
+              canCancelLoads={report.canCancelLoads}
               onChanged={() => { load(); onChanged(); }}
+              onRefresh={recheck}
             />
           )}
         </div>

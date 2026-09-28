@@ -109,8 +109,14 @@ describe("la caja se abre al lado de Rutas (MOM §29.14)", () => {
   it("Reparto y liquidación: una sola tabla y sin datos repetidos (19-09-2026)", () => {
     const routes = readFileSync(resolve(process.cwd(), "components/routes.tsx"), "utf8");
     const pay = readFileSync(resolve(process.cwd(), "components/rider-pay-panel.tsx"), "utf8");
-    // La tabla única lleva las columnas del pago y el cálculo viaja del panel de pago a la tabla.
-    for (const col of ["Tarifa", "Adicional", "Ganancia"]) expect(routes).toContain(`font-medium">${col}</th>`);
+    // La tabla única lleva el pago y el cálculo viaja del panel de pago a la
+    // tabla. Desde el 28-09 la ganancia va en una columna con su desglose
+    // (tarifa y adicional debajo), para que la tabla quepa en el panel.
+    expect(routes).toContain('font-medium">Ganancia</th>');
+    expect(routes).toContain("money(earned + pr.extra)");
+    expect(routes).toContain("Tarifa {money(earned)}");
+    expect(routes).toContain("Adicional {money(pr.extra)}");
+    expect(routes).toContain('font-medium">Cobro y respaldo</th>');
     expect(routes).toContain("compact={detailOnly}");
     expect(routes).toContain("onDetail={setPay}");
     expect(routes).toContain("+ adicional");
