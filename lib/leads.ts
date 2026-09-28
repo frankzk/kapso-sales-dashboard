@@ -828,6 +828,24 @@ export interface ClaimLike {
   id: string;
   claimed_by: string | null;
   claimed_at: string | null;
+  /** Categoría del lead. Un lead ya ganado o perdido no cuenta en el tope. */
+  category?: string | null;
+}
+
+/**
+ * Categorías de un lead TERMINADO: la venta se cerró o se perdió.
+ *
+ * Una reserva existe para que dos asesoras no llamen a la misma clienta a la
+ * vez. Un lead con el pedido ya generado no necesita esa protección, y hacerlo
+ * contar en el tope bloqueaba a quien acababa de cerrar una venta y pasaba al
+ * siguiente sin darle a la X: la reserva solo se suelta al cerrar el panel. El
+ * 28-09-2026, las únicas dos reservas sin soltar de todo el equipo eran de leads
+ * ya ganados, y bloquearon a millonesalbornoz con «Ya tienes 2 leads abiertos».
+ */
+export const CLOSED_LEAD_CATEGORIES = ["won", "lost"] as const;
+
+export function isClosedLeadCategory(category: string | null | undefined): boolean {
+  return (CLOSED_LEAD_CATEGORIES as readonly string[]).includes(category ?? "");
 }
 
 /**
@@ -836,7 +854,8 @@ export interface ClaimLike {
  * Excluye el propio `leadId`: volver a abrir un lead que ya es suyo no cuenta
  * contra el tope, y volver a abrir uno de los dos que tiene tampoco (queda uno
  * ajeno y cabe). Solo cuentan las reservas dentro del TTL: una pestaña cerrada
- * sin soltar deja de estorbar a los diez minutos, igual que hoy.
+ * sin soltar deja de estorbar a los diez minutos, igual que hoy. Y no cuentan
+ * los leads ya ganados o perdidos: ver `CLOSED_LEAD_CATEGORIES`.
  */
 export function claimsBlocking<T extends ClaimLike>(
   claims: T[],
@@ -845,7 +864,11 @@ export function claimsBlocking<T extends ClaimLike>(
   now: Date = new Date(),
 ): T[] {
   return claims.filter(
-    (c) => c.id !== leadId && c.claimed_by === userId && isClaimActive(c.claimed_at, now),
+    (c) =>
+      c.id !== leadId &&
+      c.claimed_by === userId &&
+      isClaimActive(c.claimed_at, now) &&
+      !isClosedLeadCategory(c.category),
   );
 }
 
