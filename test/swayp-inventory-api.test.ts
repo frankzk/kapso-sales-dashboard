@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  diagnoseInventoryAccess,
   inventoryToEntradasByCity,
   isInventoryAuthError,
   listWarehouses,
@@ -122,6 +123,35 @@ describe("listWarehouses", () => {
       { id: "w-are", name: "Bodega Arequipa" },
     ]);
     expect(seen[0]!.url).toContain("us-central1-swayp-co.cloudfunctions.net");
+  });
+});
+
+describe("diagnoseInventoryAccess", () => {
+  it("reporta cada host por separado sin lanzar, distinguiendo el control", async () => {
+    // Control (bags) OK en cloudfunctions, pero inventario 403 en run.app: el
+    // caso que revela «token válido, host de inventario pide otra credencial».
+    const fetchImpl = (async (url: string) => {
+      if (url.includes("bags/partner")) return { ok: true, status: 200, text: async () => "[]" } as Response;
+      if (url.includes("warehouses/byCompany")) return { ok: true, status: 200, text: async () => "[]" } as Response;
+      return { ok: false, status: 403, text: async () => '{"message":"forbidden"}' } as Response;
+    }) as unknown as typeof fetch;
+
+    const probes = await diagnoseInventoryAccess(creds(fetchImpl));
+    expect(probes).toHaveLength(3);
+    expect(probes[0]!).toMatchObject({ ok: true, status: 200, method: "GET" });
+    expect(probes[0]!.host).toContain("cloudfunctions.net");
+    const inv = probes.find((p) => p.label.includes("inventory/search"))!;
+    expect(inv).toMatchObject({ ok: false, status: 403 });
+    expect(inv.host).toContain("run.app");
+    expect(inv.body).toContain("forbidden");
+  });
+
+  it("un error de red queda como status 0, no rompe el diagnóstico", async () => {
+    const fetchImpl = (async () => {
+      throw new Error("connect ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const probes = await diagnoseInventoryAccess(creds(fetchImpl));
+    expect(probes.every((p) => p.status === 0 && !p.ok)).toBe(true);
   });
 });
 
