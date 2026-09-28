@@ -16,6 +16,7 @@ import { Card, EmptyState, Section, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/c
 import {
   NON_DELIVERY_REASONS,
   PAYMENT_METHODS,
+  rejectionNeedsPhoto,
   routeCloseBlockers,
   routeTotals,
   stopsMissingEvidence,
@@ -533,13 +534,16 @@ function RouteDetail({
   const known = closeContext !== null;
   const isGf = closeContext?.isGf ?? false;
   const blockers = useMemo(
-    () => (inProgress && closeContext ? routeCloseBlockers({ isGf: closeContext.isGf, openLoads: closeContext.openLoads, stops }) : []),
-    [inProgress, closeContext, stops],
+    () => (inProgress && closeContext ? routeCloseBlockers({ isGf: closeContext.isGf, openLoads: closeContext.openLoads, stops, routeDate: route.route_date }) : []),
+    [inProgress, closeContext, stops, route.route_date],
   );
   const hardBlockers = blockers.filter((b) => !(b.kind === "sin_reportar" && b.forceable));
   const pendingIds = useMemo(() => new Set(stops.filter((s) => s.status === "pendiente").map((s) => s.id)), [stops]);
   // «Falta foto» solo frena el cierre en Grupo GF; fuera de ahí no se marca.
-  const missingPhotoIds = useMemo(() => new Set(isGf ? stopsMissingEvidence(stops).map((s) => s.id) : []), [isGf, stops]);
+  // Los rechazos de rutas anteriores al 28/09 no la exigen (MOM §29.7).
+  const rejectionsNeedPhoto = rejectionNeedsPhoto(route.route_date);
+  const missingPhotoIds = useMemo(() => new Set(isGf ? stopsMissingEvidence(stops, route.route_date).map((s) => s.id) : []), [isGf, stops, route.route_date]);
+  const exemptRejection = (s: StopWithOrder) => !rejectionsNeedPhoto && s.outcome_reason === "rechazado" && !s.photo_path;
   // Un Yape sin captura no frena el cierre, pero sí aprobar el pago (0162).
   const missingVoucherIds = useMemo(
     () => new Set(stops.filter((s) => s.status === "entregado" && s.payment_method === "yape" && !s.voucher_path).map((s) => s.id)),
@@ -618,6 +622,8 @@ function RouteDetail({
           onRun={onRun}
           onRefresh={onRefresh}
           onShowView={showView}
+          rejectionsNeedPhoto={rejectionsNeedPhoto}
+          exemptRejections={stops.filter(exemptRejection).length}
         />
       )}
 
@@ -699,7 +705,7 @@ function RouteDetail({
               </p>
               <StopResult stop={s} />
               {(s.status === "entregado" || s.photo_path || s.voucher_path) && (
-                <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} />
+                <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} exempt={exemptRejection(s)} />
               )}
               {planning && (
                 <button
@@ -756,7 +762,7 @@ function RouteDetail({
                   </td>
                   <td className="px-2.5 py-2.5">
                     <div className="min-w-[10rem]">
-                      <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} />
+                      <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} exempt={exemptRejection(s)} />
                     </div>
                   </td>
                   <td className="px-2.5 py-2.5 text-right">
@@ -898,7 +904,13 @@ function StopResult({ stop: s }: { stop: StopWithOrder }) {
  * Cobro y respaldo: cómo y cuánto cobró, y su foto y comprobante (cada uno abre
  * en grande en otra pestaña, GET /api/reparto/foto), o lo que falta.
  */
-function StopCollection({ stop: s, needsPhoto, needsVoucher }: { stop: StopWithOrder; needsPhoto: boolean; needsVoucher: boolean }) {
+function StopCollection({ stop: s, needsPhoto, needsVoucher, exempt = false }: {
+  stop: StopWithOrder;
+  needsPhoto: boolean;
+  needsVoucher: boolean;
+  /** Rechazo sin foto de una ruta anterior al 28/09: no se exige (MOM §29.7). */
+  exempt?: boolean;
+}) {
   return (
     <div className="space-y-1.5">
       <p className="whitespace-nowrap text-slate-700">
@@ -923,6 +935,11 @@ function StopCollection({ stop: s, needsPhoto, needsVoucher }: { stop: StopWithO
             </span>
           )}
         </div>
+      )}
+      {exempt && (
+        <p className="text-xs text-slate-500" title="Hasta el 27/09 el teléfono no pedía foto al rechazar: esos rechazos no la exigen para cerrar ni para pagar (MOM §29.7).">
+          Sin foto · no se exige (antes del 28/09)
+        </p>
       )}
     </div>
   );
@@ -1028,6 +1045,8 @@ function RouteClosePanel({
   onRun,
   onRefresh,
   onShowView,
+  rejectionsNeedPhoto,
+  exemptRejections,
 }: {
   routeId: string;
   /** Se pudieron leer las cargas; sin eso el cierre tampoco pasa. */
@@ -1043,6 +1062,10 @@ function RouteClosePanel({
   onRun: RunAction;
   onRefresh?: () => Promise<void>;
   onShowView: (view: StopView) => void;
+  /** La ruta es del 28/09 o después: sus rechazos también exigen foto. */
+  rejectionsNeedPhoto: boolean;
+  /** Rechazos sin foto que no la exigen (ruta anterior al 28/09). */
+  exemptRejections: number;
 }) {
   const headingId = useId();
   const summaryId = useId();
@@ -1055,7 +1078,9 @@ function RouteClosePanel({
   const summary = !known
     ? "No se pudieron leer las cargas de Grupo GF de esta ruta, y sin eso no se puede terminar."
     : ready
-      ? `Todas las paradas tienen su reporte${isGf ? " y su foto" : ""}. Al terminarla se crea la liquidación de cada tienda.`
+      ? isGf && exemptRejections > 0
+        ? "Todo reportado; los rechazos antes del 28/09 no exigen foto. Al terminarla se crea la liquidación de cada tienda."
+        : `Todas las paradas tienen su reporte${isGf ? " y su foto" : ""}. Al terminarla se crea la liquidación de cada tienda.`
       : canForce
         ? "Quedan paradas sin reportar: espera a que las reporte o ciérrala igual."
         : `Falta resolver ${plural(pendientes, "cosa", "cosas")} antes de terminarla.`;
@@ -1156,7 +1181,9 @@ function RouteClosePanel({
                     key="sin_foto"
                     icon={<IconCamera aria-hidden="true" className="h-4 w-4" />}
                     title={`${plural(b.stops.length, "parada", "paradas")} sin foto`}
-                    detail="Cada entrega y cada rechazo llevan su foto: adjúntala con «Corregir» en «Reportar entregas»."
+                    detail={rejectionsNeedPhoto
+                      ? "Cada entrega y cada rechazo llevan su foto: adjúntala con «Corregir» en «Reportar entregas»."
+                      : "Cada entrega lleva su foto: adjúntala con «Corregir» en «Reportar entregas». Los rechazos de esta ruta no la exigen (antes del 28/09)."}
                     orders={orderNames(b.stops)}
                     actions={<button type="button" onClick={() => onShowView("sin_foto")} className={BTN_LINK}>Ver en la tabla</button>}
                   />

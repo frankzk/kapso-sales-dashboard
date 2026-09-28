@@ -268,7 +268,7 @@ export async function closeRoute(
   // Grupo GF se puede cerrar con paradas sin reportar, y solo a conciencia.
   const context = await loadRouteCloseContext(g.admin, routeId);
   if (!context) return { ok: false, error: "No se pudo comprobar la recepción de las cargas." };
-  const bloqueo = routeCloseBlockers({ isGf: context.isGf, openLoads: context.openLoads, stops })
+  const bloqueo = routeCloseBlockers({ isGf: context.isGf, openLoads: context.openLoads, stops, routeDate: route.route_date })
     .find((blocker) => !(blocker.kind === "sin_reportar" && blocker.forceable && opts.force));
   if (bloqueo) return { ok: false, error: routeCloseBlockerMessage(bloqueo) };
 

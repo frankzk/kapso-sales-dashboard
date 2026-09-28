@@ -395,4 +395,6 @@
 \ir migrations/0195_delivered_thanks_pace.sql
 \echo 'Applying 0196_gf_parallel_box.sql'
 \ir migrations/0196_gf_parallel_box.sql
+\echo 'Applying 0197_rejection_photo_exemption.sql'
+\ir migrations/0197_rejection_photo_exemption.sql
 \echo 'Done.'

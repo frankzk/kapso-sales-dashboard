@@ -149,9 +149,28 @@ export interface EvidenceStop {
   order?: { name: string | null } | null;
 }
 
-/** Entregas y rechazos sin foto: lo que no deja liquidar (MOM §29.7). */
-export function stopsMissingEvidence<T extends EvidenceStop>(stops: readonly T[]): T[] {
-  return stops.filter((stop) => (stop.status === "entregado" || stop.outcome_reason === "rechazado") && !stop.photo_path);
+/**
+ * Desde qué ruta el rechazo exige foto (MOM §29.7). Hasta el 27/09 el teléfono
+ * no la pedía al rechazar —solo a la entrega— y ya no hay puerta que
+ * fotografiar: esos rechazos no frenan ni el cierre ni el pago del motorizado
+ * (decisión de Frankz, 28-09-2026). La misma fecha vive en `rider_pay_preview`
+ * (0197), para que cerrar y aprobar el pago digan lo mismo.
+ */
+export const REJECTION_PHOTO_FROM = "2026-09-28";
+
+/** ¿Un rechazo de una ruta de ese día necesita foto? */
+export function rejectionNeedsPhoto(routeDate: string): boolean {
+  // Fechas ISO: el orden de texto es el del calendario, también con hora.
+  return routeDate >= REJECTION_PHOTO_FROM;
+}
+
+/**
+ * Entregas y rechazos sin foto: lo que no deja liquidar (MOM §29.7). La
+ * entrega la exige siempre; el rechazo, solo en rutas desde el 28/09.
+ */
+export function stopsMissingEvidence<T extends EvidenceStop>(stops: readonly T[], routeDate: string): T[] {
+  const rechazoConFoto = rejectionNeedsPhoto(routeDate);
+  return stops.filter((stop) => !stop.photo_path && (stop.status === "entregado" || (rechazoConFoto && stop.outcome_reason === "rechazado")));
 }
 
 /**
@@ -199,6 +218,8 @@ export function routeCloseBlockers(input: {
   isGf: boolean;
   openLoads: readonly OpenLoad[];
   stops: readonly EvidenceStop[];
+  /** Día de la ruta: decide si sus rechazos exigen foto (`rejectionNeedsPhoto`). */
+  routeDate: string;
 }): RouteCloseBlocker[] {
   const out: RouteCloseBlocker[] = [];
   // En Grupo GF las paradas nacen al recibir la carga: con una carga abierta,
@@ -211,7 +232,7 @@ export function routeCloseBlockers(input: {
   const pendientes = input.stops.filter((stop) => stop.status === "pendiente");
   if (pendientes.length) out.push({ kind: "sin_reportar", stops: pendientes, forceable: !input.isGf });
   if (input.isGf) {
-    const sinFoto = stopsMissingEvidence(input.stops);
+    const sinFoto = stopsMissingEvidence(input.stops, input.routeDate);
     if (sinFoto.length) out.push({ kind: "sin_foto", stops: sinFoto });
   }
   return out;

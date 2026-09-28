@@ -5844,6 +5844,25 @@ liquidar por eso.
 - No cambia qué es un rechazo ni cómo se cobra. Si una anulación de la tienda
   debe dejar de reportarse como rechazo, es otra decisión.
 
+**Excepción: los rechazos de rutas anteriores al 28-09-2026 no exigen foto
+(28-09-2026, decisión de Frankz).** Esos rechazos se reportaron cuando el
+teléfono todavía no pedía foto, y ya no hay puerta que fotografiar: 16 de
+ellos frenaban siete rutas del 23 al 26/09. Ahora:
+
+- Para terminar la ruta, un rechazo sin foto solo cuenta si la ruta es del
+  28/09 o después (`REJECTION_PHOTO_FROM` y `rejectionNeedsPhoto` en
+  `lib/routes.ts`, que usan el cierre y el panel «Para terminar la ruta»).
+- Para aprobar el pago del motorizado, lo mismo: `rider_pay_preview` (0197)
+  deja de contarlos en `evidence_missing`. Los cierres ya aprobados no cambian.
+- La fecha que manda es la de la ruta, no la del reporte: un rechazo de una
+  ruta del 28/09 exige foto aunque se haya reportado antes de que el teléfono
+  la pidiera.
+- La entrega sin foto y el Yape sin captura se siguen exigiendo siempre, sea
+  cual sea la fecha. El rechazo exento se sigue pagando al motorizado y se
+  sigue cobrando a la tienda como antes; solo deja de pedirse su foto.
+- En la tabla de la ruta, ese rechazo dice «Sin foto · no se exige (antes del
+  28/09)» en vez de «Falta foto».
+
 ### 29.8 Tarifas por distrito y comisión Yape
 
 Grupo GF Courier cobra una tarifa por distrito/zona que **incluye IGV**. Debe

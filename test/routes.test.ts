@@ -7,6 +7,8 @@ import {
   masterEffects,
   missingEvidenceMessage,
   nonDeliveryNeedsPhoto,
+  REJECTION_PHOTO_FROM,
+  rejectionNeedsPhoto,
   routeCloseBlockerMessage,
   routeCloseBlockers,
   stopEffect,
@@ -356,7 +358,26 @@ describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
       parada({ seq: 4, status: "no_entregado", outcome_reason: "no_contesta", name: "#KP4" }),
       parada({ seq: 5, status: "no_entregado", outcome_reason: "rechazado", photo_path: "r.jpg", name: "#KP5" }),
     ];
-    expect(stopsMissingEvidence(stops).map((s) => s.seq)).toEqual([2, 3]);
+    expect(stopsMissingEvidence(stops, "2026-09-28").map((s) => s.seq)).toEqual([2, 3]);
+  });
+
+  // Decisión de Frankz (28-09-2026): hasta el 27/09 el teléfono no pedía foto
+  // al rechazar, así que esos rechazos no la exigen. La entrega, siempre.
+  it("un rechazo de una ruta anterior al 28/09 no exige foto; la entrega sí", () => {
+    const stops = [
+      parada({ seq: 2, status: "entregado", name: "#KP2" }),
+      parada({ seq: 3, status: "no_entregado", outcome_reason: "rechazado", name: "#KP136057" }),
+    ];
+    expect(REJECTION_PHOTO_FROM).toBe("2026-09-28");
+    expect(stopsMissingEvidence(stops, "2026-09-27").map((s) => s.seq)).toEqual([2]);
+    expect(stopsMissingEvidence(stops, "2026-09-23").map((s) => s.seq)).toEqual([2]);
+    expect(stopsMissingEvidence(stops, "2026-09-28").map((s) => s.seq)).toEqual([2, 3]);
+    expect(stopsMissingEvidence(stops, "2026-10-01").map((s) => s.seq)).toEqual([2, 3]);
+    expect(rejectionNeedsPhoto("2026-09-27")).toBe(false);
+    expect(rejectionNeedsPhoto("2026-09-28")).toBe(true);
+    // Una fecha con hora sigue contando por el día.
+    expect(rejectionNeedsPhoto("2026-09-28T00:00:00")).toBe(true);
+    expect(rejectionNeedsPhoto("2026-09-27T23:59:59")).toBe(false);
   });
 
   it("el mensaje nombra cada pedido y dice cómo arreglarlo", () => {
@@ -376,7 +397,7 @@ describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
     const rutas = readFileSync(resolve(process.cwd(), "app/dashboard/rutas/actions.ts"), "utf8");
     // La foto que falta es un bloqueo más de `routeCloseBlockers` (sin_foto →
     // missingEvidenceMessage), la misma regla que enseña el panel de la ruta.
-    expect(rutas).toContain("routeCloseBlockers({ isGf: context.isGf, openLoads: context.openLoads, stops })");
+    expect(rutas).toContain("routeCloseBlockers({ isGf: context.isGf, openLoads: context.openLoads, stops, routeDate: route.route_date })");
     // Forzar solo salta lo forzable: en Grupo GF, nada.
     expect(rutas).toContain('.find((blocker) => !(blocker.kind === "sin_reportar" && blocker.forceable && opts.force));');
     expect(rutas).toContain('if (!context) return { ok: false, error: "No se pudo comprobar la recepción de las cargas." };');
@@ -391,6 +412,21 @@ describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
   it("y el MOM lo dice", () => {
     const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
     expect(mom).toContain("**La foto del rechazo se pide al reportarlo, no al liquidar (28-09-2026,\ndecisión de Frankz).**");
+    expect(mom).toContain("**Excepción: los rechazos de rutas anteriores al 28-09-2026 no exigen foto\n(28-09-2026, decisión de Frankz).**");
+  });
+
+  it("la excepción vive en el cierre, en el panel y en el pago del motorizado (0197)", () => {
+    const sql = readFileSync(resolve(process.cwd(), "db/migrations/0197_rejection_photo_exemption.sql"), "utf8");
+    expect(sql).toContain("create or replace function rider_pay_preview(p_route uuid, p_actor uuid)");
+    // La misma fecha que REJECTION_PHOTO_FROM: si una cambia, la otra también.
+    expect(sql).toContain(`or (x->>'outcome_reason'='rechazado' and v_route.route_date >= date '${REJECTION_PHOTO_FROM}'))`);
+    expect(sql).toContain("revoke all on function rider_pay_preview(uuid,uuid) from public,anon,authenticated;");
+    const verify = readFileSync(resolve(process.cwd(), "scripts/verify-db.sh"), "utf8");
+    expect(verify).toContain('$PSQL -f "$ROOT/scripts/sql/rider_pay_rejection_photo_smoke.sql"');
+    const panel = readFileSync(resolve(process.cwd(), "components/routes.tsx"), "utf8");
+    expect(panel).toContain('const exemptRejection = (s: StopWithOrder) => !rejectionsNeedPhoto && s.outcome_reason === "rechazado" && !s.photo_path;');
+    expect(panel).toContain("Sin foto · no se exige (antes del 28/09)");
+    expect(panel).toContain('"Todo reportado; los rechazos antes del 28/09 no exigen foto. Al terminarla se crea la liquidación de cada tienda."');
   });
 });
 
@@ -407,6 +443,8 @@ describe("qué impide terminar la ruta", () => {
     photo_path: over.photo_path === undefined ? "f.jpg" : over.photo_path,
     order: { name: over.name === undefined ? `#KP${over.seq ?? 1}` : over.name },
   });
+  // Ruta del 28/09 o después: sus rechazos también exigen foto.
+  const HOY = "2026-09-28";
   const carga = (over: Partial<OpenLoad>): OpenLoad => ({ id: over.id ?? "m1", load_number: over.load_number ?? 1, state: over.state ?? "office_check", items: over.items ?? 0 });
   // Lo que hace closeRoute: el primero que no se pueda forzar.
   const cierre = (input: Parameters<typeof routeCloseBlockers>[0], force = false) =>
@@ -414,7 +452,7 @@ describe("qué impide terminar la ruta", () => {
 
   it("una ruta de Grupo GF reportada y con fotos está lista", () => {
     const stops = [parada({ seq: 1 }), parada({ seq: 2, status: "no_entregado", outcome_reason: "rechazado" }), parada({ seq: 3, status: "no_entregado", outcome_reason: "no_contesta", photo_path: null })];
-    expect(routeCloseBlockers({ isGf: true, openLoads: [], stops })).toEqual([]);
+    expect(routeCloseBlockers({ isGf: true, openLoads: [], stops, routeDate: HOY })).toEqual([]);
   });
 
   it("Grupo GF: dice a la vez las sin reportar y las sin foto, y ninguna se fuerza", () => {
@@ -424,25 +462,35 @@ describe("qué impide terminar la ruta", () => {
       parada({ seq: 3, status: "no_entregado", outcome_reason: "rechazado", photo_path: null }),
       parada({ seq: 4, status: "pendiente", photo_path: null }),
     ];
-    const blockers = routeCloseBlockers({ isGf: true, openLoads: [], stops });
+    const blockers = routeCloseBlockers({ isGf: true, openLoads: [], stops, routeDate: HOY });
     expect(blockers.map((b) => b.kind)).toEqual(["sin_reportar", "sin_foto"]);
     expect(blockers[0]).toMatchObject({ kind: "sin_reportar", forceable: false });
     expect(blockers[0]!.kind === "sin_reportar" && blockers[0]!.stops.map((s) => s.seq)).toEqual([1, 4]);
     expect(blockers[1]!.kind === "sin_foto" && blockers[1]!.stops.map((s) => s.seq)).toEqual([2, 3]);
-    expect(cierre({ isGf: true, openLoads: [], stops }, true)?.kind).toBe("sin_reportar");
+    expect(cierre({ isGf: true, openLoads: [], stops, routeDate: HOY }, true)?.kind).toBe("sin_reportar");
+  });
+
+  it("antes del 28/09 los rechazos sin foto no frenan; las entregas sin foto sí", () => {
+    const rechazos = [parada({ seq: 1 }), parada({ seq: 2, status: "no_entregado", outcome_reason: "rechazado", photo_path: null })];
+    expect(routeCloseBlockers({ isGf: true, openLoads: [], stops: rechazos, routeDate: "2026-09-25" })).toEqual([]);
+    expect(routeCloseBlockers({ isGf: true, openLoads: [], stops: rechazos, routeDate: HOY }).map((b) => b.kind)).toEqual(["sin_foto"]);
+    const entrega = [parada({ seq: 1, photo_path: null }), ...rechazos.slice(1)];
+    const blockers = routeCloseBlockers({ isGf: true, openLoads: [], stops: entrega, routeDate: "2026-09-25" });
+    expect(blockers.map((b) => b.kind)).toEqual(["sin_foto"]);
+    expect(blockers[0]!.kind === "sin_foto" && blockers[0]!.stops.map((s) => s.seq)).toEqual([1]);
   });
 
   it("fuera de Grupo GF las sin reportar se pueden forzar y la foto no frena el cierre", () => {
     const stops = [parada({ seq: 1, status: "pendiente", photo_path: null }), parada({ seq: 2, photo_path: null })];
-    const blockers = routeCloseBlockers({ isGf: false, openLoads: [], stops });
+    const blockers = routeCloseBlockers({ isGf: false, openLoads: [], stops, routeDate: HOY });
     expect(blockers).toEqual([{ kind: "sin_reportar", stops: [stops[0]], forceable: true }]);
-    expect(cierre({ isGf: false, openLoads: [], stops })?.kind).toBe("sin_reportar");
-    expect(cierre({ isGf: false, openLoads: [], stops }, true)).toBeNull();
+    expect(cierre({ isGf: false, openLoads: [], stops, routeDate: HOY })?.kind).toBe("sin_reportar");
+    expect(cierre({ isGf: false, openLoads: [], stops, routeDate: HOY }, true)).toBeNull();
   });
 
   it("con una carga abierta la causa es la carga, no «sin paradas», y van en orden", () => {
     const openLoads = [carga({ id: "b", load_number: 2 }), carga({ id: "a", load_number: 1, items: 3, state: "ready_for_pickup" })];
-    const blockers = routeCloseBlockers({ isGf: true, openLoads, stops: [] });
+    const blockers = routeCloseBlockers({ isGf: true, openLoads, stops: [], routeDate: HOY });
     expect(blockers).toHaveLength(1);
     expect(blockers[0]!.kind === "carga_sin_recibir" && blockers[0]!.loads.map((l) => l.load_number)).toEqual([1, 2]);
     expect(openLoads.map((l) => l.load_number)).toEqual([2, 1]);
@@ -452,16 +500,16 @@ describe("qué impide terminar la ruta", () => {
   });
 
   it("una carga abierta frena aunque todo lo demás esté listo", () => {
-    const blockers = routeCloseBlockers({ isGf: true, openLoads: [carga({ load_number: 2, items: 1 })], stops: [parada({ seq: 1 })] });
+    const blockers = routeCloseBlockers({ isGf: true, openLoads: [carga({ load_number: 2, items: 1 })], stops: [parada({ seq: 1 })], routeDate: HOY });
     expect(blockers.map((b) => b.kind)).toEqual(["carga_sin_recibir"]);
     expect(routeCloseBlockerMessage(blockers[0]!)).toContain("La carga 2 tiene 1 paquete sin recibir");
   });
 
   it("sin paradas no hay nada que terminar, sea o no de Grupo GF", () => {
     for (const isGf of [true, false]) {
-      const blockers = routeCloseBlockers({ isGf, openLoads: [], stops: [] });
+      const blockers = routeCloseBlockers({ isGf, openLoads: [], stops: [], routeDate: HOY });
       expect(blockers).toEqual([{ kind: "sin_paradas" }]);
-      expect(cierre({ isGf, openLoads: [], stops: [] }, true)?.kind).toBe("sin_paradas");
+      expect(cierre({ isGf, openLoads: [], stops: [], routeDate: HOY }, true)?.kind).toBe("sin_paradas");
       expect(routeCloseBlockerMessage(blockers[0]!)).toBe("La ruta no tiene paradas: no hay nada que terminar ni liquidar.");
     }
   });
@@ -484,7 +532,8 @@ describe("qué impide terminar la ruta", () => {
 
   it("el panel de la ruta y el cierre usan la misma regla", () => {
     const panel = readFileSync(resolve(process.cwd(), "components/routes.tsx"), "utf8");
-    expect(panel).toContain("routeCloseBlockers({ isGf: closeContext.isGf, openLoads: closeContext.openLoads, stops })");
+    expect(panel).toContain("routeCloseBlockers({ isGf: closeContext.isGf, openLoads: closeContext.openLoads, stops, routeDate: route.route_date })");
+    expect(panel).toContain("stopsMissingEvidence(stops, route.route_date)");
     // «Terminar» solo se habilita cuando el cierre va a pasar, y forzar solo
     // existe fuera de Grupo GF (bloqueo forzable y nada más).
     expect(panel).toContain("disabled={disabled || !ready}");
