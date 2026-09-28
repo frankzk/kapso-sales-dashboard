@@ -1,9 +1,11 @@
 "use client";
 
 // «Recibir mi caja» (MOM §29.13): lo primero que ve el motorizado cuando la
-// oficina ya cotejó su carga. Un escaneo por paquete; «No lo recojo» con
-// motivo corto cuando algo no está, está dañado o no cabe. La ruta aparece
-// recién cuando la caja quedó recibida.
+// oficina empezó a verificar su caja. Un escaneo por paquete; «No lo recojo»
+// con motivo corto cuando algo no está, está dañado o no cabe. Desde 0196 a la
+// caja se le siguen sumando paquetes mientras se coteja: lo que oficina todavía
+// no verificó se ve «esperando a oficina» y no se recibe. La ruta aparece
+// recién cuando todo quedó recibido o se dijo que no va.
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -63,6 +65,11 @@ export function RiderReceiveBox({ riderName, loads }: { riderName: string; loads
             <p className="font-semibold text-slate-900">{load.route_date} · Carga {load.load_number}</p>
             <p className="text-sm tabular-nums text-slate-700"><b>{load.received}</b> de {load.total} recibidos{load.declined ? ` · ${load.declined} no recogidos` : ""}</p>
           </div>
+          {load.awaitingOffice > 0 && (
+            <p className="mt-1 text-xs text-slate-600">
+              {load.awaitingOffice === 1 ? "1 paquete espera" : `${load.awaitingOffice} paquetes esperan`} a que oficina los verifique. Recibe los demás; si uno no va a salir, márcalo «No lo recojo».
+            </p>
+          )}
           <progress value={load.received} max={load.total || 1} aria-label="Paquetes recibidos" className="mt-2 h-2 w-full accent-brand-600" />
           <ScanAction context="motorizado_recepcion" manifestId={load.id} disabled={pending} continuous progress={{ done: load.received, total: load.total, verb: "Recibidos" }} onResult={(r) => { setMessage(r.error ? { ok: false, text: r.error } : { ok: true, text: r.notice ?? "Paquete recibido." }); if (!r.error) router.refresh(); }} />
           <ul className="mt-4 space-y-2">
@@ -96,19 +103,22 @@ function ReceiveRow({ item, pending, declining, onReceive, onStartDecline, onDec
   const [note, setNote] = useState("");
   const received = !!item.pickup_checked_at;
   const declined = !!item.pickup_declined_at;
+  // 0196: sin la verificación de oficina el paquete no se recibe todavía.
+  const awaitingOffice = !received && !declined && !item.office_checked_at;
   return (
     <li className={cn("rounded-xl border p-3", received ? "border-emerald-200 bg-emerald-50/60" : declined ? "border-amber-200 bg-amber-50/60" : "border-slate-200 bg-white")}>
       <div className="flex items-start gap-3">
-        <span aria-label={received ? "Recibido" : declined ? "No recogido" : "Pendiente"} className={cn("mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-sm font-bold", received ? "bg-emerald-600 text-white" : declined ? "bg-amber-500 text-white" : "bg-slate-100 text-slate-500")}>{received ? "✓" : declined ? "!" : "·"}</span>
+        <span aria-label={received ? "Recibido" : declined ? "No recogido" : awaitingOffice ? "Esperando a oficina" : "Pendiente"} className={cn("mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-sm font-bold", received ? "bg-emerald-600 text-white" : declined ? "bg-amber-500 text-white" : "bg-slate-100 text-slate-500")}>{received ? "✓" : declined ? "!" : "·"}</span>
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-slate-950">{item.order_name ?? item.output_code ?? item.guide_code}</p>
           <p className="text-sm text-slate-600">{item.customer_name ?? "Cliente"} · {item.district ?? "Sin distrito"}</p>
           {declined && <p className="mt-1 text-xs text-amber-800">No lo recogiste: {item.pickup_declined_reason}</p>}
+          {awaitingOffice && <p className="mt-1 text-xs text-slate-600">Esperando a que oficina lo verifique.</p>}
         </div>
       </div>
       {!received && !declined && (
         <div className="mt-2 flex gap-2">
-          <button type="button" disabled={pending} onClick={onReceive} className="min-h-11 flex-1 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white disabled:opacity-50">Lo tengo</button>
+          {!awaitingOffice && <button type="button" disabled={pending} onClick={onReceive} className="min-h-11 flex-1 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white disabled:opacity-50">Lo tengo</button>}
           <button type="button" disabled={pending} onClick={onStartDecline} aria-expanded={declining} className="min-h-11 rounded-lg border border-amber-300 px-3 text-sm font-medium text-amber-800 disabled:opacity-50">No lo recojo</button>
         </div>
       )}

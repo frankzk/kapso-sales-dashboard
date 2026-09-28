@@ -393,4 +393,6 @@
 \ir migrations/0194_shalom_notice_caps.sql
 \echo 'Applying 0195_delivered_thanks_pace.sql'
 \ir migrations/0195_delivered_thanks_pace.sql
+\echo 'Applying 0196_gf_parallel_box.sql'
+\ir migrations/0196_gf_parallel_box.sql
 \echo 'Done.'
