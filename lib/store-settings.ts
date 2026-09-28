@@ -124,6 +124,8 @@ export interface StoreSettingsInput {
   shalom_transit_attach_ticket?: string | boolean;
   shalom_transit_phone_number_id?: string;
   shalom_transit_hour_start?: string;
+  shalom_notice_daily_cap?: string;
+  shalom_notice_hourly_cap?: string;
   shalom_transit_hour_end?: string;
   shalom_transit_payment_link?: string;
   /** Cobro por Flow.cl desde el botón «Link de pago» (0168). */
@@ -458,6 +460,11 @@ export function buildStoreUpdate(
     const v = typeof input.shalom_transit_payment_link === "string" ? input.shalom_transit_payment_link.trim() : "";
     patch.shalom_transit_payment_link = v || null;
   }
+  // Tope de avisos (0194). 0 es un valor válido: «ninguno», no «sin límite».
+  const capDay = intField(input.shalom_notice_daily_cap, 0, 1000);
+  if (capDay !== null) patch.shalom_notice_daily_cap = capDay;
+  const capHour = intField(input.shalom_notice_hourly_cap, 0, 1000);
+  if (capHour !== null) patch.shalom_notice_hourly_cap = capHour;
   const stStart = intField(input.shalom_transit_hour_start, 0, 23);
   if (stStart !== null) patch.shalom_transit_hour_start = stStart;
   const stEnd = intField(input.shalom_transit_hour_end, 1, 24);

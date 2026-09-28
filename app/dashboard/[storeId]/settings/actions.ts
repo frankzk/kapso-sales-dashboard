@@ -187,6 +187,8 @@ export async function updateStore(
     shalom_transit_attach_ticket: get("shalom_transit_attach_ticket"),
     shalom_transit_phone_number_id: get("shalom_transit_phone_number_id"),
     shalom_transit_hour_start: get("shalom_transit_hour_start"),
+    shalom_notice_daily_cap: get("shalom_notice_daily_cap"),
+    shalom_notice_hourly_cap: get("shalom_notice_hourly_cap"),
     shalom_transit_hour_end: get("shalom_transit_hour_end"),
     shalom_transit_payment_link: get("shalom_transit_payment_link"),
     shalom_arrival_template_enabled: get("shalom_arrival_template_enabled"),

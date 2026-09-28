@@ -17,6 +17,7 @@ import {
   amountValue,
   enqueueTransitNotification,
   moneyLabel,
+  noticeCapLeft,
   noticeGuideCode,
   noticeSkipReason,
   parseTransitParams,
@@ -775,5 +776,91 @@ describe("a quién NO se le manda el aviso de cobro", () => {
 
   it("sin total conocido no decide aquí: la plantilla ya se niega sola", () => {
     expect(noticeSkipReason({ generalStatus: "en_proceso", orderTotal: null, validatedAmount: 0 })).toBeNull();
+  });
+});
+
+describe("el tope de avisos por tienda (0194)", () => {
+  // El 28-09-2026 WhatsApp bloqueó el 600, que venía mandando 50-75 plantillas
+  // al día a clientas que nunca le habían escrito. El número nuevo arranca con
+  // tope: 24 h móviles (lo que mide Meta) y una hora (para repartir el día).
+  it("quedan los que falten para el tope más estricto de los dos", () => {
+    expect(noticeCapLeft({ sentLast24h: 10, sentLastHour: 2, dailyCap: 30, hourlyCap: 8 })).toBe(6);
+    expect(noticeCapLeft({ sentLast24h: 28, sentLastHour: 0, dailyCap: 30, hourlyCap: 8 })).toBe(2);
+  });
+
+  it("pasado el tope es cero, nunca negativo", () => {
+    expect(noticeCapLeft({ sentLast24h: 40, sentLastHour: 9, dailyCap: 30, hourlyCap: 8 })).toBe(0);
+  });
+
+  it("tope 0 es «ninguno», no «sin límite»", () => {
+    expect(noticeCapLeft({ sentLast24h: 0, sentLastHour: 0, dailyCap: 0, hourlyCap: 8 })).toBe(0);
+  });
+
+  it("sin tope configurado no limita: es como se comportaba antes", () => {
+    expect(noticeCapLeft({ sentLast24h: 500, sentLastHour: 500, dailyCap: null, hourlyCap: null })).toBe(
+      Infinity,
+    );
+  });
+
+  it("con el tope lleno el aviso NO sale y la fila no se toca: sale en la próxima pasada", async () => {
+    const admin = fakeAdmin();
+    const send = vi.fn();
+    const report = await processTransitNotifications(admin, {
+      nowIso: NOW,
+      sendTemplate: send,
+      loadCreds: async () => ({ ...CREDS, shalom_notice_daily_cap: 30, shalom_notice_hourly_cap: 8 }),
+      countSent: async (_store, since) =>
+        // 30 en las últimas 24 h, 3 en la última hora: el diario ya está lleno.
+        Date.parse(NOW) - Date.parse(since) > 2 * 3600_000 ? 30 : 3,
+    });
+    expect(report.deferred).toBe(1);
+    expect(send).not.toHaveBeenCalled();
+    // Ni skipped ni failed: sigue pendiente, tal cual estaba.
+    expect(admin.updates).toHaveLength(0);
+  });
+
+  it("con cupo, sale normal", async () => {
+    const admin = fakeAdmin();
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.T" });
+    const report = await processTransitNotifications(admin, {
+      nowIso: NOW,
+      sendTemplate: send,
+      loadCreds: async () => ({ ...CREDS, shalom_notice_daily_cap: 30, shalom_notice_hourly_cap: 8 }),
+      countSent: async () => 0,
+    });
+    expect(report.sent).toBe(1);
+  });
+
+  it("el cupo se gasta DENTRO de la misma pasada: con cupo 1 sale uno, no todos", async () => {
+    // Se cuenta una vez al empezar y se lleva a mano: sin eso, una pasada con
+    // 20 pendientes y cupo 1 los mandaría todos.
+    const admin = fakeAdmin({
+      pending: [
+        { id: "n1", store_id: "store", shipment_id: "ship-1", order_id: "ord-1", attempts: 0 },
+        { id: "n2", store_id: "store", shipment_id: "ship-1", order_id: "ord-1", attempts: 0 },
+      ],
+    });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.T" });
+    const report = await processTransitNotifications(admin, {
+      nowIso: NOW,
+      sendTemplate: send,
+      loadCreds: async () => ({ ...CREDS, shalom_notice_daily_cap: 1, shalom_notice_hourly_cap: 8 }),
+      countSent: async () => 0,
+    });
+    expect(report).toMatchObject({ sent: 1, deferred: 1 });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("si no se puede contar, NO manda: a ciegas con un número nuevo es lo que el tope evita", async () => {
+    const admin = fakeAdmin();
+    const send = vi.fn();
+    const report = await processTransitNotifications(admin, {
+      nowIso: NOW,
+      sendTemplate: send,
+      loadCreds: async () => ({ ...CREDS, shalom_notice_daily_cap: 30, shalom_notice_hourly_cap: 8 }),
+      countSent: async () => Number.POSITIVE_INFINITY,
+    });
+    expect(report.deferred).toBe(1);
+    expect(send).not.toHaveBeenCalled();
   });
 });
