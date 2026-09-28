@@ -217,6 +217,8 @@ export default async function StoreSettingsPage({
       shalom_transit_attach_ticket: full.shalom_transit_attach_ticket ?? false,
       shalom_transit_phone_number_id: full.shalom_transit_phone_number_id ?? null,
       shalom_transit_hour_start: full.shalom_transit_hour_start ?? 8,
+      shalom_notice_daily_cap: full.shalom_notice_daily_cap ?? 30,
+      shalom_notice_hourly_cap: full.shalom_notice_hourly_cap ?? 8,
       shalom_transit_hour_end: full.shalom_transit_hour_end ?? 21,
       shalom_transit_payment_link: full.shalom_transit_payment_link ?? null,
       shalom_arrival_template_enabled: full.shalom_arrival_template_enabled ?? false,
