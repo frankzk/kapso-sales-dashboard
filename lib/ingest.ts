@@ -134,6 +134,9 @@ export interface StoreCreds {
   delivered_thanks_hour_start: number;
   delivered_thanks_hour_end: number;
   delivered_thanks_max_hours: number;
+  /** Ritmo (0195): como mucho `count` intentos cada `minutes` minutos. */
+  delivered_thanks_pace_count: number;
+  delivered_thanks_pace_minutes: number;
   telegram_bot_token: string | null;
   telegram_chat_id: string | null;
   meta_access_token: string | null;
@@ -280,6 +283,9 @@ export async function getStoreCreds(
     delivered_thanks_hour_start: data.delivered_thanks_hour_start ?? 9,
     delivered_thanks_hour_end: data.delivered_thanks_hour_end ?? 21,
     delivered_thanks_max_hours: data.delivered_thanks_max_hours ?? 72,
+    // Pre-0195 ⇒ el ritmo por defecto, 5 cada 20 minutos.
+    delivered_thanks_pace_count: data.delivered_thanks_pace_count ?? 5,
+    delivered_thanks_pace_minutes: data.delivered_thanks_pace_minutes ?? 20,
     telegram_bot_token: decryptOrNull(data.telegram_bot_token_enc),
     telegram_chat_id: data.telegram_chat_id ?? null,
     meta_access_token: decryptOrNull(data.meta_access_token_enc),

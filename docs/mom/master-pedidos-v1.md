@@ -6688,9 +6688,15 @@ aprobada guarda `https://…/kenku-peru/?wa={{1}}` y cada envío pone el número
 - **Solo entregas recientes** (72 h por defecto). Muchas entregas se marcan en
   bloque al importar un reporte de Aliclik, días después, y un «gracias» de
   hace una semana suena a error.
-- **Tope de 25 por corrida y horario** (9 a 21 h por defecto). Una importación
-  que marca 200 entregas de golpe no puede convertirse en 200 plantillas de
-  marketing en un minuto: es lo que le baja la calidad al número.
+- **Ritmo: 5 mensajes cada 20 minutos, de 9 a 21 h** (configurable). Da 15 por
+  hora y 180 al día como máximo: por debajo de las 250 clientas distintas al día
+  con que Meta suele empezar un número nuevo, y por encima del volumen normal
+  (~74 entregas al día en Kenku), así que un día normal no se frena. Salen
+  primero las entregas más recientes; si una ráfaga no cabe, las más viejas
+  vencen a las 72 h sin mensaje. La ventana es deslizante y cuenta todos los
+  intentos, aceptados o no. Decidido el 28-09-2026: la primera activación
+  encontró ~170 entregas pendientes, que con el tope anterior de 25 por corrida
+  habrían salido en 35 minutos desde un número recién estrenado.
 - **El celular del botón va en dígitos, sin «+»**: en una URL el «+» se lee como
   un espacio.
 - **Un valor por cada botón dinámico.** La plantilla de Kenku lleva dos botones

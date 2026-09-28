@@ -62,6 +62,8 @@ export interface StoreSettingsInput {
   delivered_thanks_hour_start?: string;
   delivered_thanks_hour_end?: string;
   delivered_thanks_max_hours?: string;
+  delivered_thanks_pace_count?: string;
+  delivered_thanks_pace_minutes?: string;
   // Agente de voz para Reproprovincia (MOM §11.8, 0190).
   voice_recovery_enabled?: string | boolean;
   voice_recovery_auto?: string | boolean;
@@ -316,6 +318,10 @@ export function buildStoreUpdate(
   if (dtEnd !== null) patch.delivered_thanks_hour_end = dtEnd;
   const dtHours = intField(input.delivered_thanks_max_hours, 1, 720);
   if (dtHours !== null) patch.delivered_thanks_max_hours = dtHours;
+  const dtPaceCount = intField(input.delivered_thanks_pace_count, 1, 25);
+  if (dtPaceCount !== null) patch.delivered_thanks_pace_count = dtPaceCount;
+  const dtPaceMinutes = intField(input.delivered_thanks_pace_minutes, 5, 1440);
+  if (dtPaceMinutes !== null) patch.delivered_thanks_pace_minutes = dtPaceMinutes;
 
   // Agente de voz (MOM §11.8). Los tres toggles tienen que poder APAGARSE, y
   // el número del agente y la extensión son vaciables: sin ellos Kapta no

@@ -153,6 +153,8 @@ export async function updateStore(
     delivered_thanks_hour_start: get("delivered_thanks_hour_start"),
     delivered_thanks_hour_end: get("delivered_thanks_hour_end"),
     delivered_thanks_max_hours: get("delivered_thanks_max_hours"),
+    delivered_thanks_pace_count: get("delivered_thanks_pace_count"),
+    delivered_thanks_pace_minutes: get("delivered_thanks_pace_minutes"),
     voice_recovery_enabled: get("voice_recovery_enabled"),
     voice_recovery_auto: get("voice_recovery_auto"),
     voice_recovery_can_discard: get("voice_recovery_can_discard"),

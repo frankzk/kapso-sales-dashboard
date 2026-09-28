@@ -30,8 +30,33 @@ import { isSendablePhone, isTierLimitError, sanitizeTemplateParam } from "@/lib/
 import { sendWhatsappTemplate } from "@/lib/kapso";
 import { firstName, recoveryWithinHours } from "@/lib/return-recovery";
 
-/** Envíos por tienda y por corrida (el cron corre cada 5 min ⇒ hasta 300/h). */
+/** Techo duro por corrida, por encima de cualquier ritmo configurado. */
 export const THANKS_BATCH_CAP = 25;
+
+/**
+ * El ritmo por defecto: 5 mensajes cada 20 minutos. Da 15 por hora y 180 en la
+ * franja de 9 a 21 h — debajo de las 250 clientas distintas al día con que
+ * Meta suele empezar un número nuevo, y encima del volumen normal de Kenku
+ * (~74 entregas al día), así que en un día normal no frena nada.
+ */
+export const THANKS_DEFAULT_PACE_COUNT = 5;
+export const THANKS_DEFAULT_PACE_MINUTES = 20;
+
+/**
+ * Cuántos se pueden enviar en esta corrida sin pasarse del ritmo. Pura.
+ *
+ * Es una ventana DESLIZANTE: cuenta los intentos de los últimos `minutes`
+ * minutos, no los de un bloque de reloj. Con el cron cada 5 minutos, salen 5
+ * a las 9:00 y los siguientes cuando esos cumplen 20 minutos.
+ */
+export function thanksPaceBudget(opts: {
+  count: number;
+  minutes: number;
+  attemptsInWindow: number;
+}): number {
+  if (opts.count <= 0 || opts.minutes <= 0) return 0;
+  return Math.max(0, Math.min(THANKS_BATCH_CAP, opts.count - opts.attemptsInWindow));
+}
 
 /** Una clienta no recibe dos agradecimientos en esta ventana. */
 export const THANKS_PHONE_COOLDOWN_DAYS = 7;
@@ -158,6 +183,8 @@ export interface ThanksConfig {
   hourStart: number;
   hourEnd: number;
   maxHours: number;
+  paceCount: number;
+  paceMinutes: number;
 }
 
 /** La config de la tienda, o null si le falta algo para poder enviar. */
@@ -178,6 +205,8 @@ export function thanksConfig(creds: StoreCreds): ThanksConfig | null {
     hourStart: creds.delivered_thanks_hour_start ?? 9,
     hourEnd: creds.delivered_thanks_hour_end ?? 21,
     maxHours: creds.delivered_thanks_max_hours ?? 72,
+    paceCount: creds.delivered_thanks_pace_count ?? THANKS_DEFAULT_PACE_COUNT,
+    paceMinutes: creds.delivered_thanks_pace_minutes ?? THANKS_DEFAULT_PACE_MINUTES,
   };
 }
 
@@ -243,6 +272,24 @@ export async function runDeliveredThanks(
   if (!recoveryWithinHours(nowIso, tz, cfg.hourStart, cfg.hourEnd)) return report;
 
   const nowMs = Date.parse(nowIso);
+
+  // EL RITMO VA PRIMERO: si la ventana ya está llena, no hace falta ni leer la
+  // cola. Cuentan TODOS los intentos, aceptados o no — el ritmo es el de las
+  // llamadas a Meta, no el de los aciertos.
+  const paceSince = new Date(nowMs - cfg.paceMinutes * 60_000).toISOString();
+  const { data: recent, error: paceError } = await admin
+    .from("delivered_thanks_sends")
+    .select("sent_at")
+    .eq("store_id", storeId)
+    .gte("sent_at", paceSince);
+  if (paceError) throw new Error(`delivered thanks pace: ${paceError.message}`);
+  const budget = thanksPaceBudget({
+    count: cfg.paceCount,
+    minutes: cfg.paceMinutes,
+    attemptsInWindow: (recent ?? []).length,
+  });
+  if (budget === 0) return report;
+
   const sinceIso = new Date(nowMs - cfg.maxHours * 3_600_000).toISOString();
   const { data, error } = await admin
     .from("order_master")
@@ -265,7 +312,7 @@ export async function runDeliveredThanks(
   );
 
   for (const c of rows) {
-    if (report.sent + report.failed >= THANKS_BATCH_CAP) break;
+    if (report.sent + report.failed >= budget) break;
     if (thanksSkipReason(c, history, { nowMs, maxHours: cfg.maxHours })) {
       report.skipped += 1;
       continue;
