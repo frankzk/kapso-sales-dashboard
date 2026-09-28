@@ -422,14 +422,22 @@ export async function claimLead(leadId: string): Promise<LeadActionState> {
   // que es de cortesía. Se acepta y se deja escrito.
   const { data: mine } = await admin
     .from("leads")
-    .select("id,name,phone,claimed_by,claimed_at")
+    .select("id,name,phone,claimed_by,claimed_at,category")
     .eq("claimed_by", ctx.userId)
     .gt("claimed_at", cutoff)
     .neq("id", leadId);
-  type Mine = { id: string; name: string | null; phone: string | null; claimed_by: string | null; claimed_at: string | null };
+  type Mine = {
+    id: string;
+    name: string | null;
+    phone: string | null;
+    claimed_by: string | null;
+    claimed_at: string | null;
+    category: string | null;
+  };
   // La consulta ya filtra por asesora, TTL y lead; `claimsBlocking` vuelve a
   // aplicar la misma regla en memoria para que la prueba pura y la acción no
-  // puedan discrepar.
+  // puedan discrepar. Es ahí, y solo ahí, donde se descartan los leads ya
+  // ganados o perdidos: por eso la consulta trae `category`.
   const abiertos = claimsBlocking((mine ?? []) as Mine[], ctx.userId, leadId);
   if (abiertos.length >= MAX_OPEN_LEADS) {
     const nombres = abiertos.map((l) => l.name?.trim() || l.phone || "un lead").join(" y ");

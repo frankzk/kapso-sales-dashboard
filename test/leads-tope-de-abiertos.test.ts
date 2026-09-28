@@ -45,6 +45,39 @@ describe("la regla, pura", () => {
     expect(claimBlockedByCap(claims, YO, "a", NOW)).toBe(false);
   });
 
+  /**
+   * 28-09-2026, millonesalbornoz: «Ya tienes 2 leads abiertos (cesartananta05 y
+   * Nestor Valer)». Nestor Valer ya tenía el pedido generado; la reserva seguía
+   * viva porque solo se suelta al cerrar el panel con la X. Un lead terminado
+   * no necesita que nadie lo proteja de otra llamada.
+   */
+  it("un lead ya ganado o perdido no cuenta en el tope", () => {
+    const claims = [
+      { id: "cesar", claimed_by: YO, claimed_at: hace(4), category: "hot" },
+      { id: "nestor", claimed_by: YO, claimed_at: hace(8), category: "won" },
+    ];
+    expect(claimsBlocking(claims, YO, "sergio", NOW).map((c) => c.id)).toEqual(["cesar"]);
+    expect(claimBlockedByCap(claims, YO, "sergio", NOW)).toBe(false);
+
+    const perdido = [
+      { id: "a", claimed_by: YO, claimed_at: hace(1), category: "open" },
+      { id: "b", claimed_by: YO, claimed_at: hace(2), category: "lost" },
+    ];
+    expect(claimBlockedByCap(perdido, YO, "c", NOW)).toBe(false);
+  });
+
+  it("dos leads abiertos de verdad siguen bloqueando", () => {
+    const claims = [
+      { id: "a", claimed_by: YO, claimed_at: hace(1), category: "hot" },
+      { id: "b", claimed_by: YO, claimed_at: hace(2), category: "open" },
+    ];
+    expect(claimBlockedByCap(claims, YO, "c", NOW)).toBe(true);
+  });
+
+  it("el servidor trae la categoría para poder descartarlos", () => {
+    expect(server).toContain('.select("id,name,phone,claimed_by,claimed_at,category")');
+  });
+
   it("una reserva vencida por TTL ya no estorba", () => {
     // Pestaña cerrada sin soltar: a los diez minutos deja de contar, igual que
     // hoy deja de mostrarse como «Tomado».
