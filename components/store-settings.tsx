@@ -123,6 +123,8 @@ export interface StoreSettingsData {
     shalom_transit_attach_ticket: boolean;
     shalom_transit_phone_number_id: string | null;
     shalom_transit_hour_start: number;
+    shalom_notice_daily_cap: number;
+    shalom_notice_hourly_cap: number;
     shalom_transit_hour_end: number;
     shalom_transit_payment_link: string | null;
     shalom_arrival_template_enabled: boolean;
@@ -1747,6 +1749,37 @@ function SettingsForm({
                 className={inputCls}
               />
             </div>
+            <div>
+              <label className={labelCls} htmlFor="shalom_notice_daily_cap">Máximo por día</label>
+              <input
+                id="shalom_notice_daily_cap"
+                name="shalom_notice_daily_cap"
+                type="number"
+                min={0}
+                max={1000}
+                defaultValue={s.shalom_notice_daily_cap}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="shalom_notice_hourly_cap">Máximo por hora</label>
+              <input
+                id="shalom_notice_hourly_cap"
+                name="shalom_notice_hourly_cap"
+                type="number"
+                min={0}
+                max={1000}
+                defaultValue={s.shalom_notice_hourly_cap}
+                className={inputCls}
+              />
+            </div>
+            <p className="text-xs text-slate-500 sm:col-span-3">
+              Cuenta los avisos de Shalom y Olva, tránsito y llegada juntos. El diario es en
+              24 h móviles, como lo mide WhatsApp. Al llegar al tope el aviso{" "}
+              <strong>espera en la cola</strong> y sale en la siguiente pasada con cupo: no se
+              pierde. Un número nuevo tiene que empezar bajo y subir a medida que gana calidad.
+              No cuenta las respuestas a lo que escribe la clienta.
+            </p>
             <div className="sm:col-span-3">
               <label className={labelCls} htmlFor="shalom_transit_phone_number_id">
                 Enviar desde otro número (opcional)

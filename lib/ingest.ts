@@ -156,6 +156,9 @@ export interface StoreCreds {
   shalom_transit_attach_ticket: boolean;
   shalom_transit_phone_number_id: string | null;
   shalom_transit_hour_start: number;
+  /** Tope de avisos de Shalom/Olva: 24 h móviles y última hora (0194). */
+  shalom_notice_daily_cap: number;
+  shalom_notice_hourly_cap: number;
   shalom_transit_hour_end: number;
   /** Respuesta al botón «Link de pago», con {saldo}, {pedido} y {yape}. */
   shalom_transit_payment_link: string | null;
@@ -302,6 +305,8 @@ export async function getStoreCreds(
     shalom_transit_attach_ticket: data.shalom_transit_attach_ticket ?? false,
     shalom_transit_phone_number_id: data.shalom_transit_phone_number_id ?? null,
     shalom_transit_hour_start: data.shalom_transit_hour_start ?? 8,
+    shalom_notice_daily_cap: data.shalom_notice_daily_cap ?? 30,
+    shalom_notice_hourly_cap: data.shalom_notice_hourly_cap ?? 8,
     shalom_transit_hour_end: data.shalom_transit_hour_end ?? 21,
     shalom_transit_payment_link: data.shalom_transit_payment_link ?? null,
     shalom_arrival_template_enabled: data.shalom_arrival_template_enabled ?? false,

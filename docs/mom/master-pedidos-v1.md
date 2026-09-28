@@ -3481,6 +3481,26 @@ poner las dos columnas una al lado de la otra.
     y textos distintos, y confundirlos es mandarle a esperar a quien ya tiene el
     paquete esperándola a ella. **Los ocho parámetros son los mismos**: cambia
     el texto, no los datos.
+    - **Tope de envío por tienda** (0194, 28-09-2026): máximo por día —en 24 h
+      móviles, que es como lo mide WhatsApp— y máximo por hora, contando los
+      avisos de Shalom y Olva, tránsito y llegada, juntos. Nace en **30/día y
+      8/hora** y se sube desde Ajustes a medida que el número gane calidad.
+      - **Por qué.** Ese día WhatsApp bloqueó el 600, desde el que salían estos
+        avisos: venía mandando 50-75 plantillas al día a clientas que nunca le
+        habían escrito. El número que lo reemplace es nuevo, y un número nuevo
+        tiene que empezar despacio.
+      - **Al llegar al tope el aviso no se pierde**: se queda en la cola sin
+        tocar y sale en la siguiente pasada con cupo.
+      - **Si no se puede contar lo ya enviado, no se manda.** Mandar a ciegas
+        con un número nuevo es justo lo que el tope existe para evitar.
+      - **No cuenta** las respuestas a lo que escribe la clienta (botones,
+        acuses, la clave al validar): van en la ventana que ella abrió y cortarlas
+        sería dejarla hablando sola. Tampoco los carritos, el winback y demás,
+        que salen por otro número (el 981) y se dejaron fuera a propósito.
+      - Consecuencia asumida: si entran más avisos de los que caben, la cola
+        crece y los últimos salen con retraso — un «va en camino» puede llegar
+        cuando el paquete ya está en la agencia. Es el precio de no quemar el
+        número; se corrige subiendo el tope, no quitándolo.
     - **Los dos son avisos de COBRO, y no salen a quien ya no debe nada ni a un
       pedido cerrado** (anulado, entregado, devuelto). Se decide **al enviar**,
       no al encolar: entre una cosa y otra la clienta puede haber pagado. La

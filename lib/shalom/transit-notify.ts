@@ -107,6 +107,32 @@ export const TRANSIT_MAX_ATTEMPTS = 5;
 /** Tope de envíos por pasada del cron: cada uno puede costar una bajada del
  *  ticket, y el cron comparte sus 300 s con el rastreo. */
 export const TRANSIT_BATCH_CAP = 20;
+
+/**
+ * Cuántos avisos más se pueden mandar AHORA sin pasar ninguno de los dos
+ * topes de la tienda (0194). Pura.
+ *
+ * POR QUÉ HAY TOPE. El 28-09-2026 WhatsApp bloqueó el 600, el número desde el
+ * que salían estos avisos: venía mandando 50-75 plantillas al día a clientas
+ * que nunca le habían escrito. El número que lo reemplace es nuevo, y uno
+ * nuevo tiene que empezar despacio. El de 24 h es el que mide Meta; el de una
+ * hora reparte el día para que no salgan todos en la primera pasada del cron.
+ *
+ * Un tope ausente (`null`) no limita: así se comportaban las tiendas antes, y
+ * es lo que ven las pruebas que no hablan de topes.
+ */
+export function noticeCapLeft(input: {
+  sentLast24h: number;
+  sentLastHour: number;
+  dailyCap: number | null | undefined;
+  hourlyCap: number | null | undefined;
+}): number {
+  const quedan = [
+    input.dailyCap == null ? Infinity : input.dailyCap - input.sentLast24h,
+    input.hourlyCap == null ? Infinity : input.hourlyCap - input.sentLastHour,
+  ];
+  return Math.max(0, Math.min(...quedan));
+}
 /** La URL firmada del ticket vive lo que Meta tarda en bajarlo, con margen. */
 const TICKET_URL_SECONDS = 7 * 24 * 3600;
 
@@ -556,6 +582,8 @@ export async function processTransitNotifications(
     loadCreds?: (storeId: string) => Promise<StoreCreds | null>;
     /** Solo esta tienda. El cron drena todas; el botón de Ajustes, la suya. */
     storeId?: string;
+    /** Cuántos avisos ENVIADOS tiene la tienda desde `sinceIso`. Para el tope. */
+    countSent?: (storeId: string, sinceIso: string) => Promise<number>;
   } = {},
 ): Promise<TransitReport> {
   const report: TransitReport = { sent: 0, failed: 0, skipped: 0, deferred: 0, errors: [] };
@@ -564,6 +592,23 @@ export async function processTransitNotifications(
   const budget = opts.budgetMs ?? 150_000;
   const send = opts.sendTemplate ?? sendWhatsappTemplate;
   const loadCreds = opts.loadCreds ?? ((id: string) => getStoreCreds(id, admin));
+  const countSent =
+    opts.countSent ??
+    (async (storeId: string, sinceIso: string): Promise<number> => {
+      const { count, error } = await admin
+        .from("shalom_transit_notifications")
+        .select("id", { count: "exact", head: true })
+        .eq("store_id", storeId)
+        .eq("status", "sent")
+        .gte("sent_at", sinceIso);
+      // Si no se puede contar, se cuenta como LLENO: mandar a ciegas con un
+      // número nuevo es justo lo que el tope existe para evitar.
+      if (error) return Number.POSITIVE_INFINITY;
+      return count ?? 0;
+    });
+  // Enviados por tienda en esta ventana, contados una vez y llevados a mano
+  // mientras la pasada envía.
+  const enviados = new Map<string, { day: number; hour: number }>();
 
   let query = admin
     .from("shalom_transit_notifications")
@@ -625,7 +670,36 @@ export async function processTransitNotifications(
       continue;
     }
 
+    // EL TOPE (0194). Al llegar, el aviso se queda en la cola tal cual —ni se
+    // toca la fila— y sale en la siguiente pasada con cupo. No se pierde.
+    const tienda = credsByStore.get(row.store_id) ?? null;
+    const dailyCap = tienda?.shalom_notice_daily_cap ?? null;
+    const hourlyCap = tienda?.shalom_notice_hourly_cap ?? null;
+    if ((dailyCap != null || hourlyCap != null) && !enviados.has(row.store_id)) {
+      const t = Date.parse(nowIso);
+      const [day, hour] = await Promise.all([
+        countSent(row.store_id, new Date(t - 24 * 3600_000).toISOString()),
+        countSent(row.store_id, new Date(t - 3600_000).toISOString()),
+      ]);
+      enviados.set(row.store_id, { day, hour });
+    }
+    const cuenta = enviados.get(row.store_id) ?? { day: 0, hour: 0 };
+    const cupo = noticeCapLeft({
+      sentLast24h: cuenta.day,
+      sentLastHour: cuenta.hour,
+      dailyCap,
+      hourlyCap,
+    });
+    if (cupo <= 0) {
+      report.deferred += 1;
+      continue;
+    }
+
     const outcome = await sendOne(admin, row, cfg, { nowIso, send, kind });
+    if (outcome === "sent" && enviados.has(row.store_id)) {
+      cuenta.day += 1;
+      cuenta.hour += 1;
+    }
     if (outcome === "sent") report.sent += 1;
     else if (outcome === "failed") report.failed += 1;
     else if (outcome === "retry") report.deferred += 1;
