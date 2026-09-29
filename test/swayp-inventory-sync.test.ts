@@ -76,37 +76,31 @@ describe("credencialInventarioDesdeEnv", () => {
     if (!r.ok) expect(r.faltan).toHaveLength(5);
   });
 
-  it("usa la credencial de integración de las guías si no hay una exclusiva", () => {
+  it("NO usa la credencial de las guías: Swayp la rechaza para inventario (403 7301)", () => {
     stub({
-      SWAYP_TOKEN: "Bearer INT",
+      SWAYP_TOKEN: "INT",
       SWAYP_EMAIL: "api@kapta.pe",
       SWAYP_INVENTORY_RUC: "20610091823",
       SWAYP_INVENTORY_COMPANY_ID: "IsjvRm8cEqQBFP4r0TxF",
       SWAYP_INVENTORY_ORG_ID: "org-1",
     });
     const r = credencialInventarioDesdeEnv();
-    expect(r).toMatchObject({
-      ok: true,
-      orgId: "org-1",
-      tokenExclusivo: false,
-      creds: { token: "INT", email: "api@kapta.pe", user: "20610091823", idCompany: "IsjvRm8cEqQBFP4r0TxF" },
-    });
+    expect(r).toEqual({ ok: false, faltan: ["SWAYP_INVENTORY_TOKEN"] });
   });
 
-  it("una credencial exclusiva de inventario manda sobre la de guías", () => {
+  it("con una credencial exclusiva de inventario, arma todo (el correo puede ser el de las guías)", () => {
     stub({
       SWAYP_TOKEN: "INT",
       SWAYP_EMAIL: "api@kapta.pe",
-      SWAYP_INVENTORY_TOKEN: "INV",
-      SWAYP_INVENTORY_EMAIL: "inv@kapta.pe",
-      SWAYP_INVENTORY_RUC: "1",
-      SWAYP_INVENTORY_COMPANY_ID: "c",
-      SWAYP_INVENTORY_ORG_ID: "o",
+      SWAYP_INVENTORY_TOKEN: "Bearer INV",
+      SWAYP_INVENTORY_RUC: "20610091823",
+      SWAYP_INVENTORY_COMPANY_ID: "IsjvRm8cEqQBFP4r0TxF",
+      SWAYP_INVENTORY_ORG_ID: "org-1",
     });
     expect(credencialInventarioDesdeEnv()).toMatchObject({
       ok: true,
-      tokenExclusivo: true,
-      creds: { token: "INV", email: "inv@kapta.pe" },
+      orgId: "org-1",
+      creds: { token: "INV", email: "api@kapta.pe", user: "20610091823", idCompany: "IsjvRm8cEqQBFP4r0TxF" },
     });
   });
 });
