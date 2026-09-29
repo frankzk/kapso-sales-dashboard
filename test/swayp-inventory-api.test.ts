@@ -4,6 +4,7 @@ import {
   diagnoseInventoryAccess,
   fetchInventoryByCity,
   groupInventoryByCity,
+  inventarioDesdeProductos,
   isInventoryAuthError,
   listInventoryWarehouses,
   normalizeInventoryRow,
@@ -260,5 +261,65 @@ describe("diagnoseInventoryAccess", () => {
     }) as unknown as typeof fetch;
     const probes = await diagnoseInventoryAccess(creds(fetchImpl));
     expect(probes.every((p) => p.status === 0 && !p.ok)).toBe(true);
+  });
+});
+
+describe("inventarioDesdeProductos (GET /v1/integrations/products)", () => {
+  // Forma real, respuesta del 29-09-2026 (AURE001: 3 en Trujillo, 18 en Arequipa).
+  const respuesta = {
+    products: [
+      {
+        codbar: "AURE001",
+        nombre: "CANDIDA CLEANSE",
+        shared: false,
+        quantity: 10031,
+        warehouses: [
+          { idBodega: "130101", nombre: "BODEGA TRUJILLO", lot: "", quantity: 3 },
+          { idBodega: "40101", nombre: "Bodega Arequipa", lot: "", quantity: 18 },
+          { idBodega: "150101", nombre: "Bodega Lima", lot: "", quantity: 10000 },
+          { idBodega: "80101", nombre: "BODEGA CUSCO", lot: "", quantity: 10 },
+        ],
+      },
+      {
+        codbar: "aure003",
+        nombre: "ETHIOPIAN OIL",
+        warehouses: [
+          { idBodega: "40101", nombre: "Bodega Arequipa", lot: "L1", quantity: 70 },
+          { idBodega: "40101", nombre: "Bodega Arequipa", lot: "L2", quantity: 5 },
+        ],
+      },
+      { codbar: "", nombre: "sin código", warehouses: [{ idBodega: "40101", quantity: 9 }] },
+    ],
+  };
+
+  it("reparte por bodega → ciudad, con el ubigeo sin el cero inicial, y suma lotes", () => {
+    const r = inventarioDesdeProductos(respuesta);
+    expect(r.porCiudad.get("trujillo")).toEqual([
+      { codbar: "AURE001", nombre: "CANDIDA CLEANSE", bodega: "BODEGA TRUJILLO", disponible: 3 },
+    ]);
+    expect(r.porCiudad.get("arequipa")).toEqual([
+      { codbar: "AURE001", nombre: "CANDIDA CLEANSE", bodega: "Bodega Arequipa", disponible: 18 },
+      { codbar: "AURE003", nombre: "ETHIOPIAN OIL", bodega: "Bodega Arequipa", disponible: 75 },
+    ]);
+    expect(r.porCiudad.get("lima")?.[0]!.disponible).toBe(10000);
+    // Arequipa: «40101» se lee como 040101.
+    expect(r.bodegas.find((b) => b.id === "40101")).toMatchObject({ ciudadInei: "040101", city: "arequipa" });
+  });
+
+  it("Cusco resuelve pero no entra al sync; el producto sin código se ignora", () => {
+    const r = inventarioDesdeProductos(respuesta);
+    expect(r.porCiudad.has("cusco")).toBe(false);
+    expect(r.sinCiudad).toEqual([
+      { idWarehouse: "80101", ciudad: "cusco", nombre: "BODEGA CUSCO", ciudadInei: "080101", direccion: "", filas: 1 },
+    ]);
+    expect(r.totalFilas).toBe(6);
+    expect(r.filasPorBodega["40101"]).toBe(3);
+  });
+
+  it("acepta la lista en la raíz o en data, y una respuesta vacía no rompe", () => {
+    expect(inventarioDesdeProductos(respuesta.products).totalFilas).toBe(6);
+    expect(inventarioDesdeProductos({ data: respuesta.products }).totalFilas).toBe(6);
+    expect(inventarioDesdeProductos({}).totalFilas).toBe(0);
+    expect(inventarioDesdeProductos(null).totalFilas).toBe(0);
   });
 });

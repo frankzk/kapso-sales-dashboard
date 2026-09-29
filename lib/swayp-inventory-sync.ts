@@ -1,10 +1,17 @@
 // Sincronización de `fenix_stock` con el inventario de Swayp leído por API.
 //
 // La comparten el botón de Stock Swayp (una persona revisa el diff y aplica) y
-// el cron `/api/cron/swayp-inventory` (corre solo, cada hora). Por eso vive
+// el cron `/api/cron/swayp-inventory` (una vez al día, solo). Por eso vive
 // aquí y no en las acciones del panel: todo lo que depende de quién llama
-// —sesión, permiso, de dónde sale la credencial— lo resuelve quien llama; esto
-// recibe la credencial, la organización y el cliente admin.
+// —sesión, permiso— lo resuelve quien llama; esto recibe la FUENTE, la
+// organización y el cliente admin.
+//
+// Dos fuentes, con el mismo resultado:
+//   · "integracion" — GET /v1/integrations/products con la credencial de las
+//     guías (`SWAYP_TOKEN`). Es la del sync diario: no vence ni depende de
+//     nadie. Ver `inventarioDesdeProductos`.
+//   · "panel" — el API interno del panel con un token pegado a mano por una
+//     persona. Queda de respaldo; el token no se guarda.
 //
 // El cruce es el de siempre (`planearImportacion`, reglas en el MOM, «De dónde
 // sale el stock»). Lo que agrega el modo automático son las RETENCIONES: una
@@ -34,10 +41,20 @@ import {
   type PlanImportacion,
 } from "@/lib/swayp-inventario";
 import { cargarMapaSwaypDeOrg } from "@/lib/swayp-sku-map";
+import { env } from "@/lib/env";
+import { listIntegrationProducts, SwaypError, swaypOptsFromEnv, type SwaypClientOpts } from "@/lib/swayp";
+import { inventarioDesdeProductos } from "@/lib/swayp-inventory-api";
+
+/** De dónde se lee el inventario. */
+export type FuenteSwayp =
+  | { tipo: "integracion"; opts: SwaypClientOpts }
+  | { tipo: "panel"; creds: SwaypInventoryCreds };
 
 /** El error de una llamada a Swayp en una línea, sin el token: status + cuerpo, o el mensaje. */
 export function describirErrorSwayp(e: unknown): string {
-  if (e instanceof SwaypInventoryError) return `HTTP ${e.status}${e.body ? ` — ${e.body.slice(0, 240)}` : ""}`;
+  if (e instanceof SwaypInventoryError || e instanceof SwaypError) {
+    return `HTTP ${e.status}${e.body ? ` — ${e.body.slice(0, 240)}` : ""}`;
+  }
   if (e instanceof Error) return `${e.name}: ${e.message}`;
   return String(e);
 }
@@ -57,7 +74,26 @@ export type LecturaSwayp =
   | { error: string; diagnostico?: SwaypProbe[]; credencialRechazada?: boolean };
 
 /** Bodegas + inventario de Swayp, repartido por ciudad. No escribe nada. */
-export async function leerInventarioSwayp(creds: SwaypInventoryCreds): Promise<LecturaSwayp> {
+export async function leerInventarioSwayp(fuente: FuenteSwayp): Promise<LecturaSwayp> {
+  if (fuente.tipo === "integracion") {
+    try {
+      const raw = await listIntegrationProducts(fuente.opts);
+      return { ok: true, ...inventarioDesdeProductos(raw) };
+    } catch (e) {
+      const rechazada = e instanceof SwaypError && (e.status === 401 || e.status === 403);
+      return {
+        error: rechazada
+          ? `Swayp rechazó la credencial de integración (${describirErrorSwayp(e)}). Es la misma de las guías: revisa SWAYP_TOKEN/SWAYP_EMAIL.`
+          : `No se pudo leer el inventario de Swayp (${describirErrorSwayp(e)}).`,
+        credencialRechazada: rechazada,
+      };
+    }
+  }
+  return leerDelPanel(fuente.creds);
+}
+
+/** La lectura por el API interno del panel, con un token pegado a mano. */
+async function leerDelPanel(creds: SwaypInventoryCreds): Promise<LecturaSwayp> {
   let bodegas: SwaypWarehouse[];
   try {
     bodegas = await listInventoryWarehouses(creds);
@@ -277,7 +313,7 @@ export type SyncResult =
 export async function sincronizarInventarioSwayp(
   admin: SupabaseClient,
   input: {
-    creds: SwaypInventoryCreds;
+    fuente: FuenteSwayp;
     orgId: string;
     userId: string | null;
     ciudades: string[] | "todas";
@@ -297,7 +333,7 @@ export async function sincronizarInventarioSwayp(
 async function sincronizar(
   admin: SupabaseClient,
   input: {
-    creds: SwaypInventoryCreds;
+    fuente: FuenteSwayp;
     orgId: string;
     userId: string | null;
     ciudades: string[] | "todas";
@@ -310,7 +346,7 @@ async function sincronizar(
       : new Set(input.ciudades.map((c) => c.trim().toLowerCase()).filter(Boolean));
   if (pedidas && !pedidas.size) return { error: "Elige al menos una ciudad para sincronizar." };
 
-  const lectura = await leerInventarioSwayp(input.creds);
+  const lectura = await leerInventarioSwayp(input.fuente);
   if ("error" in lectura) return lectura;
   // Una lectura vacía es casi seguro un fallo de Swayp, no un inventario en
   // cero: aplicarla dejaría cada ciudad en 0.
@@ -415,37 +451,71 @@ async function registrarCorrida(
   if (error) console.error("[swayp-inventory] registrar la corrida:", error.message);
 }
 
-// ── Credencial guardada ──────────────────────────────────────────────────────
+// ── Sync diario ──────────────────────────────────────────────────────────────
+
+/** Una vez al día basta (decisión del 29-09-2026); 20 h deja holgura al horario. */
+export const HORAS_ENTRE_SYNCS = 20;
+
+/** ¿Toca sincronizar? Sí si nunca se hizo o la última buena fue hace ≥ 20 h. */
+export function debeSincronizar(ultimaOk: Date | null, ahora: Date = new Date()): boolean {
+  if (!ultimaOk) return true;
+  return ahora.getTime() - ultimaOk.getTime() >= HORAS_ENTRE_SYNCS * 3_600_000;
+}
+
+/** Cuándo fue la última sincronización que terminó bien (manual o automática). */
+export async function ultimaSincronizacionOk(admin: SupabaseClient, orgId: string): Promise<Date | null> {
+  const { data } = await admin
+    .from("swayp_inventory_sync_runs")
+    .select("created_at")
+    .eq("org_id", orgId)
+    .eq("ok", true)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const at = (data as { created_at: string } | null)?.created_at;
+  return at ? new Date(at) : null;
+}
 
 /**
- * La credencial con la que corre el sync sin nadie delante, desde el entorno.
- * Tiene que ser una EXCLUSIVA de inventario (`SWAYP_INVENTORY_TOKEN`): la de
- * integración de las guías (`SWAYP_TOKEN`) no sirve —probado el 29-09-2026,
- * Swayp responde 403 «No tienes autorización 7301»—. Tampoco el login del
- * panel: exige reCAPTCHA en cada inicio de sesión, justamente para impedir que
- * un programa inicie sesión solo, y no se automatiza. El correo sí puede ser
- * el de `SWAYP_EMAIL`.
+ * La fuente del sync automático: la API de integraciones con la credencial de
+ * las guías (`SWAYP_TOKEN`/`SWAYP_EMAIL`), para la organización dueña de ese
+ * stock (`SWAYP_INVENTORY_ORG_ID`). Nada de sesiones del panel: su login exige
+ * reCAPTCHA y no se automatiza.
  */
-export function credencialInventarioDesdeEnv():
-  | { ok: true; creds: SwaypInventoryCreds; orgId: string }
+export function fuenteAutomaticaDesdeEnv():
+  | { ok: true; fuente: FuenteSwayp; orgId: string }
   | { ok: false; faltan: string[] } {
-  const e = process.env;
-  const token = (e.SWAYP_INVENTORY_TOKEN || "").trim().replace(/^bearer\s+/i, "");
-  const email = (e.SWAYP_INVENTORY_EMAIL || e.SWAYP_EMAIL || "").trim();
-  const ruc = (e.SWAYP_INVENTORY_RUC || "").trim();
-  const idCompany = (e.SWAYP_INVENTORY_COMPANY_ID || "").trim();
-  const orgId = (e.SWAYP_INVENTORY_ORG_ID || "").trim();
+  const orgId = (process.env.SWAYP_INVENTORY_ORG_ID ?? "").trim();
   const faltan = [
-    !token && "SWAYP_INVENTORY_TOKEN",
-    !email && "SWAYP_INVENTORY_EMAIL (o SWAYP_EMAIL)",
-    !ruc && "SWAYP_INVENTORY_RUC",
-    !idCompany && "SWAYP_INVENTORY_COMPANY_ID",
+    !env.swaypEnabled() && "SWAYP_TOKEN / SWAYP_EMAIL",
     !orgId && "SWAYP_INVENTORY_ORG_ID",
   ].filter((v): v is string => !!v);
   if (faltan.length) return { ok: false, faltan };
-  return {
-    ok: true,
-    creds: { token, email, user: ruc, idCompany, country: "PE" },
-    orgId,
-  };
+  return { ok: true, fuente: { tipo: "integracion", opts: swaypOptsFromEnv() }, orgId };
+}
+
+export type ResultadoSiToca =
+  | { estado: "al_dia"; ultimaOk: Date | null }
+  | { estado: "sin_credencial"; faltan: string[] }
+  | { estado: "corrio"; resultado: SyncResult };
+
+/**
+ * El sync automático: corre sólo si la última sincronización buena fue hace
+ * ≥ `HORAS_ENTRE_SYNCS`. El cron lo llama cada hora y casi siempre responde
+ * «al día»; así un fallo de Swayp se reintenta a la hora siguiente y no al
+ * otro día.
+ */
+export async function sincronizarSiToca(admin: SupabaseClient): Promise<ResultadoSiToca> {
+  const f = fuenteAutomaticaDesdeEnv();
+  if (!f.ok) return { estado: "sin_credencial", faltan: f.faltan };
+  const ultimaOk = await ultimaSincronizacionOk(admin, f.orgId);
+  if (!debeSincronizar(ultimaOk)) return { estado: "al_dia", ultimaOk };
+  const resultado = await sincronizarInventarioSwayp(admin, {
+    fuente: f.fuente,
+    orgId: f.orgId,
+    userId: null,
+    ciudades: "todas",
+    source: "cron",
+  });
+  return { estado: "corrio", resultado };
 }
