@@ -23,6 +23,15 @@ import {
   recoveryWindow,
 } from "@/lib/reproprovincia";
 
+// v1.22 (29-09-2026): Swayp que no entrega abre la recuperación, igual que
+// Tanders (lib/reproprovincia.ts, `swaypGuideFailed`): su Devolución (8) y su
+// Devolución confirmada (9, 12) mandan el pedido a «Por reprogramar Lima» —y a
+// la lista de Grupo GF— o a Gestión Reproprovincia, con la ventana de la tienda
+// anclada en la salida. Hasta hoy el estado de Swayp nunca pasaba de 1 (su
+// webhook solo manda entregas); ahora lo lee su API (lib/swayp-status-sweep.ts)
+// y 112 guías resultaron devoluciones que el Master enseñaba «En tránsito»
+// (#KP135009). El resolver lee un campo nuevo (`swayp_state`), así que sube.
+//
 // v1.21 (29-09-2026): el adelanto mínimo de Agencia se mide con TODO lo
 // validado, no solo con la fila `adelanto` (lib/pickup-key.ts), y
 // `diferencia_cargada` deja pasar a Preparación. #KP134162 —S/ 10 de adelanto
@@ -113,7 +122,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.21" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.22" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -371,6 +380,8 @@ export interface MacroGuideSnapshot {
   custody_state?: string | null;
   /** Etiqueta cruda de Aliclik: única fuente de «terminó sin entregar». */
   reported_status?: string | null;
+  /** Estado crudo de Swayp: su Devolución (8/9/12) es un «no entregó». */
+  swayp_state?: number | null;
   /** Ancla de la ventana de Reproprovincia (el barrido la sella al anular). */
   closed_at?: string | null;
   updated_at?: string | null;

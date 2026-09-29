@@ -2184,9 +2184,9 @@ function ShipmentDrawer({
   const fenixDeliverySchedule = shipment
     ? getFenixDeliverySchedule(shipment.city, shipment.district)
     : null;
-  // 6 Novedad y 8 Revisión: los dos estados en los que Swayp todavía acepta una
-  // instrucción. Sin guía de Swayp no hay nada que responder — una guía manual
-  // se gestiona por teléfono, como siempre.
+  // 6 Novedad y 8 Devolución: los dos estados en los que Swayp todavía acepta
+  // una instrucción. Sin guía de Swayp no hay nada que responder — una guía
+  // manual se gestiona por teléfono, como siempre.
   const swaypNovelty = Boolean(
     shipment?.swayp_guide && (shipment.swayp_state === 6 || shipment.swayp_state === 8),
   );
@@ -2640,8 +2640,8 @@ function ShipmentDrawer({
               )}
               {swaypNovelty && (
                 // El estado crudo de Swayp es lo único que distingue «el
-                // mensajero está esperando una instrucción» de «todavía no
-                // salió»: los dos caen en `pendiente` al mapearse.
+                // mensajero está esperando una instrucción» de «va en
+                // reparto»: los dos son `en_ruta` al mapearse.
                 <div className="flex flex-wrap items-center justify-between gap-2 border-t border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-950">
                   <span>
                     <strong>

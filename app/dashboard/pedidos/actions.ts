@@ -15,6 +15,7 @@ import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
+import { getCurrentUser } from "@/lib/access";
 import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
   VOICE_STORE_COLUMNS,
@@ -210,13 +211,20 @@ export async function searchOrders(query: string): Promise<OrderMasterRow[]> {
 /**
  * Huella liviana para refrescar el listado solo cuando cambió algo. Evita
  * recargar 100 filas cada pocos segundos si la operación está quieta.
+ *
+ * Cada pestaña abierta la pide cada 45 s, así que lo que cuesta se paga
+ * multiplicado. La sesión se comprueba con `getCurrentUser` (el JWT se valida
+ * en local, como en proxy.ts) y no con `auth.getUser()`, que era un viaje a
+ * Supabase Auth por pestaña y por sondeo. La autorización real no cambia: la
+ * lectura de abajo va bajo RLS con el mismo token.
+ *
+ * Y la huella solo se mueve cuando un pedido cambia DE VERDAD: desde la 0204, un
+ * recálculo que deja la fila igual no toca `updated_at`.
  */
 export async function getOrderMasterChangeToken(): Promise<string | null> {
-  const sb = await createServerSupabase();
-  const {
-    data: { user },
-  } = await sb.auth.getUser();
+  const user = await getCurrentUser();
   if (!user) return null;
+  const sb = await createServerSupabase();
   const { data } = await sb
     .from("order_master")
     .select("updated_at")

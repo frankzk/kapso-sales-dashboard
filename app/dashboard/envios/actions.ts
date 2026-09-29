@@ -2699,9 +2699,10 @@ export async function recomputeFenixEligibility(): Promise<
 /** Estados de Swayp en los que una novedad todavía admite respuesta. */
 const SWAYP_SOLVABLE_STATES = new Set([
   6, // Novedad: el mensajero llegó y no pudo entregar.
-  8, // Revisión: el mensajero marcó devolución y todavía se puede gestionar
-  //    —mapSwaypState() ya lo documenta así—, que es justamente la puerta para
-  //    revertir una devolución que la operación no pidió.
+  8, // Devolución: el mensajero marcó devolución y todavía se puede gestionar,
+  //    que es justamente la puerta para revertir una devolución que la
+  //    operación no pidió. Mientras no se revierta, el pedido ya está en
+  //    recuperación (lib/reproprovincia.ts, `swaypGuideFailed`).
 ]);
 
 /**

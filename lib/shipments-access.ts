@@ -268,7 +268,7 @@ export async function withRecoveryState(
     const [guides, events, orders] = await Promise.all([
       sb
         .from("shipments")
-        .select("id,order_id,courier,delivery_status,reported_status,dispatched_at,closed_at,returned_at,updated_at")
+        .select("id,order_id,courier,delivery_status,reported_status,swayp_state,dispatched_at,closed_at,returned_at,updated_at")
         .in("order_id", part),
       sb
         .from("order_events")

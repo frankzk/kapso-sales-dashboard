@@ -15,8 +15,9 @@ import { timingSafeEqual } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
-import { mapSwaypState, SWAYP_STATES } from "@/lib/swayp";
-import { categoryOf } from "@/lib/shipments";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { mapSwaypState, SWAYP_STATES, swaypCustodyFor } from "@/lib/swayp";
+import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
 
 export interface SwaypWebhookBody {
   token?: unknown;
@@ -50,6 +51,132 @@ function constantTimeEquals(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
+/** Las columnas que hacen falta para aplicar un estado de Swayp a su guía. */
+export const SWAYP_SHIPMENT_COLUMNS =
+  "id,order_id,delivery_status,swayp_state,custody_state,custody_transferred_at," +
+  "dispatched_at,out_for_delivery_at,closed_at";
+
+/** La guía tal como la necesita `swaypStatePatch`. */
+export interface SwaypShipmentRow {
+  id: string;
+  order_id?: string | null;
+  delivery_status: string;
+  swayp_state: number | null;
+  custody_state?: string | null;
+  custody_transferred_at?: string | null;
+  dispatched_at?: string | null;
+  out_for_delivery_at?: string | null;
+  closed_at?: string | null;
+}
+
+/** Un estado de Swayp ya traducido a código, con las fechas que Swayp dé. */
+export interface SwaypIncomingState {
+  state: number;
+  /** Cuándo salió a reparto, si se sabe (historial de la API). */
+  departedAt?: string | null;
+  /** Cuándo entró al estado actual, si se sabe. */
+  changedAt?: string | null;
+}
+
+/** Estados de la guía que no se reabren (`reconcileDeliveryStatus`). */
+const TERMINAL_DELIVERY = new Set(["entregado", "anulado", "transferido"]);
+
+/** Estados que prueban que el paquete ya salió aunque no sepamos cuándo. */
+const LEFT_FOR_SURE = new Set([6, 8, 9, 12]);
+
+/**
+ * Lo que un estado de Swayp cambia en su guía. PURA: la usan el webhook y el
+ * barrido de la API (lib/swayp-status-sweep.ts), para que las dos puertas
+ * escriban lo mismo.
+ *
+ *   · El estado de entrega solo AVANZA (`reconcileDeliveryStatus`): una
+ *     lectura de «Por recolectar» no devuelve a `pendiente` una guía directa que
+ *     nació `en_ruta`, y un terminal no se reabre.
+ *   · El estado crudo se guarda siempre que la guía siga viva, porque es la
+ *     verdad de Swayp y lo único que distingue una Novedad de un Reparto. En
+ *     una guía ya cerrada solo entra si dice lo mismo (9 → 12).
+ *   · La custodia sigue a Swayp —`courier` en ruta, `retorno` al volver—, y a
+ *     diferencia de Tanders PUEDE volver de `retorno` a `courier`: una novedad
+ *     resuelta regresa a Reparto (5, «Solucionado») y la lectura es del
+ *     presente, no una foto atrasada. `devuelto` no lo toca nunca: eso lo pone
+ *     quien recibe la caja (MOM §9.4).
+ *   · Las fechas se llenan UNA vez: la salida (`dispatched_at`) es el ancla de
+ *     la recuperación, igual que en Tanders; el reparto (`out_for_delivery_at`)
+ *     y el cierre (`closed_at`) salen del historial de Swayp si viene.
+ *
+ * Repetir el mismo estado no cambia nada: cada estado se aplica al llegar.
+ */
+export function swaypStatePatch(
+  row: SwaypShipmentRow,
+  incoming: SwaypIncomingState,
+  nowIso: string,
+): { patch: Record<string, unknown>; changed: boolean; deliveryStatus: string } {
+  const mapped = mapSwaypState(incoming.state);
+  if (!mapped) return { patch: {}, changed: false, deliveryStatus: row.delivery_status };
+
+  const next = reconcileDeliveryStatus(row.delivery_status, mapped);
+  const applies = !TERMINAL_DELIVERY.has(row.delivery_status) || mapped === row.delivery_status;
+  const stateMoved = applies && row.swayp_state !== incoming.state;
+  const patch: Record<string, unknown> = {};
+  if (!stateMoved && next === row.delivery_status) {
+    return { patch, changed: false, deliveryStatus: row.delivery_status };
+  }
+
+  if (stateMoved) patch.swayp_state = incoming.state;
+  if (next !== row.delivery_status) {
+    patch.delivery_status = next;
+    patch.status_category = categoryOf(next);
+  }
+
+  const departed = incoming.departedAt ?? null;
+  const changedAt = incoming.changedAt ?? null;
+  const custody = swaypCustodyFor(incoming.state);
+  if (custody && row.custody_state !== "devuelto" && row.custody_state !== custody) {
+    patch.custody_state = custody;
+    if (!row.custody_transferred_at) patch.custody_transferred_at = departed ?? changedAt ?? nowIso;
+  }
+  if (!row.dispatched_at && (departed || LEFT_FOR_SURE.has(incoming.state))) {
+    patch.dispatched_at = departed ?? changedAt ?? nowIso;
+  }
+  if (!row.out_for_delivery_at && (incoming.state === 5 || incoming.state === 6)) {
+    patch.out_for_delivery_at = departed ?? changedAt ?? nowIso;
+  }
+  if (!row.closed_at && next !== row.delivery_status && TERMINAL_DELIVERY.has(next)) {
+    patch.closed_at = changedAt ?? nowIso;
+  }
+  return { patch, changed: true, deliveryStatus: next };
+}
+
+/**
+ * Aplica un estado de Swayp a su guía y, si cambió algo, recalcula el Master
+ * del pedido. `swayp_synced_at` se sella SIEMPRE: 0080 lo define como «cuándo
+ * supimos de Swayp por última vez», y sirve para ver guías que dejaron de
+ * reportar.
+ */
+export async function applySwaypState(
+  admin: SupabaseClient,
+  row: SwaypShipmentRow,
+  incoming: SwaypIncomingState,
+  opts: {
+    now?: Date;
+    /** El recálculo del Master; `false` = lo hace quien llama, en lote. */
+    recompute?: ((admin: SupabaseClient, orderIds: string[]) => Promise<unknown>) | false;
+  } = {},
+): Promise<{ changed: boolean; deliveryStatus: string }> {
+  const nowIso = (opts.now ?? new Date()).toISOString();
+  const { patch, changed, deliveryStatus } = swaypStatePatch(row, incoming, nowIso);
+  const { error } = await admin
+    .from("shipments")
+    .update({ ...patch, swayp_synced_at: nowIso })
+    .eq("id", row.id);
+  if (error) throw new Error(error.message);
+  const recompute = opts.recompute ?? recomputeOrderMasterSafe;
+  // Sin esto el cambio no llega al Master hasta la puerta de guías movidas del
+  // cron (hasta 10 minutos), y un pedido que Swayp devolvió sigue «En tránsito».
+  if (changed && row.order_id && recompute) await recompute(admin, [row.order_id]);
+  return { changed, deliveryStatus };
+}
+
 /**
  * Applies one Swayp state notification to its shipment.
  *
@@ -65,6 +192,7 @@ export async function processSwaypWebhook(input: {
   body: SwaypWebhookBody;
   admin?: SupabaseClient;
   now?: Date;
+  recompute?: ((admin: SupabaseClient, orderIds: string[]) => Promise<unknown>) | false;
 }): Promise<SwaypWebhookResult> {
   const expected = env.swaypWebhookToken();
   // También se recorta lo que llega: el token viaja copiado y pegado por dos
@@ -86,40 +214,29 @@ export async function processSwaypWebhook(input: {
   if (!Number.isFinite(stateId) || !SWAYP_STATES[stateId]) {
     return { status: "ignored", reason: "unknown_state" };
   }
-  const deliveryStatus = mapSwaypState(stateId);
-  if (!deliveryStatus) return { status: "ignored", reason: "unknown_state" };
+  if (!mapSwaypState(stateId)) return { status: "ignored", reason: "unknown_state" };
 
   const admin = input.admin ?? createAdminSupabase();
   const { data: shipment } = await admin
     .from("shipments")
-    .select("id,delivery_status,swayp_state")
+    .select(SWAYP_SHIPMENT_COLUMNS)
     .eq("swayp_guide", guideNumber)
     .maybeSingle();
   if (!shipment) return { status: "ignored", reason: "no_shipment" };
 
-  const row = shipment as { id: string; delivery_status: string; swayp_state: number | null };
-  const syncedAt = (input.now ?? new Date()).toISOString();
-
-  if (row.swayp_state === stateId && row.delivery_status === deliveryStatus) {
-    // El estado no cambia, pero SÍ se sella la hora: 0080 define
-    // `swayp_synced_at` como «cuándo se recibió la última notificación», y su
-    // razón de ser es detectar guías que dejaron de reportar. Si sólo se
-    // escribiera al cambiar de estado, una guía que Swayp sigue notificando en
-    // el mismo estado —sus reintentos, o un estado que dura días— se leería
-    // como abandonada. La columna mediría otra cosa que la que dice medir.
-    await admin.from("shipments").update({ swayp_synced_at: syncedAt }).eq("id", row.id);
-    return { status: "ignored", reason: "no_change" };
-  }
-
-  await admin
-    .from("shipments")
-    .update({
-      delivery_status: deliveryStatus,
-      status_category: categoryOf(deliveryStatus),
-      swayp_state: stateId,
-      swayp_synced_at: syncedAt,
-    })
-    .eq("id", row.id);
-
+  const row = shipment as unknown as SwaypShipmentRow;
+  // El estado no cambia, pero SÍ se sella la hora: 0080 define
+  // `swayp_synced_at` como «cuándo se recibió la última notificación», y su
+  // razón de ser es detectar guías que dejaron de reportar. Si sólo se
+  // escribiera al cambiar de estado, una guía que Swayp sigue notificando en el
+  // mismo estado —sus reintentos, o un estado que dura días— se leería como
+  // abandonada. La columna mediría otra cosa que la que dice medir.
+  const { changed, deliveryStatus } = await applySwaypState(
+    admin,
+    row,
+    { state: stateId },
+    { now: input.now, recompute: input.recompute },
+  );
+  if (!changed) return { status: "ignored", reason: "no_change" };
   return { status: "updated", shipmentId: row.id, deliveryStatus, swaypState: stateId };
 }

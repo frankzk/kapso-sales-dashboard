@@ -45,6 +45,7 @@ import {
   DEFAULT_CONFIRMATION_CYCLE_DAYS,
   confirmationAttemptDetail,
   confirmationCycleDays,
+  confirmationQueueBucket,
   type ConfirmationAttemptDetail,
 } from "@/lib/order-confirmation";
 import { evaluateDirectFenixStock, type FenixStockRow } from "@/lib/fenix";
@@ -70,6 +71,7 @@ import {
   AGENCY_AVAILABLE_STATES,
   emptyFilters,
   MANAGEMENT_DAY_STEPS,
+  masterSearchTerm,
   PAYMENT_CHECK_NONE,
   type AgencySummary,
   type MasterFilters,
@@ -941,14 +943,11 @@ const SORT_COLUMN: Record<MasterSortKey, { column: string; ascending: boolean }>
 };
 
 /**
- * El término de búsqueda, normalizado. Vive aparte porque lo miran dos sitios:
- * quien arma el `or(...ilike...)` y quien decide que buscar ignora la pestaña.
- * Si cada uno lo normalizara por su cuenta, un día dejarían de coincidir y la
- * búsqueda volvería a acotarse sola en algún caso raro — el `#` es justo eso.
+ * El término de búsqueda, normalizado. Lo miran quien arma el `or(...ilike...)`,
+ * quien decide que buscar ignora la pestaña y la pantalla que enseña los
+ * resultados: por eso la definición vive en `masterSearchTerm`, una sola vez.
  */
-function searchTerm(f: MasterFilters): string {
-  return f.search.trim().replace(/^#/, "");
-}
+const searchTerm = masterSearchTerm;
 
 /**
  * Traduce los filtros a la consulta. Cada uno se apoya en un índice que ya
@@ -1134,109 +1133,145 @@ export async function getConfirmationCycleDays(
   return out;
 }
 
-/**
- * Conteos exactos de la fila "Fecha pactada".
- *
- * Se calculan sobre toda la consulta vigente, no sobre las 100 filas visibles.
- * El propio filtro de fecha se quita antes de contar para que los cuatro chips
- * sigan mostrando su universo completo aunque uno de ellos esté seleccionado.
- */
-export async function getConfirmationDueCounts(
-  storeIds: string[],
-  params: {
-    substage?: MacroSubstage | null;
-    filters: MasterFilters;
-    now?: Date;
-  },
-): Promise<ConfirmationDueCounts> {
-  if (!storeIds.length) return EMPTY_CONFIRMATION_DUE_COUNTS;
+/** Lo que hace falta de cada fila para contar los chips de «Por confirmar». */
+export interface ConfirmationQueueRow {
+  confirmation_next_contact_on: string | null;
+  confirmation_reminder_due_at: string | null;
+  confirmation_cycle_due_on: string | null;
+  confirmation_day_count: number | null;
+}
 
-  const sb = await createServerSupabase();
-  const now = params.now ?? new Date();
-  const baseFilters: MasterFilters = { ...params.filters, confirmationDue: "" };
+/** Los dos juegos de chips de «Por confirmar»: Fecha pactada y Gestión. */
+export interface ConfirmationQueueCounts {
+  due: ConfirmationDueCounts;
+  /** Pedidos por paso de la escalera de gestión, 0…7. */
+  managementDays: Record<number, number>;
+}
 
-  const countFor = async (
-    confirmationDue: MasterFilters["confirmationDue"],
-  ): Promise<number> => {
-    let query = sb
-      .from("order_master")
-      .select("id", { count: "exact", head: true })
-      .in("store_id", storeIds)
-      .eq("macro_stage", "por_confirmar");
-    if (params.substage) query = query.eq("macro_substage", params.substage);
+const CONFIRMATION_QUEUE_COLUMNS =
+  "id,confirmation_next_contact_on,confirmation_reminder_due_at,confirmation_cycle_due_on,confirmation_day_count";
 
-    const { count, error } = await applyServerFilters(
-      query,
-      { ...baseFilters, confirmationDue },
-      now,
-    );
-    return error ? 0 : (count ?? 0);
-  };
+function emptyManagementDayCounts(): Record<number, number> {
+  const out: Record<number, number> = {};
+  for (const step of MANAGEMENT_DAY_STEPS) out[step] = 0;
+  return out;
+}
 
-  const [all, vencido, hoy, proximo] = await Promise.all([
-    countFor(""),
-    countFor("vencido"),
-    countFor("hoy"),
-    countFor("proximo"),
-  ]);
-
-  return { all, vencido, hoy, proximo };
+export function emptyConfirmationQueueCounts(): ConfirmationQueueCounts {
+  return { due: { ...EMPTY_CONFIRMATION_DUE_COUNTS }, managementDays: emptyManagementDayCounts() };
 }
 
 /**
- * Cuántos pedidos hay en cada paso de la escalera de gestión.
- *
- * MISMA REGLA QUE LOS CHIPS DE «FECHA PACTADA», y por el mismo motivo: se cuenta
- * sobre la consulta vigente —con la tienda, la subetapa y el plazo que estén
- * puestos—, no sobre las 100 filas visibles, y el propio filtro de gestión se
- * quita antes de contar para que los ocho pasos sigan enseñando su universo
- * completo aunque uno esté seleccionado. Si no, elegir «2/7 días» dejaría los
- * otros siete en cero y el desplegable se volvería inútil justo después de
- * usarlo.
- *
- * Son ocho conteos en paralelo, como los siete de `getOrderMasterCounts` y los
- * cuatro de aquí arriba: `head: true` no trae filas, solo el `count` de la
- * cabecera, y se apoyan en el índice por tienda y macroetapa que ya existe.
- *
- * Se acota a «Por confirmar» porque es donde la columna Gestión se muestra y
- * donde el filtro se ofrece. Contar fuera de ahí sería inventar un número que
- * nadie puede ver ni usar.
+ * Los pasos de gestión pedidos, leídos IGUAL que `applyServerFilters`: enteros
+ * no negativos; lo que no se entiende se ignora, y si no queda nada, no filtra.
  */
-export async function getManagementDayCounts(
+function managementDayStepsOf(f: MasterFilters): Set<number> | null {
+  if (!f.managementDays.size) return null;
+  const steps = [...f.managementDays]
+    .map((v) => Number(v))
+    .filter((n) => Number.isInteger(n) && n >= 0);
+  return steps.length ? new Set(steps) : null;
+}
+
+/**
+ * Cuenta los dos juegos de chips de «Por confirmar» sobre las filas de la
+ * consulta vigente.
+ *
+ * CADA JUEGO SE CUENTA SIN SU PROPIO FILTRO, y con el del otro puesto:
+ *   * Fecha pactada (todos, vencidos, hoy, próximos) respeta la Gestión elegida
+ *     pero no la fecha pactada elegida — si no, elegir «Hoy» dejaría los otros
+ *     chips en cero justo cuando uno quiere compararlos.
+ *   * Gestión (0/7 … 7/7) respeta la fecha pactada elegida pero no su propio
+ *     paso — elegir «2/7 días» no puede poner los otros siete en cero.
+ *
+ * El cubo de cada fila lo decide `confirmationQueueBucket`, la regla de la que
+ * `applyServerFilters` es el espejo en PostgREST (y `cola-fecha-pactada-espejo`
+ * la prueba que los mantiene iguales). Contar con la regla y no con su copia
+ * hace imposible que el chip diga una cosa y la tabla, al pulsarlo, otra.
+ *
+ * Pura, para poder probarla sin base.
+ */
+export function tallyConfirmationQueue(
+  rows: readonly ConfirmationQueueRow[],
+  filters: MasterFilters,
+  now: Date,
+): ConfirmationQueueCounts {
+  const out = emptyConfirmationQueueCounts();
+  const nowIso = now.toISOString();
+  const steps = managementDayStepsOf(filters);
+  for (const row of rows) {
+    const bucket = confirmationQueueBucket(
+      {
+        nextContactOn: row.confirmation_next_contact_on,
+        cycleDueOn: row.confirmation_cycle_due_on,
+        reminderDueAt: row.confirmation_reminder_due_at,
+      },
+      nowIso,
+    );
+    // Un nulo no es el paso 0: en la base `confirmation_day_count = 0` no casa
+    // con null, y el conteo tiene que decir lo mismo que la tabla filtrada.
+    const day = row.confirmation_day_count == null ? null : Number(row.confirmation_day_count);
+
+    if (!steps || (day !== null && steps.has(day))) {
+      out.due.all += 1;
+      if (bucket) out.due[bucket] += 1;
+    }
+    if (!filters.confirmationDue || bucket === filters.confirmationDue) {
+      if (day !== null && Object.prototype.hasOwnProperty.call(out.managementDays, day)) {
+        out.managementDays[day]! += 1;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Los chips de «Fecha pactada» y de «Gestión», con UNA lectura.
+ *
+ * Eran doce consultas por carga de la pestaña —cuatro conteos de fecha pactada
+ * y ocho de gestión—, cada una con su viaje a la base y su evaluación de la
+ * RLS. Todas contaban sobre el mismo conjunto: «Por confirmar», con la tienda,
+ * la subetapa y los filtros vigentes. Ahora se lee ese conjunto una vez, con las
+ * cuatro columnas que deciden los chips, y se cuenta en `tallyConfirmationQueue`.
+ * Son unos cientos de filas (156 el 29-09-2026) y cinco columnas cortas.
+ *
+ * Se cuenta sobre toda la consulta vigente, no sobre las 100 filas visibles.
+ */
+export async function getConfirmationQueueCounts(
   storeIds: string[],
   params: {
     substage?: MacroSubstage | null;
     filters: MasterFilters;
     now?: Date;
   },
-): Promise<Record<number, number>> {
-  const empty: Record<number, number> = {};
-  for (const step of MANAGEMENT_DAY_STEPS) empty[step] = 0;
-  if (!storeIds.length) return empty;
+): Promise<ConfirmationQueueCounts> {
+  if (!storeIds.length) return emptyConfirmationQueueCounts();
 
   const sb = await createServerSupabase();
   const now = params.now ?? new Date();
-  const baseFilters: MasterFilters = { ...params.filters, managementDays: new Set() };
+  // Los dos filtros de los chips se aplican al contar, cada uno sobre el otro
+  // juego: a la base se le pide el conjunto sin ninguno de los dos.
+  const base: MasterFilters = { ...params.filters, confirmationDue: "", managementDays: new Set() };
 
-  const countFor = async (step: number): Promise<number> => {
+  const rows: ConfirmationQueueRow[] = [];
+  for (let from = 0; from < MAX_LIST; from += PAGE) {
     let query = sb
       .from("order_master")
-      .select("id", { count: "exact", head: true })
+      .select(CONFIRMATION_QUEUE_COLUMNS)
       .in("store_id", storeIds)
-      .eq("macro_stage", "por_confirmar")
-      .eq("confirmation_day_count", step);
+      .eq("macro_stage", "por_confirmar");
     if (params.substage) query = query.eq("macro_substage", params.substage);
-
-    const { count, error } = await applyServerFilters(query, baseFilters, now);
-    return error ? 0 : (count ?? 0);
-  };
-
-  const counts = await Promise.all(MANAGEMENT_DAY_STEPS.map((step) => countFor(step)));
-  const out: Record<number, number> = {};
-  MANAGEMENT_DAY_STEPS.forEach((step, i) => {
-    out[step] = counts[i] ?? 0;
-  });
-  return out;
+    const { data, error } = await (applyServerFilters(query, base, now) as any)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    // Como antes: si la base no contesta, los chips salen en cero y la tabla,
+    // que es otra consulta, sigue funcionando.
+    if (error) return emptyConfirmationQueueCounts();
+    const page = (data ?? []) as ConfirmationQueueRow[];
+    rows.push(...page);
+    if (page.length < PAGE) break;
+  }
+  return tallyConfirmationQueue(rows, params.filters, now);
 }
 
 /**
@@ -1278,10 +1313,37 @@ export async function getOrderMasterPage(
   // quitar es una trampa — da igual que lo pusiera el usuario hace un rato.
   // Lo único que se mantiene es `store_id`, que no es un filtro sino el límite
   // de lo que esta persona puede ver.
-  const searching = searchTerm(params.filters).length > 0;
+  const term = searchTerm(params.filters);
+  const searching = term.length > 0;
   const effectiveFilters = searching
     ? { ...emptyFilters(), search: params.filters.search }
     : params.filters;
+  const from = Math.max(0, (params.page - 1) * pageSize);
+
+  // BUSCAR VA POR SU PROPIA FUNCIÓN (0204). Con la RLS de por medio, `ilike` no
+  // puede usar los índices trigram y cada búsqueda recorría la tabla entera
+  // —160–245 ms, dos veces: conteo y página—. `order_master_search` hace la
+  // misma búsqueda con los índices y acota a las tiendas de quien llama, así
+  // que no ve más que la RLS. Página y conteo salen en una sola llamada.
+  //
+  // Si la función no existe todavía (el código salió antes que la migración),
+  // se cae al camino de siempre: más lento, pero con los mismos resultados.
+  if (searching) {
+    const res = await (sb.rpc("order_master_search", { p_store_ids: storeIds, p_term: term }, { count: "exact" }) as any)
+      .select(MASTER_COLUMNS)
+      .order(sort.column, { ascending: sort.ascending, nullsFirst: false })
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (!res.error) {
+      return {
+        rows: ((res.data ?? []) as unknown as OrderMasterRow[]).map(withRuntimeCoverage),
+        total: res.count ?? 0,
+        page: params.page,
+        pageSize,
+      };
+    }
+    console.error("[master] order_master_search", res.error.code, res.error.message);
+  }
 
   const build = (select: string, opts?: { count: "exact"; head: true }) => {
     let q = opts
@@ -1299,7 +1361,6 @@ export async function getOrderMasterPage(
     build("id", { count: "exact", head: true }),
     (() => {
       const q = build(MASTER_COLUMNS) as any;
-      const from = Math.max(0, (params.page - 1) * pageSize);
       return q
         .order(sort.column, { ascending: sort.ascending, nullsFirst: false })
         // Desempate estable: sin un orden total, dos páginas pueden repetir o

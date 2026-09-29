@@ -523,6 +523,7 @@ export async function loadVoiceQueue(
     courier: string;
     delivery_status: string;
     reported_status: string | null;
+    swayp_state: number | null;
     dispatched_at: string | null;
     closed_at: string | null;
     returned_at: string | null;
@@ -551,7 +552,7 @@ export async function loadVoiceQueue(
     selectIn<Guide>(
       admin,
       "shipments",
-      "order_id, courier, delivery_status, reported_status, dispatched_at, closed_at, returned_at, updated_at",
+      "order_id, courier, delivery_status, reported_status, swayp_state, dispatched_at, closed_at, returned_at, updated_at",
       "order_id",
       ids,
     ),

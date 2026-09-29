@@ -71,9 +71,10 @@ describe("vercel.json", () => {
     // añade uno a propósito: 14 hasta el 14-09-2026, 15 desde el espejo de fotos
     // de producto, 16 desde el rastreo de Olva (20-09-2026), 17 desde el barrido
     // del agente de voz (MOM §11.8), 18 desde el sync del inventario de Swayp
-    // (29-09-2026). Que la ruta exista lo comprueba la última prueba de este
-    // archivo; no hace falta repetirlo acá.
-    expect(crons).toHaveLength(18);
+    // (29-09-2026), 19 desde el barrido de estados de Swayp (29-09-2026). Que la
+    // ruta exista lo comprueba la última prueba de este archivo; no hace falta
+    // repetirlo acá.
+    expect(crons).toHaveLength(19);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

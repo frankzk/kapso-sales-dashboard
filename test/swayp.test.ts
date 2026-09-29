@@ -324,12 +324,16 @@ describe("mapSwaypState", () => {
     expect(mapSwaypState(7)).toBe("entregado");
   });
 
-  it("keeps novedad and revisión workable (they need a gestión call)", () => {
-    expect(mapSwaypState(6)).toBe("pendiente");
-    expect(mapSwaypState(8)).toBe("pendiente");
+  it("novedad y devolución siguen con el mensajero: en_ruta, no «todavía no salió»", () => {
+    // Eran `pendiente` hasta el 29-09-2026; leídos de la API, el Master los
+    // habría mandado a «Por armar» con el paquete en la calle. Qué esperan lo
+    // dice `swayp_state`.
+    expect(mapSwaypState(6)).toBe("en_ruta");
+    expect(mapSwaypState(8)).toBe("en_ruta");
   });
 
   it("closes cancelled, indemnified and returned guides", () => {
+    expect(mapSwaypState(9)).toBe("anulado");
     expect(mapSwaypState(10)).toBe("anulado");
     expect(mapSwaypState(11)).toBe("anulado");
     expect(mapSwaypState(12)).toBe("anulado");

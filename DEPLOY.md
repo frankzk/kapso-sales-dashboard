@@ -1992,3 +1992,20 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
    sólo si pasaron ≥ 20 h desde el último sync bueno; si no, responde
    `al_dia`. Sin `SWAYP_TOKEN`/`SWAYP_EMAIL` o `SWAYP_INVENTORY_ORG_ID`
    responde `sin_credencial` con lo que falta.
+
+### 29-09-2026 · Estado de las guías Swayp leído de su API
+
+1. **Sin migración ni variables nuevas**: usa la credencial de las guías
+   (`SWAYP_TOKEN`/`SWAYP_EMAIL`) y las columnas de 0080 (`swayp_state`,
+   `swayp_synced_at`).
+2. El cron `/api/cron/swayp-status` (a los :22 y :52) lee con
+   `GET /v2/guias/{guia}` cada guía Swayp viva (`pendiente`/`en_ruta`), las
+   nunca leídas primero, hasta 200 por pasada, y aplica el `estado` por la misma
+   puerta que el webhook. Deja en el log una línea `[swayp-status]` con los
+   conteos (leídas, cambiaron, desconocidos, errores y sus motivos), sin guías
+   ni pedidos.
+3. La primera pasada mueve el atraso de golpe (el 29-09 eran ~130 guías con
+   estado viejo) y recalcula su Master; el resolver sube a `mom-v1.21`, así que
+   el resto del Master se reconcilia en las horas siguientes como siempre.
+4. Si Swayp responde 429 o la credencial falla, el barrido se detiene y lo dice
+   (`detenido`); lo pendiente va en la pasada siguiente.
