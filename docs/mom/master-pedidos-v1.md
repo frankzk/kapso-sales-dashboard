@@ -3659,6 +3659,13 @@ poner las dos columnas una al lado de la otra.
         tiene que empezar despacio.
       - **Al llegar al tope el aviso no se pierde**: se queda en la cola sin
         tocar y sale en la siguiente pasada con cupo.
+      - **Una tienda topada no le quita el turno a otra.** Cada pasada coge
+        los pendientes más antiguos de todas las tiendas; los de una tienda
+        topada no pueden salir, y si ocupaban esos puestos, la siguiente pasada
+        volvía a cogerlos a ellos. El 29-09-2026 Kenku amaneció con sus 30
+        gastados y 40 esperando, y Aurela —con 7 de 30— no mandó nada en toda
+        la mañana. Ahora primero se mira qué tiendas tienen cupo y la cola se
+        pide solo de ésas.
       - **Si no se puede contar lo ya enviado, no se manda.** Mandar a ciegas
         con un número nuevo es justo lo que el tope existe para evitar.
       - **No cuenta** las respuestas a lo que escribe la clienta (botones,
