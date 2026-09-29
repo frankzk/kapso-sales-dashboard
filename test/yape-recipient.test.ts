@@ -7,6 +7,7 @@ import {
   motivoDelDesencuentro,
   nameIsTheCustomers,
   readingLooksSwapped,
+  splitRecipientPhoneSuffix,
   type YapeRecipientCheck,
 } from "@/lib/yape-recipient";
 
@@ -479,5 +480,59 @@ describe("una cuenta sin celular: la pasarela Flow", () => {
       CON_FLOW,
     );
     expect(motivoDelDesencuentro(r, CON_FLOW)).toContain("···309 SÍ es el de Grupo GF S.A.C.");
+  });
+});
+
+describe("el final del celular pegado al nombre (BBVA, Plin)", () => {
+  // La app del BBVA escribe el contacto como «Grupo gf s •5309»; Plin, como
+  // «Grupo Gf S · 930 555 309 - Yape». Los dígitos son el celular.
+  it("los separa del nombre", () => {
+    expect(splitRecipientPhoneSuffix("Grupo gf s •5309")).toEqual({
+      name: "Grupo gf s",
+      phoneDigits: "5309",
+    });
+    expect(splitRecipientPhoneSuffix("Grupo Gf S · 930 555 309 - Yape")).toEqual({
+      name: "Grupo Gf S",
+      phoneDigits: "930555309",
+    });
+    expect(splitRecipientPhoneSuffix("Grupo gf s ***309")).toEqual({
+      name: "Grupo gf s",
+      phoneDigits: "309",
+    });
+  });
+
+  it("no toca un nombre sin separador, ni el enmascarado de Yape", () => {
+    for (const leido of ["Tienda 123", "Gr*** Gf*** S*** A*** C***", "Gabriela Rea*", "Grupo GF S.A.C."]) {
+      expect(splitRecipientPhoneSuffix(leido)).toEqual({ name: leido, phoneDigits: null });
+    }
+    expect(splitRecipientPhoneSuffix(null)).toEqual({ name: null, phoneDigits: null });
+  });
+
+  it("en un comprobante normal, los dígitos cuentan como celular", () => {
+    const r = yapeRecipientReadingFromVision({
+      extracted: { recipient_name: "Grupo gf s •5309", recipient_phone_last_digits: null },
+    });
+    expect(r).toMatchObject({ name: "Grupo gf s", phoneLastDigits: "309", status: "partial" });
+  });
+
+  it("y siguen siendo tajantes: un celular ajeno es otra cuenta", () => {
+    const r = yapeRecipientReadingFromVision({
+      extracted: { recipient_name: "Grupo gf s •5123", recipient_phone_last_digits: null },
+    });
+    expect(r.status).toBe("mismatch");
+  });
+
+  it("manda el pegado al nombre: sale del mismo bloque que el receptor", () => {
+    expect(
+      yapeRecipientReadingFromVision({
+        extracted: { recipient_name: "Grupo gf s •5309", recipient_phone_last_digits: "309" },
+      }),
+    ).toMatchObject({ phoneLastDigits: "309", status: "partial" });
+    // Un celular leído aparte no puede tapar uno ajeno pegado al nombre.
+    expect(
+      yapeRecipientReadingFromVision({
+        extracted: { recipient_name: "Grupo gf s •5123", recipient_phone_last_digits: "309" },
+      }).status,
+    ).toBe("mismatch");
   });
 });
