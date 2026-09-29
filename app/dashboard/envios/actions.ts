@@ -88,9 +88,10 @@ import {
 } from "@/lib/swayp-inventario";
 import {
   diagnoseInventoryAccess,
-  inventoryToEntradasByCity,
+  fetchInventoryByCity,
   listWarehouses,
-  searchInventory,
+  SwaypInventoryError,
+  type SwaypFilasSinCiudad,
   type SwaypInventoryCreds,
   type SwaypProbe,
 } from "@/lib/swayp-inventory-api";
@@ -2390,12 +2391,19 @@ export interface DryRunCiudad {
   sinControl: number;
 }
 
+/** El error de una llamada a Swayp en una línea, sin el token: status + cuerpo, o el mensaje. */
+function describirErrorSwayp(e: unknown): string {
+  if (e instanceof SwaypInventoryError) return `HTTP ${e.status}${e.body ? ` — ${e.body.slice(0, 240)}` : ""}`;
+  if (e instanceof Error) return `${e.name}: ${e.message}`;
+  return String(e);
+}
+
 export interface DryRunResult {
   ok: true;
   ciudades: DryRunCiudad[];
-  /** Bodegas cuya ciudad no mapeamos (Cusco, Ica…): no se tocan, se informan. */
-  bodegasSinCiudad: { idWarehouse: string; nombre: string; filas: number }[];
-  bodegas: { id: string; name: string }[];
+  /** Filas de bodegas cuya ciudad no mapeamos (Cusco, Ica…): no se tocan, se informan. */
+  bodegasSinCiudad: SwaypFilasSinCiudad[];
+  bodegas: { id: string; name: string; city: string | null }[];
   totalFilasInventario: number;
   /** Muestra CRUDA de las primeras filas, para confirmar los nombres de campo. */
   muestra: unknown[];
@@ -2440,24 +2448,31 @@ export async function swaypInventoryDryRun(input: {
   const creds: SwaypInventoryCreds = { token, email, user: ruc, idCompany, country: "PE" };
 
   let bodegas;
-  let filas;
+  let inv;
   try {
-    [bodegas, filas] = await Promise.all([listWarehouses(creds), searchInventory(creds)]);
-  } catch {
-    // Falló alguna de las dos lecturas. En vez de un mensaje ciego, se corre el
-    // diagnóstico: tres llamadas separadas que dicen qué host respondió qué. Con
-    // eso se distingue un token vencido (falla hasta la de control) de un
-    // problema de contrato (la de control pasa y otra no).
+    bodegas = await listWarehouses(creds);
+  } catch (e) {
+    // Falla la de bodegas, que es el control: la credencial no sirve.
     const diagnostico = await diagnoseInventoryAccess(creds);
-    const control = diagnostico[0];
-    const msg =
-      control && control.ok
-        ? "El token es válido (la llamada de control pasó), pero una lectura de inventario falló. Revisa el detalle: puede ser que el host de inventario pida otra credencial."
-        : "Swayp rechazó la credencial: el token está vencido, es de otra sesión, o no tiene permiso. Genera uno nuevo desde el panel y vuelve a intentar.";
-    return { error: msg, diagnostico };
+    return {
+      error: `Swayp rechazó la credencial (${describirErrorSwayp(e)}): el token está vencido, es de otra sesión, o no tiene permiso. Pega uno recién copiado del panel (sin la palabra «Bearer»).`,
+      diagnostico,
+    };
+  }
+  try {
+    inv = await fetchInventoryByCity(creds, bodegas);
+  } catch (e) {
+    // Bodegas pasó, así que el token es bueno: se muestra el error REAL de la
+    // lectura de inventario (status + cuerpo), no un diagnóstico aparte que
+    // puede dar 200 con otra petición y esconder el fallo.
+    const diagnostico = await diagnoseInventoryAccess(creds);
+    return {
+      error: `El token es válido (bodegas pasó), pero la lectura de inventario falló: ${describirErrorSwayp(e)}`,
+      diagnostico,
+    };
   }
 
-  const { porCiudad, sinCiudad } = inventoryToEntradasByCity(filas, bodegas);
+  const { porCiudad, sinCiudad, totalFilas, muestra } = inv;
 
   // Los mismos insumos que usa el importador de Excel, leídos una vez para toda
   // la organización (Aurela y Kenku comparten inventario en Swayp).
@@ -2507,9 +2522,9 @@ export async function swaypInventoryDryRun(input: {
     ok: true,
     ciudades,
     bodegasSinCiudad: sinCiudad,
-    bodegas: bodegas.map((w) => ({ id: w.id, name: w.name })),
-    totalFilasInventario: filas.length,
-    muestra: filas.slice(0, 2),
+    bodegas: bodegas.map((w) => ({ id: w.id, name: w.name, city: w.city })),
+    totalFilasInventario: totalFilas,
+    muestra,
   };
 }
 
