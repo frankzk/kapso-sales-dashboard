@@ -6741,6 +6741,31 @@ de Aliclik, por ejemplo— no entra: esa la lleva ese courier.
 - Con la salida nueva el pedido deja la recuperación y sigue el camino normal
   de Grupo GF; el paquete que volvió no lo devuelve a «Devuelto» (§7).
 
+**Escanear un «No entregado» de una caja anterior lo recibe y lo asigna
+(29-09-2026).** #KP136779 y #KP136896 salieron el 26/09 con Yhoni y volvieron
+«No entregado · reprogramado». La ruta se cerró el 28/09, pero nadie los
+recibió en oficina, así que seguían dentro de esa caja: cerrar la ruta no vacía
+la caja. El 29/09, con los paquetes en la mano, el escaneo de «Por QR»
+respondía **«Ya estaba»** —miraba si había una caja activa del motorizado, sin
+mirar de qué día— y no entraban en la ruta de hoy. Había 78 «No entregado»
+así, en cajas del 16 al 28/09, y 20 rechazos sin recibir.
+
+Regla (`lib/gf-scan-return.ts`, en `scanAssignToRider`): si el paquete está en
+la caja de un día **anterior** al de la caja que se arma, escanearlo en oficina
+prueba que volvió, igual que en «Devoluciones».
+
+| Reporte de su parada en esa caja | Qué hace el escaneo |
+| --- | --- |
+| «No entregado» (cualquier motivo menos rechazo) | Lo recibe en oficina (`gf_return_to_office`) y lo asigna a la caja de hoy. La chapa dice «En la caja de X · volvió de Yhoni del 26/09». |
+| «Rechazó el pedido» | Lo recibe como devuelto y **no** lo asigna (0189): no se reprograma. |
+| «Entregado» | No hace nada: lo dice. |
+| Sin reporte | No lo toca: la parada es de la liquidación de ese motorizado. Pide que la reporte. |
+
+Si algo impide asignarlo después de recibirlo (programado para otro día,
+límite de efectivo), la línea lo dice y el paquete queda recibido, «por
+asignar». Lo del **mismo día** no cambia: «Ya estaba» es solo la caja de ese
+día, y la de otro motorizado ofrece «Mover».
+
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 
 **Antes** la pestaña «Rutas» tenía dos subpestañas —«Cajas y cotejos» (solo
