@@ -19,6 +19,7 @@ import { recordStockMovement } from "@/lib/fenix-ledger";
 import {
   diagnoseInventoryAccess,
   fetchInventoryByCity,
+  isInventoryAuthError,
   listInventoryWarehouses,
   SwaypInventoryError,
   type SwaypFilasSinCiudad,
@@ -53,7 +54,7 @@ export type LecturaSwayp =
       filasPorBodega: Record<string, number>;
       muestra: unknown[];
     }
-  | { error: string; diagnostico?: SwaypProbe[] };
+  | { error: string; diagnostico?: SwaypProbe[]; credencialRechazada?: boolean };
 
 /** Bodegas + inventario de Swayp, repartido por ciudad. No escribe nada. */
 export async function leerInventarioSwayp(creds: SwaypInventoryCreds): Promise<LecturaSwayp> {
@@ -65,6 +66,7 @@ export async function leerInventarioSwayp(creds: SwaypInventoryCreds): Promise<L
     return {
       error: `Swayp rechazó la credencial (${describirErrorSwayp(e)}): está vencida, es de otra sesión o no tiene permiso para el inventario.`,
       diagnostico: await diagnoseInventoryAccess(creds),
+      credencialRechazada: isInventoryAuthError(e),
     };
   }
   try {
@@ -264,7 +266,7 @@ export type SyncResult =
       guias: number | null;
       errorGuias?: string;
     }
-  | { error: string; diagnostico?: SwaypProbe[] };
+  | { error: string; diagnostico?: SwaypProbe[]; credencialRechazada?: boolean };
 
 /**
  * Lee Swayp, planea y aplica. `ciudades` acota a las pedidas (botón) o

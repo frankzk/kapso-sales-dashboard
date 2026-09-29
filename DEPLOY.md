@@ -1979,13 +1979,19 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
    - `SWAYP_INVENTORY_COMPANY_ID` — id de la empresa en Swayp (`idCompany`).
    - `SWAYP_INVENTORY_ORG_ID` — la organización de Kapta dueña de ese stock.
    Ya creadas el 29-09-2026.
-3. **Falta la credencial: `SWAYP_INVENTORY_TOKEN`** (y `SWAYP_INVENTORY_EMAIL`
-   si no es el de `SWAYP_EMAIL`), una credencial de API de Swayp con acceso al
-   inventario. Hay que pedírsela a Swayp. La de integración de las guías
-   (`SWAYP_TOKEN`) NO sirve: probada el 29-09-2026, responde 403 «No tienes
-   autorización 7301». El login del panel tampoco: exige reCAPTCHA en cada
-   inicio de sesión y no se automatiza.
-4. Sin `SWAYP_INVENTORY_TOKEN` el cron (`/api/cron/swayp-inventory`, a los :40
-   de cada hora) no hace nada y responde qué falta; Stock Swayp muestra el sync
-   automático apagado. Al cargarla: Stock Swayp → «Leer inventario» con el
-   token vacío la prueba al instante, y desde la hora siguiente corre solo.
+3. **La credencial de API (`SWAYP_INVENTORY_TOKEN`) todavía no existe**: hay
+   que pedírsela a Swayp. La de integración de las guías (`SWAYP_TOKEN`) NO
+   sirve: responde 403 «No tienes autorización 7301». El login del panel
+   tampoco: exige reCAPTCHA y no se automatiza. Mientras no exista, el sync
+   diario reutiliza la sesión del panel (ver el punto siguiente).
+4. **Migración `0202_swayp_inventory_sessions.sql`** (ya aplicada el
+   29-09-2026): la sesión guardada (cifrada con `ENCRYPTION_KEY`, sin lectura
+   para usuarios) y el hash de la llave de la extensión.
+5. **Extensión de Chrome «Kapta · Swayp»**: Stock Swayp → «Descargar
+   extensión» genera un .zip con la URL (`NEXT_PUBLIC_SITE_URL`) y una llave
+   nueva. Se instala en chrome://extensions → «Modo de desarrollador» →
+   «Cargar descomprimida». Envía la sesión a `/api/swayp/session` cada vez que
+   alguien abre ce.swayp.co en ese Chrome.
+6. El cron (`/api/cron/swayp-inventory`, a los :40 de cada hora) sincroniza
+   sólo si pasaron ≥ 20 h desde el último sync bueno y hay credencial (la de
+   API o una sesión vigente); si no, responde `al_dia` o `sin_credencial`.

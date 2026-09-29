@@ -16,6 +16,7 @@ import {
   recordFenixStockMovement,
   searchStockProducts,
   swaypInventoryDryRun,
+  swaypExtensionDescargar,
   swaypInventoryEstado,
   swaypInventorySync,
   type SwaypSyncEstado,
@@ -547,7 +548,8 @@ function DryRunSwayp() {
   // y con doble «Bearer» el panel rechaza (403).
   const limpio = token.trim().replace(/^Bearer\s+/i, "");
   // Sin token pegado, el servidor usa la credencial guardada (la del cron).
-  const puedeLeer = !!limpio || !!estado?.credencialGuardada;
+  const hayGuardada = !!estado && (estado.credencialApi || !!estado.sesion?.vigente);
+  const puedeLeer = !!limpio || hayGuardada;
 
   function cargarEstado() {
     swaypInventoryEstado()
@@ -574,6 +576,7 @@ function DryRunSwayp() {
         return;
       }
       setRes(r);
+      if (r.sesionHasta) cargarEstado();
       // Se marcan de entrada las ciudades donde algo cambiaría.
       setMarcadas(new Set(r.ciudades.filter((c) => c.ajustes.length || c.altas.length).map((c) => c.ciudad)));
     });
@@ -639,18 +642,16 @@ function DryRunSwayp() {
         <div className="border-t border-slate-200">
           {/* Conexión */}
           <div className="space-y-3 px-5 py-4">
-            {estado && <EstadoAutomatico estado={estado} />}
+            {estado && <EstadoAutomatico estado={estado} onCambio={cargarEstado} />}
 
             <label className="block">
               <span className="text-sm font-medium text-slate-800">
-                Token del panel de Swayp{estado?.credencialGuardada && " (opcional)"}
+                Token del panel de Swayp{hayGuardada && " (opcional)"}
               </span>
               <span className="mt-0.5 block text-xs text-slate-500">
-                {estado?.credencialGuardada
-                  ? "Déjalo vacío para usar la credencial guardada de Kapta, la misma del sync automático. "
-                  : ""}
+                {hayGuardada ? "Déjalo vacío para usar la sesión guardada. " : ""}
                 Con tu sesión abierta en Swayp: DevTools → Red → cualquier petición → valor de
-                «Authorization». Dura una hora y no se guarda.
+                «Authorization». Se guarda cifrado hasta que vence, para el sync diario.
               </span>
               <input
                 type="password"
@@ -740,7 +741,13 @@ function DryRunSwayp() {
                   <span className="font-medium text-slate-900">{nf.format(res.totalFilasInventario)} filas</span>{" "}
                   en {res.bodegas.length} bodegas · {bodegasEnSync} se sincronizan
                   {res.conCredencialGuardada && (
-                    <span className="text-slate-500"> · leído con la credencial guardada</span>
+                    <span className="text-slate-500"> · leído con la sesión guardada</span>
+                  )}
+                  {res.sesionHasta && (
+                    <span className="text-slate-500">
+                      {" "}
+                      · token guardado para el sync diario hasta {horaCorta(res.sesionHasta)}
+                    </span>
                   )}
                 </p>
                 <details className="w-full text-xs text-slate-600">
@@ -834,59 +841,148 @@ function haceCuanto(iso: string): string {
  * Si el sync automático está activo y cómo le fue la última vez. Un fallo o una
  * ciudad retenida se ven aquí, en vez de perderse en los logs del cron.
  */
-function EstadoAutomatico({ estado }: { estado: SwaypSyncEstado }) {
+function horaCorta(iso: string): string {
+  const d = new Date(iso);
+  const hoy = new Date();
+  const hora = d.toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === hoy.toDateString()
+    ? `hoy ${hora}`
+    : `${d.toLocaleDateString("es-PE", { day: "numeric", month: "short" })} ${hora}`;
+}
+
+/**
+ * El sync diario: con qué credencial corre, cuándo fue el último, y la
+ * extensión de Chrome que le pasa la sesión de Swayp sin copiar tokens.
+ */
+function EstadoAutomatico({ estado, onCambio }: { estado: SwaypSyncEstado; onCambio: () => void }) {
+  const [descargando, startDescarga] = useTransition();
+  const [errDescarga, setErrDescarga] = useState<string | null>(null);
+  const [recienDescargada, setRecienDescargada] = useState(false);
   const ultima = estado.corridas[0];
   const ultimaAuto = estado.corridas.find((c) => c.source === "cron");
   const retenidas = ultimaAuto?.ok ? (ultimaAuto.resumen.retenidas ?? []) : [];
   const conCambios = (c: typeof ultima) => c?.resumen.ciudades?.length ?? 0;
+  const sesionVigente = estado.sesion?.vigente ? estado.sesion : null;
+
+  function descargar() {
+    if (
+      estado.extension &&
+      !confirm("Se genera una llave nueva: la extensión que ya está instalada deja de funcionar y hay que reemplazarla. ¿Descargar?")
+    )
+      return;
+    setErrDescarga(null);
+    startDescarga(async () => {
+      const r = await swaypExtensionDescargar();
+      if ("error" in r) {
+        setErrDescarga(r.error);
+        return;
+      }
+      const bytes = Uint8Array.from(atob(r.zipBase64), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = r.nombre;
+      a.click();
+      URL.revokeObjectURL(url);
+      setRecienDescargada(true);
+      onCambio();
+    });
+  }
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
-      <p>
-        <span className="font-medium text-slate-800">Sync automático: </span>
-        {estado.credencialGuardada ? (
-          ultimaAuto && !ultimaAuto.ok ? (
-            <span className="text-rose-700">configurado, pero fallando</span>
+    <div className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-600">
+      <div className="px-3 py-2.5">
+        <p>
+          <span className="font-medium text-slate-800">Sync diario: </span>
+          {estado.credencialApi ? (
+            <span className="text-emerald-700">activo con la credencial de API de Swayp</span>
+          ) : sesionVigente ? (
+            <span className="text-emerald-700">
+              activo con la sesión de Swayp{" "}
+              {sesionVigente.source === "extension" ? "que envió la extensión" : "que pegaron aquí"}, vigente
+              hasta {horaCorta(sesionVigente.expiresAt)}
+            </span>
           ) : (
-            <span className="text-emerald-700">activo, cada hora</span>
-          )
-        ) : (
-          <span>
-            apagado. Necesita una credencial de API de Swayp con acceso al inventario; mientras
-            tanto, sincroniza con el botón pegando un token del panel.
-          </span>
-        )}
-      </p>
-      {ultima && (
-        <p className="mt-1">
-          Última sincronización {haceCuanto(ultima.created_at)} ·{" "}
-          {ultima.source === "cron" ? "automática" : "manual"} ·{" "}
-          {ultima.ok ? (
-            conCambios(ultima) ? (
-              `${conCambios(ultima)} ${conCambios(ultima) === 1 ? "ciudad con cambios" : "ciudades con cambios"}`
-            ) : (
-              "sin cambios"
-            )
-          ) : (
-            <span className="text-rose-700">falló</span>
+            <span className="text-amber-800">
+              esperando una sesión de Swayp. Se sincroniza solo la próxima vez que alguien abra Swayp con la
+              extensión, o pegue un token aquí.
+            </span>
           )}
         </p>
-      )}
-      {estado.credencialGuardada && ultimaAuto && !ultimaAuto.ok && (
-        <p className="mt-1 text-rose-700">
-          El último intento automático ({haceCuanto(ultimaAuto.created_at)}) falló: {ultimaAuto.error}
+        <p className="mt-1">
+          {ultima ? (
+            <>
+              Última sincronización {haceCuanto(ultima.created_at)} ·{" "}
+              {ultima.source === "cron" ? "automática" : "manual"} ·{" "}
+              {ultima.ok ? (
+                conCambios(ultima) ? (
+                  `${conCambios(ultima)} ${conCambios(ultima) === 1 ? "ciudad con cambios" : "ciudades con cambios"}`
+                ) : (
+                  "sin cambios"
+                )
+              ) : (
+                <span className="text-rose-700">falló</span>
+              )}
+              . Como mucho una vez cada {estado.horasEntreSyncs} h.
+            </>
+          ) : (
+            `Todavía no hay sincronizaciones registradas. Como mucho una vez cada ${estado.horasEntreSyncs} h.`
+          )}
         </p>
-      )}
-      {retenidas.length > 0 && (
-        <div className="mt-1.5 text-amber-900">
-          <p className="font-medium">El sync automático no aplicó estas ciudades. Léelas y revísalas antes de aplicar:</p>
-          <ul className="mt-0.5 space-y-0.5">
-            {retenidas.map((r) => (
-              <li key={r.ciudad}>
-                <span className="capitalize">{r.ciudad}</span>: {r.motivo}
+        {ultima && !ultima.ok && ultima.source === "cron" && (
+          <p className="mt-1 text-rose-700">El último intento automático falló: {ultima.error}</p>
+        )}
+        {retenidas.length > 0 && (
+          <div className="mt-1.5 text-amber-900">
+            <p className="font-medium">El sync automático no aplicó estas ciudades. Léelas y revísalas antes de aplicar:</p>
+            <ul className="mt-0.5 space-y-0.5">
+              {retenidas.map((r) => (
+                <li key={r.ciudad}>
+                  <span className="capitalize">{r.ciudad}</span>: {r.motivo}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {!estado.credencialApi && (
+        <div className="px-3 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p>
+              <span className="font-medium text-slate-800">Extensión de Chrome: </span>
+              {estado.extension ? (
+                estado.extension.lastUsedAt ? (
+                  `último envío ${haceCuanto(estado.extension.lastUsedAt)}`
+                ) : (
+                  "descargada, todavía no envió nada"
+                )
+              ) : (
+                "sin instalar. Con ella no hay que copiar tokens: basta con abrir Swayp."
+              )}
+            </p>
+            <button
+              type="button"
+              onClick={descargar}
+              disabled={descargando}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+            >
+              {descargando ? "Generando…" : estado.extension ? "Descargar de nuevo" : "Descargar extensión"}
+            </button>
+          </div>
+          {errDescarga && <p className="mt-1 text-rose-700">{errDescarga}</p>}
+          <details className="mt-1.5" open={recienDescargada}>
+            <summary className="cursor-pointer select-none text-slate-500 hover:text-slate-700">Cómo se instala</summary>
+            <ol className="mt-1 list-decimal space-y-0.5 pl-4">
+              <li>Descomprime kapta-swayp.zip en una carpeta que no vayas a borrar.</li>
+              <li>En Chrome abre chrome://extensions y activa «Modo de desarrollador».</li>
+              <li>«Cargar descomprimida» y elige la carpeta kapta-swayp.</li>
+              <li>
+                Abre ce.swayp.co con tu sesión iniciada. Desde ahí, cada vez que alguien use Swayp en ese
+                Chrome, Kapta recibe la sesión y sincroniza el stock si ya toca.
               </li>
-            ))}
-          </ul>
+            </ol>
+          </details>
         </div>
       )}
     </div>
