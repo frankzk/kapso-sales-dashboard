@@ -517,6 +517,32 @@ describe("el final del celular pegado al nombre (BBVA, Plin)", () => {
     expect(r).toMatchObject({ name: "Grupo Gf S.", phoneLastDigits: null, status: "partial" });
   });
 
+  it("#KP136682: la billetera de destino que Plin pega al nombre no es parte de él", () => {
+    // Lectura TEXTUAL de producción: «Grupo Gf S - Yape», sin celular. Salía
+    // «Cuenta receptora no coincide» con el botón de validar apagado.
+    expect(splitRecipientPhoneSuffix("Grupo Gf S - Yape")).toEqual({
+      name: "Grupo Gf S",
+      phoneDigits: null,
+    });
+    expect(splitRecipientPhoneSuffix("Grupo Gf S-plin")).toEqual({
+      name: "Grupo Gf S",
+      phoneDigits: null,
+    });
+    const r = yapeRecipientReadingFromVision({
+      extracted: { recipient_name: "Grupo Gf S - Yape", recipient_phone_last_digits: null },
+    });
+    expect(r).toMatchObject({ name: "Grupo Gf S", status: "partial" });
+  });
+
+  it("quitar la billetera no afloja nada: un nombre ajeno sigue siéndolo", () => {
+    const r = yapeRecipientReadingFromVision({
+      extracted: { recipient_name: "Juan Pérez - Yape", recipient_phone_last_digits: null },
+    });
+    expect(r.status).toBe("mismatch");
+    // Y «Yape» a secas, sin guion, no es un sufijo: no se toca.
+    expect(splitRecipientPhoneSuffix("Yape")).toEqual({ name: "Yape", phoneDigits: null });
+  });
+
   it("no toca un nombre sin separador, ni el enmascarado de Yape", () => {
     for (const leido of ["Tienda 123", "Gr*** Gf*** S*** A*** C***", "Gabriela Rea*", "Grupo GF S.A.C."]) {
       expect(splitRecipientPhoneSuffix(leido)).toEqual({ name: leido, phoneDigits: null });

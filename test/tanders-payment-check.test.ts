@@ -53,6 +53,13 @@ describe("el BBVA pega el final del celular al nombre", () => {
     expect(isExpectedRecipient("Grupo Gf S · 930 555 309 - Yape")).toBe(true);
   });
 
+  it("y la de Plin sin número, con la billetera pegada al nombre", () => {
+    // #KP136682 (comprobante de pedido): «Grupo Gf S - Yape». La misma forma
+    // puede llegar como cobro del courier.
+    expect(isExpectedRecipient("Grupo Gf S - Yape")).toBe(true);
+    expect(isExpectedRecipient("Juan Pérez - Yape")).toBe(false);
+  });
+
   it("los dígitos son el celular: si no terminan en 309, es otra cuenta", () => {
     // Separarlos no es tirarlos. El nombre encaja, pero el celular manda.
     expect(isExpectedRecipient("Grupo gf s •5123")).toBe(false);
