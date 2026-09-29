@@ -119,7 +119,9 @@ import {
 import { env } from "@/lib/env";
 import {
   isSwaypAuthError,
+  listIntegrationProducts,
   solveNovelty,
+  SwaypError,
   swaypAuthErrorHint,
   swaypOptsFromEnv,
 } from "@/lib/swayp";
@@ -2588,6 +2590,83 @@ export async function swaypInventoryEstado(): Promise<SwaypSyncEstado | { error:
     extension,
     horasEntreSyncs: HORAS_ENTRE_SYNCS,
     corridas: (data as SwaypSyncCorrida[]) ?? [],
+  };
+}
+
+/** Lo que devolvió GET /v1/integrations/products, resumido para mirarlo. */
+export interface ProbeProductosIntegracion {
+  ok: boolean;
+  status: number;
+  /** Dónde vino la lista: raíz, o el campo que la contiene («data», «products»…). */
+  lista: string | null;
+  total: number;
+  /** Campos del primer producto, para fijar el mapeo. */
+  campos: string[];
+  /** Los primeros productos (o la respuesta entera si no hay lista), recortado. */
+  muestra: string;
+}
+
+/**
+ * Prueba GET /v1/integrations/products con la credencial de las guías
+ * (`SWAYP_TOKEN`/`SWAYP_EMAIL`). Sólo lee. Si trae el stock por bodega, el
+ * sync diario puede correr con esa credencial, sin extensión ni sesiones.
+ */
+export async function swaypProbarProductosIntegracion(): Promise<ProbeProductosIntegracion | { error: string }> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  const { data: mem } = await sb.from("memberships").select("org_id,role");
+  const esAdmin = ((mem as { org_id: string; role: string }[]) ?? []).some(
+    (m) => m.role === "owner" || m.role === "admin",
+  );
+  if (!esAdmin) return { error: "Solo un administrador puede probar la API de Swayp." };
+  if (!env.swaypEnabled()) return { error: "Kapta no tiene la credencial de Swayp configurada (SWAYP_TOKEN/SWAYP_EMAIL)." };
+
+  let raw: unknown;
+  try {
+    raw = await listIntegrationProducts(swaypOptsFromEnv());
+  } catch (e) {
+    if (e instanceof SwaypError) {
+      return { ok: false, status: e.status, lista: null, total: 0, campos: [], muestra: e.body.slice(0, 1500) };
+    }
+    return { error: e instanceof Error ? e.message : "No se pudo llamar a Swayp." };
+  }
+
+  // La lista puede venir en la raíz o dentro de un campo.
+  let lista: string | null = null;
+  let items: unknown[] | null = null;
+  if (Array.isArray(raw)) {
+    lista = "(raíz)";
+    items = raw;
+  } else if (raw && typeof raw === "object") {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (Array.isArray(v)) {
+        lista = k;
+        items = v;
+        break;
+      }
+      if (v && typeof v === "object") {
+        for (const [k2, v2] of Object.entries(v as Record<string, unknown>)) {
+          if (Array.isArray(v2)) {
+            lista = `${k}.${k2}`;
+            items = v2;
+            break;
+          }
+        }
+        if (items) break;
+      }
+    }
+  }
+  const primero = items?.[0];
+  return {
+    ok: true,
+    status: 200,
+    lista,
+    total: items?.length ?? 0,
+    campos: primero && typeof primero === "object" ? Object.keys(primero as object) : [],
+    muestra: JSON.stringify(items ? items.slice(0, 3) : raw, null, 2).slice(0, 6000),
   };
 }
 
