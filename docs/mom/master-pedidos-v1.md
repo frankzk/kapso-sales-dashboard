@@ -6031,8 +6031,9 @@ ellos frenaban siete rutas del 23 al 26/09. Ahora:
 - La entrega sin foto y el Yape sin captura se siguen exigiendo siempre, sea
   cual sea la fecha. El rechazo exento se sigue pagando al motorizado y se
   sigue cobrando a la tienda como antes; solo deja de pedirse su foto.
-- En la tabla de la ruta, ese rechazo dice «Sin foto · no se exige (antes del
-  28/09)» en vez de «Falta foto».
+- En la tabla de la ruta, ese rechazo lleva una cámara tachada con el aviso
+  «Sin foto · no se exige (antes del 28/09)» en vez del ícono ámbar de «Falta
+  la foto».
 
 ### 29.8 Tarifas por distrito y comisión Yape
 
@@ -6699,6 +6700,17 @@ una parada reportada abre el formulario con ese punto elegido. La ganancia de
 un no entregado que no es rechazo dice «No se paga · solo entrega o rechazo»,
 no «Sin tarifa»: ese punto no se paga con o sin tarifa (§29.10); «Sin tarifa»
 queda para la entrega o el rechazo sin tarifa personal vigente (28-09-2026).
+
+**Dos líneas por fila, como máximo (29-09-2026, pedido de Frankz).** La tabla
+tiene anchos fijos por columna y cada fila ocupa a lo sumo dos líneas; lo que
+no cabe se recorta y se lee entero en el tooltip. El resultado de un no
+entregado se lee por su motivo, en rojo («Rechazó el pedido», «No
+contesta»…), con la devolución y la nota debajo. El respaldo va como íconos
+sin texto, con su nombre en el tooltip: cámara y comprobante para abrir la
+foto o la captura, en ámbar lo que falta, y una cámara tachada para el
+rechazo que no la exige (§29.7). «+ adicional» es un botón «+» que aparece al
+pasar por la fila (siempre visible en pantallas táctiles), y el aviso de
+tarifa del distrito es un ícono ámbar con el texto en el tooltip.
 
 **Qué impide terminar la ruta, a la vista (28-09-2026).** Antes el
 coordinador pulsaba «Terminar ruta operativa», leía UN error («Grupo GF:

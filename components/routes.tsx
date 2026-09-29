@@ -30,7 +30,7 @@ import { RISK_LABELS, type RiskAssessment } from "@/lib/retries";
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import type { RiderRow } from "@/lib/settlements-access";
 import { Hint } from "@/components/hint";
-import { IconAlert, IconCamera, IconCheckCircle, IconClock, IconReceipt, IconTruck } from "@/components/icons";
+import { IconAlert, IconCamera, IconCameraOff, IconCheckCircle, IconClock, IconPlus, IconReceipt, IconTruck } from "@/components/icons";
 import { RIDER_PAY_BALANCE_HINT, RIDER_RATE_FORM_ID, RiderPayPanel, riderPayBalanceLabel } from "@/components/rider-pay-panel";
 import { checkStopRate, stopEarnings } from "@/lib/rider-pay";
 import type { RiderPayDetail } from "@/lib/rider-pay";
@@ -726,9 +726,20 @@ function RouteDetail({
         </ul>
 
         {/* Tabla única de paradas: en el panel cabe entera; en pantallas
-            medianas se desplaza en horizontal con el cliente fijo a la izquierda. */}
+            medianas se desplaza en horizontal con el cliente fijo a la
+            izquierda. Anchos fijos y dos líneas por fila como máximo: lo que no
+            cabe se recorta y se lee entero al pasar el cursor. */}
         <div className="hidden overflow-x-auto sm:block">
-          <table className="w-full min-w-[840px] text-sm">
+          <table className="w-full min-w-[840px] table-fixed text-sm">
+            <colgroup>
+              <col className="w-[17%]" />
+              <col className="w-[13%]" />
+              <col className="w-[12%]" />
+              <col className="w-[20%]" />
+              <col className="w-[20%]" />
+              <col className="w-[18%]" />
+              {planning && <col className="w-16" />}
+            </colgroup>
             <thead className="border-b border-slate-200 text-left text-xs text-slate-500">
               <tr>
                 <th className="sticky left-0 z-[1] bg-white px-2.5 py-2 font-medium">Cliente</th>
@@ -743,33 +754,33 @@ function RouteDetail({
             <tbody>
               {shown.map((s) => (
                 <tr key={s.id} className="group border-b border-slate-100 align-top hover:bg-slate-50">
-                  <td className="sticky left-0 z-[1] bg-white px-2.5 py-2.5 text-slate-800 group-hover:bg-slate-50">
-                    <div className="flex min-w-[8rem] gap-2">
+                  <td className="sticky left-0 z-[1] bg-white px-2.5 py-2 text-slate-800 group-hover:bg-slate-50">
+                    <div className="flex gap-2">
                       <span className="w-4 shrink-0 text-right text-xs leading-5 tabular-nums text-slate-400">{s.seq}</span>
-                      <span>{s.order?.customer_name ?? "—"}</span>
+                      <span className="line-clamp-2 min-w-0 leading-5" title={s.order?.customer_name ?? undefined}>{s.order?.customer_name ?? "—"}</span>
                     </div>
                   </td>
-                  <td className="whitespace-nowrap px-2.5 py-2.5">
-                    {s.order?.name ? <OrderLink orderId={s.order_id} className="text-slate-700 underline decoration-slate-300 underline-offset-2 hover:text-brand-700" title="Abrir la ficha del pedido">{s.order.name}</OrderLink> : "—"}
-                    <p className="text-xs tabular-nums text-slate-500">{s.order?.total == null ? "—" : money(s.order.total)}</p>
+                  <td className="px-2.5 py-2">
+                    <p className="truncate leading-5">
+                      {s.order?.name ? <OrderLink orderId={s.order_id} className="text-slate-700 underline decoration-slate-300 underline-offset-2 hover:text-brand-700" title="Abrir la ficha del pedido">{s.order.name}</OrderLink> : "—"}
+                    </p>
+                    <p className="text-xs leading-4 tabular-nums text-slate-500">{s.order?.total == null ? "—" : money(s.order.total)}</p>
                   </td>
-                  <td className="px-2.5 py-2.5">
-                    <p className="min-w-[6rem] text-slate-700">{s.order?.district ?? "—"}</p>
-                    <p className="text-xs text-slate-500">{storeName(s.store_id)}</p>
+                  <td className="px-2.5 py-2">
+                    <p className="truncate leading-5 text-slate-700" title={s.order?.district ?? undefined}>{s.order?.district ?? "—"}</p>
+                    <p className="truncate text-xs leading-4 text-slate-500">{storeName(s.store_id)}</p>
                   </td>
-                  <td className="px-2.5 py-2.5">
-                    <div className="min-w-[7.5rem]"><StopResult stop={s} /></div>
+                  <td className="px-2.5 py-2">
+                    <StopResult stop={s} />
                   </td>
-                  <td className="px-2.5 py-2.5">
-                    <div className="min-w-[10rem]">
-                      <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} exempt={exemptRejection(s)} />
-                    </div>
+                  <td className="px-2.5 py-2">
+                    <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} exempt={exemptRejection(s)} />
                   </td>
-                  <td className="px-2.5 py-2.5 text-right">
+                  <td className="px-2.5 py-2 text-right">
                     <StopEarnings stop={s} row={payRow.get(s.id)} pay={pay} onExtra={canExtra ? onExtra : undefined} />
                   </td>
                   {planning && (
-                    <td className="px-2.5 py-2.5 text-right">
+                    <td className="px-2.5 py-2 text-right">
                       <button
                         disabled={disabled}
                         onClick={() => onRun(() => removeStop(s.id))}
@@ -875,34 +886,51 @@ function RouteDetail({
   );
 }
 
-/** Resultado de la parada: entregada, no entregada (con motivo) o sin reportar. */
+/** Resultado de la parada en dos líneas: qué pasó y, debajo, la devolución y la nota. */
 function StopResult({ stop: s }: { stop: StopWithOrder }) {
+  const reason = s.status === "no_entregado" ? reasonLabel(s.outcome_reason) : null;
+  // Todo no entregado vuelve físicamente a la oficina (0188/0189).
+  const returnState = s.status === "no_entregado" && s.dispatch_manifest_id ? (s.returned_at ? "devuelto" : "por_devolver") : null;
+  const returnedAt = s.returned_at ? new Date(s.returned_at) : null;
   return (
-    <div className="space-y-1">
-      {s.status === "pendiente" ? (
-        <span className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900">Sin reportar</span>
-      ) : s.status === "entregado" ? (
-        <p className="text-xs font-semibold text-emerald-700">Entregado</p>
-      ) : (
-        <div className="text-xs">
-          <p className="font-semibold text-red-700">No entregado</p>
-          <p className="text-slate-600">{reasonLabel(s.outcome_reason)}</p>
-        </div>
+    <div className="min-w-0 text-xs">
+      {/* Un no entregado se lee por su motivo, en rojo: «Rechazó el pedido»,
+          «No contesta»… El rojo ya dice que no se entregó. */}
+      <p className="truncate leading-5" title={reason ? `No entregado · ${reason}` : undefined}>
+        {s.status === "pendiente" ? (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-900">Sin reportar</span>
+        ) : s.status === "entregado" ? (
+          <span className="font-semibold text-emerald-700">Entregado</span>
+        ) : (
+          <span className="font-semibold text-red-700"><span className="sr-only">No entregado: </span>{reason}</span>
+        )}
+      </p>
+      {(returnState || s.note) && (
+        <p className="flex min-w-0 items-center gap-1.5 leading-4">
+          {returnState === "por_devolver" && (
+            <span className="shrink-0 whitespace-nowrap rounded-full bg-red-100 px-1.5 text-[11px] font-semibold text-red-800">Por devolver</span>
+          )}
+          {returnState === "devuelto" && returnedAt && (
+            <span
+              className="shrink-0 whitespace-nowrap rounded-full bg-emerald-100 px-1.5 text-[11px] font-semibold text-emerald-800"
+              title={`Recibido en oficina el ${returnedAt.toLocaleString("es-PE", { timeZone: "America/Lima" })}`}
+            >
+              Devuelto · {returnedAt.toLocaleString("es-PE", { timeZone: "America/Lima", day: "2-digit", month: "2-digit" })}
+            </span>
+          )}
+          {s.note && <span className="min-w-0 truncate text-slate-500" title={s.note}>{s.note}</span>}
+        </p>
       )}
-      {/* Todo no entregado vuelve físicamente a la oficina (0188/0189). */}
-      {s.status === "no_entregado" && s.dispatch_manifest_id && (
-        s.returned_at
-          ? <p><span className="whitespace-nowrap rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800" title={`Recibido en oficina el ${new Date(s.returned_at).toLocaleString("es-PE", { timeZone: "America/Lima" })}`}>Devuelto · {new Date(s.returned_at).toLocaleString("es-PE", { timeZone: "America/Lima", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></p>
-          : <p><span className="whitespace-nowrap rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-800">Por devolver</span></p>
-      )}
-      {s.note && <p className="text-xs text-slate-500">{s.note}</p>}
     </div>
   );
 }
 
+const METHOD_SHORT: Record<string, string> = { efectivo: "Efectivo", yape: "Yape", pos: "POS", sin_cobro: "Sin cobro" };
+
 /**
- * Cobro y respaldo: cómo y cuánto cobró, y su foto y comprobante (cada uno abre
- * en grande en otra pestaña, GET /api/reparto/foto), o lo que falta.
+ * Cobro y respaldo en una línea: cómo y cuánto cobró, y sus respaldos como
+ * íconos (cada uno abre en grande en otra pestaña, GET /api/reparto/foto), o
+ * lo que falta en ámbar. El nombre de cada ícono va en su tooltip.
  */
 function StopCollection({ stop: s, needsPhoto, needsVoucher, exempt = false }: {
   stop: StopWithOrder;
@@ -911,46 +939,48 @@ function StopCollection({ stop: s, needsPhoto, needsVoucher, exempt = false }: {
   /** Rechazo sin foto de una ruta anterior al 28/09: no se exige (MOM §29.7). */
   exempt?: boolean;
 }) {
+  const voucherLabel = s.payment_method === "yape" ? "Ver la captura del Yape" : "Ver el comprobante de pago";
   return (
-    <div className="space-y-1.5">
-      <p className="whitespace-nowrap text-slate-700">
-        {s.status === "entregado" ? <>{methodLabel(s.payment_method)} · <span className="tabular-nums">{money(s.collected_amount)}</span></> : <span className="text-slate-400">—</span>}
+    <div className="flex min-w-0 items-center gap-2">
+      <p className="min-w-0 truncate leading-5 text-slate-700">
+        {s.status === "entregado"
+          ? <><span className="text-xs text-slate-500">{METHOD_SHORT[s.payment_method ?? ""] ?? methodLabel(s.payment_method)}</span> <span className="tabular-nums">{money(s.collected_amount)}</span></>
+          : <span className="text-slate-400">—</span>}
       </p>
-      {(s.photo_path || s.voucher_path || needsPhoto || needsVoucher) && (
-        <div className="flex flex-wrap items-center gap-1">
-          {s.photo_path && (
-            <a href={`/api/reparto/foto?path=${encodeURIComponent(s.photo_path)}`} target="_blank" rel="noreferrer" title="Ver la foto en otra pestaña" className={EVIDENCE_LINK}>
-              <IconCamera aria-hidden="true" className="h-3.5 w-3.5" />Foto
-            </a>
-          )}
-          {s.voucher_path && (
-            <a href={`/api/reparto/foto?path=${encodeURIComponent(s.voucher_path)}`} target="_blank" rel="noreferrer" title="Ver el comprobante de pago en otra pestaña" className={EVIDENCE_LINK}>
-              <IconReceipt aria-hidden="true" className="h-3.5 w-3.5" />{s.payment_method === "yape" ? "Captura" : "Voucher"}
-            </a>
-          )}
-          {(needsPhoto || needsVoucher) && (
-            <span className={MISSING_CHIP}>
-              {needsPhoto ? <IconCamera aria-hidden="true" className="h-3.5 w-3.5" /> : <IconReceipt aria-hidden="true" className="h-3.5 w-3.5" />}
-              {needsPhoto && needsVoucher ? "Falta foto y captura" : needsPhoto ? "Falta foto" : "Falta captura"}
-            </span>
-          )}
-        </div>
-      )}
-      {exempt && (
-        <p className="text-xs text-slate-500" title="Hasta el 27/09 el teléfono no pedía foto al rechazar: esos rechazos no la exigen para cerrar ni para pagar (MOM §29.7).">
-          Sin foto · no se exige (antes del 28/09)
-        </p>
-      )}
+      <span className="flex shrink-0 items-center gap-1">
+        {s.photo_path ? (
+          <a href={`/api/reparto/foto?path=${encodeURIComponent(s.photo_path)}`} target="_blank" rel="noreferrer" title="Ver la foto" aria-label="Ver la foto" className={EVIDENCE_ICON}>
+            <IconCamera aria-hidden="true" className="h-3.5 w-3.5" />
+          </a>
+        ) : needsPhoto ? (
+          <span role="img" title="Falta la foto" aria-label="Falta la foto" className={MISSING_ICON}>
+            <IconCamera aria-hidden="true" className="h-3.5 w-3.5" />
+          </span>
+        ) : exempt ? (
+          <span role="img" title="Sin foto · no se exige (antes del 28/09)" aria-label="Sin foto · no se exige (antes del 28/09)" className={EXEMPT_ICON}>
+            <IconCameraOff aria-hidden="true" className="h-3.5 w-3.5" />
+          </span>
+        ) : null}
+        {s.voucher_path ? (
+          <a href={`/api/reparto/foto?path=${encodeURIComponent(s.voucher_path)}`} target="_blank" rel="noreferrer" title={voucherLabel} aria-label={voucherLabel} className={EVIDENCE_ICON}>
+            <IconReceipt aria-hidden="true" className="h-3.5 w-3.5" />
+          </a>
+        ) : needsVoucher ? (
+          <span role="img" title="Falta la captura del Yape" aria-label="Falta la captura del Yape" className={MISSING_ICON}>
+            <IconReceipt aria-hidden="true" className="h-3.5 w-3.5" />
+          </span>
+        ) : null}
+      </span>
     </div>
   );
 }
 
 /**
- * Ganancia del motorizado por el punto y de dónde sale: tarifa (del distrito o
- * general) más adicional, y aviso si no cuadra con las tarifas registradas
- * (MOM §29.9). Solo existe con la parada reportada (entregada o rechazada):
- * antes no es S/ 0,00, es «todavía no». Sin tarifa personal vigente se dice,
- * para que se configure.
+ * Ganancia del motorizado por el punto, en dos líneas: el importe (o por qué no
+ * lo hay) y de dónde sale. Qué se muestra lo decide `stopEarnings`
+ * (lib/rider-pay.ts): un no entregado que no es rechazo dice «No se paga», no
+ * «Sin tarifa» (MOM §29.10). El aviso de tarifa (§29.9) va como ícono y
+ * «+ adicional» como botón que aparece al pasar por la fila.
  */
 function StopEarnings({ stop: s, row: pr, pay, onExtra }: {
   stop: StopWithOrder;
@@ -960,39 +990,51 @@ function StopEarnings({ stop: s, row: pr, pay, onExtra }: {
   onExtra?: (stopId: string) => void;
 }) {
   const check = pr && pay ? checkStopRate(pr, pay.rates, pay.snapshot.day) : null;
-  // Qué se muestra lo decide `stopEarnings` (lib/rider-pay.ts): un no entregado
-  // que no es rechazo dice «No se paga», no «Sin tarifa» (MOM §29.10).
   const state = pr ? stopEarnings(s, pr) : null;
   const earned = state?.kind === "ganada" ? state.base : null;
+  const extra = pr?.extra ?? 0;
   const noRateTitle = "Configura la tarifa del motorizado en «Tarifa de …», abajo";
+  const source = check?.source ? (check.source === "distrito" ? "distrito" : "general") : null;
+  const detail =
+    earned !== null ? (extra ? `+ ${money(extra)} adicional` : `Tarifa ${source ?? ""}`.trim())
+    : state?.kind === "no_se_paga" ? (extra ? "el punto no se paga" : "solo entrega o rechazo")
+    : state?.kind === "sin_tarifa" ? (extra ? `+ ${money(extra)} adicional` : null)
+    : state?.kind === "pendiente" ? (state.rate != null ? `${money(state.rate)} al reportar` : "Sin tarifa")
+    : null;
+  const detailTitle = earned !== null ? `Tarifa ${money(earned)}${source ? ` (${source})` : ""}${extra ? ` + adicional ${money(extra)}` : ""}` : undefined;
   return (
-    <div className="ml-auto min-w-[6.5rem] shrink-0 space-y-0.5 text-right">
-      {!pr || !state ? <span className="text-slate-400">—</span>
-        : earned !== null ? <p className="font-semibold tabular-nums text-slate-900">{money(earned + pr.extra)}</p>
-        : state.kind === "no_se_paga"
-          ? (pr.extra ? <p className="font-semibold tabular-nums text-slate-900">{money(pr.extra)}</p> : <p className="text-xs font-medium text-slate-600">No se paga</p>)
-        : state.kind === "sin_tarifa" ? <p className="text-xs font-medium text-amber-800" title={noRateTitle}>Sin tarifa</p>
-        : <span className="text-slate-400">—</span>}
-      {pr && earned !== null && (
-        <p className="whitespace-nowrap text-xs tabular-nums text-slate-500">
-          Tarifa {money(earned)}{check?.source ? ` · ${check.source === "distrito" ? "distrito" : "general"}` : ""}
+    <div className="min-w-0 text-right">
+      <div className="flex items-center justify-end gap-1.5 leading-5">
+        {check?.warning && state?.kind !== "no_se_paga" && (
+          <span role="img" title={check.warning} aria-label={check.warning} className="shrink-0 text-amber-600">
+            <IconAlert aria-hidden="true" className="h-3.5 w-3.5" />
+          </span>
+        )}
+        {onExtra && s.status !== "pendiente" && (
+          <button
+            type="button"
+            onClick={() => onExtra(s.id)}
+            title="Aprobar un adicional para este punto"
+            aria-label="Aprobar un adicional para este punto"
+            className="inline-flex h-5 min-h-0 w-5 shrink-0 items-center justify-center rounded text-brand-700 opacity-0 hover:bg-brand-50 focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
+          >
+            <IconPlus aria-hidden="true" className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {!pr || !state ? <span className="text-slate-400">—</span>
+          : earned !== null ? <span className="font-semibold tabular-nums text-slate-900">{money(earned + extra)}</span>
+          : state.kind === "no_se_paga"
+            ? (extra ? <span className="font-semibold tabular-nums text-slate-900">{money(extra)}</span> : <span className="text-xs font-medium text-slate-600">No se paga</span>)
+          : state.kind === "sin_tarifa" ? <span className="text-xs font-medium text-amber-800" title={noRateTitle}>Sin tarifa</span>
+          : <span className="text-slate-400">—</span>}
+      </div>
+      {detail && (
+        <p
+          className={cn("truncate text-xs leading-4 tabular-nums", state?.kind === "pendiente" && state.rate == null ? "font-medium text-amber-800" : "text-slate-500")}
+          title={state?.kind === "pendiente" && state.rate == null ? noRateTitle : detailTitle}
+        >
+          {detail}
         </p>
-      )}
-      {state?.kind === "no_se_paga" && (
-        <p className={cn("text-xs text-slate-500", !pr?.extra && "whitespace-nowrap")}>{pr?.extra ? "El punto no se paga: " : ""}solo entrega o rechazo</p>
-      )}
-      {state?.kind === "pendiente" && (state.rate != null
-        ? <p className="whitespace-nowrap text-xs tabular-nums text-slate-500">{money(state.rate)} al reportar</p>
-        : <p className="text-xs font-medium text-amber-800" title={noRateTitle}>Sin tarifa</p>)}
-      {pr && pr.extra ? <p className="whitespace-nowrap text-xs tabular-nums text-slate-500">Adicional {money(pr.extra)}</p> : null}
-      {check?.warning && state?.kind !== "no_se_paga" && (
-        <p className="flex items-start justify-end gap-1 text-left text-xs leading-snug text-amber-800" title={check.warning}>
-          <IconAlert aria-hidden="true" className="mt-px h-3.5 w-3.5 shrink-0" />
-          <span className="max-w-[13rem]">{check.warning}</span>
-        </p>
-      )}
-      {onExtra && s.status !== "pendiente" && (
-        <button type="button" onClick={() => onExtra(s.id)} className="min-h-0 text-xs font-medium text-brand-700 underline-offset-2 hover:underline" title="Aprobar un adicional para este punto">+ adicional</button>
       )}
     </div>
   );
@@ -1008,9 +1050,11 @@ const BTN_PRIMARY = cn(BTN, "bg-slate-900 font-semibold text-white hover:bg-slat
 const BTN_SECONDARY = cn(BTN, "border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50");
 const BTN_DANGER = cn(BTN, "bg-red-600 font-semibold text-white hover:bg-red-700");
 const BTN_LINK = "min-h-0 text-sm font-medium text-brand-700 underline decoration-brand-200 underline-offset-2 hover:decoration-brand-700 disabled:opacity-50";
-// Respaldo de la parada: enlace a la foto o al comprobante, o lo que falta.
-const EVIDENCE_LINK = "inline-flex min-h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-1.5 text-xs font-medium text-slate-600 hover:border-slate-300 hover:text-slate-900 pointer-coarse:min-h-11";
-const MISSING_CHIP = "inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-amber-100 px-1.5 py-1 text-xs font-semibold text-amber-900";
+// Respaldo de la parada como íconos: enlace a la foto o al comprobante, lo que
+// falta en ámbar y la foto que no se exige, tachada.
+const EVIDENCE_ICON = "inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 pointer-coarse:h-10 pointer-coarse:w-10";
+const MISSING_ICON = "inline-flex h-6 w-6 items-center justify-center rounded-md bg-amber-100 text-amber-800 pointer-coarse:h-10 pointer-coarse:w-10";
+const EXEMPT_ICON = "inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-500";
 
 function Tile({ label, value, sub, hint, highlight, warn }: { label: string; value: string; sub?: string; hint?: string; highlight?: boolean; warn?: boolean }) {
   return (
