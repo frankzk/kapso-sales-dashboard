@@ -16,12 +16,14 @@ import {
   recordFenixStockMovement,
   searchStockProducts,
   swaypInventoryDryRun,
+  swaypInventoryEstado,
   swaypInventorySync,
+  type SwaypSyncEstado,
   upsertFenixStock,
   type DryRunResult,
-  type SyncResult,
 } from "@/app/dashboard/envios/actions";
 import { STOCK_MOVEMENT_LABEL, type StockMovementKind } from "@/lib/fenix-ledger";
+import type { SyncResult } from "@/lib/swayp-inventory-sync";
 
 type ProductResult = Awaited<ReturnType<typeof searchStockProducts>>[number];
 
@@ -539,13 +541,26 @@ function DryRunSwayp() {
   const [diag, setDiag] = useState<
     { label: string; host: string; method: string; status: number; ok: boolean; body: string }[] | null
   >(null);
+  const [estado, setEstado] = useState<SwaypSyncEstado | null>(null);
 
   // Si pegan «Bearer <token>», se le quita el prefijo: el código ya lo agrega,
   // y con doble «Bearer» el panel rechaza (403).
   const limpio = token.trim().replace(/^Bearer\s+/i, "");
+  // Sin token pegado, el servidor usa la credencial guardada (la del cron).
+  const puedeLeer = !!limpio || !!estado?.credencialGuardada;
+
+  function cargarEstado() {
+    swaypInventoryEstado()
+      .then((r) => setEstado("error" in r ? null : r))
+      .catch(() => setEstado(null));
+  }
+
+  useEffect(() => {
+    if (open && !estado) cargarEstado();
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function leer() {
-    if (!limpio) return;
+    if (!puedeLeer) return;
     setErr(null);
     setAplicado(null);
     setRes(null);
@@ -565,7 +580,7 @@ function DryRunSwayp() {
   }
 
   function aplicar() {
-    if (!limpio || !marcadas.size) return;
+    if (!puedeLeer || !marcadas.size) return;
     const lista = [...marcadas].map(capitalizar).join(", ");
     if (
       !confirm(
@@ -584,6 +599,7 @@ function DryRunSwayp() {
       setAplicado(r);
       // El diff ya no vale: lo que mostraba acaba de aplicarse.
       setRes(null);
+      cargarEstado();
       router.refresh();
     });
   }
@@ -623,9 +639,16 @@ function DryRunSwayp() {
         <div className="border-t border-slate-200">
           {/* Conexión */}
           <div className="space-y-3 px-5 py-4">
+            {estado && <EstadoAutomatico estado={estado} />}
+
             <label className="block">
-              <span className="text-sm font-medium text-slate-800">Token del panel de Swayp</span>
+              <span className="text-sm font-medium text-slate-800">
+                Token del panel de Swayp{estado?.credencialGuardada && " (opcional)"}
+              </span>
               <span className="mt-0.5 block text-xs text-slate-500">
+                {estado?.credencialGuardada
+                  ? "Déjalo vacío para usar la credencial guardada de Kapta, la misma del sync automático. "
+                  : ""}
                 Con tu sesión abierta en Swayp: DevTools → Red → cualquier petición → valor de
                 «Authorization». Dura una hora y no se guarda.
               </span>
@@ -675,7 +698,7 @@ function DryRunSwayp() {
             <div className="flex flex-wrap items-center gap-3">
               <button
                 onClick={leer}
-                disabled={pending || !limpio}
+                disabled={pending || !puedeLeer}
                 className="min-h-10 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
               >
                 {leyendo ? "Leyendo Swayp…" : res ? "Volver a leer" : "Leer inventario"}
@@ -716,6 +739,9 @@ function DryRunSwayp() {
                 <p className="text-sm text-slate-700">
                   <span className="font-medium text-slate-900">{nf.format(res.totalFilasInventario)} filas</span>{" "}
                   en {res.bodegas.length} bodegas · {bodegasEnSync} se sincronizan
+                  {res.conCredencialGuardada && (
+                    <span className="text-slate-500"> · leído con la credencial guardada</span>
+                  )}
                 </p>
                 <details className="w-full text-xs text-slate-600">
                   <summary className="cursor-pointer select-none text-slate-500 hover:text-slate-700">
@@ -765,7 +791,7 @@ function DryRunSwayp() {
               <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4">
                 <button
                   onClick={aplicar}
-                  disabled={pending || !marcadas.size || !limpio}
+                  disabled={pending || !marcadas.size || !puedeLeer}
                   className="min-h-10 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
                 >
                   {aplicando
@@ -790,6 +816,73 @@ function DryRunSwayp() {
         </div>
       )}
     </Card>
+  );
+}
+
+/** «hace 12 min», «hace 3 h», «hace 2 días». */
+function haceCuanto(iso: string): string {
+  const min = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (min < 1) return "hace un momento";
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `hace ${h} h`;
+  const d = Math.round(h / 24);
+  return `hace ${d} ${d === 1 ? "día" : "días"}`;
+}
+
+/**
+ * Si el sync automático está activo y cómo le fue la última vez. Un fallo o una
+ * ciudad retenida se ven aquí, en vez de perderse en los logs del cron.
+ */
+function EstadoAutomatico({ estado }: { estado: SwaypSyncEstado }) {
+  const ultima = estado.corridas[0];
+  const ultimaAuto = estado.corridas.find((c) => c.source === "cron");
+  const retenidas = ultimaAuto?.ok ? (ultimaAuto.resumen.retenidas ?? []) : [];
+  const conCambios = (c: typeof ultima) => c?.resumen.ciudades?.length ?? 0;
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
+      <p>
+        <span className="font-medium text-slate-800">Sync automático: </span>
+        {estado.credencialGuardada ? (
+          <span className="text-emerald-700">activo, cada hora</span>
+        ) : (
+          <span>sin configurar. Mientras tanto, sincroniza con el botón.</span>
+        )}
+      </p>
+      {ultima && (
+        <p className="mt-1">
+          Última sincronización {haceCuanto(ultima.created_at)} ·{" "}
+          {ultima.source === "cron" ? "automática" : "manual"} ·{" "}
+          {ultima.ok ? (
+            conCambios(ultima) ? (
+              `${conCambios(ultima)} ${conCambios(ultima) === 1 ? "ciudad con cambios" : "ciudades con cambios"}`
+            ) : (
+              "sin cambios"
+            )
+          ) : (
+            <span className="text-rose-700">falló</span>
+          )}
+        </p>
+      )}
+      {ultimaAuto && !ultimaAuto.ok && (
+        <p className="mt-1 text-rose-700">
+          El último intento automático ({haceCuanto(ultimaAuto.created_at)}) falló: {ultimaAuto.error}
+        </p>
+      )}
+      {retenidas.length > 0 && (
+        <div className="mt-1.5 text-amber-900">
+          <p className="font-medium">El sync automático no aplicó estas ciudades. Léelas y revísalas antes de aplicar:</p>
+          <ul className="mt-0.5 space-y-0.5">
+            {retenidas.map((r) => (
+              <li key={r.ciudad}>
+                <span className="capitalize">{r.ciudad}</span>: {r.motivo}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }
 

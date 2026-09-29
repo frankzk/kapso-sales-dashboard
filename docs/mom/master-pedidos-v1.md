@@ -2578,10 +2578,28 @@ las bodegas**, en vez de un archivo por bodega. Las reglas de arriba no cambian
 - **Una ciudad que no vino en la lectura no se vacía**, y una lectura vacía
   (0 filas) no se aplica: es un fallo de Swayp, no un inventario en cero.
 - Si dos bodegas caen en la misma ciudad, sus unidades **se suman**.
-- **El token es el del login del panel** (~1 h de vida), se pega a mano y no se
-  guarda. Automatizar el sync (cron) necesita guardar una credencial de la
-  organización —una sola, Aurela y Kenku comparten inventario en Swayp—, y es
-  una decisión aparte.
+- **Con el botón, el token se pega a mano** (el del login del panel, ~1 h de
+  vida) y no se guarda; o se deja vacío y se usa la credencial guardada.
+
+**Sync automático (desde el 29-09-2026).** Corre cada hora (`/api/cron/swayp-inventory`)
+sobre todas las ciudades del sync, con las mismas reglas y además:
+
+- **Credencial de la organización, no de una persona**: una sola, porque Aurela
+  y Kenku comparten inventario en Swayp. Es la de integración de Swayp que Kapta
+  ya usa para las guías, o una exclusiva de inventario si Swayp la da. **El login
+  del panel no se automatiza**: exige reCAPTCHA en cada inicio de sesión, que
+  existe justamente para impedirlo.
+- **Retiene la ciudad que quedaría vaciada** y no la aplica: si Swayp no trae
+  ninguna unidad para una ciudad con stock, o si dejaría en 0 más de la mitad
+  de sus productos con stock (y al menos 5). Es más probable una lectura rota
+  que una bodega vaciada de un día para otro. La ciudad retenida se muestra en
+  Stock Swayp para que una persona la lea y la aplique con el botón.
+- **Cada corrida queda registrada** (`swayp_inventory_sync_runs`), automática o
+  manual, con su resultado o su error. Stock Swayp muestra la última y avisa si
+  el último intento automático falló. Un cron que falla en silencio es peor que
+  el Excel.
+- En el kardex, los movimientos del cron dicen «Swayp (API, automático)» y no
+  tienen usuario.
 - El contrato es **reversado del panel, no oficial**: si Swayp lo cambia, la
   lectura falla con el status y la respuesta a la vista, y el Excel sigue como
   respaldo.
@@ -6453,6 +6471,25 @@ porque leía `shipments.dispatched_at`. El filtro «Solo con salida previa» del
 picker se retira: es el apartado «Ya salieron». Lógica pura en
 `lib/dispatch-day.ts`, probada en `test/dispatch-day.test.ts` y
 `test/despacho-apartados-programados.test.ts`.
+
+**Lo cerrado no se asigna, y quitar de la caja devuelve a «por asignar»
+(29-09-2026).** Los «tomados sin caja» salen de las solicitudes de Grupo GF,
+no de las etapas de admisión, así que un pedido anulado con su solicitud
+aceptada seguía con casilla (#KP136160, #KP136100, #KP136653). Un tomado
+cuyo pedido está en **Por cerrar** o **Finalizado** (`takenIsAssignable`) ya
+no es asignable: pasa a seguimiento, y el servidor lo rechaza también al
+asignar por lista o por QR. **La solicitud no se cancela sola al cerrarse el
+pedido**: el MOM no lo pide (§29.6 separa la cancelación logística del pedido
+Shopify) y un pedido se puede reabrir; si vuelve a una etapa de admisión,
+vuelve a la cola sin tocar nada. Cancelarla sigue siendo un acto explícito.
+
+«Quitar» un paquete de una caja sin custodia dejaba la solicitud en
+`scheduled` sin caja (#KP136039, #KP136010, #KP135989, #KP137239,
+#KP137430). Ahora vuelve a `accepted` con evento `route_removed` en
+`logistics_request_events`, como ya hacían el retiro en custodia (0185) y el
+«no lo recojo» (0182); 0200 reparó las cinco con `route_removed_repair`. Al
+revés, mover un paquete a la caja de otro motorizado lo deja en `scheduled`:
+en custodia, el retiro lo devolvía a `accepted` dentro de la caja nueva.
 
 **El gesto único.** Escanear o fotografiar es un solo componente
 (`ScanAction`) y el contexto lo fija la pantalla, nunca el usuario:

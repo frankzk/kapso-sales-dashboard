@@ -43,6 +43,7 @@ import {
 } from "@/lib/shipments";
 import { getStoreCreds } from "@/lib/ingest";
 import { getAccessibleStores } from "@/lib/access";
+import { ElegibilidadError, recalcularElegibilidadFenix } from "@/lib/fenix-eligibility";
 import {
   fetchOrderById,
   pickStoresForOrderQuery,
@@ -83,21 +84,25 @@ import {
   leerExcelSwayp,
   planearImportacion,
   resumenDelPlan,
-  type EntradaSwayp,
   type FilaStock,
   type PlanImportacion,
 } from "@/lib/swayp-inventario";
 import {
-  diagnoseInventoryAccess,
-  fetchInventoryByCity,
   CIUDADES_DEL_SYNC,
-  listInventoryWarehouses,
-  SwaypInventoryError,
   type SwaypFilasSinCiudad,
-  type SwaypWarehouse,
   type SwaypInventoryCreds,
   type SwaypProbe,
 } from "@/lib/swayp-inventory-api";
+import {
+  aplicarPlanSwayp,
+  credencialInventarioDesdeEnv,
+  leerInventarioSwayp,
+  planesSwaypPorCiudad,
+  sincronizarInventarioSwayp,
+  type CiudadRetenida,
+  type SyncCiudadResultado,
+  type SyncResult,
+} from "@/lib/swayp-inventory-sync";
 import { resolveEmails } from "@/lib/productivity";
 import {
   shopifyShippingAddress,
@@ -2202,77 +2207,6 @@ export async function upsertFenixStock(input: {
 }
 
 /**
- * Escribe el plan de UNA ciudad: altas (renglón + `entrada` en el kardex) y
- * ajustes (`ajuste` en el kardex). Lo comparten el importador de Excel y el
- * sync por API, así que las dos fuentes dejan el mismo rastro. `origen` es lo
- * que se lee en la nota del kardex («Bodega Trujillo», «Swayp (API)»).
- * No recalcula la elegibilidad de las guías: eso lo hace quien llama, una vez.
- */
-async function aplicarPlanSwayp(
-  admin: SupabaseClient,
-  input: { orgId: string; userId: string; ciudad: string; plan: PlanImportacion; origen: string },
-): Promise<{ altas: number; aplicados: number; fallidos: number }> {
-  const { orgId, userId, ciudad, plan, origen } = input;
-  // En una ciudad sin control (Lima) no hay saldo que mover: sólo altas.
-  const sinControl = ciudadSinControl(ciudad);
-
-  // Las altas primero: crear el renglón y dejar su entrada en el kardex, para
-  // que el saldo nazca con historial igual que los demás.
-  let altas = 0;
-  for (const a of plan.altas) {
-    const { data: creado, error } = await admin
-      .from("fenix_stock")
-      .upsert(
-        {
-          org_id: orgId,
-          city: ciudad,
-          product: a.product,
-          sku: a.sku,
-          quantity: 0,
-          unlimited: sinControl,
-          updated_by: userId,
-        },
-        { onConflict: "org_id,city,product" },
-      )
-      .select("id")
-      .single();
-    if (error || !creado) continue;
-    altas++;
-    // Sin control no hay saldo que arrancar: el alta ya dice todo.
-    if (sinControl) continue;
-    await recordStockMovement(admin, {
-      orgId,
-      stockId: (creado as { id: string }).id,
-      city: ciudad,
-      product: a.product,
-      kind: "entrada",
-      delta: a.cantidad,
-      note: `Alta desde el inventario de ${origen} (${a.codbar})`,
-      createdBy: userId,
-    });
-  }
-
-  let aplicados = 0;
-  for (const a of plan.ajustes) {
-    const saldo = await recordStockMovement(admin, {
-      orgId,
-      stockId: a.id,
-      city: ciudad,
-      product: a.product,
-      kind: "ajuste",
-      delta: a.cantidadNueva - a.cantidadAnterior,
-      note: a.codbar
-        ? `Conteo de Swayp (${a.codbar}) importado de ${origen}`
-        : `No figura en el inventario de ${origen}`,
-      createdBy: userId,
-    });
-    if (saldo !== null) aplicados++;
-  }
-
-  return { altas, aplicados, fallidos: plan.ajustes.length - aplicados + (plan.altas.length - altas) };
-}
-
-/**
  * Importa el "Inventario por bodega" que exporta el panel de Swayp y deja el
  * stock de ESA ciudad igual al de ellos.
  *
@@ -2403,7 +2337,7 @@ export async function importarInventarioSwayp(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fase 1 · Dry run del sync de inventario por API (NO ESCRIBE NADA)
+// Sync del inventario de Swayp por API (la lógica vive en lib/swayp-inventory-sync.ts)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** El diff que dejaría el sync en UNA ciudad, sin aplicarlo. */
@@ -2419,13 +2353,6 @@ export interface DryRunCiudad {
   sinControl: number;
 }
 
-/** El error de una llamada a Swayp en una línea, sin el token: status + cuerpo, o el mensaje. */
-function describirErrorSwayp(e: unknown): string {
-  if (e instanceof SwaypInventoryError) return `HTTP ${e.status}${e.body ? ` — ${e.body.slice(0, 240)}` : ""}`;
-  if (e instanceof Error) return `${e.name}: ${e.message}`;
-  return String(e);
-}
-
 export interface DryRunResult {
   ok: true;
   ciudades: DryRunCiudad[];
@@ -2436,33 +2363,25 @@ export interface DryRunResult {
   totalFilasInventario: number;
   /** Muestra CRUDA de las primeras filas, para confirmar los nombres de campo. */
   muestra: unknown[];
+  /** true si se leyó con la credencial guardada de Kapta (sin pegar token). */
+  conCredencialGuardada: boolean;
 }
 
-type LecturaSwaypApi =
-  | {
-      ok: true;
-      orgId: string;
-      userId: string;
-      bodegas: SwaypWarehouse[];
-      porCiudad: Map<string, EntradaSwayp[]>;
-      sinCiudad: SwaypFilasSinCiudad[];
-      totalFilas: number;
-      filasPorBodega: Record<string, number>;
-      muestra: unknown[];
-    }
-  | { error: string; diagnostico?: SwaypProbe[] };
-
-/**
- * Lo común al dry run y al sync: permiso de admin, credencial, y la lectura de
- * bodegas + inventario de Swayp repartido por ciudad. El token llega pegado a
- * mano y NO se guarda ni se registra (dura ~1 h).
- */
-async function leerInventarioSwaypApi(input: {
-  token: string;
+interface EntradaCredencial {
+  /** Vacío = usar la credencial guardada de Kapta (la del sync automático). */
+  token?: string;
   email: string;
   user: string;
   idCompany: string;
-}): Promise<LecturaSwaypApi> {
+}
+
+/** El admin de la sesión y la credencial con la que leer Swayp. */
+async function prepararSyncSwayp(
+  input: EntradaCredencial,
+): Promise<
+  | { orgId: string; userId: string; creds: SwaypInventoryCreds; conCredencialGuardada: boolean }
+  | { error: string }
+> {
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -2475,105 +2394,51 @@ async function leerInventarioSwaypApi(input: {
   if (!adminOrg) return { error: "Solo un administrador puede sincronizar el stock." };
 
   // Un «Bearer » pegado de más duplicaría el prefijo y Swayp respondería 403.
-  const token = input.token?.trim().replace(/^bearer\s+/i, "");
+  const token = (input.token ?? "").trim().replace(/^bearer\s+/i, "");
+  if (!token) {
+    const guardada = credencialInventarioDesdeEnv();
+    if (!guardada.ok) {
+      return { error: `No hay credencial guardada de Swayp (falta ${guardada.faltan.join(", ")}). Pega un token del panel.` };
+    }
+    if (guardada.orgId !== adminOrg.org_id) {
+      return { error: "La credencial guardada de Swayp es de otra organización. Pega un token del panel." };
+    }
+    return { orgId: adminOrg.org_id, userId: user.id, creds: guardada.creds, conCredencialGuardada: true };
+  }
+
   const email = input.email?.trim();
   const ruc = input.user?.trim();
   const idCompany = input.idCompany?.trim();
-  if (!token || !email || !ruc || !idCompany) {
-    return { error: "Faltan datos de conexión (token, correo, RUC o idCompany)." };
+  if (!email || !ruc || !idCompany) {
+    return { error: "Faltan datos de la cuenta Swayp (correo, RUC o id de empresa)." };
   }
-  const creds: SwaypInventoryCreds = { token, email, user: ruc, idCompany, country: "PE" };
-
-  let bodegas: SwaypWarehouse[];
-  try {
-    bodegas = await listInventoryWarehouses(creds);
-  } catch (e) {
-    // Falla la de bodegas, que es el control: la credencial no sirve.
-    const diagnostico = await diagnoseInventoryAccess(creds);
-    return {
-      error: `Swayp rechazó la credencial (${describirErrorSwayp(e)}): el token está vencido, es de otra sesión, o no tiene permiso. Pega uno recién copiado del panel (sin la palabra «Bearer»).`,
-      diagnostico,
-    };
-  }
-  try {
-    const inv = await fetchInventoryByCity(creds, bodegas);
-    return { ok: true, orgId: adminOrg.org_id, userId: user.id, bodegas, ...inv };
-  } catch (e) {
-    // Bodegas pasó, así que el token es bueno: se muestra el error REAL de la
-    // lectura de inventario (status + cuerpo).
-    const diagnostico = await diagnoseInventoryAccess(creds);
-    return {
-      error: `El token es válido (bodegas pasó), pero la lectura de inventario falló: ${describirErrorSwayp(e)}`,
-      diagnostico,
-    };
-  }
-}
-
-/**
- * El plan de cada ciudad que trajo Swayp, con los mismos insumos que el
- * importador de Excel (`fenix_stock` y el mapa codbar→SKU de TODA la
- * organización: Aurela y Kenku comparten inventario en Swayp).
- */
-async function planesSwaypPorCiudad(
-  admin: SupabaseClient,
-  orgId: string,
-  porCiudad: Map<string, EntradaSwayp[]>,
-): Promise<{ ciudad: string; plan: PlanImportacion }[]> {
-  const skusPorCodbar = new Map<string, string[]>();
-  for (const [sku, { codbar }] of await cargarMapaSwaypDeOrg(admin, orgId)) {
-    const ya = skusPorCodbar.get(codbar.toUpperCase()) ?? [];
-    if (!ya.includes(sku)) ya.push(sku);
-    skusPorCodbar.set(codbar.toUpperCase(), ya);
-  }
-  const { data: todoElStock, error } = await admin
-    .from("fenix_stock")
-    .select("id,city,product,sku,quantity,unlimited")
-    .eq("org_id", orgId);
-  // Sin el stock actual el plan pondría TODO como alta; mejor no planear.
-  if (error) throw new Error(errorDeBase(error, "leer el stock Swayp"));
-  const filasPorCiudad = new Map<string, FilaStock[]>();
-  const etiquetaPorSku = new Map<string, string>();
-  for (const r of (todoElStock as (FilaStock & { city: string })[]) ?? []) {
-    const lista = filasPorCiudad.get(r.city) ?? [];
-    lista.push(r);
-    filasPorCiudad.set(r.city, lista);
-    const k = (r.sku ?? "").trim().toUpperCase();
-    if (k && !etiquetaPorSku.has(k)) etiquetaPorSku.set(k, r.product);
-  }
-
-  const planes: { ciudad: string; plan: PlanImportacion }[] = [];
-  for (const [ciudad, entradas] of porCiudad) {
-    const sinControl = ciudadSinControl(ciudad);
-    const filasStock = (filasPorCiudad.get(ciudad) ?? []).map((f) =>
-      sinControl ? { ...f, unlimited: true } : f,
-    );
-    planes.push({ ciudad, plan: planearImportacion(ciudad, entradas, filasStock, skusPorCodbar, etiquetaPorSku) });
-  }
-  return planes.sort((a, b) => a.ciudad.localeCompare(b.ciudad));
+  return {
+    orgId: adminOrg.org_id,
+    userId: user.id,
+    creds: { token, email, user: ruc, idCompany, country: "PE" },
+    conCredencialGuardada: false,
+  };
 }
 
 /**
  * Trae el inventario de Swayp por API y muestra qué cambiaría, SIN escribir.
- *
- * Reutiliza `planearImportacion` y las mismas lecturas que el importador de
- * Excel, así que el diff que enseña es EXACTAMENTE el que aplica
- * `swaypInventorySync` con una lectura igual.
+ * El diff es EXACTAMENTE el que aplica `swaypInventorySync` con una lectura igual.
  */
-export async function swaypInventoryDryRun(input: {
-  token: string;
-  email: string;
-  user: string;
-  idCompany: string;
-}): Promise<DryRunResult | { error: string; diagnostico?: SwaypProbe[] }> {
-  const lectura = await leerInventarioSwaypApi(input);
+export async function swaypInventoryDryRun(
+  input: EntradaCredencial,
+): Promise<DryRunResult | { error: string; diagnostico?: SwaypProbe[] }> {
+  const prep = await prepararSyncSwayp(input);
+  if ("error" in prep) return prep;
+  const lectura = await leerInventarioSwayp(prep.creds);
   if ("error" in lectura) return lectura;
 
   let planes;
   try {
-    planes = await planesSwaypPorCiudad(createAdminSupabase(), lectura.orgId, lectura.porCiudad);
+    planes = await planesSwaypPorCiudad(createAdminSupabase(), prep.orgId, lectura.porCiudad);
   } catch (e) {
     return { error: e instanceof Error ? e.message : "No se pudo leer el stock Swayp." };
   }
+
   return {
     ok: true,
     ciudades: planes.map(({ ciudad, plan }) => ({
@@ -2599,105 +2464,77 @@ export async function swaypInventoryDryRun(input: {
       .filter((w) => w.filas > 0),
     totalFilasInventario: lectura.totalFilas,
     muestra: lectura.muestra,
+    conCredencialGuardada: prep.conCredencialGuardada,
   };
 }
 
-/** Lo que el sync escribió en una ciudad. */
-export interface SyncCiudadResultado {
-  ciudad: string;
-  bajan: number;
-  suben: number;
-  /** De los que bajan, cuántos quedaron en 0. */
-  aCero: number;
-  altas: number;
-  /** Códigos de Swayp sin vínculo en Catálogo: no se pudieron cargar. */
-  sinVincular: string[];
-  unidadesAntes: number;
-  unidadesDespues: number;
-  fallidos: number;
-}
-
-export type SyncResult =
-  | {
-      ok: true;
-      ciudades: SyncCiudadResultado[];
-      /** Ciudades pedidas que no vinieron en la lectura: no se tocaron. */
-      noVinieron: string[];
-      /** Guías cuya elegibilidad se recalculó; null si el recálculo falló. */
-      guias: number | null;
-      errorGuias?: string;
-    }
-  | { error: string };
-
 /**
- * Fase 2: aplica el inventario de Swayp leído por API a `fenix_stock`, en las
- * ciudades elegidas. Vuelve a LEER en el momento —no confía en el diff que tiene
- * el navegador, que pudo quedar viejo— y escribe con el mismo camino que el
- * importador de Excel (`aplicarPlanSwayp`: kardex con `entrada`/`ajuste`).
- *
- * Sólo toca las ciudades que (a) se pidieron y (b) vinieron en la lectura con
- * una bodega mapeada a `CIUDADES_DEL_SYNC`. Una ciudad que no vino no se vacía.
+ * Aplica el inventario de Swayp a `fenix_stock` en las ciudades elegidas.
+ * Vuelve a LEER en el momento —no confía en el diff del navegador— y queda
+ * registrado en `swayp_inventory_sync_runs` como corrida manual.
  */
-export async function swaypInventorySync(input: {
-  token: string;
-  email: string;
-  user: string;
-  idCompany: string;
-  ciudades: string[];
-}): Promise<SyncResult> {
-  const pedidas = new Set((input.ciudades ?? []).map((c) => c.trim().toLowerCase()).filter(Boolean));
-  if (!pedidas.size) return { error: "Elige al menos una ciudad para sincronizar." };
-
-  const lectura = await leerInventarioSwaypApi(input);
-  if ("error" in lectura) return { error: lectura.error };
-  // Una lectura vacía es casi seguro un fallo de Swayp, no un inventario en
-  // cero: aplicarla dejaría cada ciudad pedida en 0.
-  if (lectura.totalFilas === 0) {
-    return { error: "Swayp devolvió el inventario vacío. No se aplicó nada; vuelve a intentar." };
-  }
-
-  const admin = createAdminSupabase();
-  let planes;
-  try {
-    planes = await planesSwaypPorCiudad(admin, lectura.orgId, lectura.porCiudad);
-  } catch (e) {
-    return { error: e instanceof Error ? e.message : "No se pudo leer el stock Swayp." };
-  }
-
-  const ciudades: SyncCiudadResultado[] = [];
-  for (const { ciudad, plan } of planes) {
-    if (!pedidas.has(ciudad)) continue;
-    const { fallidos } = await aplicarPlanSwayp(admin, {
-      orgId: lectura.orgId,
-      userId: lectura.userId,
-      ciudad,
-      plan,
-      origen: "Swayp (API)",
-    });
-    const bajan = plan.ajustes.filter((a) => a.cantidadNueva < a.cantidadAnterior);
-    ciudades.push({
-      ciudad,
-      bajan: bajan.length,
-      suben: plan.ajustes.length - bajan.length,
-      aCero: bajan.filter((a) => a.cantidadNueva === 0).length,
-      altas: plan.altas.length,
-      sinVincular: plan.huerfanos.filter((h) => h.motivo === "sin_vinculo").map((h) => h.codbar),
-      unidadesAntes: plan.totalNuestro,
-      unidadesDespues: plan.totalSwayp,
-      fallidos,
-    });
-  }
-
-  const sync = await recomputeFenixEligibility();
+export async function swaypInventorySync(
+  input: EntradaCredencial & { ciudades: string[] },
+): Promise<SyncResult> {
+  const prep = await prepararSyncSwayp(input);
+  if ("error" in prep) return prep;
+  const r = await sincronizarInventarioSwayp(createAdminSupabase(), {
+    creds: prep.creds,
+    orgId: prep.orgId,
+    userId: prep.userId,
+    ciudades: input.ciudades ?? [],
+    source: "manual",
+  });
   revalidatePath("/dashboard/envios/stock");
   revalidatePath("/dashboard/envios");
+  return r;
+}
 
+/** Una corrida del sync, como la muestra la pantalla. */
+export interface SwaypSyncCorrida {
+  created_at: string;
+  source: "cron" | "manual";
+  ok: boolean;
+  error: string | null;
+  resumen: {
+    ciudades?: SyncCiudadResultado[];
+    retenidas?: CiudadRetenida[];
+    guias?: number | null;
+  };
+}
+
+export interface SwaypSyncEstado {
+  /** Hay credencial en el entorno para esta organización: el cron puede correr. */
+  credencialGuardada: boolean;
+  faltan: string[];
+  /** Las últimas corridas, la más reciente primero. */
+  corridas: SwaypSyncCorrida[];
+}
+
+/** Si el sync automático está configurado y cómo le fue últimamente. */
+export async function swaypInventoryEstado(): Promise<SwaypSyncEstado | { error: string }> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+  const { data: mem } = await sb.from("memberships").select("org_id,role");
+  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
+    (m) => m.role === "owner" || m.role === "admin",
+  );
+  if (!adminOrg) return { error: "Solo un administrador puede ver el sync de Swayp." };
+
+  const guardada = credencialInventarioDesdeEnv();
+  const { data } = await createAdminSupabase()
+    .from("swayp_inventory_sync_runs")
+    .select("created_at,source,ok,error,resumen")
+    .eq("org_id", adminOrg.org_id)
+    .order("created_at", { ascending: false })
+    .limit(5);
   return {
-    ok: true,
-    ciudades,
-    noVinieron: [...pedidas].filter((c) => !lectura.porCiudad.has(c)),
-    guias: "error" in sync ? null : sync.updated,
-    ...("error" in sync ? { errorGuias: sync.error } : {}),
+    credencialGuardada: guardada.ok && guardada.orgId === adminOrg.org_id,
+    faltan: guardada.ok ? [] : guardada.faltan,
+    corridas: (data as SwaypSyncCorrida[]) ?? [],
   };
 }
 
@@ -2842,81 +2679,13 @@ export async function recomputeFenixEligibility(): Promise<
   const storeIds = stores.map((s) => s.id);
   if (!storeIds.length) return { notice: "Sin envíos.", updated: 0 };
 
-  const admin = createAdminSupabase();
-  const { data: stock, error: stockError } = await admin
-    .from("fenix_stock")
-    .select("city,product,sku,quantity,unlimited")
-    .eq("org_id", adminOrg.org_id);
-  if (stockError) return { error: errorDeBase(stockError, "consultar el stock Swayp") };
-  const stockRows = (stock as FenixStockRow[]) ?? [];
-
-  // Only pending guides carry eligibility; re-evaluate each and flip the ones
-  // whose stored flag no longer matches. Paginate past Supabase's 1,000-row
-  // response cap so a large queue is never only partially synchronized.
-  type PendingShipment = FenixCoverageRow & {
-    id: string;
-    product: string | null;
-    order_id: string | null;
-    fenix_eligible: boolean;
-  };
-  const shipments: PendingShipment[] = [];
-  const pageSize = 1000;
-  for (let from = 0; ; from += pageSize) {
-    const { data: rows, error: rowsError } = await admin
-      .from("shipments")
-      .select(`id,${FENIX_COVERAGE_COLUMNS},product,order_id,fenix_eligible`)
-      .in("store_id", storeIds)
-      .eq("status_category", "pending")
-      .range(from, from + pageSize - 1);
-    if (rowsError) return { error: errorDeBase(rowsError, "leer las guías") };
-    const page = (rows as PendingShipment[]) ?? [];
-    shipments.push(...page);
-    if (page.length < pageSize) break;
+  let updated: number;
+  try {
+    updated = await recalcularElegibilidadFenix(createAdminSupabase(), adminOrg.org_id, storeIds);
+  } catch (e) {
+    if (e instanceof ElegibilidadError) return { error: errorDeBase(e.causa, e.accion) };
+    throw e;
   }
-
-  // Pull the linked orders' line items so eligibility can match against the
-  // Shopify catalog (title + SKU) — the same source the stock sheet is keyed
-  // on — instead of the Aliclik report's free-text product.
-  const orderIds = Array.from(new Set(shipments.map((s) => s.order_id).filter((v): v is string => !!v)));
-  const productsByOrder = new Map<string, { title?: string | null; sku?: string | null }[]>();
-  for (let i = 0; i < orderIds.length; i += 300) {
-    const { data: orders, error: ordersError } = await admin
-      .from("orders")
-      .select("id,line_items")
-      .in("id", orderIds.slice(i, i + 300));
-    if (ordersError) return { error: errorDeBase(ordersError, "leer los pedidos") };
-    for (const o of (orders as { id: string; line_items: { title?: string | null; sku?: string | null }[] | null }[]) ?? []) {
-      productsByOrder.set(
-        o.id,
-        (o.line_items ?? []).map((li) => ({ title: li.title ?? null, sku: li.sku ?? null })),
-      );
-    }
-  }
-
-  const toEligible: string[] = [];
-  const toIneligible: string[] = [];
-  for (const s of shipments) {
-    const orderProducts = s.order_id ? productsByOrder.get(s.order_id) : undefined;
-    const eligible = evaluateFenix(coverageInputOf(s), stockRows, orderProducts).eligible;
-    if (eligible !== s.fenix_eligible) {
-      (eligible ? toEligible : toIneligible).push(s.id);
-    }
-  }
-
-  // Update in bounded groups instead of one network round-trip per guide.
-  for (const [eligible, ids] of [
-    [true, toEligible],
-    [false, toIneligible],
-  ] as const) {
-    for (let i = 0; i < ids.length; i += 150) {
-      const { error: updateError } = await admin
-        .from("shipments")
-        .update({ fenix_eligible: eligible })
-        .in("id", ids.slice(i, i + 150));
-      if (updateError) return { error: errorDeBase(updateError, "recalcular la cobertura Swayp") };
-    }
-  }
-  const updated = toEligible.length + toIneligible.length;
   revalidatePath("/dashboard/envios");
   return { notice: `Elegibilidad recalculada — ${updated} guías actualizadas.`, updated };
 }
