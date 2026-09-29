@@ -130,8 +130,18 @@ function words(value: string): string[] {
  * Esos dígitos no se tiran: son el CELULAR, la señal tajante. Se devuelven
  * aparte para que se juzguen como celular.
  *
- * Solo corta tras un separador de los que usan las apps (•, ·, ∙, *): un nombre
- * que simplemente termina en números no se toca.
+ * PERO NO TODO NÚMERO PEGADO AL NOMBRE ES EL CELULAR. La app del BCP pone bajo
+ * el destinatario la CUENTA enmascarada: «Grupo Gf S. **** 0012» (#AUR177129).
+ * Ese 0012 no es el ···309 de la empresa, y tomarlo por celular acusaría de
+ * desvío un cobro bueno. Por eso se distingue por el separador:
+ *
+ *   · UN solo punto (•, ·, ∙) → celular: «•5309» del BBVA, «· 930 555 309» de
+ *     Plin.
+ *   · Una máscara —asteriscos, o varios puntos seguidos— → número enmascarado
+ *     que puede ser una cuenta. Se aparta del nombre, pero NO se da por celular:
+ *     no se sabe qué es, y un dato que no se sabe no puede desmentir la cuenta.
+ *
+ * Un nombre que simplemente termina en números, sin separador, no se toca.
  */
 export function splitRecipientPhoneSuffix(raw: string | null | undefined): {
   name: string | null;
@@ -139,9 +149,11 @@ export function splitRecipientPhoneSuffix(raw: string | null | undefined): {
 } {
   const value = raw?.trim() ?? "";
   if (!value) return { name: null, phoneDigits: null };
-  const m = /^(.*?\S)\s*[•·∙*]+\s*((?:\d\s*){3,}?)\s*(?:-\s*(?:yape|plin)\s*)?$/i.exec(value);
+  const m = /^(.*?\S)\s*([•·∙*]+)\s*((?:\d\s*){3,}?)\s*(?:-\s*(?:yape|plin)\s*)?$/i.exec(value);
   if (!m) return { name: value, phoneDigits: null };
-  return { name: m[1]!.trim(), phoneDigits: m[2]!.replace(/\s/g, "") };
+  const separator = m[2]!;
+  const isPhone = separator.length === 1 && separator !== "*";
+  return { name: m[1]!.trim(), phoneDigits: isPhone ? m[3]!.replace(/\s/g, "") : null };
 }
 
 /**

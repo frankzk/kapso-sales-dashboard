@@ -70,8 +70,14 @@ const PROMPT =
   "El medio se reconoce por el logo y el diseño de la app: Yape es morado, " +
   "Plin es celeste. Un Plin puede decir que el destino es un número «Yape»: " +
   "eso sigue siendo un comprobante de Plin, que es lo que hay que devolver.\n" +
+  "LA APP DEL BCP NO SIEMPRE MUESTRA SU LOGO. Su constancia es blanca, con " +
+  "azul y naranja, dice «¡Transferencia exitosa!» y lista «Enviado a», «Desde» " +
+  "y «Número de operación». Eso es \"bcp\", también cuando desde esa app se " +
+  "envió a un Yape. No la devuelvas como \"otro\" por no ver el logo.\n" +
   "El destinatario es el dato más importante: cópialo literal, aunque venga " +
-  "recortado. No lo confundas con quien envía el dinero.\n" +
+  "recortado. No lo confundas con quien envía el dinero. El número de cuenta " +
+  "enmascarado que algunas apps ponen debajo («**** 0012») no es parte del " +
+  "nombre: no lo copies.\n" +
   "El nº de operación se compara entre guías para detectar un comprobante " +
   "reusado, así que devuelve el código y nada más: sin «N°», sin «Código de " +
   "operación:», sin espacios ni guiones de separación.";

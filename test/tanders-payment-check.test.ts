@@ -65,6 +65,24 @@ describe("el BBVA pega el final del celular al nombre", () => {
   it("un nombre ajeno con nuestro celular sigue siendo otra cuenta", () => {
     expect(isExpectedRecipient("Juan Pérez •5309")).toBe(false);
   });
+
+  it("la cuenta enmascarada del BCP no es el celular: no desmiente nada", () => {
+    // #AUR177129: la app del BCP pone «**** 0012» bajo «Grupo Gf S.». Es la
+    // cuenta, no el ···309; tomarla por celular rechazaría un cobro bueno.
+    expect(isExpectedRecipient("Grupo Gf S. **** 0012")).toBe(true);
+    // Pero el nombre sigue exigiéndose igual.
+    expect(isExpectedRecipient("Juan Pérez **** 0012")).toBe(false);
+  });
+});
+
+describe("la app del BCP", () => {
+  it("#AUR177129: su constancia leída como BCP es un cobro válido", () => {
+    // Lectura TEXTUAL de producción, salvo el medio: el lector devolvió «otro».
+    expect(checkTandersPayment({
+      voucher: voucher({ method: "bcp", recipientName: "Grupo Gf S.", amount: 80.1 }),
+      expectedAmount: 80.1,
+    })).toMatchObject({ state: "validado", reasons: [] });
+  });
 });
 
 describe("normalizeOperationNumber", () => {

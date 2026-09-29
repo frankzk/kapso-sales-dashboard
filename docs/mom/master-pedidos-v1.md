@@ -1406,10 +1406,22 @@ sin tope de antigüedad. Reglas:
     rompía la comparación y el cobro salía «El pago NO va a Grupo GF SAC»:
     **tres cobros del courier** a la cuenta de la empresa (#KP137040 entre
     ellos) quedaron en revisión administrativa. Ahora los dígitos que van tras
-    un separador (•, ·, *) se separan del nombre y se juzgan como celular:
-    tienen que terminar en `309`, o es otra cuenta aunque el nombre encaje. Un
-    nombre que solo termina en números, sin separador, no se toca. Rige igual
-    en los comprobantes de los pedidos (§12, Pagos).
+    **un solo punto** (•, ·) se separan del nombre y se juzgan como celular:
+    tienen que terminar en `309`, o es otra cuenta aunque el nombre encaje.
+  - **Pero una máscara no es el celular.** La app del BCP pone bajo el
+    destinatario la **cuenta** enmascarada: «Grupo Gf S. **** 0012»
+    (#AUR177129). Ese 0012 no es el ···309, y tomarlo por celular rechazaría
+    un cobro bueno. Tras asteriscos o varios puntos seguidos no se sabe qué
+    número es: se aparta del nombre y **no se juzga**, porque un dato que no
+    se sabe no puede desmentir la cuenta. Un nombre que solo termina en
+    números, sin separador, no se toca. Las dos reglas rigen igual en los
+    comprobantes de los pedidos (§12, Pagos).
+  - **La app del BCP se reconoce aunque no se vea su logo** (29-09-2026). Su
+    constancia —blanca con azul y naranja, «¡Transferencia exitosa!», «Enviado
+    a», «Desde»— salía como medio «otro» porque el lector solo tenía descritos
+    Yape (morado) y Plin (celeste). También se envía así a un Yape desde esa
+    app. **Seis cobros** a «Grupo Gf S.» quedaron en revisión por el medio,
+    #AUR177129 entre ellos.
   - **La cola de cobros se recorre entera: la que hace más tiempo que no se
     mira va primero.** El 10-09-2026 había **238 guías candidatas y el tope es
     de 60 por pasada**, y la consulta cortaba sin orden ninguno: entraban
@@ -4080,10 +4092,13 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
     cargados se destraban solos.
 - **El final del celular pegado al nombre cuenta como celular.** La app del
   BBVA escribe el contacto como «Grupo gf s •5309», y Plin como «Grupo Gf S ·
-  930 555 309 - Yape». Los dígitos tras el separador se apartan del nombre y,
-  si el lector no dio el celular aparte, son el celular: la misma señal
-  tajante de siempre. El lector tiene además instrucción de separarlos. Es la
-  misma regla que en los cobros del courier (§9.4).
+  930 555 309 - Yape». Los dígitos tras **un solo punto** se apartan del
+  nombre y son el celular —mandan sobre uno leído aparte, porque salen del
+  mismo bloque que el receptor—: la misma señal tajante de siempre. Tras una
+  máscara (asteriscos o varios puntos, como la cuenta «**** 0012» que pone el
+  BCP) se apartan del nombre pero no se juzgan. El lector tiene además
+  instrucción de separarlos. Es la misma regla que en los cobros del courier
+  (§9.4).
 - **Una cuenta puede no tener celular: la pasarela Flow** (migración 0198). La
   constancia de Flow dice «Pagado a: Aurela Kenku» —una sola cuenta de Flow para
   las dos marcas— y no enseña ningún celular. Sin darla de alta, **#KP136181**
