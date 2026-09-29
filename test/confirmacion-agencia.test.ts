@@ -126,16 +126,43 @@ describe("cuánto tiene que ser el pago: lo dice quien ya lo sabía", () => {
 });
 
 describe("qué pagos comprometen", () => {
-  it("`diferencia` NO confirma: llega cuando el pedido ya iba en marcha", () => {
-    // Un saldo posterior no dice nada nuevo sobre la confirmación: si hay
-    // diferencia que cobrar es porque el pedido ya se había confirmado antes.
+  it("una `diferencia` SOLA no confirma: sin adelanto vivo detrás no hay abono", () => {
+    // El formulario no deja cargar una diferencia sin adelanto; si queda sola es
+    // porque su adelanto se rechazó, y `paymentState` la lee como `sin_pago`.
     expect(hayPagoQueCompromete([pago({ kind: "diferencia" })], TOTAL)).toBe(false);
+    expect(
+      hayPagoQueCompromete(
+        [pago({ validation_status: "rechazado" }), pago({ kind: "diferencia" })],
+        TOTAL,
+      ),
+    ).toBe(false);
   });
 
   it("pero convive: con un adelanto validado al lado, sí", () => {
     expect(
       hayPagoQueCompromete([pago({ kind: "diferencia" }), pagoValidado], TOTAL),
     ).toBe(true);
+  });
+
+  it("un adelanto corto que la diferencia completa SÍ compromete (#KP134162)", () => {
+    // S/ 10 de adelanto y, treinta segundos después, S/ 20 que el formulario
+    // obliga a registrar como `diferencia`. S/ 30 validados: es el mismo abono
+    // partido en dos Yapes, y antes no llegaba nunca al mínimo.
+    const corto = SHALOM_MINIMUM_ADVANCE / 2;
+    const completa = SHALOM_MINIMUM_ADVANCE;
+    expect(
+      confirma(borrador(), [
+        pago({ amount: corto }),
+        pago({ kind: "diferencia", amount: completa }),
+      ]),
+    ).toBe(true);
+    // Lo que sigue sin validar no cuenta: el listón es lo VALIDADO.
+    expect(
+      confirma(borrador(), [
+        pago({ amount: corto }),
+        pago({ kind: "diferencia", amount: completa, validation_status: "pendiente" }),
+      ]),
+    ).toBe(false);
   });
 });
 

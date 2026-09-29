@@ -10,6 +10,7 @@ import {
   type MacroOrderSnapshot,
   type ResolveMacroStageInput,
 } from "@/lib/order-macro-stage";
+import { paymentState } from "@/lib/pickup-key";
 
 const CREATED = "2026-07-01T10:00:00.000Z";
 
@@ -314,6 +315,28 @@ describe("resolveMacroStage — Por confirmar y Preparación", () => {
     expect(agencyPaymentReady("agencia", "sin_pago")).toBe(false);
     expect(agencyPaymentReady("agencia", "adelanto_validado")).toBe(true);
     expect(agencyPaymentReady("agencia", "pago_completo")).toBe(true);
+    // Diferencia en revisión con el mínimo ya validado: lo que falta es saldo,
+    // no el abono. Antes cargarla devolvía el pedido a Por confirmar.
+    expect(agencyPaymentReady("agencia", "diferencia_cargada")).toBe(true);
+    expect(agencyPaymentReady("agencia", "adelanto_cargado")).toBe(false);
+    expect(agencyPaymentReady("agencia", "posible_duplicado")).toBe(false);
+  });
+
+  it("#KP134162: S/ 10 de adelanto + S/ 20 de diferencia validados pasan a Preparación", () => {
+    // Siete días de «Confirmó el pedido» y el pedido seguía en Por confirmar ·
+    // Último intento con «Adelanto cargado»: el mínimo se medía solo con la fila
+    // `adelanto`. Se calcula `paymentState` de verdad, no se le pasa hecho, para
+    // que la prueba cubra la costura entre los dos módulos.
+    const payments = [
+      { kind: "adelanto", validation_status: "validado", order_id: "o", amount: 10 },
+      { kind: "diferencia", validation_status: "validado", order_id: "o", amount: 20 },
+    ];
+    const state = resolve({
+      order: order({ shipping_mode: "agency" }),
+      events: [event("confirmation_contact"), event("confirmed")],
+      paymentState: paymentState(payments, 80.1),
+    });
+    expect(state).toMatchObject({ stage: "preparacion", substage: "por_generar_rotulo", reasons: [] });
   });
 
   it("«Pago requerido pendiente» ya no es una subetapa navegable", () => {

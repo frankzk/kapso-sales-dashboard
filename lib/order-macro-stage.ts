@@ -23,6 +23,12 @@ import {
   recoveryWindow,
 } from "@/lib/reproprovincia";
 
+// v1.19: el adelanto mínimo de Agencia se mide con TODO lo validado, no solo
+// con la fila `adelanto` (lib/pickup-key.ts), y `diferencia_cargada` deja pasar
+// a Preparación. #KP134162 —S/ 10 de adelanto + S/ 20 de diferencia validados,
+// siete confirmaciones— seguía en Por confirmar · Último intento. Cambia el
+// `payment_state` de filas que nadie tocó, así que la versión sube.
+//
 // v1.18: una ventana de Reproprovincia que vence sobre un rechazo en la puerta
 // cae a Por cerrar · Rechazo no reenviado, no a Recuperación vencida. La otra
 // razón se lee «se perdió por no llamar», y aquí no llamar era la regla (§11).
@@ -87,7 +93,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.18" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.19" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -644,7 +650,16 @@ export function agencyPaymentReady(
   paymentState: string | null | undefined,
 ): boolean {
   if (operation !== "agencia") return true;
-  return hasPaymentComplete(paymentState) || paymentState === "adelanto_validado";
+  // `diferencia_cargada` también: `paymentState` solo lo devuelve con el mínimo
+  // ya validado, y lo que queda en revisión es saldo. Sin él, cargar la
+  // diferencia de un pedido ya en Preparación lo devolvía a Por confirmar hasta
+  // que alguien la validara. Es la misma lista que usan el rótulo de Shalom y
+  // la compuerta de Aliclik.
+  return (
+    hasPaymentComplete(paymentState) ||
+    paymentState === "adelanto_validado" ||
+    paymentState === "diferencia_cargada"
+  );
 }
 
 function finalResultSubstage(legacy: LegacyOrderStateSnapshot, operation: OperationKind): MacroSubstage {
