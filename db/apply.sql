@@ -403,4 +403,6 @@
 \ir migrations/0199_gf_dispatch_programs.sql
 \echo 'Applying 0200_gf_orphan_scheduled_requests.sql'
 \ir migrations/0200_gf_orphan_scheduled_requests.sql
+\echo 'Applying 0201_swayp_inventory_sync_runs.sql'
+\ir migrations/0201_swayp_inventory_sync_runs.sql
 \echo 'Done.'
