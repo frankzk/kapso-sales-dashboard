@@ -8,6 +8,8 @@ import { OrderLink } from "@/components/order-link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { DispatchDayBoard } from "@/components/dispatch-day-board";
+import { Badge, Banner } from "@/components/ops-ui";
+import { IconMore } from "@/components/icons";
 import { CourierRoutesLedger } from "@/components/courier-routes-ledger";
 import { CourierBoxDrawer } from "@/components/courier-box-drawer";
 import { CourierRouteReportDrawer } from "@/components/courier-route-report-drawer";
@@ -96,10 +98,7 @@ export function GrupoGfCourierBoard({
     return (
       <div className="mx-auto max-w-4xl space-y-6">
         <header>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-            Operación logística
-          </p>
-          <h1 className="mt-1 text-xl font-semibold text-slate-950">Grupo GF Courier</h1>
+          <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Grupo GF Courier</h1>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
             Activa el operador sin cambiar rutas ni inventario actuales. Se crearán los contratos
             de las tiendas activas, Yape 3.5 % y una bolsa de inventario todavía opcional.
@@ -131,20 +130,16 @@ export function GrupoGfCourierBoard({
   const provider = snapshot.provider;
   return (
     <div className={cn("space-y-4", mobile.board)}>
-      {/* En el móvil la barra superior del panel ya dice «Grupo GF Courier»: la cabecera solo existe desde `sm`. */}
-      <header className="hidden sm:flex sm:flex-col sm:gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-            Operación logística
-          </p>
-          <h1 className="mt-1 text-xl font-semibold text-slate-950">Grupo GF Courier</h1>
-          <p className="mt-1 max-w-3xl text-sm text-slate-600">
-            Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega.
-          </p>
-        </div>
+      {/* En el móvil la barra superior del panel ya dice «Grupo GF Courier»: la cabecera solo existe desde `sm`.
+          Mundo de operación (29-09-2026): título a 28 px en tinta, sin antetítulo. */}
+      <header className="hidden sm:block">
+        <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Grupo GF Courier</h1>
+        <p className="mt-1 max-w-3xl text-sm text-ink-500">
+          Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega.
+        </p>
       </header>
 
-      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-[1fr_1fr_1fr_auto] gap-1 border-b border-slate-200 lg:flex">
+      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-[1fr_1fr_1fr_auto] gap-1 border-b border-line lg:flex lg:gap-6">
         <CourierTab
           label="Despacho del día"
           shortLabel="Despacho"
@@ -171,14 +166,14 @@ export function GrupoGfCourierBoard({
         />
       </nav>
       {LEGACY_TABS.some((t) => t.id === tab) && (
-        <p className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
+        <p className="flex flex-wrap items-center gap-x-2 text-[13px] text-ink-500">
           <span>Vista anterior · Despacho del día ya hace esto en un paso.</span>
           <button type="button" onClick={() => setTab("dispatch")} className="min-h-0 p-0 font-medium text-brand-700 underline-offset-2 hover:underline">Ir a Despacho del día</button>
         </p>
       )}
 
-      {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
-      {notice && <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}
+      {error && <Banner tone="crit" role="alert">{error}</Banner>}
+      {notice && <Banner tone="ok" role="status">{notice}</Banner>}
 
       {tab === "dispatch" && (
         <DispatchDayBoard
@@ -271,25 +266,25 @@ function MoreViewsMenu({ active, items, onPick }: {
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "relative flex min-h-12 min-w-12 items-center justify-center rounded-lg px-2 text-lg leading-none lg:min-h-14 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
-          active ? "text-brand-700" : "text-slate-500 hover:text-slate-800",
+          "relative flex min-h-12 min-w-12 items-center justify-center rounded-md px-2 lg:min-h-12",
+          active ? "text-brand-700" : "text-ink-500 hover:text-ink-900",
         )}
       >
-        ⋯
-        {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-brand-600" />}
+        <IconMore className="size-5" />
+        {active && <span className="absolute inset-x-2 bottom-0 h-0.5 bg-brand-600" />}
       </button>
       {open && (
-        <ul role="menu" className="absolute right-0 top-full z-30 mt-1 w-60 rounded-xl border border-slate-200 bg-white p-1 text-sm shadow-lg">
+        <ul role="menu" className="absolute right-0 top-full z-30 mt-1 w-60 rounded-lg bg-white p-1 text-sm shadow-pop">
           {items.map((item) => (
             <li key={item.id} role="none">
               <button
                 type="button"
                 role="menuitem"
                 onClick={() => { onPick(item.id); setOpen(false); }}
-                className="flex min-h-10 w-full items-center justify-between gap-2 rounded-lg px-3 text-left text-slate-800 hover:bg-slate-50"
+                className="flex min-h-9 w-full items-center justify-between gap-2 rounded-md px-3 text-left text-ink-700 hover:bg-wash hover:text-ink-900"
               >
                 <span>{item.label}</span>
-                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[11px] tabular-nums text-slate-600">{item.count.toLocaleString("es-PE")}</span>
+                <Badge className="tabular-nums">{item.count.toLocaleString("es-PE")}</Badge>
               </button>
             </li>
           ))}
@@ -320,20 +315,15 @@ function CourierTab({
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "relative flex min-h-12 min-w-0 items-center justify-center gap-1 px-1 py-2 text-xs font-semibold lg:min-h-14 lg:px-3 lg:text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
-        active ? "text-brand-700" : "text-slate-500 hover:text-slate-800",
+        "relative flex min-h-12 min-w-0 items-center justify-center gap-1.5 px-1 py-2 text-[13px] font-semibold transition-colors lg:px-0 lg:text-sm",
+        active ? "text-brand-700" : "text-ink-500 hover:text-ink-900",
       )}
     >
       <span className={cn("truncate", shortLabel ? "hidden lg:inline" : "")}>{label}</span>{shortLabel && <span className="truncate lg:hidden">{shortLabel}</span>}
       {showCount && (
-        <span className={cn(
-          "rounded-full px-1.5 py-0.5 text-[11px] tabular-nums",
-          active ? "bg-brand-50 text-brand-700" : "hidden bg-slate-100 text-slate-600 sm:inline",
-        )}>
-          {count}
-        </span>
+        <span className="hidden sm:inline-flex"><Badge tone={active ? "brand" : "neutral"} className="tabular-nums">{count}</Badge></span>
       )}
-      {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-brand-600" />}
+      {active && <span className="absolute inset-x-1 bottom-[-1px] h-0.5 bg-brand-600 lg:inset-x-0" />}
     </button>
   );
 }

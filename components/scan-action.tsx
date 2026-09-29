@@ -54,6 +54,8 @@ interface Props {
   /** La cámara sigue abierta tras cada lectura (QR en serie) y enseña `progress`. */
   continuous?: boolean;
   progress?: ScanProgress;
+  /** «ops»: el mundo de operación de Despacho del día. */
+  look?: "default" | "ops";
 }
 
 /**
@@ -64,7 +66,7 @@ function lineNeedsAttention(line: ScanAssignLine): boolean {
   return ["desconocido", "no_elegible", "bloqueado_efectivo", "programado_otro_dia"].includes(line.status);
 }
 
-export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, onPending, compact = false, continuous = false, progress }: Props) {
+export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, onPending, compact = false, continuous = false, progress, look = "default" }: Props) {
   const plan = scanActionPlan(context);
   const [busy, setBusy] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -209,7 +211,7 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
   return (
     <div>
       {!compact && <p className="mt-3 text-xs text-slate-500">{plan.hint}</p>}
-      <DispatchScanner busy={busy} disabled={disabled} onScan={(code) => void execute(code)} onCamera={() => setCameraOpen(true)} compact={compact} buttonLabel={compact ? (label ?? "Escanear") : undefined} hint={plan.hint} />
+      <DispatchScanner busy={busy} disabled={disabled} onScan={(code) => void execute(code)} onCamera={() => setCameraOpen(true)} compact={compact} buttonLabel={compact ? (label ?? "Escanear") : undefined} hint={plan.hint} look={look} />
       <DispatchCamera
         open={cameraOpen}
         onClose={() => { setCameraOpen(false); setLastRead(null); }}

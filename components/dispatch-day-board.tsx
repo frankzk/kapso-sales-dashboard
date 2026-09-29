@@ -9,18 +9,22 @@
 // Absorbe lo que aportaban las pestañas «Pedidos disponibles» y «Pedidos
 // tomados» (retiradas): teléfono y fecha en la fila, «2.º intento», los
 // excluidos con motivo, el picker de filtros y los estados del paquete en
-// cada caja. Las tiles de métricas son esos mismos filtros con su cantidad.
-// Desde el 29-09-2026 la lista se parte en apartados (programados hoy, nunca
-// salieron, ya salieron, +30 días, programados después) y el calendario
-// programa la salida sin tomar el pedido (0199).
+// cada caja. Desde el 29-09-2026 la lista se parte en apartados (programados
+// hoy, nunca salieron, ya salieron, +30 días, programados después) y el
+// calendario programa la salida sin tomar el pedido (0199). El mismo día la
+// vista pasó al mundo de operación (components/ops-ui.tsx): el lenguaje del
+// panel de Stripe con el azul Kapta. Los apartados son tarjetas de estado,
+// las excepciones píldoras al borde, los filtros píldoras discontinuas.
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { OrderLink } from "@/components/order-link";
 import { useRouter } from "next/navigation";
-import { cn, STICKY_HEAD } from "@/components/ui";
+import { cn } from "@/components/ui";
 import { Hint } from "@/components/hint";
-import { Chip, CountChip, Sheet } from "@/components/filter-sheet";
+import { Sheet } from "@/components/filter-sheet";
+import { AttentionPill, Badge, Banner, CHECKBOX, FIELD, FilterPill, OpsButton, StatusCard, type BadgeTone } from "@/components/ops-ui";
+import { IconAlert, IconCalendar, IconCheck, IconChevronDown, IconChevronRight, IconInfo, IconList, IconPackage, IconQr, IconRepeat, IconSearch, IconUndo, IconX } from "@/components/icons";
 import { ReturnsScanner } from "@/components/returns-scanner";
 import type { PendingReturn } from "@/lib/courier-route-ledger";
 import { ScanAction } from "@/components/scan-action";
@@ -55,17 +59,16 @@ import {
   setStages,
   sortQueue,
   splitAssignment,
-  toggleBoxTile,
   toggleInList,
   toggleQueueTile,
   isReturnable,
   takenIsAssignable,
   type BoxItemFilter,
-  type BoxTile,
   type CreatedWindow,
   type DayManifest,
   type QueueFilters,
   type QueueRow,
+  type QueueSegment,
   type QueueTile,
   type RiderBox,
 } from "@/lib/dispatch-day";
@@ -142,10 +145,18 @@ export function DispatchDayBoard(props: Props) {
   // deja el recuadro solo con el escáner para confirmar lo que vuelve.
   const [method, setMethod] = useState<"qr" | "lista" | "cajas" | "devoluciones">("qr");
   const pendingReturns = props.pendingReturns ?? [];
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  // Un popover de filtro abierto a la vez, anclado a su píldora.
+  const [openPill, setOpenPill] = useState<PillId | null>(null);
+  const pillRef: Record<PillId, React.RefObject<HTMLButtonElement | null>> = {
+    etapa: useRef<HTMLButtonElement>(null),
+    fecha: useRef<HTMLButtonElement>(null),
+    tienda: useRef<HTMLButtonElement>(null),
+    distrito: useRef<HTMLButtonElement>(null),
+    creado: useRef<HTMLButtonElement>(null),
+  };
   const [blockedOpen, setBlockedOpen] = useState(false);
   // Filtro rápido de las cajas (Todos · Por armar · Listos para cotejo · Sin
-  // confirmar): compartido por todas las cajas y por las tiles.
+  // confirmar): compartido por todas las cajas de la pestaña.
   const [boxFilter, setBoxFilter] = useState<BoxItemFilter>("todos");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openBox, setOpenBox] = useState<string | null>(null);
@@ -327,7 +338,6 @@ export function DispatchDayBoard(props: Props) {
   const facets = useMemo(() => queueFacetCounts(allRows, filters, day), [allRows, filters, day]);
   const tracking = filters.stages.length > 0;
   const activeFilters = activeFilterCount(filters);
-  const filtersButton = useRef<HTMLButtonElement>(null);
   const visible = filtered.slice(0, limit);
   const visibleAssignable = visible.filter((q) => q.assignable || isReturnable(q));
   const selectedAssignable = allRows.filter((q) => q.assignable && selected.has(q.orderId)).map((q) => q.orderId);
@@ -397,12 +407,6 @@ export function DispatchDayBoard(props: Props) {
     setLimit(100);
     setMethod("lista");
   };
-  /** Tocar una tile de cajas: abre «Cajas de hoy» con ese filtro rápido (o lo quita). */
-  const tapBoxTile = (tile: BoxTile) => {
-    setBoxFilter((cur) => toggleBoxTile(cur, tile));
-    setMethod("cajas");
-    if (!openBox && boxes[0]) setOpenBox(boxes[0].riderId ?? boxes[0].riderName);
-  };
 
   function toggle(id: string) {
     setSelected((cur) => {
@@ -462,588 +466,563 @@ export function DispatchDayBoard(props: Props) {
       : "";
   const helpText = `Escanea con el paquete en la mano: entra a la caja del motorizado y a su ruta del día elegido arriba.${riderTail}`;
 
+  // Tarjetas de estado: los apartados con su cantidad y los filtros de la
+  // lista aplicados, pero sin la etapa de seguimiento: elegir «Por
+  // reprogramar» no deja las tarjetas en cero.
+  const cards = useMemo(() => queueFacetCounts(allRows, { ...filters, stages: [], substages: [] }, day), [allRows, filters, day]);
+  /** Tocar una tarjeta: abre «Desde la lista» en ese apartado (o lo quita). */
+  const tapSegment = (segment: QueueSegment) => {
+    setFilters((cur) => ({ ...cur, segment: cur.segment === segment && method === "lista" ? null : segment, stages: [], substages: [] }));
+    setLimit(100);
+    setMethod("lista");
+  };
+  const pillValue: Record<PillId, string | null> = {
+    etapa: filters.stages.length
+      ? `${filters.stages.map((code) => (code === "sin_etapa" ? "Sin etapa" : macroStageLabel(code))).join(", ")}${filters.substages.length ? ` · ${filters.substages.length} ${filters.substages.length === 1 ? "subetapa" : "subetapas"}` : ""}`
+      : null,
+    fecha: filters.due.length ? filters.due.map((bucket) => SCHEDULED_BUCKET_LABEL[bucket]).join(", ") : null,
+    tienda: filters.store || null,
+    distrito: filters.district || null,
+    creado: filters.created !== "todo" ? CREATED_WINDOW_LABEL[filters.created] : null,
+  };
+  const togglePill = (id: PillId) => setOpenPill((cur) => (cur === id ? null : id));
+  const closePill = () => setOpenPill(null);
+
   return (
-    <section aria-labelledby="dispatch-day-title" className="space-y-3">
-      {/* Cabecera: una sola línea. Fecha · contadores · cambiar día. */}
-      <div className="flex items-center gap-2 text-xs text-slate-600">
-        <h2 id="dispatch-day-title" className="sr-only">Despacho del día</h2>
-        <span className="min-w-0 truncate whitespace-nowrap" title={`${queue.length} por asignar${boxes.length ? ` · ${boxes.length} cajas · ${dayCod} paquetes` : ""}`}>
-          <b className="text-slate-900">{scanDay === day ? `Hoy, ${formatDayShort(day)}` : formatDayShort(scanDay)}</b>
-          {" · "}<span className="tabular-nums">{queue.length.toLocaleString("es-PE")}</span> por asignar
-          {props.blocked.length > 0 && (
-            <> · <button type="button" onClick={() => setBlockedOpen(true)} className="min-h-0 p-0 text-amber-700 underline-offset-2 hover:underline" title="Pedidos de Lima que no entran en la cola: tarifa faltante, distrito inválido, servicio pausado o sin salida armable"><span className="tabular-nums">{props.blocked.length.toLocaleString("es-PE")}</span> sin condiciones</button></>
+    <section aria-labelledby="dispatch-day-title" className="space-y-4">
+      <h2 id="dispatch-day-title" className="sr-only">Despacho del día</h2>
+
+      {/* Línea del día: la fecha de la caja, el resumen y las excepciones que
+          esperan al borde de la tarea. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex items-center gap-2">
+          {dayOpen ? (
+            <span className="flex items-center gap-1.5">
+              <input type="date" value={scanDay} min={day} onChange={(e) => setScanDay(e.target.value || day)} aria-label="Día de la caja" className={cn(FIELD, "h-8 w-auto")} />
+              <OpsButton variant="ghost" size="sm" onClick={() => { setScanDay(day); setDayOpen(false); }}>Volver a hoy</OpsButton>
+            </span>
+          ) : (
+            <OpsButton size="sm" onClick={() => setDayOpen(true)} title="Día de la caja: por defecto hoy; elige otro solo para adelantar cajas" aria-label={`Día de la caja: ${scanDay === day ? "hoy" : formatDayShort(scanDay)}. Cambiar día`}>
+              <IconCalendar className="text-ink-500" />
+              {scanDay === day ? `Hoy, ${formatDayShort(day)}` : formatDayShort(scanDay)}
+              <IconChevronDown className="text-ink-500" />
+            </OpsButton>
           )}
-          {boxes.length > 0 && <> · <span className="tabular-nums">{boxes.length}</span> {boxes.length === 1 ? "caja" : "cajas"} · <span className="tabular-nums">{dayCod}</span> paq.</>}
-        </span>
-        <Hint label="Cómo funciona el despacho" text={helpText} />
-        {dayOpen ? (
-          <span className="ml-auto flex shrink-0 items-center gap-1">
-            <input type="date" value={scanDay} min={day} onChange={(e) => setScanDay(e.target.value || day)} aria-label="Día de la caja" className="min-h-7 rounded-lg border border-slate-300 px-1 text-xs" />
-            <button type="button" onClick={() => { setScanDay(day); setDayOpen(false); }} className="underline">hoy</button>
-          </span>
-        ) : (
-          <button type="button" onClick={() => setDayOpen(true)} className="ml-auto shrink-0 whitespace-nowrap text-slate-400 underline-offset-2 hover:text-slate-700 hover:underline" title="Por defecto la caja es de hoy; elige otro día solo para adelantar cajas">cambiar día</button>
-        )}
+          <Hint label="Cómo funciona el despacho" text={helpText} />
+        </div>
+        <p className="min-w-0 text-[13px] text-ink-500">
+          <b className="font-semibold tabular-nums text-ink-900">{queue.length.toLocaleString("es-PE")}</b> por asignar
+          {boxes.length > 0 && <> · <b className="font-semibold tabular-nums text-ink-900">{boxes.length}</b> {boxes.length === 1 ? "caja" : "cajas"} · <b className="font-semibold tabular-nums text-ink-900">{dayCod}</b> paq.</>}
+        </p>
+        <div role="group" aria-label="Excepciones del día" className="flex flex-wrap items-center gap-2 lg:ml-auto">
+          <AttentionPill icon={IconRepeat} label="Por reprogramar" count={queueTiles.por_reprogramar} hint={QUEUE_TILE_LABEL.por_reprogramar.hint} active={queueTileActive(filters, "por_reprogramar") && method === "lista"} onClick={() => tapQueueTile("por_reprogramar")} />
+          <AttentionPill icon={IconUndo} label="Devoluciones" count={pendingReturns.length} hint="No entregados que el motorizado tiene que traer de vuelta, de cualquier fecha. Toca para escanear y confirmar que llegaron a la oficina." active={method === "devoluciones"} onClick={() => setMethod((m) => (m === "devoluciones" ? "qr" : "devoluciones"))} />
+          <AttentionPill icon={IconAlert} label="Sin condiciones" count={props.blocked.length} hint="Pedidos de Lima que no entran en la cola: tarifa faltante, distrito inválido, servicio pausado o sin salida armable. Abre la lista con el motivo de cada uno." active={blockedOpen} onClick={() => setBlockedOpen((v) => !v)} />
+        </div>
       </div>
 
-      {/* Tiles de métricas: cada una es un filtro con su cantidad (misma fuente de
-          verdad que el picker). Una sola fila con scroll horizontal en todo
-          ancho: con nueve tarjetas, la grilla partía la fila o cortaba etiquetas.
-          El padding arriba y a los lados deja ver el anillo de la tarjeta activa
-          y el de foco: un contenedor con scroll recorta lo que sobresale. */}
-      <div role="group" aria-label="Métricas y filtros del día" className="-mx-1.5 -mt-1 flex snap-x gap-2 overflow-x-auto px-1.5 pb-2 pt-1 [scrollbar-width:thin]">
-        {(Object.keys(QUEUE_TILE_LABEL) as QueueTile[]).map((tile) => (
-          <span key={tile} className="contents">
-            <Tile label={QUEUE_TILE_LABEL[tile].label} hint={QUEUE_TILE_LABEL[tile].hint} value={queueTiles[tile]} active={queueTileActive(filters, tile) && method === "lista"} onClick={() => tapQueueTile(tile)} />
-            {tile === "por_reprogramar" && (
-              <Tile label="Devoluciones" hint="No entregados que el motorizado tiene que traer de vuelta, de cualquier fecha. Toca para escanear y confirmar que llegaron a la oficina." value={pendingReturns.length} active={method === "devoluciones"} tone={pendingReturns.length ? "amber" : undefined} onClick={() => setMethod((m) => (m === "devoluciones" ? "qr" : "devoluciones"))} />
-            )}
-          </span>
-        ))}
-        <Tile label="Sin condiciones" hint="Pedidos de Lima que no entran en la cola: tarifa faltante, distrito inválido, servicio pausado o sin salida armable. Abre la lista con el motivo de cada uno." value={props.blocked.length} active={blockedOpen} tone="amber" onClick={() => setBlockedOpen((v) => !v)} />
-        {boxes.length > 0 && (Object.keys(BOX_TILE_LABEL) as BoxTile[]).map((tile) => (
-          <Tile key={tile} label={BOX_TILE_LABEL[tile].label} hint={BOX_TILE_LABEL[tile].hint} value={boxTiles[tile]} active={boxFilter === tile} onClick={() => tapBoxTile(tile)} />
+      {/* Apartados de la cola como tarjetas de estado: cada una es un filtro con
+          su cantidad y la elegida lleva el borde azul. «Nunca salieron» es el
+          apartado a dejar en cero, como «Sin llamar» en Por confirmar. */}
+      <div role="group" aria-label="Apartados de la cola" className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-1 pt-0.5 [scrollbar-width:thin] lg:mx-0 lg:grid lg:grid-cols-6 lg:overflow-visible lg:p-0">
+        <StatusCard label="Por asignar" value={cards.segmentTotal} hint={QUEUE_TILE_LABEL.por_asignar.hint} active={method === "lista" && !tracking && filters.segment === null} onClick={() => tapQueueTile("por_asignar")} />
+        {QUEUE_SEGMENTS.map((segment) => (
+          <StatusCard key={segment} label={QUEUE_SEGMENT_LABEL[segment].label} value={cards.segment[segment]} hint={QUEUE_SEGMENT_LABEL[segment].hint} active={method === "lista" && filters.segment === segment} onClick={() => tapSegment(segment)} />
         ))}
       </div>
 
       {blockedOpen && (
-        <Sheet title={`${props.blocked.length.toLocaleString("es-PE")} sin condiciones para salir`} onClose={() => setBlockedOpen(false)} wide>
-          <p className="text-xs text-slate-500">No entran en la cola hasta que se arregle el motivo. Tarifa y pausa se corrigen en el Tarifario; el resto en el pedido o en la caja.</p>
-          <ul className="mt-2 max-h-[50vh] divide-y divide-slate-100 overflow-auto text-sm">
+        <Sheet look="ops" title={`${props.blocked.length.toLocaleString("es-PE")} sin condiciones para salir`} onClose={() => setBlockedOpen(false)} wide>
+          <p className="text-[13px] text-ink-500">No entran en la cola hasta que se arregle el motivo. Tarifa y pausa se corrigen en el Tarifario; el resto en el pedido o en la caja.</p>
+          <ul className="mt-3 max-h-[50vh] divide-y divide-line overflow-auto border-t border-line text-sm">
             {props.blocked.map((b) => {
               const reason = BLOCKED_REASON_LABEL[b.reason];
               return (
-                <li key={b.orderId} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1.5">
-                  <OrderLink orderId={b.orderId} className="font-semibold text-slate-950 hover:text-brand-700">{b.orderName}</OrderLink>
-                  <span className="text-xs text-slate-500">{b.storeName} · {b.customerName} · {b.district}</span>
-                  <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">{reason.label}</span>
-                  {reason.fix === "tarifario" && <Link href="/dashboard/courier?tab=tariffs" className="text-[11px] text-brand-700 underline">Arreglar en Tarifario</Link>}
+                <li key={b.orderId} className="flex flex-wrap items-center gap-x-2 gap-y-1 py-2">
+                  <OrderLink orderId={b.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{b.orderName}</OrderLink>
+                  <span className="text-[13px] text-ink-500">{b.storeName} · {b.customerName} · {b.district}</span>
+                  <Badge tone="warn">{reason.label}</Badge>
+                  {reason.fix === "tarifario" && <Link href="/dashboard/courier?tab=tariffs" className="text-xs font-medium text-brand-700 hover:underline">Arreglar en Tarifario</Link>}
                 </li>
               );
             })}
-            {!props.blocked.length && <li className="py-4 text-center text-xs text-slate-500">Todos los pedidos de Lima tienen condiciones para salir.</li>}
+            {!props.blocked.length && <li className="py-6 text-center text-[13px] text-ink-500">Todos los pedidos de Lima tienen condiciones para salir.</li>}
           </ul>
         </Sheet>
       )}
 
       {declined.length > 0 && (
-        <details className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          <summary className="cursor-pointer font-semibold">{declined.length} {declined.length === 1 ? "paquete no recogido" : "paquetes no recogidos"} · vuelven a «por asignar»</summary>
-          <ul className="mt-1 space-y-1">
-            {declined.map((d) => (
-              <li key={`${d.manifestId}:${d.shipmentId}`} className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{d.orderName ?? "Pedido"}</span>
-                <span className="text-amber-800/80">{d.customerName} · {d.district}</span>
-                <span>· no recogido por <b>{d.riderName}</b>: {d.reason}</span>
-              </li>
-            ))}
-          </ul>
-        </details>
+        <Banner tone="warn">
+          <details>
+            <summary className="flex cursor-pointer list-none items-center gap-1.5 font-semibold text-warn-fg [&::-webkit-details-marker]:hidden">{declined.length} {declined.length === 1 ? "paquete no recogido" : "paquetes no recogidos"} · vuelven a «por asignar»<IconChevronDown className="size-4" /></summary>
+            <ul className="mt-2 space-y-1">
+              {declined.map((d) => (
+                <li key={`${d.manifestId}:${d.shipmentId}`} className="flex flex-wrap items-center gap-x-2">
+                  <span className="font-semibold text-ink-900">{d.orderName ?? "Pedido"}</span>
+                  <span className="text-ink-500">{d.customerName} · {d.district}</span>
+                  <span>· no recogido por <b className="font-semibold">{d.riderName}</b>: {d.reason}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        </Banner>
       )}
 
-      <div className="min-w-0">
-        {/* ── Asignar y cajas, en una sola tarjeta con tres pestañas ── */}
-        <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="px-4 py-3">
-            {method === "devoluciones" && (
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-semibold text-slate-900">Recibir devoluciones en oficina</p>
-                  <button type="button" onClick={() => setMethod("qr")} className="ml-auto text-xs text-slate-500 underline">Volver a asignar</button>
-                </div>
-                {canManageDispatch
-                  ? <ReturnsScanner key={pendingReturns.length ? "con" : "sin"} orgId={orgId} pending={pendingReturns} />
-                  : <p className="text-xs text-amber-700">Tu rol no organiza rutas: puedes mirar, no recibir.</p>}
-              </div>
-            )}
-            <div className={cn("flex flex-col gap-2", method === "devoluciones" && "hidden")}>
-              <div className="min-w-0 flex-1">
-                <select
-                  value={riderId}
-                  onChange={(e) => { setRiderId(e.target.value); if (tray.length) void drainTray(e.target.value); }}
-                  aria-label="¿Quién sale hoy?"
-                  className="min-h-14 w-full rounded-xl border border-slate-300 bg-white px-3 text-base font-medium text-slate-900 focus-visible:outline-none focus-visible:border-brand-500 focus-visible:ring-4 focus-visible:ring-brand-500/15 sm:min-h-12 sm:text-sm"
-                >
-                  <option value="">¿Quién sale hoy?</option>
-                  {riders.map((r) => <option key={r.id} value={r.id}>{r.fullName}</option>)}
-                </select>
-                {riderId && riderBoxCount(riderId) > 0 && (
-                  <p className="mt-1 truncate text-xs text-slate-500">{riderName} · {riderBoxCount(riderId)} en su caja</p>
-                )}
-              </div>
-              <div role="tablist" aria-label="Forma de asignar" className="grid grid-cols-3 rounded-xl bg-slate-100 p-1 text-sm font-medium">
-                <button type="button" role="tab" aria-selected={method === "qr"} onClick={() => setMethod("qr")}
-                  className={cn("min-h-10 rounded-lg px-3", method === "qr" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800")}>
-                  Asignar por QR
-                </button>
-                <button type="button" role="tab" aria-selected={method === "lista"} onClick={() => setMethod("lista")}
-                  className={cn("min-h-10 rounded-lg px-3", method === "lista" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800")}>
-                  Desde la lista
-                </button>
-                <button type="button" role="tab" aria-selected={method === "cajas"} onClick={() => setMethod("cajas")}
-                  className={cn("flex min-h-10 items-center justify-center gap-2 rounded-lg px-3", method === "cajas" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800")}>
-                  <span className="truncate">{scanDay === day ? "Cajas de hoy" : `Cajas del ${formatDayShort(scanDay)}`}</span>
-                  <span className={cn("grid h-5 min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-[11px] font-bold tabular-nums", dayCod ? "bg-brand-600 text-white" : "bg-slate-200 text-slate-600")} title={`${boxes.length} ${boxes.length === 1 ? "caja" : "cajas"} · ${dayCod} paquetes`}>{dayCod}</span>
-                </button>
-              </div>
-              {method === "qr" && (
-              <div>
-                {canManageDispatch ? (
-                  <ScanAction
-                    context="supervisor_asignacion"
-                    compact
-                    continuous
-                    progress={riderId ? { done: liveBox.count, label: `${liveBox.count} en la caja de ${riderName}${liveBox.pending ? ` · ${liveBox.pending} asignando…` : ""}` } : undefined}
-                    disabled={draining}
-                    assign={{ orgId, riderId, scheduledFor: scanDay, overrideCash }}
-                    onQueue={(code) => setTray((cur) => addToTray(cur, code))}
-                    onPending={pendingLine}
-                    onResult={(r) => { if (r.line) pushLine(r.line); }}
-                  />
-                ) : (
-                  <p className="text-xs text-amber-700">Tu rol no organiza rutas: puedes mirar, no asignar.</p>
-                )}
-              </div>
-              )}
+      {/* ── La tarea: quién sale y cómo se le asigna. Una sola tarjeta. ── */}
+      <div className="min-w-0 overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line">
+        {method === "devoluciones" && (
+          <div className="flex flex-col gap-3 p-4">
+            <div className="flex items-center gap-2">
+              <IconUndo className="size-4 text-ink-500" />
+              <p className="text-sm font-semibold text-ink-900">Recibir devoluciones en oficina</p>
+              <OpsButton variant="ghost" size="sm" className="ml-auto" onClick={() => setMethod("qr")}>Volver a asignar</OpsButton>
             </div>
-            {method === "qr" && !helpDismissed && canManageDispatch && (
-              <p className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+            {canManageDispatch
+              ? <ReturnsScanner key={pendingReturns.length ? "con" : "sin"} orgId={orgId} pending={pendingReturns} />
+              : <Banner tone="warn">Tu rol no organiza rutas: puedes mirar, no recibir.</Banner>}
+          </div>
+        )}
+        <div className={cn("flex flex-col gap-3 p-4 lg:flex-row lg:items-end", method === "devoluciones" && "hidden")}>
+          <label className="grid min-w-0 gap-1.5 lg:w-80 lg:shrink-0">
+            <span className="text-[13px] font-medium text-ink-700">Motorizado</span>
+            <select
+              value={riderId}
+              onChange={(e) => { setRiderId(e.target.value); if (tray.length) void drainTray(e.target.value); }}
+              aria-label="¿Quién sale hoy?"
+              className={cn(FIELD, "h-10 font-medium")}
+            >
+              <option value="">¿Quién sale hoy?</option>
+              {riders.map((r) => <option key={r.id} value={r.id}>{r.fullName}</option>)}
+            </select>
+          </label>
+          <div role="tablist" aria-label="Forma de asignar" className="grid min-w-0 flex-1 grid-cols-3 gap-0.5 rounded-lg bg-wash p-0.5 ring-1 ring-inset ring-line">
+            <MethodTab active={method === "qr"} onClick={() => setMethod("qr")} icon={IconQr} label="Asignar por QR" shortLabel="Por QR" />
+            <MethodTab active={method === "lista"} onClick={() => setMethod("lista")} icon={IconList} label="Desde la lista" shortLabel="Lista" />
+            <MethodTab active={method === "cajas"} onClick={() => setMethod("cajas")} icon={IconPackage} label={scanDay === day ? "Cajas de hoy" : `Cajas del ${formatDayShort(scanDay)}`} shortLabel="Cajas">
+              <Badge tone={dayCod ? "brand" : "neutral"} title={`${boxes.length} ${boxes.length === 1 ? "caja" : "cajas"} · ${dayCod} paquetes`} className="tabular-nums">{dayCod}</Badge>
+            </MethodTab>
+          </div>
+        </div>
+        {method !== "devoluciones" && riderId && riderBoxCount(riderId) > 0 && (
+          <p className="-mt-2 px-4 pb-3 text-[13px] text-ink-500"><b className="font-semibold text-ink-700">{riderName}</b> · <span className="tabular-nums">{riderBoxCount(riderId)}</span> en su caja</p>
+        )}
+
+        {method === "qr" && (
+          <div className="border-t border-line p-4">
+            {canManageDispatch ? (
+              <ScanAction
+                context="supervisor_asignacion"
+                compact
+                continuous
+                look="ops"
+                progress={riderId ? { done: liveBox.count, label: `${liveBox.count} en la caja de ${riderName}${liveBox.pending ? ` · ${liveBox.pending} asignando…` : ""}` } : undefined}
+                disabled={draining}
+                assign={{ orgId, riderId, scheduledFor: scanDay, overrideCash }}
+                onQueue={(code) => setTray((cur) => addToTray(cur, code))}
+                onPending={pendingLine}
+                onResult={(r) => { if (r.line) pushLine(r.line); }}
+              />
+            ) : (
+              <Banner tone="warn">Tu rol no organiza rutas: puedes mirar, no asignar.</Banner>
+            )}
+            {!helpDismissed && canManageDispatch && (
+              <p className="mt-3 flex items-start gap-2 text-[13px] text-ink-500">
+                <IconInfo className="mt-px size-4 shrink-0 text-ink-300" />
                 <span className="min-w-0 flex-1">Cada escaneo toma el pedido y lo pone en la caja de {riderName || "quien elijas"}. Después, oficina lo verifica en «Verificar caja».</span>
-                <button type="button" onClick={dismissHelp} aria-label="Cerrar ayuda" className="shrink-0 text-slate-400 hover:text-slate-700">×</button>
+                <button type="button" onClick={dismissHelp} aria-label="Cerrar ayuda" className="grid size-6 shrink-0 place-items-center rounded-md text-ink-500 hover:bg-wash hover:text-ink-900"><IconX className="size-3.5" /></button>
               </p>
             )}
 
-            {method === "qr" && tray.length > 0 && (
-              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-sky-50 px-2 py-1.5 text-xs text-sky-900">
-                <span><b>{tray.length}</b> en espera de motorizado</span>
+            {tray.length > 0 && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-info-wash px-3 py-2 text-[13px] text-ink-700">
+                <span><b className="font-semibold tabular-nums text-ink-900">{tray.length}</b> en espera de motorizado</span>
                 {tray.map((e) => (
-                  <span key={e.code} className="flex items-center gap-1 rounded-full bg-white px-2 py-0.5 font-mono">
+                  <span key={e.code} className="flex items-center gap-1 rounded bg-white py-0.5 pl-2 pr-1 font-mono text-xs text-ink-700 ring-1 ring-inset ring-line">
                     {e.code}
-                    <button type="button" aria-label={`Quitar ${e.code}`} onClick={() => setTray((cur) => removeFromTray(cur, e.code))} className="text-slate-400 hover:text-red-600">×</button>
+                    <button type="button" aria-label={`Quitar ${e.code}`} onClick={() => setTray((cur) => removeFromTray(cur, e.code))} className="grid size-5 place-items-center rounded text-ink-500 hover:bg-crit-wash hover:text-crit-fg"><IconX className="size-3" /></button>
                   </span>
                 ))}
-                <button type="button" disabled={!riderId || draining} onClick={() => void drainTray(riderId)} className="ml-auto min-h-8 rounded-lg bg-sky-700 px-3 font-semibold text-white disabled:opacity-50">
+                <OpsButton variant="primary" size="sm" className="ml-auto" disabled={!riderId || draining} onClick={() => void drainTray(riderId)}>
                   {draining ? "Asignando…" : riderId ? `Asignar a ${riderName}` : "Elige motorizado"}
-                </button>
+                </OpsButton>
               </div>
             )}
 
-            {method === "qr" && lines.length > 0 && (
-              <div className="mt-3">
-                <ul className="max-h-72 divide-y divide-slate-100 overflow-auto rounded-xl border border-slate-200" aria-live="polite">
-                  {lines.map((l, i) => {
-                    const r = scanRowPresentation(l, riderName);
-                    return (
-                      <li key={`${l.code}:${i}`} className={cn("flex items-center gap-2 px-3 py-1.5 text-sm", r.rowClass)} title={[l.message, l.cashWarning].filter(Boolean).join(" · ")}>
-                        <span className="min-w-0 flex-1 truncate">
-                          <span className="font-semibold text-slate-900">{l.orderName ?? l.code}</span>
-                          <span className={cn("ml-2 text-xs font-medium", r.textClass)}>{r.text}</span>
-                        </span>
-                        {l.amount != null && <span className="shrink-0 text-xs tabular-nums text-slate-600">{moneyShort(l.amount)}</span>}
-                        {l.status === "en_otra_caja" && l.manifestId && l.shipmentId && riderId && (
-                          <button type="button" disabled={pending || draining} onClick={() => run(async () => moveManifestItem(orgId, l.manifestId!, l.shipmentId!, riderId, `Escaneado en la caja de ${riderName}`))} className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800 disabled:opacity-50">Mover</button>
-                        )}
-                        {l.status === "programado_otro_dia" && riderId && (
-                          <button type="button" disabled={pending || draining} onClick={() => confirmScanned(l)} title={l.message} className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800 disabled:opacity-50">Asignar igual</button>
-                        )}
-                        {l.status === "bloqueado_efectivo" && !overrideCash && (
-                          <button type="button" onClick={() => setOverrideCash(true)} title={`${cashOverrideHint(props.cashWarning, props.cashLimit)} Toca «Autorizar» y vuelve a escanear.`} className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800">Autorizar</button>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
+            {lines.length > 0 && (
+              <ul className="mt-3 max-h-72 divide-y divide-line overflow-auto rounded-lg ring-1 ring-line" aria-live="polite">
+                {lines.map((l, i) => {
+                  const r = scanRowPresentation(l, riderName);
+                  return (
+                    <li key={`${l.code}:${i}`} className="flex items-center gap-2 px-3 py-2 text-sm" title={[l.message, l.cashWarning].filter(Boolean).join(" · ")}>
+                      <span className="flex min-w-0 flex-1 items-center gap-2">
+                        <span className="shrink-0 font-semibold text-ink-900">{l.orderName ?? l.code}</span>
+                        <Badge tone={r.tone} className="min-w-0">{r.text}</Badge>
+                      </span>
+                      {l.amount != null && <span className="shrink-0 text-[13px] tabular-nums text-ink-500">{moneyShort(l.amount)}</span>}
+                      {l.status === "en_otra_caja" && l.manifestId && l.shipmentId && riderId && (
+                        <OpsButton size="sm" disabled={pending || draining} onClick={() => run(async () => moveManifestItem(orgId, l.manifestId!, l.shipmentId!, riderId, `Escaneado en la caja de ${riderName}`))}>Mover</OpsButton>
+                      )}
+                      {l.status === "programado_otro_dia" && riderId && (
+                        <OpsButton size="sm" disabled={pending || draining} onClick={() => confirmScanned(l)} title={l.message}>Asignar igual</OpsButton>
+                      )}
+                      {l.status === "bloqueado_efectivo" && !overrideCash && (
+                        <OpsButton size="sm" onClick={() => setOverrideCash(true)} title={`${cashOverrideHint(props.cashWarning, props.cashLimit)} Toca «Autorizar» y vuelve a escanear.`}>Autorizar</OpsButton>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
             )}
             {/* El total de la caja, del servidor: sobrevive a recargar la página
                 (la lista de escaneos de arriba es solo de esta sesión). Más grande
-                de tamaño para leerlo con la pistola en la mano. */}
-            {method === "qr" && riderId && (liveBox.count > 0 || lines.length > 0) && (() => {
+                para leerlo con la pistola en la mano. */}
+            {riderId && (liveBox.count > 0 || lines.length > 0) && (() => {
               const { count, cash, pending: inFlight } = liveBox;
               return (
-                <div className={cn("mt-2 flex items-center gap-2", cash >= props.cashLimit ? "text-red-700" : cash >= props.cashWarning ? "text-amber-700" : "text-slate-800")}>
+                <div className={cn("mt-3 flex items-center gap-2", cash >= props.cashLimit ? "text-crit-fg" : cash >= props.cashWarning ? "text-warn-fg" : "text-ink-900")}>
                   <span className="min-w-0 truncate text-[17px] font-medium leading-tight" title={`${count} en la caja de ${riderName} · efectivo previsto ${money(cash)}${cash >= props.cashLimit ? " · supera el límite" : cash >= props.cashWarning ? " · cerca del límite" : ""}${overrideCash ? " · límite autorizado" : ""}`}>
-                    <b className="tabular-nums">{count}</b> en la caja de {riderName} · <b className="tabular-nums">{moneyShort(cash)}</b>
+                    <b className="font-semibold tabular-nums">{count}</b> en la caja de {riderName} · <b className="font-semibold tabular-nums">{moneyShort(cash)}</b>
                   </span>
-                  {inFlight > 0 && <span className="shrink-0 text-xs text-slate-500">{inFlight} asignando…</span>}
-                  {lines.length > 0 && <button type="button" onClick={() => setLines([])} className="ml-auto shrink-0 text-xs text-slate-500 underline">Limpiar lista</button>}
+                  {inFlight > 0 && <span className="shrink-0 text-[13px] text-ink-500">{inFlight} asignando…</span>}
+                  {lines.length > 0 && <OpsButton variant="ghost" size="sm" className="ml-auto" onClick={() => setLines([])}>Limpiar lista</OpsButton>}
                 </div>
               );
             })()}
           </div>
-          {method === "lista" && (
-          <div className="border-t border-slate-100">
-          <div className="border-b border-slate-200 px-4 py-3">
-            <div className="flex items-center gap-2">
-              <input
-                value={filters.query}
-                onChange={(e) => patchFilters({ query: e.target.value })}
-                placeholder="Pedido, cliente, distrito o teléfono"
-                aria-label="Buscar en la cola"
-                className="min-h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-3 text-sm"
-              />
-              <div className="relative">
-                <button
-                  ref={filtersButton}
-                  type="button"
-                  onClick={() => setFiltersOpen((v) => !v)}
-                  aria-expanded={filtersOpen}
-                  aria-haspopup="dialog"
-                  className={cn("min-h-10 rounded-lg border px-3 text-sm font-medium", activeFilters ? "border-brand-300 bg-brand-50 text-brand-800" : "border-slate-300 text-slate-700 hover:bg-slate-50")}
-                >
-                  Filtros{activeFilters ? ` · ${activeFilters}` : ""}
-                </button>
-                {filtersOpen && (
-                  <Sheet title="Filtros" onClose={() => setFiltersOpen(false)} anchored anchorRef={filtersButton}>
-                    <div className="grid gap-3 text-sm">
-                      {/* Etapa, subetapa y fecha pactada como en el Master, dentro
-                          del mismo flotante que tienda y distrito: un solo sitio
-                          para filtrar. Etapa cuenta todos los pedidos de Grupo GF;
-                          elegir una que no se asigna (En curso, Por cerrar…) lista
-                          esos pedidos para seguimiento. Las subetapas aparecen
-                          solo con una etapa elegida. */}
-                      <div role="group" aria-label="Etapa" className="grid gap-1">
-                        <span className="text-xs font-medium text-slate-600">Etapa</span>
-                        <div className="grid grid-cols-2 gap-1">
-                          {ORDER_MACRO_STAGES.map((stage) => {
-                            const count = facets.stage[stage.code] ?? 0;
-                            const active = filters.stages.includes(stage.code);
-                            return (
-                              <button
-                                key={stage.code}
-                                type="button"
-                                aria-pressed={active}
-                                disabled={count === 0 && !active}
-                                onClick={() => patchFilters(setStages(filters, toggleInList(filters.stages, stage.code)))}
-                                title={count === 0 ? "Ningún pedido de Grupo GF en esta etapa" : ["preparacion", "por_despachar"].includes(stage.code) ? undefined : "Ya salieron con Grupo GF: se listan para seguimiento, sin asignar"}
-                                className={cn(
-                                  "flex min-h-10 items-center gap-2 rounded-lg border px-2 text-left transition",
-                                  active ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-700 hover:border-slate-300",
-                                  count === 0 && !active && "cursor-not-allowed opacity-40",
-                                )}
-                              >
-                                <span className={cn("grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] font-bold", active ? "bg-white/15 text-white" : "bg-slate-100 text-slate-500")}>{String(stage.order).padStart(2, "0")}</span>
-                                <span className="min-w-0">
-                                  <span className="block truncate text-xs font-semibold">{stage.label}</span>
-                                  <span className={cn("block text-[11px] tabular-nums", active ? "text-slate-300" : "text-slate-400")}>{count.toLocaleString("es-PE")} pedidos</span>
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
+        )}
+
+        {method === "lista" && (
+          <div className="border-t border-line">
+            {/* Búsqueda y filtros en píldoras, como en Stripe: discontinuas hasta
+                que filtran; sólidas con su valor y una «x» para quitarlas. */}
+            <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+              <label className="relative w-full sm:w-72">
+                <span className="sr-only">Buscar en la cola</span>
+                <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
+                <input
+                  value={filters.query}
+                  onChange={(e) => patchFilters({ query: e.target.value })}
+                  placeholder="Pedido, cliente, distrito o teléfono"
+                  aria-label="Buscar en la cola"
+                  className={cn(FIELD, "h-8 pl-8")}
+                />
+              </label>
+              <FilterPill ref={pillRef.etapa} label="Etapa" value={pillValue.etapa} expanded={openPill === "etapa"} onClick={() => togglePill("etapa")} onClear={() => patchFilters({ stages: [], substages: [] })} />
+              <FilterPill ref={pillRef.fecha} label="Fecha pactada" value={pillValue.fecha} expanded={openPill === "fecha"} onClick={() => togglePill("fecha")} onClear={() => patchFilters({ due: [] })} />
+              <FilterPill ref={pillRef.tienda} label="Tienda" value={pillValue.tienda} expanded={openPill === "tienda"} onClick={() => togglePill("tienda")} onClear={() => patchFilters({ store: "" })} />
+              <FilterPill ref={pillRef.distrito} label="Distrito" value={pillValue.distrito} expanded={openPill === "distrito"} onClick={() => togglePill("distrito")} onClear={() => patchFilters({ district: "" })} />
+              <FilterPill ref={pillRef.creado} label="Creado" value={pillValue.creado} expanded={openPill === "creado"} onClick={() => togglePill("creado")} onClear={() => patchFilters({ created: "todo" })} />
+              <FilterPill label="Armados" count={queueTiles.armados} active={filters.armedOnly} title={QUEUE_TILE_LABEL.armados.hint} onClick={() => patchFilters({ armedOnly: !filters.armedOnly })} onClear={() => patchFilters({ armedOnly: false })} />
+              <FilterPill label="Tomados sin caja" count={queueTiles.tomados_sin_caja} active={filters.takenOnly} title={QUEUE_TILE_LABEL.tomados_sin_caja.hint} onClick={() => patchFilters({ takenOnly: !filters.takenOnly })} onClear={() => patchFilters({ takenOnly: false })} />
+              {activeFilters > 0 && (
+                <OpsButton variant="ghost" size="sm" onClick={() => patchFilters({ ...EMPTY_QUEUE_FILTERS, query: filters.query, segment: filters.segment })}>Quitar filtros</OpsButton>
+              )}
+              <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto">
+                <b className="font-semibold text-ink-900">{filtered.length.toLocaleString("es-PE")}</b> {tracking ? "pedidos en esa etapa" : filters.segment ? QUEUE_SEGMENT_LABEL[filters.segment].label.toLocaleLowerCase("es") : "en cola"}
+              </p>
+            </div>
+
+            {openPill === "etapa" && (
+              <Sheet look="ops" title="Etapa" onClose={closePill} anchored anchorRef={pillRef.etapa}>
+                {/* Etapa, como en el Master: cuenta todos los pedidos de Grupo GF;
+                    elegir una que no se asigna (En curso, Por cerrar…) lista esos
+                    pedidos para seguimiento. Las subetapas aparecen con una etapa. */}
+                <div className="grid gap-4 text-sm">
+                  <div role="group" aria-label="Etapa" className="grid grid-cols-2 gap-1.5">
+                    {ORDER_MACRO_STAGES.map((stage) => {
+                      const count = facets.stage[stage.code] ?? 0;
+                      const active = filters.stages.includes(stage.code);
+                      return (
+                        <button
+                          key={stage.code}
+                          type="button"
+                          aria-pressed={active}
+                          disabled={count === 0 && !active}
+                          onClick={() => patchFilters(setStages(filters, toggleInList(filters.stages, stage.code)))}
+                          title={count === 0 ? "Ningún pedido de Grupo GF en esta etapa" : ["preparacion", "por_despachar"].includes(stage.code) ? undefined : "Ya salieron con Grupo GF: se listan para seguimiento, sin asignar"}
+                          className={cn(
+                            "flex min-h-11 min-w-0 flex-col justify-center rounded-md px-2.5 py-1.5 text-left transition-shadow",
+                            active ? "bg-brand-50 ring-2 ring-inset ring-brand-600" : "bg-white ring-1 ring-inset ring-line-strong hover:ring-ink-300",
+                            count === 0 && !active && "cursor-not-allowed opacity-40",
+                          )}
+                        >
+                          <span className={cn("block truncate text-[13px] font-semibold", active ? "text-brand-700" : "text-ink-900")}>{stage.label}</span>
+                          <span className={cn("block text-xs tabular-nums", active ? "text-brand-700" : "text-ink-500")}>{count.toLocaleString("es-PE")} pedidos</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {substageOptions.length > 0 && (
+                    <div role="group" aria-label="Subetapas" className="grid gap-2">
+                      <span className="text-xs font-semibold text-ink-600">Subetapas</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {substageOptions.map((opt) => (
+                          <ChoiceChip
+                            key={opt.substage}
+                            label={opt.substage === "sin_subetapa" ? "Sin subetapa" : macroSubstageLabel(opt.substage)}
+                            count={facets.substage[opt.substage] ?? 0}
+                            active={filters.substages.includes(opt.substage)}
+                            title={opt.stage ? `${macroStageLabel(opt.stage)} · ${macroSubstageLabel(opt.substage)}` : undefined}
+                            onClick={() => patchFilters({ substages: toggleInList(filters.substages, opt.substage) })}
+                          />
+                        ))}
                       </div>
-                      {substageOptions.length > 0 && (
-                      <div role="group" aria-label="Subetapas" className="grid gap-1">
-                        <span className="text-xs font-medium text-slate-600">Subetapas</span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {substageOptions.map((opt) => (
-                            <CountChip
-                              key={opt.substage}
-                              label={opt.substage === "sin_subetapa" ? "Sin subetapa" : macroSubstageLabel(opt.substage)}
-                              count={facets.substage[opt.substage] ?? 0}
-                              active={filters.substages.includes(opt.substage)}
-                              title={opt.stage ? `${macroStageLabel(opt.stage)} · ${macroSubstageLabel(opt.substage)}` : undefined}
-                              onClick={() => patchFilters({ substages: toggleInList(filters.substages, opt.substage) })}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                      )}
-                      <div role="group" aria-label="Fecha pactada" className="grid gap-1">
-                        <span className="flex items-center gap-1 text-xs font-medium text-slate-600">
-                          Fecha pactada
-                          <Hint label="Qué es la fecha pactada" text="Fecha pactada de salida: la de la solicitud ya tomada o, si el pedido sigue disponible, hoy o mañana según el corte de las 11:30. «Vencidos» son tomados cuya salida ya pasó." />
-                        </span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {SCHEDULED_BUCKETS.map((bucket) => (
-                            <CountChip key={bucket} label={SCHEDULED_BUCKET_LABEL[bucket]} count={facets.due[bucket]} active={filters.due.includes(bucket)} onClick={() => patchFilters({ due: toggleInList(filters.due, bucket) })} />
-                          ))}
-                        </div>
-                      </div>
-                      <label className="grid gap-1 text-xs font-medium text-slate-600">Tienda
-                        <select value={filters.store} onChange={(e) => patchFilters({ store: e.target.value })} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
-                          <option value="">Todas</option>
-                          {stores.map((st) => <option key={st} value={st}>{st}</option>)}
-                        </select>
-                      </label>
-                      <label className="grid gap-1 text-xs font-medium text-slate-600">Distrito
-                        <select value={filters.district} onChange={(e) => patchFilters({ district: e.target.value })} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
-                          <option value="">Todos</option>
-                          {districts.map((d) => <option key={d} value={d}>{d}</option>)}
-                        </select>
-                      </label>
-                      <label className="grid gap-1 text-xs font-medium text-slate-600">Fecha de creación
-                        <select value={filters.created} onChange={(e) => patchFilters({ created: e.target.value as CreatedWindow })} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900">
-                          <option value="todo">Todo</option>
-                          <option value="hoy">Hoy</option>
-                          <option value="ayer">Ayer</option>
-                          <option value="7d">Últimos 7 días</option>
-                        </select>
-                      </label>
-                      <label className="flex min-h-10 items-center gap-2"><input type="checkbox" checked={filters.armedOnly} onChange={(e) => patchFilters({ armedOnly: e.target.checked })} /> Solo armados</label>
-                      <label className="flex min-h-10 items-center gap-2"><input type="checkbox" checked={filters.takenOnly} onChange={(e) => patchFilters({ takenOnly: e.target.checked })} /> Solo tomados sin caja</label>
-                      {activeFilters > 0 && <button type="button" onClick={() => patchFilters({ ...EMPTY_QUEUE_FILTERS, query: filters.query, segment: filters.segment })} className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700">Quitar filtros</button>}
                     </div>
+                  )}
+                </div>
+              </Sheet>
+            )}
+            {openPill === "fecha" && (
+              <Sheet look="ops" title="Fecha pactada" onClose={closePill} anchored anchorRef={pillRef.fecha}>
+                <p className="text-[13px] text-ink-500">Fecha pactada de salida: la programada, la de la solicitud ya tomada o, si el pedido sigue disponible, hoy o mañana según el corte de las 11:30. «Vencidos» son los que ya debían haber salido.</p>
+                <div role="group" aria-label="Fecha pactada" className="mt-3 flex flex-wrap gap-1.5">
+                  {SCHEDULED_BUCKETS.map((bucket) => (
+                    <ChoiceChip key={bucket} label={SCHEDULED_BUCKET_LABEL[bucket]} count={facets.due[bucket]} active={filters.due.includes(bucket)} onClick={() => patchFilters({ due: toggleInList(filters.due, bucket) })} />
+                  ))}
+                </div>
+              </Sheet>
+            )}
+            {openPill === "tienda" && (
+              <Sheet look="ops" title="Tienda" onClose={closePill} anchored anchorRef={pillRef.tienda}>
+                <OptionList options={[{ value: "", label: "Todas" }, ...stores.map((st) => ({ value: st, label: st }))]} value={filters.store} onPick={(store) => { patchFilters({ store }); closePill(); }} />
+              </Sheet>
+            )}
+            {openPill === "distrito" && (
+              <Sheet look="ops" title="Distrito" onClose={closePill} anchored anchorRef={pillRef.distrito}>
+                <select value={filters.district} onChange={(e) => { patchFilters({ district: e.target.value }); closePill(); }} aria-label="Distrito" className={FIELD}>
+                  <option value="">Todos</option>
+                  {districts.map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </Sheet>
+            )}
+            {openPill === "creado" && (
+              <Sheet look="ops" title="Fecha de creación" onClose={closePill} anchored anchorRef={pillRef.creado}>
+                <OptionList
+                  options={(["todo", "hoy", "ayer", "7d"] as CreatedWindow[]).map((w) => ({ value: w, label: w === "todo" ? "Cualquier fecha" : w === "hoy" ? "Hoy" : w === "ayer" ? "Ayer" : "Últimos 7 días" }))}
+                  value={filters.created}
+                  onPick={(created) => { patchFilters({ created: created as CreatedWindow }); closePill(); }}
+                />
+              </Sheet>
+            )}
+
+            {/* Barra de acciones: marca, asigna, programa. Pegada arriba al bajar. */}
+            <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-y border-line bg-wash px-4 py-2">
+              <label className="flex min-h-8 items-center gap-2 text-sm">
+                <input type="checkbox" className={CHECKBOX} checked={allVisibleSelected} disabled={!visibleAssignable.length} onChange={() => setSelected(allVisibleSelected ? new Set() : new Set(visibleAssignable.map((q) => q.orderId)))} aria-label="Marcar los visibles" />
+                <span className={cn("font-medium", selected.size ? "text-ink-900" : "text-ink-600")}>{selected.size ? <><span className="tabular-nums">{selected.size}</span> marcados · <span className="tabular-nums">{money(selectedTotal)}</span></> : "Marca pedidos"}</span>
+              </label>
+              <OpsButton
+                variant="primary"
+                disabled={pending || !canManageDispatch || !riderId || !selected.size}
+                onClick={() => assign()}
+                title={riderId ? undefined : "Elige el motorizado arriba"}
+                className="max-w-full truncate"
+              >
+                {pending ? "Asignando…" : `Asignar${selected.size ? ` ${selected.size}` : ""} a ${riderName || "…"}`}
+              </OpsButton>
+              {/* Programar: guarda el día de salida de los marcados, sin tomarlos. */}
+              <div className="relative">
+                <OpsButton
+                  ref={rescheduleButton}
+                  disabled={pending || !canManageDispatch || !selectedAssignable.length}
+                  onClick={() => { setRescheduleDay((d) => d || day); setRescheduleOpen((v) => !v); }}
+                  aria-label="Programar la salida de los marcados"
+                  aria-expanded={rescheduleOpen}
+                  title={selectedAssignable.length ? `Programar la salida de ${selectedAssignable.length} ${selectedAssignable.length === 1 ? "pedido" : "pedidos"}` : "Marca pedidos para programar el día en que deben salir"}
+                >
+                  <IconCalendar className="text-ink-500" />
+                  Programar
+                </OpsButton>
+                {rescheduleOpen && (
+                  <Sheet look="ops" title="Programar salida" onClose={() => setRescheduleOpen(false)} anchored anchorRef={rescheduleButton}>
+                    <form className="grid gap-3 text-sm" onSubmit={(e) => { e.preventDefault(); reschedule(); }}>
+                      <p className="text-[13px] text-ink-500">{selectedAssignable.length} {selectedAssignable.length === 1 ? "pedido" : "pedidos"}. Guarda el día en que deben salir; no los toma ni los asigna. Ese día aparecen en «Programados hoy». Los que ya están en la caja de un motorizado no se mueven.</p>
+                      <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">Día de salida
+                        <input type="date" value={rescheduleDay} min={day} onChange={(e) => setRescheduleDay(e.target.value)} className={FIELD} />
+                      </label>
+                      <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">Motivo
+                        <input value={programReason} onChange={(e) => setProgramReason(e.target.value)} maxLength={200} placeholder="Queda en el historial del pedido" className={FIELD} />
+                      </label>
+                      <div role="group" aria-label="Motivos frecuentes" className="flex flex-wrap gap-1.5">
+                        {PROGRAM_REASONS.map((reason) => (
+                          <ChoiceChip key={reason} label={reason} active={programReason === reason} onClick={() => setProgramReason(reason)} />
+                        ))}
+                      </div>
+                      <OpsButton type="submit" variant="primary" disabled={!rescheduleDay || !reasonOk || pending} className="w-full">
+                        Programar {selectedAssignable.length}{rescheduleDay ? ` para el ${programDayLabel(rescheduleDay)}` : ""}
+                      </OpsButton>
+                      {selectedProgrammed.length > 0 && (
+                        <OpsButton disabled={pending} onClick={clearProgram} className="w-full">
+                          Quitar la fecha de {selectedProgrammed.length} {selectedProgrammed.length === 1 ? "programado" : "programados"}
+                        </OpsButton>
+                      )}
+                    </form>
                   </Sheet>
                 )}
               </div>
-            </div>
-            {/* Apartados de la cola, como las subetapas del Master: «Nunca
-                salieron» es el que se busca dejar en cero, igual que «Sin
-                llamar» en Por confirmar. Cada pedido asignable cae en uno. */}
-            {!tracking && (
-              <div role="group" aria-label="Apartados de la cola" className="-mx-1 mt-2 flex items-center gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]">
-                <span className="shrink-0 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">Apartados</span>
-                <button
-                  type="button"
-                  aria-pressed={filters.segment === null}
-                  onClick={() => patchFilters({ segment: null })}
-                  className={cn("min-h-8 shrink-0 whitespace-nowrap rounded-full border px-3 text-xs font-medium transition", filters.segment === null ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300")}
-                >
-                  Todos · <span className="tabular-nums">{facets.segmentTotal.toLocaleString("es-PE")}</span>
-                </button>
-                {QUEUE_SEGMENTS.map((segment) => {
-                  const count = facets.segment[segment];
-                  const active = filters.segment === segment;
-                  return (
-                    <button
-                      key={segment}
-                      type="button"
-                      aria-pressed={active}
-                      disabled={count === 0 && !active}
-                      onClick={() => patchFilters({ segment: active ? null : segment })}
-                      title={QUEUE_SEGMENT_LABEL[segment].hint}
-                      className={cn(
-                        "min-h-8 shrink-0 whitespace-nowrap rounded-full border px-3 text-xs font-medium transition",
-                        active ? "border-brand-600 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
-                        count === 0 && !active && "cursor-not-allowed opacity-40",
-                      )}
-                    >
-                      {QUEUE_SEGMENT_LABEL[segment].label} · <span className="tabular-nums">{count.toLocaleString("es-PE")}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            <p className="mt-2 text-xs tabular-nums text-slate-500">
-              <b className="text-slate-900">{filtered.length.toLocaleString("es-PE")}</b> {tracking ? "pedidos en esa etapa" : filters.segment ? QUEUE_SEGMENT_LABEL[filters.segment].label.toLocaleLowerCase("es") : "en cola"}{filtered.length > visible.length ? ` · se muestran ${visible.length}` : ""}
-            </p>
-            {activeFilters > 0 && (
-              <ul className="mt-1 flex flex-wrap gap-1.5 text-xs" aria-label="Filtros activos">
-                {filters.store && <Chip onRemove={() => patchFilters({ store: "" })}>{filters.store}</Chip>}
-                {filters.district && <Chip onRemove={() => patchFilters({ district: "" })}>{filters.district}</Chip>}
-                {filters.created !== "todo" && <Chip onRemove={() => patchFilters({ created: "todo" })}>{CREATED_WINDOW_LABEL[filters.created]}</Chip>}
-                {filters.armedOnly && <Chip onRemove={() => patchFilters({ armedOnly: false })}>armados</Chip>}
-                {filters.takenOnly && <Chip onRemove={() => patchFilters({ takenOnly: false })}>tomados sin caja</Chip>}
-                {filters.stages.map((code) => <Chip key={code} onRemove={() => patchFilters({ stages: toggleInList(filters.stages, code) })}>{code === "sin_etapa" ? "sin etapa" : macroStageLabel(code)}</Chip>)}
-                {filters.substages.map((code) => <Chip key={code} onRemove={() => patchFilters({ substages: toggleInList(filters.substages, code) })}>{code === "sin_subetapa" ? "sin subetapa" : macroSubstageLabel(code).toLocaleLowerCase("es")}</Chip>)}
-                {filters.due.map((bucket) => <Chip key={bucket} onRemove={() => patchFilters({ due: toggleInList(filters.due, bucket) })}>salida: {SCHEDULED_BUCKET_LABEL[bucket].toLocaleLowerCase("es")}</Chip>)}
-              </ul>
-            )}
-          </div>
-
-          <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2">
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={allVisibleSelected} disabled={!visibleAssignable.length} onChange={() => setSelected(allVisibleSelected ? new Set() : new Set(visibleAssignable.map((q) => q.orderId)))} aria-label="Marcar los visibles" />
-              <span className="font-medium text-slate-800">{selected.size ? `${selected.size} marcados · ${money(selectedTotal)}` : "Marca pedidos"}</span>
-            </label>
-            <button
-              type="button"
-              disabled={pending || !canManageDispatch || !riderId || !selected.size}
-              onClick={() => assign()}
-              title={riderId ? undefined : "Elige el motorizado arriba"}
-              className="min-h-10 max-w-full truncate rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
-            >
-              {pending ? "Asignando…" : `Asignar${selected.size ? ` ${selected.size}` : ""} a ${riderName || "…"}`}
-            </button>
-            {/* Programar: guarda el día de salida de los marcados, sin tomarlos. */}
-            <div className="relative">
-              <button
-                ref={rescheduleButton}
-                type="button"
-                disabled={pending || !canManageDispatch || !selectedAssignable.length}
-                onClick={() => { setRescheduleDay((d) => d || day); setRescheduleOpen((v) => !v); }}
-                aria-label="Programar la salida de los marcados"
-                title={selectedAssignable.length ? `Programar la salida de ${selectedAssignable.length} ${selectedAssignable.length === 1 ? "pedido" : "pedidos"}` : "Marca pedidos para programar el día en que deben salir"}
-                className="grid min-h-10 w-10 place-items-center rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-              >
-                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2" /><path d="M3.5 10h17M8 3v4M16 3v4" /></svg>
-              </button>
-              {rescheduleOpen && (
-                <Sheet title="Programar salida" onClose={() => setRescheduleOpen(false)} anchored anchorRef={rescheduleButton}>
-                  <form className="grid gap-3 text-sm" onSubmit={(e) => { e.preventDefault(); reschedule(); }}>
-                    <p className="text-xs text-slate-500">{selectedAssignable.length} {selectedAssignable.length === 1 ? "pedido" : "pedidos"}. Guarda el día en que deben salir; no los toma ni los asigna. Ese día aparecen en «Programados hoy». Los que ya están en la caja de un motorizado no se mueven.</p>
-                    <label className="grid gap-1 text-xs font-medium text-slate-600">Día de salida
-                      <input type="date" value={rescheduleDay} min={day} onChange={(e) => setRescheduleDay(e.target.value)} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900" />
-                    </label>
-                    <label className="grid gap-1 text-xs font-medium text-slate-600">Motivo
-                      <input value={programReason} onChange={(e) => setProgramReason(e.target.value)} maxLength={200} placeholder="Queda en el historial del pedido" className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900 placeholder:text-slate-500" />
-                    </label>
-                    <div role="group" aria-label="Motivos frecuentes" className="flex flex-wrap gap-1.5">
-                      {PROGRAM_REASONS.map((reason) => (
-                        <button key={reason} type="button" aria-pressed={programReason === reason} onClick={() => setProgramReason(reason)} className={cn("min-h-8 rounded-full border px-2.5 text-xs font-medium transition", programReason === reason ? "border-brand-600 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300")}>
-                          {reason}
-                        </button>
-                      ))}
-                    </div>
-                    <button type="submit" disabled={!rescheduleDay || !reasonOk || pending} className="min-h-10 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
-                      Programar {selectedAssignable.length}{rescheduleDay ? ` para el ${programDayLabel(rescheduleDay)}` : ""}
-                    </button>
-                    {selectedProgrammed.length > 0 && (
-                      <button type="button" disabled={pending} onClick={clearProgram} className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-                        Quitar la fecha de {selectedProgrammed.length} {selectedProgrammed.length === 1 ? "programado" : "programados"}
-                      </button>
-                    )}
-                  </form>
-                </Sheet>
+              {selectedReturnable.length > 0 && (
+                <OpsButton variant="danger" disabled={pending || !canManageDispatch} onClick={receiveInOffice} title="El paquete volvió físicamente a la oficina: sale de la caja del motorizado y vuelve a «por asignar»">
+                  Recibir en oficina {selectedReturnable.length}
+                </OpsButton>
               )}
+              <label className="flex min-h-8 items-center gap-2 text-[13px] text-ink-600 sm:ml-auto" title={cashOverrideHint(props.cashWarning, props.cashLimit)}>
+                <input type="checkbox" className={CHECKBOX} checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} /> <span className="whitespace-nowrap">Superar el límite</span>
+              </label>
             </div>
-            {selectedReturnable.length > 0 && (
-              <button
-                type="button"
-                disabled={pending || !canManageDispatch}
-                onClick={receiveInOffice}
-                title="El paquete volvió físicamente a la oficina: sale de la caja del motorizado y vuelve a «por asignar»"
-                className="min-h-10 rounded-lg border border-red-300 bg-red-50 px-3 text-sm font-semibold text-red-800 hover:bg-red-100 disabled:opacity-50"
-              >
-                Recibir en oficina {selectedReturnable.length}
-              </button>
-            )}
-            <label className="flex items-center gap-1 text-xs text-slate-600" title={cashOverrideHint(props.cashWarning, props.cashLimit)}>
-              <input type="checkbox" checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} /> <span className="whitespace-nowrap">superar el límite</span>
-            </label>
-          </div>
 
-          {programConfirm && (() => {
-            const others = [...selected].filter((id) => !programConfirm.some((q) => q.orderId === id)).length;
-            const target = scanDay === day ? "hoy" : `el ${programDayLabel(scanDay)}`;
-            return (
-              <div role="alertdialog" aria-labelledby="program-confirm-title" aria-describedby="program-confirm-list" className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
-                <p id="program-confirm-title" className="font-semibold">
-                  {programConfirm.length === 1 ? "1 marcado está programado para otro día" : `${programConfirm.length} marcados están programados para otro día`}
-                </p>
-                <ul id="program-confirm-list" className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-amber-800">
-                  {programConfirm.slice(0, 8).map((q) => (
-                    <li key={q.orderId}><b className="font-semibold">{q.orderName}</b> · {programDayLabel(q.programmedFor ?? "")}{q.programReason ? ` · ${q.programReason}` : ""}</li>
-                  ))}
-                  {programConfirm.length > 8 && <li>y {programConfirm.length - 8} más</li>}
-                </ul>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <button ref={confirmFirst} type="button" disabled={pending} onClick={() => assign({ confirmProgrammed: true })} className="min-h-9 rounded-lg bg-amber-700 px-3 text-xs font-semibold text-white hover:bg-amber-800 disabled:opacity-50">
-                    Asignar igual {target}
-                  </button>
-                  {others > 0 && (
-                    <button type="button" disabled={pending} onClick={() => assign({ skip: new Set(programConfirm.map((q) => q.orderId)) })} className="min-h-9 rounded-lg border border-amber-300 bg-white px-3 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50">
-                      Asignar solo los otros {others}
-                    </button>
-                  )}
-                  <button type="button" onClick={() => setProgramConfirm(null)} className="min-h-9 rounded-lg px-2 text-xs font-medium text-amber-900 underline-offset-2 hover:underline">
-                    Cancelar
-                  </button>
+            {programConfirm && (() => {
+              const others = [...selected].filter((id) => !programConfirm.some((q) => q.orderId === id)).length;
+              const target = scanDay === day ? "hoy" : `el ${programDayLabel(scanDay)}`;
+              return (
+                <div role="alertdialog" aria-labelledby="program-confirm-title" aria-describedby="program-confirm-list" className="border-b border-line bg-warn-wash px-4 py-3 text-sm text-ink-700">
+                  <p id="program-confirm-title" className="flex items-center gap-2 font-semibold text-warn-fg">
+                    <IconAlert className="size-4" />
+                    {programConfirm.length === 1 ? "1 marcado está programado para otro día" : `${programConfirm.length} marcados están programados para otro día`}
+                  </p>
+                  <ul id="program-confirm-list" className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 pl-6 text-[13px]">
+                    {programConfirm.slice(0, 8).map((q) => (
+                      <li key={q.orderId}><b className="font-semibold text-ink-900">{q.orderName}</b> · {programDayLabel(q.programmedFor ?? "")}{q.programReason ? ` · ${q.programReason}` : ""}</li>
+                    ))}
+                    {programConfirm.length > 8 && <li>y {programConfirm.length - 8} más</li>}
+                  </ul>
+                  <div className="mt-2.5 flex flex-wrap items-center gap-2 pl-6">
+                    <OpsButton ref={confirmFirst} variant="primary" size="sm" disabled={pending} onClick={() => assign({ confirmProgrammed: true })}>
+                      Asignar igual {target}
+                    </OpsButton>
+                    {others > 0 && (
+                      <OpsButton size="sm" disabled={pending} onClick={() => assign({ skip: new Set(programConfirm.map((q) => q.orderId)) })}>
+                        Asignar solo los otros {others}
+                      </OpsButton>
+                    )}
+                    <OpsButton variant="ghost" size="sm" onClick={() => setProgramConfirm(null)}>Cancelar</OpsButton>
+                  </div>
                 </div>
-              </div>
-            );
-          })()}
+              );
+            })()}
 
-          {/* Tabla de columnas, como el Master: anchos fijos para lo corto
-              (fechas, importes) y flexibles para pedido, cliente y estado. Lo
-              que se trunca lleva el texto completo en `title`. En pantallas
-              estrechas la tabla desplaza en horizontal. */}
-          <div className="max-h-[60vh] overflow-auto">
-            <table className={cn("w-full min-w-[880px] table-fixed border-collapse text-sm", STICKY_HEAD)}>
-              <colgroup>
-                <col className="w-9" />
-                <col className="w-[8.5rem]" />
-                <col className="w-[6.5rem]" />
-                <col />
-                <col className="w-[8rem]" />
-                <col />
-                <col className="w-[4.25rem]" />
-                <col className="w-[5rem]" />
-                <col className="w-[5.5rem]" />
-                <col className="w-[4.5rem]" />
-              </colgroup>
-              <thead>
-                <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  <th className="px-3 py-2"><span className="sr-only">Marcar</span></th>
-                  <th className="px-3 py-2">Pedido</th>
-                  <th className="px-3 py-2">Tienda</th>
-                  <th className="px-3 py-2">Cliente</th>
-                  <th className="px-3 py-2">Distrito</th>
-                  <th className="px-3 py-2">Estado</th>
-                  <th className="px-3 py-2">Creado</th>
-                  <th className="px-3 py-2" title="Salida prevista: el día programado si lo tiene; si no, después del corte de las 11:30 el pedido sale al día siguiente. Para los que ya salieron, el día de su caja.">Sale</th>
-                  <th className="px-3 py-2 text-right">Venta</th>
-                  <th className="px-3 py-2 text-right">Tarifa</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {visible.map((q) => (
-                  <tr key={q.orderId} className={cn("align-top hover:bg-slate-50", selected.has(q.orderId) && "bg-brand-50/60")}>
-                    <td className="px-3 py-2">
-                      {q.assignable || isReturnable(q)
-                        ? <input type="checkbox" checked={selected.has(q.orderId)} onChange={() => toggle(q.orderId)} aria-label={`Marcar ${q.orderName}`} className="mt-0.5" />
-                        : <span aria-hidden className="mt-0.5 inline-block h-4 w-4 rounded border border-dashed border-slate-300" title={q.route ? "Ya salió: se sigue, no se asigna" : "Pedido cerrado o cerrándose: no se asigna"} />}
-                    </td>
-                    <td className="px-3 py-2">
-                      <OrderLink orderId={q.orderId} className="block truncate font-semibold text-slate-950 hover:text-brand-700" title={q.orderName}>{q.orderName}</OrderLink>
-                      <OrderLink orderId={q.orderId} section="historial" className="text-[11px] text-brand-700 underline">Ver actividad</OrderLink>
-                    </td>
-                    <td className="truncate px-3 py-2 text-xs text-slate-600" title={q.storeName}>{q.storeName}</td>
-                    <td className="px-3 py-2">
-                      <p className="truncate text-slate-800" title={q.customerName}>{q.customerName}</p>
-                      <p className="truncate text-xs text-slate-500" title={q.customerPhone ?? undefined}>{q.customerPhone ?? "sin teléfono"}</p>
-                    </td>
-                    <td className="truncate px-3 py-2 text-slate-700" title={q.district}>{q.district}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap items-center gap-1">
-                        {q.route?.undeliveredReason && <span className="rounded-full bg-red-600 px-2 py-0.5 text-[11px] font-semibold text-white" title="Sigue en la caja del motorizado: márcalo y «Recibir en oficina» cuando vuelva el paquete">No entregado · {nonDeliveryReasonLabel(q.route.undeliveredReason)}</span>}
-                        {q.taken && !q.route && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">tomado · sin caja</span>}
-                        {!q.assignable && q.macroSubstage && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800" title={macroStageLabel(q.macroStage)}>{macroSubstageLabel(q.macroSubstage)}</span>}
-                        {q.taken && q.armed && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">armado</span>}
-                        {q.assignable && q.programmedFor && <ProgramChip day={q.programmedFor} today={day} reason={q.programReason ?? null} />}
-                        {q.hasPriorDispatch && <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-800" title="Salió a reparto al menos una vez y volvió: reprogramación o recuperación">ya salió</span>}
-                        {q.observation && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800" title={q.observation}>observado</span>}
-                        {!q.taken && !q.hasPriorDispatch && !q.observation && !q.programmedFor && <span className="text-xs text-slate-500">disponible</span>}
-                      </div>
-                      {q.route && (
-                        <p className="mt-0.5 truncate text-xs text-slate-600" title={`${q.route.riderName} · caja del ${formatDayNumeric(q.route.routeDate)}${q.route.loadNumber > 1 ? ` · carga ${q.route.loadNumber}` : ""}`}>
-                          <b>{q.route.riderName}</b>{q.route.loadNumber > 1 ? ` · carga ${q.route.loadNumber}` : ""}
-                          {" · "}{q.route.pickupCheckedAt ? "lo lleva" : q.route.officeCheckedAt ? "cotejado · sin «Lo llevo»" : "en la caja · sin cotejar"}
-                        </p>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-xs tabular-nums text-slate-600" title={q.createdAt ? `Creado el ${formatDay(limaDay(q.createdAt) ?? q.createdAt)}` : undefined}>{q.createdAt ? formatDayNumeric(limaDay(q.createdAt)) : "—"}</td>
-                    <td className="px-3 py-2 text-xs tabular-nums text-slate-600" title={q.route ? `Caja del ${formatDay(q.route.routeDate)}` : `Salida prevista: ${formatDay(q.scheduledFor)}`}>
-                      {q.route ? `caja ${formatDayNumeric(q.route.routeDate)}` : formatDayNumeric(q.scheduledFor)}
-                    </td>
-                    <td className="px-3 py-2 text-right text-xs font-semibold tabular-nums text-slate-900">{money(q.orderTotal)}</td>
-                    <td className="px-3 py-2 text-right text-xs tabular-nums text-slate-600">{money(q.tariffAmount)}</td>
+            {/* Escritorio: tabla de columnas como el Master, anchos fijos para
+                lo corto y flexibles para pedido, cliente y estado; lo que se
+                trunca lleva el texto completo en `title`. */}
+            <div className="hidden max-h-[60vh] overflow-auto sm:block">
+              <table className="w-full min-w-[900px] table-fixed border-collapse text-sm [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-white [&_th]:shadow-[inset_0_-1px_0_var(--color-line)]">
+                <colgroup>
+                  <col className="w-11" />
+                  <col className="w-[8.5rem]" />
+                  <col className="w-[6.5rem]" />
+                  <col />
+                  <col className="w-[8.5rem]" />
+                  <col className="w-[15rem]" />
+                  <col className="w-[4.5rem]" />
+                  <col className="w-[4.5rem]" />
+                  <col className="w-[6rem]" />
+                  <col className="w-[5.5rem]" />
+                </colgroup>
+                <thead>
+                  <tr className="text-left text-xs font-semibold text-ink-600">
+                    <th className="px-4 py-2.5"><span className="sr-only">Marcar</span></th>
+                    <th className="px-3 py-2.5">Pedido</th>
+                    <th className="px-3 py-2.5">Tienda</th>
+                    <th className="px-3 py-2.5">Cliente</th>
+                    <th className="px-3 py-2.5">Distrito</th>
+                    <th className="px-3 py-2.5">Estado</th>
+                    <th className="px-3 py-2.5">Creado</th>
+                    <th className="px-3 py-2.5" title="Salida prevista: el día programado si lo tiene; si no, después del corte de las 11:30 el pedido sale al día siguiente. Para los que ya salieron, el día de su caja.">Sale</th>
+                    <th className="px-3 py-2.5 text-right">Venta</th>
+                    <th className="px-4 py-2.5 text-right">Tarifa</th>
                   </tr>
-                ))}
-                {!visible.length && <tr><td colSpan={10} className="px-4 py-8 text-center text-sm text-slate-500">{tracking ? "Ningún pedido de Grupo GF con ese filtro." : "Nada por asignar con ese filtro."}</td></tr>}
+                </thead>
+                <tbody>
+                  {visible.map((q) => (
+                    <tr key={q.orderId} className={cn("border-b border-line align-top transition-colors", selected.has(q.orderId) ? "bg-brand-50/60" : "hover:bg-wash")}>
+                      <td className="px-4 py-3">
+                        <RowCheck q={q} checked={selected.has(q.orderId)} onToggle={() => toggle(q.orderId)} />
+                      </td>
+                      <td className="px-3 py-3">
+                        <OrderLink orderId={q.orderId} className="block truncate font-semibold text-ink-900 hover:text-brand-700" title={q.orderName}>{q.orderName}</OrderLink>
+                        <OrderLink orderId={q.orderId} section="historial" className="text-xs font-medium text-brand-700 hover:underline">Ver actividad</OrderLink>
+                      </td>
+                      <td className="truncate px-3 py-3 text-[13px] text-ink-600" title={q.storeName}>{q.storeName}</td>
+                      <td className="px-3 py-3">
+                        <p className="truncate text-ink-900" title={q.customerName}>{q.customerName}</p>
+                        <p className="truncate text-xs tabular-nums text-ink-500" title={q.customerPhone ?? undefined}>{q.customerPhone ?? "sin teléfono"}</p>
+                      </td>
+                      <td className="truncate px-3 py-3 text-ink-700" title={q.district}>{q.district}</td>
+                      <td className="px-3 py-3">
+                        <StateBadges q={q} today={day} />
+                        <RouteLine q={q} />
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-3 text-[13px] tabular-nums text-ink-500" title={q.createdAt ? `Creado el ${formatDay(limaDay(q.createdAt) ?? q.createdAt)}` : undefined}>{q.createdAt ? formatDayNumeric(limaDay(q.createdAt)) : "—"}</td>
+                      <td className="whitespace-nowrap px-3 py-3 text-[13px] tabular-nums text-ink-500" title={q.route ? `Caja del ${formatDay(q.route.routeDate)}` : `Salida prevista: ${formatDay(q.scheduledFor)}`}>
+                        {q.route ? `caja ${formatDayNumeric(q.route.routeDate)}` : formatDayNumeric(q.scheduledFor)}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-3 text-right font-semibold tabular-nums text-ink-900">{money(q.orderTotal)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right text-[13px] tabular-nums text-ink-500">{money(q.tariffAmount)}</td>
+                    </tr>
+                  ))}
+                  {!visible.length && (
+                    <tr><td colSpan={10} className="px-4 py-12 text-center text-sm text-ink-500">{tracking ? "Ningún pedido de Grupo GF con ese filtro." : "Nada por asignar con ese filtro."}</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Teléfono: la misma fila como tarjeta, sin desplazamiento lateral. */}
+            <ul className="divide-y divide-line sm:hidden">
+              {visible.map((q) => (
+                <li key={q.orderId} className={cn("flex gap-3 px-4 py-3", selected.has(q.orderId) && "bg-brand-50/60")}>
+                  <div className="pt-0.5"><RowCheck q={q} checked={selected.has(q.orderId)} onToggle={() => toggle(q.orderId)} /></div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <OrderLink orderId={q.orderId} className="min-w-0 truncate font-semibold text-ink-900" title={q.orderName}>{q.orderName}</OrderLink>
+                      <span className="shrink-0 font-semibold tabular-nums text-ink-900">{money(q.orderTotal)}</span>
+                    </div>
+                    <p className="mt-0.5 text-[13px] text-ink-700">{q.customerName} · {q.district}</p>
+                    <div className="mt-2"><StateBadges q={q} today={day} /></div>
+                    <RouteLine q={q} />
+                    <p className="mt-2 text-xs tabular-nums text-ink-500">
+                      {q.storeName}{q.createdAt ? ` · creado ${formatDayNumeric(limaDay(q.createdAt))}` : ""} · {q.route ? `caja ${formatDayNumeric(q.route.routeDate)}` : `sale ${formatDayNumeric(q.scheduledFor)}`} · <span className="whitespace-nowrap">tarifa {money(q.tariffAmount)}</span>
+                    </p>
+                    <OrderLink orderId={q.orderId} section="historial" className="mt-1 inline-flex min-h-8 items-center text-xs font-medium text-brand-700">Ver actividad</OrderLink>
+                  </div>
+                </li>
+              ))}
+              {!visible.length && <li className="px-4 py-12 text-center text-sm text-ink-500">{tracking ? "Ningún pedido de Grupo GF con ese filtro." : "Nada por asignar con ese filtro."}</li>}
+            </ul>
+
+            {filtered.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-4 py-3 text-[13px] tabular-nums text-ink-500">
+                <span>Mostrando <b className="font-semibold text-ink-900">{visible.length.toLocaleString("es-PE")}</b> de {filtered.length.toLocaleString("es-PE")}</span>
                 {filtered.length > visible.length && (
-                  <tr>
-                    <td colSpan={10} className="px-4 py-3 text-center">
-                      <button type="button" onClick={() => setLimit((n) => n + 100)} className="min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                        Mostrar 100 más · quedan {(filtered.length - visible.length).toLocaleString("es-PE")}
-                      </button>
-                    </td>
-                  </tr>
+                  <OpsButton size="sm" onClick={() => setLimit((n) => n + 100)}>
+                    Mostrar 100 más
+                  </OpsButton>
                 )}
-              </tbody>
-            </table>
-          </div>
-          </div>
-          )}
-          {method === "cajas" && (
-          <div className="border-t border-slate-100">
-            {/* Sin título: la pestaña ya dice «Cajas de hoy». Solo el resumen. */}
-            {boxes.length > 0 && (
-              <p className="px-4 py-2 text-xs tabular-nums text-slate-500">{boxes.length} {boxes.length === 1 ? "caja" : "cajas"} · {dayCod} paq. · toca una caja para ver sus paquetes</p>
+              </div>
             )}
+          </div>
+        )}
+
+        {method === "cajas" && (
+          <div className="border-t border-line">
+            {/* El estado de los paquetes de todas las cajas del día: un filtro
+                rápido compartido, con su cantidad. */}
+            <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+              <div role="group" aria-label="Filtro rápido de las cajas" className="flex flex-wrap gap-1.5">
+                {BOX_ITEM_FILTERS.map((f) => (
+                  <ChoiceChip
+                    key={f.id}
+                    label={f.label}
+                    count={f.id === "todos" ? dayCod : boxTiles[f.id]}
+                    active={boxFilter === f.id}
+                    title={f.id === "todos" ? undefined : BOX_TILE_LABEL[f.id].hint}
+                    onClick={() => setBoxFilter(f.id)}
+                  />
+                ))}
+              </div>
+              {boxes.length > 0 && <p className="text-[13px] tabular-nums text-ink-500 lg:ml-auto">{boxes.length} {boxes.length === 1 ? "caja" : "cajas"} · {dayCod} paq. · toca una caja para ver sus paquetes</p>}
+            </div>
             {boxes.length ? (
-              <ul className="divide-y divide-slate-100 border-t border-slate-100">
+              <ul className="divide-y divide-line border-t border-line">
                 {boxes.map((box) => (
                   <BoxRow
                     key={box.riderId ?? box.riderName}
@@ -1057,22 +1036,119 @@ export function DispatchDayBoard(props: Props) {
                     onChanged={() => router.refresh()}
                     pickupMode={props.riderPickupMode}
                     filter={boxFilter}
-                    onFilter={setBoxFilter}
                   />
                 ))}
               </ul>
             ) : (
-              <p className="px-4 py-8 text-center text-sm text-slate-500">Todavía no hay cajas {scanDay === day ? "hoy" : "ese día"}: escanea o asigna desde la lista.</p>
+              <p className="border-t border-line px-4 py-12 text-center text-sm text-ink-500">Todavía no hay cajas {scanDay === day ? "hoy" : "ese día"}: escanea o asigna desde la lista.</p>
             )}
           </div>
-          )}
-        </div>
+        )}
       </div>
     </section>
   );
 }
 
-function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged, pickupMode, filter, onFilter }: {
+type PillId = "etapa" | "fecha" | "tienda" | "distrito" | "creado";
+
+/** Pestaña de la forma de asignar: control segmentado con icono. */
+function MethodTab({ active, onClick, icon: Glyph, label, shortLabel, children }: { active: boolean; onClick: () => void; icon: typeof IconQr; label: string; shortLabel: string; children?: ReactNode }) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        "flex h-9 min-w-0 items-center justify-center gap-2 rounded-md px-2 text-sm font-semibold transition-[background-color,color,box-shadow] duration-150",
+        active ? "bg-white text-ink-900 shadow-control ring-1 ring-line" : "text-ink-500 hover:text-ink-900",
+      )}
+    >
+      <Glyph className={cn("hidden size-4 shrink-0 sm:block", active ? "text-brand-600" : "text-ink-500")} />
+      <span className="truncate sm:hidden" aria-hidden>{shortLabel}</span>
+      <span className="max-sm:sr-only truncate">{label}</span>
+      {children}
+    </button>
+  );
+}
+
+/** Chip de elección con cantidad (subetapas, plazos, motivos, filtro de cajas). */
+function ChoiceChip({ label, count, active, onClick, title }: { label: string; count?: number; active: boolean; onClick: () => void; title?: string }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      disabled={count === 0 && !active}
+      onClick={onClick}
+      title={title}
+      className={cn(
+        "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[13px] font-medium transition-shadow",
+        active ? "bg-brand-50 text-brand-700 ring-2 ring-inset ring-brand-600" : "bg-white text-ink-700 ring-1 ring-inset ring-line-strong hover:ring-ink-300",
+        count === 0 && !active && "cursor-not-allowed opacity-40",
+      )}
+    >
+      {label}
+      {count != null && <span className={cn("tabular-nums", active ? "text-brand-700" : "text-ink-500")}>{count.toLocaleString("es-PE")}</span>}
+    </button>
+  );
+}
+
+/** Lista de una sola elección dentro de un popover de filtro. */
+function OptionList({ options, value, onPick }: { options: Array<{ value: string; label: string }>; value: string; onPick: (value: string) => void }) {
+  return (
+    <div role="group" className="-mx-1 grid max-h-72 gap-0.5 overflow-auto">
+      {options.map((o) => (
+        <button
+          key={o.value || "todas"}
+          type="button"
+          aria-pressed={o.value === value}
+          onClick={() => onPick(o.value)}
+          className={cn("flex h-9 items-center justify-between gap-2 rounded-md px-2 text-left text-sm hover:bg-wash", o.value === value ? "font-semibold text-ink-900" : "text-ink-700")}
+        >
+          <span className="truncate">{o.label}</span>
+          {o.value === value && <IconCheck className="size-4 shrink-0 text-brand-600" />}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** La casilla de una fila, o el hueco punteado de lo que solo se sigue. */
+function RowCheck({ q, checked, onToggle }: { q: QueueRow; checked: boolean; onToggle: () => void }) {
+  if (q.assignable || isReturnable(q)) {
+    return <input type="checkbox" className={CHECKBOX} checked={checked} onChange={onToggle} aria-label={`Marcar ${q.orderName}`} />;
+  }
+  return <span aria-hidden className="block size-4 rounded border border-dashed border-line-strong" title={q.route ? "Ya salió: se sigue, no se asigna" : "Pedido cerrado o cerrándose: no se asigna"} />;
+}
+
+/** Las chapas de estado de una fila de la cola. */
+function StateBadges({ q, today }: { q: QueueRow; today: string }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {q.route?.undeliveredReason && <Badge tone="urgent" title="Sigue en la caja del motorizado: márcalo y «Recibir en oficina» cuando vuelva el paquete">No entregado · {nonDeliveryReasonLabel(q.route.undeliveredReason)}</Badge>}
+      {q.assignable && q.programmedFor && <ProgramChip day={q.programmedFor} today={today} reason={q.programReason ?? null} />}
+      {q.taken && !q.route && <Badge>tomado · sin caja</Badge>}
+      {!q.assignable && q.macroSubstage && <Badge tone="info" title={macroStageLabel(q.macroStage)}>{macroSubstageLabel(q.macroSubstage)}</Badge>}
+      {q.taken && q.armed && <Badge tone="ok">armado</Badge>}
+      {q.hasPriorDispatch && <Badge title="Salió a reparto al menos una vez y volvió: reprogramación o recuperación"><IconRepeat className="size-3" />ya salió</Badge>}
+      {q.observation && <Badge tone="warn" title={q.observation}>observado</Badge>}
+      {!q.taken && !q.hasPriorDispatch && !q.observation && !q.programmedFor && <span className="text-[13px] text-ink-500">disponible</span>}
+    </div>
+  );
+}
+
+/** Para lo que ya salió: el motorizado, la carga y si lo lleva. */
+function RouteLine({ q }: { q: QueueRow }) {
+  if (!q.route) return null;
+  return (
+    <p className="mt-1 truncate text-xs text-ink-500" title={`${q.route.riderName} · caja del ${formatDayNumeric(q.route.routeDate)}${q.route.loadNumber > 1 ? ` · carga ${q.route.loadNumber}` : ""}`}>
+      <b className="font-semibold text-ink-700">{q.route.riderName}</b>{q.route.loadNumber > 1 ? ` · carga ${q.route.loadNumber}` : ""}
+      {" · "}{q.route.pickupCheckedAt ? "lo lleva" : q.route.officeCheckedAt ? "cotejado · sin «Lo llevo»" : "en la caja · sin cotejar"}
+    </p>
+  );
+}
+
+function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged, pickupMode, filter }: {
   box: RiderBox;
   /** Efectivo previsto de la caja. */
   cash: number;
@@ -1085,7 +1161,6 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
   pickupMode: RiderPickupMode;
   /** Filtro rápido compartido: Todos · Por armar · Listos para cotejo · Sin confirmar. */
   filter: BoxItemFilter;
-  onFilter: (next: BoxItemFilter) => void;
 }) {
   const [pending, start] = useTransition();
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -1107,129 +1182,119 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
     if (!reason) return;
     start(async () => say(await moveManifestItem(orgId, manifestId, shipmentId, targetRiderId, reason)));
   };
-  const pct = box.assigned ? Math.round((box.officeChecked / box.assigned) * 100) : 0;
   // Modo «confirmar» (0185): lo asignado que el motorizado aún no confirmó con
   // «Lo llevo». Se puede quitar o mover desde aquí; el RPC borra su parada.
   const confirmMode = pickupMode === "confirmar";
   const unconfirmed = confirmMode
     ? box.loads.filter((m) => m.state === "in_custody").flatMap((m) => activeDispatchItems(m.items).filter((i) => !i.pickup_checked_at).map((i) => ({ manifestId: m.id, item: i })))
     : [];
+  const initials = box.riderName.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toLocaleUpperCase("es")).join("");
+  const step = (done: number, label: string) => (
+    <Badge tone={box.assigned && done >= box.assigned ? "ok" : done ? "warn" : "neutral"} className="tabular-nums">{done}/{box.assigned} {label}</Badge>
+  );
   return (
     <li>
-      <button type="button" onClick={onToggle} aria-expanded={open} title={`${boxNextStep(box)} · ${box.assigned} paquetes · ${box.armed} armados por Almacén · ${box.officeChecked} cotejados en oficina · ${box.pickupChecked} ${confirmMode ? "confirmados con «Lo llevo»" : "recibidos por el motorizado"}${box.declined ? ` · ${box.declined} no los llevó` : ""}${box.loads.length > 1 ? ` · ${box.loads.length} cargas` : ""} · efectivo previsto ${money(cash)}`} className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-slate-50">
-        <span className="min-w-0 flex-1 truncate whitespace-nowrap">
-          <span className="font-semibold text-slate-950">{box.riderName}</span>
-          <span className="text-slate-600"> · <span className="tabular-nums">{box.assigned}</span> paq. · <span className="tabular-nums">{moneyShort(cash)}</span></span>
-          {/* Cadena de estados del paquete: armado → cotejado → confirmado. */}
-          <span className={cn("text-xs tabular-nums", box.armed < box.assigned ? "text-amber-700" : "text-emerald-700")}> · {box.armed} armados</span>
-          <span className={cn("text-xs tabular-nums", load.state === "in_custody" ? "text-emerald-700" : box.officeChecked < box.assigned ? "text-amber-700" : "text-sky-700")}> · {box.officeChecked} cotejados</span>
-          <span className={cn("text-xs tabular-nums", box.pickupChecked < box.assigned ? "text-amber-700" : "text-emerald-700")}> · {box.pickupChecked} {confirmMode ? "confirmados" : "recibidos"}</span>
-          {box.declined ? <span className="text-xs text-amber-700"> · {box.declined} no rec.</span> : null}
+      <button type="button" onClick={onToggle} aria-expanded={open} title={`${boxNextStep(box)} · ${box.assigned} paquetes · ${box.armed} armados por Almacén · ${box.officeChecked} cotejados en oficina · ${box.pickupChecked} ${confirmMode ? "confirmados con «Lo llevo»" : "recibidos por el motorizado"}${box.declined ? ` · ${box.declined} no los llevó` : ""}${box.loads.length > 1 ? ` · ${box.loads.length} cargas` : ""} · efectivo previsto ${money(cash)}`} className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm transition-colors hover:bg-wash">
+        <span aria-hidden className="grid size-8 shrink-0 place-items-center rounded-full bg-line text-xs font-semibold text-ink-600">{initials}</span>
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-baseline gap-x-2">
+            <span className="font-semibold text-ink-900">{box.riderName}</span>
+            <span className="text-[13px] tabular-nums text-ink-500">{box.assigned} paq. · {moneyShort(cash)}{box.loads.length > 1 ? ` · ${box.loads.length} cargas` : ""}</span>
+          </span>
+          <span className="mt-1 flex flex-wrap gap-1">
+            {step(box.armed, "armados")}
+            {step(box.officeChecked, "cotejados")}
+            {step(box.pickupChecked, confirmMode ? "confirmados" : "recibidos")}
+            {box.declined > 0 && <Badge tone="crit" className="tabular-nums">{box.declined} no recogidos</Badge>}
+          </span>
         </span>
-        <span aria-hidden className="shrink-0 text-slate-400">{open ? "▾" : "▸"}</span>
+        <span className="hidden shrink-0 text-[13px] text-ink-500 md:block">{boxNextStep(box)}</span>
+        <IconChevronRight className={cn("size-4 shrink-0 text-ink-500 transition-transform duration-150", open && "rotate-90")} />
       </button>
       {open && (
-        <div className="space-y-3 border-t border-slate-100 bg-slate-50/60 px-4 py-3">
-          {message && <p role="status" className={cn("rounded-lg px-3 py-2 text-sm", message.ok ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700")}>{message.text}</p>}
-          <div role="group" aria-label="Filtro rápido de la caja" className="flex flex-wrap gap-1 text-xs">
-            {BOX_ITEM_FILTERS.map((f) => (
-              <button key={f.id} type="button" onClick={() => onFilter(f.id)} aria-pressed={filter === f.id} className={cn("rounded-full px-3 py-1 font-medium", filter === f.id ? "bg-slate-900 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100")}>
-                {f.label}
-              </button>
-            ))}
-          </div>
+        <div className="space-y-3 border-t border-line bg-wash px-4 py-3">
+          {message && <Banner tone={message.ok ? "ok" : "crit"} role={message.ok ? "status" : "alert"}>{message.text}</Banner>}
           {confirmMode && unconfirmed.length > 0 && (
-            <details className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              <summary className="cursor-pointer font-semibold">Sin confirmar por {box.riderName} · {unconfirmed.length}</summary>
-              <p className="mt-1 text-xs text-amber-800/80">Asignados que todavía no escaneó al sacarlos del almacén. Si no se los llevó, quítalos o muévelos: vuelven a «por asignar».</p>
-              <ul className="mt-1 divide-y divide-amber-100">
-                {unconfirmed.map(({ manifestId, item }) => {
-                  const s = item.shipment;
-                  const code = s?.output_code ?? s?.guide_code ?? s?.order_name ?? "";
-                  return (
-                    <li key={item.id} className="flex items-center gap-2 py-1.5">
-                      <span className="min-w-0 flex-1 truncate"><span className="font-medium">{s?.order_name ?? code}</span> <span className="text-xs text-amber-800/80">{s?.customer_name} · {s?.district}</span></span>
-                      {canManage && (
-                        <>
-                          <select
-                            aria-label={`Mover ${s?.order_name ?? code} a otro motorizado`}
-                            defaultValue=""
-                            disabled={pending}
-                            onChange={(e) => { const v = e.target.value; e.target.value = ""; if (v) move(manifestId, item.shipment_id, v); }}
-                            className="min-h-9 rounded-lg border border-amber-300 bg-white px-1 text-xs"
-                          >
-                            <option value="">Mover a…</option>
-                            {riders.filter((r) => r.id !== box.riderId).map((r) => <option key={r.id} value={r.id}>{r.fullName}</option>)}
-                          </select>
-                          <button type="button" disabled={pending} onClick={() => remove(manifestId, item.shipment_id)} className="min-h-9 rounded-lg px-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50">Quitar</button>
-                        </>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </details>
+            <Banner tone="warn">
+              <details>
+                <summary className="flex cursor-pointer list-none items-center gap-1.5 font-semibold text-warn-fg [&::-webkit-details-marker]:hidden">Sin confirmar por {box.riderName} · {unconfirmed.length}<IconChevronDown className="size-4" /></summary>
+                <p className="mt-1 text-[13px]">Asignados que todavía no escaneó al sacarlos del almacén. Si no se los llevó, quítalos o muévelos: vuelven a «por asignar».</p>
+                <ul className="mt-2 divide-y divide-warn-bg">
+                  {unconfirmed.map(({ manifestId, item }) => {
+                    const s = item.shipment;
+                    const code = s?.output_code ?? s?.guide_code ?? s?.order_name ?? "";
+                    return (
+                      <li key={item.id} className="flex flex-wrap items-center gap-2 py-1.5">
+                        <span className="min-w-0 flex-1 truncate"><span className="font-semibold text-ink-900">{s?.order_name ?? code}</span> <span className="text-[13px] text-ink-500">{s?.customer_name} · {s?.district}</span></span>
+                        {canManage && (
+                          <>
+                            <MoveSelect riders={riders} currentRiderId={box.riderId} disabled={pending} label={`Mover ${s?.order_name ?? code} a otro motorizado`} onPick={(v) => move(manifestId, item.shipment_id, v)} />
+                            <OpsButton variant="ghost" size="sm" disabled={pending} onClick={() => remove(manifestId, item.shipment_id)} className="text-crit-fg hover:bg-crit-wash hover:text-crit-fg">Quitar</OpsButton>
+                          </>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </details>
+            </Banner>
           )}
           {box.loads.map((m) => {
             const active = filterBoxItems(m.items, filter);
             const removed = m.items.filter((i) => !!i.removed_at);
             const checkable = canCheck && !["in_custody", "cancelled"].includes(m.state);
             return (
-              <div key={m.id} className="rounded-lg border border-slate-200 bg-white">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-3 py-2 text-xs">
-                  <span className="font-medium text-slate-700">Carga {m.load_number ?? 1} · {stateLabel(m.state)}</span>
-                  <Link href={`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(m.id)}`} className="text-brand-700 underline">Abrir en la mesa</Link>
+              <div key={m.id} className="overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2 text-[13px]">
+                  <span className="font-semibold text-ink-900">Carga {m.load_number ?? 1} <span className="font-normal text-ink-500">· {stateLabel(m.state)}</span></span>
+                  <Link href={`/dashboard/courier/rutas?manifiesto=${encodeURIComponent(m.id)}`} className="text-xs font-medium text-brand-700 hover:underline">Abrir en la mesa</Link>
                 </div>
                 {checkable && (
-                  <div className="px-3 pb-2">
-                    <div className="mt-2 flex gap-1 text-xs" role="group" aria-label="Qué hace el escaneo">
+                  <div className="space-y-2 border-b border-line px-3 py-3">
+                    <div className="inline-grid grid-cols-2 gap-0.5 rounded-md bg-wash p-0.5 ring-1 ring-inset ring-line" role="group" aria-label="Qué hace el escaneo">
                       {([["oficina_cotejo", "Cotejar"], ["supervisor_retiro", "Retirar"]] as const).map(([mode, text]) => (
-                        <button key={mode} type="button" onClick={() => setScanMode(mode)} aria-pressed={scanMode === mode} className={cn("rounded-full px-3 py-1 font-medium", scanMode === mode ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700")}>{text}</button>
+                        <button key={mode} type="button" onClick={() => setScanMode(mode)} aria-pressed={scanMode === mode} className={cn("h-7 rounded px-3 text-xs font-semibold transition-colors", scanMode === mode ? "bg-white text-ink-900 shadow-control" : "text-ink-500 hover:text-ink-900")}>{text}</button>
                       ))}
                     </div>
                     <ScanAction context={scanMode} manifestId={m.id} disabled={pending} onResult={(r) => say(r)} />
                   </div>
                 )}
-                <ul className="divide-y divide-slate-100">
+                <ul className="divide-y divide-line">
                   {active.map((item) => {
                     const s = item.shipment;
                     const code = s?.output_code ?? s?.guide_code ?? s?.order_name ?? "";
                     return (
-                      <li key={item.id} className={cn("flex items-center gap-2 px-3 py-2 text-sm", item.office_checked_at ? "bg-emerald-50/50" : "")}>
-                        <span aria-label={item.office_checked_at ? "Cotejado" : "Pendiente"} className={cn("grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-bold", item.office_checked_at ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-600")}>{item.office_checked_at ? "✓" : "·"}</span>
+                      <li key={item.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 text-sm">
+                        <span aria-label={item.office_checked_at ? "Cotejado" : "Pendiente"} className={cn("grid size-5 shrink-0 place-items-center rounded-full", item.office_checked_at ? "bg-ok-fg text-white" : "ring-1 ring-inset ring-line-strong")}>
+                          {item.office_checked_at && <IconCheck className="size-3" />}
+                        </span>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate font-medium text-slate-900">{s?.order_name ?? code} <span className="text-xs font-normal text-slate-500">{s?.customer_name} · {s?.district}</span></p>
-                          <p className="flex flex-wrap gap-1 text-[11px]"><StageChip stage={packageStage(item)} confirmMode={confirmMode} />{confirmMode && m.state === "in_custody" && !item.pickup_checked_at && !item.pickup_declined_at && <span className="text-amber-700">por confirmar</span>}</p>
-                          {s?.order_id && <OrderLink orderId={s.order_id} section="historial" className="text-[11px] text-brand-700 underline">Ver actividad</OrderLink>}
+                          <p className="truncate"><span className="font-semibold text-ink-900">{s?.order_name ?? code}</span> <span className="text-[13px] text-ink-500">{s?.customer_name} · {s?.district}</span></p>
+                          <p className="mt-1 flex flex-wrap items-center gap-1.5">
+                            <StageChip stage={packageStage(item)} confirmMode={confirmMode} />
+                            {confirmMode && m.state === "in_custody" && !item.pickup_checked_at && !item.pickup_declined_at && <span className="text-xs font-medium text-warn-fg">por confirmar</span>}
+                            {s?.order_id && <OrderLink orderId={s.order_id} section="historial" className="text-xs font-medium text-brand-700 hover:underline">Ver actividad</OrderLink>}
+                          </p>
                         </div>
                         {checkable && !item.office_checked_at && code && (
-                          <button type="button" disabled={pending} onClick={() => scan(m.id, code)} className="min-h-9 rounded-lg border border-slate-300 px-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">Cotejar</button>
+                          <OpsButton size="sm" disabled={pending} onClick={() => scan(m.id, code)}>Cotejar</OpsButton>
                         )}
                         {checkable && (
                           <>
-                            <select
-                              aria-label={`Mover ${s?.order_name ?? code} a otro motorizado`}
-                              defaultValue=""
-                              disabled={pending}
-                              onChange={(e) => { const v = e.target.value; e.target.value = ""; if (v) move(m.id, item.shipment_id, v); }}
-                              className="min-h-9 rounded-lg border border-slate-300 px-1 text-xs"
-                            >
-                              <option value="">Mover a…</option>
-                              {riders.filter((r) => r.id !== box.riderId).map((r) => <option key={r.id} value={r.id}>{r.fullName}</option>)}
-                            </select>
-                            <button type="button" disabled={pending} onClick={() => remove(m.id, item.shipment_id)} className="min-h-9 rounded-lg px-2 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">Quitar</button>
+                            <MoveSelect riders={riders} currentRiderId={box.riderId} disabled={pending} label={`Mover ${s?.order_name ?? code} a otro motorizado`} onPick={(v) => move(m.id, item.shipment_id, v)} />
+                            <OpsButton variant="ghost" size="sm" disabled={pending} onClick={() => remove(m.id, item.shipment_id)} className="text-crit-fg hover:bg-crit-wash hover:text-crit-fg">Quitar</OpsButton>
                           </>
                         )}
                       </li>
                     );
                   })}
-                  {!active.length && <li className="px-3 py-4 text-center text-xs text-slate-500">{filter === "todos" ? "Sin paquetes activos." : "Nada con ese filtro en esta carga."}</li>}
+                  {!active.length && <li className="px-3 py-6 text-center text-[13px] text-ink-500">{filter === "todos" ? "Sin paquetes activos." : "Nada con ese filtro en esta carga."}</li>}
                 </ul>
                 {removed.length > 0 && (
-                  <details className="border-t border-slate-100 px-3 py-2 text-xs text-slate-600">
-                    <summary className="cursor-pointer">Retirados o no recogidos ({removed.length})</summary>
-                    <ul className="mt-1 space-y-1">
-                      {removed.map((i) => <li key={i.id}>{i.shipment?.order_name ?? i.shipment_id} · {i.removal_reason}</li>)}
+                  <details className="border-t border-line px-3 py-2 text-[13px] text-ink-600">
+                    <summary className="cursor-pointer font-medium">Retirados o no recogidos ({removed.length})</summary>
+                    <ul className="mt-1 space-y-1 text-ink-500">
+                      {removed.map((i) => <li key={i.id}><span className="font-medium text-ink-700">{i.shipment?.order_name ?? i.shipment_id}</span> · {i.removal_reason}</li>)}
                     </ul>
                   </details>
                 )}
@@ -1239,6 +1304,22 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
         </div>
       )}
     </li>
+  );
+}
+
+/** «Mover a…»: el selector de otro motorizado, que se vacía tras elegir. */
+function MoveSelect({ riders, currentRiderId, disabled, label, onPick }: { riders: CourierRiderOption[]; currentRiderId: string | null; disabled: boolean; label: string; onPick: (riderId: string) => void }) {
+  return (
+    <select
+      aria-label={label}
+      defaultValue=""
+      disabled={disabled}
+      onChange={(e) => { const v = e.target.value; e.target.value = ""; if (v) onPick(v); }}
+      className={cn(FIELD, "h-8 w-auto pr-8 text-[13px]")}
+    >
+      <option value="">Mover a…</option>
+      {riders.filter((r) => r.id !== currentRiderId).map((r) => <option key={r.id} value={r.id}>{r.fullName}</option>)}
+    </select>
   );
 }
 
@@ -1268,48 +1349,29 @@ function formatDayShort(value: string): string {
 }
 
 /**
- * Cómo se lee el resultado de un escaneo en su fila, con color por gravedad:
- * verde entró, ámbar hay algo que decidir (mover, autorizar, ya estaba), rojo
- * no entró.
+ * Cómo se lee el resultado de un escaneo en su fila: una chapa por gravedad.
+ * Verde entró, ámbar hay algo que decidir (mover, autorizar, confirmar, ya
+ * estaba), rosa no entró.
  */
-function scanRowPresentation(l: ScanAssignLine, riderName: string): { text: string; textClass: string; rowClass: string } {
+function scanRowPresentation(l: ScanAssignLine, riderName: string): { text: string; tone: BadgeTone } {
   switch (l.status) {
     case "procesando":
-      return { text: "Asignando…", textClass: "text-slate-500", rowClass: "bg-slate-50" };
+      return { text: "Asignando…", tone: "neutral" };
     case "asignado":
-      return { text: `En la caja de ${l.riderName ?? riderName}`, textClass: "text-emerald-700", rowClass: "bg-emerald-50/50" };
+      return { text: `En la caja de ${l.riderName ?? riderName}`, tone: "ok" };
     case "ya_en_caja":
-      return { text: "Ya estaba", textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
+      return { text: "Ya estaba", tone: "warn" };
     case "en_otra_caja":
-      return { text: `En la caja de ${l.riderName ?? "otro"} → Mover`, textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
+      return { text: `En la caja de ${l.riderName ?? "otro"}`, tone: "warn" };
     case "bloqueado_efectivo":
-      return { text: "Límite de efectivo → Autorizar", textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
+      return { text: "Límite de efectivo", tone: "warn" };
     case "programado_otro_dia":
-      return { text: `Programado ${l.programmedFor ? programDayLabel(l.programmedFor) : "otro día"} → Asignar igual`, textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
+      return { text: `Programado ${l.programmedFor ? programDayLabel(l.programmedFor) : "otro día"}`, tone: "warn" };
     case "no_elegible":
-      return { text: l.message ? `No elegible: ${l.message.replace(/\.$/, "")}` : "No elegible", textClass: "text-red-700", rowClass: "bg-red-50/50" };
+      return { text: l.message ? `No elegible: ${l.message.replace(/\.$/, "")}` : "No elegible", tone: "crit" };
     default:
-      return { text: "QR desconocido", textClass: "text-red-700", rowClass: "bg-red-50/50" };
+      return { text: "QR desconocido", tone: "crit" };
   }
-}
-
-/** Tile compacta de métrica: etiqueta pequeña, cifra grande; es un filtro. */
-function Tile({ label, hint, value, active, onClick, tone = "slate" }: { label: string; hint: string; value: number; active: boolean; onClick: () => void; tone?: "slate" | "amber" }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      title={hint}
-      className={cn(
-        "flex h-12 min-w-[8.5rem] flex-1 shrink-0 snap-start flex-col justify-center rounded-xl border px-3 text-left leading-tight",
-        active ? "border-brand-500 bg-brand-50 text-brand-900 ring-1 ring-brand-500" : tone === "amber" ? "border-amber-200 bg-amber-50/60 text-amber-900 hover:bg-amber-50" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
-      )}
-    >
-      <span className="truncate text-xs">{label}</span>
-      <span className="text-base font-semibold tabular-nums">{value.toLocaleString("es-PE")}</span>
-    </button>
-  );
 }
 
 /**
@@ -1319,26 +1381,14 @@ function Tile({ label, hint, value, active, onClick, tone = "slate" }: { label: 
 function ProgramChip({ day, today, reason }: { day: string; today: string; reason: string | null }) {
   const overdue = day < today;
   const text = day === today ? "programado hoy" : `programado ${programDayLabel(day)}${overdue ? " · vencido" : ""}`;
-  return (
-    <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", overdue ? "bg-amber-50 text-amber-800" : "bg-indigo-50 text-indigo-800")} title={reason ? `Motivo: ${reason}` : undefined}>
-      {text}
-    </span>
-  );
+  return <Badge tone={overdue ? "warn" : "info"} title={reason ? `Motivo: ${reason}` : undefined}><IconCalendar className="size-3" />{text}</Badge>;
 }
 
 /** Chapa del estado del paquete en la caja: por armar · armado · cotejado · confirmado · no lo llevó. */
 function StageChip({ stage, confirmMode }: { stage: ReturnType<typeof packageStage>; confirmMode: boolean }) {
   const text = stage === "confirmado" && !confirmMode ? "recibido" : PACKAGE_STAGE_LABEL[stage];
-  return (
-    <span className={cn(
-      "rounded-full px-2 py-0.5 font-medium",
-      stage === "por_armar" && "bg-amber-50 text-amber-800",
-      stage === "armado" && "bg-sky-50 text-sky-800",
-      stage === "cotejado" && "bg-emerald-50 text-emerald-700",
-      stage === "confirmado" && "bg-emerald-600 text-white",
-      stage === "no_lo_llevo" && "bg-red-50 text-red-700",
-    )}>{text}</span>
-  );
+  const tone: BadgeTone = stage === "por_armar" ? "warn" : stage === "armado" ? "info" : stage === "no_lo_llevo" ? "crit" : "ok";
+  return <Badge tone={tone}>{text}</Badge>;
 }
 
 /** «19/09» desde YYYY-MM-DD; vacío si no hay fecha. */
