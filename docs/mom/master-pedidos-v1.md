@@ -272,6 +272,14 @@ de transporte pertenecen a cada salida.
 Por confirmar → Preparación → Por despachar → En curso → Por cerrar → Finalizado
 ```
 
+**Los contadores cuentan lo mismo que la lista (29-09-2026).** Con cualquier
+filtro puesto en el Master —tienda, courier, región, estado operativo, fechas…—
+el número de cada pestaña de macroetapa, el de «Todos» y el de cada chip de
+subetapa es cuántos pedidos de esa etapa pasan esos filtros, con la misma
+definición que la tabla (`applyServerFilters`). Sin filtros se cuenta todo el
+Master de las tiendas visibles. La búsqueda sigue aparte: mientras se busca, las
+pestañas no se muestran.
+
 ### 6.1 Por confirmar
 
 Aplica a Provincia COD y Agencia. Lima la omite.
