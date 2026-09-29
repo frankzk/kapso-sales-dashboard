@@ -2585,10 +2585,12 @@ las bodegas**, en vez de un archivo por bodega. Las reglas de arriba no cambian
 sobre todas las ciudades del sync, con las mismas reglas y además:
 
 - **Credencial de la organización, no de una persona**: una sola, porque Aurela
-  y Kenku comparten inventario en Swayp. Es la de integración de Swayp que Kapta
-  ya usa para las guías, o una exclusiva de inventario si Swayp la da. **El login
+  y Kenku comparten inventario en Swayp, y **exclusiva de inventario**
+  (`SWAYP_INVENTORY_TOKEN`). La de integración de las guías no sirve: probada
+  el 29-09-2026, Swayp responde 403 «No tienes autorización 7301». **El login
   del panel no se automatiza**: exige reCAPTCHA en cada inicio de sesión, que
-  existe justamente para impedirlo.
+  existe justamente para impedirlo. **Hasta que Swayp entregue esa credencial,
+  el sync automático está apagado** y se sincroniza con el botón.
 - **Retiene la ciudad que quedaría vaciada** y no la aplica: si Swayp no trae
   ninguna unidad para una ciudad con stock, o si dejaría en 0 más de la mitad
   de sus productos con stock (y al menos 5). Es más probable una lectura rota

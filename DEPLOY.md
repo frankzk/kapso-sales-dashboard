@@ -1978,14 +1978,14 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
    - `SWAYP_INVENTORY_RUC` — RUC de la empresa en Swayp (header `user`).
    - `SWAYP_INVENTORY_COMPANY_ID` — id de la empresa en Swayp (`idCompany`).
    - `SWAYP_INVENTORY_ORG_ID` — la organización de Kapta dueña de ese stock.
-   El token y el correo salen de `SWAYP_TOKEN`/`SWAYP_EMAIL` (la integración
-   de guías). Si Swayp da una credencial exclusiva para inventario, va en
-   `SWAYP_INVENTORY_TOKEN`/`SWAYP_INVENTORY_EMAIL` y manda sobre la otra.
-3. **El login del panel NO se automatiza**: exige reCAPTCHA en cada inicio de
-   sesión. Si la credencial de integración no abre el inventario, Stock Swayp
-   → «Leer inventario» con el token vacío lo dice (status y respuesta de
-   Swayp), el cron registra el fallo cada hora y el botón con token pegado
-   sigue funcionando. El remedio es pedirle a Swayp una credencial de API con
-   acceso al inventario.
-4. El cron (`/api/cron/swayp-inventory`, a los :40 de cada hora) no hace nada
-   hasta que las tres variables existen: responde qué falta.
+   Ya creadas el 29-09-2026.
+3. **Falta la credencial: `SWAYP_INVENTORY_TOKEN`** (y `SWAYP_INVENTORY_EMAIL`
+   si no es el de `SWAYP_EMAIL`), una credencial de API de Swayp con acceso al
+   inventario. Hay que pedírsela a Swayp. La de integración de las guías
+   (`SWAYP_TOKEN`) NO sirve: probada el 29-09-2026, responde 403 «No tienes
+   autorización 7301». El login del panel tampoco: exige reCAPTCHA en cada
+   inicio de sesión y no se automatiza.
+4. Sin `SWAYP_INVENTORY_TOKEN` el cron (`/api/cron/swayp-inventory`, a los :40
+   de cada hora) no hace nada y responde qué falta; Stock Swayp muestra el sync
+   automático apagado. Al cargarla: Stock Swayp → «Leer inventario» con el
+   token vacío la prueba al instante, y desde la hora siguiente corre solo.

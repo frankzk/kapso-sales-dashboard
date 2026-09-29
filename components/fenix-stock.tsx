@@ -845,9 +845,16 @@ function EstadoAutomatico({ estado }: { estado: SwaypSyncEstado }) {
       <p>
         <span className="font-medium text-slate-800">Sync automático: </span>
         {estado.credencialGuardada ? (
-          <span className="text-emerald-700">activo, cada hora</span>
+          ultimaAuto && !ultimaAuto.ok ? (
+            <span className="text-rose-700">configurado, pero fallando</span>
+          ) : (
+            <span className="text-emerald-700">activo, cada hora</span>
+          )
         ) : (
-          <span>sin configurar. Mientras tanto, sincroniza con el botón.</span>
+          <span>
+            apagado. Necesita una credencial de API de Swayp con acceso al inventario; mientras
+            tanto, sincroniza con el botón pegando un token del panel.
+          </span>
         )}
       </p>
       {ultima && (
@@ -865,7 +872,7 @@ function EstadoAutomatico({ estado }: { estado: SwaypSyncEstado }) {
           )}
         </p>
       )}
-      {ultimaAuto && !ultimaAuto.ok && (
+      {estado.credencialGuardada && ultimaAuto && !ultimaAuto.ok && (
         <p className="mt-1 text-rose-700">
           El último intento automático ({haceCuanto(ultimaAuto.created_at)}) falló: {ultimaAuto.error}
         </p>

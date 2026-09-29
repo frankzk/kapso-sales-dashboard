@@ -11,7 +11,8 @@ export const maxDuration = 300;
 // Sync automático del stock contra el inventario de Swayp (MOM, «El mismo
 // conteo, leído por API»). La lógica y las retenciones viven en
 // lib/swayp-inventory-sync.ts; esto solo autentica y elige la credencial.
-// Sin credencial configurada no hace nada: responde qué falta.
+// Sin credencial de inventario (`SWAYP_INVENTORY_TOKEN`) no hace nada:
+// responde qué falta.
 
 function secretEquals(got: string | null, want: string): boolean {
   if (!got) return false;
