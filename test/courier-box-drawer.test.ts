@@ -112,11 +112,11 @@ describe("la caja se abre al lado de Rutas (MOM §29.14)", () => {
     // La tabla única lleva el pago y el cálculo viaja del panel de pago a la
     // tabla. Desde el 28-09 la ganancia va en una columna con su desglose
     // (tarifa y adicional debajo), para que la tabla quepa en el panel.
-    expect(routes).toContain('font-medium">Ganancia</th>');
+    expect(routes).toContain('font-semibold">Ganancia</th>');
     expect(routes).toContain("money(earned + extra)");
     expect(routes).toContain("`+ ${money(extra)} adicional`");
     expect(routes).toContain("`Tarifa ${money(earned)}${source ? ` (${source})` : \"\"}${extra ? ` + adicional ${money(extra)}` : \"\"}`");
-    expect(routes).toContain('font-medium">Cobro y respaldo</th>');
+    expect(routes).toContain('font-semibold">Cobro y respaldo</th>');
     expect(routes).toContain("compact={detailOnly}");
     expect(routes).toContain("onDetail={setPay}");
     // Desde el 29-09, dos líneas por fila como máximo (Frankz): anchos fijos

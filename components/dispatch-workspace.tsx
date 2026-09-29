@@ -6,6 +6,8 @@ import { DispatchScanner } from "@/components/dispatch-scanner";
 import { DispatchCamera } from "@/components/dispatch-camera";
 import { GfBoxAddPackages } from "@/components/gf-box-add-packages";
 import { cn } from "@/components/ui";
+import { Banner, FIELD, OpsButton } from "@/components/ops-ui";
+import { IconCheckCircle, IconChevronDown } from "@/components/icons";
 import { isCourierTbd } from "@/lib/shipment-output";
 import { courierKey } from "@/lib/dispatch";
 import {
@@ -340,34 +342,50 @@ export function DispatchBoxPanel({
       ? canManage && selected.state !== "in_custody"
       : canPickup && !!progress?.officeComplete && (selected.state !== "in_custody" || custodyPickupOpen));
   const pickupPending = progress ? progress.total - progress.pickupChecked : 0;
+  // La caja de Grupo GF solo se abre en el panel lateral de Rutas, que ya vive
+  // en el mundo de operación (DESIGN.md); la mesa de almacén sigue igual.
+  const ops = surface === "gf";
 
   return (
     <div className="min-w-0 space-y-4">
-          <div inert={busy} className="grid grid-cols-3 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
-            <ModeButton active={mode === "build"} disabled={!canManage} onClick={() => setMode("build")} number="1" label="Agregar pedidos" />
-            <ModeButton active={mode === "office"} disabled={!canManage} onClick={() => setMode("office")} number="2" label="Verificar caja" />
-            <ModeButton active={mode === "pickup"} disabled={!canPickup || (!!selected && !needsRiderCheck(selected.kind))} onClick={() => setMode("pickup")} number="3" label="Recibir carga" />
+          <div inert={busy} className={ops ? "grid grid-cols-3 gap-0.5 rounded-lg bg-wash p-0.5 ring-1 ring-inset ring-line" : "grid grid-cols-3 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm"}>
+            <ModeButton ops={ops} active={mode === "build"} disabled={!canManage} onClick={() => setMode("build")} number="1" label="Agregar pedidos" />
+            <ModeButton ops={ops} active={mode === "office"} disabled={!canManage} onClick={() => setMode("office")} number="2" label="Verificar caja" />
+            <ModeButton ops={ops} active={mode === "pickup"} disabled={!canPickup || (!!selected && !needsRiderCheck(selected.kind))} onClick={() => setMode("pickup")} number="3" label="Recibir carga" />
           </div>
 
-          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 p-4 sm:p-7">
+          <section className={ops ? "rounded-lg ring-1 ring-line" : "overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"}>
+            <div className={ops ? "p-4 shadow-[inset_0_-1px_0_var(--color-line)] sm:p-5" : "border-b border-slate-200 p-4 sm:p-7"}>
               <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
                 <div>
-                  <h2 className="text-lg font-semibold text-slate-950">{MODE_TITLES[mode]}</h2>
-                  <p className="mt-1 text-sm leading-5 text-slate-600">{MODE_HINTS[mode]}</p>
+                  <h2 className={ops ? "text-base font-semibold leading-6 text-ink-900" : "text-lg font-semibold text-slate-950"}>{MODE_TITLES[mode]}</h2>
+                  <p className={ops ? "mt-0.5 max-w-[60ch] text-[13px] leading-5 text-ink-600" : "mt-1 text-sm leading-5 text-slate-600"}>{MODE_HINTS[mode]}</p>
                 </div>
-                {selected && <StateBadge state={selected.state} />}
+                {/* En el panel de Rutas la cabecera ya lleva la situación de la ruta. */}
+                {selected && !ops && <StateBadge state={selected.state} />}
               </div>
 
               {selected && showTarget && (
                 <RouteTarget mode={mode} disabled={busy} manifest={selected} manifests={manifests} onSelect={(id) => { setMessage(null); onSelect?.(id); }} />
               )}
-              {surface === "gf" && selected && <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
-                <span>{activeDispatchItems(selected.items).length} paquete{activeDispatchItems(selected.items).length === 1 ? "" : "s"} en esta carga</span>
-                {selected.state === "in_custody" && pickupMode === "exigir" && <Link href="/dashboard/courier" className="font-semibold text-brand-700">Agregar una carga a la misma ruta →</Link>}
+              {surface === "gf" && selected && <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-ink-600">
+                <span className="tabular-nums">{activeDispatchItems(selected.items).length} paquete{activeDispatchItems(selected.items).length === 1 ? "" : "s"} en esta carga</span>
+                {selected.state === "in_custody" && pickupMode === "exigir" && <Link href="/dashboard/courier" className="font-medium text-brand-700 hover:underline">Agregar una carga a la misma ruta →</Link>}
               </div>}
 
               {mode !== "build" && checkComplete && selected ? (
+                ops ? (
+                  <Banner tone="ok" role="status" className="mt-4" title={`${mode === "office" ? "Caja verificada" : "Carga recibida"} · ${progress?.total} de ${progress?.total}`}>
+                    <p>{selected.state === "in_custody"
+                      ? (progress?.pickupComplete
+                        ? "La entrega de esta carga quedó registrada."
+                        : `La caja ya salió con ${selected.driver_name ?? "el motorizado"}; ${pickupPending} sin confirmar. Se confirman en «Recibir carga».`)
+                      : needsRiderCheck(selected.kind) ? "Oficina terminó. Falta que el motorizado reciba cada paquete." : "Oficina terminó. Registra quién recoge para entregar al courier."}</p>
+                    {mode === "office" && selected.state !== "in_custody" && needsRiderCheck(selected.kind) && (canPickup ?
+                      <OpsButton variant="primary" className="mt-3" onClick={() => { setMode("pickup"); setMessage(null); }}>Continuar a recepción</OpsButton>
+                      : <p className="mt-1 font-medium text-ink-900">El motorizado continúa desde su acceso a Reparto.</p>)}
+                  </Banner>
+                ) : (
                 <div className="mt-4 rounded-xl bg-emerald-50 p-4" role="status">
                   <p className="font-semibold text-emerald-900">{mode === "office" ? "Caja verificada" : "Carga recibida"} · {progress?.total} de {progress?.total}</p>
                   <p className="mt-1 text-sm text-emerald-800">{selected.state === "in_custody"
@@ -379,25 +397,30 @@ export function DispatchBoxPanel({
                     <button type="button" onClick={() => { setMode("pickup"); setMessage(null); }} className="mt-3 min-h-12 w-full rounded-xl bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700">Continuar a recepción</button>
                     : <p className="mt-2 text-sm font-medium text-emerald-900">El motorizado continúa desde su acceso a Reparto.</p>)}
                 </div>
+                )
               ) : mode !== "build" && (
                 <>
-                  {mode === "pickup" && selected && !progress?.officeComplete && <p className="mt-3 text-sm text-amber-800">Primero completa la verificación de oficina.</p>}
+                  {mode === "pickup" && selected && !progress?.officeComplete && (ops
+                    ? <Banner tone="warn" className="mt-4">Primero completa la verificación de oficina.</Banner>
+                    : <p className="mt-3 text-sm text-amber-800">Primero completa la verificación de oficina.</p>)}
                   {/* Con la caja ya en poder del motorizado, confirmar por él es
                       un respaldo: va DEBAJO de la lista, con su propio título,
                       y no como el gesto principal del paso. */}
                   {!(mode === "pickup" && custodyPickupOpen) && (
-                    <DispatchScanner key={`${manifestId}:${mode}`} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
+                    <DispatchScanner key={`${manifestId}:${mode}`} look={ops ? "ops" : "default"} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
                   )}
                 </>
               )}
-              {message && <div role={message.tone === "error" ? "alert" : "status"} className={cn("mt-4 rounded-xl px-4 py-3 text-sm font-medium", message.tone === "error" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800")}>{message.text}</div>}
+              {message && (ops
+                ? <Banner tone={message.tone === "error" ? "crit" : "ok"} role={message.tone === "error" ? "alert" : "status"} className="mt-4">{message.text}</Banner>
+                : <div role={message.tone === "error" ? "alert" : "status"} className={cn("mt-4 rounded-xl px-4 py-3 text-sm font-medium", message.tone === "error" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800")}>{message.text}</div>)}
             </div>
 
             {mode === "build" ? (
               surface === "gf" ? (
                 selected
                   ? <GfBoxAddPackages manifest={selected} canManage={canManage} refresh={refresh} />
-                  : <p className="p-6 text-sm text-slate-600">Elige una caja.</p>
+                  : <p className="p-5 text-sm text-ink-600">Elige una caja.</p>
               ) : selected ? (
                 <BuildRoute
                   // Cambiar de ruta descarta la selección: arrastrarla al
@@ -413,17 +436,17 @@ export function DispatchBoxPanel({
               )
             ) : selected ? (
               <>
-                <ManifestDetail manifest={selected} mode={mode} canManage={canManage} onChanged={() => refresh(selected.id)} showResult={showResult} />
+                <ManifestDetail ops={ops} manifest={selected} mode={mode} canManage={canManage} onChanged={() => refresh(selected.id)} showResult={showResult} />
                 {mode === "pickup" && custodyPickupOpen && (
-                  <div className="border-t border-slate-200 p-4 sm:p-7">
-                    <p className="text-sm font-semibold text-slate-900">Confirmar por {selected.driver_name ?? "el motorizado"}</p>
-                    <p className="mt-1 text-sm text-slate-600">
+                  <div className={ops ? "p-4 shadow-[inset_0_1px_0_var(--color-line)] sm:p-5" : "border-t border-slate-200 p-4 sm:p-7"}>
+                    <p className={ops ? "text-sm font-semibold text-ink-900" : "text-sm font-semibold text-slate-900"}>Confirmar por {selected.driver_name ?? "el motorizado"}</p>
+                    <p className={ops ? "mt-0.5 text-[13px] text-ink-600" : "mt-1 text-sm text-slate-600"}>
                       {pickupPending > 0
                         ? `${pickupPending} paquete${pickupPending === 1 ? "" : "s"} sin confirmar. Si no puede hacerlo desde su teléfono, escanea aquí los que sí lleva; queda registrado con tu usuario.`
                         : "Todos los paquetes están confirmados."}
                     </p>
                     {pickupPending > 0 && (
-                      <DispatchScanner key={`${manifestId}:${mode}:custodia`} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
+                      <DispatchScanner key={`${manifestId}:${mode}:custodia`} look={ops ? "ops" : "default"} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
                     )}
                   </div>
                 )}
@@ -552,7 +575,27 @@ function Metric({ label, value, tone }: { label: string; value: number; tone: "s
   return <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className={cn("mb-4 h-1.5 w-8 rounded-full", tones[tone])} /><p className="text-2xl font-semibold tabular-nums text-slate-950">{value}</p><p className="mt-1 text-xs font-medium text-slate-500">{label}</p></div>;
 }
 
-function ModeButton({ active, disabled, onClick, number, label }: { active: boolean; disabled: boolean; onClick: () => void; number: string; label: string }) {
+function ModeButton({ ops = false, active, disabled, onClick, number, label }: { ops?: boolean; active: boolean; disabled: boolean; onClick: () => void; number: string; label: string }) {
+  if (ops) {
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onClick}
+        aria-pressed={active}
+        className={cn(
+          "flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-md px-2 text-[13px] font-semibold transition-[background-color,color,box-shadow] duration-150",
+          active ? "bg-white text-ink-900 shadow-control ring-1 ring-line" : "text-ink-600 hover:text-ink-900",
+          disabled && "cursor-not-allowed opacity-40 hover:text-ink-600",
+        )}
+      >
+        <span className={cn("grid size-5 shrink-0 place-items-center rounded-full text-xs tabular-nums", active ? "bg-brand-600 text-white" : "bg-line text-ink-600")}>{number}</span>
+        {/* En el teléfono basta el verbo: «Agregar», «Verificar», «Recibir». */}
+        <span className="truncate sm:hidden">{label.split(" ")[0]}</span>
+        <span className="hidden truncate sm:inline">{label}</span>
+      </button>
+    );
+  }
   return <button disabled={disabled} onClick={onClick} className={cn("flex min-h-12 items-center justify-center gap-2 rounded-xl px-2 text-xs font-semibold transition sm:text-sm", active ? "bg-slate-950 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50", disabled && "cursor-not-allowed opacity-30")}><span className={cn("grid size-5 place-items-center rounded-full text-[10px]", active ? "bg-white/20" : "bg-slate-100")}>{number}</span>{label}</button>;
 }
 
@@ -812,7 +855,7 @@ function HandOverPanel({ manifest, onDone }: { manifest: DispatchManifest; onDon
   );
 }
 
-function ManifestDetail({ manifest, mode, canManage, onChanged, showResult }: { manifest: DispatchManifest; mode: Mode; canManage: boolean; onChanged: () => Promise<void>; showResult: (r: DispatchActionResult) => void }) {
+function ManifestDetail({ ops = false, manifest, mode, canManage, onChanged, showResult }: { ops?: boolean; manifest: DispatchManifest; mode: Mode; canManage: boolean; onChanged: () => Promise<void>; showResult: (r: DispatchActionResult) => void }) {
   const [query, setQuery] = useState("");
   const active = activeDispatchItems(manifest.items);
   const removed = manifest.items.filter((item) => !!item.removed_at);
@@ -835,6 +878,7 @@ function ManifestDetail({ manifest, mode, canManage, onChanged, showResult }: { 
           .some((field) => String(field).toLowerCase().includes(needle)),
       )
     : active;
+  if (ops) return <OpsManifestDetail manifest={manifest} mode={mode} canManage={canManage} onChanged={onChanged} showResult={showResult} active={active} removed={removed} checked={checked} total={progress.total} query={query} setQuery={setQuery} shownItems={shownItems} needle={needle} />;
   return <div className="p-4 sm:p-7">
     <div className="flex items-end justify-between gap-3 text-sm">
       <span className="font-medium text-slate-700">{mode === "office" ? "Paquetes verificados" : "Paquetes recibidos"}</span>
@@ -860,6 +904,81 @@ function ManifestDetail({ manifest, mode, canManage, onChanged, showResult }: { 
       <button type="button" onClick={async () => { const reason = window.prompt("Motivo de cancelación de la ruta"); if (!reason) return; showResult(await cancelDispatchManifest(manifest.id, reason)); await onChanged(); }} className="mt-4 min-h-12 rounded-lg px-3 text-sm font-medium text-red-700 hover:bg-red-50">Cancelar esta ruta</button>
     </details>}
   </div>;
+}
+
+/**
+ * El contenido de la caja en el panel de Rutas: una barra de avance, una lista
+ * con hairlines (no una tarjeta por paquete) y las correcciones plegadas.
+ */
+function OpsManifestDetail({ manifest, mode, canManage, onChanged, showResult, active, removed, checked, total, query, setQuery, shownItems, needle }: {
+  manifest: DispatchManifest;
+  mode: Mode;
+  canManage: boolean;
+  onChanged: () => Promise<void>;
+  showResult: (r: DispatchActionResult) => void;
+  active: DispatchManifestItem[];
+  removed: DispatchManifestItem[];
+  checked: number;
+  total: number;
+  query: string;
+  setQuery: (value: string) => void;
+  shownItems: DispatchManifestItem[];
+  needle: string;
+}) {
+  const pct = total ? Math.round((checked / total) * 100) : 0;
+  const label = mode === "office" ? "Cotejo de oficina" : "Recepción del motorizado";
+  return <div className="space-y-4 p-4 sm:p-5">
+    <div>
+      <div className="flex items-baseline justify-between gap-3 text-[13px]">
+        <span className="font-medium text-ink-700">{mode === "office" ? "Paquetes verificados" : "Paquetes recibidos"}</span>
+        <span className="font-semibold tabular-nums text-ink-900">{checked} de {total}</span>
+      </div>
+      <div role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={total || 1} aria-valuenow={checked} className="mt-2 h-1.5 overflow-hidden rounded-full bg-line">
+        <div className={cn("h-full rounded-full transition-[width] duration-300", checked === total && total > 0 ? "bg-ok-fg" : "bg-brand-600")} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+    {!needsRiderCheck(manifest.kind) && manifest.state !== "in_custody" && canManage && <HandOverPanel manifest={manifest} onDone={async (r) => { showResult(r); await onChanged(); }} />}
+    {active.length > 8 && <label className="block text-[13px] font-medium text-ink-700">
+      Buscar en esta caja
+      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Código, cliente o distrito" className={cn(FIELD, "mt-1")} />
+    </label>}
+    {shownItems.length
+      ? <ul className="divide-y divide-line rounded-lg ring-1 ring-line">{shownItems.map((item) =>
+          <OpsPackageRow key={item.id} item={item} mode={mode} canRemove={false} onRemoved={async () => {}} />)}</ul>
+      : <p className="py-4 text-sm text-ink-600">{needle ? `Ningún paquete coincide con «${query.trim()}».` : "Aún no hay paquetes asignados. Agrégalos antes de verificar esta caja."}</p>}
+    {removed.length > 0 && <details className="group">
+      <summary className="flex min-h-10 cursor-pointer list-none items-center gap-1.5 text-[13px] font-semibold text-ink-700 hover:text-ink-900 [&::-webkit-details-marker]:hidden">
+        <IconChevronDown aria-hidden className="size-4 -rotate-90 text-ink-500 transition-transform group-open:rotate-0" />
+        Paquetes retirados <span className="font-medium tabular-nums text-ink-500">{removed.length}</span>
+      </summary>
+      <ul className="mt-1 space-y-1 pl-5.5">{removed.map((item) => <li key={item.id} className="text-[13px] text-ink-600"><span className="font-mono text-xs font-medium text-ink-900">{packageCode(item.shipment)}</span> · {item.removal_reason}</li>)}</ul>
+    </details>}
+    {canManage && !["in_custody", "cancelled"].includes(manifest.state) && <details className="group">
+      <summary className="flex min-h-10 cursor-pointer list-none items-center gap-1.5 text-[13px] font-semibold text-ink-700 hover:text-ink-900 [&::-webkit-details-marker]:hidden">
+        <IconChevronDown aria-hidden className="size-4 -rotate-90 text-ink-500 transition-transform group-open:rotate-0" />
+        Corregir contenido de la caja
+      </summary>
+      <p className="mb-3 mt-1 text-[13px] text-ink-600">Retirar un paquete o cancelar requiere un motivo y queda en el historial.</p>
+      <ul className="divide-y divide-line rounded-lg ring-1 ring-line">{active.map((item) => <OpsPackageRow key={item.id} item={item} mode={mode} canRemove onRemoved={async (reason) => { showResult(await removeManifestItem(manifest.id, item.shipment_id, reason)); await onChanged(); }} />)}</ul>
+      <OpsButton variant="danger" className="mt-3" onClick={async () => { const reason = window.prompt("Motivo de cancelación de la ruta"); if (!reason) return; showResult(await cancelDispatchManifest(manifest.id, reason)); await onChanged(); }}>Cancelar esta ruta</OpsButton>
+    </details>}
+  </div>;
+}
+
+/** Un paquete de la caja: verificado con el check verde, pendiente con el hueco discontinuo. */
+function OpsPackageRow({ item, mode, canRemove, onRemoved }: { item: DispatchManifestItem; mode: Mode; canRemove: boolean; onRemoved: (reason: string) => Promise<void> }) {
+  const checked = mode === "office" ? item.office_checked_at : item.pickup_checked_at;
+  const [removing, setRemoving] = useState(false);
+  return <li className="flex items-center gap-3 px-3 py-2.5">
+    {checked
+      ? <IconCheckCircle role="img" aria-label="Verificado" className="size-5 shrink-0 text-ok-fg" />
+      : <span role="img" aria-label="Pendiente" className="size-5 shrink-0 rounded-full border-[1.5px] border-dashed border-ink-300" />}
+    <div className="min-w-0 flex-1">
+      <p className="truncate font-mono text-xs font-medium text-ink-900">{packageCode(item.shipment)}</p>
+      <p className="truncate text-[13px] leading-5 text-ink-600">{item.shipment?.customer_name ?? "Cliente"} · {item.shipment?.district ?? item.shipment?.province ?? "Sin distrito"}</p>
+    </div>
+    {canRemove && <OpsButton variant="danger" size="sm" disabled={removing} onClick={async () => { const reason = window.prompt("¿Por qué se retira este paquete de la ruta?"); if (!reason) return; setRemoving(true); try { await onRemoved(reason); } finally { setRemoving(false); } }}>{removing ? "Retirando…" : "Retirar"}</OpsButton>}
+  </li>;
 }
 
 function PackageRow({ item, mode, canRemove, onRemoved }: { item: DispatchManifestItem; mode: Mode; canRemove: boolean; onRemoved: (reason: string) => Promise<void> }) {
