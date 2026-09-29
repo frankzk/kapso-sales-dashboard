@@ -17,6 +17,8 @@ import {
   searchStockProducts,
   swaypInventoryDryRun,
   swaypExtensionDescargar,
+  swaypProbarProductosIntegracion,
+  type ProbeProductosIntegracion,
   swaypInventoryEstado,
   swaypInventorySync,
   type SwaypSyncEstado,
@@ -946,6 +948,8 @@ function EstadoAutomatico({ estado, onCambio }: { estado: SwaypSyncEstado; onCam
         )}
       </div>
 
+      {!estado.credencialApi && <ProbarProductosIntegracion />}
+
       {!estado.credencialApi && (
         <div className="px-3 py-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -983,6 +987,46 @@ function EstadoAutomatico({ estado, onCambio }: { estado: SwaypSyncEstado; onCam
               </li>
             </ol>
           </details>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Prueba de GET /v1/integrations/products con la credencial de las guías. Si
+ * trae el stock por bodega, el sync diario no necesita sesiones ni extensión.
+ */
+function ProbarProductosIntegracion() {
+  const [pending, start] = useTransition();
+  const [r, setR] = useState<ProbeProductosIntegracion | { error: string } | null>(null);
+  return (
+    <div className="px-3 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p>
+          <span className="font-medium text-slate-800">API de integraciones: </span>
+          prueba si la credencial de las guías puede leer los productos, sin extensión.
+        </p>
+        <button
+          type="button"
+          onClick={() => start(async () => setR(await swaypProbarProductosIntegracion()))}
+          disabled={pending}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+        >
+          {pending ? "Probando…" : "Probar /v1/integrations/products"}
+        </button>
+      </div>
+      {r && "error" in r && <p className="mt-1 text-rose-700">{r.error}</p>}
+      {r && !("error" in r) && (
+        <div className="mt-1.5 space-y-1">
+          <p className={r.ok ? "text-emerald-700" : "text-rose-700"}>
+            {r.ok
+              ? `Respondió 200 · ${r.total} productos${r.lista ? ` en «${r.lista}»` : ""}${r.campos.length ? ` · campos: ${r.campos.join(", ")}` : ""}`
+              : `Swayp respondió ${r.status}`}
+          </p>
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-white p-2 text-[11px] text-slate-600">
+            {r.muestra}
+          </pre>
         </div>
       )}
     </div>
