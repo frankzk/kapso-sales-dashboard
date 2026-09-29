@@ -785,6 +785,26 @@ export async function removeManifestItem(
     .eq("shipment_id", shipmentId)
     .is("removed_at", null);
   if (error) return { error: error.message };
+  // Fuera de la caja, la solicitud de Grupo GF vuelve a «por asignar», como en
+  // los retiros en custodia (0185) y los no recogidos (0182). Sin esto quedaba
+  // «scheduled» sin caja: #KP136039, #KP136010, #KP135989, #KP137239 y
+  // #KP137430 (23 y 28-09-2026, reparados en 0200).
+  const { data: reverted } = await admin
+    .from("logistics_requests")
+    .update({ status: "accepted", observation: cleanReason.slice(0, 300) })
+    .eq("shipment_id", shipmentId)
+    .eq("status", "scheduled")
+    .select("id");
+  if (reverted?.length) {
+    await admin.from("logistics_request_events").insert((reverted as { id: string }[]).map((request) => ({
+      request_id: request.id,
+      kind: "route_removed",
+      status: "accepted",
+      actor: user.id,
+      note: `Retirado de la caja: ${cleanReason}`,
+      payload: { manifestId },
+    })));
+  }
   await recalculateManifest(manifestId, user.id);
   await auditDispatch({
     orgId: manifest.org_id,

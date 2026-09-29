@@ -6434,6 +6434,25 @@ picker se retira: es el apartado «Ya salieron». Lógica pura en
 `lib/dispatch-day.ts`, probada en `test/dispatch-day.test.ts` y
 `test/despacho-apartados-programados.test.ts`.
 
+**Lo cerrado no se asigna, y quitar de la caja devuelve a «por asignar»
+(29-09-2026).** Los «tomados sin caja» salen de las solicitudes de Grupo GF,
+no de las etapas de admisión, así que un pedido anulado con su solicitud
+aceptada seguía con casilla (#KP136160, #KP136100, #KP136653). Un tomado
+cuyo pedido está en **Por cerrar** o **Finalizado** (`takenIsAssignable`) ya
+no es asignable: pasa a seguimiento, y el servidor lo rechaza también al
+asignar por lista o por QR. **La solicitud no se cancela sola al cerrarse el
+pedido**: el MOM no lo pide (§29.6 separa la cancelación logística del pedido
+Shopify) y un pedido se puede reabrir; si vuelve a una etapa de admisión,
+vuelve a la cola sin tocar nada. Cancelarla sigue siendo un acto explícito.
+
+«Quitar» un paquete de una caja sin custodia dejaba la solicitud en
+`scheduled` sin caja (#KP136039, #KP136010, #KP135989, #KP137239,
+#KP137430). Ahora vuelve a `accepted` con evento `route_removed` en
+`logistics_request_events`, como ya hacían el retiro en custodia (0185) y el
+«no lo recojo» (0182); 0200 reparó las cinco con `route_removed_repair`. Al
+revés, mover un paquete a la caja de otro motorizado lo deja en `scheduled`:
+en custodia, el retiro lo devolvía a `accepted` dentro de la caja nueva.
+
 **El gesto único.** Escanear o fotografiar es un solo componente
 (`ScanAction`) y el contexto lo fija la pantalla, nunca el usuario:
 `supervisor_asignacion` → tomar + asignar (sin `office_checked` desde el 22-09-2026);

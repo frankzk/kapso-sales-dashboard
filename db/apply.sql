@@ -401,4 +401,6 @@
 \ir migrations/0198_flow_collection_account.sql
 \echo 'Applying 0199_gf_dispatch_programs.sql'
 \ir migrations/0199_gf_dispatch_programs.sql
+\echo 'Applying 0200_gf_orphan_scheduled_requests.sql'
+\ir migrations/0200_gf_orphan_scheduled_requests.sql
 \echo 'Done.'

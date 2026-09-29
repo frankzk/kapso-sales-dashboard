@@ -59,6 +59,7 @@ import {
   toggleInList,
   toggleQueueTile,
   isReturnable,
+  takenIsAssignable,
   type BoxItemFilter,
   type BoxTile,
   type CreatedWindow,
@@ -222,8 +223,10 @@ export function DispatchDayBoard(props: Props) {
   }
 
   const queue = useMemo<QueueRow[]>(() => {
+    // Un tomado cuyo pedido ya está en Por cerrar o Finalizado no se asigna:
+    // pasa a seguimiento (`takenIsAssignable`).
     const taken: QueueRow[] = props.accepted
-      .filter((o) => !o.route)
+      .filter((o) => !o.route && takenIsAssignable(o.macroStage))
       .map((o) => ({
         orderId: o.orderId,
         orderName: o.orderName,
@@ -278,7 +281,7 @@ export function DispatchDayBoard(props: Props) {
   // Los que ya salieron con Grupo GF (tienen caja): no se asignan desde aquí,
   // pero cuentan en Etapa y se listan para seguimiento al elegir la suya.
   const tracked = useMemo<QueueRow[]>(() => props.accepted
-    .filter((o) => o.route)
+    .filter((o) => o.route || !takenIsAssignable(o.macroStage))
     .map((o) => ({
       orderId: o.orderId,
       orderName: o.orderName,
@@ -980,7 +983,7 @@ export function DispatchDayBoard(props: Props) {
                     <td className="px-3 py-2">
                       {q.assignable || isReturnable(q)
                         ? <input type="checkbox" checked={selected.has(q.orderId)} onChange={() => toggle(q.orderId)} aria-label={`Marcar ${q.orderName}`} className="mt-0.5" />
-                        : <span aria-hidden className="mt-0.5 inline-block h-4 w-4 rounded border border-dashed border-slate-300" title="Ya salió: se sigue, no se asigna" />}
+                        : <span aria-hidden className="mt-0.5 inline-block h-4 w-4 rounded border border-dashed border-slate-300" title={q.route ? "Ya salió: se sigue, no se asigna" : "Pedido cerrado o cerrándose: no se asigna"} />}
                     </td>
                     <td className="px-3 py-2">
                       <OrderLink orderId={q.orderId} className="block truncate font-semibold text-slate-950 hover:text-brand-700" title={q.orderName}>{q.orderName}</OrderLink>
