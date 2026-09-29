@@ -162,6 +162,27 @@ describe("la auditoría que se guarda con el comprobante", () => {
     expect(r.swapped).toBe(true);
     expect(r.status).toBe("verified");
   });
+
+  it("la carga descarta la nota del Yape con el nombre de la clienta, y lo dice", () => {
+    // #AUR177541: la carga decide `revision_admin` con este `recipientCheck`.
+    // Si aquí no se aplicara la misma regla que en la bandeja, cada nota nueva
+    // seguiría entrando como «Revisión solicitada».
+    const nota = { ...leido, payerName: null, recipientName: "sonia ludeña" };
+    const { fields, payload } = voucherReading(
+      verdict,
+      nota,
+      CUENTAS,
+      "SONIA IBETH LUDEÑA QUISPE",
+    );
+    expect(fields).toMatchObject({
+      recipientCheck: "partial",
+      recipientName: null,
+      recipientIgnoredName: "sonia ludeña",
+    });
+    // La auditoría guarda lo que el lector DIJO, sin corregir.
+    expect((payload.extracted as Record<string, unknown>).recipient_name).toBe("sonia ludeña");
+    expect(voucherReading(verdict, nota, CUENTAS).fields.recipientCheck).toBe("mismatch");
+  });
 });
 
 describe("el comprobante repetido", () => {

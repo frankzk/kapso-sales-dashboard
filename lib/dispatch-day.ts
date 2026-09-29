@@ -175,7 +175,7 @@ export interface QueueRow {
    * reportada o despacho de otro courier): apartado «Ya salieron».
    */
   hasPriorDispatch: boolean;
-  /** Fecha de salida programada sin tomar el pedido (0198); null si no hay. */
+  /** Fecha de salida programada sin tomar el pedido (0199); null si no hay. */
   programmedFor: string | null;
   /** Motivo de la programación, para el `title` de la chapa. */
   programReason?: string | null;

@@ -95,11 +95,11 @@ export interface CourierAvailableOrder {
   tariffId: string;
   tariffAmount: number;
   scheduledFor: string;
-  /** Salió a reparto al menos una vez (`gf_order_departures`, 0198). */
+  /** Salió a reparto al menos una vez (`gf_order_departures`, 0199). */
   hasPriorDispatch: boolean;
   /** La última salida a reparto, si hubo. */
   lastDispatchedAt: string | null;
-  /** Fecha de salida programada sin tomar el pedido (0198); null si no hay. */
+  /** Fecha de salida programada sin tomar el pedido (0199); null si no hay. */
   programmedFor: string | null;
   programReason: string | null;
   /** Macroetapa y subetapa del MOM en el Master, para los chips de «Desde la lista». */
@@ -333,7 +333,7 @@ function canonicalDistrictKey(value: string | null): string | null {
 type Admin = ReturnType<typeof createAdminSupabase>;
 
 /**
- * Última salida a reparto por pedido (`gf_order_departures`, 0198). Si la
+ * Última salida a reparto por pedido (`gf_order_departures`, 0199). Si la
  * lectura falla nadie «salió»: la cola se ve entera en «Nunca salieron», que
  * es el lado prudente —se atiende antes, no se esconde—.
  */
@@ -358,7 +358,7 @@ interface DispatchProgram {
   reason: string;
 }
 
-/** Programaciones de salida sin tomar (0198), por pedido. Una lectura que falla no tumba la pantalla. */
+/** Programaciones de salida sin tomar (0199), por pedido. Una lectura que falla no tumba la pantalla. */
 async function loadPrograms(admin: Admin, filter: { storeIds?: string[]; orderIds?: string[] }): Promise<Map<string, DispatchProgram>> {
   const out = new Map<string, DispatchProgram>();
   const ids = filter.orderIds ?? filter.storeIds ?? [];
@@ -489,7 +489,7 @@ async function loadCourierOperations(
     if (!row.order_id) continue;
     shipmentsByOrder.set(row.order_id, [...(shipmentsByOrder.get(row.order_id) ?? []), row]);
   }
-  // «Nunca salieron» frente a «Ya salieron», y lo programado sin tomar (0198):
+  // «Nunca salieron» frente a «Ya salieron», y lo programado sin tomar (0199):
   // para la cola y para lo tomado, en una llamada cada uno.
   const requestOrderIdsAll = ((requestRows ?? []) as { order_id: string }[]).map((request) => request.order_id);
   const [lastDispatchByOrder, programByOrder] = await Promise.all([
@@ -2379,7 +2379,7 @@ export type ScanAssignStatus =
   | "en_otra_caja"
   | "no_elegible"
   | "bloqueado_efectivo"
-  /** Programado para otro día (0198): se asigna solo si se confirma. */
+  /** Programado para otro día (0199): se asigna solo si se confirma. */
   | "programado_otro_dia"
   | "desconocido";
 

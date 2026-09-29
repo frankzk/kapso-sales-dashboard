@@ -1400,6 +1400,16 @@ sin tope de antigüedad. Reglas:
     Yape»—. **7 de los 9 rechazos de ese día eran cobros buenos rechazados por
     el logo.** Aceptar el medio no es aceptar el pago: el destinatario y el
     monto se siguen exigiendo igual.
+  - **El final del celular pegado al nombre es el celular, no parte del
+    nombre.** La app del BBVA, al pagar a un Yape desde «Envío a contactos»,
+    escribe el contacto como «Grupo gf s •5309». Leído como nombre, «5309»
+    rompía la comparación y el cobro salía «El pago NO va a Grupo GF SAC»:
+    **tres cobros del courier** a la cuenta de la empresa (#KP137040 entre
+    ellos) quedaron en revisión administrativa. Ahora los dígitos que van tras
+    un separador (•, ·, *) se separan del nombre y se juzgan como celular:
+    tienen que terminar en `309`, o es otra cuenta aunque el nombre encaje. Un
+    nombre que solo termina en números, sin separador, no se toca. Rige igual
+    en los comprobantes de los pedidos (§12, Pagos).
   - **La cola de cobros se recorre entera: la que hace más tiempo que no se
     mira va primero.** El 10-09-2026 había **238 guías candidatas y el tope es
     de 60 por pasada**, y la consulta cortaba sin orden ninguno: entraban
@@ -2527,6 +2537,37 @@ de **bodega** y no de ciudad; hasta entonces no se inventa.
 
 La carga a mano sigue existiendo para lo que el Excel no cubre, pero es el
 parche: la fuente es el conteo de Swayp.
+
+#### El mismo conteo, leído por API (desde el 29-09-2026)
+
+El Excel sale del API interno del panel de Swayp, y Kapta ahora lo lee directo
+(Stock Swayp → «Sincronizar desde Swayp por API»): **una sola lectura trae todas
+las bodegas**, en vez de un archivo por bodega. Las reglas de arriba no cambian
+—mismo `planearImportacion`, misma columna Disponible, mismo emparejamiento por
+`codbar`, mismo kardex— y además:
+
+- **Dos pasos: leer y aplicar.** «Leer» muestra el diff por ciudad sin escribir.
+  «Aplicar» escribe sólo las ciudades marcadas y **vuelve a leer Swayp en ese
+  momento**: no aplica el diff que tenía la pantalla, que pudo quedar viejo.
+- **La ciudad sale de la bodega de fulfillment** (`warehouse/getAll` del
+  servicio de inventario), cruzando el `idWarehouse` de cada fila. No de
+  `warehouses/byCompany`: esa es la bodega de **recojo** de la empresa, no
+  donde está el stock. La ciudad se resuelve por nombre de bodega, código INEI
+  o, en último caso, la última ciudad nombrada en la dirección.
+- **Sólo se sincronizan Arequipa, Trujillo, Juliaca, Piura y Lima**
+  (`CIUDADES_DEL_SYNC`), las mismas que el Excel sabía leer. Una bodega que
+  resuelva a otra ciudad, o que no resuelva, se muestra y **no se toca**.
+  Sumar una ciudad al sync es una decisión, no un efecto del mapeo.
+- **Una ciudad que no vino en la lectura no se vacía**, y una lectura vacía
+  (0 filas) no se aplica: es un fallo de Swayp, no un inventario en cero.
+- Si dos bodegas caen en la misma ciudad, sus unidades **se suman**.
+- **El token es el del login del panel** (~1 h de vida), se pega a mano y no se
+  guarda. Automatizar el sync (cron) necesita guardar una credencial de la
+  organización —una sola, Aurela y Kenku comparten inventario en Swayp—, y es
+  una decisión aparte.
+- El contrato es **reversado del panel, no oficial**: si Swayp lo cambia, la
+  lectura falla con el status y la respuesta a la vista, y el Excel sigue como
+  respaldo.
 
 ### Stock sin control de cantidad (Lima)
 
@@ -4009,6 +4050,43 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   paga, legítimamente. La corrección **se dice en pantalla**, nunca se aplica en
   silencio: esta comprobación decide si el dinero se desvió, y quien valida
   tiene que saber que el nombre que ve salió del otro campo.
+- **El mensaje del Yape no es el receptor.** Yape deja que quien paga escriba un
+  mensaje, y la captura lo pinta justo debajo del receptor; muchas clientas
+  escriben ahí su propio nombre. El lector lo copiaba como destinatario y el
+  cobro quedaba acusado de desvío: **#AUR177541** salió «sonia ludeña» —la
+  clienta es SONIA IBETH LUDEÑA QUISPE— con el celular ···309 de la empresa. Dos
+  defensas:
+  - el lector tiene instrucción expresa de no copiar el mensaje en ningún
+    nombre;
+  - y, como una instrucción puede desobedecerse, al juzgar la cuenta: si el
+    celular receptor leído es de una cuenta nuestra **y** el nombre leído es el
+    de la clienta del pedido, ese nombre **no cuenta**. La cuenta se juzga por
+    el celular y queda en verificación parcial —contraste manual—, **nunca** en
+    `verificada`. Exige las dos puntas, como la inversión: el nombre de la
+    clienta como receptor **sin** nuestro celular es la forma de un pago que
+    ella se hizo a sí misma, y eso sigue saltando.
+  - Se reconoce a la clienta con dos palabras o más de su nombre, en cualquier
+    orden y sin tildes. El orden no importa aquí porque no se está afirmando
+    que el dinero sea nuestro —eso lo sigue diciendo el celular—, solo que ese
+    nombre es el de ella. Un nombre de pila suelto no basta.
+  - El nombre descartado **se dice en pantalla** con el motivo, igual que la
+    inversión. Rige en la carga (decide si entra en `revision_admin`), en la
+    bandeja y en el servidor al validar; como se recalcula, los comprobantes ya
+    cargados se destraban solos.
+- **El final del celular pegado al nombre cuenta como celular.** La app del
+  BBVA escribe el contacto como «Grupo gf s •5309», y Plin como «Grupo Gf S ·
+  930 555 309 - Yape». Los dígitos tras el separador se apartan del nombre y,
+  si el lector no dio el celular aparte, son el celular: la misma señal
+  tajante de siempre. El lector tiene además instrucción de separarlos. Es la
+  misma regla que en los cobros del courier (§9.4).
+- **Una cuenta puede no tener celular: la pasarela Flow** (migración 0198). La
+  constancia de Flow dice «Pagado a: Aurela Kenku» —una sola cuenta de Flow para
+  las dos marcas— y no enseña ningún celular. Sin darla de alta, **#KP136181**
+  quedaba en «cuenta receptora no coincide». Una cuenta sin celular se verifica
+  con su nombre entero, porque es la única señal que su constancia puede dar;
+  recortado queda en contraste manual, y **un celular leído la desmiente**,
+  porque su constancia no muestra ninguno. El celular nulo quiere decir «esta
+  cuenta no cobra con celular», no «falta el dato».
 - Esta distinción es de seguridad, no de comodidad: una alarma de desvío que
   salta casi siempre por un nombre cortado deja de leerse, y tiene que ser
   creíble el día que el receptor sea de verdad otro.
@@ -4202,9 +4280,15 @@ ofrecía era `Rechazar`, que habría sido falso: el dinero llegó.
   `overridePaymentValidation`— dejaba el pago sin validador, sin fecha, sin
   asiento de liquidación y sin la confirmación de agencia: peor que el atasco.
 - **La regla NO se afloja por celular.** Lo tentador es dar por buena cualquier
-  lectura cuyo celular sea el nuestro. **#AUR177034** lo desmiente: celular ···309
-  y nombre «Rosa campos Mendoza». Las dos formas de fallar necesitan ojos, y por
-  eso la salida es una persona escribiendo el motivo y no una regla nueva.
+  lectura cuyo celular sea el nuestro, y un nombre ajeno con nuestro celular
+  sigue necesitando ojos. La salida es una persona escribiendo el motivo, no una
+  regla nueva.
+- **Corrección (28-09-2026).** Esta sección citaba **#AUR177034** —celular ···309
+  y nombre «Rosa campos Mendoza»— como el comprobante ajeno con nuestro número.
+  No lo era: la clienta de ese pedido es ROSA LUZ CAMPOS MENDOZA, y el nombre era
+  el mensaje que ella escribió en el Yape (ver «El mensaje del Yape no es el
+  receptor» en §12, Pagos). Ese caso se resuelve ya sin excepción; la regla de arriba
+  no cambia, porque un nombre que **no** es el de la clienta sigue bloqueando.
 
 Mientras Kapta y el Excel convivan, validar un pago deja el comprobante listo
 para continuar y registra actor y fecha, pero **no cambia por sí solo la
@@ -5673,7 +5757,7 @@ inventar un estado operativo nuevo:
 **Qué es «salió a reparto» (29-09-2026).** Hasta esta fecha se leía solo
 `shipments.dispatched_at`, que Grupo GF no llena y `gf_return_to_office`
 vuelve a null: de 1.863 pedidos en cola, 0 figuraban con salida previa. Ahora
-lo decide `gf_order_departures` (0198), para cualquier courier: en
+lo decide `gf_order_departures` (0199), para cualquier courier: en
 `order_events`, «Lo llevo» (`pickup_checked`), el reporte en la puerta
 (`stop_reported`), el paquete recibido de vuelta en oficina
 (`returned_to_office`) o entregado sin «Lo llevo»
@@ -5810,7 +5894,7 @@ el último escaneo de «Recibir mi caja» fallaba con `delivery_stop_shipment_un
 **Programar la salida sin tomar el pedido (29-09-2026).** En Despacho del día,
 el calendario de «Desde la lista» **solo guarda el día** en que deben salir los
 pedidos marcados, con actor y motivo obligatorio (`gf_dispatch_programs`,
-0198; evento `dispatch_programmed`). No toma el pedido, no reserva tarifa ni
+0199; evento `dispatch_programmed`). No toma el pedido, no reserva tarifa ni
 crea salida: sigue disponible. Uno ya tomado mueve también su
 `logistics_requests.scheduled_for`, para que las dos fechas digan lo mismo.
 Uno que ya está en la caja de un motorizado no se programa: primero se quita

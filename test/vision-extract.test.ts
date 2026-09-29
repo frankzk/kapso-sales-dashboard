@@ -45,6 +45,11 @@ describe("parseVoucherInstant", () => {
     expect(parseVoucherInstant("10/07/2026", "09:05 am")).toBe("2026-07-10T14:05:00.000Z");
   });
 
+  it("acepta el año pegado al mes, como lo escribe el BBVA", () => {
+    // «28 septiembre2026, 13:57», constancia de «Envío a contactos».
+    expect(parseVoucherInstant("28 septiembre2026", "13:57")).toBe("2026-09-28T18:57:00.000Z");
+  });
+
   it("acepta ISO y hora de 24 horas", () => {
     expect(parseVoucherInstant("2026-07-10", "14:35")).toBe("2026-07-10T19:35:00.000Z");
   });
@@ -298,6 +303,15 @@ describe("extractYapeVoucher", () => {
     expect(prompt).toContain("OPER.");
     // Y avisa de con qué NO confundirlos en ese mismo ticket.
     expect(prompt).toContain("ARQC");
+  });
+
+  it("el prompt avisa que el mensaje del Yape no es el receptor", async () => {
+    // #AUR177541: la clienta escribió su nombre en el mensaje del Yape y el
+    // lector lo copió como destinatario, acusando de desvío un cobro a ···309.
+    const prompt = await capturePrompt();
+    expect(prompt).toContain("EL MENSAJE DEL YAPE NO ES NINGÚN NOMBRE DEL PAGO");
+    expect(prompt).toContain("LA APP DEL BBVA PEGA EL CELULAR AL NOMBRE");
+    expect(prompt).toContain("Pagado a");
   });
 
   it("el prompt también enumera los rótulos que NO valen", async () => {

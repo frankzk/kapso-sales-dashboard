@@ -168,7 +168,7 @@ describe("asignar un programado a otro día pide confirmar", () => {
 });
 
 describe("salir a reparto es salir de verdad", () => {
-  const sql = readFileSync(resolve(process.cwd(), "db/migrations/0198_gf_dispatch_programs.sql"), "utf8");
+  const sql = readFileSync(resolve(process.cwd(), "db/migrations/0199_gf_dispatch_programs.sql"), "utf8");
 
   it("la función SQL y la constante listan los mismos eventos", () => {
     const listed = /e\.kind in \(([^)]*)\)/.exec(sql)?.[1] ?? "";

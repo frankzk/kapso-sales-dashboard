@@ -447,6 +447,19 @@ function buildExtractPrompt(): string {
     "tiene que salir de ESA MISMA parte. Leer el teléfono de un sitio y el nombre " +
     "de otro es el error más caro de esta tarea: hace que un cobro correcto " +
     "parezca un desvío de dinero.\n" +
+    "EL MENSAJE DEL YAPE NO ES NINGÚN NOMBRE DEL PAGO. Yape deja que quien paga " +
+    "escriba un mensaje, y la captura lo muestra debajo del receptor, junto a un " +
+    "ícono de globo de conversación. Muchas veces es el nombre de quien paga " +
+    "(\"sonia ludeña\") o una referencia del pedido. No lo copies en " +
+    "recipient_name ni en payer_name: el receptor es el nombre grande junto al " +
+    "monto, no el texto del mensaje.\n" +
+    "LA APP DEL BBVA PEGA EL CELULAR AL NOMBRE: al pagar a un Yape desde " +
+    "\"Envío a contactos\", el campo \"Contacto\" dice \"Grupo gf s •5309\" — el " +
+    "nombre y, tras el punto, los últimos dígitos del celular. El nombre va a " +
+    "recipient_name SIN esos dígitos, y los dígitos a recipient_phone_last_digits.\n" +
+    "En una constancia de pasarela (Flow u otra), quien recibe es el comercio " +
+    "que va bajo \"Pagado a\" o equivalente; esas constancias no muestran " +
+    "celular, así que recipient_phone_last_digits es null.\n" +
     `HAY RÓTULOS QUE SE PARECEN Y NO VALEN: ${notLabels}. Conviven con el de ` +
     "operación en el mismo comprobante y nombran otra cosa — el código de " +
     "solicitud identifica la SOLICITUD de transferencia, no el movimiento. Si el " +
@@ -486,7 +499,8 @@ export function parseVoucherInstant(date: string | null, time: string | null): s
   let d: string | null = null;
 
   const numeric = /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/.exec(clean);
-  const textual = /^(\d{1,2})\s+([a-z]{3,})\.?\s+(\d{4})/.exec(clean);
+  // El año puede venir pegado al mes: el BBVA escribe «28 septiembre2026».
+  const textual = /^(\d{1,2})\s+([a-z]{3,})\.?\s*(\d{4})/.exec(clean);
   const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(clean);
   if (iso) {
     y = Number(iso[1]);

@@ -12,7 +12,7 @@
 // cada caja. Las tiles de métricas son esos mismos filtros con su cantidad.
 // Desde el 29-09-2026 la lista se parte en apartados (programados hoy, nunca
 // salieron, ya salieron, +30 días, programados después) y el calendario
-// programa la salida sin tomar el pedido (0198).
+// programa la salida sin tomar el pedido (0199).
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
@@ -329,7 +329,7 @@ export function DispatchDayBoard(props: Props) {
   const visibleAssignable = visible.filter((q) => q.assignable || isReturnable(q));
   const selectedAssignable = allRows.filter((q) => q.assignable && selected.has(q.orderId)).map((q) => q.orderId);
   const selectedReturnable = allRows.filter((q) => isReturnable(q) && selected.has(q.orderId)).map((q) => q.orderId);
-  // Programar la salida (0198): solo guarda el día, con motivo; no toma el pedido.
+  // Programar la salida (0199): solo guarda el día, con motivo; no toma el pedido.
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [rescheduleDay, setRescheduleDay] = useState("");
   const [programReason, setProgramReason] = useState("");

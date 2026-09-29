@@ -3,7 +3,11 @@ import {
   verifyYapeRecipient as verifyAgainstAccounts,
   yapeRecipientReadingFromVision as readingAgainstAccounts,
   type CollectionAccount,
+  describeCollectionAccount,
+  motivoDelDesencuentro,
+  nameIsTheCustomers,
   readingLooksSwapped,
+  splitRecipientPhoneSuffix,
   type YapeRecipientCheck,
 } from "@/lib/yape-recipient";
 
@@ -29,7 +33,8 @@ const verifyYapeRecipient = (
 const yapeRecipientReadingFromVision = (
   vision: unknown,
   accounts: CollectionAccount[] = CUENTAS,
-) => readingAgainstAccounts(vision, accounts);
+  customerName?: string | null,
+) => readingAgainstAccounts(vision, accounts, customerName);
 
 describe("verificación de la cuenta receptora Yape", () => {
   it("verifica Grupo GF S.A.C. con el celular completo", () => {
@@ -66,6 +71,7 @@ describe("verificación de la cuenta receptora Yape", () => {
       status: "mismatch",
       account: null,
       swapped: false,
+      ignoredName: null,
     });
   });
 });
@@ -153,6 +159,7 @@ describe("el nombre que el voucher corta no es un receptor distinto", () => {
       status: "partial",
       account: CUENTAS[0],
       swapped: false,
+      ignoredName: null,
     });
   });
 });
@@ -305,5 +312,227 @@ describe("la lectura que viene con el pagador y el receptor cambiados", () => {
 
   it("sin cuentas configuradas no se inventa una inversión", () => {
     expect(readingLooksSwapped("Grupo Gf S.a.c.", "309", [])).toBe(false);
+  });
+});
+
+describe("el nombre de la clienta leído como receptor es la nota del Yape", () => {
+  // #AUR177541, lectura TEXTUAL de producción: la clienta escribió su nombre en
+  // el mensaje del Yape y el lector lo copió como destinatario. El celular
+  // ···309 es el de la empresa. Quedó acusado de «receptor distinto».
+  const nota = {
+    extracted: {
+      payer_name: null,
+      recipient_name: "sonia ludeña",
+      recipient_phone_last_digits: "309",
+    },
+  };
+
+  it("#AUR177541: la nota no cuenta y la cuenta se juzga por el celular", () => {
+    const r = yapeRecipientReadingFromVision(nota, CUENTAS, "SONIA IBETH LUDEÑA QUISPE");
+    expect(r).toEqual({
+      name: null,
+      phoneLastDigits: "309",
+      status: "partial",
+      account: CUENTAS[0],
+      swapped: false,
+      ignoredName: "sonia ludeña",
+    });
+    expect(motivoDelDesencuentro(r, CUENTAS)).toBeNull();
+  });
+
+  it("#AUR177034: «Rosa campos Mendoza» era la clienta, no un receptor ajeno", () => {
+    // El MOM lo citaba como «nombre ajeno con nuestro celular». Con el pedido
+    // delante: la clienta es ROSA LUZ CAMPOS MENDOZA. Lectura textual.
+    const r = yapeRecipientReadingFromVision(
+      {
+        extracted: {
+          payer_name: "Grupo Gf S",
+          recipient_name: "Rosa campos Mendoza",
+          recipient_phone_last_digits: "309",
+        },
+      },
+      CUENTAS,
+      "ROSA LUZ CAMPOS MENDOZA",
+    );
+    expect(r.status).toBe("partial");
+    expect(r.ignoredName).toBe("Rosa campos Mendoza");
+  });
+
+  it("nunca VERIFICA la cuenta: solo deja de acusarla", () => {
+    const r = yapeRecipientReadingFromVision(nota, CUENTAS, "SONIA IBETH LUDEÑA QUISPE");
+    expect(r.status).not.toBe("verified");
+  });
+
+  it("sin el nombre de la clienta la regla no se aplica", () => {
+    expect(yapeRecipientReadingFromVision(nota).status).toBe("mismatch");
+    expect(yapeRecipientReadingFromVision(nota, CUENTAS, null).status).toBe("mismatch");
+  });
+
+  it("exige las dos puntas: sin nuestro celular sigue saltando", () => {
+    // El nombre de la clienta como receptor, sin celular nuestro, es la forma
+    // de un pago que ella se hizo a sí misma. Eso no se perdona.
+    for (const phone of [null, "555"]) {
+      const r = yapeRecipientReadingFromVision(
+        { extracted: { recipient_name: "sonia ludeña", recipient_phone_last_digits: phone } },
+        CUENTAS,
+        "SONIA IBETH LUDEÑA QUISPE",
+      );
+      expect({ phone, status: r.status, ignored: r.ignoredName }).toEqual({
+        phone,
+        status: "mismatch",
+        ignored: null,
+      });
+    }
+  });
+
+  it("un nombre ajeno con nuestro celular sigue siendo mismatch", () => {
+    const r = yapeRecipientReadingFromVision(
+      { extracted: { recipient_name: "Elizabeth Suarez", recipient_phone_last_digits: "309" } },
+      CUENTAS,
+      "SONIA IBETH LUDEÑA QUISPE",
+    );
+    expect(r.status).toBe("mismatch");
+    expect(r.ignoredName).toBeNull();
+  });
+
+  it("no toca una lectura que ya encaja", () => {
+    const r = yapeRecipientReadingFromVision(
+      { extracted: { recipient_name: "Grupo Gf S.a.c.", recipient_phone_last_digits: "309" } },
+      CUENTAS,
+      "SONIA IBETH LUDEÑA QUISPE",
+    );
+    expect(r).toMatchObject({ status: "verified", ignoredName: null, name: "Grupo Gf S.a.c." });
+  });
+
+  it("reconoce el nombre en cualquier orden, sin tildes, con palabras de menos", () => {
+    const clienta = "SONIA IBETH LUDEÑA QUISPE";
+    for (const leido of ["sonia ludeña", "Ludeña Sonia", "SONIA LUDENA QUISPE", "Ludeña Quispe"]) {
+      expect({ leido, ok: nameIsTheCustomers(leido, clienta) }).toEqual({ leido, ok: true });
+    }
+  });
+
+  it("no lo reconoce con una sola palabra ni con palabras ajenas", () => {
+    const clienta = "SONIA IBETH LUDEÑA QUISPE";
+    for (const leido of ["Sonia", "sonia perez", "pago de sonia", "sonia sonia"]) {
+      expect({ leido, ok: nameIsTheCustomers(leido, clienta) }).toEqual({ leido, ok: false });
+    }
+    expect(nameIsTheCustomers("sonia ludeña", "Sonia")).toBe(false);
+    expect(nameIsTheCustomers("sonia ludeña", null)).toBe(false);
+  });
+});
+
+describe("una cuenta sin celular: la pasarela Flow", () => {
+  // #KP136181, lectura TEXTUAL de producción: la constancia de Flow dice
+  // «Pagado a: Aurela Kenku» y no muestra celular. Una sola cuenta de Flow para
+  // las dos marcas (scripts/flow-probe.mjs). Migración 0198.
+  const FLOW: CollectionAccount = { name: "Aurela Kenku", phoneLastDigits: null };
+  const CON_FLOW = [...CUENTAS, FLOW];
+
+  it("#KP136181: la constancia de Flow verifica con el nombre del comercio", () => {
+    const r = yapeRecipientReadingFromVision(
+      {
+        extracted: {
+          payer_name: "gaby@aurela.pe",
+          recipient_name: "Aurela Kenku",
+          recipient_phone_last_digits: null,
+        },
+      },
+      CON_FLOW,
+    );
+    expect(r).toMatchObject({ status: "verified", account: FLOW, ignoredName: null });
+  });
+
+  it("sin la cuenta de Flow dada de alta, sigue en mismatch", () => {
+    expect(verifyYapeRecipient("Aurela Kenku", null).status).toBe("mismatch");
+  });
+
+  it("un celular leído desmiente a la pasarela: su constancia no enseña ninguno", () => {
+    expect(verifyAgainstAccounts("Aurela Kenku", "555", CON_FLOW).status).toBe("mismatch");
+  });
+
+  it("recortado queda en partial, como cualquier otra cuenta", () => {
+    expect(verifyAgainstAccounts("Aurela Ken", null, CON_FLOW).status).toBe("partial");
+  });
+
+  it("no le cambia la respuesta a un Yape de siempre", () => {
+    expect(verifyAgainstAccounts("Grupo GF SAC", "309", CON_FLOW)).toMatchObject({
+      status: "verified",
+      account: CUENTAS[0],
+    });
+    expect(verifyAgainstAccounts(null, "309", CON_FLOW).status).toBe("partial");
+    expect(verifyAgainstAccounts("Otro comercio", "309", CON_FLOW).status).toBe("mismatch");
+    expect(verifyAgainstAccounts("GRUPO GF S.A.C.", "123", CON_FLOW).status).toBe("mismatch");
+  });
+
+  it("una tienda con solo la pasarela sí puede contrastar", () => {
+    const v = verifyAgainstAccounts("Otro comercio", null, [FLOW]);
+    expect(v.unknownAccounts).toBe(false);
+    expect(v.status).toBe("mismatch");
+  });
+
+  it("el aviso no le inventa un celular a la pasarela", () => {
+    expect(describeCollectionAccount(FLOW)).toBe("Aurela Kenku · sin celular");
+    expect(describeCollectionAccount(CUENTAS[0]!)).toBe("Grupo GF S.A.C. · ···309");
+    // Con nuestro celular delante, el aviso nombra la cuenta de ese celular, y
+    // la pasarela —sin celular— no puede ser «la del celular».
+    const r = yapeRecipientReadingFromVision(
+      { extracted: { recipient_name: "Otro comercio", recipient_phone_last_digits: "309" } },
+      CON_FLOW,
+    );
+    expect(motivoDelDesencuentro(r, CON_FLOW)).toContain("···309 SÍ es el de Grupo GF S.A.C.");
+  });
+});
+
+describe("el final del celular pegado al nombre (BBVA, Plin)", () => {
+  // La app del BBVA escribe el contacto como «Grupo gf s •5309»; Plin, como
+  // «Grupo Gf S · 930 555 309 - Yape». Los dígitos son el celular.
+  it("los separa del nombre", () => {
+    expect(splitRecipientPhoneSuffix("Grupo gf s •5309")).toEqual({
+      name: "Grupo gf s",
+      phoneDigits: "5309",
+    });
+    expect(splitRecipientPhoneSuffix("Grupo Gf S · 930 555 309 - Yape")).toEqual({
+      name: "Grupo Gf S",
+      phoneDigits: "930555309",
+    });
+    expect(splitRecipientPhoneSuffix("Grupo gf s ***309")).toEqual({
+      name: "Grupo gf s",
+      phoneDigits: "309",
+    });
+  });
+
+  it("no toca un nombre sin separador, ni el enmascarado de Yape", () => {
+    for (const leido of ["Tienda 123", "Gr*** Gf*** S*** A*** C***", "Gabriela Rea*", "Grupo GF S.A.C."]) {
+      expect(splitRecipientPhoneSuffix(leido)).toEqual({ name: leido, phoneDigits: null });
+    }
+    expect(splitRecipientPhoneSuffix(null)).toEqual({ name: null, phoneDigits: null });
+  });
+
+  it("en un comprobante normal, los dígitos cuentan como celular", () => {
+    const r = yapeRecipientReadingFromVision({
+      extracted: { recipient_name: "Grupo gf s •5309", recipient_phone_last_digits: null },
+    });
+    expect(r).toMatchObject({ name: "Grupo gf s", phoneLastDigits: "309", status: "partial" });
+  });
+
+  it("y siguen siendo tajantes: un celular ajeno es otra cuenta", () => {
+    const r = yapeRecipientReadingFromVision({
+      extracted: { recipient_name: "Grupo gf s •5123", recipient_phone_last_digits: null },
+    });
+    expect(r.status).toBe("mismatch");
+  });
+
+  it("manda el pegado al nombre: sale del mismo bloque que el receptor", () => {
+    expect(
+      yapeRecipientReadingFromVision({
+        extracted: { recipient_name: "Grupo gf s •5309", recipient_phone_last_digits: "309" },
+      }),
+    ).toMatchObject({ phoneLastDigits: "309", status: "partial" });
+    // Un celular leído aparte no puede tapar uno ajeno pegado al nombre.
+    expect(
+      yapeRecipientReadingFromVision({
+        extracted: { recipient_name: "Grupo gf s •5123", recipient_phone_last_digits: "309" },
+      }).status,
+    ).toBe("mismatch");
   });
 });
