@@ -86,6 +86,7 @@ import {
   type MasterSortKey,
 } from "@/lib/order-master-filters";
 import { buildMasterQuery } from "@/lib/master-query";
+import { receiveSearchValue, shouldSendSearch } from "@/lib/search-input-echo";
 import { OrderLineItems } from "@/components/order-line-items";
 import {
   ORDER_COVERAGE_LABEL,
@@ -2000,23 +2001,33 @@ function MasterSearchInput({
   // que el temporizador se reinicie por eso y nunca llegue a disparar.
   const commit = useRef(onCommit);
   commit.current = onCommit;
+  // Lo que este input mandó a la URL y todavía no ha vuelto como `value`.
+  const pending = useRef<string[]>([]);
 
-  // La URL manda: atrás/adelante del navegador o «limpiar filtros» tienen que
-  // verse reflejados en el input.
+  // La URL manda cuando el cambio viene de FUERA (atrás/adelante, «Limpiar
+  // búsqueda»). Cuando es el eco de lo que mandó este mismo input, NO se copia:
+  // llega tarde, y pisaba lo que la persona había seguido escribiendo mientras
+  // tanto — «tipeas y se borra la mitad». Ver lib/search-input-echo.ts.
   useEffect(() => {
-    setText(value);
+    const next = receiveSearchValue(pending.current, value);
+    pending.current = next.pending;
+    if (next.adopt) setText(value);
   }, [value]);
 
   // Uno o dos caracteres no se mandan: no alcanzan para usar el índice de la
   // búsqueda y devolverían miles de filas. Se espera al tercero —o a que el
   // campo quede vacío, que es «limpiar la búsqueda»— y se deja el aviso.
-  const pending = text.trim().replace(/^#/, "").trim();
-  const tooShort = pending.length > 0 && pending.length < MASTER_SEARCH_MIN_CHARS;
+  const typed = text.trim().replace(/^#/, "").trim();
+  const tooShort = typed.length > 0 && typed.length < MASTER_SEARCH_MIN_CHARS;
 
   useEffect(() => {
-    if (text.trim() === value.trim()) return;
+    const next = text.trim();
+    if (!shouldSendSearch(next, value, pending.current)) return;
     if (tooShort) return;
-    const timer = setTimeout(() => commit.current(text.trim()), 400);
+    const timer = setTimeout(() => {
+      pending.current = [...pending.current, next];
+      commit.current(next);
+    }, 400);
     return () => clearTimeout(timer);
   }, [text, value, tooShort]);
 
