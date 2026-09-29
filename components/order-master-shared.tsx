@@ -586,6 +586,9 @@ export const TIMELINE_LABEL: Record<string, string> = {
   // bandeja, la mesa de despacho, el teléfono del motorizado y Liquidaciones 2.
   logistics_request_accepted: "Tomado por Grupo GF Courier",
   logistics_request_rescheduled: "Salida prevista movida al día de la caja",
+  dispatch_programmed: "Salida programada",
+  dispatch_program_cleared: "Salida programada quitada",
+  dispatch_program_overridden: "Salió otro día que el programado",
   dispatch_route_assigned: "Asignado a la caja del motorizado",
   dispatch_route_reassigned: "Movido a la caja de otro motorizado",
   package_ready: "Paquete armado en almacén",

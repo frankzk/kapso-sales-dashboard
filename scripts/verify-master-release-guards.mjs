@@ -4,10 +4,10 @@ import assert from "node:assert/strict";
 import { createMigratedDatabase, applySqlFile, readTestSql } from "./verify-master-scaling.mjs";
 
 const gate = "scripts/sql/master_read_scaling_preflight.sql";
-const pg = await createMigratedDatabase(197);
+const pg = await createMigratedDatabase(201);
 const passed = [];
 try {
-  // Missing prebuilt indexes must stop before any 0198 DDL is committed.
+  // Missing prebuilt indexes must stop before any 0202 DDL is committed.
   let installError;
   try { await applySqlFile(pg, "scripts/sql/master_read_scaling_install.sql"); }
   catch (error) { installError = error; await pg.exec("rollback"); }
@@ -16,7 +16,7 @@ try {
   passed.push("installation without prebuilt indexes rejected atomically");
   // In this isolated empty DB ordinary index builds suffice; production uses
   // the separately documented CONCURRENTLY commands outside a transaction.
-  const migration = readTestSql("db/migrations/0198_master_read_scaling.sql");
+  const migration = readTestSql("db/migrations/0202_master_read_scaling.sql");
   const start = migration.indexOf("create index if not exists order_master_store_created_page_idx");
   assert.ok(start >= 0);
   await pg.exec(migration.slice(start));
@@ -83,7 +83,7 @@ try {
   await pg.close();
 }
 
-const rollbackDb = await createMigratedDatabase(197);
+const rollbackDb = await createMigratedDatabase(201);
 try {
   await applySqlFile(rollbackDb, "scripts/sql/master_read_scaling_rollback_smoke.sql");
   passed.push("rollback preserves data and RLS, supports subsequent writes and reinstalls correctly");

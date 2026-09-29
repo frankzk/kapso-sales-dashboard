@@ -1,11 +1,11 @@
 # Deployment runbook
 
-## Master read scaling — migration 0198
+## Master read scaling — migration 0202
 
 **Release hold (2026-09-28): staging and performance acceptance remain pending.**
 The old unpublished 0157 candidate used shared counter rows and deadlocked.
-The current candidate is based on production schema 0197; 0157 is already an
-unrelated published migration and must never be overwritten. Migration 0198
+The current candidate is based on production schema 0201; 0157 is already an
+unrelated published migration and must never be overwritten. Migration 0202
 uses signed counter parts per live PostgreSQL backend slot, summed by invoker
 views in the same transaction snapshot. There is no deferred queue or global
 writer lock. The directed mixed-UPSERT regression passes on real PostgreSQL 16,
@@ -47,7 +47,7 @@ create index concurrently if not exists leads_order_id_idx
 Check `pg_index.indisvalid` after interrupted concurrent builds; an invalid index
 with the same name is not repaired by `IF NOT EXISTS`. Also verify definitions
 match the four commands above. During the planned window, run the controlled
-installer, which refuses missing/invalid indexes and wraps 0198 in one
+installer, which refuses missing/invalid indexes and wraps 0202 in one
 transaction with a 5-second lock wait and a 60-second statement limit:
 
 ```sh
@@ -147,7 +147,7 @@ code alone is insufficient: the triggers and replaced RPCs still exist.
 The rollback has a 5-second lock wait and 30-second statement limit; it needs a
 short exclusive lock. If it fails, its transaction rolls back; do not drop
 triggers piecemeal. After a successful rollback, summaries become stale and must
-not be read by the new application. Reinstall 0198 and pass the release gate
+not be read by the new application. Reinstall 0202 and pass the release gate
 before serving new reads again. Never TRUNCATE the source while counters are served.
 
 `scripts/sql/master_read_scaling_rollback_smoke.sql` tests the full reversal and
@@ -2110,3 +2110,38 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
    Redefine `gf_return_to_office`: un rechazo queda devuelto y cancela la
    solicitud en vez de volver a «por asignar».
 2. Resolver `mom-v1.16`: el cron reconcilia el histórico solo.
+
+### 28-09-2026 · La pasarela Flow como cuenta de cobro (0202)
+
+1. **Migración `0198_flow_collection_account.sql`**, a mano:
+   `psql "$DATABASE_URL" -f db/migrations/0198_flow_collection_account.sql`.
+   Permite una cuenta de cobro sin celular y da de alta «Aurela Kenku»
+   (pasarela Flow) en todas las tiendas. Sin ella, las constancias de Flow
+   siguen en «cuenta receptora no coincide».
+2. El orden no importa: el código anterior descarta una cuenta sin celular como
+   «mal cargada», y el nuevo sin la migración simplemente no la tiene.
+3. La regla de la nota del Yape (el nombre de la clienta leído como receptor)
+   no necesita migración: se recalcula al mirar, y los comprobantes ya
+   cargados se destraban solos.
+
+### 29-09-2026 · Sync automático del stock contra Swayp (0201)
+
+1. **Migración `0201_swayp_inventory_sync_runs.sql`**, a mano y ANTES del
+   código: `psql "$DATABASE_URL" -f db/migrations/0201_swayp_inventory_sync_runs.sql`.
+   Crea el registro de corridas. Sin ella el sync escribe igual, pero la
+   corrida no queda registrada y Stock Swayp no muestra cómo le fue.
+2. **Variables en Vercel (Production)**, ninguna es secreta:
+   - `SWAYP_INVENTORY_RUC` — RUC de la empresa en Swayp (header `user`).
+   - `SWAYP_INVENTORY_COMPANY_ID` — id de la empresa en Swayp (`idCompany`).
+   - `SWAYP_INVENTORY_ORG_ID` — la organización de Kapta dueña de ese stock.
+   El token y el correo salen de `SWAYP_TOKEN`/`SWAYP_EMAIL` (la integración
+   de guías). Si Swayp da una credencial exclusiva para inventario, va en
+   `SWAYP_INVENTORY_TOKEN`/`SWAYP_INVENTORY_EMAIL` y manda sobre la otra.
+3. **El login del panel NO se automatiza**: exige reCAPTCHA en cada inicio de
+   sesión. Si la credencial de integración no abre el inventario, Stock Swayp
+   → «Leer inventario» con el token vacío lo dice (status y respuesta de
+   Swayp), el cron registra el fallo cada hora y el botón con token pegado
+   sigue funcionando. El remedio es pedirle a Swayp una credencial de API con
+   acceso al inventario.
+4. El cron (`/api/cron/swayp-inventory`, a los :40 de cada hora) no hace nada
+   hasta que las tres variables existen: responde qué falta.

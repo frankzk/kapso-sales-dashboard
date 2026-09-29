@@ -13,6 +13,8 @@
 //
 // Puro y testeado: acá se decide si un cobro se da por bueno.
 
+import { splitRecipientPhoneSuffix } from "@/lib/yape-recipient";
+
 /** Estado de la comprobación. El pedido solo se da por cobrado en `validado`. */
 export type PaymentCheckState =
   | "pendiente" // todavía no hay constancia, o no se pudo leer
@@ -42,6 +44,9 @@ export const REASON_LABEL: Record<PaymentCheckReason, string> = {
 
 /** A quién tiene que ir el dinero. Igual que en lib/vision.ts. */
 export const EXPECTED_RECIPIENT = "Grupo GF SAC";
+
+/** Final de su celular (930 555 309), igual que en store_collection_accounts. */
+export const EXPECTED_RECIPIENT_PHONE_LAST_DIGITS = "309";
 
 /** Cómo se nombra cada medio en el resumen que lee la operadora. */
 export const METHOD_LABEL: Record<PaymentCheckInput["voucher"]["method"], string> = {
@@ -116,7 +121,13 @@ export function normalizeRecipient(raw: string | null | undefined): string {
 
 /** ¿El destinatario leído es Grupo GF SAC? */
 export function isExpectedRecipient(raw: string | null | undefined): boolean {
-  const got = normalizeRecipient(raw);
+  // La app del BBVA pega el final del celular al nombre: «Grupo gf s •5309».
+  // Sin separarlo, «5309» rompía la comparación y el cobro salía «NO va a
+  // Grupo GF SAC» (#KP137040). Separado, es la otra señal: tiene que terminar
+  // en el celular de la cuenta, o es otra cuenta aunque el nombre encaje.
+  const { name, phoneDigits } = splitRecipientPhoneSuffix(raw);
+  if (phoneDigits && !phoneDigits.endsWith(EXPECTED_RECIPIENT_PHONE_LAST_DIGITS)) return false;
+  const got = normalizeRecipient(name);
   if (!got) return false;
   const want = normalizeRecipient(EXPECTED_RECIPIENT);
   // Yape recorta nombres largos ("Grupo GF S..."), así que basta con que uno

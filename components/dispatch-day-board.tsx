@@ -10,6 +10,9 @@
 // tomados» (retiradas): teléfono y fecha en la fila, «2.º intento», los
 // excluidos con motivo, el picker de filtros y los estados del paquete en
 // cada caja. Las tiles de métricas son esos mismos filtros con su cantidad.
+// Desde el 29-09-2026 la lista se parte en apartados (programados hoy, nunca
+// salieron, ya salieron, +30 días, programados después) y el calendario
+// programa la salida sin tomar el pedido (0199).
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
@@ -38,6 +41,10 @@ import {
   limaDay,
   PACKAGE_STAGE_LABEL,
   packageStage,
+  programDayLabel,
+  programNeedsConfirm,
+  QUEUE_SEGMENT_LABEL,
+  QUEUE_SEGMENTS,
   QUEUE_TILE_LABEL,
   queueFacetCounts,
   queueSubstageOptions,
@@ -46,11 +53,13 @@ import {
   SCHEDULED_BUCKET_LABEL,
   SCHEDULED_BUCKETS,
   setStages,
+  sortQueue,
   splitAssignment,
   toggleBoxTile,
   toggleInList,
   toggleQueueTile,
   isReturnable,
+  takenIsAssignable,
   type BoxItemFilter,
   type BoxTile,
   type CreatedWindow,
@@ -71,6 +80,7 @@ import {
   scanAssignToRider,
   takeAndAssignGroupGfCourierOrders,
   rescheduleGroupGfCourierOrders,
+  clearGroupGfCourierPrograms,
   returnUndeliveredToOffice,
   type ScanAssignLine,
   type CourierAcceptedOrder,
@@ -106,6 +116,8 @@ const money = (n: number) => `S/ ${n.toFixed(2)}`;
 /** Sin decimales, para las líneas de una sola fila. */
 const moneyShort = (n: number) => `S/ ${Math.round(n).toLocaleString("es-PE")}`;
 const HELP_KEY = "kapta.despacho.ayuda-escaneo";
+/** Motivos frecuentes al programar una salida; el campo admite cualquier otro. */
+const PROGRAM_REASONS = ["La clienta pidió ese día", "La clienta no está antes", "Sin motorizado para el distrito"];
 
 export function DispatchDayBoard(props: Props) {
   const { orgId, day, riders, canManageDispatch, pending, run } = props;
@@ -188,6 +200,12 @@ export function DispatchDayBoard(props: Props) {
     if (line.status === "asignado" || line.status === "ya_en_caja") scheduleRefresh();
   }
 
+  /** «Asignar igual» un QR programado para otro día: su línea vuelve a «asignando…». */
+  async function confirmScanned(line: ScanAssignLine) {
+    setLines((cur) => cur.map((l) => (l === line ? { ...l, status: "procesando", message: "Asignando…" } : l)));
+    pushLine(await scanAssignToRider(orgId, riderId, line.code, { overrideCash, scheduledFor: scanDay, confirmProgrammed: true }));
+  }
+
   /** «Escanear primero»: al elegir motorizado, la bandeja se vacía en la caja de una vez. */
   async function drainTray(targetRiderId: string) {
     if (!targetRiderId || !tray.length || draining) return;
@@ -205,8 +223,10 @@ export function DispatchDayBoard(props: Props) {
   }
 
   const queue = useMemo<QueueRow[]>(() => {
+    // Un tomado cuyo pedido ya está en Por cerrar o Finalizado no se asigna:
+    // pasa a seguimiento (`takenIsAssignable`).
     const taken: QueueRow[] = props.accepted
-      .filter((o) => !o.route)
+      .filter((o) => !o.route && takenIsAssignable(o.macroStage))
       .map((o) => ({
         orderId: o.orderId,
         orderName: o.orderName,
@@ -222,7 +242,9 @@ export function DispatchDayBoard(props: Props) {
         requestId: o.requestId,
         armed: o.preparationState === "listo_despacho",
         observation: o.observation,
-        hasPriorDispatch: Boolean(o.hasPriorDispatch),
+        hasPriorDispatch: o.hasPriorDispatch,
+        programmedFor: o.programmedFor,
+        programReason: o.programReason,
         macroStage: o.macroStage,
         macroSubstage: o.macroSubstage,
         assignable: true,
@@ -247,6 +269,8 @@ export function DispatchDayBoard(props: Props) {
         armed: null,
         observation: null,
         hasPriorDispatch: o.hasPriorDispatch,
+        programmedFor: o.programmedFor,
+        programReason: o.programReason,
         macroStage: o.macroStage,
         macroSubstage: o.macroSubstage,
         assignable: true,
@@ -257,7 +281,7 @@ export function DispatchDayBoard(props: Props) {
   // Los que ya salieron con Grupo GF (tienen caja): no se asignan desde aquí,
   // pero cuentan en Etapa y se listan para seguimiento al elegir la suya.
   const tracked = useMemo<QueueRow[]>(() => props.accepted
-    .filter((o) => o.route)
+    .filter((o) => o.route || !takenIsAssignable(o.macroStage))
     .map((o) => ({
       orderId: o.orderId,
       orderName: o.orderName,
@@ -273,7 +297,9 @@ export function DispatchDayBoard(props: Props) {
       requestId: o.requestId,
       armed: o.preparationState === "listo_despacho",
       observation: o.observation,
-      hasPriorDispatch: Boolean(o.hasPriorDispatch),
+      hasPriorDispatch: o.hasPriorDispatch,
+      programmedFor: null,
+      programReason: null,
       macroStage: o.macroStage,
       macroSubstage: o.macroSubstage,
       assignable: false,
@@ -291,7 +317,9 @@ export function DispatchDayBoard(props: Props) {
 
   const stores = useMemo(() => [...new Set(queue.map((q) => q.storeName))].sort(), [queue]);
   const districts = useMemo(() => [...new Set(queue.map((q) => q.district))].sort((a, b) => a.localeCompare(b, "es")), [queue]);
-  const filtered = useMemo(() => filterQueue(allRows, filters, day), [allRows, filters, day]);
+  // Filtrada y en el orden de los apartados: programados hoy, nunca salieron,
+  // ya salieron, +30 días y programados después.
+  const filtered = useMemo(() => sortQueue(filterQueue(allRows, filters, day), day), [allRows, filters, day]);
   // Chips de etapa, subetapa y fecha pactada con su cantidad facetada (cuántas
   // quedarían al tocarlo con el resto de filtros como están). Las subetapas
   // son las de la etapa elegida; sin etapa no se muestran.
@@ -304,15 +332,28 @@ export function DispatchDayBoard(props: Props) {
   const visibleAssignable = visible.filter((q) => q.assignable || isReturnable(q));
   const selectedAssignable = allRows.filter((q) => q.assignable && selected.has(q.orderId)).map((q) => q.orderId);
   const selectedReturnable = allRows.filter((q) => isReturnable(q) && selected.has(q.orderId)).map((q) => q.orderId);
+  // Programar la salida (0199): solo guarda el día, con motivo; no toma el pedido.
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [rescheduleDay, setRescheduleDay] = useState("");
+  const [programReason, setProgramReason] = useState("");
   const rescheduleButton = useRef<HTMLButtonElement>(null);
+  const selectedProgrammed = allRows.filter((q) => q.assignable && q.programmedFor && selected.has(q.orderId)).map((q) => q.orderId);
+  const reasonOk = programReason.trim().length >= 3;
   function reschedule() {
-    if (!rescheduleDay || !selectedAssignable.length) return;
+    if (!rescheduleDay || !reasonOk || !selectedAssignable.length) return;
     const ids = selectedAssignable;
+    const reason = programReason.trim();
     setRescheduleOpen(false);
     setSelected(new Set());
-    run(() => rescheduleGroupGfCourierOrders(orgId, ids, rescheduleDay));
+    setProgramReason("");
+    run(() => rescheduleGroupGfCourierOrders(orgId, ids, rescheduleDay, reason));
+  }
+  function clearProgram() {
+    if (!selectedProgrammed.length) return;
+    const ids = selectedProgrammed;
+    setRescheduleOpen(false);
+    setSelected(new Set());
+    run(() => clearGroupGfCourierPrograms(orgId, ids));
   }
   function receiveInOffice() {
     if (!selectedReturnable.length) return;
@@ -348,7 +389,7 @@ export function DispatchDayBoard(props: Props) {
   }, [props.accepted, scanDay]);
   const declined = useMemo(() => declinedPackages(boxes), [boxes]);
   const dayCod = boxes.reduce((sum, b) => sum + b.loads.reduce((s, l) => s + activeDispatchItems(l.items).length, 0), 0);
-  const queueTiles = useMemo(() => queueTileCounts(queue, allRows), [queue, allRows]);
+  const queueTiles = useMemo(() => queueTileCounts(queue, allRows, day), [queue, allRows, day]);
   const boxTiles = useMemo(() => boxTileCounts(boxes), [boxes]);
   /** Tocar una tile de la cola: abre «Desde la lista» con ese filtro (o lo quita). */
   const tapQueueTile = (tile: QueueTile) => {
@@ -372,9 +413,24 @@ export function DispatchDayBoard(props: Props) {
     });
   }
 
-  function assign() {
+  // Asignar a la caja de otro día un pedido programado pide confirmar (§29.6):
+  // la franja ámbar sobre la tabla dice cuáles y para cuándo estaban.
+  const [programConfirm, setProgramConfirm] = useState<QueueRow[] | null>(null);
+  const confirmFirst = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (programConfirm) confirmFirst.current?.focus(); }, [programConfirm]);
+  // Cambiar lo marcado deja la franja sin objeto: se vuelve a preguntar al asignar.
+  useEffect(() => { setProgramConfirm(null); }, [selected]);
+  function assign(opts: { confirmProgrammed?: boolean; skip?: ReadonlySet<string> } = {}) {
     if (!riderId || !selected.size) return;
-    const split = splitAssignment(selected, props.available, props.accepted);
+    const ids = new Set([...selected].filter((id) => !opts.skip?.has(id)));
+    if (!ids.size) { setProgramConfirm(null); return; }
+    if (!opts.confirmProgrammed) {
+      const conflicts = queue.filter((q) => ids.has(q.orderId) && programNeedsConfirm(q.programmedFor, scanDay, day));
+      if (conflicts.length) { setProgramConfirm(conflicts); return; }
+    }
+    setProgramConfirm(null);
+    const confirmProgrammed = Boolean(opts.confirmProgrammed);
+    const split = splitAssignment(ids, props.available, props.accepted);
     setSelected(new Set());
     run(async () => {
       // Lo que falló se dice como error, en rojo y sin repetirse; lo demás
@@ -382,12 +438,12 @@ export function DispatchDayBoard(props: Props) {
       const notices: string[] = [];
       const errors: string[] = [];
       for (let i = 0; i < split.orderIds.length; i += 50) {
-        const r = await takeAndAssignGroupGfCourierOrders(orgId, riderId, split.orderIds.slice(i, i + 50), { overrideCash, day: scanDay });
+        const r = await takeAndAssignGroupGfCourierOrders(orgId, riderId, split.orderIds.slice(i, i + 50), { overrideCash, day: scanDay, confirmProgrammed });
         if (r.error) errors.push(r.error);
         else if (r.notice) notices.push(r.notice);
       }
       if (split.requestIds.length) {
-        const r = await assignGroupGfCourierRoute(orgId, riderId, split.requestIds, { overrideCash, day: scanDay });
+        const r = await assignGroupGfCourierRoute(orgId, riderId, split.requestIds, { overrideCash, day: scanDay, confirmProgrammed });
         if (r.notice) notices.push(r.notice);
         if (r.cashWarning) notices.push(r.cashWarning);
         if (r.error) errors.push(r.error);
@@ -587,6 +643,9 @@ export function DispatchDayBoard(props: Props) {
                         {l.status === "en_otra_caja" && l.manifestId && l.shipmentId && riderId && (
                           <button type="button" disabled={pending || draining} onClick={() => run(async () => moveManifestItem(orgId, l.manifestId!, l.shipmentId!, riderId, `Escaneado en la caja de ${riderName}`))} className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800 disabled:opacity-50">Mover</button>
                         )}
+                        {l.status === "programado_otro_dia" && riderId && (
+                          <button type="button" disabled={pending || draining} onClick={() => confirmScanned(l)} title={l.message} className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800 disabled:opacity-50">Asignar igual</button>
+                        )}
                         {l.status === "bloqueado_efectivo" && !overrideCash && (
                           <button type="button" onClick={() => setOverrideCash(true)} title={`${cashOverrideHint(props.cashWarning, props.cashLimit)} Toca «Autorizar» y vuelve a escanear.`} className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800">Autorizar</button>
                         )}
@@ -721,24 +780,59 @@ export function DispatchDayBoard(props: Props) {
                           <option value="7d">Últimos 7 días</option>
                         </select>
                       </label>
-                      <label className="flex min-h-10 items-center gap-2"><input type="checkbox" checked={filters.secondAttempt} onChange={(e) => patchFilters({ secondAttempt: e.target.checked })} /> Solo con salida previa</label>
                       <label className="flex min-h-10 items-center gap-2"><input type="checkbox" checked={filters.armedOnly} onChange={(e) => patchFilters({ armedOnly: e.target.checked })} /> Solo armados</label>
                       <label className="flex min-h-10 items-center gap-2"><input type="checkbox" checked={filters.takenOnly} onChange={(e) => patchFilters({ takenOnly: e.target.checked })} /> Solo tomados sin caja</label>
-                      {activeFilters > 0 && <button type="button" onClick={() => patchFilters({ ...EMPTY_QUEUE_FILTERS, query: filters.query })} className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700">Quitar filtros</button>}
+                      {activeFilters > 0 && <button type="button" onClick={() => patchFilters({ ...EMPTY_QUEUE_FILTERS, query: filters.query, segment: filters.segment })} className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700">Quitar filtros</button>}
                     </div>
                   </Sheet>
                 )}
               </div>
             </div>
+            {/* Apartados de la cola, como las subetapas del Master: «Nunca
+                salieron» es el que se busca dejar en cero, igual que «Sin
+                llamar» en Por confirmar. Cada pedido asignable cae en uno. */}
+            {!tracking && (
+              <div role="group" aria-label="Apartados de la cola" className="-mx-1 mt-2 flex items-center gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]">
+                <span className="shrink-0 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">Apartados</span>
+                <button
+                  type="button"
+                  aria-pressed={filters.segment === null}
+                  onClick={() => patchFilters({ segment: null })}
+                  className={cn("min-h-8 shrink-0 whitespace-nowrap rounded-full border px-3 text-xs font-medium transition", filters.segment === null ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300")}
+                >
+                  Todos · <span className="tabular-nums">{facets.segmentTotal.toLocaleString("es-PE")}</span>
+                </button>
+                {QUEUE_SEGMENTS.map((segment) => {
+                  const count = facets.segment[segment];
+                  const active = filters.segment === segment;
+                  return (
+                    <button
+                      key={segment}
+                      type="button"
+                      aria-pressed={active}
+                      disabled={count === 0 && !active}
+                      onClick={() => patchFilters({ segment: active ? null : segment })}
+                      title={QUEUE_SEGMENT_LABEL[segment].hint}
+                      className={cn(
+                        "min-h-8 shrink-0 whitespace-nowrap rounded-full border px-3 text-xs font-medium transition",
+                        active ? "border-brand-600 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
+                        count === 0 && !active && "cursor-not-allowed opacity-40",
+                      )}
+                    >
+                      {QUEUE_SEGMENT_LABEL[segment].label} · <span className="tabular-nums">{count.toLocaleString("es-PE")}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             <p className="mt-2 text-xs tabular-nums text-slate-500">
-              <b className="text-slate-900">{filtered.length.toLocaleString("es-PE")}</b> {tracking ? "pedidos en esa etapa" : "en cola"}{filtered.length > visible.length ? ` · se muestran ${visible.length}` : ""}
+              <b className="text-slate-900">{filtered.length.toLocaleString("es-PE")}</b> {tracking ? "pedidos en esa etapa" : filters.segment ? QUEUE_SEGMENT_LABEL[filters.segment].label.toLocaleLowerCase("es") : "en cola"}{filtered.length > visible.length ? ` · se muestran ${visible.length}` : ""}
             </p>
             {activeFilters > 0 && (
               <ul className="mt-1 flex flex-wrap gap-1.5 text-xs" aria-label="Filtros activos">
                 {filters.store && <Chip onRemove={() => patchFilters({ store: "" })}>{filters.store}</Chip>}
                 {filters.district && <Chip onRemove={() => patchFilters({ district: "" })}>{filters.district}</Chip>}
                 {filters.created !== "todo" && <Chip onRemove={() => patchFilters({ created: "todo" })}>{CREATED_WINDOW_LABEL[filters.created]}</Chip>}
-                {filters.secondAttempt && <Chip onRemove={() => patchFilters({ secondAttempt: false })}>con salida previa</Chip>}
                 {filters.armedOnly && <Chip onRemove={() => patchFilters({ armedOnly: false })}>armados</Chip>}
                 {filters.takenOnly && <Chip onRemove={() => patchFilters({ takenOnly: false })}>tomados sin caja</Chip>}
                 {filters.stages.map((code) => <Chip key={code} onRemove={() => patchFilters({ stages: toggleInList(filters.stages, code) })}>{code === "sin_etapa" ? "sin etapa" : macroStageLabel(code)}</Chip>)}
@@ -756,36 +850,51 @@ export function DispatchDayBoard(props: Props) {
             <button
               type="button"
               disabled={pending || !canManageDispatch || !riderId || !selected.size}
-              onClick={assign}
+              onClick={() => assign()}
               title={riderId ? undefined : "Elige el motorizado arriba"}
               className="min-h-10 max-w-full truncate rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
             >
               {pending ? "Asignando…" : `Asignar${selected.size ? ` ${selected.size}` : ""} a ${riderName || "…"}`}
             </button>
-            {/* Reprogramar: cambia la fecha pactada de salida de los marcados. */}
+            {/* Programar: guarda el día de salida de los marcados, sin tomarlos. */}
             <div className="relative">
               <button
                 ref={rescheduleButton}
                 type="button"
                 disabled={pending || !canManageDispatch || !selectedAssignable.length}
                 onClick={() => { setRescheduleDay((d) => d || day); setRescheduleOpen((v) => !v); }}
-                aria-label="Reprogramar la salida de los marcados"
-                title={selectedAssignable.length ? `Reprogramar la salida de ${selectedAssignable.length} ${selectedAssignable.length === 1 ? "pedido" : "pedidos"}` : "Marca pedidos para reprogramar su fecha de salida"}
+                aria-label="Programar la salida de los marcados"
+                title={selectedAssignable.length ? `Programar la salida de ${selectedAssignable.length} ${selectedAssignable.length === 1 ? "pedido" : "pedidos"}` : "Marca pedidos para programar el día en que deben salir"}
                 className="grid min-h-10 w-10 place-items-center rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               >
                 <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2" /><path d="M3.5 10h17M8 3v4M16 3v4" /></svg>
               </button>
               {rescheduleOpen && (
-                <Sheet title="Reprogramar salida" onClose={() => setRescheduleOpen(false)} anchored anchorRef={rescheduleButton}>
-                  <div className="grid gap-3 text-sm">
-                    <p className="text-xs text-slate-500">{selectedAssignable.length} {selectedAssignable.length === 1 ? "pedido" : "pedidos"}. Cambia la fecha pactada de salida; un pedido disponible se toma con esa fecha. Los que ya están en la caja de un motorizado no se mueven.</p>
-                    <label className="grid gap-1 text-xs font-medium text-slate-600">Nueva fecha de salida
+                <Sheet title="Programar salida" onClose={() => setRescheduleOpen(false)} anchored anchorRef={rescheduleButton}>
+                  <form className="grid gap-3 text-sm" onSubmit={(e) => { e.preventDefault(); reschedule(); }}>
+                    <p className="text-xs text-slate-500">{selectedAssignable.length} {selectedAssignable.length === 1 ? "pedido" : "pedidos"}. Guarda el día en que deben salir; no los toma ni los asigna. Ese día aparecen en «Programados hoy». Los que ya están en la caja de un motorizado no se mueven.</p>
+                    <label className="grid gap-1 text-xs font-medium text-slate-600">Día de salida
                       <input type="date" value={rescheduleDay} min={day} onChange={(e) => setRescheduleDay(e.target.value)} className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900" />
                     </label>
-                    <button type="button" disabled={!rescheduleDay || pending} onClick={reschedule} className="min-h-10 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
-                      Reprogramar {selectedAssignable.length}
+                    <label className="grid gap-1 text-xs font-medium text-slate-600">Motivo
+                      <input value={programReason} onChange={(e) => setProgramReason(e.target.value)} maxLength={200} placeholder="Queda en el historial del pedido" className="block min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm text-slate-900 placeholder:text-slate-500" />
+                    </label>
+                    <div role="group" aria-label="Motivos frecuentes" className="flex flex-wrap gap-1.5">
+                      {PROGRAM_REASONS.map((reason) => (
+                        <button key={reason} type="button" aria-pressed={programReason === reason} onClick={() => setProgramReason(reason)} className={cn("min-h-8 rounded-full border px-2.5 text-xs font-medium transition", programReason === reason ? "border-brand-600 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300")}>
+                          {reason}
+                        </button>
+                      ))}
+                    </div>
+                    <button type="submit" disabled={!rescheduleDay || !reasonOk || pending} className="min-h-10 rounded-lg bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
+                      Programar {selectedAssignable.length}{rescheduleDay ? ` para el ${programDayLabel(rescheduleDay)}` : ""}
                     </button>
-                  </div>
+                    {selectedProgrammed.length > 0 && (
+                      <button type="button" disabled={pending} onClick={clearProgram} className="min-h-10 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                        Quitar la fecha de {selectedProgrammed.length} {selectedProgrammed.length === 1 ? "programado" : "programados"}
+                      </button>
+                    )}
+                  </form>
                 </Sheet>
               )}
             </div>
@@ -804,6 +913,37 @@ export function DispatchDayBoard(props: Props) {
               <input type="checkbox" checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} /> <span className="whitespace-nowrap">superar el límite</span>
             </label>
           </div>
+
+          {programConfirm && (() => {
+            const others = [...selected].filter((id) => !programConfirm.some((q) => q.orderId === id)).length;
+            const target = scanDay === day ? "hoy" : `el ${programDayLabel(scanDay)}`;
+            return (
+              <div role="alertdialog" aria-labelledby="program-confirm-title" aria-describedby="program-confirm-list" className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
+                <p id="program-confirm-title" className="font-semibold">
+                  {programConfirm.length === 1 ? "1 marcado está programado para otro día" : `${programConfirm.length} marcados están programados para otro día`}
+                </p>
+                <ul id="program-confirm-list" className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-amber-800">
+                  {programConfirm.slice(0, 8).map((q) => (
+                    <li key={q.orderId}><b className="font-semibold">{q.orderName}</b> · {programDayLabel(q.programmedFor ?? "")}{q.programReason ? ` · ${q.programReason}` : ""}</li>
+                  ))}
+                  {programConfirm.length > 8 && <li>y {programConfirm.length - 8} más</li>}
+                </ul>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button ref={confirmFirst} type="button" disabled={pending} onClick={() => assign({ confirmProgrammed: true })} className="min-h-9 rounded-lg bg-amber-700 px-3 text-xs font-semibold text-white hover:bg-amber-800 disabled:opacity-50">
+                    Asignar igual {target}
+                  </button>
+                  {others > 0 && (
+                    <button type="button" disabled={pending} onClick={() => assign({ skip: new Set(programConfirm.map((q) => q.orderId)) })} className="min-h-9 rounded-lg border border-amber-300 bg-white px-3 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50">
+                      Asignar solo los otros {others}
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setProgramConfirm(null)} className="min-h-9 rounded-lg px-2 text-xs font-medium text-amber-900 underline-offset-2 hover:underline">
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Tabla de columnas, como el Master: anchos fijos para lo corto
               (fechas, importes) y flexibles para pedido, cliente y estado. Lo
@@ -832,7 +972,7 @@ export function DispatchDayBoard(props: Props) {
                   <th className="px-3 py-2">Distrito</th>
                   <th className="px-3 py-2">Estado</th>
                   <th className="px-3 py-2">Creado</th>
-                  <th className="px-3 py-2" title="Salida prevista: después del corte de las 11:30 el pedido sale al día siguiente. Para los que ya salieron, el día de su caja.">Sale</th>
+                  <th className="px-3 py-2" title="Salida prevista: el día programado si lo tiene; si no, después del corte de las 11:30 el pedido sale al día siguiente. Para los que ya salieron, el día de su caja.">Sale</th>
                   <th className="px-3 py-2 text-right">Venta</th>
                   <th className="px-3 py-2 text-right">Tarifa</th>
                 </tr>
@@ -843,7 +983,7 @@ export function DispatchDayBoard(props: Props) {
                     <td className="px-3 py-2">
                       {q.assignable || isReturnable(q)
                         ? <input type="checkbox" checked={selected.has(q.orderId)} onChange={() => toggle(q.orderId)} aria-label={`Marcar ${q.orderName}`} className="mt-0.5" />
-                        : <span aria-hidden className="mt-0.5 inline-block h-4 w-4 rounded border border-dashed border-slate-300" title="Ya salió: se sigue, no se asigna" />}
+                        : <span aria-hidden className="mt-0.5 inline-block h-4 w-4 rounded border border-dashed border-slate-300" title={q.route ? "Ya salió: se sigue, no se asigna" : "Pedido cerrado o cerrándose: no se asigna"} />}
                     </td>
                     <td className="px-3 py-2">
                       <OrderLink orderId={q.orderId} className="block truncate font-semibold text-slate-950 hover:text-brand-700" title={q.orderName}>{q.orderName}</OrderLink>
@@ -861,9 +1001,10 @@ export function DispatchDayBoard(props: Props) {
                         {q.taken && !q.route && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">tomado · sin caja</span>}
                         {!q.assignable && q.macroSubstage && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800" title={macroStageLabel(q.macroStage)}>{macroSubstageLabel(q.macroSubstage)}</span>}
                         {q.taken && q.armed && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">armado</span>}
-                        {q.hasPriorDispatch && <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-800" title="Ya tuvo al menos una salida física y volvió; revísalo como reprogramación o recuperación">salida previa</span>}
+                        {q.assignable && q.programmedFor && <ProgramChip day={q.programmedFor} today={day} reason={q.programReason ?? null} />}
+                        {q.hasPriorDispatch && <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-800" title="Salió a reparto al menos una vez y volvió: reprogramación o recuperación">ya salió</span>}
                         {q.observation && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800" title={q.observation}>observado</span>}
-                        {!q.taken && !q.hasPriorDispatch && !q.observation && <span className="text-xs text-slate-400">disponible</span>}
+                        {!q.taken && !q.hasPriorDispatch && !q.observation && !q.programmedFor && <span className="text-xs text-slate-500">disponible</span>}
                       </div>
                       {q.route && (
                         <p className="mt-0.5 truncate text-xs text-slate-600" title={`${q.route.riderName} · caja del ${formatDayNumeric(q.route.routeDate)}${q.route.loadNumber > 1 ? ` · carga ${q.route.loadNumber}` : ""}`}>
@@ -1143,6 +1284,8 @@ function scanRowPresentation(l: ScanAssignLine, riderName: string): { text: stri
       return { text: `En la caja de ${l.riderName ?? "otro"} → Mover`, textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
     case "bloqueado_efectivo":
       return { text: "Límite de efectivo → Autorizar", textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
+    case "programado_otro_dia":
+      return { text: `Programado ${l.programmedFor ? programDayLabel(l.programmedFor) : "otro día"} → Asignar igual`, textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
     case "no_elegible":
       return { text: l.message ? `No elegible: ${l.message.replace(/\.$/, "")}` : "No elegible", textClass: "text-red-700", rowClass: "bg-red-50/50" };
     default:
@@ -1170,9 +1313,19 @@ function Tile({ label, hint, value, active, onClick, tone = "slate" }: { label: 
 }
 
 /**
- * Panel: popover bajo el disparador en escritorio, hoja inferior en el móvil.
- * Sin dependencias; cierra con Escape o tocando fuera (patrón de `Hint`).
+ * Chapa de la salida programada: «programado hoy», «programado vie 02/10» o,
+ * si el día pasó sin que saliera, «programado lun 28/09 · vencido» en ámbar.
  */
+function ProgramChip({ day, today, reason }: { day: string; today: string; reason: string | null }) {
+  const overdue = day < today;
+  const text = day === today ? "programado hoy" : `programado ${programDayLabel(day)}${overdue ? " · vencido" : ""}`;
+  return (
+    <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", overdue ? "bg-amber-50 text-amber-800" : "bg-indigo-50 text-indigo-800")} title={reason ? `Motivo: ${reason}` : undefined}>
+      {text}
+    </span>
+  );
+}
+
 /** Chapa del estado del paquete en la caja: por armar · armado · cotejado · confirmado · no lo llevó. */
 function StageChip({ stage, confirmMode }: { stage: ReturnType<typeof packageStage>; confirmMode: boolean }) {
   const text = stage === "confirmado" && !confirmMode ? "recibido" : PACKAGE_STAGE_LABEL[stage];

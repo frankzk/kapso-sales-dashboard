@@ -37,6 +37,54 @@ describe("normalizeRecipient / isExpectedRecipient", () => {
   });
 });
 
+describe("el BBVA pega el final del celular al nombre", () => {
+  // #KP137040 y otros dos cobros del courier, lectura TEXTUAL de producción: la
+  // app del BBVA, al pagar a un Yape desde «Envío a contactos», escribe el
+  // contacto como «Grupo gf s •5309». Salían «El pago NO va a Grupo GF SAC».
+  it("#KP137040: «Grupo gf s •5309» es Grupo GF SAC con el celular ···309", () => {
+    expect(isExpectedRecipient("Grupo gf s •5309")).toBe(true);
+    expect(checkTandersPayment({
+      voucher: voucher({ recipientName: "Grupo gf s •5309", amount: 99 }),
+      expectedAmount: 99,
+    })).toMatchObject({ state: "validado", reasons: [] });
+  });
+
+  it("también la forma de Plin, con el número entero", () => {
+    expect(isExpectedRecipient("Grupo Gf S · 930 555 309 - Yape")).toBe(true);
+  });
+
+  it("los dígitos son el celular: si no terminan en 309, es otra cuenta", () => {
+    // Separarlos no es tirarlos. El nombre encaja, pero el celular manda.
+    expect(isExpectedRecipient("Grupo gf s •5123")).toBe(false);
+    expect(checkTandersPayment({
+      voucher: voucher({ recipientName: "Grupo gf s •5123", amount: 99 }),
+      expectedAmount: 99,
+    })).toMatchObject({ state: "rechazado", reasons: ["destinatario_distinto"] });
+  });
+
+  it("un nombre ajeno con nuestro celular sigue siendo otra cuenta", () => {
+    expect(isExpectedRecipient("Juan Pérez •5309")).toBe(false);
+  });
+
+  it("la cuenta enmascarada del BCP no es el celular: no desmiente nada", () => {
+    // #AUR177129: la app del BCP pone «**** 0012» bajo «Grupo Gf S.». Es la
+    // cuenta, no el ···309; tomarla por celular rechazaría un cobro bueno.
+    expect(isExpectedRecipient("Grupo Gf S. **** 0012")).toBe(true);
+    // Pero el nombre sigue exigiéndose igual.
+    expect(isExpectedRecipient("Juan Pérez **** 0012")).toBe(false);
+  });
+});
+
+describe("la app del BCP", () => {
+  it("#AUR177129: su constancia leída como BCP es un cobro válido", () => {
+    // Lectura TEXTUAL de producción, salvo el medio: el lector devolvió «otro».
+    expect(checkTandersPayment({
+      voucher: voucher({ method: "bcp", recipientName: "Grupo Gf S.", amount: 80.1 }),
+      expectedAmount: 80.1,
+    })).toMatchObject({ state: "validado", reasons: [] });
+  });
+});
+
 describe("normalizeOperationNumber", () => {
   it("hace colisionar dos transcripciones del mismo pago", () => {
     // Si no colisionan, el reuso del comprobante no se detecta: es toda la

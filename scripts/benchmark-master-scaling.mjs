@@ -18,8 +18,8 @@ import { applySqlFile } from "./verify-master-scaling.mjs";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOLS = resolve(ROOT, "..", ".performance-tools");
 const outputFor = (pageSize) => resolve(ROOT, pageSize === 20
-  ? "docs/performance/master-scaling-benchmark-0198-2026-09-28.json"
-  : `docs/performance/master-scaling-page${pageSize}-0198-2026-09-28.json`);
+  ? "docs/performance/master-scaling-benchmark-0202-2026-09-28.json"
+  : `docs/performance/master-scaling-page${pageSize}-0202-2026-09-28.json`);
 const workerOutputFor = (size, pageSize) => join(TOOLS,
   `master-scaling-${size}${pageSize === 20 ? "" : `-page${pageSize}`}.json`);
 const SCRIPT = fileURLToPath(import.meta.url);
@@ -308,9 +308,9 @@ async function runWorker(size, samples, pageSize) {
     for (const [name, sql] of writes) before.push(await measure(pg, `${name}_legacy`, sql, samples, { write: true }));
     result.phases.before = before;
 
-    console.log(`[master-benchmark] ${size}: applying exact migration 0198 (includes atomic backfill and indexes)`);
+    console.log(`[master-benchmark] ${size}: applying exact migration 0202 (includes atomic backfill and indexes)`);
     const migrationStarted = performance.now();
-    await applySqlFile(pg, "db/migrations/0198_master_read_scaling.sql");
+    await applySqlFile(pg, "db/migrations/0202_master_read_scaling.sql");
     result.metadata.migrationBackfillAndIndexMs = Math.round(performance.now() - migrationStarted);
     await pg.exec("vacuum (analyze) public.order_master");
     await pg.exec("vacuum (analyze) public.order_master_stage_parts");
@@ -323,8 +323,8 @@ async function runWorker(size, samples, pageSize) {
       (select count(*) from public.order_master_facet_totals)::integer as facet_rows`)).rows[0];
     result.metadata.sourceDistribution = (await pg.query(`select macro_stage,count(*)::bigint as total
       from public.order_master group by macro_stage order by macro_stage`)).rows;
-    const newCounts = functionSource("db/migrations/0198_master_read_scaling.sql", "order_master_mom_counts");
-    const newFacets = functionSource("db/migrations/0198_master_read_scaling.sql", "master_facets");
+    const newCounts = functionSource("db/migrations/0202_master_read_scaling.sql", "order_master_mom_counts");
+    const newFacets = functionSource("db/migrations/0202_master_read_scaling.sql", "master_facets");
     result.metadata.sqlSources.newCounts = newCounts;
     result.metadata.sqlSources.newFacets = newFacets;
     await pg.exec("set role authenticated");
@@ -394,9 +394,9 @@ async function main() {
     productionAccess: false, synthetic: true, pageSize, samplesPerScenario: samples,
     interpretation: [
       "These are local synthetic PostgreSQL measurements, NOT predictions of Supabase/Vercel latency or p95 under concurrent traffic.",
-      "Minimal source schema preserves tested SQL columns, B-tree indexes, store RLS, and exact migration 0198; it omits real JSON payloads, search GIN indexes, orders/shipments and existing operational write triggers.",
+      "Minimal source schema preserves tested SQL columns, B-tree indexes, store RLS, and exact migration 0202; it omits real JSON payloads, search GIN indexes, orders/shipments and existing operational write triggers.",
       `Two accessible stores; size grows only by adding older rows. The same latest ${pageSize} IDs, tied timestamps, dimensions and periodic status distribution are retained; 1% of timestamps are null.`,
-      "Baseline is measured before migration 0198; after phase retains all baseline indexes and adds the migration's indexes and transactional summaries.",
+      "Baseline is measured before migration 0202; after phase retains all baseline indexes and adds the migration's indexes and transactional summaries.",
       "Counts/facet body plans expose internal scans hidden by EXPLAIN of SET-search_path SQL RPC functions. Exact SQL bodies are extracted from repository migrations with SHA-256 provenance.",
       "One unrecorded EXPLAIN warm-up precedes 3-5 measured runs. p50 includes server execution, not network latency. Buffer cache is not flushed, and large relations can exceed cache.",
       "VACUUM ANALYZE precedes both read phases, permitting index-only scans on historical rows in the baseline and updated schema.",

@@ -16339,7 +16339,217 @@ revoke all on function rider_pay_preview(uuid,uuid) from public,anon,authenticat
 grant execute on function rider_pay_preview(uuid,uuid) to service_role;
 
 -- ---- 0198 ----
--- 0198 — Master: exact counts and facet values without reading order history.
+-- La pasarela Flow es una cuenta de cobro nuestra, y no tiene celular.
+--
+-- #KP136181 quedó en «Revisión solicitada» con el aviso de cuenta receptora que
+-- no coincide: la constancia de Flow dice «Pagado a: Aurela Kenku», y esa
+-- cuenta no estaba en la lista. Es la nuestra: una sola cuenta de Flow para las
+-- dos marcas, con ese nombre (lo confirmó scripts/flow-probe.mjs contra la
+-- cuenta de producción el 12-09-2026).
+--
+-- No se podía dar de alta porque la 0126 exige los tres dígitos del celular, y
+-- la constancia de una pasarela no enseña ninguno. Ahora el celular puede ser
+-- NULO, y eso quiere decir «esta cuenta no cobra con celular», no «falta el
+-- dato». La comparación (lib/yape-recipient.ts) lo trata así:
+--
+--   · Su única señal es el nombre: entero la verifica, recortado la deja en
+--     contraste manual.
+--   · Un celular leído la DESMIENTE: su constancia no muestra ninguno, así que
+--     un comprobante con celular no es de esta cuenta.
+--
+-- Sigue en pie la regla que no se puede romper (0126): una tienda sin cuentas no
+-- acusa a nadie. Esto solo añade una cuenta; no afloja ninguna comparación.
+
+alter table store_collection_accounts
+  alter column phone_last_digits drop not null;
+
+comment on column store_collection_accounts.phone_last_digits is
+  'Últimos 3 dígitos del celular de la cuenta. NULL = la cuenta no cobra con '
+  'celular (una pasarela como Flow): su única señal es el nombre.';
+
+-- El índice único de la 0126 va por celular, y con NULL no protege nada: dos
+-- NULL no chocan. Las cuentas sin celular no se repiten por NOMBRE.
+create unique index if not exists store_collection_accounts_no_phone_uniq
+  on store_collection_accounts (store_id, lower(label))
+  where phone_last_digits is null;
+
+-- En todas las tiendas, como la semilla de la 0126: es la misma empresa y la
+-- misma cuenta de Flow para Aurela y para Kenku.
+insert into store_collection_accounts (store_id, label, aliases, phone_last_digits, note)
+select s.id, 'Aurela Kenku', '{}'::text[], null, 'Pasarela de pagos Flow'
+from stores s
+where not exists (
+  select 1
+  from store_collection_accounts a
+  where a.store_id = s.id
+    and a.phone_last_digits is null
+    and lower(a.label) = lower('Aurela Kenku')
+);
+
+-- ---- 0199 ----
+-- 0199_gf_dispatch_programs.sql — programar la salida de un pedido de Lima
+-- sin tomarlo (MOM §29.6 y §29.13; decisión de Frankz, 29-09-2026).
+--
+-- «Si quiero dejar un pedido programado para otro día, o para un día en
+-- especial, cuando llegue ese día ¿cómo sé cuál es la lista de los
+-- programados?» Hasta aquí el calendario de Despacho del día TOMABA el pedido
+-- para guardar la fecha (la fecha vivía en `logistics_requests.scheduled_for`)
+-- y nada lo volvía a listar ese día. El 28-09 #KP137430 se retiró de la caja
+-- de Yhoni con «Es para el 2/10» y la fecha quedó solo en ese texto.
+--
+-- Programar ahora solo GUARDA LA FECHA: el pedido sigue disponible, sin
+-- reservar tarifa ni salida. Ese día aparece en «Programados hoy», el primer
+-- apartado de la cola. Una fila por pedido: la última programación manda y el
+-- historial queda en `order_events` (`dispatch_programmed`,
+-- `dispatch_program_cleared`, `dispatch_program_overridden`). Siempre con
+-- actor y motivo (§29.6).
+--
+-- La fila se borra cuando el pedido entra en la caja de un motorizado: la
+-- programación ya se cumplió. Si entra en la caja de OTRO día, la pantalla
+-- avisa y pide confirmar antes; lo confirmado queda como
+-- `dispatch_program_overridden`.
+
+create table if not exists gf_dispatch_programs (
+  order_id      uuid primary key references orders(id) on delete cascade,
+  store_id      uuid not null references stores(id) on delete cascade,
+  scheduled_for date not null,
+  reason        text not null check (char_length(btrim(reason)) between 3 and 200),
+  set_by        uuid references auth.users(id) on delete set null,
+  set_at        timestamptz not null default now()
+);
+
+create index if not exists gf_dispatch_programs_store_day_idx
+  on gf_dispatch_programs(store_id, scheduled_for);
+
+comment on table gf_dispatch_programs is
+  'Fecha de salida programada de un pedido de Lima en Despacho del día, sin tomarlo. Se borra al entrar en una caja.';
+
+alter table gf_dispatch_programs enable row level security;
+drop policy if exists gf_dispatch_programs_select on gf_dispatch_programs;
+create policy gf_dispatch_programs_select on gf_dispatch_programs for select to authenticated
+  using (store_id in (select auth_store_ids()));
+grant select on gf_dispatch_programs to authenticated;
+grant all privileges on gf_dispatch_programs to service_role;
+
+-- ── ¿Salió a reparto alguna vez? ────────────────────────────────────────────
+-- «Cómo sé cuáles pedidos no han salido ni una sola vez, versus los que han
+-- salido alguna vez.» La chapa «salida previa» leía `shipments.dispatched_at`,
+-- que ningún pedido de la cola tenía: Grupo GF no lo llena y
+-- `gf_return_to_office` lo vuelve a null. Medido el 29-09-2026: 0 de 1.863.
+--
+-- Una salida a reparto es, por pedido y cualquiera sea el courier:
+--   · en `order_events`: «Lo llevo» (`pickup_checked`), el reporte en la
+--     puerta (`stop_reported`), el paquete recibido de vuelta en oficina
+--     (`returned_to_office`) o entregado sin «Lo llevo»
+--     (`delivered_unconfirmed_pickup`). `custody_transferred` NO: en el modo
+--     «confirmar» la custodia pasa al asignar, antes de que el paquete salga;
+--   · una parada reportada de las rutas anteriores a Grupo GF;
+--   · una salida de otro courier con `dispatched_at`.
+-- Crear o anular un rótulo no es salir (§29.2). La lista de eventos es
+-- `DEPARTURE_EVENT_KINDS` (lib/dispatch-day.ts): se cambian juntas.
+--
+-- Una sola llamada para toda la cola (~1.900 pedidos): por lotes de 100 eran
+-- ~60 consultas en serie al abrir Despacho del día. SECURITY INVOKER: con un
+-- usuario, las políticas de cada tabla siguen mandando.
+create or replace function public.gf_order_departures(p_order_ids uuid[])
+returns table(order_id uuid, last_departure_at timestamptz)
+language sql stable set search_path = public as $$
+  select x.order_id, max(x.at) as last_departure_at
+  from (
+    select e.order_id, e.occurred_at as at
+      from order_events e
+     where e.order_id = any(p_order_ids)
+       and e.kind in ('pickup_checked', 'stop_reported', 'returned_to_office', 'delivered_unconfirmed_pickup')
+    union all
+    select d.order_id, d.reported_at
+      from delivery_stops d
+     where d.order_id = any(p_order_ids)
+       and d.reported_at is not null
+    union all
+    select s.order_id, s.dispatched_at
+      from shipments s
+     where s.order_id = any(p_order_ids)
+       and s.dispatched_at is not null
+  ) x
+  group by x.order_id
+$$;
+
+revoke all on function public.gf_order_departures(uuid[]) from public, anon;
+grant execute on function public.gf_order_departures(uuid[]) to authenticated, service_role;
+
+-- ---- 0200 ----
+-- 0200_gf_orphan_scheduled_requests.sql — solicitudes de Grupo GF «scheduled»
+-- sin caja vuelven a «accepted» (MOM §29.13; 29-09-2026).
+--
+-- «Quitar» un paquete de una caja todavía sin custodia (removeManifestItem)
+-- marcaba el ítem como retirado pero no tocaba la solicitud: quedaba
+-- `scheduled` sin ningún `dispatch_manifest_items` activo. Medido el
+-- 29-09-2026: #KP136039, #KP136010, #KP135989 (23-09), #KP137239 y #KP137430
+-- (28-09). El código ya revierte al retirar; esto repara lo que quedó, con un
+-- evento `route_removed_repair` por solicitud. Idempotente: una segunda
+-- corrida no encuentra nada.
+
+with orphan as (
+  select r.id
+    from logistics_requests r
+   where r.status = 'scheduled'
+     and r.shipment_id is not null
+     and not exists (
+       select 1 from dispatch_manifest_items i
+        where i.shipment_id = r.shipment_id and i.removed_at is null
+     )
+), fixed as (
+  update logistics_requests r
+     set status = 'accepted'
+    from orphan o
+   where r.id = o.id
+  returning r.id
+)
+insert into logistics_request_events (request_id, kind, status, note, payload)
+select id, 'route_removed_repair', 'accepted',
+       'Estaba «scheduled» sin caja: se retiró de la caja sin volver a «por asignar». Reparado en 0200.',
+       jsonb_build_object('migration', '0200')
+  from fixed;
+
+-- ---- 0201 ----
+-- 0201_swayp_inventory_sync_runs.sql — registro de cada sincronización del
+-- stock contra el inventario de Swayp (MOM, «El mismo conteo, leído por API»).
+--
+-- Fase 3: el sync corre solo, cada hora, sin nadie mirando. Un cron que falla
+-- en silencio es peor que el Excel: el stock se vuelve a separar de Swayp y
+-- nadie se entera. Cada corrida —automática o con el botón— deja una fila con
+-- qué hizo o por qué no pudo, y la pantalla de Stock Swayp muestra la última.
+--
+-- `resumen` es el resultado por ciudad (bajan/suben/altas/sin vincular/
+-- unidades) y las ciudades que el cron se negó a tocar. El detalle de cada
+-- cambio vive, como siempre, en el kardex (`fenix_stock_movements`).
+
+create table if not exists swayp_inventory_sync_runs (
+  id          uuid primary key default gen_random_uuid(),
+  org_id      uuid not null references organizations(id) on delete cascade,
+  source      text not null check (source in ('cron', 'manual')),
+  ok          boolean not null,
+  error       text,
+  resumen     jsonb not null default '{}'::jsonb,
+  created_by  uuid references auth.users(id) on delete set null,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists swayp_inventory_sync_runs_org_idx
+  on swayp_inventory_sync_runs(org_id, created_at desc);
+
+comment on table swayp_inventory_sync_runs is
+  'Cada sincronización de fenix_stock contra el inventario de Swayp por API: automática (cron) o manual, con su resultado o su error.';
+
+alter table swayp_inventory_sync_runs enable row level security;
+drop policy if exists swayp_inventory_sync_runs_select on swayp_inventory_sync_runs;
+create policy swayp_inventory_sync_runs_select on swayp_inventory_sync_runs for select to authenticated
+  using (org_id in (select auth_org_ids()));
+grant select on swayp_inventory_sync_runs to authenticated;
+grant all privileges on swayp_inventory_sync_runs to service_role;
+
+-- ---- 0202 ----
+-- 0202 — Master: exact counts and facet values without reading order history.
 --
 -- The aggregates below are derived data. Every change to order_master updates
 -- them in the SAME transaction; a read never sees the order without its delta.

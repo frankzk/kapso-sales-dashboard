@@ -58,6 +58,28 @@ describe("readTandersPayment", () => {
     expect((await readTandersPayment("b", "image/jpeg", CREDS)).method).toBe("bcp");
   });
 
+  it("el prompt describe la app del BCP, que no siempre muestra su logo", async () => {
+    // #AUR177129: «¡Transferencia exitosa!» desde la app del BCP a un Yape salió
+    // «otro», y el cobro quedó en revisión por el medio. El prompt solo
+    // describía Yape (morado) y Plin (celeste).
+    let prompt = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, req: RequestInit) => {
+        const body = JSON.parse(String(req.body));
+        prompt = body.messages[0].content
+          .filter((b: { type: string }) => b.type === "text")
+          .map((b: { text: string }) => b.text)
+          .join("\n");
+        return { ok: true, json: async () => ({ content: [] }) };
+      }),
+    );
+    await readTandersPayment("b", "image/jpeg", CREDS);
+    expect(prompt).toContain("LA APP DEL BCP NO SIEMPRE MUESTRA SU LOGO");
+    expect(prompt).toContain("¡Transferencia exitosa!");
+    expect(prompt).toContain("**** 0012");
+  });
+
   it("un medio desconocido no se fuerza a ninguno de los buenos", async () => {
     vi.stubGlobal("fetch", anthropicDice('{"is_payment_proof":true,"method":"mercado pago"}'));
     expect((await readTandersPayment("b", "image/jpeg", CREDS)).method).toBe("otro");

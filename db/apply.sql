@@ -397,6 +397,14 @@
 \ir migrations/0196_gf_parallel_box.sql
 \echo 'Applying 0197_rejection_photo_exemption.sql'
 \ir migrations/0197_rejection_photo_exemption.sql
-\echo 'Applying 0198_master_read_scaling.sql'
-\ir migrations/0198_master_read_scaling.sql
+\echo 'Applying 0198_flow_collection_account.sql'
+\ir migrations/0198_flow_collection_account.sql
+\echo 'Applying 0199_gf_dispatch_programs.sql'
+\ir migrations/0199_gf_dispatch_programs.sql
+\echo 'Applying 0200_gf_orphan_scheduled_requests.sql'
+\ir migrations/0200_gf_orphan_scheduled_requests.sql
+\echo 'Applying 0201_swayp_inventory_sync_runs.sql'
+\ir migrations/0201_swayp_inventory_sync_runs.sql
+\echo 'Applying 0202_master_read_scaling.sql'
+\ir migrations/0202_master_read_scaling.sql
 \echo 'Done.'

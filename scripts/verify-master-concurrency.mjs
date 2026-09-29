@@ -37,7 +37,7 @@ async function migrate(client) {
   await client.query(readTestSql('scripts/sql/test_prelude.sql'));
   const migrations = readdirSync(join(ROOT,'db/migrations')).filter((name) => /^\d{4}_.+\.sql$/.test(name)).sort();
   for (const name of migrations) {
-    if (Number(name.slice(0,4))>197) continue;
+    if (Number(name.slice(0,4))>201) continue;
     try {
       await client.query(readTestSql(`db/migrations/${name}`));
       if (name.startsWith('0003_')) await client.query(readTestSql('supabase/policies.sql'));
@@ -178,8 +178,8 @@ async function phase(runtime, database, fixture, variant, {writers,iterations,ph
 
 const settings=config();
 const report={startedAt:new Date().toISOString(),settings,localOnly:true,productionTouched:false,
-  baselineMigration:197, candidateMigration:198,
-  migrationSha256:createHash('sha256').update(readFileSync(join(ROOT,'db/migrations/0198_master_read_scaling.sql'))).digest('hex'),
+  baselineMigration:201, candidateMigration:202,
+  migrationSha256:createHash('sha256').update(readFileSync(join(ROOT,'db/migrations/0202_master_read_scaling.sql'))).digest('hex'),
   methodology:'Real PostgreSQL independent backends; identical synthetic clones, alternating before/after order; normal=one Master statement/transaction; stress=multiple Master statements/transaction. Client SQL roundtrip, not HTTP/UI or Supabase Auth. Auth role model uses test_prelude.sql.',phases:[]};
 const output=join(ROOT,settings.output);
 mkdirSync(dirname(output),{recursive:true});
@@ -188,7 +188,7 @@ let runtime;
 try {
   runtime=await startLocalPostgres();
   report.runtime={version:runtime.version,packageVersion:runtime.packageVersion,directory:runtime.directory,port:runtime.port};
-  console.log('Preparing real migrations 0001..0197 and identical synthetic database clones.');
+  console.log('Preparing real migrations 0001..0201 and identical synthetic database clones.');
   const control=await runtime.connect();
   await control.query('create database concurrency_template');
   const template=await runtime.connect('concurrency_template');
@@ -201,7 +201,7 @@ try {
   await control.query('create database concurrency_after template concurrency_template');
   await control.end();
   const after=await runtime.connect('concurrency_after');
-  await after.query(readTestSql('db/migrations/0198_master_read_scaling.sql'));
+  await after.query(readTestSql('db/migrations/0202_master_read_scaling.sql'));
   await after.query('vacuum analyze');
   await after.end();
   console.log(`Seeded ${fixture.size} fictitious orders per clone; starting simultaneous writes and reads.`);

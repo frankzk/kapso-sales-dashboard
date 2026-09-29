@@ -11,7 +11,8 @@
 import { useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import { ScanAction } from "@/components/scan-action";
-import { moveManifestItem, type ScanAssignLine } from "@/app/dashboard/courier/actions";
+import { moveManifestItem, scanAssignToRider, type ScanAssignLine } from "@/app/dashboard/courier/actions";
+import { programDayLabel } from "@/lib/dispatch-day";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 
 function money(value: number): string {
@@ -30,6 +31,8 @@ function presentation(l: ScanAssignLine, riderName: string): { text: string; tex
       return { text: `En la caja de ${l.riderName ?? "otro"} → Mover`, textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
     case "bloqueado_efectivo":
       return { text: "Límite de efectivo → Autorizar", textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
+    case "programado_otro_dia":
+      return { text: `Programado ${l.programmedFor ? programDayLabel(l.programmedFor) : "otro día"} → Asignar igual`, textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
     case "no_elegible":
       return { text: l.message ? `No elegible: ${l.message.replace(/\.$/, "")}` : "No elegible", textClass: "text-red-700", rowClass: "bg-red-50/50" };
     default:
@@ -83,6 +86,11 @@ export function GfBoxAddPackages({ manifest, canManage, refresh }: {
                     const res = await moveManifestItem(manifest.org_id, l.manifestId!, l.shipmentId!, riderId, `Escaneado en la caja de ${riderName}`);
                     push({ ...l, status: res.error ? "no_elegible" : "asignado", riderName, message: res.error ?? "" });
                   })} className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800 disabled:opacity-50">Mover</button>
+                )}
+                {l.status === "programado_otro_dia" && (
+                  <button type="button" disabled={pending} onClick={() => start(async () => {
+                    push(await scanAssignToRider(manifest.org_id, riderId, l.code, { overrideCash, scheduledFor: manifest.route_date, confirmProgrammed: true }));
+                  })} title={l.message} className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800 disabled:opacity-50">Asignar igual</button>
                 )}
                 {l.status === "bloqueado_efectivo" && !overrideCash && (
                   <button type="button" onClick={() => setOverrideCash(true)} title="Autoriza superar el límite de efectivo de la ruta y vuelve a escanear" className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800">Autorizar</button>

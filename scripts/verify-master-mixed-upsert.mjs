@@ -3,7 +3,7 @@
 // A test-only AFTER UPDATE statement trigger pauses BOTH sessions after their
 // normal UPDATE-maintenance trigger but before INSERT-maintenance. Advisory
 // locks controlled by a third backend make that interleaving deterministic;
-// no sleeps are inserted in the production function and 0198 is never changed.
+// no sleeps are inserted in the production function and 0202 is never changed.
 // Every writer executes one mixed Master UPSERT on disjoint source rows.
 // A new loopback-only PostgreSQL cluster is created and stopped by the runtime;
 // no .env, connection URL, existing database, or production data is accessed.
@@ -31,7 +31,7 @@ const errorInfo = (error) => ({ code: error?.code ?? "TEST_ERROR",
 async function migrate(client) {
   await client.query(readTestSql("scripts/sql/test_prelude.sql"));
   for (const name of readdirSync(join(ROOT, "db/migrations")).filter((name) => /^\d{4}_.+\.sql$/.test(name)).sort()) {
-    if (Number(name.slice(0, 4)) > 197) continue;
+    if (Number(name.slice(0, 4)) > 201) continue;
     await client.query(readTestSql(`db/migrations/${name}`));
     if (name.startsWith("0003_")) await client.query(readTestSql("supabase/policies.sql"));
   }
@@ -85,7 +85,7 @@ async function scenario(runtime, database, fixture, incremental) {
   const admin = await runtime.connect(database, { application_name: "mixed-upsert-coordinator" });
   const writers = await Promise.all([0, 1].map((n) => runtime.connect(database, { application_name: `mixed-upsert-writer-${n}` })));
   let pending;
-  const record = { variant: incremental ? "after_0198" : "before_0198", controlledInterleaving: true };
+  const record = { variant: incremental ? "after_0202" : "before_0202", controlledInterleaving: true };
   try {
     await admin.query(`create function public.master_mixed_test_barrier() returns trigger language plpgsql as $hook$
       begin
@@ -144,7 +144,7 @@ async function scenario(runtime, database, fixture, incremental) {
 const report = { startedAt: new Date().toISOString(), localOnly: true, productionTouched: false,
   experiment: "Two disjoint mixed UPSERTs: opposite existing/new stores, one Master statement per writer",
   limitation: "Test-only AFTER UPDATE hook forces a legal adverse interleaving using coordinator-held advisory locks. This establishes possibility, not natural frequency or production latency.",
-  migrationSha256: createHash("sha256").update(readFileSync(join(ROOT, "db/migrations/0198_master_read_scaling.sql"))).digest("hex"),
+  migrationSha256: createHash("sha256").update(readFileSync(join(ROOT, "db/migrations/0202_master_read_scaling.sql"))).digest("hex"),
   scenarios: [] };
 let runtime;
 try {
@@ -160,7 +160,7 @@ try {
   await control.query("create database mixed_after template mixed_template");
   await control.end();
   const after = await runtime.connect("mixed_after");
-  await after.query(readTestSql("db/migrations/0198_master_read_scaling.sql"));
+  await after.query(readTestSql("db/migrations/0202_master_read_scaling.sql"));
   await after.end();
   for (const incremental of [false, true]) {
     const row = await scenario(runtime, incremental ? "mixed_after" : "mixed_before", fixture, incremental);

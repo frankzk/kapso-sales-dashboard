@@ -1,4 +1,4 @@
--- Release gate AFTER 0198, BEFORE the new application. Read-only; no PII output.
+-- Release gate AFTER 0202, BEFORE the new application. Read-only; no PII output.
 -- Run as a database owner with visibility of every store, never an end-user JWT.
 -- This deliberately checks all history once; do not run it on every page/request.
 -- psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/sql/master_read_scaling_preflight.sql

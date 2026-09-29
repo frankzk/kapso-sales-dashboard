@@ -1400,6 +1400,28 @@ sin tope de antigüedad. Reglas:
     Yape»—. **7 de los 9 rechazos de ese día eran cobros buenos rechazados por
     el logo.** Aceptar el medio no es aceptar el pago: el destinatario y el
     monto se siguen exigiendo igual.
+  - **El final del celular pegado al nombre es el celular, no parte del
+    nombre.** La app del BBVA, al pagar a un Yape desde «Envío a contactos»,
+    escribe el contacto como «Grupo gf s •5309». Leído como nombre, «5309»
+    rompía la comparación y el cobro salía «El pago NO va a Grupo GF SAC»:
+    **tres cobros del courier** a la cuenta de la empresa (#KP137040 entre
+    ellos) quedaron en revisión administrativa. Ahora los dígitos que van tras
+    **un solo punto** (•, ·) se separan del nombre y se juzgan como celular:
+    tienen que terminar en `309`, o es otra cuenta aunque el nombre encaje.
+  - **Pero una máscara no es el celular.** La app del BCP pone bajo el
+    destinatario la **cuenta** enmascarada: «Grupo Gf S. **** 0012»
+    (#AUR177129). Ese 0012 no es el ···309, y tomarlo por celular rechazaría
+    un cobro bueno. Tras asteriscos o varios puntos seguidos no se sabe qué
+    número es: se aparta del nombre y **no se juzga**, porque un dato que no
+    se sabe no puede desmentir la cuenta. Un nombre que solo termina en
+    números, sin separador, no se toca. Las dos reglas rigen igual en los
+    comprobantes de los pedidos (§12, Pagos).
+  - **La app del BCP se reconoce aunque no se vea su logo** (29-09-2026). Su
+    constancia —blanca con azul y naranja, «¡Transferencia exitosa!», «Enviado
+    a», «Desde»— salía como medio «otro» porque el lector solo tenía descritos
+    Yape (morado) y Plin (celeste). También se envía así a un Yape desde esa
+    app. **Seis cobros** a «Grupo Gf S.» quedaron en revisión por el medio,
+    #AUR177129 entre ellos.
   - **La cola de cobros se recorre entera: la que hace más tiempo que no se
     mira va primero.** El 10-09-2026 había **238 guías candidatas y el tope es
     de 60 por pasada**, y la consulta cortaba sin orden ninguno: entraban
@@ -2527,6 +2549,60 @@ de **bodega** y no de ciudad; hasta entonces no se inventa.
 
 La carga a mano sigue existiendo para lo que el Excel no cubre, pero es el
 parche: la fuente es el conteo de Swayp.
+
+#### El mismo conteo, leído por API (desde el 29-09-2026)
+
+El Excel sale del API interno del panel de Swayp, y Kapta ahora lo lee directo
+(Stock Swayp → «Sincronizar desde Swayp por API»): **una sola lectura trae todas
+las bodegas**, en vez de un archivo por bodega. Las reglas de arriba no cambian
+—mismo `planearImportacion`, misma columna Disponible, mismo emparejamiento por
+`codbar`, mismo kardex— y además:
+
+- **Dos pasos: leer y aplicar.** «Leer» muestra el diff por ciudad sin escribir.
+  «Aplicar» escribe sólo las ciudades marcadas y **vuelve a leer Swayp en ese
+  momento**: no aplica el diff que tenía la pantalla, que pudo quedar viejo.
+- **La ciudad sale de la bodega de fulfillment** (`warehouse/getAll` del
+  servicio de inventario), cruzando el `idWarehouse` de cada fila. No de
+  `warehouses/byCompany`: esa es la bodega de **recojo** de la empresa, no
+  donde está el stock. La ciudad se resuelve por nombre de bodega, código INEI,
+  una ciudad nombrada dentro del nombre («BODEGA CHICLAYO») o, en último caso,
+  la última ciudad nombrada en la dirección.
+- **Un código de Swayp sin vincular en Catálogo no se carga, y el producto que
+  le corresponde de nuestro lado pasa a 0**: para Kapta, Swayp no lo tiene. La
+  pantalla lo avisa antes de aplicar cuando en una ciudad coinciden productos
+  que van a 0 y códigos sin vincular; se vincula en Catálogo y se vuelve a leer.
+- **Sólo se sincronizan Arequipa, Trujillo, Juliaca, Piura y Lima**
+  (`CIUDADES_DEL_SYNC`), las mismas que el Excel sabía leer. Una bodega que
+  resuelva a otra ciudad, o que no resuelva, se muestra y **no se toca**.
+  Sumar una ciudad al sync es una decisión, no un efecto del mapeo.
+- **Una ciudad que no vino en la lectura no se vacía**, y una lectura vacía
+  (0 filas) no se aplica: es un fallo de Swayp, no un inventario en cero.
+- Si dos bodegas caen en la misma ciudad, sus unidades **se suman**.
+- **Con el botón, el token se pega a mano** (el del login del panel, ~1 h de
+  vida) y no se guarda; o se deja vacío y se usa la credencial guardada.
+
+**Sync automático (desde el 29-09-2026).** Corre cada hora (`/api/cron/swayp-inventory`)
+sobre todas las ciudades del sync, con las mismas reglas y además:
+
+- **Credencial de la organización, no de una persona**: una sola, porque Aurela
+  y Kenku comparten inventario en Swayp. Es la de integración de Swayp que Kapta
+  ya usa para las guías, o una exclusiva de inventario si Swayp la da. **El login
+  del panel no se automatiza**: exige reCAPTCHA en cada inicio de sesión, que
+  existe justamente para impedirlo.
+- **Retiene la ciudad que quedaría vaciada** y no la aplica: si Swayp no trae
+  ninguna unidad para una ciudad con stock, o si dejaría en 0 más de la mitad
+  de sus productos con stock (y al menos 5). Es más probable una lectura rota
+  que una bodega vaciada de un día para otro. La ciudad retenida se muestra en
+  Stock Swayp para que una persona la lea y la aplique con el botón.
+- **Cada corrida queda registrada** (`swayp_inventory_sync_runs`), automática o
+  manual, con su resultado o su error. Stock Swayp muestra la última y avisa si
+  el último intento automático falló. Un cron que falla en silencio es peor que
+  el Excel.
+- En el kardex, los movimientos del cron dicen «Swayp (API, automático)» y no
+  tienen usuario.
+- El contrato es **reversado del panel, no oficial**: si Swayp lo cambia, la
+  lectura falla con el status y la respuesta a la vista, y el Excel sigue como
+  respaldo.
 
 ### Stock sin control de cantidad (Lima)
 
@@ -4009,6 +4085,46 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   paga, legítimamente. La corrección **se dice en pantalla**, nunca se aplica en
   silencio: esta comprobación decide si el dinero se desvió, y quien valida
   tiene que saber que el nombre que ve salió del otro campo.
+- **El mensaje del Yape no es el receptor.** Yape deja que quien paga escriba un
+  mensaje, y la captura lo pinta justo debajo del receptor; muchas clientas
+  escriben ahí su propio nombre. El lector lo copiaba como destinatario y el
+  cobro quedaba acusado de desvío: **#AUR177541** salió «sonia ludeña» —la
+  clienta es SONIA IBETH LUDEÑA QUISPE— con el celular ···309 de la empresa. Dos
+  defensas:
+  - el lector tiene instrucción expresa de no copiar el mensaje en ningún
+    nombre;
+  - y, como una instrucción puede desobedecerse, al juzgar la cuenta: si el
+    celular receptor leído es de una cuenta nuestra **y** el nombre leído es el
+    de la clienta del pedido, ese nombre **no cuenta**. La cuenta se juzga por
+    el celular y queda en verificación parcial —contraste manual—, **nunca** en
+    `verificada`. Exige las dos puntas, como la inversión: el nombre de la
+    clienta como receptor **sin** nuestro celular es la forma de un pago que
+    ella se hizo a sí misma, y eso sigue saltando.
+  - Se reconoce a la clienta con dos palabras o más de su nombre, en cualquier
+    orden y sin tildes. El orden no importa aquí porque no se está afirmando
+    que el dinero sea nuestro —eso lo sigue diciendo el celular—, solo que ese
+    nombre es el de ella. Un nombre de pila suelto no basta.
+  - El nombre descartado **se dice en pantalla** con el motivo, igual que la
+    inversión. Rige en la carga (decide si entra en `revision_admin`), en la
+    bandeja y en el servidor al validar; como se recalcula, los comprobantes ya
+    cargados se destraban solos.
+- **El final del celular pegado al nombre cuenta como celular.** La app del
+  BBVA escribe el contacto como «Grupo gf s •5309», y Plin como «Grupo Gf S ·
+  930 555 309 - Yape». Los dígitos tras **un solo punto** se apartan del
+  nombre y son el celular —mandan sobre uno leído aparte, porque salen del
+  mismo bloque que el receptor—: la misma señal tajante de siempre. Tras una
+  máscara (asteriscos o varios puntos, como la cuenta «**** 0012» que pone el
+  BCP) se apartan del nombre pero no se juzgan. El lector tiene además
+  instrucción de separarlos. Es la misma regla que en los cobros del courier
+  (§9.4).
+- **Una cuenta puede no tener celular: la pasarela Flow** (migración 0198). La
+  constancia de Flow dice «Pagado a: Aurela Kenku» —una sola cuenta de Flow para
+  las dos marcas— y no enseña ningún celular. Sin darla de alta, **#KP136181**
+  quedaba en «cuenta receptora no coincide». Una cuenta sin celular se verifica
+  con su nombre entero, porque es la única señal que su constancia puede dar;
+  recortado queda en contraste manual, y **un celular leído la desmiente**,
+  porque su constancia no muestra ninguno. El celular nulo quiere decir «esta
+  cuenta no cobra con celular», no «falta el dato».
 - Esta distinción es de seguridad, no de comodidad: una alarma de desvío que
   salta casi siempre por un nombre cortado deja de leerse, y tiene que ser
   creíble el día que el receptor sea de verdad otro.
@@ -4202,9 +4318,15 @@ ofrecía era `Rechazar`, que habría sido falso: el dinero llegó.
   `overridePaymentValidation`— dejaba el pago sin validador, sin fecha, sin
   asiento de liquidación y sin la confirmación de agencia: peor que el atasco.
 - **La regla NO se afloja por celular.** Lo tentador es dar por buena cualquier
-  lectura cuyo celular sea el nuestro. **#AUR177034** lo desmiente: celular ···309
-  y nombre «Rosa campos Mendoza». Las dos formas de fallar necesitan ojos, y por
-  eso la salida es una persona escribiendo el motivo y no una regla nueva.
+  lectura cuyo celular sea el nuestro, y un nombre ajeno con nuestro celular
+  sigue necesitando ojos. La salida es una persona escribiendo el motivo, no una
+  regla nueva.
+- **Corrección (28-09-2026).** Esta sección citaba **#AUR177034** —celular ···309
+  y nombre «Rosa campos Mendoza»— como el comprobante ajeno con nuestro número.
+  No lo era: la clienta de ese pedido es ROSA LUZ CAMPOS MENDOZA, y el nombre era
+  el mensaje que ella escribió en el Yape (ver «El mensaje del Yape no es el
+  receptor» en §12, Pagos). Ese caso se resuelve ya sin excepción; la regla de arriba
+  no cambia, porque un nombre que **no** es el de la clienta sigue bloqueando.
 
 Mientras Kapta y el Excel convivan, validar un pago deja el comprobante listo
 para continuar y registra actor y fecha, pero **no cambia por sí solo la
@@ -5661,14 +5783,28 @@ para las tiendas de Grupo GF administradas dentro de Kapta.
 **Prioridad dentro de Pedidos disponibles.** La bandeja separa dos colas sin
 inventar un estado operativo nuevo:
 
-- **Prioridad urgente · nunca salieron:** el pedido no tiene ninguna salida con
-  `shipments.dispatched_at`. Crear o anular un rótulo sin transferir físicamente
-  el paquete no lo saca de este grupo. Esta es la vista inicial y se ordena del
-  pedido más reciente al más antiguo.
-- **Con salida previa:** existe al menos una salida histórica con
-  `shipments.dispatched_at`, aunque el pedido haya regresado a Preparación. Se
+- **Prioridad urgente · nunca salieron:** el pedido nunca salió a reparto.
+  Crear o anular un rótulo sin transferir físicamente el paquete no lo saca de
+  este grupo. Esta es la vista inicial y se ordena del pedido más reciente al
+  más antiguo.
+- **Con salida previa («Ya salieron»):** el pedido salió a reparto al menos una
+  vez, aunque haya regresado a Preparación o esté en Por reprogramar Lima. Se
   trata como reprogramación o recuperación y conserva toda la evidencia de la
   salida anterior.
+
+**Qué es «salió a reparto» (29-09-2026).** Hasta esta fecha se leía solo
+`shipments.dispatched_at`, que Grupo GF no llena y `gf_return_to_office`
+vuelve a null: de 1.863 pedidos en cola, 0 figuraban con salida previa. Ahora
+lo decide `gf_order_departures` (0199), para cualquier courier: en
+`order_events`, «Lo llevo» (`pickup_checked`), el reporte en la puerta
+(`stop_reported`), el paquete recibido de vuelta en oficina
+(`returned_to_office`) o entregado sin «Lo llevo»
+(`delivered_unconfirmed_pickup`); una parada reportada de las rutas anteriores;
+o una salida de otro courier con `dispatched_at`. **`custody_transferred` no
+cuenta**: en el modo «confirmar» la custodia pasa al asignar, antes de que el
+paquete deje el almacén, y un paquete retirado de la caja sin salir no es un
+reintento. La lista vive en `DEPARTURE_EVENT_KINDS` (`lib/dispatch-day.ts`) y
+en la función; se cambian juntas.
 
 La separación solo prioriza la gestión. No cambia la elegibilidad, la tarifa ni
 las comprobaciones idempotentes de `Tomar pedidos`.
@@ -5792,6 +5928,29 @@ el último escaneo de «Recibir mi caja» fallaba con `delivery_stop_shipment_un
 - Cancelar una solicitud no tiene costo, incluso si el motorizado ya salió. El
   paquete puede retornar al almacén al día siguiente y la cancelación logística
   no cancela por sí sola el pedido Shopify.
+
+**Programar la salida sin tomar el pedido (29-09-2026).** En Despacho del día,
+el calendario de «Desde la lista» **solo guarda el día** en que deben salir los
+pedidos marcados, con actor y motivo obligatorio (`gf_dispatch_programs`,
+0199; evento `dispatch_programmed`). No toma el pedido, no reserva tarifa ni
+crea salida: sigue disponible. Uno ya tomado mueve también su
+`logistics_requests.scheduled_for`, para que las dos fechas digan lo mismo.
+Uno que ya está en la caja de un motorizado no se programa: primero se quita
+de la caja. La fecha no puede ser anterior a hoy. «Quitar la fecha» devuelve
+el pedido a su apartado de siempre (`dispatch_program_cleared`).
+
+Ese día el pedido aparece en **«Programados hoy»**, el primer apartado de la
+cola (§29.13); si el día pasa sin que salga, sigue ahí con la chapa «vencido».
+La programación se borra cuando el pedido entra en la caja de un motorizado.
+
+**Asignar un programado a la caja de otro día avisa y pide confirmar.** Desde
+la lista, una franja ámbar sobre la tabla dice cuáles son y para cuándo
+estaban, con «Asignar igual», «Asignar solo los otros» y «Cancelar». Por QR,
+la línea del escaneo dice «Programado vie 02/10 → Asignar igual» y no toma
+nada hasta que se confirma; igual en «Agregar pedidos» de la caja. El servidor
+repite la comprobación (`programNeedsConfirm`): un programado vencido no pide
+confirmar, porque que salga es justo lo que falta. Lo confirmado queda como
+`dispatch_program_overridden`, con el día programado y el de la caja.
 
 ### 29.7 Resultado y evidencia
 
@@ -6280,6 +6439,58 @@ cotejado / confirmado / no lo llevó) y un filtro rápido Todos · Por armar ·
 Listos para cotejo · Sin confirmar; «Sin ruta» es «tomado · sin caja» en la
 lista. Nada de esto cambia acciones de servidor.
 
+**Apartados de la cola: nunca salieron, ya salieron y programados
+(29-09-2026).** «Cómo sé cuáles pedidos no han salido ni una sola vez, versus
+los que han salido alguna vez; dar prioridad siempre a los que nunca han
+salido.» Encima de la tabla de «Desde la lista», una fila **Apartados** como
+las subetapas del Master: «Todos · N» y un chip con su cantidad por apartado.
+Cada pedido asignable cae en uno solo (`queueSegment`), y así se ordena la
+lista (`sortQueue`):
+
+1. **Programados hoy** — con salida programada para hoy o para un día que ya
+   pasó (chapa «programado hoy» o, en ámbar, «programado lun 28/09 ·
+   vencido»). Van primero: es la fecha que se le dio a la clienta.
+2. **Nunca salieron** — nunca salieron a reparto (§29.2) y se crearon en los
+   últimos 30 días. Es el apartado a dejar en cero, como «Sin llamar» en Por
+   confirmar; del más reciente al más antiguo.
+3. **Ya salieron** — salieron al menos una vez y volvieron (chapa «ya salió»,
+   que reemplaza a «salida previa»): reprogramaciones o recuperaciones.
+4. **+30 días** — nunca salieron y se crearon hace más de 30 días
+   (`STALE_AFTER_DAYS`): se revisan después de los recientes. Un pedido sin
+   fecha de creación se queda en «Nunca salieron».
+5. **Programados después** — con salida programada para otro día: no cuentan
+   para hoy y ese día pasan solos a «Programados hoy».
+
+La programación manda sobre todo lo demás. Un apartado solo reúne pedidos que
+se pueden asignar; con una etapa elegida (seguimiento) la fila no se muestra y
+elegir etapa apaga el apartado. El apartado no suma en «Filtros · N» ni lo
+borra «Quitar filtros»: tiene su propia fila a la vista. Las tiles **«Nunca
+salieron»** y **«Programados hoy»**, junto a «Por asignar», encienden su
+apartado; reemplazan a la tile «Con salida previa», que contaba 0 siempre
+porque leía `shipments.dispatched_at`. El filtro «Solo con salida previa» del
+picker se retira: es el apartado «Ya salieron». Lógica pura en
+`lib/dispatch-day.ts`, probada en `test/dispatch-day.test.ts` y
+`test/despacho-apartados-programados.test.ts`.
+
+**Lo cerrado no se asigna, y quitar de la caja devuelve a «por asignar»
+(29-09-2026).** Los «tomados sin caja» salen de las solicitudes de Grupo GF,
+no de las etapas de admisión, así que un pedido anulado con su solicitud
+aceptada seguía con casilla (#KP136160, #KP136100, #KP136653). Un tomado
+cuyo pedido está en **Por cerrar** o **Finalizado** (`takenIsAssignable`) ya
+no es asignable: pasa a seguimiento, y el servidor lo rechaza también al
+asignar por lista o por QR. **La solicitud no se cancela sola al cerrarse el
+pedido**: el MOM no lo pide (§29.6 separa la cancelación logística del pedido
+Shopify) y un pedido se puede reabrir; si vuelve a una etapa de admisión,
+vuelve a la cola sin tocar nada. Cancelarla sigue siendo un acto explícito.
+
+«Quitar» un paquete de una caja sin custodia dejaba la solicitud en
+`scheduled` sin caja (#KP136039, #KP136010, #KP135989, #KP137239,
+#KP137430). Ahora vuelve a `accepted` con evento `route_removed` en
+`logistics_request_events`, como ya hacían el retiro en custodia (0185) y el
+«no lo recojo» (0182); 0200 reparó las cinco con `route_removed_repair`. Al
+revés, mover un paquete a la caja de otro motorizado lo deja en `scheduled`:
+en custodia, el retiro lo devolvía a `accepted` dentro de la caja nueva.
+
 **El gesto único.** Escanear o fotografiar es un solo componente
 (`ScanAction`) y el contexto lo fija la pantalla, nunca el usuario:
 `supervisor_asignacion` → tomar + asignar (sin `office_checked` desde el 22-09-2026);
@@ -6370,10 +6581,10 @@ oficina»** (`gf_return_to_office`, 0188) lo saca de la caja con rastro
 «por asignar». La parada reportada se conserva: es la evidencia del intento
 y cuenta en la liquidación del día. El pedido sigue en «Por reprogramar
 Lima» hasta que se asigna a otra caja. Junto a «Asignar», el botón de
-calendario **reprograma** la fecha pactada de salida de los marcados
-(`rescheduleGroupGfCourierOrders`, evento `logistics_request_rescheduled`):
-un tomado mueve su solicitud, uno disponible se toma con esa fecha, y uno que
-ya está en la caja de un motorizado no se mueve. La tarjeta **«Por
+calendario **programa** la fecha de salida de los marcados
+(`rescheduleGroupGfCourierOrders`): desde el 29-09-2026 solo guarda el día,
+con motivo, sin tomar el pedido (§29.6); hasta entonces un disponible se tomaba
+con esa fecha. Uno que ya está en la caja de un motorizado no se mueve. La tarjeta **«Por
 reprogramar»**, antes de «Tomados sin caja», cuenta los pedidos de Grupo GF en
 «En curso · Por reprogramar Lima» (en una caja o ya en oficina) y al tocarla
 aplica ese filtro de etapa y subetapa. La versión del resolver sube a

@@ -219,7 +219,7 @@ end $test$;
 alter table order_master disable trigger order_master_read_insert;
 insert into order_master(order_id,store_id,shopify_order_id,region)
 select id,store_id,shopify_order_id,'Backfilled region' from orders where shopify_order_id = 'scaling-108';
-\ir ../../db/migrations/0198_master_read_scaling.sql
+\ir ../../db/migrations/0202_master_read_scaling.sql
 select pg_temp.assert_master_read_scaling(array[
   '01570000-0000-4000-8000-000000000011'::uuid,'01570000-0000-4000-8000-000000000012'::uuid]);
 insert into order_master(order_id,store_id,shopify_order_id,region)

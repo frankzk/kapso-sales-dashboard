@@ -170,8 +170,15 @@ export interface QueueRow {
   /** Solo los tomados: si Almacén ya lo armó. */
   armed: boolean | null;
   observation: string | null;
-  /** Tuvo una salida física previa y volvió: «Con salida previa». */
+  /**
+   * Salió a reparto al menos una vez (`DEPARTURE_EVENT_KINDS`, parada
+   * reportada o despacho de otro courier): apartado «Ya salieron».
+   */
   hasPriorDispatch: boolean;
+  /** Fecha de salida programada sin tomar el pedido (0199); null si no hay. */
+  programmedFor: string | null;
+  /** Motivo de la programación, para el `title` de la chapa. */
+  programReason?: string | null;
   /** Macroetapa y subetapa del MOM en el Master (`order_master`); null si no se conoce. */
   macroStage: string | null;
   macroSubstage: string | null;
@@ -196,6 +203,19 @@ export interface QueueRoute {
   undeliveredReason?: string | null;
 }
 
+/**
+ * Etapas en que un pedido ya tomado deja de asignarse: está cerrándose o
+ * cerrado (29-09-2026). #KP136160, #KP136100 y #KP136653 estaban anulados y
+ * seguían con casilla en «Desde la lista». La solicitud no se cancela sola:
+ * el MOM no lo dice y un pedido se puede reabrir; si vuelve, vuelve a la cola.
+ */
+export const CLOSED_FOR_ASSIGNMENT_STAGES: readonly string[] = ["por_cerrar", "finalizado"];
+
+/** Si un tomado sin caja se puede asignar según la macroetapa del Master. Sin dato, sí. */
+export function takenIsAssignable(macroStage: string | null | undefined): boolean {
+  return !macroStage || !CLOSED_FOR_ASSIGNMENT_STAGES.includes(macroStage);
+}
+
 /** Un «No entregado» que sigue en la caja del motorizado: se ve en la cola para recibirlo en oficina. */
 export function isReturnable(row: Pick<QueueRow, "route">): boolean {
   return Boolean(row.route?.undeliveredReason);
@@ -210,7 +230,8 @@ export interface QueueFilters {
   query: string;
   store: string;
   district: string;
-  secondAttempt: boolean;
+  /** Apartado de la cola; null es «Todos». No cuenta como filtro del picker: tiene su propia fila. */
+  segment: QueueSegment | null;
   armedOnly: boolean;
   takenOnly: boolean;
   created: CreatedWindow;
@@ -226,7 +247,7 @@ export const EMPTY_QUEUE_FILTERS: QueueFilters = {
   query: "",
   store: "",
   district: "",
-  secondAttempt: false,
+  segment: null,
   armedOnly: false,
   takenOnly: false,
   created: "todo",
@@ -303,14 +324,15 @@ export function inCreatedWindow(createdAt: string | null | undefined, window: Cr
 }
 
 /**
- * Tienda × distrito × salida previa × armados × tomados × fecha × etapas ×
+ * Apartado × tienda × distrito × armados × tomados × fecha × etapas ×
  * subetapas × plazo × texto (pedido, cliente, distrito o teléfono). Dentro de
  * un grupo de chips basta con cumplir uno; entre grupos se exigen todos.
  *
  * Sin ninguna etapa elegida la lista es la cola de asignación (solo
  * `assignable`): es para lo que está la pantalla. Elegir una etapa abre esa
  * etapa entera, también los pedidos que ya salieron, para seguimiento.
- * `includeTracked` fuerza mirar todos, para contar las etapas.
+ * `includeTracked` fuerza mirar todos, para contar las etapas. Un apartado
+ * solo reúne pedidos que se pueden asignar.
  */
 export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, today: string, opts: { includeTracked?: boolean } = {}): QueueRow[] {
   const needle = filters.query.trim().toLocaleLowerCase("es");
@@ -319,9 +341,9 @@ export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, to
   const onlyAssignable = !filters.stages.length && !opts.includeTracked;
   return rows.filter((q) => {
     if (onlyAssignable && !q.assignable && !isReturnable(q)) return false;
+    if (filters.segment && (!q.assignable || queueSegment(q, today) !== filters.segment)) return false;
     if (filters.store && q.storeName !== filters.store) return false;
     if (filters.district && q.district !== filters.district) return false;
-    if (filters.secondAttempt && !q.hasPriorDispatch) return false;
     if (filters.armedOnly && !q.armed) return false;
     if (filters.takenOnly && !q.taken) return false;
     if (!inCreatedWindow(q.createdAt, filters.created, today)) return false;
@@ -334,9 +356,94 @@ export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, to
   });
 }
 
-/** Cuántos filtros están activos (el texto no cuenta: tiene su propio campo). Cada grupo de chips cuenta una vez. */
+/**
+ * Cuántos filtros están activos. El texto y el apartado no cuentan: cada uno
+ * tiene su propio sitio a la vista. Cada grupo de chips cuenta una vez.
+ */
 export function activeFilterCount(filters: QueueFilters): number {
-  return [filters.store, filters.district, filters.secondAttempt, filters.armedOnly, filters.takenOnly, filters.created !== "todo", filters.stages.length > 0, filters.substages.length > 0, filters.due.length > 0].filter(Boolean).length;
+  return [filters.store, filters.district, filters.armedOnly, filters.takenOnly, filters.created !== "todo", filters.stages.length > 0, filters.substages.length > 0, filters.due.length > 0].filter(Boolean).length;
+}
+
+// ---------------------------------------------------------------------------
+// Apartados de la cola (29-09-2026). «Que tengan un apartado como un subestado,
+// simulado al "Sin llamar" de Por confirmar, donde se busca dejarlo en cero lo
+// antes posible.» Cada pedido asignable cae en uno solo, y la lista los ordena
+// en este orden: lo programado para hoy es un compromiso con la clienta; lo
+// que nunca salió va antes que un reintento; lo de más de 30 días, después de
+// lo reciente; lo programado para otro día, al final.
+// ---------------------------------------------------------------------------
+
+export type QueueSegment = "programados_hoy" | "nunca_salieron" | "ya_salieron" | "mas_de_30" | "programados_despues";
+
+export const QUEUE_SEGMENTS: readonly QueueSegment[] = ["programados_hoy", "nunca_salieron", "ya_salieron", "mas_de_30", "programados_despues"];
+
+/** Un pedido que nunca salió y se creó hace más de esto va a «+30 días». */
+export const STALE_AFTER_DAYS = 30;
+
+export const QUEUE_SEGMENT_LABEL: Record<QueueSegment, { label: string; hint: string }> = {
+  programados_hoy: { label: "Programados hoy", hint: "Con salida programada para hoy, o para un día que ya pasó sin que saliera. Van primero: es la fecha que se le dio a la clienta." },
+  nunca_salieron: { label: "Nunca salieron", hint: `Nunca tuvieron una salida a reparto y se crearon en los últimos ${STALE_AFTER_DAYS} días. Es el apartado a dejar en cero.` },
+  ya_salieron: { label: "Ya salieron", hint: "Salieron a reparto al menos una vez y volvieron: reprogramaciones o recuperaciones. Van después de los que nunca salieron." },
+  mas_de_30: { label: `+${STALE_AFTER_DAYS} días`, hint: `Nunca salieron y se crearon hace más de ${STALE_AFTER_DAYS} días: se revisan después de los recientes.` },
+  programados_despues: { label: "Programados después", hint: "Con salida programada para otro día: no cuentan para hoy. Ese día pasan solos a «Programados hoy»." },
+};
+
+/**
+ * Qué cuenta como «salió a reparto» en `order_events`: el motorizado se llevó
+ * el paquete («Lo llevo»), reportó en la puerta, o el paquete volvió a oficina.
+ * `custody_transferred` NO: en el modo «confirmar» la custodia pasa al asignar,
+ * antes de que el paquete deje el almacén, y un retirado de la caja antes de
+ * salir contaría como reintento. Crear o anular un rótulo tampoco (§29.2).
+ */
+export const DEPARTURE_EVENT_KINDS = ["pickup_checked", "stop_reported", "returned_to_office", "delivered_unconfirmed_pickup"] as const;
+
+/** El apartado de un pedido asignable. La programación manda sobre todo lo demás. */
+export function queueSegment(row: Pick<QueueRow, "programmedFor" | "hasPriorDispatch" | "createdAt">, today: string): QueueSegment {
+  if (row.programmedFor) return row.programmedFor.slice(0, 10) <= today ? "programados_hoy" : "programados_despues";
+  if (row.hasPriorDispatch) return "ya_salieron";
+  const created = limaDay(row.createdAt);
+  // Sin fecha de creación no se esconde en «+30 días»: se queda en la cola a dejar en cero.
+  if (created && created < shiftDay(today, -STALE_AFTER_DAYS)) return "mas_de_30";
+  return "nunca_salieron";
+}
+
+const SEGMENT_RANK = new Map<QueueSegment, number>(QUEUE_SEGMENTS.map((segment, i) => [segment, i]));
+
+/**
+ * El orden de la lista: por apartado; dentro de lo programado, por la fecha
+ * (lo vencido primero); en el resto, del pedido más reciente al más antiguo
+ * (§29.2). Lo que no se asigna (seguimiento, «No entregado» en caja) va detrás.
+ */
+export function sortQueue<T extends QueueRow>(rows: readonly T[], today: string): T[] {
+  const keyed = rows.map((row, i) => ({
+    row,
+    i,
+    rank: row.assignable ? SEGMENT_RANK.get(queueSegment(row, today))! : QUEUE_SEGMENTS.length,
+    program: row.programmedFor ?? "",
+    created: row.createdAt ? Date.parse(row.createdAt) || 0 : -Infinity,
+  }));
+  keyed.sort((a, b) => a.rank - b.rank || a.program.localeCompare(b.program) || b.created - a.created || a.i - b.i);
+  return keyed.map((k) => k.row);
+}
+
+/**
+ * Asignar a la caja de `boxDay` un pedido programado para otro día pide
+ * confirmar. Lo vencido no: que salga es justo lo que falta.
+ */
+export function programNeedsConfirm(programmedFor: string | null | undefined, boxDay: string, today: string): boolean {
+  if (!programmedFor) return false;
+  const day = programmedFor.slice(0, 10);
+  return day >= today && day !== boxDay;
+}
+
+const WEEKDAYS_SHORT = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+
+/** `2026-10-02` → «vie 02/10». */
+export function programDayLabel(day: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(day);
+  if (!m) return day;
+  const weekday = WEEKDAYS_SHORT[new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay()];
+  return `${weekday} ${m[3]}/${m[2]}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +508,8 @@ export function setStages(filters: QueueFilters, stages: readonly string[]): Que
   const substages = stages.length
     ? filters.substages.filter((code) => canonical.has(code) || !known.has(code))
     : [];
-  return { ...filters, stages: [...stages], substages };
+  // Con una etapa elegida la lista es de seguimiento y los apartados no se ven.
+  return { ...filters, stages: [...stages], substages, segment: stages.length ? null : filters.segment };
 }
 
 export interface QueueFacetCounts {
@@ -413,9 +521,15 @@ export interface QueueFacetCounts {
   /** Filas que cumplen todo menos el grupo de plazos; es el «Todos los plazos». */
   dueTotal: number;
   due: Record<ScheduledBucket, number>;
+  /** Filas que cumplen todo menos el apartado; es el «Todos» de la fila de apartados. */
+  segmentTotal: number;
+  segment: Record<QueueSegment, number>;
 }
 
 export function queueFacetCounts(rows: readonly QueueRow[], filters: QueueFilters, today: string): QueueFacetCounts {
+  const forSegment = filterQueue(rows, { ...filters, segment: null }, today);
+  const segment = Object.fromEntries(QUEUE_SEGMENTS.map((s) => [s, 0])) as Record<QueueSegment, number>;
+  for (const row of forSegment) if (row.assignable) segment[queueSegment(row, today)] += 1;
   const stage: Record<string, number> = {};
   // Etapa cuenta sobre todos los pedidos de Grupo GF, no solo la cola.
   for (const row of filterQueue(rows, { ...filters, stages: [] }, today, { includeTracked: true })) {
@@ -431,7 +545,7 @@ export function queueFacetCounts(rows: readonly QueueRow[], filters: QueueFilter
   const forDue = filterQueue(rows, { ...filters, due: [] }, today);
   const due: Record<ScheduledBucket, number> = { vencido: 0, hoy: 0, proximo: 0 };
   for (const row of forDue) due[scheduledBucket(row.scheduledFor, today)] += 1;
-  return { stage, substageTotal: forSubstage.length, substage, dueTotal: forDue.length, due };
+  return { stage, substageTotal: forSubstage.length, substage, dueTotal: forDue.length, due, segmentTotal: forSegment.length, segment };
 }
 
 export const CREATED_WINDOW_LABEL: Record<CreatedWindow, string> = {
@@ -506,15 +620,19 @@ export function filterBoxItems<T extends Pick<DayItem, "removed_at" | "pickup_de
 // las cajas (`BoxItemFilter`); aquí solo se decide qué toca cada tile.
 // ---------------------------------------------------------------------------
 
-export type QueueTile = "por_asignar" | "por_reprogramar" | "tomados_sin_caja" | "armados" | "segundo_intento";
+/** Tiles de la cola; las de apartado encienden ese apartado. */
+export type QueueTile = "por_asignar" | "nunca_salieron" | "programados_hoy" | "por_reprogramar" | "tomados_sin_caja" | "armados";
 export type BoxTile = "por_armar" | "listos_cotejo" | "sin_confirmar";
+
+const SEGMENT_TILES = new Set<QueueTile>(["nunca_salieron", "programados_hoy"]);
 
 export const QUEUE_TILE_LABEL: Record<QueueTile, { label: string; hint: string }> = {
   por_asignar: { label: "Por asignar", hint: "Pedidos de Lima con condiciones para salir y sin caja: disponibles más tomados sin ruta. Quita los filtros de la lista." },
-  por_reprogramar: { label: "Por reprogramar", hint: "No entregados por el motorizado (En curso · Por reprogramar Lima): los que siguen en su caja se reciben en oficina; los que ya volvieron se asignan o se reprograman con el calendario." },
+  nunca_salieron: QUEUE_SEGMENT_LABEL.nunca_salieron,
+  programados_hoy: QUEUE_SEGMENT_LABEL.programados_hoy,
+  por_reprogramar: { label: "Por reprogramar", hint: "No entregados por el motorizado (En curso · Por reprogramar Lima): los que siguen en su caja se reciben en oficina; los que ya volvieron se asignan o se programan con el calendario." },
   tomados_sin_caja: { label: "Tomados sin caja", hint: "Ya tomados por Grupo GF (servicio y tarifa reservados) pero todavía sin motorizado." },
   armados: { label: "Armados", hint: "Tomados cuya salida ya armó Almacén (listo para despacho) y siguen sin caja." },
-  segundo_intento: { label: "Con salida previa", hint: "Ya tuvieron al menos una salida física y volvieron: revísalos como reprogramaciones o recuperaciones antes de volver a tomarlos." },
 };
 
 export const BOX_TILE_LABEL: Record<BoxTile, { label: string; hint: string }> = {
@@ -532,13 +650,15 @@ export function isPorReprogramar(row: Pick<QueueRow, "macroStage" | "macroSubsta
  * `rows` es la cola de asignación; `allRows` suma los que ya salieron, porque
  * «Por reprogramar» cuenta también los no entregados que siguen en una caja.
  */
-export function queueTileCounts(rows: readonly QueueRow[], allRows: readonly QueueRow[] = rows): Record<QueueTile, number> {
+export function queueTileCounts(rows: readonly QueueRow[], allRows: readonly QueueRow[], today: string): Record<QueueTile, number> {
+  const segments = rows.map((q) => queueSegment(q, today));
   return {
     por_asignar: rows.length,
+    nunca_salieron: segments.filter((s) => s === "nunca_salieron").length,
+    programados_hoy: segments.filter((s) => s === "programados_hoy").length,
     por_reprogramar: allRows.filter(isPorReprogramar).length,
     tomados_sin_caja: rows.filter((q) => q.taken).length,
     armados: rows.filter((q) => q.armed).length,
-    segundo_intento: rows.filter((q) => q.hasPriorDispatch).length,
   };
 }
 
@@ -557,7 +677,7 @@ export function queueTileActive(filters: QueueFilters, tile: QueueTile): boolean
   if (tile === "por_reprogramar") return filters.stages.length === 1 && filters.stages[0] === "en_curso" && filters.substages.length === 1 && filters.substages[0] === "por_reprogramar_lima";
   if (tile === "tomados_sin_caja") return filters.takenOnly;
   if (tile === "armados") return filters.armedOnly;
-  return filters.secondAttempt;
+  return filters.segment === tile;
 }
 
 /** Tocar una tile: enciende su filtro (o lo apaga si ya estaba); «Por asignar» limpia todos. */
@@ -566,11 +686,17 @@ export function toggleQueueTile(filters: QueueFilters, tile: QueueTile): QueueFi
   if (tile === "por_reprogramar") {
     return queueTileActive(filters, tile)
       ? { ...filters, stages: [], substages: [] }
-      : { ...filters, stages: ["en_curso"], substages: ["por_reprogramar_lima"] };
+      : { ...filters, stages: ["en_curso"], substages: ["por_reprogramar_lima"], segment: null };
   }
   if (tile === "tomados_sin_caja") return { ...filters, takenOnly: !filters.takenOnly };
   if (tile === "armados") return { ...filters, armedOnly: !filters.armedOnly };
-  return { ...filters, secondAttempt: !filters.secondAttempt };
+  if (SEGMENT_TILES.has(tile)) {
+    // Un apartado es de la cola de asignación: apaga el seguimiento por etapa.
+    return queueTileActive(filters, tile)
+      ? { ...filters, segment: null }
+      : { ...filters, segment: tile as QueueSegment, stages: [], substages: [] };
+  }
+  return filters;
 }
 
 export function toggleBoxTile(current: BoxItemFilter, tile: BoxTile): BoxItemFilter {

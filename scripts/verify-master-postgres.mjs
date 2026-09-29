@@ -75,13 +75,13 @@ try {
   await db.query('create database rollback_check');
   const rollback = await runtime.connect('rollback_check');
   await execute(rollback,readTestSql('scripts/sql/test_prelude.sql'));
-  for(const file of readdirSync(join(root,'db/migrations')).filter(f => /^\d{4}_.+\.sql$/.test(f) && Number(f.slice(0,4))<=197).sort()) {
+  for(const file of readdirSync(join(root,'db/migrations')).filter(f => /^\d{4}_.+\.sql$/.test(f) && Number(f.slice(0,4))<=201).sort()) {
     await execute(rollback,readTestSql(`db/migrations/${file}`));
     if(file.startsWith('0003_')) await execute(rollback,readTestSql('supabase/policies.sql'));
   }
   await execute(rollback,readTestSql('scripts/sql/master_read_scaling_rollback_smoke.sql'));
   await rollback.end();
-  report.checks.push('Master rollback/reinstall from schema 0197');
+  report.checks.push('Master rollback/reinstall from schema 0201');
   await db.query('create database bundle_check');
   const bundle = await runtime.connect('bundle_check');
   await execute(bundle,readTestSql('scripts/sql/test_prelude.sql'));

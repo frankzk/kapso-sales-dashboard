@@ -31,5 +31,5 @@ begin
 end;
 $indexes$;
 
-\ir ../../db/migrations/0198_master_read_scaling.sql
+\ir ../../db/migrations/0202_master_read_scaling.sql
 commit;

@@ -1,14 +1,14 @@
--- Roll back ONLY the read implementation introduced by migration 0198.
+-- Roll back ONLY the read implementation introduced by migration 0202.
 -- Run AFTER reverting/draining application versions that read the summary
 -- tables directly. They intentionally become stale after these triggers stop.
 -- psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 --file=.../master_read_scaling_rollback.sql
 -- No orders, operational history, summary tables, helper functions or indexes
--- are deleted. Applying 0198 again rebuilds summaries before reinstalling it.
+-- are deleted. Applying 0202 again rebuilds summaries before reinstalling it.
 -- The lock is explicit because DROP TRIGGER needs ACCESS EXCLUSIVE. If a long
 -- reader/writer prevents acquisition within 5s, the ENTIRE transaction fails;
 -- inspect the blocker and retry in a quiet window, never remove the timeouts.
 -- Legacy function bodies/signatures are copied exactly from 0089 and 0078.
--- ACL exception: keep 0198's tighter authenticated/service_role-only execution.
+-- ACL exception: keep 0202's tighter authenticated/service_role-only execution.
 -- In particular, DO NOT restore 0078's implicit PUBLIC EXECUTE grant.
 begin;
 set local lock_timeout = '5s';

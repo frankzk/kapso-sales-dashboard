@@ -105,6 +105,7 @@ describe("filterQueue (Desde la lista)", () => {
     armed: null,
     observation: null,
     hasPriorDispatch: false,
+    programmedFor: null,
     macroStage: "preparacion",
     macroSubstage: "por_generar_rotulo",
     assignable: true,
@@ -120,11 +121,12 @@ describe("filterQueue (Desde la lista)", () => {
   ];
   const ids = (out: QueueRow[]) => out.map((r) => r.orderId);
 
-  it("tienda × distrito × salida previa × armados × tomados", () => {
+  it("apartado × tienda × distrito × armados × tomados", () => {
     expect(ids(filterQueue(rows, EMPTY_QUEUE_FILTERS, today))).toEqual(["a", "b", "c", "d"]);
     expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, store: "Kenku" }, today))).toEqual(["b"]);
     expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, district: "Surco" }, today))).toEqual(["a", "c", "d"]);
-    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, secondAttempt: true }, today))).toEqual(["b"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, segment: "ya_salieron" }, today))).toEqual(["b"]);
+    expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, segment: "nunca_salieron" }, today))).toEqual(["a", "c", "d"]);
     expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, armedOnly: true }, today))).toEqual(["c"]);
     expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, takenOnly: true }, today))).toEqual(["c", "d"]);
     expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, takenOnly: true, district: "Miraflores" }, today))).toEqual([]);
@@ -148,9 +150,9 @@ describe("filterQueue (Desde la lista)", () => {
     expect(ids(filterQueue(rows, { ...EMPTY_QUEUE_FILTERS, query: "kp1", store: "Kenku" }, today))).toEqual(["b"]);
   });
 
-  it("cuenta los filtros activos sin contar el texto; cada grupo de chips cuenta una vez", () => {
+  it("cuenta los filtros activos sin contar el texto ni el apartado; cada grupo de chips cuenta una vez", () => {
     expect(activeFilterCount(EMPTY_QUEUE_FILTERS)).toBe(0);
-    expect(activeFilterCount({ ...EMPTY_QUEUE_FILTERS, query: "x", store: "Aurela", created: "hoy", secondAttempt: true })).toBe(3);
+    expect(activeFilterCount({ ...EMPTY_QUEUE_FILTERS, query: "x", store: "Aurela", created: "hoy", armedOnly: true, segment: "nunca_salieron" })).toBe(3);
     expect(activeFilterCount({ ...EMPTY_QUEUE_FILTERS, substages: ["por_armar", "por_generar_rotulo"], due: ["hoy"] })).toBe(2);
     expect(activeFilterCount({ ...EMPTY_QUEUE_FILTERS, stages: ["preparacion"] })).toBe(1);
   });
@@ -233,7 +235,8 @@ describe("filterQueue (Desde la lista)", () => {
       expect(inCourse.substage).toEqual({ en_reparto: 1 });
       expect(inCourse.due).toEqual({ vencido: 0, hoy: 1, proximo: 0 });
       // Las tiles siguen contando solo la cola.
-      expect(queueTileCounts(all.filter((r) => r.assignable)).por_asignar).toBe(4);
+      const queue = all.filter((r) => r.assignable);
+      expect(queueTileCounts(queue, all, today).por_asignar).toBe(4);
     });
   });
 
@@ -297,25 +300,28 @@ describe("estado de cada paquete en la caja (segmentos de «Pedidos tomados»)",
 describe("tiles de métricas → filtros", () => {
   const row = (over: Partial<QueueRow>): QueueRow => ({
     orderId: over.orderId ?? crypto.randomUUID(), orderName: "#K", storeName: "A", customerName: "C", customerPhone: null, district: "D",
-    orderTotal: 1, createdAt: null, scheduledFor: "2026-09-19", tariffAmount: 1, taken: false, requestId: null, armed: null, observation: null, hasPriorDispatch: false, macroStage: "preparacion", macroSubstage: "por_armar", assignable: true, route: null, ...over,
+    orderTotal: 1, createdAt: null, scheduledFor: "2026-09-19", tariffAmount: 1, taken: false, requestId: null, armed: null, observation: null, hasPriorDispatch: false, programmedFor: null, macroStage: "preparacion", macroSubstage: "por_armar", assignable: true, route: null, ...over,
   });
   it("cuenta cada tile sobre la cola y sobre las cajas", () => {
-    const rows = [row({}), row({ taken: true, armed: true }), row({ taken: true, armed: false }), row({ hasPriorDispatch: true })];
-    expect(queueTileCounts(rows)).toEqual({ por_asignar: 4, por_reprogramar: 0, tomados_sin_caja: 2, armados: 1, segundo_intento: 1 });
+    const today = "2026-09-19";
+    const rows = [row({}), row({ taken: true, armed: true }), row({ taken: true, armed: false, programmedFor: "2026-09-19" }), row({ hasPriorDispatch: true }), row({ programmedFor: "2026-09-25" })];
+    expect(queueTileCounts(rows, rows, today)).toEqual({ por_asignar: 5, nunca_salieron: 2, programados_hoy: 1, por_reprogramar: 0, tomados_sin_caja: 2, armados: 1 });
     // «Por reprogramar» cuenta también los no entregados que siguen en una caja.
     const out = row({ macroStage: "en_curso", macroSubstage: "por_reprogramar_lima", assignable: false });
     const back = row({ macroStage: "en_curso", macroSubstage: "por_reprogramar_lima", taken: true });
-    expect(queueTileCounts([...rows, back], [...rows, back, out]).por_reprogramar).toBe(2);
+    expect(queueTileCounts([...rows, back], [...rows, back, out], today).por_reprogramar).toBe(2);
     const armed = { order_id: "o", order_name: "#A", customer_name: "A", district: "D", output_code: "c", guide_code: "g", preparation_state: "listo_despacho" };
     const boxes = dayBoxes([manifest({ items: [item({ shipment: armed }), item({ shipment_id: "s2", shipment: { ...armed, preparation_state: "en_armado" } }), item({ shipment_id: "s3", shipment: armed, office_checked_at: "x", pickup_checked_at: "x" })] })], "2026-09-19");
     expect(boxTileCounts(boxes)).toEqual({ por_armar: 1, listos_cotejo: 1, sin_confirmar: 2 });
   });
   it("tocar enciende el filtro, volver a tocar lo apaga; «Por asignar» limpia todo menos el texto", () => {
-    const on = toggleQueueTile({ ...EMPTY_QUEUE_FILTERS, query: "ana", store: "A" }, "segundo_intento");
-    expect(on).toMatchObject({ secondAttempt: true, store: "A", query: "ana" });
-    expect(queueTileActive(on, "segundo_intento")).toBe(true);
-    expect(toggleQueueTile(on, "segundo_intento").secondAttempt).toBe(false);
-    expect(toggleQueueTile(on, "tomados_sin_caja")).toMatchObject({ takenOnly: true, secondAttempt: true });
+    const on = toggleQueueTile({ ...EMPTY_QUEUE_FILTERS, query: "ana", store: "A" }, "nunca_salieron");
+    expect(on).toMatchObject({ segment: "nunca_salieron", store: "A", query: "ana" });
+    expect(queueTileActive(on, "nunca_salieron")).toBe(true);
+    expect(queueTileActive(on, "programados_hoy")).toBe(false);
+    expect(toggleQueueTile(on, "nunca_salieron").segment).toBeNull();
+    expect(toggleQueueTile(on, "programados_hoy").segment).toBe("programados_hoy");
+    expect(toggleQueueTile(on, "tomados_sin_caja")).toMatchObject({ takenOnly: true, segment: "nunca_salieron" });
     expect(toggleQueueTile(toggleQueueTile(on, "armados"), "armados").armedOnly).toBe(false);
     expect(toggleQueueTile(on, "por_asignar")).toEqual({ ...EMPTY_QUEUE_FILTERS, query: "ana" });
     expect(queueTileActive(EMPTY_QUEUE_FILTERS, "por_asignar")).toBe(false);

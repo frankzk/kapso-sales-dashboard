@@ -25,8 +25,37 @@ export interface CollectionAccount {
    * ignorar el orden, que la volvería permisiva con cualquier nombre.
    */
   aliases?: string[];
-  /** Últimos 3 dígitos de su celular. */
+  /**
+   * Últimos 3 dígitos de su celular. `null` cuando la cuenta NO TIENE celular:
+   * la pasarela Flow cobra como «Aurela Kenku» y su comprobante no muestra
+   * ninguno. Ahí la única señal es el nombre, y un celular leído la desmiente.
+   */
+  phoneLastDigits: string | null;
+}
+
+/** ¿La cuenta cobra con celular (Yape, Plin) o sin él (una pasarela)? */
+function accountHasPhone(account: CollectionAccount): account is CollectionAccount & {
   phoneLastDigits: string;
+} {
+  return typeof account.phoneLastDigits === "string";
+}
+
+/**
+ * Las cuentas con las que se puede contrastar. Una mal cargada —sin nombre, o
+ * con un celular que no son tres dígitos— no cuenta como cuenta. Sin celular
+ * sí vale: es una pasarela, no un dato a medias.
+ */
+function usableAccounts(accounts: CollectionAccount[]): CollectionAccount[] {
+  return accounts.filter(
+    (a) => a.name.trim() && (!accountHasPhone(a) || /^\d{3}$/.test(a.phoneLastDigits)),
+  );
+}
+
+/** Cómo se nombra una cuenta en un aviso: «Grupo GF S.A.C. · ···309». */
+export function describeCollectionAccount(account: CollectionAccount): string {
+  return accountHasPhone(account)
+    ? `${account.name} · ···${account.phoneLastDigits}`
+    : `${account.name} · sin celular`;
 }
 
 export interface YapeRecipientVerification {
@@ -63,6 +92,16 @@ export interface YapeRecipientReading {
    * otro campo.
    */
   swapped: boolean;
+  /**
+   * El nombre que el lector dio como receptor y NO cuenta, porque es el de la
+   * clienta del pedido: casi siempre la nota que ella escribe en el Yape
+   * («sonia ludeña»). `name` queda en null y la cuenta se juzga por el celular.
+   * Ver `nameIsTheCustomers`.
+   *
+   * Se expone por la misma razón que `swapped`: descartar una lectura en
+   * silencio es justo lo que esta comprobación no puede hacer.
+   */
+  ignoredName: string | null;
 }
 
 function comparableRecipientName(value: string | null | undefined): string {
@@ -76,6 +115,45 @@ function comparableRecipientName(value: string | null | undefined): string {
 
 function words(value: string): string[] {
   return value.split(" ").filter(Boolean);
+}
+
+/**
+ * Separa el final del celular que algunas apps pegan al nombre del receptor.
+ *
+ * La app del BBVA, al pagar a un Yape desde «Envío a contactos», escribe el
+ * contacto como «Grupo gf s •5309»: el nombre recortado y, tras un punto, los
+ * últimos cuatro dígitos del celular. Leído como nombre, «5309» es una palabra
+ * que no pertenece a Grupo GF S.A.C. y el cobro salía acusado de ir a otra
+ * cuenta —#KP137040 y otros dos cobros del courier—. Plin hace lo mismo con el
+ * número entero: «Grupo Gf S · 930 555 309 - Yape».
+ *
+ * Esos dígitos no se tiran: son el CELULAR, la señal tajante. Se devuelven
+ * aparte para que se juzguen como celular.
+ *
+ * PERO NO TODO NÚMERO PEGADO AL NOMBRE ES EL CELULAR. La app del BCP pone bajo
+ * el destinatario la CUENTA enmascarada: «Grupo Gf S. **** 0012» (#AUR177129).
+ * Ese 0012 no es el ···309 de la empresa, y tomarlo por celular acusaría de
+ * desvío un cobro bueno. Por eso se distingue por el separador:
+ *
+ *   · UN solo punto (•, ·, ∙) → celular: «•5309» del BBVA, «· 930 555 309» de
+ *     Plin.
+ *   · Una máscara —asteriscos, o varios puntos seguidos— → número enmascarado
+ *     que puede ser una cuenta. Se aparta del nombre, pero NO se da por celular:
+ *     no se sabe qué es, y un dato que no se sabe no puede desmentir la cuenta.
+ *
+ * Un nombre que simplemente termina en números, sin separador, no se toca.
+ */
+export function splitRecipientPhoneSuffix(raw: string | null | undefined): {
+  name: string | null;
+  phoneDigits: string | null;
+} {
+  const value = raw?.trim() ?? "";
+  if (!value) return { name: null, phoneDigits: null };
+  const m = /^(.*?\S)\s*([•·∙*]+)\s*((?:\d\s*){3,}?)\s*(?:-\s*(?:yape|plin)\s*)?$/i.exec(value);
+  if (!m) return { name: value, phoneDigits: null };
+  const separator = m[2]!;
+  const isPhone = separator.length === 1 && separator !== "*";
+  return { name: m[1]!.trim(), phoneDigits: isPhone ? m[3]!.replace(/\s/g, "") : null };
 }
 
 /**
@@ -189,17 +267,24 @@ function verifyAgainst(
 
   const nameMatches = hasName && best.complete;
   const nameCutShort = hasName && !nameMatches && nameIsCutShort(best);
-  const phoneMatches = hasPhone && phone.endsWith(account.phoneLastDigits);
+  const phoneMatches =
+    accountHasPhone(account) && hasPhone && phone.endsWith(account.phoneLastDigits);
 
   // Solo DESMIENTE lo que contradice. Una lectura incompleta no es una
   // contradicción, y el celular sigue siendo tajante: leído y sin terminar en
-  // los dígitos de la cuenta, es otra cuenta, sin matices.
+  // los dígitos de la cuenta, es otra cuenta, sin matices. Contra una cuenta
+  // SIN celular —la pasarela— cualquier celular leído es otra cuenta: su
+  // comprobante no enseña ninguno.
   const nameContradicts = hasName && !nameMatches && !nameCutShort;
   const phoneContradicts = hasPhone && !phoneMatches;
 
+  // Una pasarela no tiene segunda señal que esperar: su nombre entero es todo lo
+  // que su comprobante puede decir de la cuenta, y con él queda verificada.
+  const phoneSettled = phoneMatches || !accountHasPhone(account);
+
   let status: YapeRecipientCheck = "missing";
   if (nameContradicts || phoneContradicts) status = "mismatch";
-  else if (nameMatches && phoneMatches) status = "verified";
+  else if (nameMatches && phoneSettled) status = "verified";
   else if (nameMatches || phoneMatches || nameCutShort) status = "partial";
 
   return {
@@ -240,7 +325,7 @@ export function verifyYapeRecipient(
   const hasName = Boolean(name);
   const hasPhone = phone.length >= 3;
 
-  const usable = accounts.filter((a) => a.name.trim() && /^\d{3}$/.test(a.phoneLastDigits));
+  const usable = usableAccounts(accounts);
   if (!usable.length) {
     return {
       status: hasName || hasPhone ? "partial" : "missing",
@@ -303,31 +388,66 @@ export function readingLooksSwapped(
 }
 
 /**
- * Lee la auditoría JSON guardada con cada comprobante sin confiar en su estado.
+ * ¿El nombre leído como receptor es el de la CLIENTA del pedido?
  *
- * El `recipient_check` que hay dentro del jsonb se escribió el día de la carga,
- * con las cuentas y las reglas de ese día. Aquí se RECALCULA: es la única forma
- * de que arreglar la regla arregle también lo ya cargado.
+ * Yape deja que quien paga escriba un mensaje, y la captura lo pinta justo
+ * debajo del receptor. Muchas clientas escriben ahí su propio nombre para que
+ * sepamos de quién es el pago, y el lector lo copia como destinatario:
+ * #AUR177541 salió «sonia ludeña» —la clienta es SONIA IBETH LUDEÑA QUISPE—
+ * con el celular ···309 de la empresa, y quedó acusado de desvío. #AUR177034,
+ * el que se había dado por «nombre ajeno con nuestro celular», era lo mismo:
+ * «Rosa campos Mendoza» es ROSA LUZ CAMPOS MENDOZA, la clienta.
+ *
+ * Aquí el orden de las palabras NO importa, y es a propósito. La comparación
+ * con las cuentas lo exige porque de ella sale «el dinero es nuestro»; esta
+ * solo reconoce a la clienta, y la gente escribe su nombre como le sale
+ * («Ludeña Sonia»). Se piden dos palabras, todas del nombre de la clienta: un
+ * nombre de pila suelto no distingue a nadie.
  */
-export function yapeRecipientReadingFromVision(
-  vision: unknown,
+export function nameIsTheCustomers(
+  readName: string | null | undefined,
+  customerName: string | null | undefined,
+): boolean {
+  const read = words(comparableRecipientName(readName));
+  const pool = words(comparableRecipientName(customerName));
+  if (read.length < 2 || pool.length < 2) return false;
+  for (const word of read) {
+    const at = pool.indexOf(word);
+    if (at < 0) return false;
+    pool.splice(at, 1);
+  }
+  return true;
+}
+
+/** Lo que el lector dijo de las dos puntas del pago. */
+export interface YapeRecipientRawReading {
+  recipientName: string | null | undefined;
+  recipientPhoneLastDigits: string | null | undefined;
+  payerName: string | null | undefined;
+}
+
+/**
+ * Juzga la cuenta receptora a partir de lo que el lector dijo, con las dos
+ * correcciones aplicadas y DICHAS: la lectura invertida (`swapped`) y el nombre
+ * de la clienta tomado por receptor (`ignoredName`).
+ *
+ * Es la única definición: la usan la carga (`voucherReading`) y cada pantalla
+ * que relee la auditoría (`yapeRecipientReadingFromVision`). Dos copias de esta
+ * regla acabarían discrepando sobre si el dinero se desvió.
+ */
+export function yapeRecipientReading(
+  read: YapeRecipientRawReading,
   accounts: CollectionAccount[],
+  customerName?: string | null,
 ): YapeRecipientReading {
-  const root = vision && typeof vision === "object" ? vision as Record<string, unknown> : {};
-  const extracted = root.extracted && typeof root.extracted === "object"
-    ? root.extracted as Record<string, unknown>
-    : {};
-  const name = typeof extracted.recipient_name === "string"
-    ? extracted.recipient_name.trim() || null
-    : null;
-  const rawPhone = typeof extracted.recipient_phone_last_digits === "string"
-    ? extracted.recipient_phone_last_digits
-    : null;
-  const digits = (rawPhone ?? "").replace(/\D/g, "");
+  // «Grupo gf s •5309» (BBVA): el final del celular viene pegado al nombre. Se
+  // separa y es EL celular: sale del mismo bloque que el receptor, así que manda
+  // sobre uno leído aparte, que pudo salir de otra parte de la pantalla.
+  const split = splitRecipientPhoneSuffix(read.recipientName);
+  const name = split.name;
+  const digits = (split.phoneDigits || read.recipientPhoneLastDigits || "").replace(/\D/g, "");
   const phoneLastDigits = digits.length >= 3 ? digits.slice(-3) : null;
-  const payerName = typeof extracted.payer_name === "string"
-    ? extracted.payer_name.trim() || null
-    : null;
+  const payerName = read.payerName?.trim() || null;
 
   // La corrección va AQUÍ, donde todo se recalcula, y no en la carga: así los
   // comprobantes ya guardados con la lectura invertida se arreglan solos, sin
@@ -335,14 +455,66 @@ export function yapeRecipientReadingFromVision(
   const swapped = readingLooksSwapped(payerName, phoneLastDigits, accounts);
   const effectiveName = swapped ? payerName : name;
 
-  const verification = verifyYapeRecipient(effectiveName, phoneLastDigits, accounts);
+  let verification = verifyYapeRecipient(effectiveName, phoneLastDigits, accounts);
+
+  // EL NOMBRE DE LA CLIENTA NO ES EL RECEPTOR. Si el celular receptor es de una
+  // cuenta nuestra y el nombre leído es el de la clienta, ese nombre salió de
+  // otro sitio —la nota del Yape, o el pagador—: nadie es las dos puntas del
+  // mismo pago. Se descarta y la cuenta se juzga por el celular, que la deja en
+  // `partial` —contraste manual—, nunca en `verified`.
+  //
+  // Exige LAS DOS PUNTAS, como la inversión. Sin el celular nuestro, el nombre
+  // de la clienta como receptor es justo la forma de un pago que ella se hizo a
+  // sí misma, y eso sí tiene que seguir saltando.
+  let ignoredName: string | null = null;
+  if (
+    verification.status === "mismatch" &&
+    nameIsTheCustomers(effectiveName, customerName) &&
+    verifyYapeRecipient(null, phoneLastDigits, accounts).phoneMatches
+  ) {
+    ignoredName = effectiveName;
+    verification = verifyYapeRecipient(null, phoneLastDigits, accounts);
+  }
+
   return {
-    name: effectiveName,
+    name: ignoredName ? null : effectiveName,
     phoneLastDigits,
     status: verification.status,
     account: verification.account,
     swapped,
+    ignoredName,
   };
+}
+
+/**
+ * Lee la auditoría JSON guardada con cada comprobante sin confiar en su estado.
+ *
+ * El `recipient_check` que hay dentro del jsonb se escribió el día de la carga,
+ * con las cuentas y las reglas de ese día. Aquí se RECALCULA: es la única forma
+ * de que arreglar la regla arregle también lo ya cargado.
+ *
+ * `customerName` es el nombre de la clienta del pedido. Sin él la regla sigue
+ * en pie, solo que no puede reconocer su nombre en la nota del Yape.
+ */
+export function yapeRecipientReadingFromVision(
+  vision: unknown,
+  accounts: CollectionAccount[],
+  customerName?: string | null,
+): YapeRecipientReading {
+  const root = vision && typeof vision === "object" ? vision as Record<string, unknown> : {};
+  const extracted = root.extracted && typeof root.extracted === "object"
+    ? root.extracted as Record<string, unknown>
+    : {};
+  const text = (value: unknown) => (typeof value === "string" ? value : null);
+  return yapeRecipientReading(
+    {
+      recipientName: text(extracted.recipient_name),
+      recipientPhoneLastDigits: text(extracted.recipient_phone_last_digits),
+      payerName: text(extracted.payer_name),
+    },
+    accounts,
+    customerName,
+  );
 }
 
 /**
@@ -357,9 +529,11 @@ export function yapeRecipientReadingFromVision(
  *
  * Distinguirlo importa porque las dos formas de fallar son casos distintos:
  *
- *   · Celular nuestro y nombre que no encaja → casi siempre lectura mala, pero
- *     también es la forma que tendría un comprobante ajeno con nuestro número
- *     delante (#AUR177034: «Rosa campos Mendoza» con ···309). Hay que mirar.
+ *   · Celular nuestro y nombre que no encaja → casi siempre lectura mala —una
+ *     palabra mal leída, o el mensaje que escribió quien pagó—, pero también es
+ *     la forma que tendría un comprobante ajeno con nuestro número delante. Hay
+ *     que mirar. (Cuando ese nombre es el de la clienta ya no llega aquí: ver
+ *     `nameIsTheCustomers`.)
  *   · Celular que no es de ninguna cuenta → eso sí es tajante.
  *
  * Devuelve null cuando no hay nada que desmentir.
@@ -370,12 +544,12 @@ export function motivoDelDesencuentro(
 ): string | null {
   if (reading.status !== "mismatch") return null;
 
-  const usable = accounts.filter((a) => a.name.trim() && /^\d{3}$/.test(a.phoneLastDigits));
+  const usable = usableAccounts(accounts);
   const lista = usable.length
-    ? usable.map((a) => `${a.name} · ···${a.phoneLastDigits}`).join(" / ")
+    ? usable.map(describeCollectionAccount).join(" / ")
     : "ninguna cuenta de cobro configurada";
 
-  const celularNuestro = usable.find(
+  const celularNuestro = usable.filter(accountHasPhone).find(
     (a) => reading.phoneLastDigits && reading.phoneLastDigits.endsWith(a.phoneLastDigits),
   );
 
@@ -383,8 +557,9 @@ export function motivoDelDesencuentro(
     return (
       `El celular receptor ···${celularNuestro.phoneLastDigits} SÍ es el de ${celularNuestro.name}, ` +
       `pero el nombre leído —«${reading.name ?? "sin nombre"}»— no encaja con esa cuenta. ` +
-      "Abre el comprobante: si el nombre en la imagen es el de la cuenta, fue una lectura mala del " +
-      "lector; si es el de otra persona, el comprobante no es nuestro."
+      "Abre el comprobante: si el nombre en la imagen es el de la cuenta, o es el mensaje que " +
+      "escribió quien pagó, fue una lectura mala del lector; si es el de otra persona, el " +
+      "comprobante no es nuestro."
     );
   }
 
