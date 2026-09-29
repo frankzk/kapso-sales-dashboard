@@ -16846,7 +16846,7 @@ comment on function public.order_master_search(uuid[], text) is
 -- desconocido en vez de inventarle «Lima (provincia)».
 --
 -- Nombres sin tilde, como el resto del catálogo («Junin», «San Martin»).
--- Idempotente: cada UPDATE fija un valor y el DELETE es por clave.
+-- Idempotente: cada UPDATE fija un valor y el borrado va guardado.
 
 update peru_districts pd
 set department = v.department,
@@ -16909,4 +16909,12 @@ where pd.district_key = v.district_key
   and (pd.department is distinct from v.department
        or (v.province is not null and pd.province is distinct from v.province));
 
-delete from peru_districts where district_key = 'shalom';
+-- Guarda (test/migrations-safe-to-rerun.test.ts): solo la fila exacta que
+-- aprendió el formulario; si alguien la corrigió a mano, no se toca.
+do $$
+begin
+  delete from peru_districts
+  where district_key = 'shalom'
+    and source = 'manual'
+    and department = 'Lima (provincia)';
+end $$;
