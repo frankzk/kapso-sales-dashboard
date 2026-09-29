@@ -25,7 +25,7 @@ import { lookupDispatchShipment } from "@/app/dashboard/pedidos/despacho/actions
 import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 import { custodyOnAssign, isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
-import type { BlockedReason } from "@/lib/dispatch-day";
+import { programDayLabel, programNeedsConfirm, type BlockedReason } from "@/lib/dispatch-day";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
 import { getRouteDetail, type RouteRow, type StopWithOrder } from "@/lib/routes-access";
@@ -95,19 +95,19 @@ export interface CourierAvailableOrder {
   tariffId: string;
   tariffAmount: number;
   scheduledFor: string;
+  /** Salió a reparto al menos una vez (`gf_order_departures`, 0199). */
   hasPriorDispatch: boolean;
+  /** La última salida a reparto, si hubo. */
   lastDispatchedAt: string | null;
+  /** Fecha de salida programada sin tomar el pedido (0199); null si no hay. */
+  programmedFor: string | null;
+  programReason: string | null;
   /** Macroetapa y subetapa del MOM en el Master, para los chips de «Desde la lista». */
   macroStage: string | null;
   macroSubstage: string | null;
 }
 
-export interface CourierAcceptedOrder extends Omit<
-  CourierAvailableOrder,
-  "hasPriorDispatch" | "lastDispatchedAt"
-> {
-  /** Tuvo una salida física previa (se conoce solo si el pedido sigue en la cola de Lima). */
-  hasPriorDispatch?: boolean;
+export interface CourierAcceptedOrder extends CourierAvailableOrder {
   requestId: string;
   requestStatus: string;
   shipmentId: string | null;
@@ -330,6 +330,102 @@ function canonicalDistrictKey(value: string | null): string | null {
   return key;
 }
 
+type Admin = ReturnType<typeof createAdminSupabase>;
+
+/**
+ * Última salida a reparto por pedido (`gf_order_departures`, 0199). Si la
+ * lectura falla nadie «salió»: la cola se ve entera en «Nunca salieron», que
+ * es el lado prudente —se atiende antes, no se esconde—.
+ */
+async function loadDepartures(admin: Admin, orderIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!orderIds.length) return out;
+  const { data, error } = await admin.rpc("gf_order_departures", { p_order_ids: orderIds });
+  if (error) {
+    console.error("gf_order_departures", error.message);
+    return out;
+  }
+  for (const row of (data ?? []) as Array<{ order_id: string; last_departure_at: string }>) {
+    out.set(row.order_id, row.last_departure_at);
+  }
+  return out;
+}
+
+interface DispatchProgram {
+  order_id: string;
+  store_id: string;
+  scheduled_for: string;
+  reason: string;
+}
+
+/** Programaciones de salida sin tomar (0199), por pedido. Una lectura que falla no tumba la pantalla. */
+async function loadPrograms(admin: Admin, filter: { storeIds?: string[]; orderIds?: string[] }): Promise<Map<string, DispatchProgram>> {
+  const out = new Map<string, DispatchProgram>();
+  const ids = filter.orderIds ?? filter.storeIds ?? [];
+  if (!ids.length) return out;
+  try {
+    const { data } = await courierRowsByIds(ids, (batch) => admin
+      .from("gf_dispatch_programs")
+      .select("order_id,store_id,scheduled_for,reason")
+      .in(filter.orderIds ? "order_id" : "store_id", batch));
+    for (const row of data as DispatchProgram[]) out.set(row.order_id, row);
+  } catch (error) {
+    console.error("gf_dispatch_programs", error instanceof Error ? error.message : error);
+  }
+  return out;
+}
+
+/**
+ * Los pedidos programados para otro día que no está confirmado sacar en la
+ * caja de `boxDay` (§29.6): se devuelven con su fecha para decirlo.
+ */
+async function programConflicts(admin: Admin, orderIds: string[], boxDay: string): Promise<Map<string, DispatchProgram>> {
+  const today = limaClock().day;
+  const programs = await loadPrograms(admin, { orderIds });
+  return new Map([...programs].filter(([, program]) => programNeedsConfirm(program.scheduled_for, boxDay, today)));
+}
+
+function programConflictMessage(program: DispatchProgram, boxDay: string): string {
+  const today = limaClock().day;
+  const target = boxDay === today ? "hoy" : `el ${programDayLabel(boxDay)}`;
+  return `Programado para el ${programDayLabel(program.scheduled_for)} («${program.reason}»): confirma para que salga ${target}.`;
+}
+
+/**
+ * La programación se cumplió: el pedido entró en una caja. Si fue la de otro
+ * día, queda dicho quién lo confirmó y cuándo iba a salir.
+ */
+async function settlePrograms(admin: Admin, actor: string, entries: Array<{ orderId: string; storeId: string; shipmentId: string | null; routeDate: string; riderName: string }>): Promise<void> {
+  if (!entries.length) return;
+  const programs = await loadPrograms(admin, { orderIds: entries.map((entry) => entry.orderId) });
+  if (!programs.size) return;
+  const now = new Date().toISOString();
+  const overridden = entries.filter((entry) => {
+    const program = programs.get(entry.orderId);
+    return program && program.scheduled_for !== entry.routeDate;
+  });
+  await Promise.all([
+    admin.from("gf_dispatch_programs").delete().in("order_id", [...programs.keys()]),
+    overridden.length
+      ? admin.from("order_events").insert(overridden.map((entry) => {
+          const program = programs.get(entry.orderId)!;
+          return {
+            store_id: entry.storeId,
+            order_id: entry.orderId,
+            kind: "dispatch_program_overridden",
+            occurred_at: now,
+            actor,
+            source: "grupo_gf_courier",
+            courier: "propio",
+            shipment_id: entry.shipmentId,
+            note: `Estaba programado para el ${programDayLabel(program.scheduled_for)} («${program.reason}»); entró en la caja de ${entry.riderName} del ${programDayLabel(entry.routeDate)}.`,
+            payload: { programmedFor: program.scheduled_for, routeDate: entry.routeDate, reason: program.reason },
+          };
+        }))
+      : Promise.resolve(),
+  ]);
+}
+
 async function loadCourierOperations(
   admin: ReturnType<typeof createAdminSupabase>,
   config: OperationsConfig,
@@ -389,15 +485,17 @@ async function loadCourierOperations(
         )
         .in("order_id", ids));
   const shipmentsByOrder = new Map<string, AdmissionShipmentRow[]>();
-  const lastDispatchByOrder = new Map<string, string>();
   for (const row of (admissionShipmentRows ?? []) as AdmissionShipmentRow[]) {
     if (!row.order_id) continue;
     shipmentsByOrder.set(row.order_id, [...(shipmentsByOrder.get(row.order_id) ?? []), row]);
-    if (row.dispatched_at) {
-      const current = lastDispatchByOrder.get(row.order_id);
-      if (!current || row.dispatched_at > current) lastDispatchByOrder.set(row.order_id, row.dispatched_at);
-    }
   }
+  // «Nunca salieron» frente a «Ya salieron», y lo programado sin tomar (0199):
+  // para la cola y para lo tomado, en una llamada cada uno.
+  const requestOrderIdsAll = ((requestRows ?? []) as { order_id: string }[]).map((request) => request.order_id);
+  const [lastDispatchByOrder, programByOrder] = await Promise.all([
+    loadDepartures(admin, [...new Set([...queueOrderIds, ...requestOrderIdsAll])]),
+    loadPrograms(admin, { storeIds }),
+  ]);
 
   const storeName = new Map(
     ((stores ?? []) as { id: string; name: string }[]).map((store) => [store.id, store.name]),
@@ -457,6 +555,7 @@ async function loadCourierOperations(
       block(order, tariff.kind === "missing" ? "tarifa_faltante" : "servicio_pausado");
       continue;
     }
+    const program = programByOrder.get(order.order_id) ?? null;
     available.push({
       orderId: order.order_id,
       storeId: order.store_id,
@@ -471,9 +570,12 @@ async function loadCourierOperations(
       districtKey,
       tariffId: tariff.tariff.id,
       tariffAmount: tariff.tariff.delivery_amount,
-      scheduledFor: scheduledDay(config.provider.same_day_cutoff),
+      // Programado: sale ese día. Si no, hoy o mañana según el corte de las 11:30.
+      scheduledFor: program?.scheduled_for ?? scheduledDay(config.provider.same_day_cutoff),
       hasPriorDispatch: lastDispatchByOrder.has(order.order_id),
       lastDispatchedAt: lastDispatchByOrder.get(order.order_id) ?? null,
+      programmedFor: program?.scheduled_for ?? null,
+      programReason: program?.reason ?? null,
       macroStage: order.macro_stage ?? null,
       macroSubstage: order.macro_substage ?? null,
     });
@@ -569,6 +671,8 @@ async function loadCourierOperations(
       : null;
     const manifestId = manifestItem?.manifest_id ?? null;
     const manifest = manifestId ? manifestById.get(manifestId) ?? null : null;
+    // En una caja la programación ya se cumplió (se borra al asignar).
+    const program = manifest ? null : programByOrder.get(request.order_id) ?? null;
     return [{
       orderId: request.order_id,
       storeId: request.store_id,
@@ -583,7 +687,7 @@ async function loadCourierOperations(
       districtKey: request.district_key,
       tariffId: request.tariff_id,
       tariffAmount: Number(request.tariff_amount),
-      scheduledFor: request.scheduled_for,
+      scheduledFor: program?.scheduled_for ?? request.scheduled_for,
       requestId: request.id,
       requestStatus: request.status,
       shipmentId: request.shipment_id,
@@ -592,6 +696,9 @@ async function loadCourierOperations(
       acceptedAt: request.accepted_at,
       observation: request.observation,
       hasPriorDispatch: lastDispatchByOrder.has(request.order_id),
+      lastDispatchedAt: lastDispatchByOrder.get(request.order_id) ?? null,
+      programmedFor: program?.scheduled_for ?? null,
+      programReason: program?.reason ?? null,
       macroStage: order.macro_stage ?? null,
       macroSubstage: order.macro_substage ?? null,
       route: manifest
@@ -1113,14 +1220,6 @@ export interface AssignCourierRouteResult extends CourierActionResult {
 }
 
 /**
- * Reprogramar la salida (22-09-2026): cambia la fecha pactada de salida de
- * los pedidos marcados en «Desde la lista». Un pedido ya tomado mueve su
- * solicitud (`logistics_requests.scheduled_for`) y deja
- * `logistics_request_rescheduled`; uno todavía disponible se toma con esa
- * fecha. Uno que ya está en la caja de un motorizado no se toca: primero se
- * quita de la caja. La fecha no puede ser anterior a hoy.
- */
-/**
  * «Recibir en oficina» (0188, MOM §29.13): el paquete que el motorizado
  * reportó «No entregado» sale de su caja con rastro, la custodia vuelve a la
  * empresa y la solicitud a «por asignar». El pedido queda en «Por reprogramar
@@ -1227,21 +1326,44 @@ export async function saveRiderDistrictPay(orgId: string, input: { riderId: stri
   return { notice: `Pago de ${rider.full_name as string} guardado: S/ ${value.toFixed(2)} desde el ${input.from}.` };
 }
 
+/** Los pedidos de la org entre los marcados, con su tienda: nada de programar pedidos ajenos. */
+async function ordersOfOrg(admin: Admin, orgId: string, orderIds: string[]): Promise<Map<string, string>> {
+  const { data: stores } = await admin.from("stores").select("id").eq("org_id", orgId);
+  const storeIds = new Set(((stores ?? []) as { id: string }[]).map((store) => store.id));
+  const { data: orders } = await courierRowsByIds(orderIds, (ids) => admin.from("orders").select("id,store_id").in("id", ids));
+  return new Map((orders as Array<{ id: string; store_id: string }>)
+    .filter((order) => storeIds.has(order.store_id))
+    .map((order) => [order.id, order.store_id]));
+}
+
+/**
+ * Programar la salida (29-09-2026, MOM §29.6 y §29.13): guarda la fecha en
+ * que debe salir cada pedido marcado en «Desde la lista», con actor y motivo,
+ * SIN tomarlo. Ese día aparece en «Programados hoy». Uno ya tomado mueve
+ * también su fecha prevista (`logistics_requests.scheduled_for`) para que las
+ * dos digan lo mismo. Uno que ya está en la caja de un motorizado no se toca:
+ * primero se quita de la caja. La fecha no puede ser anterior a hoy.
+ */
 export async function rescheduleGroupGfCourierOrders(
   orgId: string,
   orderIds: string[],
   day: string,
+  rawReason = "",
 ): Promise<CourierActionResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return auth;
+  if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   if (!DATE_RE.test(day)) return { error: "Elige una fecha válida." };
   const today = limaClock().day;
-  if (day < today) return { error: "La nueva fecha no puede ser anterior a hoy." };
+  if (day < today) return { error: "La fecha no puede ser anterior a hoy." };
+  const reason = rawReason.trim().replace(/\s+/g, " ").slice(0, 200);
+  if (reason.length < 3) return { error: "Escribe el motivo: queda en el historial del pedido." };
   const ids = [...new Set(orderIds.filter(Boolean))];
   if (!ids.length) return { error: "Marca al menos un pedido." };
   const admin = createAdminSupabase();
   const { data: provider } = await admin.from("logistics_providers").select("id").eq("org_id", orgId).eq("code", "grupo-gf-courier").maybeSingle();
   if (!provider) return { error: "Grupo GF Courier no está activado." };
+  const storeByOrder = await ordersOfOrg(admin, orgId, ids);
   const { data: requestRows, error: readError } = await admin
     .from("logistics_requests")
     .select("id,order_id,store_id,shipment_id,status,scheduled_for")
@@ -1251,71 +1373,115 @@ export async function rescheduleGroupGfCourierOrders(
   if (readError) return { error: readError.message };
   const requests = (requestRows ?? []) as Array<{ id: string; order_id: string; store_id: string; shipment_id: string | null; status: string; scheduled_for: string }>;
   const byOrder = new Map(requests.map((r) => [r.order_id, r]));
-  const label = new Intl.DateTimeFormat("es-PE", { weekday: "long", day: "2-digit", month: "2-digit", timeZone: "UTC" }).format(new Date(`${day}T12:00:00Z`));
-  let moved = 0;
+  // En caja es tener un paquete activo en una caja, no el estado de la
+  // solicitud: una retirada de la caja puede seguir «scheduled».
+  const shipmentIds = requests.map((r) => r.shipment_id).filter((id): id is string => Boolean(id));
+  const { data: boxed } = shipmentIds.length
+    ? await admin.from("dispatch_manifest_items").select("shipment_id").in("shipment_id", shipmentIds).is("removed_at", null)
+    : { data: [] };
+  const inBoxShipments = new Set(((boxed ?? []) as { shipment_id: string }[]).map((row) => row.shipment_id));
+  const previous = await loadPrograms(admin, { orderIds: ids });
+  const label = programDayLabel(day);
+  const now = new Date().toISOString();
   const inBox: string[] = [];
   const errors: string[] = [];
-  const changed: string[] = [];
+  const programmed: string[] = [];
   for (const orderId of ids) {
+    const storeId = storeByOrder.get(orderId);
+    if (!storeId) { errors.push("Un pedido no es de esta organización."); continue; }
     const request = byOrder.get(orderId);
-    if (!request) continue;
-    if (request.status === "scheduled") { inBox.push(orderId); continue; }
-    if (request.scheduled_for === day) { moved += 1; continue; }
-    const { error } = await admin.from("logistics_requests").update({ scheduled_for: day }).eq("id", request.id);
+    if (request?.shipment_id && inBoxShipments.has(request.shipment_id)) { inBox.push(orderId); continue; }
+    const { error } = await admin.from("gf_dispatch_programs").upsert({
+      order_id: orderId,
+      store_id: storeId,
+      scheduled_for: day,
+      reason,
+      set_by: auth.userId,
+      set_at: now,
+    }, { onConflict: "order_id" });
     if (error) { errors.push(error.message); continue; }
+    if (request && request.scheduled_for !== day) {
+      const { error: moveError } = await admin.from("logistics_requests").update({ scheduled_for: day }).eq("id", request.id);
+      if (moveError) errors.push(moveError.message);
+    }
+    const from = previous.get(orderId)?.scheduled_for ?? null;
     await admin.from("order_events").insert({
-      store_id: request.store_id,
-      order_id: request.order_id,
-      kind: "logistics_request_rescheduled",
-      occurred_at: new Date().toISOString(),
+      store_id: storeId,
+      order_id: orderId,
+      kind: "dispatch_programmed",
+      occurred_at: now,
       actor: auth.userId,
       source: "grupo_gf_courier",
       courier: "propio",
-      shipment_id: request.shipment_id,
-      note: `Salida reprogramada del ${request.scheduled_for} al ${day} (${label}).`,
-      payload: { requestId: request.id, from: request.scheduled_for, to: day, manual: true },
+      shipment_id: request?.shipment_id ?? null,
+      note: `Salida programada para el ${label}${from && from !== day ? ` (antes el ${programDayLabel(from)})` : ""}: ${reason}.`,
+      payload: { from, to: day, reason, requestId: request?.id ?? null },
     });
-    moved += 1;
-    changed.push(orderId);
+    programmed.push(orderId);
   }
-  // Los disponibles se toman ya con esa fecha.
-  const free = ids.filter((id) => !byOrder.has(id));
-  let taken = 0;
-  if (free.length) {
-    const res = await takeOrdersCore(auth, orgId, free, { scheduledFor: day }, IMMEDIATE_EFFECTS);
-    taken = res.accepted.length;
-    for (const f of res.failed) errors.push(f.error);
-    if (res.error && !res.accepted.length) errors.push(res.error);
-    // Si la fecha era hoy o mañana antes del corte, el corte manda.
-    const { data: after } = await admin.from("logistics_requests").select("order_id,scheduled_for").eq("provider_id", provider.id).in("order_id", res.accepted.map((a) => a.orderId)).neq("status", "cancelled");
-    const early = ((after ?? []) as { scheduled_for: string }[]).filter((r) => r.scheduled_for !== day).length;
-    if (early) errors.push(`${early} ${early === 1 ? "pedido salió" : "pedidos salieron"} para el primer día posible según el corte de las 11:30.`);
-  }
-  if (changed.length) await recomputeOrderMasterSafe(admin, changed);
   revalidatePath(COURIER_PATH);
   const parts: string[] = [];
-  if (moved + taken) parts.push(`${moved + taken} ${moved + taken === 1 ? "pedido reprogramado" : "pedidos reprogramados"} para el ${label}.`);
-  if (inBox.length) parts.push(`${inBox.length} ya ${inBox.length === 1 ? "está" : "están"} en la caja de un motorizado: quítalos de la caja para reprogramarlos.`);
-  if (!moved && !taken) return { error: [...parts, ...errors].join(" ") || "No se reprogramó ningún pedido." };
-  return errors.length ? { error: [...parts, ...errors].join(" ") } : { notice: parts.join(" ") };
+  if (programmed.length) {
+    parts.push(`${programmed.length} ${programmed.length === 1 ? "pedido programado" : "pedidos programados"} para el ${label}. ${day === today ? "Están en «Programados hoy»." : "Ese día aparecen en «Programados hoy»."}`);
+  }
+  if (inBox.length) parts.push(`${inBox.length} ya ${inBox.length === 1 ? "está" : "están"} en la caja de un motorizado: quítalos de la caja para programarlos.`);
+  const unique = [...new Set(errors)];
+  if (!programmed.length) return { error: [...parts, ...unique].join(" ") || "No se programó ningún pedido." };
+  return unique.length || inBox.length ? { error: [...parts, ...unique].join(" ") } : { notice: parts.join(" ") };
 }
 
-export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[], opts: { overrideCash?: boolean; scheduledFor?: string | null; day?: string | null } = {}): Promise<CourierActionResult> {
+/** «Quitar la fecha»: el pedido vuelve a su apartado de siempre. Queda en el historial. */
+export async function clearGroupGfCourierPrograms(orgId: string, orderIds: string[]): Promise<CourierActionResult> {
+  const auth = await requireManager(orgId);
+  if ("error" in auth) return auth;
+  if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
+  const ids = [...new Set(orderIds.filter(Boolean))];
+  if (!ids.length) return { error: "Marca al menos un pedido." };
+  const admin = createAdminSupabase();
+  const storeByOrder = await ordersOfOrg(admin, orgId, ids);
+  const programs = [...(await loadPrograms(admin, { orderIds: [...storeByOrder.keys()] })).values()];
+  if (!programs.length) return { error: "Ninguno de esos pedidos tiene fecha programada." };
+  const { error } = await admin.from("gf_dispatch_programs").delete().in("order_id", programs.map((p) => p.order_id));
+  if (error) return { error: error.message };
+  const now = new Date().toISOString();
+  await admin.from("order_events").insert(programs.map((program) => ({
+    store_id: program.store_id,
+    order_id: program.order_id,
+    kind: "dispatch_program_cleared",
+    occurred_at: now,
+    actor: auth.userId,
+    source: "grupo_gf_courier",
+    courier: "propio",
+    note: `Se quitó la salida programada para el ${programDayLabel(program.scheduled_for)} («${program.reason}»).`,
+    payload: { from: program.scheduled_for, reason: program.reason },
+  })));
+  revalidatePath(COURIER_PATH);
+  return { notice: `${programs.length} ${programs.length === 1 ? "pedido vuelve" : "pedidos vuelven"} a la cola sin fecha programada.` };
+}
+
+export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[], opts: { overrideCash?: boolean; scheduledFor?: string | null; day?: string | null; confirmProgrammed?: boolean } = {}): Promise<CourierActionResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   const admin = createAdminSupabase();
   const { data: rider } = await admin.from("riders").select("id,courier").eq("id", riderId).eq("org_id", orgId).eq("active", true).maybeSingle();
   if (!rider || !isGroupGfRiderCourier(rider.courier)) return { error: "Elige un motorizado activo de Grupo GF." };
-  const taken = await takeGroupGfCourierOrders(orgId, orderIds, { scheduledFor: opts.scheduledFor ?? null, dispatchDay: opts.day ?? null });
+  // Programado para otro día: ni se toma sin confirmar (§29.6). Se mira antes
+  // de tomar, para no dejar tomado lo que no se va a asignar.
+  const boxDay = opts.day && DATE_RE.test(opts.day) ? opts.day : limaClock().day;
+  const conflicts = opts.confirmProgrammed ? new Map<string, DispatchProgram>() : await programConflicts(admin, orderIds, boxDay);
+  const held = [...conflicts.values()].map((program) => programConflictMessage(program, boxDay));
+  const toTake = orderIds.filter((id) => !conflicts.has(id));
+  if (!toTake.length) return { error: held.join(" ") || "Selecciona al menos un pedido." };
+  const taken = await takeGroupGfCourierOrders(orgId, toTake, { scheduledFor: opts.scheduledFor ?? null, dispatchDay: opts.day ?? null });
   const acceptedIds = [...taken.accepted.map((item) => item.orderId), ...taken.alreadyAccepted];
-  if (!acceptedIds.length) return { error: taken.error ?? "No se pudieron tomar los pedidos." };
+  if (!acceptedIds.length) return { error: [taken.error ?? "No se pudieron tomar los pedidos.", ...held].join(" ") };
   const { data: requests, error } = await admin.from("logistics_requests")
     .select("id,logistics_providers!inner(org_id)").in("order_id", acceptedIds)
     .eq("logistics_providers.org_id", orgId).in("status", ["accepted", "scheduled"]);
   if (error) return { notice: taken.notice, error: "Se tomaron los pedidos, pero no se pudieron asignar. Continúa desde Pedidos tomados." };
-  const assigned = await assignGroupGfCourierRoute(orgId, riderId, (requests ?? []).map((request) => request.id), opts);
-  const details = [...taken.failed.map((item) => `${item.orderId}: ${item.error}`), ...assigned.failed.map((item) => item.error)];
+  const assigned = await assignGroupGfCourierRoute(orgId, riderId, (requests ?? []).map((request) => request.id), { ...opts, confirmProgrammed: true });
+  const details = [...taken.failed.map((item) => `${item.orderId}: ${item.error}`), ...assigned.failed.map((item) => item.error), ...held];
   return { notice: [taken.notice, assigned.notice, assigned.cashWarning, assigned.error, ...details].filter(Boolean).join(" ") };
 }
 
@@ -1332,7 +1498,7 @@ export async function assignGroupGfCourierRoute(
   orgId: string,
   riderId: string,
   requestIds: string[],
-  opts: { overrideCash?: boolean; day?: string | null } = {},
+  opts: { overrideCash?: boolean; day?: string | null; confirmProgrammed?: boolean } = {},
 ): Promise<AssignCourierRouteResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return { ...auth, assigned: 0, manifestIds: [], failed: [] };
@@ -1344,7 +1510,7 @@ async function assignRouteCore(
   orgId: string,
   riderId: string,
   requestIds: string[],
-  opts: { overrideCash?: boolean; day?: string | null },
+  opts: { overrideCash?: boolean; day?: string | null; confirmProgrammed?: boolean },
   fx: SideEffects,
 ): Promise<AssignCourierRouteResult> {
   if (!auth.canManageDispatch) {
@@ -1455,6 +1621,9 @@ async function assignRouteCore(
   // otro; sin él, la caja es hoy o la fecha prevista si es posterior.
   const explicitDay = opts.day && DATE_RE.test(opts.day) && opts.day >= today ? opts.day : null;
   const boxDay = explicitDay ?? today;
+  const programs = opts.confirmProgrammed
+    ? new Map<string, DispatchProgram>()
+    : await loadPrograms(admin, { orderIds: requests.map((request) => request.order_id) });
   const groups = new Map<string, AssignableRequest[]>();
   for (const request of requests) {
     if (!request.shipment_id) {
@@ -1488,6 +1657,12 @@ async function assignRouteCore(
     // está liquidada, y el escaneo moría con «La ruta diaria ya está
     // liquidada». La fecha se mueve al día de la caja y queda en el historial.
     const routeDate = explicitDay ?? (request.scheduled_for < boxDay ? boxDay : request.scheduled_for);
+    // Programado para otro día: se avisa y se pide confirmar (§29.6).
+    const program = programs.get(request.order_id);
+    if (program && programNeedsConfirm(program.scheduled_for, routeDate, today)) {
+      failed.push({ requestId: request.id, error: programConflictMessage(program, routeDate) });
+      continue;
+    }
     if (routeDate !== request.scheduled_for) {
       const { error: moveError } = await admin
         .from("logistics_requests")
@@ -1518,6 +1693,8 @@ async function assignRouteCore(
   const manifestIds: string[] = [];
   const changedOrderIds = new Set<string>();
   const cashWarnings: string[] = [];
+  /** Lo que entró en una caja: su programación, si tenía, ya se cumplió. */
+  const settled: Parameters<typeof settlePrograms>[2] = [];
   for (const [routeDate, group] of groups) {
     // Límites de efectivo de la ruta del día (MOM §29.9): lo que ya lleva el
     // motorizado ese día más lo que se le añade. Solo cuenta lo que se cobra
@@ -1617,6 +1794,7 @@ async function assignRouteCore(
         }),
       ]);
       changedOrderIds.add(request.order_id);
+      settled.push({ orderId: request.order_id, storeId: request.store_id, shipmentId, routeDate, riderName: rider.full_name });
       assigned += 1;
       insertedAny = true;
     }
@@ -1635,6 +1813,7 @@ async function assignRouteCore(
     }
   }
 
+  await settlePrograms(admin, auth.userId, settled);
   if (changedOrderIds.size) await fx.recompute([...changedOrderIds]);
   if (fx.revalidate) {
     revalidatePath(COURIER_PATH);
@@ -2200,6 +2379,8 @@ export type ScanAssignStatus =
   | "en_otra_caja"
   | "no_elegible"
   | "bloqueado_efectivo"
+  /** Programado para otro día (0199): se asigna solo si se confirma. */
+  | "programado_otro_dia"
   | "desconocido";
 
 export interface ScanAssignLine {
@@ -2214,6 +2395,8 @@ export interface ScanAssignLine {
   amount: number | null;
   message: string;
   cashWarning?: string | null;
+  /** Con `programado_otro_dia`: el día para el que estaba programado. */
+  programmedFor?: string | null;
 }
 
 /**
@@ -2228,7 +2411,7 @@ export async function scanAssignToRider(
   orgId: string,
   riderId: string,
   rawCode: string,
-  opts: { overrideCash?: boolean; scheduledFor?: string | null } = {},
+  opts: { overrideCash?: boolean; scheduledFor?: string | null; confirmProgrammed?: boolean } = {},
 ): Promise<ScanAssignLine> {
   const code = normalizeDispatchScan(rawCode).slice(0, 200);
   const base: ScanAssignLine = { code, status: "desconocido", orderId: null, orderName: null, shipmentId: null, manifestId: null, riderName: null, amount: null, message: "" };
@@ -2285,7 +2468,15 @@ export async function scanAssignToRider(
     }
   }
 
-  // 3) Tomar (idempotente) y asignar.
+  // 3) ¿Programado para otro día? Se avisa antes de tomar nada (§29.6); la
+  // línea ofrece «Asignar igual», que vuelve aquí con `confirmProgrammed`.
+  const boxDay = opts.scheduledFor && DATE_RE.test(opts.scheduledFor) ? opts.scheduledFor : limaClock().day;
+  if (!opts.confirmProgrammed) {
+    const conflict = (await programConflicts(admin, [orderId], boxDay)).get(orderId);
+    if (conflict) return { ...line, status: "programado_otro_dia", programmedFor: conflict.scheduled_for, message: programConflictMessage(conflict, boxDay) };
+  }
+
+  // 4) Tomar (idempotente) y asignar.
   // Un solo control de permisos (arriba) y efectos diferidos: ver `SideEffects`.
   const fx = deferredEffects();
   try {
@@ -2296,7 +2487,8 @@ export async function scanAssignToRider(
   const { data: requests } = await admin.from("logistics_requests").select("id").eq("order_id", orderId).eq("provider_id", provider?.id ?? "").in("status", ["accepted", "scheduled"]);
   const requestIds = ((requests ?? []) as { id: string }[]).map((r) => r.id);
   if (!requestIds.length) return { ...line, status: "no_elegible", message: "El pedido se tomó pero no se pudo asignar. Continúa desde la lista." };
-  const assigned = await assignRouteCore(auth, orgId, rider.id, requestIds, { overrideCash: opts.overrideCash, day: opts.scheduledFor ?? null }, fx);
+  // La programación ya se miró arriba (o se confirmó): no se vuelve a leer.
+  const assigned = await assignRouteCore(auth, orgId, rider.id, requestIds, { overrideCash: opts.overrideCash, day: opts.scheduledFor ?? null, confirmProgrammed: true }, fx);
   if (!assigned.assigned) {
     const why = assigned.failed[0]?.error ?? assigned.error ?? "No se pudo asignar.";
     return { ...line, status: /efectivo|límite/i.test(why) ? "bloqueado_efectivo" : "no_elegible", message: why };
