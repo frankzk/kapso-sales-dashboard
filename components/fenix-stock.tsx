@@ -19,6 +19,7 @@ import {
   swaypInventorySync,
   upsertFenixStock,
   type DryRunResult,
+  type SyncResult,
 } from "@/app/dashboard/envios/actions";
 import { STOCK_MOVEMENT_LABEL, type StockMovementKind } from "@/lib/fenix-ledger";
 
@@ -472,6 +473,49 @@ function ImportarDeSwayp({ onDone }: { onDone: (msg: string | null) => void }) {
   );
 }
 
+const nf = new Intl.NumberFormat("es-PE");
+
+/** Chevron de disclosure, dibujado con el mismo trazo que los íconos de la barra. */
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={cn("shrink-0 text-slate-400 transition-transform duration-200", open && "rotate-180")}
+    >
+      <path d="M4 6l4 4 4-4" />
+    </svg>
+  );
+}
+
+/** Una cifra con su palabra: «6 bajan». El color acompaña, nunca es la única señal. */
+function Cifra({ n, label, tone }: { n: number; label: string; tone: "down" | "up" | "new" | "warn" | "muted" }) {
+  if (!n) return null;
+  return (
+    <span
+      className={cn(
+        "rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
+        tone === "down" && "bg-rose-50 text-rose-700",
+        tone === "up" && "bg-emerald-50 text-emerald-700",
+        tone === "new" && "bg-sky-50 text-sky-700",
+        tone === "warn" && "bg-amber-50 text-amber-800",
+        tone === "muted" && "bg-slate-100 text-slate-600",
+      )}
+    >
+      {nf.format(n)} {label}
+    </span>
+  );
+}
+
+const CATALOGO_HREF = "/dashboard/envios/aliclik";
+
 /**
  * Sync del inventario de Swayp por API, en dos pasos: «Leer» trae todas las
  * bodegas y muestra qué cambiaría por ciudad SIN escribir; «Aplicar» vuelve a
@@ -482,14 +526,15 @@ function ImportarDeSwayp({ onDone }: { onDone: (msg: string | null) => void }) {
 function DryRunSwayp() {
   const router = useRouter();
   const [pending, start] = useTransition();
+  const [accion, setAccion] = useState<"leer" | "aplicar" | null>(null);
   const [open, setOpen] = useState(false);
   const [token, setToken] = useState("");
   const [email, setEmail] = useState("fkc@monono.pe");
   const [ruc, setRuc] = useState("20610091823");
   const [idCompany, setIdCompany] = useState("IsjvRm8cEqQBFP4r0TxF");
   const [res, setRes] = useState<DryRunResult | null>(null);
+  const [aplicado, setAplicado] = useState<Extract<SyncResult, { ok: true }> | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [marcadas, setMarcadas] = useState<Set<string>>(new Set());
   const [diag, setDiag] = useState<
     { label: string; host: string; method: string; status: number; ok: boolean; body: string }[] | null
@@ -502,9 +547,10 @@ function DryRunSwayp() {
   function leer() {
     if (!limpio) return;
     setErr(null);
-    setNotice(null);
+    setAplicado(null);
     setRes(null);
     setDiag(null);
+    setAccion("leer");
     start(async () => {
       const r = await swaypInventoryDryRun({ token: limpio, email, user: ruc, idCompany });
       if ("error" in r) {
@@ -520,28 +566,22 @@ function DryRunSwayp() {
 
   function aplicar() {
     if (!limpio || !marcadas.size) return;
-    const lista = [...marcadas].join(", ");
+    const lista = [...marcadas].map(capitalizar).join(", ");
     if (
       !confirm(
-        `Se va a dejar el stock de ${lista} igual al de Swayp, con su registro en el kardex. Swayp se vuelve a leer en este momento. ¿Aplicar?`,
+        `${lista}: el stock de Kapta quedará igual al de Swayp y cada cambio se registra en el kardex.\n\nSwayp se vuelve a leer ahora, así que el resultado puede variar un poco de lo que ves. ¿Aplicar?`,
       )
     )
       return;
     setErr(null);
-    setNotice(null);
+    setAccion("aplicar");
     start(async () => {
-      const r = await swaypInventorySync({
-        token: limpio,
-        email,
-        user: ruc,
-        idCompany,
-        ciudades: [...marcadas],
-      });
-      if (r && "error" in r && r.error) {
+      const r = await swaypInventorySync({ token: limpio, email, user: ruc, idCompany, ciudades: [...marcadas] });
+      if ("error" in r) {
         setErr(r.error);
         return;
       }
-      setNotice(r && "notice" in r && r.notice ? r.notice : "Stock sincronizado.");
+      setAplicado(r);
       // El diff ya no vale: lo que mostraba acaba de aplicarse.
       setRes(null);
       router.refresh();
@@ -557,199 +597,190 @@ function DryRunSwayp() {
     });
   }
 
+  const leyendo = pending && accion === "leer";
+  const aplicando = pending && accion === "aplicar";
+  const bodegasEnSync = res?.bodegas.filter((b) => b.enSync).length ?? 0;
+  const filasHuerfanas = res?.bodegasSinCiudad.filter((b) => !res.bodegas.some((w) => w.id === b.idWarehouse)) ?? [];
+
   return (
-    <Card className="space-y-3">
+    <Card className="p-0">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between text-left"
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-4 rounded-2xl px-5 py-4 text-left hover:bg-slate-50"
       >
-        <span className="text-sm font-medium text-slate-800">Sincronizar desde Swayp por API</span>
-        <span className="text-xs text-slate-400">{open ? "▲" : "▼"}</span>
+        <span>
+          <span className="block text-sm font-semibold text-slate-900">Sincronizar stock desde Swayp</span>
+          <span className="mt-0.5 block text-xs text-slate-500">
+            Lee el inventario de todas las bodegas y deja cada ciudad igual a Swayp.
+          </span>
+        </span>
+        <Chevron open={open} />
       </button>
 
       {open && (
-        <div className="space-y-3">
-          <p className="text-xs text-slate-500">
-            «Leer» trae el inventario de todas las bodegas y muestra qué cambiaría, sin tocar la base.
-            Después eliges las ciudades y «Aplicar» las deja igual a Swayp. El token no se guarda:
-            sácalo del panel de Swayp (sesión iniciada) y pégalo acá.
-          </p>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <label className="text-xs text-slate-600">
-              Token del panel
+        <div className="border-t border-slate-200">
+          {/* Conexión */}
+          <div className="space-y-3 px-5 py-4">
+            <label className="block">
+              <span className="text-sm font-medium text-slate-800">Token del panel de Swayp</span>
+              <span className="mt-0.5 block text-xs text-slate-500">
+                Con tu sesión abierta en Swayp: DevTools → Red → cualquier petición → valor de
+                «Authorization». Dura una hora y no se guarda.
+              </span>
               <input
                 type="password"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
-                placeholder="Bearer …"
-                className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+                onKeyDown={(e) => e.key === "Enter" && leer()}
+                placeholder="Pega el token (con o sin «Bearer»)"
+                autoComplete="off"
+                className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder:text-slate-400"
               />
             </label>
-            <label className="text-xs text-slate-600">
-              Correo
-              <input
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
-              />
-            </label>
-            <label className="text-xs text-slate-600">
-              RUC (header user)
-              <input
-                value={ruc}
-                onChange={(e) => setRuc(e.target.value)}
-                className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
-              />
-            </label>
-            <label className="text-xs text-slate-600">
-              idCompany
-              <input
-                value={idCompany}
-                onChange={(e) => setIdCompany(e.target.value)}
-                className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
-              />
-            </label>
+
+            <details className="group text-xs text-slate-600">
+              <summary className="cursor-pointer select-none text-slate-500 hover:text-slate-700">
+                Cuenta Swayp: {email} · RUC {ruc}
+              </summary>
+              <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                <label className="block">
+                  Correo
+                  <input
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="mt-0.5 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="block">
+                  RUC
+                  <input
+                    value={ruc}
+                    onChange={(e) => setRuc(e.target.value)}
+                    className="mt-0.5 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="block">
+                  Id de empresa
+                  <input
+                    value={idCompany}
+                    onChange={(e) => setIdCompany(e.target.value)}
+                    className="mt-0.5 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
+                  />
+                </label>
+              </div>
+            </details>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={leer}
+                disabled={pending || !limpio}
+                className="min-h-10 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+              >
+                {leyendo ? "Leyendo Swayp…" : res ? "Volver a leer" : "Leer inventario"}
+              </button>
+              <span className="text-xs text-slate-500">Leer no cambia nada en Kapta.</span>
+            </div>
           </div>
-          <button
-            onClick={leer}
-            disabled={pending || !limpio}
-            className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-          >
-            {pending && !res ? "Leyendo…" : "Leer inventario"}
-          </button>
 
-          {err && <p className="text-xs text-rose-700">{err}</p>}
-          {notice && <p className="text-xs text-emerald-700">{notice}</p>}
-
-          {diag && (
-            <div className="space-y-1 rounded-lg border border-slate-200 bg-white p-2 text-xs">
-              <p className="font-medium text-slate-700">Diagnóstico por llamada:</p>
-              {diag.map((d, i) => (
-                <div key={i} className="flex flex-col border-t border-slate-100 py-1 first:border-0">
-                  <span className="flex items-center justify-between">
-                    <span className="text-slate-700">
-                      {d.method} {d.label}
-                    </span>
-                    <span
-                      className={cn(
-                        "font-medium",
-                        d.ok ? "text-emerald-700" : d.status === 0 ? "text-amber-700" : "text-rose-700",
-                      )}
-                    >
-                      {d.status === 0 ? "sin conexión" : d.status}
-                    </span>
-                  </span>
-                  <span className="text-slate-400">{d.host}</span>
-                  {d.body && <span className="mt-0.5 break-all text-slate-500">{d.body}</span>}
-                </div>
-              ))}
+          {/* Error */}
+          {err && (
+            <div role="alert" className="mx-5 mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-800">
+              <p>{err}</p>
+              {diag && (
+                <details className="mt-2 text-xs text-rose-900/80">
+                  <summary className="cursor-pointer select-none">Detalle técnico</summary>
+                  <ul className="mt-1.5 space-y-1.5">
+                    {diag.map((d, i) => (
+                      <li key={i}>
+                        <span className="font-medium">
+                          {d.method} {d.label}: {d.status === 0 ? "sin conexión" : d.status}
+                        </span>
+                        {d.body && <span className="block break-all">{d.body}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
             </div>
           )}
 
+          {/* Resultado de aplicar */}
+          {aplicado && <ResultadoSync r={aplicado} />}
+
+          {/* Diff */}
           {res && (
-            <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <div className="text-xs text-slate-600">
-                <p>
-                  {res.totalFilasInventario} filas de inventario en {res.bodegas.length} bodegas:
+            <div className="border-t border-slate-200">
+              <div className="flex flex-wrap items-baseline justify-between gap-2 bg-slate-50 px-5 py-3">
+                <p className="text-sm text-slate-700">
+                  <span className="font-medium text-slate-900">{nf.format(res.totalFilasInventario)} filas</span>{" "}
+                  en {res.bodegas.length} bodegas · {bodegasEnSync} se sincronizan
                 </p>
-                <ul className="mt-1 space-y-0.5">
-                  {res.bodegas.map((b) => (
-                    <li key={b.id} className="flex flex-wrap gap-x-1.5">
-                      <span className="text-slate-700">{b.name}</span>
-                      <span className="text-slate-400">·</span>
-                      <span
-                        className={cn(
-                          "capitalize",
-                          b.enSync ? "text-emerald-700" : "text-amber-700",
-                        )}
-                      >
-                        {b.city ?? "sin ciudad"}
-                        {!b.enSync && " (no se sincroniza)"}
-                      </span>
-                      <span className="text-slate-400">· {b.filas} filas</span>
-                    </li>
-                  ))}
-                </ul>
-                {res.bodegasSinCiudad.some((b) => !res.bodegas.some((w) => w.id === b.idWarehouse)) && (
-                  <p className="mt-1 text-amber-700">
-                    Filas con una bodega que Swayp no listó (se saltan):{" "}
-                    {res.bodegasSinCiudad
-                      .filter((b) => !res.bodegas.some((w) => w.id === b.idWarehouse))
-                      .map((b) => `${b.idWarehouse || "sin id"} (${b.filas})`)
-                      .join(", ")}
-                    .
-                  </p>
-                )}
+                <details className="w-full text-xs text-slate-600">
+                  <summary className="cursor-pointer select-none text-slate-500 hover:text-slate-700">
+                    Ver bodegas y su ciudad
+                  </summary>
+                  <table className="mt-2 w-full max-w-xl text-xs">
+                    <thead className="text-left text-slate-500">
+                      <tr>
+                        <th className="py-1 font-normal">Bodega</th>
+                        <th className="py-1 font-normal">Ciudad</th>
+                        <th className="py-1 text-right font-normal">Filas</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {res.bodegas.map((b) => (
+                        <tr key={b.id}>
+                          <td className="py-1 pr-3 text-slate-800">{b.name}</td>
+                          <td className="py-1 pr-3">
+                            <span className="capitalize">{b.city ?? "Sin ciudad"}</span>
+                            {!b.enSync && <span className="text-amber-800"> · no se sincroniza</span>}
+                          </td>
+                          <td className="py-1 text-right tabular-nums text-slate-600">{b.filas}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {filasHuerfanas.length > 0 && (
+                    <p className="mt-2 text-amber-800">
+                      Filas de bodegas que Swayp no listó (se saltan):{" "}
+                      {filasHuerfanas.map((b) => `${b.idWarehouse || "sin id"} (${b.filas})`).join(", ")}.
+                    </p>
+                  )}
+                </details>
               </div>
 
-              {res.ciudades.map((c) => (
-                <div key={c.ciudad} className="rounded border border-slate-200 bg-white p-2">
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={marcadas.has(c.ciudad)}
-                      onChange={() => alternar(c.ciudad)}
-                    />
-                    <span className="text-sm font-medium capitalize text-slate-800">{c.ciudad}</span>
-                  </label>
-                  <p className="text-xs text-slate-600">{c.resumen}</p>
-                  {c.ajustes.length > 0 && (
-                    <table className="mt-1.5 w-full text-xs">
-                      <thead className="text-slate-400">
-                        <tr>
-                          <th className="text-left font-normal">Producto</th>
-                          <th className="text-right font-normal">Antes</th>
-                          <th className="text-right font-normal">Swayp</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {c.ajustes.map((a) => (
-                          <tr key={a.id}>
-                            <td className="py-0.5 text-slate-700">
-                              {a.codbar ? `${a.codbar} · ` : ""}
-                              {a.product}
-                            </td>
-                            <td className="text-right text-slate-500">{a.cantidadAnterior}</td>
-                            <td
-                              className={cn(
-                                "text-right font-medium",
-                                a.cantidadNueva < a.cantidadAnterior
-                                  ? "text-rose-700"
-                                  : "text-emerald-700",
-                              )}
-                            >
-                              {a.cantidadNueva}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                  {c.altas.length > 0 && (
-                    <p className="mt-1 text-xs text-emerald-700">
-                      Altas: {c.altas.map((a) => `${a.codbar} · ${a.product} (${a.cantidad})`).join(", ")}
-                    </p>
-                  )}
-                  {c.huerfanos.length > 0 && (
-                    <p className="mt-1 text-xs text-amber-700">
-                      Sin vincular en Catálogo (no se cargan):{" "}
-                      {c.huerfanos.map((h) => `${h.codbar} · ${h.nombre} (${h.disponible})`).join(", ")}
-                    </p>
-                  )}
-                </div>
-              ))}
+              <ul className="divide-y divide-slate-200">
+                {res.ciudades.map((c) => (
+                  <CiudadDiff
+                    key={c.ciudad}
+                    c={c}
+                    marcada={marcadas.has(c.ciudad)}
+                    onToggle={() => alternar(c.ciudad)}
+                  />
+                ))}
+              </ul>
 
-              <button
-                onClick={aplicar}
-                disabled={pending || !marcadas.size || !limpio}
-                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-              >
-                {pending ? "Aplicando…" : `Aplicar a ${marcadas.size} ciudad(es)`}
-              </button>
+              <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4">
+                <button
+                  onClick={aplicar}
+                  disabled={pending || !marcadas.size || !limpio}
+                  className="min-h-10 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+                >
+                  {aplicando
+                    ? "Aplicando…"
+                    : marcadas.size
+                      ? `Aplicar a ${marcadas.size} ${marcadas.size === 1 ? "ciudad" : "ciudades"}`
+                      : "Marca una ciudad para aplicar"}
+                </button>
+                <span className="text-xs text-slate-500">
+                  Vuelve a leer Swayp al aplicar y registra cada cambio en el kardex.
+                </span>
+              </div>
 
-              <details className="text-xs text-slate-500">
-                <summary className="cursor-pointer">Muestra cruda (para verificar campos)</summary>
+              <details className="px-5 pb-4 text-xs text-slate-500">
+                <summary className="cursor-pointer select-none hover:text-slate-700">Detalle técnico: muestra cruda</summary>
                 <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all">
                   {JSON.stringify(res.muestra, null, 2)}
                 </pre>
@@ -759,6 +790,232 @@ function DryRunSwayp() {
         </div>
       )}
     </Card>
+  );
+}
+
+function capitalizar(s: string): string {
+  return s ? s[0]!.toUpperCase() + s.slice(1) : s;
+}
+
+/** Una ciudad del diff: qué cambia, con el detalle a un clic. */
+function CiudadDiff({
+  c,
+  marcada,
+  onToggle,
+}: {
+  c: DryRunResult["ciudades"][number];
+  marcada: boolean;
+  onToggle: () => void;
+}) {
+  const sinControl = ciudadSinControl(c.ciudad);
+  const bajan = c.ajustes.filter((a) => a.cantidadNueva < a.cantidadAnterior);
+  const aCero = bajan.filter((a) => a.cantidadNueva === 0);
+  const suben = c.ajustes.length - bajan.length;
+  const sinVincular = c.huerfanos.filter((h) => h.motivo === "sin_vinculo");
+  const sinEtiqueta = c.huerfanos.filter((h) => h.motivo === "sin_etiqueta");
+  const hayCambios = c.ajustes.length > 0 || c.altas.length > 0;
+  // Bajan primero (lo que más duele si está mal), y dentro, los que van a 0.
+  const ordenados = [...c.ajustes].sort(
+    (x, y) => x.cantidadNueva - x.cantidadAnterior - (y.cantidadNueva - y.cantidadAnterior),
+  );
+  const id = `ciudad-${c.ciudad}`;
+
+  return (
+    <li className="px-5 py-4">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <input
+          id={id}
+          type="checkbox"
+          checked={marcada}
+          onChange={onToggle}
+          disabled={!hayCambios}
+          className="h-4 w-4 rounded border-slate-300 accent-brand-600"
+        />
+        <label htmlFor={id} className="text-sm font-semibold capitalize text-slate-900">
+          {c.ciudad}
+        </label>
+        <div className="flex flex-wrap gap-1.5">
+          {hayCambios ? (
+            <>
+              <Cifra n={bajan.length} label="bajan" tone="down" />
+              <Cifra n={suben} label="suben" tone="up" />
+              <Cifra n={c.altas.length} label={c.altas.length === 1 ? "alta" : "altas"} tone="new" />
+            </>
+          ) : (
+            <span className="text-xs text-slate-500">Ya coincide con Swayp</span>
+          )}
+          <Cifra n={sinVincular.length} label="sin vincular" tone="warn" />
+        </div>
+        <span className="ml-auto text-xs tabular-nums text-slate-500">
+          {sinControl ? (
+            "Sin control de cantidad: solo altas"
+          ) : (
+            <>
+              {nf.format(c.totalNuestro)} → <span className="font-medium text-slate-800">{nf.format(c.totalSwayp)}</span> u.
+            </>
+          )}
+        </span>
+      </div>
+
+      {sinVincular.length > 0 && aCero.length > 0 && (
+        <p className="mt-2.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {aCero.length} {aCero.length === 1 ? "producto pasaría" : "productos pasarían"} a 0, y Swayp tiene{" "}
+          {sinVincular.length} {sinVincular.length === 1 ? "código" : "códigos"} sin vincular. Si es el mismo producto,
+          vincúlalo en{" "}
+          <a href={CATALOGO_HREF} className="font-medium underline underline-offset-2">
+            Catálogo de productos
+          </a>{" "}
+          y vuelve a leer antes de aplicar.
+        </p>
+      )}
+
+      {(c.ajustes.length > 0 || c.altas.length > 0 || c.huerfanos.length > 0) && (
+        <details className="mt-2.5">
+          <summary className="cursor-pointer select-none text-xs text-slate-500 hover:text-slate-700">
+            Ver detalle
+          </summary>
+          <div className="mt-2 space-y-3">
+            {ordenados.length > 0 && (
+              <div>
+                <table className="w-full table-fixed text-xs">
+                  <thead className="text-left text-slate-500">
+                    <tr>
+                      <th className="py-1 pr-3 font-normal">Producto</th>
+                      <th className="w-12 py-1 pr-2 text-right font-normal sm:w-16 sm:pr-3">Kapta</th>
+                      <th className="w-12 py-1 pr-2 text-right font-normal sm:w-16 sm:pr-3">Swayp</th>
+                      <th className="w-14 py-1 text-right font-normal sm:w-16">Cambio</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {ordenados.map((a) => {
+                      const d = a.cantidadNueva - a.cantidadAnterior;
+                      return (
+                        <tr key={a.id}>
+                          <td className="py-1 pr-3 text-slate-800">
+                            <div className="flex min-w-0 gap-1.5" title={a.product}>
+                              {a.codbar && <span className="shrink-0 tabular-nums text-slate-500">{a.codbar}</span>}
+                              <span className="truncate">{a.product}</span>
+                            </div>
+                          </td>
+                          <td className="py-1 pr-2 text-right tabular-nums text-slate-500 sm:pr-3">{a.cantidadAnterior}</td>
+                          <td className="py-1 pr-2 text-right tabular-nums font-medium text-slate-800 sm:pr-3">
+                            {a.cantidadNueva}
+                          </td>
+                          <td
+                            className={cn(
+                              "py-1 text-right tabular-nums font-medium",
+                              d < 0 ? "text-rose-700" : "text-emerald-700",
+                            )}
+                          >
+                            {a.cantidadNueva === 0 ? "a 0" : `${d > 0 ? "+" : "−"}${Math.abs(d)}`}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {c.altas.length > 0 && (
+              <div className="text-xs">
+                <p className="font-medium text-slate-700">Se dan de alta</p>
+                <ul className="mt-1 space-y-0.5 text-slate-600">
+                  {c.altas.map((a) => (
+                    <li key={a.codbar + a.sku}>
+                      <span className="mr-1.5 tabular-nums text-slate-500">{a.codbar}</span>
+                      {a.product} · <span className="tabular-nums">{nf.format(a.cantidad)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {sinVincular.length > 0 && (
+              <div className="text-xs">
+                <p className="font-medium text-amber-900">
+                  No se cargan: sin vincular en{" "}
+                  <a href={CATALOGO_HREF} className="underline underline-offset-2">
+                    Catálogo de productos
+                  </a>
+                </p>
+                <ul className="mt-1 space-y-0.5 text-slate-600">
+                  {sinVincular.map((h) => (
+                    <li key={h.codbar}>
+                      <span className="mr-1.5 tabular-nums text-slate-500">{h.codbar}</span>
+                      {h.nombre} · <span className="tabular-nums">{nf.format(h.disponible)}</span> en Swayp
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {sinEtiqueta.length > 0 && (
+              <div className="text-xs">
+                <p className="font-medium text-slate-700">No se cargan: vinculados, pero ninguna ciudad tiene ese SKU</p>
+                <ul className="mt-1 space-y-0.5 text-slate-600">
+                  {sinEtiqueta.map((h) => (
+                    <li key={h.codbar}>
+                      <span className="mr-1.5 tabular-nums text-slate-500">{h.codbar}</span>
+                      {h.nombre} · <span className="tabular-nums">{nf.format(h.disponible)}</span> en Swayp
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </details>
+      )}
+    </li>
+  );
+}
+
+/** Lo que dejó «Aplicar», ciudad por ciudad. */
+function ResultadoSync({ r }: { r: Extract<SyncResult, { ok: true }> }) {
+  const pendientes = r.ciudades.flatMap((c) => c.sinVincular);
+  const unicos = [...new Set(pendientes)];
+  return (
+    <div role="status" className="mx-5 mb-4 rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3">
+      <p className="text-sm font-semibold text-emerald-900">Stock sincronizado con Swayp</p>
+      <ul className="mt-2 space-y-1.5 text-sm text-slate-700">
+        {r.ciudades.map((c) => {
+          const sinControl = ciudadSinControl(c.ciudad);
+          const partes = [
+            c.bajan ? `${c.bajan} bajan${c.aCero ? ` (${c.aCero} a 0)` : ""}` : null,
+            c.suben ? `${c.suben} suben` : null,
+            c.altas ? `${c.altas} ${c.altas === 1 ? "alta" : "altas"}` : null,
+          ].filter(Boolean);
+          return (
+            <li key={c.ciudad} className="flex flex-wrap items-baseline gap-x-2">
+              <span className="font-medium capitalize text-slate-900">{c.ciudad}</span>
+              <span>{partes.length ? partes.join(" · ") : "sin cambios"}</span>
+              {!sinControl && (
+                <span className="text-xs tabular-nums text-slate-500">
+                  {nf.format(c.unidadesAntes)} → {nf.format(c.unidadesDespues)} u.
+                </span>
+              )}
+              {c.fallidos > 0 && <span className="text-xs text-rose-700">{c.fallidos} no se pudieron aplicar</span>}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-2 text-xs text-slate-600">
+        {r.guias !== null
+          ? `${nf.format(r.guias)} guías recalculadas con el stock nuevo.`
+          : `El stock quedó aplicado, pero no se pudieron recalcular las guías: ${r.errorGuias ?? "error desconocido"}.`}
+        {r.noVinieron.length > 0 && ` Sin datos de Swayp, no se tocaron: ${r.noVinieron.map(capitalizar).join(", ")}.`}
+      </p>
+      {unicos.length > 0 && (
+        <p className="mt-2 text-xs text-amber-900">
+          Quedaron sin cargar {unicos.length} {unicos.length === 1 ? "código" : "códigos"} ({unicos.join(", ")}):
+          vincúlalos en{" "}
+          <a href={CATALOGO_HREF} className="font-medium underline underline-offset-2">
+            Catálogo de productos
+          </a>{" "}
+          y vuelve a sincronizar.
+        </p>
+      )}
+    </div>
   );
 }
 

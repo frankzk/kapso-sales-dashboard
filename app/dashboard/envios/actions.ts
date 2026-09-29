@@ -2602,6 +2602,33 @@ export async function swaypInventoryDryRun(input: {
   };
 }
 
+/** Lo que el sync escribió en una ciudad. */
+export interface SyncCiudadResultado {
+  ciudad: string;
+  bajan: number;
+  suben: number;
+  /** De los que bajan, cuántos quedaron en 0. */
+  aCero: number;
+  altas: number;
+  /** Códigos de Swayp sin vínculo en Catálogo: no se pudieron cargar. */
+  sinVincular: string[];
+  unidadesAntes: number;
+  unidadesDespues: number;
+  fallidos: number;
+}
+
+export type SyncResult =
+  | {
+      ok: true;
+      ciudades: SyncCiudadResultado[];
+      /** Ciudades pedidas que no vinieron en la lectura: no se tocaron. */
+      noVinieron: string[];
+      /** Guías cuya elegibilidad se recalculó; null si el recálculo falló. */
+      guias: number | null;
+      errorGuias?: string;
+    }
+  | { error: string };
+
 /**
  * Fase 2: aplica el inventario de Swayp leído por API a `fenix_stock`, en las
  * ciudades elegidas. Vuelve a LEER en el momento —no confía en el diff que tiene
@@ -2617,7 +2644,7 @@ export async function swaypInventorySync(input: {
   user: string;
   idCompany: string;
   ciudades: string[];
-}): Promise<ShipmentActionState> {
+}): Promise<SyncResult> {
   const pedidas = new Set((input.ciudades ?? []).map((c) => c.trim().toLowerCase()).filter(Boolean));
   if (!pedidas.size) return { error: "Elige al menos una ciudad para sincronizar." };
 
@@ -2637,9 +2664,7 @@ export async function swaypInventorySync(input: {
     return { error: e instanceof Error ? e.message : "No se pudo leer el stock Swayp." };
   }
 
-  const partes: string[] = [];
-  let fallidosTotal = 0;
-  const noVinieron = [...pedidas].filter((c) => !lectura.porCiudad.has(c));
+  const ciudades: SyncCiudadResultado[] = [];
   for (const { ciudad, plan } of planes) {
     if (!pedidas.has(ciudad)) continue;
     const { fallidos } = await aplicarPlanSwayp(admin, {
@@ -2649,8 +2674,18 @@ export async function swaypInventorySync(input: {
       plan,
       origen: "Swayp (API)",
     });
-    fallidosTotal += fallidos;
-    partes.push(`${ciudad[0]!.toUpperCase()}${ciudad.slice(1)}: ${resumenDelPlan(plan)}`);
+    const bajan = plan.ajustes.filter((a) => a.cantidadNueva < a.cantidadAnterior);
+    ciudades.push({
+      ciudad,
+      bajan: bajan.length,
+      suben: plan.ajustes.length - bajan.length,
+      aCero: bajan.filter((a) => a.cantidadNueva === 0).length,
+      altas: plan.altas.length,
+      sinVincular: plan.huerfanos.filter((h) => h.motivo === "sin_vinculo").map((h) => h.codbar),
+      unidadesAntes: plan.totalNuestro,
+      unidadesDespues: plan.totalSwayp,
+      fallidos,
+    });
   }
 
   const sync = await recomputeFenixEligibility();
@@ -2658,11 +2693,11 @@ export async function swaypInventorySync(input: {
   revalidatePath("/dashboard/envios");
 
   return {
-    notice:
-      (partes.length ? partes.join(" · ") : "Ninguna ciudad pedida vino en la lectura de Swayp.") +
-      (noVinieron.length ? ` Sin datos de Swayp (no se tocaron): ${noVinieron.join(", ")}.` : "") +
-      (fallidosTotal ? ` ${fallidosTotal} movimientos no se pudieron aplicar.` : "") +
-      ("error" in sync ? ` No se pudo sincronizar las guías: ${sync.error}.` : ` ${sync.updated} guías sincronizadas.`),
+    ok: true,
+    ciudades,
+    noVinieron: [...pedidas].filter((c) => !lectura.porCiudad.has(c)),
+    guias: "error" in sync ? null : sync.updated,
+    ...("error" in sync ? { errorGuias: sync.error } : {}),
   };
 }
 
