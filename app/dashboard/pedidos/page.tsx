@@ -4,16 +4,18 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { DEFAULT_CONFIRMATION_CYCLE_DAYS } from "@/lib/order-confirmation";
 import {
   MASTER_PAGE_SIZE,
+  emptyConfirmationQueueCounts,
   getAgencySummaryCached,
   getConfirmationCycleDays,
-  getConfirmationDueCounts,
-  getManagementDayCounts,
+  getConfirmationQueueCounts,
   getMasterFacetsCached,
   getOrderMasterMomCounts,
   getOrderMasterPage,
   isMasterView,
+  type MasterMomCounts,
   type MasterView,
 } from "@/lib/orders-master-access";
+import { masterSearchTerm } from "@/lib/order-master-filters";
 import { parseMasterQuery } from "@/lib/master-query";
 import { MACRO_SUBSTAGES_BY_STAGE, type MacroSubstage } from "@/lib/order-macro-stage";
 import { EmptyState } from "@/components/ui";
@@ -21,6 +23,11 @@ import { OrdersMasterBoard } from "@/components/orders-master";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
 export const dynamic = "force-dynamic";
+
+const EMPTY_MOM_COUNTS: MasterMomCounts = {
+  stages: { todos: 0, por_confirmar: 0, preparacion: 0, por_despachar: 0, en_curso: 0, por_cerrar: 0, finalizado: 0 },
+  substages: {},
+};
 
 /**
  * Las server actions de esta ruta incluyen `connectShalomSession`, que hace un
@@ -74,37 +81,34 @@ async function PedidosContent({
   // El Master es consolidado: se consultan TODAS las tiendas accesibles, y el
   // filtro por tienda es uno más, aplicado también en la base.
   const storeIds = stores.map((s) => s.id);
+  // Mientras hay búsqueda la pantalla oculta las pestañas, los chips y los
+  // filtros, y enseña solo «Resultados de búsqueda». Contarlos sería pagar
+  // consultas que nadie ve: se cuentan al volver a la pestaña.
+  const searching = masterSearchTerm(filters) !== "";
   const showConfirmationDue =
-    view === "por_confirmar" && (substage === null || substage === "volver_a_contactar");
-  // El ciclo de recontacto se muestra junto a los chips de «Fecha pactada», así
-  // que solo hace falta en esa vista.
-  const showConfirmation = view === "por_confirmar";
-  const [
-    momCounts,
-    pageData,
-    facets,
-    agency,
-    confirmationDueCounts,
-    managementDayCounts,
-    cycleDays,
-  ] = await Promise.all([
-    getOrderMasterMomCounts(storeIds),
+    !searching && view === "por_confirmar" && (substage === null || substage === "volver_a_contactar");
+  // El ciclo de recontacto se muestra junto a los chips de «Fecha pactada», y el
+  // filtro de Gestión solo se ofrece en esta vista.
+  const showConfirmation = !searching && view === "por_confirmar";
+  const [momCounts, pageData, facets, agency, confirmationCounts, cycleDays] = await Promise.all([
+    searching ? Promise.resolve(EMPTY_MOM_COUNTS) : getOrderMasterMomCounts(storeIds),
     getOrderMasterPage(storeIds, { view, substage, filters, sortKey: "created", page }),
     // Cacheadas: no dependen de lo que se esté filtrando ni buscando.
     getMasterFacetsCached(storeIds),
     getAgencySummaryCached(storeIds),
-    showConfirmationDue
-      ? getConfirmationDueCounts(storeIds, { substage, filters })
-      : Promise.resolve({ all: 0, vencido: 0, hoy: 0, proximo: 0 }),
-    // Solo donde el filtro de Gestión se ofrece: fuera de «Por confirmar» serían
-    // ocho consultas por carga para un desplegable que nadie ve.
+    // Los chips de «Fecha pactada» y de «Gestión» salen de UNA lectura (antes
+    // eran doce conteos por carga).
     showConfirmation
-      ? getManagementDayCounts(storeIds, { substage, filters })
-      : Promise.resolve({} as Record<number, number>),
+      ? getConfirmationQueueCounts(storeIds, { substage, filters })
+      : Promise.resolve(emptyConfirmationQueueCounts()),
     showConfirmation
       ? getConfirmationCycleDays(storeIds)
       : Promise.resolve({} as Record<string, number>),
   ]);
+  const confirmationDueCounts = showConfirmationDue
+    ? confirmationCounts.due
+    : emptyConfirmationQueueCounts().due;
+  const managementDayCounts = confirmationCounts.managementDays;
 
   // Owner o admin de la organización de la tienda: el ciclo reparte la carga de
   // todo el equipo, así que se ve siempre pero solo lo mueve quien manda ahí.

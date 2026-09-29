@@ -76,6 +76,29 @@ export const MANAGEMENT_DAY_STEPS = [0, 1, 2, 3, 4, 5, 6, 7] as const;
 /** El denominador que se enseña junto al paso: «3/7 días». */
 export const MANAGEMENT_DAYS_TOTAL = 7;
 
+/**
+ * Caracteres mínimos para que el buscador del Master busque.
+ *
+ * Tres, porque es lo que necesitan los índices trigram de la búsqueda (0069,
+ * 0203): con menos no hay trigrama que buscar y la base recorre la tabla
+ * entera para devolver miles de filas que nadie va a leer. Ningún código de
+ * pedido, guía o teléfono se identifica con dos letras.
+ */
+export const MASTER_SEARCH_MIN_CHARS = 3;
+
+/**
+ * El término de búsqueda normalizado, o `""` si no alcanza para buscar.
+ *
+ * Vive aquí, y no en el servidor, porque lo miran los DOS lados: el servidor
+ * decide con esto si la búsqueda ignora la pestaña, y la pantalla, si enseña
+ * «Resultados de búsqueda». Si cada uno normalizara por su cuenta, un día
+ * dejarían de coincidir — el `#` que se pega desde WhatsApp es justo eso.
+ */
+export function masterSearchTerm(f: Pick<MasterFilters, "search">): string {
+  const term = f.search.trim().replace(/^#/, "").trim();
+  return term.length >= MASTER_SEARCH_MIN_CHARS ? term : "";
+}
+
 /** Etiqueta del paso, la MISMA que pinta la columna Gestión de la tabla. */
 export function managementDayLabel(step: number | string): string {
   return `${step}/${MANAGEMENT_DAYS_TOTAL} días`;

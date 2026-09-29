@@ -5064,6 +5064,36 @@ Y una cuarta, para quien toque la base a mano: **enlazar una guía a un pedido p
 SQL deja el Master mintiendo hasta el siguiente barrido.** Ahora el barrido lo
 recoge; antes no lo recogía nadie.
 
+### 19.2 Mirar una guía no es cambiarla (0203)
+
+La regla 1 de §19.1 sigue igual: el desfase se detecta comparando el
+`updated_at` de las guías contra el `recomputed_at` del Master. Lo que se
+precisa es **qué escritura cuenta como cambio de la guía**.
+
+- **El sello de lectura de la API no es un cambio.** `api_report_at` (cuándo la
+  miramos) y `api_updated_at` (qué `updatedAt` vimos) se escriben en cada
+  relectura, cambie o no la guía. Una escritura que solo toca esos dos deja
+  `updated_at` como estaba, y el pedido no se da por desfasado. Es la misma
+  regla que `lib/aliclik-snapshot-diff.ts` ya aplicaba en el camino directo
+  («los sellos dicen cuándo miramos, no qué vimos»), llevada al trigger, que es
+  donde el detector la lee. Cualquier otra columna distinta —también desde una
+  consola de SQL— sigue moviendo `updated_at`, y reescribir el mismo valor no lo
+  mueve.
+- **`last_report_at` sí cuenta.** Lo escriben el Excel, Olva y Tanders, y los
+  barridos de Olva y Shalom eligen qué guía leer después ordenando por
+  `updated_at`: si dejara de moverlo, se quedarían releyendo siempre las mismas.
+- **En el Master, un recálculo que no cambia nada tampoco es un cambio.**
+  `recomputed_at` dice cuándo se recalculó la fila; `updated_at`, cuándo cambió
+  lo que la fila dice. Solo lo segundo le avisa a la pantalla de que hay algo
+  nuevo que enseñar.
+
+Por qué importa, medido el 29-09-2026 en horario de trabajo: 161 pedidos con un
+evento real en una hora y 2.298 filas del Master reescritas. De 741 guías de
+Aliclik tocadas en dos horas, 729 solo habían recibido el sello. Cada sello
+disparaba un recálculo por el barrido del Master, y cada recálculo, una recarga
+completa de la página en cada pestaña abierta. Las pruebas de estas tres reglas
+viven en `scripts/sql/master_liviano_smoke.sql`.
+
 ## 20. Criterios de aceptación de la Fase 1
 
 - Un pedido Shopify sin salidas existe una sola vez en el Master.

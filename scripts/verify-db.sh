@@ -107,6 +107,12 @@ echo "▶ cobertura por coordenada"
 $PSQL -f "$ROOT/scripts/sql/coverage_smoke.sql" >/dev/null
 echo "▶ order_master_stale (0123): el desfase se ve aunque sea ANTIGUO"
 $PSQL -f "$ROOT/scripts/sql/order_master_stale_smoke.sql"
+# Qué escritura cuenta como cambio (0203): un sello de lectura de la API o un
+# recálculo sin cambios no pueden mover `updated_at`, o vuelve la cascada de
+# recálculos y recargas del Master. Y la búsqueda con índice no ve más que la RLS.
+echo "▶ Master liviano (0203): sellos y recálculos sin cambios no mueven updated_at"
+$PSQL -f "$ROOT/scripts/sql/master_liviano_smoke.sql"
+echo "  ✅ solo un cambio real mueve updated_at; la búsqueda respeta las tiendas de cada quien"
 
 echo "  ✅ cerca de un punto COD → provincia_cod; lejos → agencia; Cañete y aislamiento por org intactos"
 

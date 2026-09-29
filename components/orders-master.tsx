@@ -78,6 +78,8 @@ import {
   hasActiveFilters,
   MANAGEMENT_DAY_STEPS,
   managementDayLabel,
+  MASTER_SEARCH_MIN_CHARS,
+  masterSearchTerm,
   PAYMENT_CHECK_OPTIONS,
   type AgencySummary,
   type MasterFilters,
@@ -448,7 +450,10 @@ export function OrdersMasterBoard({
     navigate({ filters: { stores: next } });
   }
 
-  const searchActive = filters.search.trim().length >= 2;
+  // La MISMA regla que usa el servidor para decidir que se está buscando: si
+  // cada lado midiera por su cuenta, la pantalla enseñaría pestañas mientras el
+  // servidor ya las ignora (o al revés).
+  const searchActive = masterSearchTerm(filters) !== "";
   // La página llega filtrada y ordenada; aquí ya no se recorta nada.
   const listed = rows;
   const shown = rows;
@@ -2002,11 +2007,18 @@ function MasterSearchInput({
     setText(value);
   }, [value]);
 
+  // Uno o dos caracteres no se mandan: no alcanzan para usar el índice de la
+  // búsqueda y devolverían miles de filas. Se espera al tercero —o a que el
+  // campo quede vacío, que es «limpiar la búsqueda»— y se deja el aviso.
+  const pending = text.trim().replace(/^#/, "").trim();
+  const tooShort = pending.length > 0 && pending.length < MASTER_SEARCH_MIN_CHARS;
+
   useEffect(() => {
     if (text.trim() === value.trim()) return;
-    const timer = setTimeout(() => commit.current(text.trim()), 350);
+    if (tooShort) return;
+    const timer = setTimeout(() => commit.current(text.trim()), 400);
     return () => clearTimeout(timer);
-  }, [text, value]);
+  }, [text, value, tooShort]);
 
   return (
     <div className="relative">
@@ -2026,6 +2038,11 @@ function MasterSearchInput({
         >
           ✕
         </button>
+      )}
+      {tooShort && (
+        <p className="absolute left-0 top-full mt-1 whitespace-nowrap text-[11px] text-slate-400">
+          Escribe al menos {MASTER_SEARCH_MIN_CHARS} caracteres
+        </p>
       )}
     </div>
   );
