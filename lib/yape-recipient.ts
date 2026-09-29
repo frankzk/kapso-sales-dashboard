@@ -118,6 +118,33 @@ function words(value: string): string[] {
 }
 
 /**
+ * Separa el final del celular que algunas apps pegan al nombre del receptor.
+ *
+ * La app del BBVA, al pagar a un Yape desde «Envío a contactos», escribe el
+ * contacto como «Grupo gf s •5309»: el nombre recortado y, tras un punto, los
+ * últimos cuatro dígitos del celular. Leído como nombre, «5309» es una palabra
+ * que no pertenece a Grupo GF S.A.C. y el cobro salía acusado de ir a otra
+ * cuenta —#KP137040 y otros dos cobros del courier—. Plin hace lo mismo con el
+ * número entero: «Grupo Gf S · 930 555 309 - Yape».
+ *
+ * Esos dígitos no se tiran: son el CELULAR, la señal tajante. Se devuelven
+ * aparte para que se juzguen como celular.
+ *
+ * Solo corta tras un separador de los que usan las apps (•, ·, ∙, *): un nombre
+ * que simplemente termina en números no se toca.
+ */
+export function splitRecipientPhoneSuffix(raw: string | null | undefined): {
+  name: string | null;
+  phoneDigits: string | null;
+} {
+  const value = raw?.trim() ?? "";
+  if (!value) return { name: null, phoneDigits: null };
+  const m = /^(.*?\S)\s*[•·∙*]+\s*((?:\d\s*){3,}?)\s*(?:-\s*(?:yape|plin)\s*)?$/i.exec(value);
+  if (!m) return { name: value, phoneDigits: null };
+  return { name: m[1]!.trim(), phoneDigits: m[2]!.replace(/\s/g, "") };
+}
+
+/**
  * Alinea el nombre leído contra el esperado, palabra por palabra y EN ORDEN,
  * que es como recorta y enmascara una pantalla.
  *
@@ -401,8 +428,12 @@ export function yapeRecipientReading(
   accounts: CollectionAccount[],
   customerName?: string | null,
 ): YapeRecipientReading {
-  const name = read.recipientName?.trim() || null;
-  const digits = (read.recipientPhoneLastDigits ?? "").replace(/\D/g, "");
+  // «Grupo gf s •5309» (BBVA): el final del celular viene pegado al nombre. Se
+  // separa y es EL celular: sale del mismo bloque que el receptor, así que manda
+  // sobre uno leído aparte, que pudo salir de otra parte de la pantalla.
+  const split = splitRecipientPhoneSuffix(read.recipientName);
+  const name = split.name;
+  const digits = (split.phoneDigits || read.recipientPhoneLastDigits || "").replace(/\D/g, "");
   const phoneLastDigits = digits.length >= 3 ? digits.slice(-3) : null;
   const payerName = read.payerName?.trim() || null;
 

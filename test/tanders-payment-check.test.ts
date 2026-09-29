@@ -37,6 +37,36 @@ describe("normalizeRecipient / isExpectedRecipient", () => {
   });
 });
 
+describe("el BBVA pega el final del celular al nombre", () => {
+  // #KP137040 y otros dos cobros del courier, lectura TEXTUAL de producción: la
+  // app del BBVA, al pagar a un Yape desde «Envío a contactos», escribe el
+  // contacto como «Grupo gf s •5309». Salían «El pago NO va a Grupo GF SAC».
+  it("#KP137040: «Grupo gf s •5309» es Grupo GF SAC con el celular ···309", () => {
+    expect(isExpectedRecipient("Grupo gf s •5309")).toBe(true);
+    expect(checkTandersPayment({
+      voucher: voucher({ recipientName: "Grupo gf s •5309", amount: 99 }),
+      expectedAmount: 99,
+    })).toMatchObject({ state: "validado", reasons: [] });
+  });
+
+  it("también la forma de Plin, con el número entero", () => {
+    expect(isExpectedRecipient("Grupo Gf S · 930 555 309 - Yape")).toBe(true);
+  });
+
+  it("los dígitos son el celular: si no terminan en 309, es otra cuenta", () => {
+    // Separarlos no es tirarlos. El nombre encaja, pero el celular manda.
+    expect(isExpectedRecipient("Grupo gf s •5123")).toBe(false);
+    expect(checkTandersPayment({
+      voucher: voucher({ recipientName: "Grupo gf s •5123", amount: 99 }),
+      expectedAmount: 99,
+    })).toMatchObject({ state: "rechazado", reasons: ["destinatario_distinto"] });
+  });
+
+  it("un nombre ajeno con nuestro celular sigue siendo otra cuenta", () => {
+    expect(isExpectedRecipient("Juan Pérez •5309")).toBe(false);
+  });
+});
+
 describe("normalizeOperationNumber", () => {
   it("hace colisionar dos transcripciones del mismo pago", () => {
     // Si no colisionan, el reuso del comprobante no se detecta: es toda la

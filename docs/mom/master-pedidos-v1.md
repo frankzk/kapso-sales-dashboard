@@ -1400,6 +1400,16 @@ sin tope de antigüedad. Reglas:
     Yape»—. **7 de los 9 rechazos de ese día eran cobros buenos rechazados por
     el logo.** Aceptar el medio no es aceptar el pago: el destinatario y el
     monto se siguen exigiendo igual.
+  - **El final del celular pegado al nombre es el celular, no parte del
+    nombre.** La app del BBVA, al pagar a un Yape desde «Envío a contactos»,
+    escribe el contacto como «Grupo gf s •5309». Leído como nombre, «5309»
+    rompía la comparación y el cobro salía «El pago NO va a Grupo GF SAC»:
+    **tres cobros del courier** a la cuenta de la empresa (#KP137040 entre
+    ellos) quedaron en revisión administrativa. Ahora los dígitos que van tras
+    un separador (•, ·, *) se separan del nombre y se juzgan como celular:
+    tienen que terminar en `309`, o es otra cuenta aunque el nombre encaje. Un
+    nombre que solo termina en números, sin separador, no se toca. Rige igual
+    en los comprobantes de los pedidos (§12, Pagos).
   - **La cola de cobros se recorre entera: la que hace más tiempo que no se
     mira va primero.** El 10-09-2026 había **238 guías candidatas y el tope es
     de 60 por pasada**, y la consulta cortaba sin orden ninguno: entraban
@@ -4063,6 +4073,12 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
     inversión. Rige en la carga (decide si entra en `revision_admin`), en la
     bandeja y en el servidor al validar; como se recalcula, los comprobantes ya
     cargados se destraban solos.
+- **El final del celular pegado al nombre cuenta como celular.** La app del
+  BBVA escribe el contacto como «Grupo gf s •5309», y Plin como «Grupo Gf S ·
+  930 555 309 - Yape». Los dígitos tras el separador se apartan del nombre y,
+  si el lector no dio el celular aparte, son el celular: la misma señal
+  tajante de siempre. El lector tiene además instrucción de separarlos. Es la
+  misma regla que en los cobros del courier (§9.4).
 - **Una cuenta puede no tener celular: la pasarela Flow** (migración 0198). La
   constancia de Flow dice «Pagado a: Aurela Kenku» —una sola cuenta de Flow para
   las dos marcas— y no enseña ningún celular. Sin darla de alta, **#KP136181**
