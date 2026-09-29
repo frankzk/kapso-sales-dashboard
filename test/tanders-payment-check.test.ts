@@ -75,6 +75,42 @@ describe("el BBVA pega el final del celular al nombre", () => {
   });
 });
 
+describe("cualquier app que pague a un Yape", () => {
+  // #KP136441, lectura TEXTUAL de producción salvo el destino: Prex con
+  // «Titular: Grupo Gf S A C» y «Cuenta/billetera: Yape». Salía «El medio de
+  // pago no es Yape, Plin ni transferencia BCP»; había 43 así, 30 validados a mano.
+  const prex = voucher({
+    method: "otro",
+    toYape: true,
+    recipientName: "Grupo Gf S A C",
+    amount: 298,
+    operationNumber: "092514213996",
+  });
+
+  it("#KP136441: un Prex a nuestro Yape es un cobro válido", () => {
+    expect(checkTandersPayment({ voucher: prex, expectedAmount: 298 })).toEqual({
+      state: "validado",
+      reasons: [],
+      summary: "Pago a su Yape desde otra app a Grupo GF SAC por S/ 298.00.",
+    });
+  });
+
+  it("una app desconocida que no dice adónde fue el dinero sigue sin aceptarse", () => {
+    const r = checkTandersPayment({ voucher: { ...prex, toYape: false }, expectedAmount: 298 });
+    expect(r.reasons).toEqual(["medio_no_aceptado"]);
+  });
+
+  it("ir a un Yape no perdona el destinatario ni el monto", () => {
+    expect(
+      checkTandersPayment({ voucher: { ...prex, recipientName: "Juan Pérez" }, expectedAmount: 298 })
+        .reasons,
+    ).toEqual(["destinatario_distinto"]);
+    expect(checkTandersPayment({ voucher: prex, expectedAmount: 150 }).reasons).toEqual([
+      "monto_distinto",
+    ]);
+  });
+});
+
 describe("la app del BCP", () => {
   it("#AUR177129: su constancia leída como BCP es un cobro válido", () => {
     // Lectura TEXTUAL de producción, salvo el medio: el lector devolvió «otro».

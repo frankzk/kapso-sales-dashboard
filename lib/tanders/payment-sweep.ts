@@ -245,6 +245,8 @@ export interface SweepDetail {
   leido: {
     esComprobante: boolean;
     medio: string;
+    /** La constancia dice que el dinero fue a un Yape (Prex, BBVA, Plin…). */
+    aYape: boolean;
     destinatario: string | null;
     monto: number | null;
     operacion: string | null;
@@ -476,6 +478,7 @@ export async function sweepTandersPayments(
           ok: reading.ok,
           isVoucher: reading.isPaymentProof,
           method: reading.method,
+          toYape: reading.toYape,
           recipientName: reading.recipientName,
           amount: reading.amount,
           operationNumber: operacion,
@@ -528,6 +531,7 @@ export async function sweepTandersPayments(
         leido: {
           esComprobante: reading.isPaymentProof,
           medio: reading.method,
+          aYape: reading.toYape,
           destinatario: reading.recipientName,
           monto: reading.amount,
           operacion: operacion,

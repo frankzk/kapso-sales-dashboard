@@ -33,6 +33,12 @@ export interface TandersPaymentReading {
   /** ¿La imagen es un comprobante de pago (de cualquiera de los dos medios)? */
   isPaymentProof: boolean;
   method: PaymentMethod;
+  /**
+   * La constancia dice que el dinero fue a un YAPE, venga de la app que venga:
+   * «Cuenta/billetera: Yape» (Prex), «Entidad de destino: Yape» (BBVA), «- Yape»
+   * (Plin). Es independiente de `method`, que dice qué app EMITIÓ la constancia.
+   */
+  toYape: boolean;
   recipientName: string | null;
   amount: number | null;
   operationNumber: string | null;
@@ -44,6 +50,7 @@ export interface TandersPaymentReading {
 const FAILED: Omit<TandersPaymentReading, "model"> = {
   isPaymentProof: false,
   method: "otro",
+  toYape: false,
   recipientName: null,
   amount: null,
   operationNumber: null,
@@ -63,6 +70,7 @@ const PROMPT =
   "{\n" +
   '  "is_payment_proof": boolean,          // ¿es un comprobante de pago real?\n' +
   '  "method": "yape"|"plin"|"bcp"|"otro", // medio que se ve en la imagen\n' +
+  '  "destination": string|null,           // adónde fue el dinero, TAL COMO lo dice la constancia\n' +
   '  "recipient_name": string|null,        // a QUIÉN se pagó, tal como aparece\n' +
   '  "amount": number|null,                // monto en soles, solo el número\n' +
   '  "operation_number": string|null       // SOLO el código, sin "N°" ni etiquetas\n' +
@@ -74,6 +82,11 @@ const PROMPT =
   "azul y naranja, dice «¡Transferencia exitosa!» y lista «Enviado a», «Desde» " +
   "y «Número de operación». Eso es \"bcp\", también cuando desde esa app se " +
   "envió a un Yape. No la devuelvas como \"otro\" por no ver el logo.\n" +
+  "MUCHAS APPS PAGAN A UN YAPE: Prex, BBVA, Interbank y otras. Su constancia " +
+  "lo dice —«Cuenta/billetera: Yape», «Entidad de destino: Yape», «- Yape»—. " +
+  "Copia eso en \"destination\" tal cual; si la constancia no dice adónde fue " +
+  "el dinero, destination es null. En \"method\" va la app que EMITIÓ la " +
+  "constancia, no el destino.\n" +
   "El destinatario es el dato más importante: cópialo literal, aunque venga " +
   "recortado. No lo confundas con quien envía el dinero. El número de cuenta " +
   "enmascarado que algunas apps ponen debajo («**** 0012») no es parte del " +
@@ -158,6 +171,7 @@ export async function readTandersPayment(
     return {
       isPaymentProof: json.is_payment_proof === true,
       method: parseMethod(json.method),
+      toYape: /yape/i.test(text(json.destination) ?? ""),
       recipientName: text(json.recipient_name),
       amount: parseAmount(json.amount),
       operationNumber: text(json.operation_number),
