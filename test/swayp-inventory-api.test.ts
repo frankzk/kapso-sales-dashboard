@@ -5,7 +5,7 @@ import {
   fetchInventoryByCity,
   groupInventoryByCity,
   isInventoryAuthError,
-  listWarehouses,
+  listInventoryWarehouses,
   normalizeInventoryRow,
   searchInventory,
   SwaypInventoryError,
@@ -74,6 +74,11 @@ describe("ciudadDeWarehouse", () => {
     expect(ciudadDeWarehouse({ ciudad: "210101" })).toBe("juliaca");
   });
 
+  it("en la dirección busca PALABRAS, desde el final: «República» no es Ica", () => {
+    expect(ciudadDeWarehouse({ direccion: "Av. República de Panamá 3000" })).toBeNull();
+    expect(ciudadDeWarehouse({ direccion: "Calle Lima 120, Ica" })).toBe("ica");
+  });
+
   it("último recurso: rastrea la ciudad dentro de la dirección", () => {
     expect(ciudadDeWarehouse({ name: "", ciudad: "", direccion: "Av. Ejército 1015, Cayma, Arequipa" })).toBe(
       "arequipa",
@@ -85,30 +90,54 @@ describe("ciudadDeWarehouse", () => {
   });
 });
 
-describe("listWarehouses", () => {
-  it("lee idBodega y resuelve la ciudad aunque el nombre venga vacío", async () => {
+describe("listInventoryWarehouses", () => {
+  it("lee las bodegas de fulfillment (GET warehouse/getAll, {Data}) con todos sus ids", async () => {
     const seen: { url: string; headers: Record<string, string>; body: unknown }[] = [];
-    const ws = await listWarehouses(
+    const ws = await listInventoryWarehouses(
       creds(
         fakeFetch(
           {
-            "warehouses/byCompany": [
-              { idBodega: "194", nombre: "", ciudad: "040101", direccion: "Av. Ejército 1015, Cayma, Arequipa" },
-              { idBodega: "200", nombre: "BODEGA TRUJILLO", ciudad: "130101", direccion: "" },
-              { idBodega: "300", nombre: "", ciudad: "999999", direccion: "Parque industrial s/n" }, // no mapea
-            ],
+            "inventory/go/warehouse/getAll": {
+              Data: [
+                { id: "6a3c94d91da8188020b56520", idBodega: "194", name: "Bodega Arequipa", address: "Av. Ejército 1015" },
+                { id: "6a3c94d91da8188020b56521", name: "", address: "Jr. Pizarro 500, Trujillo" },
+                { id: "6a3c94d91da8188020b56522", name: "", address: "Parque industrial s/n" }, // no mapea
+              ],
+            },
           },
           seen,
         ),
       ),
     );
     expect(ws).toEqual([
-      { id: "194", name: "", ciudadInei: "040101", direccion: "Av. Ejército 1015, Cayma, Arequipa", city: "arequipa" },
-      { id: "200", name: "BODEGA TRUJILLO", ciudadInei: "130101", direccion: "", city: "trujillo" },
-      { id: "300", name: "", ciudadInei: "999999", direccion: "Parque industrial s/n", city: null },
+      {
+        id: "6a3c94d91da8188020b56520",
+        aliases: ["6a3c94d91da8188020b56520", "194"],
+        name: "Bodega Arequipa",
+        ciudadInei: "",
+        direccion: "Av. Ejército 1015",
+        city: "arequipa",
+      },
+      {
+        id: "6a3c94d91da8188020b56521",
+        aliases: ["6a3c94d91da8188020b56521"],
+        name: "",
+        ciudadInei: "",
+        direccion: "Jr. Pizarro 500, Trujillo",
+        city: "trujillo",
+      },
+      {
+        id: "6a3c94d91da8188020b56522",
+        aliases: ["6a3c94d91da8188020b56522"],
+        name: "",
+        ciudadInei: "",
+        direccion: "Parque industrial s/n",
+        city: null,
+      },
     ]);
-    // Va al host de cloudfunctions, no a run.app.
-    expect(seen[0]!.url).toContain("us-central1-swayp-co.cloudfunctions.net");
+    // El servicio de inventario, no `warehouses/byCompany` (esa es la de recojo).
+    expect(seen[0]!.url).toContain("cloudfunctions.net/api/v1/inventory/go/warehouse/getAll");
+    expect(seen[0]!.body).toBeUndefined();
   });
 });
 
@@ -144,18 +173,20 @@ describe("searchInventory", () => {
 });
 
 const WAREHOUSES: SwaypWarehouse[] = [
-  { id: "194", name: "", ciudadInei: "040101", direccion: "…Arequipa", city: "arequipa" },
-  { id: "200", name: "BODEGA TRUJILLO", ciudadInei: "130101", direccion: "", city: "trujillo" },
-  { id: "300", name: "", ciudadInei: "080101", direccion: "Parque industrial", city: null },
+  { id: "194", aliases: ["194", "6a3c-are"], name: "", ciudadInei: "040101", direccion: "…Arequipa", city: "arequipa" },
+  { id: "200", aliases: ["200"], name: "BODEGA TRUJILLO", ciudadInei: "130101", direccion: "", city: "trujillo" },
+  { id: "300", aliases: ["300"], name: "", ciudadInei: "", direccion: "Parque industrial", city: null },
+  { id: "400", aliases: ["400"], name: "Bodega Cusco", ciudadInei: "080101", direccion: "", city: "cusco" },
 ];
 
 describe("groupInventoryByCity", () => {
   it("reparte por idWarehouse, suma lotes del mismo codbar y aparta lo que no mapea", () => {
     const rows = [
       { barCode: "AURE003", availableAmount: 70, name: "Ethiopian", idWarehouse: "194" },
-      { barCode: "AURE003", availableAmount: 5, name: "Ethiopian", idWarehouse: "194" }, // otro lote
+      { barCode: "AURE003", availableAmount: 5, name: "Ethiopian", idWarehouse: "6a3c-are" }, // otro lote, por alias
       { barCode: "AURE001", availableAmount: 3, name: "Candida", idWarehouse: "200" },
       { barCode: "AURE001", availableAmount: 9, name: "Candida", idWarehouse: "300" }, // ciudad sin mapear
+      { barCode: "AURE001", availableAmount: 4, name: "Candida", idWarehouse: "400" }, // Cusco: fuera del sync
       { barCode: "AURE001", availableAmount: 1, name: "Candida", idWarehouse: "999" }, // bodega fuera de la lista
       { barCode: "AURE001", availableAmount: 1, name: "Candida", idWarehouse: "999" },
     ].map(normalizeInventoryRow);
@@ -169,8 +200,9 @@ describe("groupInventoryByCity", () => {
       { codbar: "AURE001", nombre: "Candida", bodega: "BODEGA TRUJILLO", disponible: 3 },
     ]);
     expect(sinCiudad).toEqual([
-      { idWarehouse: "300", nombre: "", ciudadInei: "080101", direccion: "Parque industrial", filas: 1 },
-      { idWarehouse: "999", nombre: "", ciudadInei: "", direccion: "", filas: 2 },
+      { idWarehouse: "300", ciudad: null, nombre: "", ciudadInei: "", direccion: "Parque industrial", filas: 1 },
+      { idWarehouse: "400", ciudad: "cusco", nombre: "Bodega Cusco", ciudadInei: "080101", direccion: "", filas: 1 },
+      { idWarehouse: "999", ciudad: null, nombre: "", ciudadInei: "", direccion: "", filas: 2 },
     ]);
   });
 });
@@ -204,7 +236,7 @@ describe("fetchInventoryByCity", () => {
 describe("diagnoseInventoryAccess", () => {
   it("reporta bodegas e inventario por separado, ambos en cloudfunctions", async () => {
     const fetchImpl = (async (url: string) => {
-      if (url.includes("warehouses/byCompany")) return { ok: true, status: 200, text: async () => "[]" } as Response;
+      if (url.includes("warehouse/getAll")) return { ok: true, status: 200, text: async () => "[]" } as Response;
       return { ok: false, status: 401, text: async () => '{"message":"Invalid or missing API Key"}' } as Response;
     }) as unknown as typeof fetch;
 

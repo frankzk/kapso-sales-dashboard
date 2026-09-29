@@ -2528,6 +2528,37 @@ de **bodega** y no de ciudad; hasta entonces no se inventa.
 La carga a mano sigue existiendo para lo que el Excel no cubre, pero es el
 parche: la fuente es el conteo de Swayp.
 
+#### El mismo conteo, leído por API (desde el 29-09-2026)
+
+El Excel sale del API interno del panel de Swayp, y Kapta ahora lo lee directo
+(Stock Swayp → «Sincronizar desde Swayp por API»): **una sola lectura trae todas
+las bodegas**, en vez de un archivo por bodega. Las reglas de arriba no cambian
+—mismo `planearImportacion`, misma columna Disponible, mismo emparejamiento por
+`codbar`, mismo kardex— y además:
+
+- **Dos pasos: leer y aplicar.** «Leer» muestra el diff por ciudad sin escribir.
+  «Aplicar» escribe sólo las ciudades marcadas y **vuelve a leer Swayp en ese
+  momento**: no aplica el diff que tenía la pantalla, que pudo quedar viejo.
+- **La ciudad sale de la bodega de fulfillment** (`warehouse/getAll` del
+  servicio de inventario), cruzando el `idWarehouse` de cada fila. No de
+  `warehouses/byCompany`: esa es la bodega de **recojo** de la empresa, no
+  donde está el stock. La ciudad se resuelve por nombre de bodega, código INEI
+  o, en último caso, la última ciudad nombrada en la dirección.
+- **Sólo se sincronizan Arequipa, Trujillo, Juliaca, Piura y Lima**
+  (`CIUDADES_DEL_SYNC`), las mismas que el Excel sabía leer. Una bodega que
+  resuelva a otra ciudad, o que no resuelva, se muestra y **no se toca**.
+  Sumar una ciudad al sync es una decisión, no un efecto del mapeo.
+- **Una ciudad que no vino en la lectura no se vacía**, y una lectura vacía
+  (0 filas) no se aplica: es un fallo de Swayp, no un inventario en cero.
+- Si dos bodegas caen en la misma ciudad, sus unidades **se suman**.
+- **El token es el del login del panel** (~1 h de vida), se pega a mano y no se
+  guarda. Automatizar el sync (cron) necesita guardar una credencial de la
+  organización —una sola, Aurela y Kenku comparten inventario en Swayp—, y es
+  una decisión aparte.
+- El contrato es **reversado del panel, no oficial**: si Swayp lo cambia, la
+  lectura falla con el status y la respuesta a la vista, y el Excel sigue como
+  respaldo.
+
 ### Stock sin control de cantidad (Lima)
 
 Lima entró a cobertura el 14-09-2026 y la operación decidió **no contar
