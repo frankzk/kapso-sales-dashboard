@@ -6,7 +6,7 @@
 // Botones de 6 px, chapas de 4 px, píldoras de filtro discontinuas que se
 // vuelven sólidas con su valor, y tarjetas de estado con borde azul al elegir.
 
-import { forwardRef, type ButtonHTMLAttributes, type ComponentType, type ReactNode, type SVGProps } from "react";
+import { forwardRef, useEffect, useRef, type ButtonHTMLAttributes, type ComponentType, type ReactNode, type SVGProps } from "react";
 import { cn } from "@/components/ui";
 import { IconAlert, IconCheckCircle, IconInfo, IconPlusCircle, IconXCircle } from "@/components/icons";
 
@@ -178,6 +178,68 @@ export function AttentionPill({ icon: Glyph, label, count, active, onClick, hint
       <Badge tone={count > 0 ? "warn" : "neutral"} className="tabular-nums">{count.toLocaleString("es-PE")}</Badge>
     </button>
   );
+}
+
+/**
+ * Panel lateral del mundo de operación (la caja y el reparto de una ruta):
+ * velo de tinta sin desenfoque, hoja blanca con sombra de popover y una
+ * cabecera pegajosa con título, chapa de estado, contexto y cierre. El ancho
+ * lo decide quien lo abre (`width`, p. ej. `max-w-[960px]`).
+ */
+export function SidePanel({ label, title, badge, meta, width, onClose, children }: {
+  /** Nombre accesible del diálogo. */
+  label: string;
+  title: ReactNode;
+  badge?: ReactNode;
+  meta?: ReactNode;
+  width: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  // Diálogo modal: el foco entra al abrir (sin saltar el scroll) y vuelve a
+  // donde estaba al cerrar, p. ej. al enlace de la fila de Rutas.
+  const panel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null;
+    panel.current?.focus({ preventScroll: true });
+    return () => { if (before?.isConnected) before.focus({ preventScroll: true }); };
+  }, []);
+  return (
+    <div className="fixed inset-0 z-30 flex justify-end bg-ink-900/30" onClick={onClose}>
+      <aside
+        ref={panel}
+        tabIndex={-1}
+        // La hoja recibe el foco solo para que el lector y Tab empiecen dentro;
+        // no es un control, así que sin anillo (el global de globals.css va
+        // fuera de capa y ganaría a una clase `outline-none`).
+        style={{ outline: "none" }}
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        className={cn("flex h-full w-full flex-col overflow-y-auto overscroll-contain bg-white shadow-pop", width)}
+      >
+        <header className="sticky top-0 z-10 flex items-start justify-between gap-3 bg-white px-4 pb-3 pt-4 shadow-[inset_0_-1px_0_var(--color-line)] sm:px-6">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              <h2 className="min-w-0 truncate text-lg font-semibold leading-7 text-ink-900">{title}</h2>
+              {badge}
+            </div>
+            {meta && <p className="mt-0.5 text-[13px] tabular-nums text-ink-500">{meta}</p>}
+          </div>
+          <button type="button" onClick={onClose} aria-label="Cerrar" className="-mr-1.5 grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900">
+            <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        </header>
+        <div className="flex-1 px-4 py-5 sm:px-6">{children}</div>
+      </aside>
+    </div>
+  );
+}
+
+/** Esqueleto de carga: bloques en el lavado, sin brillo que se mueva. */
+export function Skeleton({ className }: { className?: string }) {
+  return <div aria-hidden className={cn("animate-pulse rounded-lg bg-wash", className)} />;
 }
 
 const BANNER: Record<"ok" | "info" | "warn" | "crit", { wash: string; fg: string; icon: Icon }> = {

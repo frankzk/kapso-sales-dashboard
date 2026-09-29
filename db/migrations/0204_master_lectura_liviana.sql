@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0203_master_lectura_liviana.sql — que el Master deje de recargarse por cosas
+-- 0204_master_lectura_liviana.sql — que el Master deje de recargarse por cosas
 -- que no cambiaron, y que leerlo cueste lo que tiene que costar.
 --
 -- LO QUE SE MIDIÓ (29-09-2026, 08:00–09:00 de Lima, horario de trabajo):

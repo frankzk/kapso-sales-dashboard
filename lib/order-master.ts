@@ -31,7 +31,9 @@ import {
 } from "@/lib/order-confirmation";
 import { classifyOrderCoverage, type OrderCoverage } from "@/lib/order-coverage";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
+import { TANDERS_RECOVERY_DAYS } from "@/lib/reproprovincia";
 import { derivedGuideDates } from "@/lib/guide-dates";
+import { FENIX_DIRECT_CREATED_VIA } from "@/lib/shipment-output";
 import { ttlCache } from "@/lib/ttl-cache";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { paymentGatewayOf, type PaymentGateway } from "@/lib/payment-gateway";
@@ -245,7 +247,7 @@ function text(value: unknown): string | null {
 // cálculo, y tenerlo acá lo dejaba fuera de su alcance.
 
 function toGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): GuideSnapshot {
-  const derived = derivedGuideDates(calls);
+  const derived = derivedGuideDates(calls, { directGuide: s.created_via === FENIX_DIRECT_CREATED_VIA });
   return {
     id: s.id,
     courier: s.courier,
@@ -1664,28 +1666,37 @@ export async function reconcileOrderMaster(
   // resolvedor lo escribe así), de modo que «vencido» es `macro_since` anterior
   // a hoy menos la ventana de SU tienda. Recalcular es idempotente: si la
   // tienda tiene una ventana más larga que la que se usó, la fila vuelve igual.
+  //
+  // Tanders tiene su propia ventana (`TANDERS_RECOVERY_DAYS`), así que se busca
+  // aparte: con el corte de la tienda, sus filas entre los 30 y los 65 días se
+  // recalcularían en cada pasada sin cambiar nada, ocupando el cupo del barrido.
   if (pending.length < limit) {
     const { data: storeRows } = await admin
       .from("stores")
       .select("id,return_recovery_max_days")
       .in("id", storeIds as string[]);
     const seenVencidas = new Set(pending);
+    const tandersCutoff = new Date(Date.now() - TANDERS_RECOVERY_DAYS * 86_400_000).toISOString();
     for (const store of (storeRows ?? []) as { id: string; return_recovery_max_days: number | null }[]) {
-      if (pending.length >= limit) break;
       const windowDays = store.return_recovery_max_days ?? RECOVERY_DEFAULT_MAX_DAYS;
       const cutoff = new Date(Date.now() - windowDays * 86_400_000).toISOString();
-      const { data: vencidas } = await admin
-        .from("order_master")
-        .select("order_id")
-        .eq("store_id", store.id)
-        .eq("operational_status", "pendiente_nuevo_courier")
-        .in("macro_substage", ["gestion_reproprovincia", "por_reprogramar_lima"])
-        .lt("macro_since", cutoff)
-        .limit(limit - pending.length);
-      for (const row of (vencidas ?? []) as { order_id: string }[]) {
-        if (seenVencidas.has(row.order_id) || pending.length >= limit) continue;
-        pending.push(row.order_id);
-        seenVencidas.add(row.order_id);
+      for (const tanders of [false, true]) {
+        if (pending.length >= limit) break;
+        let query = admin
+          .from("order_master")
+          .select("order_id")
+          .eq("store_id", store.id)
+          .eq("operational_status", "pendiente_nuevo_courier")
+          .in("macro_substage", ["gestion_reproprovincia", "por_reprogramar_lima"]);
+        query = tanders
+          ? query.eq("last_courier", "tanders").lt("macro_since", tandersCutoff)
+          : query.or("last_courier.is.null,last_courier.neq.tanders").lt("macro_since", cutoff);
+        const { data: vencidas } = await query.limit(limit - pending.length);
+        for (const row of (vencidas ?? []) as { order_id: string }[]) {
+          if (seenVencidas.has(row.order_id) || pending.length >= limit) continue;
+          pending.push(row.order_id);
+          seenVencidas.add(row.order_id);
+        }
       }
     }
   }

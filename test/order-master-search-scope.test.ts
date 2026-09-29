@@ -59,7 +59,7 @@ function runPage(params: {
   search: string;
   substage?: null;
   filters?: Partial<MasterFilters>;
-  /** Simula que la migración 0203 todavía no se aplicó. */
+  /** Simula que la migración 0204 todavía no se aplicó. */
   rpcFails?: boolean;
 }) {
   const rec = recordingBuilder();
@@ -154,7 +154,7 @@ describe("Master de Pedidos: alcance de la búsqueda", () => {
   it("buscando, el límite de tiendas accesibles NO se relaja: no es un filtro", async () => {
     // Es la frontera de permisos, no una preferencia de pantalla. Soltarla al
     // buscar enseñaría pedidos de tiendas que esta persona no puede ver. La
-    // función además la cruza con `auth_store_ids()` (0203).
+    // función además la cruza con `auth_store_ids()` (0204).
     const { rpcs } = await runPage({ view: "por_confirmar", search: "KP125285" });
     expect(rpcs[0]!.args.p_store_ids).toEqual(["store-a", "store-b"]);
   });

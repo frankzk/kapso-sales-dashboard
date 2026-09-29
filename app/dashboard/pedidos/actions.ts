@@ -218,7 +218,7 @@ export async function searchOrders(query: string): Promise<OrderMasterRow[]> {
  * Supabase Auth por pestaña y por sondeo. La autorización real no cambia: la
  * lectura de abajo va bajo RLS con el mismo token.
  *
- * Y la huella solo se mueve cuando un pedido cambia DE VERDAD: desde la 0203, un
+ * Y la huella solo se mueve cuando un pedido cambia DE VERDAD: desde la 0204, un
  * recálculo que deja la fila igual no toca `updated_at`.
  */
 export async function getOrderMasterChangeToken(): Promise<string | null> {

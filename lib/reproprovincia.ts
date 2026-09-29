@@ -36,8 +36,18 @@
 // una persona y gana. El paquete que vuelve sigue siendo inventario por
 // conciliar: ese motivo convive con la gestión, no la tapa.
 
+// TANDERS EN LIMA (29-09-2026). Lo mismo le pasa a Tanders: `RETURNING` y
+// `RETURNED` son «no pudo entregar», y su propio adaptador ya lo decía —«de
+// vuelta en el almacén, y disponible para volver a salir con otro courier»
+// (lib/tanders/status.ts)—, pero esta regla solo sabía de Aliclik. El pedido
+// caía en «En curso · En retorno» mientras volvía y en «Devuelto · Por cerrar»
+// al llegar (#KP135035, #KP135161), fuera de la lista de Grupo GF. Medido: 24
+// volviendo y 62 ya devueltos sin anular en Shopify. Decisión del owner: entra
+// desde «En retorno», sin esperar la caja, y la ventana es de 65 días.
+
 import { etiquetaDiceRechazoEnPuerta, etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
+import { tandersStatusCode } from "@/lib/tanders/status";
 
 /** Evento que cierra la recuperación a mano, con motivo. */
 export const RECOVERY_DISCARDED_KIND = "recovery_discarded";
@@ -47,10 +57,18 @@ export interface RecoveryGuideLike {
   courier: string;
   delivery_status: string;
   reported_status?: string | null;
+  /** Ancla de la ventana de Tanders: su API no dice cuándo empezó a volver. */
+  dispatched_at?: string | null;
   closed_at?: string | null;
   returned_at?: string | null;
   updated_at?: string | null;
 }
+
+/**
+ * Días de la ventana cuando quien no entregó fue Tanders (owner, 29-09-2026).
+ * Es la antigüedad de Tanders en la operación: su primera guía es del 27-07.
+ */
+export const TANDERS_RECOVERY_DAYS = 65;
 
 export interface RecoveryEventLike {
   kind: string;
@@ -91,6 +109,24 @@ export function aliclikGuideFailedAfterDispatch(guide: RecoveryGuideLike): boole
 }
 
 /**
+ * ¿Tanders no pudo entregar? `RETURNING` (vuelve) o `RETURNED` (volvió).
+ *
+ * Se lee el estado ACTUAL de Tanders y no la custodia, que solo avanza: Tanders
+ * a veces pasa de `RETURNING` a `PICKED` y reintenta, y entonces la guía vuelve
+ * a estar viva. `CANCELLED` no es un intento fallido: no dice que saliera.
+ */
+export function tandersGuideFailed(guide: RecoveryGuideLike): boolean {
+  if ((guide.courier ?? "").trim().toLowerCase() !== "tanders") return false;
+  const code = tandersStatusCode(guide.reported_status);
+  return code === "RETURNING" || code === "RETURNED";
+}
+
+/** ¿Esta guía abre la recuperación del pedido? Aliclik o Tanders que no entregaron. */
+export function guideFailedAfterDispatch(guide: RecoveryGuideLike): boolean {
+  return aliclikGuideFailedAfterDispatch(guide) || tandersGuideFailed(guide);
+}
+
+/**
  * Cuándo el courier cerró la guía. `closed_at` es el sello correcto (el barrido de
  * Aliclik lo escribe al anular, ver `aliclik-track.ts`); las guías anteriores no lo tienen, así que se cae al
  * retorno o, en último caso, al último movimiento — nunca a «ahora», que
@@ -98,6 +134,28 @@ export function aliclikGuideFailedAfterDispatch(guide: RecoveryGuideLike): boole
  */
 export function guideClosedAt(guide: RecoveryGuideLike): string | null {
   return guide.closed_at ?? guide.returned_at ?? guide.updated_at ?? null;
+}
+
+/**
+ * Cuándo falló el intento: el ancla de la ventana y el «desde» de la etapa.
+ *
+ * Aliclik lo sella al anular (`guideClosedAt`). Tanders no dice cuándo empezó a
+ * volver: su barrido reescribe `updated_at` cada hora, así que la ventana nunca
+ * vencería y los días en la etapa volverían a cero en cada pasada. Se ancla en la
+ * SALIDA del intento fallido, que es fija y es anterior al fallo: la ventana se
+ * cuenta de más, nunca de menos, y no salta al llegar la caja (`returned_at`).
+ */
+export function guideFailedAt(guide: RecoveryGuideLike): string | null {
+  if (tandersGuideFailed(guide)) return guide.dispatched_at ?? guideClosedAt(guide);
+  return guideClosedAt(guide);
+}
+
+/** Días de la ventana según quién no entregó: Tanders tiene la suya. */
+export function recoveryWindowDaysFor(
+  guide: RecoveryGuideLike,
+  storeWindowDays: number = RECOVERY_DEFAULT_MAX_DAYS,
+): number {
+  return tandersGuideFailed(guide) ? TANDERS_RECOVERY_DAYS : storeWindowDays;
 }
 
 /**
@@ -110,8 +168,12 @@ export function guideClosedAt(guide: RecoveryGuideLike): string | null {
  * mientras el Master, con razón, los daba por entregados.
  */
 function recoveryApplies(guides: readonly RecoveryGuideLike[]): boolean {
+  // Una guía de Tanders que VUELVE sigue `en_ruta` —el paquete no ha llegado—,
+  // pero ya no lleva ninguna gestión: es justo la que abre la recuperación.
   return !guides.some(
-    (g) => g.delivery_status === "pendiente" || g.delivery_status === "en_ruta" || g.delivery_status === "entregado",
+    (g) =>
+      g.delivery_status === "entregado" ||
+      ((g.delivery_status === "pendiente" || g.delivery_status === "en_ruta") && !tandersGuideFailed(g)),
   );
 }
 
@@ -138,21 +200,21 @@ export function recoveryWindow(
 ): RecoveryWindow | null {
   if (events.some((e) => e.kind === RECOVERY_DISCARDED_KIND)) return null;
   if (!recoveryApplies(guides)) return null;
-  const failed = guides.filter(aliclikGuideFailedAfterDispatch);
+  const failed = guides.filter(guideFailedAfterDispatch);
   if (!failed.length) return null;
   // La más reciente: si hubo dos intentos con Aliclik, la ventana corre desde
-  // el último cierre, no desde el primero.
+  // el último cierre, no desde el primero. Y con la ventana de SU courier.
   let guide = failed[0]!;
-  let closedAt = guideClosedAt(guide);
+  let closedAt = guideFailedAt(guide);
   for (const g of failed) {
-    const at = guideClosedAt(g);
+    const at = guideFailedAt(g);
     if (at && (!closedAt || at > closedAt)) {
       guide = g;
       closedAt = at;
     }
   }
   if (!closedAt) return null;
-  const deadline = addDays(closedAt, windowDays);
+  const deadline = addDays(closedAt, recoveryWindowDaysFor(guide, windowDays));
   return {
     guide,
     closedAt,
@@ -222,7 +284,7 @@ export function recoveryOutcome(
   windowDays?: number,
 ): RecoveryKind | null {
   if (!recoveryApplies(guides)) return null;
-  if (!guides.some(aliclikGuideFailedAfterDispatch)) return null;
+  if (!guides.some(guideFailedAfterDispatch)) return null;
   // El descarte se mira DESPUÉS de saber que era recuperable: un evento suelto
   // sobre un pedido que nunca lo fue no convierte una guía cualquiera en
   // «descartada».

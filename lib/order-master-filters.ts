@@ -80,7 +80,7 @@ export const MANAGEMENT_DAYS_TOTAL = 7;
  * Caracteres mínimos para que el buscador del Master busque.
  *
  * Tres, porque es lo que necesitan los índices trigram de la búsqueda (0069,
- * 0203): con menos no hay trigrama que buscar y la base recorre la tabla
+ * 0204): con menos no hay trigrama que buscar y la base recorre la tabla
  * entera para devolver miles de filas que nadie va a leer. Ningún código de
  * pedido, guía o teléfono se identifica con dos letras.
  */

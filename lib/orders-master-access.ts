@@ -1320,7 +1320,7 @@ export async function getOrderMasterPage(
     : params.filters;
   const from = Math.max(0, (params.page - 1) * pageSize);
 
-  // BUSCAR VA POR SU PROPIA FUNCIÓN (0203). Con la RLS de por medio, `ilike` no
+  // BUSCAR VA POR SU PROPIA FUNCIÓN (0204). Con la RLS de por medio, `ilike` no
   // puede usar los índices trigram y cada búsqueda recorría la tabla entera
   // —160–245 ms, dos veces: conteo y página—. `order_master_search` hace la
   // misma búsqueda con los índices y acota a las tiendas de quien llama, así

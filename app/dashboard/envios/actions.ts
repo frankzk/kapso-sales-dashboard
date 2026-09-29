@@ -95,23 +95,16 @@ import {
 } from "@/lib/swayp-inventory-api";
 import {
   aplicarPlanSwayp,
-  credencialInventarioDesdeEnv,
+  fuenteAutomaticaDesdeEnv,
+  HORAS_ENTRE_SYNCS,
   leerInventarioSwayp,
   planesSwaypPorCiudad,
   sincronizarInventarioSwayp,
   type CiudadRetenida,
+  type FuenteSwayp,
   type SyncCiudadResultado,
   type SyncResult,
 } from "@/lib/swayp-inventory-sync";
-import {
-  credencialAutomatica,
-  crearLlaveExtension,
-  guardarSesionSwayp,
-  HORAS_ENTRE_SYNCS,
-  infoExtension,
-  infoSesionGuardada,
-} from "@/lib/swayp-inventory-session";
-import { zipExtensionSwayp } from "@/lib/swayp-extension";
 import { resolveEmails } from "@/lib/productivity";
 import {
   shopifyShippingAddress,
@@ -2372,27 +2365,22 @@ export interface DryRunResult {
   totalFilasInventario: number;
   /** Muestra CRUDA de las primeras filas, para confirmar los nombres de campo. */
   muestra: unknown[];
-  /** true si se leyó con la credencial guardada de Kapta (sin pegar token). */
-  conCredencialGuardada: boolean;
-  /** Si el token pegado quedó guardado para el sync diario: hasta cuándo (ISO). */
-  sesionHasta: string | null;
+  /** De dónde se leyó: la API de integraciones, o el panel con un token pegado. */
+  fuente: "integracion" | "panel";
 }
 
 interface EntradaCredencial {
-  /** Vacío = usar la credencial guardada de Kapta (la del sync automático). */
+  /** Vacío = la API de integraciones (credencial de las guías). Con token: el panel. */
   token?: string;
   email: string;
   user: string;
   idCompany: string;
 }
 
-/** El admin de la sesión y la credencial con la que leer Swayp. */
+/** El admin de la sesión y de dónde leer Swayp. */
 async function prepararSyncSwayp(
   input: EntradaCredencial,
-): Promise<
-  | { orgId: string; userId: string; creds: SwaypInventoryCreds; conCredencialGuardada: boolean }
-  | { error: string }
-> {
+): Promise<{ orgId: string; userId: string; fuente: FuenteSwayp } | { error: string }> {
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -2406,16 +2394,17 @@ async function prepararSyncSwayp(
 
   // Un «Bearer » pegado de más duplicaría el prefijo y Swayp respondería 403.
   const token = (input.token ?? "").trim().replace(/^bearer\s+/i, "");
-  // Vacío: la credencial de API si existe, si no la última sesión guardada.
   if (!token) {
-    const guardada = await credencialAutomatica(createAdminSupabase(), adminOrg.org_id);
-    if (!guardada) {
-      return {
-        error:
-          "No hay una sesión de Swayp vigente guardada. Pega un token del panel, o abre Swayp en el navegador que tiene la extensión.",
-      };
+    const auto = fuenteAutomaticaDesdeEnv();
+    if (!auto.ok) {
+      return { error: `Falta configurar la API de integraciones de Swayp (${auto.faltan.join(", ")}).` };
     }
-    return { orgId: adminOrg.org_id, userId: user.id, creds: guardada.creds, conCredencialGuardada: true };
+    // La credencial de las guías es de UNA empresa de Swayp: su stock sólo se
+    // escribe en la organización configurada como dueña.
+    if (auto.orgId !== adminOrg.org_id) {
+      return { error: "La cuenta de Swayp configurada es de otra organización." };
+    }
+    return { orgId: adminOrg.org_id, userId: user.id, fuente: auto.fuente };
   }
 
   const email = input.email?.trim();
@@ -2427,49 +2416,21 @@ async function prepararSyncSwayp(
   return {
     orgId: adminOrg.org_id,
     userId: user.id,
-    creds: { token, email, user: ruc, idCompany, country: "PE" },
-    conCredencialGuardada: false,
+    fuente: { tipo: "panel", creds: { token, email, user: ruc, idCompany, country: "PE" } },
   };
 }
 
 /**
- * Un token pegado que Swayp aceptó se guarda (cifrado) para el sync diario.
- * Devuelve hasta cuándo sirve (ISO), o null si no se guardó: ya era el
- * guardado, o falló el guardado, que no debe tumbar la lectura.
- */
-async function recordarSesion(prep: {
-  orgId: string;
-  userId: string;
-  creds: SwaypInventoryCreds;
-  conCredencialGuardada: boolean;
-}): Promise<string | null> {
-  if (prep.conCredencialGuardada) return null;
-  try {
-    const vence = await guardarSesionSwayp(createAdminSupabase(), {
-      orgId: prep.orgId,
-      creds: prep.creds,
-      source: "manual",
-      userId: prep.userId,
-    });
-    return vence.toISOString();
-  } catch (e) {
-    console.error("[swayp-inventory] guardar la sesión:", e);
-    return null;
-  }
-}
-
-/**
- * Trae el inventario de Swayp por API y muestra qué cambiaría, SIN escribir.
- * El diff es EXACTAMENTE el que aplica `swaypInventorySync` con una lectura igual.
+ * Trae el inventario de Swayp y muestra qué cambiaría, SIN escribir. El diff es
+ * EXACTAMENTE el que aplica `swaypInventorySync` con una lectura igual.
  */
 export async function swaypInventoryDryRun(
   input: EntradaCredencial,
 ): Promise<DryRunResult | { error: string; diagnostico?: SwaypProbe[] }> {
   const prep = await prepararSyncSwayp(input);
   if ("error" in prep) return prep;
-  const lectura = await leerInventarioSwayp(prep.creds);
+  const lectura = await leerInventarioSwayp(prep.fuente);
   if ("error" in lectura) return lectura;
-  const sesionHasta = await recordarSesion(prep);
 
   let planes;
   try {
@@ -2503,8 +2464,7 @@ export async function swaypInventoryDryRun(
       .filter((w) => w.filas > 0),
     totalFilasInventario: lectura.totalFilas,
     muestra: lectura.muestra,
-    conCredencialGuardada: prep.conCredencialGuardada,
-    sesionHasta,
+    fuente: prep.fuente.tipo,
   };
 }
 
@@ -2519,13 +2479,12 @@ export async function swaypInventorySync(
   const prep = await prepararSyncSwayp(input);
   if ("error" in prep) return prep;
   const r = await sincronizarInventarioSwayp(createAdminSupabase(), {
-    creds: prep.creds,
+    fuente: prep.fuente,
     orgId: prep.orgId,
     userId: prep.userId,
     ciudades: input.ciudades ?? [],
     source: "manual",
   });
-  if (!("error" in r)) await recordarSesion(prep);
   revalidatePath("/dashboard/envios/stock");
   revalidatePath("/dashboard/envios");
   return r;
@@ -2545,19 +2504,17 @@ export interface SwaypSyncCorrida {
 }
 
 export interface SwaypSyncEstado {
-  /** Hay credencial de API de Swayp (`SWAYP_INVENTORY_TOKEN`): no depende de ninguna sesión. */
-  credencialApi: boolean;
-  /** La sesión del panel guardada para el sync diario, sin el token. */
-  sesion: { expiresAt: string; source: "manual" | "extension"; savedAt: string; vigente: boolean } | null;
-  /** La extensión de Chrome: cuándo se descargó y cuándo envió por última vez. */
-  extension: { createdAt: string; lastUsedAt: string | null } | null;
+  /** El sync diario tiene con qué correr (API de integraciones + organización). */
+  automaticoActivo: boolean;
+  /** Qué falta configurar si no está activo. */
+  faltan: string[];
   /** Cada cuántas horas, como mucho, sincroniza el automático. */
   horasEntreSyncs: number;
   /** Las últimas corridas, la más reciente primero. */
   corridas: SwaypSyncCorrida[];
 }
 
-/** Si el sync automático está configurado y cómo le fue últimamente. */
+/** Si el sync diario está activo y cómo le fue últimamente. */
 export async function swaypInventoryEstado(): Promise<SwaypSyncEstado | { error: string }> {
   const sb = await createServerSupabase();
   const {
@@ -2570,50 +2527,19 @@ export async function swaypInventoryEstado(): Promise<SwaypSyncEstado | { error:
   );
   if (!adminOrg) return { error: "Solo un administrador puede ver el sync de Swayp." };
 
-  const admin = createAdminSupabase();
-  const api = credencialInventarioDesdeEnv();
-  const [{ data }, sesion, extension] = await Promise.all([
-    admin
-      .from("swayp_inventory_sync_runs")
-      .select("created_at,source,ok,error,resumen")
-      .eq("org_id", adminOrg.org_id)
-      .order("created_at", { ascending: false })
-      .limit(5),
-    infoSesionGuardada(admin, adminOrg.org_id),
-    infoExtension(admin, adminOrg.org_id),
-  ]);
+  const auto = fuenteAutomaticaDesdeEnv();
+  const { data } = await createAdminSupabase()
+    .from("swayp_inventory_sync_runs")
+    .select("created_at,source,ok,error,resumen")
+    .eq("org_id", adminOrg.org_id)
+    .order("created_at", { ascending: false })
+    .limit(5);
   return {
-    credencialApi: api.ok && api.orgId === adminOrg.org_id,
-    sesion: sesion ? { ...sesion, vigente: new Date(sesion.expiresAt).getTime() > Date.now() } : null,
-    extension,
+    automaticoActivo: auto.ok && auto.orgId === adminOrg.org_id,
+    faltan: auto.ok ? [] : auto.faltan,
     horasEntreSyncs: HORAS_ENTRE_SYNCS,
     corridas: (data as SwaypSyncCorrida[]) ?? [],
   };
-}
-
-/**
- * Genera la extensión de Chrome «Kapta · Swayp» de esta organización, con una
- * llave NUEVA (la anterior deja de servir). Devuelve el .zip en base64.
- */
-export async function swaypExtensionDescargar(): Promise<{ zipBase64: string; nombre: string } | { error: string }> {
-  const sb = await createServerSupabase();
-  const {
-    data: { user },
-  } = await sb.auth.getUser();
-  if (!user) redirect("/login");
-  const { data: mem } = await sb.from("memberships").select("org_id,role");
-  const adminOrg = ((mem as { org_id: string; role: string }[]) ?? []).find(
-    (m) => m.role === "owner" || m.role === "admin",
-  );
-  if (!adminOrg) return { error: "Solo un administrador puede descargar la extensión." };
-  try {
-    const llave = await crearLlaveExtension(createAdminSupabase(), adminOrg.org_id, user.id);
-    const zip = zipExtensionSwayp({ kaptaUrl: env.siteUrl(), llave });
-    return { zipBase64: Buffer.from(zip).toString("base64"), nombre: "kapta-swayp.zip" };
-  } catch (e) {
-    console.error("[swayp-inventory] extensión:", e);
-    return { error: "No se pudo generar la extensión. Inténtalo de nuevo." };
-  }
 }
 
 /** Delete a Swayp stock row (admin). */

@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { credencialInventarioDesdeEnv, motivoParaRetener, type PlanDeCiudad } from "@/lib/swayp-inventory-sync";
+import {
+  debeSincronizar,
+  fuenteAutomaticaDesdeEnv,
+  HORAS_ENTRE_SYNCS,
+  motivoParaRetener,
+  type PlanDeCiudad,
+} from "@/lib/swayp-inventory-sync";
 import type { Ajuste, PlanImportacion } from "@/lib/swayp-inventario";
 
 // El sync automático aplica sin que nadie mire. Estas pruebas fijan cuándo se
@@ -53,54 +59,40 @@ describe("motivoParaRetener", () => {
   });
 });
 
-describe("credencialInventarioDesdeEnv", () => {
+describe("fuenteAutomaticaDesdeEnv", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  const base = {
-    SWAYP_INVENTORY_TOKEN: "",
-    SWAYP_INVENTORY_EMAIL: "",
-    SWAYP_TOKEN: "",
-    SWAYP_EMAIL: "",
-    SWAYP_INVENTORY_RUC: "",
-    SWAYP_INVENTORY_COMPANY_ID: "",
-    SWAYP_INVENTORY_ORG_ID: "",
-  };
-  function stub(vals: Partial<typeof base>) {
-    for (const [k, v] of Object.entries({ ...base, ...vals })) vi.stubEnv(k, v);
+  it("usa la API de integraciones con la credencial de las guías", () => {
+    vi.stubEnv("SWAYP_TOKEN", "INT");
+    vi.stubEnv("SWAYP_EMAIL", "api@kapta.pe");
+    vi.stubEnv("SWAYP_INVENTORY_ORG_ID", "org-1");
+    const r = credencial();
+    expect(r).toMatchObject({ ok: true, orgId: "org-1", fuente: { tipo: "integracion" } });
+    if (r.ok && r.fuente.tipo === "integracion") {
+      expect(r.fuente.opts).toMatchObject({ token: "INT", email: "api@kapta.pe" });
+    }
+  });
+
+  it("sin credencial de guías o sin organización, dice qué falta", () => {
+    vi.stubEnv("SWAYP_TOKEN", "");
+    vi.stubEnv("SWAYP_EMAIL", "");
+    vi.stubEnv("SWAYP_INVENTORY_ORG_ID", "");
+    expect(credencial()).toEqual({ ok: false, faltan: ["SWAYP_TOKEN / SWAYP_EMAIL", "SWAYP_INVENTORY_ORG_ID"] });
+  });
+
+  function credencial() {
+    return fuenteAutomaticaDesdeEnv();
   }
+});
 
-  it("sin configuración, dice qué falta", () => {
-    stub({});
-    const r = credencialInventarioDesdeEnv();
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.faltan).toHaveLength(5);
+describe("debeSincronizar", () => {
+  const ahora = new Date("2026-09-29T15:00:00Z");
+  it("sí si nunca se sincronizó", () => {
+    expect(debeSincronizar(null, ahora)).toBe(true);
   });
-
-  it("NO usa la credencial de las guías: Swayp la rechaza para inventario (403 7301)", () => {
-    stub({
-      SWAYP_TOKEN: "INT",
-      SWAYP_EMAIL: "api@kapta.pe",
-      SWAYP_INVENTORY_RUC: "20610091823",
-      SWAYP_INVENTORY_COMPANY_ID: "IsjvRm8cEqQBFP4r0TxF",
-      SWAYP_INVENTORY_ORG_ID: "org-1",
-    });
-    const r = credencialInventarioDesdeEnv();
-    expect(r).toEqual({ ok: false, faltan: ["SWAYP_INVENTORY_TOKEN"] });
-  });
-
-  it("con una credencial exclusiva de inventario, arma todo (el correo puede ser el de las guías)", () => {
-    stub({
-      SWAYP_TOKEN: "INT",
-      SWAYP_EMAIL: "api@kapta.pe",
-      SWAYP_INVENTORY_TOKEN: "Bearer INV",
-      SWAYP_INVENTORY_RUC: "20610091823",
-      SWAYP_INVENTORY_COMPANY_ID: "IsjvRm8cEqQBFP4r0TxF",
-      SWAYP_INVENTORY_ORG_ID: "org-1",
-    });
-    expect(credencialInventarioDesdeEnv()).toMatchObject({
-      ok: true,
-      orgId: "org-1",
-      creds: { token: "INV", email: "api@kapta.pe", user: "20610091823", idCompany: "IsjvRm8cEqQBFP4r0TxF" },
-    });
+  it("una vez al día: no antes de 20 h desde la última buena; sí desde las 20 h", () => {
+    expect(HORAS_ENTRE_SYNCS).toBe(20);
+    expect(debeSincronizar(new Date("2026-09-28T20:00:00Z"), ahora)).toBe(false); // 19 h
+    expect(debeSincronizar(new Date("2026-09-28T19:00:00Z"), ahora)).toBe(true); // 20 h
   });
 });

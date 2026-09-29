@@ -30,6 +30,7 @@ import { RISK_LABELS, type RiskAssessment } from "@/lib/retries";
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import type { RiderRow } from "@/lib/settlements-access";
 import { Hint } from "@/components/hint";
+import { Badge, Banner, FIELD, OpsButton } from "@/components/ops-ui";
 import { IconAlert, IconCamera, IconCameraOff, IconCheckCircle, IconClock, IconPlus, IconReceipt, IconTruck } from "@/components/icons";
 import { RIDER_PAY_BALANCE_HINT, RIDER_RATE_FORM_ID, RiderPayPanel, riderPayBalanceLabel } from "@/components/rider-pay-panel";
 import { checkStopRate, stopEarnings } from "@/lib/rider-pay";
@@ -189,7 +190,7 @@ export function RoutesBoard({
   const storeName = (id: string | null) => stores.find((s) => s.id === id)?.name ?? "—";
 
   return (
-    <div className="space-y-6">
+    <div className={detailOnly ? "space-y-5" : "space-y-6"}>
       {!detailOnly && <>
       <Section title="Rutas de reparto">
         <p className="text-sm text-slate-500">
@@ -261,8 +262,8 @@ export function RoutesBoard({
       </Card>
 
       </>}
-      {detailOnly && msg && <p role="status" className="rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">{msg}</p>}
-      {detailOnly && err && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{err}</p>}
+      {detailOnly && msg && <Banner tone="ok" role="status">{msg}</Banner>}
+      {detailOnly && err && <Banner tone="crit" role="alert">{err}</Banner>}
 
       {detail && (
         <>
@@ -596,15 +597,15 @@ function RouteDetail({
       )}
 
       {planning && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3">
-          <p className="text-sm text-slate-600">La ruta se está armando: el motorizado todavía no la ve.</p>
-          <button
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-wash px-4 py-3">
+          <p className="text-sm text-ink-700">La ruta se está armando: el motorizado todavía no la ve.</p>
+          <OpsButton
+            variant="primary"
             disabled={disabled || !stops.length}
             onClick={() => onRun(() => startRoute(route.id))}
-            className={BTN_PRIMARY}
           >
             Entregar la ruta
-          </button>
+          </OpsButton>
         </div>
       )}
 
@@ -628,30 +629,31 @@ function RouteDetail({
       )}
 
       {closed && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3">
-          <p className="text-sm text-slate-600">
-            Ruta cerrada. Su liquidación está en{" "}
-            <a href="/dashboard/liquidaciones" className="font-medium text-brand-700 underline underline-offset-2">
-              Liquidaciones
-            </a>
-            , ya con todas las líneas vinculadas.
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-wash px-4 py-3">
+          <p className="flex min-w-0 items-start gap-2 text-sm text-ink-700">
+            <IconCheckCircle aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ok-fg" />
+            <span>
+              Ruta cerrada. Su liquidación está en{" "}
+              <a href="/dashboard/liquidaciones" className="font-medium text-brand-700 hover:underline">
+                Liquidaciones
+              </a>
+              , ya con todas las líneas vinculadas.
+            </span>
           </p>
-          <button
-            type="button"
+          <OpsButton
             disabled={disabled}
             onClick={() => { if (window.confirm("¿Reabrir la ruta? Se descarta su liquidación en borrador; al volver a terminarla se crea de nuevo.")) onRun(() => reopenRoute(route.id)); }}
-            className={BTN_SECONDARY}
             title="Solo mientras la liquidación siga en borrador y el cálculo diario no esté aprobado"
           >
             Reabrir ruta
-          </button>
+          </OpsButton>
         </div>
       )}
 
       {/* Una sola fila de métricas: lo operativo (paradas y cobros) y lo del
           pago del motorizado (ganancia y saldo), sin repetirlo más abajo. En
           tres columnas y sin recortar: en seis no cabían en el panel. */}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg bg-line ring-1 ring-line sm:grid-cols-3">
         <Tile label="Paradas" value={String(totals.total)} sub={`${totals.entregados} entregadas · ${totals.noEntregados} no entregadas · ${totals.pendientes} sin reportar`} />
         <Tile label="Efectivo en manos" value={money(totals.efectivo)} />
         <Tile label="Yape / POS" value={`${money(totals.yape)} / ${money(totals.pos)}`} />
@@ -675,12 +677,12 @@ function RouteDetail({
                 aria-pressed={view === v.key}
                 onClick={() => setView(v.key)}
                 className={cn(
-                  "inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-sm font-medium",
-                  view === v.key ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
+                  "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[13px] font-medium transition-shadow",
+                  view === v.key ? "bg-brand-50 text-brand-700 ring-2 ring-inset ring-brand-600" : "bg-white text-ink-700 ring-1 ring-inset ring-line-strong hover:ring-ink-300",
                 )}
               >
                 {v.label}
-                <span className={cn("tabular-nums", view === v.key ? "text-slate-300" : "text-slate-500")}>{v.count}</span>
+                <span className={cn("tabular-nums", view === v.key ? "text-brand-700" : "text-ink-500")}>{v.count}</span>
               </button>
             ))}
           </div>
@@ -688,18 +690,18 @@ function RouteDetail({
 
         {/* En el teléfono, una lista: la tabla escondía el resultado y la
             foto detrás del scroll horizontal, que es justo lo que se revisa. */}
-        <ul className="divide-y divide-slate-100 border-y border-slate-200 sm:hidden">
+        <ul className="divide-y divide-line rounded-lg ring-1 ring-line sm:hidden">
           {shown.map((s) => (
-            <li key={s.id} className="space-y-1.5 py-3">
+            <li key={s.id} className="space-y-1.5 px-3 py-3">
               <div className="flex items-start justify-between gap-3">
-                <p className="min-w-0 font-medium text-slate-900">
-                  <span className="mr-1.5 text-xs tabular-nums text-slate-400">{s.seq}</span>
+                <p className="min-w-0 font-semibold text-ink-900">
+                  <span className="mr-1.5 text-xs font-medium tabular-nums text-ink-500">{s.seq}</span>
                   {s.order?.customer_name ?? "—"}
                 </p>
                 <StopEarnings stop={s} row={payRow.get(s.id)} pay={pay} onExtra={canExtra ? onExtra : undefined} />
               </div>
-              <p className="text-xs text-slate-500">
-                {s.order?.name ? <OrderLink orderId={s.order_id} className="text-slate-700 underline decoration-slate-300 underline-offset-2 hover:text-brand-700" title="Abrir la ficha del pedido">{s.order.name}</OrderLink> : "—"}
+              <p className="text-[13px] text-ink-500">
+                {s.order?.name ? <OrderLink orderId={s.order_id} className={ORDER_LINK} title="Abrir la ficha del pedido">{s.order.name}</OrderLink> : "—"}
                 {" · "}<span className="tabular-nums">{s.order?.total == null ? "—" : money(s.order.total)}</span>
                 {" · "}{s.order?.district ?? "—"} · {storeName(s.store_id)}
               </p>
@@ -711,7 +713,7 @@ function RouteDetail({
                 <button
                   disabled={disabled}
                   onClick={() => onRun(() => removeStop(s.id))}
-                  className="text-xs text-slate-500 underline hover:text-red-600 disabled:opacity-50"
+                  className="text-xs font-medium text-crit-fg hover:underline disabled:opacity-50"
                 >
                   Quitar
                 </button>
@@ -719,7 +721,7 @@ function RouteDetail({
             </li>
           ))}
           {stops.length === 0 && (
-            <li className="py-6 text-center text-sm text-slate-500">
+            <li className="py-6 text-center text-sm text-ink-500">
               {canAddStops ? "Esta ruta no tiene paradas. Añádelas abajo." : "Esta ruta no tiene paradas."}
             </li>
           )}
@@ -729,7 +731,7 @@ function RouteDetail({
             medianas se desplaza en horizontal con el cliente fijo a la
             izquierda. Anchos fijos y dos líneas por fila como máximo: lo que no
             cabe se recorta y se lee entero al pasar el cursor. */}
-        <div className="hidden overflow-x-auto sm:block">
+        <div className="hidden overflow-x-auto rounded-lg ring-1 ring-line sm:block">
           <table className="w-full min-w-[840px] table-fixed text-sm">
             <colgroup>
               <col className="w-[17%]" />
@@ -740,51 +742,51 @@ function RouteDetail({
               <col className="w-[18%]" />
               {planning && <col className="w-16" />}
             </colgroup>
-            <thead className="border-b border-slate-200 text-left text-xs text-slate-500">
+            <thead className="text-left text-xs font-semibold text-ink-600 shadow-[inset_0_-1px_0_var(--color-line)]">
               <tr>
-                <th className="sticky left-0 z-[1] bg-white px-2.5 py-2 font-medium">Cliente</th>
-                <th className="px-2.5 py-2 font-medium">Pedido</th>
-                <th className="px-2.5 py-2 font-medium">Distrito</th>
-                <th className="px-2.5 py-2 font-medium">Resultado</th>
-                <th className="px-2.5 py-2 font-medium">Cobro y respaldo</th>
-                <th className="px-2.5 py-2 text-right font-medium">Ganancia</th>
-                {planning && <th className="px-2.5 py-2 font-medium"><span className="sr-only">Acciones</span></th>}
+                <th className="sticky left-0 z-[1] bg-white px-3 py-2.5 font-semibold">Cliente</th>
+                <th className="px-2.5 py-2.5 font-semibold">Pedido</th>
+                <th className="px-2.5 py-2.5 font-semibold">Distrito</th>
+                <th className="px-2.5 py-2.5 font-semibold">Resultado</th>
+                <th className="px-2.5 py-2.5 font-semibold">Cobro y respaldo</th>
+                <th className="px-3 py-2.5 text-right font-semibold">Ganancia</th>
+                {planning && <th className="px-2.5 py-2.5 font-semibold"><span className="sr-only">Acciones</span></th>}
               </tr>
             </thead>
             <tbody>
               {shown.map((s) => (
-                <tr key={s.id} className="group border-b border-slate-100 align-top hover:bg-slate-50">
-                  <td className="sticky left-0 z-[1] bg-white px-2.5 py-2 text-slate-800 group-hover:bg-slate-50">
+                <tr key={s.id} className="group align-top transition-colors [&+&]:shadow-[inset_0_1px_0_var(--color-line)] hover:bg-wash">
+                  <td className="sticky left-0 z-[1] bg-white px-3 py-2.5 font-medium text-ink-900 transition-colors group-hover:bg-wash">
                     <div className="flex gap-2">
-                      <span className="w-4 shrink-0 text-right text-xs leading-5 tabular-nums text-slate-400">{s.seq}</span>
+                      <span className="w-4 shrink-0 text-right text-xs font-normal leading-5 tabular-nums text-ink-500">{s.seq}</span>
                       <span className="line-clamp-2 min-w-0 leading-5" title={s.order?.customer_name ?? undefined}>{s.order?.customer_name ?? "—"}</span>
                     </div>
                   </td>
-                  <td className="px-2.5 py-2">
+                  <td className="px-2.5 py-2.5">
                     <p className="truncate leading-5">
-                      {s.order?.name ? <OrderLink orderId={s.order_id} className="text-slate-700 underline decoration-slate-300 underline-offset-2 hover:text-brand-700" title="Abrir la ficha del pedido">{s.order.name}</OrderLink> : "—"}
+                      {s.order?.name ? <OrderLink orderId={s.order_id} className={ORDER_LINK} title="Abrir la ficha del pedido">{s.order.name}</OrderLink> : "—"}
                     </p>
-                    <p className="text-xs leading-4 tabular-nums text-slate-500">{s.order?.total == null ? "—" : money(s.order.total)}</p>
+                    <p className="text-xs leading-4 tabular-nums text-ink-500">{s.order?.total == null ? "—" : money(s.order.total)}</p>
                   </td>
-                  <td className="px-2.5 py-2">
-                    <p className="truncate leading-5 text-slate-700" title={s.order?.district ?? undefined}>{s.order?.district ?? "—"}</p>
-                    <p className="truncate text-xs leading-4 text-slate-500">{storeName(s.store_id)}</p>
+                  <td className="px-2.5 py-2.5">
+                    <p className="truncate leading-5 text-ink-700" title={s.order?.district ?? undefined}>{s.order?.district ?? "—"}</p>
+                    <p className="truncate text-xs leading-4 text-ink-500">{storeName(s.store_id)}</p>
                   </td>
-                  <td className="px-2.5 py-2">
+                  <td className="px-2.5 py-2.5">
                     <StopResult stop={s} />
                   </td>
-                  <td className="px-2.5 py-2">
+                  <td className="px-2.5 py-2.5">
                     <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} exempt={exemptRejection(s)} />
                   </td>
-                  <td className="px-2.5 py-2 text-right">
+                  <td className="px-3 py-2.5 text-right">
                     <StopEarnings stop={s} row={payRow.get(s.id)} pay={pay} onExtra={canExtra ? onExtra : undefined} />
                   </td>
                   {planning && (
-                    <td className="px-2.5 py-2 text-right">
+                    <td className="px-2.5 py-2.5 text-right">
                       <button
                         disabled={disabled}
                         onClick={() => onRun(() => removeStop(s.id))}
-                        className="text-xs text-slate-500 underline hover:text-red-600 disabled:opacity-50"
+                        className="text-xs font-medium text-crit-fg hover:underline disabled:opacity-50"
                       >
                         Quitar
                       </button>
@@ -794,7 +796,7 @@ function RouteDetail({
               ))}
               {stops.length === 0 && (
                 <tr>
-                  <td colSpan={planning ? 7 : 6} className="px-3 py-6 text-center text-sm text-slate-500">
+                  <td colSpan={planning ? 7 : 6} className="px-3 py-6 text-center text-sm text-ink-500">
                     {canAddStops ? "Esta ruta no tiene paradas. Añádelas abajo." : "Esta ruta no tiene paradas."}
                   </td>
                 </tr>
@@ -898,27 +900,27 @@ function StopResult({ stop: s }: { stop: StopWithOrder }) {
           «No contesta»… El rojo ya dice que no se entregó. */}
       <p className="truncate leading-5" title={reason ? `No entregado · ${reason}` : undefined}>
         {s.status === "pendiente" ? (
-          <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-900">Sin reportar</span>
+          <Badge tone="warn">Sin reportar</Badge>
         ) : s.status === "entregado" ? (
-          <span className="font-semibold text-emerald-700">Entregado</span>
+          <Badge tone="ok">Entregado</Badge>
         ) : (
-          <span className="font-semibold text-red-700"><span className="sr-only">No entregado: </span>{reason}</span>
+          <Badge tone="crit"><span className="truncate"><span className="sr-only">No entregado: </span>{reason}</span></Badge>
         )}
       </p>
       {(returnState || s.note) && (
-        <p className="flex min-w-0 items-center gap-1.5 leading-4">
+        <p className="mt-1 flex min-w-0 items-center gap-1.5 leading-4">
           {returnState === "por_devolver" && (
-            <span className="shrink-0 whitespace-nowrap rounded-full bg-red-100 px-1.5 text-[11px] font-semibold text-red-800">Por devolver</span>
+            <span className="shrink-0 whitespace-nowrap text-xs font-semibold text-crit-fg">Por devolver</span>
           )}
           {returnState === "devuelto" && returnedAt && (
             <span
-              className="shrink-0 whitespace-nowrap rounded-full bg-emerald-100 px-1.5 text-[11px] font-semibold text-emerald-800"
+              className="shrink-0 whitespace-nowrap text-xs font-semibold tabular-nums text-ok-fg"
               title={`Recibido en oficina el ${returnedAt.toLocaleString("es-PE", { timeZone: "America/Lima" })}`}
             >
               Devuelto · {returnedAt.toLocaleString("es-PE", { timeZone: "America/Lima", day: "2-digit", month: "2-digit" })}
             </span>
           )}
-          {s.note && <span className="min-w-0 truncate text-slate-500" title={s.note}>{s.note}</span>}
+          {s.note && <span className="min-w-0 truncate text-ink-500" title={s.note}>{s.note}</span>}
         </p>
       )}
     </div>
@@ -942,10 +944,10 @@ function StopCollection({ stop: s, needsPhoto, needsVoucher, exempt = false }: {
   const voucherLabel = s.payment_method === "yape" ? "Ver la captura del Yape" : "Ver el comprobante de pago";
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <p className="min-w-0 truncate leading-5 text-slate-700">
+      <p className="min-w-0 truncate leading-5 text-ink-900">
         {s.status === "entregado"
-          ? <><span className="text-xs text-slate-500">{METHOD_SHORT[s.payment_method ?? ""] ?? methodLabel(s.payment_method)}</span> <span className="tabular-nums">{money(s.collected_amount)}</span></>
-          : <span className="text-slate-400">—</span>}
+          ? <><span className="text-xs text-ink-500">{METHOD_SHORT[s.payment_method ?? ""] ?? methodLabel(s.payment_method)}</span> <span className="tabular-nums">{money(s.collected_amount)}</span></>
+          : <span className="text-ink-300">—</span>}
       </p>
       <span className="flex shrink-0 items-center gap-1">
         {s.photo_path ? (
@@ -1006,7 +1008,7 @@ function StopEarnings({ stop: s, row: pr, pay, onExtra }: {
     <div className="min-w-0 text-right">
       <div className="flex items-center justify-end gap-1.5 leading-5">
         {check?.warning && state?.kind !== "no_se_paga" && (
-          <span role="img" title={check.warning} aria-label={check.warning} className="shrink-0 text-amber-600">
+          <span role="img" title={check.warning} aria-label={check.warning} className="shrink-0 text-warn-fg">
             <IconAlert aria-hidden="true" className="h-3.5 w-3.5" />
           </span>
         )}
@@ -1016,21 +1018,21 @@ function StopEarnings({ stop: s, row: pr, pay, onExtra }: {
             onClick={() => onExtra(s.id)}
             title="Aprobar un adicional para este punto"
             aria-label="Aprobar un adicional para este punto"
-            className="inline-flex h-5 min-h-0 w-5 shrink-0 items-center justify-center rounded text-brand-700 opacity-0 hover:bg-brand-50 focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
+            className="inline-flex h-5 min-h-0 w-5 shrink-0 items-center justify-center rounded text-brand-700 opacity-0 transition-opacity hover:bg-brand-50 focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
           >
             <IconPlus aria-hidden="true" className="h-3.5 w-3.5" />
           </button>
         )}
-        {!pr || !state ? <span className="text-slate-400">—</span>
-          : earned !== null ? <span className="font-semibold tabular-nums text-slate-900">{money(earned + extra)}</span>
+        {!pr || !state ? <span className="text-ink-300">—</span>
+          : earned !== null ? <span className="font-semibold tabular-nums text-ink-900">{money(earned + extra)}</span>
           : state.kind === "no_se_paga"
-            ? (extra ? <span className="font-semibold tabular-nums text-slate-900">{money(extra)}</span> : <span className="text-xs font-medium text-slate-600">No se paga</span>)
-          : state.kind === "sin_tarifa" ? <span className="text-xs font-medium text-amber-800" title={noRateTitle}>Sin tarifa</span>
-          : <span className="text-slate-400">—</span>}
+            ? (extra ? <span className="font-semibold tabular-nums text-ink-900">{money(extra)}</span> : <span className="text-xs font-medium text-ink-600">No se paga</span>)
+          : state.kind === "sin_tarifa" ? <span className="text-xs font-medium text-warn-fg" title={noRateTitle}>Sin tarifa</span>
+          : <span className="text-ink-300">—</span>}
       </div>
       {detail && (
         <p
-          className={cn("truncate text-xs leading-4 tabular-nums", state?.kind === "pendiente" && state.rate == null ? "font-medium text-amber-800" : "text-slate-500")}
+          className={cn("truncate text-xs leading-4 tabular-nums", state?.kind === "pendiente" && state.rate == null ? "font-medium text-warn-fg" : "text-ink-500")}
           title={state?.kind === "pendiente" && state.rate == null ? noRateTitle : detailTitle}
         >
           {detail}
@@ -1045,26 +1047,34 @@ function closedStatus(status: string): boolean {
 }
 
 // Botones del panel: uno por jerarquía, para que «Terminar» se distinga de sus arreglos.
-const BTN = "inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg px-3.5 text-sm font-medium whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50";
-const BTN_PRIMARY = cn(BTN, "bg-slate-900 font-semibold text-white hover:bg-slate-800");
-const BTN_SECONDARY = cn(BTN, "border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50");
-const BTN_DANGER = cn(BTN, "bg-red-600 font-semibold text-white hover:bg-red-700");
-const BTN_LINK = "min-h-0 text-sm font-medium text-brand-700 underline decoration-brand-200 underline-offset-2 hover:decoration-brand-700 disabled:opacity-50";
+// Las mismas piezas que `OpsButton` (components/ops-ui.tsx), como clases para
+// poder vestir también un <a> («Reportar entregas», «Abrir la caja»).
+const BTN = "inline-flex h-9 items-center justify-center gap-1.5 rounded-md px-3 text-sm font-semibold whitespace-nowrap transition-[background-color,color,box-shadow] duration-150 disabled:cursor-not-allowed disabled:opacity-50";
+const BTN_PRIMARY = cn(BTN, "bg-brand-600 text-white shadow-primary hover:bg-brand-700 disabled:hover:bg-brand-600");
+const BTN_SECONDARY = cn(BTN, "bg-white text-ink-700 shadow-control ring-1 ring-inset ring-line-strong hover:bg-wash hover:text-ink-900");
+const BTN_DANGER = cn(BTN, "bg-white text-crit-fg shadow-control ring-1 ring-inset ring-line-strong hover:bg-crit-wash");
+const BTN_LINK = "min-h-0 text-[13px] font-medium text-brand-700 hover:underline disabled:opacity-50";
+const ORDER_LINK = "font-medium text-ink-900 underline decoration-line-strong underline-offset-2 hover:text-brand-700 hover:decoration-brand-700";
 // Respaldo de la parada como íconos: enlace a la foto o al comprobante, lo que
 // falta en ámbar y la foto que no se exige, tachada.
-const EVIDENCE_ICON = "inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 pointer-coarse:h-10 pointer-coarse:w-10";
-const MISSING_ICON = "inline-flex h-6 w-6 items-center justify-center rounded-md bg-amber-100 text-amber-800 pointer-coarse:h-10 pointer-coarse:w-10";
-const EXEMPT_ICON = "inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-500";
+const EVIDENCE_ICON = "inline-flex h-6 w-6 items-center justify-center rounded-md bg-white text-ink-600 shadow-control ring-1 ring-inset ring-line-strong transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:h-10 pointer-coarse:w-10";
+const MISSING_ICON = "inline-flex h-6 w-6 items-center justify-center rounded-md bg-warn-bg text-warn-fg pointer-coarse:h-10 pointer-coarse:w-10";
+const EXEMPT_ICON = "inline-flex h-6 w-6 items-center justify-center rounded-md text-ink-500";
 
+/**
+ * Una cifra del resumen de la ruta. Las seis comparten un solo marco con
+ * hairlines entre celdas (no seis tarjetas); el saldo, que es lo que se
+ * liquida, va sobre el lavado y en la cifra más grande.
+ */
 function Tile({ label, value, sub, hint, highlight, warn }: { label: string; value: string; sub?: string; hint?: string; highlight?: boolean; warn?: boolean }) {
   return (
-    <div className={cn("min-w-0 rounded-lg border px-3 py-2.5", highlight ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white")}>
-      <p className={cn("flex items-start gap-1 text-xs leading-snug", highlight ? "text-slate-300" : "text-slate-500")}>
+    <div className={cn("min-w-0 px-4 py-3", highlight ? "bg-wash" : "bg-white")}>
+      <p className={cn("flex items-start gap-1 text-[13px] leading-snug", highlight ? "font-medium text-ink-700" : "text-ink-500")}>
         <span>{label}</span>
-        {hint && <Hint text={hint} className={highlight ? "text-slate-300" : undefined} />}
+        {hint && <Hint text={hint} />}
       </p>
-      <p className={cn("mt-1 text-base font-semibold leading-tight tabular-nums", highlight ? "text-white" : warn ? "text-amber-800" : "text-slate-900")}>{value.replaceAll("S/ ", "S/ ")}</p>
-      {sub && <p className={cn("mt-1 text-xs leading-snug", highlight ? "text-slate-300" : warn ? "text-amber-800" : "text-slate-500")}>{sub}</p>}
+      <p className={cn("mt-1 font-semibold leading-tight tabular-nums", highlight ? "text-xl text-ink-900" : warn ? "text-base text-warn-fg" : "text-base text-ink-900")}>{value.replaceAll("S/ ", "S/ ")}</p>
+      {sub && <p className={cn("mt-1 text-xs leading-snug", warn ? "text-warn-fg" : "text-ink-500")}>{sub}</p>}
     </div>
   );
 }
@@ -1148,15 +1158,15 @@ function RouteClosePanel({
   };
 
   return (
-    <section aria-labelledby={headingId} className={cn("overflow-hidden rounded-xl border", ready ? "border-emerald-200" : "border-amber-200")}>
-      <div className={cn("flex flex-wrap items-start justify-between gap-x-4 gap-y-3 px-4 py-3.5", ready ? "bg-emerald-50" : "bg-amber-50")}>
+    <section aria-labelledby={headingId} className="overflow-hidden rounded-lg ring-1 ring-line">
+      <div className={cn("flex flex-wrap items-start justify-between gap-x-4 gap-y-3 px-4 py-3.5", ready ? "bg-ok-wash" : "bg-warn-wash")}>
         <div className="flex min-w-0 flex-1 basis-72 gap-2.5">
           {ready
-            ? <IconCheckCircle aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-            : <IconAlert aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />}
+            ? <IconCheckCircle aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ok-fg" />
+            : <IconAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-warn-fg" />}
           <div className="min-w-0">
-            <h3 id={headingId} className="text-sm font-semibold text-slate-900">{ready ? "Lista para terminar" : "Para terminar la ruta"}</h3>
-            <p id={summaryId} className={cn("mt-0.5 text-sm", ready ? "text-emerald-900" : "text-amber-900")}>{summary}</p>
+            <h3 id={headingId} className={cn("text-sm font-semibold", ready ? "text-ok-fg" : "text-warn-fg")}>{ready ? "Lista para terminar" : "Para terminar la ruta"}</h3>
+            <p id={summaryId} className="mt-0.5 text-sm text-ink-700">{summary}</p>
           </div>
         </div>
         <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
@@ -1183,7 +1193,7 @@ function RouteClosePanel({
       </div>
 
       {blockers.length > 0 && (
-        <ul className="divide-y divide-slate-100 border-t border-amber-200 bg-white">
+        <ul className="divide-y divide-line bg-white shadow-[inset_0_1px_0_var(--color-line)]">
           {blockers.map((b) => {
             switch (b.kind) {
               case "carga_sin_recibir":
@@ -1219,7 +1229,7 @@ function RouteClosePanel({
                             if (!confirm(`Quedan ${plural(b.stops.length, "parada", "paradas")} sin reportar. Se cerrará igual y esas paradas no entrarán en la liquidación. ¿Seguro?`)) return;
                             onRun(() => closeRoute(routeId, { force: true }));
                           }}
-                          className="min-h-0 text-sm font-medium text-red-700 underline underline-offset-2 hover:text-red-800 disabled:opacity-50"
+                          className="min-h-0 text-[13px] font-medium text-crit-fg hover:underline disabled:opacity-50"
                         >
                           Cerrar con paradas sin reportar
                         </button>
@@ -1246,11 +1256,11 @@ function RouteClosePanel({
       )}
 
       {payNotes.length > 0 && (
-        <div className="border-t border-slate-200 bg-white px-4 py-3">
-          <h4 className="text-sm font-medium text-slate-800">Para aprobar el pago, después</h4>
+        <div className="bg-white px-4 py-3 shadow-[inset_0_1px_0_var(--color-line)]">
+          <h4 className="text-[13px] font-semibold text-ink-700">Para aprobar el pago, después</h4>
           <ul className="mt-1.5 space-y-1.5">
             {payNotes.map((note) => (
-              <li key={note.key} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm text-slate-600">
+              <li key={note.key} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm text-ink-600">
                 <span>{note.text}</span>
                 {note.action && <button type="button" onClick={note.action.run} className={BTN_LINK}>{note.action.label}</button>}
               </li>
@@ -1273,11 +1283,11 @@ function BlockerRow({ icon, title, detail, orders, actions, below }: {
 }) {
   return (
     <li className="grid grid-cols-[1rem_minmax(0,1fr)] gap-x-3 gap-y-2 px-4 py-3 sm:grid-cols-[1rem_minmax(0,1fr)_auto]">
-      <span className="pt-0.5 text-amber-600">{icon}</span>
+      <span className="pt-0.5 text-warn-fg">{icon}</span>
       <div className="min-w-0">
-        <p className="text-sm font-semibold text-slate-900">{title}</p>
-        <p className="text-sm text-slate-600">{detail}</p>
-        {orders && <p className="mt-1 text-xs text-slate-500">{orders}</p>}
+        <p className="text-sm font-semibold text-ink-900">{title}</p>
+        <p className="text-sm text-ink-600">{detail}</p>
+        {orders && <p className="mt-1 text-xs tabular-nums text-ink-500">{orders}</p>}
       </div>
       {actions && <div className="col-start-2 flex flex-wrap items-center gap-x-4 gap-y-2 sm:col-start-3 sm:justify-end sm:self-center">{actions}</div>}
       {below && <div className="col-start-2 sm:col-end-4">{below}</div>}
@@ -1330,7 +1340,7 @@ function LoadBlockerRow({ load, canCancel, disabled, onRun }: { load: OpenLoad; 
             });
           }}
         >
-          <label htmlFor={inputId} className="grid min-w-0 flex-1 basis-60 gap-1 text-xs font-medium text-slate-600">
+          <label htmlFor={inputId} className="grid min-w-0 flex-1 basis-60 gap-1 text-[13px] font-medium text-ink-700">
             Motivo de la cancelación
             <input
               id={inputId}
@@ -1340,11 +1350,11 @@ function LoadBlockerRow({ load, canCancel, disabled, onRun }: { load: OpenLoad; 
               minLength={3}
               required
               placeholder="Ej. se abrió por error"
-              className="min-h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-500"
+              className={FIELD}
             />
           </label>
           <button type="submit" disabled={disabled || !valid} className={BTN_DANGER}>Cancelar carga</button>
-          <button type="button" onClick={() => { setCancelling(false); setReason(""); }} className={cn(BTN, "text-slate-600 hover:bg-slate-100")}>Volver</button>
+          <OpsButton variant="ghost" onClick={() => { setCancelling(false); setReason(""); }}>Volver</OpsButton>
         </form>
       )}
     />

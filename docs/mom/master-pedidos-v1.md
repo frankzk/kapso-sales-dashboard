@@ -401,15 +401,22 @@ Reglas:
   aproximada y dirección de entrega.
 - Agencia queda confirmada solo cuando el pago exigido ha sido validado.
 - **Confirmación expresa de agencia.** Un pedido con las TRES cosas —documento
-  del cliente, sucursal de destino elegida y un pago validado de `adelanto` o
-  `total`— queda confirmado por los hechos y pasa a Preparación sin necesidad de
+  del cliente, sucursal de destino elegida y el adelanto mínimo validado (un
+  `total`, o un `adelanto` que con sus diferencias suma el mínimo, §12)— queda
+  confirmado por los hechos y pasa a Preparación sin necesidad de
   que nadie marque «Confirmó el pedido». Se registra como evento `confirmed` con
   `source: automatico` y la nota nombra la evidencia.
   - Las tres son necesarias. El borrador se guarda en cuanto se teclean el
     documento y la sucursal, así que sin el pago la asesora puede estar todavía
     negociando: **el dinero es lo que convierte la conversación en compromiso**.
-  - `diferencia` no cuenta como pago que compromete: es un saldo posterior sobre
-    un pedido ya en marcha, y llega cuando la confirmación ya ocurrió.
+  - Una `diferencia` sola, sin un `adelanto` vivo detrás, no compromete. Pero
+    **sí suma para el mínimo** cuando hay adelanto: el formulario registra
+    como `diferencia` todo Yape posterior al primero, así que un abono partido
+    en S/ 10 + S/ 20 es el mismo compromiso que uno de S/ 30. Hasta la
+    `mom-v1.21` (29-09-2026) solo contaba la fila `adelanto`, y #KP134162 —S/ 10
+    + S/ 20 validados, siete días marcando «Confirmó el pedido»— se quedó en
+    Por confirmar · Último intento con «Adelanto cargado»; ni pagando el total
+    habría salido.
   - No mira la cobertura. La evidencia de que el envío va a agencia es el
     borrador con su terminal elegida, no la etiqueta del clasificador: un pedido
     puede estar clasificado `provincia_cod` e irse por Shalom.
@@ -834,6 +841,18 @@ Ejemplos:
 | Shopify anulado, paquete aún con courier | Por cerrar | Devolución física pendiente |
 | Shopify anulado, nunca se despachó | Finalizado | Anulado cerrado |
 
+**Una salida devuelta no cierra el pedido si otra sigue viva (v1.19,
+29-09-2026).** El estado del pedido daba «Devuelto» en cuanto UNA salida
+volvía con evidencia (despacho, guía y retorno), aunque otra salida siguiera en
+marcha: el paquete que volvía mandaba el pedido a «Por cerrar · Devolución
+física pendiente» con el reenvío ya en la calle. Contradecía el principio 7 y el
+ejemplo de arriba («Aliclik retornando y Swayp repartiendo» es En curso). Medido
+el 29-09-2026: 86 reenvíos Swayp de provincia estaban así. Ahora `devuelto`
+exige además que no quede ninguna salida viva (`pendiente` o `en_ruta` sin
+retorno); con una viva el pedido sigue en proceso y manda esa salida. Sin esto,
+la salida nueva de Grupo GF para un pedido que Tanders devolvió (§9) lo habría
+sacado de la lista nada más tomarlo.
+
 ### 7.1 La macroetapa es una foto, y hay que revelarla
 
 Esta precedencia no se evalúa al mirar el Master: se evalúa al **recalcular**, y
@@ -1026,6 +1045,35 @@ a las 7 de la tarde con el pedido esperando.
   Tampoco el reporte ni la liquidación de la ruta del otro courier: si Grupo GF
   no entregó hoy, el pedido puede salir mañana por Tanders o Swayp con la caja
   de Grupo GF todavía en la calle.
+
+#### Lo que Tanders no entrega también es «Por reprogramar Lima» (v1.19, 29-09-2026)
+
+Hasta la v1.18 «un no entregado pasa a Por reprogramar Lima» solo se cumplía
+con el motorizado propio. Cuando Tanders no entregaba, el pedido se quedaba en
+**«En curso · En retorno»** mientras la caja volvía y pasaba a **«Devuelto ·
+Por cerrar»** al llegar: fuera de la lista de Grupo GF, como si la venta hubiera
+terminado. Pasó con #KP135035 (volviendo) y #KP135161 (ya devuelto); medidos el
+29-09-2026, 24 volviendo y 62 devueltos sin anular en Shopify.
+
+Decisión del owner (29-09-2026):
+
+- **Entra desde «En retorno»**, sin esperar la caja: Tanders `RETURNING` o
+  `RETURNED` abre la recuperación del pedido (`pendiente_nuevo_courier`) igual
+  que la guía Aliclik fallida del §11. Es la misma regla
+  (`lib/reproprovincia.ts`), así que el Master y cualquier otra pantalla la leen
+  igual. Si Tanders vuelve a `PICKED` y reintenta, la guía está viva otra vez y
+  la recuperación se apaga: manda el estado actual de Tanders, no la custodia.
+- **La ventana es de 65 días** (`TANDERS_RECOVERY_DAYS`), la antigüedad de
+  Tanders en la operación. Como su API no dice cuándo empezó a volver, se
+  cuenta desde la **salida** del intento fallido: es fija y anterior al fallo,
+  así que la ventana nunca se acorta ni salta al llegar la caja. Vencida, el
+  pedido cae por su cadena normal a Por cerrar con `recuperacion_vencida`.
+- La anulación en Shopify gana, como siempre: un pedido anulado no se
+  reprograma.
+- El paquete que vuelve sigue siendo inventario por conciliar: `Devolución
+  pendiente de inventario` convive como razón mientras dura la gestión.
+- En Despacho del día aparece en **«Desde la lista»** y en la tarjeta **«Por
+  reprogramar»**, con la chapa «Tanders no entregó · vuelve / volvió» (§29.13).
 
 #### Las guías con API también aceptan la salida adicional
 
@@ -2125,7 +2173,10 @@ La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
 
 - **Entra** cuando la guía Aliclik queda `anulado` con etiqueta de intento
   fallido y el paquete ya fuera. No espera a que el paquete vuelva: los que
-  viajan de vuelta son los más calientes.
+  viajan de vuelta son los más calientes. Desde la v1.19 también entra una
+  guía de **Tanders** en `RETURNING` o `RETURNED` (Lima, ventana de 65 días,
+  §9): esa guía sigue `en_ruta` mientras vuelve, pero no cuenta como «guía
+  viva» para esta regla, porque ya no la trabaja nadie.
 - **Mientras dura**, el pedido es `en_proceso · pendiente_nuevo_courier` y el
   Master lo enseña en **En curso · En gestión Reproprovincia** (Lima: «Por
   reprogramar Lima»). La guía Aliclik no se toca —sigue `anulado`, con su
@@ -2564,21 +2615,26 @@ parche: la fuente es el conteo de Swayp.
 
 #### El mismo conteo, leído por API (desde el 29-09-2026)
 
-El Excel sale del API interno del panel de Swayp, y Kapta ahora lo lee directo
-(Stock Swayp → «Sincronizar desde Swayp por API»): **una sola lectura trae todas
-las bodegas**, en vez de un archivo por bodega. Las reglas de arriba no cambian
+Kapta lee el inventario de Swayp directo (Stock Swayp → «Sincronizar stock
+desde Swayp»): **una sola lectura trae todas las bodegas**, en vez de un archivo
+por bodega. La fuente es **`GET /v1/integrations/products` de la API de
+integraciones, con la misma credencial que las guías** (`SWAYP_TOKEN`): cada
+producto trae su `codbar` y, por bodega, `idBodega` (el ubigeo de la ciudad,
+a veces sin el cero inicial), `nombre`, `lot` y `quantity` —el Disponible;
+los lotes de una misma bodega se suman—. El API interno del panel queda sólo
+de respaldo, con un token pegado a mano que no se guarda. Las reglas de arriba no cambian
 —mismo `planearImportacion`, misma columna Disponible, mismo emparejamiento por
 `codbar`, mismo kardex— y además:
 
 - **Dos pasos: leer y aplicar.** «Leer» muestra el diff por ciudad sin escribir.
   «Aplicar» escribe sólo las ciudades marcadas y **vuelve a leer Swayp en ese
   momento**: no aplica el diff que tenía la pantalla, que pudo quedar viejo.
-- **La ciudad sale de la bodega de fulfillment** (`warehouse/getAll` del
-  servicio de inventario), cruzando el `idWarehouse` de cada fila. No de
-  `warehouses/byCompany`: esa es la bodega de **recojo** de la empresa, no
-  donde está el stock. La ciudad se resuelve por nombre de bodega, código INEI,
-  una ciudad nombrada dentro del nombre («BODEGA CHICLAYO») o, en último caso,
-  la última ciudad nombrada en la dirección.
+- **La ciudad sale de la bodega de fulfillment**, por su nombre («BODEGA
+  TRUJILLO», «Juliaca - Puno»), su ubigeo INEI, una ciudad nombrada dentro del
+  nombre («BODEGA CHICLAYO») o, en el respaldo del panel, la última ciudad
+  nombrada en la dirección. En el respaldo del panel, las bodegas son las de
+  `warehouse/getAll` y no las de `warehouses/byCompany`, que es la bodega de
+  **recojo** de la empresa.
 - **Un código de Swayp sin vincular en Catálogo no se carga, y el producto que
   le corresponde de nuestro lado pasa a 0**: para Kapta, Swayp no lo tiene. La
   pantalla lo avisa antes de aplicar cuando en una ciudad coinciden productos
@@ -2590,8 +2646,6 @@ las bodegas**, en vez de un archivo por bodega. Las reglas de arriba no cambian
 - **Una ciudad que no vino en la lectura no se vacía**, y una lectura vacía
   (0 filas) no se aplica: es un fallo de Swayp, no un inventario en cero.
 - Si dos bodegas caen en la misma ciudad, sus unidades **se suman**.
-- **Con el botón, el token se pega a mano** (el del login del panel, ~1 h de
-  vida) y no se guarda; o se deja vacío y se usa la credencial guardada.
 
 **Sync diario (desde el 29-09-2026).** Sobre todas las ciudades del sync, con
 las mismas reglas y además:
@@ -2599,26 +2653,12 @@ las mismas reglas y además:
 - **Una vez al día basta** (decisión de Frankz, 29-09-2026): sincroniza sólo si
   la última sincronización buena, manual o automática, fue hace ≥ 20 h. El cron
   (`/api/cron/swayp-inventory`) revisa cada hora y casi siempre responde «al día».
-- **Con qué credencial.** Una credencial de API de Swayp con acceso al
-  inventario (`SWAYP_INVENTORY_TOKEN`), si existe: no vence y no depende de
-  nadie. Swayp todavía no la da: la de integración de las guías responde 403
-  «No tienes autorización 7301» (probado el 29-09-2026). Mientras tanto, se
-  **reutiliza la sesión del panel que abrió una persona**: la guarda Kapta
-  (cifrada, `swayp_inventory_sessions`, ningún usuario la puede leer) al pegar
-  un token en Stock Swayp, o la envía la **extensión de Chrome «Kapta ·
-  Swayp»** cuando alguien abre el panel de Swayp. Se usa sólo para leer
-  inventario y bodegas, y sólo hasta que vence; si Swayp la rechaza antes, se
-  descarta.
-- **El login del panel no se automatiza**: exige reCAPTCHA (v3, invisible) en
-  cada inicio de sesión, que existe justamente para impedir que un programa
-  entre solo. Siempre inicia sesión una persona.
-- **La extensión** lee la sesión que el propio panel guarda en el navegador
-  (`localStorage` «userSWC») y se la envía a Kapta con una llave de la
-  organización (sólo su hash en `swayp_extension_keys`). Kapta comprueba con
-  Swayp que la sesión sirve, que es de la empresa configurada, la guarda y, si
-  toca, sincroniza en el acto. Se descarga desde Stock Swayp con la URL y la
-  llave dentro; descargarla otra vez cambia la llave y la anterior deja de
-  servir.
+- **Con la credencial de integración de la organización**, la misma de las
+  guías: no vence, no depende de que nadie inicie sesión y no se guarda nada
+  nuevo. Hubo dos intentos antes, retirados el mismo día: la sesión del panel
+  reutilizada y una extensión de Chrome que la enviaba (el panel exige
+  reCAPTCHA, así que su login no se automatiza nunca). Con la API de
+  integraciones no hacen falta; sus tablas se borraron (0203).
 - **Retiene la ciudad que quedaría vaciada** y no la aplica: si Swayp no trae
   ninguna unidad para una ciudad con stock, o si dejaría en 0 más de la mitad
   de sus productos con stock (y al menos 5). Es más probable una lectura rota
@@ -2630,9 +2670,10 @@ las mismas reglas y además:
   el Excel.
 - En el kardex, los movimientos del cron dicen «Swayp (API, automático)» y no
   tienen usuario.
-- El contrato es **reversado del panel, no oficial**: si Swayp lo cambia, la
-  lectura falla con el status y la respuesta a la vista, y el Excel sigue como
-  respaldo.
+- `/v1/integrations/products` **no está en la documentación pública** de Swayp
+  (sólo `/v2/guias`): la forma se fijó con una respuesta real. Si Swayp la
+  cambia, la lectura falla con el status y la respuesta a la vista, y quedan
+  de respaldo el token del panel y el Excel.
 
 ### Stock sin control de cantidad (Lima)
 
@@ -2902,6 +2943,25 @@ rehace el trabajo del almacén.
 
 Lo que **sí** sigue bloqueando es una guía de verdad activa —de Swayp o de
 Aliclik—, porque ahí hay dos paquetes en juego y no uno.
+
+**Crear la guía directa no es reprogramar (v1.19, 29-09-2026).** La guía
+directa deja una gestión `reroute` **sin estado resultante** para que cuente en
+la productividad de quien la creó; Repro Provincia ya contaba como
+«reprogramada» solo la que resulta `en_ruta`. El Master, en cambio, leía
+cualquier `reroute` como reprogramación (`lib/guide-dates.ts`), así que toda
+guía directa nacía con fecha de reprogramación: en Lima caía en «En curso · Por
+reprogramar Lima» sin un solo intento fallido (#KP135009, 38 pedidos) y en
+provincia en «Gestión Reproprovincia» (32). La gestión con la que nace la guía
+directa no es una reprogramación: la guía queda en **En curso · En tránsito**.
+Las reprogramaciones de verdad dejan estado —Aliclik `en_ruta`, el reenvío
+Swayp `en_ruta` en la hija y `transferido` en la madre— y no cambian.
+
+**Solo en la guía directa (v1.20, 29-09-2026).** La v1.19 ignoraba toda gestión
+`reroute` sin estado, y en julio el reenvío por Fenix dejaba esa misma fila,
+sin estado, en la guía **madre** («Guía Fenix creada: …», 149 guías): ahí sí
+marca la reprogramación. Cinco pedidos de julio (#KP117144) cayeron en
+«Preparación · Por armar» hasta que la excepción se limitó a las guías con
+`created_via = fenix_directo`.
 
 **El destino lo pone la GUÍA, no el pedido.** Al reprogramar, la salida ya
 existe y su destino es mejor dato que el del pedido por tres razones: es el que
@@ -3514,7 +3574,14 @@ poner las dos columnas una al lado de la otra.
 
 ### Shalom
 
-- Adelanto mínimo: **S/20** validado antes de generar rótulo. Era S/30 hasta el
+- Adelanto mínimo: **S/20** validado antes de generar rótulo. Se mide con el
+  dinero validado del pedido —el `adelanto` más sus `diferencia`s—, no con la
+  fila que lo trajo; un `total` validado siempre alcanza. Es la misma cuenta
+  que el candado de Olva y el KPI «Adelanto de Agencia», y de ella cuelgan
+  `payment_state`, el paso a Preparación y la confirmación expresa (§6.1).
+  Con el mínimo validado, un comprobante en revisión deja el pedido en
+  `diferencia_cargada`, que también pasa a Preparación: lo que falta es saldo,
+  y el saldo lo exige la clave, no la confirmación. Era S/30 hasta el
   08-09-2026; se bajó a lo que la operación ya hacía —de 78 adelantos de S/20
   cargados, 76 se validaron— porque con el mínimo en 30 esos pedidos quedaban
   con «Adelanto cargado» sobre plata ya aceptada y, en Agencia, no salían de
@@ -3603,6 +3670,13 @@ poner las dos columnas una al lado de la otra.
         tiene que empezar despacio.
       - **Al llegar al tope el aviso no se pierde**: se queda en la cola sin
         tocar y sale en la siguiente pasada con cupo.
+      - **Una tienda topada no le quita el turno a otra.** Cada pasada coge
+        los pendientes más antiguos de todas las tiendas; los de una tienda
+        topada no pueden salir, y si ocupaban esos puestos, la siguiente pasada
+        volvía a cogerlos a ellos. El 29-09-2026 Kenku amaneció con sus 30
+        gastados y 40 esperando, y Aurela —con 7 de 30— no mandó nada en toda
+        la mañana. Ahora primero se mira qué tiendas tienen cupo y la cola se
+        pide solo de ésas.
       - **Si no se puede contar lo ya enviado, no se manda.** Mandar a ciegas
         con un número nuevo es justo lo que el tope existe para evitar.
       - **No cuenta** las respuestas a lo que escribe la clienta (botones,
@@ -5064,7 +5138,7 @@ Y una cuarta, para quien toque la base a mano: **enlazar una guía a un pedido p
 SQL deja el Master mintiendo hasta el siguiente barrido.** Ahora el barrido lo
 recoge; antes no lo recogía nadie.
 
-### 19.2 Mirar una guía no es cambiarla (0203)
+### 19.2 Mirar una guía no es cambiarla (0204)
 
 La regla 1 de §19.1 sigue igual: el desfase se detecta comparando el
 `updated_at` de las guías contra el `recomputed_at` del Master. Lo que se
@@ -6676,6 +6750,26 @@ la ficha pasa a **«Finalizado · Anulado cerrado»**; si eso ocurre antes de
 cerrar la ruta (el pedido aún no está anulado), espera en «Por cerrar ·
 Validación de cierre pendiente» hasta el cierre (v1.17). Los demás motivos vuelven a «por asignar» en «Por
 reprogramar Lima».
+
+**Lo que otro courier no entregó también se reprograma desde la lista (v1.19,
+29-09-2026).** «Desde la lista» solo miraba Preparación y Por despachar, y un
+pedido que Tanders no entregó está En curso (§9), así que no aparecía nunca:
+#KP135035 y #KP135161 buscados por número daban «Nada por asignar». Ahora la
+cola suma los pedidos de Lima en **«En curso · Por reprogramar Lima» que
+esperan courier nuevo** (`pendiente_nuevo_courier`, `lib/gf-retry.ts`). Un
+«Por reprogramar Lima» cuya guía sigue viva con su courier —una reprogramación
+de Aliclik, por ejemplo— no entra: esa la lleva ese courier.
+
+- La fila lleva la chapa **«Tanders no entregó · vuelve»** o **«· volvió»** y
+  cuenta en «Por asignar» y en la tarjeta «Por reprogramar».
+- **Tomarlo crea una salida NUEVA** con su QR y Almacén arma otra caja (§9.3):
+  la anterior es de otro courier y lleva su rótulo. Nunca se rellena otra
+  salida, y la que falló no cuenta como «ya en caja» aunque siga volviendo.
+- Si la caja anterior **todavía vuelve**, la salida nueva es adicional y su
+  motivo se escribe solo (`additional_output_reason`, §9): el hecho ya lo
+  reportó el courier. El tope de cinco salidas se aplica igual.
+- Con la salida nueva el pedido deja la recuperación y sigue el camino normal
+  de Grupo GF; el paquete que volvió no lo devuelve a «Devuelto» (§7).
 
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 

@@ -19,7 +19,16 @@ import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-acces
 import { resolveLimaDistrict } from "@/lib/order-coverage";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { writeCourierGuide } from "@/lib/route-output-fill";
-import { manualRouteGuideCode, pickFillableRouteOutput } from "@/lib/shipment-output";
+import { MAX_OUTPUTS_PER_ORDER, manualRouteGuideCode, pickFillableRouteOutput, puertaDeSalidaAdicional } from "@/lib/shipment-output";
+import {
+  RETRY_QUEUE_FILTER,
+  isRetryAdmission,
+  lastFailedOutput,
+  outputsBlockingRetry,
+  retryAdditionalReason,
+  retryTakenNote,
+  type FailedOutput,
+} from "@/lib/gf-retry";
 import { courierKey, normalizeDispatchScan } from "@/lib/dispatch";
 import { lookupDispatchShipment } from "@/app/dashboard/pedidos/despacho/actions";
 import type { RiderRateVersion } from "@/lib/rider-pay";
@@ -105,6 +114,11 @@ export interface CourierAvailableOrder {
   /** Macroetapa y subetapa del MOM en el Master, para los chips de «Desde la lista». */
   macroStage: string | null;
   macroSubstage: string | null;
+  /**
+   * Otro courier no lo entregó y espera courier nuevo (`lib/gf-retry.ts`): quién
+   * y si su caja ya volvió. Al tomarlo se crea una salida nueva.
+   */
+  failedOutput?: FailedOutput | null;
 }
 
 export interface CourierAcceptedOrder extends CourierAvailableOrder {
@@ -294,6 +308,8 @@ type QueueOrderRow = {
   order_created_at: string | null;
   macro_stage: string;
   macro_substage: string;
+  /** Solo la cola lo pide: distingue el reintento (`pendiente_nuevo_courier`). */
+  operational_status?: string | null;
 };
 
 type AdmissionShipmentRow = {
@@ -306,12 +322,23 @@ type AdmissionShipmentRow = {
   custody_transferred_at: string | null;
   output_number: number | null;
   dispatched_at: string | null;
+  /** Estado crudo del courier: dice si la salida anterior falló (Tanders `RETURNING`). */
+  reported_status: string | null;
+  returned_at: string | null;
+  guide_code?: string | null;
+  output_code?: string | null;
 };
 
-function isCourierAdmissionStage(stage: unknown, substage: unknown): boolean {
+/** Las columnas de salida que la admisión necesita, en la cola y al tomar. */
+const ADMISSION_SHIPMENT_COLUMNS =
+  "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at,reported_status,returned_at,guide_code,output_code";
+
+function isCourierAdmissionStage(stage: unknown, substage: unknown, operational?: unknown): boolean {
   return (
     (stage === "preparacion" && ["por_generar_rotulo", "por_armar"].includes(String(substage))) ||
-    (stage === "por_despachar" && substage === "listo_para_asignar")
+    (stage === "por_despachar" && substage === "listo_para_asignar") ||
+    // Otro courier no lo entregó (v1.19): se toma con una salida nueva.
+    isRetryAdmission(stage, substage, operational)
   );
 }
 
@@ -447,12 +474,14 @@ async function loadCourierOperations(
       allCourierRows((from, to) => admin
         .from("order_master")
         .select(
-          "order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_stage,macro_substage",
+          "order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_stage,macro_substage,operational_status",
           { count: "exact" },
         )
         .in("store_id", storeIds)
+        // Con el reintento: lo que otro courier no entregó (#KP135035, #KP135161)
+        // está En curso y no llegaba nunca a esta lista.
         .or(
-          "and(macro_stage.eq.preparacion,macro_substage.in.(por_generar_rotulo,por_armar)),and(macro_stage.eq.por_despachar,macro_substage.eq.listo_para_asignar)",
+          `and(macro_stage.eq.preparacion,macro_substage.in.(por_generar_rotulo,por_armar)),and(macro_stage.eq.por_despachar,macro_substage.eq.listo_para_asignar),${RETRY_QUEUE_FILTER}`,
         )
         .eq("coverage", "lima")
         .order("order_created_at", { ascending: false })
@@ -480,9 +509,7 @@ async function loadCourierOperations(
   const queueOrderIds = ((queueRows ?? []) as QueueOrderRow[]).map((order) => order.order_id);
   const { data: admissionShipmentRows } = await courierRowsByIds(queueOrderIds, (ids) => admin
         .from("shipments")
-        .select(
-          "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at",
-        )
+        .select(ADMISSION_SHIPMENT_COLUMNS)
         .in("order_id", ids));
   const shipmentsByOrder = new Map<string, AdmissionShipmentRow[]>();
   for (const row of (admissionShipmentRows ?? []) as AdmissionShipmentRow[]) {
@@ -526,9 +553,12 @@ async function loadCourierOperations(
   for (const order of (queueRows ?? []) as QueueOrderRow[]) {
     if (activeOrderIds.has(order.order_id)) continue;
     const outputs = shipmentsByOrder.get(order.order_id) ?? [];
+    // Un reintento no reutiliza caja —la anterior es de otro courier— y la salida
+    // que falló no cuenta como «ya en caja» aunque siga volviendo.
+    const retry = isRetryAdmission(order.macro_stage, order.macro_substage, order.operational_status);
     const fillable = pickFillableRouteOutput(outputs);
-    const assigned = activeAssignedOutput(outputs, fillable?.id ?? null);
-    const needsExistingBox = order.macro_substage !== "por_generar_rotulo";
+    const assigned = activeAssignedOutput(retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null);
+    const needsExistingBox = !retry && order.macro_substage !== "por_generar_rotulo";
     if (assigned || (needsExistingBox && !fillable)) {
       block(order, assigned ? "ya_en_caja" : "sin_salida");
       continue;
@@ -578,6 +608,7 @@ async function loadCourierOperations(
       programReason: program?.reason ?? null,
       macroStage: order.macro_stage ?? null,
       macroSubstage: order.macro_substage ?? null,
+      failedOutput: retry ? lastFailedOutput(outputs) : null,
     });
   }
 
@@ -959,31 +990,53 @@ async function takeOrdersCore(
         continue;
       }
       const row = orderMaster as Record<string, unknown>;
-      if (!isCourierAdmissionStage(row.macro_stage, row.macro_substage)) {
+      if (!isCourierAdmissionStage(row.macro_stage, row.macro_substage, row.operational_status)) {
         failed.push({ orderId, error: "El pedido ya avanzó y salió de Pedidos disponibles." });
         continue;
       }
 
       const { data: outputRows, error: outputError } = await admin
         .from("shipments")
-        .select(
-          "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at",
-        )
+        .select(ADMISSION_SHIPMENT_COLUMNS)
         .eq("order_id", orderId);
       if (outputError) {
         failed.push({ orderId, error: outputError.message });
         continue;
       }
-      const outputs = (outputRows ?? []) as AdmissionShipmentRow[];
-      const fillable = pickFillableRouteOutput(outputs);
-      const assigned = activeAssignedOutput(outputs, fillable?.id ?? null);
-      const mayCreateOutput = row.macro_substage === "por_generar_rotulo";
+      const outputs = (outputRows ?? []) as unknown as AdmissionShipmentRow[];
+      // REINTENTO (v1.19): otro courier no lo entregó. La salida que falló no
+      // cuenta como asignada y se abre una NUEVA —la caja anterior es de ese
+      // courier y lleva su rótulo (§9.3)—; nunca se rellena otra.
+      const retry = isRetryAdmission(row.macro_stage, row.macro_substage, row.operational_status);
+      const fillable = retry ? null : pickFillableRouteOutput(outputs);
+      const assigned = activeAssignedOutput(retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null);
+      const mayCreateOutput = retry || row.macro_substage === "por_generar_rotulo";
       if (assigned) {
         failed.push({ orderId, error: "El pedido ya tiene una salida asignada a otro courier." });
         continue;
       }
       if (!mayCreateOutput && !fillable) {
         failed.push({ orderId, error: "La caja existente ya no está disponible para asignarla." });
+        continue;
+      }
+      // La caja que falló puede seguir volviendo: entonces la salida nueva es
+      // ADICIONAL y lleva motivo (§9). Lo escribe el sistema porque el hecho ya
+      // lo reportó el courier; el tope de cinco salidas se aplica igual.
+      const failedBefore = retry ? lastFailedOutput(outputs) : null;
+      const puerta = retry
+        ? puertaDeSalidaAdicional({
+            courier: "propio",
+            operation: "lima",
+            outputs,
+            motivo: failedBefore ? retryAdditionalReason(failedBefore) : null,
+          })
+        : null;
+      if (puerta && !puerta.ok) {
+        failed.push({ orderId, error: puerta.error });
+        continue;
+      }
+      if (retry && outputs.length >= MAX_OUTPUTS_PER_ORDER) {
+        failed.push({ orderId, error: `El pedido ya alcanzó el máximo de ${MAX_OUTPUTS_PER_ORDER} salidas.` });
         continue;
       }
 
@@ -1169,7 +1222,9 @@ async function takeOrdersCore(
           shipment_id: write.shipmentId,
           note: write.filled
             ? "Grupo GF Courier tomó el pedido y conservó el QR de la salida existente."
-            : "Grupo GF Courier tomó el pedido desde Pedidos disponibles.",
+            : failedBefore
+              ? retryTakenNote(failedBefore)
+              : "Grupo GF Courier tomó el pedido desde Pedidos disponibles.",
           payload: {
             requestId,
             outputCode,
@@ -1180,6 +1235,30 @@ async function takeOrdersCore(
             scheduledFor,
           },
         }),
+        // La justificación auditada de la salida adicional (MOM §23), en su
+        // propio evento y con las salidas que seguían vivas: igual que Swayp.
+        puerta?.motivo
+          ? admin.from("order_events").insert({
+              store_id: String(row.store_id),
+              order_id: orderId,
+              kind: "additional_output_reason",
+              occurred_at: acceptedAt,
+              actor: auth.userId,
+              source: "grupo_gf_courier",
+              courier: "propio",
+              guide_code: guideCode,
+              shipment_id: write.shipmentId,
+              reason: puerta.motivo,
+              note: `Salida adicional por Grupo GF con ${puerta.estorban.length} salida(s) todavía viva(s).`,
+              payload: {
+                salidas_vivas: puerta.estorban.map((o) => ({
+                  codigo: o.output_code ?? o.guide_code ?? null,
+                  courier: o.courier,
+                  estado: o.delivery_status,
+                })),
+              },
+            })
+          : Promise.resolve(),
       ]);
       await fx.recompute([orderId]);
       accepted.push({ orderId, shipmentId: write.shipmentId, outputCode: outputCode ?? null });

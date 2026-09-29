@@ -1,4 +1,4 @@
--- Master liviano (migración 0203). Corre en el clúster desechable después de
+-- Master liviano (migración 0204). Corre en el clúster desechable después de
 -- todas las migraciones y reutiliza las tiendas y usuarios de rls_smoke.sql:
 -- A (viewer de la tienda A), C (owner de las dos), D (viewer sin tiendas).
 --
