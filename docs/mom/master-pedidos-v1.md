@@ -2552,8 +2552,13 @@ las bodegas**, en vez de un archivo por bodega. Las reglas de arriba no cambian
 - **La ciudad sale de la bodega de fulfillment** (`warehouse/getAll` del
   servicio de inventario), cruzando el `idWarehouse` de cada fila. No de
   `warehouses/byCompany`: esa es la bodega de **recojo** de la empresa, no
-  donde está el stock. La ciudad se resuelve por nombre de bodega, código INEI
-  o, en último caso, la última ciudad nombrada en la dirección.
+  donde está el stock. La ciudad se resuelve por nombre de bodega, código INEI,
+  una ciudad nombrada dentro del nombre («BODEGA CHICLAYO») o, en último caso,
+  la última ciudad nombrada en la dirección.
+- **Un código de Swayp sin vincular en Catálogo no se carga, y el producto que
+  le corresponde de nuestro lado pasa a 0**: para Kapta, Swayp no lo tiene. La
+  pantalla lo avisa antes de aplicar cuando en una ciudad coinciden productos
+  que van a 0 y códigos sin vincular; se vincula en Catálogo y se vuelve a leer.
 - **Sólo se sincronizan Arequipa, Trujillo, Juliaca, Piura y Lima**
   (`CIUDADES_DEL_SYNC`), las mismas que el Excel sabía leer. Una bodega que
   resuelva a otra ciudad, o que no resuelva, se muestra y **no se toca**.

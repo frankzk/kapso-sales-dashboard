@@ -85,8 +85,13 @@ describe("ciudadDeWarehouse", () => {
     );
   });
 
+  it("una ciudad conocida dentro del nombre también resuelve («BODEGA CHICLAYO»)", () => {
+    expect(ciudadDeWarehouse({ name: "BODEGA CHICLAYO" })).toBe("chiclayo");
+    expect(ciudadDeWarehouse({ name: "BODEGA HUANCAYO" })).toBe("huancayo");
+  });
+
   it("null cuando ninguna pista sirve", () => {
-    expect(ciudadDeWarehouse({ name: "BODEGA CUSCO" })).toBeNull();
+    expect(ciudadDeWarehouse({ name: "BODEGA CENTRAL", direccion: "Parque industrial s/n" })).toBeNull();
   });
 });
 

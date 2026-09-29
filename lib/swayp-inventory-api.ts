@@ -218,10 +218,32 @@ const INEI_A_CIUDAD: Record<string, string> = (() => {
 const CIUDADES_CONOCIDAS = Object.keys(UBIGEO_BY_CITY);
 
 /**
- * A qué ciudad nuestra corresponde una bodega. Tres intentos, del más fiable al
- * menos: el NOMBRE (por si trae «BODEGA TRUJILLO»), el código INEI de `ciudad`
- * (exacto), y por último rastrear una ciudad conocida dentro de la `direccion`
- * («Av. Ejército 1015, Cayma, Arequipa» → arequipa). null si ninguno acierta.
+ * La última ciudad conocida nombrada en un texto, por PALABRA y desde el FINAL.
+ * Por palabra porque «ica» está dentro de «República» y de «Fábrica»; desde el
+ * final porque la ciudad cierra la dirección («Calle Lima 120, Ica» es Ica).
+ */
+function ciudadEnTexto(texto: string | null | undefined): string | null {
+  const palabras = (texto ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  const conocidas = new Set(CIUDADES_CONOCIDAS);
+  for (let i = palabras.length - 1; i >= 0; i--) {
+    const p = palabras[i]!;
+    if (conocidas.has(p)) return p === "puno" ? "juliaca" : p;
+  }
+  return null;
+}
+
+/**
+ * A qué ciudad nuestra corresponde una bodega. Del intento más fiable al menos:
+ * el NOMBRE exacto que ya conoce el importador de Excel («Juliaca - Puno»), el
+ * código INEI de `ciudad`, una ciudad conocida dentro del nombre («BODEGA
+ * CHICLAYO») y por último dentro de la `direccion` («…, Cayma, Arequipa»).
+ * null si ninguno acierta. Resolver una ciudad no la mete al sync: eso lo
+ * decide `CIUDADES_DEL_SYNC`.
  */
 export function ciudadDeWarehouse(w: {
   name?: string | null;
@@ -234,21 +256,7 @@ export function ciudadDeWarehouse(w: {
   const inei = String(w.ciudad ?? "").trim();
   if (inei && INEI_A_CIUDAD[inei]) return INEI_A_CIUDAD[inei];
 
-  // Por PALABRA, no por subcadena: «ica» está dentro de «República» y de
-  // «Fábrica». Y desde el FINAL: la ciudad cierra la dirección, así que en
-  // «Calle Lima 120, Ica» la bodega es de Ica, no de Lima.
-  const palabras = (w.direccion ?? "")
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean);
-  const conocidas = new Set(CIUDADES_CONOCIDAS);
-  for (let i = palabras.length - 1; i >= 0; i--) {
-    const p = palabras[i]!;
-    if (conocidas.has(p)) return p === "puno" ? "juliaca" : p;
-  }
-  return null;
+  return ciudadEnTexto(w.name) ?? ciudadEnTexto(w.direccion);
 }
 
 /**
