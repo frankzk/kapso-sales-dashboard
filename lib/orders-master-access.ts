@@ -78,6 +78,7 @@ import {
   type MasterSortKey,
 } from "@/lib/order-master-filters";
 import {
+  MACRO_SUBSTAGES_BY_STAGE,
   ORDER_MACRO_STAGES,
   classifyOperation,
   type MacroSubstage,
@@ -265,6 +266,52 @@ export async function getOrderMasterMomCounts(storeIds: string[]): Promise<Maste
   const { data, error } = await sb.rpc("order_master_mom_counts", { p_store_ids: storeIds });
   if (!error) return reduceMasterMomCounts((data ?? []) as MasterCountRow[]);
   return { stages: await getOrderMasterCounts(storeIds), substages: {} };
+}
+
+/**
+ * Los contadores de las pestañas con los filtros puestos (MOM §6): cuentan lo
+ * mismo que la lista. Con «Courier: Tanders» la lista bajaba a 735 y las
+ * pestañas seguían diciendo 26.174, 106, 1.077…: el número de encima de la
+ * tabla contaba otra cosa que la tabla.
+ *
+ * Una consulta `head` por macroetapa y otra por cada subetapa de la pestaña
+ * abierta (los únicos chips a la vista), todas en paralelo y con el MISMO
+ * `applyServerFilters` que la página: si una regla de filtro cambia, cambia
+ * para los dos. Sin filtros se sigue usando la RPC agregada, que es una sola
+ * lectura.
+ */
+export async function getOrderMasterFilteredMomCounts(
+  storeIds: string[],
+  params: { filters: MasterFilters; view: MasterView; now?: Date },
+): Promise<MasterMomCounts> {
+  const stages = emptyMasterCounts();
+  const substages: Partial<Record<MacroSubstage, number>> = {};
+  if (!storeIds.length) return { stages, substages };
+  const sb = await createServerSupabase();
+  const now = params.now ?? new Date();
+  const count = async (column: "macro_stage" | "macro_substage", value: string): Promise<number> => {
+    const q = sb
+      .from("order_master")
+      .select("id", { count: "exact", head: true })
+      .in("store_id", storeIds)
+      .eq(column, value);
+    const { count: n, error } = await applyServerFilters(q, params.filters, now);
+    return error ? 0 : (n ?? 0);
+  };
+  const stageKeys = ORDER_MACRO_STAGES.map((stage) => stage.code);
+  const substageKeys = params.view === "todos" ? [] : MACRO_SUBSTAGES_BY_STAGE[params.view];
+  const [stageTotals, substageTotals] = await Promise.all([
+    Promise.all(stageKeys.map((key) => count("macro_stage", key))),
+    Promise.all(substageKeys.map((key) => count("macro_substage", key))),
+  ]);
+  stageKeys.forEach((key, i) => {
+    stages[key] = stageTotals[i] ?? 0;
+    stages.todos += stageTotals[i] ?? 0;
+  });
+  substageKeys.forEach((key, i) => {
+    substages[key] = substageTotals[i] ?? 0;
+  });
+  return { stages, substages };
 }
 
 /**

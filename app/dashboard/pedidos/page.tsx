@@ -9,13 +9,14 @@ import {
   getConfirmationCycleDays,
   getConfirmationQueueCounts,
   getMasterFacetsCached,
+  getOrderMasterFilteredMomCounts,
   getOrderMasterMomCounts,
   getOrderMasterPage,
   isMasterView,
   type MasterMomCounts,
   type MasterView,
 } from "@/lib/orders-master-access";
-import { masterSearchTerm } from "@/lib/order-master-filters";
+import { hasActiveFilters, masterSearchTerm } from "@/lib/order-master-filters";
 import { parseMasterQuery } from "@/lib/master-query";
 import { MACRO_SUBSTAGES_BY_STAGE, type MacroSubstage } from "@/lib/order-macro-stage";
 import { EmptyState } from "@/components/ui";
@@ -91,7 +92,12 @@ async function PedidosContent({
   // filtro de Gestión solo se ofrece en esta vista.
   const showConfirmation = !searching && view === "por_confirmar";
   const [momCounts, pageData, facets, agency, confirmationCounts, cycleDays] = await Promise.all([
-    searching ? Promise.resolve(EMPTY_MOM_COUNTS) : getOrderMasterMomCounts(storeIds),
+    // Con filtros, las pestañas cuentan lo mismo que la lista (MOM §6).
+    searching
+      ? Promise.resolve(EMPTY_MOM_COUNTS)
+      : hasActiveFilters(filters)
+        ? getOrderMasterFilteredMomCounts(storeIds, { filters, view })
+        : getOrderMasterMomCounts(storeIds),
     getOrderMasterPage(storeIds, { view, substage, filters, sortKey: "created", page }),
     // Cacheadas: no dependen de lo que se esté filtrando ni buscando.
     getMasterFacetsCached(storeIds),
