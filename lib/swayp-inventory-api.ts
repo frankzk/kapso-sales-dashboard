@@ -479,3 +479,99 @@ export async function fetchInventoryByCity(
     muestra: rows.slice(0, 3),
   };
 }
+
+// ── API de integraciones: GET /v1/integrations/products ─────────────────────
+//
+// La vía que quedó (29-09-2026): la API de integraciones, con la MISMA
+// credencial que las guías (`SWAYP_TOKEN`), devuelve cada producto con su stock
+// por bodega. No hace falta ni la sesión del panel ni su reCAPTCHA. Forma real:
+//   { products: [ { codbar, nombre, shared, quantity,
+//                   warehouses: [ { idBodega: "130101", nombre: "BODEGA TRUJILLO", lot: "", quantity: 3 } ] } ] }
+// · `idBodega` es el ubigeo INEI de la ciudad, a veces sin el cero inicial
+//   («40101» es Arequipa, 040101).
+// · `warehouses[].quantity` es el DISPONIBLE: AURE001 dio 3 en Trujillo y 18 en
+//   Arequipa, lo mismo que `availableAmount` de inventory/search ese día.
+// · Un producto puede repetir bodega con otro `lot`: se suman.
+// · `quantity` del producto es el total de todas las bodegas; no se usa.
+
+/** Una bodega dentro de un producto de la API de integraciones. */
+interface BodegaDeProducto {
+  idBodega?: string | number;
+  nombre?: string;
+  lot?: string;
+  quantity?: number | string;
+}
+
+/** La lista de productos, venga en la raíz, en `products` o en `data`. */
+function listaDeProductos(raw: unknown): Record<string, unknown>[] {
+  if (Array.isArray(raw)) return raw as Record<string, unknown>[];
+  const r = raw as { products?: unknown; data?: unknown } | null;
+  if (Array.isArray(r?.products)) return r.products as Record<string, unknown>[];
+  if (Array.isArray(r?.data)) return r.data as Record<string, unknown>[];
+  const d = r?.data as { products?: unknown } | undefined;
+  if (Array.isArray(d?.products)) return d.products as Record<string, unknown>[];
+  return [];
+}
+
+/**
+ * Traduce la respuesta de /v1/integrations/products a lo mismo que produce la
+ * lectura del panel: bodegas con su ciudad, entradas por ciudad (sólo las de
+ * `CIUDADES_DEL_SYNC`), lo que no se pudo ubicar y una muestra. Pura.
+ */
+export function inventarioDesdeProductos(raw: unknown): {
+  bodegas: SwaypWarehouse[];
+  porCiudad: Map<string, EntradaSwayp[]>;
+  sinCiudad: SwaypFilasSinCiudad[];
+  totalFilas: number;
+  filasPorBodega: Record<string, number>;
+  muestra: unknown[];
+} {
+  const productos = listaDeProductos(raw);
+  const bodegasPorId = new Map<string, SwaypWarehouse>();
+  const filas: SwaypInventoryRow[] = [];
+
+  for (const p of productos) {
+    const codbar = String(p.codbar ?? p.barCode ?? "").trim().toUpperCase();
+    if (!codbar) continue;
+    const nombre = String(p.nombre ?? p.name ?? "").trim();
+    for (const w of (Array.isArray(p.warehouses) ? p.warehouses : []) as BodegaDeProducto[]) {
+      const id = String(w.idBodega ?? "").trim();
+      if (!id) continue;
+      if (!bodegasPorId.has(id)) {
+        const name = String(w.nombre ?? "").trim();
+        // El ubigeo llega a veces sin el cero inicial: «40101» → «040101».
+        const ciudadInei = /^\d{5,6}$/.test(id) ? id.padStart(6, "0") : "";
+        bodegasPorId.set(id, {
+          id,
+          aliases: [id],
+          name,
+          ciudadInei,
+          direccion: "",
+          city: ciudadDeWarehouse({ name, ciudad: ciudadInei }),
+        });
+      }
+      const cantidad = num(w.quantity);
+      filas.push({
+        codbar,
+        nombre,
+        idWarehouse: id,
+        disponible: cantidad,
+        enBodega: cantidad,
+        reservado: 0,
+        enTransito: 0,
+        enDevolucion: 0,
+      });
+    }
+  }
+
+  const bodegas = [...bodegasPorId.values()];
+  const filasPorBodega: Record<string, number> = {};
+  for (const r of filas) filasPorBodega[r.idWarehouse] = (filasPorBodega[r.idWarehouse] ?? 0) + 1;
+  return {
+    bodegas,
+    ...groupInventoryByCity(filas, bodegas),
+    totalFilas: filas.length,
+    filasPorBodega,
+    muestra: productos.slice(0, 2),
+  };
+}

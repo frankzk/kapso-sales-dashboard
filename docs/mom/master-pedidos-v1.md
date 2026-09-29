@@ -2615,21 +2615,26 @@ parche: la fuente es el conteo de Swayp.
 
 #### El mismo conteo, leído por API (desde el 29-09-2026)
 
-El Excel sale del API interno del panel de Swayp, y Kapta ahora lo lee directo
-(Stock Swayp → «Sincronizar desde Swayp por API»): **una sola lectura trae todas
-las bodegas**, en vez de un archivo por bodega. Las reglas de arriba no cambian
+Kapta lee el inventario de Swayp directo (Stock Swayp → «Sincronizar stock
+desde Swayp»): **una sola lectura trae todas las bodegas**, en vez de un archivo
+por bodega. La fuente es **`GET /v1/integrations/products` de la API de
+integraciones, con la misma credencial que las guías** (`SWAYP_TOKEN`): cada
+producto trae su `codbar` y, por bodega, `idBodega` (el ubigeo de la ciudad,
+a veces sin el cero inicial), `nombre`, `lot` y `quantity` —el Disponible;
+los lotes de una misma bodega se suman—. El API interno del panel queda sólo
+de respaldo, con un token pegado a mano que no se guarda. Las reglas de arriba no cambian
 —mismo `planearImportacion`, misma columna Disponible, mismo emparejamiento por
 `codbar`, mismo kardex— y además:
 
 - **Dos pasos: leer y aplicar.** «Leer» muestra el diff por ciudad sin escribir.
   «Aplicar» escribe sólo las ciudades marcadas y **vuelve a leer Swayp en ese
   momento**: no aplica el diff que tenía la pantalla, que pudo quedar viejo.
-- **La ciudad sale de la bodega de fulfillment** (`warehouse/getAll` del
-  servicio de inventario), cruzando el `idWarehouse` de cada fila. No de
-  `warehouses/byCompany`: esa es la bodega de **recojo** de la empresa, no
-  donde está el stock. La ciudad se resuelve por nombre de bodega, código INEI,
-  una ciudad nombrada dentro del nombre («BODEGA CHICLAYO») o, en último caso,
-  la última ciudad nombrada en la dirección.
+- **La ciudad sale de la bodega de fulfillment**, por su nombre («BODEGA
+  TRUJILLO», «Juliaca - Puno»), su ubigeo INEI, una ciudad nombrada dentro del
+  nombre («BODEGA CHICLAYO») o, en el respaldo del panel, la última ciudad
+  nombrada en la dirección. En el respaldo del panel, las bodegas son las de
+  `warehouse/getAll` y no las de `warehouses/byCompany`, que es la bodega de
+  **recojo** de la empresa.
 - **Un código de Swayp sin vincular en Catálogo no se carga, y el producto que
   le corresponde de nuestro lado pasa a 0**: para Kapta, Swayp no lo tiene. La
   pantalla lo avisa antes de aplicar cuando en una ciudad coinciden productos
@@ -2641,8 +2646,6 @@ las bodegas**, en vez de un archivo por bodega. Las reglas de arriba no cambian
 - **Una ciudad que no vino en la lectura no se vacía**, y una lectura vacía
   (0 filas) no se aplica: es un fallo de Swayp, no un inventario en cero.
 - Si dos bodegas caen en la misma ciudad, sus unidades **se suman**.
-- **Con el botón, el token se pega a mano** (el del login del panel, ~1 h de
-  vida) y no se guarda; o se deja vacío y se usa la credencial guardada.
 
 **Sync diario (desde el 29-09-2026).** Sobre todas las ciudades del sync, con
 las mismas reglas y además:
@@ -2650,26 +2653,12 @@ las mismas reglas y además:
 - **Una vez al día basta** (decisión de Frankz, 29-09-2026): sincroniza sólo si
   la última sincronización buena, manual o automática, fue hace ≥ 20 h. El cron
   (`/api/cron/swayp-inventory`) revisa cada hora y casi siempre responde «al día».
-- **Con qué credencial.** Una credencial de API de Swayp con acceso al
-  inventario (`SWAYP_INVENTORY_TOKEN`), si existe: no vence y no depende de
-  nadie. Swayp todavía no la da: la de integración de las guías responde 403
-  «No tienes autorización 7301» (probado el 29-09-2026). Mientras tanto, se
-  **reutiliza la sesión del panel que abrió una persona**: la guarda Kapta
-  (cifrada, `swayp_inventory_sessions`, ningún usuario la puede leer) al pegar
-  un token en Stock Swayp, o la envía la **extensión de Chrome «Kapta ·
-  Swayp»** cuando alguien abre el panel de Swayp. Se usa sólo para leer
-  inventario y bodegas, y sólo hasta que vence; si Swayp la rechaza antes, se
-  descarta.
-- **El login del panel no se automatiza**: exige reCAPTCHA (v3, invisible) en
-  cada inicio de sesión, que existe justamente para impedir que un programa
-  entre solo. Siempre inicia sesión una persona.
-- **La extensión** lee la sesión que el propio panel guarda en el navegador
-  (`localStorage` «userSWC») y se la envía a Kapta con una llave de la
-  organización (sólo su hash en `swayp_extension_keys`). Kapta comprueba con
-  Swayp que la sesión sirve, que es de la empresa configurada, la guarda y, si
-  toca, sincroniza en el acto. Se descarga desde Stock Swayp con la URL y la
-  llave dentro; descargarla otra vez cambia la llave y la anterior deja de
-  servir.
+- **Con la credencial de integración de la organización**, la misma de las
+  guías: no vence, no depende de que nadie inicie sesión y no se guarda nada
+  nuevo. Hubo dos intentos antes, retirados el mismo día: la sesión del panel
+  reutilizada y una extensión de Chrome que la enviaba (el panel exige
+  reCAPTCHA, así que su login no se automatiza nunca). Con la API de
+  integraciones no hacen falta; sus tablas se borraron (0203).
 - **Retiene la ciudad que quedaría vaciada** y no la aplica: si Swayp no trae
   ninguna unidad para una ciudad con stock, o si dejaría en 0 más de la mitad
   de sus productos con stock (y al menos 5). Es más probable una lectura rota
@@ -2681,9 +2670,10 @@ las mismas reglas y además:
   el Excel.
 - En el kardex, los movimientos del cron dicen «Swayp (API, automático)» y no
   tienen usuario.
-- El contrato es **reversado del panel, no oficial**: si Swayp lo cambia, la
-  lectura falla con el status y la respuesta a la vista, y el Excel sigue como
-  respaldo.
+- `/v1/integrations/products` **no está en la documentación pública** de Swayp
+  (sólo `/v2/guias`): la forma se fijó con una respuesta real. Si Swayp la
+  cambia, la lectura falla con el status y la respuesta a la vista, y quedan
+  de respaldo el token del panel y el Excel.
 
 ### Stock sin control de cantidad (Lima)
 

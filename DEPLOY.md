@@ -1979,19 +1979,16 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
    - `SWAYP_INVENTORY_COMPANY_ID` — id de la empresa en Swayp (`idCompany`).
    - `SWAYP_INVENTORY_ORG_ID` — la organización de Kapta dueña de ese stock.
    Ya creadas el 29-09-2026.
-3. **La credencial de API (`SWAYP_INVENTORY_TOKEN`) todavía no existe**: hay
-   que pedírsela a Swayp. La de integración de las guías (`SWAYP_TOKEN`) NO
-   sirve: responde 403 «No tienes autorización 7301». El login del panel
-   tampoco: exige reCAPTCHA y no se automatiza. Mientras no exista, el sync
-   diario reutiliza la sesión del panel (ver el punto siguiente).
-4. **Migración `0202_swayp_inventory_sessions.sql`** (ya aplicada el
-   29-09-2026): la sesión guardada (cifrada con `ENCRYPTION_KEY`, sin lectura
-   para usuarios) y el hash de la llave de la extensión.
-5. **Extensión de Chrome «Kapta · Swayp»**: Stock Swayp → «Descargar
-   extensión» genera un .zip con la URL (`NEXT_PUBLIC_SITE_URL`) y una llave
-   nueva. Se instala en chrome://extensions → «Modo de desarrollador» →
-   «Cargar descomprimida». Envía la sesión a `/api/swayp/session` cada vez que
-   alguien abre ce.swayp.co en ese Chrome.
-6. El cron (`/api/cron/swayp-inventory`, a los :40 de cada hora) sincroniza
-   sólo si pasaron ≥ 20 h desde el último sync bueno y hay credencial (la de
-   API o una sesión vigente); si no, responde `al_dia` o `sin_credencial`.
+3. **La credencial es la de las guías** (`SWAYP_TOKEN`/`SWAYP_EMAIL`): el sync
+   lee `GET {SWAYP_API_BASE}/v1/integrations/products`, que trae cada producto
+   con su stock por bodega (confirmado el 29-09-2026). No hay credencial nueva
+   que pedir ni guardar. `SWAYP_INVENTORY_RUC`/`SWAYP_INVENTORY_COMPANY_ID`
+   sólo prellenan el respaldo con token del panel.
+4. **Migración `0203_drop_swayp_inventory_sessions.sql`**, DESPUÉS de que salga
+   el código que ya no las usa: borra `swayp_inventory_sessions` y
+   `swayp_extension_keys` (0202), de un intento previo con la sesión del panel
+   y una extensión de Chrome, retirado el mismo día. Estaban vacías.
+5. El cron (`/api/cron/swayp-inventory`, a los :40 de cada hora) sincroniza
+   sólo si pasaron ≥ 20 h desde el último sync bueno; si no, responde
+   `al_dia`. Sin `SWAYP_TOKEN`/`SWAYP_EMAIL` o `SWAYP_INVENTORY_ORG_ID`
+   responde `sin_credencial` con lo que falta.
