@@ -30,7 +30,8 @@ import { RISK_LABELS, type RiskAssessment } from "@/lib/retries";
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import type { RiderRow } from "@/lib/settlements-access";
 import { Hint } from "@/components/hint";
-import { IconAlert, IconCamera, IconCheckCircle, IconClock, IconReceipt, IconTruck } from "@/components/icons";
+import { Badge, Banner, FIELD, OpsButton } from "@/components/ops-ui";
+import { IconAlert, IconCamera, IconCameraOff, IconCheckCircle, IconClock, IconPlus, IconReceipt, IconTruck } from "@/components/icons";
 import { RIDER_PAY_BALANCE_HINT, RIDER_RATE_FORM_ID, RiderPayPanel, riderPayBalanceLabel } from "@/components/rider-pay-panel";
 import { checkStopRate, stopEarnings } from "@/lib/rider-pay";
 import type { RiderPayDetail } from "@/lib/rider-pay";
@@ -189,7 +190,7 @@ export function RoutesBoard({
   const storeName = (id: string | null) => stores.find((s) => s.id === id)?.name ?? "—";
 
   return (
-    <div className="space-y-6">
+    <div className={detailOnly ? "space-y-5" : "space-y-6"}>
       {!detailOnly && <>
       <Section title="Rutas de reparto">
         <p className="text-sm text-slate-500">
@@ -261,8 +262,8 @@ export function RoutesBoard({
       </Card>
 
       </>}
-      {detailOnly && msg && <p role="status" className="rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">{msg}</p>}
-      {detailOnly && err && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{err}</p>}
+      {detailOnly && msg && <Banner tone="ok" role="status">{msg}</Banner>}
+      {detailOnly && err && <Banner tone="crit" role="alert">{err}</Banner>}
 
       {detail && (
         <>
@@ -596,15 +597,15 @@ function RouteDetail({
       )}
 
       {planning && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3">
-          <p className="text-sm text-slate-600">La ruta se está armando: el motorizado todavía no la ve.</p>
-          <button
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-wash px-4 py-3">
+          <p className="text-sm text-ink-700">La ruta se está armando: el motorizado todavía no la ve.</p>
+          <OpsButton
+            variant="primary"
             disabled={disabled || !stops.length}
             onClick={() => onRun(() => startRoute(route.id))}
-            className={BTN_PRIMARY}
           >
             Entregar la ruta
-          </button>
+          </OpsButton>
         </div>
       )}
 
@@ -628,30 +629,31 @@ function RouteDetail({
       )}
 
       {closed && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3">
-          <p className="text-sm text-slate-600">
-            Ruta cerrada. Su liquidación está en{" "}
-            <a href="/dashboard/liquidaciones" className="font-medium text-brand-700 underline underline-offset-2">
-              Liquidaciones
-            </a>
-            , ya con todas las líneas vinculadas.
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-wash px-4 py-3">
+          <p className="flex min-w-0 items-start gap-2 text-sm text-ink-700">
+            <IconCheckCircle aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ok-fg" />
+            <span>
+              Ruta cerrada. Su liquidación está en{" "}
+              <a href="/dashboard/liquidaciones" className="font-medium text-brand-700 hover:underline">
+                Liquidaciones
+              </a>
+              , ya con todas las líneas vinculadas.
+            </span>
           </p>
-          <button
-            type="button"
+          <OpsButton
             disabled={disabled}
             onClick={() => { if (window.confirm("¿Reabrir la ruta? Se descarta su liquidación en borrador; al volver a terminarla se crea de nuevo.")) onRun(() => reopenRoute(route.id)); }}
-            className={BTN_SECONDARY}
             title="Solo mientras la liquidación siga en borrador y el cálculo diario no esté aprobado"
           >
             Reabrir ruta
-          </button>
+          </OpsButton>
         </div>
       )}
 
       {/* Una sola fila de métricas: lo operativo (paradas y cobros) y lo del
           pago del motorizado (ganancia y saldo), sin repetirlo más abajo. En
           tres columnas y sin recortar: en seis no cabían en el panel. */}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg bg-line ring-1 ring-line sm:grid-cols-3">
         <Tile label="Paradas" value={String(totals.total)} sub={`${totals.entregados} entregadas · ${totals.noEntregados} no entregadas · ${totals.pendientes} sin reportar`} />
         <Tile label="Efectivo en manos" value={money(totals.efectivo)} />
         <Tile label="Yape / POS" value={`${money(totals.yape)} / ${money(totals.pos)}`} />
@@ -675,12 +677,12 @@ function RouteDetail({
                 aria-pressed={view === v.key}
                 onClick={() => setView(v.key)}
                 className={cn(
-                  "inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-sm font-medium",
-                  view === v.key ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
+                  "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[13px] font-medium transition-shadow",
+                  view === v.key ? "bg-brand-50 text-brand-700 ring-2 ring-inset ring-brand-600" : "bg-white text-ink-700 ring-1 ring-inset ring-line-strong hover:ring-ink-300",
                 )}
               >
                 {v.label}
-                <span className={cn("tabular-nums", view === v.key ? "text-slate-300" : "text-slate-500")}>{v.count}</span>
+                <span className={cn("tabular-nums", view === v.key ? "text-brand-700" : "text-ink-500")}>{v.count}</span>
               </button>
             ))}
           </div>
@@ -688,18 +690,18 @@ function RouteDetail({
 
         {/* En el teléfono, una lista: la tabla escondía el resultado y la
             foto detrás del scroll horizontal, que es justo lo que se revisa. */}
-        <ul className="divide-y divide-slate-100 border-y border-slate-200 sm:hidden">
+        <ul className="divide-y divide-line rounded-lg ring-1 ring-line sm:hidden">
           {shown.map((s) => (
-            <li key={s.id} className="space-y-1.5 py-3">
+            <li key={s.id} className="space-y-1.5 px-3 py-3">
               <div className="flex items-start justify-between gap-3">
-                <p className="min-w-0 font-medium text-slate-900">
-                  <span className="mr-1.5 text-xs tabular-nums text-slate-400">{s.seq}</span>
+                <p className="min-w-0 font-semibold text-ink-900">
+                  <span className="mr-1.5 text-xs font-medium tabular-nums text-ink-500">{s.seq}</span>
                   {s.order?.customer_name ?? "—"}
                 </p>
                 <StopEarnings stop={s} row={payRow.get(s.id)} pay={pay} onExtra={canExtra ? onExtra : undefined} />
               </div>
-              <p className="text-xs text-slate-500">
-                {s.order?.name ? <OrderLink orderId={s.order_id} className="text-slate-700 underline decoration-slate-300 underline-offset-2 hover:text-brand-700" title="Abrir la ficha del pedido">{s.order.name}</OrderLink> : "—"}
+              <p className="text-[13px] text-ink-500">
+                {s.order?.name ? <OrderLink orderId={s.order_id} className={ORDER_LINK} title="Abrir la ficha del pedido">{s.order.name}</OrderLink> : "—"}
                 {" · "}<span className="tabular-nums">{s.order?.total == null ? "—" : money(s.order.total)}</span>
                 {" · "}{s.order?.district ?? "—"} · {storeName(s.store_id)}
               </p>
@@ -711,7 +713,7 @@ function RouteDetail({
                 <button
                   disabled={disabled}
                   onClick={() => onRun(() => removeStop(s.id))}
-                  className="text-xs text-slate-500 underline hover:text-red-600 disabled:opacity-50"
+                  className="text-xs font-medium text-crit-fg hover:underline disabled:opacity-50"
                 >
                   Quitar
                 </button>
@@ -719,53 +721,64 @@ function RouteDetail({
             </li>
           ))}
           {stops.length === 0 && (
-            <li className="py-6 text-center text-sm text-slate-500">
+            <li className="py-6 text-center text-sm text-ink-500">
               {canAddStops ? "Esta ruta no tiene paradas. Añádelas abajo." : "Esta ruta no tiene paradas."}
             </li>
           )}
         </ul>
 
         {/* Tabla única de paradas: en el panel cabe entera; en pantallas
-            medianas se desplaza en horizontal con el cliente fijo a la izquierda. */}
-        <div className="hidden overflow-x-auto sm:block">
-          <table className="w-full min-w-[840px] text-sm">
-            <thead className="border-b border-slate-200 text-left text-xs text-slate-500">
+            medianas se desplaza en horizontal con el cliente fijo a la
+            izquierda. Anchos fijos y dos líneas por fila como máximo: lo que no
+            cabe se recorta y se lee entero al pasar el cursor. */}
+        <div className="hidden overflow-x-auto rounded-lg ring-1 ring-line sm:block">
+          <table className="w-full min-w-[840px] table-fixed text-sm">
+            <colgroup>
+              <col className="w-[17%]" />
+              <col className="w-[13%]" />
+              <col className="w-[12%]" />
+              <col className="w-[20%]" />
+              <col className="w-[20%]" />
+              <col className="w-[18%]" />
+              {planning && <col className="w-16" />}
+            </colgroup>
+            <thead className="text-left text-xs font-semibold text-ink-600 shadow-[inset_0_-1px_0_var(--color-line)]">
               <tr>
-                <th className="sticky left-0 z-[1] bg-white px-2.5 py-2 font-medium">Cliente</th>
-                <th className="px-2.5 py-2 font-medium">Pedido</th>
-                <th className="px-2.5 py-2 font-medium">Distrito</th>
-                <th className="px-2.5 py-2 font-medium">Resultado</th>
-                <th className="px-2.5 py-2 font-medium">Cobro y respaldo</th>
-                <th className="px-2.5 py-2 text-right font-medium">Ganancia</th>
-                {planning && <th className="px-2.5 py-2 font-medium"><span className="sr-only">Acciones</span></th>}
+                <th className="sticky left-0 z-[1] bg-white px-3 py-2.5 font-semibold">Cliente</th>
+                <th className="px-2.5 py-2.5 font-semibold">Pedido</th>
+                <th className="px-2.5 py-2.5 font-semibold">Distrito</th>
+                <th className="px-2.5 py-2.5 font-semibold">Resultado</th>
+                <th className="px-2.5 py-2.5 font-semibold">Cobro y respaldo</th>
+                <th className="px-3 py-2.5 text-right font-semibold">Ganancia</th>
+                {planning && <th className="px-2.5 py-2.5 font-semibold"><span className="sr-only">Acciones</span></th>}
               </tr>
             </thead>
             <tbody>
               {shown.map((s) => (
-                <tr key={s.id} className="group border-b border-slate-100 align-top hover:bg-slate-50">
-                  <td className="sticky left-0 z-[1] bg-white px-2.5 py-2.5 text-slate-800 group-hover:bg-slate-50">
-                    <div className="flex min-w-[8rem] gap-2">
-                      <span className="w-4 shrink-0 text-right text-xs leading-5 tabular-nums text-slate-400">{s.seq}</span>
-                      <span>{s.order?.customer_name ?? "—"}</span>
+                <tr key={s.id} className="group align-top transition-colors [&+&]:shadow-[inset_0_1px_0_var(--color-line)] hover:bg-wash">
+                  <td className="sticky left-0 z-[1] bg-white px-3 py-2.5 font-medium text-ink-900 transition-colors group-hover:bg-wash">
+                    <div className="flex gap-2">
+                      <span className="w-4 shrink-0 text-right text-xs font-normal leading-5 tabular-nums text-ink-500">{s.seq}</span>
+                      <span className="line-clamp-2 min-w-0 leading-5" title={s.order?.customer_name ?? undefined}>{s.order?.customer_name ?? "—"}</span>
                     </div>
                   </td>
-                  <td className="whitespace-nowrap px-2.5 py-2.5">
-                    {s.order?.name ? <OrderLink orderId={s.order_id} className="text-slate-700 underline decoration-slate-300 underline-offset-2 hover:text-brand-700" title="Abrir la ficha del pedido">{s.order.name}</OrderLink> : "—"}
-                    <p className="text-xs tabular-nums text-slate-500">{s.order?.total == null ? "—" : money(s.order.total)}</p>
+                  <td className="px-2.5 py-2.5">
+                    <p className="truncate leading-5">
+                      {s.order?.name ? <OrderLink orderId={s.order_id} className={ORDER_LINK} title="Abrir la ficha del pedido">{s.order.name}</OrderLink> : "—"}
+                    </p>
+                    <p className="text-xs leading-4 tabular-nums text-ink-500">{s.order?.total == null ? "—" : money(s.order.total)}</p>
                   </td>
                   <td className="px-2.5 py-2.5">
-                    <p className="min-w-[6rem] text-slate-700">{s.order?.district ?? "—"}</p>
-                    <p className="text-xs text-slate-500">{storeName(s.store_id)}</p>
+                    <p className="truncate leading-5 text-ink-700" title={s.order?.district ?? undefined}>{s.order?.district ?? "—"}</p>
+                    <p className="truncate text-xs leading-4 text-ink-500">{storeName(s.store_id)}</p>
                   </td>
                   <td className="px-2.5 py-2.5">
-                    <div className="min-w-[7.5rem]"><StopResult stop={s} /></div>
+                    <StopResult stop={s} />
                   </td>
                   <td className="px-2.5 py-2.5">
-                    <div className="min-w-[10rem]">
-                      <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} exempt={exemptRejection(s)} />
-                    </div>
+                    <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} exempt={exemptRejection(s)} />
                   </td>
-                  <td className="px-2.5 py-2.5 text-right">
+                  <td className="px-3 py-2.5 text-right">
                     <StopEarnings stop={s} row={payRow.get(s.id)} pay={pay} onExtra={canExtra ? onExtra : undefined} />
                   </td>
                   {planning && (
@@ -773,7 +786,7 @@ function RouteDetail({
                       <button
                         disabled={disabled}
                         onClick={() => onRun(() => removeStop(s.id))}
-                        className="text-xs text-slate-500 underline hover:text-red-600 disabled:opacity-50"
+                        className="text-xs font-medium text-crit-fg hover:underline disabled:opacity-50"
                       >
                         Quitar
                       </button>
@@ -783,7 +796,7 @@ function RouteDetail({
               ))}
               {stops.length === 0 && (
                 <tr>
-                  <td colSpan={planning ? 7 : 6} className="px-3 py-6 text-center text-sm text-slate-500">
+                  <td colSpan={planning ? 7 : 6} className="px-3 py-6 text-center text-sm text-ink-500">
                     {canAddStops ? "Esta ruta no tiene paradas. Añádelas abajo." : "Esta ruta no tiene paradas."}
                   </td>
                 </tr>
@@ -875,34 +888,51 @@ function RouteDetail({
   );
 }
 
-/** Resultado de la parada: entregada, no entregada (con motivo) o sin reportar. */
+/** Resultado de la parada en dos líneas: qué pasó y, debajo, la devolución y la nota. */
 function StopResult({ stop: s }: { stop: StopWithOrder }) {
+  const reason = s.status === "no_entregado" ? reasonLabel(s.outcome_reason) : null;
+  // Todo no entregado vuelve físicamente a la oficina (0188/0189).
+  const returnState = s.status === "no_entregado" && s.dispatch_manifest_id ? (s.returned_at ? "devuelto" : "por_devolver") : null;
+  const returnedAt = s.returned_at ? new Date(s.returned_at) : null;
   return (
-    <div className="space-y-1">
-      {s.status === "pendiente" ? (
-        <span className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900">Sin reportar</span>
-      ) : s.status === "entregado" ? (
-        <p className="text-xs font-semibold text-emerald-700">Entregado</p>
-      ) : (
-        <div className="text-xs">
-          <p className="font-semibold text-red-700">No entregado</p>
-          <p className="text-slate-600">{reasonLabel(s.outcome_reason)}</p>
-        </div>
+    <div className="min-w-0 text-xs">
+      {/* Un no entregado se lee por su motivo, en rojo: «Rechazó el pedido»,
+          «No contesta»… El rojo ya dice que no se entregó. */}
+      <p className="truncate leading-5" title={reason ? `No entregado · ${reason}` : undefined}>
+        {s.status === "pendiente" ? (
+          <Badge tone="warn">Sin reportar</Badge>
+        ) : s.status === "entregado" ? (
+          <Badge tone="ok">Entregado</Badge>
+        ) : (
+          <Badge tone="crit"><span className="truncate"><span className="sr-only">No entregado: </span>{reason}</span></Badge>
+        )}
+      </p>
+      {(returnState || s.note) && (
+        <p className="mt-1 flex min-w-0 items-center gap-1.5 leading-4">
+          {returnState === "por_devolver" && (
+            <span className="shrink-0 whitespace-nowrap text-xs font-semibold text-crit-fg">Por devolver</span>
+          )}
+          {returnState === "devuelto" && returnedAt && (
+            <span
+              className="shrink-0 whitespace-nowrap text-xs font-semibold tabular-nums text-ok-fg"
+              title={`Recibido en oficina el ${returnedAt.toLocaleString("es-PE", { timeZone: "America/Lima" })}`}
+            >
+              Devuelto · {returnedAt.toLocaleString("es-PE", { timeZone: "America/Lima", day: "2-digit", month: "2-digit" })}
+            </span>
+          )}
+          {s.note && <span className="min-w-0 truncate text-ink-500" title={s.note}>{s.note}</span>}
+        </p>
       )}
-      {/* Todo no entregado vuelve físicamente a la oficina (0188/0189). */}
-      {s.status === "no_entregado" && s.dispatch_manifest_id && (
-        s.returned_at
-          ? <p><span className="whitespace-nowrap rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800" title={`Recibido en oficina el ${new Date(s.returned_at).toLocaleString("es-PE", { timeZone: "America/Lima" })}`}>Devuelto · {new Date(s.returned_at).toLocaleString("es-PE", { timeZone: "America/Lima", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></p>
-          : <p><span className="whitespace-nowrap rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-800">Por devolver</span></p>
-      )}
-      {s.note && <p className="text-xs text-slate-500">{s.note}</p>}
     </div>
   );
 }
 
+const METHOD_SHORT: Record<string, string> = { efectivo: "Efectivo", yape: "Yape", pos: "POS", sin_cobro: "Sin cobro" };
+
 /**
- * Cobro y respaldo: cómo y cuánto cobró, y su foto y comprobante (cada uno abre
- * en grande en otra pestaña, GET /api/reparto/foto), o lo que falta.
+ * Cobro y respaldo en una línea: cómo y cuánto cobró, y sus respaldos como
+ * íconos (cada uno abre en grande en otra pestaña, GET /api/reparto/foto), o
+ * lo que falta en ámbar. El nombre de cada ícono va en su tooltip.
  */
 function StopCollection({ stop: s, needsPhoto, needsVoucher, exempt = false }: {
   stop: StopWithOrder;
@@ -911,46 +941,48 @@ function StopCollection({ stop: s, needsPhoto, needsVoucher, exempt = false }: {
   /** Rechazo sin foto de una ruta anterior al 28/09: no se exige (MOM §29.7). */
   exempt?: boolean;
 }) {
+  const voucherLabel = s.payment_method === "yape" ? "Ver la captura del Yape" : "Ver el comprobante de pago";
   return (
-    <div className="space-y-1.5">
-      <p className="whitespace-nowrap text-slate-700">
-        {s.status === "entregado" ? <>{methodLabel(s.payment_method)} · <span className="tabular-nums">{money(s.collected_amount)}</span></> : <span className="text-slate-400">—</span>}
+    <div className="flex min-w-0 items-center gap-2">
+      <p className="min-w-0 truncate leading-5 text-ink-900">
+        {s.status === "entregado"
+          ? <><span className="text-xs text-ink-500">{METHOD_SHORT[s.payment_method ?? ""] ?? methodLabel(s.payment_method)}</span> <span className="tabular-nums">{money(s.collected_amount)}</span></>
+          : <span className="text-ink-300">—</span>}
       </p>
-      {(s.photo_path || s.voucher_path || needsPhoto || needsVoucher) && (
-        <div className="flex flex-wrap items-center gap-1">
-          {s.photo_path && (
-            <a href={`/api/reparto/foto?path=${encodeURIComponent(s.photo_path)}`} target="_blank" rel="noreferrer" title="Ver la foto en otra pestaña" className={EVIDENCE_LINK}>
-              <IconCamera aria-hidden="true" className="h-3.5 w-3.5" />Foto
-            </a>
-          )}
-          {s.voucher_path && (
-            <a href={`/api/reparto/foto?path=${encodeURIComponent(s.voucher_path)}`} target="_blank" rel="noreferrer" title="Ver el comprobante de pago en otra pestaña" className={EVIDENCE_LINK}>
-              <IconReceipt aria-hidden="true" className="h-3.5 w-3.5" />{s.payment_method === "yape" ? "Captura" : "Voucher"}
-            </a>
-          )}
-          {(needsPhoto || needsVoucher) && (
-            <span className={MISSING_CHIP}>
-              {needsPhoto ? <IconCamera aria-hidden="true" className="h-3.5 w-3.5" /> : <IconReceipt aria-hidden="true" className="h-3.5 w-3.5" />}
-              {needsPhoto && needsVoucher ? "Falta foto y captura" : needsPhoto ? "Falta foto" : "Falta captura"}
-            </span>
-          )}
-        </div>
-      )}
-      {exempt && (
-        <p className="text-xs text-slate-500" title="Hasta el 27/09 el teléfono no pedía foto al rechazar: esos rechazos no la exigen para cerrar ni para pagar (MOM §29.7).">
-          Sin foto · no se exige (antes del 28/09)
-        </p>
-      )}
+      <span className="flex shrink-0 items-center gap-1">
+        {s.photo_path ? (
+          <a href={`/api/reparto/foto?path=${encodeURIComponent(s.photo_path)}`} target="_blank" rel="noreferrer" title="Ver la foto" aria-label="Ver la foto" className={EVIDENCE_ICON}>
+            <IconCamera aria-hidden="true" className="h-3.5 w-3.5" />
+          </a>
+        ) : needsPhoto ? (
+          <span role="img" title="Falta la foto" aria-label="Falta la foto" className={MISSING_ICON}>
+            <IconCamera aria-hidden="true" className="h-3.5 w-3.5" />
+          </span>
+        ) : exempt ? (
+          <span role="img" title="Sin foto · no se exige (antes del 28/09)" aria-label="Sin foto · no se exige (antes del 28/09)" className={EXEMPT_ICON}>
+            <IconCameraOff aria-hidden="true" className="h-3.5 w-3.5" />
+          </span>
+        ) : null}
+        {s.voucher_path ? (
+          <a href={`/api/reparto/foto?path=${encodeURIComponent(s.voucher_path)}`} target="_blank" rel="noreferrer" title={voucherLabel} aria-label={voucherLabel} className={EVIDENCE_ICON}>
+            <IconReceipt aria-hidden="true" className="h-3.5 w-3.5" />
+          </a>
+        ) : needsVoucher ? (
+          <span role="img" title="Falta la captura del Yape" aria-label="Falta la captura del Yape" className={MISSING_ICON}>
+            <IconReceipt aria-hidden="true" className="h-3.5 w-3.5" />
+          </span>
+        ) : null}
+      </span>
     </div>
   );
 }
 
 /**
- * Ganancia del motorizado por el punto y de dónde sale: tarifa (del distrito o
- * general) más adicional, y aviso si no cuadra con las tarifas registradas
- * (MOM §29.9). Solo existe con la parada reportada (entregada o rechazada):
- * antes no es S/ 0,00, es «todavía no». Sin tarifa personal vigente se dice,
- * para que se configure.
+ * Ganancia del motorizado por el punto, en dos líneas: el importe (o por qué no
+ * lo hay) y de dónde sale. Qué se muestra lo decide `stopEarnings`
+ * (lib/rider-pay.ts): un no entregado que no es rechazo dice «No se paga», no
+ * «Sin tarifa» (MOM §29.10). El aviso de tarifa (§29.9) va como ícono y
+ * «+ adicional» como botón que aparece al pasar por la fila.
  */
 function StopEarnings({ stop: s, row: pr, pay, onExtra }: {
   stop: StopWithOrder;
@@ -960,39 +992,51 @@ function StopEarnings({ stop: s, row: pr, pay, onExtra }: {
   onExtra?: (stopId: string) => void;
 }) {
   const check = pr && pay ? checkStopRate(pr, pay.rates, pay.snapshot.day) : null;
-  // Qué se muestra lo decide `stopEarnings` (lib/rider-pay.ts): un no entregado
-  // que no es rechazo dice «No se paga», no «Sin tarifa» (MOM §29.10).
   const state = pr ? stopEarnings(s, pr) : null;
   const earned = state?.kind === "ganada" ? state.base : null;
+  const extra = pr?.extra ?? 0;
   const noRateTitle = "Configura la tarifa del motorizado en «Tarifa de …», abajo";
+  const source = check?.source ? (check.source === "distrito" ? "distrito" : "general") : null;
+  const detail =
+    earned !== null ? (extra ? `+ ${money(extra)} adicional` : `Tarifa ${source ?? ""}`.trim())
+    : state?.kind === "no_se_paga" ? (extra ? "el punto no se paga" : "solo entrega o rechazo")
+    : state?.kind === "sin_tarifa" ? (extra ? `+ ${money(extra)} adicional` : null)
+    : state?.kind === "pendiente" ? (state.rate != null ? `${money(state.rate)} al reportar` : "Sin tarifa")
+    : null;
+  const detailTitle = earned !== null ? `Tarifa ${money(earned)}${source ? ` (${source})` : ""}${extra ? ` + adicional ${money(extra)}` : ""}` : undefined;
   return (
-    <div className="ml-auto min-w-[6.5rem] shrink-0 space-y-0.5 text-right">
-      {!pr || !state ? <span className="text-slate-400">—</span>
-        : earned !== null ? <p className="font-semibold tabular-nums text-slate-900">{money(earned + pr.extra)}</p>
-        : state.kind === "no_se_paga"
-          ? (pr.extra ? <p className="font-semibold tabular-nums text-slate-900">{money(pr.extra)}</p> : <p className="text-xs font-medium text-slate-600">No se paga</p>)
-        : state.kind === "sin_tarifa" ? <p className="text-xs font-medium text-amber-800" title={noRateTitle}>Sin tarifa</p>
-        : <span className="text-slate-400">—</span>}
-      {pr && earned !== null && (
-        <p className="whitespace-nowrap text-xs tabular-nums text-slate-500">
-          Tarifa {money(earned)}{check?.source ? ` · ${check.source === "distrito" ? "distrito" : "general"}` : ""}
+    <div className="min-w-0 text-right">
+      <div className="flex items-center justify-end gap-1.5 leading-5">
+        {check?.warning && state?.kind !== "no_se_paga" && (
+          <span role="img" title={check.warning} aria-label={check.warning} className="shrink-0 text-warn-fg">
+            <IconAlert aria-hidden="true" className="h-3.5 w-3.5" />
+          </span>
+        )}
+        {onExtra && s.status !== "pendiente" && (
+          <button
+            type="button"
+            onClick={() => onExtra(s.id)}
+            title="Aprobar un adicional para este punto"
+            aria-label="Aprobar un adicional para este punto"
+            className="inline-flex h-5 min-h-0 w-5 shrink-0 items-center justify-center rounded text-brand-700 opacity-0 transition-opacity hover:bg-brand-50 focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
+          >
+            <IconPlus aria-hidden="true" className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {!pr || !state ? <span className="text-ink-300">—</span>
+          : earned !== null ? <span className="font-semibold tabular-nums text-ink-900">{money(earned + extra)}</span>
+          : state.kind === "no_se_paga"
+            ? (extra ? <span className="font-semibold tabular-nums text-ink-900">{money(extra)}</span> : <span className="text-xs font-medium text-ink-600">No se paga</span>)
+          : state.kind === "sin_tarifa" ? <span className="text-xs font-medium text-warn-fg" title={noRateTitle}>Sin tarifa</span>
+          : <span className="text-ink-300">—</span>}
+      </div>
+      {detail && (
+        <p
+          className={cn("truncate text-xs leading-4 tabular-nums", state?.kind === "pendiente" && state.rate == null ? "font-medium text-warn-fg" : "text-ink-500")}
+          title={state?.kind === "pendiente" && state.rate == null ? noRateTitle : detailTitle}
+        >
+          {detail}
         </p>
-      )}
-      {state?.kind === "no_se_paga" && (
-        <p className={cn("text-xs text-slate-500", !pr?.extra && "whitespace-nowrap")}>{pr?.extra ? "El punto no se paga: " : ""}solo entrega o rechazo</p>
-      )}
-      {state?.kind === "pendiente" && (state.rate != null
-        ? <p className="whitespace-nowrap text-xs tabular-nums text-slate-500">{money(state.rate)} al reportar</p>
-        : <p className="text-xs font-medium text-amber-800" title={noRateTitle}>Sin tarifa</p>)}
-      {pr && pr.extra ? <p className="whitespace-nowrap text-xs tabular-nums text-slate-500">Adicional {money(pr.extra)}</p> : null}
-      {check?.warning && state?.kind !== "no_se_paga" && (
-        <p className="flex items-start justify-end gap-1 text-left text-xs leading-snug text-amber-800" title={check.warning}>
-          <IconAlert aria-hidden="true" className="mt-px h-3.5 w-3.5 shrink-0" />
-          <span className="max-w-[13rem]">{check.warning}</span>
-        </p>
-      )}
-      {onExtra && s.status !== "pendiente" && (
-        <button type="button" onClick={() => onExtra(s.id)} className="min-h-0 text-xs font-medium text-brand-700 underline-offset-2 hover:underline" title="Aprobar un adicional para este punto">+ adicional</button>
       )}
     </div>
   );
@@ -1003,24 +1047,34 @@ function closedStatus(status: string): boolean {
 }
 
 // Botones del panel: uno por jerarquía, para que «Terminar» se distinga de sus arreglos.
-const BTN = "inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg px-3.5 text-sm font-medium whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50";
-const BTN_PRIMARY = cn(BTN, "bg-slate-900 font-semibold text-white hover:bg-slate-800");
-const BTN_SECONDARY = cn(BTN, "border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50");
-const BTN_DANGER = cn(BTN, "bg-red-600 font-semibold text-white hover:bg-red-700");
-const BTN_LINK = "min-h-0 text-sm font-medium text-brand-700 underline decoration-brand-200 underline-offset-2 hover:decoration-brand-700 disabled:opacity-50";
-// Respaldo de la parada: enlace a la foto o al comprobante, o lo que falta.
-const EVIDENCE_LINK = "inline-flex min-h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-1.5 text-xs font-medium text-slate-600 hover:border-slate-300 hover:text-slate-900 pointer-coarse:min-h-11";
-const MISSING_CHIP = "inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-amber-100 px-1.5 py-1 text-xs font-semibold text-amber-900";
+// Las mismas piezas que `OpsButton` (components/ops-ui.tsx), como clases para
+// poder vestir también un <a> («Reportar entregas», «Abrir la caja»).
+const BTN = "inline-flex h-9 items-center justify-center gap-1.5 rounded-md px-3 text-sm font-semibold whitespace-nowrap transition-[background-color,color,box-shadow] duration-150 disabled:cursor-not-allowed disabled:opacity-50";
+const BTN_PRIMARY = cn(BTN, "bg-brand-600 text-white shadow-primary hover:bg-brand-700 disabled:hover:bg-brand-600");
+const BTN_SECONDARY = cn(BTN, "bg-white text-ink-700 shadow-control ring-1 ring-inset ring-line-strong hover:bg-wash hover:text-ink-900");
+const BTN_DANGER = cn(BTN, "bg-white text-crit-fg shadow-control ring-1 ring-inset ring-line-strong hover:bg-crit-wash");
+const BTN_LINK = "min-h-0 text-[13px] font-medium text-brand-700 hover:underline disabled:opacity-50";
+const ORDER_LINK = "font-medium text-ink-900 underline decoration-line-strong underline-offset-2 hover:text-brand-700 hover:decoration-brand-700";
+// Respaldo de la parada como íconos: enlace a la foto o al comprobante, lo que
+// falta en ámbar y la foto que no se exige, tachada.
+const EVIDENCE_ICON = "inline-flex h-6 w-6 items-center justify-center rounded-md bg-white text-ink-600 shadow-control ring-1 ring-inset ring-line-strong transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:h-10 pointer-coarse:w-10";
+const MISSING_ICON = "inline-flex h-6 w-6 items-center justify-center rounded-md bg-warn-bg text-warn-fg pointer-coarse:h-10 pointer-coarse:w-10";
+const EXEMPT_ICON = "inline-flex h-6 w-6 items-center justify-center rounded-md text-ink-500";
 
+/**
+ * Una cifra del resumen de la ruta. Las seis comparten un solo marco con
+ * hairlines entre celdas (no seis tarjetas); el saldo, que es lo que se
+ * liquida, va sobre el lavado y en la cifra más grande.
+ */
 function Tile({ label, value, sub, hint, highlight, warn }: { label: string; value: string; sub?: string; hint?: string; highlight?: boolean; warn?: boolean }) {
   return (
-    <div className={cn("min-w-0 rounded-lg border px-3 py-2.5", highlight ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white")}>
-      <p className={cn("flex items-start gap-1 text-xs leading-snug", highlight ? "text-slate-300" : "text-slate-500")}>
+    <div className={cn("min-w-0 px-4 py-3", highlight ? "bg-wash" : "bg-white")}>
+      <p className={cn("flex items-start gap-1 text-[13px] leading-snug", highlight ? "font-medium text-ink-700" : "text-ink-500")}>
         <span>{label}</span>
-        {hint && <Hint text={hint} className={highlight ? "text-slate-300" : undefined} />}
+        {hint && <Hint text={hint} />}
       </p>
-      <p className={cn("mt-1 text-base font-semibold leading-tight tabular-nums", highlight ? "text-white" : warn ? "text-amber-800" : "text-slate-900")}>{value.replaceAll("S/ ", "S/ ")}</p>
-      {sub && <p className={cn("mt-1 text-xs leading-snug", highlight ? "text-slate-300" : warn ? "text-amber-800" : "text-slate-500")}>{sub}</p>}
+      <p className={cn("mt-1 font-semibold leading-tight tabular-nums", highlight ? "text-xl text-ink-900" : warn ? "text-base text-warn-fg" : "text-base text-ink-900")}>{value.replaceAll("S/ ", "S/ ")}</p>
+      {sub && <p className={cn("mt-1 text-xs leading-snug", warn ? "text-warn-fg" : "text-ink-500")}>{sub}</p>}
     </div>
   );
 }
@@ -1104,15 +1158,15 @@ function RouteClosePanel({
   };
 
   return (
-    <section aria-labelledby={headingId} className={cn("overflow-hidden rounded-xl border", ready ? "border-emerald-200" : "border-amber-200")}>
-      <div className={cn("flex flex-wrap items-start justify-between gap-x-4 gap-y-3 px-4 py-3.5", ready ? "bg-emerald-50" : "bg-amber-50")}>
+    <section aria-labelledby={headingId} className="overflow-hidden rounded-lg ring-1 ring-line">
+      <div className={cn("flex flex-wrap items-start justify-between gap-x-4 gap-y-3 px-4 py-3.5", ready ? "bg-ok-wash" : "bg-warn-wash")}>
         <div className="flex min-w-0 flex-1 basis-72 gap-2.5">
           {ready
-            ? <IconCheckCircle aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-            : <IconAlert aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />}
+            ? <IconCheckCircle aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ok-fg" />
+            : <IconAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-warn-fg" />}
           <div className="min-w-0">
-            <h3 id={headingId} className="text-sm font-semibold text-slate-900">{ready ? "Lista para terminar" : "Para terminar la ruta"}</h3>
-            <p id={summaryId} className={cn("mt-0.5 text-sm", ready ? "text-emerald-900" : "text-amber-900")}>{summary}</p>
+            <h3 id={headingId} className={cn("text-sm font-semibold", ready ? "text-ok-fg" : "text-warn-fg")}>{ready ? "Lista para terminar" : "Para terminar la ruta"}</h3>
+            <p id={summaryId} className="mt-0.5 text-sm text-ink-700">{summary}</p>
           </div>
         </div>
         <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
@@ -1139,7 +1193,7 @@ function RouteClosePanel({
       </div>
 
       {blockers.length > 0 && (
-        <ul className="divide-y divide-slate-100 border-t border-amber-200 bg-white">
+        <ul className="divide-y divide-line bg-white shadow-[inset_0_1px_0_var(--color-line)]">
           {blockers.map((b) => {
             switch (b.kind) {
               case "carga_sin_recibir":
@@ -1175,7 +1229,7 @@ function RouteClosePanel({
                             if (!confirm(`Quedan ${plural(b.stops.length, "parada", "paradas")} sin reportar. Se cerrará igual y esas paradas no entrarán en la liquidación. ¿Seguro?`)) return;
                             onRun(() => closeRoute(routeId, { force: true }));
                           }}
-                          className="min-h-0 text-sm font-medium text-red-700 underline underline-offset-2 hover:text-red-800 disabled:opacity-50"
+                          className="min-h-0 text-[13px] font-medium text-crit-fg hover:underline disabled:opacity-50"
                         >
                           Cerrar con paradas sin reportar
                         </button>
@@ -1202,11 +1256,11 @@ function RouteClosePanel({
       )}
 
       {payNotes.length > 0 && (
-        <div className="border-t border-slate-200 bg-white px-4 py-3">
-          <h4 className="text-sm font-medium text-slate-800">Para aprobar el pago, después</h4>
+        <div className="bg-white px-4 py-3 shadow-[inset_0_1px_0_var(--color-line)]">
+          <h4 className="text-[13px] font-semibold text-ink-700">Para aprobar el pago, después</h4>
           <ul className="mt-1.5 space-y-1.5">
             {payNotes.map((note) => (
-              <li key={note.key} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm text-slate-600">
+              <li key={note.key} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm text-ink-600">
                 <span>{note.text}</span>
                 {note.action && <button type="button" onClick={note.action.run} className={BTN_LINK}>{note.action.label}</button>}
               </li>
@@ -1229,11 +1283,11 @@ function BlockerRow({ icon, title, detail, orders, actions, below }: {
 }) {
   return (
     <li className="grid grid-cols-[1rem_minmax(0,1fr)] gap-x-3 gap-y-2 px-4 py-3 sm:grid-cols-[1rem_minmax(0,1fr)_auto]">
-      <span className="pt-0.5 text-amber-600">{icon}</span>
+      <span className="pt-0.5 text-warn-fg">{icon}</span>
       <div className="min-w-0">
-        <p className="text-sm font-semibold text-slate-900">{title}</p>
-        <p className="text-sm text-slate-600">{detail}</p>
-        {orders && <p className="mt-1 text-xs text-slate-500">{orders}</p>}
+        <p className="text-sm font-semibold text-ink-900">{title}</p>
+        <p className="text-sm text-ink-600">{detail}</p>
+        {orders && <p className="mt-1 text-xs tabular-nums text-ink-500">{orders}</p>}
       </div>
       {actions && <div className="col-start-2 flex flex-wrap items-center gap-x-4 gap-y-2 sm:col-start-3 sm:justify-end sm:self-center">{actions}</div>}
       {below && <div className="col-start-2 sm:col-end-4">{below}</div>}
@@ -1286,7 +1340,7 @@ function LoadBlockerRow({ load, canCancel, disabled, onRun }: { load: OpenLoad; 
             });
           }}
         >
-          <label htmlFor={inputId} className="grid min-w-0 flex-1 basis-60 gap-1 text-xs font-medium text-slate-600">
+          <label htmlFor={inputId} className="grid min-w-0 flex-1 basis-60 gap-1 text-[13px] font-medium text-ink-700">
             Motivo de la cancelación
             <input
               id={inputId}
@@ -1296,11 +1350,11 @@ function LoadBlockerRow({ load, canCancel, disabled, onRun }: { load: OpenLoad; 
               minLength={3}
               required
               placeholder="Ej. se abrió por error"
-              className="min-h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-500"
+              className={FIELD}
             />
           </label>
           <button type="submit" disabled={disabled || !valid} className={BTN_DANGER}>Cancelar carga</button>
-          <button type="button" onClick={() => { setCancelling(false); setReason(""); }} className={cn(BTN, "text-slate-600 hover:bg-slate-100")}>Volver</button>
+          <OpsButton variant="ghost" onClick={() => { setCancelling(false); setReason(""); }}>Volver</OpsButton>
         </form>
       )}
     />

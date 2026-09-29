@@ -1,4 +1,4 @@
--- THROWAWAY database only: apply the real migrations THROUGH 0201 first.
+-- THROWAWAY database only: apply the real migrations THROUGH 0202 first.
 -- This smoke intentionally commits: rollback.sql owns its atomic transaction.
 -- The PGlite caller destroys the isolated in-memory database afterward.
 create temp table rollback_legacy_definitions as
@@ -11,11 +11,11 @@ do $test$ begin
   if exists (select 1 from rollback_legacy_definitions
     where definition like '%order_master_stage_totals%'
        or definition like '%order_master_facet_totals%') then
-    raise exception 'Rollback smoke must start on migrations through 0201';
+    raise exception 'Rollback smoke must start on migrations through 0202';
   end if;
 end $test$;
 
-\ir ../../db/migrations/0202_master_read_scaling.sql
+\ir ../../db/migrations/0203_master_read_scaling.sql
 
 insert into auth.users(id,email) values
   ('01570000-0000-4000-8000-000000000021','rollback-viewer@test.invalid'),
@@ -193,7 +193,7 @@ reset role;
 -- Rollback is repeatable. Reinstallation repairs deliberately stale summaries
 -- and reinstates maintenance without replaying or deleting operational orders.
 \ir master_read_scaling_rollback.sql
-\ir ../../db/migrations/0202_master_read_scaling.sql
+\ir ../../db/migrations/0203_master_read_scaling.sql
 select pg_temp.assert_rebuilt_totals();
 set role service_role;
 insert into order_master(order_id,store_id,shopify_order_id,region)

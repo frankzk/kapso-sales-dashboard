@@ -1,6 +1,6 @@
 // Synthetic PostgreSQL concurrency workload. The caller supplies node-postgres
-// clients connected to a THROWAWAY database with the real schema through 0201
-// (before) or 0202 (after), test_prelude.sql and the real RLS policies.
+// clients connected to a THROWAWAY database with the real schema through 0202
+// (before) or 0203 (after), test_prelude.sql and the real RLS policies.
 // No dependency imports, connection creation, .env access or production access.
 //
 // seed(admin, { size: 50_000, workerCount: 8 }) -> fixture

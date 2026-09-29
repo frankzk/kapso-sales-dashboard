@@ -53,6 +53,13 @@ describe("el BBVA pega el final del celular al nombre", () => {
     expect(isExpectedRecipient("Grupo Gf S · 930 555 309 - Yape")).toBe(true);
   });
 
+  it("y la de Plin sin número, con la billetera pegada al nombre", () => {
+    // #KP136682 (comprobante de pedido): «Grupo Gf S - Yape». La misma forma
+    // puede llegar como cobro del courier.
+    expect(isExpectedRecipient("Grupo Gf S - Yape")).toBe(true);
+    expect(isExpectedRecipient("Juan Pérez - Yape")).toBe(false);
+  });
+
   it("los dígitos son el celular: si no terminan en 309, es otra cuenta", () => {
     // Separarlos no es tirarlos. El nombre encaja, pero el celular manda.
     expect(isExpectedRecipient("Grupo gf s •5123")).toBe(false);
@@ -72,6 +79,42 @@ describe("el BBVA pega el final del celular al nombre", () => {
     expect(isExpectedRecipient("Grupo Gf S. **** 0012")).toBe(true);
     // Pero el nombre sigue exigiéndose igual.
     expect(isExpectedRecipient("Juan Pérez **** 0012")).toBe(false);
+  });
+});
+
+describe("cualquier app que pague a un Yape", () => {
+  // #KP136441, lectura TEXTUAL de producción salvo el destino: Prex con
+  // «Titular: Grupo Gf S A C» y «Cuenta/billetera: Yape». Salía «El medio de
+  // pago no es Yape, Plin ni transferencia BCP»; había 43 así, 30 validados a mano.
+  const prex = voucher({
+    method: "otro",
+    toYape: true,
+    recipientName: "Grupo Gf S A C",
+    amount: 298,
+    operationNumber: "092514213996",
+  });
+
+  it("#KP136441: un Prex a nuestro Yape es un cobro válido", () => {
+    expect(checkTandersPayment({ voucher: prex, expectedAmount: 298 })).toEqual({
+      state: "validado",
+      reasons: [],
+      summary: "Pago a su Yape desde otra app a Grupo GF SAC por S/ 298.00.",
+    });
+  });
+
+  it("una app desconocida que no dice adónde fue el dinero sigue sin aceptarse", () => {
+    const r = checkTandersPayment({ voucher: { ...prex, toYape: false }, expectedAmount: 298 });
+    expect(r.reasons).toEqual(["medio_no_aceptado"]);
+  });
+
+  it("ir a un Yape no perdona el destinatario ni el monto", () => {
+    expect(
+      checkTandersPayment({ voucher: { ...prex, recipientName: "Juan Pérez" }, expectedAmount: 298 })
+        .reasons,
+    ).toEqual(["destinatario_distinto"]);
+    expect(checkTandersPayment({ voucher: prex, expectedAmount: 150 }).reasons).toEqual([
+      "monto_distinto",
+    ]);
   });
 });
 

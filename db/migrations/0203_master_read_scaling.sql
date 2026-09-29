@@ -1,4 +1,4 @@
--- 0202 — Master: exact counts and facet values without reading order history.
+-- 0203 — Master: exact counts and facet values without reading order history.
 --
 -- The aggregates below are derived data. Every change to order_master updates
 -- them in the SAME transaction; a read never sees the order without its delta.

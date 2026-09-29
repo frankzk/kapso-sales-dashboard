@@ -7,7 +7,7 @@
 //
 // The default command checks the entire fresh schema. --smoke also runs the
 // self-contained Master mutation/backfill/RLS smoke; bulk benchmarks import
-// createMigratedDatabase(201) and applySqlFile() from this module separately.
+// createMigratedDatabase(202) and applySqlFile() from this module separately.
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -82,7 +82,7 @@ export async function applySqlFile(pg, file) {
 
 /** Fresh in-memory PostgreSQL with the real migration chain and RLS policies.
  * policies.sql follows 0003, matching verify-db.sh / gen-apply.mjs ordering.
- * through=201 is useful for an actual pre-0202 baseline; no synthetic schema
+ * through=202 is useful for an actual pre-0203 baseline; no synthetic schema
  * or production credentials are used. Caller must await pg.close(). */
 export async function createMigratedDatabase(through = Number.POSITIVE_INFINITY) {
   if (through !== Number.POSITIVE_INFINITY && (!Number.isInteger(through) || through < 3)) {

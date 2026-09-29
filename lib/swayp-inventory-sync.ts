@@ -19,6 +19,7 @@ import { recordStockMovement } from "@/lib/fenix-ledger";
 import {
   diagnoseInventoryAccess,
   fetchInventoryByCity,
+  isInventoryAuthError,
   listInventoryWarehouses,
   SwaypInventoryError,
   type SwaypFilasSinCiudad,
@@ -53,7 +54,7 @@ export type LecturaSwayp =
       filasPorBodega: Record<string, number>;
       muestra: unknown[];
     }
-  | { error: string; diagnostico?: SwaypProbe[] };
+  | { error: string; diagnostico?: SwaypProbe[]; credencialRechazada?: boolean };
 
 /** Bodegas + inventario de Swayp, repartido por ciudad. No escribe nada. */
 export async function leerInventarioSwayp(creds: SwaypInventoryCreds): Promise<LecturaSwayp> {
@@ -65,6 +66,7 @@ export async function leerInventarioSwayp(creds: SwaypInventoryCreds): Promise<L
     return {
       error: `Swayp rechazó la credencial (${describirErrorSwayp(e)}): está vencida, es de otra sesión o no tiene permiso para el inventario.`,
       diagnostico: await diagnoseInventoryAccess(creds),
+      credencialRechazada: isInventoryAuthError(e),
     };
   }
   try {
@@ -264,7 +266,7 @@ export type SyncResult =
       guias: number | null;
       errorGuias?: string;
     }
-  | { error: string; diagnostico?: SwaypProbe[] };
+  | { error: string; diagnostico?: SwaypProbe[]; credencialRechazada?: boolean };
 
 /**
  * Lee Swayp, planea y aplica. `ciudades` acota a las pedidas (botón) o
@@ -417,23 +419,24 @@ async function registrarCorrida(
 
 /**
  * La credencial con la que corre el sync sin nadie delante, desde el entorno.
- * El token es el de integración de Swayp que Kapta ya usa para las guías
- * (`SWAYP_TOKEN`/`SWAYP_EMAIL`), salvo que haya uno exclusivo para inventario
- * (`SWAYP_INVENTORY_TOKEN`/`SWAYP_INVENTORY_EMAIL`). NO es el login del panel:
- * ese exige reCAPTCHA en cada inicio de sesión, justamente para impedir que un
- * programa inicie sesión solo, y no se automatiza.
+ * Tiene que ser una EXCLUSIVA de inventario (`SWAYP_INVENTORY_TOKEN`): la de
+ * integración de las guías (`SWAYP_TOKEN`) no sirve —probado el 29-09-2026,
+ * Swayp responde 403 «No tienes autorización 7301»—. Tampoco el login del
+ * panel: exige reCAPTCHA en cada inicio de sesión, justamente para impedir que
+ * un programa inicie sesión solo, y no se automatiza. El correo sí puede ser
+ * el de `SWAYP_EMAIL`.
  */
 export function credencialInventarioDesdeEnv():
-  | { ok: true; creds: SwaypInventoryCreds; orgId: string; tokenExclusivo: boolean }
+  | { ok: true; creds: SwaypInventoryCreds; orgId: string }
   | { ok: false; faltan: string[] } {
   const e = process.env;
-  const token = (e.SWAYP_INVENTORY_TOKEN || e.SWAYP_TOKEN || "").trim().replace(/^bearer\s+/i, "");
+  const token = (e.SWAYP_INVENTORY_TOKEN || "").trim().replace(/^bearer\s+/i, "");
   const email = (e.SWAYP_INVENTORY_EMAIL || e.SWAYP_EMAIL || "").trim();
   const ruc = (e.SWAYP_INVENTORY_RUC || "").trim();
   const idCompany = (e.SWAYP_INVENTORY_COMPANY_ID || "").trim();
   const orgId = (e.SWAYP_INVENTORY_ORG_ID || "").trim();
   const faltan = [
-    !token && "SWAYP_INVENTORY_TOKEN (o SWAYP_TOKEN)",
+    !token && "SWAYP_INVENTORY_TOKEN",
     !email && "SWAYP_INVENTORY_EMAIL (o SWAYP_EMAIL)",
     !ruc && "SWAYP_INVENTORY_RUC",
     !idCompany && "SWAYP_INVENTORY_COMPANY_ID",
@@ -444,6 +447,5 @@ export function credencialInventarioDesdeEnv():
     ok: true,
     creds: { token, email, user: ruc, idCompany, country: "PE" },
     orgId,
-    tokenExclusivo: !!e.SWAYP_INVENTORY_TOKEN?.trim(),
   };
 }

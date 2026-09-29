@@ -457,6 +457,9 @@ function buildExtractPrompt(): string {
     "\"Envío a contactos\", el campo \"Contacto\" dice \"Grupo gf s •5309\" — el " +
     "nombre y, tras el punto, los últimos dígitos del celular. El nombre va a " +
     "recipient_name SIN esos dígitos, y los dígitos a recipient_phone_last_digits.\n" +
+    "PLIN PEGA LA BILLETERA AL NOMBRE: escribe el receptor como \"Grupo Gf S - " +
+    "Yape\". \" - Yape\" es la billetera de destino, no parte del nombre: " +
+    "recipient_name es \"Grupo Gf S\".\n" +
     "En una constancia de pasarela (Flow u otra), quien recibe es el comercio " +
     "que va bajo \"Pagado a\" o equivalente; esas constancias no muestran " +
     "celular, así que recipient_phone_last_digits es null.\n" +

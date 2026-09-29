@@ -1,0 +1,593 @@
+{
+  "localOnly": true,
+  "productionTouched": false,
+  "candidate": "db/migrations/0203_master_read_scaling.sql",
+  "sha256": "d53c2a6dd7c70cdddc2f2a9a279a96ab6bc06d63e98df64c4fd4fac5767e17c6",
+  "startedAt": "2026-09-29T13:41:35.858Z",
+  "checks": [
+    "failure immediately before commit leaves original data and behavior unchanged",
+    "installation refuses a blocked source; concurrent committed update is retained",
+    "install: all pre-existing table contents, non-target functions, triggers, policies and grants preserved",
+    "rollback: all pre-existing table contents, non-target functions, triggers, policies and grants preserved",
+    "reinstall: all pre-existing table contents, non-target functions, triggers, policies and grants preserved",
+    "actual PostgreSQL 17 dump restored into a separate empty database with identical source data and passing parity"
+  ],
+  "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit",
+  "tables": [
+    {
+      "table": "auth.users",
+      "rows": 2,
+      "digest": "5b89df4088acbd66ac9344de49cdbb91"
+    },
+    {
+      "table": "public.ad_product_declarations",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.ad_products",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.additional_costs",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.aliclik_agencies",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.aliclik_cod_points",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.aliclik_health_checks",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.aliclik_order_requests",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.aliclik_package_sizes",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.aliclik_sku_map",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.aliclik_skus",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.aliclik_sweep_state",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.aliclik_webhook_events",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.cart_seq_sends",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.chatby_webhook_log",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.collection_alerts",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.conversations",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.cost_tariffs",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.daily_rollups",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.delivered_thanks_sends",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.delivery_routes",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.delivery_stop_events",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.delivery_stops",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.dispatch_events",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.dispatch_manifest_items",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.dispatch_manifests",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.district_coverage",
+      "rows": 4,
+      "digest": "73c9ea426167cc3d5ce687e9a33799eb"
+    },
+    {
+      "table": "public.draft_orders",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.drip_sends",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.fenix_stock",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.fenix_stock_movements",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.flowcl_payment_links",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.gf_dispatch_programs",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.import_batches",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.import_rows",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.ingest_anomalies",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.inventory_pool_store_access",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.inventory_pools",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.lead_calls",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.lead_coverage_pushes",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.lead_experiments",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.leads",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.logistics_district_availability_events",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.logistics_district_tariffs",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.logistics_fee_rules",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.logistics_providers",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.logistics_request_events",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.logistics_requests",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.logistics_service_agreements",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.master_backfill_log",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.memberships",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.meta_ad_insights_daily",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.meta_ads",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.meta_social_webhook_log",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.ops_snapshots",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.order_events",
+      "rows": 20,
+      "digest": "3fed2f60177e778fb965b65e6b71de60"
+    },
+    {
+      "table": "public.order_geo_overrides",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.order_master",
+      "rows": 4000,
+      "digest": "b3cddade3a14b43cc003d00853661a0f"
+    },
+    {
+      "table": "public.order_payments",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.order_sales",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.order_tasks",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.orders",
+      "rows": 4000,
+      "digest": "c48b7d1cf3977399c628ce17f36f8af6"
+    },
+    {
+      "table": "public.organizations",
+      "rows": 1,
+      "digest": "b8a8847e0223c125238f6975126b1c21"
+    },
+    {
+      "table": "public.peru_districts",
+      "rows": 51,
+      "digest": "268512fcbb42db8b166ed9de570f9155"
+    },
+    {
+      "table": "public.pickup_key_shares",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.pickup_key_views",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.product_costs",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.quick_replies",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.return_recovery_sends",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.rider_daily_pay_closures",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.rider_pay_adjustments",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.rider_pay_rates",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.rider_settlement_line_corrections",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.rider_settlement_lines",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.rider_settlements",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.riders",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.shalom_order_drafts",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.shalom_pickup_keys",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.shalom_transit_notifications",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.sheet_cell_history",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.sheet_columns",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.sheet_domain_statuses",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.sheet_domains",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.sheet_observation_reasons",
+      "rows": 11,
+      "digest": "64300a00be5c9feabc60d608a52ff261"
+    },
+    {
+      "table": "public.sheet_observations",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.sheet_rows",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.sheet_status_aliases",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.sheets",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.shipment_calls",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.shipments",
+      "rows": 2,
+      "digest": "81eaf891fc2f0080472fb31095c74a80"
+    },
+    {
+      "table": "public.shipments_status_backup_0108",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.shopify_product_images",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.store_collection_accounts",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.store_collection_escalation",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.store_payment_methods",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.stores",
+      "rows": 2,
+      "digest": "91b27a38e157bad849e4c07a321439c5"
+    },
+    {
+      "table": "public.swayp_extension_keys",
+      "rows": 1,
+      "digest": "c7783fe88bf75f9e56af50bf4550c22f"
+    },
+    {
+      "table": "public.swayp_inventory_sessions",
+      "rows": 1,
+      "digest": "6e485ac6af8acbcab104db611e2f18b2"
+    },
+    {
+      "table": "public.swayp_inventory_sync_runs",
+      "rows": 1,
+      "digest": "2014dfaa06fc38e9d03d777452ebed34"
+    },
+    {
+      "table": "public.swayp_sku_map",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.sync_state",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.tanders_payment_checks",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.user_permissions",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.user_presence",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.user_store_access",
+      "rows": 1,
+      "digest": "282294b85d27696b13f8c07724360012"
+    },
+    {
+      "table": "public.voice_calls",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.wa_auto_replies",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.wa_reply_templates",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.webhook_events",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.whatsapp_numbers",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.whatsapp_outbox",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.winback_sends",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "public.yape_vision_checks",
+      "rows": 0,
+      "digest": "d41d8cd98f00b204e9800998ecf8427e"
+    }
+  ],
+  "protectedFunctions": 137,
+  "protectedTriggers": 38,
+  "protectedPolicies": 133,
+  "backupRoundtrip": {
+    "synthetic": true,
+    "passed": true,
+    "sha256": "b79501aa0581d86c0fda83f55899c5acc109c19caddc65881dc997ba0e506b6c"
+  },
+  "ok": true,
+  "completedAt": "2026-09-29T13:41:45.699Z"
+}

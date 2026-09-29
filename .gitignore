@@ -30,6 +30,7 @@ pnpm-debug.log*
 .env.local
 .env.development
 .env.production
+/.release-backups/
 
 # vercel
 .vercel

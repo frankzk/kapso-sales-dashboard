@@ -198,3 +198,144 @@ export function IconCheckCircle(props: IconProps) {
     </svg>
   );
 }
+/** Cámara tachada: «sin foto, y no se exige». */
+export function IconCameraOff(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+      <circle cx="12" cy="13" r="3.5" />
+      <path d="M3 3l18 18" />
+    </svg>
+  );
+}
+export function IconPlus(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+// Despacho del día (mundo de operación, 29-09-2026): mismo trazo, 24 px.
+
+export function IconSearch(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m20 20-4.2-4.2" />
+    </svg>
+  );
+}
+
+export function IconPlusCircle(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 8v8M8 12h8" />
+    </svg>
+  );
+}
+
+export function IconXCircle(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m9 9 6 6M15 9l-6 6" />
+    </svg>
+  );
+}
+
+export function IconX(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M6 6l12 12M18 6 6 18" />
+    </svg>
+  );
+}
+
+export function IconCheck(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="m5 12.5 4.5 4.5L19 7.5" />
+    </svg>
+  );
+}
+
+export function IconCalendar(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3.5" y="5" width="17" height="15" rx="2" />
+      <path d="M3.5 10h17M8 3v4M16 3v4" />
+    </svg>
+  );
+}
+
+export function IconChevronDown(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+export function IconChevronRight(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="m9 6 6 6-6 6" />
+    </svg>
+  );
+}
+
+export function IconQr(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" />
+      <path d="M8 8h3v3H8zM13 13h3v3h-3zM13 8h3M8 16h3" />
+    </svg>
+  );
+}
+
+export function IconList(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M9 6h11M9 12h11M9 18h11" />
+      <path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01" />
+    </svg>
+  );
+}
+
+export function IconPackage(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z" />
+      <path d="m4 7.5 8 4.5 8-4.5M12 12v9M8 5.3l8 4.5" />
+    </svg>
+  );
+}
+
+export function IconMore(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M5.5 12h.01M12 12h.01M18.5 12h.01" strokeWidth={2.6} />
+    </svg>
+  );
+}
+
+export function IconUndo(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+    </svg>
+  );
+}
+
+export function IconRepeat(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M17 2.5 20.5 6 17 9.5" />
+      <path d="M3.5 11V9a3 3 0 0 1 3-3h14M7 21.5 3.5 18 7 14.5" />
+      <path d="M20.5 13v2a3 3 0 0 1-3 3h-14" />
+    </svg>
+  );
+}

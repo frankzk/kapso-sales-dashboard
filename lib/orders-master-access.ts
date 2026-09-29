@@ -1473,7 +1473,7 @@ async function loadAgencySummary(storeIds: string[]): Promise<AgencySummary> {
       .in("value", [...AGENCY_AVAILABLE_STATES, "retorno_iniciado", "pendiente_de_envio", "en_transito"]),
     count((q) => inAgency(q).not("agency_expires_at", "is", null).lte("agency_expires_at", soon)),
   ]);
-  // Migration 0198 is a deployment prerequisite. A missing summary must not
+  // Migration 0203 is a deployment prerequisite. A missing summary must not
   // masquerade as zero packages waiting for pickup.
   if (pickupRes.error) throw new Error(`Master agency summary unavailable (${pickupRes.error.code ?? "unknown"})`);
   const totals = new Map<string, number>();

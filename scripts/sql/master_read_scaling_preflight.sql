@@ -1,4 +1,4 @@
--- Release gate AFTER 0202, BEFORE the new application. Read-only; no PII output.
+-- Release gate AFTER 0203, BEFORE the new application. Read-only; no PII output.
 -- Run as a database owner with visibility of every store, never an end-user JWT.
 -- This deliberately checks all history once; do not run it on every page/request.
 -- psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/sql/master_read_scaling_preflight.sql
@@ -6,6 +6,8 @@ begin isolation level repeatable read read only;
 set local lock_timeout = '3s';
 set local statement_timeout = '120s';
 set local application_name = 'master-scaling-preflight';
+
+\ir master_read_scaling_indexes.sql
 
 do $gate$
 declare
@@ -19,24 +21,6 @@ begin
   if not exists (select 1 from pg_roles where rolname = current_user and (rolsuper or rolbypassrls)) then
     raise exception 'Preflight requires an administrative role with full-store visibility';
   end if;
-
-  for expected in select * from (values
-    ('order_master_store_created_page_idx', 'order_master'),
-    ('order_master_stage_created_page_idx', 'order_master'),
-    ('order_master_substage_created_page_idx', 'order_master'),
-    ('leads_order_id_idx', 'leads')
-  ) e(index_name, table_name)
-  loop
-    if not exists (
-      select 1 from pg_index i
-      join pg_class idx on idx.oid = i.indexrelid
-      join pg_namespace n on n.oid = idx.relnamespace
-      where n.nspname = 'public' and idx.relname = expected.index_name
-        and i.indrelid = to_regclass('public.' || expected.table_name)
-        and i.indisvalid and i.indisready
-    ) then raise exception 'Required Master index missing or invalid: %', expected.index_name;
-    end if;
-  end loop;
 
   for expected in select * from (values
     ('order_master_read_insert', 4),

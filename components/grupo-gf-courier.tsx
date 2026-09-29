@@ -8,6 +8,8 @@ import { OrderLink } from "@/components/order-link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { DispatchDayBoard } from "@/components/dispatch-day-board";
+import { Badge, Banner, FIELD, OpsButton } from "@/components/ops-ui";
+import { IconChevronDown, IconMore, IconSearch } from "@/components/icons";
 import { CourierRoutesLedger } from "@/components/courier-routes-ledger";
 import { CourierBoxDrawer } from "@/components/courier-box-drawer";
 import { CourierRouteReportDrawer } from "@/components/courier-route-report-drawer";
@@ -96,10 +98,7 @@ export function GrupoGfCourierBoard({
     return (
       <div className="mx-auto max-w-4xl space-y-6">
         <header>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-            Operación logística
-          </p>
-          <h1 className="mt-1 text-xl font-semibold text-slate-950">Grupo GF Courier</h1>
+          <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Grupo GF Courier</h1>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
             Activa el operador sin cambiar rutas ni inventario actuales. Se crearán los contratos
             de las tiendas activas, Yape 3.5 % y una bolsa de inventario todavía opcional.
@@ -131,20 +130,16 @@ export function GrupoGfCourierBoard({
   const provider = snapshot.provider;
   return (
     <div className={cn("space-y-4", mobile.board)}>
-      {/* En el móvil la barra superior del panel ya dice «Grupo GF Courier»: la cabecera solo existe desde `sm`. */}
-      <header className="hidden sm:flex sm:flex-col sm:gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-            Operación logística
-          </p>
-          <h1 className="mt-1 text-xl font-semibold text-slate-950">Grupo GF Courier</h1>
-          <p className="mt-1 max-w-3xl text-sm text-slate-600">
-            Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega.
-          </p>
-        </div>
+      {/* En el móvil la barra superior del panel ya dice «Grupo GF Courier»: la cabecera solo existe desde `sm`.
+          Mundo de operación (29-09-2026): título a 28 px en tinta, sin antetítulo. */}
+      <header className="hidden sm:block">
+        <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Grupo GF Courier</h1>
+        <p className="mt-1 max-w-3xl text-sm text-ink-500">
+          Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega.
+        </p>
       </header>
 
-      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-[1fr_1fr_1fr_auto] gap-1 border-b border-slate-200 lg:flex">
+      <nav aria-label="Secciones de Grupo GF Courier" className="grid grid-cols-[1fr_1fr_1fr_auto] gap-1 border-b border-line lg:flex lg:gap-6">
         <CourierTab
           label="Despacho del día"
           shortLabel="Despacho"
@@ -171,14 +166,14 @@ export function GrupoGfCourierBoard({
         />
       </nav>
       {LEGACY_TABS.some((t) => t.id === tab) && (
-        <p className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
+        <p className="flex flex-wrap items-center gap-x-2 text-[13px] text-ink-500">
           <span>Vista anterior · Despacho del día ya hace esto en un paso.</span>
           <button type="button" onClick={() => setTab("dispatch")} className="min-h-0 p-0 font-medium text-brand-700 underline-offset-2 hover:underline">Ir a Despacho del día</button>
         </p>
       )}
 
-      {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
-      {notice && <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}
+      {error && <Banner tone="crit" role="alert">{error}</Banner>}
+      {notice && <Banner tone="ok" role="status">{notice}</Banner>}
 
       {tab === "dispatch" && (
         <DispatchDayBoard
@@ -271,25 +266,25 @@ function MoreViewsMenu({ active, items, onPick }: {
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "relative flex min-h-12 min-w-12 items-center justify-center rounded-lg px-2 text-lg leading-none lg:min-h-14 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
-          active ? "text-brand-700" : "text-slate-500 hover:text-slate-800",
+          "relative flex min-h-12 min-w-12 items-center justify-center rounded-md px-2 lg:min-h-12",
+          active ? "text-brand-700" : "text-ink-500 hover:text-ink-900",
         )}
       >
-        ⋯
-        {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-brand-600" />}
+        <IconMore className="size-5" />
+        {active && <span className="absolute inset-x-2 bottom-0 h-0.5 bg-brand-600" />}
       </button>
       {open && (
-        <ul role="menu" className="absolute right-0 top-full z-30 mt-1 w-60 rounded-xl border border-slate-200 bg-white p-1 text-sm shadow-lg">
+        <ul role="menu" className="absolute right-0 top-full z-30 mt-1 w-60 rounded-lg bg-white p-1 text-sm shadow-pop">
           {items.map((item) => (
             <li key={item.id} role="none">
               <button
                 type="button"
                 role="menuitem"
                 onClick={() => { onPick(item.id); setOpen(false); }}
-                className="flex min-h-10 w-full items-center justify-between gap-2 rounded-lg px-3 text-left text-slate-800 hover:bg-slate-50"
+                className="flex min-h-9 w-full items-center justify-between gap-2 rounded-md px-3 text-left text-ink-700 hover:bg-wash hover:text-ink-900"
               >
                 <span>{item.label}</span>
-                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[11px] tabular-nums text-slate-600">{item.count.toLocaleString("es-PE")}</span>
+                <Badge className="tabular-nums">{item.count.toLocaleString("es-PE")}</Badge>
               </button>
             </li>
           ))}
@@ -320,20 +315,15 @@ function CourierTab({
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "relative flex min-h-12 min-w-0 items-center justify-center gap-1 px-1 py-2 text-xs font-semibold lg:min-h-14 lg:px-3 lg:text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
-        active ? "text-brand-700" : "text-slate-500 hover:text-slate-800",
+        "relative flex min-h-12 min-w-0 items-center justify-center gap-1 px-1 py-2 text-[13px] font-semibold sm:gap-1.5 transition-colors lg:px-0 lg:text-sm",
+        active ? "text-brand-700" : "text-ink-500 hover:text-ink-900",
       )}
     >
       <span className={cn("truncate", shortLabel ? "hidden lg:inline" : "")}>{label}</span>{shortLabel && <span className="truncate lg:hidden">{shortLabel}</span>}
-      {showCount && (
-        <span className={cn(
-          "rounded-full px-1.5 py-0.5 text-[11px] tabular-nums",
-          active ? "bg-brand-50 text-brand-700" : "hidden bg-slate-100 text-slate-600 sm:inline",
-        )}>
-          {count}
-        </span>
-      )}
-      {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-brand-600" />}
+      {/* En el teléfono la cantidad va como texto: la chapa cortaba «Despacho». */}
+      {showCount && active && <span className="tabular-nums sm:hidden">{count}</span>}
+      {showCount && <span className="hidden sm:inline-flex"><Badge tone={active ? "brand" : "neutral"} className="tabular-nums">{count}</Badge></span>}
+      {active && <span className="absolute inset-x-1 bottom-[-1px] h-0.5 bg-brand-600 lg:inset-x-0" />}
     </button>
   );
 }
@@ -971,111 +961,109 @@ function TariffMatrix({
       }).status === "paused",
   ).length;
 
+  // Mundo de operación (29-09-2026, DESIGN.md): una sola tarjeta con la barra
+  // de filtros arriba y la tabla debajo, como una lista de Stripe.
   return (
-    <div className="space-y-5">
-      <details className="rounded-xl border border-slate-200 bg-white px-3 text-sm">
-        <summary className="min-h-12 cursor-pointer py-3 font-medium text-slate-600">Condiciones del servicio</summary>
-        <p className="pb-2 text-xs text-slate-500">Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega.</p>
-        <div className="grid grid-cols-3 divide-x divide-slate-200 pb-3">
+    <div className="space-y-4">
+      <details className="group rounded-lg bg-white text-sm shadow-control ring-1 ring-line">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center gap-1.5 px-4 font-semibold text-ink-900 [&::-webkit-details-marker]:hidden">
+          Condiciones del servicio
+          <IconChevronDown className="size-4 text-ink-500 transition-transform group-open:rotate-180" />
+        </summary>
+        <p className="px-4 pb-3 text-[13px] text-ink-500">Toma pedidos de Aurela y Kenku. Almacén arma cada caja y el mismo QR acompaña toda la entrega.</p>
+        <div className="grid grid-cols-3 divide-x divide-line border-t border-line py-3">
           <Summary label="Corte" value={provider.same_day_cutoff.slice(0, 5)} />
           <Summary label="Yape" value={`${snapshot.yapePercentage} %`} />
           <Summary label="Efectivo máximo" value={money(provider.cash_limit_amount)} />
         </div>
       </details>
-      {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
-      {notice && <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}
-      {payMessage && <p role={payMessage.ok ? undefined : "alert"} className={cn("rounded-xl px-4 py-3 text-sm", payMessage.ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700")}>{payMessage.text}</p>}
+      {error && <Banner tone="crit" role="alert">{error}</Banner>}
+      {notice && <Banner tone="ok" role="status">{notice}</Banner>}
+      {payMessage && <Banner tone={payMessage.ok ? "ok" : "crit"} role={payMessage.ok ? "status" : "alert"}>{payMessage.text}</Banner>}
 
-      <section aria-label="Filtros de tarifas" className="flex flex-col gap-3 border-y border-slate-200 py-4 md:flex-row md:items-end">
-        <label className="text-xs font-medium text-slate-600">
-          Tarifario
-          <select
-            value={scope}
-            onChange={(event) => setScope(event.target.value)}
-            className="mt-1 block h-10 min-w-56 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-          >
-            <option value="general">General de Grupo GF</option>
-            {snapshot.agreements.map((agreement) => (
-              <option key={agreement.id} value={agreement.id}>{agreement.client_label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="min-w-0 flex-1 text-xs font-medium text-slate-600">
-          Buscar distrito
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Ej. Miraflores o Callao"
-            className="mt-1 block h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-          />
-        </label>
-        <label className="text-xs font-medium text-slate-600">
-          Ver y registrar desde
-          <input
-            type="date"
-            value={effectiveFrom}
-            onChange={(event) => setEffectiveFrom(event.target.value)}
-            className="mt-1 block h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-          />
-        </label>
-        <p className="pb-2 text-xs tabular-nums text-slate-500">
-          {configured}/{snapshot.districts.length} configurados
-          {paused > 0 && <span className="ml-2 font-medium text-amber-700">· {paused} pausado{paused === 1 ? "" : "s"}</span>}
-        </p>
-      </section>
+      {/* Bajo 1024 px las filas pasan a tarjetas (courier-mobile.module.css):
+          la tarjeta exterior se quita para no anidar tarjetas. */}
+      <div className="rounded-lg lg:bg-white lg:shadow-control lg:ring-1 lg:ring-line">
+        <section aria-label="Filtros de tarifas" className="flex flex-col gap-3 rounded-lg bg-white px-4 py-3 shadow-control ring-1 ring-line md:flex-row md:items-end max-lg:mb-3 lg:rounded-none lg:border-b lg:border-line lg:shadow-none lg:ring-0">
+          <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
+            Tarifario
+            <select value={scope} onChange={(event) => setScope(event.target.value)} className={cn(FIELD, "min-w-56")}>
+              <option value="general">General de Grupo GF</option>
+              {snapshot.agreements.map((agreement) => (
+                <option key={agreement.id} value={agreement.id}>{agreement.client_label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="grid min-w-0 flex-1 gap-1.5 text-[13px] font-medium text-ink-700">
+            Buscar distrito
+            <span className="relative block">
+              <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Ej. Miraflores o Callao" className={cn(FIELD, "pl-8")} />
+            </span>
+          </label>
+          <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
+            Ver y registrar desde
+            <input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} className={cn(FIELD, "w-auto")} />
+          </label>
+          <p className="flex h-9 items-center gap-2 text-[13px] tabular-nums text-ink-500">
+            <span><b className="font-semibold text-ink-900">{configured}</b>/{snapshot.districts.length} configurados</span>
+            {paused > 0 && <Badge tone="warn">{paused} pausado{paused === 1 ? "" : "s"}</Badge>}
+          </p>
+        </section>
 
-      <div className={cn(TABLE_WRAP_FROM[980], "rounded-xl border border-slate-200 bg-white shadow-sm", mobile.orders, mobile.tariffs)}>
-        <table className="w-full min-w-[980px] text-sm">
-          <thead className={STICKY_HEAD}>
-            <tr className="text-left text-xs text-slate-500">
-              <th className="px-4 py-3 font-medium">Distrito</th>
-              <th className="px-3 py-3 font-medium">Servicio</th>
-              <th className="px-3 py-3 font-medium">Zona</th>
-              <th className="px-3 py-3 text-right font-medium">Entrega o rechazo</th>
-              <th className="px-3 py-3 font-medium">Origen</th>
-              <th className="px-4 py-3 text-right font-medium">Acción</th>
-              <th className="border-l border-slate-200 px-3 py-2 font-medium">
-                <label className="flex items-center gap-1.5" title="Lo que se le paga al motorizado por cada entrega en ese distrito (tarifa personal, MOM §29.9). Se registra desde la fecha de «Ver y registrar desde».">
-                  Pago a
-                  <select value={payRider} onChange={(e) => { setPayRider(e.target.value); setPayMessage(null); }} className="h-8 rounded-md border border-slate-300 bg-white px-1.5 text-xs font-medium text-slate-900">
-                    <option value="">motorizado…</option>
-                    {riders.map((r) => <option key={r.id} value={r.id}>{r.fullName}</option>)}
-                  </select>
-                </label>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {districts.map((district) => (
-              <TariffRow
-                payCell={
-                  <RiderPayCell
-                    key={`${payRider}:${district.district_key}:${effectiveFrom}`}
-                    enabled={Boolean(payRider)}
-                    current={payRider ? resolveRiderRate(riderRates, district.district_key, effectiveFrom) : null}
-                    saving={paySaving === district.district_key}
-                    onSave={(value) => void saveRiderPay(district.district_key, value)}
-                  />
-                }
-                key={`${scope}:${district.district_key}:${effectiveFrom}`}
-                orgId={orgId}
-                providerId={provider.id}
-                agreementId={agreementId}
-                agreement={snapshot.agreements.find((item) => item.id === agreementId) ?? null}
-                district={district}
-                tariffs={snapshot.tariffs}
-                availabilityEvents={snapshot.availabilityEvents}
-                effectiveFrom={effectiveFrom}
-                pending={pending}
-                onSave={onSave}
-                onAvailability={onAvailability}
-              />
-            ))}
-            {!districts.length && (
-              <tr><td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">Ningún distrito coincide con la búsqueda.</td></tr>
-            )}
-          </tbody>
-        </table>
+        <div className={cn(TABLE_WRAP_FROM[980], mobile.orders, mobile.tariffs)}>
+          <table className="w-full min-w-[980px] text-sm">
+            <thead className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-white [&_th]:shadow-[inset_0_-1px_0_var(--color-line)]">
+              <tr className="text-left text-xs font-semibold text-ink-600">
+                <th className="px-4 py-2.5">Distrito</th>
+                <th className="px-3 py-2.5">Servicio</th>
+                <th className="px-3 py-2.5">Zona</th>
+                <th className="px-3 py-2.5 text-right">Entrega o rechazo</th>
+                <th className="px-3 py-2.5">Origen</th>
+                <th className="px-4 py-2.5 text-right">Acción</th>
+                <th className="border-l border-line px-3 py-2">
+                  <label className="flex items-center gap-2 whitespace-nowrap" title="Lo que se le paga al motorizado por cada entrega en ese distrito (tarifa personal, MOM §29.9). Se registra desde la fecha de «Ver y registrar desde».">
+                    Pago a
+                    <select value={payRider} onChange={(e) => { setPayRider(e.target.value); setPayMessage(null); }} className={cn(FIELD, "h-8 w-auto min-w-36 text-xs font-medium")}>
+                      <option value="">motorizado…</option>
+                      {riders.map((r) => <option key={r.id} value={r.id}>{r.fullName}</option>)}
+                    </select>
+                  </label>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {districts.map((district) => (
+                <TariffRow
+                  payCell={
+                    <RiderPayCell
+                      key={`${payRider}:${district.district_key}:${effectiveFrom}`}
+                      enabled={Boolean(payRider)}
+                      current={payRider ? resolveRiderRate(riderRates, district.district_key, effectiveFrom) : null}
+                      saving={paySaving === district.district_key}
+                      onSave={(value) => void saveRiderPay(district.district_key, value)}
+                    />
+                  }
+                  key={`${scope}:${district.district_key}:${effectiveFrom}`}
+                  orgId={orgId}
+                  providerId={provider.id}
+                  agreementId={agreementId}
+                  agreement={snapshot.agreements.find((item) => item.id === agreementId) ?? null}
+                  district={district}
+                  tariffs={snapshot.tariffs}
+                  availabilityEvents={snapshot.availabilityEvents}
+                  effectiveFrom={effectiveFrom}
+                  pending={pending}
+                  onSave={onSave}
+                  onAvailability={onAvailability}
+                />
+              ))}
+              {!districts.length && (
+                <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-ink-500">Ningún distrito coincide con la búsqueda.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -1084,8 +1072,8 @@ function TariffMatrix({
 function Summary({ label, value }: { label: string; value: string }) {
   return (
     <div className="px-4">
-      <p className="text-[11px] text-slate-500">{label}</p>
-      <p className="mt-0.5 whitespace-nowrap font-semibold tabular-nums text-slate-900">{value}</p>
+      <p className="text-xs text-ink-500">{label}</p>
+      <p className="mt-0.5 whitespace-nowrap font-semibold tabular-nums text-ink-900">{value}</p>
     </div>
   );
 }
@@ -1103,25 +1091,25 @@ function RiderPayCell({ enabled, current, saving, onSave }: {
 }) {
   const own = current?.source === "distrito" ? current.amount.toFixed(2) : "";
   const [value, setValue] = useState(own);
-  if (!enabled) return <span className="text-xs text-slate-400">Elige motorizado</span>;
+  if (!enabled) return <span className="text-xs text-ink-500">Elige motorizado</span>;
   const changed = value.trim() !== "" && Number(value.replace(",", ".")) !== (current?.source === "distrito" ? current.amount : NaN);
   return (
     <div className="flex items-center gap-1.5">
-      <label className="flex h-9 w-24 items-center rounded-lg border border-slate-300 bg-white px-2 focus-within:border-brand-500">
-        <span className="text-xs text-slate-400">S/</span>
+      <label className="relative block w-24">
+        <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-ink-500">S/</span>
         <input
           inputMode="decimal"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder={current?.source === "general" ? current.amount.toFixed(2) : "0.00"}
           aria-label="Pago al motorizado en este distrito"
-          className="w-full min-w-0 bg-transparent text-right text-sm tabular-nums outline-none"
+          className={cn(FIELD, "h-8 pl-7 pr-2 text-right tabular-nums")}
         />
       </label>
-      <button type="button" disabled={!changed || saving} onClick={() => onSave(value)} className="h-9 rounded-lg px-2 text-xs font-semibold text-brand-700 hover:bg-brand-50 disabled:text-slate-300">
-        {saving ? "…" : "Guardar"}
-      </button>
-      <span className="text-[11px] text-slate-400" title={current ? `Vigente desde ${current.effectiveFrom}` : undefined}>
+      <OpsButton variant="ghost" size="sm" disabled={!changed || saving} onClick={() => onSave(value)} className="text-brand-700 hover:text-brand-700">
+        {saving ? "Guardando…" : "Guardar"}
+      </OpsButton>
+      <span className="text-xs text-ink-500" title={current ? `Vigente desde ${current.effectiveFrom}` : undefined}>
         {current ? (current.source === "distrito" ? "propia" : "general") : "sin tarifa"}
       </span>
     </div>
@@ -1177,16 +1165,19 @@ function TariffRow({
   });
   const inheritedPause =
     agreementId != null && availability.status === "paused" && availability.source === "general";
+  // La acción pesa solo cuando hay algo que guardar: 25 botones iguales
+  // pesaban más que los datos.
+  const dirty = !tariff || inherited || zone !== (tariff.zone ?? "") || Number(delivery.replace(",", ".")) !== tariff.delivery_amount;
 
   return (
     <>
       <tr className={cn(
-        "border-b border-slate-100 last:border-0 hover:bg-slate-50/60",
-        availability.status === "paused" && "bg-amber-50/40 hover:bg-amber-50/60",
+        "border-b border-line transition-colors last:border-0",
+        availability.status === "paused" ? "bg-warn-wash" : "hover:bg-wash",
       )}>
         <td className="px-4 py-3">
-          <p className="font-medium text-slate-900">{district.district}</p>
-          <p className="text-xs text-slate-500">
+          <p className="font-semibold text-ink-900">{district.district}</p>
+          <p className="text-xs tabular-nums text-ink-500">
             {district.province} · {district.order_count.toLocaleString("es-PE")} pedidos Lima
           </p>
         </td>
@@ -1194,12 +1185,11 @@ function TariffRow({
           {availability.status === "paused" ? (
             <div className="min-w-44 space-y-1.5">
               <div className="flex items-center gap-2">
-                <span className="rounded-md bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">
-                  {inheritedPause ? "Pausado general" : "Pausado"}
-                </span>
+                <Badge tone="warn">{inheritedPause ? "Pausado general" : "Pausado"}</Badge>
                 {!inheritedPause && (
-                  <button
-                    type="button"
+                  <OpsButton
+                    variant="ghost"
+                    size="sm"
                     disabled={pending}
                     onClick={() => onAvailability({
                       orgId,
@@ -1208,26 +1198,24 @@ function TariffRow({
                       districtKey: district.district_key,
                       status: "available",
                     })}
-                    className="rounded-md px-1.5 py-1 text-xs font-semibold text-brand-700 transition hover:bg-brand-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-50"
+                    className="text-brand-700 hover:text-brand-700"
                   >
                     Reactivar
-                  </button>
+                  </OpsButton>
                 )}
               </div>
-              <p className="max-w-52 truncate text-xs text-amber-800" title={availability.event.reason ?? undefined}>
+              <p className="max-w-52 truncate text-xs text-warn-fg" title={availability.event.reason ?? undefined}>
                 {availability.event.reason}
                 {availability.event.paused_until && ` · hasta ${formatDate(availability.event.paused_until)}`}
               </p>
             </div>
           ) : (
-            <button
-              type="button"
-              aria-expanded={showPauseForm}
-              onClick={() => setShowPauseForm((current) => !current)}
-              className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-            >
-              Disponible · Pausar
-            </button>
+            <div className="flex items-center gap-2">
+              <Badge tone="ok" className="shrink-0">Disponible</Badge>
+              <OpsButton variant="ghost" size="sm" aria-expanded={showPauseForm} onClick={() => setShowPauseForm((current) => !current)} aria-label={`Pausar ${district.district}`} className="!w-auto">
+                Pausar
+              </OpsButton>
+            </div>
           )}
         </td>
         <td data-label="Zona" className="px-3 py-3">
@@ -1236,7 +1224,7 @@ function TariffRow({
             onChange={(event) => setZone(event.target.value)}
             aria-label={`Zona de ${district.district}`}
             placeholder="Sin zona"
-            className="h-9 w-40 rounded-lg border border-slate-200 bg-white px-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+            className={cn(FIELD, "h-8 w-40")}
           />
         </td>
         <td data-label="Entrega o rechazo" className="px-3 py-3 text-right">
@@ -1244,16 +1232,17 @@ function TariffRow({
         </td>
         <td className="px-3 py-3">
           {resolution.kind === "missing" ? (
-            <span className="rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">Sin tarifa</span>
+            <Badge tone="warn">Sin tarifa</Badge>
           ) : inherited ? (
-            <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600">Heredada de general</span>
+            <Badge>Heredada de general</Badge>
           ) : (
-            <span className="text-xs text-slate-500">{agreement?.client_label ?? "General"}</span>
+            <span className="text-[13px] text-ink-500">{agreement?.client_label ?? "General"}</span>
           )}
         </td>
         <td className="px-4 py-3 text-right">
-          <button
-            type="button"
+          <OpsButton
+            size="sm"
+            variant={dirty ? "secondary" : "ghost"}
             disabled={pending || delivery.trim() === ""}
             onClick={() => onSave({
               orgId,
@@ -1264,40 +1253,39 @@ function TariffRow({
               deliveryAmount: delivery,
               effectiveFrom,
             })}
-            className="h-9 rounded-lg px-3 text-sm font-semibold text-brand-700 transition hover:bg-brand-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:text-slate-300"
           >
             {tariff && !inherited ? "Cambiar" : inherited ? "Crear excepción" : "Guardar"}
-          </button>
+          </OpsButton>
         </td>
-        <td data-label="Pago al motorizado" className="border-l border-slate-100 px-3 py-3">{payCell}</td>
+        <td data-label="Pago al motorizado" className="border-l border-line px-3 py-3">{payCell}</td>
       </tr>
       {showPauseForm && availability.status === "available" && (
-        <tr className="border-b border-amber-100 bg-amber-50/60">
+        <tr className="border-b border-line bg-warn-wash">
           <td colSpan={7} className="px-4 py-3">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-              <label className="min-w-0 flex-1 text-xs font-medium text-slate-700">
+              <label className="grid min-w-0 flex-1 gap-1.5 text-[13px] font-medium text-ink-700">
                 Motivo para pausar {district.district}
                 <input
                   autoFocus
                   value={pauseReason}
                   onChange={(event) => setPauseReason(event.target.value)}
                   placeholder="Ej. Capacidad completa o zona temporalmente restringida"
-                  className="mt-1 block h-10 w-full rounded-lg border border-amber-200 bg-white px-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                  className={FIELD}
                 />
               </label>
-              <label className="text-xs font-medium text-slate-700">
+              <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
                 Reactivar después de esta fecha (opcional)
                 <input
                   type="date"
                   min={today()}
                   value={pausedUntil}
                   onChange={(event) => setPausedUntil(event.target.value)}
-                  className="mt-1 block h-10 rounded-lg border border-amber-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                  className={cn(FIELD, "w-auto")}
                 />
               </label>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
+                <OpsButton
+                  variant="primary"
                   disabled={pending || pauseReason.trim().length < 4}
                   onClick={() => {
                     onAvailability({
@@ -1311,20 +1299,15 @@ function TariffRow({
                     });
                     setShowPauseForm(false);
                   }}
-                  className="h-10 rounded-lg bg-amber-600 px-4 text-sm font-semibold text-white transition hover:bg-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 disabled:opacity-50"
                 >
                   Confirmar pausa
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowPauseForm(false)}
-                  className="h-10 rounded-lg px-3 text-sm font-medium text-slate-600 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                >
+                </OpsButton>
+                <OpsButton variant="ghost" onClick={() => setShowPauseForm(false)}>
                   Cancelar
-                </button>
+                </OpsButton>
               </div>
             </div>
-            <p className="mt-2 text-xs text-slate-600">
+            <p className="mt-2 text-xs text-ink-600">
               Solo bloquea asignaciones nuevas. Las rutas que ya comenzaron continúan sin cambios.
             </p>
           </td>
@@ -1360,16 +1343,16 @@ function MoneyInput({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="relative inline-block">
+    <label className="relative inline-block w-24">
       <span className="sr-only">{label}</span>
-      <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400">S/</span>
+      <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-ink-500">S/</span>
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
         inputMode="decimal"
         aria-label={label}
         placeholder="0.00"
-        className="h-9 w-24 rounded-lg border border-slate-200 bg-white pl-8 pr-2 text-right text-sm tabular-nums outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+        className={cn(FIELD, "h-8 pl-7 pr-2 text-right tabular-nums")}
       />
     </label>
   );

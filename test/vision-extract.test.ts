@@ -311,6 +311,7 @@ describe("extractYapeVoucher", () => {
     const prompt = await capturePrompt();
     expect(prompt).toContain("EL MENSAJE DEL YAPE NO ES NINGÚN NOMBRE DEL PAGO");
     expect(prompt).toContain("LA APP DEL BBVA PEGA EL CELULAR AL NOMBRE");
+    expect(prompt).toContain("PLIN PEGA LA BILLETERA AL NOMBRE");
     expect(prompt).toContain("Pagado a");
   });
 

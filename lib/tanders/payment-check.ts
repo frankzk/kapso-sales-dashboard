@@ -34,7 +34,7 @@ export type PaymentCheckReason =
 
 export const REASON_LABEL: Record<PaymentCheckReason, string> = {
   no_es_comprobante: "La imagen no es un comprobante de pago",
-  medio_no_aceptado: "El medio de pago no es Yape, Plin ni transferencia BCP",
+  medio_no_aceptado: "El medio de pago no es Yape, Plin ni transferencia BCP, ni va a un Yape",
   destinatario_distinto: "El pago NO va a Grupo GF SAC",
   monto_distinto: "El monto no coincide con el de la guía",
   sin_destinatario: "No se pudo leer a quién se pagó",
@@ -90,6 +90,11 @@ export interface PaymentCheckInput {
     isVoucher: boolean;
     /** El repartidor remite por Yape, Plin o transferencia BCP: valen los tres. */
     method: "yape" | "plin" | "bcp" | "otro";
+    /**
+     * La constancia dice que el dinero fue a un Yape («Cuenta/billetera: Yape»).
+     * Vale venga de la app que venga: cae en la misma cuenta Yape.
+     */
+    toYape?: boolean;
     recipientName: string | null;
     amount: number | null;
     operationNumber: string | null;
@@ -174,7 +179,13 @@ export function checkTandersPayment(input: PaymentCheckInput): PaymentCheckVerdi
   // constancia de un Plin al número de Grupo GF SAC dice literalmente «Enviado
   // a: … - Yape»—, y el motorizado remite con la billetera que tenga. El
   // 10-09-2026, 7 de 9 rechazos fueron cobros buenos rechazados por el logo.
-  if (voucher.method === "otro") reasons.push("medio_no_aceptado");
+  //
+  // Y CUALQUIER APP QUE PAGUE A UN YAPE. Prex, BBVA, el BCP… todas pagan a un
+  // Yape, y ese dinero cae en la misma cuenta que un Yape directo: se concilia
+  // igual. #KP136441 era un Prex con «Cuenta/billetera: Yape» rechazado por el
+  // medio, y en producción había 43 así —30 validados a mano—. Lo que no se
+  // sabe adónde fue sigue exigiendo que alguien mire.
+  if (voucher.method === "otro" && !voucher.toYape) reasons.push("medio_no_aceptado");
 
   if (!voucher.recipientName) reasons.push("sin_destinatario");
   else if (!isExpectedRecipient(voucher.recipientName)) reasons.push("destinatario_distinto");
@@ -195,7 +206,9 @@ export function checkTandersPayment(input: PaymentCheckInput): PaymentCheckVerdi
     return {
       state: "validado",
       reasons: [],
-      summary: `${METHOD_LABEL[voucher.method]} a ${EXPECTED_RECIPIENT}${
+      summary: `${
+        voucher.method === "otro" ? "Pago a su Yape desde otra app" : METHOD_LABEL[voucher.method]
+      } a ${EXPECTED_RECIPIENT}${
         voucher.amount != null ? ` por S/ ${voucher.amount.toFixed(2)}` : ""
       }.`,
     };

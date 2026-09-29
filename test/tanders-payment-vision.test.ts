@@ -80,6 +80,46 @@ describe("readTandersPayment", () => {
     expect(prompt).toContain("**** 0012");
   });
 
+  it("#KP136441: un Prex a Yape dice adónde fue el dinero, aparte de qué app lo emitió", async () => {
+    // Prex: «Titular: Grupo Gf S A C» · «Cuenta/billetera: Yape».
+    vi.stubGlobal(
+      "fetch",
+      anthropicDice(
+        '{"is_payment_proof":true,"method":"otro","destination":"Yape","recipient_name":"Grupo Gf S A C","amount":298,"operation_number":"092514213996"}',
+      ),
+    );
+    const r = await readTandersPayment("b", "image/jpeg", CREDS);
+    expect(r).toMatchObject({ method: "otro", toYape: true, recipientName: "Grupo Gf S A C" });
+  });
+
+  it("sin destino en la constancia, no se da por pagado a un Yape", async () => {
+    for (const destination of ["null", '"Cuenta BBVA 0011-0123"', '""']) {
+      vi.stubGlobal(
+        "fetch",
+        anthropicDice(`{"is_payment_proof":true,"method":"otro","destination":${destination}}`),
+      );
+      expect((await readTandersPayment("b", "image/jpeg", CREDS)).toYape).toBe(false);
+    }
+  });
+
+  it("el prompt pide el destino aparte de la app", async () => {
+    let prompt = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, req: RequestInit) => {
+        prompt = JSON.parse(String(req.body)).messages[0].content
+          .filter((b: { type: string }) => b.type === "text")
+          .map((b: { text: string }) => b.text)
+          .join("\n");
+        return { ok: true, json: async () => ({ content: [] }) };
+      }),
+    );
+    await readTandersPayment("b", "image/jpeg", CREDS);
+    expect(prompt).toContain('"destination"');
+    expect(prompt).toContain("MUCHAS APPS PAGAN A UN YAPE");
+    expect(prompt).toContain("Cuenta/billetera: Yape");
+  });
+
   it("un medio desconocido no se fuerza a ninguno de los buenos", async () => {
     vi.stubGlobal("fetch", anthropicDice('{"is_payment_proof":true,"method":"mercado pago"}'));
     expect((await readTandersPayment("b", "image/jpeg", CREDS)).method).toBe("otro");

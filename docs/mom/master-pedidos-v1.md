@@ -1393,7 +1393,8 @@ sin tope de antigüedad. Reglas:
       acusar en falso como tapar el duplicado bueno.
     - Al implantarlo (10-09-2026) el histórico de 78 comprobaciones no tenía
       **ninguna** colisión.
-  - **Medios de cobro aceptados: Yape, Plin y transferencia BCP.** Plin entró
+  - **Medios de cobro aceptados: Yape, Plin, transferencia BCP y cualquier app
+    que pague a un Yape** (ver abajo). Plin entró
     el 10-09-2026: el motorizado remite con la billetera que tenga, y Plin y
     Yape se pagan entre sí y caen en la misma cuenta —la constancia de un Plin
     a Grupo GF SAC dice literalmente «Enviado a: Grupo Gf S · 930 555 309 -
@@ -1414,14 +1415,25 @@ sin tope de antigüedad. Reglas:
     un cobro bueno. Tras asteriscos o varios puntos seguidos no se sabe qué
     número es: se aparta del nombre y **no se juzga**, porque un dato que no
     se sabe no puede desmentir la cuenta. Un nombre que solo termina en
-    números, sin separador, no se toca. Las dos reglas rigen igual en los
-    comprobantes de los pedidos (§12, Pagos).
+    números, sin separador, no se toca. Tampoco es parte del nombre la
+    billetera de destino que Plin pega al final («Grupo Gf S - Yape»): se
+    quita antes de comparar. Estas reglas rigen igual en los comprobantes de
+    los pedidos (§12, Pagos).
   - **La app del BCP se reconoce aunque no se vea su logo** (29-09-2026). Su
     constancia —blanca con azul y naranja, «¡Transferencia exitosa!», «Enviado
     a», «Desde»— salía como medio «otro» porque el lector solo tenía descritos
     Yape (morado) y Plin (celeste). También se envía así a un Yape desde esa
     app. **Seis cobros** a «Grupo Gf S.» quedaron en revisión por el medio,
     #AUR177129 entre ellos.
+  - **Cualquier app que pague a un Yape vale como medio** (29-09-2026). Prex,
+    BBVA, el BCP… todas pagan a un Yape, y ese dinero cae en la **misma cuenta
+    Yape** que un Yape directo: se concilia igual, que era la razón de limitar
+    los medios. La constancia lo dice —«Cuenta/billetera: Yape» (Prex),
+    «Entidad de destino: Yape» (BBVA), «- Yape» (Plin)— y el lector lo lee
+    aparte de qué app la emitió. **#KP136441** era un Prex así rechazado por el
+    medio, y había **43 cobros a «Grupo Gf S A C»** en la misma situación: 30 ya
+    validados a mano. Una app que **no** dice adónde fue el dinero sigue
+    exigiendo que alguien mire, y el destinatario y el monto se exigen igual.
   - **La cola de cobros se recorre entera: la que hace más tiempo que no se
     mira va primero.** El 10-09-2026 había **238 guías candidatas y el tope es
     de 60 por pasada**, y la consulta cortaba sin orden ninguno: entraban
@@ -2581,14 +2593,32 @@ las bodegas**, en vez de un archivo por bodega. Las reglas de arriba no cambian
 - **Con el botón, el token se pega a mano** (el del login del panel, ~1 h de
   vida) y no se guarda; o se deja vacío y se usa la credencial guardada.
 
-**Sync automático (desde el 29-09-2026).** Corre cada hora (`/api/cron/swayp-inventory`)
-sobre todas las ciudades del sync, con las mismas reglas y además:
+**Sync diario (desde el 29-09-2026).** Sobre todas las ciudades del sync, con
+las mismas reglas y además:
 
-- **Credencial de la organización, no de una persona**: una sola, porque Aurela
-  y Kenku comparten inventario en Swayp. Es la de integración de Swayp que Kapta
-  ya usa para las guías, o una exclusiva de inventario si Swayp la da. **El login
-  del panel no se automatiza**: exige reCAPTCHA en cada inicio de sesión, que
-  existe justamente para impedirlo.
+- **Una vez al día basta** (decisión de Frankz, 29-09-2026): sincroniza sólo si
+  la última sincronización buena, manual o automática, fue hace ≥ 20 h. El cron
+  (`/api/cron/swayp-inventory`) revisa cada hora y casi siempre responde «al día».
+- **Con qué credencial.** Una credencial de API de Swayp con acceso al
+  inventario (`SWAYP_INVENTORY_TOKEN`), si existe: no vence y no depende de
+  nadie. Swayp todavía no la da: la de integración de las guías responde 403
+  «No tienes autorización 7301» (probado el 29-09-2026). Mientras tanto, se
+  **reutiliza la sesión del panel que abrió una persona**: la guarda Kapta
+  (cifrada, `swayp_inventory_sessions`, ningún usuario la puede leer) al pegar
+  un token en Stock Swayp, o la envía la **extensión de Chrome «Kapta ·
+  Swayp»** cuando alguien abre el panel de Swayp. Se usa sólo para leer
+  inventario y bodegas, y sólo hasta que vence; si Swayp la rechaza antes, se
+  descarta.
+- **El login del panel no se automatiza**: exige reCAPTCHA (v3, invisible) en
+  cada inicio de sesión, que existe justamente para impedir que un programa
+  entre solo. Siempre inicia sesión una persona.
+- **La extensión** lee la sesión que el propio panel guarda en el navegador
+  (`localStorage` «userSWC») y se la envía a Kapta con una llave de la
+  organización (sólo su hash en `swayp_extension_keys`). Kapta comprueba con
+  Swayp que la sesión sirve, que es de la empresa configurada, la guarda y, si
+  toca, sincroniza en el acto. Se descarga desde Stock Swayp con la URL y la
+  llave dentro; descargarla otra vez cambia la llave y la anterior deja de
+  servir.
 - **Retiene la ciudad que quedaría vaciada** y no la aplica: si Swayp no trae
   ninguna unidad para una ciudad con stock, o si dejaría en 0 más de la mitad
   de sus productos con stock (y al menos 5). Es más probable una lectura rota
@@ -4117,6 +4147,11 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   BCP) se apartan del nombre pero no se juzgan. El lector tiene además
   instrucción de separarlos. Es la misma regla que en los cobros del courier
   (§9.4).
+- **La billetera de destino tampoco es parte del nombre.** Plin escribe el
+  receptor como «Grupo Gf S - Yape» (#KP136682): « - Yape» dice adónde fue el
+  dinero, y leído como nombre acusaba de desvío un cobro a la empresa. Se
+  quita antes de comparar. No afloja nada: «Juan Pérez - Yape» sigue siendo
+  Juan Pérez. Rige igual en los cobros del courier (§9.4).
 - **Una cuenta puede no tener celular: la pasarela Flow** (migración 0198). La
   constancia de Flow dice «Pagado a: Aurela Kenku» —una sola cuenta de Flow para
   las dos marcas— y no enseña ningún celular. Sin darla de alta, **#KP136181**
@@ -6019,8 +6054,9 @@ ellos frenaban siete rutas del 23 al 26/09. Ahora:
 - La entrega sin foto y el Yape sin captura se siguen exigiendo siempre, sea
   cual sea la fecha. El rechazo exento se sigue pagando al motorizado y se
   sigue cobrando a la tienda como antes; solo deja de pedirse su foto.
-- En la tabla de la ruta, ese rechazo dice «Sin foto · no se exige (antes del
-  28/09)» en vez de «Falta foto».
+- En la tabla de la ruta, ese rechazo lleva una cámara tachada con el aviso
+  «Sin foto · no se exige (antes del 28/09)» en vez del ícono ámbar de «Falta
+  la foto».
 
 ### 29.8 Tarifas por distrito y comisión Yape
 
@@ -6687,6 +6723,17 @@ una parada reportada abre el formulario con ese punto elegido. La ganancia de
 un no entregado que no es rechazo dice «No se paga · solo entrega o rechazo»,
 no «Sin tarifa»: ese punto no se paga con o sin tarifa (§29.10); «Sin tarifa»
 queda para la entrega o el rechazo sin tarifa personal vigente (28-09-2026).
+
+**Dos líneas por fila, como máximo (29-09-2026, pedido de Frankz).** La tabla
+tiene anchos fijos por columna y cada fila ocupa a lo sumo dos líneas; lo que
+no cabe se recorta y se lee entero en el tooltip. El resultado de un no
+entregado se lee por su motivo, en rojo («Rechazó el pedido», «No
+contesta»…), con la devolución y la nota debajo. El respaldo va como íconos
+sin texto, con su nombre en el tooltip: cámara y comprobante para abrir la
+foto o la captura, en ámbar lo que falta, y una cámara tachada para el
+rechazo que no la exige (§29.7). «+ adicional» es un botón «+» que aparece al
+pasar por la fila (siempre visible en pantallas táctiles), y el aviso de
+tarifa del distrito es un ícono ámbar con el texto en el tooltip.
 
 **Qué impide terminar la ruta, a la vista (28-09-2026).** Antes el
 coordinador pulsaba «Terminar ruta operativa», leía UN error («Grupo GF:

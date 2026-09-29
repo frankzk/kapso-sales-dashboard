@@ -39,4 +39,4 @@ try {
   assert.equal(uiEvent.length,1);assert.equal(uiEvent[0]!.actor,fixture.users.find((u:any)=>u.name==='admin').id);
   report.checks.push({label:'UI comment persisted exactly once with actor',passed:true});report.passed=true;
 }catch(error:any){report.errors.push({name:error.name,message:error.message});process.exitCode=1;console.error(error.message)}
-finally{report.finishedAt=new Date().toISOString();writeFileSync('docs/performance/master-staging-http-2026-09-28.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));}
+finally{report.finishedAt=new Date().toISOString();writeFileSync('docs/performance/master-staging-http-2026-09-29.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));}

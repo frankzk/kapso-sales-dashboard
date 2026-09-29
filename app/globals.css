@@ -9,6 +9,34 @@
   --color-brand-600: #1f5fe0;
   --color-brand-700: #1b4fbd;
 
+  /* Mundo de operación (29-09-2026): el lenguaje del panel de Stripe con el
+     azul Kapta. Tinta azulada en tres pasos, líneas finas, chapas de estado de
+     4 px y sombras cortas con desplazamiento. Estrena en Despacho del día. */
+  --color-ink-900: #1a1b25;
+  --color-ink-700: #414552;
+  --color-ink-600: #545969;
+  --color-ink-500: #687385;
+  --color-ink-300: #a3acba;
+  --color-line: #ebeef1;
+  --color-line-strong: #d5dbe1;
+  --color-wash: #f6f8fa;
+  --color-ok-bg: #d7f7c2;
+  --color-ok-fg: #006908;
+  --color-ok-wash: #effbea;
+  --color-info-bg: #cff5f6;
+  --color-info-fg: #0055bc;
+  --color-info-wash: #eefafb;
+  --color-warn-bg: #fcedb9;
+  --color-warn-fg: #a82c00;
+  --color-warn-wash: #fef8e4;
+  --color-crit-bg: #ffe7f2;
+  --color-crit-fg: #b3063d;
+  --color-crit-wash: #fff3f8;
+  --color-urgent: #df1b41;
+  --shadow-control: 0 1px 1px rgb(0 0 0 / 0.07), 0 2px 5px rgb(60 66 87 / 0.07);
+  --shadow-primary: 0 1px 1px rgb(0 0 0 / 0.12), 0 2px 5px rgb(31 95 224 / 0.2);
+  --shadow-pop: 0 0 0 1px rgb(64 68 82 / 0.08), 0 5px 15px rgb(0 0 0 / 0.1), 0 15px 35px rgb(48 49 61 / 0.08);
+
   /* "Atendiendo ahora" / lead tomado: punto que pulsa (opacity 1 → .35 → 1). */
   --animate-pulse-dot: pulse-dot 1.6s ease-in-out infinite;
 

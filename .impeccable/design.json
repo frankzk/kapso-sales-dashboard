@@ -1,0 +1,613 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-29T00:00:00Z",
+  "title": "Design System: Kapta",
+  "extensions": {
+    "colorMeta": {
+      "brand-600": {
+        "role": "primary",
+        "displayName": "Azul Kapta",
+        "canonical": "oklch(52.8% 0.207 262.2)",
+        "tonalRamp": [
+          "#000729",
+          "#001b5e",
+          "#003399",
+          "#1b4fbd",
+          "#1f5fe0",
+          "#2f74ff",
+          "#b9d6ff",
+          "#eef6ff"
+        ]
+      },
+      "brand-700": {
+        "role": "primary",
+        "displayName": "Azul Kapta profundo",
+        "tonalRamp": [
+          "#000729",
+          "#001b5e",
+          "#003399",
+          "#1b4fbd",
+          "#1f5fe0",
+          "#2f74ff",
+          "#b9d6ff",
+          "#eef6ff"
+        ]
+      },
+      "brand-500": {
+        "role": "primary",
+        "displayName": "Azul de foco",
+        "tonalRamp": [
+          "#000729",
+          "#001b5e",
+          "#003399",
+          "#1b4fbd",
+          "#1f5fe0",
+          "#2f74ff",
+          "#b9d6ff",
+          "#eef6ff"
+        ]
+      },
+      "brand-50": {
+        "role": "primary",
+        "displayName": "Velo azul",
+        "tonalRamp": [
+          "#000729",
+          "#001b5e",
+          "#003399",
+          "#1b4fbd",
+          "#1f5fe0",
+          "#2f74ff",
+          "#b9d6ff",
+          "#eef6ff"
+        ]
+      },
+      "ink-900": {
+        "role": "neutral",
+        "displayName": "Tinta",
+        "tonalRamp": [
+          "#1a1b25",
+          "#414552",
+          "#545969",
+          "#687385",
+          "#a3acba",
+          "#d5dbe1",
+          "#ebeef1",
+          "#f6f8fa"
+        ]
+      },
+      "ink-700": {
+        "role": "neutral",
+        "displayName": "Tinta media",
+        "tonalRamp": [
+          "#1a1b25",
+          "#414552",
+          "#545969",
+          "#687385",
+          "#a3acba",
+          "#d5dbe1",
+          "#ebeef1",
+          "#f6f8fa"
+        ]
+      },
+      "ink-600": {
+        "role": "neutral",
+        "displayName": "Tinta de apoyo",
+        "tonalRamp": [
+          "#1a1b25",
+          "#414552",
+          "#545969",
+          "#687385",
+          "#a3acba",
+          "#d5dbe1",
+          "#ebeef1",
+          "#f6f8fa"
+        ]
+      },
+      "ink-500": {
+        "role": "neutral",
+        "displayName": "Tinta tenue",
+        "tonalRamp": [
+          "#1a1b25",
+          "#414552",
+          "#545969",
+          "#687385",
+          "#a3acba",
+          "#d5dbe1",
+          "#ebeef1",
+          "#f6f8fa"
+        ]
+      },
+      "ink-300": {
+        "role": "neutral",
+        "displayName": "Tinta de borde activo",
+        "tonalRamp": [
+          "#1a1b25",
+          "#414552",
+          "#545969",
+          "#687385",
+          "#a3acba",
+          "#d5dbe1",
+          "#ebeef1",
+          "#f6f8fa"
+        ]
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Línea fuerte",
+        "tonalRamp": [
+          "#1a1b25",
+          "#414552",
+          "#545969",
+          "#687385",
+          "#a3acba",
+          "#d5dbe1",
+          "#ebeef1",
+          "#f6f8fa"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Línea",
+        "tonalRamp": [
+          "#1a1b25",
+          "#414552",
+          "#545969",
+          "#687385",
+          "#a3acba",
+          "#d5dbe1",
+          "#ebeef1",
+          "#f6f8fa"
+        ]
+      },
+      "wash": {
+        "role": "neutral",
+        "displayName": "Lavado",
+        "tonalRamp": [
+          "#1a1b25",
+          "#414552",
+          "#545969",
+          "#687385",
+          "#a3acba",
+          "#d5dbe1",
+          "#ebeef1",
+          "#f6f8fa"
+        ]
+      },
+      "white": {
+        "role": "neutral",
+        "displayName": "Superficie"
+      },
+      "slate-50": {
+        "role": "neutral",
+        "displayName": "Lienzo"
+      },
+      "ok-bg": {
+        "role": "status",
+        "displayName": "Correcto (fondo)",
+        "tonalRamp": [
+          "#001000",
+          "#002e02",
+          "#014f05",
+          "#006908",
+          "#3f963e",
+          "#66bc63",
+          "#d7f7c2",
+          "#effbea"
+        ]
+      },
+      "ok-fg": {
+        "role": "status",
+        "displayName": "Correcto (texto)",
+        "canonical": "oklch(45.2% 0.151 143.1)",
+        "tonalRamp": [
+          "#001000",
+          "#002e02",
+          "#014f05",
+          "#006908",
+          "#3f963e",
+          "#66bc63",
+          "#d7f7c2",
+          "#effbea"
+        ]
+      },
+      "ok-wash": {
+        "role": "status",
+        "displayName": "Correcto (lavado)",
+        "tonalRamp": [
+          "#001000",
+          "#002e02",
+          "#014f05",
+          "#006908",
+          "#3f963e",
+          "#66bc63",
+          "#d7f7c2",
+          "#effbea"
+        ]
+      },
+      "info-bg": {
+        "role": "status",
+        "displayName": "Información (fondo)",
+        "tonalRamp": [
+          "#000922",
+          "#002152",
+          "#013b86",
+          "#0055bc",
+          "#347de7",
+          "#69a5fe",
+          "#cff5f6",
+          "#eefafb"
+        ]
+      },
+      "info-fg": {
+        "role": "status",
+        "displayName": "Información (texto)",
+        "canonical": "oklch(47.3% 0.177 258.3)",
+        "tonalRamp": [
+          "#000922",
+          "#002152",
+          "#013b86",
+          "#0055bc",
+          "#347de7",
+          "#69a5fe",
+          "#cff5f6",
+          "#eefafb"
+        ]
+      },
+      "info-wash": {
+        "role": "status",
+        "displayName": "Información (lavado)",
+        "tonalRamp": [
+          "#000922",
+          "#002152",
+          "#013b86",
+          "#0055bc",
+          "#347de7",
+          "#69a5fe",
+          "#cff5f6",
+          "#eefafb"
+        ]
+      },
+      "warn-bg": {
+        "role": "status",
+        "displayName": "Atención (fondo)",
+        "tonalRamp": [
+          "#1c0200",
+          "#450d00",
+          "#741c01",
+          "#a82c00",
+          "#d05230",
+          "#fa7956",
+          "#fcedb9",
+          "#fef8e4"
+        ]
+      },
+      "warn-fg": {
+        "role": "status",
+        "displayName": "Atención (texto)",
+        "canonical": "oklch(48.5% 0.166 35.9)",
+        "tonalRamp": [
+          "#1c0200",
+          "#450d00",
+          "#741c01",
+          "#a82c00",
+          "#d05230",
+          "#fa7956",
+          "#fcedb9",
+          "#fef8e4"
+        ]
+      },
+      "warn-wash": {
+        "role": "status",
+        "displayName": "Atención (lavado)",
+        "tonalRamp": [
+          "#1c0200",
+          "#450d00",
+          "#741c01",
+          "#a82c00",
+          "#d05230",
+          "#fa7956",
+          "#fcedb9",
+          "#fef8e4"
+        ]
+      },
+      "crit-bg": {
+        "role": "status",
+        "displayName": "Crítico (fondo)",
+        "tonalRamp": [
+          "#1e0004",
+          "#4a0114",
+          "#7a0127",
+          "#b3063d",
+          "#da3d5c",
+          "#ff6e82",
+          "#ffe7f2",
+          "#fff3f8"
+        ]
+      },
+      "crit-fg": {
+        "role": "status",
+        "displayName": "Crítico (texto)",
+        "canonical": "oklch(49.0% 0.193 14.2)",
+        "tonalRamp": [
+          "#1e0004",
+          "#4a0114",
+          "#7a0127",
+          "#b3063d",
+          "#da3d5c",
+          "#ff6e82",
+          "#ffe7f2",
+          "#fff3f8"
+        ]
+      },
+      "crit-wash": {
+        "role": "status",
+        "displayName": "Crítico (lavado)",
+        "tonalRamp": [
+          "#1e0004",
+          "#4a0114",
+          "#7a0127",
+          "#b3063d",
+          "#da3d5c",
+          "#ff6e82",
+          "#ffe7f2",
+          "#fff3f8"
+        ]
+      },
+      "urgent": {
+        "role": "status",
+        "displayName": "Urgente",
+        "canonical": "oklch(58.0% 0.221 19.4)",
+        "tonalRamp": [
+          "#1f0003",
+          "#4a010e",
+          "#7b011d",
+          "#b0032e",
+          "#df1b41",
+          "#fe7078",
+          "#ffb4b4",
+          "#fee9e8"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Título de la página, uno por pantalla, sin antetítulo."
+      },
+      "figure": {
+        "displayName": "Figure",
+        "purpose": "Cifra de una tarjeta de estado, en cifras tabulares."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Títulos de tarjeta y hoja, pestañas en escritorio, botones, nombres de pedido."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Celdas de tabla, campos, texto de avisos."
+      },
+      "body-sm": {
+        "displayName": "Body-sm",
+        "purpose": "Resumen del día, etiquetas, píldoras, pestañas en el teléfono, metadatos."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Encabezados de tabla; las chapas usan 12 px en peso 500."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "Códigos QR y de paquete dentro de listas."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-control",
+        "value": "0 1px 1px rgb(0 0 0 / 0.07), 0 2px 5px rgb(60 66 87 / 0.07)",
+        "purpose": "Botones secundarios, campos, píldoras con valor, tarjetas de estado y de trabajo, opción activa del segmentado."
+      },
+      {
+        "name": "shadow-primary",
+        "value": "0 1px 1px rgb(0 0 0 / 0.12), 0 2px 5px rgb(31 95 224 / 0.2)",
+        "purpose": "Solo el botón principal."
+      },
+      {
+        "name": "shadow-pop",
+        "value": "0 0 0 1px rgb(64 68 82 / 0.08), 0 5px 15px rgb(0 0 0 / 0.1), 0 15px 35px rgb(48 49 61 / 0.08)",
+        "purpose": "Hojas de filtro, menús y toda capa que flota sobre la página."
+      },
+      {
+        "name": "hairline-sticky-head",
+        "value": "inset 0 -1px 0 var(--color-line)",
+        "purpose": "Línea inferior de la cabecera pegajosa de las tablas."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state-transition",
+        "value": "150ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "Cambio de fondo, color, sombra o anillo en controles; el único movimiento del mundo de operación."
+      }
+    ],
+    "focus": [
+      {
+        "name": "focus-global",
+        "value": "outline: 2px solid var(--color-brand-500); outline-offset: 2px",
+        "purpose": "Foco visible de todo control del producto."
+      },
+      {
+        "name": "focus-field",
+        "value": "box-shadow: inset 0 0 0 2px var(--color-brand-500)",
+        "purpose": "Campos del mundo de operación: el anillo interior sube a 2 px en lugar del contorno."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      },
+      {
+        "name": "pointer-coarse",
+        "value": "(pointer: coarse)",
+        "purpose": "Controles a 44 px mínimo por método de entrada, no por ancho."
+      }
+    ],
+    "adoption": {
+      "status": "El mundo de operación es la dirección aprobada; en producción solo en la cabecera y pestañas de Grupo GF Courier y en la pestaña Despacho del día.",
+      "legacy": "El resto de la aplicación usa el aspecto anterior (Tailwind slate-*, brand-600, rounded-xl/2xl, shadow-xl): deriva preexistente, no norma."
+    }
+  },
+  "components": [
+    {
+      "name": "Botón principal",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "La acción principal de una zona de trabajo: una por zona.",
+      "html": "<button class=\"ds-btn-primary\">Asignar 12 a Roy</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 0 12px; border: 0; border-radius: 6px; background: var(--color-brand-600, #1f5fe0); color: #fff; font: 600 14px/20px ui-sans-serif, system-ui, sans-serif; box-shadow: var(--shadow-primary, 0 1px 1px rgb(0 0 0 / 0.12), 0 2px 5px rgb(31 95 224 / 0.2)); cursor: pointer; transition: background-color 150ms, color 150ms, box-shadow 150ms; } .ds-btn-primary:hover { background: var(--color-brand-700, #1b4fbd); } .ds-btn-primary:focus-visible { outline: 2px solid var(--color-brand-500, #2f74ff); outline-offset: 2px; } .ds-btn-primary:disabled { opacity: .5; cursor: not-allowed; }"
+    },
+    {
+      "name": "Botón secundario",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Variante por defecto: blanca con anillo y sombra de control.",
+      "html": "<button class=\"ds-btn-secondary\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M9 6h11M9 12h11M9 18h11\"/><path d=\"M4.5 6h.01M4.5 12h.01M4.5 18h.01\"/></svg>Programar</button>",
+      "css": ".ds-btn-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 0 12px; border: 0; border-radius: 6px; background: #fff; color: var(--color-ink-700, #414552); font: 600 14px/20px ui-sans-serif, system-ui, sans-serif; box-shadow: inset 0 0 0 1px var(--color-line-strong, #d5dbe1), var(--shadow-control, 0 1px 1px rgb(0 0 0 / 0.07), 0 2px 5px rgb(60 66 87 / 0.07)); cursor: pointer; transition: background-color 150ms, color 150ms, box-shadow 150ms; } .ds-btn-secondary svg { color: var(--color-ink-500, #687385); } .ds-btn-secondary:hover { background: var(--color-wash, #f6f8fa); color: var(--color-ink-900, #1a1b25); } .ds-btn-secondary:focus-visible { outline: 2px solid var(--color-brand-500, #2f74ff); outline-offset: 2px; }"
+    },
+    {
+      "name": "Botón fantasma",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Acciones menores: Quitar filtros, Cancelar, Volver a hoy.",
+      "html": "<button class=\"ds-btn-ghost\">Quitar filtros</button>",
+      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--color-ink-600, #545969); font: 600 13px/1 ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: background-color 150ms, color 150ms; } .ds-btn-ghost:hover { background: var(--color-wash, #f6f8fa); color: var(--color-ink-900, #1a1b25); } .ds-btn-ghost:focus-visible { outline: 2px solid var(--color-brand-500, #2f74ff); outline-offset: 2px; }"
+    },
+    {
+      "name": "Campo",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Campo de texto o selector de 36 px con anillo fino y foco azul interior.",
+      "html": "<input class=\"ds-field\" placeholder=\"Pedido, cliente, distrito o teléfono\" />",
+      "css": ".ds-field { display: block; width: 100%; height: 36px; padding: 0 12px; border: 0; border-radius: 6px; background: #fff; color: var(--color-ink-900, #1a1b25); font: 400 14px/20px ui-sans-serif, system-ui, sans-serif; box-shadow: inset 0 0 0 1px var(--color-line-strong, #d5dbe1), var(--shadow-control, 0 1px 1px rgb(0 0 0 / 0.07), 0 2px 5px rgb(60 66 87 / 0.07)); transition: box-shadow 150ms; } .ds-field::placeholder { color: var(--color-ink-500, #687385); } .ds-field:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--color-brand-500, #2f74ff), var(--shadow-control, 0 1px 1px rgb(0 0 0 / 0.07), 0 2px 5px rgb(60 66 87 / 0.07)); } .ds-field:disabled { background: var(--color-wash, #f6f8fa); color: var(--color-ink-500, #687385); }"
+    },
+    {
+      "name": "Chapas de estado",
+      "kind": "chip",
+      "refersTo": "badge-neutral",
+      "description": "Estado en par de tono, 20 px, 4 px de radio, siempre con texto.",
+      "html": "<span class=\"ds-badge ds-badge-neutral\">Sin caja</span> <span class=\"ds-badge ds-badge-ok\">Entregado</span> <span class=\"ds-badge ds-badge-info\">En ruta</span> <span class=\"ds-badge ds-badge-warn\">Tarifa faltante</span> <span class=\"ds-badge ds-badge-crit\">Rechazado</span> <span class=\"ds-badge ds-badge-urgent\">Hoy</span> <span class=\"ds-badge ds-badge-brand\">12</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: 4px; font: 500 12px/1 ui-sans-serif, system-ui, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; } .ds-badge-neutral { background: var(--color-line, #ebeef1); color: var(--color-ink-600, #545969); } .ds-badge-ok { background: var(--color-ok-bg, #d7f7c2); color: var(--color-ok-fg, #006908); } .ds-badge-info { background: var(--color-info-bg, #cff5f6); color: var(--color-info-fg, #0055bc); } .ds-badge-warn { background: var(--color-warn-bg, #fcedb9); color: var(--color-warn-fg, #a82c00); } .ds-badge-crit { background: var(--color-crit-bg, #ffe7f2); color: var(--color-crit-fg, #b3063d); } .ds-badge-urgent { background: var(--color-urgent, #df1b41); color: #fff; } .ds-badge-brand { background: var(--color-brand-50, #eef6ff); color: var(--color-brand-700, #1b4fbd); }"
+    },
+    {
+      "name": "Píldora de filtro",
+      "kind": "chip",
+      "refersTo": "filter-pill",
+      "description": "Discontinua con «+» cuando no filtra; sólida, con su valor en azul y una «x», cuando filtra.",
+      "html": "<button class=\"ds-pill\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 8v8M8 12h8\"/></svg>Distrito</button> <span class=\"ds-pill-on\"><button class=\"ds-pill-x\" aria-label=\"Quitar el filtro Tienda\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"m9 9 6 6M15 9l-6 6\"/></svg></button><button class=\"ds-pill-val\">Tienda<span class=\"ds-pill-sep\"></span><span class=\"ds-pill-v\">Aurela</span></button></span>",
+      "css": ".ds-pill { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px 0 8px; border: 1px dashed var(--color-line-strong, #d5dbe1); border-radius: 9999px; background: #fff; color: var(--color-ink-600, #545969); font: 500 13px/1 ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: border-color 150ms, color 150ms; } .ds-pill svg { color: var(--color-ink-500, #687385); } .ds-pill:hover { border-color: var(--color-ink-300, #a3acba); color: var(--color-ink-900, #1a1b25); } .ds-pill:focus-visible, .ds-pill-x:focus-visible, .ds-pill-val:focus-visible { outline: 2px solid var(--color-brand-500, #2f74ff); outline-offset: 2px; } .ds-pill-on { display: inline-flex; align-items: center; height: 32px; border-radius: 9999px; background: #fff; font: 500 13px/1 ui-sans-serif, system-ui, sans-serif; box-shadow: inset 0 0 0 1px var(--color-line-strong, #d5dbe1), var(--shadow-control, 0 1px 1px rgb(0 0 0 / 0.07), 0 2px 5px rgb(60 66 87 / 0.07)); } .ds-pill-x { display: grid; place-items: center; width: 28px; height: 32px; padding-left: 4px; border: 0; background: none; color: var(--color-ink-500, #687385); border-radius: 9999px 0 0 9999px; cursor: pointer; } .ds-pill-x:hover { color: var(--color-ink-900, #1a1b25); } .ds-pill-val { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px 0 0; border: 0; background: none; color: var(--color-ink-700, #414552); font: inherit; border-radius: 0 9999px 9999px 0; cursor: pointer; } .ds-pill-val:hover { color: var(--color-ink-900, #1a1b25); } .ds-pill-sep { width: 1px; height: 14px; background: var(--color-line-strong, #d5dbe1); } .ds-pill-v { color: var(--color-brand-700, #1b4fbd); }"
+    },
+    {
+      "name": "Tarjeta de estado",
+      "kind": "card",
+      "refersTo": "status-card",
+      "description": "Etiqueta y cifra que filtran la lista; la elegida lleva el borde azul de 2 px.",
+      "html": "<div style=\"display:flex;gap:8px\"><button class=\"ds-stat\" aria-pressed=\"true\"><span class=\"ds-stat-l\">Por asignar</span><span class=\"ds-stat-v\">148</span></button><button class=\"ds-stat\" aria-pressed=\"false\"><span class=\"ds-stat-l\">Nunca salieron</span><span class=\"ds-stat-v\">6</span></button></div>",
+      "css": ".ds-stat { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 140px; padding: 10px 14px; border: 0; border-radius: 8px; background: #fff; text-align: left; cursor: pointer; box-shadow: inset 0 0 0 1px var(--color-line, #ebeef1), var(--shadow-control, 0 1px 1px rgb(0 0 0 / 0.07), 0 2px 5px rgb(60 66 87 / 0.07)); transition: box-shadow 150ms; } .ds-stat:hover { box-shadow: inset 0 0 0 1px var(--color-line-strong, #d5dbe1), var(--shadow-control, 0 1px 1px rgb(0 0 0 / 0.07), 0 2px 5px rgb(60 66 87 / 0.07)); } .ds-stat:focus-visible { outline: 2px solid var(--color-brand-500, #2f74ff); outline-offset: 2px; } .ds-stat-l { font: 500 13px/1.5 ui-sans-serif, system-ui, sans-serif; color: var(--color-ink-600, #545969); } .ds-stat-v { font: 600 20px/28px ui-sans-serif, system-ui, sans-serif; font-variant-numeric: tabular-nums; color: var(--color-ink-900, #1a1b25); } .ds-stat[aria-pressed=\"true\"] { box-shadow: inset 0 0 0 2px var(--color-brand-600, #1f5fe0), var(--shadow-control, 0 1px 1px rgb(0 0 0 / 0.07), 0 2px 5px rgb(60 66 87 / 0.07)); } .ds-stat[aria-pressed=\"true\"] .ds-stat-l, .ds-stat[aria-pressed=\"true\"] .ds-stat-v { color: var(--color-brand-700, #1b4fbd); }"
+    },
+    {
+      "name": "Pestañas subrayadas",
+      "kind": "nav",
+      "refersTo": "tab-active",
+      "description": "Navegación de la página: la activa en azul con barra de 2 px sobre la hairline.",
+      "html": "<nav class=\"ds-tabs\"><button class=\"ds-tab\" aria-current=\"page\">Despacho del día <span class=\"ds-tab-n ds-tab-n-on\">4</span></button><button class=\"ds-tab\">Rutas <span class=\"ds-tab-n\">9</span></button><button class=\"ds-tab\">Tarifario</button></nav>",
+      "css": ".ds-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--color-line, #ebeef1); } .ds-tab { position: relative; display: flex; align-items: center; gap: 6px; min-height: 48px; padding: 8px 0; border: 0; background: none; color: var(--color-ink-500, #687385); font: 600 14px/20px ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: color 150ms; } .ds-tab:hover { color: var(--color-ink-900, #1a1b25); } .ds-tab:focus-visible { outline: 2px solid var(--color-brand-500, #2f74ff); outline-offset: 2px; } .ds-tab[aria-current=\"page\"] { color: var(--color-brand-700, #1b4fbd); } .ds-tab[aria-current=\"page\"]::after { content: \"\"; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--color-brand-600, #1f5fe0); } .ds-tab-n { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: 4px; background: var(--color-line, #ebeef1); color: var(--color-ink-600, #545969); font: 500 12px/1 ui-sans-serif, system-ui, sans-serif; font-variant-numeric: tabular-nums; } .ds-tab-n-on { background: var(--color-brand-50, #eef6ff); color: var(--color-brand-700, #1b4fbd); }"
+    },
+    {
+      "name": "Control segmentado",
+      "kind": "custom",
+      "refersTo": "segmented-option-active",
+      "description": "La forma de asignar: pista de lavado con la opción activa en una pieza blanca.",
+      "html": "<div class=\"ds-seg\" role=\"tablist\"><button class=\"ds-seg-o\" role=\"tab\" aria-selected=\"true\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3\"/><path d=\"M8 8h3v3H8zM13 13h3v3h-3zM13 8h3M8 16h3\"/></svg>Asignar por QR</button><button class=\"ds-seg-o\" role=\"tab\" aria-selected=\"false\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"><path d=\"M9 6h11M9 12h11M9 18h11\"/><path d=\"M4.5 6h.01M4.5 12h.01M4.5 18h.01\"/></svg>Desde la lista</button></div>",
+      "css": ".ds-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; border-radius: 8px; background: var(--color-wash, #f6f8fa); box-shadow: inset 0 0 0 1px var(--color-line, #ebeef1); } .ds-seg-o { display: flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--color-ink-500, #687385); font: 600 14px/20px ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: background-color 150ms, color 150ms, box-shadow 150ms; } .ds-seg-o:hover { color: var(--color-ink-900, #1a1b25); } .ds-seg-o:focus-visible { outline: 2px solid var(--color-brand-500, #2f74ff); outline-offset: 2px; } .ds-seg-o[aria-selected=\"true\"] { background: #fff; color: var(--color-ink-900, #1a1b25); box-shadow: 0 0 0 1px var(--color-line, #ebeef1), var(--shadow-control, 0 1px 1px rgb(0 0 0 / 0.07), 0 2px 5px rgb(60 66 87 / 0.07)); } .ds-seg-o[aria-selected=\"true\"] svg { color: var(--color-brand-600, #1f5fe0); }"
+    },
+    {
+      "name": "Aviso",
+      "kind": "custom",
+      "refersTo": "banner-warn",
+      "description": "Aviso en la página sobre el lavado del tono, con icono y título en el tono y cuerpo en tinta.",
+      "html": "<div class=\"ds-banner ds-banner-warn\" role=\"status\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M10.3 3.8 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0z\"/><path d=\"M12 9v4M12 17h.01\"/></svg><div><p class=\"ds-banner-t\">3 marcados están programados para otro día</p><p>Asígnalos igual hoy o solo los otros.</p></div></div>",
+      "css": ".ds-banner { display: flex; gap: 12px; padding: 12px 16px; border-radius: 8px; color: var(--color-ink-700, #414552); font: 400 14px/20px ui-sans-serif, system-ui, sans-serif; } .ds-banner p { margin: 0; } .ds-banner svg { flex-shrink: 0; margin-top: 2px; } .ds-banner-t { font-weight: 600; } .ds-banner-warn { background: var(--color-warn-wash, #fef8e4); } .ds-banner-warn svg, .ds-banner-warn .ds-banner-t { color: var(--color-warn-fg, #a82c00); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "La Mesa de Despacho",
+    "overview": "Kapta se opera como una mesa de trabajo limpia: superficies blancas sobre un lienzo pizarra muy claro, líneas finas en lugar de cajas pesadas y un solo azul que dice dónde actuar. El mundo de operación toma el lenguaje del panel de Stripe (página de lista con cifras que filtran, tabla que es el trabajo, excepciones esperando al borde) y lo traduce al azul Kapta. La densidad es de escritorio con ratón, pero todo control se agranda a objetivo de dedo cuando el puntero es táctil, porque el mismo supervisor trabaja de pie en almacén con un lector o un celular.\n\nLa personalidad es clara, rápida y confiable: tinta azulada en tres pasos para jerarquía, chapas de estado de 4 px que siempre llevan texto, sombras cortas que apenas despegan los controles del papel. Nada decora; todo lo que tiene color significa algo. El movimiento se limita a transiciones de estado de 150 ms.\n\n**Alcance actual (29-09-2026).** Este mundo es la dirección aprobada para todo el producto, pero hoy solo está en producción en la cabecera y las pestañas de Grupo GF Courier y en la pestaña «Despacho del día» (tarjetas de estado, QR, lista, cajas, devoluciones y hojas). El resto de la aplicación (Rutas, Tarifario, las vistas anteriores del courier, el Master de Pedidos, Envíos, Liquidaciones y demás) sigue con el aspecto anterior: Tailwind `slate-*`, `brand-600` como acento, radios `rounded-xl`/`rounded-2xl` y `shadow-xl`. Ese aspecto es deriva preexistente, no una segunda norma: las superficies nuevas o rediseñadas usan este documento. No hay esquema oscuro; el producto declara `color-scheme: light`.",
+    "keyCharacteristics": [
+      "Superficies blancas con líneas finas (`line`) sobre el lienzo `slate-50`.",
+      "Tinta azulada en pasos (`ink-900` / `ink-700` / `ink-500`) en lugar de grises neutros.",
+      "Azul Kapta solo para acción principal, selección, pestaña activa y enlaces.",
+      "Chapas de estado de 4 px en pares fondo/texto; avisos sobre el lavado del mismo tono.",
+      "Controles de 6 px con sombra corta; tarjetas y hojas de 8 px; píldoras redondas.",
+      "Sans del sistema, título de 28 px en negrita, cuerpo de 14 px, cifras tabulares.",
+      "Una sola familia de iconos de trazo."
+    ],
+    "rules": [
+      {
+        "name": "The Azul con Oficio Rule",
+        "body": "El azul Kapta solo marca acción principal, selección, pestaña activa, foco y enlaces. Nunca es un fondo de sección, un adorno ni un color de estado.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tono Emparejado Rule",
+        "body": "Un estado siempre es un par fondo/texto del mismo tono (`*-bg` con `*-fg`) con palabras dentro; un aviso usa el lavado del tono (`*-wash`) con icono y título en `*-fg` y el cuerpo en tinta. El color nunca es la única señal.",
+        "section": "colors"
+      },
+      {
+        "name": "The Cifras Tabulares Rule",
+        "body": "Toda cantidad, monto y fecha va en cifras tabulares y con el formato `es-PE`, para que las columnas y los contadores no bailen al cambiar.",
+        "section": "typography"
+      },
+      {
+        "name": "The Título Solo Rule",
+        "body": "El título de 28 px no lleva antetítulo, eyebrow ni kicker; el contexto va en una línea de 14 px en `ink-500` debajo.",
+        "section": "typography"
+      },
+      {
+        "name": "The Cifras Navegan Rule",
+        "body": "Las tarjetas de estado son filtros, no adornos: cada una abre su parte de la lista, y la elegida lleva el borde azul. Si una cifra no filtra nada, no va en tarjeta.",
+        "section": "layout"
+      },
+      {
+        "name": "The Sombra Corta Rule",
+        "body": "Lo que está en la página lleva como mucho la sombra de control; solo lo que flota encima lleva la de popover. Nada de `shadow-xl` ni sombras difusas grandes.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Cuatro Radios Rule",
+        "body": "4, 6, 8 o redondo. `rounded-xl` y `rounded-2xl` pertenecen al aspecto anterior y no entran en superficies del mundo de operación.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "**Do** reservar `brand-600` para la acción principal, la selección, la pestaña activa y el foco; los enlaces van en `brand-700`.",
+      "**Do** escribir cada estado con palabras dentro de una chapa de par de tono (`ok`, `info`, `warn`, `crit`, `neutral`, `urgent`).",
+      "**Do** usar solo los radios 4, 6, 8 px y redondo completo, y solo las sombras de control, principal y popover.",
+      "**Do** poner todas las cantidades, montos y fechas en cifras tabulares con formato `es-PE`.",
+      "**Do** convertir las filas de tabla en tarjetas de lista bajo 640 px, sin desplazamiento horizontal en el teléfono.",
+      "**Do** dejar que el puntero táctil suba los controles a 44 px y mantener 48 px en pestañas y escáner.",
+      "**Do** construir superficies nuevas con `OpsButton`, `Badge`, `FilterPill`, `StatusCard`, `AttentionPill`, `Banner`, `FIELD`, `CHECKBOX` y `Sheet look=\"ops\"`."
+    ],
+    "donts": [
+      "**Don't** usar `slate-*`, `rounded-xl`, `rounded-2xl` ni `shadow-xl` en superficies del mundo de operación; son del aspecto anterior.",
+      "**Don't** poner antetítulos, eyebrows ni kickers sobre el título de la página.",
+      "**Don't** apilar mosaicos de color, chips y franjas del mismo peso por encima de la tarea; las excepciones esperan en píldoras al borde.",
+      "**Don't** usar el color como única señal de estado, ni un rojo sólido para acciones destructivas.",
+      "**Don't** anidar tarjetas con sombra dentro de tarjetas; separa secciones con hairlines `line`.",
+      "**Don't** añadir movimiento decorativo, degradados ni tema oscuro parcial; solo transiciones de estado de 150 ms.",
+      "**Don't** mezclar otra familia de iconos ni glifos de texto en lugar de iconos de trazo."
+    ]
+  }
+}

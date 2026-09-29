@@ -1,15 +1,16 @@
 # Deployment runbook
 
-## Master read scaling — migration 0202
+## Master read scaling — migration 0203
 
-**Release status (2026-09-28): staging integration passed; production is not deployed.**
+**Release status (2026-09-29): updated staging validation passed; production is not deployed.**
+Night procedure and unresolved backup access: `docs/performance/night-release-2026-09-29.md`.
 Current evidence and remaining release checks are in
-`docs/performance/staging-validation-2026-09-28.md`. Migration 0202 follows the
-published schema 0201 at `aa87ce0`; the earlier unpublished 0198 candidate was
-renumbered without changing its executable SQL.
+`docs/performance/validation-current-2026-09-29.json`. Migration 0203 follows the
+published schema 0202 at `6d2cbf4`; the unpublished 0198/0202 candidates were
+renumbered without changing their executable counter SQL.
 The old unpublished 0157 candidate used shared counter rows and deadlocked.
-The current candidate is based on production schema 0201; 0157 is already an
-unrelated published migration and must never be overwritten. Migration 0202
+The current candidate is based on production schema 0202; 0157 is already an
+unrelated published migration and must never be overwritten. Migration 0203
 uses signed counter parts per live PostgreSQL backend slot, summed by invoker
 views in the same transaction snapshot. There is no deferred queue or global
 writer lock. The directed mixed-UPSERT regression passes on real PostgreSQL 16,
@@ -17,7 +18,7 @@ as do the million-order concurrent integrity tests. Short adverse SQL workloads
 still show increased write latency, so integrity alone does not approve capacity.
 Real staging Auth/PostgREST tests compared complete ingestion plus projection at
 1/5/20 sessions: no sustained >20% p95 regression in the measured workload.
-See `docs/performance/validation-2026-09-28.md` for current evidence and limits;
+See `docs/performance/night-release-2026-09-29.md` for current evidence and limits;
 09-25 reports describe the historical rejected candidate.
 
 Requires PostgreSQL **16+** and `max_prepared_transactions=0`; installation
@@ -50,10 +51,14 @@ create index concurrently if not exists leads_order_id_idx
   on public.leads (order_id) where order_id is not null;
 ```
 
+The executable preparation is `scripts/sql/master_read_scaling_prepare_indexes.sql`.
+It must run outside a transaction, in the release window. The shared index guard
+checks the exact columns, sort order and predicate, as well as index validity.
+
 Check `pg_index.indisvalid` after interrupted concurrent builds; an invalid index
 with the same name is not repaired by `IF NOT EXISTS`. Also verify definitions
 match the four commands above. During the planned window, run the controlled
-installer, which refuses missing/invalid indexes and wraps 0202 in one
+installer, which refuses missing/invalid indexes and wraps 0203 in one
 transaction with a 5-second lock wait and a 60-second statement limit:
 
 ```sh
@@ -63,6 +68,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/sql/master_read_scaling_insta
 If it times out, leave the previous application serving and investigate the
 blocking activity; do not automatically raise timeouts and retry during traffic.
 The transaction rolls back its DDL/backfill. Prebuilt indexes remain in place.
+These limits apply per statement, not to the total intervention duration.
 This bounds the wait; it does not make the backfill free of write blocking.
 
 Run the mandatory read-only release gate as a database administrator with
@@ -105,7 +111,9 @@ that gate only with an explicitly agreed operational budget. Staging results are
 in `master-staging-before-2026-09-28.json` and `master-staging-after-2026-09-28.json`.
 Those runs used schema 0197 plus the identical counter implementation before its
 0202 renumber. Full current-schema SQL concurrency and staging read/HTTP checks
-were repeated after incorporating upstream migrations 0198–0201.
+were repeated after incorporating upstream migrations 0198–0201. Further
+2026-09-29 validation covers schema 0202 + candidate 0203, a 50k-order
+concurrency run, exact source preservation, and PostgreSQL 17 dump/restore.
 
 The reproducible local test now uses real PostgreSQL, not PGlite:
 
@@ -157,7 +165,7 @@ code alone is insufficient: the triggers and replaced RPCs still exist.
 The rollback has a 5-second lock wait and 30-second statement limit; it needs a
 short exclusive lock. If it fails, its transaction rolls back; do not drop
 triggers piecemeal. After a successful rollback, summaries become stale and must
-not be read by the new application. Reinstall 0202 and pass the release gate
+not be read by the new application. Reinstall 0203 and pass the release gate
 before serving new reads again. Never TRUNCATE the source while counters are served.
 
 `scripts/sql/master_read_scaling_rollback_smoke.sql` tests the full reversal and
@@ -2144,14 +2152,20 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
    - `SWAYP_INVENTORY_RUC` — RUC de la empresa en Swayp (header `user`).
    - `SWAYP_INVENTORY_COMPANY_ID` — id de la empresa en Swayp (`idCompany`).
    - `SWAYP_INVENTORY_ORG_ID` — la organización de Kapta dueña de ese stock.
-   El token y el correo salen de `SWAYP_TOKEN`/`SWAYP_EMAIL` (la integración
-   de guías). Si Swayp da una credencial exclusiva para inventario, va en
-   `SWAYP_INVENTORY_TOKEN`/`SWAYP_INVENTORY_EMAIL` y manda sobre la otra.
-3. **El login del panel NO se automatiza**: exige reCAPTCHA en cada inicio de
-   sesión. Si la credencial de integración no abre el inventario, Stock Swayp
-   → «Leer inventario» con el token vacío lo dice (status y respuesta de
-   Swayp), el cron registra el fallo cada hora y el botón con token pegado
-   sigue funcionando. El remedio es pedirle a Swayp una credencial de API con
-   acceso al inventario.
-4. El cron (`/api/cron/swayp-inventory`, a los :40 de cada hora) no hace nada
-   hasta que las tres variables existen: responde qué falta.
+   Ya creadas el 29-09-2026.
+3. **La credencial de API (`SWAYP_INVENTORY_TOKEN`) todavía no existe**: hay
+   que pedírsela a Swayp. La de integración de las guías (`SWAYP_TOKEN`) NO
+   sirve: responde 403 «No tienes autorización 7301». El login del panel
+   tampoco: exige reCAPTCHA y no se automatiza. Mientras no exista, el sync
+   diario reutiliza la sesión del panel (ver el punto siguiente).
+4. **Migración `0202_swayp_inventory_sessions.sql`** (ya aplicada el
+   29-09-2026): la sesión guardada (cifrada con `ENCRYPTION_KEY`, sin lectura
+   para usuarios) y el hash de la llave de la extensión.
+5. **Extensión de Chrome «Kapta · Swayp»**: Stock Swayp → «Descargar
+   extensión» genera un .zip con la URL (`NEXT_PUBLIC_SITE_URL`) y una llave
+   nueva. Se instala en chrome://extensions → «Modo de desarrollador» →
+   «Cargar descomprimida». Envía la sesión a `/api/swayp/session` cada vez que
+   alguien abre ce.swayp.co en ese Chrome.
+6. El cron (`/api/cron/swayp-inventory`, a los :40 de cada hora) sincroniza
+   sólo si pasaron ≥ 20 h desde el último sync bueno y hay credencial (la de
+   API o una sesión vigente); si no, responde `al_dia` o `sin_credencial`.

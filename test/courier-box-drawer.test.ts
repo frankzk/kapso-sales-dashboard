@@ -112,14 +112,22 @@ describe("la caja se abre al lado de Rutas (MOM §29.14)", () => {
     // La tabla única lleva el pago y el cálculo viaja del panel de pago a la
     // tabla. Desde el 28-09 la ganancia va en una columna con su desglose
     // (tarifa y adicional debajo), para que la tabla quepa en el panel.
-    expect(routes).toContain('font-medium">Ganancia</th>');
-    expect(routes).toContain("money(earned + pr.extra)");
-    expect(routes).toContain("Tarifa {money(earned)}");
-    expect(routes).toContain("Adicional {money(pr.extra)}");
-    expect(routes).toContain('font-medium">Cobro y respaldo</th>');
+    expect(routes).toContain('font-semibold">Ganancia</th>');
+    expect(routes).toContain("money(earned + extra)");
+    expect(routes).toContain("`+ ${money(extra)} adicional`");
+    expect(routes).toContain("`Tarifa ${money(earned)}${source ? ` (${source})` : \"\"}${extra ? ` + adicional ${money(extra)}` : \"\"}`");
+    expect(routes).toContain('font-semibold">Cobro y respaldo</th>');
     expect(routes).toContain("compact={detailOnly}");
     expect(routes).toContain("onDetail={setPay}");
-    expect(routes).toContain("+ adicional");
+    // Desde el 29-09, dos líneas por fila como máximo (Frankz): anchos fijos
+    // y lo que no cabe se recorta con tooltip; respaldos como íconos con su
+    // nombre en el tooltip; «+ adicional» como botón que aparece en la fila.
+    expect(routes).toContain('<table className="w-full min-w-[840px] table-fixed text-sm">');
+    expect(routes).toContain('className="line-clamp-2 min-w-0 leading-5"');
+    expect(routes).toContain('title="Ver la foto" aria-label="Ver la foto"');
+    expect(routes).toContain('title="Falta la foto" aria-label="Falta la foto"');
+    expect(routes).toContain('aria-label="Aprobar un adicional para este punto"');
+    expect(routes).not.toContain("h-3.5 w-3.5\" />Foto");
     // En el panel lateral no hay cabecera interna: el panel ya titula.
     expect(routes).toContain("{!compact && (");
     // El panel de pago en modo compacto no repite importes ni desglose.

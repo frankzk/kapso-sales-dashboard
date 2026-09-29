@@ -34,8 +34,8 @@ export default async function CourierDispatchPage({ searchParams }: { searchPara
   return (
     <div className="space-y-4">
       <header>
-        <Link href="/dashboard/courier" className="text-xs font-medium text-slate-500 hover:text-slate-900">Grupo GF Courier</Link>
-        <h1 className="mt-1 text-xl font-semibold text-slate-950">Rutas</h1>
+        <Link href="/dashboard/courier" className="text-[13px] font-medium text-ink-500 hover:text-ink-900">Grupo GF Courier</Link>
+        <h1 className="mt-1 text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Rutas</h1>
       </header>
       <CourierRoutesLedger rows={rows} riders={riders.map((r) => ({ id: r.id, fullName: r.full_name }))} today={today} />
       <CourierBoxDrawer />

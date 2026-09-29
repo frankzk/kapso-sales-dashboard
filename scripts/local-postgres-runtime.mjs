@@ -70,16 +70,21 @@ function runBinary(binary, args, { environment, logPath, timeoutMs = 45_000 }) {
  * stop() is idempotent, closes remaining sessions and preserves cluster/logs.
  * Only application_name can be supplied; host/port/URL credentials cannot. */
 export async function startLocalPostgres({ major = 16 } = {}) {
-  if (![16, 18].includes(major)) throw new Error("Supported isolated PostgreSQL majors: 16, 18");
+  if (![16, 17, 18].includes(major)) throw new Error("Supported isolated PostgreSQL majors: 16, 17, 18");
   const PACKAGE = major === 16
     ? join(TOOLS, "node_modules", "kapso-postgres-16")
+    : major === 17 ? join(TOOLS, "postgresql-17.11", "pgsql")
     : join(TOOLS, "node_modules", "@embedded-postgres", "windows-x64");
   if (process.platform !== "win32" || process.arch !== "x64") {
     throw new Error("This portable runtime uses the installed Windows x64 PostgreSQL package");
   }
-  const manifest = JSON.parse(readFileSync(join(PACKAGE, "package.json"), "utf8"));
+  // Official EDB archive, linked by postgresql.org/download/windows; no service.
+  const manifest = major === 17 ? { version: "17.11 EDB official binaries" }
+    : JSON.parse(readFileSync(join(PACKAGE, "package.json"), "utf8"));
   const [{ initdb, postgres, pg_ctl }, pgModule] = await Promise.all([
-    import(pathToFileURL(join(PACKAGE, "dist", "index.js")).href),
+    major === 17 ? Promise.resolve(Object.fromEntries(
+      ["initdb", "postgres", "pg_ctl"].map(name => [name, join(PACKAGE, "bin", name+".exe")]),
+    )) : import(pathToFileURL(join(PACKAGE, "dist", "index.js")).href),
     import(pathToFileURL(join(TOOLS, "node_modules", "pg", "esm", "index.mjs")).href),
   ]);
   const Client = pgModule.Client ?? pgModule.default?.Client;
@@ -88,7 +93,7 @@ export async function startLocalPostgres({ major = 16 } = {}) {
   }
   // The inspected package postinstall only recreates these local symlinks.
   // This Windows package ships an empty list, so no install script is needed.
-  const links = JSON.parse(readFileSync(join(PACKAGE, "native", "pg-symlinks.json"), "utf8"));
+  const links = major === 17 ? [] : JSON.parse(readFileSync(join(PACKAGE, "native", "pg-symlinks.json"), "utf8"));
   if (!Array.isArray(links) || links.length) {
     throw new Error("Package symlink manifest changed; inspect it before hydrating links");
   }
