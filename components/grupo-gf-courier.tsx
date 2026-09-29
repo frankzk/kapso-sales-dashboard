@@ -315,14 +315,14 @@ function CourierTab({
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "relative flex min-h-12 min-w-0 items-center justify-center gap-1.5 px-1 py-2 text-[13px] font-semibold transition-colors lg:px-0 lg:text-sm",
+        "relative flex min-h-12 min-w-0 items-center justify-center gap-1 px-1 py-2 text-[13px] font-semibold sm:gap-1.5 transition-colors lg:px-0 lg:text-sm",
         active ? "text-brand-700" : "text-ink-500 hover:text-ink-900",
       )}
     >
       <span className={cn("truncate", shortLabel ? "hidden lg:inline" : "")}>{label}</span>{shortLabel && <span className="truncate lg:hidden">{shortLabel}</span>}
-      {showCount && (
-        <span className="hidden sm:inline-flex"><Badge tone={active ? "brand" : "neutral"} className="tabular-nums">{count}</Badge></span>
-      )}
+      {/* En el teléfono la cantidad va como texto: la chapa cortaba «Despacho». */}
+      {showCount && active && <span className="tabular-nums sm:hidden">{count}</span>}
+      {showCount && <span className="hidden sm:inline-flex"><Badge tone={active ? "brand" : "neutral"} className="tabular-nums">{count}</Badge></span>}
       {active && <span className="absolute inset-x-1 bottom-[-1px] h-0.5 bg-brand-600 lg:inset-x-0" />}
     </button>
   );

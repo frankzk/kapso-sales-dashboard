@@ -155,6 +155,7 @@ export function DispatchDayBoard(props: Props) {
     creado: useRef<HTMLButtonElement>(null),
   };
   const [blockedOpen, setBlockedOpen] = useState(false);
+  const [declinedOpen, setDeclinedOpen] = useState(false);
   // Filtro rápido de las cajas (Todos · Por armar · Listos para cotejo · Sin
   // confirmar): compartido por todas las cajas de la pestaña.
   const [boxFilter, setBoxFilter] = useState<BoxItemFilter>("todos");
@@ -339,6 +340,9 @@ export function DispatchDayBoard(props: Props) {
   const tracking = filters.stages.length > 0;
   const activeFilters = activeFilterCount(filters);
   const visible = filtered.slice(0, limit);
+  // Un «No entregado» que sigue en una caja se lista para recibirlo en oficina,
+  // pero no es «por asignar»: se cuenta aparte.
+  const returnableCount = filtered.filter((q) => !tracking && isReturnable(q)).length;
   const visibleAssignable = visible.filter((q) => q.assignable || isReturnable(q));
   const selectedAssignable = allRows.filter((q) => q.assignable && selected.has(q.orderId)).map((q) => q.orderId);
   const selectedReturnable = allRows.filter((q) => isReturnable(q) && selected.has(q.orderId)).map((q) => q.orderId);
@@ -517,6 +521,9 @@ export function DispatchDayBoard(props: Props) {
         <div role="group" aria-label="Excepciones del día" className="flex flex-wrap items-center gap-2 lg:ml-auto">
           <AttentionPill icon={IconRepeat} label="Por reprogramar" count={queueTiles.por_reprogramar} hint={QUEUE_TILE_LABEL.por_reprogramar.hint} active={queueTileActive(filters, "por_reprogramar") && method === "lista"} onClick={() => tapQueueTile("por_reprogramar")} />
           <AttentionPill icon={IconUndo} label="Devoluciones" count={pendingReturns.length} hint="No entregados que el motorizado tiene que traer de vuelta, de cualquier fecha. Toca para escanear y confirmar que llegaron a la oficina." active={method === "devoluciones"} onClick={() => setMethod((m) => (m === "devoluciones" ? "qr" : "devoluciones"))} />
+          {declined.length > 0 && (
+            <AttentionPill icon={IconPackage} label="No recogidos" count={declined.length} hint="Paquetes que el motorizado no recogió de su caja: vuelven a «por asignar». Toca para ver cuáles." active={declinedOpen} onClick={() => setDeclinedOpen((v) => !v)} />
+          )}
           <AttentionPill icon={IconAlert} label="Sin condiciones" count={props.blocked.length} hint="Pedidos de Lima que no entran en la cola: tarifa faltante, distrito inválido, servicio pausado o sin salida armable. Abre la lista con el motivo de cada uno." active={blockedOpen} onClick={() => setBlockedOpen((v) => !v)} />
         </div>
       </div>
@@ -524,8 +531,8 @@ export function DispatchDayBoard(props: Props) {
       {/* Apartados de la cola como tarjetas de estado: cada una es un filtro con
           su cantidad y la elegida lleva el borde azul. «Nunca salieron» es el
           apartado a dejar en cero, como «Sin llamar» en Por confirmar. */}
-      <div role="group" aria-label="Apartados de la cola" className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-1 pt-0.5 [scrollbar-width:thin] lg:mx-0 lg:grid lg:grid-cols-6 lg:overflow-visible lg:p-0">
-        <StatusCard label="Por asignar" value={cards.segmentTotal} hint={QUEUE_TILE_LABEL.por_asignar.hint} active={method === "lista" && !tracking && filters.segment === null} onClick={() => tapQueueTile("por_asignar")} />
+      <div role="group" aria-label="Apartados de la cola" className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        <StatusCard label="Por asignar" value={QUEUE_SEGMENTS.reduce((sum, segment) => sum + cards.segment[segment], 0)} hint={QUEUE_TILE_LABEL.por_asignar.hint} active={method === "lista" && !tracking && filters.segment === null} onClick={() => tapQueueTile("por_asignar")} />
         {QUEUE_SEGMENTS.map((segment) => (
           <StatusCard key={segment} label={QUEUE_SEGMENT_LABEL[segment].label} value={cards.segment[segment]} hint={QUEUE_SEGMENT_LABEL[segment].hint} active={method === "lista" && filters.segment === segment} onClick={() => tapSegment(segment)} />
         ))}
@@ -551,21 +558,19 @@ export function DispatchDayBoard(props: Props) {
         </Sheet>
       )}
 
-      {declined.length > 0 && (
-        <Banner tone="warn">
-          <details>
-            <summary className="flex cursor-pointer list-none items-center gap-1.5 font-semibold text-warn-fg [&::-webkit-details-marker]:hidden">{declined.length} {declined.length === 1 ? "paquete no recogido" : "paquetes no recogidos"} · vuelven a «por asignar»<IconChevronDown className="size-4" /></summary>
-            <ul className="mt-2 space-y-1">
-              {declined.map((d) => (
-                <li key={`${d.manifestId}:${d.shipmentId}`} className="flex flex-wrap items-center gap-x-2">
-                  <span className="font-semibold text-ink-900">{d.orderName ?? "Pedido"}</span>
-                  <span className="text-ink-500">{d.customerName} · {d.district}</span>
-                  <span>· no recogido por <b className="font-semibold">{d.riderName}</b>: {d.reason}</span>
-                </li>
-              ))}
-            </ul>
-          </details>
-        </Banner>
+      {declinedOpen && declined.length > 0 && (
+        <Sheet look="ops" title={`${declined.length} ${declined.length === 1 ? "paquete no recogido" : "paquetes no recogidos"}`} onClose={() => setDeclinedOpen(false)} wide>
+          <p className="text-[13px] text-ink-500">El motorizado no los recogió de su caja: vuelven a «por asignar».</p>
+          <ul className="mt-3 divide-y divide-line border-t border-line text-sm">
+            {declined.map((d) => (
+              <li key={`${d.manifestId}:${d.shipmentId}`} className="flex flex-wrap items-center gap-x-2 gap-y-1 py-2">
+                <span className="font-semibold text-ink-900">{d.orderName ?? "Pedido"}</span>
+                <span className="text-[13px] text-ink-500">{d.customerName} · {d.district}</span>
+                <Badge tone="warn">{d.riderName}: {d.reason}</Badge>
+              </li>
+            ))}
+          </ul>
+        </Sheet>
       )}
 
       {/* ── La tarea: quién sale y cómo se le asigna. Una sola tarjeta. ── */}
@@ -718,7 +723,8 @@ export function DispatchDayBoard(props: Props) {
                 <OpsButton variant="ghost" size="sm" onClick={() => patchFilters({ ...EMPTY_QUEUE_FILTERS, query: filters.query, segment: filters.segment })}>Quitar filtros</OpsButton>
               )}
               <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto">
-                <b className="font-semibold text-ink-900">{filtered.length.toLocaleString("es-PE")}</b> {tracking ? "pedidos en esa etapa" : filters.segment ? QUEUE_SEGMENT_LABEL[filters.segment].label.toLocaleLowerCase("es") : "en cola"}
+                <b className="font-semibold text-ink-900">{(filtered.length - returnableCount).toLocaleString("es-PE")}</b> {tracking ? "pedidos en esa etapa" : filters.segment ? QUEUE_SEGMENT_LABEL[filters.segment].label.toLocaleLowerCase("es") : "por asignar"}
+                {returnableCount > 0 && <> · <b className="font-semibold text-ink-900">{returnableCount.toLocaleString("es-PE")}</b> por recibir en oficina</>}
               </p>
             </div>
 
@@ -910,8 +916,8 @@ export function DispatchDayBoard(props: Props) {
                   <col className="w-[8.5rem]" />
                   <col className="w-[6.5rem]" />
                   <col />
-                  <col className="w-[8.5rem]" />
-                  <col className="w-[15rem]" />
+                  <col className="w-[10.5rem]" />
+                  <col className="w-[10.5rem]" />
                   <col className="w-[4.5rem]" />
                   <col className="w-[4.5rem]" />
                   <col className="w-[6rem]" />
@@ -1190,7 +1196,7 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
     : [];
   const initials = box.riderName.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toLocaleUpperCase("es")).join("");
   const step = (done: number, label: string) => (
-    <Badge tone={box.assigned && done >= box.assigned ? "ok" : done ? "warn" : "neutral"} className="tabular-nums">{done}/{box.assigned} {label}</Badge>
+    <Badge tone={box.assigned && done >= box.assigned ? "ok" : "neutral"} className="tabular-nums">{done}/{box.assigned} {label}</Badge>
   );
   return (
     <li>
@@ -1272,7 +1278,7 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
                           <p className="truncate"><span className="font-semibold text-ink-900">{s?.order_name ?? code}</span> <span className="text-[13px] text-ink-500">{s?.customer_name} · {s?.district}</span></p>
                           <p className="mt-1 flex flex-wrap items-center gap-1.5">
                             <StageChip stage={packageStage(item)} confirmMode={confirmMode} />
-                            {confirmMode && m.state === "in_custody" && !item.pickup_checked_at && !item.pickup_declined_at && <span className="text-xs font-medium text-warn-fg">por confirmar</span>}
+                            {confirmMode && m.state === "in_custody" && !item.pickup_checked_at && !item.pickup_declined_at && <Badge tone="warn">por confirmar</Badge>}
                             {s?.order_id && <OrderLink orderId={s.order_id} section="historial" className="text-xs font-medium text-brand-700 hover:underline">Ver actividad</OrderLink>}
                           </p>
                         </div>
@@ -1292,7 +1298,7 @@ function BoxRow({ box, cash, riders, orgId, open, onToggle, canManage, onChanged
                 </ul>
                 {removed.length > 0 && (
                   <details className="border-t border-line px-3 py-2 text-[13px] text-ink-600">
-                    <summary className="cursor-pointer font-medium">Retirados o no recogidos ({removed.length})</summary>
+                    <summary className="flex cursor-pointer list-none items-center gap-1.5 font-medium [&::-webkit-details-marker]:hidden">Retirados o no recogidos ({removed.length})<IconChevronDown className="size-4" /></summary>
                     <ul className="mt-1 space-y-1 text-ink-500">
                       {removed.map((i) => <li key={i.id}><span className="font-medium text-ink-700">{i.shipment?.order_name ?? i.shipment_id}</span> · {i.removal_reason}</li>)}
                     </ul>
@@ -1381,7 +1387,7 @@ function scanRowPresentation(l: ScanAssignLine, riderName: string): { text: stri
 function ProgramChip({ day, today, reason }: { day: string; today: string; reason: string | null }) {
   const overdue = day < today;
   const text = day === today ? "programado hoy" : `programado ${programDayLabel(day)}${overdue ? " · vencido" : ""}`;
-  return <Badge tone={overdue ? "warn" : "info"} title={reason ? `Motivo: ${reason}` : undefined}><IconCalendar className="size-3" />{text}</Badge>;
+  return <Badge wrap tone={overdue ? "warn" : "info"} title={reason ? `Motivo: ${reason}` : undefined}><IconCalendar className="size-3 shrink-0" />{text}</Badge>;
 }
 
 /** Chapa del estado del paquete en la caja: por armar · armado · cotejado · confirmado · no lo llevó. */

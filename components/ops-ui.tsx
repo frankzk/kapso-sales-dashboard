@@ -66,9 +66,9 @@ const BADGE_TONE: Record<BadgeTone, string> = {
 };
 
 /** Chapa de estado: 20 px de alto, 4 px de radio, texto de 12 px. */
-export function Badge({ tone = "neutral", title, className, children }: { tone?: BadgeTone; title?: string; className?: string; children: ReactNode }) {
+export function Badge({ tone = "neutral", title, className, wrap = false, children }: { tone?: BadgeTone; title?: string; className?: string; /** Texto largo: parte en líneas en vez de cortarse. */ wrap?: boolean; children: ReactNode }) {
   return (
-    <span title={title} className={cn("inline-flex h-5 max-w-full items-center gap-1 truncate whitespace-nowrap rounded px-1.5 text-xs font-medium leading-none", BADGE_TONE[tone], className)}>
+    <span title={title} className={cn("inline-flex max-w-full items-center gap-1 rounded px-1.5 text-xs font-medium", wrap ? "min-h-5 py-0.5 leading-tight" : "h-5 truncate whitespace-nowrap leading-none", BADGE_TONE[tone], className)}>
       {children}
     </span>
   );
@@ -150,7 +150,7 @@ export function StatusCard({ label, value, active, onClick, hint }: { label: str
       aria-pressed={active}
       title={hint}
       className={cn(
-        "flex min-w-[8.75rem] shrink-0 snap-start flex-col items-start gap-0.5 rounded-lg bg-white px-3.5 py-2.5 text-left transition-shadow lg:min-w-0",
+        "flex min-w-0 flex-col items-start gap-0.5 rounded-lg bg-white px-3.5 py-2.5 text-left transition-shadow",
         active ? "shadow-control ring-2 ring-inset ring-brand-600" : "shadow-control ring-1 ring-inset ring-line hover:ring-line-strong",
       )}
     >
