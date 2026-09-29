@@ -411,4 +411,6 @@
 \ir migrations/0203_drop_swayp_inventory_sessions.sql
 \echo 'Applying 0204_master_lectura_liviana.sql'
 \ir migrations/0204_master_lectura_liviana.sql
+\echo 'Applying 0205_peru_districts_departments.sql'
+\ir migrations/0205_peru_districts_departments.sql
 \echo 'Done.'
