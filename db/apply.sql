@@ -399,4 +399,6 @@
 \ir migrations/0197_rejection_photo_exemption.sql
 \echo 'Applying 0198_flow_collection_account.sql'
 \ir migrations/0198_flow_collection_account.sql
+\echo 'Applying 0199_gf_dispatch_programs.sql'
+\ir migrations/0199_gf_dispatch_programs.sql
 \echo 'Done.'

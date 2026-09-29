@@ -5745,14 +5745,28 @@ para las tiendas de Grupo GF administradas dentro de Kapta.
 **Prioridad dentro de Pedidos disponibles.** La bandeja separa dos colas sin
 inventar un estado operativo nuevo:
 
-- **Prioridad urgente · nunca salieron:** el pedido no tiene ninguna salida con
-  `shipments.dispatched_at`. Crear o anular un rótulo sin transferir físicamente
-  el paquete no lo saca de este grupo. Esta es la vista inicial y se ordena del
-  pedido más reciente al más antiguo.
-- **Con salida previa:** existe al menos una salida histórica con
-  `shipments.dispatched_at`, aunque el pedido haya regresado a Preparación. Se
+- **Prioridad urgente · nunca salieron:** el pedido nunca salió a reparto.
+  Crear o anular un rótulo sin transferir físicamente el paquete no lo saca de
+  este grupo. Esta es la vista inicial y se ordena del pedido más reciente al
+  más antiguo.
+- **Con salida previa («Ya salieron»):** el pedido salió a reparto al menos una
+  vez, aunque haya regresado a Preparación o esté en Por reprogramar Lima. Se
   trata como reprogramación o recuperación y conserva toda la evidencia de la
   salida anterior.
+
+**Qué es «salió a reparto» (29-09-2026).** Hasta esta fecha se leía solo
+`shipments.dispatched_at`, que Grupo GF no llena y `gf_return_to_office`
+vuelve a null: de 1.863 pedidos en cola, 0 figuraban con salida previa. Ahora
+lo decide `gf_order_departures` (0199), para cualquier courier: en
+`order_events`, «Lo llevo» (`pickup_checked`), el reporte en la puerta
+(`stop_reported`), el paquete recibido de vuelta en oficina
+(`returned_to_office`) o entregado sin «Lo llevo»
+(`delivered_unconfirmed_pickup`); una parada reportada de las rutas anteriores;
+o una salida de otro courier con `dispatched_at`. **`custody_transferred` no
+cuenta**: en el modo «confirmar» la custodia pasa al asignar, antes de que el
+paquete deje el almacén, y un paquete retirado de la caja sin salir no es un
+reintento. La lista vive en `DEPARTURE_EVENT_KINDS` (`lib/dispatch-day.ts`) y
+en la función; se cambian juntas.
 
 La separación solo prioriza la gestión. No cambia la elegibilidad, la tarifa ni
 las comprobaciones idempotentes de `Tomar pedidos`.
@@ -5876,6 +5890,29 @@ el último escaneo de «Recibir mi caja» fallaba con `delivery_stop_shipment_un
 - Cancelar una solicitud no tiene costo, incluso si el motorizado ya salió. El
   paquete puede retornar al almacén al día siguiente y la cancelación logística
   no cancela por sí sola el pedido Shopify.
+
+**Programar la salida sin tomar el pedido (29-09-2026).** En Despacho del día,
+el calendario de «Desde la lista» **solo guarda el día** en que deben salir los
+pedidos marcados, con actor y motivo obligatorio (`gf_dispatch_programs`,
+0199; evento `dispatch_programmed`). No toma el pedido, no reserva tarifa ni
+crea salida: sigue disponible. Uno ya tomado mueve también su
+`logistics_requests.scheduled_for`, para que las dos fechas digan lo mismo.
+Uno que ya está en la caja de un motorizado no se programa: primero se quita
+de la caja. La fecha no puede ser anterior a hoy. «Quitar la fecha» devuelve
+el pedido a su apartado de siempre (`dispatch_program_cleared`).
+
+Ese día el pedido aparece en **«Programados hoy»**, el primer apartado de la
+cola (§29.13); si el día pasa sin que salga, sigue ahí con la chapa «vencido».
+La programación se borra cuando el pedido entra en la caja de un motorizado.
+
+**Asignar un programado a la caja de otro día avisa y pide confirmar.** Desde
+la lista, una franja ámbar sobre la tabla dice cuáles son y para cuándo
+estaban, con «Asignar igual», «Asignar solo los otros» y «Cancelar». Por QR,
+la línea del escaneo dice «Programado vie 02/10 → Asignar igual» y no toma
+nada hasta que se confirma; igual en «Agregar pedidos» de la caja. El servidor
+repite la comprobación (`programNeedsConfirm`): un programado vencido no pide
+confirmar, porque que salga es justo lo que falta. Lo confirmado queda como
+`dispatch_program_overridden`, con el día programado y el de la caja.
 
 ### 29.7 Resultado y evidencia
 
@@ -6364,6 +6401,39 @@ cotejado / confirmado / no lo llevó) y un filtro rápido Todos · Por armar ·
 Listos para cotejo · Sin confirmar; «Sin ruta» es «tomado · sin caja» en la
 lista. Nada de esto cambia acciones de servidor.
 
+**Apartados de la cola: nunca salieron, ya salieron y programados
+(29-09-2026).** «Cómo sé cuáles pedidos no han salido ni una sola vez, versus
+los que han salido alguna vez; dar prioridad siempre a los que nunca han
+salido.» Encima de la tabla de «Desde la lista», una fila **Apartados** como
+las subetapas del Master: «Todos · N» y un chip con su cantidad por apartado.
+Cada pedido asignable cae en uno solo (`queueSegment`), y así se ordena la
+lista (`sortQueue`):
+
+1. **Programados hoy** — con salida programada para hoy o para un día que ya
+   pasó (chapa «programado hoy» o, en ámbar, «programado lun 28/09 ·
+   vencido»). Van primero: es la fecha que se le dio a la clienta.
+2. **Nunca salieron** — nunca salieron a reparto (§29.2) y se crearon en los
+   últimos 30 días. Es el apartado a dejar en cero, como «Sin llamar» en Por
+   confirmar; del más reciente al más antiguo.
+3. **Ya salieron** — salieron al menos una vez y volvieron (chapa «ya salió»,
+   que reemplaza a «salida previa»): reprogramaciones o recuperaciones.
+4. **+30 días** — nunca salieron y se crearon hace más de 30 días
+   (`STALE_AFTER_DAYS`): se revisan después de los recientes. Un pedido sin
+   fecha de creación se queda en «Nunca salieron».
+5. **Programados después** — con salida programada para otro día: no cuentan
+   para hoy y ese día pasan solos a «Programados hoy».
+
+La programación manda sobre todo lo demás. Un apartado solo reúne pedidos que
+se pueden asignar; con una etapa elegida (seguimiento) la fila no se muestra y
+elegir etapa apaga el apartado. El apartado no suma en «Filtros · N» ni lo
+borra «Quitar filtros»: tiene su propia fila a la vista. Las tiles **«Nunca
+salieron»** y **«Programados hoy»**, junto a «Por asignar», encienden su
+apartado; reemplazan a la tile «Con salida previa», que contaba 0 siempre
+porque leía `shipments.dispatched_at`. El filtro «Solo con salida previa» del
+picker se retira: es el apartado «Ya salieron». Lógica pura en
+`lib/dispatch-day.ts`, probada en `test/dispatch-day.test.ts` y
+`test/despacho-apartados-programados.test.ts`.
+
 **El gesto único.** Escanear o fotografiar es un solo componente
 (`ScanAction`) y el contexto lo fija la pantalla, nunca el usuario:
 `supervisor_asignacion` → tomar + asignar (sin `office_checked` desde el 22-09-2026);
@@ -6454,10 +6524,10 @@ oficina»** (`gf_return_to_office`, 0188) lo saca de la caja con rastro
 «por asignar». La parada reportada se conserva: es la evidencia del intento
 y cuenta en la liquidación del día. El pedido sigue en «Por reprogramar
 Lima» hasta que se asigna a otra caja. Junto a «Asignar», el botón de
-calendario **reprograma** la fecha pactada de salida de los marcados
-(`rescheduleGroupGfCourierOrders`, evento `logistics_request_rescheduled`):
-un tomado mueve su solicitud, uno disponible se toma con esa fecha, y uno que
-ya está en la caja de un motorizado no se mueve. La tarjeta **«Por
+calendario **programa** la fecha de salida de los marcados
+(`rescheduleGroupGfCourierOrders`): desde el 29-09-2026 solo guarda el día,
+con motivo, sin tomar el pedido (§29.6); hasta entonces un disponible se tomaba
+con esa fecha. Uno que ya está en la caja de un motorizado no se mueve. La tarjeta **«Por
 reprogramar»**, antes de «Tomados sin caja», cuenta los pedidos de Grupo GF en
 «En curso · Por reprogramar Lima» (en una caja o ya en oficina) y al tocarla
 aplica ese filtro de etapa y subetapa. La versión del resolver sube a
