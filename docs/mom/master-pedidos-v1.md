@@ -2952,6 +2952,23 @@ misma puerta que el webhook (`applySwaypState`, `lib/swayp-ingest.ts`). Reglas:
 - En pruebas el endpoint reventaba con 500 en guías en novedad; si pasa en
   producción, el reporte lo cuenta con su motivo y la guía se reintenta en la
   pasada siguiente.
+- **La API cierra una devolución como 10 «Cancelada»** (confirmado en la
+  primera pasada, 29-09-2026). Su documentación dice que 10 solo sale de 1
+  (Generada) y llama «Cancelación» al 9, pero las 15 guías que el tracking
+  enseña en 9 «Devolución confirmada» —con Reparto, Novedad y Devolución en su
+  historial— llegaron como 10. Kapta las tomó por canceladas antes de salir, y
+  siete pedidos sin anular cayeron en «Finalizado · Anulado cerrado». Regla
+  (`normalizeSwaypIncoming`): **un 10 sobre una guía que ya salió** (estado
+  previo 4–9 o 12, salida registrada o custodia `courier`/`retorno`) **es una
+  Devolución confirmada (9)**; sobre una que nunca salió, una cancelación de
+  verdad. Como el barrido pasa cada media hora, una devolución se ve en 8 antes
+  de cerrarse. Las 15 se corrigieron a 9 con sus fechas del tracking.
+- La respuesta tampoco trae el historial como `notas`, así que las fechas de
+  salida del atraso quedaron con la hora del barrido. El historial se busca
+  también bajo otros nombres probables, y el log del barrido deja la **forma**
+  de la respuesta —claves, `estado|idEstado` crudos y dónde vino el historial,
+  sin datos de clientes— para fijar la lectura con lo que la API manda de
+  verdad.
 
 ### 11.3 Quién emite el número de guía al reprogramar
 

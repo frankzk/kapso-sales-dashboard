@@ -24,11 +24,13 @@ import {
   readSwaypGuide,
   SwaypError,
   swaypOptsFromEnv,
+  swaypResponseShape,
   SWAYP_STATES,
   type SwaypClientOpts,
 } from "@/lib/swayp";
 import {
   applySwaypState,
+  normalizeSwaypIncoming,
   SWAYP_SHIPMENT_COLUMNS,
   swaypStatePatch,
   type SwaypShipmentRow,
@@ -77,6 +79,15 @@ export interface SwaypStatusReport {
   /** Por qué paró antes de terminar, si paró. */
   detenido: null | "limite" | "credencial" | "tiempo";
   cambios: SwaypStatusChange[];
+  /**
+   * Cómo vino la respuesta, sin datos: `estado|idEstado` crudos con su cuenta y
+   * las claves de primer nivel. La forma de `GET /v2/guias` no está
+   * documentada; así se aprende (una Devolución confirmada llega como 10).
+   */
+  crudos: Record<string, number>;
+  forma: string[];
+  /** Bajo qué clave vino el historial, si vino. */
+  historial: string | null;
 }
 
 /**
@@ -150,7 +161,11 @@ export async function sweepSwaypStatus(
     fallos: [],
     detenido: null,
     cambios: [],
+    crudos: {},
+    forma: [],
+    historial: null,
   };
+  const keys = new Set<string>();
   const changedOrders = new Set<string>();
 
   let next = 0;
@@ -168,13 +183,24 @@ export async function sweepSwaypStatus(
           report.noEncontradas += 1;
           continue;
         }
+        const shape = swaypResponseShape(body);
+        if (Object.keys(report.crudos).length < 20 || report.crudos[shape.estado]) {
+          report.crudos[shape.estado] = (report.crudos[shape.estado] ?? 0) + 1;
+        }
+        for (const k of shape.keys) if (keys.size < 60) keys.add(k);
+        report.historial ??= shape.historial;
         const reading = readSwaypGuide(body);
         if (reading.state == null) {
           const key = reading.label ?? "(sin estado)";
           report.desconocidos[key] = (report.desconocidos[key] ?? 0) + 1;
           continue;
         }
-        const incoming = { state: reading.state, departedAt: reading.departedAt, changedAt: reading.changedAt };
+        // Un 10 sobre una guía que ya salió es el final de su devolución (9).
+        const incoming = normalizeSwaypIncoming(row, {
+          state: reading.state,
+          departedAt: reading.departedAt,
+          changedAt: reading.changedAt,
+        });
         const at = now();
         const result = dry
           ? swaypStatePatch(row, incoming, at.toISOString())
@@ -188,7 +214,7 @@ export async function sweepSwaypStatus(
           guia: row.swayp_guide,
           pedido: row.order_name,
           de: `${row.delivery_status} · ${stateText(row.swayp_state)}`,
-          a: `${result.deliveryStatus} · ${stateText(reading.state)}`,
+          a: `${result.deliveryStatus} · ${stateText(incoming.state)}`,
         });
         if (row.order_id) changedOrders.add(row.order_id);
       } catch (err) {
@@ -202,6 +228,7 @@ export async function sweepSwaypStatus(
     }
   }
   await Promise.all(Array.from({ length: Math.min(SWEEP_CONCURRENCY, candidates.length) }, worker));
+  report.forma = [...keys].sort();
 
   // El Master de una vez al final: sin esto, un pedido que Swayp devolvió sigue
   // «En tránsito» hasta la puerta de guías movidas del cron.

@@ -33,13 +33,16 @@ export async function GET(req: NextRequest) {
   }
   try {
     const report = await sweepSwaypStatus(createAdminSupabase());
-    // Solo conteos y motivos: ni guías ni pedidos en el log.
+    // Solo conteos, motivos y forma: ni guías, ni pedidos, ni datos de clientes.
     console.info(
       `[swayp-status] leídas ${report.scanned} · cambiaron ${report.aplicados} · sin cambio ${report.sinCambio}` +
         ` · no encontradas ${report.noEncontradas} · errores ${report.errores}` +
         (report.detenido ? ` · detenido: ${report.detenido}` : "") +
         (Object.keys(report.desconocidos).length ? ` · desconocidos ${JSON.stringify(report.desconocidos)}` : "") +
-        (report.fallos.length ? ` · fallos ${JSON.stringify(report.fallos)}` : ""),
+        (report.fallos.length ? ` · fallos ${JSON.stringify(report.fallos)}` : "") +
+        // La forma de la respuesta (claves y estados crudos, sin datos): la API
+        // no está documentada y así se ve qué manda.
+        ` · crudos ${JSON.stringify(report.crudos)} · historial ${report.historial ?? "-"} · forma ${JSON.stringify(report.forma)}`,
     );
     return NextResponse.json({ ok: true, ...report });
   } catch (err) {
