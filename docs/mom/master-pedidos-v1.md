@@ -2954,10 +2954,17 @@ la productividad de quien la creó; Repro Provincia ya contaba como
 cualquier `reroute` como reprogramación (`lib/guide-dates.ts`), así que toda
 guía directa nacía con fecha de reprogramación: en Lima caía en «En curso · Por
 reprogramar Lima» sin un solo intento fallido (#KP135009, 38 pedidos) y en
-provincia en «Gestión Reproprovincia» (32). Una gestión sin resultado no es
-una reprogramación: la guía directa queda en **En curso · En tránsito**. Las
-reprogramaciones de verdad siempre dejan estado —Aliclik `en_ruta`, el
-reenvío Swayp `en_ruta` en la hija y `transferido` en la madre— y no cambian.
+provincia en «Gestión Reproprovincia» (32). La gestión con la que nace la guía
+directa no es una reprogramación: la guía queda en **En curso · En tránsito**.
+Las reprogramaciones de verdad dejan estado —Aliclik `en_ruta`, el reenvío
+Swayp `en_ruta` en la hija y `transferido` en la madre— y no cambian.
+
+**Solo en la guía directa (v1.20, 29-09-2026).** La v1.19 ignoraba toda gestión
+`reroute` sin estado, y en julio el reenvío por Fenix dejaba esa misma fila,
+sin estado, en la guía **madre** («Guía Fenix creada: …», 149 guías): ahí sí
+marca la reprogramación. Cinco pedidos de julio (#KP117144) cayeron en
+«Preparación · Por armar» hasta que la excepción se limitó a las guías con
+`created_via = fenix_directo`.
 
 **El destino lo pone la GUÍA, no el pedido.** Al reprogramar, la salida ya
 existe y su destino es mejor dato que el del pedido por tres razones: es el que

@@ -6,17 +6,20 @@
 // guía entró en «en_ruta» y el cierre la ÚLTIMA vez que entró en un estado
 // terminal. Cuando la columna explícita existe, manda ella.
 //
-// UNA GESTIÓN SIN RESULTADO NO ES UNA REPROGRAMACIÓN (29-09-2026). La guía Swayp
-// directa deja una fila `reroute` con `new_status` nulo para que cuente en la
-// productividad de quien la creó —lo dice su comentario: «cuenta como gestión
-// sin inflar reprogramadas»—, y Repro Provincia ya contaba como reprogramada
-// solo la que resulta `en_ruta` (`aggregateReproDay`). Aquí se leía cualquier
-// `reroute` como reprogramación, así que TODA guía directa nacía con fecha de
+// LA GESTIÓN CON LA QUE NACE UNA GUÍA DIRECTA NO ES UNA REPROGRAMACIÓN
+// (29-09-2026, v1.20). La guía Swayp directa deja una fila `reroute` con
+// `new_status` nulo para que cuente en la productividad de quien la creó —lo dice
+// su comentario: «cuenta como gestión sin inflar reprogramadas»—. Aquí se leía
+// como reprogramación de ESA guía, así que toda guía directa nacía con fecha de
 // reprogramación y el Master la mandaba a «Por reprogramar Lima» sin un solo
 // intento fallido. Medido: 38 pedidos de Lima (#KP135009) y 32 de provincia en
-// «Gestión reproprovincia». Las reprogramaciones reales siempre dejan estado:
-// Aliclik `en_ruta`, reenvío Swayp `en_ruta` en la hija y `transferido` en la
-// madre.
+// «Gestión reproprovincia».
+//
+// SOLO en la guía directa, y no en cualquier `reroute` sin estado: en julio el
+// reenvío por Fenix dejaba esa misma fila, sin estado, en la guía MADRE («Guía
+// Fenix creada: …», 149 guías), y ahí sí marca la reprogramación. La v1.19 las
+// ignoraba todas y cinco pedidos de julio cayeron en «Preparación · Por armar»
+// (#KP117144). Por eso decide quien llama con `directGuide`.
 //
 // POR QUÉ ESTÁ EN SU PROPIO ARCHIVO. Vivía dentro de `order-master.ts` y solo
 // lo usaba el Master. Cuando Envíos empezó a decidir la recuperación con la
@@ -40,7 +43,11 @@ export interface DerivedGuideDates {
   lastCallAt: string | null;
 }
 
-export function derivedGuideDates(calls: readonly GuideCallLike[]): DerivedGuideDates {
+export function derivedGuideDates(
+  calls: readonly GuideCallLike[],
+  /** La guía es una Swayp directa (`created_via = fenix_directo`): su gestión de alta no reprograma. */
+  opts: { directGuide?: boolean } = {},
+): DerivedGuideDates {
   let dispatched: string | null = null;
   let rescheduled: string | null = null;
   let closed: string | null = null;
@@ -51,7 +58,8 @@ export function derivedGuideDates(calls: readonly GuideCallLike[]): DerivedGuide
     if (c.new_status === "en_ruta" && (!dispatched || c.occurred_at < dispatched)) {
       dispatched = c.occurred_at;
     }
-    if (c.kind === "reroute" && c.new_status && (!rescheduled || c.occurred_at > rescheduled)) {
+    const altaDeGuiaDirecta = opts.directGuide === true && !c.new_status;
+    if (c.kind === "reroute" && !altaDeGuiaDirecta && (!rescheduled || c.occurred_at > rescheduled)) {
       rescheduled = c.occurred_at;
     }
     if (

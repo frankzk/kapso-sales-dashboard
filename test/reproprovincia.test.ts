@@ -329,8 +329,9 @@ describe("y la macroetapa la aplica IGUAL", () => {
     // no prueba comportamiento, avisa de que hay que subir la versión.
     // v1.19 (29-09-2026): la guía Swayp directa no es reprogramación, Tanders
     // que no entrega abre la recuperación (65 días) y una salida devuelta no
-    // cierra el pedido si otra sigue viva.
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.19");
+    // cierra el pedido si otra sigue viva. v1.20: lo de la guía directa, solo
+    // en la guía directa (las madres de julio sí reprogramaban).
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.20");
   });
 });
 

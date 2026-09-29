@@ -124,26 +124,40 @@ function resolverTodo(guides: GuideSnapshot[], o = pedido(), macroOver: Partial<
 }
 
 describe("1. la guía Swayp directa no es una reprogramación (#KP135009)", () => {
-  it("una gestión `reroute` SIN resultado no fija fecha de reprogramación", () => {
+  it("la gestión con la que nace la guía directa no fija fecha de reprogramación", () => {
     // La que deja la guía directa: cuenta como gestión, no como reprogramada.
-    const d = derivedGuideDates([
-      { kind: "reroute", new_status: null, occurred_at: hace(1) },
-    ]);
+    const d = derivedGuideDates([{ kind: "reroute", new_status: null, occurred_at: hace(1) }], { directGuide: true });
     expect(d.rescheduled_at).toBeNull();
     // Pero sí es un movimiento de la guía.
     expect(d.lastCallAt).toBe(hace(1));
   });
 
-  it("las reprogramaciones de verdad siempre dejan estado, y siguen contando", () => {
-    expect(derivedGuideDates([{ kind: "reroute", new_status: "en_ruta", occurred_at: hace(2) }]).rescheduled_at).toBe(hace(2));
+  it("en una guía MADRE la misma fila sin estado sí reprograma (reenvíos de julio, #KP117144)", () => {
+    // En julio el reenvío por Fenix dejaba el `reroute` sin estado en la madre.
+    // La v1.19 lo ignoraba en todas las guías y cinco pedidos cayeron en
+    // «Preparación · Por armar».
+    expect(derivedGuideDates([{ kind: "reroute", new_status: null, occurred_at: hace(40) }]).rescheduled_at).toBe(hace(40));
+    expect(derivedGuideDates([{ kind: "reroute", new_status: null, occurred_at: hace(40) }], { directGuide: false }).rescheduled_at).toBe(hace(40));
+  });
+
+  it("las reprogramaciones de verdad siempre cuentan, también en una guía directa", () => {
+    expect(derivedGuideDates([{ kind: "reroute", new_status: "en_ruta", occurred_at: hace(2) }], { directGuide: true }).rescheduled_at).toBe(hace(2));
     expect(derivedGuideDates([{ kind: "reroute", new_status: "transferido", occurred_at: hace(3) }]).rescheduled_at).toBe(hace(3));
-    // La más reciente con estado manda, aunque después haya una sin resultado.
+    // La más reciente con estado manda, aunque después llegue la de alta.
     expect(
-      derivedGuideDates([
-        { kind: "reroute", new_status: "en_ruta", occurred_at: hace(5) },
-        { kind: "reroute", new_status: null, occurred_at: hace(1) },
-      ]).rescheduled_at,
+      derivedGuideDates(
+        [
+          { kind: "reroute", new_status: "en_ruta", occurred_at: hace(5) },
+          { kind: "reroute", new_status: null, occurred_at: hace(1) },
+        ],
+        { directGuide: true },
+      ).rescheduled_at,
     ).toBe(hace(5));
+  });
+
+  it("el Master decide «guía directa» por su `created_via`", () => {
+    const src = read("lib/order-master.ts");
+    expect(src).toContain("derivedGuideDates(calls, { directGuide: s.created_via === FENIX_DIRECT_CREATED_VIA })");
   });
 
   it("sin fecha de reprogramación, la guía directa en ruta es En curso · En tránsito", () => {
@@ -157,7 +171,7 @@ describe("1. la guía Swayp directa no es una reprogramación (#KP135009)", () =
       assigned_at: hace(12),
       dispatched_at: null,
       out_for_delivery_at: null,
-      rescheduled_at: derivedGuideDates([{ kind: "reroute", new_status: null, occurred_at: hace(2) }]).rescheduled_at,
+      rescheduled_at: derivedGuideDates([{ kind: "reroute", new_status: null, occurred_at: hace(2) }], { directGuide: true }).rescheduled_at,
       returned_at: null,
       pickup_state: null,
       preparation_state: "listo_despacho",
@@ -420,7 +434,7 @@ describe("las piezas en el código", () => {
   });
 
   it("la versión sube y el MOM lo dice", () => {
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.19");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.20");
     const mom = read("docs/mom/master-pedidos-v1.md");
     expect(mom).toContain("#### Lo que Tanders no entrega también es «Por reprogramar Lima» (v1.19, 29-09-2026)");
     expect(mom).toContain("**Crear la guía directa no es reprogramar (v1.19, 29-09-2026).**");

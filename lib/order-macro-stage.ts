@@ -23,6 +23,12 @@ import {
   recoveryWindow,
 } from "@/lib/reproprovincia";
 
+// v1.20 (29-09-2026): corrige la regla 1 de la v1.19. Ignoraba TODA gestión
+// `reroute` sin estado, y en julio el reenvío por Fenix dejaba esa fila en la
+// guía madre: cinco pedidos de julio (#KP117144) cayeron en «Preparación · Por
+// armar». Ahora solo se ignora en la guía Swayp directa, que es donde nace sin
+// reprogramar nada (lib/guide-dates.ts, `directGuide`).
+//
 // v1.19 (29-09-2026): tres reglas que mueven filas que nadie tocó.
 //   1. La guía Swayp directa no es una reprogramación: su gestión `reroute` sin
 //      resultado dejaba fecha de reprogramación y 38 pedidos de Lima salían en
@@ -100,7 +106,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.19" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.20" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

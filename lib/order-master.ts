@@ -33,6 +33,7 @@ import { classifyOrderCoverage, type OrderCoverage } from "@/lib/order-coverage"
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
 import { TANDERS_RECOVERY_DAYS } from "@/lib/reproprovincia";
 import { derivedGuideDates } from "@/lib/guide-dates";
+import { FENIX_DIRECT_CREATED_VIA } from "@/lib/shipment-output";
 import { ttlCache } from "@/lib/ttl-cache";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { paymentGatewayOf, type PaymentGateway } from "@/lib/payment-gateway";
@@ -246,7 +247,7 @@ function text(value: unknown): string | null {
 // cálculo, y tenerlo acá lo dejaba fuera de su alcance.
 
 function toGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): GuideSnapshot {
-  const derived = derivedGuideDates(calls);
+  const derived = derivedGuideDates(calls, { directGuide: s.created_via === FENIX_DIRECT_CREATED_VIA });
   return {
     id: s.id,
     courier: s.courier,
