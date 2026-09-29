@@ -16,6 +16,7 @@ import {
   recordFenixStockMovement,
   searchStockProducts,
   swaypInventoryDryRun,
+  swaypInventorySync,
   upsertFenixStock,
   type DryRunResult,
 } from "@/app/dashboard/envios/actions";
@@ -472,15 +473,14 @@ function ImportarDeSwayp({ onDone }: { onDone: (msg: string | null) => void }) {
 }
 
 /**
- * FASE 1 · Prueba de lectura del inventario por API, SIN escribir nada.
- *
- * Pega un token del panel de Swayp y muestra qué cambiaría en cada ciudad. No
- * guarda el token ni toca la base: sirve para cotejar contra el panel y
- * confirmar que el contrato (reversado) calza antes de automatizar el sync.
- * `idCompany` viene precargado con el de la organización; el RUC y el correo
- * también, para no teclearlos, pero se pueden cambiar.
+ * Sync del inventario de Swayp por API, en dos pasos: «Leer» trae todas las
+ * bodegas y muestra qué cambiaría por ciudad SIN escribir; «Aplicar» vuelve a
+ * leer en el servidor y escribe las ciudades marcadas, por el kardex, igual que
+ * el importador de Excel. El token se pega a mano y no se guarda (dura ~1 h).
+ * Correo, RUC e idCompany vienen precargados con los de la organización.
  */
 function DryRunSwayp() {
+  const router = useRouter();
   const [pending, start] = useTransition();
   const [open, setOpen] = useState(false);
   const [token, setToken] = useState("");
@@ -489,21 +489,71 @@ function DryRunSwayp() {
   const [idCompany, setIdCompany] = useState("IsjvRm8cEqQBFP4r0TxF");
   const [res, setRes] = useState<DryRunResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [marcadas, setMarcadas] = useState<Set<string>>(new Set());
   const [diag, setDiag] = useState<
     { label: string; host: string; method: string; status: number; ok: boolean; body: string }[] | null
   >(null);
 
-  function probar() {
-    if (!token.trim()) return;
+  // Si pegan «Bearer <token>», se le quita el prefijo: el código ya lo agrega,
+  // y con doble «Bearer» el panel rechaza (403).
+  const limpio = token.trim().replace(/^Bearer\s+/i, "");
+
+  function leer() {
+    if (!limpio) return;
     setErr(null);
+    setNotice(null);
     setRes(null);
     setDiag(null);
     start(async () => {
-      const r = await swaypInventoryDryRun({ token, email, user: ruc, idCompany });
+      const r = await swaypInventoryDryRun({ token: limpio, email, user: ruc, idCompany });
       if ("error" in r) {
         setErr(r.error);
         setDiag(r.diagnostico ?? null);
-      } else setRes(r);
+        return;
+      }
+      setRes(r);
+      // Se marcan de entrada las ciudades donde algo cambiaría.
+      setMarcadas(new Set(r.ciudades.filter((c) => c.ajustes.length || c.altas.length).map((c) => c.ciudad)));
+    });
+  }
+
+  function aplicar() {
+    if (!limpio || !marcadas.size) return;
+    const lista = [...marcadas].join(", ");
+    if (
+      !confirm(
+        `Se va a dejar el stock de ${lista} igual al de Swayp, con su registro en el kardex. Swayp se vuelve a leer en este momento. ¿Aplicar?`,
+      )
+    )
+      return;
+    setErr(null);
+    setNotice(null);
+    start(async () => {
+      const r = await swaypInventorySync({
+        token: limpio,
+        email,
+        user: ruc,
+        idCompany,
+        ciudades: [...marcadas],
+      });
+      if (r && "error" in r && r.error) {
+        setErr(r.error);
+        return;
+      }
+      setNotice(r && "notice" in r && r.notice ? r.notice : "Stock sincronizado.");
+      // El diff ya no vale: lo que mostraba acaba de aplicarse.
+      setRes(null);
+      router.refresh();
+    });
+  }
+
+  function alternar(ciudad: string) {
+    setMarcadas((prev) => {
+      const next = new Set(prev);
+      if (next.has(ciudad)) next.delete(ciudad);
+      else next.add(ciudad);
+      return next;
     });
   }
 
@@ -514,17 +564,16 @@ function DryRunSwayp() {
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center justify-between text-left"
       >
-        <span className="text-sm font-medium text-slate-800">
-          Sincronizar desde Swayp por API (prueba, no escribe)
-        </span>
+        <span className="text-sm font-medium text-slate-800">Sincronizar desde Swayp por API</span>
         <span className="text-xs text-slate-400">{open ? "▲" : "▼"}</span>
       </button>
 
       {open && (
         <div className="space-y-3">
           <p className="text-xs text-slate-500">
-            Trae el inventario de todas las bodegas y muestra qué cambiaría, sin tocar la base. El
-            token no se guarda. Sácalo del panel de Swayp (sesión iniciada) y pégalo acá.
+            «Leer» trae el inventario de todas las bodegas y muestra qué cambiaría, sin tocar la base.
+            Después eliges las ciudades y «Aplicar» las deja igual a Swayp. El token no se guarda:
+            sácalo del panel de Swayp (sesión iniciada) y pégalo acá.
           </p>
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="text-xs text-slate-600">
@@ -563,14 +612,15 @@ function DryRunSwayp() {
             </label>
           </div>
           <button
-            onClick={probar}
-            disabled={pending || !token.trim()}
+            onClick={leer}
+            disabled={pending || !limpio}
             className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
           >
-            {pending ? "Leyendo…" : "Probar lectura"}
+            {pending && !res ? "Leyendo…" : "Leer inventario"}
           </button>
 
           {err && <p className="text-xs text-rose-700">{err}</p>}
+          {notice && <p className="text-xs text-emerald-700">{notice}</p>}
 
           {diag && (
             <div className="space-y-1 rounded-lg border border-slate-200 bg-white p-2 text-xs">
@@ -599,16 +649,50 @@ function DryRunSwayp() {
 
           {res && (
             <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs text-slate-600">
-                {res.totalFilasInventario} filas de inventario · {res.bodegas.length} bodegas.
-                {res.bodegasSinCiudad.length > 0 &&
-                  ` Sin ciudad mapeada (se saltan): ${res.bodegasSinCiudad
-                    .map((b) => b.nombre || b.idWarehouse)
-                    .join(", ")}.`}
-              </p>
+              <div className="text-xs text-slate-600">
+                <p>
+                  {res.totalFilasInventario} filas de inventario en {res.bodegas.length} bodegas:
+                </p>
+                <ul className="mt-1 space-y-0.5">
+                  {res.bodegas.map((b) => (
+                    <li key={b.id} className="flex flex-wrap gap-x-1.5">
+                      <span className="text-slate-700">{b.name}</span>
+                      <span className="text-slate-400">·</span>
+                      <span
+                        className={cn(
+                          "capitalize",
+                          b.enSync ? "text-emerald-700" : "text-amber-700",
+                        )}
+                      >
+                        {b.city ?? "sin ciudad"}
+                        {!b.enSync && " (no se sincroniza)"}
+                      </span>
+                      <span className="text-slate-400">· {b.filas} filas</span>
+                    </li>
+                  ))}
+                </ul>
+                {res.bodegasSinCiudad.some((b) => !res.bodegas.some((w) => w.id === b.idWarehouse)) && (
+                  <p className="mt-1 text-amber-700">
+                    Filas con una bodega que Swayp no listó (se saltan):{" "}
+                    {res.bodegasSinCiudad
+                      .filter((b) => !res.bodegas.some((w) => w.id === b.idWarehouse))
+                      .map((b) => `${b.idWarehouse || "sin id"} (${b.filas})`)
+                      .join(", ")}
+                    .
+                  </p>
+                )}
+              </div>
+
               {res.ciudades.map((c) => (
                 <div key={c.ciudad} className="rounded border border-slate-200 bg-white p-2">
-                  <p className="text-sm font-medium capitalize text-slate-800">{c.ciudad}</p>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={marcadas.has(c.ciudad)}
+                      onChange={() => alternar(c.ciudad)}
+                    />
+                    <span className="text-sm font-medium capitalize text-slate-800">{c.ciudad}</span>
+                  </label>
                   <p className="text-xs text-slate-600">{c.resumen}</p>
                   {c.ajustes.length > 0 && (
                     <table className="mt-1.5 w-full text-xs">
@@ -620,7 +704,7 @@ function DryRunSwayp() {
                         </tr>
                       </thead>
                       <tbody>
-                        {c.ajustes.slice(0, 40).map((a) => (
+                        {c.ajustes.map((a) => (
                           <tr key={a.id}>
                             <td className="py-0.5 text-slate-700">
                               {a.codbar ? `${a.codbar} · ` : ""}
@@ -642,8 +726,28 @@ function DryRunSwayp() {
                       </tbody>
                     </table>
                   )}
+                  {c.altas.length > 0 && (
+                    <p className="mt-1 text-xs text-emerald-700">
+                      Altas: {c.altas.map((a) => `${a.codbar} · ${a.product} (${a.cantidad})`).join(", ")}
+                    </p>
+                  )}
+                  {c.huerfanos.length > 0 && (
+                    <p className="mt-1 text-xs text-amber-700">
+                      Sin vincular en Catálogo (no se cargan):{" "}
+                      {c.huerfanos.map((h) => `${h.codbar} · ${h.nombre} (${h.disponible})`).join(", ")}
+                    </p>
+                  )}
                 </div>
               ))}
+
+              <button
+                onClick={aplicar}
+                disabled={pending || !marcadas.size || !limpio}
+                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {pending ? "Aplicando…" : `Aplicar a ${marcadas.size} ciudad(es)`}
+              </button>
+
               <details className="text-xs text-slate-500">
                 <summary className="cursor-pointer">Muestra cruda (para verificar campos)</summary>
                 <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all">

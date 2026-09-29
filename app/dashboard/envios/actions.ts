@@ -83,14 +83,18 @@ import {
   leerExcelSwayp,
   planearImportacion,
   resumenDelPlan,
+  type EntradaSwayp,
   type FilaStock,
   type PlanImportacion,
 } from "@/lib/swayp-inventario";
 import {
   diagnoseInventoryAccess,
-  inventoryToEntradasByCity,
-  listWarehouses,
-  searchInventory,
+  fetchInventoryByCity,
+  CIUDADES_DEL_SYNC,
+  listInventoryWarehouses,
+  SwaypInventoryError,
+  type SwaypFilasSinCiudad,
+  type SwaypWarehouse,
   type SwaypInventoryCreds,
   type SwaypProbe,
 } from "@/lib/swayp-inventory-api";
@@ -2198,6 +2202,77 @@ export async function upsertFenixStock(input: {
 }
 
 /**
+ * Escribe el plan de UNA ciudad: altas (renglón + `entrada` en el kardex) y
+ * ajustes (`ajuste` en el kardex). Lo comparten el importador de Excel y el
+ * sync por API, así que las dos fuentes dejan el mismo rastro. `origen` es lo
+ * que se lee en la nota del kardex («Bodega Trujillo», «Swayp (API)»).
+ * No recalcula la elegibilidad de las guías: eso lo hace quien llama, una vez.
+ */
+async function aplicarPlanSwayp(
+  admin: SupabaseClient,
+  input: { orgId: string; userId: string; ciudad: string; plan: PlanImportacion; origen: string },
+): Promise<{ altas: number; aplicados: number; fallidos: number }> {
+  const { orgId, userId, ciudad, plan, origen } = input;
+  // En una ciudad sin control (Lima) no hay saldo que mover: sólo altas.
+  const sinControl = ciudadSinControl(ciudad);
+
+  // Las altas primero: crear el renglón y dejar su entrada en el kardex, para
+  // que el saldo nazca con historial igual que los demás.
+  let altas = 0;
+  for (const a of plan.altas) {
+    const { data: creado, error } = await admin
+      .from("fenix_stock")
+      .upsert(
+        {
+          org_id: orgId,
+          city: ciudad,
+          product: a.product,
+          sku: a.sku,
+          quantity: 0,
+          unlimited: sinControl,
+          updated_by: userId,
+        },
+        { onConflict: "org_id,city,product" },
+      )
+      .select("id")
+      .single();
+    if (error || !creado) continue;
+    altas++;
+    // Sin control no hay saldo que arrancar: el alta ya dice todo.
+    if (sinControl) continue;
+    await recordStockMovement(admin, {
+      orgId,
+      stockId: (creado as { id: string }).id,
+      city: ciudad,
+      product: a.product,
+      kind: "entrada",
+      delta: a.cantidad,
+      note: `Alta desde el inventario de ${origen} (${a.codbar})`,
+      createdBy: userId,
+    });
+  }
+
+  let aplicados = 0;
+  for (const a of plan.ajustes) {
+    const saldo = await recordStockMovement(admin, {
+      orgId,
+      stockId: a.id,
+      city: ciudad,
+      product: a.product,
+      kind: "ajuste",
+      delta: a.cantidadNueva - a.cantidadAnterior,
+      note: a.codbar
+        ? `Conteo de Swayp (${a.codbar}) importado de ${origen}`
+        : `No figura en el inventario de ${origen}`,
+      createdBy: userId,
+    });
+    if (saldo !== null) aplicados++;
+  }
+
+  return { altas, aplicados, fallidos: plan.ajustes.length - aplicados + (plan.altas.length - altas) };
+}
+
+/**
  * Importa el "Inventario por bodega" que exporta el panel de Swayp y deja el
  * stock de ESA ciudad igual al de ellos.
  *
@@ -2306,64 +2381,18 @@ export async function importarInventarioSwayp(
   );
   const plan = planearImportacion(ciudad, lectura.entradas, filasStock, skusPorCodbar, etiquetaPorSku);
 
-  // Las altas primero: crear el renglón y dejar su entrada en el kardex, para
-  // que el saldo nazca con historial igual que los demás.
-  let altas = 0;
-  for (const a of plan.altas) {
-    const { data: creado, error } = await admin
-      .from("fenix_stock")
-      .upsert(
-        {
-          org_id: adminOrg.org_id,
-          city: ciudad,
-          product: a.product,
-          sku: a.sku,
-          quantity: 0,
-          unlimited: sinControl,
-          updated_by: user.id,
-        },
-        { onConflict: "org_id,city,product" },
-      )
-      .select("id")
-      .single();
-    if (error || !creado) continue;
-    altas++;
-    // Sin control no hay saldo que arrancar: el alta ya dice todo.
-    if (sinControl) continue;
-    await recordStockMovement(admin, {
-      orgId: adminOrg.org_id,
-      stockId: (creado as { id: string }).id,
-      city: ciudad,
-      product: a.product,
-      kind: "entrada",
-      delta: a.cantidad,
-      note: `Alta desde el inventario de ${nombreBodega} (${a.codbar})`,
-      createdBy: user.id,
-    });
-  }
-
-  let aplicados = 0;
-  for (const a of plan.ajustes) {
-    const saldo = await recordStockMovement(admin, {
-      orgId: adminOrg.org_id,
-      stockId: a.id,
-      city: ciudad,
-      product: a.product,
-      kind: "ajuste",
-      delta: a.cantidadNueva - a.cantidadAnterior,
-      note: a.codbar
-        ? `Conteo de Swayp (${a.codbar}) importado de ${nombreBodega}`
-        : `No figura en el inventario de ${nombreBodega}`,
-      createdBy: user.id,
-    });
-    if (saldo !== null) aplicados++;
-  }
+  const { fallidos } = await aplicarPlanSwayp(admin, {
+    orgId: adminOrg.org_id,
+    userId: user.id,
+    ciudad,
+    plan,
+    origen: nombreBodega,
+  });
 
   const sync = await recomputeFenixEligibility();
   revalidatePath("/dashboard/envios/stock");
   revalidatePath("/dashboard/envios");
 
-  const fallidos = plan.ajustes.length - aplicados + (plan.altas.length - altas);
   return {
     notice:
       resumenDelPlan(plan) +
@@ -2390,35 +2419,50 @@ export interface DryRunCiudad {
   sinControl: number;
 }
 
+/** El error de una llamada a Swayp en una línea, sin el token: status + cuerpo, o el mensaje. */
+function describirErrorSwayp(e: unknown): string {
+  if (e instanceof SwaypInventoryError) return `HTTP ${e.status}${e.body ? ` — ${e.body.slice(0, 240)}` : ""}`;
+  if (e instanceof Error) return `${e.name}: ${e.message}`;
+  return String(e);
+}
+
 export interface DryRunResult {
   ok: true;
   ciudades: DryRunCiudad[];
-  /** Bodegas cuya ciudad no mapeamos (Cusco, Ica…): no se tocan, se informan. */
-  bodegasSinCiudad: { idWarehouse: string; nombre: string; filas: number }[];
-  bodegas: { id: string; name: string }[];
+  /** Filas de bodegas cuya ciudad no mapeamos (Cusco, Ica…): no se tocan, se informan. */
+  bodegasSinCiudad: SwaypFilasSinCiudad[];
+  /** Cada bodega de fulfillment con la ciudad que resolvió y cuántas filas trajo. */
+  bodegas: { id: string; name: string; city: string | null; filas: number; enSync: boolean }[];
   totalFilasInventario: number;
   /** Muestra CRUDA de las primeras filas, para confirmar los nombres de campo. */
   muestra: unknown[];
 }
 
+type LecturaSwaypApi =
+  | {
+      ok: true;
+      orgId: string;
+      userId: string;
+      bodegas: SwaypWarehouse[];
+      porCiudad: Map<string, EntradaSwayp[]>;
+      sinCiudad: SwaypFilasSinCiudad[];
+      totalFilas: number;
+      filasPorBodega: Record<string, number>;
+      muestra: unknown[];
+    }
+  | { error: string; diagnostico?: SwaypProbe[] };
+
 /**
- * Trae el inventario de Swayp por API y muestra qué cambiaría, SIN escribir.
- *
- * Es la Fase 1 de reemplazar el Excel: valida el contrato (reversado, no
- * oficial) y la autenticación con una lectura real, y deja cotejar el stock
- * contra el panel. El token se recibe pegado a mano y NO se guarda ni se
- * registra; la fuente definitiva del token se decide después de esta prueba.
- *
- * Reutiliza `planearImportacion` y las mismas lecturas de `fenix_stock` /
- * `swayp_sku_map` que el importador de Excel, así que el diff que enseña es
- * EXACTAMENTE el que aplicaría el sync — sólo que no lo aplica.
+ * Lo común al dry run y al sync: permiso de admin, credencial, y la lectura de
+ * bodegas + inventario de Swayp repartido por ciudad. El token llega pegado a
+ * mano y NO se guarda ni se registra (dura ~1 h).
  */
-export async function swaypInventoryDryRun(input: {
+async function leerInventarioSwaypApi(input: {
   token: string;
   email: string;
   user: string;
   idCompany: string;
-}): Promise<DryRunResult | { error: string; diagnostico?: SwaypProbe[] }> {
+}): Promise<LecturaSwaypApi> {
   const sb = await createServerSupabase();
   const {
     data: { user },
@@ -2430,7 +2474,8 @@ export async function swaypInventoryDryRun(input: {
   );
   if (!adminOrg) return { error: "Solo un administrador puede sincronizar el stock." };
 
-  const token = input.token?.trim();
+  // Un «Bearer » pegado de más duplicaría el prefijo y Swayp respondería 403.
+  const token = input.token?.trim().replace(/^bearer\s+/i, "");
   const email = input.email?.trim();
   const ruc = input.user?.trim();
   const idCompany = input.idCompany?.trim();
@@ -2439,39 +2484,53 @@ export async function swaypInventoryDryRun(input: {
   }
   const creds: SwaypInventoryCreds = { token, email, user: ruc, idCompany, country: "PE" };
 
-  let bodegas;
-  let filas;
+  let bodegas: SwaypWarehouse[];
   try {
-    [bodegas, filas] = await Promise.all([listWarehouses(creds), searchInventory(creds)]);
-  } catch {
-    // Falló alguna de las dos lecturas. En vez de un mensaje ciego, se corre el
-    // diagnóstico: tres llamadas separadas que dicen qué host respondió qué. Con
-    // eso se distingue un token vencido (falla hasta la de control) de un
-    // problema de contrato (la de control pasa y otra no).
+    bodegas = await listInventoryWarehouses(creds);
+  } catch (e) {
+    // Falla la de bodegas, que es el control: la credencial no sirve.
     const diagnostico = await diagnoseInventoryAccess(creds);
-    const control = diagnostico[0];
-    const msg =
-      control && control.ok
-        ? "El token es válido (la llamada de control pasó), pero una lectura de inventario falló. Revisa el detalle: puede ser que el host de inventario pida otra credencial."
-        : "Swayp rechazó la credencial: el token está vencido, es de otra sesión, o no tiene permiso. Genera uno nuevo desde el panel y vuelve a intentar.";
-    return { error: msg, diagnostico };
+    return {
+      error: `Swayp rechazó la credencial (${describirErrorSwayp(e)}): el token está vencido, es de otra sesión, o no tiene permiso. Pega uno recién copiado del panel (sin la palabra «Bearer»).`,
+      diagnostico,
+    };
   }
+  try {
+    const inv = await fetchInventoryByCity(creds, bodegas);
+    return { ok: true, orgId: adminOrg.org_id, userId: user.id, bodegas, ...inv };
+  } catch (e) {
+    // Bodegas pasó, así que el token es bueno: se muestra el error REAL de la
+    // lectura de inventario (status + cuerpo).
+    const diagnostico = await diagnoseInventoryAccess(creds);
+    return {
+      error: `El token es válido (bodegas pasó), pero la lectura de inventario falló: ${describirErrorSwayp(e)}`,
+      diagnostico,
+    };
+  }
+}
 
-  const { porCiudad, sinCiudad } = inventoryToEntradasByCity(filas, bodegas);
-
-  // Los mismos insumos que usa el importador de Excel, leídos una vez para toda
-  // la organización (Aurela y Kenku comparten inventario en Swayp).
-  const admin = createAdminSupabase();
+/**
+ * El plan de cada ciudad que trajo Swayp, con los mismos insumos que el
+ * importador de Excel (`fenix_stock` y el mapa codbar→SKU de TODA la
+ * organización: Aurela y Kenku comparten inventario en Swayp).
+ */
+async function planesSwaypPorCiudad(
+  admin: SupabaseClient,
+  orgId: string,
+  porCiudad: Map<string, EntradaSwayp[]>,
+): Promise<{ ciudad: string; plan: PlanImportacion }[]> {
   const skusPorCodbar = new Map<string, string[]>();
-  for (const [sku, { codbar }] of await cargarMapaSwaypDeOrg(admin, adminOrg.org_id)) {
+  for (const [sku, { codbar }] of await cargarMapaSwaypDeOrg(admin, orgId)) {
     const ya = skusPorCodbar.get(codbar.toUpperCase()) ?? [];
     if (!ya.includes(sku)) ya.push(sku);
     skusPorCodbar.set(codbar.toUpperCase(), ya);
   }
-  const { data: todoElStock } = await admin
+  const { data: todoElStock, error } = await admin
     .from("fenix_stock")
     .select("id,city,product,sku,quantity,unlimited")
-    .eq("org_id", adminOrg.org_id);
+    .eq("org_id", orgId);
+  // Sin el stock actual el plan pondría TODO como alta; mejor no planear.
+  if (error) throw new Error(errorDeBase(error, "leer el stock Swayp"));
   const filasPorCiudad = new Map<string, FilaStock[]>();
   const etiquetaPorSku = new Map<string, string>();
   for (const r of (todoElStock as (FilaStock & { city: string })[]) ?? []) {
@@ -2482,14 +2541,42 @@ export async function swaypInventoryDryRun(input: {
     if (k && !etiquetaPorSku.has(k)) etiquetaPorSku.set(k, r.product);
   }
 
-  const ciudades: DryRunCiudad[] = [];
+  const planes: { ciudad: string; plan: PlanImportacion }[] = [];
   for (const [ciudad, entradas] of porCiudad) {
     const sinControl = ciudadSinControl(ciudad);
     const filasStock = (filasPorCiudad.get(ciudad) ?? []).map((f) =>
       sinControl ? { ...f, unlimited: true } : f,
     );
-    const plan = planearImportacion(ciudad, entradas, filasStock, skusPorCodbar, etiquetaPorSku);
-    ciudades.push({
+    planes.push({ ciudad, plan: planearImportacion(ciudad, entradas, filasStock, skusPorCodbar, etiquetaPorSku) });
+  }
+  return planes.sort((a, b) => a.ciudad.localeCompare(b.ciudad));
+}
+
+/**
+ * Trae el inventario de Swayp por API y muestra qué cambiaría, SIN escribir.
+ *
+ * Reutiliza `planearImportacion` y las mismas lecturas que el importador de
+ * Excel, así que el diff que enseña es EXACTAMENTE el que aplica
+ * `swaypInventorySync` con una lectura igual.
+ */
+export async function swaypInventoryDryRun(input: {
+  token: string;
+  email: string;
+  user: string;
+  idCompany: string;
+}): Promise<DryRunResult | { error: string; diagnostico?: SwaypProbe[] }> {
+  const lectura = await leerInventarioSwaypApi(input);
+  if ("error" in lectura) return lectura;
+
+  let planes;
+  try {
+    planes = await planesSwaypPorCiudad(createAdminSupabase(), lectura.orgId, lectura.porCiudad);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo leer el stock Swayp." };
+  }
+  return {
+    ok: true,
+    ciudades: planes.map(({ ciudad, plan }) => ({
       ciudad,
       resumen: resumenDelPlan(plan),
       totalSwayp: plan.totalSwayp,
@@ -2499,17 +2586,83 @@ export async function swaypInventoryDryRun(input: {
       huerfanos: plan.huerfanos,
       sinCambio: plan.sinCambio,
       sinControl: plan.sinControl,
-    });
+    })),
+    bodegasSinCiudad: lectura.sinCiudad,
+    bodegas: lectura.bodegas
+      .map((w) => ({
+        id: w.id,
+        name: w.name || w.direccion || w.id,
+        city: w.city,
+        filas: w.aliases.reduce((n, a) => n + (lectura.filasPorBodega[a] ?? 0), 0),
+        enSync: !!w.city && CIUDADES_DEL_SYNC.has(w.city),
+      }))
+      .filter((w) => w.filas > 0),
+    totalFilasInventario: lectura.totalFilas,
+    muestra: lectura.muestra,
+  };
+}
+
+/**
+ * Fase 2: aplica el inventario de Swayp leído por API a `fenix_stock`, en las
+ * ciudades elegidas. Vuelve a LEER en el momento —no confía en el diff que tiene
+ * el navegador, que pudo quedar viejo— y escribe con el mismo camino que el
+ * importador de Excel (`aplicarPlanSwayp`: kardex con `entrada`/`ajuste`).
+ *
+ * Sólo toca las ciudades que (a) se pidieron y (b) vinieron en la lectura con
+ * una bodega mapeada a `CIUDADES_DEL_SYNC`. Una ciudad que no vino no se vacía.
+ */
+export async function swaypInventorySync(input: {
+  token: string;
+  email: string;
+  user: string;
+  idCompany: string;
+  ciudades: string[];
+}): Promise<ShipmentActionState> {
+  const pedidas = new Set((input.ciudades ?? []).map((c) => c.trim().toLowerCase()).filter(Boolean));
+  if (!pedidas.size) return { error: "Elige al menos una ciudad para sincronizar." };
+
+  const lectura = await leerInventarioSwaypApi(input);
+  if ("error" in lectura) return { error: lectura.error };
+  // Una lectura vacía es casi seguro un fallo de Swayp, no un inventario en
+  // cero: aplicarla dejaría cada ciudad pedida en 0.
+  if (lectura.totalFilas === 0) {
+    return { error: "Swayp devolvió el inventario vacío. No se aplicó nada; vuelve a intentar." };
   }
-  ciudades.sort((a, b) => a.ciudad.localeCompare(b.ciudad));
+
+  const admin = createAdminSupabase();
+  let planes;
+  try {
+    planes = await planesSwaypPorCiudad(admin, lectura.orgId, lectura.porCiudad);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo leer el stock Swayp." };
+  }
+
+  const partes: string[] = [];
+  let fallidosTotal = 0;
+  const noVinieron = [...pedidas].filter((c) => !lectura.porCiudad.has(c));
+  for (const { ciudad, plan } of planes) {
+    if (!pedidas.has(ciudad)) continue;
+    const { fallidos } = await aplicarPlanSwayp(admin, {
+      orgId: lectura.orgId,
+      userId: lectura.userId,
+      ciudad,
+      plan,
+      origen: "Swayp (API)",
+    });
+    fallidosTotal += fallidos;
+    partes.push(`${ciudad[0]!.toUpperCase()}${ciudad.slice(1)}: ${resumenDelPlan(plan)}`);
+  }
+
+  const sync = await recomputeFenixEligibility();
+  revalidatePath("/dashboard/envios/stock");
+  revalidatePath("/dashboard/envios");
 
   return {
-    ok: true,
-    ciudades,
-    bodegasSinCiudad: sinCiudad,
-    bodegas: bodegas.map((w) => ({ id: w.id, name: w.name })),
-    totalFilasInventario: filas.length,
-    muestra: filas.slice(0, 2),
+    notice:
+      (partes.length ? partes.join(" · ") : "Ninguna ciudad pedida vino en la lectura de Swayp.") +
+      (noVinieron.length ? ` Sin datos de Swayp (no se tocaron): ${noVinieron.join(", ")}.` : "") +
+      (fallidosTotal ? ` ${fallidosTotal} movimientos no se pudieron aplicar.` : "") +
+      ("error" in sync ? ` No se pudo sincronizar las guías: ${sync.error}.` : ` ${sync.updated} guías sincronizadas.`),
   };
 }
 
