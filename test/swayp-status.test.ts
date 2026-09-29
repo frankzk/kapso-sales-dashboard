@@ -12,12 +12,13 @@ import {
   mapSwaypState,
   readSwaypGuide,
   swaypCustodyFor,
+  swaypResponseShape,
   swaypStateFromLabel,
   SWAYP_RETURN_STATES,
   SWAYP_STATES,
   type SwaypClientOpts,
 } from "@/lib/swayp";
-import { swaypStatePatch, type SwaypShipmentRow } from "@/lib/swayp-ingest";
+import { normalizeSwaypIncoming, swaypStatePatch, type SwaypShipmentRow } from "@/lib/swayp-ingest";
 import { describeSwaypFailure, sweepSwaypStatus } from "@/lib/swayp-status-sweep";
 import { SwaypError } from "@/lib/swayp";
 import {
@@ -246,6 +247,84 @@ describe("qué escribe cada estado en la guía (webhook y barrido, la misma func
   });
 });
 
+describe("la API cierra una devolución como 10 «Cancelada» (29-09-2026)", () => {
+  // Las 15 guías que el tracking enseña en 9 «Devolución confirmada» llegaron por
+  // GET /v2/guias como 10, y siete pedidos sin anular cayeron en «Finalizado ·
+  // Anulado cerrado». Su doc dice que 10 solo sale de 1 (Generada).
+  const now = "2026-09-29T21:00:00.000Z";
+
+  it("un 10 sobre una guía que ya salió es el final de su devolución: 9", () => {
+    // Cada prueba de salida, sola, basta.
+    const base = { swayp_state: 1, custody_state: "empresa", dispatched_at: null, out_for_delivery_at: null } as const;
+    for (const s of [4, 5, 6, 8, 9, 12]) {
+      expect(normalizeSwaypIncoming(fila({ ...base, swayp_state: s }), { state: 10 }).state, `estado ${s}`).toBe(9);
+    }
+    expect(normalizeSwaypIncoming(fila({ ...base, dispatched_at: hace(3) }), { state: 10 }).state).toBe(9);
+    expect(normalizeSwaypIncoming(fila({ ...base, out_for_delivery_at: hace(3) }), { state: 10 }).state).toBe(9);
+    expect(normalizeSwaypIncoming(fila({ ...base, custody_state: "courier" }), { state: 10 }).state).toBe(9);
+    expect(normalizeSwaypIncoming(fila({ ...base, custody_state: "retorno" }), { state: 10 }).state).toBe(9);
+  });
+
+  it("un 10 sobre una guía que nunca salió es una cancelación de verdad", () => {
+    // La guía directa nace en_ruta, con custodia de la empresa y sin salida.
+    expect(normalizeSwaypIncoming(fila({ swayp_state: 1, custody_state: "empresa" }), { state: 10 }).state).toBe(10);
+    // Los demás estados no se tocan.
+    expect(normalizeSwaypIncoming(fila({ swayp_state: 8 }), { state: 5 }).state).toBe(5);
+  });
+
+  it("la devolución que termina en 10 queda como Devolución confirmada, con su custodia de retorno", () => {
+    const r = swaypStatePatch(fila({ swayp_state: 8, custody_state: "retorno", custody_transferred_at: hace(2), dispatched_at: hace(2) }), { state: 10 }, now);
+    expect(r.deliveryStatus).toBe("anulado");
+    expect(r.patch).toMatchObject({ swayp_state: 9, delivery_status: "anulado", closed_at: now });
+    expect(r.patch).not.toHaveProperty("custody_state");
+  });
+
+  it("y el pedido sigue en recuperación, no en Finalizado", () => {
+    const antes = fila({ swayp_state: 8, custody_state: "retorno", custody_transferred_at: hace(2), dispatched_at: hace(2) });
+    const { patch } = swaypStatePatch(antes, { state: 10 }, now);
+    const g = { ...antes, ...patch } as SwaypShipmentRow;
+    const { legacy, macro } = resolverTodo([swayp({ swayp_state: g.swayp_state, delivery_status: g.delivery_status, dispatched_at: g.dispatched_at ?? null, closed_at: g.closed_at ?? null })]);
+    expect(legacy.operational).toBe("pendiente_nuevo_courier");
+    expect(macro.stage).toBe("en_curso");
+    expect(macro.substage).toBe("por_reprogramar_lima");
+  });
+
+  it("una guía ya confirmada que vuelve a leerse como 10 no cambia", () => {
+    const r = swaypStatePatch(fila({ delivery_status: "anulado", swayp_state: 9, custody_state: "retorno", dispatched_at: hace(3), closed_at: hace(1) }), { state: 10 }, now);
+    expect(r.changed).toBe(false);
+  });
+});
+
+describe("el historial de la API, bajo el nombre que traiga", () => {
+  it("se lee también como `historial`, con `idEstado`", () => {
+    const r = readSwaypGuide({
+      estado: "Devolucion",
+      historial: [
+        { estado: "Asignada", idEstado: 4, fecha: "2026-09-28T08:46:26.834Z" },
+        { estado: "Devolucion", idEstado: 8, fecha: "2026-09-28T22:03:38.357Z" },
+      ],
+    });
+    expect(r).toMatchObject({ state: 8, departedAt: "2026-09-28T08:46:26.834Z", changedAt: "2026-09-28T22:03:38.357Z" });
+  });
+
+  it("una lista que no parece historial no se usa", () => {
+    expect(readSwaypGuide({ estado: "Reparto", productos: [{ sku: "A", cantidad: 1 }] }).departedAt).toBeNull();
+  });
+
+  it("la forma de la respuesta se registra sin sus datos", () => {
+    expect(swaypResponseShape({ guia: 1, estado: "Cancelada", idEstado: 10, destinatario: { nombre: "X" } })).toEqual({
+      keys: ["destinatario", "estado", "guia", "idEstado"],
+      estado: "Cancelada|10",
+      historial: null,
+    });
+    expect(swaypResponseShape({ data: { estado: 8, historial: [{ estado: "Reparto", fecha: "2026-09-28T08:56:47.089Z" }] } })).toMatchObject({
+      estado: "8|-",
+      historial: "historial",
+    });
+    expect(swaypResponseShape(null).estado).toBe("(vacía)");
+  });
+});
+
 // ── El barrido ──────────────────────────────────────────────────────────────
 
 interface FakeRow extends SwaypShipmentRow {
@@ -366,6 +445,23 @@ describe("el barrido de estados", () => {
     // El Master, una vez y solo con lo que cambió.
     expect(recompute).toHaveBeenCalledTimes(1);
     expect(recompute).toHaveBeenCalledWith(admin, ["o101"]);
+    // La forma, sin datos: estados crudos y claves.
+    // La que no existe ({}) no tiene forma: cuenta como no encontrada.
+    expect(report.crudos).toEqual({ "Devolucion|-": 1, "Extraviada|-": 1, "Reparto|-": 1 });
+    expect(report.forma).toContain("estado");
+    expect(report.historial).toBe("notas");
+  });
+
+  it("una devolución que la API cierra como 10 se guarda como Devolución confirmada", async () => {
+    const { admin, updates } = fakeAdmin([guia("501", { swayp_state: 8, custody_state: "retorno", dispatched_at: hace(2), custody_transferred_at: hace(2) })]);
+    const report = await sweepSwaypStatus(admin, {
+      client: cliente({ "501": { status: 200, body: { estado: "Cancelada", idEstado: 10 } } }),
+      now: () => new Date(NOW),
+      recompute: async () => undefined,
+    });
+    expect(report.cambios).toEqual([{ guia: "501", pedido: "#KP501", de: "en_ruta · 8 Devolución", a: "anulado · 9 Devolución confirmada" }]);
+    expect(updates[0]!.patch).toMatchObject({ swayp_state: 9, delivery_status: "anulado" });
+    expect(report.crudos).toEqual({ "Cancelada|10": 1 });
   });
 
   it("el primer 429 lo detiene: lo que queda va en la pasada siguiente", async () => {

@@ -84,6 +84,33 @@ const TERMINAL_DELIVERY = new Set(["entregado", "anulado", "transferido"]);
 /** Estados que prueban que el paquete ya salió aunque no sepamos cuándo. */
 const LEFT_FOR_SURE = new Set([6, 8, 9, 12]);
 
+/** Estados en los que la guía ya estaba con un mensajero (o volviendo). */
+const LEFT_STATES = new Set([4, 5, 6, 8, 9, 12]);
+
+/** ¿Lo que ya sabemos de la guía prueba que el paquete salió? */
+function guideLeft(row: SwaypShipmentRow): boolean {
+  return (
+    LEFT_STATES.has(Number(row.swayp_state)) ||
+    Boolean(row.dispatched_at || row.out_for_delivery_at) ||
+    row.custody_state === "courier" ||
+    row.custody_state === "retorno"
+  );
+}
+
+/**
+ * La API de Swayp cierra una DEVOLUCIÓN como 10 «Cancelada». Su documentación
+ * dice que 10 solo es posible desde 1 (Generada), pero el 29-09-2026 las 15
+ * guías que su tracking enseña en 9 «Devolución confirmada» —con Reparto,
+ * Novedad y Devolución en el historial— llegaron por `GET /v2/guias` como 10, y
+ * Kapta las tomó por canceladas: siete pedidos sin anular cayeron en
+ * «Finalizado · Anulado cerrado». Un 10 sobre una guía que ya salió es el final
+ * de su devolución (9); sobre una que nunca salió, una cancelación de verdad.
+ */
+export function normalizeSwaypIncoming(row: SwaypShipmentRow, incoming: SwaypIncomingState): SwaypIncomingState {
+  if (incoming.state === 10 && guideLeft(row)) return { ...incoming, state: 9 };
+  return incoming;
+}
+
 /**
  * Lo que un estado de Swayp cambia en su guía. PURA: la usan el webhook y el
  * barrido de la API (lib/swayp-status-sweep.ts), para que las dos puertas
@@ -108,9 +135,10 @@ const LEFT_FOR_SURE = new Set([6, 8, 9, 12]);
  */
 export function swaypStatePatch(
   row: SwaypShipmentRow,
-  incoming: SwaypIncomingState,
+  read: SwaypIncomingState,
   nowIso: string,
 ): { patch: Record<string, unknown>; changed: boolean; deliveryStatus: string } {
+  const incoming = normalizeSwaypIncoming(row, read);
   const mapped = mapSwaypState(incoming.state);
   if (!mapped) return { patch: {}, changed: false, deliveryStatus: row.delivery_status };
 

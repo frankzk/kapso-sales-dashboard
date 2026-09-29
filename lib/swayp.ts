@@ -654,6 +654,51 @@ const DATE_FIELD_BY_STATE: Record<number, string> = {
 };
 
 /**
+ * El historial de la guía. En el tracking público se llama `notas`; la
+ * respuesta de la API no está documentada («su estado actual y el historial de
+ * cambios»), y el 29-09-2026 NO traía `notas`: todas las fechas de salida
+ * quedaron con la hora del barrido. Se busca también bajo los nombres
+ * probables; lo que venga lo dice `swaypResponseShape` en el log del barrido.
+ */
+function historyOf(guide: Record<string, unknown>): Record<string, unknown>[] {
+  const preferred = ["notas", "historial", "historico", "history", "tracking", "estados", "seguimiento", "movimientos"];
+  const keys = [...preferred.filter((k) => k in guide), ...Object.keys(guide).filter((k) => !preferred.includes(k))];
+  for (const key of keys) {
+    const value = guide[key];
+    if (!Array.isArray(value) || !value.length) continue;
+    const items = value.map(asRecord).filter((x): x is Record<string, unknown> => x != null);
+    const looksLikeHistory = items.some(
+      (n) => ("fecha" in n || "date" in n || "createdAt" in n || "fechaCreacion" in n) && ("estado" in n || "codigoEstado" in n || "idEstado" in n),
+    );
+    if (looksLikeHistory) return items;
+  }
+  return [];
+}
+
+/**
+ * La FORMA de una respuesta, sin sus datos, para el log del barrido: las claves
+ * de primer nivel y los valores crudos de `estado`/`idEstado`, que son nombres
+ * y códigos de estado. Es lo que dijo el 29-09-2026 que una Devolución
+ * confirmada llega como 10.
+ */
+export function swaypResponseShape(body: unknown): { keys: string[]; estado: string; historial: string | null } {
+  const root = asRecord(Array.isArray(body) ? body[0] : body);
+  const guide = asRecord(root?.data) ?? root;
+  if (!guide) return { keys: [], estado: "(vacía)", historial: null };
+  const estado = guide.estado;
+  const raw = (v: unknown) => (v == null ? "-" : typeof v === "object" ? JSON.stringify(v).slice(0, 60) : String(v).slice(0, 40));
+  const history = historyOf(guide);
+  const historyKey = history.length
+    ? Object.keys(guide).find((k) => Array.isArray(guide[k]) && (guide[k] as unknown[]).length === history.length) ?? null
+    : null;
+  return {
+    keys: Object.keys(guide).sort(),
+    estado: `${raw(estado)}|${raw(guide.idEstado)}`,
+    historial: historyKey,
+  };
+}
+
+/**
  * Lee el estado de una guía de la respuesta de `GET /v2/guias/{guia}`.
  *
  * Lo que manda es `estado` —así lo indicó la operación el 29-09-2026: «buscas
@@ -697,15 +742,15 @@ export function readSwaypGuide(body: unknown): SwaypGuideReading {
 
   // El historial, cuando viene, da las fechas reales: la primera salida a
   // reparto y la entrada al estado actual.
-  const notas = Array.isArray(guide.notas) ? guide.notas.map(asRecord).filter(Boolean) : [];
   let departedAt: string | null = null;
   let changedAt: string | null = null;
-  for (const nota of notas as Record<string, unknown>[]) {
-    const at = isoOrNull(nota.fecha);
+  for (const nota of historyOf(guide)) {
+    const at = isoOrNull(nota.fecha) ?? isoOrNull(nota.date) ?? isoOrNull(nota.createdAt) ?? isoOrNull(nota.fechaCreacion);
     if (!at) continue;
     const code =
       codeOf(nota.codigoEstado) ??
-      (typeof nota.estado === "string" ? swaypStateFromLabel(nota.estado) : null);
+      codeOf(nota.idEstado) ??
+      (typeof nota.estado === "string" ? swaypStateFromLabel(nota.estado) : codeOf(nota.estado));
     if ((code === 4 || code === 5) && (!departedAt || at < departedAt)) departedAt = at;
     if (state != null && code === state && (!changedAt || at > changedAt)) changedAt = at;
   }
