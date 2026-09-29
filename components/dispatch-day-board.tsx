@@ -916,8 +916,8 @@ export function DispatchDayBoard(props: Props) {
                   <col className="w-[8.5rem]" />
                   <col className="w-[6.5rem]" />
                   <col />
-                  <col className="w-[10.5rem]" />
-                  <col className="w-[10.5rem]" />
+                  <col className="w-[9.5rem]" />
+                  <col className="w-[10rem]" />
                   <col className="w-[4.5rem]" />
                   <col className="w-[4.5rem]" />
                   <col className="w-[6rem]" />
