@@ -25,7 +25,7 @@ import { lookupDispatchShipment } from "@/app/dashboard/pedidos/despacho/actions
 import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 import { custodyOnAssign, isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
-import { programDayLabel, programNeedsConfirm, type BlockedReason } from "@/lib/dispatch-day";
+import { programDayLabel, programNeedsConfirm, takenIsAssignable, type BlockedReason } from "@/lib/dispatch-day";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
 import { getRouteDetail, type RouteRow, type StopWithOrder } from "@/lib/routes-access";
@@ -1624,8 +1624,18 @@ async function assignRouteCore(
   const programs = opts.confirmProgrammed
     ? new Map<string, DispatchProgram>()
     : await loadPrograms(admin, { orderIds: requests.map((request) => request.order_id) });
+  // Un pedido en Por cerrar o Finalizado no entra en una caja (29-09-2026).
+  const { data: stageRows } = await courierRowsByIds([...new Set(requests.map((request) => request.order_id))], (ids) => admin
+    .from("order_master")
+    .select("order_id,macro_stage")
+    .in("order_id", ids));
+  const stageByOrder = new Map((stageRows as Array<{ order_id: string; macro_stage: string | null }>).map((row) => [row.order_id, row.macro_stage]));
   const groups = new Map<string, AssignableRequest[]>();
   for (const request of requests) {
+    if (!takenIsAssignable(stageByOrder.get(request.order_id))) {
+      failed.push({ requestId: request.id, error: "El pedido ya está cerrado o cerrándose: no se asigna a una caja." });
+      continue;
+    }
     if (!request.shipment_id) {
       failed.push({ requestId: request.id, error: "La solicitud todavía no tiene salida física." });
       continue;
@@ -2339,9 +2349,12 @@ export async function moveManifestItem(
           payload: { from_rider_id: manifest.rider_id, from_manifest_id: manifestId, to_rider_id: rider.id, to_manifest_id: targetManifestId, route_date: manifest.route_date },
         })
       : Promise.resolve(),
+    // Está en otra caja: «scheduled». En custodia, el retiro (0185) la había
+    // devuelto a «accepted» y quedaba así dentro de la caja nueva.
     admin
       .from("logistics_requests")
-      .update({ observation: null })
+      .update({ observation: null, status: "scheduled" })
+      .in("status", ["accepted", "scheduled"])
       .eq("shipment_id", shipmentId)
       .eq("provider_id", (await admin.from("logistics_providers").select("id").eq("org_id", orgId).eq("code", "grupo-gf-courier").maybeSingle()).data?.id ?? "00000000-0000-0000-0000-000000000000"),
   ]);

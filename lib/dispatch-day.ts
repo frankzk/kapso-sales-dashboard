@@ -203,6 +203,19 @@ export interface QueueRoute {
   undeliveredReason?: string | null;
 }
 
+/**
+ * Etapas en que un pedido ya tomado deja de asignarse: está cerrándose o
+ * cerrado (29-09-2026). #KP136160, #KP136100 y #KP136653 estaban anulados y
+ * seguían con casilla en «Desde la lista». La solicitud no se cancela sola:
+ * el MOM no lo dice y un pedido se puede reabrir; si vuelve, vuelve a la cola.
+ */
+export const CLOSED_FOR_ASSIGNMENT_STAGES: readonly string[] = ["por_cerrar", "finalizado"];
+
+/** Si un tomado sin caja se puede asignar según la macroetapa del Master. Sin dato, sí. */
+export function takenIsAssignable(macroStage: string | null | undefined): boolean {
+  return !macroStage || !CLOSED_FOR_ASSIGNMENT_STAGES.includes(macroStage);
+}
+
 /** Un «No entregado» que sigue en la caja del motorizado: se ve en la cola para recibirlo en oficina. */
 export function isReturnable(row: Pick<QueueRow, "route">): boolean {
   return Boolean(row.route?.undeliveredReason);
