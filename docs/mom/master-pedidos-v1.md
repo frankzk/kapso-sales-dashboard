@@ -1415,8 +1415,10 @@ sin tope de antigüedad. Reglas:
     un cobro bueno. Tras asteriscos o varios puntos seguidos no se sabe qué
     número es: se aparta del nombre y **no se juzga**, porque un dato que no
     se sabe no puede desmentir la cuenta. Un nombre que solo termina en
-    números, sin separador, no se toca. Las dos reglas rigen igual en los
-    comprobantes de los pedidos (§12, Pagos).
+    números, sin separador, no se toca. Tampoco es parte del nombre la
+    billetera de destino que Plin pega al final («Grupo Gf S - Yape»): se
+    quita antes de comparar. Estas reglas rigen igual en los comprobantes de
+    los pedidos (§12, Pagos).
   - **La app del BCP se reconoce aunque no se vea su logo** (29-09-2026). Su
     constancia —blanca con azul y naranja, «¡Transferencia exitosa!», «Enviado
     a», «Desde»— salía como medio «otro» porque el lector solo tenía descritos
@@ -4129,6 +4131,11 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   BCP) se apartan del nombre pero no se juzgan. El lector tiene además
   instrucción de separarlos. Es la misma regla que en los cobros del courier
   (§9.4).
+- **La billetera de destino tampoco es parte del nombre.** Plin escribe el
+  receptor como «Grupo Gf S - Yape» (#KP136682): « - Yape» dice adónde fue el
+  dinero, y leído como nombre acusaba de desvío un cobro a la empresa. Se
+  quita antes de comparar. No afloja nada: «Juan Pérez - Yape» sigue siendo
+  Juan Pérez. Rige igual en los cobros del courier (§9.4).
 - **Una cuenta puede no tener celular: la pasarela Flow** (migración 0198). La
   constancia de Flow dice «Pagado a: Aurela Kenku» —una sola cuenta de Flow para
   las dos marcas— y no enseña ningún celular. Sin darla de alta, **#KP136181**
