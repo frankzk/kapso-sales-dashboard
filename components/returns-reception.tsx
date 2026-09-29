@@ -4,6 +4,8 @@ import Link from "next/link";
 import { FormEvent, useCallback, useRef, useState } from "react";
 import { DispatchCamera } from "@/components/dispatch-camera";
 import { cn } from "@/components/ui";
+import { Badge, Banner, OpsButton } from "@/components/ops-ui";
+import { IconCamera } from "@/components/icons";
 import {
   receiveReturnedPackage,
   type DispatchActionResult,
@@ -63,55 +65,71 @@ export function ReturnsReception({ initialData }: { initialData: ReconciliationB
   return (
     <div className="mx-auto max-w-[1500px] space-y-5 pb-24">
       <header>
-        <Link href="/dashboard/pedidos/almacen" className="text-xs font-medium text-slate-500 hover:text-slate-900">← Almacén</Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">Devoluciones de Tanders</h1>
-        <p className="mt-1 max-w-2xl text-sm text-slate-500">
+        <Link href="/dashboard/pedidos/almacen" className="text-[13px] font-medium text-ink-500 hover:text-ink-900">← Almacén</Link>
+        <h1 className="mt-1 text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Devoluciones de Tanders</h1>
+        <p className="mt-1 max-w-2xl text-sm text-ink-500">
           Escanea el QR de Tanders de cada caja que vuelve al almacén. Lo que Tanders dio por devuelto y nadie escaneó es lo que falta que te devuelvan.
         </p>
       </header>
 
-      <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 p-5 sm:p-7">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-600">Recibir</p>
-          <h2 className="mt-1 text-xl font-semibold text-slate-950">Registrar caja devuelta</h2>
-          <p className="mt-1 text-sm text-slate-500">Sirve el QR de Tanders, el nº de seguimiento (TANDER…) o el nº de pedido.</p>
+      <section className="rounded-lg bg-white shadow-control ring-1 ring-line">
+        {/* El escaneo es la tarea: el mismo gesto que el armado en Almacén. */}
+        <div className="p-4 sm:p-6">
+          <h2 className="text-base font-semibold leading-6 text-ink-900">Registrar caja devuelta</h2>
+          <p className="mt-0.5 text-[13px] text-ink-600">Sirve el QR de Tanders, el nº de seguimiento (TANDER…) o el nº de pedido.</p>
 
-          <form onSubmit={submitScan} className="mt-6 flex flex-col gap-3 sm:flex-row">
+          <form onSubmit={submitScan} className="mt-4 flex flex-col gap-2 sm:flex-row">
             <label className="relative min-w-0 flex-1">
               <span className="sr-only">QR de Tanders, nº de seguimiento o nº de pedido</span>
-              <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-xl text-slate-400">⌁</span>
+              <svg aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 size-5 -translate-y-1/2 text-ink-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M8 9v6M11 9v6M14 9v6M17 9v6" /></svg>
               <input
                 ref={inputRef}
                 autoFocus
                 value={scan}
                 onChange={(event) => setScan(event.target.value)}
                 disabled={busy}
+                autoComplete="off"
+                spellCheck={false}
+                enterKeyHint="go"
                 placeholder="Escanea el QR de Tanders o escribe TANDER…"
-                className="h-14 w-full rounded-2xl border-2 border-slate-200 bg-slate-50 pl-12 pr-4 text-base font-medium outline-none transition focus:border-slate-950 focus:bg-white disabled:opacity-50"
+                className="h-12 w-full rounded-md border-0 bg-white pl-11 pr-3 text-base font-medium text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:font-normal placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:bg-wash disabled:text-ink-500"
               />
             </label>
-            <button type="button" onClick={() => setCameraOpen(true)} disabled={busy} className="h-14 rounded-2xl border border-slate-300 px-5 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Abrir cámara</button>
-            <button disabled={busy || !scan.trim()} className="h-14 rounded-2xl bg-slate-950 px-7 font-semibold text-white hover:bg-slate-800 disabled:opacity-40">{busy ? "Procesando…" : "Recibir"}</button>
+            <OpsButton size="lg" className="h-12" onClick={() => setCameraOpen(true)} disabled={busy}>
+              <IconCamera aria-hidden />
+              Abrir cámara
+            </OpsButton>
+            <OpsButton type="submit" variant="primary" size="lg" className="h-12 px-6" disabled={busy || !scan.trim()}>{busy ? "Procesando…" : "Recibir"}</OpsButton>
           </form>
-          {message && <div className={cn("mt-4 rounded-xl px-4 py-3 text-sm font-medium", message.tone === "error" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800")}>{message.text}</div>}
+          {message && <Banner tone={message.tone === "error" ? "crit" : "ok"} role={message.tone === "error" ? "alert" : "status"} className="mt-4">{message.text}</Banner>}
         </div>
 
-        <dl className="grid grid-cols-2 gap-4 border-b border-slate-200 bg-slate-50/70 p-5 sm:grid-cols-4 sm:p-7">
-          <Stat label="Tanders dice que devolvió" value={declaradas} />
-          <Stat label="Recibidas en almacén" value={data.recibidas.length} tone="text-emerald-700" />
-          <Stat label="Faltan (te las debe)" value={data.faltan.length} tone={data.faltan.length ? "text-red-700" : "text-slate-900"} />
-          <Stat label="Vienen en camino" value={data.enCamino.length} tone="text-slate-600" />
-        </dl>
+        {/* El cuadre en una línea de cifras: lo que Tanders dice, lo que llegó
+            y lo que falta. «Faltan» se pinta en rojo solo si hay algo que reclamar. */}
+        <div className="p-4 shadow-[inset_0_1px_0_var(--color-line)] sm:p-6">
+          <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg bg-line ring-1 ring-line sm:grid-cols-4">
+            <Stat label="Tanders dice que devolvió" value={declaradas} />
+            <Stat label="Recibidas en almacén" value={data.recibidas.length} tone="ok" />
+            <Stat label="Faltan (te las debe)" value={data.faltan.length} tone={data.faltan.length ? "crit" : undefined} />
+            <Stat label="Vienen en camino" value={data.enCamino.length} />
+          </dl>
+        </div>
 
-        <div className="grid gap-6 p-5 sm:p-7 lg:grid-cols-2">
-          <div>
-            <h3 className="font-semibold text-slate-900">Faltan por llegar</h3>
-            <p className="mt-0.5 text-xs text-slate-500">Tanders las dio por devueltas y nadie las ha escaneado. Las más antiguas primero: una caja que no aparece tras días no es un retraso.</p>
+        <div className="grid grid-cols-1 shadow-[inset_0_1px_0_var(--color-line)] lg:grid-cols-2">
+          <div className="min-w-0 p-4 sm:p-6">
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-ink-900">Faltan por llegar</h3>
+              <Badge tone={data.faltan.length ? "crit" : "neutral"} className="tabular-nums">{data.faltan.length}</Badge>
+            </div>
+            <p className="mt-0.5 text-xs text-ink-500">Tanders las dio por devueltas y nadie las ha escaneado. Las más antiguas primero: una caja que no aparece tras días no es un retraso.</p>
             <GuideList rows={data.faltan} empty="Todo lo que Tanders dio por devuelto está en el almacén." when={(r) => r.returned_at} whenLabel="devuelta según Tanders" />
           </div>
-          <div>
-            <h3 className="font-semibold text-slate-900">Recibidas</h3>
-            <p className="mt-0.5 text-xs text-slate-500">Confirmadas por alguien con la caja en la mano.</p>
+          <div className="min-w-0 p-4 shadow-[inset_0_1px_0_var(--color-line)] sm:p-6 lg:shadow-[inset_1px_0_0_var(--color-line)]">
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-ink-900">Recibidas</h3>
+              <Badge tone={data.recibidas.length ? "ok" : "neutral"} className="tabular-nums">{data.recibidas.length}</Badge>
+            </div>
+            <p className="mt-0.5 text-xs text-ink-500">Confirmadas por alguien con la caja en la mano.</p>
             <GuideList rows={data.recibidas} empty="Todavía no se ha escaneado ninguna devolución." when={(r) => r.received_at} whenLabel="recibida" />
           </div>
         </div>
@@ -129,11 +147,12 @@ export function ReturnsReception({ initialData }: { initialData: ReconciliationB
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: number; tone?: string }) {
+/** Una cifra del cuadre; el tono solo tiñe el número y, si es crítico, la celda. */
+function Stat({ label, value, tone }: { label: string; value: number; tone?: "ok" | "crit" }) {
   return (
-    <div>
-      <dt className="text-xs text-slate-500">{label}</dt>
-      <dd className={cn("text-2xl font-semibold tabular-nums", tone ?? "text-slate-900")}>{value}</dd>
+    <div className={cn("min-w-0 px-4 py-3", tone === "crit" ? "bg-crit-wash" : "bg-white")}>
+      <dt className={cn("text-[13px]", tone === "crit" ? "font-medium text-crit-fg" : "text-ink-500")}>{label}</dt>
+      <dd className={cn("mt-0.5 text-xl font-semibold leading-7 tabular-nums", tone === "ok" ? "text-ok-fg" : tone === "crit" ? "text-crit-fg" : "text-ink-900")}>{value.toLocaleString("es-PE")}</dd>
     </div>
   );
 }
@@ -150,17 +169,20 @@ function GuideList({
   whenLabel: string;
 }) {
   if (!rows.length) {
-    return <div className="mt-3 rounded-2xl border border-dashed border-slate-300 py-8 text-center text-sm text-slate-500">{empty}</div>;
+    return <div className="mt-3 rounded-lg border border-dashed border-line-strong py-8 text-center text-sm text-ink-500">{empty}</div>;
   }
   return (
-    <ul className="mt-3 max-h-[28rem] divide-y divide-slate-100 overflow-y-auto rounded-2xl border border-slate-200">
+    <ul className="mt-3 max-h-[28rem] divide-y divide-line overflow-y-auto rounded-lg ring-1 ring-line">
       {rows.map((row) => {
         const days = daysSince(when(row));
         return (
-          <li key={row.id} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-4 py-2.5 text-sm">
-            <span className="font-medium text-slate-900">{row.order_name ?? "—"}</span>
-            <span className="font-mono text-xs text-slate-500">{row.guide_code}</span>
-            <span className="w-full text-xs text-slate-500 sm:w-auto">
+          <li key={row.id} className="flex items-start justify-between gap-3 px-3 py-2.5">
+            {/* El pedido y la guía se leen enteros; la antigüedad es la que parte línea. */}
+            <div className="shrink-0">
+              <p className="text-sm font-semibold tabular-nums text-ink-900">{row.order_name ?? "—"}</p>
+              <p className="font-mono text-xs text-ink-500">{row.guide_code}</p>
+            </div>
+            <span className="min-w-0 pt-0.5 text-right text-xs text-pretty tabular-nums text-ink-500">
               {days == null ? "" : days === 0 ? `${whenLabel} hoy` : `${whenLabel} hace ${days} día${days === 1 ? "" : "s"}`}
             </span>
           </li>
