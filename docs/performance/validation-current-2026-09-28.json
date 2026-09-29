@@ -1,20 +1,75 @@
 {
-  "verifiedAt": "2026-09-29T00:23:33.396Z",
-  "candidate": "0198_master_read_scaling.sql",
-  "migrationSha256": "485caa32594a925a0d7119f770e160a21a1e85ca310960b1958e88565a80b399",
+  "verifiedAt": "2026-09-29T01:29:29.164Z",
+  "candidate": "0202_master_read_scaling.sql",
+  "productionBase": "aa87ce0",
+  "migrationSha256": "27a82b392c164350262a9ac7312cc0f2430d53129192c034b539e9defafa49ea",
+  "counterSqlIdenticalAfterRenumber": true,
   "productionDeployed": false,
-  "stagingComplete": false,
-  "unitTestsPassed": 5111,
-  "unitFilesPassed": 320,
+  "stagingProject": "zuloxsrfcwhefedgfcnb",
+  "stagingCoreIntegrationPassed": true,
+  "stagingComplete": true,
+  "unitTestsPassed": 5189,
+  "unitFilesPassed": 323,
   "buildPassed": true,
-  "finalMillion": {
-    "attempts": 21000,
-    "failed": 0,
-    "normalCorrectnessPassed": true,
-    "adverseCorrectnessPassed": true,
-    "serverStopped": true
-  },
-  "directedMixedPassed": true,
   "sqlSmokePassed": true,
-  "releaseDecision": "HOLD: real staging Auth/PostgREST/UI and end-to-end performance acceptance pending"
+  "releaseGuardsPassed": 13,
+  "stagingConcurrencyOperations": 416,
+  "stagingConcurrencyPassed": true,
+  "writeP95Comparisons": [
+    {
+      "trial": 0,
+      "users": 1,
+      "beforeMs": 4640.721099999999,
+      "afterMs": 3211.4585000000006,
+      "changePct": -30.798286930020392
+    },
+    {
+      "trial": 0,
+      "users": 5,
+      "beforeMs": 3970.838100000001,
+      "afterMs": 3560.5108999999975,
+      "changePct": -10.333516241823194
+    },
+    {
+      "trial": 0,
+      "users": 20,
+      "beforeMs": 3375.388699999996,
+      "afterMs": 3829.309500000003,
+      "changePct": 13.447956379068504
+    },
+    {
+      "trial": 1,
+      "users": 1,
+      "beforeMs": 3378.092499999999,
+      "afterMs": 3170.4665999999997,
+      "changePct": -6.146246735398719
+    },
+    {
+      "trial": 1,
+      "users": 5,
+      "beforeMs": 3740.301099999997,
+      "afterMs": 3436.4916999999987,
+      "changePct": -8.12259205548983
+    },
+    {
+      "trial": 1,
+      "users": 20,
+      "beforeMs": 3377.356899999999,
+      "afterMs": 3408.311600000001,
+      "changePct": 0.9165362416984069
+    }
+  ],
+  "releaseDecision": "HOLD: draft review/CI and controlled production migration prerequisites before promotion",
+  "stagingScope": "Core Master workflows; external providers disconnected; browser file-save event unavailable",
+  "browserChecks": {
+    "login": true,
+    "page100": true,
+    "nextPreviousExact": true,
+    "storeRegionFilters": true,
+    "deepLinkHistory": true,
+    "commentAudit": true,
+    "multipleOutputs": true,
+    "changeNoticeOnPage2": true,
+    "returnToStartPreservesFilters": true
+  }
 }

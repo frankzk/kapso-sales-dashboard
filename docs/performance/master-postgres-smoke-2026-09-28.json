@@ -1,7 +1,7 @@
 {
   "localOnly": true,
   "productionTouched": false,
-  "startedAt": "2026-09-29T00:06:48.777Z",
+  "startedAt": "2026-09-29T01:18:22.995Z",
   "checks": [
     "full migration chain and initial RLS fixture",
     "Master role-switch regression in one protocol message",
@@ -24,10 +24,10 @@
     "scripts/sql/gf_parallel_box_smoke.sql",
     "scripts/sql/rider_pay_rejection_photo_smoke.sql",
     "Master parity release gate after operational fixtures",
-    "Master rollback/reinstall from schema 0197",
+    "Master rollback/reinstall from schema 0201",
     "fresh generated bundle"
   ],
   "version": "PostgreSQL 16.14, compiled by Visual C++ build 1944, 64-bit",
   "ok": true,
-  "completedAt": "2026-09-29T00:07:03.592Z"
+  "completedAt": "2026-09-29T01:18:33.381Z"
 }

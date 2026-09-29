@@ -1,64 +1,64 @@
 {
   "project": "zuloxsrfcwhefedgfcnb",
   "origin": "http://127.0.0.1:3100",
-  "startedAt": "2026-09-29T01:16:13.331Z",
+  "startedAt": "2026-09-29T01:20:35.234Z",
   "checks": [
     {
       "label": "all orders",
       "rows": 420,
       "exact": true,
-      "durationMs": 1110.0346
+      "durationMs": 1127.3397000000002
     },
     {
       "label": "region and store",
       "rows": 140,
       "exact": true,
-      "durationMs": 528.6576
+      "durationMs": 557.002
     },
     {
       "label": "stage and substage",
       "rows": 140,
       "exact": true,
-      "durationMs": 760.6003000000001
+      "durationMs": 539.5723000000003
     },
     {
       "label": "empty search",
       "rows": 0,
       "exact": true,
-      "durationMs": 515.7951000000003
+      "durationMs": 509.0675000000001
     },
     {
       "label": "viewer requests both stores",
       "rows": 210,
       "exact": true,
-      "durationMs": 569.9191999999994
+      "durationMs": 547.3822
     },
     {
       "label": "selection",
       "rows": 6,
       "exact": true,
-      "durationMs": 465.91899999999987
+      "durationMs": 480.14899999999943
     },
     {
       "label": "selection refuses other store",
       "rows": 3,
       "exact": true,
-      "durationMs": 480.52059999999983
+      "durationMs": 465.72910000000047
     },
     {
       "label": "admin server-rendered page",
       "rows": 100,
-      "durationMs": 1026.8692999999994
+      "durationMs": 1271.6296999999995
     },
     {
       "label": "viewer server-rendered page",
       "rows": 100,
-      "durationMs": 778.8914999999997
+      "durationMs": 986.0965000000006
     },
     {
       "label": "blocked server-rendered page",
       "rows": 0,
-      "durationMs": 478.98599999999897
+      "durationMs": 451.5209999999988
     },
     {
       "label": "UI comment persisted exactly once with actor",
@@ -67,5 +67,5 @@
   ],
   "errors": [],
   "passed": true,
-  "finishedAt": "2026-09-29T01:16:22.456Z"
+  "finishedAt": "2026-09-29T01:20:44.410Z"
 }

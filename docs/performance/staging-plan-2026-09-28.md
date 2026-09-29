@@ -1,8 +1,12 @@
-# Validación de integración pendiente
+# Plan de validación de integración
 
 Destino autorizado: proyecto gratuito `kapso-sales-staging`, organización
-`Kapso pruebas`, São Paulo. Confirmar su identificador una vez creado. Nunca
+`Kapso pruebas`, São Paulo, identificador `zuloxsrfcwhefedgfcnb`. Nunca
 usar el proyecto productivo `pmihklgtbyuurpkrxtoz` como destino de fixtures.
+
+Resultados ejecutados y límites: [staging-validation-2026-09-28.md](staging-validation-2026-09-28.md).
+Esta lista describe el alcance objetivo; no implica que cada combinación
+operativa o integración externa haya sido cubierta en el navegador.
 
 ## Preparación
 

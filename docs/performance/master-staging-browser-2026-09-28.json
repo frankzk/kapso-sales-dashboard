@@ -1,0 +1,17 @@
+{
+  "project": "zuloxsrfcwhefedgfcnb",
+  "origin": "http://127.0.0.1:3100",
+  "login": true,
+  "page100": true,
+  "nextPreviousExact": true,
+  "storeRegionFilters": true,
+  "deepLinkHistory": true,
+  "commentAudit": true,
+  "multipleOutputs": true,
+  "changeNoticeOnPage2": true,
+  "returnToStartPreservesFilters": true,
+  "downloadEndpointExcelParity": true,
+  "browserDownloadEventObserved": false,
+  "providerIntegrationsEnabled": false,
+  "verifiedAt": "2026-09-29T01:29:29.164Z"
+}

@@ -1,5 +1,11 @@
 # Validación del Master — 28 de septiembre de 2026
 
+> Registro de la etapa previa a staging, conservado como evidencia histórica.
+> El estado vigente, la integración de `aa87ce0` y la migración renumerada a
+> **0202** están en [staging-validation-2026-09-28.md](staging-validation-2026-09-28.md).
+> Las referencias a staging pendiente y a la candidata 0198 de este documento
+> describen ese momento anterior, no el resultado actual.
+
 **No aprobado para producción.** Se corrigió la concurrencia y se amplió la
 verificación sobre el código actual, pero falta la validación completa con
 Supabase Auth, PostgREST y la aplicación. También falta aprobar el costo de

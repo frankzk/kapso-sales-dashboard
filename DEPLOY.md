@@ -2,15 +2,21 @@
 
 ## Master read scaling — migration 0202
 
-**Release hold (2026-09-28): staging and performance acceptance remain pending.**
+**Release status (2026-09-28): staging integration passed; production is not deployed.**
+Current evidence and remaining release checks are in
+`docs/performance/staging-validation-2026-09-28.md`. Migration 0202 follows the
+published schema 0201 at `aa87ce0`; the earlier unpublished 0198 candidate was
+renumbered without changing its executable SQL.
 The old unpublished 0157 candidate used shared counter rows and deadlocked.
 The current candidate is based on production schema 0201; 0157 is already an
 unrelated published migration and must never be overwritten. Migration 0202
 uses signed counter parts per live PostgreSQL backend slot, summed by invoker
 views in the same transaction snapshot. There is no deferred queue or global
 writer lock. The directed mixed-UPSERT regression passes on real PostgreSQL 16,
-as do the initial 50k concurrent integrity tests. A short adverse workload still
-shows increased write latency, so integrity passing does not approve performance.
+as do the million-order concurrent integrity tests. Short adverse SQL workloads
+still show increased write latency, so integrity alone does not approve capacity.
+Real staging Auth/PostgREST tests compared complete ingestion plus projection at
+1/5/20 sessions: no sustained >20% p95 regression in the measured workload.
 See `docs/performance/validation-2026-09-28.md` for current evidence and limits;
 09-25 reports describe the historical rejected candidate.
 
@@ -81,7 +87,7 @@ refuses unprepared indexes and the release gate rejects deliberately corrupted
 summaries, missing indexes, disabled triggers and incorrect grants in isolation.
 It also runs the isolated rollback/reinstallation smoke on a second fresh DB.
 
-### Concurrency release gate (staging still pending)
+### Concurrency release gate
 
 Do not infer writer throughput from PGlite's single backend. Before promotion,
 use a separate PostgreSQL/Supabase staging database with representative schema,
@@ -95,8 +101,11 @@ unhandled failures and the delay between an order change and its Master update.
 Require zero aggregate drift and no new unrecovered write failures. As a
 conservative initial gate, stop promotion on a sustained >20% increase in
 end-to-end write p95 or ingestion backlog against the same baseline; replace
-that gate only with an explicitly agreed operational budget. These are release
-criteria, not results already obtained. No staging concurrency result exists yet.
+that gate only with an explicitly agreed operational budget. Staging results are
+in `master-staging-before-2026-09-28.json` and `master-staging-after-2026-09-28.json`.
+Those runs used schema 0197 plus the identical counter implementation before its
+0202 renumber. Full current-schema SQL concurrency and staging read/HTTP checks
+were repeated after incorporating upstream migrations 0198–0201.
 
 The reproducible local test now uses real PostgreSQL, not PGlite:
 
@@ -111,8 +120,9 @@ It creates and stops a new loopback-only cluster, applies the real schema to
 identical before/after clones and uses synthetic data with independent writer
 connections. It never reads application environment files or accepts a remote
 connection URL. Auth roles are simulated by the test prelude; webhook handlers,
-PostgREST, network, UI, provider integrations and ingestion lag still require
-staging. The local failure is preserved in the report, not retried away.
+PostgREST, network and UI require the separate staging suite. Actual external
+provider delivery and production ingestion backlog are not simulated by either
+suite. Historical failures remain in the reports; they are not retried away.
 
 Record the previous deployment and verify a recoverable database backup before
 the release window. After promotion, compare the same authenticated read/write

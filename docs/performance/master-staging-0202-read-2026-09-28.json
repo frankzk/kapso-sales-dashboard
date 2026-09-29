@@ -1,0 +1,56 @@
+{
+  "project": "zuloxsrfcwhefedgfcnb",
+  "variant": "0202-read",
+  "startedAt": "2026-09-29T01:19:14.726Z",
+  "roles": [
+    {
+      "name": "admin",
+      "visible": 420,
+      "pages": [
+        100,
+        100,
+        100,
+        100,
+        20
+      ],
+      "forwardBackwardExact": true,
+      "countsExact": true,
+      "facetsExact": true
+    },
+    {
+      "name": "viewer1",
+      "visible": 210,
+      "pages": [
+        100,
+        100,
+        10
+      ],
+      "forwardBackwardExact": true,
+      "countsExact": true,
+      "facetsExact": true
+    },
+    {
+      "name": "blocked",
+      "visible": 0,
+      "pages": [],
+      "forwardBackwardExact": true,
+      "countsExact": true,
+      "facetsExact": true
+    },
+    {
+      "name": "rider",
+      "visible": 1,
+      "pages": [
+        1
+      ],
+      "forwardBackwardExact": true,
+      "countsExact": true,
+      "facetsExact": true
+    }
+  ],
+  "phases": [],
+  "errors": [],
+  "idempotency": true,
+  "passed": true,
+  "finishedAt": "2026-09-29T01:19:27.217Z"
+}

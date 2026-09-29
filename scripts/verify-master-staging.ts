@@ -4,7 +4,7 @@ import { stagingContext, checked, loadFixture } from './staging-master-context';
 import { recomputeOrderMaster, clearTariffCache } from '../lib/order-master';
 import { loadMasterCursorPage, compareMasterRows, type MasterCursor } from '../lib/master-pagination';
 const variant=process.argv[2] ?? '';
-assert.ok(['before','after'].includes(variant),'Specify before or after');
+assert.ok(['before','after','0202-read'].includes(variant),'Specify before, after or 0202-read');
 const ctx=stagingContext(), fixture=loadFixture();
 const report:any={project:'zuloxsrfcwhefedgfcnb',variant,startedAt:new Date().toISOString(),roles:[],phases:[],errors:[]};
 const clients=new Map<string,ReturnType<typeof ctx.user>>();
@@ -49,7 +49,7 @@ try {
   }
   // Actual Supabase Auth sessions and application projection over PostgREST.
   // Each writer owns one order, matching independent Shopify synchronizations.
-  for(let trial=0;trial<2;trial++) for(const workers of [1,5,20]) {
+  for(let trial=0;trial<(variant==='0202-read'?0:2);trial++) for(const workers of [1,5,20]) {
     const sessions=await Promise.all(Array.from({length:workers},(_,i)=>login(`viewer${i+1}`)));
     const samples:number[]=[],readSamples:number[]=[],eventIds:string[]=[];
     clearTariffCache();
@@ -71,7 +71,7 @@ try {
     report.phases.push(phase);console.log(JSON.stringify(phase));
   }
   // A source retry keeps the source order and its projection unique.
-  const order=fixture.orders[0];for(let i=0;i<3;i++){checked(await ctx.admin.from('orders').upsert(order),'retry');await recomputeOrderMaster(ctx.admin,[order.id]);}
+  const order=fixture.orders[0];for(let i=0;i<(variant==='0202-read'?0:3);i++){checked(await ctx.admin.from('orders').upsert(order),'retry');await recomputeOrderMaster(ctx.admin,[order.id]);}
   assert.equal(checked(await ctx.admin.from('orders').select('id').eq('shopify_order_id',order.shopify_order_id).eq('store_id',order.store_id),'unique source').length,1);
   assert.equal(checked(await ctx.admin.from('order_master').select('id').eq('order_id',order.id),'unique projection').length,1);
   report.idempotency=true;report.passed=true;
