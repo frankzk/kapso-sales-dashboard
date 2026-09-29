@@ -1393,7 +1393,8 @@ sin tope de antigüedad. Reglas:
       acusar en falso como tapar el duplicado bueno.
     - Al implantarlo (10-09-2026) el histórico de 78 comprobaciones no tenía
       **ninguna** colisión.
-  - **Medios de cobro aceptados: Yape, Plin y transferencia BCP.** Plin entró
+  - **Medios de cobro aceptados: Yape, Plin, transferencia BCP y cualquier app
+    que pague a un Yape** (ver abajo). Plin entró
     el 10-09-2026: el motorizado remite con la billetera que tenga, y Plin y
     Yape se pagan entre sí y caen en la misma cuenta —la constancia de un Plin
     a Grupo GF SAC dice literalmente «Enviado a: Grupo Gf S · 930 555 309 -
@@ -1422,6 +1423,15 @@ sin tope de antigüedad. Reglas:
     Yape (morado) y Plin (celeste). También se envía así a un Yape desde esa
     app. **Seis cobros** a «Grupo Gf S.» quedaron en revisión por el medio,
     #AUR177129 entre ellos.
+  - **Cualquier app que pague a un Yape vale como medio** (29-09-2026). Prex,
+    BBVA, el BCP… todas pagan a un Yape, y ese dinero cae en la **misma cuenta
+    Yape** que un Yape directo: se concilia igual, que era la razón de limitar
+    los medios. La constancia lo dice —«Cuenta/billetera: Yape» (Prex),
+    «Entidad de destino: Yape» (BBVA), «- Yape» (Plin)— y el lector lo lee
+    aparte de qué app la emitió. **#KP136441** era un Prex así rechazado por el
+    medio, y había **43 cobros a «Grupo Gf S A C»** en la misma situación: 30 ya
+    validados a mano. Una app que **no** dice adónde fue el dinero sigue
+    exigiendo que alguien mire, y el destinatario y el monto se exigen igual.
   - **La cola de cobros se recorre entera: la que hace más tiempo que no se
     mira va primero.** El 10-09-2026 había **238 guías candidatas y el tope es
     de 60 por pasada**, y la consulta cortaba sin orden ninguno: entraban

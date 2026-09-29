@@ -172,6 +172,7 @@ export async function registerCourierCollection(
       model: input.reading.model,
       is_payment_proof: input.reading.isPaymentProof,
       method: input.reading.method,
+      to_yape: input.reading.toYape,
       recipient_name: input.reading.recipientName,
       amount: input.reading.amount,
       operation_number: input.reading.operationNumber,
