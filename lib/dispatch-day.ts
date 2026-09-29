@@ -190,6 +190,11 @@ export interface QueueRow {
   assignable: boolean;
   /** La caja del motorizado, para los que ya salieron. */
   route: QueueRoute | null;
+  /**
+   * Otro courier no lo entregó (v1.19, `lib/gf-retry.ts`): quién y si su caja
+   * ya volvió. Al asignarlo se crea una salida nueva y Almacén arma otra caja.
+   */
+  failedOutput?: { courier: string; returned: boolean } | null;
 }
 
 export interface QueueRoute {
@@ -630,7 +635,7 @@ export const QUEUE_TILE_LABEL: Record<QueueTile, { label: string; hint: string }
   por_asignar: { label: "Por asignar", hint: "Pedidos de Lima con condiciones para salir y sin caja: disponibles más tomados sin ruta. Quita los filtros de la lista." },
   nunca_salieron: QUEUE_SEGMENT_LABEL.nunca_salieron,
   programados_hoy: QUEUE_SEGMENT_LABEL.programados_hoy,
-  por_reprogramar: { label: "Por reprogramar", hint: "No entregados por el motorizado (En curso · Por reprogramar Lima): los que siguen en su caja se reciben en oficina; los que ya volvieron se asignan o se programan con el calendario." },
+  por_reprogramar: { label: "Por reprogramar", hint: "No entregados (En curso · Por reprogramar Lima): los del motorizado que siguen en su caja se reciben en oficina; los que ya volvieron, y los que otro courier no entregó, se asignan o se programan con el calendario. Lo de otro courier sale en una salida nueva." },
   tomados_sin_caja: { label: "Tomados sin caja", hint: "Ya tomados por Grupo GF (servicio y tarifa reservados) pero todavía sin motorizado." },
   armados: { label: "Armados", hint: "Tomados cuya salida ya armó Almacén (listo para despacho) y siguen sin caja." },
 };
