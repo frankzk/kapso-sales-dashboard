@@ -1075,6 +1075,36 @@ Decisión del owner (29-09-2026):
 - En Despacho del día aparece en **«Desde la lista»** y en la tarjeta **«Por
   reprogramar»**, con la chapa «Tanders no entregó · vuelve / volvió» (§29.13).
 
+#### Lo que Swayp no entrega, también (v1.22, 29-09-2026)
+
+#KP135009 seguía **«En curso · En tránsito»** con su guía 50000139816 en
+DEVOLUCIÓN en el panel de Swayp. Kapta nunca se enteraba: el webhook de Swayp
+solo ha mandado entregas, y las 147 guías vivas seguían en el estado 1. Leídas
+del tracking de Swayp el 29-09-2026, 94 estaban en Devolución, 17 en Devolución
+confirmada y 1 con cobro. Ahora el estado se lee de su API (§11.2, «El estado de
+Swayp se lee de su API»), y lo que Swayp no entregó sigue la misma regla que
+Tanders:
+
+- **Devolución (8), Devolución confirmada (9) y con cobro (12) abren la
+  recuperación** (`swaypGuideFailed`, `lib/reproprovincia.ts`), desde que el
+  paquete empieza a volver, sin esperar la caja. Novedad (6) no: el paquete
+  sigue con el mensajero esperando instrucción (§11.2). Cancelada (10) tampoco:
+  no dice que saliera.
+- **En Lima va a «Por reprogramar Lima»** y a la lista de Grupo GF con la chapa
+  «Swayp no entregó · vuelve»: Swayp se usa una sola vez por pedido en Lima
+  (§9.3), así que el siguiente intento es de otro courier. **En provincia va a
+  Gestión Reproprovincia**, donde Swayp sí se repite.
+- **La ventana es la de la tienda** (`return_recovery_max_days`), no los 65 días
+  de Tanders, que eran por su antigüedad. Se ancla igual, en la **salida** del
+  intento fallido: el barrido sella la guía en cada pasada y la Devolución
+  confirmada llega días después de la Devolución, así que ninguna de las dos
+  sirve de ancla.
+- Si la vendedora revierte la devolución desde la novedad (§11.2) y la guía
+  vuelve a Reparto, está viva otra vez y la recuperación se apaga: manda el
+  estado actual de Swayp.
+- La anulación en Shopify gana, y el pedido va a Por cerrar · Devolución física
+  pendiente hasta que se recibe la caja (§9.4).
+
 #### Las guías con API también aceptan la salida adicional
 
 La mesa de ruta manual (Axel, Urpi, Grupo GF) ya lo cumplía: con otra salida viva
@@ -2842,11 +2872,16 @@ la guía queda detenida esperando una instrucción. No es un intento fallido ya
 cerrado —eso se registra aparte—; es una pregunta abierta que alguien tiene que
 responder para que el paquete siga moviéndose.
 
-El estado 8, «Revisión», es el mensajero marcando devolución por su cuenta.
-Admite la misma gestión, y es la única puerta para revertir una devolución que la
-operación no pidió. Ambos estados mapean a `pendiente` en el modelo de la app
-—que solo tiene cinco estados—, así que el estado crudo de Swayp es lo único que
-distingue «esperando instrucción» de «todavía no salió».
+El estado 8, «Devolución», es el mensajero marcando devolución («pendiente por
+entregar al origen»). Admite la misma gestión, y es la única puerta para
+revertir una devolución que la operación no pidió; mientras no se revierta, el
+pedido ya está en recuperación (§9, «Lo que Swayp no entrega, también»). Ambos
+estados mapean a `en_ruta` en el modelo de la app —que solo tiene cinco
+estados—: el paquete está con el mensajero. El estado crudo de Swayp
+(`swayp_state`) es lo único que distingue «esperando instrucción» de «va en
+reparto». Hasta el 29-09-2026 mapeaban a `pendiente`; nunca se notó porque el
+webhook no los mandaba, pero leídos de la API el Master los habría devuelto a
+«Por armar» con el paquete en la calle.
 
 Swayp acepta exactamente tres respuestas:
 
@@ -2869,9 +2904,9 @@ Reglas:
   Devolver al remitente sí abre la devolución física, que en Swayp se recoge cada
   semana o cada quince días (§9.4).
 - **El desenlace lo confirma Swayp, no nosotros.** Al resolver una novedad la app
-  no toca el estado del envío: lo actualiza el webhook cuando el mensajero
-  ejecuta la instrucción —o cuando no la ejecuta—. Adelantarlo sería pintar en el
-  Master un final que todavía no ocurrió.
+  no toca el estado del envío: lo trae la lectura de su API (abajo) cuando el
+  mensajero ejecuta la instrucción —o cuando no la ejecuta—. Adelantarlo sería
+  pintar en el Master un final que todavía no ocurrió.
 - Queda registrado en `order_events` con el término `novelty_solved`, que guarda
   quién decidió, qué acción, con qué comentario y para qué fecha. Es append-only.
 
@@ -2880,6 +2915,43 @@ tiene —es gestión de venta, la misma persona que llamaría a la clienta—.
 **Devolver al remitente exige además `closure.return`**, porque cierra la entrega
 y dispara la devolución física, que es lo que ese permiso gobierna en el resto
 del sistema.
+
+#### El estado de Swayp se lee de su API (29-09-2026)
+
+**Qué pasaba.** El único canal era el webhook, y el webhook de Swayp **solo ha
+mandado entregas**: las 43 guías que alguna vez actualizó estaban en 7, y no
+llegó ni un Reparto, una Novedad ni una Devolución. Las 147 guías que Kapta
+tenía vivas seguían en el estado 1, y el Master enseñaba «En tránsito» a 112
+devoluciones y a 14 novedades que nadie veía en Envíos (#KP135009).
+
+**Qué hace ahora.** Cada media hora (`/api/cron/swayp-status`, a los :22 y
+:52) Kapta lee cada guía Swayp viva con `GET /v2/guias/{guia}` y toma el
+**`estado`** de la respuesta —como indicó la operación—, y lo aplica por la
+misma puerta que el webhook (`applySwaypState`, `lib/swayp-ingest.ts`). Reglas:
+
+- **Los estados reales**, confirmados con el historial de las 147 guías: 1
+  Generada, 3 Por recolectar, 4 Asignada, 5 Reparto (también «Solucionado», la
+  novedad resuelta), 6 Novedad, 7 Entregada, 8 **Devolución**, 9 **Devolución
+  confirmada**, 10 Cancelada, 12 **Devolución confirmada con cobro**. El
+  catálogo anterior llamaba «Revisión» al 8, «Cancelación» al 9 y «Devolución
+  confirmada» al 12. Un `estado` que no conocemos **no toca la guía**: el
+  barrido lo cuenta con su texto, igual que Tanders.
+- **El estado de entrega solo avanza.** 1–3 son `pendiente`, pero una guía
+  directa nace `en_ruta` y no retrocede; 4, 5, 6 y 8 son `en_ruta`; 7
+  `entregado`; 9–12 `anulado`. Una guía cerrada no se reabre.
+- **La custodia sigue a Swayp:** con el mensajero (`courier`) en 4–6, de vuelta
+  (`retorno`) en 8, 9 y 12. Nunca `devuelto`: «Devolución confirmada» es que la
+  caja llegó a la bodega de Swayp, y la salida sigue abierta hasta recibirla
+  (§9.4). Una novedad resuelta que vuelve a Reparto regresa a `courier`.
+- **Las fechas se llenan una vez**, del historial de Swayp si viene: la salida
+  (`dispatched_at`, la primera Asignada o Reparto), el reparto
+  (`out_for_delivery_at`) y el cierre (`closed_at`).
+- Hasta 200 guías por pasada, las nunca leídas primero; se detiene en el primer
+  429 o si la credencial falla, y deja una línea `[swayp-status]` con los
+  conteos y los motivos de fallo, sin datos de guías ni pedidos.
+- En pruebas el endpoint reventaba con 500 en guías en novedad; si pasa en
+  producción, el reporte lo cuenta con su motivo y la guía se reintenta en la
+  pasada siguiente.
 
 ### 11.3 Quién emite el número de guía al reprogramar
 
@@ -6760,7 +6832,8 @@ esperan courier nuevo** (`pendiente_nuevo_courier`, `lib/gf-retry.ts`). Un
 «Por reprogramar Lima» cuya guía sigue viva con su courier —una reprogramación
 de Aliclik, por ejemplo— no entra: esa la lleva ese courier.
 
-- La fila lleva la chapa **«Tanders no entregó · vuelve»** o **«· volvió»** y
+- La fila lleva la chapa **«Tanders no entregó · vuelve»** o **«· volvió»** —o
+  **«Swayp no entregó · vuelve»** desde la v1.22— y
   cuenta en «Por asignar» y en la tarjeta «Por reprogramar».
 - **Tomarlo crea una salida NUEVA** con su QR y Almacén arma otra caja (§9.3):
   la anterior es de otro courier y lleva su rótulo. Nunca se rellena otra

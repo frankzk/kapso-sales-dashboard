@@ -332,8 +332,9 @@ describe("y la macroetapa la aplica IGUAL", () => {
     // cierra el pedido si otra sigue viva. v1.20: lo de la guía directa, solo
     // en la guía directa (las madres de julio sí reprogramaban).
     // v1.21: el adelanto mínimo de Agencia suma todo lo validado, no solo la
-    // fila `adelanto` (#KP134162).
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.21");
+    // fila `adelanto` (#KP134162). v1.22: Swayp que no entrega (Devolución,
+    // Devolución confirmada) abre la recuperación como Tanders.
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.22");
   });
 });
 

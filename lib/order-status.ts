@@ -204,6 +204,8 @@ export interface GuideSnapshot {
   /** La etiqueta cruda de Aliclik (`status · dispatch · call`). Es lo único que
    *  distingue «el courier no pudo entregar» de «nos cancelaron la venta». */
   reported_status?: string | null;
+  /** El estado crudo de Swayp (1..12): su Devolución también abre la recuperación. */
+  swayp_state?: number | null;
   created_at: string | null;
   updated_at: string | null;
 }

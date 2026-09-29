@@ -45,8 +45,19 @@
 // volviendo y 62 ya devueltos sin anular en Shopify. Decisión del owner: entra
 // desde «En retorno», sin esperar la caja, y la ventana es de 65 días.
 
+// SWAYP (29-09-2026). Lo mismo, una tercera vez: Swayp «Devolución» (8) es su
+// `RETURNING` y «Devolución confirmada» (9, y 12 con cobro) su `RETURNED`. Nunca
+// había pasado por acá porque su webhook solo manda entregas y Kapta tenía las
+// 147 guías vivas en el estado 1; leídas de su API, 112 resultaron devoluciones
+// que el Master enseñaba «En tránsito» (#KP135009). La decisión del owner para
+// Tanders aplica igual —entra desde que vuelve, sin esperar la caja—, pero con la
+// ventana de la tienda: los 65 días eran por la antigüedad de Tanders. El §9.3
+// ya decía qué sigue: en Lima Swayp va una sola vez, así que el reintento es de
+// Grupo GF; en Reproprovincia Swayp se repite.
+
 import { etiquetaDiceRechazoEnPuerta, etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
+import { SWAYP_RETURN_STATES } from "@/lib/swayp";
 import { tandersStatusCode } from "@/lib/tanders/status";
 
 /** Evento que cierra la recuperación a mano, con motivo. */
@@ -57,7 +68,9 @@ export interface RecoveryGuideLike {
   courier: string;
   delivery_status: string;
   reported_status?: string | null;
-  /** Ancla de la ventana de Tanders: su API no dice cuándo empezó a volver. */
+  /** El estado crudo de Swayp (1..12): dice si su guía no entregó. */
+  swayp_state?: number | null;
+  /** Ancla de la ventana de Tanders y Swayp: la salida del intento fallido. */
   dispatched_at?: string | null;
   closed_at?: string | null;
   returned_at?: string | null;
@@ -121,9 +134,29 @@ export function tandersGuideFailed(guide: RecoveryGuideLike): boolean {
   return code === "RETURNING" || code === "RETURNED";
 }
 
-/** ¿Esta guía abre la recuperación del pedido? Aliclik o Tanders que no entregaron. */
+/**
+ * ¿Swayp no pudo entregar? Devolución (8), Devolución confirmada (9) o con
+ * cobro (12). Se lee el estado ACTUAL: una novedad resuelta vuelve de 8 a
+ * Reparto (5, «Solucionado») y la guía vuelve a estar viva, como el `PICKED` de
+ * Tanders. Cancelada (10) no es un intento fallido: no dice que saliera.
+ */
+export function swaypGuideFailed(guide: RecoveryGuideLike): boolean {
+  const courier = (guide.courier ?? "").trim().toLowerCase();
+  if (courier !== "fenix" && courier !== "swayp") return false;
+  return guide.swayp_state != null && SWAYP_RETURN_STATES.has(Number(guide.swayp_state));
+}
+
+/**
+ * La guía no entregó y su paquete todavía vuelve, así que sigue `en_ruta` sin
+ * que nadie la trabaje: el `RETURNING` de Tanders y la Devolución de Swayp.
+ */
+function liveGuideFailed(guide: RecoveryGuideLike): boolean {
+  return tandersGuideFailed(guide) || swaypGuideFailed(guide);
+}
+
+/** ¿Esta guía abre la recuperación del pedido? Aliclik, Tanders o Swayp que no entregaron. */
 export function guideFailedAfterDispatch(guide: RecoveryGuideLike): boolean {
-  return aliclikGuideFailedAfterDispatch(guide) || tandersGuideFailed(guide);
+  return aliclikGuideFailedAfterDispatch(guide) || liveGuideFailed(guide);
 }
 
 /**
@@ -146,7 +179,9 @@ export function guideClosedAt(guide: RecoveryGuideLike): string | null {
  * cuenta de más, nunca de menos, y no salta al llegar la caja (`returned_at`).
  */
 export function guideFailedAt(guide: RecoveryGuideLike): string | null {
-  if (tandersGuideFailed(guide)) return guide.dispatched_at ?? guideClosedAt(guide);
+  // Swayp igual: su barrido sella `swayp_synced_at` —y con él `updated_at`— en
+  // cada pasada, y la Devolución confirmada llega días después de la Devolución.
+  if (liveGuideFailed(guide)) return guide.dispatched_at ?? guideClosedAt(guide);
   return guideClosedAt(guide);
 }
 
@@ -168,12 +203,13 @@ export function recoveryWindowDaysFor(
  * mientras el Master, con razón, los daba por entregados.
  */
 function recoveryApplies(guides: readonly RecoveryGuideLike[]): boolean {
-  // Una guía de Tanders que VUELVE sigue `en_ruta` —el paquete no ha llegado—,
-  // pero ya no lleva ninguna gestión: es justo la que abre la recuperación.
+  // Una guía de Tanders o de Swayp que VUELVE sigue `en_ruta` —el paquete no ha
+  // llegado—, pero ya no lleva ninguna gestión: es justo la que abre la
+  // recuperación.
   return !guides.some(
     (g) =>
       g.delivery_status === "entregado" ||
-      ((g.delivery_status === "pendiente" || g.delivery_status === "en_ruta") && !tandersGuideFailed(g)),
+      ((g.delivery_status === "pendiente" || g.delivery_status === "en_ruta") && !liveGuideFailed(g)),
   );
 }
 

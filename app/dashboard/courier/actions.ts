@@ -325,6 +325,8 @@ type AdmissionShipmentRow = {
   dispatched_at: string | null;
   /** Estado crudo del courier: dice si la salida anterior falló (Tanders `RETURNING`). */
   reported_status: string | null;
+  /** Estado crudo de Swayp: su Devolución también es una salida que falló. */
+  swayp_state: number | null;
   returned_at: string | null;
   guide_code?: string | null;
   output_code?: string | null;
@@ -332,7 +334,7 @@ type AdmissionShipmentRow = {
 
 /** Las columnas de salida que la admisión necesita, en la cola y al tomar. */
 const ADMISSION_SHIPMENT_COLUMNS =
-  "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at,reported_status,returned_at,guide_code,output_code";
+  "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at,reported_status,swayp_state,returned_at,guide_code,output_code";
 
 function isCourierAdmissionStage(stage: unknown, substage: unknown, operational?: unknown): boolean {
   return (

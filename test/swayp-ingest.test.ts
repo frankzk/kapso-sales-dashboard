@@ -100,19 +100,22 @@ describe("state updates", () => {
     expect(updates[0]).toMatchObject({ delivery_status: "en_ruta", status_category: "in_route" });
   });
 
-  it("brings a novedad back to the workable queue", async () => {
+  it("una novedad no devuelve a `pendiente` una guía que ya salió", async () => {
     const { admin, updates } = fakeAdmin({ id: "s1", delivery_status: "en_ruta", swayp_state: 5 });
-    await processSwaypWebhook({ body: { token: TOKEN, guide_number: "1", state: "6" }, admin });
-    expect(updates[0]).toMatchObject({ delivery_status: "pendiente", swayp_state: 6 });
+    const r = await processSwaypWebhook({ body: { token: TOKEN, guide_number: "1", state: "6" }, admin });
+    expect(r.status).toBe("updated");
+    expect(updates[0]).toMatchObject({ swayp_state: 6 });
+    expect(updates[0]).not.toHaveProperty("delivery_status");
   });
 
   it("records the raw state even when two states map to the same delivery_status", async () => {
-    // 6 (Novedad) and 8 (Revisión) both map to 'pendiente'; swayp_state is what
-    // keeps them distinguishable.
-    const { admin, updates } = fakeAdmin({ id: "s1", delivery_status: "pendiente", swayp_state: 6 });
+    // 6 (Novedad) y 8 (Devolución) son los dos `en_ruta`; swayp_state es lo que
+    // los distingue, y el 8 abre la recuperación del pedido.
+    const { admin, updates } = fakeAdmin({ id: "s1", delivery_status: "en_ruta", swayp_state: 6 });
     const r = await processSwaypWebhook({ body: { token: TOKEN, guide_number: "1", state: "8" }, admin });
     expect(r.status).toBe("updated");
-    expect(updates[0]).toMatchObject({ delivery_status: "pendiente", swayp_state: 8 });
+    expect(updates[0]).toMatchObject({ swayp_state: 8, custody_state: "retorno" });
+    expect(updates[0]).not.toHaveProperty("delivery_status");
   });
 });
 

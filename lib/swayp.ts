@@ -390,13 +390,15 @@ export interface SwaypGuide {
  * pertenece a la cuenta, así que eso se traduce a null en vez de a un objeto
  * vacío que el llamador confundiría con datos.
  *
- * OJO: hoy este endpoint **revienta con 500 cuando la guía está en novedad**
- * —`TypeError: Cannot read properties of undefined (reading 'novedadFoto')`,
- * reproducido en el entorno de pruebas—. Es un fallo del lado de Swayp, no
- * nuestro. Lanza excepción, que es lo correcto, pero significa que no se puede
- * consultar una guía justo en el estado en el que más falta haría. El flujo de
- * novedades no depende de esto: trabaja con el `swayp_state` que trae el
- * webhook.
+ * OJO: en el entorno de pruebas este endpoint **reventaba con 500 cuando la
+ * guía estaba en novedad** —`TypeError: Cannot read properties of undefined
+ * (reading 'novedadFoto')`—. Es un fallo del lado de Swayp. Lanza excepción,
+ * que es lo correcto; el barrido de estados (lib/swayp-status-sweep.ts) la
+ * cuenta con su motivo y reintenta en la pasada siguiente, así que si pasa en
+ * producción se ve en su reporte en vez de perderse.
+ *
+ * Desde el 29-09-2026 es la fuente del estado: el webhook de Swayp solo ha
+ * mandado entregas (7), nunca una novedad ni una devolución.
  */
 export async function getGuide(
   opts: SwaypClientOpts,
@@ -486,6 +488,18 @@ export function solveNovelty(
 
 // ── Estados ──────────────────────────────────────────────────────────────────
 
+/**
+ * Los estados de Swayp con el nombre que Swayp les da.
+ *
+ * CORREGIDO CON DATOS REALES (29-09-2026). El catálogo original llamaba
+ * «Revisión» al 8, «Cancelación» al 9 y «Devolución confirmada» al 12. El
+ * historial de las 147 guías vivas leído del tracking público de Swayp dice
+ * otra cosa, sin excepción: 8 es «Devolucion» («marcado para devolución,
+ * pendiente por entregar al origen»), 9 es «Devolucion Confirmada» y 12
+ * «Devolucion Confirmada Con Cobro». El 2 y el 11 no aparecieron en ninguna:
+ * se conservan con el nombre de la documentación. El 5 aparece también como
+ * «Solucionado»: es el Reparto al que vuelve una novedad resuelta.
+ */
 export const SWAYP_STATES: Record<number, string> = {
   1: "Generada",
   2: "Preparada",
@@ -494,11 +508,11 @@ export const SWAYP_STATES: Record<number, string> = {
   5: "Reparto",
   6: "Novedad",
   7: "Entregada",
-  8: "Revisión",
-  9: "Cancelación",
+  8: "Devolución",
+  9: "Devolución confirmada",
   10: "Cancelada",
   11: "Indemnizada",
-  12: "Devolución confirmada",
+  12: "Devolución confirmada con cobro",
 };
 
 /**
@@ -507,12 +521,19 @@ export const SWAYP_STATES: Record<number, string> = {
  * "returning", so the mapping is deliberately lossy and the raw Swayp state is
  * stored alongside it:
  *
- *   1·2·3 aún en bodega        → pendiente
- *   4·5   en manos del mensajero → en_ruta
- *   6     novedad: la entrega falló y necesita gestión telefónica → pendiente
- *   8     el mensajero marcó devolución; todavía se puede gestionar → pendiente
- *   7     entregada            → entregado
- *   10·11·12 cerradas sin entrega → anulado
+ *   1·2·3 aún en bodega                                  → pendiente
+ *   4·5   en manos del mensajero                         → en_ruta
+ *   6     novedad: el mensajero lo tiene y espera instrucción → en_ruta
+ *   8     devolución: el paquete vuelve; aún se puede revertir → en_ruta
+ *   7     entregada                                      → entregado
+ *   9·12  devolución confirmada: la guía terminó sin entregar → anulado
+ *   10·11 cancelada / indemnizada                        → anulado
+ *
+ * 6 y 8 eran `pendiente` hasta el 29-09-2026. Nunca se notaba porque el webhook
+ * de Swayp solo ha mandado entregas, pero al leerlos de la API el Master los
+ * habría leído como «todavía no salió» y el pedido habría vuelto a «Por armar»
+ * con el paquete en la calle. El paquete está con el mensajero, igual que el
+ * `RETURNING` de Tanders; qué espera lo dice `swayp_state`.
  *
  * Returns null for an unknown code so the caller leaves the row untouched
  * rather than writing a wrong status.
@@ -520,11 +541,180 @@ export const SWAYP_STATES: Record<number, string> = {
 export function mapSwaypState(idEstado: number | string): string | null {
   const id = Number(idEstado);
   if (!Number.isFinite(id)) return null;
-  if (id === 1 || id === 2 || id === 3 || id === 6 || id === 8) return "pendiente";
-  if (id === 4 || id === 5) return "en_ruta";
+  if (id === 1 || id === 2 || id === 3) return "pendiente";
+  if (id === 4 || id === 5 || id === 6 || id === 8) return "en_ruta";
   if (id === 7) return "entregado";
   if (id === 9 || id === 10 || id === 11 || id === 12) return "anulado";
   return null;
+}
+
+/**
+ * Los estados en los que Swayp NO ENTREGÓ y el paquete vuelve o ya volvió al
+ * origen: Devolución (8), Devolución confirmada (9) y con cobro (12). Son el
+ * `RETURNING`/`RETURNED` de Swayp, y abren la recuperación del pedido igual que
+ * los de Tanders (lib/reproprovincia.ts). 10 (Cancelada) no: no dice que el
+ * paquete saliera.
+ */
+export const SWAYP_RETURN_STATES: ReadonlySet<number> = new Set([8, 9, 12]);
+
+/**
+ * Dónde está el paquete según el estado de Swayp, en el escalafón de custodia
+ * del MOM. `null` = el estado no lo dice (en bodega de Swayp, cancelada,
+ * entregada): no se toca.
+ *
+ * 9 y 12 se quedan en `retorno`, no en `devuelto`: «Devolución confirmada» es
+ * que llegó a la bodega de SWAYP, y el MOM §9.4 dice que la caja se recoge cada
+ * semana o cada quince días y que la salida sigue abierta hasta recibirla. El
+ * `devuelto` lo pone quien la recibe.
+ */
+export function swaypCustodyFor(idEstado: number): "courier" | "retorno" | null {
+  if (idEstado === 4 || idEstado === 5 || idEstado === 6) return "courier";
+  if (SWAYP_RETURN_STATES.has(idEstado)) return "retorno";
+  return null;
+}
+
+function normalizeLabel(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * El texto de `estado` → su código. Los nombres son los que Swayp escribe en la
+ * guía (vistos el 29-09-2026), sin tildes ni mayúsculas. «Solucionado» es el
+ * Reparto al que vuelve una novedad resuelta.
+ */
+const STATE_BY_LABEL: Record<string, number> = {
+  generada: 1,
+  preparada: 2,
+  "por recolectar": 3,
+  asignada: 4,
+  reparto: 5,
+  "en reparto": 5,
+  solucionado: 5,
+  novedad: 6,
+  entregada: 7,
+  entregado: 7,
+  devolucion: 8,
+  "devolucion confirmada": 9,
+  cancelada: 10,
+  indemnizada: 11,
+  "devolucion confirmada con cobro": 12,
+};
+
+/** Código del texto de un estado de Swayp, o null si no lo conocemos. */
+export function swaypStateFromLabel(label: string | null | undefined): number | null {
+  if (typeof label !== "string") return null;
+  return STATE_BY_LABEL[normalizeLabel(label)] ?? null;
+}
+
+/** Lo que se sabe de una guía leída con `GET /v2/guias/{guia}`. */
+export interface SwaypGuideReading {
+  /** Código 1..12, o null si el `estado` no se pudo traducir. */
+  state: number | null;
+  /** El `estado` tal cual vino, para aprender de lo que no se tradujo. */
+  label: string | null;
+  /** Cuándo salió a reparto, si Swayp lo dice. */
+  departedAt: string | null;
+  /** Cuándo entró al estado actual, si Swayp lo dice. */
+  changedAt: string | null;
+}
+
+function isoOrNull(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function codeOf(value: unknown): number | null {
+  if (typeof value === "number" || (typeof value === "string" && /^\s*\d+\s*$/.test(value))) {
+    const n = Number(value);
+    return SWAYP_STATES[n] ? n : null;
+  }
+  return null;
+}
+
+/** Fecha de un campo `fecha…` para el estado actual, cuando no hay historial. */
+const DATE_FIELD_BY_STATE: Record<number, string> = {
+  5: "fechaReparto",
+  6: "fechaNovedad",
+  7: "fechaEntregada",
+  9: "fechaDevolucion",
+  10: "fechaCancelado",
+  12: "fechaDevolucion",
+};
+
+/**
+ * Lee el estado de una guía de la respuesta de `GET /v2/guias/{guia}`.
+ *
+ * Lo que manda es `estado` —así lo indicó la operación el 29-09-2026: «buscas
+ * "estado" dentro del body de respuesta»—. Viene como TEXTO («Devolucion»), igual
+ * que en la guía que muestra el tracking público; si llegara como número o como
+ * objeto `{codigo, nombre}` también se lee, y a falta de él se prueba
+ * `idEstado`/`codigoEstado`. Un texto que no conocemos NO se adivina: `state`
+ * queda null y el barrido lo cuenta con su texto, igual que Tanders.
+ *
+ * La forma completa de la respuesta no está documentada; lo demás (el
+ * historial `notas`, las `fecha…`) se aprovecha si viene y se ignora si no.
+ */
+export function readSwaypGuide(body: unknown): SwaypGuideReading {
+  const root = asRecord(Array.isArray(body) ? body[0] : body);
+  const guide = asRecord(root?.data) ?? root;
+  if (!guide) return { state: null, label: null, departedAt: null, changedAt: null };
+
+  let state: number | null = null;
+  let label: string | null = null;
+  const estado = guide.estado;
+  const estadoObj = asRecord(estado);
+  if (typeof estado === "string" && !/^\s*\d+\s*$/.test(estado)) {
+    label = estado.trim() || null;
+    state = swaypStateFromLabel(estado);
+  } else if (estadoObj) {
+    const nombre = [estadoObj.nombre, estadoObj.name, estadoObj.descripcion, estadoObj.estado].find(
+      (v): v is string => typeof v === "string" && v.trim() !== "",
+    );
+    label = nombre?.trim() ?? null;
+    state =
+      swaypStateFromLabel(nombre) ??
+      codeOf(estadoObj.codigo) ??
+      codeOf(estadoObj.id) ??
+      codeOf(estadoObj.idEstado) ??
+      codeOf(estadoObj.codigoEstado);
+  } else {
+    state = codeOf(estado);
+    if (state != null) label = String(estado).trim();
+  }
+  if (state == null) state = codeOf(guide.idEstado) ?? codeOf(guide.codigoEstado);
+
+  // El historial, cuando viene, da las fechas reales: la primera salida a
+  // reparto y la entrada al estado actual.
+  const notas = Array.isArray(guide.notas) ? guide.notas.map(asRecord).filter(Boolean) : [];
+  let departedAt: string | null = null;
+  let changedAt: string | null = null;
+  for (const nota of notas as Record<string, unknown>[]) {
+    const at = isoOrNull(nota.fecha);
+    if (!at) continue;
+    const code =
+      codeOf(nota.codigoEstado) ??
+      (typeof nota.estado === "string" ? swaypStateFromLabel(nota.estado) : null);
+    if ((code === 4 || code === 5) && (!departedAt || at < departedAt)) departedAt = at;
+    if (state != null && code === state && (!changedAt || at > changedAt)) changedAt = at;
+  }
+  departedAt ??= isoOrNull(guide.fechaReparto) ?? isoOrNull(guide.fechaTransito);
+  if (!changedAt && state != null && DATE_FIELD_BY_STATE[state]) {
+    changedAt = isoOrNull(guide[DATE_FIELD_BY_STATE[state]!]);
+  }
+
+  return { state, label, departedAt, changedAt };
 }
 
 /** URL de tracking pública, para mandarle al cliente final. No requiere auth. */

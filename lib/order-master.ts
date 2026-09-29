@@ -62,7 +62,7 @@ const SHIPMENT_BASE_COLUMNS =
   "id,order_id,store_id,courier,guide_code,delivery_status,status_category," +
   "aliclik_attempts,reroute_attempts,delivered_source,district,province,region," +
   "delivery_address,delivery_reference,latitude,longitude," +
-  "customer_name,customer_phone,created_at,updated_at,reported_status";
+  "customer_name,customer_phone,created_at,updated_at,reported_status,swayp_state";
 const SHIPMENT_GESTION_COLUMNS =
   ",assigned_at,dispatched_at,out_for_delivery_at,rescheduled_at,closed_at," +
   "returned_at,pickup_state,agency_branch,agency_arrived_at,agency_expires_at," +
@@ -165,6 +165,8 @@ interface ShipmentRecord {
   updated_at: string | null;
   /** `status · dispatch · call` de Aliclik: decide si el pedido merece otro intento. */
   reported_status?: string | null;
+  /** Estado crudo de Swayp (0080): su Devolución también lo decide. */
+  swayp_state?: number | null;
   assigned_at?: string | null;
   dispatched_at?: string | null;
   out_for_delivery_at?: string | null;
@@ -263,6 +265,7 @@ function toGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): GuideSnapshot 
     closed_at: s.closed_at ?? derived.closed_at,
     returned_at: s.returned_at ?? null,
     reported_status: s.reported_status ?? null,
+    swayp_state: s.swayp_state ?? null,
     pickup_state: s.pickup_state ?? null,
     agency_branch: s.agency_branch ?? null,
     agency_arrived_at: s.agency_arrived_at ?? null,
@@ -296,6 +299,7 @@ function toMacroGuideSnapshot(s: ShipmentRecord, calls: CallRecord[]): MacroGuid
     preparation_state: s.preparation_state ?? null,
     custody_state: s.custody_state ?? null,
     reported_status: guide.reported_status ?? null,
+    swayp_state: guide.swayp_state ?? null,
     closed_at: guide.closed_at,
     updated_at: guide.updated_at,
   };

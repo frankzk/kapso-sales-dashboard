@@ -428,15 +428,16 @@ describe("las piezas en el código", () => {
     expect(src).toContain('query.or("last_courier.is.null,last_courier.neq.tanders").lt("macro_since", cutoff)');
   });
 
-  it("todas las lecturas de la regla traen la salida del intento (el ancla de Tanders)", () => {
-    expect(read("lib/shipments-access.ts")).toContain('"id,order_id,courier,delivery_status,reported_status,dispatched_at,closed_at,returned_at,updated_at"');
-    expect(read("lib/voice-recovery-server.ts")).toContain('"order_id, courier, delivery_status, reported_status, dispatched_at, closed_at, returned_at, updated_at"');
+  it("todas las lecturas de la regla traen la salida del intento (el ancla de Tanders) y el estado de Swayp", () => {
+    expect(read("lib/shipments-access.ts")).toContain('"id,order_id,courier,delivery_status,reported_status,swayp_state,dispatched_at,closed_at,returned_at,updated_at"');
+    expect(read("lib/voice-recovery-server.ts")).toContain('"order_id, courier, delivery_status, reported_status, swayp_state, dispatched_at, closed_at, returned_at, updated_at"');
   });
 
   it("la versión sube y el MOM lo dice", () => {
-    // La v1.21 vino después (adelanto mínimo de Agencia, #KP134162); lo que se
-    // vigila aquí es que el MOM documente la v1.19.
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.21");
+    // La v1.21 (adelanto mínimo de Agencia, #KP134162) y la v1.22 (Swayp que
+    // no entrega) vinieron después; lo que se vigila aquí es que el MOM
+    // documente la v1.19.
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.22");
     const mom = read("docs/mom/master-pedidos-v1.md");
     expect(mom).toContain("#### Lo que Tanders no entrega también es «Por reprogramar Lima» (v1.19, 29-09-2026)");
     expect(mom).toContain("**Crear la guía directa no es reprogramar (v1.19, 29-09-2026).**");
