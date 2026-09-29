@@ -495,10 +495,26 @@ describe("el final del celular pegado al nombre (BBVA, Plin)", () => {
       name: "Grupo Gf S",
       phoneDigits: "930555309",
     });
-    expect(splitRecipientPhoneSuffix("Grupo gf s ***309")).toEqual({
-      name: "Grupo gf s",
-      phoneDigits: "309",
+  });
+
+  it("una máscara no es el celular: la cuenta del BCP se aparta sin juzgarla", () => {
+    // #AUR177129: «Grupo Gf S. **** 0012» — 0012 es la CUENTA, no el ···309.
+    // Con asteriscos o varios puntos no se sabe qué número es, y un dato que no
+    // se sabe no puede desmentir la cuenta.
+    for (const [leido, nombre] of [
+      ["Grupo Gf S. **** 0012", "Grupo Gf S."],
+      ["Grupo gf s ***309", "Grupo gf s"],
+      ["Grupo gf s ••••5309", "Grupo gf s"],
+    ] as const) {
+      expect(splitRecipientPhoneSuffix(leido)).toEqual({ name: nombre, phoneDigits: null });
+    }
+  });
+
+  it("la constancia del BCP no queda acusada por la cuenta enmascarada", () => {
+    const r = yapeRecipientReadingFromVision({
+      extracted: { recipient_name: "Grupo Gf S. **** 0012", recipient_phone_last_digits: null },
     });
+    expect(r).toMatchObject({ name: "Grupo Gf S.", phoneLastDigits: null, status: "partial" });
   });
 
   it("no toca un nombre sin separador, ni el enmascarado de Yape", () => {
