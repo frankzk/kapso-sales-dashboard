@@ -413,7 +413,7 @@ Reglas:
     **sí suma para el mínimo** cuando hay adelanto: el formulario registra
     como `diferencia` todo Yape posterior al primero, así que un abono partido
     en S/ 10 + S/ 20 es el mismo compromiso que uno de S/ 30. Hasta la
-    `mom-v1.20` (29-09-2026) solo contaba la fila `adelanto`, y #KP134162 —S/ 10
+    `mom-v1.21` (29-09-2026) solo contaba la fila `adelanto`, y #KP134162 —S/ 10
     + S/ 20 validados, siete días marcando «Confirmó el pedido»— se quedó en
     Por confirmar · Último intento con «Adelanto cargado»; ni pagando el total
     habría salido.
@@ -2961,10 +2961,17 @@ la productividad de quien la creó; Repro Provincia ya contaba como
 cualquier `reroute` como reprogramación (`lib/guide-dates.ts`), así que toda
 guía directa nacía con fecha de reprogramación: en Lima caía en «En curso · Por
 reprogramar Lima» sin un solo intento fallido (#KP135009, 38 pedidos) y en
-provincia en «Gestión Reproprovincia» (32). Una gestión sin resultado no es
-una reprogramación: la guía directa queda en **En curso · En tránsito**. Las
-reprogramaciones de verdad siempre dejan estado —Aliclik `en_ruta`, el
-reenvío Swayp `en_ruta` en la hija y `transferido` en la madre— y no cambian.
+provincia en «Gestión Reproprovincia» (32). La gestión con la que nace la guía
+directa no es una reprogramación: la guía queda en **En curso · En tránsito**.
+Las reprogramaciones de verdad dejan estado —Aliclik `en_ruta`, el reenvío
+Swayp `en_ruta` en la hija y `transferido` en la madre— y no cambian.
+
+**Solo en la guía directa (v1.20, 29-09-2026).** La v1.19 ignoraba toda gestión
+`reroute` sin estado, y en julio el reenvío por Fenix dejaba esa misma fila,
+sin estado, en la guía **madre** («Guía Fenix creada: …», 149 guías): ahí sí
+marca la reprogramación. Cinco pedidos de julio (#KP117144) cayeron en
+«Preparación · Por armar» hasta que la excepción se limitó a las guías con
+`created_via = fenix_directo`.
 
 **El destino lo pone la GUÍA, no el pedido.** Al reprogramar, la salida ya
 existe y su destino es mejor dato que el del pedido por tres razones: es el que
@@ -3673,6 +3680,13 @@ poner las dos columnas una al lado de la otra.
         tiene que empezar despacio.
       - **Al llegar al tope el aviso no se pierde**: se queda en la cola sin
         tocar y sale en la siguiente pasada con cupo.
+      - **Una tienda topada no le quita el turno a otra.** Cada pasada coge
+        los pendientes más antiguos de todas las tiendas; los de una tienda
+        topada no pueden salir, y si ocupaban esos puestos, la siguiente pasada
+        volvía a cogerlos a ellos. El 29-09-2026 Kenku amaneció con sus 30
+        gastados y 40 esperando, y Aurela —con 7 de 30— no mandó nada en toda
+        la mañana. Ahora primero se mira qué tiendas tienen cupo y la cola se
+        pide solo de ésas.
       - **Si no se puede contar lo ya enviado, no se manda.** Mandar a ciegas
         con un número nuevo es justo lo que el tope existe para evitar.
       - **No cuenta** las respuestas a lo que escribe la clienta (botones,
