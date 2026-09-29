@@ -7,7 +7,7 @@ related_targets: ["components/grupo-gf-courier.tsx"]
 
 # Despacho del día (Grupo GF Courier)
 
-Scope: cabecera y pestañas de Grupo GF Courier y toda la pestaña Despacho del día (métricas, QR, lista, cajas, devoluciones, hojas). Rutas y Tarifario quedan en una segunda etapa. Mode: Operate.
+Scope: cabecera y pestañas de Grupo GF Courier y toda la pestaña Despacho del día (métricas, QR, lista, cajas, devoluciones, hojas). Segunda etapa (29-09-2026, pedida por Frankz: «haz lo mismo con Rutas y Tarifario»): Rutas y Tarifario heredan este mundo sin cambiarlo. Mode: Operate.
 Audience: supervisor de despacho de Grupo GF, de pie en almacén o en escritorio, con lector de QR o celular.
 Job: decidir quién sale y asignarle paquetes; dejar en cero «Nunca salieron»; atender lo programado hoy.
 Constraints: conservar funciones, textos, reglas y pruebas; objetivos de 44–48 px con puntero táctil; sin scroll horizontal en tareas del teléfono.
