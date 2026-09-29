@@ -401,15 +401,22 @@ Reglas:
   aproximada y dirección de entrega.
 - Agencia queda confirmada solo cuando el pago exigido ha sido validado.
 - **Confirmación expresa de agencia.** Un pedido con las TRES cosas —documento
-  del cliente, sucursal de destino elegida y un pago validado de `adelanto` o
-  `total`— queda confirmado por los hechos y pasa a Preparación sin necesidad de
+  del cliente, sucursal de destino elegida y el adelanto mínimo validado (un
+  `total`, o un `adelanto` que con sus diferencias suma el mínimo, §12)— queda
+  confirmado por los hechos y pasa a Preparación sin necesidad de
   que nadie marque «Confirmó el pedido». Se registra como evento `confirmed` con
   `source: automatico` y la nota nombra la evidencia.
   - Las tres son necesarias. El borrador se guarda en cuanto se teclean el
     documento y la sucursal, así que sin el pago la asesora puede estar todavía
     negociando: **el dinero es lo que convierte la conversación en compromiso**.
-  - `diferencia` no cuenta como pago que compromete: es un saldo posterior sobre
-    un pedido ya en marcha, y llega cuando la confirmación ya ocurrió.
+  - Una `diferencia` sola, sin un `adelanto` vivo detrás, no compromete. Pero
+    **sí suma para el mínimo** cuando hay adelanto: el formulario registra
+    como `diferencia` todo Yape posterior al primero, así que un abono partido
+    en S/ 10 + S/ 20 es el mismo compromiso que uno de S/ 30. Hasta la
+    `mom-v1.21` (29-09-2026) solo contaba la fila `adelanto`, y #KP134162 —S/ 10
+    + S/ 20 validados, siete días marcando «Confirmó el pedido»— se quedó en
+    Por confirmar · Último intento con «Adelanto cargado»; ni pagando el total
+    habría salido.
   - No mira la cobertura. La evidencia de que el envío va a agencia es el
     borrador con su terminal elegida, no la etiqueta del clasificador: un pedido
     puede estar clasificado `provincia_cod` e irse por Shalom.
@@ -3567,7 +3574,14 @@ poner las dos columnas una al lado de la otra.
 
 ### Shalom
 
-- Adelanto mínimo: **S/20** validado antes de generar rótulo. Era S/30 hasta el
+- Adelanto mínimo: **S/20** validado antes de generar rótulo. Se mide con el
+  dinero validado del pedido —el `adelanto` más sus `diferencia`s—, no con la
+  fila que lo trajo; un `total` validado siempre alcanza. Es la misma cuenta
+  que el candado de Olva y el KPI «Adelanto de Agencia», y de ella cuelgan
+  `payment_state`, el paso a Preparación y la confirmación expresa (§6.1).
+  Con el mínimo validado, un comprobante en revisión deja el pedido en
+  `diferencia_cargada`, que también pasa a Preparación: lo que falta es saldo,
+  y el saldo lo exige la clave, no la confirmación. Era S/30 hasta el
   08-09-2026; se bajó a lo que la operación ya hacía —de 78 adelantos de S/20
   cargados, 76 se validaron— porque con el mínimo en 30 esos pedidos quedaban
   con «Adelanto cargado» sobre plata ya aceptada y, en Agencia, no salían de

@@ -434,7 +434,9 @@ describe("las piezas en el código", () => {
   });
 
   it("la versión sube y el MOM lo dice", () => {
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.20");
+    // La v1.21 vino después (adelanto mínimo de Agencia, #KP134162); lo que se
+    // vigila aquí es que el MOM documente la v1.19.
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.21");
     const mom = read("docs/mom/master-pedidos-v1.md");
     expect(mom).toContain("#### Lo que Tanders no entrega también es «Por reprogramar Lima» (v1.19, 29-09-2026)");
     expect(mom).toContain("**Crear la guía directa no es reprogramar (v1.19, 29-09-2026).**");

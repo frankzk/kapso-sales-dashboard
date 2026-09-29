@@ -331,7 +331,9 @@ describe("y la macroetapa la aplica IGUAL", () => {
     // que no entrega abre la recuperación (65 días) y una salida devuelta no
     // cierra el pedido si otra sigue viva. v1.20: lo de la guía directa, solo
     // en la guía directa (las madres de julio sí reprogramaban).
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.20");
+    // v1.21: el adelanto mínimo de Agencia suma todo lo validado, no solo la
+    // fila `adelanto` (#KP134162).
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.21");
   });
 });
 

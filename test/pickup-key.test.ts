@@ -231,6 +231,52 @@ describe("paymentState — indicador del Master", () => {
     ).toBe("pago_completo");
   });
 
+  it("el mínimo se mide con TODO lo validado, no con la fila `adelanto` (#KP134162)", () => {
+    // S/ 10 de adelanto + S/ 20 de diferencia validados sobre S/ 80.10. El
+    // formulario obliga a registrar el segundo Yape como diferencia, así que
+    // contar solo la fila `adelanto` dejaba el pedido en `adelanto_cargado`
+    // para siempre.
+    const corto = payment("adelanto", "validado", ORDER, ADELANTO_MINIMO / 2);
+    const resto = payment("diferencia", "validado", ORDER, ADELANTO_MINIMO);
+    expect(paymentState([corto, resto], 80.1)).toBe("adelanto_validado");
+    expect(paymentProgress([corto, resto], 80.1).advanceValidated).toBe(true);
+    // Ni pagando el total salía: la fila `adelanto` sola nunca llegaba.
+    expect(
+      paymentState([corto, payment("diferencia", "validado", ORDER, 80.1 - ADELANTO_MINIMO / 2)], 80.1),
+    ).toBe("pago_completo");
+  });
+
+  it("lo que completa el mínimo tiene que estar VALIDADO", () => {
+    const corto = payment("adelanto", "validado", ORDER, ADELANTO_MINIMO / 2);
+    const enRevision = payment("diferencia", "pendiente_revision", ORDER, ADELANTO_MINIMO);
+    expect(paymentState([corto, enRevision], 100)).toBe("adelanto_cargado");
+    expect(paymentProgress([corto, enRevision], 100).advanceValidated).toBe(false);
+    expect(paymentProgress([corto, enRevision], 100).advanceRegistered).toBe(true);
+  });
+
+  it("con el mínimo validado, un comprobante en revisión es `diferencia_cargada`", () => {
+    // Incluido el caso raro de validar la diferencia antes que el adelanto: lo
+    // validado ya alcanza, y queda algo por revisar.
+    expect(
+      paymentState(
+        [
+          payment("adelanto", "pendiente_revision", ORDER, ADELANTO_MINIMO / 2),
+          payment("diferencia", "validado", ORDER, ADELANTO_MINIMO),
+        ],
+        100,
+      ),
+    ).toBe("diferencia_cargada");
+  });
+
+  it("una diferencia sin adelanto vivo no hace de adelanto", () => {
+    const soloDiferencia = [
+      payment("adelanto", "rechazado", ORDER, ADELANTO_MINIMO),
+      payment("diferencia", "validado", ORDER, ADELANTO_MINIMO),
+    ];
+    expect(paymentState(soloDiferencia, 100)).toBe("sin_pago");
+    expect(paymentProgress(soloDiferencia, 100).advanceValidated).toBe(false);
+  });
+
   it("un adelanto validado menor al mínimo todavía no habilita la guía", () => {
     // Se ancla a la constante, no a un número: el mínimo bajó de 30 a 20 el
     // 08-09-2026 y esta prueba, que usaba «20» como ejemplo de «poco», se habría

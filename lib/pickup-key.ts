@@ -47,16 +47,20 @@ export function paymentProgress(
   const validatedCents = live
     .filter((payment) => payment.validation_status === "validado")
     .reduce((sum, payment) => sum + (inCents(payment.amount) ?? 0), 0);
-  const advanceRegisteredCents = live
-    .filter((payment) => payment.kind === "adelanto" || payment.kind === "total")
-    .reduce((sum, payment) => sum + (inCents(payment.amount) ?? 0), 0);
-  const advanceValidatedCents = live
-    .filter(
-      (payment) =>
-        payment.validation_status === "validado" &&
-        (payment.kind === "adelanto" || payment.kind === "total"),
-    )
-    .reduce((sum, payment) => sum + (inCents(payment.amount) ?? 0), 0);
+  // EL MÍNIMO DEL ADELANTO SE MIDE CON EL DINERO, no con el nombre de la fila.
+  // Solo sumaba `adelanto` y `total`, y el formulario obliga a registrar como
+  // `diferencia` todo lo que llega después del primer Yape: una clienta que
+  // abona S/ 10 y a los treinta segundos S/ 20 más no alcanzaba NUNCA el mínimo.
+  // #KP134162: S/ 30 validados, siete días de «Confirmó el pedido» y el pedido
+  // quieto en Por confirmar con «Adelanto cargado». Es la misma cuenta que ya
+  // hacen el candado de Olva y el KPI «Adelanto de Agencia» (MOM §12).
+  //
+  // Exige un adelanto VIVO detrás, como el formulario (`paymentPlanProblem`):
+  // una diferencia sola —su adelanto rechazado— sigue sin comprometer nada, y
+  // `paymentState` la lee como `sin_pago`. Si esta cuenta dijera otra cosa, la
+  // confirmación expresa escribiría `confirmed` sobre un pedido que
+  // `agencyPaymentReady` no deja pasar.
+  const hasAdvance = live.some((payment) => payment.kind === "adelanto");
   const hasTotalRegistered = live.some((payment) => payment.kind === "total");
   const hasTotalValidated = live.some(
     (payment) => payment.kind === "total" && payment.validation_status === "validado",
@@ -73,9 +77,9 @@ export function paymentProgress(
     validatedRemaining:
       validOrderTotal === null ? null : Math.max(0, validOrderTotal - validatedCents) / 100,
     advanceRegistered:
-      hasTotalRegistered || advanceRegisteredCents >= SHALOM_MINIMUM_ADVANCE * 100,
+      hasTotalRegistered || (hasAdvance && registeredCents >= SHALOM_MINIMUM_ADVANCE * 100),
     advanceValidated:
-      hasTotalValidated || advanceValidatedCents >= SHALOM_MINIMUM_ADVANCE * 100,
+      hasTotalValidated || (hasAdvance && validatedCents >= SHALOM_MINIMUM_ADVANCE * 100),
     completeRegistered: validOrderTotal !== null && registeredCents >= validOrderTotal,
     completeValidated: validOrderTotal !== null && validatedCents >= validOrderTotal,
   };
@@ -453,20 +457,24 @@ export function paymentState(
     return total.validation_status === "validado" ? "pago_completo" : "pago_total_cargado";
   }
   if (!adelanto) return "sin_pago";
-  if (adelanto.validation_status !== "validado") return "adelanto_cargado";
-  if (!paymentProgress([adelanto], orderTotal).advanceValidated) return "adelanto_cargado";
+  const progress = paymentProgress(payments, orderTotal);
   // Si lo VALIDADO ya cubre el pedido, está pagado — venga en una fila o en
   // tres. Sin esto, un adelanto de S/ 200 sobre un pedido de S/ 198 se anunciaba
   // como «Diferencia pendiente» mientras el mismo panel mostraba «Saldo por
   // cargar: S/ 0.00». La contradicción no era cosmética: de este estado cuelgan
   // la subetapa `pendiente_pago_diferencia` y el monto que se manda al courier.
-  if (paymentProgress(payments, orderTotal).completeValidated) return "pago_completo";
+  if (progress.completeValidated) return "pago_completo";
+  // El mínimo lo decide `paymentProgress` con TODO lo validado, igual que la
+  // confirmación expresa de agencia. Antes se preguntaba solo por la fila
+  // `adelanto`: un S/ 10 + S/ 20 quedaba en `adelanto_cargado` para siempre
+  // —ni pagando el total salía— y `agencyPaymentReady` lo retenía en Por
+  // confirmar (#KP134162).
+  if (!progress.advanceValidated) return "adelanto_cargado";
   if (!diferencias.length) return "adelanto_validado";
-  if (diferencias.some((payment) => payment.validation_status !== "validado")) {
+  if ([adelanto, ...diferencias].some((payment) => payment.validation_status !== "validado")) {
     return "diferencia_cargada";
   }
-  const progress = paymentProgress([adelanto, ...diferencias], orderTotal);
-  if (progress.orderTotal !== null && !progress.completeValidated) return "adelanto_validado";
+  if (progress.orderTotal !== null) return "adelanto_validado";
   return "pago_completo";
 }
 
