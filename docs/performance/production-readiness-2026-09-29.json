@@ -1,0 +1,25 @@
+{
+  "checkedAt": "2026-09-29T13:34:52.491063Z",
+  "project": "pmihklgtbyuurpkrxtoz",
+  "readOnly": true,
+  "serverVersion": "17.6",
+  "maxPreparedTransactions": 0,
+  "masterEstimatedRows": 26024,
+  "candidateInstalled": false,
+  "requiredIndexesPresent": 0,
+  "dailyBackupObserved": "2026-09-29T08:36:13Z",
+  "pointInTimeRecoveryEnabled": false,
+  "storageFilesIncludedInDatabaseBackup": false,
+  "passwordAvailable": true,
+  "backupRestoreVerified": false,
+  "quotaNotice": "Organization exceeds quota; dashboard warns possible restrictions from 2026-10-08 if unresolved",
+  "notes": [
+    "Initial count query returned upstream timeout; not repeated. Catalog-only follow-up succeeded.",
+    "A subsequent editor replacement caused a syntax error before a corrected metadata-only query succeeded.",
+    "No production data, schema, settings, credentials or scheduled tasks were modified."
+  ],
+  "passwordAuthenticationPassed": false,
+  "freshLogicalBackupComplete": false,
+  "backupAttemptedAt": "2026-09-29T13:44:53.394Z",
+  "backupError": "PostgreSQL password authentication failed; no production data or schema changed"
+}

@@ -8,6 +8,9 @@
 // joins (que PostgREST tampoco daría).
 
 import { unstable_cache } from "next/cache";
+import { cache } from "react";
+import { hasQueryFilters } from "@/lib/master-query";
+import { loadMasterCursorPage, type MasterCursor } from "@/lib/master-pagination";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
@@ -257,12 +260,18 @@ export async function getOrderMasterCounts(storeIds: string[]): Promise<MasterCo
   return { todos, por_confirmar, preparacion, por_despachar, en_curso, por_cerrar, finalizado };
 }
 
-export async function getOrderMasterMomCounts(storeIds: string[]): Promise<MasterMomCounts> {
+const loadMasterMomCounts = cache(async (storeKey: string): Promise<MasterMomCounts> => {
+  const storeIds: string[] = JSON.parse(storeKey);
   if (!storeIds.length) return { stages: emptyMasterCounts(), substages: {} };
   const sb = await createServerSupabase();
   const { data, error } = await sb.rpc("order_master_mom_counts", { p_store_ids: storeIds });
   if (!error) return reduceMasterMomCounts((data ?? []) as MasterCountRow[]);
-  return { stages: await getOrderMasterCounts(storeIds), substages: {} };
+  throw new Error(`Master counts unavailable (${error.code ?? "unknown"})`);
+});
+
+/** Request-only cache: mutations never inherit another request's totals. */
+export function getOrderMasterMomCounts(storeIds: string[]): Promise<MasterMomCounts> {
+  return loadMasterMomCounts(JSON.stringify([...new Set(storeIds)].sort()));
 }
 
 /**
@@ -907,13 +916,18 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
 /** Filas por página. 100 llena la pantalla y pesa ~100 KB, frente a los 9,5 MB
  *  que costaba bajar la tabla entera. */
 export const MASTER_PAGE_SIZE = 100;
+// Internal callers such as export can read larger batches without changing the
+// visible page size. Stay within PostgREST's response limit.
+const MASTER_MAX_BATCH_SIZE = 1000;
 
 export interface MasterPage {
   rows: OrderMasterRow[];
-  /** Cuántos hay en total con esos filtros, para paginar y para el contador. */
+  /** Total filtrado para la pantalla; 0 si el lector pidió includeTotal:false. */
   total: number;
   page: number;
   pageSize: number;
+  /** Continuation after these rows; null when bulk reads skip page metadata. */
+  hasNext: boolean | null;
 }
 
 export interface ConfirmationDueCounts {
@@ -1256,10 +1270,16 @@ export async function getOrderMasterPage(
     substage?: MacroSubstage | null;
     pageSize?: number;
     now?: Date;
+    cursor?: MasterCursor | null;
+    /** Bulk reads skip totals and continuation probes; hasNext is then null. */
+    includeTotal?: boolean;
   },
 ): Promise<MasterPage> {
-  const pageSize = params.pageSize ?? MASTER_PAGE_SIZE;
-  const empty: MasterPage = { rows: [], total: 0, page: 1, pageSize };
+  const pageSize = Number.isFinite(params.pageSize)
+    ? Math.max(1, Math.min(MASTER_MAX_BATCH_SIZE, Math.trunc(params.pageSize!)))
+    : MASTER_PAGE_SIZE;
+  const includePageInfo = params.includeTotal !== false;
+  const empty: MasterPage = { rows: [], total: 0, page: 1, pageSize, hasNext: includePageInfo ? false : null };
   if (!storeIds.length) return empty;
 
   const sb = await createServerSupabase();
@@ -1293,28 +1313,87 @@ export async function getOrderMasterPage(
     return applyServerFilters(q, effectiveFilters, now);
   };
 
-  // El conteo va en paralelo con la página: es una consulta `head`, no trae
-  // filas, y hace falta para poder paginar.
-  const [countRes, rowsRes] = await Promise.all([
-    build("id", { count: "exact", head: true }),
-    (() => {
-      const q = build(MASTER_COLUMNS) as any;
-      const from = Math.max(0, (params.page - 1) * pageSize);
-      return q
-        .order(sort.column, { ascending: sort.ascending, nullsFirst: false })
-        // Desempate estable: sin un orden total, dos páginas pueden repetir o
-        // saltarse una fila.
-        .order("id", { ascending: true })
-        .range(from, from + pageSize - 1);
-    })(),
-  ]);
+  const scopedStores = [...new Set(storeIds)].filter((id) =>
+    !effectiveFilters.stores.size || effectiveFilters.stores.has(id));
+  if (!scopedStores.length) return empty;
+  // Totals for plain stages come from the same incremental summaries as the
+  // tabs. HEAD count=exact still scans matching rows; it is NOT constant-time.
+  const canUseSummary = !hasQueryFilters({ ...effectiveFilters, stores: new Set() });
+  const totalPromise = params.includeTotal === false
+    ? Promise.resolve(0)
+    : canUseSummary
+    ? getOrderMasterMomCounts(scopedStores).then((counts) => params.substage
+      ? (counts.substages[params.substage] ?? 0)
+      : counts.stages[view])
+    : Promise.resolve(build("id", { count: "exact", head: true })).then((res: any) => {
+      if (res.error) throw new Error(`Master filtered count unavailable (${res.error.code ?? "unknown"})`);
+      return res.count ?? 0;
+    });
 
-  if (rowsRes.error) return empty;
+  const readCursorRows = (limit: number, cursor: MasterCursor | null): Promise<OrderMasterRow[]> => {
+    const backwards = cursor?.direction === "previous";
+    return loadMasterCursorPage(scopedStores, limit, cursor, async (storeId, segment, limit) => {
+      let q = (build(MASTER_COLUMNS) as any).eq("store_id", storeId);
+      if (segment === "undated") {
+        q = q.is("order_created_at", null);
+        if (cursor?.createdAt === null) {
+          q = backwards ? q.lt("id", cursor.id) : q.gt("id", cursor.id);
+        }
+      } else if (segment === "dated") {
+        q = q.not("order_created_at", "is", null);
+        if (cursor?.createdAt) {
+          const at = cursor.createdAt;
+          // The separate bound is essential: a bare OR keyset predicate can
+          // scan/discard all preceding dates despite having an order index.
+          q = backwards ? q.gte("order_created_at", at) : q.lte("order_created_at", at);
+          q = q.or(backwards
+            ? `order_created_at.gt.${at},and(order_created_at.eq.${at},id.lt.${cursor.id})`
+            : `order_created_at.lt.${at},and(order_created_at.eq.${at},id.gt.${cursor.id})`);
+        }
+      }
+      const res = await q.order("order_created_at", { ascending: !!backwards, nullsFirst: !!backwards })
+        .order("id", { ascending: !backwards }).range(0, limit - 1);
+      if (res.error) throw new Error(`Master rows unavailable (${res.error.code ?? "unknown"})`);
+      return (res.data ?? []) as OrderMasterRow[];
+    });
+  };
+  // Totals can shrink while a cursor preserves its place. Fetch one extra row
+  // to decide continuation from that place, never from page * pageSize < total.
+  // Backward reads must retain the nearest page, not trim its final row.
+  const inlineLookahead = includePageInfo && params.cursor?.direction !== "previous"
+    && pageSize < MASTER_MAX_BATCH_SIZE;
+  const readSize = pageSize + (inlineLookahead ? 1 : 0);
+  const readRows = async (): Promise<OrderMasterRow[]> => {
+    // Compatibility for bookmarked numeric pages. UI navigation uses cursors.
+    if (!params.cursor && params.page > 1) {
+      const from = (params.page - 1) * pageSize;
+      const res = await (build(MASTER_COLUMNS) as any)
+        .order(sort.column, { ascending: false, nullsFirst: false })
+        .order("id", { ascending: true }).range(from, from + readSize - 1);
+      if (res.error) throw new Error(`Master rows unavailable (${res.error.code ?? "unknown"})`);
+      return res.data ?? [];
+    }
+    return readCursorRows(readSize, params.cursor ?? null);
+  };
+  const [total, candidates] = await Promise.all([totalPromise, readRows()]);
+  const rows = candidates.slice(0, pageSize);
+  let hasNext: boolean | null = includePageInfo ? candidates.length > pageSize : null;
+  if (includePageInfo && !inlineLookahead && rows.length
+    && (params.cursor?.direction === "previous" || rows.length === pageSize)) {
+    const last = rows[rows.length - 1]!;
+    // A backward page's extra row would mean "has previous", not "has next".
+    // Probe its forward boundary instead, also respecting PostgREST's 1000 cap.
+    const following = await readCursorRows(1, {
+      id: last.id, createdAt: last.order_created_at, direction: "next",
+    });
+    hasNext = following.length > 0;
+  }
   return {
-    rows: ((rowsRes.data ?? []) as unknown as OrderMasterRow[]).map(withRuntimeCoverage),
-    total: countRes.count ?? 0,
+    rows: rows.map(withRuntimeCoverage),
+    total,
     page: params.page,
     pageSize,
+    hasNext,
   };
 }
 
@@ -1388,14 +1467,21 @@ async function loadAgencySummary(storeIds: string[]): Promise<AgencySummary> {
   // nadie—, y arreglar la que no se ejecutaba no cambió nada en pantalla.
   const inAgency = (q: any) => q.or("pickup_state.not.is.null,shipping_mode.eq.agency");
   const soon = new Date(now.getTime() + 2 * 86_400_000).toISOString();
-  const [disponibles, proximosAVencer, retornoIniciado, pendienteDeEnvio, enTransito] =
-    await Promise.all([
-    count((q) => q.in("pickup_state", [...AGENCY_AVAILABLE_STATES])),
+  const [pickupRes, proximosAVencer] = await Promise.all([
+    admin.from("order_master_facet_totals").select("value,total")
+      .in("store_id", storeIds).eq("dimension", "pickup")
+      .in("value", [...AGENCY_AVAILABLE_STATES, "retorno_iniciado", "pendiente_de_envio", "en_transito"]),
     count((q) => inAgency(q).not("agency_expires_at", "is", null).lte("agency_expires_at", soon)),
-    count((q) => q.eq("pickup_state", "retorno_iniciado")),
-    count((q) => q.eq("pickup_state", "pendiente_de_envio")),
-    count((q) => q.eq("pickup_state", "en_transito")),
   ]);
+  // Migration 0203 is a deployment prerequisite. A missing summary must not
+  // masquerade as zero packages waiting for pickup.
+  if (pickupRes.error) throw new Error(`Master agency summary unavailable (${pickupRes.error.code ?? "unknown"})`);
+  const totals = new Map<string, number>();
+  for (const row of pickupRes.data ?? []) totals.set(row.value, (totals.get(row.value) ?? 0) + Number(row.total));
+  const disponibles = AGENCY_AVAILABLE_STATES.reduce((sum, state) => sum + (totals.get(state) ?? 0), 0);
+  const retornoIniciado = totals.get("retorno_iniciado") ?? 0;
+  const pendienteDeEnvio = totals.get("pendiente_de_envio") ?? 0;
+  const enTransito = totals.get("en_transito") ?? 0;
   return { pendienteDeEnvio, enTransito, disponibles, proximosAVencer, retornoIniciado };
 }
 
@@ -1444,7 +1530,7 @@ export async function getOrderMasterRowsByIds(
       .in("order_id", slice)
       .order("order_created_at", { ascending: false, nullsFirst: false })
       .order("id", { ascending: true });
-    if (error) break;
+    if (error) throw new Error(`Master selected rows unavailable (${error.code ?? "unknown"})`);
     out.push(...((data ?? []) as unknown as OrderMasterRow[]).map(withRuntimeCoverage));
   }
   return out;

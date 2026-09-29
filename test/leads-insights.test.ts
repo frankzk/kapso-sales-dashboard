@@ -186,7 +186,7 @@ describe("rollupToInputs: de las filas agrupadas en la base a los constructores"
 });
 
 describe("el panel pregunta primero al RPC y la SQL dice lo mismo que el código", () => {
-  const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
+  const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8").replace(/\r\n/g, "\n");
 
   it("getLeadsInsights llama a lead_insights_rollup y solo drena si no existe", () => {
     const src = read("lib/leads-insights.ts");

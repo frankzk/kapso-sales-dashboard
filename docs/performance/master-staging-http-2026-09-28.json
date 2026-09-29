@@ -1,0 +1,71 @@
+{
+  "project": "zuloxsrfcwhefedgfcnb",
+  "origin": "http://127.0.0.1:3100",
+  "startedAt": "2026-09-29T01:20:35.234Z",
+  "checks": [
+    {
+      "label": "all orders",
+      "rows": 420,
+      "exact": true,
+      "durationMs": 1127.3397000000002
+    },
+    {
+      "label": "region and store",
+      "rows": 140,
+      "exact": true,
+      "durationMs": 557.002
+    },
+    {
+      "label": "stage and substage",
+      "rows": 140,
+      "exact": true,
+      "durationMs": 539.5723000000003
+    },
+    {
+      "label": "empty search",
+      "rows": 0,
+      "exact": true,
+      "durationMs": 509.0675000000001
+    },
+    {
+      "label": "viewer requests both stores",
+      "rows": 210,
+      "exact": true,
+      "durationMs": 547.3822
+    },
+    {
+      "label": "selection",
+      "rows": 6,
+      "exact": true,
+      "durationMs": 480.14899999999943
+    },
+    {
+      "label": "selection refuses other store",
+      "rows": 3,
+      "exact": true,
+      "durationMs": 465.72910000000047
+    },
+    {
+      "label": "admin server-rendered page",
+      "rows": 100,
+      "durationMs": 1271.6296999999995
+    },
+    {
+      "label": "viewer server-rendered page",
+      "rows": 100,
+      "durationMs": 986.0965000000006
+    },
+    {
+      "label": "blocked server-rendered page",
+      "rows": 0,
+      "durationMs": 451.5209999999988
+    },
+    {
+      "label": "UI comment persisted exactly once with actor",
+      "passed": true
+    }
+  ],
+  "errors": [],
+  "passed": true,
+  "finishedAt": "2026-09-29T01:20:44.410Z"
+}

@@ -1,5 +1,179 @@
 # Deployment runbook
 
+## Master read scaling — migration 0203
+
+**Release status (2026-09-29): updated staging validation passed; production is not deployed.**
+Night procedure and unresolved backup access: `docs/performance/night-release-2026-09-29.md`.
+Current evidence and remaining release checks are in
+`docs/performance/validation-current-2026-09-29.json`. Migration 0203 follows the
+published schema 0202 at `a85f2c1`; the unpublished 0198/0202 candidates were
+renumbered without changing their executable counter SQL.
+The old unpublished 0157 candidate used shared counter rows and deadlocked.
+The current candidate is based on production schema 0202; 0157 is already an
+unrelated published migration and must never be overwritten. Migration 0203
+uses signed counter parts per live PostgreSQL backend slot, summed by invoker
+views in the same transaction snapshot. There is no deferred queue or global
+writer lock. The directed mixed-UPSERT regression passes on real PostgreSQL 16,
+as do the million-order concurrent integrity tests. Short adverse SQL workloads
+still show increased write latency, so integrity alone does not approve capacity.
+Real staging Auth/PostgREST tests compared complete ingestion plus projection at
+1/5/20 sessions: no sustained >20% p95 regression in the measured workload.
+See `docs/performance/night-release-2026-09-29.md` for current evidence and limits;
+09-25 reports describe the historical rejected candidate.
+
+Requires PostgreSQL **16+** and `max_prepared_transactions=0`; installation
+rejects incompatible settings. Slots are reused after a backend exits. Parts
+per counter key are bounded by backend capacity, while distinct historical facet
+values can leave cancelling parts; monitor that cardinality. Reinstallation
+compacts the derived data. Existing rider-only order access from 0186 is retained:
+riders receive counts/facets only for visible assigned orders, not store totals.
+
+Apply **before** deploying the code that reads `order_master_facet_totals`.
+Deploying Vercel alone does not create the summaries. The migration preserves
+orders and operational events; it builds derived counters and installs
+transactional statement triggers. Its one-time backfill takes a
+`SHARE ROW EXCLUSIVE` lock on `order_master`: on first installation reads
+continue, writers wait. Reapplying replaces existing triggers and briefly needs
+an `ACCESS EXCLUSIVE` lock: reads can also wait, and long readers can delay it.
+Schedule a quiet window, set an appropriate lock timeout, and monitor ingestion.
+
+Prebuild the four indexes outside a transaction to avoid blocking writes while
+Postgres builds indexes on the historical tables:
+
+```sql
+create index concurrently if not exists order_master_store_created_page_idx
+  on public.order_master (store_id, order_created_at desc nulls last, id asc);
+create index concurrently if not exists order_master_stage_created_page_idx
+  on public.order_master (store_id, macro_stage, order_created_at desc nulls last, id asc);
+create index concurrently if not exists order_master_substage_created_page_idx
+  on public.order_master (store_id, macro_substage, order_created_at desc nulls last, id asc);
+create index concurrently if not exists leads_order_id_idx
+  on public.leads (order_id) where order_id is not null;
+```
+
+The executable preparation is `scripts/sql/master_read_scaling_prepare_indexes.sql`.
+It must run outside a transaction, in the release window. The shared index guard
+checks the exact columns, sort order and predicate, as well as index validity.
+
+Check `pg_index.indisvalid` after interrupted concurrent builds; an invalid index
+with the same name is not repaired by `IF NOT EXISTS`. Also verify definitions
+match the four commands above. During the planned window, run the controlled
+installer, which refuses missing/invalid indexes and wraps 0203 in one
+transaction with a 5-second lock wait and a 60-second statement limit:
+
+```sh
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/sql/master_read_scaling_install.sql
+```
+
+If it times out, leave the previous application serving and investigate the
+blocking activity; do not automatically raise timeouts and retry during traffic.
+The transaction rolls back its DDL/backfill. Prebuilt indexes remain in place.
+These limits apply per statement, not to the total intervention duration.
+This bounds the wait; it does not make the backfill free of write blocking.
+
+Run the mandatory read-only release gate as a database administrator with
+full-store visibility before serving the new code:
+
+```sh
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/sql/master_read_scaling_preflight.sql
+```
+
+It compares every stage/facet reference count to the source in a consistent
+read-only snapshot and checks required indexes, enabled triggers, read grants,
+RLS and absence of direct summary write grants. A mismatch, missing object or
+timeout stops promotion. This is a one-time historical scan, not a per-page
+operation; its 3-second lock wait and 120-second statement limit are explicit.
+
+The smoke test in `scripts/sql/master_read_scaling_smoke.sql` is **only for an
+isolated test database**, never production. The full migration chain and that
+smoke can be checked locally with `node scripts/verify-master-scaling.mjs --smoke`
+after installing its separate PGlite runtime (instructions in the script).
+`node scripts/verify-master-release-guards.mjs` also verifies that the installer
+refuses unprepared indexes and the release gate rejects deliberately corrupted
+summaries, missing indexes, disabled triggers and incorrect grants in isolation.
+It also runs the isolated rollback/reinstallation smoke on a second fresh DB.
+
+### Concurrency release gate
+
+Do not infer writer throughput from PGlite's single backend. Before promotion,
+use a separate PostgreSQL/Supabase staging database with representative schema,
+indexes and synthetic history. Compare the previous/new version with the same
+mixed workload: ingestion, order projection updates and user actions, at 1, 5
+and 20 simultaneous writers. Include many orders sharing the same summary keys.
+Use read-only parity checks after each round and exercise rollback/reinstall.
+
+Record write/ingestion p50/p95, throughput, lock waits, deadlocks, timeouts,
+unhandled failures and the delay between an order change and its Master update.
+Require zero aggregate drift and no new unrecovered write failures. As a
+conservative initial gate, stop promotion on a sustained >20% increase in
+end-to-end write p95 or ingestion backlog against the same baseline; replace
+that gate only with an explicitly agreed operational budget. Staging results are
+in `master-staging-before-2026-09-28.json` and `master-staging-after-2026-09-28.json`.
+Those runs used schema 0197 plus the identical counter implementation before its
+0202 renumber. Full current-schema SQL concurrency and staging read/HTTP checks
+were repeated after incorporating upstream migrations 0198–0201. Further
+2026-09-29 validation covers schema 0202 + candidate 0203, a 50k-order
+concurrency run, exact source preservation, and PostgreSQL 17 dump/restore.
+
+The reproducible local test now uses real PostgreSQL, not PGlite:
+
+```sh
+npm install --prefix ../.performance-tools --ignore-scripts --no-audit --no-fund kapso-postgres-16@npm:@embedded-postgres/windows-x64@16.14.0-beta.17 pg@8.23.0
+node scripts/verify-master-mixed-upsert.mjs
+node scripts/verify-master-concurrency.mjs --size=50000 --output=docs/performance/master-concurrency-current-50k-pg16.json
+node scripts/verify-master-postgres.mjs
+```
+
+It creates and stops a new loopback-only cluster, applies the real schema to
+identical before/after clones and uses synthetic data with independent writer
+connections. It never reads application environment files or accepts a remote
+connection URL. Auth roles are simulated by the test prelude; webhook handlers,
+PostgREST, network and UI require the separate staging suite. Actual external
+provider delivery and production ingestion backlog are not simulated by either
+suite. Historical failures remain in the reports; they are not retried away.
+
+Record the previous deployment and verify a recoverable database backup before
+the release window. After promotion, compare the same authenticated read/write
+flows and logs with the baseline; a failed integrity check or new write failures
+requires reversal. Existing filtered exact counts remain a separate bottleneck.
+
+Enable `KAPSO_SERVER_PERFORMANCE=1` temporarily to obtain correlated Master
+data-loading phases and Supabase HTTP timings, without customer data or filters.
+`db_http` includes transport until headers; it is not pure PostgreSQL execution
+time. Measure SQL separately with bounded read-only EXPLAIN/logs.
+
+### Reversal
+
+For an application-only regression, restore the previous deployment. If the
+problem is write contention from summary maintenance, reverting application
+code alone is insufficient: the triggers and replaced RPCs still exist.
+
+1. Restore the previous application on every instance that uses this database,
+   including previews; drain in-flight requests of the new code and verify the
+   previous readers are serving. Do not run the DB rollback with new readers live.
+2. Run the prepared atomic DB rollback:
+
+   ```sh
+   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/sql/master_read_scaling_rollback.sql
+   ```
+
+3. It restores the old RPC bodies and removes only the three new maintenance
+   triggers, retaining restrictive authenticated/service-role grants. Orders,
+   events, summary tables and indexes are preserved. The retained indexes still
+   have a write cost. Verify the previous flows and ingestion after reversal.
+
+The rollback has a 5-second lock wait and 30-second statement limit; it needs a
+short exclusive lock. If it fails, its transaction rolls back; do not drop
+triggers piecemeal. After a successful rollback, summaries become stale and must
+not be read by the new application. Reinstall 0203 and pass the release gate
+before serving new reads again. Never TRUNCATE the source while counters are served.
+
+`scripts/sql/master_read_scaling_rollback_smoke.sql` tests the full reversal and
+reinstallation in an isolated database; never execute that fixture in production.
+
+See `docs/performance/audit-2026-09-25.md` for evidence and outstanding scale
+limits, including filtered exact counts and legacy numeric page URLs.
+
 Turnkey checklist to put the dashboard live on **Supabase + Vercel**. The steps
 below are the ones that need a browser/computer (creating projects, OAuth,
 pasting credentials). Everything else (code, migrations, tests, CI) is already
@@ -1955,7 +2129,7 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
    solicitud en vez de volver a «por asignar».
 2. Resolver `mom-v1.16`: el cron reconcilia el histórico solo.
 
-### 28-09-2026 · La pasarela Flow como cuenta de cobro (0198)
+### 28-09-2026 · La pasarela Flow como cuenta de cobro (0202)
 
 1. **Migración `0198_flow_collection_account.sql`**, a mano:
    `psql "$DATABASE_URL" -f db/migrations/0198_flow_collection_account.sql`.

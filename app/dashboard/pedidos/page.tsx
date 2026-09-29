@@ -3,7 +3,6 @@ import { getAccessibleStores, getAdminOrgs } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { DEFAULT_CONFIRMATION_CYCLE_DAYS } from "@/lib/order-confirmation";
 import {
-  MASTER_PAGE_SIZE,
   getAgencySummaryCached,
   getConfirmationCycleDays,
   getConfirmationDueCounts,
@@ -15,6 +14,8 @@ import {
   type MasterView,
 } from "@/lib/orders-master-access";
 import { parseMasterQuery } from "@/lib/master-query";
+import { parseMasterCursor } from "@/lib/master-pagination";
+import { measureServerOperation, withServerPerformance } from "@/lib/server-performance";
 import { MACRO_SUBSTAGES_BY_STAGE, type MacroSubstage } from "@/lib/order-macro-stage";
 import { EmptyState } from "@/components/ui";
 import { OrdersMasterBoard } from "@/components/orders-master";
@@ -41,17 +42,23 @@ export default function PedidosPage({
   );
 }
 
-async function PedidosContent({
+function PedidosContent(props: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  return withServerPerformance("master.page", () => loadPedidosContent(props));
+}
+
+async function loadPedidosContent({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const [sp, stores, perms, adminOrgs] = await Promise.all([
+  const [sp, stores, perms, adminOrgs] = await measureServerOperation("access", () => Promise.all([
     searchParams,
     getAccessibleStores(),
     getMasterPermissions(),
     getAdminOrgs(),
-  ]);
+  ]));
   if (!stores.length) {
     return <EmptyState title="No tienes tiendas asignadas" />;
   }
@@ -88,13 +95,13 @@ async function PedidosContent({
     managementDayCounts,
     cycleDays,
   ] = await Promise.all([
-    getOrderMasterMomCounts(storeIds),
-    getOrderMasterPage(storeIds, { view, substage, filters, sortKey: "created", page }),
+    measureServerOperation("counts", () => getOrderMasterMomCounts(storeIds)),
+    measureServerOperation("rows", () => getOrderMasterPage(storeIds, { view, substage, filters, sortKey: "created", page, cursor: parseMasterCursor(flat.cursor) })),
     // Cacheadas: no dependen de lo que se esté filtrando ni buscando.
-    getMasterFacetsCached(storeIds),
-    getAgencySummaryCached(storeIds),
+    measureServerOperation("facets", () => getMasterFacetsCached(storeIds)),
+    measureServerOperation("agency", () => getAgencySummaryCached(storeIds)),
     showConfirmationDue
-      ? getConfirmationDueCounts(storeIds, { substage, filters })
+      ? measureServerOperation("confirmation_due", () => getConfirmationDueCounts(storeIds, { substage, filters }))
       : Promise.resolve({ all: 0, vencido: 0, hoy: 0, proximo: 0 }),
     // Solo donde el filtro de Gestión se ofrece: fuera de «Por confirmar» serían
     // ocho consultas por carga para un desplegable que nadie ve.
@@ -102,7 +109,7 @@ async function PedidosContent({
       ? getManagementDayCounts(storeIds, { substage, filters })
       : Promise.resolve({} as Record<number, number>),
     showConfirmation
-      ? getConfirmationCycleDays(storeIds)
+      ? measureServerOperation("confirmation_cycle", () => getConfirmationCycleDays(storeIds))
       : Promise.resolve({} as Record<string, number>),
   ]);
 
@@ -133,7 +140,7 @@ async function PedidosContent({
       rows={pageData.rows}
       total={pageData.total}
       page={pageData.page}
-      pageSize={pageData.pageSize || MASTER_PAGE_SIZE}
+      hasNext={pageData.hasNext === true}
       filters={filters}
       sortKey="created"
       facets={facets}

@@ -1,0 +1,41 @@
+{
+  "recordedAtUtc": "2026-09-25T17:39:32Z",
+  "workspace": "C:/Users/Pc/Documents/Kapso Sales/kapso-sales-dashboard",
+  "build": {
+    "command": "node node_modules/next/dist/bin/next build",
+    "exitCode": 0,
+    "nextVersion": "16.2.9",
+    "bundler": "Turbopack",
+    "compiledSuccessfully": true,
+    "typescriptPassed": true,
+    "staticPagesGenerated": 4,
+    "observedTimings": {
+      "compilationSeconds": 4.0,
+      "typescriptSeconds": 13.6,
+      "staticGenerationMilliseconds": 91
+    },
+    "completedAtUtcApprox": "2026-09-25T17:37:50Z",
+    "approximateTimestampEvidence": {
+      ".next/BUILD_ID.lastWriteTimeUtc": "2026-09-25T17:37:49.6884591Z",
+      ".next/prerender-manifest.json.lastWriteTimeUtc": "2026-09-25T17:37:49.8352512Z"
+    },
+    "evidence": "Observed terminal output reported compilation success, TypeScript completion, static page generation, final route table and exit code 0.",
+    "stdoutFile": null,
+    "notes": [
+      "The successful build output was observed in the task but was not redirected to a log file.",
+      "This document records that completed build; no build was repeated to create it.",
+      "The earlier failed build log predates the db-fetch dependency bridge correction and does not describe this successful run.",
+      "Timings are local build timings, not application response-time measurements."
+    ]
+  },
+  "focusedTests": {
+    "command": "node node_modules/vitest/vitest.mjs run test/server-performance.test.ts",
+    "vitestVersion": "4.1.10",
+    "exitCode": 0,
+    "filesPassed": 1,
+    "testsPassed": 9,
+    "testsFailed": 0,
+    "observedDurationMilliseconds": 167,
+    "notes": "Includes the dependency-free fetch bridge and an existing client reference receiving instrumentation only within an enabled server scope. This is a focused run, not a full-suite result."
+  }
+}

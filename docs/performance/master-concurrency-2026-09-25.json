@@ -1,0 +1,3060 @@
+{
+  "startedAt": "2026-09-25T22:36:39.071Z",
+  "settings": {
+    "size": 50000,
+    "iterations": 200,
+    "trials": 2,
+    "stressIterations": 20,
+    "output": "docs/performance/master-concurrency-2026-09-25.json"
+  },
+  "localOnly": true,
+  "productionTouched": false,
+  "methodology": "Real PostgreSQL independent backends; identical synthetic clones, alternating before/after order; normal=one Master statement/transaction; stress=multiple Master statements/transaction. Client SQL roundtrip, not HTTP/UI or Supabase Auth. Auth role model uses test_prelude.sql.",
+  "phases": [
+    {
+      "variant": "before",
+      "label": "t1-c1",
+      "mode": "normal",
+      "writers": 1,
+      "iterations": 200,
+      "phaseIndex": 0,
+      "durationMs": 1118.4290999999994,
+      "attempts": 200,
+      "committed": 167,
+      "intentionalRollbacks": 33,
+      "failed": 0,
+      "committedPerSecond": 149.31657268216654,
+      "latency": {
+        "samples": 200,
+        "p50Ms": 1.223,
+        "p95Ms": 29.187,
+        "maxMs": 59.6
+      },
+      "committedLatency": {
+        "samples": 167,
+        "p50Ms": 1.258,
+        "p95Ms": 29.356,
+        "maxMs": 59.6
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 34,
+          "succeeded": 34,
+          "failed": 0,
+          "p50Ms": 0.955,
+          "p95Ms": 1.806,
+          "maxMs": 25.964,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "projection_upsert": {
+          "attempts": 34,
+          "succeeded": 34,
+          "failed": 0,
+          "p50Ms": 0.916,
+          "p95Ms": 2.167,
+          "maxMs": 14.195,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "multirow_upsert": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 24.711,
+          "p95Ms": 47.216,
+          "maxMs": 59.6,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "ingestion": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 1.343,
+          "p95Ms": 2.502,
+          "maxMs": 4.42,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 1.147,
+          "p95Ms": 2.159,
+          "maxMs": 4.311,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "intentional_rollback": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 1.126,
+          "p95Ms": 1.709,
+          "maxMs": 1.973,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        52436
+      ],
+      "failures": [],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 0,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 12,
+              "p50Ms": 9.503699999999299,
+              "p95Ms": 123.03169999999955,
+              "maxMs": 123.03169999999955
+            },
+            "counts": {
+              "samples": 12,
+              "p50Ms": 11.875700000000506,
+              "p95Ms": 17.000700000000506,
+              "maxMs": 17.000700000000506
+            },
+            "facets": {
+              "samples": 12,
+              "p50Ms": 38.4903000000013,
+              "p95Ms": 43.83439999999973,
+              "maxMs": 43.83439999999973
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 13,
+              "p50Ms": 7.040899999999965,
+              "p95Ms": 37.55240000000049,
+              "maxMs": 37.55240000000049
+            },
+            "counts": {
+              "samples": 13,
+              "p50Ms": 9.095900000000256,
+              "p95Ms": 14.493400000001202,
+              "maxMs": 14.493400000001202
+            },
+            "facets": {
+              "samples": 13,
+              "p50Ms": 39.57250000000022,
+              "p95Ms": 44.58059999999932,
+              "maxMs": 44.58059999999932
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 39,
+        "samplesWithWaitingWriters": 0,
+        "maxWaitingWriters": 0,
+        "maxUnGrantedLocks": 0,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true
+        },
+        "sourceRows": 50033,
+        "orderRows": 50033,
+        "auditEvents": 33
+      }
+    },
+    {
+      "variant": "after",
+      "label": "t1-c1",
+      "mode": "normal",
+      "writers": 1,
+      "iterations": 200,
+      "phaseIndex": 0,
+      "durationMs": 1228.4853000000003,
+      "attempts": 200,
+      "committed": 167,
+      "intentionalRollbacks": 33,
+      "failed": 0,
+      "committedPerSecond": 135.93976256777347,
+      "latency": {
+        "samples": 200,
+        "p50Ms": 1.637,
+        "p95Ms": 28.909,
+        "maxMs": 58.569
+      },
+      "committedLatency": {
+        "samples": 167,
+        "p50Ms": 1.637,
+        "p95Ms": 30.004,
+        "maxMs": 58.569
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 34,
+          "succeeded": 34,
+          "failed": 0,
+          "p50Ms": 1.219,
+          "p95Ms": 1.751,
+          "maxMs": 28.664,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "projection_upsert": {
+          "attempts": 34,
+          "succeeded": 34,
+          "failed": 0,
+          "p50Ms": 1.477,
+          "p95Ms": 2.737,
+          "maxMs": 13.503,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "multirow_upsert": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 26.053,
+          "p95Ms": 58,
+          "maxMs": 58.569,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "ingestion": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 1.867,
+          "p95Ms": 2.622,
+          "maxMs": 4.159,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 1.495,
+          "p95Ms": 1.881,
+          "maxMs": 3.623,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "intentional_rollback": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 1.644,
+          "p95Ms": 2.293,
+          "maxMs": 2.357,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        35536
+      ],
+      "failures": [],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 0,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 40,
+              "p50Ms": 0.8629999999975553,
+              "p95Ms": 1.0619000000006054,
+              "maxMs": 14.875299999999697
+            },
+            "counts": {
+              "samples": 40,
+              "p50Ms": 0.183099999998376,
+              "p95Ms": 0.5377000000007683,
+              "maxMs": 1.2243999999991502
+            },
+            "facets": {
+              "samples": 40,
+              "p50Ms": 0.19919999999910942,
+              "p95Ms": 0.37620000000242726,
+              "maxMs": 1.477100000000064
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 39,
+              "p50Ms": 2.2009999999972933,
+              "p95Ms": 2.628499999998894,
+              "maxMs": 22.988400000002002
+            },
+            "counts": {
+              "samples": 39,
+              "p50Ms": 0.2195999999967171,
+              "p95Ms": 0.49680000000080327,
+              "maxMs": 1.3245000000024447
+            },
+            "facets": {
+              "samples": 39,
+              "p50Ms": 0.2073999999993248,
+              "p95Ms": 0.7389000000002852,
+              "maxMs": 1.3078999999997905
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 41,
+        "samplesWithWaitingWriters": 0,
+        "maxWaitingWriters": 0,
+        "maxUnGrantedLocks": 0,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "stageReferenceCounts": true,
+          "facetReferenceCounts": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "stageRls_viewer": true,
+          "facetRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true,
+          "stageRls_outsider": true,
+          "facetRls_outsider": true
+        },
+        "sourceRows": 50033,
+        "orderRows": 50033,
+        "auditEvents": 33
+      }
+    },
+    {
+      "variant": "before",
+      "label": "t1-c5",
+      "mode": "normal",
+      "writers": 5,
+      "iterations": 200,
+      "phaseIndex": 1,
+      "durationMs": 1581.4138999999996,
+      "attempts": 1000,
+      "committed": 835,
+      "intentionalRollbacks": 165,
+      "failed": 0,
+      "committedPerSecond": 528.008511876619,
+      "latency": {
+        "samples": 1000,
+        "p50Ms": 1.234,
+        "p95Ms": 38.93,
+        "maxMs": 83.824
+      },
+      "committedLatency": {
+        "samples": 835,
+        "p50Ms": 1.26,
+        "p95Ms": 43.16,
+        "maxMs": 83.824
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 170,
+          "succeeded": 170,
+          "failed": 0,
+          "p50Ms": 0.974,
+          "p95Ms": 2.459,
+          "maxMs": 36.707,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "projection_upsert": {
+          "attempts": 170,
+          "succeeded": 170,
+          "failed": 0,
+          "p50Ms": 1,
+          "p95Ms": 1.963,
+          "maxMs": 29.549,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "multirow_upsert": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 32.25,
+          "p95Ms": 68.144,
+          "maxMs": 83.824,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "ingestion": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 1.373,
+          "p95Ms": 3.379,
+          "maxMs": 18.711,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 1.22,
+          "p95Ms": 2.35,
+          "maxMs": 5.318,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "intentional_rollback": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 1.097,
+          "p95Ms": 1.697,
+          "maxMs": 8.047,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        66264,
+        21916,
+        21636,
+        62748,
+        61204
+      ],
+      "failures": [],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 0,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 12,
+              "p50Ms": 21.08220000000074,
+              "p95Ms": 131.75019999999859,
+              "maxMs": 131.75019999999859
+            },
+            "counts": {
+              "samples": 12,
+              "p50Ms": 12.524900000000343,
+              "p95Ms": 16.589599999999336,
+              "maxMs": 16.589599999999336
+            },
+            "facets": {
+              "samples": 12,
+              "p50Ms": 58.31009999999878,
+              "p95Ms": 88.65400000000227,
+              "maxMs": 88.65400000000227
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 15,
+              "p50Ms": 9.365899999997055,
+              "p95Ms": 35.48500000000058,
+              "maxMs": 35.48500000000058
+            },
+            "counts": {
+              "samples": 15,
+              "p50Ms": 9.927199999998265,
+              "p95Ms": 14.623900000002322,
+              "maxMs": 14.623900000002322
+            },
+            "facets": {
+              "samples": 15,
+              "p50Ms": 56.207900000001246,
+              "p95Ms": 82.40020000000004,
+              "maxMs": 82.40020000000004
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 56,
+        "samplesWithWaitingWriters": 0,
+        "maxWaitingWriters": 0,
+        "maxUnGrantedLocks": 0,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true
+        },
+        "sourceRows": 50198,
+        "orderRows": 50198,
+        "auditEvents": 198
+      }
+    },
+    {
+      "variant": "after",
+      "label": "t1-c5",
+      "mode": "normal",
+      "writers": 5,
+      "iterations": 200,
+      "phaseIndex": 1,
+      "durationMs": 1907.845599999997,
+      "attempts": 1000,
+      "committed": 835,
+      "intentionalRollbacks": 165,
+      "failed": 0,
+      "committedPerSecond": 437.66644428668724,
+      "latency": {
+        "samples": 1000,
+        "p50Ms": 2.104,
+        "p95Ms": 46.401,
+        "maxMs": 101.99
+      },
+      "committedLatency": {
+        "samples": 835,
+        "p50Ms": 2.207,
+        "p95Ms": 50.168,
+        "maxMs": 101.99
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 170,
+          "succeeded": 170,
+          "failed": 0,
+          "p50Ms": 1.384,
+          "p95Ms": 27.051,
+          "maxMs": 51.962,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "projection_upsert": {
+          "attempts": 170,
+          "succeeded": 170,
+          "failed": 0,
+          "p50Ms": 1.834,
+          "p95Ms": 4.609,
+          "maxMs": 19.989,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "multirow_upsert": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 35.646,
+          "p95Ms": 71.499,
+          "maxMs": 101.99,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "ingestion": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 3.327,
+          "p95Ms": 5.91,
+          "maxMs": 13.743,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 1.824,
+          "p95Ms": 5.703,
+          "maxMs": 39.898,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "intentional_rollback": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 1.956,
+          "p95Ms": 3.958,
+          "maxMs": 13.591,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        65116,
+        49104,
+        39748,
+        59540,
+        19884
+      ],
+      "failures": [],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 0,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 63,
+              "p50Ms": 0.8544000000001688,
+              "p95Ms": 11.584900000001653,
+              "maxMs": 33.572400000000926
+            },
+            "counts": {
+              "samples": 63,
+              "p50Ms": 0.17980000000170548,
+              "p95Ms": 0.3401000000012573,
+              "maxMs": 4.082699999999022
+            },
+            "facets": {
+              "samples": 63,
+              "p50Ms": 0.19839999999749125,
+              "p95Ms": 0.3065999999998894,
+              "maxMs": 2.198599999999715
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 60,
+              "p50Ms": 2.8971999999994296,
+              "p95Ms": 8.711999999999534,
+              "maxMs": 48.232600000003
+            },
+            "counts": {
+              "samples": 60,
+              "p50Ms": 0.2220000000015716,
+              "p95Ms": 0.34430000000065775,
+              "maxMs": 1.6424000000006345
+            },
+            "facets": {
+              "samples": 60,
+              "p50Ms": 0.21199999999953434,
+              "p95Ms": 0.39760000000023865,
+              "maxMs": 1.2494999999980791
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 67,
+        "samplesWithWaitingWriters": 19,
+        "maxWaitingWriters": 3,
+        "maxUnGrantedLocks": 3,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "stageReferenceCounts": true,
+          "facetReferenceCounts": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "stageRls_viewer": true,
+          "facetRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true,
+          "stageRls_outsider": true,
+          "facetRls_outsider": true
+        },
+        "sourceRows": 50198,
+        "orderRows": 50198,
+        "auditEvents": 198
+      }
+    },
+    {
+      "variant": "before",
+      "label": "t1-c20",
+      "mode": "normal",
+      "writers": 20,
+      "iterations": 200,
+      "phaseIndex": 2,
+      "durationMs": 5320.320899999999,
+      "attempts": 4000,
+      "committed": 3340,
+      "intentionalRollbacks": 660,
+      "failed": 0,
+      "committedPerSecond": 627.7816813643705,
+      "latency": {
+        "samples": 4000,
+        "p50Ms": 2.423,
+        "p95Ms": 138.693,
+        "maxMs": 463.229
+      },
+      "committedLatency": {
+        "samples": 3340,
+        "p50Ms": 2.676,
+        "p95Ms": 145.215,
+        "maxMs": 463.229
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 680,
+          "succeeded": 680,
+          "failed": 0,
+          "p50Ms": 2.054,
+          "p95Ms": 33.791,
+          "maxMs": 243.677,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "projection_upsert": {
+          "attempts": 680,
+          "succeeded": 680,
+          "failed": 0,
+          "p50Ms": 2.044,
+          "p95Ms": 5.104,
+          "maxMs": 48.869,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "multirow_upsert": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 115.114,
+          "p95Ms": 350.664,
+          "maxMs": 463.229,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "ingestion": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 2.733,
+          "p95Ms": 5.236,
+          "maxMs": 45.657,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 2.639,
+          "p95Ms": 8.007,
+          "maxMs": 239.055,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "intentional_rollback": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 1.699,
+          "p95Ms": 3.484,
+          "maxMs": 9.83,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        54168,
+        22536,
+        65952,
+        13908,
+        49896,
+        54716,
+        18476,
+        21172,
+        8444,
+        59028,
+        51288,
+        49480,
+        26548,
+        45840,
+        54128,
+        51120,
+        43988,
+        64324,
+        44920,
+        65148
+      ],
+      "failures": [],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 0,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 15,
+              "p50Ms": 47.882000000001426,
+              "p95Ms": 164.33220000000074,
+              "maxMs": 164.33220000000074
+            },
+            "counts": {
+              "samples": 15,
+              "p50Ms": 41.66350000000239,
+              "p95Ms": 241.8191999999981,
+              "maxMs": 241.8191999999981
+            },
+            "facets": {
+              "samples": 15,
+              "p50Ms": 187.44970000000103,
+              "p95Ms": 343.2608999999975,
+              "maxMs": 343.2608999999975
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 21,
+              "p50Ms": 19.676400000000285,
+              "p95Ms": 102.2387000000017,
+              "maxMs": 203.04929999999877
+            },
+            "counts": {
+              "samples": 21,
+              "p50Ms": 21.387500000000728,
+              "p95Ms": 40.46679999999833,
+              "maxMs": 49.09779999999955
+            },
+            "facets": {
+              "samples": 21,
+              "p50Ms": 161.76250000000073,
+              "p95Ms": 302.3719999999994,
+              "maxMs": 309.3957999999984
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 179,
+        "samplesWithWaitingWriters": 4,
+        "maxWaitingWriters": 6,
+        "maxUnGrantedLocks": 2,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true
+        },
+        "sourceRows": 50858,
+        "orderRows": 50858,
+        "auditEvents": 858
+      }
+    },
+    {
+      "variant": "after",
+      "label": "t1-c20",
+      "mode": "normal",
+      "writers": 20,
+      "iterations": 200,
+      "phaseIndex": 2,
+      "durationMs": 6092.190399999996,
+      "attempts": 4000,
+      "committed": 3340,
+      "intentionalRollbacks": 660,
+      "failed": 0,
+      "committedPerSecond": 548.2428782921825,
+      "latency": {
+        "samples": 4000,
+        "p50Ms": 5.828,
+        "p95Ms": 107.382,
+        "maxMs": 1100.733
+      },
+      "committedLatency": {
+        "samples": 3340,
+        "p50Ms": 5.936,
+        "p95Ms": 113.537,
+        "maxMs": 1100.733
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 680,
+          "succeeded": 680,
+          "failed": 0,
+          "p50Ms": 2.03,
+          "p95Ms": 7.228,
+          "maxMs": 105.245,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "projection_upsert": {
+          "attempts": 680,
+          "succeeded": 680,
+          "failed": 0,
+          "p50Ms": 4.302,
+          "p95Ms": 64.012,
+          "maxMs": 345.777,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "multirow_upsert": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 65.838,
+          "p95Ms": 187.734,
+          "maxMs": 426.314,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "ingestion": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 5.967,
+          "p95Ms": 53.499,
+          "maxMs": 1100.733,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 6.898,
+          "p95Ms": 64.5,
+          "maxMs": 333.493,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "intentional_rollback": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 5.566,
+          "p95Ms": 44.179,
+          "maxMs": 466.061,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        24680,
+        25536,
+        22952,
+        46176,
+        16072,
+        61144,
+        58072,
+        14692,
+        54912,
+        23564,
+        66540,
+        24332,
+        21424,
+        31340,
+        19264,
+        24752,
+        31120,
+        30532,
+        21760,
+        26996
+      ],
+      "failures": [],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 0,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 219,
+              "p50Ms": 0.8519999999989523,
+              "p95Ms": 1.3214000000007218,
+              "maxMs": 59.15990000000238
+            },
+            "counts": {
+              "samples": 219,
+              "p50Ms": 0.21710000000166474,
+              "p95Ms": 0.34680000000662403,
+              "maxMs": 6.5001999999985856
+            },
+            "facets": {
+              "samples": 219,
+              "p50Ms": 0.2871000000013737,
+              "p95Ms": 0.4761999999973341,
+              "maxMs": 2.754399999997986
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 183,
+              "p50Ms": 5.952199999999721,
+              "p95Ms": 9.378700000001118,
+              "maxMs": 90.82410000000164
+            },
+            "counts": {
+              "samples": 183,
+              "p50Ms": 0.2993999999962398,
+              "p95Ms": 0.4696999999941909,
+              "maxMs": 1.6638999999995576
+            },
+            "facets": {
+              "samples": 183,
+              "p50Ms": 0.33250000000407454,
+              "p95Ms": 0.5133999999961816,
+              "maxMs": 1.7086999999992258
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 220,
+        "samplesWithWaitingWriters": 189,
+        "maxWaitingWriters": 19,
+        "maxUnGrantedLocks": 19,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "stageReferenceCounts": true,
+          "facetReferenceCounts": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "stageRls_viewer": true,
+          "facetRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true,
+          "stageRls_outsider": true,
+          "facetRls_outsider": true
+        },
+        "sourceRows": 50858,
+        "orderRows": 50858,
+        "auditEvents": 858
+      }
+    },
+    {
+      "variant": "after",
+      "label": "t2-c1",
+      "mode": "normal",
+      "writers": 1,
+      "iterations": 200,
+      "phaseIndex": 3,
+      "durationMs": 1413.149000000005,
+      "attempts": 200,
+      "committed": 167,
+      "intentionalRollbacks": 33,
+      "failed": 0,
+      "committedPerSecond": 118.1757903802072,
+      "latency": {
+        "samples": 200,
+        "p50Ms": 1.642,
+        "p95Ms": 29.609,
+        "maxMs": 74.171
+      },
+      "committedLatency": {
+        "samples": 167,
+        "p50Ms": 1.695,
+        "p95Ms": 31.491,
+        "maxMs": 74.171
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 34,
+          "succeeded": 34,
+          "failed": 0,
+          "p50Ms": 1.286,
+          "p95Ms": 10.374,
+          "maxMs": 32.844,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "projection_upsert": {
+          "attempts": 34,
+          "succeeded": 34,
+          "failed": 0,
+          "p50Ms": 1.582,
+          "p95Ms": 12.597,
+          "maxMs": 12.617,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "multirow_upsert": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 28.756,
+          "p95Ms": 62.804,
+          "maxMs": 74.171,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "ingestion": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 1.877,
+          "p95Ms": 10.171,
+          "maxMs": 10.641,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 1.39,
+          "p95Ms": 10.644,
+          "maxMs": 10.745,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "intentional_rollback": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 1.595,
+          "p95Ms": 2.181,
+          "maxMs": 2.378,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        62948
+      ],
+      "failures": [],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 0,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 47,
+              "p50Ms": 0.8098000000027241,
+              "p95Ms": 1.0857000000032713,
+              "maxMs": 16.25510000000213
+            },
+            "counts": {
+              "samples": 47,
+              "p50Ms": 0.22730000000592554,
+              "p95Ms": 0.48329999999987194,
+              "maxMs": 1.0658999999941443
+            },
+            "facets": {
+              "samples": 47,
+              "p50Ms": 0.3448000000062166,
+              "p95Ms": 0.5754000000015367,
+              "maxMs": 1.2453000000023167
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 41,
+              "p50Ms": 5.110999999997148,
+              "p95Ms": 7.542699999998149,
+              "maxMs": 32.462500000001455
+            },
+            "counts": {
+              "samples": 41,
+              "p50Ms": 0.2577999999994063,
+              "p95Ms": 0.4855999999999767,
+              "maxMs": 1.062099999995553
+            },
+            "facets": {
+              "samples": 41,
+              "p50Ms": 0.4040999999997439,
+              "p95Ms": 0.6532000000006519,
+              "maxMs": 1.2641999999977998
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 48,
+        "samplesWithWaitingWriters": 0,
+        "maxWaitingWriters": 0,
+        "maxUnGrantedLocks": 0,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "stageReferenceCounts": true,
+          "facetReferenceCounts": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "stageRls_viewer": true,
+          "facetRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true,
+          "stageRls_outsider": true,
+          "facetRls_outsider": true
+        },
+        "sourceRows": 50891,
+        "orderRows": 50891,
+        "auditEvents": 891
+      }
+    },
+    {
+      "variant": "before",
+      "label": "t2-c1",
+      "mode": "normal",
+      "writers": 1,
+      "iterations": 200,
+      "phaseIndex": 3,
+      "durationMs": 1190.9789000000019,
+      "attempts": 200,
+      "committed": 167,
+      "intentionalRollbacks": 33,
+      "failed": 0,
+      "committedPerSecond": 140.22078812647288,
+      "latency": {
+        "samples": 200,
+        "p50Ms": 1.111,
+        "p95Ms": 29.754,
+        "maxMs": 64.512
+      },
+      "committedLatency": {
+        "samples": 167,
+        "p50Ms": 1.164,
+        "p95Ms": 30.355,
+        "maxMs": 64.512
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 34,
+          "succeeded": 34,
+          "failed": 0,
+          "p50Ms": 0.776,
+          "p95Ms": 1.267,
+          "maxMs": 44.847,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "projection_upsert": {
+          "attempts": 34,
+          "succeeded": 34,
+          "failed": 0,
+          "p50Ms": 0.84,
+          "p95Ms": 1.312,
+          "maxMs": 12.835,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "multirow_upsert": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 26.838,
+          "p95Ms": 50.393,
+          "maxMs": 64.512,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "ingestion": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 1.374,
+          "p95Ms": 2.078,
+          "maxMs": 2.924,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 1.111,
+          "p95Ms": 1.682,
+          "maxMs": 3.6,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "intentional_rollback": {
+          "attempts": 33,
+          "succeeded": 33,
+          "failed": 0,
+          "p50Ms": 0.978,
+          "p95Ms": 1.453,
+          "maxMs": 1.725,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        33156
+      ],
+      "failures": [],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 0,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 5,
+              "p50Ms": 37.93989999999758,
+              "p95Ms": 138.5601999999999,
+              "maxMs": 138.5601999999999
+            },
+            "counts": {
+              "samples": 5,
+              "p50Ms": 27.30909999999858,
+              "p95Ms": 134.65679999999702,
+              "maxMs": 134.65679999999702
+            },
+            "facets": {
+              "samples": 5,
+              "p50Ms": 125.0590000000011,
+              "p95Ms": 159.0147999999972,
+              "maxMs": 159.0147999999972
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 7,
+              "p50Ms": 14.9774000000034,
+              "p95Ms": 74.03549999999814,
+              "maxMs": 74.03549999999814
+            },
+            "counts": {
+              "samples": 7,
+              "p50Ms": 16.616799999996147,
+              "p95Ms": 30.51140000000305,
+              "maxMs": 30.51140000000305
+            },
+            "facets": {
+              "samples": 7,
+              "p50Ms": 120.52909999999974,
+              "p95Ms": 168.90350000000035,
+              "maxMs": 168.90350000000035
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 38,
+        "samplesWithWaitingWriters": 0,
+        "maxWaitingWriters": 0,
+        "maxUnGrantedLocks": 0,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true
+        },
+        "sourceRows": 50891,
+        "orderRows": 50891,
+        "auditEvents": 891
+      }
+    },
+    {
+      "variant": "after",
+      "label": "t2-c5",
+      "mode": "normal",
+      "writers": 5,
+      "iterations": 200,
+      "phaseIndex": 4,
+      "durationMs": 1826.4375,
+      "attempts": 1000,
+      "committed": 835,
+      "intentionalRollbacks": 165,
+      "failed": 0,
+      "committedPerSecond": 457.1741436539712,
+      "latency": {
+        "samples": 1000,
+        "p50Ms": 2.18,
+        "p95Ms": 43.845,
+        "maxMs": 81.844
+      },
+      "committedLatency": {
+        "samples": 835,
+        "p50Ms": 2.246,
+        "p95Ms": 45.519,
+        "maxMs": 81.844
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 170,
+          "succeeded": 170,
+          "failed": 0,
+          "p50Ms": 1.502,
+          "p95Ms": 2.814,
+          "maxMs": 50.974,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "projection_upsert": {
+          "attempts": 170,
+          "succeeded": 170,
+          "failed": 0,
+          "p50Ms": 1.874,
+          "p95Ms": 4.223,
+          "maxMs": 10.764,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "multirow_upsert": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 38.288,
+          "p95Ms": 59.318,
+          "maxMs": 81.844,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "ingestion": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 3.07,
+          "p95Ms": 5.393,
+          "maxMs": 9.649,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 2.039,
+          "p95Ms": 5.244,
+          "maxMs": 10.569,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "intentional_rollback": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 1.989,
+          "p95Ms": 4.031,
+          "maxMs": 7.331,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        59936,
+        29584,
+        46244,
+        49964,
+        9952
+      ],
+      "failures": [],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 0,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 62,
+              "p50Ms": 0.8001000000003842,
+              "p95Ms": 2.210800000000745,
+              "maxMs": 30.359800000005635
+            },
+            "counts": {
+              "samples": 62,
+              "p50Ms": 0.1952000000019325,
+              "p95Ms": 0.330100000006496,
+              "maxMs": 3.682300000000396
+            },
+            "facets": {
+              "samples": 62,
+              "p50Ms": 0.34500000000116415,
+              "p95Ms": 0.596399999994901,
+              "maxMs": 2.1684000000022934
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 56,
+              "p50Ms": 4.508800000003248,
+              "p95Ms": 6.914700000001176,
+              "maxMs": 58.52649999999994
+            },
+            "counts": {
+              "samples": 56,
+              "p50Ms": 0.24710000000050059,
+              "p95Ms": 0.6235999999989872,
+              "maxMs": 1.4334000000017113
+            },
+            "facets": {
+              "samples": 56,
+              "p50Ms": 0.405800000000454,
+              "p95Ms": 0.6947999999974854,
+              "maxMs": 1.5247999999992317
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 64,
+        "samplesWithWaitingWriters": 14,
+        "maxWaitingWriters": 3,
+        "maxUnGrantedLocks": 3,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "stageReferenceCounts": true,
+          "facetReferenceCounts": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "stageRls_viewer": true,
+          "facetRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true,
+          "stageRls_outsider": true,
+          "facetRls_outsider": true
+        },
+        "sourceRows": 51056,
+        "orderRows": 51056,
+        "auditEvents": 1056
+      }
+    },
+    {
+      "variant": "before",
+      "label": "t2-c5",
+      "mode": "normal",
+      "writers": 5,
+      "iterations": 200,
+      "phaseIndex": 4,
+      "durationMs": 1554.517399999997,
+      "attempts": 1000,
+      "committed": 835,
+      "intentionalRollbacks": 165,
+      "failed": 0,
+      "committedPerSecond": 537.1441966490704,
+      "latency": {
+        "samples": 1000,
+        "p50Ms": 1.256,
+        "p95Ms": 39.283,
+        "maxMs": 89.674
+      },
+      "committedLatency": {
+        "samples": 835,
+        "p50Ms": 1.341,
+        "p95Ms": 40.026,
+        "maxMs": 89.674
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 170,
+          "succeeded": 170,
+          "failed": 0,
+          "p50Ms": 1.046,
+          "p95Ms": 2.053,
+          "maxMs": 73.025,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "projection_upsert": {
+          "attempts": 170,
+          "succeeded": 170,
+          "failed": 0,
+          "p50Ms": 1.05,
+          "p95Ms": 1.794,
+          "maxMs": 22.585,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "multirow_upsert": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 35.042,
+          "p95Ms": 61.544,
+          "maxMs": 89.674,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "ingestion": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 1.415,
+          "p95Ms": 2.362,
+          "maxMs": 11.996,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 1.302,
+          "p95Ms": 2.213,
+          "maxMs": 5.639,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "intentional_rollback": {
+          "attempts": 165,
+          "succeeded": 165,
+          "failed": 0,
+          "p50Ms": 1.084,
+          "p95Ms": 1.51,
+          "maxMs": 3.242,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        53476,
+        27064,
+        35084,
+        65056,
+        38624
+      ],
+      "failures": [],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 0,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 4,
+              "p50Ms": 50.06390000000101,
+              "p95Ms": 166.66259999999602,
+              "maxMs": 166.66259999999602
+            },
+            "counts": {
+              "samples": 4,
+              "p50Ms": 34.60720000000583,
+              "p95Ms": 157.245600000002,
+              "maxMs": 157.245600000002
+            },
+            "facets": {
+              "samples": 4,
+              "p50Ms": 187.38530000000173,
+              "p95Ms": 208.36970000000292,
+              "maxMs": 208.36970000000292
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 6,
+              "p50Ms": 21.606400000004214,
+              "p95Ms": 92.80539999999746,
+              "maxMs": 92.80539999999746
+            },
+            "counts": {
+              "samples": 6,
+              "p50Ms": 22.700300000004063,
+              "p95Ms": 35.939400000002934,
+              "maxMs": 35.939400000002934
+            },
+            "facets": {
+              "samples": 6,
+              "p50Ms": 186.49990000000253,
+              "p95Ms": 208.0037999999986,
+              "maxMs": 208.0037999999986
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 55,
+        "samplesWithWaitingWriters": 0,
+        "maxWaitingWriters": 0,
+        "maxUnGrantedLocks": 0,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true
+        },
+        "sourceRows": 51056,
+        "orderRows": 51056,
+        "auditEvents": 1056
+      }
+    },
+    {
+      "variant": "after",
+      "label": "t2-c20",
+      "mode": "normal",
+      "writers": 20,
+      "iterations": 200,
+      "phaseIndex": 5,
+      "durationMs": 5379.499599999996,
+      "attempts": 4000,
+      "committed": 3340,
+      "intentionalRollbacks": 660,
+      "failed": 0,
+      "committedPerSecond": 620.8755922205112,
+      "latency": {
+        "samples": 4000,
+        "p50Ms": 5.637,
+        "p95Ms": 98.536,
+        "maxMs": 420.444
+      },
+      "committedLatency": {
+        "samples": 3340,
+        "p50Ms": 5.967,
+        "p95Ms": 106.626,
+        "maxMs": 420.444
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 680,
+          "succeeded": 680,
+          "failed": 0,
+          "p50Ms": 2.185,
+          "p95Ms": 5.761,
+          "maxMs": 116.542,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "projection_upsert": {
+          "attempts": 680,
+          "succeeded": 680,
+          "failed": 0,
+          "p50Ms": 5.673,
+          "p95Ms": 76.909,
+          "maxMs": 254.277,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "multirow_upsert": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 62.181,
+          "p95Ms": 173.599,
+          "maxMs": 382.947,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "ingestion": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 5.522,
+          "p95Ms": 46.294,
+          "maxMs": 254.141,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 6.335,
+          "p95Ms": 40.298,
+          "maxMs": 420.444,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "intentional_rollback": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 4.939,
+          "p95Ms": 33.442,
+          "maxMs": 221.661,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        28064,
+        65544,
+        22360,
+        36276,
+        64048,
+        58156,
+        47596,
+        62776,
+        14044,
+        57180,
+        45832,
+        7896,
+        26128,
+        50188,
+        34696,
+        17476,
+        52176,
+        23436,
+        19696,
+        25656
+      ],
+      "failures": [],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 0,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 195,
+              "p50Ms": 0.8643999999985681,
+              "p95Ms": 1.3174999999973807,
+              "maxMs": 56.70840000000317
+            },
+            "counts": {
+              "samples": 195,
+              "p50Ms": 0.2419000000008964,
+              "p95Ms": 0.37260000000242144,
+              "maxMs": 7.295899999997346
+            },
+            "facets": {
+              "samples": 195,
+              "p50Ms": 0.41339999999763677,
+              "p95Ms": 0.6503999999986263,
+              "maxMs": 3.5841999999975087
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 142,
+              "p50Ms": 7.186899999993329,
+              "p95Ms": 22.483899999999267,
+              "maxMs": 96.22919999999431
+            },
+            "counts": {
+              "samples": 142,
+              "p50Ms": 0.3220000000001164,
+              "p95Ms": 0.5063999999983935,
+              "maxMs": 1.604700000003504
+            },
+            "facets": {
+              "samples": 142,
+              "p50Ms": 0.47260000000096625,
+              "p95Ms": 0.7379000000000815,
+              "maxMs": 2.2471000000005006
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 198,
+        "samplesWithWaitingWriters": 168,
+        "maxWaitingWriters": 18,
+        "maxUnGrantedLocks": 18,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "stageReferenceCounts": true,
+          "facetReferenceCounts": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "stageRls_viewer": true,
+          "facetRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true,
+          "stageRls_outsider": true,
+          "facetRls_outsider": true
+        },
+        "sourceRows": 51716,
+        "orderRows": 51716,
+        "auditEvents": 1716
+      }
+    },
+    {
+      "variant": "before",
+      "label": "t2-c20",
+      "mode": "normal",
+      "writers": 20,
+      "iterations": 200,
+      "phaseIndex": 5,
+      "durationMs": 4443.627099999998,
+      "attempts": 4000,
+      "committed": 3340,
+      "intentionalRollbacks": 660,
+      "failed": 0,
+      "committedPerSecond": 751.6382281492525,
+      "latency": {
+        "samples": 4000,
+        "p50Ms": 2.341,
+        "p95Ms": 102.952,
+        "maxMs": 351.61
+      },
+      "committedLatency": {
+        "samples": 3340,
+        "p50Ms": 2.569,
+        "p95Ms": 120.912,
+        "maxMs": 351.61
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 680,
+          "succeeded": 680,
+          "failed": 0,
+          "p50Ms": 2.017,
+          "p95Ms": 43.69,
+          "maxMs": 87.293,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "projection_upsert": {
+          "attempts": 680,
+          "succeeded": 680,
+          "failed": 0,
+          "p50Ms": 2.058,
+          "p95Ms": 11.758,
+          "maxMs": 55.259,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "multirow_upsert": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 86.817,
+          "p95Ms": 209.958,
+          "maxMs": 351.61,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "ingestion": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 2.492,
+          "p95Ms": 7.543,
+          "maxMs": 77.247,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 2.495,
+          "p95Ms": 8.467,
+          "maxMs": 77.211,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "intentional_rollback": {
+          "attempts": 660,
+          "succeeded": 660,
+          "failed": 0,
+          "p50Ms": 1.755,
+          "p95Ms": 2.694,
+          "maxMs": 24.637,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        63316,
+        23156,
+        53184,
+        58972,
+        12912,
+        28016,
+        47280,
+        66308,
+        30956,
+        25860,
+        21412,
+        60496,
+        37340,
+        42312,
+        25480,
+        66028,
+        40544,
+        16900,
+        58608,
+        52436
+      ],
+      "failures": [],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 0,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 7,
+              "p50Ms": 63.445999999996275,
+              "p95Ms": 177.5911000000051,
+              "maxMs": 177.5911000000051
+            },
+            "counts": {
+              "samples": 7,
+              "p50Ms": 71.77160000000003,
+              "p95Ms": 162.9774000000034,
+              "maxMs": 162.9774000000034
+            },
+            "facets": {
+              "samples": 7,
+              "p50Ms": 438.05019999999786,
+              "p95Ms": 711.671199999997,
+              "maxMs": 711.671199999997
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 8,
+              "p50Ms": 49.34240000000136,
+              "p95Ms": 122.8301999999967,
+              "maxMs": 122.8301999999967
+            },
+            "counts": {
+              "samples": 8,
+              "p50Ms": 47.29450000000361,
+              "p95Ms": 82.80129999999917,
+              "maxMs": 82.80129999999917
+            },
+            "facets": {
+              "samples": 8,
+              "p50Ms": 396.2016000000003,
+              "p95Ms": 711.049500000001,
+              "maxMs": 711.049500000001
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 155,
+        "samplesWithWaitingWriters": 3,
+        "maxWaitingWriters": 4,
+        "maxUnGrantedLocks": 3,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true
+        },
+        "sourceRows": 51716,
+        "orderRows": 51716,
+        "auditEvents": 1716
+      }
+    },
+    {
+      "variant": "before",
+      "label": "adverse-c5",
+      "mode": "multi_statement_stress",
+      "writers": 5,
+      "iterations": 20,
+      "phaseIndex": 6,
+      "durationMs": 286.04320000000007,
+      "attempts": 100,
+      "committed": 85,
+      "intentionalRollbacks": 15,
+      "failed": 0,
+      "committedPerSecond": 297.157911811922,
+      "latency": {
+        "samples": 100,
+        "p50Ms": 1.927,
+        "p95Ms": 70.651,
+        "maxMs": 77.365
+      },
+      "committedLatency": {
+        "samples": 85,
+        "p50Ms": 2.081,
+        "p95Ms": 72.382,
+        "maxMs": 77.365
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 20,
+          "succeeded": 20,
+          "failed": 0,
+          "p50Ms": 1.535,
+          "p95Ms": 49.395,
+          "maxMs": 49.46,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "projection_upsert": {
+          "attempts": 20,
+          "succeeded": 20,
+          "failed": 0,
+          "p50Ms": 1.914,
+          "p95Ms": 11.129,
+          "maxMs": 11.503,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "multirow_upsert": {
+          "attempts": 15,
+          "succeeded": 15,
+          "failed": 0,
+          "p50Ms": 69.683,
+          "p95Ms": 77.365,
+          "maxMs": 77.365,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "ingestion": {
+          "attempts": 15,
+          "succeeded": 15,
+          "failed": 0,
+          "p50Ms": 1.744,
+          "p95Ms": 7.614,
+          "maxMs": 7.614,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 15,
+          "succeeded": 15,
+          "failed": 0,
+          "p50Ms": 2.086,
+          "p95Ms": 5.601,
+          "maxMs": 5.601,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "intentional_rollback": {
+          "attempts": 15,
+          "succeeded": 15,
+          "failed": 0,
+          "p50Ms": 1.823,
+          "p95Ms": 3.001,
+          "maxMs": 3.001,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        49316,
+        59936,
+        53468,
+        10756,
+        13104
+      ],
+      "failures": [],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 0,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 1,
+              "p50Ms": 58.44560000000638,
+              "p95Ms": 58.44560000000638,
+              "maxMs": 58.44560000000638
+            },
+            "counts": {
+              "samples": 1,
+              "p50Ms": 32.90089999999327,
+              "p95Ms": 32.90089999999327,
+              "maxMs": 32.90089999999327
+            },
+            "facets": {
+              "samples": 1,
+              "p50Ms": 277.60869999999704,
+              "p95Ms": 277.60869999999704,
+              "maxMs": 277.60869999999704
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 1,
+              "p50Ms": 74.07330000000366,
+              "p95Ms": 74.07330000000366,
+              "maxMs": 74.07330000000366
+            },
+            "counts": {
+              "samples": 1,
+              "p50Ms": 34.394799999994575,
+              "p95Ms": 34.394799999994575,
+              "maxMs": 34.394799999994575
+            },
+            "facets": {
+              "samples": 1,
+              "p50Ms": 285.19809999999416,
+              "p95Ms": 285.19809999999416,
+              "maxMs": 285.19809999999416
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 10,
+        "samplesWithWaitingWriters": 0,
+        "maxWaitingWriters": 0,
+        "maxUnGrantedLocks": 0,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true
+        },
+        "sourceRows": 51731,
+        "orderRows": 51731,
+        "auditEvents": 1746
+      }
+    },
+    {
+      "variant": "after",
+      "label": "adverse-c5",
+      "mode": "multi_statement_stress",
+      "writers": 5,
+      "iterations": 20,
+      "phaseIndex": 6,
+      "durationMs": 12341.085999999996,
+      "attempts": 100,
+      "committed": 74,
+      "intentionalRollbacks": 14,
+      "failed": 12,
+      "committedPerSecond": 5.996230801730093,
+      "latency": {
+        "samples": 88,
+        "p50Ms": 6.876,
+        "p95Ms": 2032.086,
+        "maxMs": 3048.378
+      },
+      "committedLatency": {
+        "samples": 74,
+        "p50Ms": 7.394,
+        "p95Ms": 2034.328,
+        "maxMs": 3048.378
+      },
+      "summary": {
+        "projection_update": {
+          "attempts": 20,
+          "succeeded": 19,
+          "failed": 1,
+          "p50Ms": 3.148,
+          "p95Ms": 2026.131,
+          "maxMs": 2026.131,
+          "failureP50Ms": 1079.215,
+          "sqlstates": {
+            "40P01": 1
+          }
+        },
+        "projection_upsert": {
+          "attempts": 20,
+          "succeeded": 14,
+          "failed": 6,
+          "p50Ms": 5.294,
+          "p95Ms": 2034.328,
+          "maxMs": 2034.328,
+          "failureP50Ms": 2020.64,
+          "sqlstates": {
+            "40P01": 6
+          }
+        },
+        "multirow_upsert": {
+          "attempts": 15,
+          "succeeded": 13,
+          "failed": 2,
+          "p50Ms": 1034.529,
+          "p95Ms": 3048.378,
+          "maxMs": 3048.378,
+          "failureP50Ms": 2017.988,
+          "sqlstates": {
+            "40P01": 2
+          }
+        },
+        "ingestion": {
+          "attempts": 15,
+          "succeeded": 15,
+          "failed": 0,
+          "p50Ms": 5.18,
+          "p95Ms": 2025.682,
+          "maxMs": 2025.682,
+          "failureP50Ms": null,
+          "sqlstates": {}
+        },
+        "stage_change": {
+          "attempts": 15,
+          "succeeded": 13,
+          "failed": 2,
+          "p50Ms": 6.711,
+          "p95Ms": 1014.674,
+          "maxMs": 1014.674,
+          "failureP50Ms": 1010.349,
+          "sqlstates": {
+            "40P01": 2
+          }
+        },
+        "intentional_rollback": {
+          "attempts": 15,
+          "succeeded": 14,
+          "failed": 1,
+          "p50Ms": 4.424,
+          "p95Ms": 2030.496,
+          "maxMs": 2030.496,
+          "failureP50Ms": 1015.078,
+          "sqlstates": {
+            "40P01": 1
+          }
+        }
+      },
+      "operationsCovered": true,
+      "backendPids": [
+        64588,
+        51864,
+        55112,
+        63320,
+        50984
+      ],
+      "failures": [
+        {
+          "workerId": 0,
+          "iteration": 1,
+          "operation": "projection_upsert",
+          "mode": "multi_statement_stress",
+          "outcome": "failed",
+          "statements": [
+            {
+              "label": "begin",
+              "ms": 0.036
+            },
+            {
+              "label": "timeouts",
+              "ms": 0.076,
+              "rows": 1
+            },
+            {
+              "label": "projection_upsert",
+              "ms": 2035.73,
+              "rows": 1,
+              "expectedRows": 1
+            },
+            {
+              "label": "projection_upsert",
+              "ms": 2008.099,
+              "error": "40P01"
+            }
+          ],
+          "expectedNewOrders": 0,
+          "expectedAuditEvents": 0,
+          "failedAt": "projection_upsert",
+          "error": {
+            "code": "40P01",
+            "message": "deadlock detected"
+          },
+          "durationMs": 4044.128
+        },
+        {
+          "workerId": 0,
+          "iteration": 4,
+          "operation": "stage_change",
+          "mode": "multi_statement_stress",
+          "outcome": "failed",
+          "statements": [
+            {
+              "label": "begin",
+              "ms": 0.068
+            },
+            {
+              "label": "timeouts",
+              "ms": 0.124,
+              "rows": 1
+            },
+            {
+              "label": "append_events",
+              "ms": 2.071,
+              "rows": 2,
+              "expectedRows": 2
+            },
+            {
+              "label": "stage_change",
+              "ms": 0.975,
+              "rows": 1,
+              "expectedRows": 1
+            },
+            {
+              "label": "stage_change",
+              "ms": 2023.929,
+              "error": "40P01"
+            }
+          ],
+          "expectedNewOrders": 0,
+          "expectedAuditEvents": 2,
+          "failedAt": "stage_change",
+          "error": {
+            "code": "40P01",
+            "message": "deadlock detected"
+          },
+          "durationMs": 2027.282
+        },
+        {
+          "workerId": 0,
+          "iteration": 8,
+          "operation": "multirow_upsert",
+          "mode": "multi_statement_stress",
+          "outcome": "failed",
+          "statements": [
+            {
+              "label": "begin",
+              "ms": 0.059
+            },
+            {
+              "label": "timeouts",
+              "ms": 0.168,
+              "rows": 1
+            },
+            {
+              "label": "multirow_upsert",
+              "ms": 2017.612,
+              "error": "40P01"
+            }
+          ],
+          "expectedNewOrders": 0,
+          "expectedAuditEvents": 0,
+          "failedAt": "multirow_upsert",
+          "error": {
+            "code": "40P01",
+            "message": "deadlock detected"
+          },
+          "durationMs": 2017.988
+        },
+        {
+          "workerId": 1,
+          "iteration": 7,
+          "operation": "projection_upsert",
+          "mode": "multi_statement_stress",
+          "outcome": "failed",
+          "statements": [
+            {
+              "label": "begin",
+              "ms": 0.044
+            },
+            {
+              "label": "timeouts",
+              "ms": 0.13,
+              "rows": 1
+            },
+            {
+              "label": "projection_upsert",
+              "ms": 2.947,
+              "rows": 1,
+              "expectedRows": 1
+            },
+            {
+              "label": "projection_upsert",
+              "ms": 1017.226,
+              "error": "40P01"
+            }
+          ],
+          "expectedNewOrders": 0,
+          "expectedAuditEvents": 0,
+          "failedAt": "projection_upsert",
+          "error": {
+            "code": "40P01",
+            "message": "deadlock detected"
+          },
+          "durationMs": 1020.626
+        },
+        {
+          "workerId": 2,
+          "iteration": 1,
+          "operation": "projection_upsert",
+          "mode": "multi_statement_stress",
+          "outcome": "failed",
+          "statements": [
+            {
+              "label": "begin",
+              "ms": 0.081
+            },
+            {
+              "label": "timeouts",
+              "ms": 0.098,
+              "rows": 1
+            },
+            {
+              "label": "projection_upsert",
+              "ms": 1023.994,
+              "rows": 1,
+              "expectedRows": 1
+            },
+            {
+              "label": "projection_upsert",
+              "ms": 1012.181,
+              "error": "40P01"
+            }
+          ],
+          "expectedNewOrders": 0,
+          "expectedAuditEvents": 0,
+          "failedAt": "projection_upsert",
+          "error": {
+            "code": "40P01",
+            "message": "deadlock detected"
+          },
+          "durationMs": 2036.63
+        },
+        {
+          "workerId": 3,
+          "iteration": 0,
+          "operation": "projection_update",
+          "mode": "multi_statement_stress",
+          "outcome": "failed",
+          "statements": [
+            {
+              "label": "begin",
+              "ms": 0.032
+            },
+            {
+              "label": "timeouts",
+              "ms": 0.171,
+              "rows": 1
+            },
+            {
+              "label": "projection_update",
+              "ms": 60.492,
+              "rows": 1,
+              "expectedRows": 1
+            },
+            {
+              "label": "projection_update",
+              "ms": 1018.296,
+              "error": "40P01"
+            }
+          ],
+          "expectedNewOrders": 0,
+          "expectedAuditEvents": 0,
+          "failedAt": "projection_update",
+          "error": {
+            "code": "40P01",
+            "message": "deadlock detected"
+          },
+          "durationMs": 1079.215
+        },
+        {
+          "workerId": 3,
+          "iteration": 1,
+          "operation": "projection_upsert",
+          "mode": "multi_statement_stress",
+          "outcome": "failed",
+          "statements": [
+            {
+              "label": "begin",
+              "ms": 0.03
+            },
+            {
+              "label": "timeouts",
+              "ms": 0.091,
+              "rows": 1
+            },
+            {
+              "label": "projection_upsert",
+              "ms": 2020.324,
+              "error": "40P01"
+            }
+          ],
+          "expectedNewOrders": 0,
+          "expectedAuditEvents": 0,
+          "failedAt": "projection_upsert",
+          "error": {
+            "code": "40P01",
+            "message": "deadlock detected"
+          },
+          "durationMs": 2020.64
+        },
+        {
+          "workerId": 3,
+          "iteration": 7,
+          "operation": "projection_upsert",
+          "mode": "multi_statement_stress",
+          "outcome": "failed",
+          "statements": [
+            {
+              "label": "begin",
+              "ms": 0.037
+            },
+            {
+              "label": "timeouts",
+              "ms": 0.065,
+              "rows": 1
+            },
+            {
+              "label": "projection_upsert",
+              "ms": 2.194,
+              "rows": 1,
+              "expectedRows": 1
+            },
+            {
+              "label": "projection_upsert",
+              "ms": 1009.225,
+              "error": "40P01"
+            }
+          ],
+          "expectedNewOrders": 0,
+          "expectedAuditEvents": 0,
+          "failedAt": "projection_upsert",
+          "error": {
+            "code": "40P01",
+            "message": "deadlock detected"
+          },
+          "durationMs": 1011.771
+        },
+        {
+          "workerId": 3,
+          "iteration": 8,
+          "operation": "multirow_upsert",
+          "mode": "multi_statement_stress",
+          "outcome": "failed",
+          "statements": [
+            {
+              "label": "begin",
+              "ms": 0.047
+            },
+            {
+              "label": "timeouts",
+              "ms": 0.088,
+              "rows": 1
+            },
+            {
+              "label": "multirow_upsert",
+              "ms": 2028.734,
+              "error": "40P01"
+            }
+          ],
+          "expectedNewOrders": 0,
+          "expectedAuditEvents": 0,
+          "failedAt": "multirow_upsert",
+          "error": {
+            "code": "40P01",
+            "message": "deadlock detected"
+          },
+          "durationMs": 2029.151
+        },
+        {
+          "workerId": 3,
+          "iteration": 10,
+          "operation": "stage_change",
+          "mode": "multi_statement_stress",
+          "outcome": "failed",
+          "statements": [
+            {
+              "label": "begin",
+              "ms": 0.026
+            },
+            {
+              "label": "timeouts",
+              "ms": 0.084,
+              "rows": 1
+            },
+            {
+              "label": "append_events",
+              "ms": 0.839,
+              "rows": 2,
+              "expectedRows": 2
+            },
+            {
+              "label": "stage_change",
+              "ms": 7.53,
+              "rows": 1,
+              "expectedRows": 1
+            },
+            {
+              "label": "stage_change",
+              "ms": 1001.751,
+              "error": "40P01"
+            }
+          ],
+          "expectedNewOrders": 0,
+          "expectedAuditEvents": 2,
+          "failedAt": "stage_change",
+          "error": {
+            "code": "40P01",
+            "message": "deadlock detected"
+          },
+          "durationMs": 1010.349
+        },
+        {
+          "workerId": 3,
+          "iteration": 17,
+          "operation": "intentional_rollback",
+          "mode": "multi_statement_stress",
+          "outcome": "failed",
+          "statements": [
+            {
+              "label": "begin",
+              "ms": 0.029
+            },
+            {
+              "label": "timeouts",
+              "ms": 0.065,
+              "rows": 1
+            },
+            {
+              "label": "ingest_order",
+              "ms": 0.206,
+              "rows": 1,
+              "expectedRows": 1
+            },
+            {
+              "label": "projection_upsert",
+              "ms": 2.75,
+              "rows": 1,
+              "expectedRows": 1
+            },
+            {
+              "label": "rollback_hot_update",
+              "ms": 1011.849,
+              "error": "40P01"
+            }
+          ],
+          "expectedNewOrders": 0,
+          "expectedAuditEvents": 0,
+          "failedAt": "rollback_hot_update",
+          "error": {
+            "code": "40P01",
+            "message": "deadlock detected"
+          },
+          "durationMs": 1015.078
+        },
+        {
+          "workerId": 4,
+          "iteration": 13,
+          "operation": "projection_upsert",
+          "mode": "multi_statement_stress",
+          "outcome": "failed",
+          "statements": [
+            {
+              "label": "begin",
+              "ms": 0.096
+            },
+            {
+              "label": "timeouts",
+              "ms": 0.087,
+              "rows": 1
+            },
+            {
+              "label": "projection_upsert",
+              "ms": 1003.178,
+              "rows": 1,
+              "expectedRows": 1
+            },
+            {
+              "label": "projection_upsert",
+              "ms": 2026.222,
+              "error": "40P01"
+            }
+          ],
+          "expectedNewOrders": 0,
+          "expectedAuditEvents": 0,
+          "failedAt": "projection_upsert",
+          "error": {
+            "code": "40P01",
+            "message": "deadlock detected"
+          },
+          "durationMs": 3029.833
+        }
+      ],
+      "failuresTruncated": false,
+      "stoppedWorkers": [],
+      "deadlocksStatsDelta": 12,
+      "readers": [
+        {
+          "role": "service-both-stores",
+          "summary": {
+            "page": {
+              "samples": 398,
+              "p50Ms": 0.8176999999996042,
+              "p95Ms": 1.110499999995227,
+              "maxMs": 31.379199999995762
+            },
+            "counts": {
+              "samples": 398,
+              "p50Ms": 0.23699999999371357,
+              "p95Ms": 0.3660999999992782,
+              "maxMs": 3.270199999999022
+            },
+            "facets": {
+              "samples": 398,
+              "p50Ms": 0.43189999999594875,
+              "p95Ms": 0.6714999999967404,
+              "maxMs": 2.462200000009034
+            }
+          },
+          "errors": []
+        },
+        {
+          "role": "authenticated-store-a",
+          "summary": {
+            "page": {
+              "samples": 381,
+              "p50Ms": 4.823400000008405,
+              "p95Ms": 5.556199999991804,
+              "maxMs": 66.95059999999648
+            },
+            "counts": {
+              "samples": 381,
+              "p50Ms": 0.270699999993667,
+              "p95Ms": 0.44329999999899883,
+              "maxMs": 1.2621999999973923
+            },
+            "facets": {
+              "samples": 381,
+              "p50Ms": 0.45709999999962747,
+              "p95Ms": 0.6527999999962049,
+              "maxMs": 1.5699000000022352
+            }
+          },
+          "errors": []
+        }
+      ],
+      "locks": {
+        "observations": 399,
+        "samplesWithWaitingWriters": 394,
+        "maxWaitingWriters": 5,
+        "maxUnGrantedLocks": 5,
+        "errors": []
+      },
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "stageReferenceCounts": true,
+          "facetReferenceCounts": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "stageRls_viewer": true,
+          "facetRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true,
+          "stageRls_outsider": true,
+          "facetRls_outsider": true
+        },
+        "sourceRows": 51731,
+        "orderRows": 51731,
+        "auditEvents": 1742
+      }
+    }
+  ],
+  "runtime": {
+    "version": "PostgreSQL 18.4 on x86_64-windows, compiled by msvc-19.44.35226, 64-bit",
+    "packageVersion": "18.4.0-beta.17",
+    "directory": "C:\\Users\\Pc\\Documents\\Kapso Sales\\.performance-tools\\pg-runs\\concurrency-9gmbLV",
+    "port": 59045
+  },
+  "fixture": {
+    "version": 1,
+    "size": 50000,
+    "workerCount": 20,
+    "hotRowsPerWorker": 200,
+    "orgId": "0157c000-0000-4000-8000-000000000001",
+    "storeIds": [
+      "0157c000-0000-4000-8000-000000000011",
+      "0157c000-0000-4000-8000-000000000012"
+    ],
+    "viewerId": "0157c000-0000-4000-8000-000000000021",
+    "outsiderId": "0157c000-0000-4000-8000-000000000022",
+    "anchor": "2026-09-25T12:00:00.000Z",
+    "seedMs": 6921.175,
+    "hotRows": 4000
+  },
+  "normalCorrectnessPassed": true,
+  "adverseCorrectnessPassed": false,
+  "completedAt": "2026-09-25T22:38:01.750Z",
+  "stoppedAt": "2026-09-25T22:38:02.094Z"
+}

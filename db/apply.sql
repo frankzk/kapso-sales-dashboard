@@ -407,4 +407,6 @@
 \ir migrations/0201_swayp_inventory_sync_runs.sql
 \echo 'Applying 0202_swayp_inventory_sessions.sql'
 \ir migrations/0202_swayp_inventory_sessions.sql
+\echo 'Applying 0203_master_read_scaling.sql'
+\ir migrations/0203_master_read_scaling.sql
 \echo 'Done.'

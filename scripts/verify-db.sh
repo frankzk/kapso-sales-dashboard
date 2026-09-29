@@ -99,6 +99,9 @@ echo "▶ Master para el motorizado: solo los pedidos de sus rutas (0186)"
 $PSQL -f "$ROOT/scripts/sql/rider_master_smoke.sql"
 echo "  ✅ motorizado lee del Master solo sus paradas; owner sigue viendo todo"
 
+echo "▶ Master read scaling: transactional totals, facets, backfill and RLS"
+$PSQL -f "$ROOT/scripts/sql/master_read_scaling_smoke.sql"
+
 # La cobertura COD se decide por coordenada además de por nombre (0100). Es
 # lógica geoespacial hecha a mano (haversine, sin PostGIS): esta prueba fija que
 # la cercanía a un punto COD clasifica bien y que las reglas de precedencia y el

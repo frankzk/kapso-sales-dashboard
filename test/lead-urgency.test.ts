@@ -194,7 +194,7 @@ describe("countLeadUrgency", () => {
 // mientras la fila mostraba la ventana de WhatsApp. Estas guardas leen el fuente
 // para probar que el cálculo LLEGA a la pantalla.
 describe("la fila usa la urgencia, no la ventana de 24h", () => {
-  const src = readFileSync(new URL("../components/leads.tsx", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../components/leads.tsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
   it("el acento lateral lo pinta la urgencia", () => {
     expect(src).toContain("inset 3px 0 0 ${ud.accent}");

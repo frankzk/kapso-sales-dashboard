@@ -1,0 +1,23 @@
+{
+  "project": "zuloxsrfcwhefedgfcnb",
+  "passed": true,
+  "orderId": "01980000-0000-4000-0003-000000000356",
+  "oneMasterRow": true,
+  "twoPhysicalOutputs": true,
+  "identitiesPreserved": true,
+  "outputs": [
+    {
+      "id": "01980000-0000-4000-0008-000000000001",
+      "output_number": 1,
+      "output_code": "PRUEBA0356-S01",
+      "qr_token": "bc235f14-75cf-4771-b05c-5b72d169e12b"
+    },
+    {
+      "id": "01980000-0000-4000-0008-000000000002",
+      "output_number": 2,
+      "output_code": "PRUEBA0356-S02",
+      "qr_token": "1532ac8f-6893-4f09-9bfe-dfeaccf97e35"
+    }
+  ],
+  "at": "2026-09-29T01:26:49.613Z"
+}

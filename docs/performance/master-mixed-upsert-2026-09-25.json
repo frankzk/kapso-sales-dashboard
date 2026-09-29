@@ -1,0 +1,209 @@
+{
+  "startedAt": "2026-09-26T01:42:26.240Z",
+  "localOnly": true,
+  "productionTouched": false,
+  "experiment": "Two disjoint mixed UPSERTs: opposite existing/new stores, one Master statement per writer",
+  "limitation": "Test-only AFTER UPDATE hook forces a legal adverse interleaving using coordinator-held advisory locks. This establishes possibility, not natural frequency or production latency.",
+  "migrationSha256": "e7ea282cbb7890c38e7095bd295341a99650dd26b055fd450d5ade97747f3bf5",
+  "scenarios": [
+    {
+      "variant": "before_0157",
+      "controlledInterleaving": true,
+      "barrierObserved": [
+        {
+          "pid": 41748,
+          "gate": 0,
+          "application_name": "mixed-upsert-writer-0",
+          "wait_event_type": "Lock",
+          "wait_event": "advisory"
+        },
+        {
+          "pid": 35016,
+          "gate": 1,
+          "application_name": "mixed-upsert-writer-1",
+          "wait_event_type": "Lock",
+          "wait_event": "advisory"
+        }
+      ],
+      "writers": [
+        {
+          "workerId": 0,
+          "backendPid": 41748,
+          "existingOrder": "0157c000-0000-4000-9000-000000000002",
+          "insertedOrder": "0157c000-0000-4000-9000-000000000009",
+          "oldStore": "0157c000-0000-4000-8000-000000000011",
+          "newStore": "0157c000-0000-4000-8000-000000000012",
+          "masterStatements": 1,
+          "sourceIdsDisjoint": true,
+          "outcome": "committed",
+          "rowsAffected": 2,
+          "durationMs": 27.666
+        },
+        {
+          "workerId": 1,
+          "backendPid": 35016,
+          "existingOrder": "0157c000-0000-4000-9000-000000000001",
+          "insertedOrder": "0157c000-0000-4000-9000-000000000010",
+          "oldStore": "0157c000-0000-4000-8000-000000000012",
+          "newStore": "0157c000-0000-4000-8000-000000000011",
+          "masterStatements": 1,
+          "sourceIdsDisjoint": true,
+          "outcome": "committed",
+          "rowsAffected": 2,
+          "durationMs": 27.938
+        }
+      ],
+      "deadlocks": 0,
+      "committed": 2,
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true
+        },
+        "sourceRows": 10,
+        "orderRows": 10,
+        "auditEvents": 0
+      },
+      "resultingRows": [
+        {
+          "shopify_order_id": "concurrency-1",
+          "macro_stage": "preparacion",
+          "macro_substage": "por_armar"
+        },
+        {
+          "shopify_order_id": "concurrency-2",
+          "macro_stage": "preparacion",
+          "macro_substage": "por_armar"
+        },
+        {
+          "shopify_order_id": "mixed-9",
+          "macro_stage": "por_confirmar",
+          "macro_substage": "sin_llamar"
+        },
+        {
+          "shopify_order_id": "mixed-10",
+          "macro_stage": "por_confirmar",
+          "macro_substage": "sin_llamar"
+        }
+      ]
+    },
+    {
+      "variant": "after_0157",
+      "controlledInterleaving": true,
+      "barrierObserved": [
+        {
+          "pid": 51708,
+          "gate": 0,
+          "application_name": "mixed-upsert-writer-0",
+          "wait_event_type": "Lock",
+          "wait_event": "advisory"
+        },
+        {
+          "pid": 29712,
+          "gate": 1,
+          "application_name": "mixed-upsert-writer-1",
+          "wait_event_type": "Lock",
+          "wait_event": "advisory"
+        }
+      ],
+      "writers": [
+        {
+          "workerId": 0,
+          "backendPid": 51708,
+          "existingOrder": "0157c000-0000-4000-9000-000000000002",
+          "insertedOrder": "0157c000-0000-4000-9000-000000000009",
+          "oldStore": "0157c000-0000-4000-8000-000000000011",
+          "newStore": "0157c000-0000-4000-8000-000000000012",
+          "masterStatements": 1,
+          "sourceIdsDisjoint": true,
+          "outcome": "committed",
+          "rowsAffected": 2,
+          "durationMs": 150.244
+        },
+        {
+          "workerId": 1,
+          "backendPid": 29712,
+          "existingOrder": "0157c000-0000-4000-9000-000000000001",
+          "insertedOrder": "0157c000-0000-4000-9000-000000000010",
+          "oldStore": "0157c000-0000-4000-8000-000000000012",
+          "newStore": "0157c000-0000-4000-8000-000000000011",
+          "masterStatements": 1,
+          "sourceIdsDisjoint": true,
+          "outcome": "failed",
+          "error": {
+            "code": "40P01",
+            "message": "deadlock detected",
+            "detail": "Process 29712 waits for ShareLock on transaction 917; blocked by process 51708.\nProcess 51708 waits for ShareLock on transaction 918; blocked by process 29712.",
+            "context": "while inserting index tuple (0,2) in relation \"order_master_stage_totals\"\nSQL statement \"insert into public.order_master_stage_totals as target\n        (store_id, macro_stage, macro_substage, total)\n      values (d.store_id, d.macro_stage, d.macro_substage, d.delta)\n      on conflict (store_id, macro_stage, macro_substage) do update\n        set total = target.total + excluded.total\"\nPL/pgSQL function maintain_order_master_read_totals() line 43 at SQL statement"
+          },
+          "durationMs": 148.645
+        }
+      ],
+      "deadlocks": 1,
+      "committed": 1,
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "stageReferenceCounts": true,
+          "facetReferenceCounts": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "stageRls_viewer": true,
+          "facetRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true,
+          "stageRls_outsider": true,
+          "facetRls_outsider": true
+        },
+        "sourceRows": 9,
+        "orderRows": 9,
+        "auditEvents": 0
+      },
+      "resultingRows": [
+        {
+          "shopify_order_id": "concurrency-1",
+          "macro_stage": "por_confirmar",
+          "macro_substage": "sin_llamar"
+        },
+        {
+          "shopify_order_id": "concurrency-2",
+          "macro_stage": "preparacion",
+          "macro_substage": "por_armar"
+        },
+        {
+          "shopify_order_id": "mixed-9",
+          "macro_stage": "por_confirmar",
+          "macro_substage": "sin_llamar"
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "version": "PostgreSQL 18.4 on x86_64-windows, compiled by msvc-19.44.35226, 64-bit",
+    "packageVersion": "18.4.0-beta.17",
+    "directory": "C:\\Users\\Pc\\Documents\\Kapso Sales\\.performance-tools\\pg-runs\\concurrency-zAw7Bs",
+    "port": 51501
+  },
+  "riskReproduced": true,
+  "completedAt": "2026-09-26T01:42:32.539Z",
+  "stoppedAt": "2026-09-26T01:42:34.490Z"
+}

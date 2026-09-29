@@ -1,0 +1,24 @@
+{
+  "project": "zuloxsrfcwhefedgfcnb",
+  "passed": true,
+  "runs": [
+    {
+      "requested": 420,
+      "written": 420,
+      "failed": 0,
+      "deferred": 0,
+      "staleDoorError": null
+    },
+    {
+      "requested": 420,
+      "written": 420,
+      "failed": 0,
+      "deferred": 0,
+      "staleDoorError": null
+    }
+  ],
+  "eventsPreserved": 417,
+  "outputsPreserved": 2,
+  "providersContacted": false,
+  "at": "2026-09-29T13:51:25.932Z"
+}

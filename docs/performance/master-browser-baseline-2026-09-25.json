@@ -1,0 +1,12 @@
+{
+  "date": "2026-09-25",
+  "route": "/dashboard/pedidos",
+  "source": "Authenticated in-app browser, published application before local changes",
+  "method": "Wall time around reload plus waiting until Master heading and table are visible; includes browser automation overhead. Not Navigation Timing, LCP, SQL time or a percentile study. Resource Timing is unavailable in the browser tool's read-only evaluation scope.",
+  "samples": [
+    { "sample": 1, "reloadToTableObservedMs": 974, "dataRows": 100 },
+    { "sample": 2, "reloadToTableObservedMs": 757, "dataRows": 100 },
+    { "sample": 3, "reloadToTableObservedMs": 830, "dataRows": 100 }
+  ],
+  "otherRoutes": "Consolidado and Repro navigations initially exposed Suspense placeholders; their partial navigation durations were discarded instead of reporting them as data-ready times. No authenticated browser after-change measurement exists because the changes have not been deployed."
+}

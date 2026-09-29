@@ -22,6 +22,7 @@ import {
   type MasterView,
 } from "@/lib/orders-master-access";
 import { parseMasterQuery } from "@/lib/master-query";
+import type { MasterCursor } from "@/lib/master-pagination";
 import { MACRO_SUBSTAGES_BY_STAGE, type MacroSubstage } from "@/lib/order-macro-stage";
 import {
   MASTER_EXPORT_COLUMNS,
@@ -37,8 +38,8 @@ export const dynamic = "force-dynamic";
 // corto justo en el caso que más falta hace exportar.
 export const maxDuration = 120;
 
-/** Filas por consulta. Alto para dar pocos viajes, por debajo del tope de
- *  PostgREST para que ninguna página vuelva recortada en silencio. */
+/** Tamaño solicitado; el lector puede aplicar un límite menor y devuelve el
+ *  tamaño efectivo en pageSize. No confundirlo con el fin del listado. */
 const CHUNK = 1000;
 /**
  * Tope duro de filas. No es una preferencia: por encima de esto la petición se
@@ -71,23 +72,33 @@ export async function GET(req: NextRequest) {
   const now = new Date();
   const rows: OrderMasterRow[] = [];
   let truncated = false;
+  let cursor: MasterCursor | null = null;
 
-  for (let page = 1; ; page++) {
+  for (;;) {
+    // Al llegar al tope solo comprobamos si queda otra fila: exactamente
+    // 20.000 pedidos no son una descarga truncada. Nunca se agrega esa fila.
+    const atLimit = rows.length >= MAX_ROWS;
     const res = await getOrderMasterPage(storeIds, {
       view,
       substage,
       filters,
       sortKey: "created",
-      page,
-      pageSize: CHUNK,
+      page: 1,
+      pageSize: atLimit ? 1 : Math.min(CHUNK, MAX_ROWS - rows.length),
+      cursor,
+      includeTotal: false,
       now,
     });
-    rows.push(...res.rows);
-    if (res.rows.length < CHUNK) break;
-    if (rows.length >= MAX_ROWS) {
-      truncated = true;
+    if (atLimit) {
+      truncated = res.rows.length > 0;
       break;
     }
+    rows.push(...res.rows);
+    if (res.rows.length < res.pageSize) break;
+    const last = res.rows.at(-1);
+    if (!last) break;
+    // Cursor estable: no se vuelve a recorrer todo lo ya exportado con OFFSET.
+    cursor = { id: last.id, createdAt: last.order_created_at, direction: "next" };
   }
 
   return workbookResponse(rows, stores, now, view, truncated);

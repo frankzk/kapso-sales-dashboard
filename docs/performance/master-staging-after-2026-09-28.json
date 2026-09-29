@@ -1,0 +1,165 @@
+{
+  "project": "zuloxsrfcwhefedgfcnb",
+  "variant": "after",
+  "startedAt": "2026-09-29T01:05:06.404Z",
+  "roles": [
+    {
+      "name": "admin",
+      "visible": 420,
+      "pages": [
+        100,
+        100,
+        100,
+        100,
+        20
+      ],
+      "forwardBackwardExact": true,
+      "countsExact": true,
+      "facetsExact": true
+    },
+    {
+      "name": "viewer1",
+      "visible": 210,
+      "pages": [
+        100,
+        100,
+        10
+      ],
+      "forwardBackwardExact": true,
+      "countsExact": true,
+      "facetsExact": true
+    },
+    {
+      "name": "blocked",
+      "visible": 0,
+      "pages": [],
+      "forwardBackwardExact": true,
+      "countsExact": true,
+      "facetsExact": true
+    },
+    {
+      "name": "rider",
+      "visible": 1,
+      "pages": [
+        1
+      ],
+      "forwardBackwardExact": true,
+      "countsExact": true,
+      "facetsExact": true
+    }
+  ],
+  "phases": [
+    {
+      "trial": 0,
+      "workers": 1,
+      "ingestionAndProjection": {
+        "samples": 4,
+        "p50Ms": 2888.3626000000004,
+        "p95Ms": 3211.4585000000006,
+        "maxMs": 3211.4585000000006
+      },
+      "authenticatedPage": {
+        "samples": 4,
+        "p50Ms": 222.725400000003,
+        "p95Ms": 321.39789999999994,
+        "maxMs": 321.39789999999994
+      },
+      "eventsExpected": 4,
+      "eventsFound": 4
+    },
+    {
+      "trial": 0,
+      "workers": 5,
+      "ingestionAndProjection": {
+        "samples": 20,
+        "p50Ms": 3170.677499999998,
+        "p95Ms": 3560.5108999999975,
+        "maxMs": 3604.7691000000013
+      },
+      "authenticatedPage": {
+        "samples": 20,
+        "p50Ms": 224.0547000000006,
+        "p95Ms": 251.45350000000326,
+        "maxMs": 285.0113999999994
+      },
+      "eventsExpected": 20,
+      "eventsFound": 20
+    },
+    {
+      "trial": 0,
+      "workers": 20,
+      "ingestionAndProjection": {
+        "samples": 80,
+        "p50Ms": 3201.941899999998,
+        "p95Ms": 3829.309500000003,
+        "maxMs": 4372.275999999998
+      },
+      "authenticatedPage": {
+        "samples": 80,
+        "p50Ms": 235.37399999999616,
+        "p95Ms": 446.02479999999923,
+        "maxMs": 777.5325000000012
+      },
+      "eventsExpected": 80,
+      "eventsFound": 80
+    },
+    {
+      "trial": 1,
+      "workers": 1,
+      "ingestionAndProjection": {
+        "samples": 4,
+        "p50Ms": 2926.7058000000106,
+        "p95Ms": 3170.4665999999997,
+        "maxMs": 3170.4665999999997
+      },
+      "authenticatedPage": {
+        "samples": 4,
+        "p50Ms": 220.54279999999562,
+        "p95Ms": 255.18510000000242,
+        "maxMs": 255.18510000000242
+      },
+      "eventsExpected": 4,
+      "eventsFound": 4
+    },
+    {
+      "trial": 1,
+      "workers": 5,
+      "ingestionAndProjection": {
+        "samples": 20,
+        "p50Ms": 3165.2102000000014,
+        "p95Ms": 3436.4916999999987,
+        "maxMs": 3526.805899999992
+      },
+      "authenticatedPage": {
+        "samples": 20,
+        "p50Ms": 222.0100999999995,
+        "p95Ms": 256.302199999991,
+        "maxMs": 258.2920000000013
+      },
+      "eventsExpected": 20,
+      "eventsFound": 20
+    },
+    {
+      "trial": 1,
+      "workers": 20,
+      "ingestionAndProjection": {
+        "samples": 80,
+        "p50Ms": 3090.447800000009,
+        "p95Ms": 3408.311600000001,
+        "maxMs": 3470.9677999999985
+      },
+      "authenticatedPage": {
+        "samples": 80,
+        "p50Ms": 227.67410000000382,
+        "p95Ms": 260.6515999999974,
+        "maxMs": 279.32769999999437
+      },
+      "eventsExpected": 80,
+      "eventsFound": 80
+    }
+  ],
+  "errors": [],
+  "idempotency": true,
+  "passed": true,
+  "finishedAt": "2026-09-29T01:07:05.236Z"
+}

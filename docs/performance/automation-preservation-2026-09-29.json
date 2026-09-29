@@ -1,0 +1,91 @@
+{
+  "base": "a85f2c1dbf702ce917ecb22583a4be78babb71ed",
+  "checkedAt": "2026-09-29T13:52:37.423Z",
+  "unchangedPaths": [
+    "vercel.json",
+    "app/api/cron",
+    "app/api/webhooks",
+    "lib/ingest.ts",
+    "lib/order-master.ts",
+    "lib/backup.ts",
+    "lib/env.ts",
+    "proxy.ts"
+  ],
+  "cronSchedules": [
+    {
+      "path": "/api/cron/sync",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/master-reconcile",
+      "schedule": "5,15,25,35,45,55 * * * *"
+    },
+    {
+      "path": "/api/cron/telegram-summary",
+      "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/cron/backup",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/aliclik-catalog",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/shopify-product-images",
+      "schedule": "30 9 * * *"
+    },
+    {
+      "path": "/api/cron/aliclik-reconcile",
+      "schedule": "*/20 * * * *"
+    },
+    {
+      "path": "/api/cron/aliclik-close",
+      "schedule": "10,30,50 * * * *"
+    },
+    {
+      "path": "/api/cron/shalom-reconcile",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/olva-reconcile",
+      "schedule": "15,45 * * * *"
+    },
+    {
+      "path": "/api/cron/aliclik-tariffs",
+      "schedule": "30 11 * * *"
+    },
+    {
+      "path": "/api/cron/aliclik-health",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/meta-insights",
+      "schedule": "15 10 * * *"
+    },
+    {
+      "path": "/api/cron/tanders-payments",
+      "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/cron/tanders-status",
+      "schedule": "20 * * * *"
+    },
+    {
+      "path": "/api/cron/coverage-push",
+      "schedule": "0 13,15,17,19,21 * * *"
+    },
+    {
+      "path": "/api/cron/voice-recovery",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/swayp-inventory",
+      "schedule": "40 * * * *"
+    }
+  ],
+  "cronCount": 18,
+  "externalServicesCalled": false,
+  "productionEnvironmentChanged": false
+}

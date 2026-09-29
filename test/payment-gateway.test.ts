@@ -24,7 +24,7 @@ import { isWebPrepaid, orderFullyPaid } from "@/lib/order-paid";
  * pasarela sin confirmar o ningún dato: conducto regular. Nada se deduce.
  */
 
-const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
+const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8").replace(/\r\n/g, "\n");
 const CHECKOUT = "Checkout Flow | Tarjeta, Transf., Cuotas débito";
 
 describe("clasificar la pasarela", () => {
