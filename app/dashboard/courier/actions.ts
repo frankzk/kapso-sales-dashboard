@@ -35,6 +35,7 @@ import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 import { custodyOnAssign, isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import { programDayLabel, programNeedsConfirm, takenIsAssignable, type BlockedReason } from "@/lib/dispatch-day";
+import { pastBoxDecision, pastBoxMessage, receivedFromLabel } from "@/lib/gf-scan-return";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
 import { getRouteDetail, type RouteRow, type StopWithOrder } from "@/lib/routes-access";
@@ -2489,6 +2490,11 @@ export interface ScanAssignLine {
   cashWarning?: string | null;
   /** Con `programado_otro_dia`: el día para el que estaba programado. */
   programmedFor?: string | null;
+  /**
+   * El paquete volvió de la caja de un día anterior y este escaneo lo recibió
+   * en oficina antes de asignarlo: «Yhoni del 26/09».
+   */
+  receivedFrom?: string | null;
 }
 
 /**
@@ -2536,16 +2542,49 @@ export async function scanAssignToRider(
   const { data: om } = await admin.from("order_master").select("order_name,order_total,store_id").eq("order_id", orderId).maybeSingle();
   const line: ScanAssignLine = { ...base, orderId, shipmentId, orderName: (om?.order_name as string | null) ?? null, amount: om?.order_total == null ? null : Number(om.order_total), riderName: rider.full_name };
 
+  // El día de la caja que se arma: hoy, o el que eligió el supervisor.
+  const boxDay = opts.scheduledFor && DATE_RE.test(opts.scheduledFor) ? opts.scheduledFor : limaClock().day;
+  let receivedFrom: string | null = null;
+
   // 2) ¿Ya está en una caja activa?
   if (shipmentId) {
     const { data: active } = await admin
       .from("dispatch_manifest_items")
-      .select("manifest_id,office_checked_at,dispatch_manifests!inner(id,rider_id,driver_name,route_date,state)")
+      .select("id,manifest_id,office_checked_at,dispatch_manifests!inner(id,rider_id,driver_name,route_date,state)")
       .eq("shipment_id", shipmentId)
       .is("removed_at", null)
       .maybeSingle();
-    const box = (active as { manifest_id: string; office_checked_at: string | null; dispatch_manifests: { rider_id: string | null; driver_name: string | null; route_date: string; state: string } } | null) ?? null;
-    if (box) {
+    const box = (active as { id: string; manifest_id: string; office_checked_at: string | null; dispatch_manifests: { rider_id: string | null; driver_name: string | null; route_date: string; state: string } } | null) ?? null;
+    // Una caja de un día ANTERIOR (lib/gf-scan-return.ts): escanearlo en
+    // oficina prueba que volvió. Un «No entregado» se recibe y se asigna en el
+    // mismo gesto; antes respondía «Ya estaba» y no entraba en la ruta de hoy.
+    if (box && box.dispatch_manifests.route_date < boxDay) {
+      const fromName = box.dispatch_manifests.driver_name ?? "otro motorizado";
+      const { data: stop } = await admin
+        .from("delivery_stops")
+        .select("status,outcome_reason")
+        .eq("shipment_id", shipmentId)
+        .eq("dispatch_manifest_id", box.manifest_id)
+        .order("reported_at", { ascending: false, nullsFirst: false })
+        .limit(1)
+        .maybeSingle();
+      const decision = pastBoxDecision({
+        boxRouteDate: box.dispatch_manifests.route_date,
+        targetDay: boxDay,
+        stopStatus: (stop?.status as string | null) ?? null,
+        outcomeReason: (stop?.outcome_reason as string | null) ?? null,
+      });
+      if (decision === "entregado" || decision === "sin_reporte") {
+        return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: pastBoxMessage(decision, fromName, box.dispatch_manifests.route_date) };
+      }
+      const { error: returnError } = await admin.rpc("gf_return_to_office", { p_item_id: box.id, p_actor: auth.userId });
+      if (returnError) return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: returnError.message };
+      if (decision === "recibir_rechazado") {
+        await recomputeOrderMasterSafe(admin, [orderId]);
+        return { ...line, status: "no_elegible", message: pastBoxMessage(decision, fromName, box.dispatch_manifests.route_date) };
+      }
+      receivedFrom = receivedFromLabel(fromName, box.dispatch_manifests.route_date);
+    } else if (box) {
       if (box.dispatch_manifests.rider_id === rider.id) {
         return {
           ...line,
@@ -2560,30 +2599,39 @@ export async function scanAssignToRider(
     }
   }
 
+  // Lo que se diga de aquí en adelante sobre un paquete recibido lo cuenta:
+  // salió de la caja vieja aunque no llegue a entrar en la nueva.
+  const receivedNote = receivedFrom ? `Recibido en oficina (salió de la caja de ${receivedFrom}). ` : "";
+  if (receivedFrom) line.receivedFrom = receivedFrom;
+
   // 3) ¿Programado para otro día? Se avisa antes de tomar nada (§29.6); la
   // línea ofrece «Asignar igual», que vuelve aquí con `confirmProgrammed`.
-  const boxDay = opts.scheduledFor && DATE_RE.test(opts.scheduledFor) ? opts.scheduledFor : limaClock().day;
   if (!opts.confirmProgrammed) {
     const conflict = (await programConflicts(admin, [orderId], boxDay)).get(orderId);
-    if (conflict) return { ...line, status: "programado_otro_dia", programmedFor: conflict.scheduled_for, message: programConflictMessage(conflict, boxDay) };
+    if (conflict) {
+      if (receivedFrom) await recomputeOrderMasterSafe(admin, [orderId]);
+      return { ...line, status: "programado_otro_dia", programmedFor: conflict.scheduled_for, message: receivedNote + programConflictMessage(conflict, boxDay) };
+    }
   }
 
   // 4) Tomar (idempotente) y asignar.
   // Un solo control de permisos (arriba) y efectos diferidos: ver `SideEffects`.
   const fx = deferredEffects();
   try {
+  // Recibido de una caja vieja: el Master se entera al final, con lo demás.
+  if (receivedFrom) await fx.recompute([orderId]);
   const taken = await takeOrdersCore(auth, orgId, [orderId], { dispatchDay: opts.scheduledFor ?? limaClock().day }, fx);
-  if (taken.failed.length) return { ...line, status: "no_elegible", message: taken.failed[0]!.error };
-  if (!taken.accepted.length && !taken.alreadyAccepted.length) return { ...line, status: "no_elegible", message: taken.error ?? "No se pudo tomar el pedido." };
+  if (taken.failed.length) return { ...line, status: "no_elegible", message: receivedNote + taken.failed[0]!.error };
+  if (!taken.accepted.length && !taken.alreadyAccepted.length) return { ...line, status: "no_elegible", message: receivedNote + (taken.error ?? "No se pudo tomar el pedido.") };
   const { data: provider } = await admin.from("logistics_providers").select("id").eq("org_id", orgId).eq("code", "grupo-gf-courier").maybeSingle();
   const { data: requests } = await admin.from("logistics_requests").select("id").eq("order_id", orderId).eq("provider_id", provider?.id ?? "").in("status", ["accepted", "scheduled"]);
   const requestIds = ((requests ?? []) as { id: string }[]).map((r) => r.id);
-  if (!requestIds.length) return { ...line, status: "no_elegible", message: "El pedido se tomó pero no se pudo asignar. Continúa desde la lista." };
+  if (!requestIds.length) return { ...line, status: "no_elegible", message: receivedNote + "El pedido se tomó pero no se pudo asignar. Continúa desde la lista." };
   // La programación ya se miró arriba (o se confirmó): no se vuelve a leer.
   const assigned = await assignRouteCore(auth, orgId, rider.id, requestIds, { overrideCash: opts.overrideCash, day: opts.scheduledFor ?? null, confirmProgrammed: true }, fx);
   if (!assigned.assigned) {
     const why = assigned.failed[0]?.error ?? assigned.error ?? "No se pudo asignar.";
-    return { ...line, status: /efectivo|límite/i.test(why) ? "bloqueado_efectivo" : "no_elegible", message: why };
+    return { ...line, status: /efectivo|límite/i.test(why) ? "bloqueado_efectivo" : "no_elegible", message: receivedNote + why };
   }
   const manifestId = assigned.manifestIds[0] ?? null;
   return {
@@ -2591,7 +2639,7 @@ export async function scanAssignToRider(
     status: "asignado",
     manifestId,
     shipmentId: taken.accepted[0]?.shipmentId ?? shipmentId,
-    message: `Asignado a ${rider.full_name}. Falta verificarlo en oficina («Verificar caja»).`,
+    message: `${receivedNote}Asignado a ${rider.full_name}. Falta verificarlo en oficina («Verificar caja»).`,
     cashWarning: assigned.cashWarning ?? null,
   };
   } finally {

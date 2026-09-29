@@ -1367,7 +1367,8 @@ function scanRowPresentation(l: ScanAssignLine, riderName: string): { text: stri
     case "procesando":
       return { text: "Asignando…", tone: "neutral" };
     case "asignado":
-      return { text: `En la caja de ${l.riderName ?? riderName}`, tone: "ok" };
+      // Volvió de la caja de otro día y el mismo escaneo lo recibió en oficina.
+      return { text: `En la caja de ${l.riderName ?? riderName}${l.receivedFrom ? ` · volvió de ${l.receivedFrom}` : ""}`, tone: "ok" };
     case "ya_en_caja":
       return { text: "Ya estaba", tone: "warn" };
     case "en_otra_caja":
