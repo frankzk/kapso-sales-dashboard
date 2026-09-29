@@ -42,6 +42,7 @@ import { handleInboundMessage } from "@/lib/wa-button-replies";
 import {
   applyHandoff,
   archiveStaleLeads,
+  closeCartLeadsWithOrders,
   eventOverridesDisposition,
   expireColdHandoffs,
   flagCartAttentionWaves,
@@ -790,6 +791,18 @@ async function processOrderWebhook(
     }
   }
 
+  // Un pedido SIN tag `kapso` no gana el lead, pero sí saca de la cola el
+  // carrito del mismo teléfono si trae uno de sus productos: la clienta lo cerró
+  // por otra vía (bot de carritos, formulario web). Al instante, para que nadie
+  // la llame después de comprar. Best-effort: el barrido del cron lo repite.
+  if (!isKapsoOrder && row.customer_phone && !row.cancelled_at) {
+    try {
+      await closeCartLeadsWithOrders(admin, params.storeId, { phones: [row.customer_phone] });
+    } catch {
+      /* best-effort */
+    }
+  }
+
   // El pedido acaba de entrar o cambiar (incluida una anulación en Shopify, que
   // es la fuente principal del estado Anulado — §3.4): refresca su fila del Master.
   try {
@@ -906,6 +919,7 @@ export interface SyncReport {
   returnRecoverySent: number; // plantillas de recuperación de devueltos enviadas
   deliveredThanksSent: number; // agradecimientos con catálogo al entregar
   requeued: number; // carritos reencolados con atención (olas, máx 2 por lead)
+  cartsClosedByOrder: number; // carritos que salieron de la cola porque ya son pedido
   orderMaster: number; // filas del Master reconciliadas en esta corrida
   errors: string[];
 }
@@ -985,6 +999,7 @@ export async function runStoreSync(
     returnRecoverySent: 0,
     deliveredThanksSent: 0,
     requeued: 0,
+    cartsClosedByOrder: 0,
     orderMaster: 0,
     errors: [],
   };
@@ -1129,6 +1144,16 @@ export async function runStoreSync(
       report.errors.push(`shopify_drafts: ${e.message}`);
       await setSyncState(admin, storeId, "shopify_drafts", null, "error", e.message);
     }
+  }
+
+  // 1c) Carritos que ya son pedido. Va DESPUÉS de 1a-bis (todos los pedidos) y
+  //     de 1b (carritos → leads) a propósito: 1b puede crear el lead de un
+  //     carrito cuyo pedido ya llegó, y así sale de la cola en la misma corrida.
+  //     No llama a Shopify, así que corre aunque falte el token.
+  try {
+    report.cartsClosedByOrder = await closeCartLeadsWithOrders(admin, storeId);
+  } catch (e: any) {
+    report.errors.push(`carritos_con_pedido: ${e.message}`);
   }
 
   // 2) Kapso pull (conversations since last_active cursor)
