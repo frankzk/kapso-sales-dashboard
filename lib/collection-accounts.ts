@@ -10,7 +10,8 @@ interface Row {
   store_id: string;
   label: string;
   aliases: string[] | null;
-  phone_last_digits: string;
+  /** Nulo en una cuenta sin celular, como la pasarela Flow (0198). */
+  phone_last_digits: string | null;
 }
 
 /**

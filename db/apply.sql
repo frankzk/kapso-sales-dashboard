@@ -397,4 +397,6 @@
 \ir migrations/0196_gf_parallel_box.sql
 \echo 'Applying 0197_rejection_photo_exemption.sql'
 \ir migrations/0197_rejection_photo_exemption.sql
+\echo 'Applying 0198_flow_collection_account.sql'
+\ir migrations/0198_flow_collection_account.sql
 \echo 'Done.'

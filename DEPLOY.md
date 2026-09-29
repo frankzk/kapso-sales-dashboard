@@ -1954,3 +1954,16 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
    Redefine `gf_return_to_office`: un rechazo queda devuelto y cancela la
    solicitud en vez de volver a «por asignar».
 2. Resolver `mom-v1.16`: el cron reconcilia el histórico solo.
+
+### 28-09-2026 · La pasarela Flow como cuenta de cobro (0198)
+
+1. **Migración `0198_flow_collection_account.sql`**, a mano:
+   `psql "$DATABASE_URL" -f db/migrations/0198_flow_collection_account.sql`.
+   Permite una cuenta de cobro sin celular y da de alta «Aurela Kenku»
+   (pasarela Flow) en todas las tiendas. Sin ella, las constancias de Flow
+   siguen en «cuenta receptora no coincide».
+2. El orden no importa: el código anterior descarta una cuenta sin celular como
+   «mal cargada», y el nuevo sin la migración simplemente no la tiene.
+3. La regla de la nota del Yape (el nombre de la clienta leído como receptor)
+   no necesita migración: se recalcula al mirar, y los comprobantes ya
+   cargados se destraban solos.

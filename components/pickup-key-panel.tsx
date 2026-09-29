@@ -41,6 +41,7 @@ import {
 } from "@/lib/pickup-key";
 import type { OrderPaymentPanelMode } from "@/lib/order-payment-panel";
 import {
+  describeCollectionAccount,
   verifyYapeRecipient,
   yapeRecipientReadingFromVision,
   type CollectionAccount,
@@ -248,6 +249,7 @@ export function PickupKeyPanel({
           <PaymentList
             payments={panel.payments}
             accounts={panel.collectionAccounts}
+            customerName={panel.customerName}
             canValidate={panel.canValidate}
             canRegister={false}
             pending={pending}
@@ -307,6 +309,7 @@ export function PickupKeyPanel({
       <PaymentList
         payments={panel.payments}
         accounts={panel.collectionAccounts}
+        customerName={panel.customerName}
         canValidate={panel.canValidate}
         canRegister={panel.canRegister}
         pending={pending}
@@ -461,6 +464,7 @@ function PaymentMoneySummary({
 function PaymentList({
   payments,
   accounts,
+  customerName,
   canValidate,
   canRegister,
   pending,
@@ -474,6 +478,8 @@ function PaymentList({
   payments: PaymentRow[];
   /** Las cuentas de cobro de la tienda, para juzgar el receptor de cada uno. */
   accounts: CollectionAccount[];
+  /** La clienta: su nombre leído como receptor es la nota del Yape. */
+  customerName: string | null;
   canValidate: boolean;
   canRegister: boolean;
   pending: boolean;
@@ -518,6 +524,7 @@ function PaymentList({
             vision={p.vision}
             hasVoucher={Boolean(p.file_path)}
             accounts={accounts}
+            customerName={customerName}
           />
           {p.notes && <p className="text-xs text-slate-500">{p.notes}</p>}
           {/* El comprobante se guardaba y no se podía ver: quien validaba tenía
@@ -555,6 +562,7 @@ function PaymentList({
             <ValidateActions
               payment={p}
               accounts={accounts}
+              customerName={customerName}
               pending={pending}
               onValidate={onValidate}
               keyAutosend={keyAutosend}
@@ -622,6 +630,7 @@ function PaymentList({
 function ValidateActions({
   payment,
   accounts,
+  customerName,
   pending,
   onValidate,
   keyAutosend,
@@ -629,13 +638,15 @@ function ValidateActions({
 }: {
   payment: PaymentRow;
   accounts: CollectionAccount[];
+  customerName: string | null;
   pending: boolean;
   onValidate: (id: string, sendKey: boolean) => void;
   keyAutosend?: PanelData["keyAutosend"];
   children: React.ReactNode;
 }) {
   const [verPrevia, setVerPrevia] = useState(false);
-  const mismatch = yapeRecipientReadingFromVision(payment.vision, accounts).status === "mismatch";
+  const mismatch =
+    yapeRecipientReadingFromVision(payment.vision, accounts, customerName).status === "mismatch";
   const libera = Boolean(keyAutosend?.enabled && keyAutosend.unlocks.includes(payment.id));
   // Liberar la clave y poder escribirle son dos cosas distintas: fuera de las
   // 24 h el botón vuelve a ser «Validar» y se dice por qué, en vez de prometer
@@ -781,23 +792,31 @@ function StoredRecipientStatus({
   vision,
   hasVoucher,
   accounts,
+  customerName,
 }: {
   vision: unknown;
   hasVoucher: boolean;
   accounts: CollectionAccount[];
+  customerName: string | null;
 }) {
-  const reading = yapeRecipientReadingFromVision(vision, accounts);
+  const reading = yapeRecipientReadingFromVision(vision, accounts, customerName);
   if (!hasVoucher && reading.status === "missing") return null;
   const label =
     reading.status === "verified"
       // Se nombra la cuenta con la que encajó: con varias cuentas de cobro,
       // "verificada" a secas ya no dice a cuál llegó el dinero.
-      ? `Cuenta receptora verificada: ${reading.account?.name ?? "cuenta de cobro"} · ***${reading.account?.phoneLastDigits ?? "···"}`
+      ? `Cuenta receptora verificada: ${
+          reading.account ? describeCollectionAccount(reading.account) : "cuenta de cobro"
+        }`
       : reading.status === "mismatch"
         ? `Receptor distinto: ${reading.name ?? "nombre no leído"} · ${
             reading.phoneLastDigits ? `***${reading.phoneLastDigits}` : "celular no leído"
           }`
-        : // El voucher corta el destinatario y esa lectura corta NO acusa a
+        : // El nombre de la clienta leído como receptor —la nota del Yape— no
+          // contó. Se dice cuál, para que no parezca que no se leyó nada.
+          reading.ignoredName
+          ? `El nombre leído «${reading.ignoredName}» es el de la clienta (la nota del Yape), no el receptor. El celular ***${reading.phoneLastDigits} es nuestro; contrasta la imagen antes de validar.`
+          : // El voucher corta el destinatario y esa lectura corta NO acusa a
           // nadie: se nombra lo leído para que se contraste con la imagen, sin
           // afirmar que la cuenta sea otra.
           verifyYapeRecipient(reading.name, reading.phoneLastDigits, accounts).nameCutShort
@@ -1103,9 +1122,17 @@ function RecipientAccountCheck({
   const swapNotice = reading?.swapped
     ? " La lectura vino con el pagador y el receptor cambiados de sitio; se corrigió, pero contrasta la imagen."
     : "";
+  // Lo mismo con el nombre de la clienta tomado por receptor: se descartó, y se
+  // dice cuál, para que el operador lo contraste con la imagen.
+  const ignoredNotice = reading?.ignoredName
+    ? ` El nombre leído «${reading.ignoredName}» es el de la clienta —la nota que escribió en el Yape—, no el receptor: no cuenta.`
+    : "";
   const message =
     verification.status === "verified"
-      ? `Cuenta receptora verificada: ${verification.account?.name ?? ""}. Las dos señales coinciden.`
+      ? verification.account && !verification.account.phoneLastDigits
+        // La pasarela (Flow) no cobra con celular: su nombre es la única señal.
+        ? `Cuenta receptora verificada: ${verification.account.name}. Coincide el nombre; esta cuenta no cobra con celular.`
+        : `Cuenta receptora verificada: ${verification.account?.name ?? ""}. Las dos señales coinciden.`
       : verification.status === "mismatch"
         ? "El comprobante apunta a una cuenta que no es de la tienda. No podrá validarse."
         : verification.unknownAccounts
@@ -1117,7 +1144,7 @@ function RecipientAccountCheck({
           : verification.status === "partial"
             ? "Verificación parcial. Revisa la señal que no pudo leerse antes de validar."
             : "Se completa automáticamente al pulsar Leer y rellenar.";
-  const fullMessage = message + swapNotice;
+  const fullMessage = message + swapNotice + ignoredNotice;
 
   return (
     <fieldset className="rounded-lg bg-slate-50 p-3" aria-live="polite">
@@ -1125,7 +1152,10 @@ function RecipientAccountCheck({
       <div className="grid gap-2 sm:grid-cols-2">
         <RecipientSignal
           label="Destinatario leído"
-          value={reading?.name ?? "Pendiente de lectura"}
+          value={
+            reading?.name ??
+            (reading?.ignoredName ? `«${reading.ignoredName}» (nota del Yape)` : "Pendiente de lectura")
+          }
           expected={accounts.map((a) => a.name).join(" o ") || "una cuenta de cobro configurada"}
           present={verification.hasName}
           matches={verification.nameMatches}
@@ -1135,8 +1165,10 @@ function RecipientAccountCheck({
           label="Celular receptor"
           value={reading?.phoneLastDigits ? `*** *** ${reading.phoneLastDigits}` : "Pendiente de lectura"}
           expected={
-            accounts.map((a) => `terminación ${a.phoneLastDigits}`).join(" o ") ||
-            "una cuenta de cobro configurada"
+            accounts
+              .filter((a) => a.phoneLastDigits)
+              .map((a) => `terminación ${a.phoneLastDigits}`)
+              .join(" o ") || "una cuenta de cobro configurada"
           }
           present={verification.hasPhone}
           matches={verification.phoneMatches}
@@ -1462,6 +1494,7 @@ function VoucherForm({
         phoneLastDigits: result.fields.recipientPhoneLastDigits,
         account: result.fields.recipientAccount,
         swapped: result.fields.recipientSwapped,
+        ignoredName: result.fields.recipientIgnoredName,
       });
       setReadNotice(result.notice);
       if (!result.isVoucher) {

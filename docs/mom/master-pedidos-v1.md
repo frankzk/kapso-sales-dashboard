@@ -4009,6 +4009,37 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   paga, legítimamente. La corrección **se dice en pantalla**, nunca se aplica en
   silencio: esta comprobación decide si el dinero se desvió, y quien valida
   tiene que saber que el nombre que ve salió del otro campo.
+- **El mensaje del Yape no es el receptor.** Yape deja que quien paga escriba un
+  mensaje, y la captura lo pinta justo debajo del receptor; muchas clientas
+  escriben ahí su propio nombre. El lector lo copiaba como destinatario y el
+  cobro quedaba acusado de desvío: **#AUR177541** salió «sonia ludeña» —la
+  clienta es SONIA IBETH LUDEÑA QUISPE— con el celular ···309 de la empresa. Dos
+  defensas:
+  - el lector tiene instrucción expresa de no copiar el mensaje en ningún
+    nombre;
+  - y, como una instrucción puede desobedecerse, al juzgar la cuenta: si el
+    celular receptor leído es de una cuenta nuestra **y** el nombre leído es el
+    de la clienta del pedido, ese nombre **no cuenta**. La cuenta se juzga por
+    el celular y queda en verificación parcial —contraste manual—, **nunca** en
+    `verificada`. Exige las dos puntas, como la inversión: el nombre de la
+    clienta como receptor **sin** nuestro celular es la forma de un pago que
+    ella se hizo a sí misma, y eso sigue saltando.
+  - Se reconoce a la clienta con dos palabras o más de su nombre, en cualquier
+    orden y sin tildes. El orden no importa aquí porque no se está afirmando
+    que el dinero sea nuestro —eso lo sigue diciendo el celular—, solo que ese
+    nombre es el de ella. Un nombre de pila suelto no basta.
+  - El nombre descartado **se dice en pantalla** con el motivo, igual que la
+    inversión. Rige en la carga (decide si entra en `revision_admin`), en la
+    bandeja y en el servidor al validar; como se recalcula, los comprobantes ya
+    cargados se destraban solos.
+- **Una cuenta puede no tener celular: la pasarela Flow** (migración 0198). La
+  constancia de Flow dice «Pagado a: Aurela Kenku» —una sola cuenta de Flow para
+  las dos marcas— y no enseña ningún celular. Sin darla de alta, **#KP136181**
+  quedaba en «cuenta receptora no coincide». Una cuenta sin celular se verifica
+  con su nombre entero, porque es la única señal que su constancia puede dar;
+  recortado queda en contraste manual, y **un celular leído la desmiente**,
+  porque su constancia no muestra ninguno. El celular nulo quiere decir «esta
+  cuenta no cobra con celular», no «falta el dato».
 - Esta distinción es de seguridad, no de comodidad: una alarma de desvío que
   salta casi siempre por un nombre cortado deja de leerse, y tiene que ser
   creíble el día que el receptor sea de verdad otro.
@@ -4202,9 +4233,15 @@ ofrecía era `Rechazar`, que habría sido falso: el dinero llegó.
   `overridePaymentValidation`— dejaba el pago sin validador, sin fecha, sin
   asiento de liquidación y sin la confirmación de agencia: peor que el atasco.
 - **La regla NO se afloja por celular.** Lo tentador es dar por buena cualquier
-  lectura cuyo celular sea el nuestro. **#AUR177034** lo desmiente: celular ···309
-  y nombre «Rosa campos Mendoza». Las dos formas de fallar necesitan ojos, y por
-  eso la salida es una persona escribiendo el motivo y no una regla nueva.
+  lectura cuyo celular sea el nuestro, y un nombre ajeno con nuestro celular
+  sigue necesitando ojos. La salida es una persona escribiendo el motivo, no una
+  regla nueva.
+- **Corrección (28-09-2026).** Esta sección citaba **#AUR177034** —celular ···309
+  y nombre «Rosa campos Mendoza»— como el comprobante ajeno con nuestro número.
+  No lo era: la clienta de ese pedido es ROSA LUZ CAMPOS MENDOZA, y el nombre era
+  el mensaje que ella escribió en el Yape (ver «El mensaje del Yape no es el
+  receptor» en §12, Pagos). Ese caso se resuelve ya sin excepción; la regla de arriba
+  no cambia, porque un nombre que **no** es el de la clienta sigue bloqueando.
 
 Mientras Kapta y el Excel convivan, validar un pago deja el comprobante listo
 para continuar y registra actor y fecha, pero **no cambia por sí solo la

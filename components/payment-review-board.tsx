@@ -79,7 +79,11 @@ function normalizedSearch(item: PaymentReviewItem): string {
 }
 
 function RecipientSignal({ item }: { item: PaymentReviewItem }) {
-  const reading = yapeRecipientReadingFromVision(item.vision, item.collectionAccounts);
+  const reading = yapeRecipientReadingFromVision(
+    item.vision,
+    item.collectionAccounts,
+    item.customerName,
+  );
   const config =
     reading.status === "verified"
       // Con varias cuentas de cobro, "verificada" a secas ya no dice a cuál
@@ -116,7 +120,11 @@ function ReviewCard({
   const [excepcionAbierta, setExcepcionAbierta] = useState(false);
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState<PaymentActionState | null>(null);
-  const recipient = yapeRecipientReadingFromVision(item.vision, item.collectionAccounts);
+  const recipient = yapeRecipientReadingFromVision(
+    item.vision,
+    item.collectionAccounts,
+    item.customerName,
+  );
   const canApprove = Boolean(item.operationNumber) && recipient.status !== "mismatch";
   const remaining =
     item.orderTotal === null ? null : Math.max(0, item.orderTotal - item.validatedTotal);
@@ -192,6 +200,16 @@ function ReviewCard({
           </span>
         )}
       </div>
+
+      {/* Descartar una lectura en silencio es lo que esta comprobación no puede
+          hacer: se dice qué nombre no contó y por qué, para contrastarlo. */}
+      {recipient.ignoredName && (
+        <p className="mt-2 text-xs leading-relaxed text-slate-600">
+          El nombre leído «{recipient.ignoredName}» es el de la clienta —la nota que escribió en el
+          Yape—, no el receptor: no cuenta para validar. La cuenta se juzga por el celular
+          ···{recipient.phoneLastDigits}.
+        </p>
+      )}
 
       {item.notes && (
         <p className="mt-2.5 whitespace-pre-line rounded-lg bg-rose-50 px-2.5 py-2 text-xs leading-relaxed text-rose-800">

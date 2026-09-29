@@ -447,6 +447,15 @@ function buildExtractPrompt(): string {
     "tiene que salir de ESA MISMA parte. Leer el teléfono de un sitio y el nombre " +
     "de otro es el error más caro de esta tarea: hace que un cobro correcto " +
     "parezca un desvío de dinero.\n" +
+    "EL MENSAJE DEL YAPE NO ES NINGÚN NOMBRE DEL PAGO. Yape deja que quien paga " +
+    "escriba un mensaje, y la captura lo muestra debajo del receptor, junto a un " +
+    "ícono de globo de conversación. Muchas veces es el nombre de quien paga " +
+    "(\"sonia ludeña\") o una referencia del pedido. No lo copies en " +
+    "recipient_name ni en payer_name: el receptor es el nombre grande junto al " +
+    "monto, no el texto del mensaje.\n" +
+    "En una constancia de pasarela (Flow u otra), quien recibe es el comercio " +
+    "que va bajo \"Pagado a\" o equivalente; esas constancias no muestran " +
+    "celular, así que recipient_phone_last_digits es null.\n" +
     `HAY RÓTULOS QUE SE PARECEN Y NO VALEN: ${notLabels}. Conviven con el de ` +
     "operación en el mismo comprobante y nombran otra cosa — el código de " +
     "solicitud identifica la SOLICITUD de transferencia, no el movimiento. Si el " +
