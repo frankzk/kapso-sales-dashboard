@@ -57,10 +57,12 @@ export interface BorradorDeAgencia {
 /**
  * ¿Hay un pago que comprometa a la clienta?
  *
- * Delega en `paymentProgress`, la definición única: exige `adelanto`/`total`
- * VALIDADO por al menos `SHALOM_MINIMUM_ADVANCE`. Una `diferencia` no entra en
- * esa cuenta, y es correcto: es un saldo posterior sobre un pedido que ya iba
- * en marcha, así que llega cuando la confirmación ya ocurrió.
+ * Delega en `paymentProgress`, la definición única: un `total` validado, o un
+ * adelanto con al menos `SHALOM_MINIMUM_ADVANCE` VALIDADOS sumando todos los
+ * comprobantes. La `diferencia` entra en la suma: el formulario registra así
+ * todo lo que llega después del primer Yape, y un abono partido en S/ 10 +
+ * S/ 20 es el mismo compromiso que uno de S/ 30 (#KP134162). Sola, sin un
+ * adelanto vivo detrás, no compromete.
  */
 export function hayPagoQueCompromete(
   pagos: readonly PaymentSnapshot[],
