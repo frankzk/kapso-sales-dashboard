@@ -1415,8 +1415,10 @@ sin tope de antigüedad. Reglas:
     un cobro bueno. Tras asteriscos o varios puntos seguidos no se sabe qué
     número es: se aparta del nombre y **no se juzga**, porque un dato que no
     se sabe no puede desmentir la cuenta. Un nombre que solo termina en
-    números, sin separador, no se toca. Las dos reglas rigen igual en los
-    comprobantes de los pedidos (§12, Pagos).
+    números, sin separador, no se toca. Tampoco es parte del nombre la
+    billetera de destino que Plin pega al final («Grupo Gf S - Yape»): se
+    quita antes de comparar. Estas reglas rigen igual en los comprobantes de
+    los pedidos (§12, Pagos).
   - **La app del BCP se reconoce aunque no se vea su logo** (29-09-2026). Su
     constancia —blanca con azul y naranja, «¡Transferencia exitosa!», «Enviado
     a», «Desde»— salía como medio «otro» porque el lector solo tenía descritos
@@ -4145,6 +4147,11 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   BCP) se apartan del nombre pero no se juzgan. El lector tiene además
   instrucción de separarlos. Es la misma regla que en los cobros del courier
   (§9.4).
+- **La billetera de destino tampoco es parte del nombre.** Plin escribe el
+  receptor como «Grupo Gf S - Yape» (#KP136682): « - Yape» dice adónde fue el
+  dinero, y leído como nombre acusaba de desvío un cobro a la empresa. Se
+  quita antes de comparar. No afloja nada: «Juan Pérez - Yape» sigue siendo
+  Juan Pérez. Rige igual en los cobros del courier (§9.4).
 - **Una cuenta puede no tener celular: la pasarela Flow** (migración 0198). La
   constancia de Flow dice «Pagado a: Aurela Kenku» —una sola cuenta de Flow para
   las dos marcas— y no enseña ningún celular. Sin darla de alta, **#KP136181**
@@ -6047,8 +6054,9 @@ ellos frenaban siete rutas del 23 al 26/09. Ahora:
 - La entrega sin foto y el Yape sin captura se siguen exigiendo siempre, sea
   cual sea la fecha. El rechazo exento se sigue pagando al motorizado y se
   sigue cobrando a la tienda como antes; solo deja de pedirse su foto.
-- En la tabla de la ruta, ese rechazo dice «Sin foto · no se exige (antes del
-  28/09)» en vez de «Falta foto».
+- En la tabla de la ruta, ese rechazo lleva una cámara tachada con el aviso
+  «Sin foto · no se exige (antes del 28/09)» en vez del ícono ámbar de «Falta
+  la foto».
 
 ### 29.8 Tarifas por distrito y comisión Yape
 
@@ -6715,6 +6723,17 @@ una parada reportada abre el formulario con ese punto elegido. La ganancia de
 un no entregado que no es rechazo dice «No se paga · solo entrega o rechazo»,
 no «Sin tarifa»: ese punto no se paga con o sin tarifa (§29.10); «Sin tarifa»
 queda para la entrega o el rechazo sin tarifa personal vigente (28-09-2026).
+
+**Dos líneas por fila, como máximo (29-09-2026, pedido de Frankz).** La tabla
+tiene anchos fijos por columna y cada fila ocupa a lo sumo dos líneas; lo que
+no cabe se recorta y se lee entero en el tooltip. El resultado de un no
+entregado se lee por su motivo, en rojo («Rechazó el pedido», «No
+contesta»…), con la devolución y la nota debajo. El respaldo va como íconos
+sin texto, con su nombre en el tooltip: cámara y comprobante para abrir la
+foto o la captura, en ámbar lo que falta, y una cámara tachada para el
+rechazo que no la exige (§29.7). «+ adicional» es un botón «+» que aparece al
+pasar por la fila (siempre visible en pantallas táctiles), y el aviso de
+tarifa del distrito es un ícono ámbar con el texto en el tooltip.
 
 **Qué impide terminar la ruta, a la vista (28-09-2026).** Antes el
 coordinador pulsaba «Terminar ruta operativa», leía UN error («Grupo GF:

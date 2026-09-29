@@ -142,14 +142,20 @@ function words(value: string): string[] {
  *     no se sabe qué es, y un dato que no se sabe no puede desmentir la cuenta.
  *
  * Un nombre que simplemente termina en números, sin separador, no se toca.
+ *
+ * Y LA BILLETERA DE DESTINO TAMPOCO ES PARTE DEL NOMBRE. Plin escribe el
+ * receptor como «Grupo Gf S - Yape» (#KP136682): « - Yape» dice adónde fue el
+ * dinero, y leído como nombre era una palabra ajena a Grupo GF S.A.C. Se quita
+ * antes que nada. Quitarla no afloja nada: «Juan Pérez - Yape» sigue siendo
+ * Juan Pérez.
  */
 export function splitRecipientPhoneSuffix(raw: string | null | undefined): {
   name: string | null;
   phoneDigits: string | null;
 } {
-  const value = raw?.trim() ?? "";
+  const value = (raw?.trim() ?? "").replace(/\s*-\s*(?:yape|plin)\s*$/i, "").trim();
   if (!value) return { name: null, phoneDigits: null };
-  const m = /^(.*?\S)\s*([•·∙*]+)\s*((?:\d\s*){3,}?)\s*(?:-\s*(?:yape|plin)\s*)?$/i.exec(value);
+  const m = /^(.*?\S)\s*([•·∙*]+)\s*((?:\d\s*){3,}?)$/.exec(value);
   if (!m) return { name: value, phoneDigits: null };
   const separator = m[2]!;
   const isPhone = separator.length === 1 && separator !== "*";
