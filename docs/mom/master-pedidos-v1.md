@@ -2591,16 +2591,32 @@ las bodegas**, en vez de un archivo por bodega. Las reglas de arriba no cambian
 - **Con el botón, el token se pega a mano** (el del login del panel, ~1 h de
   vida) y no se guarda; o se deja vacío y se usa la credencial guardada.
 
-**Sync automático (desde el 29-09-2026).** Corre cada hora (`/api/cron/swayp-inventory`)
-sobre todas las ciudades del sync, con las mismas reglas y además:
+**Sync diario (desde el 29-09-2026).** Sobre todas las ciudades del sync, con
+las mismas reglas y además:
 
-- **Credencial de la organización, no de una persona**: una sola, porque Aurela
-  y Kenku comparten inventario en Swayp, y **exclusiva de inventario**
-  (`SWAYP_INVENTORY_TOKEN`). La de integración de las guías no sirve: probada
-  el 29-09-2026, Swayp responde 403 «No tienes autorización 7301». **El login
-  del panel no se automatiza**: exige reCAPTCHA en cada inicio de sesión, que
-  existe justamente para impedirlo. **Hasta que Swayp entregue esa credencial,
-  el sync automático está apagado** y se sincroniza con el botón.
+- **Una vez al día basta** (decisión de Frankz, 29-09-2026): sincroniza sólo si
+  la última sincronización buena, manual o automática, fue hace ≥ 20 h. El cron
+  (`/api/cron/swayp-inventory`) revisa cada hora y casi siempre responde «al día».
+- **Con qué credencial.** Una credencial de API de Swayp con acceso al
+  inventario (`SWAYP_INVENTORY_TOKEN`), si existe: no vence y no depende de
+  nadie. Swayp todavía no la da: la de integración de las guías responde 403
+  «No tienes autorización 7301» (probado el 29-09-2026). Mientras tanto, se
+  **reutiliza la sesión del panel que abrió una persona**: la guarda Kapta
+  (cifrada, `swayp_inventory_sessions`, ningún usuario la puede leer) al pegar
+  un token en Stock Swayp, o la envía la **extensión de Chrome «Kapta ·
+  Swayp»** cuando alguien abre el panel de Swayp. Se usa sólo para leer
+  inventario y bodegas, y sólo hasta que vence; si Swayp la rechaza antes, se
+  descarta.
+- **El login del panel no se automatiza**: exige reCAPTCHA (v3, invisible) en
+  cada inicio de sesión, que existe justamente para impedir que un programa
+  entre solo. Siempre inicia sesión una persona.
+- **La extensión** lee la sesión que el propio panel guarda en el navegador
+  (`localStorage` «userSWC») y se la envía a Kapta con una llave de la
+  organización (sólo su hash en `swayp_extension_keys`). Kapta comprueba con
+  Swayp que la sesión sirve, que es de la empresa configurada, la guarda y, si
+  toca, sincroniza en el acto. Se descarga desde Stock Swayp con la URL y la
+  llave dentro; descargarla otra vez cambia la llave y la anterior deja de
+  servir.
 - **Retiene la ciudad que quedaría vaciada** y no la aplica: si Swayp no trae
   ninguna unidad para una ciudad con stock, o si dejaría en 0 más de la mitad
   de sus productos con stock (y al menos 5). Es más probable una lectura rota
