@@ -6,8 +6,8 @@ import { DispatchScanner } from "@/components/dispatch-scanner";
 import { DispatchCamera } from "@/components/dispatch-camera";
 import { GfBoxAddPackages } from "@/components/gf-box-add-packages";
 import { cn } from "@/components/ui";
-import { Banner, FIELD, OpsButton } from "@/components/ops-ui";
-import { IconCheckCircle, IconChevronDown } from "@/components/icons";
+import { Badge, Banner, CHECKBOX, FIELD, OpsButton, type BadgeTone } from "@/components/ops-ui";
+import { IconCheckCircle, IconChevronDown, IconPlus, IconSearch } from "@/components/icons";
 import { isCourierTbd } from "@/lib/shipment-output";
 import { courierKey } from "@/lib/dispatch";
 import {
@@ -79,14 +79,18 @@ function routeHeading(manifest: DispatchManifest): { title: string; subtitle: st
   return who ? { title: who, subtitle: `${courier}${manifest.courier === "propio" ? ` · Carga ${manifest.load_number ?? 1}` : ""}` } : { title: courier, subtitle: "Courier" };
 }
 
-const STATE_TONE: Record<DispatchManifestState, string> = {
-  draft: "bg-slate-100 text-slate-700",
-  office_check: "bg-amber-100 text-amber-800",
-  ready_for_pickup: "bg-blue-100 text-blue-800",
-  pickup_check: "bg-violet-100 text-violet-800",
-  in_custody: "bg-emerald-100 text-emerald-800",
-  cancelled: "bg-red-100 text-red-700",
+/** Estado de la caja como chapa del mundo de operación. */
+const STATE_BADGE: Record<DispatchManifestState, BadgeTone> = {
+  draft: "neutral",
+  office_check: "warn",
+  ready_for_pickup: "info",
+  pickup_check: "info",
+  in_custody: "ok",
+  cancelled: "crit",
 };
+
+/** Enlace con forma de botón secundario (`OpsButton`), para navegar o descargar. */
+const LINK_SECONDARY = "inline-flex h-9 pointer-coarse:h-11 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-white px-3 text-sm font-semibold text-ink-700 shadow-control ring-1 ring-inset ring-line-strong transition-colors duration-150 hover:bg-wash hover:text-ink-900";
 
 function todayLima(): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -174,35 +178,37 @@ export function DispatchWorkspace({
     <div className="mx-auto max-w-[1500px] space-y-4 pb-12">
       <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div>
-          <Link href={surface === "gf" ? "/dashboard/courier?tab=routes" : "/dashboard/pedidos/almacen"} className="text-xs font-medium text-slate-500 hover:text-slate-900">{surface === "gf" ? "← Grupo GF Courier · Rutas" : "← Almacén"}</Link>
-          <h1 className="mt-2 text-xl font-semibold tracking-tight text-slate-950 sm:text-2xl">{surface === "gf" ? "Verificar y recibir" : "Almacén · Entregas a couriers"}</h1>
-          <p className="mt-1 hidden max-w-2xl text-sm text-slate-500 sm:block">{surface === "gf" ? "Verifica la caja y luego registra la recepción del motorizado. La custodia cambia al recibir el 100 %." : "Primero se asigna la ruta, después se coteja. La custodia cambia solo cuando el motorizado recibe el 100 % — o, si no hay motorizado, cuando se anota quién recoge."}</p>
+          <Link href={surface === "gf" ? "/dashboard/courier?tab=routes" : "/dashboard/pedidos/almacen"} className="text-[13px] font-medium text-ink-500 hover:text-ink-900">{surface === "gf" ? "← Grupo GF Courier · Rutas" : "← Almacén"}</Link>
+          <h1 className="mt-1 text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">{surface === "gf" ? "Verificar y recibir" : "Entregas a couriers"}</h1>
+          <p className="mt-1 hidden max-w-2xl text-sm text-ink-500 sm:block">{surface === "gf" ? "Verifica la caja y luego registra la recepción del motorizado. La custodia cambia al recibir el 100 %." : "Primero se asigna la ruta, después se coteja. La custodia cambia solo cuando el motorizado recibe el 100 % — o, si no hay motorizado, cuando se anota quién recoge."}</p>
         </div>
-        <div className={cn("items-center gap-3", surface === "gf" ? "hidden sm:flex" : "flex")}>
+        <div className={cn("items-center gap-2", surface === "gf" ? "hidden sm:flex" : "flex")}>
           {canPrepare && (
-            <Link href="/dashboard/pedidos/almacen" className="min-h-11 rounded-xl border border-slate-300 px-5 text-sm font-semibold leading-[2.75rem] text-slate-700 hover:bg-slate-50">← Almacén</Link>
+            <Link href="/dashboard/pedidos/almacen" className={LINK_SECONDARY}>Ir al Almacén</Link>
           )}
           {canManage && surface !== "gf" && (
-            <button onClick={() => setShowCreate(true)} className="min-h-11 rounded-xl bg-slate-950 px-5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">+ Nueva ruta</button>
+            <OpsButton variant="primary" onClick={() => setShowCreate(true)}><IconPlus aria-hidden />Nueva ruta</OpsButton>
           )}
-          {surface === "gf" && <Link href="/dashboard/courier" className="rounded-lg border px-4 py-3 text-sm font-semibold">Tomar y asignar pedidos</Link>}
+          {surface === "gf" && <Link href="/dashboard/courier" className={LINK_SECONDARY}>Tomar y asignar pedidos</Link>}
         </div>
       </header>
 
-      <div className="hidden grid-cols-2 gap-3 sm:grid lg:grid-cols-4">
-        <Metric label="Armados sin ruta" value={stats.ready} tone="slate" />
-        <Metric label="Por armar en almacén" value={stats.pending} tone="amber" />
-        <Metric label="Listas para recojo" value={stats.officeReady} tone="blue" />
-        <Metric label="Entregadas hoy" value={stats.transferred} tone="green" />
-      </div>
+      {/* El día de la mesa en una línea de cifras: informan, no filtran, así
+          que van en un solo marco con hairlines y no en tarjetas (DESIGN.md). */}
+      <dl className="hidden grid-cols-2 gap-px overflow-hidden rounded-lg bg-line shadow-control ring-1 ring-line sm:grid lg:grid-cols-4">
+        <Metric label="Armados sin ruta" value={stats.ready} />
+        <Metric label="Por armar en almacén" value={stats.pending} />
+        <Metric label="Listas para recojo" value={stats.officeReady} />
+        <Metric label="Entregadas hoy" value={stats.transferred} />
+      </dl>
 
-      <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
         <aside inert={busy} className="order-2 space-y-3 xl:order-1">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Rutas recientes</h2>
-            <span className="text-xs text-slate-400">{activeManifests.length}</span>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-ink-900">Rutas recientes</h2>
+            <Badge className="tabular-nums">{activeManifests.length}</Badge>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1">
             {activeManifests.length ? activeManifests.map((manifest) => (
               <ManifestCard
                 key={manifest.id}
@@ -210,7 +216,7 @@ export function DispatchWorkspace({
                 active={selectedId === manifest.id}
                 onClick={() => { setMessage(null); setSelectedId(manifest.id); }}
               />
-            )) : <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">Aún no hay rutas. Crea una para comenzar.</div>}
+            )) : <div className="rounded-lg border border-dashed border-line-strong p-6 text-center text-sm text-ink-500">Aún no hay rutas. Crea una para comenzar.</div>}
           </div>
         </aside>
 
@@ -342,27 +348,30 @@ export function DispatchBoxPanel({
       ? canManage && selected.state !== "in_custody"
       : canPickup && !!progress?.officeComplete && (selected.state !== "in_custody" || custodyPickupOpen));
   const pickupPending = progress ? progress.total - progress.pickupChecked : 0;
-  // La caja de Grupo GF solo se abre en el panel lateral de Rutas, que ya vive
-  // en el mundo de operación (DESIGN.md); la mesa de almacén sigue igual.
-  const ops = surface === "gf";
+  // Dentro del panel lateral de Rutas (sin «Caja seleccionada») la hoja ya es
+  // la superficie; en la mesa de almacén la sección es la tarjeta de trabajo.
+  const onPage = showTarget;
+  const scanner = (key: string) => (
+    <DispatchScanner key={key} look="ops" busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
+  );
 
   return (
     <div className="min-w-0 space-y-4">
-          <div inert={busy} className={ops ? "grid grid-cols-3 gap-0.5 rounded-lg bg-wash p-0.5 ring-1 ring-inset ring-line" : "grid grid-cols-3 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm"}>
-            <ModeButton ops={ops} active={mode === "build"} disabled={!canManage} onClick={() => setMode("build")} number="1" label="Agregar pedidos" />
-            <ModeButton ops={ops} active={mode === "office"} disabled={!canManage} onClick={() => setMode("office")} number="2" label="Verificar caja" />
-            <ModeButton ops={ops} active={mode === "pickup"} disabled={!canPickup || (!!selected && !needsRiderCheck(selected.kind))} onClick={() => setMode("pickup")} number="3" label="Recibir carga" />
+          <div inert={busy} className="grid grid-cols-3 gap-0.5 rounded-lg bg-wash p-0.5 ring-1 ring-inset ring-line">
+            <ModeButton active={mode === "build"} disabled={!canManage} onClick={() => setMode("build")} number="1" label="Agregar pedidos" />
+            <ModeButton active={mode === "office"} disabled={!canManage} onClick={() => setMode("office")} number="2" label="Verificar caja" />
+            <ModeButton active={mode === "pickup"} disabled={!canPickup || (!!selected && !needsRiderCheck(selected.kind))} onClick={() => setMode("pickup")} number="3" label="Recibir carga" />
           </div>
 
-          <section className={ops ? "rounded-lg ring-1 ring-line" : "overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"}>
-            <div className={ops ? "p-4 shadow-[inset_0_-1px_0_var(--color-line)] sm:p-5" : "border-b border-slate-200 p-4 sm:p-7"}>
+          <section className={cn("rounded-lg ring-1 ring-line", onPage && "bg-white shadow-control")}>
+            <div className="p-4 shadow-[inset_0_-1px_0_var(--color-line)] sm:p-5">
               <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
                 <div>
-                  <h2 className={ops ? "text-base font-semibold leading-6 text-ink-900" : "text-lg font-semibold text-slate-950"}>{MODE_TITLES[mode]}</h2>
-                  <p className={ops ? "mt-0.5 max-w-[60ch] text-[13px] leading-5 text-ink-600" : "mt-1 text-sm leading-5 text-slate-600"}>{MODE_HINTS[mode]}</p>
+                  <h2 className="text-base font-semibold leading-6 text-ink-900">{MODE_TITLES[mode]}</h2>
+                  <p className="mt-0.5 max-w-[60ch] text-[13px] leading-5 text-ink-600">{MODE_HINTS[mode]}</p>
                 </div>
                 {/* En el panel de Rutas la cabecera ya lleva la situación de la ruta. */}
-                {selected && !ops && <StateBadge state={selected.state} />}
+                {selected && onPage && <Badge tone={STATE_BADGE[selected.state]} className="shrink-0 self-start">{DISPATCH_STATE_LABELS[selected.state]}</Badge>}
               </div>
 
               {selected && showTarget && (
@@ -374,46 +383,26 @@ export function DispatchBoxPanel({
               </div>}
 
               {mode !== "build" && checkComplete && selected ? (
-                ops ? (
-                  <Banner tone="ok" role="status" className="mt-4" title={`${mode === "office" ? "Caja verificada" : "Carga recibida"} · ${progress?.total} de ${progress?.total}`}>
-                    <p>{selected.state === "in_custody"
-                      ? (progress?.pickupComplete
-                        ? "La entrega de esta carga quedó registrada."
-                        : `La caja ya salió con ${selected.driver_name ?? "el motorizado"}; ${pickupPending} sin confirmar. Se confirman en «Recibir carga».`)
-                      : needsRiderCheck(selected.kind) ? "Oficina terminó. Falta que el motorizado reciba cada paquete." : "Oficina terminó. Registra quién recoge para entregar al courier."}</p>
-                    {mode === "office" && selected.state !== "in_custody" && needsRiderCheck(selected.kind) && (canPickup ?
-                      <OpsButton variant="primary" className="mt-3" onClick={() => { setMode("pickup"); setMessage(null); }}>Continuar a recepción</OpsButton>
-                      : <p className="mt-1 font-medium text-ink-900">El motorizado continúa desde su acceso a Reparto.</p>)}
-                  </Banner>
-                ) : (
-                <div className="mt-4 rounded-xl bg-emerald-50 p-4" role="status">
-                  <p className="font-semibold text-emerald-900">{mode === "office" ? "Caja verificada" : "Carga recibida"} · {progress?.total} de {progress?.total}</p>
-                  <p className="mt-1 text-sm text-emerald-800">{selected.state === "in_custody"
+                <Banner tone="ok" role="status" className="mt-4" title={`${mode === "office" ? "Caja verificada" : "Carga recibida"} · ${progress?.total} de ${progress?.total}`}>
+                  <p>{selected.state === "in_custody"
                     ? (progress?.pickupComplete
                       ? "La entrega de esta carga quedó registrada."
                       : `La caja ya salió con ${selected.driver_name ?? "el motorizado"}; ${pickupPending} sin confirmar. Se confirman en «Recibir carga».`)
                     : needsRiderCheck(selected.kind) ? "Oficina terminó. Falta que el motorizado reciba cada paquete." : "Oficina terminó. Registra quién recoge para entregar al courier."}</p>
                   {mode === "office" && selected.state !== "in_custody" && needsRiderCheck(selected.kind) && (canPickup ?
-                    <button type="button" onClick={() => { setMode("pickup"); setMessage(null); }} className="mt-3 min-h-12 w-full rounded-xl bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700">Continuar a recepción</button>
-                    : <p className="mt-2 text-sm font-medium text-emerald-900">El motorizado continúa desde su acceso a Reparto.</p>)}
-                </div>
-                )
+                    <OpsButton variant="primary" className="mt-3" onClick={() => { setMode("pickup"); setMessage(null); }}>Continuar a recepción</OpsButton>
+                    : <p className="mt-1 font-medium text-ink-900">El motorizado continúa desde su acceso a Reparto.</p>)}
+                </Banner>
               ) : mode !== "build" && (
                 <>
-                  {mode === "pickup" && selected && !progress?.officeComplete && (ops
-                    ? <Banner tone="warn" className="mt-4">Primero completa la verificación de oficina.</Banner>
-                    : <p className="mt-3 text-sm text-amber-800">Primero completa la verificación de oficina.</p>)}
+                  {mode === "pickup" && selected && !progress?.officeComplete && <Banner tone="warn" className="mt-4">Primero completa la verificación de oficina.</Banner>}
                   {/* Con la caja ya en poder del motorizado, confirmar por él es
                       un respaldo: va DEBAJO de la lista, con su propio título,
                       y no como el gesto principal del paso. */}
-                  {!(mode === "pickup" && custodyPickupOpen) && (
-                    <DispatchScanner key={`${manifestId}:${mode}`} look={ops ? "ops" : "default"} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
-                  )}
+                  {!(mode === "pickup" && custodyPickupOpen) && scanner(`${manifestId}:${mode}`)}
                 </>
               )}
-              {message && (ops
-                ? <Banner tone={message.tone === "error" ? "crit" : "ok"} role={message.tone === "error" ? "alert" : "status"} className="mt-4">{message.text}</Banner>
-                : <div role={message.tone === "error" ? "alert" : "status"} className={cn("mt-4 rounded-xl px-4 py-3 text-sm font-medium", message.tone === "error" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800")}>{message.text}</div>)}
+              {message && <Banner tone={message.tone === "error" ? "crit" : "ok"} role={message.tone === "error" ? "alert" : "status"} className="mt-4">{message.text}</Banner>}
             </div>
 
             {mode === "build" ? (
@@ -432,27 +421,25 @@ export function DispatchBoxPanel({
                   onAdded={async (result) => { showResult(result); await refresh(selected.id); }}
                 />
               ) : (
-                <div className="p-12 text-center text-sm text-slate-500">Elige una ruta de la lista o crea una nueva.</div>
+                <div className="p-12 text-center text-sm text-ink-500">Elige una ruta de la lista o crea una nueva.</div>
               )
             ) : selected ? (
               <>
-                <ManifestDetail ops={ops} manifest={selected} mode={mode} canManage={canManage} onChanged={() => refresh(selected.id)} showResult={showResult} />
+                <ManifestDetail manifest={selected} mode={mode} canManage={canManage} onChanged={() => refresh(selected.id)} showResult={showResult} />
                 {mode === "pickup" && custodyPickupOpen && (
-                  <div className={ops ? "p-4 shadow-[inset_0_1px_0_var(--color-line)] sm:p-5" : "border-t border-slate-200 p-4 sm:p-7"}>
-                    <p className={ops ? "text-sm font-semibold text-ink-900" : "text-sm font-semibold text-slate-900"}>Confirmar por {selected.driver_name ?? "el motorizado"}</p>
-                    <p className={ops ? "mt-0.5 text-[13px] text-ink-600" : "mt-1 text-sm text-slate-600"}>
+                  <div className="p-4 shadow-[inset_0_1px_0_var(--color-line)] sm:p-5">
+                    <p className="text-sm font-semibold text-ink-900">Confirmar por {selected.driver_name ?? "el motorizado"}</p>
+                    <p className="mt-0.5 text-[13px] text-ink-600">
                       {pickupPending > 0
                         ? `${pickupPending} paquete${pickupPending === 1 ? "" : "s"} sin confirmar. Si no puede hacerlo desde su teléfono, escanea aquí los que sí lleva; queda registrado con tu usuario.`
                         : "Todos los paquetes están confirmados."}
                     </p>
-                    {pickupPending > 0 && (
-                      <DispatchScanner key={`${manifestId}:${mode}:custodia`} look={ops ? "ops" : "default"} busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
-                    )}
+                    {pickupPending > 0 && scanner(`${manifestId}:${mode}:custodia`)}
                   </div>
                 )}
               </>
             ) : (
-              <div className="p-12 text-center text-sm text-slate-500">Elige una ruta de la lista o crea una nueva.</div>
+              <div className="p-12 text-center text-sm text-ink-500">Elige una ruta de la lista o crea una nueva.</div>
             )}
           </section>
 
@@ -498,20 +485,22 @@ function RouteTarget({
   const packages = progress.total;
   const officeChecked = progress.officeChecked;
   const officeComplete = progress.officeComplete;
+  // El destino elegido lleva el lenguaje de la selección (velo y anillo
+  // azul): es lo que no se puede confundir al asignar.
   return (
-    <div className="mt-4 rounded-xl bg-slate-950 p-3 text-white sm:p-4">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+    <div className="mt-4 rounded-lg bg-brand-50/60 p-3 ring-2 ring-inset ring-brand-600 sm:p-4">
+      <p className="text-[13px] font-medium text-ink-600">
         {mode === "build" ? (rider ? "Estás asignando a la ruta de" : "Estás preparando la entrega de") : "Caja seleccionada"}
       </p>
       {/* Quién se lleva la caja y qué día: es lo único que distingue dos rutas
           del mismo día. Debajo, de qué se trata esa ruta. */}
-      <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-lg font-semibold">{title}</span>
-        <span className="text-sm font-medium text-slate-300">
+      <div className="mt-0.5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="text-base font-semibold text-ink-900">{title}</span>
+        <span className="text-[13px] font-medium tabular-nums text-ink-600">
           {routeDayLong(manifest.route_date)}
         </span>
       </div>
-      <p className="mt-1 text-sm text-slate-300">{subtitle}</p>
+      <p className="mt-0.5 text-[13px] text-ink-600">{subtitle}</p>
 
       {/* Urpi carga los pedidos en SU sistema desde SU Excel. El archivo sale de
           aquí para no volver a escribir a mano lo que ya está en la ruta.
@@ -519,14 +508,11 @@ function RouteTarget({
           Urpi no puede quedarse esperando una caja que no sale. */}
       {courierKey(manifest.courier) === "urpi" && packages > 0 && (
         <div className="mt-3">
-          <a
-            href={`/api/despacho/${manifest.id}/urpi`}
-            className="inline-flex min-h-10 items-center rounded-xl bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-100"
-          >
-            Excel para Urpi ({packages})
+          <a href={`/api/despacho/${manifest.id}/urpi`} className={LINK_SECONDARY}>
+            Excel para Urpi <Badge className="tabular-nums">{packages} {packages === 1 ? "paquete" : "paquetes"}</Badge>
           </a>
           {!officeComplete && (
-            <p className="mt-1.5 text-xs text-amber-300">
+            <p className="mt-1.5 text-[13px] text-warn-fg">
               El cotejo de oficina va {officeChecked} de {packages}: el archivo puede cambiar si
               se retira algún paquete.
             </p>
@@ -534,23 +520,26 @@ function RouteTarget({
         </div>
       )}
       {manifests.length > 1 && (
-        <details className="mt-2">
-          <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium text-slate-200">Cambiar de caja</summary>
-        <label className="block">
-          <span className="sr-only">Cambiar de ruta</span>
-          <select
-            disabled={disabled}
-            value={manifest.id}
-            onChange={(event) => onSelect(event.target.value)}
-            className="min-h-12 w-full rounded-xl border border-white/20 bg-white/10 px-3 text-base font-medium text-white sm:max-w-md"
-          >
-            {manifests.map((option) => (
-              <option key={option.id} value={option.id} className="text-slate-950">
-                {routeName(option)}{option.courier === "propio" ? ` · Carga ${option.load_number ?? 1}` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
+        <details className="group mt-2">
+          <summary className="flex min-h-9 cursor-pointer list-none items-center gap-1.5 text-[13px] font-semibold text-brand-700 pointer-coarse:min-h-11 [&::-webkit-details-marker]:hidden">
+            <IconChevronDown aria-hidden className="size-4 -rotate-90 transition-transform group-open:rotate-0" />
+            Cambiar de caja
+          </summary>
+          <label className="mt-1 block">
+            <span className="sr-only">Cambiar de ruta</span>
+            <select
+              disabled={disabled}
+              value={manifest.id}
+              onChange={(event) => onSelect(event.target.value)}
+              className={cn(FIELD, "sm:max-w-md")}
+            >
+              {manifests.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {routeName(option)}{option.courier === "propio" ? ` · Carga ${option.load_number ?? 1}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
         </details>
       )}
     </div>
@@ -570,37 +559,35 @@ const MODE_HINTS: Record<Mode, string> = {
   pickup: "El propio motorizado escanea cada paquete que recibe. Al llegar al 100 %, la custodia cambia automáticamente.",
 };
 
-function Metric({ label, value, tone }: { label: string; value: number; tone: "slate" | "amber" | "blue" | "green" }) {
-  const tones = { slate: "bg-slate-950", amber: "bg-amber-500", blue: "bg-blue-600", green: "bg-emerald-600" };
-  return <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className={cn("mb-4 h-1.5 w-8 rounded-full", tones[tone])} /><p className="text-2xl font-semibold tabular-nums text-slate-950">{value}</p><p className="mt-1 text-xs font-medium text-slate-500">{label}</p></div>;
+/** Una cifra del día de la mesa: etiqueta y número, dentro del marco común. */
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="bg-white px-4 py-3">
+      <dt className="text-[13px] text-ink-500">{label}</dt>
+      <dd className="mt-0.5 text-xl font-semibold leading-7 tabular-nums text-ink-900">{value.toLocaleString("es-PE")}</dd>
+    </div>
+  );
 }
 
-function ModeButton({ ops = false, active, disabled, onClick, number, label }: { ops?: boolean; active: boolean; disabled: boolean; onClick: () => void; number: string; label: string }) {
-  if (ops) {
-    return (
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={onClick}
-        aria-pressed={active}
-        className={cn(
-          "flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-md px-2 text-[13px] font-semibold transition-[background-color,color,box-shadow] duration-150",
-          active ? "bg-white text-ink-900 shadow-control ring-1 ring-line" : "text-ink-600 hover:text-ink-900",
-          disabled && "cursor-not-allowed opacity-40 hover:text-ink-600",
-        )}
-      >
-        <span className={cn("grid size-5 shrink-0 place-items-center rounded-full text-xs tabular-nums", active ? "bg-brand-600 text-white" : "bg-line text-ink-600")}>{number}</span>
-        {/* En el teléfono basta el verbo: «Agregar», «Verificar», «Recibir». */}
-        <span className="truncate sm:hidden">{label.split(" ")[0]}</span>
-        <span className="hidden truncate sm:inline">{label}</span>
-      </button>
-    );
-  }
-  return <button disabled={disabled} onClick={onClick} className={cn("flex min-h-12 items-center justify-center gap-2 rounded-xl px-2 text-xs font-semibold transition sm:text-sm", active ? "bg-slate-950 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50", disabled && "cursor-not-allowed opacity-30")}><span className={cn("grid size-5 place-items-center rounded-full text-[10px]", active ? "bg-white/20" : "bg-slate-100")}>{number}</span>{label}</button>;
-}
-
-function StateBadge({ state }: { state: DispatchManifestState }) {
-  return <span className={cn("inline-flex w-fit rounded-full px-3 py-1 text-xs font-semibold", STATE_TONE[state])}>{DISPATCH_STATE_LABELS[state]}</span>;
+function ModeButton({ active, disabled, onClick, number, label }: { active: boolean; disabled: boolean; onClick: () => void; number: string; label: string }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-md px-2 text-[13px] font-semibold transition-[background-color,color,box-shadow] duration-150",
+        active ? "bg-white text-ink-900 shadow-control ring-1 ring-line" : "text-ink-600 hover:text-ink-900",
+        disabled && "cursor-not-allowed opacity-40 hover:text-ink-600",
+      )}
+    >
+      <span className={cn("grid size-5 shrink-0 place-items-center rounded-full text-xs tabular-nums", active ? "bg-brand-600 text-white" : "bg-line text-ink-600")}>{number}</span>
+      {/* En el teléfono basta el verbo: «Agregar», «Verificar», «Recibir». */}
+      <span aria-hidden className="truncate sm:hidden">{label.split(" ")[0]}</span>
+      <span className="sr-only sm:not-sr-only sm:truncate">{label}</span>
+    </button>
+  );
 }
 
 function ManifestCard({ manifest, active, onClick }: { manifest: DispatchManifest; active: boolean; onClick: () => void }) {
@@ -611,12 +598,35 @@ function ManifestCard({ manifest, active, onClick }: { manifest: DispatchManifes
   const completed = manifest.state === "in_custody"
     ? progress.total
     : rider ? progress.pickupChecked : progress.officeChecked;
-  const percent = progress.total ? Math.round((completed / progress.total) * 100) : 0;
+  const percent = manifest.state === "in_custody" ? 100 : progress.total ? Math.round((completed / progress.total) * 100) : 0;
   // El título es QUIÉN se lleva la caja, y cuando no hay una persona concreta
   // —Urpi, Aliclik, una agencia— el courier ES quien se la lleva. Decir
   // "Sin motorizado" no nombraba nada y dejaba la tarjeta sin identidad.
   const { title, subtitle } = routeHeading(manifest);
-  return <button onClick={onClick} className={cn("w-full rounded-2xl border p-4 text-left transition", active ? "border-slate-950 bg-slate-950 text-white shadow-lg" : "border-slate-200 bg-white hover:border-slate-400")}><div className="flex items-start justify-between gap-2"><p className="min-w-0 truncate text-base font-semibold">{title}</p><span className={cn("shrink-0 text-sm font-semibold tabular-nums", active ? "text-slate-300" : "text-slate-500")}>{routeDay(manifest.route_date)}</span></div><p className={cn("mt-0.5 truncate text-xs", active ? "text-slate-300" : "text-slate-500")}>{subtitle}</p><div className={cn("mt-3 h-1.5 overflow-hidden rounded-full", active ? "bg-white/15" : "bg-slate-100")}><div className={cn("h-full rounded-full", active ? "bg-emerald-400" : "bg-slate-950")} style={{ width: `${manifest.state === "in_custody" ? 100 : percent}%` }} /></div><div className={cn("mt-2 flex items-center justify-between text-xs", active ? "text-slate-300" : "text-slate-500")}><span>{DISPATCH_STATE_LABELS[manifest.state]}</span><span>{completed}/{progress.total}</span></div></button>;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "w-full rounded-lg bg-white p-3.5 text-left shadow-control transition-shadow",
+        active ? "ring-2 ring-inset ring-brand-600" : "ring-1 ring-inset ring-line hover:ring-line-strong",
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <p className={cn("min-w-0 truncate text-sm font-semibold", active ? "text-brand-700" : "text-ink-900")}>{title}</p>
+        <span className="shrink-0 text-[13px] font-medium tabular-nums text-ink-500">{routeDay(manifest.route_date)}</span>
+      </div>
+      <p className="mt-0.5 truncate text-[13px] text-ink-500">{subtitle}</p>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-line">
+        <div className={cn("h-full rounded-full", percent === 100 ? "bg-ok-fg" : "bg-brand-600")} style={{ width: `${percent}%` }} />
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <Badge tone={STATE_BADGE[manifest.state]}>{DISPATCH_STATE_LABELS[manifest.state]}</Badge>
+        <span className="text-xs tabular-nums text-ink-500">{completed}/{progress.total}</span>
+      </div>
+    </button>
+  );
 }
 
 /**
@@ -686,30 +696,29 @@ function BuildRoute({
   const allShownPicked = shown.length > 0 && shown.every((s) => picked.has(s.id));
 
   return (
-    <div className="p-5 sm:p-7">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h3 className="font-semibold text-slate-900">Paquetes sin ruta</h3>
-        <label className="flex items-center gap-2 text-xs text-slate-600">
-          <input type="checkbox" checked={onlyMatching} onChange={(e) => setOnlyMatching(e.target.checked)} className="size-4" />
+    <div className="p-4 sm:p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-ink-900">Paquetes sin ruta <span className="font-medium tabular-nums text-ink-500">{visible.length}</span></h3>
+        <label className="flex items-center gap-2 text-[13px] text-ink-700">
+          <input type="checkbox" checked={onlyMatching} onChange={(e) => setOnlyMatching(e.target.checked)} className={CHECKBOX} />
           Solo los que pueden ir con {courierLabelFor(manifest.courier)}
         </label>
       </div>
 
       {!closed && (
-        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
           <label className="relative min-w-0 flex-1">
             <span className="sr-only">Buscar paquete</span>
-            <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">⌕</span>
+            <IconSearch aria-hidden className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Buscar por código, pedido, cliente o distrito"
-              className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm outline-none focus:border-slate-950 focus:bg-white"
+              className={cn(FIELD, "pl-9")}
             />
           </label>
           {shown.length > 0 && (
-            <button
-              type="button"
+            <OpsButton
               onClick={() => {
                 setConfirming(false);
                 setPicked((prev) => {
@@ -721,63 +730,61 @@ function BuildRoute({
                   return next;
                 });
               }}
-              className="h-11 shrink-0 rounded-xl border border-slate-300 px-4 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               {allShownPicked ? "Quitar selección" : `Seleccionar ${shown.length}`}
-            </button>
+            </OpsButton>
           )}
         </div>
       )}
 
       {closed ? (
-        <div className="rounded-2xl border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500">Esta ruta ya está cerrada.</div>
+        <div className="rounded-lg border border-dashed border-line-strong py-10 text-center text-sm text-ink-500">Esta ruta ya está cerrada.</div>
       ) : visible.length ? (
         <>
-          <div className="grid gap-2 md:grid-cols-2">
+          <ul className="divide-y divide-line rounded-lg ring-1 ring-line">
             {shown.map((shipment) => (
-              <label
-                key={shipment.id}
-                className={cn(
-                  "flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition",
-                  picked.has(shipment.id) ? "border-slate-950 bg-slate-50" : "border-slate-200 hover:border-slate-400",
-                )}
-              >
-                <input type="checkbox" checked={picked.has(shipment.id)} onChange={() => toggle(shipment.id)} className="mt-1 size-4 shrink-0" />
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-start justify-between gap-3">
-                    <span className="font-semibold text-slate-950">{packageCode(shipment)}</span>
-                    <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase text-slate-600">
-                      {isCourierTbd(shipment.courier) ? "Por definir" : courierLabelFor(shipment.courier)}
+              <li key={shipment.id}>
+                <label
+                  className={cn(
+                    "flex cursor-pointer items-start gap-3 px-3 py-2.5 transition-colors",
+                    picked.has(shipment.id) ? "bg-brand-50/60" : "hover:bg-wash",
+                  )}
+                >
+                  <input type="checkbox" checked={picked.has(shipment.id)} onChange={() => toggle(shipment.id)} className={cn(CHECKBOX, "mt-0.5")} />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="font-mono text-xs font-semibold text-ink-900">{packageCode(shipment)}</span>
+                      <Badge>{isCourierTbd(shipment.courier) ? "Por definir" : courierLabelFor(shipment.courier)}</Badge>
+                      <Badge tone={isArmed(shipment) ? "ok" : "warn"}>{isArmed(shipment) ? "Armado en almacén" : "Almacén aún no lo escaneó"}</Badge>
                     </span>
+                    <span className="mt-0.5 block truncate text-sm text-ink-700">{shipment.customer_name ?? "Cliente"} · {shipment.district ?? shipment.province ?? "Sin distrito"}</span>
+                    <span className="block truncate text-xs tabular-nums text-ink-500">{shipment.order_name} · {storeName.get(shipment.store_id) ?? "Tienda"}</span>
                   </span>
-                  <span className="mt-1 block truncate text-sm text-slate-700">{shipment.customer_name ?? "Cliente"} · {shipment.district ?? shipment.province ?? "Sin distrito"}</span>
-                  <span className="mt-1 block text-xs text-slate-400">{shipment.order_name} · {storeName.get(shipment.store_id) ?? "Tienda"}</span>
-                  <span className={cn("mt-2 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold", isArmed(shipment) ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800")}>
-                    {isArmed(shipment) ? "Armado en almacén" : "Almacén aún no lo escaneó"}
-                  </span>
-                </span>
-              </label>
+                </label>
+              </li>
             ))}
-          </div>
-          {visible.length > 60 && <p className="mt-3 text-xs text-slate-400">Se muestran 60 de {visible.length}. Afina la búsqueda o asigna estos y vuelve por el resto.</p>}
+          </ul>
+          {visible.length > 60 && <p className="mt-2 text-xs text-ink-500">Se muestran 60 de {visible.length}. Afina la búsqueda o asigna estos y vuelve por el resto.</p>}
 
           {/* Barra pegada al pie: con la lista larga, el destino y el botón se
               quedaban arriba y fuera de vista, que es justo cuando uno asigna a
               la ruta equivocada. */}
           {picked.size > 0 && (
-            <div className="sticky bottom-4 z-10 mt-5">
+            <div className="sticky bottom-4 z-10 mt-4">
               {confirming ? (
-                <div className="rounded-2xl border-2 border-slate-950 bg-white p-4 shadow-xl">
-                  <p className="text-base text-slate-700 sm:text-lg">
+                <div className="rounded-lg bg-white p-4 shadow-pop">
+                  <p className="text-sm text-ink-700 sm:text-base">
                     Vas a asignar{" "}
-                    <strong className="font-semibold text-slate-950">
+                    <strong className="font-semibold text-ink-900">
                       {picked.size} paquete{picked.size === 1 ? "" : "s"}
                     </strong>{" "}
                     a la ruta de{" "}
-                    <strong className="font-semibold text-slate-950">{routeNameLong(manifest)}</strong>.
+                    <strong className="font-semibold text-ink-900">{routeNameLong(manifest)}</strong>.
                   </p>
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                    <button
+                    <OpsButton
+                      variant="primary"
+                      size="lg"
                       disabled={busy}
                       onClick={async () => {
                         setBusy(true);
@@ -787,33 +794,25 @@ function BuildRoute({
                         await onAdded(result);
                         setBusy(false);
                       }}
-                      className="h-12 rounded-xl bg-slate-950 px-6 font-semibold text-white disabled:opacity-40"
                     >
                       {busy ? "Asignando…" : "Sí, asignar"}
-                    </button>
-                    <button
-                      disabled={busy}
-                      onClick={() => setConfirming(false)}
-                      className="h-12 rounded-xl border border-slate-300 px-6 font-medium text-slate-700 hover:bg-slate-50"
-                    >
+                    </OpsButton>
+                    <OpsButton size="lg" variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
                       Cancelar
-                    </button>
+                    </OpsButton>
                   </div>
                 </div>
               ) : (
-                <button
-                  onClick={() => setConfirming(true)}
-                  className="w-full rounded-2xl bg-slate-950 px-6 py-4 text-lg font-semibold text-white shadow-xl sm:text-xl"
-                >
+                <OpsButton variant="primary" size="lg" className="w-full whitespace-normal py-3 text-left sm:text-center" onClick={() => setConfirming(true)}>
                   Asignar {picked.size} paquete{picked.size === 1 ? "" : "s"} a la ruta de{" "}
                   {routeNameLong(manifest)}
-                </button>
+                </OpsButton>
               )}
             </div>
           )}
         </>
       ) : (
-        <div className="rounded-2xl border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500">
+        <div className="rounded-lg border border-dashed border-line-strong py-10 text-center text-sm text-ink-500">
           {query.trim()
             ? `Ningún paquete coincide con «${query.trim()}».`
             : `No hay paquetes libres ${onlyMatching ? `para ${courierLabelFor(manifest.courier)}` : ""}.`}
@@ -830,32 +829,32 @@ function HandOverPanel({ manifest, onDone }: { manifest: DispatchManifest; onDon
   const progress = dispatchProgress(manifest.items);
   if (!progress.officeComplete) {
     return (
-      <p className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">
-        Completa el cotejo de oficina ({progress.officeChecked} de {progress.total}) y anota aquí quién recoge.
+      <p className="rounded-lg bg-wash px-4 py-3 text-[13px] text-ink-600">
+        Completa el cotejo de oficina (<span className="tabular-nums">{progress.officeChecked} de {progress.total}</span>) y anota aquí quién recoge.
       </p>
     );
   }
   return (
-    <div className="mt-5 rounded-2xl border border-slate-200 p-4">
-      <p className="text-sm font-semibold text-slate-900">¿Quién recoge?</p>
-      <p className="mt-1 text-xs text-slate-500">
+    <div className="rounded-lg p-4 ring-1 ring-line">
+      <p className="text-sm font-semibold text-ink-900">¿Quién recoge?</p>
+      <p className="mt-0.5 text-[13px] text-ink-500">
         Esta ruta no tiene motorizado que coteje. El nombre de quien se lleva las cajas es la única prueba de la entrega.
       </p>
       <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre y DNI de quien recoge" className="h-11 min-w-0 flex-1 rounded-xl border border-slate-200 px-3" />
-        <button
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre y DNI de quien recoge" aria-label="Nombre y DNI de quien recoge" className={cn(FIELD, "flex-1")} />
+        <OpsButton
+          variant="primary"
           disabled={busy || name.trim().length < 3}
           onClick={async () => { setBusy(true); await onDone(await handOverToCourier(manifest.id, name)); setBusy(false); }}
-          className="h-11 rounded-xl bg-slate-950 px-6 font-semibold text-white disabled:opacity-40"
         >
           {busy ? "Cerrando…" : "Entregar al courier"}
-        </button>
+        </OpsButton>
       </div>
     </div>
   );
 }
 
-function ManifestDetail({ ops = false, manifest, mode, canManage, onChanged, showResult }: { ops?: boolean; manifest: DispatchManifest; mode: Mode; canManage: boolean; onChanged: () => Promise<void>; showResult: (r: DispatchActionResult) => void }) {
+function ManifestDetail({ manifest, mode, canManage, onChanged, showResult }: { manifest: DispatchManifest; mode: Mode; canManage: boolean; onChanged: () => Promise<void>; showResult: (r: DispatchActionResult) => void }) {
   const [query, setQuery] = useState("");
   const active = activeDispatchItems(manifest.items);
   const removed = manifest.items.filter((item) => !!item.removed_at);
@@ -878,36 +877,11 @@ function ManifestDetail({ ops = false, manifest, mode, canManage, onChanged, sho
           .some((field) => String(field).toLowerCase().includes(needle)),
       )
     : active;
-  if (ops) return <OpsManifestDetail manifest={manifest} mode={mode} canManage={canManage} onChanged={onChanged} showResult={showResult} active={active} removed={removed} checked={checked} total={progress.total} query={query} setQuery={setQuery} shownItems={shownItems} needle={needle} />;
-  return <div className="p-4 sm:p-7">
-    <div className="flex items-end justify-between gap-3 text-sm">
-      <span className="font-medium text-slate-700">{mode === "office" ? "Paquetes verificados" : "Paquetes recibidos"}</span>
-      <span className="font-semibold tabular-nums text-slate-950">{checked} de {progress.total}</span>
-    </div>
-    <progress aria-label={mode === "office" ? "Cotejo de oficina" : "Recepción del motorizado"} value={checked} max={progress.total || 1} className="mt-2 h-2 w-full accent-brand-600" />
-    {!needsRiderCheck(manifest.kind) && manifest.state !== "in_custody" && canManage && <HandOverPanel manifest={manifest} onDone={async (r) => { showResult(r); await onChanged(); }} />}
-    {active.length > 8 && <label className="mt-4 block text-sm font-medium text-slate-700">
-      Buscar en esta caja
-      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Código, cliente o distrito" className="mt-1 min-h-12 w-full rounded-xl border border-slate-200 px-3 text-base focus-visible:ring-2 focus-visible:ring-brand-500" />
-    </label>}
-    <div className="mt-4 space-y-2">{shownItems.length ? shownItems.map((item) =>
-      <PackageRow key={item.id} item={item} mode={mode} canRemove={false} onRemoved={async () => {}} />
-    ) : <p className="py-6 text-sm text-slate-600">{needle ? `Ningún paquete coincide con «${query.trim()}».` : "Aún no hay paquetes asignados. Agrégalos antes de verificar esta caja."}</p>}</div>
-    {removed.length > 0 && <details className="mt-4 border-t border-slate-200 pt-2">
-      <summary className="min-h-12 cursor-pointer py-3 text-sm font-medium text-slate-600">Paquetes retirados ({removed.length})</summary>
-      <div className="space-y-2">{removed.map((item) => <div key={item.id} className="text-sm text-slate-600"><span className="font-medium">{packageCode(item.shipment)}</span> · {item.removal_reason}</div>)}</div>
-    </details>}
-    {canManage && !["in_custody", "cancelled"].includes(manifest.state) && <details className="mt-5 border-t border-slate-200 pt-2">
-      <summary className="min-h-12 cursor-pointer py-3 text-sm font-medium text-slate-600">Corregir contenido de la caja</summary>
-      <p className="mb-3 text-sm text-slate-600">Retirar un paquete o cancelar requiere un motivo y queda en el historial.</p>
-      <div className="space-y-2">{active.map((item) => <PackageRow key={item.id} item={item} mode={mode} canRemove onRemoved={async (reason) => { showResult(await removeManifestItem(manifest.id, item.shipment_id, reason)); await onChanged(); }} />)}</div>
-      <button type="button" onClick={async () => { const reason = window.prompt("Motivo de cancelación de la ruta"); if (!reason) return; showResult(await cancelDispatchManifest(manifest.id, reason)); await onChanged(); }} className="mt-4 min-h-12 rounded-lg px-3 text-sm font-medium text-red-700 hover:bg-red-50">Cancelar esta ruta</button>
-    </details>}
-  </div>;
+  return <OpsManifestDetail manifest={manifest} mode={mode} canManage={canManage} onChanged={onChanged} showResult={showResult} active={active} removed={removed} checked={checked} total={progress.total} query={query} setQuery={setQuery} shownItems={shownItems} needle={needle} />;
 }
 
 /**
- * El contenido de la caja en el panel de Rutas: una barra de avance, una lista
+ * El contenido de la caja (mesa y panel de Rutas): una barra de avance, una lista
  * con hairlines (no una tarjeta por paquete) y las correcciones plegadas.
  */
 function OpsManifestDetail({ manifest, mode, canManage, onChanged, showResult, active, removed, checked, total, query, setQuery, shownItems, needle }: {
@@ -981,19 +955,6 @@ function OpsPackageRow({ item, mode, canRemove, onRemoved }: { item: DispatchMan
   </li>;
 }
 
-function PackageRow({ item, mode, canRemove, onRemoved }: { item: DispatchManifestItem; mode: Mode; canRemove: boolean; onRemoved: (reason: string) => Promise<void> }) {
-  const checked = mode === "office" ? item.office_checked_at : item.pickup_checked_at;
-  const [removing, setRemoving] = useState(false);
-  return <div className={cn("flex items-start gap-3 rounded-xl border p-3", checked ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-white")}>
-    <span aria-label={checked ? "Verificado" : "Pendiente"} className={cn("mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-sm font-bold", checked ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-500")}>{checked ? "✓" : "·"}</span>
-    <div className="min-w-0 flex-1">
-      <p className="break-words text-sm font-semibold text-slate-950">{packageCode(item.shipment)}</p>
-      <p className="mt-1 break-words text-sm leading-5 text-slate-600">{item.shipment?.customer_name ?? "Cliente"} · {item.shipment?.district ?? item.shipment?.province ?? "Sin distrito"}</p>
-    </div>
-    {canRemove && <button type="button" disabled={removing} onClick={async () => { const reason = window.prompt("¿Por qué se retira este paquete de la ruta?"); if (!reason) return; setRemoving(true); try { await onRemoved(reason); } finally { setRemoving(false); } }} className="min-h-12 shrink-0 rounded-lg px-3 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">{removing ? "Retirando…" : "Retirar"}</button>}
-  </div>;
-}
-
 function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchRider[]; onClose: () => void; onCreated: (result: DispatchActionResult) => void }) {
   const [selection, setSelection] = useState("");
   const [routeDate, setRouteDate] = useState(todayLima());
@@ -1003,8 +964,13 @@ function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchR
   const choice = useMemo(() => routeChoiceByValue(riders, selection), [riders, selection]);
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-950/50 p-0 sm:items-center sm:p-6">
+    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-ink-900/30 p-0 sm:items-center sm:p-6" onClick={() => { if (!busy) onClose(); }}>
       <form
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="nueva-ruta-titulo"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => { if (event.key === "Escape" && !busy) onClose(); }}
         onSubmit={async (event) => {
           event.preventDefault();
           if (!choice) return;
@@ -1018,59 +984,58 @@ function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchR
           );
           setBusy(false);
         }}
-        className="w-full rounded-t-3xl bg-white p-6 shadow-2xl sm:max-w-lg sm:rounded-3xl"
+        className="w-full rounded-t-lg bg-white p-5 shadow-pop sm:max-w-lg sm:rounded-lg sm:p-6"
       >
-        <div className="flex items-center justify-between">
+        <div className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-xl font-semibold text-slate-950">Nueva ruta</h2>
-            <p className="text-sm text-slate-500">Una entrega diaria por courier. Los motorizados de Grupo GF se organizan en su módulo.</p>
+            <h2 id="nueva-ruta-titulo" className="text-lg font-semibold leading-7 text-ink-900">Nueva ruta</h2>
+            <p className="mt-0.5 text-[13px] text-ink-500">Una entrega diaria por courier. Los motorizados de Grupo GF se organizan en su módulo.</p>
           </div>
-          <button type="button" onClick={onClose} className="grid size-10 place-items-center rounded-full bg-slate-100 text-lg">×</button>
+          <button type="button" onClick={onClose} disabled={busy} aria-label="Cerrar" className="-mr-1.5 grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 disabled:opacity-50">
+            <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
         </div>
-        <div className="mt-6 grid gap-4 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            {/* Un solo desplegable: los motorizados propios agrupados bajo su
-                cabecera y, debajo, los couriers. Elegir dos veces —courier y
-                luego motorizado— era decir una sola cosa en dos pasos. */}
-            <Field label="Sale con">
-              <select
-                required
-                value={selection}
-                onChange={(event) => setSelection(event.target.value)}
-                className="h-11 w-full rounded-xl border border-slate-200 px-3"
-              >
-                <option value="">Elige con quién sale</option>
-                <optgroup label="Couriers">
-                  {couriers.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </optgroup>
-              </select>
-            </Field>
-          </div>
-          <div className="sm:col-span-2">
-            <Field label="Fecha de la ruta">
-              <input required type="date" value={routeDate} onChange={(e) => setRouteDate(e.target.value)} className="h-11 w-full rounded-xl border border-slate-200 px-3" />
-            </Field>
-          </div>
+        <div className="mt-5 grid gap-4">
+          {/* Un solo desplegable: los motorizados propios agrupados bajo su
+              cabecera y, debajo, los couriers. Elegir dos veces —courier y
+              luego motorizado— era decir una sola cosa en dos pasos. */}
+          <Field label="Sale con">
+            <select
+              required
+              autoFocus
+              value={selection}
+              onChange={(event) => setSelection(event.target.value)}
+              className={FIELD}
+            >
+              <option value="">Elige con quién sale</option>
+              <optgroup label="Couriers">
+                {couriers.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+          </Field>
+          <Field label="Fecha de la ruta">
+            <input required type="date" value={routeDate} onChange={(e) => setRouteDate(e.target.value)} className={FIELD} />
+          </Field>
         </div>
         {choice && (
-          <p className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-600">
+          <Banner tone="info" className="mt-4">
             {needsRiderCheck(routeKindForCourier(choice.courier))
               ? "Ruta de reparto: la cierra el cotejo del motorizado, escaneando lo que recibe."
               : "Entrega al courier: no hay motorizado que coteje, así que se cierra anotando quién recoge las cajas."}
-          </p>
+          </Banner>
         )}
-        <button disabled={busy || !choice} className="mt-6 h-12 w-full rounded-xl bg-slate-950 font-semibold text-white disabled:opacity-50">
+        <OpsButton type="submit" variant="primary" size="lg" disabled={busy || !choice} className="mt-6 w-full">
           {busy ? "Creando…" : "Crear ruta"}
-        </button>
+        </OpsButton>
       </form>
     </div>
   );
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-600">{label}</span>{children}</label>;
+  return <label className="block"><span className="mb-1 block text-[13px] font-medium text-ink-700">{label}</span>{children}</label>;
 }

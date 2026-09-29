@@ -1,7 +1,7 @@
 {
-  "verifiedAt": "2026-09-29T13:49:18.358Z",
+  "verifiedAt": "2026-09-29T13:52:37.424Z",
   "candidate": "0203_master_read_scaling.sql",
-  "productionBase": "6d2cbf4f94c6a65f7967d1d93cd97a1636ffa6e4",
+  "productionBase": "a85f2c1dbf702ce917ecb22583a4be78babb71ed",
   "productionDeployed": false,
   "productionSchemaChanged": false,
   "releaseDecision": "HOLD: PostgreSQL authentication failed; fresh production backup and recovery validation, reviewed CI and release-window checks remain",
@@ -13,8 +13,8 @@
     "scripts/sql/master_read_scaling_preflight.sql": "7ae679ed3bffd06c5a2a7ff90d073aeee62a904d0c65b19c1edd69057f7d55bd",
     "scripts/sql/master_read_scaling_rollback.sql": "bbc9ab0c78ee262a24fbb255dba2c6e830cb59b27c6d703a0668933a591c7436"
   },
-  "unitTestsPassed": 5209,
-  "unitFilesPassed": 324,
+  "unitTestsPassed": 5236,
+  "unitFilesPassed": 325,
   "typecheckPassed": true,
   "buildPassed": true,
   "migrationPieces": 203,
@@ -59,11 +59,15 @@
     "eventsPreserved": 417,
     "outputsPreserved": 2,
     "providersContacted": false,
-    "at": "2026-09-29T13:44:23.699Z"
+    "at": "2026-09-29T13:51:25.932Z"
   },
   "cronSchedulesUnchanged": 18,
   "providerCallsDuringTests": false,
   "productionFreshBackupComplete": false,
   "productionBackupRestoreVerified": false,
-  "nightRunbook": "night-release-2026-09-29.md"
+  "nightRunbook": "night-release-2026-09-29.md",
+  "upstreamChangesIncorporated": [
+    "#740",
+    "#741"
+  ]
 }

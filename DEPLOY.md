@@ -6,7 +6,7 @@
 Night procedure and unresolved backup access: `docs/performance/night-release-2026-09-29.md`.
 Current evidence and remaining release checks are in
 `docs/performance/validation-current-2026-09-29.json`. Migration 0203 follows the
-published schema 0202 at `6d2cbf4`; the unpublished 0198/0202 candidates were
+published schema 0202 at `a85f2c1`; the unpublished 0198/0202 candidates were
 renumbered without changing their executable counter SQL.
 The old unpublished 0157 candidate used shared counter rows and deadlocked.
 The current candidate is based on production schema 0202; 0157 is already an

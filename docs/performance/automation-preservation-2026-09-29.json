@@ -1,6 +1,6 @@
 {
-  "base": "6d2cbf4",
-  "checkedAt": "2026-09-29T13:36:15.189Z",
+  "base": "a85f2c1dbf702ce917ecb22583a4be78babb71ed",
+  "checkedAt": "2026-09-29T13:52:37.423Z",
   "unchangedPaths": [
     "vercel.json",
     "app/api/cron",

@@ -1,8 +1,9 @@
 # Validación del Master — 28 de septiembre de 2026
 
 > Registro de la etapa previa a staging, conservado como evidencia histórica.
-> El estado vigente, la integración de `aa87ce0` y la migración renumerada a
-> **0202** están en [staging-validation-2026-09-28.md](staging-validation-2026-09-28.md).
+> La integración de `aa87ce0` y la candidata **0202** constan en
+> [staging-validation-2026-09-28.md](staging-validation-2026-09-28.md).
+> El estado vigente de **0203** está en [night-release-2026-09-29.md](night-release-2026-09-29.md).
 > Las referencias a staging pendiente y a la candidata 0198 de este documento
 > describen ese momento anterior, no el resultado actual.
 

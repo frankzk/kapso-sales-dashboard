@@ -71,5 +71,6 @@
     "multipleOutputs": true,
     "changeNoticeOnPage2": true,
     "returnToStartPreservesFilters": true
-  }
+  },
+  "supersededBy": "validation-current-2026-09-29.json"
 }

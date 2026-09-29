@@ -24,6 +24,7 @@ const ready=Object.entries(expected).every(([k,v])=>values[k]===v)
   && Boolean(values.PGPASSWORD) && tools.every(name=>existsSync(join(bin,name+'.exe')));
 if(process.argv[2]==='--check') {
   console.log(JSON.stringify({project:'pmihklgtbyuurpkrxtoz',readOnly:true,
+    authenticationChecked:false,
     connectionParametersMatch:Object.entries(expected).every(([k,v])=>values[k]===v),
     passwordAvailable:Boolean(values.PGPASSWORD),toolsAvailable:tools.every(name=>existsSync(join(bin,name+'.exe'))),ready}));
 } else if(process.argv[2]==='--backup') {

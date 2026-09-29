@@ -1,5 +1,8 @@
 # Validación en Supabase de pruebas
 
+> Registro histórico del candidato 0202. La versión vigente es 0203;
+> consultar [el procedimiento y evidencia del 29-09](night-release-2026-09-29.md).
+
 ## Estado y versión
 
 La concurrencia corregida y la integración Auth/PostgREST/aplicación pasaron los

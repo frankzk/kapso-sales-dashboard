@@ -6,8 +6,8 @@ comprobaciones de la ventana. No hay despliegue ni ejecución nocturna programad
 
 ## Alcance y versión
 
-Base de producción revisada: `6d2cbf4f94c6a65f7967d1d93cd97a1636ffa6e4`.
-Integración revisada: `5ff4767115c78d7f8e0a311a257d99154451f40c`.
+Base de producción revisada: `a85f2c1dbf702ce917ecb22583a4be78babb71ed`.
+Integración revisada: `a85f2c1dbf702ce917ecb22583a4be78babb71ed`.
 PR: https://github.com/frankzk/kapso-sales-dashboard/pull/730.
 
 La migración candidata es `db/migrations/0203_master_read_scaling.sql`, después
@@ -26,7 +26,7 @@ Los pedidos, eventos y salidas físicas mantienen sus identidades y reglas.
 
 | Validación | Resultado y alcance |
 | --- | --- |
-| Aplicación integrada | 5.209 pruebas en 324 archivos; tipos y compilación aprobados |
+| Aplicación integrada | 5.236 pruebas en 325 archivos; tipos y compilación aprobados |
 | Cadena SQL | 203 piezas; PostgreSQL 16 real, permisos, operaciones, reversión y bundle aprobados |
 | Guardas de publicación | 15 comprobaciones; incluyen índices con orden/predicado incorrectos, permisos y contadores dañados |
 | Preservación PG17 | 113 tablas existentes, 137 funciones ajenas al cambio, 38 triggers y 133 políticas conservados al instalar, revertir y reinstalar |

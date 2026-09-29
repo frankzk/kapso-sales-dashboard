@@ -25,7 +25,8 @@ describe("admisión de pedidos de Grupo GF Courier", () => {
     const start = src.indexOf("export async function takeGroupGfCourierOrders(");
     const body = src.slice(start, src.indexOf("\nexport ", start + 1));
     const alreadyTaken = body.indexOf('.in("status", ["accepting", "accepted", "scheduled"])');
-    const outputCheck = body.indexOf("activeAssignedOutput(outputs");
+    // Desde la v1.19 el reintento filtra antes la salida que falló.
+    const outputCheck = body.indexOf("activeAssignedOutput(retry ? outputsBlockingRetry(outputs) : outputs");
     expect(alreadyTaken).toBeGreaterThan(0);
     expect(outputCheck).toBeGreaterThan(alreadyTaken);
     expect(body.slice(alreadyTaken, outputCheck)).toContain("alreadyAccepted.push(orderId)");

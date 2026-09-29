@@ -327,9 +327,10 @@ describe("y la macroetapa la aplica IGUAL", () => {
   it("la versión del MOM sube, para que el cron reconcilie el histórico", () => {
     // Esta guarda se reescribe con CADA cambio que mueva filas que nadie tocó:
     // no prueba comportamiento, avisa de que hay que subir la versión.
-    // v1.18 (26-09-2026): una ventana que vence sobre un rechazo en la puerta
-    // cae a «Rechazo no reenviado», no a «Recuperación vencida».
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.18");
+    // v1.19 (29-09-2026): la guía Swayp directa no es reprogramación, Tanders
+    // que no entrega abre la recuperación (65 días) y una salida devuelta no
+    // cierra el pedido si otra sigue viva.
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.19");
   });
 });
 
