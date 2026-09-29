@@ -609,6 +609,59 @@ export async function processTransitNotifications(
   // Enviados por tienda en esta ventana, contados una vez y llevados a mano
   // mientras la pasada envía.
   const enviados = new Map<string, { day: number; hour: number }>();
+  const credsByStore = new Map<string, StoreCreds | null>();
+
+  /** Carga (una vez) lo que hace falta para saber el cupo de una tienda. */
+  const cupoDe = async (storeId: string): Promise<number> => {
+    if (!credsByStore.has(storeId)) credsByStore.set(storeId, await loadCreds(storeId));
+    const tienda = credsByStore.get(storeId) ?? null;
+    const dailyCap = tienda?.shalom_notice_daily_cap ?? null;
+    const hourlyCap = tienda?.shalom_notice_hourly_cap ?? null;
+    if (dailyCap == null && hourlyCap == null) return Number.POSITIVE_INFINITY;
+    if (!enviados.has(storeId)) {
+      const t = Date.parse(nowIso);
+      const [day, hour] = await Promise.all([
+        countSent(storeId, new Date(t - 24 * 3600_000).toISOString()),
+        countSent(storeId, new Date(t - 3600_000).toISOString()),
+      ]);
+      enviados.set(storeId, { day, hour });
+    }
+    const cuenta = enviados.get(storeId)!;
+    return noticeCapLeft({ sentLast24h: cuenta.day, sentLastHour: cuenta.hour, dailyCap, hourlyCap });
+  };
+
+  // UNA TIENDA CON EL TOPE LLENO NO OCUPA PUESTOS DE LA PASADA. La pasada coge
+  // los N pendientes más antiguos de TODAS las tiendas; si los de una tienda
+  // topada entraban, se quedaban ahí sin salir —el tope no los deja— y la
+  // siguiente pasada volvía a cogerlos a ellos. Pasó el 28-09-2026: Kenku llegó
+  // a sus 30 del día con 40 avisos esperando, esos 40 llenaban los 20 puestos
+  // de cada pasada, y Aurela —con 7 de sus 30 usados— no mandó nada en toda la
+  // mañana. Así que primero se mira qué tiendas tienen cupo, y la cola se pide
+  // solo de ésas.
+  let conCupo: string[] | null = null; // null = sin filtrar por tienda
+  if (!opts.storeId) {
+    const { data: pend, error: pendErr } = await admin
+      .from("shalom_transit_notifications")
+      .select("store_id")
+      .eq("status", "pending")
+      .lte("next_attempt_at", nowIso)
+      .limit(2000);
+    if (pendErr) {
+      report.errors.push(`cola: ${pendErr.message}`);
+      return report;
+    }
+    const tiendas = [...new Set(((pend ?? []) as { store_id: string }[]).map((r) => r.store_id))];
+    if (!tiendas.length) return report;
+    conCupo = [];
+    for (const id of tiendas) {
+      if ((await cupoDe(id)) > 0) conCupo.push(id);
+    }
+    if (!conCupo.length) {
+      // Todas topadas: nada que hacer hasta que se libere cupo. Esperan.
+      report.deferred += (pend ?? []).length;
+      return report;
+    }
+  }
 
   let query = admin
     .from("shalom_transit_notifications")
@@ -616,6 +669,7 @@ export async function processTransitNotifications(
     .eq("status", "pending")
     .lte("next_attempt_at", nowIso);
   if (opts.storeId) query = query.eq("store_id", opts.storeId);
+  if (conCupo) query = query.in("store_id", conCupo);
   const { data, error } = await query
     .order("created_at", { ascending: true })
     .limit(opts.limit ?? TRANSIT_BATCH_CAP);
@@ -626,7 +680,6 @@ export async function processTransitNotifications(
   const rows = (data ?? []) as TransitQueueRow[];
   if (!rows.length) return report;
 
-  const credsByStore = new Map<string, StoreCreds | null>();
   // Por tienda Y tipo: una tienda puede tener encendido el de tránsito y
   // apagado el de llegada, que es justo como se van a estrenar.
   const configByStore = new Map<string, ReturnType<typeof transitConfig>>();
@@ -671,32 +724,16 @@ export async function processTransitNotifications(
     }
 
     // EL TOPE (0194). Al llegar, el aviso se queda en la cola tal cual —ni se
-    // toca la fila— y sale en la siguiente pasada con cupo. No se pierde.
-    const tienda = credsByStore.get(row.store_id) ?? null;
-    const dailyCap = tienda?.shalom_notice_daily_cap ?? null;
-    const hourlyCap = tienda?.shalom_notice_hourly_cap ?? null;
-    if ((dailyCap != null || hourlyCap != null) && !enviados.has(row.store_id)) {
-      const t = Date.parse(nowIso);
-      const [day, hour] = await Promise.all([
-        countSent(row.store_id, new Date(t - 24 * 3600_000).toISOString()),
-        countSent(row.store_id, new Date(t - 3600_000).toISOString()),
-      ]);
-      enviados.set(row.store_id, { day, hour });
-    }
-    const cuenta = enviados.get(row.store_id) ?? { day: 0, hour: 0 };
-    const cupo = noticeCapLeft({
-      sentLast24h: cuenta.day,
-      sentLastHour: cuenta.hour,
-      dailyCap,
-      hourlyCap,
-    });
-    if (cupo <= 0) {
+    // toca la fila— y sale en la siguiente pasada con cupo. No se pierde. Se
+    // vuelve a mirar aquí porque el cupo se gasta DENTRO de la pasada.
+    if ((await cupoDe(row.store_id)) <= 0) {
       report.deferred += 1;
       continue;
     }
 
     const outcome = await sendOne(admin, row, cfg, { nowIso, send, kind });
-    if (outcome === "sent" && enviados.has(row.store_id)) {
+    const cuenta = enviados.get(row.store_id);
+    if (outcome === "sent" && cuenta) {
       cuenta.day += 1;
       cuenta.hour += 1;
     }

@@ -237,7 +237,18 @@ function fakeAdmin(opts: FakeOpts = {}) {
         eq: () => chain,
         lte: () => chain,
         order: () => chain,
-        limit: () => chain,
+        // Respeta el límite de la pasada: sin eso, una prueba de «una tienda
+        // topada le quita el turno a otra» pasaría también con el fallo dentro.
+        limit(n: number) {
+          chain._limit = n;
+          return chain;
+        },
+        // Respeta el filtro por tienda: la cola lo usa para dejar fuera a las
+        // tiendas con el tope lleno, y una prueba que lo ignorara no probaría eso.
+        in(col: string, vals: string[]) {
+          chain._in = { col, vals };
+          return chain;
+        },
         insert(row: any) {
           inserts.push({ table, row });
           return Promise.resolve({ error: null });
@@ -294,7 +305,10 @@ function fakeAdmin(opts: FakeOpts = {}) {
             ],
             store_payment_methods: methods,
           };
-          return Promise.resolve({ data: lists[table] ?? [], error: null }).then(res, rej);
+          let data = lists[table] ?? [];
+          if (chain._in) data = data.filter((r: any) => chain._in.vals.includes(r[chain._in.col]));
+          if (chain._limit != null) data = data.slice(0, chain._limit);
+          return Promise.resolve({ data, error: null }).then(res, rej);
         },
       };
       return chain;
@@ -849,6 +863,46 @@ describe("el tope de avisos por tienda (0194)", () => {
     });
     expect(report).toMatchObject({ sent: 1, deferred: 1 });
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("una tienda con el tope lleno NO le quita el turno a otra que tiene cupo", async () => {
+    // El caso real del 28-09-2026: Kenku llegó a sus 30 con 40 avisos
+    // esperando, esos 40 llenaban los puestos de cada pasada, y Aurela —con 7
+    // de 30— no mandó nada en toda la mañana. Aquí la tienda topada tiene más
+    // pendientes que puestos, y AUN ASÍ el aviso de la otra sale.
+    const topada = Array.from({ length: 25 }, (_, i) => ({
+      id: `k${i}`,
+      store_id: "kenku",
+      shipment_id: "ship-1",
+      order_id: "ord-1",
+      attempts: 0,
+    }));
+    const admin = fakeAdmin({
+      pending: [...topada, { id: "a1", store_id: "aurela", shipment_id: "ship-1", order_id: "ord-1", attempts: 0 }],
+    });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.T" });
+    const report = await processTransitNotifications(admin, {
+      nowIso: NOW,
+      sendTemplate: send,
+      loadCreds: async () => ({ ...CREDS, shalom_notice_daily_cap: 30, shalom_notice_hourly_cap: 8 }),
+      countSent: async (storeId) => (storeId === "kenku" ? 30 : 7),
+    });
+    expect(report.sent).toBe(1);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("si todas las tiendas están topadas, no toca nada y espera", async () => {
+    const admin = fakeAdmin();
+    const send = vi.fn();
+    const report = await processTransitNotifications(admin, {
+      nowIso: NOW,
+      sendTemplate: send,
+      loadCreds: async () => ({ ...CREDS, shalom_notice_daily_cap: 30, shalom_notice_hourly_cap: 8 }),
+      countSent: async () => 30,
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(report.deferred).toBe(1);
+    expect(admin.updates).toHaveLength(0);
   });
 
   it("si no se puede contar, NO manda: a ciegas con un número nuevo es lo que el tope evita", async () => {
