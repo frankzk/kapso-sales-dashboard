@@ -413,6 +413,25 @@ export async function getGuide(
   return res;
 }
 
+// ── Productos (API de integraciones) ─────────────────────────────────────────
+
+/**
+ * GET /v1/integrations/products — los productos de la cuenta en la API de
+ * integraciones, con la MISMA credencial que las guías. No está en la doc
+ * pública (sólo /v2/guias); lo indicó la operación el 29-09-2026 como la vía
+ * para leer el inventario. La forma de la respuesta todavía no se conoce: se
+ * devuelve cruda y la pantalla de Stock Swayp la muestra para fijar el mapeo.
+ */
+export async function listIntegrationProducts(
+  opts: SwaypClientOpts,
+  query: Record<string, string> = {},
+): Promise<unknown> {
+  const qs = new URLSearchParams(query).toString();
+  return swaypFetch<unknown>(opts, "GET", `/v1/integrations/products${qs ? `?${qs}` : ""}`, undefined, {
+    retry: true,
+  });
+}
+
 // ── Novedades ────────────────────────────────────────────────────────────────
 
 export interface SwaypNoveltySolution {
