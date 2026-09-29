@@ -35,7 +35,8 @@ export const RIDER_PARAM = "motorizado";
 
 type DayMode = "hoy" | "todas" | "fecha";
 
-const SITUATION_TONE: Record<CourierLedgerSituation, BadgeTone> = {
+/** Tono de la chapa de situación: la lista y el panel de la caja dicen lo mismo. */
+export const SITUATION_TONE: Record<CourierLedgerSituation, BadgeTone> = {
   borrador: "neutral",
   cotejo_oficina: "warn",
   lista_para_recojo: "info",

@@ -19,24 +19,27 @@ function money(value: number): string {
   return `S/ ${value.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+/** Arreglo de una fila con aviso («Mover», «Asignar igual», «Autorizar»): botón secundario pequeño. */
+const AMEND = "inline-flex h-7 shrink-0 items-center rounded-md bg-white px-2 text-xs font-semibold text-ink-700 shadow-control ring-1 ring-inset ring-line-strong hover:bg-wash hover:text-ink-900 disabled:opacity-50";
+
 function presentation(l: ScanAssignLine, riderName: string): { text: string; textClass: string; rowClass: string } {
   switch (l.status) {
     case "procesando":
-      return { text: "Asignando…", textClass: "text-slate-500", rowClass: "bg-slate-50" };
+      return { text: "Asignando…", textClass: "text-ink-500", rowClass: "bg-wash" };
     case "asignado":
-      return { text: `En la caja de ${l.riderName ?? riderName}`, textClass: "text-emerald-700", rowClass: "bg-emerald-50/50" };
+      return { text: `En la caja de ${l.riderName ?? riderName}`, textClass: "text-ok-fg", rowClass: "bg-ok-wash" };
     case "ya_en_caja":
-      return { text: "Ya estaba", textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
+      return { text: "Ya estaba", textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
     case "en_otra_caja":
-      return { text: `En la caja de ${l.riderName ?? "otro"} → Mover`, textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
+      return { text: `En la caja de ${l.riderName ?? "otro"} → Mover`, textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
     case "bloqueado_efectivo":
-      return { text: "Límite de efectivo → Autorizar", textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
+      return { text: "Límite de efectivo → Autorizar", textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
     case "programado_otro_dia":
-      return { text: `Programado ${l.programmedFor ? programDayLabel(l.programmedFor) : "otro día"} → Asignar igual`, textClass: "text-amber-700", rowClass: "bg-amber-50/40" };
+      return { text: `Programado ${l.programmedFor ? programDayLabel(l.programmedFor) : "otro día"} → Asignar igual`, textClass: "text-warn-fg", rowClass: "bg-warn-wash" };
     case "no_elegible":
-      return { text: l.message ? `No elegible: ${l.message.replace(/\.$/, "")}` : "No elegible", textClass: "text-red-700", rowClass: "bg-red-50/50" };
+      return { text: l.message ? `No elegible: ${l.message.replace(/\.$/, "")}` : "No elegible", textClass: "text-crit-fg", rowClass: "bg-crit-wash" };
     default:
-      return { text: "QR desconocido", textClass: "text-red-700", rowClass: "bg-red-50/50" };
+      return { text: "QR desconocido", textClass: "text-crit-fg", rowClass: "bg-crit-wash" };
   }
 }
 
@@ -51,9 +54,9 @@ export function GfBoxAddPackages({ manifest, canManage, refresh }: {
   const riderName = manifest.driver_name ?? "el motorizado";
   const riderId = manifest.rider_id ?? null;
 
-  if (!canManage) return <p className="p-6 text-sm text-slate-600">Tu rol no organiza rutas: puedes mirar, no agregar.</p>;
-  if (!riderId) return <p className="p-6 text-sm text-slate-600">Esta caja no tiene motorizado asignado; se agrega desde Despacho del día.</p>;
-  if (manifest.state === "cancelled") return <p className="p-6 text-sm text-slate-600">Esta caja está cancelada.</p>;
+  if (!canManage) return <p className="p-5 text-sm text-ink-600">Tu rol no organiza rutas: puedes mirar, no agregar.</p>;
+  if (!riderId) return <p className="p-5 text-sm text-ink-600">Esta caja no tiene motorizado asignado; se agrega desde Despacho del día.</p>;
+  if (manifest.state === "cancelled") return <p className="p-5 text-sm text-ink-600">Esta caja está cancelada.</p>;
 
   const push = (line: ScanAssignLine) => {
     setLines((cur) => [line, ...cur.filter((l) => l.code !== line.code)].slice(0, 30));
@@ -61,46 +64,47 @@ export function GfBoxAddPackages({ manifest, canManage, refresh }: {
   };
 
   return (
-    <div className="space-y-3 p-4 sm:p-7">
+    <div className="space-y-3 p-4 sm:p-5">
       <ScanAction
         context="supervisor_asignacion"
         compact
+        look="ops"
         disabled={pending}
         assign={{ orgId: manifest.org_id, riderId, scheduledFor: manifest.route_date, overrideCash }}
         onResult={(r) => { if (r.line) push(r.line); }}
       />
-      <p className="text-xs text-slate-500">Cada escaneo toma el pedido y lo pone en esta caja. Después se verifica en «Verificar caja».</p>
+      <p className="text-[13px] text-ink-500">Cada escaneo toma el pedido y lo pone en esta caja. Después se verifica en «Verificar caja».</p>
       {lines.length > 0 && (
-        <ul className="max-h-72 divide-y divide-slate-100 overflow-auto rounded-xl border border-slate-200" aria-live="polite">
+        <ul className="max-h-72 divide-y divide-line overflow-auto rounded-lg ring-1 ring-line" aria-live="polite">
           {lines.map((l, i) => {
             const r = presentation(l, riderName);
             return (
-              <li key={`${l.code}:${i}`} className={cn("flex items-center gap-2 px-3 py-1.5 text-sm", r.rowClass)} title={[l.message, l.cashWarning].filter(Boolean).join(" · ")}>
+              <li key={`${l.code}:${i}`} className={cn("flex items-center gap-2 px-3 py-2 text-sm", r.rowClass)} title={[l.message, l.cashWarning].filter(Boolean).join(" · ")}>
                 <span className="min-w-0 flex-1 truncate">
-                  <span className="font-semibold text-slate-900">{l.orderName ?? l.code}</span>
+                  <span className="font-semibold text-ink-900">{l.orderName ?? l.code}</span>
                   <span className={cn("ml-2 text-xs font-medium", r.textClass)}>{r.text}</span>
                 </span>
-                {l.amount != null && <span className="shrink-0 text-xs tabular-nums text-slate-600">{money(l.amount)}</span>}
+                {l.amount != null && <span className="shrink-0 text-xs tabular-nums text-ink-600">{money(l.amount)}</span>}
                 {l.status === "en_otra_caja" && l.manifestId && l.shipmentId && (
                   <button type="button" disabled={pending} onClick={() => start(async () => {
                     const res = await moveManifestItem(manifest.org_id, l.manifestId!, l.shipmentId!, riderId, `Escaneado en la caja de ${riderName}`);
                     push({ ...l, status: res.error ? "no_elegible" : "asignado", riderName, message: res.error ?? "" });
-                  })} className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800 disabled:opacity-50">Mover</button>
+                  })} className={AMEND}>Mover</button>
                 )}
                 {l.status === "programado_otro_dia" && (
                   <button type="button" disabled={pending} onClick={() => start(async () => {
                     push(await scanAssignToRider(manifest.org_id, riderId, l.code, { overrideCash, scheduledFor: manifest.route_date, confirmProgrammed: true }));
-                  })} title={l.message} className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800 disabled:opacity-50">Asignar igual</button>
+                  })} title={l.message} className={AMEND}>Asignar igual</button>
                 )}
                 {l.status === "bloqueado_efectivo" && !overrideCash && (
-                  <button type="button" onClick={() => setOverrideCash(true)} title="Autoriza superar el límite de efectivo de la ruta y vuelve a escanear" className="min-h-8 shrink-0 rounded-lg border border-amber-300 px-2 text-xs font-medium text-amber-800">Autorizar</button>
+                  <button type="button" onClick={() => setOverrideCash(true)} title="Autoriza superar el límite de efectivo de la ruta y vuelve a escanear" className={AMEND}>Autorizar</button>
                 )}
               </li>
             );
           })}
         </ul>
       )}
-      {overrideCash && <p className="text-xs text-amber-700">Límite de efectivo autorizado para esta caja.</p>}
+      {overrideCash && <p className="text-[13px] text-warn-fg">Límite de efectivo autorizado para esta caja.</p>}
     </div>
   );
 }
