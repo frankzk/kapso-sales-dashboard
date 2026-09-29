@@ -396,7 +396,7 @@ export function settlementStatus(totals: SettlementTotals): "cuadrada" | "con_de
 // ---------------------------------------------------------------------------
 
 /** Lo que una línea de liquidación implica para el estado del pedido. */
-export type LineEffect = "entregado" | "anulado" | null;
+export type LineEffect = "entregado" | null;
 
 /**
  * Qué le pasa al pedido según lo que declara la hoja del courier.
@@ -406,9 +406,10 @@ export type LineEffect = "entregado" | "anulado" | null;
  * si esto no lo hace, sus entregas —todo Lima Metropolitana— se quedan en
  * "pendiente" para siempre y el cuadre las marca como "cobro sin entrega".
  *
- * Solo dos resultados mueven el pedido. Todo lo demás lo deja vivo, porque son
+ * Solo la entrega mueve el pedido. Todo lo demás lo deja vivo, porque son
  * reintentos: cerrar un pedido por error cuesta una venta, dejarlo abierto
- * cuesta otra visita.
+ * cuesta otra visita. Hasta la v1.22 un «rechazado» ANULABA el pedido; desde la
+ * v1.23 no (owner, 30-09-2026): solo la anulación en Shopify termina la venta.
  */
 export function lineEffect(line: {
   declared_status: string | null;
@@ -420,8 +421,8 @@ export function lineEffect(line: {
   const s = normalize(line.declared_status);
   if (!s) return null;
   // El rechazo se mira ANTES: "rechazado" no debe caer en ninguna raíz de
-  // entrega, y es el único fallo que cierra el pedido.
-  if (s.includes("rechaz")) return "anulado";
+  // entrega. No cierra el pedido (v1.23): sigue vivo para otro intento.
+  if (s.includes("rechaz")) return null;
   if (line.payment_method) return "entregado";
   return declaresDelivered(line.declared_status) ? "entregado" : null;
 }
@@ -445,10 +446,7 @@ export function settlementMasterEffects(
     out.push({
       order_id: l.order_id,
       target,
-      reason:
-        target === "entregado"
-          ? `Entregado según la liquidación del courier (${l.declared_status ?? "sin detalle"}).`
-          : `El cliente rechazó el pedido, según la liquidación del courier.`,
+      reason: `Entregado según la liquidación del courier (${l.declared_status ?? "sin detalle"}).`,
     });
   }
   return out;

@@ -1,7 +1,8 @@
-// La ÚNICA puerta a «entregado» (y a «anulado por rechazo») desde una fuente
-// de reparto: cierre de ruta, Liquidaciones 1 y Liquidaciones 2 (MOM §11.4,
-// §29.12, §30.8). Antes había tres copias del mismo insert con guardas
-// distintas; ahora hay una función y las guardas se unen aquí.
+// La ÚNICA puerta a «entregado» desde una fuente de reparto: cierre de ruta,
+// Liquidaciones 1 y Liquidaciones 2 (MOM §11.4, §29.12, §30.8). Hasta la v1.22
+// también anulaba por rechazo; desde la v1.23 solo Shopify anula (owner).
+// Antes había tres copias del mismo insert con guardas distintas; ahora hay
+// una función y las guardas se unen aquí.
 //
 // Qué escribe: un `order_events` `status_override` con la fuente que lo pidió
 // y recalcula el Master. Qué comprueba, según lo que reciba:
@@ -17,7 +18,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { defaultOperationalFor } from "@/lib/order-status";
 
-export type MasterDoorTarget = "entregado" | "anulado";
+export type MasterDoorTarget = "entregado";
 export type MasterDoorSource = "ruta" | "liquidacion";
 
 export interface MasterDoorGuard {

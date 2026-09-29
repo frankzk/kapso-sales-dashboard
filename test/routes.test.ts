@@ -286,8 +286,8 @@ describe("stopEffect y masterEffects", () => {
     expect(stopEffect({ status: "entregado" })).toBe("entregado");
   });
 
-  it("solo el rechazo cierra el pedido", () => {
-    expect(stopEffect({ status: "no_entregado", outcome_reason: "rechazado" })).toBe("anulado");
+  it("el rechazo tampoco cierra el pedido: solo Shopify anula (v1.23)", () => {
+    expect(stopEffect({ status: "no_entregado", outcome_reason: "rechazado" })).toBeNull();
   });
 
   it("los motivos de reintento NO tocan el pedido", () => {
@@ -310,9 +310,8 @@ describe("stopEffect y masterEffects", () => {
       { order_id: "o3", status: "no_entregado", outcome_reason: "no_contesta" },
       { order_id: "o4", status: "pendiente" },
     ]);
-    expect(effects).toHaveLength(2);
+    expect(effects).toHaveLength(1);
     expect(effects[0]).toMatchObject({ order_id: "o1", target: "entregado" });
-    expect(effects[1]).toMatchObject({ order_id: "o2", target: "anulado" });
     expect(effects.every((e) => e.reason.length > 0)).toBe(true);
   });
 });

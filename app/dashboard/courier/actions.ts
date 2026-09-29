@@ -2581,10 +2581,6 @@ export async function scanAssignToRider(
       }
       const { error: returnError } = await admin.rpc("gf_return_to_office", { p_item_id: box.id, p_actor: auth.userId });
       if (returnError) return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: returnError.message };
-      if (decision === "recibir_rechazado") {
-        await recomputeOrderMasterSafe(admin, [orderId]);
-        return { ...line, status: "no_elegible", message: pastBoxMessage(decision, fromName, box.dispatch_manifests.route_date) };
-      }
       receivedFrom = receivedFromLabel(fromName, box.dispatch_manifests.route_date);
     } else if (box) {
       if (box.dispatch_manifests.rider_id === rider.id) {

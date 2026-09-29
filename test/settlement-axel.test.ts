@@ -403,9 +403,8 @@ describe("de la liquidación al Master", () => {
     expect(lineEffect(line({ declared_status: "PAGO POS" }))).toBe("entregado");
   });
 
-  it("solo el rechazo anula; los demás fallos dejan el pedido vivo", () => {
-    expect(lineEffect(line({ declared_status: "RECHAZO" }))).toBe("anulado");
-    for (const st of ["CAIDA", "NO CONTESTO", "LUNES", "CAIDA COBRO"]) {
+  it("ningún fallo anula, tampoco el rechazo: el pedido sigue vivo (v1.23)", () => {
+    for (const st of ["RECHAZO", "CAIDA", "NO CONTESTO", "LUNES", "CAIDA COBRO"]) {
       expect(lineEffect(line({ declared_status: st }))).toBeNull();
     }
   });
@@ -421,7 +420,7 @@ describe("de la liquidación al Master", () => {
       line({ id: "b", order_id: "o1" }),
       line({ id: "c", order_id: "o2", declared_status: "RECHAZO" }),
     ]);
-    expect(effects).toHaveLength(2);
-    expect(effects.map((e) => e.target)).toEqual(["entregado", "anulado"]);
+    expect(effects).toHaveLength(1);
+    expect(effects.map((e) => e.target)).toEqual(["entregado"]);
   });
 });

@@ -608,12 +608,5 @@ export async function applySettlementToMaster(settlementId: string): Promise<Act
   revalidatePath("/dashboard/liquidaciones");
   revalidatePath("/dashboard/pedidos");
 
-  const entregados = pending.filter((e) => e.target === "entregado").length;
-  const anulados = pending.length - entregados;
-  return {
-    ok: true,
-    message:
-      `Master actualizado: ${entregados} entregado(s)` +
-      (anulados ? `, ${anulados} anulado(s) por rechazo` : "") + ".",
-  };
+  return { ok: true, message: `Master actualizado: ${pending.length} entregado(s).` };
 }

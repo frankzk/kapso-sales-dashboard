@@ -333,8 +333,9 @@ describe("y la macroetapa la aplica IGUAL", () => {
     // en la guía directa (las madres de julio sí reprogramaban).
     // v1.21: el adelanto mínimo de Agencia suma todo lo validado, no solo la
     // fila `adelanto` (#KP134162). v1.22: Swayp que no entrega (Devolución,
-    // Devolución confirmada) abre la recuperación como Tanders.
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.22");
+    // Devolución confirmada) abre la recuperación como Tanders. v1.23: una
+    // guía de cualquier courier de Lima anulada después de salir, también.
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.23");
   });
 });
 

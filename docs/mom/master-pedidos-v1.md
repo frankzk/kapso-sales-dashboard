@@ -841,7 +841,8 @@ Ejemplos:
 | Motorizado propio dijo «Lo llevo» | En curso | En reparto |
 | Motorizado propio reportó la parada entregada, ruta sin cerrar | Por cerrar | Validación de cierre pendiente |
 | Motorizado propio reportó reprogramado o «no estaba» | En curso | Por reprogramar Lima |
-| Motorizado propio reportó rechazado, dirección errada u otro | Por cerrar | Devolución física pendiente |
+| Motorizado propio reportó no entregado, rechazo incluido (v1.23) | En curso | Por reprogramar Lima |
+| Cualquier courier de Lima anuló la guía con la caja ya fuera (v1.23) | En curso | Por reprogramar Lima |
 | Ruta cerrada con la parada entregada, sin liquidar | Por cerrar | Pendiente de liquidación |
 | Aliclik retornando y Swayp repartiendo | En curso | En reparto |
 | Una salida entregó y otra sigue activa | Por cerrar | Salida adicional activa |
@@ -1112,6 +1113,52 @@ Tanders:
   estado actual de Swayp.
 - La anulación en Shopify gana, y el pedido va a Por cerrar · Devolución física
   pendiente hasta que se recibe la caja (§9.4).
+
+#### En Lima, lo que no se entrega se reprograma (v1.23, 30-09-2026)
+
+**#AUR177276** salió con Tanders el 23-09 y volvió: su caja se escaneó en
+Devoluciones el 29-09. Tanders no dijo `RETURNED` sino **`CANCELLED`**, y la
+regla de la v1.19 dejaba esa palabra fuera porque «no dice que saliera». La
+salida sí lo decía, así que el pedido, vivo en Shopify, cayó en **«Por cerrar ·
+Devolución pendiente de inventario»**, y la mesa de ruta pedía «Reabrir
+primero» para elegir otro courier.
+
+Decisión del owner (30-09-2026), para **todos los couriers de Lima**:
+
+- **Lo que no se entrega pasa a «Por reprogramar Lima».** Solo la entrega lleva
+  a Por cerrar (liquidación) y solo la **anulación en Shopify** termina la
+  venta.
+- **Una guía anulada después de salir es un intento fallido**, diga lo que diga
+  el vocabulario de su courier (`guideAnnulledAfterDispatch`,
+  `lib/reproprovincia.ts`): Tanders `CANCELLED`, Swayp Cancelada (10), una
+  salida de Axel, Urpi o Grupo GF anulada con la caja ya en la calle. La prueba
+  de que salió es la custodia: `dispatched_at`, o que la caja ya volvió. Lo que
+  se anuló **sin salir** sigue siendo una corrección y se cierra solo, como
+  antes (8 guías Tanders `CANCELLED` que nunca salieron, medido el 30-09-2026).
+  Aliclik conserva su regla —su etiqueta distingue el intento fallido de la
+  anulación de la tienda— y las agencias no entran: no reparten.
+- **«Rechazó el pedido» del motorizado propio tampoco cierra la venta**: se
+  reprograma como cualquier «No entregado». Deshace, para el rechazo, lo que
+  fijaron la v1.15, la v1.16 y la 0189 (§29.13). El cierre de la ruta y
+  Liquidaciones ya no anulan el pedido por un rechazo; «Recibir en oficina»
+  (0206) lo devuelve a «por asignar» como los demás motivos, y el escaneo de una
+  caja anterior lo recibe y lo asigna. Un rechazo que la 0189 ya recibió como
+  devuelto va igual a «Por reprogramar Lima», con el inventario como razón.
+- La ventana, el ancla y lo demás no cambian: Tanders 65 días, los demás la de
+  la tienda, contadas desde la **salida** del intento fallido. El paquete que
+  vuelve sigue arrastrando `Devolución pendiente de inventario` como razón.
+- **Anulado en Shopify**: el pedido espera la caja en **Por cerrar** (§13:
+  toda salida despachada necesita devolución física para cerrar una
+  cancelación) y, conciliado el inventario, pasa a **Finalizado**. Una ventana
+  vencida ya no le pone `recuperacion_vencida`: la anulación la decidió una
+  persona y no había nada que recuperar. Antes esa razón no se apagaba nunca y
+  el pedido quedaba en Por cerrar con el inventario ya conciliado (9 de Aliclik
+  el 30-09-2026).
+
+Lo que queda fuera: Axel y Urpi no reportan sus no entregados a Kapta —solo
+llegan por la liquidación, que únicamente mueve entregas—. Hasta que lo hagan,
+su no entregado llega a «Por reprogramar Lima» cuando alguien anula esa salida
+con la caja ya fuera.
 
 #### Las guías con API también aceptan la salida adicional
 
@@ -6476,9 +6523,10 @@ Reparto propio es una vista con vocabulario y cuadre encima de ella:
   pasado por despacho se añade como parada en su ruta del día; un punto sin
   pedido Shopify (Kast) vive solo en la hoja, porque la parada exige pedido.
   /reparto/cuaderno redirige.
-- **Asimetría documentada, no resuelta**: «rechazado» y «cancelado» del
-  cuaderno se traducen al motivo `rechazado` de Rutas, con el que el cierre de
-  ruta anula el pedido; desde la hoja, «Aplicar al Master» nunca anula (§30.3).
+- **Asimetría resuelta (v1.23)**: «rechazado» y «cancelado» del cuaderno se
+  traducen al motivo `rechazado` de Rutas, con el que el cierre de ruta
+  anulaba el pedido; desde la hoja, «Aplicar al Master» nunca anula (§30.3).
+  Desde la v1.23 ninguno anula: solo Shopify anula (§9).
 - **Límites de efectivo (§29.9) activos**: al asignar a la ruta diaria se suma
   el efectivo previsto (lo que ya lleva más lo nuevo, sin pedidos pagados en
   Shopify); pasa del umbral → aviso; pasa del límite → rechazo salvo
@@ -6837,7 +6885,8 @@ asignar muestra solo «Escanear» y el campo de código para confirmar que cada
 paquete llegó a la oficina (cámara en serie, «Devueltos X de N»), y cada
 lectura hace «Recibir en oficina». Tocarla otra vez vuelve a asignar. En «Reparto y
 liquidación», cada no entregado dice **«Devuelto · fecha hora»** o **«Por
-devolver»**. **«Rechazó el pedido» no se reprograma** (0189): mientras está en
+devolver»**. **Hasta la v1.23, «Rechazó el pedido» no se reprogramaba** (0189;
+desde la v1.23 se reprograma como los demás motivos, §9): mientras estaba en
 la caja va a «Por cerrar · Devolución física pendiente»; recibido en oficina,
 la salida queda devuelta (`custody_state = devuelto`, `returned_at`), la
 solicitud del courier se cancela y el pedido pasa a «Por cerrar · Devolución
@@ -6884,8 +6933,7 @@ prueba que volvió, igual que en «Devoluciones».
 
 | Reporte de su parada en esa caja | Qué hace el escaneo |
 | --- | --- |
-| «No entregado» (cualquier motivo menos rechazo) | Lo recibe en oficina (`gf_return_to_office`) y lo asigna a la caja de hoy. La chapa dice «En la caja de X · volvió de Yhoni del 26/09». |
-| «Rechazó el pedido» | Lo recibe como devuelto y **no** lo asigna (0189): no se reprograma. |
+| «No entregado» (cualquier motivo, rechazo incluido desde la v1.23) | Lo recibe en oficina (`gf_return_to_office`) y lo asigna a la caja de hoy. La chapa dice «En la caja de X · volvió de Yhoni del 26/09». |
 | «Entregado» | No hace nada: lo dice. |
 | Sin reporte | No lo toca: la parada es de la liquidación de ese motorizado. Pide que la reporte. |
 

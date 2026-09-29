@@ -12,7 +12,7 @@ const stop = (over: Partial<{ status: string; photo_path: string | null; voucher
 describe("masterDoorVerdict", () => {
   it("sin guarda pasa: líneas de Liquidaciones 1 y filas del Excel histórico sin parada", () => {
     expect(masterDoorVerdict({ target: "entregado" })).toEqual({ ok: true });
-    expect(masterDoorVerdict({ target: "anulado", guard: {} })).toEqual({ ok: true });
+    expect(masterDoorVerdict({ target: "entregado", guard: {} })).toEqual({ ok: true });
   });
 
   it("una observación abierta en la fila retiene el cruce, venga de donde venga", () => {
@@ -30,9 +30,5 @@ describe("masterDoorVerdict", () => {
   it("una parada de backfill (sin reported_by) no exige evidencia; una reportada de verdad sí", () => {
     expect(masterDoorVerdict({ target: "entregado", guard: { stop: stop({ photo_path: null, reported_by: null }), requireEvidence: true } })).toEqual({ ok: true });
     expect(masterDoorVerdict({ target: "entregado", guard: { stop: stop({ photo_path: null, reported_by: "u1" }), requireEvidence: true } })).toMatchObject({ ok: false, code: "sin_evidencia" });
-  });
-
-  it("un rechazo (anulado) desde Rutas no exige que la parada esté entregada", () => {
-    expect(masterDoorVerdict({ target: "anulado", guard: { stop: stop({ status: "no_entregado" }), requireEvidence: true } })).toEqual({ ok: true });
   });
 });

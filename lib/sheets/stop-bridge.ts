@@ -12,11 +12,9 @@
 //     escrito, manda; si no (paradas reportadas desde la pantalla vieja), se
 //     deriva del enum y del motivo.
 //
-// ASIMETRÍA DOCUMENTADA (MOM §30.3 frente a lib/routes.ts CLOSING_REASONS):
-// «rechazado» y «cancelado» se traducen al motivo `rechazado` de Rutas, y
-// Rutas SÍ anula el pedido al cerrar la ruta con ese motivo. Desde la hoja,
-// «Aplicar al Master» nunca anula: solo entrega. No se resuelve aquí; se deja
-// escrito.
+// «rechazado» y «cancelado» se traducen al motivo `rechazado` de Rutas. Hasta
+// la v1.22 Rutas anulaba el pedido al cerrar la ruta con ese motivo y la hoja
+// no (MOM §30.3); desde la v1.23 ninguna de las dos anula: solo Shopify.
 
 import { NON_DELIVERY_REASONS, PAYMENT_METHODS, type PaymentMethod, type StopStatus } from "@/lib/routes";
 import { normalizeAlias } from "./statuses";
