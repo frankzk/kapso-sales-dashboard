@@ -11,7 +11,7 @@ const SHEET_BREAKPOINT = 640;
 const ANCHORED_WIDTH = 360;
 const MARGIN = 12;
 
-export function Sheet({ title, onClose, children, anchored = false, wide = false, anchorRef }: {
+export function Sheet({ title, onClose, children, anchored = false, wide = false, anchorRef, look = "default" }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
@@ -20,7 +20,10 @@ export function Sheet({ title, onClose, children, anchored = false, wide = false
   wide?: boolean;
   /** El botón que abre el popover: manda la posición y sus clics no lo cierran. */
   anchorRef?: RefObject<HTMLElement | null>;
+  /** «ops»: el mundo de operación de Despacho del día (radio 8 px, sombra de popover, tinta). */
+  look?: "default" | "ops";
 }) {
+  const ops = look === "ops";
   const root = useRef<HTMLDivElement>(null);
   // Anclado en escritorio: el popover vive en document.body (portal) con
   // `position: fixed` calculado desde el botón y acotado a la pantalla. Antes
@@ -79,16 +82,23 @@ export function Sheet({ title, onClose, children, anchored = false, wide = false
       aria-label={title}
       style={style ?? undefined}
       className={cn(
-        "fixed inset-x-3 bottom-3 z-50 max-h-[80vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-xl",
+        "fixed inset-x-3 bottom-3 z-50 max-h-[80vh] overflow-y-auto bg-white p-4",
+        ops ? "rounded-lg shadow-pop" : "rounded-2xl border border-slate-200 shadow-xl",
         // El popover tiene ancho fijo; sin `overflow-x-hidden` y sin `min-w-0`
         // en los campos, un <select> con una opción larga se salía por la derecha.
         "overflow-x-hidden sm:max-w-[calc(100vw-2rem)]",
         !anchored && cn("sm:left-1/2 sm:top-24 sm:bottom-auto sm:right-auto sm:-translate-x-1/2", wide ? "sm:w-[42rem]" : "sm:w-96"),
       )}
     >
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="text-sm font-semibold text-slate-900">{title}</p>
-        <button type="button" onClick={onClose} aria-label="Cerrar" className="min-h-8 rounded-lg px-2 text-sm text-slate-500 hover:bg-slate-100">×</button>
+      <div className={cn("flex items-center justify-between gap-2", ops ? "mb-3" : "mb-2")}>
+        <p className={cn("text-sm font-semibold", ops ? "text-ink-900" : "text-slate-900")}>{title}</p>
+        {ops ? (
+          <button type="button" onClick={onClose} aria-label="Cerrar" className="grid size-7 place-items-center rounded-md text-ink-500 hover:bg-wash hover:text-ink-900">
+            <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        ) : (
+          <button type="button" onClick={onClose} aria-label="Cerrar" className="min-h-8 rounded-lg px-2 text-sm text-slate-500 hover:bg-slate-100">×</button>
+        )}
       </div>
       {children}
     </div>

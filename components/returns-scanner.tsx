@@ -2,12 +2,12 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { cn } from "@/components/ui";
 import { DispatchScanner } from "@/components/dispatch-scanner";
 import { DispatchCamera } from "@/components/dispatch-camera";
 import { returnUndeliveredByCode, returnUndeliveredToOffice } from "@/app/dashboard/courier/actions";
 import type { PendingReturn } from "@/lib/courier-route-ledger";
 import { nonDeliveryReasonLabel } from "@/lib/gf-delivery";
+import { Badge, OpsButton } from "@/components/ops-ui";
 
 /**
  * Devoluciones (Despacho del día): el supervisor escanea (o teclea) cada paquete «No
@@ -48,20 +48,20 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
   const last = lines[0] ?? null;
   return (
     <div>
-      <DispatchScanner busy={busy} disabled={false} compact buttonLabel="Escanear" onScan={(code) => void run(code)} onCamera={() => setCameraOpen(true)} />
-      <p className="mt-2 text-xs text-slate-500">Confirma que la devolución llegó a la oficina: <b className="tabular-nums text-slate-800">{total - left.length} de {total}</b> recibidas{left.length ? `, faltan ${left.length}` : ""}. Un no entregado vuelve a «por asignar»; un rechazo queda devuelto.</p>
+      <DispatchScanner busy={busy} disabled={false} compact look="ops" buttonLabel="Escanear" onScan={(code) => void run(code)} onCamera={() => setCameraOpen(true)} />
+      <p className="mt-3 text-[13px] text-ink-500">Confirma que la devolución llegó a la oficina: <b className="font-semibold tabular-nums text-ink-900">{total - left.length} de {total}</b> recibidas{left.length ? `, faltan ${left.length}` : ""}. Un no entregado vuelve a «por asignar»; un rechazo queda devuelto.</p>
       {lines.length > 0 && (
-        <ul className="mt-3 max-h-40 divide-y divide-slate-100 overflow-auto rounded-lg border border-slate-200 text-sm" aria-live="polite">
+        <ul className="mt-3 max-h-40 divide-y divide-line overflow-auto rounded-lg text-sm ring-1 ring-line" aria-live="polite">
           {lines.map((l, i) => (
-            <li key={`${l.code}:${i}`} className={cn("flex items-center gap-2 px-3 py-1.5", l.ok ? "bg-emerald-50/60" : "bg-red-50/60")}>
-              <span className="font-semibold text-slate-900">{l.code}</span>
-              <span className={cn("text-xs", l.ok ? "text-emerald-700" : "text-red-700")}>{l.text}</span>
+            <li key={`${l.code}:${i}`} className="flex items-center gap-2 px-3 py-2">
+              <span className="font-semibold text-ink-900">{l.code}</span>
+              <Badge tone={l.ok ? "ok" : "crit"} className="min-w-0">{l.text}</Badge>
             </li>
           ))}
         </ul>
       )}
       {/* Cuáles son: lo que falta devolver, del más antiguo al más reciente. */}
-      <div className="mt-4 max-h-[55vh] overflow-auto rounded-xl border border-slate-200">
+      <div className="mt-4 max-h-[55vh] overflow-auto rounded-lg ring-1 ring-line">
         <table className="w-full min-w-[720px] table-fixed text-sm">
           <colgroup>
             <col className="w-[8.5rem]" />
@@ -71,31 +71,31 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
             <col className="w-[11rem]" />
             <col className="w-[6rem]" />
           </colgroup>
-          <thead className="sticky top-0 z-10 bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+          <thead className="sticky top-0 z-10 bg-white text-left text-xs font-semibold text-ink-600 shadow-[inset_0_-1px_0_var(--color-line)]">
             <tr>
-              <th className="px-3 py-2">Pedido</th>
-              <th className="px-3 py-2">Cliente</th>
-              <th className="px-3 py-2">Motorizado</th>
-              <th className="px-3 py-2">Caja del</th>
-              <th className="px-3 py-2">Motivo</th>
-              <th className="px-3 py-2"><span className="sr-only">Recibir</span></th>
+              <th className="px-3 py-2.5">Pedido</th>
+              <th className="px-3 py-2.5">Cliente</th>
+              <th className="px-3 py-2.5">Motorizado</th>
+              <th className="px-3 py-2.5">Caja del</th>
+              <th className="px-3 py-2.5">Motivo</th>
+              <th className="px-3 py-2.5"><span className="sr-only">Recibir</span></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-line">
             {left.map((p) => (
-              <tr key={p.orderId} className="align-top hover:bg-slate-50">
-                <td className="px-3 py-2">
-                  <p className="truncate font-semibold text-slate-900" title={p.orderName}>{p.orderName}</p>
-                  {p.code && <p className="truncate font-mono text-[11px] text-slate-500" title={p.code}>{p.code}</p>}
+              <tr key={p.orderId} className="align-top transition-colors hover:bg-wash">
+                <td className="px-3 py-2.5">
+                  <p className="truncate font-semibold text-ink-900" title={p.orderName}>{p.orderName}</p>
+                  {p.code && <p className="truncate font-mono text-[11px] text-ink-500" title={p.code}>{p.code}</p>}
                 </td>
-                <td className="px-3 py-2"><p className="truncate text-slate-800" title={`${p.customerName} · ${p.district}`}>{p.customerName}</p><p className="truncate text-xs text-slate-500" title={p.district}>{p.district}</p></td>
-                <td className="truncate px-3 py-2 text-slate-700" title={p.riderName}>{p.riderName}</td>
-                <td className="px-3 py-2 tabular-nums text-slate-700">{p.routeDate ? `${p.routeDate.slice(8, 10)}/${p.routeDate.slice(5, 7)}` : "—"}</td>
-                <td className="px-3 py-2"><span className={cn("inline-block max-w-full truncate rounded-full px-2 py-0.5 text-[11px] font-medium", p.reason === "rechazado" ? "bg-red-600 text-white" : "bg-red-50 text-red-800")} title={nonDeliveryReasonLabel(p.reason)}>{nonDeliveryReasonLabel(p.reason)}</span></td>
-                <td className="px-3 py-2 text-right"><button type="button" disabled={busy} onClick={() => void run(p.orderName, p.orderId)} className="min-h-8 rounded-lg border border-slate-300 px-2.5 text-xs font-medium text-slate-700 hover:bg-white disabled:opacity-50">Recibir</button></td>
+                <td className="px-3 py-2.5"><p className="truncate text-ink-900" title={`${p.customerName} · ${p.district}`}>{p.customerName}</p><p className="truncate text-xs text-ink-500" title={p.district}>{p.district}</p></td>
+                <td className="truncate px-3 py-2.5 text-ink-700" title={p.riderName}>{p.riderName}</td>
+                <td className="px-3 py-2.5 tabular-nums text-ink-700">{p.routeDate ? `${p.routeDate.slice(8, 10)}/${p.routeDate.slice(5, 7)}` : "—"}</td>
+                <td className="px-3 py-2.5"><Badge tone={p.reason === "rechazado" ? "urgent" : "crit"} title={nonDeliveryReasonLabel(p.reason)}>{nonDeliveryReasonLabel(p.reason)}</Badge></td>
+                <td className="px-3 py-2 text-right"><OpsButton size="sm" disabled={busy} onClick={() => void run(p.orderName, p.orderId)}>Recibir</OpsButton></td>
               </tr>
             ))}
-            {!left.length && <tr><td colSpan={6} className="px-3 py-8 text-center text-sm text-emerald-700">Todas las devoluciones están en la oficina.</td></tr>}
+            {!left.length && <tr><td colSpan={6} className="px-3 py-10 text-center text-sm font-medium text-ok-fg">Todas las devoluciones están en la oficina.</td></tr>}
           </tbody>
         </table>
       </div>
