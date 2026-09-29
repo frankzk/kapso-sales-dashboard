@@ -54,7 +54,7 @@ function constantTimeEquals(a: string, b: string): boolean {
 /** Las columnas que hacen falta para aplicar un estado de Swayp a su guía. */
 export const SWAYP_SHIPMENT_COLUMNS =
   "id,order_id,delivery_status,swayp_state,custody_state,custody_transferred_at," +
-  "dispatched_at,out_for_delivery_at,closed_at";
+  "dispatched_at,out_for_delivery_at,closed_at,reported_status";
 
 /** La guía tal como la necesita `swaypStatePatch`. */
 export interface SwaypShipmentRow {
@@ -67,6 +67,8 @@ export interface SwaypShipmentRow {
   dispatched_at?: string | null;
   out_for_delivery_at?: string | null;
   closed_at?: string | null;
+  /** La etiqueta de la última novedad («Swayp · … (16)»), si se conoce. */
+  reported_status?: string | null;
 }
 
 /** Un estado de Swayp ya traducido a código, con las fechas que Swayp dé. */
@@ -76,6 +78,13 @@ export interface SwaypIncomingState {
   departedAt?: string | null;
   /** Cuándo entró al estado actual, si se sabe. */
   changedAt?: string | null;
+  /**
+   * La etiqueta de la última novedad del historial (`swaypNoveltyLabel`). Va a
+   * `reported_status`, la etiqueta cruda del courier: de ahí la leen Envíos y el
+   * agente de voz para saber si la rechazaron en la puerta. Sin historial (el
+   * webhook) no se toca la que haya.
+   */
+  novelty?: string | null;
 }
 
 /** Estados de la guía que no se reabren (`reconcileDeliveryStatus`). */
@@ -145,9 +154,15 @@ export function swaypStatePatch(
   const next = reconcileDeliveryStatus(row.delivery_status, mapped);
   const applies = !TERMINAL_DELIVERY.has(row.delivery_status) || mapped === row.delivery_status;
   const stateMoved = applies && row.swayp_state !== incoming.state;
+  const labelMoved = Boolean(incoming.novelty) && incoming.novelty !== (row.reported_status ?? null);
   const patch: Record<string, unknown> = {};
-  if (!stateMoved && next === row.delivery_status) {
+  if (!stateMoved && next === row.delivery_status && !labelMoved) {
     return { patch, changed: false, deliveryStatus: row.delivery_status };
+  }
+  if (labelMoved) patch.reported_status = incoming.novelty;
+  if (!stateMoved && next === row.delivery_status) {
+    // Solo cambió lo que dijo el courier: el estado y las fechas quedan igual.
+    return { patch, changed: true, deliveryStatus: row.delivery_status };
   }
 
   if (stateMoved) patch.swayp_state = incoming.state;

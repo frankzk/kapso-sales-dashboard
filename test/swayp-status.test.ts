@@ -30,6 +30,9 @@ import {
   TANDERS_RECOVERY_DAYS,
 } from "@/lib/reproprovincia";
 import { resolveOrderState, type GuideSnapshot, type OrderSnapshot } from "@/lib/order-status";
+import { expiredRecoveryKind, guideDoorRejection, recoveryWindow } from "@/lib/reproprovincia";
+import { voiceRecoveryEligible, type VoiceCandidateInput } from "@/lib/voice-recovery-queue";
+import { swaypLabelSaysRejection, swaypNoveltyLabel, SWAYP_REJECTION_NOVELTIES } from "@/lib/swayp";
 import { resolveMacroStage, type MacroGuideSnapshot, type MacroOrderSnapshot } from "@/lib/order-macro-stage";
 import { failedOutputLabel, lastFailedOutput, outputsBlockingRetry } from "@/lib/gf-retry";
 
@@ -54,7 +57,7 @@ const GUIA_DEVUELTA = {
     { nota: "Procesado en el origen", fecha: "2026-09-28T07:32:15.121Z", estado: "Por Recolectar", codigoEstado: "3" },
     { nota: "Asignada en SWAYP Moto", fecha: "2026-09-28T08:46:26.834Z", estado: "Asignada", codigoEstado: "4" },
     { nota: "Paquete en Reparto", fecha: "2026-09-28T08:56:47.089Z", estado: "Reparto", codigoEstado: "5" },
-    { nota: "Novedad creada", fecha: "2026-09-28T18:15:55.642Z", estado: "Novedad", codigoEstado: "6", nombreNovedad: "Destinatario indica que ya no desea el producto" },
+    { nota: "Novedad creada", fecha: "2026-09-28T18:15:55.642Z", estado: "Novedad", codigoEstado: "6", idNovedad: "16", nombreNovedad: "Destinatario indica que ya no desea el producto" },
     { nota: "Marcado para devolución, pendiente por entregar al origen", fecha: "2026-09-28T22:03:38.357Z", estado: "Devolucion", codigoEstado: "8" },
   ],
 };
@@ -108,6 +111,7 @@ describe("leer `estado` de GET /v2/guias/{guia}", () => {
       // La primera salida con el mensajero (Asignada), no el Reparto.
       departedAt: "2026-09-28T08:46:26.834Z",
       changedAt: "2026-09-28T22:03:38.357Z",
+      novelty: { id: 16, name: "Destinatario indica que ya no desea el producto" },
     });
   });
 
@@ -141,7 +145,7 @@ describe("leer `estado` de GET /v2/guias/{guia}", () => {
 
   it("una respuesta vacía o rara no inventa nada", () => {
     for (const body of [null, undefined, "hola", 42, {}, []]) {
-      expect(readSwaypGuide(body), JSON.stringify(body)).toEqual({ state: null, label: null, departedAt: null, changedAt: null });
+      expect(readSwaypGuide(body), JSON.stringify(body)).toEqual({ state: null, label: null, departedAt: null, changedAt: null, novelty: null });
     }
   });
 });
@@ -316,10 +320,12 @@ describe("el historial de la API, bajo el nombre que traiga", () => {
       keys: ["destinatario", "estado", "guia", "idEstado"],
       estado: "Cancelada|10",
       historial: null,
+      historialClaves: [],
     });
     expect(swaypResponseShape({ data: { estado: 8, historial: [{ estado: "Reparto", fecha: "2026-09-28T08:56:47.089Z" }] } })).toMatchObject({
       estado: "8|-",
       historial: "historial",
+      historialClaves: ["estado", "fecha"],
     });
     expect(swaypResponseShape(null).estado).toBe("(vacía)");
   });
@@ -683,5 +689,144 @@ describe("el Master: lo que Swayp no entregó se reprograma", () => {
     expect(read("app/dashboard/courier/actions.ts")).toMatch(/ADMISSION_SHIPMENT_COLUMNS =\s*"[^"]*swayp_state/);
     expect(read("lib/shipments-access.ts")).toContain("reported_status,swayp_state,dispatched_at");
     expect(read("lib/voice-recovery-server.ts")).toContain("reported_status, swayp_state, dispatched_at");
+  });
+});
+
+// ── El rechazo en la puerta de Swayp (29-09-2026) ───────────────────────────
+//
+// El agente de voz podía llamar en provincia a clientas que le dijeron a Swayp
+// «ya no desea el producto». Swayp lo dice en su novedad (catálogo público: 16
+// «Destinatario ya no desea el producto», 15 «no ha comprado ningún producto»);
+// el barrido la guarda como etiqueta del courier y la regla la lee igual que el
+// `REFUSED` de Aliclik.
+
+const RECHAZO = "Swayp · Destinatario indica que ya no desea el producto (16)";
+const NO_CONTESTA = "Swayp · Destinatario no contesta (7)";
+
+describe("la novedad de Swayp como etiqueta del courier", () => {
+  it("la etiqueta lleva nombre e id", () => {
+    expect(swaypNoveltyLabel({ id: 16, name: "Destinatario indica que ya no desea el producto" })).toBe(RECHAZO);
+    expect(swaypNoveltyLabel({ id: 7, name: " Destinatario no contesta " })).toBe(NO_CONTESTA);
+    expect(swaypNoveltyLabel({ id: null, name: "Reprogramado" })).toBe("Swayp · Reprogramado");
+    expect(swaypNoveltyLabel({ id: 13, name: null })).toBe("Swayp · Novedad (13)");
+  });
+
+  it("rechazo = novedades 15 y 16; decide el id, y sin id el nombre", () => {
+    expect([...SWAYP_REJECTION_NOVELTIES].sort((a, b) => a - b)).toEqual([15, 16]);
+    expect(swaypLabelSaysRejection(RECHAZO)).toBe(true);
+    expect(swaypLabelSaysRejection("Swayp · Destinatario no ha comprado ningún producto (15)")).toBe(true);
+    expect(swaypLabelSaysRejection(NO_CONTESTA)).toBe(false);
+    // «Pedido diferente al solicitado» no: el error es nuestro.
+    expect(swaypLabelSaysRejection("Swayp · Pedido diferente al solicitado (12)")).toBe(false);
+    expect(swaypLabelSaysRejection("Swayp · Destinatario ya no desea el producto")).toBe(true);
+    // Ni la etiqueta de Aliclik ni nada que no sea de Swayp.
+    expect(swaypLabelSaysRejection("REFUSED · PICKED · ")).toBe(false);
+    expect(swaypLabelSaysRejection("ya no desea el producto (16)")).toBe(false);
+    expect(swaypLabelSaysRejection(null)).toBe(false);
+  });
+
+  it("cuenta la ÚLTIMA novedad del historial", () => {
+    const historial = (a: [string, string, string], b: [string, string, string]) => ({
+      estado: "Devolucion",
+      estados: [
+        { estado: "Novedad", codigoEstado: "6", fecha: a[0], idNovedad: a[1], nombreNovedad: a[2] },
+        { estado: "Novedad", codigoEstado: "6", fecha: b[0], idNovedad: b[1], nombreNovedad: b[2] },
+        { estado: "Devolucion", codigoEstado: "8", fecha: "2026-09-28T22:03:38.357Z" },
+      ],
+    });
+    expect(readSwaypGuide(historial(["2026-09-28T10:00:00Z", "7", "Destinatario no contesta"], ["2026-09-28T18:00:00Z", "16", "Destinatario ya no desea el producto"])).novelty).toEqual({ id: 16, name: "Destinatario ya no desea el producto" });
+    expect(readSwaypGuide(historial(["2026-09-28T18:00:00Z", "16", "Destinatario ya no desea el producto"], ["2026-09-28T10:00:00Z", "7", "Destinatario no contesta"])).novelty).toEqual({ id: 16, name: "Destinatario ya no desea el producto" });
+    expect(readSwaypGuide({ estado: "Reparto" }).novelty).toBeNull();
+  });
+
+  it("guardarla es un cambio aunque el estado no cambie; la misma, no", () => {
+    const now = "2026-09-29T22:00:00.000Z";
+    const viva = fila({ swayp_state: 8, custody_state: "retorno", dispatched_at: hace(2), custody_transferred_at: hace(2) });
+    expect(swaypStatePatch(viva, { state: 8, novelty: RECHAZO }, now)).toEqual({ patch: { reported_status: RECHAZO }, changed: true, deliveryStatus: "en_ruta" });
+    expect(swaypStatePatch({ ...viva, reported_status: RECHAZO }, { state: 8, novelty: RECHAZO }, now).changed).toBe(false);
+    // Sin historial (el webhook) no borra la que hay.
+    expect(swaypStatePatch({ ...viva, reported_status: RECHAZO }, { state: 8 }, now).changed).toBe(false);
+    // Con cambio de estado, va junto.
+    expect(swaypStatePatch(viva, { state: 10, novelty: RECHAZO }, now).patch).toMatchObject({ swayp_state: 9, reported_status: RECHAZO });
+  });
+
+  it("el barrido la escribe y deja en el log las claves del historial", async () => {
+    const { admin, updates } = fakeAdmin([guia("601", { swayp_state: 8, custody_state: "retorno", dispatched_at: hace(2), custody_transferred_at: hace(2) })]);
+    const report = await sweepSwaypStatus(admin, {
+      client: cliente({ "601": { status: 200, body: { estado: "Devolucion", idEstado: 8, estados: [{ estado: "Novedad", codigoEstado: "6", fecha: "2026-09-28T18:15:55.642Z", idNovedad: "16", nombreNovedad: "Destinatario indica que ya no desea el producto" }] } } }),
+      now: () => new Date(NOW),
+      recompute: async () => undefined,
+    });
+    expect(updates[0]!.patch).toMatchObject({ reported_status: RECHAZO });
+    expect(report.historial).toBe("estados");
+    expect(report.historialClaves).toEqual(["codigoEstado", "estado", "fecha", "idNovedad", "nombreNovedad"]);
+  });
+});
+
+describe("el rechazo de Swayp en la recuperación y en el agente de voz", () => {
+  const fallida = (reported_status: string | null) => ({
+    courier: "fenix",
+    delivery_status: "en_ruta",
+    swayp_state: 8,
+    reported_status,
+    dispatched_at: hace(2),
+    closed_at: null,
+    returned_at: null,
+    updated_at: hace(0),
+  });
+
+  it("es un rechazo en la puerta solo en una guía de Swayp", () => {
+    expect(guideDoorRejection(fallida(RECHAZO))).toBe(true);
+    expect(guideDoorRejection(fallida(NO_CONTESTA))).toBe(false);
+    expect(guideDoorRejection({ ...fallida(RECHAZO), courier: "aliclik" })).toBe(false);
+    // El de Aliclik sigue igual.
+    expect(guideDoorRejection({ courier: "aliclik", delivery_status: "anulado", reported_status: "REFUSED · PICKED · " })).toBe(true);
+  });
+
+  it("la recuperación sigue abierta, pero si vence es «rechazo no reenviado»", () => {
+    const w = recoveryWindow([fallida(RECHAZO)], [], NOW, 30);
+    expect(w).toMatchObject({ doorRejection: true, expired: false });
+    const vencida = recoveryWindow([{ ...fallida(RECHAZO), dispatched_at: hace(40) }], [], NOW, 30);
+    expect(vencida?.expired).toBe(true);
+    expect(expiredRecoveryKind(vencida!)).toBe("rechazo_no_reenviado");
+    expect(recoveryWindow([fallida(NO_CONTESTA)], [], NOW, 30)?.doorRejection).toBe(false);
+  });
+
+  const voz = (reported_status: string | null): VoiceCandidateInput => ({
+    now: new Date(NOW),
+    today: "2026-09-29",
+    guides: [fallida(reported_status)],
+    events: [],
+    recoveryWindowDays: 30,
+    maxAgeDays: 7,
+    district: "Cusco",
+    region: "Cuzco",
+    lineItems: [{ title: "Aceite de Semilla Negra", sku: "ETH-60", quantity: 1 }],
+    stock: [{ city: "cusco", product: "Aceite de Semilla Negra", sku: "ETH-60", quantity: 10 }],
+    phone: "51930555309",
+    priors: [],
+    nextContactOn: null,
+    agentCalls: [],
+    maxAgentAttempts: 2,
+    doNotCall: false,
+  });
+
+  it("el agente no llama a quien le dijo a Swayp que ya no lo quiere", () => {
+    expect(voiceRecoveryEligible(voz(RECHAZO))).toEqual({ eligible: false, reason: "rechazo_en_puerta" });
+  });
+
+  it("a quien no contestó, sí", () => {
+    expect(voiceRecoveryEligible(voz(NO_CONTESTA))).toMatchObject({ eligible: true });
+    expect(voiceRecoveryEligible(voz(null))).toMatchObject({ eligible: true });
+  });
+
+  it("el barrido lee la etiqueta y el cron deja las claves del historial", () => {
+    expect(read("lib/swayp-status-sweep.ts")).toContain("novelty: reading.novelty ? swaypNoveltyLabel(reading.novelty) : null,");
+    expect(read("lib/swayp-ingest.ts")).toContain('"dispatched_at,out_for_delivery_at,closed_at,reported_status"');
+    expect(read("app/api/cron/swayp-status/route.ts")).toContain("JSON.stringify(report.historialClaves)");
+    expect(read("lib/voice-recovery-queue.ts")).toContain("motivoDelCourier(guide.reported_status).vioElProducto || window.doorRejection");
+    const mom = read("docs/mom/master-pedidos-v1.md");
+    expect(mom).toContain("**Swayp también rechaza en la puerta\n   (29-09-2026):**");
+    expect(mom).toContain("- **La novedad se guarda como etiqueta del courier** (`reported_status`):");
   });
 });

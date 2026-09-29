@@ -88,8 +88,10 @@ export function voiceRecoveryEligible(input: VoiceCandidateInput): VoiceEligibil
   if (ageMs > input.maxAgeDays * 86_400_000) return { eligible: false, reason: "cerrada_hace_mucho" };
 
   // 4. Quien lo rechazó teniéndolo delante no se llama. Sin motivo, sí (§11.7).
+  // `window.doorRejection` suma el rechazo de Swayp (novedad 15/16), que su
+  // etiqueta no dice en el vocabulario de Aliclik (29-09-2026).
   const guide = window.guide as RecoveryGuideLike & { reported_status?: string | null };
-  if (motivoDelCourier(guide.reported_status).vioElProducto) {
+  if (motivoDelCourier(guide.reported_status).vioElProducto || window.doorRejection) {
     return { eligible: false, reason: "rechazo_en_puerta" };
   }
 

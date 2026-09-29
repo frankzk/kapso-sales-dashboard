@@ -621,6 +621,40 @@ export interface SwaypGuideReading {
   departedAt: string | null;
   /** Cuándo entró al estado actual, si Swayp lo dice. */
   changedAt: string | null;
+  /** La última novedad del historial (id del catálogo de Swayp y nombre), si hubo. */
+  novelty: { id: number | null; name: string | null } | null;
+}
+
+/**
+ * Las novedades de Swayp que son un RECHAZO EN LA PUERTA: el mensajero llegó y
+ * el destinatario no quiso el producto. Del catálogo público de Swayp
+ * («Catálogo completo de novedades», 29-09-2026): 16 «Destinatario ya no desea
+ * el producto» y 15 «Destinatario no ha comprado ningún producto». Son el
+ * `REFUSED` de Aliclik: a quien lo rechazó teniéndolo delante no lo llama el
+ * agente de voz (MOM §11.8). «Pedido diferente al solicitado» (12) no está: ahí
+ * el error es nuestro y la clienta sí puede quererlo.
+ */
+export const SWAYP_REJECTION_NOVELTIES: ReadonlySet<number> = new Set([15, 16]);
+
+/** Prefijo de la etiqueta que Kapta guarda para una novedad de Swayp. */
+const SWAYP_LABEL_PREFIX = "Swayp · ";
+
+/**
+ * La etiqueta cruda del courier para una guía Swayp (`shipments.reported_status`):
+ * «Swayp · Destinatario ya no desea el producto (16)». Lleva el nombre para
+ * leerla en Envíos y el id para decidir sin depender de cómo se escriba.
+ */
+export function swaypNoveltyLabel(novelty: { id: number | null; name: string | null }): string {
+  const name = novelty.name?.trim() || "Novedad";
+  return `${SWAYP_LABEL_PREFIX}${name}${novelty.id != null ? ` (${novelty.id})` : ""}`;
+}
+
+/** ¿La etiqueta de una guía Swayp dice que la rechazaron en la puerta? */
+export function swaypLabelSaysRejection(label: string | null | undefined): boolean {
+  if (!label || !label.startsWith(SWAYP_LABEL_PREFIX)) return false;
+  const id = /\((\d+)\)\s*$/.exec(label)?.[1];
+  if (id) return SWAYP_REJECTION_NOVELTIES.has(Number(id));
+  return /ya no desea|no ha comprado/i.test(label);
 }
 
 function isoOrNull(value: unknown): string | null {
@@ -639,6 +673,15 @@ function codeOf(value: unknown): number | null {
   if (typeof value === "number" || (typeof value === "string" && /^\s*\d+\s*$/.test(value))) {
     const n = Number(value);
     return SWAYP_STATES[n] ? n : null;
+  }
+  return null;
+}
+
+/** Id de novedad del catálogo de Swayp (1..30), o null. */
+function codeOfNovelty(value: unknown): number | null {
+  if (typeof value === "number" || (typeof value === "string" && /^\s*\d+\s*$/.test(value))) {
+    const n = Number(value);
+    return Number.isInteger(n) && n > 0 && n < 100 ? n : null;
   }
   return null;
 }
@@ -681,20 +724,25 @@ function historyOf(guide: Record<string, unknown>): Record<string, unknown>[] {
  * y códigos de estado. Es lo que dijo el 29-09-2026 que una Devolución
  * confirmada llega como 10.
  */
-export function swaypResponseShape(body: unknown): { keys: string[]; estado: string; historial: string | null } {
+export function swaypResponseShape(body: unknown): { keys: string[]; estado: string; historial: string | null; historialClaves: string[] } {
   const root = asRecord(Array.isArray(body) ? body[0] : body);
   const guide = asRecord(root?.data) ?? root;
-  if (!guide) return { keys: [], estado: "(vacía)", historial: null };
+  if (!guide) return { keys: [], estado: "(vacía)", historial: null, historialClaves: [] };
   const estado = guide.estado;
   const raw = (v: unknown) => (v == null ? "-" : typeof v === "object" ? JSON.stringify(v).slice(0, 60) : String(v).slice(0, 40));
   const history = historyOf(guide);
   const historyKey = history.length
     ? Object.keys(guide).find((k) => Array.isArray(guide[k]) && (guide[k] as unknown[]).length === history.length) ?? null
     : null;
+  // Las claves de los elementos del historial —no sus valores—: dicen si la
+  // novedad viene como `idNovedad`/`nombreNovedad`, como en el tracking.
+  const historyKeys = new Set<string>();
+  for (const item of history) for (const k of Object.keys(item)) if (historyKeys.size < 30) historyKeys.add(k);
   return {
     keys: Object.keys(guide).sort(),
     estado: `${raw(estado)}|${raw(guide.idEstado)}`,
     historial: historyKey,
+    historialClaves: [...historyKeys].sort(),
   };
 }
 
@@ -714,7 +762,7 @@ export function swaypResponseShape(body: unknown): { keys: string[]; estado: str
 export function readSwaypGuide(body: unknown): SwaypGuideReading {
   const root = asRecord(Array.isArray(body) ? body[0] : body);
   const guide = asRecord(root?.data) ?? root;
-  if (!guide) return { state: null, label: null, departedAt: null, changedAt: null };
+  if (!guide) return { state: null, label: null, departedAt: null, changedAt: null, novelty: null };
 
   let state: number | null = null;
   let label: string | null = null;
@@ -744,9 +792,21 @@ export function readSwaypGuide(body: unknown): SwaypGuideReading {
   // reparto y la entrada al estado actual.
   let departedAt: string | null = null;
   let changedAt: string | null = null;
+  let novelty: SwaypGuideReading["novelty"] = null;
+  let noveltyAt = "";
   for (const nota of historyOf(guide)) {
     const at = isoOrNull(nota.fecha) ?? isoOrNull(nota.date) ?? isoOrNull(nota.createdAt) ?? isoOrNull(nota.fechaCreacion);
     if (!at) continue;
+    // La novedad que cuenta es la ÚLTIMA: si primero no contestó y después dijo
+    // que ya no lo quiere, lo que vale es cómo terminó (igual que Aliclik).
+    const noveltyId = codeOfNovelty(nota.idNovedad ?? nota.novedadId ?? nota.id_novedad);
+    const noveltyName = [nota.nombreNovedad, nota.nombre_novedad, typeof nota.novedad === "string" ? nota.novedad : null].find(
+      (v): v is string => typeof v === "string" && v.trim() !== "",
+    );
+    if ((noveltyId != null || noveltyName) && at >= noveltyAt) {
+      novelty = { id: noveltyId, name: noveltyName?.trim() ?? null };
+      noveltyAt = at;
+    }
     const code =
       codeOf(nota.codigoEstado) ??
       codeOf(nota.idEstado) ??
@@ -759,7 +819,7 @@ export function readSwaypGuide(body: unknown): SwaypGuideReading {
     changedAt = isoOrNull(guide[DATE_FIELD_BY_STATE[state]!]);
   }
 
-  return { state, label, departedAt, changedAt };
+  return { state, label, departedAt, changedAt, novelty };
 }
 
 /** URL de tracking pública, para mandarle al cliente final. No requiere auth. */

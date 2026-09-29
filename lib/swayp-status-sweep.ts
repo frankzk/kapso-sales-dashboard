@@ -23,6 +23,7 @@ import {
   isSwaypAuthError,
   readSwaypGuide,
   SwaypError,
+  swaypNoveltyLabel,
   swaypOptsFromEnv,
   swaypResponseShape,
   SWAYP_STATES,
@@ -88,6 +89,8 @@ export interface SwaypStatusReport {
   forma: string[];
   /** Bajo qué clave vino el historial, si vino. */
   historial: string | null;
+  /** Las claves de los elementos del historial, sin sus valores. */
+  historialClaves: string[];
 }
 
 /**
@@ -164,8 +167,10 @@ export async function sweepSwaypStatus(
     crudos: {},
     forma: [],
     historial: null,
+    historialClaves: [],
   };
   const keys = new Set<string>();
+  const historyKeys = new Set<string>();
   const changedOrders = new Set<string>();
 
   let next = 0;
@@ -189,6 +194,7 @@ export async function sweepSwaypStatus(
         }
         for (const k of shape.keys) if (keys.size < 60) keys.add(k);
         report.historial ??= shape.historial;
+        for (const k of shape.historialClaves) if (historyKeys.size < 30) historyKeys.add(k);
         const reading = readSwaypGuide(body);
         if (reading.state == null) {
           const key = reading.label ?? "(sin estado)";
@@ -200,6 +206,7 @@ export async function sweepSwaypStatus(
           state: reading.state,
           departedAt: reading.departedAt,
           changedAt: reading.changedAt,
+          novelty: reading.novelty ? swaypNoveltyLabel(reading.novelty) : null,
         });
         const at = now();
         const result = dry
@@ -229,6 +236,7 @@ export async function sweepSwaypStatus(
   }
   await Promise.all(Array.from({ length: Math.min(SWEEP_CONCURRENCY, candidates.length) }, worker));
   report.forma = [...keys].sort();
+  report.historialClaves = [...historyKeys].sort();
 
   // El Master de una vez al final: sin esto, un pedido que Swayp devolvió sigue
   // «En tránsito» hasta la puerta de guías movidas del cron.
