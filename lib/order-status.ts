@@ -639,7 +639,18 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
   }
 
   // ── 2. Devuelto confirmado (exige despacho + guía + retorno)
-  if (returnProven) {
+  //
+  // ...Y QUE NO QUEDE OTRA SALIDA VIVA (29-09-2026). Con una salida nueva en
+  // marcha el pedido no está devuelto: lo está esa caja. Es el principio 7 del
+  // MOM —varias salidas a la vez— y su ejemplo del §7: «Aliclik retornando y
+  // Swayp repartiendo» es En curso. Sin esto, el paquete que volvía mandaba el
+  // pedido a «Devuelto · Por cerrar» aunque el reenvío ya estuviera en la calle:
+  // 86 reenvíos Swayp de provincia estaban así, y una salida nueva de Grupo GF
+  // tras un retorno de Tanders habría salido de su lista nada más tomarla.
+  const liveOutput = real.some(
+    (g) => (g.delivery_status === "pendiente" || g.delivery_status === "en_ruta") && !g.returned_at,
+  );
+  if (returnProven && !liveOutput) {
     return {
       ...rollup,
       general: "devuelto",
@@ -683,8 +694,9 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
   // versión anterior daba el pedido «en proceso» por una gestión que se acababa
   // de deshacer. Sin gestión viva, el pedido vuelve a Preparación (§4).
   if (currentReal) {
-    // Un retorno reclamado sin evidencia NO cierra el pedido, pero sí se ve.
-    const operational = returnClaimed
+    // Un retorno reclamado sin evidencia NO cierra el pedido, pero sí se ve. Uno
+    // PROBADO de otra salida ya está dicho en su guía: aquí manda la que sigue viva.
+    const operational = returnClaimed && !returnProven
       ? "en_proceso_de_retorno"
       : inProgressOperational(real, currentReal, now);
     return {

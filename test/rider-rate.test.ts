@@ -80,7 +80,7 @@ describe("stopEarnings: qué dice la ganancia de una parada", () => {
     expect(sql).toContain("case when s.status='entregado' or (s.status='no_entregado' and s.outcome_reason='rechazado') then t.amount else 0 end base");
     const tabla = readFileSync(resolve(process.cwd(), "components/routes.tsx"), "utf8");
     expect(tabla).toContain("const state = pr ? stopEarnings(s, pr) : null;");
-    expect(tabla).toContain('<span className="text-xs font-medium text-slate-600">No se paga</span>');
+    expect(tabla).toContain('<span className="text-xs font-medium text-ink-600">No se paga</span>');
     expect(tabla).toContain("solo entrega o rechazo");
   });
 });

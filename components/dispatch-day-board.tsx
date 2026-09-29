@@ -74,6 +74,7 @@ import {
 } from "@/lib/dispatch-day";
 import { macroStageLabel, macroSubstageLabel, ORDER_MACRO_STAGES } from "@/lib/order-macro-stage";
 import { nonDeliveryReasonLabel } from "@/lib/gf-delivery";
+import { failedOutputLabel } from "@/lib/gf-retry";
 import { addToTray, optimisticBox, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import type { RiderPickupMode } from "@/lib/grupo-gf-courier";
@@ -287,6 +288,7 @@ export function DispatchDayBoard(props: Props) {
         macroSubstage: o.macroSubstage,
         assignable: true,
         route: null,
+        failedOutput: o.failedOutput ?? null,
       }));
     return [...taken, ...free];
   }, [props.accepted, props.available]);
@@ -1132,6 +1134,7 @@ function StateBadges({ q, today }: { q: QueueRow; today: string }) {
   return (
     <div className="flex flex-wrap items-center gap-1">
       {q.route?.undeliveredReason && <Badge tone="urgent" title="Sigue en la caja del motorizado: márcalo y «Recibir en oficina» cuando vuelva el paquete">No entregado · {nonDeliveryReasonLabel(q.route.undeliveredReason)}</Badge>}
+      {q.failedOutput && <Badge tone="crit" title="Otro courier no lo entregó. Al asignarlo se crea una salida nueva y Almacén arma otra caja con su rótulo.">{failedOutputLabel(q.failedOutput)}</Badge>}
       {q.assignable && q.programmedFor && <ProgramChip day={q.programmedFor} today={today} reason={q.programReason ?? null} />}
       {q.taken && !q.route && <Badge>tomado · sin caja</Badge>}
       {!q.assignable && q.macroSubstage && <Badge tone="info" title={macroStageLabel(q.macroStage)}>{macroSubstageLabel(q.macroSubstage)}</Badge>}

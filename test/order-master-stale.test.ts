@@ -189,6 +189,7 @@ describe("reconcileOrderMaster — la puerta del desfase que no puede mirar", ()
         eq: () => b,
         neq: () => b,
         not: () => b,
+        or: () => b,
         lt: () => b,
         order: () => b,
         limit: () => b,

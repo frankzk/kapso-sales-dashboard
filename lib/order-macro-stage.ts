@@ -23,11 +23,24 @@ import {
   recoveryWindow,
 } from "@/lib/reproprovincia";
 
-// v1.19: el adelanto mínimo de Agencia se mide con TODO lo validado, no solo
-// con la fila `adelanto` (lib/pickup-key.ts), y `diferencia_cargada` deja pasar
-// a Preparación. #KP134162 —S/ 10 de adelanto + S/ 20 de diferencia validados,
+// v1.20 (29-09-2026): el adelanto mínimo de Agencia se mide con TODO lo
+// validado, no solo con la fila `adelanto` (lib/pickup-key.ts), y
+// `diferencia_cargada` deja pasar a Preparación. #KP134162 —S/ 10 de adelanto + S/ 20 de diferencia validados,
 // siete confirmaciones— seguía en Por confirmar · Último intento. Cambia el
 // `payment_state` de filas que nadie tocó, así que la versión sube.
+//
+// v1.19 (29-09-2026): tres reglas que mueven filas que nadie tocó.
+//   1. La guía Swayp directa no es una reprogramación: su gestión `reroute` sin
+//      resultado dejaba fecha de reprogramación y 38 pedidos de Lima salían en
+//      «Por reprogramar Lima» (32 de provincia en Reproprovincia) sin un solo
+//      intento fallido. Salen según su guía; casi todos, a En curso · En
+//      tránsito (lib/guide-dates.ts).
+//   2. Tanders que no entrega (`RETURNING`/`RETURNED`) abre la recuperación como
+//      Aliclik, con 65 días: el pedido va a «Por reprogramar Lima» en vez de
+//      «En retorno» o «Devuelto · Por cerrar» (lib/reproprovincia.ts).
+//   3. Una salida devuelta no cierra el pedido como Devuelto si otra sigue viva
+//      (lib/order-status.ts): 86 reenvíos Swayp de provincia estaban en «Por
+//      cerrar» con el reenvío en la calle.
 //
 // v1.18: una ventana de Reproprovincia que vence sobre un rechazo en la puerta
 // cae a Por cerrar · Rechazo no reenviado, no a Recuperación vencida. La otra
@@ -93,7 +106,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.19" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.20" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

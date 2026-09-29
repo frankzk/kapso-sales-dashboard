@@ -413,7 +413,7 @@ Reglas:
     **sí suma para el mínimo** cuando hay adelanto: el formulario registra
     como `diferencia` todo Yape posterior al primero, así que un abono partido
     en S/ 10 + S/ 20 es el mismo compromiso que uno de S/ 30. Hasta la
-    `mom-v1.19` (29-09-2026) solo contaba la fila `adelanto`, y #KP134162 —S/ 10
+    `mom-v1.20` (29-09-2026) solo contaba la fila `adelanto`, y #KP134162 —S/ 10
     + S/ 20 validados, siete días marcando «Confirmó el pedido»— se quedó en
     Por confirmar · Último intento con «Adelanto cargado»; ni pagando el total
     habría salido.
@@ -841,6 +841,18 @@ Ejemplos:
 | Shopify anulado, paquete aún con courier | Por cerrar | Devolución física pendiente |
 | Shopify anulado, nunca se despachó | Finalizado | Anulado cerrado |
 
+**Una salida devuelta no cierra el pedido si otra sigue viva (v1.19,
+29-09-2026).** El estado del pedido daba «Devuelto» en cuanto UNA salida
+volvía con evidencia (despacho, guía y retorno), aunque otra salida siguiera en
+marcha: el paquete que volvía mandaba el pedido a «Por cerrar · Devolución
+física pendiente» con el reenvío ya en la calle. Contradecía el principio 7 y el
+ejemplo de arriba («Aliclik retornando y Swayp repartiendo» es En curso). Medido
+el 29-09-2026: 86 reenvíos Swayp de provincia estaban así. Ahora `devuelto`
+exige además que no quede ninguna salida viva (`pendiente` o `en_ruta` sin
+retorno); con una viva el pedido sigue en proceso y manda esa salida. Sin esto,
+la salida nueva de Grupo GF para un pedido que Tanders devolvió (§9) lo habría
+sacado de la lista nada más tomarlo.
+
 ### 7.1 La macroetapa es una foto, y hay que revelarla
 
 Esta precedencia no se evalúa al mirar el Master: se evalúa al **recalcular**, y
@@ -1033,6 +1045,35 @@ a las 7 de la tarde con el pedido esperando.
   Tampoco el reporte ni la liquidación de la ruta del otro courier: si Grupo GF
   no entregó hoy, el pedido puede salir mañana por Tanders o Swayp con la caja
   de Grupo GF todavía en la calle.
+
+#### Lo que Tanders no entrega también es «Por reprogramar Lima» (v1.19, 29-09-2026)
+
+Hasta la v1.18 «un no entregado pasa a Por reprogramar Lima» solo se cumplía
+con el motorizado propio. Cuando Tanders no entregaba, el pedido se quedaba en
+**«En curso · En retorno»** mientras la caja volvía y pasaba a **«Devuelto ·
+Por cerrar»** al llegar: fuera de la lista de Grupo GF, como si la venta hubiera
+terminado. Pasó con #KP135035 (volviendo) y #KP135161 (ya devuelto); medidos el
+29-09-2026, 24 volviendo y 62 devueltos sin anular en Shopify.
+
+Decisión del owner (29-09-2026):
+
+- **Entra desde «En retorno»**, sin esperar la caja: Tanders `RETURNING` o
+  `RETURNED` abre la recuperación del pedido (`pendiente_nuevo_courier`) igual
+  que la guía Aliclik fallida del §11. Es la misma regla
+  (`lib/reproprovincia.ts`), así que el Master y cualquier otra pantalla la leen
+  igual. Si Tanders vuelve a `PICKED` y reintenta, la guía está viva otra vez y
+  la recuperación se apaga: manda el estado actual de Tanders, no la custodia.
+- **La ventana es de 65 días** (`TANDERS_RECOVERY_DAYS`), la antigüedad de
+  Tanders en la operación. Como su API no dice cuándo empezó a volver, se
+  cuenta desde la **salida** del intento fallido: es fija y anterior al fallo,
+  así que la ventana nunca se acorta ni salta al llegar la caja. Vencida, el
+  pedido cae por su cadena normal a Por cerrar con `recuperacion_vencida`.
+- La anulación en Shopify gana, como siempre: un pedido anulado no se
+  reprograma.
+- El paquete que vuelve sigue siendo inventario por conciliar: `Devolución
+  pendiente de inventario` convive como razón mientras dura la gestión.
+- En Despacho del día aparece en **«Desde la lista»** y en la tarjeta **«Por
+  reprogramar»**, con la chapa «Tanders no entregó · vuelve / volvió» (§29.13).
 
 #### Las guías con API también aceptan la salida adicional
 
@@ -2132,7 +2173,10 @@ La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
 
 - **Entra** cuando la guía Aliclik queda `anulado` con etiqueta de intento
   fallido y el paquete ya fuera. No espera a que el paquete vuelva: los que
-  viajan de vuelta son los más calientes.
+  viajan de vuelta son los más calientes. Desde la v1.19 también entra una
+  guía de **Tanders** en `RETURNING` o `RETURNED` (Lima, ventana de 65 días,
+  §9): esa guía sigue `en_ruta` mientras vuelve, pero no cuenta como «guía
+  viva» para esta regla, porque ya no la trabaja nadie.
 - **Mientras dura**, el pedido es `en_proceso · pendiente_nuevo_courier` y el
   Master lo enseña en **En curso · En gestión Reproprovincia** (Lima: «Por
   reprogramar Lima»). La guía Aliclik no se toca —sigue `anulado`, con su
@@ -2909,6 +2953,18 @@ rehace el trabajo del almacén.
 
 Lo que **sí** sigue bloqueando es una guía de verdad activa —de Swayp o de
 Aliclik—, porque ahí hay dos paquetes en juego y no uno.
+
+**Crear la guía directa no es reprogramar (v1.19, 29-09-2026).** La guía
+directa deja una gestión `reroute` **sin estado resultante** para que cuente en
+la productividad de quien la creó; Repro Provincia ya contaba como
+«reprogramada» solo la que resulta `en_ruta`. El Master, en cambio, leía
+cualquier `reroute` como reprogramación (`lib/guide-dates.ts`), así que toda
+guía directa nacía con fecha de reprogramación: en Lima caía en «En curso · Por
+reprogramar Lima» sin un solo intento fallido (#KP135009, 38 pedidos) y en
+provincia en «Gestión Reproprovincia» (32). Una gestión sin resultado no es
+una reprogramación: la guía directa queda en **En curso · En tránsito**. Las
+reprogramaciones de verdad siempre dejan estado —Aliclik `en_ruta`, el
+reenvío Swayp `en_ruta` en la hija y `transferido` en la madre— y no cambian.
 
 **El destino lo pone la GUÍA, no el pedido.** Al reprogramar, la salida ya
 existe y su destino es mejor dato que el del pedido por tres razones: es el que
@@ -6660,6 +6716,26 @@ la ficha pasa a **«Finalizado · Anulado cerrado»**; si eso ocurre antes de
 cerrar la ruta (el pedido aún no está anulado), espera en «Por cerrar ·
 Validación de cierre pendiente» hasta el cierre (v1.17). Los demás motivos vuelven a «por asignar» en «Por
 reprogramar Lima».
+
+**Lo que otro courier no entregó también se reprograma desde la lista (v1.19,
+29-09-2026).** «Desde la lista» solo miraba Preparación y Por despachar, y un
+pedido que Tanders no entregó está En curso (§9), así que no aparecía nunca:
+#KP135035 y #KP135161 buscados por número daban «Nada por asignar». Ahora la
+cola suma los pedidos de Lima en **«En curso · Por reprogramar Lima» que
+esperan courier nuevo** (`pendiente_nuevo_courier`, `lib/gf-retry.ts`). Un
+«Por reprogramar Lima» cuya guía sigue viva con su courier —una reprogramación
+de Aliclik, por ejemplo— no entra: esa la lleva ese courier.
+
+- La fila lleva la chapa **«Tanders no entregó · vuelve»** o **«· volvió»** y
+  cuenta en «Por asignar» y en la tarjeta «Por reprogramar».
+- **Tomarlo crea una salida NUEVA** con su QR y Almacén arma otra caja (§9.3):
+  la anterior es de otro courier y lleva su rótulo. Nunca se rellena otra
+  salida, y la que falló no cuenta como «ya en caja» aunque siga volviendo.
+- Si la caja anterior **todavía vuelve**, la salida nueva es adicional y su
+  motivo se escribe solo (`additional_output_reason`, §9): el hecho ya lo
+  reportó el courier. El tope de cinco salidas se aplica igual.
+- Con la salida nueva el pedido deja la recuperación y sigue el camino normal
+  de Grupo GF; el paquete que volvió no lo devuelve a «Devuelto» (§7).
 
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 

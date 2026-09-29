@@ -12,11 +12,18 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { cn } from "@/components/ui";
+import { Badge, Banner, SidePanel, Skeleton, type BadgeTone } from "@/components/ops-ui";
 import { RoutesBoard } from "@/components/routes";
 import { loadCourierRouteReport, type CourierRouteReport } from "@/app/dashboard/courier/actions";
 import { closeCourierBoxHref, readCourierReportRequest } from "@/lib/courier-box-href";
 import { routeDayLong } from "@/lib/dispatch";
+
+/** Estado de la ruta en la cabecera: armando, en curso o cerrada (lib/routes-access). */
+const ROUTE_TONE: Record<string, { label: string; tone: BadgeTone }> = {
+  planificada: { label: "Armando", tone: "neutral" },
+  en_curso: { label: "En curso", tone: "info" },
+  cerrada: { label: "Cerrada", tone: "neutral" },
+};
 
 export function CourierRouteReportDrawer() {
   return (
@@ -82,58 +89,53 @@ function CourierRouteReportPanel({ routeId, onClose, onChanged }: { routeId: str
     return () => document.removeEventListener("keydown", esc);
   }, [onClose]);
 
+  return <CourierRouteReportView report={report} error={error} onClose={onClose} onChanged={() => { load(); onChanged(); }} onRefresh={recheck} />;
+}
+
+/** Lo que el panel enseña, sin cargar nada (se puede mirar con datos de ejemplo). */
+export function CourierRouteReportView({ report, error, onClose, onChanged, onRefresh }: {
+  report: CourierRouteReport | null;
+  error: string | null;
+  onClose: () => void;
+  onChanged: () => void;
+  onRefresh: () => Promise<void>;
+}) {
   const route = report?.detail.route ?? null;
   const riderName = route ? (report?.riders.find((r) => r.id === route.rider_id)?.full_name ?? "Motorizado") : "Ruta";
-  const title = route ? `${riderName} · ${routeDayLong(route.route_date)}` : "Reparto y liquidación";
 
   return (
-    <div className="fixed inset-0 z-30 flex justify-end bg-slate-900/40 backdrop-blur-[1px]" onClick={onClose}>
-      <aside
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Reparto y liquidación de ${riderName}`}
-        className="flex h-full w-full max-w-[960px] flex-col overflow-y-auto bg-white shadow-2xl"
-      >
-        <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur">
-          <div className="flex items-start justify-between gap-3 px-4 py-3 sm:px-5">
-            <div className="min-w-0">
-              <p className="truncate text-base font-semibold text-slate-900">{title}</p>
-              {route && <p className="mt-0.5 text-sm text-slate-500">Reparto y liquidación</p>}
-            </div>
-            <button type="button" onClick={onClose} aria-label="Cerrar" className="min-h-0 shrink-0 rounded-lg border-0 bg-transparent p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700">
-              <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" /></svg>
-            </button>
-          </div>
+    <SidePanel
+      label={`Reparto y liquidación de ${riderName}`}
+      title={route ? riderName : "Reparto y liquidación"}
+      badge={route && <Badge tone={ROUTE_TONE[route.status]?.tone ?? "neutral"}>{ROUTE_TONE[route.status]?.label ?? route.status}</Badge>}
+      meta={route && `${routeDayLong(route.route_date)} · Reparto y liquidación`}
+      width="max-w-[960px]"
+      onClose={onClose}
+    >
+      {error && <Banner tone="crit" role="alert" className="mb-4">{error}</Banner>}
+      {!report && !error && (
+        <div className="space-y-3">
+          <Skeleton className="h-24" />
+          <Skeleton className="h-48" />
         </div>
-
-        <div className={cn("flex-1 p-4 sm:p-5", !report && !error && "animate-pulse")}>
-          {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
-          {!report && !error && (
-            <div className="space-y-3">
-              <div className="h-24 rounded-2xl bg-slate-100" />
-              <div className="h-48 rounded-2xl bg-slate-100" />
-            </div>
-          )}
-          {report && (
-            <RoutesBoard
-              detailOnly
-              stores={report.stores}
-              riders={report.riders}
-              routes={[report.detail.route]}
-              detail={report.detail}
-              assignable={[]}
-              retries={[]}
-              day={report.day}
-              canReport={report.canReport}
-              closeContext={report.closeContext}
-              canCancelLoads={report.canCancelLoads}
-              onChanged={() => { load(); onChanged(); }}
-              onRefresh={recheck}
-            />
-          )}
-        </div>
-      </aside>
-    </div>
+      )}
+      {report && (
+        <RoutesBoard
+          detailOnly
+          stores={report.stores}
+          riders={report.riders}
+          routes={[report.detail.route]}
+          detail={report.detail}
+          assignable={[]}
+          retries={[]}
+          day={report.day}
+          canReport={report.canReport}
+          closeContext={report.closeContext}
+          canCancelLoads={report.canCancelLoads}
+          onChanged={onChanged}
+          onRefresh={onRefresh}
+        />
+      )}
+    </SidePanel>
   );
 }

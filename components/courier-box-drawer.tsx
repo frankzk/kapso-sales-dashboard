@@ -12,7 +12,8 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { cn } from "@/components/ui";
+import { Badge, Banner, SidePanel, Skeleton } from "@/components/ops-ui";
+import { SITUATION_TONE } from "@/components/courier-routes-ledger";
 import { DispatchBoxPanel } from "@/components/dispatch-workspace";
 import { loadCourierBox, type CourierBoxDetail } from "@/app/dashboard/courier/actions";
 import { loadDispatchWorkspace } from "@/app/dashboard/pedidos/despacho/actions";
@@ -72,15 +73,6 @@ function CourierBoxPanel({ request, onClose, onChanged }: { request: CourierBoxR
     return () => document.removeEventListener("keydown", esc);
   }, [onClose]);
 
-  const storeName = useMemo(() => new Map((detail?.stores ?? []).map((s) => [s.id, s.name])), [detail?.stores]);
-  const manifest = detail?.manifestId ? detail.data.manifests.find((m) => m.id === detail.manifestId) ?? null : null;
-  const route = detail?.route ?? null;
-  const situation = route
-    ? LEDGER_SITUATION_LABELS[ledgerSituation({ routeStatus: route.status, manifestState: manifest?.state ?? null, settlementStatus: route.settlementStatus })]
-    : null;
-  const title = route?.riderName ?? manifest?.driver_name ?? "Caja";
-  const day = route?.routeDate ?? manifest?.route_date ?? null;
-
   async function refresh(preferId?: string | null) {
     if (!detail) return;
     const fresh = await loadDispatchWorkspace(preferId ?? detail.manifestId);
@@ -88,59 +80,63 @@ function CourierBoxPanel({ request, onClose, onChanged }: { request: CourierBoxR
     onChanged();
   }
 
-  return (
-    <div className="fixed inset-0 z-30 flex justify-end bg-slate-900/40 backdrop-blur-[1px]" onClick={onClose}>
-      <aside
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Caja de ${title}`}
-        className="flex h-full w-full max-w-[760px] flex-col overflow-y-auto bg-white shadow-2xl"
-      >
-        <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur">
-          <div className="flex items-start justify-between gap-3 px-4 py-3 sm:px-5">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="text-base font-semibold text-slate-900">{title}</p>
-                {situation && <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-700">{situation}</span>}
-              </div>
-              <p className="mt-0.5 text-sm text-slate-500">
-                {day ? routeDayLong(day) : ""}
-                {manifest ? ` · Carga ${manifest.load_number ?? 1}` : route ? " · Sin caja de despacho" : ""}
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              <button type="button" onClick={onClose} aria-label="Cerrar" className="min-h-0 rounded-lg border-0 bg-transparent p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700">
-                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" /></svg>
-              </button>
-            </div>
-          </div>
-        </div>
+  return <CourierBoxView detail={detail} error={error} onClose={onClose} refresh={refresh} />;
+}
 
-        <div className={cn("flex-1 space-y-4 p-4 sm:p-5", !detail && !error && "animate-pulse")}>
-          {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
-          {!detail && !error && <div className="h-40 rounded-2xl bg-slate-100" />}
-          {detail && manifest && (
-            <DispatchBoxPanel
-              data={detail.data}
-              manifestId={manifest.id}
-              manifests={[manifest]}
-              canManage={detail.canManage}
-              canPickup={detail.canPickup}
-              surface="gf"
-              storeName={storeName}
-              refresh={refresh}
-              showTarget={false}
-            />
-          )}
-          {detail && !manifest && route && (
-            <div className="rounded-2xl border border-dashed border-slate-300 p-5 text-sm text-slate-600">
-              <p className="font-medium text-slate-800">Esta ruta no pasó por Despacho del día.</p>
-              <p className="mt-1">Sus paradas vienen del cuaderno del motorizado (Liquidaciones 2). Los tres pasos de la caja no aplican; el reparto y su cierre se abren desde «Liquidación» en la lista.</p>
-            </div>
-          )}
-        </div>
-      </aside>
-    </div>
+/**
+ * Lo que el panel de la caja enseña, sin cargar nada: cabecera con la
+ * situación de la ruta y los tres pasos. Separado de la carga para poder
+ * mirarlo con datos de ejemplo.
+ */
+export function CourierBoxView({ detail, error, onClose, refresh }: {
+  detail: CourierBoxDetail | null;
+  error: string | null;
+  onClose: () => void;
+  refresh: (preferId?: string | null) => Promise<void>;
+}) {
+  const storeName = useMemo(() => new Map((detail?.stores ?? []).map((s) => [s.id, s.name])), [detail?.stores]);
+  const manifest = detail?.manifestId ? detail.data.manifests.find((m) => m.id === detail.manifestId) ?? null : null;
+  const route = detail?.route ?? null;
+  const situation = route
+    ? ledgerSituation({ routeStatus: route.status, manifestState: manifest?.state ?? null, settlementStatus: route.settlementStatus })
+    : null;
+  const title = route?.riderName ?? manifest?.driver_name ?? "Caja";
+  const day = route?.routeDate ?? manifest?.route_date ?? null;
+
+  return (
+    <SidePanel
+      label={`Caja de ${title}`}
+      title={title}
+      badge={situation && <Badge tone={SITUATION_TONE[situation]}>{LEDGER_SITUATION_LABELS[situation]}</Badge>}
+      meta={<>
+        {day ? routeDayLong(day) : ""}
+        {manifest ? ` · Carga ${manifest.load_number ?? 1}` : route ? " · Sin caja de despacho" : ""}
+      </>}
+      width="max-w-[760px]"
+      onClose={onClose}
+    >
+      <div className="space-y-4">
+        {error && <Banner tone="crit" role="alert">{error}</Banner>}
+        {!detail && !error && <><Skeleton className="h-11" /><Skeleton className="h-64" /></>}
+        {detail && manifest && (
+          <DispatchBoxPanel
+            data={detail.data}
+            manifestId={manifest.id}
+            manifests={[manifest]}
+            canManage={detail.canManage}
+            canPickup={detail.canPickup}
+            surface="gf"
+            storeName={storeName}
+            refresh={refresh}
+            showTarget={false}
+          />
+        )}
+        {detail && !manifest && route && (
+          <Banner tone="info" title="Esta ruta no pasó por Despacho del día.">
+            Sus paradas vienen del cuaderno del motorizado (Liquidaciones 2). Los tres pasos de la caja no aplican; el reparto y su cierre se abren desde «Liquidación» en la lista.
+          </Banner>
+        )}
+      </div>
+    </SidePanel>
   );
 }

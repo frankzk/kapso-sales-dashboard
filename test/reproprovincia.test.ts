@@ -327,9 +327,9 @@ describe("y la macroetapa la aplica IGUAL", () => {
   it("la versión del MOM sube, para que el cron reconcilie el histórico", () => {
     // Esta guarda se reescribe con CADA cambio que mueva filas que nadie tocó:
     // no prueba comportamiento, avisa de que hay que subir la versión.
-    // v1.19 (29-09-2026): el adelanto mínimo de Agencia suma todo lo validado,
+    // v1.20 (29-09-2026): el adelanto mínimo de Agencia suma todo lo validado,
     // no solo la fila `adelanto` (#KP134162).
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.19");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.20");
   });
 });
 
