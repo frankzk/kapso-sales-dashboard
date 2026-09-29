@@ -334,7 +334,7 @@ describe("y la macroetapa la aplica IGUAL", () => {
 });
 
 describe("las piezas en el código", () => {
-  const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
+  const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8").replace(/\r\n/g, "\n");
 
   it("la mesa de confirmación también se enseña en Reproprovincia: la gestión es por PEDIDO", () => {
     const src = read("components/order-drawer.tsx");
@@ -464,7 +464,7 @@ describe("en qué quedó la recuperación, para enseñarlo", () => {
 });
 
 describe("Envíos, en el código", () => {
-  const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
+  const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8").replace(/\r\n/g, "\n");
 
   it("la cola de Pendiente solo anexa las ACTIVAS, decididas por la misma función", () => {
     const src = read("lib/shipments-access.ts");
@@ -512,7 +512,7 @@ describe("Envíos, en el código", () => {
  * MISMO evento de descarte que el Master.
  */
 describe("gestión sobre la guía anulada, desde Envíos", () => {
-  const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
+  const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8").replace(/\r\n/g, "\n");
   const accion = () => {
     const src = read("app/dashboard/envios/actions.ts");
     const start = src.indexOf("export async function registerRecoveryCall(");
@@ -580,7 +580,7 @@ describe("gestión sobre la guía anulada, desde Envíos", () => {
  * `returned_at`, que llega días después — vencidas para uno, activas para el otro.
  */
 describe("cuadrar Envíos con el Master", () => {
-  const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
+  const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8").replace(/\r\n/g, "\n");
 
   it("con una guía ENTREGADA en el pedido no hay recuperación: ése fue el reenvío que funcionó", () => {
     const fenixEntregada = guia({ id: "g2", courier: "fenix", delivery_status: "entregado", reported_status: null });

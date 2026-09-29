@@ -1,5 +1,7 @@
 "use client";
 
+import { masterCursorFor } from "@/lib/master-pagination";
+
 // Master de Pedidos — la vista central de control de la operación logística.
 //
 // FILTRA LA BASE, NO ESTA PANTALLA. Antes se bajaban las ~10.000 filas al
@@ -169,7 +171,7 @@ export function OrdersMasterBoard({
   rows,
   total,
   page,
-  pageSize,
+  hasNext,
   filters,
   sortKey,
   facets,
@@ -201,7 +203,7 @@ export function OrdersMasterBoard({
   rows: OrderMasterRow[];
   total: number;
   page: number;
-  pageSize: number;
+  hasNext: boolean;
   /** Filtros vigentes, leídos de la URL en el servidor. Aquí solo se pintan y
    *  se reescriben; quien filtra es la base. */
   filters: MasterFilters;
@@ -263,6 +265,16 @@ export function OrdersMasterBoard({
     setOpenWorkspace(workspaceForDrawerSection(params.get("seccion")));
     setOpenId(abrir);
   }, []);
+  const navigatingRef = useRef(navigating);
+  navigatingRef.current = navigating;
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  const [listUpdated, setListUpdated] = useState(false);
+  const onFirstPage = page <= 1;
+  const listScope = `${view}/${substage ?? ""}/${buildMasterQuery({ filters, sortKey, page: 1 }).toString()}`;
+  useEffect(() => {
+    setListUpdated(false);
+  }, [onFirstPage, listScope]);
   // Selección para acciones en lote (hoy: imprimir rótulos).
   //
   // SOBREVIVE A LAS BÚSQUEDAS. La tanda de rótulos del día se arma buscando
@@ -277,17 +289,26 @@ export function OrdersMasterBoard({
 
   useEffect(() => {
     let stopped = false;
+    let inFlight = false;
     const check = async () => {
-      if (document.visibilityState !== "visible" || navigating) return;
-      const next = await getOrderMasterChangeToken();
-      if (stopped || !next) return;
-      if (changeToken.current === null) {
-        changeToken.current = next;
-        return;
-      }
-      if (next !== changeToken.current) {
-        changeToken.current = next;
-        router.refresh();
+      if (stopped || inFlight || document.visibilityState !== "visible" || navigatingRef.current) return;
+      inFlight = true;
+      try {
+        const next = await getOrderMasterChangeToken();
+        if (stopped || navigatingRef.current || !next) return;
+        if (changeToken.current === null) {
+          changeToken.current = next;
+          return;
+        }
+        if (next !== changeToken.current) {
+          changeToken.current = next;
+          if (pageRef.current > 1) setListUpdated(true);
+          router.refresh();
+        }
+      } catch {
+        // Una caída de red no debe interrumpir el siguiente chequeo periódico.
+      } finally {
+        inFlight = false;
       }
     };
     void check();
@@ -301,7 +322,7 @@ export function OrdersMasterBoard({
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [navigating, router]);
+  }, [router]);
 
   const toggleRow = (orderId: string) => {
     setSelectedIds((prev) => {
@@ -395,10 +416,18 @@ export function OrdersMasterBoard({
       sortKey: next.sortKey ?? sortKey,
       // Cualquier cambio de filtro u orden vuelve a la página 1: quedarse en la
       // 7 del resultado anterior es una pantalla en blanco sin explicación.
-      page: next.page ?? (next.filters || next.sortKey ? 1 : page),
+      // Si una cola se vació durante la gestión, Anterior vuelve al inicio.
+      page: next.page && !rows.length ? 1 : next.page ?? (next.filters || next.sortKey ? 1 : page),
     });
     if (view !== "todos") qs.set("view", view);
     if (substage) qs.set("substage", substage);
+    // Page one must remain live: a previous cursor would hide new arrivals
+    // after a refresh by keeping its old upper boundary.
+    if (next.page && next.page > 1 && !next.filters && !next.sortKey && rows.length) {
+      const direction = next.page > page ? "next" : "previous";
+      const edge = direction === "next" ? rows[rows.length - 1] : rows[0];
+      if (edge) qs.set("cursor", masterCursorFor(edge, direction));
+    }
     startNav(() => router.replace(`${pathname}?${qs.toString()}`, { scroll: false }));
   };
 
@@ -454,30 +483,30 @@ export function OrdersMasterBoard({
   const shown = rows;
   // Para poder nombrar los pedidos en el reporte de una acción en lote: la
   // acción devuelve ids, y "#KP125756 falló" es accionable, "un uuid" no.
-  // Se acumulan entre páginas: un pedido elegido en otra búsqueda ya no está en
-  // `rows`, y la barra tiene que poder nombrarlo. "#KP125756 falló" es
-  // accionable; un uuid no.
+  // Solo se conservan la página visible y los seleccionados: los nombres de
+  // una selección sobreviven a las búsquedas sin acumular cada página visitada.
   const [seenNames, setSeenNames] = useState<Map<string, string>>(new Map());
   useEffect(() => {
     setSeenNames((prev) => {
-      const next = new Map(prev);
-      let changed = false;
-      for (const row of rows) {
-        const name = row.order_name ?? row.order_id;
-        if (next.get(row.order_id) !== name) {
-          next.set(row.order_id, name);
-          changed = true;
-        }
+      const next = new Map<string, string>();
+      for (const id of selectedIds) {
+        const name = prev.get(id);
+        if (name !== undefined) next.set(id, name);
       }
-      return changed ? next : prev;
+      for (const row of rows) {
+        next.set(row.order_id, row.order_name ?? row.order_id);
+      }
+      if (next.size === prev.size && Array.from(next).every(([id, name]) => prev.get(id) === name)) {
+        return prev;
+      }
+      return next;
     });
-  }, [rows]);
+  }, [rows, selectedIds]);
   const orderNames = useMemo(() => {
     const map = new Map(seenNames);
     for (const row of rows) map.set(row.order_id, row.order_name ?? row.order_id);
     return map;
   }, [seenNames, rows]);
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
     <div className="space-y-4">
@@ -516,6 +545,12 @@ export function OrdersMasterBoard({
         </div>
       </div>
 
+      <LiveListNotice
+        visible={listUpdated && !onFirstPage}
+        busy={navigating}
+        onStart={() => navigate({ page: 1 })}
+      />
+
       {searchActive ? (
         <Card className="w-fit min-w-full p-0">
           <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
@@ -525,7 +560,7 @@ export function OrdersMasterBoard({
             <div className="flex items-center gap-3">
               <PagerControls
                 page={page}
-                totalPages={totalPages}
+                hasNext={hasNext}
                 busy={navigating}
                 onPage={(p) => navigate({ page: p })}
               />
@@ -550,7 +585,7 @@ export function OrdersMasterBoard({
               />
               <Pager
                 page={page}
-                totalPages={totalPages}
+                hasNext={hasNext}
                 total={total}
                 shown={shown.length}
                 busy={navigating}
@@ -909,7 +944,7 @@ export function OrdersMasterBoard({
                 />
                 <PagerControls
                   page={page}
-                  totalPages={totalPages}
+                  hasNext={hasNext}
                   busy={navigating}
                   onPage={(p) => navigate({ page: p })}
                 />
@@ -937,7 +972,7 @@ export function OrdersMasterBoard({
                     resto. El paginador solo existía en la vista de búsqueda. */}
                 <Pager
                   page={page}
-                  totalPages={totalPages}
+                  hasNext={hasNext}
                   total={total}
                   shown={listed.length}
                   busy={navigating}
@@ -2031,18 +2066,39 @@ function MasterSearchInput({
   );
 }
 
+function LiveListNotice({ visible, busy, onStart }: {
+  visible: boolean;
+  busy: boolean;
+  onStart: () => void;
+}) {
+  if (!visible) return null;
+  return (
+    <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+      <span>La lista se ha actualizado</span>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onStart}
+        className="rounded px-1 py-1 font-medium text-blue-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:opacity-40"
+      >
+        Volver al inicio
+      </button>
+    </div>
+  );
+}
+
 function PagerControls({
   page,
-  totalPages,
+  hasNext,
   busy,
   onPage,
 }: {
   page: number;
-  totalPages: number;
+  hasNext: boolean;
   busy: boolean;
   onPage: (page: number) => void;
 }) {
-  if (totalPages <= 1) return null;
+  if (page <= 1 && !hasNext) return null;
   return (
     <div className="flex shrink-0 items-center gap-1.5">
       <button
@@ -2053,10 +2109,10 @@ function PagerControls({
         Anterior
       </button>
       <span className="px-1 text-xs tabular-nums text-slate-500">
-        {page} / {totalPages}
+        Página {page}
       </span>
       <button
-        disabled={busy || page >= totalPages}
+        disabled={busy || !hasNext}
         onClick={() => onPage(page + 1)}
         className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
       >
@@ -2068,28 +2124,27 @@ function PagerControls({
 
 function Pager({
   page,
-  totalPages,
+  hasNext,
   total,
   shown,
   busy,
   onPage,
 }: {
   page: number;
-  totalPages: number;
+  hasNext: boolean;
   total: number;
   shown: number;
   busy: boolean;
   onPage: (page: number) => void;
 }) {
   if (total === 0) return null;
-  const from = (page - 1) * 100 + 1;
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3">
       <p className="text-xs text-slate-500">
-        {from}–{from + shown - 1} de {total.toLocaleString("es-PE")}
+        {shown} mostrados · {total.toLocaleString("es-PE")} {total === 1 ? "pedido" : "pedidos"} en total
         {busy && <span className="ml-2 text-slate-400">actualizando…</span>}
       </p>
-      <PagerControls page={page} totalPages={totalPages} busy={busy} onPage={onPage} />
+      <PagerControls page={page} hasNext={hasNext} busy={busy} onPage={onPage} />
     </div>
   );
 }

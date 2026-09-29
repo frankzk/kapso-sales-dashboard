@@ -1,0 +1,209 @@
+{
+  "startedAt": "2026-09-28T23:41:31.139Z",
+  "localOnly": true,
+  "productionTouched": false,
+  "experiment": "Two disjoint mixed UPSERTs: opposite existing/new stores, one Master statement per writer",
+  "limitation": "Test-only AFTER UPDATE hook forces a legal adverse interleaving using coordinator-held advisory locks. This establishes possibility, not natural frequency or production latency.",
+  "migrationSha256": "92f8278eb372df76e178d3883338c0ad420b798c534917f927b82f48c260bf66",
+  "scenarios": [
+    {
+      "variant": "before_0157",
+      "controlledInterleaving": true,
+      "barrierObserved": [
+        {
+          "pid": 79492,
+          "gate": 0,
+          "application_name": "mixed-upsert-writer-0",
+          "wait_event_type": "Lock",
+          "wait_event": "advisory"
+        },
+        {
+          "pid": 10816,
+          "gate": 1,
+          "application_name": "mixed-upsert-writer-1",
+          "wait_event_type": "Lock",
+          "wait_event": "advisory"
+        }
+      ],
+      "writers": [
+        {
+          "workerId": 0,
+          "backendPid": 79492,
+          "existingOrder": "0157c000-0000-4000-9000-000000000002",
+          "insertedOrder": "0157c000-0000-4000-9000-000000000009",
+          "oldStore": "0157c000-0000-4000-8000-000000000011",
+          "newStore": "0157c000-0000-4000-8000-000000000012",
+          "masterStatements": 1,
+          "sourceIdsDisjoint": true,
+          "outcome": "committed",
+          "rowsAffected": 2,
+          "durationMs": 21.553
+        },
+        {
+          "workerId": 1,
+          "backendPid": 10816,
+          "existingOrder": "0157c000-0000-4000-9000-000000000001",
+          "insertedOrder": "0157c000-0000-4000-9000-000000000010",
+          "oldStore": "0157c000-0000-4000-8000-000000000012",
+          "newStore": "0157c000-0000-4000-8000-000000000011",
+          "masterStatements": 1,
+          "sourceIdsDisjoint": true,
+          "outcome": "committed",
+          "rowsAffected": 2,
+          "durationMs": 21.813
+        }
+      ],
+      "deadlocks": 0,
+      "committed": 2,
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true
+        },
+        "sourceRows": 10,
+        "orderRows": 10,
+        "auditEvents": 0
+      },
+      "resultingRows": [
+        {
+          "shopify_order_id": "concurrency-1",
+          "macro_stage": "preparacion",
+          "macro_substage": "por_armar"
+        },
+        {
+          "shopify_order_id": "concurrency-2",
+          "macro_stage": "preparacion",
+          "macro_substage": "por_armar"
+        },
+        {
+          "shopify_order_id": "mixed-9",
+          "macro_stage": "por_confirmar",
+          "macro_substage": "sin_llamar"
+        },
+        {
+          "shopify_order_id": "mixed-10",
+          "macro_stage": "por_confirmar",
+          "macro_substage": "sin_llamar"
+        }
+      ]
+    },
+    {
+      "variant": "after_0157",
+      "controlledInterleaving": true,
+      "barrierObserved": [
+        {
+          "pid": 44652,
+          "gate": 0,
+          "application_name": "mixed-upsert-writer-0",
+          "wait_event_type": "Lock",
+          "wait_event": "advisory"
+        },
+        {
+          "pid": 54712,
+          "gate": 1,
+          "application_name": "mixed-upsert-writer-1",
+          "wait_event_type": "Lock",
+          "wait_event": "advisory"
+        }
+      ],
+      "writers": [
+        {
+          "workerId": 0,
+          "backendPid": 44652,
+          "existingOrder": "0157c000-0000-4000-9000-000000000002",
+          "insertedOrder": "0157c000-0000-4000-9000-000000000009",
+          "oldStore": "0157c000-0000-4000-8000-000000000011",
+          "newStore": "0157c000-0000-4000-8000-000000000012",
+          "masterStatements": 1,
+          "sourceIdsDisjoint": true,
+          "outcome": "committed",
+          "rowsAffected": 2,
+          "durationMs": 21.979
+        },
+        {
+          "workerId": 1,
+          "backendPid": 54712,
+          "existingOrder": "0157c000-0000-4000-9000-000000000001",
+          "insertedOrder": "0157c000-0000-4000-9000-000000000010",
+          "oldStore": "0157c000-0000-4000-8000-000000000012",
+          "newStore": "0157c000-0000-4000-8000-000000000011",
+          "masterStatements": 1,
+          "sourceIdsDisjoint": true,
+          "outcome": "committed",
+          "rowsAffected": 2,
+          "durationMs": 21.658
+        }
+      ],
+      "deadlocks": 0,
+      "committed": 2,
+      "verification": {
+        "ok": true,
+        "checks": {
+          "sourceIdentities": true,
+          "intentionalRollbacks": true,
+          "allOrdersProjected": true,
+          "unambiguousOutcomes": true,
+          "committedIngestions": true,
+          "committedAuditEvents": true,
+          "rpcParityAdmin": true,
+          "stageReferenceCounts": true,
+          "facetReferenceCounts": true,
+          "rpcParityService": true,
+          "rpcParity_viewer": true,
+          "sourceRls_viewer": true,
+          "stageRls_viewer": true,
+          "facetRls_viewer": true,
+          "rpcParity_outsider": true,
+          "sourceRls_outsider": true,
+          "stageRls_outsider": true,
+          "facetRls_outsider": true
+        },
+        "sourceRows": 10,
+        "orderRows": 10,
+        "auditEvents": 0
+      },
+      "resultingRows": [
+        {
+          "shopify_order_id": "concurrency-1",
+          "macro_stage": "preparacion",
+          "macro_substage": "por_armar"
+        },
+        {
+          "shopify_order_id": "concurrency-2",
+          "macro_stage": "preparacion",
+          "macro_substage": "por_armar"
+        },
+        {
+          "shopify_order_id": "mixed-9",
+          "macro_stage": "por_confirmar",
+          "macro_substage": "sin_llamar"
+        },
+        {
+          "shopify_order_id": "mixed-10",
+          "macro_stage": "por_confirmar",
+          "macro_substage": "sin_llamar"
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "version": "PostgreSQL 18.4 on x86_64-windows, compiled by msvc-19.44.35226, 64-bit",
+    "packageVersion": "18.4.0-beta.17",
+    "directory": "C:\\Users\\Pc\\Documents\\Kapso Sales\\.performance-tools\\pg-runs\\concurrency-dtlH81",
+    "port": 60948
+  },
+  "riskReproduced": false,
+  "completedAt": "2026-09-28T23:41:37.918Z",
+  "stoppedAt": "2026-09-28T23:41:40.124Z"
+}

@@ -1,0 +1,33 @@
+{
+  "localOnly": true,
+  "productionTouched": false,
+  "startedAt": "2026-09-29T00:06:48.777Z",
+  "checks": [
+    "full migration chain and initial RLS fixture",
+    "Master role-switch regression in one protocol message",
+    "scripts/sql/sheets_rider_smoke.sql",
+    "scripts/sql/rider_master_smoke.sql",
+    "scripts/sql/master_read_scaling_smoke.sql",
+    "scripts/sql/coverage_smoke.sql",
+    "scripts/sql/order_master_stale_smoke.sql",
+    "scripts/sql/lima_region_smoke.sql",
+    "scripts/sql/append_only_smoke.sql",
+    "scripts/sql/order_sales_smoke.sql",
+    "scripts/sql/lead_queue_counts_smoke.sql",
+    "scripts/sql/dispatch_smoke.sql",
+    "scripts/sql/gf_route_loads_smoke.sql",
+    "scripts/sql/gf_rider_decline_smoke.sql",
+    "scripts/sql/gf_assign_custody_smoke.sql",
+    "scripts/sql/gf_one_load_smoke.sql",
+    "scripts/sql/gf_pickup_mode_smoke.sql",
+    "scripts/sql/gf_return_to_office_smoke.sql",
+    "scripts/sql/gf_parallel_box_smoke.sql",
+    "scripts/sql/rider_pay_rejection_photo_smoke.sql",
+    "Master parity release gate after operational fixtures",
+    "Master rollback/reinstall from schema 0197",
+    "fresh generated bundle"
+  ],
+  "version": "PostgreSQL 16.14, compiled by Visual C++ build 1944, 64-bit",
+  "ok": true,
+  "completedAt": "2026-09-29T00:07:03.592Z"
+}

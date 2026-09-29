@@ -1,0 +1,271 @@
+{
+  "measuredAt": "2026-09-25T17:25:58.622Z",
+  "source": "PostgREST service role from local workstation; includes network; excludes browser/RLS",
+  "storeCount": 2,
+  "results": [
+    {
+      "round": 1,
+      "name": "page20",
+      "status": 200,
+      "ttfbMs": 521,
+      "totalMs": 522,
+      "bytes": 28824,
+      "rows": 20,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 1,
+      "name": "page100",
+      "status": 200,
+      "ttfbMs": 620,
+      "totalMs": 632,
+      "bytes": 147641,
+      "rows": 100,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 1,
+      "name": "exact_count",
+      "status": 206,
+      "ttfbMs": 464,
+      "totalMs": 464,
+      "bytes": 0,
+      "rows": null,
+      "count": "24898",
+      "errorCode": null
+    },
+    {
+      "round": 1,
+      "name": "mom_counts",
+      "status": 200,
+      "ttfbMs": 665,
+      "totalMs": 666,
+      "bytes": 1892,
+      "rows": 23,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 1,
+      "name": "facets",
+      "status": 200,
+      "ttfbMs": 758,
+      "totalMs": 760,
+      "bytes": 36996,
+      "rows": null,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 1,
+      "name": "page20_offset20000",
+      "status": 200,
+      "ttfbMs": 340,
+      "totalMs": 344,
+      "bytes": 29202,
+      "rows": 20,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 1,
+      "name": "agency_available",
+      "status": 200,
+      "ttfbMs": 504,
+      "totalMs": 504,
+      "bytes": 0,
+      "rows": null,
+      "count": "281",
+      "errorCode": null
+    },
+    {
+      "round": 1,
+      "name": "change_token",
+      "status": 200,
+      "ttfbMs": 662,
+      "totalMs": 663,
+      "bytes": 51,
+      "rows": 1,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 2,
+      "name": "page20",
+      "status": 200,
+      "ttfbMs": 519,
+      "totalMs": 520,
+      "bytes": 28824,
+      "rows": 20,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 2,
+      "name": "page100",
+      "status": 200,
+      "ttfbMs": 643,
+      "totalMs": 650,
+      "bytes": 147641,
+      "rows": 100,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 2,
+      "name": "exact_count",
+      "status": 206,
+      "ttfbMs": 241,
+      "totalMs": 241,
+      "bytes": 0,
+      "rows": null,
+      "count": "24898",
+      "errorCode": null
+    },
+    {
+      "round": 2,
+      "name": "mom_counts",
+      "status": 200,
+      "ttfbMs": 466,
+      "totalMs": 466,
+      "bytes": 1892,
+      "rows": 23,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 2,
+      "name": "facets",
+      "status": 200,
+      "ttfbMs": 626,
+      "totalMs": 629,
+      "bytes": 36996,
+      "rows": null,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 2,
+      "name": "page20_offset20000",
+      "status": 200,
+      "ttfbMs": 313,
+      "totalMs": 314,
+      "bytes": 29202,
+      "rows": 20,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 2,
+      "name": "agency_available",
+      "status": 200,
+      "ttfbMs": 264,
+      "totalMs": 264,
+      "bytes": 0,
+      "rows": null,
+      "count": "281",
+      "errorCode": null
+    },
+    {
+      "round": 2,
+      "name": "change_token",
+      "status": 200,
+      "ttfbMs": 427,
+      "totalMs": 428,
+      "bytes": 51,
+      "rows": 1,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 3,
+      "name": "page20",
+      "status": 200,
+      "ttfbMs": 1045,
+      "totalMs": 1048,
+      "bytes": 28824,
+      "rows": 20,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 3,
+      "name": "page100",
+      "status": 200,
+      "ttfbMs": 624,
+      "totalMs": 632,
+      "bytes": 147641,
+      "rows": 100,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 3,
+      "name": "exact_count",
+      "status": 206,
+      "ttfbMs": 232,
+      "totalMs": 232,
+      "bytes": 0,
+      "rows": null,
+      "count": "24898",
+      "errorCode": null
+    },
+    {
+      "round": 3,
+      "name": "mom_counts",
+      "status": 200,
+      "ttfbMs": 444,
+      "totalMs": 445,
+      "bytes": 1892,
+      "rows": 23,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 3,
+      "name": "facets",
+      "status": 200,
+      "ttfbMs": 4859,
+      "totalMs": 4917,
+      "bytes": 36996,
+      "rows": null,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 3,
+      "name": "page20_offset20000",
+      "status": 200,
+      "ttfbMs": 655,
+      "totalMs": 672,
+      "bytes": 29202,
+      "rows": 20,
+      "count": "*",
+      "errorCode": null
+    },
+    {
+      "round": 3,
+      "name": "agency_available",
+      "status": 200,
+      "ttfbMs": 698,
+      "totalMs": 698,
+      "bytes": 0,
+      "rows": null,
+      "count": "281",
+      "errorCode": null
+    },
+    {
+      "round": 3,
+      "name": "change_token",
+      "status": 200,
+      "ttfbMs": 453,
+      "totalMs": 454,
+      "bytes": 51,
+      "rows": 1,
+      "count": "*",
+      "errorCode": null
+    }
+  ]
+}

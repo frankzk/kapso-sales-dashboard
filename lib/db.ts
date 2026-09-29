@@ -7,6 +7,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
+import { supabaseFetch } from "@/lib/db-fetch";
 
 /** RLS-scoped client bound to the current request's auth cookies. */
 export async function createServerSupabase(): Promise<SupabaseClient> {
@@ -15,6 +16,7 @@ export async function createServerSupabase(): Promise<SupabaseClient> {
   const { cookies } = await import("next/headers");
   const cookieStore = await cookies();
   return createServerClient(env.supabaseUrl(), env.supabaseAnonKey(), {
+    global: { fetch: supabaseFetch },
     cookies: {
       getAll() {
         return cookieStore.getAll();
@@ -40,6 +42,7 @@ export function createAdminSupabase(): SupabaseClient {
   if (_admin) return _admin;
   _admin = createClient(env.supabaseUrl(), env.serviceRoleKey(), {
     auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: supabaseFetch },
   });
   return _admin;
 }

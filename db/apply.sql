@@ -397,4 +397,6 @@
 \ir migrations/0196_gf_parallel_box.sql
 \echo 'Applying 0197_rejection_photo_exemption.sql'
 \ir migrations/0197_rejection_photo_exemption.sql
+\echo 'Applying 0198_master_read_scaling.sql'
+\ir migrations/0198_master_read_scaling.sql
 \echo 'Done.'

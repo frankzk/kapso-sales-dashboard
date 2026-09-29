@@ -1,0 +1,20 @@
+{
+  "verifiedAt": "2026-09-29T00:23:33.396Z",
+  "candidate": "0198_master_read_scaling.sql",
+  "migrationSha256": "485caa32594a925a0d7119f770e160a21a1e85ca310960b1958e88565a80b399",
+  "productionDeployed": false,
+  "stagingComplete": false,
+  "unitTestsPassed": 5111,
+  "unitFilesPassed": 320,
+  "buildPassed": true,
+  "finalMillion": {
+    "attempts": 21000,
+    "failed": 0,
+    "normalCorrectnessPassed": true,
+    "adverseCorrectnessPassed": true,
+    "serverStopped": true
+  },
+  "directedMixedPassed": true,
+  "sqlSmokePassed": true,
+  "releaseDecision": "HOLD: real staging Auth/PostgREST/UI and end-to-end performance acceptance pending"
+}

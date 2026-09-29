@@ -55,7 +55,7 @@ function runPage(params: {
   filters?: Partial<MasterFilters>;
 }) {
   const rec = recordingBuilder();
-  createServerSupabaseMock.mockResolvedValue({ from: () => rec.builder });
+  createServerSupabaseMock.mockResolvedValue({ from: () => rec.builder, rpc: async () => ({ data: [], error: null }) });
   const filters = { ...emptyFilters(), ...(params.filters ?? {}), search: params.search };
   return getOrderMasterPage(["store-a", "store-b"], {
     view: params.view,
