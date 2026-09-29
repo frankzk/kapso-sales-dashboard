@@ -56,6 +56,14 @@ interface Props {
   progress?: ScanProgress;
 }
 
+/**
+ * Lo que no entró en la caja se dice como error (rojo y pitido en la cámara);
+ * «programado para otro día» también: espera que alguien confirme.
+ */
+function lineNeedsAttention(line: ScanAssignLine): boolean {
+  return ["desconocido", "no_elegible", "bloqueado_efectivo", "programado_otro_dia"].includes(line.status);
+}
+
 export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, onPending, compact = false, continuous = false, progress }: Props) {
   const plan = scanActionPlan(context);
   const [busy, setBusy] = useState(false);
@@ -82,7 +90,7 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
         const code = assignQueue.current[0]!;
         try {
           const line = await scanAssignToRider(assign!.orgId, assign!.riderId, code, { overrideCash: assign!.overrideCash, scheduledFor: assign!.scheduledFor ?? null });
-          report({ line, notice: line.message, error: line.status === "desconocido" || line.status === "no_elegible" || line.status === "bloqueado_efectivo" ? line.message : undefined });
+          report({ line, notice: line.message, error: lineNeedsAttention(line) ? line.message : undefined });
         } catch {
           report({
             line: { code, status: "no_elegible", orderId: null, orderName: null, shipmentId: null, manifestId: null, riderName: null, amount: null, message: "No se pudo registrar. Reintenta el mismo código; no se duplicará." },
@@ -126,7 +134,7 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
           return;
         }
         const line = await scanAssignToRider(assign.orgId, assign.riderId, code, { overrideCash: assign.overrideCash, scheduledFor: assign.scheduledFor ?? null });
-        report({ line, notice: line.message, error: line.status === "desconocido" || line.status === "no_elegible" || line.status === "bloqueado_efectivo" ? line.message : undefined });
+        report({ line, notice: line.message, error: lineNeedsAttention(line) ? line.message : undefined });
       } else if (context === "supervisor_retiro") {
         if (!manifestId) return report({ error: "Falta la caja." });
         const found = await lookupDispatchShipment(code);
