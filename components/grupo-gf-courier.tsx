@@ -981,8 +981,10 @@ function TariffMatrix({
       {notice && <Banner tone="ok" role="status">{notice}</Banner>}
       {payMessage && <Banner tone={payMessage.ok ? "ok" : "crit"} role={payMessage.ok ? "status" : "alert"}>{payMessage.text}</Banner>}
 
-      <div className="rounded-lg bg-white shadow-control ring-1 ring-line">
-        <section aria-label="Filtros de tarifas" className="flex flex-col gap-3 border-b border-line px-4 py-3 md:flex-row md:items-end">
+      {/* Bajo 1024 px las filas pasan a tarjetas (courier-mobile.module.css):
+          la tarjeta exterior se quita para no anidar tarjetas. */}
+      <div className="rounded-lg lg:bg-white lg:shadow-control lg:ring-1 lg:ring-line">
+        <section aria-label="Filtros de tarifas" className="flex flex-col gap-3 rounded-lg bg-white px-4 py-3 shadow-control ring-1 ring-line md:flex-row md:items-end max-lg:mb-3 lg:rounded-none lg:border-b lg:border-line lg:shadow-none lg:ring-0">
           <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
             Tarifario
             <select value={scope} onChange={(event) => setScope(event.target.value)} className={cn(FIELD, "min-w-56")}>
@@ -1163,6 +1165,9 @@ function TariffRow({
   });
   const inheritedPause =
     agreementId != null && availability.status === "paused" && availability.source === "general";
+  // La acción pesa solo cuando hay algo que guardar: 25 botones iguales
+  // pesaban más que los datos.
+  const dirty = !tariff || inherited || zone !== (tariff.zone ?? "") || Number(delivery.replace(",", ".")) !== tariff.delivery_amount;
 
   return (
     <>
@@ -1207,7 +1212,7 @@ function TariffRow({
           ) : (
             <div className="flex items-center gap-2">
               <Badge tone="ok" className="shrink-0">Disponible</Badge>
-              <OpsButton variant="ghost" size="sm" aria-expanded={showPauseForm} onClick={() => setShowPauseForm((current) => !current)} aria-label={`Pausar ${district.district}`}>
+              <OpsButton variant="ghost" size="sm" aria-expanded={showPauseForm} onClick={() => setShowPauseForm((current) => !current)} aria-label={`Pausar ${district.district}`} className="!w-auto">
                 Pausar
               </OpsButton>
             </div>
@@ -1237,6 +1242,7 @@ function TariffRow({
         <td className="px-4 py-3 text-right">
           <OpsButton
             size="sm"
+            variant={dirty ? "secondary" : "ghost"}
             disabled={pending || delivery.trim() === ""}
             onClick={() => onSave({
               orgId,

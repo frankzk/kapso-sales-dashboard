@@ -39,8 +39,8 @@ const SITUATION_TONE: Record<CourierLedgerSituation, BadgeTone> = {
   borrador: "neutral",
   cotejo_oficina: "warn",
   lista_para_recojo: "info",
-  en_poder_del_courier: "brand",
-  en_reparto: "brand",
+  en_poder_del_courier: "info",
+  en_reparto: "info",
   cerrada: "neutral",
   liquidada: "ok",
 };
@@ -176,7 +176,7 @@ export function CourierRoutesLedger({
               <th className="px-3 py-2.5 text-center"><span className="inline-flex items-center gap-1">Devolver <Hint text="No entregados que el motorizado tiene que traer de vuelta: devueltos / por devolver. Se reciben en Despacho del día, píldora «Devoluciones»." /></span></th>
               <th className="px-3 py-2.5 text-right">Efectivo</th>
               <th className="px-4 py-2.5"><span className="inline-flex items-center gap-1">Avance <Hint text="Con caja, dos barras: verde, cotejados por oficina; azul, recibidos por el motorizado con «Lo llevo». Sin caja: paradas ya reportadas." /></span></th>
-              <th className="w-32 px-3 py-2.5">Liquidación</th>
+              <th className="px-3 py-2.5">Liquidación</th>
             </tr>
           </thead>
           {groups.map(([day, list]) => (
@@ -236,13 +236,13 @@ function ProgressBars({ bars, compact = false }: { bars: Bar[]; compact?: boolea
       {bars.map((bar) => (
         <div key={bar.text + bar.tone} className="flex items-center gap-2">
           <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-line" aria-hidden="true">
-            <div className={cn("h-full rounded-full", bar.tone === "brand" ? "bg-brand-600" : "bg-ok-fg")} style={{ width: `${bar.pct}%` }} />
+            <div className={cn("h-full rounded-full", bar.tone === "brand" ? "bg-info-fg" : "bg-ok-fg")} style={{ width: `${bar.pct}%` }} />
           </div>
           <span className="w-9 shrink-0 text-right text-xs tabular-nums text-ink-600">{bar.pct}%</span>
           {compact && <span className="truncate text-xs text-ink-500">{bar.text}</span>}
         </div>
       ))}
-      {!compact && <p className="text-xs text-ink-500">{bars.map((b) => b.text).join(" · ")}</p>}
+      {!compact && <p className="max-w-[12rem] truncate text-xs text-ink-500" title={bars.map((b) => b.text).join(" · ")}>{bars.map((b) => b.text).join(" · ")}</p>}
     </div>
   );
 }
@@ -255,10 +255,16 @@ function settlementLabel(status: string | null): string {
 /** Celda «Liquidación»: el estado si ya hay liquidación, o el acceso al reparto y cierre. */
 function ReportLink({ row, href, className }: { row: CourierLedgerRow; href: string; className?: string }) {
   const label = row.settlementStatus ? settlementLabel(row.settlementStatus) : "Reparto y liquidación";
+  // Parte en dos líneas si la tabla no cabe, pero la flecha va siempre con la
+  // última palabra: a 1.440 px una sola línea empujaba la columna fuera de vista.
+  const cut = label.lastIndexOf(" ");
   return (
-    <a href={href} onClick={(e) => openInPlace(e, href)} title="Paradas, cierre de la ruta y pago del motorizado" className={cn("inline-flex items-center gap-1 text-[13px] font-medium leading-snug text-brand-700 hover:underline", className)}>
-      {label}
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="shrink-0"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+    <a href={href} onClick={(e) => openInPlace(e, href)} title="Paradas, cierre de la ruta y pago del motorizado" className={cn("inline-block min-w-[6.5rem] text-[13px] font-medium leading-5 text-brand-700 hover:underline", className)}>
+      {cut > 0 && `${label.slice(0, cut)} `}
+      <span className="whitespace-nowrap">
+        {label.slice(cut + 1)}
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="ml-1 inline-block align-[-1px]"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+      </span>
     </a>
   );
 }
