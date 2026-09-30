@@ -1329,7 +1329,7 @@ export async function returnUndeliveredToOffice(orgId: string, orderIds: string[
   revalidatePath(COURIER_PATH);
   revalidatePath("/dashboard/pedidos");
   if (!changed.length) return { error: [...new Set(errors)].join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
-  const done = `${changed.length} ${changed.length === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina. Los no entregados vuelven a «por asignar» (Por reprogramar Lima); los rechazados quedan devueltos.`;
+  const done = `${changed.length} ${changed.length === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina. Vuelven a «por asignar» (Por reprogramar Lima), también los rechazados.`;
   return errors.length ? { error: `${done} ${[...new Set(errors)].join(" ")}` } : { notice: done };
 }
 

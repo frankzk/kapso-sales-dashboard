@@ -14,12 +14,14 @@ import { useRouter } from "next/navigation";
 import { OrderLink } from "@/components/order-link";
 import { Card, EmptyState, Section, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import {
+  isForceableBlocker,
   NON_DELIVERY_REASONS,
   PAYMENT_METHODS,
   rejectionNeedsPhoto,
   routeCloseBlockers,
   routeTotals,
   stopsMissingEvidence,
+  stopsNotReceived,
   type EvidenceStop,
   type OpenLoad,
   type RouteCloseBlocker,
@@ -31,7 +33,7 @@ import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import type { RiderRow } from "@/lib/settlements-access";
 import { Hint } from "@/components/hint";
 import { Badge, Banner, FIELD, OpsButton } from "@/components/ops-ui";
-import { IconAlert, IconCamera, IconCameraOff, IconCheckCircle, IconClock, IconPlus, IconReceipt, IconTruck } from "@/components/icons";
+import { IconAlert, IconCamera, IconCameraOff, IconCheckCircle, IconClock, IconPlus, IconReceipt, IconTruck, IconUndo } from "@/components/icons";
 import { RIDER_PAY_BALANCE_HINT, RIDER_RATE_FORM_ID, RiderPayPanel, riderPayBalanceLabel } from "@/components/rider-pay-panel";
 import { checkStopRate, stopEarnings } from "@/lib/rider-pay";
 import type { RiderPayDetail } from "@/lib/rider-pay";
@@ -41,6 +43,7 @@ import {
   reopenRoute,
   ensureRoute,
   linkRiderAccount,
+  receiveRouteReturns,
   removeStop,
   searchAssignable,
   startRoute,
@@ -98,7 +101,7 @@ const methodLabel = (code: string | null) =>
 type RunAction = (fn: () => Promise<{ ok: boolean; error?: string; message?: string }>) => void;
 
 /** Qué paradas enseña la tabla: todas, o las que frenan el cierre o el pago. */
-type StopView = "todas" | "sin_reportar" | "sin_foto" | "sin_captura";
+type StopView = "todas" | "sin_reportar" | "sin_foto" | "sin_captura" | "por_devolver";
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
@@ -538,7 +541,7 @@ function RouteDetail({
     () => (inProgress && closeContext ? routeCloseBlockers({ isGf: closeContext.isGf, openLoads: closeContext.openLoads, stops, routeDate: route.route_date }) : []),
     [inProgress, closeContext, stops, route.route_date],
   );
-  const hardBlockers = blockers.filter((b) => !(b.kind === "sin_reportar" && b.forceable));
+  const hardBlockers = blockers.filter((b) => !isForceableBlocker(b));
   const pendingIds = useMemo(() => new Set(stops.filter((s) => s.status === "pendiente").map((s) => s.id)), [stops]);
   // «Falta foto» solo frena el cierre en Grupo GF; fuera de ahí no se marca.
   // Los rechazos de rutas anteriores al 28/09 no la exigen (MOM §29.7).
@@ -550,10 +553,13 @@ function RouteDetail({
     () => new Set(stops.filter((s) => s.status === "entregado" && s.payment_method === "yape" && !s.voucher_path).map((s) => s.id)),
     [stops],
   );
+  // «No entregado» que siguen dentro de la caja: la misma regla que el cierre.
+  const notReceivedIds = useMemo(() => new Set(isGf ? stopsNotReceived(stops).map((s) => s.id) : []), [isGf, stops]);
   const viewIds: Record<Exclude<StopView, "todas">, Set<string>> = {
     sin_reportar: pendingIds,
     sin_foto: missingPhotoIds,
     sin_captura: missingVoucherIds,
+    por_devolver: notReceivedIds,
   };
   const [pickedView, setView] = useState<StopView>("todas");
   // Si el filtro se queda vacío (ya se reportó todo), vuelve a «Todas».
@@ -586,6 +592,7 @@ function RouteDetail({
     { key: "sin_reportar", label: "Sin reportar", count: pendingIds.size },
     { key: "sin_foto", label: "Sin foto", count: missingPhotoIds.size },
     { key: "sin_captura", label: "Yape sin captura", count: missingVoucherIds.size },
+    { key: "por_devolver", label: "Por devolver", count: notReceivedIds.size },
   ];
 
   return (
@@ -1133,7 +1140,7 @@ function RouteClosePanel({
   const summaryId = useId();
   const [checking, setChecking] = useState(false);
   const ready = known && blockers.length === 0;
-  const forceable = blockers.find((b) => b.kind === "sin_reportar" && b.forceable);
+  const forceable = blockers.find(isForceableBlocker);
   const canForce = known && hardBlockers.length === 0 && !!forceable;
   // Cada carga abierta cuenta como un pendiente por sí sola.
   const pendientes = blockers.reduce((n, b) => n + (b.kind === "carga_sin_recibir" ? b.loads.length : 1), 0);
@@ -1144,7 +1151,9 @@ function RouteClosePanel({
         ? "Todo reportado; los rechazos antes del 28/09 no exigen foto. Al terminarla se crea la liquidación de cada tienda."
         : `Todas las paradas tienen su reporte${isGf ? " y su foto" : ""}. Al terminarla se crea la liquidación de cada tienda.`
       : canForce
-        ? "Quedan paradas sin reportar: espera a que las reporte o ciérrala igual."
+        ? forceable?.kind === "sin_recibir"
+          ? "Quedan «No entregado» dentro de la caja: recíbelos en oficina si ya volvieron, o ciérrala igual."
+          : "Quedan paradas sin reportar: espera a que las reporte o ciérrala igual."
         : `Falta resolver ${plural(pendientes, "cosa", "cosas")} antes de terminarla.`;
 
   const recheck = async () => {
@@ -1232,6 +1241,43 @@ function RouteClosePanel({
                           className="min-h-0 text-[13px] font-medium text-crit-fg hover:underline disabled:opacity-50"
                         >
                           Cerrar con paradas sin reportar
+                        </button>
+                      )}
+                    </>}
+                  />
+                );
+              case "sin_recibir":
+                return (
+                  <BlockerRow
+                    key="sin_recibir"
+                    icon={<IconUndo aria-hidden="true" className="h-4 w-4" />}
+                    title={`${plural(b.stops.length, "«No entregado»", "«No entregado»")} sin recibir en oficina`}
+                    detail="Siguen dentro de la caja del motorizado. Si ya volvieron, recíbelos aquí. Si los trae después, ciérrala igual: quedan en «Devoluciones» y el escaneo de Despacho del día los recibe."
+                    orders={orderNames(b.stops)}
+                    actions={<>
+                      <button type="button" onClick={() => onShowView("por_devolver")} className={BTN_LINK}>Ver en la tabla</button>
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => {
+                          if (!confirm(`¿Las ${plural(b.stops.length, "caja", "cajas")} ya ${b.stops.length === 1 ? "está" : "están"} en la oficina? Salen de la caja del motorizado y vuelven a «por asignar», también los rechazados.`)) return;
+                          onRun(() => receiveRouteReturns(routeId));
+                        }}
+                        className={BTN_LINK}
+                      >
+                        Recibir en oficina
+                      </button>
+                      {canForce && (
+                        <button
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => {
+                            if (!confirm(`Quedan ${plural(b.stops.length, "paquete «No entregado»", "paquetes «No entregado»")} en la caja. Se cerrará igual y quedarán pendientes en «Devoluciones». ¿Seguro?`)) return;
+                            onRun(() => closeRoute(routeId, { force: true }));
+                          }}
+                          className="min-h-0 text-[13px] font-medium text-crit-fg hover:underline disabled:opacity-50"
+                        >
+                          Cerrar igual
                         </button>
                       )}
                     </>}

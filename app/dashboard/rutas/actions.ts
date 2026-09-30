@@ -19,12 +19,15 @@ import {
 } from "@/lib/routes-access";
 import {
   groupByStore,
+  isForceableBlocker,
   masterEffects,
   routeCloseBlockerMessage,
   routeCloseBlockers,
   routeTotals,
+  stopsNotReceived,
   stopsToSettlementLines,
 } from "@/lib/routes";
+import { returnUndeliveredToOffice } from "@/app/dashboard/courier/actions";
 import { loadRouteCloseContext } from "@/lib/route-close";
 import { applyDeliveriesToMaster } from "@/lib/master-door";
 import { syncStopsToSheet } from "@/lib/sheets/stop-sync";
@@ -243,6 +246,28 @@ export async function startRoute(routeId: string): Promise<RouteActionResult> {
 }
 
 /**
+ * «Recibir en oficina» desde el cierre de la ruta (29-09-2026): los «No
+ * entregado» que siguen en su caja, de una vez. Es la MISMA puerta que
+ * «Devoluciones» en Despacho del día (`returnUndeliveredToOffice`, 0188/0206):
+ * sale de la caja con rastro y vuelve a «por asignar», rechazo incluido
+ * (v1.23). Pulsarlo dice que las cajas están en la oficina.
+ */
+export async function receiveRouteReturns(routeId: string): Promise<RouteActionResult> {
+  const g = await guard();
+  if ("error" in g) return { ok: false, error: g.error };
+  const detail = await getRouteDetail(routeId);
+  if (!detail) return { ok: false, error: "Ruta inexistente o sin acceso." };
+  const pending = stopsNotReceived(detail.stops);
+  if (!pending.length) return { ok: true, message: "No queda ningún «No entregado» en la caja." };
+  const orgId = detail.route.org_id;
+  if (!orgId) return { ok: false, error: "La ruta no tiene organización: recíbelos desde «Devoluciones»." };
+  const res = await returnUndeliveredToOffice(orgId, [...new Set(pending.map((stop) => stop.order_id))]);
+  revalidatePath("/dashboard/courier/rutas");
+  if (res.error) return { ok: false, error: res.error };
+  return { ok: true, message: res.notice };
+}
+
+/**
  * Cierra la ruta y genera su liquidación.
  *
  * Lo que declara el motorizado se convierte en líneas de liquidación con su
@@ -264,12 +289,13 @@ export async function closeRoute(
   if (route.status === "cerrada") return { ok: false, error: "La ruta ya está cerrada." };
 
   // Los bloqueos salen de la MISMA regla que enseña el panel de la ruta antes
-  // de pulsar: el primero que no se pueda forzar es el error. Solo fuera de
-  // Grupo GF se puede cerrar con paradas sin reportar, y solo a conciencia.
+  // de pulsar: el primero que no se pueda forzar es el error. A conciencia se
+  // puede cerrar fuera de Grupo GF con paradas sin reportar, y en Grupo GF con
+  // «No entregado» que el motorizado todavía no devolvió (29-09-2026).
   const context = await loadRouteCloseContext(g.admin, routeId);
   if (!context) return { ok: false, error: "No se pudo comprobar la recepción de las cargas." };
   const bloqueo = routeCloseBlockers({ isGf: context.isGf, openLoads: context.openLoads, stops, routeDate: route.route_date })
-    .find((blocker) => !(blocker.kind === "sin_reportar" && blocker.forceable && opts.force));
+    .find((blocker) => !(isForceableBlocker(blocker) && opts.force));
   if (bloqueo) return { ok: false, error: routeCloseBlockerMessage(bloqueo) };
 
   const stores = await getAccessibleStores();

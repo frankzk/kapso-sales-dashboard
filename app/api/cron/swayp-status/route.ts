@@ -42,7 +42,8 @@ export async function GET(req: NextRequest) {
         (report.fallos.length ? ` · fallos ${JSON.stringify(report.fallos)}` : "") +
         // La forma de la respuesta (claves y estados crudos, sin datos): la API
         // no está documentada y así se ve qué manda.
-        ` · crudos ${JSON.stringify(report.crudos)} · historial ${report.historial ?? "-"} · forma ${JSON.stringify(report.forma)}`,
+        ` · crudos ${JSON.stringify(report.crudos)} · historial ${report.historial ?? "-"} ${JSON.stringify(report.historialClaves)}` +
+        ` · forma ${JSON.stringify(report.forma)}`,
     );
     return NextResponse.json({ ok: true, ...report });
   } catch (err) {

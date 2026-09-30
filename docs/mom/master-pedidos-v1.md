@@ -3007,6 +3007,12 @@ misma puerta que el webhook (`applySwaypState`, `lib/swayp-ingest.ts`). Reglas:
 - En pruebas el endpoint reventaba con 500 en guías en novedad; si pasa en
   producción, el reporte lo cuenta con su motivo y la guía se reintenta en la
   pasada siguiente.
+- **La novedad se guarda como etiqueta del courier** (`reported_status`):
+  «Swayp · Destinatario ya no desea el producto (16)», con el nombre para
+  leerla en Envíos y el id del catálogo público de Swayp para decidir. Cuenta
+  la **última** novedad del historial: si primero no contestó y después dijo
+  que ya no lo quiere, vale lo segundo. Sin historial —el webhook— no se borra
+  la que hay. Las novedades 15 y 16 son rechazo en la puerta (§11.8).
 - **La API cierra una devolución como 10 «Cancelada»** (confirmado en la
   primera pasada, 29-09-2026). Su documentación dice que 10 solo sale de 1
   (Generada) y llama «Cancelación» al 9, pero las 15 guías que el tracking
@@ -3375,7 +3381,13 @@ una condición existe en otra pantalla, se lee de la misma función.
 4. El motivo del courier **no es rechazo en puerta** (`REFUSED` y equivalentes
    leídos por `motivoDelCourier`). **Sin motivo entra**: §11.7 dice que la
    ausencia no equivale a recuperable, y la llamada es justamente el medio que
-   lo averigua sin pedir dinero.
+   lo averigua sin pedir dinero. **Swayp también rechaza en la puerta
+   (29-09-2026):** su novedad 16 «Destinatario ya no desea el producto» y la 15
+   «no ha comprado ningún producto» cuentan igual que el `REFUSED` de Aliclik
+   (`guideDoorRejection`, `lib/reproprovincia.ts`). Desde que el fallo de Swayp
+   abre la recuperación (§9, v1.22), el agente habría llamado en provincia a
+   clientas que se lo dijeron al mensajero. La 12 «Pedido diferente al
+   solicitado» no: ahí el error es nuestro.
 5. **Teléfono peruano válido.** Los leads identificados solo por BSUID (§8.1)
    quedan fuera: no se pueden llamar.
 6. **Menos de dos antecedentes** (§8). Con dos o más, la conversación exige
@@ -7059,6 +7071,26 @@ lado:
   sin captura.
 - El panel ya no carga la muestra de pedidos asignables ni la cola de
   reintentos, que se pedían en cada apertura y no se enseñaban.
+
+**Cerrar una ruta no vacía la caja: los «No entregado» se reciben o se dejan a
+conciencia (29-09-2026).** La ruta de Yhoni del 26/09 se cerró el 28/09 con
+#KP136779 y #KP136896 reportados «No entregado» dentro de la caja, y nadie los
+recibió en oficina: al escanearlos el 29/09 para la ruta de hoy, el escaneo
+decía «Ya estaba». Había 78 así, en cajas del 16 al 28/09, y 20 rechazos.
+
+- `routeCloseBlockers` suma, en Grupo GF, **«No entregado» sin recibir en
+  oficina** (`sin_recibir`): paradas «No entregado» cuyo paquete conserva su
+  ítem activo en la caja (`stopsNotReceived`, el mismo criterio del escaneo).
+- **Se puede cerrar igual, a conciencia** («Cerrar igual», con confirmación):
+  el motorizado propio devuelve el saldo no entregado al día siguiente (§9.4),
+  y exigirlo esa noche frenaría la liquidación del efectivo. Lo que queda sigue
+  en «Devoluciones» y el escaneo de «Por QR» lo recibe al volver a asignarlo.
+  Es lo único que se fuerza en Grupo GF; lo sin reportar y la foto no.
+- **«Recibir en oficina»** en la misma fila (`receiveRouteReturns`) los recibe
+  de una vez por la puerta de «Devoluciones» (`returnUndeliveredToOffice`,
+  0188/0206): vuelven a «por asignar», rechazos incluidos (v1.23). Pulsarlo es
+  decir que las cajas están en la oficina, y lo confirma.
+- La tabla de la ruta filtra **«Por devolver»** con el mismo criterio.
 
 **Reabrir ruta.** Una ruta cerrada vuelve a «en curso» (`reopenRoute`, permiso
 `routes.manage`) solo mientras su liquidación de origen `ruta` siga en

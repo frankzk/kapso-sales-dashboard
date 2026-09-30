@@ -68,7 +68,7 @@
 
 import { etiquetaDiceRechazoEnPuerta, etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
-import { SWAYP_RETURN_STATES } from "@/lib/swayp";
+import { SWAYP_RETURN_STATES, swaypLabelSaysRejection } from "@/lib/swayp";
 import { tandersStatusCode } from "@/lib/tanders/status";
 
 /** Evento que cierra la recuperación a mano, con motivo. */
@@ -165,6 +165,17 @@ export function swaypGuideFailed(guide: RecoveryGuideLike): boolean {
  */
 function liveGuideFailed(guide: RecoveryGuideLike): boolean {
   return tandersGuideFailed(guide) || swaypGuideFailed(guide);
+}
+
+/**
+ * ¿La guía terminó en un RECHAZO EN LA PUERTA? El `REFUSED` de Aliclik, o la
+ * novedad 15/16 de Swayp («ya no desea el producto», «no ha comprado ningún
+ * producto»), que el barrido guarda como etiqueta (`swaypLabelSaysRejection`).
+ */
+export function guideDoorRejection(guide: RecoveryGuideLike): boolean {
+  if (etiquetaDiceRechazoEnPuerta(guide.reported_status)) return true;
+  const courier = (guide.courier ?? "").trim().toLowerCase();
+  return (courier === "fenix" || courier === "swayp") && swaypLabelSaysRejection(guide.reported_status);
 }
 
 /**
@@ -295,7 +306,7 @@ export function recoveryWindow(
     // Decide la MISMA guía que ancla la ventana, la del último intento: si el
     // cliente primero no contestó y después lo rechazó en la puerta, lo que
     // cuenta es cómo terminó la última vez.
-    doorRejection: etiquetaDiceRechazoEnPuerta(guide.reported_status),
+    doorRejection: guideDoorRejection(guide),
   };
 }
 

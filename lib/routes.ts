@@ -147,6 +147,12 @@ export interface EvidenceStop {
   outcome_reason: string | null;
   photo_path: string | null;
   order?: { name: string | null } | null;
+  /**
+   * El ítem ACTIVO de la caja de Grupo GF de la que salió la parada (0185).
+   * Un «No entregado» que todavía lo tiene sigue dentro de la caja: nadie lo
+   * recibió en oficina.
+   */
+  manifest_item_id?: string | null;
 }
 
 /**
@@ -205,7 +211,27 @@ export type RouteCloseBlocker =
   | { kind: "carga_sin_recibir"; loads: OpenLoad[] }
   | { kind: "sin_paradas" }
   | { kind: "sin_reportar"; stops: EvidenceStop[]; forceable: boolean }
-  | { kind: "sin_foto"; stops: EvidenceStop[] };
+  | { kind: "sin_foto"; stops: EvidenceStop[] }
+  /**
+   * «No entregado» que siguen dentro de la caja (29-09-2026). Se puede cerrar
+   * igual —el motorizado propio los devuelve al día siguiente (MOM §9.4)—,
+   * pero a conciencia: así quedaron 78 atrapados en cajas del 16 al 28/09.
+   */
+  | { kind: "sin_recibir"; stops: EvidenceStop[]; forceable: true };
+
+/** Lo que el coordinador puede saltar a conciencia con «Cerrar igual». */
+export function isForceableBlocker(blocker: RouteCloseBlocker): boolean {
+  return (blocker.kind === "sin_reportar" && blocker.forceable) || blocker.kind === "sin_recibir";
+}
+
+/**
+ * Los «No entregado» de la ruta que siguen en su caja de Grupo GF. Mismo
+ * criterio que el escaneo de Despacho del día: un ítem activo es un paquete que
+ * la caja todavía dice tener.
+ */
+export function stopsNotReceived<T extends EvidenceStop>(stops: readonly T[]): T[] {
+  return stops.filter((stop) => stop.status === "no_entregado" && !!stop.manifest_item_id);
+}
 
 /**
  * Todo lo que impide terminar la ruta, en el orden en que lo comprueba el
@@ -234,6 +260,8 @@ export function routeCloseBlockers(input: {
   if (input.isGf) {
     const sinFoto = stopsMissingEvidence(input.stops, input.routeDate);
     if (sinFoto.length) out.push({ kind: "sin_foto", stops: sinFoto });
+    const sinRecibir = stopsNotReceived(input.stops);
+    if (sinRecibir.length) out.push({ kind: "sin_recibir", stops: sinRecibir, forceable: true });
   }
   return out;
 }
@@ -265,6 +293,10 @@ export function routeCloseBlockerMessage(blocker: RouteCloseBlocker): string {
     }
     case "sin_foto":
       return missingEvidenceMessage(blocker.stops) ?? "Falta la foto de una entrega o un rechazo.";
+    case "sin_recibir": {
+      const uno = blocker.stops.length === 1;
+      return `${uno ? "Falta recibir en oficina 1 paquete «No entregado»" : `Faltan recibir en oficina ${blocker.stops.length} paquetes «No entregado»`}: ${orderList(blocker.stops)}. Si ya ${uno ? "volvió, recíbelo" : "volvieron, recíbelos"} con «Recibir en oficina»; si ${uno ? "vuelve" : "vuelven"} después, ciérrala igual: ${uno ? "queda" : "quedan"} en «Devoluciones» y se ${uno ? "recibe" : "reciben"} al escanear${uno ? "lo" : "los"}.`;
+    }
   }
 }
 

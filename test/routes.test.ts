@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeRoutePayout,
   groupByStore,
+  isForceableBlocker,
   masterEffects,
   missingEvidenceMessage,
   nonDeliveryNeedsPhoto,
@@ -14,6 +15,7 @@ import {
   stopEffect,
   routeTotals,
   stopsMissingEvidence,
+  stopsNotReceived,
   stopsToSettlementLines,
   validateStopReport,
   type OpenLoad,
@@ -397,8 +399,9 @@ describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
     // La foto que falta es un bloqueo más de `routeCloseBlockers` (sin_foto →
     // missingEvidenceMessage), la misma regla que enseña el panel de la ruta.
     expect(rutas).toContain("routeCloseBlockers({ isGf: context.isGf, openLoads: context.openLoads, stops, routeDate: route.route_date })");
-    // Forzar solo salta lo forzable: en Grupo GF, nada.
-    expect(rutas).toContain('.find((blocker) => !(blocker.kind === "sin_reportar" && blocker.forceable && opts.force));');
+    // Forzar solo salta lo forzable: en Grupo GF, solo los «No entregado» que
+    // siguen en la caja (29-09-2026).
+    expect(rutas).toContain(".find((blocker) => !(isForceableBlocker(blocker) && opts.force));");
     expect(rutas).toContain('if (!context) return { ok: false, error: "No se pudo comprobar la recepción de las cargas." };');
     expect(rutas).toContain("const requireEvidence = context.isGf;");
     expect(rutas).toContain("error: routeCloseBlockerMessage(bloqueo)");
@@ -435,19 +438,20 @@ describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
 // sola regla dice TODO lo que impide terminar: el panel lo enseña antes de
 // pulsar y el servidor rechaza con el primero que no se pueda forzar.
 describe("qué impide terminar la ruta", () => {
-  const parada = (over: Partial<{ seq: number; status: string; outcome_reason: string | null; photo_path: string | null; name: string | null }>) => ({
+  const parada = (over: Partial<{ seq: number; status: string; outcome_reason: string | null; photo_path: string | null; name: string | null; manifest_item_id: string | null }>) => ({
     seq: over.seq ?? 1,
     status: over.status ?? "entregado",
     outcome_reason: over.outcome_reason ?? null,
     photo_path: over.photo_path === undefined ? "f.jpg" : over.photo_path,
     order: { name: over.name === undefined ? `#KP${over.seq ?? 1}` : over.name },
+    manifest_item_id: over.manifest_item_id ?? null,
   });
   // Ruta del 28/09 o después: sus rechazos también exigen foto.
   const HOY = "2026-09-28";
   const carga = (over: Partial<OpenLoad>): OpenLoad => ({ id: over.id ?? "m1", load_number: over.load_number ?? 1, state: over.state ?? "office_check", items: over.items ?? 0 });
   // Lo que hace closeRoute: el primero que no se pueda forzar.
   const cierre = (input: Parameters<typeof routeCloseBlockers>[0], force = false) =>
-    routeCloseBlockers(input).find((b) => !(b.kind === "sin_reportar" && b.forceable && force)) ?? null;
+    routeCloseBlockers(input).find((b) => !(isForceableBlocker(b) && force)) ?? null;
 
   it("una ruta de Grupo GF reportada y con fotos está lista", () => {
     const stops = [parada({ seq: 1 }), parada({ seq: 2, status: "no_entregado", outcome_reason: "rechazado" }), parada({ seq: 3, status: "no_entregado", outcome_reason: "no_contesta", photo_path: null })];
@@ -527,6 +531,68 @@ describe("qué impide terminar la ruta", () => {
     expect(routeCloseBlockerMessage({ kind: "sin_reportar", stops: ocho.slice(0, 2), forceable: true })).toMatch(/^Quedan 2 paradas sin reportar\./);
     const sinFoto = [parada({ seq: 16, status: "no_entregado", outcome_reason: "rechazado", photo_path: null, name: "#KP136057" })];
     expect(routeCloseBlockerMessage({ kind: "sin_foto", stops: sinFoto })).toBe(missingEvidenceMessage(sinFoto));
+  });
+
+  // #KP136779 y #KP136896: Yhoni los reportó «No entregado» el 26/09, la ruta
+  // se cerró el 28/09 y seguían en la caja; el escaneo del 29/09 decía «Ya
+  // estaba». Eran 78 así. Cerrar ahora lo dice, y se puede hacer a conciencia.
+  it("un «No entregado» que sigue en la caja frena el cierre de Grupo GF, pero se puede cerrar igual", () => {
+    const stops = [
+      parada({ seq: 1 }),
+      parada({ seq: 2, status: "no_entregado", outcome_reason: "reprogramado", name: "#KP136779", manifest_item_id: "i2" }),
+      parada({ seq: 3, status: "no_entregado", outcome_reason: "rechazado", name: "#KP136896", manifest_item_id: "i3" }),
+      // Ya recibido en oficina: el ítem salió de la caja.
+      parada({ seq: 4, status: "no_entregado", outcome_reason: "no_contesta", manifest_item_id: null }),
+    ];
+    const blockers = routeCloseBlockers({ isGf: true, openLoads: [], stops, routeDate: HOY });
+    expect(blockers).toEqual([{ kind: "sin_recibir", stops: [stops[1], stops[2]], forceable: true }]);
+    expect(isForceableBlocker(blockers[0]!)).toBe(true);
+    expect(stopsNotReceived(stops).map((s) => s.seq)).toEqual([2, 3]);
+    expect(cierre({ isGf: true, openLoads: [], stops, routeDate: HOY })?.kind).toBe("sin_recibir");
+    expect(cierre({ isGf: true, openLoads: [], stops, routeDate: HOY }, true)).toBeNull();
+  });
+
+  it("forzar no salta nada más en Grupo GF: ni lo sin reportar ni la foto", () => {
+    const stops = [
+      parada({ seq: 1, status: "pendiente", photo_path: null }),
+      parada({ seq: 2, status: "no_entregado", outcome_reason: "no_contesta", manifest_item_id: "i2" }),
+    ];
+    expect(routeCloseBlockers({ isGf: true, openLoads: [], stops, routeDate: HOY }).map((b) => b.kind)).toEqual(["sin_reportar", "sin_recibir"]);
+    expect(cierre({ isGf: true, openLoads: [], stops, routeDate: HOY }, true)?.kind).toBe("sin_reportar");
+  });
+
+  it("fuera de Grupo GF no hay caja: no se pide recibir nada", () => {
+    const stops = [parada({ seq: 1, status: "no_entregado", outcome_reason: "no_contesta", manifest_item_id: "i1" })];
+    expect(routeCloseBlockers({ isGf: false, openLoads: [], stops, routeDate: HOY })).toEqual([]);
+  });
+
+  it("el mensaje nombra los pedidos y dice las dos salidas", () => {
+    const dos = [
+      parada({ seq: 2, status: "no_entregado", name: "#KP136779", manifest_item_id: "i2" }),
+      parada({ seq: 3, status: "no_entregado", name: "#KP136896", manifest_item_id: "i3" }),
+    ];
+    expect(routeCloseBlockerMessage({ kind: "sin_recibir", stops: dos, forceable: true })).toBe(
+      "Faltan recibir en oficina 2 paquetes «No entregado»: #KP136779, #KP136896. Si ya volvieron, recíbelos con «Recibir en oficina»; si vuelven después, ciérrala igual: quedan en «Devoluciones» y se reciben al escanearlos.",
+    );
+    expect(routeCloseBlockerMessage({ kind: "sin_recibir", stops: dos.slice(0, 1), forceable: true })).toBe(
+      "Falta recibir en oficina 1 paquete «No entregado»: #KP136779. Si ya volvió, recíbelo con «Recibir en oficina»; si vuelve después, ciérrala igual: queda en «Devoluciones» y se recibe al escanearlo.",
+    );
+  });
+
+  it("el panel ofrece recibirlos ahí mismo, con la misma puerta que «Devoluciones»", () => {
+    const panel = readFileSync(resolve(process.cwd(), "components/routes.tsx"), "utf8");
+    expect(panel).toContain("onRun(() => receiveRouteReturns(routeId))");
+    expect(panel).toContain("const hardBlockers = blockers.filter((b) => !isForceableBlocker(b));");
+    expect(panel).toContain('{ key: "por_devolver", label: "Por devolver", count: notReceivedIds.size }');
+    const rutas = readFileSync(resolve(process.cwd(), "app/dashboard/rutas/actions.ts"), "utf8");
+    expect(rutas).toContain("const pending = stopsNotReceived(detail.stops);");
+    expect(rutas).toContain("await returnUndeliveredToOffice(orgId, [...new Set(pending.map((stop) => stop.order_id))]);");
+    // La caja la dice el ítem activo que ya carga el detalle de la ruta.
+    const access = readFileSync(resolve(process.cwd(), "lib/routes-access.ts"), "utf8");
+    expect(access).toContain("manifest_item_id: pickups.get(pickupKey(s))?.id ?? null,");
+    expect(access).toContain('.is("removed_at", null);');
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    expect(mom).toContain("**Cerrar una ruta no vacía la caja: los «No entregado» se reciben o se dejan a\nconciencia (29-09-2026).**");
   });
 
   it("el panel de la ruta y el cierre usan la misma regla", () => {

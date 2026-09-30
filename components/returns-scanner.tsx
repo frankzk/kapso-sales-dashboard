@@ -12,8 +12,8 @@ import { Badge, OpsButton } from "@/components/ops-ui";
 /**
  * Devoluciones (Despacho del día): el supervisor escanea (o teclea) cada paquete «No
  * entregado» que vuelve con el motorizado. Cámara en serie, como al asignar,
- * con «Devueltos X de N». Cada lectura lo saca de la caja (0188/0189): un no
- * entregado vuelve a «por asignar»; un rechazo queda devuelto.
+ * con «Devueltos X de N». Cada lectura lo saca de la caja (0188/0206) y lo
+ * vuelve a «por asignar», rechazo incluido (v1.23).
  */
 export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: PendingReturn[] }) {
   const router = useRouter();
@@ -49,7 +49,7 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
   return (
     <div>
       <DispatchScanner busy={busy} disabled={false} compact look="ops" buttonLabel="Escanear" onScan={(code) => void run(code)} onCamera={() => setCameraOpen(true)} />
-      <p className="mt-3 text-[13px] text-ink-500">Confirma que la devolución llegó a la oficina: <b className="font-semibold tabular-nums text-ink-900">{total - left.length} de {total}</b> recibidas{left.length ? `, faltan ${left.length}` : ""}. Un no entregado vuelve a «por asignar»; un rechazo queda devuelto.</p>
+      <p className="mt-3 text-[13px] text-ink-500">Confirma que la devolución llegó a la oficina: <b className="font-semibold tabular-nums text-ink-900">{total - left.length} de {total}</b> recibidas{left.length ? `, faltan ${left.length}` : ""}. Vuelven a «por asignar», también los rechazados.</p>
       {lines.length > 0 && (
         <ul className="mt-3 max-h-40 divide-y divide-line overflow-auto rounded-lg text-sm ring-1 ring-line" aria-live="polite">
           {lines.map((l, i) => (
