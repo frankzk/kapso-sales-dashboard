@@ -1034,6 +1034,208 @@ export async function linkOrdersToLeads(
 }
 
 // ---------------------------------------------------------------------------
+// Carritos que la clienta ya convirtió en pedido por su cuenta.
+//
+// POR QUÉ EXISTE. El vínculo pedido → lead de arriba es solo para pedidos con
+// tag `kapso`. Un carrito abandonado que la clienta cierra después por otra vía
+// —el bot de carritos («BOT + CARRITO RECUPERADO»), un formulario nuevo en la
+// web, una venta manual— no lo lleva, y el carrito seguía en «Sin llamar».
+// Medido en 30 días: 56 carritos así, y en 23 la asesora llamó a quien ya había
+// comprado y lo cerró como «Ya compró en otro lado» (perdido).
+//
+// LA REGLA son cuatro variables fijas: mismo teléfono (lo pone la consulta),
+// pedido no anulado, pedido posterior al carrito y al menos un producto en
+// común. No hay ventana de horas: la mitad de esos 56 compró más de un día
+// después, y como el pedido tiene que ser POSTERIOR al carrito, uno viejo nunca
+// cierra un carrito nuevo. Solo toca leads en cola (open/hot): no crea leads ni
+// reescribe un perdido. MOM, «Carrito que ya es pedido».
+// ---------------------------------------------------------------------------
+
+/** Lo que identifica un producto en el carrito y en el pedido. */
+export type CartProductRef = Pick<OrderLineItem, "product_id" | "sku" | "title">;
+
+function productTitleKey(title: string | null | undefined): string {
+  return String(title ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * ¿Son el mismo producto? Por id de producto, SKU o nombre: basta uno.
+ *
+ * Hacen falta los tres porque los carritos de EasySell a veces llegan sin
+ * `product_id` (ítem personalizado) y con el mismo SKU y nombre que el pedido.
+ * Pura.
+ */
+export function sameCartProduct(a: CartProductRef, b: CartProductRef): boolean {
+  if (a.product_id && b.product_id && String(a.product_id) === String(b.product_id)) return true;
+  if (a.sku && b.sku && a.sku.trim() && a.sku.trim() === b.sku.trim()) return true;
+  const ta = productTitleKey(a.title);
+  return ta.length > 0 && ta === productTitleKey(b.title);
+}
+
+/**
+ * ¿Este pedido cierra este carrito? Las variables fijas de la regla, menos el
+ * teléfono (que ya viene emparejado). Compara instantes con `Date.parse` y no
+ * como texto: el webhook trae `-05:00` y la base devuelve `+00:00`. Pura.
+ */
+export function orderClosesCart(
+  cart: { createdAt: string | null | undefined; items: readonly CartProductRef[] | null | undefined },
+  order: {
+    created_at: string | null | undefined;
+    cancelled_at: string | null | undefined;
+    line_items: readonly CartProductRef[] | null | undefined;
+  },
+): boolean {
+  if (order.cancelled_at) return false;
+  const cartAt = Date.parse(cart.createdAt ?? "");
+  const orderAt = Date.parse(order.created_at ?? "");
+  if (!Number.isFinite(cartAt) || !Number.isFinite(orderAt) || orderAt <= cartAt) return false;
+  const orderItems = order.line_items ?? [];
+  return (cart.items ?? []).some((a) => orderItems.some((b) => sameCartProduct(a, b)));
+}
+
+/** Cuánto hacia atrás mira el barrido del cron. Es la red de seguridad del
+ *  webhook (que actúa al instante): cubre un webhook perdido o un lead que el
+ *  sync de carritos creó DESPUÉS de que llegara el pedido. */
+export const CART_ORDER_SWEEP_DAYS = 3;
+
+/**
+ * Saca de la cola los carritos que ya son pedido: status `ya_tiene_pedido`
+ * (ganado), con el pedido vinculado, y una fila `system` en el historial.
+ *
+ * `phones`: los teléfonos a revisar (el webhook pasa el del pedido que llegó).
+ * Sin `phones`, el barrido toma los de los pedidos no anulados creados desde
+ * `sinceIso`. Respeta una gestión de la asesora registrada DESPUÉS del pedido
+ * (`eventOverridesDisposition`): ahí ya habló con la clienta y su resultado
+ * manda. Devuelve cuántos leads cerró. Idempotente: un lead cerrado ya no es
+ * open/hot y no vuelve a salir en la consulta.
+ */
+export async function closeCartLeadsWithOrders(
+  admin: SupabaseClient,
+  storeId: string,
+  opts: { phones?: string[]; sinceIso?: string } = {},
+): Promise<number> {
+  let phones = opts.phones ? [...new Set(opts.phones.filter(Boolean))] : null;
+  if (!phones) {
+    const since = opts.sinceIso ?? new Date(Date.now() - CART_ORDER_SWEEP_DAYS * 86_400_000).toISOString();
+    const found = new Set<string>();
+    const PAGE = 1000;
+    // Se avanza por lo que llegó y se corta en la página vacía, no en «menos de
+    // PAGE»: si la API tiene un tope de filas menor, esa condición cortaría a la
+    // primera página creyendo que era la última.
+    for (let from = 0, pages = 0; pages < 50; pages += 1) {
+      const { data } = await admin
+        .from("orders")
+        .select("customer_phone")
+        .eq("store_id", storeId)
+        .is("cancelled_at", null)
+        .not("customer_phone", "is", null)
+        .gte("created_at", since)
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, from + PAGE - 1);
+      const rows = (data as { customer_phone: string | null }[] | null) ?? [];
+      if (!rows.length) break;
+      for (const r of rows) if (r.customer_phone) found.add(r.customer_phone);
+      from += rows.length;
+    }
+    phones = [...found];
+  }
+  if (!phones.length) return 0;
+
+  let closed = 0;
+  for (const part of chunkIds(phones, 200)) {
+    const { data: leadRows } = await admin
+      .from("leads")
+      .select("id, phone, draft_order_gid")
+      .eq("store_id", storeId)
+      .in("phone", part)
+      .in("category", ["open", "hot"])
+      .not("draft_order_gid", "is", null);
+    const leads = ((leadRows as { id: string; phone: string; draft_order_gid: string | null }[] | null) ?? []).filter(
+      (l) => l.phone && l.draft_order_gid,
+    );
+    if (!leads.length) continue;
+
+    const cartByGid = new Map<string, { createdAt: string | null; items: CartProductRef[] }>();
+    for (const gids of chunkIds([...new Set(leads.map((l) => l.draft_order_gid as string))], 100)) {
+      const { data } = await admin
+        .from("draft_orders")
+        .select("draft_order_gid, created_at, line_items")
+        .eq("store_id", storeId)
+        .in("draft_order_gid", gids);
+      for (const d of (data as { draft_order_gid: string; created_at: string | null; line_items: CartProductRef[] | null }[] | null) ?? []) {
+        cartByGid.set(d.draft_order_gid, { createdAt: d.created_at, items: d.line_items ?? [] });
+      }
+    }
+
+    const leadPhones = [...new Set(leads.map((l) => l.phone))];
+    type OrderRef = {
+      id: string;
+      name: string | null;
+      customer_phone: string;
+      created_at: string | null;
+      cancelled_at: string | null;
+      line_items: CartProductRef[] | null;
+    };
+    const ordersByPhone = new Map<string, OrderRef[]>();
+    {
+      const { data } = await admin
+        .from("orders")
+        .select("id, name, customer_phone, created_at, cancelled_at, line_items")
+        .eq("store_id", storeId)
+        .in("customer_phone", leadPhones)
+        .is("cancelled_at", null);
+      for (const o of (data as OrderRef[] | null) ?? []) {
+        const list = ordersByPhone.get(o.customer_phone) ?? [];
+        list.push(o);
+        ordersByPhone.set(o.customer_phone, list);
+      }
+    }
+    const dispositionAt = await lastDispositionAtByPhone(admin, storeId, leadPhones);
+
+    for (const lead of leads) {
+      const cart = cartByGid.get(lead.draft_order_gid as string);
+      if (!cart) continue;
+      // El PRIMER pedido que cierra el carrito: es el que lo convirtió.
+      const order = (ordersByPhone.get(lead.phone) ?? [])
+        .filter((o) => orderClosesCart(cart, o))
+        .sort((a, b) => Date.parse(a.created_at ?? "") - Date.parse(b.created_at ?? ""))[0];
+      if (!order) continue;
+      if (!eventOverridesDisposition(order.created_at, dispositionAt.get(lead.phone))) continue;
+
+      // Guarda en el propio update: si entre la lectura y aquí la asesora lo
+      // gestionó o ya lo ganó otro camino, no se pisa.
+      const { data: updated } = await admin
+        .from("leads")
+        .update({
+          status: "ya_tiene_pedido",
+          category: "won",
+          needs_attention: false,
+          has_order: true,
+          order_id: order.id,
+          // Sale de TODAS las listas de llamada: Seguimientos lista por fecha
+          // sin mirar la categoría.
+          next_followup_at: null,
+        })
+        .eq("id", lead.id)
+        .in("category", ["open", "hot"])
+        .select("id");
+      if (!((updated as { id: string }[] | null) ?? []).length) continue;
+      await admin.from("lead_calls").insert({
+        lead_id: lead.id,
+        store_id: storeId,
+        vendedora: null,
+        kind: "system",
+        new_status: "ya_tiene_pedido",
+        note: `La clienta hizo el pedido${order.name ? ` ${order.name}` : ""} con un producto del carrito: sale de la cola.`,
+      });
+      closed += 1;
+    }
+  }
+  return closed;
+}
+
+// ---------------------------------------------------------------------------
 // Draft orders (Releasit COD carts) → leads. Mirrors linkOrdersToLeads.
 // ---------------------------------------------------------------------------
 

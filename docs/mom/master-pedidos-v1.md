@@ -2394,6 +2394,52 @@ Tasa de cierre entre los LLAMADOS, 60 días:
 Mismo orden en las dos tiendas; lo que cambia son las magnitudes, y por eso los
 pesos de llamada son por tienda.
 
+**Carrito que ya es pedido (29-09-2026).** Un carrito sale de la cola de
+llamadas en cuanto llega un pedido que cumple cuatro variables fijas:
+
+1. Mismo teléfono que el carrito.
+2. El pedido no está anulado.
+3. El pedido es posterior al carrito.
+4. El pedido trae al menos un producto del carrito — mismo id de producto,
+   mismo SKU o mismo nombre. Hacen falta los tres porque los carritos de
+   EasySell a veces llegan sin id de producto.
+
+El lead pasa a `ya_tiene_pedido` (ganado) con el pedido vinculado, pierde la
+fecha de seguimiento —la vista Seguimientos lista por fecha sin mirar la
+categoría— y queda una fila `system` en su historial con el número del pedido.
+No le da la venta a ninguna asesora: eso lo decide `order_sales`, no el estado
+del lead.
+
+Por qué existe. El vínculo pedido → lead solo lo hacían los pedidos con tag
+`kapso`. Un carrito que la clienta cerraba por otra vía —el bot de carritos
+(«BOT + CARRITO RECUPERADO»), un formulario nuevo en la web, una venta manual—
+se quedaba en «Sin llamar». Medido en 30 días: 56 carritos así, y en 23 la
+asesora llamó a quien ya había comprado y lo cerró como «Ya compró en otro
+lado», un perdido que era una venta nuestra.
+
+**No hay ventana de horas**, a propósito. De esos 56, 24 compraron en menos de
+una hora y 20 más de siete días después: con «últimas 24 h» quedaba la mitad en
+la cola. La ventana tampoco protege de nada, porque la variable 3 ya impide que
+un pedido viejo cierre un carrito nuevo. Si compró **otro** producto, el
+carrito se queda en la cola: ahí sí hay algo que ofrecer.
+
+Alcance:
+
+- Solo leads **en cola** (open/hot), sea cual sea su estado dentro de ella. No
+  crea leads —cada cliente de la web sería un ganado falso— ni reescribe un
+  perdido o un ganado.
+- Solo carritos respaldados por un borrador de Shopify (`draft_order_gid`): el
+  carrito deducido del chat no trae productos con qué comparar.
+- Si la asesora registró una gestión **después** del pedido, manda su
+  resultado: ya habló con la clienta.
+
+Corre en dos lugares: el webhook de pedidos, al instante, para todo pedido sin
+tag `kapso` (los que sí lo llevan ya ganan el lead por su camino); y el cron,
+que revisa los pedidos de los últimos `CART_ORDER_SWEEP_DAYS` días como red de
+seguridad. El cron va después de sincronizar pedidos y carritos: si el sync de
+carritos crea el lead de un carrito cuyo pedido ya llegó, sale de la cola en la
+misma corrida.
+
 **Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
 que la cola tiene que recortar: quedan fuera **Shalom, Tanders, Urpi y el
 reparto propio**. Shalom es agencia —la clienta recoge en el terminal, no hay
