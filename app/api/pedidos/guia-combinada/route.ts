@@ -16,6 +16,7 @@ import { outputDisplayCode } from "@/lib/shipment-output";
 import { buildTandersLabel, type LabelShipment } from "@/lib/tanders/label";
 import { buildGuiaCombinadaPdf, type CombinadaEntry } from "@/lib/labels/guia-combinada";
 import { labelItemsFor } from "@/lib/labels/line-items";
+import { pickCombinadaOutputs, type CombinadaCandidate } from "@/lib/labels/guia-combinada-select";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,11 +51,16 @@ function parseIds(raw: string | null): string[] {
 }
 
 export async function GET(request: NextRequest) {
-  const shipmentIds = parseIds(request.nextUrl.searchParams.get("ids"));
-  if (!shipmentIds.length) {
+  // Dos formas de pedirla: `ids` (salidas, desde el drawer) u `orders` (pedidos,
+  // desde la barra en lote del Master). Con pedidos se imprime la salida de
+  // Tanders vigente de cada uno, sin crear nada (lib/labels/guia-combinada-select.ts).
+  let shipmentIds = parseIds(request.nextUrl.searchParams.get("ids"));
+  const requestedOrders = parseIds(request.nextUrl.searchParams.get("orders"));
+  const requested = shipmentIds.length || requestedOrders.length;
+  if (!requested) {
     return NextResponse.json({ error: "Indica las salidas a imprimir." }, { status: 400 });
   }
-  if (shipmentIds.length > MAX_LABELS) {
+  if (requested > MAX_LABELS) {
     return NextResponse.json(
       { error: `Demasiadas guías de una vez (máximo ${MAX_LABELS}).` },
       { status: 400 },
@@ -66,6 +72,24 @@ export async function GET(request: NextRequest) {
     data: { user },
   } = await sb.auth.getUser();
   if (!user) return new NextResponse("unauthorized", { status: 401 });
+
+  let missingOrders = 0;
+  if (!shipmentIds.length) {
+    const { data: candidates } = await sb
+      .from("shipments")
+      .select("id,order_id,courier,delivery_status,output_number")
+      .in("order_id", requestedOrders)
+      .eq("courier", "tanders");
+    const picked = pickCombinadaOutputs(requestedOrders, (candidates ?? []) as CombinadaCandidate[]);
+    shipmentIds = picked.shipmentIds;
+    missingOrders = picked.missingOrderIds.length;
+    if (!shipmentIds.length) {
+      return NextResponse.json(
+        { error: "Ninguno de esos pedidos tiene una guía de Tanders: la combinada es para salidas de Tanders." },
+        { status: 400 },
+      );
+    }
+  }
 
   const { data } = await sb.from("shipments").select(COLUMNS).in("id", shipmentIds);
   const byId = new Map(((data as Row[] | null) ?? []).map((r) => [r.id, r]));
@@ -146,6 +170,8 @@ export async function GET(request: NextRequest) {
       "content-type": "application/pdf",
       "content-disposition": `inline; filename="${filename}"`,
       "cache-control": "no-store",
+      // Pedidos sin guía de Tanders (pedida por pedidos): la barra lo dice.
+      "x-combinadas-omitidas": String(missingOrders),
     },
   });
 }
