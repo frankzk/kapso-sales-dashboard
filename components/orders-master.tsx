@@ -550,6 +550,7 @@ export function OrdersMasterBoard({
                 multiStore={stores.length > 1}
                 showConfirmation={view === "por_confirmar"}
                 onOpen={setOpenId}
+                openId={openId}
                 selected={selectedIds}
                 onToggleRow={toggleRow}
                 onToggleAll={toggleAll}
@@ -934,6 +935,7 @@ export function OrdersMasterBoard({
                   multiStore={stores.length > 1}
                   showConfirmation={view === "por_confirmar"}
                   onOpen={setOpenId}
+                  openId={openId}
                   selected={selectedIds}
                   onToggleRow={toggleRow}
                   onToggleAll={toggleAll}
@@ -1746,6 +1748,7 @@ function MasterTable({
   multiStore,
   showConfirmation,
   onOpen,
+  openId,
   selected,
   onToggleRow,
   onToggleAll,
@@ -1755,6 +1758,8 @@ function MasterTable({
   multiStore: boolean;
   showConfirmation: boolean;
   onOpen: (orderId: string) => void;
+  /** El pedido cuyo drawer está abierto: su fila se resalta detrás del panel. */
+  openId: string | null;
   selected: Set<string>;
   onToggleRow: (orderId: string) => void;
   onToggleAll: (orderIds: string[], checked: boolean) => void;
@@ -1829,19 +1834,28 @@ function MasterTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
+          {rows.map((r) => {
+            // La fila del drawer abierto: con el panel encima se perdía de vista
+            // de qué pedido era. Un azul más firme que el de la casilla marcada,
+            // para que «lo que estoy mirando» no se confunda con «lo que elegí».
+            const isOpen = openId === r.order_id;
+            return (
             <tr
               key={r.id}
               onClick={() => onOpen(r.order_id)}
+              aria-current={isOpen ? "true" : undefined}
               className={cn(
-                "cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50",
+                "cursor-pointer border-b border-slate-100 last:border-0",
                 // La fila necesita fondo propio: las celdas congeladas lo
                 // HEREDAN, y sin él se transparentarían dejando ver el
-                // contenido que pasa por debajo. Excluyente con el resaltado de
-                // selección: dos clases de fondo a la vez y no manda el orden
-                // del atributo sino el del CSS, así que el resaltado podría
-                // perder contra el blanco.
-                selected.has(r.order_id) ? "bg-brand-50/60" : "bg-white",
+                // contenido que pasa por debajo. Una sola clase de fondo a la
+                // vez: con dos no manda el orden del atributo sino el del CSS,
+                // y el resaltado podría perder contra el blanco.
+                isOpen
+                  ? "bg-brand-100"
+                  : selected.has(r.order_id)
+                    ? "bg-brand-50/60 hover:bg-slate-50"
+                    : "bg-white hover:bg-slate-50",
               )}
             >
               {/* stopPropagation: marcar la fila no debe abrir el drawer. */}
@@ -1854,7 +1868,7 @@ function MasterTable({
                   className="h-4 w-4 cursor-pointer align-middle"
                 />
               </td>
-              <td {...frozen("pedido")} className={cn(frozen("pedido").className, "px-4 py-2.5 font-medium text-slate-900")}>{r.order_name ?? "—"}</td>
+              <td {...frozen("pedido")} className={cn(frozen("pedido").className, "px-4 py-2.5", isOpen ? "font-semibold text-brand-700" : "font-medium text-slate-900")}>{r.order_name ?? "—"}</td>
               {multiStore && <td {...frozen("tienda")} className={cn(frozen("tienda").className, "px-2 py-2.5 text-slate-600")}>{storeName(r.store_id)}</td>}
               <td {...frozen("creado")} className={cn(frozen("creado").className, "px-2 py-2.5 text-slate-600")}>{fmtDate(r.order_created_at)}</td>
               <td {...frozen("cliente")} className={cn(frozen("cliente").className, "px-2 py-2.5 text-slate-700")}>
@@ -1905,7 +1919,8 @@ function MasterTable({
               <td className="px-2 py-2.5 text-slate-600">{fmtDate(r.last_movement_at)}</td>
               <td className="px-4 py-2.5 text-slate-600">{fmtAge(r.macro_since ?? r.status_since)}</td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
