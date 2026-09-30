@@ -415,4 +415,6 @@
 \ir migrations/0205_peru_districts_departments.sql
 \echo 'Applying 0206_gf_return_rejected_reprograms.sql'
 \ir migrations/0206_gf_return_rejected_reprograms.sql
+\echo 'Applying 0207_lead_cart_count_48h.sql'
+\ir migrations/0207_lead_cart_count_48h.sql
 \echo 'Done.'

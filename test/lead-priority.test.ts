@@ -540,3 +540,57 @@ describe("distrito y ficha de producto son EL MISMO balde", () => {
     );
   });
 });
+
+// Dentro de `carrito`, la que armó 2+ carritos en 48 h cierra más en los cuatro
+// tramos de Kenku (lib/lead-priority.ts, REPEAT_CART_FACTOR). En Aurela no hay
+// muestra (44 llamadas, z ≈ 0,9) y no se aplica.
+describe("carrito · la clienta armó varios carritos", () => {
+  const hace = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
+  const carritoDe = (h: number, cart_count_48h: number | null) =>
+    carrito({ first_seen_at: hace(h), last_interaction_at: hace(h), cart_count_48h });
+
+  it("en Kenku multiplica el peso del tramo por 1,5", () => {
+    expect(leadPriorityScore(carritoDe(0.5, 2), KENKU, NOW)).toBeCloseTo(
+      1.5 * leadPriorityScore(carritoDe(0.5, 1), KENKU, NOW),
+    );
+    expect(leadPriorityScore(carritoDe(0.5, 5), KENKU, NOW)).toBeCloseTo(
+      leadPriorityScore(carritoDe(0.5, 2), KENKU, NOW),
+    ); // es «varios», no «más es mejor»: 5 carritos valen lo mismo que 2
+  });
+
+  it("dentro de cada tramo, la de varios carritos va primero (el orden medido)", () => {
+    for (const h of [0.5, 3, 12, 30]) {
+      expect(leadPriorityScore(carritoDe(h, 2), KENKU, NOW)).toBeGreaterThan(
+        leadPriorityScore(carritoDe(h, 1), KENKU, NOW),
+      );
+    }
+  });
+
+  it("un solo carrito, o sin el dato (migración pendiente), puntúa como antes", () => {
+    const antes = leadPriorityScore(carrito(), KENKU, NOW);
+    expect(leadPriorityScore(carrito({ cart_count_48h: 1 }), KENKU, NOW)).toEqual(antes);
+    expect(leadPriorityScore(carrito({ cart_count_48h: null }), KENKU, NOW)).toEqual(antes);
+  });
+
+  it("no toca el bono de ticket: armar dos carritos no dice que vaya a gastar más", () => {
+    const uno = leadPriorityScore(carritoDe(0.5, 1), KENKU, NOW);
+    const conTicket = (n: number) =>
+      leadPriorityScore({ ...carritoDe(0.5, n), cart_value: 250 }, KENKU, NOW);
+    // La diferencia entre 2 y 1 carrito es la misma con o sin ticket: 0,5 × peso.
+    expect(conTicket(2) - conTicket(1)).toBeCloseTo(0.5 * uno);
+  });
+
+  it("solo aplica a carritos: otro segmento con el dato no se mueve", () => {
+    expect(leadPriorityScore(interes({ cart_count_48h: 3 }), KENKU, NOW)).toEqual(
+      leadPriorityScore(interes(), KENKU, NOW),
+    );
+  });
+
+  it("en Aurela no se aplica (sin muestra) ni en una tienda sin medir", () => {
+    for (const profile of [AURELA, scoringProfileFor("Tienda Nueva")]) {
+      expect(leadPriorityScore(carritoDe(0.5, 3), profile, NOW)).toEqual(
+        leadPriorityScore(carritoDe(0.5, 1), profile, NOW),
+      );
+    }
+  });
+});

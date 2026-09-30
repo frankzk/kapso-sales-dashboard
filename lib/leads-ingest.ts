@@ -1272,13 +1272,35 @@ async function upsertLeadResilient(admin: SupabaseClient, row: any): Promise<voi
   const { error } = await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
   if (!error) return;
   let dropped = false;
-  for (const c of ["draft_order_name", "draft_order_status", "draft_order_url", "province", "region", "referencia", "address1", "ship_name"]) {
+  for (const c of ["draft_order_name", "draft_order_status", "draft_order_url", "province", "region", "referencia", "address1", "ship_name", "cart_count_48h"]) {
     if (c in row) {
       delete row[c];
       dropped = true;
     }
   }
   if (dropped) await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
+}
+
+/** Ventana de «armó varios carritos» (cart_count_48h, 0207). */
+const CART_COUNT_WINDOW_MS = 48 * 3_600_000;
+
+/**
+ * Cuántos carritos cayeron en las 48 h que terminan en `cartAt`, incluido él.
+ *
+ * Nunca devuelve menos de 1: el carrito de la fila existe aunque la consulta no
+ * lo haya traído (un fallo, o la base todavía sin él). Instantes con
+ * `Date.parse`, no como texto: Shopify y la base escriben la zona distinto.
+ * Puro.
+ */
+export function cartsInWindow(cartAt: string | null | undefined, cartTimes: readonly string[]): number {
+  const end = Date.parse(cartAt ?? "");
+  if (!Number.isFinite(end)) return 1;
+  const start = end - CART_COUNT_WINDOW_MS;
+  const n = cartTimes.filter((t) => {
+    const at = Date.parse(t);
+    return Number.isFinite(at) && at >= start && at <= end;
+  }).length;
+  return Math.max(1, n);
 }
 
 /** OPEN/INVOICE_SENT draft → ensure a callable "cart" lead. Creates it if new;
@@ -1292,6 +1314,7 @@ async function upsertDraftCartLead(
   exists: boolean,
   reopen: CartReopen = false,
   fillSource = false,
+  cartCount = 1,
 ): Promise<void> {
   const qty = d.line_items.reduce((s, li) => s + (Number(li.quantity) || 0), 0);
   const seen = d.updated_at ?? d.created_at; // the cart's activity time
@@ -1306,6 +1329,7 @@ async function upsertDraftCartLead(
     cart_item_count: qty > 0 ? qty : 1, // >0 so leadSegment() → "carrito"
     cart_summary: draftCartSummary(d.line_items),
     cart_product_handle: cartProductHandle(d.line_items),
+    cart_count_48h: cartCount,
     district: d.district,
     province: d.province,
     region: d.region,
@@ -2190,6 +2214,29 @@ export async function linkDraftOrdersToLeads(
   // lead only reopens for a cart fresher than this, so it never ping-pongs.
   const staleCutoff = new Date(Date.now() - STALE_LEAD_DAYS * 86_400_000).toISOString();
 
+  // Cuándo armó cada teléfono sus carritos, para contar los de las 48 h que
+  // terminan en cada uno (cart_count_48h, 0207). Todos los estados: un carrito
+  // completado también es un intento de compra. Una sola consulta por lote.
+  const cartTimesByPhone = new Map<string, string[]>();
+  {
+    const times = eligible.map((d) => Date.parse(d.created_at ?? "")).filter(Number.isFinite);
+    if (times.length) {
+      const floor = new Date(Math.min(...times) - CART_COUNT_WINDOW_MS).toISOString();
+      const { data } = await admin
+        .from("draft_orders")
+        .select("customer_phone, created_at")
+        .eq("store_id", storeId)
+        .in("customer_phone", phones)
+        .gte("created_at", floor);
+      for (const r of (data as { customer_phone: string | null; created_at: string | null }[] | null) ?? []) {
+        if (!r.customer_phone || !r.created_at) continue;
+        const list = cartTimesByPhone.get(r.customer_phone) ?? [];
+        list.push(r.created_at);
+        cartTimesByPhone.set(r.customer_phone, list);
+      }
+    }
+  }
+
   const recoveredDates: string[] = []; // created_at of newly-captured recovered orders
   const graceMs = DRAFT_GRACE_MINUTES * 60_000;
   for (const d of eligible) {
@@ -2236,7 +2283,8 @@ export async function linkDraftOrdersToLeads(
     // On reopen, attribute the lead to the cart if it has no source yet (a bare lead
     // created by the order link) so it shows under "Carrito" in the Fuente filter.
     const fillSource = reopen && !existingSource.get(phone);
-    await upsertDraftCartLead(admin, storeId, d, existingCategory.has(phone), reopen, fillSource);
+    const cartCount = cartsInWindow(d.created_at, cartTimesByPhone.get(phone) ?? []);
+    await upsertDraftCartLead(admin, storeId, d, existingCategory.has(phone), reopen, fillSource, cartCount);
   }
   return recoveredDates;
 }

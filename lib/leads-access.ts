@@ -68,6 +68,7 @@ const LEAD_BOARD_SELECT = [
   "first_inbound_text",
   "last_product_handle",
   "cart_product_handle",
+  "cart_count_48h",
   "source",
   "ad_id",
   "ad_headline",
@@ -88,6 +89,7 @@ const COLUMNAS_CON_MIGRACION_PENDIENTE = new Set([
   "first_inbound_text",
   "last_product_handle",
   "cart_product_handle",
+  "cart_count_48h", // 0207: sin ella la cola se ordena como antes, sin el factor
 ]);
 const LEAD_BOARD_SELECT_LEGACY = LEAD_BOARD_SELECT.split(",")
   .filter((c) => !COLUMNAS_CON_MIGRACION_PENDIENTE.has(c))

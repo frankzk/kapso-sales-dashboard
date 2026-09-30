@@ -246,6 +246,8 @@ export interface LeadRow {
   last_product_handle?: string | null;
   /** Handle del producto del carrito o de la navegacion abandonada (0143). */
   cart_product_handle?: string | null;
+  /** Carritos de la clienta en las 48 h que terminan en el ultimo (0207). */
+  cart_count_48h?: number | null;
   // Source / channel attribution (0008). 'meta_ad' = structured Click-to-WhatsApp
   // referral (real ad_id); 'fb_web' = reached WhatsApp via a Facebook/IG web link
   // (utm_source=facebook/fbclid, no ad_id); 'cod_cart'/'abandoned_browse' = flows;
