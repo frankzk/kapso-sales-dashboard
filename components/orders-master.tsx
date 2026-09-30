@@ -1203,18 +1203,39 @@ const BULK_COURIERS: { key: ManualRouteCourier; label: string }[] = [
 
 /** Descarga el PDF que devuelve el endpoint, o el mensaje de error si no hay rótulos. */
 async function downloadRotulos(query: string): Promise<{ error?: string; missing: number }> {
-  const response = await fetch(`/api/pedidos/rotulos?${query}`);
+  return downloadPdf(`/api/pedidos/rotulos?${query}`, "x-rotulos-missing", "rotulos.pdf");
+}
+
+/**
+ * Guías combinadas de Tanders (su rótulo arriba y el interno abajo) de los
+ * pedidos elegidos. Solo lee: imprime la salida de Tanders vigente de cada uno y
+ * cuenta los que no tienen (lib/labels/guia-combinada-select.ts).
+ */
+async function downloadCombinadas(orderIds: string[]): Promise<{ error?: string; missing: number }> {
+  return downloadPdf(
+    `/api/pedidos/guia-combinada?orders=${orderIds.join(",")}`,
+    "x-combinadas-omitidas",
+    "guias-combinadas.pdf",
+  );
+}
+
+async function downloadPdf(
+  url: string,
+  missingHeader: string,
+  fallbackName: string,
+): Promise<{ error?: string; missing: number }> {
+  const response = await fetch(url);
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     return { error: body?.error ?? "No se pudieron generar los rótulos.", missing: 0 };
   }
-  const missing = Number(response.headers.get("x-rotulos-missing") ?? "0");
+  const missing = Number(response.headers.get(missingHeader) ?? "0");
   const blob = await response.blob();
   const href = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = href;
   anchor.download =
-    response.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "rotulos.pdf";
+    response.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ?? fallbackName;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
@@ -1305,6 +1326,29 @@ function BulkBar({
     }
   };
 
+  const downloadCombined = async () => {
+    setBusy(true);
+    reset();
+    try {
+      const pdf = await downloadCombinadas(Array.from(selectedIds));
+      if (pdf.error) {
+        setError(pdf.error);
+        return;
+      }
+      const printed = count - pdf.missing;
+      setNotice(
+        `${printed} ${printed === 1 ? "guía combinada descargada" : "guías combinadas descargadas"}.` +
+          (pdf.missing
+            ? ` ${pdf.missing} ${pdf.missing === 1 ? "pedido no tiene" : "pedidos no tienen"} guía de Tanders.`
+            : ""),
+      );
+    } catch {
+      setError("No se pudieron generar las guías combinadas.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Crear salidas y, si salió alguna, bajar sus rótulos en el mismo gesto: es el
   // flujo real del almacén (elegir la tanda, generarla, imprimirla).
   const createOutputs = async () => {
@@ -1380,6 +1424,14 @@ function BulkBar({
           className="rounded-lg bg-white px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-slate-100 disabled:opacity-50"
         >
           {busy ? "Trabajando…" : "Descargar rótulos (PDF)"}
+        </button>
+        <button
+          onClick={downloadCombined}
+          disabled={busy}
+          title="El rótulo de Tanders y el interno en una hoja, para los pedidos que ya tienen guía de Tanders"
+          className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          Guías combinadas Tanders (PDF)
         </button>
         {canEdit && (
           <button
