@@ -538,12 +538,17 @@ describe("resolveMacroStage — Por cerrar y Finalizado", () => {
       guide({ id: "s1", delivery_status: "anulado", custody_state: "devuelto", returned_at: returnedAt }),
       guide({ id: "s2", courier: "axel", delivery_status: "anulado", custody_state: "devuelto", returned_at: returnedAt }),
     ];
+    // Anulado en Shopify: la salida de Axel que volvió ya no abre recuperación
+    // (v1.23), solo queda conciliar las dos cajas.
+    const cancelled = order({ cancelled_at: returnedAt });
     const oneClosed = resolve({
+      order: cancelled,
       guides,
       events: [{ ...event("inventory_reconciled", "2026-07-08T11:00:00.000Z"), shipment_id: "s1" }],
       legacy: { general: "devuelto", operational: "devuelto_al_origen", since: returnedAt },
     });
     const bothClosed = resolve({
+      order: cancelled,
       guides,
       events: [
         { ...event("inventory_reconciled", "2026-07-08T11:00:00.000Z"), shipment_id: "s1" },
@@ -731,11 +736,12 @@ describe("motorizado propio: lo que reporta mueve la etapa (v1.14, MOM §29.13)"
     expect(gf({ events: [stop("no_entregado", T("19:00"), "no_estaba")] })).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima" });
   });
 
-  it("v1.15: todo «No entregado» es Por reprogramar Lima; solo «Rechazó el pedido» va a devolución", () => {
-    for (const reason of ["direccion_errada", "no_contesta", "sin_dinero", "otro", "reprogramado", "no_estaba"]) {
+  it("v1.23: todo «No entregado» es Por reprogramar Lima, también «Rechazó el pedido»", () => {
+    // Hasta la v1.22 el rechazo iba a Por cerrar · Devolución física pendiente
+    // (v1.15). Regla del owner: solo la anulación en Shopify termina la venta.
+    for (const reason of ["direccion_errada", "no_contesta", "sin_dinero", "otro", "reprogramado", "no_estaba", "rechazado"]) {
       expect(gf({ events: [stop("no_entregado", T("19:00"), reason)] })).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima" });
     }
-    expect(gf({ events: [stop("no_entregado", T("19:00"), "rechazado")] })).toMatchObject({ stage: "por_cerrar", substage: "devolucion_fisica_pendiente" });
   });
 
   it("recibido en oficina sigue en Por reprogramar Lima hasta que vuelva a salir", () => {
@@ -744,17 +750,25 @@ describe("motorizado propio: lo que reporta mueve la etapa (v1.14, MOM §29.13)"
     expect(gf({ guides: [back], events })).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima", since: T("19:00") });
     // Asignado a una caja nueva: deja de estar por reprogramar.
     expect(gf({ guides: [back], events: [...events, ev("dispatch_route_assigned", "2026-09-23T14:00:00.000Z")] }).substage).not.toBe("por_reprogramar_lima");
-    // Un rechazo que volvió a oficina no se reprograma: queda devuelto y por conciliar inventario.
+    // Un rechazo recibido en oficina desde la 0206 vuelve a la empresa como los
+    // demás motivos: sigue en Por reprogramar Lima hasta que vuelva a salir.
+    const rejectedEvents = [stop("no_entregado", T("19:00"), "rechazado"), ev("returned_to_office", T("20:00"))];
+    expect(gf({ guides: [back], events: rejectedEvents })).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima", since: T("19:00") });
+    // El que la 0189 recibió como DEVUELTO, antes de la v1.23: tampoco cierra la
+    // venta. Se reprograma, con el inventario de la caja como razón mientras no
+    // se concilie.
     const rejectedBack = { ...own(), custody_state: "devuelto", returned_at: T("20:00") };
-    const rejected = gf({ guides: [rejectedBack], events: [stop("no_entregado", T("19:00"), "rechazado"), ev("returned_to_office", T("20:00"))] });
-    expect(rejected).toMatchObject({ stage: "por_cerrar", substage: "devolucion_pendiente_inventario" });
-    // Inventario reingresado antes de cerrar la ruta: espera el cierre, no vuelve a En curso.
-    const reinventoried = gf({ guides: [rejectedBack], events: [stop("no_entregado", T("19:00"), "rechazado"), ev("returned_to_office", T("20:00")), { kind: "inventory_reconciled", occurred_at: T("20:30"), shipment_id: "s-gf" }] });
-    expect(reinventoried).toMatchObject({ stage: "por_cerrar", substage: "validacion_cierre_pendiente" });
-    // Ruta cerrada (anulado) e inventario resuelto: Finalizado · Anulado cerrado.
-    expect(gf({ guides: [rejectedBack], events: [stop("no_entregado", T("19:00"), "rechazado"), ev("returned_to_office", T("20:00")), { kind: "inventory_reconciled", occurred_at: T("20:30"), shipment_id: "s-gf" }], legacy: { general: "anulado", operational: "anulado", since: T("21:00") } })).toMatchObject({ stage: "finalizado", substage: "anulado_cerrado" });
-    // Y con el pedido ya anulado al cerrar la ruta, sigue ahí hasta conciliar.
-    expect(gf({ guides: [rejectedBack], events: [stop("no_entregado", T("19:00"), "rechazado"), ev("returned_to_office", T("20:00"))], legacy: { general: "anulado", operational: "anulado", since: T("21:00") } })).toMatchObject({ stage: "por_cerrar", substage: "devolucion_pendiente_inventario" });
+    const rejected = gf({ guides: [rejectedBack], events: rejectedEvents });
+    expect(rejected).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima", since: T("19:00") });
+    expect(rejected.reasons).toContain("devolucion_pendiente_inventario");
+    const reinventoried = gf({ guides: [rejectedBack], events: [...rejectedEvents, { kind: "inventory_reconciled", occurred_at: T("20:30"), shipment_id: "s-gf" }] });
+    expect(reinventoried).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima" });
+    expect(reinventoried.reasons).not.toContain("devolucion_pendiente_inventario");
+    // Anulado en Shopify e inventario resuelto: Finalizado · Anulado cerrado.
+    const shopifyCancelled = { general: "anulado", operational: "anulado", since: T("21:00") } as const;
+    expect(gf({ guides: [rejectedBack], events: [...rejectedEvents, { kind: "inventory_reconciled", occurred_at: T("20:30"), shipment_id: "s-gf" }], legacy: shopifyCancelled })).toMatchObject({ stage: "finalizado", substage: "anulado_cerrado" });
+    // Y anulado en Shopify sin conciliar, espera la caja en Por cerrar.
+    expect(gf({ guides: [rejectedBack], events: rejectedEvents, legacy: shopifyCancelled })).toMatchObject({ stage: "por_cerrar", substage: "devolucion_pendiente_inventario" });
   });
 
   it("modo exigir: la custodia recibida por el motorizado es «Lo llevo» → En reparto; la del asignar no", () => {
@@ -771,7 +785,7 @@ describe("motorizado propio: lo que reporta mueve la etapa (v1.14, MOM §29.13)"
   it("deshacer el reporte vuelve a lo anterior: «Lo llevo» → En reparto", () => {
     expect(gf({ events: [ev("pickup_checked", T("15:32")), stop("entregado", T("19:32")), stop("pendiente", T("19:40"))] })).toMatchObject({ stage: "en_curso", substage: "en_reparto" });
     // Y un reporte nuevo después del deshacer vuelve a mandar.
-    expect(gf({ events: [ev("pickup_checked", T("15:32")), stop("entregado", T("19:32")), stop("pendiente", T("19:40")), stop("no_entregado", T("19:50"), "rechazado")] })).toMatchObject({ stage: "por_cerrar", substage: "devolucion_fisica_pendiente" });
+    expect(gf({ events: [ev("pickup_checked", T("15:32")), stop("entregado", T("19:32")), stop("pendiente", T("19:40")), stop("no_entregado", T("19:50"), "rechazado")] })).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima" });
   });
 
   it("una parada del cuaderno sin shipment_id vale para la salida propia vigente", () => {

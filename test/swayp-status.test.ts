@@ -679,7 +679,7 @@ describe("el Master: lo que Swayp no entregó se reprograma", () => {
     expect(mom).toContain("#### Lo que Swayp no entrega, también (v1.22, 29-09-2026)");
     expect(mom).toContain("#### El estado de Swayp se lee de su API (29-09-2026)");
     expect(mom).not.toContain("El estado 8, «Revisión»");
-    expect(read("lib/order-macro-stage.ts")).toContain('MOM_RESOLUTION_VERSION = "mom-v1.22"');
+    expect(read("lib/order-macro-stage.ts")).toContain('MOM_RESOLUTION_VERSION = "mom-v1.23"');
   });
 
   it("todos los lectores de la regla traen el estado de Swayp", () => {

@@ -447,27 +447,22 @@ export function stopsToSettlementLines(
  * un motorizado propio se quedaría "pendiente" para siempre y el cuadre lo
  * marcaría como "cobro sin entrega" en todas y cada una de sus paradas.
  *
- * `null` = no se toca el pedido. Es la respuesta correcta para casi todos los
+ * `null` = no se toca el pedido. Es la respuesta correcta para TODOS los
  * motivos de no entrega: que hoy no contestara no cambia nada del pedido, solo
  * significa que hay que volver. Cerrarlo sería perder una venta viva.
+ *
+ * Tampoco «Rechazó el pedido» (v1.23, 30-09-2026). Hasta la v1.22 el cierre de
+ * la ruta ANULABA el pedido por un rechazo. Regla del owner: solo la anulación
+ * en Shopify termina la venta; el rechazo va a «Por reprogramar Lima» como
+ * cualquier «No entregado», y lo lee el Master de la parada misma.
  */
-export type StopEffect = "entregado" | "anulado" | null;
-
-/** Motivos por los que el pedido SÍ se cierra. Deliberadamente cortos: cerrar
- *  un pedido por error cuesta una venta, y dejarlo abierto solo cuesta otra
- *  visita. Ante la duda, no se cierra. */
-const CLOSING_REASONS: Record<string, StopEffect> = {
-  // El cliente lo vio y no lo quiso: eso sí es el final del pedido.
-  rechazado: "anulado",
-};
+export type StopEffect = "entregado" | null;
 
 export function stopEffect(stop: {
   status: StopStatus;
   outcome_reason?: string | null;
 }): StopEffect {
-  if (stop.status === "entregado") return "entregado";
-  if (stop.status !== "no_entregado") return null;
-  return CLOSING_REASONS[stop.outcome_reason ?? ""] ?? null;
+  return stop.status === "entregado" ? "entregado" : null;
 }
 
 export interface MasterEffect {
@@ -495,10 +490,7 @@ export function masterEffects(
     out.push({
       order_id: s.order_id,
       target,
-      reason:
-        target === "entregado"
-          ? "Entregado por el motorizado y confirmado al cerrar la ruta."
-          : "El cliente rechazó el pedido; reportado por el motorizado.",
+      reason: "Entregado por el motorizado y confirmado al cerrar la ruta.",
     });
   }
   return out;

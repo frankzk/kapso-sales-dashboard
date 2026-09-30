@@ -23,6 +23,16 @@ import {
   recoveryWindow,
 } from "@/lib/reproprovincia";
 
+// v1.23 (30-09-2026): en Lima, lo que cualquier courier no entrega pasa a «Por
+// reprogramar Lima»; solo la entrega lleva a cerrar y solo la anulación en
+// Shopify termina la venta (owner). Dos cambios: una guía ANULADA DESPUÉS DE
+// SALIR abre la recuperación con cualquier courier (lib/reproprovincia.ts,
+// `guideAnnulledAfterDispatch`: #AUR177276, Tanders `CANCELLED` con la caja ya
+// devuelta, estaba en Por cerrar), y «Rechazó el pedido» del motorizado propio
+// deja de cerrar la venta: se reprograma como cualquier «No entregado»
+// (deshace la v1.15/v1.16/v1.17 para el rechazo). Cambia filas que nadie tocó,
+// así que la versión sube.
+//
 // v1.22 (29-09-2026): Swayp que no entrega abre la recuperación, igual que
 // Tanders (lib/reproprovincia.ts, `swaypGuideFailed`): su Devolución (8) y su
 // Devolución confirmada (9, 12) mandan el pedido a «Por reprogramar Lima» —y a
@@ -122,7 +132,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.22" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.23" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -766,7 +776,12 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   // es la única forma de medir cuánto se pierde por no llamar. Si el último
   // intento fue un rechazo en la puerta, la razón es otra: no reenviarlo es la
   // regla del §11, no una pérdida (`expiredRecoveryKind`).
-  if (["anulado", "devuelto"].includes(legacy.general)) {
+  //
+  // No con el pedido anulado en Shopify (v1.23): esa decisión la tomó una
+  // persona y gana, así que no hubo nada que recuperar. Sin esto la razón no se
+  // apagaba nunca y el pedido se quedaba en Por cerrar aun con la caja devuelta
+  // y el inventario conciliado (9 de Aliclik el 30-09-2026).
+  if (["anulado", "devuelto"].includes(legacy.general) && !input.order.cancelled_at) {
     const window = recoveryWindow(
       guides,
       events,
@@ -916,13 +931,16 @@ function isOwnCourier(courier: string | null | undefined): boolean {
   return (courier ?? "").trim().toLowerCase() === "propio";
 }
 
-export type GfRiderSignal = "lo_lleva" | "entregado" | "postergado" | "no_entregado";
+export type GfRiderSignal = "lo_lleva" | "entregado" | "postergado";
 
 /**
- * v1.15 (22-09-2026): todo «No entregado» es reprogramable salvo que el
- * cliente rechazara el pedido — ese sí cierra la venta y va a devolución.
+ * v1.23 (30-09-2026): todo «No entregado» es reprogramable, también «Rechazó el
+ * pedido». Hasta la v1.22 el rechazo cerraba la venta (v1.15) y el pedido iba a
+ * «Por cerrar» aunque siguiera vivo en Shopify. Regla del owner: en Lima solo la
+ * entrega lleva a cerrar y solo la anulación en Shopify termina la venta; el
+ * rechazo en la puerta sigue en gestión, como el de Aliclik (§8.2, §11).
  */
-const GF_CLOSING_REASONS = new Set(["rechazado"]);
+const GF_REJECTED_REASON = "rechazado";
 
 /**
  * Custodia que el motorizado recibió escaneando su caja (modo `exigir`): es
@@ -967,8 +985,7 @@ export function gfRiderSignal(
   const status = String(latest.payload?.status ?? "");
   if (status === "entregado") return { signal: "entregado", at: latest.occurred_at };
   if (status !== "no_entregado") return null;
-  const reason = String(latest.payload?.outcome_reason ?? "");
-  return { signal: GF_CLOSING_REASONS.has(reason) ? "no_entregado" : "postergado", at: latest.occurred_at };
+  return { signal: "postergado", at: latest.occurred_at };
 }
 
 /** Hora del último reporte de la salida si fue «Rechazó el pedido» (y no se deshizo). */
@@ -980,7 +997,7 @@ function gfRejectedAt(events: readonly MacroEventSnapshot[], guide: MacroGuideSn
     if (!last || event.occurred_at > last.occurred_at) last = event;
   }
   if (!last || String(last.payload?.status ?? "") !== "no_entregado") return null;
-  return GF_CLOSING_REASONS.has(String(last.payload?.outcome_reason ?? "")) ? last.occurred_at : null;
+  return String(last.payload?.outcome_reason ?? "") === GF_REJECTED_REASON ? last.occurred_at : null;
 }
 
 /** Hora del último «No entregado» reprogramable de la salida, si nada la ha vuelto a mover después. */
@@ -1001,7 +1018,6 @@ function gfAwaitingRetry(events: readonly MacroEventSnapshot[], guide: MacroGuid
     }
   }
   if (!failed || String(failed.payload?.status ?? "") !== "no_entregado") return null;
-  if (GF_CLOSING_REASONS.has(String(failed.payload?.outcome_reason ?? ""))) return null;
   if (undoneAt && undoneAt > failed.occurred_at) return null;
   if (moved && moved > failed.occurred_at) return null;
   return failed.occurred_at;
@@ -1200,18 +1216,22 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
     );
   }
 
-  // Rechazado en puerta y ya devuelto a la oficina (0189): la venta terminó y
-  // el paquete volvió; queda conciliar el inventario. Va antes que la custodia
-  // porque la salida conserva `dispatched_at`.
+  // Rechazado en puerta y recibido como devuelto por la 0189 (antes de la
+  // v1.23): la venta NO terminó —solo la anulación en Shopify la termina—, así
+  // que se reprograma como cualquier «No entregado», con el inventario de la
+  // caja devuelta como razón. Va antes que la custodia porque la salida
+  // conserva `dispatched_at`. Desde la 0206 un rechazo vuelve a «por asignar»
+  // como los demás motivos y ya no llega aquí.
   const rejectedBack = input.guides.find((guide) => isOwnCourier(guide.courier) && hasReturned(guide) && gfRejectedAt(input.events, guide));
   if (rejectedBack) {
-    if (!inventoryResolvedForGuide(rejectedBack, input.events)) {
-      return result("por_cerrar", "devolucion_pendiente_inventario", rejectedBack.returned_at ?? gfRejectedAt(input.events, rejectedBack), operation, ["devolucion_pendiente_inventario"]);
-    }
-    // Inventario ya resuelto pero la ruta aún abierta: el pedido todavía no está
-    // anulado (lo anula el cierre de la ruta). Espera ahí, nunca vuelve a En
-    // curso; al anularse cae en Finalizado · Anulado cerrado por la rama de arriba.
-    return result("por_cerrar", "validacion_cierre_pendiente", rejectedBack.returned_at ?? input.legacy.since, operation, ["validacion_cierre_pendiente"]);
+    const inventoryPending = !inventoryResolvedForGuide(rejectedBack, input.events);
+    return result(
+      "en_curso",
+      operation === "lima" ? "por_reprogramar_lima" : "gestion_reproprovincia",
+      gfRejectedAt(input.events, rejectedBack) ?? rejectedBack.returned_at ?? input.legacy.since,
+      operation,
+      inventoryPending ? ["devolucion_pendiente_inventario"] : [],
+    );
   }
 
   const current = currentGuide(input.guides);
@@ -1221,9 +1241,6 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
     const rider = gfRiderSignal(input.events, current);
     if (rider?.signal === "entregado") {
       return result("por_cerrar", "validacion_cierre_pendiente", rider.at, operation, ["validacion_cierre_pendiente"]);
-    }
-    if (rider?.signal === "no_entregado") {
-      return result("por_cerrar", "devolucion_fisica_pendiente", rider.at, operation, ["devolucion_fisica_pendiente"]);
     }
     if (rider?.signal === "postergado") {
       return result(

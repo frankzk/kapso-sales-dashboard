@@ -55,6 +55,17 @@
 // ya decía qué sigue: en Lima Swayp va una sola vez, así que el reintento es de
 // Grupo GF; en Reproprovincia Swayp se repite.
 
+// CUALQUIER COURIER DE LIMA (v1.23, 30-09-2026). #AUR177276 salió con Tanders
+// el 23-09 y volvió: su caja se escaneó en Devoluciones el 29-09. Pero Tanders
+// no dijo `RETURNED` sino `CANCELLED`, y esa palabra quedaba fuera porque «no
+// dice que saliera». La salida sí lo decía (`dispatched_at`), así que el pedido,
+// vivo en Shopify, cayó en «Por cerrar · Devolución pendiente de inventario».
+// Regla del owner: en Lima, lo que un courier no entrega pasa a «Por reprogramar
+// Lima»; solo la entrega lleva a cerrar y solo la anulación en Shopify termina
+// la venta. Así que una guía ANULADA DESPUÉS DE SALIR es un intento fallido,
+// diga lo que diga el vocabulario de su courier. Lo que se anuló sin salir sigue
+// siendo lo que era: una corrección, no un intento.
+
 import { etiquetaDiceRechazoEnPuerta, etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
 import { SWAYP_RETURN_STATES, swaypLabelSaysRejection } from "@/lib/swayp";
@@ -126,7 +137,8 @@ export function aliclikGuideFailedAfterDispatch(guide: RecoveryGuideLike): boole
  *
  * Se lee el estado ACTUAL de Tanders y no la custodia, que solo avanza: Tanders
  * a veces pasa de `RETURNING` a `PICKED` y reintenta, y entonces la guía vuelve
- * a estar viva. `CANCELLED` no es un intento fallido: no dice que saliera.
+ * a estar viva. `CANCELLED` solo no dice que saliera: si la guía llegó a salir,
+ * lo cubre `guideAnnulledAfterDispatch`.
  */
 export function tandersGuideFailed(guide: RecoveryGuideLike): boolean {
   if ((guide.courier ?? "").trim().toLowerCase() !== "tanders") return false;
@@ -138,7 +150,8 @@ export function tandersGuideFailed(guide: RecoveryGuideLike): boolean {
  * ¿Swayp no pudo entregar? Devolución (8), Devolución confirmada (9) o con
  * cobro (12). Se lee el estado ACTUAL: una novedad resuelta vuelve de 8 a
  * Reparto (5, «Solucionado») y la guía vuelve a estar viva, como el `PICKED` de
- * Tanders. Cancelada (10) no es un intento fallido: no dice que saliera.
+ * Tanders. Cancelada (10) sola no dice que saliera: si salió, la cubre
+ * `guideAnnulledAfterDispatch`.
  */
 export function swaypGuideFailed(guide: RecoveryGuideLike): boolean {
   const courier = (guide.courier ?? "").trim().toLowerCase();
@@ -165,9 +178,29 @@ export function guideDoorRejection(guide: RecoveryGuideLike): boolean {
   return (courier === "fenix" || courier === "swayp") && swaypLabelSaysRejection(guide.reported_status);
 }
 
-/** ¿Esta guía abre la recuperación del pedido? Aliclik, Tanders o Swayp que no entregaron. */
+/**
+ * Couriers que esta regla general NO cubre: Aliclik ya tiene la suya —su
+ * etiqueta dice si el intento falló o si la anulación fue de la tienda— y las
+ * agencias no reparten: la clienta recoge en el terminal (§10).
+ */
+const OWN_RULE_OR_AGENCY = new Set(["aliclik", "shalom", "olva", "por_definir"]);
+
+/**
+ * ¿La guía se anuló DESPUÉS de salir con su courier? Es un intento fallido en
+ * Lima con cualquier courier (v1.23): Tanders `CANCELLED`, Swayp Cancelada, una
+ * salida de Axel o Urpi anulada con la caja ya en la calle. La prueba de que
+ * salió es la de la custodia: `dispatched_at`, o que la caja ya volvió.
+ */
+export function guideAnnulledAfterDispatch(guide: RecoveryGuideLike): boolean {
+  const courier = (guide.courier ?? "").trim().toLowerCase();
+  if (!courier || OWN_RULE_OR_AGENCY.has(courier)) return false;
+  if (guide.delivery_status !== "anulado") return false;
+  return Boolean(guide.dispatched_at || guide.returned_at);
+}
+
+/** ¿Esta guía abre la recuperación del pedido? Cualquier courier que no entregó. */
 export function guideFailedAfterDispatch(guide: RecoveryGuideLike): boolean {
-  return aliclikGuideFailedAfterDispatch(guide) || liveGuideFailed(guide);
+  return aliclikGuideFailedAfterDispatch(guide) || liveGuideFailed(guide) || guideAnnulledAfterDispatch(guide);
 }
 
 /**
@@ -192,7 +225,9 @@ export function guideClosedAt(guide: RecoveryGuideLike): string | null {
 export function guideFailedAt(guide: RecoveryGuideLike): string | null {
   // Swayp igual: su barrido sella `swayp_synced_at` —y con él `updated_at`— en
   // cada pasada, y la Devolución confirmada llega días después de la Devolución.
-  if (liveGuideFailed(guide)) return guide.dispatched_at ?? guideClosedAt(guide);
+  // La anulada después de salir, igual: Tanders no sella `closed_at` y su
+  // barrido reescribe `updated_at`; la salida es fija.
+  if (liveGuideFailed(guide) || guideAnnulledAfterDispatch(guide)) return guide.dispatched_at ?? guideClosedAt(guide);
   return guideClosedAt(guide);
 }
 
@@ -201,7 +236,8 @@ export function recoveryWindowDaysFor(
   guide: RecoveryGuideLike,
   storeWindowDays: number = RECOVERY_DEFAULT_MAX_DAYS,
 ): number {
-  return tandersGuideFailed(guide) ? TANDERS_RECOVERY_DAYS : storeWindowDays;
+  const tanders = (guide.courier ?? "").trim().toLowerCase() === "tanders";
+  return tanders && guideFailedAfterDispatch(guide) ? TANDERS_RECOVERY_DAYS : storeWindowDays;
 }
 
 /**

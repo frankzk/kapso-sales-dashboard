@@ -2009,3 +2009,15 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
    el resto del Master se reconcilia en las horas siguientes como siempre.
 4. Si Swayp responde 429 o la credencial falla, el barrido se detiene y lo dice
    (`detenido`); lo pendiente va en la pasada siguiente.
+
+### 30-09-2026 · En Lima, lo que no se entrega se reprograma (0206, `mom-v1.23`)
+
+1. **Migración `0206_gf_return_rejected_reprograms.sql`**, a mano, antes del
+   código. Redefine `gf_return_to_office` (deshace la 0189): un «Rechazó el
+   pedido» recibido en oficina vuelve a «por asignar» como los demás motivos,
+   en vez de quedar devuelto y cancelar la solicitud. Solo cambia la función.
+2. Resolver `mom-v1.23`: el cron reconcilia el histórico solo. Una guía de
+   cualquier courier de Lima anulada después de salir abre la recuperación, y
+   el rechazo del motorizado propio va a «Por reprogramar Lima».
+3. El cierre de ruta y Liquidaciones ya no anulan el pedido por un rechazo:
+   solo Shopify anula.

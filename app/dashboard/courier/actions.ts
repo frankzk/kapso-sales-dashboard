@@ -1329,7 +1329,7 @@ export async function returnUndeliveredToOffice(orgId: string, orderIds: string[
   revalidatePath(COURIER_PATH);
   revalidatePath("/dashboard/pedidos");
   if (!changed.length) return { error: [...new Set(errors)].join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
-  const done = `${changed.length} ${changed.length === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina. Los no entregados vuelven a «por asignar» (Por reprogramar Lima); los rechazados quedan devueltos.`;
+  const done = `${changed.length} ${changed.length === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina. Vuelven a «por asignar» (Por reprogramar Lima), también los rechazados.`;
   return errors.length ? { error: `${done} ${[...new Set(errors)].join(" ")}` } : { notice: done };
 }
 
@@ -2581,10 +2581,6 @@ export async function scanAssignToRider(
       }
       const { error: returnError } = await admin.rpc("gf_return_to_office", { p_item_id: box.id, p_actor: auth.userId });
       if (returnError) return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: returnError.message };
-      if (decision === "recibir_rechazado") {
-        await recomputeOrderMasterSafe(admin, [orderId]);
-        return { ...line, status: "no_elegible", message: pastBoxMessage(decision, fromName, box.dispatch_manifests.route_date) };
-      }
       receivedFrom = receivedFromLabel(fromName, box.dispatch_manifests.route_date);
     } else if (box) {
       if (box.dispatch_manifests.rider_id === rider.id) {
