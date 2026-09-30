@@ -2394,6 +2394,32 @@ Tasa de cierre entre los LLAMADOS, 60 días:
 Mismo orden en las dos tiendas; lo que cambia son las magnitudes, y por eso los
 pesos de llamada son por tienda.
 
+**Dentro de `carrito`, primero la que armó varios (Kenku, 30-09-2026).** Quien
+armó 2 o más carritos en 48 horas cierra más cuando se la llama, en los cuatro
+tramos horarios. Mismo método que la tabla de arriba —60 días, solo carritos
+llamados, carritos contados hasta la primera llamada—:
+
+| Hasta la 1.ª llamada | 1 carrito | 2+ carritos |
+|---|---|---|
+| < 1 h | 30,6 % (1.593) | 42,9 % (49) |
+| 1–6 h | 16,3 % (897) | 26,7 % (45) |
+| 6–24 h | 12,5 % (1.348) | 19,3 % (109) |
+| + 1 día | 4,6 % (675) | 12,1 % (66) |
+
+En la cola, el peso del carrito se multiplica por **1,5** (medido: 1,59 veces lo
+esperado, z ≈ 4,1; se redondea hacia abajo). Solo el peso, no el bono de ticket.
+Lo que se afirma es el orden **dentro** de cada tramo; entre tramos el factor
+produce cruces que la muestra de «2+» no alcanza a confirmar ni a desmentir.
+
+**Aurela no lo lleva:** 44 llamadas, 11 cierres contra 8,7 esperados (z ≈ 0,9).
+Sin muestra no se inventa. El dato vive en `leads.cart_count_48h` (0207), que
+escribe la sincronización de carritos junto con el carrito de la fila; sin la
+migración aplicada, la cola se ordena como antes.
+
+Esto ordena la llamada, no la reemplaza. Se descartó crear el pedido de forma
+automática para esta señal: incluso aquí, 6 de cada 10 carritos que siguen
+abiertos a las dos horas no terminan en pedido.
+
 **Carrito que ya es pedido (29-09-2026).** Un carrito sale de la cola de
 llamadas en cuanto llega un pedido que cumple cuatro variables fijas:
 

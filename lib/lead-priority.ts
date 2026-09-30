@@ -241,6 +241,38 @@ const WEIGHT_BY_AGE: Record<string, Partial<Record<LeadSegment, AgeTier[]>>> = {
   },
 };
 
+// LA QUE ARMÓ VARIOS CARRITOS (2026-09-30). Dentro de `carrito`, quien armó 2 o
+// más en 48 horas cierra más en TODOS los tramos. Mismo método que arriba: 60
+// días, solo carritos que la asesora llamó, por horas hasta la primera llamada,
+// y los carritos contados hasta esa llamada — lo que se sabe al marcar:
+//
+//   Kenku          1 carrito        2+ carritos
+//   < 1 h          30,6% (1.593)    42,9% (49)
+//   1–6 h          16,3%   (897)    26,7% (45)
+//   6–24 h         12,5% (1.348)    19,3% (109)
+//   +1 día          4,6%   (675)    12,1% (66)
+//
+// Juntando tramos cierran 1,59 veces lo esperado con las tasas de 1 carrito
+// (62 contra 38,9; z ≈ 4,1). Es un FACTOR sobre el peso del tramo y no tramos
+// propios porque cada tramo de «2+» tiene 45-109 llamadas: suficiente para ver
+// que el efecto está en los cuatro, no para medir una forma distinta. Se redondea
+// HACIA ABAJO (1,5) porque el tramo de «+1 día» (2,6×) infla el promedio.
+//
+// Lo que se afirma es DENTRO de cada tramo: a igual antigüedad, primero la que
+// armó varios. Entre tramos distintos el factor produce cruces (un «2+» de 1-6 h
+// queda por encima de un carrito único de <1 h: 25,5 contra 24) que la medición
+// no confirma ni desmiente — 26,7% contra 30,6% con 45 llamadas cae dentro del
+// ruido. Por eso las pruebas controlan el orden dentro del tramo, no entre tramos.
+//
+// AURELA NO LO LLEVA: son 44 llamadas, 11 cierres contra 8,7 esperados (z ≈
+// 0,9). Mismo criterio que su `frio` sin tramos: sin muestra no se inventa.
+const REPEAT_CART_FACTOR: Record<string, number> = {
+  "kenku peru": 1.5,
+};
+
+/** Desde cuántos carritos en 48 h cuenta como «armó varios». */
+export const REPEAT_CART_MIN = 2;
+
 /** Promedio de las tiendas medidas: conserva el orden, que es lo que importa.
  *  Se usa en una tienda nueva, hasta tener historia propia para medirla. */
 const DEFAULT_WEIGHTS: SegmentWeights = { carrito: 17, interes: 7, converso: 3, frio: 0.5 };
@@ -255,6 +287,9 @@ export interface ScoringProfile {
   /** Tramos horarios por segmento. Un segmento ausente (o una tienda sin
    *  medición propia) usa su peso plano. */
   byAge: Partial<Record<LeadSegment, AgeTier[]>>;
+  /** Factor sobre el peso de un `carrito` cuya clienta armó REPEAT_CART_MIN o
+   *  más en 48 h. Ausente = 1 (tienda sin medición). */
+  repeatCart?: number;
 }
 
 export function scoringProfileFor(storeName: string | null | undefined): ScoringProfile {
@@ -262,6 +297,7 @@ export function scoringProfileFor(storeName: string | null | undefined): Scoring
   return {
     segment: WEIGHTS_BY_STORE[key] ?? DEFAULT_WEIGHTS,
     byAge: WEIGHT_BY_AGE[key] ?? {},
+    repeatCart: REPEAT_CART_FACTOR[key] ?? 1,
   };
 }
 
@@ -321,6 +357,8 @@ export interface LeadPriorityInput {
   cart_value?: number | null;
   last_interaction_at?: string | null;
   first_seen_at?: string | null;
+  /** Carritos de la clienta en las 48 h que terminan en el último (0207). */
+  cart_count_48h?: number | null;
 }
 
 /** Horas transcurridas desde `iso`, o null si no hay fecha usable. */
@@ -332,8 +370,9 @@ function hoursSince(iso: string | null | undefined, nowMs: number): number | nul
 
 /**
  * Puntaje de prioridad de un lead. Más alto = llamar antes. Puro.
- *   (peso del segmento + bono por ticket) × frescura
- * En `carrito` el peso depende de la antigüedad (ver CART_WEIGHT_BY_AGE).
+ *   (peso del segmento × varios carritos + bono por ticket) × frescura
+ * El peso depende de la antigüedad (ver WEIGHT_BY_AGE); en `carrito` además
+ * sube si la clienta armó varios (ver REPEAT_CART_FACTOR).
  */
 export function leadPriorityScore(
   lead: LeadPriorityInput,
@@ -349,11 +388,16 @@ export function leadPriorityScore(
   // Consecuencia conocida: un cliente que entró hace 3 días y volvió a escribir
   // hoy cuenta como lead viejo. Intuitivamente debería re-calentarse, pero no
   // hay medición de eso y no se inventa.
-  const base = weightForAge(
+  const tierWeight = weightForAge(
     profile.byAge[segment],
     hoursSince(lead.first_seen_at ?? lead.last_interaction_at, nowMs),
     profile.segment[segment],
   );
+  // Multiplica el peso (la probabilidad), no el bono de ticket: armar dos
+  // carritos dice que quiere comprar, no que vaya a gastar más.
+  const repeatCart =
+    segment === "carrito" && (lead.cart_count_48h ?? 0) >= REPEAT_CART_MIN ? (profile.repeatCart ?? 1) : 1;
+  const base = tierWeight * repeatCart;
   const cartBonus = Math.min(
     CART_VALUE_CAP,
     Math.max(0, (lead.cart_value ?? 0) / CART_VALUE_STEP),

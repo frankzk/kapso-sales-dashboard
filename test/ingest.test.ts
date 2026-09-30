@@ -474,6 +474,32 @@ describe("linkDraftOrdersToLeads precedence", () => {
     await linkDraftOrdersToLeads(fake as any, "store-1", [draft]);
     expect(fake.upsertedLeads).toHaveLength(0); // too fresh — waits for the grace period
   });
+
+  it("anota cuántos carritos armó la clienta en las 48 h (cart_count_48h, 0207)", async () => {
+    const { linkDraftOrdersToLeads } = await import("@/lib/leads-ingest");
+    const { mapRestDraftOrder } = await import("@/lib/shopify");
+    const fake = new FakeSupabase(makeStoreRow());
+    // El draft es del 24-06 12:00Z; la base tiene otro del día anterior y uno de
+    // hace tres días (fuera de la ventana).
+    const origExec = fake.exec.bind(fake);
+    fake.exec = (b: FakeBuilder) => {
+      if (b.table === "draft_orders" && b.op === "select") {
+        return {
+          data: [
+            { customer_phone: "51980111222", created_at: "2026-06-21T12:00:00Z" },
+            { customer_phone: "51980111222", created_at: "2026-06-23T18:00:00Z" },
+            { customer_phone: "51980111222", created_at: "2026-06-24T12:00:00Z" },
+          ],
+          error: null,
+        };
+      }
+      return origExec(b);
+    };
+    const draft = mapRestDraftOrder(JSON.parse(DRAFT_OPEN_BODY), "store-1");
+    await linkDraftOrdersToLeads(fake as any, "store-1", [draft]);
+    expect(fake.upsertedLeads).toHaveLength(1);
+    expect(fake.upsertedLeads[0].cart_count_48h).toBe(2);
+  });
 });
 
 describe("shouldReopenWonCart (open cart vs a sticky `won` lead)", () => {
