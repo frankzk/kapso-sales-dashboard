@@ -11,7 +11,7 @@ describe("escanear un paquete que sigue en la caja de otro día", () => {
     ).toBe("recibir_y_asignar");
   });
 
-  it("cualquier motivo de no entregado que no sea rechazo se reprograma", () => {
+  it("cualquier motivo de no entregado se reprograma", () => {
     for (const reason of ["no_contesta", "no_estaba", "direccion_errada", "sin_dinero", "otro", null]) {
       expect(
         pastBoxDecision({ boxRouteDate: "2026-09-16", targetDay: today, stopStatus: "no_entregado", outcomeReason: reason }),
@@ -20,10 +20,10 @@ describe("escanear un paquete que sigue en la caja de otro día", () => {
     }
   });
 
-  it("un rechazo se recibe como devuelto y no se asigna (0189)", () => {
+  it("un rechazo también se recibe y se asigna: solo Shopify termina la venta (v1.23)", () => {
     expect(
       pastBoxDecision({ boxRouteDate: "2026-09-26", targetDay: today, stopStatus: "no_entregado", outcomeReason: "rechazado" }),
-    ).toBe("recibir_rechazado");
+    ).toBe("recibir_y_asignar");
   });
 
   it("sin reporte no se toca: la parada es de la liquidación de ese motorizado", () => {
@@ -55,7 +55,6 @@ describe("lo que dice la línea", () => {
     expect(boxDayShort("2026-09-26")).toBe("26/09");
     expect(receivedFromLabel("Yhoni", "2026-09-26")).toBe("Yhoni del 26/09");
     expect(pastBoxMessage("sin_reporte", "Yhoni", "2026-09-26")).toContain("la caja de Yhoni del 26/09");
-    expect(pastBoxMessage("recibir_rechazado", "Yhoni", "2026-09-26")).toMatch(/devuelto y no se reprograma/);
     expect(pastBoxMessage("entregado", "Yhoni", "2026-09-26")).toMatch(/reportó entregado/);
   });
 });
@@ -77,11 +76,10 @@ describe("el escaneo usa la regla antes de decir «Ya estaba»", () => {
     expect(scan).toMatch(/\.eq\("dispatch_manifest_id", box\.manifest_id\)\s*\.order\("reported_at", \{ ascending: false, nullsFirst: false \}\)/);
   });
 
-  it("un rechazo recibido no llega a tomarse ni asignarse", () => {
-    const rejected = scan.indexOf('decision === "recibir_rechazado"');
+  it("un rechazo recibido sigue hacia la asignación, como cualquier «No entregado» (v1.23)", () => {
+    expect(scan).not.toContain("recibir_rechazado");
+    const received = scan.indexOf('admin.rpc("gf_return_to_office"');
     const take = scan.indexOf("takeOrdersCore(");
-    expect(rejected).toBeGreaterThan(0);
-    expect(take).toBeGreaterThan(rejected);
-    expect(scan.slice(rejected, rejected + 300)).toContain("return {");
+    expect(take).toBeGreaterThan(received);
   });
 });

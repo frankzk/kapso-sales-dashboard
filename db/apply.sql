@@ -413,4 +413,6 @@
 \ir migrations/0204_master_lectura_liviana.sql
 \echo 'Applying 0205_peru_districts_departments.sql'
 \ir migrations/0205_peru_districts_departments.sql
+\echo 'Applying 0206_gf_return_rejected_reprograms.sql'
+\ir migrations/0206_gf_return_rejected_reprograms.sql
 \echo 'Done.'
