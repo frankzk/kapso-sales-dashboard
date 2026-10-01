@@ -3,6 +3,8 @@ import { createHmac } from "node:crypto";
 import { encrypt, generateEncryptionKey } from "@/lib/crypto";
 import {
   closeCartLeadsWithOrders,
+  isRepurchaseCart,
+  linkOrderToLead,
   orderClosesCart,
   sameCartProduct,
   type CartProductRef,
@@ -475,5 +477,58 @@ describe("processShopifyWebhook · pedido sin tag kapso", () => {
       db as any,
     );
     expect(lead(db).status).toBe("nuevo");
+  });
+});
+
+// --- Recompra: quien ya compró y arma un carrito 7+ días después (MOM) --------
+describe("isRepurchaseCart", () => {
+  const order = "2026-07-06T15:00:00+00:00";
+  it("7 días o más después del último pedido es recompra", () => {
+    expect(isRepurchaseCart("2026-07-13T15:00:00+00:00", order)).toBe(true); // justo 7 días
+    expect(isRepurchaseCart("2026-09-30T20:18:00+00:00", order)).toBe(true);
+  });
+  it("menos de 7 días no: ahí caen los residuos de EasySell de minutos después", () => {
+    expect(isRepurchaseCart("2026-07-06T15:20:00+00:00", order)).toBe(false);
+    expect(isRepurchaseCart("2026-07-13T14:59:00+00:00", order)).toBe(false);
+  });
+  it("sin pedido o sin fecha de carrito no es recompra", () => {
+    expect(isRepurchaseCart("2026-09-30T20:18:00+00:00", null)).toBe(false);
+    expect(isRepurchaseCart(null, order)).toBe(false);
+  });
+  it("compara instantes, no texto", () => {
+    // 6 días y 23 h en UTC aunque como texto «2026-07-13T09» parezca de 7 días.
+    expect(isRepurchaseCart("2026-07-13T09:00:00-05:00", "2026-07-06T15:00:00+00:00")).toBe(false);
+  });
+});
+
+describe("linkOrderToLead · no esconde una recompra con un pedido viejo", () => {
+  // El lead está en cola por un carrito del 13-09; Shopify reenvía el webhook de
+  // un pedido de julio (se actualizó). Ese pedido no cubre esta compra.
+  it("un pedido anterior a la recompra solo se vincula: el lead sigue en cola", async () => {
+    const db = seed();
+    await linkOrderToLead(db as any, {
+      storeId: STORE,
+      phone: PHONE,
+      orderId: "order-julio",
+      orderCreatedAt: "2026-07-06T15:00:00+00:00",
+    });
+    expect(lead(db)).toMatchObject({ status: "nuevo", category: "open", has_order: true, order_id: "order-julio" });
+  });
+
+  it("un pedido de DESPUÉS del carrito sí lo gana", async () => {
+    const db = seed();
+    await linkOrderToLead(db as any, {
+      storeId: STORE,
+      phone: PHONE,
+      orderId: "order-nuevo",
+      orderCreatedAt: "2026-09-29T10:10:56+00:00",
+    });
+    expect(lead(db)).toMatchObject({ status: "pedido_generado", category: "won", order_id: "order-nuevo" });
+  });
+
+  it("sin fecha del pedido se comporta como antes (gana)", async () => {
+    const db = seed();
+    await linkOrderToLead(db as any, { storeId: STORE, phone: PHONE, orderId: "order-x" });
+    expect(lead(db)).toMatchObject({ status: "pedido_generado", category: "won" });
   });
 });

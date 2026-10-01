@@ -528,15 +528,61 @@ describe("shouldReopenWonCart (open cart vs a sticky `won` lead)", () => {
     ).toBe(true);
   });
 
-  it("does NOT reopen a lead explicitly confirmed as won", async () => {
+  it("does NOT reopen a won lead for a cart minutes after its order (residuo de EasySell)", async () => {
+    const { shouldReopenWonCart } = await import("@/lib/leads-ingest");
+    // 302 de estos en 60 días, casi todos «abandono» de EasySell: no son compras.
+    for (const status of ["pedido_generado", "ya_tiene_pedido"]) {
+      expect(
+        shouldReopenWonCart({
+          category: "won",
+          status,
+          draftCreatedAt: "2026-06-01T10:20:00Z",
+          lastOrderAt: "2026-06-01T10:00:00Z",
+          lastDispositionAt: null,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("reopens a won lead on a repurchase 7+ days after its order, whatever won it", async () => {
+    const { shouldReopenWonCart } = await import("@/lib/leads-ingest");
+    // Hasta 2026-10-01 estos dos estados bloqueaban TODA reapertura, y como son
+    // los únicos estados ganados la recompra no ocurría nunca.
+    for (const status of ["pedido_generado", "ya_tiene_pedido"]) {
+      expect(
+        shouldReopenWonCart({
+          category: "won",
+          status,
+          draftCreatedAt: "2026-06-30T18:33:41Z",
+          lastOrderAt: "2026-06-01T10:00:00Z",
+          lastDispositionAt: null,
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("a confirmed win with NO active order still doesn't reopen (unchanged)", async () => {
     const { shouldReopenWonCart } = await import("@/lib/leads-ingest");
     expect(
       shouldReopenWonCart({
         category: "won",
         status: "ya_tiene_pedido",
         draftCreatedAt: "2026-06-30T18:33:41Z",
-        lastOrderAt: "2026-06-01T10:00:00Z",
+        lastOrderAt: null,
         lastDispositionAt: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("a repurchase still respects a disposition registered after the cart", async () => {
+    const { shouldReopenWonCart } = await import("@/lib/leads-ingest");
+    expect(
+      shouldReopenWonCart({
+        category: "won",
+        status: "pedido_generado",
+        draftCreatedAt: "2026-06-30T10:00:00Z",
+        lastOrderAt: "2026-06-01T10:00:00Z",
+        lastDispositionAt: "2026-06-30T11:00:00Z",
       }),
     ).toBe(false);
   });

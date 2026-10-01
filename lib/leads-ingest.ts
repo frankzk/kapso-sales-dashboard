@@ -20,7 +20,7 @@ import { env } from "@/lib/env";
 import { noteAnomaly } from "@/lib/ingest-anomalies";
 import { analyzeYapeVoucher } from "@/lib/vision";
 import type { StoreCreds } from "@/lib/ingest";
-import { deriveAutoState, nextLeadState, statusDef } from "@/lib/leads";
+import { categoryOf, deriveAutoState, nextLeadState, statusDef } from "@/lib/leads";
 import { tzParts } from "@/lib/metrics";
 import { normalizePhone } from "@/lib/phone";
 import {
@@ -481,9 +481,14 @@ export async function syncStoreLeads(
       : (existingByBsuid.get(seed.bsuid as string) ?? null);
     const order = phone ? orderByPhone.get(phone) : undefined;
     const cartAt = phone ? (newestOpenCartAt.get(phone) ?? null) : null;
+    // Recompra en curso: un carrito abierto de 7+ días después del último pedido.
+    // Para REABRIR un ganado el carrito tiene que ser posterior a la última
+    // gestión; para NO devolver a ganado un lead que ya está en cola, no — si no,
+    // la asesora marca «no responde» y la siguiente sincronización lo esconde.
+    const existingWon = !!existing && categoryOf(existing.status) === "won";
     const hasRecentIntent =
-      !!(order?.createdAt && cartAt && cartAt > order.createdAt) &&
-      eventOverridesDisposition(cartAt, phone ? dispositionByPhone.get(phone) : undefined);
+      isRepurchaseCart(cartAt, order?.createdAt) &&
+      (!existingWon || eventOverridesDisposition(cartAt, phone ? dispositionByPhone.get(phone) : undefined));
     await upsertLeadFromSeed(admin, storeId, seed, {
       hasOrder: !!order,
       orderId: order?.id ?? null,
@@ -847,12 +852,48 @@ export function eventOverridesDisposition(
   return eventAt > dispositionAt;
 }
 
+/** Días mínimos entre el último pedido activo y un carrito para que cuente como
+ *  RECOMPRA. Ver isRepurchaseCart. */
+export const REPURCHASE_MIN_DAYS = 7;
+
 /**
- * Should a fresh OPEN cart re-open a lead currently marked `won`? Yes when the cart
- * out-ranks the win — either there is NO active (non-cancelled) order anchoring it
- * (`lastOrderAt` null: the winning order was cancelled or is gone), or the cart
- * post-dates that order (a recompra) — AND the cart also post-dates the agent's last
- * manual disposition (never revert a worked result). Pure; drives the reopen guard.
+ * ¿Este carrito es una compra NUEVA de alguien que ya compró? Sí cuando se armó
+ * REPURCHASE_MIN_DAYS o más después de su último pedido activo.
+ *
+ * POR QUÉ HAY UN MÍNIMO. Medido en 60 días, de los carritos armados después de un
+ * pedido, 302 aparecieron MENOS DE UNA HORA después —296 de ellos «abandono» de
+ * EasySell—: residuos del propio formulario, no compras. Los de menos de 7 días
+ * terminaron en pedido un 5,8%; los de 7 días o más, un 27,3% (por encima del
+ * carrito promedio), y eso con el lead escondido en «Ganados» sin que nadie los
+ * llamara. Los 7 días son además la regla de negocio: «no tiene pedido hace más
+ * de 7 días». Instantes con `Date.parse`. Puro.
+ */
+export function isRepurchaseCart(
+  cartAt: string | null | undefined,
+  lastOrderAt: string | null | undefined,
+): boolean {
+  const cart = Date.parse(cartAt ?? "");
+  const order = Date.parse(lastOrderAt ?? "");
+  if (!Number.isFinite(cart) || !Number.isFinite(order)) return false;
+  return cart - order >= REPURCHASE_MIN_DAYS * 86_400_000;
+}
+
+/**
+ * Should a fresh OPEN cart re-open a lead currently marked `won`? Two cases, and in
+ * both the cart has to post-date the agent's last manual disposition (never revert
+ * a worked result):
+ *
+ *  - RECOMPRA: the cart is a repurchase (isRepurchaseCart) — whatever won the lead,
+ *    `pedido_generado` or `ya_tiene_pedido`. Hasta 2026-10-01 esos dos estados
+ *    bloqueaban TODA reapertura, y como son los únicos estados ganados, la
+ *    recompra no ocurría nunca. El bloqueo frenaba los residuos de EasySell de
+ *    minutos después del pedido; el mínimo de días los frena sin esconder las
+ *    compras nuevas.
+ *  - SIN PEDIDO ACTIVO (`lastOrderAt` null: the winning order was cancelled or is
+ *    gone). This one keeps the old status guard: un ganado confirmado no se
+ *    reabre por un carrito cualquiera.
+ *
+ * Pure; drives the reopen guard.
  */
 export function shouldReopenWonCart(opts: {
   category: string | undefined;
@@ -862,10 +903,10 @@ export function shouldReopenWonCart(opts: {
   lastDispositionAt: string | null | undefined;
 }): boolean {
   if (opts.category !== "won") return false;
+  if (!eventOverridesDisposition(opts.draftCreatedAt, opts.lastDispositionAt)) return false;
+  if (isRepurchaseCart(opts.draftCreatedAt, opts.lastOrderAt)) return true;
   if (opts.status === "pedido_generado" || opts.status === "ya_tiene_pedido") return false;
-  const cartBeatsOrder =
-    !opts.lastOrderAt || (!!opts.draftCreatedAt && opts.draftCreatedAt > opts.lastOrderAt);
-  return cartBeatsOrder && eventOverridesDisposition(opts.draftCreatedAt, opts.lastDispositionAt);
+  return !opts.lastOrderAt;
 }
 
 /**
@@ -975,22 +1016,50 @@ export async function lastDispositionAtByPhone(
 
 /** Mark the lead for an order's customer as won (sticky), creating it if new.
  *  `win` is false when the order predates the agent's last manual disposition →
- *  we only link the order (has_order/order_id) and keep the registered result. */
+ *  we only link the order (has_order/order_id) and keep the registered result.
+ *
+ *  Tampoco gana cuando el lead está en cola por una RECOMPRA que este pedido no
+ *  cubre (el carrito es de 7+ días después del pedido): Shopify reenvía el
+ *  webhook de un pedido viejo cada vez que se actualiza, y sin esta guarda cada
+ *  actualización volvía a esconder la recompra en «Ganados». */
 export async function linkOrderToLead(
   admin: SupabaseClient,
-  params: { storeId: string; phone: string | null; orderId: string | null; win?: boolean },
+  params: {
+    storeId: string;
+    phone: string | null;
+    orderId: string | null;
+    win?: boolean;
+    orderCreatedAt?: string | null;
+  },
 ): Promise<void> {
   if (!params.phone) return;
+  let win = params.win !== false;
+  if (win && params.orderCreatedAt) {
+    const { data: lead } = await admin
+      .from("leads")
+      .select("category, draft_order_gid")
+      .eq("store_id", params.storeId)
+      .eq("phone", params.phone)
+      .maybeSingle();
+    const l = lead as { category?: string | null; draft_order_gid?: string | null } | null;
+    if (l?.draft_order_gid && (l.category === "open" || l.category === "hot")) {
+      const { data: draft } = await admin
+        .from("draft_orders")
+        .select("created_at")
+        .eq("store_id", params.storeId)
+        .eq("draft_order_gid", l.draft_order_gid)
+        .maybeSingle();
+      const cartAt = (draft as { created_at?: string | null } | null)?.created_at ?? null;
+      if (isRepurchaseCart(cartAt, params.orderCreatedAt)) win = false;
+    }
+  }
   const base = {
     store_id: params.storeId,
     phone: params.phone,
     has_order: true,
     order_id: params.orderId,
   };
-  const row =
-    params.win === false
-      ? base
-      : { ...base, status: "pedido_generado", category: "won", needs_attention: false };
+  const row = win ? { ...base, status: "pedido_generado", category: "won", needs_attention: false } : base;
   await admin.from("leads").upsert(row, { onConflict: "store_id,phone" });
 }
 
@@ -1029,6 +1098,7 @@ export async function linkOrdersToLeads(
       phone: o.customer_phone ?? null,
       orderId: idByShopifyId.get(String(o.shopify_order_id)) ?? null,
       win: eventOverridesDisposition(o.created_at, dispositionAt.get(o.customer_phone as string)),
+      orderCreatedAt: o.created_at ?? null,
     });
   }
 }

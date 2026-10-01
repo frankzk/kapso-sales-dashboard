@@ -440,9 +440,27 @@ describe("nextLeadState", () => {
   it("new lead → nuevo", () => {
     expect(nextLeadState(null, {})).toEqual({ status: "nuevo", category: "open", needsAttention: false });
   });
-  it("keeps an already-won lead sticky even when a cart signal arrives", () => {
-    expect(nextLeadState({ status: "pedido_generado" }, { hasOrder: true, hasRecentIntent: true })).toBeNull();
-    expect(nextLeadState({ status: "ya_tiene_pedido" }, { hasOrder: true, hasRecentIntent: true })).toBeNull();
+  it("keeps an already-won lead sticky without a repurchase", () => {
+    // El carrito que EasySell deja minutos después del pedido NO es intención:
+    // syncStoreLeads solo marca hasRecentIntent con una recompra (7+ días).
+    expect(nextLeadState({ status: "pedido_generado" }, { hasOrder: true, hasRecentIntent: false })).toBeNull();
+    expect(nextLeadState({ status: "ya_tiene_pedido" }, { hasOrder: true, hasRecentIntent: false })).toBeNull();
+  });
+  it("reopens a won lead on a repurchase (cart 7+ days after its last order)", () => {
+    // Hasta 2026-10-01 la guarda de arriba se tragaba este caso: 481 recompras
+    // en 52 días quedaron en «Ganados» sin que nadie las llamara.
+    for (const status of ["pedido_generado", "ya_tiene_pedido"]) {
+      expect(nextLeadState({ status }, { hasOrder: true, hasRecentIntent: true })).toEqual({
+        status: "nuevo",
+        category: "open",
+        needsAttention: false,
+      });
+    }
+  });
+  it("a repurchase keeps the agent's later manual status", () => {
+    // Reabierta y gestionada («no responde»): la siguiente sincronización no la
+    // devuelve a ganado mientras la recompra siga abierta.
+    expect(nextLeadState({ status: "no_responde" }, { hasOrder: true, hasRecentIntent: true })).toBeNull();
   });
   it("order without a newer cart still wins", () => {
     expect(nextLeadState(null, { hasOrder: true, hasRecentIntent: false })).toMatchObject({

@@ -2525,6 +2525,42 @@ seguridad. El cron va después de sincronizar pedidos y carritos: si el sync de
 carritos crea el lead de un carrito cuyo pedido ya llegó, sale de la cola en la
 misma corrida.
 
+**Quien ya compró y arma un carrito nuevo vuelve a la cola (recompra,
+01-10-2026).** Un lead ganado —`pedido_generado` o `ya_tiene_pedido`— vuelve a
+«Sin llamar» como `carrito` cuando arma un carrito abierto **7 días o más
+después de su último pedido activo** (`isRepurchaseCart`). La clienta trae la
+dirección del pedido anterior, y «Generar pedido» ya distingue una recompra de
+un duplicado.
+
+Por qué hacía falta. El código decía reabrir la recompra, pero dos guardas lo
+impedían siempre: la sincronización de conversaciones no miraba la intención si
+el lead ya estaba ganado, y la de carritos no reabría un `pedido_generado` ni un
+`ya_tiene_pedido`, que son los únicos estados ganados. En 52 días quedaron 481
+carritos de recompra escondidos en «Ganados»; aun sin que nadie los llamara,
+el 27,3 % terminó en pedido.
+
+Por qué 7 días y no «cualquier carrito posterior». En 60 días, 302 carritos
+aparecieron **menos de una hora** después de un pedido —296 de ellos «abandono»
+de EasySell— y los de menos de 7 días terminaron en pedido un 5,8 %: son
+residuos del propio formulario. Ese era el motivo del bloqueo; el mínimo de días
+los deja fuera sin esconder las compras nuevas. Coincide con la regla de negocio:
+«no tiene pedido hace más de 7 días».
+
+Lo que se respeta:
+
+- Para **reabrir** un ganado, el carrito tiene que ser posterior a la última
+  gestión de la asesora, como siempre.
+- Una vez en cola, la gestión de la asesora («no responde», etc.) manda: la
+  siguiente sincronización no la devuelve a ganado mientras la recompra siga
+  abierta.
+- Un pedido **viejo** que Shopify vuelve a notificar (se actualizó) solo se
+  vincula; no vuelve a ganar el lead si su carrito es de 7+ días después.
+- Un ganado **sin pedido activo** sigue sin reabrirse por un carrito cualquiera
+  (sin cambios).
+
+Fuera de alcance: quien solo escribe por WhatsApp sin armar carrito. Su mensaje
+vive en Kapso y no dice producto ni cantidad en un campo que se pueda leer.
+
 **Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
 que la cola tiene que recortar: quedan fuera **Shalom, Tanders, Urpi y el
 reparto propio**. Shalom es agencia —la clienta recoge en el terminal, no hay
