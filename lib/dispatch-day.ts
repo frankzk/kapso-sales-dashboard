@@ -373,24 +373,25 @@ export function activeFilterCount(filters: QueueFilters): number {
 // Apartados de la cola (29-09-2026). «Que tengan un apartado como un subestado,
 // simulado al "Sin llamar" de Por confirmar, donde se busca dejarlo en cero lo
 // antes posible.» Cada pedido asignable cae en uno solo, y la lista los ordena
-// en este orden: lo programado para hoy es un compromiso con la clienta; lo
+// en este orden: lo programado para hoy y mañana es un compromiso con la clienta; lo
 // que nunca salió va antes que un reintento; lo de más de 30 días, después de
-// lo reciente; lo programado para otro día, al final.
+// lo reciente; lo programado para después de mañana, al final.
 // ---------------------------------------------------------------------------
 
-export type QueueSegment = "programados_hoy" | "nunca_salieron" | "ya_salieron" | "mas_de_30" | "programados_despues";
+export type QueueSegment = "programados_hoy" | "programados_manana" | "nunca_salieron" | "ya_salieron" | "mas_de_30" | "programados_despues";
 
-export const QUEUE_SEGMENTS: readonly QueueSegment[] = ["programados_hoy", "nunca_salieron", "ya_salieron", "mas_de_30", "programados_despues"];
+export const QUEUE_SEGMENTS: readonly QueueSegment[] = ["programados_hoy", "programados_manana", "nunca_salieron", "ya_salieron", "mas_de_30", "programados_despues"];
 
 /** Un pedido que nunca salió y se creó hace más de esto va a «+30 días». */
 export const STALE_AFTER_DAYS = 30;
 
 export const QUEUE_SEGMENT_LABEL: Record<QueueSegment, { label: string; hint: string }> = {
   programados_hoy: { label: "Programados hoy", hint: "Con salida programada para hoy, o para un día que ya pasó sin que saliera. Van primero: es la fecha que se le dio a la clienta." },
+  programados_manana: { label: "Programados para mañana", hint: "Con salida programada para mañana. Al llegar ese día pasan a «Programados hoy»." },
   nunca_salieron: { label: "Nunca salieron", hint: `Nunca tuvieron una salida a reparto y se crearon en los últimos ${STALE_AFTER_DAYS} días. Es el apartado a dejar en cero.` },
   ya_salieron: { label: "Ya salieron", hint: "Salieron a reparto al menos una vez y volvieron: reprogramaciones o recuperaciones. Van después de los que nunca salieron." },
   mas_de_30: { label: `+${STALE_AFTER_DAYS} días`, hint: `Nunca salieron y se crearon hace más de ${STALE_AFTER_DAYS} días: se revisan después de los recientes.` },
-  programados_despues: { label: "Programados después", hint: "Con salida programada para otro día: no cuentan para hoy. Ese día pasan solos a «Programados hoy»." },
+  programados_despues: { label: "Programados después", hint: "Con salida programada para después de mañana. Al acercarse la fecha pasan a «Programados para mañana» y luego a «Programados hoy»." },
 };
 
 /**
@@ -404,7 +405,11 @@ export const DEPARTURE_EVENT_KINDS = ["pickup_checked", "stop_reported", "return
 
 /** El apartado de un pedido asignable. La programación manda sobre todo lo demás. */
 export function queueSegment(row: Pick<QueueRow, "programmedFor" | "hasPriorDispatch" | "createdAt">, today: string): QueueSegment {
-  if (row.programmedFor) return row.programmedFor.slice(0, 10) <= today ? "programados_hoy" : "programados_despues";
+  if (row.programmedFor) {
+    const programmedDay = row.programmedFor.slice(0, 10);
+    if (programmedDay <= today) return "programados_hoy";
+    return programmedDay === shiftDay(today, 1) ? "programados_manana" : "programados_despues";
+  }
   if (row.hasPriorDispatch) return "ya_salieron";
   const created = limaDay(row.createdAt);
   // Sin fecha de creación no se esconde en «+30 días»: se queda en la cola a dejar en cero.

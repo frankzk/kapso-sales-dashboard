@@ -6819,16 +6819,20 @@ lista (`sortQueue`):
 1. **Programados hoy** — con salida programada para hoy o para un día que ya
    pasó (chapa «programado hoy» o, en ámbar, «programado lun 28/09 ·
    vencido»). Van primero: es la fecha que se le dio a la clienta.
-2. **Nunca salieron** — nunca salieron a reparto (§29.2) y se crearon en los
+2. **Programados para mañana** (01-10-2026) — con salida programada para el
+   día siguiente a hoy en Lima. Su tarjeta aparece junto a «Programados hoy»
+   y filtra esos pedidos; al llegar su fecha pasan a «Programados hoy».
+3. **Nunca salieron** — nunca salieron a reparto (§29.2) y se crearon en los
    últimos 30 días. Es el apartado a dejar en cero, como «Sin llamar» en Por
    confirmar; del más reciente al más antiguo.
-3. **Ya salieron** — salieron al menos una vez y volvieron (chapa «ya salió»,
+4. **Ya salieron** — salieron al menos una vez y volvieron (chapa «ya salió»,
    que reemplaza a «salida previa»): reprogramaciones o recuperaciones.
-4. **+30 días** — nunca salieron y se crearon hace más de 30 días
+5. **+30 días** — nunca salieron y se crearon hace más de 30 días
    (`STALE_AFTER_DAYS`): se revisan después de los recientes. Un pedido sin
    fecha de creación se queda en «Nunca salieron».
-5. **Programados después** — con salida programada para otro día: no cuentan
-   para hoy y ese día pasan solos a «Programados hoy».
+6. **Programados después** — con salida programada para después de mañana:
+   al acercarse la fecha pasan a «Programados para mañana» y después a
+   «Programados hoy». Los conteos no se duplican entre apartados.
 
 La programación manda sobre todo lo demás. Un apartado solo reúne pedidos que
 se pueden asignar; con una etapa elegida (seguimiento) la fila no se muestra y

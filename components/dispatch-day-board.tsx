@@ -10,7 +10,7 @@
 // tomados» (retiradas): teléfono y fecha en la fila, «2.º intento», los
 // excluidos con motivo, el picker de filtros y los estados del paquete en
 // cada caja. Desde el 29-09-2026 la lista se parte en apartados (programados
-// hoy, nunca salieron, ya salieron, +30 días, programados después) y el
+// hoy, mañana, nunca salieron, ya salieron, +30 días, programados después) y el
 // calendario programa la salida sin tomar el pedido (0199). El mismo día la
 // vista pasó al mundo de operación (components/ops-ui.tsx): el lenguaje del
 // panel de Stripe con el azul Kapta. Los apartados son tarjetas de estado,
@@ -331,7 +331,7 @@ export function DispatchDayBoard(props: Props) {
 
   const stores = useMemo(() => [...new Set(queue.map((q) => q.storeName))].sort(), [queue]);
   const districts = useMemo(() => [...new Set(queue.map((q) => q.district))].sort((a, b) => a.localeCompare(b, "es")), [queue]);
-  // Filtrada y en el orden de los apartados: programados hoy, nunca salieron,
+  // Filtrada y en el orden de los apartados: programados hoy, mañana, nunca salieron,
   // ya salieron, +30 días y programados después.
   const filtered = useMemo(() => sortQueue(filterQueue(allRows, filters, day), day), [allRows, filters, day]);
   // Chips de etapa, subetapa y fecha pactada con su cantidad facetada (cuántas
@@ -533,7 +533,7 @@ export function DispatchDayBoard(props: Props) {
       {/* Apartados de la cola como tarjetas de estado: cada una es un filtro con
           su cantidad y la elegida lleva el borde azul. «Nunca salieron» es el
           apartado a dejar en cero, como «Sin llamar» en Por confirmar. */}
-      <div role="group" aria-label="Apartados de la cola" className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      <div role="group" aria-label="Apartados de la cola" className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-7">
         <StatusCard label="Por asignar" value={QUEUE_SEGMENTS.reduce((sum, segment) => sum + cards.segment[segment], 0)} hint={QUEUE_TILE_LABEL.por_asignar.hint} active={method === "lista" && !tracking && filters.segment === null} onClick={() => tapQueueTile("por_asignar")} />
         {QUEUE_SEGMENTS.map((segment) => (
           <StatusCard key={segment} label={QUEUE_SEGMENT_LABEL[segment].label} value={cards.segment[segment]} hint={QUEUE_SEGMENT_LABEL[segment].hint} active={method === "lista" && filters.segment === segment} onClick={() => tapSegment(segment)} />
