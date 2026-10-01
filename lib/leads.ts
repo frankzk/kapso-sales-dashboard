@@ -176,7 +176,11 @@ export function nextLeadState(
   existing: LeadStateSnapshot | null,
   sig: { hasOrder?: boolean; hasRecentIntent?: boolean },
 ): AutoState | null {
-  if (sig.hasOrder && existing && categoryOf(existing.status) === "won") {
+  // Ganado se queda ganado — SALVO recompra. Hasta 2026-10-01 esta guarda no
+  // miraba `hasRecentIntent`, así que la recompra de abajo nunca llegaba a
+  // ejecutarse para un lead ya ganado, que es justo el caso para el que existe:
+  // en 52 días, 481 carritos de recompra quedaron escondidos en «Ganados».
+  if (sig.hasOrder && !sig.hasRecentIntent && existing && categoryOf(existing.status) === "won") {
     return null;
   }
   // A prior order wins the lead — UNLESS there's a newer buying signal (a fresh

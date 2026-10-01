@@ -785,6 +785,7 @@ async function processOrderWebhook(
         phone: row.customer_phone,
         orderId: ord?.id ?? null,
         win: eventOverridesDisposition(row.created_at, dispAt.get(row.customer_phone)),
+        orderCreatedAt: row.created_at,
       });
     } catch {
       /* best-effort */
