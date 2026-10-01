@@ -533,7 +533,7 @@ export function DispatchDayBoard(props: Props) {
       {/* Apartados de la cola como tarjetas de estado: cada una es un filtro con
           su cantidad y la elegida lleva el borde azul. «Nunca salieron» es el
           apartado a dejar en cero, como «Sin llamar» en Por confirmar. */}
-      <div role="group" aria-label="Apartados de la cola" className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-7">
+      <div role="group" aria-label="Apartados de la cola" className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-7 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto">
         <StatusCard label="Por asignar" value={QUEUE_SEGMENTS.reduce((sum, segment) => sum + cards.segment[segment], 0)} hint={QUEUE_TILE_LABEL.por_asignar.hint} active={method === "lista" && !tracking && filters.segment === null} onClick={() => tapQueueTile("por_asignar")} />
         {QUEUE_SEGMENTS.map((segment) => (
           <StatusCard key={segment} label={QUEUE_SEGMENT_LABEL[segment].label} value={cards.segment[segment]} hint={QUEUE_SEGMENT_LABEL[segment].hint} active={method === "lista" && filters.segment === segment} onClick={() => tapSegment(segment)} />
