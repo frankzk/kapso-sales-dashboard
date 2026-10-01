@@ -904,7 +904,7 @@ function ManifestDetail({ manifest, mode, canManage, onChanged, showResult }: { 
   // Una ruta de cien paquetes no se revisa desplazándose. El buscador sirve
   // sobre todo para el final del cotejo: encontrar los pocos que faltan.
   const needle = query.trim().toLowerCase();
-  const shownItems = needle
+  const filteredItems = needle
     ? active.filter((item) =>
         [
           item.shipment?.output_code,
@@ -918,6 +918,11 @@ function ManifestDetail({ manifest, mode, canManage, onChanged, showResult }: { 
           .some((field) => String(field).toLowerCase().includes(needle)),
       )
     : active;
+  // Los pendientes van primero; cada grupo conserva el orden de la carga.
+  const checkedAt = mode === "office" ? "office_checked_at" : "pickup_checked_at";
+  const shownItems = [...filteredItems].sort(
+    (a, b) => Number(!!a[checkedAt]) - Number(!!b[checkedAt]),
+  );
   return <OpsManifestDetail manifest={manifest} mode={mode} canManage={canManage} onChanged={onChanged} showResult={showResult} active={active} removed={removed} checked={checked} total={progress.total} query={query} setQuery={setQuery} shownItems={shownItems} needle={needle} />;
 }
 
