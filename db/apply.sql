@@ -417,4 +417,6 @@
 \ir migrations/0206_gf_return_rejected_reprograms.sql
 \echo 'Applying 0207_lead_cart_count_48h.sql'
 \ir migrations/0207_lead_cart_count_48h.sql
+\echo 'Applying 0208_leads_search_trigram.sql'
+\ir migrations/0208_leads_search_trigram.sql
 \echo 'Done.'
