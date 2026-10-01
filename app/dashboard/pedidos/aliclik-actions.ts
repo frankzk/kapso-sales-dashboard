@@ -42,6 +42,7 @@ import {
 } from "@/lib/orders-master-access";
 import { aliclikRiskGate } from "@/lib/order-confirmation-brief";
 import { aliclikDoorBan } from "@/lib/door-rejection";
+import { getAliclikDuplicateHold } from "./aliclik-duplicate-actions";
 import { classifyOperation } from "@/lib/order-macro-stage";
 import { normalizePhone } from "@/lib/phone";
 import { pinSinCorroborar } from "@/lib/pin-corroborado";
@@ -1179,6 +1180,10 @@ export async function createAliclikGuide(
   const doorBan = aliclikDoorBan(confirmationBrief.doorRejections);
   if (doorBan.banned) return { error: doorBan.message ?? "Aliclik está cerrado para este cliente." };
 
+  const duplicateCheck = await getAliclikDuplicateHold(orderId);
+  if ("error" in duplicateCheck) return { error: duplicateCheck.error };
+  if (!duplicateCheck.hold.allowed) return { error: duplicateCheck.hold.message ?? "Resuelve el posible duplicado antes de crear otra guía." };
+
   const riskGate = aliclikRiskGate(
     confirmationBrief.risk.requirement,
     ctx.row.payment_state,
@@ -1281,6 +1286,12 @@ export async function createAliclikGuide(
     products: preview.items.map((i) => ({ ean: i.ean, quantity: i.quantity, price: i.price })),
     courier: courierBlock as AliclikCourierQuote,
   };
+
+  // Cotizar puede tardar: volver a leer pagos, resoluciones y salidas antes de
+  // registrar la intención. Una excepción de antecedentes NO abre esta puerta.
+  const finalDuplicateCheck = await getAliclikDuplicateHold(orderId);
+  if ("error" in finalDuplicateCheck) return { error: finalDuplicateCheck.error };
+  if (!finalDuplicateCheck.hold.allowed) return { error: finalDuplicateCheck.hold.message ?? "El posible duplicado sigue retenido." };
 
   // EL CANDADO. Se escribe ANTES del POST: si dos peticiones llegan a la vez,
   // una choca aquí (23505) en lugar de crear dos pedidos reales en Aliclik.

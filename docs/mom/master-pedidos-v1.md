@@ -1041,6 +1041,43 @@ Corregir un bloqueo mal puesto se hace **sobre el dato** —la etiqueta de la
 guía— y no sobre el permiso. Es el precio de que la regla no se pueda ablandar
 a las 7 de la tarde con el pedido esperando.
 
+### 8.3 Otro pedido del mismo producto todavía despachado (01-10-2026)
+
+Decisión aprobada por el owner: en **Provincia COD**, crear otra guía Aliclik
+queda retenido cuando otro pedido del mismo teléfono tiene el mismo producto
+y variante en una salida físicamente despachada que todavía no se entregó ni
+regresó. Se revisan las tiendas accesibles de la misma organización. Una
+coincidencia de SKU permite reconocer el producto entre tiendas; dentro de la
+misma tienda manda la variante Shopify. Basta un producto coincidente, aunque
+las cantidades o el resto de la canasta difieran. No hay ventana de siete días:
+la retención dura lo que dure el paquete pendiente.
+
+Una guía creada pero sin despacho no activa esta regla. Tampoco un envío ya
+entregado o recuperado. Cancelar en Shopify, cerrar la guía o solicitar retorno
+no prueba que la caja volvió. Se revisan todas las salidas del otro pedido.
+
+La operadora registra una resolución con motivo, actor, fecha y las salidas
+concretas que revisó:
+
+- **Solo quiere el anterior:** el nuevo sigue retenido; su cancelación se
+  tramita por el procedimiento habitual, sin cancelar Shopify automáticamente.
+- **Quiere ambos:** confirmación explícita registrada y al menos el adelanto
+  mínimo vigente validado en el pedido nuevo. Un comprobante pendiente o el
+  pago del primer pedido no sirven. El pago se vuelve a comprobar al crear.
+- **Reemplaza al anterior:** sigue retenido hasta que conste la recuperación
+  física o entrega del envío anterior. Solicitar detenerlo no lo libera.
+- **Excepción autorizada:** exige el permiso `master.override_status` en la
+  organización del pedido y un motivo. La autorización solo vale para los
+  productos y salidas revisados; un cambio exige nueva revisión.
+
+La retención se comprueba en el servidor antes de escribir hacia Aliclik y se
+muestra en confirmación y en el panel de creación. Una confirmación genérica o
+una excepción de antecedentes no la levantan. Si no puede verificarse el dato,
+no se crea la guía. Esta excepción tampoco levanta el veto de dos rechazos del
+§8.2. Cotizar o vincular una guía que ya existe siguen siendo operaciones
+distintas; la regla impide emitir una nueva. Lima y los demás couriers conservan
+sus reglas. Las resoluciones quedan en `order_events`, sin borrar historial.
+
 ## 9. Lima
 
 - Todos los pedidos entran directamente a Preparación.

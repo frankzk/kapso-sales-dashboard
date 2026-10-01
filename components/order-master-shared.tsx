@@ -550,6 +550,7 @@ export const TIMELINE_LABEL: Record<string, string> = {
   cancelled_shopify: "Anulado en Shopify",
   courier_assigned: "Courier asignado",
   guide_registered: "Guía registrada",
+  aliclik_duplicate_resolution: "Resolución de posible duplicado Aliclik",
   route_output_created: "Salida y rótulo creados",
   route_output_cancelled: "Salida anulada",
   olva_tracking_linked: "Tracking de Olva registrado",

@@ -31,6 +31,7 @@ import {
   type FrozenKey,
 } from "@/lib/master-table-columns";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
+import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
 import { CopyButton } from "@/components/copy-button";
 import { AliclikCoverageProbe } from "@/components/aliclik-coverage-probe";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
@@ -729,7 +730,7 @@ export function OrderDrawer({
     return () => {
       alive = false;
     };
-  }, [orderId, wantsBrief]);
+  }, [orderId, wantsBrief, detail]);
   const paymentPanel = detail
     ? orderPaymentPanelPresentation({
         operation: detail.routePlan.operation,
@@ -737,7 +738,9 @@ export function OrderDrawer({
         shippingMode: detail.row.shipping_mode,
         macroSubstage: detail.row.macro_substage,
         macroReasons: detail.row.macro_reasons,
-        riskRequirement: brief?.risk.requirement ?? null,
+        riskRequirement: brief?.risk.requirement === "pago_completo" ? "pago_completo"
+          : brief?.duplicateHold?.conflicts.length && brief.duplicateHold.resolution?.decision !== "exception"
+            ? "exigir_adelanto" : brief?.risk.requirement ?? null,
         paymentState: detail.row.payment_state,
         paymentFacts: {
           financialStatus: detail.row.financial_status,
@@ -1069,6 +1072,7 @@ export function OrderDrawer({
               >
                 <ConfirmationDesk
                   brief={brief}
+                  onDuplicateChanged={() => { void reload(); onSaved(); }}
                   row={detail.row}
                   tasks={detail.tasks}
                   shopifyUrl={shopifyUrl}
@@ -1626,6 +1630,8 @@ export function OrderDrawer({
                   riskRequirement={brief?.risk.requirement ?? "ninguno"}
                   paymentState={detail.row.payment_state}
                   riskReasons={brief?.risk.reasons ?? []}
+                  duplicateHold={brief?.duplicateHold}
+                  onDuplicateChanged={() => { void reload(); onSaved(); }}
                   onCreated={() => {
                     void reload();
                     onSaved();
@@ -2135,7 +2141,9 @@ function PriorOrderRow({
   );
 }
 
-function ConfirmationBrief({ brief }: { brief: OrderConfirmationBrief }) {
+function ConfirmationBrief({ brief, orderId, onDuplicateChanged }: {
+  brief: OrderConfirmationBrief; orderId: string; onDuplicateChanged: () => void;
+}) {
   const { counts, risk, duplicates, codCouriers, priors, orderCreatedAt, products, doorRejections } =
     brief;
   const doorBan = doorRejections === null ? null : aliclikDoorBan(doorRejections);
@@ -2207,7 +2215,9 @@ function ConfirmationBrief({ brief }: { brief: OrderConfirmationBrief }) {
         </div>
       )}
 
-      <div className={cn("rounded-md border px-2.5 py-2", REQUIREMENT_TONE[risk.requirement])}>
+      <AliclikDuplicatePanel key={orderId} orderId={orderId} initialHold={brief.duplicateHold} onChanged={onDuplicateChanged} />
+
+      {(risk.requirement !== "ninguno" || (brief.duplicateHold?.allowed && !brief.duplicateHold.conflicts.length)) && <div className={cn("rounded-md border px-2.5 py-2", REQUIREMENT_TONE[risk.requirement])}>
         <p className="text-xs font-bold">
           {PAYMENT_REQUIREMENT_LABEL[risk.requirement]}
           {risk.antecedents > 0 && (
@@ -2221,12 +2231,12 @@ function ConfirmationBrief({ brief }: { brief: OrderConfirmationBrief }) {
         {risk.reasons.length > 0 && (
           <p className="mt-0.5 text-[11px] leading-4 opacity-90">{risk.reasons.join(" ")}</p>
         )}
-      </div>
+      </div>}
 
       {/* Un duplicado no visto termina en dos paquetes al mismo destino, y el
           flete de uno se pierde. Se listan con nombre y fecha: la decisión es
           humana, la herramienta solo se asegura de que los vea. */}
-      {duplicates.length > 0 && (
+      {duplicates.length > 0 && !brief.duplicateHold?.conflicts.length && (
         <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2">
           <p className="text-xs font-bold text-amber-900">
             ⚠ {duplicates.length} pedido{duplicates.length === 1 ? "" : "s"} abierto
@@ -2293,6 +2303,7 @@ function ConfirmationBrief({ brief }: { brief: OrderConfirmationBrief }) {
 
 function ConfirmationDesk({
   brief,
+  onDuplicateChanged,
   row,
   tasks,
   shopifyUrl,
@@ -2301,6 +2312,7 @@ function ConfirmationDesk({
   onAttempt,
 }: {
   brief: OrderConfirmationBrief | null;
+  onDuplicateChanged: () => void;
   row: OrderMasterRow;
   tasks: OrderMasterDetail["tasks"];
   shopifyUrl: string | null;
@@ -2468,7 +2480,7 @@ function ConfirmationDesk({
         </p>
       )}
 
-      {brief && <ConfirmationBrief brief={brief} />}
+      {brief && <ConfirmationBrief brief={brief} orderId={row.order_id} onDuplicateChanged={onDuplicateChanged} />}
 
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="block">
