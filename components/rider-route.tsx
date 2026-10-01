@@ -239,7 +239,7 @@ function RiderRouteScreenInner({
   return (
     <main className="rider-scale mx-auto min-h-screen max-w-md bg-slate-50 lg:grid lg:max-w-5xl lg:grid-cols-[28rem_minmax(0,1fr)] lg:items-start">
       <div className="min-w-0 pb-24 lg:min-h-screen lg:shadow-[inset_-1px_0_0_var(--color-line)]">
-      <header className="sticky top-0 z-10 bg-white px-4 pb-3 pt-3 shadow-[inset_0_-1px_0_var(--color-line)]">
+      <header className="bg-white px-4 pb-2 pt-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h1 className="truncate text-base font-semibold text-ink-900">{riderName}</h1>
@@ -252,7 +252,7 @@ function RiderRouteScreenInner({
               value={route.id}
               onChange={(e) => router.push(`/reparto?ruta=${e.target.value}${coordinator ? "&modo=coordinacion" : ""}`)}
               aria-label="Ruta a reportar"
-              className="h-12 shrink-0 rounded-md border-0 bg-white px-2 text-xs text-ink-700 shadow-control ring-1 ring-inset ring-line-strong"
+              className="h-12 min-w-0 max-w-[60%] rounded-md border-0 bg-white px-2 text-xs text-ink-700 shadow-control ring-1 ring-inset ring-line-strong"
             >
               {routes.map((r) => (
                 <option key={r.id} value={r.id}>
@@ -266,18 +266,26 @@ function RiderRouteScreenInner({
           )}
         </div>
         {coordinator && (
-          <Banner tone="info" className="mt-3">
-            Reportas como <strong className="font-semibold text-ink-900">{coordinator}</strong> por el motorizado. Tu usuario quedará registrado.{" "}
-            <a className="font-medium text-brand-700 underline underline-offset-2" href="/dashboard/courier/reparto">Volver a Rutas</a>
-          </Banner>
+          <div className="mt-2 flex items-start justify-between gap-3 text-xs">
+            <details className="min-w-0 flex-1 text-ink-600">
+              <summary className="min-h-11 cursor-pointer py-3 font-medium">Modo coordinación</summary>
+              <p className="pb-2 break-words">
+                Reportas como <strong className="font-semibold text-ink-900">{coordinator}</strong> por el motorizado. Tu usuario quedará registrado.
+              </p>
+            </details>
+            <a className="inline-flex min-h-11 shrink-0 items-center font-medium text-brand-700 underline underline-offset-2" href="/dashboard/courier/reparto">Volver a Rutas</a>
+          </div>
         )}
+      </header>
         {/* Las cifras son filtros (la regla de Cifras Navegan): tocar una deja
-            solo esas paradas; tocarla otra vez las muestra todas. */}
-        <div className="mt-3 grid grid-cols-3 gap-2">
+            solo esas paradas; tocarla otra vez las muestra todas. Solo esta
+            franja queda fija: los avisos y el escáner se desplazan con la lista. */}
+        <div role="group" aria-label="Filtrar pedidos por estado" className="sticky top-0 z-10 grid grid-cols-3 gap-2 bg-white px-3 py-2 shadow-[inset_0_-1px_0_var(--color-line)]">
           <RouteCount label="Por entregar" value={totals.pendientes} active={statusFilter === "pendiente"} onClick={() => toggleStatus("pendiente")} />
           <RouteCount label="Entregados" value={totals.entregados} active={statusFilter === "entregado"} onClick={() => toggleStatus("entregado")} />
           <RouteCount label="No entregados" value={totals.noEntregados} active={statusFilter === "no_entregado"} onClick={() => toggleStatus("no_entregado")} />
         </div>
+      <div className="bg-white px-4">
         {receptionPending && !coordinator && (
           <Link href="/reparto" className={cn("mt-3 inline-flex min-h-12 w-full items-center justify-center rounded-md px-3 text-sm font-semibold", RIDER_SECONDARY)}>
             Volver a recibir mi caja
@@ -328,7 +336,7 @@ function RiderRouteScreenInner({
         {closed && (
           <Banner tone="info" className="mt-3">Esta ruta ya está cerrada. Si algo quedó mal, avisa al coordinador.</Banner>
         )}
-      </header>
+      </div>
 
       <ul className="space-y-2 p-3">
         {statusFilter && (
@@ -409,12 +417,12 @@ function RouteCount({ label, value, active, onClick }: { label: string; value: n
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        "flex min-w-0 flex-col items-start justify-between gap-1 rounded-lg bg-white px-3 py-2 text-left shadow-control transition-shadow",
+        "flex min-h-12 min-w-0 flex-col items-center justify-center gap-0.5 rounded-md bg-white px-1.5 py-1.5 text-center transition-shadow",
         active ? "ring-2 ring-inset ring-brand-600" : "ring-1 ring-inset ring-line hover:ring-line-strong",
       )}
     >
-      <span className={cn("text-xs font-medium leading-tight", active ? "text-brand-700" : "text-ink-600")}>{label}</span>
-      <span className={cn("text-xl font-semibold leading-7 tabular-nums", active ? "text-brand-700" : "text-ink-900")}>{value.toLocaleString("es-PE")}</span>
+      <span className={cn("text-[13px] font-medium leading-4", active ? "text-brand-700" : "text-ink-600")}>{label}</span>
+      <span className={cn("text-[16px] font-semibold leading-5 tabular-nums", active ? "text-brand-700" : "text-ink-900")}>{value.toLocaleString("es-PE")}</span>
     </button>
   );
 }
