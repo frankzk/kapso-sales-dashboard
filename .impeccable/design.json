@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-29T00:00:00Z",
+  "generatedAt": "2026-10-01T00:47:37Z",
   "title": "Design System: Kapta",
   "extensions": {
     "colorMeta": {
@@ -425,7 +425,22 @@
       {
         "name": "state-transition",
         "value": "150ms cubic-bezier(0.4, 0, 0.2, 1)",
-        "purpose": "Cambio de fondo, color, sombra o anillo en controles; el único movimiento del mundo de operación."
+        "purpose": "Cambio de fondo, color, sombra o anillo en controles."
+      },
+      {
+        "name": "skeleton-pulse",
+        "value": "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+        "purpose": "Esqueleto de carga en wash; solo opacidad, sin desplazamiento."
+      },
+      {
+        "name": "slide-in-right",
+        "value": "220ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "purpose": "La ficha de /reparto entra desde la derecha en el teléfono; quieta desde lg y con movimiento reducido."
+      },
+      {
+        "name": "photo-progress",
+        "value": "1.1s ease-in-out infinite",
+        "purpose": "Barra de 4 px que recorre su pista mientras sube una foto; con movimiento reducido, barra quieta al 50 %."
       }
     ],
     "focus": [
@@ -456,8 +471,8 @@
       }
     ],
     "adoption": {
-      "status": "El mundo de operación es la dirección aprobada; en producción solo en la cabecera y pestañas de Grupo GF Courier y en la pestaña Despacho del día.",
-      "legacy": "El resto de la aplicación usa el aspecto anterior (Tailwind slate-*, brand-600, rounded-xl/2xl, shadow-xl): deriva preexistente, no norma."
+      "status": "El mundo de operación es la dirección aprobada; en producción en Grupo GF Courier (cabecera, pestañas, Despacho del día, Rutas, Tarifario y los paneles de Rutas), Almacén, Devoluciones de Tanders, Entregas a couriers y, desde el 30-09-2026, la pantalla del motorizado (/reparto).",
+      "legacy": "El resto de la aplicación usa el aspecto anterior (Tailwind slate-*, brand-600, rounded-xl/2xl, shadow-xl): deriva preexistente, no norma; en /reparto, «Recibir mi caja» y el escáner de QR con su cámara."
     }
   },
   "components": [
@@ -544,7 +559,7 @@
   ],
   "narrative": {
     "northStar": "La Mesa de Despacho",
-    "overview": "Kapta se opera como una mesa de trabajo limpia: superficies blancas sobre un lienzo pizarra muy claro, líneas finas en lugar de cajas pesadas y un solo azul que dice dónde actuar. El mundo de operación toma el lenguaje del panel de Stripe (página de lista con cifras que filtran, tabla que es el trabajo, excepciones esperando al borde) y lo traduce al azul Kapta. La densidad es de escritorio con ratón, pero todo control se agranda a objetivo de dedo cuando el puntero es táctil, porque el mismo supervisor trabaja de pie en almacén con un lector o un celular.\n\nLa personalidad es clara, rápida y confiable: tinta azulada en tres pasos para jerarquía, chapas de estado de 4 px que siempre llevan texto, sombras cortas que apenas despegan los controles del papel. Nada decora; todo lo que tiene color significa algo. El movimiento se limita a transiciones de estado de 150 ms.\n\n**Alcance actual (29-09-2026).** Este mundo es la dirección aprobada para todo el producto, pero hoy solo está en producción en la cabecera y las pestañas de Grupo GF Courier y en la pestaña «Despacho del día» (tarjetas de estado, QR, lista, cajas, devoluciones y hojas). El resto de la aplicación (Rutas, Tarifario, las vistas anteriores del courier, el Master de Pedidos, Envíos, Liquidaciones y demás) sigue con el aspecto anterior: Tailwind `slate-*`, `brand-600` como acento, radios `rounded-xl`/`rounded-2xl` y `shadow-xl`. Ese aspecto es deriva preexistente, no una segunda norma: las superficies nuevas o rediseñadas usan este documento. No hay esquema oscuro; el producto declara `color-scheme: light`.",
+    "overview": "Kapta se opera como una mesa de trabajo limpia: superficies blancas sobre un lienzo pizarra muy claro, líneas finas en lugar de cajas pesadas y un solo azul que dice dónde actuar. El mundo de operación toma el lenguaje del panel de Stripe (página de lista con cifras que filtran, tabla que es el trabajo, excepciones esperando al borde) y lo traduce al azul Kapta. La densidad es de escritorio con ratón, pero todo control se agranda a objetivo de dedo cuando el puntero es táctil, porque el mismo supervisor trabaja de pie en almacén con un lector o un celular.\n\nLa personalidad es clara, rápida y confiable: tinta azulada en tres pasos para jerarquía, chapas de estado de 4 px que siempre llevan texto, sombras cortas que apenas despegan los controles del papel. Nada decora; todo lo que tiene color significa algo. El movimiento se limita a transiciones de estado de 150 ms y a decir que algo carga o entra (el esqueleto en `wash`, la barra de subida de una foto, la ficha de `/reparto` que entra desde la derecha en el teléfono); lo que se desplaza se apaga con movimiento reducido.\n\n**Alcance actual (30-09-2026).** Este mundo es la dirección aprobada para todo el producto, pero hoy está en producción en la cabecera y las pestañas de Grupo GF Courier, en «Despacho del día» (tarjetas de estado, QR, lista, cajas, devoluciones y hojas), donde se estrenó el 29-09-2026, y, desde el mismo día, en Rutas (también en `/dashboard/courier/rutas`) y Tarifario, en los dos paneles laterales que abre Rutas —la caja y «Reparto y liquidación» (cierre, resumen, tabla de paradas y pago del motorizado)— en la estación «Almacén» (`/dashboard/pedidos/almacen`: escáner de armado, «Por empacar» como un marco con una celda por operación cuyo lavado dice si está en cero, cerca del corte o vencida, la cola por armar como listas con hairlines y las detenidas en ámbar con su chapa, y «Armados hoy»), en «Devoluciones de Tanders» (`/dashboard/pedidos/devoluciones`: el mismo escáner, el cuadre en un marco de cifras con «Faltan» en lavado crítico si hay algo que reclamar, y las listas de faltantes y recibidas) y en la mesa «Entregas a couriers» (`/dashboard/pedidos/despacho`: cifras del día, rutas recientes, destino elegido, paquetes sin ruta, «¿Quién recoge?» y «Nueva ruta»). Desde el 30-09-2026 también está en la pantalla del motorizado (`/reparto`, la misma que abre Coordinación para reportar por él): la lista de paradas con «Añadir un punto», la ficha de la parada con su reporte, la hoja de WhatsApp, los campos de evidencia y la cámara dentro de la página. Los tres pasos de la caja (`DispatchBoxPanel`) se ven igual en la mesa y en el panel; en la mesa la sección lleva la sombra de tarjeta porque está sobre el lienzo. Excepción consciente: bajo 1024 px las filas del Tarifario se vuelven tarjetas con el módulo compartido `components/courier-mobile.module.css`, que también usan las vistas anteriores y no se tocó; la tarjeta exterior se quita ahí para no anidar tarjetas. El resto de la aplicación (las partes de `components/routes.tsx` que el panel no muestra —añadir paradas y reintentos—; en `/reparto`, «Recibir mi caja» y el escáner de QR de «Confirmar todos» y «Lo llevo», montado sin `look=\"ops\"`, y su cámara; las vistas anteriores del courier, el Master de Pedidos, Envíos, Liquidaciones y demás) sigue con el aspecto anterior: Tailwind `slate-*`, `brand-600` como acento, radios `rounded-xl`/`rounded-2xl` y `shadow-xl`. Ese aspecto es deriva preexistente, no una segunda norma: las superficies nuevas o rediseñadas usan este documento. No hay esquema oscuro; el producto declara `color-scheme: light`. La única superficie oscura es el visor de la cámara, negro como en la cámara del teléfono.",
     "keyCharacteristics": [
       "Superficies blancas con líneas finas (`line`) sobre el lienzo `slate-50`.",
       "Tinta azulada en pasos (`ink-900` / `ink-700` / `ink-500`) en lugar de grises neutros.",
@@ -566,6 +581,11 @@
         "section": "colors"
       },
       {
+        "name": "The Resultado en su Tono Rule",
+        "body": "Elegir un resultado es declarar un estado: la opción encendida toma el par de su tono con anillo de 2 px en `*-fg`, icono y palabra (Entregado en `ok`, No entregado en `crit`). Elegir entre opciones que no son estados (método de pago, motivo, cuenta) es selección y va en azul: `brand-50`, texto `brand-700` y anillo de 2 px en `brand-600`.",
+        "section": "colors"
+      },
+      {
         "name": "The Cifras Tabulares Rule",
         "body": "Toda cantidad, monto y fecha va en cifras tabulares y con el formato `es-PE`, para que las columnas y los contadores no bailen al cambiar.",
         "section": "typography"
@@ -578,6 +598,11 @@
       {
         "name": "The Cifras Navegan Rule",
         "body": "Las tarjetas de estado son filtros, no adornos: cada una abre su parte de la lista, y la elegida lleva el borde azul. Si una cifra no filtra nada, no va en tarjeta.",
+        "section": "layout"
+      },
+      {
+        "name": "The Escala de Calle Rule",
+        "body": "En `/reparto` crece el texto, no el sistema: colores, radios, anillos y sombras son los mismos, pero ningún objetivo baja de 48 px —tampoco los enlaces de texto como «Copiar» o «Waze»— y en la ficha los gestos (Ir · WhatsApp · Llamar, Entregado / No entregado) miden 56 px.",
         "section": "layout"
       },
       {
@@ -597,16 +622,16 @@
       "**Do** usar solo los radios 4, 6, 8 px y redondo completo, y solo las sombras de control, principal y popover.",
       "**Do** poner todas las cantidades, montos y fechas en cifras tabulares con formato `es-PE`.",
       "**Do** convertir las filas de tabla en tarjetas de lista bajo 640 px, sin desplazamiento horizontal en el teléfono.",
-      "**Do** dejar que el puntero táctil suba los controles a 44 px y mantener 48 px en pestañas y escáner.",
+      "**Do** dejar que el puntero táctil suba los controles a 44 px y mantener 48 px en pestañas y escáner; en `/reparto`, 48 px como mínimo y 56 px en los gestos de la ficha.",
       "**Do** construir superficies nuevas con `OpsButton`, `Badge`, `FilterPill`, `StatusCard`, `AttentionPill`, `Banner`, `FIELD`, `CHECKBOX` y `Sheet look=\"ops\"`."
     ],
     "donts": [
-      "**Don't** usar `slate-*`, `rounded-xl`, `rounded-2xl` ni `shadow-xl` en superficies del mundo de operación; son del aspecto anterior.",
+      "**Don't** usar `slate-*` (fuera del lienzo `slate-50`), `rounded-xl`, `rounded-2xl` ni `shadow-xl` en superficies del mundo de operación; son del aspecto anterior.",
       "**Don't** poner antetítulos, eyebrows ni kickers sobre el título de la página.",
       "**Don't** apilar mosaicos de color, chips y franjas del mismo peso por encima de la tarea; las excepciones esperan en píldoras al borde.",
       "**Don't** usar el color como única señal de estado, ni un rojo sólido para acciones destructivas.",
       "**Don't** anidar tarjetas con sombra dentro de tarjetas; separa secciones con hairlines `line`.",
-      "**Don't** añadir movimiento decorativo, degradados ni tema oscuro parcial; solo transiciones de estado de 150 ms.",
+      "**Don't** añadir movimiento decorativo, degradados ni tema oscuro parcial (el visor negro de la cámara es la única excepción); el movimiento es de estado (150 ms) o dice que algo carga o entra, y lo que se desplaza se apaga con movimiento reducido.",
       "**Don't** mezclar otra familia de iconos ni glifos de texto en lugar de iconos de trazo."
     ]
   }

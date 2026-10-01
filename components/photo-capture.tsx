@@ -186,7 +186,7 @@ export function PhotoCapture({ stopId, kind, label, photoPath, disabled = false,
           </p>
         </div>
       </div>
-      {busy && <div aria-hidden className="mt-3 h-1 overflow-hidden rounded-full bg-line"><div className="h-full w-1/3 animate-[photo-progress_1.1s_ease-in-out_infinite] rounded-full bg-brand-600" /></div>}
+      {busy && <div aria-hidden className="mt-3 h-1 overflow-hidden rounded-full bg-line"><div className="h-full w-1/3 animate-[photo-progress_1.1s_ease-in-out_infinite] rounded-full bg-info-fg" /></div>}
       {/* El error va en un aviso, no pintando el campo (DESIGN.md, Inputs). */}
       {failure && <Banner tone="crit" role="alert" title={failure.title} className="mt-3">{failure.text}</Banner>}
       <div className="mt-3 grid grid-cols-2 gap-2">

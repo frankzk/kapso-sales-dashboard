@@ -248,7 +248,7 @@ function RiderRouteScreenInner({
               value={route.id}
               onChange={(e) => router.push(`/reparto?ruta=${e.target.value}${coordinator ? "&modo=coordinacion" : ""}`)}
               aria-label="Ruta a reportar"
-              className="h-10 shrink-0 rounded-md border-0 bg-white px-2 text-xs text-ink-700 shadow-control ring-1 ring-inset ring-line-strong"
+              className="h-12 shrink-0 rounded-md border-0 bg-white px-2 text-xs text-ink-700 shadow-control ring-1 ring-inset ring-line-strong"
             >
               {routes.map((r) => (
                 <option key={r.id} value={r.id}>
@@ -618,11 +618,11 @@ function QuickActions({ stop, variant, onWhatsApp }: { stop: StopWithOrder; vari
           </>
         );
         const cls = bar
-          ? cn("flex h-14 flex-col items-center justify-center gap-1 rounded-md", enabled ? RIDER_SECONDARY : "bg-wash text-ink-300")
+          ? cn("flex h-14 flex-col items-center justify-center gap-1 rounded-md", enabled ? RIDER_SECONDARY : "bg-wash text-ink-500 [&_svg]:text-ink-300")
           : cn(
               "flex h-12 items-center justify-center gap-2 transition-colors",
               i > 0 && "shadow-[inset_1px_0_0_var(--color-line)]",
-              enabled ? "text-ink-700 hover:bg-wash hover:text-ink-900" : "text-ink-300",
+              enabled ? "text-ink-700 hover:bg-wash hover:text-ink-900" : "text-ink-500 [&_svg]:text-ink-300",
             );
         if (!enabled) {
           return <span key={key} aria-disabled="true" className={cls}>{body}</span>;

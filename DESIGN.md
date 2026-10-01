@@ -215,9 +215,9 @@ components:
 
 Kapta se opera como una mesa de trabajo limpia: superficies blancas sobre un lienzo pizarra muy claro, líneas finas en lugar de cajas pesadas y un solo azul que dice dónde actuar. El mundo de operación toma el lenguaje del panel de Stripe (página de lista con cifras que filtran, tabla que es el trabajo, excepciones esperando al borde) y lo traduce al azul Kapta. La densidad es de escritorio con ratón, pero todo control se agranda a objetivo de dedo cuando el puntero es táctil, porque el mismo supervisor trabaja de pie en almacén con un lector o un celular.
 
-La personalidad es clara, rápida y confiable: tinta azulada en tres pasos para jerarquía, chapas de estado de 4 px que siempre llevan texto, sombras cortas que apenas despegan los controles del papel. Nada decora; todo lo que tiene color significa algo. El movimiento se limita a transiciones de estado de 150 ms.
+La personalidad es clara, rápida y confiable: tinta azulada en tres pasos para jerarquía, chapas de estado de 4 px que siempre llevan texto, sombras cortas que apenas despegan los controles del papel. Nada decora; todo lo que tiene color significa algo. El movimiento se limita a transiciones de estado de 150 ms y a decir que algo carga o entra (el esqueleto en `wash`, la barra de subida de una foto, la ficha de `/reparto` que entra desde la derecha en el teléfono); lo que se desplaza se apaga con movimiento reducido.
 
-**Alcance actual (29-09-2026).** Este mundo es la dirección aprobada para todo el producto, pero hoy está en producción en la cabecera y las pestañas de Grupo GF Courier, en «Despacho del día» (tarjetas de estado, QR, lista, cajas, devoluciones y hojas) y, desde el mismo día, en Rutas (también en `/dashboard/courier/rutas`) y Tarifario, en los dos paneles laterales que abre Rutas —la caja y «Reparto y liquidación» (cierre, resumen, tabla de paradas y pago del motorizado)— en la estación «Almacén» (`/dashboard/pedidos/almacen`: escáner de armado, «Por empacar» como un marco con una celda por operación cuyo lavado dice si está en cero, cerca del corte o vencida, la cola por armar como listas con hairlines y las detenidas en ámbar con su chapa, y «Armados hoy»), en «Devoluciones de Tanders» (`/dashboard/pedidos/devoluciones`: el mismo escáner, el cuadre en un marco de cifras con «Faltan» en lavado crítico si hay algo que reclamar, y las listas de faltantes y recibidas) y en la mesa «Entregas a couriers» (`/dashboard/pedidos/despacho`: cifras del día, rutas recientes, destino elegido, paquetes sin ruta, «¿Quién recoge?» y «Nueva ruta»). Los tres pasos de la caja (`DispatchBoxPanel`) se ven igual en la mesa y en el panel; en la mesa la sección lleva la sombra de tarjeta porque está sobre el lienzo. Excepción consciente: bajo 1024 px las filas del Tarifario se vuelven tarjetas con el módulo compartido `components/courier-mobile.module.css`, que también usan las vistas anteriores y no se tocó; la tarjeta exterior se quita ahí para no anidar tarjetas. El resto de la aplicación (las partes de `components/routes.tsx` que el panel no muestra —añadir paradas y reintentos—; las vistas anteriores del courier, el Master de Pedidos, Envíos, Liquidaciones y demás) sigue con el aspecto anterior: Tailwind `slate-*`, `brand-600` como acento, radios `rounded-xl`/`rounded-2xl` y `shadow-xl`. Ese aspecto es deriva preexistente, no una segunda norma: las superficies nuevas o rediseñadas usan este documento. No hay esquema oscuro; el producto declara `color-scheme: light`.
+**Alcance actual (30-09-2026).** Este mundo es la dirección aprobada para todo el producto, pero hoy está en producción en la cabecera y las pestañas de Grupo GF Courier, en «Despacho del día» (tarjetas de estado, QR, lista, cajas, devoluciones y hojas), donde se estrenó el 29-09-2026, y, desde el mismo día, en Rutas (también en `/dashboard/courier/rutas`) y Tarifario, en los dos paneles laterales que abre Rutas —la caja y «Reparto y liquidación» (cierre, resumen, tabla de paradas y pago del motorizado)— en la estación «Almacén» (`/dashboard/pedidos/almacen`: escáner de armado, «Por empacar» como un marco con una celda por operación cuyo lavado dice si está en cero, cerca del corte o vencida, la cola por armar como listas con hairlines y las detenidas en ámbar con su chapa, y «Armados hoy»), en «Devoluciones de Tanders» (`/dashboard/pedidos/devoluciones`: el mismo escáner, el cuadre en un marco de cifras con «Faltan» en lavado crítico si hay algo que reclamar, y las listas de faltantes y recibidas) y en la mesa «Entregas a couriers» (`/dashboard/pedidos/despacho`: cifras del día, rutas recientes, destino elegido, paquetes sin ruta, «¿Quién recoge?» y «Nueva ruta»). Desde el 30-09-2026 también está en la pantalla del motorizado (`/reparto`, la misma que abre Coordinación para reportar por él): la lista de paradas con «Añadir un punto», la ficha de la parada con su reporte, la hoja de WhatsApp, los campos de evidencia y la cámara dentro de la página. Los tres pasos de la caja (`DispatchBoxPanel`) se ven igual en la mesa y en el panel; en la mesa la sección lleva la sombra de tarjeta porque está sobre el lienzo. Excepción consciente: bajo 1024 px las filas del Tarifario se vuelven tarjetas con el módulo compartido `components/courier-mobile.module.css`, que también usan las vistas anteriores y no se tocó; la tarjeta exterior se quita ahí para no anidar tarjetas. El resto de la aplicación (las partes de `components/routes.tsx` que el panel no muestra —añadir paradas y reintentos—; en `/reparto`, «Recibir mi caja» y el escáner de QR de «Confirmar todos» y «Lo llevo», montado sin `look="ops"`, y su cámara; las vistas anteriores del courier, el Master de Pedidos, Envíos, Liquidaciones y demás) sigue con el aspecto anterior: Tailwind `slate-*`, `brand-600` como acento, radios `rounded-xl`/`rounded-2xl` y `shadow-xl`. Ese aspecto es deriva preexistente, no una segunda norma: las superficies nuevas o rediseñadas usan este documento. No hay esquema oscuro; el producto declara `color-scheme: light`. La única superficie oscura es el visor de la cámara, negro como en la cámara del teléfono.
 
 **Key Characteristics:**
 - Superficies blancas con líneas finas (`line`) sobre el lienzo `slate-50`.
@@ -236,7 +236,7 @@ Una paleta fría y contenida: tinta azulada, hairlines casi invisibles, un azul 
 - **Azul Kapta** (`brand-600`): la acción principal de cada zona (Asignar, Programar, Escanear), la línea de 2 px bajo la pestaña activa, el borde de 2 px de la tarjeta de estado elegida, los iconos del modo activo y las casillas.
 - **Azul Kapta profundo** (`brand-700`): hover del botón principal, texto de enlaces («Ver actividad», «Arreglar en Tarifario»), texto de la pestaña activa, el valor dentro de una píldora de filtro y la cifra de una tarjeta elegida.
 - **Azul de foco** (`brand-500`): el contorno de foco visible de todo el producto (2 px con 2 px de separación) y el anillo interior de 2 px de los campos enfocados.
-- **Velo azul** (`brand-50`): fondo de filas marcadas (al 60 %), chips de elección encendidos y la chapa `brand` (contador de la pestaña activa).
+- **Velo azul** (`brand-50`): fondo de filas marcadas (al 60 %), chips y opciones de elección encendidos y la chapa `brand` (contador de la pestaña activa y «Siguiente», la próxima parada del motorizado).
 
 ### Neutral
 - **Tinta** (`ink-900`): títulos, nombres de pedido, cifras y todo lo que se lee primero.
@@ -262,6 +262,8 @@ Una paleta fría y contenida: tinta azulada, hairlines casi invisibles, un azul 
 
 **The Tono Emparejado Rule.** Un estado siempre es un par fondo/texto del mismo tono (`*-bg` con `*-fg`) con palabras dentro; un aviso usa el lavado del tono (`*-wash`) con icono y título en `*-fg` y el cuerpo en tinta. El color nunca es la única señal.
 
+**The Resultado en su Tono Rule.** Elegir un resultado es declarar un estado: la opción encendida toma el par de su tono con anillo de 2 px en `*-fg`, icono y palabra (Entregado en `ok`, No entregado en `crit`). Elegir entre opciones que no son estados (método de pago, motivo, cuenta) es selección y va en azul: `brand-50`, texto `brand-700` y anillo de 2 px en `brand-600`.
+
 ## Typography
 
 **Display Font:** ninguna fuente web; la sans del sistema (`ui-sans-serif, system-ui, sans-serif`)
@@ -279,6 +281,8 @@ Una paleta fría y contenida: tinta azulada, hairlines casi invisibles, un azul 
 - **Label** (600, 12px, 16px): encabezados de tabla; las chapas usan 12 px en peso 500.
 - **Code** (400, 11–12px, mono): códigos QR y de paquete dentro de listas.
 
+**Escala de calle.** Dentro de `.rider-scale` (la pantalla del motorizado) el texto sube un 30 % y el diseño no: 12 → 15,6 px, 14 → 18,2 px, 16 → 20,8 px y 18 → 23,4 px. En la ficha, el monto (por cobrar o cobrado) es la cifra más grande de la pantalla (28 px en peso 700, tabular).
+
 ### Named Rules
 **The Cifras Tabulares Rule.** Toda cantidad, monto y fecha va en cifras tabulares y con el formato `es-PE`, para que las columnas y los contadores no bailen al cambiar.
 
@@ -292,8 +296,12 @@ Las tarjetas de estado forman una grilla de 2 columnas en el teléfono, 3 desde 
 
 Con puntero táctil (`pointer: coarse`) todo botón, selector y campo sube a 44 px mínimo; con ratón, el escritorio conserva la densidad de 32–36 px. La decisión se toma por método de entrada, no por ancho de pantalla.
 
+La pantalla del motorizado (`/reparto`) es una columna de teléfono de 448 px como máximo sobre el lienzo, con cabecera blanca pegajosa; desde `lg` es una grilla de dos columnas, la lista de 448 px y la ficha a su lado. En el teléfono la ficha cubre la lista, «atrás» la cierra y el desplazamiento es solo suyo; su cabecera arriba y «Guardar» abajo quedan fijos, al alcance del pulgar y con el margen del área segura.
+
 ### Named Rules
 **The Cifras Navegan Rule.** Las tarjetas de estado son filtros, no adornos: cada una abre su parte de la lista, y la elegida lleva el borde azul. Si una cifra no filtra nada, no va en tarjeta.
+
+**The Escala de Calle Rule.** En `/reparto` crece el texto, no el sistema: colores, radios, anillos y sombras son los mismos, pero ningún objetivo baja de 48 px —tampoco los enlaces de texto como «Copiar» o «Waze»— y en la ficha los gestos (Ir · WhatsApp · Llamar, Entregado / No entregado) miden 56 px.
 
 ## Elevation & Depth
 
@@ -362,7 +370,16 @@ Velo `ink-900` al 30 % sin desenfoque; hoja blanca a la derecha con la sombra de
 Fondo en el lavado del tono, icono de 16 px y título en `*-fg`, cuerpo en `ink-700`, 8px de radio, 12px × 16px de relleno.
 
 ### Iconos
-Una sola familia de trazo: rejilla de 24, trazo de 1,8, extremos y uniones redondeados, `currentColor`. 16 px dentro de botones y controles, 14 px en píldoras, 20 px por defecto.
+Una sola familia de trazo: rejilla de 24, trazo de 1,8, extremos y uniones redondeados, `currentColor`. 16 px dentro de botones y controles, 14 px en píldoras, 20 px por defecto. En `/reparto` suben un paso: 20 px en botones y 24 px en los gestos de la ficha, su flecha de volver y la cámara; los enlaces de texto siguen en 16 px. Las marcas ajenas se dibujan con el mismo trazo (WhatsApp es un globo con auricular), nunca con su logo.
+
+### Pantalla del motorizado
+La mesa a escala de calle: las mismas piezas, más grandes y pocas.
+- **Lista:** tarjetas de parada con el número de orden en un disco de 28 px (`ink-900` por entregar, `line` ya reportada) y el monto tabular a la derecha; la próxima lleva la chapa «Siguiente».
+- **Gestos de la parada:** Ir · WhatsApp · Llamar, como fila de 48 px con hairlines bajo cada tarjeta por entregar y como tres botones secundarios de 56 px (icono de 24 px sobre la etiqueta) en la ficha. Sin número o sin dirección, el gesto se apaga y su etiqueta dice por qué («Sin celular»).
+- **«Guardar»:** barra pegajosa al pie con hairline superior; el botón principal ocupa todo el ancho (52 px) y dice qué guarda («Guardar entrega», «Guardar no entrega», «Corregir»). Encima, lo que falta en `ink-600` y «Completar» en `brand-700`, que lleva al campo y le da el foco. «Guardar» no se apaga por lo que falta: solo mientras guarda o sin saldo legible.
+- **Evidencia:** un marco blanco de 8 px con anillo `line` y sombra de control: cuadro de 56 px (icono en `wash`, la miniatura subida o la foto guardada en `ok-wash`), etiqueta, estado («Obligatoria», «Subiendo…», «Lista» en `ok-fg`) y «Cámara» y «Galería» como botones secundarios de 48 px. Mientras sube, una barra de 4 px recorre su pista `line`; un fallo es un aviso `crit` con título y «Reintentar la subida».
+- **Cámara:** dentro de la página, a pantalla completa y en negro (`#000`), con título y controles en blanco: cierre de 48 px, «Galería» y «Linterna» como icono sobre etiqueta y un disparador redondo de 72 px. Es la única superficie oscura del mundo; si la cámara no abre, lo dice una tarjeta blanca con sombra de popover y título en `crit-fg`.
+- **Hoja de WhatsApp:** la hoja inferior a escala de calle: velo `ink-900` al 30 %, blanca con 8 px arriba y sombra de popover (centrada desde `lg`) y cierre de 48 px; cada mensaje es una tarjeta secundaria con icono, nombre y el texto que se abrirá en WhatsApp.
 
 ## Do's and Don'ts
 
@@ -372,14 +389,14 @@ Una sola familia de trazo: rejilla de 24, trazo de 1,8, extremos y uniones redon
 - **Do** usar solo los radios 4, 6, 8 px y redondo completo, y solo las sombras de control, principal y popover.
 - **Do** poner todas las cantidades, montos y fechas en cifras tabulares con formato `es-PE`.
 - **Do** convertir las filas de tabla en tarjetas de lista bajo 640 px, sin desplazamiento horizontal en el teléfono.
-- **Do** dejar que el puntero táctil suba los controles a 44 px y mantener 48 px en pestañas y escáner.
+- **Do** dejar que el puntero táctil suba los controles a 44 px y mantener 48 px en pestañas y escáner; en `/reparto`, 48 px como mínimo y 56 px en los gestos de la ficha.
 - **Do** construir superficies nuevas con `OpsButton`, `Badge`, `FilterPill`, `StatusCard`, `AttentionPill`, `Banner`, `FIELD`, `CHECKBOX` y `Sheet look="ops"`.
 
 ### Don't:
-- **Don't** usar `slate-*`, `rounded-xl`, `rounded-2xl` ni `shadow-xl` en superficies del mundo de operación; son del aspecto anterior.
+- **Don't** usar `slate-*` (fuera del lienzo `slate-50`), `rounded-xl`, `rounded-2xl` ni `shadow-xl` en superficies del mundo de operación; son del aspecto anterior.
 - **Don't** poner antetítulos, eyebrows ni kickers sobre el título de la página.
 - **Don't** apilar mosaicos de color, chips y franjas del mismo peso por encima de la tarea; las excepciones esperan en píldoras al borde.
 - **Don't** usar el color como única señal de estado, ni un rojo sólido para acciones destructivas.
 - **Don't** anidar tarjetas con sombra dentro de tarjetas; separa secciones con hairlines `line`.
-- **Don't** añadir movimiento decorativo, degradados ni tema oscuro parcial; solo transiciones de estado de 150 ms.
+- **Don't** añadir movimiento decorativo, degradados ni tema oscuro parcial (el visor negro de la cámara es la única excepción); el movimiento es de estado (150 ms) o dice que algo carga o entra, y lo que se desplaza se apaga con movimiento reducido.
 - **Don't** mezclar otra familia de iconos ni glifos de texto en lugar de iconos de trazo.
