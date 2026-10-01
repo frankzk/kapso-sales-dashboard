@@ -8,25 +8,19 @@
 // `por definir` desde «Descargar rótulos (PDF)», que después bloquea la emisión
 // de la guía de agencia. Este endpoint las junta y quita el rodeo.
 //
+// La composición vive en lib/shalom/rotulo-compose.ts, compartida con las guías
+// combinadas en lote (app/api/shalom/rotulos).
+//
 // Es una ruta y no una server action porque devuelve un PDF: el navegador lo
 // abre en una pestaña y se imprime, sin pasar el binario por React. Necesita
 // descifrar credenciales de la tienda (service role) → Node.
 
 import { NextResponse, type NextRequest } from "next/server";
-import QRCode from "qrcode";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
-import { describeShalomError } from "@/lib/shalom/client";
-import { loadStoreShalom, type StoreShalom } from "@/lib/shalom/session";
-import { shalomLabelPdf } from "@/lib/shalom/label-cache";
-import { buildAgencyRotuloPdf } from "@/lib/labels/agency-rotulo";
-import { labelItemsFor } from "@/lib/labels/line-items";
-import { outputDisplayCode } from "@/lib/shipment-output";
+import { SHALOM_ROTULO_COLUMNS, composeShalomRotulo, type ShalomRotuloRow } from "@/lib/shalom/rotulo-compose";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/** Su etiqueta es una página. Techo generoso pero finito, como en `label/`. */
-const MAX_BYTES = 10 * 1024 * 1024;
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ shipmentId: string }> }) {
   const { shipmentId } = await ctx.params;
@@ -39,113 +33,18 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ shipmentId
   } = await sb.auth.getUser();
   if (!user) return new NextResponse("unauthorized", { status: 401 });
 
-  const { data: shipment } = await sb
-    .from("shipments")
-    .select(
-      "id,store_id,order_id,courier,guide_code,output_code,output_number,qr_token,order_name,customer_name,product,shalom_ose_id",
-    )
-    .eq("id", shipmentId)
-    .maybeSingle();
+  const { data: shipment } = await sb.from("shipments").select(SHALOM_ROTULO_COLUMNS).eq("id", shipmentId).maybeSingle();
   if (!shipment) return new NextResponse("forbidden", { status: 403 });
 
-  const row = shipment as {
-    id: string;
-    store_id: string;
-    order_id: string | null;
-    courier: string;
-    guide_code: string | null;
-    output_code: string | null;
-    output_number: number | null;
-    qr_token: string | null;
-    order_name: string | null;
-    customer_name: string | null;
-    product: string | null;
-    shalom_ose_id: number | null;
-  };
+  const result = await composeShalomRotulo(sb, createAdminSupabase(), shipment as unknown as ShalomRotuloRow);
+  if (!result.ok) return new NextResponse(result.message, { status: result.status });
 
-  if (row.courier !== "shalom") {
-    return new NextResponse("esta guía no es de Shalom", { status: 400 });
-  }
-  if (!row.shalom_ose_id) {
-    return new NextResponse(
-      "Esta guía no se creó por API (llegó por el reporte), así que su rótulo hay que bajarlo de pro.shalom.pe.",
-      { status: 404 },
-    );
-  }
-  // Sin QR no hay banda que valga: el doble escaneo de despacho es la mitad del
-  // motivo de este papel. Es defensivo — la base lo pone al crear la salida.
-  if (!row.qr_token) {
-    return new NextResponse(
-      "Esta salida no tiene QR interno; imprime el rótulo de Shalom y avisa, porque no debería pasar.",
-      { status: 409 },
-    );
-  }
-
-  const admin = createAdminSupabase();
-  const store = await loadStoreShalom(admin, row.store_id);
-  if (!store?.shalom_pro_email) {
-    return new NextResponse("La tienda no tiene cuenta de Shalom Pro configurada.", { status: 409 });
-  }
-
-  let courierPdf: Uint8Array;
-  try {
-    // De la caché si ya se pidió una vez. Su PDF no cambia una vez emitida la
-    // guía, y pedirlo cuesta ~45 s — al filo del timeout.
-    courierPdf = await shalomLabelPdf(
-      admin,
-      row.store_id,
-      store as StoreShalom,
-      row.shalom_ose_id as number,
-    );
-  } catch (err) {
-    return new NextResponse(describeShalomError(err), { status: 502 });
-  }
-  if (courierPdf.byteLength > MAX_BYTES) {
-    return new NextResponse("el rótulo de Shalom llegó con un tamaño inesperado", { status: 502 });
-  }
-
-  // Los productos y la tienda salen por el cliente de sesión, no por el admin:
-  // lo que el usuario no puede ver tampoco debe acabar impreso en un rótulo.
-  const [{ data: order }, { data: storeRow }] = await Promise.all([
-    row.order_id
-      ? sb.from("orders").select("line_items").eq("id", row.order_id).maybeSingle()
-      : Promise.resolve({ data: null }),
-    sb.from("stores").select("name").eq("id", row.store_id).maybeSingle(),
-  ]);
-
-  const code =
-    outputDisplayCode(row.output_code, row.courier) || row.output_code || row.guide_code || "";
-
-  let pdf: Uint8Array;
-  try {
-    pdf = await buildAgencyRotuloPdf(courierPdf, {
-      code,
-      guideCode: row.guide_code,
-      storeName: (storeRow as { name: string | null } | null)?.name ?? null,
-      orderName: row.order_name,
-      customerName: row.customer_name,
-      items: labelItemsFor((order as { line_items?: unknown } | null)?.line_items, row.product),
-      qrPng: await QRCode.toBuffer(row.qr_token, {
-        margin: 0,
-        width: 320,
-        errorCorrectionLevel: "M",
-      }),
-    });
-  } catch {
-    // Componer puede fallar si su PDF viene corrupto o cifrado. Se dice, en vez
-    // de servir un papel a medias: el rótulo suelto sigue en `/api/shalom/label`.
-    return new NextResponse(
-      "No se pudo componer el rótulo con el PDF de Shalom. Usa el rótulo suelto y avisa.",
-      { status: 502 },
-    );
-  }
-
-  return new NextResponse(pdf as unknown as BodyInit, {
+  return new NextResponse(result.pdf as unknown as BodyInit, {
     status: 200,
     headers: {
       "content-type": "application/pdf",
       "x-content-type-options": "nosniff",
-      "content-disposition": `inline; filename="rotulo-${code || row.shalom_ose_id}.pdf"`,
+      "content-disposition": `inline; filename="rotulo-${result.code}.pdf"`,
       "cache-control": "private, max-age=300",
     },
   });
