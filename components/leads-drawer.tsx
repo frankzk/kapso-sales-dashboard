@@ -35,14 +35,8 @@ import {
   createQuickReply,
   deleteQuickReply,
   generateOrder,
-  listLeadTemplates,
-  listQuickReplies,
-  loadLeadConversation,
-  loadOrderDraft,
-  pollLeadState,
   registerCall,
   createWaMediaUpload,
-  searchStoreProducts,
   sendLeadMedia,
   sendLeadMessage,
   sendLeadTemplate,
@@ -53,6 +47,14 @@ import {
   type LeadThread,
   type QuickReply,
 } from "@/app/dashboard/leads/actions";
+import {
+  listLeadTemplates,
+  listQuickReplies,
+  loadLeadConversation,
+  loadOrderDraft,
+  pollLeadState,
+  searchStoreProducts,
+} from "@/lib/leads-read-client";
 import { REPLY_TOKEN_LABEL, renderReplyPreview, validateReplyParams } from "@/lib/wa-reply-templates";
 import { shopifyDraftOrderAdminUrl } from "@/lib/shopify-urls";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
@@ -389,21 +391,23 @@ export function LeadDrawer({
   useEffect(() => {
     if (lead.has_order) return; // already won → nothing to watch
     let inFlight = false;
+    let alive = true;
     const id = setInterval(() => {
       if (inFlight || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
       inFlight = true;
       void pollLeadState(lead.id)
         .then((r) => {
-          if ("error" in r) return;
+          if (!alive || "error" in r) return;
           if (r.hasOrder !== lead.has_order || r.status !== lead.status || r.category !== lead.category) {
             onRegisteredRef.current(); // real change → full refresh (lead + historial + lista)
           }
         })
+        .catch(() => { /* retry on the next tick */ })
         .finally(() => {
           inFlight = false;
         });
     }, 12_000);
-    return () => clearInterval(id);
+    return () => { alive = false; clearInterval(id); };
   }, [lead.id, lead.has_order, lead.status, lead.category]);
 
   // cod_cart sin conversación → empty-state; el resto muestra el chat (que se
@@ -957,6 +961,7 @@ function WhatsappChat({
   const countRef = useRef(0); // previous message count, to detect new arrivals
   const activeIdRef = useRef<string | null>(null); // active thread (for silent polls)
   const requestRef = useRef(0); // ignore a slower response after switching threads/leads
+  const chatRequestRef = useRef<AbortController | null>(null);
   const [showJump, setShowJump] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -964,6 +969,10 @@ function WhatsappChat({
 
   const load = useCallback(
     (opts?: { silent?: boolean; conversationId?: string }) => {
+      if (opts?.silent && chatRequestRef.current) return;
+      chatRequestRef.current?.abort();
+      const controller = new AbortController();
+      chatRequestRef.current = controller;
       const requestId = ++requestRef.current;
       if (!opts?.silent) {
         startUiMeasure("kapso:whatsapp-chat-first-paint");
@@ -1009,13 +1018,22 @@ function WhatsappChat({
       };
       // First paint reads only the active session. Older sessions are merged in
       // a silent follow-up, while 20s polls remain cheap and active-session only.
-      loadLeadConversation(leadId, opts?.conversationId, false).then((res) => {
+      void loadLeadConversation(leadId, opts?.conversationId, false, controller.signal).then(async (res) => {
         apply(res, { merge: !!opts?.silent });
-        if (!opts?.silent && res.activeConversationId) {
+        if (!controller.signal.aborted && !opts?.silent && res.activeConversationId) {
           // El segundo pase trae el hilo completo (sesiones viejas incluidas):
           // es un superconjunto, así que reemplaza sin merge.
-          void loadLeadConversation(leadId, res.activeConversationId, true).then((full) => apply(full));
+          const full = await loadLeadConversation(leadId, res.activeConversationId, true, controller.signal);
+          apply(full);
         }
+      }).catch(() => {
+        if (controller.signal.aborted || requestRef.current !== requestId) return;
+        setState((current) => current.status === "ready" ? current : {
+          status: "ready", messages: [], threads: [], activeId: null, activePhoneNumberId: null,
+          reason: "No se pudo cargar la conversación. Vuelve a intentarlo.",
+        });
+      }).finally(() => {
+        if (chatRequestRef.current === controller) chatRequestRef.current = null;
       });
     },
     [leadId],
@@ -1029,6 +1047,11 @@ function WhatsappChat({
     setShowJump(false);
     setSearch("");
     if (hasConversation) load();
+    return () => {
+      requestRef.current++;
+      chatRequestRef.current?.abort();
+      chatRequestRef.current = null;
+    };
   }, [hasConversation, load]);
 
   // Live updates: refresh the ACTIVE thread quietly every 20s while open + visible.
@@ -1767,7 +1790,7 @@ function TemplateComposer({
         setSelectedId(list[0]!.id);
         setValues(list[0]!.defaults);
       }
-    });
+    }).catch(() => { if (alive) { setTemplates([]); setMsg("No se pudieron cargar las plantillas."); } });
     return () => {
       alive = false;
     };
@@ -1947,7 +1970,7 @@ function QuickReplyBar({ leadId, onInsert }: { leadId: string; onInsert: (body: 
     let alive = true;
     listQuickReplies(leadId).then((r) => {
       if (alive) setReplies(r);
-    });
+    }).catch(() => { if (alive) setMsg("No se pudieron cargar las respuestas rápidas."); });
     return () => {
       alive = false;
     };
@@ -2272,6 +2295,8 @@ function OrderFormPanel({
         setSendConfirm(res.windowOpen);
       }
       setLoading(false);
+    }).catch(() => {
+      if (alive) { setMsg("No se pudo cargar el borrador."); setLoading(false); }
     });
     return () => {
       alive = false;
@@ -2823,11 +2848,16 @@ function ProductPicker({
     setSearching(true);
     let alive = true;
     const t = setTimeout(async () => {
-      const r = await searchStoreProducts(leadId, term);
-      if (alive) {
-        setResults(r);
-        setOpenProd(null); // nueva búsqueda → colapsa cualquier producto expandido
-        setSearching(false);
+      try {
+        const r = await searchStoreProducts(leadId, term);
+        if (alive) {
+          setResults(r);
+          setOpenProd(null); // nueva búsqueda → colapsa cualquier producto expandido
+        }
+      } catch {
+        if (alive) setResults(null);
+      } finally {
+        if (alive) setSearching(false);
       }
     }, 280);
     return () => {
