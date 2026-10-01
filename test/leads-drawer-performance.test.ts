@@ -30,4 +30,15 @@ describe("Leads drawer performance paths", () => {
     expect(drawer).toContain('startUiMeasure("kapso:call-save")');
     expect(drawer).toContain('startUiMeasure("kapso:whatsapp-send")');
   });
+
+  it("handles each confirmed call response without requesting a full refresh", () => {
+    const drawer = read("components", "leads-drawer.tsx");
+    const callForm = drawer.slice(drawer.indexOf("function CallForm("));
+    expect(callForm).not.toContain("refreshList: true");
+    expect(callForm).toContain("}, [state]);");
+    expect(drawer).toContain("<CallForm key={lead.id}");
+    const board = read("components", "leads.tsx");
+    expect(board).toContain("leadId = update.savedCall?.lead_id ?? leadId");
+    expect(board).toContain("request === countRequestRef.current");
+  });
 });

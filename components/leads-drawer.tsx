@@ -752,7 +752,7 @@ export function LeadDrawer({
               )}
 
               {/* Resultado de la llamada */}
-              <CallForm leadId={lead.id} onRegistered={onRegistered} />
+              <CallForm key={lead.id} leadId={lead.id} onRegistered={onRegistered} />
 
               {/* Historial (timeline) */}
               <section>
@@ -2955,11 +2955,11 @@ function CallForm({
   useEffect(() => {
     if (state.notice || state.error) finishUiMeasure("kapso:call-save");
     if (state.notice) {
-      onRegistered({ savedCall: state.savedCall, leadPatch: state.leadPatch, refreshList: true });
+      onRegistered({ savedCall: state.savedCall, leadPatch: state.leadPatch });
       setStatus("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.notice]);
+  }, [state]);
   // Disposiciones más usadas como chips; el resto en el <select> "Otros estados"
   // (registerCall acepta cualquier estado válido, así que no se pierde ninguno).
   const CHIPS: [string, string][] = [
