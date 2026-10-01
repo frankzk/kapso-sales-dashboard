@@ -27,7 +27,7 @@ import { Sheet } from "@/components/filter-sheet";
 import { AttentionPill, Badge, Banner, FIELD, FilterPill, OpsButton, type BadgeTone } from "@/components/ops-ui";
 import { IconPackage, IconSearch } from "@/components/icons";
 import { courierBoxHref, courierReportHref, courierRouteDrawerHref } from "@/lib/courier-box-href";
-import { LEDGER_SITUATION_LABELS, ledgerMatchesSituation, ledgerSituation, parseCourierSituation, type CourierLedgerRow, type CourierLedgerSituation, type CourierSituationFilter } from "@/lib/courier-route-ledger";
+import { LEDGER_SITUATION_LABELS, availableLedgerSituations, ledgerMatchesSituation, ledgerSituation, parseCourierSituation, type CourierLedgerRow, type CourierLedgerSituation, type CourierSituationFilter } from "@/lib/courier-route-ledger";
 import { searchCourierRoutes } from "@/app/dashboard/courier/route-search-actions";
 import { routeDayLong } from "@/lib/dispatch";
 
@@ -77,20 +77,20 @@ export function CourierRoutesLedger({
   const code = searchParams.get("buscar")?.trim() ?? "";
   const [searchInput, setSearchInput] = useState(code);
   const [retry, setRetry] = useState(0);
-  const remoteKey = code ? `code:${code}` : `situation:${situation ?? "todas"}`;
+  const remoteKey = code ? `code:${code}` : "all";
   const [remote, setRemote] = useState<{ key: string; rows: CourierLedgerRow[]; limited?: boolean; error?: string } | null>(null);
   useEffect(() => { setSearchInput(code); }, [code]);
   useEffect(() => {
     let alive = true;
     setRemote(null);
-    searchCourierRoutes({ code, situation: !code ? situation ?? undefined : undefined }).then((result) => {
+    searchCourierRoutes({ code }).then((result) => {
       if (!alive) return;
       setRemote("error" in result ? { key: remoteKey, rows: [], error: result.error } : { key: remoteKey, ...result });
     }).catch(() => {
       if (alive) setRemote({ key: remoteKey, rows: [], error: "No se pudieron consultar las rutas. Revisa la conexión e intenta nuevamente." });
     });
     return () => { alive = false; };
-  }, [remoteKey, code, situation, rows, retry]);
+  }, [remoteKey, code, rows, retry]);
   const loading = remote?.key !== remoteKey;
   const sourceRows = remote?.key === remoteKey ? remote.rows : [];
   const dayMode: DayMode = dayParam === "todas" ? "todas" : isDay(dayParam) ? "fecha" : "hoy";
@@ -113,12 +113,18 @@ export function CourierRoutesLedger({
     window.history.replaceState(null, "", href);
   }
 
-  const filtered = useMemo(() => sourceRows.filter((r) =>
-    ledgerMatchesSituation(r, situation)
-    &&
+  const contextRows = useMemo(() => sourceRows.filter((r) =>
     (!riderParam || r.riderId === riderParam)
     && (dayMode === "todas" || (dayMode === "hoy" ? r.routeDate === today : r.routeDate === specificDay)),
-  ), [sourceRows, situation, riderParam, dayMode, today, specificDay]);
+  ), [sourceRows, riderParam, dayMode, today, specificDay]);
+  const situationOptions = useMemo(() => availableLedgerSituations(contextRows), [contextRows]);
+  const visibleSituation = situation && situationOptions.includes(situation) ? situation : null;
+  const filtered = useMemo(() => contextRows.filter((r) => ledgerMatchesSituation(r, visibleSituation)), [contextRows, visibleSituation]);
+  useEffect(() => {
+    // Si otro filtro o una actualización deja la opción vacía, vuelve a Todas.
+    // Nunca borra la selección por un error ni por una consulta aún pendiente.
+    if (situation && !loading && !remote?.error && !remote?.limited && !situationOptions.includes(situation)) setParams({ situation: null });
+  }, [situation, situationOptions, loading, remote?.error, remote?.limited, search]);
 
   const groups = useMemo(() => {
     const map = new Map<string, CourierLedgerRow[]>();
@@ -152,10 +158,9 @@ export function CourierRoutesLedger({
         <FilterPill ref={dayPill} label="Fecha" value={dayValue} expanded={openPill === "fecha"} onClick={() => setOpenPill((v) => (v === "fecha" ? null : "fecha"))} onClear={dayMode !== "hoy" ? () => setParams({ day: null }) : undefined} />
         <FilterPill ref={riderPill} label="Motorizado" value={riderParam ? riderName(riderParam) : null} expanded={openPill === "motorizado"} onClick={() => setOpenPill((v) => (v === "motorizado" ? null : "motorizado"))} onClear={() => setParams({ rider: null })} />
         <div className="w-52 max-w-full">
-          <select aria-label="Situación" value={situation ?? ""} onChange={(event) => setParams({ situation: parseCourierSituation(event.target.value) })} className={FIELD}>
+          <select aria-label="Situación" value={visibleSituation ?? ""} disabled={loading || Boolean(remote?.error || remote?.limited)} onChange={(event) => setParams({ situation: parseCourierSituation(event.target.value) })} className={FIELD}>
             <option value="">Todas las situaciones</option>
-            <option value="abiertas">Todas las abiertas</option>
-            {(Object.entries(LEDGER_SITUATION_LABELS) as [CourierLedgerSituation, string][]).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            {situationOptions.map((value) => <option key={value} value={value}>{value === "abiertas" ? "Todas las abiertas" : LEDGER_SITUATION_LABELS[value]}</option>)}
           </select>
         </div>
         {activeFilters > 0 && <OpsButton variant="ghost" size="sm" onClick={() => { setSearchInput(""); setParams({ day: null, rider: null, situation: null, code: null }); }}>Quitar filtros</OpsButton>}

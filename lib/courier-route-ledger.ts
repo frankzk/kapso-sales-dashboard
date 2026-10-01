@@ -107,6 +107,13 @@ export function ledgerMatchesSituation(row: Pick<CourierLedgerRow, "routeStatus"
   return !situation || (situation === "abiertas" ? ledgerIsOpen(row) : ledgerSituation(row) === situation);
 }
 
+/** Opciones con rutas, calculadas antes de aplicar la situación seleccionada. */
+export function availableLedgerSituations(rows: Pick<CourierLedgerRow, "routeStatus" | "manifestState" | "settlementStatus">[]): CourierSituationFilter[] {
+  const present = new Set(rows.map(ledgerSituation));
+  const options: CourierSituationFilter[] = rows.some(ledgerIsOpen) ? ["abiertas"] : [];
+  return options.concat((Object.keys(LEDGER_SITUATION_LABELS) as CourierLedgerSituation[]).filter((value) => present.has(value)));
+}
+
 interface RouteRowLite {
   id: string;
   rider_id: string;
