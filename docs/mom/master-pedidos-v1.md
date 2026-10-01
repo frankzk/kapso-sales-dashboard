@@ -6749,8 +6749,11 @@ y en uno en SQL (`gf_rider_pickup_mode`); sin proveedor se asume `exigir`.
   Roy»); «Confirmar todos» en la cabecera abre el mismo escáner en **modo
   continuo**: la cámara se queda abierta tras cada lectura, ignora el mismo QR
   repetido seguido, muestra bajo el visor «Confirmados X de N · faltan Y» con
-  su barra y la última lectura (también los errores, sin cerrarse), y se
-  cierra con «Listo» o sola un segundo después de confirmar el último. El
+  su barra. La última lectura (también los errores, sin cerrarse) aparece en una
+  franja encima del visor, incluso sin un contador de avance. La cámara conserva
+  la misma sesión al actualizar los resultados y ofrece «Reiniciar cámara» si
+  se interrumpe. Se cierra con «Listo» o sola un segundo después de confirmar
+  el último. El
   escaneo de asignación de Despacho del día usa el mismo modo con «N en la
   caja de Roy». **«No lo llevo»** con motivo (`gf_rider_decline`, que en este
   modo admite la caja en custodia) retira el ítem, **borra su parada si sigue
