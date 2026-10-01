@@ -1,7 +1,7 @@
 "use client";
 
 import { mergeConversationMessages } from "@/lib/conversation-merge";
-import { canUseActiveChatPoll, chatThreadsAfterRead } from "@/lib/leads-chat-poll";
+import { canUseActiveChatPoll, chatContextAfterRead } from "@/lib/leads-chat-poll";
 import { type ReactNode, useActionState, useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { CallQr } from "@/components/call-qr";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
@@ -1009,9 +1009,8 @@ function WhatsappChat({
             status: "ready",
             messages: [...mergeConversationMessages(prior, res.messages), ...localMessages],
             reason: res.reason,
-            threads: chatThreadsAfterRead(current.status === "ready" ? current : null, res),
+            ...chatContextAfterRead(current.status === "ready" ? current : null, res),
             activeId: res.activeConversationId,
-            activePhoneNumberId: res.activePhoneNumberId,
           };
         });
         if (firstPaintPending) {

@@ -5,11 +5,11 @@ export function canUseActiveChatPoll(lastDiscoveryAt: number | null, now: number
   return lastDiscoveryAt !== null && now >= lastDiscoveryAt && now - lastDiscoveryAt < 120_000;
 }
 
-export function chatThreadsAfterRead(
-  previous: { activeId: string | null; threads: LeadThread[] } | null,
+export function chatContextAfterRead(
+  previous: { activeId: string | null; threads: LeadThread[]; activePhoneNumberId: string | null } | null,
   response: LeadConversation,
-): LeadThread[] {
+): { threads: LeadThread[]; activePhoneNumberId: string | null } {
   return response.threadsUnchanged && previous?.activeId === response.activeConversationId
-    ? previous.threads
-    : response.threads;
+    ? { threads: previous.threads, activePhoneNumberId: previous.activePhoneNumberId }
+    : { threads: response.threads, activePhoneNumberId: response.activePhoneNumberId };
 }

@@ -67,7 +67,7 @@ describe("read timing integration with existing provider clients", () => {
     vi.stubGlobal("fetch", fetch);
     await loadLeadConversation("test-lead", "test-thread", false, true);
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(String(fetch.mock.calls[1][0])).toContain("next-page");
+    expect(String(fetch.mock.calls[1]![0])).toContain("next-page");
     expect(metric().stages).not.toHaveProperty("kapso.discovery");
   });
   it("discovers a rotated session when the requested id no longer matches the lead", async () => {
