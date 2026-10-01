@@ -77,7 +77,7 @@ describe("independent leads endpoint", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(mocks.search).toHaveBeenCalledWith([id], "999888777");
     const log = JSON.parse(vi.mocked(console.info).mock.calls[0]![0]);
-    expect(log).toEqual({ event: "leads.read", operation: "searchLeads", durationMs: expect.any(Number) });
+    expect(log).toEqual({ event: "leads.read", operation: "searchLeads", durationMs: expect.any(Number), authMs: expect.any(Number), totalMs: expect.any(Number) });
   });
 
   it("preserves a denied lead result from the existing RLS authorization", async () => {

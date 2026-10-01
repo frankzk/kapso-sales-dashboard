@@ -17,7 +17,7 @@ describe("Leads drawer performance paths", () => {
     const actions = read("app", "dashboard", "leads", "actions.ts");
 
     expect(actions).toContain("if (!includeOlder && !conversationId && storedId)");
-    expect(actions).toContain("fetchConversationTranscript({ apiKey }, storedId, 1)");
+    expect(actions).toContain("fetchConversationTranscript({ apiKey, fetchImpl }, storedId, 1)");
   });
 
   it("keeps call saves local and WhatsApp sends optimistic", () => {

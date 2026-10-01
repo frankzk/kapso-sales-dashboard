@@ -41,11 +41,14 @@ function json(data: unknown, status = 200) {
  * Never dispatch arbitrary action names (especially send/claim/register).
  */
 export async function POST(request: Request) {
+  const requestStartedAt = performance.now();
   const origin = request.headers.get("origin");
   if (!origin || origin !== new URL(request.url).origin) return json({ error: "Origen inválido." }, 403);
   if (!request.headers.get("content-type")?.startsWith("application/json")) return json({ error: "Formato inválido." }, 415);
   if (Number(request.headers.get("content-length") ?? 0) > 16_384) return json({ error: "Solicitud demasiado grande." }, 413);
+  const authStartedAt = performance.now();
   if (!await getCurrentUser()) return json({ error: "Sin sesión." }, 401);
+  const authMs = Math.round(performance.now() - authStartedAt);
 
   const raw = await request.text();
   if (raw.length > 16_384) return json({ error: "Solicitud demasiado grande." }, 413);
@@ -76,7 +79,11 @@ export async function POST(request: Request) {
     return json({ error: "No se pudo cargar la información." }, 500);
   } finally {
     // No phone numbers, lead ids, search text or customer content in telemetry.
-    console.info(JSON.stringify({ event: "leads.read", operation, durationMs: Math.round(performance.now() - startedAt) }));
+    console.info(JSON.stringify({
+      event: "leads.read", operation,
+      durationMs: Math.round(performance.now() - startedAt),
+      authMs, totalMs: Math.round(performance.now() - requestStartedAt),
+    }));
   }
 }
 
