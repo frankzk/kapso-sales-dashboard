@@ -200,7 +200,6 @@ export function AliclikGuidePanel({
   return (
     <Card>
       <div className="space-y-4">
-        <AliclikDuplicatePanel key={orderId} orderId={orderId} initialHold={duplicateHold} onGateChange={setDuplicateAllowed} onChanged={onDuplicateChanged} />
         <ExistingGuideLinkPanel orderId={orderId} onLinked={onCreated} />
         <div className="border-t border-slate-200 pt-4">
           <div className="flex items-start justify-between gap-2">
@@ -534,6 +533,9 @@ export function AliclikGuidePanel({
             </p>
           </div>
         ) : null}
+        <div className="mt-3">
+          <AliclikDuplicatePanel key={orderId} orderId={orderId} initialHold={duplicateHold} onGateChange={setDuplicateAllowed} onChanged={onDuplicateChanged} />
+        </div>
         </div>
       </div>
     </Card>
