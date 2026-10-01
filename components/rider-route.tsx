@@ -468,7 +468,7 @@ function StopPanel({
           <StopStatusLine stop={stop} badge={decision.badge} />
         </span>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <div data-rider-scroll className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {!delegated && (decision.canConfirm || decision.canDecline) && (
           <div className="lg:hidden">
             <PickupConfirmBar stop={stop} onDone={onDone} />
@@ -888,6 +888,28 @@ function radioKeys(e: KeyboardEvent<HTMLButtonElement>, choose: (delta: 1 | -1) 
   if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); choose(-1); }
 }
 
+/** Los campos de un borrador, sin su versión ni su hora. */
+function draftFieldsOf(draft: StopDraftFields): StopDraftFields {
+  const { status, method, amount, reason, note, photoPath, voucherPath, written, writtenPayment, reasonCode, reasonNote } = draft;
+  return { status, method, amount, reason, note, photoPath, voucherPath, written, writtenPayment, reasonCode, reasonNote };
+}
+
+/** Lo que volvió del borrador, en una línea: «Entregado · Yape · la foto de la entrega ya subida». */
+function describeDraft(draft: StopDraftFields): string {
+  const parts: string[] = [draft.status === "entregado" ? "Entregado" : "No entregado"];
+  if (draft.status === "entregado") {
+    const method = PAYMENT_METHODS.find((m) => m.code === draft.method)?.label;
+    const amount = Number(draft.amount.replace(",", "."));
+    if (method) parts.push(draft.amount.trim() && draft.method !== "sin_cobro" && Number.isFinite(amount) ? `${method} ${money(amount)}` : method);
+  } else {
+    const reason = NON_DELIVERY_REASONS.find((r) => r.code === draft.reason)?.label;
+    if (reason) parts.push(reason);
+  }
+  if (draft.photoPath) parts.push(draft.status === "entregado" ? "la foto de la entrega ya subida" : "la foto ya subida");
+  if (draft.voucherPath) parts.push("la captura del Yape ya subida");
+  return `${parts.join(" · ")}.`;
+}
+
 /** Los campos a los que «Guardar» puede llevar: los de la validación y dos más. */
 type GapField = StopReportField | "delegado" | "diferencia";
 
@@ -932,7 +954,9 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
     method, amount, reason, note, photoPath, voucherPath, written, writtenPayment, reasonCode, reasonNote,
   };
   const [pristine] = useState<StopDraftFields>(() => fields);
-  const [recovered, setRecovered] = useState(false);
+  // Lo que volvió del borrador, dicho tal cual; se apaga al primer cambio.
+  const [recovered, setRecovered] = useState<string | null>(null);
+  const restoredAt = useRef<string | null>(null);
   useEffect(() => {
     try {
       const draft = parseDraft(window.localStorage.getItem(draftKey(stop.id)), Date.now(), stop.reported_at);
@@ -948,7 +972,8 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
       setWrittenPayment(draft.writtenPayment);
       setReasonCode(draft.reasonCode);
       setReasonNote(draft.reasonNote);
-      setRecovered(true);
+      setRecovered(describeDraft(draft));
+      restoredAt.current = JSON.stringify(draftFieldsOf(draft));
     } catch {
       // Sin almacenamiento (modo privado, bloqueado): se trabaja sin borrador.
     }
@@ -957,6 +982,11 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
   useEffect(() => {
     // El montaje no es un cambio: el primer paso solo arma el registro.
     if (saves.current++ === 0) return;
+    // Lo recuperado ya se vio: el aviso se va cuando el motorizado sigue.
+    if (restoredAt.current && restoredAt.current !== JSON.stringify(fields)) {
+      restoredAt.current = null;
+      setRecovered(null);
+    }
     try {
       if (draftDiffers(fields, pristine)) window.localStorage.setItem(draftKey(stop.id), serializeDraft(fields, Date.now()));
       else window.localStorage.removeItem(draftKey(stop.id));
@@ -979,7 +1009,8 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
     setWrittenPayment(pristine.writtenPayment);
     setReasonCode(pristine.reasonCode);
     setReasonNote(pristine.reasonNote);
-    setRecovered(false);
+    setRecovered(null);
+    restoredAt.current = null;
   }
 
   // Cada campo se puede alcanzar desde «Guardar»: el primero que falta se
@@ -989,8 +1020,19 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
   function goTo(field: GapField) {
     const el = fieldRefs.current[field];
     if (!el) return;
-    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    el.scrollIntoView({ block: "center", behavior: smooth ? "smooth" : "auto" });
+    const behavior: ScrollBehavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+    // Solo se desplaza la ficha. `scrollIntoView` también movía la capa de
+    // afuera (fija, con overflow oculto, pero desplazable por código) y
+    // «Guardar» se salía de la pantalla (revisión final, 30-09-2026).
+    const box = el.closest<HTMLElement>("[data-rider-scroll]");
+    if (box) {
+      const frame = box.getBoundingClientRect();
+      const rect = el.getBoundingClientRect();
+      const top = box.scrollTop + rect.top - frame.top - Math.max(0, (frame.height - rect.height) / 2);
+      box.scrollTo({ top: Math.max(0, top), behavior });
+    } else {
+      el.scrollIntoView({ block: "nearest", behavior });
+    }
     el.querySelector<HTMLElement>("input, textarea, select, button:not([disabled])")?.focus({ preventScroll: true });
   }
 
@@ -1089,8 +1131,8 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
     <div>
       <div className="space-y-5 px-4 pb-4 pt-5">
         {recovered && (
-          <Banner tone="info" role="status" title="Recuperamos lo que habías marcado">
-            Chrome se cerró mientras reportabas; quedó tal cual, con la foto ya subida.{" "}
+          <Banner tone="info" role="status" title="Sigue lo que habías marcado">
+            {recovered}{" "}
             <button type="button" onClick={discardDraft} className="-my-3 inline-flex min-h-12 items-center font-semibold text-brand-700 underline underline-offset-2">Empezar de nuevo</button>
           </Banner>
         )}
@@ -1362,7 +1404,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
         ) : gap ? (
           <button type="button" onClick={() => goTo(gap.field)} className="mb-1 flex min-h-12 w-full items-center justify-between gap-3 text-left text-xs text-ink-600">
             <span aria-live="polite">Antes de guardar: {gap.message.charAt(0).toLowerCase() + gap.message.slice(1)}</span>
-            <span className="inline-flex shrink-0 items-center gap-1 font-semibold text-brand-700">Ir<IconChevronDown className="size-4" /></span>
+            <span className="inline-flex shrink-0 items-center gap-1 font-semibold text-brand-700">Completar<IconChevronDown className="size-4" /></span>
           </button>
         ) : null}
         <button

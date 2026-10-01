@@ -68,13 +68,21 @@ describe("la ficha usa el borrador y lleva al campo que falta", () => {
     expect(form).toContain("window.localStorage.setItem(draftKey(stop.id), serializeDraft(fields, Date.now()))");
     const success = form.slice(form.indexOf("if (!res.ok)"), form.indexOf("onDone();"));
     expect(success).toContain("window.localStorage.removeItem(draftKey(stop.id))");
-    expect(form).toContain("Recuperamos lo que habías marcado");
+    expect(form).toContain("Sigue lo que habías marcado");
+    // Dice lo que volvió, sin afirmar que Chrome se cerró, y se va al primer cambio.
+    expect(form).toContain("setRecovered(describeDraft(draft));");
+    expect(form).not.toContain("Chrome se cerró");
+    expect(form).toContain("if (restoredAt.current && restoredAt.current !== JSON.stringify(fields)) {");
   });
 
   it("«Guardar» solo se apaga sin saldo; si falta algo, lleva a ese campo", () => {
     expect(form).toContain("disabled={pending || balanceMissing}");
     expect(form).toContain("goTo(gap.field);");
     expect(form).toContain("onClick={() => goTo(gap.field)}");
+    // Solo se desplaza la ficha: la barra de «Guardar» no se sale de la pantalla.
+    expect(form).toContain('el.closest<HTMLElement>("[data-rider-scroll]")');
+    expect(form).not.toContain('scrollIntoView({ block: "center"');
+    expect(rider).toContain('<div data-rider-scroll className="min-h-0 flex-1 overflow-y-auto overscroll-contain">');
     for (const key of ["estado", "metodo", "monto", "motivo", "nota", "delegado", "diferencia"]) {
       expect(form).toContain(`ref={anchor("${key}")}`);
     }
