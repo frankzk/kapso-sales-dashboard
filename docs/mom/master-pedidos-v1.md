@@ -3820,6 +3820,61 @@ poner las dos columnas una al lado de la otra.
   quien asesore en protección de datos si eso es aceptable; si no lo es, o se
   apaga la grabación (queda la transcripción) o el aviso vuelve al saludo.
 
+### 11.9 Reintento automático Aliclik → Swayp sin contacto (01-10-2026)
+
+Decisión operativa: se autoriza un nuevo despacho por parámetros, **sin llamada
+ni reconfirmación**. No se registra una aceptación del cliente. El flujo de voz
+de §11.8 sigue siendo otro flujo y cede prioridad a los candidatos de esta regla.
+
+La política v1 exige todas estas condiciones:
+
+- Pedido Shopify vigente, en PEN y pendiente de pago, sin devolución de dinero,
+  con importe positivo y creado hace como máximo **14 días**. Las guías antiguas
+  del piloto fueron excepciones manuales; no amplían esta ventana.
+- Guía Aliclik **anulada con cierre registrado** (`closed_at` o devolución),
+  con motivo `CANCEL` o `NOT_RESPOND`. No hace falta esperar el retorno físico
+  del paquete: Swayp arma una nueva salida con su propio stock. Un intento
+  «no responde» que sigue en reparto no puede originar otra salida.
+- Teléfono peruano válido, igual al del destino; una entrega anterior a la
+  compra actual, en los últimos **180 días**, al mismo domicilio, distrito y
+  provincia. El historial se cruza entre tiendas de la misma organización.
+- Productos distintos de los entregados: no basta cambiar talla o variante.
+  SKU, producto, título normalizado y codbar permiten detectar coincidencias.
+  Una compra posterior con el mismo producto se aparta como posible reemplazo.
+- Sin rechazo explícito en las notas del pedido, gestiones o resultados de voz;
+  sin descarte, guía viva, entrega del pedido ni intento Swayp anterior. Sin
+  guía tomada por un asesor, programación futura o llamada en curso.
+- Provincia fuera de Lima/Callao, distrito con ubigeo exacto y bodega habilitada
+  por API. Todos los SKU deben tener codbar sin conflictos entre tiendas.
+- Inventario **leído de Swayp al emitir**, para todas las cantidades. La reserva
+  serializada resta emisiones concurrentes y emisiones inciertas. Nunca basta
+  el indicador guardado de elegibilidad. Si falta un dato, el pedido se aparta.
+
+`swayp_auto_settings` conserva interruptor y límites por organización: apagado
+al instalar, máximo **10 intentos diarios** entre todas sus tiendas, día de Lima.
+Los plazos y el tope se pueden configurar en la base. El cron corre cada
+**30 minutos** en producción; cada pasada revisa hasta 50 pedidos, rotando los
+menos recientemente evaluados. Programa para el siguiente día operativo:
+sin domingo y, conservadoramente, sin sábado en Arequipa.
+
+El nuevo envío físico conserva su identidad propia, el número real de Swayp y
+el vínculo desde la guía Aliclik, que queda transferida. El historial dice
+«reintento automático, sin llamada ni nueva confirmación».
+
+**Una solicitud como máximo por origen.** Antes del POST, `swayp_emission_claim`
+serializa por organización, verifica cupo, stock reservado y que los datos no
+hayan cambiado. La reserva se comparte con emisiones por botón y voz. Un pedido
+tiene un solo intento automático. Swayp no admite clave de idempotencia: un
+timeout o caída del proceso no libera la reserva ni repite el POST. Se conserva
+el número emitido antes del alta local; los resultados inciertos quedan para
+reconciliación humana. No se anulan guías externas automáticamente.
+
+En **Repro Provincia → Ver automático Aliclik → Swayp** se muestran el estado,
+las ejecuciones, las guías emitidas y el último motivo por pedido. Un administrador
+puede pausar o activar la regla y ejecutar una pasada. Las escrituras quedan
+restringidas al servidor; las lecturas respetan organización y tiendas mediante
+RLS. Los previews no pueden activar ni ejecutar emisiones automáticas.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom

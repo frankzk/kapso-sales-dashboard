@@ -74,7 +74,8 @@ describe("vercel.json", () => {
     // (29-09-2026), 19 desde el barrido de estados de Swayp (29-09-2026). Que la
     // ruta exista lo comprueba la última prueba de este archivo; no hace falta
     // repetirlo acá.
-    expect(crons).toHaveLength(19);
+    // 20: reintento Aliclik → Swayp sin contacto (MOM §11.9).
+    expect(crons).toHaveLength(20);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

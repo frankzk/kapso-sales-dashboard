@@ -23,6 +23,8 @@ import {
 import { compareVoiceCandidates, voiceRecoveryEligible } from "@/lib/voice-recovery-queue";
 import { requestCallback, zadarmaLocalPeru } from "@/lib/zadarma";
 import { reenviarGuiaAnulada } from "@/lib/swayp-reenvio";
+import { inspectAuto } from "@/lib/swayp-auto-server";
+import { evaluateAutoDispatch, type AutoSettings } from "@/lib/swayp-auto-policy";
 
 const OPEN_STATUSES = ["queued", "dialing", "in_progress"] as const;
 
@@ -321,6 +323,22 @@ export async function placeVoiceCall(
   input: PlaceCallInput,
   now: Date = new Date(),
 ): Promise<PlaceCallResult> {
+  // No-contact recovery has priority over voice. The DB also serializes a
+  // concurrent voice insert against an automatic emission claim.
+  if (input.mode === "real") {
+    const { data: store } = await admin.from("stores").select("org_id").eq("id",input.storeId).single();
+    const { data: policy, error } = await admin.from("swayp_auto_settings").select("*").eq("org_id",store?.org_id ?? "").maybeSingle();
+    if (error) return {ok:false,status:503,error:"No se pudo comprobar la prioridad del despacho automático."};
+    if (policy?.enabled) {
+      const {data: guides,error: guideError}=await admin.from("shipments").select("id").eq("order_id",input.orderId).eq("courier","aliclik").eq("delivery_status","anulado");
+      if(guideError) return {ok:false,status:503,error:guideError.message};
+      for(const g of guides??[]) {
+        const {snapshot}=await inspectAuto(admin,g.id);
+        if(evaluateAutoDispatch(snapshot,policy as AutoSettings,now).eligible)
+          return {ok:false,status:409,error:"Este pedido corresponde al reintento automático sin llamada."};
+      }
+    }
+  }
   const phone = zadarmaLocalPeru(input.phone);
   if (!phone) return { ok: false, status: 400, error: "El teléfono no es un número peruano válido." };
   if (!input.agentNumber.trim() || !input.sip.trim()) {
