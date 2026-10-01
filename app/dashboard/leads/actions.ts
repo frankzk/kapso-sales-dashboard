@@ -661,6 +661,23 @@ export async function registerCall(
   _prev: LeadActionState,
   formData: FormData,
 ): Promise<LeadActionState> {
+  const startedAt = performance.now();
+  let outcome = "exception";
+  try {
+    const result = await persistCall(formData);
+    outcome = result.error ? "error" : "success";
+    return result;
+  } finally {
+    // No lead ids, phone numbers or notes in performance telemetry.
+    console.info(JSON.stringify({
+      event: "leads.call.save", outcome,
+      durationMs: Math.round(performance.now() - startedAt),
+      commit: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ?? "local",
+    }));
+  }
+}
+
+async function persistCall(formData: FormData): Promise<LeadActionState> {
   const leadId = String(formData.get("lead_id") ?? "");
   const ctx = await authorizeLead(leadId);
   if (!ctx) return { error: "Sin acceso a este lead." };
@@ -759,7 +776,8 @@ export async function registerCall(
   if (callRes.error) return { error: `No se pudo registrar la llamada: ${callRes.error.message}` };
   if (leadRes.error) return { error: `La llamada se registró, pero no se pudo actualizar el lead: ${leadRes.error.message}` };
 
-  revalidatePath("/dashboard/leads");
+  // Return the confirmed write only. Revalidation would render and serialize
+  // the entire queue before the action response can finish.
   const savedCall = { ...(callRes.data as LeadCallRow), vendedora_name: "Tú" };
   return {
     notice: status

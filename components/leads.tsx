@@ -25,6 +25,7 @@ import {
 } from "@/lib/lead-urgency";
 import type { LeadsInsights } from "@/lib/leads-insights";
 import { FORCED_REFRESH_MS, decideQueueRefresh } from "@/lib/leads-live-refresh";
+import { patchLeadRows, patchLeadCounts } from "@/lib/leads-local-update";
 import {
   buildMetaAudienceCsv,
   buildMetaAudienceRows,
@@ -615,9 +616,9 @@ export function LeadsBoard({
   stores,
   storeId,
   view,
-  counts,
+  counts: serverCounts,
   queueSignature,
-  leads,
+  leads: serverLeads,
   adNames,
   adDeclarations,
   waNumbers,
@@ -671,6 +672,18 @@ export function LeadsBoard({
    *  export debe repedir el universo completo al servidor. */
   leadsComplete?: boolean;
 }) {
+  const [board, setBoard] = useState({ sourceLeads: serverLeads, sourceCounts: serverCounts, leads: serverLeads, counts: serverCounts });
+  // A route/periodic refresh replaces the local confirmed writes atomically.
+  if (board.sourceLeads !== serverLeads || board.sourceCounts !== serverCounts) {
+    setBoard({ sourceLeads: serverLeads, sourceCounts: serverCounts, leads: serverLeads, counts: serverCounts });
+  }
+  const { leads, counts } = board;
+  const countRequestRef = useRef(0);
+  useEffect(() => {
+    // Invalidate an older count request on refresh or unmount.
+    countRequestRef.current += 1;
+    return () => { countRequestRef.current += 1; };
+  }, [serverLeads, serverCounts]);
   const router = useRouter();
   // El alcance es un array y cambia de identidad en cada render, así que no
   // sirve como dependencia de efectos: usarlo directo relanzaría la carga de
@@ -881,10 +894,10 @@ export function LeadsBoard({
   }, [queueSignature]);
   // Los contadores con los que se comparó la última vez: «Atender ahora» y
   // Yapes son los que hacen urgente una recarga (lib/leads-live-refresh.ts).
-  const countsRef = useRef(counts);
+  const countsRef = useRef(serverCounts);
   useEffect(() => {
-    countsRef.current = counts;
-  }, [counts]);
+    countsRef.current = serverCounts;
+  }, [serverCounts]);
   useEffect(() => {
     let alive = true;
     let lastRefreshAt = Date.now();
@@ -1032,6 +1045,29 @@ export function LeadsBoard({
 
   function refreshDetail(leadId: string, update?: LeadDrawerUpdate) {
     if (update) {
+      // Identify the saved row even if the user opened another drawer meanwhile.
+      leadId = update.savedCall?.lead_id ?? leadId;
+      if (update.savedCall && update.leadPatch) {
+        const patch = update.leadPatch;
+        const before = leads.find((row) => row.id === leadId)
+          ?? results?.find((row) => row.id === leadId)
+          ?? (selected?.id === leadId ? selected : null);
+        setBoard((current) => ({
+          ...current,
+          leads: patchLeadRows(current.leads, leadId, patch, view, before),
+          counts: before ? patchLeadCounts(current.counts, before, patch) : current.counts,
+        }));
+        setResults((current) => current ? patchLeadRows(current, leadId, patch) : current);
+        // Account for our own urgent-count delta. Keep the old signature so a
+        // concurrent change by another advisor is still detected by polling.
+        if (before) countsRef.current = patchLeadCounts(countsRef.current, before, patch);
+        const request = ++countRequestRef.current;
+        void pollLeadsQueue(scope).then((next) => {
+          if (next && request === countRequestRef.current) {
+            setBoard((current) => ({ ...current, counts: next.counts }));
+          }
+        }).catch(() => undefined); // periodic polling retries on network failure
+      }
       if (activeLeadIdRef.current === leadId) {
         if (update.leadPatch) {
           setSelected((current) => (current?.id === leadId ? { ...current, ...update.leadPatch } : current));
@@ -1040,9 +1076,8 @@ export function LeadsBoard({
           setCalls((current) => [update.savedCall!, ...(current ?? []).filter((call) => call.id !== update.savedCall!.id)]);
         }
       }
-      // The drawer is already current. Only refresh the queue/counts when the
-      // mutation can change its membership (a call disposition), and do it in
-      // the background without reloading Shopify history or the drawer detail.
+      // Other mutations can still request a full background refresh. Calls
+      // above update their row, facets and counts without requesting one.
       if (update.refreshList) router.refresh();
       return;
     }
