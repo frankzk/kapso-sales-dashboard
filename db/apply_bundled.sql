@@ -17209,7 +17209,7 @@ $$;
 revoke all on function swayp_auto_candidates(uuid),swayp_auto_snapshot(uuid),swayp_auto_inspect(uuid),swayp_emission_claim(uuid,uuid,text,text,jsonb,boolean,jsonb,jsonb,timestamptz) from public,anon,authenticated;
 grant execute on function swayp_auto_candidates(uuid),swayp_auto_snapshot(uuid),swayp_auto_inspect(uuid),swayp_emission_claim(uuid,uuid,text,text,jsonb,boolean,jsonb,jsonb,timestamptz) to service_role;
 
-create or replace function swayp_link_emission() returns trigger language plpgsql security definer set search_path=public as $$
+create or replace function swayp_link_emission() returns trigger language plpgsql security invoker set search_path=public as $$
 begin
   update swayp_guide_emissions set child_id=new.id
     where store_id=new.store_id and order_id=new.order_id and guide_code=new.swayp_guide and child_id is null;
@@ -17221,7 +17221,7 @@ drop trigger if exists swayp_link_emission on shipments;
 create trigger swayp_link_emission after insert on shipments for each row
   when (new.courier='fenix' and new.swayp_guide is not null) execute function swayp_link_emission();
 
-create or replace function swayp_auto_voice_interlock() returns trigger language plpgsql security definer set search_path=public as $$
+create or replace function swayp_auto_voice_interlock() returns trigger language plpgsql security invoker set search_path=public as $$
 declare v_org uuid;
 begin
   select org_id into v_org from stores where id=new.store_id;
