@@ -13,7 +13,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
 import {
-  createGuide,
   isSwaypAuthError,
   swaypAuthErrorHint,
   swaypOptsFromEnv,
@@ -43,6 +42,7 @@ import {
 } from "@/lib/shopify-address";
 import { normalizePhone } from "@/lib/phone";
 import type { OrderLineItem, OrderShippingAddress } from "@/lib/types";
+import { emitSwaypOnce, type AutoEmission } from "@/lib/swayp-emission";
 
 /**
  * Reevalúa la cobertura y el stock de un envío contra el inventario de hoy.
@@ -220,6 +220,9 @@ export async function loadSwaypSkuMap(
  */
 export async function createFenixGuideViaApi(args: {
   admin: SupabaseClient;
+  orderId: string;
+  sourceKey: string;
+  automatic?: AutoEmission;
   /** Tienda del pedido: el mapa de productos es por tienda. */
   storeId: string;
   city: string;
@@ -245,8 +248,7 @@ export async function createFenixGuideViaApi(args: {
 
   const opts = swaypOptsFromEnv();
   try {
-    const created = await createGuide(opts, built.input);
-    return { ok: true, guia: String(created.guia), idEstado: created.idEstado };
+    return await emitSwaypOnce({ ...args, input: built.input });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "error desconocido";
     // Visible en los logs de Vercel. El motivo también sube al operador en el
@@ -386,6 +388,8 @@ export async function swaypGuideForReprogram(
 
   return createFenixGuideViaApi({
     admin,
+    orderId: order.id,
+    sourceKey: shipmentId,
     storeId: order.store_id,
     city,
     district,

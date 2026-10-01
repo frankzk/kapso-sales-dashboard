@@ -1731,6 +1731,8 @@ export async function createDirectFenixGuide(input: {
   if (!input.guideCode?.trim()) {
     const viaApi = await createFenixGuideViaApi({
       admin,
+      orderId: order.id,
+      sourceKey: `direct:${order.id}:${input.dispatchDateIso}`,
       storeId: order.store_id,
       city,
       district,

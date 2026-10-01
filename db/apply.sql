@@ -419,4 +419,6 @@
 \ir migrations/0207_lead_cart_count_48h.sql
 \echo 'Applying 0208_leads_search_trigram.sql'
 \ir migrations/0208_leads_search_trigram.sql
+\echo 'Applying 0209_swayp_auto_dispatch.sql'
+\ir migrations/0209_swayp_auto_dispatch.sql
 \echo 'Done.'

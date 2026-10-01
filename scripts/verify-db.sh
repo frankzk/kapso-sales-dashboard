@@ -164,6 +164,9 @@ $PSQL -d bundle_check -f "$ROOT/db/apply_bundled.sql" >/dev/null
 $PSQL -c "drop database bundle_check" >/dev/null
 echo "  ✅ apply_bundled.sql levanta el esquema completo desde cero"
 
+echo "▶ automático Aliclik → Swayp: reserva, cupo, evidencia y RLS"
+$PSQL -f "$ROOT/scripts/sql/swayp_auto_smoke.sql"
+
 echo "▶ doble cotejo de despacho"
 $PSQL -f "$ROOT/scripts/sql/dispatch_smoke.sql"
 echo "  ✅ la custodia solo cambia después de cotejar el 100 % dos veces"
