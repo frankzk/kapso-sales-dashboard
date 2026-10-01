@@ -7082,21 +7082,25 @@ día y motorizado se aplican en el navegador (`?dia=` y `?motorizado=`).
 
 **Situación y búsqueda por código (01-10-2026).** El desplegable «Situación»
 reemplaza «Solo abiertas». Ofrece Todas las situaciones y cada situación de la
-columna (Borrador, Cotejo de oficina, Lista para recojo, En poder del courier,
-En reparto, Cerrada y Liquidada). «Todas las abiertas» agrupa las que no están
+columna que tenga al menos una ruta disponible con la fecha, motorizado y
+búsqueda actuales. No ofrece situaciones vacías. Las opciones se calculan
+antes de aplicar la situación elegida, para poder cambiar entre ellas.
+Si la situación elegida se queda sin rutas al cambiar otro filtro o actualizar
+los datos, vuelve a Todas las situaciones; no lo hace durante la carga ni
+ante errores. Todas las situaciones siempre está disponible para quitar el
+filtro. «Todas las abiertas» solo aparece si hay alguna ruta abierta y agrupa las que no están
 cerradas ni liquidadas. Usa el mismo resolver de la fila: una ruta liquidada
 no aparece en Cerrada ni En reparto aunque su estado operativo siga así.
-Al elegir una situación se consultan todas sus rutas, sin el tope de las
-últimas 150, y se conservan los filtros de fecha y motorizado. Todas las
-situaciones también consulta el historial completo, para que al quitar una
-situación no desaparezcan rutas antiguas que se acababan de encontrar.
+La consulta trae todas las situaciones sin el tope de las últimas 150;
+elegir una filtra en el navegador y conserva fecha y motorizado. Al quitar
+una situación no desaparecen rutas antiguas que se acababan de encontrar.
 «Quitar filtros» restablece Hoy y elimina también la búsqueda y la situación.
 
 El buscador acepta número de pedido (con o sin `#`, también un fragmento de al
 menos tres caracteres), guía, código de salida o QR. Consulta las identidades
 del pedido y sus paradas y cajas con RLS, sin limitarse a las rutas cargadas.
 Al buscar restablece Todas las fechas y Todos los motorizados, conserva la
-situación elegida y avisa si ese filtro oculta coincidencias en otras situaciones.
+situación elegida si tiene coincidencias; si no, vuelve a Todas las situaciones.
 Muestra el código encontrado junto al motorizado, fecha y situación, con acceso
 a la caja y a «Reparto y liquidación». Si hubo varios intentos, conserva sus
 rutas en orden de fecha; no elige una a ciegas. Las cajas canceladas y los ítems

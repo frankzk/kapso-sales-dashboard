@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { courierCodePattern, courierSearchCode, findCourierRouteMatches } from "@/lib/courier-route-search";
-import { getCourierRouteLedger, ledgerIsOpen, ledgerMatchesSituation, parseCourierSituation, type CourierLedgerSituation } from "@/lib/courier-route-ledger";
+import { getCourierRouteLedger, availableLedgerSituations, ledgerIsOpen, ledgerMatchesSituation, parseCourierSituation, type CourierLedgerSituation } from "@/lib/courier-route-ledger";
 import { searchCourierRoutes } from "@/app/dashboard/courier/route-search-actions";
 
 const db = vi.hoisted(() => ({ tables: {} as Record<string, Record<string, any>[]>, calls: [] as string[], allowed: true, user: true, failure: "" }));
@@ -109,6 +109,21 @@ describe("Solo abiertas", () => {
 });
 
 describe("desplegable de situación", () => {
+  it("ofrece solo situaciones con rutas y no duplica opciones", () => {
+    const inDelivery = { routeStatus: "en_curso", manifestState: null, settlementStatus: null };
+    const closed = { routeStatus: "cerrada", manifestState: null, settlementStatus: null };
+    expect(availableLedgerSituations([inDelivery, inDelivery, closed])).toEqual(["abiertas", "en_reparto", "cerrada"]);
+    expect(availableLedgerSituations([closed])).toEqual(["cerrada"]);
+    expect(availableLedgerSituations([])).toEqual([]);
+  });
+
+  it("las rutas liquidadas no habilitan abiertas ni su antiguo estado operativo", () => {
+    expect(availableLedgerSituations([
+      { routeStatus: "en_curso", manifestState: null, settlementStatus: "pagada" },
+      { routeStatus: "cerrada", manifestState: null, settlementStatus: "pagada" },
+    ])).toEqual(["liquidada"]);
+  });
+
   it.each([
     ["planificada", "draft", null, "borrador"],
     ["planificada", "office_check", null, "cotejo_oficina"],
