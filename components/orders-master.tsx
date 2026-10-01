@@ -159,6 +159,7 @@ import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 import { fmtDate, fmtDateTime, fmtAge, CoverageBadge, MacroStageBadge } from "@/components/order-master-shared";
 import { DRAWER_SECTION_IDS, OrderDrawer, type DrawerSectionId, type DrawerWorkspaceView } from "@/components/order-drawer";
 import { workspaceForDrawerSection } from "@/lib/order-drawer-href";
+import { hasCombinedGuide, type CombinedGuideCourier } from "@/lib/labels/guia-combinada-select";
 
 export function OrdersMasterBoard({
   stores,
@@ -483,6 +484,23 @@ export function OrdersMasterBoard({
     for (const row of rows) map.set(row.order_id, row.order_name ?? row.order_id);
     return map;
   }, [seenNames, rows]);
+  // El courier de cada pedido visto, para saber si la selección tiene guía
+  // combinada (Tanders o Shalom). Sobrevive a cambiar de página, como los nombres.
+  const [seenCouriers, setSeenCouriers] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    setSeenCouriers((prev) => {
+      const next = new Map(prev);
+      let changed = false;
+      for (const row of rows) {
+        const courier = row.current_courier ?? row.last_courier ?? "";
+        if (next.get(row.order_id) !== courier) {
+          next.set(row.order_id, courier);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [rows]);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
@@ -994,6 +1012,7 @@ export function OrdersMasterBoard({
       <BulkBar
         selectedIds={selectedIds}
         orderNames={orderNames}
+        orderCouriers={seenCouriers}
         visibleIds={rows.map((r) => r.order_id)}
         onToggleRow={toggleRow}
         canEdit={canEdit}
@@ -1207,29 +1226,36 @@ async function downloadRotulos(query: string): Promise<{ error?: string; missing
 }
 
 /**
- * Guías combinadas de Tanders (su rótulo arriba y el interno abajo) de los
- * pedidos elegidos. Solo lee: imprime la salida de Tanders vigente de cada uno y
- * cuenta los que no tienen (lib/labels/guia-combinada-select.ts).
+ * Guías combinadas (el rótulo del courier arriba y el interno abajo) de los
+ * pedidos elegidos, un PDF por courier porque el papel es distinto: Tanders en
+ * A4, Shalom en etiqueta de 100×150 mm. Solo lee: imprime la salida vigente de
+ * cada pedido y cuenta las que no tiene (lib/labels/guia-combinada-select.ts).
  */
-async function downloadCombinadas(orderIds: string[]): Promise<{ error?: string; missing: number }> {
-  return downloadPdf(
-    `/api/pedidos/guia-combinada?orders=${orderIds.join(",")}`,
-    "x-combinadas-omitidas",
-    "guias-combinadas.pdf",
-  );
+const COMBINED_ENDPOINT: Record<CombinedGuideCourier, { url: string; file: string; label: string }> = {
+  tanders: { url: "/api/pedidos/guia-combinada", file: "guias-combinadas-tanders.pdf", label: "Tanders (A4)" },
+  shalom: { url: "/api/shalom/rotulos", file: "rotulos-shalom.pdf", label: "Shalom (etiqueta)" },
+};
+
+async function downloadCombinadas(
+  courier: CombinedGuideCourier,
+  orderIds: string[],
+): Promise<{ error?: string; missing: number; failed: number }> {
+  const target = COMBINED_ENDPOINT[courier];
+  return downloadPdf(`${target.url}?orders=${orderIds.join(",")}`, "x-combinadas-omitidas", target.file);
 }
 
 async function downloadPdf(
   url: string,
   missingHeader: string,
   fallbackName: string,
-): Promise<{ error?: string; missing: number }> {
+): Promise<{ error?: string; missing: number; failed: number }> {
   const response = await fetch(url);
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    return { error: body?.error ?? "No se pudieron generar los rótulos.", missing: 0 };
+    return { error: body?.error ?? "No se pudieron generar los rótulos.", missing: 0, failed: 0 };
   }
   const missing = Number(response.headers.get(missingHeader) ?? "0");
+  const failed = Number(response.headers.get("x-combinadas-fallidas") ?? "0");
   const blob = await response.blob();
   const href = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -1240,12 +1266,13 @@ async function downloadPdf(
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(href);
-  return { missing };
+  return { missing, failed };
 }
 
 function BulkBar({
   selectedIds,
   orderNames,
+  orderCouriers,
   visibleIds,
   canEdit,
   onClear,
@@ -1254,6 +1281,8 @@ function BulkBar({
 }: {
   selectedIds: Set<string>;
   orderNames: Map<string, string>;
+  /** Courier de cada pedido visto: decide si hay guías combinadas que bajar. */
+  orderCouriers: Map<string, string>;
   /** Ids de la página visible, para avisar de lo elegido que no se ve. */
   visibleIds: string[];
   canEdit: boolean;
@@ -1286,6 +1315,13 @@ function BulkBar({
   }, [bulkOperationalOptions, bulkOperational]);
 
   const count = selectedIds.size;
+  const combinedGroups = new Map<CombinedGuideCourier, string[]>();
+  for (const orderId of selectedIds) {
+    const courier = (orderCouriers.get(orderId) ?? "").trim().toLowerCase();
+    if (!hasCombinedGuide(courier)) continue;
+    combinedGroups.set(courier, [...(combinedGroups.get(courier) ?? []), orderId]);
+  }
+  const combinedCount = Array.from(combinedGroups.values()).reduce((n, ids) => n + ids.length, 0);
   const onPage = new Set(visibleIds);
   const offscreen = Array.from(selectedIds).filter((id) => !onPage.has(id)).length;
   if (!count) return null;
@@ -1330,17 +1366,40 @@ function BulkBar({
     setBusy(true);
     reset();
     try {
-      const pdf = await downloadCombinadas(Array.from(selectedIds));
-      if (pdf.error) {
-        setError(pdf.error);
+      const parts: string[] = [];
+      const errors: string[] = [];
+      let notPrinted = count - combinedCount;
+      let failed = 0;
+      for (const [courier, ids] of combinedGroups) {
+        const target = COMBINED_ENDPOINT[courier];
+        const pdf = await downloadCombinadas(courier, ids);
+        if (pdf.error) {
+          errors.push(`${target.label}: ${pdf.error}`);
+          notPrinted += ids.length;
+          continue;
+        }
+        const printed = ids.length - pdf.missing - pdf.failed;
+        notPrinted += pdf.missing;
+        failed += pdf.failed;
+        parts.push(`${printed} ${target.label}`);
+      }
+      if (!parts.length) {
+        setError(errors.join(" · ") || "Ninguno de los pedidos tiene guía combinada.");
         return;
       }
-      const printed = count - pdf.missing;
       setNotice(
-        `${printed} ${printed === 1 ? "guía combinada descargada" : "guías combinadas descargadas"}.` +
-          (pdf.missing
-            ? ` ${pdf.missing} ${pdf.missing === 1 ? "pedido no tiene" : "pedidos no tienen"} guía de Tanders.`
-            : ""),
+        [
+          `Guías combinadas descargadas: ${parts.join(" · ")}.`,
+          notPrinted ? `${notPrinted} sin guía combinada (solo Tanders y Shalom creada desde Kapta la tienen).` : "",
+          failed
+            ? failed === 1
+              ? "1 de Shalom no se pudo componer: imprímela desde el pedido."
+              : `${failed} de Shalom no se pudieron componer: imprímelas desde el pedido.`
+            : "",
+          ...errors,
+        ]
+          .filter(Boolean)
+          .join(" "),
       );
     } catch {
       setError("No se pudieron generar las guías combinadas.");
@@ -1425,14 +1484,18 @@ function BulkBar({
         >
           {busy ? "Trabajando…" : "Descargar rótulos (PDF)"}
         </button>
-        <button
-          onClick={downloadCombined}
-          disabled={busy}
-          title="El rótulo de Tanders y el interno en una hoja, para los pedidos que ya tienen guía de Tanders"
-          className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
-        >
-          Guías combinadas Tanders (PDF)
-        </button>
+        {/* Solo con algún pedido de Tanders o Shalom: los demás couriers no
+            tienen guía combinada, y el botón no debe prometer lo que no hay. */}
+        {combinedCount > 0 && (
+          <button
+            onClick={downloadCombined}
+            disabled={busy}
+            title="El rótulo del courier y el interno en un papel: Tanders en A4, Shalom en etiqueta. Un PDF por courier."
+            className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            Guías combinadas (PDF){combinedCount < count ? ` · ${combinedCount}` : ""}
+          </button>
+        )}
         {canEdit && (
           <button
             onClick={() => {
