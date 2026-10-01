@@ -107,7 +107,7 @@ describe("mobile verification", () => {
     expect(html).not.toContain("Carga recibida");
     expect(html).not.toContain("Continuar a recepción");
   });
-  it("no autofocus on load: the first typed character focuses the field, and requests release their lock on failure", () => {
+  it("no autofocus on load: the first typed character focuses the field, and scans enter the queue", () => {
     const scanner = readFileSync(new URL("../components/dispatch-scanner.tsx", import.meta.url), "utf8");
     const workspace = readFileSync(new URL("../components/dispatch-workspace.tsx", import.meta.url), "utf8");
     // fd1f878: sin halo de foco al abrir la página; una pistola lectora sigue
@@ -115,8 +115,8 @@ describe("mobile verification", () => {
     expect(scanner).not.toContain("autoFocus");
     expect(scanner).toContain('window.addEventListener("keydown", onKey)');
     expect(scanner).toContain("if (event.key.length !== 1) return;");
-    expect(workspace).toContain("scanLock.current");
-    expect(workspace).toContain("finally { setBusy(false); scanLock.current = false; }");
+    expect(workspace).toContain("scanQueue.enqueue({");
+    expect(workspace).not.toContain("scanLock.current");
   });
   it("mobile routes cards open the box and carry all four counters", () => {
     // La lista de Rutas (MOM §29.14): en el móvil cada tarjeta abre la caja

@@ -23,7 +23,8 @@ describe("escaneo continuo con avance (MOM §30.9)", () => {
     expect(cam).toContain("REPEAT_MS");
     expect(cam).toContain("AUTO_CLOSE_MS");
     // En continuo la lectura NO detiene la cámara ni la cierra.
-    const cont = cam.slice(cam.indexOf("if (continuous) {"), cam.indexOf("handledRef.current = true;"));
+    const start = cam.indexOf("if (continuous) {");
+    const cont = cam.slice(start, cam.indexOf("} else {", start));
     expect(cont).not.toContain("onClose()");
     expect(cont).not.toContain("stop()");
     // Al terminar dice «Verificados 4 de 4 · listo» (o Recibidos / Confirmados).

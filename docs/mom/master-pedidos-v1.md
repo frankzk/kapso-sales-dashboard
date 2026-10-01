@@ -6678,8 +6678,22 @@ QR tardaba 6-7 s porque la página entera (≈1.700 pedidos) se reconstruía
 tres veces por escaneo. «Verificar caja», «Recibir carga» y «Recibir mi caja» usan la misma
 cámara en serie que la asignación: queda abierta tras cada lectura y debajo
 dice «Verificados 3 de 4 · faltan 1» (o «Recibidos …»), y se cierra con
-«Listo» o sola al completar la caja. Si
-el pedido se tomó días atrás y su fecha prevista ya pasó, la caja no es la de
+«Listo» o sola al completar la caja.
+
+**Lecturas seguidas sin esperar a la red (01-10-2026).** Asignación, cotejo y
+recepción conservan cada QR distinto en una cola y procesan las confirmaciones
+en orden. Un código repetido mientras está pendiente no se envía dos veces.
+El aviso encima del visor muestra al instante el último QR leído y cuántos
+siguen **por confirmar**; leer no equivale a guardar. El cotejo suma al contador
+solo las respuestas exitosas, y recarga la caja al terminar la cola, sin
+descartar un QR porque la respuesta anterior o la recarga siguen en curso.
+Cada lectura conserva la caja, motorizado y paso elegidos al capturarla. Si una
+falla, su aviso permanece visible aunque las siguientes se guarden; ese código
+se puede reintentar y solo desaparece del aviso cuando se confirma correctamente.
+La cámara no se cierra automáticamente mientras haya confirmaciones pendientes.
+Al volver a la app después de ocultarla, se vuelve a abrir la cámara.
+
+Si el pedido se tomó días atrás y su fecha prevista ya pasó, la caja no es la de
 aquel día (cuya ruta está liquidada) sino la de hoy o la elegida: la fecha
 prevista se mueve hacia adelante y queda `logistics_request_rescheduled` en el
 historial. Nunca se mueve hacia atrás. El
@@ -6749,8 +6763,11 @@ y en uno en SQL (`gf_rider_pickup_mode`); sin proveedor se asume `exigir`.
   Roy»); «Confirmar todos» en la cabecera abre el mismo escáner en **modo
   continuo**: la cámara se queda abierta tras cada lectura, ignora el mismo QR
   repetido seguido, muestra bajo el visor «Confirmados X de N · faltan Y» con
-  su barra y la última lectura (también los errores, sin cerrarse), y se
-  cierra con «Listo» o sola un segundo después de confirmar el último. El
+  su barra. La última lectura (también los errores, sin cerrarse) aparece en una
+  franja encima del visor, incluso sin un contador de avance. La cámara conserva
+  la misma sesión al actualizar los resultados y ofrece «Reiniciar cámara» si
+  se interrumpe. Se cierra con «Listo» o sola un segundo después de confirmar
+  el último. El
   escaneo de asignación de Despacho del día usa el mismo modo con «N en la
   caja de Roy». **«No lo llevo»** con motivo (`gf_rider_decline`, que en este
   modo admite la caja en custodia) retira el ítem, **borra su parada si sigue
