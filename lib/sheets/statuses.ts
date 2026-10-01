@@ -16,6 +16,7 @@
 
 import { OPERATIONAL_STATUSES } from "@/lib/order-status";
 import type { ContributionMark, StatusEffect } from "./types";
+import { normalizeAlias } from "./alias";
 
 export interface StatusTemplate {
   code: string;
@@ -33,21 +34,9 @@ export function isOperationalCode(code: string): boolean {
   return OPERATIONAL_CODES.has(code);
 }
 
-/**
- * Normaliza lo que escribe la gente para compararlo: mayúsculas, sin acentos,
- * sin puntuación al final y con un solo espacio entre palabras. «Reprogramado»,
- * «REPROGRAMADO.» y « reprogramado » son el mismo alias.
- */
-export function normalizeAlias(raw: string | null | undefined): string {
-  return (raw ?? "")
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .toUpperCase()
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[.,;:!¡?¿]+$/g, "")
-    .trim();
-}
+// `normalizeAlias` vive en ./alias, sin dependencias: la pantalla del
+// motorizado la usa y no debe cargar el resto de este módulo (30-09-2026).
+export { normalizeAlias };
 
 // ---------------------------------------------------------------------------
 // Reparto propio — lo que escriben los motorizados (Roy, Yhoni, Duglas…)

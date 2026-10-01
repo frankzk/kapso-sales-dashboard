@@ -32,7 +32,7 @@ describe("detalle de la parada en panel lateral", () => {
   });
 
   it("en pantalla ancha son dos columnas y la fila ya no despliega nada debajo", () => {
-    expect(src).toContain("lg:grid lg:max-w-3xl lg:grid-cols-[28rem_minmax(0,1fr)]");
+    expect(src).toContain("lg:grid lg:max-w-5xl lg:grid-cols-[28rem_minmax(0,1fr)]");
     const card = src.slice(src.indexOf("function StopCard("), src.indexOf("/**\n * «Lo llevo» abre el gesto único"));
     expect(card).not.toContain("ReportForm");
     expect(card).not.toContain("Abrir mapa");

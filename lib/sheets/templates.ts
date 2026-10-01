@@ -23,6 +23,7 @@ import {
 } from "./statuses";
 import { ZONAS } from "./resolver";
 import type { ColumnDataType, ColumnKind, ColumnSource, SheetRowKey } from "./types";
+import { REPARTO_PAYMENT_METHODS } from "./payment-methods";
 
 export interface ColumnTemplate {
   key: string;
@@ -77,18 +78,9 @@ const manual = (key: string, label: string, extra: Partial<ColumnTemplate> = {})
  *  Shopify que los motorizados llevan en la misma ruta. */
 export const REPARTO_STORES = ["Aurela", "Kenku", "Kast", "Otra"] as const;
 
-/** Métodos de pago, lista cerrada. Sale del vocabulario de jul-sep 2026. */
-export const REPARTO_PAYMENT_METHODS = [
-  "Efectivo",
-  "Yape Grupo GF",
-  "Yape/Plin Frankz",
-  "Yape/Plin Gabriela",
-  "Izipay",
-  "Link de pago",
-  "Transferencia",
-  "Pagado antes",
-  "Sin cobro",
-] as const;
+// La lista cerrada vive en ./payment-methods, sin dependencias: la pantalla del
+// motorizado la usa y no debe cargar las plantillas (30-09-2026).
+export { REPARTO_PAYMENT_METHODS };
 
 /** Lo que escriben → método. Normalizado con normalizeAlias. Lo que no está
  *  aquí ni en la lista se guarda literal en `metodo_pago_reportado`. */

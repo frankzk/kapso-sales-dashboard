@@ -99,9 +99,25 @@
   }
 }
 
+/* Subida de una foto del motorizado: una barra que recorre la pista mientras
+   el servidor responde (no hay avance real que medir en un fetch). */
+@keyframes photo-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-slide-in-right {
     animation: none;
+  }
+  .animate-\[photo-progress_1\.1s_ease-in-out_infinite\] {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
   }
 }
 

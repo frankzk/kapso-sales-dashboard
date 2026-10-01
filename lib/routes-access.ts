@@ -34,6 +34,9 @@ export interface StopWithOrder extends RouteStop {
   /** Tienda del pedido (0057). Es lo que agrupa las liquidaciones cuando una
    *  ruta mezcla tiendas en el mismo viaje. */
   store_id: string | null;
+  /** Su nombre («Kenku Peru», «Aurela»): el motorizado se presenta como la
+   *  tienda por WhatsApp (30-09-2026). */
+  store_name?: string | null;
   outcome_reason: string | null;
   note: string | null;
   photo_path: string | null;
@@ -109,19 +112,14 @@ export async function getRouteDetail(
   routeId: string,
 ): Promise<{ route: RouteRow; stops: StopWithOrder[] } | null> {
   const sb = await createServerSupabase();
-  const { data: head } = await sb
-    .from("delivery_routes")
-    .select(ROUTE_COLUMNS)
-    .eq("id", routeId)
-    .maybeSingle();
+  // La cabecera y las paradas salen a la vez: el motorizado espera cada ida y
+  // vuelta con datos móviles.
+  const [{ data: head }, { data: stopRows }] = await Promise.all([
+    sb.from("delivery_routes").select(ROUTE_COLUMNS).eq("id", routeId).maybeSingle(),
+    sb.from("delivery_stops").select(STOP_COLUMNS).eq("route_id", routeId).order("seq"),
+  ]);
   if (!head) return null;
   const route = head as unknown as RouteRow;
-
-  const { data: stopRows } = await sb
-    .from("delivery_stops")
-    .select(STOP_COLUMNS)
-    .eq("route_id", routeId)
-    .order("seq");
   const stops = (stopRows ?? []) as unknown as StopWithOrder[];
 
   const orderIds = [...new Set(stops.map((s) => s.order_id))];
@@ -150,11 +148,12 @@ export async function getRouteDetail(
     }
   }
 
-  const [balances, pickups, returns] = await Promise.all([loadRouteCollectionBalances(orderIds), loadStopPickups(stops), loadStopReturns(stops)]);
+  const [balances, pickups, returns, storeNames] = await Promise.all([loadRouteCollectionBalances(orderIds), loadStopPickups(stops), loadStopReturns(stops), loadStoreNames(stops)]);
   return {
     route,
     stops: stops.map((s) => ({
       ...s,
+      store_name: s.store_id ? storeNames.get(s.store_id) ?? null : null,
       order: byOrder.get(s.order_id) ?? null,
       collection: balances.get(s.order_id),
       manifest_item_id: pickups.get(pickupKey(s))?.id ?? null,
@@ -162,6 +161,18 @@ export async function getRouteDetail(
       returned_at: returns.get(pickupKey(s)) ?? null,
     })),
   };
+}
+
+/**
+ * El nombre de cada tienda de la ruta. Se lee con el service role y SOLO
+ * `id,name`: el motorizado no es miembro de la tienda y la fila guarda
+ * credenciales que no debe ver ni su propio cliente.
+ */
+async function loadStoreNames(stops: readonly StopWithOrder[]): Promise<Map<string, string>> {
+  const ids = [...new Set(stops.map((s) => s.store_id).filter((id): id is string => Boolean(id)))];
+  if (!ids.length) return new Map();
+  const { data } = await createAdminSupabase().from("stores").select("id,name").in("id", ids);
+  return new Map(((data ?? []) as { id: string; name: string | null }[]).filter((row) => row.name).map((row) => [row.id, row.name as string]));
 }
 
 function pickupKey(stop: { dispatch_manifest_id?: string | null; shipment_id?: string | null }): string {

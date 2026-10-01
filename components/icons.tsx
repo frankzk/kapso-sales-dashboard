@@ -339,3 +339,76 @@ export function IconRepeat(props: IconProps) {
     </svg>
   );
 }
+
+export function IconArrowLeft(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M19 12H5M11 5l-7 7 7 7" />
+    </svg>
+  );
+}
+
+/** Navegar: la flecha de «ir» de los mapas. */
+export function IconNavigate(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M20.5 3.5 3.5 10.6l7 2.9 2.9 7z" />
+    </svg>
+  );
+}
+
+export function IconPhone(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M8.2 3.5H5.5a1.5 1.5 0 0 0-1.5 1.6C4.6 13 11 19.4 18.9 20a1.5 1.5 0 0 0 1.6-1.5v-2.7a1 1 0 0 0-.7-1l-3.3-1a1 1 0 0 0-1 .3l-1.4 1.5a13 13 0 0 1-5.7-5.7l1.5-1.4a1 1 0 0 0 .3-1l-1-3.3a1 1 0 0 0-1-.7z" />
+    </svg>
+  );
+}
+
+/** WhatsApp dibujado con el trazo de la familia: globo con cola y auricular. */
+export function IconWhatsApp(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4.3 19.7 5.4 16A8.5 8.5 0 1 1 8.4 19z" />
+      <path d="M9.4 8.4c-.4.9-.2 2.3.9 3.6s2.6 2.2 3.6 2.2c.6 0 1-.4 1.3-.9l-1.5-1-.8.6a4.2 4.2 0 0 1-1.6-1.6l.6-.8-1-1.5c-.2 0-.4.1-.5.4z" />
+    </svg>
+  );
+}
+
+export function IconMapPin(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z" />
+      <circle cx="12" cy="9.5" r="2.5" />
+    </svg>
+  );
+}
+
+export function IconCopy(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="8.5" y="8.5" width="11.5" height="11.5" rx="1.5" />
+      <path d="M15.5 8.5V5.5A1.5 1.5 0 0 0 14 4H5.5A1.5 1.5 0 0 0 4 5.5V14a1.5 1.5 0 0 0 1.5 1.5h3" />
+    </svg>
+  );
+}
+
+/** Galería: una foto ya tomada. */
+export function IconImage(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+      <circle cx="9" cy="9.5" r="1.5" />
+      <path d="m20.5 15.5-4.8-4.8L6 19.5" />
+    </svg>
+  );
+}
+
+/** Linterna de la cámara. */
+export function IconFlash(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M13 2.5 5 13.5h6l-1 8 8-11h-6z" />
+    </svg>
+  );
+}

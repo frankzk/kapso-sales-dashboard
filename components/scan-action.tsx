@@ -7,11 +7,12 @@
 //   oficina_cotejo        → scanManifestItem(…, "office")   → office_checked
 //   motorizado_recepcion  → receiveMyGfPackage(…) con caja   → pickup_checked
 //                           confirmMyGfPickup(…) sin caja    → pickup_checked («Lo llevo», 0185)
-//   motorizado_entrega    → foto a /api/reparto/foto         → evidencia de la parada
+//   motorizado_entrega    → PhotoCapture → /api/reparto/foto → evidencia de la parada
 //   supervisor_retiro     → lookup + removeManifestItem(…)  → package_removed
 
 import { useRef, useState } from "react";
 import { DispatchScanner } from "@/components/dispatch-scanner";
+import { PhotoCapture } from "@/components/photo-capture";
 import { DispatchCamera } from "@/components/dispatch-camera";
 import { scanActionPlan, type ScanContext } from "@/lib/scan-action";
 import { lookupDispatchShipment, removeManifestItem, scanManifestItem } from "@/app/dashboard/pedidos/despacho/actions";
@@ -76,7 +77,6 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
     if (continuous) setLastRead(r.error ? { ok: false, text: r.error } : r.notice ? { ok: true, text: `✓ ${r.notice}` } : null);
     onResult(r);
   };
-  const fileRef = useRef<HTMLInputElement>(null);
   const inFlight = useRef(false);
 
   // Asignar por QR no descarta lecturas: cada QR entra a una cola, se anuncia
@@ -154,57 +154,18 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
     }
   }
 
-  async function uploadPhoto(file: File) {
-    if (!stopId) return onResult({ error: "Falta la parada." });
-    setBusy(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("stopId", stopId);
-      fd.append("kind", photoKind);
-      const res = await fetch("/api/reparto/foto", { method: "POST", body: fd });
-      const json = (await res.json()) as { path?: string; error?: string };
-      if (!res.ok) onResult({ error: json.error ?? "No se pudo subir la foto." });
-      else onResult({ path: json.path, notice: "Foto lista." });
-    } catch {
-      onResult({ error: "No se pudo subir la foto. Revisa tu señal." });
-    } finally {
-      setBusy(false);
-    }
-  }
-
+  // La foto (entrega, Yape, rechazo) es su propio campo: cámara dentro de la
+  // página, galería y foto reducida antes de subir (30-09-2026).
   if (plan.gesture === "photo") {
     return (
-      <div className="rounded-lg border border-dashed border-slate-300 p-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs text-slate-600">
-            {label ?? plan.label}
-            {photoPath && <strong className="ml-1 text-emerald-700">✓ lista</strong>}
-          </span>
-          <button
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            disabled={busy || disabled}
-            className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 disabled:opacity-50"
-          >
-            {busy ? "Subiendo…" : photoPath ? "Cambiar" : "Tomar foto"}
-          </button>
-        </div>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          // `capture` abre la cámara en el móvil; en escritorio abre el selector.
-          capture="environment"
-          className="hidden"
-          aria-label={label ?? plan.label}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void uploadPhoto(f);
-            e.target.value = "";
-          }}
-        />
-      </div>
+      <PhotoCapture
+        stopId={stopId}
+        kind={photoKind}
+        label={label ?? plan.label}
+        photoPath={photoPath}
+        disabled={disabled}
+        onResult={onResult}
+      />
     );
   }
 

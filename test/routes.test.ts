@@ -407,7 +407,7 @@ describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
     expect(rutas).toContain("error: routeCloseBlockerMessage(bloqueo)");
     expect(rutas).not.toContain("Falta evidencia de entrega o rechazo. Completa el reporte antes de liquidar.");
     const telefono = readFileSync(resolve(process.cwd(), "components/rider-route.tsx"), "utf8");
-    expect(telefono).toContain('status === "no_entregado" && nonDeliveryNeedsPhoto(reason, delegated) && <ScanAction');
+    expect(telefono).toContain('status === "no_entregado" && nonDeliveryNeedsPhoto(reason, delegated) && <PhotoCapture');
     expect(telefono).toContain('label={delegated ? "Evidencia del reporte" : "Foto del rechazo"}');
   });
 

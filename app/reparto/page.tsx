@@ -28,22 +28,23 @@ export default async function RepartoPage({
 }) {
   const [sp, user] = await Promise.all([searchParams, getCurrentUser()]);
   if (!user) redirect("/login");
-  const perms = await getMasterPermissions();
+  // Cada ida y vuelta la espera el motorizado con datos móviles: lo que no
+  // depende de otra respuesta sale a la vez (30-09-2026).
+  const [perms, rider] = await Promise.all([getMasterPermissions(), getMyRider()]);
   if (sp.modo === "coordinacion" && perms.can("routes.report_others")) {
     return <CoordinatorReport routeId={sp.ruta} email={user.email ?? "Coordinación"} />;
   }
 
-  const rider = await getMyRider();
   if (!rider) {
     if (perms.can("routes.report_others")) {
       return <CoordinatorReport routeId={sp.ruta} email={user.email ?? "Coordinación"} />;
     }
     return (
-      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center p-6">
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center">
-          <h1 className="text-lg font-semibold text-slate-900">Reparto</h1>
-          <p className="mt-2 text-sm text-slate-500">
-            Si eres motorizado, pide vincular tu ficha a <strong className="text-slate-700">{user.email}</strong>.
+      <main className="rider-scale mx-auto flex min-h-screen max-w-md flex-col justify-center bg-slate-50 p-4">
+        <div className="rounded-lg bg-white p-6 text-center shadow-control ring-1 ring-inset ring-line">
+          <h1 className="text-lg font-semibold text-ink-900">Reparto</h1>
+          <p className="mt-2 text-sm text-ink-600">
+            Si eres motorizado, pide vincular tu ficha a <strong className="font-semibold text-ink-900">{user.email}</strong>.
             Si eres jefe o coordinador, pide activar «Reportar entregas de rutas» en Equipo. No necesitas una ficha de motorizado.
           </p>
         </div>
@@ -55,12 +56,11 @@ export default async function RepartoPage({
   // 'cerrada'), así que no hay que filtrar por estado aquí.
   // Una sola pantalla (MOM §29.12): la ruta es la verdad y el vocabulario de
   // su hoja de Reparto propio viaja con ella para escribir como en el cuaderno.
-  const [routes, loads, sheet] = await Promise.all([getRoutes({ riderId: rider.id, limit: 30 }), getMyGfLoads(), getRiderSheet(rider.id)]);
-  const vocabulary = sheet ? await loadRiderVocabulary(sheet) : null;
+  const [routes, loads, sheet, pickupMode] = await Promise.all([getRoutes({ riderId: rider.id, limit: 30 }), getMyGfLoads(), getRiderSheet(rider.id), getMyPickupMode()]);
   const active = routes.find((r) => r.status === "en_curso");
   const wanted = sp.ruta && routes.some((r) => r.id === sp.ruta) ? sp.ruta : null;
   const routeId = wanted ?? active?.id ?? routes[0]?.id ?? null;
-  const detail = routeId ? await getRouteDetail(routeId) : null;
+  const [vocabulary, detail] = await Promise.all([sheet ? loadRiderVocabulary(sheet) : null, routeId ? getRouteDetail(routeId) : null]);
   const today = limaDate(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10);
 
   // Primero la caja, después la ruta (MOM §29.13): mientras haya una carga
@@ -68,7 +68,6 @@ export default async function RepartoPage({
   // dice cuáles no recoge. La ruta se muestra recién con la custodia cambiada.
   // En modo «confirmar» (0185) la ruta aparece al asignar y cada parada nace
   // «por confirmar»: el motorizado dice «Lo llevo» al sacarla del almacén.
-  const pickupMode = await getMyPickupMode();
   if (riderScreenFor(pickupMode, loads.map((load) => load.state)) === "recibir_caja") {
     return <RiderReceiveBox riderName={rider.full_name} loads={loads} />;
   }

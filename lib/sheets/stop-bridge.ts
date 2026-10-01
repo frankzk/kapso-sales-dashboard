@@ -17,7 +17,7 @@
 // no (MOM §30.3); desde la v1.23 ninguna de las dos anula: solo Shopify.
 
 import { NON_DELIVERY_REASONS, PAYMENT_METHODS, type PaymentMethod, type StopStatus } from "@/lib/routes";
-import { normalizeAlias } from "./statuses";
+import { normalizeAlias } from "./alias";
 import type { CellValue, StatusEffect } from "./types";
 
 export interface StopTarget {

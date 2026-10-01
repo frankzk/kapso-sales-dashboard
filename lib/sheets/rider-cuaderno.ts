@@ -13,9 +13,11 @@ import { applyWrittenPayment, applyWrittenStatus } from "./written-status";
 import { normalizeOrderCode, puntoRowKey } from "./reparto-import";
 import type { StatusLookup } from "./statuses";
 import type { CellValue, StatusEffect } from "./types";
+import { MONTO_TOLERANCE, montoDiffers } from "./monto";
 
-/** Diferencia mínima para considerar que un monto no cuadra (S/). */
-export const MONTO_TOLERANCE = 0.5;
+// `MONTO_TOLERANCE` y `montoDiffers` viven en ./monto, sin dependencias: la
+// pantalla del motorizado las usa y no debe cargar este módulo (30-09-2026).
+export { MONTO_TOLERANCE, montoDiffers };
 
 export const DIGITAL_METHODS: ReadonlySet<string> = new Set([
   "Yape Grupo GF",
@@ -27,11 +29,6 @@ export const DIGITAL_METHODS: ReadonlySet<string> = new Set([
 
 export function isDigitalMethod(method: string | null | undefined): boolean {
   return Boolean(method && DIGITAL_METHODS.has(method));
-}
-
-export function montoDiffers(aCobrar: number | null, kaptaTotal: number | null): boolean {
-  if (aCobrar === null || kaptaTotal === null) return false;
-  return Math.abs(aCobrar - kaptaTotal) > MONTO_TOLERANCE;
 }
 
 /**

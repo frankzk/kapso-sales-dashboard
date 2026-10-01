@@ -4,6 +4,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { routeReportAccess } from "@/lib/route-report-access";
+import { PHOTO_UPLOAD_LIMIT } from "@/lib/photo-resize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,9 +13,11 @@ export const maxDuration = 60;
 /** Fotos de entrega y comprobantes: llevan casa, cara y montos. Bucket privado. */
 const BUCKET = "delivery-proofs";
 
-// Las cámaras de móvil sacan fotos grandes; se acepta hasta 12 MB y el
-// navegador ya las reduce antes de subirlas.
-const MAX_BYTES = 12 * 1024 * 1024;
+// La pantalla del motorizado reduce cada foto a 1600 px en JPEG antes de
+// subirla (PhotoCapture, 30-09-2026): llega en cientos de KB. El tope es el de
+// `lib/photo-resize`, por debajo del corte de 4,5 MB con que Vercel rechaza el
+// cuerpo antes de llegar aquí (y sin JSON que el teléfono pueda leer).
+const MAX_BYTES = PHOTO_UPLOAD_LIMIT;
 const TYPES = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic"]);
 
 let bucketReady = false;
@@ -59,7 +62,7 @@ export async function POST(req: NextRequest) {
   }
   if (file.size === 0) return NextResponse.json({ error: "La foto está vacía." }, { status: 400 });
   if (file.size > MAX_BYTES) {
-    return NextResponse.json({ error: "La foto es demasiado grande (máx. 12 MB)." }, { status: 413 });
+    return NextResponse.json({ error: "La foto es demasiado grande (máx. 4 MB). Tómala otra vez con «Cámara»." }, { status: 413 });
   }
   const type = (file.type ?? "").toLowerCase();
   if (type && !TYPES.has(type)) {
