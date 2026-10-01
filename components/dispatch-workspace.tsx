@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { DispatchScanner } from "@/components/dispatch-scanner";
 import { DispatchCamera } from "@/components/dispatch-camera";
+import { createScanQueue } from "@/lib/scan-queue";
 import { GfBoxAddPackages } from "@/components/gf-box-add-packages";
 import { cn } from "@/components/ui";
 import { Badge, Banner, CHECKBOX, FIELD, OpsButton, type BadgeTone } from "@/components/ops-ui";
@@ -296,46 +297,80 @@ export function DispatchBoxPanel({
   }
   const [mode, setMode] = useState<Mode>(() => modeForAccess(selected));
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [busy, setBusyState] = useState(false);
+  const [pendingScans, setPendingScans] = useState(0);
+  const [scanQueue] = useState(() => createScanQueue(setPendingScans));
+  const busy = pendingScans > 0;
+  const [lastCaptured, setLastCaptured] = useState<string | null>(null);
+  const [confirmed, setConfirmed] = useState<Record<string, string[]>>({});
+  const [failedReads, setFailedReads] = useState<Record<string, string>>({});
+  const needsRefresh = useRef(false);
   const [ownMessage, setOwnMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const message = outerMessage === undefined ? ownMessage : outerMessage;
   const setMessage = setOuterMessage ?? setOwnMessage;
-  const scanLock = useRef(false);
   const closeCamera = useCallback(() => setCameraOpen(false), []);
-  const setBusy = useCallback((value: boolean) => { setBusyState(value); onBusy?.(value); }, [onBusy]);
+  useEffect(() => { onBusy?.(busy); }, [busy, onBusy]);
+  const refreshAfterScans = useEffectEvent(async () => {
+    try { await refresh(manifestId); }
+    catch { setMessage({ tone: "error", text: "Las lecturas respondieron, pero no se pudo actualizar la caja. Revisa la conexión y vuelve a abrirla." }); }
+  });
+  useEffect(() => {
+    if (pendingScans || !needsRefresh.current) return;
+    const timer = window.setTimeout(() => {
+      needsRefresh.current = false;
+      void refreshAfterScans();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [pendingScans, manifestId]);
 
   function showResult(result: DispatchActionResult) {
     setMessage({ tone: result.error ? "error" : "ok", text: result.error ?? result.notice ?? "Listo." });
   }
 
-  const executeScan = useCallback(async (raw: string) => {
+  function executeScan(raw: string) {
     const value = raw.trim();
-    if (!value || scanLock.current) return;
-    scanLock.current = true;
-    setBusy(true);
-    setMessage(null);
-    try {
-    let result: DispatchActionResult;
-    if (!selected) {
-      result = { error: "Elige una ruta antes de escanear." };
-    } else {
-      // El cotejo SOLO confirma lo que ya se decidió al armar la ruta. Antes
-      // agregaba el paquete en el mismo gesto, así que un escaneo distraído
-      // metía una caja ajena a la ruta y la daba por cotejada.
-      result = await scanManifestItem(selected.id, value, mode === "office" ? "office" : "pickup");
+    if (!value) return;
+    if (!selected) { showResult({ error: "Elige una ruta antes de escanear." }); return; }
+    const target = selected.id;
+    const stage = mode === "office" ? "office" : "pickup";
+    const recordFailure = (error?: string) => setFailedReads((current) => {
+      const next = { ...current };
+      const key = `${target}:${stage}:${value.toLowerCase()}`;
+      if (error) next[key] = `${value}: ${error}`;
+      else delete next[key];
+      return next;
+    });
+    const accepted = scanQueue.enqueue({
+      key: `${target}:${stage}:${value.toLowerCase()}`,
+      run: async () => {
+        // Verification only checks a package already assigned to this box.
+        const result = await scanManifestItem(target, value, stage);
+        recordFailure(result.error);
+        showResult({ ...result, notice: result.notice ? `${value}: ${result.notice}` : undefined, error: result.error ? `${value}: ${result.error}` : undefined });
+        if (!result.error && result.shipment) {
+          const shipmentId = result.shipment.id;
+          const key = `${target}:${stage}`;
+          setConfirmed((current) => ({ ...current, [key]: [...new Set([...(current[key] ?? []), shipmentId])] }));
+        }
+      },
+      onError: () => {
+        const error = "No se pudo confirmar. Revisa la conexión y vuelve a escanear el mismo paquete; no se duplicará.";
+        recordFailure(error);
+        setMessage({ tone: "error", text: `${value}: ${error}` });
+      },
+    });
+    if (accepted) {
+      needsRefresh.current = true;
+      setLastCaptured(value);
     }
-    showResult(result);
-    await refresh(selected?.id);
-    } catch {
-      setMessage({ tone: "error", text: "No se pudo confirmar la respuesta. Revisa la conexión y vuelve a escanear el mismo paquete; no se duplicará." });
-    } finally { setBusy(false); scanLock.current = false; }
-  }, [busy, mode, selected]);
-
-  const onCameraScan = useCallback((value: string) => {
-    void executeScan(value);
-  }, [executeScan]);
+  }
 
   const progress = selected ? dispatchProgress(selected.items) : null;
+  const scanStage = mode === "office" ? "office" : "pickup";
+  const confirmedHere = new Set(confirmed[`${manifestId}:${scanStage}`] ?? []);
+  const scanIssues = Object.entries(failedReads).filter(([key]) => key.startsWith(`${manifestId}:${scanStage}:`)).map(([, text]) => text);
+  const confirmedCount = selected ? activeDispatchItems(selected.items).filter((item) =>
+    (scanStage === "office" ? item.office_checked_at : item.pickup_checked_at) || confirmedHere.has(item.shipment_id),
+  ).length : 0;
   const checkComplete = selected?.state !== "cancelled" && !!progress && (mode === "office" ? progress.officeComplete : progress.pickupComplete);
   // Con la carga ya en custodia, el cotejo de oficina se cierra (la caja ya
   // salió), pero el de recojo sigue abierto si el modo del proveedor no es
@@ -352,7 +387,7 @@ export function DispatchBoxPanel({
   // la superficie; en la mesa de almacén la sección es la tarjeta de trabajo.
   const onPage = showTarget;
   const scanner = (key: string) => (
-    <DispatchScanner key={key} look="ops" busy={busy} disabled={!scanAllowed} onScan={(code) => void executeScan(code)} onCamera={() => setCameraOpen(true)} />
+    <DispatchScanner key={key} look="ops" busy={false} disabled={!scanAllowed} onScan={executeScan} onCamera={() => setCameraOpen(true)} />
   );
 
   return (
@@ -403,6 +438,8 @@ export function DispatchBoxPanel({
                 </>
               )}
               {message && <Banner tone={message.tone === "error" ? "crit" : "ok"} role={message.tone === "error" ? "alert" : "status"} className="mt-4">{message.text}</Banner>}
+              {!cameraOpen && pendingScans > 0 && <p role="status" className="mt-2 text-sm text-ink-600">{pendingScans} lecturas por confirmar. Puedes seguir escaneando.</p>}
+              {!cameraOpen && scanIssues.map((text) => <p key={text} role="alert" className="mt-2 text-sm text-red-700">{text}</p>)}
             </div>
 
             {mode === "build" ? (
@@ -449,10 +486,13 @@ export function DispatchBoxPanel({
       <DispatchCamera
         open={cameraOpen}
         onClose={closeCamera}
-        onScan={onCameraScan}
+        onScan={executeScan}
         continuous
-        progress={progress ? { done: mode === "office" ? progress.officeChecked : progress.pickupChecked, total: progress.total, verb: mode === "office" ? "Verificados" : "Recibidos" } : undefined}
+        progress={progress ? { done: confirmedCount, total: progress.total, verb: mode === "office" ? "Verificados" : "Recibidos" } : undefined}
         status={message ? { ok: message.tone !== "error", text: message.text } : null}
+        pending={pendingScans}
+        lastCaptured={lastCaptured}
+        issues={scanIssues}
       />
     </div>
   );

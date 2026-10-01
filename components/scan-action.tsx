@@ -10,7 +10,7 @@
 //   motorizado_entrega    → PhotoCapture → /api/reparto/foto → evidencia de la parada
 //   supervisor_retiro     → lookup + removeManifestItem(…)  → package_removed
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { DispatchScanner } from "@/components/dispatch-scanner";
 import { PhotoCapture } from "@/components/photo-capture";
 import { DispatchCamera } from "@/components/dispatch-camera";
@@ -19,6 +19,7 @@ import { lookupDispatchShipment, removeManifestItem, scanManifestItem } from "@/
 import { confirmMyGfPickup, receiveMyGfPackage } from "@/app/reparto/receive";
 import { scanAssignToRider, type ScanAssignLine } from "@/app/dashboard/courier/actions";
 import type { ScanProgress } from "@/lib/scan-progress";
+import { createScanQueue } from "@/lib/scan-queue";
 
 export interface ScanActionResult {
   error?: string;
@@ -69,88 +70,75 @@ function lineNeedsAttention(line: ScanAssignLine): boolean {
 
 export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, onPending, compact = false, continuous = false, progress, look = "default" }: Props) {
   const plan = scanActionPlan(context);
-  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState(0);
+  const [scanQueue] = useState(() => createScanQueue(setPending));
+  const [lastCaptured, setLastCaptured] = useState<string | null>(null);
+  const [failedReads, setFailedReads] = useState<Record<string, string>>({});
+  const scanScope = JSON.stringify([context, manifestId, itemId, assign]);
+  const scanIssues = Object.entries(failedReads).filter(([key]) => key.startsWith(`${scanScope}:`)).map(([, text]) => text);
+  const busy = pending > 0;
   const [cameraOpen, setCameraOpen] = useState(false);
   // Última lectura, para decirla dentro de la cámara sin cerrarla.
   const [lastRead, setLastRead] = useState<{ ok: boolean; text: string } | null>(null);
-  const report = (r: ScanActionResult) => {
+  const reportResult = (r: ScanActionResult, code: string) => {
+    setFailedReads((current) => {
+      const next = { ...current };
+      const key = `${scanScope}:${code.toLowerCase()}`;
+      if (r.error) next[key] = `${code}: ${r.error}`;
+      else delete next[key];
+      return next;
+    });
     if (continuous) setLastRead(r.error ? { ok: false, text: r.error } : r.notice ? { ok: true, text: `✓ ${r.notice}` } : null);
     onResult(r);
   };
-  const inFlight = useRef(false);
-
-  // Asignar por QR no descarta lecturas: cada QR entra a una cola, se anuncia
-  // al instante (`onPending`) y se procesa en orden. Antes, mientras el
-  // servidor respondía (varios segundos), los QR siguientes se perdían.
-  const assignQueue = useRef<string[]>([]);
-  const draining = useRef(false);
-  async function drainAssign() {
-    if (draining.current) return;
-    draining.current = true;
-    try {
-      while (assignQueue.current.length) {
-        const code = assignQueue.current[0]!;
-        try {
-          const line = await scanAssignToRider(assign!.orgId, assign!.riderId, code, { overrideCash: assign!.overrideCash, scheduledFor: assign!.scheduledFor ?? null });
-          report({ line, notice: line.message, error: lineNeedsAttention(line) ? line.message : undefined });
-        } catch {
-          report({
-            line: { code, status: "no_elegible", orderId: null, orderName: null, shipmentId: null, manifestId: null, riderName: null, amount: null, message: "No se pudo registrar. Reintenta el mismo código; no se duplicará." },
-            error: "No se pudo registrar. Reintenta el mismo código; no se duplicará.",
-          });
-        } finally {
-          assignQueue.current.shift();
-        }
-      }
-    } finally {
-      draining.current = false;
+  function execute(raw: string) {
+    const code = raw.trim();
+    if (!code || disabled) return;
+    // Capture context and target in this job, rather than borrowing the target
+    // from the first request while another QR waits for its turn.
+    const accepted = scanQueue.enqueue({
+      key: `${scanScope}:${code.toLowerCase()}`,
+      run: () => processScan(code),
+      onError: () => {
+        const error = "No se pudo confirmar. Reintenta el mismo código; no se duplicará.";
+        reportResult({ error, ...(context === "supervisor_asignacion" && assign?.riderId ? {
+          line: { code, status: "no_elegible" as const, orderId: null, orderName: null, shipmentId: null, manifestId: null, riderName: null, amount: null, message: error },
+        } : {}) }, code);
+      },
+    });
+    if (accepted) {
+      setLastCaptured(code);
+      if (context === "supervisor_asignacion" && assign?.riderId) onPending?.(code);
     }
   }
 
-  async function execute(code: string) {
-    if (context === "supervisor_asignacion" && assign?.riderId && code.trim()) {
-      const clean = code.trim();
-      if (assignQueue.current.some((c) => c.toLowerCase() === clean.toLowerCase())) return;
-      assignQueue.current.push(clean);
-      onPending?.(clean);
-      void drainAssign();
-      return;
-    }
-    if (inFlight.current || !code.trim()) return;
-    inFlight.current = true;
-    setBusy(true);
-    try {
-      if (context === "oficina_cotejo") {
-        if (!manifestId) return report({ error: "Falta la caja." });
-        const r = await scanManifestItem(manifestId, code, "office");
-        report({ error: r.error, notice: r.notice });
-      } else if (context === "motorizado_recepcion") {
-        // Con caja: «Recibir mi caja» (modo exigir). Sin caja: «Lo llevo» sobre
-        // la ruta ya en custodia (modo confirmar), acotado al ítem si se dio.
-        if (manifestId) report(await receiveMyGfPackage(manifestId, code));
-        else report(await confirmMyGfPickup({ itemId: itemId ?? null, code }));
-      } else if (context === "supervisor_asignacion") {
-        if (!assign?.riderId) {
-          if (onQueue) onQueue(code);
-          else report({ error: "Elige un motorizado antes de escanear." });
-          return;
-        }
-        const line = await scanAssignToRider(assign.orgId, assign.riderId, code, { overrideCash: assign.overrideCash, scheduledFor: assign.scheduledFor ?? null });
-        report({ line, notice: line.message, error: lineNeedsAttention(line) ? line.message : undefined });
-      } else if (context === "supervisor_retiro") {
-        if (!manifestId) return report({ error: "Falta la caja." });
-        const found = await lookupDispatchShipment(code);
-        if (found.error || !found.shipment) return report({ error: found.error ?? "Paquete no encontrado." });
-        const reason = window.prompt(`¿Por qué se retira ${found.shipment.order_name ?? found.shipment.guide_code} de la caja?`);
-        if (!reason) return report({});
-        const r = await removeManifestItem(manifestId, found.shipment.id, reason);
-        report({ error: r.error, notice: r.notice });
+  async function processScan(code: string) {
+    const report = (result: ScanActionResult) => reportResult(result, code);
+    if (context === "oficina_cotejo") {
+      if (!manifestId) return report({ error: "Falta la caja." });
+      const r = await scanManifestItem(manifestId, code, "office");
+      report({ error: r.error, notice: r.notice });
+    } else if (context === "motorizado_recepcion") {
+      // Con caja: «Recibir mi caja» (modo exigir). Sin caja: «Lo llevo» sobre
+      // la ruta ya en custodia (modo confirmar), acotado al ítem si se dio.
+      if (manifestId) report(await receiveMyGfPackage(manifestId, code));
+      else report(await confirmMyGfPickup({ itemId: itemId ?? null, code }));
+    } else if (context === "supervisor_asignacion") {
+      if (!assign?.riderId) {
+        if (onQueue) { onQueue(code); report({ notice: `${code} guardado en la bandeja. Elige motorizado para asignarlo.` }); }
+        else report({ error: "Elige un motorizado antes de escanear." });
+        return;
       }
-    } catch {
-      report({ error: "No se pudo registrar. Reintenta el mismo código; no se duplicará." });
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
+      const line = await scanAssignToRider(assign.orgId, assign.riderId, code, { overrideCash: assign.overrideCash, scheduledFor: assign.scheduledFor ?? null });
+      report({ line, notice: line.message, error: lineNeedsAttention(line) ? line.message : undefined });
+    } else if (context === "supervisor_retiro") {
+      if (!manifestId) return report({ error: "Falta la caja." });
+      const found = await lookupDispatchShipment(code);
+      if (found.error || !found.shipment) return report({ error: found.error ?? "Paquete no encontrado." });
+      const reason = window.prompt(`¿Por qué se retira ${found.shipment.order_name ?? found.shipment.guide_code} de la caja?`);
+      if (!reason) return report({});
+      const r = await removeManifestItem(manifestId, found.shipment.id, reason);
+      report({ error: r.error, notice: r.notice });
     }
   }
 
@@ -172,7 +160,9 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
   return (
     <div>
       {!compact && <p className="mt-3 text-xs text-slate-500">{plan.hint}</p>}
-      <DispatchScanner busy={busy} disabled={disabled} onScan={(code) => void execute(code)} onCamera={() => setCameraOpen(true)} compact={compact} buttonLabel={compact ? (label ?? "Escanear") : undefined} hint={plan.hint} look={look} />
+      <DispatchScanner busy={busy && !continuous} disabled={disabled} onScan={execute} onCamera={() => setCameraOpen(true)} compact={compact} buttonLabel={compact ? (label ?? "Escanear") : undefined} hint={plan.hint} look={look} />
+      {!cameraOpen && pending > 0 && <p role="status" className="mt-2 text-sm text-slate-600">{pending} lecturas por confirmar. Puedes seguir escaneando.</p>}
+      {!cameraOpen && scanIssues.map((text) => <p key={text} role="alert" className="mt-2 text-sm text-red-700">{text}</p>)}
       <DispatchCamera
         open={cameraOpen}
         onClose={() => { setCameraOpen(false); setLastRead(null); }}
@@ -180,6 +170,9 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
         continuous={continuous}
         progress={progress}
         status={lastRead}
+        pending={pending}
+        lastCaptured={lastCaptured}
+        issues={scanIssues}
       />
     </div>
   );

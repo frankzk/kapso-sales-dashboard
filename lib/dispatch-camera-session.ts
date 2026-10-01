@@ -56,7 +56,10 @@ export function startDispatchCamera(video: HTMLVideoElement, events: {
       if (stopped) return;
       // We own playback and cleanup. ZXing only decodes: its stream helpers
       // unconditionally clear the video when an older session finishes stopping.
-      controls = new BrowserQRCodeReader().scan(video, (result) => {
+      controls = new BrowserQRCodeReader(undefined, {
+        delayBetweenScanAttempts: 100,
+        delayBetweenScanSuccess: 100,
+      }).scan(video, (result) => {
         if (!stopped && result) events.onScan(result.getText());
       }, (error) => {
         if (error) fail(error);

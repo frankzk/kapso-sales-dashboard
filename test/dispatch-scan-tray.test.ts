@@ -63,8 +63,8 @@ describe("asignar por QR sin esperar (22-09-2026)", () => {
     expect(body).not.toContain("takeGroupGfCourierOrders(");
     expect(src).toContain("after(async () => { await recomputeOrderMasterSafe(");
     const scan = read("components/scan-action.tsx");
-    expect(scan).toContain("assignQueue.current.push(clean);");
-    expect(scan).toContain("onPending?.(clean);");
+    expect(scan).toContain("scanQueue.enqueue({");
+    expect(scan).toContain("onPending?.(code);");
     const board = read("components/dispatch-day-board.tsx");
     expect(board).toContain("onPending={pendingLine}");
     expect(board).toContain("scheduleRefresh()");

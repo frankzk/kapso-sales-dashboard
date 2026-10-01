@@ -18,6 +18,9 @@ export function DispatchCamera({
   continuous = false,
   progress,
   status,
+  pending = 0,
+  lastCaptured,
+  issues = [],
 }: {
   open: boolean;
   onClose: () => void;
@@ -33,12 +36,17 @@ export function DispatchCamera({
   progress?: ScanProgress;
   /** Última lectura: qué pasó con el código anterior, sin cerrar la cámara. */
   status?: { ok: boolean; text: string } | null;
+  /** Read locally, but not yet confirmed by the server. */
+  pending?: number;
+  lastCaptured?: string | null;
+  /** Failed saves remain visible even if a later package succeeds. */
+  issues?: string[];
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   // Parent callbacks change after every scan; they must not reopen the camera.
   const scanLatest = useEffectEvent((value: string) => onScan(value));
   const closeLatest = useEffectEvent(() => onClose());
-  const finished = Boolean(continuous && progress && scanProgressDone(progress));
+  const finished = Boolean(continuous && pending === 0 && issues.length === 0 && progress && scanProgressDone(progress));
   useEffect(() => {
     if (!open || !finished) return;
     const t = window.setTimeout(() => closeLatest(), AUTO_CLOSE_MS);
@@ -48,6 +56,19 @@ export function DispatchCamera({
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(true);
   const [attempt, setAttempt] = useState(0);
+  const [pageVisible, setPageVisible] = useState(true);
+  useEffect(() => {
+    if (!open) return;
+    const visibility = () => setPageVisible(document.visibilityState !== "hidden");
+    const restored = (event: PageTransitionEvent) => { if (event.persisted) setAttempt((value) => value + 1); };
+    visibility();
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("pageshow", restored);
+    return () => {
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("pageshow", restored);
+    };
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     const previousFocus = document.activeElement as HTMLElement | null;
@@ -58,7 +79,7 @@ export function DispatchCamera({
   }, [open]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !pageVisible) return;
     setError(null);
     setStarting(true);
     if (!videoRef.current) return;
@@ -87,12 +108,12 @@ export function DispatchCamera({
       },
     });
     return () => session.stop();
-  }, [open, continuous, attempt]);
+  }, [open, continuous, attempt, pageVisible]);
 
   if (!open) return null;
   return (
     <div role="dialog" aria-modal="true" aria-labelledby="dispatch-camera-title" onKeyDown={(event) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") { event.stopPropagation(); onClose(); }
       if (event.key === "Tab") {
         const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>("button");
         const first = buttons[0];
@@ -115,7 +136,16 @@ export function DispatchCamera({
           "sticky top-0 z-10 border-b px-5 py-3 text-base font-semibold leading-snug break-words",
           status ? (status.ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-800") : "border-slate-200 bg-slate-50 text-slate-600",
         )}>
-          {status?.text ?? "Apunta al QR del pedido para escanear."}
+          {status?.text ?? (pending > 0 ? "Lectura recibida" : "Apunta al QR del pedido para escanear.")}
+          {pending > 0 && <p className="mt-1 text-sm font-medium text-slate-700">
+            {lastCaptured ? `Leído: ${lastCaptured}. ` : ""}{pending} por confirmar. Puedes seguir escaneando.
+          </p>}
+          {issues.length > 0 && <div className="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-800">
+            <p className="font-semibold">{issues.length} sin confirmar · vuelve a escanear</p>
+            <ul className="mt-1 max-h-24 overflow-y-auto font-normal">
+              {issues.map((text) => <li key={text} className="py-1">{text}</li>)}
+            </ul>
+          </div>}
         </div>
         {error && <p role="alert" className="bg-red-50 px-5 py-3 text-sm text-red-700">{error}</p>}
         <div className="relative aspect-[4/3] max-h-[60dvh] overflow-hidden bg-slate-950">
