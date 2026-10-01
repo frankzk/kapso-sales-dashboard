@@ -7,7 +7,7 @@
 // Mundo de operación (29-09-2026, DESIGN.md): filtros en píldoras, situación
 // en chapas y una tabla de líneas finas, como Despacho del día.
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { MouseEvent } from "react";
 
@@ -24,10 +24,11 @@ function openInPlace(event: MouseEvent<HTMLAnchorElement>, href: string) {
 import { cn } from "@/components/ui";
 import { Hint } from "@/components/hint";
 import { Sheet } from "@/components/filter-sheet";
-import { AttentionPill, Badge, FIELD, FilterPill, OpsButton, type BadgeTone } from "@/components/ops-ui";
-import { IconPackage } from "@/components/icons";
+import { AttentionPill, Badge, Banner, FIELD, FilterPill, OpsButton, type BadgeTone } from "@/components/ops-ui";
+import { IconPackage, IconSearch } from "@/components/icons";
 import { courierBoxHref, courierReportHref, courierRouteDrawerHref } from "@/lib/courier-box-href";
-import { LEDGER_SITUATION_LABELS, ledgerSituation, type CourierLedgerRow, type CourierLedgerSituation } from "@/lib/courier-route-ledger";
+import { LEDGER_SITUATION_LABELS, ledgerIsOpen, ledgerSituation, type CourierLedgerRow, type CourierLedgerSituation } from "@/lib/courier-route-ledger";
+import { searchCourierRoutes } from "@/app/dashboard/courier/route-search-actions";
 import { routeDayLong } from "@/lib/dispatch";
 
 export const DAY_PARAM = "dia";
@@ -73,6 +74,27 @@ export function CourierRoutesLedger({
   const search = searchParams.toString();
   const dayParam = searchParams.get(DAY_PARAM);
   const riderParam = searchParams.get(RIDER_PARAM) ?? "";
+  const onlyOpen = searchParams.get("abiertas") === "1";
+  const code = searchParams.get("buscar")?.trim() ?? "";
+  const [searchInput, setSearchInput] = useState(code);
+  const [retry, setRetry] = useState(0);
+  const remoteKey = code ? `code:${code}` : onlyOpen ? "open" : "";
+  const [remote, setRemote] = useState<{ key: string; rows: CourierLedgerRow[]; limited?: boolean; error?: string } | null>(null);
+  useEffect(() => { setSearchInput(code); }, [code]);
+  useEffect(() => {
+    if (!remoteKey) { setRemote(null); return; }
+    let alive = true;
+    setRemote(null);
+    searchCourierRoutes({ code, openOnly: !code && onlyOpen }).then((result) => {
+      if (!alive) return;
+      setRemote("error" in result ? { key: remoteKey, rows: [], error: result.error } : { key: remoteKey, ...result });
+    }).catch(() => {
+      if (alive) setRemote({ key: remoteKey, rows: [], error: "No se pudieron consultar las rutas. Revisa la conexión e intenta nuevamente." });
+    });
+    return () => { alive = false; };
+  }, [remoteKey, code, onlyOpen, rows, retry]);
+  const loading = Boolean(remoteKey && remote?.key !== remoteKey);
+  const sourceRows = remoteKey ? (remote?.key === remoteKey ? remote.rows : []) : rows;
   const dayMode: DayMode = dayParam === "todas" ? "todas" : isDay(dayParam) ? "fecha" : "hoy";
   const specificDay = isDay(dayParam) ? dayParam : "";
   const [openPill, setOpenPill] = useState<"fecha" | "motorizado" | null>(null);
@@ -84,21 +106,26 @@ export function CourierRoutesLedger({
   // «Quitar filtros», la × del chip y elegir «Un día concreto» también iban al
   // servidor, y el picker parecía no responder durante esos segundos.
   const [navPending, startNav] = useTransition();
-  const loadedDays = useMemo(() => new Set(rows.map((r) => r.routeDate)), [rows]);
-  function setParams(patch: { day?: string | null; rider?: string | null }) {
+  const loadedDays = useMemo(() => new Set(sourceRows.map((r) => r.routeDate)), [sourceRows]);
+  function setParams(patch: { day?: string | null; rider?: string | null; open?: boolean; code?: string | null }) {
     const params = new URLSearchParams(search);
     if (patch.day !== undefined) { if (patch.day) params.set(DAY_PARAM, patch.day); else params.delete(DAY_PARAM); }
     if (patch.rider !== undefined) { if (patch.rider) params.set(RIDER_PARAM, patch.rider); else params.delete(RIDER_PARAM); }
+    if (patch.open !== undefined) { if (patch.open) params.set("abiertas", "1"); else params.delete("abiertas"); }
+    if (patch.code !== undefined) { if (patch.code) params.set("buscar", patch.code); else params.delete("buscar"); }
+    if (pathname === "/dashboard/courier") params.set("tab", "routes");
     const href = params.toString() ? `${pathname}?${params}` : pathname;
-    const needsServer = isDay(patch.day) && !loadedDays.has(patch.day);
+    const needsServer = !remoteKey && isDay(patch.day) && !loadedDays.has(patch.day);
     if (needsServer) startNav(() => router.replace(href));
     else window.history.replaceState(null, "", href);
   }
 
-  const filtered = useMemo(() => rows.filter((r) =>
+  const filtered = useMemo(() => sourceRows.filter((r) =>
+    (!onlyOpen || ledgerIsOpen(r))
+    &&
     (!riderParam || r.riderId === riderParam)
     && (dayMode === "todas" || (dayMode === "hoy" ? r.routeDate === today : r.routeDate === specificDay)),
-  ), [rows, riderParam, dayMode, today, specificDay]);
+  ), [sourceRows, onlyOpen, riderParam, dayMode, today, specificDay]);
 
   const groups = useMemo(() => {
     const map = new Map<string, CourierLedgerRow[]>();
@@ -106,7 +133,7 @@ export function CourierRoutesLedger({
     return [...map.entries()].sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0));
   }, [filtered]);
 
-  const activeFilters = (riderParam ? 1 : 0) + (dayMode !== "hoy" ? 1 : 0);
+  const activeFilters = (riderParam ? 1 : 0) + (dayMode !== "hoy" ? 1 : 0) + (onlyOpen ? 1 : 0) + (code ? 1 : 0);
   const dayPill = useRef<HTMLButtonElement>(null);
   const riderPill = useRef<HTMLButtonElement>(null);
   const dayValue = dayMode === "todas" ? "Todas" : dayMode === "fecha" ? routeDayLong(specificDay) : "Hoy";
@@ -118,11 +145,21 @@ export function CourierRoutesLedger({
 
   return (
     <section aria-label="Rutas y cajas" className="space-y-3">
+      <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => { event.preventDefault(); setParams({ code: searchInput.trim(), day: "todas", rider: null }); setRetry((n) => n + 1); }}>
+        <div className="relative min-w-0 flex-1 sm:max-w-md">
+          <IconSearch className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
+          <input type="search" aria-label="Buscar pedido en rutas" aria-describedby="route-search-help" placeholder="Código de pedido, guía o QR" value={searchInput} onChange={(event) => setSearchInput(event.target.value)} minLength={3} maxLength={200} className={cn(FIELD, "w-full pl-9")} />
+        </div>
+        <OpsButton type="submit" disabled={loading || searchInput.trim().length < 3}>{loading ? "Buscando…" : "Buscar"}</OpsButton>
+        {code && <OpsButton variant="ghost" onClick={() => { setSearchInput(""); setParams({ code: null }); }}>Limpiar búsqueda</OpsButton>}
+        <p id="route-search-help" className="w-full text-xs text-ink-500">Busca el pedido en todas las fechas y abre su reparto para continuar.</p>
+      </form>
       <div className="flex flex-wrap items-center gap-2">
         {/* Fecha siempre dice qué muestra; la «x» vuelve a hoy. */}
         <FilterPill ref={dayPill} label="Fecha" value={dayValue} expanded={openPill === "fecha"} onClick={() => setOpenPill((v) => (v === "fecha" ? null : "fecha"))} onClear={dayMode !== "hoy" ? () => setParams({ day: null }) : undefined} />
         <FilterPill ref={riderPill} label="Motorizado" value={riderParam ? riderName(riderParam) : null} expanded={openPill === "motorizado"} onClick={() => setOpenPill((v) => (v === "motorizado" ? null : "motorizado"))} onClear={() => setParams({ rider: null })} />
-        {activeFilters > 0 && <OpsButton variant="ghost" size="sm" onClick={() => setParams({ day: null, rider: null })}>Quitar filtros</OpsButton>}
+        <OpsButton size="sm" aria-pressed={onlyOpen} className={onlyOpen ? "text-brand-700 ring-2 ring-brand-600" : undefined} onClick={() => setParams({ open: !onlyOpen, ...(!onlyOpen ? { day: "todas" } : {}) })}>Solo abiertas</OpsButton>
+        {activeFilters > 0 && <OpsButton variant="ghost" size="sm" onClick={() => { setSearchInput(""); setParams({ day: null, rider: null, open: false, code: null }); }}>Quitar filtros</OpsButton>}
         {openPill === "fecha" && (
           <Sheet look="ops" title="Fecha" onClose={() => setOpenPill(null)} anchored anchorRef={dayPill}>
             <div className="grid gap-3 text-sm">
@@ -148,7 +185,7 @@ export function CourierRoutesLedger({
             </select>
           </Sheet>
         )}
-        <span className="text-[13px] text-ink-500"><b className="font-semibold tabular-nums text-ink-900">{filtered.length}</b> ruta{filtered.length === 1 ? "" : "s"}</span>
+        <span role="status" className="text-[13px] text-ink-500">{loading ? "Consultando rutas…" : <><b className="font-semibold tabular-nums text-ink-900">{filtered.length}</b> ruta{filtered.length === 1 ? "" : "s"}{code && ` para «${code}»`}</>}</span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {unassignedCount > 0 && onShowUnassigned && (
             <AttentionPill icon={IconPackage} label="Pedidos sin ruta" count={unassignedCount} active={false} hint="Tomados que todavía no están en la caja de un motorizado: ábrelos en Despacho del día." onClick={onShowUnassigned} />
@@ -156,10 +193,15 @@ export function CourierRoutesLedger({
         </div>
       </div>
 
-      <div className="max-h-[70vh] overflow-auto rounded-lg bg-white shadow-control ring-1 ring-line">
-        {!groups.length && (
+      {remoteKey && remote?.error && <Banner tone="crit" role="alert">{remote.error} <OpsButton size="sm" onClick={() => setRetry((n) => n + 1)}>Reintentar</OpsButton></Banner>}
+      {remoteKey && remote?.limited && <Banner tone="warn">El código coincide con demasiados pedidos. Escribe el código completo para encontrar su ruta.</Banner>}
+      {code && onlyOpen && sourceRows.some((r) => !ledgerIsOpen(r)) && <p className="text-[13px] text-ink-600">Hay coincidencias en rutas cerradas o liquidadas. <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => setParams({ open: false })}>Mostrar también cerradas</button></p>}
+
+      <div aria-busy={loading} className="max-h-[70vh] overflow-auto rounded-lg bg-white shadow-control ring-1 ring-line">
+        {loading && <p className="px-4 py-12 text-center text-sm text-ink-500">Buscando rutas…</p>}
+        {!loading && !remote?.error && !remote?.limited && !groups.length && (
           <p className="px-4 py-12 text-center text-sm text-ink-500">
-            {dayMode === "hoy" ? "Hoy no hay rutas todavía. Asigna pedidos desde Despacho del día." : "No hay rutas con esos filtros."}
+            {code ? (sourceRows.length ? "El pedido tiene rutas, pero ninguna coincide con estos filtros." : "No encontramos ese código en una ruta. Revisa el código; el pedido podría estar sin asignar.") : onlyOpen ? "No hay rutas abiertas con esos filtros." : dayMode === "hoy" ? "Hoy no hay rutas todavía. Asigna pedidos desde Despacho del día." : "No hay rutas con esos filtros."}
           </p>
         )}
         {/* Desktop: tabla con una cabecera por fecha. Sin filas no se pinta:
@@ -279,6 +321,7 @@ function LedgerRow({ row, href, reportHref }: { row: CourierLedgerRow; href: str
       <td className="whitespace-nowrap px-4 py-3">
         <a href={href} onClick={(e) => openInPlace(e, href)} className="font-semibold text-ink-900 hover:text-brand-700">{row.riderName}</a>
         <p className="text-xs text-ink-500">{row.manifestId ? `Carga ${row.loadNumber ?? 1}` : "Sin caja"}</p>
+        {row.matchedOrders?.length ? <p className="mt-1 max-w-52 whitespace-normal text-xs font-medium text-brand-700">{row.matchedOrders.join(", ")}</p> : null}
       </td>
       <td className="px-3 py-3"><Badge tone={SITUATION_TONE[situation]}>{LEDGER_SITUATION_LABELS[situation]}</Badge></td>
       <td className="px-2 py-3 text-center font-semibold tabular-nums text-ink-900">{row.assignedCount}</td>
@@ -302,6 +345,7 @@ function LedgerCard({ row, href, reportHref }: { row: CourierLedgerRow; href: st
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <p className="font-semibold text-ink-900">{row.riderName}</p>
+            {row.matchedOrders?.length ? <p className="text-xs font-medium text-brand-700">{row.matchedOrders.join(", ")}</p> : null}
             <p className="text-xs tabular-nums text-ink-500">{row.manifestId ? `Carga ${row.loadNumber ?? 1}` : "Sin caja"} · {row.assignedCount} paq. · <span className="whitespace-nowrap">{money(row.codAmount)}</span></p>
           </div>
           <Badge tone={SITUATION_TONE[situation]} className="shrink-0">{LEDGER_SITUATION_LABELS[situation]}</Badge>
