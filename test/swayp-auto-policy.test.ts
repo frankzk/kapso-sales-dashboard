@@ -48,3 +48,33 @@ describe("reintento sin contacto",()=>{
     expect(nextAutoDelivery(new Date("2026-10-03T17:00:00Z"),"trujillo")).toBe("2026-10-05");
   });
 });
+
+describe("piloto sin historial",()=>{
+  const pilot={...config,pilot_enabled:true,pilot_daily_cap:3};
+  function fresh(){const s=snapshot();s.history=[];s.payments=[];Object.assign(s.source,{aliclik_attempts:1,latitude:-16.39,longitude:-71.54,delivery_reference:"Frente al colegio"});return s;}
+  it("admite un pedido reciente de un intento sin inventar una entrega anterior",()=>{
+    expect(evaluateAutoDispatch(fresh(),pilot,now)).toMatchObject({eligible:true,cohort:"recent_no_history",priorOrderId:null});
+  });
+  it("queda apagado por defecto",()=>expect(evaluateAutoDispatch(fresh(),config,now)).toMatchObject({reason:"no_history"}));
+  it.each([null,0,2,3])("no asume un único intento para %s",attempts=>{
+    const s=fresh();s.source.aliclik_attempts=attempts;expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"pilot_limits"});
+  });
+  it("rechaza más de 7 días o más de S/199",()=>{
+    const s=fresh();s.order.total_amount=199;expect(evaluateAutoDispatch(s,pilot,now).eligible).toBe(true);
+    s.order.total_amount=199.01;expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"pilot_limits"});
+    s.order.total_amount=99;s.order.created_at="2026-09-24T19:59:59Z";expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"pilot_limits"});
+  });
+  it("exige pin y referencia",()=>{
+    const s=fresh();s.source.latitude=null;expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"pilot_location"});
+    s.source.latitude=-16.39;s.source.delivery_reference=null;expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"pilot_location"});
+  });
+  it("no cobra el total si hay adelanto o pago por revisar",()=>{
+    const s=fresh();s.payments=[{validation_status:"validado"}];expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"payment_review"});
+    s.payments=undefined;expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"payment_review"});
+  });
+  it("sigue detectando reemplazos aunque no tenga historial de entrega",()=>{
+    const s=fresh();s.history=[{...snapshot().history[0]!,delivered_at:null,line_items:[item("NEW")]}];
+    expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"duplicate"});
+  });
+  it("conserva la vía original y su plazo",()=>expect(evaluateAutoDispatch(snapshot(),pilot,now)).toMatchObject({eligible:true,cohort:"prior_delivery"}));
+});

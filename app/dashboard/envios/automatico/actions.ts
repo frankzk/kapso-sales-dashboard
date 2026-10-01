@@ -23,3 +23,9 @@ export async function runAutomatic(form: FormData) {
   await runAutoDispatch(admin,data as AutoSettings);
   revalidatePath("/dashboard/envios/automatico");
 }
+export async function togglePilot(form: FormData) {
+  const orgId=String(form.get("orgId")),admin=await authorized(orgId);
+  const {error}=await admin.from("swayp_auto_settings").update({pilot_enabled:form.get("enabled")==="true",updated_at:new Date().toISOString()}).eq("org_id",orgId);
+  if(error) throw new Error(error.message);
+  revalidatePath("/dashboard/envios/automatico");
+}

@@ -8,6 +8,8 @@ import { normalizeSku } from "@/lib/swayp-productos";
 import { leerInventarioSwayp } from "@/lib/swayp-inventory-sync";
 import { swaypOptsFromEnv } from "@/lib/swayp";
 import { fenixWarehouseKey } from "@/lib/shipments";
+import { corroboratePilotLocation } from "@/lib/swayp-auto-location";
+import { limaDateKey } from "@/lib/aliclik-geo";
 
 export async function inspectAuto(admin: SupabaseClient, shipmentId: string) {
   const { data, error } = await admin.rpc("swayp_auto_inspect", { p_source: shipmentId });
@@ -26,6 +28,9 @@ export async function runAutoDispatch(admin: SupabaseClient, settings: AutoSetti
     runId=run.data.id;
   }
   try {
+    const used=await admin.from("swayp_guide_emissions").select("evidence").eq("org_id",settings.org_id).eq("automatic",true).gte("created_at",`${limaDateKey()}T00:00:00-05:00`);
+    if(used.error) throw new Error(used.error.message);
+    let pilotUsed=(used.data??[]).filter(e=>e.evidence?.cohort==="recent_no_history").length;
     const {data:rows,error} = await admin.rpc("swayp_auto_candidates",{p_org:settings.org_id});
     if (error) throw new Error(error.message);
     for (const row of (rows ?? []) as {id:string}[]) {
@@ -34,12 +39,22 @@ export async function runAutoDispatch(admin: SupabaseClient, settings: AutoSetti
       const verdict = evaluateAutoDispatch(s,settings,new Date());
       report.checked++;
       let reason=verdict.reason;
-      const evidence: Record<string,unknown> = {fingerprint,policy:"aliclik-swayp-v1",orderName:s.order.name};
+      const evidence: Record<string,unknown> = {fingerprint,policy:"aliclik-swayp-v2",orderName:s.order.name};
       if (verdict.eligible) {
+        evidence.cohort=verdict.cohort;
         evidence.priorOrderId=verdict.priorOrderId;
         evidence.dispatchDate=verdict.dispatchDate;
+        let locationOk=true;
+        const pilotFull=verdict.cohort==="recent_no_history"&&pilotUsed>=(settings.pilot_daily_cap??3);
+        if(verdict.cohort==="recent_no_history"&&!pilotFull) {
+          const located=await corroboratePilotLocation(admin,settings.org_id,verdict.city,verdict.address.city!,s.source.latitude!,s.source.longitude!);
+          locationOk=located.ok;
+          evidence.location=located;
+        }
         const senders=parseSenders(env.swaypSenders());
-        if (!env.swaypEnabled() || !senders[verdict.city]
+        if (pilotFull) reason="pilot_cap";
+        else if (!locationOk) reason="pilot_location";
+        else if (!env.swaypEnabled() || !senders[verdict.city]
           || process.env.SWAYP_INVENTORY_ORG_ID !== settings.org_id) reason="api_disabled";
         else {
           const mappingRows=await filasDelMapaSwayp(admin,s.order.store_id);
@@ -63,7 +78,9 @@ export async function runAutoDispatch(admin: SupabaseClient, settings: AutoSetti
             else {
               report.eligible++;
               if (!dry) {
-                const note="Reintento automático Aliclik → Swayp por política v1: entrega previa en el mismo domicilio, producto distinto y stock completo. Sin llamada ni nueva confirmación del cliente.";
+                const note=verdict.cohort==="recent_no_history"
+                  ? "Reintento automático Aliclik → Swayp, piloto sin historial: hasta 7 días, un intento, máximo S/199, ubicación corroborada y stock completo. Sin llamada ni nueva confirmación del cliente."
+                  : "Reintento automático Aliclik → Swayp: entrega previa en el mismo domicilio, producto distinto y stock completo. Sin llamada ni nueva confirmación del cliente.";
                 const issued=await createFenixGuideViaApi({
                   admin,storeId:s.order.store_id,orderId:s.order.id,sourceKey:s.source.id,city:verdict.city,
                   district:verdict.address.city,customerName:verdict.address.name,customerPhone:verdict.phone,
@@ -89,6 +106,7 @@ export async function runAutoDispatch(admin: SupabaseClient, settings: AutoSetti
                   }
                   else {
                     reason="created"; evidence.childId=child.childId; report.created++;
+                    if(verdict.cohort==="recent_no_history") pilotUsed++;
                     const audit=await admin.from("shipment_calls").insert({shipment_id:child.childId,store_id:s.order.store_id,
                       agent:null,kind:"reroute",new_status:"en_ruta",note,next_followup_at:verdict.dispatchDate});
                     if (audit.error) throw new Error(`Guía ${issued.guia} creada; falta nota de auditoría: ${audit.error.message}`);

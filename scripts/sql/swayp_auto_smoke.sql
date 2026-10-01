@@ -41,4 +41,35 @@ do $$ begin
   if (select count(*) from swayp_guide_emissions)<>1 then raise exception 'emission RLS leaks another store'; end if;
 end $$;
 reset role;
+do $$
+declare
+  org uuid := '33333333-3333-3333-3333-333333333333';
+  a uuid := 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  b uuid := 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+  o4 uuid := gen_random_uuid(); o5 uuid := gen_random_uuid();
+  s4 uuid := gen_random_uuid(); s5 uuid := gen_random_uuid(); r jsonb; evidence jsonb;
+begin
+  update swayp_auto_settings set daily_cap=10,pilot_daily_cap=1 where org_id=org;
+  insert into orders(id,store_id,shopify_order_id,created_at,total_amount) values(o4,a,'pilot4',now(),99),(o5,b,'pilot5',now(),149);
+  insert into shipments(id,store_id,order_id,courier,guide_code,delivery_status,status_category,reported_status,closed_at,aliclik_attempts) values
+    (s4,a,o4,'aliclik','PILOT4','anulado','cancelled','CANCEL',now(),1),
+    (s5,b,o5,'aliclik','PILOT5','anulado','cancelled','CANCEL',now(),1);
+  evidence:=jsonb_build_object('fingerprint',swayp_auto_inspect(s4)->>'fingerprint','cohort','recent_no_history','location',jsonb_build_object('ok',true));
+  r:=swayp_emission_claim(a,o4,s4::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence,'[{"codbar":"TEST","disponible":50}]',now());
+  if r->>'error'<>'Piloto desactivado' then raise exception 'pilot flag bypass: %',r; end if;
+  update swayp_auto_settings set pilot_enabled=true where org_id=org;
+  r:=swayp_emission_claim(a,o4,s4::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence||'{"location":{"ok":false}}','[{"codbar":"TEST","disponible":50}]',now());
+  if r->>'error'<>'El pedido no cumple el piloto sin historial' then raise exception 'location bypass: %',r; end if;
+  r:=swayp_emission_claim(a,o4,s4::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence,'[{"codbar":"TEST","disponible":50}]',now());
+  if not r ? 'id' then raise exception 'pilot claim failed: %',r; end if;
+  evidence:=jsonb_build_object('fingerprint',swayp_auto_inspect(s5)->>'fingerprint','cohort','recent_no_history','location',jsonb_build_object('ok',true));
+  r:=swayp_emission_claim(b,o5,s5::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence,'[{"codbar":"TEST","disponible":50}]',now());
+  if r->>'error'<>'Piloto: cupo diario alcanzado' then raise exception 'pilot cap not shared across stores: %',r; end if;
+  if (select attempts from swayp_auto_metrics where org_id=org and cohort='recent_no_history')<>1 then raise exception 'cohort metrics missing'; end if;
+end $$;
+set local role authenticated;
+do $$ begin
+  if (select sum(attempts) from swayp_auto_metrics)<>2 then raise exception 'metrics bypass RLS'; end if;
+end $$;
+reset role;
 rollback;
