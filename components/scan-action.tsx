@@ -53,6 +53,7 @@ interface Props {
   onPending?: (code: string) => void;
   /** Incluye la lectura en curso y las que esperan; permite refrescar al vaciar la cola. */
   onPendingCountChange?: (count: number) => void;
+  onCameraOpenChange?: (open: boolean) => void;
   /** Primera vista mínima: sin párrafo de ayuda (va al `title` del botón), campo siempre visible. */
   compact?: boolean;
   /** La cámara sigue abierta tras cada lectura (QR en serie) y enseña `progress`. */
@@ -70,7 +71,7 @@ function lineNeedsAttention(line: ScanAssignLine): boolean {
   return ["desconocido", "no_elegible", "bloqueado_efectivo", "programado_otro_dia"].includes(line.status);
 }
 
-export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, onPending, onPendingCountChange, compact = false, continuous = false, progress, look = "default" }: Props) {
+export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, onPending, onPendingCountChange, onCameraOpenChange, compact = false, continuous = false, progress, look = "default" }: Props) {
   const plan = scanActionPlan(context);
   const [pending, setPending] = useState(0);
   const reportPendingCount = useEffectEvent((count: number) => onPendingCountChange?.(count));
@@ -82,6 +83,8 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
   const scanIssues = Object.entries(failedReads).filter(([key]) => key.startsWith(`${scanScope}:`)).map(([, text]) => text);
   const busy = pending > 0;
   const [cameraOpen, setCameraOpen] = useState(false);
+  const reportCameraOpen = useEffectEvent((open: boolean) => onCameraOpenChange?.(open));
+  useEffect(() => { reportCameraOpen(cameraOpen); }, [cameraOpen]);
   // Última lectura, para decirla dentro de la cámara sin cerrarla.
   const [lastRead, setLastRead] = useState<{ ok: boolean; text: string } | null>(null);
   const reportResult = (r: ScanActionResult, code: string) => {

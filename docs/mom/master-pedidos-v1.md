@@ -6696,8 +6696,9 @@ Al volver a la app después de ocultarla, se vuelve a abrir la cámara.
 **Agregar pedidos dentro de la caja (01-10-2026).** El paso de Rutas también
 usa escaneo continuo: muestra «Asignando…» desde la lectura y cuenta únicamente
 los paquetes confirmados de la tanda, sin duplicar un paquete repetido. No
-cierra la cámara al guardar; actualiza la caja una vez al vaciar la cola,
-tras una pausa de 250 ms. Mientras quedan guardados pendientes no se cambia
+cierra la cámara al guardar; actualiza la caja una vez al cerrar la cámara
+y vaciar la cola, tras una pausa de 250 ms. Con lector o ingreso manual, basta
+con vaciar la cola. Mientras quedan guardados o la actualización pendientes no se cambia
 de paso ni se ejecutan correcciones de otras filas. La autenticación del
 cotejo se comparte solo dentro de cada operación; las búsquedas conservan
 RLS. La asignación reutiliza el identificador del proveedor durante la toma
