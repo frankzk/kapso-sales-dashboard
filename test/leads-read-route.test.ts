@@ -62,6 +62,7 @@ describe("independent leads endpoint", () => {
     ["searchLeads", [["invalid-store"], "999"]],
     ["searchLeads", [[id], "x".repeat(201)]],
     ["loadLeadConversation", [id, null, "true"]],
+    ["loadLeadConversation", [id, null, false, "true"]],
     ["loadLeadCustomerHistory", [id, "extra argument"]],
   ])("rejects mutations and malformed arguments (%s)", async (operation, args) => {
     expect((await POST(request(operation as string, args as unknown[]))).status).toBe(400);
@@ -90,6 +91,12 @@ describe("independent leads endpoint", () => {
     mocks.conversation.mockResolvedValue({ messages: [] });
     await POST(request("loadLeadConversation", [id, null, false]));
     expect(mocks.conversation).toHaveBeenCalledWith(id, undefined, false);
+  });
+
+  it("accepts the optional active poll flag while retaining the existing authorization path", async () => {
+    mocks.conversation.mockResolvedValue({ messages: [] });
+    expect((await POST(request("loadLeadConversation", [id, "thread", false, true]))).status).toBe(200);
+    expect(mocks.conversation).toHaveBeenCalledWith(id, "thread", false, true);
   });
 
   it("finishes a search while a slow history request is still pending", async () => {

@@ -16,8 +16,8 @@ describe("Leads drawer performance paths", () => {
   it("paints the known active Kapso thread before discovering older sessions", () => {
     const actions = read("app", "dashboard", "leads", "actions.ts");
 
-    expect(actions).toContain("if (!includeOlder && !conversationId && storedId)");
-    expect(actions).toContain("fetchConversationTranscript({ apiKey, fetchImpl }, storedId, 1)");
+    expect(actions).toContain("if (!includeOlder && storedId && (!conversationId || knownActivePoll))");
+    expect(actions).toContain("fetchConversationTranscript({ apiKey, fetchImpl }, storedId, knownActivePoll ? 2 : 1)");
   });
 
   it("keeps call saves local and WhatsApp sends optimistic", () => {

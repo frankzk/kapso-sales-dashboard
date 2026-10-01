@@ -4,6 +4,16 @@ import { loadLeadConversation, loadLeadCustomerHistory, searchLeads } from "@/li
 afterEach(() => vi.unstubAllGlobals());
 
 describe("leads browser transport", () => {
+  it("sends the active poll flag independently of request cancellation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ messages: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    await loadLeadConversation("lead", "thread", false, controller.signal, true);
+    expect(fetchMock).toHaveBeenCalledWith("/api/leads/read", expect.objectContaining({
+      signal: controller.signal,
+      body: JSON.stringify({ operation: "loadLeadConversation", args: ["lead", "thread", false, true] }),
+    }));
+  });
   it("dispatches a new read immediately while another is waiting", async () => {
     let release!: (response: Response) => void;
     const slow = new Promise<Response>((resolve) => { release = resolve; });
