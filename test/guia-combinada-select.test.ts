@@ -3,7 +3,7 @@
 // baja el rótulo interno y la combinada solo existía en el drawer.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { pickCombinadaOutputs, type CombinadaCandidate } from "@/lib/labels/guia-combinada-select";
+import { hasCombinedGuide, pickCombinadaOutputs, type CombinadaCandidate } from "@/lib/labels/guia-combinada-select";
 
 const salida = (over: Partial<CombinadaCandidate>): CombinadaCandidate => ({
   id: "s1",
@@ -46,19 +46,48 @@ describe("pickCombinadaOutputs", () => {
   });
 });
 
-describe("las piezas", () => {
-  it("la ruta acepta pedidos y dice cuántos no tenían guía de Tanders", () => {
-    const route = readFileSync("app/api/pedidos/guia-combinada/route.ts", "utf8");
-    expect(route).toContain('request.nextUrl.searchParams.get("orders")');
-    expect(route).toContain("pickCombinadaOutputs(requestedOrders");
-    expect(route).toContain('"x-combinadas-omitidas"');
+describe("Shalom también tiene guía combinada (su etiqueta embebida)", () => {
+  it("solo Tanders y Shalom la tienen; Olva y los demás no", () => {
+    expect(hasCombinedGuide("tanders")).toBe(true);
+    expect(hasCombinedGuide("shalom")).toBe(true);
+    for (const courier of ["olva", "aliclik", "propio", "fenix", "axel", "", null]) {
+      expect(hasCombinedGuide(courier), String(courier)).toBe(false);
+    }
   });
 
-  it("la barra en lote del Master tiene el botón y solo lee (no crea salidas)", () => {
+  it("de Shalom, solo la guía creada por API: la del Excel no tiene PDF que embeber", () => {
+    const shalom = (over: Partial<CombinadaCandidate>) => salida({ courier: "shalom", shalom_ose_id: 991, ...over });
+    expect(pickCombinadaOutputs(["o1"], [shalom({})], "shalom").shipmentIds).toEqual(["s1"]);
+    expect(pickCombinadaOutputs(["o1"], [shalom({ shalom_ose_id: null })], "shalom").missingOrderIds).toEqual(["o1"]);
+    // Cada courier lee solo sus salidas.
+    expect(pickCombinadaOutputs(["o1"], [shalom({})], "tanders").shipmentIds).toEqual([]);
+  });
+});
+
+describe("las piezas", () => {
+  it("las dos rutas aceptan pedidos y dicen cuántos no tenían guía", () => {
+    const tanders = readFileSync("app/api/pedidos/guia-combinada/route.ts", "utf8");
+    expect(tanders).toContain('request.nextUrl.searchParams.get("orders")');
+    expect(tanders).toContain('pickCombinadaOutputs(requestedOrders, (candidates ?? []) as CombinadaCandidate[], "tanders")');
+    expect(tanders).toContain('"x-combinadas-omitidas"');
+    const shalom = readFileSync("app/api/shalom/rotulos/route.ts", "utf8");
+    expect(shalom).toContain('pickCombinadaOutputs(orderIds, rows as CombinadaCandidate[], "shalom")');
+    expect(shalom).toContain('"x-combinadas-omitidas"');
+    expect(shalom).toContain('"x-combinadas-fallidas"');
+  });
+
+  it("el rótulo de Shalom del drawer y el del lote se componen con la MISMA función", () => {
+    expect(readFileSync("app/api/shalom/rotulo/[shipmentId]/route.ts", "utf8")).toContain("composeShalomRotulo(");
+    expect(readFileSync("app/api/shalom/rotulos/route.ts", "utf8")).toContain("composeShalomRotulo(");
+  });
+
+  it("la barra solo ofrece el botón si la selección tiene Tanders o Shalom, y solo lee", () => {
     const master = readFileSync("components/orders-master.tsx", "utf8");
-    expect(master).toContain("Guías combinadas Tanders (PDF)");
+    expect(master).toContain("Guías combinadas (PDF)");
+    expect(master).not.toContain("Guías combinadas Tanders (PDF)");
+    expect(master).toContain("{combinedCount > 0 && (");
     const fn = master.slice(master.indexOf("const downloadCombined"), master.indexOf("// Crear salidas y, si salió alguna"));
-    expect(fn).toContain("downloadCombinadas(Array.from(selectedIds))");
+    expect(fn).toContain("downloadCombinadas(courier, ids)");
     expect(fn).not.toContain("resolveLabelsForOrders");
   });
 });

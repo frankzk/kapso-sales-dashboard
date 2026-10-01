@@ -16,6 +16,7 @@
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useTransition, type ComponentType, type KeyboardEvent, type SVGProps } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import {
   NON_DELIVERY_REASONS,
   PAYMENT_METHODS,
@@ -113,6 +114,8 @@ type RiderRouteScreenProps = {
   today?: string;
   /** Modo de recojo (0185): en «confirmar» cada parada nace «por confirmar». */
   pickupMode?: RiderPickupMode;
+  /** Puede reportar otro día mientras la caja de hoy sigue pendiente. */
+  receptionPending?: boolean;
 };
 
 export function RiderRouteScreen(props: RiderRouteScreenProps) {
@@ -137,6 +140,7 @@ function RiderRouteScreenInner({
   vocabulary,
   today,
   pickupMode,
+  receptionPending,
 }: RiderRouteScreenProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -274,6 +278,11 @@ function RiderRouteScreenInner({
           <RouteCount label="Entregados" value={totals.entregados} active={statusFilter === "entregado"} onClick={() => toggleStatus("entregado")} />
           <RouteCount label="No entregados" value={totals.noEntregados} active={statusFilter === "no_entregado"} onClick={() => toggleStatus("no_entregado")} />
         </div>
+        {receptionPending && !coordinator && (
+          <Link href="/reparto" className={cn("mt-3 inline-flex min-h-12 w-full items-center justify-center rounded-md px-3 text-sm font-semibold", RIDER_SECONDARY)}>
+            Volver a recibir mi caja
+          </Link>
+        )}
         {mode === "confirmar" && unconfirmed > 0 && !coordinator && (
           <div className="mt-3">
             <button

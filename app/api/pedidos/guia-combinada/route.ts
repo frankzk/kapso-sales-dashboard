@@ -80,7 +80,7 @@ export async function GET(request: NextRequest) {
       .select("id,order_id,courier,delivery_status,output_number")
       .in("order_id", requestedOrders)
       .eq("courier", "tanders");
-    const picked = pickCombinadaOutputs(requestedOrders, (candidates ?? []) as CombinadaCandidate[]);
+    const picked = pickCombinadaOutputs(requestedOrders, (candidates ?? []) as CombinadaCandidate[], "tanders");
     shipmentIds = picked.shipmentIds;
     missingOrders = picked.missingOrderIds.length;
     if (!shipmentIds.length) {

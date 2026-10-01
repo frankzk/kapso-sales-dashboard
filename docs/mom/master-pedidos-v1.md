@@ -6695,6 +6695,15 @@ paradas se crean solo para lo aceptado. La ruta aparece recién con la custodia
 cambiada. Un paquete ya recibido no se rechaza desde el teléfono: lo retira el
 supervisor.
 
+**Reportes anteriores sin recibir la caja de hoy (01-10-2026).** En modo
+`exigir`, «Recibir mi caja» permite elegir una ruta propia de un día anterior
+a hoy en Lima para completar sus reportes. La selección explícita de esa ruta
+no exige escanear la carga pendiente de hoy; sus permisos de reporte y cierre
+siguen vigentes (una ruta cerrada continúa siendo de consulta). Al volver a la
+ruta de hoy o a `/reparto`, se muestra otra vez la recepción mientras quede
+pendiente. Elegir otro día no recibe paquetes, no cambia custodia ni elimina
+historial. Un id de ruta ajeno, inválido o sin acceso no evita el bloqueo.
+
 **La verificación del motorizado tiene tres modos, y se deciden en datos.**
 `logistics_providers.rider_pickup_mode` (0185; reemplaza el booleano
 `rider_pickup_check_required` de 0183, migrado `true`→`exigir` y
