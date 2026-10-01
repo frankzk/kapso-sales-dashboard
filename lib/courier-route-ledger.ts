@@ -9,6 +9,7 @@
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { activeDispatchItems } from "@/lib/dispatch";
 import type { DispatchManifestState } from "@/lib/dispatch";
+import { allCourierRows } from "@/lib/courier-flow";
 
 export interface CourierLedgerRow {
   routeId: string;
@@ -37,6 +38,8 @@ export interface CourierLedgerRow {
   returnsDue: number;
   /** De esos, los ya recibidos en oficina (`returned_to_office`, 0188). */
   returnsDone: number;
+  /** Pedidos que coinciden con el código buscado, solo en resultados de búsqueda. */
+  matchedOrders?: string[];
 }
 
 /** Un «No entregado» que sigue en la caja del motorizado, esperando volver. */
@@ -88,6 +91,11 @@ export const LEDGER_SITUATION_LABELS: Record<CourierLedgerSituation, string> = {
   liquidada: "Liquidada",
 };
 
+export function ledgerIsOpen(row: Pick<CourierLedgerRow, "routeStatus" | "manifestState" | "settlementStatus">): boolean {
+  const situation = ledgerSituation(row);
+  return situation !== "cerrada" && situation !== "liquidada";
+}
+
 interface RouteRowLite {
   id: string;
   rider_id: string;
@@ -100,16 +108,24 @@ interface RouteRowLite {
  * Rutas de reparto con su caja. Sin `day` trae las últimas `limit` (hoy
  * primero); con `day` trae solo ese día, sin tope práctico.
  */
-export async function getCourierRouteLedger(opts: { day?: string | null; limit?: number } = {}): Promise<CourierLedgerRow[]> {
+export async function getCourierRouteLedger(opts: { day?: string | null; limit?: number; openOnly?: boolean; routeIds?: string[] } = {}): Promise<CourierLedgerRow[]> {
+  if (opts.routeIds && !opts.routeIds.length) return [];
   const sb = await createServerSupabase();
-  let query = sb.from("delivery_routes").select("id,rider_id,route_date,status,settlement_id");
-  if (opts.day) query = query.eq("route_date", opts.day);
-  const { data: routeRows, error } = await query
-    .order("route_date", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(opts.day ? 500 : (opts.limit ?? 150));
-  if (error) throw new Error(error.message);
-  const routes = (routeRows ?? []) as RouteRowLite[];
+  const query = () => {
+    let q = sb.from("delivery_routes").select("id,rider_id,route_date,status,settlement_id");
+    if (opts.day) q = q.eq("route_date", opts.day);
+    if (opts.openOnly) q = q.neq("status", "cerrada");
+    if (opts.routeIds) q = q.in("id", opts.routeIds);
+    return q.order("route_date", { ascending: false }).order("created_at", { ascending: false }).order("id");
+  };
+  let routes: RouteRowLite[];
+  if (opts.openOnly || opts.routeIds) {
+    routes = await allCourierRows<RouteRowLite>((from, to) => query().range(from, to));
+  } else {
+    const { data, error } = await query().limit(opts.day ? 500 : (opts.limit ?? 150));
+    if (error) throw new Error(error.message);
+    routes = (data ?? []) as RouteRowLite[];
+  }
   if (!routes.length) return [];
 
   const routeIds = routes.map((r) => r.id);
@@ -127,6 +143,9 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
     ),
     settlementIds.length ? sb.from("rider_settlements").select("id,status").in("id", settlementIds) : Promise.resolve({ data: [] as { id: string; status: string }[] }),
   ]);
+  for (const result of [ridersRes, settlementsRes]) {
+    if ("error" in result && result.error) throw new Error(result.error.message);
+  }
 
   const riderName = new Map(((ridersRes.data ?? []) as { id: string; full_name: string }[]).map((r) => [r.id, r.full_name]));
   const settlementStatus = new Map(((settlementsRes.data ?? []) as { id: string; status: string }[]).map((s) => [s.id, s.status]));
@@ -235,7 +254,7 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
   // Una ruta abierta sin paradas ni paquetes no es una ruta: es la caja que
   // quedó vacía tras «Quitar» o «No lo llevo». Las cerradas o liquidadas se
   // conservan aunque queden en cero, porque son historia.
-  return rows.filter((r) => r.assignedCount > 0 || r.routeStatus === "cerrada" || r.settlementStatus != null);
+  return rows.filter((r) => (!opts.openOnly || ledgerIsOpen(r)) && (r.assignedCount > 0 || r.routeStatus === "cerrada" || r.settlementStatus != null));
 }
 
 /**

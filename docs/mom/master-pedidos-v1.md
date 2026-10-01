@@ -7058,6 +7058,25 @@ y por fecha (Hoy · un día concreto · Todas) con el mismo picker de Despacho
 del día. «Hoy» y «Todas» filtran en el navegador sobre las últimas 150 rutas;
 un día concreto lo trae el servidor (`?dia=`), porque puede ser anterior.
 
+**Rutas abiertas y búsqueda por código (01-10-2026).** «Solo abiertas» excluye
+las situaciones Cerrada y Liquidada, usando la misma regla de situación de la
+fila. Al activarlo se muestran todas las fechas y se consultan todas las rutas
+abiertas, sin el tope de las últimas 150. Se puede combinar con motorizado y día.
+«Quitar filtros» restablece Hoy y elimina también la búsqueda y Solo abiertas.
+
+El buscador acepta número de pedido (con o sin `#`, también un fragmento de al
+menos tres caracteres), guía, código de salida o QR. Consulta las identidades
+del pedido y sus paradas y cajas con RLS, sin limitarse a las rutas cargadas.
+Al buscar restablece Todas las fechas y Todos los motorizados, conserva Solo
+abiertas si estaba activado y avisa si ese filtro oculta coincidencias cerradas.
+Muestra el código encontrado junto al motorizado, fecha y situación, con acceso
+a la caja y a «Reparto y liquidación». Si hubo varios intentos, conserva sus
+rutas en orden de fecha; no elige una a ciegas. Las cajas canceladas y los ítems
+retirados o no recogidos no cuentan como asignación activa. Si el fragmento
+coincide con más de 30 pedidos o salidas, pide precisar en vez de mostrar una
+muestra como resultado completo. Buscar y filtrar no cambian pedidos ni rutas.
+La URL conserva `buscar` y `abiertas=1` al abrir y cerrar los paneles.
+
 **Cada fila** dice motorizado y carga, la situación, asignados / armados /
 cotejados / recibidos, efectivo previsto (§29.9), avance y liquidación. La
 situación es una sola, del momento más temprano al más tardío: borrador →
