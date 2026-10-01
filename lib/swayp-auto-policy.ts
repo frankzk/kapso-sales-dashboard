@@ -53,7 +53,7 @@ export const AUTO_REASONS: Record<string, string> = {
   no_mapping: "Falta vínculo de algún producto con Swayp", no_stock: "Sin stock completo en Swayp",
   api_disabled: "Bodega sin emisión por API", created: "Guía Swayp creada", review: "Emisión pendiente de revisión",
   emission_blocked: "Emisión detenida por tope, reserva o cambio de datos",
-  pilot_limits: "Piloto: requiere hasta 7 días, un intento y máximo S/199",
+  pilot_limits: "Piloto: requiere hasta 7 días, un intento y máximo S/500",
   pilot_location: "Piloto: ubicación o referencia sin corroborar",
   pilot_cap: "Piloto: cupo de 3 intentos diarios alcanzado",
   payment_review: "Tiene un pago registrado: revisar saldo antes de reenviar",
@@ -93,7 +93,7 @@ export function evaluateAutoDispatch(s: AutoSnapshot, c: AutoSettings, now: Date
   const cohort: AutoCohort = prior ? "prior_delivery" : "recent_no_history";
   if (!prior && !c.pilot_enabled) return no("no_history");
   if (!prior) {
-    if (age > 7 || g.aliclik_attempts !== 1 || Number(o.total_amount) > 199) return no("pilot_limits");
+    if (age > 7 || g.aliclik_attempts !== 1 || Number(o.total_amount) > 500) return no("pilot_limits");
     // Presence alone is not corroboration: the server also resolves these
     // coordinates through Aliclik and requires the exact destination ubigeo.
     if (!address.address2?.trim() || !Number.isFinite(g.latitude) || !Number.isFinite(g.longitude)
