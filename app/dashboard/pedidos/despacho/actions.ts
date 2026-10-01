@@ -69,10 +69,10 @@ const ORDER_NAME_SCAN = /^[A-Za-z0-9][A-Za-z0-9-]{2,31}$/;
  * del rótulo lleva el número de pedido (MOM §4), que puede tener varias salidas.
  * Quien llama decide con `pickDispatchScanTarget` cuál corresponde a su tarea.
  */
-async function findScanCandidates(rawCode: string): Promise<DispatchShipment[]> {
+async function findScanCandidates(rawCode: string, auth?: Awaited<ReturnType<typeof currentUser>>): Promise<DispatchShipment[]> {
   const code = normalizeDispatchScan(rawCode);
   if (!code) return [];
-  const { sb } = await currentUser();
+  const { sb } = auth ?? await currentUser();
   const attempts: Array<{ column: string; value: string }> = [];
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(code)) {
     attempts.push({ column: "qr_token", value: code });
@@ -108,8 +108,8 @@ function ambiguousScanError(options: DispatchShipment[]): string {
   return `Ese pedido tiene ${options.length} salidas (${codes}). Escanea el QR o el código de la salida.`;
 }
 
-async function visibleManifest(manifestId: string): Promise<DispatchManifest | null> {
-  const { sb } = await currentUser();
+async function visibleManifest(manifestId: string, auth?: Awaited<ReturnType<typeof currentUser>>): Promise<DispatchManifest | null> {
+  const { sb } = auth ?? await currentUser();
   const { data } = await sb
     .from("dispatch_manifests")
     .select("*")
@@ -649,7 +649,11 @@ export async function scanManifestItem(
   const perms = await getMasterPermissions();
   const needed = stage === "office" ? "dispatch.manage" : "dispatch.pickup";
   if (!perms.can(needed)) return { error: "No tienes permiso para realizar este cotejo." };
-  const [manifest, candidates] = await Promise.all([visibleManifest(manifestId), findScanCandidates(code)]);
+  // Una autenticación por lectura, compartida solo dentro de esta operación.
+  // Las búsquedas conservan el cliente del usuario y sus políticas RLS.
+  const auth = await currentUser();
+  const { user } = auth;
+  const [manifest, candidates] = await Promise.all([visibleManifest(manifestId, auth), findScanCandidates(code, auth)]);
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
   if (!candidates.length) return { error: SCAN_NOT_FOUND };
   if (manifest.state === "cancelled") return { error: "Esa ruta ya está cerrada." };
@@ -678,7 +682,6 @@ export async function scanManifestItem(
   const item = (rows ?? []).find((row) => row.shipment_id === shipment.id);
   if (!item) return { error: "Ese paquete no pertenece a esta ruta." };
 
-  const { user } = await currentUser();
   if (stage === "pickup") {
     const { data: all } = await admin
       .from("dispatch_manifest_items")

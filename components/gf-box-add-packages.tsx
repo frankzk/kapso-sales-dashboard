@@ -8,7 +8,7 @@
 // elegir: la caja ya es de uno. Antes aquí solo había un enlace a otra
 // página.
 
-import { useState, useTransition } from "react";
+import { useEffect, useEffectEvent, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import { ScanAction } from "@/components/scan-action";
 import { moveManifestItem, scanAssignToRider, type ScanAssignLine } from "@/app/dashboard/courier/actions";
@@ -43,14 +43,40 @@ function presentation(l: ScanAssignLine, riderName: string): { text: string; tex
   }
 }
 
-export function GfBoxAddPackages({ manifest, canManage, refresh }: {
+export function GfBoxAddPackages({ manifest, canManage, refresh, onBusy }: {
   manifest: DispatchManifest;
   canManage: boolean;
   refresh: (preferId?: string | null) => Promise<void>;
+  onBusy?: (busy: boolean) => void;
 }) {
   const [lines, setLines] = useState<ScanAssignLine[]>([]);
   const [overrideCash, setOverrideCash] = useState(false);
   const [pending, start] = useTransition();
+  const [pendingScans, setPendingScans] = useState(0);
+  const [confirmedIds, setConfirmedIds] = useState<string[]>([]);
+  const [revision, setRevision] = useState(0);
+  const [refreshedRevision, setRefreshedRevision] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const busy = pending || pendingScans > 0;
+  const unsettled = busy || revision > refreshedRevision;
+  useEffect(() => { onBusy?.(unsettled); }, [unsettled, onBusy]);
+  const refreshBox = useEffectEvent(async (savedRevision: number) => {
+    setRefreshing(true);
+    try { await refresh(manifest.id); setRefreshError(null); }
+    catch { setRefreshError("Los pedidos se guardaron, pero no se pudo actualizar la caja. Vuelve a abrirla para actualizarla."); }
+    finally { setRefreshedRevision(savedRevision); setRefreshing(false); }
+  });
+  useEffect(() => {
+    // Una pausa entre paquetes no termina la tanda de cámara. La recarga
+    // completa espera a «Listo» y a que respondan todas las lecturas.
+    if (busy || cameraOpen || refreshing || revision === refreshedRevision) return;
+    const timer = window.setTimeout(() => {
+      void refreshBox(revision);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [busy, cameraOpen, refreshing, revision, refreshedRevision]);
   const riderName = manifest.driver_name ?? "el motorizado";
   const riderId = manifest.rider_id ?? null;
 
@@ -60,7 +86,11 @@ export function GfBoxAddPackages({ manifest, canManage, refresh }: {
 
   const push = (line: ScanAssignLine) => {
     setLines((cur) => [line, ...cur.filter((l) => l.code !== line.code)].slice(0, 30));
-    if (line.status === "asignado" || line.status === "ya_en_caja") void refresh(manifest.id);
+    if (line.status === "asignado" || line.status === "ya_en_caja") {
+      const id = line.shipmentId ?? line.orderId ?? line.code;
+      setConfirmedIds((current) => current.includes(id) ? current : [...current, id]);
+      setRevision((current) => current + 1);
+    }
   };
 
   return (
@@ -68,12 +98,18 @@ export function GfBoxAddPackages({ manifest, canManage, refresh }: {
       <ScanAction
         context="supervisor_asignacion"
         compact
+        continuous
         look="ops"
         disabled={pending}
         assign={{ orgId: manifest.org_id, riderId, scheduledFor: manifest.route_date, overrideCash }}
+        progress={{ done: confirmedIds.length, label: `${confirmedIds.length} confirmados en esta tanda` }}
+        onPendingCountChange={setPendingScans}
+        onCameraOpenChange={setCameraOpen}
+        onPending={(code) => push({ code, status: "procesando", orderId: null, orderName: null, shipmentId: null, manifestId: manifest.id, riderName, amount: null, message: "Asignando…" })}
         onResult={(r) => { if (r.line) push(r.line); }}
       />
       <p className="text-[13px] text-ink-500">Cada escaneo toma el pedido y lo pone en esta caja. Después se verifica en «Verificar caja».</p>
+      {refreshError && <p role="alert" className="text-sm text-crit-fg">{refreshError}</p>}
       {lines.length > 0 && (
         <ul className="max-h-72 divide-y divide-line overflow-auto rounded-lg ring-1 ring-line" aria-live="polite">
           {lines.map((l, i) => {
@@ -86,13 +122,13 @@ export function GfBoxAddPackages({ manifest, canManage, refresh }: {
                 </span>
                 {l.amount != null && <span className="shrink-0 text-xs tabular-nums text-ink-600">{money(l.amount)}</span>}
                 {l.status === "en_otra_caja" && l.manifestId && l.shipmentId && (
-                  <button type="button" disabled={pending} onClick={() => start(async () => {
+                  <button type="button" disabled={busy} onClick={() => start(async () => {
                     const res = await moveManifestItem(manifest.org_id, l.manifestId!, l.shipmentId!, riderId, `Escaneado en la caja de ${riderName}`);
                     push({ ...l, status: res.error ? "no_elegible" : "asignado", riderName, message: res.error ?? "" });
                   })} className={AMEND}>Mover</button>
                 )}
                 {l.status === "programado_otro_dia" && (
-                  <button type="button" disabled={pending} onClick={() => start(async () => {
+                  <button type="button" disabled={busy} onClick={() => start(async () => {
                     push(await scanAssignToRider(manifest.org_id, riderId, l.code, { overrideCash, scheduledFor: manifest.route_date, confirmProgrammed: true }));
                   })} title={l.message} className={AMEND}>Asignar igual</button>
                 )}

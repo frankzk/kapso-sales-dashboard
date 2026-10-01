@@ -6693,6 +6693,18 @@ se puede reintentar y solo desaparece del aviso cuando se confirma correctamente
 La cámara no se cierra automáticamente mientras haya confirmaciones pendientes.
 Al volver a la app después de ocultarla, se vuelve a abrir la cámara.
 
+**Agregar pedidos dentro de la caja (01-10-2026).** El paso de Rutas también
+usa escaneo continuo: muestra «Asignando…» desde la lectura y cuenta únicamente
+los paquetes confirmados de la tanda, sin duplicar un paquete repetido. No
+cierra la cámara al guardar; actualiza la caja una vez al cerrar la cámara
+y vaciar la cola, tras una pausa de 250 ms. Con lector o ingreso manual, basta
+con vaciar la cola. Mientras quedan guardados o la actualización pendientes no se cambia
+de paso ni se ejecutan correcciones de otras filas. La autenticación del
+cotejo se comparte solo dentro de cada operación; las búsquedas conservan
+RLS. La asignación reutiliza el identificador del proveedor durante la toma
+y consulta en paralelo los datos independientes, conservando la validación
+de proveedor activo, custodia, programación y efectivo antes de asignar.
+
 Si el pedido se tomó días atrás y su fecha prevista ya pasó, la caja no es la de
 aquel día (cuya ruta está liquidada) sino la de hoy o la elegida: la fecha
 prevista se mueve hacia adelante y queda `logistics_request_rescheduled` en el

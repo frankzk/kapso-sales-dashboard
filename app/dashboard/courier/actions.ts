@@ -943,6 +943,7 @@ async function takeOrdersCore(
   orderIds: string[],
   opts: { scheduledFor?: string | null; dispatchDay?: string | null; tandersConfirmations?: TandersConfirmations },
   fx: SideEffects,
+  scanContext?: { gfProvider: { id: string } | null },
 ): Promise<TakeCourierOrdersResult> {
   const uniqueOrderIds = [...new Set(orderIds.filter(Boolean))];
   if (!uniqueOrderIds.length) {
@@ -961,12 +962,12 @@ async function takeOrdersCore(
   const accepted: TakeCourierOrdersResult["accepted"] = [];
   const alreadyAccepted: string[] = [];
   const failed: TakeCourierOrdersResult["failed"] = [];
-  const { data: gfProvider } = await admin
+  const gfProvider = scanContext ? scanContext.gfProvider : (await admin
     .from("logistics_providers")
     .select("id")
     .eq("org_id", orgId)
     .eq("code", "grupo-gf-courier")
-    .maybeSingle();
+    .maybeSingle()).data;
 
   // Secuencial a propósito: cada admisión vuelve a comprobar la configuración
   // vigente y deja su propio resultado. Un pedido inválido no tumba la tanda.
@@ -2540,14 +2541,19 @@ export async function scanAssignToRider(
   if ("error" in auth) return { ...base, status: "no_elegible", message: auth.error };
   if (!auth.canManageDispatch) return { ...base, status: "no_elegible", message: "No tienes permiso para organizar rutas." };
   const admin = createAdminSupabase();
-  const { data: rider } = await admin.from("riders").select("id,full_name,courier").eq("id", riderId).eq("org_id", orgId).eq("active", true).maybeSingle();
+  // Lecturas independientes, después de comprobar permisos. El proveedor se
+  // reutiliza durante esta toma; asignar vuelve a validar su configuración activa.
+  const [{ data: rider }, found, { data: gfProvider }] = await Promise.all([
+    admin.from("riders").select("id,full_name,courier").eq("id", riderId).eq("org_id", orgId).eq("active", true).maybeSingle(),
+    lookupDispatchShipment(code),
+    admin.from("logistics_providers").select("id").eq("org_id", orgId).eq("code", "grupo-gf-courier").maybeSingle(),
+  ]);
   if (!rider || !isGroupGfRiderCourier(rider.courier)) return { ...base, status: "no_elegible", message: "Elige un motorizado activo de Grupo GF." };
 
   // 1) ¿A qué pedido apunta el código? Primero como salida (QR, código de
   // salida, guía); si no, como número de pedido de las tiendas de la org.
   let orderId: string | null = null;
   let shipmentId: string | null = null;
-  const found = await lookupDispatchShipment(code);
   if (found.shipment) {
     orderId = found.shipment.order_id;
     shipmentId = found.shipment.id;
@@ -2561,7 +2567,15 @@ export async function scanAssignToRider(
     return { ...base, message: found.error ?? "Ese pedido tiene varias salidas: escanea el QR de la caja." };
   }
   if (!orderId) return { ...base, message: "No encontramos un pedido con ese QR, guía o número." };
-  const { data: om } = await admin.from("order_master").select("order_name,order_total,store_id").eq("order_id", orderId).maybeSingle();
+  const [{ data: om }, { data: active }] = await Promise.all([
+    admin.from("order_master").select("order_name,order_total,store_id").eq("order_id", orderId).maybeSingle(),
+    shipmentId ? admin
+      .from("dispatch_manifest_items")
+      .select("id,manifest_id,office_checked_at,dispatch_manifests!inner(id,rider_id,driver_name,route_date,state)")
+      .eq("shipment_id", shipmentId)
+      .is("removed_at", null)
+      .maybeSingle() : Promise.resolve({ data: null }),
+  ]);
   const line: ScanAssignLine = { ...base, orderId, shipmentId, orderName: (om?.order_name as string | null) ?? null, amount: om?.order_total == null ? null : Number(om.order_total), riderName: rider.full_name };
 
   // El día de la caja que se arma: hoy, o el que eligió el supervisor.
@@ -2570,12 +2584,6 @@ export async function scanAssignToRider(
 
   // 2) ¿Ya está en una caja activa?
   if (shipmentId) {
-    const { data: active } = await admin
-      .from("dispatch_manifest_items")
-      .select("id,manifest_id,office_checked_at,dispatch_manifests!inner(id,rider_id,driver_name,route_date,state)")
-      .eq("shipment_id", shipmentId)
-      .is("removed_at", null)
-      .maybeSingle();
     const box = (active as { id: string; manifest_id: string; office_checked_at: string | null; dispatch_manifests: { rider_id: string | null; driver_name: string | null; route_date: string; state: string } } | null) ?? null;
     // Una caja de un día ANTERIOR (lib/gf-scan-return.ts): escanearlo en
     // oficina prueba que volvió. Un «No entregado» se recibe y se asigna en el
@@ -2638,11 +2646,10 @@ export async function scanAssignToRider(
   try {
   // Recibido de una caja vieja: el Master se entera al final, con lo demás.
   if (receivedFrom) await fx.recompute([orderId]);
-  const taken = await takeOrdersCore(auth, orgId, [orderId], { dispatchDay: opts.scheduledFor ?? limaClock().day }, fx);
+  const taken = await takeOrdersCore(auth, orgId, [orderId], { dispatchDay: opts.scheduledFor ?? limaClock().day }, fx, { gfProvider });
   if (taken.failed.length) return { ...line, status: "no_elegible", message: receivedNote + taken.failed[0]!.error };
   if (!taken.accepted.length && !taken.alreadyAccepted.length) return { ...line, status: "no_elegible", message: receivedNote + (taken.error ?? "No se pudo tomar el pedido.") };
-  const { data: provider } = await admin.from("logistics_providers").select("id").eq("org_id", orgId).eq("code", "grupo-gf-courier").maybeSingle();
-  const { data: requests } = await admin.from("logistics_requests").select("id").eq("order_id", orderId).eq("provider_id", provider?.id ?? "").in("status", ["accepted", "scheduled"]);
+  const { data: requests } = await admin.from("logistics_requests").select("id").eq("order_id", orderId).eq("provider_id", gfProvider?.id ?? "").in("status", ["accepted", "scheduled"]);
   const requestIds = ((requests ?? []) as { id: string }[]).map((r) => r.id);
   if (!requestIds.length) return { ...line, status: "no_elegible", message: receivedNote + "El pedido se tomó pero no se pudo asignar. Continúa desde la lista." };
   // La programación ya se miró arriba (o se confirmó): no se vuelve a leer.
