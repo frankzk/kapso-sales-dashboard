@@ -65,12 +65,14 @@ import {
   loadLeadCustomerHistory,
   loadLeadDetail,
   loadLeadsInsightsPanel,
-  openLeadDrawer,
   pollLeadsQueue,
-  releaseLead,
-  resolveHandoff,
   searchLeads,
   loadLeadsForAudience,
+} from "@/lib/leads-read-client";
+import {
+  openLeadDrawer,
+  releaseLead,
+  resolveHandoff,
 } from "@/app/dashboard/leads/actions";
 import { claveAnuncio, handleDeAnuncioPara, type AdDeclaration } from "@/lib/ad-products";
 import { cn } from "@/components/ui";
@@ -762,7 +764,7 @@ export function LeadsBoard({
     insightsLoadedAtRef.current = { scopeKey, at: Date.now() };
     void loadLeadsInsightsPanel(scope, timezone, counts.sin_llamar).then((result) => {
       if (alive && !("error" in result)) setInsightsData(result);
-    });
+    }).catch(() => { /* retain the last analytical snapshot on a network failure */ });
     return () => {
       alive = false;
     };
@@ -777,18 +779,26 @@ export function LeadsBoard({
     }
     setSearching(true);
     let alive = true;
+    const controller = new AbortController();
     const t = setTimeout(async () => {
-      const res = await searchLeads(scope, q);
-      if (alive) {
-        setResults(res);
-        setSearching(false);
+      try {
+        const res = await searchLeads(scope, q, controller.signal);
+        if (alive) setResults(res);
+      } catch {
+        if (alive) {
+          setResults(null);
+          setBanner("No se pudo completar la búsqueda. Intenta nuevamente.");
+        }
+      } finally {
+        if (alive) setSearching(false);
       }
     }, 220);
     return () => {
       alive = false;
+      controller.abort();
       clearTimeout(t);
     };
-  }, [query, storeId]);
+  }, [query, scopeKey]);
 
   // Auto-abrir un lead cuando llega ?open=<id> (p. ej. al tocar "Tomar" en el
   // pop-up de Yapes).
@@ -878,32 +888,38 @@ export function LeadsBoard({
   useEffect(() => {
     let alive = true;
     let lastRefreshAt = Date.now();
+    let inFlight = false;
     const check = async () => {
-      if (document.hidden) return;
-      const now = Date.now();
-      if (now - lastRefreshAt >= FORCED_REFRESH_MS) {
-        lastRefreshAt = now;
+      if (!alive || document.hidden || inFlight) return;
+      inFlight = true;
+      try {
+        const now = Date.now();
+        if (now - lastRefreshAt >= FORCED_REFRESH_MS) {
+          lastRefreshAt = now;
+          router.refresh();
+          return;
+        }
+        const next = await pollLeadsQueue(scope).catch(() => null);
+        if (!alive || document.hidden) return;
+        if (next === null) return; // fallo puntual: se reintenta al siguiente tick
+        const decision = decideQueueRefresh({
+          prevSignature: signatureRef.current,
+          nextSignature: next.signature,
+          prevCounts: countsRef.current,
+          nextCounts: next.counts,
+          lastRefreshAt,
+          now: Date.now(),
+        });
+        // «skip» por calma NO adelanta la firma: el siguiente sondeo vuelve a
+        // ver el cambio y recarga cuando toque.
+        if (decision === "skip") return;
+        signatureRef.current = next.signature;
+        countsRef.current = next.counts;
+        lastRefreshAt = Date.now();
         router.refresh();
-        return;
+      } finally {
+        inFlight = false;
       }
-      const next = await pollLeadsQueue(scope).catch(() => null);
-      if (!alive || document.hidden) return;
-      if (next === null) return; // fallo puntual: se reintenta al siguiente tick
-      const decision = decideQueueRefresh({
-        prevSignature: signatureRef.current,
-        nextSignature: next.signature,
-        prevCounts: countsRef.current,
-        nextCounts: next.counts,
-        lastRefreshAt,
-        now: Date.now(),
-      });
-      // «skip» por calma NO adelanta la firma: el siguiente sondeo vuelve a
-      // ver el cambio y recarga cuando toque.
-      if (decision === "skip") return;
-      signatureRef.current = next.signature;
-      countsRef.current = next.counts;
-      lastRefreshAt = Date.now();
-      router.refresh();
     };
     const timer = setInterval(() => void check(), LEADS_LIVE_POLL_MS);
     const onVisible = () => {
@@ -1004,6 +1020,11 @@ export function LeadsBoard({
         }
       });
       return true;
+    } catch {
+      if (activeLeadIdRef.current === leadId) {
+        setBanner("No se pudo cargar el lead. Intenta nuevamente.");
+      }
+      return false;
     } finally {
       setOpeningId((current) => (current === leadId ? null : current));
     }
@@ -1046,7 +1067,7 @@ export function LeadsBoard({
         }
       });
       router.refresh(); // reflect status/queue changes in the list + counts
-    })();
+    })().catch(() => setBanner("No se pudo actualizar el lead. Intenta nuevamente."));
   }
 
   // El popup del aviso de reserva: al aparecer, el foco va a su botón —así un

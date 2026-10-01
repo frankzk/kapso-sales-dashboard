@@ -12,11 +12,10 @@ import { useRouter } from "next/navigation";
 import {
   assignYape,
   claimLead,
-  listStoreVendedoras,
-  listYapeAlerts,
   passYape,
   type YapeAlert,
 } from "@/app/dashboard/leads/actions";
+import { listStoreVendedoras, listYapeAlerts } from "@/lib/leads-read-client";
 
 const POLL_MS = 15_000;
 
@@ -48,15 +47,20 @@ export function YapeAlerts({ enabled = true }: { enabled?: boolean }) {
   const [alerts, setAlerts] = useState<YapeAlert[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const knownRef = useRef<Set<string>>(new Set()); // ids already alerted (to beep only on new)
+  const pollingRef = useRef(false);
 
   const refresh = useCallback(async () => {
     if (!enabled) return;
     if (typeof document !== "undefined" && document.hidden) return;
+    if (pollingRef.current) return;
+    pollingRef.current = true;
     let next: YapeAlert[];
     try {
       next = await listYapeAlerts();
     } catch {
       return; // transient error — keep the current queue, retry next tick
+    } finally {
+      pollingRef.current = false;
     }
     setAlerts(next);
     const hasNew = next.some((a) => !knownRef.current.has(a.id));
@@ -181,7 +185,7 @@ export function YapeAssign({
     let alive = true;
     listStoreVendedoras(storeId).then((v) => {
       if (alive) setVendedoras(v);
-    });
+    }).catch(() => { if (alive) setMsg("No se pudieron cargar las asesoras."); });
     return () => {
       alive = false;
     };
