@@ -1,5 +1,6 @@
 "use server";
 
+import { measureLeadRead, type LeadReadTiming } from "@/lib/leads-read-timing";
 import { randomUUID } from "node:crypto";
 import { getPedidosRecientesPorTelefono } from "@/lib/leads-access";
 import { avisoDuplicado, cuandoLabel } from "@/lib/pedido-duplicado";
@@ -221,16 +222,20 @@ export async function loadLeadCustomerHistory(
 ): Promise<
   { customerHistory: CustomerHistory | null; cartSummary: string | null } | { error: string }
 > {
-  const ctx = await authorizeLead(leadId);
+  return measureLeadRead("history", "history", (timing) => loadLeadCustomerHistoryTimed(leadId, timing));
+}
+
+async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTiming): ReturnType<typeof loadLeadCustomerHistory> {
+  const ctx = await timing.time("authorize", () => authorizeLead(leadId));
   if (!ctx) return { error: "Sin acceso a este lead." };
   const admin = createAdminSupabase();
   const [leadRes, creds] = await Promise.all([
-    admin
+    timing.time("db.lead", () => admin
       .from("leads")
       .select("phone,order_id,source,cart_summary,kapso_conversation_id")
       .eq("id", leadId)
-      .maybeSingle(),
-    getStoreCreds(ctx.storeId, admin),
+      .maybeSingle()),
+    timing.time("db.credentials", () => getStoreCreds(ctx.storeId, admin)),
   ]);
   const lead = leadRes.data as {
     phone: string | null;
@@ -241,19 +246,19 @@ export async function loadLeadCustomerHistory(
   } | null;
   if (!lead) return { error: "No encontrado." };
 
-  const customerHistory = await getCustomerHistory(
+  const customerHistory = await timing.time("db.history", () => getCustomerHistory(
     ctx.storeId,
     lead.phone,
     lead.order_id,
     creds?.shopify_domain ?? null,
-  );
+  ));
   if (customerHistory && lead.phone && creds?.shopify_token) {
     try {
-      const shopOrders = await getCustomerRecentOrders(
-        { domain: creds.shopify_domain, token: creds.shopify_token },
+      const shopOrders = await timing.time("shopify.history", () => getCustomerRecentOrders(
+        { domain: creds.shopify_domain, token: creds.shopify_token!, fetchImpl: timing.fetch("shopify") },
         lead.phone,
         { excludeName: customerHistory.currentOrderName, limit: 3 },
-      );
+      ));
       if (shopOrders.length) customerHistory.recentOrders = shopOrders;
     } catch {
       /* keep the local fallback list */
@@ -265,19 +270,19 @@ export async function loadLeadCustomerHistory(
     try {
       let convId = lead.kapso_conversation_id;
       if (!convId && lead.phone) {
-        const convs = await listConversationsByPhone({ apiKey: creds.kapso_api_key }, lead.phone);
+        const convs = await timing.time("kapso.discovery", () => listConversationsByPhone({ apiKey: creds.kapso_api_key!, fetchImpl: timing.fetch("kapso") }, lead.phone!));
         convId = convs[0]?.id != null ? String(convs[0].id) : null;
       }
       if (convId) {
-        const msgs = await fetchConversationTranscript({ apiKey: creds.kapso_api_key }, convId);
+        const msgs = await timing.time("kapso.transcript", () => fetchConversationTranscript({ apiKey: creds.kapso_api_key!, fetchImpl: timing.fetch("kapso") }, convId!));
         const product = templateProductParam(msgs, creds.browse_template_name);
         if (product) {
           cartSummary = product;
-          await admin
+          await timing.time("db.cart", () => admin
             .from("leads")
             .update({ cart_summary: product })
             .eq("id", leadId)
-            .is("cart_summary", null);
+            .is("cart_summary", null));
         }
       }
     } catch {
@@ -290,7 +295,7 @@ export async function loadLeadCustomerHistory(
   // descubriría el bloqueo al pulsar "Cotizar". Las server actions vuelven a
   // comprobar el permiso antes de escribir — esto es la puerta, no la cerradura.
   if (customerHistory?.currentOrderId) {
-    const perms = await getMasterPermissions();
+    const perms = await timing.time("permissions", () => getMasterPermissions());
     if (!perms.can("aliclik.create_guide")) customerHistory.currentOrderId = null;
   }
 
@@ -1277,6 +1282,13 @@ export async function loadLeadConversation(
   conversationId?: string,
   includeOlder = true,
 ): Promise<LeadConversation> {
+  return measureLeadRead("chat", conversationId ? "selected_thread" : includeOlder ? "history" : "first_paint",
+    (timing) => loadLeadConversationTimed(leadId, conversationId, includeOlder, timing));
+}
+
+async function loadLeadConversationTimed(
+  leadId: string, conversationId: string | undefined, includeOlder: boolean, timing: LeadReadTiming,
+): Promise<LeadConversation> {
   const empty = (reason?: string): LeadConversation => ({
     messages: [],
     threads: [],
@@ -1284,11 +1296,11 @@ export async function loadLeadConversation(
     activePhoneNumberId: null,
     reason,
   });
-  const ctx = await authorizeLead(leadId);
+  const ctx = await timing.time("authorize", () => authorizeLead(leadId));
   if (!ctx) return empty("Sin acceso a este lead.");
-  const outboxPromise = listLeadWhatsappOutbox(createAdminSupabase(), ctx.storeId, leadId).catch(() => []);
+  const outboxPromise = timing.time("db.outbox", () => listLeadWhatsappOutbox(createAdminSupabase(), ctx.storeId, leadId)).catch(() => []);
 
-  const creds = await getStoreCreds(ctx.storeId);
+  const creds = await timing.time("db.credentials", () => getStoreCreds(ctx.storeId));
   const lead = {
     kapso_conversation_id: ctx.kapsoConversationId,
     phone: ctx.phone,
@@ -1296,6 +1308,7 @@ export async function loadLeadConversation(
   };
   if (!creds?.kapso_api_key) return empty("La tienda no tiene Kapso configurado.");
   const apiKey = creds.kapso_api_key;
+  const fetchImpl = timing.fetch("kapso");
 
   // The transcript is the slow part the user waits on. Fetch it for the best-known
   // conversation id CONCURRENTLY with the conversation list (which only drives the
@@ -1309,7 +1322,7 @@ export async function loadLeadConversation(
   // requests the full multi-session context silently right after this response.
   if (!includeOlder && !conversationId && storedId) {
     try {
-      const activeMsgs = await fetchConversationTranscript({ apiKey }, storedId, 1);
+      const activeMsgs = await timing.time("kapso.transcript", () => fetchConversationTranscript({ apiKey, fetchImpl }, storedId, 1));
       const providerMessages = toLeadConversationMessages(activeMsgs);
       reconcileTranscriptStatuses(ctx.storeId, providerMessages);
       const messages = mergeTranscriptWithOutbox(
@@ -1341,10 +1354,10 @@ export async function loadLeadConversation(
   }
 
   const [convs, storedTranscript] = await Promise.all([
-    lead?.phone ? listConversationsByPhone({ apiKey }, lead.phone) : Promise.resolve([]),
-    storedId ? fetchConversationTranscript({ apiKey }, storedId, 2).catch(() => null) : Promise.resolve(null),
+    lead?.phone ? timing.time("kapso.discovery", () => listConversationsByPhone({ apiKey, fetchImpl }, lead.phone!)) : Promise.resolve([]),
+    storedId ? timing.time("kapso.transcript", () => fetchConversationTranscript({ apiKey, fetchImpl }, storedId, 2)).catch(() => null) : Promise.resolve(null),
   ]);
-  const labels = await getWaNumbers(convs.map((c) => (c.phone_number_id as string | null) ?? null));
+  const labels = await timing.time("db.labels", () => getWaNumbers(convs.map((c) => (c.phone_number_id as string | null) ?? null)));
   const threadsRaw: LeadThread[] = convs.map((c) => {
     const pnid = (c.phone_number_id as string | null) ?? null;
     const wn = pnid ? labels[pnid] : null;
@@ -1406,7 +1419,7 @@ export async function loadLeadConversation(
     activeMsgs =
       activeId === storedId && storedTranscript
         ? storedTranscript
-        : await fetchConversationTranscript({ apiKey }, activeId, 2);
+        : await timing.time("kapso.transcript", () => fetchConversationTranscript({ apiKey, fetchImpl }, activeId!, 2));
   } catch {
     const messages = mergeTranscriptWithOutbox([], await outboxPromise, activePhoneNumberId);
     return {
@@ -1425,7 +1438,7 @@ export async function loadLeadConversation(
     olderIds.map((id) =>
       id === storedId && storedTranscript
         ? Promise.resolve(storedTranscript)
-        : fetchConversationTranscript({ apiKey }, id, 1).catch(() => [] as ConversationMessage[]),
+        : timing.time("kapso.older", () => fetchConversationTranscript({ apiKey, fetchImpl }, id, 1)).catch(() => [] as ConversationMessage[]),
     ),
   );
   const parsed = mergeTranscripts([activeMsgs, ...olderMsgs]);
