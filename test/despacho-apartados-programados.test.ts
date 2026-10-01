@@ -55,13 +55,31 @@ const row = (over: Partial<QueueRow>): QueueRow => ({
 });
 
 describe("cada pedido asignable cae en un solo apartado", () => {
-  it("lo programado para hoy o vencido va a «Programados hoy»; lo futuro, a «Programados después»", () => {
+  it("separa hoy y vencidos, mañana y fechas posteriores", () => {
     expect(queueSegment(row({ programmedFor: today }), today)).toBe("programados_hoy");
     expect(queueSegment(row({ programmedFor: "2026-09-27" }), today)).toBe("programados_hoy");
+    expect(queueSegment(row({ programmedFor: "2026-09-30" }), today)).toBe("programados_manana");
     expect(queueSegment(row({ programmedFor: "2026-10-02" }), today)).toBe("programados_despues");
   });
 
+  it.each([
+    ["2026-09-30", "2026-10-01"],
+    ["2026-12-31", "2027-01-01"],
+    ["2028-02-28", "2028-02-29"],
+    ["2028-02-29", "2028-03-01"],
+  ])("mañana cruza correctamente de %s a %s", (day, nextDay) => {
+    expect(queueSegment(row({ programmedFor: nextDay }), day)).toBe("programados_manana");
+  });
+
+  it("la fecha programada pasa de después a mañana y luego a hoy", () => {
+    const scheduled = row({ programmedFor: "2026-10-02" });
+    expect(queueSegment(scheduled, "2026-09-30")).toBe("programados_despues");
+    expect(queueSegment(scheduled, "2026-10-01")).toBe("programados_manana");
+    expect(queueSegment(scheduled, "2026-10-02")).toBe("programados_hoy");
+  });
+
   it("la programación manda sobre «ya salió» y sobre la antigüedad", () => {
+    expect(queueSegment(row({ programmedFor: "2026-09-30", hasPriorDispatch: true, createdAt: "2026-06-01T12:00:00Z" }), today)).toBe("programados_manana");
     expect(queueSegment(row({ programmedFor: "2026-10-02", hasPriorDispatch: true }), today)).toBe("programados_despues");
     expect(queueSegment(row({ programmedFor: today, createdAt: "2026-06-01T12:00:00Z" }), today)).toBe("programados_hoy");
   });
@@ -87,6 +105,7 @@ describe("el orden de la lista es el de los apartados", () => {
   const rows = [
     row({ orderId: "viejo", createdAt: "2026-07-01T12:00:00Z" }),
     row({ orderId: "futuro-2", programmedFor: "2026-10-03" }),
+    row({ orderId: "manana", programmedFor: "2026-09-30" }),
     row({ orderId: "reintento", hasPriorDispatch: true }),
     row({ orderId: "nuevo-ayer", createdAt: "2026-09-28T12:00:00Z" }),
     row({ orderId: "seguimiento", assignable: false, route: { riderName: "Roy", routeDate: today, loadNumber: 1, state: "in_custody", officeCheckedAt: null, pickupCheckedAt: null, undeliveredReason: "no_estaba" } }),
@@ -96,9 +115,9 @@ describe("el orden de la lista es el de los apartados", () => {
     row({ orderId: "futuro-1", programmedFor: "2026-10-01" }),
   ];
 
-  it("programados hoy (vencidos primero) → nunca salieron (recientes primero) → ya salieron → +30 días → programados después → lo que no se asigna", () => {
+  it("programados hoy (vencidos primero) → mañana → nunca salieron (recientes primero) → ya salieron → +30 días → programados después → lo que no se asigna", () => {
     expect(sortQueue(rows, today).map((r) => r.orderId)).toEqual([
-      "vencido", "hoy", "nuevo-hoy", "nuevo-ayer", "reintento", "viejo", "futuro-1", "futuro-2", "seguimiento",
+      "vencido", "hoy", "manana", "nuevo-hoy", "nuevo-ayer", "reintento", "viejo", "futuro-1", "futuro-2", "seguimiento",
     ]);
   });
 
@@ -109,7 +128,7 @@ describe("el orden de la lista es el de los apartados", () => {
   });
 
   it("los apartados van en ese mismo orden en la fila de chips", () => {
-    expect(QUEUE_SEGMENTS).toEqual(["programados_hoy", "nunca_salieron", "ya_salieron", "mas_de_30", "programados_despues"]);
+    expect(QUEUE_SEGMENTS).toEqual(["programados_hoy", "programados_manana", "nunca_salieron", "ya_salieron", "mas_de_30", "programados_despues"]);
   });
 });
 
@@ -133,7 +152,7 @@ describe("el apartado filtra y cuenta como un chip más", () => {
 
   it("cada chip dice cuántos hay con el resto de filtros; «Todos» es lo que muestra la lista sin apartado", () => {
     const all = queueFacetCounts(rows, { ...EMPTY_QUEUE_FILTERS, segment: "nunca_salieron" }, today);
-    expect(all.segment).toEqual({ programados_hoy: 1, nunca_salieron: 1, ya_salieron: 1, mas_de_30: 1, programados_despues: 0 });
+    expect(all.segment).toEqual({ programados_hoy: 1, programados_manana: 0, nunca_salieron: 1, ya_salieron: 1, mas_de_30: 1, programados_despues: 0 });
     expect(all.segmentTotal).toBe(5);
     const aurela = queueFacetCounts(rows, { ...EMPTY_QUEUE_FILTERS, store: "Aurela" }, today);
     expect(aurela.segment.mas_de_30).toBe(1);
@@ -143,6 +162,24 @@ describe("el apartado filtra y cuenta como un chip más", () => {
   it("elegir una etapa (seguimiento) apaga el apartado", () => {
     expect(setStages({ ...EMPTY_QUEUE_FILTERS, segment: "nunca_salieron" }, ["en_curso"]).segment).toBeNull();
     expect(setStages({ ...EMPTY_QUEUE_FILTERS, segment: "nunca_salieron" }, []).segment).toBe("nunca_salieron");
+  });
+
+  it("mañana filtra y cuenta solo asignables, sin duplicarlos en después ni ignorar la tienda", () => {
+    const scheduled = [
+      row({ orderId: "manana-kenku", programmedFor: "2026-09-30" }),
+      row({ orderId: "manana-aurela", programmedFor: "2026-09-30", storeName: "Aurela" }),
+      row({ orderId: "despues", programmedFor: "2026-10-01" }),
+      row({ orderId: "seguimiento", programmedFor: "2026-09-30", assignable: false }),
+    ];
+    const filters = { ...EMPTY_QUEUE_FILTERS, segment: "programados_manana" as const };
+    expect(ids(filterQueue(scheduled, filters, today))).toEqual(["manana-kenku", "manana-aurela"]);
+    const counts = queueFacetCounts(scheduled, filters, today);
+    expect(counts.segment.programados_manana).toBe(2);
+    expect(counts.segment.programados_despues).toBe(1);
+    expect(Object.values(counts.segment).reduce((sum, count) => sum + count, 0)).toBe(3);
+    const kenku = { ...filters, store: "Kenku" };
+    expect(ids(filterQueue(scheduled, kenku, today))).toEqual(["manana-kenku"]);
+    expect(queueFacetCounts(scheduled, kenku, today).segment.programados_manana).toBe(1);
   });
 });
 
