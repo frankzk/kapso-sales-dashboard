@@ -5,7 +5,8 @@
 // con motivo corto cuando algo no está, está dañado o no cabe. Desde 0196 a la
 // caja se le siguen sumando paquetes mientras se coteja: lo que oficina todavía
 // no verificó se ve «esperando a oficina» y no se recibe. La ruta aparece
-// recién cuando todo quedó recibido o se dijo que no va.
+// recién cuando todo quedó recibido o se dijo que no va. Los reportes de días
+// anteriores siguen accesibles sin recibir primero la caja de hoy.
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -18,7 +19,11 @@ function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }
 
-export function RiderReceiveBox({ riderName, loads }: { riderName: string; loads: RiderLoad[] }) {
+export function RiderReceiveBox({ riderName, loads, previousRoutes = [] }: {
+  riderName: string;
+  loads: RiderLoad[];
+  previousRoutes?: { id: string; route_date: string; status: string }[];
+}) {
   const router = useRouter();
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [declining, setDeclining] = useState<string | null>(null);
@@ -58,6 +63,23 @@ export function RiderReceiveBox({ riderName, loads }: { riderName: string; loads
         <h1 className="text-base font-semibold text-slate-900">Recibir mi caja</h1>
         <p className="text-xs text-slate-500">{riderName} · escanea cada paquete que te entregan. Si uno no está, está dañado o no cabe, márcalo como «No lo recojo».</p>
       </header>
+      {previousRoutes.length > 0 && (
+        <section aria-label="Reportes de días anteriores" className="m-4 rounded-lg bg-white p-4 shadow-control ring-1 ring-inset ring-line">
+          <label htmlFor="previous-route" className="block text-sm font-semibold text-ink-900">Completar reportes anteriores</label>
+          <p className="mt-1 text-sm text-ink-600">Puedes completar otro día antes de recibir tu caja. La ruta de hoy se habilita al terminar la recepción.</p>
+          <select
+            id="previous-route"
+            value=""
+            onChange={(e) => { if (e.target.value) router.push(`/reparto?ruta=${encodeURIComponent(e.target.value)}`); }}
+            className="mt-3 h-12 w-full min-w-0 rounded-md border-0 bg-white px-3 text-base text-ink-900 shadow-control ring-1 ring-inset ring-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+          >
+            <option value="" disabled>Elegir un día anterior</option>
+            {previousRoutes.map((route) => (
+              <option key={route.id} value={route.id}>{route.route_date} · {route.status === "cerrada" ? "Cerrada" : "Por cerrar"}</option>
+            ))}
+          </select>
+        </section>
+      )}
       {message && <p role="status" className={cn("mx-4 mt-3 rounded-lg px-3 py-2 text-sm", message.ok ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700")}>{message.text}</p>}
       {loads.map((load) => (
         <section key={load.id} aria-label={`Carga ${load.load_number} del ${load.route_date}`} className="m-4 rounded-2xl border border-slate-200 bg-white p-4">

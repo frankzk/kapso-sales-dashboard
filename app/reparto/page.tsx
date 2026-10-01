@@ -63,13 +63,19 @@ export default async function RepartoPage({
   const [vocabulary, detail] = await Promise.all([sheet ? loadRiderVocabulary(sheet) : null, routeId ? getRouteDetail(routeId) : null]);
   const today = limaDate(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10);
 
-  // Primero la caja, después la ruta (MOM §29.13): mientras haya una carga
-  // cotejada por oficina y no recibida, el motorizado verifica sus paquetes y
-  // dice cuáles no recoge. La ruta se muestra recién con la custodia cambiada.
+  // La recepción bloquea la ruta de hoy, no los reportes de días anteriores.
+  // Solo una selección explícita, visible para este motorizado y leída con
+  // RLS permite entrar al historial; un id ajeno o inválido no evita la caja.
   // En modo «confirmar» (0185) la ruta aparece al asignar y cada parada nace
   // «por confirmar»: el motorizado dice «Lo llevo» al sacarla del almacén.
-  if (riderScreenFor(pickupMode, loads.map((load) => load.state)) === "recibir_caja") {
-    return <RiderReceiveBox riderName={rider.full_name} loads={loads} />;
+  const receptionPending = riderScreenFor(pickupMode, loads.map((load) => load.state)) === "recibir_caja";
+  const selectedPastRoute = !!wanted && !!detail && detail.route.route_date < today;
+  if (receptionPending && !selectedPastRoute) {
+    return <RiderReceiveBox
+      riderName={rider.full_name}
+      loads={loads}
+      previousRoutes={routes.filter((r) => r.route_date < today).map(({ id, route_date, status }) => ({ id, route_date, status }))}
+    />;
   }
   return (
     <><RiderRouteScreen
@@ -80,6 +86,7 @@ export default async function RepartoPage({
       vocabulary={vocabulary}
       today={today}
       pickupMode={pickupMode}
+      receptionPending={receptionPending}
     /></>
   );
 }
