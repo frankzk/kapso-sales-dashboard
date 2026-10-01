@@ -11,6 +11,7 @@
 // gestiona despachos ni asignaciones: eso sigue en Repro Provincia.
 
 import { revalidatePath } from "next/cache";
+import { loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
@@ -1505,9 +1506,12 @@ async function attestAgencyShipment(
 export async function loadConfirmationBrief(
   orderId: string,
 ): Promise<{ brief: OrderConfirmationBrief } | { error: string }> {
-  const brief = await getOrderConfirmationBrief(orderId);
+  const [brief, duplicateHold] = await Promise.all([
+    getOrderConfirmationBrief(orderId),
+    loadAliclikDuplicateHold(orderId).catch(() => null),
+  ]);
   if (!brief) return { error: "Sin acceso a este pedido." };
-  return { brief };
+  return { brief: { ...brief, duplicateHold } };
 }
 
 

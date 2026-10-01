@@ -1591,6 +1591,8 @@ export async function getMasterFacets(storeIds: string[]): Promise<{
 // ---------------------------------------------------------------------------
 
 export interface OrderConfirmationBrief {
+  /** null means verification failed, not that the customer is clear. */
+  duplicateHold?: import("@/lib/aliclik-duplicate").DuplicateHold | null;
   /** Los otros pedidos del MISMO teléfono, del más nuevo al más viejo. */
   priors: PriorOrderSnapshot[];
   counts: OutcomeCounts;

@@ -18,6 +18,8 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Card } from "@/components/ui";
+import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
+import type { DuplicateHold } from "@/lib/aliclik-duplicate";
 import {
   createAliclikGuide,
   linkExistingAliclikGuide,
@@ -73,6 +75,8 @@ export function AliclikGuidePanel({
   riskRequirement = "ninguno",
   paymentState = null,
   riskReasons = [],
+  duplicateHold,
+  onDuplicateChanged,
   onCreated,
 }: {
   orderId: string;
@@ -81,9 +85,12 @@ export function AliclikGuidePanel({
   riskRequirement?: PaymentRequirement;
   paymentState?: string | null;
   riskReasons?: string[];
+  duplicateHold?: DuplicateHold | null;
+  onDuplicateChanged?: () => void;
   onCreated: () => void;
 }) {
   const [coordinate, setCoordinate] = useState("");
+  const [duplicateAllowed, setDuplicateAllowed] = useState(false);
   const [preview, setPreview] = useState<AliclikPreview | null>(null);
   const [transportId, setTransportId] = useState<number | null>(null);
   const [note, setNote] = useState("");
@@ -141,7 +148,7 @@ export function AliclikGuidePanel({
   };
 
   const create = () => {
-    if (transportId === null) return;
+    if (transportId === null || !duplicateAllowed) return;
     setMessage(null);
     setBusy("create");
     startTransition(async () => {
@@ -193,6 +200,7 @@ export function AliclikGuidePanel({
   return (
     <Card>
       <div className="space-y-4">
+        <AliclikDuplicatePanel key={orderId} orderId={orderId} initialHold={duplicateHold} onGateChange={setDuplicateAllowed} onChanged={onDuplicateChanged} />
         <ExistingGuideLinkPanel orderId={orderId} onLinked={onCreated} />
         <div className="border-t border-slate-200 pt-4">
           <div className="flex items-start justify-between gap-2">
@@ -499,7 +507,7 @@ export function AliclikGuidePanel({
                 busy !== null ||
                 transportId === null ||
                 Boolean(preview.writeBlocked) ||
-                !riskGate.allowed
+                !riskGate.allowed || !duplicateAllowed
               }
               className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-70"
             >
