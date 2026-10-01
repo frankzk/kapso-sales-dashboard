@@ -64,9 +64,17 @@ export interface StopReport {
   hasVoucher: boolean;
 }
 
+/** El campo del formulario que cada error pide arreglar (30-09-2026). */
+export type StopReportField = "estado" | "metodo" | "monto" | "yape" | "foto" | "motivo" | "nota";
+
 export interface ReportValidation {
   ok: boolean;
   errors: string[];
+  /**
+   * Para cada error, en el mismo orden, el campo que lo arregla: el teléfono
+   * lleva al motorizado al primero que falta en vez de solo pintarlo de rojo.
+   */
+  fields: StopReportField[];
 }
 
 /**
@@ -81,54 +89,59 @@ export interface ReportValidation {
  */
 export function validateStopReport(report: StopReport): ReportValidation {
   const errors: string[] = [];
+  const fields: StopReportField[] = [];
+  const fail = (field: StopReportField, message: string) => {
+    fields.push(field);
+    errors.push(message);
+  };
 
   if (report.status === "pendiente") {
-    errors.push("Elige si lo entregaste o no.");
-    return { ok: false, errors };
+    fail("estado", "Elige si lo entregaste o no.");
+    return { ok: false, errors, fields };
   }
 
   if (report.status === "entregado") {
     if (!isPaymentMethod(report.paymentMethod)) {
-      errors.push("Indica cómo cobraste.");
+      fail("metodo", "Indica cómo cobraste.");
     }
     const needsAmount =
       report.paymentMethod === "efectivo" ||
       report.paymentMethod === "yape" ||
       report.paymentMethod === "pos";
     if (needsAmount && (report.collectedAmount === null || !Number.isFinite(report.collectedAmount) || report.collectedAmount <= 0)) {
-      errors.push("Escribe cuánto cobraste.");
+      fail("monto", "Escribe cuánto cobraste.");
     }
     if (report.paymentMethod === "sin_cobro" && report.collectedAmount !== 0) {
-      errors.push("Sin cobro debe registrar S/ 0.00.");
+      fail("monto", "Sin cobro debe registrar S/ 0.00.");
     }
     if (report.paymentMethod === "yape" && !report.hasVoucher) {
-      errors.push("Adjunta la captura del Yape.");
+      fail("yape", "Adjunta la captura del Yape.");
     }
     if (!report.hasPhoto) {
-      errors.push("Adjunta la foto de la entrega.");
+      fail("foto", "Adjunta la foto de la entrega.");
     }
   }
 
   if (report.status === "no_entregado") {
     if (!isNonDeliveryReason(report.outcomeReason)) {
-      errors.push("Indica por qué no se entregó.");
+      fail("motivo", "Indica por qué no se entregó.");
     }
     if (report.outcomeReason === "otro" && !report.note?.trim()) {
-      errors.push("Escribe en la nota qué pasó.");
+      fail("nota", "Escribe en la nota qué pasó.");
     }
     // Un rechazo se le cobra a la tienda como una entrega (MOM §29.7), y sin
     // foto no hay cómo sostenerlo. Se pide AQUÍ, al reportar, porque es el único
     // momento en que el motorizado está en la puerta: antes solo lo pedía la
     // liquidación, días después, y de 204 rechazos ninguno tenía foto.
     if (report.outcomeReason === "rechazado" && !report.hasPhoto) {
-      errors.push("Adjunta la foto del rechazo.");
+      fail("foto", "Adjunta la foto del rechazo.");
     }
     if ((report.collectedAmount ?? 0) > 0) {
-      errors.push("Marcaste que no se entregó pero declaraste dinero cobrado.");
+      fail("monto", "Marcaste que no se entregó pero declaraste dinero cobrado.");
     }
   }
 
-  return { ok: errors.length === 0, errors };
+  return { ok: errors.length === 0, errors, fields };
 }
 
 /**

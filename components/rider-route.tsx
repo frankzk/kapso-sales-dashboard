@@ -23,8 +23,10 @@ import {
   routeTotals,
   validateStopReport,
   type PaymentMethod,
+  type StopReportField,
   type StopStatus,
 } from "@/lib/routes";
+import { draftDiffers, draftKey, parseDraft, serializeDraft, type StopDraftFields } from "@/lib/rider-draft";
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import { addManualStop, addSheetOnlyPoint, reportStop, searchOrdersForRider } from "@/app/reparto/actions";
 import { PhotoCapture } from "@/components/photo-capture";
@@ -53,10 +55,12 @@ import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import {
   IconArrowLeft,
   IconCheck,
+  IconChevronDown,
   IconCopy,
   IconMapPin,
   IconNavigate,
   IconPhone,
+  IconPlus,
   IconWhatsApp,
   IconX,
 } from "@/components/icons";
@@ -321,7 +325,7 @@ function RiderRouteScreenInner({
         {statusFilter && (
           <li className="flex items-center justify-between gap-3 rounded-lg bg-wash px-3 py-2 text-sm text-ink-700">
             <span>Mostrando solo {statusFilter === "pendiente" ? "por entregar" : statusFilter === "entregado" ? "entregados" : "no entregados"}</span>
-            <button type="button" onClick={() => setStatusFilter(null)} className="min-h-11 font-semibold text-brand-700 underline underline-offset-2">Ver todos</button>
+            <button type="button" onClick={() => setStatusFilter(null)} className="min-h-12 px-2 -mr-2 font-semibold text-brand-700 underline underline-offset-2">Ver todos</button>
           </li>
         )}
         {stops.map((stop, index) => ({ stop, number: index + 1 })).filter(({ stop }) => !statusFilter || stop.status === statusFilter).map(({ stop, number }) => (
@@ -457,10 +461,8 @@ function StopPanel({
           <IconArrowLeft className="size-6" />
         </button>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-base font-semibold text-ink-900">{o?.customer_name ?? "Sin nombre"}</p>
-          <p className="truncate text-xs text-ink-500">
-            {o?.name ?? "—"} · {o?.district ?? "—"}
-          </p>
+          <p className="line-clamp-2 break-words text-base font-semibold leading-tight text-ink-900">{o?.customer_name ?? "Sin nombre"}</p>
+          <p className="truncate text-xs tabular-nums text-ink-500">{o?.name ?? "—"}</p>
         </div>
         <span className="flex shrink-0 flex-col items-end gap-1">
           <StopStatusLine stop={stop} badge={decision.badge} />
@@ -473,6 +475,7 @@ function StopPanel({
           </div>
         )}
         <div className="space-y-4 px-4 pt-4">
+          <DueFigure stop={stop} />
           <AddressBlock stop={stop} />
           <QuickActions stop={stop} variant="bar" onWhatsApp={onWhatsApp} />
         </div>
@@ -522,6 +525,31 @@ function StopStatusLine({ stop, badge, quietPending = false }: {
   );
 }
 
+/**
+ * La cifra de la parada, lo primero que se lee en la puerta: lo que falta
+ * cobrar («Pagado» si no falta nada) o, ya entregada, lo cobrado y cómo.
+ */
+function DueFigure({ stop }: { stop: StopWithOrder }) {
+  const delivered = stop.status === "entregado";
+  const remaining = stop.collection?.remaining ?? null;
+  const due = delivered ? stop.collected_amount : amountDue(stop);
+  const method = delivered ? PAYMENT_METHODS.find((m) => m.code === stop.payment_method)?.label : null;
+  const prepaid = stop.collection?.validated ?? 0;
+  return (
+    <div>
+      <p className="text-xs font-medium text-ink-600">{delivered ? "Cobrado" : "Por cobrar"}</p>
+      <p className="text-[1.75rem] font-bold leading-9 tabular-nums text-ink-900">
+        {!delivered && due === 0 ? "Pagado" : money(due)}
+      </p>
+      {delivered && method && <p className="text-xs text-ink-600">{method}</p>}
+      {!delivered && remaining == null && <p className="text-xs text-warn-fg">Saldo sin confirmar: es el total del pedido. Actualiza la ruta.</p>}
+      {!delivered && prepaid > 0 && stop.order?.total != null && (
+        <p className="text-xs tabular-nums text-ink-600">Pedido {money(stop.order.total)} · pagado antes {money(prepaid)}</p>
+      )}
+    </div>
+  );
+}
+
 /** La dirección, su referencia y dos atajos: copiarla y abrirla en Waze. */
 function AddressBlock({ stop }: { stop: StopWithOrder }) {
   const o = stop.order;
@@ -534,6 +562,8 @@ function AddressBlock({ stop }: { stop: StopWithOrder }) {
       <IconMapPin className="mt-0.5 size-5 shrink-0 text-ink-500" />
       <div className="min-w-0 flex-1">
         <p className="text-sm text-ink-900">{o?.address ?? "Sin dirección"}</p>
+        {/* El distrito completo: «San Juan …» puede ser de Lurigancho o de Miraflores. */}
+        {o?.district && <p className="text-sm font-semibold text-ink-900">{o.district}</p>}
         {o?.reference && <p className="mt-0.5 text-xs text-ink-600">Ref: {o.reference}</p>}
         {(text || waze) && (
           <div className="mt-1 flex flex-wrap gap-x-5">
@@ -542,14 +572,14 @@ function AddressBlock({ stop }: { stop: StopWithOrder }) {
                 type="button"
                 onClick={() => copy(text)}
                 aria-label={copyState === "idle" ? "Copiar dirección" : undefined}
-                className={cn("inline-flex min-h-11 items-center gap-1.5 text-xs font-semibold", copyState === "fail" ? "text-crit-fg" : "text-brand-700")}
+                className={cn("-mx-2 inline-flex min-h-12 items-center gap-1.5 px-2 text-xs font-semibold", copyState === "fail" ? "text-crit-fg" : "text-brand-700")}
               >
                 {copyState === "ok" ? <IconCheck className="size-4" /> : <IconCopy className="size-4" />}
                 <span aria-live="polite">{copyLabel(copyState)}</span>
               </button>
             )}
             {waze && (
-              <a href={waze} target="_blank" rel="noreferrer" aria-label="Abrir en Waze" className="inline-flex min-h-11 items-center gap-1.5 text-xs font-semibold text-brand-700">
+              <a href={waze} target="_blank" rel="noreferrer" aria-label="Abrir en Waze" className="-mx-2 inline-flex min-h-12 items-center gap-1.5 px-2 text-xs font-semibold text-brand-700">
                 <IconNavigate className="size-4" />
                 Waze
               </a>
@@ -661,7 +691,7 @@ function WhatsAppSheet({ stop, riderName, onClose }: { stop: StopWithOrder; ride
             </h2>
             <p className="text-xs text-ink-500">Se abre WhatsApp con el mensaje escrito; tú lo envías.</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Cerrar" className="-mr-2 -mt-1 grid size-11 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900">
+          <button type="button" onClick={onClose} aria-label="Cerrar" className="-mr-2 -mt-1 grid size-12 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900">
             <IconX className="size-5" />
           </button>
         </div>
@@ -825,7 +855,7 @@ function PickupConfirmBar({ stop, onDone }: { stop: StopWithOrder; onDone: () =>
             type="button"
             disabled={pending}
             onClick={() => start(async () => say(await confirmMyGfPickup({ itemId: stop.manifest_item_id })))}
-            className={cn("h-11 w-full rounded-md px-3 text-xs font-semibold disabled:opacity-50", RIDER_SECONDARY)}
+            className={cn("h-12 w-full rounded-md px-3 text-xs font-semibold disabled:opacity-50", RIDER_SECONDARY)}
           >
             Sin escanear: confirmo que lo llevo
           </button>
@@ -857,6 +887,9 @@ function radioKeys(e: KeyboardEvent<HTMLButtonElement>, choose: (delta: 1 | -1) 
   if (e.key === "ArrowRight" || e.key === "ArrowDown") { e.preventDefault(); choose(1); }
   if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); choose(-1); }
 }
+
+/** Los campos a los que «Guardar» puede llevar: los de la validación y dos más. */
+type GapField = StopReportField | "delegado" | "diferencia";
 
 const OUTCOMES: { value: "entregado" | "no_entregado"; label: string; icon: Glyph; chosen: string }[] = [
   { value: "entregado", label: "Entregado", icon: IconCheck, chosen: "bg-ok-bg text-ok-fg ring-2 ring-inset ring-ok-fg" },
@@ -891,6 +924,76 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
   const [accountsOpen, setAccountsOpen] = useState(false);
   const outcomeRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
+  // El borrador de la parada (lib/rider-draft): si Android cierra Chrome al
+  // salir a WhatsApp, a la galería o a una llamada, al volver la ficha
+  // recupera lo marcado y la foto ya subida. Se borra al guardar.
+  const fields: StopDraftFields = {
+    status: status === "no_entregado" ? "no_entregado" : "entregado",
+    method, amount, reason, note, photoPath, voucherPath, written, writtenPayment, reasonCode, reasonNote,
+  };
+  const [pristine] = useState<StopDraftFields>(() => fields);
+  const [recovered, setRecovered] = useState(false);
+  useEffect(() => {
+    try {
+      const draft = parseDraft(window.localStorage.getItem(draftKey(stop.id)), Date.now(), stop.reported_at);
+      if (!draft) return;
+      setStatus(draft.status);
+      setMethod(draft.method as PaymentMethod | null);
+      setAmount(draft.amount);
+      setReason(draft.reason);
+      setNote(draft.note);
+      setPhotoPath(draft.photoPath);
+      setVoucherPath(draft.voucherPath);
+      setWritten(draft.written);
+      setWrittenPayment(draft.writtenPayment);
+      setReasonCode(draft.reasonCode);
+      setReasonNote(draft.reasonNote);
+      setRecovered(true);
+    } catch {
+      // Sin almacenamiento (modo privado, bloqueado): se trabaja sin borrador.
+    }
+  }, [stop.id, stop.reported_at]);
+  const saves = useRef(0);
+  useEffect(() => {
+    // El montaje no es un cambio: el primer paso solo arma el registro.
+    if (saves.current++ === 0) return;
+    try {
+      if (draftDiffers(fields, pristine)) window.localStorage.setItem(draftKey(stop.id), serializeDraft(fields, Date.now()));
+      else window.localStorage.removeItem(draftKey(stop.id));
+    } catch {
+      // Sin almacenamiento: el borrador es una ayuda, no una condición.
+    }
+    // `fields` se arma en cada render; lo que cambia son sus valores.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stop.id, status, method, amount, reason, note, photoPath, voucherPath, written, writtenPayment, reasonCode, reasonNote]);
+  function discardDraft() {
+    try { window.localStorage.removeItem(draftKey(stop.id)); } catch { /* sin almacenamiento */ }
+    setStatus(pristine.status);
+    setMethod(pristine.method as PaymentMethod | null);
+    setAmount(pristine.amount);
+    setReason(pristine.reason);
+    setNote(pristine.note);
+    setPhotoPath(pristine.photoPath);
+    setVoucherPath(pristine.voucherPath);
+    setWritten(pristine.written);
+    setWrittenPayment(pristine.writtenPayment);
+    setReasonCode(pristine.reasonCode);
+    setReasonNote(pristine.reasonNote);
+    setRecovered(false);
+  }
+
+  // Cada campo se puede alcanzar desde «Guardar»: el primero que falta se
+  // centra en pantalla y recibe el foco, en vez de solo pintar un error abajo.
+  const fieldRefs = useRef<Partial<Record<GapField, HTMLElement | null>>>({});
+  const anchor = (key: GapField) => (el: HTMLElement | null) => { fieldRefs.current[key] = el; };
+  function goTo(field: GapField) {
+    const el = fieldRefs.current[field];
+    if (!el) return;
+    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ block: "center", behavior: smooth ? "smooth" : "auto" });
+    el.querySelector<HTMLElement>("input, textarea, select, button:not([disabled])")?.focus({ preventScroll: true });
+  }
+
   const numericAmount = amount.trim() ? Number(amount.replace(",", ".")) : null;
   const collectedForReason = status === "entregado" ? (method === "sin_cobro" ? 0 : numericAmount) : null;
   const mustExplain = status === "entregado" && Boolean(vocabulary) && montoDiffers(collectedForReason, stop.order?.total ?? null);
@@ -912,7 +1015,17 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
     hasPhoto: Boolean(photoPath),
     hasVoucher: Boolean(voucherPath),
   });
-  const nextStep = !check.ok ? check.errors[0] : mustExplain && !reasonCode ? "Elige por qué cobraste distinto." : null;
+  // El primer hueco, en el orden de siempre: coordinación, la validación del
+  // servidor y el motivo de la diferencia de monto.
+  const gap: { field: GapField; message: string } | null =
+    delegated && !reportReason.trim() ? { field: "delegado", message: "Indica por qué reportas por el motorizado." }
+    : delegated && !photoPath ? { field: "foto", message: "Adjunta la evidencia del reporte por el motorizado." }
+    : !check.ok ? { field: check.fields[0] ?? "estado", message: check.errors[0] ?? "Revisa el reporte." }
+    : mustExplain && !reasonCode ? { field: "diferencia", message: `Cobraste ${money(collectedForReason)} y el pedido es de ${money(stop.order?.total)}. Elige por qué.` }
+    : mustExplain && reasonCode === "otro" && reasonNote.trim().length < 3 ? { field: "diferencia", message: "Con motivo «Otro», escribe una nota." }
+    : null;
+  // Sin saldo no se puede cuadrar el cobro: es lo único que bloquea el botón.
+  const balanceMissing = status === "entregado" && stop.collection?.remaining == null;
 
   function applyWritten(text: string) {
     setWritten(text);
@@ -927,26 +1040,12 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
   }
 
   function submit() {
-    if (delegated && !reportReason.trim()) {
-      setErr("Indica por qué reportas por el motorizado.");
-      return;
-    }
-    if (delegated && !photoPath) {
-      setErr("Adjunta la evidencia del reporte por el motorizado.");
-      return;
-    }
     // Se valida con la MISMA función que el servidor, para avisarle antes de
-    // gastarle datos en una petición que va a rebotar igual.
-    if (!check.ok) {
-      setErr(check.errors.join(" "));
-      return;
-    }
-    if (mustExplain && !reasonCode) {
-      setErr(`Cobraste ${money(collectedForReason)} y el pedido es de ${money(stop.order?.total)}. Elige por qué.`);
-      return;
-    }
-    if (mustExplain && reasonCode === "otro" && reasonNote.trim().length < 3) {
-      setErr("Con motivo «Otro», escribe una nota.");
+    // gastarle datos en una petición que va a rebotar igual, y se lo lleva al
+    // campo que falta.
+    if (gap) {
+      setErr(gap.message);
+      goTo(gap.field);
       return;
     }
     start(async () => {
@@ -969,7 +1068,10 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
           reasonNote: mustExplain ? reasonNote.trim() || null : null,
         });
         if (!res.ok) setErr(res.error ?? "No se pudo guardar.");
-        else onDone();
+        else {
+          try { window.localStorage.removeItem(draftKey(stop.id)); } catch { /* sin almacenamiento */ }
+          onDone();
+        }
       } catch {
         setErr("No se pudo confirmar el guardado. Revisa tu conexión y actualiza la ruta antes de reintentar.");
       }
@@ -986,11 +1088,17 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
   return (
     <div>
       <div className="space-y-5 px-4 pb-4 pt-5">
-        {delegated && <label className="block text-sm font-semibold text-ink-900">Motivo del reporte por el motorizado
+        {recovered && (
+          <Banner tone="info" role="status" title="Recuperamos lo que habías marcado">
+            Chrome se cerró mientras reportabas; quedó tal cual, con la foto ya subida.{" "}
+            <button type="button" onClick={discardDraft} className="-my-3 inline-flex min-h-12 items-center font-semibold text-brand-700 underline underline-offset-2">Empezar de nuevo</button>
+          </Banner>
+        )}
+        {delegated && <label ref={anchor("delegado")} className="block text-sm font-semibold text-ink-900">Motivo del reporte por el motorizado
           <input required value={reportReason} onChange={(e) => setReportReason(e.target.value)} placeholder="Ej. Roy envió la evidencia y está sin conexión" className={cn(RIDER_FIELD, "mt-1.5 font-normal")} />
         </label>}
 
-        <fieldset>
+        <fieldset ref={anchor("estado")}>
           <legend className="text-sm font-semibold text-ink-900">¿Qué pasó?</legend>
           <div role="radiogroup" aria-label="Resultado de la parada" className="mt-2 grid grid-cols-2 gap-2">
             {OUTCOMES.map(({ value, label, icon: Icon, chosen }, i) => {
@@ -1010,7 +1118,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
                     outcomeRefs.current[(i + 1) % OUTCOMES.length]?.focus();
                   })}
                   className={cn(
-                    "inline-flex h-14 items-center justify-center gap-2 rounded-md text-sm font-semibold transition-[background-color,color,box-shadow] duration-150",
+                    "inline-flex h-14 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition-[background-color,color,box-shadow] duration-150",
                     checked ? chosen : RIDER_SECONDARY,
                   )}
                 >
@@ -1024,16 +1132,16 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
 
         {status === "entregado" && (
           <>
-            <div className="rounded-lg bg-wash px-4 py-3">
-              <p className="text-xs font-medium text-ink-600">Saldo por cobrar</p>
-              <p className="text-lg font-semibold tabular-nums text-ink-900">
-                {stop.collection?.remaining == null ? "No disponible, actualiza la ruta" : money(stop.collection.remaining)}
+            {/* La cifra grande está arriba de la ficha; aquí, la referencia del cobro. */}
+            <div className="text-xs text-ink-600">
+              <p className="tabular-nums">
+                Saldo por cobrar: <strong className="font-semibold text-ink-900">{stop.collection?.remaining == null ? "No disponible, actualiza la ruta" : money(stop.collection.remaining)}</strong>
+                {!!stop.collection?.validated && <> · Pagos previos validados: {money(stop.collection.validated)}</>}
               </p>
-              {!!stop.collection?.validated && <p className="text-xs tabular-nums text-ink-600">Pagos previos validados: {money(stop.collection.validated)}</p>}
-              {!!stop.collection?.pending && <p className="mt-1 text-xs text-warn-fg">Hay {money(stop.collection.pending)} pendientes de validar. Consulta a coordinación antes de volver a cobrar.</p>}
+              {!!stop.collection?.pending && <p className="mt-1 text-warn-fg">Hay {money(stop.collection.pending)} pendientes de validar. Consulta a coordinación antes de volver a cobrar.</p>}
             </div>
 
-            <fieldset>
+            <fieldset ref={anchor("metodo")}>
               <legend className="text-sm font-semibold text-ink-900">¿Cómo pagó?</legend>
               <div className="mt-2 grid grid-cols-2 gap-2">
                 {PAYMENT_METHODS.map((m) => (
@@ -1055,7 +1163,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
             </fieldset>
 
             {method && method !== "sin_cobro" && (
-              <label className="block">
+              <label ref={anchor("monto")} className="block">
                 <span className="text-sm font-semibold text-ink-900">Importe cobrado en esta entrega</span>
                 <span className="relative mt-1.5 block">
                   <span aria-hidden className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-base text-ink-500">S/</span>
@@ -1079,7 +1187,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
                     <span className="font-semibold text-ink-900">Cuenta:</span>{" "}
                     {writtenPayment.trim() || <>{stopPaymentToSheet(method)} <span className="text-ink-500">(la de siempre)</span></>}
                   </p>
-                  <button type="button" aria-expanded={accountsOpen} onClick={() => setAccountsOpen((v) => !v)} className="min-h-11 shrink-0 text-xs font-semibold text-brand-700">
+                  <button type="button" aria-expanded={accountsOpen} onClick={() => setAccountsOpen((v) => !v)} className="-mr-2 min-h-12 shrink-0 px-2 text-xs font-semibold text-brand-700">
                     {accountsOpen ? "Listo" : "Cambiar"}
                   </button>
                 </div>
@@ -1097,7 +1205,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
                           type="button"
                           aria-pressed={chosen}
                           onClick={() => { setWrittenPayment(usual ? "" : a); setOtherAccount(false); }}
-                          className={cn("h-11 rounded-full px-4 text-sm font-medium transition-[background-color,color,box-shadow] duration-150", chosen ? RIDER_CHOSEN : RIDER_SECONDARY)}
+                          className={cn("h-12 rounded-full px-4 text-sm font-medium transition-[background-color,color,box-shadow] duration-150", chosen ? RIDER_CHOSEN : RIDER_SECONDARY)}
                         >
                           {a}
                         </button>
@@ -1107,7 +1215,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
                         type="button"
                         aria-expanded={otherAccount}
                         onClick={() => { setOtherAccount((v) => !v); if (accounts.includes(writtenPayment as (typeof accounts)[number])) setWrittenPayment(""); }}
-                        className={cn("h-11 rounded-full px-4 text-sm font-medium", otherAccount ? RIDER_CHOSEN : RIDER_SECONDARY)}
+                        className={cn("h-12 rounded-full px-4 text-sm font-medium", otherAccount ? RIDER_CHOSEN : RIDER_SECONDARY)}
                       >
                         Otra…
                       </button>
@@ -1135,7 +1243,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
             )}
 
             {mustExplain && vocabulary && (
-              <div className="space-y-2 rounded-lg bg-warn-wash p-3 text-sm">
+              <div ref={anchor("diferencia")} className="space-y-2 rounded-lg bg-warn-wash p-3 text-sm">
                 <p className="font-semibold text-warn-fg">Cobraste {money(collectedForReason)} y el pedido es de {money(stop.order?.total)}. ¿Por qué?</p>
                 <select value={reasonCode} onChange={(e) => setReasonCode(e.target.value)} aria-label="Motivo de la diferencia" className={RIDER_FIELD}>
                   <option value="">Elige el motivo</option>
@@ -1151,6 +1259,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
 
             <div className="space-y-2">
               <PhotoCapture
+                fieldRef={anchor("foto")}
                 stopId={stop.id}
                 kind="entrega"
                 photoPath={photoPath}
@@ -1159,6 +1268,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
               />
               {method === "yape" && (
                 <PhotoCapture
+                  fieldRef={anchor("yape")}
                   stopId={stop.id}
                   kind="yape"
                   photoPath={voucherPath}
@@ -1171,7 +1281,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
         )}
 
         {status === "no_entregado" && (
-          <fieldset>
+          <fieldset ref={anchor("motivo")}>
             <legend className="text-sm font-semibold text-ink-900">¿Por qué no se entregó?</legend>
             <div className="mt-2 grid grid-cols-2 gap-2">
               {NON_DELIVERY_REASONS.map((r) => (
@@ -1196,6 +1306,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
             puerta, como una entrega. Cualquier otra no entrega solo lleva foto
             cuando reporta otra persona por él. */}
         {status === "no_entregado" && nonDeliveryNeedsPhoto(reason, delegated) && <PhotoCapture
+          fieldRef={anchor("foto")}
           stopId={stop.id}
           kind="entrega"
           photoPath={photoPath}
@@ -1227,7 +1338,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
           </label>
         )}
 
-        <label className="block text-sm font-semibold text-ink-900">
+        <label ref={anchor("nota")} className="block text-sm font-semibold text-ink-900">
           Nota {noteRequired ? <span className="font-normal text-warn-fg">(obligatoria con «Otro»)</span> : <span className="font-normal text-ink-500">(opcional)</span>}
           <textarea
             aria-label="Nota del reporte"
@@ -1241,17 +1352,23 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
       </div>
 
       {/* «Guardar» pegado abajo, al alcance del pulgar, con lo que falta dicho
-          antes de pulsar. */}
-      <div className="sticky bottom-0 z-10 bg-white px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 shadow-[inset_0_1px_0_var(--color-line)]">
-        {err ? (
+          antes de pulsar; tocar el aviso o «Guardar» lleva a ese campo. */}
+      <div className="sticky bottom-0 z-10 bg-white px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 shadow-[inset_0_1px_0_var(--color-line)]">
+        {balanceMissing ? (
+          <p className="mb-2 text-xs text-warn-fg">No se pudo leer el saldo por cobrar: actualiza la ruta antes de guardar la entrega.</p>
+        ) : err && (!gap || err === gap.message) ? (
+          // Un error viejo se apaga solo cuando el campo que pedía ya se arregló.
           <p role="alert" className="mb-2 text-sm text-crit-fg">{err}</p>
-        ) : nextStep ? (
-          <p className="mb-2 text-xs text-ink-600" aria-live="polite">Antes de guardar: {nextStep.charAt(0).toLowerCase() + nextStep.slice(1)}</p>
+        ) : gap ? (
+          <button type="button" onClick={() => goTo(gap.field)} className="mb-1 flex min-h-12 w-full items-center justify-between gap-3 text-left text-xs text-ink-600">
+            <span aria-live="polite">Antes de guardar: {gap.message.charAt(0).toLowerCase() + gap.message.slice(1)}</span>
+            <span className="inline-flex shrink-0 items-center gap-1 font-semibold text-brand-700">Ir<IconChevronDown className="size-4" /></span>
+          </button>
         ) : null}
         <button
           type="button"
           onClick={submit}
-          disabled={pending || (status === "entregado" && (method === null || stop.collection?.remaining == null))}
+          disabled={pending || balanceMissing}
           className="h-[3.25rem] w-full rounded-md bg-brand-600 px-4 text-sm font-semibold text-white shadow-primary transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-brand-600"
         >
           {saveLabel}
@@ -1301,8 +1418,9 @@ function AddPointPanel({ fecha, onDone }: { fecha: string; onDone: () => void })
   }
   if (!open) {
     return (
-      <button type="button" onClick={() => setOpen(true)} className="h-12 w-full rounded-lg border border-dashed border-line-strong bg-white px-4 text-sm font-medium text-ink-600 transition-colors hover:border-ink-300 hover:text-ink-900">
-        + Añadir un punto que no está en mi ruta
+      <button type="button" onClick={() => setOpen(true)} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg border border-dashed border-line-strong bg-white px-4 text-sm font-medium text-ink-600 transition-colors hover:border-ink-300 hover:text-ink-900">
+        <IconPlus className="size-5 shrink-0" />
+        Añadir un punto que no está en mi ruta
       </button>
     );
   }
@@ -1310,7 +1428,7 @@ function AddPointPanel({ fecha, onDone }: { fecha: string; onDone: () => void })
     <section className="space-y-3 rounded-lg bg-white p-4 shadow-control ring-1 ring-inset ring-line" aria-label="Añadir punto">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-ink-900">Añadir punto · {fecha}</h2>
-        <button type="button" onClick={() => setOpen(false)} className="min-h-11 text-xs font-medium text-ink-600 underline underline-offset-2">Cerrar</button>
+        <button type="button" onClick={() => setOpen(false)} className="-mr-2 min-h-12 px-2 text-xs font-medium text-ink-600 underline underline-offset-2">Cerrar</button>
       </div>
       <div className="flex gap-2">
         <input
@@ -1331,13 +1449,13 @@ function AddPointPanel({ fecha, onDone }: { fecha: string; onDone: () => void })
                 <p className="truncate font-medium text-ink-900">{r.order_name} · {r.customer_name ?? "Sin nombre"}</p>
                 <p className="truncate text-xs tabular-nums text-ink-500">{r.district ?? "—"} · {money(r.order_total)}</p>
               </div>
-              <button type="button" disabled={pending} onClick={() => add(r.order_id)} className="h-11 shrink-0 rounded-md bg-brand-600 px-3 text-xs font-semibold text-white shadow-primary transition-colors hover:bg-brand-700 disabled:opacity-50">Añadir</button>
+              <button type="button" disabled={pending} onClick={() => add(r.order_id)} className="h-12 shrink-0 rounded-md bg-brand-600 px-3 text-xs font-semibold text-white shadow-primary transition-colors hover:bg-brand-700 disabled:opacity-50">Añadir</button>
             </li>
           ))}
         </ul>
       )}
       <details className="text-sm">
-        <summary className="min-h-11 cursor-pointer py-2 text-ink-600">Punto sin pedido de Kapta (Kast, encargo)</summary>
+        <summary className="flex min-h-12 cursor-pointer items-center text-ink-600">Punto sin pedido de Kapta (Kast, encargo)</summary>
         <div className="mt-2 flex gap-2">
           <input value={kastName} onChange={(e) => setKastName(e.target.value)} placeholder="Nombre del cliente" aria-label="Cliente del punto sin pedido" className={cn(RIDER_FIELD, "flex-1")} />
           <button type="button" disabled={pending || !kastName.trim()} onClick={addKast} className={cn("h-12 shrink-0 rounded-md px-4 text-sm font-semibold disabled:opacity-50", RIDER_SECONDARY)}>Añadir</button>

@@ -71,7 +71,9 @@ describe("supervisor report", () => {
     expect(html).toContain("S/ 59.00");
     expect(html).toContain("S/ 30.00");
     expect(html).not.toContain('aria-pressed="true"');
-    expect(html).toContain('disabled=""');
+    // «Guardar» no se apaga por el método: dice qué falta y lleva a ese campo.
+    expect(html).toContain("Antes de guardar: indica cómo cobraste.");
+    expect(html).not.toContain('disabled=""');
   });
   it("renders the additional reason field only for coordination", () => {
     const stop = { id: "stop", status: "pendiente", order: null } as StopWithOrder;

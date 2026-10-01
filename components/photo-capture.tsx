@@ -14,7 +14,8 @@
 //     «Reintentar» la vuelve a mandar sin tomarla otra vez.
 
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { canUploadAsIs, fitWithin, PHOTO_QUALITY, PHOTO_UPLOAD_LIMIT } from "@/lib/photo-resize";
+import { canUploadAsIs, decodeResize, fitWithin, PHOTO_HEADER_BYTES, PHOTO_QUALITY, PHOTO_UPLOAD_LIMIT, readImageSize } from "@/lib/photo-resize";
+import { Banner } from "@/components/ops-ui";
 import { IconCamera, IconCheckCircle, IconImage } from "@/components/icons";
 import { cn } from "@/components/ui";
 
@@ -31,21 +32,31 @@ type Phase = "idle" | "preparing" | "uploading" | "failed";
 /** Un error que ya viene dicho para el motorizado. */
 class PhotoError extends Error {}
 
-/** Reduce la foto elegida a 1600 px en JPEG; un JPEG ya chico se sube tal cual. */
+/**
+ * Reduce la foto elegida a 1600 px en JPEG; un JPEG ya chico se sube tal cual.
+ * Las medidas se leen de la cabecera y el navegador la decodifica YA reducida:
+ * una foto de 12 MP no ocupa 48 MB de memoria antes de achicarse.
+ */
 async function shrink(file: File): Promise<Blob> {
+  let size: { width: number; height: number } | null = null;
+  try {
+    size = readImageSize(new Uint8Array(await file.slice(0, PHOTO_HEADER_BYTES).arrayBuffer()));
+  } catch {
+    size = null;
+  }
+  if (size && canUploadAsIs(file, size)) return file;
   let bitmap: ImageBitmap | null = null;
   try {
-    bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    bitmap = await createImageBitmap(file, { imageOrientation: "from-image", resizeQuality: "medium", ...decodeResize(size) });
   } catch {
     bitmap = null;
   }
   if (!bitmap) {
     // Sin decodificar (p. ej. HEIC en Chrome): se manda tal cual si entra.
     if (file.size <= PHOTO_UPLOAD_LIMIT) return file;
-    throw new PhotoError("No se pudo leer esa foto y pesa demasiado para subirla. Toma otra con «Cámara».");
+    throw new PhotoError("No se pudo leer esa foto y pesa demasiado para subirla. Tómala con «Cámara».");
   }
   try {
-    if (canUploadAsIs(file, bitmap)) return file;
     const { width, height } = fitWithin(bitmap.width, bitmap.height);
     const canvas = document.createElement("canvas");
     canvas.width = width;
@@ -82,7 +93,7 @@ async function upload(photo: Blob, stopId: string, kind: "entrega" | "yape"): Pr
   return json.path;
 }
 
-export function PhotoCapture({ stopId, kind, label, photoPath, disabled = false, onResult }: {
+export function PhotoCapture({ stopId, kind, label, photoPath, disabled = false, onResult, fieldRef }: {
   stopId?: string;
   kind: "entrega" | "yape";
   label: string;
@@ -90,11 +101,13 @@ export function PhotoCapture({ stopId, kind, label, photoPath, disabled = false,
   photoPath: string | null;
   disabled?: boolean;
   onResult: (result: PhotoCaptureResult) => void;
+  /** Para que «Guardar» lleve al campo cuando falta la foto. */
+  fieldRef?: (el: HTMLDivElement | null) => void;
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [cameraOpen, setCameraOpen] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{ title: string; text: string } | null>(null);
   const pending = useRef<Blob | null>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
 
@@ -114,8 +127,8 @@ export function PhotoCapture({ stopId, kind, label, photoPath, disabled = false,
       onResult({ path, notice: "Foto lista." });
     } catch (error) {
       // Sin respuesta del servidor (sin señal): `fetch` rechaza con TypeError.
-      const message = error instanceof PhotoError ? error.message : "No se pudo subir la foto. Revisa tu señal.";
-      setFailure(message);
+      const message = error instanceof PhotoError ? error.message : "Revisa tu señal y vuelve a intentar.";
+      setFailure({ title: "No se subió la foto", text: message });
       setPhase("failed");
       onResult({ error: message });
     }
@@ -128,8 +141,8 @@ export function PhotoCapture({ stopId, kind, label, photoPath, disabled = false,
     try {
       await send(await shrink(file));
     } catch (error) {
-      const message = error instanceof PhotoError ? error.message : "No se pudo preparar esa foto. Prueba con «Cámara».";
-      setFailure(message);
+      const message = error instanceof PhotoError ? error.message : "Prueba con otra foto o tómala con «Cámara».";
+      setFailure({ title: "No se pudo usar esa foto", text: message });
       setPhase("idle");
       onResult({ error: message });
     }
@@ -140,31 +153,42 @@ export function PhotoCapture({ stopId, kind, label, photoPath, disabled = false,
   const status = phase === "preparing" ? "Preparando la foto…" : phase === "uploading" ? "Subiendo…" : done ? "Lista" : null;
 
   return (
-    <div className={cn("rounded-lg bg-white p-3 shadow-control ring-1 ring-inset", phase === "failed" ? "ring-crit-fg/40" : "ring-line")}>
+    <div ref={fieldRef} className="rounded-lg bg-white p-3 shadow-control ring-1 ring-inset ring-line">
       <div className="flex items-center gap-3">
-        <div className="relative grid size-14 shrink-0 place-items-center overflow-hidden rounded-md bg-wash text-ink-500">
-          {preview && done ? (
-            // La miniatura es la foto ya reducida que se subió, en memoria.
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={preview} alt="" className="size-full object-cover" />
-          ) : done ? (
-            <IconCheckCircle className="size-6 text-ok-fg" />
-          ) : (
-            <IconCamera className="size-6" />
-          )}
-        </div>
+        {done && !preview && photoPath ? (
+          // Una foto ya guardada (otra visita, o recuperada del borrador) no se
+          // descarga sola: el cuadro entero la abre, del tamaño de un dedo.
+          <a
+            href={`/api/reparto/foto?path=${encodeURIComponent(photoPath)}`}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`Ver ${label.toLowerCase()} guardada`}
+            className="grid size-14 shrink-0 place-items-center rounded-md bg-ok-wash text-ok-fg ring-1 ring-inset ring-line transition-colors hover:bg-ok-bg"
+          >
+            <IconCheckCircle className="size-6" />
+          </a>
+        ) : (
+          <div className="relative grid size-14 shrink-0 place-items-center overflow-hidden rounded-md bg-wash text-ink-500">
+            {preview && done ? (
+              // La miniatura es la foto ya reducida que se subió, en memoria.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={preview} alt="" className="size-full object-cover" />
+            ) : (
+              <IconCamera className="size-6" />
+            )}
+          </div>
+        )}
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-ink-900">{label}</p>
           <p aria-live="polite" className={cn("text-xs", done && !busy ? "font-medium text-ok-fg" : "text-ink-500")}>
             {status ?? (phase === "failed" ? "No se subió" : "Obligatoria")}
-            {done && !busy && photoPath && !preview && (
-              <> · <a href={`/api/reparto/foto?path=${encodeURIComponent(photoPath)}`} target="_blank" rel="noreferrer" className="font-medium text-brand-700 underline underline-offset-2">Ver</a></>
-            )}
+            {done && !busy && !preview && " · toca el cuadro para verla"}
           </p>
         </div>
       </div>
       {busy && <div aria-hidden className="mt-3 h-1 overflow-hidden rounded-full bg-line"><div className="h-full w-1/3 animate-[photo-progress_1.1s_ease-in-out_infinite] rounded-full bg-brand-600" /></div>}
-      {failure && <p role="alert" className="mt-2 text-sm text-crit-fg">{failure}</p>}
+      {/* El error va en un aviso, no pintando el campo (DESIGN.md, Inputs). */}
+      {failure && <Banner tone="crit" role="alert" title={failure.title} className="mt-3">{failure.text}</Banner>}
       <div className="mt-3 grid grid-cols-2 gap-2">
         {phase === "failed" && pending.current ? (
           <button type="button" disabled={disabled} onClick={() => pending.current && void send(pending.current)} className="col-span-2 inline-flex h-12 items-center justify-center gap-2 rounded-md bg-white text-sm font-semibold text-ink-700 shadow-control ring-1 ring-inset ring-line-strong transition-colors hover:bg-wash disabled:opacity-50">
