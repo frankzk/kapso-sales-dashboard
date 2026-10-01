@@ -10,7 +10,7 @@
 //   motorizado_entrega    → PhotoCapture → /api/reparto/foto → evidencia de la parada
 //   supervisor_retiro     → lookup + removeManifestItem(…)  → package_removed
 
-import { useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { DispatchScanner } from "@/components/dispatch-scanner";
 import { PhotoCapture } from "@/components/photo-capture";
 import { DispatchCamera } from "@/components/dispatch-camera";
@@ -51,6 +51,8 @@ interface Props {
   onQueue?: (code: string) => void;
   /** Solo en `supervisor_asignacion`: el QR se leyó; su resultado llega después por `onResult`. */
   onPending?: (code: string) => void;
+  /** Incluye la lectura en curso y las que esperan; permite refrescar al vaciar la cola. */
+  onPendingCountChange?: (count: number) => void;
   /** Primera vista mínima: sin párrafo de ayuda (va al `title` del botón), campo siempre visible. */
   compact?: boolean;
   /** La cámara sigue abierta tras cada lectura (QR en serie) y enseña `progress`. */
@@ -68,9 +70,11 @@ function lineNeedsAttention(line: ScanAssignLine): boolean {
   return ["desconocido", "no_elegible", "bloqueado_efectivo", "programado_otro_dia"].includes(line.status);
 }
 
-export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, onPending, compact = false, continuous = false, progress, look = "default" }: Props) {
+export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "entrega", photoPath = null, label, disabled = false, onResult, assign, onQueue, onPending, onPendingCountChange, compact = false, continuous = false, progress, look = "default" }: Props) {
   const plan = scanActionPlan(context);
   const [pending, setPending] = useState(0);
+  const reportPendingCount = useEffectEvent((count: number) => onPendingCountChange?.(count));
+  useEffect(() => { reportPendingCount(pending); }, [pending]);
   const [scanQueue] = useState(() => createScanQueue(setPending));
   const [lastCaptured, setLastCaptured] = useState<string | null>(null);
   const [failedReads, setFailedReads] = useState<Record<string, string>>({});

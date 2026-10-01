@@ -298,8 +298,9 @@ export function DispatchBoxPanel({
   const [mode, setMode] = useState<Mode>(() => modeForAccess(selected));
   const [cameraOpen, setCameraOpen] = useState(false);
   const [pendingScans, setPendingScans] = useState(0);
+  const [assignmentBusy, setAssignmentBusy] = useState(false);
   const [scanQueue] = useState(() => createScanQueue(setPendingScans));
-  const busy = pendingScans > 0;
+  const busy = pendingScans > 0 || assignmentBusy;
   const [lastCaptured, setLastCaptured] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<Record<string, string[]>>({});
   const [failedReads, setFailedReads] = useState<Record<string, string>>({});
@@ -403,7 +404,7 @@ export function DispatchBoxPanel({
               <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
                 <div>
                   <h2 className="text-base font-semibold leading-6 text-ink-900">{MODE_TITLES[mode]}</h2>
-                  <p className="mt-0.5 max-w-[60ch] text-[13px] leading-5 text-ink-600">{MODE_HINTS[mode]}</p>
+                  <p className="mt-0.5 max-w-[60ch] text-[13px] leading-5 text-ink-600">{surface === "gf" && mode === "build" ? "Escanea un paquete tras otro para agregarlos a esta caja. Después confirma su contenido en «Verificar caja»." : MODE_HINTS[mode]}</p>
                 </div>
                 {/* En el panel de Rutas la cabecera ya lleva la situación de la ruta. */}
                 {selected && onPage && <Badge tone={STATE_BADGE[selected.state]} className="shrink-0 self-start">{DISPATCH_STATE_LABELS[selected.state]}</Badge>}
@@ -445,7 +446,7 @@ export function DispatchBoxPanel({
             {mode === "build" ? (
               surface === "gf" ? (
                 selected
-                  ? <GfBoxAddPackages manifest={selected} canManage={canManage} refresh={refresh} />
+                  ? <GfBoxAddPackages key={selected.id} manifest={selected} canManage={canManage} refresh={refresh} onBusy={setAssignmentBusy} />
                   : <p className="p-5 text-sm text-ink-600">Elige una caja.</p>
               ) : selected ? (
                 <BuildRoute
