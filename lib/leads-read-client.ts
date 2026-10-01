@@ -35,7 +35,8 @@ export const listLeadTemplates = (...args: Parameters<Reads["listLeadTemplates"]
 export const listQuickReplies = (...args: Parameters<Reads["listQuickReplies"]>) => readLeadData("listQuickReplies", args);
 export const loadLeadConversation = (
   leadId: string, conversationId?: string, includeOlder = true, signal?: AbortSignal,
-) => readLeadData("loadLeadConversation", [leadId, conversationId, includeOlder], signal);
+  refreshActiveOnly = false,
+) => readLeadData("loadLeadConversation", [leadId, conversationId, includeOlder, refreshActiveOnly], signal);
 export const loadOrderDraft = (...args: Parameters<Reads["loadOrderDraft"]>) => readLeadData("loadOrderDraft", args);
 export const pollLeadState = (...args: Parameters<Reads["pollLeadState"]>) => readLeadData("pollLeadState", args);
 export const searchStoreProducts = (...args: Parameters<Reads["searchStoreProducts"]>) => readLeadData("searchStoreProducts", args);

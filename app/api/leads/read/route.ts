@@ -16,7 +16,7 @@ const schemas = {
   loadLeadsForAudience: z.tuple([scope, z.enum(["por_llamar", "handoff", "yape", "seguimientos", "ganados", "perdidos"])]),
   listLeadTemplates: lead,
   listQuickReplies: lead,
-  loadLeadConversation: z.tuple([uuid, z.string().max(200).nullish(), z.boolean().optional()]),
+  loadLeadConversation: z.tuple([uuid, z.string().max(200).nullish(), z.boolean().optional(), z.boolean().optional()]),
   loadOrderDraft: lead,
   pollLeadState: lead,
   searchStoreProducts: z.tuple([uuid, z.string().max(200)]),

@@ -64,7 +64,7 @@ export class LeadReadTiming {
 
 export async function measureLeadRead<T>(
   operation: "history" | "chat",
-  mode: "history" | "first_paint" | "selected_thread",
+  mode: "history" | "first_paint" | "selected_thread" | "active_poll",
   work: (timing: LeadReadTiming) => Promise<T>,
 ): Promise<T> {
   const timing = new LeadReadTiming();

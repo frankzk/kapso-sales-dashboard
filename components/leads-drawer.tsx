@@ -1,6 +1,7 @@
 "use client";
 
 import { mergeConversationMessages } from "@/lib/conversation-merge";
+import { canUseActiveChatPoll, chatContextAfterRead } from "@/lib/leads-chat-poll";
 import { type ReactNode, useActionState, useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { CallQr } from "@/components/call-qr";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
@@ -962,6 +963,7 @@ function WhatsappChat({
   const activeIdRef = useRef<string | null>(null); // active thread (for silent polls)
   const requestRef = useRef(0); // ignore a slower response after switching threads/leads
   const chatRequestRef = useRef<AbortController | null>(null);
+  const lastDiscoveryAtRef = useRef<number | null>(null);
   const [showJump, setShowJump] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -985,6 +987,7 @@ function WhatsappChat({
       ) => {
         if (requestRef.current !== requestId) return;
         activeIdRef.current = res.activeConversationId;
+        if (!res.threadsUnchanged) lastDiscoveryAtRef.current = Date.now();
         setState((current) => {
           const localMessages =
             current.status === "ready"
@@ -1006,9 +1009,8 @@ function WhatsappChat({
             status: "ready",
             messages: [...mergeConversationMessages(prior, res.messages), ...localMessages],
             reason: res.reason,
-            threads: res.threads,
+            ...chatContextAfterRead(current.status === "ready" ? current : null, res),
             activeId: res.activeConversationId,
-            activePhoneNumberId: res.activePhoneNumberId,
           };
         });
         if (firstPaintPending) {
@@ -1018,7 +1020,8 @@ function WhatsappChat({
       };
       // First paint reads only the active session. Older sessions are merged in
       // a silent follow-up, while 20s polls remain cheap and active-session only.
-      void loadLeadConversation(leadId, opts?.conversationId, false, controller.signal).then(async (res) => {
+      const refreshActiveOnly = !!opts?.silent && canUseActiveChatPoll(lastDiscoveryAtRef.current, Date.now());
+      void loadLeadConversation(leadId, opts?.conversationId, false, controller.signal, refreshActiveOnly).then(async (res) => {
         apply(res, { merge: !!opts?.silent });
         if (!controller.signal.aborted && !opts?.silent && res.activeConversationId) {
           // El segundo pase trae el hilo completo (sesiones viejas incluidas):
@@ -1044,6 +1047,7 @@ function WhatsappChat({
     atBottomRef.current = true;
     countRef.current = 0;
     activeIdRef.current = null;
+    lastDiscoveryAtRef.current = null;
     setShowJump(false);
     setSearch("");
     if (hasConversation) load();

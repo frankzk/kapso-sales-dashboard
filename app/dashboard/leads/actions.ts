@@ -1226,6 +1226,7 @@ export interface LeadThread {
 export interface LeadConversation {
   messages: LeadConversationMessage[];
   threads: LeadThread[]; // all conversations for this phone (drives the number selector)
+  threadsUnchanged?: boolean; // transcript-only response; retain this thread's selector
   activeConversationId: string | null;
   activePhoneNumberId: string | null; // the number to reply FROM for the active thread
   reason?: string; // set (with messages: []) when the transcript can't be shown
@@ -1281,13 +1282,14 @@ export async function loadLeadConversation(
   leadId: string,
   conversationId?: string,
   includeOlder = true,
+  refreshActiveOnly = false,
 ): Promise<LeadConversation> {
-  return measureLeadRead("chat", conversationId ? "selected_thread" : includeOlder ? "history" : "first_paint",
-    (timing) => loadLeadConversationTimed(leadId, conversationId, includeOlder, timing));
+  return measureLeadRead("chat", refreshActiveOnly && !includeOlder ? "active_poll" : conversationId ? "selected_thread" : includeOlder ? "history" : "first_paint",
+    (timing) => loadLeadConversationTimed(leadId, conversationId, includeOlder, refreshActiveOnly, timing));
 }
 
 async function loadLeadConversationTimed(
-  leadId: string, conversationId: string | undefined, includeOlder: boolean, timing: LeadReadTiming,
+  leadId: string, conversationId: string | undefined, includeOlder: boolean, refreshActiveOnly: boolean, timing: LeadReadTiming,
 ): Promise<LeadConversation> {
   const empty = (reason?: string): LeadConversation => ({
     messages: [],
@@ -1320,9 +1322,12 @@ async function loadLeadConversationTimed(
   // id. Show that session immediately instead of waiting for Kapso's slower
   // phone-wide conversation discovery and the WhatsApp-number labels. The client
   // requests the full multi-session context silently right after this response.
-  if (!includeOlder && !conversationId && storedId) {
+  // An explicit id is trusted only when it matches the RLS-authorized lead's
+  // stored conversation. Other numbers/ids still go through phone discovery.
+  const knownActivePoll = refreshActiveOnly && conversationId === lead.kapso_conversation_id;
+  if (!includeOlder && storedId && (!conversationId || knownActivePoll)) {
     try {
-      const activeMsgs = await timing.time("kapso.transcript", () => fetchConversationTranscript({ apiKey, fetchImpl }, storedId, 1));
+      const activeMsgs = await timing.time("kapso.transcript", () => fetchConversationTranscript({ apiKey, fetchImpl }, storedId, knownActivePoll ? 2 : 1));
       const providerMessages = toLeadConversationMessages(activeMsgs);
       reconcileTranscriptStatuses(ctx.storeId, providerMessages);
       const messages = mergeTranscriptWithOutbox(
@@ -1333,6 +1338,7 @@ async function loadLeadConversationTimed(
       return {
         messages,
         threads: [],
+        threadsUnchanged: true,
         activeConversationId: storedId,
         activePhoneNumberId: lead?.wa_phone_number_id ?? null,
         reason: messages.length ? undefined : "Sin mensajes en esta conversación todavía.",
@@ -1346,6 +1352,7 @@ async function loadLeadConversationTimed(
       return {
         messages,
         threads: [],
+        threadsUnchanged: true,
         activeConversationId: storedId,
         activePhoneNumberId: lead?.wa_phone_number_id ?? null,
         reason: messages.length ? undefined : "No se pudo cargar la conversación de WhatsApp.",
