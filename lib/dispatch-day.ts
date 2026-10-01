@@ -195,6 +195,7 @@ export interface QueueRow {
    * ya volvió. Al asignarlo se crea una salida nueva y Almacén arma otra caja.
    */
   failedOutput?: { courier: string; returned: boolean } | null;
+  tandersReview?: import("@/lib/gf-tanders-review").TandersReview | null;
 }
 
 export interface QueueRoute {

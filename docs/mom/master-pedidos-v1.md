@@ -1057,6 +1057,28 @@ a las 7 de la tarde con el pedido esperando.
 
 #### Lo que Tanders no entrega también es «Por reprogramar Lima» (v1.19, 29-09-2026)
 
+**Despachos de Tanders de días anteriores sin entrega (decisión del owner,
+01-10-2026).** En Lima, «Desde la lista» también ofrece para revisión los
+pedidos En curso · En tránsito cuyo courier actual es Tanders y cuyas salidas
+activas de Tanders fueron despachadas antes de hoy, según el día de Lima.
+Casos: #KP137018 y #KP135818. Los entregados (#KP137017), anulados, despachos
+del mismo día y pedidos con otra salida activa quedan fuera de esta excepción.
+
+- Se muestran como **«Tanders · despacho anterior · sin entrega»**, con la fecha
+  de despacho. La fecha de la caja elegida no adelanta esta disponibilidad.
+- Antes de asignar a Grupo GF se exige confirmar **por pedido**, sin selección
+  predeterminada, si el paquete volvió al almacén o si saldrá otro mientras se
+  recupera el anterior. El servidor revalida el estado y las salidas confirmadas;
+  el escaneo o una llamada directa no omiten este requisito.
+- Se crea una salida nueva con rótulo propio y armado pendiente, respetando el
+  máximo de cinco salidas. La confirmación, el actor y las salidas de Tanders
+  quedan en el historial; si todavía hay una salida viva, se registra el motivo
+  de salida adicional.
+- Mostrar el pedido no cambia su macroetapa ni declara fallida, devuelta o
+  anulada la guía de Tanders. La confirmación de almacén se conserva como
+  declaración del operador; la recepción física y la conciliación del paquete
+  anterior mantienen su circuito habitual. No se sobrescribe la salida original.
+
 Hasta la v1.18 «un no entregado pasa a Por reprogramar Lima» solo se cumplía
 con el motorizado propio. Cuando Tanders no entregaba, el pedido se quedaba en
 **«En curso · En retorno»** mientras la caja volvía y pasaba a **«Devuelto ·

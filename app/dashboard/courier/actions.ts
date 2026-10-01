@@ -30,6 +30,7 @@ import {
   type FailedOutput,
 } from "@/lib/gf-retry";
 import { courierKey, normalizeDispatchScan } from "@/lib/dispatch";
+import { tandersReview, tandersReviewQueueFilter, confirmedTandersReview, tandersReviewReason, type TandersReview, type TandersConfirmations } from "@/lib/gf-tanders-review";
 import { lookupDispatchShipment } from "@/app/dashboard/pedidos/despacho/actions";
 import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
@@ -120,6 +121,7 @@ export interface CourierAvailableOrder {
    * y si su caja ya volvió. Al tomarlo se crea una salida nueva.
    */
   failedOutput?: FailedOutput | null;
+  tandersReview?: TandersReview | null;
 }
 
 export interface CourierAcceptedOrder extends CourierAvailableOrder {
@@ -311,6 +313,8 @@ type QueueOrderRow = {
   macro_substage: string;
   /** Solo la cola lo pide: distingue el reintento (`pendiente_nuevo_courier`). */
   operational_status?: string | null;
+  coverage?: string | null;
+  current_courier?: string | null;
 };
 
 type AdmissionShipmentRow = {
@@ -323,6 +327,7 @@ type AdmissionShipmentRow = {
   custody_transferred_at: string | null;
   output_number: number | null;
   dispatched_at: string | null;
+  status_category?: string | null;
   /** Estado crudo del courier: dice si la salida anterior falló (Tanders `RETURNING`). */
   reported_status: string | null;
   /** Estado crudo de Swayp: su Devolución también es una salida que falló. */
@@ -334,7 +339,7 @@ type AdmissionShipmentRow = {
 
 /** Las columnas de salida que la admisión necesita, en la cola y al tomar. */
 const ADMISSION_SHIPMENT_COLUMNS =
-  "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at,reported_status,swayp_state,returned_at,guide_code,output_code";
+  "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at,status_category,reported_status,swayp_state,returned_at,guide_code,output_code";
 
 function isCourierAdmissionStage(stage: unknown, substage: unknown, operational?: unknown): boolean {
   return (
@@ -477,14 +482,14 @@ async function loadCourierOperations(
       allCourierRows((from, to) => admin
         .from("order_master")
         .select(
-          "order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_stage,macro_substage,operational_status",
+          "order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_stage,macro_substage,operational_status,coverage,current_courier",
           { count: "exact" },
         )
         .in("store_id", storeIds)
         // Con el reintento: lo que otro courier no entregó (#KP135035, #KP135161)
         // está En curso y no llegaba nunca a esta lista.
         .or(
-          `and(macro_stage.eq.preparacion,macro_substage.in.(por_generar_rotulo,por_armar)),and(macro_stage.eq.por_despachar,macro_substage.eq.listo_para_asignar),${RETRY_QUEUE_FILTER}`,
+          `and(macro_stage.eq.preparacion,macro_substage.in.(por_generar_rotulo,por_armar)),and(macro_stage.eq.por_despachar,macro_substage.eq.listo_para_asignar),${RETRY_QUEUE_FILTER},${tandersReviewQueueFilter(day)}`,
         )
         .eq("coverage", "lima")
         .order("order_created_at", { ascending: false })
@@ -559,9 +564,11 @@ async function loadCourierOperations(
     // Un reintento no reutiliza caja —la anterior es de otro courier— y la salida
     // que falló no cuenta como «ya en caja» aunque siga volviendo.
     const retry = isRetryAdmission(order.macro_stage, order.macro_substage, order.operational_status);
+    const review = tandersReview(order, outputs, day);
+    if (!isCourierAdmissionStage(order.macro_stage, order.macro_substage, order.operational_status) && !review) continue;
     const fillable = pickFillableRouteOutput(outputs);
-    const assigned = activeAssignedOutput(retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null);
-    const needsExistingBox = !retry && order.macro_substage !== "por_generar_rotulo";
+    const assigned = activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null);
+    const needsExistingBox = !review && !retry && order.macro_substage !== "por_generar_rotulo";
     if (assigned || (needsExistingBox && !fillable)) {
       block(order, assigned ? "ya_en_caja" : "sin_salida");
       continue;
@@ -612,6 +619,7 @@ async function loadCourierOperations(
       macroStage: order.macro_stage ?? null,
       macroSubstage: order.macro_substage ?? null,
       failedOutput: retry ? lastFailedOutput(outputs) : null,
+      tandersReview: review,
     });
   }
 
@@ -922,7 +930,7 @@ const MAX_TAKE_ORDERS = 50;
 export async function takeGroupGfCourierOrders(
   orgId: string,
   orderIds: string[],
-  opts: { scheduledFor?: string | null; dispatchDay?: string | null } = {},
+  opts: { scheduledFor?: string | null; dispatchDay?: string | null; tandersConfirmations?: TandersConfirmations } = {},
 ): Promise<TakeCourierOrdersResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return { ...auth, accepted: [], alreadyAccepted: [], failed: [] };
@@ -933,7 +941,7 @@ async function takeOrdersCore(
   auth: ManagerAuth,
   orgId: string,
   orderIds: string[],
-  opts: { scheduledFor?: string | null; dispatchDay?: string | null },
+  opts: { scheduledFor?: string | null; dispatchDay?: string | null; tandersConfirmations?: TandersConfirmations },
   fx: SideEffects,
 ): Promise<TakeCourierOrdersResult> {
   const uniqueOrderIds = [...new Set(orderIds.filter(Boolean))];
@@ -993,10 +1001,6 @@ async function takeOrdersCore(
         continue;
       }
       const row = orderMaster as Record<string, unknown>;
-      if (!isCourierAdmissionStage(row.macro_stage, row.macro_substage, row.operational_status)) {
-        failed.push({ orderId, error: "El pedido ya avanzó y salió de Pedidos disponibles." });
-        continue;
-      }
 
       const { data: outputRows, error: outputError } = await admin
         .from("shipments")
@@ -1007,13 +1011,28 @@ async function takeOrdersCore(
         continue;
       }
       const outputs = (outputRows ?? []) as unknown as AdmissionShipmentRow[];
+      const review = tandersReview(row, outputs, limaClock().day);
+      if (!isCourierAdmissionStage(row.macro_stage, row.macro_substage, row.operational_status) && !review) {
+        failed.push({ orderId, error: "El pedido ya avanzó y salió de Pedidos disponibles." });
+        continue;
+      }
+      const confirmation = opts.tandersConfirmations?.[orderId];
+      if (review && !auth.canManageDispatch) {
+        failed.push({ orderId, error: "No tienes permiso para reasignar los paquetes de Tanders." });
+        continue;
+      }
+      if (review && !confirmedTandersReview(review, confirmation)) {
+        failed.push({ orderId, error: `${row.order_name ?? "El pedido"}: confirma en Desde la lista si el paquete de Tanders volvió al almacén o si saldrá otro mientras se recupera el anterior.` });
+        continue;
+      }
+      const reviewReason = review && confirmation ? tandersReviewReason(confirmation.packageLocation) : null;
       // REINTENTO (v1.19): otro courier no lo entregó. La salida que falló no
       // cuenta como asignada y se abre una NUEVA —la caja anterior es de ese
       // courier y lleva su rótulo (§9.3)—; nunca se rellena otra.
       const retry = isRetryAdmission(row.macro_stage, row.macro_substage, row.operational_status);
-      const fillable = retry ? null : pickFillableRouteOutput(outputs);
-      const assigned = activeAssignedOutput(retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null);
-      const mayCreateOutput = retry || row.macro_substage === "por_generar_rotulo";
+      const fillable = retry || review ? null : pickFillableRouteOutput(outputs);
+      const assigned = activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null);
+      const mayCreateOutput = Boolean(review) || retry || row.macro_substage === "por_generar_rotulo";
       if (assigned) {
         failed.push({ orderId, error: "El pedido ya tiene una salida asignada a otro courier." });
         continue;
@@ -1026,19 +1045,19 @@ async function takeOrdersCore(
       // ADICIONAL y lleva motivo (§9). Lo escribe el sistema porque el hecho ya
       // lo reportó el courier; el tope de cinco salidas se aplica igual.
       const failedBefore = retry ? lastFailedOutput(outputs) : null;
-      const puerta = retry
+      const puerta = retry || review
         ? puertaDeSalidaAdicional({
             courier: "propio",
             operation: "lima",
             outputs,
-            motivo: failedBefore ? retryAdditionalReason(failedBefore) : null,
+            motivo: reviewReason ?? (failedBefore ? retryAdditionalReason(failedBefore) : null),
           })
         : null;
       if (puerta && !puerta.ok) {
         failed.push({ orderId, error: puerta.error });
         continue;
       }
-      if (retry && outputs.length >= MAX_OUTPUTS_PER_ORDER) {
+      if ((retry || review) && outputs.length >= MAX_OUTPUTS_PER_ORDER) {
         failed.push({ orderId, error: `El pedido ya alcanzó el máximo de ${MAX_OUTPUTS_PER_ORDER} salidas.` });
         continue;
       }
@@ -1151,7 +1170,7 @@ async function takeOrdersCore(
         preparation_state: "rotulo_generado",
         custody_state: "empresa",
         created_via: "grupo_gf_courier",
-      }, { createIfMissing: mayCreateOutput });
+      }, { createIfMissing: mayCreateOutput, forceNew: Boolean(review) });
       if ("error" in write) {
         await admin
           .from("logistics_requests")
@@ -1225,14 +1244,15 @@ async function takeOrdersCore(
           shipment_id: write.shipmentId,
           note: write.filled
             ? "Grupo GF Courier tomó el pedido y conservó el QR de la salida existente."
-            : failedBefore
+            : reviewReason ?? (failedBefore
               ? retryTakenNote(failedBefore)
-              : "Grupo GF Courier tomó el pedido desde Pedidos disponibles.",
+              : "Grupo GF Courier tomó el pedido desde Pedidos disponibles."),
           payload: {
             requestId,
             outputCode,
             reusedOutput: write.filled,
             tariffId: check.tariffId,
+            tandersReview: review && confirmation ? { ...review, packageLocation: confirmation.packageLocation } : null,
             tariffAmount: check.tariffAmount,
             districtKey: check.districtKey,
             scheduledFor,
@@ -1541,7 +1561,7 @@ export async function clearGroupGfCourierPrograms(orgId: string, orderIds: strin
   return { notice: `${programs.length} ${programs.length === 1 ? "pedido vuelve" : "pedidos vuelven"} a la cola sin fecha programada.` };
 }
 
-export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[], opts: { overrideCash?: boolean; scheduledFor?: string | null; day?: string | null; confirmProgrammed?: boolean } = {}): Promise<CourierActionResult> {
+export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[], opts: { overrideCash?: boolean; scheduledFor?: string | null; day?: string | null; confirmProgrammed?: boolean; tandersConfirmations?: TandersConfirmations } = {}): Promise<CourierActionResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
@@ -1555,7 +1575,7 @@ export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: 
   const held = [...conflicts.values()].map((program) => programConflictMessage(program, boxDay));
   const toTake = orderIds.filter((id) => !conflicts.has(id));
   if (!toTake.length) return { error: held.join(" ") || "Selecciona al menos un pedido." };
-  const taken = await takeGroupGfCourierOrders(orgId, toTake, { scheduledFor: opts.scheduledFor ?? null, dispatchDay: opts.day ?? null });
+  const taken = await takeGroupGfCourierOrders(orgId, toTake, { scheduledFor: opts.scheduledFor ?? null, dispatchDay: opts.day ?? null, tandersConfirmations: opts.tandersConfirmations });
   const acceptedIds = [...taken.accepted.map((item) => item.orderId), ...taken.alreadyAccepted];
   if (!acceptedIds.length) return { error: [taken.error ?? "No se pudieron tomar los pedidos.", ...held].join(" ") };
   const { data: requests, error } = await admin.from("logistics_requests")
