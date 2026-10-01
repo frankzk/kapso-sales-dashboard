@@ -50,7 +50,7 @@ declare
   s4 uuid := gen_random_uuid(); s5 uuid := gen_random_uuid(); r jsonb; evidence jsonb;
 begin
   update swayp_auto_settings set daily_cap=10,pilot_daily_cap=1 where org_id=org;
-  insert into orders(id,store_id,shopify_order_id,created_at,total_amount) values(o4,a,'pilot4',now(),99),(o5,b,'pilot5',now(),149);
+  insert into orders(id,store_id,shopify_order_id,created_at,total_amount) values(o4,a,'pilot4',now(),500.01),(o5,b,'pilot5',now(),149);
   insert into shipments(id,store_id,order_id,courier,guide_code,delivery_status,status_category,reported_status,closed_at,aliclik_attempts) values
     (s4,a,o4,'aliclik','PILOT4','anulado','cancelled','CANCEL',now(),1),
     (s5,b,o5,'aliclik','PILOT5','anulado','cancelled','CANCEL',now(),1);
@@ -58,6 +58,10 @@ begin
   r:=swayp_emission_claim(a,o4,s4::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence,'[{"codbar":"TEST","disponible":50}]',now());
   if r->>'error'<>'Piloto desactivado' then raise exception 'pilot flag bypass: %',r; end if;
   update swayp_auto_settings set pilot_enabled=true where org_id=org;
+  r:=swayp_emission_claim(a,o4,s4::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence,'[{"codbar":"TEST","disponible":50}]',now());
+  if r->>'error'<>'El pedido no cumple el piloto sin historial' then raise exception 'amount above 500 accepted: %',r; end if;
+  update orders set total_amount=500 where id=o4;
+  evidence:=jsonb_build_object('fingerprint',swayp_auto_inspect(s4)->>'fingerprint','cohort','recent_no_history','location',jsonb_build_object('ok',true));
   r:=swayp_emission_claim(a,o4,s4::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence||'{"location":{"ok":false}}','[{"codbar":"TEST","disponible":50}]',now());
   if r->>'error'<>'El pedido no cumple el piloto sin historial' then raise exception 'location bypass: %',r; end if;
   r:=swayp_emission_claim(a,o4,s4::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence,'[{"codbar":"TEST","disponible":50}]',now());

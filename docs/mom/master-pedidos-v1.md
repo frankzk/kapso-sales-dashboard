@@ -3918,8 +3918,10 @@ Ampliación aprobada: la entrega previa deja de ser obligatoria para una segunda
 vía con **3 intentos diarios por organización**, dentro del máximo general de 10.
 Tiene interruptor propio, apagado al instalar. La vía con historial se conserva.
 
-- Pedido de hasta **7 días**, importe positivo de hasta **S/199**, exactamente
+- Pedido de hasta **7 días**, importe positivo de hasta **S/500**, exactamente
   **un intento Aliclik registrado**. Cero o dato ausente no significan un intento.
+- El máximo inicial de S/199 se amplió a **S/500** por decisión del usuario el
+  01-10-2026. Se conserva el cupo de 3 diarios y el resto de condiciones.
 - Referencia no vacía y coordenadas completas. Antes de emitir se consulta el
   pin mediante la lectura de cotización de Aliclik: distrito y provincia deben
   resolver al mismo ubigeo exacto que el destino. Si falla la consulta o difieren,

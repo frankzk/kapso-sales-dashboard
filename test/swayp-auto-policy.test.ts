@@ -59,9 +59,12 @@ describe("piloto sin historial",()=>{
   it.each([null,0,2,3])("no asume un único intento para %s",attempts=>{
     const s=fresh();s.source.aliclik_attempts=attempts;expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"pilot_limits"});
   });
-  it("rechaza más de 7 días o más de S/199",()=>{
-    const s=fresh();s.order.total_amount=199;expect(evaluateAutoDispatch(s,pilot,now).eligible).toBe(true);
-    s.order.total_amount=199.01;expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"pilot_limits"});
+  it.each([200,300,499.99,500])("admite S/%s con los demás requisitos del piloto",amount=>{
+    const s=fresh();s.order.total_amount=amount;expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({eligible:true,cohort:"recent_no_history"});
+  });
+  it("rechaza más de 7 días o más de S/500",()=>{
+    const s=fresh();s.order.total_amount=500;expect(evaluateAutoDispatch(s,pilot,now).eligible).toBe(true);
+    s.order.total_amount=500.01;expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"pilot_limits"});
     s.order.total_amount=99;s.order.created_at="2026-09-24T19:59:59Z";expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"pilot_limits"});
   });
   it("exige pin y referencia",()=>{
