@@ -25,7 +25,7 @@ begin
   r:=swayp_emission_claim(b,o2,s2::text,'arequipa',products,true,jsonb_build_object('fingerprint',swayp_auto_inspect(s2)->>'fingerprint'),'[{"codbar":"TEST","disponible":1}]',now());
   if r->>'error' <> 'Stock insuficiente después de reservas' then raise exception 'reservation not respected: %',r; end if;
   fingerprint:=swayp_auto_inspect(s2)->>'fingerprint';
-  update orders set shopify_note='changed after evaluation' where id=o2;
+  update orders set raw=jsonb_build_object('note','changed after evaluation') where id=o2;
   r:=swayp_emission_claim(b,o2,s2::text,'arequipa',products,true,jsonb_build_object('fingerprint',fingerprint),'[{"codbar":"TEST","disponible":2}]',now());
   if r->>'error' <> 'Los datos cambiaron; se reevaluará' then raise exception 'stale evidence accepted: %',r; end if;
   r:=swayp_emission_claim(b,o2,s2::text,'arequipa',products,true,jsonb_build_object('fingerprint',swayp_auto_inspect(s2)->>'fingerprint'),'[{"codbar":"TEST","disponible":2}]',now());

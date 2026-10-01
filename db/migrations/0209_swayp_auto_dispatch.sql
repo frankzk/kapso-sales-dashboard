@@ -88,6 +88,7 @@ create or replace function swayp_auto_snapshot(p_source uuid) returns jsonb lang
        'delivered_at',m.delivered_at,'address',m.address,'district',m.district,'province',m.province,'region',m.region) order by h.id)
       from orders h join stores ht on ht.id=h.store_id left join order_master m on m.order_id=h.id
       where ht.org_id=t.org_id and h.id<>o.id
+        and regexp_replace(h.customer_phone,'[^0-9]','','g') ~ '^(0051|51)?9[0-9]{8}$'
         and right(regexp_replace(h.customer_phone,'[^0-9]','','g'),9)=right(regexp_replace(o.customer_phone,'[^0-9]','','g'),9)
         and h.created_at>=now()-interval '365 days'),'[]'))
   from shipments s join orders o on o.id=s.order_id join stores t on t.id=o.store_id where s.id=p_source;
