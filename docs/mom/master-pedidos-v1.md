@@ -3875,6 +3875,33 @@ puede pausar o activar la regla y ejecutar una pasada. Las escrituras quedan
 restringidas al servidor; las lecturas respetan organización y tiendas mediante
 RLS. Los previews no pueden activar ni ejecutar emisiones automáticas.
 
+#### 11.9.1 Piloto sin entrega previa (01-10-2026)
+
+Ampliación aprobada: la entrega previa deja de ser obligatoria para una segunda
+vía con **3 intentos diarios por organización**, dentro del máximo general de 10.
+Tiene interruptor propio, apagado al instalar. La vía con historial se conserva.
+
+- Pedido de hasta **7 días**, importe positivo de hasta **S/199**, exactamente
+  **un intento Aliclik registrado**. Cero o dato ausente no significan un intento.
+- Referencia no vacía y coordenadas completas. Antes de emitir se consulta el
+  pin mediante la lectura de cotización de Aliclik: distrito y provincia deben
+  resolver al mismo ubigeo exacto que el destino. Si falla la consulta o difieren,
+  se aparta; no se mueve el pin ni se modifica el domicilio automáticamente.
+- Sin pago registrado no rechazado: este piloto cobra el total contra entrega.
+  La vía para descontar adelantos se mantiene fuera de este alcance.
+- Siguen vigentes cierre Aliclik, rechazo, duplicados, producto ya entregado,
+  otras salidas, gestión vigente, cobertura, vinculación y stock completo vivo.
+- Sin llamadas ni reconfirmación. Se consulta la tarifa Swayp antes del único
+  POST de emisión y se conserva como estimación de costo, no como liquidación.
+
+La reserva serializada verifica también el subcupo, el interruptor y los límites
+del piloto. Enviar, crear o quedar incierto consume el cupo; no se libera por un
+timeout. El historial distingue `recent_no_history` de `prior_delivery`.
+La pantalla agrega guías, entregas, devoluciones, anulaciones y pendientes por
+vía. Costo por entrega recuperada = suma de fletes cotizados y devoluciones
+registradas de la vía / entregas logradas, incluyendo envíos fallidos. Si falta
+un costo o aún no hay entregas, indica pendiente; nunca lo presenta como cero.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom

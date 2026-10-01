@@ -5,13 +5,15 @@ import { resolveUbigeo } from "@/lib/ubigeo";
 import { normalizeSku } from "@/lib/swayp-productos";
 import type { OrderLineItem } from "@/lib/types";
 
-export interface AutoSettings { org_id: string; enabled: boolean; daily_cap: number; max_order_days: number; history_days: number }
+export interface AutoSettings { org_id: string; enabled: boolean; daily_cap: number; max_order_days: number; history_days: number; pilot_enabled?: boolean; pilot_daily_cap?: number }
+export type AutoCohort = "prior_delivery" | "recent_no_history";
 interface Guide { id: string; courier: string; delivery_status: string; reported_status: string | null; fenix_shipment_id: string | null }
 export interface AutoSnapshot {
   order: { id: string; store_id: string; name: string | null; created_at: string; customer_phone: string | null;
     cancelled_at: string | null; total_amount: number | null; total_refunded: number | null; currency: string | null;
     financial_status: string | null; line_items: OrderLineItem[] | null; shopify_note: string | null; raw: unknown };
-  source: Guide & ShipmentDestination & { store_id: string; order_id: string; guide_code: string; returned_at: string | null;
+  payments?: { validation_status: string }[];
+  source: Guide & ShipmentDestination & { aliclik_attempts?: number | null; latitude?: number | null; longitude?: number | null; store_id: string; order_id: string; guide_code: string; returned_at: string | null;
     closed_at: string | null; claimed_by: string | null; next_followup_at: string | null; non_delivery_reason: string | null; recovery_state: string | null };
   guides: Guide[];
   notes: { kind: string; reason: string | null; note: string | null; new_status: string | null }[];
@@ -51,6 +53,10 @@ export const AUTO_REASONS: Record<string, string> = {
   no_mapping: "Falta vínculo de algún producto con Swayp", no_stock: "Sin stock completo en Swayp",
   api_disabled: "Bodega sin emisión por API", created: "Guía Swayp creada", review: "Emisión pendiente de revisión",
   emission_blocked: "Emisión detenida por tope, reserva o cambio de datos",
+  pilot_limits: "Piloto: requiere hasta 7 días, un intento y máximo S/199",
+  pilot_location: "Piloto: ubicación o referencia sin corroborar",
+  pilot_cap: "Piloto: cupo de 3 intentos diarios alcanzado",
+  payment_review: "Tiene un pago registrado: revisar saldo antes de reenviar",
 };
 
 export function evaluateAutoDispatch(s: AutoSnapshot, c: AutoSettings, now: Date) {
@@ -84,10 +90,20 @@ export function evaluateAutoDispatch(s: AutoSnapshot, c: AutoSettings, now: Date
   const prior = delivered.find(h => normalized(h.address) === normalized(address.address1)
     && normalized(h.district) === normalized(address.city)
     && normalized(h.province || h.region) === normalized(address.province));
-  if (!prior) return no("no_history");
+  const cohort: AutoCohort = prior ? "prior_delivery" : "recent_no_history";
+  if (!prior && !c.pilot_enabled) return no("no_history");
+  if (!prior) {
+    if (age > 7 || g.aliclik_attempts !== 1 || Number(o.total_amount) > 199) return no("pilot_limits");
+    // Presence alone is not corroboration: the server also resolves these
+    // coordinates through Aliclik and requires the exact destination ubigeo.
+    if (!address.address2?.trim() || !Number.isFinite(g.latitude) || !Number.isFinite(g.longitude)
+      || !g.latitude || !g.longitude || Math.abs(g.latitude)>90 || Math.abs(g.longitude)>180) return no("pilot_location");
+    // This pilot is COD in full; advances need a separate balance-aware path.
+    if (!s.payments || s.payments.some(p=>p.validation_status!=="rechazado")) return no("payment_review");
+  }
   if (delivered.some(h => !h.line_items?.length || productsOverlap(items,h.line_items))) return no("same_product");
   if (s.history.some(h => !h.cancelled_at && (!h.delivered_at || Date.parse(h.created_at) >= Date.parse(o.created_at))
     && (!h.line_items?.length || productsOverlap(items,h.line_items)))) return no("duplicate");
-  return { eligible: true as const, reason: "eligible", city, address, phone, items, priorOrderId: prior.id,
+  return { eligible: true as const, reason: "eligible", city, address, phone, items, cohort, priorOrderId: prior?.id ?? null,
     dispatchDate: nextAutoDelivery(now,city) };
 }

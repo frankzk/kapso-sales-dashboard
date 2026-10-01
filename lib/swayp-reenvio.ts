@@ -16,6 +16,7 @@ import {
   isSwaypAuthError,
   swaypAuthErrorHint,
   swaypOptsFromEnv,
+  quote as quoteSwayp,
 } from "@/lib/swayp";
 import { buildSwaypGuideInput, parseSenders } from "@/lib/swayp-guide";
 import { avisoSinVinculoSwayp, productosSinVinculo } from "@/lib/swayp-productos";
@@ -248,6 +249,20 @@ export async function createFenixGuideViaApi(args: {
 
   const opts = swaypOptsFromEnv();
   try {
+    if(args.automatic?.evidence.cohort==="recent_no_history") {
+      const i=built.input;
+      const quoted=await quoteSwayp(opts,{
+        ciudadRemitente:i.ciudadRemitente,direccionRemitente:i.direccionRemitente,
+        ciudadDestinatario:i.ciudadDestinatario,direccionDestinatario:i.direccionDestinatario,
+        adicionalDireccion:i.adicionalDireccion,idWarehouse:i.idWarehouse,
+        peso:i.peso,largo:i.largo,alto:i.alto,ancho:i.ancho,
+        valorDeclarado:i.valorDeclarado,valorRecaudo:i.valorRecaudo,
+      });
+      if(quoted.valorFlete==null || String(quoted.valorFlete).trim()==="" || !Number.isFinite(Number(quoted.valorFlete)) || Number(quoted.valorFlete)<0)
+        return {ok:false,reason:"Swayp no devolvió un costo de envío válido para el piloto"};
+      args.automatic.evidence.quotedDeliveryCost=Number(quoted.valorFlete);
+      args.automatic.evidence.quotedAt=new Date().toISOString();
+    }
     return await emitSwaypOnce({ ...args, input: built.input });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "error desconocido";

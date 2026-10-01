@@ -421,4 +421,6 @@
 \ir migrations/0208_leads_search_trigram.sql
 \echo 'Applying 0209_swayp_auto_dispatch.sql'
 \ir migrations/0209_swayp_auto_dispatch.sql
+\echo 'Applying 0210_swayp_auto_no_history_pilot.sql'
+\ir migrations/0210_swayp_auto_no_history_pilot.sql
 \echo 'Done.'
