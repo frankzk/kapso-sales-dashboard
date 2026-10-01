@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { courierCodePattern, courierSearchCode, findCourierRouteMatches } from "@/lib/courier-route-search";
-import { getCourierRouteLedger, ledgerIsOpen } from "@/lib/courier-route-ledger";
+import { getCourierRouteLedger, ledgerIsOpen, ledgerMatchesSituation, parseCourierSituation, type CourierLedgerSituation } from "@/lib/courier-route-ledger";
 import { searchCourierRoutes } from "@/app/dashboard/courier/route-search-actions";
 
 const db = vi.hoisted(() => ({ tables: {} as Record<string, Record<string, any>[]>, calls: [] as string[], allowed: true, user: true, failure: "" }));
@@ -105,5 +105,52 @@ describe("Solo abiertas", () => {
     db.tables.delivery_routes = [{ id: "old", rider_id: "roy", route_date: "2026-08-01", status: "en_curso", settlement_id: "paid" }];
     db.tables.rider_settlements = [{ id: "paid", status: "pagada" }];
     expect(await getCourierRouteLedger({ openOnly: true })).toEqual([]);
+  });
+});
+
+describe("desplegable de situación", () => {
+  it.each([
+    ["planificada", "draft", null, "borrador"],
+    ["planificada", "office_check", null, "cotejo_oficina"],
+    ["planificada", "ready_for_pickup", null, "lista_para_recojo"],
+    ["planificada", "in_custody", null, "en_poder_del_courier"],
+    ["en_curso", "in_custody", null, "en_reparto"],
+    ["cerrada", "in_custody", "borrador", "cerrada"],
+    ["en_curso", "in_custody", "pagada", "liquidada"],
+  ] as const)("coincide con la chapa: %s / %s / %s → %s", (routeStatus, manifestState, settlementStatus, expected) => {
+    const row = { routeStatus, manifestState, settlementStatus };
+    for (const candidate of ["borrador", "cotejo_oficina", "lista_para_recojo", "en_poder_del_courier", "en_reparto", "cerrada", "liquidada"] as CourierLedgerSituation[]) {
+      expect(ledgerMatchesSituation(row, candidate)).toBe(candidate === expected);
+    }
+    expect(ledgerMatchesSituation(row, null)).toBe(true);
+    expect(ledgerMatchesSituation(row, "abiertas")).toBe(expected !== "cerrada" && expected !== "liquidada");
+  });
+
+  it("consulta cerradas antiguas sin límite de 150 o 500 y separa liquidadas", async () => {
+    db.tables.delivery_routes = Array.from({ length: 501 }, (_, i) => ({ id: `r${i}`, rider_id: "roy", route_date: "2026-08-01", status: "cerrada", settlement_id: null }));
+    db.tables.delivery_routes.push({ id: "paid-route", rider_id: "roy", route_date: "2026-08-01", status: "cerrada", settlement_id: "paid" });
+    db.tables.rider_settlements = [{ id: "paid", status: "pagada" }];
+    const closed = await searchCourierRoutes({ situation: "cerrada" });
+    expect(closed).not.toHaveProperty("error");
+    if ("error" in closed) throw new Error(closed.error);
+    expect(closed.rows).toHaveLength(501);
+    expect(closed.rows.some((r) => r.routeId === "r500")).toBe(true);
+    const settled = await getCourierRouteLedger({ situation: "liquidada" });
+    expect(settled.map((r) => r.routeId)).toEqual(["paid-route"]);
+    const all = await searchCourierRoutes({});
+    if ("error" in all) throw new Error(all.error);
+    expect(all.rows).toHaveLength(502);
+  });
+
+  it("valida el valor de la URL sin aceptar propiedades heredadas", () => {
+    expect(parseCourierSituation("en_reparto")).toBe("en_reparto");
+    expect(parseCourierSituation("abiertas")).toBe("abiertas");
+    for (const value of ["", "todas", "inventada", "toString", "__proto__", null, {}]) expect(parseCourierSituation(value)).toBeNull();
+  });
+
+  it("aplica los permisos también al consultar una situación", async () => {
+    db.allowed = false;
+    expect(await searchCourierRoutes({ situation: "cerrada" })).toHaveProperty("error");
+    expect(db.calls).toEqual([]);
   });
 });

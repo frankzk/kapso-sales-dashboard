@@ -7,8 +7,8 @@
 // Mundo de operación (29-09-2026, DESIGN.md): filtros en píldoras, situación
 // en chapas y una tabla de líneas finas, como Despacho del día.
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import type { MouseEvent } from "react";
 
 // La fila abre el panel con `history.pushState`, que Next sincroniza con
@@ -27,7 +27,7 @@ import { Sheet } from "@/components/filter-sheet";
 import { AttentionPill, Badge, Banner, FIELD, FilterPill, OpsButton, type BadgeTone } from "@/components/ops-ui";
 import { IconPackage, IconSearch } from "@/components/icons";
 import { courierBoxHref, courierReportHref, courierRouteDrawerHref } from "@/lib/courier-box-href";
-import { LEDGER_SITUATION_LABELS, ledgerIsOpen, ledgerSituation, type CourierLedgerRow, type CourierLedgerSituation } from "@/lib/courier-route-ledger";
+import { LEDGER_SITUATION_LABELS, ledgerMatchesSituation, ledgerSituation, parseCourierSituation, type CourierLedgerRow, type CourierLedgerSituation, type CourierSituationFilter } from "@/lib/courier-route-ledger";
 import { searchCourierRoutes } from "@/app/dashboard/courier/route-search-actions";
 import { routeDayLong } from "@/lib/dispatch";
 
@@ -70,62 +70,55 @@ export function CourierRoutesLedger({
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const router = useRouter();
   const search = searchParams.toString();
   const dayParam = searchParams.get(DAY_PARAM);
   const riderParam = searchParams.get(RIDER_PARAM) ?? "";
-  const onlyOpen = searchParams.get("abiertas") === "1";
+  const situation = parseCourierSituation(searchParams.get("situacion")) ?? (searchParams.get("abiertas") === "1" ? "abiertas" : null);
   const code = searchParams.get("buscar")?.trim() ?? "";
   const [searchInput, setSearchInput] = useState(code);
   const [retry, setRetry] = useState(0);
-  const remoteKey = code ? `code:${code}` : onlyOpen ? "open" : "";
+  const remoteKey = code ? `code:${code}` : `situation:${situation ?? "todas"}`;
   const [remote, setRemote] = useState<{ key: string; rows: CourierLedgerRow[]; limited?: boolean; error?: string } | null>(null);
   useEffect(() => { setSearchInput(code); }, [code]);
   useEffect(() => {
-    if (!remoteKey) { setRemote(null); return; }
     let alive = true;
     setRemote(null);
-    searchCourierRoutes({ code, openOnly: !code && onlyOpen }).then((result) => {
+    searchCourierRoutes({ code, situation: !code ? situation ?? undefined : undefined }).then((result) => {
       if (!alive) return;
       setRemote("error" in result ? { key: remoteKey, rows: [], error: result.error } : { key: remoteKey, ...result });
     }).catch(() => {
       if (alive) setRemote({ key: remoteKey, rows: [], error: "No se pudieron consultar las rutas. Revisa la conexión e intenta nuevamente." });
     });
     return () => { alive = false; };
-  }, [remoteKey, code, onlyOpen, rows, retry]);
-  const loading = Boolean(remoteKey && remote?.key !== remoteKey);
-  const sourceRows = remoteKey ? (remote?.key === remoteKey ? remote.rows : []) : rows;
+  }, [remoteKey, code, situation, rows, retry]);
+  const loading = remote?.key !== remoteKey;
+  const sourceRows = remote?.key === remoteKey ? remote.rows : [];
   const dayMode: DayMode = dayParam === "todas" ? "todas" : isDay(dayParam) ? "fecha" : "hoy";
   const specificDay = isDay(dayParam) ? dayParam : "";
   const [openPill, setOpenPill] = useState<"fecha" | "motorizado" | null>(null);
 
-  // Motorizado, «hoy/todas» y cualquier día que ya esté cargado filtran en el
-  // navegador: solo se reescribe la barra. Al servidor se va únicamente por un
-  // día que no está en las filas (anterior a las últimas 150 rutas), y se
-  // avisa mientras tarda: la página entera se vuelve a calcular. Antes
-  // «Quitar filtros», la × del chip y elegir «Un día concreto» también iban al
-  // servidor, y el picker parecía no responder durante esos segundos.
-  const [navPending, startNav] = useTransition();
-  const loadedDays = useMemo(() => new Set(sourceRows.map((r) => r.routeDate)), [sourceRows]);
-  function setParams(patch: { day?: string | null; rider?: string | null; open?: boolean; code?: string | null }) {
+  // La consulta de situación trae todas las fechas, incluso en «Todas».
+  // Fecha y motorizado filtran esas filas sin recalcular toda la pantalla.
+  function setParams(patch: { day?: string | null; rider?: string | null; situation?: CourierSituationFilter | null; code?: string | null }) {
     const params = new URLSearchParams(search);
     if (patch.day !== undefined) { if (patch.day) params.set(DAY_PARAM, patch.day); else params.delete(DAY_PARAM); }
     if (patch.rider !== undefined) { if (patch.rider) params.set(RIDER_PARAM, patch.rider); else params.delete(RIDER_PARAM); }
-    if (patch.open !== undefined) { if (patch.open) params.set("abiertas", "1"); else params.delete("abiertas"); }
+    if (patch.situation !== undefined) {
+      params.delete("abiertas");
+      if (patch.situation) params.set("situacion", patch.situation); else params.delete("situacion");
+    }
     if (patch.code !== undefined) { if (patch.code) params.set("buscar", patch.code); else params.delete("buscar"); }
     if (pathname === "/dashboard/courier") params.set("tab", "routes");
     const href = params.toString() ? `${pathname}?${params}` : pathname;
-    const needsServer = !remoteKey && isDay(patch.day) && !loadedDays.has(patch.day);
-    if (needsServer) startNav(() => router.replace(href));
-    else window.history.replaceState(null, "", href);
+    window.history.replaceState(null, "", href);
   }
 
   const filtered = useMemo(() => sourceRows.filter((r) =>
-    (!onlyOpen || ledgerIsOpen(r))
+    ledgerMatchesSituation(r, situation)
     &&
     (!riderParam || r.riderId === riderParam)
     && (dayMode === "todas" || (dayMode === "hoy" ? r.routeDate === today : r.routeDate === specificDay)),
-  ), [sourceRows, onlyOpen, riderParam, dayMode, today, specificDay]);
+  ), [sourceRows, situation, riderParam, dayMode, today, specificDay]);
 
   const groups = useMemo(() => {
     const map = new Map<string, CourierLedgerRow[]>();
@@ -133,7 +126,7 @@ export function CourierRoutesLedger({
     return [...map.entries()].sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0));
   }, [filtered]);
 
-  const activeFilters = (riderParam ? 1 : 0) + (dayMode !== "hoy" ? 1 : 0) + (onlyOpen ? 1 : 0) + (code ? 1 : 0);
+  const activeFilters = (riderParam ? 1 : 0) + (dayMode !== "hoy" ? 1 : 0) + (situation ? 1 : 0) + (code ? 1 : 0);
   const dayPill = useRef<HTMLButtonElement>(null);
   const riderPill = useRef<HTMLButtonElement>(null);
   const dayValue = dayMode === "todas" ? "Todas" : dayMode === "fecha" ? routeDayLong(specificDay) : "Hoy";
@@ -158,8 +151,12 @@ export function CourierRoutesLedger({
         {/* Fecha siempre dice qué muestra; la «x» vuelve a hoy. */}
         <FilterPill ref={dayPill} label="Fecha" value={dayValue} expanded={openPill === "fecha"} onClick={() => setOpenPill((v) => (v === "fecha" ? null : "fecha"))} onClear={dayMode !== "hoy" ? () => setParams({ day: null }) : undefined} />
         <FilterPill ref={riderPill} label="Motorizado" value={riderParam ? riderName(riderParam) : null} expanded={openPill === "motorizado"} onClick={() => setOpenPill((v) => (v === "motorizado" ? null : "motorizado"))} onClear={() => setParams({ rider: null })} />
-        <OpsButton size="sm" aria-pressed={onlyOpen} className={onlyOpen ? "text-brand-700 ring-2 ring-brand-600" : undefined} onClick={() => setParams({ open: !onlyOpen, ...(!onlyOpen ? { day: "todas" } : {}) })}>Solo abiertas</OpsButton>
-        {activeFilters > 0 && <OpsButton variant="ghost" size="sm" onClick={() => { setSearchInput(""); setParams({ day: null, rider: null, open: false, code: null }); }}>Quitar filtros</OpsButton>}
+        <select aria-label="Situación" value={situation ?? ""} onChange={(event) => setParams({ situation: parseCourierSituation(event.target.value) })} className={cn(FIELD, "w-auto max-w-full rounded-full py-1.5 text-[13px]", situation && "text-brand-700")}>
+          <option value="">Todas las situaciones</option>
+          <option value="abiertas">Todas las abiertas</option>
+          {(Object.entries(LEDGER_SITUATION_LABELS) as [CourierLedgerSituation, string][]).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        {activeFilters > 0 && <OpsButton variant="ghost" size="sm" onClick={() => { setSearchInput(""); setParams({ day: null, rider: null, situation: null, code: null }); }}>Quitar filtros</OpsButton>}
         {openPill === "fecha" && (
           <Sheet look="ops" title="Fecha" onClose={() => setOpenPill(null)} anchored anchorRef={dayPill}>
             <div className="grid gap-3 text-sm">
@@ -173,7 +170,6 @@ export function CourierRoutesLedger({
                   <input type="date" value={specificDay} max={today} onChange={(e) => { if (isDay(e.target.value)) setParams({ day: e.target.value }); }} className={FIELD} />
                 </label>
               )}
-              {navPending && <p className="text-[13px] text-ink-500">Cargando ese día…</p>}
             </div>
           </Sheet>
         )}
@@ -195,13 +191,13 @@ export function CourierRoutesLedger({
 
       {remoteKey && remote?.error && <Banner tone="crit" role="alert">{remote.error} <OpsButton size="sm" onClick={() => setRetry((n) => n + 1)}>Reintentar</OpsButton></Banner>}
       {remoteKey && remote?.limited && <Banner tone="warn">El código coincide con demasiados pedidos. Escribe el código completo para encontrar su ruta.</Banner>}
-      {code && onlyOpen && sourceRows.some((r) => !ledgerIsOpen(r)) && <p className="text-[13px] text-ink-600">Hay coincidencias en rutas cerradas o liquidadas. <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => setParams({ open: false })}>Mostrar también cerradas</button></p>}
+      {code && situation && sourceRows.some((r) => !ledgerMatchesSituation(r, situation)) && <p className="text-[13px] text-ink-600">Hay coincidencias en otras situaciones. <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => setParams({ situation: null })}>Mostrar todas las situaciones</button></p>}
 
       <div aria-busy={loading} className="max-h-[70vh] overflow-auto rounded-lg bg-white shadow-control ring-1 ring-line">
         {loading && <p className="px-4 py-12 text-center text-sm text-ink-500">Buscando rutas…</p>}
         {!loading && !remote?.error && !remote?.limited && !groups.length && (
           <p className="px-4 py-12 text-center text-sm text-ink-500">
-            {code ? (sourceRows.length ? "El pedido tiene rutas, pero ninguna coincide con estos filtros." : "No encontramos ese código en una ruta. Revisa el código; el pedido podría estar sin asignar.") : onlyOpen ? "No hay rutas abiertas con esos filtros." : dayMode === "hoy" ? "Hoy no hay rutas todavía. Asigna pedidos desde Despacho del día." : "No hay rutas con esos filtros."}
+            {code ? (sourceRows.length ? "El pedido tiene rutas, pero ninguna coincide con estos filtros." : "No encontramos ese código en una ruta. Revisa el código; el pedido podría estar sin asignar.") : situation ? "No hay rutas con esa situación y esos filtros." : dayMode === "hoy" ? "Hoy no hay rutas todavía. Asigna pedidos desde Despacho del día." : "No hay rutas con esos filtros."}
           </p>
         )}
         {/* Desktop: tabla con una cabecera por fecha. Sin filas no se pinta:

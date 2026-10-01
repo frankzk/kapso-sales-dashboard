@@ -96,6 +96,17 @@ export function ledgerIsOpen(row: Pick<CourierLedgerRow, "routeStatus" | "manife
   return situation !== "cerrada" && situation !== "liquidada";
 }
 
+export type CourierSituationFilter = CourierLedgerSituation | "abiertas";
+
+export function parseCourierSituation(value: unknown): CourierSituationFilter | null {
+  return typeof value === "string" && (value === "abiertas" || Object.prototype.hasOwnProperty.call(LEDGER_SITUATION_LABELS, value))
+    ? value as CourierSituationFilter : null;
+}
+
+export function ledgerMatchesSituation(row: Pick<CourierLedgerRow, "routeStatus" | "manifestState" | "settlementStatus">, situation: CourierSituationFilter | null): boolean {
+  return !situation || (situation === "abiertas" ? ledgerIsOpen(row) : ledgerSituation(row) === situation);
+}
+
 interface RouteRowLite {
   id: string;
   rider_id: string;
@@ -108,18 +119,21 @@ interface RouteRowLite {
  * Rutas de reparto con su caja. Sin `day` trae las últimas `limit` (hoy
  * primero); con `day` trae solo ese día, sin tope práctico.
  */
-export async function getCourierRouteLedger(opts: { day?: string | null; limit?: number; openOnly?: boolean; routeIds?: string[] } = {}): Promise<CourierLedgerRow[]> {
+export async function getCourierRouteLedger(opts: { day?: string | null; limit?: number; allRoutes?: boolean; openOnly?: boolean; situation?: CourierSituationFilter; routeIds?: string[] } = {}): Promise<CourierLedgerRow[]> {
   if (opts.routeIds && !opts.routeIds.length) return [];
   const sb = await createServerSupabase();
   const query = () => {
     let q = sb.from("delivery_routes").select("id,rider_id,route_date,status,settlement_id");
     if (opts.day) q = q.eq("route_date", opts.day);
     if (opts.openOnly) q = q.neq("status", "cerrada");
+    if (opts.situation === "abiertas") q = q.neq("status", "cerrada");
+    if (opts.situation === "en_reparto") q = q.eq("status", "en_curso");
+    if (opts.situation === "cerrada") q = q.eq("status", "cerrada");
     if (opts.routeIds) q = q.in("id", opts.routeIds);
     return q.order("route_date", { ascending: false }).order("created_at", { ascending: false }).order("id");
   };
   let routes: RouteRowLite[];
-  if (opts.openOnly || opts.routeIds) {
+  if (opts.allRoutes || opts.openOnly || opts.situation || opts.routeIds) {
     routes = await allCourierRows<RouteRowLite>((from, to) => query().range(from, to));
   } else {
     const { data, error } = await query().limit(opts.day ? 500 : (opts.limit ?? 150));
@@ -254,7 +268,7 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
   // Una ruta abierta sin paradas ni paquetes no es una ruta: es la caja que
   // quedó vacía tras «Quitar» o «No lo llevo». Las cerradas o liquidadas se
   // conservan aunque queden en cero, porque son historia.
-  return rows.filter((r) => (!opts.openOnly || ledgerIsOpen(r)) && (r.assignedCount > 0 || r.routeStatus === "cerrada" || r.settlementStatus != null));
+  return rows.filter((r) => (!opts.openOnly || ledgerIsOpen(r)) && ledgerMatchesSituation(r, opts.situation ?? null) && (r.assignedCount > 0 || r.routeStatus === "cerrada" || r.settlementStatus != null));
 }
 
 /**
