@@ -151,11 +151,13 @@ export function CourierRoutesLedger({
         {/* Fecha siempre dice qué muestra; la «x» vuelve a hoy. */}
         <FilterPill ref={dayPill} label="Fecha" value={dayValue} expanded={openPill === "fecha"} onClick={() => setOpenPill((v) => (v === "fecha" ? null : "fecha"))} onClear={dayMode !== "hoy" ? () => setParams({ day: null }) : undefined} />
         <FilterPill ref={riderPill} label="Motorizado" value={riderParam ? riderName(riderParam) : null} expanded={openPill === "motorizado"} onClick={() => setOpenPill((v) => (v === "motorizado" ? null : "motorizado"))} onClear={() => setParams({ rider: null })} />
-        <select aria-label="Situación" value={situation ?? ""} onChange={(event) => setParams({ situation: parseCourierSituation(event.target.value) })} className={cn(FIELD, "w-auto max-w-full rounded-full py-1.5 text-[13px]", situation && "text-brand-700")}>
-          <option value="">Todas las situaciones</option>
-          <option value="abiertas">Todas las abiertas</option>
-          {(Object.entries(LEDGER_SITUATION_LABELS) as [CourierLedgerSituation, string][]).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </select>
+        <div className="w-52 max-w-full">
+          <select aria-label="Situación" value={situation ?? ""} onChange={(event) => setParams({ situation: parseCourierSituation(event.target.value) })} className={FIELD}>
+            <option value="">Todas las situaciones</option>
+            <option value="abiertas">Todas las abiertas</option>
+            {(Object.entries(LEDGER_SITUATION_LABELS) as [CourierLedgerSituation, string][]).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </div>
         {activeFilters > 0 && <OpsButton variant="ghost" size="sm" onClick={() => { setSearchInput(""); setParams({ day: null, rider: null, situation: null, code: null }); }}>Quitar filtros</OpsButton>}
         {openPill === "fecha" && (
           <Sheet look="ops" title="Fecha" onClose={() => setOpenPill(null)} anchored anchorRef={dayPill}>
