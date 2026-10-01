@@ -75,6 +75,7 @@ import {
 import { macroStageLabel, macroSubstageLabel, ORDER_MACRO_STAGES } from "@/lib/order-macro-stage";
 import { nonDeliveryReasonLabel } from "@/lib/gf-delivery";
 import { failedOutputLabel } from "@/lib/gf-retry";
+import { confirmedTandersReview, type TandersConfirmations, type TandersPackageLocation } from "@/lib/gf-tanders-review";
 import { addToTray, optimisticBox, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import type { RiderPickupMode } from "@/lib/grupo-gf-courier";
@@ -289,6 +290,7 @@ export function DispatchDayBoard(props: Props) {
         assignable: true,
         route: null,
         failedOutput: o.failedOutput ?? null,
+        tandersReview: o.tandersReview ?? null,
       }));
     return [...taken, ...free];
   }, [props.accepted, props.available]);
@@ -426,11 +428,15 @@ export function DispatchDayBoard(props: Props) {
   // Asignar a la caja de otro día un pedido programado pide confirmar (§29.6):
   // la franja ámbar sobre la tabla dice cuáles y para cuándo estaban.
   const [programConfirm, setProgramConfirm] = useState<QueueRow[] | null>(null);
+  type AssignOptions = { confirmProgrammed?: boolean; skip?: ReadonlySet<string>; tandersConfirmations?: TandersConfirmations };
+  const [tandersConfirm, setTandersConfirm] = useState<{ rows: QueueRow[]; opts: AssignOptions } | null>(null);
+  const [tandersChoices, setTandersChoices] = useState<TandersConfirmations>({});
+  useEffect(() => { setTandersConfirm(null); setTandersChoices({}); }, [selected, riderId, scanDay, props.available]);
   const confirmFirst = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (programConfirm) confirmFirst.current?.focus(); }, [programConfirm]);
   // Cambiar lo marcado deja la franja sin objeto: se vuelve a preguntar al asignar.
   useEffect(() => { setProgramConfirm(null); }, [selected]);
-  function assign(opts: { confirmProgrammed?: boolean; skip?: ReadonlySet<string> } = {}) {
+  function assign(opts: AssignOptions = {}) {
     if (!riderId || !selected.size) return;
     const ids = new Set([...selected].filter((id) => !opts.skip?.has(id)));
     if (!ids.size) { setProgramConfirm(null); return; }
@@ -439,6 +445,13 @@ export function DispatchDayBoard(props: Props) {
       if (conflicts.length) { setProgramConfirm(conflicts); return; }
     }
     setProgramConfirm(null);
+    const reviews = queue.filter((q) => ids.has(q.orderId) && q.tandersReview);
+    if (reviews.some((q) => !confirmedTandersReview(q.tandersReview!, opts.tandersConfirmations?.[q.orderId]))) {
+      setTandersChoices({});
+      setTandersConfirm({ rows: reviews, opts });
+      return;
+    }
+    setTandersConfirm(null);
     const confirmProgrammed = Boolean(opts.confirmProgrammed);
     const split = splitAssignment(ids, props.available, props.accepted);
     setSelected(new Set());
@@ -448,7 +461,7 @@ export function DispatchDayBoard(props: Props) {
       const notices: string[] = [];
       const errors: string[] = [];
       for (let i = 0; i < split.orderIds.length; i += 50) {
-        const r = await takeAndAssignGroupGfCourierOrders(orgId, riderId, split.orderIds.slice(i, i + 50), { overrideCash, day: scanDay, confirmProgrammed });
+        const r = await takeAndAssignGroupGfCourierOrders(orgId, riderId, split.orderIds.slice(i, i + 50), { overrideCash, day: scanDay, confirmProgrammed, tandersConfirmations: opts.tandersConfirmations });
         if (r.error) errors.push(r.error);
         else if (r.notice) notices.push(r.notice);
       }
@@ -878,6 +891,34 @@ export function DispatchDayBoard(props: Props) {
               </label>
             </div>
 
+            {tandersConfirm && (
+              <Sheet look="ops" title="Revisar paquetes de Tanders" onClose={() => setTandersConfirm(null)} wide>
+                <p className="mb-4 text-sm text-ink-600">Estos pedidos salieron en días anteriores y siguen sin entrega registrada. Confirma qué paquete saldrá con {riderName}. La guía de Tanders conserva su historial; Grupo GF tendrá una nueva salida y rótulo.</p>
+                <div className="space-y-4">
+                  {tandersConfirm.rows.map((q) => (
+                    <fieldset key={q.orderId} className="rounded-lg border border-line p-3">
+                      <legend className="px-1 text-sm font-semibold">{q.orderName} · despachado {programDayLabel(limaDay(q.tandersReview!.dispatchedAt)!)}</legend>
+                      {([
+                        ["returned", "El paquete volvió al almacén"],
+                        ["additional", "Saldrá otro paquete mientras se recupera el anterior"],
+                      ] as const).map(([value, label]) => (
+                        <label key={value} className="flex min-h-11 items-center gap-2 text-sm">
+                          <input type="radio" name={`tanders-${q.orderId}`} value={value} checked={tandersChoices[q.orderId]?.packageLocation === value}
+                            onChange={() => setTandersChoices((choices) => ({ ...choices, [q.orderId]: { shipmentIds: q.tandersReview!.shipmentIds, packageLocation: value as TandersPackageLocation } }))} />
+                          {label}
+                        </label>
+                      ))}
+                    </fieldset>
+                  ))}
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <OpsButton variant="primary" disabled={pending || tandersConfirm.rows.some((q) => !confirmedTandersReview(q.tandersReview!, tandersChoices[q.orderId]))}
+                    onClick={() => assign({ ...tandersConfirm.opts, tandersConfirmations: tandersChoices })}>Confirmar y asignar a {riderName}</OpsButton>
+                  <OpsButton variant="ghost" onClick={() => setTandersConfirm(null)}>Cancelar</OpsButton>
+                </div>
+              </Sheet>
+            )}
+
             {programConfirm && (() => {
               const others = [...selected].filter((id) => !programConfirm.some((q) => q.orderId === id)).length;
               const target = scanDay === day ? "hoy" : `el ${programDayLabel(scanDay)}`;
@@ -1135,6 +1176,7 @@ function StateBadges({ q, today }: { q: QueueRow; today: string }) {
     <div className="flex flex-wrap items-center gap-1">
       {q.route?.undeliveredReason && <Badge tone="urgent" title="Sigue en la caja del motorizado: márcalo y «Recibir en oficina» cuando vuelva el paquete">No entregado · {nonDeliveryReasonLabel(q.route.undeliveredReason)}</Badge>}
       {q.failedOutput && <Badge tone="crit" title="Otro courier no lo entregó. Al asignarlo se crea una salida nueva y Almacén arma otra caja con su rótulo.">{failedOutputLabel(q.failedOutput)}</Badge>}
+      {q.tandersReview && <span className="text-xs text-warn-fg" title="Confirma el paquete antes de asignar. Tanders conserva su salida original.">Tanders · despacho anterior · sin entrega · {programDayLabel(limaDay(q.tandersReview.dispatchedAt)!)}</span>}
       {q.assignable && q.programmedFor && <ProgramChip day={q.programmedFor} today={today} reason={q.programReason ?? null} />}
       {q.taken && !q.route && <Badge>tomado · sin caja</Badge>}
       {!q.assignable && q.macroSubstage && <Badge tone="info" title={macroStageLabel(q.macroStage)}>{macroSubstageLabel(q.macroSubstage)}</Badge>}

@@ -397,8 +397,8 @@ describe("las piezas en el código", () => {
     const body = src.slice(start, src.indexOf("\nexport async function loadCourierConfig(", start));
     expect(body).toContain("macro_stage,macro_substage,operational_status");
     expect(body).toContain("${RETRY_QUEUE_FILTER}");
-    expect(body).toContain("activeAssignedOutput(retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null)");
-    expect(body).toContain("const needsExistingBox = !retry && order.macro_substage !== \"por_generar_rotulo\"");
+    expect(body).toContain("activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null)");
+    expect(body).toContain("const needsExistingBox = !review && !retry && order.macro_substage !== \"por_generar_rotulo\"");
     expect(body).toContain("failedOutput: retry ? lastFailedOutput(outputs) : null");
   });
 
@@ -407,9 +407,9 @@ describe("las piezas en el código", () => {
     const start = src.indexOf("async function takeOrdersCore(");
     const body = src.slice(start, src.indexOf("\nexport ", start));
     expect(body).toContain("isCourierAdmissionStage(row.macro_stage, row.macro_substage, row.operational_status)");
-    expect(body).toContain("const fillable = retry ? null : pickFillableRouteOutput(outputs);");
-    expect(body).toContain("const mayCreateOutput = retry || row.macro_substage === \"por_generar_rotulo\";");
-    expect(body).toContain("motivo: failedBefore ? retryAdditionalReason(failedBefore) : null");
+    expect(body).toContain("const fillable = retry || review ? null : pickFillableRouteOutput(outputs);");
+    expect(body).toContain("const mayCreateOutput = Boolean(review) || retry || row.macro_substage === \"por_generar_rotulo\";");
+    expect(body).toContain("motivo: reviewReason ?? (failedBefore ? retryAdditionalReason(failedBefore) : null)");
     expect(body).toContain("outputs.length >= MAX_OUTPUTS_PER_ORDER");
     expect(body).toContain('kind: "additional_output_reason"');
     expect(body).toContain("reason: puerta.motivo");

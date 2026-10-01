@@ -154,9 +154,9 @@ export async function writeCourierGuide(
   admin: SupabaseClient,
   orderId: string,
   row: Record<string, unknown> & { created_via: string },
-  options: { createIfMissing?: boolean } = {},
+  options: { createIfMissing?: boolean; forceNew?: boolean } = {},
 ): Promise<RouteOutputWriteResult | { error: string }> {
-  const target = await findFillable(admin, orderId);
+  const target = options.forceNew ? null : await findFillable(admin, orderId);
   const dropped: string[] = [];
 
   if (target) {
