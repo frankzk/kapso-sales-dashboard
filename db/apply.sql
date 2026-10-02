@@ -439,4 +439,6 @@
 \ir migrations/0217_aliclik_sweep_reanudable.sql
 \echo 'Applying 0218_olva_portal_cotejo.sql'
 \ir migrations/0218_olva_portal_cotejo.sql
+\echo 'Applying 0219_swayp_claim_salida_por_definir.sql'
+\ir migrations/0219_swayp_claim_salida_por_definir.sql
 \echo 'Done.'
