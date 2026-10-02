@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createServerSupabaseMock } = vi.hoisted(() => ({
@@ -13,6 +15,7 @@ import {
   getStoreLeads,
   handoffFreshCutoffIso,
   HANDOFF_FRESH_HOURS,
+  sortPorLlamar,
 } from "@/lib/leads-access";
 
 describe("handoffFreshCutoffIso (frescura de la cola Atender ahora)", () => {
@@ -71,7 +74,7 @@ describe("getStoreLeads pagination", () => {
   }
 
   it("pide las páginas que faltan A LA VEZ cuando el servidor da el total", async () => {
-    const source = Array.from({ length: 2545 }, (_, index) => ({ id: `lead-${index}` }));
+    const source = Array.from({ length: 2545 }, (_, index) => ({ id: `lead-${String(index).padStart(4, "0")}` }));
     const { ranges, started, openGate } = mockPagedLeads(source, true);
 
     const pending = getStoreLeads(["kenku-peru"], "por_llamar", null);
@@ -93,7 +96,7 @@ describe("getStoreLeads pagination", () => {
   });
 
   it("drains every PostgREST page for the complete call queue (servidor sin total)", async () => {
-    const source = Array.from({ length: 1167 }, (_, index) => ({ id: `lead-${index}` }));
+    const source = Array.from({ length: 1167 }, (_, index) => ({ id: `lead-${String(index).padStart(4, "0")}` }));
     const { ranges, openGate } = mockPagedLeads(source, false);
     openGate(); // sin total no hay paralelo que valga: se drena en serie
 
@@ -108,7 +111,7 @@ describe("getStoreLeads pagination", () => {
   });
 
   it("no pide una segunda página cuando la primera ya no está llena", async () => {
-    const source = Array.from({ length: 42 }, (_, index) => ({ id: `lead-${index}` }));
+    const source = Array.from({ length: 42 }, (_, index) => ({ id: `lead-${String(index).padStart(4, "0")}` }));
     const { ranges, openGate } = mockPagedLeads(source, true);
     openGate();
 
@@ -215,5 +218,27 @@ describe("getLeadQueueSnapshot", () => {
     expect(snapshot.counts.por_llamar).toBe(1295);
     expect(snapshot.counts.sin_llamar).toBe(1250);
     expect(snapshot.signature.startsWith("legacy:")).toBe(true);
+  });
+});
+
+describe("sortPorLlamar", () => {
+  it("ordena como lo hacía la base: atención primero, interacción más reciente, id", () => {
+    const rows = [
+      { id: "b", needs_attention: false, last_interaction_at: "2026-10-01T10:00:00Z" },
+      { id: "a", needs_attention: false, last_interaction_at: "2026-10-01T10:00:00Z" },
+      { id: "c", needs_attention: true, last_interaction_at: "2026-09-01T10:00:00Z" },
+      { id: "d", needs_attention: false, last_interaction_at: "2026-10-02T10:00:00Z" },
+      { id: "e", needs_attention: false, last_interaction_at: null },
+    ];
+    // DESC deja los nulos primero, como Postgres.
+    expect(sortPorLlamar(rows).map((r) => r.id)).toEqual(["c", "e", "d", "a", "b"]);
+  });
+
+  it("la base ya no ordena las filas anchas de «Por llamar»: solo pagina por id", () => {
+    const src = readFileSync(join(process.cwd(), "lib/leads-access.ts"), "utf8");
+    const porLlamar = src.slice(src.indexOf('case "por_llamar":'), src.indexOf('case "handoff":'));
+    expect(porLlamar).toContain('.order("id", { ascending: true })');
+    expect(porLlamar).not.toContain('.order("needs_attention"');
+    expect(porLlamar).not.toContain('.order("last_interaction_at"');
   });
 });

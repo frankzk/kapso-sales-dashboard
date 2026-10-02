@@ -51,6 +51,7 @@ const LEAD_BOARD_SELECT = [
   "handoff_at",
   "category",
   "status",
+  "needs_attention",
   "has_order",
   "district",
   "cart_value",
@@ -139,9 +140,12 @@ export async function getStoreLeads(
         q = q
           .in("category", ["open", "hot"])
           .neq("status", "yape_por_verificar") // payment-pending leads live in the Yape/Shalom tab
-          .order("needs_attention", { ascending: false })
-          .order("last_interaction_at", { ascending: false })
-          .order("id", { ascending: true }); // stable pagination tie-breaker
+          // Solo por `id`: la cola se carga ENTERA y se ordena aquí
+          // (sortPorLlamar). Ordenar en la base las filas anchas de la cola
+          // —~7.000 con 40 columnas— desbordaba a disco en CADA página de cada
+          // refresco: 15 millones de bloques temporales escritos, la segunda
+          // consulta más cara de la base (02-10-2026).
+          .order("id", { ascending: true });
         break;
       case "handoff":
         // "Atender ahora": handoffs del bot ocurridos en las últimas
@@ -189,9 +193,37 @@ export async function getStoreLeads(
   if (limit !== null) {
     let res = await buildQuery().limit(limit);
     if (res.error) res = await buildQuery(LEAD_BOARD_SELECT_LEGACY).limit(limit);
-    return (res.data as unknown as LeadRow[]) ?? [];
+    const limited = (res.data as unknown as LeadRow[]) ?? [];
+    return view === "por_llamar" ? sortPorLlamar(limited) : limited;
   }
+  const all = await drainLeads(buildQuery);
+  return view === "por_llamar" ? sortPorLlamar(all) : all;
+}
 
+/**
+ * El orden de «Por llamar»: primero los que piden atención, luego la última
+ * interacción más reciente, y el id como desempate estable. Es el mismo orden
+ * que antes hacía la base (`DESC` deja los nulos primero, como Postgres).
+ */
+export function sortPorLlamar<T extends Pick<LeadRow, "id" | "needs_attention" | "last_interaction_at">>(rows: T[]): T[] {
+  const desc = (a: string | null | undefined, b: string | null | undefined) => {
+    if (a == b) return 0;
+    if (a == null) return -1;
+    if (b == null) return 1;
+    return a < b ? 1 : -1;
+  };
+  return [...rows].sort(
+    (a, b) =>
+      Number(Boolean(b.needs_attention)) - Number(Boolean(a.needs_attention)) ||
+      desc(a.last_interaction_at, b.last_interaction_at) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+}
+
+async function drainLeads(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  buildQuery: (select?: string, count?: "exact") => any,
+): Promise<LeadRow[]> {
   // PostgREST caps one response at ~1000 rows even when `.limit()` asks for
   // more. The queue's facets and chart drill-downs run client-side, so they must
   // receive the same complete universe that the paginated insights query uses.
