@@ -260,9 +260,79 @@ export async function getConversations(
 }
 
 /**
+ * Dónde se quedó la página anterior en el orden `instante DESC, id DESC`: la
+ * última fila leída. `at` va tal como lo devolvió PostgREST (con sus
+ * microsegundos) e `id` desempata las filas que comparten instante.
+ */
+export interface RecencyCursor {
+  at: string;
+  id: string;
+}
+
+const ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * El filtro `or` que deja solo lo que viene DESPUÉS del cursor en el orden
+ * `column DESC, id DESC`: un instante anterior, o el mismo con un id menor.
+ *
+ * Los dos valores salen de la propia base (la última fila de la página), pero
+ * `or` viaja como texto que PostgREST parsea —una coma o un paréntesis en el
+ * valor cambiaría la consulta, ver lib/aliclik-track.ts—, así que se validan
+ * antes de interpolarlos. Null si no tienen la forma esperada: quien pagina
+ * corta ahí en lugar de mandar un filtro que no controla.
+ */
+export function recencyCursorFilter(column: string, cursor: RecencyCursor): string | null {
+  if (!ISO_INSTANT_RE.test(cursor.at) || !UUID_RE.test(cursor.id)) return null;
+  return `${column}.lt."${cursor.at}",and(${column}.eq."${cursor.at}",id.lt.${cursor.id})`;
+}
+
+/**
+ * Microsegundos desde epoch. `Date` se queda en milisegundos y la base guarda
+ * microsegundos: sin los tres dígitos que faltan, dos leads del mismo
+ * milisegundo saldrían en otro orden que el de la base.
+ */
+function instantMicros(iso: string | null): number {
+  const ms = iso ? Date.parse(iso) : Number.NaN;
+  if (!Number.isFinite(ms)) return Number.NEGATIVE_INFINITY;
+  const fraction = /\.(\d+)/.exec(iso!)?.[1] ?? "";
+  return ms * 1000 + Number(`${fraction}000000`.slice(3, 6));
+}
+
+/** El orden de la base, `last_interaction_at DESC, id DESC`, para juntar tiendas. */
+function byInteractionDesc(a: LeadRow, b: LeadRow): number {
+  return (
+    instantMicros(b.last_interaction_at) - instantMicros(a.last_interaction_at) ||
+    (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
+  );
+}
+
+/**
  * Leads active in the range (last_interaction within bounds), RLS-scoped and
  * paginated. Feeds the leads-derived dashboard modules (loss reasons,
  * bot-vs-advisor, conversational funnel). Only the columns the metrics need.
+ *
+ * UNA CONSULTA POR TIENDA Y PAGINADA POR CURSOR (02-10-2026). Antes era una sola
+ * con `store_id = ANY(...)` y `OFFSET`, y las dos cosas obligaban a la base a
+ * ordenar el rango ENTERO en cada página:
+ *
+ * - Con `= ANY`, aunque llegue una sola tienda, el planificador no da por
+ *   ordenado lo que sale del índice `(store_id, last_interaction_at DESC)`: lo
+ *   lee en orden y lo vuelve a ordenar. Con `eq` lo usa tal cual.
+ * - Con `OFFSET`, la página 19 lee y ordena las 18.000 filas anteriores para
+ *   tirarlas. Con el cursor cada página empieza donde terminó la otra.
+ *
+ * Medido en producción con Kenku a 30 días (18.454 leads): con `OFFSET`, la
+ * página 16 tardaba 52 ms, leía 20.700 bloques y ordenaba 6 MB en memoria, a un
+ * paso de los 7 MB de `work_mem` (en la base Micro se iba a disco: 178 bloques
+ * temporales por página en promedio). Con el cursor, cualquier página: 4 ms y
+ * 1.033 bloques, sin más orden que el desempate de las filas del mismo instante.
+ *
+ * El resultado es el de antes: los mismos leads, del más reciente al más
+ * antiguo, con el tope MAX_ROWS aplicado a todas las tiendas juntas. Y ahora sin
+ * repetidos ni perdidos: con `OFFSET` y sin desempate, los leads que comparten
+ * instante —en Kenku, 9.438 de los últimos 90 días— podían salir dos veces o
+ * ninguna al cruzar el borde de una página.
  */
 export async function getLeadsForDashboard(
   storeIds: string[],
@@ -271,7 +341,6 @@ export async function getLeadsForDashboard(
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
   const { startIso, endIso } = rangeBounds(range);
-  const out: LeadRow[] = [];
   const BASE_COLS =
     "id,store_id,phone,wa_id,name,email,first_seen_at,last_interaction_at,kapso_conversation_id,handoff_reason,handoff_at,category,status,needs_attention,order_id,has_order";
   // Optional attribution columns, richest first. We try the fullest set and step
@@ -285,27 +354,58 @@ export async function getLeadsForDashboard(
     `${BASE_COLS},source,ad_id,ad_headline`,
     BASE_COLS,
   ];
-  let colIdx = 0;
-  const pageQuery = (select: string, from: number) =>
-    sb
-      .from("leads")
-      .select(select)
-      .in("store_id", storeIds)
-      .gte("last_interaction_at", startIso)
-      .lte("last_interaction_at", endIso)
-      .order("last_interaction_at", { ascending: false })
-      .range(from, from + PAGE_SIZE - 1);
-  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
-    let { data, error } = await pageQuery(COL_SETS[colIdx]!, from);
-    while (error && colIdx < COL_SETS.length - 1) {
-      colIdx++; // step down to a simpler column set and retry this page
-      ({ data, error } = await pageQuery(COL_SETS[colIdx]!, from));
+
+  const drainStore = async (storeId: string): Promise<LeadRow[]> => {
+    const out: LeadRow[] = [];
+    const seen = new Set<string>();
+    let colIdx = 0;
+    let cursor: RecencyCursor | null = null;
+    let after: string | null = null;
+    const pageQuery = (select: string) => {
+      let q = sb
+        .from("leads")
+        .select(select)
+        .eq("store_id", storeId)
+        .gte("last_interaction_at", startIso)
+        // El cursor también acota el índice por arriba; el `or` solo resuelve
+        // el desempate de las filas que comparten ese mismo instante.
+        .lte("last_interaction_at", cursor?.at ?? endIso);
+      if (after) q = q.or(after);
+      return q
+        .order("last_interaction_at", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(PAGE_SIZE);
+    };
+    while (out.length < MAX_ROWS) {
+      let { data, error } = await pageQuery(COL_SETS[colIdx]!);
+      while (error && colIdx < COL_SETS.length - 1) {
+        colIdx++; // step down to a simpler column set and retry this page
+        ({ data, error } = await pageQuery(COL_SETS[colIdx]!));
+      }
+      if (error || !data?.length) break;
+      const rows = data as unknown as LeadRow[];
+      // Un lead cuya última interacción retrocediera durante el drenado podría
+      // volver a salir más abajo; contarlo dos veces inflaría las métricas.
+      for (const row of rows) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        out.push(row);
+      }
+      if (rows.length < PAGE_SIZE) break;
+      const last = rows[rows.length - 1]!;
+      if (!last.last_interaction_at) break;
+      cursor = { at: last.last_interaction_at, id: last.id };
+      after = recencyCursorFilter("last_interaction_at", cursor);
+      if (!after) break;
     }
-    if (error || !data?.length) break;
-    out.push(...(data as unknown as LeadRow[]));
-    if (data.length < PAGE_SIZE) break;
-  }
-  return out;
+    return out;
+  };
+
+  const perStore = await Promise.all([...new Set(storeIds)].map(drainStore));
+  // Una tienda ya llega en el orden de la base; varias se intercalan con ese
+  // mismo orden para que el tope se quede con los más recientes de todas.
+  const all = perStore.length === 1 ? perStore[0]! : perStore.flat().sort(byInteractionDesc);
+  return all.slice(0, MAX_ROWS);
 }
 
 /** Leads acquired for the first time in the selected local-calendar range.
