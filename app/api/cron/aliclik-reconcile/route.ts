@@ -6,7 +6,7 @@ import { listOrders, type AliclikOrder } from "@/lib/aliclik";
 import { applyAliclikSnapshot } from "@/lib/aliclik-track";
 import { normalizePhone } from "@/lib/phone";
 import { readOrderMarker } from "@/lib/aliclik-reconcile";
-import { recordSweep } from "@/lib/aliclik-sweep-state";
+import { planSweep, readSweepCursor, recordSweep } from "@/lib/aliclik-sweep-state";
 import { categoryOf } from "@/lib/shipments";
 import { env } from "@/lib/env";
 
@@ -114,6 +114,10 @@ interface StoreReport {
   sweepComplete: boolean;
   /** Por qué se cortó, cuando se cortó. Vacío si terminó el recorrido. */
   stoppedBy: "" | "api_error" | "budget" | "max_pages";
+  /** Página por la que empezó esta pasada (>1: continuó un ciclo cortado). */
+  startPage: number;
+  /** Por qué página sigue el ciclo si esta pasada no lo terminó. */
+  resumePage: number | null;
   errors: string[];
 }
 
@@ -350,6 +354,8 @@ const emptyReport = (storeId: string): StoreReport => ({
   pages: 0,
   sweepComplete: false,
   stoppedBy: "",
+  startPage: 1,
+  resumePage: null,
   errors: [],
 });
 
@@ -361,9 +367,14 @@ async function reconcileStore(
 ): Promise<StoreReport> {
   const report = emptyReport(storeId);
   const startedAt = new Date();
-  const windowFrom = new Date(startedAt.getTime() - LOOKBACK_DAYS * DAY_MS);
+  // Un recorrido entero puede no caber en una pasada: si la anterior se cortó,
+  // esta sigue por su página y con su misma ventana (0217). El inicio del CICLO
+  // es lo que vale como evidencia cuando se termina.
+  const plan = planSweep(await readSweepCursor(admin, storeId), startedAt, LOOKBACK_DAYS * DAY_MS);
+  const windowFrom = plan.windowFrom;
   const startDate = dateKey(windowFrom);
   const endDate = dateKey(startedAt);
+  report.startPage = plan.startPage;
 
   // Intenciones que se quedaron sin respuesta. Se cargan ANTES del barrido para
   // poder emparejarlas con lo que devuelva Aliclik en la misma pasada.
@@ -398,8 +409,12 @@ async function reconcileStore(
   // por error de la API, por el tope de páginas o por agotar el presupuesto de
   // tiempo deja esto en false a propósito.
   let sweepComplete = false;
+  // Por qué página tiene que seguir la próxima pasada si esta no termina.
+  let resumePage: number | null = null;
 
-  for (let page = 1; page <= MAX_PAGES; page++) {
+  const lastPage = plan.startPage + MAX_PAGES - 1;
+  for (let page = plan.startPage; page <= lastPage; page++) {
+    resumePage = page;
     if (Date.now() > deadline) {
       report.stoppedBy = "budget";
       break;
@@ -484,7 +499,10 @@ async function reconcileStore(
       sweepComplete = true;
       break;
     }
-    if (page === MAX_PAGES) report.stoppedBy = "max_pages";
+    // Esta página quedó leída entera: si la pasada se corta ahora, se sigue por
+    // la siguiente.
+    resumePage = page + 1;
+    if (page === lastPage) report.stoppedBy = "max_pages";
   }
 
   report.sweepComplete = sweepComplete;
@@ -504,11 +522,13 @@ async function reconcileStore(
   // La constancia va SIEMPRE, complete o no: una pasada truncada solo anota el
   // intento y deja intactas las marcas del último barrido bueno.
   const stateErr = await recordSweep(admin, storeId, {
-    startedAt,
+    startedAt: plan.cycleStartedAt,
     finishedAt: new Date(),
     windowFrom,
     complete: sweepComplete,
+    resumePage: sweepComplete ? null : resumePage,
   });
+  report.resumePage = sweepComplete ? null : resumePage;
   if (stateErr) report.errors.push(`constancia del barrido: ${stateErr}`);
 
   return report;
@@ -550,6 +570,18 @@ async function run(req: NextRequest) {
     }
   }
 
+  // Una línea por pasada en los logs. Sin ella, por qué un barrido no terminaba
+  // (tiempo, error de la API, tope de páginas) solo se veía llamando al cron a
+  // mano: desde el 29-09 ninguna pasada se completó y nadie lo supo hasta el
+  // 02-10 (0217).
+  console.info(
+    "aliclik-reconcile",
+    JSON.stringify(reports.map((r) => ({
+      store: r.storeId, pages: r.pages, startPage: r.startPage, resumePage: r.resumePage,
+      complete: r.sweepComplete, stoppedBy: r.stoppedBy, scanned: r.scanned, applied: r.applied,
+      errors: r.errors.slice(0, 3),
+    }))),
+  );
   return NextResponse.json({ ok: true, reports });
 }
 
