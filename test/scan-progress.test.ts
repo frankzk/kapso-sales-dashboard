@@ -41,7 +41,7 @@ describe("escaneo continuo con avance (MOM §30.9)", () => {
     const board = read("components/dispatch-day-board.tsx");
     expect(board).toContain("en la caja de ${riderName}${liveBox.pending ? ` · ${liveBox.pending} asignando…` : \"\"}` } : undefined}");
     const action = read("components/scan-action.tsx");
-    expect(action).toContain("status={lastRead}");
+    expect(action).toContain("status={lastRead?.scope === scanScope ? lastRead.result : null}");
   });
 });
 

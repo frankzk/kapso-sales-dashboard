@@ -183,7 +183,17 @@ export function DispatchDayBoard(props: Props) {
       /* sin almacenamiento: se cierra solo en esta vista */
     }
   };
-  const [lines, setLines] = useState<ScanAssignLine[]>([]);
+  // Cada respuesta conserva el destino elegido al leer el QR, aunque el
+  // usuario cambie de motorizado o día mientras espera al servidor.
+  const scanScope = JSON.stringify([orgId, riderId, scanDay]);
+  const [linesByScope, setLinesByScope] = useState<Record<string, ScanAssignLine[]>>({});
+  const lines = useMemo(() => linesByScope[scanScope] ?? [], [linesByScope, scanScope]);
+  function updateLines(scope: string, update: (current: ScanAssignLine[]) => ScanAssignLine[]) {
+    setLinesByScope((current) => ({ ...current, [scope]: update(current[scope] ?? []) }));
+  }
+  function setLines(update: ScanAssignLine[] | ((current: ScanAssignLine[]) => ScanAssignLine[])) {
+    updateLines(scanScope, (current) => typeof update === "function" ? update(current) : update);
+  }
   const [tray, setTray] = useState<TrayEntry[]>([]);
   const [draining, setDraining] = useState(false);
 
@@ -223,11 +233,12 @@ export function DispatchDayBoard(props: Props) {
   /** «Escanear primero»: al elegir motorizado, la bandeja se vacía en la caja de una vez. */
   async function drainTray(targetRiderId: string) {
     if (!targetRiderId || !tray.length || draining) return;
+    const targetScope = JSON.stringify([orgId, targetRiderId, scanDay]);
     setDraining(true);
     try {
       for (const entry of tray) {
         const line = await scanAssignToRider(orgId, targetRiderId, entry.code, { overrideCash, scheduledFor: scanDay });
-        setLines((cur) => [line, ...cur].slice(0, 200));
+        updateLines(targetScope, (cur) => [line, ...cur].slice(0, 200));
         setTray((cur) => removeFromTray(cur, entry.code));
       }
       router.refresh();

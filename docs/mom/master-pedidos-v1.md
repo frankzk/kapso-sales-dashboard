@@ -6903,6 +6903,13 @@ se puede reintentar y solo desaparece del aviso cuando se confirma correctamente
 La cámara no se cierra automáticamente mientras haya confirmaciones pendientes.
 Al volver a la app después de ocultarla, se vuelve a abrir la cámara.
 
+La lista de resultados de «Por QR» y su contador se separan por organización,
+motorizado y día de la caja. Cambiar de destino muestra solo sus lecturas;
+volver al anterior recupera las suyas. Una respuesta tardía se queda en el
+destino original y no aparece ni suma en el nuevo. «Limpiar lista» afecta
+únicamente al destino visible. Los códigos escaneados sin motorizado siguen
+en la bandeja y se asignan al motorizado elegido.
+
 **Agregar pedidos dentro de la caja (01-10-2026).** El paso de Rutas también
 usa escaneo continuo: muestra «Asignando…» desde la lectura y cuenta únicamente
 los paquetes confirmados de la tanda, sin duplicar un paquete repetido. No
