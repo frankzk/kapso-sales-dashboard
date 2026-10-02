@@ -138,8 +138,11 @@ roles and the `auth` schema, so it just works.
      `deferred` solo dice que no cupo y vuelve en la pasada siguiente — si no
      baja nunca, el presupuesto se quedó corto.
    - `/api/cron/telegram-summary` — daily 13:00 UTC (per-store daily summary).
-   - `/api/cron/aliclik-catalog` — diario 09:00 UTC. Refresca el espejo del
-     catálogo de Aliclik (EAN, stock por almacén, agencias Shalom). Solo lectura.
+   - `/api/cron/aliclik-catalog` — cada hora, en el minuto 7. Refresca el espejo
+     del catálogo de Aliclik (EAN, stock por almacén, agencias Shalom). Solo
+     lectura. Era diario (09:00 UTC) hasta el 2-10-2026: lo que cambiaba en
+     Aliclik durante el día no se veía hasta el día siguiente y bloqueaba la
+     creación de pedidos hasta que alguien sincronizaba a mano.
    - `/api/cron/aliclik-reconcile` — cada 20 min. Red de seguridad del webhook de
      Aliclik, que llega **sin firma y sin garantía de entrega**: relee los
      pedidos de los últimos 14 días y resuelve las creaciones que se fueron en

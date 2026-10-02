@@ -15,6 +15,7 @@ import { getAccessibleStores } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { getStoreCreds } from "@/lib/ingest";
 import {
+  latestSyncedAt,
   loadAllAliclikSkus,
   loadShopifySkuDetails,
   normalizeProductName,
@@ -275,7 +276,7 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
     swaypUnmapped: rows.filter((r) => !r.codbar).length,
     missingSku: rows.filter((r) => !r.shopifySku).length,
     catalogSize: skus.length,
-    syncedAt: skus[0]?.synced_at ?? null,
+    syncedAt: latestSyncedAt(skus),
   };
 }
 
