@@ -4,13 +4,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState, useTransition } from "react";
 import { registerUrpiSource, syncUrpiSource } from "@/app/dashboard/urpi/actions";
-import { URPI_SOURCE_EXAMPLES, sheetUrl } from "@/lib/urpi-programming";
+import { URPI_SOURCE_EXAMPLES, sheetUrl, urpiAutoMonths } from "@/lib/urpi-programming";
 import type { UrpiSource, UrpiSnapshot } from "@/lib/urpi-programming-db";
 
 type Store = { id: string; name: string; canManage: boolean; canEdit: boolean };
 type Props = {
   stores: Store[]; sources: UrpiSource[]; source: UrpiSource | null; snapshot: UrpiSnapshot | null;
-  versions: Pick<UrpiSnapshot, "id" | "created_at" | "origin" | "row_count">[]; googleConfigured: boolean;
+  versions: Pick<UrpiSnapshot, "id" | "created_at" | "origin" | "row_count">[]; googleConfigured: boolean; autoSyncEnabled: boolean;
 };
 const field = "h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500";
 const button = "rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50";
@@ -19,7 +19,7 @@ const dateLabel = (value: string) => value.split("-").reverse().join("/");
 const timeLabel = (value: string) => new Intl.DateTimeFormat("es-PE", { dateStyle: "short", timeStyle: "short", timeZone: "America/Lima" }).format(new Date(value));
 const money = (value: number) => new Intl.NumberFormat("es-PE", { style: "currency", currency: "PEN" }).format(value);
 
-export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versions, googleConfigured }: Props) {
+export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versions, googleConfigured, autoSyncEnabled }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [uploading, setUploading] = useState(false);
@@ -115,6 +115,9 @@ export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versio
           <span>{googleConfigured ? "Conexión de lectura a Google configurada" : "Conexión a Google pendiente · disponible mediante Excel"}</span>
         </div>
         {!googleConfigured && selectedStore?.canEdit && <p className="text-sm text-slate-600">Para cargar ahora: abre el Sheet y elige Archivo → Descargar → Microsoft Excel (.xlsx). Se leerán todas las pestañas del mes seleccionado.</p>}
+        <p className="text-sm text-slate-600">{!autoSyncEnabled ? "Lectura automática pendiente de activación." : source && urpiAutoMonths().includes(source.month) ? "Lectura automática programada cada 15 minutos. No necesitas mantener esta pantalla abierta." : "Archivo histórico: actualización manual disponible. La lectura automática cubre el mes anterior, actual y siguiente."}</p>
+        {source?.last_auto_attempt_at && <p className="text-xs text-slate-500">Último intento automático: {timeLabel(source.last_auto_attempt_at)}{source.last_auto_success_at ? ` · Última lectura automática correcta: ${timeLabel(source.last_auto_success_at)}` : ""} · hora de Lima</p>}
+        {source?.last_auto_error && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{source.last_auto_error}</p>}
       </section>
 
       {snapshot ? <>

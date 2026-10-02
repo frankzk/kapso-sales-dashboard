@@ -5,7 +5,8 @@ custodia, cobro ni liquidación a partir de las pestañas de programación.
 
 ## Instalación
 
-1. Aplicar `db/migrations/0212_urpi_programming.sql` antes de desplegar.
+1. Aplicar `db/migrations/0212_urpi_programming.sql` y
+   `db/migrations/0213_urpi_auto_sync.sql` antes de desplegar.
 2. Registrar el enlace y mes por tienda. Para archivos mixtos, registrar el
    mismo enlace para Kenku (prefijo KP) y Aurela (prefijo AUR). La separación
    por tienda permite aplicar la misma autorización de lectura que el Master.
@@ -29,9 +30,34 @@ a Kapta. La aplicación necesita una conexión propia:
    `spreadsheets.readonly`, descubre pestañas por metadata y lee rangos acotados
    A:O del mes solicitado. No modifica el archivo de Urpi.
 
-Esta primera fase ejecuta la lectura bajo demanda; todavía no hay un cron
-automático ni scraping de AppSheet. Si no hay credenciales, la pantalla explica
-que la conexión está pendiente y mantiene habilitada la carga de Excel.
+También se puede ejecutar la lectura con el botón, además del proceso periódico
+descrito abajo. Si no hay credenciales, la pantalla explica que la conexión está
+pendiente y mantiene habilitada la carga de Excel. AppSheet no está integrado.
+
+## Lectura automática
+
+- Endpoint `/api/cron/urpi-programming`, programado cada 15 minutos, todos los
+  días. Requiere `Authorization: Bearer <CRON_SECRET>`; no admite secreto en URL.
+- Vercel lo ejecuta en producción. Previews se omiten; sin credenciales de Google
+  tampoco se consulta la base. `URPI_AUTO_SYNC_ENABLED=false` permite pausarlo.
+- Consulta únicamente fuentes ya registradas del mes anterior, actual y siguiente
+  según `America/Lima`. Cada nuevo archivo mensual debe registrarse y compartirse
+  como lector con la cuenta de integración. Meses antiguos: actualización manual.
+- Procesa hasta 12 fuentes por ciclo, empezando por el intento más antiguo.
+  Con más fuentes o respuestas lentas, algunas pasan al siguiente ciclo. Un libro
+  Kenku/Aurela se descarga una sola vez por ejecución y se separa por prefijo.
+- Reserva de 6 minutos por fuente e intervalo mínimo de 10 minutos entre intentos;
+  la reserva caduca si se interrumpe la función. Solo su propietario puede liberarla.
+  El lector tiene 60 segundos por libro y el barrido deja de tomar fuentes tras
+  180 segundos, dentro de los 300 segundos máximos del endpoint.
+- Reutiliza las versiones inmutables: sin cambios no hay otra versión; una lectura
+  fallida no vacía ni reemplaza datos. Guarda actor nulo para la ejecución de sistema.
+  La hora original de lectura se conserva aunque se reutilice para otra tienda,
+  evitando sobrescribir una importación manual posterior con datos anteriores.
+- La pantalla muestra último intento, última lectura automática correcta y errores.
+  Un fallo devuelve HTTP 503 para observabilidad y se reintenta en el siguiente ciclo.
+  Los logs y respuestas del cron no incluyen filas, destinatarios ni credenciales.
+- No es una automatización de este chat: funciona en el servidor aun con Kapta cerrado.
 
 ## Integridad
 
@@ -68,6 +94,7 @@ en reportes de entrega ni cambia fechas por sí sola.
 
 `npm test -- test/urpi-programming.test.ts test/urpi-programming-access.test.ts test/urpi-google-sheets.test.ts test/urpi-excel.test.ts`
 y `npm run typecheck`.
+Para el proceso periódico: `npm test -- test/urpi-auto-sync.test.ts test/urpi-auto-route.test.ts`.
 
 La prueba de SQL requiere el runtime PostgreSQL local aislado:
 `node scripts/verify-urpi-programming.mjs <ruta-a-local-postgres-runtime.mjs>`.
@@ -76,7 +103,7 @@ aislamiento por tienda y rechazo de lecturas atrasadas. Nunca usa DATABASE_URL.
 
 ### Resultado de la validación local (01/10/2026)
 
-- 52 pruebas de lector, permisos, fechas y navegación relacionadas; 17 checks
+- 63 pruebas de lector, permisos, fechas, cron y navegación relacionadas; 26 checks
   sobre PostgreSQL local aislado. TypeScript sin errores.
 - Lectura de las 53 pestañas reales de septiembre y octubre: 208 programaciones
   con código en esa lectura, y una fila sin código señalada para revisión.

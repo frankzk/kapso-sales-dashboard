@@ -6,7 +6,7 @@ export function urpiGoogleConfigured(): boolean {
   return Boolean(process.env.URPI_GOOGLE_CLIENT_EMAIL && process.env.URPI_GOOGLE_PRIVATE_KEY);
 }
 
-async function googleToken(): Promise<string> {
+async function googleToken(signal: AbortSignal): Promise<string> {
   if (!urpiGoogleConfigured()) throw new Error("La lectura de Google todavía no está conectada. Puedes cargar el Excel descargado del mismo Sheet.");
   const now = Math.floor(Date.now() / 1000);
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -17,7 +17,7 @@ async function googleToken(): Promise<string> {
   })}`;
   const signature = createSign("RSA-SHA256").update(assertion).sign(process.env.URPI_GOOGLE_PRIVATE_KEY!.replace(/\\n/g, "\n"), "base64url");
   const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST", cache: "no-store", signal: AbortSignal.timeout(15000),
+    method: "POST", cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]),
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: `${assertion}.${signature}` }),
   });
@@ -27,8 +27,8 @@ async function googleToken(): Promise<string> {
   return body.access_token;
 }
 
-async function readGoogle(url: string, token: string): Promise<unknown> {
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store", signal: AbortSignal.timeout(20000) });
+async function readGoogle(url: string, token: string, signal: AbortSignal): Promise<unknown> {
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(20000)]) });
   if (res.status === 403 || res.status === 404) throw new Error("La conexión no puede leer este Sheet. Comparte el archivo como lector con la cuenta de integración y comprueba que Sheets API esté habilitada.");
   if (!res.ok) throw new Error(`Google Sheets no respondió correctamente (${res.status}). Conservamos la última lectura.`);
   return res.json();
@@ -36,9 +36,10 @@ async function readGoogle(url: string, token: string): Promise<unknown> {
 
 export async function readUrpiGoogleWorkbook(spreadsheetId: string, month: string): Promise<{ title: string; tabs: UrpiTab[] }> {
   if (!/^[a-zA-Z0-9_-]{20,100}$/.test(spreadsheetId)) throw new Error("Identificador de Sheet inválido.");
-  const token = await googleToken();
+  const signal = AbortSignal.timeout(60000);
+  const token = await googleToken(signal);
   const base = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}`;
-  const metadata = await readGoogle(`${base}?fields=properties(title),sheets(properties(sheetId,title,gridProperties))`, token) as {
+  const metadata = await readGoogle(`${base}?fields=properties(title),sheets(properties(sheetId,title,gridProperties))`, token, signal) as {
     properties: { title: string };
     sheets: { properties: { title: string; sheetId: number; gridProperties?: { rowCount: number; columnCount: number } } }[];
   };
@@ -53,7 +54,7 @@ export async function readUrpiGoogleWorkbook(spreadsheetId: string, month: strin
     const group = sheets.slice(offset, offset + 5);
     const params = new URLSearchParams({ valueRenderOption: "FORMATTED_VALUE" });
     for (const sheet of group) params.append("ranges", `'${sheet.title.replace(/'/g, "''")}'!A1:O${sheet.gridProperties!.rowCount}`);
-    const result = await readGoogle(`${base}/values:batchGet?${params}`, token) as { valueRanges?: { values?: unknown[][] }[] };
+    const result = await readGoogle(`${base}/values:batchGet?${params}`, token, signal) as { valueRanges?: { values?: unknown[][] }[] };
     if (result.valueRanges?.length !== group.length) throw new Error("Google devolvió una lectura incompleta. Conservamos la última lectura.");
     group.forEach((sheet, i) => tabs.push({ title: sheet.title, sheetId: sheet.sheetId, values: result.valueRanges![i]?.values ?? [] }));
   }

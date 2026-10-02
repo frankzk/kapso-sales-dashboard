@@ -30,6 +30,9 @@ try {
   const migration = await readFile(new URL("../db/migrations/0212_urpi_programming.sql", import.meta.url), "utf8");
   await db.query(migration);
   await db.query(migration); // Migration is rerunnable.
+  const autoMigration = await readFile(new URL("../db/migrations/0213_urpi_auto_sync.sql", import.meta.url), "utf8");
+  await db.query(autoMigration);
+  await db.query(autoMigration);
   const { rows: sources } = await db.query(`insert into urpi_programming_sources(store_id,spreadsheet_id,month,order_prefix,name)
     values ('11111111-1111-1111-1111-111111111111','12345678901234567890123','2026-10','KP','Kenku'),
     ('22222222-2222-2222-2222-222222222222','12345678901234567890123','2026-10','AUR','Aurela') returning id`);
@@ -61,5 +64,38 @@ try {
   await assert.rejects(db.query("select * from urpi_programming_sources"), /permission denied/); checks++;
   await db.query("reset role");
   assert.equal((await db.query("select count(*)::int as n from orders")).rows[0].n, 2); checks++;
+  // Two workers compete for the same source. Conditional UPDATE is the lease;
+  // only the token owner may finish it, and cooldown blocks duplicate delivery.
+  const worker = await runtime.connect("postgres", { application_name: "urpi-auto-contender" });
+  const tokenA = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+  const tokenB = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+  const claimSql = `update urpi_programming_sources set auto_sync_token=$2,
+      auto_sync_until=$3::timestamptz + interval '6 minutes', last_auto_attempt_at=$3
+    where id=$1 and (last_auto_attempt_at is null or last_auto_attempt_at < $3::timestamptz - interval '10 minutes')
+      and (auto_sync_until is null or auto_sync_until < $3::timestamptz) returning id`;
+  try {
+    await db.query("set role service_role");
+    await worker.query("set role service_role");
+    const contenders = await Promise.all([
+      db.query(claimSql, [source, tokenA, "2026-10-01T15:00:00Z"]),
+      worker.query(claimSql, [source, tokenB, "2026-10-01T15:00:00Z"]),
+    ]);
+    assert.equal(contenders.reduce((n, r) => n + r.rowCount, 0), 1); checks++;
+    const winner = contenders[0].rowCount ? tokenA : tokenB;
+    const loser = winner === tokenA ? tokenB : tokenA;
+    assert.equal((await db.query("update urpi_programming_sources set auto_sync_token=null,auto_sync_until=null where id=$1 and auto_sync_token=$2 returning id", [source, loser])).rowCount, 0); checks++;
+    assert.equal((await db.query("update urpi_programming_sources set auto_sync_token=null,auto_sync_until=null where id=$1 and auto_sync_token=$2 returning id", [source, winner])).rowCount, 1); checks++;
+    assert.equal((await db.query(claimSql, [source, loser, "2026-10-01T15:05:00Z"])).rowCount, 0); checks++;
+    assert.equal((await db.query(claimSql, [source, loser, "2026-10-01T15:15:00Z"])).rowCount, 1); checks++;
+    // An interrupted worker's lease expires without a manual unlock.
+    assert.equal((await db.query(claimSql, [source, winner, "2026-10-01T15:30:00Z"])).rowCount, 1); checks++;
+    await db.query("update urpi_programming_sources set last_auto_error='read failed' where id=$1", [source]);
+    assert.equal((await db.query("select count(*)::int as n from urpi_programming_snapshots")).rows[0].n, 2); checks++;
+    // Automatic snapshots record a system actor, not a fabricated user.
+    await db.query("select save_urpi_programming_snapshot($1,null,$2,$3,$4,'google',null)", [source, "2026-10-01T15:30:00Z", "c".repeat(64), payload]);
+    assert.equal((await db.query("select created_by from urpi_programming_snapshots where digest=$1", ["c".repeat(64)])).rows[0].created_by, null); checks++;
+    await db.query("reset role; set role authenticated");
+    await assert.rejects(db.query("update urpi_programming_sources set auto_sync_token=null"), /permission denied/); checks++;
+  } finally { await worker.end(); }
   console.log(JSON.stringify({ ok: true, checks, localOnly: true, scenario: "RLS, immutable history, idempotency, stale import and cross-store protection" }));
 } finally { await runtime.stop(); }

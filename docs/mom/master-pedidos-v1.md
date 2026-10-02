@@ -7758,8 +7758,19 @@ ni entregar el pedido. Los conteos son de programaciones, no ventas ni intentos.
 
 Lectura mediante conexión propia de Google con permiso de solo lectura; alternativa
 de carga del libro mensual completo `.xlsx`. La conexión de una conversación de
-Codex no autoriza automáticamente al servidor de Kapta. En esta fase la lectura es
-bajo demanda. RLS restringe fuentes y versiones a `auth_store_ids()`; registrar
+Codex no autoriza automáticamente al servidor de Kapta. La lectura automática se
+programa cada 15 minutos para fuentes registradas del mes anterior, actual y
+siguiente, según Lima. No descubre ni registra por sí sola archivos nuevos.
+Los meses más antiguos mantienen actualización manual. Un libro compartido se
+lee una vez por ejecución; sus prefijos siguen aislados por tienda. Una reserva
+temporal y un intervalo mínimo de 10 minutos evitan lecturas automáticas
+duplicadas. Cada ejecución procesa hasta 12 fuentes, priorizando las de intento
+más antiguo; al agotar el tiempo, el resto queda para el siguiente ciclo.
+Un fallo conserva la versión vigente, queda visible y se reintenta en el ciclo
+siguiente. Las versiones automáticas registran actor de sistema (`created_by`
+nulo); una lectura manual más reciente prevalece sobre datos automáticos previos.
+El proceso no modifica estados de entrega ni genera reprogramaciones.
+RLS restringe fuentes y versiones a `auth_store_ids()`; registrar
 exige `sheets.manage` e importar `sheets.edit`, dentro de la organización elegida.
 
 **Regla de Urpi confirmada por el owner:** «Reprogramado» es para el día siguiente
@@ -7769,7 +7780,7 @@ identidad de pedido ni otra salida física. Se omiten domingos; no se estableci�
 excepción para feriados. La función y sus pruebas quedan preparadas para la fase
 de reportes; la programación enviada conserva su fecha original.
 
-Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migración 0212.
+Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0212–0213.
 
 ## 31. Agradecimiento con catálogo al entregar
 

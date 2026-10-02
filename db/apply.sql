@@ -433,4 +433,6 @@
 \ir migrations/0214_auto_order_trials.sql
 \echo 'Applying 0215_urpi_programming.sql'
 \ir migrations/0215_urpi_programming.sql
+\echo 'Applying 0216_urpi_auto_sync.sql'
+\ir migrations/0216_urpi_auto_sync.sql
 \echo 'Done.'

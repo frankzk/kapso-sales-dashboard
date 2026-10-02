@@ -11,6 +11,9 @@ export interface UrpiSource {
   name: string;
   current_snapshot_id: string | null;
   last_checked_at: string | null;
+  last_auto_attempt_at?: string | null;
+  last_auto_success_at?: string | null;
+  last_auto_error?: string | null;
 }
 
 export interface UrpiSnapshot {
@@ -50,7 +53,7 @@ export async function linkUrpiOrders(admin: SupabaseClient, storeId: string, dat
 }
 
 export async function saveUrpiProgramming(admin: SupabaseClient, source: UrpiSource, data: UrpiProgrammingData, options: {
-  actor: string; startedAt: string; origin: "google" | "excel"; filename: string | null;
+  actor: string | null; startedAt: string; origin: "google" | "excel"; filename: string | null;
 }): Promise<{ changed: boolean; rows: number; linked: number }> {
   if (source.current_snapshot_id) {
     const { data: previous, error } = await admin.from("urpi_programming_snapshots").select("payload").eq("source_id", source.id).eq("id", source.current_snapshot_id).single();

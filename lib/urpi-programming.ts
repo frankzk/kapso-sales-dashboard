@@ -55,6 +55,14 @@ export function validMonth(value: string): boolean {
   return /^20\d{2}-(0[1-9]|1[0-2])$/.test(value);
 }
 
+/** Month boundaries follow Lima, including January/December rollover. */
+export function urpiAutoMonths(now = new Date()): string[] {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Lima", year: "numeric", month: "2-digit" }).formatToParts(now);
+  const year = Number(parts.find((part) => part.type === "year")!.value);
+  const month = Number(parts.find((part) => part.type === "month")!.value) - 1;
+  return [-1, 0, 1].map((offset) => new Date(Date.UTC(year, month + offset, 1)).toISOString().slice(0, 7));
+}
+
 export function urpiDateIso(value: unknown): string | null {
   const text = String(value ?? "").trim();
   let parts: string[] | null = null;

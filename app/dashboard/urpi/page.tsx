@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/ui";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import { UrpiProgrammingBoard } from "@/components/urpi-programming-board";
 import { urpiGoogleConfigured } from "@/lib/urpi-google-sheets";
+import { urpiAutoEnabled } from "@/lib/urpi-auto-sync";
 import type { UrpiSource, UrpiSnapshot } from "@/lib/urpi-programming-db";
 
 export const dynamic = "force-dynamic";
@@ -45,5 +46,6 @@ async function UrpiContent({ searchParams }: { searchParams: Promise<Params> }) 
     key={`${source?.id ?? "empty"}:${snapshot?.id ?? "empty"}`}
     stores={stores.map((store) => ({ id: store.id, name: store.name, canManage: permissions.get(store.org_id)?.manage ?? false, canEdit: permissions.get(store.org_id)?.edit ?? false }))}
     sources={sources} source={source} snapshot={snapshot} versions={versions} googleConfigured={urpiGoogleConfigured()}
+    autoSyncEnabled={urpiAutoEnabled() && process.env.VERCEL_ENV === "production"}
   />;
 }
