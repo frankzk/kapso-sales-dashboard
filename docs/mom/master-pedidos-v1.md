@@ -4731,9 +4731,22 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   titula así la pantalla de quien RECIBIÓ, y la operación la saca de nuestra
   sesión: el receptor somos nosotros aunque no aparezca. El nombre grande y el
   «Número de celular» que muestra son de **quien pagó**, así que no se contrastan
-  con las cuentas de cobro y la cuenta queda `verificada` como «captura de
-  nuestro Yape». Antes se leían como receptor y el cobro se acusaba de desvío:
-  #KP138399, S/ 30 de «Guadalupe Del\*» (···717), operación 15926914.
+  con las cuentas de cobro. Antes se leían como receptor y el cobro se acusaba
+  de desvío: #KP138399, S/ 30 de «Guadalupe Del\*» (···717), operación 15926914.
+  **Candado: el aviso de Yape Empresa.** «Te yapearon» lo muestra cualquier
+  cuenta que recibió un Yape, también la personal de un cliente que reenvía lo
+  que le pagó otra persona. La nuestra es Yape Empresa y su pantalla trae al pie
+  «el cobro servicio Yape Empresa…». Con ese aviso la cuenta queda `verificada`
+  como «captura de nuestro Yape Empresa»; sin él queda `parcial` —no acusa, puede
+  ser la cuenta personal de una dueña— y alguien confirma en nuestro Yape que el
+  pago entró antes de validar.
+- **La fecha del pago tiene que encajar con el pedido (02-10-2026).** Un pago de
+  **más de dos días antes** de que se creara el pedido no lo paga: es un Yape de
+  otra venta. El nº de operación y la huella del archivo solo atrapan lo que ya
+  está cargado; esto atrapa el Yape viejo que nunca se registró. El margen cubre
+  el adelanto que llega antes de que se arme el pedido. No bloquea: el pago entra
+  en `revision_admin` con el motivo («el pago es de N días antes de que se creara
+  el pedido»), igual que un receptor que no cuadra. Sin fecha leída no se juzga.
 - **Una tienda sin cuentas configuradas NO acusa a nadie.** Vacío significa "no
   sabemos contra qué contrastar" y cae en verificación parcial —contraste
   manual—, jamás en `receptor distinto`. Lo contrario convertiría un despiste de

@@ -12,6 +12,13 @@ import {
 export const STORE_STATUSES = ["active", "paused", "disabled"] as const;
 export type StoreStatus = (typeof STORE_STATUSES)[number];
 
+/** El estado de la tienda en palabras; el valor que se guarda no cambia. */
+export const STORE_STATUS_LABEL: Record<StoreStatus, string> = {
+  active: "Activa",
+  paused: "Pausada",
+  disabled: "Deshabilitada",
+};
+
 export interface StoreSettingsInput {
   name?: string;
   currency?: string;

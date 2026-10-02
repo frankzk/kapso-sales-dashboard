@@ -9,6 +9,7 @@
 // vuelve a comprobar en el servidor antes de descifrar nada, y cada
 // visualización queda registrada de forma imborrable (0049).
 
+import { paymentDateNotice, paymentDateVerdict } from "@/lib/payment-date-guard";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
@@ -432,8 +433,10 @@ export interface VoucherPrefillFields {
   recipientSwapped: boolean;
   /** Nombre de la clienta leído como receptor (la nota del Yape); no contó. */
   recipientIgnoredName: string | null;
-  /** Captura de nuestra propia cuenta («Te yapearon»): el receptor somos nosotros. */
+  /** Captura de quien recibió («Te yapearon»). */
   recipientReceivedView: boolean;
+  /** Esa captura trae el aviso de Yape Empresa: es de nuestra cuenta. */
+  recipientYapeEmpresa: boolean;
 }
 
 /**
@@ -480,8 +483,8 @@ export async function readVoucherFields(
     // la cuenta receptora porque eso confundiría al operador: la validación de
     // Grupo GF usa exclusivamente recipientName + recipientPhoneLastDigits.
     inspection.fields.payerName && "nombre del pagador",
-    inspection.fields.recipientReceivedView
-      ? "captura de nuestro Yape («Te yapearon»)"
+    inspection.fields.recipientReceivedView && inspection.fields.recipientYapeEmpresa
+      ? "captura de nuestro Yape Empresa («Te yapearon»)"
       : inspection.fields.recipientCheck === "verified" && "receptor verificado",
   ].filter(Boolean);
 
@@ -680,8 +683,11 @@ export async function registerPayment(
   // Entra como "información incompleta" para que alguien lo complete a mano.
   // Tampoco se rechaza solo un comprobante que la visión no reconoce: la imagen
   // por sí sola nunca vale como pago validado (§"Estados de validación").
+  // Un Yape de días antes de crearse el pedido no lo paga: es de otra venta.
+  // Va a revisión administrativa con el motivo (lib/payment-date-guard.ts).
+  const dateVerdict = paymentDateVerdict(paidAt, ctx.row.order_created_at);
   const status =
-    vision.fields.recipientCheck === "mismatch" || identityDiscrepancy
+    vision.fields.recipientCheck === "mismatch" || identityDiscrepancy || dateVerdict.tooEarly
       ? "revision_admin"
       : !operation || (vision.ok && !vision.isVoucher)
         ? "info_incompleta"
@@ -708,6 +714,8 @@ export async function registerPayment(
         extracted_operation: readOperation,
         used_operation: operation,
         discrepancy: identityDiscrepancy,
+        paid_days_before_order: dateVerdict.daysBefore,
+        paid_too_early: dateVerdict.tooEarly,
       },
     },
   });
@@ -775,6 +783,9 @@ export async function registerPayment(
     return {
       notice: "Comprobante cargado, pero la imagen no parece un Yape: queda para revisión.",
     };
+  }
+  if (dateVerdict.tooEarly) {
+    return { notice: `Comprobante cargado. ${paymentDateNotice(dateVerdict)}` };
   }
   if (vision.fields.recipientCheck === "mismatch") {
     return {

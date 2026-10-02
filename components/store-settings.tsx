@@ -31,7 +31,7 @@ import {
 } from "@/components/settings-ui";
 import { IconAlert, IconArrowLeft, IconCheckCircle, IconChevronDown, IconCopy } from "@/components/icons";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
-import { STORE_STATUSES } from "@/lib/store-settings";
+import { STORE_STATUSES, STORE_STATUS_LABEL } from "@/lib/store-settings";
 import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
   addPaymentMethod,
@@ -318,13 +318,6 @@ const INDEX: IndexGroup[] = [
   },
 ];
 
-/** El estado de la tienda en palabras; el valor que se guarda no cambia. */
-const STATUS_LABEL: Record<string, string> = {
-  active: "Activa",
-  paused: "Pausada",
-  disabled: "Deshabilitada",
-};
-
 /** El nombre de una fuente de sincronización (`shopify_all` → «Shopify all»). */
 function sourceLabel(source: string): string {
   const words = source.replace(/_/g, " ");
@@ -388,7 +381,7 @@ export function StoreSettings({
                     <select id="status" name="status" defaultValue={s.status} className={FIELD}>
                       {STORE_STATUSES.map((st) => (
                         <option key={st} value={st}>
-                          {STATUS_LABEL[st] ?? st}
+                          {STORE_STATUS_LABEL[st] ?? st}
                         </option>
                       ))}
                     </select>

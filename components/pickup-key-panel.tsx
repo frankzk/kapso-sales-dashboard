@@ -806,7 +806,7 @@ function StoredRecipientStatus({
       // Se nombra la cuenta con la que encajó: con varias cuentas de cobro,
       // "verificada" a secas ya no dice a cuál llegó el dinero.
       ? reading.receivedView
-        ? "Captura de nuestro Yape («Te yapearon»): llegó a una cuenta de la tienda"
+        ? "Captura de nuestro Yape Empresa («Te yapearon»): llegó a la cuenta de la tienda"
         : `Cuenta receptora verificada: ${
             reading.account ? describeCollectionAccount(reading.account) : "cuenta de cobro"
           }`
@@ -823,6 +823,8 @@ function StoredRecipientStatus({
           // afirmar que la cuenta sea otra.
           verifyYapeRecipient(reading.name, reading.phoneLastDigits, accounts).nameCutShort
           ? `Destinatario leído a medias: «${reading.name}». Contrasta la imagen antes de validar.`
+          : reading.receivedView
+            ? "Captura «Te yapearon» sin el aviso de Yape Empresa: confirma en nuestro Yape que el pago entró antes de validar."
           : reading.status === "partial"
             ? "Cuenta receptora parcialmente leída. Contrasta la imagen antes de validar."
             : "La cuenta receptora no pudo leerse. Contrasta la imagen antes de validar.";
@@ -1123,10 +1125,17 @@ function RecipientAccountCheck({
     return (
       <fieldset className="rounded-lg bg-slate-50 p-3" aria-live="polite">
         <legend className="px-1 text-xs font-semibold text-slate-700">Cuenta receptora del Yape</legend>
-        <p className="text-xs font-medium text-emerald-700">
-          ✓ Captura de nuestro Yape («Te yapearon»): el dinero llegó a una cuenta de la tienda. El nombre y el
-          celular que muestra son de quien pagó.
-        </p>
+        {reading.yapeEmpresa ? (
+          <p className="text-xs font-medium text-emerald-700">
+            ✓ Captura de nuestro Yape Empresa («Te yapearon»): el dinero llegó a la cuenta de la tienda. El nombre y
+            el celular que muestra son de quien pagó.
+          </p>
+        ) : (
+          <p className="text-xs font-medium text-amber-700">
+            Captura «Te yapearon» sin el aviso de Yape Empresa: puede ser de cualquier cuenta que recibió un Yape,
+            no necesariamente la nuestra. Confirma en nuestro Yape que el pago entró antes de validar.
+          </p>
+        )}
       </fieldset>
     );
   }
@@ -1511,6 +1520,7 @@ function VoucherForm({
         swapped: result.fields.recipientSwapped,
         ignoredName: result.fields.recipientIgnoredName,
         receivedView: result.fields.recipientReceivedView,
+        yapeEmpresa: result.fields.recipientYapeEmpresa,
       });
       setReadNotice(result.notice);
       if (!result.isVoucher) {

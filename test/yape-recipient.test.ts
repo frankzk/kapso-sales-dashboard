@@ -72,6 +72,7 @@ describe("verificación de la cuenta receptora Yape", () => {
       account: null,
       swapped: false,
       receivedView: false,
+      yapeEmpresa: false,
       ignoredName: null,
     });
   });
@@ -161,6 +162,7 @@ describe("el nombre que el voucher corta no es un receptor distinto", () => {
       account: CUENTAS[0],
       swapped: false,
       receivedView: false,
+      yapeEmpresa: false,
       ignoredName: null,
     });
   });
@@ -338,6 +340,7 @@ describe("el nombre de la clienta leído como receptor es la nota del Yape", () 
       account: CUENTAS[0],
       swapped: false,
       receivedView: false,
+      yapeEmpresa: false,
       ignoredName: "sonia ludeña",
     });
     expect(motivoDelDesencuentro(r, CUENTAS)).toBeNull();
