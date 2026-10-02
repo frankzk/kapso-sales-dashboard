@@ -90,14 +90,19 @@ function RecipientSignal({ item }: { item: PaymentReviewItem }) {
       // llegó el dinero, y eso es justo lo que el revisor necesita ver.
       ? {
           label: reading.receivedView
-            ? "Captura de nuestro Yape («Te yapearon»)"
+            ? "Captura de nuestro Yape Empresa («Te yapearon»)"
             : `Cuenta verificada: ${reading.account?.name ?? "de la tienda"}`,
           tone: "bg-emerald-50 text-emerald-700",
         }
       : reading.status === "mismatch"
         ? { label: "Cuenta receptora no coincide", tone: "bg-red-50 text-red-700" }
         : reading.status === "partial"
-          ? { label: "Receptor leído parcialmente", tone: "bg-amber-50 text-amber-800" }
+          ? {
+              label: reading.receivedView
+                ? "«Te yapearon» sin aviso Yape Empresa: confirmar en nuestro Yape"
+                : "Receptor leído parcialmente",
+              tone: "bg-amber-50 text-amber-800",
+            }
           : { label: "Receptor por cotejar", tone: "bg-slate-100 text-slate-600" };
   return (
     <span className={cn("inline-flex rounded-full px-2 py-1 text-[11px] font-semibold", config.tone)}>

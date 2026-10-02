@@ -105,10 +105,16 @@ export interface YapeRecipientReading {
   /**
    * Captura de la cuenta que RECIBIÓ («Te yapearon»): sale de nuestra propia
    * sesión de Yape, así que el receptor somos nosotros aunque no aparezca
-   * (02-10-2026, #KP138399). Cuenta como `verified`; `account` queda en null
-   * porque la captura no dice cuál de nuestras cuentas fue.
+   * (02-10-2026, #KP138399). `account` queda en null porque la captura no dice
+   * cuál de nuestras cuentas fue.
    */
   receivedView: boolean;
+  /**
+   * La captura «Te yapearon» trae el aviso de Yape Empresa. Con él cuenta como
+   * `verified`; sin él queda `partial`: «Te yapearon» lo dice cualquier cuenta
+   * que recibió, también la personal de quien nos manda la captura.
+   */
+  yapeEmpresa: boolean;
 }
 
 function comparableRecipientName(value: string | null | undefined): string {
@@ -439,6 +445,8 @@ export interface YapeRecipientRawReading {
   payerName: string | null | undefined;
   /** La captura es de quien recibió («Te yapearon»). Ver `YapeRecipientReading`. */
   receivedView?: boolean | null;
+  /** La captura menciona «Yape Empresa». Ver `YapeRecipientReading`. */
+  yapeEmpresaMarker?: boolean | null;
 }
 
 /**
@@ -460,15 +468,23 @@ export function yapeRecipientReading(
   // nuestra. El nombre y el celular que muestra son de quien pagó, así que no
   // se contrastan con nuestras cuentas — hacerlo acusaba de desvío a un cobro
   // impecable (#KP138399, 02-10-2026).
+  //
+  // SEGUNDO CANDADO: EL AVISO DE YAPE EMPRESA. «Te yapearon» lo muestra
+  // cualquier cuenta que recibió un Yape, también la personal de un cliente que
+  // nos reenvía lo que le pagó otra persona. Nuestra cuenta es Yape Empresa y su
+  // pantalla trae el aviso al pie; sin él no se acusa a nadie —puede ser la
+  // cuenta personal de una dueña—, pero queda `partial`: alguien mira la imagen.
   if (read.receivedView) {
+    const yapeEmpresa = read.yapeEmpresaMarker === true;
     return {
       name: null,
       phoneLastDigits: null,
-      status: "verified",
+      status: yapeEmpresa ? "verified" : "partial",
       account: null,
       swapped: false,
       ignoredName: null,
       receivedView: true,
+      yapeEmpresa,
     };
   }
 
@@ -516,6 +532,7 @@ export function yapeRecipientReading(
     swapped,
     ignoredName,
     receivedView: false,
+    yapeEmpresa: false,
   };
 }
 
@@ -545,6 +562,7 @@ export function yapeRecipientReadingFromVision(
       recipientPhoneLastDigits: text(extracted.recipient_phone_last_digits),
       payerName: text(extracted.payer_name),
       receivedView: extracted.received_view === true,
+      yapeEmpresaMarker: extracted.yape_empresa_marker === true,
     },
     accounts,
     customerName,
