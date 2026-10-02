@@ -50,6 +50,10 @@
       "schedule": "15,45 * * * *"
     },
     {
+      "path": "/api/cron/olva-portal",
+      "schedule": "20 0,12,14,16,18,20,22 * * *"
+    },
+    {
       "path": "/api/cron/aliclik-tariffs",
       "schedule": "30 11 * * *"
     },

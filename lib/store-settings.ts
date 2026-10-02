@@ -143,6 +143,11 @@ export interface StoreSettingsInput {
   olva_arrival_template_enabled?: string | boolean;
   olva_arrival_template_name?: string;
   olva_arrival_params?: string;
+  // Portal de clientes de Olva, para «Cotejar Olva» (0218). La contraseña
+  // sigue la regla de los secretos: vacía = se conserva la guardada.
+  olva_portal_username?: string;
+  olva_portal_password?: string;
+  olva_portal_ruc?: string;
   flowcl_link_enabled?: string | boolean;
   flowcl_link_email?: string;
   flowcl_link_ttl_hours?: string;
@@ -503,6 +508,15 @@ export function buildStoreUpdate(
     const v = clean(input[k]);
     if (v !== null) patch[k] = v;
   }
+
+  // Portal de clientes de Olva (0218). Un RUC que no son 11 dígitos no se
+  // guarda: el portal lo pide en cada consulta y con otro valor no trae nada.
+  const olvaUser = clean(input.olva_portal_username);
+  if (olvaUser !== null) patch.olva_portal_username = olvaUser;
+  const olvaPass = clean(input.olva_portal_password);
+  if (olvaPass) patch.olva_portal_password_enc = encrypt(olvaPass, keyOverride);
+  const olvaRuc = clean(input.olva_portal_ruc)?.replace(/\D/g, "") ?? null;
+  if (olvaRuc && /^\d{11}$/.test(olvaRuc)) patch.olva_portal_ruc = olvaRuc;
 
   // Cobro por Flow.cl desde el botón «Link de pago» (0168).
   for (const k of ["flowcl_link_enabled", "flowcl_link_yape_only"] as const) {

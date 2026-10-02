@@ -4554,6 +4554,58 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   plantillas de Olva se configuran en Ajustes, aparte de los de Shalom; con el
   aviso apagado la cola cierra la fila como omitida y no manda nada.
 
+#### Cotejar Olva: el tracking sale del portal de clientes (migración 0218, decidido el 02-10-2026)
+
+- **El problema.** Sin tracking no hay rastreo ni avisos, y el tracking había
+  que teclearlo a mano: del 22-09 al 02-10-2026 **ninguna de las 28 salidas de
+  Olva lo tuvo**. El portal de clientes de Olva (atc.olvaexpress.pe →
+  Reportes → Seguimiento de envíos) sí lista todos los envíos de la cuenta de
+  la empresa, con destinatario, distrito, dirección y fecha de registro.
+- **Qué hace.** «Cotejar Olva» (menú lateral, con permiso de logística) entra
+  al portal con la cuenta de la empresa, trae los envíos de los **últimos 7
+  días** y pone el tracking en las salidas de Olva **sin tracking** de todas
+  las tiendas de la organización. Corre **solo cada dos horas, de 7 a 19 h de
+  Lima** (`/api/cron/olva-portal`) y con el botón «Traer de Olva ahora». Desde
+  ahí todo sigue como siempre: el rastreo de cada media hora mueve el estado y
+  encola los avisos a la clienta.
+- **Solo se vincula lo que no admite duda**, porque un tracking en la salida
+  equivocada mueve el estado de OTRO pedido y le avisa a OTRA clienta. Dos
+  caminos:
+  1. **«Doc. externo» = número del pedido** (`KP137860`, con o sin `#`) o el
+     código de la salida. Quien registra en Olva puede teclearlo y entonces no
+     hay nada que interpretar.
+  2. **Misma dirección y todos los nombres.** La dirección de Olva, sin el
+     « NRO null» y la referencia entre paréntesis que Olva le añade, es
+     idéntica a la de la salida (sin importar mayúsculas, tildes ni
+     puntuación); y **todos** los nombres que Kapta tiene de la clienta, al
+     menos dos, están en el destinatario de Olva (que suele traer además el
+     segundo nombre). La salida se creó entre 21 días antes y 2 días después
+     del registro en Olva.
+
+  Y en los dos, **pareja única**: un envío con una sola salida posible y esa
+  salida pedida por un solo envío. Si no, va a **«Por revisar»** con hasta tres
+  candidatos y el motivo, y una persona pulsa «Es este» (la misma acción del
+  drawer). Casos reales del 02-10: «Ciro Alegria Claro» contra «CIRO ALEGRIA
+  ALVARON», misma casa, y «Ramiro Casapia Guzman» contra «JORGE CASAPIA
+  GUZMAN», misma casa: los dos a revisar. Un tracking que ya está en una salida
+  no se toca, y si alguien teclea uno mientras se coteja, gana lo tecleado.
+- **El tracking se guarda sin ceros delante.** El portal escribe
+  «02649804/26»; la página pública, el correo y todo lo guardado, «2649804-26».
+  `parseOlvaTracking` quita los ceros para que el índice único vea el mismo
+  envío en las dos formas.
+- **Credenciales** en Ajustes de la tienda → «Olva (portal de clientes)»:
+  usuario, contraseña (cifrada) y RUC (el portal lo pide en cada consulta).
+  Basta con ponerlas en una tienda de la organización; una tienda con **otro**
+  RUC queda fuera de esa cuenta.
+- **Cloudflare** está delante del portal. Si bloquea el acceso automático, el
+  cotejo queda en la bitácora como fallido con ese motivo y la pantalla ofrece
+  **«Pegar respuesta»**: la respuesta de `getTrackingsClient` copiada del
+  navegador pasa por el mismo cotejo.
+- **Bitácora** (`olva_portal_runs`): cada cotejo —automático, botón o pegado—
+  guarda cuántos envíos trajo, cuántos vinculó, el detalle de lo que quedó por
+  revisar o sin pareja, o el error. La pantalla enseña el último y, de lo
+  pendiente, solo lo que hoy sigue sin tracking.
+
 ### Pagos
 
 - **Un pedido pagado en el checkout no tiene cobro que gestionar.** Desde que

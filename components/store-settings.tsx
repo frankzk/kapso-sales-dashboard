@@ -142,6 +142,9 @@ export interface StoreSettingsData {
     olva_arrival_template_enabled: boolean;
     olva_arrival_template_name: string | null;
     olva_arrival_params: string | null;
+    /** Portal de clientes de Olva, para «Cotejar Olva» (0218). */
+    olva_portal_username: string | null;
+    olva_portal_ruc: string | null;
     flowcl_link_enabled: boolean;
     flowcl_link_email: string | null;
     flowcl_link_ttl_hours: number;
@@ -164,6 +167,7 @@ export interface StoreSettingsData {
     aliclikWebhookSecret: boolean;
     tandersPassword: boolean;
     shalomProPassword: boolean;
+    olvaPortalPassword: boolean;
   };
   oauthAvailable: boolean;
   siteUrl: string;
@@ -2280,6 +2284,46 @@ function SettingsForm({
                 : "El catálogo es por cuenta, así que el id no es universal y los de la documentación no valen. Pulsa «Probar conexión» arriba y este campo pasa a ser una lista."}
             </span>
           </label>
+        </fieldset>
+
+        <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
+          <legend className="px-1 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+            Olva (portal de clientes)
+          </legend>
+          <p className="text-xs text-slate-500">
+            La cuenta de <strong>atc.olvaexpress.pe</strong> con la que la empresa registra sus envíos.
+            Con ella, <strong>Cotejar Olva</strong> trae los envíos del portal y les pone el tracking a
+            las salidas que no lo tienen, solo cuando no hay duda. La contraseña se guarda{" "}
+            <strong>cifrada</strong>. Si varias tiendas despachan con la misma cuenta, basta con ponerla
+            en una: el cotejo mira las salidas de todas las tiendas de la organización.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs text-slate-500">
+                Usuario del portal <SavedMark set={Boolean(s.olva_portal_username)} />
+              </span>
+              <input
+                name="olva_portal_username"
+                autoComplete="off"
+                defaultValue={s.olva_portal_username ?? ""}
+                placeholder="120556792829"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs text-slate-500">
+                RUC de la cuenta <SavedMark set={Boolean(s.olva_portal_ruc)} />
+              </span>
+              <input
+                name="olva_portal_ruc"
+                inputMode="numeric"
+                defaultValue={s.olva_portal_ruc ?? ""}
+                placeholder="20556792829"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+          <SecretField name="olva_portal_password" label="Contraseña del portal" set={data.has.olvaPortalPassword} />
         </fieldset>
 
         <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
