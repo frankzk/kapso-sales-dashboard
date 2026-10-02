@@ -27,10 +27,10 @@ try {
     grant usage on schema public,auth to authenticated,service_role;
     grant select on orders to service_role;
   `);
-  const migration = await readFile(new URL("../db/migrations/0212_urpi_programming.sql", import.meta.url), "utf8");
+  const migration = await readFile(new URL("../db/migrations/0215_urpi_programming.sql", import.meta.url), "utf8");
   await db.query(migration);
   await db.query(migration); // Migration is rerunnable.
-  const autoMigration = await readFile(new URL("../db/migrations/0213_urpi_auto_sync.sql", import.meta.url), "utf8");
+  const autoMigration = await readFile(new URL("../db/migrations/0216_urpi_auto_sync.sql", import.meta.url), "utf8");
   await db.query(autoMigration);
   await db.query(autoMigration);
   const { rows: sources } = await db.query(`insert into urpi_programming_sources(store_id,spreadsheet_id,month,order_prefix,name)

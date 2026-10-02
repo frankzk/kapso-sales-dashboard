@@ -5,8 +5,8 @@ custodia, cobro ni liquidación a partir de las pestañas de programación.
 
 ## Instalación
 
-1. Aplicar `db/migrations/0212_urpi_programming.sql` y
-   `db/migrations/0213_urpi_auto_sync.sql` antes de desplegar.
+1. Aplicar `db/migrations/0215_urpi_programming.sql` y
+   `db/migrations/0216_urpi_auto_sync.sql` antes de desplegar.
 2. Registrar el enlace y mes por tienda. Para archivos mixtos, registrar el
    mismo enlace para Kenku (prefijo KP) y Aurela (prefijo AUR). La separación
    por tienda permite aplicar la misma autorización de lectura que el Master.

@@ -7780,7 +7780,7 @@ identidad de pedido ni otra salida física. Se omiten domingos; no se estableci�
 excepción para feriados. La función y sus pruebas quedan preparadas para la fase
 de reportes; la programación enviada conserva su fecha original.
 
-Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0212–0213.
+Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0215–0216.
 
 ## 31. Agradecimiento con catálogo al entregar
 
