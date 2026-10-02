@@ -8,6 +8,7 @@
 
 import { forwardRef, useEffect, useRef, type ButtonHTMLAttributes, type ComponentType, type ReactNode, type SVGProps } from "react";
 import { cn } from "@/components/ui";
+import { opsButtonClass, type ButtonSize, type ButtonVariant } from "@/components/ops-styles";
 import { IconAlert, IconCheckCircle, IconInfo, IconPlusCircle, IconXCircle } from "@/components/icons";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
@@ -19,31 +20,7 @@ export const FIELD =
 /** Casilla nativa con el azul de la marca. */
 export const CHECKBOX = "size-4 shrink-0 cursor-pointer rounded accent-brand-600";
 
-type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
-type ButtonSize = "sm" | "md" | "lg";
-
-const BUTTON_VARIANT: Record<ButtonVariant, string> = {
-  primary: "bg-brand-600 text-white shadow-primary hover:bg-brand-700 disabled:hover:bg-brand-600",
-  secondary: "bg-white text-ink-700 shadow-control ring-1 ring-inset ring-line-strong hover:bg-wash hover:text-ink-900 disabled:hover:bg-white",
-  ghost: "text-ink-600 hover:bg-wash hover:text-ink-900 disabled:hover:bg-transparent",
-  danger: "bg-white text-crit-fg shadow-control ring-1 ring-inset ring-line-strong hover:bg-crit-wash disabled:hover:bg-white",
-};
-
-const BUTTON_SIZE: Record<ButtonSize, string> = {
-  sm: "h-8 gap-1.5 px-2.5 text-[13px]",
-  md: "h-9 gap-1.5 px-3 text-sm",
-  lg: "h-11 gap-2 px-4 text-sm",
-};
-
-/** Las clases de `OpsButton`, para un enlace que tiene que verse como botón. */
-export function opsButtonClass(variant: ButtonVariant = "secondary", size: ButtonSize = "md", className?: string): string {
-  return cn(
-    "inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-md font-semibold transition-[background-color,color,box-shadow] duration-150 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
-    BUTTON_VARIANT[variant],
-    BUTTON_SIZE[size],
-    className,
-  );
-}
+export { opsButtonClass };
 
 export const OpsButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; size?: ButtonSize }>(
   function OpsButton({ variant = "secondary", size = "md", className, type = "button", ...rest }, ref) {
