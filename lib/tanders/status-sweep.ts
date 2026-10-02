@@ -21,7 +21,7 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { sealReturn } from "@/lib/returned-source";
 import { categoryOf, reconcileDeliveryStatus } from "@/lib/shipments";
 import { TandersClient } from "@/lib/tanders/client";
-import { mapTandersStatus, reconcileTandersCustodyState } from "@/lib/tanders/status";
+import { mapTandersStatus, custodyAfterTandersReport } from "@/lib/tanders/status";
 import {
   isThrottled,
   pace,
@@ -45,6 +45,7 @@ interface Candidate {
   order_name: string | null;
   delivery_status: string;
   custody_state: string | null;
+  pickup_state: string | null;
   dispatched_at: string | null;
   custody_transferred_at: string | null;
   returned_at: string | null;
@@ -85,7 +86,7 @@ export async function sweepTandersStatus(
     .from("shipments")
     .select(
       "id,store_id,guide_code,tanders_order_id,order_id,order_name,delivery_status," +
-        "custody_state,dispatched_at,custody_transferred_at,returned_at,returned_source",
+        "custody_state,pickup_state,dispatched_at,custody_transferred_at,returned_at,returned_source",
     )
     .eq("courier", "tanders")
     .in("delivery_status", ["pendiente", "en_ruta"])
@@ -165,7 +166,7 @@ export async function sweepTandersStatus(
       const nextStatus = mapped.deliveryStatus
         ? reconcileDeliveryStatus(row.delivery_status, mapped.deliveryStatus)
         : row.delivery_status;
-      const nextCustody = reconcileTandersCustodyState(row.custody_state, mapped.custodyState);
+      const nextCustody = custodyAfterTandersReport(row, mapped.custodyState);
 
       const patch: Record<string, unknown> = {
         reported_status: rawStatus || null,

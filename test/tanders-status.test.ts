@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   mapTandersStatus,
+  custodyAfterTandersReport,
   reconcileTandersCustodyState,
   tandersStatusCode,
 } from "@/lib/tanders/status";
@@ -103,6 +104,16 @@ describe("reconcileTandersCustodyState", () => {
     expect(reconcileTandersCustodyState("devuelto", "retorno")).toBe("devuelto");
   });
 
+  it("un reintento de Tanders (RETURNING → PICKED/DELIVERED) devuelve la custodia al courier", () => {
+    // #AUR177144 y otras 7 (02-10-2026): Tanders las volvió a repartir y el
+    // Master las seguía mostrando «En retorno».
+    expect(reconcileTandersCustodyState("retorno", "courier")).toBe("courier");
+    // Lo que ya está en el almacén no vuelve a la calle por un snapshot.
+    expect(reconcileTandersCustodyState("devuelto", "courier")).toBe("devuelto");
+    // Y el motorizado no lo devuelve a la empresa.
+    expect(reconcileTandersCustodyState("retorno", "empresa")).toBe("retorno");
+  });
+
   it("sin dato entrante no cambia nada", () => {
     expect(reconcileTandersCustodyState("empresa", null)).toBe("empresa");
     expect(reconcileTandersCustodyState(null, null)).toBeNull();
@@ -110,5 +121,21 @@ describe("reconcileTandersCustodyState", () => {
 
   it("sin estado previo acepta el entrante", () => {
     expect(reconcileTandersCustodyState(null, "courier")).toBe("courier");
+  });
+});
+
+describe("custodyAfterTandersReport", () => {
+  it("el reintento de Tanders devuelve al courier un retorno que vino de su RETURNING", () => {
+    expect(custodyAfterTandersReport({ custody_state: "retorno", pickup_state: null }, "courier")).toBe("courier");
+  });
+
+  it("un retorno que pidió una persona no lo deshace un PICKED de Tanders", () => {
+    expect(
+      custodyAfterTandersReport({ custody_state: "retorno", pickup_state: "retorno_solicitado" }, "courier"),
+    ).toBe("retorno");
+    // Pero sí avanza cuando Tanders confirma que llegó.
+    expect(
+      custodyAfterTandersReport({ custody_state: "retorno", pickup_state: "retorno_solicitado" }, "devuelto"),
+    ).toBe("devuelto");
   });
 });

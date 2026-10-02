@@ -86,6 +86,14 @@ const CUSTODY_RANK: Record<string, number> = {
 /**
  * La custodia solo avanza. Un snapshot atrasado de Tanders no puede devolver a
  * la empresa un paquete que ya se llevó el motorizado, igual que en Aliclik.
+ *
+ * UNA excepción: de `retorno` a `courier`. Tanders reintenta guías que ya
+ * estaban volviendo —pasan de `RETURNING` a `PICKED`/`DELIVERED`— y el paquete
+ * vuelve a estar en reparto, no de regreso (MOM v1.19: «manda el estado actual
+ * de Tanders, no la custodia»). Sin esto la custodia se quedaba en `retorno` y
+ * el Master ponía en «En retorno» guías que Tanders estaba repartiendo: 8 vivas
+ * el 02-10-2026. `devuelto` sigue sin retroceder: el paquete ya está en el
+ * almacén, y eso lo acredita una persona o un `RETURNED`, no un snapshot.
  */
 export function reconcileTandersCustodyState(
   current: string | null | undefined,
@@ -93,5 +101,22 @@ export function reconcileTandersCustodyState(
 ): string | null {
   if (!incoming) return current ?? null;
   if (!current) return incoming;
+  if (current === "retorno" && incoming === "courier") return "courier";
   return (CUSTODY_RANK[incoming] ?? 0) > (CUSTODY_RANK[current] ?? 0) ? incoming : current;
+}
+
+/**
+ * La custodia que deja un reporte de Tanders sobre una guía. Un retorno que
+ * pidió una PERSONA («Solicitar retorno», `pickup_state = retorno_solicitado`)
+ * no lo deshace un `PICKED`: Tanders todavía no lo procesó. Sólo un retorno que
+ * vino de su propio `RETURNING` vuelve al courier cuando Tanders reintenta.
+ */
+export function custodyAfterTandersReport(
+  row: { custody_state: string | null; pickup_state: string | null },
+  incoming: TandersStatusMapping["custodyState"],
+): string | null {
+  if (row.custody_state === "retorno" && row.pickup_state === "retorno_solicitado" && incoming === "courier") {
+    return "retorno";
+  }
+  return reconcileTandersCustodyState(row.custody_state, incoming);
 }
