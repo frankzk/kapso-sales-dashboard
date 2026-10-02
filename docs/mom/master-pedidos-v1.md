@@ -1172,6 +1172,12 @@ Tanders:
   estado actual de Swayp.
 - La anulación en Shopify gana, y el pedido va a Por cerrar · Devolución física
   pendiente hasta que se recibe la caja (§9.4).
+- **En pantalla, la salida se lee «En devolución · vuelve al origen»**, no «En
+  ruta» (02-10-2026, #KP132318). La guía se guarda como `en_ruta` + custodia
+  `retorno` —el paquete sigue con el courier, de regreso—, y mostrar sólo
+  `delivery_status` contradecía al panel de Swayp. La custodia manda en la
+  etiqueta mientras la salida esté abierta (`shipmentStateLabel`), y la tarjeta
+  del courier ya no pide «anúlala»: una devolución en curso no se cancela.
 
 #### En Lima, lo que no se entrega se reprograma (v1.23, 30-09-2026)
 

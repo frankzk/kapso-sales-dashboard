@@ -645,3 +645,16 @@ describe("resolveOrderState — registrar la guía DESPUÉS del cambio manual", 
     expect(s.overrideApplied).toBe(true);
   });
 });
+
+describe("shipmentStateLabel (la custodia manda mientras la salida está abierta)", () => {
+  it("una Devolución de Swayp (en_ruta + retorno) se lee «En devolución», no «En ruta»", async () => {
+    const { shipmentStateLabel, shipmentIsReturning } = await import("@/lib/order-status");
+    const vuelve = { deliveryStatus: "en_ruta", custodyState: "retorno" };
+    expect(shipmentStateLabel(vuelve)).toBe("En devolución · vuelve al origen");
+    expect(shipmentIsReturning(vuelve)).toBe(true);
+    expect(shipmentStateLabel({ deliveryStatus: "en_ruta", custodyState: "courier" })).toBe("En ruta");
+    // Cerrada, manda el resultado: un entregado no «vuelve».
+    expect(shipmentStateLabel({ deliveryStatus: "entregado", custodyState: "retorno" })).toBe("Entregado");
+    expect(shipmentIsReturning({ deliveryStatus: "anulado", custodyState: "retorno" })).toBe(false);
+  });
+});

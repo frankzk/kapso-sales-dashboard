@@ -111,6 +111,33 @@ export function generalLabel(code: string): string {
 export function operationalLabel(code: string): string {
   return OPERATIONAL_BY_CODE.get(code)?.label ?? code;
 }
+/**
+ * El estado de UNA salida para mostrarlo, contando dónde está el paquete.
+ *
+ * `delivery_status` sola miente cuando el paquete vuelve: el barrido de Swayp
+ * (y el de Tanders) guarda una Devolución como `en_ruta` + custodia `retorno`
+ * —el paquete sigue en manos del courier, ahora de regreso—, y la pantalla
+ * decía «En ruta» con la guía en DEVOLUCIÓN en el panel del courier (#KP132318,
+ * 02-10-2026). La custodia manda sobre el estado de entrega mientras la salida
+ * no esté cerrada.
+ */
+export function shipmentStateLabel(input: {
+  deliveryStatus: string;
+  custodyState?: string | null;
+  pickupState?: string | null;
+}): string {
+  const cerrada = input.deliveryStatus === "entregado" || input.deliveryStatus === "anulado";
+  if (!cerrada && input.custodyState === "retorno") return "En devolución · vuelve al origen";
+  if (!cerrada && input.custodyState === "devuelto") return "Devuelto al origen";
+  return operationalLabel(input.pickupState ?? input.deliveryStatus);
+}
+
+/** ¿El paquete de esta salida está volviendo o ya volvió? */
+export function shipmentIsReturning(input: { deliveryStatus: string; custodyState?: string | null }): boolean {
+  const cerrada = input.deliveryStatus === "entregado" || input.deliveryStatus === "anulado";
+  return !cerrada && (input.custodyState === "retorno" || input.custodyState === "devuelto");
+}
+
 export function isGeneralStatus(code: string | null | undefined): code is GeneralStatus {
   return !!code && GENERAL_BY_CODE.has(code as GeneralStatus);
 }

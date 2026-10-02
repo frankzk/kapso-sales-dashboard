@@ -1,7 +1,7 @@
 import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import type { OperationKind } from "@/lib/order-macro-stage";
 import type { GroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier";
-import { terminalOrderBlocker } from "@/lib/order-status";
+import { shipmentIsReturning, terminalOrderBlocker } from "@/lib/order-status";
 import {
   MAX_OUTPUTS_PER_ORDER,
   canRepeatCourier,
@@ -63,6 +63,8 @@ export interface RouteBlockingOutput {
   shortCode: string | null;
   deliveryStatus: string;
   pickupState: string | null;
+  /** Para decir «en devolución» y no «en ruta» cuando el paquete vuelve. */
+  custodyState: string | null;
 }
 
 export interface SwaypRouteCheck {
@@ -389,17 +391,27 @@ function applyOutputPolicy(
     // del courier, que es para lo que se enseña.
     const reversed = [...activeWithCourier].reverse();
     const blocking = reversed.find((output) => output.guideCode) ?? reversed[0]!;
+    // Una guía que el courier ya está devolviendo no se «anula»: no entregó y
+    // el paquete viene de regreso. Decirle a la operadora que la anule la manda
+    // a cancelar en el panel del courier una devolución en curso.
+    const vuelve = shipmentIsReturning({
+      deliveryStatus: blocking.deliveryStatus,
+      custodyState: blocking.custodyState,
+    });
     return {
       ...route,
       recommended: false,
       availability: "blocked",
-      reason: `${route.label} ya tiene una salida activa en este pedido. Anúlala o ciérrala antes de crear otra.`,
+      reason: vuelve
+        ? `${route.label} no entregó: su guía está en devolución y el paquete vuelve al origen. Mientras esa guía siga abierta no se crea otra con ${route.label}.`
+        : `${route.label} ya tiene una salida activa en este pedido. Anúlala o ciérrala antes de crear otra.`,
       blockingOutput: {
         id: blocking.id,
         guideCode: blocking.guideCode ?? null,
         shortCode: blocking.shortCode ?? null,
         deliveryStatus: blocking.deliveryStatus,
         pickupState: blocking.pickupState ?? null,
+        custodyState: blocking.custodyState ?? null,
       },
     };
   }
