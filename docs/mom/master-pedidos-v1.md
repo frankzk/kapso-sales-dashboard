@@ -4039,6 +4039,15 @@ timeout o caída del proceso no libera la reserva ni repite el POST. Se conserva
 el número emitido antes del alta local; los resultados inciertos quedan para
 reconciliación humana. No se anulan guías externas automáticamente.
 
+**Solo el automático exige que no quede otra salida viva (02-10-2026).** Su
+origen es una guía Aliclik ya anulada, y la reserva lo comprueba. Las emisiones
+por botón o voz no: la guía Swayp directa se escribe sobre la salida «por
+definir» del pedido, y en Lima puede salir como adicional con motivo (§9,
+`puertaDeSalidaAdicional`). Desde la 0209 el chequeo se aplicaba a todas, contaba
+como «otra guía activa» la propia salida «por definir» y ninguna guía directa se
+podía crear (#KP138264, #KP138197 y #KP138302, esta con la salida de Grupo GF
+todavía pendiente). La 0219 lo limita al automático.
+
 En **Repro Provincia → Ver automático Aliclik → Swayp** se muestran el estado,
 las ejecuciones, las guías emitidas y el último motivo por pedido. Un administrador
 puede pausar o activar la regla y ejecutar una pasada. Las escrituras quedan
