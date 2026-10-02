@@ -10,11 +10,14 @@ import {
   type OlvaPortalRow,
 } from "@/lib/olva/portal";
 import {
+  dniMatch,
   matchPortalRows,
+  mergeDniMatches,
   nameCovered,
   olvaAddressCore,
   normalizeText,
   type CotejoCandidate,
+  type CotejoOutcome,
 } from "@/lib/olva/portal-match";
 
 // Las cinco filas que trajo el portal el 02-10-2026, con los nombres cambiados
@@ -300,5 +303,84 @@ describe("el ingreso al portal", () => {
     expect(r.ok && r.rows.map((x) => x.id.tracking)).toEqual(["2649804", "2649802", "2649806", "2649803", "2649805"]);
     const bad = await fetchOlvaPortalTrackings({ jwt: "otro", ruc: "1", desde: "2026-10-01", hasta: "2026-10-02" }, impl);
     expect(bad).toMatchObject({ ok: false, kind: "auth" });
+  });
+});
+
+describe("el tercer camino: el DNI", () => {
+  // #AUR177457, 02-10-2026: Gerson dio su DNI para el envío. Olva lo mandó a
+  // su oficina de Contamana y Kapta tenía la dirección de su casa, así que
+  // nombre y dirección no bastaban: quedó «por revisar». Preguntándole al
+  // portal por su DNI, contesta ese envío y ningún otro.
+  const gersonRow: OlvaPortalRow = {
+    id: { tracking: "2609754", emision: "26" },
+    rawTracking: "02609754/26",
+    estado: "DESPACHADO",
+    destinatario: "GERSON DAVID DIAZ MELENDEZ",
+    departamento: "LORETO",
+    provincia: "UCAYALI",
+    distrito: "CONTAMANA",
+    direccion: "OFICINA CONTAMANA - CA BUENAVENTURA MARQUEZ NRO 135 CONTAMANA",
+    fechaRegistro: "2026-09-28",
+    docExterno: null,
+  };
+  const gerson = cand({
+    shipmentId: "s-gerson",
+    orderName: "#AUR177457",
+    storeId: "aurela",
+    customerName: "Gerson DAVID DIAZ Meléndez",
+    address: "Buenaventura Márquez 111",
+    createdAt: "2026-09-25T20:00:00Z",
+    dni: "43491974",
+  });
+
+  it("sin el DNI queda por revisar; con él, se vincula", () => {
+    const [sinDni] = matchPortalRows([gersonRow], [gerson], new Map());
+    expect(sinDni).toMatchObject({ kind: "revisar" });
+    const row = dniMatch(gerson, [gersonRow], new Map());
+    expect(row?.rawTracking).toBe("02609754/26");
+    expect(mergeDniMatches([sinDni!], [{ candidate: gerson, row: row! }])).toMatchObject([
+      { kind: "vincular", via: "dni", candidate: { shipmentId: "s-gerson" } },
+    ]);
+  });
+
+  it("también con un nombre de mentira, si comparte al menos uno", () => {
+    // «Renan Renan» en Kapta, «RENAN TENORIO GUERRERO» en Olva.
+    const renan = { ...gerson, customerName: "Renan Renan" };
+    expect(dniMatch(renan, [{ ...gersonRow, destinatario: "RENAN TENORIO GUERRERO" }], new Map())).not.toBeNull();
+  });
+
+  it("no vale si el portal contesta más de uno, ninguno en común o fuera de fecha", () => {
+    const otro = { ...gersonRow, id: { tracking: "2609999", emision: "26" }, rawTracking: "02609999/26" };
+    expect(dniMatch(gerson, [gersonRow, otro], new Map())).toBeNull();
+    // Si el portal ignorase el filtro y devolviera a otra persona, el nombre lo frena.
+    expect(dniMatch(gerson, [{ ...gersonRow, destinatario: "ROSA QUISPE MAMANI" }], new Map())).toBeNull();
+    expect(dniMatch({ ...gerson, createdAt: "2026-08-01T20:00:00Z" }, [gersonRow], new Map())).toBeNull();
+    // Lo ya vinculado no cuenta: de dos envíos, uno ya tenía dueño.
+    expect(dniMatch(gerson, [gersonRow, otro], new Map([["2609999-26", "#AUR1"]]))).not.toBeNull();
+  });
+
+  it("dos pedidos con el mismo DNI y un solo envío: a revisar", () => {
+    // #AUR177381 y #AUR177383, la misma clienta dos veces.
+    const a = { ...gerson, shipmentId: "s-a", orderName: "#AUR177381" };
+    const b = { ...gerson, shipmentId: "s-b", orderName: "#AUR177383" };
+    const out = mergeDniMatches([], [{ candidate: a, row: gersonRow }, { candidate: b, row: gersonRow }]);
+    expect(out).toMatchObject([{ kind: "revisar", reason: expect.stringContaining("2 salidas") }]);
+  });
+
+  it("si el DNI y la dirección señalan salidas distintas, no se elige", () => {
+    const porDireccion = { ...gerson, shipmentId: "s-otra", orderName: "#AUR9" };
+    const previo: CotejoOutcome[] = [{ kind: "vincular", row: gersonRow, candidate: porDireccion, via: "nombre_direccion" }];
+    expect(mergeDniMatches(previo, [{ candidate: gerson, row: gersonRow }])).toMatchObject([
+      { kind: "revisar", hints: [{ candidate: { shipmentId: "s-otra" } }, { candidate: { shipmentId: "s-gerson" } }] },
+    ]);
+  });
+
+  it("un envío que no vino en el listado se añade al cotejo", () => {
+    expect(mergeDniMatches([], [{ candidate: gerson, row: gersonRow }])).toMatchObject([{ kind: "vincular", via: "dni" }]);
+  });
+
+  it("la consulta lleva el DNI en el filtro del portal", () => {
+    const url = new URL(portalTrackingsUrl({ ruc: "20556792829", desde: "2026-09-23", hasta: "2026-10-02", dni: "43491974" }));
+    expect(url.searchParams.get("dni_consignado")).toBe("43491974");
   });
 });

@@ -4594,7 +4594,7 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   ahí todo sigue como siempre: el rastreo de cada media hora mueve el estado y
   encola los avisos a la clienta.
 - **Solo se vincula lo que no admite duda**, porque un tracking en la salida
-  equivocada mueve el estado de OTRO pedido y le avisa a OTRA clienta. Dos
+  equivocada mueve el estado de OTRO pedido y le avisa a OTRA clienta. Tres
   caminos:
   1. **«Doc. externo» = número del pedido** (`KP137860`, con o sin `#`) o el
      código de la salida. Quien registra en Olva puede teclearlo y entonces no
@@ -4606,8 +4606,19 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
      menos dos, están en el destinatario de Olva (que suele traer además el
      segundo nombre). La salida se creó entre 21 días antes y 2 días después
      del registro en Olva.
+  3. **El DNI de la clienta** (añadido el 02-10-2026). El listado del portal no
+     trae el documento del destinatario, pero el portal **sí filtra por él**
+     (`dni_consignado`). Para cada salida sin tracking que los dos caminos
+     anteriores no resolvieron y que tiene DNI apuntado («DNI y agencia» del
+     panel de pagos, `shalom_order_drafts`), se le pregunta al portal por ese
+     DNI desde dos días antes de crear la salida. Vale si contesta **un solo
+     envío sin tracking**, en la ventana de fechas, con **al menos un nombre
+     en común** —por si el portal un día ignorara el filtro—. Resuelve lo que
+     la dirección no puede: el envío a la **oficina de Olva** cuando Kapta
+     tiene la casa (#AUR177457) y los nombres de relleno («Renan Renan»). Solo
+     con el acceso automático; al pegar la respuesta no hay a quién preguntar.
 
-  Y en los dos, **pareja única**: un envío con una sola salida posible y esa
+  Y en todos, **pareja única**: un envío con una sola salida posible y esa
   salida pedida por un solo envío. Si no, va a **«Por revisar»** con hasta tres
   candidatos y el motivo, y una persona pulsa «Es este» (la misma acción del
   drawer). Casos reales del 02-10: «Ciro Alegria Claro» contra «CIRO ALEGRIA
