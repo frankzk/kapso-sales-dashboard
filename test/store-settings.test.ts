@@ -258,3 +258,19 @@ describe("aviso de guía Shalom en tránsito (0166)", () => {
     expect(buildStoreUpdate({ shalom_transit_hour_start: "25", shalom_transit_hour_end: "0" }, KEY)).toEqual({});
   });
 });
+
+describe("portal de clientes de Olva (0218)", () => {
+  it("cifra la contraseña, guarda usuario y RUC, y un RUC mal escrito no se guarda", () => {
+    const patch = buildStoreUpdate(
+      { olva_portal_username: " 120556792829 ", olva_portal_password: "nueva", olva_portal_ruc: "20556792829" },
+      KEY,
+    );
+    expect(patch.olva_portal_username).toBe("120556792829");
+    expect(patch.olva_portal_ruc).toBe("20556792829");
+    expect(decrypt(patch.olva_portal_password_enc as string, KEY)).toBe("nueva");
+
+    const sinCambios = buildStoreUpdate({ olva_portal_password: "", olva_portal_ruc: "2055679" }, KEY);
+    expect(sinCambios).not.toHaveProperty("olva_portal_password_enc");
+    expect(sinCambios).not.toHaveProperty("olva_portal_ruc");
+  });
+});

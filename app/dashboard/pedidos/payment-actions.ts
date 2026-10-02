@@ -432,6 +432,8 @@ export interface VoucherPrefillFields {
   recipientSwapped: boolean;
   /** Nombre de la clienta leído como receptor (la nota del Yape); no contó. */
   recipientIgnoredName: string | null;
+  /** Captura de nuestra propia cuenta («Te yapearon»): el receptor somos nosotros. */
+  recipientReceivedView: boolean;
 }
 
 /**
@@ -478,7 +480,9 @@ export async function readVoucherFields(
     // la cuenta receptora porque eso confundiría al operador: la validación de
     // Grupo GF usa exclusivamente recipientName + recipientPhoneLastDigits.
     inspection.fields.payerName && "nombre del pagador",
-    inspection.fields.recipientCheck === "verified" && "receptor verificado",
+    inspection.fields.recipientReceivedView
+      ? "captura de nuestro Yape («Te yapearon»)"
+      : inspection.fields.recipientCheck === "verified" && "receptor verificado",
   ].filter(Boolean);
 
   return {

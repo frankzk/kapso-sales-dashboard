@@ -437,4 +437,6 @@
 \ir migrations/0216_urpi_auto_sync.sql
 \echo 'Applying 0217_aliclik_sweep_reanudable.sql'
 \ir migrations/0217_aliclik_sweep_reanudable.sql
+\echo 'Applying 0218_olva_portal_cotejo.sql'
+\ir migrations/0218_olva_portal_cotejo.sql
 \echo 'Done.'

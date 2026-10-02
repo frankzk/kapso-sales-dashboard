@@ -397,6 +397,13 @@ export interface YapeVoucherFields {
   recipientName: string | null;
   /** Últimos 3 dígitos del celular destino, cuando aparecen en la captura. */
   recipientPhoneLastDigits: string | null;
+  /**
+   * La captura es de la cuenta que RECIBIÓ: Yape la titula «Te yapearon». Solo
+   * la tiene quien recibe, y nosotros la sacamos de nuestra propia sesión
+   * (confirmado por la operación, 02-10-2026, #KP138399): el receptor somos
+   * nosotros. El nombre y el celular que muestra son de QUIEN PAGÓ.
+   */
+  receivedView?: boolean;
   ok: boolean;
   model: string;
 }
@@ -423,7 +430,8 @@ function buildExtractPrompt(): string {
     '  "time": string|null,              // hora, tal como se ve (p. ej. "02:35 pm")\n' +
     '  "payer_name": string|null,        // quien paga\n' +
     '  "recipient_name": string|null,    // quien recibe\n' +
-    '  "recipient_phone_last_digits": string|null // últimos 3 dígitos del Nro. de celular destino\n' +
+    '  "recipient_phone_last_digits": string|null, // últimos 3 dígitos del Nro. de celular destino\n' +
+    '  "received_view": boolean          // true si es la captura de QUIEN RECIBIÓ: dice "Te yapearon"\n' +
     "}\n" +
     "El comprobante puede venir de CUALQUIER banco o billetera peruana (Yape, " +
     "Plin, BCP, Interbank, BBVA, Scotiabank), y cada uno rotula ese dato a su " +
@@ -442,6 +450,12 @@ function buildExtractPrompt(): string {
     "que va bajo \"Enviado a\" o \"Destino\". El nombre de quien pagó suele estar " +
     "en otra parte de la pantalla, o no aparecer: si no lo ves, payer_name es " +
     "null — nunca lo rellenes con el del receptor, ni al revés.\n" +
+    "LA CAPTURA DE QUIEN RECIBIÓ SE LEE AL REVÉS. Si el comprobante dice \"Te " +
+    "yapearon\", es la pantalla de la cuenta que RECIBIÓ el dinero: el nombre " +
+    "grande junto al monto y el \"Número de celular\" son de QUIEN PAGÓ. Entonces " +
+    "received_view es true, ese nombre va a payer_name, y recipient_name y " +
+    "recipient_phone_last_digits son null — el receptor no aparece. En cualquier " +
+    "otro comprobante received_view es false.\n" +
     "EL NOMBRE Y EL CELULAR DEL RECEPTOR SALEN DEL MISMO BLOQUE. Si tomas los " +
     "últimos dígitos del celular de una parte de la imagen, el nombre del receptor " +
     "tiene que salir de ESA MISMA parte. Leer el teléfono de un sitio y el nombre " +
@@ -612,12 +626,24 @@ function parseFields(text: string): Omit<YapeVoucherFields, "ok" | "model"> | nu
     operationLabel: operationNumber ? rawLabel : null,
     amount: num(o.amount),
     paidAt: parseVoucherInstant(str(o.date), str(o.time)),
-    payerName: str(o.payer_name),
-    recipientName: str(o.recipient_name),
-    recipientPhoneLastDigits: (() => {
-      const digits = (str(o.recipient_phone_last_digits) ?? "").replace(/\D/g, "");
-      return digits.length >= 3 ? digits.slice(-3) : null;
-    })(),
+    // En la captura de quien recibió, todo lo que se lee es del pagador: si el
+    // modelo igual dejó un nombre como receptor, es el del pagador mal puesto.
+    ...(o.received_view === true
+      ? {
+          payerName: str(o.payer_name) ?? str(o.recipient_name),
+          recipientName: null,
+          recipientPhoneLastDigits: null,
+          receivedView: true,
+        }
+      : {
+          payerName: str(o.payer_name),
+          recipientName: str(o.recipient_name),
+          recipientPhoneLastDigits: (() => {
+            const digits = (str(o.recipient_phone_last_digits) ?? "").replace(/\D/g, "");
+            return digits.length >= 3 ? digits.slice(-3) : null;
+          })(),
+          receivedView: false,
+        }),
   };
 }
 
@@ -640,6 +666,7 @@ export async function extractYapeVoucher(
     payerName: null,
     recipientName: null,
     recipientPhoneLastDigits: null,
+    receivedView: false,
     ok: false,
     model,
   };
