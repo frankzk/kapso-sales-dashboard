@@ -200,6 +200,22 @@ components:
     backgroundColor: "{colors.white}"
     rounded: "{rounded.lg}"
     padding: "16px"
+  switch:
+    backgroundColor: "{colors.line-strong}"
+    rounded: "{rounded.full}"
+    height: "20px"
+    width: "36px"
+  switch-on:
+    backgroundColor: "{colors.brand-600}"
+  index-item:
+    textColor: "{colors.ink-600}"
+    typography: "{typography.body-sm}"
+    rounded: "{rounded.md}"
+    padding: "0 10px"
+    height: "28px"
+  index-item-active:
+    backgroundColor: "{colors.brand-50}"
+    textColor: "{colors.brand-700}"
   banner-warn:
     backgroundColor: "{colors.warn-wash}"
     textColor: "{colors.ink-700}"
@@ -217,7 +233,7 @@ Kapta se opera como una mesa de trabajo limpia: superficies blancas sobre un lie
 
 La personalidad es clara, rápida y confiable: tinta azulada en tres pasos para jerarquía, chapas de estado de 4 px que siempre llevan texto, sombras cortas que apenas despegan los controles del papel. Nada decora; todo lo que tiene color significa algo. El movimiento se limita a transiciones de estado de 150 ms y a decir que algo carga o entra (el esqueleto en `wash`, la barra de subida de una foto, la ficha de `/reparto` que entra desde la derecha en el teléfono); lo que se desplaza se apaga con movimiento reducido.
 
-**Alcance actual (30-09-2026).** Este mundo es la dirección aprobada para todo el producto, pero hoy está en producción en la cabecera y las pestañas de Grupo GF Courier, en «Despacho del día» (tarjetas de estado, QR, lista, cajas, devoluciones y hojas), donde se estrenó el 29-09-2026, y, desde el mismo día, en Rutas (también en `/dashboard/courier/rutas`) y Tarifario, en los dos paneles laterales que abre Rutas —la caja y «Reparto y liquidación» (cierre, resumen, tabla de paradas y pago del motorizado)— en la estación «Almacén» (`/dashboard/pedidos/almacen`: escáner de armado, «Por empacar» como un marco con una celda por operación cuyo lavado dice si está en cero, cerca del corte o vencida, la cola por armar como listas con hairlines y las detenidas en ámbar con su chapa, y «Armados hoy»), en «Devoluciones de Tanders» (`/dashboard/pedidos/devoluciones`: el mismo escáner, el cuadre en un marco de cifras con «Faltan» en lavado crítico si hay algo que reclamar, y las listas de faltantes y recibidas) y en la mesa «Entregas a couriers» (`/dashboard/pedidos/despacho`: cifras del día, rutas recientes, destino elegido, paquetes sin ruta, «¿Quién recoge?» y «Nueva ruta»). Desde el 30-09-2026 también está en la pantalla del motorizado (`/reparto`, la misma que abre Coordinación para reportar por él): la lista de paradas con «Añadir un punto», la ficha de la parada con su reporte, la hoja de WhatsApp, los campos de evidencia y la cámara dentro de la página. Los tres pasos de la caja (`DispatchBoxPanel`) se ven igual en la mesa y en el panel; en la mesa la sección lleva la sombra de tarjeta porque está sobre el lienzo. Excepción consciente: bajo 1024 px las filas del Tarifario se vuelven tarjetas con el módulo compartido `components/courier-mobile.module.css`, que también usan las vistas anteriores y no se tocó; la tarjeta exterior se quita ahí para no anidar tarjetas. El resto de la aplicación (las partes de `components/routes.tsx` que el panel no muestra —añadir paradas y reintentos—; en `/reparto`, «Recibir mi caja» y el escáner de QR de «Confirmar todos» y «Lo llevo», montado sin `look="ops"`, y su cámara; las vistas anteriores del courier, el Master de Pedidos, Envíos, Liquidaciones y demás) sigue con el aspecto anterior: Tailwind `slate-*`, `brand-600` como acento, radios `rounded-xl`/`rounded-2xl` y `shadow-xl`. Ese aspecto es deriva preexistente, no una segunda norma: las superficies nuevas o rediseñadas usan este documento. No hay esquema oscuro; el producto declara `color-scheme: light`. La única superficie oscura es el visor de la cámara, negro como en la cámara del teléfono.
+**Alcance actual (02-10-2026).** Este mundo es la dirección aprobada para todo el producto, pero hoy está en producción en la cabecera y las pestañas de Grupo GF Courier, en «Despacho del día» (tarjetas de estado, QR, lista, cajas, devoluciones y hojas), donde se estrenó el 29-09-2026, y, desde el mismo día, en Rutas (también en `/dashboard/courier/rutas`) y Tarifario, en los dos paneles laterales que abre Rutas —la caja y «Reparto y liquidación» (cierre, resumen, tabla de paradas y pago del motorizado)— en la estación «Almacén» (`/dashboard/pedidos/almacen`: escáner de armado, «Por empacar» como un marco con una celda por operación cuyo lavado dice si está en cero, cerca del corte o vencida, la cola por armar como listas con hairlines y las detenidas en ámbar con su chapa, y «Armados hoy»), en «Devoluciones de Tanders» (`/dashboard/pedidos/devoluciones`: el mismo escáner, el cuadre en un marco de cifras con «Faltan» en lavado crítico si hay algo que reclamar, y las listas de faltantes y recibidas) y en la mesa «Entregas a couriers» (`/dashboard/pedidos/despacho`: cifras del día, rutas recientes, destino elegido, paquetes sin ruta, «¿Quién recoge?» y «Nueva ruta»). Desde el 30-09-2026 también está en la pantalla del motorizado (`/reparto`, la misma que abre Coordinación para reportar por él): la lista de paradas con «Añadir un punto», la ficha de la parada con su reporte, la hoja de WhatsApp, los campos de evidencia y la cámara dentro de la página. Desde el 02-10-2026 también está en Ajustes de la tienda (`/dashboard/[storeId]/settings`): el índice lateral, los grupos y secciones con su chapa de estado, y las tarjetas que se guardan cada una por su cuenta. Los tres pasos de la caja (`DispatchBoxPanel`) se ven igual en la mesa y en el panel; en la mesa la sección lleva la sombra de tarjeta porque está sobre el lienzo. Excepción consciente: bajo 1024 px las filas del Tarifario se vuelven tarjetas con el módulo compartido `components/courier-mobile.module.css`, que también usan las vistas anteriores y no se tocó; la tarjeta exterior se quita ahí para no anidar tarjetas. El resto de la aplicación (las partes de `components/routes.tsx` que el panel no muestra —añadir paradas y reintentos—; en `/reparto`, «Recibir mi caja» y el escáner de QR de «Confirmar todos» y «Lo llevo», montado sin `look="ops"`, y su cámara; las vistas anteriores del courier, el Master de Pedidos, Envíos, Liquidaciones y demás) sigue con el aspecto anterior: Tailwind `slate-*`, `brand-600` como acento, radios `rounded-xl`/`rounded-2xl` y `shadow-xl`. Ese aspecto es deriva preexistente, no una segunda norma: las superficies nuevas o rediseñadas usan este documento. No hay esquema oscuro; el producto declara `color-scheme: light`. La única superficie oscura es el visor de la cámara, negro como en la cámara del teléfono.
 
 **Key Characteristics:**
 - Superficies blancas con líneas finas (`line`) sobre el lienzo `slate-50`.
@@ -233,10 +249,10 @@ La personalidad es clara, rápida y confiable: tinta azulada en tres pasos para 
 Una paleta fría y contenida: tinta azulada, hairlines casi invisibles, un azul de acción y cuatro tonos de estado que nunca aparecen sin texto.
 
 ### Primary
-- **Azul Kapta** (`brand-600`): la acción principal de cada zona (Asignar, Programar, Escanear), la línea de 2 px bajo la pestaña activa, el borde de 2 px de la tarjeta de estado elegida, los iconos del modo activo y las casillas.
+- **Azul Kapta** (`brand-600`): la acción principal de cada zona (Asignar, Programar, Escanear), la línea de 2 px bajo la pestaña activa, el borde de 2 px de la tarjeta de estado elegida, los iconos del modo activo, las casillas y el interruptor encendido.
 - **Azul Kapta profundo** (`brand-700`): hover del botón principal, texto de enlaces («Ver actividad», «Arreglar en Tarifario»), texto de la pestaña activa, el valor dentro de una píldora de filtro y la cifra de una tarjeta elegida.
 - **Azul de foco** (`brand-500`): el contorno de foco visible de todo el producto (2 px con 2 px de separación) y el anillo interior de 2 px de los campos enfocados.
-- **Velo azul** (`brand-50`): fondo de filas marcadas (al 60 %), chips y opciones de elección encendidos y la chapa `brand` (contador de la pestaña activa y «Siguiente», la próxima parada del motorizado).
+- **Velo azul** (`brand-50`): fondo de filas marcadas (al 60 %), chips y opciones de elección encendidos, el ítem activo del índice de Ajustes y la chapa `brand` (contador de la pestaña activa y «Siguiente», la próxima parada del motorizado).
 
 ### Neutral
 - **Tinta** (`ink-900`): títulos, nombres de pedido, cifras y todo lo que se lee primero.
@@ -366,6 +382,12 @@ Hoja `look="ops"`: blanca, 8px, sombra de popover, 16px de relleno, título de 1
 ### Panel lateral (SidePanel)
 Velo `ink-900` al 30 % sin desenfoque; hoja blanca a la derecha con la sombra de popover y el ancho que pide quien la abre (760 px la caja, 960 px el reparto). Cabecera pegajosa con hairline inferior: nombre en 18 px peso 600, la chapa de situación a su lado y el contexto (día, carga) en 13 px `ink-500` debajo; cierre de 32 px con icono de trazo. Cuerpo con 16 px de margen en el teléfono y 24 px desde `sm`. Dentro, las secciones se separan con hairlines o marcos `line` sin sombra; el resumen de cifras es un solo marco con hairlines entre celdas, y el saldo va sobre `wash`. La carga es un esqueleto en `wash`.
 
+### Interruptor (Switch)
+Lo que se enciende y se apaga en un ajuste: una pista redonda de 36 × 20 px en `line-strong` con un botón blanco de 16 px y sombra de control; encendido, la pista pasa a `brand-600` y el botón se corre 16 px en 150 ms (sin movimiento con movimiento reducido). Desde `sm` lleva a la izquierda su estado en palabras, 13 px («Encendido» en `ink-900`, «Apagado» en `ink-500`, o el par que diga ese ajuste: «Automático / A mano», «Sí / No»); en el teléfono basta la posición, y el lector oye el estado del `role="switch"`. Va en una fila (`ToggleRow`): título de 14 px en peso 600 y su explicación en 13 px `ink-500` a la izquierda, el interruptor a la derecha, y debajo los avisos que lo acompañan. Detrás viaja un oculto con «false» para que apagar también se guarde. Reemplaza al selector «Habilitado / Deshabilitado».
+
+### Página de ajustes
+La configuración de Stripe en este mundo. Título de 28 px «Ajustes» con la tienda y el dominio debajo, y «Volver al panel» como botón secundario a la derecha. Desde `xl` (1280 px), un índice pegajoso de 13 rem a la izquierda: los grupos en 12 px peso 600 `ink-500` y sus secciones como ítems de 28 px en 13 px `ink-600`; el que se está leyendo (la sección que cruza la franja del 15 al 35 % de la ventana) va en `brand-50` con texto `brand-700` en peso 600, y el índice tiene su propio desplazamiento en ventanas bajas. Por debajo de `xl`, un selector «Ir a» pegajoso arriba, sobre el lienzo con hairline inferior, que sigue la misma sección. Cada grupo es un título de 20 px peso 600 con hairline debajo; cada sección, un título de 16 px peso 600 con su chapa de estado («Conectada», «Activo», «Sin token», «Apagado»), su explicación en 14 px `ink-500` a 68 caracteres como mucho y, a la derecha, las acciones que no guardan nada (Probar conexión, Sincronizar) como botones secundarios pequeños. Debajo, tarjetas: filas con hairlines, campos en rejilla de dos o tres columnas, credenciales con chapa «Configurado» o «Sin configurar» y el campo vacío («Déjalo en blanco para conservarlo»), URLs en una línea monoespaciada sobre `wash` con «Copiar», y un pie con hairline donde vive el «Guardar» principal de esa tarjeta y, a su izquierda, «Cambios sin guardar», «Guardado» en `ok-fg` o el error en `crit-fg`. Las acciones de un clic (Sincronizar ahora, Re-registrar webhooks) son filas con título, ayuda y botón secundario. Las listas (plantillas, cuentas, escalera, excepciones) son filas con hairlines y su alta va en la misma tarjeta, separada por otra hairline; vacías, dicen qué significa estar vacías.
+
 ### Avisos (Banner)
 Fondo en el lavado del tono, icono de 16 px y título en `*-fg`, cuerpo en `ink-700`, 8px de radio, 12px × 16px de relleno.
 
@@ -390,7 +412,8 @@ La mesa a escala de calle: las mismas piezas, más grandes y pocas.
 - **Do** poner todas las cantidades, montos y fechas en cifras tabulares con formato `es-PE`.
 - **Do** convertir las filas de tabla en tarjetas de lista bajo 640 px, sin desplazamiento horizontal en el teléfono.
 - **Do** dejar que el puntero táctil suba los controles a 44 px y mantener 48 px en pestañas y escáner; en `/reparto`, 48 px como mínimo y 56 px en los gestos de la ficha.
-- **Do** construir superficies nuevas con `OpsButton`, `Badge`, `FilterPill`, `StatusCard`, `AttentionPill`, `Banner`, `FIELD`, `CHECKBOX` y `Sheet look="ops"`.
+- **Do** construir superficies nuevas con `OpsButton`, `Badge`, `FilterPill`, `StatusCard`, `AttentionPill`, `Banner`, `FIELD`, `CHECKBOX` y `Sheet look="ops"`; las de configuración, con las piezas de `components/settings-ui.tsx` (`SettingsIndex`, `SettingsGroup`, `SettingsSection`, `Field`, `ToggleRow`, `HourRange`, `CodeLine`).
+- **Do** usar un interruptor para lo que se enciende y se apaga, nunca un selector «Habilitado / Deshabilitado».
 
 ### Don't:
 - **Don't** usar `slate-*` (fuera del lienzo `slate-50`), `rounded-xl`, `rounded-2xl` ni `shadow-xl` en superficies del mundo de operación; son del aspecto anterior.
