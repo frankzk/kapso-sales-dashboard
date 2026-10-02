@@ -52,6 +52,11 @@ alter table auto_order_trials enable row level security;
 drop policy if exists auto_order_trials_select on auto_order_trials;
 create policy auto_order_trials_select on auto_order_trials for select to authenticated
   using (store_id in (select auth_store_ids()));
+-- Cada fila se convierte en un pedido real: solo el servidor escribe. Supabase
+-- da por defecto INSERT/UPDATE/DELETE a anon y authenticated en las tablas
+-- nuevas (ver 0213); sin política de escritura RLS ya los frena, y el revoke lo
+-- deja dicho por si alguien agrega una política después.
+revoke all on auto_order_trials from anon, authenticated;
 grant select on auto_order_trials to authenticated;
 grant all privileges on auto_order_trials to service_role;
 
@@ -76,5 +81,6 @@ select t.cohort,
     on o.store_id = t.store_id and o.shopify_order_id = t.shopify_order_id
   left join order_master om on om.order_id = o.id;
 
+revoke all on auto_order_trial_results from anon, authenticated;
 grant select on auto_order_trial_results to authenticated;
 grant select on auto_order_trial_results to service_role;
