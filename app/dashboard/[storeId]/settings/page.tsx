@@ -277,7 +277,7 @@ export default async function StoreSettingsPage({
   };
 
   const banner = sp.installed
-    ? { kind: "ok" as const, msg: "✅ Tienda conectada con Shopify. Webhooks registrados y backfill iniciado." }
+    ? { kind: "ok" as const, msg: "Tienda conectada con Shopify. Webhooks registrados y backfill iniciado." }
     : sp.shopify_error
       ? { kind: "error" as const, msg: `No se pudo conectar con Shopify: ${SHOPIFY_ERRORS[sp.shopify_error] ?? sp.shopify_error}` }
       : null;

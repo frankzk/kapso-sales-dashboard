@@ -35,21 +35,19 @@ const BUTTON_SIZE: Record<ButtonSize, string> = {
   lg: "h-11 gap-2 px-4 text-sm",
 };
 
+/** Las clases de `OpsButton`, para un enlace que tiene que verse como botón. */
+export function opsButtonClass(variant: ButtonVariant = "secondary", size: ButtonSize = "md", className?: string): string {
+  return cn(
+    "inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-md font-semibold transition-[background-color,color,box-shadow] duration-150 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
+    BUTTON_VARIANT[variant],
+    BUTTON_SIZE[size],
+    className,
+  );
+}
+
 export const OpsButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; size?: ButtonSize }>(
   function OpsButton({ variant = "secondary", size = "md", className, type = "button", ...rest }, ref) {
-    return (
-      <button
-        ref={ref}
-        type={type}
-        className={cn(
-          "inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-md font-semibold transition-[background-color,color,box-shadow] duration-150 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
-          BUTTON_VARIANT[variant],
-          BUTTON_SIZE[size],
-          className,
-        )}
-        {...rest}
-      />
-    );
+    return <button ref={ref} type={type} className={opsButtonClass(variant, size, className)} {...rest} />;
   },
 );
 

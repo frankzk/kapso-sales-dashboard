@@ -471,7 +471,7 @@
       }
     ],
     "adoption": {
-      "status": "El mundo de operación es la dirección aprobada; en producción en Grupo GF Courier (cabecera, pestañas, Despacho del día, Rutas, Tarifario y los paneles de Rutas), Almacén, Devoluciones de Tanders, Entregas a couriers y, desde el 30-09-2026, la pantalla del motorizado (/reparto).",
+      "status": "El mundo de operación es la dirección aprobada; en producción en Grupo GF Courier (cabecera, pestañas, Despacho del día, Rutas, Tarifario y los paneles de Rutas), Almacén, Devoluciones de Tanders, Entregas a couriers y, desde el 30-09-2026, la pantalla del motorizado (/reparto) y, desde el 02-10-2026, Ajustes de la tienda (/dashboard/[storeId]/settings).",
       "legacy": "El resto de la aplicación usa el aspecto anterior (Tailwind slate-*, brand-600, rounded-xl/2xl, shadow-xl): deriva preexistente, no norma; en /reparto, «Recibir mi caja» y el escáner de QR con su cámara."
     }
   },
@@ -555,6 +555,14 @@
       "description": "Aviso en la página sobre el lavado del tono, con icono y título en el tono y cuerpo en tinta.",
       "html": "<div class=\"ds-banner ds-banner-warn\" role=\"status\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M10.3 3.8 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0z\"/><path d=\"M12 9v4M12 17h.01\"/></svg><div><p class=\"ds-banner-t\">3 marcados están programados para otro día</p><p>Asígnalos igual hoy o solo los otros.</p></div></div>",
       "css": ".ds-banner { display: flex; gap: 12px; padding: 12px 16px; border-radius: 8px; color: var(--color-ink-700, #414552); font: 400 14px/20px ui-sans-serif, system-ui, sans-serif; } .ds-banner p { margin: 0; } .ds-banner svg { flex-shrink: 0; margin-top: 2px; } .ds-banner-t { font-weight: 600; } .ds-banner-warn { background: var(--color-warn-wash, #fef8e4); } .ds-banner-warn svg, .ds-banner-warn .ds-banner-t { color: var(--color-warn-fg, #a82c00); }"
+    },
+    {
+      "name": "Interruptor",
+      "kind": "toggle",
+      "refersTo": "switch",
+      "description": "Lo que se enciende y se apaga en un ajuste: pista de 36 × 20 px; apagada, blanca con anillo y botón en ink-500; encendida, azul con botón blanco; su estado en palabras a la izquierda desde sm.",
+      "html": "<label class=\"ds-switch\"><span class=\"ds-switch-state\">Encendido</span><input type=\"checkbox\" role=\"switch\" checked><span class=\"ds-switch-track\" aria-hidden=\"true\"></span></label>",
+      "css": ".ds-switch { position: relative; display: inline-flex; align-items: center; gap: 10px; cursor: pointer; } .ds-switch input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; } .ds-switch-state { font: 500 13px/20px ui-sans-serif, system-ui, sans-serif; color: var(--color-ink-900, #1a1b25); } .ds-switch-track { position: relative; width: 36px; height: 20px; border-radius: 9999px; background: #fff; box-shadow: inset 0 0 0 1px var(--color-ink-500, #687385); transition: background-color 150ms, box-shadow 150ms; } .ds-switch-track::after { content: \"\"; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 9999px; background: var(--color-ink-500, #687385); transition: transform 150ms, background-color 150ms; } .ds-switch input:checked + .ds-switch-track { background: var(--color-brand-600, #1f5fe0); box-shadow: inset 0 0 0 1px var(--color-brand-600, #1f5fe0); } .ds-switch input:checked + .ds-switch-track::after { transform: translateX(16px); background: #fff; box-shadow: var(--shadow-control, 0 1px 1px rgb(0 0 0 / 0.07), 0 2px 5px rgb(60 66 87 / 0.07)); } .ds-switch input:focus-visible + .ds-switch-track { outline: 2px solid var(--color-brand-500, #2f74ff); outline-offset: 2px; } @media (prefers-reduced-motion: reduce) { .ds-switch-track, .ds-switch-track::after { transition: none; } }"
     }
   ],
   "narrative": {
