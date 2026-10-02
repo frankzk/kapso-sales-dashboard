@@ -4666,6 +4666,13 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   el dinero se fue a OTRA cuenta—: diecisiete comprobantes en tres semanas,
   ninguno validado nunca, y los pedidos salieron igual. El bloqueo no protegía
   nada; solo enseñaba a no leer la alarma.
+- **La captura «Te yapearon» es de nuestra propia cuenta (02-10-2026).** Yape
+  titula así la pantalla de quien RECIBIÓ, y la operación la saca de nuestra
+  sesión: el receptor somos nosotros aunque no aparezca. El nombre grande y el
+  «Número de celular» que muestra son de **quien pagó**, así que no se contrastan
+  con las cuentas de cobro y la cuenta queda `verificada` como «captura de
+  nuestro Yape». Antes se leían como receptor y el cobro se acusaba de desvío:
+  #KP138399, S/ 30 de «Guadalupe Del\*» (···717), operación 15926914.
 - **Una tienda sin cuentas configuradas NO acusa a nadie.** Vacío significa "no
   sabemos contra qué contrastar" y cae en verificación parcial —contraste
   manual—, jamás en `receptor distinto`. Lo contrario convertiría un despiste de
