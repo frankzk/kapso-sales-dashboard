@@ -2207,6 +2207,25 @@ esperar:
   ausencia **no** pudo comprobarse, y se cuenta aparte. Antes de reintentar hay
   que mirar el panel de Aliclik.
 
+**Un barrido puede repartirse en varias pasadas (02-10-2026).** El recorrido de
+la ventana de 14 días son ~13 páginas, y una pasada tiene ~115 s por tienda. El
+último barrido completo fue el 29-09 y tardó 112 s; desde entonces cada pasada se
+cortaba por tiempo y la siguiente volvía a la página 1, así que las últimas
+páginas no se leían nunca y no hubo evidencia para caducar nada. Ahora una pasada
+cortada deja anotado su **ciclo** —cuándo empezó, qué ventana consulta y por qué
+página sigue— y la siguiente continúa ahí con la misma ventana. Al leer la última
+página el ciclo cuenta como barrido completo **desde que empezó el ciclo**, no
+desde la última pasada: una intención nacida a mitad del ciclo sigue sin contar
+como buscada. Un ciclo de más de tres horas se descarta y se empieza de nuevo.
+
+**El pase de rezagadas no depende de que el barrido termine.** Para no consultar
+dos veces lo mismo, salta las guías que la API acaba de leer. «Acaba» son los
+últimos **30 minutos**, y no el inicio del último barrido completo: con los
+barridos sin completarse esa marca envejeció tres días, y excluía a 531 de 608
+guías vivas. Entre ellas estaba #AUR177107, un rechazo del 25-09 que viene de
+vuelta: mientras nadie lo releyera, la retención por duplicado de #AUR177661
+(§8.3) no podía soltarse.
+
 El motivo de la caducidad **se añade** al fallo original en vez de sustituirlo:
 el timeout es la mitad del diagnóstico y esa fila es lo que se le presenta al
 soporte de Aliclik cuando hay que reclamar.

@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { getStoreCreds } from "@/lib/ingest";
 import { refreshAliclikOrder } from "@/lib/aliclik-track";
-import { selectFollowUpGuides, followUpKey, type FollowUpCandidate } from "@/lib/aliclik-followup";
+import { selectFollowUpGuides, followUpKey, followUpFreshSince, type FollowUpCandidate } from "@/lib/aliclik-followup";
 import {
   selectExpiredOrphans,
   type ExpiryCandidate,
@@ -319,11 +319,13 @@ async function followUpLiveGuides(
     return;
   }
 
-  // El barrido acaba de refrescar a las que caen dentro de su ventana: no se
-  // gasta un turno en ellas. Sin constancia de barrido no se excluye a nadie —
-  // el orden de la cola ya reparte bien.
-  const sweptAt = sweep ? new Date(sweep.startedAt) : null;
-  const refreshedSince = sweptAt && Number.isFinite(sweptAt.getTime()) ? sweptAt : null;
+  // Las que la API acaba de leer —el barrido o una consulta suelta— no gastan
+  // turno. «Acaba» es una ventana fija y no el inicio del último barrido
+  // completo: si los barridos dejan de completarse, esa marca envejece y excluía
+  // para siempre a toda guía leída después. Pasó del 29-09 al 02-10-2026: 531 de
+  // 608 guías vivas fuera de la cola, entre ellas devoluciones que liberaban
+  // retenciones de duplicado (0217).
+  const refreshedSince = followUpFreshSince(now);
 
   const selection = selectFollowUpGuides((data ?? []) as FollowUpCandidate[], {
     refreshedSince,
@@ -566,6 +568,17 @@ async function run(req: NextRequest) {
     }
   }
 
+  // Una línea por pasada en los logs: cuántas rezagadas se consultaron y
+  // cuántas quedaron esperando turno. Un atasco del pase se ve aquí sin tener
+  // que llamar al cron a mano (0217).
+  console.info(
+    "aliclik-close",
+    JSON.stringify(reports.map((r) => ({
+      store: r.storeId, sweepAgeMinutes: r.sweepAgeMinutes, followUpScanned: r.followUpScanned,
+      followUpApplied: r.followUpApplied, followUpDeferred: r.followUpDeferred,
+      followUpAbandoned: r.followUpAbandoned, orphansExpired: r.orphansExpired, errors: r.errors.slice(0, 3),
+    }))),
+  );
   return NextResponse.json({ ok: true, reports });
 }
 

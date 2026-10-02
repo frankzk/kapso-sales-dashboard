@@ -435,4 +435,6 @@
 \ir migrations/0215_urpi_programming.sql
 \echo 'Applying 0216_urpi_auto_sync.sql'
 \ir migrations/0216_urpi_auto_sync.sql
+\echo 'Applying 0217_aliclik_sweep_reanudable.sql'
+\ir migrations/0217_aliclik_sweep_reanudable.sql
 \echo 'Done.'

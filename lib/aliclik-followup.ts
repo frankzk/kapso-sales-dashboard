@@ -125,6 +125,20 @@ export function followUpKey(c: Pick<FollowUpCandidate, "external_order_number" |
   return (c.external_order_number ?? "").trim() || (c.guide_code ?? "").trim();
 }
 
+/**
+ * Cuánto vale una lectura de API como «recién hecha» para el pase de rezagadas.
+ *
+ * Más que la cadencia del barrido (20 min), para que lo que leyó su última
+ * pasada no se vuelva a consultar, y poco como para que una guía que el barrido
+ * ya no alcanza espere mucho su turno.
+ */
+export const FOLLOW_UP_FRESH_MS = 30 * 60_000;
+
+/** Desde cuándo una lectura de API excluye a la guía de esta pasada. Pura. */
+export function followUpFreshSince(now: Date): Date {
+  return new Date(now.getTime() - FOLLOW_UP_FRESH_MS);
+}
+
 export interface SelectFollowUpOpts {
   /**
    * Instante desde el cual una lectura de API cuenta como "recién hecha": las
