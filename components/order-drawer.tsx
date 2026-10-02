@@ -104,6 +104,8 @@ import {
   isGeneralStatus,
   operationalLabel,
   operationalStatusesFor,
+  shipmentIsReturning,
+  shipmentStateLabel,
   type GeneralStatus,
 } from "@/lib/order-status";
 import {
@@ -1284,9 +1286,25 @@ export function OrderDrawer({
                           {g.shalom_codigo}
                         </span>
                       )}
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                        {g.delivery_status}
-                      </span>
+                      {(() => {
+                        const estado = {
+                          deliveryStatus: g.delivery_status,
+                          custodyState: g.custody_state,
+                          pickupState: g.pickup_state,
+                        };
+                        return (
+                          <span
+                            className={cn(
+                              "rounded-full px-2 py-0.5 text-xs",
+                              shipmentIsReturning(estado)
+                                ? "bg-amber-50 font-medium text-amber-800"
+                                : "bg-slate-100 text-slate-600",
+                            )}
+                          >
+                            {shipmentStateLabel(estado)}
+                          </span>
+                        );
+                      })()}
                       {/* Grupo GF: quién tiene el paquete y en qué quedó la parada. */}
                       {(() => {
                         const gf = detail.gfDeliveries.find((d) => d.shipmentId === g.id);

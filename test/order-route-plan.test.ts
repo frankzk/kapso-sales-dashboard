@@ -281,7 +281,29 @@ describe("una salida viva bloquea repetir ese mismo courier", () => {
       shortCode: "MCMH",
       deliveryStatus: "pendiente",
       pickupState: "pendiente_de_envio",
+      custodyState: null,
     });
+  });
+
+  it("una guía que vuelve no se manda a anular: dice que está en devolución (#KP132318)", () => {
+    // Swayp marcó DEVOLUCIÓN; el barrido la guarda como en_ruta + custodia retorno.
+    const plan = buildOrderRoutePlan({
+      operation: "lima",
+      outputs: [
+        {
+          id: "g1",
+          courier: "fenix",
+          deliveryStatus: "en_ruta",
+          custodyState: "retorno",
+          guideCode: "50000142099",
+        },
+      ],
+    });
+    const swayp = plan.candidates.find((route) => route.key === "swayp");
+    expect(swayp?.availability).toBe("blocked");
+    expect(swayp?.reason).toMatch(/no entregó: su guía está en devolución/);
+    expect(swayp?.reason).not.toMatch(/Anúlala/);
+    expect(swayp?.blockingOutput?.custodyState).toBe("retorno");
   });
 
   it("una ruta libre no arrastra la identidad de otra", () => {

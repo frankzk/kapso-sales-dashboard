@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/components/ui";
-import { operationalLabel } from "@/lib/order-status";
+import { shipmentIsReturning, shipmentStateLabel } from "@/lib/order-status";
 import type {
   OrderRoutePlan,
   RouteCandidate,
@@ -143,7 +143,7 @@ export function OrderRouteDesk({
                 <div className="mt-2 rounded-md border border-slate-200 bg-white px-2 py-1.5">
                   <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-600">
                     <span className="font-semibold uppercase tracking-wide text-slate-500">
-                      Salida activa
+                      {shipmentIsReturning(route.blockingOutput) ? "Salida en devolución" : "Salida activa"}
                     </span>
                     {route.blockingOutput.guideCode && (
                       // `select-all`: el número se copia de un clic para pegarlo
@@ -159,10 +159,13 @@ export function OrderRouteDesk({
                       </span>
                     )}
                   </p>
-                  <p className="mt-0.5 text-[11px] text-slate-500">
-                    {operationalLabel(
-                      route.blockingOutput.pickupState ?? route.blockingOutput.deliveryStatus,
+                  <p
+                    className={cn(
+                      "mt-0.5 text-[11px]",
+                      shipmentIsReturning(route.blockingOutput) ? "font-medium text-amber-800" : "text-slate-500",
                     )}
+                  >
+                    {shipmentStateLabel(route.blockingOutput)}
                   </p>
                 </div>
               )}
