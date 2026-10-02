@@ -429,4 +429,6 @@
 \ir migrations/0212_rollups_rango_indexable.sql
 \echo 'Applying 0213_rollups_solo_service_role.sql'
 \ir migrations/0213_rollups_solo_service_role.sql
+\echo 'Applying 0214_auto_order_trials.sql'
+\ir migrations/0214_auto_order_trials.sql
 \echo 'Done.'
