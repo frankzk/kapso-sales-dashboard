@@ -201,12 +201,70 @@ interface ExistingLead {
   has_order: boolean;
 }
 
+// ─── Leer el estado de un lead antes de escribirle uno (01-10-2026) ──────────
+//
+// Cada camino que decide el estado de un lead —la sincronización de
+// conversaciones, la de carritos, los webhooks de Kapso— lee primero lo que ya
+// hay: si existe, qué estado tiene, si compró, cuándo lo gestionó una asesora.
+// Esas lecturas ignoraban el error y seguían con lo que hubiera, y «no pude
+// leer» se convertía en «no hay nada»: un lead sin estado previo, que
+// nextLeadState deriva desde cero a «Sin llamar».
+//
+// Así se pisaron 2.290 leads de Kenku el 01-10-2026 a las 20:26, con la base
+// reiniciándose: el cursor no se leyó (y sin cursor se piden TODAS las
+// conversaciones), salieron ~4.400 teléfonos en un solo `in()` de 57 KB que la
+// pasarela devolvió con 400, y cada lead volvió a «Sin llamar»: ganados con
+// pedido, gestiones de asesora, cerrados y los de Yape/Shalom.
+//
+// La regla ahora: si no se pudo leer, no se escribe estado. La pasada se corta y
+// la siguiente la reintenta.
+
+/**
+ * Cuántos valores viajan en cada `in()`. El filtro va en la URL y la pasarela
+ * rechaza las largas: 150 teléfonos son unos 2 KB.
+ */
+export const IN_CHUNK = 150;
+
+/** Lo más que PostgREST devuelve en una respuesta (`db-max-rows`). */
+const POSTGREST_MAX_ROWS = 1000;
+
+/**
+ * `select … where columna in (valores)` por trozos de IN_CHUNK, y LANZA si
+ * cualquiera falla. Un trozo que vuelve lleno puede venir cortado por el tope de
+ * PostgREST sin avisar: se parte en dos y se vuelve a pedir hasta que cada
+ * respuesta quepa entera.
+ */
+export async function selectIn<T>(
+  values: readonly string[],
+  query: (chunk: string[]) => PromiseLike<{ data: unknown; error: { message: string } | null }>,
+): Promise<T[]> {
+  const out: T[] = [];
+  const pending: string[][] = [];
+  for (let i = 0; i < values.length; i += IN_CHUNK) pending.push(values.slice(i, i + IN_CHUNK));
+  while (pending.length) {
+    const chunk = pending.shift()!;
+    const { data, error } = await query(chunk);
+    if (error) throw new Error(error.message);
+    const rows = (data as T[] | null) ?? [];
+    if (rows.length >= POSTGREST_MAX_ROWS) {
+      if (chunk.length === 1) throw new Error(`más de ${POSTGREST_MAX_ROWS} filas para un solo valor`);
+      const half = Math.ceil(chunk.length / 2);
+      pending.unshift(chunk.slice(0, half), chunk.slice(half));
+      continue;
+    }
+    out.push(...rows);
+  }
+  return out;
+}
+
 async function getCursor(admin: SupabaseClient, storeId: string): Promise<string | null> {
-  const { data } = await admin
+  const { data, error } = await admin
     .from("sync_state")
     .select("cursor")
     .match({ store_id: storeId, source: "leads" })
     .maybeSingle();
+  // Sin cursor se piden TODAS las conversaciones: un error no puede leerse así.
+  if (error) throw new Error(`cursor de leads: ${error.message}`);
   return data?.cursor ?? null;
 }
 
@@ -393,81 +451,89 @@ export async function syncStoreLeads(
     return { touched: 0, enriched, sinTelefono };
   }
 
-  // Orders by phone (non-cancelled, keep the most recent) → won linkage.
+  // Lo que decide el estado de cada lead: su pedido, su carrito, si ya existe y
+  // cuándo lo gestionó una asesora. Si CUALQUIERA de estas lecturas falla no se
+  // escribe nada (ver selectIn): el cursor se queda donde estaba y la próxima
+  // pasada reintenta la misma ventana.
   const orderByPhone = new Map<string, { id: string; createdAt: string | null }>();
-  {
-    const { data } = await admin
-      .from("orders")
-      .select("id, customer_phone, created_at")
-      .eq("store_id", storeId)
-      .in("customer_phone", phones)
-      .is("cancelled_at", null);
-    for (const o of (data as { id: string; customer_phone: string; created_at: string | null }[]) ?? []) {
+  const newestOpenCartAt = new Map<string, string>();
+  const existingByPhone = new Map<string, ExistingLead>();
+  const existingByBsuid = new Map<string, ExistingLead>();
+  let dispositionByPhone: Map<string, string>;
+  try {
+    // Orders by phone (non-cancelled, keep the most recent) → won linkage.
+    const orders = await selectIn<{ id: string; customer_phone: string; created_at: string | null }>(phones, (chunk) =>
+      admin
+        .from("orders")
+        .select("id, customer_phone, created_at")
+        .eq("store_id", storeId)
+        .in("customer_phone", chunk)
+        .is("cancelled_at", null),
+    );
+    for (const o of orders) {
       if (!o.customer_phone) continue;
       const prev = orderByPhone.get(o.customer_phone);
       if (!prev || (o.created_at ?? "") > (prev.createdAt ?? "")) {
         orderByPhone.set(o.customer_phone, { id: o.id, createdAt: o.created_at });
       }
     }
-  }
 
-  // Newest OPEN cart (draft) per phone → "new buying intent" signal. A draft
-  // created after a won order means a repeat purchase in progress, so the lead
-  // must reopen instead of staying won (recompra).
-  const newestOpenCartAt = new Map<string, string>();
-  {
-    const { data } = await admin
-      .from("draft_orders")
-      .select("customer_phone, created_at")
-      .eq("store_id", storeId)
-      .in("customer_phone", phones)
-      .in("status", ["open", "invoice_sent"]);
-    for (const d of (data as { customer_phone: string | null; created_at: string | null }[]) ?? []) {
+    // Newest OPEN cart (draft) per phone → "new buying intent" signal. A draft
+    // created after a won order means a repeat purchase in progress, so the lead
+    // must reopen instead of staying won (recompra).
+    const carts = await selectIn<{ customer_phone: string | null; created_at: string | null }>(phones, (chunk) =>
+      admin
+        .from("draft_orders")
+        .select("customer_phone, created_at")
+        .eq("store_id", storeId)
+        .in("customer_phone", chunk)
+        .in("status", ["open", "invoice_sent"]),
+    );
+    for (const d of carts) {
       if (!d.customer_phone || !d.created_at) continue;
       const prev = newestOpenCartAt.get(d.customer_phone);
       if (!prev || d.created_at > prev) newestOpenCartAt.set(d.customer_phone, d.created_at);
     }
-  }
 
-  // Existing leads for these phones.
-  const existingByPhone = new Map<string, ExistingLead>();
-  {
-    const { data } = await admin
-      .from("leads")
-      .select("phone, status, handoff_reason, has_order")
-      .eq("store_id", storeId)
-      .in("phone", phones);
-    for (const l of (data as ExistingLead[]) ?? []) {
+    // Existing leads for these phones.
+    const byPhone = await selectIn<ExistingLead>(phones, (chunk) =>
+      admin
+        .from("leads")
+        .select("phone, status, handoff_reason, has_order")
+        .eq("store_id", storeId)
+        .in("phone", chunk),
+    );
+    for (const l of byPhone) {
       if (l.phone) existingByPhone.set(l.phone, l);
     }
-  }
 
-  // Y los que ya existen identificados por BSUID (0105). Va en una consulta
-  // aparte y no en un `or(...)` porque son dos claves distintas sobre dos índices
-  // distintos: mezclarlas en un filtro compuesto le impide a Postgres usar
-  // cualquiera de los dos.
-  const existingByBsuid = new Map<string, ExistingLead>();
-  {
+    // Y los que ya existen identificados por BSUID (0105). Va en una consulta
+    // aparte y no en un `or(...)` porque son dos claves distintas sobre dos índices
+    // distintos: mezclarlas en un filtro compuesto le impide a Postgres usar
+    // cualquiera de los dos.
     const bsuids = [...seeds.values()]
       .filter((s) => !s.phone && s.bsuid)
       .map((s) => s.bsuid as string);
-    if (bsuids.length) {
-      const { data } = await admin
+    const byBsuid = await selectIn<ExistingLead & { bsuid: string | null }>(bsuids, (chunk) =>
+      admin
         .from("leads")
         .select("phone, bsuid, status, handoff_reason, has_order")
         .eq("store_id", storeId)
-        .in("bsuid", bsuids);
-      for (const l of (data as (ExistingLead & { bsuid: string | null })[]) ?? []) {
-        if (l.bsuid) existingByBsuid.set(l.bsuid, l);
-      }
+        .in("bsuid", chunk),
+    );
+    for (const l of byBsuid) {
+      if (l.bsuid) existingByBsuid.set(l.bsuid, l);
     }
-  }
 
-  // Last manual call disposition per phone → a cart only counts as "new intent"
-  // (reopen) when it post-dates the agent's registered result. Otherwise a cart
-  // created BEFORE the disposition would wrongly revert a worked lead to "Sin
-  // llamar".
-  const dispositionByPhone = await lastDispositionAtByPhone(admin, storeId, phones);
+    // Last manual call disposition per phone → a cart only counts as "new intent"
+    // (reopen) when it post-dates the agent's registered result. Otherwise a cart
+    // created BEFORE the disposition would wrongly revert a worked lead to "Sin
+    // llamar".
+    dispositionByPhone = await lastDispositionAtByPhone(admin, storeId, phones);
+  } catch (e) {
+    await setCursor(admin, storeId, cursor, "error", `lecturas: ${e instanceof Error ? e.message : String(e)}`);
+    return { touched: 0, enriched: { ...ZERO_ENRICH }, sinTelefono };
+  }
 
   let maxTs = cursor;
   // Se itera sobre las SEMILLAS, no sobre los teléfonos: desde la 0105 hay leads
@@ -978,7 +1044,12 @@ export function shouldReopenLostCart(opts: {
 
 /** Most recent MANUAL call disposition time per phone (when an agent set a call
  *  result). The auto-sync must not override a disposition with an order/cart that
- *  predates it. Returns {} on any error. */
+ *  predates it.
+ *
+ *  LANZA si no puede leer (ver selectIn). Antes devolvía {} ante cualquier error,
+ *  y un mapa vacío dice «nadie gestionó a estos leads»: con eso un pedido o un
+ *  carrito podía pasar por encima del resultado que una asesora acababa de
+ *  registrar. */
 export async function lastDispositionAtByPhone(
   admin: SupabaseClient,
   storeId: string,
@@ -986,26 +1057,26 @@ export async function lastDispositionAtByPhone(
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   if (!phones.length) return out;
-  const { data: leadRows } = await admin
-    .from("leads")
-    .select("id, phone")
-    .eq("store_id", storeId)
-    .in("phone", phones);
+  const leadRows = await selectIn<{ id: string; phone: string }>(phones, (chunk) =>
+    admin.from("leads").select("id, phone").eq("store_id", storeId).in("phone", chunk),
+  );
   const phoneById = new Map<string, string>();
   const ids: string[] = [];
-  for (const l of (leadRows as { id: string; phone: string }[]) ?? []) {
+  for (const l of leadRows) {
     phoneById.set(l.id, l.phone);
     ids.push(l.id);
   }
   if (!ids.length) return out;
-  const { data: calls } = await admin
-    .from("lead_calls")
-    .select("lead_id, occurred_at")
-    .eq("store_id", storeId)
-    .eq("kind", "call")
-    .not("new_status", "is", null)
-    .in("lead_id", ids);
-  for (const c of (calls as { lead_id: string; occurred_at: string }[]) ?? []) {
+  const calls = await selectIn<{ lead_id: string; occurred_at: string }>(ids, (chunk) =>
+    admin
+      .from("lead_calls")
+      .select("lead_id, occurred_at")
+      .eq("store_id", storeId)
+      .eq("kind", "call")
+      .not("new_status", "is", null)
+      .in("lead_id", chunk),
+  );
+  for (const c of calls) {
     const phone = phoneById.get(c.lead_id);
     if (!phone) continue;
     const prev = out.get(phone);
@@ -2248,33 +2319,34 @@ export async function linkDraftOrdersToLeads(
   const existingCategory = new Map<string, string>();
   const existingStatus = new Map<string, string>();
   const existingSource = new Map<string, string | null>();
-  {
-    const { data } = await admin
-      .from("leads")
-      .select("phone, status, category, source")
-      .eq("store_id", storeId)
-      .in("phone", phones);
-    for (const l of (data as { phone: string; status: string; category: string; source: string | null }[]) ?? []) {
-      existingCategory.set(l.phone, l.category);
-      existingStatus.set(l.phone, l.status);
-      existingSource.set(l.phone, l.source);
-    }
+  // LANZAN si no pueden leer (ver selectIn): con un lead que existe tomado por
+  // nuevo, upsertDraftCartLead le escribiría estado «nuevo», fuente y nombre
+  // encima de su gestión. Nada se pierde: la sincronización de carritos vuelve a
+  // recorrer los abiertos en cada pasada, también los que llegaron por webhook.
+  const existingRows = await selectIn<{ phone: string; status: string; category: string; source: string | null }>(
+    phones,
+    (chunk) => admin.from("leads").select("phone, status, category, source").eq("store_id", storeId).in("phone", chunk),
+  );
+  for (const l of existingRows) {
+    existingCategory.set(l.phone, l.category);
+    existingStatus.set(l.phone, l.status);
+    existingSource.set(l.phone, l.source);
   }
 
   // Latest won order date per phone → a newer open cart means a repeat purchase.
   const orderCreatedAt = new Map<string, string>();
-  {
-    const { data } = await admin
+  const orderRows = await selectIn<{ customer_phone: string | null; created_at: string | null }>(phones, (chunk) =>
+    admin
       .from("orders")
       .select("customer_phone, created_at")
       .eq("store_id", storeId)
-      .in("customer_phone", phones)
-      .is("cancelled_at", null);
-    for (const o of (data as { customer_phone: string | null; created_at: string | null }[]) ?? []) {
-      if (!o.customer_phone || !o.created_at) continue;
-      const prev = orderCreatedAt.get(o.customer_phone);
-      if (!prev || o.created_at > prev) orderCreatedAt.set(o.customer_phone, o.created_at);
-    }
+      .in("customer_phone", chunk)
+      .is("cancelled_at", null),
+  );
+  for (const o of orderRows) {
+    if (!o.customer_phone || !o.created_at) continue;
+    const prev = orderCreatedAt.get(o.customer_phone);
+    if (!prev || o.created_at > prev) orderCreatedAt.set(o.customer_phone, o.created_at);
   }
 
   // Last manual call disposition per phone → a repeat cart only reopens a won lead
@@ -2292,13 +2364,15 @@ export async function linkDraftOrdersToLeads(
     const times = eligible.map((d) => Date.parse(d.created_at ?? "")).filter(Number.isFinite);
     if (times.length) {
       const floor = new Date(Math.min(...times) - CART_COUNT_WINDOW_MS).toISOString();
-      const { data } = await admin
-        .from("draft_orders")
-        .select("customer_phone, created_at")
-        .eq("store_id", storeId)
-        .in("customer_phone", phones)
-        .gte("created_at", floor);
-      for (const r of (data as { customer_phone: string | null; created_at: string | null }[] | null) ?? []) {
+      const rows = await selectIn<{ customer_phone: string | null; created_at: string | null }>(phones, (chunk) =>
+        admin
+          .from("draft_orders")
+          .select("customer_phone, created_at")
+          .eq("store_id", storeId)
+          .in("customer_phone", chunk)
+          .gte("created_at", floor),
+      );
+      for (const r of rows) {
         if (!r.customer_phone || !r.created_at) continue;
         const list = cartTimesByPhone.get(r.customer_phone) ?? [];
         list.push(r.created_at);
@@ -2393,7 +2467,7 @@ export async function ingestConversationEvent(
 
   // Order by phone (non-cancelled) → won linkage. Solo con teléfono: los pedidos
   // de Shopify se indexan por número y no conocen el BSUID.
-  const { data: order } = seed.phone
+  const { data: order, error: orderError } = seed.phone
     ? await admin
         .from("orders")
         .select("id")
@@ -2402,14 +2476,19 @@ export async function ingestConversationEvent(
         .is("cancelled_at", null)
         .limit(1)
         .maybeSingle()
-    : { data: null };
+    : { data: null, error: null };
 
-  const { data: existing } = await admin
+  const { data: existing, error: existingError } = await admin
     .from("leads")
     .select("phone, status, handoff_reason, has_order")
     .eq("store_id", storeId)
     .eq(idCol, idVal)
     .maybeSingle();
+
+  // Sin saber si el lead existe ni si compró, nextLeadState lo derivaría desde
+  // cero y pisaría su gestión (ver selectIn). No se escribe nada: la
+  // sincronización de conversaciones lo vuelve a ver en su próxima pasada.
+  if (orderError || existingError) return { ok: false, reason: "read-failed" };
 
   await upsertLeadFromSeed(admin, storeId, seed, {
     hasOrder: Boolean(order?.id),
@@ -2468,12 +2547,25 @@ export async function applyHandoff(
     return { ok: false, reason: "no-identity" };
   }
 
-  const { data: existing } = await admin
+  const { data: existing, error: existingError } = await admin
     .from("leads")
     .select("status, has_order")
     .eq("store_id", storeId)
     .eq(idCol, idVal)
     .maybeSingle();
+
+  // Un lead que no se pudo leer no es un lead que no existe: tomado por nuevo,
+  // el handoff le escribiría «casi cierra» encima de un ganado o de la gestión
+  // de una asesora (ver selectIn). Se registra y no se escribe.
+  if (existingError) {
+    await noteAnomaly(admin, {
+      storeId,
+      source: "handoff",
+      reason: "lectura_fallida",
+      sample: { message: existingError.message.slice(0, 200), reason: info.reason },
+    });
+    return { ok: false, reason: "read-failed" };
+  }
 
   if (!canCreate && !existing) {
     // Se conoce la conversación pero ningún lead la tiene todavía: no hay fila
