@@ -2590,9 +2590,17 @@ falla, la fila queda `omitido` con el motivo y no se toca Shopify.
 
 Qué hace al generar:
 
+- Si la fila trae dirección (grupo B), la pone **en el borrador antes de
+  completarlo**, sin tocar productos ni precios. Si Shopify no la guarda, el
+  pedido no se genera (`direccion_no_aplicada`). Corregirla en el pedido ya
+  creado pide `write_orders`, que las tiendas no dieron: el 02-10-2026 seis
+  pedidos del grupo B salieron así con la «-» del formulario y hubo que
+  corregirlos a mano en Shopify.
 - Completa **el mismo borrador** del cliente (`paymentPending`): mismos
   productos, cantidades y precios que vio en el formulario.
-- Etiqueta el pedido en Shopify con `auto_recompra` y la cohorte.
+- Intenta etiquetar el pedido en Shopify con `auto_recompra` y la cohorte. Sin
+  `write_orders` no puede, y no hace falta para medir: la tabla guarda el
+  pedido.
 - Gana el lead (`pedido_generado`) y deja una fila `system` en su historial.
   **No acredita la venta a ninguna asesora**: nadie la cerró.
 - El pedido sigue el camino normal del Master: Lima entra directo a

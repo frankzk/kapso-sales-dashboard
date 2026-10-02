@@ -22,7 +22,7 @@ import {
   completeDraftOrder,
   fetchOrderById,
   getDraftOrderForEdit,
-  updateOrderShippingAddress,
+  updateDraftShippingAddress,
   type OrderAddressInput,
 } from "@/lib/shopify";
 import { extractNumericId } from "@/lib/shopify-urls";
@@ -172,7 +172,8 @@ export interface AutoTrialDeps {
   hasLaterOrder(phone: string, cartCreatedAt: string): Promise<boolean>;
   liveDraftStatus(gid: string): Promise<string | null>;
   completeDraft(gid: string): Promise<{ orderGid: string | null; orderName: string | null }>;
-  setOrderAddress(orderGid: string, address: OrderAddressInput): Promise<void>;
+  /** Pone la dirección en el borrador antes de completarlo. */
+  setDraftAddress(draftGid: string, address: OrderAddressInput): Promise<void>;
   tagOrder(orderGid: string, tags: string[]): Promise<void>;
   /** Registra el pedido en Kapta y gana el lead. Devuelve el created_at del pedido. */
   recordOrder(input: {
@@ -198,10 +199,11 @@ export interface AutoTrialReport {
  * Procesa las filas pendientes de una tienda. Nunca lanza por una fila: cada
  * una termina `generado`, `omitido` (con motivo) o `error` (con el mensaje).
  *
- * Una vez completado el borrador, el pedido EXISTE en Shopify. Desde ahí nada
- * deshace nada: la dirección, la etiqueta y el registro local son de mejor
- * esfuerzo, y lo que falle queda escrito en `reason` de una fila `generado`
- * para corregirlo a mano.
+ * Todo lo que el pedido necesita para despacharse —la dirección incluida— se
+ * deja en el borrador ANTES de completarlo. Una vez completado, el pedido
+ * EXISTE en Shopify y nada lo deshace: la etiqueta y el registro local son de
+ * mejor esfuerzo, y lo que falle queda escrito en `reason` de una fila
+ * `generado` para corregirlo a mano.
  */
 export async function processAutoOrderTrials(
   deps: AutoTrialDeps,
@@ -234,6 +236,20 @@ export async function processAutoOrderTrials(
         continue;
       }
 
+      // La dirección va en el BORRADOR, antes de completarlo. Corregirla en el
+      // pedido ya creado pide `write_orders`, que la tienda no dio: así salieron
+      // seis pedidos del grupo B con la «-» del formulario (02-10-2026). Si el
+      // borrador no acepta la dirección, el pedido no se genera.
+      const address = trialAddress(row, draft);
+      if (address) {
+        try {
+          await deps.setDraftAddress(row.draft_order_gid, address);
+        } catch (e: any) {
+          await skip(`direccion_no_aplicada: ${String(e?.message ?? e).slice(0, 300)}`);
+          continue;
+        }
+      }
+
       let completed: { orderGid: string | null; orderName: string | null };
       try {
         completed = await deps.completeDraft(row.draft_order_gid);
@@ -248,18 +264,17 @@ export async function processAutoOrderTrials(
       if (!completed.orderGid) throw new Error("Shopify completó el carrito pero no devolvió el pedido");
 
       const avisos: string[] = [];
-      const address = trialAddress(row, draft);
-      if (address) {
-        try {
-          await deps.setOrderAddress(completed.orderGid, address);
-        } catch (e: any) {
-          avisos.push(`dirección no aplicada: ${e?.message ?? e}`);
-        }
-      }
       try {
         await deps.tagOrder(completed.orderGid, [AUTO_TRIAL_TAG, row.cohort]);
       } catch (e: any) {
-        avisos.push(`etiqueta no aplicada: ${e?.message ?? e}`);
+        // Etiquetar el pedido también pide `write_orders`. No hace falta para
+        // medir —la tabla guarda el pedido—, así que se anota corto y se sigue.
+        const msg = String(e?.message ?? e);
+        avisos.push(
+          /access denied|write_orders/i.test(msg)
+            ? "etiqueta no aplicada: falta permiso write_orders"
+            : `etiqueta no aplicada: ${msg.slice(0, 200)}`,
+        );
       }
       try {
         const at = await deps.recordOrder({
@@ -368,8 +383,8 @@ export function autoTrialDeps(
       const done = await completeDraftOrder({ ...shopify, draftGid: gid, paymentPending: true });
       return { orderGid: done.orderGid, orderName: done.orderName };
     },
-    async setOrderAddress(orderGid, address) {
-      await updateOrderShippingAddress({ ...shopify, orderGid, address });
+    async setDraftAddress(draftGid, address) {
+      await updateDraftShippingAddress({ ...shopify, draftGid, address });
     },
     async tagOrder(orderGid, tags) {
       await addTags({ ...shopify, gid: orderGid, tags });

@@ -179,7 +179,7 @@ function fakeDeps(over: Partial<AutoTrialDeps> & { rows?: AutoOrderTrialRow[] } 
       calls.push(`complete:${gid}`);
       return { orderGid: "gid://shopify/Order/5550001", orderName: "#KP140001" };
     },
-    setOrderAddress: async (gid, a) => {
+    setDraftAddress: async (gid, a) => {
       calls.push(`address:${gid}:${a.address1}`);
     },
     tagOrder: async (gid, tags) => {
@@ -216,14 +216,35 @@ describe("processAutoOrderTrials", () => {
     });
   });
 
-  it("grupo B: pone la dirección de la fila en el pedido ANTES de registrarlo", async () => {
+  it("grupo B: la dirección va al BORRADOR antes de completarlo", async () => {
     const { deps, calls } = fakeDeps({
       rows: [row({ grupo: "B", address1: "Av. Canevaro 1275", district: "Lince" })],
       loadDraft: async () => draft({ address1: "-" }),
     });
     await processAutoOrderTrials(deps);
-    expect(calls[1]).toBe("address:gid://shopify/Order/5550001:Av. Canevaro 1275");
-    expect(calls.indexOf("record:gid://shopify/Order/5550001")).toBeGreaterThan(1);
+    expect(calls.slice(0, 2)).toEqual([`address:${GID}:Av. Canevaro 1275`, `complete:${GID}`]);
+  });
+
+  it("grupo B: si el borrador no acepta la dirección, NO se genera el pedido", async () => {
+    // Así salieron seis pedidos con la «-» del formulario el 02-10-2026: la
+    // dirección se corregía DESPUÉS de crear el pedido y Shopify lo negó.
+    const { deps, calls, finished } = fakeDeps({
+      rows: [row({ grupo: "B", address1: "Av. Canevaro 1275", district: "Lince" })],
+      loadDraft: async () => draft({ address1: "-" }),
+      setDraftAddress: async () => {
+        throw new Error("Access denied for draftOrderUpdate field.");
+      },
+    });
+    const r = await processAutoOrderTrials(deps);
+    expect(r).toMatchObject({ generated: 0, skipped: 1 });
+    expect(calls).toEqual([]);
+    expect(String(finished.t1!.reason)).toMatch(/^direccion_no_aplicada: Access denied/);
+  });
+
+  it("sin dirección propia en la fila no toca la del carrito", async () => {
+    const { deps, calls } = fakeDeps();
+    await processAutoOrderTrials(deps);
+    expect(calls.some((c) => c.startsWith("address:"))).toBe(false);
   });
 
   it("si la regla dice que no, no toca Shopify y deja el motivo", async () => {
@@ -278,12 +299,12 @@ describe("processAutoOrderTrials", () => {
   it("con el pedido ya creado, lo que falle después se anota pero la fila queda generada", async () => {
     const { deps, finished } = fakeDeps({
       tagOrder: async () => {
-        throw new Error("Access denied for tagsAdd");
+        throw new Error("Shopify GraphQL errors: Access denied for tagsAdd field.");
       },
     });
     const r = await processAutoOrderTrials(deps);
     expect(r.generated).toBe(1);
     expect(finished.t1).toMatchObject({ status: "generado" });
-    expect(String(finished.t1!.reason)).toContain("etiqueta no aplicada");
+    expect(finished.t1!.reason).toBe("etiqueta no aplicada: falta permiso write_orders");
   });
 });
