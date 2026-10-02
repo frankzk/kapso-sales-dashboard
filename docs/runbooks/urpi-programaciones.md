@@ -112,10 +112,12 @@ aislamiento por tienda y rechazo de lecturas atrasadas. Nunca usa DATABASE_URL.
 - Componente verificado en una página temporal local con datos anonimizados:
   búsqueda, filtro por fecha, totales y selector de archivo de ejemplo.
   La página temporal se eliminó; no forma parte del módulo.
-- La compilación completa del repositorio está bloqueada por importaciones
-  preexistentes de `node:crypto` en componentes cliente (ajustes y ficha de pedido).
-  El componente aislado y el endpoint de importación sí compilan. Hay que resolver
-  el bloqueo global antes del despliegue.
+- La compilación completa en el preview de Vercel terminó correctamente el
+  02/10/2026. Los fallos locales de compilación no se reprodujeron en Vercel;
+  el entorno local usa una unión de `node_modules` fuera de la raíz que
+  Turbopack rechaza.
 
-No se aplicó la migración ni se importaron datos en producción. La lectura de
-Google dentro de Kapta sigue pendiente de las credenciales y acceso descritos.
+Las migraciones 0215 y 0216 se aplicaron en producción el 02/10/2026. Se verificaron
+RLS, lectura por usuarios autenticados y escritura/RPC solo de servidor. No se
+importaron datos en producción. La lectura de Google dentro de Kapta sigue
+pendiente de las credenciales y acceso descritos.
