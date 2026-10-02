@@ -1175,9 +1175,12 @@ Tanders:
 - **En pantalla, la salida se lee «En devolución · vuelve al origen»**, no «En
   ruta» (02-10-2026, #KP132318). La guía se guarda como `en_ruta` + custodia
   `retorno` —el paquete sigue con el courier, de regreso—, y mostrar sólo
-  `delivery_status` contradecía al panel de Swayp. La custodia manda en la
-  etiqueta mientras la salida esté abierta (`shipmentStateLabel`), y la tarjeta
-  del courier ya no pide «anúlala»: una devolución en curso no se cancela.
+  `delivery_status` contradecía al panel de Swayp. La etiqueta
+  (`shipmentStateLabel`) sigue lo que el courier dice HOY —el estado de Swayp,
+  el último de Tanders— y la custodia sólo cuando no se sabe: la custodia no
+  retrocede, y una guía de Tanders que pasó por `RETURNING` y volvió a reintentar
+  no está «en devolución». La tarjeta del courier ya no pide «anúlala»: una
+  devolución en curso no se cancela.
 
 #### En Lima, lo que no se entrega se reprograma (v1.23, 30-09-2026)
 

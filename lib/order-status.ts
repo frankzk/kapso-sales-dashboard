@@ -121,21 +121,52 @@ export function operationalLabel(code: string): string {
  * 02-10-2026). La custodia manda sobre el estado de entrega mientras la salida
  * no esté cerrada.
  */
-export function shipmentStateLabel(input: {
+export interface ShipmentStateInput {
   deliveryStatus: string;
   custodyState?: string | null;
   pickupState?: string | null;
-}): string {
-  const cerrada = input.deliveryStatus === "entregado" || input.deliveryStatus === "anulado";
-  if (!cerrada && input.custodyState === "retorno") return "En devolución · vuelve al origen";
-  if (!cerrada && input.custodyState === "devuelto") return "Devuelto al origen";
-  return operationalLabel(input.pickupState ?? input.deliveryStatus);
+  courier?: string | null;
+  /** Estado crudo de Swayp (`shipments.swayp_state`). */
+  swaypState?: number | null;
+  /** Lo último que reportó el courier (`shipments.reported_status`), p. ej. el de Tanders. */
+  reportedStatus?: string | null;
 }
 
-/** ¿El paquete de esta salida está volviendo o ya volvió? */
-export function shipmentIsReturning(input: { deliveryStatus: string; custodyState?: string | null }): boolean {
-  const cerrada = input.deliveryStatus === "entregado" || input.deliveryStatus === "anulado";
-  return !cerrada && (input.custodyState === "retorno" || input.custodyState === "devuelto");
+/**
+ * Estados de Swayp en los que el paquete vuelve: Devolución (8), Devolución
+ * confirmada (9) y con cobro (12). Es `SWAYP_RETURN_STATES` de lib/swayp.ts,
+ * copiado aquí porque esto lo usa el navegador; una prueba fija que coincidan.
+ */
+export const SWAYP_RETURN_STATE_IDS: ReadonlySet<number> = new Set([8, 9, 12]);
+
+/**
+ * ¿El paquete de esta salida está volviendo o ya volvió?
+ *
+ * Manda lo que el courier dice HOY, y la custodia sólo cuando no se sabe. La
+ * custodia es un escalafón que no retrocede: una guía de Tanders que pasó por
+ * `RETURNING` y volvió a `PICKED`/`DELIVERED` (reintento) se queda en `retorno`
+ * aunque el paquete ya no esté volviendo. Leerla sola decía «en devolución» en
+ * 8 guías de Tanders vivas (02-10-2026); el Master ya las trataba como vivas.
+ */
+export function shipmentIsReturning(input: ShipmentStateInput): boolean {
+  if (input.deliveryStatus === "entregado" || input.deliveryStatus === "anulado") return false;
+  const courier = (input.courier ?? "").toLowerCase();
+  if ((courier === "fenix" || courier === "swayp") && input.swaypState != null) {
+    return SWAYP_RETURN_STATE_IDS.has(input.swaypState);
+  }
+  if (courier === "tanders" && input.reportedStatus) {
+    const code = input.reportedStatus.trim().toUpperCase();
+    if (code === "RETURNING" || code === "RETURNED") return true;
+    if (code === "PENDING" || code === "PICKED" || code === "DELIVERED") return false;
+  }
+  return input.custodyState === "retorno" || input.custodyState === "devuelto";
+}
+
+export function shipmentStateLabel(input: ShipmentStateInput): string {
+  if (shipmentIsReturning(input)) {
+    return input.custodyState === "devuelto" ? "Devuelto al origen" : "En devolución · vuelve al origen";
+  }
+  return operationalLabel(input.pickupState ?? input.deliveryStatus);
 }
 
 export function isGeneralStatus(code: string | null | undefined): code is GeneralStatus {

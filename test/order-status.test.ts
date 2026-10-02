@@ -646,15 +646,34 @@ describe("resolveOrderState — registrar la guía DESPUÉS del cambio manual", 
   });
 });
 
-describe("shipmentStateLabel (la custodia manda mientras la salida está abierta)", () => {
-  it("una Devolución de Swayp (en_ruta + retorno) se lee «En devolución», no «En ruta»", async () => {
-    const { shipmentStateLabel, shipmentIsReturning } = await import("@/lib/order-status");
-    const vuelve = { deliveryStatus: "en_ruta", custodyState: "retorno" };
-    expect(shipmentStateLabel(vuelve)).toBe("En devolución · vuelve al origen");
-    expect(shipmentIsReturning(vuelve)).toBe(true);
-    expect(shipmentStateLabel({ deliveryStatus: "en_ruta", custodyState: "courier" })).toBe("En ruta");
-    // Cerrada, manda el resultado: un entregado no «vuelve».
+describe("shipmentStateLabel: manda lo que el courier dice hoy", () => {
+  it("Swayp en Devolución (8) se lee «En devolución», no «En ruta» (#KP132318)", async () => {
+    const { shipmentStateLabel } = await import("@/lib/order-status");
+    expect(
+      shipmentStateLabel({ deliveryStatus: "en_ruta", custodyState: "retorno", courier: "fenix", swaypState: 8 }),
+    ).toBe("En devolución · vuelve al origen");
+    expect(
+      shipmentStateLabel({ deliveryStatus: "en_ruta", custodyState: "courier", courier: "fenix", swaypState: 5 }),
+    ).toBe("En ruta");
+  });
+
+  it("Tanders que reintenta (PICKED/DELIVERED) NO está en devolución aunque la custodia quedó en retorno", async () => {
+    const { shipmentIsReturning } = await import("@/lib/order-status");
+    const base = { deliveryStatus: "en_ruta", custodyState: "retorno", courier: "tanders" };
+    expect(shipmentIsReturning({ ...base, reportedStatus: "DELIVERED" })).toBe(false);
+    expect(shipmentIsReturning({ ...base, reportedStatus: "PICKED" })).toBe(false);
+    expect(shipmentIsReturning({ ...base, reportedStatus: "RETURNING" })).toBe(true);
+  });
+
+  it("sin estado del courier, la custodia decide; una salida cerrada nunca «vuelve»", async () => {
+    const { shipmentIsReturning, shipmentStateLabel } = await import("@/lib/order-status");
+    expect(shipmentIsReturning({ deliveryStatus: "en_ruta", custodyState: "retorno", courier: "propio" })).toBe(true);
     expect(shipmentStateLabel({ deliveryStatus: "entregado", custodyState: "retorno" })).toBe("Entregado");
-    expect(shipmentIsReturning({ deliveryStatus: "anulado", custodyState: "retorno" })).toBe(false);
+  });
+
+  it("los estados de devolución de Swayp coinciden con lib/swayp", async () => {
+    const { SWAYP_RETURN_STATE_IDS } = await import("@/lib/order-status");
+    const { SWAYP_RETURN_STATES } = await import("@/lib/swayp");
+    expect([...SWAYP_RETURN_STATE_IDS].sort()).toEqual([...SWAYP_RETURN_STATES].sort());
   });
 });

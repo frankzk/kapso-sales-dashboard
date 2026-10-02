@@ -937,6 +937,8 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
         guideCode: guide.guide_code,
         shortCode: guide.shalom_codigo ?? null,
         pickupState: guide.pickup_state,
+        swaypState: guide.swayp_state ?? null,
+        reportedStatus: guide.reported_status ?? null,
         // Para distinguir la salida «por definir» —que la guía RELLENA— de una
         // que de verdad estorba. Sin esto la mesa advertía de una salida
         // adicional que no se va a crear.

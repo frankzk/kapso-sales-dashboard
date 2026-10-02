@@ -34,6 +34,9 @@ export interface RouteOutputSnapshot {
   shortCode?: string | null;
   /** Estado del flujo de agencia, que es lo que el courier reporta. */
   pickupState?: string | null;
+  /** Lo que el courier dice HOY: decide si el paquete vuelve (`shipmentIsReturning`). */
+  swaypState?: number | null;
+  reportedStatus?: string | null;
   /**
    * Los tres campos que faltaban para saber si la salida es RELLENABLE.
    *
@@ -65,6 +68,9 @@ export interface RouteBlockingOutput {
   pickupState: string | null;
   /** Para decir «en devolución» y no «en ruta» cuando el paquete vuelve. */
   custodyState: string | null;
+  courier: string;
+  swaypState: number | null;
+  reportedStatus: string | null;
 }
 
 export interface SwaypRouteCheck {
@@ -394,10 +400,7 @@ function applyOutputPolicy(
     // Una guía que el courier ya está devolviendo no se «anula»: no entregó y
     // el paquete viene de regreso. Decirle a la operadora que la anule la manda
     // a cancelar en el panel del courier una devolución en curso.
-    const vuelve = shipmentIsReturning({
-      deliveryStatus: blocking.deliveryStatus,
-      custodyState: blocking.custodyState,
-    });
+    const vuelve = shipmentIsReturning(blocking);
     return {
       ...route,
       recommended: false,
@@ -412,6 +415,9 @@ function applyOutputPolicy(
         deliveryStatus: blocking.deliveryStatus,
         pickupState: blocking.pickupState ?? null,
         custodyState: blocking.custodyState ?? null,
+        courier: blocking.courier,
+        swaypState: blocking.swaypState ?? null,
+        reportedStatus: blocking.reportedStatus ?? null,
       },
     };
   }
