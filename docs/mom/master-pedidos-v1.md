@@ -7737,6 +7737,51 @@ y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
   porque son vocabulario, no datos de nadie. Del Master lee solo los pedidos de
   sus rutas (0186, §27).
 
+### 30.10 Programaciones mensuales enviadas a Urpi (01/10/2026)
+
+`/dashboard/urpi` reúne los Google Sheets mensuales de programación de Urpi.
+Es una fuente documental de lo enviado: no confirma custodia, salida a reparto,
+entrega, cobro ni liquidación. Vive separada de las rutas propias de Grupo GF.
+
+Una fuente se registra por tienda, archivo y mes, con prefijo de pedido explícito.
+Un libro mixto Kenku/Aurela se registra para ambas tiendas, aislando KP y AUR.
+Se leen todas las pestañas con fecha del mes y las columnas reales de la plantilla.
+El vínculo se resuelve por código completo dentro de la tienda; sin coincidencia
+o con varias coincidencias, se conserva el registro y se pide revisión. Nunca
+crea pedidos fuera de Shopify ni salidas físicas a partir de una fila del Sheet.
+
+Cada cambio importado conserva una versión inmutable, con origen, actor y hora.
+Reimportar el contenido actual no duplica la versión. Las importaciones fallidas,
+incompletas o concurrentes atrasadas conservan la versión vigente. Las versiones
+anteriores siguen disponibles; retirar una fila de la hoja no equivale a cancelar
+ni entregar el pedido. Los conteos son de programaciones, no ventas ni intentos.
+
+Lectura mediante conexión propia de Google con permiso de solo lectura; alternativa
+de carga del libro mensual completo `.xlsx`. La conexión de una conversación de
+Codex no autoriza automáticamente al servidor de Kapta. La lectura automática se
+programa cada 15 minutos para fuentes registradas del mes anterior, actual y
+siguiente, según Lima. No descubre ni registra por sí sola archivos nuevos.
+Los meses más antiguos mantienen actualización manual. Un libro compartido se
+lee una vez por ejecución; sus prefijos siguen aislados por tienda. Una reserva
+temporal y un intervalo mínimo de 10 minutos evitan lecturas automáticas
+duplicadas. Cada ejecución procesa hasta 12 fuentes, priorizando las de intento
+más antiguo; al agotar el tiempo, el resto queda para el siguiente ciclo.
+Un fallo conserva la versión vigente, queda visible y se reintenta en el ciclo
+siguiente. Las versiones automáticas registran actor de sistema (`created_by`
+nulo); una lectura manual más reciente prevalece sobre datos automáticos previos.
+El proceso no modifica estados de entrega ni genera reprogramaciones.
+RLS restringe fuentes y versiones a `auth_store_ids()`; registrar
+exige `sheets.manage` e importar `sheets.edit`, dentro de la organización elegida.
+
+**Regla de Urpi confirmada por el owner:** «Reprogramado» es para el día siguiente
+de lunes a sábado. Viernes pasa a sábado, sábado a lunes. Se calcula desde la
+fecha del reporte, no desde su importación. Cruza meses y años sin crear otra
+identidad de pedido ni otra salida física. Se omiten domingos; no se estableció
+excepción para feriados. La función y sus pruebas quedan preparadas para la fase
+de reportes; la programación enviada conserva su fecha original.
+
+Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0215–0216.
+
 ## 31. Agradecimiento con catálogo al entregar
 
 Cuando un pedido pasa a **entregado**, se le manda a la clienta una plantilla de

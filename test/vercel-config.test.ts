@@ -75,7 +75,8 @@ describe("vercel.json", () => {
     // ruta exista lo comprueba la última prueba de este archivo; no hace falta
     // repetirlo acá.
     // 20: reintento Aliclik → Swayp sin contacto (MOM §11.9).
-    expect(crons).toHaveLength(20);
+    // 21: lectura automática de programaciones mensuales de Urpi.
+    expect(crons).toHaveLength(21);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

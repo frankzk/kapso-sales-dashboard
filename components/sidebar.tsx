@@ -59,6 +59,7 @@ function navItems(
     }
     if (canManageLogistics) {
       items.push({ href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck });
+      items.push({ href: "/dashboard/urpi", label: "Programaciones Urpi", icon: IconTruck });
     }
     return items;
   }
@@ -85,7 +86,10 @@ function navItems(
     // funcionando en su URL; para volver a mostrarlas, repón estas dos líneas.
     { href: "/dashboard/costos", label: "Costos", icon: IconMoney },
     ...(canManageLogistics
-      ? [{ href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck }]
+      ? [
+        { href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck },
+        { href: "/dashboard/urpi", label: "Programaciones Urpi", icon: IconTruck },
+      ]
       : []),
     { href: "/dashboard/team", label: "Equipo", icon: IconUsers },
     { href: "/dashboard/stores/new", label: "Conectar tienda", icon: IconPlug },
