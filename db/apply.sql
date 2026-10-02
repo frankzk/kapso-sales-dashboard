@@ -427,4 +427,6 @@
 \ir migrations/0211_swayp_pilot_amount_500.sql
 \echo 'Applying 0212_rollups_rango_indexable.sql'
 \ir migrations/0212_rollups_rango_indexable.sql
+\echo 'Applying 0213_rollups_solo_service_role.sql'
+\ir migrations/0213_rollups_solo_service_role.sql
 \echo 'Done.'
