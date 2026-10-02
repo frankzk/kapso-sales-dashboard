@@ -107,8 +107,13 @@ export const LEADS_VIEW_LIMIT = 200;
  * A qué tiendas mira la cola. Una sola, o varias con la opción "Todas".
  *
  * Es SIEMPRE un array, incluso para una tienda: `in ("store_id", [x])` usa el
- * mismo indice `(store_id, ...)` que `eq`, asi que no hay dos caminos que
- * mantener ni un `if` que se pueda olvidar en una de las siete vistas.
+ * mismo indice `(store_id, ...)` que `eq` PARA FILTRAR, asi que no hay dos
+ * caminos que mantener ni un `if` que se pueda olvidar en una de las siete
+ * vistas. Para ORDENAR no es lo mismo: con `= ANY` el planificador no da por
+ * ordenado lo que sale del indice y lo vuelve a ordenar entero. Aqui las vistas
+ * se cortan en 200 y «Por llamar» ordena por id, que ningun indice de la cola
+ * sirve con o sin `eq`; pero donde se drenan miles de filas por un indice
+ * ordenado hay que pedir tienda por tienda con `eq` (ver getLeadsForDashboard).
  *
  * NO mezcla nada por dentro: cada lead sigue siendo su fila, con su tienda. Lo
  * unico que cambia es que la consulta deja de acotarse a una. La RLS sigue
