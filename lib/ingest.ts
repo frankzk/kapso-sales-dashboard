@@ -451,36 +451,64 @@ export async function recomputeRollups(
   if (error) throw new Error(`recompute_daily_rollups: ${error.message}`);
 }
 
-async function getSyncCursor(
+// ─── El cursor de cada sincronización sobrevive a sus errores (02-10-2026) ────
+//
+// Cada pasada (shopify, shopify_all, shopify_drafts, kapso) guarda hasta dónde
+// llegó en `sync_state.cursor`, y la siguiente sigue desde ahí. Sin cursor se
+// pide TODO: todos los pedidos tag:kapso, todos los de la tienda desde
+// ORDERS_SYNC_FROM, todas las conversaciones de Kapso.
+//
+// Dos cosas lo dejaban en blanco justo cuando la base estaba mal, y ambas
+// amplificaban la caída del 01-10-2026:
+//
+// - Al fallar, cada `catch` escribía `cursor: null`. Una pasada que fallaba
+//   por un timeout hacía que la siguiente recorriera todo desde el principio:
+//   más carga sobre una base que ya no daba abasto, más timeouts, más pasadas
+//   desde cero. Ahora el error se registra con recordSyncError, que no toca el
+//   cursor: la siguiente reintenta desde el mismo punto.
+// - getSyncCursor tomaba un error de lectura por «no hay cursor» y la pasada
+//   arrancaba desde cero. Ahora lanza, y el `catch` de la sección lo registra.
+
+export async function getSyncCursor(
   admin: SupabaseClient,
   storeId: string,
   source: string,
 ): Promise<string | null> {
-  const { data } = await admin
+  const { data, error } = await admin
     .from("sync_state")
     .select("cursor")
     .match({ store_id: storeId, source })
     .maybeSingle();
+  if (error) throw new Error(`cursor de ${source}: ${error.message}`);
   return data?.cursor ?? null;
 }
 
-async function setSyncState(
+/**
+ * Deja constancia de que la pasada `source` falló, SIN tocar su cursor: el
+ * upsert no lleva la columna, así que la fila conserva el que tenía (y una fila
+ * nueva queda sin cursor, como siempre).
+ */
+export async function recordSyncError(
+  admin: SupabaseClient,
+  storeId: string,
+  source: string,
+  message: string,
+): Promise<void> {
+  await admin.from("sync_state").upsert(
+    { store_id: storeId, source, last_run_at: new Date().toISOString(), status: "error", error: message },
+    { onConflict: "store_id,source" },
+  );
+}
+
+/** Una pasada terminó bien: avanza el cursor hasta donde llegó y limpia el error. */
+async function recordSyncOk(
   admin: SupabaseClient,
   storeId: string,
   source: string,
   cursor: string | null,
-  status: string,
-  error?: string,
 ): Promise<void> {
   await admin.from("sync_state").upsert(
-    {
-      store_id: storeId,
-      source,
-      cursor,
-      last_run_at: new Date().toISOString(),
-      status,
-      error: error ?? null,
-    },
+    { store_id: storeId, source, cursor, last_run_at: new Date().toISOString(), status: "ok", error: null },
     { onConflict: "store_id,source" },
   );
 }
@@ -1043,10 +1071,10 @@ export async function runStoreSync(
         if (!page.hasNextPage) break;
         after = page.endCursor;
       }
-      await setSyncState(admin, storeId, "shopify", maxUpdatedAt, "ok");
+      await recordSyncOk(admin, storeId, "shopify", maxUpdatedAt);
     } catch (e: any) {
       report.errors.push(`shopify: ${e.message}`);
-      await setSyncState(admin, storeId, "shopify", null, "error", e.message);
+      await recordSyncError(admin, storeId, "shopify", e.message);
     }
   }
 
@@ -1084,7 +1112,7 @@ export async function runStoreSync(
         if (!page.hasNextPage) break;
         after = page.endCursor;
       }
-      await setSyncState(admin, storeId, "shopify_all", maxUpdatedAt, "ok");
+      await recordSyncOk(admin, storeId, "shopify_all", maxUpdatedAt);
       // Refresca el Master para los pedidos que acaba de tocar esta pasada.
       for (const batch of chunk(touched, 200)) {
         const { data } = await admin
@@ -1099,7 +1127,7 @@ export async function runStoreSync(
       }
     } catch (e: any) {
       report.errors.push(`shopify_all: ${e.message}`);
-      await setSyncState(admin, storeId, "shopify_all", null, "error", e.message);
+      await recordSyncError(admin, storeId, "shopify_all", e.message);
     }
   }
 
@@ -1143,10 +1171,10 @@ export async function runStoreSync(
           after = page.endCursor;
         }
       }
-      await setSyncState(admin, storeId, "shopify_drafts", maxUpdatedAt, "ok");
+      await recordSyncOk(admin, storeId, "shopify_drafts", maxUpdatedAt);
     } catch (e: any) {
       report.errors.push(`shopify_drafts: ${e.message}`);
-      await setSyncState(admin, storeId, "shopify_drafts", null, "error", e.message);
+      await recordSyncError(admin, storeId, "shopify_drafts", e.message);
     }
   }
 
@@ -1210,10 +1238,10 @@ export async function runStoreSync(
         if (ts && (!maxTs || ts > maxTs)) maxTs = ts;
         if (r.started_at) affectedDates.add(tzParts(r.started_at, creds.timezone).date);
       }
-      await setSyncState(admin, storeId, "kapso", maxTs, "ok");
+      await recordSyncOk(admin, storeId, "kapso", maxTs);
     } catch (e: any) {
       report.errors.push(`kapso: ${e.message}`);
-      await setSyncState(admin, storeId, "kapso", null, "error", e.message);
+      await recordSyncError(admin, storeId, "kapso", e.message);
     }
   }
 
