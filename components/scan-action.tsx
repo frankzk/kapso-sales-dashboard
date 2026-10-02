@@ -77,7 +77,7 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
   const reportPendingCount = useEffectEvent((count: number) => onPendingCountChange?.(count));
   useEffect(() => { reportPendingCount(pending); }, [pending]);
   const [scanQueue] = useState(() => createScanQueue(setPending));
-  const [lastCaptured, setLastCaptured] = useState<string | null>(null);
+  const [lastCaptured, setLastCaptured] = useState<{ scope: string; code: string } | null>(null);
   const [failedReads, setFailedReads] = useState<Record<string, string>>({});
   const scanScope = JSON.stringify([context, manifestId, itemId, assign]);
   const scanIssues = Object.entries(failedReads).filter(([key]) => key.startsWith(`${scanScope}:`)).map(([, text]) => text);
@@ -86,7 +86,7 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
   const reportCameraOpen = useEffectEvent((open: boolean) => onCameraOpenChange?.(open));
   useEffect(() => { reportCameraOpen(cameraOpen); }, [cameraOpen]);
   // Última lectura, para decirla dentro de la cámara sin cerrarla.
-  const [lastRead, setLastRead] = useState<{ ok: boolean; text: string } | null>(null);
+  const [lastRead, setLastRead] = useState<{ scope: string; result: { ok: boolean; text: string } } | null>(null);
   const reportResult = (r: ScanActionResult, code: string) => {
     setFailedReads((current) => {
       const next = { ...current };
@@ -95,7 +95,7 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
       else delete next[key];
       return next;
     });
-    if (continuous) setLastRead(r.error ? { ok: false, text: r.error } : r.notice ? { ok: true, text: `✓ ${r.notice}` } : null);
+    if (continuous) setLastRead(r.error ? { scope: scanScope, result: { ok: false, text: r.error } } : r.notice ? { scope: scanScope, result: { ok: true, text: `✓ ${r.notice}` } } : null);
     onResult(r);
   };
   function execute(raw: string) {
@@ -114,7 +114,7 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
       },
     });
     if (accepted) {
-      setLastCaptured(code);
+      setLastCaptured({ scope: scanScope, code });
       if (context === "supervisor_asignacion" && assign?.riderId) onPending?.(code);
     }
   }
@@ -176,9 +176,9 @@ export function ScanAction({ context, manifestId, itemId, stopId, photoKind = "e
         onScan={(value) => void execute(value)}
         continuous={continuous}
         progress={progress}
-        status={lastRead}
+        status={lastRead?.scope === scanScope ? lastRead.result : null}
         pending={pending}
-        lastCaptured={lastCaptured}
+        lastCaptured={lastCaptured?.scope === scanScope ? lastCaptured.code : null}
         issues={scanIssues}
       />
     </div>
