@@ -93,6 +93,7 @@ import type { RouteKey } from "@/lib/order-route-plan";
 import type { OrderMasterRow } from "@/lib/types";
 import { ADELANTO_MINIMO, ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import { formatOlvaTracking, parseOlvaTracking, type OlvaTrackingId } from "@/lib/olva/tracking";
+import { olvaTrackingTakenBy } from "@/lib/olva/link";
 import { orderFullyPaid } from "@/lib/order-paid";
 import { discardRecovery, validarMotivoDescarte } from "@/lib/recovery-discard";
 
@@ -342,28 +343,6 @@ export interface CreateManualRouteOutputInput {
 /** El año a dos dígitos que la página de Olva preselecciona como «emisión». */
 function olvaDefaultEmision(): string {
   return limaTodayKey().slice(2, 4);
-}
-
-/**
- * ¿Otra salida ya tiene este tracking? Es la misma regla que las guías de
- * Shalom vinculadas a mano: un número, una salida. Se excluye la propia para
- * que reenviar el formulario sea idempotente.
- */
-async function olvaTrackingTakenBy(
-  admin: ReturnType<typeof createAdminSupabase>,
-  id: OlvaTrackingId,
-  exceptShipmentId: string | null,
-): Promise<{ error?: string; taken?: { id: string; order_name: string | null } | null }> {
-  let query = admin
-    .from("shipments")
-    .select("id,order_name")
-    .eq("olva_tracking", id.tracking)
-    .eq("olva_emision", id.emision)
-    .limit(1);
-  if (exceptShipmentId) query = query.neq("id", exceptShipmentId);
-  const { data, error } = await query.maybeSingle();
-  if (error) return { error: `No se pudo validar el tracking: ${error.message}` };
-  return { taken: (data as { id: string; order_name: string | null } | null) ?? null };
 }
 
 export interface CreateManualRouteOutputResult extends MasterActionState {

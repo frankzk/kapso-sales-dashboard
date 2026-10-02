@@ -89,7 +89,9 @@ function RecipientSignal({ item }: { item: PaymentReviewItem }) {
       // Con varias cuentas de cobro, "verificada" a secas ya no dice a cuál
       // llegó el dinero, y eso es justo lo que el revisor necesita ver.
       ? {
-          label: `Cuenta verificada: ${reading.account?.name ?? "de la tienda"}`,
+          label: reading.receivedView
+            ? "Captura de nuestro Yape («Te yapearon»)"
+            : `Cuenta verificada: ${reading.account?.name ?? "de la tienda"}`,
           tone: "bg-emerald-50 text-emerald-700",
         }
       : reading.status === "mismatch"

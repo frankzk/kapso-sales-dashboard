@@ -102,6 +102,13 @@ export interface YapeRecipientReading {
    * silencio es justo lo que esta comprobación no puede hacer.
    */
   ignoredName: string | null;
+  /**
+   * Captura de la cuenta que RECIBIÓ («Te yapearon»): sale de nuestra propia
+   * sesión de Yape, así que el receptor somos nosotros aunque no aparezca
+   * (02-10-2026, #KP138399). Cuenta como `verified`; `account` queda en null
+   * porque la captura no dice cuál de nuestras cuentas fue.
+   */
+  receivedView: boolean;
 }
 
 function comparableRecipientName(value: string | null | undefined): string {
@@ -430,6 +437,8 @@ export interface YapeRecipientRawReading {
   recipientName: string | null | undefined;
   recipientPhoneLastDigits: string | null | undefined;
   payerName: string | null | undefined;
+  /** La captura es de quien recibió («Te yapearon»). Ver `YapeRecipientReading`. */
+  receivedView?: boolean | null;
 }
 
 /**
@@ -446,6 +455,23 @@ export function yapeRecipientReading(
   accounts: CollectionAccount[],
   customerName?: string | null,
 ): YapeRecipientReading {
+  // «TE YAPEARON» ES NUESTRA PROPIA PANTALLA. Solo la ve la cuenta que recibió,
+  // y la captura sale de nuestra sesión de Yape: el dinero llegó a una cuenta
+  // nuestra. El nombre y el celular que muestra son de quien pagó, así que no
+  // se contrastan con nuestras cuentas — hacerlo acusaba de desvío a un cobro
+  // impecable (#KP138399, 02-10-2026).
+  if (read.receivedView) {
+    return {
+      name: null,
+      phoneLastDigits: null,
+      status: "verified",
+      account: null,
+      swapped: false,
+      ignoredName: null,
+      receivedView: true,
+    };
+  }
+
   // «Grupo gf s •5309» (BBVA): el final del celular viene pegado al nombre. Se
   // separa y es EL celular: sale del mismo bloque que el receptor, así que manda
   // sobre uno leído aparte, que pudo salir de otra parte de la pantalla.
@@ -489,6 +515,7 @@ export function yapeRecipientReading(
     account: verification.account,
     swapped,
     ignoredName,
+    receivedView: false,
   };
 }
 
@@ -517,6 +544,7 @@ export function yapeRecipientReadingFromVision(
       recipientName: text(extracted.recipient_name),
       recipientPhoneLastDigits: text(extracted.recipient_phone_last_digits),
       payerName: text(extracted.payer_name),
+      receivedView: extracted.received_view === true,
     },
     accounts,
     customerName,

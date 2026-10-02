@@ -60,6 +60,7 @@ function navItems(
     if (canManageLogistics) {
       items.push({ href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck });
       items.push({ href: "/dashboard/urpi", label: "Programaciones Urpi", icon: IconTruck });
+      items.push({ href: "/dashboard/olva", label: "Cotejar Olva", icon: IconTruck });
     }
     return items;
   }
@@ -89,6 +90,8 @@ function navItems(
       ? [
         { href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck },
         { href: "/dashboard/urpi", label: "Programaciones Urpi", icon: IconTruck },
+        // Pega el tracking de Olva a las salidas que no lo tienen (MOM §12).
+        { href: "/dashboard/olva", label: "Cotejar Olva", icon: IconTruck },
       ]
       : []),
     { href: "/dashboard/team", label: "Equipo", icon: IconUsers },

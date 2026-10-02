@@ -165,6 +165,9 @@ export interface StoreSettingsData {
     olva_arrival_template_enabled: boolean;
     olva_arrival_template_name: string | null;
     olva_arrival_params: string | null;
+    /** Portal de clientes de Olva, para «Cotejar Olva» (0218). */
+    olva_portal_username: string | null;
+    olva_portal_ruc: string | null;
     flowcl_link_enabled: boolean;
     flowcl_link_email: string | null;
     flowcl_link_ttl_hours: number;
@@ -187,6 +190,7 @@ export interface StoreSettingsData {
     aliclikWebhookSecret: boolean;
     tandersPassword: boolean;
     shalomProPassword: boolean;
+    olvaPortalPassword: boolean;
   };
   oauthAvailable: boolean;
   siteUrl: string;
@@ -275,6 +279,7 @@ const INDEX: IndexGroup[] = [
       { id: "kapso", label: "Kapso" },
       { id: "aliclik", label: "Aliclik" },
       { id: "shalom", label: "Shalom" },
+      { id: "olva", label: "Olva" },
       { id: "tanders", label: "Tanders" },
       { id: "flowcl", label: "Flow.cl" },
       { id: "meta", label: "Meta Ads" },
@@ -475,6 +480,7 @@ export function StoreSettings({
               enabled={s.aliclik_enabled}
             />
             <ShalomSection data={data} />
+            <OlvaPortalSection data={data} />
             <TandersSection data={data} />
             <FlowclSection data={data} />
             <MetaSection data={data} />
@@ -1284,6 +1290,69 @@ function ShalomSection({ data }: { data: StoreSettingsData }) {
           <ActionResult state={agencyState} className="mt-3" />
         </form>
       </div>
+    </SettingsSection>
+  );
+}
+
+/**
+ * Portal de clientes de Olva (0218): la cuenta con la que «Cotejar Olva» trae
+ * los envíos del portal y les pone el tracking a las salidas que no lo tienen.
+ */
+function OlvaPortalSection({ data }: { data: StoreSettingsData }) {
+  const s = data.store;
+  const ready = data.has.olvaPortalPassword && Boolean(s.olva_portal_username);
+  return (
+    <SettingsSection
+      id="olva"
+      title="Olva (portal de clientes)"
+      badge={<Badge tone={ready ? "ok" : "neutral"}>{ready ? "Cuenta configurada" : "Sin cuenta"}</Badge>}
+      description={
+        <p>
+          La cuenta de <strong>atc.olvaexpress.pe</strong> con la que la empresa registra sus envíos. Con ella,{" "}
+          <strong>Cotejar Olva</strong> trae los envíos del portal y les pone el tracking a las salidas que no lo
+          tienen, solo cuando no hay duda. La contraseña se guarda <strong>cifrada</strong>. Si varias tiendas
+          despachan con la misma cuenta, basta con ponerla en una: el cotejo mira las salidas de todas las tiendas
+          de la organización.
+        </p>
+      }
+    >
+      <StoreForm
+        storeId={s.id}
+        persisted={[s.olva_portal_username, s.olva_portal_ruc, data.has.olvaPortalPassword]}
+      >
+        <FieldGrid>
+          <Field
+            label="Usuario del portal"
+            htmlFor="olva_portal_username"
+            mark={<SavedMark set={Boolean(s.olva_portal_username)} />}
+          >
+            <input
+              id="olva_portal_username"
+              name="olva_portal_username"
+              autoComplete="off"
+              defaultValue={s.olva_portal_username ?? ""}
+              placeholder="120556792829"
+              className={NUMBER_FIELD}
+            />
+          </Field>
+          <Field label="RUC de la cuenta" htmlFor="olva_portal_ruc" mark={<SavedMark set={Boolean(s.olva_portal_ruc)} />}>
+            <input
+              id="olva_portal_ruc"
+              name="olva_portal_ruc"
+              inputMode="numeric"
+              defaultValue={s.olva_portal_ruc ?? ""}
+              placeholder="20556792829"
+              className={NUMBER_FIELD}
+            />
+          </Field>
+          <SecretField
+            name="olva_portal_password"
+            label="Contraseña del portal"
+            set={data.has.olvaPortalPassword}
+            className="sm:col-span-2 sm:max-w-xl"
+          />
+        </FieldGrid>
+      </StoreForm>
     </SettingsSection>
   );
 }

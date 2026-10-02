@@ -145,6 +145,10 @@ export function parseOlvaTracking(
     emision = (defaultEmision ?? "").trim() || null;
   }
 
+  // El portal de clientes escribe el número con ceros delante («02649804/26»);
+  // la página pública, el correo y todo lo ya guardado, sin ellos. Una sola
+  // forma, o el índice único dejaría pasar el mismo envío dos veces.
+  if (tracking) tracking = tracking.replace(/^0+(?=\d)/, "");
   if (!tracking || tracking.length < 4 || tracking.length > 12) {
     return { ok: false, error: "El número de tracking de Olva tiene entre 4 y 12 dígitos." };
   }
