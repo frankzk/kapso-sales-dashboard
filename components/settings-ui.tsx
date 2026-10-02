@@ -46,15 +46,28 @@ export function SettingsIndex({ groups, children }: { groups: IndexGroup[]; chil
   const [active, setActive] = useState(ids[0] ?? "");
   const rail = useRef<HTMLDivElement>(null);
 
+  // Tras un salto pedido desde el índice, el desplazamiento suave cruza otras
+  // secciones por el camino: mientras dura, manda la elegida y no el espía.
+  const jumping = useRef<string | null>(null);
+
   // La sección activa es la primera que cruza una franja del 15 al 35 % de la
-  // ventana: lo que el ojo está leyendo, no lo que asoma por abajo.
+  // ventana: lo que el ojo está leyendo, no lo que asoma por abajo. Al fondo de
+  // la página manda la última, que si es corta nunca llega a la franja.
   useEffect(() => {
     const visible = new Map<string, boolean>();
+    const atBottom = () =>
+      window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+    const pick = () => {
+      if (jumping.current) return;
+      const last = ids[ids.length - 1];
+      if (last && atBottom()) return setActive(last);
+      const first = ids.find((id) => visible.get(id));
+      if (first) setActive(first);
+    };
     const io = new IntersectionObserver(
       (entries) => {
         for (const e of entries) visible.set(e.target.id, e.isIntersecting);
-        const first = ids.find((id) => visible.get(id));
-        if (first) setActive(first);
+        pick();
       },
       { rootMargin: "-15% 0px -65% 0px" },
     );
@@ -62,7 +75,17 @@ export function SettingsIndex({ groups, children }: { groups: IndexGroup[]; chil
       const el = document.getElementById(id);
       if (el) io.observe(el);
     }
-    return () => io.disconnect();
+    let frame = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(pick);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      io.disconnect();
+      cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", onScroll);
+    };
   }, [ids]);
 
   // El índice tiene su propio scroll en ventanas bajas: el ítem activo no se
@@ -84,15 +107,22 @@ export function SettingsIndex({ groups, children }: { groups: IndexGroup[]; chil
     const el = document.getElementById(id);
     if (!el) return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    jumping.current = id;
+    // `scrollend` no existe en todos los navegadores: el plazo es el respaldo.
+    const release = () => {
+      if (jumping.current === id) jumping.current = null;
+    };
+    window.addEventListener("scrollend", release, { once: true });
+    window.setTimeout(release, 1200);
     el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
-    history.replaceState(null, "", `#${id}`);
+    history.replaceState(history.state, "", `#${id}`);
     setActive(id);
   }, []);
 
   return (
     <div className="xl:grid xl:grid-cols-[13rem_minmax(0,1fr)] xl:gap-10">
       <nav aria-label="Secciones de ajustes" className="hidden xl:block">
-        <div ref={rail} className="sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto overscroll-contain pb-6 pr-1">
+        <div ref={rail} className="sticky top-6 -ml-1 max-h-[calc(100vh-3rem)] overflow-y-auto overscroll-contain px-1 pb-6 pt-1">
           {groups.map((g) => (
             <div key={g.title} className="mt-5 first:mt-0">
               <p className="px-2.5 text-xs font-semibold leading-4 text-ink-500">{g.title}</p>
@@ -126,7 +156,7 @@ export function SettingsIndex({ groups, children }: { groups: IndexGroup[]; chil
       </nav>
 
       <div className="min-w-0">
-        <div className="sticky top-0 z-20 -mx-4 bg-slate-50 px-4 py-2 shadow-[inset_0_-1px_0_var(--color-line)] sm:-mx-5 sm:px-5 xl:hidden">
+        <div className="sticky top-0 z-20 -mx-4 bg-slate-50 px-4 py-2 shadow-[inset_0_-1px_0_var(--color-line)] sm:-mx-5 sm:px-5 lg:-mx-8 lg:px-8 xl:hidden">
           <label className="flex items-center gap-3">
             <span className="shrink-0 text-[13px] font-medium text-ink-600">Ir a</span>
             <select value={active} onChange={(e) => go(e.target.value)} className={FIELD}>
@@ -273,12 +303,15 @@ export function Switch({
   defaultChecked,
   on = "Encendido",
   off = "Apagado",
+  describedBy,
 }: {
   id: string;
   name: string;
   defaultChecked: boolean;
   on?: string;
   off?: string;
+  /** El id de la explicación, para que el lector la lea con el interruptor. */
+  describedBy?: string;
 }) {
   return (
     <>
@@ -290,6 +323,7 @@ export function Switch({
           name={name}
           value="true"
           defaultChecked={defaultChecked}
+          aria-describedby={describedBy}
           className="peer absolute inset-0 z-10 m-0 size-full cursor-pointer appearance-none opacity-0"
         />
         <span aria-hidden className="hidden text-[13px] font-medium text-ink-500 sm:inline sm:peer-checked:hidden">
@@ -300,9 +334,12 @@ export function Switch({
         </span>
         <span
           aria-hidden
-          className="relative h-5 w-9 shrink-0 rounded-full bg-line-strong transition-colors duration-150 motion-reduce:transition-none peer-hover:bg-ink-300 peer-checked:bg-brand-600 peer-checked:peer-hover:bg-brand-700 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand-500 peer-checked:[&>span]:translate-x-4"
+          // Apagado, la pista es blanca con anillo y botón en `ink-500` (4,8:1
+          // sobre blanco): una pista gris clara se queda en 1,4:1 y no se ve
+          // dónde empieza el control (WCAG 1.4.11). Encendido, azul y botón blanco.
+          className="relative h-5 w-9 shrink-0 rounded-full bg-white ring-1 ring-inset ring-ink-500 transition-[background-color,box-shadow] duration-150 motion-reduce:transition-none peer-hover:bg-wash peer-checked:bg-brand-600 peer-checked:ring-brand-600 peer-checked:peer-hover:bg-brand-700 peer-checked:peer-hover:ring-brand-700 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand-500 peer-checked:[&>span]:translate-x-4 peer-checked:[&>span]:bg-white peer-checked:[&>span]:shadow-control"
         >
-          <span className="absolute left-0.5 top-0.5 size-4 rounded-full bg-white shadow-control transition-transform duration-150 motion-reduce:transition-none" />
+          <span className="absolute left-[3px] top-[3px] size-3.5 rounded-full bg-ink-500 transition-[transform,background-color] duration-150 motion-reduce:transition-none" />
         </span>
       </span>
       <input type="hidden" name={name} value="false" />
@@ -330,6 +367,7 @@ export function ToggleRow({
   children?: ReactNode;
 }) {
   const id = useId();
+  const descId = `${id}-desc`;
   return (
     <div className={ROW}>
       <div className="flex items-start justify-between gap-4">
@@ -337,9 +375,20 @@ export function ToggleRow({
           <label htmlFor={id} className="cursor-pointer text-sm font-semibold leading-5 text-ink-900">
             {label}
           </label>
-          {description && <div className={cn(HELP, "mt-0.5 max-w-[68ch] space-y-1.5")}>{description}</div>}
+          {description && (
+            <div id={descId} className={cn(HELP, "mt-0.5 max-w-[68ch] space-y-1.5")}>
+              {description}
+            </div>
+          )}
         </div>
-        <Switch id={id} name={name} defaultChecked={defaultChecked} on={on} off={off} />
+        <Switch
+          id={id}
+          name={name}
+          defaultChecked={defaultChecked}
+          on={on}
+          off={off}
+          describedBy={description ? descId : undefined}
+        />
       </div>
       {children && <div className="mt-3 space-y-2">{children}</div>}
     </div>

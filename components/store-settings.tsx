@@ -5,7 +5,7 @@
 // su chapa de estado y tarjetas que se guardan cada una por su cuenta.
 
 import Link from "next/link";
-import { useActionState, useEffect, useState, useTransition, type ReactNode } from "react";
+import { useActionState, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import { Badge, Banner, CHECKBOX, FIELD, OpsButton, opsButtonClass } from "@/components/ops-ui";
@@ -313,6 +313,19 @@ const INDEX: IndexGroup[] = [
   },
 ];
 
+/** El estado de la tienda en palabras; el valor que se guarda no cambia. */
+const STATUS_LABEL: Record<string, string> = {
+  active: "Activa",
+  paused: "Pausada",
+  disabled: "Deshabilitada",
+};
+
+/** El nombre de una fuente de sincronización (`shopify_all` → «Shopify all»). */
+function sourceLabel(source: string): string {
+  const words = source.replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 /** Enlace a otra sección de esta misma página. */
 function SectionLink({ to, children }: { to: string; children: ReactNode }) {
   return (
@@ -370,7 +383,7 @@ export function StoreSettings({
                     <select id="status" name="status" defaultValue={s.status} className={FIELD}>
                       {STORE_STATUSES.map((st) => (
                         <option key={st} value={st}>
-                          {st}
+                          {STATUS_LABEL[st] ?? st}
                         </option>
                       ))}
                     </select>
@@ -499,13 +512,20 @@ export function StoreSettings({
  * `updateStore` solo parchea los campos que llegan (lo que no viene, no se
  * toca), así que cada tarjeta manda los suyos y guardar una no pisa las demás.
  *
- * La `key` del <form> es lo PERSISTIDO de esos campos. React 19 resetea el
- * formulario al terminar la acción, y un campo NO controlado vuelve al
- * `defaultValue` que tenía AL MONTARSE: cambiar la prop no mueve la selección
- * del DOM. Con eso, «Crear guías en Aliclik» se guardaba en la base y acto
- * seguido la pantalla volvía a pintar el valor viejo. Volver a montarlo cuando
- * cambia lo persistido (y solo entonces) aplica de nuevo cada `defaultValue`.
- * Va por tarjeta y no de toda la página: guardar una no tira lo que se está
+ * Se envía a mano (`onSubmit` + la acción dentro de una transición) y no con
+ * `action={…}`, porque React 19 reinicia el formulario al terminar CUALQUIER
+ * acción, también la que vuelve con error: el pie decía «no se pudo guardar»
+ * mientras lo escrito ya había vuelto en silencio a lo persistido. Así, con
+ * error lo escrito se queda; con éxito se refresca la página y, cuando el
+ * refresco ya llegó, se reinicia la tarjeta (vacía las credenciales y repone lo
+ * que el servidor no aceptó).
+ *
+ * La `key` del <form> es lo PERSISTIDO de esos campos. Un campo NO controlado
+ * conserva el `defaultValue` que tenía AL MONTARSE: cambiar la prop no mueve la
+ * selección del DOM, y «Crear guías en Aliclik» se guardaba en la base mientras
+ * la pantalla seguía pintando el valor viejo. Volver a montarlo cuando cambia
+ * lo persistido (y solo entonces) aplica de nuevo cada `defaultValue`. Va por
+ * tarjeta y no de toda la página: guardar una no tira lo que se está
  * escribiendo en otra.
  */
 function StoreForm({
@@ -522,22 +542,38 @@ function StoreForm({
   children: ReactNode;
 }) {
   const [state, action, pending] = useActionState(updateStore, initial);
+  const [, startSave] = useTransition();
+  const [refreshing, startRefresh] = useTransition();
   const [dirty, setDirty] = useState(false);
+  const form = useRef<HTMLFormElement>(null);
+  const resetAfterRefresh = useRef(false);
   const router = useRouter();
 
-  // La acción del servidor revalida la ruta, pero el formulario se queda con
-  // lo que tenía montado: refrescar trae lo persistido y, con ello, la `key`.
+  // Guardado: la acción revalida la ruta, pero la tarjeta se queda con lo que
+  // tenía montado; el refresco trae lo persistido y, con ello, la `key`.
   useEffect(() => {
-    if (state.notice === "Tienda actualizada.") router.refresh();
+    if (state === initial || state.error) return;
+    resetAfterRefresh.current = true;
+    startRefresh(() => router.refresh());
   }, [router, state]);
+
+  useEffect(() => {
+    if (refreshing || !resetAfterRefresh.current) return;
+    resetAfterRefresh.current = false;
+    form.current?.reset();
+  }, [refreshing]);
 
   return (
     <form
       key={JSON.stringify(persisted)}
-      action={action}
+      ref={form}
+      onSubmit={(e) => {
+        e.preventDefault();
+        const data = new FormData(e.currentTarget);
+        setDirty(false);
+        startSave(() => action(data));
+      }}
       onChange={() => setDirty(true)}
-      // React reinicia el formulario al terminar cualquier acción —guardar o
-      // una prueba con `formAction`—: lo escrito vuelve a lo persistido.
       onReset={() => setDirty(false)}
       className={cn(CARD, "divide-y divide-line")}
     >
@@ -546,10 +582,10 @@ function StoreForm({
       {children}
       <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 px-4 py-3 sm:px-5">
         <p role="status" className="mr-auto min-w-0 text-[13px] leading-5">
-          <SaveStatus dirty={dirty} pending={pending} state={state} />
+          <SaveStatus dirty={dirty} pending={pending || refreshing} state={state} />
         </p>
-        <OpsButton type="submit" variant="primary" disabled={pending}>
-          {pending ? "Guardando…" : "Guardar"}
+        <OpsButton type="submit" variant="primary" disabled={pending || refreshing}>
+          {pending || refreshing ? "Guardando…" : "Guardar"}
         </OpsButton>
       </div>
     </form>
@@ -980,6 +1016,7 @@ function AliclikSection({
             label="Token de integración de Aliclik"
             set={hasToken}
             hint="Para leer el catálogo y crear guías de contraentrega desde el Master de Pedidos."
+            className="max-w-xl"
           />
         </div>
         <ToggleRow
@@ -1378,17 +1415,17 @@ function FlowclSection({ data }: { data: StoreSettingsData }) {
  * Los campos del cobro por link, con la sonda de Flow dentro.
  *
  * La sonda vive DENTRO del formulario —es donde se buscan el email y el importe
- * que prueba— pero es otra acción: su `dispatch` va como `formAction` del
- * botón, y su resultado se pinta ahí mismo. Un <form> dentro de otro no es HTML
- * válido; esto es la forma de React 19 de tener dos botones con dos acciones en
- * el mismo formulario.
+ * que prueba— pero es otra acción. Va en un botón normal que lee el formulario
+ * y despacha su acción a mano, no como `formAction` de un botón de envío: el
+ * primer botón de envío es el que dispara Enter, y si fuera la sonda, pulsar
+ * Enter en las horas o el email crearía un cobro REAL en vez de guardar. Así,
+ * además, probar no reinicia lo que se está editando en la tarjeta.
  */
 function FlowLinkFields({ store: s }: { store: StoreSettingsData["store"] }) {
   const [flowProbe, flowProbeAction, flowProbePending] = useActionState(testFlowclLink, initial);
-  // Controlado a propósito: React vacía los campos NO controlados al terminar
-  // cualquier acción del formulario, y la sonda de Flow es una acción. Sin
-  // esto, escribir el email y pulsar «Crear cobro de prueba» lo borraba en el
-  // mismo clic — el usuario veía «falta el email» con el email recién escrito.
+  const [, startProbe] = useTransition();
+  // Controlado a propósito: la tarjeta se reinicia al guardar, y el email que
+  // la sonda usa es el que está escrito, guardado o no.
   const [flowEmail, setFlowEmail] = useState(s.flowcl_link_email ?? "");
   return (
     <>
@@ -1456,7 +1493,15 @@ function FlowLinkFields({ store: s }: { store: StoreSettingsData["store"] }) {
             defaultValue="20"
             className={cn(NUMBER_NARROW, "w-24")}
           />
-          <OpsButton type="submit" formAction={flowProbeAction} formNoValidate disabled={flowProbePending}>
+          <OpsButton
+            onClick={(e) => {
+              const owner = e.currentTarget.form;
+              if (!owner) return;
+              const data = new FormData(owner);
+              startProbe(() => flowProbeAction(data));
+            }}
+            disabled={flowProbePending}
+          >
             {flowProbePending ? "Creando…" : "Crear cobro de prueba"}
           </OpsButton>
         </div>
@@ -1507,7 +1552,12 @@ function MetaSection({ data }: { data: StoreSettingsData }) {
     >
       <StoreForm storeId={s.id} title="Token" persisted={[data.has.metaToken]}>
         <div className={ROW}>
-          <SecretField name="meta_access_token" label="Access token de Meta (Marketing API)" set={data.has.metaToken} />
+          <SecretField
+            name="meta_access_token"
+            label="Access token de Meta (Marketing API)"
+            set={data.has.metaToken}
+            className="max-w-xl"
+          />
         </div>
       </StoreForm>
       <MetaAdAccountPicker storeId={s.id} current={accounts} />
@@ -2462,7 +2512,7 @@ function ShalomNoticesSection({ data }: { data: StoreSettingsData }) {
               name="shalom_transit_phone_number_id"
               defaultValue={s.shalom_transit_phone_number_id ?? ""}
               placeholder="Vacío = el número por el que escribió la clienta, o el de la tienda"
-              className={FIELD}
+              className={cn(FIELD, "sm:max-w-xl")}
             />
           </Field>
           <Field
@@ -2966,7 +3016,7 @@ function EscalationSection({
             {rows.map((r, i) => (
               <li key={r.id} className={cn(ROW, "flex flex-wrap items-center gap-x-3 gap-y-2 py-3")}>
                 <span
-                  aria-label={`Paso ${i + 1}`}
+                  aria-hidden
                   className="grid size-6 shrink-0 place-items-center rounded-full bg-wash text-xs font-semibold tabular-nums text-ink-700 ring-1 ring-inset ring-line"
                 >
                   {i + 1}
@@ -3228,7 +3278,7 @@ function SystemSections({ data }: { data: StoreSettingsData }) {
               <ul className="divide-y divide-line border-t border-line">
                 {data.sync.map((r) => (
                   <li key={r.source} className={cn("grid gap-x-4 gap-y-1 px-4 py-3 text-sm sm:px-5", syncCols)}>
-                    <span className="font-medium text-ink-900">{r.source}</span>
+                    <span className="font-medium text-ink-900">{sourceLabel(r.source)}</span>
                     <span>
                       <Badge tone={r.status === "error" ? "crit" : r.status === "ok" ? "ok" : "neutral"}>
                         {r.status === "error" ? "Error" : r.status === "ok" ? "Correcta" : (r.status ?? "—")}
