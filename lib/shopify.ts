@@ -1384,24 +1384,69 @@ const ORDER_ADDRESS_UPDATE_MUTATION = /* GraphQL */ `
   }
 `;
 
+/** MailingAddressInput de Shopify para Perú: código de país y, si se reconoce
+ *  la región, su código ISO (un nombre suelto como "Lima" Shopify lo descarta). */
+function toMailingAddressInput(address: OrderAddressInput): Record<string, unknown> {
+  const parts = (address.name ?? "").trim().split(/\s+/).filter(Boolean);
+  const provinceCode = resolvePeruProvinceCode(address.province);
+  const shippingAddress: Record<string, unknown> = {
+    address1: address.address1?.trim() || null,
+    address2: address.address2?.trim() || null,
+    city: address.city?.trim() || null,
+    countryCode: "PE",
+    firstName: parts[0] ?? null,
+    lastName: parts.length > 1 ? parts.slice(1).join(" ") : null,
+    phone: toE164(address.phone),
+  };
+  if (provinceCode) shippingAddress.provinceCode = provinceCode;
+  return shippingAddress;
+}
+
+const DRAFT_ADDRESS_UPDATE_MUTATION = /* GraphQL */ `
+  mutation DraftAddressUpdate($id: ID!, $input: DraftOrderInput!) {
+    draftOrderUpdate(id: $id, input: $input) {
+      draftOrder { id shippingAddress { address1 city } }
+      userErrors { field message }
+    }
+  }
+`;
+
+/**
+ * Cambia SOLO la dirección de envío de un borrador abierto.
+ *
+ * Existe porque corregir la dirección del PEDIDO ya creado (`orderUpdate`)
+ * pide `write_orders`, que las tiendas no siempre dan; el borrador se edita
+ * con `write_draft_orders`, el mismo permiso que ya usa «Generar pedido». Va
+ * sin `lineItems` a propósito: `draftOrderUpdate` deja intacto lo que no se
+ * manda, así que productos, cantidades y precios siguen siendo los del
+ * cliente. Lanza si Shopify no confirma la calle nueva.
+ */
+export async function updateDraftShippingAddress(
+  opts: ShopifyClientOpts & { draftGid: string; address: OrderAddressInput },
+): Promise<void> {
+  const shippingAddress = toMailingAddressInput(opts.address);
+  const data = await shopifyGraphQL<any>({
+    ...opts,
+    query: DRAFT_ADDRESS_UPDATE_MUTATION,
+    variables: { id: opts.draftGid, input: { shippingAddress } },
+  });
+  const errs = data?.draftOrderUpdate?.userErrors ?? [];
+  if (errs.length) {
+    throw new Error(`draftOrderUpdate: ${errs.map((e: any) => e.message).join("; ")}`);
+  }
+  const saved = String(data?.draftOrderUpdate?.draftOrder?.shippingAddress?.address1 ?? "").trim();
+  if (saved !== String(shippingAddress.address1 ?? "").trim()) {
+    throw new Error("draftOrderUpdate: Shopify no guardó la dirección");
+  }
+}
+
 /** Update the delivery address of an existing Shopify order. `orderUpdate`
  * replaces the shipping-address object, so we send the complete known address
  * (recipient + phone included) rather than only the changed street line. */
 export async function updateOrderShippingAddress(
   opts: ShopifyClientOpts & { orderGid: string; address: OrderAddressInput },
 ): Promise<void> {
-  const parts = (opts.address.name ?? "").trim().split(/\s+/).filter(Boolean);
-  const provinceCode = resolvePeruProvinceCode(opts.address.province);
-  const shippingAddress: Record<string, unknown> = {
-    address1: opts.address.address1?.trim() || null,
-    address2: opts.address.address2?.trim() || null,
-    city: opts.address.city?.trim() || null,
-    countryCode: "PE",
-    firstName: parts[0] ?? null,
-    lastName: parts.length > 1 ? parts.slice(1).join(" ") : null,
-    phone: toE164(opts.address.phone),
-  };
-  if (provinceCode) shippingAddress.provinceCode = provinceCode;
+  const shippingAddress = toMailingAddressInput(opts.address);
 
   const data = await shopifyGraphQL<{
     orderUpdate?: {
