@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { confirmedTandersReview, tandersReview, tandersReviewReason } from "@/lib/gf-tanders-review";
+import { confirmedTandersReview, tandersReleaseCutoff, tandersReview, tandersReviewQueueFilter, tandersReviewReason } from "@/lib/gf-tanders-review";
 
 const order = { coverage: "lima", current_courier: "tanders", macro_stage: "en_curso", macro_substage: "en_transito" };
 const output = { id: "tanders-1", courier: "tanders", delivery_status: "en_ruta", dispatched_at: "2026-09-28T15:20:17.647Z", status_category: "in_route", reported_status: "PICKED" };
@@ -47,5 +47,31 @@ describe("Tanders de días anteriores en Desde la lista", () => {
   it("el motivo distingue recepción declarada y paquete adicional", () => {
     expect(tandersReviewReason("returned")).toContain("confirma que el paquete volvió");
     expect(tandersReviewReason("additional")).toContain("mientras se recupera el anterior");
+  });
+});
+
+describe("Tanders libera el paquete el siguiente día hábil (solo el domingo no lo es)", () => {
+  // 02-10-2026 es viernes, 03 sábado, 04 domingo, 05 lunes.
+  const at = (day: string) => `${day}T15:00:00Z`; // 10:00 de Lima
+  it("recolectado el viernes: libre el sábado", () => {
+    expect(tandersReview(order, [{ ...output, dispatched_at: at("2026-10-02") }], "2026-10-02")).toBeNull();
+    expect(tandersReview(order, [{ ...output, dispatched_at: at("2026-10-02") }], "2026-10-03")).not.toBeNull();
+  });
+  it("recolectado el sábado: el domingo sigue siendo de Tanders, libre el lunes", () => {
+    expect(tandersReview(order, [{ ...output, dispatched_at: at("2026-10-03") }], "2026-10-04")).toBeNull();
+    expect(tandersReview(order, [{ ...output, dispatched_at: at("2026-10-03") }], "2026-10-05")).not.toBeNull();
+  });
+  it("el domingo sigue ofreciendo lo que ya estaba libre", () => {
+    expect(tandersReview(order, [{ ...output, dispatched_at: at("2026-10-02") }], "2026-10-04")).not.toBeNull();
+  });
+  it("los feriados se trabajan: no corren el límite", () => {
+    // 08-10-2026 (jueves, feriado en Perú) es un día cualquiera.
+    expect(tandersReleaseCutoff("2026-10-08")).toBe("2026-10-08");
+  });
+  it("el límite es el mismo día salvo el domingo, que es el sábado", () => {
+    expect(tandersReleaseCutoff("2026-10-05")).toBe("2026-10-05");
+    expect(tandersReleaseCutoff("2026-10-04")).toBe("2026-10-03");
+    expect(tandersReviewQueueFilter("2026-10-04")).toContain("dispatched_at.lt.2026-10-03T00:00:00-05:00");
+    expect(tandersReviewQueueFilter("2026-10-05")).toContain("dispatched_at.lt.2026-10-05T00:00:00-05:00");
   });
 });
