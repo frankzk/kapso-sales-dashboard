@@ -7737,6 +7737,40 @@ y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
   porque son vocabulario, no datos de nadie. Del Master lee solo los pedidos de
   sus rutas (0186, §27).
 
+### 30.10 Programaciones mensuales enviadas a Urpi (01/10/2026)
+
+`/dashboard/urpi` reúne los Google Sheets mensuales de programación de Urpi.
+Es una fuente documental de lo enviado: no confirma custodia, salida a reparto,
+entrega, cobro ni liquidación. Vive separada de las rutas propias de Grupo GF.
+
+Una fuente se registra por tienda, archivo y mes, con prefijo de pedido explícito.
+Un libro mixto Kenku/Aurela se registra para ambas tiendas, aislando KP y AUR.
+Se leen todas las pestañas con fecha del mes y las columnas reales de la plantilla.
+El vínculo se resuelve por código completo dentro de la tienda; sin coincidencia
+o con varias coincidencias, se conserva el registro y se pide revisión. Nunca
+crea pedidos fuera de Shopify ni salidas físicas a partir de una fila del Sheet.
+
+Cada cambio importado conserva una versión inmutable, con origen, actor y hora.
+Reimportar el contenido actual no duplica la versión. Las importaciones fallidas,
+incompletas o concurrentes atrasadas conservan la versión vigente. Las versiones
+anteriores siguen disponibles; retirar una fila de la hoja no equivale a cancelar
+ni entregar el pedido. Los conteos son de programaciones, no ventas ni intentos.
+
+Lectura mediante conexión propia de Google con permiso de solo lectura; alternativa
+de carga del libro mensual completo `.xlsx`. La conexión de una conversación de
+Codex no autoriza automáticamente al servidor de Kapta. En esta fase la lectura es
+bajo demanda. RLS restringe fuentes y versiones a `auth_store_ids()`; registrar
+exige `sheets.manage` e importar `sheets.edit`, dentro de la organización elegida.
+
+**Regla de Urpi confirmada por el owner:** «Reprogramado» es para el día siguiente
+de lunes a sábado. Viernes pasa a sábado, sábado a lunes. Se calcula desde la
+fecha del reporte, no desde su importación. Cruza meses y años sin crear otra
+identidad de pedido ni otra salida física. Se omiten domingos; no se estableció
+excepción para feriados. La función y sus pruebas quedan preparadas para la fase
+de reportes; la programación enviada conserva su fecha original.
+
+Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migración 0212.
+
 ## 31. Agradecimiento con catálogo al entregar
 
 Cuando un pedido pasa a **entregado**, se le manda a la clienta una plantilla de
