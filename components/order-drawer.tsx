@@ -1291,6 +1291,9 @@ export function OrderDrawer({
                           deliveryStatus: g.delivery_status,
                           custodyState: g.custody_state,
                           pickupState: g.pickup_state,
+                          courier: g.courier,
+                          swaypState: g.swayp_state ?? null,
+                          reportedStatus: g.reported_status ?? null,
                         };
                         return (
                           <span

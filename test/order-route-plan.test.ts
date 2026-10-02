@@ -282,6 +282,9 @@ describe("una salida viva bloquea repetir ese mismo courier", () => {
       deliveryStatus: "pendiente",
       pickupState: "pendiente_de_envio",
       custodyState: null,
+      courier: "shalom",
+      swaypState: null,
+      reportedStatus: null,
     });
   });
 
@@ -295,6 +298,7 @@ describe("una salida viva bloquea repetir ese mismo courier", () => {
           courier: "fenix",
           deliveryStatus: "en_ruta",
           custodyState: "retorno",
+          swaypState: 8,
           guideCode: "50000142099",
         },
       ],
