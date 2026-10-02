@@ -59,6 +59,7 @@ import {
   type LeadEnrichStats,
 } from "@/lib/leads-ingest";
 import { runCartSequence } from "@/lib/cart-sequence";
+import { autoTrialDeps, processAutoOrderTrials } from "@/lib/auto-order-trials";
 import { runReturnRecovery } from "@/lib/return-recovery";
 import { runDeliveredThanks } from "@/lib/delivered-thanks";
 import type { ConversationRow, DraftOrderRow, OrderRow } from "@/lib/types";
@@ -921,6 +922,7 @@ export interface SyncReport {
   deliveredThanksSent: number; // agradecimientos con catálogo al entregar
   requeued: number; // carritos reencolados con atención (olas, máx 2 por lead)
   cartsClosedByOrder: number; // carritos que salieron de la cola porque ya son pedido
+  autoOrdersGenerated: number; // pedidos de la prueba de recompra automática (0214)
   orderMaster: number; // filas del Master reconciliadas en esta corrida
   errors: string[];
 }
@@ -1001,6 +1003,7 @@ export async function runStoreSync(
     deliveredThanksSent: 0,
     requeued: 0,
     cartsClosedByOrder: 0,
+    autoOrdersGenerated: 0,
     orderMaster: 0,
     errors: [],
   };
@@ -1155,6 +1158,22 @@ export async function runStoreSync(
     report.cartsClosedByOrder = await closeCartLeadsWithOrders(admin, storeId);
   } catch (e: any) {
     report.errors.push(`carritos_con_pedido: ${e.message}`);
+  }
+
+  // 1d) Prueba de pedidos automáticos de recompra (0214). Solo procesa los
+  //     carritos que una persona autorizó en `auto_order_trials`; sin filas
+  //     pendientes es una sola lectura. Va después de 1c para que un carrito
+  //     que ya es pedido salga de la cola antes y la prueba lo omita.
+  if (creds.shopify_token) {
+    try {
+      const trials = await processAutoOrderTrials(
+        autoTrialDeps(admin, storeId, { domain: creds.shopify_domain, token: creds.shopify_token }),
+      );
+      report.autoOrdersGenerated = trials.generated;
+      for (const iso of trials.orderDates) affectedDates.add(tzParts(iso, creds.timezone).date);
+    } catch (e: any) {
+      report.errors.push(`pedidos_auto: ${e.message}`);
+    }
   }
 
   // 2) Kapso pull (conversations since last_active cursor)

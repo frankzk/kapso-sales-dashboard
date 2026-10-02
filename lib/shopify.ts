@@ -1423,6 +1423,32 @@ export async function updateOrderShippingAddress(
   }
 }
 
+const TAGS_ADD_MUTATION = /* GraphQL */ `
+  mutation TagsAdd($id: ID!, $tags: [String!]!) {
+    tagsAdd(id: $id, tags: $tags) {
+      userErrors { field message }
+    }
+  }
+`;
+
+/** Add tags to a Shopify resource (an order here) without touching the ones it
+ *  already has. `tagsAdd` merges; `orderUpdate` with `tags` would replace. */
+export async function addTags(
+  opts: ShopifyClientOpts & { gid: string; tags: string[] },
+): Promise<void> {
+  const tags = [...new Set(opts.tags.map((t) => t.trim()).filter(Boolean))];
+  if (!tags.length) return;
+  const data = await shopifyGraphQL<any>({
+    ...opts,
+    query: TAGS_ADD_MUTATION,
+    variables: { id: opts.gid, tags },
+  });
+  const errs = data?.tagsAdd?.userErrors ?? [];
+  if (errs.length) {
+    throw new Error(`tagsAdd: ${errs.map((e: any) => e.message).join("; ")}`);
+  }
+}
+
 /**
  * Cómo se le pide a Shopify que respete un precio distinto al del catálogo.
  *

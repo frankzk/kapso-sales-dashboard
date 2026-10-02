@@ -2561,6 +2561,51 @@ Lo que se respeta:
 Fuera de alcance: quien solo escribe por WhatsApp sin armar carrito. Su mensaje
 vive en Kapso y no dice producto ni cantidad en un campo que se pueda leer.
 
+**Prueba: pedido de recompra sin llamada (`exp-recompra-1`, 02-10-2026).** Un
+grupo cerrado de ~30 carritos de recompra se convierte en pedido **sin llamar
+antes**, para medir cuántos se entregan y decidir si se automatiza. No es la
+regla general: solo se generan los carritos que una persona cargó uno por uno
+en `auto_order_trials` (0214). El cron (`lib/auto-order-trials.ts`, paso 1d)
+los procesa.
+
+Qué se generó y por qué esos. Del barrido de recompras del 02-10-2026 (68
+carritos) se eligieron los de cliente cuyo **último pedido se entregó**, que
+**no escribió después** de armar el carrito y que nadie había gestionado. Cada
+fila lleva un grupo, porque cada uno prueba una regla distinta que se querría
+automatizar:
+
+- **A** — la dirección del carrito es la misma donde ya se le entregó.
+- **B** — el carrito traía «-» o le faltaba el distrito; se usa la dirección de
+  su entrega anterior (la fila la trae y se le pone al pedido).
+- **C** — dirección nueva, real, distinta de la anterior.
+
+Quedaron fuera los de último pedido aún en curso, devuelto o anulado, y los que
+escribieron después del carrito.
+
+Justo antes de completar, cada fila se vuelve a validar (`trialSkipReason`): el
+lead sigue `nuevo` y sin gestión, el carrito sigue siendo el suyo y abierto
+—también en Shopify—, el total es mayor que cero, el carrito tiene 12 días o
+menos, el cliente no compró después y hay una dirección despachable. Si algo
+falla, la fila queda `omitido` con el motivo y no se toca Shopify.
+
+Qué hace al generar:
+
+- Completa **el mismo borrador** del cliente (`paymentPending`): mismos
+  productos, cantidades y precios que vio en el formulario.
+- Etiqueta el pedido en Shopify con `auto_recompra` y la cohorte.
+- Gana el lead (`pedido_generado`) y deja una fila `system` en su historial.
+  **No acredita la venta a ninguna asesora**: nadie la cerró.
+- El pedido sigue el camino normal del Master: Lima entra directo a
+  Preparación; Provincia COD y Agencia pasan por «Por confirmar» como cualquier
+  otro.
+
+Cómo se mide. `auto_order_trial_results` cruza cada fila con el Master. La
+comparación es contra los pedidos de recompra normales de julio-agosto de 2026
+(cliente con un pedido entregado al menos 7 días antes): Kenku entregó el 76 %
+en Lima, el 66 % en Provincia COD y el 65 % en Agencia; Aurela, ~60 %. Con 30
+pedidos el margen es de unos ±18 puntos: alcanza para ver si se entrega «casi
+igual» o «claramente peor», no diferencias finas.
+
 **Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
 que la cola tiene que recortar: quedan fuera **Shalom, Tanders, Urpi y el
 reparto propio**. Shalom es agencia —la clienta recoge en el terminal, no hay
