@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildCatalogRows,
   collectActiveShopifyCatalogDetails,
   collectShopifySkuDetails,
   flattenCatalog,
   hydrateOrderLineSkusFromCatalog,
+  latestSyncedAt,
   normalizeSku,
   resolveAliclikItems,
   type AliclikSkuMapRow,
@@ -450,5 +452,98 @@ describe("flattenCatalog", () => {
   it("descarta SKUs sin EAN — sin EAN no se puede pedir", () => {
     const rows = flattenCatalog([{ id: 1, name: "X", skus: [{ sku: "A", ean: null }] }], false);
     expect(rows).toHaveLength(0);
+  });
+});
+
+describe("latestSyncedAt", () => {
+  it("toma la sincronización más reciente, no la de la primera fila", () => {
+    // Orden por EAN, como lo lee la pantalla: la primera fila es un producto
+    // retirado que conserva la hora de la última vez que apareció.
+    const rows = [
+      { synced_at: "2026-09-22T14:33:59.335+00:00" },
+      { synced_at: "2026-10-02T16:53:13.601+00:00" },
+      { synced_at: "2026-10-01T16:41:02.000+00:00" },
+    ];
+    expect(latestSyncedAt(rows)).toBe("2026-10-02T16:53:13.601+00:00");
+  });
+
+  it("compara instantes, no texto, aunque cambie el huso del formato", () => {
+    const rows = [
+      { synced_at: "2026-10-02T11:00:00-05:00" }, // 16:00 UTC
+      { synced_at: "2026-10-02T15:00:00+00:00" },
+    ];
+    expect(latestSyncedAt(rows)).toBe("2026-10-02T11:00:00-05:00");
+  });
+
+  it("ignora horas vacías o ilegibles y devuelve null sin catálogo", () => {
+    expect(latestSyncedAt([])).toBeNull();
+    expect(latestSyncedAt([{ synced_at: null }, { synced_at: "no-es-fecha" }])).toBeNull();
+    expect(
+      latestSyncedAt([{ synced_at: null }, { synced_at: "2026-10-02T09:01:10Z" }]),
+    ).toBe("2026-10-02T09:01:10Z");
+  });
+});
+
+describe("buildCatalogRows", () => {
+  const base = [
+    {
+      id: 1,
+      name: "Fat-Burn Shorts",
+      skus: [
+        { sku: "FB-L", ean: "111", stockVirtual: 121, warehouseId: 7, warehouseName: "GRUPO GF" },
+        { sku: "FB-XL", ean: "222", stockVirtual: 103, warehouseId: 7, warehouseName: "GRUPO GF" },
+      ],
+    },
+  ];
+  const agency = [
+    {
+      id: 1,
+      name: "Fat-Burn Shorts",
+      skus: [
+        {
+          sku: "FB-L",
+          ean: "111",
+          stockVirtual: 121,
+          warehouseId: 7,
+          warehouseName: "GRUPO GF",
+          formatTimeAgency: "13:00",
+          shalomOriginIn: "LIMA",
+        },
+      ],
+    },
+  ];
+
+  it("con la pasada de agencia, marca apto solo lo que vino en ella", () => {
+    const rows = buildCatalogRows(base, agency);
+    const byEan = new Map(rows.map((r) => [r.ean, r]));
+    expect(byEan.get("111")).toMatchObject({
+      is_agency_eligible: true,
+      format_time_agency: "13:00",
+      shalom_origin_in: "LIMA",
+      warehouse_name: "GRUPO GF",
+    });
+    expect(byEan.get("222")).toMatchObject({ is_agency_eligible: false, format_time_agency: null });
+  });
+
+  it("si la pasada de agencia falló, NO manda columnas de agencia: el upsert conserva las anteriores", () => {
+    // Antes salía `is_agency_eligible: false` en todas las filas y un error
+    // pasajero de Aliclik dejaba el catálogo entero «no apto para agencia».
+    const rows = buildCatalogRows(base, null);
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row).not.toHaveProperty("is_agency_eligible");
+      expect(row).not.toHaveProperty("format_time_agency");
+      expect(row).not.toHaveProperty("shalom_origin_in");
+      // Lo que trae la pasada normal sí se refresca.
+      expect(row).toHaveProperty("stock_virtual");
+      expect(row).toHaveProperty("warehouse_id");
+    }
+  });
+
+  it("todas las filas llevan las mismas columnas (supabase-js rellena con NULL las que falten)", () => {
+    for (const rows of [buildCatalogRows(base, agency), buildCatalogRows(base, null)]) {
+      const keys = rows.map((r) => Object.keys(r).sort().join(","));
+      expect(new Set(keys).size).toBe(1);
+    }
   });
 });

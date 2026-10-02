@@ -233,6 +233,19 @@ export async function getOrders(
   return out;
 }
 
+/**
+ * Conversations started in the range, RLS-scoped. Mismo drenado que
+ * getLeadsForDashboard —una consulta por tienda y cada página desde la última
+ * fila de la anterior—, y por las mismas razones.
+ *
+ * Medido en producción (02-10-2026) con Kenku a 30 días (21.779 conversaciones):
+ * con `store_id = ANY` y `OFFSET`, la página 19 tardaba 38 ms, leía 23.000
+ * bloques y reordenaba el rango entero (3,6 MB) en cada una de las 22 páginas;
+ * en la base Micro se iba a disco (50 bloques temporales por página). Con el
+ * cursor, cualquier página: 2,9 ms y 800 bloques, leyendo el índice
+ * `(store_id, started_at)` hacia atrás. Y sin repetidas ni perdidas: 1.477
+ * instantes los comparten dos o más conversaciones de la misma tienda.
+ */
 export async function getConversations(
   storeIds: string[],
   range: DateRange,
@@ -240,23 +253,21 @@ export async function getConversations(
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
   const { startIso, endIso } = rangeBounds(range);
-  const out: ConversationRow[] = [];
-  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
-    const { data, error } = await sb
-      .from("conversations")
-      .select(
-        "store_id,kapso_conversation_id,phone_number_id,started_at,status,message_count,last_message_at",
-      )
-      .in("store_id", storeIds)
-      .gte("started_at", startIso)
-      .lte("started_at", endIso)
-      .order("started_at", { ascending: false })
-      .range(from, from + PAGE_SIZE - 1);
-    if (error || !data?.length) break;
-    out.push(...(data as ConversationRow[]));
-    if (data.length < PAGE_SIZE) break;
-  }
-  return out;
+  return drainStoresByRecency<ConversationRow & { id: string }>(
+    storeIds,
+    "started_at",
+    (row) => row.started_at,
+    (storeId) => (upper, after) => {
+      let q = sb
+        .from("conversations")
+        .select("id,store_id,kapso_conversation_id,phone_number_id,started_at,status,message_count,last_message_at")
+        .eq("store_id", storeId)
+        .gte("started_at", startIso)
+        .lte("started_at", upper ?? endIso);
+      if (after) q = q.or(after);
+      return q.order("started_at", { ascending: false }).order("id", { ascending: false }).limit(PAGE_SIZE);
+    },
+  );
 }
 
 /**
@@ -299,12 +310,65 @@ function instantMicros(iso: string | null): number {
   return ms * 1000 + Number(`${fraction}000000`.slice(3, 6));
 }
 
-/** El orden de la base, `last_interaction_at DESC, id DESC`, para juntar tiendas. */
-function byInteractionDesc(a: LeadRow, b: LeadRow): number {
-  return (
-    instantMicros(b.last_interaction_at) - instantMicros(a.last_interaction_at) ||
-    (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
-  );
+/**
+ * Drena las tiendas en el orden de la base, `column DESC, id DESC`: una
+ * consulta por tienda y cada página desde la última fila de la anterior, nunca
+ * con OFFSET (el porqué y lo medido, en getLeadsForDashboard). Las tiendas se
+ * intercalan con ese mismo orden y el tope MAX_ROWS se aplica a todas juntas.
+ *
+ * `pageFor(storeId)` devuelve cómo pedir una página de esa tienda: el rango con
+ * tope superior `upper` (el instante del cursor; null en la primera, que va hasta
+ * el fin del rango) y, si hay cursor, el filtro `or` del desempate. Cada tienda
+ * tiene su propia función, así que puede guardar estado propio (el juego de
+ * columnas de los leads). El drenado de una tienda se corta al primer error,
+ * como antes.
+ */
+async function drainStoresByRecency<T extends { id: string }>(
+  storeIds: string[],
+  column: string,
+  at: (row: T) => string | null,
+  pageFor: (
+    storeId: string,
+  ) => (upper: string | null, after: string | null) => PromiseLike<{ data: unknown; error: unknown }>,
+): Promise<T[]> {
+  const drain = async (storeId: string): Promise<T[]> => {
+    const page = pageFor(storeId);
+    const out: T[] = [];
+    const seen = new Set<string>();
+    let upper: string | null = null;
+    let after: string | null = null;
+    while (out.length < MAX_ROWS) {
+      const { data, error } = await page(upper, after);
+      if (error || !Array.isArray(data) || !data.length) break;
+      const rows = data as T[];
+      // Una fila cuyo instante retrocediera durante el drenado podría volver a
+      // salir más abajo; contarla dos veces inflaría las métricas.
+      for (const row of rows) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        out.push(row);
+      }
+      if (rows.length < PAGE_SIZE) break;
+      const last = rows[rows.length - 1]!;
+      const lastAt = at(last);
+      if (!lastAt) break;
+      upper = lastAt;
+      after = recencyCursorFilter(column, { at: lastAt, id: last.id });
+      if (!after) break;
+    }
+    return out;
+  };
+
+  const perStore = await Promise.all([...new Set(storeIds)].map(drain));
+  // Una tienda ya llega en el orden de la base; varias se intercalan con ese
+  // mismo orden para que el tope se quede con las más recientes de todas.
+  const all =
+    perStore.length === 1
+      ? perStore[0]!
+      : perStore
+          .flat()
+          .sort((a, b) => instantMicros(at(b)) - instantMicros(at(a)) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+  return all.slice(0, MAX_ROWS);
 }
 
 /**
@@ -355,13 +419,9 @@ export async function getLeadsForDashboard(
     BASE_COLS,
   ];
 
-  const drainStore = async (storeId: string): Promise<LeadRow[]> => {
-    const out: LeadRow[] = [];
-    const seen = new Set<string>();
+  return drainStoresByRecency<LeadRow>(storeIds, "last_interaction_at", (row) => row.last_interaction_at, (storeId) => {
     let colIdx = 0;
-    let cursor: RecencyCursor | null = null;
-    let after: string | null = null;
-    const pageQuery = (select: string) => {
+    const pageQuery = (select: string, upper: string | null, after: string | null) => {
       let q = sb
         .from("leads")
         .select(select)
@@ -369,43 +429,22 @@ export async function getLeadsForDashboard(
         .gte("last_interaction_at", startIso)
         // El cursor también acota el índice por arriba; el `or` solo resuelve
         // el desempate de las filas que comparten ese mismo instante.
-        .lte("last_interaction_at", cursor?.at ?? endIso);
+        .lte("last_interaction_at", upper ?? endIso);
       if (after) q = q.or(after);
       return q
         .order("last_interaction_at", { ascending: false })
         .order("id", { ascending: false })
         .limit(PAGE_SIZE);
     };
-    while (out.length < MAX_ROWS) {
-      let { data, error } = await pageQuery(COL_SETS[colIdx]!);
-      while (error && colIdx < COL_SETS.length - 1) {
+    return async (upper, after) => {
+      let res = await pageQuery(COL_SETS[colIdx]!, upper, after);
+      while (res.error && colIdx < COL_SETS.length - 1) {
         colIdx++; // step down to a simpler column set and retry this page
-        ({ data, error } = await pageQuery(COL_SETS[colIdx]!));
+        res = await pageQuery(COL_SETS[colIdx]!, upper, after);
       }
-      if (error || !data?.length) break;
-      const rows = data as unknown as LeadRow[];
-      // Un lead cuya última interacción retrocediera durante el drenado podría
-      // volver a salir más abajo; contarlo dos veces inflaría las métricas.
-      for (const row of rows) {
-        if (seen.has(row.id)) continue;
-        seen.add(row.id);
-        out.push(row);
-      }
-      if (rows.length < PAGE_SIZE) break;
-      const last = rows[rows.length - 1]!;
-      if (!last.last_interaction_at) break;
-      cursor = { at: last.last_interaction_at, id: last.id };
-      after = recencyCursorFilter("last_interaction_at", cursor);
-      if (!after) break;
-    }
-    return out;
-  };
-
-  const perStore = await Promise.all([...new Set(storeIds)].map(drainStore));
-  // Una tienda ya llega en el orden de la base; varias se intercalan con ese
-  // mismo orden para que el tope se quede con los más recientes de todas.
-  const all = perStore.length === 1 ? perStore[0]! : perStore.flat().sort(byInteractionDesc);
-  return all.slice(0, MAX_ROWS);
+      return res;
+    };
+  });
 }
 
 /** Leads acquired for the first time in the selected local-calendar range.

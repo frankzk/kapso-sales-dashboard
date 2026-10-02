@@ -28,9 +28,29 @@ interface ReviewOutput {
   reported_status?: string | null;
 }
 
+/**
+ * Desde qué día queda libre un paquete que Tanders recolectó y no entregó.
+ *
+ * El día que Tanders lo recolecta es su día de reparto: hasta que termina, el
+ * paquete es suyo. Queda libre el SIGUIENTE DÍA HÁBIL, y el único día no hábil
+ * es el domingo —los feriados se trabaja— (confirmado por la operación,
+ * 02-10-2026). Recolectado el viernes, libre el sábado; recolectado el sábado,
+ * libre el lunes, no el domingo.
+ *
+ * Devuelve el día límite: se ofrecen los despachos ANTERIORES a él. Un día
+ * cualquiera es él mismo; un domingo es el sábado anterior, para que lo
+ * despachado el sábado espere al lunes. Días `YYYY-MM-DD` de Lima. Pura.
+ */
+export function tandersReleaseCutoff(today: string): string {
+  const noon = new Date(`${today}T12:00:00Z`);
+  if (!Number.isFinite(noon.getTime()) || noon.getUTCDay() !== 0) return today;
+  return new Date(noon.getTime() - 86_400_000).toISOString().slice(0, 10);
+}
+
 /** La consulta y la revalidación usan el día real de Lima, no el día de la caja. */
 export function tandersReviewQueueFilter(today: string): string {
-  return `and(macro_stage.eq.en_curso,macro_substage.eq.en_transito,current_courier.eq.tanders,dispatched_at.lt.${today}T00:00:00-05:00)`;
+  const cutoff = tandersReleaseCutoff(today);
+  return `and(macro_stage.eq.en_curso,macro_substage.eq.en_transito,current_courier.eq.tanders,dispatched_at.lt.${cutoff}T00:00:00-05:00)`;
 }
 
 export function tandersReview(order: ReviewOrder, outputs: readonly ReviewOutput[], today: string): TandersReview | null {
@@ -41,7 +61,7 @@ export function tandersReview(order: ReviewOrder, outputs: readonly ReviewOutput
   const live = outputs.filter((o) => ["pendiente", "en_ruta", "por_preparar"].includes(o.delivery_status));
   if (!live.length || live.some((o) => {
     const dispatchedDay = o.dispatched_at && Number.isFinite(Date.parse(o.dispatched_at)) ? limaDay(o.dispatched_at) : null;
-    return o.courier !== "tanders" || o.delivery_status !== "en_ruta" || !dispatchedDay || dispatchedDay >= today;
+    return o.courier !== "tanders" || o.delivery_status !== "en_ruta" || !dispatchedDay || dispatchedDay >= tandersReleaseCutoff(today);
   })) return null;
   return {
     shipmentIds: live.map((o) => o.id).sort(),

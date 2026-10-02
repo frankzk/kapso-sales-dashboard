@@ -1101,6 +1101,17 @@ activas de Tanders fueron despachadas antes de hoy, según el día de Lima.
 Casos: #KP137018 y #KP135818. Los entregados (#KP137017), anulados, despachos
 del mismo día y pedidos con otra salida activa quedan fuera de esta excepción.
 
+**El día de reparto de Tanders y el siguiente día hábil (02-10-2026).** Tanders
+reparte el día en que recolecta. Mientras la guía está Pendiente, y hasta que
+termina su día de reparto, el paquete es de Tanders: Grupo GF no puede agregarlo a
+una ruta, y el escaneo lo rechaza porque el pedido ya tiene una salida de otro
+courier (#KP136944, recolectado el 02-10 a las 9:28). Queda disponible el
+**siguiente día hábil**. El único día no hábil es el **domingo**; los feriados se
+trabajan. Recolectado el viernes, libre el sábado; recolectado el sábado, libre
+el lunes. La fecha de recolección es la que Kapta anota como despacho al leer el
+estado de Tanders (cada hora). Una guía que Tanders no llega a recolectar sigue
+bloqueada; qué hacer con ella está pendiente de decisión.
+
 - Se muestran como **«Tanders · despacho anterior · sin entrega»**, con la fecha
   de despacho. La fecha de la caja elegida no adelanta esta disponibilidad.
 - Antes de asignar a Grupo GF se exige confirmar **por pedido**, sin selección
@@ -1131,6 +1142,11 @@ Decisión del owner (29-09-2026):
   (`lib/reproprovincia.ts`), así que el Master y cualquier otra pantalla la leen
   igual. Si Tanders vuelve a `PICKED` y reintenta, la guía está viva otra vez y
   la recuperación se apaga: manda el estado actual de Tanders, no la custodia.
+  Desde el 02-10-2026 la custodia también lo sigue: de `retorno` vuelve a
+  `courier` con un `PICKED`/`DELIVERED` (`reconcileTandersCustodyState`), la
+  única vez que la custodia retrocede. Antes se quedaba en `retorno` y el
+  Master mostraba «En retorno» guías que Tanders estaba repartiendo. `devuelto`
+  no retrocede nunca.
 - **La ventana es de 65 días** (`TANDERS_RECOVERY_DAYS`), la antigüedad de
   Tanders en la operación. Como su API no dice cuándo empezó a volver, se
   cuenta desde la **salida** del intento fallido: es fija y anterior al fallo,
@@ -4702,6 +4718,13 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   el dinero se fue a OTRA cuenta—: diecisiete comprobantes en tres semanas,
   ninguno validado nunca, y los pedidos salieron igual. El bloqueo no protegía
   nada; solo enseñaba a no leer la alarma.
+- **La captura «Te yapearon» es de nuestra propia cuenta (02-10-2026).** Yape
+  titula así la pantalla de quien RECIBIÓ, y la operación la saca de nuestra
+  sesión: el receptor somos nosotros aunque no aparezca. El nombre grande y el
+  «Número de celular» que muestra son de **quien pagó**, así que no se contrastan
+  con las cuentas de cobro y la cuenta queda `verificada` como «captura de
+  nuestro Yape». Antes se leían como receptor y el cobro se acusaba de desvío:
+  #KP138399, S/ 30 de «Guadalupe Del\*» (···717), operación 15926914.
 - **Una tienda sin cuentas configuradas NO acusa a nadie.** Vacío significa "no
   sabemos contra qué contrastar" y cae en verificación parcial —contraste
   manual—, jamás en `receptor distinto`. Lo contrario convertiría un despiste de
