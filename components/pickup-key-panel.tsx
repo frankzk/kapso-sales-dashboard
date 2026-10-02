@@ -805,9 +805,11 @@ function StoredRecipientStatus({
     reading.status === "verified"
       // Se nombra la cuenta con la que encajó: con varias cuentas de cobro,
       // "verificada" a secas ya no dice a cuál llegó el dinero.
-      ? `Cuenta receptora verificada: ${
-          reading.account ? describeCollectionAccount(reading.account) : "cuenta de cobro"
-        }`
+      ? reading.receivedView
+        ? "Captura de nuestro Yape («Te yapearon»): llegó a una cuenta de la tienda"
+        : `Cuenta receptora verificada: ${
+            reading.account ? describeCollectionAccount(reading.account) : "cuenta de cobro"
+          }`
       : reading.status === "mismatch"
         ? `Receptor distinto: ${reading.name ?? "nombre no leído"} · ${
             reading.phoneLastDigits ? `***${reading.phoneLastDigits}` : "celular no leído"
@@ -1115,6 +1117,19 @@ function RecipientAccountCheck({
   reading: YapeRecipientReading | null;
   accounts: CollectionAccount[];
 }) {
+  // «Te yapearon»: la captura es de nuestra propia cuenta, así que no hay
+  // receptor que contrastar — el nombre y el celular son de quien pagó.
+  if (reading?.receivedView) {
+    return (
+      <fieldset className="rounded-lg bg-slate-50 p-3" aria-live="polite">
+        <legend className="px-1 text-xs font-semibold text-slate-700">Cuenta receptora del Yape</legend>
+        <p className="text-xs font-medium text-emerald-700">
+          ✓ Captura de nuestro Yape («Te yapearon»): el dinero llegó a una cuenta de la tienda. El nombre y el
+          celular que muestra son de quien pagó.
+        </p>
+      </fieldset>
+    );
+  }
   const verification = verifyYapeRecipient(reading?.name, reading?.phoneLastDigits, accounts);
   // Corregir la lectura invertida en silencio sería peor que no corregirla: esto
   // decide si el dinero se desvió, y quien valida tiene que saber que el nombre
@@ -1495,6 +1510,7 @@ function VoucherForm({
         account: result.fields.recipientAccount,
         swapped: result.fields.recipientSwapped,
         ignoredName: result.fields.recipientIgnoredName,
+        receivedView: result.fields.recipientReceivedView,
       });
       setReadNotice(result.notice);
       if (!result.isVoucher) {
