@@ -48,7 +48,7 @@ export function OlvaCotejoBoard({ orgs, liveLinked }: { orgs: CotejoOrg[]; liveL
         <p className="max-w-3xl text-sm text-slate-500">
           Trae del portal de Olva los envíos que registró la empresa y les pone el tracking a las salidas de Kapta
           que no lo tienen. <strong>Solo vincula lo que no admite duda</strong>: el «Doc. externo» igual al número
-          del pedido, o la misma dirección con todos los nombres de la clienta. Lo demás queda abajo para que lo
+          del pedido, el DNI de la clienta, o la misma dirección con todos sus nombres. Lo demás queda abajo para que lo
           decida una persona. Con el tracking puesto, Kapta rastrea el envío y le avisa a la clienta.
         </p>
       </header>
@@ -180,7 +180,7 @@ function OrgCotejo({ org, liveLinked }: { org: CotejoOrg; liveLinked: Record<str
               <>
                 <span className="font-mono">{r.tracking}</span> → <strong>{r.orderName}</strong>{" "}
                 <span className="text-slate-500">
-                  · {r.destinatario} · {r.via === "doc_externo" ? "Doc. externo" : "nombre y dirección"}
+                  · {r.destinatario} · {r.via === "doc_externo" ? "Doc. externo" : r.via === "dni" ? "DNI" : "nombre y dirección"}
                 </span>
               </>
             )}
