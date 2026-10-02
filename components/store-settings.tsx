@@ -545,9 +545,19 @@ function StoreForm({
   const [, startSave] = useTransition();
   const [refreshing, startRefresh] = useTransition();
   const [dirty, setDirty] = useState(false);
+  // Hasta que la página carga su JavaScript, el formulario no tiene quién lo
+  // envíe a mano: un Enter haría el envío nativo del navegador. Con «Guardar»
+  // apagado hasta entonces no hay envío implícito, y `method="post"` evita que,
+  // si lo hubiera, las credenciales viajen en la URL.
+  const [ready, setReady] = useState(false);
   const form = useRef<HTMLFormElement>(null);
   const resetAfterRefresh = useRef(false);
+  // Lo escrito mientras se guardaba no lo ha visto el servidor: el reinicio de
+  // después lo borraría sin avisar.
+  const editedDuringSave = useRef(false);
   const router = useRouter();
+
+  useEffect(() => setReady(true), []);
 
   // Guardado: la acción revalida la ruta, pero la tarjeta se queda con lo que
   // tenía montado; el refresco trae lo persistido y, con ello, la `key`.
@@ -560,20 +570,25 @@ function StoreForm({
   useEffect(() => {
     if (refreshing || !resetAfterRefresh.current) return;
     resetAfterRefresh.current = false;
-    form.current?.reset();
+    if (!editedDuringSave.current) form.current?.reset();
   }, [refreshing]);
 
   return (
     <form
       key={JSON.stringify(persisted)}
       ref={form}
+      method="post"
       onSubmit={(e) => {
         e.preventDefault();
         const data = new FormData(e.currentTarget);
+        editedDuringSave.current = false;
         setDirty(false);
         startSave(() => action(data));
       }}
-      onChange={() => setDirty(true)}
+      onChange={() => {
+        editedDuringSave.current = true;
+        setDirty(true);
+      }}
       onReset={() => setDirty(false)}
       className={cn(CARD, "divide-y divide-line")}
     >
@@ -584,7 +599,7 @@ function StoreForm({
         <p role="status" className="mr-auto min-w-0 text-[13px] leading-5">
           <SaveStatus dirty={dirty} pending={pending || refreshing} state={state} />
         </p>
-        <OpsButton type="submit" variant="primary" disabled={pending || refreshing}>
+        <OpsButton type="submit" variant="primary" disabled={!ready || pending || refreshing}>
           {pending || refreshing ? "Guardando…" : "Guardar"}
         </OpsButton>
       </div>
