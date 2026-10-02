@@ -116,6 +116,19 @@ describe("vercel.json", () => {
     expect(at("/api/cron/aliclik-close")).toBe("10,30,50 * * * *");
   });
 
+  it("el catálogo de Aliclik se refresca cada hora", () => {
+    // El resolutor decide si un pedido es creable con este espejo. Con una sola
+    // pasada diaria, lo que cambiaba en Aliclik durante el día (stock,
+    // elegibilidad para agencia, productos nuevos) bloqueaba pedidos hasta que
+    // alguien sincronizaba a mano. Pasó el 1 y el 2-10-2026. Volver a
+    // espaciarlo "para ahorrar llamadas" debe ser una decisión consciente.
+    // El minuto 7 lo aleja de los demás crons y la pasada de las 09:07 UTC
+    // termina mucho antes de la franja mala de la API (09:25-09:45 UTC).
+    const crons = cfg.crons as { path: string; schedule: string }[];
+    const cron = crons.find((c) => c.path === "/api/cron/aliclik-catalog");
+    expect(cron?.schedule).toBe("7 * * * *");
+  });
+
   it("las tarifas de Aliclik NO se cotizan en la franja mala de su API", () => {
     // Los 5xx de Aliclik llegan siempre a la misma hora: el 29/07 fallaron 136
     // de 203 peticiones entre las 09:25 y las 09:45 UTC, y el 17/08 saltó una

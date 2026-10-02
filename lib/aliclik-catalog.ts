@@ -941,6 +941,30 @@ export async function loadCatalogFor(
   return { skus, mapping };
 }
 
+/**
+ * Hora de la última sincronización: la MÁS RECIENTE de todo el espejo.
+ *
+ * No sirve la de una fila cualquiera. El sync hace upsert y no borra, así que un
+ * producto que su proveedor retiró del catálogo de Aliclik conserva para siempre
+ * la hora de la última vez que apareció. La pantalla leía la primera fila por
+ * EAN —un producto de otro proveedor que desapareció el 22-09— y el 2-10, recién
+ * sincronizada, anunciaba «sincronizado 22/9».
+ */
+export function latestSyncedAt(
+  rows: readonly { synced_at: string | null }[],
+): string | null {
+  let latest: string | null = null;
+  let latestMs = -Infinity;
+  for (const row of rows) {
+    const ms = row.synced_at ? Date.parse(row.synced_at) : NaN;
+    if (Number.isFinite(ms) && ms > latestMs) {
+      latest = row.synced_at;
+      latestMs = ms;
+    }
+  }
+  return latest;
+}
+
 /** Igual que `loadCatalogFor`, pero con las columnas que la pantalla muestra. */
 export async function loadAllAliclikSkus(
   storeId: string,

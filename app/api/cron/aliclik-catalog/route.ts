@@ -16,6 +16,13 @@ export const maxDuration = 300;
 // `stores.aliclik_enabled`. Tener el catálogo al día es útil aunque la creación
 // de guías siga apagada — de hecho es lo que permite saber, antes de encender
 // nada, cuántos pedidos serían creables.
+//
+// CADA HORA, no una vez al día. El resolutor decide si un pedido es creable con
+// este espejo, así que todo lo que cambia en Aliclik durante el día —stock,
+// elegibilidad para agencia, productos nuevos— no existía para Kapta hasta la
+// pasada de las 04:00 (Lima). El 1 y el 2-10-2026 hubo que sincronizar a mano
+// para poder crear pedidos. La pasada tarda en torno a un minuto por tienda,
+// lejos del `maxDuration`. El minuto 7 es para no coincidir con los demás crons.
 
 function secretEquals(provided: string | null, expected: string): boolean {
   if (!provided) return false;

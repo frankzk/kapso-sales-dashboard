@@ -30,7 +30,7 @@
     },
     {
       "path": "/api/cron/aliclik-catalog",
-      "schedule": "0 9 * * *"
+      "schedule": "7 * * * *"
     },
     { "path": "/api/cron/shopify-product-images", "schedule": "30 9 * * *" },
     {

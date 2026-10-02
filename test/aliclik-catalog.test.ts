@@ -4,6 +4,7 @@ import {
   collectShopifySkuDetails,
   flattenCatalog,
   hydrateOrderLineSkusFromCatalog,
+  latestSyncedAt,
   normalizeSku,
   resolveAliclikItems,
   type AliclikSkuMapRow,
@@ -450,5 +451,34 @@ describe("flattenCatalog", () => {
   it("descarta SKUs sin EAN — sin EAN no se puede pedir", () => {
     const rows = flattenCatalog([{ id: 1, name: "X", skus: [{ sku: "A", ean: null }] }], false);
     expect(rows).toHaveLength(0);
+  });
+});
+
+describe("latestSyncedAt", () => {
+  it("toma la sincronización más reciente, no la de la primera fila", () => {
+    // Orden por EAN, como lo lee la pantalla: la primera fila es un producto
+    // retirado que conserva la hora de la última vez que apareció.
+    const rows = [
+      { synced_at: "2026-09-22T14:33:59.335+00:00" },
+      { synced_at: "2026-10-02T16:53:13.601+00:00" },
+      { synced_at: "2026-10-01T16:41:02.000+00:00" },
+    ];
+    expect(latestSyncedAt(rows)).toBe("2026-10-02T16:53:13.601+00:00");
+  });
+
+  it("compara instantes, no texto, aunque cambie el huso del formato", () => {
+    const rows = [
+      { synced_at: "2026-10-02T11:00:00-05:00" }, // 16:00 UTC
+      { synced_at: "2026-10-02T15:00:00+00:00" },
+    ];
+    expect(latestSyncedAt(rows)).toBe("2026-10-02T11:00:00-05:00");
+  });
+
+  it("ignora horas vacías o ilegibles y devuelve null sin catálogo", () => {
+    expect(latestSyncedAt([])).toBeNull();
+    expect(latestSyncedAt([{ synced_at: null }, { synced_at: "no-es-fecha" }])).toBeNull();
+    expect(
+      latestSyncedAt([{ synced_at: null }, { synced_at: "2026-10-02T09:01:10Z" }]),
+    ).toBe("2026-10-02T09:01:10Z");
   });
 });

@@ -353,7 +353,7 @@ export async function testAliclikConnection(
   };
 }
 
-/** Sincroniza el catálogo de Aliclik bajo demanda (además del cron diario). */
+/** Sincroniza el catálogo de Aliclik bajo demanda (además del cron horario). */
 export async function syncAliclikCatalogNow(
   _prev: SettingsState,
   formData: FormData,
