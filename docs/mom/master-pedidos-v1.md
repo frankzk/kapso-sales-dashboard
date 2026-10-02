@@ -1131,6 +1131,11 @@ Decisión del owner (29-09-2026):
   (`lib/reproprovincia.ts`), así que el Master y cualquier otra pantalla la leen
   igual. Si Tanders vuelve a `PICKED` y reintenta, la guía está viva otra vez y
   la recuperación se apaga: manda el estado actual de Tanders, no la custodia.
+  Desde el 02-10-2026 la custodia también lo sigue: de `retorno` vuelve a
+  `courier` con un `PICKED`/`DELIVERED` (`reconcileTandersCustodyState`), la
+  única vez que la custodia retrocede. Antes se quedaba en `retorno` y el
+  Master mostraba «En retorno» guías que Tanders estaba repartiendo. `devuelto`
+  no retrocede nunca.
 - **La ventana es de 65 días** (`TANDERS_RECOVERY_DAYS`), la antigüedad de
   Tanders en la operación. Como su API no dice cuándo empezó a volver, se
   cuenta desde la **salida** del intento fallido: es fija y anterior al fallo,
