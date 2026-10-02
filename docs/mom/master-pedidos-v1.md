@@ -1101,6 +1101,17 @@ activas de Tanders fueron despachadas antes de hoy, según el día de Lima.
 Casos: #KP137018 y #KP135818. Los entregados (#KP137017), anulados, despachos
 del mismo día y pedidos con otra salida activa quedan fuera de esta excepción.
 
+**El día de reparto de Tanders y el siguiente día hábil (02-10-2026).** Tanders
+reparte el día en que recolecta. Mientras la guía está Pendiente, y hasta que
+termina su día de reparto, el paquete es de Tanders: Grupo GF no puede agregarlo a
+una ruta, y el escaneo lo rechaza porque el pedido ya tiene una salida de otro
+courier (#KP136944, recolectado el 02-10 a las 9:28). Queda disponible el
+**siguiente día hábil**. El único día no hábil es el **domingo**; los feriados se
+trabajan. Recolectado el viernes, libre el sábado; recolectado el sábado, libre
+el lunes. La fecha de recolección es la que Kapta anota como despacho al leer el
+estado de Tanders (cada hora). Una guía que Tanders no llega a recolectar sigue
+bloqueada; qué hacer con ella está pendiente de decisión.
+
 - Se muestran como **«Tanders · despacho anterior · sin entrega»**, con la fecha
   de despacho. La fecha de la caja elegida no adelanta esta disponibilidad.
 - Antes de asignar a Grupo GF se exige confirmar **por pedido**, sin selección
