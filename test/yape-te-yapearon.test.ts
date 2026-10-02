@@ -32,6 +32,7 @@ describe("lectura de una captura «Te yapearon»", () => {
         recipient_name: null,
         recipient_phone_last_digits: null,
         received_view: true,
+        yape_empresa_marker: true,
       }),
     });
     expect(out).toMatchObject({
@@ -41,6 +42,7 @@ describe("lectura de una captura «Te yapearon»", () => {
       recipientName: null,
       recipientPhoneLastDigits: null,
       receivedView: true,
+      yapeEmpresaMarker: true,
     });
   });
 
@@ -73,12 +75,21 @@ describe("lectura de una captura «Te yapearon»", () => {
 });
 
 describe("cuenta receptora de una captura «Te yapearon»", () => {
-  it("cuenta como cobro a una cuenta nuestra, sin contrastar al pagador", () => {
+  it("con el aviso de Yape Empresa cuenta como cobro a nuestra cuenta, sin contrastar al pagador", () => {
+    const reading = yapeRecipientReading(
+      { recipientName: null, recipientPhoneLastDigits: null, payerName: "Guadalupe Del*", receivedView: true, yapeEmpresaMarker: true },
+      ACCOUNTS,
+    );
+    expect(reading).toMatchObject({ status: "verified", receivedView: true, yapeEmpresa: true, account: null, name: null });
+  });
+
+  it("sin el aviso de Yape Empresa queda parcial: puede ser la cuenta personal de cualquiera", () => {
     const reading = yapeRecipientReading(
       { recipientName: null, recipientPhoneLastDigits: null, payerName: "Guadalupe Del*", receivedView: true },
       ACCOUNTS,
     );
-    expect(reading).toMatchObject({ status: "verified", receivedView: true, account: null, name: null });
+    // Ni verificada ni acusada de desvío: alguien la confirma en nuestro Yape.
+    expect(reading).toMatchObject({ status: "partial", receivedView: true, yapeEmpresa: false });
   });
 
   it("antes de la regla, ese mismo pago se acusaba de desvío", () => {
@@ -97,7 +108,7 @@ describe("cuenta receptora de una captura «Te yapearon»", () => {
       {
         operationNumber: "15926914", operationLabel: "Código de operación", amount: 30, paidAt: null,
         payerName: "Guadalupe Del*", recipientName: null, recipientPhoneLastDigits: null,
-        receivedView: true, ok: true, model: "m",
+        receivedView: true, yapeEmpresaMarker: true, ok: true, model: "m",
       },
       ACCOUNTS,
     );
@@ -105,6 +116,7 @@ describe("cuenta receptora de una captura «Te yapearon»", () => {
     expect(inspection.fields.recipientReceivedView).toBe(true);
     const extracted = (inspection.payload as { extracted: Record<string, unknown> }).extracted;
     expect(extracted.received_view).toBe(true);
+    expect(extracted.yape_empresa_marker).toBe(true);
     expect(yapeRecipientReadingFromVision(inspection.payload, ACCOUNTS).status).toBe("verified");
   });
 });

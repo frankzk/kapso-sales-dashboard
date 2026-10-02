@@ -404,6 +404,13 @@ export interface YapeVoucherFields {
    * nosotros. El nombre y el celular que muestra son de QUIEN PAGÓ.
    */
   receivedView?: boolean;
+  /**
+   * La captura «Te yapearon» trae el aviso de **Yape Empresa** al pie («el cobro
+   * servicio Yape Empresa…»). Solo lo muestran las cuentas Yape Empresa, como la
+   * de Grupo GF: es lo que distingue nuestra pantalla de la de una cuenta
+   * personal cualquiera que también recibió un Yape (02-10-2026).
+   */
+  yapeEmpresaMarker?: boolean;
   ok: boolean;
   model: string;
 }
@@ -431,7 +438,8 @@ function buildExtractPrompt(): string {
     '  "payer_name": string|null,        // quien paga\n' +
     '  "recipient_name": string|null,    // quien recibe\n' +
     '  "recipient_phone_last_digits": string|null, // últimos 3 dígitos del Nro. de celular destino\n' +
-    '  "received_view": boolean          // true si es la captura de QUIEN RECIBIÓ: dice "Te yapearon"\n' +
+    '  "received_view": boolean,         // true si es la captura de QUIEN RECIBIÓ: dice "Te yapearon"\n' +
+    '  "yape_empresa_marker": boolean    // true si la captura menciona "Yape Empresa" (aviso al pie)\n' +
     "}\n" +
     "El comprobante puede venir de CUALQUIER banco o billetera peruana (Yape, " +
     "Plin, BCP, Interbank, BBVA, Scotiabank), y cada uno rotula ese dato a su " +
@@ -456,6 +464,10 @@ function buildExtractPrompt(): string {
     "received_view es true, ese nombre va a payer_name, y recipient_name y " +
     "recipient_phone_last_digits son null — el receptor no aparece. En cualquier " +
     "otro comprobante received_view es false.\n" +
+    "Las cuentas Yape Empresa muestran al pie un aviso como \"el cobro servicio " +
+    "Yape Empresa se aplica sobre el total de las ventas del día\". Si la captura " +
+    "menciona \"Yape Empresa\" en cualquier parte, yape_empresa_marker es true; si " +
+    "no lo ves, false.\n" +
     "EL NOMBRE Y EL CELULAR DEL RECEPTOR SALEN DEL MISMO BLOQUE. Si tomas los " +
     "últimos dígitos del celular de una parte de la imagen, el nombre del receptor " +
     "tiene que salir de ESA MISMA parte. Leer el teléfono de un sitio y el nombre " +
@@ -634,6 +646,7 @@ function parseFields(text: string): Omit<YapeVoucherFields, "ok" | "model"> | nu
           recipientName: null,
           recipientPhoneLastDigits: null,
           receivedView: true,
+          yapeEmpresaMarker: o.yape_empresa_marker === true,
         }
       : {
           payerName: str(o.payer_name),
@@ -643,6 +656,7 @@ function parseFields(text: string): Omit<YapeVoucherFields, "ok" | "model"> | nu
             return digits.length >= 3 ? digits.slice(-3) : null;
           })(),
           receivedView: false,
+          yapeEmpresaMarker: o.yape_empresa_marker === true,
         }),
   };
 }

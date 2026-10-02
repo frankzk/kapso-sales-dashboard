@@ -53,8 +53,10 @@ export interface VoucherInspection {
      * no contó para juzgar la cuenta. `recipientName` queda en null.
      */
     recipientIgnoredName: string | null;
-    /** Captura de nuestra propia cuenta («Te yapearon»). */
+    /** Captura de quien recibió («Te yapearon»). */
     recipientReceivedView: boolean;
+    /** Esa captura trae el aviso de Yape Empresa: es de nuestra cuenta. */
+    recipientYapeEmpresa: boolean;
     /** Con qué cuenta de cobro encajó, si encajó con alguna. */
     recipientAccount: CollectionAccount | null;
   };
@@ -76,6 +78,7 @@ export const EMPTY_INSPECTION: VoucherInspection = {
     recipientSwapped: false,
     recipientIgnoredName: null,
     recipientReceivedView: false,
+    recipientYapeEmpresa: false,
     recipientAccount: null,
   },
   payload: {},
@@ -123,6 +126,7 @@ export function voucherReading(
       recipientSwapped: swapped,
       recipientIgnoredName: recipient.ignoredName,
       recipientReceivedView: recipient.receivedView,
+      recipientYapeEmpresa: recipient.yapeEmpresa,
     },
     payload: {
       indicators: verdict.indicators,
@@ -146,6 +150,7 @@ export function voucherReading(
         // «Te yapearon»: captura de nuestra propia cuenta. La relectura de cada
         // pantalla lo necesita para no contrastar al pagador con nuestras cuentas.
         received_view: extracted.receivedView === true,
+        yape_empresa_marker: extracted.yapeEmpresaMarker === true,
         recipient_check: recipientCheck,
         // A qué cuenta de cobro llegó, cuando se pudo determinar. Con varias
         // cuentas, "verificado" a secas ya no dice dónde está el dinero.
