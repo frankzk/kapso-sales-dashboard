@@ -142,7 +142,10 @@ roles and the `auth` schema, so it just works.
      del catálogo de Aliclik (EAN, stock por almacén, agencias Shalom). Solo
      lectura. Era diario (09:00 UTC) hasta el 2-10-2026: lo que cambiaba en
      Aliclik durante el día no se veía hasta el día siguiente y bloqueaba la
-     creación de pedidos hasta que alguien sincronizaba a mano.
+     creación de pedidos hasta que alguien sincronizaba a mano. Si falla solo la
+     pasada `isAgency=true`, se guarda el resto y la elegibilidad para agencia
+     queda la de la sincronización anterior (con aviso en el informe), en vez de
+     marcar todo el catálogo como no apto para agencia.
    - `/api/cron/aliclik-reconcile` — cada 20 min. Red de seguridad del webhook de
      Aliclik, que llega **sin firma y sin garantía de entrega**: relee los
      pedidos de los últimos 14 días y resuelve las creaciones que se fueron en

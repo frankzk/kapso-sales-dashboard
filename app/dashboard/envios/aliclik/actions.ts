@@ -73,8 +73,12 @@ export async function syncCatalog(
   );
   revalidatePath(PATH);
   if (!report.ok) return { error: report.errors.join("; ") || "No se pudo sincronizar." };
+  // Los avisos se muestran, igual que en Ajustes: una pasada de agencia fallida
+  // deja la elegibilidad de la sincronización anterior, y quien sincroniza a
+  // mano tiene que saberlo en vez de leer «actualizado» a secas.
+  const notice = `Catálogo actualizado: ${report.shopifySkus} SKUs activos de Shopify, ${report.skus} SKUs de Aliclik, ${report.agencies} agencias. ${report.autoMapped} mapeos nuevos automáticos.`;
   return {
-    notice: `Catálogo actualizado: ${report.shopifySkus} SKUs activos de Shopify, ${report.skus} SKUs de Aliclik, ${report.agencies} agencias. ${report.autoMapped} mapeos nuevos automáticos.`,
+    notice: report.errors.length ? `${notice} Avisos: ${report.errors.join("; ")}` : notice,
   };
 }
 

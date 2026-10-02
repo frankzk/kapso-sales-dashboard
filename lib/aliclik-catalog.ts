@@ -529,6 +529,49 @@ export function flattenCatalog(
   return out;
 }
 
+/** Columnas que solo trae la pasada `isAgency=true`. */
+const AGENCY_COLUMNS = ["is_agency_eligible", "format_time_agency", "shalom_origin_in"] as const;
+
+/**
+ * Une las dos pasadas del catálogo en filas de `aliclik_skus`.
+ *
+ * `agency` es `null` cuando la pasada de agencia falló. Entonces las filas salen
+ * SIN las columnas de agencia y el upsert no las toca: cada EAN conserva la
+ * elegibilidad y la hora de corte de la última pasada buena, y los EAN nuevos
+ * entran con el valor por defecto (no apto). Antes se escribían los valores de
+ * la pasada normal —`is_agency_eligible = false` para todos—, así que un error
+ * pasajero de Aliclik dejaba el catálogo entero como no despachable por agencia
+ * hasta el sync siguiente, y cada pedido de agencia se bloqueaba con
+ * `no_apto_agencia` sin que nada avisara del porqué.
+ *
+ * Todas las filas llevan las mismas columnas, a propósito: supabase-js arma la
+ * lista de columnas con la unión de las claves y rellena con NULL las que le
+ * falten a una fila, e `is_agency_eligible` es NOT NULL.
+ */
+export function buildCatalogRows(
+  base: readonly AliclikProduct[],
+  agency: readonly AliclikProduct[] | null,
+): Record<string, unknown>[] {
+  const rows = new Map<string, Record<string, unknown>>();
+  for (const r of flattenCatalog(base, false)) rows.set(String(r.ean), r);
+
+  if (!agency) {
+    return [...rows.values()].map((r) => {
+      const row = { ...r };
+      for (const column of AGENCY_COLUMNS) delete row[column];
+      return row;
+    });
+  }
+
+  for (const r of flattenCatalog(agency, true)) {
+    const prev = rows.get(String(r.ean));
+    // La pasada de agencia gana en sus campos propios y marca la elegibilidad,
+    // pero no debe perder lo que solo trae la pasada normal.
+    rows.set(String(r.ean), prev ? { ...prev, ...r, is_agency_eligible: true } : r);
+  }
+  return [...rows.values()];
+}
+
 export interface CatalogSyncResult {
   ok: boolean;
   skus: number;
@@ -572,21 +615,16 @@ export async function syncAliclikCatalog(
     return { ...out, ok: false, errors: [`Catálogo: ${base.error}`] };
   }
   const agency = await listAllProducts(opts, { isAgency: true });
-  if (!agency.ok) out.errors.push(`Catálogo de agencia: ${agency.error}`);
-
-  const rows = new Map<string, Record<string, unknown>>();
-  for (const r of flattenCatalog(base.data, false)) rows.set(String(r.ean), r);
-  if (agency.ok) {
-    for (const r of flattenCatalog(agency.data, true)) {
-      const prev = rows.get(String(r.ean));
-      // La pasada de agencia gana en sus campos propios y marca la elegibilidad,
-      // pero no debe perder lo que solo trae la pasada normal.
-      rows.set(String(r.ean), prev ? { ...prev, ...r, is_agency_eligible: true } : r);
-    }
+  if (!agency.ok) {
+    out.errors.push(
+      `Catálogo de agencia: ${agency.error} (se conserva la elegibilidad para agencia de la sincronización anterior)`,
+    );
+  } else {
     out.agencySkus = agency.data.reduce((n, p) => n + (p.skus?.length ?? 0), 0);
   }
 
-  const payload: Record<string, unknown>[] = [...rows.values()].map((r) => ({
+  const rows = buildCatalogRows(base.data, agency.ok ? agency.data : null);
+  const payload: Record<string, unknown>[] = rows.map((r) => ({
     ...r,
     store_id: storeId,
     synced_at: new Date().toISOString(),
