@@ -95,6 +95,9 @@ describe("parseOlvaTracking", () => {
     expect(parseOlvaTracking("2552504-26")).toEqual({ ok: true, value: { tracking: "2552504", emision: "26" } });
     expect(parseOlvaTracking("26-2552504")).toEqual({ ok: true, value: { tracking: "2552504", emision: "26" } });
     expect(parseOlvaTracking("2552504", "26")).toEqual({ ok: true, value: { tracking: "2552504", emision: "26" } });
+    // El portal de clientes lo escribe con ceros delante y barra: es el mismo envío.
+    expect(parseOlvaTracking("02649804/26")).toEqual({ ok: true, value: { tracking: "2649804", emision: "26" } });
+    expect(parseOlvaTracking("26-02649804")).toEqual({ ok: true, value: { tracking: "2649804", emision: "26" } });
     expect(formatOlvaTracking({ tracking: "2552504", emision: "26" })).toBe("2552504-26");
   });
 

@@ -76,7 +76,8 @@ describe("vercel.json", () => {
     // repetirlo acá.
     // 20: reintento Aliclik → Swayp sin contacto (MOM §11.9).
     // 21: lectura automática de programaciones mensuales de Urpi.
-    expect(crons).toHaveLength(21);
+    // 22: «Cotejar Olva», el tracking desde el portal de clientes (MOM §12).
+    expect(crons).toHaveLength(22);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);
