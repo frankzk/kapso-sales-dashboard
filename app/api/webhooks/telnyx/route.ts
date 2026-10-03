@@ -3,7 +3,7 @@
 // Telnyx avisa cada paso de cada tramo. Aquí se hace lo que en Zadarma hacía
 // la centralita:
 //   · la clienta contesta → se abre el tramo a xAI, unido al de ella;
-//   · la línea detecta contestadora → se cuelga y se registra «no contesta»;
+//   · la línea detecta contestadora → solo se anota (modo sombra, ver abajo);
 //   · la clienta cuelga sin haber llegado al agente → «no contesta» al momento,
 //     con la causa (timbró, ocupado, rechazó), sin esperar al barrido;
 //   · un tramo cuelga → se cuelga el otro.
@@ -134,14 +134,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, action: "agente_marcado" });
   }
 
-  if (ev.type === "call.machine.detection.ended" && leg === "cliente" && ev.amdResult === "machine") {
-    await hangup(ev.callControlId);
-    await hangup(telephony.agente);
-    if (open) {
-      await closeAsNoAnswer(admin, asOpen(row), "No contestó: contestó un buzón de voz (lo detectó la línea).", now);
-    }
-    return NextResponse.json({ ok: true, action: "buzon" });
-  }
+  // La detección de contestadora va en MODO SOMBRA: su resultado queda en
+  // `eventos` (amd) y no cuelga. En la primera prueba (03-10-2026) tomó por
+  // buzón a una persona que acababa de contestar y cortó antes de que el
+  // agente hablara. Los buzones los sigue resolviendo el agente, como en
+  // Zadarma, hasta que el resultado medido contra lo que pasó diga que la
+  // detección acierta (MOM §11.8).
 
   if (ev.type === "call.hangup" && leg === "cliente") {
     await hangup(telephony.agente);

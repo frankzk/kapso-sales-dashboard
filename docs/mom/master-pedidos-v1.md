@@ -3939,9 +3939,14 @@ Reglas de esa tabla:
     un segundo tramo hacia la puerta SIP de xAI del número de Telnyx y lo une
     al de ella (`bridge_on_answer`). No usa SIP REFER, que Telnyx cobra por
     llamada.
-  - **Contestadora, ocupado o sin respuesta.** Se cuelga y se registra «no
-    contesta» al momento, con la causa. No se espera al barrido ni se gasta
-    al agente.
+  - **Ocupado, rechazo o sin respuesta.** Se registra «no contesta» al
+    momento, con la causa. No se espera al barrido.
+  - **Contestadora: modo sombra.** La detección de Telnyx corre en cada
+    llamada y su resultado queda anotado (`amd`), pero no cuelga. En la
+    primera prueba (03-10-2026) tomó por buzón a una persona dos segundos
+    después de contestar y cortó antes de que el agente hablara. Los buzones
+    los sigue resolviendo el agente, como en Zadarma. Se activará solo si,
+    comparada con lo que realmente pasó en las llamadas, acierta.
   - **Mismo número de agente.** Las dos líneas usan el mismo
     `agent_number`, así que `identificar_llamada` encuentra la llamada igual y
     nunca hay dos abiertas a la vez.

@@ -9,8 +9,9 @@
 //      tramo hacia el SIP de xAI con `link_to` + `bridge_on_answer`: los dos
 //      quedan unidos en cuanto xAI atiende. No se usa SIP REFER, que Telnyx
 //      cobra a 0,10 USD por llamada.
-//   3. Si la detección dice «contestadora», se cuelga y se registra
-//      «no contesta» sin gastar al agente.
+//   3. La detección de contestadora corre en modo sombra: su resultado se
+//      anota en la llamada pero no cuelga (un falso «buzón» cortó a una
+//      persona en la primera prueba, 03-10-2026).
 //
 // Cada aviso llega firmado con Ed25519 (`telnyx-signature-ed25519` sobre
 // `<timestamp>|<cuerpo>`); se verifica con la clave pública de la cuenta.
