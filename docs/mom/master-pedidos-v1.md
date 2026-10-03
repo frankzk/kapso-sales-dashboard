@@ -1242,8 +1242,10 @@ Decisión del owner (30-09-2026), para **todos los couriers de Lima**:
 **La caja escaneada gana al courier atrasado (03-10-2026).** #AUR176862 salió
 con Tanders el 14-09 y su caja se escaneó en Devoluciones el 29-09; cuatro días
 después Tanders seguía diciendo `PICKED`. Leyendo sólo al courier, la guía
-estaba viva, y el pedido —vivo en Shopify— quedaba en «Por cerrar · Devolución
-pendiente de inventario». Una guía de **Tanders o Swayp** que el courier sigue
+estaba viva, y un pedido vivo en Shopify en esa situación habría quedado en
+«Por cerrar» en vez de «Por reprogramar Lima». (#AUR176862 no lo estaba: se
+anuló en Shopify el 19-09 —su `financial_status` siguió en `pending` por ser
+contra entrega— y su Por cerrar es correcto.) Una guía de **Tanders o Swayp** que el courier sigue
 dando por viva pero cuya caja ya se recibió en el almacén (`returned_at`) es un
 intento fallido (`apiGuideReceivedBack`, `lib/reproprovincia.ts`), con la misma
 ventana y la misma ancla. Grupo GF y el motorizado propio no entran: su

@@ -218,8 +218,9 @@ describe("el MOM lo dice", () => {
 
 describe("la caja escaneada en el almacén gana al estado atrasado del courier (03-10-2026)", () => {
   // #AUR176862: Tanders seguía diciendo `PICKED` cuatro días después de que la
-  // caja se escaneara en Devoluciones. El pedido, vivo en Shopify, quedaba en
-  // «Por cerrar · Devolución pendiente de inventario».
+  // caja se escaneara en Devoluciones. Ese pedido estaba anulado en Shopify (su
+  // Por cerrar era correcto), pero uno vivo en la misma situación habría caído
+  // en «Por cerrar · Devolución pendiente de inventario».
   const AUR176862 = {
     delivery_status: "en_ruta",
     reported_status: "PICKED",
