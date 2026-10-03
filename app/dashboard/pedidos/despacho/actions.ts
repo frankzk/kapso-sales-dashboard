@@ -22,6 +22,13 @@ import {
 import { operationFitsCourier, routeKindForCourier } from "@/lib/dispatch-routing";
 import { courierLabelFor } from "@/lib/couriers/catalog";
 import { decideReception } from "@/lib/returns-reception";
+import { loadPickupKeyFacts } from "@/lib/shalom/pickup-facts";
+import {
+  decideShalomReception,
+  shalomReceptionPatch,
+  type ShalomReturnGuide,
+} from "@/lib/shalom/return-reception";
+import { normalizeReturnGuide } from "@/lib/shalom/returns";
 import type { OperationKind } from "@/lib/order-macro-stage";
 import {
   DISPATCH_SHIPMENT_COLUMNS,
@@ -250,6 +257,9 @@ export async function markShipmentReady(code: string): Promise<DispatchActionRes
   return { notice: `${dispatchScanLabel(shipment)} quedó listo para despacho.`, shipment };
 }
 
+/** Los couriers cuyas cajas devueltas se reciben escaneando (MOM §9.4). */
+const RETURN_SCAN_COURIERS = new Set(["tanders", "shalom"]);
+
 /**
  * Registra que una caja devuelta LLEGÓ al almacén. Es el escaneo de la pantalla
  * de devoluciones, y vive acá —junto a `markShipmentReady`— porque usa el mismo
@@ -262,22 +272,33 @@ export async function markShipmentReady(code: string): Promise<DispatchActionRes
  * escaneó. Si el courier todavía no la había reportado, quien la tiene en la
  * mano la sella — exactamente lo que hacía el botón manual del drawer.
  *
- * Por ahora solo Tanders: Aliclik y Shalom tienen su propia vía de sellado y
- * su cola de recuperación, y mezclarlas acá sin medirlas sería un riesgo.
+ * Tanders y Shalom. Shalom tiene su propia decisión (`receiveShalomReturn`):
+ * una guía que dio por recogida también se recibe si la clienta nunca tuvo la
+ * clave. Aliclik sigue con su vía de sellado y su cola de recuperación.
+ *
+ * `returnGuide` es la guía de retorno de la etiqueta de Shalom, si se anotó.
  */
-export async function receiveReturnedPackage(code: string): Promise<DispatchActionResult> {
+export async function receiveReturnedPackage(
+  code: string,
+  opts: { returnGuide?: string | null } = {},
+): Promise<DispatchActionResult> {
   const perms = await getMasterPermissions();
   if (!perms.can("warehouse.prepare")) return { error: "No tienes permiso para recibir paquetes." };
+  const returnGuide = normalizeReturnGuide(opts.returnGuide);
+  if (returnGuide === false) {
+    return { error: "La guía de retorno no es válida: escribe solo el número que trae la etiqueta de Shalom." };
+  }
   const pick = pickDispatchScanTarget(
     await findScanCandidates(code),
-    (candidate) => candidate.courier === "tanders",
+    (candidate) => RETURN_SCAN_COURIERS.has(candidate.courier),
   );
   if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
   if (pick.kind === "ambigua") return { error: ambiguousScanError(pick.options) };
   const shipment = pick.shipment;
-  if (shipment.courier !== "tanders") {
-    return { error: `${dispatchScanLabel(shipment)} no es de Tanders: su devolución se registra desde el Master.` };
+  if (!RETURN_SCAN_COURIERS.has(shipment.courier)) {
+    return { error: `${dispatchScanLabel(shipment)} no es de Tanders ni de Shalom: su devolución se registra desde el Master.` };
   }
+  if (shipment.courier === "shalom") return receiveShalomReturn(shipment, returnGuide);
 
   const admin = createAdminSupabase();
   const [{ data: guide }, { data: received }] = await Promise.all([
@@ -341,6 +362,93 @@ export async function receiveReturnedPackage(code: string): Promise<DispatchActi
   revalidatePath(RETURNS_PATH);
   revalidatePath("/dashboard/pedidos");
   return { notice: `${dispatchScanLabel(shipment)} recibida en almacén.`, shipment };
+}
+
+/**
+ * La caja de Shalom llegó al almacén (MOM §9.4 y §12).
+ *
+ * Shalom no sella devoluciones: o el rastreo la dejó en `retorno` al sacarla de
+ * la agencia, o la dio por recogida. En el segundo caso solo se recibe si la
+ * clienta nunca tuvo la clave, y entonces la guía se corrige: deja de ser un
+ * recojo y queda anulada, y el pedido pasa a devuelto. Sin poder leer la clave
+ * no se decide nada: se pide volver a escanear.
+ */
+async function receiveShalomReturn(
+  shipment: DispatchShipment,
+  returnGuide: string | null,
+): Promise<DispatchActionResult> {
+  const label = dispatchScanLabel(shipment);
+  const admin = createAdminSupabase();
+  const [guideRead, receivedRead] = await Promise.all([
+    admin
+      .from("shipments")
+      .select("delivery_status,custody_state,returned_at,pickup_state,dispatched_at,out_for_delivery_at")
+      .eq("id", shipment.id)
+      .maybeSingle(),
+    admin
+      .from("order_events")
+      .select("id")
+      .eq("shipment_id", shipment.id)
+      .eq("kind", "return_received")
+      .limit(1),
+  ]);
+  const readError = guideRead.error ?? receivedRead.error;
+  if (readError) return { error: `${label}: no se pudo leer la guía (${readError.message}). Vuelve a escanearla.` };
+  const guide = guideRead.data as ShalomReturnGuide | null;
+  if (!guide) return { error: SCAN_NOT_FOUND };
+
+  const keys = shipment.order_id
+    ? await loadPickupKeyFacts(admin, shipment.order_id)
+    : ({ ok: true, facts: { hasKey: false, keyGiven: false } } as const);
+  if (!keys.ok) return { error: `${label}: ${keys.error}. Vuelve a escanearla.` };
+
+  const decision = decideShalomReception(guide, keys.facts, Boolean(receivedRead.data?.length));
+  if (!decision.ok) {
+    return decision.reason === "ya_recibida"
+      ? { notice: `${label}: ${decision.message}`, shipment }
+      : { error: `${label}: ${decision.message}` };
+  }
+
+  const { user } = await currentUser();
+  const orgId = await orgForStore(shipment.store_id);
+  if (!orgId) return { error: "No pudimos identificar la organización de la salida." };
+  const now = new Date().toISOString();
+
+  // Los filtros repiten lo que se decidió: si la guía cambió entre la lectura y
+  // la escritura, no se toca y se pide volver a escanear.
+  let write = admin.from("shipments").update(shalomReceptionPatch(decision, user.id, now)).eq("id", shipment.id);
+  if (decision.correct) write = write.eq("delivery_status", "entregado");
+  if (decision.seal) write = write.is("returned_at", null);
+  const { data: written, error } = await write.select("id");
+  if (error) return { error: error.message };
+  if (!written?.length) return { error: `${label}: la guía cambió mientras escaneabas. Vuelve a escanearla.` };
+
+  const reference = returnGuide ? ` Guía de retorno de Shalom: ${returnGuide}.` : "";
+  await auditDispatch({
+    orgId,
+    shipment,
+    actor: user.id,
+    kind: "return_received",
+    orderNote: decision.correct
+      ? `Devolución de Shalom recibida en almacén. Shalom la había dado por «recogida», pero la clienta nunca tuvo la clave: era el retorno. La guía queda anulada.${reference}`
+      : `Devolución de Shalom recibida en almacén: la caja se escaneó al llegar.${reference}`,
+    payload: {
+      via: "escaneo",
+      correccion_recogido: decision.correct,
+      antes: { delivery_status: guide.delivery_status, pickup_state: guide.pickup_state, custody_state: guide.custody_state },
+      guia_retorno: returnGuide,
+    },
+  });
+  if (shipment.order_id) await recomputeOrderMasterSafe(admin, [shipment.order_id]);
+  revalidatePath(RETURNS_PATH);
+  revalidatePath("/dashboard/pedidos");
+  return {
+    notice:
+      `${label} recibida en almacén.` +
+      (decision.correct ? " Shalom la había dado por recogida: queda corregida como retorno." : "") +
+      (returnGuide ? ` Guía de retorno ${returnGuide} anotada.` : ""),
+    shipment,
+  };
 }
 
 const createManifestSchema = z.object({

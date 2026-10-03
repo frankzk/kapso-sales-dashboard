@@ -110,7 +110,7 @@ export function WarehouseStation({
         <nav aria-label="Otras pantallas del almacén" className="flex flex-wrap gap-2">
           <Link href="/dashboard/pedidos/despacho" className={LINK_SECONDARY}>Entregas a couriers <span aria-hidden className="text-ink-500">→</span></Link>
           <Link href="/dashboard/courier/rutas" className={LINK_SECONDARY}>Cajas de Grupo GF <span aria-hidden className="text-ink-500">→</span></Link>
-          <Link href="/dashboard/pedidos/devoluciones" className={LINK_SECONDARY}>Devoluciones de Tanders <span aria-hidden className="text-ink-500">→</span></Link>
+          <Link href="/dashboard/pedidos/devoluciones" className={LINK_SECONDARY}>Devoluciones <span aria-hidden className="text-ink-500">→</span></Link>
         </nav>
       </header>
 

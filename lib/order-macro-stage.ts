@@ -586,7 +586,14 @@ const PICKUP_STATES_IN_CUSTODY = new Set([
   "devuelto_al_origen",
 ]);
 
-function hasExternalCustody(guide: MacroGuideSnapshot): boolean {
+/**
+ * ¿El paquete salió de la empresa? Se exporta porque la recepción de
+ * devoluciones hace la misma pregunta («¿hay algo que recibir?») y tiene que
+ * contestarla igual que el Master.
+ */
+export function hasExternalCustody(
+  guide: Pick<MacroGuideSnapshot, "custody_state" | "dispatched_at" | "out_for_delivery_at" | "delivery_status" | "pickup_state">,
+): boolean {
   return (
     guide.custody_state === "courier" ||
     guide.custody_state === "retorno" ||
@@ -667,8 +674,12 @@ function hasPaymentComplete(paymentState: string | null | undefined): boolean {
  * significar «lo cobró el mostrador»; de hecho el 46,8 % de los pedidos de
  * Agencia en Preparación ya están `paid` por otras vías. Aflojarla dejaría salir
  * a despacho pedidos sin el abono exigido, que es lo contrario de lo que hace.
+ *
+ * El rastreo de Shalom también la usa (03-10-2026): un «entregado» sin cobro y
+ * sin clave entregada es el retorno, y «sin cobro» tiene que significar lo
+ * mismo que en la alerta que ese retorno encendía.
  */
-function hasCollectionEvidence(
+export function hasCollectionEvidence(
   paymentState: string | null | undefined,
   order: Pick<MacroOrderSnapshot, "financial_status" | "total_refunded">,
 ): boolean {
