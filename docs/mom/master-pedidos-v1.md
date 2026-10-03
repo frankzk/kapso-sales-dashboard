@@ -1109,8 +1109,18 @@ courier (#KP136944, recolectado el 02-10 a las 9:28). Queda disponible el
 **siguiente día hábil**. El único día no hábil es el **domingo**; los feriados se
 trabajan. Recolectado el viernes, libre el sábado; recolectado el sábado, libre
 el lunes. La fecha de recolección es la que Kapta anota como despacho al leer el
-estado de Tanders (cada hora). Una guía que Tanders no llega a recolectar sigue
-bloqueada; qué hacer con ella está pendiente de decisión.
+estado de Tanders (cada hora).
+
+**Una guía que Tanders nunca recolecta también se libera (03-10-2026).** Se da
+por hecho que Tanders la repartiría el siguiente día hábil después de crearla
+(la fecha de creación la devuelve Tanders al crear la guía). Si termina ese día
+y la guía sigue **Pendiente**, el paquete queda libre el día hábil siguiente, con
+la misma regla del domingo: creada el jueves, libre el sábado; creada el
+viernes, libre el lunes; creada el sábado, libre el martes. Aparece en «Desde la
+lista» como **«Tanders · sin recolectar · guía del …»** y pide la misma
+confirmación por pedido —el paquete está en el almacén, o saldrá otro—. La guía
+de Tanders no se anula sola: si después la recolectan, se concilia por el
+circuito de siempre.
 
 - Se muestran como **«Tanders · despacho anterior · sin entrega»**, con la fecha
   de despacho. La fecha de la caja elegida no adelanta esta disponibilidad.

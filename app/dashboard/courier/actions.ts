@@ -333,13 +333,15 @@ type AdmissionShipmentRow = {
   /** Estado crudo de Swayp: su Devolución también es una salida que falló. */
   swayp_state: number | null;
   returned_at: string | null;
+  /** Cuándo se creó la guía en Tanders: decide cuándo se libera una sin recolectar. */
+  tanders_created_at?: string | null;
   guide_code?: string | null;
   output_code?: string | null;
 };
 
 /** Las columnas de salida que la admisión necesita, en la cola y al tomar. */
 const ADMISSION_SHIPMENT_COLUMNS =
-  "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at,status_category,reported_status,swayp_state,returned_at,guide_code,output_code";
+  "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at,status_category,reported_status,swayp_state,returned_at,guide_code,output_code,tanders_created_at:tanders_raw->>createdAt";
 
 function isCourierAdmissionStage(stage: unknown, substage: unknown, operational?: unknown): boolean {
   return (
@@ -1026,7 +1028,7 @@ async function takeOrdersCore(
         failed.push({ orderId, error: `${row.order_name ?? "El pedido"}: confirma en Desde la lista si el paquete de Tanders volvió al almacén o si saldrá otro mientras se recupera el anterior.` });
         continue;
       }
-      const reviewReason = review && confirmation ? tandersReviewReason(confirmation.packageLocation) : null;
+      const reviewReason = review && confirmation ? tandersReviewReason(confirmation.packageLocation, review.uncollected === true) : null;
       // REINTENTO (v1.19): otro courier no lo entregó. La salida que falló no
       // cuenta como asignada y se abre una NUEVA —la caja anterior es de ese
       // courier y lleva su rótulo (§9.3)—; nunca se rellena otra.
