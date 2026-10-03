@@ -30,6 +30,19 @@ export const env = {
   zadarmaKey: () => required("ZADARMA_KEY").trim(),
   zadarmaSecret: () => required("ZADARMA_SECRET").trim(),
   voiceToolsSecret: () => required("VOICE_TOOLS_SECRET").trim(),
+  // «Agente Telnyx» (MOM §11.8): la segunda línea que compite con Zadarma.
+  // TELNYX_FROM_NUMBER es el número de Telnyx que ve la clienta y TELNYX_XAI_SIP_URI
+  // la puerta SIP de ese número en xAI. VOICE_TELNYX_SHARE es el % de las
+  // llamadas del barrido que van por Telnyx (0 = solo pruebas).
+  telnyxApiKey: () => required("TELNYX_API_KEY").trim(),
+  telnyxPublicKey: () => required("TELNYX_PUBLIC_KEY").trim(),
+  telnyxConnectionId: () => required("TELNYX_CONNECTION_ID").trim(),
+  telnyxFromNumber: () => required("TELNYX_FROM_NUMBER").trim(),
+  telnyxXaiSipUri: () => required("TELNYX_XAI_SIP_URI").trim(),
+  voiceTelnyxShare: () => {
+    const n = Number((process.env.VOICE_TELNYX_SHARE ?? "0").trim());
+    return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
+  },
 
   // --- non-secret runtime config ---
   shopifyApiVersion: () => process.env.SHOPIFY_API_VERSION ?? "2025-01",

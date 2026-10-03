@@ -17,6 +17,9 @@ import {
   aggregateReproDay,
   VOICE_AGENT_KEY,
   VOICE_AGENT_NAME,
+  VOICE_AGENT_TELNYX_KEY,
+  VOICE_AGENT_TELNYX_NAME,
+  isVoiceAgentKey,
   computeReprogramStats,
   limaCalendarDayBounds,
   shipmentSearchTerms,
@@ -1142,11 +1145,12 @@ export async function getReproTodayByAgent(storeIds: string[]): Promise<ReproDay
 
   const counts = aggregateReproDay(calls);
   if (!counts.length) return [];
-  const emails = await resolveEmails(counts.map((c) => c.agent).filter((a) => a !== VOICE_AGENT_KEY));
-  return counts.map((c) => ({
-    ...c,
-    name: c.agent === VOICE_AGENT_KEY ? VOICE_AGENT_NAME : (emails.get(c.agent) ?? c.agent),
-  }));
+  const emails = await resolveEmails(counts.map((c) => c.agent).filter((a) => !isVoiceAgentKey(a)));
+  const voiceNames: Record<string, string> = {
+    [VOICE_AGENT_KEY]: VOICE_AGENT_NAME,
+    [VOICE_AGENT_TELNYX_KEY]: VOICE_AGENT_TELNYX_NAME,
+  };
+  return counts.map((c) => ({ ...c, name: voiceNames[c.agent] ?? emails.get(c.agent) ?? c.agent }));
 }
 
 async function buildReprogramRows(

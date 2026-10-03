@@ -6,7 +6,8 @@
 //
 //   POST /api/internal/voice/test-call
 //   x-internal-secret: <CRON_SECRET>
-//   { "order_id": "<uuid>" | "order_name": "#KP135098", "phone": "930555309" }
+//   { "order_id": "<uuid>" | "order_name": "#KP135098", "phone": "930555309",
+//     "telefonia": "zadarma" | "telnyx" }   (por defecto zadarma)
 //
 // No mira `voice_recovery_enabled`: probar tiene que poder hacerse con la cola
 // apagada. Sí exige número de agente y extensión con caller ID peruano, igual
@@ -29,7 +30,7 @@ export async function POST(req: NextRequest) {
   if (!internalAuthorized(req)) {
     return NextResponse.json({ ok: false, error: "no autorizado" }, { status: 401 });
   }
-  let body: { order_id?: string; order_name?: string; phone?: string };
+  let body: { order_id?: string; order_name?: string; phone?: string; telefonia?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -56,10 +57,11 @@ export async function POST(req: NextRequest) {
   }
   const order = orders[0] as { id: string; store_id: string; name: string };
 
+  const telephony = body.telefonia === "telnyx" ? "telnyx" : "zadarma";
   const store = await loadStoreVoiceConfig(admin, order.store_id);
   const agentNumber = store?.voice_recovery_agent_number?.trim();
-  const sip = store?.voice_recovery_zadarma_sip?.trim();
-  if (!agentNumber || !sip) {
+  const sip = store?.voice_recovery_zadarma_sip?.trim() ?? "";
+  if (!agentNumber || (telephony === "zadarma" && !sip)) {
     return NextResponse.json(
       {
         ok: false,
@@ -80,6 +82,7 @@ export async function POST(req: NextRequest) {
       triggeredBy: null,
       agentNumber,
       sip,
+      telephony,
     },
     now,
   );
@@ -96,6 +99,10 @@ export async function POST(req: NextRequest) {
     order: order.name,
     from: placed.from,
     to: placed.to,
-    note: "Zadarma marca primero al agente y después a este teléfono. Nada se escribe sobre el pedido.",
+    telefonia: telephony,
+    note:
+      telephony === "telnyx"
+        ? "Telnyx marca a este teléfono y, cuando contestas, te une con el agente. Nada se escribe sobre el pedido."
+        : "Zadarma marca primero al agente y después a este teléfono. Nada se escribe sobre el pedido.",
   });
 }

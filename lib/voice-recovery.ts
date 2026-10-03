@@ -26,6 +26,24 @@ export const DIALING_TTL_MINUTES = 3;
  */
 export const IN_PROGRESS_TTL_MINUTES = 5;
 
+/**
+ * Firma de las notas del agente. La de Telnyx la pone `noteOnRecoveryGuide`
+ * cuando la llamada salió por esa línea; «Hoy por asesora» separa los dos
+ * agentes por esta firma (`reproDayActor`).
+ */
+export const VOICE_NOTE_SIGNER = "Agente de voz";
+export const VOICE_NOTE_SIGNER_TELNYX = "Agente de voz (Telnyx)";
+
+/**
+ * Por qué línea sale una llamada del barrido: Telnyx con probabilidad
+ * `share` (0–100), si está configurado; si no, Zadarma. Al azar y por llamada,
+ * para que las dos líneas reciban la misma cola a la misma hora.
+ */
+export function pickTelephony(share: number, telnyxReady: boolean, random: () => number = Math.random): "zadarma" | "telnyx" {
+  if (!telnyxReady || !(share > 0)) return "zadarma";
+  return random() * 100 < share ? "telnyx" : "zadarma";
+}
+
 // ── Producto corto ──────────────────────────────────────────────────────────
 
 const STOP_TAIL = new Set(["de", "del", "para", "con", "y", "la", "el", "los", "las", "en", "a"]);
@@ -349,7 +367,7 @@ export function translateGestion(
   // El prompt pide escribir textual «que no la llamen» en el resumen. Se
   // marca para que el barrido no vuelva a llamar a ese teléfono (§11.8, cond. 9).
   if (pideNoLlamar(`${resumen} ${clean(input.motivo)}`)) extra.no_llamar = true;
-  const noteFor = (prefix: string) => ["Agente de voz", prefix, resumen].filter(Boolean).join(" · ");
+  const noteFor = (prefix: string) => [VOICE_NOTE_SIGNER, prefix, resumen].filter(Boolean).join(" · ");
 
   if (d === "confirma") {
     if (!fechaFutura) {
