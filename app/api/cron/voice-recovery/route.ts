@@ -22,9 +22,12 @@ import {
   realCallsToday,
   salidasSwaypPendientes,
   sweepStaleCalls,
+  telnyxConfig,
   type VoiceStoreSettings,
 } from "@/lib/voice-recovery-server";
+import { pickTelephony } from "@/lib/voice-recovery";
 import { withinVoiceHours } from "@/lib/voice-recovery-queue";
+import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,6 +39,7 @@ interface StoreReport {
   queue?: number;
   excluded?: Record<string, number>;
   called?: string | null;
+  telephony?: "zadarma" | "telnyx";
   error?: string;
 }
 
@@ -60,6 +64,8 @@ async function run(req: NextRequest) {
   // llamadas también: la salida no molesta a nadie y la fecha ya está pactada.
   const salidas = dry ? [] : await salidasSwaypPendientes(admin, now);
   const busyAgents = new Set((await openCalls(admin)).map((c) => c.agent_number));
+  const telnyxShare = env.voiceTelnyxShare();
+  const telnyxReady = !("error" in telnyxConfig());
 
   const reports: StoreReport[] = [];
   for (const store of stores) {
@@ -77,7 +83,10 @@ async function run(req: NextRequest) {
 
       const agentNumber = store.voice_recovery_agent_number?.trim() ?? "";
       const sip = store.voice_recovery_zadarma_sip?.trim() ?? "";
-      if (!agentNumber || !sip) {
+      // Agente Daaph (Zadarma) contra Agente Telnyx: el mismo agente de xAI,
+      // otra línea. Cada llamada se sortea con VOICE_TELNYX_SHARE (MOM §11.8).
+      const telephony = pickTelephony(telnyxShare, telnyxReady);
+      if (!agentNumber || (telephony === "zadarma" && !sip)) {
         report.action = "sin_configuracion";
         continue;
       }
@@ -112,6 +121,7 @@ async function run(req: NextRequest) {
           triggeredBy: null,
           agentNumber,
           sip,
+          telephony,
         },
         now,
       );
@@ -119,6 +129,7 @@ async function run(req: NextRequest) {
         busyAgents.add(agentNumber);
         report.action = "llamada";
         report.called = next.orderName;
+        report.telephony = telephony;
       } else {
         report.action = "error";
         report.error = placed.error;

@@ -3930,6 +3930,35 @@ Reglas de esa tabla:
   voz», o por ser un `reroute` sin actor (las dos filas de la salida Swayp que
   crea el agente). Cada llamada suya es una gestión; su salida suma una
   reprogramada. Otra fila sin actor no se atribuye a nadie (28-09-2026).
+- **Agente Daaph contra Agente Telnyx** (03-10-2026). Es el mismo agente de
+  xAI con el mismo guion y la misma voz. Cambia solo la línea: Daaph llama por
+  Zadarma (callback) y Telnyx por Telnyx Call Control. Así se mide qué línea
+  conecta mejor.
+  - **Cómo llama Telnyx.** Kapta escribe la fila (`telephony = 'telnyx'`) y
+    marca a la clienta con detección de contestadora. Cuando contesta, abre
+    un segundo tramo hacia la puerta SIP de xAI del número de Telnyx y lo une
+    al de ella (`bridge_on_answer`). No usa SIP REFER, que Telnyx cobra por
+    llamada.
+  - **Contestadora, ocupado o sin respuesta.** Se cuelga y se registra «no
+    contesta» al momento, con la causa. No se espera al barrido ni se gasta
+    al agente.
+  - **Mismo número de agente.** Las dos líneas usan el mismo
+    `agent_number`, así que `identificar_llamada` encuentra la llamada igual y
+    nunca hay dos abiertas a la vez.
+  - **Avisos de Telnyx.** Los recibe `/api/webhooks/telnyx`, solo si vienen
+    firmados (Ed25519, `TELNYX_PUBLIC_KEY`). Cada aviso queda en
+    `voice_calls.telephony_response.eventos`, con el tramo, la causa del
+    corte, quién colgó y el resultado de la detección.
+  - **Reparto.** Cada llamada del barrido se sortea: va por Telnyx con
+    probabilidad `VOICE_TELNYX_SHARE` (0–100; 0 = solo pruebas) y, si no,
+    por Zadarma. La prueba manual elige la línea con `telefonia`.
+  - **«Hoy por asesora».** Las notas de una llamada por Telnyx firman
+    «Agente de voz (Telnyx)» y cuentan en la fila **«Agente Telnyx»**; las de
+    Zadarma, en «Agente Daaph». Las dos filas van al final de la tabla.
+  - **Cuándo arranca el reparto.** Mientras Telnyx solo tenga número de EE.
+    UU., queda en pruebas a un teléfono propio: con un +1 la clienta contesta
+    menos y la comparación saldría injusta. El reparto empieza cuando llegue
+    un número de Lima.
 - Todo hecho que escribe lleva en `payload` el `voice_call_id`, y la línea de
   tiempo del drawer lo muestra con actor **«Agente de voz»** y enlace a la
   transcripción. Un intento que no se puede leer después no es historial

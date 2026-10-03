@@ -9,6 +9,8 @@ import type { FenixStockRow } from "@/lib/fenix";
 import { confirmationReminderDueAt } from "@/lib/order-confirmation";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
+  VOICE_NOTE_SIGNER,
+  VOICE_NOTE_SIGNER_TELNYX,
   VOICE_SOURCE,
   buildFicha,
   isStale,
@@ -22,6 +24,7 @@ import {
 } from "@/lib/voice-recovery";
 import { compareVoiceCandidates, voiceRecoveryEligible } from "@/lib/voice-recovery-queue";
 import { requestCallback, zadarmaLocalPeru } from "@/lib/zadarma";
+import { clienteDialBody, dialTelnyx, telnyxPeruE164, type TelnyxConfig } from "@/lib/telnyx";
 import { reenviarGuiaAnulada } from "@/lib/swayp-reenvio";
 import { inspectAuto } from "@/lib/swayp-auto-server";
 import { evaluateAutoDispatch, type AutoSettings } from "@/lib/swayp-auto-policy";
@@ -113,6 +116,21 @@ export async function writeVoiceAttempt(
 }
 
 /**
+ * Con qué nombre firma el agente sus notas en la guía (MOM §11.8). Las dos
+ * líneas compiten con el mismo agente de xAI; «Hoy por asesora» las separa por
+ * esta firma: «Agente de voz» es el Agente Daaph (Zadarma) y «Agente de voz
+ * (Telnyx)» el Agente Telnyx.
+ */
+async function voiceNoteSigner(admin: SupabaseClient, callId: string): Promise<string> {
+  const { data } = await admin.from("voice_calls").select("telephony").eq("id", callId).maybeSingle();
+  return (data as { telephony?: string } | null)?.telephony === "telnyx" ? VOICE_NOTE_SIGNER_TELNYX : VOICE_NOTE_SIGNER;
+}
+
+function firmarNota(note: string, firma: string): string {
+  return note.startsWith(VOICE_NOTE_SIGNER) ? `${firma}${note.slice(VOICE_NOTE_SIGNER.length)}` : note;
+}
+
+/**
  * La misma gestión, anotada en la guía anulada que Envíos muestra (MOM §11.8).
  *
  * El intento vive en el pedido (`order_events`), que es lo que lee el Master.
@@ -143,13 +161,14 @@ async function noteOnRecoveryGuide(
   const guia = (data ?? [])[0] as { id: string } | undefined;
   if (!guia) return;
   const followup = nextContactOn ? `${nextContactOn}T00:00:00Z` : null;
+  const firma = await voiceNoteSigner(admin, call.id);
   const { error } = await admin.from("shipment_calls").insert({
     shipment_id: guia.id,
     store_id: call.store_id,
     agent: null,
     kind: "call",
     new_status: null,
-    note,
+    note: firmarNota(note, firma),
     next_followup_at: followup,
     occurred_at: now.toISOString(),
   });
@@ -175,32 +194,47 @@ export async function sweepStaleCalls(admin: SupabaseClient, now: Date): Promise
   type Row = OpenCall & { store_id: string; order_id: string; mode: "real" | "test" };
   const stale = ((data ?? []) as Row[]).filter((c) => isStale(c, now));
   for (const c of stale) {
-    const r = staleCallResolution(c);
-    // Se cierra ANTES de escribir y solo si seguía abierta: dos barridos a la
-    // vez no registran dos veces (y la v2 es idempotente por operation_id).
-    const { data: closed } = await admin
-      .from("voice_calls")
-      .update({ status: r.status, outcome: r.outcome, ended_at: now.toISOString(), error: r.error })
-      .eq("id", c.id)
-      .in("status", OPEN_STATUSES as unknown as string[])
-      .select("id");
-    if (!r.registerNoAnswer || !closed?.length) continue;
-
     const resumen =
       c.status === "in_progress"
         ? "No contestó: la llamada llegó al agente pero se cortó sin gestión (buzón o cuelgue)."
         : "No contestó: la llamada no llegó al agente.";
-    const action = translateGestion(
-      { disposition: "no_contesta", resumen },
-      { today: voiceDates(now).hoy, canDiscard: false, voiceCallId: c.id },
-    );
-    if (action.kind !== "attempt") continue;
-    const writeError = await writeVoiceAttempt(admin, c, action, now);
-    if (writeError) {
-      await admin.from("voice_calls").update({ status: "failed", error: writeError }).eq("id", c.id);
-    } else {
-      await recomputeOrderMasterSafe(admin, [c.order_id]);
-    }
+    await closeAsNoAnswer(admin, c, resumen, now);
+  }
+}
+
+/**
+ * Cierra una llamada abierta como «no contesta» y, si es real, lo registra
+ * sobre el pedido. La usan el barrido (ventana vencida) y los avisos de
+ * Telnyx (no contestó, ocupado, contestadora), que saben antes que el barrido
+ * que la llamada no va a llegar al agente.
+ */
+export async function closeAsNoAnswer(
+  admin: SupabaseClient,
+  c: Pick<OpenCall, "id" | "status"> & { store_id: string; order_id: string; mode: "real" | "test" },
+  resumen: string,
+  now: Date,
+): Promise<void> {
+  const r = staleCallResolution(c);
+  // Se cierra ANTES de escribir y solo si seguía abierta: dos cierres a la
+  // vez no registran dos veces (y la v2 es idempotente por operation_id).
+  const { data: closed } = await admin
+    .from("voice_calls")
+    .update({ status: r.status, outcome: r.outcome, ended_at: now.toISOString(), error: r.error })
+    .eq("id", c.id)
+    .in("status", OPEN_STATUSES as unknown as string[])
+    .select("id");
+  if (!r.registerNoAnswer || !closed?.length) return;
+
+  const action = translateGestion(
+    { disposition: "no_contesta", resumen },
+    { today: voiceDates(now).hoy, canDiscard: false, voiceCallId: c.id },
+  );
+  if (action.kind !== "attempt") return;
+  const writeError = await writeVoiceAttempt(admin, c, action, now);
+  if (writeError) {
+    await admin.from("voice_calls").update({ status: "failed", error: writeError }).eq("id", c.id);
+  } else {
+    await recomputeOrderMasterSafe(admin, [c.order_id]);
   }
 }
 
@@ -307,6 +341,8 @@ export interface PlaceCallInput {
   triggeredBy: string | null;
   agentNumber: string;
   sip: string;
+  /** Línea por la que sale: Zadarma (Agente Daaph, por defecto) o Telnyx (Agente Telnyx). */
+  telephony?: "zadarma" | "telnyx";
 }
 
 export type PlaceCallResult =
@@ -339,6 +375,7 @@ export async function placeVoiceCall(
       }
     }
   }
+  if (input.telephony === "telnyx") return placeTelnyxCall(admin, input, now);
   const phone = zadarmaLocalPeru(input.phone);
   if (!phone) return { ok: false, status: 400, error: "El teléfono no es un número peruano válido." };
   if (!input.agentNumber.trim() || !input.sip.trim()) {
@@ -411,6 +448,91 @@ export async function placeVoiceCall(
   }
   await admin.from("voice_calls").update({ telephony_response: result.response }).eq("id", callId);
   return { ok: true, callId, from: result.from, to: result.to };
+}
+
+/** La configuración de Telnyx del servidor, o el motivo por el que falta. */
+export function telnyxConfig(): TelnyxConfig | { error: string } {
+  try {
+    return {
+      apiKey: env.telnyxApiKey(),
+      connectionId: env.telnyxConnectionId(),
+      fromNumber: env.telnyxFromNumber(),
+      xaiSipUri: env.telnyxXaiSipUri(),
+    };
+  } catch (err) {
+    return { error: `Falta configurar Telnyx en Vercel: ${(err as Error).message}` };
+  }
+}
+
+/**
+ * Lo mismo que el callback de Zadarma, por Telnyx: fila primero, después el
+ * tramo a la clienta. El tramo a xAI lo abre el aviso `call.answered`
+ * (`app/api/webhooks/telnyx`). Usa el mismo número de agente que Zadarma: el
+ * agente de xAI es uno, `identificar_llamada` lo encuentra igual y el índice
+ * de una llamada abierta por número impide que las dos líneas se pisen.
+ */
+async function placeTelnyxCall(
+  admin: SupabaseClient,
+  input: PlaceCallInput,
+  now: Date,
+): Promise<PlaceCallResult> {
+  const phone = zadarmaLocalPeru(input.phone);
+  const to = telnyxPeruE164(input.phone);
+  if (!phone || !to) return { ok: false, status: 400, error: "El teléfono no es un número peruano válido." };
+  if (!input.agentNumber.trim()) {
+    return { ok: false, status: 400, error: "Falta el número del agente en los ajustes de la tienda." };
+  }
+  const cfg = telnyxConfig();
+  if ("error" in cfg) return { ok: false, status: 500, error: cfg.error };
+
+  await sweepStaleCalls(admin, now);
+
+  const { data: inserted, error: insertError } = await admin
+    .from("voice_calls")
+    .insert({
+      store_id: input.storeId,
+      order_id: input.orderId,
+      mode: input.mode,
+      telephony: "telnyx",
+      agent_number: input.agentNumber.trim(),
+      phone,
+      status: "dialing",
+      dialed_at: now.toISOString(),
+      triggered_by: input.triggeredBy,
+    })
+    .select("id")
+    .single();
+  if (insertError) {
+    const busy = insertError.code === "23505";
+    return {
+      ok: false,
+      status: busy ? 409 : 500,
+      error: busy ? "El agente ya está en otra llamada. Espera a que termine." : insertError.message,
+    };
+  }
+  const callId = (inserted as { id: string }).id;
+
+  const dialed = await dialTelnyx(cfg, clienteDialBody(cfg, callId, to));
+  if (!dialed.ok) {
+    await admin
+      .from("voice_calls")
+      .update({
+        status: "failed",
+        error: dialed.error ?? "Telnyx no marcó.",
+        telephony_response: dialed.response ?? null,
+        ended_at: new Date().toISOString(),
+      })
+      .eq("id", callId);
+    return { ok: false, status: 502, error: dialed.error ?? "Telnyx no marcó.", callId };
+  }
+  await admin
+    .from("voice_calls")
+    .update({
+      provider_call_id: dialed.callControlId,
+      telephony_response: { cliente: dialed.callControlId, eventos: [] },
+    })
+    .eq("id", callId);
+  return { ok: true, callId, from: cfg.fromNumber, to };
 }
 
 // ── La cola del barrido ─────────────────────────────────────────────────────
@@ -750,7 +872,7 @@ export async function crearSalidaSwaypDelAgente(
 
     const r = await reenviarGuiaAnulada(admin, { userId: null, storeId: call.store_id }, anulada.id, {
       nextFollowupAt: new Date(`${gestion.fecha}T00:00:00Z`).toISOString(),
-      note: `Agente de voz: la clienta aceptó el reenvío por teléfono. ${gestion.resumen}`.trim(),
+      note: `${await voiceNoteSigner(admin, call.id)}: la clienta aceptó el reenvío por teléfono. ${gestion.resumen}`.trim(),
     });
     if ("error" in r) return { ok: false, motivo: r.error };
     return { ok: true, guia: r.guideCode, guia_anulada: r.sourceGuide };

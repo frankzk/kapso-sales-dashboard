@@ -1156,11 +1156,20 @@ export function rescheduleGuideCode(
 //
 // El agente de voz (MOM §11.8) escribe con actor nulo: sus notas empiezan con
 // «Agente de voz» y la salida Swayp que crea deja las dos filas `reroute` sin
-// asesora. Esas filas cuentan en una fila propia, «Agente Daaph», al final de
-// la tabla. Cualquier otra fila sin actor sigue fuera: no es de nadie.
+// asesora. Esas filas cuentan en una fila propia, al final de la tabla. Son
+// dos agentes que compiten con el mismo agente de xAI y distinta línea: la
+// nota «Agente de voz (Telnyx)» es el Agente Telnyx y el resto el Agente Daaph
+// (Zadarma). Cualquier otra fila sin actor sigue fuera: no es de nadie.
 
 export const VOICE_AGENT_KEY = "agente_daaph";
 export const VOICE_AGENT_NAME = "Agente Daaph";
+export const VOICE_AGENT_TELNYX_KEY = "agente_telnyx";
+export const VOICE_AGENT_TELNYX_NAME = "Agente Telnyx";
+
+/** ¿Es la fila de un agente de voz (no de una asesora)? */
+export function isVoiceAgentKey(agent: string): boolean {
+  return agent === VOICE_AGENT_KEY || agent === VOICE_AGENT_TELNYX_KEY;
+}
 
 export interface ReproDayCall {
   agent: string | null;
@@ -1173,8 +1182,9 @@ export interface ReproDayCall {
 /** Quién firma la gestión: la asesora, el agente de voz o nadie. */
 export function reproDayActor(c: ReproDayCall): string | null {
   if (c.agent) return c.agent;
-  if (c.kind === "reroute" || (c.note ?? "").startsWith("Agente de voz")) return VOICE_AGENT_KEY;
-  return null;
+  const note = c.note ?? "";
+  if (c.kind !== "reroute" && !note.startsWith("Agente de voz")) return null;
+  return note.includes("Agente de voz (Telnyx)") ? VOICE_AGENT_TELNYX_KEY : VOICE_AGENT_KEY;
 }
 
 export interface ReproDayAgentCount {
@@ -1218,7 +1228,7 @@ export function aggregateReproDay(calls: ReproDayCall[]): ReproDayAgentCount[] {
     .sort(
       (a, b) =>
         // El agente va último: llama a toda la cola y taparía a las asesoras.
-        Number(a.agent === VOICE_AGENT_KEY) - Number(b.agent === VOICE_AGENT_KEY) ||
+        Number(isVoiceAgentKey(a.agent)) - Number(isVoiceAgentKey(b.agent)) ||
         b.gestiones - a.gestiones ||
         b.reprogramadas - a.reprogramadas ||
         b.guias - a.guias ||
