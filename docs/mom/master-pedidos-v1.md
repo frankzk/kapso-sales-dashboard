@@ -6919,6 +6919,34 @@ ellos frenaban siete rutas del 23 al 26/09. Ahora:
   «Sin foto · no se exige (antes del 28/09)» en vez del ícono ámbar de «Falta
   la foto».
 
+**Excepción: lo cargado desde el cuaderno no exige foto (03-10-2026, decisión
+de Frankz).** Alexis todavía no usa la app: sus rutas del 01/10 y del 02/10
+existían en Kapta, con la caja cotejada y recibida, pero nadie reportó las
+paradas desde el teléfono. Se cargaron desde la foto de su hoja, y de ahí no
+sale foto de entrega que pedir.
+
+- Una parada reportada con `reported_by` vacío es una parada **cargada desde
+  el cuaderno**. Es la misma marca del backfill histórico de Liquidaciones 2
+  (§29.12), que la puerta al Master ya eximía de evidencia. La app nunca la
+  deja vacía al reportar.
+- No exige foto para terminar la ruta (`reportedFromNotebook` y
+  `stopsMissingEvidence` en `lib/routes.ts`) ni para aprobar el pago del
+  motorizado (`rider_pay_preview`, 0222). Se paga y se cobra a la tienda como
+  cualquier entrega o rechazo. El Yape sin captura se sigue exigiendo.
+- Quién la cargó no se pierde: queda en `delivery_stop_events.actor`, en el
+  `stop_reported` de la actividad del pedido (`origen: cuaderno`) y en la nota
+  de la parada.
+- En la tabla de la ruta lleva la cámara tachada con «Sin foto · cargada desde
+  el cuaderno». Corregirla desde la app la vuelve un reporte normal, que
+  exige foto.
+- Vocabulario de la hoja de Alexis: EFECTIVO y PAGO POS son entregas; RECHAZO
+  y COBRO CAIDA, «Rechazó el pedido» (se pagan y se cobran, como en su hoja);
+  CAIDA y ANULADO, «Otro» con la palabra en la nota (no se pagan ni se cobran;
+  ANULADO no anula: solo Shopify anula, §9); NO CONTESTO, «No contesta»; REPRO,
+  «Reprogramado». Lo que la hoja trae fuera de la caja del día no se carga
+  como parada: §29.5 exige el cotejo.
+- El paso a paso está en `docs/runbooks/cuaderno-a-rutas.md`.
+
 ### 29.8 Tarifas por distrito y comisión Yape
 
 Grupo GF Courier cobra una tarifa por distrito/zona que **incluye IGV**. Debe
@@ -7034,6 +7062,8 @@ cambia solo: la diferencia se corrige con un adicional o reabriendo la ruta.
   canónico opcional y vigencia. La excepción de distrito gana a su tarifa general.
   Entregado y rechazado por el cliente pagan el mismo importe por punto; los demás
   intentos no pagan automáticamente. Roy acordó S/8.50 por entrega o rechazo.
+  Alexis cobra lo de su hoja desde el 01/10: S/ 10, S/ 13 en Puente Piedra y
+  Carabayllo y S/ 15 en Lurigancho (decisión de Frankz, 03-10-2026).
   No se asigna una tarifa por coincidencia de nombre ni se modifica historia.
 - En Rutas se configuran tarifas personales con `costs.manage` en la organización
   correspondiente. Una nueva tarifa crea una versión y exige motivo. Sin tarifa
