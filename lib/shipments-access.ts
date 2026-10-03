@@ -43,6 +43,7 @@ import { derivedGuideDates, type GuideCallLike } from "@/lib/guide-dates";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { aggregateVoiceScore, type VoiceScoreCall, type VoiceScoreboard } from "@/lib/voice-scoreboard";
 import { productImagesFor } from "@/lib/shopify-product-images";
 import {
   buildShipmentLineage,
@@ -1154,6 +1155,40 @@ export async function getReproTodayByAgent(storeIds: string[]): Promise<ReproDay
     [VOICE_AGENT_ELEVENLABS_KEY]: VOICE_AGENT_ELEVENLABS_NAME,
   };
   return counts.map((c) => ({ ...c, name: voiceNames[c.agent] ?? emails.get(c.agent) ?? c.agent }));
+}
+
+/**
+ * «Agentes de voz: comparación» (MOM §11.8): llamadas reales de hoy y de los
+ * últimos siete días de Lima (hoy incluido), por agente.
+ */
+export async function getVoiceScoreboard(storeIds: string[]): Promise<VoiceScoreboard | null> {
+  if (!storeIds.length) return null;
+  const sb = await createServerSupabase();
+  const { startIso: hoyIso, endIso } = limaCalendarDayBounds();
+  const semanaIso = new Date(Date.parse(hoyIso) - 6 * 86_400_000).toISOString();
+
+  type Row = Omit<VoiceScoreCall, "salidaOk"> & { queued_at: string; salida_ok: boolean | null };
+  const rows: Row[] = [];
+  for (let from = 0; from < MAX_LIST * 4; from += PAGE) {
+    const { data, error } = await sb
+      .from("voice_calls")
+      .select("telephony, provider, started_at, outcome, queued_at, salida_ok:outcome_payload->salida_swayp->ok")
+      .in("store_id", storeIds)
+      .eq("mode", "real")
+      .gte("queued_at", semanaIso)
+      .lt("queued_at", endIso)
+      .order("queued_at", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) return null;
+    const batch = (data as unknown as Row[]) ?? [];
+    rows.push(...batch);
+    if (batch.length < PAGE) break;
+  }
+  const calls = rows.map((r) => ({ ...r, salidaOk: r.salida_ok === true }));
+  return {
+    hoy: aggregateVoiceScore(calls.filter((c) => c.queued_at >= hoyIso)),
+    semana: aggregateVoiceScore(calls),
+  };
 }
 
 async function buildReprogramRows(
