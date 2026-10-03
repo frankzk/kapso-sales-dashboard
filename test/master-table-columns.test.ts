@@ -96,28 +96,43 @@ describe("el recorte del texto", () => {
   });
 });
 
-describe("la tabla usa la geometría, no números sueltos", () => {
-  it("el componente no vuelve a declarar sus propios anchos", () => {
-    // El invariante solo se sostiene si hay UNA definición. Una copia local de
-    // los anchos en el componente volvería a divergir de los offsets el día que
-    // alguien ajuste una columna, y eso no se ve en ninguna prueba de esta
-    // función pura: se ve en pantalla, cizallado.
-    const source = readFileSync(
-      resolve(process.cwd(), "components/orders-master.tsx"),
-      "utf8",
-    );
-    expect(source).toContain("frozenOffsets(multiStore)");
-    expect(source).toContain("frozenCellStyle(");
-    expect(source).not.toMatch(/const FROZEN_W = \{/);
+// El Master dejó las columnas congeladas el 02-10-2026: la tabla compacta
+// (celdas de dos renglones, MOM §25) entra entera en la pantalla y ya no hay
+// scroll horizontal del que proteger el nombre del pedido.
+describe("la tabla del Master entra en la pantalla", () => {
+  const source = readFileSync(
+    resolve(process.cwd(), "components/orders-master.tsx"),
+    "utf8",
+  );
+
+  it("no vuelve a un ancho mínimo ni a columnas congeladas", () => {
+    expect(source).not.toMatch(/min-w-\[1\d{3}px\]/);
+    expect(source).not.toContain("frozenOffsets(");
+    expect(source).toContain("xl:table-fixed");
   });
 
-  it("el nombre del cliente se recorta contra un ancho real", () => {
-    // `truncate` a secas en el `<td>` fue justo lo que no funcionó.
-    const source = readFileSync(
-      resolve(process.cwd(), "components/orders-master.tsx"),
-      "utf8",
-    );
-    expect(source).toContain('frozenTextWidth("cliente")');
-    expect(source).toMatch(/className="block truncate"/);
+  it("ningún dato de las columnas de antes se pierde", () => {
+    for (const field of [
+      "r.order_name",
+      "storeName(r.store_id)",
+      "r.order_created_at",
+      "r.customer_name",
+      "r.customer_phone",
+      "r.region",
+      "r.province",
+      "r.district",
+      "<CoverageBadge coverage={r.coverage} />",
+      "r.last_courier",
+      "r.courier_count",
+      "r.attempt_count",
+      "<MacroStageBadge stage={r.macro_stage} />",
+      "macroSubstageLabel(r.macro_substage)",
+      "r.confirmation_day_count",
+      "<NextContactCell row={r} />",
+      "fmtDate(r.last_movement_at)",
+      "fmtAge(since)",
+    ]) {
+      expect(source).toContain(field);
+    }
   });
 });

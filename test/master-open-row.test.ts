@@ -14,8 +14,9 @@ describe("Master: la fila del drawer abierto se resalta", () => {
 
   it("la fila abierta tiene su propio fondo, distinto del de la casilla marcada", () => {
     expect(board).toContain('aria-current={isOpen ? "true" : undefined}');
-    expect(board).toContain('? "bg-brand-100"');
-    expect(board).toContain('"bg-brand-50/60 hover:bg-slate-50"');
+    expect(board).toContain('? "bg-brand-100/70"');
+    expect(board).toContain('? "bg-brand-50"');
+    expect(board).toContain('"bg-white hover:bg-wash"');
   });
 
   it("el velo del drawer deja ver la tabla", () => {

@@ -16,16 +16,32 @@
 // mantiene el listado anterior en pantalla mientras llega el nuevo en vez de
 // parpadear a vacío.
 
-import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Card, cn, EmptyState, STICKY_HEAD, TABLE_LAYER, TABLE_WRAP_PAGE_X } from "@/components/ui";
+import { cn } from "@/components/ui";
 import {
-  frozenCellStyle,
-  frozenOffsets,
-  frozenTextWidth,
-  type FrozenKey,
-} from "@/lib/master-table-columns";
+  AttentionPill,
+  Badge,
+  Banner,
+  CHECKBOX,
+  ChoiceChip,
+  FIELD,
+  FilterPill,
+  OpsButton,
+  StatusCard,
+  opsButtonClass,
+} from "@/components/ops-ui";
+import { Sheet } from "@/components/filter-sheet";
+import {
+  IconClock,
+  IconDownload,
+  IconPackage,
+  IconSearch,
+  IconTruck,
+  IconUndo,
+  IconX,
+} from "@/components/icons";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { CopyButton } from "@/components/copy-button";
 import { AliclikCoverageProbe } from "@/components/aliclik-coverage-probe";
@@ -33,7 +49,6 @@ import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
 import { OrderClosureDesk } from "@/components/order-closure-desk";
 import { OrderRouteDesk } from "@/components/order-route-desk";
-import { ChecklistFilter } from "@/components/filters";
 import { PickupKeyPanel, ShalomPickupKeyPanel } from "@/components/pickup-key-panel";
 import { TandersGuideModal } from "@/components/tanders-guide-modal";
 import { markTandersLabelGenerated } from "@/app/dashboard/pedidos/tanders-actions";
@@ -156,7 +171,7 @@ import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 // Formato
 // ---------------------------------------------------------------------------
 
-import { fmtDate, fmtDateTime, fmtAge, CoverageBadge, MacroStageBadge } from "@/components/order-master-shared";
+import { fmtDate, fmtDateTime, fmtAge, CoverageBadge, MacroStageBadge, MacroStageDot } from "@/components/order-master-shared";
 import { DRAWER_SECTION_IDS, OrderDrawer, type DrawerSectionId, type DrawerWorkspaceView } from "@/components/order-drawer";
 import { workspaceForDrawerSection } from "@/lib/order-drawer-href";
 import { hasCombinedGuide, type CombinedGuideCourier } from "@/lib/labels/guia-combinada-select";
@@ -339,7 +354,7 @@ export function OrdersMasterBoard({
   // con un conjunto distinto del que se está viendo. Sin `page`: se exporta
   // todo lo filtrado, no la página abierta.
   const [exporting, setExporting] = useState(false);
-  const [exportNote, setExportNote] = useState<string | null>(null);
+  const [exportNote, setExportNote] = useState<{ tone: "warn" | "crit"; text: string } | null>(null);
 
   const downloadExcel = async () => {
     if (exporting) return;
@@ -377,12 +392,13 @@ export function OrdersMasterBoard({
       // incompleto con pinta de completo, que es el peor resultado posible.
       if (res.headers.get("X-Export-Truncated") === "1") {
         const rows = Number(res.headers.get("X-Export-Rows") ?? 0);
-        setExportNote(
-          `El listado supera el máximo por descarga: se exportaron las primeras ${rows.toLocaleString("es-PE")} filas. Acota los filtros para bajar el resto.`,
-        );
+        setExportNote({
+          tone: "warn",
+          text: `El listado supera el máximo por descarga: se exportaron las primeras ${rows.toLocaleString("es-PE")} filas. Acota los filtros para bajar el resto.`,
+        });
       }
     } catch {
-      setExportNote("No se pudo generar el Excel. Vuelve a intentarlo.");
+      setExportNote({ tone: "crit", text: "No se pudo generar el Excel. Vuelve a intentarlo." });
     } finally {
       // Revocar de inmediato cancelaría la descarga en Safari, que lee la URL
       // después del click.
@@ -503,479 +519,334 @@ export function OrdersMasterBoard({
   }, [rows]);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
+  const multiStore = stores.length > 1;
+  const filtering = hasActiveFilters(filters);
+  const moreCount = moreFilterCount(filters);
+  const scope =
+    stores.length === 1
+      ? "de la tienda"
+      : stores.length === 2
+        ? "de las dos tiendas"
+        : `de las ${stores.length.toLocaleString("es-PE")} tiendas`;
+  const goToPage = (p: number) => navigate({ page: p });
+
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold text-slate-900">Master de Pedidos</h1>
-          <p className="text-xs text-slate-500">
-            Estado real de cada pedido de las dos tiendas, con su historial completo.
-          </p>
+    <div className="space-y-6">
+      {/* Título y contexto a la izquierda; búsqueda y estaciones a la derecha.
+          En pantallas más angostas las acciones bajan bajo el título. */}
+      <header className="grid items-start gap-x-6 gap-y-3 min-[1400px]:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Master de Pedidos</h1>
+            {!canEdit && <Badge>Solo lectura</Badge>}
+          </div>
+          <p className="mt-1 text-sm text-ink-500">Estado real de cada pedido {scope}, con su historial completo.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 min-[1400px]:pt-0.5">
+          <MasterSearchInput value={filters.search} onCommit={commitSearch} />
           {canWarehouse && (
-            <Link
-              href="/dashboard/pedidos/almacen"
-              className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-            >
-              <span aria-hidden="true">▣</span>
+            <Link href="/dashboard/pedidos/almacen" className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}>
+              <IconPackage className="text-ink-500" />
               Almacén
             </Link>
           )}
           {canDispatch && (
-            <Link
-              href="/dashboard/pedidos/despacho"
-              className="inline-flex min-h-9 items-center gap-2 rounded-lg bg-slate-900 px-3 text-sm font-medium text-white transition hover:bg-slate-700"
-            >
-              <span aria-hidden="true">▦</span>
+            <Link href="/dashboard/pedidos/despacho" className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}>
+              <IconTruck className="text-ink-500" />
               Almacén · Entregas a couriers
             </Link>
           )}
-          <MasterSearchInput value={filters.search} onCommit={commitSearch} />
-          {!canEdit && (
-            <span className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs text-slate-500">
-              Solo lectura
-            </span>
-          )}
         </div>
-      </div>
+      </header>
 
       {searchActive ? (
-        <Card className="w-fit min-w-full p-0">
-          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
-            <p className="text-sm font-medium text-slate-800">
-              Resultados de búsqueda ({total.toLocaleString("es-PE")})
+        <section aria-label="Resultados de búsqueda" aria-busy={navigating || undefined} className={CARD}>
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
+            <p className="text-sm text-ink-700">
+              <b className="font-semibold tabular-nums text-ink-900">{total.toLocaleString("es-PE")}</b>{" "}
+              {total === 1 ? "resultado" : "resultados"} de búsqueda
             </p>
-            <div className="flex items-center gap-3">
-              <PagerControls
-                page={page}
-                totalPages={totalPages}
-                busy={navigating}
-                onPage={(p) => navigate({ page: p })}
-              />
-              <button onClick={() => commitSearch("")} className="text-xs text-slate-500 hover:underline">
+            <div className="flex flex-wrap items-center gap-2">
+              <PagerControls page={page} totalPages={totalPages} busy={navigating} onPage={goToPage} />
+              <OpsButton variant="ghost" size="sm" onClick={() => commitSearch("")}>
                 Limpiar búsqueda
-              </button>
+              </OpsButton>
             </div>
           </div>
           {searching ? (
-            <p className="p-5 text-sm text-slate-400">Buscando…</p>
+            <p className="border-t border-line px-4 py-8 text-sm text-ink-500 sm:px-5">Buscando…</p>
           ) : listed.length ? (
             <>
               <MasterTable
                 rows={shown}
                 storeName={storeName}
-                multiStore={stores.length > 1}
+                multiStore={multiStore}
                 showConfirmation={view === "por_confirmar"}
                 onOpen={setOpenId}
                 openId={openId}
                 selected={selectedIds}
                 onToggleRow={toggleRow}
                 onToggleAll={toggleAll}
+                busy={navigating}
               />
               <Pager
                 page={page}
+                pageSize={pageSize}
                 totalPages={totalPages}
                 total={total}
                 shown={shown.length}
                 busy={navigating}
-                onPage={(p) => navigate({ page: p })}
+                onPage={goToPage}
               />
             </>
           ) : (
-            <p className="p-5 text-sm text-slate-400">Sin coincidencias.</p>
+            <p className="border-t border-line px-4 py-8 text-sm text-ink-500 sm:px-5">
+              Sin coincidencias. Prueba con el código del pedido, el teléfono o la guía.
+            </p>
           )}
-        </Card>
+        </section>
       ) : (
         <>
           {agencyHasActivity(agency) && (
-            <AgencyStrip
-              summary={agency}
-              filters={filters}
-              onFilter={(next) => patch(next)}
-            />
+            <AgencyLine summary={agency} filters={filters} onFilter={(next) => patch(next)} />
           )}
 
-          <section aria-label="Macroetapas del pedido" className="space-y-2">
-            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
-              <div className="grid min-w-[1040px] grid-cols-[112px_repeat(6,minmax(148px,1fr))] gap-1">
-                {MASTER_VIEWS.map((stage, index) => {
-                  const active = stage.key === view;
-                  const isAll = stage.key === "todos";
-                  return (
-                    <button
-                      key={stage.key}
-                      type="button"
-                      aria-current={active ? "page" : undefined}
-                      onClick={() => navigateStage(stage.key)}
-                      className={cn(
-                        "group flex min-h-14 items-center gap-2 rounded-lg px-3 text-left transition",
-                        active
-                          ? "bg-slate-950 text-white shadow-sm"
-                          : "text-slate-600 hover:bg-slate-50 hover:text-slate-950",
-                        navigating && "opacity-60",
-                      )}
-                    >
-                      {!isAll && (
-                        <span className={cn(
-                          "grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10px] font-bold",
-                          active ? "bg-white/15 text-white" : "bg-slate-100 text-slate-500",
-                        )}>
-                          {String(index).padStart(2, "0")}
-                        </span>
-                      )}
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm font-semibold">{stage.label}</span>
-                        <span className={cn("block text-xs", active ? "text-slate-300" : "text-slate-400")}>
-                          {counts[stage.key].toLocaleString("es-PE")} pedidos
-                        </span>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+          {/* Las macroetapas son la navegación: siete cifras que filtran, con
+              el tono del MOM (§25) en un cuadro que sirve de leyenda de las
+              chapas de la tabla. Debajo, las subetapas de la abierta. */}
+          <section aria-label="Macroetapas del pedido" className="space-y-3">
+            <div role="group" aria-label="Macroetapa" className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+              {MASTER_VIEWS.map((stage) => (
+                <StatusCard
+                  key={stage.key}
+                  label={stage.label}
+                  value={counts[stage.key]}
+                  active={stage.key === view}
+                  onClick={() => navigateStage(stage.key)}
+                  marker={stage.key === "todos" ? undefined : <MacroStageDot stage={stage.key} />}
+                />
+              ))}
             </div>
 
             {view !== "todos" && (
-              <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                <span className="shrink-0 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">
-                  Subetapas
-                </span>
-                <button
-                  type="button"
+              <div role="group" aria-label="Subetapa" className="flex flex-wrap items-center gap-1.5">
+                <span className="mr-1 text-[13px] font-medium text-ink-600">Subetapa</span>
+                <ChoiceChip
+                  label="Todas"
+                  count={counts[view]}
+                  active={substage === null}
                   onClick={() => navigateStage(view)}
-                  className={cn(
-                    "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition",
-                    substage === null
-                      ? "border-slate-950 bg-slate-950 text-white"
-                      : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
-                  )}
-                >
-                  Todas · {counts[view].toLocaleString("es-PE")}
-                </button>
-                {stageSubstages.map((stageSubstage) => {
-                  const count = substageCounts[stageSubstage] ?? 0;
-                  return (
-                    <button
-                      key={stageSubstage}
-                      type="button"
-                      disabled={count === 0}
-                      onClick={() => navigateStage(view, stageSubstage)}
-                      className={cn(
-                        "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition",
-                        substage === stageSubstage
-                          ? "border-brand-600 bg-brand-50 text-brand-700"
-                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
-                        count === 0 && "cursor-not-allowed opacity-40",
-                      )}
-                    >
-                      {macroSubstageLabel(stageSubstage)} · {count.toLocaleString("es-PE")}
-                    </button>
-                  );
-                })}
+                />
+                {stageSubstages.map((stageSubstage) => (
+                  <ChoiceChip
+                    key={stageSubstage}
+                    label={macroSubstageLabel(stageSubstage)}
+                    count={substageCounts[stageSubstage] ?? 0}
+                    active={substage === stageSubstage}
+                    onClick={() => navigateStage(view, stageSubstage)}
+                  />
+                ))}
               </div>
             )}
             {view === "por_confirmar" &&
               (substage === null || substage === "volver_a_contactar") && (
-                <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                  <span className="shrink-0 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">
-                    Fecha pactada
-                  </span>
+                <div role="group" aria-label="Fecha pactada" className="flex flex-wrap items-center gap-1.5">
+                  <span className="mr-1 text-[13px] font-medium text-ink-600">Fecha pactada</span>
                   {([
                     ["", "Todos los plazos", confirmationDueCounts.all],
                     ["vencido", "Vencidos", confirmationDueCounts.vencido],
                     ["hoy", "Hoy", confirmationDueCounts.hoy],
                     ["proximo", "Próximos", confirmationDueCounts.proximo],
                   ] as const).map(([value, label, count]) => (
-                    <button
+                    <ChoiceChip
                       key={value || "todos"}
-                      type="button"
+                      label={label}
+                      count={count}
+                      active={filters.confirmationDue === value}
                       onClick={() => patch({ confirmationDue: value })}
-                      className={cn(
-                        "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition",
-                        filters.confirmationDue === value
-                          ? "border-indigo-600 bg-indigo-50 text-indigo-800"
-                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300",
-                      )}
-                    >
-                      {label} · {count.toLocaleString("es-PE")}
-                    </button>
+                    />
                   ))}
                 </div>
               )}
           </section>
 
-          {/* Filtros */}
-          <div className="flex flex-wrap items-center gap-2">
-            {stores.length > 1 && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-slate-400">Tienda:</span>
-                {stores.map((s) => {
-                  const active = filters.stores.size === 0 || filters.stores.has(s.id);
-                  return (
-                    <button
-                      key={s.id}
-                      onClick={() => toggleStore(s.id)}
-                      className={cn(
-                        "rounded-full border px-2.5 py-1 text-xs font-medium transition",
-                        active
-                          ? "border-brand-200 bg-brand-50 text-brand-700"
-                          : "border-slate-200 bg-white text-slate-400",
-                      )}
-                    >
-                      {s.name}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+          {/* Filtros: píldoras discontinuas que se vuelven sólidas con su valor. */}
+          <div className="space-y-3">
+            <div role="group" aria-label="Filtros" className="flex flex-wrap items-center gap-2">
+              {multiStore && (
+                <FacetPill
+                  label="Tienda"
+                  options={stores.map((s) => ({ value: s.id, label: s.name }))}
+                  selected={filters.stores}
+                  onChange={(next) => patch({ stores: next })}
+                />
+              )}
+              <FacetPill
+                label="Estado operativo"
+                options={facets.operational.map((v) => ({ value: v, label: v }))}
+                selected={filters.operationalStatuses}
+                onChange={(operationalStatuses) => patch({ operationalStatuses })}
+              />
+              <FacetPill
+                label="Courier"
+                options={facets.courier.map((v) => ({ value: v, label: cap(v) }))}
+                selected={filters.couriers}
+                onChange={(couriers) => patch({ couriers })}
+              />
+              {/* Las opciones son fijas, no una faceta: «rechazado» tiene que
+                  poder pedirse aunque hoy no haya ninguno, que es justo cuando
+                  interesa comprobar que no hay ninguno. */}
+              <FacetPill
+                label="Cobro del courier"
+                options={PAYMENT_CHECK_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                selected={filters.paymentChecks}
+                onChange={(paymentChecks) => patch({ paymentChecks })}
+              />
+              <FacetPill
+                label="Región"
+                options={facets.region.map((v) => ({ value: v, label: cap(v) }))}
+                selected={filters.regions}
+                onChange={(regions) => patch({ regions })}
+              />
+              <FacetPill
+                label="Provincia"
+                options={facets.province.map((v) => ({ value: v, label: cap(v) }))}
+                selected={filters.provinces}
+                onChange={(provinces) => patch({ provinces })}
+              />
+              <FacetPill
+                label="Distrito"
+                options={facets.district.map((v) => ({ value: v, label: cap(v) }))}
+                selected={filters.districts}
+                onChange={(districts) => patch({ districts })}
+              />
+              <FacetPill
+                label="Cobertura"
+                options={facets.coverage.map((v) => ({
+                  value: v,
+                  label: ORDER_COVERAGE_LABEL[v as OrderCoverage] ?? v,
+                }))}
+                selected={filters.coverages}
+                onChange={(coverages) => patch({ coverages })}
+              />
+              {facets.pickup.length > 0 && (
+                <FacetPill
+                  label="Agencia"
+                  options={facets.pickup.map((v) => ({ value: v, label: v }))}
+                  selected={filters.pickupStates}
+                  onChange={(pickupStates) => patch({ pickupStates })}
+                />
+              )}
+              {/* Solo donde la columna Gestión se ve. Un filtro por una columna
+                  que no está en pantalla filtraría a ciegas: el usuario vería la
+                  lista encogerse sin nada que se lo explique. El cero se enseña:
+                  saber que nadie está en un paso es información. */}
+              {view === "por_confirmar" && (
+                <FacetPill
+                  label="Gestión"
+                  options={MANAGEMENT_DAY_STEPS.map((step) => ({
+                    value: String(step),
+                    label: managementDayLabel(String(step)),
+                    count: managementDayCounts[step] ?? 0,
+                  }))}
+                  selected={filters.managementDays}
+                  onChange={(managementDays) => patch({ managementDays })}
+                />
+              )}
+              <FilterPill
+                label="Más filtros"
+                active={moreCount > 0}
+                count={moreCount > 0 ? moreCount : undefined}
+                expanded={showMore}
+                onClick={() => setShowMore((v) => !v)}
+                onClear={moreCount > 0 ? () => patch(CLEARED_MORE_FILTERS) : undefined}
+                title="Fechas, modalidad, señales y antigüedad sin movimientos"
+              />
+              {filtering && (
+                <OpsButton variant="ghost" size="sm" onClick={() => navigate({ filters: emptyFilters() })}>
+                  Quitar filtros
+                </OpsButton>
+              )}
+            </div>
 
-            <ChecklistFilter
-              label="Estado operativo"
-              options={facets.operational}
-              selected={filters.operationalStatuses}
-              onChange={(operationalStatuses) => patch({ operationalStatuses })}
-              capitalize={false}
-            />
-            <ChecklistFilter
-              label="Courier"
-              options={facets.courier}
-              selected={filters.couriers}
-              onChange={(couriers) => patch({ couriers })}
-            />
-            {/* Las opciones son fijas, no una faceta: «rechazado» tiene que
-                poder pedirse aunque hoy no haya ninguno, que es justo cuando
-                interesa comprobar que no hay ninguno. */}
-            <ChecklistFilter
-              label="Cobro del courier"
-              options={PAYMENT_CHECK_OPTIONS.map((o) => o.value)}
-              selected={filters.paymentChecks}
-              onChange={(paymentChecks) => patch({ paymentChecks })}
-              capitalize={false}
-              optionLabel={(v) =>
-                PAYMENT_CHECK_OPTIONS.find((o) => o.value === v)?.label ?? v
-              }
-            />
-            <ChecklistFilter
-              label="Región"
-              options={facets.region}
-              selected={filters.regions}
-              onChange={(regions) => patch({ regions })}
-            />
-            <ChecklistFilter
-              label="Provincia"
-              options={facets.province}
-              selected={filters.provinces}
-              onChange={(provinces) => patch({ provinces })}
-            />
-            <ChecklistFilter
-              label="Distrito"
-              options={facets.district}
-              selected={filters.districts}
-              onChange={(districts) => patch({ districts })}
-            />
-            <ChecklistFilter
-              label="Cobertura"
-              options={facets.coverage}
-              selected={filters.coverages}
-              onChange={(coverages) => patch({ coverages })}
-              optionLabel={(value) =>
-                ORDER_COVERAGE_LABEL[value as OrderCoverage] ?? value
-              }
-            />
-            {facets.pickup.length > 0 && (
-              <ChecklistFilter
-                label="Agencia"
-                options={facets.pickup}
-                selected={filters.pickupStates}
-                onChange={(pickupStates) => patch({ pickupStates })}
-                capitalize={false}
+            {showMore && (
+              <MoreFilters
+                filters={filters}
+                onPatch={patch}
+                cycles={view === "por_confirmar" ? cyclesInScope : []}
               />
             )}
-            {/* Solo donde la columna Gestión se ve. Un filtro por una columna
-                que no está en pantalla filtraría a ciegas: el usuario vería la
-                lista encogerse sin nada que se lo explique. */}
-            {view === "por_confirmar" && (
-              <ChecklistFilter
-                label="Gestión"
-                options={MANAGEMENT_DAY_STEPS.map(String)}
-                selected={filters.managementDays}
-                onChange={(managementDays) => patch({ managementDays })}
-                capitalize={false}
-                optionLabel={managementDayLabel}
-                counts={managementDayCounts}
-              />
-            )}
-
-            <button
-              onClick={() => setShowMore((v) => !v)}
-              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
-            >
-              {showMore ? "Menos filtros" : "Más filtros"} ▾
-            </button>
-
-            {hasActiveFilters(filters) && (
-              <button
-                onClick={() => navigate({ filters: emptyFilters() })}
-                className="text-xs text-slate-500 hover:underline"
-              >
-                Limpiar filtros
-              </button>
-            )}
-
-            <span className="ml-auto text-xs text-slate-400">
-              Orden: Fecha de creación · más recientes primero
-            </span>
           </div>
 
-          {showMore && (
-            <Card className="space-y-3 p-4">
-              <div className="grid min-w-0 gap-3 md:grid-cols-2 2xl:grid-cols-4">
-                <DateRange
-                  label="Creación"
-                  from={filters.createdFrom}
-                  to={filters.createdTo}
-                  onChange={(createdFrom, createdTo) => patch({ createdFrom, createdTo })}
-                />
-                <DateRange
-                  label="Despacho"
-                  from={filters.dispatchedFrom}
-                  to={filters.dispatchedTo}
-                  onChange={(dispatchedFrom, dispatchedTo) => patch({ dispatchedFrom, dispatchedTo })}
-                />
-                <DateRange
-                  label="Último movimiento"
-                  from={filters.movementFrom}
-                  to={filters.movementTo}
-                  onChange={(movementFrom, movementTo) => patch({ movementFrom, movementTo })}
-                />
-                <DateRange
-                  label="Entrega"
-                  from={filters.deliveredFrom}
-                  to={filters.deliveredTo}
-                  onChange={(deliveredFrom, deliveredTo) => patch({ deliveredFrom, deliveredTo })}
-                />
-              </div>
-              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
-                <label className="flex items-center gap-1.5">
-                  Modalidad:
-                  <select
-                    value={[...filters.shippingModes][0] ?? ""}
-                    onChange={(e) =>
-                      patch({ shippingModes: e.target.value ? new Set([e.target.value]) : new Set() })
-                    }
-                    className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                  >
-                    <option value="">Todas</option>
-                    <option value="cod">Contraentrega</option>
-                    <option value="agency">Agencia</option>
-                  </select>
-                </label>
-                <Toggle
-                  label="Con comentarios"
-                  checked={filters.withComments}
-                  onChange={(withComments) => patch({ withComments })}
-                />
-                <Toggle
-                  label="Más de un courier"
-                  checked={filters.multiCourier}
-                  onChange={(multiCourier) => patch({ multiCourier })}
-                />
-                <Toggle
-                  label="Más de un intento"
-                  checked={filters.multiAttempt}
-                  onChange={(multiAttempt) => patch({ multiAttempt })}
-                />
-                <label className="flex items-center gap-1.5">
-                  Sin movimientos hace:
-                  <select
-                    value={filters.staleDays}
-                    onChange={(e) => patch({ staleDays: Number(e.target.value) })}
-                    className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                  >
-                    <option value={0}>—</option>
-                    <option value={3}>3 días</option>
-                    <option value={7}>7 días</option>
-                    <option value={15}>15 días</option>
-                    <option value={30}>30 días</option>
-                  </select>
-                </label>
-              </div>
-              {/* El ciclo de recontacto vive acá y no en la fila de los chips:
-                  se toca una vez cada mucho —es un ajuste de tienda, no un
-                  filtro del día— y arriba le robaba un renglón entero a la cola,
-                  que es lo que sí se mira todo el rato. */}
-              {view === "por_confirmar" && cyclesInScope.length > 0 && (
-                <div className="border-t border-slate-100 pt-3">
-                  <ConfirmationCycleControl cycles={cyclesInScope} />
-                </div>
-              )}
-            </Card>
-          )}
-
-          <Card className="w-fit min-w-full p-0">
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+          <section aria-label="Pedidos" aria-busy={navigating || undefined} className={CARD}>
+            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
               {/* El contador dice el TOTAL de la macroetapa, no las 100 de la
                   página: "100 pedidos" a secas hacía creer que no había más. */}
-              <p className="text-sm font-medium text-slate-800">
-                {total.toLocaleString("es-PE")} {total === 1 ? "pedido" : "pedidos"}
+              <p className="text-sm text-ink-700">
+                <b className="font-semibold tabular-nums text-ink-900">{total.toLocaleString("es-PE")}</b>{" "}
+                {total === 1 ? "pedido" : "pedidos"}
                 {total > listed.length && (
-                  <span className="ml-1 text-xs font-normal text-slate-400">
-                    · se muestran {listed.length}
-                  </span>
+                  <span className="text-ink-500"> · se muestran {listed.length.toLocaleString("es-PE")}</span>
                 )}
+                <span className="hidden text-ink-500 sm:inline"> · los más recientes primero</span>
               </p>
-              <div className="flex shrink-0 items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2">
                 <ExportButton
                   busy={exporting}
                   total={total}
                   selected={selectedIds.size}
                   onClick={() => void downloadExcel()}
                 />
-                <PagerControls
-                  page={page}
-                  totalPages={totalPages}
-                  busy={navigating}
-                  onPage={(p) => navigate({ page: p })}
-                />
+                <PagerControls page={page} totalPages={totalPages} busy={navigating} onPage={goToPage} />
               </div>
             </div>
             {exportNote && (
-              <p className="border-b border-amber-200 bg-amber-50 px-5 py-2 text-xs text-amber-800">
-                {exportNote}
-              </p>
+              <Banner tone={exportNote.tone} role="status" className="mx-4 mb-3 sm:mx-5">
+                {exportNote.text}
+              </Banner>
             )}
             {listed.length ? (
               <>
                 <MasterTable
                   rows={listed}
                   storeName={storeName}
-                  multiStore={stores.length > 1}
+                  multiStore={multiStore}
                   showConfirmation={view === "por_confirmar"}
                   onOpen={setOpenId}
                   openId={openId}
                   selected={selectedIds}
                   onToggleRow={toggleRow}
                   onToggleAll={toggleAll}
+                  busy={navigating}
                 />
                 {/* Las vistas por macroetapa nunca tuvieron paginador: se veían
                     las primeras 100 de miles y no había forma de llegar al
                     resto. El paginador solo existía en la vista de búsqueda. */}
                 <Pager
                   page={page}
+                  pageSize={pageSize}
                   totalPages={totalPages}
                   total={total}
                   shown={listed.length}
                   busy={navigating}
-                  onPage={(p) => navigate({ page: p })}
+                  onPage={goToPage}
                 />
               </>
             ) : (
-              <p className="p-5 text-sm text-slate-400">
-                {rows.length ? "Ningún pedido cumple los filtros." : "Todavía no hay pedidos aquí."}
-              </p>
+              <div className="flex flex-col items-start gap-3 border-t border-line px-4 py-8 sm:px-5">
+                <p className="text-sm text-ink-700">
+                  {filtering || substage
+                    ? "Ningún pedido cumple los filtros."
+                    : "Todavía no hay pedidos aquí."}
+                </p>
+                {filtering && (
+                  <OpsButton size="sm" onClick={() => navigate({ filters: emptyFilters() })}>
+                    Quitar filtros
+                  </OpsButton>
+                )}
+              </div>
             )}
-          </Card>
+          </section>
         </>
       )}
 
@@ -1025,13 +896,179 @@ export function OrdersMasterBoard({
   );
 }
 
+/** Tarjeta blanca del mundo de operación (DESIGN.md). Sin `overflow-hidden`:
+ *  recortaría el encabezado pegajoso de la tabla. */
+const CARD = "rounded-lg bg-white shadow-control ring-1 ring-line";
+
+/** Los datos de lugar y courier llegan en minúsculas; se enseñan con mayúscula
+ *  inicial sin tocar el valor que viaja en la URL. */
+const LOWER_WORDS = new Set(["de", "del", "la", "las", "los", "el", "y"]);
+function cap(value: string): string {
+  return value.replace(/(^|[\s(/-])(\p{L}+)/gu, (match, sep: string, word: string, offset: number) =>
+    offset > 0 && LOWER_WORDS.has(word) ? match : sep + word.charAt(0).toUpperCase() + word.slice(1),
+  );
+}
+
+/** Lo que vive en «Más filtros». Cuenta los que están puestos, para que la
+ *  píldora diga que hay filtros aunque el panel esté cerrado. */
+function moreFilterCount(f: MasterFilters): number {
+  return [
+    f.createdFrom || f.createdTo,
+    f.dispatchedFrom || f.dispatchedTo,
+    f.movementFrom || f.movementTo,
+    f.deliveredFrom || f.deliveredTo,
+    f.shippingModes.size > 0,
+    f.withComments,
+    f.multiCourier,
+    f.multiAttempt,
+    f.staleDays > 0,
+  ].filter(Boolean).length;
+}
+
+const CLEARED_MORE_FILTERS: Partial<MasterFilters> = {
+  createdFrom: "",
+  createdTo: "",
+  dispatchedFrom: "",
+  dispatchedTo: "",
+  movementFrom: "",
+  movementTo: "",
+  deliveredFrom: "",
+  deliveredTo: "",
+  shippingModes: new Set(),
+  withComments: false,
+  multiCourier: false,
+  multiAttempt: false,
+  staleDays: 0,
+};
+
+type FacetOption = { value: string; label: string; count?: number };
+
 /**
- * Tira de seguimiento de agencia (§10). Es lo que evita la devolución: entre el
- * 5 % y el 6 % de estos pedidos termina devuelto por no recogerse a tiempo, así
- * que lo accionable es ver cuántos están disponibles y cuántos van a vencer.
- * Cada bloque es un filtro de un clic.
+ * Filtro de varias opciones: píldora que abre una lista con casillas. Cada
+ * casilla filtra al momento (la URL cambia y la base trae la página), como el
+ * desplegable de antes.
  */
-function AgencyStrip({
+function FacetPill({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: FacetOption[];
+  selected: Set<string>;
+  onChange: (next: Set<string>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const pill = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => {
+    setOpen(false);
+    setQuery("");
+  }, []);
+
+  // Un facet vacío o transitoriamente ausente nunca debe tumbar el panel: la
+  // base y la interfaz se despliegan por separado.
+  const safe = (Array.isArray(options) ? options : []).filter(
+    (o) => typeof o.value === "string" && o.value.length > 0,
+  );
+  const labelOf = new Map(safe.map((o) => [o.value, o.label]));
+  const picked = Array.from(selected);
+  const first = picked[0];
+  const value =
+    first === undefined
+      ? null
+      : picked.length === 1
+        ? (labelOf.get(first) ?? first)
+        : `${labelOf.get(first) ?? first} +${picked.length - 1}`;
+  const term = query.trim().toLocaleLowerCase("es");
+  const shown = term ? safe.filter((o) => o.label.toLocaleLowerCase("es").includes(term)) : safe;
+
+  const toggle = (option: string) => {
+    const next = new Set(selected);
+    if (next.has(option)) next.delete(option);
+    else next.add(option);
+    onChange(next);
+  };
+
+  return (
+    <>
+      <FilterPill
+        ref={pill}
+        label={label}
+        value={value}
+        expanded={open}
+        onClick={() => (open ? close() : setOpen(true))}
+        onClear={() => onChange(new Set())}
+        title={picked.length > 1 ? picked.map((v) => labelOf.get(v) ?? v).join(", ") : undefined}
+      />
+      {open && (
+        <Sheet look="ops" title={label} onClose={close} anchored anchorRef={pill}>
+          {safe.length > 8 && (
+            <label className="relative mb-2 block">
+              <span className="sr-only">Buscar en {label.toLocaleLowerCase("es")}</span>
+              <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={`Buscar ${label.toLocaleLowerCase("es")}`}
+                className={cn(FIELD, "h-8 pl-8")}
+              />
+            </label>
+          )}
+          <ul className="-mx-1 grid max-h-72 gap-0.5 overflow-y-auto">
+            {shown.map((o) => (
+              <li key={o.value}>
+                <label className="flex min-h-9 cursor-pointer items-center gap-2.5 rounded-md px-2 text-sm text-ink-700 hover:bg-wash pointer-coarse:min-h-11">
+                  <input
+                    type="checkbox"
+                    className={CHECKBOX}
+                    checked={selected.has(o.value)}
+                    onChange={() => toggle(o.value)}
+                  />
+                  <span className="min-w-0 flex-1 truncate">{o.label}</span>
+                  {o.count != null && (
+                    <span className="shrink-0 text-xs tabular-nums text-ink-500">
+                      {o.count.toLocaleString("es-PE")}
+                    </span>
+                  )}
+                </label>
+              </li>
+            ))}
+            {shown.length === 0 && (
+              <li className="px-2 py-2 text-[13px] text-ink-500">
+                {safe.length ? "Sin coincidencias." : "Todavía no hay opciones."}
+              </li>
+            )}
+          </ul>
+          {selected.size > 0 && (
+            <div className="mt-3 flex items-center justify-between gap-2 border-t border-line pt-3">
+              <span className="text-[13px] tabular-nums text-ink-500">
+                {selected.size} {selected.size === 1 ? "elegido" : "elegidos"}
+              </span>
+              <OpsButton variant="ghost" size="sm" onClick={() => onChange(new Set())}>
+                Quitar selección
+              </OpsButton>
+            </div>
+          )}
+        </Sheet>
+      )}
+    </>
+  );
+}
+
+/**
+ * Seguimiento de agencia (§10). Es lo que evita la devolución: entre el 5 % y
+ * el 6 % de estos pedidos termina devuelto por no recogerse a tiempo, así que
+ * lo accionable es ver cuántos están disponibles y cuántos van a vencer.
+ *
+ * EL RECORRIDO EN CURSO, EN ORDEN FÍSICO, EN UNA SOLA LÍNEA: sale, viaja,
+ * llega, se acerca a vencer, se devuelve. Sin total ni estados terminales
+ * («Entregados», «Devueltos» ya no piden nada). Las dos primeras cifras se
+ * leen; las tres últimas son filtros de un toque.
+ */
+function AgencyLine({
   summary,
   filters,
   onFilter,
@@ -1044,96 +1081,153 @@ function AgencyStrip({
     filters.pickupStates.has("disponible_para_recojo") ||
     filters.pickupStates.has("pendiente_de_recojo");
   const retornoActive = filters.pickupStates.has("retorno_iniciado");
+  const num = (n: number) => <b className="font-semibold tabular-nums text-ink-900">{n.toLocaleString("es-PE")}</b>;
 
   return (
-    <Card className="flex flex-wrap items-center gap-4 p-4">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Envíos por agencia
-        </p>
-        <p className="text-xs text-slate-400">Shalom · Olva — seguimiento del recojo</p>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <p className="min-w-0 text-[13px] leading-5 text-ink-500">
+        <span className="font-semibold text-ink-700">Envíos por agencia</span> · Shalom y Olva ·{" "}
+        {num(summary.pendienteDeEnvio)} {summary.pendienteDeEnvio === 1 ? "pendiente" : "pendientes"} de envío ·{" "}
+        {num(summary.enTransito)} en tránsito
+      </p>
+      <div role="group" aria-label="Recojo en agencia" className="flex flex-wrap items-center gap-2 lg:ml-auto">
+        <AttentionPill
+          icon={IconPackage}
+          label="Disponibles para recojo"
+          count={summary.disponibles}
+          active={disponiblesActive}
+          hint="Ya llegaron a la agencia y esperan al cliente. Toca para listarlos."
+          onClick={() =>
+            onFilter({
+              pickupStates: disponiblesActive
+                ? new Set()
+                : new Set(["disponible_para_recojo", "pendiente_de_recojo"]),
+              expiringSoon: false,
+            })
+          }
+        />
+        <AttentionPill
+          icon={IconClock}
+          label="Próximos a vencer"
+          count={summary.proximosAVencer}
+          active={filters.expiringSoon}
+          hint="El plazo de recojo está por vencer: si nadie recoge, la agencia lo devuelve."
+          onClick={() => onFilter({ expiringSoon: !filters.expiringSoon, pickupStates: new Set() })}
+        />
+        <AttentionPill
+          icon={IconUndo}
+          label="Retorno iniciado"
+          count={summary.retornoIniciado}
+          active={retornoActive}
+          hint="La agencia ya inició la devolución."
+          onClick={() =>
+            onFilter({
+              pickupStates: retornoActive ? new Set() : new Set(["retorno_iniciado"]),
+              expiringSoon: false,
+            })
+          }
+        />
       </div>
-      {/* EL RECORRIDO EN CURSO, EN ORDEN FÍSICO, EN UNA SOLA LÍNEA.
-          Este panel existe para ver lo que está EN CURSO, así que no lleva
-          total ni estados terminales: «Entregados» y «Devueltos» son pedidos
-          que ya no piden nada y solo diluyen los que sí. El orden es el del
-          paquete —sale, viaja, llega, se acerca a vencer, se devuelve— para que
-          se lea como un embudo y no como cinco cifras sueltas. */}
-      <AgencyStat label="Pendiente de envío" value={summary.pendienteDeEnvio} />
-      <AgencyStat label="En tránsito" value={summary.enTransito} />
-      <AgencyStat
-        label="Disponibles para recojo"
-        value={summary.disponibles}
-        active={disponiblesActive}
-        onClick={() =>
-          onFilter({
-            pickupStates: disponiblesActive
-              ? new Set()
-              : new Set(["disponible_para_recojo", "pendiente_de_recojo"]),
-            expiringSoon: false,
-          })
-        }
-      />
-      <AgencyStat
-        label="Próximos a vencer"
-        value={summary.proximosAVencer}
-        tone={summary.proximosAVencer > 0 ? "warning" : undefined}
-        active={filters.expiringSoon}
-        onClick={() => onFilter({ expiringSoon: !filters.expiringSoon, pickupStates: new Set() })}
-      />
-      <AgencyStat
-        label="Retorno iniciado"
-        value={summary.retornoIniciado}
-        tone={summary.retornoIniciado > 0 ? "warning" : undefined}
-        active={retornoActive}
-        onClick={() =>
-          onFilter({
-            pickupStates: retornoActive ? new Set() : new Set(["retorno_iniciado"]),
-            expiringSoon: false,
-          })
-        }
-      />
-    </Card>
+    </div>
   );
 }
 
-function AgencyStat({
-  label,
-  value,
-  tone,
-  active,
-  onClick,
+/** El panel de «Más filtros»: fechas, modalidad, señales y el ciclo de recontacto. */
+function MoreFilters({
+  filters,
+  onPatch,
+  cycles,
 }: {
-  label: string;
-  value: number;
-  tone?: "warning" | "danger";
-  active?: boolean;
-  onClick?: () => void;
+  filters: MasterFilters;
+  onPatch: (next: Partial<MasterFilters>) => void;
+  cycles: ConfirmationCycleOption[];
 }) {
-  const body = (
-    <>
-      <p
-        className={cn(
-          "text-xl font-semibold",
-          tone === "danger" ? "text-red-700" : tone === "warning" ? "text-amber-700" : "text-slate-900",
-        )}
-      >
-        {value}
-      </p>
-      <p className="text-xs text-slate-500">{label}</p>
-    </>
-  );
-  if (!onClick) return <div className="min-w-[7rem]">{body}</div>;
   return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "min-w-[7rem] rounded-lg px-2 py-1 text-left transition hover:bg-slate-50",
-        active && "bg-brand-50 ring-1 ring-brand-200",
+    <div className={cn(CARD, "space-y-5 p-4 sm:p-5")}>
+      <div className="grid min-w-0 gap-4 md:grid-cols-2 2xl:grid-cols-4">
+        <DateRange
+          label="Creación"
+          from={filters.createdFrom}
+          to={filters.createdTo}
+          onChange={(createdFrom, createdTo) => onPatch({ createdFrom, createdTo })}
+        />
+        <DateRange
+          label="Despacho"
+          from={filters.dispatchedFrom}
+          to={filters.dispatchedTo}
+          onChange={(dispatchedFrom, dispatchedTo) => onPatch({ dispatchedFrom, dispatchedTo })}
+        />
+        <DateRange
+          label="Último movimiento"
+          from={filters.movementFrom}
+          to={filters.movementTo}
+          onChange={(movementFrom, movementTo) => onPatch({ movementFrom, movementTo })}
+        />
+        <DateRange
+          label="Entrega"
+          from={filters.deliveredFrom}
+          to={filters.deliveredTo}
+          onChange={(deliveredFrom, deliveredTo) => onPatch({ deliveredFrom, deliveredTo })}
+        />
+      </div>
+      <div className="flex flex-wrap items-end gap-x-6 gap-y-4">
+        <label className="grid gap-1.5">
+          <span className="text-[13px] font-medium text-ink-700">Modalidad</span>
+          <select
+            value={[...filters.shippingModes][0] ?? ""}
+            onChange={(e) =>
+              onPatch({ shippingModes: e.target.value ? new Set([e.target.value]) : new Set() })
+            }
+            className={cn(FIELD, "w-44 pointer-coarse:h-11")}
+          >
+            <option value="">Todas</option>
+            <option value="cod">Contraentrega</option>
+            <option value="agency">Agencia</option>
+          </select>
+        </label>
+        <label className="grid gap-1.5">
+          <span className="text-[13px] font-medium text-ink-700">Sin movimientos hace</span>
+          <select
+            value={filters.staleDays}
+            onChange={(e) => onPatch({ staleDays: Number(e.target.value) })}
+            className={cn(FIELD, "w-36 pointer-coarse:h-11")}
+          >
+            <option value={0}>Sin filtro</option>
+            <option value={3}>3 días</option>
+            <option value={7}>7 días</option>
+            <option value={15}>15 días</option>
+            <option value={30}>30 días</option>
+          </select>
+        </label>
+        <fieldset className="flex flex-wrap items-center gap-x-5">
+          <legend className="sr-only">Señales del pedido</legend>
+          <Toggle
+            label="Con comentarios"
+            checked={filters.withComments}
+            onChange={(withComments) => onPatch({ withComments })}
+          />
+          <Toggle
+            label="Más de un courier"
+            checked={filters.multiCourier}
+            onChange={(multiCourier) => onPatch({ multiCourier })}
+          />
+          <Toggle
+            label="Más de un intento"
+            checked={filters.multiAttempt}
+            onChange={(multiAttempt) => onPatch({ multiAttempt })}
+          />
+        </fieldset>
+      </div>
+      {/* El ciclo de recontacto vive acá y no en la fila de los chips: se toca
+          una vez cada mucho —es un ajuste de tienda, no un filtro del día— y
+          arriba le robaba un renglón entero a la cola, que es lo que sí se mira
+          todo el rato. */}
+      {cycles.length > 0 && (
+        <div className="border-t border-line pt-4">
+          <ConfirmationCycleControl cycles={cycles} />
+        </div>
       )}
-    >
-      {body}
-    </button>
+    </div>
   );
 }
 
@@ -1147,12 +1241,12 @@ function Toggle({
   onChange: (next: boolean) => void;
 }) {
   return (
-    <label className="flex cursor-pointer items-center gap-1.5">
+    <label className="flex min-h-9 cursor-pointer items-center gap-2 text-sm text-ink-700 pointer-coarse:min-h-11">
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="h-3.5 w-3.5"
+        className={CHECKBOX}
       />
       {label}
     </label>
@@ -1171,37 +1265,28 @@ function DateRange({
   onChange: (from: string, to: string) => void;
 }) {
   return (
-    <fieldset className="min-w-0 space-y-1.5">
-      <legend className="text-xs text-slate-500">{label}</legend>
-      <div className="grid min-w-0 grid-cols-2 gap-2">
-        <label className="min-w-0 space-y-1">
-          <span className="block text-[11px] text-slate-400">Desde</span>
-          <input
-            type="date"
-            value={from}
-            onChange={(e) => onChange(e.target.value, to)}
-            className="block min-w-0 w-full max-w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-700"
-          />
-        </label>
-        <label className="min-w-0 space-y-1">
-          <span className="block text-[11px] text-slate-400">Hasta</span>
-          <input
-            type="date"
-            value={to}
-            onChange={(e) => onChange(from, e.target.value)}
-            className="block min-w-0 w-full max-w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-700"
-          />
-        </label>
+    <fieldset className="min-w-0">
+      <legend className="mb-1.5 text-[13px] font-medium text-ink-700">{label}</legend>
+      <div className="flex min-w-0 items-center gap-2">
+        <input
+          type="date"
+          value={from}
+          aria-label={`${label}: desde`}
+          onChange={(e) => onChange(e.target.value, to)}
+          className={cn(FIELD, "min-w-0 flex-1 px-2.5 tabular-nums pointer-coarse:h-11")}
+        />
+        <span aria-hidden className="text-ink-500">–</span>
+        <input
+          type="date"
+          value={to}
+          aria-label={`${label}: hasta`}
+          onChange={(e) => onChange(from, e.target.value)}
+          className={cn(FIELD, "min-w-0 flex-1 px-2.5 tabular-nums pointer-coarse:h-11")}
+        />
       </div>
     </fieldset>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Tabla (§14)
-// ---------------------------------------------------------------------------
-
-
 
 /**
  * Barra de acciones en lote. Aparece solo cuando hay pedidos marcados.
@@ -1471,104 +1556,119 @@ function BulkBar({
     }
   };
 
+  const LABEL = "grid gap-1 text-xs font-medium text-ink-600";
+
   return (
-    <div className="sticky bottom-4 z-30 mx-auto flex w-fit max-w-full flex-col gap-2 rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-white shadow-xl">
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="text-sm font-semibold">
-          {count} {count === 1 ? "pedido seleccionado" : "pedidos seleccionados"}
+    <div
+      role="region"
+      aria-label="Acciones en lote"
+      className="sticky bottom-4 z-30 mx-auto flex w-full max-w-5xl flex-col gap-3 rounded-lg bg-white p-3 shadow-pop ring-1 ring-line sm:w-fit sm:px-4"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="mr-1 text-sm font-semibold text-ink-900">
+          <span className="tabular-nums">{count.toLocaleString("es-PE")}</span>{" "}
+          {count === 1 ? "pedido seleccionado" : "pedidos seleccionados"}
         </span>
-        <button
-          onClick={download}
-          disabled={busy}
-          className="rounded-lg bg-white px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-slate-100 disabled:opacity-50"
-        >
+        <OpsButton variant="primary" size="sm" onClick={download} disabled={busy} className="pointer-coarse:h-11">
           {busy ? "Trabajando…" : "Descargar rótulos (PDF)"}
-        </button>
+        </OpsButton>
         {/* Solo con algún pedido de Tanders o Shalom: los demás couriers no
             tienen guía combinada, y el botón no debe prometer lo que no hay. */}
         {combinedCount > 0 && (
-          <button
+          <OpsButton
+            size="sm"
             onClick={downloadCombined}
             disabled={busy}
             title="El rótulo del courier y el interno en un papel: Tanders en A4, Shalom en etiqueta. Un PDF por courier."
-            className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+            className="pointer-coarse:h-11"
           >
             Guías combinadas (PDF){combinedCount < count ? ` · ${combinedCount}` : ""}
-          </button>
+          </OpsButton>
         )}
         {canEdit && (
-          <button
+          <OpsButton
+            size="sm"
+            aria-expanded={showCreate}
             onClick={() => {
               reset();
+              setShowStatus(false);
               setShowCreate((v) => !v);
             }}
             disabled={busy}
-            className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+            className="pointer-coarse:h-11"
           >
             {showCreate ? "Cancelar" : "Forzar courier…"}
-          </button>
+          </OpsButton>
         )}
         {canEdit && (
-          <button
+          <OpsButton
+            size="sm"
+            aria-expanded={showStatus}
             onClick={() => {
               reset();
+              setShowCreate(false);
               setShowStatus((v) => !v);
             }}
             disabled={busy}
-            className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+            className="pointer-coarse:h-11"
           >
             {showStatus ? "Cancelar" : "Registrar estado…"}
-          </button>
+          </OpsButton>
         )}
-        <button
+        <OpsButton
+          variant="ghost"
+          size="sm"
+          aria-expanded={showPicked}
           onClick={() => setShowPicked((v) => !v)}
-          className="text-xs text-slate-300 hover:underline"
+          className="pointer-coarse:h-11"
         >
           {showPicked ? "Ocultar" : "Ver"} selección
-        </button>
-        <button onClick={onClear} className="text-xs text-slate-300 hover:underline">
+        </OpsButton>
+        <OpsButton variant="ghost" size="sm" onClick={onClear} className="pointer-coarse:h-11">
           Limpiar
-        </button>
+        </OpsButton>
       </div>
 
       {/* La selección sobrevive a las búsquedas, así que casi siempre habrá
           pedidos elegidos que no están en pantalla. Poder verlos y sacar
           cualquiera es lo que impide imprimir una tanda a ciegas. */}
       {offscreen > 0 && !showPicked && (
-        <p className="text-[11px] text-slate-400">
+        <p className="text-[13px] text-ink-500">
           {offscreen} de los seleccionados {offscreen === 1 ? "no está" : "no están"} en esta
           búsqueda. Siguen contando para el PDF.
         </p>
       )}
       {showPicked && (
-        <div className="flex flex-wrap gap-1.5 border-t border-slate-700 pt-2">
+        <ul aria-label="Pedidos seleccionados" className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto border-t border-line pt-3">
           {Array.from(selectedIds).map((orderId) => (
-            <button
-              key={orderId}
-              onClick={() => onToggleRow(orderId)}
-              title="Quitar de la selección"
-              className="inline-flex items-center gap-1.5 rounded-full bg-slate-800 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-slate-700"
-            >
-              {orderNames.get(orderId) ?? orderId}
-              <span aria-hidden className="text-slate-400">×</span>
-            </button>
+            <li key={orderId}>
+              <button
+                type="button"
+                onClick={() => onToggleRow(orderId)}
+                aria-label={`Quitar ${orderNames.get(orderId) ?? orderId} de la selección`}
+                className="inline-flex h-7 items-center gap-1 rounded-full bg-wash pl-2.5 pr-1.5 text-xs font-medium text-ink-700 ring-1 ring-inset ring-line-strong transition-colors hover:text-ink-900 pointer-coarse:h-11"
+              >
+                {orderNames.get(orderId) ?? orderId}
+                <IconX aria-hidden className="size-3.5 text-ink-500" />
+              </button>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
 
       {showCreate && (
-        <div className="flex flex-wrap items-end gap-2 border-t border-slate-700 pt-2">
-          <p className="w-full text-[11px] text-slate-400">
+        <div className="flex flex-wrap items-end gap-3 border-t border-line pt-3">
+          <p className="max-w-2xl basis-full text-[13px] leading-5 text-ink-500">
             Normalmente no hace falta: «Descargar rótulos» ya crea la salida y el courier se fija
             en despacho. Usa esto para forzar un courier concreto (Olva valida su adelanto) o para
             crear una salida adicional con motivo.
           </p>
-          <label className="text-[11px] text-slate-300">
+          <label className={LABEL}>
             Courier
             <select
               value={courier}
               onChange={(e) => setCourier(e.target.value as ManualRouteCourier)}
-              className="mt-0.5 block rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+              className={cn(FIELD, "h-8 w-auto pointer-coarse:h-11")}
             >
               {BULK_COURIERS.map((c) => (
                 <option key={c.key} value={c.key}>
@@ -1577,50 +1677,48 @@ function BulkBar({
               ))}
             </select>
           </label>
-          <label className="text-[11px] text-slate-300">
+          <label className={LABEL}>
             Sale el
             <input
               type="date"
               value={dispatchDate}
               onChange={(e) => setDispatchDate(e.target.value)}
-              className="mt-0.5 block rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+              className={cn(FIELD, "h-8 w-auto tabular-nums pointer-coarse:h-11")}
             />
           </label>
-          <label className="text-[11px] text-slate-300">
+          <label className={LABEL}>
             Motivo (si el pedido ya tiene una salida activa)
             <input
               value={note}
               onChange={(e) => setNote(e.target.value)}
               placeholder="Opcional"
-              className="mt-0.5 block w-56 rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+              className={cn(FIELD, "h-8 w-56 pointer-coarse:h-11")}
             />
           </label>
-          <button
-            onClick={createOutputs}
-            disabled={busy}
-            className="rounded-lg bg-white px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-slate-100 disabled:opacity-50"
-          >
+          <OpsButton variant="primary" size="sm" onClick={createOutputs} disabled={busy} className="pointer-coarse:h-11">
             {busy ? "Creando…" : `Crear ${count} salida${count === 1 ? "" : "s"} e imprimir`}
-          </button>
+          </OpsButton>
         </div>
       )}
 
       {showStatus && (
-        <div className="flex flex-wrap items-end gap-2 border-t border-slate-700 pt-2">
+        <div className="flex flex-wrap items-end gap-3 border-t border-line pt-3">
           {/* El aviso no es decorativo: un override CONGELA el pedido frente al
               recálculo. Aplicado a cincuenta de golpe, cincuenta pedidos dejan
               de seguir a su guía, y quien lo hace tiene que saberlo ANTES. */}
-          <p className="w-full max-w-xl text-[11px] leading-4 text-amber-300">
-            Queda como cambio manual y <strong>congela</strong> el pedido: deja de seguir a su guía
-            hasta que alguien lo vuelva a mover a mano. Úsalo en pedidos ya cerrados, no en los que
-            siguen en movimiento.
-          </p>
-          <label className="text-[11px] text-slate-300">
+          <div className="basis-full">
+            <Banner tone="warn" className="max-w-2xl">
+              Queda como cambio manual y <strong className="font-semibold">congela</strong> el pedido: deja de
+              seguir a su guía hasta que alguien lo vuelva a mover a mano. Úsalo en pedidos ya cerrados, no en
+              los que siguen en movimiento.
+            </Banner>
+          </div>
+          <label className={LABEL}>
             Estado
             <select
               value={bulkGeneral}
               onChange={(e) => setBulkGeneral(e.target.value as GeneralStatus)}
-              className="mt-0.5 block rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+              className={cn(FIELD, "h-8 w-auto pointer-coarse:h-11")}
             >
               {GENERAL_STATUSES.map((s) => (
                 <option key={s.code} value={s.code}>
@@ -1629,12 +1727,12 @@ function BulkBar({
               ))}
             </select>
           </label>
-          <label className="text-[11px] text-slate-300">
+          <label className={LABEL}>
             Detalle
             <select
               value={bulkOperational}
               onChange={(e) => setBulkOperational(e.target.value)}
-              className="mt-0.5 block rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+              className={cn(FIELD, "h-8 w-auto pointer-coarse:h-11")}
             >
               {bulkOperationalOptions.map((o) => (
                 <option key={o.code} value={o.code}>
@@ -1643,47 +1741,43 @@ function BulkBar({
               ))}
             </select>
           </label>
-          <label className="text-[11px] text-slate-300">
+          <label className={LABEL}>
             Motivo (obligatorio si el pedido ya estaba cerrado)
             <input
               value={bulkReason}
               onChange={(e) => setBulkReason(e.target.value)}
               placeholder="Opcional"
-              className="mt-0.5 block w-56 rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+              className={cn(FIELD, "h-8 w-56 pointer-coarse:h-11")}
             />
           </label>
-          <label className="text-[11px] text-slate-300">
+          <label className={LABEL}>
             Comentario
             <input
               value={bulkComment}
               onChange={(e) => setBulkComment(e.target.value)}
               placeholder="PAGADO"
-              className="mt-0.5 block w-44 rounded-lg border border-slate-600 bg-slate-900 px-2 py-1.5 text-sm text-white"
+              className={cn(FIELD, "h-8 w-44 pointer-coarse:h-11")}
             />
           </label>
-          <button
-            onClick={applyStatus}
-            disabled={busy}
-            className="rounded-lg bg-white px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-slate-100 disabled:opacity-50"
-          >
+          <OpsButton variant="primary" size="sm" onClick={applyStatus} disabled={busy} className="pointer-coarse:h-11">
             {busy
               ? "Aplicando…"
               : `Aplicar a ${count} pedido${count === 1 ? "" : "s"}`}
-          </button>
+          </OpsButton>
         </div>
       )}
 
-      {error && <p className="max-w-lg text-xs text-red-300">{error}</p>}
-      {notice && <p className="max-w-lg text-xs text-emerald-300">{notice}</p>}
+      {error && <p role="alert" className="max-w-2xl text-[13px] leading-5 text-crit-fg">{error}</p>}
+      {notice && <p role="status" className="max-w-2xl text-[13px] leading-5 text-ok-fg">{notice}</p>}
       {failures.length > 0 && (
-        <details className="max-w-lg text-xs text-amber-300">
-          <summary className="cursor-pointer">
+        <details className="max-w-2xl text-[13px] leading-5 text-ink-700">
+          <summary className="cursor-pointer font-medium text-warn-fg">
             {failures.length} pedido{failures.length === 1 ? "" : "s"} con problemas — ver por qué
           </summary>
-          <ul className="mt-1 space-y-0.5">
+          <ul className="mt-1.5 space-y-0.5">
             {failures.map((f) => (
               <li key={f.orderId}>
-                <span className="font-medium">{orderNames.get(f.orderId) ?? f.orderId}</span>:{" "}
+                <span className="font-medium text-ink-900">{orderNames.get(f.orderId) ?? f.orderId}</span>:{" "}
                 {f.error}
               </li>
             ))}
@@ -1723,17 +1817,15 @@ function ConfirmationCycleControl({ cycles }: { cycles: ConfirmationCycleOption[
   if (!cycles.length) return null;
 
   const label = (
-    <span className="shrink-0 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">
-      Ciclo sin fecha pactada
-    </span>
+    <span className="shrink-0 text-[13px] font-medium text-ink-700">Ciclo sin fecha pactada</span>
   );
 
   if (cycles.length > 1) {
     return (
-      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-500">
         {label}
-        <span>{cycles.map((c) => `${c.storeName} ${c.days} d`).join(" · ")}</span>
-        <span className="text-slate-400">— filtra por tienda para cambiarlo</span>
+        <span className="tabular-nums text-ink-700">{cycles.map((c) => `${c.storeName} ${c.days} d`).join(" · ")}</span>
+        <span>— filtra por tienda para cambiarlo</span>
       </div>
     );
   }
@@ -1741,10 +1833,10 @@ function ConfirmationCycleControl({ cycles }: { cycles: ConfirmationCycleOption[
   const cycle = cycles[0]!;
   if (!cycle.canEdit) {
     return (
-      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-500">
         {label}
-        <span className="font-medium text-slate-700">{cycleLabel(cycle.days)}</span>
-        <span className="text-slate-400">— lo cambia un owner o admin de la tienda</span>
+        <span className="font-medium text-ink-900">{cycleLabel(cycle.days)}</span>
+        <span>— lo cambia un owner o admin de la tienda</span>
       </div>
     );
   }
@@ -1773,46 +1865,46 @@ function ConfirmationCycleSelect({
     : [...CYCLE_CHOICES, days].sort((a, b) => a - b);
 
   return (
-    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-      {label}
-      <select
-        value={days}
-        disabled={pending}
-        onChange={(e) => {
-          const next = Number(e.target.value);
-          if (next === days) return;
-          const previous = days;
-          setDays(next);
-          setFeedback(null);
-          startTransition(async () => {
-            const state = await setStoreConfirmationCycle(cycle.storeId, next);
-            setFeedback(state);
-            if (state.error) {
-              setDays(previous);
-              return;
-            }
-            // Los chips de «Fecha pactada» se cuentan en el servidor: sin
-            // refrescar, el ciclo nuevo no se vería en los números de al lado,
-            // que es justo lo que este control tiene que dejar ver.
-            router.refresh();
-          });
-        }}
-        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 disabled:opacity-50"
-      >
-        {choices.map((option) => (
-          <option key={option} value={option}>
-            {cycleLabel(option)}
-          </option>
-        ))}
-      </select>
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[13px] text-ink-500">
+      <label className="flex items-center gap-2.5">
+        {label}
+        <select
+          value={days}
+          disabled={pending}
+          onChange={(e) => {
+            const next = Number(e.target.value);
+            if (next === days) return;
+            const previous = days;
+            setDays(next);
+            setFeedback(null);
+            startTransition(async () => {
+              const state = await setStoreConfirmationCycle(cycle.storeId, next);
+              setFeedback(state);
+              if (state.error) {
+                setDays(previous);
+                return;
+              }
+              // Los chips de «Fecha pactada» se cuentan en el servidor: sin
+              // refrescar, el ciclo nuevo no se vería en los números de al lado,
+              // que es justo lo que este control tiene que dejar ver.
+              router.refresh();
+            });
+          }}
+          className={cn(FIELD, "h-8 w-auto pointer-coarse:h-11")}
+        >
+          {choices.map((option) => (
+            <option key={option} value={option}>
+              {cycleLabel(option)}
+            </option>
+          ))}
+        </select>
+      </label>
       {feedback?.error ? (
-        <span className="text-rose-600">{feedback.error}</span>
+        <span role="alert" className="text-crit-fg">{feedback.error}</span>
       ) : feedback?.notice ? (
-        <span className="text-emerald-700">{feedback.notice}</span>
+        <span role="status" className="text-ok-fg">{feedback.notice}</span>
       ) : (
-        <span className="text-slate-400">
-          Sin fecha pactada, el pedido vuelve a «Hoy» cada {cycleLabel(days)}.
-        </span>
+        <span>Sin fecha pactada, el pedido vuelve a «Hoy» cada {cycleLabel(days)}.</span>
       )}
     </div>
   );
@@ -1831,31 +1923,62 @@ function ConfirmationCycleSelect({
 function NextContactCell({ row, now }: { row: OrderMasterRow; now?: string }) {
   const today = limaDayKey(now ?? new Date().toISOString());
   if (row.confirmation_next_contact_on) {
-    return <>{fmtDate(`${row.confirmation_next_contact_on}T12:00:00.000Z`)}</>;
+    return <ContactLines main={fmtDate(`${row.confirmation_next_contact_on}T12:00:00.000Z`)} />;
   }
   const reminder = row.confirmation_reminder_due_at;
   // El recordatorio manda siempre que exista, también uno de días atrás: ese es
   // un reintento que nadie hizo y su hora, ya pasada, es justo lo que hay que
   // ver. La celda tiene que decir lo mismo que la cola (`confirmationQueueBucket`).
-  if (reminder) return <>{fmtDateTime(reminder)}</>;
+  if (reminder) return <ContactLines main={fmtDateTime(reminder)} />;
   const cycle = row.confirmation_cycle_due_on;
   if (!cycle) {
     // Sin fecha, sin recordatorio y sin ciclo: nunca se le ha llamado, y la
     // primera llamada toca hoy. La celda dice lo mismo que la cola.
-    return (
-      <span className="inline-flex flex-col leading-tight">
-        <span>Hoy</span>
-        <span className="text-[11px] text-slate-400">primera llamada</span>
-      </span>
-    );
+    return <ContactLines main="Hoy" note="primera llamada" />;
   }
   return (
-    <span className="inline-flex flex-col leading-tight">
-      <span>{cycle <= today ? "Hoy" : fmtDate(`${cycle}T12:00:00.000Z`)}</span>
-      <span className="text-[11px] text-slate-400">ciclo automático</span>
+    <ContactLines
+      main={cycle <= today ? "Hoy" : fmtDate(`${cycle}T12:00:00.000Z`)}
+      note="ciclo automático"
+    />
+  );
+}
+
+/** Dos renglones en escritorio; uno, con su punto, en el teléfono. */
+function ContactLines({ main, note }: { main: string; note?: string }) {
+  return (
+    <span className="inline-flex min-w-0 flex-wrap items-baseline gap-x-1.5 xl:flex-col xl:items-start xl:gap-0">
+      <span className="tabular-nums text-ink-900">{main}</span>
+      {note && (
+        <>
+          <span aria-hidden className="text-ink-300 xl:hidden">·</span>
+          <span className="text-[13px] text-ink-500">{note}</span>
+        </>
+      )}
     </span>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Tabla (§14, §25)
+// ---------------------------------------------------------------------------
+
+/**
+ * La tabla del Master es para BARRER (MOM §25): quién, dónde, en qué macroetapa
+ * y desde cuándo. Celdas de dos renglones en vez de diecisiete columnas: la
+ * tabla entra entera en la pantalla y ya no hay columnas congeladas ni scroll
+ * horizontal. Ningún dato se fue: tienda y creación van bajo el pedido, el
+ * teléfono bajo el cliente, provincia, región y cobertura con el distrito, los
+ * couriers e intentos con el courier, y la antigüedad junto a su macroetapa.
+ *
+ * Por debajo de 1280 px cada fila se vuelve una ficha corta (sin cabecera de
+ * tabla): las mismas celdas, colocadas en una rejilla.
+ */
+const TH =
+  "sticky top-0 z-10 bg-white px-3 py-2.5 text-left text-xs font-semibold text-ink-600 shadow-[inset_0_1px_0_var(--color-line),inset_0_-1px_0_var(--color-line)]";
+const TD = "px-3 py-2.5 align-top max-xl:p-0";
+/** Separador que solo existe cuando la celda va en una línea (teléfono). */
+const DOT = "text-ink-300 xl:hidden";
 
 function MasterTable({
   rows,
@@ -1867,6 +1990,7 @@ function MasterTable({
   selected,
   onToggleRow,
   onToggleAll,
+  busy,
 }: {
   rows: OrderMasterRow[];
   storeName: (id: string) => string;
@@ -1878,182 +2002,235 @@ function MasterTable({
   selected: Set<string>;
   onToggleRow: (orderId: string) => void;
   onToggleAll: (orderIds: string[], checked: boolean) => void;
+  /** Llega otra página: la actual se atenúa en vez de parpadear a vacío. */
+  busy: boolean;
 }) {
   const pageIds = rows.map((r) => r.order_id);
   const allChecked = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+  const someChecked = !allChecked && pageIds.some((id) => selected.has(id));
+  const headCheck = useRef<HTMLInputElement>(null);
+  const listCheck = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    for (const box of [headCheck.current, listCheck.current]) if (box) box.indeterminate = someChecked;
+  }, [someChecked]);
+  const toggleAllBox = (ref: typeof headCheck, label: string) => (
+    <input
+      ref={ref}
+      type="checkbox"
+      className={CHECKBOX}
+      checked={allChecked}
+      onChange={(e) => onToggleAll(pageIds, e.target.checked)}
+      aria-label={label}
+    />
+  );
 
-  // Columnas congeladas: la tabla sigue siendo más ancha que la pantalla,
-  // así que al ir a la derecha se perdía de vista de QUÉ pedido es cada fila.
-  // Estas se quedan pegadas a la izquierda.
-  //
-  // La geometría vive en lib/master-table-columns.ts, con pruebas: el
-  // desplazamiento de cada una es la suma de los anchos de las anteriores, así
-  // que esos anchos tienen que ser TECHO y no sugerencia. Sin `maxWidth`, un
-  // nombre de cliente largo ensanchaba la columna y cizallaba la tabla entera.
-  const left = frozenOffsets(multiStore);
-  /** Props de una celda congelada. El fondo se HEREDA de la fila: así sigue el
-   *  hover y el resaltado de selección, que en un color fijo se perderían. */
-  //
-  // Las capas salen de TABLE_LAYER, no de números sueltos: la esquina congelada
-  // estaba en 30, empatada con los desplegables de filtro, y los tapaba — pero
-  // solo los de la izquierda, que son los que caen encima de ella.
-  const frozen = (key: FrozenKey, header = false) => ({
-    className: cn("sticky", header ? "bg-slate-50" : "bg-inherit"),
-    style: frozenCellStyle(
-      key,
-      left,
-      header ? TABLE_LAYER.frozenHead : TABLE_LAYER.frozenCell,
-    ),
-  });
+  // Anchos de columna (tabla fija): Por confirmar suma Gestión y Próximo
+  // contacto, y el resto cede sitio. «Últ. movimiento» se queda con lo que sobra.
+  const w = showConfirmation
+    ? { check: "w-[4%]", pedido: "w-[13%]", cliente: "w-[14%]", destino: "w-[15%]", courier: "w-[8.5%]", etapa: "w-[15%]", gestion: "w-[8%]", proximo: "w-[12%]" }
+    : { check: "w-[4%]", pedido: "w-[15%]", cliente: "w-[17%]", destino: "w-[21%]", courier: "w-[13%]", etapa: "w-[19%]", gestion: "", proximo: "" };
 
   return (
-    <div className={TABLE_WRAP_PAGE_X}>
-      <table className="w-full min-w-[1180px] text-sm">
-        <thead className={STICKY_HEAD}>
-          <tr className="text-left text-xs text-slate-500">
-            <th {...frozen("check", true)} className={cn(frozen("check", true).className, "px-2 py-2")}>
-              <input
-                type="checkbox"
-                checked={allChecked}
-                onChange={(e) => onToggleAll(pageIds, e.target.checked)}
-                aria-label="Seleccionar todos los pedidos de esta página"
-                className="h-4 w-4 cursor-pointer align-middle"
-              />
+    <>
+      {/* Sin cabecera de tabla (teléfono y tableta), la casilla de la página va aquí. */}
+      <label className="flex min-h-11 cursor-pointer items-center gap-2.5 border-t border-line px-4 text-[13px] text-ink-600 xl:hidden">
+        {toggleAllBox(listCheck, "Seleccionar todos los pedidos de esta página")}
+        Seleccionar los {rows.length.toLocaleString("es-PE")} de esta página
+      </label>
+      <table className="w-full text-sm max-xl:block xl:table-fixed">
+        <thead className="max-xl:hidden">
+          <tr>
+            <th className={cn(TH, w.check, "pl-5")}>
+              {toggleAllBox(headCheck, "Seleccionar todos los pedidos de esta página")}
             </th>
-            <th {...frozen("pedido", true)} className={cn(frozen("pedido", true).className, "px-4 py-2 font-medium")}>Pedido</th>
-            {multiStore && <th {...frozen("tienda", true)} className={cn(frozen("tienda", true).className, "px-2 py-2 font-medium")}>Tienda</th>}
-            <th {...frozen("creado", true)} className={cn(frozen("creado", true).className, "px-2 py-2 font-medium")}>Creado</th>
-            <th {...frozen("cliente", true)} className={cn(frozen("cliente", true).className, "px-2 py-2 font-medium")}>Cliente</th>
-            <th className="px-2 py-2 font-medium">Teléfono</th>
-            <th className="px-2 py-2 font-medium">Región</th>
-            <th className="px-2 py-2 font-medium">Provincia</th>
-            <th className="px-2 py-2 font-medium">Distrito</th>
-            <th className="px-2 py-2 font-medium">Cobertura</th>
-            <th className="px-2 py-2 font-medium">Último courier</th>
-            <th className="px-2 py-2 text-right font-medium" title="Couriers que gestionaron el pedido">
-              Cour.
-            </th>
-            <th className="px-2 py-2 text-right font-medium" title="Intentos de entrega">
-              Int.
-            </th>
-            <th className="px-2 py-2 font-medium">Macroetapa</th>
-            <th className="px-2 py-2 font-medium">Subetapa</th>
+            <th className={cn(TH, w.pedido)}>Pedido</th>
+            <th className={cn(TH, w.cliente)}>Cliente</th>
+            <th className={cn(TH, w.destino)}>Destino</th>
+            <th className={cn(TH, w.courier)}>Courier</th>
+            <th className={cn(TH, w.etapa)}>Etapa</th>
             {showConfirmation && (
               <>
-                <th className="px-2 py-2 font-medium">Gestión</th>
-                <th className="px-2 py-2 font-medium">Próximo contacto</th>
+                <th className={cn(TH, w.gestion)}>Gestión</th>
+                <th className={cn(TH, w.proximo)}>Próximo contacto</th>
               </>
             )}
-            <th className="px-2 py-2 font-medium">Últ. movimiento</th>
-            <th className="px-4 py-2 font-medium">Antigüedad</th>
+            <th className={cn(TH, "pr-5")} title="Último movimiento">Movimiento</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody
+          className={cn(
+            "divide-y divide-line transition-opacity duration-150 motion-reduce:transition-none max-xl:block max-xl:border-t max-xl:border-line",
+            busy && "opacity-60",
+          )}
+        >
           {rows.map((r) => {
             // La fila del drawer abierto: con el panel encima se perdía de vista
             // de qué pedido era. Un azul más firme que el de la casilla marcada,
             // para que «lo que estoy mirando» no se confunda con «lo que elegí».
             const isOpen = openId === r.order_id;
+            const isSelected = selected.has(r.order_id);
+            const since = r.macro_since ?? r.status_since;
+            const showCourierCounts = Boolean(r.last_courier) || r.attempt_count > 0 || r.courier_count > 1;
             return (
-            <tr
-              key={r.id}
-              onClick={() => onOpen(r.order_id)}
-              aria-current={isOpen ? "true" : undefined}
-              className={cn(
-                "cursor-pointer border-b border-slate-100 last:border-0",
-                // La fila necesita fondo propio: las celdas congeladas lo
-                // HEREDAN, y sin él se transparentarían dejando ver el
-                // contenido que pasa por debajo. Una sola clase de fondo a la
-                // vez: con dos no manda el orden del atributo sino el del CSS,
-                // y el resaltado podría perder contra el blanco.
-                isOpen
-                  ? "bg-brand-100"
-                  : selected.has(r.order_id)
-                    ? "bg-brand-50/60 hover:bg-slate-50"
-                    : "bg-white hover:bg-slate-50",
-              )}
-            >
-              {/* stopPropagation: marcar la fila no debe abrir el drawer. */}
-              <td {...frozen("check")} className={cn(frozen("check").className, "px-2 py-2.5")} onClick={(e) => e.stopPropagation()}>
-                <input
-                  type="checkbox"
-                  checked={selected.has(r.order_id)}
-                  onChange={() => onToggleRow(r.order_id)}
-                  aria-label={`Seleccionar ${r.order_name ?? "pedido"}`}
-                  className="h-4 w-4 cursor-pointer align-middle"
-                />
-              </td>
-              <td {...frozen("pedido")} className={cn(frozen("pedido").className, "px-4 py-2.5", isOpen ? "font-semibold text-brand-700" : "font-medium text-slate-900")}>{r.order_name ?? "—"}</td>
-              {multiStore && <td {...frozen("tienda")} className={cn(frozen("tienda").className, "px-2 py-2.5 text-slate-600")}>{storeName(r.store_id)}</td>}
-              <td {...frozen("creado")} className={cn(frozen("creado").className, "px-2 py-2.5 text-slate-600")}>{fmtDate(r.order_created_at)}</td>
-              <td {...frozen("cliente")} className={cn(frozen("cliente").className, "px-2 py-2.5 text-slate-700")}>
-                {/* El recorte va en un bloque propio, no en el `<td>`: `max-width`
-                    sobre una celda de tabla no es fiable, y sin un techo real
-                    `truncate` no tiene contra qué recortar. El nombre entero
-                    sigue a un `title` de distancia. */}
-                <span
-                  className="block truncate"
-                  style={{ maxWidth: frozenTextWidth("cliente") }}
-                  title={r.customer_name ?? ""}
+              <tr
+                key={r.id}
+                onClick={() => onOpen(r.order_id)}
+                aria-current={isOpen ? "true" : undefined}
+                className={cn(
+                  "cursor-pointer transition-colors duration-100 max-xl:grid max-xl:grid-cols-[1.75rem_minmax(0,1fr)_auto] max-xl:gap-x-2 max-xl:gap-y-1 max-xl:px-4 max-xl:py-3",
+                  isOpen
+                    ? "bg-brand-100/70"
+                    : isSelected
+                      ? "bg-brand-50"
+                      : "bg-white hover:bg-wash",
+                )}
+              >
+                {/* stopPropagation: marcar la fila no debe abrir el drawer. */}
+                <td
+                  className={cn(TD, "pl-5 max-xl:col-start-1 max-xl:row-start-1")}
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  {r.customer_name ?? "—"}
-                </span>
-              </td>
-              <td className="px-2 py-2.5 text-slate-600">{r.customer_phone ?? "—"}</td>
-              <td className="px-2 py-2.5 text-slate-600">{r.region ?? "—"}</td>
-              <td className="px-2 py-2.5 text-slate-600">{r.province ?? "—"}</td>
-              <td className="px-2 py-2.5 text-slate-600">{r.district ?? "—"}</td>
-              <td className="px-2 py-2.5"><CoverageBadge coverage={r.coverage} /></td>
-              <td className="px-2 py-2.5 capitalize text-slate-500">{r.last_courier ?? "—"}</td>
-              <td className="px-2 py-2.5 text-right text-slate-700">
-                <span className={cn(r.courier_count > 1 && "font-semibold text-amber-700")}>
-                  {r.courier_count}
-                </span>
-              </td>
-              <td className="px-2 py-2.5 text-right text-slate-700">
-                <span className={cn(r.attempt_count > 1 && "font-semibold text-amber-700")}>
-                  {r.attempt_count}
-                </span>
-              </td>
-              <td className="px-2 py-2.5">
-                <MacroStageBadge stage={r.macro_stage} />
-              </td>
-              <td className="px-2 py-2.5 text-slate-600">{macroSubstageLabel(r.macro_substage)}</td>
-              {showConfirmation && (
-                <>
-                  <td className="px-2 py-2.5 text-slate-600">
-                    {r.macro_substage === "historico_sin_gestion"
-                      ? "Fuera del corte"
-                      : `${r.confirmation_day_count ?? 0}/7 días`}
-                  </td>
-                  <td className="px-2 py-2.5 text-slate-600">
-                    <NextContactCell row={r} />
-                  </td>
-                </>
-              )}
-              <td className="px-2 py-2.5 text-slate-600">{fmtDate(r.last_movement_at)}</td>
-              <td className="px-4 py-2.5 text-slate-600">{fmtAge(r.macro_since ?? r.status_since)}</td>
-            </tr>
+                  <label className="-m-2 grid size-9 cursor-pointer place-items-center pointer-coarse:size-11">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => onToggleRow(r.order_id)}
+                      aria-label={`Seleccionar ${r.order_name ?? "pedido"}`}
+                      className={CHECKBOX}
+                    />
+                  </label>
+                </td>
+                <td className={cn(TD, "max-xl:col-start-2 max-xl:row-start-1")}>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpen(r.order_id);
+                    }}
+                    title="Abrir la ficha del pedido"
+                    className={cn(
+                      "block max-w-full truncate text-left leading-5 underline-offset-2 hover:underline",
+                      isOpen ? "font-semibold text-brand-700" : "font-medium text-ink-900",
+                    )}
+                  >
+                    {r.order_name ?? "—"}
+                  </button>
+                  <p
+                    className="truncate text-[13px] leading-5 text-ink-500"
+                    title={r.order_created_at ? `Creado el ${fmtDateTime(r.order_created_at)}` : undefined}
+                  >
+                    {/* La fecha primero: si algo se corta, que sea el nombre de la tienda. */}
+                    <span className="tabular-nums">{fmtDate(r.order_created_at)}</span>
+                    {multiStore && <> · {storeName(r.store_id)}</>}
+                  </p>
+                </td>
+                <td className={cn(TD, "max-xl:col-span-2 max-xl:col-start-2 max-xl:row-start-2")}>
+                  <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 xl:block">
+                    <p className="max-w-full truncate leading-5 text-ink-900" title={r.customer_name ?? undefined}>
+                      {r.customer_name ?? "—"}
+                    </p>
+                    {r.customer_phone && (
+                      <>
+                        <span aria-hidden className={DOT}>·</span>
+                        <p className="truncate text-[13px] leading-5 tabular-nums text-ink-500">{r.customer_phone}</p>
+                      </>
+                    )}
+                  </div>
+                </td>
+                <td className={cn(TD, "max-xl:col-span-2 max-xl:col-start-2 max-xl:row-start-3")}>
+                  {/* El distrito tiene el renglón entero; la cobertura va con
+                      provincia y región, que ceden primero si falta sitio. */}
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 xl:block">
+                    <p className="max-w-full truncate leading-5 text-ink-900" title={r.district ?? undefined}>
+                      {r.district ?? "—"}
+                    </p>
+                    <span aria-hidden className={DOT}>·</span>
+                    <div className="flex min-w-0 items-center gap-1.5 xl:mt-0.5">
+                      <CoverageBadge coverage={r.coverage} />
+                      <span
+                        className="truncate text-[13px] leading-5 text-ink-500"
+                        title={[r.province, r.region].filter(Boolean).join(" · ") || undefined}
+                      >
+                        {[r.province, r.region].filter(Boolean).join(" · ") || "—"}
+                      </span>
+                    </div>
+                  </div>
+                </td>
+                <td
+                  className={cn(
+                    TD,
+                    "max-xl:col-span-2 max-xl:col-start-2 max-xl:row-start-5",
+                    // En la ficha del teléfono, un renglón con solo «—» sobra.
+                    !r.last_courier && !showCourierCounts && "max-xl:hidden",
+                  )}
+                  title={`${r.courier_count} ${r.courier_count === 1 ? "courier" : "couriers"} · ${r.attempt_count} ${r.attempt_count === 1 ? "intento" : "intentos"} de entrega`}
+                >
+                  <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 xl:block">
+                    <p className="truncate capitalize leading-5 text-ink-900">{r.last_courier ?? "—"}</p>
+                    {showCourierCounts && (
+                      <>
+                        <span aria-hidden className={DOT}>·</span>
+                        <p className="text-[13px] leading-5 tabular-nums text-ink-500">
+                          <span className={cn(r.attempt_count > 1 && "font-semibold text-warn-fg")}>
+                            {r.attempt_count} {r.attempt_count === 1 ? "intento" : "intentos"}
+                          </span>
+                          {r.courier_count > 1 && (
+                            <>
+                              {" · "}
+                              <span className="font-semibold text-warn-fg">{r.courier_count} couriers</span>
+                            </>
+                          )}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </td>
+                <td className={cn(TD, "max-xl:col-span-2 max-xl:col-start-2 max-xl:row-start-4")}>
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 xl:block">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <MacroStageBadge stage={r.macro_stage} />
+                      <span
+                        className="shrink-0 text-[13px] tabular-nums text-ink-500"
+                        title={since ? `En esta macroetapa desde el ${fmtDate(since)}` : undefined}
+                      >
+                        {fmtAge(since)}
+                      </span>
+                    </div>
+                    <span aria-hidden className={DOT}>·</span>
+                    <p className="truncate text-[13px] leading-5 text-ink-600 xl:mt-0.5">
+                      {macroSubstageLabel(r.macro_substage)}
+                    </p>
+                  </div>
+                </td>
+                {showConfirmation && (
+                  <>
+                    <td className={cn(TD, "max-xl:col-span-2 max-xl:col-start-2 max-xl:row-start-6")}>
+                      <span className="text-[13px] text-ink-500 xl:hidden">Gestión </span>
+                      <span className="whitespace-nowrap tabular-nums text-ink-900 xl:text-[13px]">
+                        {r.macro_substage === "historico_sin_gestion"
+                          ? "Fuera del corte"
+                          : `${r.confirmation_day_count ?? 0}/7 días`}
+                      </span>
+                    </td>
+                    <td className={cn(TD, "max-xl:col-span-2 max-xl:col-start-2 max-xl:row-start-7")}>
+                      <span className="text-[13px] text-ink-500 xl:hidden">Próximo contacto </span>
+                      <NextContactCell row={r} />
+                    </td>
+                  </>
+                )}
+                <td className={cn(TD, "pr-5 max-xl:col-start-3 max-xl:row-start-1 max-xl:text-right")}>
+                  <span className="text-[13px] text-ink-500 xl:hidden">Mov. </span>
+                  <span className="text-[13px] tabular-nums text-ink-700 xl:text-sm">{fmtDate(r.last_movement_at)}</span>
+                </td>
+              </tr>
             );
           })}
         </tbody>
       </table>
-    </div>
+    </>
   );
 }
 
-
-
-/**
- * Paginación. Existe porque el listado dejó de traerse entero: antes eran ~10.000
- * filas y 9,5 MB por carga, ahora son 100 filas por página. Enseña el total real
- * (contado en la base, no las visibles) para que nadie confunda "hay 100" con
- * "hay 100 en total".
- */
-/**
- * Anterior / Siguiente. Va arriba Y abajo de la tabla: con 100 filas, tener los
- * controles solo al pie obliga a recorrer la página entera para cambiarla.
- */
 /**
  * El nombre que propone el servidor en `Content-Disposition`. Sin él, el
  * navegador bautiza el fichero con el nombre de la ruta ("pedidos") y sin
@@ -2091,7 +2268,8 @@ function ExportButton({
     ? `Descargar Excel (${selected.toLocaleString("es-PE")} seleccionados)`
     : `Descargar Excel (${total.toLocaleString("es-PE")})`;
   return (
-    <button
+    <OpsButton
+      size="sm"
       onClick={onClick}
       disabled={busy}
       title={
@@ -2099,10 +2277,11 @@ function ExportButton({
           ? `Descargar en Excel los ${count.toLocaleString("es-PE")} pedidos seleccionados`
           : `Descargar ${count.toLocaleString("es-PE")} ${count === 1 ? "pedido" : "pedidos"} en Excel, con los filtros aplicados`
       }
-      className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+      className="pointer-coarse:h-11"
     >
+      <IconDownload className="text-ink-500" />
       {busy ? "Generando…" : label}
-    </button>
+    </OpsButton>
   );
 }
 
@@ -2110,7 +2289,7 @@ function ExportButton({
  * El buscador del Master, con su propio estado.
  *
  * POR QUÉ VIVE APARTE. El estado del texto estaba en `OrdersMasterBoard`, que es
- * el mismo componente que pinta la tabla: 100 filas × 17 columnas, más badges y
+ * el mismo componente que pinta la tabla: 100 filas con varias líneas, chapas y
  * botones por celda. Cada pulsación disparaba un render del board entero —unos
  * dos mil elementos— antes de que la letra llegara a la pantalla, y eso se nota
  * como que el input se atasca y se come teclas. El debounce no lo arreglaba
@@ -2133,6 +2312,8 @@ function MasterSearchInput({
   commit.current = onCommit;
   // Lo que este input mandó a la URL y todavía no ha vuelto como `value`.
   const pending = useRef<string[]>([]);
+  const input = useRef<HTMLInputElement>(null);
+  const hintId = useId();
 
   // La URL manda cuando el cambio viene de FUERA (atrás/adelante, «Limpiar
   // búsqueda»). Cuando es el eco de lo que mandó este mismo input, NO se copia:
@@ -2162,26 +2343,36 @@ function MasterSearchInput({
   }, [text, value, tooShort]);
 
   return (
-    <div className="relative">
-      <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400">
-        🔍
-      </span>
+    <div role="search" className="relative w-full sm:w-80">
+      <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
       <input
+        ref={input}
         value={text}
         onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && text) setText("");
+        }}
+        enterKeyHint="search"
+        aria-label="Buscar pedido, cliente, teléfono o guía"
+        aria-describedby={tooShort ? hintId : undefined}
         placeholder="Buscar pedido, cliente, teléfono o guía…"
-        className="w-72 rounded-lg border border-slate-200 py-1.5 pl-8 pr-7 text-sm"
+        className={cn(FIELD, "pl-8 pr-9 pointer-coarse:h-11")}
       />
       {text && (
         <button
-          onClick={() => setText("")}
-          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+          type="button"
+          onClick={() => {
+            setText("");
+            input.current?.focus();
+          }}
+          aria-label="Borrar la búsqueda"
+          className="absolute right-1 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-9"
         >
-          ✕
+          <IconX className="size-4" />
         </button>
       )}
       {tooShort && (
-        <p className="absolute left-0 top-full mt-1 whitespace-nowrap text-[11px] text-slate-400">
+        <p id={hintId} className="absolute left-0 top-full mt-1 whitespace-nowrap text-xs text-ink-500">
           Escribe al menos {MASTER_SEARCH_MIN_CHARS} caracteres
         </p>
       )}
@@ -2189,6 +2380,10 @@ function MasterSearchInput({
   );
 }
 
+/**
+ * Anterior / Siguiente. Va arriba Y abajo de la tabla: con 100 filas, tener los
+ * controles solo al pie obliga a recorrer la página entera para cambiarla.
+ */
 function PagerControls({
   page,
   totalPages,
@@ -2202,30 +2397,29 @@ function PagerControls({
 }) {
   if (totalPages <= 1) return null;
   return (
-    <div className="flex shrink-0 items-center gap-1.5">
-      <button
-        disabled={busy || page <= 1}
-        onClick={() => onPage(page - 1)}
-        className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-      >
+    <div role="group" aria-label="Cambiar de página" className="flex shrink-0 items-center gap-1.5">
+      <OpsButton size="sm" disabled={busy || page <= 1} onClick={() => onPage(page - 1)} className="pointer-coarse:h-11">
         Anterior
-      </button>
-      <span className="px-1 text-xs tabular-nums text-slate-500">
-        {page} / {totalPages}
+      </OpsButton>
+      <span className="px-1 text-[13px] tabular-nums text-ink-500">
+        {page.toLocaleString("es-PE")} / {totalPages.toLocaleString("es-PE")}
       </span>
-      <button
-        disabled={busy || page >= totalPages}
-        onClick={() => onPage(page + 1)}
-        className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-      >
+      <OpsButton size="sm" disabled={busy || page >= totalPages} onClick={() => onPage(page + 1)} className="pointer-coarse:h-11">
         Siguiente
-      </button>
+      </OpsButton>
     </div>
   );
 }
 
+/**
+ * Paginación. Existe porque el listado dejó de traerse entero: antes eran ~10.000
+ * filas y 9,5 MB por carga, ahora son 100 filas por página. Enseña el total real
+ * (contado en la base, no las visibles) para que nadie confunda "hay 100" con
+ * "hay 100 en total".
+ */
 function Pager({
   page,
+  pageSize,
   totalPages,
   total,
   shown,
@@ -2233,6 +2427,7 @@ function Pager({
   onPage,
 }: {
   page: number;
+  pageSize: number;
   totalPages: number;
   total: number;
   shown: number;
@@ -2240,15 +2435,14 @@ function Pager({
   onPage: (page: number) => void;
 }) {
   if (total === 0) return null;
-  const from = (page - 1) * 100 + 1;
+  const from = (page - 1) * pageSize + 1;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3">
-      <p className="text-xs text-slate-500">
-        {from}–{from + shown - 1} de {total.toLocaleString("es-PE")}
-        {busy && <span className="ml-2 text-slate-400">actualizando…</span>}
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-4 py-3 sm:px-5">
+      <p className="text-[13px] tabular-nums text-ink-500">
+        {from.toLocaleString("es-PE")}–{(from + shown - 1).toLocaleString("es-PE")} de {total.toLocaleString("es-PE")}
+        {busy && <span> · actualizando…</span>}
       </p>
       <PagerControls page={page} totalPages={totalPages} busy={busy} onPage={onPage} />
     </div>
   );
 }
-

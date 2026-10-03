@@ -23,7 +23,7 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import { Hint } from "@/components/hint";
 import { Sheet } from "@/components/filter-sheet";
-import { AttentionPill, Badge, Banner, CHECKBOX, FIELD, FilterPill, OpsButton, StatusCard, type BadgeTone } from "@/components/ops-ui";
+import { AttentionPill, Badge, Banner, CHECKBOX, ChoiceChip, FIELD, FilterPill, OpsButton, StatusCard, type BadgeTone } from "@/components/ops-ui";
 import { IconAlert, IconCalendar, IconCheck, IconChevronDown, IconChevronRight, IconInfo, IconList, IconPackage, IconQr, IconRepeat, IconSearch, IconUndo, IconX } from "@/components/icons";
 import { ReturnsScanner } from "@/components/returns-scanner";
 import type { PendingReturn } from "@/lib/courier-route-ledger";
@@ -1128,27 +1128,6 @@ function MethodTab({ active, onClick, icon: Glyph, label, shortLabel, children }
       <span className="truncate sm:hidden" aria-hidden>{shortLabel}</span>
       <span className="max-sm:sr-only truncate">{label}</span>
       {children}
-    </button>
-  );
-}
-
-/** Chip de elección con cantidad (subetapas, plazos, motivos, filtro de cajas). */
-function ChoiceChip({ label, count, active, onClick, title }: { label: string; count?: number; active: boolean; onClick: () => void; title?: string }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      disabled={count === 0 && !active}
-      onClick={onClick}
-      title={title}
-      className={cn(
-        "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[13px] font-medium transition-shadow",
-        active ? "bg-brand-50 text-brand-700 ring-2 ring-inset ring-brand-600" : "bg-white text-ink-700 ring-1 ring-inset ring-line-strong hover:ring-ink-300",
-        count === 0 && !active && "cursor-not-allowed opacity-40",
-      )}
-    >
-      {label}
-      {count != null && <span className={cn("tabular-nums", active ? "text-brand-700" : "text-ink-500")}>{count.toLocaleString("es-PE")}</span>}
     </button>
   );
 }

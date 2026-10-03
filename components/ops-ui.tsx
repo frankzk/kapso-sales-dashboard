@@ -117,7 +117,16 @@ export const FilterPill = forwardRef<HTMLButtonElement, {
  * Tarjeta de estado: etiqueta y cifra; elegida lleva el borde azul de 2 px.
  * Es un filtro, no un adorno: tocarla abre esa parte de la lista.
  */
-export function StatusCard({ label, value, active, onClick, hint }: { label: string; value: number; active: boolean; onClick: () => void; hint?: string }) {
+export function StatusCard({ label, value, active, onClick, hint, marker }: {
+  label: string;
+  value: number;
+  active: boolean;
+  onClick: () => void;
+  hint?: string;
+  /** Marca de color antes de la etiqueta (p. ej. el tono de la macroetapa del MOM). */
+  marker?: ReactNode;
+}) {
+  const labelTone = active ? "text-brand-700" : "text-ink-600";
   return (
     <button
       type="button"
@@ -129,8 +138,36 @@ export function StatusCard({ label, value, active, onClick, hint }: { label: str
         active ? "shadow-control ring-2 ring-inset ring-brand-600" : "shadow-control ring-1 ring-inset ring-line hover:ring-line-strong",
       )}
     >
-      <span className={cn("w-full truncate text-[13px] font-medium", active ? "text-brand-700" : "text-ink-600")}>{label}</span>
+      {marker ? (
+        <span className={cn("flex w-full min-w-0 items-center gap-1.5 text-[13px] font-medium", labelTone)}>
+          {marker}
+          <span className="truncate">{label}</span>
+        </span>
+      ) : (
+        <span className={cn("w-full truncate text-[13px] font-medium", labelTone)}>{label}</span>
+      )}
       <span className={cn("text-xl font-semibold leading-7 tabular-nums", active ? "text-brand-700" : "text-ink-900")}>{value.toLocaleString("es-PE")}</span>
+    </button>
+  );
+}
+
+/** Chip de elección con cantidad (subetapas, plazos, motivos, filtro de cajas). */
+export function ChoiceChip({ label, count, active, onClick, title }: { label: string; count?: number; active: boolean; onClick: () => void; title?: string }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      disabled={count === 0 && !active}
+      onClick={onClick}
+      title={title}
+      className={cn(
+        "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[13px] font-medium transition-shadow pointer-coarse:h-11",
+        active ? "bg-brand-50 text-brand-700 ring-2 ring-inset ring-brand-600" : "bg-white text-ink-700 ring-1 ring-inset ring-line-strong hover:ring-ink-300",
+        count === 0 && !active && "cursor-not-allowed opacity-40",
+      )}
+    >
+      {label}
+      {count != null && <span className={cn("tabular-nums", active ? "text-brand-700" : "text-ink-500")}>{count.toLocaleString("es-PE")}</span>}
     </button>
   );
 }
