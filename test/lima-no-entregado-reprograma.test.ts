@@ -215,3 +215,39 @@ describe("el MOM lo dice", () => {
     expect(mom).toContain("#AUR177276");
   });
 });
+
+describe("la caja escaneada en el almacén gana al estado atrasado del courier (03-10-2026)", () => {
+  // #AUR176862: Tanders seguía diciendo `PICKED` cuatro días después de que la
+  // caja se escaneara en Devoluciones. El pedido, vivo en Shopify, quedaba en
+  // «Por cerrar · Devolución pendiente de inventario».
+  const AUR176862 = {
+    delivery_status: "en_ruta",
+    reported_status: "PICKED",
+    returned_at: hace(1),
+    pickup_state: "devuelto",
+  } as const;
+
+  it("Tanders o Swayp vivos con la caja ya recibida cuentan como intento fallido", () => {
+    expect(guideFailedAfterDispatch(salida(AUR176862))).toBe(true);
+    expect(guideFailedAfterDispatch(salida({ ...AUR176862, courier: "fenix", reported_status: null }))).toBe(true);
+    // Sin la caja recibida, un PICKED es una guía viva: la lleva Tanders.
+    expect(guideFailedAfterDispatch(salida({ ...AUR176862, returned_at: null }))).toBe(false);
+  });
+
+  it("Grupo GF y el motorizado propio no: su «Recibir en oficina» los devuelve a «por asignar»", () => {
+    for (const courier of ["propio", "grupo_gf", "axel", "urpi"]) {
+      expect(guideFailedAfterDispatch(salida({ ...AUR176862, courier, reported_status: null })), courier).toBe(false);
+    }
+  });
+
+  it("el pedido vivo en Shopify va a «Por reprogramar Lima», anclado en la salida", () => {
+    const { macro } = resolverTodo([salida(AUR176862)]);
+    expect(macro).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima", since: hace(7) });
+    expect(macro.reasons).toContain("devolucion_pendiente_inventario");
+  });
+
+  it("anulado en Shopify, espera la caja en Por cerrar como siempre", () => {
+    const { macro } = resolverTodo([salida(AUR176862)], pedido({ cancelled_at: hace(2), financial_status: "voided" }));
+    expect(macro.stage).toBe("por_cerrar");
+  });
+});
