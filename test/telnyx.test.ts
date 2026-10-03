@@ -165,6 +165,11 @@ describe("guardas del flujo (código)", () => {
     expect(fn.indexOf(".insert(")).toBeLessThan(fn.indexOf("dialTelnyx("));
   });
 
+  it("la detección de contestadora no cuelga: modo sombra (falso «buzón» el 03-10-2026)", () => {
+    expect(route).not.toMatch(/call\.machine\.detection\.ended"[^]*?hangup\(/);
+    expect(route).not.toContain("contestó un buzón de voz");
+  });
+
   it("el barrido sortea la línea de cada llamada", () => {
     expect(cron).toContain("pickTelephony(telnyxShare, telnyxReady)");
     expect(cron).toContain("telephony,");
