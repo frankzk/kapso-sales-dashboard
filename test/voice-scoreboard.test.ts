@@ -6,6 +6,7 @@ import {
   voiceAgentOfCall,
   voiceCallsPerConfirma,
   voiceConversion,
+  voiceScoreBounds,
   type VoiceScoreCall,
 } from "@/lib/voice-scoreboard";
 import { VOICE_AGENT_ELEVENLABS_KEY, VOICE_AGENT_KEY, VOICE_AGENT_TELNYX_KEY } from "@/lib/shipments";
@@ -53,9 +54,27 @@ describe("Agentes de voz: comparación (MOM §11.8)", () => {
     expect(voiceCallsPerConfirma({ confirma: 0, llamadas: 5 })).toBeNull();
   });
 
-  it("solo llamadas reales", () => {
+  it("solo llamadas reales, dentro del rango", () => {
     const src = readFileSync(resolve(__dirname, "../lib/shipments-access.ts"), "utf8");
-    const fn = src.slice(src.indexOf("export async function getVoiceScoreboard"));
-    expect(fn.slice(0, fn.indexOf("\n}\n"))).toContain('.eq("mode", "real")');
+    const fn = src.slice(src.indexOf("export async function getVoiceScore("));
+    const body = fn.slice(0, fn.indexOf("\n}\n"));
+    expect(body).toContain('.eq("mode", "real")');
+    expect(body).toContain("voiceScoreBounds(from, to)");
+  });
+
+  it("el rango son días de Lima, ambos incluidos", () => {
+    expect(voiceScoreBounds("2026-10-03", "2026-10-03")).toEqual({
+      startIso: "2026-10-03T05:00:00.000Z",
+      endIso: "2026-10-04T05:00:00.000Z",
+    });
+    expect(voiceScoreBounds("2026-10-01", "2026-10-03")?.endIso).toBe("2026-10-04T05:00:00.000Z");
+  });
+
+  it("el rango llega del navegador: fechas malas, invertidas o eternas → null", () => {
+    expect(voiceScoreBounds("2026-10-04", "2026-10-03")).toBeNull();
+    expect(voiceScoreBounds("ayer", "2026-10-03")).toBeNull();
+    expect(voiceScoreBounds("2026-13-01", "2026-13-02")).toBeNull();
+    expect(voiceScoreBounds("2024-01-01", "2026-10-03")).toBeNull();
+    expect(voiceScoreBounds("2025-10-03", "2026-10-03")).not.toBeNull();
   });
 });

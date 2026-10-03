@@ -1,6 +1,7 @@
 // «Agentes de voz: comparación» — MOM §11.8. Los agentes compiten en las
 // mismas condiciones (misma cola, mismo guion); lo que cambia es la línea o el
-// motor. Esta tabla los pone uno al lado del otro, solo con llamadas reales.
+// motor. Esta tabla los pone uno al lado del otro, solo con llamadas reales, en
+// el rango de días que se elija (hoy, ayer, 7 días, este mes o uno a mano).
 //
 // Función pura: recibe las filas de `voice_calls` y devuelve una fila por
 // agente, siempre los tres, para que un agente sin llamadas se vea en cero.
@@ -84,7 +85,20 @@ export function voiceCallsPerConfirma(r: Pick<VoiceScoreRow, "confirma" | "llama
   return r.confirma ? r.llamadas / r.confirma : null;
 }
 
-export interface VoiceScoreboard {
-  hoy: VoiceScoreRow[];
-  semana: VoiceScoreRow[];
+/** El rango más largo que se consulta de una vez. */
+export const VOICE_SCORE_MAX_DAYS = 366;
+
+/**
+ * Días calendario de Lima, ambos incluidos (YYYY-MM-DD), a instantes UTC
+ * `[startIso, endIso)`. Null si las fechas no valen o el rango es demasiado
+ * largo: llega desde el navegador.
+ */
+export function voiceScoreBounds(from: string, to: string): { startIso: string; endIso: string } | null {
+  const day = /^\d{4}-\d{2}-\d{2}$/;
+  if (!day.test(from) || !day.test(to) || from > to) return null;
+  const start = Date.parse(`${from}T00:00:00-05:00`);
+  const end = Date.parse(`${to}T00:00:00-05:00`) + 86_400_000;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  if (end - start > VOICE_SCORE_MAX_DAYS * 86_400_000) return null;
+  return { startIso: new Date(start).toISOString(), endIso: new Date(end).toISOString() };
 }

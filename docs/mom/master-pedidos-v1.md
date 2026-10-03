@@ -4009,8 +4009,11 @@ Reglas de esa tabla:
     vez. Mientras tanto, el barrido no reparte llamadas a ElevenLabs.
   - **«Agentes de voz: comparación»** (Envíos, en el resumen de arriba, junto
     a «Hoy por asesora»). Muestra una fila por agente, siempre los tres, con
-    llamadas **reales** (`mode = 'real'`) de hoy o de los últimos siete días
-    de Lima. El agente sale de la llamada: Zadarma es Daaph; Telnyx con
+    llamadas **reales** (`mode = 'real'`) del rango elegido, con los mismos
+    chips que el popup de reprogramaciones: Hoy, Ayer, Últimos 7 días, Este
+    mes o un Rango a mano (días de Lima, ambos incluidos, hasta 366). Hoy llega
+    con la página; los otros rangos se piden al elegirlos. El agente sale de la
+    llamada: Zadarma es Daaph; Telnyx con
     `provider = 'grok'` es Telnyx y con `elevenlabs` es ElevenLabs.
     - **Atendidas:** `started_at` presente, porque `identificar_llamada`
       corrió.
