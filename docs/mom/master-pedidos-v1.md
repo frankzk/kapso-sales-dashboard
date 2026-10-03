@@ -4110,10 +4110,21 @@ Ampliación aprobada: la entrega previa deja de ser obligatoria para una segunda
 vía con **3 intentos diarios por organización**, dentro del máximo general de 10.
 Tiene interruptor propio, apagado al instalar. La vía con historial se conserva.
 
-- Pedido de hasta **7 días**, importe positivo de hasta **S/500**, exactamente
-  **un intento Aliclik registrado**. Cero o dato ausente no significan un intento.
+- Pedido de hasta **14 días**, importe positivo de hasta **S/500**, con **0, 1
+  o 2 intentos Aliclik informados**. Un intento sin dato no cuenta como cero: se
+  aparta. Tres o más intentos también.
 - El máximo inicial de S/199 se amplió a **S/500** por decisión del usuario el
   01-10-2026. Se conserva el cupo de 3 diarios y el resto de condiciones.
+- **Ampliación del 03-10-2026** (decisión del owner, migración 0220): de 7 a 14
+  días y de exactamente un intento a 0–2. En 70 pasadas el piloto emitió 4
+  guías y en las últimas no halló ni un elegible; el cupo no era el freno. De
+  126 pedidos apartados por estos límites, 95 pasaban de 7 días —la edad se
+  cuenta desde la compra y Aliclik suele fallar entre el día 5 y el 10—, 68
+  traían 0 intentos (el courier cerró sin llegar a ir) y 26 traían 2 o más. Al
+  ampliar se contaba 1 entrega y 1 devolución de 4 emitidas: se mide de nuevo
+  antes de tocar el cupo. Los límites viven en `PILOT_MAX_ORDER_DAYS` y
+  `pilotAttemptsOk` (`lib/swayp-auto-policy.ts`) y la reserva
+  (`swayp_emission_claim`) repite los mismos.
 - Referencia no vacía y coordenadas completas. Antes de emitir se consulta el
   pin mediante la lectura de cotización de Aliclik: distrito y provincia deben
   resolver al mismo ubigeo exacto que el destino. Si falla la consulta o difieren,

@@ -441,4 +441,6 @@
 \ir migrations/0218_olva_portal_cotejo.sql
 \echo 'Applying 0219_swayp_claim_salida_por_definir.sql'
 \ir migrations/0219_swayp_claim_salida_por_definir.sql
+\echo 'Applying 0220_swayp_pilot_14_dias_0_a_2_intentos.sql'
+\ir migrations/0220_swayp_pilot_14_dias_0_a_2_intentos.sql
 \echo 'Done.'

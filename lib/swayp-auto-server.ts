@@ -79,7 +79,7 @@ export async function runAutoDispatch(admin: SupabaseClient, settings: AutoSetti
               report.eligible++;
               if (!dry) {
                 const note=verdict.cohort==="recent_no_history"
-                  ? "Reintento automático Aliclik → Swayp, piloto sin historial: hasta 7 días, un intento, máximo S/500, ubicación corroborada y stock completo. Sin llamada ni nueva confirmación del cliente."
+                  ? "Reintento automático Aliclik → Swayp, piloto sin historial: hasta 14 días, de 0 a 2 intentos, máximo S/500, ubicación corroborada y stock completo. Sin llamada ni nueva confirmación del cliente."
                   : "Reintento automático Aliclik → Swayp: entrega previa en el mismo domicilio, producto distinto y stock completo. Sin llamada ni nueva confirmación del cliente.";
                 const issued=await createFenixGuideViaApi({
                   admin,storeId:s.order.store_id,orderId:s.order.id,sourceKey:s.source.id,city:verdict.city,
