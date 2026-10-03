@@ -507,9 +507,12 @@ function DrawerJourneyRail({ current }: { current: string | null | undefined }) 
 function DrawerNextActionCard({
   action,
   onJump,
+  children,
 }: {
   action: DrawerNextAction;
   onJump: (target: DrawerSectionId) => void;
+  /** Lo que acompaña a la acción (el motorizado de Grupo GF), en una zona debajo. */
+  children?: ReactNode;
 }) {
   const cta = action.href ? (
     <Link href={action.href} className={opsButtonClass("primary", "md", "shrink-0 pointer-coarse:h-11")}>
@@ -546,6 +549,7 @@ function DrawerNextActionCard({
         </div>
         {cta}
       </div>
+      {children && <div className={cn(CARD_ZONE, "mt-4 sm:mt-5")}>{children}</div>}
     </section>
   );
 }
@@ -675,6 +679,23 @@ export function OrderDrawer({
       cancelAnimationFrame(frame);
     };
   }, [indexItems, workspace]);
+
+  // ¿Queda índice a la derecha? Sin una señal, «Gestión manual» se escondía tras
+  // el borde del teléfono y nada decía que la fila se desplaza.
+  const [indexMore, setIndexMore] = useState(false);
+  useEffect(() => {
+    const row = indexRef.current;
+    if (!row) return;
+    const sync = () => setIndexMore(row.scrollLeft + row.clientWidth < row.scrollWidth - 1);
+    sync();
+    row.addEventListener("scroll", sync, { passive: true });
+    const observer = new ResizeObserver(sync);
+    observer.observe(row);
+    return () => {
+      row.removeEventListener("scroll", sync);
+      observer.disconnect();
+    };
+  }, [indexItems]);
 
   // En el teléfono el índice se desplaza de lado: la sección actual no se sale.
   useEffect(() => {
@@ -1041,22 +1062,26 @@ export function OrderDrawer({
                 // deja de poder copiarse justo en los pedidos donde más se
                 // necesita.
                 <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-[13px] leading-5 text-ink-500 sm:flex-nowrap">
-                  {/* En el teléfono parte en dos líneas: recortado, el nombre
-                      del cliente desaparecía entero. */}
-                  <span className="min-w-0 sm:truncate">
-                    {storeName(row.store_id)} · creado el{" "}
-                    <span className="tabular-nums">{fmtDate(row.order_created_at)}</span>
-                    {detail?.row.customer_name ? (
-                      <>
-                        {" · "}
-                        <span className="text-ink-700">{detail.row.customer_name}</span>
-                      </>
-                    ) : null}
+                  <span className="shrink-0">{storeName(row.store_id)}</span>
+                  {/* En el teléfono la fecha espera en Información: cada línea de
+                      más en la cabecera fija es pantalla que no se usa. */}
+                  <span className="hidden shrink-0 sm:inline">
+                    · creado el <span className="tabular-nums">{fmtDate(row.order_created_at)}</span>
                   </span>
-                  {/* El «·», el número y «Copiar» parten juntos: sueltos, en el
-                      teléfono el número bajaba solo y el punto quedaba colgando. */}
+                  {/* En el teléfono el cliente va en su propia línea, arriba y
+                      entero: detrás de la tienda se partía a media palabra. En
+                      escritorio es lo que se recorta si no cabe, nunca el
+                      teléfono. */}
+                  {detail?.row.customer_name ? (
+                    <span className="min-w-0 max-sm:order-first max-sm:basis-full sm:truncate">
+                      <span aria-hidden="true" className="max-sm:hidden">· </span>
+                      <span className="text-ink-700">{detail.row.customer_name}</span>
+                    </span>
+                  ) : null}
+                  {/* El «·», el número y «Copiar» parten juntos: sueltos, el
+                      número bajaba solo y el punto quedaba colgando. */}
                   {detail?.row.customer_phone && (
-                    <span className="inline-flex items-center gap-x-1.5 whitespace-nowrap">
+                    <span className="inline-flex shrink-0 items-center gap-x-1.5 whitespace-nowrap">
                       <span aria-hidden="true">·</span>
                       <span className="tabular-nums text-ink-700">{detail.row.customer_phone}</span>
                       <CopyButton
@@ -1185,7 +1210,10 @@ export function OrderDrawer({
             <nav aria-label="Secciones de la pestaña" className="border-t border-line">
               <div
                 ref={indexRef}
-                className="relative flex gap-1 overflow-x-auto px-1.5 py-2 [scrollbar-width:none] sm:px-3.5 [&::-webkit-scrollbar]:hidden"
+                className={cn(
+                  "relative flex gap-1 overflow-x-auto px-1.5 py-2 [scrollbar-width:none] sm:px-3.5 [&::-webkit-scrollbar]:hidden",
+                  indexMore && "[mask-image:linear-gradient(to_right,#000_calc(100%_-_3rem),transparent)]",
+                )}
               >
                 {indexItems.map((item) => {
                   const current = item.id === currentSection;
@@ -1240,7 +1268,7 @@ export function OrderDrawer({
               role="tabpanel"
               aria-labelledby="pedido-tab-operar"
               hidden={workspace !== "operar"}
-              className="flex flex-col gap-4"
+              className="flex flex-col gap-4 sm:gap-6"
             >
               <section
                 data-drawer-section="resumen"
@@ -1280,17 +1308,19 @@ export function OrderDrawer({
                 <DrawerJourneyRail current={detail.row.macro_stage} />
               </section>
               {nextAction && workspace === "operar" && (
-                <div className="order-2 space-y-3">
-                  <DrawerNextActionCard action={nextAction} onJump={jumpTo} />
+                <div className="order-2">
                   {/* Grupo GF: quién tiene el paquete y en qué quedó, arriba y en
                       cualquier etapa (también Por cerrar), sin bajar hasta
-                      «Salidas y guías». */}
-                  {gfActive && (
-                    <div className="rounded-lg bg-white px-4 py-3 shadow-control ring-1 ring-line">
-                      <p className="text-[13px] font-medium text-ink-700">Motorizado Grupo GF</p>
-                      <GfDeliveryLine delivery={gfActive} />
-                    </div>
-                  )}
+                      «Salidas y guías». Va DENTRO de la tarjeta de la acción, en
+                      su zona: suelto debajo era una tarjeta sin título. */}
+                  <DrawerNextActionCard action={nextAction} onJump={jumpTo}>
+                    {gfActive && (
+                      <>
+                        <p className="text-[13px] font-medium text-ink-700">Motorizado Grupo GF</p>
+                        <GfDeliveryLine delivery={gfActive} />
+                      </>
+                    )}
+                  </DrawerNextActionCard>
                 </div>
               )}
               {/* La gestión de confirmación va arriba porque en Por confirmar ES
@@ -1704,7 +1734,7 @@ export function OrderDrawer({
               role="tabpanel"
               aria-labelledby="pedido-tab-informacion"
               hidden={workspace !== "informacion"}
-              className="flex flex-col gap-4"
+              className="flex flex-col gap-4 sm:gap-6"
             >
               <section
                 data-drawer-section="cliente"
@@ -1816,7 +1846,7 @@ export function OrderDrawer({
               role="tabpanel"
               aria-labelledby="pedido-tab-actividad"
               hidden={workspace !== "actividad"}
-              className="flex flex-col gap-4"
+              className="flex flex-col gap-4 sm:gap-6"
             >
               <section
                 data-drawer-section="historial"
@@ -1953,8 +1983,6 @@ export function OrderDrawer({
  * mida (crece con los avisos y con el índice): `--ficha-head` lo pone la hoja.
  */
 const SECTION = cn(SECTION_CARD, "scroll-mt-[calc(var(--ficha-head,9rem)_+_1rem)]");
-/** Marco sin sombra para una lista dentro de una tarjeta (el historial del cliente). */
-const FRAME = "rounded-lg ring-1 ring-inset ring-line";
 const FIELD_LABEL = "text-[13px] leading-5 text-ink-500";
 const FIELD_VALUE = "mt-0.5 break-words text-sm leading-5 text-ink-900";
 /** Etiqueta de un campo de formulario. */
@@ -2323,7 +2351,7 @@ function PriorOrderRow({
   const attempts = row.attempt_count ?? 0;
 
   return (
-    <li className="px-3 py-2.5">
+    <li className="px-4 py-2.5 sm:px-5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="font-mono text-xs font-semibold text-ink-900">
           {row.order_name ?? row.order_id}
@@ -2487,7 +2515,7 @@ function ConfirmationBrief({ brief, orderId, onDuplicateChanged }: {
             Historial del cliente
             <span className="font-normal text-ink-500 group-open:hidden">(ver los {priors.length})</span>
           </summary>
-          <ul className={cn(FRAME, "mt-2 divide-y divide-line")}>
+          <ul className="-mx-4 mt-2 divide-y divide-line border-y border-line sm:-mx-5">
             {priors.slice(0, 10).map((row) => (
               <PriorOrderRow
                 key={row.order_id}

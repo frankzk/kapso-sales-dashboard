@@ -296,7 +296,7 @@ export function PickupKeyPanel({
   // en el panel de la salida, no acá.
   if (mode === "prepaid") {
     return (
-      <section className="space-y-4">
+      <section className="@container space-y-4">
         {head(<Badge tone="ok">Pagado por web</Badge>)}
         <Banner tone="ok">
           Este pedido se pagó en el checkout
@@ -344,7 +344,7 @@ export function PickupKeyPanel({
       : PAYMENT_STATE_TONE[panel.paymentState as PaymentState] ?? "neutral";
 
   return (
-    <section className="space-y-4">
+    <section className="@container space-y-4">
       {head(<Badge tone={paymentTone}>{paymentLabel}</Badge>)}
 
       {gatewayNote && (
@@ -480,52 +480,76 @@ function PaymentMoneySummary({
       ? "Adelanto cargado, falta validarlo"
       : `Faltan S/ ${Math.max(0, SHALOM_MINIMUM_ADVANCE - progress.registeredTotal).toFixed(2)} para el adelanto mínimo`;
 
+  // El resumen de cifras del mundo (DESIGN.md, Panel lateral): un marco con
+  // hairlines entre celdas y el saldo sobre `wash`. Escrito como frase, en el
+  // teléfono «S/» quedaba en una línea y el monto en la siguiente.
+  const cells: { label: string; value: string; note?: string; balance?: boolean }[] = [
+    {
+      label: "Validado",
+      value: `S/ ${progress.validatedTotal.toFixed(2)}`,
+      note: progress.orderTotal !== null ? `de S/ ${progress.orderTotal.toFixed(2)}` : undefined,
+    },
+    { label: "Cargado", value: `S/ ${progress.registeredTotal.toFixed(2)}` },
+    ...(progress.registeredRemaining !== null
+      ? [{ label: "Saldo por cargar", value: `S/ ${progress.registeredRemaining.toFixed(2)}`, balance: true }]
+      : []),
+  ];
+
   return (
-    <div className="rounded-lg bg-wash px-4 py-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <p className="text-sm font-semibold tabular-nums text-ink-900">
-          S/ {progress.validatedTotal.toFixed(2)} validados
-          {progress.orderTotal !== null ? ` de S/ ${progress.orderTotal.toFixed(2)}` : ""}
-        </p>
-        <p className="text-[13px] tabular-nums text-ink-600">
-          Cargado: <strong className="font-semibold text-ink-900">S/ {progress.registeredTotal.toFixed(2)}</strong>
-          {progress.registeredRemaining !== null && (
-            <> · Saldo por cargar: <strong className="font-semibold text-ink-900">S/ {progress.registeredRemaining.toFixed(2)}</strong></>
+    <div className="overflow-hidden rounded-lg ring-1 ring-inset ring-line">
+      <dl className={cn("grid divide-y divide-line @md:divide-x @md:divide-y-0", cells.length === 3 ? "@md:grid-cols-3" : "@md:grid-cols-2")}>
+        {cells.map((cell) => (
+          <div
+            key={cell.label}
+            className={cn(
+              "flex items-baseline justify-between gap-3 px-4 py-2.5 @md:block @md:py-3",
+              cell.balance && "bg-wash",
+            )}
+          >
+            <dt className="text-[13px] text-ink-600">{cell.label}</dt>
+            <dd className="text-right @md:mt-0.5 @md:text-left">
+              <span className="whitespace-nowrap text-base font-semibold tabular-nums text-ink-900">{cell.value}</span>
+              {cell.note && (
+                <span className="ml-1.5 whitespace-nowrap text-[13px] tabular-nums text-ink-600">{cell.note}</span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <div className="border-t border-line px-4 py-3">
+        {progress.orderTotal !== null && (
+          <div
+            className="mb-2.5 h-1.5 overflow-hidden rounded-full bg-line-strong"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={ratio}
+            aria-label={`${ratio}% del pedido validado`}
+          >
+            <div
+              className="h-full rounded-full bg-ok-fg transition-[width] duration-200 motion-reduce:transition-none"
+              style={{ width: `${ratio}%` }}
+            />
+          </div>
+        )}
+        <p
+          className={cn(
+            "flex items-center gap-1.5 text-[13px] font-medium",
+            progress.advanceValidated
+              ? "text-ok-fg"
+              : progress.advanceRegistered
+                ? "text-warn-fg"
+                : "text-ink-600",
           )}
+        >
+          {progress.advanceValidated ? (
+            <IconCheck aria-hidden className="size-4 shrink-0" />
+          ) : progress.advanceRegistered ? (
+            <IconClock aria-hidden className="size-4 shrink-0" />
+          ) : null}
+          {advanceCopy}
         </p>
       </div>
-      {progress.orderTotal !== null && (
-        <div
-          className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-line-strong"
-          role="progressbar"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={ratio}
-          aria-label={`${ratio}% del pedido validado`}
-        >
-          <div
-            className="h-full rounded-full bg-ok-fg transition-[width] duration-200 motion-reduce:transition-none"
-            style={{ width: `${ratio}%` }}
-          />
-        </div>
-      )}
-      <p
-        className={cn(
-          "mt-2 flex items-center gap-1.5 text-[13px] font-medium",
-          progress.advanceValidated
-            ? "text-ok-fg"
-            : progress.advanceRegistered
-              ? "text-warn-fg"
-              : "text-ink-600",
-        )}
-      >
-        {progress.advanceValidated ? (
-          <IconCheck aria-hidden className="size-4 shrink-0" />
-        ) : progress.advanceRegistered ? (
-          <IconClock aria-hidden className="size-4 shrink-0" />
-        ) : null}
-        {advanceCopy}
-      </p>
     </div>
   );
 }
@@ -589,11 +613,18 @@ function PaymentList({
                   {STATUS_LABEL[p.validation_status] ?? p.validation_status}
                 </Badge>
               </div>
-              <p className="-mt-1 text-[13px] tabular-nums text-ink-500">
-                {p.operation_number ? `Op. ${p.operation_number} · ` : ""}
-                {fmtDateTime(p.paid_at)}
-                {p.payer_name ? ` · Pagó: ${p.payer_name}` : ""}
-              </p>
+              {/* Sin operación, fecha ni pagador la línea decía solo «—». */}
+              {(p.operation_number || p.paid_at || p.payer_name) && (
+                <p className="-mt-1 text-[13px] tabular-nums text-ink-500">
+                  {[
+                    p.operation_number ? `Op. ${p.operation_number}` : null,
+                    p.paid_at ? fmtDateTime(p.paid_at) : null,
+                    p.payer_name ? `Pagó: ${p.payer_name}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              )}
               <StoredRecipientStatus
                 vision={p.vision}
                 hasVoucher={Boolean(p.file_path)}
@@ -759,18 +790,27 @@ function ValidateActions({
         {children}
       </div>
 
+      {/* Un desplegable, como «Consultas de la clave»: es lo que va a salir,
+          no un aviso de que algo salió bien. */}
       {enviará && (
-        <div className="rounded-md bg-ok-wash px-3 py-2">
+        <div>
           <button
             type="button"
             onClick={() => setVerPrevia((v) => !v)}
             aria-expanded={verPrevia}
-            className="inline-flex items-center text-[13px] font-medium text-ok-fg underline-offset-2 hover:underline pointer-coarse:min-h-11"
+            className="inline-flex min-h-8 items-center gap-1.5 text-[13px] font-medium text-ink-600 hover:text-ink-900 pointer-coarse:min-h-11"
           >
+            <IconChevronDown
+              aria-hidden
+              className={cn(
+                "size-4 text-ink-500 transition-transform duration-150 motion-reduce:transition-none",
+                verPrevia ? "rotate-0" : "-rotate-90",
+              )}
+            />
             {verPrevia ? "Ocultar el mensaje" : "Ver el mensaje que se enviará"}
           </button>
           {verPrevia && (
-            <pre className="mt-1 whitespace-pre-wrap font-sans text-[13px] leading-5 text-ink-900">
+            <pre className="ml-5.5 mt-1 whitespace-pre-wrap rounded-md bg-wash px-3 py-2 font-sans text-[13px] leading-5 text-ink-900">
               {keyAutosend?.preview}
             </pre>
           )}
@@ -1174,11 +1214,12 @@ function MissingOperation({
   );
 }
 
-const SIGNAL_TONE = {
-  neutral: { box: "bg-white ring-line", disc: "bg-line text-ink-500" },
-  ok: { box: "bg-ok-wash ring-ok-bg", disc: "bg-ok-fg text-white" },
-  partial: { box: "bg-warn-wash ring-warn-bg", disc: "bg-warn-fg text-white" },
-  bad: { box: "bg-crit-wash ring-crit-bg", disc: "bg-crit-fg text-white" },
+/** El disco de cada señal dice en qué quedó; el texto lo repite para el lector. */
+const SIGNAL_DISC = {
+  neutral: "bg-line-strong text-ink-600",
+  ok: "bg-ok-fg text-white",
+  partial: "bg-warn-fg text-white",
+  bad: "bg-crit-fg text-white",
 } as const;
 
 function RecipientSignal({
@@ -1201,15 +1242,17 @@ function RecipientSignal({
 }) {
   const tone = !present ? "neutral" : matches ? "ok" : cutShort ? "partial" : "bad";
   return (
-    <div className={cn("rounded-md px-3 py-2 ring-1 ring-inset", SIGNAL_TONE[tone].box)}>
-      <p className="text-xs font-medium text-ink-500">{label}</p>
+    // Una columna sobre el `wash` del grupo, sin recuadro propio: un marco
+    // dentro de otro marco dentro de la tarjeta era un nivel de más.
+    <div className="min-w-0 py-1 @md:px-3 @md:first:pl-0 @md:last:pr-0">
+      <p className="text-xs font-medium text-ink-600">{label}</p>
       <div className="mt-1 flex items-center gap-2">
         <span
           aria-hidden="true"
-          className={cn("grid size-5 shrink-0 place-items-center rounded-full", SIGNAL_TONE[tone].disc)}
+          className={cn("grid size-5 shrink-0 place-items-center rounded-full", SIGNAL_DISC[tone])}
         >
           {tone === "neutral" ? (
-            <span className="size-1.5 rounded-full bg-ink-500" />
+            <span className="size-1.5 rounded-full bg-ink-600" />
           ) : tone === "ok" ? (
             <IconCheck className="size-3" strokeWidth={2.6} />
           ) : tone === "partial" ? (
@@ -1218,7 +1261,7 @@ function RecipientSignal({
             <IconX className="size-3" strokeWidth={2.6} />
           )}
         </span>
-        <span className={cn("min-w-0 truncate text-sm font-semibold", present ? "text-ink-900" : "text-ink-500")}>
+        <span className={cn("min-w-0 truncate text-sm font-semibold", present ? "text-ink-900" : "text-ink-600")}>
           {value}
         </span>
         {/* El tono no puede ser la única señal: el lector oye en qué quedó. */}
@@ -1226,7 +1269,7 @@ function RecipientSignal({
           {tone === "neutral" ? "(sin leer)" : tone === "ok" ? "(coincide)" : tone === "partial" ? "(leído a medias)" : "(no coincide)"}
         </span>
       </div>
-      <p className="mt-1 text-xs leading-4 text-ink-500">Debe coincidir con {expected}</p>
+      <p className="mt-1 text-xs leading-4 text-ink-600">Debe coincidir con {expected}</p>
     </div>
   );
 }
@@ -1303,7 +1346,7 @@ function RecipientAccountCheck({
       <p id={titleId} className="text-[13px] font-semibold text-ink-700">
         Cuenta receptora del Yape
       </p>
-      <div className="grid gap-2 @md:grid-cols-2">
+      <div className="grid divide-y divide-line @md:grid-cols-2 @md:divide-x @md:divide-y-0">
         <RecipientSignal
           label="Destinatario leído"
           value={
@@ -1337,7 +1380,7 @@ function RecipientAccountCheck({
               ? "text-crit-fg"
               : verification.status === "partial"
                 ? "text-warn-fg"
-                : "text-ink-500",
+                : "text-ink-600",
         )}
       >
         {verification.status === "verified" ? (
@@ -2077,7 +2120,7 @@ function VoucherForm({
                     <p className="text-[13px] text-ink-600">
                       Tipo de este pago: <strong className="font-semibold text-ink-900">Diferencia</strong>
                     </p>
-                    <span className="text-[13px] text-ink-500">El adelanto ya fue registrado</span>
+                    <span className="text-[13px] text-ink-600">El adelanto ya fue registrado</span>
                   </div>
                 ) : (
                   // El control segmentado de DESIGN.md: pista en `wash` y la
