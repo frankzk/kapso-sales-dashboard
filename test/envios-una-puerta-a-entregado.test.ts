@@ -72,9 +72,10 @@ describe("el formulario manual tiene fecha propia y se pliega", () => {
 describe("la cola va primero", () => {
   it("las métricas quedan plegadas en un resumen", () => {
     const summary = ui.slice(ui.indexOf("<details className=\"group rounded-xl"), ui.indexOf("</details>"));
-    expect(summary).toContain("Resumen: reprogramaciones y gestión de hoy");
+    expect(summary).toContain("Resumen: reprogramaciones, gestión de hoy y agentes de voz");
     expect(summary).toContain("<ReprogramStrip stats={reprogram} stores={stores} />");
     expect(summary).toContain("<TodayByAgentPanel rows={todayByAgent} />");
+    expect(summary).toContain("<VoiceScorePanel score={voiceScore} />");
     expect(summary).not.toContain("<details open");
   });
 });

@@ -4,6 +4,7 @@ import { getAccessibleStores } from "@/lib/access";
 import {
   getReprogramStats,
   getReproTodayByAgent,
+  getVoiceScoreboard,
   getShipmentCounts,
   getStoreShipments,
   isShipmentView,
@@ -42,11 +43,12 @@ async function EnviosContent({
   // counts + queue span ALL accessible stores (guides are a shared multitienda
   // pool); the store/province/district filters happen client-side in the board.
   const storeIds = stores.map((s) => s.id);
-  const [counts, shipments, reprogram, todayByAgent] = await Promise.all([
+  const [counts, shipments, reprogram, todayByAgent, voiceScore] = await Promise.all([
     getShipmentCounts(storeIds),
     getStoreShipments(storeIds, view),
     getReprogramStats(storeIds),
     getReproTodayByAgent(storeIds),
+    getVoiceScoreboard(storeIds),
   ]);
 
   return (
@@ -59,6 +61,7 @@ async function EnviosContent({
       counts={counts}
       shipments={shipments}
       todayByAgent={todayByAgent}
+      voiceScore={voiceScore}
       initialOpenId={sp.open ?? null}
     />
     </>

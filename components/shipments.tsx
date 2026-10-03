@@ -55,6 +55,12 @@ import type {
 } from "@/lib/types";
 import { SHIPMENT_VIEWS, type ShipmentView, type ReproDayAgentNamed } from "@/lib/shipments-access";
 import {
+  voiceCallsPerConfirma,
+  voiceConversion,
+  type VoiceScoreRow,
+  type VoiceScoreboard,
+} from "@/lib/voice-scoreboard";
+import {
   RECOVERY_CALL_DISPOSITIONS,
   RECOVERY_LABEL,
   type RecoveryCallDisposition,
@@ -389,6 +395,7 @@ export function ShipmentsBoard({
   shipments,
   reprogram,
   todayByAgent,
+  voiceScore,
   initialOpenId,
 }: {
   stores: StoreSummary[];
@@ -397,6 +404,7 @@ export function ShipmentsBoard({
   shipments: ShipmentRow[];
   reprogram?: ReprogramStats;
   todayByAgent?: ReproDayAgentNamed[];
+  voiceScore?: VoiceScoreboard | null;
   initialOpenId?: string | null;
 }) {
   const router = useRouter();
@@ -962,14 +970,15 @@ export function ShipmentsBoard({
           son lectura de dirección, no de quien marca el teléfono: cada apertura
           de Envíos costaba un scroll y una lectura antes de la primera guía.
           Siguen a un clic, plegadas, con los mismos datos. */}
-      {(reprogram || todayByAgent) && (
+      {(reprogram || todayByAgent || voiceScore) && (
         <details className="group rounded-xl border border-slate-200 bg-white">
           <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium text-slate-700 marker:text-slate-500">
-            Resumen: reprogramaciones y gestión de hoy
+            Resumen: reprogramaciones, gestión de hoy y agentes de voz
           </summary>
           <div className="space-y-3 border-t border-slate-100 p-3">
             {reprogram && <ReprogramStrip stats={reprogram} stores={stores} />}
             {todayByAgent && <TodayByAgentPanel rows={todayByAgent} />}
+            {voiceScore && <VoiceScorePanel score={voiceScore} />}
           </div>
         </details>
       )}
@@ -4265,6 +4274,81 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+/** «Agentes de voz: comparación» (MOM §11.8): los agentes que compiten, uno al
+ *  lado del otro, solo con llamadas reales. Hoy o los últimos siete días. */
+function VoiceScorePanel({ score }: { score: VoiceScoreboard }) {
+  const [period, setPeriod] = useState<"hoy" | "semana">("hoy");
+  const rows: VoiceScoreRow[] = score[period];
+  const pct = (n: number | null) => (n == null ? "—" : `${Math.round(n * 100)}%`);
+  const per = (n: number | null) => (n == null ? "—" : n.toFixed(1).replace(".", ","));
+  const cell = "px-3 py-1.5 text-right tabular-nums";
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white">
+      <div className="flex items-center gap-2 px-3 py-2 text-xs">
+        <span className="text-sm font-semibold text-slate-800">Agentes de voz: comparación</span>
+        <div className="ml-auto inline-flex rounded-md border border-slate-200 p-0.5" role="group" aria-label="Periodo">
+          {(
+            [
+              ["hoy", "Hoy"],
+              ["semana", "7 días"],
+            ] as const
+          ).map(([key, text]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setPeriod(key)}
+              aria-pressed={period === key}
+              className={`rounded px-2 py-0.5 ${period === key ? "bg-slate-800 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-t border-slate-100 text-xs text-slate-500">
+              <th className="px-3 py-1.5 text-left font-medium">Agente</th>
+              <th className="px-3 py-1.5 text-right font-medium">Llamadas</th>
+              <th className="px-3 py-1.5 text-right font-medium">Atendidas</th>
+              <th className="px-3 py-1.5 text-right font-medium">Sin gestión</th>
+              <th className="px-3 py-1.5 text-right font-medium">Confirma</th>
+              <th className="px-3 py-1.5 text-right font-medium">Programa</th>
+              <th className="px-3 py-1.5 text-right font-medium">Cancela</th>
+              <th className="px-3 py-1.5 text-right font-medium">Guías Swayp</th>
+              <th className="px-3 py-1.5 text-right font-medium">Confirma / atendidas</th>
+              <th className="px-3 py-1.5 text-right font-medium">Llamadas por confirma</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.agent} className={`border-t border-slate-100 ${r.llamadas ? "" : "text-slate-500"}`}>
+                <td className="px-3 py-1.5 text-left text-slate-700">{r.name}</td>
+                <td className={`${cell} font-semibold text-slate-800`}>{r.llamadas}</td>
+                <td className={cell}>{r.atendidas}</td>
+                <td className={`${cell} text-amber-700`}>{r.sinGestion}</td>
+                <td className={`${cell} text-emerald-700`}>{r.confirma}</td>
+                <td className={cell}>{r.programar}</td>
+                <td className={`${cell} text-slate-500`}>{r.cancela}</td>
+                <td className={cell}>{r.guias}</td>
+                <td className={`${cell} font-semibold`}>{pct(voiceConversion(r))}</td>
+                <td className={cell}>{per(voiceCallsPerConfirma(r))}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="border-t border-slate-100 px-3 py-2 text-xs leading-relaxed text-slate-500">
+          Solo llamadas reales (no las de prueba) · Atendidas: la clienta habló con el agente · Sin gestión: atendió
+          pero se cortó sin que el agente registrara un resultado · Guías Swayp: salidas creadas por sus «confirma» ·
+          Agente Daaph: Zadarma + Grok · Agente Telnyx: Telnyx + Grok · Agente ElevenLabs: Telnyx + ElevenLabs.
+        </p>
+      </div>
     </div>
   );
 }
