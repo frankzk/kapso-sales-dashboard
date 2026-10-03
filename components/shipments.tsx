@@ -54,12 +54,7 @@ import type {
   StoreSummary,
 } from "@/lib/types";
 import { SHIPMENT_VIEWS, type ShipmentView, type ReproDayAgentNamed } from "@/lib/shipments-access";
-import {
-  voiceCallsPerConfirma,
-  voiceConversion,
-  type VoiceScoreRow,
-  type VoiceScoreboard,
-} from "@/lib/voice-scoreboard";
+import { voiceCallsPerConfirma, voiceConversion, type VoiceScoreRow } from "@/lib/voice-scoreboard";
 import {
   RECOVERY_CALL_DISPOSITIONS,
   RECOVERY_LABEL,
@@ -87,6 +82,7 @@ import {
   claimShipment,
   createFenixGuide,
   loadReprogramData,
+  loadVoiceScore,
   loadShipmentDetail,
   reprogramCancelledShipmentException,
   registerCourierReportResult,
@@ -404,7 +400,8 @@ export function ShipmentsBoard({
   shipments: ShipmentRow[];
   reprogram?: ReprogramStats;
   todayByAgent?: ReproDayAgentNamed[];
-  voiceScore?: VoiceScoreboard | null;
+  /** «Agentes de voz: comparación» de hoy; los otros rangos se piden al elegirlos. */
+  voiceScore?: VoiceScoreRow[] | null;
   initialOpenId?: string | null;
 }) {
   const router = useRouter();
@@ -978,7 +975,7 @@ export function ShipmentsBoard({
           <div className="space-y-3 border-t border-slate-100 p-3">
             {reprogram && <ReprogramStrip stats={reprogram} stores={stores} />}
             {todayByAgent && <TodayByAgentPanel rows={todayByAgent} />}
-            {voiceScore && <VoiceScorePanel score={voiceScore} />}
+            {voiceScore && <VoiceScorePanel initial={voiceScore} />}
           </div>
         </details>
       )}
@@ -4279,10 +4276,29 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
 }
 
 /** «Agentes de voz: comparación» (MOM §11.8): los agentes que compiten, uno al
- *  lado del otro, solo con llamadas reales. Hoy o los últimos siete días. */
-function VoiceScorePanel({ score }: { score: VoiceScoreboard }) {
-  const [period, setPeriod] = useState<"hoy" | "semana">("hoy");
-  const rows: VoiceScoreRow[] = score[period];
+ *  lado del otro, solo con llamadas reales. Los mismos chips de rango que el
+ *  popup de reprogramaciones; hoy llega con la página y el resto se pide. */
+function VoiceScorePanel({ initial }: { initial: VoiceScoreRow[] }) {
+  const today = limaTodayKey();
+  const [preset, setPreset] = useState<ReprogramPreset>("hoy");
+  const [custom, setCustom] = useState({ from: today, to: today });
+  const { from, to } = reprogramPresetRange(preset, custom);
+  const key = `${from}|${to}`;
+  const [loaded, setLoaded] = useState<Record<string, VoiceScoreRow[] | "error">>({ [`${today}|${today}`]: initial });
+  const result = loaded[key];
+
+  useEffect(() => {
+    if (result) return;
+    let alive = true;
+    loadVoiceScore(from, to)
+      .then((rows) => alive && setLoaded((m) => ({ ...m, [key]: rows ?? "error" })))
+      .catch(() => alive && setLoaded((m) => ({ ...m, [key]: "error" })));
+    return () => {
+      alive = false;
+    };
+  }, [key, from, to, result]);
+
+  const rows = Array.isArray(result) ? result : null;
   const pct = (n: number | null) => (n == null ? "—" : `${Math.round(n * 100)}%`);
   const per = (n: number | null) => (n == null ? "—" : n.toFixed(1).replace(".", ","));
   const cell = "px-3 py-1.5 text-right tabular-nums";
@@ -4291,24 +4307,48 @@ function VoiceScorePanel({ score }: { score: VoiceScoreboard }) {
     <div className="rounded-xl border border-slate-200 bg-white">
       <div className="flex items-center gap-2 px-3 py-2 text-xs">
         <span className="text-sm font-semibold text-slate-800">Agentes de voz: comparación</span>
-        <div className="ml-auto inline-flex rounded-md border border-slate-200 p-0.5" role="group" aria-label="Periodo">
-          {(
-            [
-              ["hoy", "Hoy"],
-              ["semana", "7 días"],
-            ] as const
-          ).map(([key, text]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setPeriod(key)}
-              aria-pressed={period === key}
-              className={`rounded px-2 py-0.5 ${period === key ? "bg-slate-800 text-white" : "text-slate-600 hover:bg-slate-100"}`}
-            >
-              {text}
-            </button>
-          ))}
-        </div>
+        <span className="ml-auto text-slate-500">{from === to ? from : `${from} al ${to}`}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2">
+        {REPROGRAM_PRESETS.map((p) => (
+          <button
+            key={p.key}
+            type="button"
+            onClick={() => setPreset(p.key)}
+            aria-pressed={preset === p.key}
+            className={cn(
+              "rounded-full border px-2.5 py-1 text-xs font-medium transition",
+              preset === p.key
+                ? "border-brand-200 bg-brand-50 text-brand-700"
+                : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+            )}
+          >
+            {p.label}
+          </button>
+        ))}
+        {preset === "rango" && (
+          <span className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span aria-hidden="true">Del</span>
+            <input
+              type="date"
+              aria-label="Desde"
+              value={custom.from}
+              max={custom.to}
+              onChange={(e) => setCustom((s) => ({ ...s, from: e.target.value || s.from }))}
+              className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
+            />
+            <span aria-hidden="true">al</span>
+            <input
+              type="date"
+              aria-label="Hasta"
+              value={custom.to}
+              min={custom.from}
+              max={today}
+              onChange={(e) => setCustom((s) => ({ ...s, to: e.target.value || s.to }))}
+              className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
+            />
+          </span>
+        )}
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -4327,7 +4367,14 @@ function VoiceScorePanel({ score }: { score: VoiceScoreboard }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {!rows && (
+              <tr className="border-t border-slate-100">
+                <td colSpan={10} className="px-3 py-3 text-xs text-slate-500">
+                  {result === "error" ? "No se pudo leer este rango." : "Cargando…"}
+                </td>
+              </tr>
+            )}
+            {rows?.map((r) => (
               <tr key={r.agent} className={`border-t border-slate-100 ${r.llamadas ? "" : "text-slate-500"}`}>
                 <td className="px-3 py-1.5 text-left text-slate-700">{r.name}</td>
                 <td className={`${cell} font-semibold text-slate-800`}>{r.llamadas}</td>
@@ -4426,7 +4473,7 @@ const REPROGRAM_PRESETS: { key: ReprogramPreset; label: string }[] = [
   { key: "hoy", label: "Hoy" },
   { key: "ayer", label: "Ayer" },
   { key: "7d", label: "Últimos 7 días" },
-  { key: "mes", label: "Mes" },
+  { key: "mes", label: "Este mes" },
   { key: "rango", label: "Rango" },
 ];
 

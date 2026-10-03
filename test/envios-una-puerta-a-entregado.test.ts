@@ -75,7 +75,7 @@ describe("la cola va primero", () => {
     expect(summary).toContain("Resumen: reprogramaciones, gestión de hoy y agentes de voz");
     expect(summary).toContain("<ReprogramStrip stats={reprogram} stores={stores} />");
     expect(summary).toContain("<TodayByAgentPanel rows={todayByAgent} />");
-    expect(summary).toContain("<VoiceScorePanel score={voiceScore} />");
+    expect(summary).toContain("<VoiceScorePanel initial={voiceScore} />");
     expect(summary).not.toContain("<details open");
   });
 });

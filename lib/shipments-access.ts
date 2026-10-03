@@ -43,7 +43,12 @@ import { derivedGuideDates, type GuideCallLike } from "@/lib/guide-dates";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
-import { aggregateVoiceScore, type VoiceScoreCall, type VoiceScoreboard } from "@/lib/voice-scoreboard";
+import {
+  aggregateVoiceScore,
+  voiceScoreBounds,
+  type VoiceScoreCall,
+  type VoiceScoreRow,
+} from "@/lib/voice-scoreboard";
 import { productImagesFor } from "@/lib/shopify-product-images";
 import {
   buildShipmentLineage,
@@ -1158,37 +1163,32 @@ export async function getReproTodayByAgent(storeIds: string[]): Promise<ReproDay
 }
 
 /**
- * «Agentes de voz: comparación» (MOM §11.8): llamadas reales de hoy y de los
- * últimos siete días de Lima (hoy incluido), por agente.
+ * «Agentes de voz: comparación» (MOM §11.8): llamadas reales entre dos días de
+ * Lima, ambos incluidos. Null si el rango no vale o la lectura falla.
  */
-export async function getVoiceScoreboard(storeIds: string[]): Promise<VoiceScoreboard | null> {
-  if (!storeIds.length) return null;
+export async function getVoiceScore(storeIds: string[], from: string, to: string): Promise<VoiceScoreRow[] | null> {
+  const bounds = voiceScoreBounds(from, to);
+  if (!storeIds.length || !bounds) return null;
   const sb = await createServerSupabase();
-  const { startIso: hoyIso, endIso } = limaCalendarDayBounds();
-  const semanaIso = new Date(Date.parse(hoyIso) - 6 * 86_400_000).toISOString();
 
-  type Row = Omit<VoiceScoreCall, "salidaOk"> & { queued_at: string; salida_ok: boolean | null };
-  const rows: Row[] = [];
-  for (let from = 0; from < MAX_LIST * 4; from += PAGE) {
+  type Row = Omit<VoiceScoreCall, "salidaOk"> & { salida_ok: boolean | null };
+  const calls: VoiceScoreCall[] = [];
+  for (let offset = 0; offset < MAX_LIST * 4; offset += PAGE) {
     const { data, error } = await sb
       .from("voice_calls")
-      .select("telephony, provider, started_at, outcome, queued_at, salida_ok:outcome_payload->salida_swayp->ok")
+      .select("telephony, provider, started_at, outcome, salida_ok:outcome_payload->salida_swayp->ok")
       .in("store_id", storeIds)
       .eq("mode", "real")
-      .gte("queued_at", semanaIso)
-      .lt("queued_at", endIso)
+      .gte("queued_at", bounds.startIso)
+      .lt("queued_at", bounds.endIso)
       .order("queued_at", { ascending: true })
-      .range(from, from + PAGE - 1);
+      .range(offset, offset + PAGE - 1);
     if (error) return null;
     const batch = (data as unknown as Row[]) ?? [];
-    rows.push(...batch);
+    for (const r of batch) calls.push({ ...r, salidaOk: r.salida_ok === true });
     if (batch.length < PAGE) break;
   }
-  const calls = rows.map((r) => ({ ...r, salidaOk: r.salida_ok === true }));
-  return {
-    hoy: aggregateVoiceScore(calls.filter((c) => c.queued_at >= hoyIso)),
-    semana: aggregateVoiceScore(calls),
-  };
+  return aggregateVoiceScore(calls);
 }
 
 async function buildReprogramRows(

@@ -9,6 +9,7 @@ import { recomputeOrderMasterForShipmentsSafe } from "@/lib/order-master";
 import {
   getReprogramRows,
   getShipmentWithCalls,
+  getVoiceScore,
   searchOrdersForLink,
   searchShipmentsQuery,
   withRecoveryState,
@@ -17,6 +18,7 @@ import {
 import type { RecoveryCallDisposition } from "@/lib/reproprovincia";
 import { discardRecovery, validarMotivoDescarte } from "@/lib/recovery-discard";
 import type { ReprogramChildRow } from "@/lib/shipments";
+import type { VoiceScoreRow } from "@/lib/voice-scoreboard";
 import {
   CLAIM_TTL_MINUTES,
   COURIER_REPORT_RESULTS,
@@ -193,6 +195,16 @@ export async function loadReprogramData(): Promise<{
   const storeIds = stores.map((s) => s.id);
   if (!storeIds.length) return { rows: [], asesorNames: {} };
   return getReprogramRows(storeIds);
+}
+
+/** «Agentes de voz: comparación» para un rango de días de Lima. RLS-scoped. */
+export async function loadVoiceScore(from: string, to: string): Promise<VoiceScoreRow[] | null> {
+  const stores = await getAccessibleStores();
+  return getVoiceScore(
+    stores.map((s) => s.id),
+    from,
+    to,
+  );
 }
 
 /** Authorize the caller against a shipment via RLS (must see its store). */

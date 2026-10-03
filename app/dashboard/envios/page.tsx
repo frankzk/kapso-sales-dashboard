@@ -4,12 +4,13 @@ import { getAccessibleStores } from "@/lib/access";
 import {
   getReprogramStats,
   getReproTodayByAgent,
-  getVoiceScoreboard,
+  getVoiceScore,
   getShipmentCounts,
   getStoreShipments,
   isShipmentView,
   type ShipmentView,
 } from "@/lib/shipments-access";
+import { limaTodayKey } from "@/lib/shipments";
 import { EmptyState } from "@/components/ui";
 import { ShipmentsBoard } from "@/components/shipments";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
@@ -43,12 +44,13 @@ async function EnviosContent({
   // counts + queue span ALL accessible stores (guides are a shared multitienda
   // pool); the store/province/district filters happen client-side in the board.
   const storeIds = stores.map((s) => s.id);
+  const today = limaTodayKey();
   const [counts, shipments, reprogram, todayByAgent, voiceScore] = await Promise.all([
     getShipmentCounts(storeIds),
     getStoreShipments(storeIds, view),
     getReprogramStats(storeIds),
     getReproTodayByAgent(storeIds),
-    getVoiceScoreboard(storeIds),
+    getVoiceScore(storeIds, today, today),
   ]);
 
   return (
