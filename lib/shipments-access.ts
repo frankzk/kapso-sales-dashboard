@@ -19,6 +19,8 @@ import {
   VOICE_AGENT_NAME,
   VOICE_AGENT_TELNYX_KEY,
   VOICE_AGENT_TELNYX_NAME,
+  VOICE_AGENT_ELEVENLABS_KEY,
+  VOICE_AGENT_ELEVENLABS_NAME,
   isVoiceAgentKey,
   computeReprogramStats,
   limaCalendarDayBounds,
@@ -1149,6 +1151,7 @@ export async function getReproTodayByAgent(storeIds: string[]): Promise<ReproDay
   const voiceNames: Record<string, string> = {
     [VOICE_AGENT_KEY]: VOICE_AGENT_NAME,
     [VOICE_AGENT_TELNYX_KEY]: VOICE_AGENT_TELNYX_NAME,
+    [VOICE_AGENT_ELEVENLABS_KEY]: VOICE_AGENT_ELEVENLABS_NAME,
   };
   return counts.map((c) => ({ ...c, name: voiceNames[c.agent] ?? emails.get(c.agent) ?? c.agent }));
 }

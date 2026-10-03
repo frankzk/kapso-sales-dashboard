@@ -3991,6 +3991,17 @@ Reglas de esa tabla:
   - **«Hoy por asesora».** Las notas de una llamada por Telnyx firman
     «Agente de voz (Telnyx)» y cuentan en la fila **«Agente Telnyx»**; las de
     Zadarma, en «Agente Daaph». Las dos filas van al final de la tabla.
+  - **Agente ElevenLabs** (03-10-2026). Usa la misma línea Telnyx, pero con
+    otro motor: el agente de ElevenLabs («Agente ElevenLabs · Kenku
+    Reproprovincia»), con el mismo guion y las mismas herramientas de Kapta.
+    La llamada guarda el motor en `voice_calls.provider` (`grok` o
+    `elevenlabs`). El tramo hacia el agente va a `TELNYX_ELEVENLABS_SIP_URI`
+    en vez de a la puerta de xAI. Sus notas firman «Agente de voz
+    (ElevenLabs)» y cuentan en la fila **Agente ElevenLabs**. Se prueba con
+    «Por ElevenLabs» en el Master o con `motor` en la prueba interna.
+    Primero se compara la línea (Daaph contra Telnyx, mismo motor) y después
+    el motor (Telnyx + Grok contra Telnyx + ElevenLabs), una variable a la
+    vez. Mientras tanto, el barrido no reparte llamadas a ElevenLabs.
   - **Cuándo arranca el reparto.** Mientras Telnyx solo tenga número de EE.
     UU., queda en pruebas a un teléfono propio: con un +1 la clienta contesta
     menos y la comparación saldría injusta. El reparto empieza cuando llegue

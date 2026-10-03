@@ -7,7 +7,8 @@
 //   POST /api/internal/voice/test-call
 //   x-internal-secret: <CRON_SECRET>
 //   { "order_id": "<uuid>" | "order_name": "#KP135098", "phone": "930555309",
-//     "telefonia": "zadarma" | "telnyx" }   (por defecto zadarma)
+//     "telefonia": "zadarma" | "telnyx", "motor": "grok" | "elevenlabs" }
+//   (por defecto zadarma + grok; ElevenLabs solo por Telnyx)
 //
 // No mira `voice_recovery_enabled`: probar tiene que poder hacerse con la cola
 // apagada. Sí exige número de agente y extensión con caller ID peruano, igual
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest) {
   if (!internalAuthorized(req)) {
     return NextResponse.json({ ok: false, error: "no autorizado" }, { status: 401 });
   }
-  let body: { order_id?: string; order_name?: string; phone?: string; telefonia?: string };
+  let body: { order_id?: string; order_name?: string; phone?: string; telefonia?: string; motor?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -57,7 +58,8 @@ export async function POST(req: NextRequest) {
   }
   const order = orders[0] as { id: string; store_id: string; name: string };
 
-  const telephony = body.telefonia === "telnyx" ? "telnyx" : "zadarma";
+  const engine = body.motor === "elevenlabs" ? "elevenlabs" : "grok";
+  const telephony = body.telefonia === "telnyx" || engine === "elevenlabs" ? "telnyx" : "zadarma";
   const store = await loadStoreVoiceConfig(admin, order.store_id);
   const agentNumber = store?.voice_recovery_agent_number?.trim();
   const sip = store?.voice_recovery_zadarma_sip?.trim() ?? "";
@@ -83,6 +85,7 @@ export async function POST(req: NextRequest) {
       agentNumber,
       sip,
       telephony,
+      engine,
     },
     now,
   );

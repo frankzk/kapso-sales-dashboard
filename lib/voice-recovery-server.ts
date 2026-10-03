@@ -10,6 +10,7 @@ import { confirmationReminderDueAt } from "@/lib/order-confirmation";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import {
   VOICE_NOTE_SIGNER,
+  VOICE_NOTE_SIGNER_ELEVENLABS,
   VOICE_NOTE_SIGNER_TELNYX,
   VOICE_SOURCE,
   buildFicha,
@@ -24,7 +25,14 @@ import {
 } from "@/lib/voice-recovery";
 import { compareVoiceCandidates, voiceRecoveryEligible } from "@/lib/voice-recovery-queue";
 import { requestCallback, zadarmaLocalPeru } from "@/lib/zadarma";
-import { clienteDialBody, dialTelnyx, telnyxPeruE164, type TelnyxConfig } from "@/lib/telnyx";
+import {
+  agentSipUriFor,
+  clienteDialBody,
+  dialTelnyx,
+  telnyxPeruE164,
+  type TelnyxConfig,
+  type VoiceEngine,
+} from "@/lib/telnyx";
 import { reenviarGuiaAnulada } from "@/lib/swayp-reenvio";
 import { inspectAuto } from "@/lib/swayp-auto-server";
 import { evaluateAutoDispatch, type AutoSettings } from "@/lib/swayp-auto-policy";
@@ -116,14 +124,17 @@ export async function writeVoiceAttempt(
 }
 
 /**
- * Con qué nombre firma el agente sus notas en la guía (MOM §11.8). Las dos
- * líneas compiten con el mismo agente de xAI; «Hoy por asesora» las separa por
- * esta firma: «Agente de voz» es el Agente Daaph (Zadarma) y «Agente de voz
- * (Telnyx)» el Agente Telnyx.
+ * Con qué nombre firma el agente sus notas en la guía (MOM §11.8). «Hoy por
+ * asesora» separa los agentes por esta firma: «Agente de voz» es el Agente
+ * Daaph (Zadarma + Grok), «Agente de voz (Telnyx)» el Agente Telnyx (Telnyx +
+ * Grok) y «Agente de voz (ElevenLabs)» el Agente ElevenLabs (Telnyx +
+ * ElevenLabs).
  */
 async function voiceNoteSigner(admin: SupabaseClient, callId: string): Promise<string> {
-  const { data } = await admin.from("voice_calls").select("telephony").eq("id", callId).maybeSingle();
-  return (data as { telephony?: string } | null)?.telephony === "telnyx" ? VOICE_NOTE_SIGNER_TELNYX : VOICE_NOTE_SIGNER;
+  const { data } = await admin.from("voice_calls").select("telephony, provider").eq("id", callId).maybeSingle();
+  const row = data as { telephony?: string; provider?: string } | null;
+  if (row?.provider === "elevenlabs") return VOICE_NOTE_SIGNER_ELEVENLABS;
+  return row?.telephony === "telnyx" ? VOICE_NOTE_SIGNER_TELNYX : VOICE_NOTE_SIGNER;
 }
 
 function firmarNota(note: string, firma: string): string {
@@ -343,6 +354,8 @@ export interface PlaceCallInput {
   sip: string;
   /** Línea por la que sale: Zadarma (Agente Daaph, por defecto) o Telnyx (Agente Telnyx). */
   telephony?: "zadarma" | "telnyx";
+  /** Solo con Telnyx: qué agente atiende. Grok por defecto; ElevenLabs es el Agente ElevenLabs. */
+  engine?: VoiceEngine;
 }
 
 export type PlaceCallResult =
@@ -458,6 +471,7 @@ export function telnyxConfig(): TelnyxConfig | { error: string } {
       connectionId: env.telnyxConnectionId(),
       fromNumber: env.telnyxFromNumber(),
       xaiSipUri: env.telnyxXaiSipUri(),
+      elevenLabsSipUri: env.telnyxElevenLabsSipUri(),
     };
   } catch (err) {
     return { error: `Falta configurar Telnyx en Vercel: ${(err as Error).message}` };
@@ -484,6 +498,14 @@ async function placeTelnyxCall(
   }
   const cfg = telnyxConfig();
   if ("error" in cfg) return { ok: false, status: 500, error: cfg.error };
+  const engine: VoiceEngine = input.engine === "elevenlabs" ? "elevenlabs" : "grok";
+  if (!agentSipUriFor(cfg, engine)) {
+    return {
+      ok: false,
+      status: 500,
+      error: "Falta TELNYX_ELEVENLABS_SIP_URI en Vercel: la puerta SIP del agente de ElevenLabs.",
+    };
+  }
 
   await sweepStaleCalls(admin, now);
 
@@ -494,6 +516,7 @@ async function placeTelnyxCall(
       order_id: input.orderId,
       mode: input.mode,
       telephony: "telnyx",
+      provider: engine,
       agent_number: input.agentNumber.trim(),
       phone,
       status: "dialing",

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   agenteDialBody,
+  agentSipUriFor,
   clienteDialBody,
   decodeClientState,
   encodeClientState,
@@ -14,6 +15,7 @@ import {
 } from "@/lib/telnyx";
 import { pickTelephony } from "@/lib/voice-recovery";
 import {
+  VOICE_AGENT_ELEVENLABS_KEY,
   VOICE_AGENT_KEY,
   VOICE_AGENT_TELNYX_KEY,
   aggregateReproDay,
@@ -25,6 +27,7 @@ const cfg = {
   connectionId: "conn-1",
   fromNumber: "+19182386713",
   xaiSipUri: "sip:+19182386713@sip.voice.x.ai;transport=tls",
+  elevenLabsSipUri: "sip:+19182386713@sip.rtc.elevenlabs.io:5061;transport=tls",
 };
 
 function keyPair() {
@@ -65,6 +68,13 @@ describe("Agente Telnyx — cliente de Telnyx (MOM §11.8)", () => {
     expect(decodeClientState(body.client_state)).toEqual({ vc: "vc-1", leg: "agente" });
     const src = readFileSync(resolve(__dirname, "../lib/telnyx.ts"), "utf8");
     expect(src).not.toMatch(/actions\/refer|actions\/transfer/);
+  });
+
+  it("el motor elige la puerta SIP: Grok (xAI) o ElevenLabs; sin puerta, null", () => {
+    expect(agentSipUriFor(cfg, "grok")).toBe(cfg.xaiSipUri);
+    expect(agentSipUriFor(cfg, "elevenlabs")).toBe(cfg.elevenLabsSipUri);
+    expect(agentSipUriFor({ ...cfg, elevenLabsSipUri: "" }, "elevenlabs")).toBeNull();
+    expect(agenteDialBody(cfg, "vc-1", "ccid", cfg.elevenLabsSipUri).to).toBe(cfg.elevenLabsSipUri);
   });
 
   it("acepta solo avisos firmados por la cuenta y recientes", () => {
@@ -137,6 +147,19 @@ describe("«Hoy por asesora» separa los dos agentes", () => {
     ).toBe(VOICE_AGENT_TELNYX_KEY);
   });
 
+  it("la firma «Agente de voz (ElevenLabs)» es el Agente ElevenLabs", () => {
+    expect(reproDayActor({ agent: null, kind: "call", newStatus: null, shipmentId: "g", note: "Agente de voz (ElevenLabs) · confirma" })).toBe(VOICE_AGENT_ELEVENLABS_KEY);
+    expect(
+      reproDayActor({
+        agent: null,
+        kind: "reroute",
+        newStatus: "en_ruta",
+        shipmentId: "g",
+        note: "Excepción sobre guía anulada X. Motivo: Agente de voz (ElevenLabs): la clienta aceptó",
+      }),
+    ).toBe(VOICE_AGENT_ELEVENLABS_KEY);
+  });
+
   it("los dos agentes van al final, detrás de las asesoras", () => {
     const out = aggregateReproDay([
       { agent: null, kind: "call", newStatus: null, shipmentId: "a", note: "Agente de voz · x" },
@@ -161,6 +184,7 @@ describe("guardas del flujo (código)", () => {
   it("la fila se escribe antes de marcar, con la línea y el mismo número de agente", () => {
     const fn = server.slice(server.indexOf("async function placeTelnyxCall"));
     expect(fn.indexOf('telephony: "telnyx"')).toBeGreaterThan(-1);
+    expect(fn.indexOf("provider: engine")).toBeGreaterThan(-1);
     expect(fn.indexOf("agent_number: input.agentNumber.trim()")).toBeGreaterThan(-1);
     expect(fn.indexOf(".insert(")).toBeLessThan(fn.indexOf("dialTelnyx("));
   });

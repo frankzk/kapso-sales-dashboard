@@ -143,6 +143,15 @@ export function VoiceAgentPanel({
             >
               Por Telnyx
             </OpsButton>
+            {/* Misma línea Telnyx, otro motor (Agente ElevenLabs, MOM §11.8). */}
+            <OpsButton
+              size="sm"
+              disabled={pending || telefono.replace(/\D/g, "").length < 9}
+              onClick={() => run(() => probarAgenteEnMiTelefono(orderId, telefono, "elevenlabs"))}
+              className="pointer-coarse:h-11"
+            >
+              Por ElevenLabs
+            </OpsButton>
             <OpsButton size="sm" variant="ghost" onClick={() => setProbando(false)} className="pointer-coarse:h-11">
               Cancelar
             </OpsButton>
