@@ -66,7 +66,7 @@ export const AUTO_REASONS: Record<string, string> = {
   emission_blocked: "Emisión detenida por tope, reserva o cambio de datos",
   pilot_limits: "Piloto: requiere hasta 14 días, de 0 a 2 intentos informados y máximo S/500",
   pilot_location: "Piloto: ubicación o referencia sin corroborar",
-  pilot_cap: "Piloto: cupo de 3 intentos diarios alcanzado",
+  pilot_cap: "Piloto: cupo diario de intentos alcanzado",
   payment_review: "Tiene un pago registrado: revisar saldo antes de reenviar",
 };
 
