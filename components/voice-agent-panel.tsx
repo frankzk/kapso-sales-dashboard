@@ -15,6 +15,9 @@ import {
   type MasterActionState,
 } from "@/app/dashboard/pedidos/actions";
 import { VOICE_OUTCOME_LABEL, type VoiceAgentPanelData } from "@/lib/voice-recovery-labels";
+import { cn } from "@/components/ui";
+import { Badge, FIELD, OpsButton } from "@/components/ops-ui";
+import { IconPhone } from "@/components/icons";
 
 const hora = new Intl.DateTimeFormat("es-PE", {
   timeZone: "America/Lima",
@@ -62,7 +65,7 @@ export function VoiceAgentPanel({
   }, [cargar, pending]);
 
   if (loadError) {
-    return <p className="mt-3 text-xs text-slate-500">Agente de voz: {loadError}</p>;
+    return <p className="mt-4 text-[13px] text-ink-500">Agente de voz: {loadError}</p>;
   }
   if (!data) return null;
 
@@ -76,96 +79,81 @@ export function VoiceAgentPanel({
   return (
     <section
       aria-labelledby={`voz-${orderId}`}
-      className="mt-3 space-y-2 rounded-lg border border-slate-200 bg-white p-3"
+      className="mt-4 space-y-3 rounded-lg p-4 ring-1 ring-inset ring-line"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h4 id={`voz-${orderId}`} className="text-xs font-semibold text-slate-800">
+        <h4 id={`voz-${orderId}`} className="text-sm font-semibold text-ink-900">
           Agente de voz
         </h4>
-        <span
-          className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-            data.eligible ? "bg-emerald-50 text-emerald-800" : "bg-slate-100 text-slate-600"
-          }`}
-        >
+        <Badge tone={data.eligible ? "ok" : "neutral"}>
           {data.eligible ? "En la cola del agente" : "Fuera de la cola"}
-        </span>
+        </Badge>
       </div>
 
-      {!puedeLlamar && porQueNo && <p className="text-xs text-slate-600">{porQueNo}</p>}
+      {!puedeLlamar && porQueNo && <p className="text-[13px] leading-5 text-ink-600">{porQueNo}</p>}
 
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
+        <OpsButton
           disabled={pending || !puedeLlamar}
           onClick={() => run(() => llamarConAgente(orderId))}
-          className="min-h-[44px] rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-40"
+          className="pointer-coarse:h-11"
         >
+          <IconPhone aria-hidden className="text-ink-500" />
           Llamar con el agente
-        </button>
+        </OpsButton>
         {data.configured && !probando && (
-          <button
-            type="button"
-            onClick={() => setProbando(true)}
-            className="text-xs text-slate-600 underline-offset-2 hover:underline"
-          >
+          <OpsButton variant="ghost" size="sm" onClick={() => setProbando(true)} className="pointer-coarse:h-11">
             Probar en mi teléfono
-          </button>
+          </OpsButton>
         )}
       </div>
 
       {probando && (
-        <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-2">
-          <p className="text-xs text-amber-900">
+        <div className="space-y-3 rounded-lg bg-wash p-3">
+          <p className="text-[13px] leading-5 text-ink-700">
             El agente te llama con la ficha de este pedido. Es una prueba: nada se escribe sobre el pedido.
           </p>
-          <label className="block text-xs text-amber-900">
+          <label className="grid gap-1.5 text-[13px] font-medium text-ink-700 sm:w-56">
             Tu celular
             <input
               value={telefono}
               onChange={(e) => setTelefono(e.target.value)}
               inputMode="tel"
               placeholder="9XXXXXXXX"
-              className="mt-1 w-full rounded-lg border border-amber-200 px-2 py-1.5 text-sm"
+              className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11")}
             />
           </label>
           <div className="flex gap-2">
-            <button
-              type="button"
+            <OpsButton
+              size="sm"
+              variant="primary"
               disabled={pending || telefono.replace(/\D/g, "").length < 9}
               onClick={() => run(() => probarAgenteEnMiTelefono(orderId, telefono))}
-              className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-40"
+              className="pointer-coarse:h-11"
             >
               Llamarme
-            </button>
-            <button
-              type="button"
-              onClick={() => setProbando(false)}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100"
-            >
+            </OpsButton>
+            <OpsButton size="sm" variant="ghost" onClick={() => setProbando(false)} className="pointer-coarse:h-11">
               Cancelar
-            </button>
+            </OpsButton>
           </div>
         </div>
       )}
 
       {data.calls.length > 0 && (
-        <ul className="divide-y divide-slate-100 text-xs">
+        <ul className="divide-y divide-line border-t border-line text-[13px] leading-5">
           {data.calls.map((c) => (
-            <li key={c.id} className="py-1.5">
+            <li key={c.id} className="py-2">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="tabular-nums text-slate-500">{hora.format(new Date(c.queued_at))}</span>
-                <span className="font-medium text-slate-800">{estadoLlamada(c.status, c.outcome, c.error)}</span>
-                {c.mode === "test" && (
-                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-900">
-                    prueba
-                  </span>
-                )}
+                <span className="tabular-nums text-ink-500">{hora.format(new Date(c.queued_at))}</span>
+                <span className="font-medium text-ink-900">{estadoLlamada(c.status, c.outcome, c.error)}</span>
+                {c.mode === "test" && <Badge tone="warn">prueba</Badge>}
                 {c.propone_descartar && c.mode === "real" && (
-                  <span className="text-rose-700">Propone descartar: revisar y descartar a mano.</span>
+                  <span className="text-crit-fg">Propone descartar: revisar y descartar a mano.</span>
                 )}
-                {c.no_llamar && <span className="text-rose-700">Pidió que no la llamen.</span>}
+                {c.no_llamar && <span className="text-crit-fg">Pidió que no la llamen.</span>}
               </div>
-              {c.resumen && <p className="mt-0.5 text-slate-600">{c.resumen}</p>}
+              {c.resumen && <p className="mt-0.5 text-ink-700">{c.resumen}</p>}
             </li>
           ))}
         </ul>

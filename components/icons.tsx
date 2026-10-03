@@ -235,6 +235,25 @@ export function IconDownload(props: IconProps) {
   );
 }
 
+/** Abre en otra pestaña (Shopify, un PDF, el seguimiento del courier). */
+export function IconArrowUpRight(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M7 17 17 7M8.5 7H17v8.5" />
+    </svg>
+  );
+}
+
+/** Estado fijado a mano: el recálculo no lo pisa. */
+export function IconLock(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="5" y="10.5" width="14" height="10" rx="2" />
+      <path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3" />
+    </svg>
+  );
+}
+
 export function IconPlusCircle(props: IconProps) {
   return (
     <svg {...base(props)}>

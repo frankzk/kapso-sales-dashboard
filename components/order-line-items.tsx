@@ -55,14 +55,14 @@ function Thumb({ title, src }: { title: string; src?: string | null }) {
         // veces. Decorativa para el lector de pantalla, útil para el ojo.
         alt=""
         loading="lazy"
-        className="h-11 w-11 shrink-0 rounded-lg border border-slate-200 bg-white object-cover"
+        className="size-11 shrink-0 rounded-md bg-white object-cover ring-1 ring-inset ring-line"
       />
     );
   }
   return (
     <span
       aria-hidden="true"
-      className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-500"
+      className="grid size-11 shrink-0 place-items-center rounded-md bg-wash text-sm font-semibold text-ink-500 ring-1 ring-inset ring-line"
     >
       {initial}
     </span>
@@ -86,7 +86,7 @@ export function OrderLineItems({
 }) {
   if (items.length === 0) {
     return (
-      <p className={cn("text-xs text-slate-500", className)}>
+      <p className={cn("text-[13px] text-ink-500", className)}>
         Shopify no devolvió productos para este pedido.
       </p>
     );
@@ -97,36 +97,36 @@ export function OrderLineItems({
 
   return (
     <div className={className}>
-      <ul className="divide-y divide-slate-100">
+      <ul className="divide-y divide-line">
         {items.map((item, index) => {
           const linea = lineSubtotal(item);
           return (
             <li
               key={`${item.variant_id ?? item.sku ?? item.title}-${index}`}
-              className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0"
+              className="flex items-start gap-3 py-3 first:pt-0 last:pb-0"
             >
               <Thumb title={item.title || "?"} src={item.image_url} />
 
               <div className="min-w-0 flex-1">
-                <p className="text-sm leading-5 text-slate-800">
+                <p className="text-sm font-medium leading-5 text-ink-900">
                   {item.title || "Producto sin nombre"}
                 </p>
                 {/* La variante manda sobre el SKU: es lo que distingue dos
                     líneas del mismo producto, y lo que se le lee a la clienta
                     por teléfono para confirmar que se le manda lo que pidió. */}
                 {item.variant_title && (
-                  <p className="mt-0.5 text-xs font-medium text-slate-600">{item.variant_title}</p>
+                  <p className="mt-0.5 text-[13px] leading-5 text-ink-700">{item.variant_title}</p>
                 )}
                 {item.sku && (
-                  <p className="mt-0.5 font-mono text-xs text-slate-500">{item.sku}</p>
+                  <p className="mt-0.5 font-mono text-xs text-ink-500">{item.sku}</p>
                 )}
               </div>
 
               {/* El importe de la línea a la derecha y en cifras tabulares:
                   varias líneas se comparan leyendo hacia abajo. */}
               <div className="shrink-0 text-right tabular-nums">
-                <p className="text-sm font-medium text-slate-800">{soles(linea)}</p>
-                <p className="mt-0.5 text-xs text-slate-500">
+                <p className="text-sm font-medium text-ink-900">{soles(linea)}</p>
+                <p className="mt-0.5 text-[13px] text-ink-500">
                   {item.price == null
                     ? `${item.quantity} u.`
                     : `${soles(item.price)} × ${item.quantity}`}
@@ -138,11 +138,11 @@ export function OrderLineItems({
       </ul>
 
       {showTotals && totals && (
-        <dl className="mt-2.5 space-y-1 border-t border-slate-200 pt-2.5 text-sm tabular-nums">
+        <dl className="mt-3 space-y-1.5 border-t border-line pt-3 text-sm tabular-nums">
           <Row label={`Subtotal · ${units} ${units === 1 ? "unidad" : "unidades"}`} value={soles(totals.subtotal)} />
           {/* Un descuento en cero no se dibuja; uno aplicado sí, y en su signo. */}
           {totals.discounts != null && totals.discounts > 0 && (
-            <Row label="Descuento" value={`− ${soles(totals.discounts)}`} tone="emerald" />
+            <Row label="Descuento" value={`− ${soles(totals.discounts)}`} tone="ok" />
           )}
           {totals.shipping != null && (
             <Row
@@ -166,17 +166,17 @@ function Row({
   label: string;
   value: string;
   strong?: boolean;
-  tone?: "emerald";
+  tone?: "ok";
 }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
-      <dt className={cn("text-xs", strong ? "font-semibold text-slate-800" : "text-slate-500")}>
+      <dt className={cn("text-[13px]", strong ? "font-semibold text-ink-900" : "text-ink-500")}>
         {label}
       </dt>
       <dd
         className={cn(
-          strong ? "text-sm font-semibold text-slate-900" : "text-xs",
-          tone === "emerald" ? "text-emerald-700" : strong ? "" : "text-slate-700",
+          strong ? "text-sm font-semibold text-ink-900" : "text-[13px]",
+          tone === "ok" ? "text-ok-fg" : strong ? "" : "text-ink-700",
         )}
       >
         {value}
