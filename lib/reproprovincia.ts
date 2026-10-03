@@ -160,11 +160,33 @@ export function swaypGuideFailed(guide: RecoveryGuideLike): boolean {
 }
 
 /**
- * La guía no entregó y su paquete todavía vuelve, así que sigue `en_ruta` sin
- * que nadie la trabaje: el `RETURNING` de Tanders y la Devolución de Swayp.
+ * ¿La caja de una guía de Tanders o Swayp ya está en NUESTRO almacén aunque el
+ * courier la siga dando por viva? (03-10-2026)
+ *
+ * #AUR176862: la caja se escaneó en Devoluciones el 29-09 (`returned_at`,
+ * custodia `devuelto`), y cuatro días después Tanders seguía diciendo `PICKED`.
+ * Leyendo sólo al courier, la guía estaba «viva»: el pedido, vivo en Shopify,
+ * quedaba en Por cerrar en vez de «Por reprogramar Lima» (v1.23). El escaneo
+ * es un hecho físico y gana al estado atrasado del courier.
+ *
+ * Sólo Tanders y Swayp: son los que reportan su estado por API y pueden quedar
+ * atrasados. Grupo GF y el motorizado propio tienen su propio «Recibir en
+ * oficina», que devuelve la salida a «por asignar».
+ */
+export function apiGuideReceivedBack(guide: RecoveryGuideLike): boolean {
+  const courier = (guide.courier ?? "").trim().toLowerCase();
+  if (courier !== "tanders" && courier !== "fenix" && courier !== "swayp") return false;
+  if (guide.delivery_status !== "pendiente" && guide.delivery_status !== "en_ruta") return false;
+  return Boolean(guide.returned_at);
+}
+
+/**
+ * La guía no entregó y su paquete todavía vuelve —o ya volvió y el courier no
+ * se enteró—, así que sigue `en_ruta` sin que nadie la trabaje: el `RETURNING`
+ * de Tanders, la Devolución de Swayp, o la caja ya escaneada en el almacén.
  */
 function liveGuideFailed(guide: RecoveryGuideLike): boolean {
-  return tandersGuideFailed(guide) || swaypGuideFailed(guide);
+  return tandersGuideFailed(guide) || swaypGuideFailed(guide) || apiGuideReceivedBack(guide);
 }
 
 /**
