@@ -13,8 +13,8 @@ export const maxDuration = 60;
 // envío (notificaciones@olva.com.pe) y saca el PDF adjunto:
 //
 //   POST /api/webhooks/olva-email   cabecera x-olva-email-secret: <secreto>
-//   { "messageId": "...", "subject": "...", "receivedAt": "...",
-//     "fileName": "rotulo-202600715289.pdf", "pdfBase64": "JVBERi0..." }
+//   multipart/form-data: messageId, subject, receivedAt, fileName y `file`
+//   (el PDF). O JSON con los mismos campos y `pdfBase64`.
 //
 // Responde 200 también cuando el rótulo no se pudo leer o no casa con nada:
 // para Make el correo está entregado, y lo que pasó queda en la tabla
@@ -34,19 +34,48 @@ export async function POST(req: NextRequest) {
   const given = req.headers.get("x-olva-email-secret") ?? req.nextUrl.searchParams.get("secret");
   if (!secretEquals(given, secret)) return new NextResponse("unauthorized", { status: 401 });
 
-  let body: { messageId?: unknown; subject?: unknown; receivedAt?: unknown; fileName?: unknown; pdfBase64?: unknown };
+  // Make lo manda como multipart (el PDF como archivo, sin escapar nada); se
+  // acepta también JSON con el PDF en base64, para pruebas a mano.
+  let messageId = "";
+  let subject: string | null = null;
+  let receivedAt: string | null = null;
+  let fileName = "";
+  let bytes: Buffer;
+  const type = req.headers.get("content-type") ?? "";
   try {
-    body = await req.json();
+    if (type.includes("multipart/form-data")) {
+      const form = await req.formData();
+      const str = (k: string) => {
+        const v = form.get(k);
+        return typeof v === "string" ? v.trim() : "";
+      };
+      messageId = str("messageId");
+      subject = str("subject") || null;
+      receivedAt = str("receivedAt") || null;
+      fileName = str("fileName");
+      const file = form.get("file");
+      bytes = file && typeof file !== "string" ? Buffer.from(await file.arrayBuffer()) : Buffer.alloc(0);
+      if (!fileName && file && typeof file !== "string") fileName = file.name ?? "";
+    } else {
+      const body = (await req.json()) as Record<string, unknown>;
+      const str = (k: string) => (typeof body[k] === "string" ? (body[k] as string).trim() : "");
+      messageId = str("messageId");
+      subject = str("subject") || null;
+      receivedAt = str("receivedAt") || null;
+      fileName = str("fileName");
+      bytes = Buffer.from(str("pdfBase64"), "base64");
+    }
   } catch {
-    return NextResponse.json({ ok: false, error: "cuerpo no es JSON" }, { status: 400 });
+    return NextResponse.json({ ok: false, error: "cuerpo ilegible" }, { status: 400 });
   }
-  const messageId = typeof body.messageId === "string" ? body.messageId.trim() : "";
-  const b64 = typeof body.pdfBase64 === "string" ? body.pdfBase64.trim() : "";
-  if (!messageId || !b64) return NextResponse.json({ ok: false, error: "faltan messageId o pdfBase64" }, { status: 400 });
-
-  const bytes = Buffer.from(b64, "base64");
+  if (!messageId) return NextResponse.json({ ok: false, error: "falta messageId" }, { status: 400 });
   if (!bytes.length || bytes.length > MAX_PDF_BYTES) {
     return NextResponse.json({ ok: false, error: "el PDF está vacío o es demasiado grande" }, { status: 400 });
+  }
+  // Solo el rótulo: Olva adjunta un PDF por correo, y cualquier otro adjunto
+  // (una imagen de la firma, por ejemplo) no es asunto de este endpoint.
+  if (bytes.subarray(0, 5).toString("latin1") !== "%PDF-") {
+    return NextResponse.json({ ok: true, outcome: "ignorado", note: "el adjunto no es un PDF" });
   }
 
   let text = "";
@@ -57,12 +86,6 @@ export async function POST(req: NextRequest) {
     console.error("[olva-email] no se pudo leer el PDF", e);
   }
 
-  const result = await ingestOlvaEmailLabel(createAdminSupabase(), {
-    messageId,
-    fileName: typeof body.fileName === "string" ? body.fileName : "",
-    receivedAt: typeof body.receivedAt === "string" && body.receivedAt ? body.receivedAt : null,
-    subject: typeof body.subject === "string" ? body.subject : null,
-    text,
-  });
+  const result = await ingestOlvaEmailLabel(createAdminSupabase(), { messageId, fileName, receivedAt, subject, text });
   return NextResponse.json({ ok: true, ...result });
 }
