@@ -4635,6 +4635,19 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   ALVARON», misma casa, y «Ramiro Casapia Guzman» contra «JORGE CASAPIA
   GUZMAN», misma casa: los dos a revisar. Un tracking que ya está en una salida
   no se toca, y si alguien teclea uno mientras se coteja, gana lo tecleado.
+- **«Vincular a pedido» para lo que no encontró pareja** (añadido el
+  03-10-2026). Cada envío «sin pareja» —y cada uno «por revisar», por si es
+  otro pedido— lleva una casilla para escribir el número del pedido. Lo
+  decide una persona, así que no hay regla de parecido: si el pedido tiene
+  **una** salida de Olva sin tracking, el tracking va ahí; si **no tiene
+  ninguna** (pedido «sin asignar courier»), se le crea la salida de Olva con
+  el tracking, por el mismo camino que el Master, con fecha de salida de hoy y
+  la nota de que el envío ya estaba en Olva; si tiene **otro** tracking o
+  **varias** salidas de Olva libres, no se toca y se pide hacerlo en el
+  Master. Los permisos, el tracking repetido y el evento en la ficha son los
+  de las acciones del Master. Casos del 02-10: #KP136585, #KP137218 y
+  #AUR177643 estaban «sin asignar courier»; #KP136660 («Carlos Carlos») y
+  #KP137464 («Alfredo Alfredo») tenían salida pero ni DNI ni nombre real.
 - **El tracking se guarda sin ceros delante.** El portal escribe
   «02649804/26»; la página pública, el correo y todo lo guardado, «2649804-26».
   `parseOlvaTracking` quita los ceros para que el índice único vea el mismo
