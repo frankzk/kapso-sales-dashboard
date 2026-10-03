@@ -16,7 +16,7 @@ import {
 } from "@/app/dashboard/pedidos/actions";
 import { VOICE_OUTCOME_LABEL, type VoiceAgentPanelData } from "@/lib/voice-recovery-labels";
 import { cn } from "@/components/ui";
-import { Badge, FIELD, OpsButton } from "@/components/ops-ui";
+import { Badge, CARD_ZONE, FIELD, OpsButton } from "@/components/ops-ui";
 import { IconPhone } from "@/components/icons";
 
 const hora = new Intl.DateTimeFormat("es-PE", {
@@ -79,7 +79,8 @@ export function VoiceAgentPanel({
   return (
     <section
       aria-labelledby={`voz-${orderId}`}
-      className="mt-4 space-y-3 rounded-lg p-4 ring-1 ring-inset ring-line"
+      // Una zona más de la tarjeta de confirmación, sobre su hairline.
+      className={cn(CARD_ZONE, "mt-4 space-y-3 sm:mt-5")}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 id={`voz-${orderId}`} className="text-sm font-semibold text-ink-900">
