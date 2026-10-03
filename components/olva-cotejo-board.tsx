@@ -40,7 +40,17 @@ const timeLabel = (value: string) =>
   new Intl.DateTimeFormat("es-PE", { dateStyle: "short", timeStyle: "short", timeZone: "America/Lima" }).format(new Date(value));
 const SOURCE: Record<CotejoRun["source"], string> = { cron: "automático", manual: "botón", pegado: "pegado a mano" };
 
-export function OlvaCotejoBoard({ orgs, liveLinked }: { orgs: CotejoOrg[]; liveLinked: Record<string, string | null> }) {
+type LabelHints = Record<string, { suggested: string | null; note: string | null }>;
+
+export function OlvaCotejoBoard({
+  orgs,
+  liveLinked,
+  labelHints = {},
+}: {
+  orgs: CotejoOrg[];
+  liveLinked: Record<string, string | null>;
+  labelHints?: LabelHints;
+}) {
   return (
     <div className="space-y-6">
       <header className="space-y-1">
@@ -53,13 +63,21 @@ export function OlvaCotejoBoard({ orgs, liveLinked }: { orgs: CotejoOrg[]; liveL
         </p>
       </header>
       {orgs.map((org) => (
-        <OrgCotejo key={org.orgId} org={org} liveLinked={liveLinked} />
+        <OrgCotejo key={org.orgId} org={org} liveLinked={liveLinked} labelHints={labelHints} />
       ))}
     </div>
   );
 }
 
-function OrgCotejo({ org, liveLinked }: { org: CotejoOrg; liveLinked: Record<string, string | null> }) {
+function OrgCotejo({
+  org,
+  liveLinked,
+  labelHints,
+}: {
+  org: CotejoOrg;
+  liveLinked: Record<string, string | null>;
+  labelHints: LabelHints;
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [notice, setNotice] = useState<{ ok: boolean; message: string } | null>(null);
@@ -180,7 +198,7 @@ function OrgCotejo({ org, liveLinked }: { org: CotejoOrg; liveLinked: Record<str
               <>
                 <span className="font-mono">{r.tracking}</span> → <strong>{r.orderName}</strong>{" "}
                 <span className="text-slate-500">
-                  · {r.destinatario} · {r.via === "doc_externo" ? "Doc. externo" : r.via === "dni" ? "DNI" : "nombre y dirección"}
+                  · {r.destinatario} · {r.via === "doc_externo" ? "Doc. externo" : r.via === "dni" ? "DNI" : r.via === "telefono" ? "teléfono del rótulo" : "nombre y dirección"}
                 </span>
               </>
             )}
@@ -197,7 +215,16 @@ function OrgCotejo({ org, liveLinked }: { org: CotejoOrg; liveLinked: Record<str
                     · {r.distrito} · {r.direccion}
                   </span>
                 </div>
-                {org.canEdit ? <OrderLinker tracking={r.tracking} onDone={() => router.refresh()} /> : null}
+                {labelHints[r.tracking]?.note ? (
+                  <p className="text-xs text-slate-500">Rótulo del correo: {labelHints[r.tracking]?.note}</p>
+                ) : null}
+                {org.canEdit ? (
+                  <OrderLinker
+                    tracking={r.tracking}
+                    initial={labelHints[r.tracking]?.suggested ?? ""}
+                    onDone={() => router.refresh()}
+                  />
+                ) : null}
               </div>
             )}
           />
@@ -279,9 +306,20 @@ function HintRow({
  * Para el envío que no encontró salida: quien sabe de qué pedido es lo
  * escribe, y el tracking va a su salida de Olva (o se le crea una).
  */
-function OrderLinker({ tracking, onDone, label = "Vincular a pedido" }: { tracking: string; onDone: () => void; label?: string }) {
+function OrderLinker({
+  tracking,
+  onDone,
+  label = "Vincular a pedido",
+  initial = "",
+}: {
+  tracking: string;
+  onDone: () => void;
+  label?: string;
+  /** El pedido que propone el rótulo del correo (mismo teléfono). */
+  initial?: string;
+}) {
   const [pending, startTransition] = useTransition();
-  const [order, setOrder] = useState("");
+  const [order, setOrder] = useState(initial.replace(/^#/, ""));
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
   const submit = () =>
     startTransition(async () => {

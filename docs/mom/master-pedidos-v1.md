@@ -4790,7 +4790,7 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   encola los avisos a la clienta.
 - **Solo se vincula lo que no admite duda**, porque un tracking en la salida
   equivocada mueve el estado de OTRO pedido y le avisa a OTRA clienta. Tres
-  caminos:
+  caminos (y un cuarto con el rótulo del correo, más abajo):
   1. **«Doc. externo» = número del pedido** (`KP137860`, con o sin `#`) o el
      código de la salida. Quien registra en Olva puede teclearlo y entonces no
      hay nada que interpretar.
@@ -4838,6 +4838,28 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   organización que siguen «por revisar» o «sin pareja» y cuyo tracking hoy no
   está en ninguna salida: lo vinculado después a mano ya no cuenta. Sin nada
   pendiente no se pinta nada. Solo lo ve quien ve la entrada (logística).
+- **El rótulo que Olva manda por correo** (migración 0223, añadido el
+  03-10-2026). Al registrar cada envío, Olva escribe desde
+  notificaciones@olva.com.pe («Registro exitoso … - Registro Nro …») con el
+  **rótulo en PDF**, y ese rótulo —a diferencia del listado y del rótulo del
+  portal— trae **«RUC/DNI» y «TELEFONO/CELULAR» del destinatario**. Un
+  escenario de **Make** vigila el buzón (cuenta de Microsoft 365 conectada en
+  Make), saca el PDF y lo manda a `/api/webhooks/olva-email` con un secreto
+  propio (`OLVA_EMAIL_WEBHOOK_SECRET`). Kapta lo lee y lo guarda en
+  `olva_email_labels` (con el texto leído, para corregir el lector sin pedir
+  el correo otra vez), y:
+  - si su tracking no está en ninguna salida, busca entre las salidas de Olva
+    sin tracking de las tiendas de esa cuenta (el RUC de «ENVIA») **una sola**
+    con el **mismo teléfono** (los 9 dígitos, con o sin 51) **o el mismo
+    DNI**, **al menos un nombre en común** y creada en la ventana de fechas.
+    Si la hay, le pone el tracking. Dos —la misma clienta con dos pedidos— no
+    se adivinan.
+  - si ninguna salida casa pero **un solo pedido abierto** tiene ese teléfono
+    (el pedido «sin asignar courier», sin salida de Olva), **no crea la
+    salida**: la deja **sugerida** en «Cotejar Olva», con la casilla «Vincular
+    a pedido» ya rellena, y lo confirma una persona.
+  - el cotejo del portal vuelve a usar los rótulos guardados para lo que siga
+    sin resolver, porque la salida puede crearse después del correo.
 - **El tracking se guarda sin ceros delante.** El portal escribe
   «02649804/26»; la página pública, el correo y todo lo guardado, «2649804-26».
   `parseOlvaTracking` quita los ceros para que el índice único vea el mismo

@@ -166,6 +166,10 @@ export const env = {
   olvaTrackingApiBase: () =>
     (process.env.OLVA_TRACKING_API_BASE ?? "https://reports.olvaexpress.pe").trim().replace(/\/$/, ""),
   olvaTrackingConfigured: () => Boolean((process.env.OLVA_TRACKING_APIKEY ?? "").trim()),
+  //     Secreto del escenario de Make que reenvía los correos de registro de
+  //     Olva con su rótulo en PDF (/api/webhooks/olva-email, MOM §12). Sin él
+  //     el endpoint no acepta nada.
+  olvaEmailWebhookSecret: () => (process.env.OLVA_EMAIL_WEBHOOK_SECRET ?? "").trim(),
 
   // --- Chatby (white-label de uChat): "Live Chat Webhook" ---
   //     Secreto compartido que Chatby manda en la cabecera personalizada del
