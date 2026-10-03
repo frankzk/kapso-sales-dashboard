@@ -4109,7 +4109,8 @@ RLS. Los previews no pueden activar ni ejecutar emisiones automáticas.
 Ampliación aprobada: la entrega previa deja de ser obligatoria para una segunda
 vía con **6 intentos diarios por organización** (eran 3 hasta el 03-10-2026),
 dentro del máximo general de 10. El cupo se configura en la base
-(`pilot_daily_cap`), entre 1 y el cupo general (`daily_cap`). Tiene interruptor
+(`pilot_daily_cap`, de 1 a 50) y siempre cuenta dentro del cupo general:
+la reserva comprueba el general primero. Tiene interruptor
 propio, apagado al instalar. La vía con historial se conserva.
 
 - Pedido de hasta **14 días**, importe positivo de hasta **S/500**, con **0, 1
@@ -4130,8 +4131,9 @@ propio, apagado al instalar. La vía con historial se conserva.
 - **Cupo de 3 a 6 diarios** (03-10-2026, decisión del owner, migración 0221).
   Se decidió el mismo día de la ampliación, sin esperar la nueva medición: con
   ~99 pedidos que pasan los límites nuevos, 3 al día los dejaba vencer a los 14
-  días. La 0210 fijaba el tope en 3 con un `check`; la 0221 lo acota por el
-  cupo general, porque el piloto siempre cuenta dentro de él.
+  días. La 0210 fijaba el tope en 3 con un `check`; la 0221 lo deja de 1 a 50,
+  la misma cota del cupo general. No se compara contra `daily_cap`: ese check
+  entre columnas rompía una organización con cupo general menor que 3.
 - Referencia no vacía y coordenadas completas. Antes de emitir se consulta el
   pin mediante la lectura de cotización de Aliclik: distrito y provincia deben
   resolver al mismo ubigeo exacto que el destino. Si falla la consulta o difieren,

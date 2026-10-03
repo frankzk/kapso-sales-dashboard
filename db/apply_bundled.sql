@@ -18005,11 +18005,14 @@ $$;
 -- aunque §11.9 dice que los topes se configuran en la base. Tras ampliar el
 -- piloto a 14 días y 0–2 intentos (0220) el owner lo sube a 6.
 --
--- QUÉ CAMBIA. El tope del piloto queda entre 1 y el cupo general
--- (`daily_cap`, hoy 10): el piloto siempre se cuenta dentro del máximo general,
--- así que un valor mayor no tendría efecto y solo confundiría la pantalla. La
--- reserva (`swayp_emission_claim`) ya lee el valor de la tabla y no cambia.
+-- QUÉ CAMBIA. El tope del piloto queda entre 1 y 50, la misma cota que el
+-- cupo general (`daily_cap`, 0209). No se compara contra `daily_cap`: un check
+-- entre columnas rompía la configuración de una organización con cupo general
+-- menor que el default del piloto (3), y el smoke de la reserva crea justo una
+-- con `daily_cap = 2`. Tampoco hace falta: la reserva comprueba el cupo general
+-- antes que el del piloto, así que el piloto nunca emite más que el general.
+-- `swayp_emission_claim` ya lee el valor de la tabla y no cambia.
 
 alter table swayp_auto_settings drop constraint if exists swayp_auto_settings_pilot_daily_cap_check;
 alter table swayp_auto_settings add constraint swayp_auto_settings_pilot_daily_cap_check
-  check (pilot_daily_cap >= 1 and pilot_daily_cap <= daily_cap);
+  check (pilot_daily_cap between 1 and 50);
