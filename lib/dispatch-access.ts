@@ -9,6 +9,7 @@ import {
   type ReconciliationBuckets,
   type ReconciliationRow,
 } from "@/lib/returns-reception";
+import { bucketShalomReturns, type ShalomReturnBuckets, type ShalomReturnRow } from "@/lib/shalom/returns";
 
 export interface DispatchShipment {
   id: string;
@@ -325,43 +326,86 @@ export async function getWarehouseStationData(): Promise<WarehouseStationData> {
   };
 }
 
+/** El cuadre de la pantalla Devoluciones, un bloque por courier (MOM §9.4). */
+export interface ReturnsReceptionData {
+  tanders: ReconciliationBuckets;
+  shalom: ShalomReturnBuckets;
+}
+
 /**
- * El cuadre de devoluciones de Tanders: lo que el courier dice que devolvió
- * frente a lo que una persona registró en almacén. Con el cliente del usuario
- * (RLS), así cada uno ve solo sus tiendas.
+ * Lo que devuelve cada courier frente a lo que una persona registró en almacén.
+ * Con el cliente del usuario (RLS), así cada uno ve solo sus tiendas.
  *
- * Entra toda guía Tanders que el courier dio por devuelta o que viene de
- * vuelta, y que no está entregada. Sin tope de antigüedad a propósito: la caja
- * que más importa es justo la que el courier dio por devuelta hace semanas y
- * nunca apareció.
+ * Una lectura que falla LANZA: este cuadre dice cuántas cajas faltan, y «0»
+ * por un error de la base mandaría a dar por cerrado lo que nadie ha recibido.
  */
-export async function getReturnsReceptionData(): Promise<ReconciliationBuckets> {
+export async function getReturnsReceptionData(): Promise<ReturnsReceptionData> {
   const sb = await createServerSupabase();
-  const { data: guides } = await sb
+  const [tanders, shalom] = await Promise.all([tandersReturns(sb), shalomReturns(sb)]);
+  return { tanders, shalom };
+}
+
+type UserSupabase = Awaited<ReturnType<typeof createServerSupabase>>;
+
+/**
+ * Tanders: lo que el courier dice que devolvió. Entra toda guía que dio por
+ * devuelta o que viene de vuelta, y que no está entregada. Sin tope de
+ * antigüedad a propósito: la caja que más importa es justo la que el courier
+ * dio por devuelta hace semanas y nunca apareció.
+ */
+async function tandersReturns(sb: UserSupabase): Promise<ReconciliationBuckets> {
+  const { data: guides, error } = await sb
     .from("shipments")
     .select("id,guide_code,order_name,reported_status,custody_state,returned_at,returned_source")
     .eq("courier", "tanders")
     .neq("delivery_status", "entregado")
     .or("reported_status.in.(RETURNED,RETURNING),custody_state.in.(devuelto,retorno)")
     .limit(2000);
+  if (error) throw new Error(`devoluciones de Tanders: ${error.message}`);
   const rows = (guides ?? []) as Omit<ReconciliationRow, "received_at">[];
   if (!rows.length) return bucketReturns([]);
+  const received = await receivedAtByShipment(sb, rows.map((r) => r.id));
+  return bucketReturns(rows.map((r) => ({ ...r, received_at: received.get(r.id) ?? null })));
+}
 
+/**
+ * Shalom: las que sacó de la agencia para devolverlas (`retorno`, lo marca el
+ * rastreo, MOM §12) y las que ya se recibieron. Las que Shalom dio por
+ * recogidas no entran: si alguna aparece en el almacén, se escanea igual y la
+ * recepción decide (lib/shalom/returns.ts).
+ */
+async function shalomReturns(sb: UserSupabase): Promise<ShalomReturnBuckets> {
+  const { data: guides, error } = await sb
+    .from("shipments")
+    .select("id,guide_code,order_name,custody_state,returned_at,closed_at,updated_at")
+    .eq("courier", "shalom")
+    .neq("delivery_status", "entregado")
+    .or("custody_state.in.(retorno,devuelto),returned_at.not.is.null")
+    .limit(2000);
+  if (error) throw new Error(`devoluciones de Shalom: ${error.message}`);
+  const rows = (guides ?? []) as Omit<ShalomReturnRow, "received_at">[];
+  if (!rows.length) return bucketShalomReturns([]);
+  const received = await receivedAtByShipment(sb, rows.map((r) => r.id));
+  return bucketShalomReturns(rows.map((r) => ({ ...r, received_at: received.get(r.id) ?? null })));
+}
+
+/** La primera recepción en almacén (`return_received`) de cada guía. */
+async function receivedAtByShipment(sb: UserSupabase, ids: string[]): Promise<Map<string, string>> {
   const received = new Map<string, string>();
   // Por tandas: una lista `in.(…)` de cientos de uuids no cabe en una URL.
-  for (let i = 0; i < rows.length; i += 200) {
-    const ids = rows.slice(i, i + 200).map((r) => r.id);
-    const { data: events } = await sb
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data: events, error } = await sb
       .from("order_events")
       .select("shipment_id,occurred_at")
       .eq("kind", "return_received")
-      .in("shipment_id", ids);
+      .in("shipment_id", ids.slice(i, i + 200));
+    if (error) throw new Error(`recepciones en almacén: ${error.message}`);
     for (const e of (events ?? []) as { shipment_id: string; occurred_at: string }[]) {
       const prev = received.get(e.shipment_id);
       if (!prev || e.occurred_at < prev) received.set(e.shipment_id, e.occurred_at);
     }
   }
-  return bucketReturns(rows.map((r) => ({ ...r, received_at: received.get(r.id) ?? null })));
+  return received;
 }
 
 // Motorizados activos visibles para el usuario (RLS acota por organización).

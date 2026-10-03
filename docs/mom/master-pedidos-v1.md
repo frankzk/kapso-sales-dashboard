@@ -1612,8 +1612,36 @@ sin tope de antigüedad. Reglas:
         no es un retraso, es una pérdida.
       - No se recibe como devolución una guía que el courier dio por ENTREGADA:
         si esa caja está en el almacén es una incidencia que hay que escalar.
-      - Solo Tanders, por ahora: Aliclik y Shalom tienen su propia vía de
-        sellado y su cola de recuperación.
+        La única excepción es la de Shalom, abajo.
+      - **Tanders y Shalom** (Shalom desde el 03-10-2026). Aliclik sigue con su
+        propia vía de sellado y su cola de recuperación.
+      - **Shalom, en la misma pantalla.** Un solo escáner para los dos
+        couriers: sirve el QR de nuestra banda del rótulo, el nº de guía Shalom
+        original o el nº de pedido. La etiqueta de retorno de Shalom trae una
+        guía nueva que el sistema no conoce: se anota, si se quiere, en el campo
+        opcional «Guía de retorno de Shalom», y queda en la nota y el `payload`
+        del `return_received`.
+        - **Lo que el rastreo dejó de vuelta** (`anulado`, custodia `retorno`,
+          §12) se recibe y se sella como cualquier retorno.
+        - **Lo que Shalom dio por recogido** se recibe solo si el pedido tiene
+          clave y nunca se le dio a la clienta: la caja en la mano prueba que
+          aquel «recogido» era el retorno. La guía se corrige a `anulado` en el
+          mismo escaneo y el pedido pasa a devuelto. Si la clave se reveló o se
+          envió, puede que la clienta lo recogiera y lo devolviera: es una
+          devolución del cliente y se abre desde el Master. Sin clave
+          registrada, se escala.
+        - **Una guía todavía viva** —la caja volvió antes de que Shalom lo
+          dijera— se recibe y se anula; si no, el rastreo la daría por recogida
+          cuando Shalom cierre la guía original.
+        - Sin poder leer la clave no se decide nada: se pide volver a escanear.
+          La escritura repite lo que se leyó (entregada, sin sellar): si la guía
+          cambió entre medias, no se toca.
+        - **El cuadre de Shalom**: lo que Shalom devolvió, lo recibido y lo que
+          está **por recibir**, en ámbar si hay alguna —esa caja hay que ir a
+          buscarla—, de la más antigua a la más reciente desde que salió de la
+          agencia.
+      - **El cuadre falla cerrado.** Si no se puede leer, la pantalla lo dice en
+        vez de pintar «0 por recibir».
   - **EL MISMO COMPROBANTE NO COBRA DOS PEDIDOS.** Si el nº de operación ya
     quedó registrado en otra guía, la comprobación sale **`rechazado`** por
     `operacion_duplicada` aunque todo lo demás cuadre —buen medio, buena
@@ -4505,7 +4533,51 @@ un costo o aún no hay entregas, indica pendiente; nunca lo presenta como cero.
 - Alertas: 7, 3 y 1 día antes del vencimiento.
 - Responsable de seguimiento, pago, recojo y retorno: Gerardo.
 - Si Shalom reporta `Recogido` sin pago completo: conservar el hecho logístico,
-  mantener el caso abierto y generar alerta financiera crítica.
+  mantener el caso abierto y generar alerta financiera crítica. **Salvo cuando
+  no pudo ser la clienta** (03-10-2026): ver «El "entregado" que es el retorno».
+
+#### El «entregado» que es el retorno (03-10-2026)
+
+Shalom no tiene un hito de retorno. Cuando saca el paquete de la agencia de
+destino para devolverlo —con una guía nueva y la etiqueta «CAMBIO DE DESTINO»
+rumbo a Lima—, cierra la guía original con fecha en `entregado`, y el rastreo lo
+leía como el recojo de la clienta. El pedido caía en «Por cerrar · Recogido sin
+pago completo», la alerta crítica de cobro, por un paquete que venía de vuelta.
+
+- **El caso.** La caja de #KP128064 llegó al almacén con esa etiqueta y el Master
+  la tenía como recogida. Medido sobre los «recogido» de Shalom de 75 días:
+  **48** salieron de la agencia sin que la clave se revelara ni se enviara
+  nunca, sin el saldo pagado y tras **15 a 41 días** en ella, en tandas de minuto
+  a minuto —el 22/09 a las 10:25, 10:26 y 10:27, por ejemplo—. Sin clave no se
+  recoge en el mostrador: eran retornos. Los 10 recojos reales con saldo
+  pendiente salieron a los **1-7 días**, y en 9 de ellos alguien había revelado
+  la clave.
+- **La regla.** Un `entregado` de Shalom es el **retorno** cuando, a la vez:
+  1. el pedido tiene clave registrada y **nunca** se reveló en pantalla
+     (`key_view`) ni se envió (`key_shared`, `pickup_key_shares`);
+  2. no hay rastro de cobro, con el **mismo** criterio que la alerta
+     `recogido_sin_pago_completo` (§6.5);
+  3. pasaron **8 días o más** entre la llegada a la agencia (hito `destino`) y
+     la salida.
+
+  Sin clave registrada o sin fecha de llegada no se adivina: se respeta el
+  recojo y la alerta sigue encendida para que una persona lo mire.
+- **Qué se escribe.** La guía queda `anulado` —terminal: el rastreo deja de
+  preguntar por ella—, con `pickup_state = retorno_iniciado`, custodia `retorno`
+  y `closed_at` en la fecha de salida, y su `courier_status` en la línea de
+  tiempo dice por qué y cuántos días estuvo en la agencia. El pedido pasa a
+  «Por cerrar · Devolución física pendiente» y la caja se espera en
+  **Devoluciones** (§9.4).
+- **Falla cerrado.** Si no se pueden leer la clave o el cobro, no se escribe
+  nada: la guía sigue viva y la pasada siguiente lo reintenta. «No pude leer la
+  clave» no es «no hay clave».
+- **De la clave solo se pregunta si existe.** Nunca se lee `key_enc`.
+- Costo asumido: un recojo real con la clave dictada por fuera de Kapta, sin
+  revelarla en pantalla, sin cobro y tras 8 días en la agencia se leería como
+  retorno. Esa caja nunca llegaría a Devoluciones y se quedaría «por recibir»:
+  ahí se ve.
+- Lo leído antes de esta regla no se corrige solo: esas guías ya están
+  `entregado` y el rastreo no vuelve a preguntar por ellas.
 
 Contingencia cuando la creación por API o Shalom Pro está degradada:
 

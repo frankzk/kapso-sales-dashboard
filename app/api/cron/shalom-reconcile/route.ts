@@ -5,12 +5,8 @@ import { env } from "@/lib/env";
 import { publicClient } from "@/lib/shalom/session";
 import { describeShalomError } from "@/lib/shalom/client";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import {
-  readShalomTracking,
-  shalomNeedsTracking,
-  shalomTrackingChanged,
-  type ShalomTrackingStatus,
-} from "@/lib/shalom/tracking";
+import { shalomNeedsTracking, type ShalomTrackingStatus } from "@/lib/shalom/tracking";
+import { applyShalomTracking, type ShalomLiveGuide } from "@/lib/shalom/reconcile";
 import { enqueueTransitNotification, processTransitNotifications } from "@/lib/shalom/transit-notify";
 
 export const runtime = "nodejs";
@@ -65,16 +61,10 @@ function authorized(req: NextRequest): boolean {
   return secretEquals(req.nextUrl.searchParams.get("secret"), secret);
 }
 
-interface LiveGuide {
-  id: string;
-  store_id: string;
-  order_id: string | null;
-  guide_code: string | null;
+interface LiveGuide extends ShalomLiveGuide {
   /** Alfanumérico de 4. El rastreo NO resuelve sin él (ver más abajo). */
   shalom_codigo: string | null;
   shalom_ose_id: number | null;
-  delivery_status: string;
-  pickup_state: string | null;
 }
 
 export async function GET(req: NextRequest) {
@@ -110,6 +100,8 @@ export async function GET(req: NextRequest) {
   const touchedOrders = new Set<string>();
   const errors: string[] = [];
   let applied = 0;
+  /** «Entregados» que eran el retorno de la caja, no un recojo (MOM §12). */
+  let retornos = 0;
   let failed = 0;
   let reported = 0;
   let queued = 0;
@@ -187,40 +179,19 @@ export async function GET(req: NextRequest) {
       }
       answered.push(guide.id);
 
-      const next = readShalomTracking(r.tracking?.status as ShalomTrackingStatus | null);
-      if (!shalomTrackingChanged(guide, next)) continue;
-
-      const upd = await admin
-        .from("shipments")
-        .update({
-          delivery_status: next.deliveryStatus,
-          status_category: next.deliveryStatus === "entregado" ? "delivered" : "pending",
-          pickup_state: next.pickupState,
-          last_report_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", guide.id);
-      if (upd.error) {
-        errors.push(`${guide.guide_code}: ${upd.error.message}`);
+      // Leer el hito, decidir si un «entregado» fue el recojo o el retorno, y
+      // escribirlo en la guía y en la línea de tiempo: lib/shalom/reconcile.ts.
+      const outcome = await applyShalomTracking(admin, guide, r.tracking?.status as ShalomTrackingStatus | null);
+      if (outcome.kind === "sin_cambio") continue;
+      if (outcome.kind === "error") {
+        errors.push(outcome.message);
         continue;
       }
       applied += 1;
+      if (outcome.retorno) retornos += 1;
 
       if (guide.order_id) {
         touchedOrders.add(guide.order_id);
-        await admin.from("order_events").insert({
-          store_id: guide.store_id,
-          order_id: guide.order_id,
-          kind: "courier_status",
-          occurred_at: next.at ?? new Date().toISOString(),
-          actor: null,
-          source: "shalom",
-          courier: "shalom",
-          guide_code: guide.guide_code,
-          new_status: next.deliveryStatus,
-          new_operational: next.pickupState,
-          note: `Shalom: ${next.pickupState}${next.delayed ? " (con demora declarada)" : ""}.`,
-        });
 
         // El paquete salió de viaje: es el momento de avisarle a la clienta
         // (MOM §12). Se ENCOLA nada más; el envío va aparte, abajo, porque
@@ -236,7 +207,7 @@ export async function GET(req: NextRequest) {
           en_transito: "transito",
           disponible_para_recojo: "disponible",
         };
-        const kind = avisoDe[next.pickupState];
+        const kind = avisoDe[outcome.pickupState];
         if (kind) {
           const ok = await enqueueTransitNotification(admin, {
             storeId: guide.store_id,
@@ -293,6 +264,8 @@ export async function GET(req: NextRequest) {
     // "todo bien, sin novedad", que antes se leía igual que "no corrió".
     reported,
     applied,
+    // De los aplicados, los «entregado» que se leyeron como retorno (MOM §12).
+    retornos,
     failed,
     // Por qué las rechazó, agrupado. Con `failed` a secas no hay nada que hacer;
     // con el motivo y una guía de muestra se va directo a comprobarlo.
