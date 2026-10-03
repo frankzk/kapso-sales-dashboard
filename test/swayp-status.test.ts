@@ -32,7 +32,7 @@ import {
 import { resolveOrderState, type GuideSnapshot, type OrderSnapshot } from "@/lib/order-status";
 import { expiredRecoveryKind, guideDoorRejection, recoveryWindow } from "@/lib/reproprovincia";
 import { voiceRecoveryEligible, type VoiceCandidateInput } from "@/lib/voice-recovery-queue";
-import { swaypLabelSaysRejection, swaypNoveltyLabel, SWAYP_REJECTION_NOVELTIES } from "@/lib/swayp";
+import { swaypLabelSaysRejection, swaypLabelSaysUndispatched, swaypNoveltyLabel, SWAYP_REJECTION_NOVELTIES, SWAYP_UNDISPATCHED_NOVELTY } from "@/lib/swayp";
 import { resolveMacroStage, type MacroGuideSnapshot, type MacroOrderSnapshot } from "@/lib/order-macro-stage";
 import { failedOutputLabel, lastFailedOutput, outputsBlockingRetry } from "@/lib/gf-retry";
 
@@ -723,6 +723,16 @@ describe("la novedad de Swayp como etiqueta del courier", () => {
     expect(swaypLabelSaysRejection("REFUSED · PICKED · ")).toBe(false);
     expect(swaypLabelSaysRejection("ya no desea el producto (16)")).toBe(false);
     expect(swaypLabelSaysRejection(null)).toBe(false);
+  });
+
+  it("bodega no despachó = novedad 20; decide el id, y sin id el nombre (#KP138099)", () => {
+    expect(SWAYP_UNDISPATCHED_NOVELTY).toBe(20);
+    expect(swaypLabelSaysUndispatched("Swayp · Bodega no despacho mercancía (20)")).toBe(true);
+    expect(swaypLabelSaysUndispatched("Swayp · Bodega no despachó mercancía")).toBe(true);
+    expect(swaypLabelSaysUndispatched(NO_CONTESTA)).toBe(false);
+    expect(swaypLabelSaysUndispatched("Swayp · Falta Inventario (18)")).toBe(false);
+    expect(swaypLabelSaysUndispatched("Bodega no despacho mercancía (20)")).toBe(false);
+    expect(swaypLabelSaysUndispatched(null)).toBe(false);
   });
 
   it("cuenta la ÚLTIMA novedad del historial", () => {

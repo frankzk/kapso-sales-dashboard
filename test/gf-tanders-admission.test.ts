@@ -98,3 +98,36 @@ describe("admisión real de Tanders con dependencias de datos simuladas", () => 
     expect(state.writes).toEqual([]);
   });
 });
+
+describe("admisión de una guía Swayp que su bodega no despachó (#KP138099)", () => {
+  beforeEach(() => {
+    // Sábado 03-10-2026, 12:30 de Lima: el reparto de Swayp era el viernes.
+    vi.setSystemTime(new Date("2026-10-03T17:30:00Z"));
+    state.order = { order_id: "order", order_name: "#KP138099", store_id: "store", coverage: "lima", current_courier: "fenix", macro_stage: "en_curso", macro_substage: "en_reparto", operational_status: "en_reparto", district: "Lurin" };
+    state.outputs = [{ id: "swayp-s01", order_id: "order", courier: "fenix", created_via: "fenix_directo", delivery_status: "en_ruta", dispatched_at: "2026-10-02T05:36:54Z", status_category: "in_route", reported_status: "Swayp · Bodega no despacho mercancía (20)", swayp_state: 6, custody_state: "courier" }];
+  });
+  const takeSwayp = (packageLocation?: TandersPackageLocation) => takeGroupGfCourierOrders("org", ["order"], {
+    tandersConfirmations: packageLocation ? { order: { shipmentIds: ["swayp-s01"], packageLocation } } : undefined,
+  });
+
+  it("el escaneo o una llamada directa sin confirmación lo dice y no escribe nada", async () => {
+    const result = await takeSwayp();
+    expect(result.failed[0]?.error).toContain("la bodega de Swayp no lo despachó");
+    expect(state.writes).toEqual([]);
+  });
+  it("confirmado, crea otra salida de Grupo GF sin tocar la guía de Swayp", async () => {
+    const result = await takeSwayp("returned");
+    expect(result.error).toBeUndefined();
+    expect(result.accepted).toHaveLength(1);
+    const inserted = state.writes.find((w) => w.table === "shipments" && w.op === "insert")!;
+    expect(inserted.value).toMatchObject({ courier: "propio", custody_state: "empresa" });
+    expect(state.writes.filter((w) => w.table === "shipments" && w.op === "update").every((w) => w.filters.id !== "swayp-s01")).toBe(true);
+    const reason = state.writes.find((w) => w.table === "order_events" && w.value.kind === "additional_output_reason")!;
+    expect(reason.value.reason).toContain("bodega no despachó");
+  });
+  it("si Swayp la devuelve a Reparto, ya no se ofrece", async () => {
+    state.outputs[0]!.swayp_state = 5;
+    expect((await takeSwayp("returned")).accepted).toEqual([]);
+    expect(state.writes).toEqual([]);
+  });
+});

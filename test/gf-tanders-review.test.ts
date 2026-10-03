@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { confirmedTandersReview, nextBusinessDay, tandersExpectedDeliveryDay, tandersReleaseCutoff, tandersReview, tandersReviewQueueFilter, tandersReviewReason } from "@/lib/gf-tanders-review";
+import { confirmedTandersReview, courierReview, nextBusinessDay, swaypUndispatchedQueueFilter, swaypUndispatchedReview, tandersExpectedDeliveryDay, tandersReleaseCutoff, tandersReview, tandersReviewQueueFilter, tandersReviewReason } from "@/lib/gf-tanders-review";
 
 const order = { coverage: "lima", current_courier: "tanders", macro_stage: "en_curso", macro_substage: "en_transito" };
 const output = { id: "tanders-1", courier: "tanders", delivery_status: "en_ruta", dispatched_at: "2026-09-28T15:20:17.647Z", status_category: "in_route", reported_status: "PICKED" };
@@ -7,7 +7,7 @@ const today = "2026-10-01";
 
 describe("Tanders de días anteriores en Desde la lista", () => {
   it.each(["2026-09-28T15:20:17.647Z", "2026-09-24T14:20:38.034Z"])("ofrece el caso real despachado %s", (dispatched_at) => {
-    expect(tandersReview(order, [{ ...output, dispatched_at }], today)).toEqual({ shipmentIds: [output.id], dispatchedAt: dispatched_at });
+    expect(tandersReview(order, [{ ...output, dispatched_at }], today)).toEqual({ courier: "tanders", shipmentIds: [output.id], dispatchedAt: dispatched_at });
   });
   it("usa medianoche de Lima: 04:59 UTC es ayer, 05:00 es hoy", () => {
     expect(tandersReview(order, [{ ...output, dispatched_at: "2026-10-01T04:59:59Z" }], today)).not.toBeNull();
@@ -95,7 +95,7 @@ describe("Tanders que nunca recolectó: libre al día hábil siguiente del que d
   it("creada el jueves: Tanders debía repartirla el viernes; si sigue Pendiente, libre el sábado", () => {
     expect(tandersReview(waiting, [pending(thursday)], "2026-10-02")).toBeNull();
     const review = tandersReview(waiting, [pending(thursday)], "2026-10-03");
-    expect(review).toEqual({ shipmentIds: ["tanders-p"], dispatchedAt: thursday, uncollected: true });
+    expect(review).toEqual({ courier: "tanders", shipmentIds: ["tanders-p"], dispatchedAt: thursday, uncollected: true });
   });
 
   it("creada el viernes: debía repartirla el sábado; libre el lunes, no el domingo", () => {
@@ -126,5 +126,74 @@ describe("Tanders que nunca recolectó: libre al día hábil siguiente del que d
   it("el motivo dice que la guía nunca se recolectó", () => {
     expect(tandersReviewReason("returned", true)).toContain("nunca se recolectó");
     expect(tandersReviewReason("returned")).toContain("despacho anterior");
+  });
+});
+
+describe("Swayp que su bodega no despachó: libre al día hábil siguiente de su reparto (03-10-2026)", () => {
+  // #KP138099: Lurín, guía directa 50000142751, reparto del viernes 02-10 (00:36 de Lima).
+  const order = { coverage: "lima", current_courier: "fenix", macro_stage: "en_curso", macro_substage: "en_reparto" };
+  const guide = {
+    id: "swayp-1", courier: "fenix", delivery_status: "en_ruta", dispatched_at: "2026-10-02T05:36:54Z",
+    status_category: "in_route", reported_status: "Swayp · Bodega no despacho mercancía (20)", swayp_state: 6,
+  };
+
+  it("el caso real: el viernes es de Swayp, el sábado ya se ofrece", () => {
+    expect(swaypUndispatchedReview(order, [guide], "2026-10-02")).toBeNull();
+    expect(swaypUndispatchedReview(order, [guide], "2026-10-03")).toEqual({
+      courier: "swayp", shipmentIds: ["swayp-1"], dispatchedAt: guide.dispatched_at, uncollected: true,
+    });
+  });
+
+  it("reparto del sábado: el domingo sigue siendo de Swayp, libre el lunes", () => {
+    const saturday = { ...guide, dispatched_at: "2026-10-03T15:00:00Z" };
+    expect(swaypUndispatchedReview(order, [saturday], "2026-10-04")).toBeNull();
+    expect(swaypUndispatchedReview(order, [saturday], "2026-10-05")).not.toBeNull();
+  });
+
+  it("también en tránsito, y el texto sin número de novedad", () => {
+    expect(swaypUndispatchedReview({ ...order, macro_substage: "en_transito" }, [guide], "2026-10-03")).not.toBeNull();
+    expect(swaypUndispatchedReview(order, [{ ...guide, reported_status: "Swayp · Bodega no despachó mercancía" }], "2026-10-03")).not.toBeNull();
+  });
+
+  it.each([
+    ["otra novedad: el mensajero sí tiene el paquete", { reported_status: "Swayp · Destinatario no contesta (7)" }],
+    ["Swayp lo reprogramó", { reported_status: "Swayp · Reprogramado (6)", swayp_state: 5 }],
+    ["la novedad se resolvió y volvió a Reparto", { swayp_state: 5 }],
+    ["Swayp marcó Devolución: eso ya es recuperación", { swayp_state: 8 }],
+    ["sin fecha de reparto", { dispatched_at: null }],
+    ["entregada", { delivery_status: "entregado", status_category: "delivered" }],
+  ])("no se ofrece si %s", (_, patch) => {
+    expect(swaypUndispatchedReview(order, [{ ...guide, ...patch }], "2026-10-03")).toBeNull();
+  });
+
+  it.each([
+    { coverage: "provincia_cod" }, { current_courier: "tanders" },
+    { macro_substage: "por_reprogramar_lima" }, { macro_stage: "por_cerrar", macro_substage: "devolucion_fisica_pendiente" },
+  ])("respeta el estado del pedido: %j", (patch) => {
+    expect(swaypUndispatchedReview({ ...order, ...patch }, [guide], "2026-10-03")).toBeNull();
+  });
+
+  it("otra salida viva de otro courier sigue bloqueando", () => {
+    expect(swaypUndispatchedReview(order, [guide, { id: "gf", courier: "propio", delivery_status: "pendiente", dispatched_at: null }], "2026-10-03")).toBeNull();
+  });
+
+  it("courierReview elige la regla que aplica", () => {
+    expect(courierReview(order, [guide], "2026-10-03")?.courier).toBe("swayp");
+    const tanders = { coverage: "lima", current_courier: "tanders", macro_stage: "en_curso", macro_substage: "en_transito" };
+    const picked = { id: "t", courier: "tanders", delivery_status: "en_ruta", dispatched_at: "2026-10-02T15:00:00Z", status_category: "in_route", reported_status: "PICKED" };
+    expect(courierReview(tanders, [picked], "2026-10-03")?.courier).toBe("tanders");
+  });
+
+  it("la cola trae los candidatos con el mismo límite del domingo", () => {
+    expect(swaypUndispatchedQueueFilter("2026-10-03")).toBe(
+      "and(macro_stage.eq.en_curso,macro_substage.in.(en_transito,en_reparto),current_courier.eq.fenix,dispatched_at.lt.2026-10-03T00:00:00-05:00)",
+    );
+    expect(swaypUndispatchedQueueFilter("2026-10-04")).toContain("dispatched_at.lt.2026-10-03T00:00:00-05:00");
+  });
+
+  it("el motivo nombra la novedad de Swayp", () => {
+    expect(tandersReviewReason("returned", true, "swayp")).toContain("bodega no despachó");
+    expect(tandersReviewReason("returned", true, "swayp")).toContain("está en el almacén");
+    expect(tandersReviewReason("additional", true, "swayp")).toContain("salida adicional");
   });
 });

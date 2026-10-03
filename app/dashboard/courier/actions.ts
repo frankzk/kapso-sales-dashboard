@@ -30,7 +30,7 @@ import {
   type FailedOutput,
 } from "@/lib/gf-retry";
 import { courierKey, normalizeDispatchScan } from "@/lib/dispatch";
-import { tandersReview, tandersReviewQueueFilter, confirmedTandersReview, tandersReviewReason, type TandersReview, type TandersConfirmations } from "@/lib/gf-tanders-review";
+import { courierReview, tandersReviewQueueFilter, swaypUndispatchedQueueFilter, confirmedTandersReview, tandersReviewReason, type TandersReview, type TandersConfirmations } from "@/lib/gf-tanders-review";
 import { lookupDispatchShipment } from "@/app/dashboard/pedidos/despacho/actions";
 import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
@@ -491,7 +491,7 @@ async function loadCourierOperations(
         // Con el reintento: lo que otro courier no entregó (#KP135035, #KP135161)
         // está En curso y no llegaba nunca a esta lista.
         .or(
-          `and(macro_stage.eq.preparacion,macro_substage.in.(por_generar_rotulo,por_armar)),and(macro_stage.eq.por_despachar,macro_substage.eq.listo_para_asignar),${RETRY_QUEUE_FILTER},${tandersReviewQueueFilter(day)}`,
+          `and(macro_stage.eq.preparacion,macro_substage.in.(por_generar_rotulo,por_armar)),and(macro_stage.eq.por_despachar,macro_substage.eq.listo_para_asignar),${RETRY_QUEUE_FILTER},${tandersReviewQueueFilter(day)},${swaypUndispatchedQueueFilter(day)}`,
         )
         .eq("coverage", "lima")
         .order("order_created_at", { ascending: false })
@@ -566,7 +566,7 @@ async function loadCourierOperations(
     // Un reintento no reutiliza caja —la anterior es de otro courier— y la salida
     // que falló no cuenta como «ya en caja» aunque siga volviendo.
     const retry = isRetryAdmission(order.macro_stage, order.macro_substage, order.operational_status);
-    const review = tandersReview(order, outputs, day);
+    const review = courierReview(order, outputs, day);
     if (!isCourierAdmissionStage(order.macro_stage, order.macro_substage, order.operational_status) && !review) continue;
     const fillable = pickFillableRouteOutput(outputs);
     const assigned = activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null);
@@ -1014,21 +1014,23 @@ async function takeOrdersCore(
         continue;
       }
       const outputs = (outputRows ?? []) as unknown as AdmissionShipmentRow[];
-      const review = tandersReview(row, outputs, limaClock().day);
+      const review = courierReview(row, outputs, limaClock().day);
       if (!isCourierAdmissionStage(row.macro_stage, row.macro_substage, row.operational_status) && !review) {
         failed.push({ orderId, error: "El pedido ya avanzó y salió de Pedidos disponibles." });
         continue;
       }
       const confirmation = opts.tandersConfirmations?.[orderId];
       if (review && !auth.canManageDispatch) {
-        failed.push({ orderId, error: "No tienes permiso para reasignar los paquetes de Tanders." });
+        failed.push({ orderId, error: `No tienes permiso para reasignar los paquetes de ${review.courier === "swayp" ? "Swayp" : "Tanders"}.` });
         continue;
       }
       if (review && !confirmedTandersReview(review, confirmation)) {
-        failed.push({ orderId, error: `${row.order_name ?? "El pedido"}: confirma en Desde la lista si el paquete de Tanders volvió al almacén o si saldrá otro mientras se recupera el anterior.` });
+        failed.push({ orderId, error: review.courier === "swayp"
+          ? `${row.order_name ?? "El pedido"}: la bodega de Swayp no lo despachó. Confirma en Desde la lista si el paquete está en el almacén o si saldrá otro.`
+          : `${row.order_name ?? "El pedido"}: confirma en Desde la lista si el paquete de Tanders volvió al almacén o si saldrá otro mientras se recupera el anterior.` });
         continue;
       }
-      const reviewReason = review && confirmation ? tandersReviewReason(confirmation.packageLocation, review.uncollected === true) : null;
+      const reviewReason = review && confirmation ? tandersReviewReason(confirmation.packageLocation, review.uncollected === true, review.courier) : null;
       // REINTENTO (v1.19): otro courier no lo entregó. La salida que falló no
       // cuenta como asignada y se abre una NUEVA —la caja anterior es de ese
       // courier y lleva su rótulo (§9.3)—; nunca se rellena otra.

@@ -657,6 +657,22 @@ export function swaypLabelSaysRejection(label: string | null | undefined): boole
   return /ya no desea|no ha comprado/i.test(label);
 }
 
+/**
+ * La novedad 20 de Swayp, «Bodega no despachó mercancía»: el paquete NUNCA
+ * salió de la bodega. Es lo contrario de lo que dice el estado 6 en el resto de
+ * las novedades —el mensajero tiene el paquete—, y por eso se mira aparte
+ * (#KP138099, 03-10-2026).
+ */
+export const SWAYP_UNDISPATCHED_NOVELTY = 20;
+
+/** ¿La etiqueta de una guía Swayp dice que su bodega no despachó el paquete? */
+export function swaypLabelSaysUndispatched(label: string | null | undefined): boolean {
+  if (!label || !label.startsWith(SWAYP_LABEL_PREFIX)) return false;
+  const id = /\((\d+)\)\s*$/.exec(label)?.[1];
+  if (id) return Number(id) === SWAYP_UNDISPATCHED_NOVELTY;
+  return /bodega no despach/i.test(normalizeLabel(label));
+}
+
 function isoOrNull(value: unknown): string | null {
   if (typeof value !== "string" || !value.trim()) return null;
   const ms = Date.parse(value);

@@ -75,7 +75,7 @@ import {
 import { macroStageLabel, macroSubstageLabel, ORDER_MACRO_STAGES } from "@/lib/order-macro-stage";
 import { nonDeliveryReasonLabel } from "@/lib/gf-delivery";
 import { failedOutputLabel } from "@/lib/gf-retry";
-import { confirmedTandersReview, type TandersConfirmations, type TandersPackageLocation } from "@/lib/gf-tanders-review";
+import { confirmedTandersReview, type TandersConfirmations, type TandersPackageLocation, type TandersReview } from "@/lib/gf-tanders-review";
 import { addToTray, optimisticBox, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import type { RiderPickupMode } from "@/lib/grupo-gf-courier";
@@ -903,14 +903,14 @@ export function DispatchDayBoard(props: Props) {
             </div>
 
             {tandersConfirm && (
-              <Sheet look="ops" title="Revisar paquetes de Tanders" onClose={() => setTandersConfirm(null)} wide>
-                <p className="mb-4 text-sm text-ink-600">Estos pedidos tienen guía de Tanders sin entrega: salieron en días anteriores, o Tanders nunca los recolectó. Confirma qué paquete saldrá con {riderName}. La guía de Tanders conserva su historial; Grupo GF tendrá una nueva salida y rótulo.</p>
+              <Sheet look="ops" title={tandersConfirm.rows.every((q) => q.tandersReview!.courier === "swayp") ? "Revisar paquetes de Swayp" : "Revisar paquetes de otro courier"} onClose={() => setTandersConfirm(null)} wide>
+                <p className="mb-4 text-sm text-ink-600">Estos pedidos tienen guía de Tanders o Swayp sin entrega: salieron en días anteriores, Tanders nunca los recolectó, o la bodega de Swayp no los despachó. Confirma qué paquete saldrá con {riderName}. La guía del otro courier conserva su historial; Grupo GF tendrá una nueva salida y rótulo.</p>
                 <div className="space-y-4">
                   {tandersConfirm.rows.map((q) => (
                     <fieldset key={q.orderId} className="rounded-lg border border-line p-3">
-                      <legend className="px-1 text-sm font-semibold">{q.orderName} · {q.tandersReview!.uncollected ? "guía sin recolectar desde el" : "despachado"} {programDayLabel(limaDay(q.tandersReview!.dispatchedAt)!)}</legend>
+                      <legend className="px-1 text-sm font-semibold">{q.orderName} · {courierReviewLabel(q.tandersReview!)} {programDayLabel(limaDay(q.tandersReview!.dispatchedAt)!)}</legend>
                       {([
-                        ["returned", "El paquete volvió al almacén"],
+                        ["returned", q.tandersReview!.courier === "swayp" ? "El paquete está en el almacén" : "El paquete volvió al almacén"],
                         ["additional", "Saldrá otro paquete mientras se recupera el anterior"],
                       ] as const).map(([value, label]) => (
                         <label key={value} className="flex min-h-11 items-center gap-2 text-sm">
@@ -1160,13 +1160,25 @@ function RowCheck({ q, checked, onToggle }: { q: QueueRow; checked: boolean; onT
   return <span aria-hidden className="block size-4 rounded border border-dashed border-line-strong" title={q.route ? "Ya salió: se sigue, no se asigna" : "Pedido cerrado o cerrándose: no se asigna"} />;
 }
 
+/** Cómo se nombra la guía en revisión en la hoja de confirmación, antes de su fecha. */
+function courierReviewLabel(review: TandersReview): string {
+  if (review.courier === "swayp") return "bodega de Swayp no lo despachó · reparto del";
+  return review.uncollected ? "guía sin recolectar desde el" : "despachado";
+}
+
+/** La chapa de la fila, antes de la fecha. */
+function courierReviewChip(review: TandersReview): string {
+  if (review.courier === "swayp") return "Swayp · bodega no despachó · reparto del";
+  return review.uncollected ? "Tanders · sin recolectar · guía del" : "Tanders · despacho anterior · sin entrega ·";
+}
+
 /** Las chapas de estado de una fila de la cola. */
 function StateBadges({ q, today }: { q: QueueRow; today: string }) {
   return (
     <div className="flex flex-wrap items-center gap-1">
       {q.route?.undeliveredReason && <Badge tone="urgent" title="Sigue en la caja del motorizado: márcalo y «Recibir en oficina» cuando vuelva el paquete">No entregado · {nonDeliveryReasonLabel(q.route.undeliveredReason)}</Badge>}
       {q.failedOutput && <Badge tone="crit" title="Otro courier no lo entregó. Al asignarlo se crea una salida nueva y Almacén arma otra caja con su rótulo.">{failedOutputLabel(q.failedOutput)}</Badge>}
-      {q.tandersReview && <span className="text-xs text-warn-fg" title="Confirma el paquete antes de asignar. Tanders conserva su salida original.">{q.tandersReview.uncollected ? "Tanders · sin recolectar · guía del" : "Tanders · despacho anterior · sin entrega ·"} {programDayLabel(limaDay(q.tandersReview.dispatchedAt)!)}</span>}
+      {q.tandersReview && <span className="text-xs text-warn-fg" title={`Confirma el paquete antes de asignar. ${q.tandersReview.courier === "swayp" ? "Swayp" : "Tanders"} conserva su salida original.`}>{courierReviewChip(q.tandersReview)} {programDayLabel(limaDay(q.tandersReview.dispatchedAt)!)}</span>}
       {q.assignable && q.programmedFor && <ProgramChip day={q.programmedFor} today={today} reason={q.programReason ?? null} />}
       {q.taken && !q.route && <Badge>tomado · sin caja</Badge>}
       {!q.assignable && q.macroSubstage && <Badge tone="info" title={macroStageLabel(q.macroStage)}>{macroSubstageLabel(q.macroSubstage)}</Badge>}

@@ -1,7 +1,11 @@
 // Un despacho anterior sin entrega permite revisión, no declara fallida la guía.
+// Cubre a Tanders y, desde el 03-10-2026, la guía Swayp que su bodega no despachó.
 import { limaDay } from "@/lib/dispatch-day";
+import { swaypLabelSaysUndispatched } from "@/lib/swayp";
 
 export interface TandersReview {
+  /** De quién es la guía que se revisa: Tanders, o Swayp sin despachar. */
+  courier: "tanders" | "swayp";
   shipmentIds: string[];
   /**
    * Despacho anterior: cuándo Tanders lo recolectó. Sin recolectar: cuándo se
@@ -34,6 +38,8 @@ interface ReviewOutput {
   reported_status?: string | null;
   /** Cuándo se creó la guía en Tanders (`tanders_raw.createdAt`). */
   tanders_created_at?: string | null;
+  /** Estado crudo de Swayp (1..12): la novedad 20 solo cuenta mientras siga en 6. */
+  swayp_state?: number | null;
 }
 
 /**
@@ -105,18 +111,64 @@ export function tandersReview(order: ReviewOrder, outputs: readonly ReviewOutput
   if (!live.length || live.some((o) => o.courier !== "tanders")) return null;
   if (inTransit && live.every(collectedAndDue)) {
     return {
+      courier: "tanders",
       shipmentIds: live.map((o) => o.id).sort(),
       dispatchedAt: live.map((o) => o.dispatched_at!).sort().at(-1)!,
     };
   }
   if (waitingPickup && live.every(uncollectedAndDue)) {
     return {
+      courier: "tanders",
       shipmentIds: live.map((o) => o.id).sort(),
       dispatchedAt: live.map((o) => o.tanders_created_at!).sort().at(-1)!,
       uncollected: true,
     };
   }
   return null;
+}
+
+/**
+ * La guía Swayp que su bodega NO despachó (novedad 20, «Bodega no despachó
+ * mercancía»). El barrido la lee como cualquier Novedad —estado 6, el paquete
+ * con el mensajero— y le sella salida y custodia del courier, así que el pedido
+ * queda «En curso · En reparto» con el paquete en nuestro almacén (#KP138099).
+ * Novedad no abre la recuperación (§9, v1.22), así que nada lo destrababa.
+ *
+ * Misma regla que Tanders (decisión del owner, 03-10-2026): el día que Swayp le
+ * puso de reparto es suyo; si termina y la guía sigue en esa novedad, queda
+ * libre el día hábil siguiente, con la confirmación por pedido de siempre. Si
+ * Swayp la mueve —Devolución abre la recuperación; Reparto la revive—, deja de
+ * ofrecerse. La guía de Swayp no se toca: resolver su novedad sigue en Envíos.
+ */
+export function swaypUndispatchedReview(order: ReviewOrder, outputs: readonly ReviewOutput[], today: string): TandersReview | null {
+  if (order.coverage !== "lima" || order.current_courier !== "fenix") return null;
+  if (order.macro_stage !== "en_curso" || !["en_transito", "en_reparto"].includes(String(order.macro_substage))) return null;
+  if (outputs.some((o) => o.status_category === "delivered" || o.delivery_status === "entregado")) return null;
+  const live = outputs.filter((o) => ["pendiente", "en_ruta", "por_preparar"].includes(o.delivery_status));
+  if (!live.length || live.some((o) => o.courier !== "fenix")) return null;
+  const cutoff = tandersReleaseCutoff(today);
+  const undispatchedAndDue = (o: ReviewOutput) => {
+    const repartoDay = o.dispatched_at && Number.isFinite(Date.parse(o.dispatched_at)) ? limaDay(o.dispatched_at) : null;
+    return o.swayp_state === 6 && swaypLabelSaysUndispatched(o.reported_status) && Boolean(repartoDay) && repartoDay! < cutoff;
+  };
+  if (!live.every(undispatchedAndDue)) return null;
+  return {
+    courier: "swayp",
+    shipmentIds: live.map((o) => o.id).sort(),
+    dispatchedAt: live.map((o) => o.dispatched_at!).sort().at(-1)!,
+    uncollected: true,
+  };
+}
+
+/** La revisión que aplique: Tanders, o Swayp sin despachar. */
+export function courierReview(order: ReviewOrder, outputs: readonly ReviewOutput[], today: string): TandersReview | null {
+  return tandersReview(order, outputs, today) ?? swaypUndispatchedReview(order, outputs, today);
+}
+
+/** La cola trae los candidatos de Swayp; `swaypUndispatchedReview` decide. */
+export function swaypUndispatchedQueueFilter(today: string): string {
+  const cutoff = tandersReleaseCutoff(today);
+  return `and(macro_stage.eq.en_curso,macro_substage.in.(en_transito,en_reparto),current_courier.eq.fenix,dispatched_at.lt.${cutoff}T00:00:00-05:00)`;
 }
 
 /** Confirmación por pedido, vinculada a las salidas que vio el operador. */
@@ -126,7 +178,12 @@ export function confirmedTandersReview(review: TandersReview, confirmation: Tand
     [...confirmation.shipmentIds].sort().every((id, i) => id === review.shipmentIds[i]));
 }
 
-export function tandersReviewReason(location: TandersPackageLocation, uncollected = false): string {
+export function tandersReviewReason(location: TandersPackageLocation, uncollected = false, courier: TandersReview["courier"] = "tanders"): string {
+  if (courier === "swayp") {
+    return location === "returned"
+      ? "Swayp: su bodega no despachó la guía (novedad 20) y pasó su día de reparto. El operador confirma que el paquete está en el almacén; Grupo GF crea una nueva salida."
+      : "Swayp: su bodega no despachó la guía (novedad 20) y pasó su día de reparto. El operador solicita otro paquete; Grupo GF crea una salida adicional.";
+  }
   if (uncollected) {
     return location === "returned"
       ? "Tanders: la guía nunca se recolectó y pasó su día de reparto. El operador confirma que el paquete está en el almacén; Grupo GF crea una nueva salida."

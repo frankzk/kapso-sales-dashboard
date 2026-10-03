@@ -1122,6 +1122,34 @@ confirmación por pedido —el paquete está en el almacén, o saldrá otro—. 
 de Tanders no se anula sola: si después la recolectan, se concilia por el
 circuito de siempre.
 
+**Una guía Swayp que su bodega no despachó, igual (decisión del owner,
+03-10-2026).** #KP138099 (Lurín) tenía la guía directa 50000142751 escrita sobre
+su salida KP138099-S01. Swayp la dejó en **Novedad (6)** con la novedad **20,
+«Bodega no despachó mercancía»**: el paquete nunca salió y la caja estaba en
+nuestra oficina. El barrido lee toda Novedad como «el paquete está con el
+mensajero» y le selló salida y custodia del courier, así que el pedido quedó
+«En curso · En reparto»; Novedad no abre la recuperación (§9, v1.22), «Anular
+guía Swayp» se niega con la caja «ya salida», y el escaneo de Grupo GF respondía
+«El pedido ya avanzó y salió de Pedidos disponibles». Nada lo destrababa.
+
+- El día de reparto que Swayp le puso (la salida que anotó el barrido) es suyo.
+  Si termina y la guía **sigue en Novedad 20**, el paquete queda libre el
+  **siguiente día hábil**, con la misma regla del domingo que Tanders.
+- Aparece en «Desde la lista» como **«Swayp · bodega no despachó · reparto del
+  …»** y pide la misma confirmación por pedido: **el paquete está en el
+  almacén**, o saldrá otro. El escaneo o una llamada directa sin esa
+  confirmación lo rechazan diciendo que la bodega de Swayp no lo despachó.
+- Grupo GF crea una **salida nueva con su rótulo** (la S01 es de la guía de
+  Swayp) y el motivo de salida adicional se escribe solo.
+- **Solo la novedad 20.** Cualquier otra novedad dice que el mensajero tiene el
+  paquete, y «Reprogramado» que Swayp vuelve otro día (#KP137814): esas se
+  resuelven desde Envíos. Si Swayp mueve la guía —Devolución abre la
+  recuperación, Reparto la revive— deja de ofrecerse.
+- La guía de Swayp **no se toca sola**: resolver su novedad («Devolver al
+  remitente») sigue siendo una decisión de Envíos, para que Swayp no la
+  despache después. Implementación: `swaypUndispatchedReview`,
+  `lib/gf-tanders-review.ts`.
+
 - Se muestran como **«Tanders · despacho anterior · sin entrega»**, con la fecha
   de despacho. La fecha de la caja elegida no adelanta esta disponibilidad.
 - Antes de asignar a Grupo GF se exige confirmar **por pedido**, sin selección
@@ -1182,8 +1210,9 @@ Tanders:
 - **Devolución (8), Devolución confirmada (9) y con cobro (12) abren la
   recuperación** (`swaypGuideFailed`, `lib/reproprovincia.ts`), desde que el
   paquete empieza a volver, sin esperar la caja. Novedad (6) no: el paquete
-  sigue con el mensajero esperando instrucción (§11.2). Cancelada (10) tampoco:
-  no dice que saliera.
+  sigue con el mensajero esperando instrucción (§11.2). La excepción es la
+  novedad 20, «Bodega no despachó mercancía», que se libera a Grupo GF tras su
+  día de reparto (§9, 03-10-2026). Cancelada (10) tampoco: no dice que saliera.
 - **En Lima va a «Por reprogramar Lima»** y a la lista de Grupo GF con la chapa
   «Swayp no entregó · vuelve»: Swayp se usa una sola vez por pedido en Lima
   (§9.3), así que el siguiente intento es de otro courier. **En provincia va a
