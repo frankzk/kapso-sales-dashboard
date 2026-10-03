@@ -4648,6 +4648,11 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   de las acciones del Master. Casos del 02-10: #KP136585, #KP137218 y
   #AUR177643 estaban «sin asignar courier»; #KP136660 («Carlos Carlos») y
   #KP137464 («Alfredo Alfredo») tenían salida pero ni DNI ni nombre real.
+- **El menú lateral dice cuántos quedan** (añadido el 03-10-2026). Al lado
+  de «Cotejar Olva» aparece el número de envíos del último cotejo de cada
+  organización que siguen «por revisar» o «sin pareja» y cuyo tracking hoy no
+  está en ninguna salida: lo vinculado después a mano ya no cuenta. Sin nada
+  pendiente no se pinta nada. Solo lo ve quien ve la entrada (logística).
 - **El tracking se guarda sin ceros delante.** El portal escribe
   «02649804/26»; la página pública, el correo y todo lo guardado, «2649804-26».
   `parseOlvaTracking` quita los ceros para que el índice único vea el mismo
