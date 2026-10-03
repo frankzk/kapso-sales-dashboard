@@ -380,6 +380,7 @@ Firmes y discretos: se distinguen por relleno y sombra, no por tamaño.
 - **Focus:** el anillo pasa a 2 px en `brand-500`, sin contorno exterior.
 - **Error / Disabled:** deshabilitado sobre `wash` con texto `ink-500`; los errores se dicen en un aviso `crit`, no pintando el campo.
 - **Casilla:** nativa, 16 px, `accent-color` en `brand-600`.
+- **Otro tamaño:** `FIELD` trae 36 px a todo el ancho; para un campo de 32 px o de ancho fijo se parte de `FIELD_BOX` y se ponen alto, ancho y relleno. `cn` solo junta clases y en el CSS `h-9` va detrás de `h-8` y `w-full` detrás de `w-44`, así que sumarlos a `FIELD` no cambia nada.
 
 ### Navigation
 - **Pestañas subrayadas:** texto en peso 600 (13 px en el teléfono, 14 px desde `lg`), `ink-500` en reposo y `ink-900` al pasar; la activa en `brand-700` con barra de 2 px en `brand-600` sobre la hairline `line` del contenedor; objetivo mínimo de 48 px. El contador va como chapa (`brand` en la activa, `neutral` en las demás); en el teléfono solo la activa muestra su número, como texto.

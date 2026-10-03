@@ -13,9 +13,18 @@ import { IconAlert, IconCheckCircle, IconInfo, IconPlusCircle, IconXCircle } fro
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
+/**
+ * El campo sin alto, ancho ni relleno lateral. `cn` solo junta clases: no
+ * resuelve conflictos, y en el CSS de Tailwind `h-9` va detrás de `h-8` y
+ * `w-full` detrás de `w-44`, así que `cn(FIELD, "h-8 w-44")` se quedaba en
+ * 36 px a todo el ancho sin avisar. Quien necesite otro tamaño parte de aquí y
+ * pone los tres.
+ */
+export const FIELD_BOX =
+  "block min-w-0 rounded-md border-0 bg-white text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:bg-wash disabled:text-ink-500";
+
 /** Campo de texto o selector: 36 px, anillo fino, foco azul. */
-export const FIELD =
-  "block h-9 w-full min-w-0 rounded-md border-0 bg-white px-3 text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:bg-wash disabled:text-ink-500";
+export const FIELD = `${FIELD_BOX} h-9 w-full px-3`;
 
 /** Casilla nativa con el azul de la marca. */
 export const CHECKBOX = "size-4 shrink-0 cursor-pointer rounded accent-brand-600";

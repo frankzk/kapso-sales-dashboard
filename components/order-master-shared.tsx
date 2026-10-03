@@ -269,7 +269,7 @@ export function ShalomCancelButton({
             setError(null);
             setConfirming(true);
           }}
-          className="text-[13px] font-medium text-crit-fg underline-offset-2 hover:underline"
+          className="inline-flex items-center text-[13px] font-medium text-crit-fg underline-offset-2 hover:underline pointer-coarse:min-h-11"
         >
           Anular
         </button>
@@ -345,7 +345,7 @@ export function FenixCancelButton({
             setError(null);
             setConfirming(true);
           }}
-          className="text-[13px] font-medium text-crit-fg underline-offset-2 hover:underline"
+          className="inline-flex items-center text-[13px] font-medium text-crit-fg underline-offset-2 hover:underline pointer-coarse:min-h-11"
         >
           Anular guía Swayp
         </button>
@@ -423,7 +423,7 @@ export function ManualOutputCancelButton({
             setError(null);
             setConfirming(true);
           }}
-          className="text-[13px] font-medium text-crit-fg underline-offset-2 hover:underline"
+          className="inline-flex items-center text-[13px] font-medium text-crit-fg underline-offset-2 hover:underline pointer-coarse:min-h-11"
         >
           Anular salida
         </button>
@@ -580,6 +580,8 @@ export const TIMELINE_LABEL: Record<string, string> = {
   cancelled_shopify: "Anulado en Shopify",
   courier_assigned: "Courier asignado",
   guide_registered: "Guía registrada",
+  guide_created: "Guía creada",
+  guide_cancelled: "Guía anulada",
   aliclik_duplicate_resolution: "Resolución de posible duplicado Aliclik",
   route_output_created: "Salida y rótulo creados",
   route_output_cancelled: "Salida anulada",

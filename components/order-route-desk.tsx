@@ -15,10 +15,13 @@ import type {
   RouteDeskGate,
 } from "@/lib/order-route-plan";
 
+// Fondo y anillo por disponibilidad. La sugerida cambia el anillo por el azul
+// de 2 px EN LUGAR de este: `cn` no resuelve conflictos y `ring-line` va
+// detrás de `ring-brand-600` en el CSS, así que sumarlos dejaba el gris.
 const STATUS_TONE = {
-  available: "bg-white ring-1 ring-inset ring-line",
-  warning: "bg-warn-wash ring-1 ring-inset ring-warn-bg",
-  blocked: "bg-wash ring-1 ring-inset ring-line",
+  available: { bg: "bg-white", ring: "ring-1 ring-inset ring-line" },
+  warning: { bg: "bg-warn-wash", ring: "ring-1 ring-inset ring-warn-bg" },
+  blocked: { bg: "bg-wash", ring: "ring-1 ring-inset ring-line" },
 } as const;
 
 const ACTION_LABEL: Record<RouteAction, string> = {
@@ -115,14 +118,16 @@ export function OrderRouteDesk({
           // `routeDeskGate`.
           const closed = blockedActions.has(route.action);
           const enabled = !closed && route.availability !== "blocked" && actionEnabled(route);
-          const suggested = route.recommended && route.availability !== "blocked";
+          // «Sugerido» solo cuando se puede tomar: con el pedido cerrado la
+          // tarjeta dice «Reabrir primero» y una recomendación ahí confunde.
+          const suggested = route.recommended && enabled;
           return (
             <article
               key={route.key}
               className={cn(
                 "flex min-h-36 flex-col rounded-lg p-4",
-                STATUS_TONE[route.availability],
-                suggested && "ring-2 ring-brand-600",
+                STATUS_TONE[route.availability].bg,
+                suggested ? "ring-2 ring-inset ring-brand-600" : STATUS_TONE[route.availability].ring,
               )}
             >
               <div className="flex items-start justify-between gap-2">
@@ -177,7 +182,7 @@ export function OrderRouteDesk({
               <div className="flex-1" />
               <OpsButton
                 size="sm"
-                variant={enabled && route.recommended ? "primary" : "secondary"}
+                variant={suggested ? "primary" : "secondary"}
                 disabled={!enabled}
                 onClick={() => onSelect(route)}
                 className="mt-4 self-start pointer-coarse:h-11"

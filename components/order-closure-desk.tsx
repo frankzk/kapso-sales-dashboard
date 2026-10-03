@@ -281,10 +281,10 @@ export function OrderClosureDesk({
                 aria-pressed={active}
                 onClick={() => choose(action)}
                 className={cn(
-                  "rounded-lg bg-white p-3 text-left transition-shadow disabled:cursor-not-allowed disabled:opacity-50",
+                  "rounded-lg p-3 text-left transition-shadow disabled:cursor-not-allowed disabled:opacity-50",
                   active
                     ? "bg-brand-50 ring-2 ring-inset ring-brand-600"
-                    : "ring-1 ring-inset ring-line-strong hover:ring-ink-300",
+                    : "bg-white ring-1 ring-inset ring-line-strong hover:ring-ink-300",
                 )}
               >
                 <span

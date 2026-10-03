@@ -29,6 +29,7 @@ import {
   Banner,
   CHECKBOX,
   FIELD,
+  FIELD_BOX,
   OpsButton,
   Skeleton,
   opsButtonClass,
@@ -802,6 +803,29 @@ export function OrderDrawer({
     };
   }, []);
 
+  // `aria-modal` no basta: Tab se escapaba a la tabla del Master que queda
+  // detrás. El foco da la vuelta dentro de la hoja. Los modales de guía viven
+  // fuera de ella y llevan su propio foco.
+  const trapFocus = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab" || !scrollRef.current) return;
+    const items = Array.from(
+      scrollRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => el.getClientRects().length > 0);
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (!first || !last) return;
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || active === scrollRef.current)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   const tabs: { id: DrawerWorkspaceView; label: string; count?: number }[] = [
     { id: "operar", label: "Operar" },
     { id: "informacion", label: "Información" },
@@ -836,6 +860,7 @@ export function OrderDrawer({
         // no es un control, así que sin anillo.
         style={{ outline: "none" }}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={trapFocus}
         role="dialog"
         aria-modal="true"
         aria-label={`Pedido ${row?.order_name ?? ""}`}
@@ -903,7 +928,11 @@ export function OrderDrawer({
                       <span className="whitespace-nowrap tabular-nums text-ink-700">
                         {detail.row.customer_phone}
                       </span>
-                      <CopyButton value={detail.row.customer_phone} label="el teléfono" />
+                      <CopyButton
+                        value={detail.row.customer_phone}
+                        label="el teléfono"
+                        className="justify-center pointer-coarse:size-11"
+                      />
                     </>
                   )}
                 </div>
@@ -916,7 +945,7 @@ export function OrderDrawer({
                     href={`tel:${detail.row.customer_phone}`}
                     title="Llamar al cliente"
                     aria-label="Llamar al cliente"
-                    className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11")}
+                    className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11 pointer-coarse:min-w-11")}
                   >
                     <IconPhone aria-hidden className="text-ink-500" />
                     <span className="hidden sm:inline">Llamar</span>
@@ -927,7 +956,7 @@ export function OrderDrawer({
                     rel="noreferrer"
                     title="Abrir WhatsApp"
                     aria-label="Abrir WhatsApp con el cliente"
-                    className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11")}
+                    className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11 pointer-coarse:min-w-11")}
                   >
                     <IconWhatsApp aria-hidden className="text-ink-500" />
                     <span className="hidden sm:inline">WhatsApp</span>
@@ -939,7 +968,7 @@ export function OrderDrawer({
                   href={masterHref}
                   title="Abrir en Master de Pedidos"
                   aria-label={`Abrir ${row?.order_name ?? "el pedido"} en Master de Pedidos`}
-                  className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11")}
+                  className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11 pointer-coarse:min-w-11")}
                 >
                   <IconList aria-hidden className="text-ink-500" />
                   <span className="hidden sm:inline">Master de Pedidos</span>
@@ -1044,667 +1073,658 @@ export function OrderDrawer({
             <Skeleton className="h-48 w-full" />
           </div>
         ) : (
-          <div className="flex flex-col gap-6 px-4 pb-10 pt-6 sm:px-6">
-            <section
+          <div className="px-4 pb-10 pt-6 sm:px-6">
+            <div
               id="pedido-panel-operar"
               role="tabpanel"
               aria-labelledby="pedido-tab-operar"
               hidden={workspace !== "operar"}
-              data-drawer-section="resumen"
-              className="order-1 scroll-mt-36 space-y-5"
+              className="flex flex-col gap-6"
             >
-              <div>
-                <h3 className="text-base font-semibold leading-6 text-ink-900">Situación</h3>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <MacroStageBadge stage={detail.row.macro_stage} />
-                  <span className="text-sm font-medium text-ink-900">
-                    {macroSubstageLabel(detail.row.macro_substage)}
-                  </span>
-                  {/* Un motivo dice qué falta, la subetapa dice en qué punto va la
-                      gestión: el pedido se ve entero sin abrir nada. En Por cerrar
-                      los motivos son el trabajo mismo y los lista la mesa de cierre,
-                      así que no se repiten aquí. */}
-                  {detail.row.macro_stage !== "por_cerrar" &&
-                    (detail.row.macro_reasons ?? []).map((reason) => (
-                      <Badge key={reason} tone="warn">
-                        {macroSubstageLabel(reason)}
-                      </Badge>
-                    ))}
-                </div>
-                <p className="mt-1.5 text-[13px] leading-5 text-ink-500">
-                  <span className="tabular-nums">{fmtAge(detail.row.macro_since ?? detail.row.status_since)}</span> en esta
-                  macroetapa · fuente: {detail.row.status_source ?? "—"}
-                </p>
-              </div>
-
-              <DrawerJourneyRail current={detail.row.macro_stage} />
-            </section>
-
-            {nextAction && workspace === "operar" && (
-              <div className="order-2 space-y-3">
-                <DrawerNextActionCard action={nextAction} onJump={jumpTo} />
-                {/* Grupo GF: quién tiene el paquete y en qué quedó, arriba y en
-                    cualquier etapa (también Por cerrar), sin bajar hasta
-                    «Salidas y guías». */}
-                {gfActive && (
-                  <div className={cn(FRAME, "px-4 py-3")}>
-                    <p className="text-[13px] font-medium text-ink-700">Motorizado Grupo GF</p>
-                    <GfDeliveryLine delivery={gfActive} />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* La gestión de confirmación va arriba porque en Por confirmar ES
-                el trabajo. Se muestra antes que el panel de pago para que el
-                empate de `order-3` lo resuelva el orden del DOM: en Agencia el
-                abono se pide DURANTE la llamada, no en vez de ella. */}
-            {/* Y también en Reproprovincia: la gestión de llamadas era por GUÍA, y
-                una guía anulada no admite gestión, así que estos pedidos no se
-                podían llamar (0 llamadas sobre 920 en 60 días). La mesa de
-                confirmación es por PEDIDO: se reutiliza tal cual. */}
-            {(detail.row.macro_stage === "por_confirmar" ||
-              detail.row.macro_substage === "gestion_reproprovincia") &&
-              canEdit && (
-              <div
-                hidden={workspace !== "operar"}
-                data-drawer-section="confirmacion"
-                className={cn("order-3 scroll-mt-36", SECTION)}
+              <section
+                data-drawer-section="resumen"
+                className="order-1 scroll-mt-36 space-y-5"
               >
-                <ConfirmationDesk
-                  brief={brief}
-                  onDuplicateChanged={() => { void reload(); onSaved(); }}
-                  row={detail.row}
-                  tasks={detail.tasks}
-                  shopifyUrl={shopifyUrl}
-                  timeline={detail.timeline}
-                  pending={pending}
-                  onAttempt={(payload) =>
-                    run(() => registerConfirmationAttempt(orderId, payload))
-                  }
-                />
-                {detail.row.macro_substage === "gestion_reproprovincia" && (
-                  <>
-                    {/* MOM §11.8: el agente de voz llama a estos pedidos. */}
-                    <VoiceAgentPanel orderId={orderId} pending={pending} run={run} />
-                    <DescartarRecuperacion
-                      pending={pending}
-                      onDiscard={(motivo) => run(() => descartarRecuperacion(orderId, motivo))}
-                    />
-                  </>
-                )}
-              </div>
-            )}
+                <div>
+                  <h3 className="text-base font-semibold leading-6 text-ink-900">Situación</h3>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <MacroStageBadge stage={detail.row.macro_stage} />
+                    <span className="text-sm font-medium text-ink-900">
+                      {macroSubstageLabel(detail.row.macro_substage)}
+                    </span>
+                    {/* Un motivo dice qué falta, la subetapa dice en qué punto va la
+                        gestión: el pedido se ve entero sin abrir nada. En Por cerrar
+                        los motivos son el trabajo mismo y los lista la mesa de cierre,
+                        así que no se repiten aquí. */}
+                    {detail.row.macro_stage !== "por_cerrar" &&
+                      (detail.row.macro_reasons ?? []).map((reason) => (
+                        <Badge key={reason} tone="warn">
+                          {macroSubstageLabel(reason)}
+                        </Badge>
+                      ))}
+                  </div>
+                  <p className="mt-1.5 text-[13px] leading-5 text-ink-500">
+                    <span className="tabular-nums">{fmtAge(detail.row.macro_since ?? detail.row.status_since)}</span> en esta
+                    macroetapa · fuente: {detail.row.status_source ?? "—"}
+                  </p>
+                </div>
 
-            <section
+                <DrawerJourneyRail current={detail.row.macro_stage} />
+              </section>
+              {nextAction && workspace === "operar" && (
+                <div className="order-2 space-y-3">
+                  <DrawerNextActionCard action={nextAction} onJump={jumpTo} />
+                  {/* Grupo GF: quién tiene el paquete y en qué quedó, arriba y en
+                      cualquier etapa (también Por cerrar), sin bajar hasta
+                      «Salidas y guías». */}
+                  {gfActive && (
+                    <div className={cn(FRAME, "px-4 py-3")}>
+                      <p className="text-[13px] font-medium text-ink-700">Motorizado Grupo GF</p>
+                      <GfDeliveryLine delivery={gfActive} />
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* La gestión de confirmación va arriba porque en Por confirmar ES
+                  el trabajo. Se muestra antes que el panel de pago para que el
+                  empate de `order-3` lo resuelva el orden del DOM: en Agencia el
+                  abono se pide DURANTE la llamada, no en vez de ella. */}
+              {/* Y también en Reproprovincia: la gestión de llamadas era por GUÍA, y
+                  una guía anulada no admite gestión, así que estos pedidos no se
+                  podían llamar (0 llamadas sobre 920 en 60 días). La mesa de
+                  confirmación es por PEDIDO: se reutiliza tal cual. */}
+              {(detail.row.macro_stage === "por_confirmar" ||
+                detail.row.macro_substage === "gestion_reproprovincia") &&
+                canEdit && (
+                <div
+                  data-drawer-section="confirmacion"
+                  className={cn("order-3 scroll-mt-36", SECTION)}
+                >
+                  <ConfirmationDesk
+                    brief={brief}
+                    onDuplicateChanged={() => { void reload(); onSaved(); }}
+                    row={detail.row}
+                    tasks={detail.tasks}
+                    shopifyUrl={shopifyUrl}
+                    timeline={detail.timeline}
+                    pending={pending}
+                    onAttempt={(payload) =>
+                      run(() => registerConfirmationAttempt(orderId, payload))
+                    }
+                  />
+                  {detail.row.macro_substage === "gestion_reproprovincia" && (
+                    <>
+                      {/* MOM §11.8: el agente de voz llama a estos pedidos. */}
+                      <VoiceAgentPanel orderId={orderId} pending={pending} run={run} />
+                      <DescartarRecuperacion
+                        pending={pending}
+                        onDiscard={(motivo) => run(() => descartarRecuperacion(orderId, motivo))}
+                      />
+                    </>
+                  )}
+                </div>
+              )}
+              <div
+                data-drawer-section="rutas"
+                className={cn("order-4 scroll-mt-36", SECTION)}
+              >
+                <OrderRouteDesk
+                  plan={detail.routePlan}
+                  gate={detail.routeGate}
+                  onJump={jumpTo}
+                  actionEnabled={routeEnabled}
+                  onSelect={selectRoute}
+                />
+              </div>
+              <section
+                data-drawer-section="guias"
+                className={cn("order-6 scroll-mt-36 space-y-4", SECTION)}
+              >
+                <SectionHead
+                  title="Salidas y guías"
+                  badge={<Badge className="tabular-nums">{detail.guides.length}</Badge>}
+                  help="Cada salida conserva su courier, rótulo, QR y resultado independiente."
+                />
+                {detail.guides.length === 0 ? (
+                  <p className={cn(FRAME, "px-4 py-3 text-sm text-ink-500")}>
+                    Sin gestión logística registrada todavía.
+                  </p>
+                ) : (
+                  <ul className={cn(FRAME, "divide-y divide-line")}>
+                    {detail.guides.map((g) => {
+                      const estado = {
+                        deliveryStatus: g.delivery_status,
+                        custodyState: g.custody_state,
+                        pickupState: g.pickup_state,
+                        courier: g.courier,
+                        swaypState: g.swayp_state ?? null,
+                        reportedStatus: g.reported_status ?? null,
+                      };
+                      const gf = detail.gfDeliveries.find((d) => d.shipmentId === g.id);
+                      return (
+                      <li key={g.id} className="space-y-2.5 px-4 py-3">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                          <span className="text-sm font-semibold capitalize text-ink-900">{g.courier}</span>
+                          <span className="font-mono text-xs text-ink-600">
+                            {outputDisplayCode(g.output_code, g.courier) || g.guide_code}
+                          </span>
+                          {/* El número con el que el COURIER conoce el envío.
+                              Estaba escondido: en cuanto la salida tenía código
+                              interno, `outputDisplayCode` ganaba y el `guide_code`
+                              no se pintaba nunca. Es justo el dato que hay que
+                              teclear en el panel del courier para buscarla, y el
+                              que el rótulo de Shalom titula «N° de Orden». */}
+                          {g.guide_code && outputDisplayCode(g.output_code, g.courier) && (
+                            <span className="select-all font-mono text-xs font-semibold text-ink-900">
+                              N° {g.guide_code}
+                            </span>
+                          )}
+                          {/* Shalom muestra en su panel el nº de orden Y un código
+                              corto. Sin el corto hay que abrir cada envío allá para
+                              saber cuál es cuál. */}
+                          {g.shalom_codigo && (
+                            <span className="rounded bg-wash px-1.5 py-0.5 font-mono text-xs font-medium text-ink-700 ring-1 ring-inset ring-line">
+                              {g.shalom_codigo}
+                            </span>
+                          )}
+                          <Badge tone={shipmentIsReturning(estado) ? "warn" : "neutral"}>
+                            {shipmentStateLabel(estado)}
+                          </Badge>
+                          {(g.aliclik_attempts ?? g.reroute_attempts) > 0 && (
+                            <span className="text-[13px] font-medium tabular-nums text-warn-fg">
+                              {g.aliclik_attempts ?? g.reroute_attempts} intento(s)
+                            </span>
+                          )}
+                          {g.guide_code === detail.row.guide_code && (
+                            <span className="ml-auto text-[13px] text-ink-500">Guía actual</span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                          {g.courier === "tanders" && (
+                            // Navegación real (no window.open tras un await): así el
+                            // bloqueador de ventanas emergentes no se la come. El
+                            // marcado en Tanders sale en paralelo, sin frenar la
+                            // impresión — el rótulo ya está compuesto de nuestro lado.
+                            <a
+                              href={`/dashboard/pedidos/rotulos?ids=${g.id}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={() => void markTandersLabelGenerated([g.id])}
+                              className={DOC_LINK}
+                            >
+                              Rótulo
+                              <IconArrowUpRight aria-hidden className="size-3.5" />
+                            </a>
+                          )}
+                          {/* Los dos rótulos del paquete en UNA hoja: el de
+                              Tanders arriba y, debajo, el QR de la salida y qué va
+                              dentro de la caja. Se suma a los otros dos en vez de
+                              reemplazarlos mientras se valida en el almacén. Marca
+                              «rótulo generado» igual que el enlace suyo: para
+                              Tanders el paquete quedó rotulado, lo imprimas junto o
+                              por separado. */}
+                          {g.courier === "tanders" && (
+                            <a
+                              href={`/api/pedidos/guia-combinada?ids=${g.id}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={() => void markTandersLabelGenerated([g.id])}
+                              className={DOC_LINK}
+                            >
+                              Guía combinada
+                              <IconArrowUpRight aria-hidden className="size-3.5" />
+                            </a>
+                          )}
+                          {/* Un solo papel para la caja de agencia: la etiqueta de
+                              Shalom —que la compone ELLOS y se pide a su API—
+                              arriba, y debajo nuestra banda con el QR de la salida
+                              y los productos. Antes eran dos impresiones, y para
+                              conseguir la segunda el almacén acababa creando una
+                              salida `por definir` que después bloquea la guía.
+
+                              Solo existe para las guías creadas por API: las que
+                              llegaron por el Excel no tienen `ose_id` y su rótulo se
+                              baja del panel de Shalom. */}
+                          {g.courier === "shalom" && g.shalom_ose_id && (
+                            <>
+                              <a href={`/api/shalom/rotulo/${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK}>
+                                Rótulo
+                                <IconArrowUpRight aria-hidden className="size-3.5" />
+                              </a>
+                              {/* El suelto se conserva a un clic de distancia: si la
+                                  composición falla, el mostrador de Shalom sigue
+                                  necesitando su papel. */}
+                              <a href={`/api/shalom/label/${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK_QUIET}>
+                                Solo Shalom
+                              </a>
+                              {/* El «Ticket Shalom», el recibo de tira del
+                                  mostrador. No es el rótulo: es el otro papel, el
+                                  que hasta ahora había que bajar a mano de
+                                  pro.shalom.pe envío por envío. */}
+                              <a href={`/api/shalom/ticket/${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK_QUIET}>
+                                Ticket
+                              </a>
+                            </>
+                          )}
+                          {g.qr_token && (
+                            <a href={`/api/pedidos/rotulos?ids=${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK}>
+                              Rótulo interno
+                              <IconArrowUpRight aria-hidden className="size-3.5" />
+                            </a>
+                          )}
+                          {canCreateShalomGuide && shalomGuideIsCancelable(g) && (
+                            <ShalomCancelButton
+                              shipmentId={g.id}
+                              guideCode={g.guide_code}
+                              codigo={g.shalom_codigo ?? null}
+                              onDone={(msg) => {
+                                setNotice(msg);
+                                void reload();
+                                onSaved();
+                              }}
+                            />
+                          )}
+                          {/* El botón que faltaba para Swayp. Rellenar la salida le
+                              cambia la vía, así que «Anular salida» deja de
+                              ofrecerse —bien: la guía ya existe del otro lado— y sin
+                              esto no quedaba ninguno. Ver `cancelFenixOutput`. */}
+                          {canEdit && fenixOutputIsCancelable(g) && (
+                            <FenixCancelButton
+                              shipmentId={g.id}
+                              guideCode={g.guide_code}
+                              wasFilled={detail.filledOutputIds.includes(g.id)}
+                              onDone={(msg) => {
+                                setNotice(msg);
+                                void reload();
+                                onSaved();
+                              }}
+                            />
+                          )}
+                          {/* El número con el que Olva conoce el envío, y con el
+                              que Kapta le pregunta el estado cada media hora (§12).
+                              Llega por correo después de crear la salida, así que
+                              se registra —o se corrige— desde aquí. */}
+                          {canEdit && g.courier.trim().toLowerCase() === "olva" && (
+                            <OlvaTrackingField
+                              shipmentId={g.id}
+                              current={
+                                g.olva_tracking && g.olva_emision
+                                  ? formatOlvaTracking({ tracking: g.olva_tracking, emision: g.olva_emision })
+                                  : null
+                              }
+                              rawStatus={g.olva_status ?? null}
+                              onDone={(msg) => {
+                                setNotice(msg);
+                                void reload();
+                                onSaved();
+                              }}
+                            />
+                          )}
+                          {/* Las salidas de ruta manual no tienen API a la que
+                              avisar: anularlas es corregir NUESTRO registro, así que
+                              basta el permiso con el que se crearon. */}
+                          {canEdit && manualOutputIsCancelable(g) && (
+                            <ManualOutputCancelButton
+                              shipmentId={g.id}
+                              label={g.output_code ?? g.guide_code ?? "esta salida"}
+                              onDone={(msg) => {
+                                setNotice(msg);
+                                void reload();
+                                onSaved();
+                              }}
+                            />
+                          )}
+                        </div>
+                        {/* Grupo GF: quién tiene el paquete y en qué quedó la parada. */}
+                        {gf ? <GfDeliveryLine delivery={gf} /> : null}
+                      </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                {/* El cobro del courier lo confirma una PERSONA en Validar
+                    pagos: el lector de imágenes prepara la ficha, pero valida una
+                    imagen, no un depósito. Desde acá se llega de un clic en vez
+                    de buscar el pedido en la otra pantalla. */}
+                {detail.row.payment_check_state && (
+                  <p className="text-[13px] leading-5 text-ink-500">
+                    Cobro del courier:{" "}
+                    <strong className="font-semibold text-ink-900">
+                      {PAYMENT_CHECK_OPTIONS.find((o) => o.value === detail.row.payment_check_state)
+                        ?.label ?? detail.row.payment_check_state}
+                    </strong>
+                    .{" "}
+                    <a href="/dashboard/pagos" target="_blank" rel="noreferrer" className={DOC_LINK}>
+                      Confirmarlo en Validar pagos
+                      <IconArrowUpRight aria-hidden className="size-3.5" />
+                    </a>
+                  </p>
+                )}
+                {detail.guides.some((guide) => guide.courier === "shalom") && (
+                  <ShalomPickupKeyPanel orderId={orderId} onChanged={onSaved} />
+                )}
+              </section>
+              {["por_cerrar", "finalizado"].includes(detail.row.macro_stage ?? "") && (
+                <div
+                  data-drawer-section="cierre"
+                  className={cn("order-7 scroll-mt-36", SECTION)}
+                >
+                  <OrderClosureDesk
+                    stage={detail.row.macro_stage}
+                    reasons={(detail.row.macro_reasons ?? []) as MacroSubstage[]}
+                    generalStatus={detail.row.general_status}
+                    guides={detail.guides}
+                    permissions={closurePermissions}
+                    pending={pending}
+                    onAction={(input) => run(() => registerClosureAction(orderId, input))}
+                  />
+                </div>
+              )}
+              {/* Agencia o una regla de riesgo ponen el pago antes que la ruta.
+                  Provincia COD puede salir contra entrega, así que conserva la
+                  Mesa de ruta primero y deja el pago anticipado como herramienta
+                  opcional debajo. Sigue disponible antes de crear Shalom para no
+                  reconstruir el antiguo callejón circular guía ↔ adelanto. */}
+              {showPaymentPanel && paymentPanel && (
+                <div
+                  data-drawer-section="pagos"
+                  className={cn(
+                    "scroll-mt-36",
+                    SECTION,
+                    paymentPanel.mode === "required" ? "order-3" : "order-5",
+                  )}
+                >
+                  <PickupKeyPanel
+                    orderId={orderId}
+                    mode={paymentPanel.mode}
+                    gatewayNote={gatewayNote}
+                    onChanged={onSaved}
+                  />
+                </div>
+              )}
+              {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
+                  una. En cuanto existe, el seguimiento vive en Envíos.
+
+                  Y solo donde Aliclik atiende. El plan de rutas ya no lo ofrece
+                  en Agencia —ahí van Shalom u Olva—, pero este panel se dibujaba
+                  igual con solo tener el permiso: la pantalla mostraba las dos
+                  tarjetas de agencia y, debajo, un formulario para crear una guía
+                  de una ruta que ese pedido no puede tomar. Se lee el plan en vez
+                  de repetir la regla aquí, que es como se vuelven a separar. */}
+              {canCreateGuide && aliclikOffered && (
+                <div
+                  data-drawer-section="aliclik"
+                  className={cn("order-5 scroll-mt-36", SECTION)}
+                >
+                  <AliclikGuidePanel
+                    orderId={orderId}
+                    hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
+                    health={detail.aliclikHealth}
+                    riskRequirement={brief?.risk.requirement ?? "ninguno"}
+                    paymentState={detail.row.payment_state}
+                    riskReasons={brief?.risk.reasons ?? []}
+                    duplicateHold={brief?.duplicateHold}
+                    onDuplicateChanged={() => { void reload(); onSaved(); }}
+                    onCreated={() => {
+                      void reload();
+                      onSaved();
+                    }}
+                  />
+                </div>
+              )}
+              {/* Esconderlo sin más dejaría buscando a quien esperaba encontrarlo.
+                  La salida es corregir la dirección: la cobertura se recalcula a
+                  partir de ella y, si el pedido era Provincia COD mal clasificada,
+                  Aliclik vuelve solo.
+
+                  Pero eso vale mientras la ruta se está DECIDIENDO. Con una salida
+                  ya activa la pregunta está contestada: corregir la dirección no va
+                  a traer Aliclik de vuelta a un paquete que ya viaja, y el bloque
+                  se lee como una opción disponible cuando no lo es. */}
+              {canCreateGuide &&
+                !aliclikOffered &&
+                detail.routePlan.operation === "agencia" &&
+                detail.routePlan.activeOutputCount === 0 && (
+                <div
+                  data-drawer-section="aliclik"
+                  className={cn("order-5 scroll-mt-36 space-y-3", SECTION)}
+                >
+                  <SectionHead
+                    title="Aliclik"
+                    help="Aliclik no atiende pedidos de Agencia; este va con Shalom u Olva. Si la dirección está mal clasificada, corrígela y la cobertura se recalcula sola. Y si la dirección está bien pero crees que Aliclik sí llega, pregúntaselo: cotizar no crea nada."
+                  />
+                  <OpsButton size="sm" onClick={() => jumpTo("ubicacion")} className="pointer-coarse:h-11">
+                    Revisar ubicación y cobertura
+                    <IconChevronDown aria-hidden className="text-ink-500" />
+                  </OpsButton>
+                  <AliclikCoverageProbe
+                    orderId={detail.row.order_id}
+                    district={detail.row.district}
+                    canMark={canCreateGuide}
+                  />
+                </div>
+              )}
+              {canEdit ? (
+                <div className={cn("order-8", SECTION)}>
+                  <OrderActions
+                    row={detail.row}
+                    canOverride={canOverride}
+                    pending={pending}
+                    outputCount={detail.routePlan.outputCount}
+                    onStatus={(general, operational, reason, agencyCourier) =>
+                      run(() => setOrderStatus(orderId, { general, operational, reason, agencyCourier }))
+                    }
+                    onComment={(text, type) => run(() => addOrderComment(orderId, { text, type }))}
+                    onReturn={(reason, guideCode) => run(() => registerReturn(orderId, { reason, guideCode }))}
+                    onRelink={(guideCode) => run(() => relinkGuide(guideCode, orderId))}
+                  />
+                </div>
+              ) : (
+                <div className={cn("order-8", SECTION)}>
+                  <div className="flex items-start gap-3 rounded-lg bg-wash px-4 py-3">
+                    <IconLock aria-hidden className="mt-0.5 size-4 shrink-0 text-ink-500" />
+                    <div>
+                      <p className="text-sm font-semibold text-ink-900">Solo lectura</p>
+                      <p className="mt-0.5 text-[13px] leading-5 text-ink-600">
+                        Tu rol permite consultar el pedido, sus comentarios y su historial, pero no modificarlo.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div
               id="pedido-panel-informacion"
               role="tabpanel"
               aria-labelledby="pedido-tab-informacion"
               hidden={workspace !== "informacion"}
-              className="order-1 space-y-4"
+              className="flex flex-col gap-6"
             >
-              {/* La cobertura vive en la cabecera fija. Repetirla aquí, a dos
-                  dedos y en la misma pantalla, sugería que eran dos datos
-                  distintos. La de «Ubicación y cobertura» sí se queda: ahí es
-                  el sujeto de la sección y lo que se corrige. */}
-              <SectionHead
-                title="Pedido y cliente"
-                help="Datos comerciales sincronizados desde Shopify y contexto operativo de Kapta."
-              />
-              <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
-                <Field label="Cliente" value={detail.row.customer_name} />
-                <Field label="Teléfono" value={detail.row.customer_phone} numeric />
-                <Field
-                  label="Modalidad"
-                  value={
-                    detail.row.shipping_mode
-                      ? (MODE_LABEL[detail.row.shipping_mode] ?? detail.row.shipping_mode)
-                      : null
-                  }
-                />
-                <Field label="Monto" value={fmtMoney(detail.row.order_total)} numeric />
-                <Field label="Tienda" value={storeName(detail.row.store_id)} />
-                <Field label="Creado" value={fmtDateTime(detail.row.order_created_at)} numeric />
-                <Field label="Courier actual" value={detail.row.current_courier} capitalize />
-                <Field label="Guía actual" value={detail.row.guide_code} mono />
-                {/* Estos cuatro vivían solo en la tabla. Al sacar sus columnas
-                    del Master —para que quepa lo que se mira todos los días—
-                    tienen que estar aquí, o el dato desaparecería del sistema. */}
-                {detail.row.pickup_state && (
-                  <>
-                    <Field
-                      label="Agencia"
-                      value={
-                        [operationalLabel(detail.row.pickup_state), detail.row.agency_branch]
-                          .filter(Boolean)
-                          .join(" · ") || null
-                      }
-                    />
-                    <div className="min-w-0">
-                      <dt className={FIELD_LABEL}>Días en agencia</dt>
-                      <dd className={FIELD_VALUE}>
-                        <AgencyDays
-                          arrivedAt={detail.row.agency_arrived_at}
-                          expiresAt={detail.row.agency_expires_at}
-                        />
-                      </dd>
-                    </div>
-                  </>
-                )}
-                <div className="min-w-0">
-                  <dt className={FIELD_LABEL}>Pago / clave</dt>
-                  <dd className={FIELD_VALUE}>
-                    <PaymentIndicator
-                      paymentState={detail.row.payment_state}
-                      keyState={detail.row.key_state}
-                    />
-                  </dd>
-                </div>
-                <Field label="Costo logístico" value={fmtMoney(detail.row.logistics_cost)} numeric />
-              </dl>
-
-              {/* LA NOTA DEL PEDIDO, tal como se escribió en Shopify.
-                  Va FUERA de la rejilla y a ancho completo porque es texto libre
-                  y de largo imprevisible: como un campo más de cuatro columnas se
-                  cortaría justo donde está el dato. `whitespace-pre-wrap` respeta
-                  los saltos de línea que puso quien la escribió.
-                  Solo aparece si hay nota: un bloque vacío enseñaría un hueco
-                  permanente en todos los pedidos que no la usan. */}
-              {detail.shopifyNote && (
-                <Banner tone="warn" title="Nota del pedido">
-                  <p className="mt-0.5 whitespace-pre-wrap break-words text-ink-900">{detail.shopifyNote}</p>
-                </Banner>
-              )}
-            </section>
-
-            <div hidden={workspace !== "informacion"} className={cn("order-2 scroll-mt-36", SECTION)}>
-              <GeoSection
-                orderId={orderId}
-                row={detail.row}
-                canEdit={canEdit}
-                onSaved={() => {
-                  void reload();
-                  onSaved();
-                }}
-              />
-            </div>
-
-            {detail.lineItems.length > 0 && (
               <section
-                hidden={workspace !== "informacion"}
-                data-drawer-section="productos"
-                className={cn("order-3 scroll-mt-36 space-y-4", SECTION)}
+                className="order-1 space-y-4"
               >
+                {/* La cobertura vive en la cabecera fija. Repetirla aquí, a dos
+                    dedos y en la misma pantalla, sugería que eran dos datos
+                    distintos. La de «Ubicación y cobertura» sí se queda: ahí es
+                    el sujeto de la sección y lo que se corrige. */}
                 <SectionHead
-                  title="Productos"
-                  badge={
-                    <Badge className="tabular-nums">
-                      {detail.lineItems.length} {detail.lineItems.length === 1 ? "producto" : "productos"}
-                    </Badge>
-                  }
+                  title="Pedido y cliente"
+                  help="Datos comerciales sincronizados desde Shopify y contexto operativo de Kapta."
                 />
-                <OrderLineItems items={detail.lineItems} totals={detail.totals} />
-              </section>
-            )}
-
-            <div
-              hidden={workspace !== "operar"}
-              data-drawer-section="rutas"
-              className={cn("order-4 scroll-mt-36", SECTION)}
-            >
-              <OrderRouteDesk
-                plan={detail.routePlan}
-                gate={detail.routeGate}
-                onJump={jumpTo}
-                actionEnabled={routeEnabled}
-                onSelect={selectRoute}
-              />
-            </div>
-
-            <section
-              hidden={workspace !== "operar"}
-              data-drawer-section="guias"
-              className={cn("order-6 scroll-mt-36 space-y-4", SECTION)}
-            >
-              <SectionHead
-                title="Salidas y guías"
-                badge={<Badge className="tabular-nums">{detail.guides.length}</Badge>}
-                help="Cada salida conserva su courier, rótulo, QR y resultado independiente."
-              />
-              {detail.guides.length === 0 ? (
-                <p className={cn(FRAME, "px-4 py-3 text-sm text-ink-500")}>
-                  Sin gestión logística registrada todavía.
-                </p>
-              ) : (
-                <ul className={cn(FRAME, "divide-y divide-line")}>
-                  {detail.guides.map((g) => {
-                    const estado = {
-                      deliveryStatus: g.delivery_status,
-                      custodyState: g.custody_state,
-                      pickupState: g.pickup_state,
-                      courier: g.courier,
-                      swaypState: g.swayp_state ?? null,
-                      reportedStatus: g.reported_status ?? null,
-                    };
-                    const gf = detail.gfDeliveries.find((d) => d.shipmentId === g.id);
-                    return (
-                    <li key={g.id} className="space-y-2.5 px-4 py-3">
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-                        <span className="text-sm font-semibold capitalize text-ink-900">{g.courier}</span>
-                        <span className="font-mono text-xs text-ink-600">
-                          {outputDisplayCode(g.output_code, g.courier) || g.guide_code}
-                        </span>
-                        {/* El número con el que el COURIER conoce el envío.
-                            Estaba escondido: en cuanto la salida tenía código
-                            interno, `outputDisplayCode` ganaba y el `guide_code`
-                            no se pintaba nunca. Es justo el dato que hay que
-                            teclear en el panel del courier para buscarla, y el
-                            que el rótulo de Shalom titula «N° de Orden». */}
-                        {g.guide_code && outputDisplayCode(g.output_code, g.courier) && (
-                          <span className="select-all font-mono text-xs font-semibold text-ink-900">
-                            N° {g.guide_code}
-                          </span>
-                        )}
-                        {/* Shalom muestra en su panel el nº de orden Y un código
-                            corto. Sin el corto hay que abrir cada envío allá para
-                            saber cuál es cuál. */}
-                        {g.shalom_codigo && (
-                          <span className="rounded bg-wash px-1.5 py-0.5 font-mono text-xs font-medium text-ink-700 ring-1 ring-inset ring-line">
-                            {g.shalom_codigo}
-                          </span>
-                        )}
-                        <Badge tone={shipmentIsReturning(estado) ? "warn" : "neutral"}>
-                          {shipmentStateLabel(estado)}
-                        </Badge>
-                        {(g.aliclik_attempts ?? g.reroute_attempts) > 0 && (
-                          <span className="text-[13px] font-medium tabular-nums text-warn-fg">
-                            {g.aliclik_attempts ?? g.reroute_attempts} intento(s)
-                          </span>
-                        )}
-                        {g.guide_code === detail.row.guide_code && (
-                          <span className="ml-auto text-[13px] text-ink-500">Guía actual</span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                        {g.courier === "tanders" && (
-                          // Navegación real (no window.open tras un await): así el
-                          // bloqueador de ventanas emergentes no se la come. El
-                          // marcado en Tanders sale en paralelo, sin frenar la
-                          // impresión — el rótulo ya está compuesto de nuestro lado.
-                          <a
-                            href={`/dashboard/pedidos/rotulos?ids=${g.id}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={() => void markTandersLabelGenerated([g.id])}
-                            className={DOC_LINK}
-                          >
-                            Rótulo
-                            <IconArrowUpRight aria-hidden className="size-3.5" />
-                          </a>
-                        )}
-                        {/* Los dos rótulos del paquete en UNA hoja: el de
-                            Tanders arriba y, debajo, el QR de la salida y qué va
-                            dentro de la caja. Se suma a los otros dos en vez de
-                            reemplazarlos mientras se valida en el almacén. Marca
-                            «rótulo generado» igual que el enlace suyo: para
-                            Tanders el paquete quedó rotulado, lo imprimas junto o
-                            por separado. */}
-                        {g.courier === "tanders" && (
-                          <a
-                            href={`/api/pedidos/guia-combinada?ids=${g.id}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={() => void markTandersLabelGenerated([g.id])}
-                            className={DOC_LINK}
-                          >
-                            Guía combinada
-                            <IconArrowUpRight aria-hidden className="size-3.5" />
-                          </a>
-                        )}
-                        {/* Un solo papel para la caja de agencia: la etiqueta de
-                            Shalom —que la compone ELLOS y se pide a su API—
-                            arriba, y debajo nuestra banda con el QR de la salida
-                            y los productos. Antes eran dos impresiones, y para
-                            conseguir la segunda el almacén acababa creando una
-                            salida `por definir` que después bloquea la guía.
-
-                            Solo existe para las guías creadas por API: las que
-                            llegaron por el Excel no tienen `ose_id` y su rótulo se
-                            baja del panel de Shalom. */}
-                        {g.courier === "shalom" && g.shalom_ose_id && (
-                          <>
-                            <a href={`/api/shalom/rotulo/${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK}>
-                              Rótulo
-                              <IconArrowUpRight aria-hidden className="size-3.5" />
-                            </a>
-                            {/* El suelto se conserva a un clic de distancia: si la
-                                composición falla, el mostrador de Shalom sigue
-                                necesitando su papel. */}
-                            <a href={`/api/shalom/label/${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK_QUIET}>
-                              Solo Shalom
-                            </a>
-                            {/* El «Ticket Shalom», el recibo de tira del
-                                mostrador. No es el rótulo: es el otro papel, el
-                                que hasta ahora había que bajar a mano de
-                                pro.shalom.pe envío por envío. */}
-                            <a href={`/api/shalom/ticket/${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK_QUIET}>
-                              Ticket
-                            </a>
-                          </>
-                        )}
-                        {g.qr_token && (
-                          <a href={`/api/pedidos/rotulos?ids=${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK}>
-                            Rótulo interno
-                            <IconArrowUpRight aria-hidden className="size-3.5" />
-                          </a>
-                        )}
-                        {canCreateShalomGuide && shalomGuideIsCancelable(g) && (
-                          <ShalomCancelButton
-                            shipmentId={g.id}
-                            guideCode={g.guide_code}
-                            codigo={g.shalom_codigo ?? null}
-                            onDone={(msg) => {
-                              setNotice(msg);
-                              void reload();
-                              onSaved();
-                            }}
-                          />
-                        )}
-                        {/* El botón que faltaba para Swayp. Rellenar la salida le
-                            cambia la vía, así que «Anular salida» deja de
-                            ofrecerse —bien: la guía ya existe del otro lado— y sin
-                            esto no quedaba ninguno. Ver `cancelFenixOutput`. */}
-                        {canEdit && fenixOutputIsCancelable(g) && (
-                          <FenixCancelButton
-                            shipmentId={g.id}
-                            guideCode={g.guide_code}
-                            wasFilled={detail.filledOutputIds.includes(g.id)}
-                            onDone={(msg) => {
-                              setNotice(msg);
-                              void reload();
-                              onSaved();
-                            }}
-                          />
-                        )}
-                        {/* El número con el que Olva conoce el envío, y con el
-                            que Kapta le pregunta el estado cada media hora (§12).
-                            Llega por correo después de crear la salida, así que
-                            se registra —o se corrige— desde aquí. */}
-                        {canEdit && g.courier.trim().toLowerCase() === "olva" && (
-                          <OlvaTrackingField
-                            shipmentId={g.id}
-                            current={
-                              g.olva_tracking && g.olva_emision
-                                ? formatOlvaTracking({ tracking: g.olva_tracking, emision: g.olva_emision })
-                                : null
-                            }
-                            rawStatus={g.olva_status ?? null}
-                            onDone={(msg) => {
-                              setNotice(msg);
-                              void reload();
-                              onSaved();
-                            }}
-                          />
-                        )}
-                        {/* Las salidas de ruta manual no tienen API a la que
-                            avisar: anularlas es corregir NUESTRO registro, así que
-                            basta el permiso con el que se crearon. */}
-                        {canEdit && manualOutputIsCancelable(g) && (
-                          <ManualOutputCancelButton
-                            shipmentId={g.id}
-                            label={g.output_code ?? g.guide_code ?? "esta salida"}
-                            onDone={(msg) => {
-                              setNotice(msg);
-                              void reload();
-                              onSaved();
-                            }}
-                          />
-                        )}
-                      </div>
-                      {/* Grupo GF: quién tiene el paquete y en qué quedó la parada. */}
-                      {gf ? <GfDeliveryLine delivery={gf} /> : null}
-                    </li>
-                    );
-                  })}
-                </ul>
-              )}
-              {/* El cobro del courier lo confirma una PERSONA en Validar
-                  pagos: el lector de imágenes prepara la ficha, pero valida una
-                  imagen, no un depósito. Desde acá se llega de un clic en vez
-                  de buscar el pedido en la otra pantalla. */}
-              {detail.row.payment_check_state && (
-                <p className="text-[13px] leading-5 text-ink-500">
-                  Cobro del courier:{" "}
-                  <strong className="font-semibold text-ink-900">
-                    {PAYMENT_CHECK_OPTIONS.find((o) => o.value === detail.row.payment_check_state)
-                      ?.label ?? detail.row.payment_check_state}
-                  </strong>
-                  .{" "}
-                  <a href="/dashboard/pagos" target="_blank" rel="noreferrer" className={DOC_LINK}>
-                    Confirmarlo en Validar pagos
-                    <IconArrowUpRight aria-hidden className="size-3.5" />
-                  </a>
-                </p>
-              )}
-              {detail.guides.some((guide) => guide.courier === "shalom") && (
-                <ShalomPickupKeyPanel orderId={orderId} onChanged={onSaved} />
-              )}
-            </section>
-
-            {["por_cerrar", "finalizado"].includes(detail.row.macro_stage ?? "") && (
-              <div
-                hidden={workspace !== "operar"}
-                data-drawer-section="cierre"
-                className={cn("order-7 scroll-mt-36", SECTION)}
-              >
-                <OrderClosureDesk
-                  stage={detail.row.macro_stage}
-                  reasons={(detail.row.macro_reasons ?? []) as MacroSubstage[]}
-                  generalStatus={detail.row.general_status}
-                  guides={detail.guides}
-                  permissions={closurePermissions}
-                  pending={pending}
-                  onAction={(input) => run(() => registerClosureAction(orderId, input))}
-                />
-              </div>
-            )}
-
-            <section
-              id="pedido-panel-actividad"
-              role="tabpanel"
-              aria-labelledby="pedido-tab-actividad"
-              hidden={workspace !== "actividad"}
-              data-drawer-section="historial"
-              className="order-1 scroll-mt-36 space-y-5"
-            >
-              <SectionHead
-                title="Actividad y auditoría"
-                badge={<Badge>Solo lectura</Badge>}
-                help={`${detail.timeline.length} movimiento${detail.timeline.length === 1 ? "" : "s"} · se conserva indefinidamente`}
-              />
-              {detail.timeline.length === 0 ? (
-                <p className={cn(FRAME, "px-4 py-3 text-sm text-ink-500")}>Sin movimientos registrados.</p>
-              ) : (
-                <ol className="relative space-y-5 pl-6 before:absolute before:bottom-1 before:left-[5px] before:top-1.5 before:w-px before:bg-line-strong">
-                  {detail.timeline.map((t) => (
-                    <li key={t.id} className="relative">
-                      {/* El punto dice de qué parte del recorrido es el hecho
-                          (los tonos de macroetapa del MOM); el texto lo dice
-                          igual, así que el color nunca es la única señal. */}
-                      <span
-                        aria-hidden
-                        className={cn(
-                          "absolute -left-6 top-1.5 size-[11px] rounded-full ring-[3px] ring-white",
-                          t.origin === "leads"
-                            ? "bg-ink-700"
-                            : /payment|liquidation|entregado/.test(t.kind)
-                              ? "bg-emerald-500"
-                            : /return|refund|merma|anulado/.test(t.kind)
-                              ? "bg-orange-500"
-                              : /guide|dispatch|route|custody/.test(t.kind)
-                                ? "bg-indigo-500"
-                                : "bg-ink-300",
-                        )}
+                <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+                  <Field label="Cliente" value={detail.row.customer_name} />
+                  <Field label="Teléfono" value={detail.row.customer_phone} numeric />
+                  <Field
+                    label="Modalidad"
+                    value={
+                      detail.row.shipping_mode
+                        ? (MODE_LABEL[detail.row.shipping_mode] ?? detail.row.shipping_mode)
+                        : null
+                    }
+                  />
+                  <Field label="Monto" value={fmtMoney(detail.row.order_total)} numeric />
+                  <Field label="Tienda" value={storeName(detail.row.store_id)} />
+                  <Field label="Creado" value={fmtDateTime(detail.row.order_created_at)} numeric />
+                  <Field label="Courier actual" value={detail.row.current_courier} capitalize />
+                  <Field label="Guía actual" value={detail.row.guide_code} mono />
+                  {/* Estos cuatro vivían solo en la tabla. Al sacar sus columnas
+                      del Master —para que quepa lo que se mira todos los días—
+                      tienen que estar aquí, o el dato desaparecería del sistema. */}
+                  {detail.row.pickup_state && (
+                    <>
+                      <Field
+                        label="Agencia"
+                        value={
+                          [operationalLabel(detail.row.pickup_state), detail.row.agency_branch]
+                            .filter(Boolean)
+                            .join(" · ") || null
+                        }
                       />
-                      <p className="text-sm font-medium leading-5 text-ink-900">
-                        {TIMELINE_LABEL[t.kind] ?? t.kind}
-                        {/* El resultado va pegado al título, no en la línea de
-                            la nota: la nota es opcional y sin esto dos
-                            resultados distintos se leían idénticos. */}
-                        {t.confirmation?.result && (
-                          <span className="font-normal text-ink-600">
-                            {" "}· {confirmationResultLabel(t.confirmation.result)}
-                          </span>
-                        )}
-                        {(t.statusLabel ?? (t.newStatus ? generalLabel(t.newStatus) : null)) && (
-                          <span className="font-normal text-ink-600">
-                            {" "}→ {t.statusLabel ?? generalLabel(t.newStatus!)}
-                          </span>
-                        )}
-                      </p>
-                      {(t.note || t.reason) && (
-                        <p className="mt-0.5 max-w-[68ch] text-sm leading-5 text-ink-700">{t.note ?? t.reason}</p>
-                      )}
-                      <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
-                        <span className="tabular-nums">{fmtDateTime(t.occurredAt)}</span>
-                        {t.actorName ? ` · ${t.actorName}` : ""}
-                        {t.confirmation?.channel
-                          ? ` · ${confirmationChannelLabel(t.confirmation.channel)}`
-                          : ""}
-                        {t.courier ? ` · ${t.courier}` : ""}
-                        {t.guideCode ? ` · ${t.guideCode}` : ""}
-                        {` · ${
-                          t.origin === "gestion"
-                            ? "Repro Provincia"
-                            : t.origin === "leads"
-                              ? "Leads"
-                              : t.source
-                        }`}
-                      </p>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </section>
+                      <div className="min-w-0">
+                        <dt className={FIELD_LABEL}>Días en agencia</dt>
+                        <dd className={FIELD_VALUE}>
+                          <AgencyDays
+                            arrivedAt={detail.row.agency_arrived_at}
+                            expiresAt={detail.row.agency_expires_at}
+                          />
+                        </dd>
+                      </div>
+                    </>
+                  )}
+                  <div className="min-w-0">
+                    <dt className={FIELD_LABEL}>Pago / clave</dt>
+                    <dd className={FIELD_VALUE}>
+                      <PaymentIndicator
+                        paymentState={detail.row.payment_state}
+                        keyState={detail.row.key_state}
+                      />
+                    </dd>
+                  </div>
+                  <Field label="Costo logístico" value={fmtMoney(detail.row.logistics_cost)} numeric />
+                </dl>
 
-            {/* Agencia o una regla de riesgo ponen el pago antes que la ruta.
-                Provincia COD puede salir contra entrega, así que conserva la
-                Mesa de ruta primero y deja el pago anticipado como herramienta
-                opcional debajo. Sigue disponible antes de crear Shalom para no
-                reconstruir el antiguo callejón circular guía ↔ adelanto. */}
-            {showPaymentPanel && paymentPanel && (
-              <div
-                hidden={workspace !== "operar"}
-                data-drawer-section="pagos"
-                className={cn(
-                  "scroll-mt-36",
-                  SECTION,
-                  paymentPanel.mode === "required" ? "order-3" : "order-5",
+                {/* LA NOTA DEL PEDIDO, tal como se escribió en Shopify.
+                    Va FUERA de la rejilla y a ancho completo porque es texto libre
+                    y de largo imprevisible: como un campo más de cuatro columnas se
+                    cortaría justo donde está el dato. `whitespace-pre-wrap` respeta
+                    los saltos de línea que puso quien la escribió.
+                    Solo aparece si hay nota: un bloque vacío enseñaría un hueco
+                    permanente en todos los pedidos que no la usan. */}
+                {detail.shopifyNote && (
+                  <Banner tone="warn" title="Nota del pedido">
+                    <p className="mt-0.5 whitespace-pre-wrap break-words text-ink-900">{detail.shopifyNote}</p>
+                  </Banner>
                 )}
-              >
-                <PickupKeyPanel
+              </section>
+              <div className={cn("order-2 scroll-mt-36", SECTION)}>
+                <GeoSection
                   orderId={orderId}
-                  mode={paymentPanel.mode}
-                  gatewayNote={gatewayNote}
-                  onChanged={onSaved}
-                />
-              </div>
-            )}
-
-            {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
-                una. En cuanto existe, el seguimiento vive en Envíos.
-
-                Y solo donde Aliclik atiende. El plan de rutas ya no lo ofrece
-                en Agencia —ahí van Shalom u Olva—, pero este panel se dibujaba
-                igual con solo tener el permiso: la pantalla mostraba las dos
-                tarjetas de agencia y, debajo, un formulario para crear una guía
-                de una ruta que ese pedido no puede tomar. Se lee el plan en vez
-                de repetir la regla aquí, que es como se vuelven a separar. */}
-            {canCreateGuide && aliclikOffered && (
-              <div
-                hidden={workspace !== "operar"}
-                data-drawer-section="aliclik"
-                className={cn("order-5 scroll-mt-36", SECTION)}
-              >
-                <AliclikGuidePanel
-                  orderId={orderId}
-                  hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
-                  health={detail.aliclikHealth}
-                  riskRequirement={brief?.risk.requirement ?? "ninguno"}
-                  paymentState={detail.row.payment_state}
-                  riskReasons={brief?.risk.reasons ?? []}
-                  duplicateHold={brief?.duplicateHold}
-                  onDuplicateChanged={() => { void reload(); onSaved(); }}
-                  onCreated={() => {
+                  row={detail.row}
+                  canEdit={canEdit}
+                  onSaved={() => {
                     void reload();
                     onSaved();
                   }}
                 />
               </div>
-            )}
-
-            {/* Esconderlo sin más dejaría buscando a quien esperaba encontrarlo.
-                La salida es corregir la dirección: la cobertura se recalcula a
-                partir de ella y, si el pedido era Provincia COD mal clasificada,
-                Aliclik vuelve solo.
-
-                Pero eso vale mientras la ruta se está DECIDIENDO. Con una salida
-                ya activa la pregunta está contestada: corregir la dirección no va
-                a traer Aliclik de vuelta a un paquete que ya viaja, y el bloque
-                se lee como una opción disponible cuando no lo es. */}
-            {canCreateGuide &&
-              !aliclikOffered &&
-              detail.routePlan.operation === "agencia" &&
-              detail.routePlan.activeOutputCount === 0 && (
-              <div
-                hidden={workspace !== "operar"}
-                data-drawer-section="aliclik"
-                className={cn("order-5 scroll-mt-36 space-y-3", SECTION)}
+              {detail.lineItems.length > 0 && (
+                <section
+                  data-drawer-section="productos"
+                  className={cn("order-3 scroll-mt-36 space-y-4", SECTION)}
+                >
+                  <SectionHead
+                    title="Productos"
+                    badge={
+                      <Badge className="tabular-nums">
+                        {detail.lineItems.length} {detail.lineItems.length === 1 ? "producto" : "productos"}
+                      </Badge>
+                    }
+                  />
+                  <OrderLineItems items={detail.lineItems} totals={detail.totals} />
+                </section>
+              )}
+            </div>
+            <div
+              id="pedido-panel-actividad"
+              role="tabpanel"
+              aria-labelledby="pedido-tab-actividad"
+              hidden={workspace !== "actividad"}
+              className="flex flex-col gap-6"
+            >
+              <section
+                data-drawer-section="historial"
+                className="order-1 scroll-mt-36 space-y-5"
               >
                 <SectionHead
-                  title="Aliclik"
-                  help="Aliclik no atiende pedidos de Agencia; este va con Shalom u Olva. Si la dirección está mal clasificada, corrígela y la cobertura se recalcula sola. Y si la dirección está bien pero crees que Aliclik sí llega, pregúntaselo: cotizar no crea nada."
+                  title="Actividad y auditoría"
+                  badge={<Badge>Solo lectura</Badge>}
+                  help={`${detail.timeline.length} movimiento${detail.timeline.length === 1 ? "" : "s"} · se conserva indefinidamente`}
                 />
-                <OpsButton size="sm" onClick={() => jumpTo("ubicacion")} className="pointer-coarse:h-11">
-                  Revisar ubicación y cobertura
-                  <IconChevronDown aria-hidden className="text-ink-500" />
-                </OpsButton>
-                <AliclikCoverageProbe
-                  orderId={detail.row.order_id}
-                  district={detail.row.district}
-                  canMark={canCreateGuide}
-                />
-              </div>
-            )}
-
-            {canEdit ? (
-              <div hidden={workspace !== "operar"} className={cn("order-8", SECTION)}>
-                <OrderActions
-                  row={detail.row}
-                  canOverride={canOverride}
-                  pending={pending}
-                  outputCount={detail.routePlan.outputCount}
-                  onStatus={(general, operational, reason, agencyCourier) =>
-                    run(() => setOrderStatus(orderId, { general, operational, reason, agencyCourier }))
-                  }
-                  onComment={(text, type) => run(() => addOrderComment(orderId, { text, type }))}
-                  onReturn={(reason, guideCode) => run(() => registerReturn(orderId, { reason, guideCode }))}
-                  onRelink={(guideCode) => run(() => relinkGuide(guideCode, orderId))}
-                />
-              </div>
-            ) : (
-              <div hidden={workspace !== "operar"} className={cn("order-8", SECTION)}>
-                <div className="flex items-start gap-3 rounded-lg bg-wash px-4 py-3">
-                  <IconLock aria-hidden className="mt-0.5 size-4 shrink-0 text-ink-500" />
-                  <div>
-                    <p className="text-sm font-semibold text-ink-900">Solo lectura</p>
-                    <p className="mt-0.5 text-[13px] leading-5 text-ink-600">
-                      Tu rol permite consultar el pedido, sus comentarios y su historial, pero no modificarlo.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
+                {detail.timeline.length === 0 ? (
+                  <p className={cn(FRAME, "px-4 py-3 text-sm text-ink-500")}>Sin movimientos registrados.</p>
+                ) : (
+                  <ol className="relative space-y-5 pl-6 before:absolute before:bottom-1 before:left-[5px] before:top-1.5 before:w-px before:bg-line-strong">
+                    {detail.timeline.map((t) => (
+                      <li key={t.id} className="relative">
+                        {/* El punto dice de qué parte del recorrido es el hecho
+                            (los tonos de macroetapa del MOM); el texto lo dice
+                            igual, así que el color nunca es la única señal. */}
+                        <span
+                          aria-hidden
+                          className={cn(
+                            "absolute -left-6 top-1.5 size-[11px] rounded-full ring-[3px] ring-white",
+                            t.origin === "leads"
+                              ? "bg-ink-700"
+                              : /payment|liquidation|entregado/.test(t.kind)
+                                ? "bg-emerald-500"
+                              : /return|refund|merma|anulado/.test(t.kind)
+                                ? "bg-orange-500"
+                                : /guide|dispatch|route|custody/.test(t.kind)
+                                  ? "bg-indigo-500"
+                                  : "bg-ink-300",
+                          )}
+                        />
+                        <p className="text-sm font-medium leading-5 text-ink-900">
+                          {TIMELINE_LABEL[t.kind] ?? t.kind}
+                          {/* El resultado va pegado al título, no en la línea de
+                              la nota: la nota es opcional y sin esto dos
+                              resultados distintos se leían idénticos. */}
+                          {t.confirmation?.result && (
+                            <span className="font-normal text-ink-600">
+                              {" "}· {confirmationResultLabel(t.confirmation.result)}
+                            </span>
+                          )}
+                          {(t.statusLabel ?? (t.newStatus ? generalLabel(t.newStatus) : null)) && (
+                            <span className="font-normal text-ink-600">
+                              {" "}→ {t.statusLabel ?? generalLabel(t.newStatus!)}
+                            </span>
+                          )}
+                        </p>
+                        {(t.note || t.reason) && (
+                          <p className="mt-0.5 max-w-[68ch] text-sm leading-5 text-ink-700">{t.note ?? t.reason}</p>
+                        )}
+                        <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
+                          <span className="tabular-nums">{fmtDateTime(t.occurredAt)}</span>
+                          {t.actorName ? ` · ${t.actorName}` : ""}
+                          {t.confirmation?.channel
+                            ? ` · ${confirmationChannelLabel(t.confirmation.channel)}`
+                            : ""}
+                          {t.courier ? ` · ${t.courier}` : ""}
+                          {t.guideCode ? ` · ${t.guideCode}` : ""}
+                          {` · ${
+                            t.origin === "gestion"
+                              ? "Repro Provincia"
+                              : t.origin === "leads"
+                                ? "Leads"
+                                : t.source
+                          }`}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </section>
+            </div>
           </div>
         )}
       </aside>
@@ -1771,8 +1791,9 @@ const LABEL = "grid gap-1.5 text-[13px] font-medium text-ink-700";
 const TEXTAREA = cn(FIELD, "h-auto py-2 leading-5");
 /** Enlace a un papel o a otra pantalla (abre en otra pestaña). */
 const DOC_LINK =
-  "inline-flex items-center gap-1 text-[13px] font-medium text-brand-700 underline-offset-2 hover:underline";
-const DOC_LINK_QUIET = "text-[13px] text-ink-600 underline-offset-2 hover:text-ink-900 hover:underline";
+  "inline-flex items-center gap-1 text-[13px] font-medium text-brand-700 underline-offset-2 hover:underline pointer-coarse:min-h-11";
+const DOC_LINK_QUIET =
+  "inline-flex items-center text-[13px] text-ink-600 underline-offset-2 hover:text-ink-900 hover:underline pointer-coarse:min-h-11";
 
 function SectionHead({
   title,
@@ -2167,6 +2188,9 @@ function PriorOrderRow({
         {/* El pedido abierto que se mira puede ser el MÁS VIEJO del teléfono: sin
             esta marca, un re-pedido posterior se lee como antecedente previo. */}
         {later && <Badge tone="info">posterior a este</Badge>}
+        {/* Dicho en una chapa y no solo en color: en el teléfono la línea de
+            productos se recorta y el aviso se perdía. */}
+        {repeats && <Badge tone="warn">lo mismo que este pedido</Badge>}
         <Badge
           className="ml-auto"
           tone={outcome === "entregado" ? "ok" : outcome === "anulado" || outcome === "devuelto" ? "crit" : "neutral"}
@@ -2184,7 +2208,6 @@ function PriorOrderRow({
           title={row.products}
         >
           {row.products}
-          {repeats && " · lo mismo que este pedido"}
         </p>
       )}
 
@@ -2727,7 +2750,7 @@ function OrderActions({
               value={agencyCourier}
               onChange={(e) => setAgencyCourier(e.target.value)}
               aria-label="Agencia por la que se envió"
-              className={cn(FIELD, "mt-2 w-auto pointer-coarse:h-11")}
+              className={cn(FIELD_BOX, "mt-2 h-9 w-auto px-3 pointer-coarse:h-11")}
             >
               <option value="">Elige la agencia…</option>
               {AGENCY_COURIER_OPTIONS.map((option) => (
@@ -2779,7 +2802,7 @@ function OrderActions({
             onChange={(e) => setCommentType(e.target.value)}
             aria-label="Tipo de comentario"
             placeholder="Tipo (opcional)"
-            className={cn(FIELD, "w-44 pointer-coarse:h-11")}
+            className={cn(FIELD_BOX, "h-9 w-44 px-3 pointer-coarse:h-11")}
           />
           <OpsButton
             disabled={pending || !comment.trim()}
@@ -2813,14 +2836,14 @@ function OrderActions({
                 onChange={(e) => setReturnGuide(e.target.value)}
                 aria-label="Guía de la devolución"
                 placeholder="Guía"
-                className={cn(FIELD, "w-40 font-mono text-[13px] pointer-coarse:h-11")}
+                className={cn(FIELD_BOX, "h-9 w-40 px-3 font-mono text-[13px] pointer-coarse:h-11")}
               />
               <input
                 value={returnReason}
                 onChange={(e) => setReturnReason(e.target.value)}
                 aria-label="Motivo de la devolución"
                 placeholder="Motivo de la devolución"
-                className={cn(FIELD, "w-auto min-w-44 flex-1 pointer-coarse:h-11")}
+                className={cn(FIELD_BOX, "h-9 min-w-44 flex-1 px-3 pointer-coarse:h-11")}
               />
               <OpsButton
                 variant="danger"
@@ -3025,7 +3048,7 @@ function OlvaTrackingField({
             setValue(current ?? "");
             setEditing(true);
           }}
-          className="text-[13px] font-medium text-brand-700 underline-offset-2 hover:underline"
+          className="inline-flex items-center text-[13px] font-medium text-brand-700 underline-offset-2 hover:underline pointer-coarse:min-h-11"
         >
           {current ? "Corregir tracking" : "Registrar tracking Olva"}
         </button>
@@ -3059,7 +3082,7 @@ function OlvaTrackingField({
         onChange={(event) => setValue(event.target.value)}
         aria-label="Tracking de Olva"
         placeholder="2552504-26"
-        className={cn(FIELD, "h-8 w-40 font-mono text-[13px] tabular-nums pointer-coarse:h-11")}
+        className={cn(FIELD_BOX, "h-8 w-40 px-3 font-mono text-[13px] tabular-nums pointer-coarse:h-11")}
       />
       <OpsButton type="submit" variant="primary" size="sm" disabled={!value.trim()} className="pointer-coarse:h-11">
         Guardar
