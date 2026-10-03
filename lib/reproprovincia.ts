@@ -165,9 +165,11 @@ export function swaypGuideFailed(guide: RecoveryGuideLike): boolean {
  *
  * #AUR176862: la caja se escaneó en Devoluciones el 29-09 (`returned_at`,
  * custodia `devuelto`), y cuatro días después Tanders seguía diciendo `PICKED`.
- * Leyendo sólo al courier, la guía estaba «viva»: el pedido, vivo en Shopify,
- * quedaba en Por cerrar en vez de «Por reprogramar Lima» (v1.23). El escaneo
- * es un hecho físico y gana al estado atrasado del courier.
+ * Leyendo sólo al courier, la guía estaba «viva», y un pedido vivo en Shopify
+ * así quedaría en Por cerrar en vez de «Por reprogramar Lima» (v1.23). Ese
+ * pedido resultó anulado en Shopify (19-09), así que su Por cerrar era el
+ * correcto; la regla cubre el caso vivo. El escaneo es un hecho físico y gana al
+ * estado atrasado del courier.
  *
  * Sólo Tanders y Swayp: son los que reportan su estado por API y pueden quedar
  * atrasados. Grupo GF y el motorizado propio tienen su propio «Recibir en
