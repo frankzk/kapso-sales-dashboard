@@ -2384,6 +2384,7 @@ export async function llamarConAgente(orderId: string): Promise<MasterActionStat
 export async function probarAgenteEnMiTelefono(
   orderId: string,
   phone: string,
+  telephony: "zadarma" | "telnyx" = "zadarma",
 ): Promise<MasterActionState> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) return { error: "Tu rol no permite probar el agente." };
@@ -2399,7 +2400,13 @@ export async function probarAgenteEnMiTelefono(
     triggeredBy: ctx.userId,
     agentNumber: store.voice_recovery_agent_number ?? "",
     sip: store.voice_recovery_zadarma_sip ?? "",
+    telephony: telephony === "telnyx" ? "telnyx" : "zadarma",
   });
   if (!placed.ok) return { error: placed.error };
-  return { notice: "Te estamos llamando. Es una prueba: nada se escribe sobre el pedido." };
+  return {
+    notice:
+      telephony === "telnyx"
+        ? "Te llama el Agente Telnyx (número +1). Es una prueba: nada se escribe sobre el pedido."
+        : "Te estamos llamando. Es una prueba: nada se escribe sobre el pedido.",
+  };
 }

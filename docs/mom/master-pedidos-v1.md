@@ -3951,7 +3951,9 @@ Reglas de esa tabla:
     corte, quién colgó y el resultado de la detección.
   - **Reparto.** Cada llamada del barrido se sortea: va por Telnyx con
     probabilidad `VOICE_TELNYX_SHARE` (0–100; 0 = solo pruebas) y, si no,
-    por Zadarma. La prueba manual elige la línea con `telefonia`.
+    por Zadarma. La prueba manual elige la línea: «Probar en mi teléfono»
+    del Master tiene «Llamarme» (Zadarma) y «Por Telnyx», y
+    `/api/internal/voice/test-call` acepta `telefonia`.
   - **«Hoy por asesora».** Las notas de una llamada por Telnyx firman
     «Agente de voz (Telnyx)» y cuentan en la fila **«Agente Telnyx»**; las de
     Zadarma, en «Agente Daaph». Las dos filas van al final de la tabla.
