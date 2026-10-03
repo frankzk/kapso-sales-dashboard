@@ -1109,8 +1109,18 @@ courier (#KP136944, recolectado el 02-10 a las 9:28). Queda disponible el
 **siguiente día hábil**. El único día no hábil es el **domingo**; los feriados se
 trabajan. Recolectado el viernes, libre el sábado; recolectado el sábado, libre
 el lunes. La fecha de recolección es la que Kapta anota como despacho al leer el
-estado de Tanders (cada hora). Una guía que Tanders no llega a recolectar sigue
-bloqueada; qué hacer con ella está pendiente de decisión.
+estado de Tanders (cada hora).
+
+**Una guía que Tanders nunca recolecta también se libera (03-10-2026).** Se da
+por hecho que Tanders la repartiría el siguiente día hábil después de crearla
+(la fecha de creación la devuelve Tanders al crear la guía). Si termina ese día
+y la guía sigue **Pendiente**, el paquete queda libre el día hábil siguiente, con
+la misma regla del domingo: creada el jueves, libre el sábado; creada el
+viernes, libre el lunes; creada el sábado, libre el martes. Aparece en «Desde la
+lista» como **«Tanders · sin recolectar · guía del …»** y pide la misma
+confirmación por pedido —el paquete está en el almacén, o saldrá otro—. La guía
+de Tanders no se anula sola: si después la recolectan, se concilia por el
+circuito de siempre.
 
 - Se muestran como **«Tanders · despacho anterior · sin entrega»**, con la fecha
   de despacho. La fecha de la caja elegida no adelanta esta disponibilidad.
@@ -4637,6 +4647,24 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   ALVARON», misma casa, y «Ramiro Casapia Guzman» contra «JORGE CASAPIA
   GUZMAN», misma casa: los dos a revisar. Un tracking que ya está en una salida
   no se toca, y si alguien teclea uno mientras se coteja, gana lo tecleado.
+- **«Vincular a pedido» para lo que no encontró pareja** (añadido el
+  03-10-2026). Cada envío «sin pareja» —y cada uno «por revisar», por si es
+  otro pedido— lleva una casilla para escribir el número del pedido. Lo
+  decide una persona, así que no hay regla de parecido: si el pedido tiene
+  **una** salida de Olva sin tracking, el tracking va ahí; si **no tiene
+  ninguna** (pedido «sin asignar courier»), se le crea la salida de Olva con
+  el tracking, por el mismo camino que el Master, con fecha de salida de hoy y
+  la nota de que el envío ya estaba en Olva; si tiene **otro** tracking o
+  **varias** salidas de Olva libres, no se toca y se pide hacerlo en el
+  Master. Los permisos, el tracking repetido y el evento en la ficha son los
+  de las acciones del Master. Casos del 02-10: #KP136585, #KP137218 y
+  #AUR177643 estaban «sin asignar courier»; #KP136660 («Carlos Carlos») y
+  #KP137464 («Alfredo Alfredo») tenían salida pero ni DNI ni nombre real.
+- **El menú lateral dice cuántos quedan** (añadido el 03-10-2026). Al lado
+  de «Cotejar Olva» aparece el número de envíos del último cotejo de cada
+  organización que siguen «por revisar» o «sin pareja» y cuyo tracking hoy no
+  está en ninguna salida: lo vinculado después a mano ya no cuenta. Sin nada
+  pendiente no se pinta nada. Solo lo ve quien ve la entrada (logística).
 - **El tracking se guarda sin ceros delante.** El portal escribe
   «02649804/26»; la página pública, el correo y todo lo guardado, «2649804-26».
   `parseOlvaTracking` quita los ceros para que el índice único vea el mismo

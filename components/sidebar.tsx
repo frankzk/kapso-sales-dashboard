@@ -105,6 +105,24 @@ function navItems(
 
 const SIDEBAR_COLLAPSED_KEY = "kapta.sidebar.collapsed";
 
+function navLabel(it: NavItem, badges?: Record<string, number>): string {
+  const n = badges?.[it.href] ?? 0;
+  return n > 0 ? `${it.label} (${n} pendientes)` : it.label;
+}
+
+/** El número de pendientes al lado de la entrada; nada si es cero. */
+function NavBadge({ count }: { count?: number }) {
+  if (!count || count <= 0) return null;
+  return (
+    <span
+      aria-label={`${count} pendientes`}
+      className="ml-auto shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800 tabular-nums"
+    >
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
 function Brand({ collapsed = false }: { collapsed?: boolean }) {
   return (
     <div className={cn("flex items-center", collapsed ? "justify-center" : "gap-2.5")}>
@@ -123,6 +141,7 @@ export function Sidebar({
   roleLabel,
   canValidatePayments,
   canManageLogistics,
+  badges,
   pendingHref,
   onNavigate,
 }: {
@@ -132,6 +151,8 @@ export function Sidebar({
   roleLabel: string;
   canValidatePayments: boolean;
   canManageLogistics: boolean;
+  /** Pendientes por entrada del menú (href → cuántos), p. ej. «Cotejar Olva». */
+  badges?: Record<string, number>;
   pendingHref?: string | null;
   onNavigate?: (href: string) => void;
 }) {
@@ -252,8 +273,8 @@ export function Sidebar({
                 onTouchStart={() => prepare(it.href)}
                 onClick={(event) => beginNavigation(event, it.href)}
                 aria-current={active ? "page" : undefined}
-                aria-label={collapsed ? it.label : undefined}
-                title={collapsed ? it.label : undefined}
+                aria-label={collapsed ? navLabel(it, badges) : undefined}
+                title={collapsed ? navLabel(it, badges) : undefined}
                 className={cn(
                   "flex h-9 items-center rounded-lg text-sm font-medium transition",
                   collapsed ? "justify-center px-2" : "gap-3 px-3",
@@ -262,8 +283,14 @@ export function Sidebar({
                     : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
                 )}
               >
-                <Ico className="h-[18px] w-[18px] shrink-0" />
-                {!collapsed && <span className="truncate">{it.label}</span>}
+                <span className="relative shrink-0">
+                  <Ico className="h-[18px] w-[18px]" />
+                  {collapsed && (badges?.[it.href] ?? 0) > 0 ? (
+                    <span aria-hidden="true" className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-amber-500" />
+                  ) : null}
+                </span>
+                {!collapsed && <span className="min-w-0 flex-1 truncate">{it.label}</span>}
+                {!collapsed ? <NavBadge count={badges?.[it.href]} /> : null}
               </Link>
             );
           })}
@@ -373,7 +400,9 @@ export function Sidebar({
                   active ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50",
                 )}
               >
-                <it.icon aria-hidden="true" className="size-5 shrink-0" />{it.label}
+                <it.icon aria-hidden="true" className="size-5 shrink-0" />
+                <span className="flex-1">{it.label}</span>
+                <NavBadge count={badges?.[it.href]} />
               </Link>
             );
           })}

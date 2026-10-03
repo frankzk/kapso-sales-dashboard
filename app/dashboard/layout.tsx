@@ -5,6 +5,8 @@ import { DashboardShell } from "@/components/dashboard-shell";
 import { OrderDrawerHost } from "@/components/order-drawer-host";
 import { canValidatePaymentsAnywhere } from "@/lib/payment-review-access";
 import { getMasterPermissions } from "@/lib/permissions-access";
+import { createAdminSupabase } from "@/lib/db";
+import { countOlvaCotejoPending } from "@/lib/olva/cotejo-pending";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +23,16 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // Solo motorizado: su módulo es /reparto, la ruta del día con el vocabulario
   // de su cuaderno (MOM §29.12, §30.9). El panel no es suyo.
   if (isRiderOnly) redirect("/reparto");
+  const canManageLogistics =
+    permissions.can("logistics.manage") ||
+    permissions.can("routes.manage") ||
+    permissions.can("dispatch.manage") ||
+    permissions.can("dispatch.pickup");
+  // Lo que espera a una persona en «Cotejar Olva» (MOM §12). Un fallo aquí no
+  // puede tumbar el panel entero: sin número, el menú sigue funcionando.
+  const olvaPending = canManageLogistics
+    ? await countOlvaCotejoPending(createAdminSupabase(), [...new Set(stores.map((s) => s.org_id))]).catch(() => 0)
+    : 0;
   const roleLabel = isVendedoraOnly
     ? "Vendedora"
     : roles.includes("owner") || roles.includes("admin")
@@ -35,7 +47,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
       roleLabel={roleLabel}
       yapeAlertsEnabled={roles.includes("vendedora")}
       canValidatePayments={canValidatePayments}
-      canManageLogistics={permissions.can("logistics.manage") || permissions.can("routes.manage") || permissions.can("dispatch.manage") || permissions.can("dispatch.pickup")}
+      canManageLogistics={canManageLogistics}
+      badges={olvaPending > 0 ? { "/dashboard/olva": olvaPending } : undefined}
     >
       {children}
       {/* La ficha del pedido para todo el panel (MOM §25): se abre con
