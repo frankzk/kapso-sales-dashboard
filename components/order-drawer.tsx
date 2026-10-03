@@ -20,17 +20,20 @@
 // mantiene el listado anterior en pantalla mientras llega el nuevo en vez de
 // parpadear a vacío.
 
-import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { cn } from "@/components/ui";
 import {
   Badge,
   Banner,
+  CARD_ZONE,
   CHECKBOX,
   FIELD,
   FIELD_BOX,
   OpsButton,
+  SECTION_CARD,
+  SectionHead,
   Skeleton,
   opsButtonClass,
   type BadgeTone,
@@ -212,6 +215,26 @@ export type DrawerSectionId =
   | "cierre"
   | "acciones"
   | "historial";
+
+/**
+ * Lo que dice el índice bajo las pestañas por cada sección. Corto a propósito:
+ * el título largo ya está en la tarjeta. Una sección sin entrada aquí no sale
+ * en el índice.
+ */
+const INDEX_LABEL: Record<string, string> = {
+  resumen: "Situación",
+  confirmacion: "Confirmación",
+  rutas: "Mesa de ruta",
+  pagos: "Cobro",
+  aliclik: "Aliclik",
+  guias: "Salidas y guías",
+  cierre: "Cierre",
+  acciones: "Gestión manual",
+  cliente: "Pedido y cliente",
+  ubicacion: "Ubicación",
+  productos: "Productos",
+  historial: "Actividad",
+};
 
 /** Las mismas de arriba, para validar la sección que llega por la URL. */
 export const DRAWER_SECTION_IDS: readonly DrawerSectionId[] = [
@@ -484,9 +507,12 @@ function DrawerJourneyRail({ current }: { current: string | null | undefined }) 
 function DrawerNextActionCard({
   action,
   onJump,
+  children,
 }: {
   action: DrawerNextAction;
   onJump: (target: DrawerSectionId) => void;
+  /** Lo que acompaña a la acción (el motorizado de Grupo GF), en una zona debajo. */
+  children?: ReactNode;
 }) {
   const cta = action.href ? (
     <Link href={action.href} className={opsButtonClass("primary", "md", "shrink-0 pointer-coarse:h-11")}>
@@ -501,9 +527,14 @@ function DrawerNextActionCard({
   ) : null;
 
   return (
+    // La única tarjeta con el anillo azul de 2 px: entre todas las de la ficha,
+    // es la que dice qué toca ahora. Si algo la frena, pasa al ámbar de aviso.
     <section
       aria-label="Próxima acción"
-      className={cn("rounded-lg p-4", action.tone === "amber" ? "bg-warn-wash" : "bg-wash")}
+      className={cn(
+        "rounded-lg p-4 shadow-control sm:p-5",
+        action.tone === "amber" ? "bg-warn-wash ring-1 ring-warn-bg" : "bg-white ring-2 ring-brand-600",
+      )}
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
@@ -518,6 +549,7 @@ function DrawerNextActionCard({
         </div>
         {cta}
       </div>
+      {children && <div className={cn(CARD_ZONE, "mt-4 sm:mt-5")}>{children}</div>}
     </section>
   );
 }
@@ -571,6 +603,126 @@ export function OrderDrawer({
   const [error, setError] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<DrawerWorkspaceView>(initialWorkspace ?? "operar");
   const scrollRef = useRef<HTMLElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
+  const indexRef = useRef<HTMLDivElement>(null);
+  const [indexItems, setIndexItems] = useState<{ id: string; label: string }[]>([]);
+  const [currentSection, setCurrentSection] = useState<string | null>(null);
+
+  // La altura de la cabecera fija, para que un salto deje la sección justo
+  // debajo de ella. No es fija: crece con los avisos y con el índice.
+  useEffect(() => {
+    const header = headerRef.current;
+    const sheet = scrollRef.current;
+    if (!header || !sheet) return;
+    const sync = () => sheet.style.setProperty("--ficha-head", `${header.offsetHeight}px`);
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+
+  // El índice: las secciones de la pestaña abierta que están en pantalla, en el
+  // orden en que SE VEN. El DOM no sirve de orden: el cobro sube o baja con
+  // `order-*` según si el pago es requisito. Corre en cada render porque qué
+  // secciones existen depende del pedido, del permiso y de la etapa; solo
+  // escribe cuando la lista cambia.
+  useLayoutEffect(() => {
+    const panel = scrollRef.current?.querySelector<HTMLElement>(`#pedido-panel-${workspace}`);
+    const seen = new Set<string>();
+    const next = panel
+      ? Array.from(panel.querySelectorAll<HTMLElement>("[data-drawer-section]"))
+          .filter((el) => {
+            const id = el.dataset.drawerSection ?? "";
+            if (!INDEX_LABEL[id] || seen.has(id)) return false;
+            seen.add(id);
+            return true;
+          })
+          .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+          .map((el) => ({ id: el.dataset.drawerSection!, label: INDEX_LABEL[el.dataset.drawerSection!]! }))
+      : [];
+    setIndexItems((prev) =>
+      prev.length === next.length && prev.every((item, i) => item.id === next[i]!.id) ? prev : next,
+    );
+  });
+
+  // Cuál se está leyendo: la última cuya tarjeta ya pasó bajo la cabecera.
+  useEffect(() => {
+    const sheet = scrollRef.current;
+    if (!sheet || indexItems.length === 0) {
+      setCurrentSection(null);
+      return;
+    }
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const line = (headerRef.current?.getBoundingClientRect().bottom ?? 0) + 32;
+      let current = indexItems[0]!.id;
+      for (const item of indexItems) {
+        const el = sheet.querySelector<HTMLElement>(
+          `#pedido-panel-${workspace} [data-drawer-section="${item.id}"]`,
+        );
+        if (el && el.getBoundingClientRect().top <= line) current = item.id;
+      }
+      // Al fondo, la última: si es corta nunca llega a pasar bajo la cabecera.
+      if (sheet.scrollTop > 0 && sheet.scrollTop + sheet.clientHeight >= sheet.scrollHeight - 2) {
+        current = indexItems[indexItems.length - 1]!.id;
+      }
+      setCurrentSection(current);
+    };
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    update();
+    sheet.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      sheet.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(frame);
+    };
+  }, [indexItems, workspace]);
+
+  // ¿Queda índice a la derecha? Sin una señal, «Gestión manual» se escondía tras
+  // el borde del teléfono y nada decía que la fila se desplaza.
+  const [indexMore, setIndexMore] = useState(false);
+  useEffect(() => {
+    const row = indexRef.current;
+    if (!row) return;
+    const sync = () => setIndexMore(row.scrollLeft + row.clientWidth < row.scrollWidth - 1);
+    sync();
+    row.addEventListener("scroll", sync, { passive: true });
+    const observer = new ResizeObserver(sync);
+    observer.observe(row);
+    return () => {
+      row.removeEventListener("scroll", sync);
+      observer.disconnect();
+    };
+  }, [indexItems]);
+
+  // En el teléfono el índice se desplaza de lado: la sección actual no se sale.
+  useEffect(() => {
+    const row = indexRef.current;
+    const item = currentSection ? row?.querySelector<HTMLElement>(`[data-index-item="${currentSection}"]`) : null;
+    if (!row || !item) return;
+    const left = item.offsetLeft - 8;
+    const right = item.offsetLeft + item.offsetWidth + 8;
+    if (left < row.scrollLeft) row.scrollTo({ left });
+    else if (right > row.scrollLeft + row.clientWidth) row.scrollTo({ left: right - row.clientWidth });
+  }, [currentSection]);
+
+  /** Del índice a la sección: la lleva bajo la cabecera y le pasa el foco. */
+  const goToSection = (id: string) => {
+    const el = scrollRef.current?.querySelector<HTMLElement>(
+      `#pedido-panel-${workspace} [data-drawer-section="${id}"]`,
+    );
+    if (!el) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    // El foco va con la vista: con el teclado, el siguiente Tab sigue en la
+    // sección elegida y no vuelve a la cabecera.
+    if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+    el.style.outline = "none";
+    el.focus({ preventScroll: true });
+    setCurrentSection(id);
+  };
 
   /**
    * Cambia primero al espacio que contiene la herramienta y después la enfoca.
@@ -864,13 +1016,13 @@ export function OrderDrawer({
         role="dialog"
         aria-modal="true"
         aria-label={`Pedido ${row?.order_name ?? ""}`}
-        className="h-full w-full max-w-[880px] overflow-y-auto overscroll-contain bg-white shadow-pop"
+        className="h-full w-full max-w-[880px] overflow-y-auto overscroll-contain bg-slate-50 shadow-pop"
       >
         {/* La cabecera lleva lo que hay que tener SIEMPRE a la vista (MOM §25):
             qué pedido es, en qué estado está, cuánto vale, de quién es y cómo
             llamarle. Antes había que subir hasta arriba para recordar el
             estado, y el monto quedaba enterrado entre los datos del cliente. */}
-        <header className="sticky top-0 z-10 bg-white shadow-[inset_0_-1px_0_var(--color-line)]">
+        <header ref={headerRef} className="sticky top-0 z-10 bg-white shadow-[inset_0_-1px_0_var(--color-line)]">
           <div className="flex items-start justify-between gap-3 px-4 pt-4 sm:px-6">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -910,30 +1062,34 @@ export function OrderDrawer({
                 // deja de poder copiarse justo en los pedidos donde más se
                 // necesita.
                 <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-[13px] leading-5 text-ink-500 sm:flex-nowrap">
-                  {/* En el teléfono parte en dos líneas: recortado, el nombre
-                      del cliente desaparecía entero. */}
-                  <span className="min-w-0 sm:truncate">
-                    {storeName(row.store_id)} · creado el{" "}
-                    <span className="tabular-nums">{fmtDate(row.order_created_at)}</span>
-                    {detail?.row.customer_name ? (
-                      <>
-                        {" · "}
-                        <span className="text-ink-700">{detail.row.customer_name}</span>
-                      </>
-                    ) : null}
+                  <span className="shrink-0">{storeName(row.store_id)}</span>
+                  {/* En el teléfono la fecha espera en Información: cada línea de
+                      más en la cabecera fija es pantalla que no se usa. */}
+                  <span className="hidden shrink-0 sm:inline">
+                    · creado el <span className="tabular-nums">{fmtDate(row.order_created_at)}</span>
                   </span>
+                  {/* En el teléfono el cliente va en su propia línea, arriba y
+                      entero: detrás de la tienda se partía a media palabra. En
+                      escritorio es lo que se recorta si no cabe, nunca el
+                      teléfono. */}
+                  {detail?.row.customer_name ? (
+                    <span className="min-w-0 max-sm:order-first max-sm:basis-full sm:truncate">
+                      <span aria-hidden="true" className="max-sm:hidden">· </span>
+                      <span className="text-ink-700">{detail.row.customer_name}</span>
+                    </span>
+                  ) : null}
+                  {/* El «·», el número y «Copiar» parten juntos: sueltos, el
+                      número bajaba solo y el punto quedaba colgando. */}
                   {detail?.row.customer_phone && (
-                    <>
+                    <span className="inline-flex shrink-0 items-center gap-x-1.5 whitespace-nowrap">
                       <span aria-hidden="true">·</span>
-                      <span className="whitespace-nowrap tabular-nums text-ink-700">
-                        {detail.row.customer_phone}
-                      </span>
+                      <span className="tabular-nums text-ink-700">{detail.row.customer_phone}</span>
                       <CopyButton
                         value={detail.row.customer_phone}
                         label="el teléfono"
                         className="justify-center pointer-coarse:size-11"
                       />
-                    </>
+                    </span>
                   )}
                 </div>
               )}
@@ -1047,6 +1203,39 @@ export function OrderDrawer({
           ) : (
             <div className="h-3" />
           )}
+          {/* EL ÍNDICE DE LA PESTAÑA. Operar llega a medir 4.000 px: sin él no
+              se sabe qué secciones hay debajo ni en cuál se está. Una sola
+              sección no necesita índice. */}
+          {detail && indexItems.length > 1 && (
+            <nav aria-label="Secciones de la pestaña" className="border-t border-line">
+              <div
+                ref={indexRef}
+                className={cn(
+                  "relative flex gap-1 overflow-x-auto px-1.5 py-2 [scrollbar-width:none] sm:px-3.5 [&::-webkit-scrollbar]:hidden",
+                  indexMore && "[mask-image:linear-gradient(to_right,#000_calc(100%_-_3rem),transparent)]",
+                )}
+              >
+                {indexItems.map((item) => {
+                  const current = item.id === currentSection;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      data-index-item={item.id}
+                      aria-current={current ? "location" : undefined}
+                      onClick={() => goToSection(item.id)}
+                      className={cn(
+                        "h-7 shrink-0 whitespace-nowrap rounded-md px-2.5 text-[13px] font-medium transition-colors pointer-coarse:h-11",
+                        current ? "bg-brand-50 text-brand-700" : "text-ink-600 hover:bg-wash hover:text-ink-900",
+                      )}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </nav>
+          )}
         </header>
 
         {!detail && error ? (
@@ -1073,56 +1262,65 @@ export function OrderDrawer({
             <Skeleton className="h-48 w-full" />
           </div>
         ) : (
-          <div className="px-4 pb-10 pt-6 sm:px-6">
+          <div className="px-4 pb-10 pt-4 sm:px-6 sm:pt-6">
             <div
               id="pedido-panel-operar"
               role="tabpanel"
               aria-labelledby="pedido-tab-operar"
               hidden={workspace !== "operar"}
-              className="flex flex-col gap-6"
+              className="flex flex-col gap-4 sm:gap-6"
             >
               <section
                 data-drawer-section="resumen"
-                className="order-1 scroll-mt-36 space-y-5"
+                className={cn("order-1 space-y-5", SECTION)}
               >
-                <div>
-                  <h3 className="text-base font-semibold leading-6 text-ink-900">Situación</h3>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <MacroStageBadge stage={detail.row.macro_stage} />
-                    <span className="text-sm font-medium text-ink-900">
-                      {macroSubstageLabel(detail.row.macro_substage)}
-                    </span>
-                    {/* Un motivo dice qué falta, la subetapa dice en qué punto va la
-                        gestión: el pedido se ve entero sin abrir nada. En Por cerrar
-                        los motivos son el trabajo mismo y los lista la mesa de cierre,
-                        así que no se repiten aquí. */}
-                    {detail.row.macro_stage !== "por_cerrar" &&
-                      (detail.row.macro_reasons ?? []).map((reason) => (
-                        <Badge key={reason} tone="warn">
-                          {macroSubstageLabel(reason)}
-                        </Badge>
-                      ))}
-                  </div>
-                  <p className="mt-1.5 text-[13px] leading-5 text-ink-500">
-                    <span className="tabular-nums">{fmtAge(detail.row.macro_since ?? detail.row.status_since)}</span> en esta
-                    macroetapa · fuente: {detail.row.status_source ?? "—"}
-                  </p>
-                </div>
+                {/* La macroetapa y la subetapa van EN la cabecera de la tarjeta:
+                    son la respuesta a «¿dónde está?», y debajo solo queda el
+                    recorrido que la ubica entre las seis. */}
+                <SectionHead
+                  title="Situación"
+                  badge={
+                    <>
+                      <MacroStageBadge stage={detail.row.macro_stage} />
+                      <span className="text-sm font-medium text-ink-900">
+                        {macroSubstageLabel(detail.row.macro_substage)}
+                      </span>
+                      {/* Un motivo dice qué falta, la subetapa dice en qué punto va la
+                          gestión: el pedido se ve entero sin abrir nada. En Por cerrar
+                          los motivos son el trabajo mismo y los lista la mesa de cierre,
+                          así que no se repiten aquí. */}
+                      {detail.row.macro_stage !== "por_cerrar" &&
+                        (detail.row.macro_reasons ?? []).map((reason) => (
+                          <Badge key={reason} tone="warn">
+                            {macroSubstageLabel(reason)}
+                          </Badge>
+                        ))}
+                    </>
+                  }
+                  help={
+                    <>
+                      <span className="tabular-nums">{fmtAge(detail.row.macro_since ?? detail.row.status_since)}</span> en esta
+                      macroetapa · fuente: {detail.row.status_source ?? "—"}
+                    </>
+                  }
+                />
 
                 <DrawerJourneyRail current={detail.row.macro_stage} />
               </section>
               {nextAction && workspace === "operar" && (
-                <div className="order-2 space-y-3">
-                  <DrawerNextActionCard action={nextAction} onJump={jumpTo} />
+                <div className="order-2">
                   {/* Grupo GF: quién tiene el paquete y en qué quedó, arriba y en
                       cualquier etapa (también Por cerrar), sin bajar hasta
-                      «Salidas y guías». */}
-                  {gfActive && (
-                    <div className={cn(FRAME, "px-4 py-3")}>
-                      <p className="text-[13px] font-medium text-ink-700">Motorizado Grupo GF</p>
-                      <GfDeliveryLine delivery={gfActive} />
-                    </div>
-                  )}
+                      «Salidas y guías». Va DENTRO de la tarjeta de la acción, en
+                      su zona: suelto debajo era una tarjeta sin título. */}
+                  <DrawerNextActionCard action={nextAction} onJump={jumpTo}>
+                    {gfActive && (
+                      <>
+                        <p className="text-[13px] font-medium text-ink-700">Motorizado Grupo GF</p>
+                        <GfDeliveryLine delivery={gfActive} />
+                      </>
+                    )}
+                  </DrawerNextActionCard>
                 </div>
               )}
               {/* La gestión de confirmación va arriba porque en Por confirmar ES
@@ -1138,7 +1336,7 @@ export function OrderDrawer({
                 canEdit && (
                 <div
                   data-drawer-section="confirmacion"
-                  className={cn("order-3 scroll-mt-36", SECTION)}
+                  className={cn("order-3", SECTION)}
                 >
                   <ConfirmationDesk
                     brief={brief}
@@ -1166,7 +1364,7 @@ export function OrderDrawer({
               )}
               <div
                 data-drawer-section="rutas"
-                className={cn("order-4 scroll-mt-36", SECTION)}
+                className={cn("order-4", SECTION)}
               >
                 <OrderRouteDesk
                   plan={detail.routePlan}
@@ -1178,7 +1376,7 @@ export function OrderDrawer({
               </div>
               <section
                 data-drawer-section="guias"
-                className={cn("order-6 scroll-mt-36 space-y-4", SECTION)}
+                className={cn("order-6 space-y-4", SECTION)}
               >
                 <SectionHead
                   title="Salidas y guías"
@@ -1186,11 +1384,13 @@ export function OrderDrawer({
                   help="Cada salida conserva su courier, rótulo, QR y resultado independiente."
                 />
                 {detail.guides.length === 0 ? (
-                  <p className={cn(FRAME, "px-4 py-3 text-sm text-ink-500")}>
+                  <p className="text-sm text-ink-500">
                     Sin gestión logística registrada todavía.
                   </p>
                 ) : (
-                  <ul className={cn(FRAME, "divide-y divide-line")}>
+                  // Filas de borde a borde, con la hairline de la tarjeta: un marco
+                  // dentro de la tarjeta sería una tarjeta dentro de otra.
+                  <ul className="-mx-4 divide-y divide-line sm:-mx-5 [&>li:first-child]:pt-0 [&>li:last-child]:pb-0">
                     {detail.guides.map((g) => {
                       const estado = {
                         deliveryStatus: g.delivery_status,
@@ -1202,7 +1402,7 @@ export function OrderDrawer({
                       };
                       const gf = detail.gfDeliveries.find((d) => d.shipmentId === g.id);
                       return (
-                      <li key={g.id} className="space-y-2.5 px-4 py-3">
+                      <li key={g.id} className="space-y-2.5 px-4 py-3 sm:px-5">
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
                           <span className="text-sm font-semibold capitalize text-ink-900">{g.courier}</span>
                           <span className="font-mono text-xs text-ink-600">
@@ -1407,7 +1607,7 @@ export function OrderDrawer({
               {["por_cerrar", "finalizado"].includes(detail.row.macro_stage ?? "") && (
                 <div
                   data-drawer-section="cierre"
-                  className={cn("order-7 scroll-mt-36", SECTION)}
+                  className={cn("order-7", SECTION)}
                 >
                   <OrderClosureDesk
                     stage={detail.row.macro_stage}
@@ -1428,11 +1628,7 @@ export function OrderDrawer({
               {showPaymentPanel && paymentPanel && (
                 <div
                   data-drawer-section="pagos"
-                  className={cn(
-                    "scroll-mt-36",
-                    SECTION,
-                    paymentPanel.mode === "required" ? "order-3" : "order-5",
-                  )}
+                  className={cn(SECTION, paymentPanel.mode === "required" ? "order-3" : "order-5")}
                 >
                   <PickupKeyPanel
                     orderId={orderId}
@@ -1454,7 +1650,7 @@ export function OrderDrawer({
               {canCreateGuide && aliclikOffered && (
                 <div
                   data-drawer-section="aliclik"
-                  className={cn("order-5 scroll-mt-36", SECTION)}
+                  className={cn("order-5", SECTION)}
                 >
                   <AliclikGuidePanel
                     orderId={orderId}
@@ -1487,7 +1683,7 @@ export function OrderDrawer({
                 detail.routePlan.activeOutputCount === 0 && (
                 <div
                   data-drawer-section="aliclik"
-                  className={cn("order-5 scroll-mt-36 space-y-3", SECTION)}
+                  className={cn("order-5 space-y-4", SECTION)}
                 >
                   <SectionHead
                     title="Aliclik"
@@ -1505,7 +1701,7 @@ export function OrderDrawer({
                 </div>
               )}
               {canEdit ? (
-                <div className={cn("order-8", SECTION)}>
+                <div data-drawer-section="acciones" className={cn("order-8", SECTION)}>
                   <OrderActions
                     row={detail.row}
                     canOverride={canOverride}
@@ -1521,7 +1717,7 @@ export function OrderDrawer({
                 </div>
               ) : (
                 <div className={cn("order-8", SECTION)}>
-                  <div className="flex items-start gap-3 rounded-lg bg-wash px-4 py-3">
+                  <div className="flex items-start gap-3">
                     <IconLock aria-hidden className="mt-0.5 size-4 shrink-0 text-ink-500" />
                     <div>
                       <p className="text-sm font-semibold text-ink-900">Solo lectura</p>
@@ -1538,10 +1734,11 @@ export function OrderDrawer({
               role="tabpanel"
               aria-labelledby="pedido-tab-informacion"
               hidden={workspace !== "informacion"}
-              className="flex flex-col gap-6"
+              className="flex flex-col gap-4 sm:gap-6"
             >
               <section
-                className="order-1 space-y-4"
+                data-drawer-section="cliente"
+                className={cn("order-1 space-y-4", SECTION)}
               >
                 {/* La cobertura vive en la cabecera fija. Repetirla aquí, a dos
                     dedos y en la misma pantalla, sugería que eran dos datos
@@ -1616,7 +1813,7 @@ export function OrderDrawer({
                   </Banner>
                 )}
               </section>
-              <div className={cn("order-2 scroll-mt-36", SECTION)}>
+              <div data-drawer-section="ubicacion" className={cn("order-2", SECTION)}>
                 <GeoSection
                   orderId={orderId}
                   row={detail.row}
@@ -1630,7 +1827,7 @@ export function OrderDrawer({
               {detail.lineItems.length > 0 && (
                 <section
                   data-drawer-section="productos"
-                  className={cn("order-3 scroll-mt-36 space-y-4", SECTION)}
+                  className={cn("order-3 space-y-4", SECTION)}
                 >
                   <SectionHead
                     title="Productos"
@@ -1649,11 +1846,11 @@ export function OrderDrawer({
               role="tabpanel"
               aria-labelledby="pedido-tab-actividad"
               hidden={workspace !== "actividad"}
-              className="flex flex-col gap-6"
+              className="flex flex-col gap-4 sm:gap-6"
             >
               <section
                 data-drawer-section="historial"
-                className="order-1 scroll-mt-36 space-y-5"
+                className={cn("order-1 space-y-5", SECTION)}
               >
                 <SectionHead
                   title="Actividad y auditoría"
@@ -1661,7 +1858,7 @@ export function OrderDrawer({
                   help={`${detail.timeline.length} movimiento${detail.timeline.length === 1 ? "" : "s"} · se conserva indefinidamente`}
                 />
                 {detail.timeline.length === 0 ? (
-                  <p className={cn(FRAME, "px-4 py-3 text-sm text-ink-500")}>Sin movimientos registrados.</p>
+                  <p className="text-sm text-ink-500">Sin movimientos registrados.</p>
                 ) : (
                   <ol className="relative space-y-5 pl-6 before:absolute before:bottom-1 before:left-[5px] before:top-1.5 before:w-px before:bg-line-strong">
                     {detail.timeline.map((t) => (
@@ -1780,10 +1977,12 @@ export function OrderDrawer({
 // Piezas de la ficha (mundo de operación, DESIGN.md)
 // ---------------------------------------------------------------------------
 
-/** Una sección de la ficha sobre su hairline: el resto de la pestaña va debajo. */
-const SECTION = "border-t border-line pt-6";
-/** Marco sin sombra para listas y bloques dentro de la hoja. */
-const FRAME = "rounded-lg ring-1 ring-inset ring-line";
+/**
+ * Cada sección de la ficha es una tarjeta sobre el lienzo (`SECTION_CARD`). Un
+ * salto a ella deja su borde de arriba justo bajo la cabecera fija, mida lo que
+ * mida (crece con los avisos y con el índice): `--ficha-head` lo pone la hoja.
+ */
+const SECTION = cn(SECTION_CARD, "scroll-mt-[calc(var(--ficha-head,9rem)_+_1rem)]");
 const FIELD_LABEL = "text-[13px] leading-5 text-ink-500";
 const FIELD_VALUE = "mt-0.5 break-words text-sm leading-5 text-ink-900";
 /** Etiqueta de un campo de formulario. */
@@ -1794,31 +1993,6 @@ const DOC_LINK =
   "inline-flex items-center gap-1 text-[13px] font-medium text-brand-700 underline-offset-2 hover:underline pointer-coarse:min-h-11";
 const DOC_LINK_QUIET =
   "inline-flex items-center text-[13px] text-ink-600 underline-offset-2 hover:text-ink-900 hover:underline pointer-coarse:min-h-11";
-
-function SectionHead({
-  title,
-  badge,
-  help,
-  aside,
-}: {
-  title: string;
-  badge?: ReactNode;
-  help?: ReactNode;
-  aside?: ReactNode;
-}) {
-  return (
-    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <h3 className="text-base font-semibold leading-6 text-ink-900">{title}</h3>
-          {badge}
-        </div>
-        {help && <p className="mt-0.5 max-w-[68ch] text-[13px] leading-5 text-ink-500">{help}</p>}
-      </div>
-      {aside && <div className="flex flex-wrap items-center gap-2">{aside}</div>}
-    </div>
-  );
-}
 
 function DismissButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
@@ -1919,7 +2093,7 @@ function GeoSection({
   const set = (patch: Partial<OrderGeoInput>) => setForm((f) => ({ ...f, ...patch }));
 
   return (
-    <section data-drawer-section="ubicacion" className="scroll-mt-36 space-y-4">
+    <section className="space-y-4">
       <SectionHead
         title="Ubicación y cobertura"
         badge={
@@ -1983,7 +2157,7 @@ function GeoSection({
         </dl>
       ) : (
         <form
-          className={cn(FRAME, "space-y-4 p-4")}
+          className={cn(CARD_ZONE, "space-y-4")}
           onSubmit={(event) => {
             event.preventDefault();
             save();
@@ -2048,7 +2222,7 @@ function GeoSection({
             />
             Recordar esta provincia para los próximos pedidos del mismo distrito
           </label>
-          <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
+          <div className="flex flex-wrap items-center gap-2 pt-1">
             <OpsButton type="submit" variant="primary" disabled={pending} className="pointer-coarse:h-11">
               {pending ? "Guardando…" : "Guardar ubicación"}
             </OpsButton>
@@ -2177,7 +2351,7 @@ function PriorOrderRow({
   const attempts = row.attempt_count ?? 0;
 
   return (
-    <li className="px-3 py-2.5">
+    <li className="px-4 py-2.5 sm:px-5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="font-mono text-xs font-semibold text-ink-900">
           {row.order_name ?? row.order_id}
@@ -2242,7 +2416,7 @@ function ConfirmationBrief({ brief, orderId, onDuplicateChanged }: {
   );
 
   return (
-    <div className={cn(FRAME, "space-y-3 p-4")}>
+    <div className={cn(CARD_ZONE, "space-y-3")}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h4 className="text-sm font-semibold text-ink-900">Antes de llamar</h4>
         <span className="text-[13px] text-ink-500">
@@ -2341,7 +2515,7 @@ function ConfirmationBrief({ brief, orderId, onDuplicateChanged }: {
             Historial del cliente
             <span className="font-normal text-ink-500 group-open:hidden">(ver los {priors.length})</span>
           </summary>
-          <ul className={cn(FRAME, "mt-2 divide-y divide-line")}>
+          <ul className="-mx-4 mt-2 divide-y divide-line border-y border-line sm:-mx-5">
             {priors.slice(0, 10).map((row) => (
               <PriorOrderRow
                 key={row.order_id}
@@ -2543,7 +2717,7 @@ function ConfirmationDesk({
 
       {/* Sin <form> a propósito: un Enter suelto en la fecha no debe gastar un
           día de gestión. El intento se registra solo con el botón. */}
-      <div className={cn(FRAME, "space-y-4 p-4")}>
+      <div className={cn(CARD_ZONE, "space-y-4")}>
         <h4 className="text-sm font-semibold text-ink-900">Registrar intento</h4>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className={LABEL}>
@@ -2602,7 +2776,7 @@ function ConfirmationDesk({
           />
         </label>
 
-        <div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
+        <div className="flex flex-wrap items-center gap-3 pt-1">
           <OpsButton
             variant="primary"
             disabled={blocked}
@@ -2686,12 +2860,12 @@ function OrderActions({
   }, [general, options, operational]);
 
   return (
-    <section data-drawer-section="acciones" className="order-9 scroll-mt-36 space-y-5">
+    <section className="space-y-5">
       <SectionHead
         title="Gestión manual"
         help="Registra el resultado operativo o deja una nota. Las correcciones excepcionales están separadas al final."
       />
-      <div className={cn(FRAME, "space-y-3 p-4")}>
+      <div className={cn(CARD_ZONE, "space-y-3")}>
         <h4 className="text-sm font-semibold text-ink-900">Registrar estado</h4>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className={LABEL}>
@@ -2770,7 +2944,7 @@ function OrderActions({
             className={cn(FIELD, "font-normal pointer-coarse:h-11")}
           />
         </label>
-        <div className="border-t border-line pt-3">
+        <div className="pt-1">
           <OpsButton
             variant="primary"
             disabled={
@@ -2786,7 +2960,7 @@ function OrderActions({
         </div>
       </div>
 
-      <div className={cn(FRAME, "space-y-3 p-4")}>
+      <div className={cn(CARD_ZONE, "space-y-3")}>
         <h4 className="text-sm font-semibold text-ink-900">Comentario</h4>
         <textarea
           value={comment}
@@ -2818,12 +2992,14 @@ function OrderActions({
         </div>
       </div>
 
-      <details className={cn(FRAME, "group")}>
-        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-4 text-sm font-semibold text-ink-900 transition-colors hover:bg-wash [&::-webkit-details-marker]:hidden">
+      {/* La última franja de la tarjeta, de borde a borde y hasta el pie: es lo
+          excepcional, así que espera plegado bajo lo de todos los días. */}
+      <details className="group -mx-4 -mb-4 border-t border-line sm:-mx-5 sm:-mb-5">
+        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 rounded-b-lg px-4 text-sm font-semibold text-ink-900 transition-colors hover:bg-wash group-open:rounded-none sm:px-5 [&::-webkit-details-marker]:hidden">
           Devoluciones y correcciones avanzadas
           <IconChevronDown aria-hidden className="size-4 text-ink-500 transition-transform duration-150 group-open:rotate-180 motion-reduce:transition-none" />
         </summary>
-        <div className="space-y-5 border-t border-line p-4">
+        <div className="space-y-5 border-t border-line px-4 pb-4 pt-4 sm:px-5 sm:pb-5">
           <div className="space-y-2">
             <h4 className="text-sm font-semibold text-ink-900">Registrar devolución</h4>
             <p className="text-[13px] leading-5 text-ink-500">

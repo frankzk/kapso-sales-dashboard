@@ -5,7 +5,7 @@
 // tarjeta por modalidad. La sugerida lleva el anillo azul y el botón principal.
 
 import { cn } from "@/components/ui";
-import { Badge, Banner, OpsButton } from "@/components/ops-ui";
+import { Badge, Banner, OpsButton, SectionHead } from "@/components/ops-ui";
 import { shipmentIsReturning, shipmentStateLabel } from "@/lib/order-status";
 import type {
   OrderRoutePlan,
@@ -58,22 +58,18 @@ export function OrderRouteDesk({
   const blockedActions = new Set(gate?.blockedActions ?? []);
   return (
     <section className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h3 className="text-base font-semibold leading-6 text-ink-900">Mesa de ruta</h3>
-            <Badge>{plan.operationLabel}</Badge>
-          </div>
-          <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
-            Decide la siguiente salida sin mezclar el pedido con sus cajas físicas.
+      <SectionHead
+        title="Mesa de ruta"
+        badge={<Badge>{plan.operationLabel}</Badge>}
+        help="Decide la siguiente salida sin mezclar el pedido con sus cajas físicas."
+        aside={
+          <p className="text-[13px] leading-5 text-ink-500">
+            <span className="text-lg font-semibold tabular-nums text-ink-900">{plan.outputCount}</span>
+            <span className="tabular-nums">/{plan.maxOutputs}</span> salidas ·{" "}
+            <span className="tabular-nums">{plan.activeOutputCount}</span> activas
           </p>
-        </div>
-        <p className="text-right text-[13px] leading-5 text-ink-500">
-          <span className="text-lg font-semibold tabular-nums text-ink-900">{plan.outputCount}</span>
-          <span className="tabular-nums">/{plan.maxOutputs}</span> salidas ·{" "}
-          <span className="tabular-nums">{plan.activeOutputCount}</span> activas
-        </p>
-      </div>
+        }
+      />
 
       {/* El motivo va ARRIBA y con el sitio donde se arregla. Un botón apagado
           que dice «Reabrir primero» no basta: hay dos «reabrir» en este drawer
@@ -147,7 +143,14 @@ export function OrderRouteDesk({
                   estado que el courier reporta, la tarjeta ya contesta las tres
                   preguntas que uno se hace ahí mismo. */}
               {route.blockingOutput && (
-                <div className="mt-3 rounded-md bg-white px-3 py-2 ring-1 ring-inset ring-line">
+                // Un recuadro sin anillo: la tarjeta de la modalidad ya es el
+                // marco, y otro anillo dentro sería un marco dentro de otro.
+                <div
+                  className={cn(
+                    "mt-3 rounded-md px-3 py-2",
+                    route.availability === "warning" ? "bg-white" : "bg-wash",
+                  )}
+                >
                   <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-600">
                     <span className="font-semibold text-ink-700">
                       {shipmentIsReturning(route.blockingOutput) ? "Salida en devolución" : "Salida activa"}

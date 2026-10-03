@@ -2,13 +2,38 @@
 
 // Panel de pagos Yape y gestión de la credencial Shalom dentro del pedido.
 //
+// En el mundo de operación de DESIGN.md (03-10-2026): el cobro es una tarjeta
+// más de la ficha, con su título y su estado en chapa como las demás; los
+// comprobantes, el registro y la credencial son zonas sobre hairlines, y el
+// registro es una escalera de tres pasos con su disco y su estado.
+//
 // La clave NUNCA aparece en el listado ni en exportaciones: solo aquí, tras una
 // acción explícita, y cada visualización queda registrada. El botón de mostrar
 // solo aparece cuando el servidor ya dijo que se puede — y aun así el servidor
 // lo vuelve a comprobar antes de descifrar nada.
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { cn } from "@/components/ui";
+import {
+  Badge,
+  Banner,
+  CARD_ZONE,
+  FIELD,
+  FIELD_BOX,
+  OpsButton,
+  SectionHead,
+  Skeleton,
+  type BadgeTone,
+} from "@/components/ops-ui";
+import {
+  IconAlert,
+  IconArrowUpRight,
+  IconCheck,
+  IconChevronDown,
+  IconClock,
+  IconImage,
+  IconX,
+} from "@/components/icons";
 import {
   completePaymentData,
   overridePaymentValidation,
@@ -62,12 +87,26 @@ const STATUS_LABEL: Record<string, string> = {
   revision_admin: "En revisión administrativa",
 };
 
-const STATUS_TONE: Record<string, string> = {
-  validado: "bg-emerald-100 text-emerald-800",
-  rechazado: "bg-slate-200 text-slate-600",
-  posible_duplicado: "bg-red-100 text-red-800",
-  info_incompleta: "bg-amber-100 text-amber-800",
+const STATUS_TONE: Record<string, BadgeTone> = {
+  validado: "ok",
+  rechazado: "neutral",
+  posible_duplicado: "crit",
+  info_incompleta: "warn",
 };
+
+/** El estado del cobro en la chapa de la cabecera; el texto lo dice igual. */
+const PAYMENT_STATE_TONE: Record<PaymentState, BadgeTone> = {
+  sin_pago: "warn",
+  adelanto_cargado: "info",
+  adelanto_validado: "info",
+  diferencia_cargada: "info",
+  pago_total_cargado: "info",
+  pago_completo: "ok",
+  posible_duplicado: "crit",
+};
+
+/** Etiqueta de un campo de formulario. */
+const LABEL = "grid gap-1.5 text-[13px] font-medium text-ink-700";
 
 function fmtDateTime(iso: string | null): string {
   if (!iso) return "—";
@@ -171,15 +210,13 @@ function PanelLoadError({
   className?: string;
 }) {
   return (
-    <div className={cn("space-y-2", className)}>
-      <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{message}</p>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-      >
+    <div className={cn("space-y-3", className)}>
+      <Banner tone="crit" role="alert">
+        {message}
+      </Banner>
+      <OpsButton size="sm" onClick={onRetry} className="pointer-coarse:h-11">
         Intentar nuevamente
-      </button>
+      </OpsButton>
     </div>
   );
 }
@@ -215,9 +252,41 @@ export function PickupKeyPanel({
     });
   }
 
+  const paymentOptional = mode === "optional";
+  // La cabecera es la misma mientras carga, si falla y con el panel listo: la
+  // tarjeta dice qué es antes de saber cuánto se cobró.
+  const head = (badge?: ReactNode) => (
+    <SectionHead
+      title={mode === "prepaid" ? "Cobro" : "Cobro para envío por agencia"}
+      badge={badge}
+      help={
+        mode === "prepaid"
+          ? undefined
+          : paymentOptional
+            ? "Opcional para Provincia COD. Úsalo si el pedido irá por Agencia o el historial del cliente exige adelanto."
+            : "El pago acumulado habilita la guía; el pago completo permite entregar la clave desde la salida Shalom."
+      }
+    />
+  );
+
   if (!panel) {
-    if (error) return <PanelLoadError message={error} onRetry={() => void reload()} />;
-    return <p className="text-sm text-slate-400">Cargando pagos…</p>;
+    if (error) {
+      return (
+        <section className="space-y-4">
+          {head()}
+          <PanelLoadError message={error} onRetry={() => void reload()} />
+        </section>
+      );
+    }
+    return (
+      <section className="space-y-4">
+        {head()}
+        <div className="space-y-2" aria-busy="true" aria-label="Cargando pagos">
+          <Skeleton className="h-20 w-full" />
+          <Skeleton className="h-9 w-2/3" />
+        </div>
+      </section>
+    );
   }
 
   // PAGADO EN EL CHECKOUT: no hay cobro que gestionar. El panel colapsa a una
@@ -227,21 +296,20 @@ export function PickupKeyPanel({
   // en el panel de la salida, no acá.
   if (mode === "prepaid") {
     return (
-      <section className="space-y-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-emerald-800">
-            Cobro
-          </h3>
-          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
-            Pagado por web
-          </span>
-        </div>
-        <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+      <section className="@container space-y-4">
+        {head(<Badge tone="ok">Pagado por web</Badge>)}
+        <Banner tone="ok">
           Este pedido se pagó en el checkout
-          {panel.orderTotal != null ? `: S/ ${panel.orderTotal.toFixed(2)}` : ""}. No hay que
-          cobrar en la entrega ni cargar comprobante.
-        </p>
-        {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+          {panel.orderTotal != null ? (
+            <span className="tabular-nums">: S/ {panel.orderTotal.toFixed(2)}</span>
+          ) : null}
+          . No hay que cobrar en la entrega ni cargar comprobante.
+        </Banner>
+        {error && (
+          <Banner tone="crit" role="alert">
+            {error}
+          </Banner>
+        )}
         {/* Si además hay comprobantes cargados se siguen listando: un pedido
             puede tener historia de Yape antes de haberse pagado por web, y
             esconderla dejaría dinero registrado sin rastro en pantalla. */}
@@ -266,42 +334,32 @@ export function PickupKeyPanel({
     );
   }
 
-  const paymentOptional = mode === "optional";
   const paymentLabel =
     paymentOptional && panel.paymentState === "sin_pago"
       ? "Sin pago requerido"
       : PAYMENT_STATE_LABEL[panel.paymentState as PaymentState] ?? panel.paymentState;
+  const paymentTone: BadgeTone =
+    paymentOptional && panel.paymentState === "sin_pago"
+      ? "neutral"
+      : PAYMENT_STATE_TONE[panel.paymentState as PaymentState] ?? "neutral";
 
   return (
-    <section className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h3
-            className={cn(
-              "text-xs font-bold uppercase tracking-[0.12em]",
-              paymentOptional ? "text-slate-700" : "text-amber-900",
-            )}
-          >
-            Cobro para envío por agencia
-          </h3>
-          <p className="mt-0.5 text-xs text-slate-500">
-            {paymentOptional
-              ? "Opcional para Provincia COD. Úsalo si el pedido irá por Agencia o el historial del cliente exige adelanto."
-              : "El pago acumulado habilita la guía; el pago completo permite entregar la clave desde la salida Shalom."}
-          </p>
-        </div>
-        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
-          {paymentLabel}
-        </span>
-      </div>
+    <section className="@container space-y-4">
+      {head(<Badge tone={paymentTone}>{paymentLabel}</Badge>)}
 
       {gatewayNote && (
-        <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{gatewayNote}</p>
+        <p className="rounded-lg bg-wash px-4 py-2.5 text-[13px] leading-5 text-ink-700">{gatewayNote}</p>
       )}
 
-      {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      {error && (
+        <Banner tone="crit" role="alert">
+          {error}
+        </Banner>
+      )}
       {notice && (
-        <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notice}</p>
+        <Banner tone="ok" role="status">
+          {notice}
+        </Banner>
       )}
 
       <PaymentMoneySummary payments={panel.payments} orderTotal={panel.orderTotal} />
@@ -372,28 +430,25 @@ export function ShalomPickupKeyPanel({
     });
   }
 
+  // Una zona más de la tarjeta «Salidas y guías», sobre su hairline.
   if (!panel) {
     if (error) {
-      return (
-        <PanelLoadError
-          message={error}
-          onRetry={() => void reload()}
-          className="border-t border-sky-100 pt-3"
-        />
-      );
+      return <PanelLoadError message={error} onRetry={() => void reload()} className={CARD_ZONE} />;
     }
-    return (
-      <p className="border-t border-sky-100 pt-3 text-sm text-slate-400">
-        Cargando credencial Shalom…
-      </p>
-    );
+    return <p className={cn(CARD_ZONE, "text-[13px] text-ink-500")}>Cargando credencial Shalom…</p>;
   }
 
   return (
-    <div className="space-y-3 border-t border-sky-100 pt-3">
-      {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+    <div className={cn(CARD_ZONE, "space-y-3")}>
+      {error && (
+        <Banner tone="crit" role="alert">
+          {error}
+        </Banner>
+      )}
       {notice && (
-        <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notice}</p>
+        <Banner tone="ok" role="status">
+          {notice}
+        </Banner>
       )}
       <KeySection
         panel={panel}
@@ -425,38 +480,76 @@ function PaymentMoneySummary({
       ? "Adelanto cargado, falta validarlo"
       : `Faltan S/ ${Math.max(0, SHALOM_MINIMUM_ADVANCE - progress.registeredTotal).toFixed(2)} para el adelanto mínimo`;
 
+  // El resumen de cifras del mundo (DESIGN.md, Panel lateral): un marco con
+  // hairlines entre celdas y el saldo sobre `wash`. Escrito como frase, en el
+  // teléfono «S/» quedaba en una línea y el monto en la siguiente.
+  const cells: { label: string; value: string; note?: string; balance?: boolean }[] = [
+    {
+      label: "Validado",
+      value: `S/ ${progress.validatedTotal.toFixed(2)}`,
+      note: progress.orderTotal !== null ? `de S/ ${progress.orderTotal.toFixed(2)}` : undefined,
+    },
+    { label: "Cargado", value: `S/ ${progress.registeredTotal.toFixed(2)}` },
+    ...(progress.registeredRemaining !== null
+      ? [{ label: "Saldo por cargar", value: `S/ ${progress.registeredRemaining.toFixed(2)}`, balance: true }]
+      : []),
+  ];
+
   return (
-    <div className="space-y-2 rounded-lg bg-slate-50 px-3 py-3">
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm">
-        <p className="font-semibold text-slate-900">
-          S/ {progress.validatedTotal.toFixed(2)} validados
-          {progress.orderTotal !== null ? ` de S/ ${progress.orderTotal.toFixed(2)}` : ""}
-        </p>
-        <p className="text-xs text-slate-600">
-          Cargado: <strong className="text-slate-800">S/ {progress.registeredTotal.toFixed(2)}</strong>
-          {progress.registeredRemaining !== null && (
-            <> · Saldo por cargar: <strong className="text-slate-800">S/ {progress.registeredRemaining.toFixed(2)}</strong></>
+    <div className="overflow-hidden rounded-lg ring-1 ring-inset ring-line">
+      <dl className={cn("grid divide-y divide-line @md:divide-x @md:divide-y-0", cells.length === 3 ? "@md:grid-cols-3" : "@md:grid-cols-2")}>
+        {cells.map((cell) => (
+          <div
+            key={cell.label}
+            className={cn(
+              "flex items-baseline justify-between gap-3 px-4 py-2.5 @md:block @md:py-3",
+              cell.balance && "bg-wash",
+            )}
+          >
+            <dt className="text-[13px] text-ink-600">{cell.label}</dt>
+            <dd className="text-right @md:mt-0.5 @md:text-left">
+              <span className="whitespace-nowrap text-base font-semibold tabular-nums text-ink-900">{cell.value}</span>
+              {cell.note && (
+                <span className="ml-1.5 whitespace-nowrap text-[13px] tabular-nums text-ink-600">{cell.note}</span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <div className="border-t border-line px-4 py-3">
+        {progress.orderTotal !== null && (
+          <div
+            className="mb-2.5 h-1.5 overflow-hidden rounded-full bg-line-strong"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={ratio}
+            aria-label={`${ratio}% del pedido validado`}
+          >
+            <div
+              className="h-full rounded-full bg-ok-fg transition-[width] duration-200 motion-reduce:transition-none"
+              style={{ width: `${ratio}%` }}
+            />
+          </div>
+        )}
+        <p
+          className={cn(
+            "flex items-center gap-1.5 text-[13px] font-medium",
+            progress.advanceValidated
+              ? "text-ok-fg"
+              : progress.advanceRegistered
+                ? "text-warn-fg"
+                : "text-ink-600",
           )}
+        >
+          {progress.advanceValidated ? (
+            <IconCheck aria-hidden className="size-4 shrink-0" />
+          ) : progress.advanceRegistered ? (
+            <IconClock aria-hidden className="size-4 shrink-0" />
+          ) : null}
+          {advanceCopy}
         </p>
       </div>
-      {progress.orderTotal !== null && (
-        <div className="h-1.5 overflow-hidden rounded-full bg-slate-200" aria-label={`${ratio}% del pedido validado`}>
-          <div className="h-full rounded-full bg-emerald-600 transition-[width] duration-200" style={{ width: `${ratio}%` }} />
-        </div>
-      )}
-      <p
-        className={cn(
-          "text-xs font-medium",
-          progress.advanceValidated
-            ? "text-emerald-700"
-            : progress.advanceRegistered
-              ? "text-amber-700"
-              : "text-slate-500",
-        )}
-      >
-        {progress.advanceValidated ? "✓ " : progress.advanceRegistered ? "◷ " : ""}
-        {advanceCopy}
-      </p>
     </div>
   );
 }
@@ -496,120 +589,142 @@ function PaymentList({
   const [reason, setReason] = useState("");
 
   if (!payments.length) {
-    return <p className="text-sm text-slate-400">Todavía no se ha cargado ningún comprobante.</p>;
+    return <p className="text-[13px] text-ink-500">Todavía no se ha cargado ningún comprobante.</p>;
   }
 
   return (
-    <ul className="space-y-2">
-      {payments.map((p) => (
-        <li key={p.id} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium capitalize text-slate-800">{p.kind}</span>
-            {p.amount !== null && <span className="text-slate-700">S/ {p.amount.toFixed(2)}</span>}
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 text-xs font-medium",
-                STATUS_TONE[p.validation_status] ?? "bg-slate-100 text-slate-700",
+    // Una zona de la tarjeta, con los comprobantes en filas de borde a borde:
+    // cada uno en su recuadro era un marco dentro de otro.
+    <div className={cn(CARD_ZONE, "space-y-3")}>
+      <div className="flex items-center gap-2">
+        <h4 className="text-sm font-semibold text-ink-900">Comprobantes</h4>
+        <Badge className="tabular-nums">{payments.length}</Badge>
+      </div>
+      <ul className="-mx-4 divide-y divide-line sm:-mx-5 [&>li:first-child]:pt-0 [&>li:last-child]:pb-0">
+        {payments.map((p) => (
+          <li key={p.id} className="flex gap-4 px-4 py-3 sm:px-5">
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-sm font-semibold capitalize text-ink-900">{p.kind}</span>
+                {p.amount !== null && (
+                  <span className="text-sm tabular-nums text-ink-900">S/ {p.amount.toFixed(2)}</span>
+                )}
+                <Badge tone={STATUS_TONE[p.validation_status] ?? "neutral"}>
+                  {STATUS_LABEL[p.validation_status] ?? p.validation_status}
+                </Badge>
+              </div>
+              {/* Sin operación, fecha ni pagador la línea decía solo «—». */}
+              {(p.operation_number || p.paid_at || p.payer_name) && (
+                <p className="-mt-1 text-[13px] tabular-nums text-ink-500">
+                  {[
+                    p.operation_number ? `Op. ${p.operation_number}` : null,
+                    p.paid_at ? fmtDateTime(p.paid_at) : null,
+                    p.payer_name ? `Pagó: ${p.payer_name}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
               )}
-            >
-              {STATUS_LABEL[p.validation_status] ?? p.validation_status}
-            </span>
-          </div>
-          <p className="text-xs text-slate-500">
-            {p.operation_number ? `Op. ${p.operation_number} · ` : ""}
-            {fmtDateTime(p.paid_at)}
-            {p.payer_name ? ` · Pagó: ${p.payer_name}` : ""}
-          </p>
-          <StoredRecipientStatus
-            vision={p.vision}
-            hasVoucher={Boolean(p.file_path)}
-            accounts={accounts}
-            customerName={customerName}
-          />
-          {p.notes && <p className="text-xs text-slate-500">{p.notes}</p>}
-          {/* El comprobante se guardaba y no se podía ver: quien validaba tenía
-              que fiarse de los campos transcritos, que es justo lo que la imagen
-              sirve para contrastar. La miniatura abre el original en pestaña. */}
-          {p.file_path && (
-            <a
-              href={`/api/payments/${p.id}/voucher`}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-2 inline-flex flex-col items-start gap-1"
-              title="Ver el comprobante en grande"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={`/api/payments/${p.id}/voucher`}
-                alt="Comprobante de Yape"
-                className="max-h-64 max-w-full rounded-lg border border-slate-200 bg-slate-50 object-contain"
+              <StoredRecipientStatus
+                vision={p.vision}
+                hasVoucher={Boolean(p.file_path)}
+                accounts={accounts}
+                customerName={customerName}
               />
-              <span className="text-[11px] font-medium text-brand-700">Abrir a tamaño completo</span>
-            </a>
-          )}
-          {!p.operation_number && p.validation_status !== "rechazado" && (
-            <MissingOperation
-              payment={p}
-              canRegister={canRegister}
-              pending={pending}
-              onComplete={onComplete}
-            />
-          )}
-          {canValidate &&
-            p.operation_number &&
-            p.validation_status !== "validado" &&
-            p.validation_status !== "rechazado" && (
-            <ValidateActions
-              payment={p}
-              accounts={accounts}
-              customerName={customerName}
-              pending={pending}
-              onValidate={onValidate}
-              keyAutosend={keyAutosend}
-            >
-              {/* Rechazar vive dentro para quedar en la misma fila. */}
-              {rejecting === p.id ? (
-                <>
-                  <input
-                    value={reason}
-                    onChange={(e) => setReason(e.target.value)}
-                    placeholder="Motivo del rechazo"
-                    className="flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                  />
-                  <button
-                    disabled={pending || !reason.trim()}
-                    onClick={() => {
-                      onReject(p.id, reason);
-                      setRejecting(null);
-                      setReason("");
-                    }}
-                    className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 disabled:opacity-50"
-                  >
-                    Confirmar rechazo
-                  </button>
-                </>
-              ) : (
-                <button
-                  disabled={pending}
-                  onClick={() => setRejecting(p.id)}
-                  className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                >
-                  Rechazar
-                </button>
+              {p.notes && <p className="text-[13px] leading-5 text-ink-600">{p.notes}</p>}
+              {!p.operation_number && p.validation_status !== "rechazado" && (
+                <MissingOperation
+                  payment={p}
+                  canRegister={canRegister}
+                  pending={pending}
+                  onComplete={onComplete}
+                />
               )}
-            </ValidateActions>
-          )}
-          {/* Reasignar vive FUERA del bloque de validar/rechazar: un pago
-              cargado en el pedido equivocado casi siempre se descubre DESPUÉS
-              de validarlo, y ahí el bloque de arriba ya no se dibuja. Colgarlo
-              de la misma condición lo habría dejado invisible justo en el caso
-              que viene a resolver. */}
-          {canOverride && p.validation_status !== "rechazado" && (
-            <ReassignPayment payment={p} pending={pending} onReassign={onReassign} />
-          )}
-        </li>
-      ))}
-    </ul>
+              {canValidate &&
+                p.operation_number &&
+                p.validation_status !== "validado" &&
+                p.validation_status !== "rechazado" && (
+                <ValidateActions
+                  payment={p}
+                  accounts={accounts}
+                  customerName={customerName}
+                  pending={pending}
+                  onValidate={onValidate}
+                  keyAutosend={keyAutosend}
+                >
+                  {/* Rechazar vive dentro para quedar en la misma fila. */}
+                  {rejecting === p.id ? (
+                    <>
+                      <input
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        placeholder="Motivo del rechazo"
+                        aria-label="Motivo del rechazo"
+                        className={cn(FIELD_BOX, "h-8 min-w-40 flex-1 px-2.5 text-[13px] pointer-coarse:h-11")}
+                      />
+                      <OpsButton
+                        size="sm"
+                        variant="danger"
+                        disabled={pending || !reason.trim()}
+                        onClick={() => {
+                          onReject(p.id, reason);
+                          setRejecting(null);
+                          setReason("");
+                        }}
+                        className="pointer-coarse:h-11"
+                      >
+                        Confirmar rechazo
+                      </OpsButton>
+                    </>
+                  ) : (
+                    <OpsButton
+                      size="sm"
+                      disabled={pending}
+                      onClick={() => setRejecting(p.id)}
+                      className="pointer-coarse:h-11"
+                    >
+                      Rechazar
+                    </OpsButton>
+                  )}
+                </ValidateActions>
+              )}
+              {/* Reasignar vive FUERA del bloque de validar/rechazar: un pago
+                  cargado en el pedido equivocado casi siempre se descubre DESPUÉS
+                  de validarlo, y ahí el bloque de arriba ya no se dibuja. Colgarlo
+                  de la misma condición lo habría dejado invisible justo en el caso
+                  que viene a resolver. */}
+              {canOverride && p.validation_status !== "rechazado" && (
+                <ReassignPayment payment={p} pending={pending} onReassign={onReassign} />
+              )}
+            </div>
+            {/* El comprobante se guardaba y no se podía ver: quien validaba tenía
+                que fiarse de los campos transcritos, que es justo lo que la imagen
+                sirve para contrastar. La miniatura, a la derecha de sus datos para
+                cotejarlos de un vistazo, abre el original en otra pestaña. */}
+            {p.file_path && (
+              <a
+                href={`/api/payments/${p.id}/voucher`}
+                target="_blank"
+                rel="noreferrer"
+                className="group flex w-20 shrink-0 flex-col items-start gap-1 sm:w-24"
+                title="Ver el comprobante en grande"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`/api/payments/${p.id}/voucher`}
+                  alt="Comprobante de Yape"
+                  className="max-h-40 w-full rounded-md bg-wash object-cover object-top ring-1 ring-line"
+                />
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 underline-offset-2 group-hover:underline pointer-coarse:min-h-11">
+                  Ampliar
+                  <IconArrowUpRight aria-hidden className="size-3" />
+                </span>
+              </a>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -654,9 +769,11 @@ function ValidateActions({
   const enviará = libera && Boolean(keyAutosend?.windowOpen);
 
   return (
-    <div className="mt-1.5 space-y-1.5">
+    <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <button
+        <OpsButton
+          size="sm"
+          variant="primary"
           disabled={pending || mismatch}
           onClick={() => onValidate(payment.id, enviará)}
           title={
@@ -666,31 +783,41 @@ function ValidateActions({
                 ? "Validar y mandarle la clave de recojo por WhatsApp"
                 : "Validar comprobante"
           }
-          className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+          className="pointer-coarse:h-11"
         >
           {enviará ? "Validar y enviar la clave" : "Validar"}
-        </button>
+        </OpsButton>
         {children}
       </div>
 
+      {/* Un desplegable, como «Consultas de la clave»: es lo que va a salir,
+          no un aviso de que algo salió bien. */}
       {enviará && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5">
+        <div>
           <button
             type="button"
             onClick={() => setVerPrevia((v) => !v)}
-            className="text-[11px] font-medium text-emerald-800 underline-offset-2 hover:underline"
+            aria-expanded={verPrevia}
+            className="inline-flex min-h-8 items-center gap-1.5 text-[13px] font-medium text-ink-600 hover:text-ink-900 pointer-coarse:min-h-11"
           >
+            <IconChevronDown
+              aria-hidden
+              className={cn(
+                "size-4 text-ink-500 transition-transform duration-150 motion-reduce:transition-none",
+                verPrevia ? "rotate-0" : "-rotate-90",
+              )}
+            />
             {verPrevia ? "Ocultar el mensaje" : "Ver el mensaje que se enviará"}
           </button>
           {verPrevia && (
-            <pre className="mt-1 whitespace-pre-wrap font-sans text-[11px] leading-snug text-emerald-900">
+            <pre className="ml-5.5 mt-1 whitespace-pre-wrap rounded-md bg-wash px-3 py-2 font-sans text-[13px] leading-5 text-ink-900">
               {keyAutosend?.preview}
             </pre>
           )}
         </div>
       )}
       {libera && !enviará && (
-        <p className="text-[11px] text-amber-700">
+        <p className="text-[13px] leading-5 text-warn-fg">
           La clave no saldrá sola: la clienta no escribe hace más de 24 h y WhatsApp no deja
           mandarle texto libre fuera de esa ventana. Entrégasela tú y regístralo.
         </p>
@@ -730,7 +857,7 @@ function ReassignPayment({
         type="button"
         disabled={pending}
         onClick={() => setOpen(true)}
-        className="mt-1.5 text-[11px] font-medium text-slate-500 underline underline-offset-2 hover:text-slate-800 disabled:opacity-50"
+        className="flex w-fit items-center text-[13px] font-medium text-ink-600 underline underline-offset-2 hover:text-ink-900 disabled:opacity-50 pointer-coarse:min-h-11"
       >
         Está en el pedido equivocado
       </button>
@@ -738,33 +865,34 @@ function ReassignPayment({
   }
 
   return (
-    <div className="mt-1.5 space-y-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
-      <p className="text-xs font-semibold text-slate-700">Mover este pago a otro pedido</p>
-      <div className="flex flex-wrap gap-1.5">
+    <div className="space-y-2 rounded-lg bg-wash p-3">
+      <p className="text-[13px] font-semibold text-ink-900">Mover este pago a otro pedido</p>
+      <div className="flex flex-wrap gap-2">
         <input
           value={target}
           onChange={(e) => setTarget(e.target.value)}
           placeholder="#KP130243"
           autoComplete="off"
           aria-label="Pedido de destino"
-          className="w-36 rounded-lg border border-slate-200 px-2 py-1 text-xs"
+          className={cn(FIELD_BOX, "h-8 w-36 px-2.5 font-mono text-[13px] pointer-coarse:h-11")}
         />
         <input
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           placeholder="Motivo (obligatorio)"
           aria-label="Motivo de la corrección"
-          className="min-w-[10rem] flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs"
+          className={cn(FIELD_BOX, "h-8 min-w-40 flex-1 px-2.5 text-[13px] pointer-coarse:h-11")}
         />
       </div>
       {/* Se dice ANTES, no como confirmación después: quien mueve dinero entre
           pedidos tiene que saber que queda firmado en los dos. */}
-      <p className="text-[11px] text-slate-500">
+      <p className="text-[13px] leading-5 text-ink-600">
         Quedará en el historial de los dos pedidos, con tu nombre y el motivo.
       </p>
-      <div className="flex gap-1.5">
-        <button
-          type="button"
+      <div className="flex gap-2">
+        <OpsButton
+          size="sm"
+          variant="primary"
           disabled={pending || !ready}
           onClick={() => {
             onReassign(payment.id, target, reason);
@@ -772,17 +900,13 @@ function ReassignPayment({
             setTarget("");
             setReason("");
           }}
-          className="rounded-lg bg-slate-800 px-2.5 py-1 text-xs font-medium text-white hover:bg-slate-900 disabled:opacity-50"
+          className="pointer-coarse:h-11"
         >
           Mover el pago
-        </button>
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-white"
-        >
+        </OpsButton>
+        <OpsButton size="sm" variant="ghost" onClick={() => setOpen(false)} className="pointer-coarse:h-11">
           Cancelar
-        </button>
+        </OpsButton>
       </div>
     </div>
   );
@@ -831,16 +955,20 @@ function StoredRecipientStatus({
   return (
     <p
       className={cn(
-        "mt-1 text-xs font-medium",
+        "flex items-start gap-1.5 text-[13px] font-medium leading-5",
         reading.status === "verified"
-          ? "text-emerald-700"
+          ? "text-ok-fg"
           : reading.status === "mismatch"
-            ? "text-red-700"
-            : "text-amber-700",
+            ? "text-crit-fg"
+            : "text-warn-fg",
       )}
     >
-      {reading.status === "verified" ? "✓ " : "⚠ "}
-      {label}
+      {reading.status === "verified" ? (
+        <IconCheck aria-hidden className="mt-0.5 size-4 shrink-0" />
+      ) : (
+        <IconAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
+      )}
+      <span>{label}</span>
     </p>
   );
 }
@@ -868,21 +996,18 @@ function StoredRecipientStatus({
  * Windows filtran de más con el comodín y esconden los .webp — que es
  * exactamente el formato en el que Chrome guarda muchas capturas.
  */
-function VoucherPicker({ file, onPick }: { file: File | null; onPick: (f: File | null) => void }) {
+function VoucherPicker({
+  file,
+  preview,
+  onPick,
+}: {
+  file: File | null;
+  /** La imagen elegida, ya como URL local (`useObjectUrl`). */
+  preview: string | null;
+  onPick: (f: File | null) => void;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
-  const [preview, setPreview] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!file) {
-      setPreview(null);
-      return;
-    }
-    const url = URL.createObjectURL(file);
-    setPreview(url);
-    // Sin esto cada imagen elegida deja su blob retenido en memoria.
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
 
   // El pegado se escucha en toda la ventana: pedirle a alguien que "haga foco en
   // la zona de subida" antes de Ctrl+V es pedirle que sepa algo que no se ve.
@@ -913,60 +1038,51 @@ function VoucherPicker({ file, onPick }: { file: File | null; onPick: (f: File |
         const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith("image/"));
         if (f) onPick(f);
       }}
+      // Discontinuo: en este mundo es «vacío o disponible», y aquí se suelta.
       className={cn(
-        "rounded-lg border border-dashed px-3 py-3 transition",
-        over ? "border-brand-500 bg-brand-50" : "border-slate-300",
+        "rounded-lg border border-dashed p-3 transition-colors",
+        over ? "border-brand-500 bg-brand-50" : "border-line-strong",
       )}
     >
       {preview ? (
-        <div className="grid gap-3 lg:grid-cols-[minmax(260px,0.9fr)_minmax(0,1.1fr)]">
-          <a
-            href={preview}
-            target="_blank"
-            rel="noreferrer"
-            className="grid min-h-72 place-items-center rounded-lg bg-slate-100 p-3"
-            title="Abrir comprobante a tamaño completo"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={preview}
-              alt="Comprobante por subir"
-              className="max-h-[28rem] w-full rounded-md object-contain"
-            />
-          </a>
-          <div className="space-y-2 self-start text-xs text-slate-600">
-            <p className="font-medium text-slate-800">{file?.name}</p>
-            <p>{file ? `${Math.round(file.size / 1024)} KB · ${file.type || "imagen"}` : ""}</p>
-            <p>La imagen queda visible mientras cotejas los datos leídos. Haz clic para ampliarla.</p>
-          </div>
+        <div className="space-y-2">
+          {/* En una tarjeta ancha la imagen vive a la derecha de los campos
+              (`VoucherForm`); aquí solo cuando no cabe al lado. */}
+          <VoucherPreview src={preview} className="@2xl:hidden" />
+          <p className="text-[13px] leading-5 text-ink-600">
+            <span className="font-medium text-ink-900">{file?.name}</span>
+            {file ? ` · ${Math.round(file.size / 1024)} KB · ${file.type || "imagen"}` : ""}
+          </p>
+          <p className="text-[13px] leading-5 text-ink-500">
+            La imagen queda visible mientras cotejas los datos leídos. Haz clic para ampliarla.
+          </p>
         </div>
       ) : (
-        <p className="text-xs text-slate-500">
-          Arrastra el comprobante aquí, <strong>pégalo con Ctrl+V</strong> o elígelo con el botón.
+        <p className="text-[13px] leading-5 text-ink-600">
+          Arrastra el comprobante aquí, <strong className="font-semibold text-ink-900">pégalo con Ctrl+V</strong> o
+          elígelo con el botón.
         </p>
       )}
       {/* El input nativo se pintaba como texto suelto ("Seleccionar archivo /
           Ningún archivo seleccionado") y no se leía como algo pulsable. Se
           esconde y se pone un botón de verdad. */}
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <OpsButton size="sm" onClick={() => inputRef.current?.click()} className="pointer-coarse:h-11">
+          <IconImage aria-hidden className="text-ink-500" />
           {file ? "Cambiar imagen" : "Elegir imagen del Yape"}
-        </button>
+        </OpsButton>
         {file && (
-          <button
-            type="button"
+          <OpsButton
+            size="sm"
+            variant="ghost"
             onClick={() => {
               onPick(null);
               if (inputRef.current) inputRef.current.value = "";
             }}
-            className="text-xs text-slate-500 underline hover:text-slate-700"
+            className="pointer-coarse:h-11"
           >
             Quitar
-          </button>
+          </OpsButton>
         )}
         <input
           ref={inputRef}
@@ -980,6 +1096,42 @@ function VoucherPicker({ file, onPick }: { file: File | null; onPick: (f: File |
         />
       </div>
     </div>
+  );
+}
+
+/** La URL local de la imagen elegida, para enseñarla antes de subirla. */
+function useObjectUrl(file: File | null): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!file) {
+      setUrl(null);
+      return;
+    }
+    const next = URL.createObjectURL(file);
+    setUrl(next);
+    // Sin esto cada imagen elegida deja su blob retenido en memoria.
+    return () => URL.revokeObjectURL(next);
+  }, [file]);
+  return url;
+}
+
+/** El comprobante elegido, grande, y un clic para abrirlo a tamaño completo. */
+function VoucherPreview({ src, className, tall = false }: { src: string; className?: string; tall?: boolean }) {
+  return (
+    <a
+      href={src}
+      target="_blank"
+      rel="noreferrer"
+      className={cn("grid place-items-center rounded-lg bg-wash p-2 ring-1 ring-inset ring-line", className)}
+      title="Abrir comprobante a tamaño completo"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt="Comprobante por subir"
+        className={cn("w-full rounded-md object-contain", tall ? "max-h-[28rem]" : "max-h-80")}
+      />
+    </a>
   );
 }
 
@@ -999,24 +1151,28 @@ function MissingOperation({
   const [paidAt, setPaidAt] = useState("");
 
   return (
-    <div className="mt-1.5 space-y-1.5 rounded-lg bg-amber-50 px-2.5 py-2">
+    <div className="space-y-2 rounded-lg bg-warn-wash px-3 py-2.5">
       {/* El texto depende de si HAY campo debajo. Decía «escribe el número
           aquí» siempre, también cuando `canRegister` es falso y no se dibuja
           ninguna casilla: una pantalla que nombra una acción que no ofrece
           manda a quien la lee a buscar algo que no existe. */}
-      <p className="text-xs text-amber-900">
-        {canRegister
-          ? "Sin nº de operación no se puede validar. Si la captura está recortada, pide al cliente el comprobante completo o escribe el número aquí."
-          : "Sin nº de operación no se puede validar, y tu rol no permite completarlo. Pide al cliente el comprobante completo o avisa a quien registre pagos."}
+      <p className="flex items-start gap-1.5 text-[13px] leading-5 text-ink-700">
+        <IconAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-warn-fg" />
+        <span>
+          {canRegister
+            ? "Sin nº de operación no se puede validar. Si la captura está recortada, pide al cliente el comprobante completo o escribe el número aquí."
+            : "Sin nº de operación no se puede validar, y tu rol no permite completarlo. Pide al cliente el comprobante completo o avisa a quien registre pagos."}
+        </span>
       </p>
       {canRegister && (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-2">
           <input
             value={operation}
             onChange={(e) => setOperation(e.target.value)}
             placeholder="Nº de operación"
+            aria-label="Nº de operación"
             autoComplete="off"
-            className="w-40 rounded-lg border border-amber-200 px-2 py-1 text-xs"
+            className={cn(FIELD_BOX, "h-8 w-40 px-2.5 text-[13px] tabular-nums pointer-coarse:h-11")}
           />
           {payment.amount === null && (
             <input
@@ -1024,7 +1180,8 @@ function MissingOperation({
               onChange={(e) => setAmount(e.target.value)}
               inputMode="decimal"
               placeholder="Monto"
-              className="w-24 rounded-lg border border-amber-200 px-2 py-1 text-xs"
+              aria-label="Monto"
+              className={cn(FIELD_BOX, "h-8 w-24 px-2.5 text-[13px] tabular-nums pointer-coarse:h-11")}
             />
           )}
           {!payment.paid_at && (
@@ -1032,10 +1189,13 @@ function MissingOperation({
               type="datetime-local"
               value={paidAt}
               onChange={(e) => setPaidAt(e.target.value)}
-              className="rounded-lg border border-amber-200 px-2 py-1 text-xs"
+              aria-label="Fecha y hora del pago"
+              className={cn(FIELD_BOX, "h-8 w-auto px-2.5 text-[13px] tabular-nums pointer-coarse:h-11")}
             />
           )}
-          <button
+          <OpsButton
+            size="sm"
+            variant="primary"
             disabled={pending || operation.replace(/[^a-z0-9]/gi, "").length < 4}
             onClick={() =>
               onComplete(payment.id, {
@@ -1044,15 +1204,23 @@ function MissingOperation({
                 paidAt: paidAt ? new Date(paidAt).toISOString() : null,
               })
             }
-            className="rounded-lg bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+            className="pointer-coarse:h-11"
           >
             Completar datos
-          </button>
+          </OpsButton>
         </div>
       )}
     </div>
   );
 }
+
+/** El disco de cada señal dice en qué quedó; el texto lo repite para el lector. */
+const SIGNAL_DISC = {
+  neutral: "bg-line-strong text-ink-600",
+  ok: "bg-ok-fg text-white",
+  partial: "bg-warn-fg text-white",
+  bad: "bg-crit-fg text-white",
+} as const;
 
 function RecipientSignal({
   label,
@@ -1074,40 +1242,34 @@ function RecipientSignal({
 }) {
   const tone = !present ? "neutral" : matches ? "ok" : cutShort ? "partial" : "bad";
   return (
-    <div
-      className={cn(
-        "rounded-lg border bg-white px-3 py-2",
-        tone === "neutral"
-          ? "border-slate-200"
-          : tone === "ok"
-            ? "border-emerald-300 bg-emerald-50/50"
-            : tone === "partial"
-              ? "border-amber-300 bg-amber-50/50"
-              : "border-red-300 bg-red-50/50",
-      )}
-    >
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+    // Una columna sobre el `wash` del grupo, sin recuadro propio: un marco
+    // dentro de otro marco dentro de la tarjeta era un nivel de más.
+    <div className="min-w-0 py-1 @md:px-3 @md:first:pl-0 @md:last:pr-0">
+      <p className="text-xs font-medium text-ink-600">{label}</p>
       <div className="mt-1 flex items-center gap-2">
         <span
           aria-hidden="true"
-          className={cn(
-            "grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-bold",
-            tone === "neutral"
-              ? "bg-slate-100 text-slate-400"
-              : tone === "ok"
-                ? "bg-emerald-600 text-white"
-                : tone === "partial"
-                  ? "bg-amber-500 text-white"
-                  : "bg-red-600 text-white",
-          )}
+          className={cn("grid size-5 shrink-0 place-items-center rounded-full", SIGNAL_DISC[tone])}
         >
-          {tone === "neutral" ? "·" : tone === "ok" ? "✓" : tone === "partial" ? "~" : "×"}
+          {tone === "neutral" ? (
+            <span className="size-1.5 rounded-full bg-ink-600" />
+          ) : tone === "ok" ? (
+            <IconCheck className="size-3" strokeWidth={2.6} />
+          ) : tone === "partial" ? (
+            <IconAlert className="size-3" />
+          ) : (
+            <IconX className="size-3" strokeWidth={2.6} />
+          )}
         </span>
-        <span className={cn("min-w-0 truncate text-sm font-semibold", present ? "text-slate-900" : "text-slate-400")}>
+        <span className={cn("min-w-0 truncate text-sm font-semibold", present ? "text-ink-900" : "text-ink-600")}>
           {value}
         </span>
+        {/* El tono no puede ser la única señal: el lector oye en qué quedó. */}
+        <span className="sr-only">
+          {tone === "neutral" ? "(sin leer)" : tone === "ok" ? "(coincide)" : tone === "partial" ? "(leído a medias)" : "(no coincide)"}
+        </span>
       </div>
-      <p className="mt-1 text-[11px] text-slate-500">Debe coincidir con {expected}</p>
+      <p className="mt-1 text-xs leading-4 text-ink-600">Debe coincidir con {expected}</p>
     </div>
   );
 }
@@ -1119,24 +1281,33 @@ function RecipientAccountCheck({
   reading: YapeRecipientReading | null;
   accounts: CollectionAccount[];
 }) {
+  const titleId = useId();
   // «Te yapearon»: la captura es de nuestra propia cuenta, así que no hay
   // receptor que contrastar — el nombre y el celular son de quien pagó.
   if (reading?.receivedView) {
     return (
-      <fieldset className="rounded-lg bg-slate-50 p-3" aria-live="polite">
-        <legend className="px-1 text-xs font-semibold text-slate-700">Cuenta receptora del Yape</legend>
+      <div role="group" aria-labelledby={titleId} aria-live="polite" className="space-y-2 rounded-lg bg-wash p-3">
+        <p id={titleId} className="text-[13px] font-semibold text-ink-700">
+          Cuenta receptora del Yape
+        </p>
         {reading.yapeEmpresa ? (
-          <p className="text-xs font-medium text-emerald-700">
-            ✓ Captura de nuestro Yape Empresa («Te yapearon»): el dinero llegó a la cuenta de la tienda. El nombre y
-            el celular que muestra son de quien pagó.
+          <p className="flex items-start gap-1.5 text-[13px] font-medium leading-5 text-ok-fg">
+            <IconCheck aria-hidden className="mt-0.5 size-4 shrink-0" />
+            <span>
+              Captura de nuestro Yape Empresa («Te yapearon»): el dinero llegó a la cuenta de la tienda. El nombre y
+              el celular que muestra son de quien pagó.
+            </span>
           </p>
         ) : (
-          <p className="text-xs font-medium text-amber-700">
-            Captura «Te yapearon» sin el aviso de Yape Empresa: puede ser de cualquier cuenta que recibió un Yape,
-            no necesariamente la nuestra. Confirma en nuestro Yape que el pago entró antes de validar.
+          <p className="flex items-start gap-1.5 text-[13px] font-medium leading-5 text-warn-fg">
+            <IconAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
+            <span>
+              Captura «Te yapearon» sin el aviso de Yape Empresa: puede ser de cualquier cuenta que recibió un Yape,
+              no necesariamente la nuestra. Confirma en nuestro Yape que el pago entró antes de validar.
+            </span>
           </p>
         )}
-      </fieldset>
+      </div>
     );
   }
   const verification = verifyYapeRecipient(reading?.name, reading?.phoneLastDigits, accounts);
@@ -1171,9 +1342,11 @@ function RecipientAccountCheck({
   const fullMessage = message + swapNotice + ignoredNotice;
 
   return (
-    <fieldset className="rounded-lg bg-slate-50 p-3" aria-live="polite">
-      <legend className="px-1 text-xs font-semibold text-slate-700">Cuenta receptora del Yape</legend>
-      <div className="grid gap-2 sm:grid-cols-2">
+    <div role="group" aria-labelledby={titleId} aria-live="polite" className="space-y-2 rounded-lg bg-wash p-3">
+      <p id={titleId} className="text-[13px] font-semibold text-ink-700">
+        Cuenta receptora del Yape
+      </p>
+      <div className="grid divide-y divide-line @md:grid-cols-2 @md:divide-x @md:divide-y-0">
         <RecipientSignal
           label="Destinatario leído"
           value={
@@ -1200,20 +1373,24 @@ function RecipientAccountCheck({
       </div>
       <p
         className={cn(
-          "mt-2 text-xs font-medium",
+          "flex items-start gap-1.5 text-[13px] font-medium leading-5",
           verification.status === "verified"
-            ? "text-emerald-700"
+            ? "text-ok-fg"
             : verification.status === "mismatch"
-              ? "text-red-700"
+              ? "text-crit-fg"
               : verification.status === "partial"
-                ? "text-amber-700"
-                : "text-slate-500",
+                ? "text-warn-fg"
+                : "text-ink-600",
         )}
       >
-        {verification.status === "verified" ? "✓ " : verification.status === "mismatch" ? "⚠ " : ""}
-        {fullMessage}
+        {verification.status === "verified" ? (
+          <IconCheck aria-hidden className="mt-0.5 size-4 shrink-0" />
+        ) : verification.status === "mismatch" || verification.status === "partial" ? (
+          <IconAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
+        ) : null}
+        <span>{fullMessage}</span>
       </p>
-    </fieldset>
+    </div>
   );
 }
 
@@ -1608,429 +1785,504 @@ function VoucherForm({
     }
   }
 
+  const preview = useObjectUrl(file);
+  const step1Saved = Boolean(shalomSaved.document || shalomSaved.terminalId);
+  const canRegisterNow = Boolean(file || operation.trim());
+  const hasKinds = availableKinds.length > 0;
+
   return (
-    <div className="space-y-4 rounded-lg border border-slate-200 p-3">
+    // Una zona de la tarjeta de cobro. `@container`: lo que cabe al lado de qué
+    // lo decide el ancho de la tarjeta, no el de la ventana — la ficha mide
+    // 880 px como mucho aunque la pantalla mida el doble.
+    <div className={cn(CARD_ZONE, "@container space-y-4")}>
       <div>
-        <p className="text-sm font-semibold text-slate-900">Registrar un pago</p>
-        <p className="mt-0.5 text-xs text-slate-500">
+        <h4 className="text-sm font-semibold text-ink-900">Registrar un pago</h4>
+        <p className="mt-0.5 max-w-[68ch] text-[13px] leading-5 text-ink-500">
           Prepara el destino, coteja la imagen y registra únicamente los datos que realmente aparecen.
         </p>
       </div>
-      <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-        {[
-          // Lo GUARDADO, no lo tecleado: ver `shalomSaved`.
-          ["1", "DNI y agencia", Boolean(shalomSaved.document || shalomSaved.terminalId)],
-          ["2", "Comprobante", Boolean(file)],
-          ["3", "Revisar y registrar", Boolean(readNotice)],
-        ].map(([step, label, done]) => (
-          <div
-            key={String(step)}
-            className={cn(
-              "flex items-center justify-center gap-1.5 border-r border-slate-200 px-2 py-2 text-[11px] font-semibold last:border-r-0",
-              done ? "bg-emerald-50 text-emerald-700" : "text-slate-500",
-            )}
-          >
-            <span
-              className={cn(
-                "grid size-5 place-items-center rounded-full text-[10px]",
-                done ? "bg-emerald-600 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200",
-              )}
-            >
-              {done ? "✓" : step}
-            </span>
-            {label}
-          </div>
-        ))}
-      </div>
 
-      {/* Datos de Shalom, adelantados y OPCIONALES (0073).
-          Van aquí porque quien registra el Yape acaba de hablar con la clienta y
-          tiene el DNI a mano; quien crea la guía suele ser otra persona en otro
-          momento, y hoy tiene que volver a pedirlo. Nada de esto condiciona el
-          pago: un cobro no puede quedarse esperando a un DNI. */}
-      {/* Con la guía ya creada estos datos dejan de ser un borrador: Shalom los
-          tiene, los imprimió en su rótulo y el paquete viaja con ellos.
-          Editarlos acá no cambia nada allá — solo hace que Kapta y el rótulo
-          físico digan cosas distintas, que es peor que no poder tocarlos. La
-          salida real es anular la guía y crear otra, y eso se dice. */}
-      {shalomGuide ? (
-        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-sm font-semibold text-slate-900">1. DNI y agencia Shalom</p>
-            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
-              🔒 Ya en la guía
-            </span>
-          </div>
-          <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-xs text-slate-400">Documento</dt>
-              <dd className="font-medium text-slate-800">
-                {shalomDoc ? `${shalomDocType} ${shalomDoc}` : "—"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-slate-400">Agencia de destino</dt>
-              <dd className="font-medium text-slate-800">{shalomAgency?.nombre ?? "—"}</dd>
-            </div>
-          </dl>
-          <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
-            <span>Guía</span>
-            {shalomGuide.guideCode && (
-              <span className="font-mono font-semibold text-slate-800">
-                N° {shalomGuide.guideCode}
-              </span>
-            )}
-            {shalomGuide.codigo && (
-              <span className="rounded bg-white px-1.5 py-0.5 font-mono font-medium text-slate-700 ring-1 ring-slate-200">
-                {shalomGuide.codigo}
-              </span>
-            )}
-            <span className="text-slate-500">
-              · {operationalLabel(shalomGuide.pickupState ?? shalomGuide.deliveryStatus)}
-            </span>
-          </p>
-          <p className="mt-1 text-xs leading-5 text-slate-500">
-            El destinatario y el destino ya viajan impresos en el rótulo de Shalom. Para cambiarlos
-            hay que anular esa guía —desde «Salidas y guías»— y crear otra.
-          </p>
-        </div>
-      ) : (
-      <details open className="rounded-lg bg-slate-50 px-3 py-3">
-        <summary className="cursor-pointer text-sm font-semibold text-slate-900">
-          1. DNI y agencia Shalom <span className="font-normal text-slate-500">(opcional)</span>
-        </summary>
-        <p className="mt-2 text-xs text-slate-400">
-          Completa primero estos datos si el cliente recogerá por Shalom. Se guardan solos y quedan
-          listos para crear la guía, aunque el comprobante llegue después.
-        </p>
-        {/* El guardado ocurre solo, así que tiene que VERSE: una escritura
-            silenciosa que falla es indistinguible de una que funcionó, y eso es
-            justo lo que hacía perder el DNI sin que nadie se enterara. */}
-        {(shalomSaving || shalomSaveError || shalomSaved.document || shalomSaved.terminalId) && (
-          <p
-            className={cn(
-              "mt-1 text-xs font-medium",
-              shalomSaveError ? "text-red-600" : shalomSaving ? "text-slate-500" : "text-emerald-600",
-            )}
-            aria-live="polite"
-          >
-            {shalomSaveError
-              ? `No se pudo guardar: ${shalomSaveError}`
-              : shalomSaving
-                ? "Guardando…"
-                : `✓ Guardado${shalomSaved.document ? ` · ${shalomSaved.document}` : ""}`}
-          </p>
+      {/* Con la imagen elegida y sitio de sobra, el comprobante se queda a la
+          derecha y fijo mientras se baja por los campos: cotejar es mirar la
+          imagen y el campo a la vez, no de memoria. Sin sitio, va dentro del
+          paso 2. */}
+      <div
+        className={cn(
+          preview && hasKinds && "@2xl:grid @2xl:grid-cols-[minmax(0,1fr)_15rem] @2xl:items-start @2xl:gap-6",
         )}
-        <div className="mt-2 flex flex-wrap gap-2">
-          <select
-            value={shalomDocType}
-            onChange={(e) => {
-              shalomTouched.current = true;
-              setShalomDocType(e.target.value as ShalomDocumentType);
-              setShalomDoc("");
-              setDocumentNotice(null);
-            }}
-            className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+      >
+        {/* Los tres pasos en una escalera vertical: disco con su número (o el
+            visto cuando está hecho), título y su estado en chapa. Antes había
+            además una barra de pasos arriba que repetía los mismos tres títulos. */}
+        <ol className="min-w-0">
+          <Step
+            n={1}
+            last={!hasKinds}
+            done={Boolean(shalomGuide) || step1Saved}
+            title="DNI y agencia Shalom"
+            badge={
+              shalomGuide ? (
+                <Badge>Ya en la guía</Badge>
+              ) : shalomSaving ? (
+                <Badge>Guardando…</Badge>
+              ) : shalomSaveError ? (
+                <Badge tone="crit">Sin guardar</Badge>
+              ) : step1Saved ? (
+                <Badge tone="ok">Guardado</Badge>
+              ) : (
+                <Badge>Opcional</Badge>
+              )
+            }
+            help={
+              shalomGuide
+                ? undefined
+                : "Completa primero estos datos si el cliente recogerá por Shalom. Se guardan solos y quedan listos para crear la guía, aunque el comprobante llegue después."
+            }
           >
-            <option value="DNI">DNI</option>
-            <option value="RUC">RUC</option>
-            <option value="CE">CE</option>
-          </select>
-          <div className="min-w-[260px] flex-1">
-            <div className="flex gap-2">
-              <input
-                value={shalomDoc}
-                onChange={(e) => changeDocument(e.target.value)}
-                // Al salir del campo, no en cada tecla: un DNI a medio escribir
-                // no es una decisión, y el servidor lo rechazaría igual.
-                onBlur={() => void persistShalomDraft({})}
-                inputMode={shalomDocType === "CE" ? "text" : "numeric"}
-                maxLength={shalomDocType === "DNI" ? 8 : shalomDocType === "RUC" ? 11 : 20}
-                placeholder={
-                  shalomDocType === "DNI"
-                    ? "DNI de 8 dígitos"
-                    : shalomDocType === "RUC"
-                      ? "RUC de 11 dígitos"
-                      : "Carné de extranjería"
-                }
-                aria-invalid={Boolean(shalomDocumentProblem)}
-                className={cn(
-                  "min-w-0 flex-1 rounded-lg border px-2 py-1.5 text-sm outline-none focus:ring-2",
-                  shalomDocumentProblem
-                    ? "border-red-300 focus:border-red-400 focus:ring-red-100"
-                    : shalomDoc
-                      ? "border-emerald-300 focus:border-emerald-400 focus:ring-emerald-100"
-                      : "border-slate-200 focus:border-brand-400 focus:ring-brand-100",
-                )}
-              />
-              <button
-                type="button"
-                onClick={validateDocument}
-                disabled={documentChecking || !shalomDoc.trim() || Boolean(shalomDocumentProblem)}
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-              >
-                {documentChecking ? "Validando…" : "Validar"}
-              </button>
-            </div>
-            {shalomDocumentProblem && (
-              <p className="mt-1 text-xs font-medium text-red-600">{shalomDocumentProblem}</p>
-            )}
-            {!shalomDocumentProblem && shalomDoc && !documentNotice && (
-              <p className="mt-1 text-xs font-medium text-emerald-600">
-                ✓ Formato válido
-              </p>
-            )}
-            {documentNotice && (
-              <p className="mt-1 text-xs text-slate-600">{documentNotice}</p>
-            )}
-          </div>
-        </div>
-        <div className="relative mt-2">
-          {shalomAgency ? (
-            <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-emerald-900">
-                  ✓ {shalomAgency.nombre}
+            {/* Datos de Shalom, adelantados y OPCIONALES (0073).
+                Van aquí porque quien registra el Yape acaba de hablar con la clienta y
+                tiene el DNI a mano; quien crea la guía suele ser otra persona en otro
+                momento, y hoy tiene que volver a pedirlo. Nada de esto condiciona el
+                pago: un cobro no puede quedarse esperando a un DNI. */}
+            {/* Con la guía ya creada estos datos dejan de ser un borrador: Shalom los
+                tiene, los imprimió en su rótulo y el paquete viaja con ellos.
+                Editarlos acá no cambia nada allá — solo hace que Kapta y el rótulo
+                físico digan cosas distintas, que es peor que no poder tocarlos. La
+                salida real es anular la guía y crear otra, y eso se dice. */}
+            {shalomGuide ? (
+              <>
+                <dl className="grid gap-x-6 gap-y-3 @md:grid-cols-2">
+                  <div className="min-w-0">
+                    <dt className="text-[13px] leading-5 text-ink-500">Documento</dt>
+                    <dd className="mt-0.5 text-sm font-medium tabular-nums text-ink-900">
+                      {shalomDoc ? `${shalomDocType} ${shalomDoc}` : "—"}
+                    </dd>
+                  </div>
+                  <div className="min-w-0">
+                    <dt className="text-[13px] leading-5 text-ink-500">Agencia de destino</dt>
+                    <dd className="mt-0.5 break-words text-sm font-medium text-ink-900">{shalomAgency?.nombre ?? "—"}</dd>
+                  </div>
+                </dl>
+                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-600">
+                  <span>Guía</span>
+                  {shalomGuide.guideCode && (
+                    <span className="select-all font-mono font-semibold text-ink-900">N° {shalomGuide.guideCode}</span>
+                  )}
+                  {shalomGuide.codigo && (
+                    <span className="rounded bg-wash px-1.5 py-0.5 font-mono text-xs font-medium text-ink-700 ring-1 ring-inset ring-line">
+                      {shalomGuide.codigo}
+                    </span>
+                  )}
+                  <span className="text-ink-500">
+                    · {operationalLabel(shalomGuide.pickupState ?? shalomGuide.deliveryStatus)}
+                  </span>
                 </p>
-                <p className="truncate text-xs text-emerald-700">
-                  {/* La agencia rescatada del borrador solo trae id y nombre: sin
-                      esto quedaría un "#612 · " con el separador colgando. */}
-                  {[
-                    `#${shalomAgency.id}`,
-                    shalomAgency.departamento,
-                    shalomAgency.provincia,
-                    shalomAgency.distrito,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
+                <p className="max-w-[68ch] text-[13px] leading-5 text-ink-500">
+                  El destinatario y el destino ya viajan impresos en el rótulo de Shalom. Para cambiarlos
+                  hay que anular esa guía —desde «Salidas y guías»— y crear otra.
                 </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  shalomTouched.current = true;
-                  setShalomAgency(null);
-                  setShalomAgencyQuery("");
-                  // Quitarla también se guarda: si no, recargar la resucitaría.
-                  void persistShalomDraft({ terminalId: null, terminalName: null });
-                }}
-                className="shrink-0 text-xs font-medium text-emerald-800 underline"
-              >
-                Cambiar
-              </button>
-            </div>
-          ) : (
-            <>
-              <input
-                value={shalomAgencyQuery}
-                onChange={(e) => setShalomAgencyQuery(e.target.value)}
-                placeholder="Buscar agencia por ciudad, distrito o nombre"
-                autoComplete="off"
-                role="combobox"
-                aria-expanded={shalomAgencies.length > 0}
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
-              />
-              {agencySearching && <p className="mt-1 text-xs text-slate-400">Buscando agencias…</p>}
-              {agencyError && <p className="mt-1 text-xs font-medium text-red-600">{agencyError}</p>}
-              {!agencySearching && !agencyError && shalomAgencyQuery.trim().length >= 2 && shalomAgencies.length === 0 && (
-                <p className="mt-1 text-xs text-slate-500">No encontramos agencias con ese texto.</p>
-              )}
-              {shalomAgencies.length > 0 && (
-                <ul
-                  role="listbox"
-                  className="absolute z-30 mt-1 max-h-52 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-xl shadow-slate-900/10"
+              </>
+            ) : (
+              <>
+                {/* El guardado ocurre solo, así que tiene que VERSE: una escritura
+                    silenciosa que falla es indistinguible de una que funcionó, y eso es
+                    justo lo que hacía perder el DNI sin que nadie se enterara. La chapa
+                    del paso dice en qué quedó; esta línea lo anuncia al lector. */}
+                <p
+                  className={cn(
+                    "text-[13px] font-medium empty:hidden",
+                    shalomSaveError ? "text-crit-fg" : shalomSaving ? "text-ink-500" : "text-ok-fg",
+                  )}
+                  aria-live="polite"
                 >
-                  {shalomAgencies.map((agency) => (
-                    <li key={agency.id} role="option" aria-selected="false">
-                      <button
-                        type="button"
+                  {shalomSaveError
+                    ? `No se pudo guardar: ${shalomSaveError}`
+                    : shalomSaving
+                      ? "Guardando…"
+                      : step1Saved
+                        ? `Guardado${shalomSaved.document ? ` · ${shalomSaved.document}` : ""}`
+                        : ""}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <select
+                    value={shalomDocType}
+                    onChange={(e) => {
+                      shalomTouched.current = true;
+                      setShalomDocType(e.target.value as ShalomDocumentType);
+                      setShalomDoc("");
+                      setDocumentNotice(null);
+                    }}
+                    aria-label="Tipo de documento"
+                    className={cn(FIELD_BOX, "h-9 w-24 px-2.5 pointer-coarse:h-11")}
+                  >
+                    <option value="DNI">DNI</option>
+                    <option value="RUC">RUC</option>
+                    <option value="CE">CE</option>
+                  </select>
+                  <div className="min-w-[15rem] flex-1">
+                    <div className="flex gap-2">
+                      <input
+                        value={shalomDoc}
+                        onChange={(e) => changeDocument(e.target.value)}
+                        // Al salir del campo, no en cada tecla: un DNI a medio escribir
+                        // no es una decisión, y el servidor lo rechazaría igual.
+                        onBlur={() => void persistShalomDraft({})}
+                        inputMode={shalomDocType === "CE" ? "text" : "numeric"}
+                        maxLength={shalomDocType === "DNI" ? 8 : shalomDocType === "RUC" ? 11 : 20}
+                        placeholder={
+                          shalomDocType === "DNI"
+                            ? "DNI de 8 dígitos"
+                            : shalomDocType === "RUC"
+                              ? "RUC de 11 dígitos"
+                              : "Carné de extranjería"
+                        }
+                        aria-label="Número de documento"
+                        aria-invalid={Boolean(shalomDocumentProblem)}
+                        className={cn(FIELD_BOX, "h-9 min-w-0 flex-1 px-3 tabular-nums pointer-coarse:h-11")}
+                      />
+                      <OpsButton
+                        onClick={validateDocument}
+                        disabled={documentChecking || !shalomDoc.trim() || Boolean(shalomDocumentProblem)}
+                        className="pointer-coarse:h-11"
+                      >
+                        {documentChecking ? "Validando…" : "Validar"}
+                      </OpsButton>
+                    </div>
+                    {shalomDocumentProblem && (
+                      <p className="mt-1.5 text-[13px] font-medium text-crit-fg">{shalomDocumentProblem}</p>
+                    )}
+                    {!shalomDocumentProblem && shalomDoc && !documentNotice && (
+                      <p className="mt-1.5 flex items-center gap-1 text-[13px] font-medium text-ok-fg">
+                        <IconCheck aria-hidden className="size-3.5" />
+                        Formato válido
+                      </p>
+                    )}
+                    {documentNotice && <p className="mt-1.5 text-[13px] leading-5 text-ink-600">{documentNotice}</p>}
+                  </div>
+                </div>
+                <div className="relative">
+                  {shalomAgency ? (
+                    <div className="flex items-center justify-between gap-3 rounded-lg bg-ok-wash px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="flex items-center gap-1.5 text-sm font-semibold text-ink-900">
+                          <IconCheck aria-hidden className="size-4 shrink-0 text-ok-fg" />
+                          <span className="truncate">{shalomAgency.nombre}</span>
+                        </p>
+                        <p className="truncate pl-[22px] text-[13px] text-ink-600">
+                          {/* La agencia rescatada del borrador solo trae id y nombre: sin
+                              esto quedaría un "#612 · " con el separador colgando. */}
+                          {[
+                            `#${shalomAgency.id}`,
+                            shalomAgency.departamento,
+                            shalomAgency.provincia,
+                            shalomAgency.distrito,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </p>
+                      </div>
+                      <OpsButton
+                        size="sm"
+                        variant="ghost"
                         onClick={() => {
                           shalomTouched.current = true;
-                          setShalomAgency(agency);
-                          setShalomAgencyQuery(agency.nombre);
-                          setShalomAgencies([]);
-                          // Elegirla ES la decisión: se guarda aquí, no al pagar.
-                          void persistShalomDraft({
-                            terminalId: agency.id,
-                            terminalName: agency.nombre,
-                          });
+                          setShalomAgency(null);
+                          setShalomAgencyQuery("");
+                          // Quitarla también se guarda: si no, recargar la resucitaría.
+                          void persistShalomDraft({ terminalId: null, terminalName: null });
                         }}
-                        className="block w-full rounded-lg px-3 py-2 text-left hover:bg-brand-50"
+                        className="shrink-0 pointer-coarse:h-11"
                       >
-                        <span className="text-sm font-semibold text-slate-800">{agency.nombre}</span>{" "}
-                        <span className="text-xs text-slate-400">#{agency.id}</span>
-                        <span className="block text-xs text-slate-500">
-                          {[agency.departamento, agency.provincia, agency.distrito].filter(Boolean).join(" · ")}
-                        </span>
-                        {agency.direccion && (
-                          <span className="block truncate text-[11px] text-slate-400">{agency.direccion}</span>
+                        Cambiar
+                      </OpsButton>
+                    </div>
+                  ) : (
+                    <>
+                      <input
+                        value={shalomAgencyQuery}
+                        onChange={(e) => setShalomAgencyQuery(e.target.value)}
+                        placeholder="Buscar agencia por ciudad, distrito o nombre"
+                        aria-label="Agencia Shalom de destino"
+                        autoComplete="off"
+                        role="combobox"
+                        aria-expanded={shalomAgencies.length > 0}
+                        className={cn(FIELD, "pointer-coarse:h-11")}
+                      />
+                      {agencySearching && <p className="mt-1.5 text-[13px] text-ink-500">Buscando agencias…</p>}
+                      {agencyError && <p className="mt-1.5 text-[13px] font-medium text-crit-fg">{agencyError}</p>}
+                      {!agencySearching && !agencyError && shalomAgencyQuery.trim().length >= 2 && shalomAgencies.length === 0 && (
+                        <p className="mt-1.5 text-[13px] text-ink-500">No encontramos agencias con ese texto.</p>
+                      )}
+                      {shalomAgencies.length > 0 && (
+                        <ul
+                          role="listbox"
+                          className="absolute z-30 mt-1 max-h-52 w-full overflow-y-auto rounded-lg bg-white p-1 shadow-pop"
+                        >
+                          {shalomAgencies.map((agency) => (
+                            <li key={agency.id} role="option" aria-selected="false">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  shalomTouched.current = true;
+                                  setShalomAgency(agency);
+                                  setShalomAgencyQuery(agency.nombre);
+                                  setShalomAgencies([]);
+                                  // Elegirla ES la decisión: se guarda aquí, no al pagar.
+                                  void persistShalomDraft({
+                                    terminalId: agency.id,
+                                    terminalName: agency.nombre,
+                                  });
+                                }}
+                                className="block w-full rounded-md px-3 py-2 text-left transition-colors hover:bg-wash"
+                              >
+                                <span className="text-sm font-semibold text-ink-900">{agency.nombre}</span>{" "}
+                                <span className="text-xs tabular-nums text-ink-500">#{agency.id}</span>
+                                <span className="block text-[13px] text-ink-600">
+                                  {[agency.departamento, agency.provincia, agency.distrito].filter(Boolean).join(" · ")}
+                                </span>
+                                {agency.direccion && (
+                                  <span className="block truncate text-xs text-ink-500">{agency.direccion}</span>
+                                )}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+          </Step>
+
+          {hasKinds && (
+            <>
+              <Step
+                n={2}
+                done={Boolean(file)}
+                title="Comprobante de Yape"
+                badge={readNotice ? <Badge tone="ok">Leído</Badge> : file ? <Badge>Imagen cargada</Badge> : undefined}
+                help="Pega o sube la imagen. Permanecerá grande y visible mientras cotejas la lectura."
+              >
+                <VoucherPicker file={file} preview={preview} onPick={pickVoucher} />
+                {file && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-wash px-4 py-3">
+                    <div className="min-w-0 flex-1 basis-60">
+                      <p className="text-sm font-semibold text-ink-900">Leer datos del comprobante</p>
+                      <p className="text-[13px] leading-5 text-ink-600">
+                        Obtiene monto, operación, fecha y cuenta receptora. Tú confirmas contra la imagen.
+                      </p>
+                    </div>
+                    {/* El paso que toca lleva el azul: antes de leer es «Leer y
+                        rellenar»; después, «Registrar». Un solo principal a la vez. */}
+                    <OpsButton
+                      variant={readNotice ? "secondary" : "primary"}
+                      onClick={readAndPrefill}
+                      disabled={reading || busy || pending}
+                      className="shrink-0 pointer-coarse:h-11"
+                    >
+                      {reading ? "Leyendo imagen…" : readNotice ? "Volver a leer" : "Leer y rellenar"}
+                    </OpsButton>
+                    {readNotice && (
+                      <p className="flex basis-full items-start gap-1.5 text-[13px] font-medium leading-5 text-ok-fg">
+                        <IconCheck aria-hidden className="mt-0.5 size-4 shrink-0" />
+                        <span>{readNotice}</span>
+                      </p>
+                    )}
+                    {readWarning && (
+                      <p className="flex basis-full items-start gap-1.5 text-[13px] font-medium leading-5 text-warn-fg">
+                        <IconAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
+                        <span>{readWarning}</span>
+                      </p>
+                    )}
+                  </div>
+                )}
+              </Step>
+
+              <Step
+                n={3}
+                last
+                done={Boolean(readNotice)}
+                title="Revisa y registra"
+                badge={
+                  progress.registeredRemaining !== null ? (
+                    <Badge className="tabular-nums">Saldo por cargar: S/ {progress.registeredRemaining.toFixed(2)}</Badge>
+                  ) : undefined
+                }
+                help={
+                  file
+                    ? "Contrasta los datos rellenados con el comprobante."
+                    : "También puedes completar los datos manualmente si no tienes una imagen."
+                }
+              >
+                {availableKinds.length === 1 ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-wash px-4 py-2.5">
+                    <p className="text-[13px] text-ink-600">
+                      Tipo de este pago: <strong className="font-semibold text-ink-900">Diferencia</strong>
+                    </p>
+                    <span className="text-[13px] text-ink-600">El adelanto ya fue registrado</span>
+                  </div>
+                ) : (
+                  // El control segmentado de DESIGN.md: pista en `wash` y la
+                  // opción elegida en blanco con sombra de control.
+                  <div
+                    className="grid grid-cols-2 gap-0.5 rounded-lg bg-wash p-0.5 ring-1 ring-inset ring-line"
+                    role="radiogroup"
+                    aria-label="Tipo del primer pago"
+                  >
+                    {availableKinds.map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        role="radio"
+                        aria-checked={kind === value}
+                        onClick={() => setKind(value)}
+                        className={cn(
+                          "h-8 min-w-0 rounded-md px-2 text-[13px] font-semibold transition-colors pointer-coarse:h-11",
+                          kind === value
+                            ? "bg-white text-ink-900 shadow-control ring-1 ring-line"
+                            : "text-ink-600 hover:text-ink-900",
                         )}
+                      >
+                        {value === "adelanto" ? "Adelanto" : "Pago total"}
                       </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+                    ))}
+                  </div>
+                )}
+
+                {/* Su propio `@container`: al lado de la imagen hay menos sitio
+                    que a todo el ancho, y los campos se acomodan a lo que tienen. */}
+                <div className="@container space-y-3">
+                  <div className="grid gap-3 @md:grid-cols-2 @2xl:grid-cols-3">
+                    <label className={LABEL}>
+                      Monto
+                      <input
+                        value={amount}
+                        onChange={(e) => setAmount(e.target.value)}
+                        inputMode="decimal"
+                        placeholder={
+                          kind === "adelanto"
+                            ? `Mínimo S/ ${SHALOM_MINIMUM_ADVANCE.toFixed(0)}`
+                            : progress.registeredRemaining !== null
+                              ? `Saldo S/ ${progress.registeredRemaining.toFixed(2)}`
+                              : "Monto leído"
+                        }
+                        className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11")}
+                      />
+                    </label>
+                    <label className={LABEL}>
+                      Nº de operación
+                      <input
+                        value={operation}
+                        onChange={(e) => setOperation(e.target.value)}
+                        placeholder="Número del Yape"
+                        className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11")}
+                      />
+                    </label>
+                    <label className={LABEL}>
+                      Fecha y hora
+                      <input
+                        type="datetime-local"
+                        value={paidAt}
+                        onChange={(e) => setPaidAt(e.target.value)}
+                        className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11")}
+                      />
+                    </label>
+                  </div>
+                  <RecipientAccountCheck reading={recipientCheck} accounts={accounts} />
+                </div>
+              </Step>
             </>
           )}
-        </div>
-      </details>
-      )}
+        </ol>
 
-      {availableKinds.length > 0 ? (
-        <>
-          <section className="space-y-3">
-            <div>
-              <h4 className="text-sm font-semibold text-slate-900">2. Comprobante de Yape</h4>
-              <p className="mt-0.5 text-xs text-slate-500">
-                Pega o sube la imagen. Permanecerá grande y visible mientras cotejas la lectura.
-              </p>
-            </div>
-            <VoucherPicker file={file} onPick={pickVoucher} />
-            {file && (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-sky-50 px-3 py-3">
-                <div>
-                  <p className="text-sm font-semibold text-sky-950">Leer datos del comprobante</p>
-                  <p className="text-xs text-sky-700">
-                    Obtiene monto, operación, fecha y cuenta receptora. Tú confirmas contra la imagen.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={readAndPrefill}
-                  disabled={reading || busy || pending}
-                  className="rounded-lg bg-sky-700 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-800 focus:outline-none focus:ring-2 focus:ring-sky-300 disabled:cursor-wait disabled:opacity-50"
-                >
-                  {reading ? "Leyendo imagen…" : readNotice ? "Volver a leer" : "Leer y rellenar"}
-                </button>
-                {readNotice && (
-                  <p className="basis-full rounded-lg bg-white/80 px-2.5 py-2 text-xs font-medium text-emerald-700">
-                    ✓ {readNotice}
-                  </p>
-                )}
-                {readWarning && (
-                  <p className="basis-full rounded-lg bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-800">
-                    ⚠ {readWarning}
-                  </p>
-                )}
-              </div>
-            )}
-          </section>
-
-          <section className="space-y-3 border-t border-slate-200 pt-4">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <h4 className="text-sm font-semibold text-slate-900">3. Revisa y registra</h4>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  {file
-                    ? "Contrasta los datos rellenados con el comprobante visible arriba."
-                    : "También puedes completar los datos manualmente si no tienes una imagen."}
-                </p>
-              </div>
-              {progress.registeredRemaining !== null && (
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
-                  Saldo por cargar: S/ {progress.registeredRemaining.toFixed(2)}
-                </span>
-              )}
-            </div>
-
-            {availableKinds.length === 1 ? (
-              <div className="flex items-center justify-between rounded-lg bg-indigo-50 px-3 py-2">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-indigo-600">Tipo de este pago</p>
-                  <p className="text-sm font-semibold text-indigo-950">Diferencia</p>
-                </div>
-                <span className="text-xs text-indigo-700">El adelanto ya fue registrado</span>
-              </div>
-            ) : (
-              <div
-                className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1"
-                role="radiogroup"
-                aria-label="Tipo del primer pago"
-              >
-                {availableKinds.map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    role="radio"
-                    aria-checked={kind === value}
-                    onClick={() => setKind(value)}
-                    className={cn(
-                      "min-w-0 rounded-md px-2 py-2 text-xs font-semibold transition focus:outline-none focus:ring-2 focus:ring-brand-300",
-                      kind === value
-                        ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
-                        : "text-slate-500 hover:text-slate-800",
-                    )}
-                  >
-                    {value === "adelanto" ? "Adelanto" : "Pago total"}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              <label className="space-y-1 text-xs font-medium text-slate-600">
-                <span>Monto</span>
-                <input
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  inputMode="decimal"
-                  placeholder={
-                    kind === "adelanto"
-                      ? `Mínimo S/ ${SHALOM_MINIMUM_ADVANCE.toFixed(0)}`
-                      : progress.registeredRemaining !== null
-                        ? `Saldo S/ ${progress.registeredRemaining.toFixed(2)}`
-                        : "Monto leído"
-                  }
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
-                />
-              </label>
-              <label className="space-y-1 text-xs font-medium text-slate-600">
-                <span>Nº de operación</span>
-                <input
-                  value={operation}
-                  onChange={(e) => setOperation(e.target.value)}
-                  placeholder="Número del Yape"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
-                />
-              </label>
-              <label className="space-y-1 text-xs font-medium text-slate-600">
-                <span>Fecha y hora</span>
-                <input
-                  type="datetime-local"
-                  value={paidAt}
-                  onChange={(e) => setPaidAt(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
-                />
-              </label>
-            </div>
-            <RecipientAccountCheck reading={recipientCheck} accounts={accounts} />
-          </section>
-
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
-            <p className="max-w-md text-xs text-slate-500">
-              La lectura rellena datos, pero no valida el ingreso. El pago quedará pendiente de revisión.
-            </p>
-            <button
-              disabled={busy || reading || pending || (!file && !operation.trim())}
-              onClick={submit}
-              className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-300 disabled:opacity-50"
-            >
-              {busy ? "Registrando…" : `Registrar ${kind === "total" ? "pago total" : kind}`}
-            </button>
+        {preview && hasKinds && (
+          <div className="sticky top-[calc(var(--ficha-head,9rem)_+_1rem)] hidden space-y-1.5 @2xl:block">
+            <VoucherPreview src={preview} tall />
+            <p className="text-xs text-ink-500">Haz clic en la imagen para ampliarla.</p>
           </div>
-          {!file && !operation.trim() && (
-            <p className="text-xs text-slate-400">
+        )}
+      </div>
+
+      {hasKinds ? (
+        <div className={cn(CARD_ZONE, "flex flex-wrap items-center justify-between gap-3")}>
+          <p className="max-w-md text-[13px] leading-5 text-ink-500">
+            La lectura rellena datos, pero no valida el ingreso. El pago quedará pendiente de revisión.
+          </p>
+          <OpsButton
+            variant={file && !readNotice ? "secondary" : "primary"}
+            disabled={busy || reading || pending || !canRegisterNow}
+            onClick={submit}
+            className="pointer-coarse:h-11"
+          >
+            {busy ? "Registrando…" : `Registrar ${kind === "total" ? "pago total" : kind}`}
+          </OpsButton>
+          {!canRegisterNow && (
+            <p className="basis-full text-[13px] text-ink-500">
               Elige la imagen del Yape, o escribe el nº de operación si lo registrarás manualmente.
             </p>
           )}
-        </>
-      ) : (
-        <div className="rounded-lg bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
-          <p className="font-semibold">✓ El monto cargado ya cubre el total del pedido.</p>
-          <p className="mt-0.5 text-xs">No corresponde registrar otro comprobante mientras estos pagos sigan vigentes.</p>
         </div>
+      ) : (
+        <Banner tone="ok" title="El monto cargado ya cubre el total del pedido.">
+          No corresponde registrar otro comprobante mientras estos pagos sigan vigentes.
+        </Banner>
       )}
     </div>
+  );
+}
+
+/**
+ * Un paso del registro: el disco con su número (o el visto cuando está hecho,
+ * como el recorrido de la ficha), el título con su estado en chapa, la ayuda y
+ * lo suyo debajo. La línea que baja al siguiente paso se pinta en tinta cuando
+ * este ya está hecho.
+ */
+function Step({
+  n,
+  title,
+  done,
+  badge,
+  help,
+  last = false,
+  children,
+}: {
+  n: number;
+  title: string;
+  done: boolean;
+  badge?: ReactNode;
+  help?: string;
+  last?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <li className={cn("relative pl-9", !last && "pb-6")}>
+      {!last && (
+        <span
+          aria-hidden="true"
+          className={cn("absolute bottom-0 left-[11px] top-7 w-px", done ? "bg-ink-500" : "bg-line-strong")}
+        />
+      )}
+      <span
+        aria-hidden="true"
+        className={cn(
+          "absolute left-0 top-0 grid size-6 place-items-center rounded-full text-xs font-semibold tabular-nums",
+          done ? "bg-ink-900 text-white" : "bg-white text-ink-600 ring-1 ring-inset ring-line-strong",
+        )}
+      >
+        {done ? <IconCheck className="size-3.5" strokeWidth={2.6} /> : n}
+      </span>
+      <div className="flex min-h-6 flex-wrap items-center gap-x-2 gap-y-1">
+        <h5 className="text-sm font-semibold text-ink-900">
+          <span className="sr-only">Paso {n}: </span>
+          {title}
+          {done && <span className="sr-only"> (hecho)</span>}
+        </h5>
+        {badge}
+      </div>
+      {help && <p className="mt-0.5 max-w-[68ch] text-[13px] leading-5 text-ink-500">{help}</p>}
+      <div className="mt-3 space-y-3">{children}</div>
+    </li>
   );
 }
 
@@ -2075,97 +2327,103 @@ function KeySection({
   }
 
   return (
-    <div className={cn("space-y-2", !embedded && "rounded-lg border border-slate-200 p-3")}>
+    <div className={cn("space-y-3", !embedded && "rounded-lg p-4 ring-1 ring-inset ring-line")}>
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-sky-900">
-          Credencial de recojo Shalom
-        </p>
-        <p className="mt-0.5 text-xs text-slate-500">
+        <h4 className="text-sm font-semibold text-ink-900">Credencial de recojo Shalom</h4>
+        <p className="mt-0.5 max-w-[68ch] text-[13px] leading-5 text-ink-500">
           Pertenece a la salida Shalom. El pago completo controla cuándo puede mostrarse y entregarse.
         </p>
       </div>
 
       {!panel.hasKey ? (
         panel.canManageKey ? (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <input
               value={newKey}
               onChange={(e) => setNewKey(e.target.value)}
               placeholder="Clave emitida por Shalom"
-              className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+              aria-label="Clave emitida por Shalom"
+              autoComplete="off"
+              className={cn(FIELD_BOX, "h-9 min-w-48 flex-1 px-3 font-mono pointer-coarse:h-11")}
             />
-            <button
+            <OpsButton
               disabled={pending || !newKey.trim()}
               onClick={() => {
                 onSetKey(newKey);
                 setNewKey("");
               }}
-              className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              className="pointer-coarse:h-11"
             >
               Registrar clave
-            </button>
+            </OpsButton>
           </div>
         ) : (
-          <p className="text-sm text-slate-400">Todavía no se ha registrado la clave.</p>
+          <p className="text-[13px] text-ink-500">Todavía no se ha registrado la clave.</p>
         )
       ) : (
         <>
           {!panel.canReveal && (
-            <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              🔒 Clave bloqueada. {panel.blockers}
-            </p>
+            <Banner tone="warn" title="Clave bloqueada">
+              {panel.blockers}
+            </Banner>
           )}
           {panel.canViewKey ? (
             <div className="space-y-2">
               {revealed ? (
-                <p className="rounded-lg bg-slate-900 px-3 py-2 font-mono text-lg tracking-widest text-white">
+                // Sin fondo oscuro: este mundo no tiene tema oscuro parcial. La
+                // clave se lee por el tamaño y la monoespaciada, y se copia de un clic.
+                <p className="select-all rounded-md bg-wash px-3 py-2 font-mono text-lg font-semibold tracking-widest text-ink-900 ring-1 ring-inset ring-line">
                   {revealed}
                 </p>
               ) : (
                 <div className="flex flex-wrap items-center gap-2">
-                  <button
+                  <OpsButton
+                    variant="primary"
                     disabled={busy || !panel.canReveal}
                     onClick={() => reveal(false)}
-                    className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                    className="pointer-coarse:h-11"
                   >
                     Mostrar clave
-                  </button>
+                  </OpsButton>
                   {!panel.canReveal && panel.canOverride && (
                     <>
                       <input
                         value={reason}
                         onChange={(e) => setReason(e.target.value)}
                         placeholder="Motivo de la excepción (obligatorio)"
-                        className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                        aria-label="Motivo de la excepción"
+                        className={cn(FIELD_BOX, "h-9 min-w-48 flex-1 px-3 pointer-coarse:h-11")}
                       />
-                      <button
+                      <OpsButton
+                        variant="danger"
                         disabled={busy || !reason.trim()}
                         onClick={() => reveal(true)}
-                        className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+                        className="pointer-coarse:h-11"
                       >
                         Mostrar como excepción
-                      </button>
+                      </OpsButton>
                     </>
                   )}
                 </div>
               )}
-              <p className="text-xs text-slate-400">
+              <p className="text-[13px] leading-5 text-ink-500">
                 Cada visualización queda registrada con tu usuario, la fecha y el estado de los
                 pagos en ese momento.
               </p>
             </div>
           ) : (
-            <p className="text-sm text-slate-400">
+            <p className="text-[13px] text-ink-500">
               Tu rol no permite ver la clave; solicítala a un administrador.
             </p>
           )}
 
           {panel.canViewKey && panel.canReveal && (
-            <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-2">
+            <div className="flex flex-wrap gap-2 pt-1">
               <select
                 value={channel}
                 onChange={(e) => setChannel(e.target.value)}
-                className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                aria-label="Canal de entrega"
+                className={cn(FIELD_BOX, "h-9 w-auto px-2.5 pointer-coarse:h-11")}
               >
                 <option value="whatsapp">WhatsApp</option>
                 <option value="llamada">Llamada</option>
@@ -2176,28 +2434,29 @@ function KeySection({
                 value={shareNote}
                 onChange={(e) => setShareNote(e.target.value)}
                 placeholder="Observación (opcional)"
-                className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                aria-label="Observación de la entrega"
+                className={cn(FIELD_BOX, "h-9 min-w-48 flex-1 px-3 pointer-coarse:h-11")}
               />
-              <button
+              <OpsButton
                 disabled={pending}
                 onClick={() => {
                   onShare(channel, shareNote);
                   setShareNote("");
                 }}
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                className="pointer-coarse:h-11"
               >
                 Registrar entrega al cliente
-              </button>
+              </OpsButton>
             </div>
           )}
         </>
       )}
 
       {panel.shares.length > 0 && (
-        <ul className="space-y-1 border-t border-slate-100 pt-2 text-xs text-slate-500">
+        <ul className="space-y-1 text-[13px] leading-5 text-ink-600">
           {panel.shares.map((s) => (
             <li key={s.id}>
-              Enviada por {s.channel} el {fmtDateTime(s.shared_at)}
+              Enviada por {s.channel} el <span className="tabular-nums">{fmtDateTime(s.shared_at)}</span>
               {s.note ? ` — ${s.note}` : ""}
             </li>
           ))}
@@ -2205,16 +2464,20 @@ function KeySection({
       )}
 
       {panel.views.length > 0 && (
-        <details className="border-t border-slate-100 pt-2 text-xs text-slate-500">
-          <summary className="cursor-pointer">
+        <details className="group text-[13px] text-ink-600">
+          <summary className="inline-flex min-h-8 cursor-pointer list-none items-center gap-1.5 font-medium hover:text-ink-900 pointer-coarse:min-h-11 [&::-webkit-details-marker]:hidden">
+            <IconChevronDown
+              aria-hidden
+              className="size-4 -rotate-90 text-ink-500 transition-transform duration-150 group-open:rotate-0 motion-reduce:transition-none"
+            />
             Consultas de la clave ({panel.views.length})
           </summary>
-          <ul className="mt-1 space-y-1">
+          <ul className="mt-1 space-y-1 pl-5.5">
             {panel.views.map((v) => (
-              <li key={v.id}>
-                {fmtDateTime(v.viewed_at)}
-                {v.override ? " · EXCEPCIÓN" : ""}
-                {v.reason ? ` — ${v.reason}` : ""}
+              <li key={v.id} className="flex flex-wrap items-center gap-x-2">
+                <span className="tabular-nums">{fmtDateTime(v.viewed_at)}</span>
+                {v.override && <Badge tone="crit">Excepción</Badge>}
+                {v.reason ? <span>— {v.reason}</span> : null}
               </li>
             ))}
           </ul>

@@ -686,6 +686,7 @@ export function OrdersMasterBoard({
               {multiStore && (
                 <FacetPill
                   label="Tienda"
+                  allLabel="Todas las tiendas"
                   options={stores.map((s) => ({ value: s.id, label: s.name }))}
                   selected={filters.stores}
                   onChange={(next) => patch({ stores: next })}
@@ -693,12 +694,14 @@ export function OrdersMasterBoard({
               )}
               <FacetPill
                 label="Estado operativo"
+                allLabel="Todos los estados"
                 options={facets.operational.map((v) => ({ value: v, label: v }))}
                 selected={filters.operationalStatuses}
                 onChange={(operationalStatuses) => patch({ operationalStatuses })}
               />
               <FacetPill
                 label="Courier"
+                allLabel="Todos los couriers"
                 options={facets.courier.map((v) => ({ value: v, label: cap(v) }))}
                 selected={filters.couriers}
                 onChange={(couriers) => patch({ couriers })}
@@ -708,30 +711,35 @@ export function OrdersMasterBoard({
                   interesa comprobar que no hay ninguno. */}
               <FacetPill
                 label="Cobro del courier"
+                allLabel="Todos los cobros"
                 options={PAYMENT_CHECK_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
                 selected={filters.paymentChecks}
                 onChange={(paymentChecks) => patch({ paymentChecks })}
               />
               <FacetPill
                 label="Región"
+                allLabel="Todas las regiones"
                 options={facets.region.map((v) => ({ value: v, label: cap(v) }))}
                 selected={filters.regions}
                 onChange={(regions) => patch({ regions })}
               />
               <FacetPill
                 label="Provincia"
+                allLabel="Todas las provincias"
                 options={facets.province.map((v) => ({ value: v, label: cap(v) }))}
                 selected={filters.provinces}
                 onChange={(provinces) => patch({ provinces })}
               />
               <FacetPill
                 label="Distrito"
+                allLabel="Todos los distritos"
                 options={facets.district.map((v) => ({ value: v, label: cap(v) }))}
                 selected={filters.districts}
                 onChange={(districts) => patch({ districts })}
               />
               <FacetPill
                 label="Cobertura"
+                allLabel="Todas las coberturas"
                 options={facets.coverage.map((v) => ({
                   value: v,
                   label: ORDER_COVERAGE_LABEL[v as OrderCoverage] ?? v,
@@ -742,6 +750,7 @@ export function OrdersMasterBoard({
               {facets.pickup.length > 0 && (
                 <FacetPill
                   label="Agencia"
+                  allLabel="Todos los estados de agencia"
                   options={facets.pickup.map((v) => ({ value: v, label: v }))}
                   selected={filters.pickupStates}
                   onChange={(pickupStates) => patch({ pickupStates })}
@@ -754,6 +763,7 @@ export function OrdersMasterBoard({
               {view === "por_confirmar" && (
                 <FacetPill
                   label="Gestión"
+                  allLabel="Todos los días de gestión"
                   options={MANAGEMENT_DAY_STEPS.map((step) => ({
                     value: String(step),
                     label: managementDayLabel(String(step)),
@@ -991,11 +1001,17 @@ type FacetOption = { value: string; label: string; count?: number };
  */
 function FacetPill({
   label,
+  allLabel,
   options,
   selected,
   onChange,
 }: {
   label: string;
+  /**
+   * La casilla de arriba, la que dice que no hay filtro: «Todas las tiendas»,
+   * «Todos los couriers». Se escribe por filtro porque el género cambia.
+   */
+  allLabel: string;
   options: FacetOption[];
   selected: Set<string>;
   onChange: (next: Set<string>) => void;
@@ -1065,14 +1081,33 @@ function FacetPill({
               />
             </label>
           )}
+          {/* «TODAS» ARRIBA Y MARCADA MIENTRAS NO HAYA FILTRO. Sin nada marcado
+              el Master ya enseña todo, pero la hoja con las casillas vacías no lo
+              decía, y la reacción natural era marcarlas todas: eso es un filtro
+              puesto («Aurela +1») que además deja fuera la tienda que se cree
+              mañana. Marcarla quita el filtro; elegir una opción la desmarca.
+              Mientras se busca no sale: la lista es la de lo que se busca. */}
+          {!term && (
+            <div className="-mx-1 mb-1 border-b border-line pb-1">
+              <label className="flex min-h-9 cursor-pointer items-center gap-2.5 rounded-md px-2 text-sm font-medium text-ink-900 hover:bg-wash pointer-coarse:min-h-11">
+                <input
+                  type="checkbox"
+                  // Sin buscador, el foco entra por la primera casilla.
+                  autoFocus={safe.length <= 8}
+                  className={CHECKBOX}
+                  checked={selected.size === 0}
+                  onChange={() => onChange(new Set())}
+                />
+                <span className="min-w-0 flex-1 truncate">{allLabel}</span>
+              </label>
+            </div>
+          )}
           <ul className="-mx-1 grid max-h-72 gap-0.5 overflow-y-auto">
-            {shown.map((o, i) => (
+            {shown.map((o) => (
               <li key={o.value}>
                 <label className="flex min-h-9 cursor-pointer items-center gap-2.5 rounded-md px-2 text-sm text-ink-700 hover:bg-wash pointer-coarse:min-h-11">
                   <input
                     type="checkbox"
-                    // Sin buscador, el foco entra por la primera casilla.
-                    autoFocus={i === 0 && safe.length <= 8}
                     className={CHECKBOX}
                     checked={selected.has(o.value)}
                     onChange={() => toggle(o.value)}
@@ -1092,15 +1127,11 @@ function FacetPill({
               </li>
             )}
           </ul>
+          {/* «Quitar selección» vivía aquí; ahora lo hace «Todas», arriba. */}
           {selected.size > 0 && (
-            <div className="mt-3 flex items-center justify-between gap-2 border-t border-line pt-3">
-              <span className="text-[13px] tabular-nums text-ink-500">
-                {selected.size} {selected.size === 1 ? "elegido" : "elegidos"}
-              </span>
-              <OpsButton variant="ghost" size="sm" onClick={() => onChange(new Set())} className="pointer-coarse:h-11">
-                Quitar selección
-              </OpsButton>
-            </div>
+            <p className="mt-3 border-t border-line pt-3 text-[13px] tabular-nums text-ink-500">
+              {selected.size} {selected.size === 1 ? "elegido" : "elegidos"}
+            </p>
           )}
           </div>
         </Sheet>

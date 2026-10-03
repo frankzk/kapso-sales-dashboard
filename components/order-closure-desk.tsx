@@ -6,7 +6,7 @@ import type {
   ClosureActionKey,
 } from "@/app/dashboard/pedidos/actions";
 import { cn } from "@/components/ui";
-import { Badge, Banner, FIELD, OpsButton } from "@/components/ops-ui";
+import { Badge, Banner, CARD_ZONE, FIELD, OpsButton, SectionHead } from "@/components/ops-ui";
 import { macroSubstageLabel, type MacroSubstage } from "@/lib/order-macro-stage";
 import { outputDisplayCode } from "@/lib/shipment-output";
 import type { ShipmentRow } from "@/lib/types";
@@ -242,21 +242,17 @@ export function OrderClosureDesk({
 
   return (
     <section className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h3 className="text-base font-semibold leading-6 text-ink-900">Mesa de cierre</h3>
-            <Badge tone={stage === "finalizado" ? "ok" : openReasons.length ? "warn" : "neutral"} className="tabular-nums">
-              {stage === "finalizado"
-                ? "Cerrado"
-                : `${openReasons.length} pendiente${openReasons.length === 1 ? "" : "s"}`}
-            </Badge>
-          </div>
-          <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
-            Cada obligación se cierra con un hecho nuevo; el historial anterior no se modifica.
-          </p>
-        </div>
-      </div>
+      <SectionHead
+        title="Mesa de cierre"
+        badge={
+          <Badge tone={stage === "finalizado" ? "ok" : openReasons.length ? "warn" : "neutral"} className="tabular-nums">
+            {stage === "finalizado"
+              ? "Cerrado"
+              : `${openReasons.length} pendiente${openReasons.length === 1 ? "" : "s"}`}
+          </Badge>
+        }
+        help="Cada obligación se cierra con un hecho nuevo; el historial anterior no se modifica."
+      />
 
       {openReasons.length > 0 && (
         <div className="flex flex-wrap gap-1.5" aria-label="Obligaciones abiertas">
@@ -307,7 +303,8 @@ export function OrderClosureDesk({
       )}
 
       {selected && chosen && (
-        <div className="space-y-4 rounded-lg p-4 ring-1 ring-inset ring-line">
+        // El formulario de la acción elegida es una zona más de la tarjeta.
+        <div className={cn(CARD_ZONE, "space-y-4")}>
           <div>
             <p className="text-sm font-semibold text-ink-900">{chosen.label}</p>
             <p className="mt-0.5 text-[13px] leading-5 text-ink-500">{chosen.description}</p>
@@ -365,7 +362,7 @@ export function OrderClosureDesk({
               Este botón no envía dinero. Úsalo solamente después de que Frankz haya hecho el reembolso.
             </Banner>
           )}
-          <div className="flex gap-2 border-t border-line pt-4">
+          <div className="flex gap-2 pt-1">
             <OpsButton
               variant={chosen.tone === "danger" ? "danger" : "primary"}
               disabled={!canSave}

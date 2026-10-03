@@ -258,6 +258,50 @@ export function SidePanel({ label, title, badge, meta, width, onClose, children 
   );
 }
 
+/**
+ * Tarjeta de sección (la ficha del pedido): blanca sobre el lienzo, con anillo
+ * `line` y sombra de control. Arriba lleva su `SectionHead`; lo de dentro se
+ * reparte en zonas sobre hairlines de borde a borde (`CARD_ZONE`), nunca en
+ * otra tarjeta. Una sección que se notaba poco era una hairline gris clara
+ * más débil que los marcos de dentro: al entornar los ojos se veían marcos,
+ * no secciones.
+ */
+export const SECTION_CARD = "rounded-lg bg-white p-4 shadow-control ring-1 ring-line sm:p-5";
+
+/**
+ * Una zona dentro de la tarjeta de sección, sobre una hairline que la cruza
+ * entera. Los márgenes negativos son el relleno de `SECTION_CARD`: si cambia
+ * uno, cambia el otro.
+ */
+export const CARD_ZONE = "-mx-4 border-t border-line px-4 pt-4 sm:-mx-5 sm:px-5 sm:pt-5";
+
+/**
+ * Cabecera de una tarjeta de sección: título de 16 px con su chapa, la ayuda
+ * debajo y, a la derecha, lo que no guarda nada (un enlace, un contador). La
+ * hairline de debajo cruza la tarjeta entera, como la de `CARD_ZONE`.
+ */
+export function SectionHead({ title, badge, help, aside, id }: {
+  title: ReactNode;
+  badge?: ReactNode;
+  help?: ReactNode;
+  aside?: ReactNode;
+  /** Para `aria-labelledby` de la sección. */
+  id?: string;
+}) {
+  return (
+    <div className="-mx-4 flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-line px-4 pb-4 sm:-mx-5 sm:px-5">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <h3 id={id} className="text-base font-semibold leading-6 text-ink-900">{title}</h3>
+          {badge}
+        </div>
+        {help && <div className="mt-0.5 max-w-[68ch] text-[13px] leading-5 text-ink-500">{help}</div>}
+      </div>
+      {aside && <div className="flex flex-wrap items-center gap-x-3 gap-y-2">{aside}</div>}
+    </div>
+  );
+}
+
 /** Esqueleto de carga: bloques en el lavado, sin brillo que se mueva. */
 export function Skeleton({ className }: { className?: string }) {
   return <div aria-hidden className={cn("animate-pulse rounded-lg bg-wash", className)} />;
