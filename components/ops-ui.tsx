@@ -75,7 +75,7 @@ export const FilterPill = forwardRef<HTMLButtonElement, {
         onClick={onClick}
         aria-expanded={expanded}
         title={title}
-        className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-dashed border-line-strong bg-white pl-2 pr-3 text-[13px] font-medium text-ink-600 transition-colors hover:border-ink-300 hover:text-ink-900"
+        className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-dashed border-line-strong bg-white pl-2 pr-3 text-[13px] font-medium text-ink-600 transition-colors hover:border-ink-300 hover:text-ink-900 pointer-coarse:h-11"
       >
         <IconPlusCircle className="size-3.5 text-ink-500" />
         {label}
@@ -84,9 +84,9 @@ export const FilterPill = forwardRef<HTMLButtonElement, {
     );
   }
   return (
-    <span className="inline-flex h-8 shrink-0 items-center rounded-full bg-white text-[13px] font-medium shadow-control ring-1 ring-inset ring-line-strong">
+    <span className="inline-flex h-8 shrink-0 items-center rounded-full bg-white text-[13px] font-medium shadow-control ring-1 ring-inset ring-line-strong pointer-coarse:h-11">
       {onClear && (
-        <button type="button" onClick={onClear} aria-label={`Quitar el filtro ${label}`} className="grid h-8 w-7 place-items-center rounded-l-full pl-1 text-ink-500 hover:text-ink-900">
+        <button type="button" onClick={onClear} aria-label={`Quitar el filtro ${label}`} className="grid h-8 w-7 place-items-center rounded-l-full pl-1 text-ink-500 hover:text-ink-900 pointer-coarse:h-11 pointer-coarse:w-10">
           <IconXCircle className="size-3.5" />
         </button>
       )}
@@ -96,7 +96,7 @@ export const FilterPill = forwardRef<HTMLButtonElement, {
         onClick={onClick}
         aria-expanded={expanded}
         title={title}
-        className={cn("inline-flex h-8 min-w-0 items-center gap-1.5 whitespace-nowrap rounded-r-full pr-3 text-ink-700 hover:text-ink-900", !onClear && "rounded-l-full pl-3")}
+        className={cn("inline-flex h-8 min-w-0 items-center gap-1.5 whitespace-nowrap rounded-r-full pr-3 text-ink-700 hover:text-ink-900 pointer-coarse:h-11", !onClear && "rounded-l-full pl-3")}
       >
         {value ? (
           <>
@@ -117,7 +117,16 @@ export const FilterPill = forwardRef<HTMLButtonElement, {
  * Tarjeta de estado: etiqueta y cifra; elegida lleva el borde azul de 2 px.
  * Es un filtro, no un adorno: tocarla abre esa parte de la lista.
  */
-export function StatusCard({ label, value, active, onClick, hint }: { label: string; value: number; active: boolean; onClick: () => void; hint?: string }) {
+export function StatusCard({ label, value, active, onClick, hint, marker }: {
+  label: string;
+  value: number;
+  active: boolean;
+  onClick: () => void;
+  hint?: string;
+  /** Marca de color antes de la etiqueta (p. ej. el tono de la macroetapa del MOM). */
+  marker?: ReactNode;
+}) {
+  const labelTone = active ? "text-brand-700" : "text-ink-600";
   return (
     <button
       type="button"
@@ -129,8 +138,36 @@ export function StatusCard({ label, value, active, onClick, hint }: { label: str
         active ? "shadow-control ring-2 ring-inset ring-brand-600" : "shadow-control ring-1 ring-inset ring-line hover:ring-line-strong",
       )}
     >
-      <span className={cn("w-full truncate text-[13px] font-medium", active ? "text-brand-700" : "text-ink-600")}>{label}</span>
+      {marker ? (
+        <span className={cn("flex w-full min-w-0 items-center gap-1.5 text-[13px] font-medium", labelTone)}>
+          {marker}
+          <span className="truncate">{label}</span>
+        </span>
+      ) : (
+        <span className={cn("w-full truncate text-[13px] font-medium", labelTone)}>{label}</span>
+      )}
       <span className={cn("text-xl font-semibold leading-7 tabular-nums", active ? "text-brand-700" : "text-ink-900")}>{value.toLocaleString("es-PE")}</span>
+    </button>
+  );
+}
+
+/** Chip de elección con cantidad (subetapas, plazos, motivos, filtro de cajas). */
+export function ChoiceChip({ label, count, active, onClick, title }: { label: string; count?: number; active: boolean; onClick: () => void; title?: string }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      disabled={count === 0 && !active}
+      onClick={onClick}
+      title={title}
+      className={cn(
+        "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[13px] font-medium transition-shadow pointer-coarse:h-11",
+        active ? "bg-brand-50 text-brand-700 ring-2 ring-inset ring-brand-600" : "bg-white text-ink-700 ring-1 ring-inset ring-line-strong hover:ring-ink-300",
+        count === 0 && !active && "cursor-not-allowed opacity-40",
+      )}
+    >
+      {label}
+      {count != null && <span className={cn("tabular-nums", active ? "text-brand-700" : "text-ink-500")}>{count.toLocaleString("es-PE")}</span>}
     </button>
   );
 }
@@ -144,7 +181,7 @@ export function AttentionPill({ icon: Glyph, label, count, active, onClick, hint
       aria-pressed={active}
       title={hint}
       className={cn(
-        "inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white pl-2.5 pr-1.5 text-[13px] font-medium shadow-control transition-shadow",
+        "inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white pl-2.5 pr-1.5 text-[13px] font-medium shadow-control transition-shadow pointer-coarse:h-11",
         active ? "text-brand-700 ring-2 ring-inset ring-brand-600" : "text-ink-700 ring-1 ring-inset ring-line-strong hover:ring-ink-300",
       )}
     >

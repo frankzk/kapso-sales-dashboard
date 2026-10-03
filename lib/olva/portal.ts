@@ -157,7 +157,7 @@ export function parsePortalTrackings(
 }
 
 /** La URL de la consulta, con los mismos parámetros que manda el portal. */
-export function portalTrackingsUrl(input: { ruc: string; desde: string; hasta: string }): string {
+export function portalTrackingsUrl(input: { ruc: string; desde: string; hasta: string; dni?: string | null }): string {
   // El portal filtra también por año de emisión, a dos dígitos. Con un rango
   // que cruza de año habría que hacer dos consultas; el cotejo pide días.
   const emision = input.hasta.slice(2, 4);
@@ -174,7 +174,9 @@ export function portalTrackingsUrl(input: { ruc: string; desde: string; hasta: s
     emision_tracking: emision,
     tracking: "",
     ubigeos: "",
-    dni_consignado: "",
+    // El filtro del portal por documento del destinatario: la respuesta no
+    // trae el DNI, pero sí se puede preguntar por él (ver portal-match.ts).
+    dni_consignado: input.dni ?? "",
     nombre_consignado: "",
     tipo_cliente: "CONTADO",
   });
@@ -318,7 +320,7 @@ export async function olvaPortalLogin(
 
 /** Trae los envíos registrados entre dos días (YYYY-MM-DD, hora de Lima). */
 export async function fetchOlvaPortalTrackings(
-  input: { jwt: string; ruc: string; desde: string; hasta: string },
+  input: { jwt: string; ruc: string; desde: string; hasta: string; dni?: string | null },
   fetchImpl: FetchImpl = fetch,
 ): Promise<OlvaPortalResult> {
   try {

@@ -203,11 +203,13 @@ const STATUS_TONE: Record<string, string> = {
   devuelto: "bg-red-100 text-red-800",
 };
 
+// Chapa de 4 px del mundo de operación. La cobertura se lee por su texto; solo
+// «Por revisar» lleva color, porque es la única que pide que alguien actúe.
 const COVERAGE_TONE: Record<OrderCoverage, string> = {
-  lima: "border-sky-200 bg-sky-50 text-sky-700",
-  provincia_cod: "border-emerald-200 bg-emerald-50 text-emerald-700",
-  agencia: "border-violet-200 bg-violet-50 text-violet-700",
-  por_revisar: "border-amber-300 bg-amber-50 text-amber-800",
+  lima: "bg-line text-ink-600",
+  provincia_cod: "bg-line text-ink-600",
+  agencia: "bg-line text-ink-600",
+  por_revisar: "bg-warn-bg text-warn-fg",
 };
 
 export function CoverageBadge({ coverage }: { coverage: OrderMasterRow["coverage"] }) {
@@ -215,7 +217,7 @@ export function CoverageBadge({ coverage }: { coverage: OrderMasterRow["coverage
   return (
     <span
       className={cn(
-        "inline-flex whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+        "inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded px-1.5 text-xs font-medium leading-none",
         COVERAGE_TONE[value],
       )}
     >
@@ -472,26 +474,45 @@ export function StatusBadge({ status, locked }: { status: string; locked?: boole
   );
 }
 
+// Los tonos de macroetapa son regla del MOM (§25): ámbar para confirmación,
+// celeste para preparación, índigo para despacho, cian para seguimiento,
+// naranja para cierre, verde para completado y gris para consulta. Son la única
+// excepción a la paleta de estados del mundo de operación (DESIGN.md), y van en
+// chapa de 4 px como el resto.
 const MACRO_STAGE_TONE: Record<string, string> = {
-  por_confirmar: "bg-amber-50 text-amber-800 ring-amber-600/20",
-  preparacion: "bg-sky-50 text-sky-800 ring-sky-600/20",
-  por_despachar: "bg-indigo-50 text-indigo-800 ring-indigo-600/20",
-  en_curso: "bg-cyan-50 text-cyan-800 ring-cyan-600/20",
-  por_cerrar: "bg-orange-50 text-orange-800 ring-orange-600/20",
-  finalizado: "bg-emerald-50 text-emerald-800 ring-emerald-600/20",
+  por_confirmar: "bg-amber-100 text-amber-800",
+  preparacion: "bg-sky-100 text-sky-800",
+  por_despachar: "bg-indigo-100 text-indigo-800",
+  en_curso: "bg-cyan-100 text-cyan-800",
+  por_cerrar: "bg-orange-100 text-orange-800",
+  finalizado: "bg-emerald-100 text-emerald-800",
+};
+
+const MACRO_STAGE_DOT: Record<string, string> = {
+  por_confirmar: "bg-amber-500",
+  preparacion: "bg-sky-500",
+  por_despachar: "bg-indigo-500",
+  en_curso: "bg-cyan-500",
+  por_cerrar: "bg-orange-500",
+  finalizado: "bg-emerald-500",
 };
 
 export function MacroStageBadge({ stage }: { stage: string | null | undefined }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset",
-        MACRO_STAGE_TONE[stage ?? ""] ?? "bg-slate-100 text-slate-700 ring-slate-500/20",
+        "inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded px-1.5 text-xs font-medium leading-none",
+        MACRO_STAGE_TONE[stage ?? ""] ?? "bg-line text-ink-600",
       )}
     >
       {macroStageLabel(stage)}
     </span>
   );
+}
+
+/** El tono de la macroetapa en un cuadro de 8 px: la leyenda de las chapas. */
+export function MacroStageDot({ stage }: { stage: string }) {
+  return <span aria-hidden className={cn("size-2 shrink-0 rounded-[2px]", MACRO_STAGE_DOT[stage] ?? "bg-ink-300")} />;
 }
 
 // ---------------------------------------------------------------------------

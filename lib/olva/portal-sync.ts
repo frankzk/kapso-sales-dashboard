@@ -10,11 +10,20 @@ import {
   olvaPortalLogin,
   type OlvaPortalRow,
 } from "@/lib/olva/portal";
-import { matchPortalRows, type CotejoCandidate, type CotejoOutcome } from "@/lib/olva/portal-match";
+import {
+  dniMatch,
+  matchPortalRows,
+  mergeDniMatches,
+  type CotejoCandidate,
+  type CotejoOutcome,
+} from "@/lib/olva/portal-match";
 import { formatOlvaTracking } from "@/lib/olva/tracking";
 
 /** Días hacia atrás que mira el cotejo automático y el botón. */
 export const COTEJO_DEFAULT_DAYS = 7;
+/** Preguntas por DNI por cotejo: una por salida sin tracking que tenga DNI. */
+const MAX_DNI_QUERIES = 40;
+const DNI_CONCURRENCY = 3;
 
 /** Una cuenta del portal y las tiendas cuyas salidas coteja. */
 export interface OlvaPortalAccount {
@@ -157,7 +166,7 @@ async function loadCandidates(admin: SupabaseClient, storeIds: string[], rows: O
   const from = addDays(days[0] ?? limaDayKey(), -30);
   const { data, error } = await admin
     .from("shipments")
-    .select("id,store_id,order_name,guide_code,customer_name,delivery_address,district,created_at,delivery_status")
+    .select("id,store_id,order_id,order_name,guide_code,customer_name,delivery_address,district,created_at,delivery_status")
     .in("store_id", storeIds)
     .eq("courier", "olva")
     .is("olva_tracking", null)
@@ -165,16 +174,34 @@ async function loadCandidates(admin: SupabaseClient, storeIds: string[], rows: O
     .gte("created_at", `${from}T05:00:00Z`)
     .limit(2000);
   if (error) throw new Error(`No se pudieron leer las salidas de Olva: ${error.message}`);
-  return ((data ?? []) as {
+  const shipments = (data ?? []) as {
     id: string;
     store_id: string;
+    order_id: string | null;
     order_name: string | null;
     guide_code: string | null;
     customer_name: string | null;
     delivery_address: string | null;
     district: string | null;
     created_at: string;
-  }[]).map((s) => ({
+  }[];
+
+  // El DNI que la clienta dio para el envío se apunta en el panel de pagos
+  // («DNI y agencia»), por pedido.
+  const dniByOrder = new Map<string, string>();
+  const orderIds = [...new Set(shipments.map((s) => s.order_id).filter((id): id is string => Boolean(id)))];
+  for (let i = 0; i < orderIds.length; i += 200) {
+    const { data: drafts } = await admin
+      .from("shalom_order_drafts")
+      .select("order_id,document")
+      .in("order_id", orderIds.slice(i, i + 200));
+    for (const d of (drafts ?? []) as { order_id: string; document: string | null }[]) {
+      const doc = (d.document ?? "").replace(/\s/g, "");
+      if (/^\d{8,12}$/.test(doc)) dniByOrder.set(d.order_id, doc);
+    }
+  }
+
+  return shipments.map((s) => ({
     shipmentId: s.id,
     storeId: s.store_id,
     orderName: s.order_name,
@@ -183,7 +210,39 @@ async function loadCandidates(admin: SupabaseClient, storeIds: string[], rows: O
     address: s.delivery_address,
     district: s.district,
     createdAt: s.created_at,
+    dni: s.order_id ? (dniByOrder.get(s.order_id) ?? null) : null,
   }));
+}
+
+/**
+ * Pregunta al portal por el DNI de cada salida que el cotejo no resolvió. El
+ * rango arranca dos días antes de crear la salida (el envío no se registra
+ * antes) y no cruza de año, que el portal filtra por año de emisión.
+ */
+async function dniPairs(
+  admin: SupabaseClient,
+  input: { jwt: string; ruc: string; hasta: string; fetchImpl?: typeof fetch },
+  candidates: CotejoCandidate[],
+  linked: Map<string, string | null>,
+): Promise<{ candidate: CotejoCandidate; row: OlvaPortalRow }[]> {
+  const pairs: { candidate: CotejoCandidate; row: OlvaPortalRow }[] = [];
+  const queue = candidates.slice(0, MAX_DNI_QUERIES);
+  const yearStart = `${input.hasta.slice(0, 4)}-01-01`;
+  const ask = async (c: CotejoCandidate) => {
+    const from = addDays(limaDayKey(new Date(c.createdAt)), -2);
+    const res = await fetchOlvaPortalTrackings(
+      { jwt: input.jwt, ruc: input.ruc, desde: from > yearStart ? from : yearStart, hasta: input.hasta, dni: c.dni },
+      input.fetchImpl,
+    );
+    if (!res.ok || !res.rows.length) return;
+    for (const [k, v] of await loadLinked(admin, res.rows)) linked.set(k, v);
+    const row = dniMatch(c, res.rows, linked);
+    if (row) pairs.push({ candidate: c, row });
+  };
+  for (let i = 0; i < queue.length; i += DNI_CONCURRENCY) {
+    await Promise.all(queue.slice(i, i + DNI_CONCURRENCY).map(ask));
+  }
+  return pairs;
 }
 
 /** Qué trackings del lote ya están en alguna salida, de cualquier tienda. */
@@ -229,7 +288,12 @@ async function applyOutcomes(
         })),
       });
     } else {
-      const via = o.via === "doc_externo" ? "el Doc. externo es el pedido" : "nombre y dirección idénticos";
+      const via =
+        o.via === "doc_externo"
+          ? "el Doc. externo es el pedido"
+          : o.via === "dni"
+            ? "el DNI de la clienta"
+            : "nombre y dirección idénticos";
       const res = await linkOlvaTrackingIfEmpty(admin, {
         shipmentId: o.candidate.shipmentId,
         id: o.row.id,
@@ -300,6 +364,7 @@ export async function runOlvaCotejo(
   try {
     let rows = input.rows;
     let skipped = input.skipped ?? 0;
+    let session: { jwt: string; ruc: string } | null = null;
     if (!rows) {
       const { username, password, ruc } = input.account;
       if (!username || !password || !ruc) return fail("Faltan el usuario, la contraseña o el RUC del portal de Olva en Ajustes.");
@@ -309,13 +374,22 @@ export async function runOlvaCotejo(
       if (!res.ok) return fail(res.error, res.kind === "blocked");
       rows = res.rows;
       skipped = res.skipped;
+      session = { jwt: login.jwt, ruc };
     }
 
     const [candidates, linked] = await Promise.all([
       loadCandidates(admin, input.account.storeIds, rows),
       loadLinked(admin, rows),
     ]);
-    const resumenRows = await applyOutcomes(admin, matchPortalRows(rows, candidates, linked), input.actor);
+    let outcomes = matchPortalRows(rows, candidates, linked);
+    // El DNI necesita preguntarle al portal: solo con sesión, no al pegar.
+    if (session) {
+      const resolved = new Set(outcomes.flatMap((o) => (o.kind === "vincular" ? [o.candidate.shipmentId] : [])));
+      const pending = candidates.filter((c) => c.dni && !resolved.has(c.shipmentId));
+      const pairs = await dniPairs(admin, { ...session, hasta: range.hasta, fetchImpl: input.fetchImpl }, pending, linked);
+      outcomes = mergeDniMatches(outcomes, pairs);
+    }
+    const resumenRows = await applyOutcomes(admin, outcomes, input.actor);
     const count = (k: CotejoResumenRow["outcome"]) => resumenRows.filter((r) => r.outcome === k).length;
     return record(
       {
