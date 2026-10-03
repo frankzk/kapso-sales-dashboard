@@ -82,3 +82,44 @@ export async function linkOlvaTrackingIfEmpty(
   }
   return { ok: true };
 }
+
+/** Una salida del pedido, lo que hace falta para decidir dónde va el tracking. */
+export interface OrderOutputForLink {
+  id: string;
+  courier: string;
+  deliveryStatus: string;
+  olvaTracking: string | null;
+  olvaEmision: string | null;
+}
+
+export type OlvaLinkPlan =
+  | { kind: "set"; shipmentId: string }
+  | { kind: "create" }
+  | { kind: "done" }
+  | { kind: "error"; error: string };
+
+/**
+ * «Vincular a pedido» de Cotejar Olva: alguien eligió A MANO a qué pedido va
+ * un envío de Olva. PURA. Si el pedido tiene UNA salida de Olva sin tracking,
+ * el tracking va ahí; si no tiene ninguna, se crea; si tiene otro tracking o
+ * varias salidas de Olva libres, no se adivina cuál.
+ */
+export function planOlvaLink(outputs: OrderOutputForLink[], id: OlvaTrackingId): OlvaLinkPlan {
+  const olva = outputs.filter((o) => o.courier.trim().toLowerCase() === "olva" && o.deliveryStatus !== "anulado");
+  const label = formatOlvaTracking(id);
+  if (olva.some((o) => o.olvaTracking === id.tracking && o.olvaEmision === id.emision)) return { kind: "done" };
+  const free = olva.filter((o) => !o.olvaTracking);
+  const [only] = free;
+  if (free.length === 1 && only) return { kind: "set", shipmentId: only.id };
+  if (free.length > 1) {
+    return { kind: "error", error: `El pedido tiene ${free.length} salidas de Olva sin tracking: elige cuál en el Master.` };
+  }
+  const other = olva.find((o) => o.olvaTracking);
+  if (other?.olvaTracking && other.olvaEmision) {
+    return {
+      kind: "error",
+      error: `El pedido ya tiene el tracking ${formatOlvaTracking({ tracking: other.olvaTracking, emision: other.olvaEmision })}, no ${label}. Si es otro envío, créalo en el Master.`,
+    };
+  }
+  return { kind: "create" };
+}

@@ -6,7 +6,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { pasteCotejo, runCotejoNow } from "@/app/dashboard/olva/actions";
+import { linkTrackingToOrder, pasteCotejo, runCotejoNow } from "@/app/dashboard/olva/actions";
 import { setOlvaTracking } from "@/app/dashboard/pedidos/actions";
 import type { CotejoResumen, CotejoResumenRow } from "@/lib/olva/portal-sync";
 
@@ -190,12 +190,15 @@ function OrgCotejo({ org, liveLinked }: { org: CotejoOrg; liveLinked: Record<str
             empty="Todos los envíos de Olva tienen su salida."
             rows={unmatched}
             render={(r) => (
-              <>
-                <span className="font-mono">{r.tracking}</span> · {r.destinatario}{" "}
-                <span className="text-slate-500">
-                  · {r.distrito} · {r.direccion}
-                </span>
-              </>
+              <div className="space-y-1 py-1">
+                <div>
+                  <span className="font-mono">{r.tracking}</span> · {r.destinatario}{" "}
+                  <span className="text-slate-500">
+                    · {r.distrito} · {r.direccion}
+                  </span>
+                </div>
+                {org.canEdit ? <OrderLinker tracking={r.tracking} onDone={() => router.refresh()} /> : null}
+              </div>
             )}
           />
         </div>
@@ -224,6 +227,7 @@ function ReviewTable({ rows, canEdit, onDone }: { rows: CotejoResumenRow[]; canE
               {r.hints?.map((h) => (
                 <HintRow key={h.shipmentId} tracking={r.tracking} hint={h} canEdit={canEdit} onDone={onDone} />
               ))}
+              {canEdit ? <OrderLinker tracking={r.tracking} onDone={onDone} label="¿Es otro pedido?" /> : null}
             </li>
           ))}
         </ul>
@@ -267,6 +271,40 @@ function HintRow({
           {pending ? "Vinculando…" : `Es este: vincular a ${hint.orderName ?? "la salida"}`}
         </button>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Para el envío que no encontró salida: quien sabe de qué pedido es lo
+ * escribe, y el tracking va a su salida de Olva (o se le crea una).
+ */
+function OrderLinker({ tracking, onDone, label = "Vincular a pedido" }: { tracking: string; onDone: () => void; label?: string }) {
+  const [pending, startTransition] = useTransition();
+  const [order, setOrder] = useState("");
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const submit = () =>
+    startTransition(async () => {
+      const res = await linkTrackingToOrder(tracking, order);
+      setResult(res);
+      if (res.ok) onDone();
+    });
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-xs text-slate-500">{label}:</span>
+      <input
+        value={order}
+        onChange={(e) => setOrder(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && order.trim()) submit();
+        }}
+        placeholder="KP136585"
+        className="h-8 w-32 rounded-lg border border-slate-300 bg-white px-2 text-xs"
+      />
+      <button className={button} disabled={pending || !order.trim()} onClick={submit}>
+        {pending ? "Vinculando…" : "Vincular"}
+      </button>
+      {result ? <span className={`text-xs ${result.ok ? "text-emerald-700" : "text-red-700"}`}>{result.message}</span> : null}
     </div>
   );
 }
