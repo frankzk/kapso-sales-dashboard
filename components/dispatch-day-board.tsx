@@ -904,11 +904,11 @@ export function DispatchDayBoard(props: Props) {
 
             {tandersConfirm && (
               <Sheet look="ops" title="Revisar paquetes de Tanders" onClose={() => setTandersConfirm(null)} wide>
-                <p className="mb-4 text-sm text-ink-600">Estos pedidos salieron en días anteriores y siguen sin entrega registrada. Confirma qué paquete saldrá con {riderName}. La guía de Tanders conserva su historial; Grupo GF tendrá una nueva salida y rótulo.</p>
+                <p className="mb-4 text-sm text-ink-600">Estos pedidos tienen guía de Tanders sin entrega: salieron en días anteriores, o Tanders nunca los recolectó. Confirma qué paquete saldrá con {riderName}. La guía de Tanders conserva su historial; Grupo GF tendrá una nueva salida y rótulo.</p>
                 <div className="space-y-4">
                   {tandersConfirm.rows.map((q) => (
                     <fieldset key={q.orderId} className="rounded-lg border border-line p-3">
-                      <legend className="px-1 text-sm font-semibold">{q.orderName} · despachado {programDayLabel(limaDay(q.tandersReview!.dispatchedAt)!)}</legend>
+                      <legend className="px-1 text-sm font-semibold">{q.orderName} · {q.tandersReview!.uncollected ? "guía sin recolectar desde el" : "despachado"} {programDayLabel(limaDay(q.tandersReview!.dispatchedAt)!)}</legend>
                       {([
                         ["returned", "El paquete volvió al almacén"],
                         ["additional", "Saldrá otro paquete mientras se recupera el anterior"],
@@ -1166,7 +1166,7 @@ function StateBadges({ q, today }: { q: QueueRow; today: string }) {
     <div className="flex flex-wrap items-center gap-1">
       {q.route?.undeliveredReason && <Badge tone="urgent" title="Sigue en la caja del motorizado: márcalo y «Recibir en oficina» cuando vuelva el paquete">No entregado · {nonDeliveryReasonLabel(q.route.undeliveredReason)}</Badge>}
       {q.failedOutput && <Badge tone="crit" title="Otro courier no lo entregó. Al asignarlo se crea una salida nueva y Almacén arma otra caja con su rótulo.">{failedOutputLabel(q.failedOutput)}</Badge>}
-      {q.tandersReview && <span className="text-xs text-warn-fg" title="Confirma el paquete antes de asignar. Tanders conserva su salida original.">Tanders · despacho anterior · sin entrega · {programDayLabel(limaDay(q.tandersReview.dispatchedAt)!)}</span>}
+      {q.tandersReview && <span className="text-xs text-warn-fg" title="Confirma el paquete antes de asignar. Tanders conserva su salida original.">{q.tandersReview.uncollected ? "Tanders · sin recolectar · guía del" : "Tanders · despacho anterior · sin entrega ·"} {programDayLabel(limaDay(q.tandersReview.dispatchedAt)!)}</span>}
       {q.assignable && q.programmedFor && <ProgramChip day={q.programmedFor} today={today} reason={q.programReason ?? null} />}
       {q.taken && !q.route && <Badge>tomado · sin caja</Badge>}
       {!q.assignable && q.macroSubstage && <Badge tone="info" title={macroStageLabel(q.macroStage)}>{macroSubstageLabel(q.macroSubstage)}</Badge>}
