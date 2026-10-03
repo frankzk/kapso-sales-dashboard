@@ -134,6 +134,15 @@ export function VoiceAgentPanel({
             >
               Llamarme
             </OpsButton>
+            {/* La otra línea del mismo agente (Agente Telnyx, MOM §11.8). */}
+            <OpsButton
+              size="sm"
+              disabled={pending || telefono.replace(/\D/g, "").length < 9}
+              onClick={() => run(() => probarAgenteEnMiTelefono(orderId, telefono, "telnyx"))}
+              className="pointer-coarse:h-11"
+            >
+              Por Telnyx
+            </OpsButton>
             <OpsButton size="sm" variant="ghost" onClick={() => setProbando(false)} className="pointer-coarse:h-11">
               Cancelar
             </OpsButton>
