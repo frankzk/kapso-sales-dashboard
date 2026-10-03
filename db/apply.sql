@@ -443,4 +443,6 @@
 \ir migrations/0219_swayp_claim_salida_por_definir.sql
 \echo 'Applying 0220_swayp_pilot_14_dias_0_a_2_intentos.sql'
 \ir migrations/0220_swayp_pilot_14_dias_0_a_2_intentos.sql
+\echo 'Applying 0221_swayp_pilot_cupo_hasta_general.sql'
+\ir migrations/0221_swayp_pilot_cupo_hasta_general.sql
 \echo 'Done.'
