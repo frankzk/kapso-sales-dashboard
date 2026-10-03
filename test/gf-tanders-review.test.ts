@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { confirmedTandersReview, tandersReleaseCutoff, tandersReview, tandersReviewQueueFilter, tandersReviewReason } from "@/lib/gf-tanders-review";
+import { confirmedTandersReview, nextBusinessDay, tandersExpectedDeliveryDay, tandersReleaseCutoff, tandersReview, tandersReviewQueueFilter, tandersReviewReason } from "@/lib/gf-tanders-review";
 
 const order = { coverage: "lima", current_courier: "tanders", macro_stage: "en_curso", macro_substage: "en_transito" };
 const output = { id: "tanders-1", courier: "tanders", delivery_status: "en_ruta", dispatched_at: "2026-09-28T15:20:17.647Z", status_category: "in_route", reported_status: "PICKED" };
@@ -73,5 +73,58 @@ describe("Tanders libera el paquete el siguiente día hábil (solo el domingo no
     expect(tandersReleaseCutoff("2026-10-04")).toBe("2026-10-03");
     expect(tandersReviewQueueFilter("2026-10-04")).toContain("dispatched_at.lt.2026-10-03T00:00:00-05:00");
     expect(tandersReviewQueueFilter("2026-10-05")).toContain("dispatched_at.lt.2026-10-05T00:00:00-05:00");
+  });
+});
+
+describe("Tanders que nunca recolectó: libre al día hábil siguiente del que debía repartir (03-10-2026)", () => {
+  // 01-10 jueves, 02 viernes, 03 sábado, 04 domingo, 05 lunes, 06 martes.
+  const waiting = { coverage: "lima", current_courier: "tanders", macro_stage: "por_despachar", macro_substage: "listo_para_asignar" };
+  const pending = (createdAt: string) => ({
+    id: "tanders-p", courier: "tanders", delivery_status: "pendiente", dispatched_at: null,
+    status_category: "pending", reported_status: "PENDING", tanders_created_at: createdAt,
+  });
+  // 16:36 de Lima del jueves 01-10, como #KP136944.
+  const thursday = "2026-10-01T21:36:40.318Z";
+
+  it("el día hábil siguiente salta el domingo", () => {
+    expect(nextBusinessDay("2026-10-01")).toBe("2026-10-02");
+    expect(nextBusinessDay("2026-10-03")).toBe("2026-10-05");
+    expect(tandersExpectedDeliveryDay(thursday)).toBe("2026-10-02");
+  });
+
+  it("creada el jueves: Tanders debía repartirla el viernes; si sigue Pendiente, libre el sábado", () => {
+    expect(tandersReview(waiting, [pending(thursday)], "2026-10-02")).toBeNull();
+    const review = tandersReview(waiting, [pending(thursday)], "2026-10-03");
+    expect(review).toEqual({ shipmentIds: ["tanders-p"], dispatchedAt: thursday, uncollected: true });
+  });
+
+  it("creada el viernes: debía repartirla el sábado; libre el lunes, no el domingo", () => {
+    const friday = "2026-10-02T20:00:00Z";
+    expect(tandersReview(waiting, [pending(friday)], "2026-10-04")).toBeNull();
+    expect(tandersReview(waiting, [pending(friday)], "2026-10-05")).not.toBeNull();
+  });
+
+  it("creada el sábado: debía repartirla el lunes; libre el martes", () => {
+    const saturday = "2026-10-03T15:00:00Z";
+    expect(tandersReview(waiting, [pending(saturday)], "2026-10-05")).toBeNull();
+    expect(tandersReview(waiting, [pending(saturday)], "2026-10-06")).not.toBeNull();
+  });
+
+  it("sin fecha de creación de la guía no se libera", () => {
+    expect(tandersReview(waiting, [pending(null as unknown as string)], "2026-10-10")).toBeNull();
+  });
+
+  it("si Tanders ya la recolectó, manda la regla del despacho, no la de la creación", () => {
+    const collected = { ...pending(thursday), delivery_status: "en_ruta", dispatched_at: "2026-10-05T15:00:00Z" };
+    expect(tandersReview(waiting, [collected], "2026-10-05")).toBeNull();
+  });
+
+  it("otra salida viva de otro courier sigue bloqueando", () => {
+    expect(tandersReview(waiting, [pending(thursday), { id: "gf", courier: "propio", delivery_status: "pendiente", dispatched_at: null }], "2026-10-03")).toBeNull();
+  });
+
+  it("el motivo dice que la guía nunca se recolectó", () => {
+    expect(tandersReviewReason("returned", true)).toContain("nunca se recolectó");
+    expect(tandersReviewReason("returned")).toContain("despacho anterior");
   });
 });

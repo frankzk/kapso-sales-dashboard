@@ -8,6 +8,10 @@ import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { createAdminSupabase } from "@/lib/db";
 import { hasOrgPermission } from "@/lib/permissions-access";
 import { parsePortalTrackings } from "@/lib/olva/portal";
+import { planOlvaLink } from "@/lib/olva/link";
+import { formatOlvaTracking, parseOlvaTracking } from "@/lib/olva/tracking";
+import { limaTodayKey } from "@/lib/shipments";
+import { createManualRouteOutput, setOlvaTracking } from "@/app/dashboard/pedidos/actions";
 import {
   loadOlvaPortalAccounts,
   olvaPortalAccountForStore,
@@ -90,4 +94,78 @@ export async function pasteCotejo(storeId: string, text: string): Promise<Cotejo
   });
   revalidatePath(PATH);
   return describe(result);
+}
+
+/**
+ * «Vincular a pedido»: el envío de Olva no encontró salida y alguien sabe de
+ * qué pedido es. El tracking va a su salida de Olva libre o, si el pedido no
+ * tiene ninguna, se le crea una con el mismo camino que el Master.
+ */
+export async function linkTrackingToOrder(tracking: string, orderNameRaw: string): Promise<CotejoActionState> {
+  const parsed = parseOlvaTracking(tracking);
+  if (!parsed.ok) return { ok: false, message: parsed.error };
+  const digits = orderNameRaw.trim().toUpperCase().replace(/[#\s]/g, "");
+  if (!/^[A-Z]{1,6}\d{3,}$/.test(digits)) return { ok: false, message: "Escribe el número del pedido, por ejemplo KP136585." };
+  const orderName = `#${digits}`;
+
+  const stores = await getAccessibleStores();
+  const admin = createAdminSupabase();
+  const { data: orders } = await admin
+    .from("order_master")
+    .select("order_id,store_id")
+    .eq("order_name", orderName)
+    .in("store_id", stores.map((s) => s.id))
+    .limit(2);
+  const found = (orders ?? []) as { order_id: string; store_id: string }[];
+  const order = found[0];
+  if (!order) return { ok: false, message: `No encontré el pedido ${orderName} en tus tiendas.` };
+  if (found.length > 1) return { ok: false, message: `Hay más de un pedido ${orderName}: hazlo desde el Master.` };
+
+  const { data: outputs, error } = await admin
+    .from("shipments")
+    .select("id,courier,delivery_status,olva_tracking,olva_emision")
+    .eq("order_id", order.order_id);
+  if (error) return { ok: false, message: error.message };
+  const plan = planOlvaLink(
+    ((outputs ?? []) as {
+      id: string;
+      courier: string;
+      delivery_status: string;
+      olva_tracking: string | null;
+      olva_emision: string | null;
+    }[]).map((o) => ({
+      id: o.id,
+      courier: o.courier,
+      deliveryStatus: o.delivery_status,
+      olvaTracking: o.olva_tracking,
+      olvaEmision: o.olva_emision,
+    })),
+    parsed.value,
+  );
+
+  const label = formatOlvaTracking(parsed.value);
+  // Los permisos, el tracking repetido y el evento en la ficha los ponen las
+  // mismas acciones del Master: aquí solo se decide cuál toca.
+  let res: { error?: string; notice?: string };
+  if (plan.kind === "error") return { ok: false, message: plan.error };
+  if (plan.kind === "done") return { ok: true, message: `${orderName} ya tenía el tracking ${label}.` };
+  if (plan.kind === "set") {
+    res = await setOlvaTracking(plan.shipmentId, { tracking: label });
+  } else {
+    res = await createManualRouteOutput(order.order_id, {
+      courier: "olva",
+      dispatchDate: limaTodayKey(),
+      olvaTracking: label,
+      note: `Salida de Olva registrada desde «Cotejar Olva»: el envío ya estaba en Olva con el tracking ${label}.`,
+    });
+  }
+  if (res.error) return { ok: false, message: res.error };
+  revalidatePath(PATH);
+  return {
+    ok: true,
+    message:
+      plan.kind === "create"
+        ? `Se creó la salida de Olva de ${orderName} con el tracking ${label}.`
+        : `Tracking ${label} puesto en ${orderName}.`,
+  };
 }
