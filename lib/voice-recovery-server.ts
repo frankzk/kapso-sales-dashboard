@@ -34,6 +34,7 @@ import {
   type VoiceEngine,
 } from "@/lib/telnyx";
 import { reenviarGuiaAnulada } from "@/lib/swayp-reenvio";
+import { parseSenders } from "@/lib/swayp-guide";
 import { inspectAuto } from "@/lib/swayp-auto-server";
 import { evaluateAutoDispatch, type AutoSettings } from "@/lib/swayp-auto-policy";
 
@@ -770,6 +771,8 @@ export async function loadVoiceQueue(
     priorsByPhone.set(p.customer_phone, [...(priorsByPhone.get(p.customer_phone) ?? []), p]);
   }
 
+  const swaypSenders = parseSenders(env.swaypSenders());
+
   const candidates: VoiceCandidate[] = [];
   for (const m of masters) {
     const verdict = voiceRecoveryEligible({
@@ -783,6 +786,7 @@ export async function loadVoiceQueue(
       region: m.region,
       lineItems: (itemsBy.get(m.order_id) ?? []) as { title?: string; sku?: string; quantity?: number }[],
       stock,
+      swaypSenders,
       phone: m.customer_phone,
       priors: (priorsByPhone.get(m.customer_phone ?? "") ?? []).filter((p) => p.order_id !== m.order_id) as never,
       nextContactOn: m.confirmation_next_contact_on,

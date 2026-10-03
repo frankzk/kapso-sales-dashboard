@@ -21,12 +21,14 @@ import {
   type RecoveryGuideLike,
 } from "@/lib/reproprovincia";
 import { deriveFenixCoverageCity } from "@/lib/shipments";
+import { esCiudadPorApiSwayp, type SwaypSender } from "@/lib/swayp-guide";
 import { zadarmaLocalPeru } from "@/lib/zadarma";
 
 export type VoiceExclusion =
   | "recuperacion_no_activa" // 1
   | "cerrada_hace_mucho" // 2
   | "sin_stock_swayp" // 3
+  | "sin_bodega_swayp" // 3
   | "rechazo_en_puerta" // 4
   | "telefono_invalido" // 5
   | "antecedentes" // 6
@@ -50,6 +52,8 @@ export interface VoiceCandidateInput {
   region: string | null;
   lineItems: readonly DirectStockItem[];
   stock: readonly FenixStockRow[];
+  /** Las bodegas de `SWAYP_SENDERS`, ya leídas con `parseSenders`. */
+  swaypSenders: Readonly<Record<string, SwaypSender>>;
   phone: string | null;
   /** Los otros pedidos del mismo teléfono en la tienda (§8.1). */
   priors: readonly PriorOrderSnapshot[];
@@ -99,6 +103,12 @@ export function voiceRecoveryEligible(input: VoiceCandidateInput): VoiceEligibil
   const city = deriveFenixCoverageCity(input.district, input.region);
   if (!evaluateDirectFenixStock(city, [...input.stock], [...input.lineItems]).ok) {
     return { eligible: false, reason: "sin_stock_swayp" };
+  }
+  // …y sin bodega configurada tampoco: la salida Swayp falla después de que
+  // la clienta aceptó (KP133059, Ica, 03-10-2026). La misma función que
+  // decide en Envíos si una ciudad sale por la API de Swayp.
+  if (!esCiudadPorApiSwayp(city, input.swaypSenders)) {
+    return { eligible: false, reason: "sin_bodega_swayp" };
   }
 
   // 5. Solo móviles peruanos: un fijo o un BSUID no se llaman.
@@ -179,6 +189,7 @@ export const VOICE_EXCLUSION_LABEL: Record<VoiceExclusion, string> = {
   recuperacion_no_activa: "La recuperación no está activa (vencida, descartada o con guía nueva).",
   cerrada_hace_mucho: "La guía se cerró hace más días de los que llama el agente.",
   sin_stock_swayp: "No hay stock Swayp del producto en su ciudad: no hay reenvío que ofrecer.",
+  sin_bodega_swayp: "Su ciudad no tiene bodega Swayp configurada: el reenvío no se podría crear.",
   rechazo_en_puerta: "El courier reporta que lo rechazó en la puerta.",
   telefono_invalido: "No tiene un celular peruano válido.",
   antecedentes: "Tiene dos antecedentes o más: la conversación exige adelanto y la lleva una persona.",

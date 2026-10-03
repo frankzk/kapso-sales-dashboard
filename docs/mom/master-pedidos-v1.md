@@ -3720,7 +3720,12 @@ una condición existe en otra pantalla, se lee de la misma función.
 3. **Hay stock Swayp del producto en la ciudad del pedido**, leído del conteo
    de Swayp (§11, «De dónde sale el stock»). Sin stock el agente no tiene nada
    que ofrecer: la única propuesta del guion es el reenvío local contra
-   entrega. Agencia con adelanto no es una oferta del agente.
+   entrega. Agencia con adelanto no es una oferta del agente. **Y la ciudad
+   tiene bodega Swayp configurada** (remitente en `SWAYP_SENDERS`, la misma
+   prueba `esCiudadPorApiSwayp` que usa Envíos): con stock pero sin remitente
+   la clienta aceptaba y la salida fallaba después («No hay bodega Swayp
+   configurada para ica», KP133059, 03-10-2026). Motivo propio,
+   `sin_bodega_swayp`, para que se vea qué ciudad falta configurar.
 4. El motivo del courier **no es rechazo en puerta** (`REFUSED` y equivalentes
    leídos por `motivoDelCourier`). **Sin motivo entra**: §11.7 dice que la
    ausencia no equivale a recuperable, y la llamada es justamente el medio que

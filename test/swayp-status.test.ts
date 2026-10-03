@@ -813,6 +813,7 @@ describe("el rechazo de Swayp en la recuperación y en el agente de voz", () => 
     region: "Cuzco",
     lineItems: [{ title: "Aceite de Semilla Negra", sku: "ETH-60", quantity: 1 }],
     stock: [{ city: "cusco", product: "Aceite de Semilla Negra", sku: "ETH-60", quantity: 10 }],
+    swaypSenders: { cusco: { nombre: "Kenku", nit: "", direccion: "Av. El Sol 123", telefono: "999", email: "a@b.pe" } },
     phone: "51930555309",
     priors: [],
     nextContactOn: null,
