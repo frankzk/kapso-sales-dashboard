@@ -14,7 +14,14 @@
 //      de la clienta dentro del destinatario de Olva, que suele llevar además
 //      el segundo nombre. Con al menos dos nombres: «Carlos Carlos» no basta.
 //
-// Y en los dos, una pareja única: un envío con una sola salida posible y esa
+//   3. El DNI. El listado del portal no lo trae, pero el portal SÍ filtra por
+//      el documento del destinatario (`dni_consignado`). Se le pregunta por el
+//      DNI que la clienta dio para el envío (`shalom_order_drafts`) y vale si
+//      contesta UN solo envío sin tracking, del rango de fechas, con al menos
+//      un nombre en común. Lo del nombre no es por desconfiar del DNI: es por
+//      si el portal un día ignora el filtro y devuelve cualquier cosa.
+//
+// Y en todos, una pareja única: un envío con una sola salida posible y esa
 // salida pedida por un solo envío. Todo lo demás va a «revisar», con los
 // candidatos a la vista, y lo decide una persona.
 //
@@ -37,9 +44,11 @@ export interface CotejoCandidate {
   district: string | null;
   /** ISO: cuándo se creó la salida en Kapta. */
   createdAt: string;
+  /** El DNI (o CE) que la clienta dio para el envío, si se apuntó. */
+  dni?: string | null;
 }
 
-export type CotejoVia = "doc_externo" | "nombre_direccion";
+export type CotejoVia = "doc_externo" | "nombre_direccion" | "dni";
 
 export interface CotejoHint {
   candidate: CotejoCandidate;
@@ -204,4 +213,93 @@ export function matchPortalRows(
     if (hints.length) return { kind: "revisar", row, reason: "Se parece, pero no es idéntico.", hints };
     return { kind: "sin_pareja", row };
   });
+}
+
+/**
+ * Lo que el portal contestó al preguntarle por el DNI de una salida: el envío
+ * que le corresponde, o null si no hay uno solo que no admita duda.
+ */
+export function dniMatch(
+  candidate: CotejoCandidate,
+  rowsForDni: OlvaPortalRow[],
+  linked: Map<string, string | null>,
+): OlvaPortalRow | null {
+  const free = rowsForDni.filter((r) => !linked.has(formatOlvaTracking(r.id)));
+  const [only] = free;
+  if (free.length !== 1 || !only) return null;
+  if (!inWindow(candidate, only)) return null;
+  return sharedNames(candidate.customerName, only.destinatario) >= 1 ? only : null;
+}
+
+function hintOf(candidate: CotejoCandidate, why: string): CotejoHint {
+  return { candidate, why };
+}
+
+/**
+ * Suma al cotejo lo que se encontró por DNI. Una pareja por DNI solo se
+ * vincula si nadie más la discute: ni otra salida con el mismo envío, ni otro
+ * envío ya emparejado con esa salida por otro camino.
+ */
+export function mergeDniMatches(
+  outcomes: CotejoOutcome[],
+  pairs: { candidate: CotejoCandidate; row: OlvaPortalRow }[],
+): CotejoOutcome[] {
+  const out = [...outcomes];
+  const key = (row: OlvaPortalRow) => formatOlvaTracking(row.id);
+  const indexOf = (row: OlvaPortalRow) => out.findIndex((o) => key(o.row) === key(row));
+  const byTracking = new Map<string, { row: OlvaPortalRow; candidates: CotejoCandidate[] }>();
+  for (const p of pairs) {
+    const entry = byTracking.get(key(p.row)) ?? { row: p.row, candidates: [] };
+    if (!entry.candidates.some((c) => c.shipmentId === p.candidate.shipmentId)) entry.candidates.push(p.candidate);
+    byTracking.set(key(p.row), entry);
+  }
+
+  const put = (row: OlvaPortalRow, next: CotejoOutcome) => {
+    const i = indexOf(row);
+    if (i >= 0) out[i] = next;
+    else out.push(next);
+  };
+
+  for (const { row, candidates } of byTracking.values()) {
+    const i = indexOf(row);
+    const current = i >= 0 ? out[i] : undefined;
+    if (current?.kind === "ya_vinculado") continue;
+    const [only] = candidates;
+    if (candidates.length !== 1 || !only) {
+      put(row, {
+        kind: "revisar",
+        row,
+        reason: `El mismo envío responde al DNI de ${candidates.length} salidas.`,
+        hints: candidates.slice(0, MAX_HINTS).map((c) => hintOf(c, "mismo DNI")),
+      });
+      continue;
+    }
+    if (current?.kind === "vincular") {
+      if (current.candidate.shipmentId === only.shipmentId) continue;
+      put(row, {
+        kind: "revisar",
+        row,
+        reason: "El DNI apunta a una salida y la dirección y el nombre a otra.",
+        hints: [hintOf(current.candidate, "misma dirección y mismos nombres"), hintOf(only, "mismo DNI")],
+      });
+      continue;
+    }
+    // ¿Esa salida ya se la llevó OTRO envío por otro camino?
+    const rival = out.findIndex(
+      (o) => o.kind === "vincular" && o.candidate.shipmentId === only.shipmentId && key(o.row) !== key(row),
+    );
+    if (rival >= 0) {
+      const other = out[rival]!;
+      out[rival] = {
+        kind: "revisar",
+        row: other.row,
+        reason: "Otro envío de Olva responde al DNI de esta salida.",
+        hints: [hintOf(only, "misma dirección y mismos nombres")],
+      };
+      put(row, { kind: "revisar", row, reason: "Otro envío de Olva coincide con esta salida.", hints: [hintOf(only, "mismo DNI")] });
+      continue;
+    }
+    put(row, { kind: "vincular", row, candidate: only, via: "dni" });
+  }
+  return out;
 }
