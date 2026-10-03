@@ -6,6 +6,7 @@ import type {
   ClosureActionKey,
 } from "@/app/dashboard/pedidos/actions";
 import { cn } from "@/components/ui";
+import { Badge, Banner, FIELD, OpsButton } from "@/components/ops-ui";
 import { macroSubstageLabel, type MacroSubstage } from "@/lib/order-macro-stage";
 import { outputDisplayCode } from "@/lib/shipment-output";
 import type { ShipmentRow } from "@/lib/types";
@@ -230,76 +231,94 @@ export function OrderClosureDesk({
     if (saved) setSelected(null);
   }
 
+  const FIELD_LABEL = "grid gap-1.5 text-[13px] font-medium text-ink-700";
+  const canSave = !(
+    pending ||
+    !note.trim() ||
+    (chosen?.needsShipment && !shipmentId) ||
+    (chosen?.needsAmount &&
+      (!amount.trim() || !Number.isFinite(Number(amount)) || Number(amount) <= 0))
+  );
+
   return (
-    <section className="rounded-xl border border-orange-200 bg-orange-50/40 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-orange-800">
-            Mesa de cierre
-          </p>
-          <p className="mt-1 text-sm text-slate-600">
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <h3 className="text-base font-semibold leading-6 text-ink-900">Mesa de cierre</h3>
+            <Badge tone={stage === "finalizado" ? "ok" : openReasons.length ? "warn" : "neutral"} className="tabular-nums">
+              {stage === "finalizado"
+                ? "Cerrado"
+                : `${openReasons.length} pendiente${openReasons.length === 1 ? "" : "s"}`}
+            </Badge>
+          </div>
+          <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
             Cada obligación se cierra con un hecho nuevo; el historial anterior no se modifica.
           </p>
         </div>
-        <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-orange-800 ring-1 ring-orange-200">
-          {stage === "finalizado"
-            ? "Cerrado"
-            : `${openReasons.length} pendiente${openReasons.length === 1 ? "" : "s"}`}
-        </span>
       </div>
 
       {openReasons.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1.5" aria-label="Obligaciones abiertas">
           {openReasons.map((reason) => (
-            <span key={reason} className="rounded-full bg-white px-2 py-1 text-xs text-orange-900 ring-1 ring-orange-200">
+            <Badge key={reason} tone="warn">
               {macroSubstageLabel(reason)}
-            </span>
+            </Badge>
           ))}
         </div>
       )}
 
       {actions.length > 0 ? (
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-2 sm:grid-cols-2" role="group" aria-label="Acciones de cierre">
           {actions.map((action) => {
             const meta = ACTION_META[action];
+            const active = selected === action;
             return (
               <button
                 key={action}
                 type="button"
                 disabled={pending}
+                aria-pressed={active}
                 onClick={() => choose(action)}
                 className={cn(
-                  "rounded-lg border bg-white p-3 text-left transition hover:-translate-y-px hover:shadow-sm disabled:opacity-50",
-                  meta.tone === "danger" ? "border-rose-200" : "border-orange-200",
+                  "rounded-lg p-3 text-left transition-shadow disabled:cursor-not-allowed disabled:opacity-50",
+                  active
+                    ? "bg-brand-50 ring-2 ring-inset ring-brand-600"
+                    : "bg-white ring-1 ring-inset ring-line-strong hover:ring-ink-300",
                 )}
               >
-                <span className={cn("block text-sm font-semibold", meta.tone === "danger" ? "text-rose-800" : "text-slate-800")}>
+                <span
+                  className={cn(
+                    "block text-sm font-semibold",
+                    meta.tone === "danger" ? "text-crit-fg" : active ? "text-brand-700" : "text-ink-900",
+                  )}
+                >
                   {meta.label}
                 </span>
-                <span className="mt-1 block text-xs leading-4 text-slate-500">{meta.description}</span>
+                <span className="mt-0.5 block text-[13px] leading-5 text-ink-500">{meta.description}</span>
               </button>
             );
           })}
         </div>
       ) : (
-        <p className="mt-3 rounded-lg bg-white px-3 py-2 text-xs text-slate-500 ring-1 ring-orange-100">
+        <p className="rounded-lg bg-wash px-4 py-3 text-[13px] leading-5 text-ink-600">
           Tu rol puede consultar este cierre, pero no tiene una acción disponible sobre sus obligaciones actuales.
         </p>
       )}
 
       {selected && chosen && (
-        <div className="mt-4 space-y-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="space-y-4 rounded-lg p-4 ring-1 ring-inset ring-line">
           <div>
-            <p className="text-sm font-semibold text-slate-900">{chosen.label}</p>
-            <p className="text-xs text-slate-500">{chosen.description}</p>
+            <p className="text-sm font-semibold text-ink-900">{chosen.label}</p>
+            <p className="mt-0.5 text-[13px] leading-5 text-ink-500">{chosen.description}</p>
           </div>
           {chosen.needsShipment && (
-            <label className="block text-xs font-medium text-slate-600">
+            <label className={FIELD_LABEL}>
               Salida física
               <select
                 value={shipmentId}
                 onChange={(event) => setShipmentId(event.target.value)}
-                className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+                className={cn(FIELD, "font-normal pointer-coarse:h-11")}
               >
                 <option value="">Elige una salida</option>
                 {selectableGuides.map((guide) => (
@@ -311,64 +330,53 @@ export function OrderClosureDesk({
             </label>
           )}
           {chosen.needsAmount && (
-            <label className="block text-xs font-medium text-slate-600">
+            <label className={cn(FIELD_LABEL, "sm:w-48")}>
               Monto (S/)
               <input
                 inputMode="decimal"
                 value={amount}
                 onChange={(event) => setAmount(event.target.value)}
                 placeholder="0.00"
-                className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+                className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11")}
               />
             </label>
           )}
-          <label className="block text-xs font-medium text-slate-600">
+          <label className={FIELD_LABEL}>
             Nota de auditoría
             <textarea
               rows={2}
               value={note}
               onChange={(event) => setNote(event.target.value)}
               placeholder="Qué ocurrió, quién lo confirmó y qué evidencia se revisó"
-              className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+              className={cn(FIELD, "h-auto py-2 font-normal leading-5")}
             />
           </label>
-          <label className="block text-xs font-medium text-slate-600">
+          <label className={FIELD_LABEL}>
             Referencia o evidencia (opcional)
             <input
               value={reference}
               onChange={(event) => setReference(event.target.value)}
               placeholder="N.º de operación, enlace, nombre de archivo o lote"
-              className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+              className={cn(FIELD, "font-normal pointer-coarse:h-11")}
             />
           </label>
           {selected === "refund_complete" && (
-            <p className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            <Banner tone="crit">
               Este botón no envía dinero. Úsalo solamente después de que Frankz haya hecho el reembolso.
-            </p>
+            </Banner>
           )}
-          <div className="flex gap-2">
-            <button
-              type="button"
-              disabled={
-                pending ||
-                !note.trim() ||
-                (chosen.needsShipment && !shipmentId) ||
-                (chosen.needsAmount &&
-                  (!amount.trim() || !Number.isFinite(Number(amount)) || Number(amount) <= 0))
-              }
+          <div className="flex gap-2 border-t border-line pt-4">
+            <OpsButton
+              variant={chosen.tone === "danger" ? "danger" : "primary"}
+              disabled={!canSave}
               onClick={submit}
-              className="rounded-lg bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+              className="pointer-coarse:h-11"
             >
               Guardar acción
-            </button>
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => setSelected(null)}
-              className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
-            >
+            </OpsButton>
+            <OpsButton disabled={pending} onClick={() => setSelected(null)} className="pointer-coarse:h-11">
               Cancelar
-            </button>
+            </OpsButton>
           </div>
         </div>
       )}

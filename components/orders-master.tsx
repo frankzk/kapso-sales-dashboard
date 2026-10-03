@@ -27,6 +27,7 @@ import {
   CHECKBOX,
   ChoiceChip,
   FIELD,
+  FIELD_BOX,
   FilterPill,
   OpsButton,
   StatusCard,
@@ -1060,7 +1061,7 @@ function FacetPill({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={`Buscar ${label.toLocaleLowerCase("es")}`}
-                className={cn(FIELD, "h-8 pl-8")}
+                className={cn(FIELD_BOX, "h-8 w-full pl-8 pr-3")}
               />
             </label>
           )}
@@ -1230,7 +1231,7 @@ function MoreFilters({
             onChange={(e) =>
               onPatch({ shippingModes: e.target.value ? new Set([e.target.value]) : new Set() })
             }
-            className={cn(FIELD, "w-44 pointer-coarse:h-11")}
+            className={cn(FIELD_BOX, "h-9 w-44 px-3 pointer-coarse:h-11")}
           >
             <option value="">Todas</option>
             <option value="cod">Contraentrega</option>
@@ -1242,7 +1243,7 @@ function MoreFilters({
           <select
             value={filters.staleDays}
             onChange={(e) => onPatch({ staleDays: Number(e.target.value) })}
-            className={cn(FIELD, "w-36 pointer-coarse:h-11")}
+            className={cn(FIELD_BOX, "h-9 w-36 px-3 pointer-coarse:h-11")}
           >
             <option value={0}>Sin filtro</option>
             <option value={3}>3 días</option>
@@ -1325,7 +1326,7 @@ function DateRange({
           value={from}
           aria-label={`${label}: desde`}
           onChange={(e) => onChange(e.target.value, to)}
-          className={cn(FIELD, "min-w-0 flex-1 px-2.5 tabular-nums pointer-coarse:h-11")}
+          className={cn(FIELD_BOX, "h-9 flex-1 px-2.5 tabular-nums pointer-coarse:h-11")}
         />
         <span aria-hidden className="text-ink-500">–</span>
         <input
@@ -1333,7 +1334,7 @@ function DateRange({
           value={to}
           aria-label={`${label}: hasta`}
           onChange={(e) => onChange(from, e.target.value)}
-          className={cn(FIELD, "min-w-0 flex-1 px-2.5 tabular-nums pointer-coarse:h-11")}
+          className={cn(FIELD_BOX, "h-9 flex-1 px-2.5 tabular-nums pointer-coarse:h-11")}
         />
       </div>
     </fieldset>
@@ -1720,7 +1721,7 @@ function BulkBar({
             <select
               value={courier}
               onChange={(e) => setCourier(e.target.value as ManualRouteCourier)}
-              className={cn(FIELD, "h-8 w-auto pointer-coarse:h-11")}
+              className={cn(FIELD_BOX, "h-8 w-auto px-3 pointer-coarse:h-11")}
             >
               {BULK_COURIERS.map((c) => (
                 <option key={c.key} value={c.key}>
@@ -1735,7 +1736,7 @@ function BulkBar({
               type="date"
               value={dispatchDate}
               onChange={(e) => setDispatchDate(e.target.value)}
-              className={cn(FIELD, "h-8 w-auto tabular-nums pointer-coarse:h-11")}
+              className={cn(FIELD_BOX, "h-8 w-auto px-3 tabular-nums pointer-coarse:h-11")}
             />
           </label>
           <label className={LABEL}>
@@ -1744,7 +1745,7 @@ function BulkBar({
               value={note}
               onChange={(e) => setNote(e.target.value)}
               placeholder="Opcional"
-              className={cn(FIELD, "h-8 w-56 pointer-coarse:h-11")}
+              className={cn(FIELD_BOX, "h-8 w-56 px-3 pointer-coarse:h-11")}
             />
           </label>
           <OpsButton variant="primary" size="sm" onClick={createOutputs} disabled={busy} className="pointer-coarse:h-11">
@@ -1770,7 +1771,7 @@ function BulkBar({
             <select
               value={bulkGeneral}
               onChange={(e) => setBulkGeneral(e.target.value as GeneralStatus)}
-              className={cn(FIELD, "h-8 w-auto pointer-coarse:h-11")}
+              className={cn(FIELD_BOX, "h-8 w-auto px-3 pointer-coarse:h-11")}
             >
               {GENERAL_STATUSES.map((s) => (
                 <option key={s.code} value={s.code}>
@@ -1784,7 +1785,7 @@ function BulkBar({
             <select
               value={bulkOperational}
               onChange={(e) => setBulkOperational(e.target.value)}
-              className={cn(FIELD, "h-8 w-auto pointer-coarse:h-11")}
+              className={cn(FIELD_BOX, "h-8 w-auto px-3 pointer-coarse:h-11")}
             >
               {bulkOperationalOptions.map((o) => (
                 <option key={o.code} value={o.code}>
@@ -1799,7 +1800,7 @@ function BulkBar({
               value={bulkReason}
               onChange={(e) => setBulkReason(e.target.value)}
               placeholder="Opcional"
-              className={cn(FIELD, "h-8 w-56 pointer-coarse:h-11")}
+              className={cn(FIELD_BOX, "h-8 w-56 px-3 pointer-coarse:h-11")}
             />
           </label>
           <label className={LABEL}>
@@ -1808,7 +1809,7 @@ function BulkBar({
               value={bulkComment}
               onChange={(e) => setBulkComment(e.target.value)}
               placeholder="PAGADO"
-              className={cn(FIELD, "h-8 w-44 pointer-coarse:h-11")}
+              className={cn(FIELD_BOX, "h-8 w-44 px-3 pointer-coarse:h-11")}
             />
           </label>
           <OpsButton variant="primary" size="sm" onClick={applyStatus} disabled={busy} className="pointer-coarse:h-11">
@@ -1942,7 +1943,7 @@ function ConfirmationCycleSelect({
               router.refresh();
             });
           }}
-          className={cn(FIELD, "h-8 w-auto pointer-coarse:h-11")}
+          className={cn(FIELD_BOX, "h-8 w-auto px-3 pointer-coarse:h-11")}
         >
           {choices.map((option) => (
             <option key={option} value={option}>
@@ -2428,7 +2429,7 @@ function MasterSearchInput({
         aria-label="Buscar pedido, cliente, teléfono o guía"
         aria-describedby={tooShort ? hintId : undefined}
         placeholder="Buscar pedido, cliente, teléfono o guía…"
-        className={cn(FIELD, "pl-8 pr-9 pointer-coarse:h-11")}
+        className={cn(FIELD_BOX, "h-9 w-full pl-8 pr-9 pointer-coarse:h-11")}
       />
       {text && (
         <button

@@ -20,6 +20,7 @@
 // parpadear a vacío.
 
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { IconLock } from "@/components/icons";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, cn, EmptyState, STICKY_HEAD, TABLE_LAYER, TABLE_WRAP_PAGE_X } from "@/components/ui";
@@ -195,12 +196,15 @@ export const MODE_LABEL: Record<string, string> = {
   agency: "Agencia",
 };
 
+// El estado comercial en chapa de 4 px y par de tono (DESIGN.md): en curso es
+// información, entregado es correcto, devuelto es crítico; pendiente y anulado,
+// neutros.
 const STATUS_TONE: Record<string, string> = {
-  pendiente: "bg-slate-100 text-slate-700",
-  en_proceso: "bg-amber-100 text-amber-800",
-  entregado: "bg-emerald-100 text-emerald-800",
-  anulado: "bg-slate-200 text-slate-600",
-  devuelto: "bg-red-100 text-red-800",
+  pendiente: "bg-line text-ink-600",
+  en_proceso: "bg-info-bg text-info-fg",
+  entregado: "bg-ok-bg text-ok-fg",
+  anulado: "bg-line text-ink-600",
+  devuelto: "bg-crit-bg text-crit-fg",
 };
 
 // Chapa de 4 px del mundo de operación. La cobertura se lee por su texto; solo
@@ -254,7 +258,7 @@ export function ShalomCancelButton({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (busy) return <span className="text-xs text-slate-500">Anulando…</span>;
+  if (busy) return <span className="text-[13px] text-ink-500">Anulando…</span>;
 
   if (!confirming) {
     return (
@@ -265,19 +269,19 @@ export function ShalomCancelButton({
             setError(null);
             setConfirming(true);
           }}
-          className="text-xs font-medium text-red-700 hover:underline"
+          className="inline-flex items-center text-[13px] font-medium text-crit-fg underline-offset-2 hover:underline pointer-coarse:min-h-11"
         >
           Anular
         </button>
-        {error && <span className="w-full text-xs text-red-700">{error}</span>}
+        {error && <span role="alert" className="w-full text-[13px] text-crit-fg">{error}</span>}
       </>
     );
   }
 
   return (
-    <span className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-red-50 px-2 py-1.5">
-      <span className="text-xs text-red-800">
-        ¿Anular la guía <strong>{guideCode ?? "—"}</strong>
+    <span className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-crit-wash px-3 py-2">
+      <span className="text-[13px] leading-5 text-ink-700">
+        ¿Anular la guía <strong className="font-semibold text-ink-900">{guideCode ?? "—"}</strong>
         {codigo ? ` (${codigo})` : ""} en Shalom? No se puede deshacer.
       </span>
       <button
@@ -290,14 +294,14 @@ export function ShalomCancelButton({
           if ("error" in res) setError(res.error);
           else onDone(res.notice);
         }}
-        className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-800"
+        className="inline-flex h-8 items-center rounded-md bg-white px-2.5 text-[13px] font-semibold text-crit-fg shadow-control ring-1 ring-inset ring-line-strong transition-colors hover:bg-crit-wash pointer-coarse:h-11"
       >
         Sí, anular
       </button>
       <button
         type="button"
         onClick={() => setConfirming(false)}
-        className="text-xs font-medium text-slate-600 hover:underline"
+        className="inline-flex h-8 items-center rounded-md px-2.5 text-[13px] font-semibold text-ink-600 transition-colors hover:bg-white/70 hover:text-ink-900 pointer-coarse:h-11"
       >
         Cancelar
       </button>
@@ -330,7 +334,7 @@ export function FenixCancelButton({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (busy) return <span className="text-xs text-slate-500">Anulando…</span>;
+  if (busy) return <span className="text-[13px] text-ink-500">Anulando…</span>;
 
   if (!confirming) {
     return (
@@ -341,19 +345,19 @@ export function FenixCancelButton({
             setError(null);
             setConfirming(true);
           }}
-          className="text-xs font-medium text-red-700 hover:underline"
+          className="inline-flex items-center text-[13px] font-medium text-crit-fg underline-offset-2 hover:underline pointer-coarse:min-h-11"
         >
           Anular guía Swayp
         </button>
-        {error && <span className="w-full text-xs text-red-700">{error}</span>}
+        {error && <span role="alert" className="w-full text-[13px] text-crit-fg">{error}</span>}
       </>
     );
   }
 
   return (
-    <span className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-red-50 px-2 py-1.5">
-      <span className="text-xs text-red-800">
-        ¿Anular la guía <strong>{guideCode ?? "—"}</strong>?{" "}
+    <span className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-crit-wash px-3 py-2">
+      <span className="text-[13px] leading-5 text-ink-700">
+        ¿Anular la guía <strong className="font-semibold text-ink-900">{guideCode ?? "—"}</strong>?{" "}
         {wasFilled
           ? "La caja se queda como está y la salida vuelve a quedar sin courier, lista para otra guía."
           : "La salida queda anulada."}{" "}
@@ -369,14 +373,14 @@ export function FenixCancelButton({
           if (res.error) setError(res.error);
           else onDone(res.notice ?? "Guía Swayp anulada.");
         }}
-        className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-800"
+        className="inline-flex h-8 items-center rounded-md bg-white px-2.5 text-[13px] font-semibold text-crit-fg shadow-control ring-1 ring-inset ring-line-strong transition-colors hover:bg-crit-wash pointer-coarse:h-11"
       >
         Sí, anular
       </button>
       <button
         type="button"
         onClick={() => setConfirming(false)}
-        className="text-xs font-medium text-slate-600 hover:underline"
+        className="inline-flex h-8 items-center rounded-md px-2.5 text-[13px] font-semibold text-ink-600 transition-colors hover:bg-white/70 hover:text-ink-900 pointer-coarse:h-11"
       >
         Cancelar
       </button>
@@ -408,7 +412,7 @@ export function ManualOutputCancelButton({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (busy) return <span className="text-xs text-slate-500">Anulando…</span>;
+  if (busy) return <span className="text-[13px] text-ink-500">Anulando…</span>;
 
   if (!confirming) {
     return (
@@ -419,19 +423,19 @@ export function ManualOutputCancelButton({
             setError(null);
             setConfirming(true);
           }}
-          className="text-xs font-medium text-red-700 hover:underline"
+          className="inline-flex items-center text-[13px] font-medium text-crit-fg underline-offset-2 hover:underline pointer-coarse:min-h-11"
         >
           Anular salida
         </button>
-        {error && <span className="w-full text-xs text-red-700">{error}</span>}
+        {error && <span role="alert" className="w-full text-[13px] text-crit-fg">{error}</span>}
       </>
     );
   }
 
   return (
-    <span className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-red-50 px-2 py-1.5">
-      <span className="text-xs text-red-800">
-        ¿Anular <strong>{label}</strong>? Solo si la caja sigue en almacén; si ya salió con el
+    <span className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-crit-wash px-3 py-2">
+      <span className="text-[13px] leading-5 text-ink-700">
+        ¿Anular <strong className="font-semibold text-ink-900">{label}</strong>? Solo si la caja sigue en almacén; si ya salió con el
         motorizado, registra su retorno.
       </span>
       <button
@@ -444,14 +448,14 @@ export function ManualOutputCancelButton({
           if (res.error) setError(res.error);
           else onDone(res.notice ?? `${label} anulada.`);
         }}
-        className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-800"
+        className="inline-flex h-8 items-center rounded-md bg-white px-2.5 text-[13px] font-semibold text-crit-fg shadow-control ring-1 ring-inset ring-line-strong transition-colors hover:bg-crit-wash pointer-coarse:h-11"
       >
         Sí, anular
       </button>
       <button
         type="button"
         onClick={() => setConfirming(false)}
-        className="text-xs font-medium text-slate-600 hover:underline"
+        className="inline-flex h-8 items-center rounded-md px-2.5 text-[13px] font-semibold text-ink-600 transition-colors hover:bg-white/70 hover:text-ink-900 pointer-coarse:h-11"
       >
         Cancelar
       </button>
@@ -463,13 +467,18 @@ export function StatusBadge({ status, locked }: { status: string; locked?: boole
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
-        STATUS_TONE[status] ?? "bg-slate-100 text-slate-700",
+        "inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 text-xs font-medium leading-none",
+        STATUS_TONE[status] ?? "bg-line text-ink-600",
       )}
       title={locked ? "Estado fijado manualmente: el recálculo automático no lo pisa" : undefined}
     >
       {generalLabel(status)}
-      {locked && <span aria-hidden="true">🔒</span>}
+      {locked && (
+        <>
+          <IconLock aria-hidden className="size-3" strokeWidth={2.2} />
+          <span className="sr-only">(fijado a mano)</span>
+        </>
+      )}
     </span>
   );
 }
@@ -536,7 +545,7 @@ export function PaymentIndicator({
   const key = keyState ? (KEY_STATE_LABEL[keyState as KeyState] ?? keyState) : null;
   const alert = paymentState === "posible_duplicado";
   return (
-    <span className={cn("text-xs", alert && "font-semibold text-red-700")} title={key ?? undefined}>
+    <span className={cn(alert && "font-semibold text-crit-fg")} title={key ?? undefined}>
       {pay}
       {key && key !== "Sin clave" ? ` · ${key}` : ""}
     </span>
@@ -557,7 +566,7 @@ export function AgencyDays({
   const soon = left !== null && Number.isFinite(left) && left <= 3 * 86_400_000;
   return (
     <span
-      className={cn(soon && "font-semibold text-amber-700")}
+      className={cn("tabular-nums", soon && "font-semibold text-warn-fg")}
       title={expiresAt ? `Vence el ${fmtDate(expiresAt)}` : undefined}
     >
       {days === null ? "—" : days}
@@ -571,6 +580,8 @@ export const TIMELINE_LABEL: Record<string, string> = {
   cancelled_shopify: "Anulado en Shopify",
   courier_assigned: "Courier asignado",
   guide_registered: "Guía registrada",
+  guide_created: "Guía creada",
+  guide_cancelled: "Guía anulada",
   aliclik_duplicate_resolution: "Resolución de posible duplicado Aliclik",
   route_output_created: "Salida y rótulo creados",
   route_output_cancelled: "Salida anulada",

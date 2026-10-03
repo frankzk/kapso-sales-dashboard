@@ -21,7 +21,9 @@ describe("Master: la fila del drawer abierto se resalta", () => {
 
   it("el velo del drawer deja ver la tabla", () => {
     const drawer = read("components/order-drawer.tsx");
-    expect(drawer).toContain('className="fixed inset-0 z-30 flex justify-end bg-slate-900/20"');
-    expect(drawer).not.toContain("bg-slate-900/40 backdrop-blur-[1px]");
+    // Velo de tinta al 20 % y sin desenfoque (DESIGN.md, mundo de operación):
+    // la fila resaltada se sigue leyendo detrás de la ficha.
+    expect(drawer).toContain('className="fixed inset-0 z-30 flex justify-end bg-ink-900/20"');
+    expect(drawer).not.toContain("backdrop-blur");
   });
 });

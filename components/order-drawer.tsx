@@ -23,13 +23,32 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
-import { Card, cn, EmptyState, STICKY_HEAD, TABLE_LAYER, TABLE_WRAP_PAGE_X } from "@/components/ui";
+import { cn } from "@/components/ui";
 import {
-  frozenCellStyle,
-  frozenOffsets,
-  frozenTextWidth,
-  type FrozenKey,
-} from "@/lib/master-table-columns";
+  Badge,
+  Banner,
+  CHECKBOX,
+  FIELD,
+  FIELD_BOX,
+  OpsButton,
+  Skeleton,
+  opsButtonClass,
+  type BadgeTone,
+} from "@/components/ops-ui";
+import {
+  IconArrowUpRight,
+  IconCamera,
+  IconCheck,
+  IconChevronDown,
+  IconChevronRight,
+  IconList,
+  IconLock,
+  IconMapPin,
+  IconPhone,
+  IconReceipt,
+  IconWhatsApp,
+  IconX,
+} from "@/components/icons";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
 import { CopyButton } from "@/components/copy-button";
@@ -38,7 +57,6 @@ import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
 import { OrderClosureDesk } from "@/components/order-closure-desk";
 import { OrderRouteDesk } from "@/components/order-route-desk";
-import { ChecklistFilter } from "@/components/filters";
 import { PickupKeyPanel, ShalomPickupKeyPanel } from "@/components/pickup-key-panel";
 import { TandersGuideModal } from "@/components/tanders-guide-modal";
 import { markTandersLabelGenerated } from "@/app/dashboard/pedidos/tanders-actions";
@@ -226,13 +244,15 @@ const DRAWER_STAGE_ORDER = MASTER_VIEWS.filter(
   (view): view is { key: OrderMacroStage; label: string } => view.key !== "todos",
 );
 
-const DRAWER_STAGE_ACCENT: Record<string, string> = {
-  por_confirmar: "border-amber-500 bg-amber-500 text-white",
-  preparacion: "border-sky-600 bg-sky-600 text-white",
-  por_despachar: "border-indigo-600 bg-indigo-600 text-white",
-  en_curso: "border-cyan-700 bg-cyan-700 text-white",
-  por_cerrar: "border-orange-600 bg-orange-600 text-white",
-  finalizado: "border-emerald-700 bg-emerald-700 text-white",
+// El paso actual del recorrido lleva el tono de su macroetapa (MOM §25), con el
+// mismo par de la chapa para que el número se lea: el anillo es el tono.
+const DRAWER_STAGE_STEP: Record<string, string> = {
+  por_confirmar: "bg-amber-100 text-amber-800 ring-2 ring-amber-500",
+  preparacion: "bg-sky-100 text-sky-800 ring-2 ring-sky-500",
+  por_despachar: "bg-indigo-100 text-indigo-800 ring-2 ring-indigo-500",
+  en_curso: "bg-cyan-100 text-cyan-800 ring-2 ring-cyan-500",
+  por_cerrar: "bg-orange-100 text-orange-800 ring-2 ring-orange-500",
+  finalizado: "bg-emerald-100 text-emerald-800 ring-2 ring-emerald-500",
 };
 
 function workspaceForSection(section: DrawerSectionId): DrawerWorkspaceView {
@@ -241,11 +261,12 @@ function workspaceForSection(section: DrawerSectionId): DrawerWorkspaceView {
   return "operar";
 }
 
-const NEXT_ACTION_TONE: Record<DrawerNextAction["tone"], string> = {
-  indigo: "border-indigo-200 bg-indigo-50 text-indigo-950",
-  amber: "border-amber-200 bg-amber-50 text-amber-950",
-  emerald: "border-emerald-200 bg-emerald-50 text-emerald-950",
-  slate: "border-slate-200 bg-slate-50 text-slate-950",
+/** La chapa de la próxima acción: azul por defecto, ámbar cuando algo la frena. */
+const NEXT_ACTION_BADGE: Record<DrawerNextAction["tone"], BadgeTone> = {
+  indigo: "brand",
+  amber: "warn",
+  emerald: "brand",
+  slate: "neutral",
 };
 
 /**
@@ -409,43 +430,43 @@ function DrawerJourneyRail({ current }: { current: string | null | undefined }) 
         const isCurrent = index === currentIndex;
         const isDone = currentIndex >= 0 && index < currentIndex;
         return (
-          <li key={stage.key} className="relative min-w-0 px-1 first:pl-0 last:pr-0">
+          <li key={stage.key} className="relative min-w-0">
             {index > 0 && (
               <span
                 aria-hidden="true"
                 className={cn(
-                  "absolute left-0 right-1/2 top-3 h-px -translate-y-1/2",
-                  isDone || isCurrent ? "bg-emerald-300" : "bg-slate-200",
+                  "absolute left-0 right-1/2 top-2.5 h-px",
+                  isDone || isCurrent ? "bg-ink-500" : "bg-line-strong",
                 )}
               />
             )}
             {index < DRAWER_STAGE_ORDER.length - 1 && (
               <span
                 aria-hidden="true"
-                className={cn(
-                  "absolute left-1/2 right-0 top-3 h-px -translate-y-1/2",
-                  isDone ? "bg-emerald-300" : "bg-slate-200",
-                )}
+                className={cn("absolute left-1/2 right-0 top-2.5 h-px", isDone ? "bg-ink-500" : "bg-line-strong")}
               />
             )}
-            <div className="relative flex min-w-0 flex-col items-center text-center" aria-current={isCurrent ? "step" : undefined}>
+            <div className="relative flex min-w-0 flex-col items-center px-0.5 text-center" aria-current={isCurrent ? "step" : undefined}>
               <span
                 className={cn(
-                  "relative z-[1] grid h-6 w-6 place-items-center rounded-full border text-[10px] font-bold tabular-nums",
-                  isCurrent && (DRAWER_STAGE_ACCENT[stage.key] ?? "border-slate-700 bg-slate-700 text-white"),
-                  isDone && "border-emerald-500 bg-emerald-500 text-white",
-                  !isCurrent && !isDone && "border-slate-200 bg-white text-slate-400",
+                  "relative z-[1] grid size-5 place-items-center rounded-full text-xs font-semibold tabular-nums",
+                  isCurrent
+                    ? (DRAWER_STAGE_STEP[stage.key] ?? "bg-line text-ink-700 ring-2 ring-ink-500")
+                    : isDone
+                      ? "bg-ink-900 text-white"
+                      : "bg-white text-ink-500 ring-1 ring-inset ring-line-strong",
                 )}
               >
-                {isDone ? "✓" : index + 1}
+                {isDone ? <IconCheck aria-hidden className="size-3" strokeWidth={2.6} /> : index + 1}
               </span>
               <span
                 className={cn(
-                  "mt-1.5 max-w-[6.5rem] text-[10px] font-semibold leading-tight",
-                  isCurrent ? "text-slate-900" : isDone ? "text-emerald-700" : "text-slate-400",
+                  "mt-1.5 max-w-[6.5rem] text-xs leading-4",
+                  isCurrent ? "font-semibold text-ink-900" : isDone ? "text-ink-600" : "text-ink-500",
                 )}
               >
                 {stage.label}
+                {isDone && <span className="sr-only"> (hecho)</span>}
               </span>
             </div>
           </li>
@@ -455,6 +476,11 @@ function DrawerJourneyRail({ current }: { current: string | null | undefined }) 
   );
 }
 
+/**
+ * La próxima acción: un título que dice qué hacer, por qué, y un solo botón.
+ * La chapa dice de qué parte del recorrido sale la acción («Confirmación ·
+ * último intento»); en ámbar cuando algo la frena.
+ */
 function DrawerNextActionCard({
   action,
   onJump,
@@ -462,37 +488,35 @@ function DrawerNextActionCard({
   action: DrawerNextAction;
   onJump: (target: DrawerSectionId) => void;
 }) {
-  const buttonClass = cn(
-    "inline-flex min-h-9 items-center justify-center rounded-lg px-3 py-2 text-xs font-bold transition focus:outline-none focus:ring-2 focus:ring-offset-2",
-    action.tone === "indigo" && "bg-indigo-700 text-white hover:bg-indigo-800 focus:ring-indigo-600",
-    action.tone === "amber" && "bg-amber-800 text-white hover:bg-amber-900 focus:ring-amber-700",
-    action.tone === "emerald" && "bg-emerald-800 text-white hover:bg-emerald-900 focus:ring-emerald-700",
-    action.tone === "slate" && "bg-slate-900 text-white hover:bg-slate-800 focus:ring-slate-700",
-  );
+  const cta = action.href ? (
+    <Link href={action.href} className={opsButtonClass("primary", "md", "shrink-0 pointer-coarse:h-11")}>
+      {action.cta}
+      <IconChevronRight aria-hidden />
+    </Link>
+  ) : action.target ? (
+    <OpsButton variant="primary" onClick={() => onJump(action.target!)} className="shrink-0 pointer-coarse:h-11">
+      {action.cta}
+      <IconChevronDown aria-hidden />
+    </OpsButton>
+  ) : null;
 
   return (
-    <section className={cn("rounded-xl border p-4", NEXT_ACTION_TONE[action.tone])}>
+    <section
+      aria-label="Próxima acción"
+      className={cn("rounded-lg p-4", action.tone === "amber" ? "bg-warn-wash" : "bg-wash")}
+    >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <p className="text-[11px] font-bold uppercase tracking-[0.14em] opacity-65">
-            Próxima acción · {action.eyebrow}
-          </p>
-          <h3 className="mt-1 text-base font-semibold leading-tight">{action.title}</h3>
-          <p className="mt-1 max-w-xl text-sm leading-5 opacity-75">{action.description}</p>
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+            <h3 className="text-base font-semibold leading-6 text-ink-900">
+              <span className="sr-only">Próxima acción: </span>
+              {action.title}
+            </h3>
+            <Badge tone={NEXT_ACTION_BADGE[action.tone]}>{action.eyebrow}</Badge>
+          </div>
+          <p className="mt-1 max-w-[62ch] text-sm leading-5 text-ink-600">{action.description}</p>
         </div>
-        {action.href ? (
-          <Link href={action.href} className={cn(buttonClass, "shrink-0")}>
-            {action.cta} →
-          </Link>
-        ) : action.target ? (
-          <button
-            type="button"
-            onClick={() => onJump(action.target!)}
-            className={cn(buttonClass, "shrink-0")}
-          >
-            {action.cta} ↓
-          </button>
-        ) : null}
+        {cta}
       </div>
     </section>
   );
@@ -769,30 +793,90 @@ export function OrderDrawer({
   const gfActive = detail?.gfDeliveries.length ? detail.gfDeliveries[detail.gfDeliveries.length - 1]! : null;
   const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel, gfDeliverySentence(gfActive)) : null;
 
+  // Diálogo modal: el foco entra a la hoja al abrir (sin saltar el scroll) y
+  // vuelve a donde estaba al cerrar, p. ej. al pedido de la tabla del Master.
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null;
+    scrollRef.current?.focus({ preventScroll: true });
+    return () => {
+      if (before?.isConnected) before.focus({ preventScroll: true });
+    };
+  }, []);
+
+  // `aria-modal` no basta: Tab se escapaba a la tabla del Master que queda
+  // detrás. El foco da la vuelta dentro de la hoja. Los modales de guía viven
+  // fuera de ella y llevan su propio foco.
+  const trapFocus = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab" || !scrollRef.current) return;
+    const items = Array.from(
+      scrollRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => el.getClientRects().length > 0);
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (!first || !last) return;
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || active === scrollRef.current)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const tabs: { id: DrawerWorkspaceView; label: string; count?: number }[] = [
+    { id: "operar", label: "Operar" },
+    { id: "informacion", label: "Información" },
+    { id: "actividad", label: "Actividad", count: detail?.timeline.length },
+  ];
+  // Pestañas con flechas, Inicio y Fin (patrón ARIA): el foco se mueve y la
+  // pestaña se abre en el mismo gesto.
+  const onTabKey = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    const index = tabs.findIndex((tab) => tab.id === workspace);
+    const target =
+      event.key === "ArrowRight"
+        ? tabs[(index + 1) % tabs.length]
+        : event.key === "ArrowLeft"
+          ? tabs[(index + tabs.length - 1) % tabs.length]
+          : event.key === "Home"
+            ? tabs[0]
+            : event.key === "End"
+              ? tabs[tabs.length - 1]
+              : null;
+    if (!target) return;
+    event.preventDefault();
+    openWorkspace(target.id);
+    document.getElementById(`pedido-tab-${target.id}`)?.focus();
+  };
+
   return (
-    <div
-      className="fixed inset-0 z-30 flex justify-end bg-slate-900/20"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-30 flex justify-end bg-ink-900/20" onClick={onClose}>
       <aside
         ref={scrollRef}
+        tabIndex={-1}
+        // La hoja recibe el foco solo para que Tab y el lector empiecen dentro;
+        // no es un control, así que sin anillo.
+        style={{ outline: "none" }}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={trapFocus}
         role="dialog"
         aria-modal="true"
         aria-label={`Pedido ${row?.order_name ?? ""}`}
-        className="h-full w-full max-w-[880px] overflow-y-auto bg-white shadow-2xl"
+        className="h-full w-full max-w-[880px] overflow-y-auto overscroll-contain bg-white shadow-pop"
       >
-        {/* La cabecera lleva lo que hay que tener SIEMPRE a la vista: qué pedido
-            es, en qué estado está y cuánto vale. Antes había que subir hasta
-            arriba para recordar el estado, y el monto quedaba enterrado entre
-            los datos del cliente. */}
-        <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur">
-          <div className="flex items-start justify-between gap-3 px-5 py-3">
+        {/* La cabecera lleva lo que hay que tener SIEMPRE a la vista (MOM §25):
+            qué pedido es, en qué estado está, cuánto vale, de quién es y cómo
+            llamarle. Antes había que subir hasta arriba para recordar el
+            estado, y el monto quedaba enterrado entre los datos del cliente. */}
+        <header className="sticky top-0 z-10 bg-white shadow-[inset_0_-1px_0_var(--color-line)]">
+          <div className="flex items-start justify-between gap-3 px-4 pt-4 sm:px-6">
             <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="text-base font-semibold text-slate-900">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <h2 className="text-lg font-semibold leading-7 tabular-nums text-ink-900">
                   {row?.order_name ?? "Pedido"}
-                </p>
+                </h2>
                 {shopifyUrl && (
                   <a
                     href={shopifyUrl}
@@ -800,32 +884,16 @@ export function OrderDrawer({
                     rel="noopener noreferrer"
                     title="Abrir en Shopify"
                     aria-label={`Abrir ${row?.order_name ?? "pedido"} en Shopify (nueva pestaña)`}
-                    className="inline-flex shrink-0 items-center justify-center rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-brand-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
+                    className="-ml-1 grid size-7 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
                   >
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden="true"
-                    >
-                      <path d="M7 17 17 7" />
-                      <path d="M8 7h9v9" />
-                    </svg>
+                    <IconArrowUpRight aria-hidden className="size-4" />
                   </a>
                 )}
                 {detail && (
-                  <StatusBadge
-                    status={detail.row.general_status}
-                    locked={detail.row.status_locked}
-                  />
+                  <StatusBadge status={detail.row.general_status} locked={detail.row.status_locked} />
                 )}
                 {detail && (
-                  <span className="text-sm font-semibold text-slate-700">
+                  <span className="text-sm font-semibold tabular-nums text-ink-900">
                     {fmtMoney(detail.row.order_total)}
                   </span>
                 )}
@@ -841,41 +909,57 @@ export function OrderDrawer({
                 // nombre de cliente largo se lo lleva por delante y el teléfono
                 // deja de poder copiarse justo en los pedidos donde más se
                 // necesita.
-                <div className="flex min-w-0 items-center gap-1 text-xs text-slate-500">
-                  <span className="truncate">
-                    {storeName(row.store_id)} · creado el {fmtDate(row.order_created_at)}
-                    {detail?.row.customer_name ? ` · ${detail.row.customer_name}` : ""}
+                <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-[13px] leading-5 text-ink-500 sm:flex-nowrap">
+                  {/* En el teléfono parte en dos líneas: recortado, el nombre
+                      del cliente desaparecía entero. */}
+                  <span className="min-w-0 sm:truncate">
+                    {storeName(row.store_id)} · creado el{" "}
+                    <span className="tabular-nums">{fmtDate(row.order_created_at)}</span>
+                    {detail?.row.customer_name ? (
+                      <>
+                        {" · "}
+                        <span className="text-ink-700">{detail.row.customer_name}</span>
+                      </>
+                    ) : null}
                   </span>
                   {detail?.row.customer_phone && (
                     <>
                       <span aria-hidden="true">·</span>
-                      <span className="tabular-nums whitespace-nowrap">
+                      <span className="whitespace-nowrap tabular-nums text-ink-700">
                         {detail.row.customer_phone}
                       </span>
-                      <CopyButton value={detail.row.customer_phone} label="el teléfono" />
+                      <CopyButton
+                        value={detail.row.customer_phone}
+                        label="el teléfono"
+                        className="justify-center pointer-coarse:size-11"
+                      />
                     </>
                   )}
                 </div>
               )}
             </div>
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1.5">
               {detail?.row.customer_phone && (
                 <>
                   <a
                     href={`tel:${detail.row.customer_phone}`}
-                    className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
                     title="Llamar al cliente"
+                    aria-label="Llamar al cliente"
+                    className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11 pointer-coarse:min-w-11")}
                   >
-                    Llamar
+                    <IconPhone aria-hidden className="text-ink-500" />
+                    <span className="hidden sm:inline">Llamar</span>
                   </a>
                   <a
                     href={`https://wa.me/${detail.row.customer_phone.replace(/\D/g, "")}`}
                     target="_blank"
                     rel="noreferrer"
-                    className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
                     title="Abrir WhatsApp"
+                    aria-label="Abrir WhatsApp con el cliente"
+                    className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11 pointer-coarse:min-w-11")}
                   >
-                    WhatsApp
+                    <IconWhatsApp aria-hidden className="text-ink-500" />
+                    <span className="hidden sm:inline">WhatsApp</span>
                   </a>
                 </>
               )}
@@ -884,705 +968,743 @@ export function OrderDrawer({
                   href={masterHref}
                   title="Abrir en Master de Pedidos"
                   aria-label={`Abrir ${row?.order_name ?? "el pedido"} en Master de Pedidos`}
-                  className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11 pointer-coarse:min-w-11")}
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <rect x="3" y="4" width="18" height="16" rx="2" />
-                    <path d="M3 10h18M9 10v10" />
-                  </svg>
+                  <IconList aria-hidden className="text-ink-500" />
                   <span className="hidden sm:inline">Master de Pedidos</span>
                 </a>
               )}
               <button
+                type="button"
                 onClick={onClose}
                 aria-label="Cerrar"
-                className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                className="-mr-1.5 grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
               >
-                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-                  <path
-                    d="M4 4l8 8M12 4l-8 8"
-                    stroke="currentColor"
-                    strokeWidth="1.75"
-                    strokeLinecap="round"
-                  />
-                </svg>
+                <IconX aria-hidden className="size-4" />
               </button>
             </div>
           </div>
 
+          {/* Los avisos van DENTRO de la cabecera fija: un error que se pierde
+              al scrollear es un error que nadie lee, y estas acciones mueven
+              dinero y estados. Se quitan con su «x». */}
+          {(error || notice) && detail && (
+            <div className="space-y-2 px-4 pt-3 sm:px-6">
+              {error && (
+                <Banner tone="crit" role="alert" className="items-start">
+                  <div className="flex items-start justify-between gap-3">
+                    <p>{error}</p>
+                    <DismissButton label="Quitar el error" onClick={() => setError(null)} />
+                  </div>
+                </Banner>
+              )}
+              {notice && (
+                <Banner tone="ok" role="status">
+                  <div className="flex items-start justify-between gap-3">
+                    <p>{notice}</p>
+                    <DismissButton label="Quitar el aviso" onClick={() => setNotice(null)} />
+                  </div>
+                </Banner>
+              )}
+            </div>
+          )}
+
           {/* Tres espacios estables, como en Shopify: hacer el trabajo, consultar
               el pedido y auditar lo ocurrido. El equipo deja de navegar una
               lista accidental de formularios. */}
-          {detail && (
-            <div className="flex items-center gap-5 px-5" role="tablist" aria-label="Espacios del pedido">
-              {(
-                [
-                  { id: "operar", label: "Operar", meta: "Siguiente acción" },
-                  { id: "informacion", label: "Información", meta: "Cliente y pedido" },
-                  {
-                    id: "actividad",
-                    label: "Actividad",
-                    meta: `${detail.timeline.length} movimiento${detail.timeline.length === 1 ? "" : "s"}`,
-                  },
-                ] as const
-              ).map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={workspace === tab.id}
-                  aria-controls={`pedido-panel-${tab.id}`}
-                  onClick={() => openWorkspace(tab.id)}
-                  className={cn(
-                    "relative flex min-h-11 items-center gap-2 border-b-2 px-0.5 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
-                    workspace === tab.id
-                      ? "border-brand-600 text-slate-950"
-                      : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800",
-                  )}
-                >
-                  <span>{tab.label}</span>
-                  <span
+          {detail ? (
+            <div className="mt-2 flex gap-6 px-4 sm:px-6" role="tablist" aria-label="Espacios del pedido">
+              {tabs.map((tab) => {
+                const active = workspace === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    id={`pedido-tab-${tab.id}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    aria-controls={`pedido-panel-${tab.id}`}
+                    tabIndex={active ? 0 : -1}
+                    onClick={() => openWorkspace(tab.id)}
+                    onKeyDown={onTabKey}
                     className={cn(
-                      "hidden rounded-full px-2 py-0.5 text-[10px] font-medium lg:inline",
-                      workspace === tab.id ? "bg-brand-50 text-brand-700" : "bg-slate-100 text-slate-500",
+                      "flex min-h-12 items-center gap-2 border-b-2 text-sm font-semibold transition-colors",
+                      active
+                        ? "border-brand-600 text-brand-700"
+                        : "border-transparent text-ink-500 hover:text-ink-900",
                     )}
                   >
-                    {tab.meta}
-                  </span>
-                </button>
-              ))}
+                    {tab.label}
+                    {tab.count != null && (
+                      <Badge tone={active ? "brand" : "neutral"} className="tabular-nums">
+                        {tab.count.toLocaleString("es-PE")}
+                      </Badge>
+                    )}
+                  </button>
+                );
+              })}
             </div>
+          ) : (
+            <div className="h-3" />
           )}
-        </div>
-
-        {/* Pegados bajo la cabecera: un error que se pierde al scrollear es un
-            error que nadie lee, y estas acciones mueven dinero y estados. */}
-        {error && (
-          <div className="sticky top-[112px] z-10 mx-5 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {error}
-          </div>
-        )}
-        {notice && (
-          <div className="sticky top-[112px] z-10 mx-5 mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-            {notice}
-          </div>
-        )}
+        </header>
 
         {!detail && error ? (
           // La carga falló: ya no queda nada que esperar. El esqueleto latiendo
           // bajo el error decía justo lo contrario —«sigo trayéndolo»— y dejaba
           // al equipo mirando una pantalla que no iba a llegar nunca. Aquí el
           // pedido no se pudo traer y lo único útil es volver a intentarlo.
-          <div className="space-y-3 p-5">
-            <p className="text-sm text-slate-500">
-              El detalle de este pedido no se pudo cargar. El pedido sigue en su sitio: esto es un
-              fallo al leerlo, no un pedido perdido.
-            </p>
-            <button
-              type="button"
-              onClick={() => void reload()}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
+          <div className="space-y-4 px-4 py-6 sm:px-6">
+            <Banner tone="crit" role="alert" title="El detalle de este pedido no se pudo cargar">
+              <p>{error}</p>
+              <p className="mt-1">El pedido sigue en su sitio: esto es un fallo al leerlo, no un pedido perdido.</p>
+            </Banner>
+            <OpsButton onClick={() => void reload()} className="pointer-coarse:h-11">
               Reintentar
-            </button>
+            </OpsButton>
           </div>
         ) : !detail ? (
           // Un "Cargando…" suelto no dice nada; un esqueleto con la forma del
           // contenido evita que la pantalla salte cuando llega.
-          <div className="space-y-4 p-5" aria-busy="true">
-            <div className="h-6 w-2/3 animate-pulse rounded bg-slate-100" />
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {[0, 1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className="h-10 animate-pulse rounded bg-slate-100" />
-              ))}
-            </div>
-            <div className="h-24 animate-pulse rounded bg-slate-100" />
-            <div className="h-40 animate-pulse rounded bg-slate-100" />
+          <div className="space-y-6 px-4 py-6 sm:px-6" aria-busy="true" aria-label="Cargando el pedido">
+            <Skeleton className="h-5 w-2/3" />
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-28 w-full" />
+            <Skeleton className="h-48 w-full" />
           </div>
         ) : (
-          <div className="flex flex-col gap-5 p-5">
-            <section
+          <div className="px-4 pb-10 pt-6 sm:px-6">
+            <div
               id="pedido-panel-operar"
               role="tabpanel"
-              aria-label="Operar pedido"
+              aria-labelledby="pedido-tab-operar"
               hidden={workspace !== "operar"}
-              data-drawer-section="resumen"
-              className="order-1 scroll-mt-28 space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4"
+              className="flex flex-col gap-6"
             >
-              <div>
-                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
-                  Situación del pedido
-                </p>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <MacroStageBadge stage={detail.row.macro_stage} />
-                  <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-600 ring-1 ring-slate-200">
-                    {macroSubstageLabel(detail.row.macro_substage)}
-                  </span>
-                  {/* Un motivo dice qué falta, la subetapa dice en qué punto va la
-                      gestión: el pedido se ve entero sin abrir nada. En Por cerrar
-                      los motivos son el trabajo mismo y los lista la mesa de cierre,
-                      así que no se repiten aquí. */}
-                  {detail.row.macro_stage !== "por_cerrar" &&
-                    (detail.row.macro_reasons ?? []).map((reason) => (
-                      <span
-                        key={reason}
-                        className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-900 ring-1 ring-amber-200"
-                      >
-                        {macroSubstageLabel(reason)}
-                      </span>
-                    ))}
-                  <span className="text-xs text-slate-400">
-                    {fmtAge(detail.row.macro_since ?? detail.row.status_since)} en esta macroetapa · fuente:{" "}
-                    {detail.row.status_source ?? "—"}
-                  </span>
-                </div>
-              </div>
-
-              <DrawerJourneyRail current={detail.row.macro_stage} />
-            </section>
-
-            {nextAction && workspace === "operar" && (
-              <div className="order-2 space-y-2">
-                <DrawerNextActionCard action={nextAction} onJump={jumpTo} />
-                {/* Grupo GF: quién tiene el paquete y en qué quedó, arriba y en
-                    cualquier etapa (también Por cerrar), sin bajar hasta
-                    «Salidas y guías». */}
-                {gfActive && (
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                    <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">Motorizado Grupo GF</p>
-                    <GfDeliveryLine delivery={gfActive} />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* La gestión de confirmación va arriba porque en Por confirmar ES
-                el trabajo. Se muestra antes que el panel de pago para que el
-                empate de `order-3` lo resuelva el orden del DOM: en Agencia el
-                abono se pide DURANTE la llamada, no en vez de ella. */}
-            {/* Y también en Reproprovincia: la gestión de llamadas era por GUÍA, y
-                una guía anulada no admite gestión, así que estos pedidos no se
-                podían llamar (0 llamadas sobre 920 en 60 días). La mesa de
-                confirmación es por PEDIDO: se reutiliza tal cual. */}
-            {(detail.row.macro_stage === "por_confirmar" ||
-              detail.row.macro_substage === "gestion_reproprovincia") &&
-              canEdit && (
-              <div
-                hidden={workspace !== "operar"}
-                data-drawer-section="confirmacion"
-                className="order-3 scroll-mt-28"
+              <section
+                data-drawer-section="resumen"
+                className="order-1 scroll-mt-36 space-y-5"
               >
-                <ConfirmationDesk
-                  brief={brief}
-                  onDuplicateChanged={() => { void reload(); onSaved(); }}
-                  row={detail.row}
-                  tasks={detail.tasks}
-                  shopifyUrl={shopifyUrl}
-                  timeline={detail.timeline}
-                  pending={pending}
-                  onAttempt={(payload) =>
-                    run(() => registerConfirmationAttempt(orderId, payload))
-                  }
-                />
-                {detail.row.macro_substage === "gestion_reproprovincia" && (
-                  <>
-                    {/* MOM §11.8: el agente de voz llama a estos pedidos. */}
-                    <VoiceAgentPanel orderId={orderId} pending={pending} run={run} />
-                    <DescartarRecuperacion
-                      pending={pending}
-                      onDiscard={(motivo) => run(() => descartarRecuperacion(orderId, motivo))}
-                    />
-                  </>
-                )}
-              </div>
-            )}
+                <div>
+                  <h3 className="text-base font-semibold leading-6 text-ink-900">Situación</h3>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <MacroStageBadge stage={detail.row.macro_stage} />
+                    <span className="text-sm font-medium text-ink-900">
+                      {macroSubstageLabel(detail.row.macro_substage)}
+                    </span>
+                    {/* Un motivo dice qué falta, la subetapa dice en qué punto va la
+                        gestión: el pedido se ve entero sin abrir nada. En Por cerrar
+                        los motivos son el trabajo mismo y los lista la mesa de cierre,
+                        así que no se repiten aquí. */}
+                    {detail.row.macro_stage !== "por_cerrar" &&
+                      (detail.row.macro_reasons ?? []).map((reason) => (
+                        <Badge key={reason} tone="warn">
+                          {macroSubstageLabel(reason)}
+                        </Badge>
+                      ))}
+                  </div>
+                  <p className="mt-1.5 text-[13px] leading-5 text-ink-500">
+                    <span className="tabular-nums">{fmtAge(detail.row.macro_since ?? detail.row.status_since)}</span> en esta
+                    macroetapa · fuente: {detail.row.status_source ?? "—"}
+                  </p>
+                </div>
 
-            <section
+                <DrawerJourneyRail current={detail.row.macro_stage} />
+              </section>
+              {nextAction && workspace === "operar" && (
+                <div className="order-2 space-y-3">
+                  <DrawerNextActionCard action={nextAction} onJump={jumpTo} />
+                  {/* Grupo GF: quién tiene el paquete y en qué quedó, arriba y en
+                      cualquier etapa (también Por cerrar), sin bajar hasta
+                      «Salidas y guías». */}
+                  {gfActive && (
+                    <div className={cn(FRAME, "px-4 py-3")}>
+                      <p className="text-[13px] font-medium text-ink-700">Motorizado Grupo GF</p>
+                      <GfDeliveryLine delivery={gfActive} />
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* La gestión de confirmación va arriba porque en Por confirmar ES
+                  el trabajo. Se muestra antes que el panel de pago para que el
+                  empate de `order-3` lo resuelva el orden del DOM: en Agencia el
+                  abono se pide DURANTE la llamada, no en vez de ella. */}
+              {/* Y también en Reproprovincia: la gestión de llamadas era por GUÍA, y
+                  una guía anulada no admite gestión, así que estos pedidos no se
+                  podían llamar (0 llamadas sobre 920 en 60 días). La mesa de
+                  confirmación es por PEDIDO: se reutiliza tal cual. */}
+              {(detail.row.macro_stage === "por_confirmar" ||
+                detail.row.macro_substage === "gestion_reproprovincia") &&
+                canEdit && (
+                <div
+                  data-drawer-section="confirmacion"
+                  className={cn("order-3 scroll-mt-36", SECTION)}
+                >
+                  <ConfirmationDesk
+                    brief={brief}
+                    onDuplicateChanged={() => { void reload(); onSaved(); }}
+                    row={detail.row}
+                    tasks={detail.tasks}
+                    shopifyUrl={shopifyUrl}
+                    timeline={detail.timeline}
+                    pending={pending}
+                    onAttempt={(payload) =>
+                      run(() => registerConfirmationAttempt(orderId, payload))
+                    }
+                  />
+                  {detail.row.macro_substage === "gestion_reproprovincia" && (
+                    <>
+                      {/* MOM §11.8: el agente de voz llama a estos pedidos. */}
+                      <VoiceAgentPanel orderId={orderId} pending={pending} run={run} />
+                      <DescartarRecuperacion
+                        pending={pending}
+                        onDiscard={(motivo) => run(() => descartarRecuperacion(orderId, motivo))}
+                      />
+                    </>
+                  )}
+                </div>
+              )}
+              <div
+                data-drawer-section="rutas"
+                className={cn("order-4 scroll-mt-36", SECTION)}
+              >
+                <OrderRouteDesk
+                  plan={detail.routePlan}
+                  gate={detail.routeGate}
+                  onJump={jumpTo}
+                  actionEnabled={routeEnabled}
+                  onSelect={selectRoute}
+                />
+              </div>
+              <section
+                data-drawer-section="guias"
+                className={cn("order-6 scroll-mt-36 space-y-4", SECTION)}
+              >
+                <SectionHead
+                  title="Salidas y guías"
+                  badge={<Badge className="tabular-nums">{detail.guides.length}</Badge>}
+                  help="Cada salida conserva su courier, rótulo, QR y resultado independiente."
+                />
+                {detail.guides.length === 0 ? (
+                  <p className={cn(FRAME, "px-4 py-3 text-sm text-ink-500")}>
+                    Sin gestión logística registrada todavía.
+                  </p>
+                ) : (
+                  <ul className={cn(FRAME, "divide-y divide-line")}>
+                    {detail.guides.map((g) => {
+                      const estado = {
+                        deliveryStatus: g.delivery_status,
+                        custodyState: g.custody_state,
+                        pickupState: g.pickup_state,
+                        courier: g.courier,
+                        swaypState: g.swayp_state ?? null,
+                        reportedStatus: g.reported_status ?? null,
+                      };
+                      const gf = detail.gfDeliveries.find((d) => d.shipmentId === g.id);
+                      return (
+                      <li key={g.id} className="space-y-2.5 px-4 py-3">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                          <span className="text-sm font-semibold capitalize text-ink-900">{g.courier}</span>
+                          <span className="font-mono text-xs text-ink-600">
+                            {outputDisplayCode(g.output_code, g.courier) || g.guide_code}
+                          </span>
+                          {/* El número con el que el COURIER conoce el envío.
+                              Estaba escondido: en cuanto la salida tenía código
+                              interno, `outputDisplayCode` ganaba y el `guide_code`
+                              no se pintaba nunca. Es justo el dato que hay que
+                              teclear en el panel del courier para buscarla, y el
+                              que el rótulo de Shalom titula «N° de Orden». */}
+                          {g.guide_code && outputDisplayCode(g.output_code, g.courier) && (
+                            <span className="select-all font-mono text-xs font-semibold text-ink-900">
+                              N° {g.guide_code}
+                            </span>
+                          )}
+                          {/* Shalom muestra en su panel el nº de orden Y un código
+                              corto. Sin el corto hay que abrir cada envío allá para
+                              saber cuál es cuál. */}
+                          {g.shalom_codigo && (
+                            <span className="rounded bg-wash px-1.5 py-0.5 font-mono text-xs font-medium text-ink-700 ring-1 ring-inset ring-line">
+                              {g.shalom_codigo}
+                            </span>
+                          )}
+                          <Badge tone={shipmentIsReturning(estado) ? "warn" : "neutral"}>
+                            {shipmentStateLabel(estado)}
+                          </Badge>
+                          {(g.aliclik_attempts ?? g.reroute_attempts) > 0 && (
+                            <span className="text-[13px] font-medium tabular-nums text-warn-fg">
+                              {g.aliclik_attempts ?? g.reroute_attempts} intento(s)
+                            </span>
+                          )}
+                          {g.guide_code === detail.row.guide_code && (
+                            <span className="ml-auto text-[13px] text-ink-500">Guía actual</span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                          {g.courier === "tanders" && (
+                            // Navegación real (no window.open tras un await): así el
+                            // bloqueador de ventanas emergentes no se la come. El
+                            // marcado en Tanders sale en paralelo, sin frenar la
+                            // impresión — el rótulo ya está compuesto de nuestro lado.
+                            <a
+                              href={`/dashboard/pedidos/rotulos?ids=${g.id}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={() => void markTandersLabelGenerated([g.id])}
+                              className={DOC_LINK}
+                            >
+                              Rótulo
+                              <IconArrowUpRight aria-hidden className="size-3.5" />
+                            </a>
+                          )}
+                          {/* Los dos rótulos del paquete en UNA hoja: el de
+                              Tanders arriba y, debajo, el QR de la salida y qué va
+                              dentro de la caja. Se suma a los otros dos en vez de
+                              reemplazarlos mientras se valida en el almacén. Marca
+                              «rótulo generado» igual que el enlace suyo: para
+                              Tanders el paquete quedó rotulado, lo imprimas junto o
+                              por separado. */}
+                          {g.courier === "tanders" && (
+                            <a
+                              href={`/api/pedidos/guia-combinada?ids=${g.id}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={() => void markTandersLabelGenerated([g.id])}
+                              className={DOC_LINK}
+                            >
+                              Guía combinada
+                              <IconArrowUpRight aria-hidden className="size-3.5" />
+                            </a>
+                          )}
+                          {/* Un solo papel para la caja de agencia: la etiqueta de
+                              Shalom —que la compone ELLOS y se pide a su API—
+                              arriba, y debajo nuestra banda con el QR de la salida
+                              y los productos. Antes eran dos impresiones, y para
+                              conseguir la segunda el almacén acababa creando una
+                              salida `por definir` que después bloquea la guía.
+
+                              Solo existe para las guías creadas por API: las que
+                              llegaron por el Excel no tienen `ose_id` y su rótulo se
+                              baja del panel de Shalom. */}
+                          {g.courier === "shalom" && g.shalom_ose_id && (
+                            <>
+                              <a href={`/api/shalom/rotulo/${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK}>
+                                Rótulo
+                                <IconArrowUpRight aria-hidden className="size-3.5" />
+                              </a>
+                              {/* El suelto se conserva a un clic de distancia: si la
+                                  composición falla, el mostrador de Shalom sigue
+                                  necesitando su papel. */}
+                              <a href={`/api/shalom/label/${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK_QUIET}>
+                                Solo Shalom
+                              </a>
+                              {/* El «Ticket Shalom», el recibo de tira del
+                                  mostrador. No es el rótulo: es el otro papel, el
+                                  que hasta ahora había que bajar a mano de
+                                  pro.shalom.pe envío por envío. */}
+                              <a href={`/api/shalom/ticket/${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK_QUIET}>
+                                Ticket
+                              </a>
+                            </>
+                          )}
+                          {g.qr_token && (
+                            <a href={`/api/pedidos/rotulos?ids=${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK}>
+                              Rótulo interno
+                              <IconArrowUpRight aria-hidden className="size-3.5" />
+                            </a>
+                          )}
+                          {canCreateShalomGuide && shalomGuideIsCancelable(g) && (
+                            <ShalomCancelButton
+                              shipmentId={g.id}
+                              guideCode={g.guide_code}
+                              codigo={g.shalom_codigo ?? null}
+                              onDone={(msg) => {
+                                setNotice(msg);
+                                void reload();
+                                onSaved();
+                              }}
+                            />
+                          )}
+                          {/* El botón que faltaba para Swayp. Rellenar la salida le
+                              cambia la vía, así que «Anular salida» deja de
+                              ofrecerse —bien: la guía ya existe del otro lado— y sin
+                              esto no quedaba ninguno. Ver `cancelFenixOutput`. */}
+                          {canEdit && fenixOutputIsCancelable(g) && (
+                            <FenixCancelButton
+                              shipmentId={g.id}
+                              guideCode={g.guide_code}
+                              wasFilled={detail.filledOutputIds.includes(g.id)}
+                              onDone={(msg) => {
+                                setNotice(msg);
+                                void reload();
+                                onSaved();
+                              }}
+                            />
+                          )}
+                          {/* El número con el que Olva conoce el envío, y con el
+                              que Kapta le pregunta el estado cada media hora (§12).
+                              Llega por correo después de crear la salida, así que
+                              se registra —o se corrige— desde aquí. */}
+                          {canEdit && g.courier.trim().toLowerCase() === "olva" && (
+                            <OlvaTrackingField
+                              shipmentId={g.id}
+                              current={
+                                g.olva_tracking && g.olva_emision
+                                  ? formatOlvaTracking({ tracking: g.olva_tracking, emision: g.olva_emision })
+                                  : null
+                              }
+                              rawStatus={g.olva_status ?? null}
+                              onDone={(msg) => {
+                                setNotice(msg);
+                                void reload();
+                                onSaved();
+                              }}
+                            />
+                          )}
+                          {/* Las salidas de ruta manual no tienen API a la que
+                              avisar: anularlas es corregir NUESTRO registro, así que
+                              basta el permiso con el que se crearon. */}
+                          {canEdit && manualOutputIsCancelable(g) && (
+                            <ManualOutputCancelButton
+                              shipmentId={g.id}
+                              label={g.output_code ?? g.guide_code ?? "esta salida"}
+                              onDone={(msg) => {
+                                setNotice(msg);
+                                void reload();
+                                onSaved();
+                              }}
+                            />
+                          )}
+                        </div>
+                        {/* Grupo GF: quién tiene el paquete y en qué quedó la parada. */}
+                        {gf ? <GfDeliveryLine delivery={gf} /> : null}
+                      </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                {/* El cobro del courier lo confirma una PERSONA en Validar
+                    pagos: el lector de imágenes prepara la ficha, pero valida una
+                    imagen, no un depósito. Desde acá se llega de un clic en vez
+                    de buscar el pedido en la otra pantalla. */}
+                {detail.row.payment_check_state && (
+                  <p className="text-[13px] leading-5 text-ink-500">
+                    Cobro del courier:{" "}
+                    <strong className="font-semibold text-ink-900">
+                      {PAYMENT_CHECK_OPTIONS.find((o) => o.value === detail.row.payment_check_state)
+                        ?.label ?? detail.row.payment_check_state}
+                    </strong>
+                    .{" "}
+                    <a href="/dashboard/pagos" target="_blank" rel="noreferrer" className={DOC_LINK}>
+                      Confirmarlo en Validar pagos
+                      <IconArrowUpRight aria-hidden className="size-3.5" />
+                    </a>
+                  </p>
+                )}
+                {detail.guides.some((guide) => guide.courier === "shalom") && (
+                  <ShalomPickupKeyPanel orderId={orderId} onChanged={onSaved} />
+                )}
+              </section>
+              {["por_cerrar", "finalizado"].includes(detail.row.macro_stage ?? "") && (
+                <div
+                  data-drawer-section="cierre"
+                  className={cn("order-7 scroll-mt-36", SECTION)}
+                >
+                  <OrderClosureDesk
+                    stage={detail.row.macro_stage}
+                    reasons={(detail.row.macro_reasons ?? []) as MacroSubstage[]}
+                    generalStatus={detail.row.general_status}
+                    guides={detail.guides}
+                    permissions={closurePermissions}
+                    pending={pending}
+                    onAction={(input) => run(() => registerClosureAction(orderId, input))}
+                  />
+                </div>
+              )}
+              {/* Agencia o una regla de riesgo ponen el pago antes que la ruta.
+                  Provincia COD puede salir contra entrega, así que conserva la
+                  Mesa de ruta primero y deja el pago anticipado como herramienta
+                  opcional debajo. Sigue disponible antes de crear Shalom para no
+                  reconstruir el antiguo callejón circular guía ↔ adelanto. */}
+              {showPaymentPanel && paymentPanel && (
+                <div
+                  data-drawer-section="pagos"
+                  className={cn(
+                    "scroll-mt-36",
+                    SECTION,
+                    paymentPanel.mode === "required" ? "order-3" : "order-5",
+                  )}
+                >
+                  <PickupKeyPanel
+                    orderId={orderId}
+                    mode={paymentPanel.mode}
+                    gatewayNote={gatewayNote}
+                    onChanged={onSaved}
+                  />
+                </div>
+              )}
+              {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
+                  una. En cuanto existe, el seguimiento vive en Envíos.
+
+                  Y solo donde Aliclik atiende. El plan de rutas ya no lo ofrece
+                  en Agencia —ahí van Shalom u Olva—, pero este panel se dibujaba
+                  igual con solo tener el permiso: la pantalla mostraba las dos
+                  tarjetas de agencia y, debajo, un formulario para crear una guía
+                  de una ruta que ese pedido no puede tomar. Se lee el plan en vez
+                  de repetir la regla aquí, que es como se vuelven a separar. */}
+              {canCreateGuide && aliclikOffered && (
+                <div
+                  data-drawer-section="aliclik"
+                  className={cn("order-5 scroll-mt-36", SECTION)}
+                >
+                  <AliclikGuidePanel
+                    orderId={orderId}
+                    hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
+                    health={detail.aliclikHealth}
+                    riskRequirement={brief?.risk.requirement ?? "ninguno"}
+                    paymentState={detail.row.payment_state}
+                    riskReasons={brief?.risk.reasons ?? []}
+                    duplicateHold={brief?.duplicateHold}
+                    onDuplicateChanged={() => { void reload(); onSaved(); }}
+                    onCreated={() => {
+                      void reload();
+                      onSaved();
+                    }}
+                  />
+                </div>
+              )}
+              {/* Esconderlo sin más dejaría buscando a quien esperaba encontrarlo.
+                  La salida es corregir la dirección: la cobertura se recalcula a
+                  partir de ella y, si el pedido era Provincia COD mal clasificada,
+                  Aliclik vuelve solo.
+
+                  Pero eso vale mientras la ruta se está DECIDIENDO. Con una salida
+                  ya activa la pregunta está contestada: corregir la dirección no va
+                  a traer Aliclik de vuelta a un paquete que ya viaja, y el bloque
+                  se lee como una opción disponible cuando no lo es. */}
+              {canCreateGuide &&
+                !aliclikOffered &&
+                detail.routePlan.operation === "agencia" &&
+                detail.routePlan.activeOutputCount === 0 && (
+                <div
+                  data-drawer-section="aliclik"
+                  className={cn("order-5 scroll-mt-36 space-y-3", SECTION)}
+                >
+                  <SectionHead
+                    title="Aliclik"
+                    help="Aliclik no atiende pedidos de Agencia; este va con Shalom u Olva. Si la dirección está mal clasificada, corrígela y la cobertura se recalcula sola. Y si la dirección está bien pero crees que Aliclik sí llega, pregúntaselo: cotizar no crea nada."
+                  />
+                  <OpsButton size="sm" onClick={() => jumpTo("ubicacion")} className="pointer-coarse:h-11">
+                    Revisar ubicación y cobertura
+                    <IconChevronDown aria-hidden className="text-ink-500" />
+                  </OpsButton>
+                  <AliclikCoverageProbe
+                    orderId={detail.row.order_id}
+                    district={detail.row.district}
+                    canMark={canCreateGuide}
+                  />
+                </div>
+              )}
+              {canEdit ? (
+                <div className={cn("order-8", SECTION)}>
+                  <OrderActions
+                    row={detail.row}
+                    canOverride={canOverride}
+                    pending={pending}
+                    outputCount={detail.routePlan.outputCount}
+                    onStatus={(general, operational, reason, agencyCourier) =>
+                      run(() => setOrderStatus(orderId, { general, operational, reason, agencyCourier }))
+                    }
+                    onComment={(text, type) => run(() => addOrderComment(orderId, { text, type }))}
+                    onReturn={(reason, guideCode) => run(() => registerReturn(orderId, { reason, guideCode }))}
+                    onRelink={(guideCode) => run(() => relinkGuide(guideCode, orderId))}
+                  />
+                </div>
+              ) : (
+                <div className={cn("order-8", SECTION)}>
+                  <div className="flex items-start gap-3 rounded-lg bg-wash px-4 py-3">
+                    <IconLock aria-hidden className="mt-0.5 size-4 shrink-0 text-ink-500" />
+                    <div>
+                      <p className="text-sm font-semibold text-ink-900">Solo lectura</p>
+                      <p className="mt-0.5 text-[13px] leading-5 text-ink-600">
+                        Tu rol permite consultar el pedido, sus comentarios y su historial, pero no modificarlo.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div
               id="pedido-panel-informacion"
               role="tabpanel"
-              aria-label="Información del pedido"
+              aria-labelledby="pedido-tab-informacion"
               hidden={workspace !== "informacion"}
-              className="order-1 rounded-xl border border-slate-200 bg-slate-50/70 p-4"
+              className="flex flex-col gap-6"
             >
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
-                    Pedido y cliente
-                  </p>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Datos comerciales sincronizados desde Shopify y contexto operativo de Kapta.
-                  </p>
-                </div>
+              <section
+                className="order-1 space-y-4"
+              >
                 {/* La cobertura vive en la cabecera fija. Repetirla aquí, a dos
                     dedos y en la misma pantalla, sugería que eran dos datos
                     distintos. La de «Ubicación y cobertura» sí se queda: ahí es
                     el sujeto de la sección y lo que se corrige. */}
-              </div>
-              <dl className="mt-4 grid grid-cols-2 gap-x-5 gap-y-3 text-sm sm:grid-cols-4">
-                <Field label="Cliente" value={detail.row.customer_name} />
-                <Field label="Teléfono" value={detail.row.customer_phone} />
-                <Field
-                  label="Modalidad"
-                  value={
-                    detail.row.shipping_mode
-                      ? (MODE_LABEL[detail.row.shipping_mode] ?? detail.row.shipping_mode)
-                      : null
-                  }
+                <SectionHead
+                  title="Pedido y cliente"
+                  help="Datos comerciales sincronizados desde Shopify y contexto operativo de Kapta."
                 />
-                <Field label="Monto" value={fmtMoney(detail.row.order_total)} />
-                <Field label="Tienda" value={storeName(detail.row.store_id)} />
-                <Field label="Creado" value={fmtDateTime(detail.row.order_created_at)} />
-                <Field label="Courier actual" value={detail.row.current_courier} />
-                <Field label="Guía actual" value={detail.row.guide_code} />
-                {/* Estos cuatro vivían solo en la tabla. Al sacar sus columnas
-                    del Master —para que quepa lo que se mira todos los días—
-                    tienen que estar aquí, o el dato desaparecería del sistema. */}
-                {detail.row.pickup_state && (
-                  <>
-                    <Field
-                      label="Agencia"
-                      value={
-                        [operationalLabel(detail.row.pickup_state), detail.row.agency_branch]
-                          .filter(Boolean)
-                          .join(" · ") || null
-                      }
-                    />
-                    <div>
-                      <dt className="text-xs text-slate-400">Días en agencia</dt>
-                      <dd className="text-slate-700">
-                        <AgencyDays
-                          arrivedAt={detail.row.agency_arrived_at}
-                          expiresAt={detail.row.agency_expires_at}
-                        />
-                      </dd>
-                    </div>
-                  </>
+                <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+                  <Field label="Cliente" value={detail.row.customer_name} />
+                  <Field label="Teléfono" value={detail.row.customer_phone} numeric />
+                  <Field
+                    label="Modalidad"
+                    value={
+                      detail.row.shipping_mode
+                        ? (MODE_LABEL[detail.row.shipping_mode] ?? detail.row.shipping_mode)
+                        : null
+                    }
+                  />
+                  <Field label="Monto" value={fmtMoney(detail.row.order_total)} numeric />
+                  <Field label="Tienda" value={storeName(detail.row.store_id)} />
+                  <Field label="Creado" value={fmtDateTime(detail.row.order_created_at)} numeric />
+                  <Field label="Courier actual" value={detail.row.current_courier} capitalize />
+                  <Field label="Guía actual" value={detail.row.guide_code} mono />
+                  {/* Estos cuatro vivían solo en la tabla. Al sacar sus columnas
+                      del Master —para que quepa lo que se mira todos los días—
+                      tienen que estar aquí, o el dato desaparecería del sistema. */}
+                  {detail.row.pickup_state && (
+                    <>
+                      <Field
+                        label="Agencia"
+                        value={
+                          [operationalLabel(detail.row.pickup_state), detail.row.agency_branch]
+                            .filter(Boolean)
+                            .join(" · ") || null
+                        }
+                      />
+                      <div className="min-w-0">
+                        <dt className={FIELD_LABEL}>Días en agencia</dt>
+                        <dd className={FIELD_VALUE}>
+                          <AgencyDays
+                            arrivedAt={detail.row.agency_arrived_at}
+                            expiresAt={detail.row.agency_expires_at}
+                          />
+                        </dd>
+                      </div>
+                    </>
+                  )}
+                  <div className="min-w-0">
+                    <dt className={FIELD_LABEL}>Pago / clave</dt>
+                    <dd className={FIELD_VALUE}>
+                      <PaymentIndicator
+                        paymentState={detail.row.payment_state}
+                        keyState={detail.row.key_state}
+                      />
+                    </dd>
+                  </div>
+                  <Field label="Costo logístico" value={fmtMoney(detail.row.logistics_cost)} numeric />
+                </dl>
+
+                {/* LA NOTA DEL PEDIDO, tal como se escribió en Shopify.
+                    Va FUERA de la rejilla y a ancho completo porque es texto libre
+                    y de largo imprevisible: como un campo más de cuatro columnas se
+                    cortaría justo donde está el dato. `whitespace-pre-wrap` respeta
+                    los saltos de línea que puso quien la escribió.
+                    Solo aparece si hay nota: un bloque vacío enseñaría un hueco
+                    permanente en todos los pedidos que no la usan. */}
+                {detail.shopifyNote && (
+                  <Banner tone="warn" title="Nota del pedido">
+                    <p className="mt-0.5 whitespace-pre-wrap break-words text-ink-900">{detail.shopifyNote}</p>
+                  </Banner>
                 )}
-                <div>
-                  <dt className="text-xs text-slate-400">Pago / clave</dt>
-                  <dd className="text-slate-700">
-                    <PaymentIndicator
-                      paymentState={detail.row.payment_state}
-                      keyState={detail.row.key_state}
-                    />
-                  </dd>
-                </div>
-                <Field label="Costo logístico" value={fmtMoney(detail.row.logistics_cost)} />
-              </dl>
-
-              {/* LA NOTA DEL PEDIDO, tal como se escribió en Shopify.
-                  Va FUERA de la rejilla y a ancho completo porque es texto libre
-                  y de largo imprevisible: como un campo más de cuatro columnas se
-                  cortaría justo donde está el dato. `whitespace-pre-wrap` respeta
-                  los saltos de línea que puso quien la escribió.
-                  Solo aparece si hay nota: un bloque vacío enseñaría un hueco
-                  permanente en todos los pedidos que no la usan. */}
-              {detail.shopifyNote && (
-                <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/70 p-3">
-                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-800">
-                    Nota del pedido
-                  </p>
-                  <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-800">
-                    {detail.shopifyNote}
-                  </p>
-                </div>
-              )}
-            </section>
-
-            <div hidden={workspace !== "informacion"} className="order-2 scroll-mt-28">
-              <GeoSection
-                orderId={orderId}
-                row={detail.row}
-                canEdit={canEdit}
-                onSaved={() => {
-                  void reload();
-                  onSaved();
-                }}
-              />
-            </div>
-
-            {detail.lineItems.length > 0 && (
-              <section
-                hidden={workspace !== "informacion"}
-                data-drawer-section="productos"
-                className="order-3 scroll-mt-28 rounded-xl border border-slate-200 bg-white p-4"
-              >
-                <div className="mb-2 flex items-baseline justify-between gap-3">
-                  <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
-                    Productos
-                  </h3>
-                  <p className="shrink-0 text-xs tabular-nums text-slate-500">
-                    {detail.lineItems.length}{" "}
-                    {detail.lineItems.length === 1 ? "producto" : "productos"}
-                  </p>
-                </div>
-                <OrderLineItems items={detail.lineItems} totals={detail.totals} />
               </section>
-            )}
-
-            <div
-              hidden={workspace !== "operar"}
-              data-drawer-section="rutas"
-              className="order-4 scroll-mt-28"
-            >
-              <OrderRouteDesk
-                plan={detail.routePlan}
-                gate={detail.routeGate}
-                onJump={jumpTo}
-                actionEnabled={routeEnabled}
-                onSelect={selectRoute}
-              />
-            </div>
-
-            <section
-              hidden={workspace !== "operar"}
-              data-drawer-section="guias"
-              className="order-6 scroll-mt-28 rounded-xl border border-sky-200 bg-sky-50/40 p-4"
-            >
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div>
-                  <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-sky-900">
-                    Salidas y guías
-                  </h3>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Cada salida conserva su courier, rótulo, QR y resultado independiente.
-                  </p>
-                </div>
-                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-sky-800 ring-1 ring-sky-200">
-                  {detail.guides.length}
-                </span>
-              </div>
-              {detail.guides.length === 0 ? (
-                <p className="text-sm text-slate-400">
-                  Sin gestión logística registrada todavía.
-                </p>
-              ) : (
-                <ul className="space-y-1.5">
-                  {detail.guides.map((g) => (
-                    <li
-                      key={g.id}
-                      className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-100 bg-white px-3 py-2 text-sm shadow-sm"
-                    >
-                      <span className="font-medium capitalize text-slate-800">{g.courier}</span>
-                      <span className="font-mono text-xs text-slate-500">
-                        {outputDisplayCode(g.output_code, g.courier) || g.guide_code}
-                      </span>
-                      {/* El número con el que el COURIER conoce el envío.
-                          Estaba escondido: en cuanto la salida tenía código
-                          interno, `outputDisplayCode` ganaba y el `guide_code`
-                          no se pintaba nunca. Es justo el dato que hay que
-                          teclear en el panel del courier para buscarla, y el
-                          que el rótulo de Shalom titula «N° de Orden». */}
-                      {g.guide_code && outputDisplayCode(g.output_code, g.courier) && (
-                        <span className="font-mono text-xs font-semibold text-slate-700">
-                          N° {g.guide_code}
-                        </span>
-                      )}
-                      {/* Shalom muestra en su panel el nº de orden Y un código
-                          corto. Sin el corto hay que abrir cada envío allá para
-                          saber cuál es cuál. */}
-                      {g.shalom_codigo && (
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs font-medium text-slate-700">
-                          {g.shalom_codigo}
-                        </span>
-                      )}
-                      {(() => {
-                        const estado = {
-                          deliveryStatus: g.delivery_status,
-                          custodyState: g.custody_state,
-                          pickupState: g.pickup_state,
-                          courier: g.courier,
-                          swaypState: g.swayp_state ?? null,
-                          reportedStatus: g.reported_status ?? null,
-                        };
-                        return (
-                          <span
-                            className={cn(
-                              "rounded-full px-2 py-0.5 text-xs",
-                              shipmentIsReturning(estado)
-                                ? "bg-amber-50 font-medium text-amber-800"
-                                : "bg-slate-100 text-slate-600",
-                            )}
-                          >
-                            {shipmentStateLabel(estado)}
-                          </span>
-                        );
-                      })()}
-                      {/* Grupo GF: quién tiene el paquete y en qué quedó la parada. */}
-                      {(() => {
-                        const gf = detail.gfDeliveries.find((d) => d.shipmentId === g.id);
-                        return gf ? <GfDeliveryLine delivery={gf} /> : null;
-                      })()}
-                      {(g.aliclik_attempts ?? g.reroute_attempts) > 0 && (
-                        <span className="text-xs text-amber-700">
-                          {g.aliclik_attempts ?? g.reroute_attempts} intento(s)
-                        </span>
-                      )}
-                      {g.courier === "tanders" && (
-                        // Navegación real (no window.open tras un await): así el
-                        // bloqueador de ventanas emergentes no se la come. El
-                        // marcado en Tanders sale en paralelo, sin frenar la
-                        // impresión — el rótulo ya está compuesto de nuestro lado.
-                        <a
-                          href={`/dashboard/pedidos/rotulos?ids=${g.id}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={() => void markTandersLabelGenerated([g.id])}
-                          className="text-xs font-medium text-brand-700 hover:underline"
-                        >
-                          Rótulo ↗
-                        </a>
-                      )}
-                      {/* Los dos rótulos del paquete en UNA hoja: el de
-                          Tanders arriba y, debajo, el QR de la salida y qué va
-                          dentro de la caja. Se suma a los otros dos en vez de
-                          reemplazarlos mientras se valida en el almacén. Marca
-                          «rótulo generado» igual que el enlace suyo: para
-                          Tanders el paquete quedó rotulado, lo imprimas junto o
-                          por separado. */}
-                      {g.courier === "tanders" && (
-                        <a
-                          href={`/api/pedidos/guia-combinada?ids=${g.id}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={() => void markTandersLabelGenerated([g.id])}
-                          className="rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-xs font-medium text-brand-700 hover:bg-brand-100"
-                        >
-                          Guía combinada ↗
-                        </a>
-                      )}
-                      {/* Un solo papel para la caja de agencia: la etiqueta de
-                          Shalom —que la compone ELLOS y se pide a su API—
-                          arriba, y debajo nuestra banda con el QR de la salida
-                          y los productos. Antes eran dos impresiones, y para
-                          conseguir la segunda el almacén acababa creando una
-                          salida `por definir` que después bloquea la guía.
-
-                          Solo existe para las guías creadas por API: las que
-                          llegaron por el Excel no tienen `ose_id` y su rótulo se
-                          baja del panel de Shalom. */}
-                      {g.courier === "shalom" && g.shalom_ose_id && (
-                        <>
-                          <a
-                            href={`/api/shalom/rotulo/${g.id}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs font-medium text-brand-700 hover:underline"
-                          >
-                            Rótulo ↗
-                          </a>
-                          {/* El suelto se conserva a un clic de distancia: si la
-                              composición falla, el mostrador de Shalom sigue
-                              necesitando su papel. */}
-                          <a
-                            href={`/api/shalom/label/${g.id}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs text-slate-500 hover:underline"
-                          >
-                            solo Shalom
-                          </a>
-                          {/* El «Ticket Shalom», el recibo de tira del
-                              mostrador. No es el rótulo: es el otro papel, el
-                              que hasta ahora había que bajar a mano de
-                              pro.shalom.pe envío por envío. */}
-                          <a
-                            href={`/api/shalom/ticket/${g.id}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs text-slate-500 hover:underline"
-                          >
-                            ticket
-                          </a>
-                        </>
-                      )}
-                      {canCreateShalomGuide && shalomGuideIsCancelable(g) && (
-                        <ShalomCancelButton
-                          shipmentId={g.id}
-                          guideCode={g.guide_code}
-                          codigo={g.shalom_codigo ?? null}
-                          onDone={(msg) => {
-                            setNotice(msg);
-                            void reload();
-                            onSaved();
-                          }}
-                        />
-                      )}
-                      {/* El botón que faltaba para Swayp. Rellenar la salida le
-                          cambia la vía, así que «Anular salida» deja de
-                          ofrecerse —bien: la guía ya existe del otro lado— y sin
-                          esto no quedaba ninguno. Ver `cancelFenixOutput`. */}
-                      {canEdit && fenixOutputIsCancelable(g) && (
-                        <FenixCancelButton
-                          shipmentId={g.id}
-                          guideCode={g.guide_code}
-                          wasFilled={detail.filledOutputIds.includes(g.id)}
-                          onDone={(msg) => {
-                            setNotice(msg);
-                            void reload();
-                            onSaved();
-                          }}
-                        />
-                      )}
-                      {/* Las salidas de ruta manual no tienen API a la que
-                          avisar: anularlas es corregir NUESTRO registro, así que
-                          basta el permiso con el que se crearon. */}
-                      {/* El número con el que Olva conoce el envío, y con el
-                          que Kapta le pregunta el estado cada media hora (§12).
-                          Llega por correo después de crear la salida, así que
-                          se registra —o se corrige— desde aquí. */}
-                      {canEdit && g.courier.trim().toLowerCase() === "olva" && (
-                        <OlvaTrackingField
-                          shipmentId={g.id}
-                          current={
-                            g.olva_tracking && g.olva_emision
-                              ? formatOlvaTracking({ tracking: g.olva_tracking, emision: g.olva_emision })
-                              : null
-                          }
-                          rawStatus={g.olva_status ?? null}
-                          onDone={(msg) => {
-                            setNotice(msg);
-                            void reload();
-                            onSaved();
-                          }}
-                        />
-                      )}
-                      {canEdit && manualOutputIsCancelable(g) && (
-                        <ManualOutputCancelButton
-                          shipmentId={g.id}
-                          label={g.output_code ?? g.guide_code ?? "esta salida"}
-                          onDone={(msg) => {
-                            setNotice(msg);
-                            void reload();
-                            onSaved();
-                          }}
-                        />
-                      )}
-                      {g.qr_token && (
-                        <a
-                          href={`/api/pedidos/rotulos?ids=${g.id}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                        >
-                          Rótulo interno
-                        </a>
-                      )}
-                      {g.guide_code === detail.row.guide_code && (
-                        <span className="ml-auto text-xs text-slate-400">actual</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {/* El cobro del courier lo confirma una PERSONA en Validar
-                  pagos: el lector de imágenes prepara la ficha, pero valida una
-                  imagen, no un depósito. Desde acá se llega de un clic en vez
-                  de buscar el pedido en la otra pantalla. */}
-              {detail.row.payment_check_state && (
-                <p className="mt-3 text-xs text-slate-500">
-                  Cobro del courier:{" "}
-                  <strong className="text-slate-700">
-                    {PAYMENT_CHECK_OPTIONS.find((o) => o.value === detail.row.payment_check_state)
-                      ?.label ?? detail.row.payment_check_state}
-                  </strong>
-                  .{" "}
-                  <a
-                    href="/dashboard/pagos"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-medium text-slate-700 underline"
-                  >
-                    Confirmarlo en Validar pagos
-                  </a>
-                </p>
-              )}
-              {detail.guides.some((guide) => guide.courier === "shalom") && (
-                <ShalomPickupKeyPanel orderId={orderId} onChanged={onSaved} />
-              )}
-            </section>
-
-            {["por_cerrar", "finalizado"].includes(detail.row.macro_stage ?? "") && (
-              <div
-                hidden={workspace !== "operar"}
-                data-drawer-section="cierre"
-                className="order-7 scroll-mt-28"
-              >
-                <OrderClosureDesk
-                  stage={detail.row.macro_stage}
-                  reasons={(detail.row.macro_reasons ?? []) as MacroSubstage[]}
-                  generalStatus={detail.row.general_status}
-                  guides={detail.guides}
-                  permissions={closurePermissions}
-                  pending={pending}
-                  onAction={(input) => run(() => registerClosureAction(orderId, input))}
+              <div className={cn("order-2 scroll-mt-36", SECTION)}>
+                <GeoSection
+                  orderId={orderId}
+                  row={detail.row}
+                  canEdit={canEdit}
+                  onSaved={() => {
+                    void reload();
+                    onSaved();
+                  }}
                 />
               </div>
-            )}
-
-            <section
+              {detail.lineItems.length > 0 && (
+                <section
+                  data-drawer-section="productos"
+                  className={cn("order-3 scroll-mt-36 space-y-4", SECTION)}
+                >
+                  <SectionHead
+                    title="Productos"
+                    badge={
+                      <Badge className="tabular-nums">
+                        {detail.lineItems.length} {detail.lineItems.length === 1 ? "producto" : "productos"}
+                      </Badge>
+                    }
+                  />
+                  <OrderLineItems items={detail.lineItems} totals={detail.totals} />
+                </section>
+              )}
+            </div>
+            <div
               id="pedido-panel-actividad"
               role="tabpanel"
-              aria-label="Actividad del pedido"
+              aria-labelledby="pedido-tab-actividad"
               hidden={workspace !== "actividad"}
-              data-drawer-section="historial"
-              className="order-1 scroll-mt-28 overflow-hidden rounded-xl border border-slate-200 bg-white"
+              className="flex flex-col gap-6"
             >
-              <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50/70 px-4 py-3">
-                <div>
-                  <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">
-                    Actividad y auditoría
-                  </h3>
-                  <p className="mt-0.5 text-xs text-slate-400">
-                    {detail.timeline.length} movimiento{detail.timeline.length === 1 ? "" : "s"} · se conserva indefinidamente
-                  </p>
-                </div>
-                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
-                  Solo lectura
-                </span>
-              </div>
-              <div className="px-4 py-4">
+              <section
+                data-drawer-section="historial"
+                className="order-1 scroll-mt-36 space-y-5"
+              >
+                <SectionHead
+                  title="Actividad y auditoría"
+                  badge={<Badge>Solo lectura</Badge>}
+                  help={`${detail.timeline.length} movimiento${detail.timeline.length === 1 ? "" : "s"} · se conserva indefinidamente`}
+                />
                 {detail.timeline.length === 0 ? (
-                  <p className="text-sm text-slate-400">Sin movimientos registrados.</p>
+                  <p className={cn(FRAME, "px-4 py-3 text-sm text-ink-500")}>Sin movimientos registrados.</p>
                 ) : (
-                  <ol className="space-y-3 border-l border-slate-200 pl-4">
+                  <ol className="relative space-y-5 pl-6 before:absolute before:bottom-1 before:left-[5px] before:top-1.5 before:w-px before:bg-line-strong">
                     {detail.timeline.map((t) => (
                       <li key={t.id} className="relative">
+                        {/* El punto dice de qué parte del recorrido es el hecho
+                            (los tonos de macroetapa del MOM); el texto lo dice
+                            igual, así que el color nunca es la única señal. */}
                         <span
+                          aria-hidden
                           className={cn(
-                            "absolute -left-[21px] top-1.5 h-2 w-2 rounded-full",
+                            "absolute -left-6 top-1.5 size-[11px] rounded-full ring-[3px] ring-white",
                             t.origin === "leads"
-                              ? "bg-violet-500"
+                              ? "bg-ink-700"
                               : /payment|liquidation|entregado/.test(t.kind)
                                 ? "bg-emerald-500"
                               : /return|refund|merma|anulado/.test(t.kind)
                                 ? "bg-orange-500"
                                 : /guide|dispatch|route|custody/.test(t.kind)
                                   ? "bg-indigo-500"
-                                  : "bg-slate-400",
+                                  : "bg-ink-300",
                           )}
                         />
-                        <p className="text-sm font-medium text-slate-800">
+                        <p className="text-sm font-medium leading-5 text-ink-900">
                           {TIMELINE_LABEL[t.kind] ?? t.kind}
                           {/* El resultado va pegado al título, no en la línea de
                               la nota: la nota es opcional y sin esto dos
                               resultados distintos se leían idénticos. */}
                           {t.confirmation?.result && (
-                            <span className="ml-1 font-normal text-slate-500">
-                              · {confirmationResultLabel(t.confirmation.result)}
+                            <span className="font-normal text-ink-600">
+                              {" "}· {confirmationResultLabel(t.confirmation.result)}
                             </span>
                           )}
                           {(t.statusLabel ?? (t.newStatus ? generalLabel(t.newStatus) : null)) && (
-                            <span className="ml-1 font-normal text-slate-500">
-                              → {t.statusLabel ?? generalLabel(t.newStatus!)}
+                            <span className="font-normal text-ink-600">
+                              {" "}→ {t.statusLabel ?? generalLabel(t.newStatus!)}
                             </span>
                           )}
                         </p>
                         {(t.note || t.reason) && (
-                          <p className="mt-0.5 text-sm leading-5 text-slate-600">{t.note ?? t.reason}</p>
+                          <p className="mt-0.5 max-w-[68ch] text-sm leading-5 text-ink-700">{t.note ?? t.reason}</p>
                         )}
-                        <p className="mt-0.5 text-xs text-slate-400">
-                          {fmtDateTime(t.occurredAt)}
+                        <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
+                          <span className="tabular-nums">{fmtDateTime(t.occurredAt)}</span>
                           {t.actorName ? ` · ${t.actorName}` : ""}
                           {t.confirmation?.channel
                             ? ` · ${confirmationChannelLabel(t.confirmation.channel)}`
@@ -1601,130 +1723,8 @@ export function OrderDrawer({
                     ))}
                   </ol>
                 )}
-              </div>
-            </section>
-
-            {/* Agencia o una regla de riesgo ponen el pago antes que la ruta.
-                Provincia COD puede salir contra entrega, así que conserva la
-                Mesa de ruta primero y deja el pago anticipado como herramienta
-                opcional debajo. Sigue disponible antes de crear Shalom para no
-                reconstruir el antiguo callejón circular guía ↔ adelanto. */}
-            {showPaymentPanel && paymentPanel && (
-              <div
-                hidden={workspace !== "operar"}
-                data-drawer-section="pagos"
-                className={cn(
-                  "scroll-mt-28 rounded-xl border p-4",
-                  paymentPanel.mode === "required"
-                    ? "order-3 border-amber-200 bg-amber-50/30"
-                    : "order-5 border-slate-200 bg-white",
-                )}
-              >
-                <PickupKeyPanel
-                  orderId={orderId}
-                  mode={paymentPanel.mode}
-                  gatewayNote={gatewayNote}
-                  onChanged={onSaved}
-                />
-              </div>
-            )}
-
-            {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
-                una. En cuanto existe, el seguimiento vive en Envíos.
-
-                Y solo donde Aliclik atiende. El plan de rutas ya no lo ofrece
-                en Agencia —ahí van Shalom u Olva—, pero este panel se dibujaba
-                igual con solo tener el permiso: la pantalla mostraba las dos
-                tarjetas de agencia y, debajo, un formulario para crear una guía
-                de una ruta que ese pedido no puede tomar. Se lee el plan en vez
-                de repetir la regla aquí, que es como se vuelven a separar. */}
-            {canCreateGuide && aliclikOffered && (
-              <div
-                hidden={workspace !== "operar"}
-                data-drawer-section="aliclik"
-                className="order-5 scroll-mt-28"
-              >
-                <AliclikGuidePanel
-                  orderId={orderId}
-                  hasCoordinate={detail.row.latitude != null && detail.row.longitude != null}
-                  health={detail.aliclikHealth}
-                  riskRequirement={brief?.risk.requirement ?? "ninguno"}
-                  paymentState={detail.row.payment_state}
-                  riskReasons={brief?.risk.reasons ?? []}
-                  duplicateHold={brief?.duplicateHold}
-                  onDuplicateChanged={() => { void reload(); onSaved(); }}
-                  onCreated={() => {
-                    void reload();
-                    onSaved();
-                  }}
-                />
-              </div>
-            )}
-
-            {/* Esconderlo sin más dejaría buscando a quien esperaba encontrarlo.
-                La salida es corregir la dirección: la cobertura se recalcula a
-                partir de ella y, si el pedido era Provincia COD mal clasificada,
-                Aliclik vuelve solo.
-
-                Pero eso vale mientras la ruta se está DECIDIENDO. Con una salida
-                ya activa la pregunta está contestada: corregir la dirección no va
-                a traer Aliclik de vuelta a un paquete que ya viaja, y el bloque
-                se lee como una opción disponible cuando no lo es. */}
-            {canCreateGuide &&
-              !aliclikOffered &&
-              detail.routePlan.operation === "agencia" &&
-              detail.routePlan.activeOutputCount === 0 && (
-              <div
-                hidden={workspace !== "operar"}
-                data-drawer-section="aliclik"
-                className="order-5 scroll-mt-28 rounded-xl border border-slate-200 bg-white p-4"
-              >
-                <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
-                  Aliclik
-                </h3>
-                <p className="mt-1 text-sm leading-5 text-slate-600">
-                  Aliclik no atiende pedidos de Agencia; este va con Shalom u Olva. Si la dirección
-                  está mal clasificada, corrígela y la cobertura se recalcula sola. Y si la
-                  dirección está bien pero crees que Aliclik sí llega, pregúntaselo: cotizar no
-                  crea nada.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => jumpTo("ubicacion")}
-                  className="mt-3 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Revisar ubicación y cobertura ↓
-                </button>
-                <AliclikCoverageProbe
-                  orderId={detail.row.order_id}
-                  district={detail.row.district}
-                  canMark={canCreateGuide}
-                />
-              </div>
-            )}
-
-            {canEdit ? (
-              <div hidden={workspace !== "operar"} className="order-8">
-                <OrderActions
-                  row={detail.row}
-                  canOverride={canOverride}
-                  pending={pending}
-                  outputCount={detail.routePlan.outputCount}
-                  onStatus={(general, operational, reason, agencyCourier) =>
-                    run(() => setOrderStatus(orderId, { general, operational, reason, agencyCourier }))
-                  }
-                  onComment={(text, type) => run(() => addOrderComment(orderId, { text, type }))}
-                  onReturn={(reason, guideCode) => run(() => registerReturn(orderId, { reason, guideCode }))}
-                  onRelink={(guideCode) => run(() => relinkGuide(guideCode, orderId))}
-                />
-              </div>
-            ) : (
-              <div hidden={workspace !== "operar"} className="order-8">
-                <EmptyState title="Solo lectura">
-                  Tu rol permite consultar el pedido, sus comentarios y su historial, pero no modificarlo.
-                </EmptyState>
-              </div>
-            )}
+              </section>
+            </div>
           </div>
         )}
       </aside>
@@ -1776,6 +1776,62 @@ export function OrderDrawer({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Piezas de la ficha (mundo de operación, DESIGN.md)
+// ---------------------------------------------------------------------------
+
+/** Una sección de la ficha sobre su hairline: el resto de la pestaña va debajo. */
+const SECTION = "border-t border-line pt-6";
+/** Marco sin sombra para listas y bloques dentro de la hoja. */
+const FRAME = "rounded-lg ring-1 ring-inset ring-line";
+const FIELD_LABEL = "text-[13px] leading-5 text-ink-500";
+const FIELD_VALUE = "mt-0.5 break-words text-sm leading-5 text-ink-900";
+/** Etiqueta de un campo de formulario. */
+const LABEL = "grid gap-1.5 text-[13px] font-medium text-ink-700";
+const TEXTAREA = cn(FIELD, "h-auto py-2 leading-5");
+/** Enlace a un papel o a otra pantalla (abre en otra pestaña). */
+const DOC_LINK =
+  "inline-flex items-center gap-1 text-[13px] font-medium text-brand-700 underline-offset-2 hover:underline pointer-coarse:min-h-11";
+const DOC_LINK_QUIET =
+  "inline-flex items-center text-[13px] text-ink-600 underline-offset-2 hover:text-ink-900 hover:underline pointer-coarse:min-h-11";
+
+function SectionHead({
+  title,
+  badge,
+  help,
+  aside,
+}: {
+  title: string;
+  badge?: ReactNode;
+  help?: ReactNode;
+  aside?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <h3 className="text-base font-semibold leading-6 text-ink-900">{title}</h3>
+          {badge}
+        </div>
+        {help && <p className="mt-0.5 max-w-[68ch] text-[13px] leading-5 text-ink-500">{help}</p>}
+      </div>
+      {aside && <div className="flex flex-wrap items-center gap-2">{aside}</div>}
+    </div>
+  );
+}
+
+function DismissButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className="-my-1 -mr-1 grid size-6 shrink-0 place-items-center rounded text-ink-500 transition-colors hover:bg-white/70 hover:text-ink-900 pointer-coarse:size-11"
+    >
+      <IconX aria-hidden className="size-3.5" />
+    </button>
+  );
+}
 
 /** Enlace al mapa: por coordenadas si las hay, si no por la dirección escrita. */
 function mapUrl(row: OrderMasterRow): string | null {
@@ -1863,56 +1919,53 @@ function GeoSection({
   const set = (patch: Partial<OrderGeoInput>) => setForm((f) => ({ ...f, ...patch }));
 
   return (
-    <section
-      data-drawer-section="ubicacion"
-      className="scroll-mt-28 space-y-3 rounded-xl border border-slate-200 bg-white p-4"
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Ubicación y cobertura</h3>
-        <CoverageBadge coverage={row.coverage} />
-        {row.geo_source && (
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-            {GEO_SOURCE_LABEL[row.geo_source] ?? row.geo_source}
-          </span>
-        )}
-        {url && (
-          <a
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            className="text-xs text-brand-700 hover:underline"
-          >
-            Ver mapa ↗
-          </a>
-        )}
-        {canEdit && !editing && (
-          <button onClick={open} className="ml-auto text-xs text-slate-500 hover:underline">
-            {hasOverride ? "Editar corrección" : "Corregir ubicación"}
-          </button>
-        )}
-      </div>
+    <section data-drawer-section="ubicacion" className="scroll-mt-36 space-y-4">
+      <SectionHead
+        title="Ubicación y cobertura"
+        badge={
+          <>
+            <CoverageBadge coverage={row.coverage} />
+            {row.geo_source && <Badge>{GEO_SOURCE_LABEL[row.geo_source] ?? row.geo_source}</Badge>}
+          </>
+        }
+        aside={
+          <>
+            {url && (
+              <a href={url} target="_blank" rel="noreferrer" className={DOC_LINK}>
+                <IconMapPin aria-hidden className="size-3.5" />
+                Ver mapa
+              </a>
+            )}
+            {canEdit && !editing && (
+              <OpsButton size="sm" onClick={open} className="pointer-coarse:h-11">
+                {hasOverride ? "Editar corrección" : "Corregir ubicación"}
+              </OpsButton>
+            )}
+          </>
+        }
+      />
 
-      {message && <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">{message}</p>}
+      {message && (
+        <p role="status" className="rounded-lg bg-wash px-4 py-2.5 text-sm text-ink-700">
+          {message}
+        </p>
+      )}
 
       {(row.coverage ?? "por_revisar") === "por_revisar" && !editing && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-          <p className="text-xs text-amber-900">
-            Completa la región y el distrito para asignar el flujo correcto.
-          </p>
-          {canEdit && (
-            <button
-              type="button"
-              onClick={open}
-              className="shrink-0 rounded-md bg-amber-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-800"
-            >
-              Completar
-            </button>
-          )}
-        </div>
+        <Banner tone="warn">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p>Completa la región y el distrito para asignar el flujo correcto.</p>
+            {canEdit && (
+              <OpsButton size="sm" onClick={open} className="pointer-coarse:h-11">
+                Completar
+              </OpsButton>
+            )}
+          </div>
+        </Banner>
       )}
 
       {!editing ? (
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
           <Field label="Región" value={row.region} />
           <Field label="Provincia" value={row.province} />
           <Field label="Distrito" value={row.district} />
@@ -1920,6 +1973,7 @@ function GeoSection({
           <Field label="Referencia" value={row.reference} />
           <Field
             label="Coordenadas"
+            numeric
             value={
               row.latitude != null && row.longitude != null
                 ? `${row.latitude}, ${row.longitude}`
@@ -1928,12 +1982,18 @@ function GeoSection({
           />
         </dl>
       ) : (
-        <div className="space-y-2 rounded-lg border border-slate-200 p-3">
-          <p className="text-xs text-slate-500">
+        <form
+          className={cn(FRAME, "space-y-4 p-4")}
+          onSubmit={(event) => {
+            event.preventDefault();
+            save();
+          }}
+        >
+          <p className="max-w-[68ch] text-[13px] leading-5 text-ink-500">
             Deja en blanco lo que no quieras cambiar. Esta corrección gana sobre Shopify, sobre los
             reportes de los couriers y sobre el ubigeo, y no se pierde al sincronizar.
           </p>
-          <div className="grid gap-2 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-3">
             <LabeledInput label="Región" value={form.region} onChange={(region) => set({ region })} />
             <LabeledInput
               label="Provincia"
@@ -1946,7 +2006,7 @@ function GeoSection({
               onChange={(district) => set({ district })}
             />
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2">
             <LabeledInput
               label="Dirección"
               value={form.address}
@@ -1958,17 +2018,19 @@ function GeoSection({
               onChange={(reference) => set({ reference })}
             />
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2">
             <LabeledInput
               label="Latitud"
               value={form.latitude}
               placeholder="-12.0464"
+              inputMode="decimal"
               onChange={(latitude) => set({ latitude })}
             />
             <LabeledInput
               label="Longitud"
               value={form.longitude}
               placeholder="-77.0428"
+              inputMode="decimal"
               onChange={(longitude) => set({ longitude })}
             />
           </div>
@@ -1977,41 +2039,29 @@ function GeoSection({
             value={form.note}
             onChange={(note) => set({ note })}
           />
-          <label className="flex items-center gap-1.5 text-xs text-slate-600">
+          <label className="flex min-h-9 cursor-pointer items-center gap-2 text-sm text-ink-700 pointer-coarse:min-h-11">
             <input
               type="checkbox"
               checked={remember}
               onChange={(e) => setRemember(e.target.checked)}
-              className="h-3.5 w-3.5"
+              className={CHECKBOX}
             />
             Recordar esta provincia para los próximos pedidos del mismo distrito
           </label>
-          <div className="flex flex-wrap gap-2">
-            <button
-              disabled={pending}
-              onClick={save}
-              className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-            >
-              Guardar ubicación
-            </button>
-            <button
-              disabled={pending}
-              onClick={() => setEditing(false)}
-              className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
+          <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
+            <OpsButton type="submit" variant="primary" disabled={pending} className="pointer-coarse:h-11">
+              {pending ? "Guardando…" : "Guardar ubicación"}
+            </OpsButton>
+            <OpsButton disabled={pending} onClick={() => setEditing(false)} className="pointer-coarse:h-11">
               Cancelar
-            </button>
+            </OpsButton>
             {hasOverride && (
-              <button
-                disabled={pending}
-                onClick={clear}
-                className="ml-auto text-xs text-slate-500 hover:underline"
-              >
+              <OpsButton variant="ghost" size="sm" disabled={pending} onClick={clear} className="ml-auto pointer-coarse:h-11">
                 Quitar corrección y volver al origen
-              </button>
+              </OpsButton>
             )}
           </div>
-        </div>
+        </form>
       )}
     </section>
   );
@@ -2021,31 +2071,56 @@ function LabeledInput({
   label,
   value,
   placeholder,
+  inputMode,
   onChange,
 }: {
   label: string;
   value: string | number | null | undefined;
   placeholder?: string;
+  inputMode?: "decimal";
   onChange: (next: string) => void;
 }) {
   return (
-    <label className="block">
-      <span className="text-xs text-slate-400">{label}</span>
+    <label className={LABEL}>
+      {label}
       <input
         value={value ?? ""}
         placeholder={placeholder}
+        inputMode={inputMode}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-0.5 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+        className={cn(FIELD, "font-normal pointer-coarse:h-11", inputMode && "tabular-nums")}
       />
     </label>
   );
 }
 
-function Field({ label, value }: { label: string; value: string | null | undefined }) {
+function Field({
+  label,
+  value,
+  numeric,
+  capitalize,
+  mono,
+}: {
+  label: string;
+  value: string | null | undefined;
+  numeric?: boolean;
+  capitalize?: boolean;
+  mono?: boolean;
+}) {
   return (
-    <div>
-      <dt className="text-xs text-slate-400">{label}</dt>
-      <dd className="text-slate-700">{value || "—"}</dd>
+    <div className="min-w-0">
+      <dt className={FIELD_LABEL}>{label}</dt>
+      <dd
+        className={cn(
+          FIELD_VALUE,
+          numeric && "tabular-nums",
+          capitalize && "capitalize",
+          mono && "font-mono text-[13px]",
+          !value && "text-ink-500",
+        )}
+      >
+        {value || "—"}
+      </dd>
     </div>
   );
 }
@@ -2061,11 +2136,11 @@ function Field({ label, value }: { label: string; value: string | null | undefin
  * el 20, el 22, el 25 y el 28 de julio son cuatro días de siete, no nueve. Los
  * días en que nadie llamó no gastan cupo.
  */
-const REQUIREMENT_TONE: Record<PaymentRequirement, string> = {
-  ninguno: "border-slate-200 bg-white text-slate-700",
-  sugerir_adelanto: "border-amber-200 bg-amber-50 text-amber-900",
-  exigir_adelanto: "border-orange-300 bg-orange-50 text-orange-900",
-  pago_completo: "border-rose-300 bg-rose-50 text-rose-900",
+const REQUIREMENT_TONE: Record<PaymentRequirement, "neutral" | "warn" | "crit"> = {
+  ninguno: "neutral",
+  sugerir_adelanto: "warn",
+  exigir_adelanto: "warn",
+  pago_completo: "crit",
 };
 
 /**
@@ -2102,53 +2177,45 @@ function PriorOrderRow({
   const attempts = row.attempt_count ?? 0;
 
   return (
-    <li className="rounded-md border border-slate-200 bg-slate-50/60 px-2 py-1.5">
-      <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
-        <span className="font-mono text-[11px] font-medium text-slate-800">
+    <li className="px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="font-mono text-xs font-semibold text-ink-900">
           {row.order_name ?? row.order_id}
         </span>
-        <span className="text-[11px] text-slate-500">
+        <span className="text-xs tabular-nums text-ink-500">
           {fmtDate(row.order_created_at)} · {fmtAge(row.order_created_at)}
         </span>
         {/* El pedido abierto que se mira puede ser el MÁS VIEJO del teléfono: sin
             esta marca, un re-pedido posterior se lee como antecedente previo. */}
-        {later && (
-          <span className="rounded bg-indigo-100 px-1 text-[10px] font-semibold text-indigo-800">
-            posterior a este
-          </span>
-        )}
-        <span
-          className={cn(
-            "ml-auto rounded px-1.5 text-[10px] font-semibold",
-            outcome === "entregado"
-              ? "bg-emerald-100 text-emerald-800"
-              : outcome === "anulado" || outcome === "devuelto"
-                ? "bg-rose-100 text-rose-800"
-                : "bg-slate-200 text-slate-700",
-          )}
+        {later && <Badge tone="info">posterior a este</Badge>}
+        {/* Dicho en una chapa y no solo en color: en el teléfono la línea de
+            productos se recorta y el aviso se perdía. */}
+        {repeats && <Badge tone="warn">lo mismo que este pedido</Badge>}
+        <Badge
+          className="ml-auto"
+          tone={outcome === "entregado" ? "ok" : outcome === "anulado" || outcome === "devuelto" ? "crit" : "neutral"}
         >
           {row.operational_status ? operationalLabel(row.operational_status) : PRIOR_OUTCOME_LABEL[outcome]}
-        </span>
+        </Badge>
       </div>
 
       {row.products && (
         <p
           className={cn(
-            "mt-0.5 truncate text-[11px]",
-            repeats ? "font-semibold text-amber-800" : "text-slate-600",
+            "mt-1 truncate text-[13px] leading-5",
+            repeats ? "font-semibold text-warn-fg" : "text-ink-700",
           )}
           title={row.products}
         >
           {row.products}
-          {repeats && " · lo mismo que este pedido"}
         </p>
       )}
 
       {/* Nueve de cada diez anulados nunca llegaron a despacharse. Decirlo evita
           exigir pago completo por antecedentes que no costaron un solo flete. */}
-      <p className="mt-0.5 text-[10px] text-slate-500">
+      <p className="mt-0.5 text-xs leading-4 text-ink-500">
         {dispatch === "nunca_despachado" ? (
-          <span className="font-medium text-slate-600">{DISPATCH_STATE_LABEL.nunca_despachado}</span>
+          <span className="font-medium text-ink-700">{DISPATCH_STATE_LABEL.nunca_despachado}</span>
         ) : (
           <>
             {courier ?? "courier sin registrar"}
@@ -2175,12 +2242,10 @@ function ConfirmationBrief({ brief, orderId, onDuplicateChanged }: {
   );
 
   return (
-    <div className="space-y-2.5 rounded-lg border border-slate-200 bg-white p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h4 className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-500">
-          Antes de llamar
-        </h4>
-        <span className="text-[11px] text-slate-500">
+    <div className={cn(FRAME, "space-y-3 p-4")}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h4 className="text-sm font-semibold text-ink-900">Antes de llamar</h4>
+        <span className="text-[13px] text-ink-500">
           {known === 0
             ? "Sin otros pedidos con este teléfono"
             : `${known} pedido${known === 1 ? "" : "s"} más con este teléfono` +
@@ -2194,23 +2259,20 @@ function ConfirmationBrief({ brief, orderId, onDuplicateChanged }: {
           llama tiene que saber que esta guía no va a salir por Aliclik ANTES de
           prometerle al cliente una fecha. Ver lib/door-rejection.ts. */}
       {doorBan?.banned && (
-        <div className="rounded-md border border-rose-400 bg-rose-50 px-2.5 py-2">
-          <p className="text-xs font-bold text-rose-900">
-            ⛔ Aliclik cerrado para este cliente · {doorBan.rejections} rechazos en la puerta
-          </p>
-          <p className="mt-0.5 text-[11px] leading-4 text-rose-900">
-            Ya tuvo el producto en la mano y lo devolvió {doorBan.rejections} veces. No se puede
-            exceptuar. Despáchalo por {ROUTES_STILL_ALLOWED_LABEL}.
-          </p>
-        </div>
+        <Banner
+          tone="crit"
+          role="alert"
+          title={`Aliclik cerrado para este cliente · ${doorBan.rejections} rechazos en la puerta`}
+        >
+          Ya tuvo el producto en la mano y lo devolvió {doorBan.rejections} veces. No se puede
+          exceptuar. Despáchalo por {ROUTES_STILL_ALLOWED_LABEL}.
+        </Banner>
       )}
       {doorRejections === null && (
-        <div className="rounded-md border border-slate-300 bg-slate-50 px-2.5 py-2">
-          <p className="text-[11px] leading-4 text-slate-700">
-            No se pudo verificar si este cliente tiene rechazos en la puerta. Vuelve a abrir el
-            pedido antes de crear una guía Aliclik.
-          </p>
-        </div>
+        <p className="rounded-lg bg-wash px-4 py-2.5 text-[13px] leading-5 text-ink-700">
+          No se pudo verificar si este cliente tiene rechazos en la puerta. Vuelve a abrir el
+          pedido antes de crear una guía Aliclik.
+        </p>
       )}
 
       {/* El desglose por desenlace, que es lo que la columna «Métricas» resume a
@@ -2219,60 +2281,53 @@ function ConfirmationBrief({ brief, orderId, onDuplicateChanged }: {
       {outcomes.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {outcomes.map((key) => (
-            <span
+            <Badge
               key={key}
-              className={cn(
-                "rounded-full px-2 py-0.5 text-xs font-medium ring-1",
-                key === "entregado"
-                  ? "bg-emerald-50 text-emerald-800 ring-emerald-200"
-                  : key === "anulado" || key === "devuelto"
-                    ? "bg-rose-50 text-rose-800 ring-rose-200"
-                    : "bg-slate-50 text-slate-700 ring-slate-200",
-              )}
+              className="tabular-nums"
+              tone={key === "entregado" ? "ok" : key === "anulado" || key === "devuelto" ? "crit" : "neutral"}
             >
               {PRIOR_OUTCOME_LABEL[key]}: {counts[key]}
-            </span>
+            </Badge>
           ))}
         </div>
       )}
 
       <AliclikDuplicatePanel key={orderId} orderId={orderId} initialHold={brief.duplicateHold} onChanged={onDuplicateChanged} />
 
-      {(risk.requirement !== "ninguno" || (brief.duplicateHold?.allowed && !brief.duplicateHold.conflicts.length)) && <div className={cn("rounded-md border px-2.5 py-2", REQUIREMENT_TONE[risk.requirement])}>
-        <p className="text-xs font-bold">
-          {PAYMENT_REQUIREMENT_LABEL[risk.requirement]}
-          {risk.antecedents > 0 && (
-            <span className="font-medium">
-              {" "}
-              · {risk.antecedents} antecedente{risk.antecedents === 1 ? "" : "s"} de rechazo o
-              devolución
-            </span>
-          )}
-        </p>
-        {risk.reasons.length > 0 && (
-          <p className="mt-0.5 text-[11px] leading-4 opacity-90">{risk.reasons.join(" ")}</p>
-        )}
-      </div>}
+      {(risk.requirement !== "ninguno" || (brief.duplicateHold?.allowed && !brief.duplicateHold.conflicts.length)) && (
+        <RequirementNote tone={REQUIREMENT_TONE[risk.requirement]}>
+          <p className="font-semibold text-ink-900">
+            {PAYMENT_REQUIREMENT_LABEL[risk.requirement]}
+            {risk.antecedents > 0 && (
+              <span className="font-normal text-ink-700">
+                {" "}
+                · {risk.antecedents} antecedente{risk.antecedents === 1 ? "" : "s"} de rechazo o
+                devolución
+              </span>
+            )}
+          </p>
+          {risk.reasons.length > 0 && <p className="mt-0.5">{risk.reasons.join(" ")}</p>}
+        </RequirementNote>
+      )}
 
       {/* Un duplicado no visto termina en dos paquetes al mismo destino, y el
           flete de uno se pierde. Se listan con nombre y fecha: la decisión es
           humana, la herramienta solo se asegura de que los vea. */}
       {duplicates.length > 0 && !brief.duplicateHold?.conflicts.length && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2">
-          <p className="text-xs font-bold text-amber-900">
-            ⚠ {duplicates.length} pedido{duplicates.length === 1 ? "" : "s"} abierto
-            {duplicates.length === 1 ? "" : "s"} del mismo teléfono
-          </p>
+        <Banner
+          tone="warn"
+          title={`${duplicates.length} pedido${duplicates.length === 1 ? "" : "s"} abierto${duplicates.length === 1 ? "" : "s"} del mismo teléfono`}
+        >
           <ul className="mt-1 space-y-0.5">
             {duplicates.slice(0, 5).map((row) => (
-              <li key={row.order_id} className="text-[11px] text-amber-900">
-                <span className="font-mono font-medium">{row.order_name ?? row.order_id}</span>
+              <li key={row.order_id} className="tabular-nums">
+                <span className="font-mono font-semibold text-ink-900">{row.order_name ?? row.order_id}</span>
                 {row.order_created_at ? ` · ${fmtDate(row.order_created_at)}` : ""}
                 {row.order_total != null ? ` · ${fmtMoney(row.order_total)}` : ""}
               </li>
             ))}
           </ul>
-        </div>
+        </Banner>
       )}
 
       {/* El historial pedido a pedido. El desglose de arriba dice CUÁNTOS; esto
@@ -2281,13 +2336,12 @@ function ConfirmationBrief({ brief, orderId, onDuplicateChanged }: {
           Aliclik por separado. */}
       {priors.length > 0 && (
         <details className="group" open={priors.length <= 4}>
-          <summary className="cursor-pointer list-none text-[11px] font-semibold text-slate-500 hover:text-slate-700">
+          <summary className="flex min-h-8 cursor-pointer list-none items-center gap-1.5 text-[13px] font-medium text-ink-700 hover:text-ink-900 pointer-coarse:min-h-11 [&::-webkit-details-marker]:hidden">
+            <IconChevronRight aria-hidden className="size-4 text-ink-500 transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none" />
             Historial del cliente
-            <span className="ml-1 font-normal text-slate-400 group-open:hidden">
-              (ver los {priors.length})
-            </span>
+            <span className="font-normal text-ink-500 group-open:hidden">(ver los {priors.length})</span>
           </summary>
-          <ul className="mt-1.5 space-y-1">
+          <ul className={cn(FRAME, "mt-2 divide-y divide-line")}>
             {priors.slice(0, 10).map((row) => (
               <PriorOrderRow
                 key={row.order_id}
@@ -2298,7 +2352,7 @@ function ConfirmationBrief({ brief, orderId, onDuplicateChanged }: {
             ))}
           </ul>
           {priors.length > 10 && (
-            <p className="mt-1 text-[10px] text-slate-400">
+            <p className="mt-1.5 text-xs text-ink-500">
               y {priors.length - 10} más, no mostrados
             </p>
           )}
@@ -2308,17 +2362,27 @@ function ConfirmationBrief({ brief, orderId, onDuplicateChanged }: {
       {/* La pregunta de la llamada es «¿sale por Aliclik o va a agencia?». Sale
           de la misma matriz de tarifas que ya clasifica la cobertura, así que no
           puede contradecir lo que dice la cabecera del pedido. */}
-      <p className="text-[11px] text-slate-600">
-        <span className="font-semibold text-slate-500">Cobertura COD:</span>{" "}
+      <p className="text-[13px] leading-5 text-ink-500">
+        Cobertura COD:{" "}
         {codCouriers.length > 0 ? (
-          <span className="font-medium text-slate-800">{codCouriers.join(" · ")}</span>
+          <span className="font-medium text-ink-900">{codCouriers.join(" · ")}</span>
         ) : (
-          <span className="text-slate-500">
-            sin courier COD con tarifa para este destino; va por agencia
-          </span>
+          <span>sin courier COD con tarifa para este destino; va por agencia</span>
         )}
       </p>
     </div>
+  );
+}
+
+/** La escalera de adelanto del §8: en neutro, ámbar o crítico según lo que exige. */
+function RequirementNote({ tone, children }: { tone: "neutral" | "warn" | "crit"; children: ReactNode }) {
+  if (tone === "neutral") {
+    return <div className="rounded-lg bg-wash px-4 py-3 text-[13px] leading-5 text-ink-700">{children}</div>;
+  }
+  return (
+    <Banner tone={tone} className="text-[13px] leading-5">
+      {children}
+    </Banner>
   );
 }
 
@@ -2379,57 +2443,35 @@ function ConfirmationDesk({
   const needsDate = Boolean(selected?.schedulesFollowup);
   const blocked = pending || lastAttempt || (needsDate && !nextContactOn);
 
-
   return (
-    <section
-      className={cn(
-        "space-y-4 rounded-xl border p-4",
-        lastAttempt ? "border-amber-300 bg-amber-50/50" : "border-indigo-200 bg-indigo-50/40",
-      )}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-indigo-900">
-            Gestión de confirmación
-          </h3>
-          <p className="mt-1 text-xs leading-5 text-slate-600">
-            Un registro por intento. Llamada, WhatsApp y mensaje del mismo día cuentan como un
-            solo día de gestión.
-          </p>
-        </div>
-        <span
-          className={cn(
-            "rounded-full px-2.5 py-1 text-xs font-bold ring-1",
-            lastAttempt
-              ? "bg-white text-amber-900 ring-amber-300"
-              : "bg-white text-indigo-900 ring-indigo-200",
-          )}
-        >
-          Día {used} de {CONFIRMATION_MAX_DAYS}
-        </span>
-      </div>
+    <section className="space-y-4">
+      <SectionHead
+        title="Gestión de confirmación"
+        badge={
+          <Badge tone={lastAttempt ? "warn" : "neutral"} className="tabular-nums">
+            Día {used} de {CONFIRMATION_MAX_DAYS}
+          </Badge>
+        }
+        help="Un registro por intento. Llamada, WhatsApp y mensaje del mismo día cuentan como un solo día de gestión."
+      />
 
       {used > 0 && (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5" aria-label="Días con gestión">
           {days.map((day) => (
-            <span
-              key={day}
-              className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-700 ring-1 ring-slate-200"
-            >
+            <Badge key={day} className="tabular-nums">
               {day.slice(5).split("-").reverse().join("/")}
-            </span>
+            </Badge>
           ))}
         </div>
       )}
 
       {lastAttempt && (
-        <div className="rounded-lg bg-white px-3 py-3 text-xs leading-5 text-amber-950 ring-1 ring-amber-200">
+        <Banner tone="warn" title="Último intento completado">
           <p>
-            <strong>Último intento completado.</strong> Se agotaron los {CONFIRMATION_MAX_DAYS} días
-            de gestión. Kapta no anula automáticamente.
+            Se agotaron los {CONFIRMATION_MAX_DAYS} días de gestión. Kapta no anula automáticamente.
           </p>
           {cancellationTask && (
-            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-amber-100 pt-2">
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               <span>
                 Tarea asignada a {cancellationTask.assignedName ?? "la última persona que gestionó"}.
               </span>
@@ -2438,56 +2480,52 @@ function ConfirmationDesk({
                   href={shopifyUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="rounded-md bg-amber-900 px-2.5 py-1.5 font-semibold text-white hover:bg-amber-950"
+                  className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11")}
                 >
-                  Revisar en Shopify ↗
+                  Revisar en Shopify
+                  <IconArrowUpRight aria-hidden className="text-ink-500" />
                 </a>
               )}
             </div>
           )}
-        </div>
+        </Banner>
       )}
 
       {row.macro_substage === "historico_sin_gestion" && (
-        <p className="rounded-lg bg-slate-100 px-3 py-2 text-xs leading-5 text-slate-700">
+        <p className="rounded-lg bg-wash px-4 py-2.5 text-[13px] leading-5 text-ink-700">
           Pedido anterior al corte operativo del 01/06/2026. Se conserva en el historial y no
           cuenta como trabajo nuevo de Sin llamar.
         </p>
       )}
 
       {row.confirmation_next_contact_on && (
-        <div
-          className={cn(
-            "flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs ring-1",
-            followupBucket === "vencido"
-              ? "bg-rose-50 text-rose-900 ring-rose-200"
-              : followupBucket === "hoy"
-                ? "bg-amber-50 text-amber-900 ring-amber-200"
-                : "bg-sky-50 text-sky-900 ring-sky-200",
-          )}
+        <Banner
+          tone={followupBucket === "vencido" ? "crit" : followupBucket === "hoy" ? "warn" : "info"}
         >
-          <strong>
-            {followupBucket === "vencido"
-              ? "Contacto vencido"
-              : followupBucket === "hoy"
-                ? "Contactar hoy"
-                : "Próximo contacto"}
-          </strong>
-          <span>{fmtDate(`${row.confirmation_next_contact_on}T12:00:00.000Z`)}</span>
-        </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <strong className="font-semibold text-ink-900">
+              {followupBucket === "vencido"
+                ? "Contacto vencido"
+                : followupBucket === "hoy"
+                  ? "Contactar hoy"
+                  : "Próximo contacto"}
+            </strong>
+            <span className="tabular-nums">{fmtDate(`${row.confirmation_next_contact_on}T12:00:00.000Z`)}</span>
+          </div>
+        </Banner>
       )}
 
       {/* El ciclo automático: sin fecha pactada el pedido igual vuelve a la cola.
           Se anuncia aquí para que quien abra el pedido sepa que lo trajo el
           ciclo y no un compromiso con el cliente. */}
       {!row.confirmation_next_contact_on && row.confirmation_cycle_due_on && !lastAttempt && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700 ring-1 ring-slate-200">
-          <strong>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-wash px-4 py-2.5 text-[13px] text-ink-700">
+          <strong className="font-semibold text-ink-900">
             {row.confirmation_cycle_due_on <= today
               ? "Toca hoy por ciclo automático"
               : "Vuelve a la cola por ciclo automático"}
           </strong>
-          <span>
+          <span className="tabular-nums">
             {row.confirmation_cycle_due_on <= today
               ? "Sin fecha pactada"
               : fmtDate(`${row.confirmation_cycle_due_on}T12:00:00.000Z`)}
@@ -2496,97 +2534,99 @@ function ConfirmationDesk({
       )}
 
       {reminderTask?.dueAt && !lastAttempt && (
-        <p className="text-xs text-slate-500">
-          Recordatorio de confirmación: {fmtDateTime(reminderTask.dueAt)}.
+        <p className="text-[13px] text-ink-500">
+          Recordatorio de confirmación: <span className="tabular-nums">{fmtDateTime(reminderTask.dueAt)}</span>.
         </p>
       )}
 
       {brief && <ConfirmationBrief brief={brief} orderId={row.order_id} onDuplicateChanged={onDuplicateChanged} />}
 
-      <div className="grid gap-2 sm:grid-cols-2">
-        <label className="block">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+      {/* Sin <form> a propósito: un Enter suelto en la fecha no debe gastar un
+          día de gestión. El intento se registra solo con el botón. */}
+      <div className={cn(FRAME, "space-y-4 p-4")}>
+        <h4 className="text-sm font-semibold text-ink-900">Registrar intento</h4>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className={LABEL}>
             Canal
-          </span>
-          <select
-            value={channel}
-            onChange={(e) => setChannel(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
-          >
-            {CONFIRMATION_CHANNELS.map((option) => (
-              <option key={option.code} value={option.code}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <select
+              value={channel}
+              onChange={(e) => setChannel(e.target.value)}
+              className={cn(FIELD, "font-normal pointer-coarse:h-11")}
+            >
+              {CONFIRMATION_CHANNELS.map((option) => (
+                <option key={option.code} value={option.code}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={LABEL}>
             Resultado
-          </span>
-          <select
-            value={result}
-            onChange={(e) => setResult(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
-          >
-            {CONFIRMATION_RESULTS.map((option) => (
-              <option key={option.code} value={option.code}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+            <select
+              value={result}
+              onChange={(e) => setResult(e.target.value)}
+              className={cn(FIELD, "font-normal pointer-coarse:h-11")}
+            >
+              {CONFIRMATION_RESULTS.map((option) => (
+                <option key={option.code} value={option.code}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
 
-      {selected && <p className="text-xs text-slate-500">{selected.hint}</p>}
+        {selected && <p className="-mt-1 text-[13px] leading-5 text-ink-500">{selected.hint}</p>}
 
-      {needsDate && (
-        <label className="block">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {needsDate && (
+          <label className={cn(LABEL, "sm:w-56")}>
             Próximo contacto
-          </span>
-          <input
-            type="date"
-            value={nextContactOn}
-            min={today}
-            onChange={(e) => setNextContactOn(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm sm:w-52"
+            <input
+              type="date"
+              value={nextContactOn}
+              min={today}
+              onChange={(e) => setNextContactOn(e.target.value)}
+              className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11")}
+            />
+          </label>
+        )}
+
+        <label className={LABEL}>
+          Qué dijo el cliente
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={2}
+            placeholder="Opcional"
+            className={cn(TEXTAREA, "font-normal")}
           />
         </label>
-      )}
 
-      <textarea
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        rows={2}
-        placeholder="Qué dijo el cliente (opcional)"
-        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
-      />
-
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          disabled={blocked}
-          onClick={() => {
-            onAttempt({
-              result,
-              channel,
-              note,
-              nextContactOn,
-              operationId: crypto.randomUUID(),
-            });
-            setNote("");
-            setNextContactOn("");
-          }}
-          className="rounded-lg bg-indigo-700 px-3 py-2 text-sm font-bold text-white hover:bg-indigo-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-        >
-          Registrar intento
-        </button>
-        <span className="text-xs text-slate-500">
-          {opensNewDay
-            ? `Abre el día ${projected} de ${CONFIRMATION_MAX_DAYS}.`
-            : "Ya hay gestión de hoy: no consume otro día."}
-        </span>
+        <div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
+          <OpsButton
+            variant="primary"
+            disabled={blocked}
+            onClick={() => {
+              onAttempt({
+                result,
+                channel,
+                note,
+                nextContactOn,
+                operationId: crypto.randomUUID(),
+              });
+              setNote("");
+              setNextContactOn("");
+            }}
+            className="pointer-coarse:h-11"
+          >
+            Registrar intento
+          </OpsButton>
+          <span className="text-[13px] text-ink-500">
+            {opensNewDay
+              ? `Abre el día ${projected} de ${CONFIRMATION_MAX_DAYS}.`
+              : "Ya hay gestión de hoy: no consume otro día."}
+          </span>
+        </div>
       </div>
     </section>
   );
@@ -2646,52 +2686,49 @@ function OrderActions({
   }, [general, options, operational]);
 
   return (
-    <section
-      data-drawer-section="acciones"
-      className="order-9 scroll-mt-28 space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4"
-    >
-      <div>
-        <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-600">
-          Gestión manual
-        </h3>
-        <p className="mt-1 text-xs leading-5 text-slate-500">
-          Registra el resultado operativo o deja una nota. Las correcciones excepcionales están separadas al final.
-        </p>
-      </div>
-      <div className="space-y-2">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Registrar estado
-        </h4>
-        <div className="flex flex-wrap gap-2">
-          <select
-            value={general}
-            onChange={(e) => setGeneral(e.target.value as GeneralStatus)}
-            className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-          >
-            {GENERAL_STATUSES.map((s) => (
-              <option key={s.code} value={s.code}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-          <select
-            value={operational}
-            onChange={(e) => setOperational(e.target.value)}
-            className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-          >
-            {options.map((o) => (
-              <option key={o.code} value={o.code}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+    <section data-drawer-section="acciones" className="order-9 scroll-mt-36 space-y-5">
+      <SectionHead
+        title="Gestión manual"
+        help="Registra el resultado operativo o deja una nota. Las correcciones excepcionales están separadas al final."
+      />
+      <div className={cn(FRAME, "space-y-3 p-4")}>
+        <h4 className="text-sm font-semibold text-ink-900">Registrar estado</h4>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className={LABEL}>
+            Estado
+            <select
+              value={general}
+              onChange={(e) => setGeneral(e.target.value as GeneralStatus)}
+              className={cn(FIELD, "font-normal pointer-coarse:h-11")}
+            >
+              {GENERAL_STATUSES.map((s) => (
+                <option key={s.code} value={s.code}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={LABEL}>
+            Detalle
+            <select
+              value={operational}
+              onChange={(e) => setOperational(e.target.value)}
+              className={cn(FIELD, "font-normal pointer-coarse:h-11")}
+            >
+              {options.map((o) => (
+                <option key={o.code} value={o.code}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         {changingClosed && (
-          <p className="text-xs text-amber-700">
+          <Banner tone="warn">
             Este pedido ya está {generalLabel(row.general_status).toLowerCase()}. Cambiarlo exige un
             motivo y queda registrado en el historial
             {!canOverride && "; tu rol no lo permite"}.
-          </p>
+          </Banner>
         )}
         {/* UN PEDIDO DE AGENCIA NO PUEDE HABER LLEGADO SIN HABER SALIDO.
             Medido el 09-09-2026: los pedidos de agencia cuyo estado viene del
@@ -2703,16 +2740,17 @@ function OrderActions({
             aparte ya existe —la salida manual admite Olva— y no se usó ni una vez
             en 40 días contra 866 salidas de Shalom. */}
         {needsAgencyCourier && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 p-2.5">
-            <p className="text-xs leading-5 text-amber-900">
-              Este pedido no tiene ninguna salida registrada. ¿Por qué agencia se envió? Queda
-              como salida con tu firma, y sin ella el pedido no aparece en los indicadores de
-              envío ni en el aviso de vencimiento en agencia.
+          <Banner tone="warn" title="¿Por qué agencia se envió?">
+            <p>
+              Este pedido no tiene ninguna salida registrada. Queda como salida con tu firma, y sin
+              ella el pedido no aparece en los indicadores de envío ni en el aviso de vencimiento en
+              agencia.
             </p>
             <select
               value={agencyCourier}
               onChange={(e) => setAgencyCourier(e.target.value)}
-              className="mt-2 rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-sm"
+              aria-label="Agencia por la que se envió"
+              className={cn(FIELD_BOX, "mt-2 h-9 w-auto px-3 pointer-coarse:h-11")}
             >
               <option value="">Elige la agencia…</option>
               {AGENCY_COURIER_OPTIONS.map((option) => (
@@ -2721,68 +2759,74 @@ function OrderActions({
                 </option>
               ))}
             </select>
-          </div>
+          </Banner>
         )}
-        <input
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder={changingClosed ? "Motivo (obligatorio)" : "Motivo u observación (opcional)"}
-          className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-        />
-        <button
-          disabled={
-            pending ||
-            (changingClosed && (!canOverride || !reason.trim())) ||
-            (needsAgencyCourier && !agencyCourier)
-          }
-          onClick={() => onStatus(general, operational, reason, agencyCourier || undefined)}
-          className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-        >
-          Guardar estado
-        </button>
+        <label className={LABEL}>
+          {changingClosed ? "Motivo (obligatorio)" : "Motivo u observación"}
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder={changingClosed ? "Por qué se corrige un pedido cerrado" : "Opcional"}
+            className={cn(FIELD, "font-normal pointer-coarse:h-11")}
+          />
+        </label>
+        <div className="border-t border-line pt-3">
+          <OpsButton
+            variant="primary"
+            disabled={
+              pending ||
+              (changingClosed && (!canOverride || !reason.trim())) ||
+              (needsAgencyCourier && !agencyCourier)
+            }
+            onClick={() => onStatus(general, operational, reason, agencyCourier || undefined)}
+            className="pointer-coarse:h-11"
+          >
+            Guardar estado
+          </OpsButton>
+        </div>
       </div>
 
-      <div className="space-y-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Comentario</h3>
+      <div className={cn(FRAME, "space-y-3 p-4")}>
+        <h4 className="text-sm font-semibold text-ink-900">Comentario</h4>
         <textarea
           value={comment}
           onChange={(e) => setComment(e.target.value)}
           rows={2}
+          aria-label="Comentario"
           placeholder="Cliente no responde, dirección incorrecta, pendiente de reasignación…"
-          className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+          className={TEXTAREA}
         />
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <input
             value={commentType}
             onChange={(e) => setCommentType(e.target.value)}
+            aria-label="Tipo de comentario"
             placeholder="Tipo (opcional)"
-            className="w-40 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+            className={cn(FIELD_BOX, "h-9 w-44 px-3 pointer-coarse:h-11")}
           />
-          <button
+          <OpsButton
             disabled={pending || !comment.trim()}
             onClick={() => {
               onComment(comment, commentType);
               setComment("");
               setCommentType("");
             }}
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+            className="pointer-coarse:h-11"
           >
             Añadir comentario
-          </button>
+          </OpsButton>
         </div>
       </div>
 
-      <details className="group overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+      <details className={cn(FRAME, "group")}>
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-4 text-sm font-semibold text-ink-900 transition-colors hover:bg-wash [&::-webkit-details-marker]:hidden">
           Devoluciones y correcciones avanzadas
-          <span className="text-slate-400 transition-transform group-open:rotate-180">⌄</span>
+          <IconChevronDown aria-hidden className="size-4 text-ink-500 transition-transform duration-150 group-open:rotate-180 motion-reduce:transition-none" />
         </summary>
-        <div className="space-y-4 border-t border-slate-100 p-3">
+        <div className="space-y-5 border-t border-line p-4">
           <div className="space-y-2">
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-rose-700">
-              Registrar devolución
-            </h4>
-            <p className="text-xs text-slate-500">
+            <h4 className="text-sm font-semibold text-ink-900">Registrar devolución</h4>
+            <p className="text-[13px] leading-5 text-ink-500">
               Solo se marca como devuelto si consta el despacho y la guía; si no, queda como retorno en
               curso.
             </p>
@@ -2790,56 +2834,58 @@ function OrderActions({
               <input
                 value={returnGuide}
                 onChange={(e) => setReturnGuide(e.target.value)}
+                aria-label="Guía de la devolución"
                 placeholder="Guía"
-                className="w-40 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                className={cn(FIELD_BOX, "h-9 w-40 px-3 font-mono text-[13px] pointer-coarse:h-11")}
               />
               <input
                 value={returnReason}
                 onChange={(e) => setReturnReason(e.target.value)}
+                aria-label="Motivo de la devolución"
                 placeholder="Motivo de la devolución"
-                className="min-w-44 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                className={cn(FIELD_BOX, "h-9 min-w-44 flex-1 px-3 pointer-coarse:h-11")}
               />
-              <button
+              <OpsButton
+                variant="danger"
                 disabled={pending || !returnReason.trim()}
                 onClick={() => onReturn(returnReason, returnGuide)}
-                className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-white disabled:text-slate-400"
+                className="pointer-coarse:h-11"
               >
                 Registrar
-              </button>
+              </OpsButton>
             </div>
           </div>
 
-          <div className="space-y-2 border-t border-slate-100 pt-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Corregir vínculo de guía
-            </h4>
+          <div className="space-y-2 border-t border-line pt-5">
+            <h4 className="text-sm font-semibold text-ink-900">Corregir vínculo de guía</h4>
             {/* Qué hace, dicho antes de pulsar. Es la única vía para mover una
                 guía que se enganchó al pedido equivocado —pasa cuando un cliente
                 tiene dos pedidos y el emparejador solo tuvo el teléfono— y sin
                 decirlo se lee como «vincular una guía suelta», que es lo que ya
                 hace la tarjeta de Aliclik de arriba. */}
-            <p className="text-xs text-slate-500">
-              MUEVE la guía a este pedido, aunque esté en otro: se la quita al anterior, renumera la
-              salida y deja constancia en los dos historiales. Es la corrección para una guía
-              enganchada al pedido equivocado.
+            <p className="text-[13px] leading-5 text-ink-500">
+              <strong className="font-semibold text-ink-700">Mueve</strong> la guía a este pedido, aunque
+              esté en otro: se la quita al anterior, renumera la salida y deja constancia en los dos
+              historiales. Es la corrección para una guía enganchada al pedido equivocado.
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
               <input
                 value={relinkCode}
                 onChange={(e) => setRelinkCode(e.target.value)}
+                aria-label="Código de guía a vincular a este pedido"
                 placeholder="Código de guía a vincular a este pedido"
-                className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
+                className={cn(FIELD, "flex-1 font-mono text-[13px] pointer-coarse:h-11")}
               />
-              <button
+              <OpsButton
                 disabled={pending || !relinkCode.trim()}
                 onClick={() => {
                   onRelink(relinkCode);
                   setRelinkCode("");
                 }}
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                className="pointer-coarse:h-11"
               >
                 Vincular
-              </button>
+              </OpsButton>
             </div>
           </div>
         </div>
@@ -2864,59 +2910,60 @@ function DescartarRecuperacion({
   const [motivo, setMotivo] = useState("");
   if (!abierto) {
     return (
-      <div className="mt-2 flex justify-end">
-        <button
-          type="button"
-          onClick={() => setAbierto(true)}
-          className="text-xs text-slate-500 underline-offset-2 hover:text-rose-700 hover:underline"
-        >
+      <div className="mt-3 flex justify-end">
+        <OpsButton variant="ghost" size="sm" onClick={() => setAbierto(true)} className="pointer-coarse:h-11">
           No hay reenvío posible · descartar la recuperación
-        </button>
+        </OpsButton>
       </div>
     );
   }
   return (
-    <div className="mt-2 space-y-2 rounded-lg border border-rose-200 bg-rose-50/60 p-3">
-      <p className="text-xs font-semibold text-rose-900">Descartar la recuperación</p>
-      <p className="text-xs text-rose-800">
-        El pedido pasa a cierre con este motivo escrito. No se toca la guía de Aliclik ni el inventario.
-      </p>
+    <div className="mt-3 space-y-3 rounded-lg bg-crit-wash p-4">
+      <div>
+        <p className="text-sm font-semibold text-crit-fg">Descartar la recuperación</p>
+        <p className="mt-0.5 text-[13px] leading-5 text-ink-700">
+          El pedido pasa a cierre con este motivo escrito. No se toca la guía de Aliclik ni el inventario.
+        </p>
+      </div>
       <input
         value={motivo}
         onChange={(e) => setMotivo(e.target.value)}
+        aria-label="Motivo del descarte"
         placeholder="Motivo (obligatorio): p. ej. la clienta ya no quiere el producto"
-        className="w-full rounded-lg border border-rose-200 px-2 py-1.5 text-sm"
+        className={cn(FIELD, "pointer-coarse:h-11")}
       />
       <div className="flex gap-2">
-        <button
-          type="button"
+        <OpsButton
+          variant="danger"
+          size="sm"
           disabled={pending || motivo.trim().length < 8}
           onClick={() => onDiscard(motivo)}
-          className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-40"
+          className="pointer-coarse:h-11"
         >
           Descartar
-        </button>
-        <button
-          type="button"
+        </OpsButton>
+        <OpsButton
+          variant="ghost"
+          size="sm"
           onClick={() => {
             setAbierto(false);
             setMotivo("");
           }}
-          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100"
+          className="pointer-coarse:h-11"
         >
           Cancelar
-        </button>
+        </OpsButton>
       </div>
     </div>
   );
 }
 
-const GF_TONE: Record<string, string> = {
-  slate: "bg-slate-100 text-slate-700",
-  sky: "bg-sky-100 text-sky-800",
-  emerald: "bg-emerald-100 text-emerald-800",
-  amber: "bg-amber-100 text-amber-800",
-  red: "bg-red-100 text-red-800",
+const GF_TONE: Record<string, BadgeTone> = {
+  slate: "neutral",
+  sky: "info",
+  emerald: "ok",
+  amber: "warn",
+  red: "crit",
 };
 
 /**
@@ -2930,13 +2977,22 @@ function GfDeliveryLine({ delivery }: { delivery: GfDelivery }) {
   if (!s) return null;
   const photo = delivery.stop?.photoPath;
   const voucher = delivery.stop?.voucherPath;
+  const proof = "grid size-7 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11";
   return (
-    <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 border-t border-slate-100 pt-1.5 text-xs">
-      <span className={cn("rounded-full px-2 py-0.5 font-semibold", GF_TONE[s.tone])}>{s.label}</span>
-      {s.detail && <span className="text-slate-600">{s.detail}</span>}
+    <div className="mt-1.5 flex w-full flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-5">
+      <Badge tone={GF_TONE[s.tone] ?? "neutral"}>{s.label}</Badge>
+      {s.detail && <span className="tabular-nums text-ink-700">{s.detail}</span>}
       {/* Cada respaldo abre en grande en otra pestaña (GET /api/reparto/foto). */}
-      {photo && <a href={`/api/reparto/foto?path=${encodeURIComponent(photo)}`} target="_blank" rel="noreferrer" title="Ver la foto de la entrega" className="rounded px-1 text-base hover:bg-slate-100">📷</a>}
-      {voucher && <a href={`/api/reparto/foto?path=${encodeURIComponent(voucher)}`} target="_blank" rel="noreferrer" title="Ver el comprobante de pago" className="rounded px-1 text-base hover:bg-slate-100">🧾</a>}
+      {photo && (
+        <a href={`/api/reparto/foto?path=${encodeURIComponent(photo)}`} target="_blank" rel="noreferrer" title="Ver la foto de la entrega" aria-label="Ver la foto de la entrega" className={proof}>
+          <IconCamera aria-hidden className="size-4" />
+        </a>
+      )}
+      {voucher && (
+        <a href={`/api/reparto/foto?path=${encodeURIComponent(voucher)}`} target="_blank" rel="noreferrer" title="Ver el comprobante de pago" aria-label="Ver el comprobante de pago" className={proof}>
+          <IconReceipt aria-hidden className="size-4" />
+        </a>
+      )}
     </div>
   );
 }
@@ -2963,7 +3019,7 @@ function OlvaTrackingField({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (busy) return <span className="text-xs text-slate-500">Guardando tracking…</span>;
+  if (busy) return <span className="text-[13px] text-ink-500">Guardando tracking…</span>;
 
   if (!editing) {
     return (
@@ -2974,13 +3030,14 @@ function OlvaTrackingField({
             target="_blank"
             rel="noreferrer"
             title="Abre el seguimiento de Olva; pega ahí el número"
-            className="rounded bg-amber-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-amber-900 ring-1 ring-amber-200 hover:bg-amber-100"
+            className="inline-flex items-center gap-1 rounded bg-wash px-1.5 py-0.5 font-mono text-xs font-semibold text-ink-900 ring-1 ring-inset ring-line transition-colors hover:ring-line-strong"
           >
             Olva {current}
+            <IconArrowUpRight aria-hidden className="size-3 text-ink-500" />
           </a>
         ) : null}
         {current && rawStatus && (
-          <span className="text-xs text-slate-500" title="Último estado que dijo Olva">
+          <span className="text-[13px] text-ink-500" title="Último estado que dijo Olva">
             {rawStatus.toLowerCase()}
           </span>
         )}
@@ -2991,18 +3048,18 @@ function OlvaTrackingField({
             setValue(current ?? "");
             setEditing(true);
           }}
-          className="text-xs font-medium text-sky-700 hover:underline"
+          className="inline-flex items-center text-[13px] font-medium text-brand-700 underline-offset-2 hover:underline pointer-coarse:min-h-11"
         >
           {current ? "Corregir tracking" : "Registrar tracking Olva"}
         </button>
-        {error && <span className="w-full text-xs text-red-700">{error}</span>}
+        {error && <span role="alert" className="w-full text-[13px] text-crit-fg">{error}</span>}
       </>
     );
   }
 
   return (
     <form
-      className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-2 py-1.5"
+      className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-wash p-3"
       onSubmit={async (event) => {
         event.preventDefault();
         setBusy(true);
@@ -3023,31 +3080,28 @@ function OlvaTrackingField({
         autoFocus
         value={value}
         onChange={(event) => setValue(event.target.value)}
+        aria-label="Tracking de Olva"
         placeholder="2552504-26"
-        className="w-36 rounded border border-amber-200 bg-white px-2 py-1 font-mono text-xs text-slate-900"
+        className={cn(FIELD_BOX, "h-8 w-40 px-3 font-mono text-[13px] tabular-nums pointer-coarse:h-11")}
       />
-      <button
-        type="submit"
-        disabled={!value.trim()}
-        className="rounded bg-slate-950 px-2 py-1 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-      >
+      <OpsButton type="submit" variant="primary" size="sm" disabled={!value.trim()} className="pointer-coarse:h-11">
         Guardar
-      </button>
-      <button
-        type="button"
+      </OpsButton>
+      <OpsButton
+        variant="ghost"
+        size="sm"
         onClick={() => {
           setEditing(false);
           setError(null);
         }}
-        className="text-xs font-medium text-slate-600 hover:underline"
+        className="pointer-coarse:h-11"
       >
         Cancelar
-      </button>
-      <span className="w-full text-[11px] text-amber-900">
+      </OpsButton>
+      <span className="w-full text-xs text-ink-500">
         Como lo trae el correo de Olva («26-2552504») o su página («2552504 - 26»).
       </span>
-      {error && <span className="w-full text-xs text-red-700">{error}</span>}
+      {error && <span role="alert" className="w-full text-[13px] text-crit-fg">{error}</span>}
     </form>
   );
 }
-
