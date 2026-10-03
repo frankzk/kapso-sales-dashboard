@@ -7,6 +7,17 @@ import type { OrderLineItem } from "@/lib/types";
 
 export interface AutoSettings { org_id: string; enabled: boolean; daily_cap: number; max_order_days: number; history_days: number; pilot_enabled?: boolean; pilot_daily_cap?: number }
 export type AutoCohort = "prior_delivery" | "recent_no_history";
+
+/** MOM 11.9.1, ampliado el 03-10-2026: hasta 14 días y de 0 a 2 intentos Aliclik.
+ *  La reserva de la base (`swayp_emission_claim`, 0220) repite estos límites. */
+export const PILOT_MAX_ORDER_DAYS = 14;
+export const PILOT_MAX_AMOUNT = 500;
+export const PILOT_MAX_ALICLIK_ATTEMPTS = 2;
+
+/** Un intento informado de 0 a 2. Sin dato no se asume ninguno. */
+export function pilotAttemptsOk(attempts: number | null | undefined): boolean {
+  return Number.isInteger(attempts) && attempts! >= 0 && attempts! <= PILOT_MAX_ALICLIK_ATTEMPTS;
+}
 interface Guide { id: string; courier: string; delivery_status: string; reported_status: string | null; fenix_shipment_id: string | null }
 export interface AutoSnapshot {
   order: { id: string; store_id: string; name: string | null; created_at: string; customer_phone: string | null;
@@ -53,7 +64,7 @@ export const AUTO_REASONS: Record<string, string> = {
   no_mapping: "Falta vínculo de algún producto con Swayp", no_stock: "Sin stock completo en Swayp",
   api_disabled: "Bodega sin emisión por API", created: "Guía Swayp creada", review: "Emisión pendiente de revisión",
   emission_blocked: "Emisión detenida por tope, reserva o cambio de datos",
-  pilot_limits: "Piloto: requiere hasta 7 días, un intento y máximo S/500",
+  pilot_limits: "Piloto: requiere hasta 14 días, de 0 a 2 intentos informados y máximo S/500",
   pilot_location: "Piloto: ubicación o referencia sin corroborar",
   pilot_cap: "Piloto: cupo de 3 intentos diarios alcanzado",
   payment_review: "Tiene un pago registrado: revisar saldo antes de reenviar",
@@ -93,7 +104,7 @@ export function evaluateAutoDispatch(s: AutoSnapshot, c: AutoSettings, now: Date
   const cohort: AutoCohort = prior ? "prior_delivery" : "recent_no_history";
   if (!prior && !c.pilot_enabled) return no("no_history");
   if (!prior) {
-    if (age > 7 || g.aliclik_attempts !== 1 || Number(o.total_amount) > 500) return no("pilot_limits");
+    if (age > PILOT_MAX_ORDER_DAYS || !pilotAttemptsOk(g.aliclik_attempts) || Number(o.total_amount) > PILOT_MAX_AMOUNT) return no("pilot_limits");
     // Presence alone is not corroboration: the server also resolves these
     // coordinates through Aliclik and requires the exact destination ubigeo.
     if (!address.address2?.trim() || !Number.isFinite(g.latitude) || !Number.isFinite(g.longitude)

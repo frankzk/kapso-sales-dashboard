@@ -27,7 +27,7 @@ export default async function AutomaticPage() {
       <p className="font-semibold">{c.enabled?"Activo":"Pausado"} · máximo {c.daily_cap} intentos por día entre las tiendas de la organización</p>
       <p>Vía con historial: pedidos de hasta {c.max_order_days} días. Entrega anterior en los últimos {c.history_days} días, mismo domicilio y producto distinto. Sin rechazo ni otra salida activa. Stock completo consultado en Swayp.</p>
       <p className="font-semibold">Piloto sin historial: {c.pilot_enabled?"activo":"pausado"} · máximo {c.pilot_daily_cap??3} intentos diarios, incluidos en el límite general.</p>
-      <p>Hasta 7 días, un intento Aliclik y máximo S/500. Referencia y ubicación corroborada, sin pagos registrados por descontar. Conserva las comprobaciones de rechazo, duplicados, cobertura y stock completo.</p>
+      <p>Hasta 14 días, de 0 a 2 intentos Aliclik informados y máximo S/500. Referencia y ubicación corroborada, sin pagos registrados por descontar. Conserva las comprobaciones de rechazo, duplicados, cobertura y stock completo.</p>
       {memberships.some(m=>m.org_id===c.org_id&&["owner","admin"].includes(m.role))&&<div className="flex gap-4">
         <form action={toggleAutomatic}><input type="hidden" name="orgId" value={c.org_id}/><input type="hidden" name="enabled" value={String(!c.enabled)}/><button className="rounded border px-3 py-2">{c.enabled?"Pausar":"Activar"}</button></form>
         {c.enabled&&<form action={runAutomatic}><input type="hidden" name="orgId" value={c.org_id}/><button className="rounded border px-3 py-2">Evaluar y despachar ahora</button></form>}
