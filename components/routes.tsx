@@ -18,6 +18,7 @@ import {
   NON_DELIVERY_REASONS,
   PAYMENT_METHODS,
   rejectionNeedsPhoto,
+  reportedFromNotebook,
   routeCloseBlockers,
   routeTotals,
   stopsMissingEvidence,
@@ -548,6 +549,12 @@ function RouteDetail({
   const rejectionsNeedPhoto = rejectionNeedsPhoto(route.route_date);
   const missingPhotoIds = useMemo(() => new Set(isGf ? stopsMissingEvidence(stops, route.route_date).map((s) => s.id) : []), [isGf, stops, route.route_date]);
   const exemptRejection = (s: StopWithOrder) => !rejectionsNeedPhoto && s.outcome_reason === "rechazado" && !s.photo_path;
+  // Lo cargado desde el cuaderno tampoco la exige: nadie estuvo en la puerta
+  // con el teléfono (MOM §29.7). El ícono tachado dice cuál de las dos.
+  const exemptNotebook = (s: StopWithOrder) =>
+    !s.photo_path && reportedFromNotebook(s) && (s.status === "entregado" || s.outcome_reason === "rechazado");
+  const exemptPhoto = (s: StopWithOrder) =>
+    exemptNotebook(s) ? "Sin foto · cargada desde el cuaderno" : exemptRejection(s) ? "Sin foto · no se exige (antes del 28/09)" : null;
   // Un Yape sin captura no frena el cierre, pero sí aprobar el pago (0162).
   const missingVoucherIds = useMemo(
     () => new Set(stops.filter((s) => s.status === "entregado" && s.payment_method === "yape" && !s.voucher_path).map((s) => s.id)),
@@ -632,6 +639,7 @@ function RouteDetail({
           onShowView={showView}
           rejectionsNeedPhoto={rejectionsNeedPhoto}
           exemptRejections={stops.filter(exemptRejection).length}
+          notebookStops={stops.filter(exemptNotebook).length}
         />
       )}
 
@@ -714,7 +722,7 @@ function RouteDetail({
               </p>
               <StopResult stop={s} />
               {(s.status === "entregado" || s.photo_path || s.voucher_path) && (
-                <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} exempt={exemptRejection(s)} />
+                <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} exempt={exemptPhoto(s)} />
               )}
               {planning && (
                 <button
@@ -783,7 +791,7 @@ function RouteDetail({
                     <StopResult stop={s} />
                   </td>
                   <td className="px-2.5 py-2.5">
-                    <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} exempt={exemptRejection(s)} />
+                    <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} exempt={exemptPhoto(s)} />
                   </td>
                   <td className="px-3 py-2.5 text-right">
                     <StopEarnings stop={s} row={payRow.get(s.id)} pay={pay} onExtra={canExtra ? onExtra : undefined} />
@@ -941,12 +949,13 @@ const METHOD_SHORT: Record<string, string> = { efectivo: "Efectivo", yape: "Yape
  * íconos (cada uno abre en grande en otra pestaña, GET /api/reparto/foto), o
  * lo que falta en ámbar. El nombre de cada ícono va en su tooltip.
  */
-function StopCollection({ stop: s, needsPhoto, needsVoucher, exempt = false }: {
+function StopCollection({ stop: s, needsPhoto, needsVoucher, exempt = null }: {
   stop: StopWithOrder;
   needsPhoto: boolean;
   needsVoucher: boolean;
-  /** Rechazo sin foto de una ruta anterior al 28/09: no se exige (MOM §29.7). */
-  exempt?: boolean;
+  /** Por qué no se exige la foto que falta (MOM §29.7): un rechazo de una ruta
+   *  anterior al 28/09 o una parada cargada desde el cuaderno. */
+  exempt?: string | null;
 }) {
   const voucherLabel = s.payment_method === "yape" ? "Ver la captura del Yape" : "Ver el comprobante de pago";
   return (
@@ -966,7 +975,7 @@ function StopCollection({ stop: s, needsPhoto, needsVoucher, exempt = false }: {
             <IconCamera aria-hidden="true" className="h-3.5 w-3.5" />
           </span>
         ) : exempt ? (
-          <span role="img" title="Sin foto · no se exige (antes del 28/09)" aria-label="Sin foto · no se exige (antes del 28/09)" className={EXEMPT_ICON}>
+          <span role="img" title={exempt} aria-label={exempt} className={EXEMPT_ICON}>
             <IconCameraOff aria-hidden="true" className="h-3.5 w-3.5" />
           </span>
         ) : null}
@@ -1116,6 +1125,7 @@ function RouteClosePanel({
   onShowView,
   rejectionsNeedPhoto,
   exemptRejections,
+  notebookStops,
 }: {
   routeId: string;
   /** Se pudieron leer las cargas; sin eso el cierre tampoco pasa. */
@@ -1135,6 +1145,8 @@ function RouteClosePanel({
   rejectionsNeedPhoto: boolean;
   /** Rechazos sin foto que no la exigen (ruta anterior al 28/09). */
   exemptRejections: number;
+  /** Entregas y rechazos cargados desde el cuaderno, sin foto que pedir. */
+  notebookStops: number;
 }) {
   const headingId = useId();
   const summaryId = useId();
@@ -1149,7 +1161,9 @@ function RouteClosePanel({
     : ready
       ? isGf && exemptRejections > 0
         ? "Todo reportado; los rechazos antes del 28/09 no exigen foto. Al terminarla se crea la liquidación de cada tienda."
-        : `Todas las paradas tienen su reporte${isGf ? " y su foto" : ""}. Al terminarla se crea la liquidación de cada tienda.`
+        : isGf && notebookStops > 0
+          ? "Todo reportado; lo cargado desde el cuaderno no exige foto. Al terminarla se crea la liquidación de cada tienda."
+          : `Todas las paradas tienen su reporte${isGf ? " y su foto" : ""}. Al terminarla se crea la liquidación de cada tienda.`
       : canForce
         ? forceable?.kind === "sin_recibir"
           ? "Quedan «No entregado» dentro de la caja: recíbelos en oficina si ya volvieron, o ciérrala igual."

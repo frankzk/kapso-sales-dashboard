@@ -87,6 +87,53 @@ aceptar las observaciones de monto, o en bloque con
 `scripts/apply-cuaderno-history-to-master.ts` (deja `master_backfill_log`,
 reversible con `scripts/rollback-master-backfill.ts`).
 
+## Un motorizado sin app, con la ruta ya en Kapta (foto de su hoja)
+
+Es el caso de Alexis desde el 01/10/2026: Despacho armó su caja, oficina la
+cotejó y él la recibió, así que la ruta existe y está «En reparto», pero nadie
+reporta las paradas desde el teléfono. Llega una foto de su hoja por día
+(columnas Ítem · Proveedor · Cliente · Distrito · F. pago · Recaudado ·
+Ganancia mot. · Observación, con el pedido en Observación). Los pasos 1 a 3 de
+arriba no sirven aquí: crean rutas y cajas que ya existen.
+
+1. **Transcribe y cuadra.** Pasa cada fila a una tabla y suma «Recaudado» y
+   «Ganancia»: tienen que dar el TOTAL COBRADO de la foto al céntimo antes de
+   seguir. Ojo con la fecha de la cabecera (la del 01/10 decía 28/02/2025):
+   manda la ruta cuyos pedidos coinciden.
+2. **Cruza con la ruta del día** (`delivery_routes` del motorizado y fecha,
+   `delivery_stops` con su pedido). Tres grupos: paradas pendientes que la hoja
+   explica, paradas ya reportadas (no se tocan) y filas que no están en la caja.
+   Estas últimas **no se cargan**: §29.5 exige el cotejo. Se le pasan a quien
+   liquida con su nota (otro motorizado las tiene, salieron de nuevo otro día,
+   no existen en Kapta).
+3. **Reporta las pendientes en una transacción** que replique
+   `writeStopReport` (`lib/stop-report.ts`), con el vocabulario de §29.7:
+   - `delivery_stops`: estado, método y monto (solo si entregado), motivo (solo
+     si no entregado), nota «Cuaderno de X del dd/mm (punto N): …»,
+     `written_status` (lo escrito), `written_status_code` (código de Reparto
+     propio), `written_payment`, `reported_at = now()`,
+     `pickup_confirmed` del ítem de la caja y **`reported_by = null`**: es la
+     marca de «cargada desde el cuaderno», y lo que la exime de foto.
+   - `delivery_stop_events` con `actor` = quien pidió la carga.
+   - `order_events` `stop_reported` con el mismo actor, `source = 'reparto'`,
+     `courier = 'propio'` y `payload.origen = 'cuaderno'`.
+   - Antes de escribir, un `do $$` que aborte si las filas no caen exactamente
+     en N paradas pendientes de una ruta en curso. Ensaya primero terminando
+     en un `raise exception` que imprima los conteos: deshace todo.
+4. **El Master.** Fuera de la app nadie llama a `recomputeOrderMasterSafe`.
+   Marca esas filas como de versión vieja y el cron `master-reconcile` (cada
+   10 minutos) las recalcula:
+   `update order_master set macro_version = 'cuaderno-recalcular' where order_id in (…)`.
+   Tocar solo `shipments.updated_at` no sirve: su trigger lo ignora.
+5. **Comprueba**: la ruta sin pendientes, el efectivo igual a la hoja menos lo
+   que quedó fuera, y el Master con los entregados en «Por cerrar» y el resto
+   en «Por reprogramar Lima». Terminar la ruta y aprobar el pago siguen siendo
+   de quien liquida, desde «Reparto y liquidación».
+
+La ganancia que trae la hoja la calcula Kapta con su tarifa personal
+(`rider_pay_rates`). Si no coincide, la tarifa se registra con
+`rider_pay_save_rate` (nueva versión, con motivo); no se corrige a mano.
+
 ## Antes de importar
 
 - Si ese día hubo pruebas en Despacho del día con pedidos que no salieron,

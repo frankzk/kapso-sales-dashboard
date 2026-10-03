@@ -194,6 +194,9 @@ echo "  ✅ misma caja durante el cotejo; lo nuevo reabre oficina; se recibe lo 
 echo "▶ pago del motorizado: el rechazo antes del 28/09 no exige foto (0197)"
 $PSQL -f "$ROOT/scripts/sql/rider_pay_rejection_photo_smoke.sql"
 echo "  ✅ rechazo del 27/09 sin foto no frena el pago; el del 28/09 sí; entrega sin foto y Yape sin captura cuentan siempre"
+echo "▶ pago del motorizado: lo cargado desde el cuaderno no exige foto (0222)"
+$PSQL -f "$ROOT/scripts/sql/rider_pay_notebook_photo_smoke.sql"
+echo "  ✅ entrega y rechazo del cuaderno sin foto no frenan el pago y se pagan; la entrega de la app sin foto y el Yape sin captura sí cuentan"
 
 echo ""
 echo "✅ DB verification passed."

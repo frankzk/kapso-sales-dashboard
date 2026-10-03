@@ -10,6 +10,7 @@ import {
   nonDeliveryNeedsPhoto,
   REJECTION_PHOTO_FROM,
   rejectionNeedsPhoto,
+  reportedFromNotebook,
   routeCloseBlockerMessage,
   routeCloseBlockers,
   stopEffect,
@@ -379,6 +380,48 @@ describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
     // Una fecha con hora sigue contando por el día.
     expect(rejectionNeedsPhoto("2026-09-28T00:00:00")).toBe(true);
     expect(rejectionNeedsPhoto("2026-09-27T23:59:59")).toBe(false);
+  });
+
+  // Decisión de Frankz (03-10-2026): Alexis todavía no usa la app y sus rutas
+  // se cargan desde la foto de su hoja. Lo cargado desde el cuaderno
+  // (`reported_by` null) no exige foto; lo reportado desde la app, sí.
+  it("lo cargado desde el cuaderno no exige foto; lo reportado desde la app sí", () => {
+    const stops = [
+      { ...parada({ seq: 1, status: "entregado" }), reported_by: null },
+      { ...parada({ seq: 2, status: "no_entregado", outcome_reason: "rechazado" }), reported_by: null },
+      { ...parada({ seq: 3, status: "entregado" }), reported_by: "coordinacion" },
+      // Quien no leyó `reported_by` sigue exigiéndola, como antes.
+      parada({ seq: 4, status: "entregado" }),
+    ];
+    expect(stopsMissingEvidence(stops, "2026-10-01").map((s) => s.seq)).toEqual([3, 4]);
+    expect(routeCloseBlockers({ isGf: true, openLoads: [], stops: stops.slice(0, 2), routeDate: "2026-10-01" })).toEqual([]);
+    expect(reportedFromNotebook({ status: "entregado", reported_by: null })).toBe(true);
+    expect(reportedFromNotebook({ status: "no_entregado", reported_by: null })).toBe(true);
+    // Una parada pendiente no tiene reporte: no es «del cuaderno».
+    expect(reportedFromNotebook({ status: "pendiente", reported_by: null })).toBe(false);
+    expect(reportedFromNotebook({ status: "entregado", reported_by: "coordinacion" })).toBe(false);
+    expect(reportedFromNotebook({ status: "entregado" })).toBe(false);
+  });
+
+  it("la excepción del cuaderno vive en el cierre, en el panel y en el pago del motorizado (0222)", () => {
+    const sql = readFileSync(resolve(process.cwd(), "db/migrations/0222_rider_pay_notebook_photo_exemption.sql"), "utf8");
+    expect(sql).toContain("create or replace function rider_pay_preview(p_route uuid, p_actor uuid)");
+    expect(sql).toContain("s.collected_amount,s.reported_at,s.reported_by,s.photo_path,s.voucher_path,");
+    expect(sql).toContain("and coalesce(x->>'photo_path','')='' and x->>'reported_by' is not null)");
+    // La regla del 28/09 sigue igual.
+    expect(sql).toContain(`or (x->>'outcome_reason'='rechazado' and v_route.route_date >= date '${REJECTION_PHOTO_FROM}'))`);
+    expect(sql).toContain("revoke all on function rider_pay_preview(uuid,uuid) from public,anon,authenticated;");
+    const verify = readFileSync(resolve(process.cwd(), "scripts/verify-db.sh"), "utf8");
+    expect(verify).toContain('$PSQL -f "$ROOT/scripts/sql/rider_pay_notebook_photo_smoke.sql"');
+    const panel = readFileSync(resolve(process.cwd(), "components/routes.tsx"), "utf8");
+    expect(panel).toContain("!s.photo_path && reportedFromNotebook(s) && (s.status === \"entregado\" || s.outcome_reason === \"rechazado\");");
+    expect(panel).toContain("Sin foto · cargada desde el cuaderno");
+    expect(panel).toContain("exempt={exemptPhoto(s)} />");
+    // Las paradas de la ruta traen `reported_by`: sin él, la excepción no se aplicaría.
+    const access = readFileSync(resolve(process.cwd(), "lib/routes-access.ts"), "utf8");
+    expect(access).toContain("photo_path,voucher_path,reported_at,reported_by,");
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    expect(mom).toContain("**Excepción: lo cargado desde el cuaderno no exige foto (03-10-2026, decisión\nde Frankz).**");
   });
 
   it("el mensaje nombra cada pedido y dice cómo arreglarlo", () => {

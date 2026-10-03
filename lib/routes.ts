@@ -166,6 +166,23 @@ export interface EvidenceStop {
    * recibió en oficina.
    */
   manifest_item_id?: string | null;
+  /**
+   * Quién guardó el reporte. `null` en una parada ya reportada = se cargó
+   * desde el cuaderno (§29.7): nadie estuvo en la puerta con el teléfono.
+   * `undefined` = quien llama no lo leyó, y la foto se exige como siempre.
+   */
+  reported_by?: string | null;
+}
+
+/**
+ * ¿La parada se cargó desde el cuaderno y no desde la app? Es la misma marca
+ * que la puerta al Master usa para el backfill histórico (`reported_by` null,
+ * lib/master-door.ts): el backfill de Liquidaciones 2 y un motorizado que
+ * todavía no usa la app, cargado desde la foto de su hoja (03-10-2026). Quién
+ * lo cargó queda en `delivery_stop_events.actor` y en la actividad del pedido.
+ */
+export function reportedFromNotebook(stop: { status: string; reported_by?: string | null }): boolean {
+  return stop.status !== "pendiente" && stop.reported_by === null;
 }
 
 /**
@@ -185,11 +202,17 @@ export function rejectionNeedsPhoto(routeDate: string): boolean {
 
 /**
  * Entregas y rechazos sin foto: lo que no deja liquidar (MOM §29.7). La
- * entrega la exige siempre; el rechazo, solo en rutas desde el 28/09.
+ * entrega la exige siempre; el rechazo, solo en rutas desde el 28/09. Lo
+ * cargado desde el cuaderno no la exige: no hay foto que pedir.
  */
 export function stopsMissingEvidence<T extends EvidenceStop>(stops: readonly T[], routeDate: string): T[] {
   const rechazoConFoto = rejectionNeedsPhoto(routeDate);
-  return stops.filter((stop) => !stop.photo_path && (stop.status === "entregado" || (rechazoConFoto && stop.outcome_reason === "rechazado")));
+  return stops.filter(
+    (stop) =>
+      !stop.photo_path &&
+      !reportedFromNotebook(stop) &&
+      (stop.status === "entregado" || (rechazoConFoto && stop.outcome_reason === "rechazado")),
+  );
 }
 
 /**
