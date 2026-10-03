@@ -4260,8 +4260,8 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
           <p className="border-t border-slate-100 px-3 py-2 text-xs leading-relaxed text-slate-500">
             Gestiones: llamadas y reprogramaciones registradas hoy · Reprogramadas: confirmadas y en ruta ·
             Anuladas: la clienta canceló · Entregadas: cerradas por el resultado del courier · Guías: distintas
-            tocadas hoy · Agente Daaph y Agente Telnyx: el agente de voz IA por dos líneas (Zadarma y Telnyx); cada
-            llamada suya es una gestión.
+            tocadas hoy · Agente Daaph, Agente Telnyx y Agente ElevenLabs: el agente de voz IA por distintas líneas y
+            motores; cada llamada suya es una gestión.
           </p>
         </div>
       )}

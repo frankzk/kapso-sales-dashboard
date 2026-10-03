@@ -33,6 +33,7 @@ export const IN_PROGRESS_TTL_MINUTES = 5;
  */
 export const VOICE_NOTE_SIGNER = "Agente de voz";
 export const VOICE_NOTE_SIGNER_TELNYX = "Agente de voz (Telnyx)";
+export const VOICE_NOTE_SIGNER_ELEVENLABS = "Agente de voz (ElevenLabs)";
 
 /**
  * Por qué línea sale una llamada del barrido: Telnyx con probabilidad

@@ -90,6 +90,17 @@ export interface TelnyxConfig {
   fromNumber: string;
   /** Puerta SIP del agente en xAI para este número. */
   xaiSipUri: string;
+  /** Puerta SIP del agente de ElevenLabs para este número; vacía si no está configurada. */
+  elevenLabsSipUri: string;
+}
+
+/** Qué agente atiende la llamada: Grok (xAI) o ElevenLabs. Es `voice_calls.provider`. */
+export type VoiceEngine = "grok" | "elevenlabs";
+
+/** La puerta SIP del motor, o null si ese motor no está configurado. */
+export function agentSipUriFor(cfg: Pick<TelnyxConfig, "xaiSipUri" | "elevenLabsSipUri">, engine: VoiceEngine): string | null {
+  const uri = engine === "elevenlabs" ? cfg.elevenLabsSipUri : cfg.xaiSipUri;
+  return uri.trim() || null;
 }
 
 export interface TelnyxDialResult {
@@ -146,10 +157,15 @@ export function clienteDialBody(cfg: TelnyxConfig, voiceCallId: string, to: stri
 }
 
 /** El cuerpo del tramo a xAI, unido al de la clienta en cuanto xAI atiende. */
-export function agenteDialBody(cfg: TelnyxConfig, voiceCallId: string, clienteCallControlId: string): Record<string, unknown> {
+export function agenteDialBody(
+  cfg: TelnyxConfig,
+  voiceCallId: string,
+  clienteCallControlId: string,
+  agentSipUri: string = cfg.xaiSipUri,
+): Record<string, unknown> {
   return {
     connection_id: cfg.connectionId,
-    to: cfg.xaiSipUri,
+    to: agentSipUri,
     from: cfg.fromNumber,
     timeout_secs: 20,
     link_to: clienteCallControlId,

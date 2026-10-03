@@ -1157,18 +1157,20 @@ export function rescheduleGuideCode(
 // El agente de voz (MOM §11.8) escribe con actor nulo: sus notas empiezan con
 // «Agente de voz» y la salida Swayp que crea deja las dos filas `reroute` sin
 // asesora. Esas filas cuentan en una fila propia, al final de la tabla. Son
-// dos agentes que compiten con el mismo agente de xAI y distinta línea: la
-// nota «Agente de voz (Telnyx)» es el Agente Telnyx y el resto el Agente Daaph
-// (Zadarma). Cualquier otra fila sin actor sigue fuera: no es de nadie.
+// agentes que compiten: la nota «Agente de voz (Telnyx)» es el Agente Telnyx
+// (Telnyx + Grok), «Agente de voz (ElevenLabs)» el Agente ElevenLabs (Telnyx +
+// ElevenLabs) y el resto el Agente Daaph (Zadarma + Grok). Cualquier otra fila sin actor sigue fuera: no es de nadie.
 
 export const VOICE_AGENT_KEY = "agente_daaph";
 export const VOICE_AGENT_NAME = "Agente Daaph";
 export const VOICE_AGENT_TELNYX_KEY = "agente_telnyx";
 export const VOICE_AGENT_TELNYX_NAME = "Agente Telnyx";
+export const VOICE_AGENT_ELEVENLABS_KEY = "agente_elevenlabs";
+export const VOICE_AGENT_ELEVENLABS_NAME = "Agente ElevenLabs";
 
 /** ¿Es la fila de un agente de voz (no de una asesora)? */
 export function isVoiceAgentKey(agent: string): boolean {
-  return agent === VOICE_AGENT_KEY || agent === VOICE_AGENT_TELNYX_KEY;
+  return agent === VOICE_AGENT_KEY || agent === VOICE_AGENT_TELNYX_KEY || agent === VOICE_AGENT_ELEVENLABS_KEY;
 }
 
 export interface ReproDayCall {
@@ -1184,6 +1186,7 @@ export function reproDayActor(c: ReproDayCall): string | null {
   if (c.agent) return c.agent;
   const note = c.note ?? "";
   if (c.kind !== "reroute" && !note.startsWith("Agente de voz")) return null;
+  if (note.includes("Agente de voz (ElevenLabs)")) return VOICE_AGENT_ELEVENLABS_KEY;
   return note.includes("Agente de voz (Telnyx)") ? VOICE_AGENT_TELNYX_KEY : VOICE_AGENT_KEY;
 }
 

@@ -17,6 +17,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import {
   agenteDialBody,
+  agentSipUriFor,
   dialTelnyx,
   hangupTelnyx,
   noAnswerResumen,
@@ -40,6 +41,7 @@ interface Row {
   mode: "real" | "test";
   status: string;
   telephony: string;
+  provider: string;
   telephony_response: { cliente?: string; agente?: string; eventos?: unknown[] } | null;
 }
 
@@ -78,7 +80,7 @@ export async function POST(req: NextRequest) {
   const now = new Date();
   const { data } = await admin
     .from("voice_calls")
-    .select("id, store_id, order_id, mode, status, telephony, telephony_response")
+    .select("id, store_id, order_id, mode, status, telephony, provider, telephony_response")
     .eq("id", ev.state.vc)
     .maybeSingle();
   const row = data as Row | null;
@@ -114,7 +116,11 @@ export async function POST(req: NextRequest) {
       await hangup(ev.callControlId);
       return NextResponse.json({ ok: true, action: "colgada: la llamada ya estaba cerrada" });
     }
-    const dialed = await dialTelnyx(cfg, agenteDialBody(cfg, row.id, ev.callControlId));
+    // Grok o ElevenLabs, según el motor con que se pidió la llamada.
+    const agentUri = agentSipUriFor(cfg, row.provider === "elevenlabs" ? "elevenlabs" : "grok");
+    const dialed = agentUri
+      ? await dialTelnyx(cfg, agenteDialBody(cfg, row.id, ev.callControlId, agentUri))
+      : { ok: false, error: "el motor de la llamada no tiene puerta SIP configurada" };
     if (!dialed.ok) {
       await hangup(ev.callControlId);
       await admin

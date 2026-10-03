@@ -39,6 +39,9 @@ export const env = {
   telnyxConnectionId: () => required("TELNYX_CONNECTION_ID").trim(),
   telnyxFromNumber: () => required("TELNYX_FROM_NUMBER").trim(),
   telnyxXaiSipUri: () => required("TELNYX_XAI_SIP_URI").trim(),
+  // El Agente ElevenLabs (mismo guion, otro motor) entra por esta puerta SIP.
+  // Opcional: sin ella, la línea Telnyx solo ofrece Grok.
+  telnyxElevenLabsSipUri: () => (process.env.TELNYX_ELEVENLABS_SIP_URI ?? "").trim(),
   voiceTelnyxShare: () => {
     const n = Number((process.env.VOICE_TELNYX_SHARE ?? "0").trim());
     return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
