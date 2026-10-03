@@ -256,6 +256,9 @@ export function OrdersMasterBoard({
   const pathname = usePathname();
   const [navigating, startNav] = useTransition();
   const [showMore, setShowMore] = useState(false);
+  // En el teléfono las píldoras viven detrás de una sola («Filtros»): diez
+  // píldoras en cuatro renglones empujaban el primer pedido dos pantallas abajo.
+  const [phoneFilters, setPhoneFilters] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const searchParams = useSearchParams();
   // ABRIR UN PEDIDO DESDE FUERA. La cola de cobranza avisa de un comprobante
@@ -429,9 +432,6 @@ export function OrdersMasterBoard({
     startNav(() => router.replace(`${pathname}?${qs.toString()}`, { scroll: false }));
   };
 
-  const setFilters = (updater: (f: MasterFilters) => MasterFilters) =>
-    navigate({ filters: updater(filters) });
-
   // La búsqueda es un filtro más y la resuelve la base. El estado del input NO
   // vive aquí: está en `MasterSearchInput`, y el motivo es de rendimiento, no
   // de orden. Ver el comentario de ese componente.
@@ -461,12 +461,6 @@ export function OrdersMasterBoard({
     navigate({ filters: next });
   }
 
-  function toggleStore(id: string) {
-    const next = new Set(filters.stores);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    navigate({ filters: { stores: next } });
-  }
 
   // La MISMA regla que usa el servidor para decidir que se está buscando: si
   // cada lado midiera por su cuenta, la pantalla enseñaría pestañas mientras el
@@ -522,6 +516,7 @@ export function OrdersMasterBoard({
   const multiStore = stores.length > 1;
   const filtering = hasActiveFilters(filters);
   const moreCount = moreFilterCount(filters);
+  const pillCount = pillFilterCount(filters, view === "por_confirmar") + (moreCount > 0 ? 1 : 0);
   const scope =
     stores.length === 1
       ? "de la tienda"
@@ -568,7 +563,7 @@ export function OrdersMasterBoard({
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <PagerControls page={page} totalPages={totalPages} busy={navigating} onPage={goToPage} />
-              <OpsButton variant="ghost" size="sm" onClick={() => commitSearch("")}>
+              <OpsButton variant="ghost" size="sm" onClick={() => commitSearch("")} className="pointer-coarse:h-11">
                 Limpiar búsqueda
               </OpsButton>
             </div>
@@ -672,7 +667,21 @@ export function OrdersMasterBoard({
 
           {/* Filtros: píldoras discontinuas que se vuelven sólidas con su valor. */}
           <div className="space-y-3">
-            <div role="group" aria-label="Filtros" className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 sm:hidden">
+              <FilterPill
+                label="Filtros"
+                active={pillCount > 0}
+                count={pillCount > 0 ? pillCount : undefined}
+                expanded={phoneFilters}
+                onClick={() => setPhoneFilters((v) => !v)}
+                onClear={pillCount > 0 ? () => patch(CLEARED_PILL_FILTERS) : undefined}
+              />
+            </div>
+            <div
+              role="group"
+              aria-label="Filtros"
+              className={cn("flex flex-wrap items-center gap-2", !phoneFilters && "max-sm:hidden")}
+            >
               {multiStore && (
                 <FacetPill
                   label="Tienda"
@@ -763,7 +772,7 @@ export function OrdersMasterBoard({
                 title="Fechas, modalidad, señales y antigüedad sin movimientos"
               />
               {filtering && (
-                <OpsButton variant="ghost" size="sm" onClick={() => navigate({ filters: emptyFilters() })}>
+                <OpsButton variant="ghost" size="sm" onClick={() => navigate({ filters: emptyFilters() })} className="pointer-coarse:h-11">
                   Quitar filtros
                 </OpsButton>
               )}
@@ -840,7 +849,7 @@ export function OrdersMasterBoard({
                     : "Todavía no hay pedidos aquí."}
                 </p>
                 {filtering && (
-                  <OpsButton size="sm" onClick={() => navigate({ filters: emptyFilters() })}>
+                  <OpsButton size="sm" onClick={() => navigate({ filters: emptyFilters() })} className="pointer-coarse:h-11">
                     Quitar filtros
                   </OpsButton>
                 )}
@@ -925,6 +934,22 @@ function moreFilterCount(f: MasterFilters): number {
   ].filter(Boolean).length;
 }
 
+/** Cuántas píldoras de filtro están puestas (la de Gestión solo cuenta donde se ve). */
+function pillFilterCount(f: MasterFilters, withManagement: boolean): number {
+  return [
+    f.stores,
+    f.operationalStatuses,
+    f.couriers,
+    f.paymentChecks,
+    f.regions,
+    f.provinces,
+    f.districts,
+    f.coverages,
+    f.pickupStates,
+    ...(withManagement ? [f.managementDays] : []),
+  ].filter((set) => set.size > 0).length;
+}
+
 const CLEARED_MORE_FILTERS: Partial<MasterFilters> = {
   createdFrom: "",
   createdTo: "",
@@ -939,6 +964,21 @@ const CLEARED_MORE_FILTERS: Partial<MasterFilters> = {
   multiCourier: false,
   multiAttempt: false,
   staleDays: 0,
+};
+
+/** Lo que quita la píldora «Filtros» del teléfono: las píldoras y «Más filtros». */
+const CLEARED_PILL_FILTERS: Partial<MasterFilters> = {
+  stores: new Set(),
+  operationalStatuses: new Set(),
+  couriers: new Set(),
+  paymentChecks: new Set(),
+  regions: new Set(),
+  provinces: new Set(),
+  districts: new Set(),
+  coverages: new Set(),
+  pickupStates: new Set(),
+  managementDays: new Set(),
+  ...CLEARED_MORE_FILTERS,
 };
 
 type FacetOption = { value: string; label: string; count?: number };
@@ -962,7 +1002,13 @@ function FacetPill({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const pill = useRef<HTMLButtonElement>(null);
+  const sheet = useRef<HTMLDivElement>(null);
+  // La hoja vive en un portal: al cerrarla con Escape o con su «x» el foco
+  // vuelve a la píldora, no al principio del documento. Si se cerró tocando
+  // otra cosa, el foco se queda donde la persona lo puso.
   const close = useCallback(() => {
+    const active = document.activeElement;
+    if (active === document.body || (active && sheet.current?.contains(active))) pill.current?.focus();
     setOpen(false);
     setQuery("");
   }, []);
@@ -1004,6 +1050,7 @@ function FacetPill({
       />
       {open && (
         <Sheet look="ops" title={label} onClose={close} anchored anchorRef={pill}>
+          <div ref={sheet}>
           {safe.length > 8 && (
             <label className="relative mb-2 block">
               <span className="sr-only">Buscar en {label.toLocaleLowerCase("es")}</span>
@@ -1018,11 +1065,13 @@ function FacetPill({
             </label>
           )}
           <ul className="-mx-1 grid max-h-72 gap-0.5 overflow-y-auto">
-            {shown.map((o) => (
+            {shown.map((o, i) => (
               <li key={o.value}>
                 <label className="flex min-h-9 cursor-pointer items-center gap-2.5 rounded-md px-2 text-sm text-ink-700 hover:bg-wash pointer-coarse:min-h-11">
                   <input
                     type="checkbox"
+                    // Sin buscador, el foco entra por la primera casilla.
+                    autoFocus={i === 0 && safe.length <= 8}
                     className={CHECKBOX}
                     checked={selected.has(o.value)}
                     onChange={() => toggle(o.value)}
@@ -1047,11 +1096,12 @@ function FacetPill({
               <span className="text-[13px] tabular-nums text-ink-500">
                 {selected.size} {selected.size === 1 ? "elegido" : "elegidos"}
               </span>
-              <OpsButton variant="ghost" size="sm" onClick={() => onChange(new Set())}>
+              <OpsButton variant="ghost" size="sm" onClick={() => onChange(new Set())} className="pointer-coarse:h-11">
                 Quitar selección
               </OpsButton>
             </div>
           )}
+          </div>
         </Sheet>
       )}
     </>
@@ -1084,13 +1134,15 @@ function AgencyLine({
   const num = (n: number) => <b className="font-semibold tabular-nums text-ink-900">{n.toLocaleString("es-PE")}</b>;
 
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+    // `justify-between`: en una línea, cifras a la izquierda y píldoras a la
+    // derecha; si no caben, cada parte empieza a la izquierda en su renglón.
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
       <p className="min-w-0 text-[13px] leading-5 text-ink-500">
         <span className="font-semibold text-ink-700">Envíos por agencia</span> · Shalom y Olva ·{" "}
         {num(summary.pendienteDeEnvio)} {summary.pendienteDeEnvio === 1 ? "pendiente" : "pendientes"} de envío ·{" "}
         {num(summary.enTransito)} en tránsito
       </p>
-      <div role="group" aria-label="Recojo en agencia" className="flex flex-wrap items-center gap-2 lg:ml-auto">
+      <div role="group" aria-label="Recojo en agencia" className="flex flex-wrap items-center gap-2">
         <AttentionPill
           icon={IconPackage}
           label="Disponibles para recojo"
@@ -2078,10 +2130,12 @@ function MasterTable({
                 aria-current={isOpen ? "true" : undefined}
                 className={cn(
                   "cursor-pointer transition-colors duration-100 max-xl:grid max-xl:grid-cols-[1.75rem_minmax(0,1fr)_auto] max-xl:gap-x-2 max-xl:gap-y-1 max-xl:px-4 max-xl:py-3",
+                  // Sobre el azul firme, el texto de apoyo sube a ink-600: en
+                  // ink-500 quedaba en 4,2:1. Marcada, el velo al 60 % lo deja en 4,6:1.
                   isOpen
-                    ? "bg-brand-100/70"
+                    ? "bg-brand-100/70 [&_.text-ink-500]:text-ink-600"
                     : isSelected
-                      ? "bg-brand-50"
+                      ? "bg-brand-50/60"
                       : "bg-white hover:bg-wash",
                 )}
               >
@@ -2117,7 +2171,10 @@ function MasterTable({
                   </button>
                   <p
                     className="truncate text-[13px] leading-5 text-ink-500"
-                    title={r.order_created_at ? `Creado el ${fmtDateTime(r.order_created_at)}` : undefined}
+                    title={[
+                      r.order_created_at ? `Creado el ${fmtDateTime(r.order_created_at)}` : "",
+                      multiStore ? storeName(r.store_id) : "",
+                    ].filter(Boolean).join(" · ") || undefined}
                   >
                     {/* La fecha primero: si algo se corta, que sea el nombre de la tienda. */}
                     <span className="tabular-nums">{fmtDate(r.order_created_at)}</span>
@@ -2130,10 +2187,10 @@ function MasterTable({
                       {r.customer_name ?? "—"}
                     </p>
                     {r.customer_phone && (
-                      <>
+                      <p className="flex min-w-0 gap-x-1.5 text-[13px] leading-5 tabular-nums text-ink-500 xl:block xl:truncate">
                         <span aria-hidden className={DOT}>·</span>
-                        <p className="truncate text-[13px] leading-5 tabular-nums text-ink-500">{r.customer_phone}</p>
-                      </>
+                        <span className="truncate">{r.customer_phone}</span>
+                      </p>
                     )}
                   </div>
                 </td>
@@ -2144,8 +2201,8 @@ function MasterTable({
                     <p className="max-w-full truncate leading-5 text-ink-900" title={r.district ?? undefined}>
                       {r.district ?? "—"}
                     </p>
-                    <span aria-hidden className={DOT}>·</span>
                     <div className="flex min-w-0 items-center gap-1.5 xl:mt-0.5">
+                      <span aria-hidden className={DOT}>·</span>
                       <CoverageBadge coverage={r.coverage} />
                       <span
                         className="truncate text-[13px] leading-5 text-ink-500"
@@ -2169,15 +2226,15 @@ function MasterTable({
                     <p className="truncate capitalize leading-5 text-ink-900">{r.last_courier ?? "—"}</p>
                     {showCourierCounts && (
                       <>
-                        <span aria-hidden className={DOT}>·</span>
                         <p className="text-[13px] leading-5 tabular-nums text-ink-500">
-                          <span className={cn(r.attempt_count > 1 && "font-semibold text-warn-fg")}>
+                          <span aria-hidden className={cn(DOT, "mr-1.5")}>·</span>
+                          <span className={cn("whitespace-nowrap", r.attempt_count > 1 && "font-semibold text-warn-fg")}>
                             {r.attempt_count} {r.attempt_count === 1 ? "intento" : "intentos"}
                           </span>
                           {r.courier_count > 1 && (
                             <>
                               {" · "}
-                              <span className="font-semibold text-warn-fg">{r.courier_count} couriers</span>
+                              <span className="whitespace-nowrap font-semibold text-warn-fg">{r.courier_count} couriers</span>
                             </>
                           )}
                         </p>
@@ -2196,9 +2253,9 @@ function MasterTable({
                         {fmtAge(since)}
                       </span>
                     </div>
-                    <span aria-hidden className={DOT}>·</span>
-                    <p className="truncate text-[13px] leading-5 text-ink-600 xl:mt-0.5">
-                      {macroSubstageLabel(r.macro_substage)}
+                    <p className="flex min-w-0 gap-x-1.5 text-[13px] leading-5 text-ink-600 xl:mt-0.5 xl:block xl:truncate">
+                      <span aria-hidden className={DOT}>·</span>
+                      <span className="truncate">{macroSubstageLabel(r.macro_substage)}</span>
                     </p>
                   </div>
                 </td>
@@ -2328,6 +2385,19 @@ function MasterSearchInput({
   // Uno o dos caracteres no se mandan: no alcanzan para usar el índice de la
   // búsqueda y devolverían miles de filas. Se espera al tercero —o a que el
   // campo quede vacío, que es «limpiar la búsqueda»— y se deja el aviso.
+  // «/» lleva a la búsqueda desde cualquier parte del tablero, como en Stripe.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog']")) return;
+      e.preventDefault();
+      input.current?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   const typed = text.trim().replace(/^#/, "").trim();
   const tooShort = typed.length > 0 && typed.length < MASTER_SEARCH_MIN_CHARS;
 
@@ -2353,6 +2423,8 @@ function MasterSearchInput({
           if (e.key === "Escape" && text) setText("");
         }}
         enterKeyHint="search"
+        aria-keyshortcuts="/"
+        title="Atajo: /"
         aria-label="Buscar pedido, cliente, teléfono o guía"
         aria-describedby={tooShort ? hintId : undefined}
         placeholder="Buscar pedido, cliente, teléfono o guía…"
@@ -2366,7 +2438,7 @@ function MasterSearchInput({
             input.current?.focus();
           }}
           aria-label="Borrar la búsqueda"
-          className="absolute right-1 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-9"
+          className="absolute right-1 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:right-0 pointer-coarse:size-11"
         >
           <IconX className="size-4" />
         </button>

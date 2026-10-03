@@ -11,7 +11,7 @@ Scope: el tablero de `/dashboard/pedidos` — cabecera, búsqueda, tira de agenc
 Audience: el equipo de operación (confirmación, almacén, seguimiento, cierre) en escritorio la mayor parte del día; supervisores que lo abren desde el teléfono.
 Job: localizar y priorizar pedidos (quién, dónde, en qué macroetapa y desde cuándo, MOM §25), abrir la ficha del que toca y actuar en lote sobre una tanda.
 Constraints: conservar lógica, filtros en la URL, contadores con filtros (MOM §6), paginador con total en todas las vistas, el ciclo de recontacto dentro de «Más filtros» (§6.1), «Próximo contacto» distinguiendo fecha pactada de ciclo automático, y los tonos de macroetapa del MOM (§25: ámbar confirmación, celeste preparación, índigo despacho, cian seguimiento, naranja cierre, verde completado, gris consulta). Ningún dato sale de la tabla sin estar en la ficha. Sin scroll horizontal; 44 px con puntero táctil.
-Decisions (02-10-2026, Frankz): «Tablero ahora, ficha después»; tabla «Compacta, sin scroll» con celdas agrupadas; macroetapas como «Tarjetas de cifra» con subetapas en chips debajo.
+Decisions (02-10-2026, Frankz): «Ahora vamos con Master de Pedidos … haz tu mejor trabajo!» dentro del mundo ya fijado con «diseñarlo con estilo Stripe» (Ajustes, 02-10-2026; Despacho, 29-09-2026); «Tablero ahora, ficha después»; tabla «Compacta, sin scroll» con celdas agrupadas; macroetapas como «Tarjetas de cifra» con subetapas en chips debajo.
 
 ## Direction contract
 
@@ -23,6 +23,6 @@ STORY: The operator lands on Todos, reads the six stages as counts, taps the one
 
 FIRST VIEWPORT: title with the two station links and the search; the agency line with its three attention pills; seven count cards; the subetapa chips; the filter pills; the work card header (total, Excel, pager) and the first rows.
 
-FORM: Stripe Dashboard list page (category canon), pinned by the user in words; accent translated to Kapta blue.
+FORM: Stripe Dashboard list page (category canon), pinned by the user in words («estilo Stripe»); no roll and no seed key; accent translated to Kapta blue.
 
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict and DESIGN.md.
