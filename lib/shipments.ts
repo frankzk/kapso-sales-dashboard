@@ -33,12 +33,17 @@ export type ShipmentCategory = "pending" | "in_route" | "delivered" | "closed" |
  * DESTINO de una recuperación, no como insumo. Tanders, Urpi y propio salen
  * por la misma razón: no se reprograman desde esta cola.
  *
+ * OLVA TAMBIÉN ES AGENCIA (04-10-2026). Se quedaba porque nadie la había
+ * nombrado, y con la cola abierta sin Lima eran 17 de 341 filas: guías pagadas
+ * por adelantado, en tránsito o esperando en el mostrador de destino, sin
+ * intento que reprogramar. Se cotejan en «Cotejar Olva», no acá.
+ *
  * ES UNA LISTA DE EXCLUIDOS, NO DE ADMITIDOS, y a propósito: con una lista de
  * admitidos, un courier nuevo desaparecería de la cola sin que nadie se
  * enterara. Así aparece, y alguien pregunta qué hace ahí. Trabajo que sobra se
  * ve; trabajo que falta, no.
  */
-export const COURIERS_FUERA_DE_REPRO = ["shalom", "tanders", "urpi", "propio"] as const;
+export const COURIERS_FUERA_DE_REPRO = ["shalom", "olva", "tanders", "urpi", "propio"] as const;
 
 /** ¿Esta guía se trabaja desde Repro Provincia? */
 export function perteneceARepro(courier: string | null | undefined): boolean {
@@ -65,9 +70,10 @@ export function perteneceARepro(courier: string | null | undefined): boolean {
  * falta es justo lo que no se hace acá. De hecho hay 2 guías en poder del
  * courier sin intentos informados: con la custodia se quedan, que es lo correcto.
  *
- * SOLO APLICA A ALICLIK. Las `por_definir` —pedidos sin salida todavía— y las
- * guías Swayp pendientes también están en custodia `empresa`, pero sacarlas es
- * otra decisión y no está tomada (§11).
+ * SOLO APLICA A ALICLIK. Las guías Swayp pendientes también están en custodia
+ * `empresa`, pero sacarlas es otra decisión y no está tomada (§11). Las
+ * `por_definir` salen de la cola por su propia regla (`COURIER_TBD`, en
+ * `lib/shipments-access.ts`), no por la custodia.
  */
 export function esperaSalidaDeAliclik(
   courier: string | null | undefined,
