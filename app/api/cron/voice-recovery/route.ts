@@ -47,8 +47,14 @@ interface StoreReport {
   error?: string;
 }
 
-/** Cuántos pedidos de la cola se prueban por pasada antes de rendirse. */
-const MAX_TRIES_PER_PASS = 10;
+/**
+ * Cuántos pedidos de la cola se prueban por pasada antes de rendirse. Los del
+ * reintento automático son cierres recientes y se juntan al frente: con 10, el
+ * 04-10-2026 (cola de 261) las pasadas se rendían sin llamar a nadie.
+ */
+const MAX_TRIES_PER_PASS = 60;
+/** Tope de tiempo para probar candidatos: la función tiene 60 s en total. */
+const TRY_BUDGET_MS = 30_000;
 
 async function run(req: NextRequest) {
   // Vercel Cron manda `Authorization: Bearer <CRON_SECRET>`.
@@ -127,7 +133,9 @@ async function run(req: NextRequest) {
       let next = queue.candidates[0]!;
       let placed: Awaited<ReturnType<typeof placeVoiceCall>> | null = null;
       report.skipped = 0;
+      const tryStart = Date.now();
       for (const candidate of queue.candidates.slice(0, MAX_TRIES_PER_PASS)) {
+        if (placed && Date.now() - tryStart > TRY_BUDGET_MS) break;
         next = candidate;
         placed = await placeVoiceCall(
           admin,

@@ -4093,6 +4093,11 @@ Reglas de esa tabla:
     Desde entonces ese pedido ni siquiera entra a la cola: queda excluido como
     `reintento_automatico`. Si la base rechaza igual una llamada por esa
     razón, se trata como un salto y la pasada sigue con el siguiente.
+
+    Aun así quedaban más de diez pedidos al frente que Kapta saltaba. La regla
+    del reintento automático los marca como candidatos, pero el despachador
+    emite pocos al día (por ejemplo, el piloto tiene cupo diario). Ahora cada
+    pasada prueba hasta 60 pedidos, con un tope de 30 s, antes de rendirse.
     **Secreto propio (04-10-2026).** Las tools aceptan `VOICE_TOOLS_SECRET`
     (xAI) o `VOICE_TOOLS_SECRET_ELEVENLABS` (ElevenLabs). El segundo es
     opcional: si está vacío, solo vale el primero. Así cada agente tiene su
