@@ -98,3 +98,48 @@ export function paymentObservationLabel(status: string): string {
   if (status === "revision_admin") return "Revisión solicitada";
   return "Pendiente de revisión";
 }
+
+/**
+ * Quién dio el pago por bueno. La bandeja decía solo «Validado el …», y desde
+ * que hay validaciones sin persona (la pasarela Flow, el estado de cuenta de
+ * Yape — MOM §16.2) esa frase no distingue una firma de una conciliación. Un
+ * pago validado tiene que poder explicarse solo: quién, o con qué prueba.
+ */
+export type PaymentValidator =
+  | { kind: "persona"; name: string }
+  /** El movimiento del estado de cuenta de Yape que lo concilió. */
+  | { kind: "estado_yape"; payer: string; amount: number; at: string }
+  | { kind: "pasarela"; name: string }
+  /** Validado sin persona y sin rastro de cómo: no se inventa uno. */
+  | { kind: "sin_registro" };
+
+/**
+ * «04/10, 09:22:42» en hora de Lima. A mano y no con Intl: el formato de
+ * `es-PE` cambia entre versiones de ICU («4/10» pese a pedir dos dígitos), y
+ * Perú es UTC-5 fijo, sin horario de verano.
+ */
+function limaShort(iso: string): string {
+  const t = new Date(Date.parse(iso) - 5 * 3_600_000).toISOString();
+  return `${t.slice(8, 10)}/${t.slice(5, 7)}, ${t.slice(11, 19)}`;
+}
+
+/** Lo que dice la tarjeta: quién validó y, si no fue una persona, con qué. */
+export function describePaymentValidator(validator: PaymentValidator | null): {
+  by: string;
+  detail: string | null;
+} {
+  if (!validator) return { by: "Validado", detail: null };
+  switch (validator.kind) {
+    case "persona":
+      return { by: `Validado por ${validator.name}`, detail: null };
+    case "estado_yape":
+      return {
+        by: "Validado por el estado de cuenta de Yape",
+        detail: `Movimiento: ${validator.payer} · S/ ${validator.amount.toFixed(2)} · ${limaShort(validator.at)}`,
+      };
+    case "pasarela":
+      return { by: `Validado por la pasarela ${validator.name}`, detail: null };
+    case "sin_registro":
+      return { by: "Validado sin persona registrada", detail: null };
+  }
+}
