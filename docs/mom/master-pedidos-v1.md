@@ -4021,6 +4021,13 @@ Reglas de esa tabla:
     porcentajes suman más de 100, se recortan a 100. Sigue habiendo una sola
     llamada a la vez por tienda, porque las tres líneas comparten el número de
     agente.
+
+    **Reintento automático (04-10-2026).** Si un pedido de la cola corresponde
+    al reintento automático Aliclik → Swayp, el agente no lo llama: el
+    reintento tiene prioridad. En ese caso el barrido lo salta y prueba el
+    siguiente, hasta 10 pedidos por pasada. El domingo 04-10 un solo pedido
+    así quedó al frente de la cola y bloqueó todas las pasadas desde las
+    11:00, con 24 pedidos listos detrás.
     **Secreto propio (04-10-2026).** Las tools aceptan `VOICE_TOOLS_SECRET`
     (xAI) o `VOICE_TOOLS_SECRET_ELEVENLABS` (ElevenLabs). El segundo es
     opcional: si está vacío, solo vale el primero. Así cada agente tiene su

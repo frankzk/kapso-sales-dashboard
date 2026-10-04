@@ -266,6 +266,12 @@ describe("guardas del flujo (código)", () => {
     expect(route.indexOf('ev.type === "call.cost"')).toBeLessThan(route.indexOf("eventos.push("));
   });
 
+  it("un pedido del reintento automático no bloquea la cola: se salta al siguiente (04-10-2026)", () => {
+    expect(server).toContain('reason: "reintento_automatico"');
+    expect(cron).toContain('placed.ok || placed.reason !== "reintento_automatico"');
+    expect(cron).toContain("queue.candidates.slice(0, MAX_TRIES_PER_PASS)");
+  });
+
   it("el barrido sortea línea y motor de cada llamada", () => {
     expect(cron).toContain("pickVoiceRoute({ telnyxShare, elevenShare, telnyxReady, elevenReady })");
     expect(cron).toContain("telephony,");

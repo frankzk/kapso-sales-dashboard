@@ -42,8 +42,13 @@ interface StoreReport {
   called?: string | null;
   telephony?: "zadarma" | "telnyx";
   engine?: "grok" | "elevenlabs";
+  /** Pedidos saltados en esta pasada por ser del reintento automático. */
+  skipped?: number;
   error?: string;
 }
+
+/** Cuántos pedidos de la cola se prueban por pasada antes de rendirse. */
+const MAX_TRIES_PER_PASS = 10;
 
 async function run(req: NextRequest) {
   // Vercel Cron manda `Authorization: Bearer <CRON_SECRET>`.
@@ -112,26 +117,37 @@ async function run(req: NextRequest) {
       const queue = await loadVoiceQueue(admin, store, now);
       report.queue = queue.candidates.length;
       report.excluded = queue.excluded;
-      const next = queue.candidates[0];
-      if (!next) {
+      if (!queue.candidates.length) {
         report.action = "cola_vacia";
         continue;
       }
-      const placed = await placeVoiceCall(
-        admin,
-        {
-          storeId: store.id,
-          orderId: next.orderId,
-          phone: next.phone,
-          mode: "real",
-          triggeredBy: null,
-          agentNumber,
-          sip,
-          telephony,
-          engine,
-        },
-        now,
-      );
+      // El reintento automático Aliclik → Swayp tiene prioridad (no se llama):
+      // ese pedido se salta y se prueba el siguiente. Sin esto, un solo pedido
+      // en reintento al frente de la cola bloqueaba el día entero (04-10-2026).
+      let next = queue.candidates[0]!;
+      let placed: Awaited<ReturnType<typeof placeVoiceCall>> | null = null;
+      report.skipped = 0;
+      for (const candidate of queue.candidates.slice(0, MAX_TRIES_PER_PASS)) {
+        next = candidate;
+        placed = await placeVoiceCall(
+          admin,
+          {
+            storeId: store.id,
+            orderId: next.orderId,
+            phone: next.phone,
+            mode: "real",
+            triggeredBy: null,
+            agentNumber,
+            sip,
+            telephony,
+            engine,
+          },
+          now,
+        );
+        if (placed.ok || placed.reason !== "reintento_automatico") break;
+        report.skipped += 1;
+      }
+      if (!placed) continue;
       if (placed.ok) {
         busyAgents.add(agentNumber);
         report.action = "llamada";
