@@ -88,5 +88,26 @@ async function OlvaCotejoContent() {
     };
   });
 
-  return <OlvaCotejoBoard orgs={orgs} liveLinked={liveLinked} />;
+  // Lo que dice el rótulo que llegó por correo de los envíos pendientes: el
+  // pedido con ese teléfono, si lo hay, para proponerlo en «Vincular a pedido».
+  const labelHints: Record<string, { suggested: string | null; note: string | null }> = {};
+  for (let i = 0; i < numbers.length; i += 200) {
+    const { data } = await admin
+      .from("olva_email_labels")
+      .select("olva_tracking,olva_emision,suggested_order_name,match_note")
+      .in("olva_tracking", numbers.slice(i, i + 200).map((n) => n.tracking));
+    for (const l of (data ?? []) as {
+      olva_tracking: string;
+      olva_emision: string;
+      suggested_order_name: string | null;
+      match_note: string | null;
+    }[]) {
+      labelHints[formatOlvaTracking({ tracking: l.olva_tracking, emision: l.olva_emision })] = {
+        suggested: l.suggested_order_name,
+        note: l.match_note,
+      };
+    }
+  }
+
+  return <OlvaCotejoBoard orgs={orgs} liveLinked={liveLinked} labelHints={labelHints} />;
 }
