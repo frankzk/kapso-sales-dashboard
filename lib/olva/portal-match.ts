@@ -46,9 +46,11 @@ export interface CotejoCandidate {
   createdAt: string;
   /** El DNI (o CE) que la clienta dio para el envío, si se apuntó. */
   dni?: string | null;
+  /** El teléfono de la clienta en la salida, tal como está («51949155990»). */
+  phone?: string | null;
 }
 
-export type CotejoVia = "doc_externo" | "nombre_direccion" | "dni";
+export type CotejoVia = "doc_externo" | "nombre_direccion" | "dni" | "telefono";
 
 export interface CotejoHint {
   candidate: CotejoCandidate;
@@ -102,7 +104,7 @@ export function nameCovered(kapta: string | null, olva: string): boolean {
   return true;
 }
 
-function sharedNames(kapta: string | null, olva: string): number {
+export function sharedNames(kapta: string | null, olva: string): number {
   const o = nameTokens(olva);
   let n = 0;
   for (const t of nameTokens(kapta)) if (o.has(t)) n += 1;
@@ -126,10 +128,15 @@ function addDays(day: string, n: number): string {
   return new Date(Date.parse(`${day}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 }
 
-function inWindow(c: CotejoCandidate, row: OlvaPortalRow): boolean {
-  if (!row.fechaRegistro) return true;
+/** ¿Se creó la salida en la ventana de un envío registrado ese día en Olva? */
+export function createdNear(c: CotejoCandidate, day: string | null): boolean {
+  if (!day) return true;
   const d = limaDay(c.createdAt);
-  return d >= addDays(row.fechaRegistro, -WINDOW_BEFORE_DAYS) && d <= addDays(row.fechaRegistro, WINDOW_AFTER_DAYS);
+  return d >= addDays(day, -WINDOW_BEFORE_DAYS) && d <= addDays(day, WINDOW_AFTER_DAYS);
+}
+
+function inWindow(c: CotejoCandidate, row: OlvaPortalRow): boolean {
+  return createdNear(c, row.fechaRegistro);
 }
 
 function exactMatches(row: OlvaPortalRow, candidates: CotejoCandidate[]): { via: CotejoVia; list: CotejoCandidate[] } {
@@ -235,21 +242,29 @@ function hintOf(candidate: CotejoCandidate, why: string): CotejoHint {
   return { candidate, why };
 }
 
+const VIA_HINT: Record<CotejoVia, string> = {
+  doc_externo: "el Doc. externo es este pedido",
+  nombre_direccion: "misma dirección y mismos nombres",
+  dni: "mismo DNI",
+  telefono: "mismo teléfono",
+};
+
 /**
- * Suma al cotejo lo que se encontró por DNI. Una pareja por DNI solo se
- * vincula si nadie más la discute: ni otra salida con el mismo envío, ni otro
- * envío ya emparejado con esa salida por otro camino.
+ * Suma al cotejo lo que se encontró por DNI (preguntándole al portal) o por
+ * el teléfono y el DNI del rótulo que llega por correo. Una pareja así solo
+ * se vincula si nadie más la discute: ni otra salida con el mismo envío, ni
+ * otro envío ya emparejado con esa salida por otro camino.
  */
 export function mergeDniMatches(
   outcomes: CotejoOutcome[],
-  pairs: { candidate: CotejoCandidate; row: OlvaPortalRow }[],
+  pairs: { candidate: CotejoCandidate; row: OlvaPortalRow; via?: CotejoVia }[],
 ): CotejoOutcome[] {
   const out = [...outcomes];
   const key = (row: OlvaPortalRow) => formatOlvaTracking(row.id);
   const indexOf = (row: OlvaPortalRow) => out.findIndex((o) => key(o.row) === key(row));
-  const byTracking = new Map<string, { row: OlvaPortalRow; candidates: CotejoCandidate[] }>();
+  const byTracking = new Map<string, { row: OlvaPortalRow; via: CotejoVia; candidates: CotejoCandidate[] }>();
   for (const p of pairs) {
-    const entry = byTracking.get(key(p.row)) ?? { row: p.row, candidates: [] };
+    const entry = byTracking.get(key(p.row)) ?? { row: p.row, via: p.via ?? "dni", candidates: [] };
     if (!entry.candidates.some((c) => c.shipmentId === p.candidate.shipmentId)) entry.candidates.push(p.candidate);
     byTracking.set(key(p.row), entry);
   }
@@ -260,7 +275,9 @@ export function mergeDniMatches(
     else out.push(next);
   };
 
-  for (const { row, candidates } of byTracking.values()) {
+  for (const { row, via, candidates } of byTracking.values()) {
+    const why = VIA_HINT[via];
+    const que = via === "telefono" ? "al teléfono" : "al DNI";
     const i = indexOf(row);
     const current = i >= 0 ? out[i] : undefined;
     if (current?.kind === "ya_vinculado") continue;
@@ -269,8 +286,8 @@ export function mergeDniMatches(
       put(row, {
         kind: "revisar",
         row,
-        reason: `El mismo envío responde al DNI de ${candidates.length} salidas.`,
-        hints: candidates.slice(0, MAX_HINTS).map((c) => hintOf(c, "mismo DNI")),
+        reason: `El mismo envío responde ${que} de ${candidates.length} salidas.`,
+        hints: candidates.slice(0, MAX_HINTS).map((c) => hintOf(c, why)),
       });
       continue;
     }
@@ -279,8 +296,8 @@ export function mergeDniMatches(
       put(row, {
         kind: "revisar",
         row,
-        reason: "El DNI apunta a una salida y la dirección y el nombre a otra.",
-        hints: [hintOf(current.candidate, "misma dirección y mismos nombres"), hintOf(only, "mismo DNI")],
+        reason: `El ${via === "telefono" ? "teléfono" : "DNI"} apunta a una salida y el cotejo a otra.`,
+        hints: [hintOf(current.candidate, VIA_HINT[current.via]), hintOf(only, why)],
       });
       continue;
     }
@@ -293,13 +310,13 @@ export function mergeDniMatches(
       out[rival] = {
         kind: "revisar",
         row: other.row,
-        reason: "Otro envío de Olva responde al DNI de esta salida.",
-        hints: [hintOf(only, "misma dirección y mismos nombres")],
+        reason: `Otro envío de Olva responde ${que} de esta salida.`,
+        hints: [hintOf(only, other.kind === "vincular" ? VIA_HINT[other.via] : why)],
       };
-      put(row, { kind: "revisar", row, reason: "Otro envío de Olva coincide con esta salida.", hints: [hintOf(only, "mismo DNI")] });
+      put(row, { kind: "revisar", row, reason: "Otro envío de Olva coincide con esta salida.", hints: [hintOf(only, why)] });
       continue;
     }
-    put(row, { kind: "vincular", row, candidate: only, via: "dni" });
+    put(row, { kind: "vincular", row, candidate: only, via });
   }
   return out;
 }
