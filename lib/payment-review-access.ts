@@ -6,12 +6,14 @@ import { loadCollectionAccounts } from "@/lib/collection-accounts";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import type { CollectionAccount } from "@/lib/yape-recipient";
+import { resolveAgentNames } from "@/lib/agent-names";
 import {
   limaDayBounds,
   paymentReviewBatches,
   PAYMENT_OBSERVED_STATUSES,
   PAYMENT_PENDING_STATUSES,
   type PaymentReviewLane,
+  type PaymentValidator,
 } from "@/lib/payment-review";
 
 const LANE_LIMIT = 80;
@@ -28,6 +30,7 @@ type RawPayment = {
   validation_status: string;
   registered_at: string;
   validated_at: string | null;
+  validated_by: string | null;
   notes: string | null;
   vision: unknown;
 };
@@ -60,6 +63,8 @@ export interface PaymentReviewItem {
   validationStatus: string;
   registeredAt: string;
   validatedAt: string | null;
+  /** Quién lo validó, o con qué prueba si no fue una persona. Solo si está validado. */
+  validatedBy: PaymentValidator | null;
   notes: string | null;
   vision: unknown;
   /**
@@ -119,7 +124,7 @@ export async function getPaymentReviewBoard(): Promise<PaymentReviewBoardData | 
   const day = limaDayBounds();
   const columns =
     "id,store_id,order_id,kind,amount,operation_number,paid_at,file_path," +
-    "validation_status,registered_at,validated_at,notes,vision";
+    "validation_status,registered_at,validated_at,validated_by,notes,vision";
 
   const [pendingRes, observedRes, validatedRes, pendingCountRes, observedCountRes, validatedCountRes] =
     await Promise.all([
@@ -223,6 +228,8 @@ export async function getPaymentReviewBoard(): Promise<PaymentReviewBoardData | 
     totals.set(row.order_id, current);
   }
 
+  const validators = await loadValidators(laneRows.validated);
+
   function toItem(row: RawPayment): PaymentReviewItem {
     const order = orders.get(row.order_id);
     const progress = totals.get(row.order_id) ?? { registered: 0, validated: 0 };
@@ -244,6 +251,7 @@ export async function getPaymentReviewBoard(): Promise<PaymentReviewBoardData | 
       validationStatus: row.validation_status,
       registeredAt: row.registered_at,
       validatedAt: row.validated_at,
+      validatedBy: validators.get(row.id) ?? null,
       notes: row.notes,
       vision: row.vision,
       collectionAccounts: accountsByStore.get(row.store_id) ?? [],
@@ -272,4 +280,66 @@ export async function getPaymentReviewBoard(): Promise<PaymentReviewBoardData | 
       validated: counts.validated > laneRows.validated.length,
     },
   };
+}
+
+/**
+ * Quién validó cada pago. Una persona se nombra como en el resto del panel (la
+ * parte local de su correo). Sin persona hay dos caminos que validan solos y
+ * cada uno deja su rastro: la conciliación con el estado de cuenta de Yape
+ * (`yape_statement_matches`, MOM §16.2) y la pasarela Flow
+ * (`flowcl_payment_links`). Esas tablas solo las lee el servidor: los pagos ya
+ * vienen filtrados por las tiendas donde quien mira puede validar.
+ *
+ * Nunca lanza: si no se puede averiguar, la tarjeta dice «Validado» a secas,
+ * que es lo que decía antes, en vez de tumbar la bandeja.
+ */
+async function loadValidators(rows: RawPayment[]): Promise<Map<string, PaymentValidator>> {
+  const out = new Map<string, PaymentValidator>();
+  try {
+    const admin = createAdminSupabase();
+    const byPerson = rows.filter((r) => r.validated_by);
+    const names = await resolveAgentNames(byPerson.map((r) => r.validated_by!), admin);
+    for (const r of byPerson) {
+      out.set(r.id, { kind: "persona", name: names[r.validated_by!] ?? "una persona" });
+    }
+
+    const unsigned = rows.filter((r) => !r.validated_by).map((r) => r.id);
+    if (!unsigned.length) return out;
+    const [matchesRes, flowRes] = await Promise.all([
+      admin.from("yape_statement_matches").select("payment_id,movement_key").in("payment_id", unsigned),
+      admin.from("flowcl_payment_links").select("payment_id").in("payment_id", unsigned),
+    ]);
+    const matches = (matchesRes.data ?? []) as { payment_id: string; movement_key: string }[];
+    if (matches.length) {
+      const { data: movements } = await admin
+        .from("yape_statement_movements")
+        .select("movement_key,origin,amount,occurred_at")
+        .in(
+          "movement_key",
+          matches.map((m) => m.movement_key),
+        );
+      const byKey = new Map(
+        ((movements ?? []) as { movement_key: string; origin: string; amount: number | string; occurred_at: string }[])
+          .map((m) => [m.movement_key, m]),
+      );
+      for (const match of matches) {
+        const m = byKey.get(match.movement_key);
+        if (m) {
+          out.set(match.payment_id, {
+            kind: "estado_yape",
+            payer: m.origin,
+            amount: Number(m.amount),
+            at: m.occurred_at,
+          });
+        }
+      }
+    }
+    for (const link of (flowRes.data ?? []) as { payment_id: string }[]) {
+      if (!out.has(link.payment_id)) out.set(link.payment_id, { kind: "pasarela", name: "Flow" });
+    }
+    for (const id of unsigned) if (!out.has(id)) out.set(id, { kind: "sin_registro" });
+  } catch (e) {
+    console.error("[validar-pagos] no se pudo averiguar quién validó", e);
+  }
+  return out;
 }

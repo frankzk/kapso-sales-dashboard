@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  describePaymentValidator,
   limaDayBounds,
   paymentKindLabel,
   paymentObservationLabel,
@@ -33,5 +34,35 @@ describe("payment review lanes", () => {
   it("expone etiquetas operativas claras", () => {
     expect(paymentKindLabel("total")).toBe("Pago total");
     expect(paymentObservationLabel("info_incompleta")).toBe("Información incompleta");
+  });
+});
+
+describe("describePaymentValidator", () => {
+  it("una persona se nombra", () => {
+    expect(describePaymentValidator({ kind: "persona", name: "gabriela" })).toEqual({
+      by: "Validado por gabriela",
+      detail: null,
+    });
+  });
+
+  it("el estado de cuenta de Yape dice con qué movimiento (MOM §16.2)", () => {
+    // #KP138765: «Benito Cac*», S/ 30, a las 09:22:42 de Lima.
+    expect(
+      describePaymentValidator({
+        kind: "estado_yape",
+        payer: "Benito Cac*",
+        amount: 30,
+        at: "2026-10-04T14:22:42.000Z",
+      }),
+    ).toEqual({
+      by: "Validado por el estado de cuenta de Yape",
+      detail: "Movimiento: Benito Cac* · S/ 30.00 · 04/10, 09:22:42",
+    });
+  });
+
+  it("la pasarela, y lo que no dejó rastro, no se atribuyen a nadie", () => {
+    expect(describePaymentValidator({ kind: "pasarela", name: "Flow" }).by).toBe("Validado por la pasarela Flow");
+    expect(describePaymentValidator({ kind: "sin_registro" }).by).toBe("Validado sin persona registrada");
+    expect(describePaymentValidator(null).by).toBe("Validado");
   });
 });

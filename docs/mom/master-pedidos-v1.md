@@ -5410,7 +5410,13 @@ cuenta receptora leída, evidencia y progreso acumulado del pedido.
 
 - `Pendientes`: `pendiente_revision`, ordenados del más reciente al más antiguo.
 - `Observados`: `posible_duplicado`, `info_incompleta` o `revision_admin`.
-- `Validados hoy`: pagos `validado` durante el día calendario de Lima.
+- `Validados hoy`: pagos `validado` durante el día calendario de Lima. Cada
+  tarjeta dice **quién lo validó** (04-10-2026): la persona —como en el resto
+  del panel, por la parte local de su correo—, o, cuando no hubo persona, con
+  qué prueba: «el estado de cuenta de Yape» con el movimiento que lo concilió
+  (pagador, monto y hora, §16.2) o «la pasarela Flow» (§12). Decía solo
+  «Validado el …», y desde que hay validaciones sin persona esa frase no
+  distinguía una firma de una conciliación.
 - `Observar` exige motivo y mueve el comprobante a `revision_admin`.
 - `Rechazar` es una decisión definitiva desde Observados. No borra el pago: sale
   de la cola activa y queda preservado en el expediente y sus eventos.
