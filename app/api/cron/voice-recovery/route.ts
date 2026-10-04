@@ -25,7 +25,8 @@ import {
   telnyxConfig,
   type VoiceStoreSettings,
 } from "@/lib/voice-recovery-server";
-import { pickTelephony } from "@/lib/voice-recovery";
+import { pickVoiceRoute } from "@/lib/voice-recovery";
+import { agentSipUriFor } from "@/lib/telnyx";
 import { withinVoiceHours } from "@/lib/voice-recovery-queue";
 import { env } from "@/lib/env";
 
@@ -40,6 +41,7 @@ interface StoreReport {
   excluded?: Record<string, number>;
   called?: string | null;
   telephony?: "zadarma" | "telnyx";
+  engine?: "grok" | "elevenlabs";
   error?: string;
 }
 
@@ -65,7 +67,10 @@ async function run(req: NextRequest) {
   const salidas = dry ? [] : await salidasSwaypPendientes(admin, now);
   const busyAgents = new Set((await openCalls(admin)).map((c) => c.agent_number));
   const telnyxShare = env.voiceTelnyxShare();
-  const telnyxReady = !("error" in telnyxConfig());
+  const elevenShare = env.voiceElevenLabsShare();
+  const telnyxCfg = telnyxConfig();
+  const telnyxReady = !("error" in telnyxCfg);
+  const elevenReady = !("error" in telnyxCfg) && agentSipUriFor(telnyxCfg, "elevenlabs") !== null;
 
   const reports: StoreReport[] = [];
   for (const store of stores) {
@@ -83,9 +88,10 @@ async function run(req: NextRequest) {
 
       const agentNumber = store.voice_recovery_agent_number?.trim() ?? "";
       const sip = store.voice_recovery_zadarma_sip?.trim() ?? "";
-      // Agente Daaph (Zadarma) contra Agente Telnyx: el mismo agente de xAI,
-      // otra línea. Cada llamada se sortea con VOICE_TELNYX_SHARE (MOM §11.8).
-      const telephony = pickTelephony(telnyxShare, telnyxReady);
+      // Agente Daaph (Zadarma + Grok), Agente Telnyx (Telnyx + Grok) y Agente
+      // ElevenLabs (Telnyx + ElevenLabs): cada llamada se sortea con
+      // VOICE_TELNYX_SHARE y VOICE_ELEVENLABS_SHARE (MOM §11.8).
+      const { telephony, engine } = pickVoiceRoute({ telnyxShare, elevenShare, telnyxReady, elevenReady });
       if (!agentNumber || (telephony === "zadarma" && !sip)) {
         report.action = "sin_configuracion";
         continue;
@@ -122,6 +128,7 @@ async function run(req: NextRequest) {
           agentNumber,
           sip,
           telephony,
+          engine,
         },
         now,
       );
@@ -130,6 +137,7 @@ async function run(req: NextRequest) {
         report.action = "llamada";
         report.called = next.orderName;
         report.telephony = telephony;
+        report.engine = engine;
       } else {
         report.action = "error";
         report.error = placed.error;

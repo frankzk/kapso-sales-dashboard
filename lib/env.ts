@@ -49,6 +49,12 @@ export const env = {
     const n = Number((process.env.VOICE_TELNYX_SHARE ?? "0").trim());
     return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
   },
+  // % de las llamadas reales del barrido para el Agente ElevenLabs (Telnyx +
+  // ElevenLabs). 0 o vacío = no recibe llamadas reales.
+  voiceElevenLabsShare: () => {
+    const n = Number((process.env.VOICE_ELEVENLABS_SHARE ?? "0").trim());
+    return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
+  },
 
   // --- non-secret runtime config ---
   shopifyApiVersion: () => process.env.SHOPIFY_API_VERSION ?? "2025-01",
