@@ -7092,6 +7092,12 @@ sale foto de entrega que pedir.
   ANULADO no anula: solo Shopify anula, §9); NO CONTESTO, «No contesta»; REPRO,
   «Reprogramado». Lo que la hoja trae fuera de la caja del día no se carga
   como parada: §29.5 exige el cotejo.
+- Excepción (04-10-2026, decisión de Frankz): un pedido asignado a la ruta de
+  ese día en una carga que nunca se cotejó ni se recibió sí se carga, si la
+  hoja dice que salió. La parada apunta a esa carga (`dispatch_manifest_id`),
+  pero no se inventa el cotejo: la carga sigue sin recibir y se cancela vacía
+  para poder terminar la ruta. Fue #KP136825, rechazado el 02/10 en la carga 2
+  de Alexis.
 - El paso a paso está en `docs/runbooks/cuaderno-a-rutas.md`.
 
 ### 29.8 Tarifas por distrito y comisión Yape

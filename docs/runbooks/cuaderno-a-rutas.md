@@ -105,7 +105,10 @@ arriba no sirven aquí: crean rutas y cajas que ya existen.
    explica, paradas ya reportadas (no se tocan) y filas que no están en la caja.
    Estas últimas **no se cargan**: §29.5 exige el cotejo. Se le pasan a quien
    liquida con su nota (otro motorizado las tiene, salieron de nuevo otro día,
-   no existen en Kapta).
+   no existen en Kapta). Única excepción (§29.7): un pedido de una carga de ese
+   día que nunca se recibió, si quien liquida decide incluirlo. Se inserta la
+   parada con `dispatch_manifest_id` de esa carga, sin marcar cotejos, y la
+   carga se cancela vacía desde «Reparto y liquidación».
 3. **Reporta las pendientes en una transacción** que replique
    `writeStopReport` (`lib/stop-report.ts`), con el vocabulario de §29.7:
    - `delivery_stops`: estado, método y monto (solo si entregado), motivo (solo
