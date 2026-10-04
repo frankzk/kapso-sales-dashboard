@@ -294,6 +294,14 @@ describe("guardas del flujo (código)", () => {
     expect(reserva).toBeLessThan(reg.indexOf("discardRecovery(admin"));
   });
 
+  it("el reintento automático no tapa la cola: fuera de ella, y si la base lo rechaza se salta (04-10-2026)", () => {
+    const fn = server.slice(server.indexOf("export async function loadVoiceQueue("));
+    expect(fn).toContain('"swayp_guide_emissions", "order_id", "order_id", ids');
+    expect(fn).toContain("autoRetry: autoRetry.has(m.order_id)");
+    // Las dos líneas: el rechazo de `swayp_auto_voice_interlock` es un salto, no un error.
+    expect(server.match(/if \(isAutoRetryInterlock\(insertError\)\) return autoRetryRefusal\(\);/g)).toHaveLength(2);
+  });
+
   it("el barrido sortea línea y motor de cada llamada", () => {
     expect(cron).toContain("pickVoiceRoute({ telnyxShare, elevenShare, telnyxReady, elevenReady })");
     expect(cron).toContain("telephony,");

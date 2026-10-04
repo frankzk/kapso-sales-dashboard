@@ -80,6 +80,7 @@ describe("quién entra a la cola del agente (MOM §11.8)", () => {
     ["9 · pidió que no la llamen", { doNotCall: true }, "pidio_no_llamar"],
     ["tope · el agente ya llamó hoy", { agentCalls: [{ queued_at: "2026-09-22T14:30:00.000Z" }] }, "agente_ya_llamo_hoy"],
     ["tope · el agente agotó sus intentos", { agentCalls: [{ queued_at: hace(3) }, { queued_at: hace(2) }] }, "agente_agoto_intentos"],
+    ["ya tiene reintento automático Aliclik → Swayp (04-10-2026)", { autoRetry: true }, "reintento_automatico"],
   ])("%s → fuera", (_name, over, reason) => {
     expect(voiceRecoveryEligible(input(over))).toEqual({ eligible: false, reason });
   });

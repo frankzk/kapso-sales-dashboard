@@ -4082,6 +4082,17 @@ Reglas de esa tabla:
     siguiente, hasta 10 pedidos por pasada. El domingo 04-10 un solo pedido
     así quedó al frente de la cola y bloqueó todas las pasadas desde las
     11:00, con 24 pedidos listos detrás.
+
+    Esa misma tarde volvió a pasar, con la cola de 266. Los pedidos que ya
+    tienen una emisión del reintento automático
+    (`swayp_guide_emissions.automatic`) se ponen al frente, porque son
+    cierres recientes. Los diez primeros eran así: nueve los saltó Kapta y el
+    décimo lo rechazó la base (`swayp_auto_voice_interlock`). Ese rechazo no
+    se tomaba como un salto, así que la pasada terminaba sin llamar a nadie.
+
+    Desde entonces ese pedido ni siquiera entra a la cola: queda excluido como
+    `reintento_automatico`. Si la base rechaza igual una llamada por esa
+    razón, se trata como un salto y la pasada sigue con el siguiente.
     **Secreto propio (04-10-2026).** Las tools aceptan `VOICE_TOOLS_SECRET`
     (xAI) o `VOICE_TOOLS_SECRET_ELEVENLABS` (ElevenLabs). El segundo es
     opcional: si está vacío, solo vale el primero. Así cada agente tiene su
