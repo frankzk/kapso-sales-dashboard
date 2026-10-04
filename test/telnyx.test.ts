@@ -270,6 +270,9 @@ describe("guardas del flujo (código)", () => {
     expect(server).toContain('reason: "reintento_automatico"');
     expect(cron).toContain('placed.ok || placed.reason !== "reintento_automatico"');
     expect(cron).toContain("queue.candidates.slice(0, MAX_TRIES_PER_PASS)");
+    // Con 10 no alcanzaba: los del reintento se juntan al frente (04-10-2026).
+    expect(cron).toContain("const MAX_TRIES_PER_PASS = 60;");
+    expect(cron).toContain("Date.now() - tryStart > TRY_BUDGET_MS");
   });
 
   it("un corte sin gestión se cierra al momento, no a los ~10 min del barrido (04-10-2026)", () => {
