@@ -23,6 +23,8 @@ export interface VoiceScoreCall {
   outcome: string | null;
   /** `outcome_payload.salida_swayp.ok`: la guía Swayp nueva salió. */
   salidaOk: boolean;
+  /** `telephony_response.costo.total`: lo que cobró Telnyx (US$); null si no avisó. */
+  costo?: number | null;
 }
 
 export interface VoiceScoreRow {
@@ -37,6 +39,10 @@ export interface VoiceScoreRow {
   cancela: number;
   /** Guías Swayp creadas por sus «confirma». */
   guias: number;
+  /** Suma de lo que cobró la línea, solo de las llamadas con costo avisado. */
+  costo: number;
+  /** Cuántas llamadas traen costo. Zadarma no lo avisa: Daaph queda en cero. */
+  conCosto: number;
 }
 
 const ORDER = [
@@ -57,7 +63,19 @@ export function aggregateVoiceScore(calls: readonly VoiceScoreCall[]): VoiceScor
   const rows = new Map<string, VoiceScoreRow>(
     ORDER.map(([agent, name]) => [
       agent,
-      { agent, name, llamadas: 0, atendidas: 0, sinGestion: 0, confirma: 0, programar: 0, cancela: 0, guias: 0 },
+      {
+        agent,
+        name,
+        llamadas: 0,
+        atendidas: 0,
+        sinGestion: 0,
+        confirma: 0,
+        programar: 0,
+        cancela: 0,
+        guias: 0,
+        costo: 0,
+        conCosto: 0,
+      },
     ]),
   );
   for (const c of calls) {
@@ -71,6 +89,10 @@ export function aggregateVoiceScore(calls: readonly VoiceScoreCall[]): VoiceScor
     if (c.outcome === "programar") r.programar += 1;
     if (c.outcome === "cancela") r.cancela += 1;
     if (c.salidaOk) r.guias += 1;
+    if (typeof c.costo === "number" && Number.isFinite(c.costo)) {
+      r.costo += c.costo;
+      r.conCosto += 1;
+    }
   }
   return [...rows.values()];
 }
@@ -83,6 +105,15 @@ export function voiceConversion(r: Pick<VoiceScoreRow, "confirma" | "atendidas">
 /** Cuántas llamadas cuesta un «confirma», o null si aún no hay ninguno. */
 export function voiceCallsPerConfirma(r: Pick<VoiceScoreRow, "confirma" | "llamadas">): number | null {
   return r.confirma ? r.llamadas / r.confirma : null;
+}
+
+/**
+ * Costo por «confirma», solo cuando TODAS las llamadas traen costo: con una
+ * parte sin costo el cociente saldría más barato de lo que fue.
+ */
+export function voiceCostPerConfirma(r: Pick<VoiceScoreRow, "confirma" | "costo" | "conCosto" | "llamadas">): number | null {
+  if (!r.confirma || !r.conCosto || r.conCosto < r.llamadas) return null;
+  return r.costo / r.confirma;
 }
 
 /** El rango más largo que se consulta de una vez. */

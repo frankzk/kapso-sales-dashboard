@@ -209,6 +209,58 @@ export interface TelnyxEvent {
   sipHangupCause: string | null;
   amdResult: string | null;
   recordingUrl: string | null;
+  /** Solo en `call.cost`: lo que Telnyx cobró por este tramo. */
+  cost: TelnyxCost | null;
+}
+
+/** Lo que Telnyx cobró por un tramo (`call.cost`). Montos en la moneda de la cuenta. */
+export interface TelnyxCost {
+  total: number | null;
+  currency: string | null;
+  billedSecs: number | null;
+  /** `success` o `error`: con `error` Telnyx no pudo calcularlo. */
+  status: string | null;
+  parts: { parte: string; costo: number | null; tarifa: number | null; segundos: number | null }[];
+}
+
+function parseCost(p: Record<string, unknown>): TelnyxCost {
+  const num = (v: unknown) => {
+    const n = typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : NaN;
+    return Number.isFinite(n) ? n : null;
+  };
+  const rawParts = Array.isArray(p.cost_parts) ? (p.cost_parts as Record<string, unknown>[]) : [];
+  const parts = rawParts.map((c) => ({
+    parte: typeof c.call_part === "string" ? c.call_part : "",
+    costo: num(c.cost),
+    tarifa: num(c.rate),
+    segundos: num(c.billed_duration_secs),
+  }));
+  const currency = rawParts.map((c) => c.currency).find((c): c is string => typeof c === "string" && !!c) ?? null;
+  return {
+    total: num(p.total_cost),
+    currency,
+    billedSecs: num(p.billed_duration_secs),
+    status: typeof p.status === "string" ? p.status : null,
+    parts,
+  };
+}
+
+/** Lo que se guarda en `telephony_response.costo`: cada tramo y la suma. */
+export interface TelnyxCostRecord {
+  cliente?: TelnyxCost;
+  agente?: TelnyxCost;
+  /** Suma de los tramos con monto; null si ninguno lo tiene. */
+  total: number | null;
+  moneda: string | null;
+}
+
+/** Suma el costo de un tramo al registro de la llamada. Repetir un aviso no duplica. */
+export function applyTelnyxCost(prev: TelnyxCostRecord | null | undefined, leg: TelnyxLeg, cost: TelnyxCost): TelnyxCostRecord {
+  const next: TelnyxCostRecord = { ...(prev ?? { total: null, moneda: null }), [leg]: cost };
+  const legs = [next.cliente, next.agente].filter((c): c is TelnyxCost => !!c && c.total != null);
+  next.total = legs.length ? Math.round(legs.reduce((sum, c) => sum + (c.total ?? 0), 0) * 1e6) / 1e6 : null;
+  next.moneda = legs.find((c) => c.currency)?.currency ?? next.moneda ?? null;
+  return next;
 }
 
 export function parseTelnyxEvent(body: unknown): TelnyxEvent | null {
@@ -227,6 +279,7 @@ export function parseTelnyxEvent(body: unknown): TelnyxEvent | null {
     sipHangupCause: str(p.sip_hangup_cause) ?? (typeof p.sip_hangup_cause === "number" ? String(p.sip_hangup_cause) : null),
     amdResult: str(p.result),
     recordingUrl: str(urls.mp3) ?? str(urls.wav),
+    cost: data.event_type === "call.cost" ? parseCost(p) : null,
   };
 }
 
