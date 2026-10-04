@@ -235,16 +235,21 @@ export async function closeAsNoAnswer(
   c: Pick<OpenCall, "id" | "status"> & { store_id: string; order_id: string; mode: "real" | "test" },
   resumen: string,
   now: Date,
+  opts: { error?: string; soloSinGestion?: boolean } = {},
 ): Promise<void> {
   const r = staleCallResolution(c);
   // Se cierra ANTES de escribir y solo si seguía abierta: dos cierres a la
   // vez no registran dos veces (y la v2 es idempotente por operation_id).
-  const { data: closed } = await admin
+  let close = admin
     .from("voice_calls")
-    .update({ status: r.status, outcome: r.outcome, ended_at: now.toISOString(), error: r.error })
+    .update({ status: r.status, outcome: r.outcome, ended_at: now.toISOString(), error: opts.error ?? r.error })
     .eq("id", c.id)
-    .in("status", OPEN_STATUSES as unknown as string[])
-    .select("id");
+    .in("status", OPEN_STATUSES as unknown as string[]);
+  // Cierre por corte: un `registrar_gestion` en curso ya tomó la fila con su
+  // `outcome` y gana. El barrido no lleva esta condición: una fila tomada
+  // cuyo registro se cayó debe cerrarse igual, o el número queda ocupado.
+  if (opts.soloSinGestion) close = close.is("outcome", null);
+  const { data: closed } = await close.select("id");
   if (!r.registerNoAnswer || !closed?.length) return;
 
   const action = translateGestion(
