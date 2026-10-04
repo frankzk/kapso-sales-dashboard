@@ -4770,6 +4770,17 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
    de orden permite una eventual anulación por API.
 6. El mismo número de guía no puede vincularse a dos pedidos. Un segundo envío
    del mismo formulario sobre el mismo pedido actualiza datos sin crear otro QR.
+7. **El OSE ID que falte se trae solo** (decidido el 04-10-2026). Los avisos de
+   tránsito y de llegada llevan el ticket en PDF, y el ticket se baja con el
+   OSE ID: sin él el aviso no sale. El 01-10-2026 se crearon a mano 21 guías de
+   Kenku sin OSE ID y 25 avisos se perdieron. Ahora el cron de Shalom, antes de
+   drenar la cola de avisos, busca las guías manuales de los últimos 30 días
+   sin OSE ID en el listado de órdenes de la cuenta (`GET /v1/orders`) y les
+   pone el `id` de su orden. Que ese `id` sea el OSE ID **se comprueba en cada
+   lectura** con las guías creadas por API, cuyo OSE ID se conoce: si alguna
+   aparece con otro `id`, o ninguna aparece, no se escribe nada. Mientras
+   tanto, el aviso de una guía manual sin OSE ID **reintenta** en vez de
+   fallar.
 
 ### Olva
 
