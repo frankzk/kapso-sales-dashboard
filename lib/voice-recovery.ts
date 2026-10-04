@@ -45,6 +45,31 @@ export function pickTelephony(share: number, telnyxReady: boolean, random: () =>
   return random() * 100 < share ? "telnyx" : "zadarma";
 }
 
+export interface VoiceRoute {
+  telephony: "zadarma" | "telnyx";
+  engine: "grok" | "elevenlabs";
+}
+
+/**
+ * Los tres agentes del barrido (decisión del owner, 04-10-2026): Agente Telnyx
+ * (Telnyx + Grok) con `telnyxShare` %, Agente ElevenLabs (Telnyx + ElevenLabs)
+ * con `elevenShare` % y el resto Agente Daaph (Zadarma + Grok). Al azar y por
+ * llamada, sobre la misma cola. Un agente sin configurar no recibe nada: su
+ * parte vuelve a Daaph. Si los dos suman más de 100, se recortan a 100.
+ */
+export function pickVoiceRoute(
+  opts: { telnyxShare: number; elevenShare: number; telnyxReady: boolean; elevenReady: boolean },
+  random: () => number = Math.random,
+): VoiceRoute {
+  const clamp = (n: number) => (Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0);
+  const grok = opts.telnyxReady ? clamp(opts.telnyxShare) : 0;
+  const eleven = opts.telnyxReady && opts.elevenReady ? Math.min(clamp(opts.elevenShare), 100 - grok) : 0;
+  const r = random() * 100;
+  if (r < grok) return { telephony: "telnyx", engine: "grok" };
+  if (r < grok + eleven) return { telephony: "telnyx", engine: "elevenlabs" };
+  return { telephony: "zadarma", engine: "grok" };
+}
+
 // ── Producto corto ──────────────────────────────────────────────────────────
 
 const STOP_TAIL = new Set(["de", "del", "para", "con", "y", "la", "el", "los", "las", "en", "a"]);

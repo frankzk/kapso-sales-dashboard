@@ -4010,7 +4010,17 @@ Reglas de esa tabla:
     «Por ElevenLabs» en el Master o con `motor` en la prueba interna.
     Primero se compara la línea (Daaph contra Telnyx, mismo motor) y después
     el motor (Telnyx + Grok contra Telnyx + ElevenLabs), una variable a la
-    vez. Mientras tanto, el barrido no reparte llamadas a ElevenLabs.
+    vez. **Cambio del owner (04-10-2026):** compiten los tres a la vez. El
+    barrido sortea cada llamada real:
+    - `VOICE_TELNYX_SHARE` % al Agente Telnyx (Telnyx + Grok);
+    - `VOICE_ELEVENLABS_SHARE` % al Agente ElevenLabs (Telnyx + ElevenLabs);
+    - el resto al Agente Daaph (Zadarma + Grok).
+
+    Las reglas del sorteo están en `pickVoiceRoute`. Un agente sin configurar
+    (sin puerta SIP) no recibe llamadas y su parte vuelve a Daaph; si los dos
+    porcentajes suman más de 100, se recortan a 100. Sigue habiendo una sola
+    llamada a la vez por tienda, porque las tres líneas comparten el número de
+    agente.
     **Secreto propio (04-10-2026).** Las tools aceptan `VOICE_TOOLS_SECRET`
     (xAI) o `VOICE_TOOLS_SECRET_ELEVENLABS` (ElevenLabs). El segundo es
     opcional: si está vacío, solo vale el primero. Así cada agente tiene su
@@ -4080,10 +4090,11 @@ Reglas de esa tabla:
     y se reintenta. Un aviso repetido reemplaza el de su tramo, no lo suma dos
     veces. Con `status = error` no hay monto, y el total no lo cuenta como
     cero.
-  - **Cuándo arranca el reparto.** Mientras Telnyx solo tenga número de EE.
-    UU., queda en pruebas a un teléfono propio: con un +1 la clienta contesta
-    menos y la comparación saldría injusta. El reparto empieza cuando llegue
-    un número de Lima.
+  - **Cuándo arranca el reparto.** El plan era esperar el número de Lima,
+    porque con un +1 la clienta contesta menos y la comparación sale
+    injusta. El owner decidió arrancar el 04-10-2026 con el +1 de EE. UU.
+    Al leer la comparación, la tasa de atendidas de Telnyx y ElevenLabs se
+    lee con esa desventaja hasta que llegue el número de Lima.
 - Todo hecho que escribe lleva en `payload` el `voice_call_id`, y la línea de
   tiempo del drawer lo muestra con actor **«Agente de voz»** y enlace a la
   transcripción. Un intento que no se puede leer después no es historial

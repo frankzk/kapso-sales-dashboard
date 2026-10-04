@@ -14,7 +14,7 @@ import {
   telnyxPeruE164,
   verifyTelnyxSignature,
 } from "@/lib/telnyx";
-import { pickTelephony } from "@/lib/voice-recovery";
+import { pickTelephony, pickVoiceRoute } from "@/lib/voice-recovery";
 import {
   VOICE_AGENT_ELEVENLABS_KEY,
   VOICE_AGENT_KEY,
@@ -181,6 +181,23 @@ describe("reparto Daaph contra Telnyx", () => {
   });
 });
 
+describe("reparto de los tres agentes (Daaph, Telnyx, ElevenLabs)", () => {
+  const all = { telnyxShare: 33, elevenShare: 33, telnyxReady: true, elevenReady: true };
+  it("cada tramo del azar va a su agente", () => {
+    expect(pickVoiceRoute(all, () => 0.1)).toEqual({ telephony: "telnyx", engine: "grok" });
+    expect(pickVoiceRoute(all, () => 0.5)).toEqual({ telephony: "telnyx", engine: "elevenlabs" });
+    expect(pickVoiceRoute(all, () => 0.9)).toEqual({ telephony: "zadarma", engine: "grok" });
+  });
+  it("un agente sin configurar no recibe nada: su parte vuelve a Daaph", () => {
+    expect(pickVoiceRoute({ ...all, elevenReady: false }, () => 0.5)).toEqual({ telephony: "zadarma", engine: "grok" });
+    expect(pickVoiceRoute({ ...all, telnyxReady: false }, () => 0.1)).toEqual({ telephony: "zadarma", engine: "grok" });
+  });
+  it("sin porcentajes, todo por Zadarma; si suman más de 100, se recorta", () => {
+    expect(pickVoiceRoute({ ...all, telnyxShare: 0, elevenShare: 0 }, () => 0)).toEqual({ telephony: "zadarma", engine: "grok" });
+    expect(pickVoiceRoute({ ...all, telnyxShare: 80, elevenShare: 80 }, () => 0.95)).toEqual({ telephony: "telnyx", engine: "elevenlabs" });
+  });
+});
+
 describe("«Hoy por asesora» separa los dos agentes", () => {
   it("la firma «Agente de voz (Telnyx)» es el Agente Telnyx; el resto, Daaph", () => {
     expect(reproDayActor({ agent: null, kind: "call", newStatus: null, shipmentId: "g", note: "Agente de voz (Telnyx) · No contestó" })).toBe(VOICE_AGENT_TELNYX_KEY);
@@ -249,8 +266,9 @@ describe("guardas del flujo (código)", () => {
     expect(route.indexOf('ev.type === "call.cost"')).toBeLessThan(route.indexOf("eventos.push("));
   });
 
-  it("el barrido sortea la línea de cada llamada", () => {
-    expect(cron).toContain("pickTelephony(telnyxShare, telnyxReady)");
+  it("el barrido sortea línea y motor de cada llamada", () => {
+    expect(cron).toContain("pickVoiceRoute({ telnyxShare, elevenShare, telnyxReady, elevenReady })");
     expect(cron).toContain("telephony,");
+    expect(cron).toContain("engine,");
   });
 });
