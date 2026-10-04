@@ -16,7 +16,9 @@ import {
   mergeDniMatches,
   type CotejoCandidate,
   type CotejoOutcome,
+  type CotejoVia,
 } from "@/lib/olva/portal-match";
+import { matchLabel } from "@/lib/olva/email-label";
 import { formatOlvaTracking } from "@/lib/olva/tracking";
 
 /** Días hacia atrás que mira el cotejo automático y el botón. */
@@ -163,10 +165,14 @@ export function defaultCotejoRange(now: Date = new Date()): { desde: string; has
 
 async function loadCandidates(admin: SupabaseClient, storeIds: string[], rows: OlvaPortalRow[]): Promise<CotejoCandidate[]> {
   const days = rows.map((r) => r.fechaRegistro).filter((d): d is string => Boolean(d)).sort();
-  const from = addDays(days[0] ?? limaDayKey(), -30);
+  return loadOlvaCandidates(admin, storeIds, addDays(days[0] ?? limaDayKey(), -30));
+}
+
+/** Las salidas de Olva sin tracking creadas desde `from` (YYYY-MM-DD), con su DNI y teléfono. */
+export async function loadOlvaCandidates(admin: SupabaseClient, storeIds: string[], from: string): Promise<CotejoCandidate[]> {
   const { data, error } = await admin
     .from("shipments")
-    .select("id,store_id,order_id,order_name,guide_code,customer_name,delivery_address,district,created_at,delivery_status")
+    .select("id,store_id,order_id,order_name,guide_code,customer_name,customer_phone,delivery_address,district,created_at,delivery_status")
     .in("store_id", storeIds)
     .eq("courier", "olva")
     .is("olva_tracking", null)
@@ -181,6 +187,7 @@ async function loadCandidates(admin: SupabaseClient, storeIds: string[], rows: O
     order_name: string | null;
     guide_code: string | null;
     customer_name: string | null;
+    customer_phone: string | null;
     delivery_address: string | null;
     district: string | null;
     created_at: string;
@@ -211,7 +218,57 @@ async function loadCandidates(admin: SupabaseClient, storeIds: string[], rows: O
     district: s.district,
     createdAt: s.created_at,
     dni: s.order_id ? (dniByOrder.get(s.order_id) ?? null) : null,
+    phone: s.customer_phone,
   }));
+}
+
+/**
+ * Los envíos sin resolver que tienen su rótulo de correo guardado, casados
+ * por teléfono o DNI con las mismas reglas que al llegar el correo.
+ */
+async function labelPairs(
+  admin: SupabaseClient,
+  outcomes: CotejoOutcome[],
+  candidates: CotejoCandidate[],
+): Promise<{ candidate: CotejoCandidate; row: OlvaPortalRow; via: CotejoVia }[]> {
+  const pending = outcomes.filter((o) => o.kind === "revisar" || o.kind === "sin_pareja").map((o) => o.row);
+  if (!pending.length) return [];
+  const resolved = new Set(outcomes.flatMap((o) => (o.kind === "vincular" ? [o.candidate.shipmentId] : [])));
+  const free = candidates.filter((c) => !resolved.has(c.shipmentId));
+  const { data } = await admin
+    .from("olva_email_labels")
+    .select("olva_tracking,olva_emision,recipient_name,recipient_doc,recipient_phone,label_date")
+    .in("olva_tracking", pending.map((r) => r.id.tracking));
+  const labels = (data ?? []) as {
+    olva_tracking: string;
+    olva_emision: string;
+    recipient_name: string | null;
+    recipient_doc: string | null;
+    recipient_phone: string | null;
+    label_date: string | null;
+  }[];
+  const pairs: { candidate: CotejoCandidate; row: OlvaPortalRow; via: CotejoVia }[] = [];
+  for (const row of pending) {
+    const l = labels.find((x) => x.olva_tracking === row.id.tracking && x.olva_emision === row.id.emision);
+    if (!l) continue;
+    const m = matchLabel(
+      {
+        id: row.id,
+        senderDoc: null,
+        recipientName: l.recipient_name,
+        recipientDoc: l.recipient_doc,
+        recipientPhone: l.recipient_phone,
+        address: null,
+        reference: null,
+        registro: null,
+        ubigeo: null,
+        fecha: l.label_date ?? row.fechaRegistro,
+      },
+      free,
+    );
+    if (m.kind === "match") pairs.push({ candidate: m.candidate, row, via: m.via });
+  }
+  return pairs;
 }
 
 /**
@@ -293,7 +350,9 @@ async function applyOutcomes(
           ? "el Doc. externo es el pedido"
           : o.via === "dni"
             ? "el DNI de la clienta"
-            : "nombre y dirección idénticos";
+            : o.via === "telefono"
+              ? "el teléfono del rótulo que llegó por correo"
+              : "nombre y dirección idénticos";
       const res = await linkOlvaTrackingIfEmpty(admin, {
         shipmentId: o.candidate.shipmentId,
         id: o.row.id,
@@ -389,6 +448,9 @@ export async function runOlvaCotejo(
       const pairs = await dniPairs(admin, { ...session, hasta: range.hasta, fetchImpl: input.fetchImpl }, pending, linked);
       outcomes = mergeDniMatches(outcomes, pairs);
     }
+    // Y el rótulo que llegó por correo (teléfono y DNI del destinatario), para
+    // lo que siga sin resolver. No necesita sesión: está en la base.
+    outcomes = mergeDniMatches(outcomes, await labelPairs(admin, outcomes, candidates));
     const resumenRows = await applyOutcomes(admin, outcomes, input.actor);
     const count = (k: CotejoResumenRow["outcome"]) => resumenRows.filter((r) => r.outcome === k).length;
     return record(

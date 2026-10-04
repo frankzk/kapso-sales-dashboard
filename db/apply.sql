@@ -447,4 +447,6 @@
 \ir migrations/0221_swayp_pilot_cupo_hasta_general.sql
 \echo 'Applying 0222_rider_pay_notebook_photo_exemption.sql'
 \ir migrations/0222_rider_pay_notebook_photo_exemption.sql
+\echo 'Applying 0223_olva_email_labels.sql'
+\ir migrations/0223_olva_email_labels.sql
 \echo 'Done.'
