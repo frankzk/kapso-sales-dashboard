@@ -7,6 +7,8 @@
 //   · la clienta cuelga sin haber llegado al agente → «no contesta» al momento,
 //     con la causa (timbró, ocupado, rechazó), sin esperar al barrido;
 //   · un tramo cuelga → se cuelga el otro;
+//   · se corta una conversación sin gestión → «no contesta» al momento (tras
+//     3 s por si el registro venía en camino), sin esperar al barrido;
 //   · Telnyx dice cuánto costó cada tramo (`call.cost`) → se guarda en
 //     `telephony_response.costo`, con la suma de los dos tramos.
 // Cada aviso queda en `voice_calls.telephony_response.eventos`: con eso se ve
@@ -159,8 +161,7 @@ export async function POST(req: NextRequest) {
 
   if (ev.type === "call.hangup" && leg === "cliente") {
     await hangup(telephony.agente);
-    // Solo si nunca llegó al agente: una conversación en curso la cierra
-    // `registrar_gestion` o, si se cortó sin gestión, el barrido.
+    // Nunca llegó al agente: «no contesta» con la causa del corte.
     if (row.status === "dialing") {
       const contesto = eventos.some(
         (e) => (e as { tipo?: string; tramo?: string }).tipo === "call.answered" && (e as { tramo?: string }).tramo === "cliente",
@@ -168,15 +169,39 @@ export async function POST(req: NextRequest) {
       const resumen = contesto ? "No contestó: colgó antes de hablar con el agente." : noAnswerResumen(ev);
       await closeAsNoAnswer(admin, asOpen(row), resumen, now);
     }
+    if (row.status === "in_progress") await closeCutWithoutGestion(admin, row, now);
     return NextResponse.json({ ok: true, action: "cliente_colgo" });
   }
 
   if (ev.type === "call.hangup" && leg === "agente") {
     await hangup(telephony.cliente);
+    if (row.status === "in_progress") await closeCutWithoutGestion(admin, row, now);
     return NextResponse.json({ ok: true, action: "agente_colgo" });
   }
 
   return NextResponse.json({ ok: true });
+}
+
+/** Margen para que llegue un `registrar_gestion` pedido a la vez que el corte. */
+const HANGUP_GRACE_MS = 3_000;
+
+/**
+ * La conversación se cortó y el agente no registró nada: se cierra como «no
+ * contesta» al momento, sin esperar al barrido. Todos los agentes comparten el
+ * número de la tienda (una llamada abierta a la vez), y con el barrido la cola
+ * quedaba parada ~10 min tras cada corte (04-10-2026). El error empieza con
+ * «sin registrar_gestion», como el del barrido: la comparación la sigue
+ * contando como atendida y cortada sin gestión.
+ */
+async function closeCutWithoutGestion(admin: ReturnType<typeof createAdminSupabase>, row: Row, now: Date) {
+  await new Promise((r) => setTimeout(r, HANGUP_GRACE_MS));
+  await closeAsNoAnswer(
+    admin,
+    asOpen(row),
+    "No contestó: la llamada llegó al agente pero se cortó sin gestión (buzón o cuelgue).",
+    now,
+    { error: "sin registrar_gestion: se cortó la llamada", soloSinGestion: true },
+  );
 }
 
 /**

@@ -64,6 +64,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: action.error });
   }
 
+  // Se toma la fila ANTES de escribir sobre el pedido: si la línea avisa el
+  // corte mientras se registra (el agente cuelga en paralelo), el cierre por
+  // corte ve el `outcome` y no anota un «no contesta» encima (MOM §11.8).
+  const { data: tomada } = await admin
+    .from("voice_calls")
+    .update({ outcome: action.disposition })
+    .eq("id", call.id)
+    .eq("status", "in_progress")
+    .is("outcome", null)
+    .select("id");
+  if (!tomada?.length) {
+    return NextResponse.json({ ok: false, error: "la llamada ya se registró o se cerró" });
+  }
+
   const outcomePayload = {
     ...body,
     accion: action.kind,

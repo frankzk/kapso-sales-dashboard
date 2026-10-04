@@ -3979,6 +3979,26 @@ Reglas de esa tabla:
     llamada.
   - **Ocupado, rechazo o sin respuesta.** Se registra «no contesta» al
     momento, con la causa. No se espera al barrido.
+  - **Corte sin gestión (04-10-2026).** Si se corta una llamada que ya
+    llegó al agente y él no registró nada, Kapta la cierra como «no
+    contesta» en cuanto Telnyx avisa el corte, sin esperar al barrido de
+    cinco minutos. Antes de cerrar espera 3 s, por si el registro venía en
+    camino.
+
+    El error empieza con «sin registrar_gestion», igual que el del barrido,
+    así que la comparación la sigue contando como atendida y cortada sin
+    gestión. Esto importa porque las tres líneas comparten el número de
+    agente: el domingo 04-10, cada corte dejaba la cola parada unos 10 min
+    hasta que pasaba el barrido. Zadarma no avisa el corte, así que Daaph
+    sigue dependiendo del barrido.
+
+    Para no anotar un «no contesta» encima de una gestión,
+    `registrar_gestion` reserva primero la llamada: escribe su `outcome` solo
+    si la llamada sigue en curso y sin resultado, y recién después escribe
+    sobre el pedido. El cierre por corte no toca una llamada reservada.
+    Tampoco vale un segundo registro en la misma llamada. El barrido sí
+    cierra una llamada reservada cuyo registro se cayó, porque si no el
+    número quedaría ocupado.
   - **Contestadora: modo sombra.** La detección de Telnyx corre en cada
     llamada y su resultado queda anotado (`amd`), pero no cuelga. En la
     primera prueba (03-10-2026) tomó por buzón a una persona dos segundos
@@ -4054,6 +4074,17 @@ Reglas de esa tabla:
     `encontrada = no`, y el agente cae a `identificar_llamada`.
     `identificar_llamada` entrega una llamada ya «en curso» solo si la abrió
     este inicio; cualquier otra en curso sería la ficha de otra conversación.
+    **Sin respuesta real (04-10-2026).** El domingo, las 3 llamadas atendidas
+    por ElevenLabs terminaron sin registro:
+    - una de 300 s, dando vueltas con una grabación que solo decía «aló»;
+    - otra en que la persona no habló, y el agente colgó sin registrar;
+    - otra que se cortó tras 20 s de silencio.
+
+    Desde entonces el guion manda insistir como mucho dos veces cuando nadie
+    habla, o cuando solo dicen «aló» o suena una grabación. Si sigue igual,
+    el agente registra `no_contesta` y **después** cuelga. Nunca cuelga sin
+    registrar, salvo si la ficha no existe. La duración máxima bajó de 300 s
+    a 180 s.
   - **«Agentes de voz: comparación»** (Envíos, en el resumen de arriba, junto
     a «Hoy por asesora»). Muestra una fila por agente, siempre los tres, con
     llamadas **reales** (`mode = 'real'`) del rango elegido, con los mismos
