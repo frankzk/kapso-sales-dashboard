@@ -3960,10 +3960,14 @@ Reglas de esa tabla:
   había llamado (26-09-2026).
 - En **«Hoy por asesora»** (Envíos) esas filas cuentan como una asesora más,
   **«Agente Daaph»** con la marca IA, siempre al final de la tabla y dentro
-  del total del equipo. Se reconocen por el actor nulo y la nota «Agente de
-  voz», o por ser un `reroute` sin actor (las dos filas de la salida Swayp que
-  crea el agente). Cada llamada suya es una gestión; su salida suma una
-  reprogramada. Otra fila sin actor no se atribuye a nadie (28-09-2026).
+  del total del equipo. Se reconocen por el actor nulo y una nota que dice
+  «Agente de voz»: sus llamadas la empiezan así, y las dos filas `reroute` de
+  la salida Swayp que crea la llevan en el motivo. Cada llamada suya es una
+  gestión; su salida suma una reprogramada. Otra fila sin actor no se atribuye
+  a nadie (28-09-2026). **Un `reroute` sin actor ya no basta** (04-10-2026): el
+  «Reintento automático Aliclik → Swayp» también lo escribe, y el 03-10 le dio
+  al Agente Daaph 21 gestiones y 6 reprogramadas con 10 llamadas y ningún
+  «confirma».
 - **Agente Daaph contra Agente Telnyx** (03-10-2026). Es el mismo agente de
   xAI con el mismo guion y la misma voz. Cambia solo la línea: Daaph llama por
   Zadarma (callback) y Telnyx por Telnyx Call Control. Así se mide qué línea
@@ -4023,8 +4027,12 @@ Reglas de esa tabla:
     con la página; los otros rangos se piden al elegirlos. El agente sale de la
     llamada: Zadarma es Daaph; Telnyx con
     `provider = 'grok'` es Telnyx y con `elevenlabs` es ElevenLabs.
-    - **Atendidas:** `started_at` presente, porque `identificar_llamada`
-      corrió.
+    - **Atendidas:** `started_at` presente —`identificar_llamada` corrió, el
+      agente creyó oír a una persona— **salvo que el propio agente registrara
+      después «no contestó»**: eso es un buzón. El «no contestó» que escribe el
+      vigilante al cerrar una llamada sin registro (`error` «sin
+      registrar_gestion…») sí es atendida (04-10-2026: el 03-10 salían 10
+      atendidas y 10 sin gestión sobre 4 buzones y 6 cortes).
     - **Sin gestión:** atendidas cuyo resultado no es `confirma`, `programar`
       ni `cancela`.
     - **Guías Swayp:** `outcome_payload.salida_swayp.ok`.
