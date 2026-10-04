@@ -5,6 +5,7 @@ import { shopifyOrderAdminUrl } from "@/lib/shopify";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
+import type { DistrictCoverageRule } from "@/lib/district-coverage";
 import type { PedidoPrevio } from "@/lib/pedido-duplicado";
 import {
   buildAnomalyReport,
@@ -62,6 +63,7 @@ const LEAD_BOARD_SELECT = [
   "draft_order_status",
   "draft_order_url",
   "province",
+  "region", // 0013; el filtro de cobertura la lee (lib/lead-coverage.ts)
   "referencia",
   "address1",
   "ship_name",
@@ -274,6 +276,39 @@ async function drainLeads(
     if (batch.length < LEADS_PAGE_SIZE) break;
   }
   return rows;
+}
+
+/**
+ * Cobertura del último pedido del mismo teléfono, por lead de «Por llamar»
+ * (0224). Es la pista del filtro de cobertura cuando el lead no dejó dirección.
+ *
+ * Vacío si la migración no corrió o la consulta falla: la cola se dibuja igual
+ * y esos leads quedan «Sin identificar», que es lo que eran antes.
+ */
+export async function getLeadPriorCoverage(storeIds: StoreScope): Promise<Record<string, string>> {
+  if (!storeIds.length) return {};
+  const sb = await createServerSupabase();
+  const { data, error } = await sb.rpc("lead_prior_order_coverage", { p_store_ids: storeIds });
+  if (error || !data) return {};
+  const out: Record<string, string> = {};
+  for (const row of data as { lead_id: string; coverage: string }[]) out[row.lead_id] = row.coverage;
+  return out;
+}
+
+/**
+ * Las excepciones de cobertura por distrito (0121), para que el filtro de la
+ * cola diga lo mismo que el pedido (Pucusana va por agencia). Las globales y
+ * las de las tiendas que se miran. Vacío si falla: manda la regla general.
+ */
+export async function getDistrictCoverageRules(storeIds: StoreScope): Promise<DistrictCoverageRule[]> {
+  if (!storeIds.length) return [];
+  const sb = await createServerSupabase();
+  const { data, error } = await sb
+    .from("district_coverage")
+    .select("store_id,district,coverage")
+    .or(`store_id.is.null,store_id.in.(${storeIds.join(",")})`);
+  if (error || !data) return [];
+  return data as DistrictCoverageRule[];
 }
 
 export async function getLeadWithCalls(

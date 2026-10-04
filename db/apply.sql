@@ -449,4 +449,6 @@
 \ir migrations/0222_rider_pay_notebook_photo_exemption.sql
 \echo 'Applying 0223_olva_email_labels.sql'
 \ir migrations/0223_olva_email_labels.sql
+\echo 'Applying 0224_lead_prior_order_coverage.sql'
+\ir migrations/0224_lead_prior_order_coverage.sql
 \echo 'Done.'

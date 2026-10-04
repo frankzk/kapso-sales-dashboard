@@ -139,6 +139,11 @@ const AMBIGUOUS_DISTRICTS = new Set(
   ].map(normalizeCoverageLabel),
 );
 
+/** ¿Es un distrito de Lima/Callao cuyo nombre se repite en otro departamento? */
+export function isAmbiguousLimaDistrict(district: string | null | undefined): boolean {
+  return AMBIGUOUS_DISTRICTS.has(normalizeCoverageLabel(district));
+}
+
 const NON_COD_COURIERS = new Set(["shalom", "olva", "olva courier"]);
 
 export function normalizeCoverageLabel(value: string | null | undefined): string {

@@ -15,6 +15,8 @@ import {
   type StoreScope,
 } from "@/lib/leads-access";
 import { facetItems } from "@/lib/leads-facets";
+import { LEAD_COVERAGES, countLeadCoverage, leadCoverage, type LeadCoverage } from "@/lib/lead-coverage";
+import type { DistrictCoverageRule } from "@/lib/district-coverage";
 import { scoringProfileFor, sortLeadsByPriorityScoped } from "@/lib/lead-priority";
 import {
   countLeadUrgency,
@@ -623,6 +625,8 @@ export function LeadsBoard({
   adDeclarations,
   waNumbers,
   agentNames,
+  priorCoverage,
+  coverageRules,
   currency,
   timezone,
   insights,
@@ -658,6 +662,11 @@ export function LeadsBoard({
   /** Id de asesora → nombre, solo para quienes tienen una reserva viva en la
    *  lista. Con esto la etiqueta «Tomado» dice por quién. */
   agentNames?: Record<string, string>;
+  /** Id de lead → cobertura de su último pedido con el mismo teléfono (0224).
+   *  Pista del filtro de cobertura cuando el lead no dejó dirección. */
+  priorCoverage?: Record<string, string>;
+  /** Excepciones de cobertura por distrito (0121), las mismas del pedido. */
+  coverageRules?: DistrictCoverageRule[];
   currency: string;
   timezone: string;
   insights: LeadsInsights | null;
@@ -715,6 +724,10 @@ export function LeadsBoard({
   // al estado activo. La Gestión es un refino que vive en Filtros (sin default).
   const [queueState, setQueueState] = useState<QueueState>(initialState ?? "sin_llamar");
   const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
+  // Eje 3 (cobertura): Lima / Provincia / Sin identificar, al lado del segmento.
+  // Es una pista para repartir llamadas, no la cobertura del pedido (ver
+  // lib/lead-coverage.ts).
+  const [covFilter, setCovFilter] = useState<LeadCoverage | null>(null);
   const [gestFilter, setGestFilter] = useState<LeadGestion | "otros" | null>(initialGest ?? null);
   const [winFilter, setWinFilter] = useState<"all" | "fresca" | "por_vencer" | "cerrada">("all");
   // Edad del lead. EJE PROPIO, no un desglose de "Ventana": son dos relojes
@@ -1205,6 +1218,18 @@ export function LeadsBoard({
     return (l: LeadRow) => porLead.get(l.id) ?? null;
   }, [leads, adDeclarations]);
 
+  // La cobertura de cada lead, resuelta UNA vez por cola: el predicado del
+  // filtro y sus contadores la piden varias veces por lead y por render. Las
+  // filas que no son de la cola (la audiencia completa) se resuelven al vuelo.
+  const coverageOf = useMemo(() => {
+    const rules = coverageRules ?? [];
+    const resolve = (l: LeadRow) =>
+      leadCoverage(l, { priorCoverage: priorCoverage?.[l.id] ?? null, overrides: rules });
+    const porLead = new Map<string, LeadCoverage>();
+    for (const l of leads) porLead.set(l.id, resolve(l));
+    return (l: LeadRow): LeadCoverage => porLead.get(l.id) ?? resolve(l);
+  }, [leads, priorCoverage, coverageRules]);
+
   // Jerarquía de filtros (faceted counts): los contadores de cada grupo se
   // calculan sobre los leads que pasan TODOS los demás filtros activos, pero NO
   // el propio. Así, al elegir "Con carrito" (18), Gestión/Ventana/Fuente/Número
@@ -1225,6 +1250,8 @@ export function LeadsBoard({
     hasBrowse,
     segCounts,
     segTotal,
+    covCounts,
+    covTotal,
     stateCounts,
     seguimientoAlert,
     gestCounts,
@@ -1265,6 +1292,7 @@ export function LeadsBoard({
     // AND: el segmento se filtra DENTRO del estado activo (no lo reemplaza).
     const matchState = (l: LeadRow) => !inQueue || matchesQueueState(l, queueState);
     const matchSeg = (l: LeadRow) => !inQueue || !segFilter || leadSegment(l) === segFilter;
+    const matchCov = (l: LeadRow) => !inQueue || !covFilter || coverageOf(l) === covFilter;
     const matchGest = (l: LeadRow) => {
       // En "Sin llamar" todos son nuevos → la gestión no aplica (su panel se oculta).
       if (!inQueue || queueState === "sin_llamar" || !gestFilter) return true;
@@ -1295,6 +1323,7 @@ export function LeadsBoard({
       prod: matchProd,
       state: matchState,
       seg: matchSeg,
+      cov: matchCov,
       gest: matchGest,
       win: matchWin,
       edad: matchEdad,
@@ -1309,9 +1338,12 @@ export function LeadsBoard({
     // el facet de estado, así que los segmentos suman el total del estado (p.ej. 237
     // en Sin llamar), no los 429. "Todos" = ese total.
     const segBase = facets.except("seg");
+    // Cobertura: mismo trato que el segmento — sus chips suman el total del
+    // estado activo con los demás filtros puestos, menos el suyo.
+    const covBase = facets.except("cov");
     // Eje 1 (estado): tabs primarios con totales estables (237 / 192). Su base salta
-    // el propio estado Y el segmento, para no encogerse al elegir un segmento.
-    const stateBase = facets.except("state", "seg");
+    // el propio estado, el segmento y la cobertura, para no encogerse al elegir uno.
+    const stateBase = facets.except("state", "seg", "cov");
     const gestBase = facets.except("gest");
     const winBase = facets.except("win");
     const edadBase = facets.except("edad");
@@ -1350,6 +1382,8 @@ export function LeadsBoard({
       hasBrowse: leads.some((l) => l.source === "abandoned_browse"),
       segCounts: countLeadSegments(segBase),
       segTotal: segBase.length,
+      covCounts: countLeadCoverage(covBase.map(coverageOf)),
+      covTotal: covBase.length,
       stateCounts: countQueueStates(stateBase),
       // Semáforo del tab "En seguimiento": cuántos piden atención (olas de carrito,
       // respuestas nuevas, seguimientos vencidos) — visible sin entrar al tab.
@@ -1373,10 +1407,10 @@ export function LeadsBoard({
       hasMultiNumbers: waIdsAcc.length >= 2,
       prodOptions: prodOptionsAcc,
       prodSin: prodSinAcc,
-      // Hora dorada: se cuenta sobre `segBase` —todo menos el propio filtro de
-      // segmento— para que elegir un chip no apague el aviso. Es una alarma sobre
+      // Hora dorada: se cuenta sin los filtros de segmento ni de cobertura para
+      // que elegir un chip no apague el aviso. Es una alarma sobre
       // la cola, no un resumen de lo que se está mirando.
-      goldenTally: tallyGolden(facets.except("seg", "edad"), leadSegment, now),
+      goldenTally: tallyGolden(facets.except("seg", "cov", "edad"), leadSegment, now),
       shownLeads: facets.all,
     };
   }, [
@@ -1390,6 +1424,8 @@ export function LeadsBoard({
     inQueue,
     queueState,
     segFilter,
+    covFilter,
+    coverageOf,
     gestFilter,
     winFilter,
     edadFilter,
@@ -1423,6 +1459,7 @@ export function LeadsBoard({
     (isReviewView ? 1 : 0);
   function clearFilters() {
     setSegFilter(null);
+    setCovFilter(null);
     setGestFilter(null);
     setWinFilter("all");
     setEdadFilter("all");
@@ -1534,7 +1571,9 @@ export function LeadsBoard({
         const all = await loadLeadsForAudience(scope, view);
         if (all.length) rows = all.filter(facetsMatchAll);
       }
-      const segment = [view, inQueue ? queueState : null, segFilter].filter(Boolean).join(" ");
+      const segment = [view, inQueue ? queueState : null, segFilter, inQueue ? covFilter : null]
+        .filter(Boolean)
+        .join(" ");
       const today = new Date().toLocaleDateString("en-CA", { timeZone: timezone });
       const url = URL.createObjectURL(
         new Blob([buildMetaAudienceCsv(rows)], { type: "text/csv;charset=utf-8" }),
@@ -1771,6 +1810,15 @@ export function LeadsBoard({
                   label: SEG_TAB_LABEL[key],
                   count: segCounts[key],
                 })),
+              ]}
+            />
+            <SegControl
+              label="Cobertura"
+              value={covFilter ?? "all"}
+              onChange={(key) => setCovFilter(key === "all" ? null : (key as LeadCoverage))}
+              options={[
+                { key: "all", label: "Todos", count: covTotal },
+                ...LEAD_COVERAGES.map(({ key, label }) => ({ key, label, count: covCounts[key] })),
               ]}
             />
             {interactionDateFilter && queueState === "sin_llamar" && (
@@ -2054,16 +2102,17 @@ export function LeadsBoard({
             )}
             <button
               type="button"
-              // Limpia también el segmento: el aviso cuenta la hora entera sin
-              // mirar el chip activo, así que si al filtrar quedara un segmento
-              // puesto la lista mostraría menos filas que el número del botón —
-              // el mismo desajuste que este cambio viene a quitar.
+              // Limpia también el segmento y la cobertura: el aviso cuenta la
+              // hora entera sin mirar esos chips, así que si al filtrar quedara
+              // uno puesto la lista mostraría menos filas que el número del
+              // botón — el mismo desajuste que este cambio viene a quitar.
               onClick={() => {
                 if (edadFilter === "dorada") {
                   setEdadFilter("all");
                 } else {
                   setEdadFilter("dorada");
                   setSegFilter(null);
+                  setCovFilter(null);
                 }
               }}
               className={cn(

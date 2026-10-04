@@ -2576,6 +2576,34 @@ Tasa de cierre entre los LLAMADOS, 60 días:
 Mismo orden en las dos tiendas; lo que cambia son las magnitudes, y por eso los
 pesos de llamada son por tienda.
 
+**Cobertura de la cola de leads (04-10-2026).** Al lado del segmento, la cola
+se parte en **Lima / Provincia / Sin identificar** (`lib/lead-coverage.ts`).
+Es una pista para repartir llamadas, **no** la cobertura del pedido: esa sigue
+teniendo una sola definición, `order_coverage_for` (§5), y el pedido la recibe
+al nacer. Por eso existe un tercer valor que el pedido no tiene: un lead que no
+dijo dónde vive no es de provincia, es uno del que no se sabe. Medido al
+abrirlo: el 71 % de los ~3.000 «Sin llamar» no tenía ni distrito ni región.
+
+Se decide con la primera señal que sirva:
+
+1. **Su propia dirección**: la del carrito de Shopify, la guardada del cliente
+   (el Flow deja el departamento en `province`, no en `region`) o la respuesta
+   del chat. Lima es la MISMA regla del pedido (`isLimaMetropolitanaOrCallao`,
+   espejo de `is_lima_metropolitana`) y las excepciones de `district_coverage`
+   mandan igual (Pucusana → Provincia). El botón «¿Lima o provincia?» del bot
+   cuenta como respuesta. Un texto libre se lee buscando distritos de Lima y
+   departamentos, provincias o ciudades de fuera; si nombra las dos cosas, o un
+   distrito que existe en Lima y en provincia (Independencia, La Victoria),
+   queda Sin identificar.
+2. **El último pedido del mismo teléfono** (`order_master.coverage`, 0224),
+   solo si lo propio no alcanza: lo que contestó hoy es más nuevo.
+
+«Lima (departamento)» sin un distrito legible **no** se da por Provincia: de
+los pedidos con esa región de los últimos 120 días, 188 de 633 (30 %) resultaron
+de Lima Metropolitana por su distrito. Las frases del bot que el lector del
+chat guardó como distrito («indicarte bien 🚚», «coordinarlo») no son lugar y
+quedan Sin identificar.
+
 **Dentro de `carrito`, primero la que armó varios (Kenku, 30-09-2026).** Quien
 armó 2 o más carritos en 48 horas cierra más cuando se la llama, en los cuatro
 tramos horarios. Mismo método que la tabla de arriba —60 días, solo carritos
