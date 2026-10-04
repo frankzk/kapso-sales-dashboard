@@ -49,15 +49,25 @@ function secretEquals(provided: string | null | undefined, expected: string): bo
 }
 
 /**
- * Las tools del agente se autentican con VOICE_TOOLS_SECRET. Se acepta como
+ * Las tools del agente se autentican con VOICE_TOOLS_SECRET (xAI) o con
+ * VOICE_TOOLS_SECRET_ELEVENLABS (ElevenLabs, opcional): cada agente con su
+ * secreto, para rotar uno sin cortar al otro. Se acepta como
  * `Authorization: Bearer …` o como cabecera `x-voice-secret`, según lo que
- * permita la consola de xAI.
+ * permita cada consola; en `x-voice-secret` un «Bearer » delante también vale
+ * (ElevenLabs lo guarda dentro del secreto si se pegó así, 04-10-2026).
  */
 export function voiceToolAuthorized(req: NextRequest): boolean {
-  const secret = env.voiceToolsSecret();
-  const bearer = req.headers.get("authorization");
-  if (bearer?.startsWith("Bearer ") && secretEquals(bearer.slice(7).trim(), secret)) return true;
-  return secretEquals(req.headers.get("x-voice-secret")?.trim(), secret);
+  return voiceToolSecretMatches(req.headers, [env.voiceToolsSecret(), env.voiceToolsSecretElevenLabs()]);
+}
+
+/** Separado para probarlo sin Request. Un secreto vacío nunca autoriza. */
+export function voiceToolSecretMatches(headers: Pick<Headers, "get">, secrets: string[]): boolean {
+  const valid = secrets.filter(Boolean);
+  const bearer = headers.get("authorization");
+  const fromAuth = bearer?.startsWith("Bearer ") ? bearer.slice(7).trim() : null;
+  const raw = headers.get("x-voice-secret")?.trim() ?? null;
+  const fromHeader = raw?.startsWith("Bearer ") ? raw.slice(7).trim() : raw;
+  return valid.some((s) => secretEquals(fromAuth ?? undefined, s) || secretEquals(fromHeader ?? undefined, s));
 }
 
 /** Lo mismo que los crons: nuestra propia infraestructura llamándose. */

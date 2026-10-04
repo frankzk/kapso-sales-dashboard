@@ -30,6 +30,9 @@ export const env = {
   zadarmaKey: () => required("ZADARMA_KEY").trim(),
   zadarmaSecret: () => required("ZADARMA_SECRET").trim(),
   voiceToolsSecret: () => required("VOICE_TOOLS_SECRET").trim(),
+  // Opcional: el secreto propio del agente de ElevenLabs, para no compartir ni
+  // rotar el de xAI. Vacío = solo vale VOICE_TOOLS_SECRET.
+  voiceToolsSecretElevenLabs: () => (process.env.VOICE_TOOLS_SECRET_ELEVENLABS ?? "").trim(),
   // «Agente Telnyx» (MOM §11.8): la segunda línea que compite con Zadarma.
   // TELNYX_FROM_NUMBER es el número de Telnyx que ve la clienta y TELNYX_XAI_SIP_URI
   // la puerta SIP de ese número en xAI. VOICE_TELNYX_SHARE es el % de las
