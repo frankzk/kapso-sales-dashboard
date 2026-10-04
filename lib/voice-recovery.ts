@@ -211,6 +211,66 @@ export function buildFicha(input: FichaInput, now: Date): Ficha {
   };
 }
 
+// ── Ficha precargada para ElevenLabs (webhook de inicio de conversación) ────
+
+/**
+ * Las variables que el agente de ElevenLabs recibe al conectar. Van TODAS en
+ * cada respuesta, como texto: ElevenLabs exige que estén todas las variables
+ * que el prompt usa, o no arranca la conversación.
+ */
+export const ELEVENLABS_FICHA_VARS = [
+  "encontrada",
+  "tienda",
+  "nombre",
+  "producto",
+  "producto_corto",
+  "cantidad",
+  "monto",
+  "distrito",
+  "ciudad",
+  "direccion",
+  "referencia",
+  "ventana_horaria",
+  "hoy",
+  "hoy_texto",
+  "fecha_minima",
+  "fecha_minima_texto",
+  "fecha_saludo",
+] as const;
+
+export interface ElevenLabsInitiation {
+  type: "conversation_initiation_client_data";
+  dynamic_variables: Record<(typeof ELEVENLABS_FICHA_VARS)[number], string>;
+  conversation_config_override: { agent: { first_message: string } };
+}
+
+/**
+ * Lo que Kapta devuelve a ElevenLabs al conectar (MOM §11.8): la ficha ya
+ * cargada y un primer mensaje que pregunta por la clienta. Sin ficha, todo
+ * vacío y `encontrada = "no"`: el agente cae a `identificar_llamada`.
+ */
+export function elevenLabsInitiation(ficha: Ficha | null): ElevenLabsInitiation {
+  const vars = Object.fromEntries(ELEVENLABS_FICHA_VARS.map((k) => [k, ""])) as ElevenLabsInitiation["dynamic_variables"];
+  vars.encontrada = "no";
+  if (ficha) {
+    for (const k of ELEVENLABS_FICHA_VARS) {
+      if (k === "encontrada") continue;
+      vars[k] = String(ficha[k] ?? "");
+    }
+    vars.encontrada = "si";
+  }
+  const first_message = !ficha
+    ? "Hola, buenas."
+    : ficha.nombre
+      ? `Hola, buenas. ¿Hablo con ${ficha.nombre}?`
+      : "Hola, buenas. ¿Con quién tengo el gusto?";
+  return {
+    type: "conversation_initiation_client_data",
+    dynamic_variables: vars,
+    conversation_config_override: { agent: { first_message } },
+  };
+}
+
 // ── La atadura: qué llamada abierta es la de este agente ────────────────────
 
 export interface OpenCall {

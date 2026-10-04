@@ -269,6 +269,12 @@ export async function openCalls(admin: SupabaseClient): Promise<OpenCall[]> {
   return (data ?? []) as OpenCall[];
 }
 
+/** ¿La abrió el webhook de inicio de ElevenLabs (`outcome_payload.ficha_precargada`)? */
+export async function fichaPrecargada(admin: SupabaseClient, id: string): Promise<boolean> {
+  const { data } = await admin.from("voice_calls").select("outcome_payload").eq("id", id).maybeSingle();
+  return (data as { outcome_payload?: { ficha_precargada?: boolean } | null } | null)?.outcome_payload?.ficha_precargada === true;
+}
+
 export interface VoiceCallRow {
   id: string;
   store_id: string;

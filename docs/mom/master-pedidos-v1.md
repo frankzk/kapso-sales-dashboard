@@ -4019,6 +4019,24 @@ Reglas de esa tabla:
     Se mandan como `Authorization: Bearer …` o como `x-voice-secret`. En
     `x-voice-secret` también vale con «Bearer » delante: así quedó guardado
     el secreto en ElevenLabs en la primera prueba, y dio 401.
+    **Ficha precargada (04-10-2026).** ElevenLabs llama a
+    `/api/voice/elevenlabs/inicio?agente=…` al entrar la llamada (el webhook
+    de datos de inicio de conversación, con `x-voice-secret`). Kapta busca la
+    llamada abierta igual que `identificar_llamada`, la pasa a «en curso»
+    (`outcome_payload.ficha_precargada`) y devuelve dos cosas:
+    - la ficha como variables dinámicas de texto, siempre todas, con
+      `encontrada` = `si` o `no`;
+    - el primer mensaje: «Hola, buenas. ¿Hablo con {nombre}?», o «¿Con quién
+      tengo el gusto?» si no hay nombre.
+
+    Así el agente habla al conectar con los datos ya cargados, sin ida y
+    vuelta a la tool. En la medición del 03-10, esa ida y vuelta eran unos 2 s
+    después del primer «aló».
+
+    Sin ficha (o si algo falla) responde igual 200, con todo vacío y
+    `encontrada = no`, y el agente cae a `identificar_llamada`.
+    `identificar_llamada` entrega una llamada ya «en curso» solo si la abrió
+    este inicio; cualquier otra en curso sería la ficha de otra conversación.
   - **«Agentes de voz: comparación»** (Envíos, en el resumen de arriba, junto
     a «Hoy por asesora»). Muestra una fila por agente, siempre los tres, con
     llamadas **reales** (`mode = 'real'`) del rango elegido, con los mismos

@@ -17,6 +17,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
 import { pickOpenCall } from "@/lib/voice-recovery";
 import {
+  fichaPrecargada,
   loadCall,
   loadFicha,
   openCalls,
@@ -38,11 +39,16 @@ export async function POST(req: NextRequest) {
   const now = new Date();
 
   await sweepStaleCalls(admin, now);
-  const picked = pickOpenCall(await openCalls(admin), "dialing", {
-    now,
-    agentNumber: body.agente ?? null,
-    customerPhone: body.numero_cliente ?? null,
-  });
+  const open = await openCalls(admin);
+  const opts = { now, agentNumber: body.agente ?? null, customerPhone: body.numero_cliente ?? null };
+  let picked = pickOpenCall(open, "dialing", opts);
+  // Ya en curso SOLO si la abrió el inicio de ElevenLabs (ficha precargada):
+  // el agente consultó de nuevo y recibe la misma ficha. Cualquier otra
+  // llamada en curso no se entrega: sería la ficha de otra conversación.
+  if ("error" in picked && picked.error === "ninguna") {
+    const enCurso = pickOpenCall(open, "in_progress", opts);
+    if (!("error" in enCurso) && (await fichaPrecargada(admin, enCurso.call.id))) picked = enCurso;
+  }
   if ("error" in picked) {
     return NextResponse.json({ encontrada: false, motivo: picked.error });
   }
