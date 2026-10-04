@@ -112,3 +112,14 @@ describe("con qué salida casa el rótulo", () => {
     expect(matchLabel(label, [vieja])).toEqual({ kind: "none" });
   });
 });
+
+describe("el pedido sugerido tiene que ser de la fecha del rótulo", () => {
+  it("la clienta que vuelve a comprar: el rótulo de septiembre no sugiere el pedido de octubre", async () => {
+    const { orderFitsLabelDate } = await import("@/lib/olva/email-label");
+    // 2386211-26, rótulo del 02-09; #KP138415 es del 02-10.
+    expect(orderFitsLabelDate("2026-10-02T15:00:00Z", "2026-09-02")).toBe(false);
+    expect(orderFitsLabelDate("2026-08-28T15:00:00Z", "2026-09-02")).toBe(true);
+    expect(orderFitsLabelDate("2026-09-02T23:00:00Z", "2026-09-02")).toBe(true);
+    expect(orderFitsLabelDate(null, "2026-09-02")).toBe(true);
+  });
+});
