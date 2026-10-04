@@ -37,7 +37,8 @@ export type VoiceExclusion =
   | "sin_cupo_de_gestion" // 8
   | "pidio_no_llamar" // 9
   | "agente_ya_llamo_hoy"
-  | "agente_agoto_intentos";
+  | "agente_agoto_intentos"
+  | "reintento_automatico";
 
 export interface VoiceCandidateInput {
   now: Date;
@@ -64,6 +65,12 @@ export interface VoiceCandidateInput {
   maxAgentAttempts: number;
   /** El teléfono pidió al agente que no lo llamen, en esta tienda. */
   doNotCall: boolean;
+  /**
+   * Ya tiene una emisión del reintento automático Aliclik → Swayp
+   * (`swayp_guide_emissions.automatic`). La base no deja llamarlo
+   * (`swayp_auto_voice_interlock`).
+   */
+  autoRetry?: boolean;
 }
 
 export type VoiceEligibility =
@@ -86,6 +93,11 @@ export function voiceRecoveryEligible(input: VoiceCandidateInput): VoiceEligibil
   }
   const window = recoveryWindow(input.guides, input.events, nowIso, input.recoveryWindowDays);
   if (!window) return { eligible: false, reason: "recuperacion_no_activa" };
+
+  // El reintento automático tiene prioridad y la base rechaza la llamada. Si
+  // entrara a la cola, se pondría al frente (cierres recientes) y taparía a los
+  // llamables: el 04-10-2026 los diez primeros eran así y nadie se llamó.
+  if (input.autoRetry) return { eligible: false, reason: "reintento_automatico" };
 
   // 2. La parte caliente: el paquete sigue cerca de la clienta.
   const ageMs = input.now.getTime() - new Date(window.closedAt).getTime();
@@ -199,4 +211,5 @@ export const VOICE_EXCLUSION_LABEL: Record<VoiceExclusion, string> = {
   pidio_no_llamar: "Pidió al agente que no la llamen.",
   agente_ya_llamo_hoy: "El agente ya la llamó hoy.",
   agente_agoto_intentos: "El agente agotó sus intentos con este pedido.",
+  reintento_automatico: "Ya tiene un reintento automático Aliclik → Swayp: no se llama.",
 };

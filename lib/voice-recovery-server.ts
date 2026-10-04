@@ -380,6 +380,20 @@ export interface PlaceCallInput {
   engine?: VoiceEngine;
 }
 
+/** `swayp_auto_voice_interlock` (0209): la base rechazó la fila porque el pedido ya tiene reintento automático. */
+function isAutoRetryInterlock(err: { message?: string }): boolean {
+  return (err.message ?? "").includes("reintento automático sin llamada");
+}
+
+function autoRetryRefusal(): PlaceCallResult {
+  return {
+    ok: false,
+    status: 409,
+    error: "Este pedido corresponde al reintento automático sin llamada.",
+    reason: "reintento_automatico",
+  };
+}
+
 export type PlaceCallResult =
   | { ok: true; callId: string; from: string; to: string }
   | { ok: false; status: number; error: string; callId?: string; reason?: "reintento_automatico" };
@@ -406,12 +420,7 @@ export async function placeVoiceCall(
       for(const g of guides??[]) {
         const {snapshot}=await inspectAuto(admin,g.id);
         if(evaluateAutoDispatch(snapshot,policy as AutoSettings,now).eligible)
-          return {
-            ok: false,
-            status: 409,
-            error: "Este pedido corresponde al reintento automático sin llamada.",
-            reason: "reintento_automatico",
-          };
+          return autoRetryRefusal();
       }
     }
   }
@@ -458,6 +467,7 @@ export async function placeVoiceCall(
     .select("id")
     .single();
   if (insertError) {
+    if (isAutoRetryInterlock(insertError)) return autoRetryRefusal();
     const busy = insertError.code === "23505";
     return {
       ok: false,
@@ -553,6 +563,7 @@ async function placeTelnyxCall(
     .select("id")
     .single();
   if (insertError) {
+    if (isAutoRetryInterlock(insertError)) return autoRetryRefusal();
     const busy = insertError.code === "23505";
     return {
       ok: false,
@@ -738,7 +749,7 @@ export async function loadVoiceQueue(
   };
   type Call = { order_id: string; queued_at: string };
 
-  const [guides, events, orders, priors, calls, stockRes, dnc] = await Promise.all([
+  const [guides, events, orders, priors, calls, stockRes, dnc, autoEmissions] = await Promise.all([
     selectIn<Guide>(
       admin,
       "shipments",
@@ -776,7 +787,11 @@ export async function loadVoiceQueue(
       .select("phone")
       .eq("store_id", store.id)
       .eq("outcome_payload->>no_llamar", "true"),
+    selectIn<{ order_id: string }>(admin, "swayp_guide_emissions", "order_id", "order_id", ids, (q) =>
+      (q as unknown as { eq: (c: string, v: boolean) => unknown }).eq("automatic", true),
+    ),
   ]);
+  const autoRetry = new Set(autoEmissions.map((e) => e.order_id));
   const stock = ((stockRes as { data: unknown[] | null }).data ?? []) as FenixStockRow[];
   const doNotCall = new Set(
     ((dnc.data ?? []) as { phone: string }[]).map((r) => zadarmaLocalPeru(r.phone)).filter(Boolean),
@@ -819,6 +834,7 @@ export async function loadVoiceQueue(
       agentCalls: callsBy.get(m.order_id) ?? [],
       maxAgentAttempts: store.voice_recovery_max_attempts,
       doNotCall: doNotCall.has(zadarmaLocalPeru(m.customer_phone) ?? "-"),
+      autoRetry: autoRetry.has(m.order_id),
     });
     if (verdict.eligible) {
       candidates.push({
