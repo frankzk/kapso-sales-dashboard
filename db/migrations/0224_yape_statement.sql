@@ -98,6 +98,11 @@ comment on table yape_statement_matches is
 alter table yape_statement_imports enable row level security;
 alter table yape_statement_movements enable row level security;
 alter table yape_statement_matches enable row level security;
+-- RLS sin policy ya deniega, pero Supabase concede por defecto todos los
+-- privilegios a anon y authenticated (0053): se quitan, como segunda cerradura.
+revoke all on yape_statement_imports   from anon, authenticated;
+revoke all on yape_statement_movements from anon, authenticated;
+revoke all on yape_statement_matches   from anon, authenticated;
 grant all privileges on yape_statement_imports to service_role;
 grant all privileges on yape_statement_movements to service_role;
 grant all privileges on yape_statement_matches to service_role;
