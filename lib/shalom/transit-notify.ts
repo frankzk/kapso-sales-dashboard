@@ -30,6 +30,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { OLVA_PICKUP_WINDOW_DAYS, formatOlvaTracking } from "@/lib/olva/tracking";
+import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
 import type { StoreCreds } from "@/lib/ingest";
 import { getStoreCreds } from "@/lib/ingest";
 import { sendWhatsappDocument, sendWhatsappTemplate, type WhatsappSendResult } from "@/lib/kapso";
@@ -401,6 +402,7 @@ interface ShipmentRow {
   guide_code: string | null;
   shalom_codigo: string | null;
   shalom_ose_id: number | null;
+  created_via?: string | null;
   olva_tracking?: string | null;
   olva_emision?: string | null;
   customer_name: string | null;
@@ -784,7 +786,7 @@ async function sendOne(
   const { data: sh } = await admin
     .from("shipments")
     .select(
-      "id,guide_code,shalom_codigo,shalom_ose_id,olva_tracking,olva_emision,customer_name,customer_phone,agency_branch,province,district",
+      "id,guide_code,shalom_codigo,shalom_ose_id,olva_tracking,olva_emision,customer_name,customer_phone,agency_branch,province,district,created_via",
     )
     .eq("id", row.shipment_id)
     .maybeSingle();
@@ -841,10 +843,16 @@ async function sendOne(
   let headerDocument: { link: string; filename: string } | undefined;
   if (cfg.attachTicket) {
     if (!shipment.shalom_ose_id) {
-      return fail("la plantilla lleva el ticket pero la guía no tiene OSE ID (no se creó por API)", {
-        retryable: false,
-        patch: { phone, phone_number_id: phoneNumberId },
-      });
+      // Una guía creada a mano en Shalom Pro sí tiene OSE ID; el cron lo trae
+      // del listado de la cuenta (lib/shalom/ose-backfill.ts). Se espera a
+      // que llegue en vez de dar el aviso por perdido.
+      const manual = shipment.created_via === SHALOM_ORIGIN.manual;
+      return fail(
+        manual
+          ? "la plantilla lleva el ticket y la guía manual aún no tiene OSE ID: se busca en la cuenta de Shalom"
+          : "la plantilla lleva el ticket pero la guía no tiene OSE ID (no se creó por API)",
+        { retryable: manual, patch: { phone, phone_number_id: phoneNumberId } },
+      );
     }
     const link = await ticketLink(admin, row.store_id, shipment.shalom_ose_id);
     if (!link) {
