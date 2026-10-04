@@ -4007,6 +4007,14 @@ Reglas de esa tabla:
     Primero se compara la línea (Daaph contra Telnyx, mismo motor) y después
     el motor (Telnyx + Grok contra Telnyx + ElevenLabs), una variable a la
     vez. Mientras tanto, el barrido no reparte llamadas a ElevenLabs.
+    **Secreto propio (04-10-2026).** Las tools aceptan `VOICE_TOOLS_SECRET`
+    (xAI) o `VOICE_TOOLS_SECRET_ELEVENLABS` (ElevenLabs). El segundo es
+    opcional: si está vacío, solo vale el primero. Así cada agente tiene su
+    secreto y rotar uno no corta al otro.
+
+    Se mandan como `Authorization: Bearer …` o como `x-voice-secret`. En
+    `x-voice-secret` también vale con «Bearer » delante: así quedó guardado
+    el secreto en ElevenLabs en la primera prueba, y dio 401.
   - **«Agentes de voz: comparación»** (Envíos, en el resumen de arriba, junto
     a «Hoy por asesora»). Muestra una fila por agente, siempre los tres, con
     llamadas **reales** (`mode = 'real'`) del rango elegido, con los mismos
