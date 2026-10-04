@@ -68,7 +68,7 @@ describe("la regla está conectada donde decide", () => {
     // Y el rechazo va ANTES de escribir el estado: comprobar después de
     // aprobar sería un adorno.
     expect(body.indexOf("typedTheOperationNumber")).toBeLessThan(
-      body.indexOf('validation_status: "validado"'),
+      body.indexOf("applyPaymentValidation("),
     );
   });
 

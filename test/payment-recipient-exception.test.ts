@@ -114,14 +114,19 @@ describe("la excepción vive dentro de validatePayment, no en una acción aparte
   });
 
   it("y por tanto hace todo lo que hace una validación normal", () => {
+    // Va por el MISMO núcleo que cualquier validación (lib/payment-validation.ts),
+    // firmado por quien la levanta.
+    expect(validate).toContain("applyPaymentValidation(");
+    expect(validate).toContain('who: { storeId: ctx.storeId, actor: ctx.userId, source: "manual" }');
+    const core = readFileSync(resolve(process.cwd(), "lib/payment-validation.ts"), "utf8");
     for (const parte of [
-      "validated_by: ctx.userId",
+      "validated_by: who.actor",
       "validated_at:",
-      "ajustarLiquidacionDelCobro(",
+      "adjustCourierLiquidation(",
       "registrarConfirmacionExpresaDeAgencia(",
       "recomputeOrderMasterSafe(",
     ]) {
-      expect(validate, parte).toContain(parte);
+      expect(core, parte).toContain(parte);
     }
   });
 

@@ -1556,6 +1556,12 @@ sin tope de antigüedad. Reglas:
     editada, ni un comprobante real de otra transferencia. Mientras no haya
     conexión con el estado de cuenta del banco, el modelo **prepara la ficha** y
     la firma la pone alguien.
+    - **Desde el 04-10-2026 esa conexión existe para Yape** (§16.2): el cobro
+      que aparece en el estado de cuenta de Yape al mismo minuto, por el mismo
+      monto y por el mismo canal se valida solo, y cierra la liquidación igual
+      que la firma de una persona. Lo que no cuadra así sigue esperando a
+      alguien. Para eso el lector de Tanders transcribe ahora también la
+      **fecha y hora** del pago.
     - Cada cobro entra a **«Validar pagos»** (`order_payments`, tipo
       `cobro_courier`) con la imagen guardada en NUESTRO bucket —la evidencia de
       un cobro no puede depender de que el courier conserve el archivo— y con lo
@@ -2538,6 +2544,14 @@ recuperación, `RECOVERY_DEFAULT_MAX_DAYS * 2`— porque el conjunto «cerradas 
 Aliclik» crece sin fin. Se consulta más ancho que la elegibilidad a propósito:
 para poder MOSTRAR las vencidas con su motivo en vez de esconderlas.
 
+**Dentro de esa ventana se lee todo, por páginas (04-10-2026).** La consulta
+cortaba en 1.000 filas ordenadas por `updated_at`, y en 60 días ya había 2.640
+cerradas. Como los barridos reescriben `updated_at` a diario, entraban solo las
+de los últimos ~8 días: **404 pedidos con la recuperación activa** —todos «En
+gestión Reproprovincia» en el Master— no aparecían en la cola, 141 de ellos con
+los filtros de trabajo de provincia. Ahora se pagina por `id`, que no se mueve
+mientras el barrido escribe, y la cola se ordena después.
+
 La lista y el contador salen de la MISMA llamada. El conteo no puede ser un
 `COUNT` exacto porque el predicado necesita partir `reported_status` y eso se
 resuelve en memoria; dos caminos distintos para el número y las filas es cómo
@@ -2595,7 +2609,7 @@ Se decide con la primera señal que sirva:
    departamentos, provincias o ciudades de fuera; si nombra las dos cosas, o un
    distrito que existe en Lima y en provincia (Independencia, La Victoria),
    queda Sin identificar.
-2. **El último pedido del mismo teléfono** (`order_master.coverage`, 0224),
+2. **El último pedido del mismo teléfono** (`order_master.coverage`, 0225),
    solo si lo propio no alcanza: lo que contestó hoy es más nuevo.
 
 «Lima (departamento)» sin un distrito legible **no** se da por Provincia: de
@@ -2766,18 +2780,37 @@ pedidos el margen es de unos ±18 puntos: alcanza para ver si se entrega «casi
 igual» o «claramente peor», no diferencias finas.
 
 **Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
-que la cola tiene que recortar: quedan fuera **Shalom, Tanders, Urpi y el
-reparto propio**. Shalom es agencia —la clienta recoge en el terminal, no hay
-intento de entrega que reprogramar— y por eso aparece como DESTINO de una
-recuperación (§11.1, §12), nunca como insumo. Los otros tres no se reprograman
-desde esta pantalla.
+que la cola tiene que recortar: quedan fuera **Shalom, Olva, Tanders, Urpi y el
+reparto propio**. Shalom y Olva son agencia —la clienta recoge en el terminal,
+no hay intento de entrega que reprogramar— y por eso aparecen como DESTINO de
+una recuperación (§11.1, §12), nunca como insumo; las guías Olva se cotejan en
+«Cotejar Olva». Los otros tres no se reprograman desde esta pantalla.
 
 El recorte es una lista de **excluidos**, no de admitidos: un courier nuevo
 entra en la cola y alguien pregunta qué hace ahí. Con una lista de admitidos
 desaparecería sin que nadie se enterara, y trabajo que falta no se ve.
 
-Las guías `por_definir` —filas sintéticas de pedidos que todavía no tienen
-salida— SÍ se quedan. Sacarlas es otra decisión y no está tomada.
+#### Lo que la cola listaba sin tener nada que ver (04-10-2026)
+
+Con la cola abierta como la trabaja el equipo —sin Lima, «Swayp: Fuera de
+cobertura», «Sin contactar hoy»— salían 341 guías y **47 no eran trabajo de
+reprogramación**: 15 de pedidos anulados en Shopify, 12 de pedidos cuyo primer
+despacho aún no salía, 17 guías Olva (Olva no estaba en la lista solo porque
+nadie la había nombrado) y 3 de pedidos por cerrar. Desde ese día:
+
+- **Las salidas `por_definir` salen de Pendiente.** Son cajas armadas esperando
+  courier (§4): la decisión que les falta es de despacho, no de reprogramación.
+  Medido ese día: 3.250 pendientes así —1.245 de pedidos anulados en Shopify,
+  1.254 de primer despacho por armar o por asignar, 730 salidas adicionales de
+  pedidos por cerrar— y **ninguna** de un pedido en gestión Reproprovincia: el
+  reenvío nace directo como guía Swayp. Eran el 77 % de la pestaña. Una
+  `por_definir` anulada sigue en la pestaña Anulado, que es el registro.
+- **Una guía de un pedido anulado en Shopify sale de Pendiente**, como ya salía
+  de «Por recuperar»: la recuperación no gana sobre una anulación que decidió
+  una persona (más abajo). La anulación vive en `orders`, así que este recorte
+  va después de leer las filas, y por eso el chip de Pendiente cuenta filas en
+  vez de pedir un conteo: la lista y el chip pasan por la misma función. Si la
+  lectura de pedidos falla, la guía se queda.
 
 **Y tampoco entra lo que Aliclik todavía no ha sacado del almacén.** La cola es
 para lo que se intentó entregar y no se pudo; una guía recién preparada no tiene
@@ -2794,8 +2827,9 @@ courier sin intentos informados: con la custodia se quedan, que es lo correcto.
 
 Dos límites, los dos deliberados:
 
-- **Solo Aliclik.** Las `por_definir` y las guías Fenix pendientes también están
-  en custodia `empresa`; sacarlas es otra decisión y no está tomada.
+- **Solo Aliclik.** Las guías Fenix pendientes también están en custodia
+  `empresa`; sacarlas es otra decisión y no está tomada. Las `por_definir` salen
+  por su propia regla (arriba), no por la custodia.
 - **Solo la pestaña Pendiente.** `custody_state` no se actualiza al entregar, así
   que en una guía cerrada el valor es viejo y no significa «sigue en el almacén».
   Aplicar el recorte a todas las pestañas escondía 317 anuladas, 78 entregadas,
@@ -4210,7 +4244,14 @@ sube Kenku a `voice_recovery_daily_cap = 130` y `voice_recovery_max_age_days
 = 30`, la misma ventana que la recuperación (`return_recovery_max_days`). Con
 una llamada cada cinco minutos, 130 es lo que cabe entre las 9:00 y las 20:00.
 Se mide la tasa de «confirma» por antigüedad de la guía (0–7, 8–14, 15–21 y
-22–30 días) para decidir si la parte tibia vale la llamada. Todas las
+22–30 días) para decidir si la parte tibia vale la llamada.
+**Tercer ajuste, 04-10-2026:** Kenku tenía en la base `voice_recovery_daily_cap
+= 80` y `voice_recovery_max_age_days = 21`, no el 130/30 del ajuste anterior.
+La cola se vació a las 14:35: de los pedidos con stock Swayp, 158 ya tenían las
+2 llamadas del agente. El owner pasa Kenku a **`voice_recovery_max_attempts =
+3`** y **`voice_recovery_max_age_days = 30`**. El tope diario sigue en 80. El
+día sigue siendo de una llamada del agente por pedido, y el tope de siete días
+de gestión (§6.1) sigue siendo de todos. Todas las
 transcripciones de la
 primera semana se escuchan. Se decide con estas cifras, comparadas con la
 línea base de cero llamadas:
@@ -5229,6 +5270,13 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - Esta distinción es de seguridad, no de comodidad: una alarma de desvío que
   salta casi siempre por un nombre cortado deja de leerse, y tiene que ser
   creíble el día que el receptor sea de verdad otro.
+- **«p. m.» con espacio es de la tarde (04-10-2026).** Yape escribe la hora como
+  «02:15 p. m.», y la lectura solo reconocía «p.m.» o «pm»: toda hora de la
+  tarde de un Yape se guardaba **doce horas antes** (#KP138402, «02:15», era el
+  Yape de las 14:15:08). Ese día catorce comprobantes pendientes estaban así.
+  Se acepta también el día de la semana que antepone el BCP («Martes, 29
+  Septiembre 2026») y la «hs.» de Prex. Lo ya cargado no se reescribe: el cruce
+  con el estado de cuenta lo tiene en cuenta (§16.2).
 - La visión corre **una sola vez**, al subir el comprobante, y su lectura queda
   guardada en la fila. Arreglar el lector no mueve lo ya cargado: hay que
   releerlo (`scripts/reprocess-vouchers.ts`). El estado del receptor sí se
@@ -5433,6 +5481,81 @@ Mientras Kapta y el Excel convivan, validar un pago deja el comprobante listo
 para continuar y registra actor y fecha, pero **no cambia por sí solo la
 macroetapa ni marca el pedido como pagado en Shopify**. Esas automatizaciones se
 activan cuando la migración operativa al sistema sea completa.
+
+### 16.2 Validación por el estado de cuenta de Yape
+
+**Lo que una persona hacía mirando la app de Yape lo hace ahora el estado de
+cuenta (04-10-2026).** Validar un comprobante pedía a alguien porque el lector
+valida una imagen, no un depósito (§9.4, 0158): faltaba la conexión con el
+estado de cuenta. El reporte de movimientos que Yape Empresa manda por correo
+—«Te compartimos tus movimientos», desde `notificaciones@yape.pe`, un Excel con
+cada ingreso— **es** esa conexión. Ese día se cruzó a mano el primero contra la
+bandeja: **66 de 87 comprobantes cuadraban sin margen de duda**, y nueve más
+solo «casi».
+
+- **El circuito.** Un escenario de Make vigila el buzón (el mismo de los
+  rótulos de Olva) y manda el Excel a `/api/webhooks/yape-movements`. Kapta
+  guarda cada movimiento **una sola vez** —los reportes se solapan— y cruza la
+  bandeja contra ellos.
+- **El reporte no trae nº de operación.** Por eso un comprobante y un
+  movimiento son el mismo pago solo si coinciden **a la vez**:
+  1. **el monto**, al céntimo;
+  2. **el minuto**: la constancia imprime la hora al minuto y el reporte al
+     segundo. Un Yape directo cae dentro de ese minuto; lo que viene de otra
+     app (Plin, BCP, Prex…) trae el reloj de esa app y tiene un minuto de
+     holgura a cada lado;
+  3. **quién pagó**: en un adelanto, diferencia o pago total, el pagador del
+     reporte es **la clienta del pedido** («Benito Cac\*» ↔ Benito Cachique
+     Puga; con el nombre completo, dos palabras suyas en cualquier orden). En
+     el **cobro del courier** paga el motorizado, así que el nombre no dice
+     nada: se exige que **el canal** del reporte sea el de la constancia (un
+     Yape sale como Yape directo; Plin, BBVA o Scotiabank como «PLIN - …»; el
+     BCP como «BCP - …»);
+  4. y que sea **inequívoco**: un solo movimiento encaja con el comprobante y
+     **ningún otro pago vivo** —validado o no, de cualquier pedido— encaja con
+     ese movimiento.
+- **Lo que coincide así se valida solo**, por el **mismo camino** que la firma
+  de una persona (`applyPaymentValidation`, `lib/payment-validation.ts`):
+  estado `validado`, evento `payment`, cierre de liquidación del cobro del
+  courier y su guía a `entregado` (§9.4), confirmación de agencia, alertas y
+  Master. Con `validated_by` nulo y fuente `estado_yape` —no lo validó nadie,
+  lo validó el estado de cuenta, igual que Flow (§12)—, y el evento lleva el
+  movimiento: pagador, canal, monto y hora. Cada conciliación queda en
+  `yape_statement_matches`, **única por movimiento y por comprobante**: el
+  mismo dinero no paga dos pedidos.
+- **Nunca lo valida el cruce, aunque el dinero esté en el reporte:**
+  - lo que no está en `pendiente_revision`: lo observado, lo incompleto y lo
+    duplicado lo está mirando una persona, y su decisión manda. Por lo mismo,
+    si entre la lectura y la escritura alguien lo observó o rechazó, no se
+    toca;
+  - sin nº de operación (validar lo exige), o con el nº **transcrito a mano**:
+    los cuatro ojos piden que lo dé por bueno otra persona y el reporte no
+    trae el número para contrastarlo;
+  - sin hora en la ficha;
+  - con una cuenta receptora que **no cuadra**: esa excepción es de un
+    administrador, por escrito (§16.1);
+  - un cobro de courier que **no fue a un Yape** (la transferencia a la cuenta
+    BCP ···0012): no está en este reporte;
+  - **el mismo monto y minuto pero pagó otra persona**. El 04-10 fueron nueve
+    («Tito Gab\*» pagando el pedido de Gilberto Gabino, «Luis Pal\*» el de
+    Alfredo Palao): probablemente un familiar, pero eso lo decide alguien.
+- **Dos imposibles se descartan**: un movimiento **posterior** a la carga del
+  comprobante —nadie sube la constancia de un pago que aún no hizo— y uno que
+  ya concilió otro comprobante.
+- **La hora leída 12 h antes.** Hasta el 04-10-2026 el lector perdía el
+  «p. m.» de Yape (§12, Pagos). Al comprobante con hora de mañana se le prueba
+  también la misma hora por la tarde; sigue exigiendo minuto, monto, la
+  clienta y que el pago sea anterior a la carga.
+- **El cobro del courier necesita su hora.** El lector de Tanders no la leía
+  hasta el 04-10-2026; ahora la transcribe, y antes de cruzar se le relee la
+  constancia guardada a los cobros pendientes que entraron sin ella. Sin hora
+  —el Plin de Scotiabank no imprime el año y se toma el de la lectura— no hay
+  cruce.
+- **Se puede deshacer como cualquier validación**: observar o rechazar después
+  emite `liquidation_observed` y devuelve la guía a `en_ruta` (§9.4).
+- `?simulacro=1` en el webhook calcula qué validaría sin escribir nada. Cada
+  reporte deja su fila en `yape_statement_imports` con lo validado, lo omitido
+  por motivo y lo que no se pudo escribir.
 
 ## 17. KPI principales
 

@@ -2027,3 +2027,35 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
    el rechazo del motorizado propio va a «Por reprogramar Lima».
 3. El cierre de ruta y Liquidaciones ya no anulan el pedido por un rechazo:
    solo Shopify anula.
+
+### 04-10-2026 · Validar pagos con el estado de cuenta de Yape (0224, MOM §16.2)
+
+1. **Migración `0224_yape_statement.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0224_yape_statement.sql`. Crea
+   `yape_statement_imports`, `yape_statement_movements` y
+   `yape_statement_matches`. Sin ella el webhook falla al guardar el reporte y
+   no valida nada.
+2. **Variable en Vercel (Production)**: `YAPE_MOVEMENTS_WEBHOOK_SECRET`, un
+   valor largo y aleatorio (`openssl rand -hex 24`). Es el mismo que va en la
+   cabecera `x-yape-movements-secret` del escenario de Make. Sin ella el
+   endpoint responde 401 a todo, que es lo seguro: lo que entra por ahí VALIDA
+   pagos.
+3. **Escenario de Make «Kapta · Estado de cuenta Yape (Outlook → Kapta)»**, el
+   gemelo del de los rótulos de Olva: vigila el buzón Fkc@monono.pe con
+   `from:notificaciones@yape.pe`, saca los adjuntos `.xlsx` y los manda por
+   multipart a `/api/webhooks/yape-movements` (campos `messageId`, `subject`,
+   `receivedAt`, `fileName`, `file`). Se crea **inactivo**: se enciende después
+   de los pasos 1 y 2, o Make recibe 404/401 y lo acaba pausando.
+4. **Primera prueba en simulacro**, con el reporte que haya a mano:
+   `curl -F messageId=prueba -F fileName=reporte.xlsx -F file=@YAPE_REPORTE_MOVIMIENTOS_04102026.xlsx -H "x-yape-movements-secret: $SECRETO" "https://kapso-sales-dashboard.vercel.app/api/webhooks/yape-movements?simulacro=1"`.
+   Responde qué validaría (`validados`) y por qué omitió el resto (`omitidos`)
+   sin escribir nada. El simulacro no relee las horas de los cobros de courier,
+   así que esos salen como `sin_hora` hasta la primera corrida real.
+5. **La primera corrida real** relee la constancia de los cobros de courier
+   pendientes sin hora (unos 40 el 04-10: una llamada de visión por cada uno,
+   con la clave de la tienda) antes de cruzar. Lo que no quepa en el tiempo
+   entra en el siguiente reporte.
+6. **Qué mirar después**: `select * from yape_statement_imports order by
+   created_at desc limit 5;` — `validated` y `report` (validados, omitidos por
+   motivo, errores). Cada pago validado así tiene un evento `payment` con
+   fuente `estado_yape` y el movimiento en `payload`.

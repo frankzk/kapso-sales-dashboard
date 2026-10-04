@@ -662,7 +662,7 @@ export function LeadsBoard({
   /** Id de asesora → nombre, solo para quienes tienen una reserva viva en la
    *  lista. Con esto la etiqueta «Tomado» dice por quién. */
   agentNames?: Record<string, string>;
-  /** Id de lead → cobertura de su último pedido con el mismo teléfono (0224).
+  /** Id de lead → cobertura de su último pedido con el mismo teléfono (0225).
    *  Pista del filtro de cobertura cuando el lead no dejó dirección. */
   priorCoverage?: Record<string, string>;
   /** Excepciones de cobertura por distrito (0121), las mismas del pedido. */

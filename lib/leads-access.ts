@@ -280,7 +280,7 @@ async function drainLeads(
 
 /**
  * Cobertura del último pedido del mismo teléfono, por lead de «Por llamar»
- * (0224). Es la pista del filtro de cobertura cuando el lead no dejó dirección.
+ * (0225). Es la pista del filtro de cobertura cuando el lead no dejó dirección.
  *
  * Vacío si la migración no corrió o la consulta falla: la cola se dibuja igual
  * y esos leads quedan «Sin identificar», que es lo que eran antes.

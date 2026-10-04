@@ -26,6 +26,9 @@ const ACTIONS = readFileSync(
   resolve(process.cwd(), "app/dashboard/pedidos/payment-actions.ts"),
   "utf8",
 );
+// Lo que implica validar —también cerrar la liquidación— vive en un núcleo
+// compartido con el cruce del estado de cuenta de Yape.
+const CORE = readFileSync(resolve(process.cwd(), "lib/payment-validation.ts"), "utf8");
 
 /** El cuerpo de una función exportada, para poder mirarla aislada. */
 function cuerpoDe(nombre: string): string {
@@ -37,7 +40,9 @@ function cuerpoDe(nombre: string): string {
 
 describe("el cobro del courier cierra el pedido", () => {
   it("validar emite el cierre de liquidación", () => {
-    expect(cuerpoDe("validatePayment")).toContain("ajustarLiquidacionDelCobro");
+    expect(cuerpoDe("validatePayment")).toContain("applyPaymentValidation(");
+    const nucleo = CORE.slice(CORE.indexOf("export async function applyPaymentValidation("));
+    expect(nucleo).toMatch(/adjustCourierLiquidation\(admin, who, payment, true,/);
   });
 
   it("rechazar y observar lo reabren, no lo cierran otra vez", () => {
@@ -64,7 +69,7 @@ describe("el cobro del courier cierra el pedido", () => {
     // Un adelanto validado NO liquida nada — el courier sigue debiendo el
     // efectivo que cobró. La guarda vive en un solo sitio para que no se pueda
     // olvidar en uno de los tres.
-    const helper = ACTIONS.slice(ACTIONS.indexOf("async function ajustarLiquidacionDelCobro"));
+    const helper = CORE.slice(CORE.indexOf("export async function adjustCourierLiquidation("));
     expect(helper).toContain(`payment.kind !== COURIER_COLLECTION_KIND`);
     expect(COURIER_COLLECTION_KIND).toBe("cobro_courier");
   });
@@ -72,7 +77,7 @@ describe("el cobro del courier cierra el pedido", () => {
   it("usa el MISMO evento que el cierre manual del drawer", () => {
     // Si inventara un evento propio, la macroetapa no lo entendería y el pedido
     // seguiría en «Pendiente de liquidación» con la firma ya puesta.
-    const helper = ACTIONS.slice(ACTIONS.indexOf("async function ajustarLiquidacionDelCobro"));
+    const helper = CORE.slice(CORE.indexOf("export async function adjustCourierLiquidation("));
     expect(helper).toContain('"liquidation_closed"');
     expect(helper).toContain('"liquidation_observed"');
   });

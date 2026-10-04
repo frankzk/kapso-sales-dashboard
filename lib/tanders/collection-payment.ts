@@ -8,8 +8,11 @@
 // que ser una persona — y esa persona ya tiene su pantalla desde 0049.
 //
 // Así que el modelo pasa de DECIDIR a PREPARAR LA FICHA: baja la imagen, la
-// guarda en nuestro bucket, transcribe monto, operación y destinatario, y deja
-// el cobro en la cola con el veredicto como pista. La firma la pone el humano.
+// guarda en nuestro bucket, transcribe monto, operación, destinatario y hora,
+// y deja el cobro en la cola con el veredicto como pista. La firma la pone el
+// humano — o, desde el 04-10-2026, el estado de cuenta de Yape cuando el cobro
+// aparece en él al mismo minuto, por el mismo monto y canal (lib/yape-statement,
+// MOM §16.2). Esa es la conexión con el banco que faltaba.
 //
 // LO QUE SE GANA AL ENTRAR AQUÍ, y que la vía paralela de Tanders no tenía:
 // el nº de operación es único en TODO el sistema, la huella sha256 atrapa la
@@ -159,6 +162,9 @@ export async function registerCourierCollection(
     kind: COURIER_COLLECTION_KIND,
     amount,
     operation_number: operation,
+    // La hora que imprime la constancia: con ella se cruza al minuto contra el
+    // estado de cuenta de Yape (lib/yape-statement).
+    paid_at: input.reading.paidAt,
     file_path: path,
     file_type: input.mediaType,
     file_sha256: sha256,
@@ -176,6 +182,7 @@ export async function registerCourierCollection(
       recipient_name: input.reading.recipientName,
       amount: input.reading.amount,
       operation_number: input.reading.operationNumber,
+      paid_at: input.reading.paidAt,
       expected_amount: input.expectedAmount,
       verdict: input.verdict.state,
       reasons: input.verdict.reasons,

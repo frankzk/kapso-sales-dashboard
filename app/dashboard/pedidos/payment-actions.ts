@@ -19,7 +19,7 @@ import { decryptOrNull, encrypt } from "@/lib/crypto";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { closeAlertsResolvedBy } from "@/lib/collection-alerts-access";
-import { registrarConfirmacionExpresaDeAgencia } from "@/lib/confirmacion-agencia-access";
+import { adjustCourierLiquidation, applyPaymentValidation } from "@/lib/payment-validation";
 import {
   analyzeYapeVoucherFromEnv,
   extractYapeVoucherFromEnv,
@@ -34,10 +34,6 @@ import {
 } from "@/lib/yape-recipient";
 import { normalizePhone } from "@/lib/phone";
 import { typedTheOperationNumber } from "@/lib/payment-review";
-import {
-  applyHumanRulingToGuide,
-  COURIER_COLLECTION_KIND,
-} from "@/lib/tanders/collection-payment";
 import {
   canRevealPickupKey,
   describeBlockers,
@@ -847,25 +843,10 @@ async function loadPayment(paymentId: string) {
 }
 
 /**
- * Validar el cobro del courier CIERRA LA LIQUIDACIÓN del pedido.
- *
- * POR QUÉ. Un pedido contraentrega entregado se queda en «Por cerrar ·
- * Pendiente de liquidación» hasta que exista un evento `liquidation_closed`
- * (lib/order-macro-stage.ts). La regla es correcta —no declarar un cierre
- * financiero que nadie respalda— pero el 12-09-2026 no había NI UN evento así
- * en toda la historia de la base: 4.204 pedidos esperando una firma que nadie
- * daba. El propio código lo admitía: «el repositorio auditado todavía no
- * contiene la fuente de liquidaciones».
- *
- * Ahora sí la hay, y por pedido en vez de en bloque: alguien miró el
- * comprobante del motorizado al lado de lo que leyó el modelo y dijo que el
- * dinero llegó. Eso es exactamente lo que una liquidación pretende demostrar.
- * Se emite el MISMO evento que emitiría a mano desde el cierre del drawer, así
- * que la macroetapa no necesita saber nada nuevo.
- *
- * Y se puede deshacer: rechazar u observar después un cobro ya validado emite
- * `liquidation_observed`, que reabre el cierre. Un pedido no puede quedarse
- * finalizado por una firma que luego se retiró.
+ * El cierre (o la reapertura) de la liquidación del cobro del courier, hecho
+ * por una persona desde la bandeja. La regla y su porqué viven en
+ * `adjustCourierLiquidation` (lib/payment-validation.ts): el cruce con el
+ * estado de cuenta de Yape la usa igual.
  */
 async function ajustarLiquidacionDelCobro(
   admin: ReturnType<typeof createAdminSupabase>,
@@ -874,22 +855,13 @@ async function ajustarLiquidacionDelCobro(
   cerrada: boolean,
   note: string,
 ): Promise<void> {
-  if (payment.kind !== COURIER_COLLECTION_KIND) return;
-  await admin.from("order_events").insert({
-    store_id: ctx.storeId,
-    order_id: payment.order_id,
-    kind: cerrada ? "liquidation_closed" : "liquidation_observed",
-    actor: ctx.userId,
-    source: "manual",
+  await adjustCourierLiquidation(
+    admin,
+    { storeId: ctx.storeId, actor: ctx.userId, source: "manual" },
+    payment,
+    cerrada,
     note,
-  });
-  // Y la GUÍA sigue a la firma. Antes solo se emitía el cierre, y la guía se
-  // quedaba donde la hubiera dejado el MODELO: el 24-09-2026 había 49 pedidos
-  // que una persona había validado y que seguían «En tránsito», porque el
-  // lector los había rechazado y para el Master nunca se entregaron. El cierre
-  // de liquidación existía, pero el pedido no podía llegar a usarlo. Ver
-  // `guidePatchForHumanRuling`.
-  await applyHumanRulingToGuide(admin, payment, cerrada ? "validado" : "retirado");
+  );
 }
 
 /**
@@ -985,74 +957,39 @@ export async function validatePayment(
       };
     }
   }
-  const { error } = await admin
-    .from("order_payments")
-    .update({
-      validation_status: "validado",
-      validated_by: ctx.userId,
-      validated_at: new Date().toISOString(),
-    })
-    .eq("id", paymentId);
-  if (error) return { error: error.message };
-
-  await admin.from("order_events").insert({
-    store_id: ctx.storeId,
-    order_id: payment.order_id,
-    kind: "payment",
-    actor: ctx.userId,
-    source: "manual",
-    previous_status: payment.validation_status,
-    new_status: "validado",
+  // Lo que viene después de decidir —estado, evento, cierre de liquidación del
+  // courier, confirmación de agencia, alertas, Master— vive en
+  // `applyPaymentValidation`, compartido con el cruce del estado de cuenta de
+  // Yape: dos copias de «qué implica validar» acabarían dejando pedidos
+  // distintos según quién validó.
+  const applied = await applyPaymentValidation(admin, {
+    payment: { ...payment, id: paymentId },
+    who: { storeId: ctx.storeId, actor: ctx.userId, source: "manual" },
     note: recipientException
       ? `Yape de ${payment.kind} validado con excepción de cuenta receptora.`
       : `Yape de ${payment.kind} validado.`,
+    // La excepción va en SU PROPIO evento, no solo en la nota del anterior: es
+    // lo que hay que poder listar el día que alguien pregunte cuántos cobros se
+    // dieron por buenos sin que la cuenta cuadrara, y quién lo decidió. Se
+    // guarda la lectura que se saltó, para releerla sin reconstruirla.
+    extraEvents: recipientException
+      ? [
+          {
+            kind: "payment_recipient_exception",
+            reason: recipientException,
+            note: `Cuenta receptora no verificada; validado igualmente por un administrador.`,
+            payload: {
+              nombre_leido: recipient.name,
+              celular_leido: recipient.phoneLastDigits,
+              cuentas: accounts.map(describeCollectionAccount),
+            },
+          },
+        ]
+      : [],
+    liquidationNote: "Cobro del courier validado: el dinero de este pedido está confirmado.",
   });
-  // La excepción va en SU PROPIO evento, no solo en la nota del anterior: es lo
-  // que hay que poder listar el día que alguien pregunte cuántos cobros se
-  // dieron por buenos sin que la cuenta cuadrara, y quién lo decidió. Se guarda
-  // la lectura que se saltó, para releerla sin reconstruirla.
-  if (recipientException) {
-    await admin.from("order_events").insert({
-      store_id: ctx.storeId,
-      order_id: payment.order_id,
-      kind: "payment_recipient_exception",
-      actor: ctx.userId,
-      source: "manual",
-      reason: recipientException,
-      note: `Cuenta receptora no verificada; validado igualmente por un administrador.`,
-      payload: {
-        nombre_leido: recipient.name,
-        celular_leido: recipient.phoneLastDigits,
-        cuentas: accounts.map(describeCollectionAccount),
-      },
-    });
-  }
-  await ajustarLiquidacionDelCobro(
-    admin,
-    ctx,
-    payment,
-    true,
-    "Cobro del courier validado: el dinero de este pedido está confirmado.",
-  );
-  // El pago suele ser la ÚLTIMA de las tres piezas: el DNI y la agencia ya
-  // estaban apuntados desde que se registró el cobro. Se pregunta antes de
-  // recalcular para que la macroetapa se resuelva ya con el hecho escrito y el
-  // pedido no pase por un estado intermedio que nadie llegue a ver.
-  const confirmado = await registrarConfirmacionExpresaDeAgencia(
-    admin,
-    payment.order_id,
-    ctx.storeId,
-    ctx.userId,
-  );
-  // La alerta de cobranza que pedía justo esto se cierra sola: el hecho ya
-  // ocurrió y pedir además un clic de confirmación es el clic que se deja de
-  // dar (lib/collection-alerts-access.ts).
-  await closeAlertsResolvedBy(
-    admin,
-    { storeId: ctx.storeId, orderId: payment.order_id, paymentId },
-    "el pago se revisó en Kapta",
-  );
-  await recomputeOrderMasterSafe(admin, [payment.order_id]);
+  if (!applied.ok) return { error: applied.error };
+  const confirmado = applied.confirmado;
 
   // LA CLAVE, EN EL MISMO CLIC. Va DESPUÉS de recalcular el Master para que el
   // envío se decida con el pedido ya en su estado nuevo, y solo si quien pulsó

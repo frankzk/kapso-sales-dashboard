@@ -1,4 +1,4 @@
--- 0224_lead_prior_order_coverage.sql — la cobertura del último pedido del
+-- 0225_lead_prior_order_coverage.sql — la cobertura del último pedido del
 -- mismo teléfono, para el filtro Lima / Provincia de la cola de leads.
 --
 -- POR QUÉ. La cola se quiere partir por cobertura, pero el 71 % de los leads
