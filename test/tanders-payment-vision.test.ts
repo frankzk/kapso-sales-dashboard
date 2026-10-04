@@ -7,7 +7,7 @@
 // operadora tiene que decir lo que de verdad se vio.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readTandersPayment } from "@/lib/tanders/payment-vision";
+import { paidAtFrom, readTandersPayment } from "@/lib/tanders/payment-vision";
 
 const CREDS = { anthropicApiKey: "sk-test", anthropicModel: "modelo-x" };
 
@@ -144,5 +144,40 @@ describe("readTandersPayment", () => {
     const r = await readTandersPayment("b", "image/jpeg", {});
     expect(r.ok).toBe(false);
     expect(f).not.toHaveBeenCalled();
+  });
+});
+
+describe("readTandersPayment · fecha y hora del pago", () => {
+  it("lee la hora con su «p. m.» para cruzar con el estado de cuenta", async () => {
+    // #AUR177586: «30 set. 2026 · 07:01 p. m.»; en el estado de cuenta de Yape
+    // es «Jesus Alv*» a las 19:01:21.
+    vi.stubGlobal(
+      "fetch",
+      anthropicDice(
+        '{"is_payment_proof":true,"method":"yape","amount":116.1,"operation_number":"28446207","date":"30 set. 2026","time":"07:01 p. m."}',
+      ),
+    );
+    const r = await readTandersPayment("b", "image/jpeg", CREDS);
+    expect(r.paidAt).toBe("2026-10-01T00:01:00.000Z");
+  });
+
+  it("sin hora no se inventa la medianoche", async () => {
+    vi.stubGlobal(
+      "fetch",
+      anthropicDice('{"is_payment_proof":true,"method":"yape","amount":99,"date":"03 oct. 2026","time":null}'),
+    );
+    expect((await readTandersPayment("b", "image/jpeg", CREDS)).paidAt).toBeNull();
+  });
+});
+
+describe("paidAtFrom", () => {
+  it("el Plin de Scotiabank no trae año: es el de la lectura (#KP138386)", () => {
+    const now = Date.parse("2026-10-04T21:00:00.000Z");
+    expect(paidAtFrom("03 oct.", "02:13 p. m.", now)).toBe("2026-10-03T19:13:00.000Z");
+  });
+
+  it("una de diciembre leída en enero es del año anterior", () => {
+    const now = Date.parse("2027-01-02T15:00:00.000Z");
+    expect(paidAtFrom("30 dic.", "08:00 p. m.", now)).toBe("2026-12-31T01:00:00.000Z");
   });
 });

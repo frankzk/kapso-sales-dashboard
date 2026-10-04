@@ -179,6 +179,11 @@ export const env = {
   //     Olva con su rótulo en PDF (/api/webhooks/olva-email, MOM §12). Sin él
   //     el endpoint no acepta nada.
   olvaEmailWebhookSecret: () => (process.env.OLVA_EMAIL_WEBHOOK_SECRET ?? "").trim(),
+  //     Secreto del escenario de Make que reenvía el reporte de movimientos de
+  //     Yape Empresa (notificaciones@yape.pe, /api/webhooks/yape-movements,
+  //     MOM §16.2). Sin él el endpoint no acepta nada: lo que entra por ahí
+  //     VALIDA pagos.
+  yapeMovementsWebhookSecret: () => (process.env.YAPE_MOVEMENTS_WEBHOOK_SECRET ?? "").trim(),
 
   // --- Chatby (white-label de uChat): "Live Chat Webhook" ---
   //     Secreto compartido que Chatby manda en la cabecera personalizada del

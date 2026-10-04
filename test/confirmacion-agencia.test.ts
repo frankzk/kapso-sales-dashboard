@@ -188,9 +188,10 @@ describe("las piezas en el código", () => {
     // El pago suele llegar último, pero no siempre: a veces lo validado está y
     // lo que falta es el DNI. Si solo una puerta preguntara, la confirmación
     // dependería del orden en que se hicieron las cosas.
-    expect(read("app/dashboard/pedidos/payment-actions.ts")).toContain(
-      "registrarConfirmacionExpresaDeAgencia(",
-    );
+    // Validar un pago —a mano o por el estado de cuenta— pasa por el núcleo
+    // compartido, y es ahí donde se pregunta.
+    expect(read("app/dashboard/pedidos/payment-actions.ts")).toContain("applyPaymentValidation(");
+    expect(read("lib/payment-validation.ts")).toContain("registrarConfirmacionExpresaDeAgencia(");
     expect(read("app/dashboard/pedidos/shalom-actions.ts")).toContain(
       "registrarConfirmacionExpresaDeAgencia(",
     );

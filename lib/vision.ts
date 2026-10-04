@@ -521,7 +521,9 @@ export function parseVoucherInstant(date: string | null, time: string | null): s
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .trim();
+    .trim()
+    // El BCP antepone el día de la semana: «Martes, 29 Septiembre 2026».
+    .replace(/^(lunes|martes|miercoles|jueves|viernes|sabado|domingo),?\s+/, "");
 
   let y: number | null = null;
   let m: string | null = null;
@@ -549,10 +551,15 @@ export function parseVoucherInstant(date: string | null, time: string | null): s
   let hh = "00";
   let mm = "00";
   if (time) {
-    const t = /(\d{1,2}):(\d{2})\s*(a\.?m\.?|p\.?m\.?)?/i.exec(time.trim());
+    // Yape escribe «02:15 p. m.», con un espacio entre «p.» y «m.». Sin
+    // admitirlo, el sufijo no se reconocía y TODA hora de la tarde de un Yape
+    // se guardaba doce horas antes: el 04-10-2026, catorce comprobantes
+    // pendientes estaban así (#KP138402 «02:15» era el Yape de las 14:15:08).
+    // Rompía el cruce con el estado de cuenta, que va al minuto.
+    const t = /(\d{1,2}):(\d{2})(?::\d{2})?\s*(a\.?\s*m\.?|p\.?\s*m\.?)?/i.exec(time.trim());
     if (t) {
       let hour = Number(t[1]);
-      const suffix = (t[3] ?? "").toLowerCase().replace(/\./g, "");
+      const suffix = (t[3] ?? "").toLowerCase().replace(/[.\s]/g, "");
       if (suffix === "pm" && hour < 12) hour += 12;
       if (suffix === "am" && hour === 12) hour = 0;
       if (hour > 23) return null;
