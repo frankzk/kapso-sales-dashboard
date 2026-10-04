@@ -18,9 +18,15 @@ import {
 export interface VoiceScoreCall {
   telephony: string | null;
   provider: string | null;
-  /** Lo marca `identificar_llamada`: la clienta contestó y habló con el agente. */
+  /** Lo marca `identificar_llamada`: el agente creyó oír a una persona. */
   started_at: string | null;
   outcome: string | null;
+  /**
+   * El vigilante cierra con «sin registrar_gestion dentro de la ventana» la
+   * llamada que llegó a conversación y se cortó sin resultado. Es lo que separa
+   * ese `no_contesta` del que registró el propio agente al oír un buzón.
+   */
+  error?: string | null;
   /** `outcome_payload.salida_swayp.ok`: la guía Swayp nueva salió. */
   salidaOk: boolean;
   /** `telephony_response.costo.total`: lo que cobró Telnyx (US$); null si no avisó. */
@@ -32,7 +38,7 @@ export interface VoiceScoreRow {
   name: string;
   llamadas: number;
   atendidas: number;
-  /** Atendió y se cortó sin que el agente registrara la gestión. */
+  /** Atendió y terminó sin que el agente registrara la gestión. */
   sinGestion: number;
   confirma: number;
   programar: number;
@@ -59,6 +65,22 @@ export function voiceAgentOfCall(c: Pick<VoiceScoreCall, "telephony" | "provider
 
 const GESTION = new Set(["confirma", "programar", "cancela"]);
 
+/** El vigilante la cerró: el agente la tomó por persona y nunca registró nada. */
+function cortadaSinRegistro(c: Pick<VoiceScoreCall, "error">): boolean {
+  return (c.error ?? "").startsWith("sin registrar_gestion");
+}
+
+/**
+ * ¿La clienta habló con el agente? `started_at` solo dice que el agente CREYÓ
+ * oír a una persona: si después él mismo registró «no contestó», era un buzón
+ * (el 03-10-2026, 4 de las 10 llamadas de Daaph, ~19 s cada una). Contarlas
+ * como atendidas daba 10 atendidas y 10 «sin gestión» sobre 10 buzones y cortes.
+ */
+export function voiceCallAnswered(c: Pick<VoiceScoreCall, "started_at" | "outcome" | "error">): boolean {
+  if (!c.started_at) return false;
+  return !(c.outcome === "no_contesta" && !cortadaSinRegistro(c));
+}
+
 export function aggregateVoiceScore(calls: readonly VoiceScoreCall[]): VoiceScoreRow[] {
   const rows = new Map<string, VoiceScoreRow>(
     ORDER.map(([agent, name]) => [
@@ -81,7 +103,7 @@ export function aggregateVoiceScore(calls: readonly VoiceScoreCall[]): VoiceScor
   for (const c of calls) {
     const r = rows.get(voiceAgentOfCall(c))!;
     r.llamadas += 1;
-    if (c.started_at) {
+    if (voiceCallAnswered(c)) {
       r.atendidas += 1;
       if (!GESTION.has(c.outcome ?? "")) r.sinGestion += 1;
     }

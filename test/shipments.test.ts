@@ -14,6 +14,7 @@ import {
   aggregateReproDay,
   reproDayActor,
   VOICE_AGENT_KEY,
+  VOICE_AGENT_TELNYX_KEY,
   type ReprogramChildRow,
   categoryOf,
   isCallable,
@@ -300,14 +301,42 @@ describe("aggregateReproDay (productividad de hoy por asesora)", () => {
       { agent: null, kind: "call", newStatus: null, shipmentId: "g1", note: "Agente de voz · No contestó" },
       { agent: null, kind: "call", newStatus: null, shipmentId: "g2", note: "Agente de voz · acepta reenvío" },
       // La salida Swayp que crea el agente: madre transferida + hija en ruta.
-      { agent: null, kind: "reroute", newStatus: "transferido", shipmentId: "g2", note: "Excepción sobre guía anulada" },
-      { agent: null, kind: "reroute", newStatus: "en_ruta", shipmentId: "h2", note: "Excepción sobre guía anulada" },
+      {
+        agent: null,
+        kind: "reroute",
+        newStatus: "transferido",
+        shipmentId: "g2",
+        note: "Excepción sobre guía anulada AUR5X1. Motivo: Agente de voz: la clienta aceptó el reenvío por teléfono.",
+      },
+      {
+        agent: null,
+        kind: "reroute",
+        newStatus: "en_ruta",
+        shipmentId: "h2",
+        note: "Excepción sobre guía anulada AUR5X1. Motivo: Agente de voz: la clienta aceptó el reenvío por teléfono. Esta es la nueva guía activa.",
+      },
       { agent: "u1", kind: "call", newStatus: null, shipmentId: "g3" },
     ]);
     expect(out).toEqual([
       { agent: "u1", gestiones: 1, reprogramadas: 0, anuladas: 0, entregadas: 0, guias: 1 },
       { agent: VOICE_AGENT_KEY, gestiones: 4, reprogramadas: 1, anuladas: 0, entregadas: 0, guias: 3 },
     ]);
+  });
+
+  it("el reintento automático Aliclik → Swayp no es del agente de voz (03-10-2026)", () => {
+    // Le daba al Agente Daaph 6 «reprogramadas» con 10 llamadas y ningún confirma.
+    const auto = "Reintento automático Aliclik → Swayp: entrega previa en el mismo domicilio, producto distinto y stock completo.";
+    expect(reproDayActor({ agent: null, kind: "reroute", newStatus: "en_ruta", shipmentId: "g", note: auto })).toBeNull();
+    expect(
+      aggregateReproDay([
+        { agent: null, kind: "reroute", newStatus: "transferido", shipmentId: "g", note: auto },
+        { agent: null, kind: "reroute", newStatus: "en_ruta", shipmentId: "h", note: auto },
+      ]),
+    ).toEqual([]);
+    // La firma de los otros agentes sigue resolviendo a su fila.
+    expect(
+      reproDayActor({ agent: null, kind: "reroute", newStatus: "en_ruta", shipmentId: "g", note: "… Motivo: Agente de voz (Telnyx): aceptó" }),
+    ).toBe(VOICE_AGENT_TELNYX_KEY);
   });
 
   it("una fila sin actor que no es del agente no se atribuye a nadie", () => {

@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   aggregateVoiceScore,
+  voiceCallAnswered,
   voiceAgentOfCall,
   voiceCallsPerConfirma,
   voiceConversion,
@@ -38,7 +39,8 @@ describe("Agentes de voz: comparación (MOM §11.8)", () => {
   it("cuenta atendidas, cortes sin gestión, resultados y guías", () => {
     const [daaph, telnyx] = aggregateVoiceScore([
       call(), // no contestó
-      call({ started_at: "t", outcome: "no_contesta" }), // atendió y se cortó
+      // Atendió y se cortó: lo cerró el vigilante, sin resultado del agente.
+      call({ started_at: "t", outcome: "no_contesta", error: "sin registrar_gestion dentro de la ventana" }),
       call({ started_at: "t", outcome: "confirma", salidaOk: true }),
       call({ started_at: "t", outcome: "programar" }),
       call({ telephony: "telnyx", started_at: "t", outcome: "confirma" }),
@@ -48,6 +50,22 @@ describe("Agentes de voz: comparación (MOM §11.8)", () => {
     expect(telnyx).toMatchObject({ llamadas: 2, atendidas: 2, sinGestion: 0, confirma: 1, cancela: 1, guias: 0 });
     expect(voiceConversion(daaph!)).toBeCloseTo(1 / 3);
     expect(voiceCallsPerConfirma(daaph!)).toBe(4);
+  });
+
+  it("un buzón que el propio agente registró como «no contestó» no es atendida (03-10-2026)", () => {
+    // Daaph: 4 buzones registrados por él y 6 cortes cerrados por el vigilante.
+    // Antes salía 10 atendidas y 10 «sin gestión».
+    const buzon = { started_at: "t", outcome: "no_contesta" } as const;
+    const corte = { started_at: "t", outcome: "no_contesta", error: "sin registrar_gestion dentro de la ventana" } as const;
+    const [daaph] = aggregateVoiceScore([
+      ...Array.from({ length: 4 }, () => call(buzon)),
+      ...Array.from({ length: 6 }, () => call(corte)),
+    ]);
+    expect(daaph).toMatchObject({ llamadas: 10, atendidas: 6, sinGestion: 6, confirma: 0 });
+    expect(voiceCallAnswered(buzon)).toBe(false);
+    expect(voiceCallAnswered(corte)).toBe(true);
+    expect(voiceCallAnswered({ started_at: "t", outcome: "confirma" })).toBe(true);
+    expect(voiceCallAnswered({ started_at: null, outcome: "no_contesta" })).toBe(false);
   });
 
   it("suma el costo de Telnyx; costo por confirma solo si todas lo traen", () => {
