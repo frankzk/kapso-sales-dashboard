@@ -377,7 +377,7 @@ export interface PlaceCallInput {
 
 export type PlaceCallResult =
   | { ok: true; callId: string; from: string; to: string }
-  | { ok: false; status: number; error: string; callId?: string };
+  | { ok: false; status: number; error: string; callId?: string; reason?: "reintento_automatico" };
 
 /**
  * Escribe la fila ANTES de marcar y luego pide el callback (MOM §11.8: la
@@ -401,7 +401,12 @@ export async function placeVoiceCall(
       for(const g of guides??[]) {
         const {snapshot}=await inspectAuto(admin,g.id);
         if(evaluateAutoDispatch(snapshot,policy as AutoSettings,now).eligible)
-          return {ok:false,status:409,error:"Este pedido corresponde al reintento automático sin llamada."};
+          return {
+            ok: false,
+            status: 409,
+            error: "Este pedido corresponde al reintento automático sin llamada.",
+            reason: "reintento_automatico",
+          };
       }
     }
   }
