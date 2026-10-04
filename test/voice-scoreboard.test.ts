@@ -6,6 +6,7 @@ import {
   voiceAgentOfCall,
   voiceCallsPerConfirma,
   voiceConversion,
+  voiceCostPerConfirma,
   voiceScoreBounds,
   type VoiceScoreCall,
 } from "@/lib/voice-scoreboard";
@@ -47,6 +48,20 @@ describe("Agentes de voz: comparación (MOM §11.8)", () => {
     expect(telnyx).toMatchObject({ llamadas: 2, atendidas: 2, sinGestion: 0, confirma: 1, cancela: 1, guias: 0 });
     expect(voiceConversion(daaph!)).toBeCloseTo(1 / 3);
     expect(voiceCallsPerConfirma(daaph!)).toBe(4);
+  });
+
+  it("suma el costo de Telnyx; costo por confirma solo si todas lo traen", () => {
+    const [daaph, telnyx] = aggregateVoiceScore([
+      call({ started_at: "t", outcome: "confirma" }), // Zadarma: sin costo
+      call({ telephony: "telnyx", started_at: "t", outcome: "confirma", costo: 0.05 }),
+      call({ telephony: "telnyx", costo: 0.01 }),
+    ]);
+    expect(daaph).toMatchObject({ costo: 0, conCosto: 0 });
+    expect(voiceCostPerConfirma(daaph!)).toBeNull();
+    expect(telnyx!.costo).toBeCloseTo(0.06);
+    expect(telnyx!.conCosto).toBe(2);
+    expect(voiceCostPerConfirma(telnyx!)).toBeCloseTo(0.06);
+    expect(voiceCostPerConfirma({ confirma: 1, costo: 0.05, conCosto: 1, llamadas: 2 })).toBeNull();
   });
 
   it("sin atendidas ni confirma no hay tasa: guion, no cero", () => {

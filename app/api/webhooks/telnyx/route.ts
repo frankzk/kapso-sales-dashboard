@@ -6,7 +6,9 @@
 //   · la línea detecta contestadora → solo se anota (modo sombra, ver abajo);
 //   · la clienta cuelga sin haber llegado al agente → «no contesta» al momento,
 //     con la causa (timbró, ocupado, rechazó), sin esperar al barrido;
-//   · un tramo cuelga → se cuelga el otro.
+//   · un tramo cuelga → se cuelga el otro;
+//   · Telnyx dice cuánto costó cada tramo (`call.cost`) → se guarda en
+//     `telephony_response.costo`, con la suma de los dos tramos.
 // Cada aviso queda en `voice_calls.telephony_response.eventos`: con eso se ve
 // por qué se cortó cada llamada, que es lo que el piloto quiere medir.
 //
@@ -16,6 +18,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import {
+  applyTelnyxCost,
   agenteDialBody,
   agentSipUriFor,
   dialTelnyx,
@@ -23,6 +26,7 @@ import {
   noAnswerResumen,
   parseTelnyxEvent,
   verifyTelnyxSignature,
+  type TelnyxCostRecord,
   type TelnyxEvent,
 } from "@/lib/telnyx";
 import { closeAsNoAnswer, telnyxConfig } from "@/lib/voice-recovery-server";
@@ -42,7 +46,8 @@ interface Row {
   status: string;
   telephony: string;
   provider: string;
-  telephony_response: { cliente?: string; agente?: string; eventos?: unknown[] } | null;
+  telephony_response: { cliente?: string; agente?: string; eventos?: unknown[]; costo?: TelnyxCostRecord } | null;
+  updated_at: string;
 }
 
 /** Solo se llama con una fila abierta (`OPEN.has(status)`). */
@@ -80,11 +85,16 @@ export async function POST(req: NextRequest) {
   const now = new Date();
   const { data } = await admin
     .from("voice_calls")
-    .select("id, store_id, order_id, mode, status, telephony, provider, telephony_response")
+    .select("id, store_id, order_id, mode, status, telephony, provider, telephony_response, updated_at")
     .eq("id", ev.state.vc)
     .maybeSingle();
   const row = data as Row | null;
   if (!row || row.telephony !== "telnyx") return NextResponse.json({ ok: true, ignored: "llamada desconocida" });
+
+  if (ev.type === "call.cost" && ev.cost) {
+    const saved = await saveCost(admin, row, ev);
+    return NextResponse.json({ ok: true, action: saved ? "costo_guardado" : "costo_no_guardado" });
+  }
 
   const telephony = { ...(row.telephony_response ?? {}) };
   const eventos = Array.isArray(telephony.eventos) ? telephony.eventos : [];
@@ -167,4 +177,33 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ ok: true });
+}
+
+/**
+ * Los dos tramos avisan su costo casi a la vez, al colgar. Leer-modificar-
+ * escribir a ciegas haría que el segundo borrara al primero: se escribe solo
+ * si la fila no cambió desde la lectura (`updated_at`), y si cambió se vuelve
+ * a leer.
+ */
+async function saveCost(admin: ReturnType<typeof createAdminSupabase>, first: Row, ev: TelnyxEvent): Promise<boolean> {
+  let row: Row | null = first;
+  for (let intento = 0; intento < 4 && row; intento++) {
+    const telephony = { ...(row.telephony_response ?? {}) };
+    telephony.costo = applyTelnyxCost(telephony.costo, ev.state!.leg, ev.cost!);
+    const { data } = await admin
+      .from("voice_calls")
+      .update({ telephony_response: telephony })
+      .eq("id", row.id)
+      .eq("updated_at", row.updated_at)
+      .select("id");
+    if (data?.length) return true;
+    const { data: fresh } = await admin
+      .from("voice_calls")
+      .select("id, store_id, order_id, mode, status, telephony, provider, telephony_response, updated_at")
+      .eq("id", row.id)
+      .maybeSingle();
+    row = fresh as Row | null;
+  }
+  console.error(`[telnyx] costo no guardado (llamada ${first.id}, tramo ${ev.state?.leg})`);
+  return false;
 }

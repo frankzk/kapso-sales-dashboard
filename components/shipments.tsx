@@ -54,7 +54,12 @@ import type {
   StoreSummary,
 } from "@/lib/types";
 import { SHIPMENT_VIEWS, type ShipmentView, type ReproDayAgentNamed } from "@/lib/shipments-access";
-import { voiceCallsPerConfirma, voiceConversion, type VoiceScoreRow } from "@/lib/voice-scoreboard";
+import {
+  voiceCallsPerConfirma,
+  voiceConversion,
+  voiceCostPerConfirma,
+  type VoiceScoreRow,
+} from "@/lib/voice-scoreboard";
 import {
   RECOVERY_CALL_DISPOSITIONS,
   RECOVERY_LABEL,
@@ -4301,6 +4306,7 @@ function VoiceScorePanel({ initial }: { initial: VoiceScoreRow[] }) {
   const rows = Array.isArray(result) ? result : null;
   const pct = (n: number | null) => (n == null ? "—" : `${Math.round(n * 100)}%`);
   const per = (n: number | null) => (n == null ? "—" : n.toFixed(1).replace(".", ","));
+  const usd = (n: number | null) => (n == null ? "—" : `$${n.toFixed(2).replace(".", ",")}`);
   const cell = "px-3 py-1.5 text-right tabular-nums";
 
   return (
@@ -4364,12 +4370,14 @@ function VoiceScorePanel({ initial }: { initial: VoiceScoreRow[] }) {
               <th className="px-3 py-1.5 text-right font-medium">Guías Swayp</th>
               <th className="px-3 py-1.5 text-right font-medium">Confirma / atendidas</th>
               <th className="px-3 py-1.5 text-right font-medium">Llamadas por confirma</th>
+              <th className="px-3 py-1.5 text-right font-medium">Costo línea (US$)</th>
+              <th className="px-3 py-1.5 text-right font-medium">Costo por confirma</th>
             </tr>
           </thead>
           <tbody>
             {!rows && (
               <tr className="border-t border-slate-100">
-                <td colSpan={10} className="px-3 py-3 text-xs text-slate-500">
+                <td colSpan={12} className="px-3 py-3 text-xs text-slate-500">
                   {result === "error" ? "No se pudo leer este rango." : "Cargando…"}
                 </td>
               </tr>
@@ -4386,6 +4394,15 @@ function VoiceScorePanel({ initial }: { initial: VoiceScoreRow[] }) {
                 <td className={cell}>{r.guias}</td>
                 <td className={`${cell} font-semibold`}>{pct(voiceConversion(r))}</td>
                 <td className={cell}>{per(voiceCallsPerConfirma(r))}</td>
+                <td className={cell}>
+                  {r.conCosto ? usd(r.costo) : "—"}
+                  {r.conCosto > 0 && r.conCosto < r.llamadas && (
+                    <span className="ml-1 text-xs text-slate-500">
+                      ({r.conCosto} de {r.llamadas})
+                    </span>
+                  )}
+                </td>
+                <td className={cell}>{usd(voiceCostPerConfirma(r))}</td>
               </tr>
             ))}
           </tbody>
@@ -4393,7 +4410,9 @@ function VoiceScorePanel({ initial }: { initial: VoiceScoreRow[] }) {
         <p className="border-t border-slate-100 px-3 py-2 text-xs leading-relaxed text-slate-500">
           Solo llamadas reales (no las de prueba) · Atendidas: la clienta habló con el agente · Sin gestión: atendió
           pero se cortó sin que el agente registrara un resultado · Guías Swayp: salidas creadas por sus «confirma» ·
-          Agente Daaph: Zadarma + Grok · Agente Telnyx: Telnyx + Grok · Agente ElevenLabs: Telnyx + ElevenLabs.
+          Costo línea: lo que Telnyx avisó que cobró (los dos tramos; sin el minuto de xAI ni de ElevenLabs).
+          Zadarma no lo avisa, por eso Daaph sale con guion · Agente Daaph: Zadarma + Grok · Agente Telnyx:
+          Telnyx + Grok · Agente ElevenLabs: Telnyx + ElevenLabs.
         </p>
       </div>
     </div>

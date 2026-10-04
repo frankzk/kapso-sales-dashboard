@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  applyTelnyxCost,
   agenteDialBody,
   agentSipUriFor,
   clienteDialBody,
@@ -120,6 +121,54 @@ describe("Agente Telnyx — cliente de Telnyx (MOM §11.8)", () => {
   });
 });
 
+describe("costo real de cada tramo (call.cost)", () => {
+  const aviso = (leg: "cliente" | "agente", total: string) =>
+    parseTelnyxEvent({
+      data: {
+        event_type: "call.cost",
+        payload: {
+          call_control_id: `ccid-${leg}`,
+          client_state: encodeClientState({ vc: "vc-1", leg }),
+          status: "success",
+          total_cost: total,
+          billed_duration_secs: 60,
+          cost_parts: [
+            { call_part: "call-control", cost: "0.002", currency: "USD", rate: "0.002", billed_duration_secs: 60 },
+            { call_part: "sip-trunking", cost: "0.0353", currency: "USD", rate: "0.0353", billed_duration_secs: 60 },
+          ],
+        },
+      },
+    })!;
+
+  it("lee el total, la moneda, los segundos y el desglose", () => {
+    expect(aviso("cliente", "0.0373").cost).toEqual({
+      total: 0.0373,
+      currency: "USD",
+      billedSecs: 60,
+      status: "success",
+      parts: [
+        { parte: "call-control", costo: 0.002, tarifa: 0.002, segundos: 60 },
+        { parte: "sip-trunking", costo: 0.0353, tarifa: 0.0353, segundos: 60 },
+      ],
+    });
+    // Los demás avisos no traen costo.
+    expect(parseTelnyxEvent({ data: { event_type: "call.answered", payload: {} } })?.cost).toBeNull();
+  });
+
+  it("suma los dos tramos y un aviso repetido no duplica", () => {
+    let rec = applyTelnyxCost(null, "cliente", aviso("cliente", "0.0373").cost!);
+    expect(rec).toMatchObject({ total: 0.0373, moneda: "USD" });
+    rec = applyTelnyxCost(rec, "agente", aviso("agente", "0.004").cost!);
+    expect(rec.total).toBe(0.0413);
+    expect(applyTelnyxCost(rec, "agente", aviso("agente", "0.004").cost!).total).toBe(0.0413);
+  });
+
+  it("sin monto (status error) el total no inventa ceros", () => {
+    const sinMonto = { total: null, currency: null, billedSecs: null, status: "error", parts: [] };
+    expect(applyTelnyxCost(null, "cliente", sinMonto).total).toBeNull();
+  });
+});
+
 describe("reparto Daaph contra Telnyx", () => {
   it("sin Telnyx configurado o con 0 %, todo va por Zadarma", () => {
     expect(pickTelephony(50, false, () => 0)).toBe("zadarma");
@@ -192,6 +241,12 @@ describe("guardas del flujo (código)", () => {
   it("la detección de contestadora no cuelga: modo sombra (falso «buzón» el 03-10-2026)", () => {
     expect(route).not.toMatch(/call\.machine\.detection\.ended"[^]*?hangup\(/);
     expect(route).not.toContain("contestó un buzón de voz");
+  });
+
+  it("el costo se guarda sin pisar el del otro tramo (escritura condicionada)", () => {
+    const fn = route.slice(route.indexOf("async function saveCost"));
+    expect(fn).toContain('.eq("updated_at", row.updated_at)');
+    expect(route.indexOf('ev.type === "call.cost"')).toBeLessThan(route.indexOf("eventos.push("));
   });
 
   it("el barrido sortea la línea de cada llamada", () => {

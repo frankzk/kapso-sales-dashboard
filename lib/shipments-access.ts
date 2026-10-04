@@ -1171,12 +1171,14 @@ export async function getVoiceScore(storeIds: string[], from: string, to: string
   if (!storeIds.length || !bounds) return null;
   const sb = await createServerSupabase();
 
-  type Row = Omit<VoiceScoreCall, "salidaOk"> & { salida_ok: boolean | null };
+  type Row = Omit<VoiceScoreCall, "salidaOk" | "costo"> & { salida_ok: boolean | null; costo: number | null };
   const calls: VoiceScoreCall[] = [];
   for (let offset = 0; offset < MAX_LIST * 4; offset += PAGE) {
     const { data, error } = await sb
       .from("voice_calls")
-      .select("telephony, provider, started_at, outcome, salida_ok:outcome_payload->salida_swayp->ok")
+      .select(
+        "telephony, provider, started_at, outcome, salida_ok:outcome_payload->salida_swayp->ok, costo:telephony_response->costo->total",
+      )
       .in("store_id", storeIds)
       .eq("mode", "real")
       .gte("queued_at", bounds.startIso)
@@ -1185,7 +1187,9 @@ export async function getVoiceScore(storeIds: string[], from: string, to: string
       .range(offset, offset + PAGE - 1);
     if (error) return null;
     const batch = (data as unknown as Row[]) ?? [];
-    for (const r of batch) calls.push({ ...r, salidaOk: r.salida_ok === true });
+    for (const r of batch) {
+      calls.push({ ...r, salidaOk: r.salida_ok === true, costo: typeof r.costo === "number" ? r.costo : null });
+    }
     if (batch.length < PAGE) break;
   }
   return aggregateVoiceScore(calls);

@@ -4024,8 +4024,28 @@ Reglas de esa tabla:
     - **Llamadas por confirma:** llamadas sobre confirma, como aproximación
       del costo.
 
-    No muestra costo en soles: la duración que guarda `voice_calls` no es la
-    facturada cuando la cierra el barrido.
+    - **Costo línea (US$):** lo que Telnyx avisa que cobró, la suma de los dos
+      tramos. No incluye el minuto de xAI ni el de ElevenLabs.
+    - **Costo por confirma:** solo cuando todas las llamadas del rango traen
+      costo. Si hay llamadas sin costo, la columna muestra «n de m».
+
+    Daaph sale con guion porque Zadarma no avisa el costo por llamada, y la
+    duración que guarda `voice_calls` no es la facturada cuando la cierra el
+    barrido.
+  - **Costo real de cada llamada Telnyx** (04-10-2026). Con «call cost
+    webhooks» activado en la aplicación de Telnyx, cada tramo manda
+    `call.cost` al colgar: total, moneda, segundos facturados y desglose
+    (`call-control`, `sip-trunking`, etc.). Se guarda en
+    `voice_calls.telephony_response.costo` así:
+    - `cliente` y `agente`: el aviso de cada tramo.
+    - `total`: la suma de los tramos con monto.
+    - `moneda`.
+
+    Los dos tramos avisan casi a la vez. La escritura solo se hace si la fila
+    no cambió desde que se leyó (`updated_at`) y, si cambió, se vuelve a leer
+    y se reintenta. Un aviso repetido reemplaza el de su tramo, no lo suma dos
+    veces. Con `status = error` no hay monto, y el total no lo cuenta como
+    cero.
   - **Cuándo arranca el reparto.** Mientras Telnyx solo tenga número de EE.
     UU., queda en pruebas a un teléfono propio: con un +1 la clienta contesta
     menos y la comparación saldría injusta. El reparto empieza cuando llegue
