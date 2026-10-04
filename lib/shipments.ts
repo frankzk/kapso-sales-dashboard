@@ -1181,11 +1181,20 @@ export interface ReproDayCall {
   note?: string | null;
 }
 
-/** Quién firma la gestión: la asesora, el agente de voz o nadie. */
+/**
+ * Quién firma la gestión: la asesora, el agente de voz o nadie.
+ *
+ * Una fila sin actor es del agente de voz sólo si su nota lo dice. Antes bastaba
+ * con ser `reroute`, y el «Reintento automático Aliclik → Swayp» —que también
+ * escribe `reroute` sin actor— se le contaba al Agente Daaph: el 03-10-2026 le
+ * dio 21 gestiones y 6 reprogramadas con 10 llamadas y ningún «confirma». Las
+ * salidas Swayp del agente llevan su firma en el motivo («… Motivo: Agente de
+ * voz: la clienta aceptó el reenvío …»), así que siguen contando.
+ */
 export function reproDayActor(c: ReproDayCall): string | null {
   if (c.agent) return c.agent;
   const note = c.note ?? "";
-  if (c.kind !== "reroute" && !note.startsWith("Agente de voz")) return null;
+  if (!note.includes("Agente de voz")) return null;
   if (note.includes("Agente de voz (ElevenLabs)")) return VOICE_AGENT_ELEVENLABS_KEY;
   return note.includes("Agente de voz (Telnyx)") ? VOICE_AGENT_TELNYX_KEY : VOICE_AGENT_KEY;
 }

@@ -1177,7 +1177,7 @@ export async function getVoiceScore(storeIds: string[], from: string, to: string
     const { data, error } = await sb
       .from("voice_calls")
       .select(
-        "telephony, provider, started_at, outcome, salida_ok:outcome_payload->salida_swayp->ok, costo:telephony_response->costo->total",
+        "telephony, provider, started_at, outcome, error, salida_ok:outcome_payload->salida_swayp->ok, costo:telephony_response->costo->total",
       )
       .in("store_id", storeIds)
       .eq("mode", "real")
