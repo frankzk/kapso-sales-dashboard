@@ -41,6 +41,7 @@ import {
 } from "@/lib/reproprovincia";
 import { derivedGuideDates, type GuideCallLike } from "@/lib/guide-dates";
 import { chunk } from "@/lib/access";
+import { COURIER_TBD } from "@/lib/shipment-output";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import {
@@ -537,6 +538,58 @@ const FUERA_DE_REPRO = `(${COURIERS_FUERA_DE_REPRO.join(",")})`;
 const YA_SALIO_O_NO_ES_ALICLIK = "courier.neq.aliclik,custody_state.neq.empresa";
 
 /**
+ * Las salidas «por definir» tampoco son de esta cola (04-10-2026).
+ *
+ * Una `por_definir` es una caja armada en el almacén esperando courier (MOM §4):
+ * la decisión que le falta es de DESPACHO —con quién sale—, no de
+ * reprogramación. Medido ese día: 3.250 pendientes así —1.245 de pedidos
+ * anulados en Shopify, 1.254 de primer despacho por armar o por asignar, 730
+ * salidas adicionales de pedidos por cerrar— y NINGUNA de un pedido en gestión
+ * Reproprovincia. El reenvío de Reproprovincia nace directo como guía Swayp, no
+ * como `por_definir`. Era el 77 % de la pestaña y lo que más ruido metía en la
+ * cola de provincia.
+ *
+ * Solo en Pendiente, como el recorte por custodia: una `por_definir` anulada
+ * sigue en la pestaña Anulado, que es el registro.
+ */
+const SALIDA_POR_DEFINIR = COURIER_TBD;
+
+/**
+ * Lo que la persona anuló en Shopify no se reprograma (MOM §11: la recuperación
+ * «no gana sobre una anulación en Shopify»). Las cerradas por recuperar ya lo
+ * respetaban (`withRecoveryState`); las pendientes no, y una guía Swayp de un
+ * pedido anulado seguía ofreciéndose para llamar.
+ *
+ * VA DESPUÉS DE TRAER LAS FILAS, no en la consulta: la anulación vive en
+ * `orders` y `shipments` no la tiene. Se puede porque los recortes de la
+ * consulta ya dejaron la cola en cientos de filas, lejos del tope de
+ * `MAX_LIST`. La lista y el contador del chip pasan por ESTA función, así que no
+ * pueden discrepar. Si la lectura falla, la fila se queda: nunca se esconde una
+ * guía por no saber.
+ */
+export async function sinPedidoAnuladoEnShopify<T extends { order_id: string | null }>(
+  sb: SupabaseClient,
+  rows: T[],
+): Promise<T[]> {
+  const orderIds = Array.from(
+    new Set(rows.map((r) => r.order_id).filter((id): id is string => !!id)),
+  );
+  if (!orderIds.length) return rows;
+  const anulados = new Set<string>();
+  for (const part of chunk(orderIds, 300)) {
+    const { data, error } = await sb
+      .from("orders")
+      .select("id")
+      .in("id", part)
+      .not("cancelled_at", "is", null);
+    if (error) return rows;
+    for (const o of (data ?? []) as { id: string }[]) anulados.add(o.id);
+  }
+  if (!anulados.size) return rows;
+  return rows.filter((r) => !r.order_id || !anulados.has(r.order_id));
+}
+
+/**
  * SOLO EN PENDIENTE, y esto no es un detalle: medido contra producción, el mismo
  * recorte aplicado a todas las pestañas se llevaba 317 anuladas, 78 entregadas,
  * 46 en ruta y 15 transferidas. `custody_state` no se actualiza al entregar, así
@@ -564,6 +617,15 @@ const YA_SALIO_O_NO_ES_ALICLIK = "courier.neq.aliclik,custody_state.neq.empresa"
  * vencidas con su motivo, en vez de esconderlas. Medido al abrirlo: 844 guías,
  * de las que solo 1 pasaba de 60 días.
  *
+ * SE LEE POR PÁGINAS, SIN TOPE (04-10-2026). Era UNA consulta con
+ * `.limit(1000)` ordenada por `updated_at`, y el conjunto ya no cabía: 2.640
+ * cerradas en 60 días. Como los barridos reescriben `updated_at` a diario, las
+ * 1.000 «más recientes» eran las de los últimos ~8 días, y 404 pedidos con la
+ * recuperación ACTIVA —todos «En gestión Reproprovincia» en el Master— no
+ * llegaban a la cola. Se pagina por `id`, que no cambia entre página y página
+ * (paginar por `updated_at` mientras el barrido lo mueve salta o repite filas),
+ * y el orden de la cola se rehace al final.
+ *
  * Devuelve las filas —no un conteo— porque la lista y el chip salen de ACÁ, de
  * la misma llamada. Un `head:true` no puede contar lo que hay que filtrar en
  * memoria, y dos caminos distintos para el número y las filas es exactamente
@@ -577,26 +639,34 @@ async function guiasPorRecuperar(
   const desdeIso = new Date(
     Date.now() - RECOVERY_DEFAULT_MAX_DAYS * 2 * 86_400_000,
   ).toISOString();
-  let query = sb
-    .from("shipments")
-    .select(columns)
-    .in("store_id", storeIds)
-    .eq("status_category", "closed")
-    .eq("courier", "aliclik")
-    .gte("updated_at", desdeIso);
-  // El filtro solo tiene sentido si las columnas TRAEN el embebido: acota qué
-  // llamadas entran en `shipment_calls(count)`. Pedido sobre unas columnas que
-  // no lo embeben, PostgREST responde 400 y esta función devolvía [] en
-  // silencio — que es lo que pasaba con `RECUPERAR_COUNT_COLUMNS`, dejando el
-  // chip de Pendiente sin su mitad «Por recuperar» (visto en los logs del
-  // 15-09-2026). El contador y la lista salen de aquí, así que el número y las
-  // filas tienen que venir de la misma consulta o vuelven a discrepar.
-  if (columns.includes("shipment_calls")) query = query.eq("shipment_calls.kind", "call");
-  const { data, error } = await query
-    .order("updated_at", { ascending: false })
-    .limit(PAGE);
-  if (error) return [];
-  const cerradasSinEntregar = ((data as unknown as ShipmentWithCallCount[]) ?? []).filter((row) =>
+  const cerradas: ShipmentWithCallCount[] = [];
+  for (let from = 0; from < MAX_RECUPERAR; from += PAGE) {
+    let query = sb
+      .from("shipments")
+      .select(columns)
+      .in("store_id", storeIds)
+      .eq("status_category", "closed")
+      .eq("courier", "aliclik")
+      .gte("updated_at", desdeIso);
+    // El filtro solo tiene sentido si las columnas TRAEN el embebido: acota qué
+    // llamadas entran en `shipment_calls(count)`. Pedido sobre unas columnas que
+    // no lo embeben, PostgREST responde 400 y esta función devolvía [] en
+    // silencio — que es lo que pasaba con `RECUPERAR_COUNT_COLUMNS`, dejando el
+    // chip de Pendiente sin su mitad «Por recuperar» (visto en los logs del
+    // 15-09-2026). El contador y la lista salen de aquí, así que el número y las
+    // filas tienen que venir de la misma consulta o vuelven a discrepar.
+    if (columns.includes("shipment_calls")) query = query.eq("shipment_calls.kind", "call");
+    const { data, error } = await query
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) return [];
+    const rows = (data as unknown as ShipmentWithCallCount[]) ?? [];
+    cerradas.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  // El orden de antes —lo último que se movió, arriba— se rehace en memoria.
+  cerradas.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+  const cerradasSinEntregar = cerradas.filter((row) =>
     etiquetaDiceTerminoSinEntregar(row.reported_status),
   );
   // Y de ésas, solo las que el PEDIDO todavía admite: dentro de la ventana y sin
@@ -616,6 +686,13 @@ export function esColaDeReprogramacion(cats: string[]): boolean {
 // default), so we paginate with .range() instead of a big .limit().
 const PAGE = 1000;
 const MAX_LIST = 5000;
+/**
+ * Freno de seguridad de las cerradas por recuperar, no un recorte: el conjunto
+ * de 60 días eran 2.640 filas el 04-10-2026. Si algún día lo alcanza, el
+ * síntoma es el de antes —recuperables activas fuera de la cola— y hay que
+ * mirar por qué crecieron, no subir el número a ciegas.
+ */
+const MAX_RECUPERAR = 20_000;
 
 /** Shipments for a view across the given (accessible) stores. */
 export async function getStoreShipments(
@@ -635,7 +712,7 @@ export async function getStoreShipments(
         .in("status_category", cats)
         .not("courier", "in", FUERA_DE_REPRO)
         .eq("shipment_calls.kind", "call");
-      if (esColaDeReprogramacion(cats)) query = query.or(YA_SALIO_O_NO_ES_ALICLIK);
+      if (esColaDeReprogramacion(cats)) query = query.or(YA_SALIO_O_NO_ES_ALICLIK).neq("courier", SALIDA_POR_DEFINIR);
       query =
         view === "pendiente"
           ? query.order("next_followup_at", { ascending: true, nullsFirst: true }).order("updated_at", { ascending: false })
@@ -649,6 +726,7 @@ export async function getStoreShipments(
     out.push(...rows);
     if (rows.length < PAGE) break;
   }
+  const propias = esColaDeReprogramacion(cats) ? await sinPedidoAnuladoEnShopify(sb, out) : out;
   // La segunda mitad del badge en las cerradas sin entregar («Anulado ·
   // Reproprovincia / Recuperación vencida / Descartada»). Se calcula sobre las
   // filas propias de la vista ANTES de anexar las recuperables, que ya vienen
@@ -663,7 +741,7 @@ export async function getStoreShipments(
   // Aliclik —En ruta, Entregado, Transferido—, así que se perdían siempre
   // (#KP132394: «En ruta 591» con la tabla vacía). El contador venía de otra
   // consulta y seguía diciendo la verdad, que es lo que lo volvió invisible.
-  const filas = [...(await withRecoveryState(sb, out))];
+  const filas = [...(await withRecoveryState(sb, propias))];
   // Las cerradas SIN entregar entran a la misma cola (MOM §11), no a una
   // pestaña aparte: son la misma pregunta —«¿a quién hay que llamar?»— y el
   // documento las lista junto a las demás entradas. Se distinguen con el chip
@@ -728,15 +806,46 @@ async function countByCategory(
   storeIds: string[],
   cats: string[],
 ): Promise<number> {
-  let query = sb
+  if (esColaDeReprogramacion(cats)) return (await filasDeColaPendiente(sb, storeIds)).length;
+  const { count } = await sb
     .from("shipments")
     .select("id", { count: "exact", head: true })
     .in("store_id", storeIds)
     .in("status_category", cats)
     .not("courier", "in", FUERA_DE_REPRO);
-  if (esColaDeReprogramacion(cats)) query = query.or(YA_SALIO_O_NO_ES_ALICLIK);
-  const { count } = await query;
   return count ?? 0;
+}
+
+/**
+ * Las filas de la cola Pendiente, solo lo justo para CONTARLAS.
+ *
+ * El chip no puede ser un `count` de cabecera: la anulación en Shopify se
+ * recorta después de leer (`sinPedidoAnuladoEnShopify`), y un conteo que se
+ * saltara ese paso volvería a decir un número distinto del de la tabla. Mismos
+ * recortes de consulta que `getStoreShipments`, mismo recorte en memoria.
+ */
+async function filasDeColaPendiente(
+  sb: SupabaseClient,
+  storeIds: string[],
+): Promise<{ id: string; order_id: string | null }[]> {
+  const out: { id: string; order_id: string | null }[] = [];
+  for (let from = 0; from < MAX_LIST; from += PAGE) {
+    const { data, error } = await sb
+      .from("shipments")
+      .select("id,order_id")
+      .in("store_id", storeIds)
+      .in("status_category", ["pending"])
+      .not("courier", "in", FUERA_DE_REPRO)
+      .or(YA_SALIO_O_NO_ES_ALICLIK)
+      .neq("courier", SALIDA_POR_DEFINIR)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) break;
+    const rows = (data ?? []) as { id: string; order_id: string | null }[];
+    out.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  return sinPedidoAnuladoEnShopify(sb, out);
 }
 
 /** Tally shipments into the view buckets (for tab badges). Uses exact COUNT

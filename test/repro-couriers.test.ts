@@ -21,9 +21,16 @@ import { esColaDeReprogramacion } from "@/lib/shipments-access";
 const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
 const ACCESS = "lib/shipments-access.ts";
 
-describe("los cuatro que salen", () => {
+describe("los que salen", () => {
   it("Shalom no se reprograma: es agencia, la clienta recoge en el terminal", () => {
     expect(perteneceARepro("shalom")).toBe(false);
+  });
+
+  it("Olva tampoco: también es agencia, pagada por adelantado (04-10-2026)", () => {
+    // Se quedaba solo porque nadie la había nombrado: 17 de 341 filas de la
+    // cola de provincia eran guías Olva en tránsito o esperando en destino.
+    expect(perteneceARepro("olva")).toBe(false);
+    expect(perteneceARepro(" OLVA ")).toBe(false);
   });
 
   it("tampoco Tanders, Urpi ni el reparto propio", () => {
@@ -49,7 +56,6 @@ describe("es lista de EXCLUIDOS, no de admitidos", () => {
     // La diferencia importa. Con una lista de admitidos, un courier nuevo
     // desaparecería de la pantalla sin que nadie se entere; así aparece, y
     // alguien pregunta qué hace ahí. Trabajo que sobra se ve; el que falta, no.
-    expect(perteneceARepro("olva")).toBe(true);
     expect(perteneceARepro("swayp")).toBe(true);
     expect(perteneceARepro("axel")).toBe(true);
   });
@@ -72,10 +78,12 @@ describe("la lista y el contador recortan IGUAL", () => {
   // por su cuenta, el día que uno cambiara el número y las filas dirían cosas
   // distintas y no habría forma de saber cuál miente. Es el fallo que este repo
   // repite: el mismo hecho escrito en dos sitios.
-  it("las dos consultas aplican el recorte", () => {
+  it("las tres consultas aplican el recorte", () => {
+    // La lista, el contador de las demás pestañas y el de Pendiente, que desde
+    // el 04-10-2026 lee filas para poder recortar los pedidos anulados.
     const source = read(ACCESS);
     const veces = source.match(/\.not\("courier", "in", FUERA_DE_REPRO\)/g) ?? [];
-    expect(veces, "la lista y el contador").toHaveLength(2);
+    expect(veces, "la lista y los dos contadores").toHaveLength(3);
   });
 
   it("y las dos lo sacan de la MISMA constante", () => {
@@ -143,7 +151,7 @@ describe("una guía que todavía no salió del almacén no se reprograma", () =>
 
   it("la lista y el contador lo aplican los dos, desde la misma constante", () => {
     const source = read(ACCESS);
-    expect(source.match(/query\.or\(YA_SALIO_O_NO_ES_ALICLIK\)/g) ?? []).toHaveLength(2);
+    expect(source.match(/\.or\(YA_SALIO_O_NO_ES_ALICLIK\)/g) ?? []).toHaveLength(2);
     // Es la negación de «Aliclik Y en el almacén»: basta con que el courier sea
     // otro, o que el paquete ya haya salido.
     expect(source).toContain('"courier.neq.aliclik,custody_state.neq.empresa"');
@@ -153,7 +161,7 @@ describe("una guía que todavía no salió del almacén no se reprograma", () =>
     const source = read(ACCESS);
     const start = source.indexOf("export async function getStoreShipments(");
     const body = source.slice(start, source.indexOf("\n}", start));
-    expect(body).toContain("query.or(YA_SALIO_O_NO_ES_ALICLIK)");
+    expect(body).toContain(".or(YA_SALIO_O_NO_ES_ALICLIK)");
     expect(body).not.toContain("esperaSalidaDeAliclik");
   });
 
@@ -164,15 +172,21 @@ describe("una guía que todavía no salió del almacén no se reprograma", () =>
   // en el almacén». Esas pestañas son el REGISTRO de lo que pasó; esconder ahí
   // una guía entregada sería perder historial, no limpiar una cola.
   describe("solo recorta la cola de Pendiente", () => {
-    it("las dos consultas lo condicionan a la categoría", () => {
+    it("la lista y el contador lo condicionan a la categoría", () => {
       // Se mide el RECORTE emparejado con su condición, no cada uso de
       // `esColaDeReprogramacion`: ese guarda responde «¿es la cola de repro?» y
       // hay más de una decisión que depende de eso —anexar las cerradas por
       // recuperar es otra—. Contar el guarda a secas mezclaba las dos y fallaba
       // al añadir la segunda, que no tiene nada que ver con la custodia.
       const source = read(ACCESS);
-      const emparejado = /if \(esColaDeReprogramacion\(cats\)\) query = query\.or\(YA_SALIO_O_NO_ES_ALICLIK\);/g;
-      expect(source.match(emparejado) ?? []).toHaveLength(2);
+      // La lista recorta en su consulta…
+      expect(source).toContain(
+        'if (esColaDeReprogramacion(cats)) query = query.or(YA_SALIO_O_NO_ES_ALICLIK).neq("courier", SALIDA_POR_DEFINIR);',
+      );
+      // …y el contador solo pasa por la cola de Pendiente bajo la misma condición.
+      expect(source).toContain(
+        "if (esColaDeReprogramacion(cats)) return (await filasDeColaPendiente(sb, storeIds)).length;",
+      );
     });
 
     it("Pendiente sí; entregado, anulado, en ruta y transferido no", () => {
