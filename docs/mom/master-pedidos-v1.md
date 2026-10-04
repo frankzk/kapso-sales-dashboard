@@ -2544,6 +2544,14 @@ recuperación, `RECOVERY_DEFAULT_MAX_DAYS * 2`— porque el conjunto «cerradas 
 Aliclik» crece sin fin. Se consulta más ancho que la elegibilidad a propósito:
 para poder MOSTRAR las vencidas con su motivo en vez de esconderlas.
 
+**Dentro de esa ventana se lee todo, por páginas (04-10-2026).** La consulta
+cortaba en 1.000 filas ordenadas por `updated_at`, y en 60 días ya había 2.640
+cerradas. Como los barridos reescriben `updated_at` a diario, entraban solo las
+de los últimos ~8 días: **404 pedidos con la recuperación activa** —todos «En
+gestión Reproprovincia» en el Master— no aparecían en la cola, 141 de ellos con
+los filtros de trabajo de provincia. Ahora se pagina por `id`, que no se mueve
+mientras el barrido escribe, y la cola se ordena después.
+
 La lista y el contador salen de la MISMA llamada. El conteo no puede ser un
 `COUNT` exacto porque el predicado necesita partir `reported_status` y eso se
 resuelve en memoria; dos caminos distintos para el número y las filas es cómo
@@ -2744,18 +2752,37 @@ pedidos el margen es de unos ±18 puntos: alcanza para ver si se entrega «casi
 igual» o «claramente peor», no diferencias finas.
 
 **Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
-que la cola tiene que recortar: quedan fuera **Shalom, Tanders, Urpi y el
-reparto propio**. Shalom es agencia —la clienta recoge en el terminal, no hay
-intento de entrega que reprogramar— y por eso aparece como DESTINO de una
-recuperación (§11.1, §12), nunca como insumo. Los otros tres no se reprograman
-desde esta pantalla.
+que la cola tiene que recortar: quedan fuera **Shalom, Olva, Tanders, Urpi y el
+reparto propio**. Shalom y Olva son agencia —la clienta recoge en el terminal,
+no hay intento de entrega que reprogramar— y por eso aparecen como DESTINO de
+una recuperación (§11.1, §12), nunca como insumo; las guías Olva se cotejan en
+«Cotejar Olva». Los otros tres no se reprograman desde esta pantalla.
 
 El recorte es una lista de **excluidos**, no de admitidos: un courier nuevo
 entra en la cola y alguien pregunta qué hace ahí. Con una lista de admitidos
 desaparecería sin que nadie se enterara, y trabajo que falta no se ve.
 
-Las guías `por_definir` —filas sintéticas de pedidos que todavía no tienen
-salida— SÍ se quedan. Sacarlas es otra decisión y no está tomada.
+#### Lo que la cola listaba sin tener nada que ver (04-10-2026)
+
+Con la cola abierta como la trabaja el equipo —sin Lima, «Swayp: Fuera de
+cobertura», «Sin contactar hoy»— salían 341 guías y **47 no eran trabajo de
+reprogramación**: 15 de pedidos anulados en Shopify, 12 de pedidos cuyo primer
+despacho aún no salía, 17 guías Olva (Olva no estaba en la lista solo porque
+nadie la había nombrado) y 3 de pedidos por cerrar. Desde ese día:
+
+- **Las salidas `por_definir` salen de Pendiente.** Son cajas armadas esperando
+  courier (§4): la decisión que les falta es de despacho, no de reprogramación.
+  Medido ese día: 3.250 pendientes así —1.245 de pedidos anulados en Shopify,
+  1.254 de primer despacho por armar o por asignar, 730 salidas adicionales de
+  pedidos por cerrar— y **ninguna** de un pedido en gestión Reproprovincia: el
+  reenvío nace directo como guía Swayp. Eran el 77 % de la pestaña. Una
+  `por_definir` anulada sigue en la pestaña Anulado, que es el registro.
+- **Una guía de un pedido anulado en Shopify sale de Pendiente**, como ya salía
+  de «Por recuperar»: la recuperación no gana sobre una anulación que decidió
+  una persona (más abajo). La anulación vive en `orders`, así que este recorte
+  va después de leer las filas, y por eso el chip de Pendiente cuenta filas en
+  vez de pedir un conteo: la lista y el chip pasan por la misma función. Si la
+  lectura de pedidos falla, la guía se queda.
 
 **Y tampoco entra lo que Aliclik todavía no ha sacado del almacén.** La cola es
 para lo que se intentó entregar y no se pudo; una guía recién preparada no tiene
@@ -2772,8 +2799,9 @@ courier sin intentos informados: con la custodia se quedan, que es lo correcto.
 
 Dos límites, los dos deliberados:
 
-- **Solo Aliclik.** Las `por_definir` y las guías Fenix pendientes también están
-  en custodia `empresa`; sacarlas es otra decisión y no está tomada.
+- **Solo Aliclik.** Las guías Fenix pendientes también están en custodia
+  `empresa`; sacarlas es otra decisión y no está tomada. Las `por_definir` salen
+  por su propia regla (arriba), no por la custodia.
 - **Solo la pestaña Pendiente.** `custody_state` no se actualiza al entregar, así
   que en una guía cerrada el valor es viejo y no significa «sigue en el almacén».
   Aplicar el recorte a todas las pestañas escondía 317 anuladas, 78 entregadas,
