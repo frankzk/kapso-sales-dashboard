@@ -4221,9 +4221,11 @@ Se mide la tasa de «confirma» por antigüedad de la guía (0–7, 8–14, 15�
 = 80` y `voice_recovery_max_age_days = 21`, no el 130/30 del ajuste anterior.
 La cola se vació a las 14:35: de los pedidos con stock Swayp, 158 ya tenían las
 2 llamadas del agente. El owner pasa Kenku a **`voice_recovery_max_attempts =
-3`** y **`voice_recovery_max_age_days = 30`**. El tope diario sigue en 80. El
-día sigue siendo de una llamada del agente por pedido, y el tope de siete días
-de gestión (§6.1) sigue siendo de todos. Todas las
+3`** y **`voice_recovery_max_age_days = 30`**. Con eso la cola pasa de 6 a 266
+pedidos. Ese mismo día también sube el tope a **`voice_recovery_daily_cap =
+130`**, lo que cabe entre las 9:00 y las 20:00 con una llamada cada cinco
+minutos. Sigue habiendo una llamada del agente por pedido y día. El tope de
+siete días de gestión (§6.1) sigue siendo de todos. Todas las
 transcripciones de la
 primera semana se escuchan. Se decide con estas cifras, comparadas con la
 línea base de cero llamadas:
