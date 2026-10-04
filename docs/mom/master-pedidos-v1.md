@@ -1556,6 +1556,12 @@ sin tope de antigüedad. Reglas:
     editada, ni un comprobante real de otra transferencia. Mientras no haya
     conexión con el estado de cuenta del banco, el modelo **prepara la ficha** y
     la firma la pone alguien.
+    - **Desde el 04-10-2026 esa conexión existe para Yape** (§16.2): el cobro
+      que aparece en el estado de cuenta de Yape al mismo minuto, por el mismo
+      monto y por el mismo canal se valida solo, y cierra la liquidación igual
+      que la firma de una persona. Lo que no cuadra así sigue esperando a
+      alguien. Para eso el lector de Tanders transcribe ahora también la
+      **fecha y hora** del pago.
     - Cada cobro entra a **«Validar pagos»** (`order_payments`, tipo
       `cobro_courier`) con la imagen guardada en NUESTRO bucket —la evidencia de
       un cobro no puede depender de que el courier conserve el archivo— y con lo
@@ -5208,6 +5214,13 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - Esta distinción es de seguridad, no de comodidad: una alarma de desvío que
   salta casi siempre por un nombre cortado deja de leerse, y tiene que ser
   creíble el día que el receptor sea de verdad otro.
+- **«p. m.» con espacio es de la tarde (04-10-2026).** Yape escribe la hora como
+  «02:15 p. m.», y la lectura solo reconocía «p.m.» o «pm»: toda hora de la
+  tarde de un Yape se guardaba **doce horas antes** (#KP138402, «02:15», era el
+  Yape de las 14:15:08). Ese día catorce comprobantes pendientes estaban así.
+  Se acepta también el día de la semana que antepone el BCP («Martes, 29
+  Septiembre 2026») y la «hs.» de Prex. Lo ya cargado no se reescribe: el cruce
+  con el estado de cuenta lo tiene en cuenta (§16.2).
 - La visión corre **una sola vez**, al subir el comprobante, y su lectura queda
   guardada en la fila. Arreglar el lector no mueve lo ya cargado: hay que
   releerlo (`scripts/reprocess-vouchers.ts`). El estado del receptor sí se
@@ -5412,6 +5425,81 @@ Mientras Kapta y el Excel convivan, validar un pago deja el comprobante listo
 para continuar y registra actor y fecha, pero **no cambia por sí solo la
 macroetapa ni marca el pedido como pagado en Shopify**. Esas automatizaciones se
 activan cuando la migración operativa al sistema sea completa.
+
+### 16.2 Validación por el estado de cuenta de Yape
+
+**Lo que una persona hacía mirando la app de Yape lo hace ahora el estado de
+cuenta (04-10-2026).** Validar un comprobante pedía a alguien porque el lector
+valida una imagen, no un depósito (§9.4, 0158): faltaba la conexión con el
+estado de cuenta. El reporte de movimientos que Yape Empresa manda por correo
+—«Te compartimos tus movimientos», desde `notificaciones@yape.pe`, un Excel con
+cada ingreso— **es** esa conexión. Ese día se cruzó a mano el primero contra la
+bandeja: **66 de 87 comprobantes cuadraban sin margen de duda**, y nueve más
+solo «casi».
+
+- **El circuito.** Un escenario de Make vigila el buzón (el mismo de los
+  rótulos de Olva) y manda el Excel a `/api/webhooks/yape-movements`. Kapta
+  guarda cada movimiento **una sola vez** —los reportes se solapan— y cruza la
+  bandeja contra ellos.
+- **El reporte no trae nº de operación.** Por eso un comprobante y un
+  movimiento son el mismo pago solo si coinciden **a la vez**:
+  1. **el monto**, al céntimo;
+  2. **el minuto**: la constancia imprime la hora al minuto y el reporte al
+     segundo. Un Yape directo cae dentro de ese minuto; lo que viene de otra
+     app (Plin, BCP, Prex…) trae el reloj de esa app y tiene un minuto de
+     holgura a cada lado;
+  3. **quién pagó**: en un adelanto, diferencia o pago total, el pagador del
+     reporte es **la clienta del pedido** («Benito Cac\*» ↔ Benito Cachique
+     Puga; con el nombre completo, dos palabras suyas en cualquier orden). En
+     el **cobro del courier** paga el motorizado, así que el nombre no dice
+     nada: se exige que **el canal** del reporte sea el de la constancia (un
+     Yape sale como Yape directo; Plin, BBVA o Scotiabank como «PLIN - …»; el
+     BCP como «BCP - …»);
+  4. y que sea **inequívoco**: un solo movimiento encaja con el comprobante y
+     **ningún otro pago vivo** —validado o no, de cualquier pedido— encaja con
+     ese movimiento.
+- **Lo que coincide así se valida solo**, por el **mismo camino** que la firma
+  de una persona (`applyPaymentValidation`, `lib/payment-validation.ts`):
+  estado `validado`, evento `payment`, cierre de liquidación del cobro del
+  courier y su guía a `entregado` (§9.4), confirmación de agencia, alertas y
+  Master. Con `validated_by` nulo y fuente `estado_yape` —no lo validó nadie,
+  lo validó el estado de cuenta, igual que Flow (§12)—, y el evento lleva el
+  movimiento: pagador, canal, monto y hora. Cada conciliación queda en
+  `yape_statement_matches`, **única por movimiento y por comprobante**: el
+  mismo dinero no paga dos pedidos.
+- **Nunca lo valida el cruce, aunque el dinero esté en el reporte:**
+  - lo que no está en `pendiente_revision`: lo observado, lo incompleto y lo
+    duplicado lo está mirando una persona, y su decisión manda. Por lo mismo,
+    si entre la lectura y la escritura alguien lo observó o rechazó, no se
+    toca;
+  - sin nº de operación (validar lo exige), o con el nº **transcrito a mano**:
+    los cuatro ojos piden que lo dé por bueno otra persona y el reporte no
+    trae el número para contrastarlo;
+  - sin hora en la ficha;
+  - con una cuenta receptora que **no cuadra**: esa excepción es de un
+    administrador, por escrito (§16.1);
+  - un cobro de courier que **no fue a un Yape** (la transferencia a la cuenta
+    BCP ···0012): no está en este reporte;
+  - **el mismo monto y minuto pero pagó otra persona**. El 04-10 fueron nueve
+    («Tito Gab\*» pagando el pedido de Gilberto Gabino, «Luis Pal\*» el de
+    Alfredo Palao): probablemente un familiar, pero eso lo decide alguien.
+- **Dos imposibles se descartan**: un movimiento **posterior** a la carga del
+  comprobante —nadie sube la constancia de un pago que aún no hizo— y uno que
+  ya concilió otro comprobante.
+- **La hora leída 12 h antes.** Hasta el 04-10-2026 el lector perdía el
+  «p. m.» de Yape (§12, Pagos). Al comprobante con hora de mañana se le prueba
+  también la misma hora por la tarde; sigue exigiendo minuto, monto, la
+  clienta y que el pago sea anterior a la carga.
+- **El cobro del courier necesita su hora.** El lector de Tanders no la leía
+  hasta el 04-10-2026; ahora la transcribe, y antes de cruzar se le relee la
+  constancia guardada a los cobros pendientes que entraron sin ella. Sin hora
+  —el Plin de Scotiabank no imprime el año y se toma el de la lectura— no hay
+  cruce.
+- **Se puede deshacer como cualquier validación**: observar o rechazar después
+  emite `liquidation_observed` y devuelve la guía a `en_ruta` (§9.4).
+- `?simulacro=1` en el webhook calcula qué validaría sin escribir nada. Cada
+  reporte deja su fila en `yape_statement_imports` con lo validado, lo omitido
+  por motivo y lo que no se pudo escribir.
 
 ## 17. KPI principales
 

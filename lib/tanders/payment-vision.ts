@@ -13,7 +13,12 @@
 // lanza, y ante cualquier fallo devuelve `ok: false` para que el llamante NO lo
 // confunda con un veredicto negativo — un timeout no es un pago mal hecho.
 
-import { normalizeMediaType, resolveVisionCreds, type StoreVisionCreds } from "@/lib/vision";
+import {
+  normalizeMediaType,
+  parseVoucherInstant,
+  resolveVisionCreds,
+  type StoreVisionCreds,
+} from "@/lib/vision";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -42,6 +47,13 @@ export interface TandersPaymentReading {
   recipientName: string | null;
   amount: number | null;
   operationNumber: string | null;
+  /**
+   * Fecha y hora del pago en ISO, SOLO si la constancia muestra las dos. Es lo
+   * que permite cruzar el cobro con el estado de cuenta de Yape al minuto
+   * (MOM §9.4). Sin hora no se inventa la medianoche: queda null y el cobro lo
+   * firma una persona.
+   */
+  paidAt: string | null;
   /** false = no hubo veredicto (sin clave, timeout, red, respuesta ilegible). */
   ok: boolean;
   model: string;
@@ -54,6 +66,7 @@ const FAILED: Omit<TandersPaymentReading, "model"> = {
   recipientName: null,
   amount: null,
   operationNumber: null,
+  paidAt: null,
   ok: false,
 };
 
@@ -73,7 +86,9 @@ const PROMPT =
   '  "destination": string|null,           // adónde fue el dinero, TAL COMO lo dice la constancia\n' +
   '  "recipient_name": string|null,        // a QUIÉN se pagó, tal como aparece\n' +
   '  "amount": number|null,                // monto en soles, solo el número\n' +
-  '  "operation_number": string|null       // SOLO el código, sin "N°" ni etiquetas\n' +
+  '  "operation_number": string|null,      // SOLO el código, sin "N°" ni etiquetas\n' +
+  '  "date": string|null,                  // fecha del pago, tal como se ve (p. ej. "30 set. 2026")\n' +
+  '  "time": string|null                   // hora del pago, tal como se ve, con "a. m."/"p. m." si aparece\n' +
   "}\n" +
   "El medio se reconoce por el logo y el diseño de la app: Yape es morado, " +
   "Plin es celeste. Un Plin puede decir que el destino es un número «Yape»: " +
@@ -93,7 +108,10 @@ const PROMPT =
   "nombre: no lo copies.\n" +
   "El nº de operación se compara entre guías para detectar un comprobante " +
   "reusado, así que devuelve el código y nada más: sin «N°», sin «Código de " +
-  "operación:», sin espacios ni guiones de separación.";
+  "operación:», sin espacios ni guiones de separación.\n" +
+  "La fecha y la hora son las DEL PAGO que imprime la constancia, no la del " +
+  "reloj del teléfono en la barra de arriba. Copia la hora con su «a. m.» o " +
+  "«p. m.» si lo trae: sin eso, las 02:15 de la tarde parecen de la madrugada.";
 
 function parseAmount(v: unknown): number | null {
   const n = typeof v === "number" ? v : typeof v === "string" ? Number(v.replace(/[^\d.]/g, "")) : NaN;
@@ -115,6 +133,32 @@ function parseMethod(v: unknown): PaymentMethod {
 function text(v: unknown): string | null {
   const s = typeof v === "string" ? v.trim() : "";
   return s ? s : null;
+}
+
+/**
+ * El instante del pago, solo con fecha Y hora. `parseVoucherInstant` deja la
+ * medianoche cuando falta la hora, que para un adelanto basta; aquí el dato se
+ * usa para cruzar al minuto con el estado de cuenta, y una medianoche
+ * inventada es una hora falsa.
+ */
+export function paidAtFrom(
+  date: string | null,
+  time: string | null,
+  now: number = Date.now(),
+): string | null {
+  if (!date || !time) return null;
+  // El Plin de Scotiabank no imprime el año («03 oct.»). Se lee hoy una
+  // constancia de hace días: es el año en curso, salvo que eso la pusiera en el
+  // futuro (una de diciembre leída en enero).
+  if (!/\d{4}/.test(date)) {
+    const year = new Date(now - 5 * 3_600_000).getUTCFullYear();
+    const guess = parseVoucherInstant(`${date.replace(/[.\s]+$/, "")} ${year}`, time);
+    if (!guess) return null;
+    return Date.parse(guess) > now + 86_400_000
+      ? parseVoucherInstant(`${date.replace(/[.\s]+$/, "")} ${year - 1}`, time)
+      : guess;
+  }
+  return parseVoucherInstant(date, time);
 }
 
 /** Lee la constancia. Nunca lanza. */
@@ -175,6 +219,7 @@ export async function readTandersPayment(
       recipientName: text(json.recipient_name),
       amount: parseAmount(json.amount),
       operationNumber: text(json.operation_number),
+      paidAt: paidAtFrom(text(json.date), text(json.time)),
       ok: true,
       model,
     };

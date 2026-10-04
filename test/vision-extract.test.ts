@@ -59,6 +59,27 @@ describe("parseVoucherInstant", () => {
     expect(parseVoucherInstant("2026-07-10", "12:00 pm")).toBe("2026-07-10T17:00:00.000Z");
   });
 
+  it("«p. m.» con espacio, como lo escribe Yape, es de la tarde", () => {
+    // #KP138402: «02 oct. 2026 | 02:15 p. m.» se guardaba como 02:15 de la
+    // madrugada; el estado de cuenta lo tiene a las 14:15:08.
+    expect(parseVoucherInstant("02 oct. 2026", "02:15 p. m.")).toBe("2026-10-02T19:15:00.000Z");
+    expect(parseVoucherInstant("02 oct. 2026", "02:15 p.m.")).toBe("2026-10-02T19:15:00.000Z");
+    expect(parseVoucherInstant("02 oct. 2026", "02:15 PM")).toBe("2026-10-02T19:15:00.000Z");
+    expect(parseVoucherInstant("02 oct. 2026", "12:30 p. m.")).toBe("2026-10-02T17:30:00.000Z");
+    expect(parseVoucherInstant("02 oct. 2026", "12:05 a. m.")).toBe("2026-10-02T05:05:00.000Z");
+    expect(parseVoucherInstant("02 oct. 2026", "07:01:22 p. m.")).toBe("2026-10-03T00:01:00.000Z");
+  });
+
+  it("el día de la semana que antepone el BCP no estorba", () => {
+    expect(parseVoucherInstant("Martes, 29 Septiembre 2026", "01:27 p.m.")).toBe("2026-09-29T18:27:00.000Z");
+    expect(parseVoucherInstant("Sábado 03 Octubre 2026", "05:07 pm.")).toBe("2026-10-03T22:07:00.000Z");
+  });
+
+  it("los sufijos de 24 horas de Prex y BBVA no estorban", () => {
+    expect(parseVoucherInstant("03/10/2026", "19:41 hs.")).toBe("2026-10-04T00:41:00.000Z");
+    expect(parseVoucherInstant("30 septiembre2026", "21:42 h")).toBe("2026-10-01T02:42:00.000Z");
+  });
+
   it("sin hora se queda a medianoche local", () => {
     expect(parseVoucherInstant("2026-07-10", null)).toBe("2026-07-10T05:00:00.000Z");
   });
