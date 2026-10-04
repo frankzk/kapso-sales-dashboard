@@ -81,6 +81,22 @@ export function parseOlvaLabelText(raw: string): OlvaEmailLabel {
   };
 }
 
+/** Un pedido se crea ANTES de que su envío se registre en Olva: hasta 21 días antes, o el mismo día. */
+const ORDER_BEFORE_DAYS = 21;
+const ORDER_AFTER_DAYS = 1;
+
+/**
+ * ¿Puede ser de este rótulo un pedido creado en `createdAt`? Sin esto, la
+ * clienta que vuelve a comprar hace que un rótulo de septiembre sugiera su
+ * pedido de octubre. PURA.
+ */
+export function orderFitsLabelDate(createdAt: string | null | undefined, day: string | null): boolean {
+  if (!day || !createdAt) return true;
+  const created = new Date(new Date(createdAt).getTime() - 5 * 3_600_000).toISOString().slice(0, 10);
+  const shift = (n: number) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+  return created >= shift(-ORDER_BEFORE_DAYS) && created <= shift(ORDER_AFTER_DAYS);
+}
+
 export type LabelMatch =
   | { kind: "match"; candidate: CotejoCandidate; via: "telefono" | "dni" }
   | { kind: "ambiguous"; candidates: CotejoCandidate[] }
