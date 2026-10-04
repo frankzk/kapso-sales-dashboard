@@ -43,6 +43,12 @@ import { derivedGuideDates, type GuideCallLike } from "@/lib/guide-dates";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import {
+  aggregateVoiceScore,
+  voiceScoreBounds,
+  type VoiceScoreCall,
+  type VoiceScoreRow,
+} from "@/lib/voice-scoreboard";
 import { productImagesFor } from "@/lib/shopify-product-images";
 import {
   buildShipmentLineage,
@@ -1154,6 +1160,35 @@ export async function getReproTodayByAgent(storeIds: string[]): Promise<ReproDay
     [VOICE_AGENT_ELEVENLABS_KEY]: VOICE_AGENT_ELEVENLABS_NAME,
   };
   return counts.map((c) => ({ ...c, name: voiceNames[c.agent] ?? emails.get(c.agent) ?? c.agent }));
+}
+
+/**
+ * «Agentes de voz: comparación» (MOM §11.8): llamadas reales entre dos días de
+ * Lima, ambos incluidos. Null si el rango no vale o la lectura falla.
+ */
+export async function getVoiceScore(storeIds: string[], from: string, to: string): Promise<VoiceScoreRow[] | null> {
+  const bounds = voiceScoreBounds(from, to);
+  if (!storeIds.length || !bounds) return null;
+  const sb = await createServerSupabase();
+
+  type Row = Omit<VoiceScoreCall, "salidaOk"> & { salida_ok: boolean | null };
+  const calls: VoiceScoreCall[] = [];
+  for (let offset = 0; offset < MAX_LIST * 4; offset += PAGE) {
+    const { data, error } = await sb
+      .from("voice_calls")
+      .select("telephony, provider, started_at, outcome, salida_ok:outcome_payload->salida_swayp->ok")
+      .in("store_id", storeIds)
+      .eq("mode", "real")
+      .gte("queued_at", bounds.startIso)
+      .lt("queued_at", bounds.endIso)
+      .order("queued_at", { ascending: true })
+      .range(offset, offset + PAGE - 1);
+    if (error) return null;
+    const batch = (data as unknown as Row[]) ?? [];
+    for (const r of batch) calls.push({ ...r, salidaOk: r.salida_ok === true });
+    if (batch.length < PAGE) break;
+  }
+  return aggregateVoiceScore(calls);
 }
 
 async function buildReprogramRows(

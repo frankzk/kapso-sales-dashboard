@@ -4007,6 +4007,25 @@ Reglas de esa tabla:
     Primero se compara la línea (Daaph contra Telnyx, mismo motor) y después
     el motor (Telnyx + Grok contra Telnyx + ElevenLabs), una variable a la
     vez. Mientras tanto, el barrido no reparte llamadas a ElevenLabs.
+  - **«Agentes de voz: comparación»** (Envíos, en el resumen de arriba, junto
+    a «Hoy por asesora»). Muestra una fila por agente, siempre los tres, con
+    llamadas **reales** (`mode = 'real'`) del rango elegido, con los mismos
+    chips que el popup de reprogramaciones: Hoy, Ayer, Últimos 7 días, Este
+    mes o un Rango a mano (días de Lima, ambos incluidos, hasta 366). Hoy llega
+    con la página; los otros rangos se piden al elegirlos. El agente sale de la
+    llamada: Zadarma es Daaph; Telnyx con
+    `provider = 'grok'` es Telnyx y con `elevenlabs` es ElevenLabs.
+    - **Atendidas:** `started_at` presente, porque `identificar_llamada`
+      corrió.
+    - **Sin gestión:** atendidas cuyo resultado no es `confirma`, `programar`
+      ni `cancela`.
+    - **Guías Swayp:** `outcome_payload.salida_swayp.ok`.
+    - **Conversión:** confirma sobre atendidas.
+    - **Llamadas por confirma:** llamadas sobre confirma, como aproximación
+      del costo.
+
+    No muestra costo en soles: la duración que guarda `voice_calls` no es la
+    facturada cuando la cierra el barrido.
   - **Cuándo arranca el reparto.** Mientras Telnyx solo tenga número de EE.
     UU., queda en pruebas a un teléfono propio: con un +1 la clienta contesta
     menos y la comparación saldría injusta. El reparto empieza cuando llegue

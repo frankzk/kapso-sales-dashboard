@@ -54,6 +54,7 @@ import type {
   StoreSummary,
 } from "@/lib/types";
 import { SHIPMENT_VIEWS, type ShipmentView, type ReproDayAgentNamed } from "@/lib/shipments-access";
+import { voiceCallsPerConfirma, voiceConversion, type VoiceScoreRow } from "@/lib/voice-scoreboard";
 import {
   RECOVERY_CALL_DISPOSITIONS,
   RECOVERY_LABEL,
@@ -81,6 +82,7 @@ import {
   claimShipment,
   createFenixGuide,
   loadReprogramData,
+  loadVoiceScore,
   loadShipmentDetail,
   reprogramCancelledShipmentException,
   registerCourierReportResult,
@@ -389,6 +391,7 @@ export function ShipmentsBoard({
   shipments,
   reprogram,
   todayByAgent,
+  voiceScore,
   initialOpenId,
 }: {
   stores: StoreSummary[];
@@ -397,6 +400,8 @@ export function ShipmentsBoard({
   shipments: ShipmentRow[];
   reprogram?: ReprogramStats;
   todayByAgent?: ReproDayAgentNamed[];
+  /** «Agentes de voz: comparación» de hoy; los otros rangos se piden al elegirlos. */
+  voiceScore?: VoiceScoreRow[] | null;
   initialOpenId?: string | null;
 }) {
   const router = useRouter();
@@ -962,14 +967,15 @@ export function ShipmentsBoard({
           son lectura de dirección, no de quien marca el teléfono: cada apertura
           de Envíos costaba un scroll y una lectura antes de la primera guía.
           Siguen a un clic, plegadas, con los mismos datos. */}
-      {(reprogram || todayByAgent) && (
+      {(reprogram || todayByAgent || voiceScore) && (
         <details className="group rounded-xl border border-slate-200 bg-white">
           <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium text-slate-700 marker:text-slate-500">
-            Resumen: reprogramaciones y gestión de hoy
+            Resumen: reprogramaciones, gestión de hoy y agentes de voz
           </summary>
           <div className="space-y-3 border-t border-slate-100 p-3">
             {reprogram && <ReprogramStrip stats={reprogram} stores={stores} />}
             {todayByAgent && <TodayByAgentPanel rows={todayByAgent} />}
+            {voiceScore && <VoiceScorePanel initial={voiceScore} />}
           </div>
         </details>
       )}
@@ -4269,6 +4275,131 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
   );
 }
 
+/** «Agentes de voz: comparación» (MOM §11.8): los agentes que compiten, uno al
+ *  lado del otro, solo con llamadas reales. Los mismos chips de rango que el
+ *  popup de reprogramaciones; hoy llega con la página y el resto se pide. */
+function VoiceScorePanel({ initial }: { initial: VoiceScoreRow[] }) {
+  const today = limaTodayKey();
+  const [preset, setPreset] = useState<ReprogramPreset>("hoy");
+  const [custom, setCustom] = useState({ from: today, to: today });
+  const { from, to } = reprogramPresetRange(preset, custom);
+  const key = `${from}|${to}`;
+  const [loaded, setLoaded] = useState<Record<string, VoiceScoreRow[] | "error">>({ [`${today}|${today}`]: initial });
+  const result = loaded[key];
+
+  useEffect(() => {
+    if (result) return;
+    let alive = true;
+    loadVoiceScore(from, to)
+      .then((rows) => alive && setLoaded((m) => ({ ...m, [key]: rows ?? "error" })))
+      .catch(() => alive && setLoaded((m) => ({ ...m, [key]: "error" })));
+    return () => {
+      alive = false;
+    };
+  }, [key, from, to, result]);
+
+  const rows = Array.isArray(result) ? result : null;
+  const pct = (n: number | null) => (n == null ? "—" : `${Math.round(n * 100)}%`);
+  const per = (n: number | null) => (n == null ? "—" : n.toFixed(1).replace(".", ","));
+  const cell = "px-3 py-1.5 text-right tabular-nums";
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white">
+      <div className="flex items-center gap-2 px-3 py-2 text-xs">
+        <span className="text-sm font-semibold text-slate-800">Agentes de voz: comparación</span>
+        <span className="ml-auto text-slate-500">{from === to ? from : `${from} al ${to}`}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2">
+        {REPROGRAM_PRESETS.map((p) => (
+          <button
+            key={p.key}
+            type="button"
+            onClick={() => setPreset(p.key)}
+            aria-pressed={preset === p.key}
+            className={cn(
+              "rounded-full border px-2.5 py-1 text-xs font-medium transition",
+              preset === p.key
+                ? "border-brand-200 bg-brand-50 text-brand-700"
+                : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+            )}
+          >
+            {p.label}
+          </button>
+        ))}
+        {preset === "rango" && (
+          <span className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span aria-hidden="true">Del</span>
+            <input
+              type="date"
+              aria-label="Desde"
+              value={custom.from}
+              max={custom.to}
+              onChange={(e) => setCustom((s) => ({ ...s, from: e.target.value || s.from }))}
+              className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
+            />
+            <span aria-hidden="true">al</span>
+            <input
+              type="date"
+              aria-label="Hasta"
+              value={custom.to}
+              min={custom.from}
+              max={today}
+              onChange={(e) => setCustom((s) => ({ ...s, to: e.target.value || s.to }))}
+              className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
+            />
+          </span>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-t border-slate-100 text-xs text-slate-500">
+              <th className="px-3 py-1.5 text-left font-medium">Agente</th>
+              <th className="px-3 py-1.5 text-right font-medium">Llamadas</th>
+              <th className="px-3 py-1.5 text-right font-medium">Atendidas</th>
+              <th className="px-3 py-1.5 text-right font-medium">Sin gestión</th>
+              <th className="px-3 py-1.5 text-right font-medium">Confirma</th>
+              <th className="px-3 py-1.5 text-right font-medium">Programa</th>
+              <th className="px-3 py-1.5 text-right font-medium">Cancela</th>
+              <th className="px-3 py-1.5 text-right font-medium">Guías Swayp</th>
+              <th className="px-3 py-1.5 text-right font-medium">Confirma / atendidas</th>
+              <th className="px-3 py-1.5 text-right font-medium">Llamadas por confirma</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!rows && (
+              <tr className="border-t border-slate-100">
+                <td colSpan={10} className="px-3 py-3 text-xs text-slate-500">
+                  {result === "error" ? "No se pudo leer este rango." : "Cargando…"}
+                </td>
+              </tr>
+            )}
+            {rows?.map((r) => (
+              <tr key={r.agent} className={`border-t border-slate-100 ${r.llamadas ? "" : "text-slate-500"}`}>
+                <td className="px-3 py-1.5 text-left text-slate-700">{r.name}</td>
+                <td className={`${cell} font-semibold text-slate-800`}>{r.llamadas}</td>
+                <td className={cell}>{r.atendidas}</td>
+                <td className={`${cell} text-amber-700`}>{r.sinGestion}</td>
+                <td className={`${cell} text-emerald-700`}>{r.confirma}</td>
+                <td className={cell}>{r.programar}</td>
+                <td className={`${cell} text-slate-500`}>{r.cancela}</td>
+                <td className={cell}>{r.guias}</td>
+                <td className={`${cell} font-semibold`}>{pct(voiceConversion(r))}</td>
+                <td className={cell}>{per(voiceCallsPerConfirma(r))}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="border-t border-slate-100 px-3 py-2 text-xs leading-relaxed text-slate-500">
+          Solo llamadas reales (no las de prueba) · Atendidas: la clienta habló con el agente · Sin gestión: atendió
+          pero se cortó sin que el agente registrara un resultado · Guías Swayp: salidas creadas por sus «confirma» ·
+          Agente Daaph: Zadarma + Grok · Agente Telnyx: Telnyx + Grok · Agente ElevenLabs: Telnyx + ElevenLabs.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /** Franja compacta bajo el encabezado: la tasa de entrega de lo reprogramado en
  *  Kapta (guías Swayp hijas), visible sin clics. "Ver detalle" abre el popup. */
 function ReprogramStrip({ stats, stores }: { stats: ReprogramStats; stores: StoreSummary[] }) {
@@ -4342,7 +4473,7 @@ const REPROGRAM_PRESETS: { key: ReprogramPreset; label: string }[] = [
   { key: "hoy", label: "Hoy" },
   { key: "ayer", label: "Ayer" },
   { key: "7d", label: "Últimos 7 días" },
-  { key: "mes", label: "Mes" },
+  { key: "mes", label: "Este mes" },
   { key: "rango", label: "Rango" },
 ];
 
