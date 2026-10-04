@@ -4,7 +4,13 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { linkOlvaTrackingIfEmpty } from "@/lib/olva/link";
-import { matchLabel, parseOlvaLabelText, phoneKey, type OlvaEmailLabel } from "@/lib/olva/email-label";
+import {
+  matchLabel,
+  orderFitsLabelDate,
+  parseOlvaLabelText,
+  phoneKey,
+  type OlvaEmailLabel,
+} from "@/lib/olva/email-label";
 import { loadOlvaCandidates, limaDayKey } from "@/lib/olva/portal-sync";
 import { formatOlvaTracking } from "@/lib/olva/tracking";
 import { isTerminalGeneral } from "@/lib/order-status";
@@ -50,17 +56,22 @@ async function storesForSender(admin: SupabaseClient, senderDoc: string | null):
  * en la pantalla, no se crea la salida sola. Crear una salida es una decisión
  * de despacho y el rótulo solo dice a quién iba.
  */
-async function suggestOrder(admin: SupabaseClient, storeIds: string[], label: OlvaEmailLabel): Promise<string[]> {
+async function suggestOrder(
+  admin: SupabaseClient,
+  storeIds: string[],
+  label: OlvaEmailLabel,
+  day: string,
+): Promise<string[]> {
   const key = phoneKey(label.recipientPhone);
   if (!key || !storeIds.length) return [];
   const { data } = await admin
     .from("order_master")
-    .select("order_name,customer_name,general_status")
+    .select("order_name,general_status,order_created_at")
     .in("store_id", storeIds)
     .in("customer_phone", [`51${key}`, key, `+51${key}`])
-    .limit(10);
-  return ((data ?? []) as { order_name: string | null; general_status: string | null }[])
-    .filter((o) => o.order_name && !isTerminalGeneral(o.general_status ?? ""))
+    .limit(20);
+  return ((data ?? []) as { order_name: string | null; general_status: string | null; order_created_at: string | null }[])
+    .filter((o) => o.order_name && !isTerminalGeneral(o.general_status ?? "") && orderFitsLabelDate(o.order_created_at, day))
     .map((o) => o.order_name as string);
 }
 
@@ -142,7 +153,7 @@ export async function ingestOlvaEmailLabel(
     return save({}, { outcome: "ambiguo", tracking, note: `Coincide con varias salidas: ${names}.` });
   }
 
-  const orders = await suggestOrder(admin, storeIds, label);
+  const orders = await suggestOrder(admin, storeIds, label, day);
   if (orders.length === 1) {
     return save(
       { suggested_order_name: orders[0] },

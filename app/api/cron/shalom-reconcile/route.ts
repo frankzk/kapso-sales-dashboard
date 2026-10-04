@@ -8,6 +8,7 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { shalomNeedsTracking, type ShalomTrackingStatus } from "@/lib/shalom/tracking";
 import { applyShalomTracking, type ShalomLiveGuide } from "@/lib/shalom/reconcile";
 import { enqueueTransitNotification, processTransitNotifications } from "@/lib/shalom/transit-notify";
+import { backfillManualOseIds } from "@/lib/shalom/ose-backfill";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -247,6 +248,12 @@ export async function GET(req: NextRequest) {
   // Drenar la cola de avisos con lo que quede de presupuesto. Corre después
   // del rastreo a propósito: el rastreo es lo que no puede esperar, y un
   // aviso que se queda en cola sale en la pasada siguiente, media hora después.
+  // Antes de drenar: el OSE ID de las guías creadas a mano en Shalom Pro, para
+  // que sus avisos puedan llevar el ticket (lib/shalom/ose-backfill.ts). Sin
+  // guías manuales pendientes es una consulta y vuelve.
+  const ose = await backfillManualOseIds(admin);
+  errors.push(...ose.errores);
+
   const elapsed = Date.now() - startedAt;
   const avisos = await processTransitNotifications(admin, {
     budgetMs: Math.max(20_000, 240_000 - elapsed),
@@ -259,6 +266,7 @@ export async function GET(req: NextRequest) {
     // Avisos de tránsito: cuántos entraron a la cola en esta pasada y cómo
     // quedó la cola tras drenarla.
     avisos: { encolados: queued, ...avisos },
+    oseManual: { buscadas: ose.buscadas, resueltas: ose.resueltas, sinResolver: ose.sinResolver.length },
     // `reported` = Shalom contestó. `applied` = además cambió algo. Separarlos
     // es lo que hace legible una corrida a mano: reported>0 y applied=0 significa
     // "todo bien, sin novedad", que antes se leía igual que "no corrió".
