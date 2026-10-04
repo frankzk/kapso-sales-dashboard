@@ -272,6 +272,28 @@ describe("guardas del flujo (código)", () => {
     expect(cron).toContain("queue.candidates.slice(0, MAX_TRIES_PER_PASS)");
   });
 
+  it("un corte sin gestión se cierra al momento, no a los ~10 min del barrido (04-10-2026)", () => {
+    // Los dos tramos: cuelgue de la clienta y del agente.
+    expect(route.match(/if \(row\.status === "in_progress"\) await closeCutWithoutGestion\(admin, row, now\);/g)).toHaveLength(2);
+    const fn = route.slice(route.indexOf("async function closeCutWithoutGestion"));
+    // Margen por si el registro venía en camino, y nunca sobre una gestión.
+    expect(fn.indexOf("HANGUP_GRACE_MS")).toBeLessThan(fn.indexOf("closeAsNoAnswer("));
+    expect(fn).toContain("soloSinGestion: true");
+    // La comparación lo sigue contando como atendida y cortada sin gestión.
+    expect(fn).toMatch(/error: "sin registrar_gestion/);
+    const close = server.slice(server.indexOf("export async function closeAsNoAnswer("));
+    expect(close).toContain('if (opts.soloSinGestion) close = close.is("outcome", null);');
+  });
+
+  it("registrar_gestion reserva la llamada antes de escribir sobre el pedido", () => {
+    const reg = readFileSync(resolve(__dirname, "../app/api/voice/tools/registrar_gestion/route.ts"), "utf8");
+    const reserva = reg.indexOf(".update({ outcome: action.disposition })");
+    expect(reserva).toBeGreaterThan(-1);
+    expect(reg.slice(reserva, reserva + 200)).toContain('.is("outcome", null)');
+    expect(reserva).toBeLessThan(reg.indexOf("writeVoiceAttempt(admin, call"));
+    expect(reserva).toBeLessThan(reg.indexOf("discardRecovery(admin"));
+  });
+
   it("el barrido sortea línea y motor de cada llamada", () => {
     expect(cron).toContain("pickVoiceRoute({ telnyxShare, elevenShare, telnyxReady, elevenReady })");
     expect(cron).toContain("telephony,");
