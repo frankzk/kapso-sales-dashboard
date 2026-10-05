@@ -626,6 +626,7 @@ export function LeadsBoard({
   waNumbers,
   agentNames,
   priorCoverage,
+  shopifyLocations,
   coverageRules,
   currency,
   timezone,
@@ -665,6 +666,9 @@ export function LeadsBoard({
   /** Id de lead → cobertura de su último pedido con el mismo teléfono (0225).
    *  Pista del filtro de cobertura cuando el lead no dejó dirección. */
   priorCoverage?: Record<string, string>;
+  /** Id de lead → dirección del cliente en Shopify (0228), para los que no
+   *  dicen dónde viven ni compraron antes. */
+  shopifyLocations?: Record<string, { province: string | null; city: string | null }>;
   /** Excepciones de cobertura por distrito (0121), las mismas del pedido. */
   coverageRules?: DistrictCoverageRule[];
   currency: string;
@@ -1224,11 +1228,15 @@ export function LeadsBoard({
   const coverageOf = useMemo(() => {
     const rules = coverageRules ?? [];
     const resolve = (l: LeadRow) =>
-      leadCoverage(l, { priorCoverage: priorCoverage?.[l.id] ?? null, overrides: rules });
+      leadCoverage(l, {
+        priorCoverage: priorCoverage?.[l.id] ?? null,
+        shopifyAddress: shopifyLocations?.[l.id] ?? null,
+        overrides: rules,
+      });
     const porLead = new Map<string, LeadCoverage>();
     for (const l of leads) porLead.set(l.id, resolve(l));
     return (l: LeadRow): LeadCoverage => porLead.get(l.id) ?? resolve(l);
-  }, [leads, priorCoverage, coverageRules]);
+  }, [leads, priorCoverage, shopifyLocations, coverageRules]);
 
   // Jerarquía de filtros (faceted counts): los contadores de cada grupo se
   // calculan sobre los leads que pasan TODOS los demás filtros activos, pero NO

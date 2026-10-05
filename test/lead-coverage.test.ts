@@ -181,3 +181,30 @@ describe("conteo", () => {
     expect(isLeadCoverage("agencia")).toBe(false);
   });
 });
+
+describe("cobertura del lead — dirección del cliente en Shopify (0228)", () => {
+  it("es la última pista: se lee con las mismas reglas que la del lead", () => {
+    expect(leadCoverage(lead({}), { shopifyAddress: { province: "Lima (provincia)", city: "Los Olivos" } })).toBe("lima");
+    expect(leadCoverage(lead({}), { shopifyAddress: { province: "Arequipa", city: "Cayma" } })).toBe("provincia");
+    expect(leadCoverage(lead({}), { shopifyAddress: { province: "Lima (departamento)", city: "Huaral" } })).toBe(
+      "provincia",
+    );
+    // «Lima (departamento)» sin distrito legible sigue sin decir nada.
+    expect(leadCoverage(lead({}), { shopifyAddress: { province: "Lima (departamento)", city: null } })).toBe(
+      "sin_identificar",
+    );
+  });
+
+  it("lo que dijo el lead y su último pedido mandan sobre la dirección de Shopify", () => {
+    const shopifyAddress = { province: "Arequipa", city: "Cayma" };
+    expect(leadCoverage(lead({ district: "Comas" }), { shopifyAddress })).toBe("lima");
+    expect(leadCoverage(lead({}), { priorCoverage: "lima", shopifyAddress })).toBe("lima");
+  });
+
+  it("las excepciones de distrito también valen para la dirección de Shopify", () => {
+    const overrides = [{ store_id: null, district: "pucusana", coverage: "agencia" as const }];
+    expect(
+      leadCoverage(lead({}), { shopifyAddress: { province: "Lima (provincia)", city: "Pucusana" }, overrides }),
+    ).toBe("provincia");
+  });
+});

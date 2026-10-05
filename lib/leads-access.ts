@@ -287,11 +287,54 @@ async function drainLeads(
  */
 export async function getLeadPriorCoverage(storeIds: StoreScope): Promise<Record<string, string>> {
   if (!storeIds.length) return {};
-  const sb = await createServerSupabase();
-  const { data, error } = await sb.rpc("lead_prior_order_coverage", { p_store_ids: storeIds });
-  if (error || !data) return {};
+  const rows = await drainRpc<{ lead_id: string; coverage: string }>("lead_prior_order_coverage", {
+    p_store_ids: storeIds,
+  });
   const out: Record<string, string> = {};
-  for (const row of data as { lead_id: string; coverage: string }[]) out[row.lead_id] = row.coverage;
+  for (const row of rows) out[row.lead_id] = row.coverage;
+  return out;
+}
+
+/**
+ * La dirección que Shopify tiene del cliente, para los leads de la cola que no
+ * dicen dónde viven (0228). La busca la sincronización; aquí solo se lee. Es la
+ * última pista del filtro de cobertura. Vacío si la migración no corrió.
+ */
+export async function getLeadShopifyLocations(
+  storeIds: StoreScope,
+): Promise<Record<string, { province: string | null; city: string | null }>> {
+  if (!storeIds.length) return {};
+  const rows = await drainRpc<{ lead_id: string; province: string | null; city: string | null }>(
+    "lead_shopify_location_hints",
+    { p_store_ids: storeIds },
+  );
+  const out: Record<string, { province: string | null; city: string | null }> = {};
+  for (const row of rows) out[row.lead_id] = { province: row.province, city: row.city };
+  return out;
+}
+
+/**
+ * Todas las filas de una función de la base, por páginas.
+ *
+ * PostgREST corta cada respuesta en 1.000 filas SIN avisar, y una función que
+ * devuelve un conjunto no es la excepción: la pista del pedido anterior ya
+ * devuelve ~800 leads, y el día que pasara de 1.000 la cola habría perdido el
+ * resto en silencio. Se pide por `lead_id` para que las páginas no se pisen.
+ * Ante un error devuelve lo que llegó hasta ahí (vacío si falla la primera).
+ */
+async function drainRpc<T extends { lead_id: string }>(fn: string, args: Record<string, unknown>): Promise<T[]> {
+  const sb = await createServerSupabase();
+  const out: T[] = [];
+  for (let from = 0; from < LEADS_PAGE_CAP; from += LEADS_PAGE_SIZE) {
+    const { data, error } = await sb
+      .rpc(fn, args)
+      .order("lead_id", { ascending: true })
+      .range(from, from + LEADS_PAGE_SIZE - 1);
+    if (error || !data) break;
+    const page = data as unknown as T[];
+    out.push(...page);
+    if (page.length < LEADS_PAGE_SIZE) break;
+  }
   return out;
 }
 
