@@ -1,6 +1,6 @@
 # Clientes externos de Grupo GF Courier — plan
 
-Versión 2 · 05-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
+Versión 3 · 05-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
 
 Grupo GF Courier hoy reparte solo para tiendas de su propia organización
 (Aurela y Kenku). Este plan lo abre a **tiendas cliente**: negocios ajenos, con
@@ -22,6 +22,10 @@ se escriben allí en la Fase 0, antes de programar (AGENTS.md).
 | 6 | **Asignar obliga.** Si el pedido cumple contrato, cobertura, tarifa y no hay pausa, queda tomado. Grupo GF puede anular con motivo. No hay estado «solicitada». |
 | 7 | **Todo cobro en la puerta va a Grupo GF**: efectivo, Yape de Grupo GF y POS. Si el cliente final igual paga directo a la tienda, se marca «pago directo a la tienda»: no entra al neto ni paga comisión. |
 | 8 | **Cuenta corriente por contrato.** Cada liquidación aprobada suma su neto, positivo o negativo; cada depósito de Grupo GF o pago del cliente resta. |
+| 9 | El producto de Proveeduría Grupo GF se cobra **solo en lo entregado**. Un rechazo o un no entregado lo devuelve a la bolsa sin cargo; dañado o faltante queda observado (§29.7). |
+| 10 | **Mapeo de SKU obligatorio** por tienda: cada SKU del Shopify del cliente es «producto Grupo GF X» o «producto propio del cliente». Un pedido con una línea sin mapear no se puede asignar. |
+| 11 | **Bolsa por línea, sin control de stock** en la v1: se registra de qué bolsa sale cada línea para armar y cobrar, sin reservar ni contar. Conteo y recepción del inventario del cliente, en la v2. |
+| 12 | Swayp, Shalom, el agente de voz y Chatby **quedan apagados** para organizaciones cliente: usan credenciales únicas de Grupo GF (`lib/env.ts`). |
 
 ## 2. Una sola base de datos
 
@@ -145,38 +149,21 @@ pantalla. Y dos huecos de origen:
 
 Hoy no se filtra porque todos somos la misma empresa.
 
-## 6. Decisiones abiertas
+## 6. Lo que falta precisar al escribir el MOM
 
-Salen de la decisión 5: si el cliente revende producto de Grupo GF, la
-liquidación también tiene que cobrarle ese producto, y Grupo GF tiene que saber
-qué producto suyo es cada línea del Shopify del cliente. Hoy no hay catálogo de
-Grupo GF para terceros: `product_costs` (0050) es el costo propio de cada
-organización, no un precio de venta a un cliente. Van con recomendación.
+Las decisiones de producto (9 a 11) salen de la 5: si el cliente revende
+producto de Grupo GF, la liquidación también le cobra ese producto, y Grupo GF
+tiene que saber qué producto suyo es cada línea del Shopify del cliente. Hoy no
+hay catálogo de Grupo GF para terceros: `product_costs` (0050) es el costo
+propio de cada organización, no un precio de venta a un cliente.
 
-**F. ¿Cuándo se cobra el producto de Grupo GF?** Recomiendo **solo en lo
-entregado**. Un rechazo o un no entregado devuelve el producto a la bolsa sin
-cargo y solo paga la tarifa que ya corresponda. Un paquete dañado o faltante
-queda observado (§29.7).
+Quedan tres detalles menores, a cerrar en la Fase 0 con el texto del MOM:
 
-**G. ¿Cómo sabe Grupo GF de qué bolsa sale cada línea?** Recomiendo un **mapeo
-por tienda** de cada SKU del Shopify del cliente, como ya existe para Aliclik y
-Swayp (`aliclik_sku_map`, `swayp_sku_map`). Cada SKU se marca «producto Grupo GF
-X» o «producto propio del cliente». Un pedido con una línea sin mapear **no se
-puede asignar** y se dice cuál falta. Así nunca sale producto de Grupo GF sin
-cobrarse.
-
-**H. Control de stock en la v1.** §29.3 permite empezar sin inventario
-estricto. Recomiendo que la v1 registre **de qué bolsa sale cada línea** (para
-cobrar y para armar), pero **sin reservar ni contar stock**. El conteo y la
-recepción del inventario del cliente con cotejo van en la v2. Riesgo: se puede
-asignar un pedido sin stock y enterarse al armar, igual que hoy con Aurela y
-Kenku.
-
-**E. Qué incluye «Kapta completo».** Swayp (con remitente de Kenku), Shalom,
-el agente de voz (Zadarma/Telnyx) y Chatby usan **credenciales únicas de Grupo
-GF** en variables de entorno (`lib/env.ts`). Un cliente que las use actuaría con
-las cuentas de Grupo GF. Recomiendo apagarlas para organizaciones cliente en la
-v1, hasta que sean por tienda.
+- **Cierre financiero del pedido del cliente**: al aprobar su línea de
+  liquidación o al registrar el depósito que la paga.
+- **Cancelación desde la tienda** después de que el pedido entró a una caja
+  (propuesta en la Fase 3: la tienda cancela antes; después lo hace Grupo GF).
+- **Frecuencia del depósito del saldo a favor**: un campo del contrato.
 
 ## 7. Fases
 
@@ -210,8 +197,11 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
 - **Campo nuevo en el contrato: quién inicia.** `cola_operador` para Aurela y
   Kenku, `tienda_asigna` para clientes. `assignment_mode` existe pero no se lee
   en ningún sitio.
+- **Integraciones apagadas** para organizaciones cliente (decisión 12): Swayp,
+  Shalom, agente de voz y Chatby no se ofrecen ni se ejecutan para sus tiendas.
 - **Pruebas.** Validación entre organizaciones, invitación aceptada y rechazada,
-  y que no se pueda crear un segundo operador.
+  que no se pueda crear un segundo operador y que una tienda cliente no dispare
+  ninguna de esas integraciones.
 
 ### Fase 2 — Grupo GF ve solo lo que le asignaron
 
@@ -255,7 +245,7 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
   - Productos de Proveeduría con **precio al cliente**: vigencia, precio general
     y excepción por contrato, el mismo patrón que las tarifas por distrito
     (§29.8).
-  - Mapeo de SKU por tienda (decisión G), que puede editar el cliente y Grupo GF
+  - Mapeo de SKU por tienda (decisión 10), que puede editar el cliente y Grupo GF
     revisa.
   - Asignar exige todas las líneas mapeadas, y la solicitud congela bolsa y
     precio de cada línea, igual que congela la tarifa.
@@ -297,8 +287,8 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
     vez por pedido y ruta/día;
   - el 3.5 % sobre cada Yape recibido por Grupo GF, redondeado por operación,
     con la regla vigente (la del contrato gana a la general);
-  - el precio congelado del producto de Proveeduría en lo entregado (decisión
-    F);
+  - el precio congelado del producto de Proveeduría, solo en lo entregado
+    (decisión 9);
   - el neto.
 - **Bloqueos.** Una ruta abierta, una parada pendiente, evidencia faltante o una
   línea sin tarifa («Sin tarifa configurada», nunca S/0).
@@ -330,7 +320,7 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
   quién inicia; Aurela y Kenku siguen en cola automática; asignar obliga
   (decisión 6).
 - **§29.3.** Bolsa por línea a partir del mapeo de SKU; precio al cliente del
-  producto de Proveeduría; qué se cobra en un rechazo (F, G y H).
+  producto de Proveeduría; qué se cobra en un rechazo (decisiones 9 a 11).
 - **§29.6.** La tienda asigna, cancela y reprograma: hasta cuándo y con qué
   motivo.
 - **§29.7.** Qué ve el cliente y qué se le oculta, en concreto.
@@ -352,7 +342,7 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
 - **Conexión Shopify.** No está verificado que la app de Kapta (OAuth) se pueda
   instalar en tiendas ajenas, ni que Shopify siga permitiendo crear apps
   personalizadas desde el admin. Se prueba en la Fase 0.
-- **Integraciones con credenciales globales** (decisión E).
+- **Integraciones con credenciales globales** (decisión 12).
 - **Token `propio`.** Las salidas de clientes también lo llevan (§29.2). El
   cliente vería «propio» si no se traduce (Fase 4).
 - **Permisos sumados entre organizaciones.** `getMasterPermissions` suma
@@ -366,7 +356,7 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
 - Portal por API o Excel para tiendas sin Shopify (§29.11 paso 5, segunda
   parte).
 - Conteo de stock, reservas y recepción del inventario del cliente con cotejo
-  (§29.3), si se aprueba H.
+  (§29.3, decisión 11).
 - Cobro de la suscripción de Kapta a los clientes.
 - GPS en el reporte (§29.7): no existe en ninguna parte todavía.
 - Enlace público de seguimiento para el cliente final.
