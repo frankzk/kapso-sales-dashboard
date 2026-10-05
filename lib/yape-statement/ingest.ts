@@ -17,6 +17,7 @@ import { applyPaymentValidation } from "@/lib/payment-validation";
 import { backfillCourierPaidAt, type CourierTimeBackfillReport } from "@/lib/tanders/collection-time-backfill";
 import {
   matchStatement,
+  statementAccountKey,
   type MatchableMovement,
   type SkipReason,
   type StatementPayment,
@@ -63,11 +64,6 @@ export interface StatementRunResult {
 const HOUR = 3_600_000;
 const MINUTE = 60_000;
 
-/** Solo letras y dígitos: «GRUPO GF  S.A.C.» y «Grupo GF S.A.C.» son la misma cuenta. */
-function accountKey(s: string): string {
-  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
 function limaClock(iso: string): string {
   return new Date(Date.parse(iso) - 5 * HOUR).toISOString().slice(0, 19).replace("T", " ");
 }
@@ -98,11 +94,11 @@ async function storesForDestination(admin: SupabaseClient, destination: string):
     .from("store_collection_accounts")
     .select("store_id,label,aliases")
     .eq("active", true);
-  const want = accountKey(destination);
+  const want = statementAccountKey(destination);
   return [
     ...new Set(
       ((data ?? []) as { store_id: string; label: string; aliases: string[] | null }[])
-        .filter((a) => [a.label, ...(a.aliases ?? [])].some((n) => accountKey(n) === want))
+        .filter((a) => [a.label, ...(a.aliases ?? [])].some((n) => statementAccountKey(n) === want))
         .map((a) => a.store_id),
     ),
   ];

@@ -5627,6 +5627,17 @@ solo «casi».
 - `?simulacro=1` en el webhook calcula qué validaría sin escribir nada. Cada
   reporte deja su fila en `yape_statement_imports` con lo validado, lo omitido
   por motivo y lo que no se pudo escribir.
+- **Y eso se ve en «Validar pagos › Estado de cuenta Yape»** (05-10-2026).
+  Una pestaña al lado de los comprobantes lista cada correo, del último
+  recibido al primero: cuándo llegó y cuándo se procesó, el periodo y los
+  movimientos nuevos que traía, **los pagos que validó** —pedido, quién pagó
+  según Yape, monto, hora del movimiento y la regla que cuadró— y los
+  pendientes del periodo que quedaron para validar a mano, por motivo. El
+  mismo correo procesado dos veces se marca como tal, y un pago que una
+  persona observó o rechazó después lo dice en vez de seguir figurando como
+  validado sin más. Solo muestra los reportes de una cuenta de cobro de las
+  tiendas donde quien mira puede validar pagos, y de cada uno solo los pagos
+  de esas tiendas (`lib/yape-statement/log.ts`).
 
 ## 17. KPI principales
 
