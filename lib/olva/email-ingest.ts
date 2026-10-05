@@ -9,13 +9,14 @@ import {
   orderFitsLabelDate,
   parseOlvaLabelText,
   phoneKey,
+  type LabelOutcome,
   type OlvaEmailLabel,
 } from "@/lib/olva/email-label";
 import { loadOlvaCandidates, limaDayKey } from "@/lib/olva/portal-sync";
 import { formatOlvaTracking } from "@/lib/olva/tracking";
 import { isTerminalGeneral } from "@/lib/order-status";
 
-export type LabelOutcome = "vinculado" | "ya_vinculado" | "sugerido" | "ambiguo" | "sin_pareja" | "ilegible";
+export type { LabelOutcome };
 
 export interface LabelIngestResult {
   outcome: LabelOutcome;
@@ -102,7 +103,15 @@ export async function ingestOlvaEmailLabel(
     updated_at: new Date().toISOString(),
   };
   const save = async (extra: Record<string, unknown>, result: LabelIngestResult) => {
-    await admin.from("olva_email_labels").upsert({ ...base, ...extra, match_note: result.note }, { onConflict: "message_id,file_name" });
+    const row = { ...base, ...extra, match_note: result.note, outcome: result.outcome };
+    let { error } = await admin.from("olva_email_labels").upsert(row, { onConflict: "message_id,file_name" });
+    // Sin la 0226 aplicada no existe `outcome`: el correo se guarda igual y
+    // «Correos de Olva» deduce el resultado de la nota (`labelOutcome`).
+    if (error && /outcome/.test(error.message)) {
+      const { outcome: _outcome, ...legacy } = row;
+      ({ error } = await admin.from("olva_email_labels").upsert(legacy, { onConflict: "message_id,file_name" }));
+    }
+    if (error) console.error("[olva-email] no se pudo guardar el rótulo", input.messageId, error.message);
     return result;
   };
 
@@ -117,6 +126,18 @@ export async function ingestOlvaEmailLabel(
     .maybeSingle();
   const linked = owner as { id: string; order_name: string | null } | null;
   if (linked) {
+    // Make puede mandar el mismo correo otra vez. Si la primera vez fue ESTE
+    // correo el que puso el tracking, sigue siéndolo: no pasa a «ya estaba».
+    const { data: before } = await admin
+      .from("olva_email_labels")
+      .select("linked_shipment_id,match_note")
+      .eq("message_id", input.messageId)
+      .eq("file_name", input.fileName)
+      .maybeSingle();
+    const prior = before as { linked_shipment_id: string | null; match_note: string | null } | null;
+    if (prior?.linked_shipment_id === linked.id && prior.match_note?.startsWith("Puesto en")) {
+      return save({ linked_shipment_id: linked.id }, { outcome: "vinculado", tracking, note: prior.match_note });
+    }
     return save(
       { linked_shipment_id: linked.id },
       { outcome: "ya_vinculado", tracking, note: `Ya estaba en ${linked.order_name ?? "una salida"}.` },

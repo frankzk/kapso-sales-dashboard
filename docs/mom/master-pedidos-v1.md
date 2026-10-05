@@ -5127,6 +5127,38 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
     a pedido» ya rellena, y lo confirma una persona.
   - el cotejo del portal vuelve a usar los rótulos guardados para lo que siga
     sin resolver, porque la salida puede crearse después del correo.
+- **Y cada correo queda a la vista en «Cotejar Olva › Correos de Olva»**
+  (migración 0226, añadido el 05-10-2026). La pantalla tiene dos pestañas:
+  «Cotejo del portal» (lo de siempre) y «Correos de Olva»
+  (`/dashboard/olva?vista=correos`), que lista cada rótulo recibido, del
+  último al primero y por día de llegada en Lima: hora, tracking y nº de
+  registro (el asunto, si no se leyó), destinatario y dirección, el
+  resultado y el pedido. El resultado de cada correo AL LLEGAR se guarda en
+  `olva_email_labels.outcome` (`vinculado`, `ya_vinculado`, `sugerido`,
+  `ambiguo`, `sin_pareja`, `ilegible`; las filas anteriores se rellenan con
+  las frases que ya escribía el webhook), y la pantalla lo cruza con dónde
+  está HOY el tracking, como el resto de «Cotejar Olva»:
+  - **Vinculado al llegar**: el correo le puso el tracking a su salida. Si
+    después se corrigió en el Master, sigue contando y dice dónde está hoy.
+  - **Ya tenía tracking**: estaba en una salida antes de llegar el correo; se
+    dice quién se adelantó y cuándo (el evento `olva_tracking_linked`: el
+    cotejo del portal y por qué camino, otro correo, o una persona a mano).
+  - **Vinculado después**: llegó sugerido, ambiguo o sin pareja y hoy el
+    tracking está en una salida; dice quién lo puso y qué pasó al llegar.
+  - **Sin vincular**: su tracking sigue sin salida. Lleva «Vincular a
+    pedido» —la misma acción del cotejo—, rellena con el pedido sugerido si
+    lo hay.
+  - **Ilegible**: no se leyó el tracking del PDF.
+
+  Las cifras de arriba filtran la lista. Si no llega ningún correo en tres
+  días, un aviso pide revisar el escenario de Make. Alcance: los correos
+  cuyo RUC de «ENVIA» es de una organización de quien mira, y los que no
+  son de ninguna (sin RUC legible o con un RUC que ninguna tienda tiene en
+  Ajustes), porque ver que llegaron es lo que explica por qué no
+  vincularon; los de un RUC de otra organización no se muestran. Se ven los
+  200 más recientes (`lib/olva/email-log.ts`). Si Make vuelve a mandar un
+  correo que ya vinculó, sigue figurando como «vinculado al llegar» y no
+  pasa a «ya tenía tracking».
 - **El tracking se guarda sin ceros delante.** El portal escribe
   «02649804/26»; la página pública, el correo y todo lo guardado, «2649804-26».
   `parseOlvaTracking` quita los ceros para que el índice único vea el mismo
