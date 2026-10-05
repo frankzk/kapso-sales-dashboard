@@ -36,6 +36,7 @@ import { PAYMENT_OBSERVED_STATUSES } from "@/lib/payment-review";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { inspectVoucher } from "@/lib/voucher-inspect";
 import { findOperationClash, normalizeOperationNumber } from "@/lib/yape-dedup";
+import { raiseRepeatedVoucherAlert } from "@/lib/repeated-voucher-alert";
 
 interface PaymentRow {
   id: string;
@@ -205,6 +206,22 @@ export async function reprocessObservedVouchers(
           kind: "nº_ya_usado",
           detail: `el nº ${readOperation} ya lo usa el pago ${clash.id} (${clash.kind}) — no se escribe`,
         });
+        // Releer descubrió un comprobante que ya paga OTRO pedido: es la alerta
+        // urgente (0226). Solo de verdad, no en la pasada de prueba.
+        if (write && clash.order_id !== row.order_id) {
+          const { data: nombres } = await admin.from("orders").select("id,name").in("id", [row.order_id, clash.order_id]);
+          const nombre = new Map(((nombres ?? []) as { id: string; name: string | null }[]).map((o) => [o.id, o.name]));
+          await raiseRepeatedVoucherAlert(admin, {
+            storeId: row.store_id,
+            orderId: row.order_id,
+            orderName: nombre.get(row.order_id) ?? null,
+            alsoIn: [nombre.get(clash.order_id) ?? "otro pedido"],
+            operation: readOperation,
+            amount: row.amount == null ? null : Number(row.amount),
+            source: "subida_manual",
+            actions: ["Lo encontró la relectura de comprobantes: el nº no se escribió."],
+          });
+        }
       } else {
         patch.operation_number = readOperation;
         gainedOperation = true;

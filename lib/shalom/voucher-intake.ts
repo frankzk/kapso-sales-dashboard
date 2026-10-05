@@ -37,6 +37,7 @@ import { VOUCHER_BUCKET, voucherReading } from "@/lib/voucher-inspect";
 import { loadStoreCollectionAccounts } from "@/lib/collection-accounts";
 import { describeDuplicate, findDuplicate, normalizeOperationNumber } from "@/lib/yape-dedup";
 import { raiseCollectionAlert } from "@/lib/collection-alerts-access";
+import { raiseRepeatedVoucherAlert } from "@/lib/repeated-voucher-alert";
 
 /** Un pedido al que este comprobante PODRÍA pertenecer. */
 export interface VoucherCandidate {
@@ -281,6 +282,19 @@ export async function handleInboundVoucher(
         .maybeSingle();
       dup.conflict.order_name = (otro as { name: string | null } | null)?.name ?? null;
     }
+    // Además de la cola de cobranza, la alerta urgente (0226): el mismo pago no
+    // puede estar en más de un pedido, y eso lo tienen que ver ya.
+    await raiseRepeatedVoucherAlert(admin, {
+      storeId,
+      orderId: match.candidate.orderId,
+      orderName: match.candidate.orderName,
+      alsoIn: [dup.conflict?.order_name ?? "otro pedido"],
+      operation,
+      fileSha256: sha256,
+      amount,
+      source: "whatsapp",
+      actions: ["No se registró: quedó bloqueado."],
+    });
     return fail(accion.outcome, describeDuplicate(dup));
   }
 

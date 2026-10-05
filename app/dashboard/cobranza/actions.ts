@@ -17,12 +17,13 @@ import {
   sweepUnattributedAlerts,
 } from "@/lib/collection-alerts-access";
 import { alertVisibleTo, waitingMinutes } from "@/lib/collection-escalation";
+import { getMasterPermissions } from "@/lib/permissions-access";
 
 export interface CollectionAlertView {
   id: string;
   storeId: string;
   storeName: string;
-  kind: "registrado" | "sin_atribuir";
+  kind: "registrado" | "sin_atribuir" | "comprobante_repetido";
   orderId: string | null;
   orderName: string | null;
   phone: string | null;
@@ -85,10 +86,13 @@ export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
     .eq("status", "abierta")
     .order("created_at", { ascending: true })
     .limit(200);
+  // La de comprobante repetido no tiene escalera: la ven todos los que tienen
+  // el permiso, a la vez (0226).
+  const seesRepeated = (await getMasterPermissions()).can("alerts.repeated_voucher");
   const rows = ((data ?? []) as {
     id: string;
     store_id: string;
-    kind: "registrado" | "sin_atribuir";
+    kind: CollectionAlertView["kind"];
     order_id: string | null;
     phone: string | null;
     amount: number | null;
@@ -97,10 +101,12 @@ export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
     passed: string[] | null;
     offered_to: string | null;
   }[]).filter((r) =>
-    alertVisibleTo(
-      { offeredTo: r.offered_to, offeredAt: null, passed: r.passed ?? [], claimedBy: null },
-      user.id,
-    ),
+    r.kind === "comprobante_repetido"
+      ? seesRepeated
+      : alertVisibleTo(
+          { offeredTo: r.offered_to, offeredAt: null, passed: r.passed ?? [], claimedBy: null },
+          user.id,
+        ),
   );
   if (!rows.length) return [];
 
@@ -132,7 +138,8 @@ export async function listMyCollectionAlerts(): Promise<CollectionAlertView[]> {
     detail: r.detail,
     waitingMinutes: waitingMinutes(r.created_at, nowMs),
     escalations: (r.passed ?? []).length,
-    mine: r.offered_to === user.id,
+    // La urgente es de todos los que la reciben: va arriba como «mía».
+    mine: r.kind === "comprobante_repetido" || r.offered_to === user.id,
     ownerName: r.offered_to ? (nombreDe[r.offered_to] ?? null) : null,
   }));
   return vista.sort((a, b) =>
@@ -175,6 +182,27 @@ export async function discardCollectionAlert(
     motivo.trim() || "descartada a mano",
     "descartada",
   );
+  return ok ? { ok: true } : { ok: false, error: "Ya estaba cerrada." };
+}
+
+/**
+ * Cerrar una alerta de comprobante repetido diciendo qué se hizo. A diferencia
+ * de las de cobranza, ningún HECHO del sistema la resuelve: decidir cuál de los
+ * pedidos está pagado de verdad lo hace una persona, y lo que decidió queda
+ * escrito para quien la vea después.
+ */
+export async function attendRepeatedVoucherAlert(
+  alertId: string,
+  resolucion: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const ctx = await authorize(alertId);
+  if (!ctx) return { ok: false, error: "Sin acceso a esta alerta." };
+  if (!(await getMasterPermissions()).can("alerts.repeated_voucher")) {
+    return { ok: false, error: "No tienes el permiso de esta alerta." };
+  }
+  const texto = resolucion.trim();
+  if (texto.length < 5) return { ok: false, error: "Escribe qué se hizo (cuál pedido sí estaba pagado)." };
+  const ok = await resolveCollectionAlert(createAdminSupabase(), alertId, ctx.userId, texto, "atendida");
   return ok ? { ok: true } : { ok: false, error: "Ya estaba cerrada." };
 }
 
