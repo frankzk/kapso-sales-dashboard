@@ -4210,6 +4210,21 @@ Reglas de esa tabla:
     el agente registra `no_contesta` y **después** cuelga. Nunca cuelga sin
     registrar, salvo si la ficha no existe. La duración máxima bajó de 300 s
     a 180 s.
+  - **«Llamando ahora» (Envíos, 05-10-2026).** En la pestaña Pendiente, la
+    pantalla pregunta cada 5 s por las llamadas del agente abiertas: reales,
+    marcando o en conversación, y sin las caducadas (`getLiveVoiceCalls`).
+    - **La fila va primero**, sea cual sea el orden elegido, con fondo azul
+      claro y una nota: «Marcando · Agente X» mientras suena, o «Llamando ·
+      Agente X» con un punto verde cuando la clienta ya habla. La nota lleva
+      el tiempo que va la llamada. Así nadie abre esa guía para llamar a la
+      vez que el agente.
+    - **Pedido oculto por los filtros:** si los filtros esconden el pedido
+      en llamada, una línea arriba de la tabla lo dice, con «Buscarlo».
+    - **Al terminar la llamada**, la cola se recarga (como mucho una vez cada
+      15 s) y la fila sale con la gestión que registró el agente.
+    - **Pestaña oculta:** con la pestaña del navegador oculta no se consulta.
+    - **Tiempo de la llamada:** el reloj de la nota corre solo, sin repintar
+      la tabla.
   - **«Agentes de voz: comparación»** (Envíos, en el resumen de arriba, junto
     a «Hoy por asesora»). Muestra una fila por agente, siempre los tres, con
     llamadas **reales** (`mode = 'real'`) del rango elegido, con los mismos
