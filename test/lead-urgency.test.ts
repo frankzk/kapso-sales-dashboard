@@ -214,7 +214,7 @@ describe("la fila usa la urgencia, no la ventana de 24h", () => {
   });
 
   it("el aviso de hora dorada se pinta con el conteo real", () => {
-    expect(src).toContain('tallyGolden(facets.except("seg", "edad"), leadSegment, now)');
+    expect(src).toContain('tallyGolden(facets.except("seg", "cov", "edad"), leadSegment, now)');
     expect(src).toContain("en hora dorada");
     // Y se puede filtrar por él: sin esto el aviso informa pero no lleva a
     // ninguna parte.
@@ -233,14 +233,15 @@ describe("la fila usa la urgencia, no la ventana de 24h", () => {
     expect(src).not.toContain("Ver la última hora (${edadCounts.dorada})");
   });
 
-  // El aviso cuenta la hora entera SIN mirar el chip de segmento (por eso su base
-  // es `except("seg","edad")`). Si al filtrar quedara un segmento activo, la lista
-  // mostraría menos filas que el número del botón — el mismo desajuste otra vez,
-  // solo que un clic más tarde.
-  it("al filtrar por la hora dorada se limpia el segmento", () => {
+  // El aviso cuenta la hora entera SIN mirar los chips de segmento ni de
+  // cobertura (por eso su base es `except("seg","cov","edad")`). Si al filtrar
+  // quedara uno activo, la lista mostraría menos filas que el número del botón
+  // — el mismo desajuste otra vez, solo que un clic más tarde.
+  it("al filtrar por la hora dorada se limpian el segmento y la cobertura", () => {
     const boton = src.slice(src.indexOf("Ver estos ${goldenTally.total}") - 900);
     expect(boton).toContain('setEdadFilter("dorada");');
     expect(boton).toContain("setSegFilter(null);");
+    expect(boton).toContain("setCovFilter(null);");
   });
 
   // El chip vive en su propio eje. Si alguien lo metiera dentro de "Ventana"

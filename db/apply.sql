@@ -451,4 +451,6 @@
 \ir migrations/0223_olva_email_labels.sql
 \echo 'Applying 0224_yape_statement.sql'
 \ir migrations/0224_yape_statement.sql
+\echo 'Applying 0225_lead_prior_order_coverage.sql'
+\ir migrations/0225_lead_prior_order_coverage.sql
 \echo 'Done.'
