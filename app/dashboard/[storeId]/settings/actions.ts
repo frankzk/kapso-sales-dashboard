@@ -10,6 +10,7 @@ import { getStoreCreds, runStoreSync } from "@/lib/ingest";
 import { registerOrderWebhooks } from "@/lib/shopify";
 import { buildStoreDailySummary, formatDailySummary, limaDayBounds } from "@/lib/daily-summary";
 import { sendTelegramToAll } from "@/lib/telegram";
+import { repeatedVoucherTelegram } from "@/lib/repeated-voucher-alert";
 import {
   listMetaAdAccounts,
   probeMetaConnection,
@@ -167,6 +168,7 @@ export async function updateStore(
     voice_recovery_zadarma_sip: get("voice_recovery_zadarma_sip"),
     confirmation_cycle_days: get("confirmation_cycle_days"),
     telegram_chat_id: get("telegram_chat_id"),
+    urgent_telegram_chat_id: get("urgent_telegram_chat_id"),
     telegram_bot_token: get("telegram_bot_token"),
     meta_access_token: get("meta_access_token"),
     aliclik_api_token: get("aliclik_api_token"),
@@ -247,6 +249,86 @@ export async function updateStore(
   revalidatePath("/dashboard/stores");
   return { notice: "Tienda actualizada." };
 }
+
+/**
+ * Mensaje de prueba al grupo de alertas urgentes (0226), con el mismo texto que
+ * llegará de verdad. Sirve para comprobar que el bot está en el grupo y que el
+ * chat id es el bueno ANTES de que haga falta.
+ */
+export async function sendUrgentTelegramTest(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const creds = await getStoreCreds(storeId, ctx.admin);
+  const { data: store } = await ctx.admin.from("stores").select("urgent_telegram_chat_id").eq("id", storeId).maybeSingle();
+  const chat = (store as { urgent_telegram_chat_id?: string | null } | null)?.urgent_telegram_chat_id;
+  if (!creds?.telegram_bot_token || !chat) {
+    return { error: "Configura primero el token del bot y el chat id del grupo de alertas urgentes (y guarda)." };
+  }
+  const text = repeatedVoucherTelegram(creds.name, {
+    storeId,
+    orderName: "#PRUEBA1",
+    alsoIn: ["#PRUEBA2"],
+    operation: "00000000",
+    amount: 89,
+    source: "subida_manual",
+    actions: ["Esto es una PRUEBA desde Ajustes: no hay ningún comprobante repetido."],
+  });
+  const res = await sendTelegramToAll(creds.telegram_bot_token, chat, text);
+  if (!res.sent) {
+    const why = res.results.find((r) => !r.ok)?.error ?? "sin chat id válido";
+    return { error: `Telegram rechazó el envío: ${why}. ¿Agregaste el bot al grupo?` };
+  }
+  return { notice: `Alerta de prueba enviada ✓ — ${res.sent}/${res.total} destinatario(s).` };
+}
+
+/**
+ * Los grupos donde está el bot, con su chat id. Telegram no enseña el id de un
+ * grupo en la app: lo sabe el bot cuando alguien escribe en el grupo. Se lee de
+ * `getUpdates` (los últimos mensajes que recibió el bot) y se devuelve para
+ * copiarlo — no se guarda nada solo.
+ */
+export async function findTelegramGroups(
+  _prev: SettingsState,
+  formData: FormData,
+): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const creds = await getStoreCreds(storeId, ctx.admin);
+  if (!creds?.telegram_bot_token) return { error: "Configura primero el token del bot (y guarda)." };
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${creds.telegram_bot_token}/getUpdates?limit=100`);
+    const body = (await res.json()) as {
+      ok: boolean;
+      description?: string;
+      result?: { message?: { chat?: TgChat }; my_chat_member?: { chat?: TgChat } }[];
+    };
+    if (!body.ok) return { error: `Telegram respondió: ${body.description ?? res.status}` };
+    const groups = new Map<number, string>();
+    for (const u of body.result ?? []) {
+      for (const chat of [u.message?.chat, u.my_chat_member?.chat]) {
+        if (chat && (chat.type === "group" || chat.type === "supergroup")) groups.set(chat.id, chat.title ?? "(sin nombre)");
+      }
+    }
+    if (!groups.size) {
+      return {
+        error:
+          "El bot no ve ningún grupo todavía. Agrégalo al grupo, escribe cualquier mensaje en el grupo y vuelve a intentarlo.",
+      };
+    }
+    return {
+      notice: `Grupos donde está el bot: ${[...groups].map(([id, title]) => `«${title}» → ${id}`).join(" · ")}. Copia el número al campo y guarda.`,
+    };
+  } catch (e) {
+    return { error: errMsg(e) };
+  }
+}
+
+type TgChat = { id: number; type: string; title?: string };
 
 /**
  * Mint a fresh per-store Kapso webhook secret, store it encrypted, and reveal

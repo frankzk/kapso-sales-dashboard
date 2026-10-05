@@ -453,4 +453,6 @@
 \ir migrations/0224_yape_statement.sql
 \echo 'Applying 0225_lead_prior_order_coverage.sql'
 \ir migrations/0225_lead_prior_order_coverage.sql
+\echo 'Applying 0226_repeated_voucher_alert.sql'
+\ir migrations/0226_repeated_voucher_alert.sql
 \echo 'Done.'

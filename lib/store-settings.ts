@@ -86,6 +86,8 @@ export interface StoreSettingsInput {
   confirmation_cycle_days?: string;
   // Telegram daily summary: chat id is plain, token is a secret.
   telegram_chat_id?: string;
+  /** Grupo de alertas urgentes (0226): comprobante repetido. Mismo formato. */
+  urgent_telegram_chat_id?: string;
   /** Modelo de visión de esta tienda (plain). Vacío = el del entorno. */
   anthropic_model?: string;
   // Secrets — only applied when non-empty.
@@ -363,6 +365,8 @@ export function buildStoreUpdate(
 
   const tgChat = clean(input.telegram_chat_id);
   if (tgChat !== null) patch.telegram_chat_id = tgChat;
+  const urgentChat = clean(input.urgent_telegram_chat_id);
+  if (urgentChat !== null) patch.urgent_telegram_chat_id = urgentChat;
 
   const token = clean(input.shopify_token);
   if (token) patch.shopify_token_enc = encrypt(token, keyOverride);
