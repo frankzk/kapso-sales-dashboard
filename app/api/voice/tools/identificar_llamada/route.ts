@@ -24,7 +24,9 @@ import {
   readToolBody,
   sweepStaleCalls,
   voiceToolAuthorized,
+  voiceToolEngine,
 } from "@/lib/voice-recovery-server";
+import { callsForEngine } from "@/lib/voice-recovery";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,7 +41,9 @@ export async function POST(req: NextRequest) {
   const now = new Date();
 
   await sweepStaleCalls(admin, now);
-  const open = await openCalls(admin);
+  // Solo las llamadas del motor que pregunta: con los agentes en paralelo, el
+  // número no basta para separar a Grok de ElevenLabs (MOM §11.8).
+  const open = callsForEngine(await openCalls(admin), voiceToolEngine(req.headers));
   const opts = { now, agentNumber: body.agente ?? null, customerPhone: body.numero_cliente ?? null };
   let picked = pickOpenCall(open, "dialing", opts);
   // Ya en curso SOLO si la abrió el inicio de ElevenLabs (ficha precargada):

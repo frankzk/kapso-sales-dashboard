@@ -4140,8 +4140,24 @@ Reglas de esa tabla:
     así que la comparación la sigue contando como atendida y cortada sin
     gestión. Esto importa porque las tres líneas comparten el número de
     agente: el domingo 04-10, cada corte dejaba la cola parada unos 10 min
-    hasta que pasaba el barrido. Zadarma no avisa el corte, así que Daaph
-    sigue dependiendo del barrido.
+    hasta que pasaba el barrido.
+
+    **Daaph (Zadarma), desde el 05-10-2026.** Zadarma avisa el fin de cada
+    llamada a `/api/webhooks/zadarma`: la URL se configura en el panel de
+    Zadarma, en las notificaciones de la centralita, con `NOTIFY_OUT_END`.
+    - El aviso viene firmado con la clave de la API (`ZADARMA_SECRET`), como lo
+      hace su librería oficial. Al guardar la URL, Zadarma la verifica con
+      `zd_echo`.
+    - La llamada se encuentra por el teléfono de la clienta entre las abiertas
+      de Zadarma de los últimos 30 min, porque el callback no devuelve un id.
+    - Si estaba en curso sin gestión, se aplica el mismo cierre por corte que
+      en Telnyx (`closeCutWithoutGestion`). Si seguía marcando, se cierra como
+      «no contesta» con la causa que dio Zadarma: ocupado, sin respuesta,
+      cancelada.
+    - Cada aviso queda en `telephony_response.eventos`.
+
+    El 05-10, una llamada de Daaph contestada a las 09:15:30 seguía «en curso»
+    a las 09:20 sin resultado, y la pasada de las 09:20 se perdió.
 
     Para no anotar un «no contesta» encima de una gestión,
     `registrar_gestion` reserva primero la llamada: escribe su `outcome` solo
@@ -4192,6 +4208,30 @@ Reglas de esa tabla:
     porcentajes suman más de 100, se recortan a 100. Sigue habiendo una sola
     llamada a la vez por tienda, porque las tres líneas comparten el número de
     agente.
+
+    **Agentes en paralelo (decisión del owner, 05-10-2026).** Con una sola
+    llamada a la vez, cada pasada del barrido (cada 5 min) daba una llamada:
+    unas 12 por hora para una cola de ~250. Ahora cada agente con **número
+    propio** llama a la vez. La pasada lanza una llamada por número libre, cada
+    agente con el siguiente pedido de la cola y todas contando contra el tope
+    del día (`planVoiceSlots`).
+
+    Las tools encuentran la llamada por el número de agente, así que dos
+    agentes solo pueden ir en paralelo si Kapta sabe, al recibir la tool, de
+    qué motor viene. Si no lo sabe, comparten número y se turnan.
+    - **ElevenLabs** firma sus tools con su propio secreto
+      (`VOICE_TOOLS_SECRET_ELEVENLABS`). Por eso tiene su número
+      (`<número>#elevenlabs`), y sus tools y su inicio solo ven llamadas de
+      ElevenLabs (`callsForEngine`). La URL de sus tools no cambia
+      (`?agente=1-11`), porque el sufijo no tiene dígitos y el número se
+      compara por dígitos.
+    - **Daaph y Telnyx** usan el mismo agente de xAI y el mismo secreto, así
+      que comparten número y su turno se sortea con sus porcentajes. Telnyx
+      pasa a tener turno propio cuando su agente de xAI tenga otro `?agente=`,
+      configurado en `VOICE_AGENT_NUMBER_TELNYX` (con dígitos distintos).
+    - En paralelo, el porcentaje de un agente con turno propio solo lo
+      enciende o lo apaga (> 0). Si falta el secreto de ElevenLabs o es igual
+      al de xAI, todo vuelve a un turno sorteado entre los tres.
 
     **Reintento automático (04-10-2026).** Si un pedido de la cola corresponde
     al reintento automático Aliclik → Swayp, el agente no lo llama: el

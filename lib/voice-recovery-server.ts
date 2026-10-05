@@ -22,6 +22,7 @@ import {
   type Ficha,
   type GestionAction,
   type OpenCall,
+  type VoiceLanes,
 } from "@/lib/voice-recovery";
 import { compareVoiceCandidates, voiceRecoveryEligible } from "@/lib/voice-recovery-queue";
 import { requestCallback, zadarmaLocalPeru } from "@/lib/zadarma";
@@ -58,6 +59,27 @@ function secretEquals(provided: string | null | undefined, expected: string): bo
  */
 export function voiceToolAuthorized(req: NextRequest): boolean {
   return voiceToolSecretMatches(req.headers, [env.voiceToolsSecret(), env.voiceToolsSecretElevenLabs()]);
+}
+
+/**
+ * Qué motor llamó a la tool, por el secreto que trajo: el de ElevenLabs o el de
+ * xAI. Null si los dos secretos son el mismo (o falta el de ElevenLabs): ahí no
+ * se puede distinguir y los agentes no llaman en paralelo (`voiceLanes`).
+ */
+export function voiceToolEngine(headers: Pick<Headers, "get">): "grok" | "elevenlabs" | null {
+  const main = env.voiceToolsSecret();
+  const eleven = env.voiceToolsSecretElevenLabs();
+  if (!eleven || eleven === main) return null;
+  if (voiceToolSecretMatches(headers, [eleven])) return "elevenlabs";
+  if (voiceToolSecretMatches(headers, [main])) return "grok";
+  return null;
+}
+
+/** Qué agentes pueden llamar a la vez (MOM §11.8, agentes en paralelo). */
+export function voiceLanes(): VoiceLanes {
+  const main = env.voiceToolsSecret();
+  const eleven = env.voiceToolsSecretElevenLabs();
+  return { elevenOwn: Boolean(eleven) && eleven !== main, telnyxNumber: env.voiceAgentNumberTelnyx() };
 }
 
 /** Separado para probarlo sin Request. Un secreto vacío nunca autoriza. */
@@ -265,10 +287,36 @@ export async function closeAsNoAnswer(
   }
 }
 
+/** Margen para que llegue un `registrar_gestion` pedido a la vez que el corte. */
+export const HANGUP_GRACE_MS = 3_000;
+
+/**
+ * La conversación se cortó y el agente no registró nada: se cierra como «no
+ * contesta» al momento, sin esperar al barrido. Lo llaman los avisos de corte
+ * de Telnyx y de Zadarma (MOM §11.8). Con el barrido, la cola quedaba parada
+ * ~10 min tras cada corte (04-10-2026). El error empieza con «sin
+ * registrar_gestion», como el del barrido: la comparación la sigue contando
+ * como atendida y cortada sin gestión.
+ */
+export async function closeCutWithoutGestion(
+  admin: SupabaseClient,
+  c: Pick<OpenCall, "id" | "status"> & { store_id: string; order_id: string; mode: "real" | "test" },
+  now: Date,
+): Promise<void> {
+  await new Promise((r) => setTimeout(r, HANGUP_GRACE_MS));
+  await closeAsNoAnswer(
+    admin,
+    c,
+    "No contestó: la llamada llegó al agente pero se cortó sin gestión (buzón o cuelgue).",
+    now,
+    { error: "sin registrar_gestion: se cortó la llamada", soloSinGestion: true },
+  );
+}
+
 export async function openCalls(admin: SupabaseClient): Promise<OpenCall[]> {
   const { data, error } = await admin
     .from("voice_calls")
-    .select("id, agent_number, phone, status, dialed_at, started_at")
+    .select("id, agent_number, phone, provider, status, dialed_at, started_at")
     .in("status", OPEN_STATUSES as unknown as string[]);
   if (error) throw new Error(error.message);
   return (data ?? []) as OpenCall[];

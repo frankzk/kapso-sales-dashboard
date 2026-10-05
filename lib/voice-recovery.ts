@@ -70,6 +70,101 @@ export function pickVoiceRoute(
   return { telephony: "zadarma", engine: "grok" };
 }
 
+// ── Agentes en paralelo (04-10-2026) ────────────────────────────────────────
+
+/**
+ * El número de agente de cada línea. Las tools encuentran la llamada por ese
+ * número (una abierta por número, índice único), así que dos agentes solo
+ * pueden llamar a la vez si tienen números distintos Y Kapta sabe, al recibir
+ * la tool, de qué motor viene:
+ *
+ * - ElevenLabs firma con su propio secreto (`VOICE_TOOLS_SECRET_ELEVENLABS`):
+ *   sus filas llevan `<número>#elevenlabs` y sus tools solo ven llamadas de
+ *   ElevenLabs. La URL de sus tools no cambia (`?agente=1-11`): el sufijo no
+ *   tiene dígitos y la comparación es por dígitos.
+ * - Daaph y Telnyx usan el mismo agente de xAI y el mismo secreto: comparten
+ *   número salvo que Telnyx tenga uno propio (`VOICE_AGENT_NUMBER_TELNYX`, con
+ *   dígitos distintos, el que su agente de xAI manda en `?agente=`).
+ */
+export const ELEVENLABS_AGENT_SUFFIX = "#elevenlabs";
+
+export interface VoiceLanes {
+  /** ElevenLabs tiene secreto propio: puede llamar a la vez que Grok. */
+  elevenOwn: boolean;
+  /** Número propio del Agente Telnyx en xAI; vacío = comparte con Daaph. */
+  telnyxNumber: string;
+}
+
+export function voiceAgentNumberFor(base: string, route: VoiceRoute, lanes: VoiceLanes): string {
+  const b = base.trim();
+  if (route.telephony === "zadarma") return b;
+  if (route.engine === "elevenlabs") return lanes.elevenOwn ? `${b}${ELEVENLABS_AGENT_SUFFIX}` : b;
+  return lanes.telnyxNumber.trim() || b;
+}
+
+export interface VoiceSlot {
+  agentNumber: string;
+  route: VoiceRoute;
+}
+
+/**
+ * Qué llamadas lanza una pasada del barrido: una por número de agente libre.
+ *
+ * - Sin agentes separados, un solo turno sorteado entre los tres
+ *   (`pickVoiceRoute`), como hasta el 04-10.
+ * - Con ElevenLabs separado, su turno va aparte y el turno de Grok se sortea
+ *   entre Daaph y Telnyx con sus porcentajes.
+ * - Con Telnyx también separado, cada agente tiene su turno.
+ *
+ * En paralelo, el porcentaje solo enciende o apaga al agente (> 0), salvo entre
+ * dos que comparten número, donde sigue siendo el reparto.
+ */
+export function planVoiceSlots(
+  o: {
+    base: string;
+    telnyxShare: number;
+    elevenShare: number;
+    telnyxReady: boolean;
+    elevenReady: boolean;
+    lanes: VoiceLanes;
+  },
+  random: () => number = Math.random,
+): VoiceSlot[] {
+  const clamp = (n: number) => (Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0);
+  const slot = (route: VoiceRoute): VoiceSlot => ({ agentNumber: voiceAgentNumberFor(o.base, route, o.lanes), route });
+  const daaph: VoiceRoute = { telephony: "zadarma", engine: "grok" };
+  const telnyx: VoiceRoute = { telephony: "telnyx", engine: "grok" };
+  const eleven: VoiceRoute = { telephony: "telnyx", engine: "elevenlabs" };
+  const elevenOn = o.lanes.elevenOwn && o.telnyxReady && o.elevenReady && clamp(o.elevenShare) > 0;
+  if (!elevenOn) {
+    return [slot(pickVoiceRoute({ telnyxShare: o.telnyxShare, elevenShare: o.elevenShare, telnyxReady: o.telnyxReady, elevenReady: o.elevenReady }, random))];
+  }
+  const t = o.telnyxReady ? clamp(o.telnyxShare) : 0;
+  const d = Math.max(0, 100 - t - clamp(o.elevenShare));
+  const telnyxOwn = Boolean(o.lanes.telnyxNumber.trim()) && t > 0;
+  const slots: VoiceSlot[] = [slot(eleven)];
+  if (telnyxOwn) {
+    slots.unshift(slot(telnyx));
+    if (d > 0) slots.unshift(slot(daaph));
+  } else if (t + d > 0) {
+    slots.unshift(slot(random() * (t + d) < t ? telnyx : daaph));
+  }
+  return slots;
+}
+
+/**
+ * Las llamadas abiertas que puede ver una tool según el motor que la llamó: con
+ * el secreto de ElevenLabs, solo las de ElevenLabs; con el de xAI, solo las de
+ * Grok. `null` (secretos iguales) = todas, como antes.
+ */
+export function callsForEngine<T extends { provider?: string | null }>(
+  calls: readonly T[],
+  engine: "grok" | "elevenlabs" | null,
+): T[] {
+  if (!engine) return [...calls];
+  return calls.filter((c) => (c.provider === "elevenlabs") === (engine === "elevenlabs"));
+}
+
 // ── Producto corto ──────────────────────────────────────────────────────────
 
 const STOP_TAIL = new Set(["de", "del", "para", "con", "y", "la", "el", "los", "las", "en", "a"]);
@@ -302,6 +397,8 @@ export interface OpenCall {
   id: string;
   agent_number: string;
   phone: string;
+  /** `grok` o `elevenlabs`: el motor que atiende (para separar las tools). */
+  provider?: string | null;
   status: "queued" | "dialing" | "in_progress";
   dialed_at: string | null;
   started_at: string | null;

@@ -23,8 +23,10 @@ import {
   loadVoiceQueue,
   placeVoiceCall,
   realCallsToday,
+  voiceLanes,
   type VoiceStoreSettings,
 } from "@/lib/voice-recovery-server";
+import { voiceAgentNumberFor } from "@/lib/voice-recovery";
 import {
   VOICE_EXCLUSION_LABEL,
   VOICE_SUNDAY_START_HOUR,
@@ -2392,17 +2394,23 @@ export async function probarAgenteEnMiTelefono(
   if (!ctx) return { error: "Sin acceso a este pedido." };
   const store = await voiceStoreFor(ctx.storeId);
   if (!store) return { error: "Tienda no encontrada." };
+  // ElevenLabs sale por la línea Telnyx con otro motor.
+  const route = {
+    telephony: telephony === "zadarma" ? ("zadarma" as const) : ("telnyx" as const),
+    engine: telephony === "elevenlabs" ? ("elevenlabs" as const) : ("grok" as const),
+  };
   const placed = await placeVoiceCall(createAdminSupabase(), {
     storeId: store.id,
     orderId,
     phone,
     mode: "test",
     triggeredBy: ctx.userId,
-    agentNumber: store.voice_recovery_agent_number ?? "",
+    // El mismo número que usa ese agente en el barrido: con los agentes en
+    // paralelo, una prueba de ElevenLabs no ocupa el número de Daaph.
+    agentNumber: voiceAgentNumberFor(store.voice_recovery_agent_number ?? "", route, voiceLanes()),
     sip: store.voice_recovery_zadarma_sip ?? "",
-    // ElevenLabs sale por la línea Telnyx con otro motor.
-    telephony: telephony === "zadarma" ? "zadarma" : "telnyx",
-    engine: telephony === "elevenlabs" ? "elevenlabs" : "grok",
+    telephony: route.telephony,
+    engine: route.engine,
   });
   if (!placed.ok) return { error: placed.error };
   return {
