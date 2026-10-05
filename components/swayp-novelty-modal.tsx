@@ -45,6 +45,9 @@ export function SwaypNoveltyModal({
   const [fecha, setFecha] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  // Devolver al remitente no se deshace: como las salidas del cajón que cierran
+  // la venta, se pide un segundo clic que nombra la guía.
+  const [confirmReturn, setConfirmReturn] = useState(false);
   const [pending, start] = useTransition();
   const panel = useRef<HTMLDivElement>(null);
 
@@ -56,6 +59,8 @@ export function SwaypNoveltyModal({
 
   const meta = accion ? NOVELTY_ACTIONS[accion] : null;
   const needsDate = meta?.needsDate ?? false;
+  const isReturn = meta?.isReturn ?? false;
+  const returnGuide = swaypGuide ?? guideCode;
   // Mismo corte que la creación de guía: Swayp arma sus rutas 16:00–17:00 para
   // el día siguiente, así que la fecha más temprana posible es mañana.
   const minDate = nextDayKey(limaTodayKey());
@@ -66,6 +71,10 @@ export function SwaypNoveltyModal({
 
   function submit() {
     if (!accion) return;
+    if (isReturn && !confirmReturn) {
+      setConfirmReturn(true);
+      return;
+    }
     setError(null);
     start(async () => {
       const res = await solveSwaypNovelty({
@@ -118,7 +127,12 @@ export function SwaypNoveltyModal({
             </h2>
             <p className="text-[13px] leading-5 text-ink-500">
               <span className="font-mono text-ink-700">{guideCode ?? "Envío"}</span>
-              {swaypGuide ? <> · guía <span className="font-mono">{swaypGuide}</span></> : ""}
+              {/* La guía Swayp solo si es otra: en una guía directa es la misma. */}
+              {swaypGuide && swaypGuide !== guideCode ? (
+                <> · guía Swayp <span className="font-mono">{swaypGuide}</span></>
+              ) : (
+                ""
+              )}
               {swaypState === 8 ? " · el mensajero marcó devolución" : ""}
             </p>
           </div>
@@ -159,8 +173,12 @@ export function SwaypNoveltyModal({
                         label={option.label}
                         description={blocked ? "Necesitas el permiso de retornos y devoluciones." : option.hint}
                         active={accion === key}
+                        danger={option.isReturn}
                         disabled={blocked}
-                        onClick={() => setAccion(key)}
+                        onClick={() => {
+                          setAccion(key);
+                          setConfirmReturn(false);
+                        }}
                       />
                     );
                   })}
@@ -197,18 +215,38 @@ export function SwaypNoveltyModal({
                 </span>
               </label>
 
+              {isReturn && confirmReturn && (
+                <Banner tone="crit" role="alert" title="El paquete vuelve a la bodega.">
+                  <p>Swayp cierra el intento y no se puede volver a ofrecer desde aquí.</p>
+                </Banner>
+              )}
+
               {error && (
                 <Banner tone="crit" role="alert">
                   {error}
                 </Banner>
               )}
 
-              <div className="flex justify-end gap-2">
-                <OpsButton onClick={onClose} className="pointer-coarse:h-11">
+              <div className="flex flex-wrap justify-end gap-2">
+                <OpsButton
+                  onClick={confirmReturn ? () => setConfirmReturn(false) : onClose}
+                  className="pointer-coarse:h-11"
+                >
                   Cancelar
                 </OpsButton>
-                <OpsButton variant="primary" onClick={submit} disabled={!canSubmit} className="pointer-coarse:h-11">
-                  {pending ? "Enviando…" : "Enviar a Swayp"}
+                <OpsButton
+                  variant={isReturn ? "danger" : "primary"}
+                  onClick={submit}
+                  disabled={!canSubmit}
+                  className="pointer-coarse:h-11"
+                >
+                  {pending
+                    ? "Enviando…"
+                    : isReturn && confirmReturn
+                      ? `Sí, devolver la guía ${returnGuide ?? ""}`.trim()
+                      : isReturn
+                        ? "Devolver al remitente…"
+                        : "Enviar a Swayp"}
                 </OpsButton>
               </div>
             </>

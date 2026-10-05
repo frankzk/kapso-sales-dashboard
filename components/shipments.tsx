@@ -2875,7 +2875,7 @@ function ShipmentDrawer({
                         className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11 pointer-coarse:min-w-11")}
                       >
                         <IconPhone aria-hidden className="text-ink-500" />
-                        <span className="hidden sm:inline">Llamar</span>
+                        Llamar
                       </a>
                       <a
                         href={`https://wa.me/${phone.replace(/\D/g, "")}`}
@@ -2997,7 +2997,9 @@ function ShipmentDrawer({
               )}
             </header>
 
-            <div className="space-y-4 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:space-y-5 sm:p-6">
+            {/* `gap` y no `space-y`: las tarjetas son hijas del `fieldset` con
+                `display: contents`, y `space-y` solo alcanza a hijos directos. */}
+            <div className="flex flex-col gap-4 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:gap-6 sm:p-6">
             {/* En solo lectura el bloque sigue habilitado a propósito: es lo que
                 permite que tocar un control pida la reserva. Si vuelve
                 «tomada», se deshabilita y el borrador se puede copiar. */}
@@ -3151,14 +3153,36 @@ function ShipmentDrawer({
                   }
                   aside={
                     !showCancelledException && (
-                      <OpsButton size="sm" onClick={() => setShowCancelledException(true)} className="pointer-coarse:h-11">
+                      <OpsButton
+                        size="sm"
+                        onClick={() => setShowCancelledException(true)}
+                        // Sin stock, sin cobertura o sin vínculo de codbar no
+                        // hay guía que crear: el motivo se lee antes del clic.
+                        disabled={cancelledExceptionUnavailable}
+                        aria-describedby={cancelledExceptionUnavailable ? "guia-reenvio-bloqueo" : undefined}
+                        className="pointer-coarse:h-11"
+                      >
                         {enRecuperacion ? "Reenviar" : "Crear excepción"}
                       </OpsButton>
                     )
                   }
                 />
 
-                {showCancelledException && (
+                {cancelledExceptionUnavailable && (
+                  <div id="guia-reenvio-bloqueo" className="pt-4">
+                    {swaypSinCodbarAviso ? (
+                      <Banner tone="crit">{swaypSinCodbarAviso}</Banner>
+                    ) : (
+                      <Banner tone="warn">
+                        {fenixReason === "sin_stock"
+                          ? `Swayp no tiene stock para este pedido en ${detail.shipment.city ?? "la ciudad indicada"}.`
+                          : `Swayp no tiene cobertura en ${detail.shipment.city ?? "la ciudad indicada"}.`}
+                      </Banner>
+                    )}
+                  </div>
+                )}
+
+                {showCancelledException && !cancelledExceptionUnavailable && (
                   <div className="space-y-4 pt-4">
                     <label className={DRAWER_LABEL}>
                       Nueva fecha de entrega
@@ -3190,16 +3214,6 @@ function ShipmentDrawer({
                       registrar el reenvío. Si Swayp no responde, el reenvío no se registra y el aviso dice por qué.
                     </p>
 
-                    {swaypSinCodbarAviso && (
-                      <Banner tone="crit">{swaypSinCodbarAviso}</Banner>
-                    )}
-                    {cancelledExceptionUnavailable && !swaypSinCodbar && (
-                      <Banner tone="warn">
-                        {fenixReason === "sin_stock"
-                          ? `Swayp no tiene stock para este pedido en ${detail.shipment.city ?? "la ciudad indicada"}.`
-                          : `Swayp no tiene cobertura en ${detail.shipment.city ?? "la ciudad indicada"}.`}
-                      </Banner>
-                    )}
 
                     <div className="flex flex-wrap justify-end gap-2">
                       <OpsButton
@@ -3450,36 +3464,36 @@ function ShipmentDrawer({
                     }
                   />
                   <div className="space-y-4 pt-4">
-                    <label className={DRAWER_LABEL}>
-                      ¿Qué informó Swayp?
-                      <select
-                        value={courierResult}
-                        onChange={(e) => {
-                          setCourierResult(e.target.value as CourierReportResult | "");
-                          setCourierDate("");
-                          // Cambiar de resultado desarma el segundo clic: un botón
-                          // rojo cebado no puede sobrevivir a un cambio de opinión.
-                          setConfirmCourierClose(false);
-                        }}
-                        className={DRAWER_INPUT}
-                      >
-                        <option value="">Selecciona el resultado…</option>
+                    {/* Las cinco salidas a la vista, cada una con lo que hace
+                        (antes era un desplegable y el efecto se leía después). */}
+                    <div role="group" aria-labelledby="guia-courier-que" className="grid gap-2">
+                      <p id="guia-courier-que" className="text-[13px] font-medium leading-5 text-ink-700">
+                        ¿Qué informó Swayp?
+                      </p>
+                      <div className="grid gap-2 sm:grid-cols-2">
                         {COURIER_REPORT_RESULTS.map((result) => (
-                          <option key={result.code} value={result.code}>{result.optionLabel}</option>
+                          <OptionTile
+                            key={result.code}
+                            label={result.label}
+                            description={result.effect}
+                            active={courierResult === result.code}
+                            // Rojo solo si de verdad cierra la venta: corregir una
+                            // guía que ya está anulada no termina nada.
+                            danger={result.resultingStatus === "anulado" && detail.shipment.delivery_status !== "anulado"}
+                            onClick={() => {
+                              setCourierResult(result.code);
+                              setCourierDate("");
+                              // Cambiar de resultado desarma el segundo clic: un botón
+                              // rojo cebado no puede sobrevivir a un cambio de opinión.
+                              setConfirmCourierClose(false);
+                            }}
+                          />
                         ))}
-                      </select>
-                    </label>
-
-                    {courierResultDefinition && (
-                      <div className={DRAWER_NOTE}>
-                        <p className="font-semibold text-ink-900">Qué sucederá</p>
-                        <p className="mt-0.5">{courierResultDefinition.effect}</p>
-                        {reopensClosedGuide && (
-                          <p className="mt-1 font-medium text-warn-fg">
-                            Esta corrección reabrirá una guía que actualmente está cerrada.
-                          </p>
-                        )}
                       </div>
+                    </div>
+
+                    {reopensClosedGuide && (
+                      <Banner tone="warn">Esta corrección reabrirá una guía que actualmente está cerrada.</Banner>
                     )}
 
                     {courierResultDefinition?.requiresDate && (
@@ -3719,32 +3733,41 @@ function ShipmentDrawer({
                       No aumenta los intentos ni cambia el estado del envío.
                     </p>
                   )}
-                  <div className={cn(disposition === "confirma" && aliclikDecision && CARD_ZONE, "grid gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]")}>
-                    <label className={DRAWER_LABEL}>
-                      {disposition === "confirma"
-                        ? reprogramProvider === "aliclik"
-                          ? "Fecha de reprogramación en Aliclik"
-                          : "Fecha de reprogramación (va en la nueva guía Swayp)"
-                        : disposition === "programar"
-                          ? "Fecha de próxima llamada"
-                          : "Próximo intento (opcional)"}
-                      <input
-                        type="date"
-                        value={nextDate}
-                        onChange={(e) => setNextDate(e.target.value)}
-                        // UNA REPROGRAMACIÓN CONFIRMADA NO PUEDE SER DE AYER. El
-                        // `min` solo cubría «programar», y ni el botón ni el
-                        // servidor exigían futuro para «confirma»: se emitía una
-                        // guía Swayp con la fecha pasada ESTAMPADA EN SU NÚMERO
-                        // (`rescheduleGuideCode`) y un despacho imposible agendado.
-                        min={
-                          disposition === "programar" || disposition === "confirma"
-                            ? tomorrowDateInputValue()
-                            : undefined
-                        }
-                        className={DRAWER_INPUT}
-                      />
-                    </label>
+                  <div
+                    className={cn(
+                      disposition === "confirma" && aliclikDecision && CARD_ZONE,
+                      "grid gap-4",
+                      disposition !== "cancela" && "sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]",
+                    )}
+                  >
+                    {/* Al anular no hay próximo intento: la fecha se descartaba. */}
+                    {disposition !== "cancela" && (
+                      <label className={DRAWER_LABEL}>
+                        {disposition === "confirma"
+                          ? reprogramProvider === "aliclik"
+                            ? "Fecha de reprogramación en Aliclik"
+                            : "Fecha de reprogramación (va en la nueva guía Swayp)"
+                          : disposition === "programar"
+                            ? "Fecha de próxima llamada"
+                            : "Próximo intento (opcional)"}
+                        <input
+                          type="date"
+                          value={nextDate}
+                          onChange={(e) => setNextDate(e.target.value)}
+                          // UNA REPROGRAMACIÓN CONFIRMADA NO PUEDE SER DE AYER. El
+                          // `min` solo cubría «programar», y ni el botón ni el
+                          // servidor exigían futuro para «confirma»: se emitía una
+                          // guía Swayp con la fecha pasada ESTAMPADA EN SU NÚMERO
+                          // (`rescheduleGuideCode`) y un despacho imposible agendado.
+                          min={
+                            disposition === "programar" || disposition === "confirma"
+                              ? tomorrowDateInputValue()
+                              : undefined
+                          }
+                          className={DRAWER_INPUT}
+                        />
+                      </label>
+                    )}
                     <label className={DRAWER_LABEL}>
                       Nota de la llamada
                       <textarea
