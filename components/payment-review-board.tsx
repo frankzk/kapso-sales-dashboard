@@ -10,6 +10,7 @@ import {
   validatePayment,
   type PaymentActionState,
 } from "@/app/dashboard/pedidos/payment-actions";
+import { PaymentReviewTabs } from "@/components/payment-review-tabs";
 import { cn } from "@/components/ui";
 import {
   describePaymentValidator,
@@ -461,6 +462,8 @@ export function PaymentReviewBoard({ data }: { data: PaymentReviewBoardData }) {
           />
         </label>
       </header>
+
+      <PaymentReviewTabs active="comprobantes" />
 
       <div className="flex items-start gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3.5 py-3 text-sm text-sky-900">
         <span aria-hidden="true" className="mt-0.5 font-bold">i</span>

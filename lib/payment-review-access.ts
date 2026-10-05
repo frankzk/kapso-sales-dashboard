@@ -91,7 +91,8 @@ export interface PaymentReviewBoardData {
   truncated: Record<PaymentReviewLane, boolean>;
 }
 
-const paymentValidationStores = cache(async function paymentValidationStores() {
+/** Las tiendas donde quien mira puede validar pagos (`payments.validate`). */
+export const paymentValidationStores = cache(async function paymentValidationStores() {
   const stores = await getAccessibleStores();
   const orgIds = [...new Set(stores.map((store) => store.org_id).filter(Boolean))] as string[];
   const permissions = await Promise.all(
