@@ -25,6 +25,7 @@ import {
   registerCourierCollection,
 } from "@/lib/tanders/collection-payment";
 import { alertDuplicatePayments } from "@/lib/tanders/duplicate-alert";
+import { raiseRepeatedVoucherAlert } from "@/lib/repeated-voucher-alert";
 import {
   checkTandersPayment,
   normalizeOperationNumber,
@@ -589,7 +590,22 @@ export async function sweepTandersPayments(
           expectedAmount: expected,
         });
         if (alta.registered) report.aRevision += 1;
-        else if (alta.reason === "error") {
+        else if (alta.reason === "duplicado" && !alta.repeated.sameOrder) {
+          // El nº de operación no chocó (o no se pudo leer), pero el ARCHIVO sí:
+          // es el caso de los cuatro pedidos con el mismo Lemon de S/ 89, que se
+          // bloqueaba sin que nadie se enterara (0226).
+          await raiseRepeatedVoucherAlert(admin, {
+            storeId: row.store_id,
+            orderId: row.order_id,
+            orderName: row.order_name ?? row.guide_code,
+            alsoIn: [alta.repeated.orderName ?? "otro pedido"],
+            operation: alta.repeated.operation,
+            fileSha256: alta.repeated.sha256,
+            amount: alta.repeated.amount,
+            source: "cobro_courier",
+            actions: ["El cobro no entró a «Validar pagos»: quedó bloqueado."],
+          });
+        } else if (alta.reason === "error") {
           report.errores += 1;
           recordSweepFailure(report.fallos, new Error(`No se pudo encolar el cobro: ${alta.detail}`));
         }

@@ -200,6 +200,8 @@ export default async function StoreSettingsPage({
       // Pre-0133 la columna no existe ⇒ el ciclo por defecto del MOM.
       confirmation_cycle_days: confirmationCycleDays(full.confirmation_cycle_days),
       telegram_chat_id: full.telegram_chat_id ?? null,
+      // Pre-0226 la columna no existe ⇒ sin grupo de alertas urgentes.
+      urgent_telegram_chat_id: full.urgent_telegram_chat_id ?? null,
       anthropic_model: full.anthropic_model ?? null,
       // Pre-0054 la columna no existe ⇒ integración apagada.
       aliclik_enabled: Boolean(full.aliclik_enabled),

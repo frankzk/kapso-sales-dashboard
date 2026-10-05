@@ -2,7 +2,7 @@
 // y si encontró su pedido. Se fija lo que la pestaña promete: que lo que hizo
 // el correo al llegar no se confunda con lo que pasó después, que lo de hoy
 // mande sobre la bitácora, y que una fila guardada sin `outcome` (antes de la
-// 0226) se lea igual que la rellenó la migración.
+// 0227) se lea igual que la rellenó la migración.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -69,7 +69,7 @@ function build(input: {
 }
 
 describe("labelOutcome", () => {
-  it("con la 0226, manda lo que guardó el webhook", () => {
+  it("con la 0227, manda lo que guardó el webhook", () => {
     expect(labelOutcome(correo({ id: "a", outcome: "sugerido", match_note: "Ya estaba en #KP1." }))).toBe("sugerido");
   });
 

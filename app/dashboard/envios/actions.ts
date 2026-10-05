@@ -10,6 +10,7 @@ import {
   getReprogramRows,
   getShipmentWithCalls,
   getVoiceScore,
+  getLiveVoiceCalls,
   searchOrdersForLink,
   searchShipmentsQuery,
   withRecoveryState,
@@ -19,6 +20,7 @@ import type { RecoveryCallDisposition } from "@/lib/reproprovincia";
 import { discardRecovery, validarMotivoDescarte } from "@/lib/recovery-discard";
 import type { ReprogramChildRow } from "@/lib/shipments";
 import type { VoiceScoreRow } from "@/lib/voice-scoreboard";
+import type { LiveVoiceCall } from "@/lib/voice-live";
 import {
   CLAIM_TTL_MINUTES,
   COURIER_REPORT_RESULTS,
@@ -205,6 +207,12 @@ export async function loadVoiceScore(from: string, to: string): Promise<VoiceSco
     from,
     to,
   );
+}
+
+/** «Llamando ahora»: llamadas del agente abiertas en las tiendas visibles. RLS-scoped. */
+export async function loadLiveVoiceCalls(): Promise<LiveVoiceCall[] | null> {
+  const stores = await getAccessibleStores();
+  return getLiveVoiceCalls(stores.map((s) => s.id));
 }
 
 /** Authorize the caller against a shipment via RLS (must see its store). */

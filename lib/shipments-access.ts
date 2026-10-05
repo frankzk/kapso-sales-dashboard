@@ -55,6 +55,8 @@ import {
   buildShipmentLineage,
   type ShipmentLineageNode,
 } from "@/lib/shipment-lineage";
+import { isStale } from "@/lib/voice-recovery";
+import { liveAgentName, type LiveVoiceCall } from "@/lib/voice-live";
 
 // The manual-review queue: guides that didn't auto-link to an order AND still
 // need a human. We exclude terminal states (delivered/closed) and rows dismissed
@@ -1302,6 +1304,50 @@ export async function getVoiceScore(storeIds: string[], from: string, to: string
     if (batch.length < PAGE) break;
   }
   return aggregateVoiceScore(calls);
+}
+
+/**
+ * Las llamadas del agente abiertas ahora mismo (marcando o en conversación),
+ * solo reales, para «Llamando ahora» en Envíos (MOM §11.8). Una llamada
+ * caducada no se muestra: el barrido la cerrará y no hay nadie al teléfono.
+ * Null si la lectura falla, para que la pantalla conserve lo último que vio.
+ */
+export async function getLiveVoiceCalls(storeIds: string[]): Promise<LiveVoiceCall[] | null> {
+  if (!storeIds.length) return [];
+  const sb = await createServerSupabase();
+  const { data, error } = await sb
+    .from("voice_calls")
+    .select("id, order_id, agent_number, phone, status, telephony, provider, dialed_at, started_at, orders(name)")
+    .in("store_id", storeIds)
+    .eq("mode", "real")
+    .in("status", ["dialing", "in_progress"])
+    .order("dialed_at", { ascending: true });
+  if (error) return null;
+  type Row = {
+    id: string;
+    order_id: string;
+    agent_number: string;
+    phone: string;
+    status: "dialing" | "in_progress";
+    telephony: string | null;
+    provider: string | null;
+    dialed_at: string | null;
+    started_at: string | null;
+    orders: { name: string | null } | { name: string | null }[] | null;
+  };
+  const now = new Date();
+  return ((data ?? []) as unknown as Row[])
+    .filter((r) => !isStale(r, now))
+    .map((r) => {
+      const order = Array.isArray(r.orders) ? r.orders[0] : r.orders;
+      return {
+        orderId: r.order_id,
+        orderName: order?.name ?? null,
+        agent: liveAgentName(r.telephony, r.provider),
+        phase: r.status,
+        since: (r.status === "in_progress" ? r.started_at : r.dialed_at) ?? r.dialed_at ?? now.toISOString(),
+      };
+    });
 }
 
 async function buildReprogramRows(

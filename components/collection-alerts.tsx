@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import {
+  attendRepeatedVoucherAlert,
   discardCollectionAlert,
   listMyCollectionAlerts,
   type CollectionAlertView,
@@ -37,6 +38,9 @@ const POLL_MS = 20_000;
 const TITULO: Record<CollectionAlertView["kind"], string> = {
   registrado: "Comprobante por validar",
   sin_atribuir: "Llegó un comprobante y no se pudo registrar",
+  // 0226: el mismo pago en más de un pedido. Urgente, sin escalera: la ven a la
+  // vez todos los que tienen el permiso.
+  comprobante_repetido: "🚨 Comprobante repetido en más de un pedido",
 };
 
 export function CollectionAlerts({ enabled = true }: { enabled?: boolean }) {
@@ -95,7 +99,11 @@ export function CollectionAlerts({ enabled = true }: { enabled?: boolean }) {
             // La que me toca, en ámbar; la que ya escaló y solo estoy mirando,
             // apagada. Con tres personas viendo la misma alerta, lo primero que
             // hay que poder distinguir de un vistazo es si la mía es mía.
-            a.mine ? "border-amber-300" : "border-slate-200",
+            a.kind === "comprobante_repetido"
+              ? "border-red-400 ring-1 ring-red-200"
+              : a.mine
+                ? "border-amber-300"
+                : "border-slate-200",
           )}
         >
           <div className="flex items-start justify-between gap-2">
@@ -120,7 +128,7 @@ export function CollectionAlerts({ enabled = true }: { enabled?: boolean }) {
               antes la sigue viendo hasta que se resuelva, y este renglón es lo
               que evita que dos personas la atiendan a la vez sin saberlo:
               siempre dice a quién le toca AHORA. */}
-          {!a.mine && (
+          {!a.mine && a.kind !== "comprobante_repetido" && (
             <p className="mt-1 text-xs font-medium text-slate-500">
               {a.ownerName ? `Le toca ahora a ${a.ownerName}` : "Sin responsable asignado"} · la
               sigues viendo porque escaló
@@ -142,21 +150,52 @@ export function CollectionAlerts({ enabled = true }: { enabled?: boolean }) {
                 Ir a validar
               </a>
             )}
+            {/* Comprobante repetido: ningún hecho del sistema la cierra. Decidir
+                cuál pedido está pagado de verdad lo hace una persona, y lo que
+                decidió queda escrito. No se «descarta»: se atiende. */}
+            {a.kind === "comprobante_repetido" && (
+              <>
+                {a.orderId && (
+                  <a
+                    href={`/dashboard/pedidos?abrir=${a.orderId}&ir=pagos`}
+                    className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700"
+                  >
+                    Ver el pedido
+                  </a>
+                )}
+                <button
+                  type="button"
+                  disabled={busy === a.id}
+                  onClick={() => {
+                    const que = window.prompt(
+                      "¿Qué se hizo? (cuál pedido sí estaba pagado, a cuál se le pidió el pago…)",
+                    );
+                    if (que === null) return;
+                    void run(a.id, () => attendRepeatedVoucherAlert(a.id, que));
+                  }}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  Ya lo revisé
+                </button>
+              </>
+            )}
             {/* Lo único que se cierra a mano: lo que nunca se va a resolver
                 solo. El resto se cierra con el hecho —el pago validado, el
                 comprobante subido— sin pedir ningún clic de confirmación. */}
-            <button
-              type="button"
-              disabled={busy === a.id}
-              onClick={() => {
-                const motivo = window.prompt("¿Por qué se descarta?", "no es un comprobante");
-                if (motivo === null) return;
-                void run(a.id, () => discardCollectionAlert(a.id, motivo));
-              }}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-60"
-            >
-              Descartar
-            </button>
+            {a.kind !== "comprobante_repetido" && (
+              <button
+                type="button"
+                disabled={busy === a.id}
+                onClick={() => {
+                  const motivo = window.prompt("¿Por qué se descarta?", "no es un comprobante");
+                  if (motivo === null) return;
+                  void run(a.id, () => discardCollectionAlert(a.id, motivo));
+                }}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Descartar
+              </button>
+            )}
           </div>
         </div>
       ))}

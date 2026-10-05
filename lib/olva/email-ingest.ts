@@ -105,7 +105,7 @@ export async function ingestOlvaEmailLabel(
   const save = async (extra: Record<string, unknown>, result: LabelIngestResult) => {
     const row = { ...base, ...extra, match_note: result.note, outcome: result.outcome };
     let { error } = await admin.from("olva_email_labels").upsert(row, { onConflict: "message_id,file_name" });
-    // Sin la 0226 aplicada no existe `outcome`: el correo se guarda igual y
+    // Sin la 0227 aplicada no existe `outcome`: el correo se guarda igual y
     // «Correos de Olva» deduce el resultado de la nota (`labelOutcome`).
     if (error && /outcome/.test(error.message)) {
       const { outcome: _outcome, ...legacy } = row;

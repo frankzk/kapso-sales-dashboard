@@ -50,6 +50,8 @@ import {
   reRegisterWebhooks,
   saveMetaAdAccounts,
   sendTelegramTest,
+  sendUrgentTelegramTest,
+  findTelegramGroups,
   addEscalationStep,
   moveEscalationStep,
   removeEscalationStep,
@@ -130,6 +132,8 @@ export interface StoreSettingsData {
     /** Ciclo de recontacto en confirmación (MOM §6.1, migración 0133). */
     confirmation_cycle_days: number;
     telegram_chat_id: string | null;
+    /** Grupo de alertas urgentes (0226). */
+    urgent_telegram_chat_id: string | null;
     anthropic_model: string | null;
     aliclik_enabled: boolean;
     tanders_email: string | null;
@@ -1690,6 +1694,45 @@ function TelegramSection({ data }: { data: StoreSettingsData }) {
           title="Envío de prueba"
           label="Enviar resumen de prueba"
           help="Manda ahora mismo a tu Telegram el resumen del día anterior, para validar la configuración de arriba."
+        />
+      </div>
+
+      {/* 0226: el comprobante repetido no puede esperar al resumen de mañana, y
+          no tiene por qué ir al mismo chat: va al grupo de quienes deciden. */}
+      <div className={cn(CARD, "space-y-3")}>
+        <div>
+          <p className="text-sm font-semibold text-slate-900">🚨 Alertas urgentes: comprobante repetido</p>
+          <p className={HELP}>
+            Cuando un mismo comprobante aparece en más de un pedido, el aviso sale al instante a este grupo con el
+            bot de arriba. Crea un grupo en Telegram con las personas que deben enterarse, agrega el bot, escribe
+            cualquier mensaje en el grupo y usa <strong>Buscar grupos del bot</strong> para obtener su chat id. Sin
+            grupo, el aviso va al chat del resumen diario.
+          </p>
+        </div>
+        <StoreForm storeId={s.id} persisted={[s.urgent_telegram_chat_id]}>
+          <Field label="Chat ID del grupo de alertas urgentes" htmlFor="urgent_telegram_chat_id">
+            <input
+              id="urgent_telegram_chat_id"
+              name="urgent_telegram_chat_id"
+              defaultValue={s.urgent_telegram_chat_id ?? ""}
+              placeholder="-1001234567890"
+              className={FIELD}
+            />
+          </Field>
+        </StoreForm>
+        <ActionRow
+          action={findTelegramGroups}
+          storeId={s.id}
+          title="Buscar grupos del bot"
+          label="Buscar grupos"
+          help="Lista los grupos donde está el bot y su chat id, para copiarlo arriba."
+        />
+        <ActionRow
+          action={sendUrgentTelegramTest}
+          storeId={s.id}
+          title="Alerta de prueba"
+          label="Enviar alerta de prueba"
+          help="Manda al grupo una alerta de comprobante repetido marcada como PRUEBA."
         />
       </div>
     </SettingsSection>

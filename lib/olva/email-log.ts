@@ -3,7 +3,7 @@
 // lib/olva/email-log-access.ts.
 //
 // Se cuentan dos cosas distintas y la pantalla no las mezcla:
-//   - lo que hizo el correo AL LLEGAR (`outcome`, la 0226), que no cambia;
+//   - lo que hizo el correo AL LLEGAR (`outcome`, la 0227), que no cambia;
 //   - dónde está HOY su tracking. Un correo que llegó «sin pareja» puede estar
 //     vinculado después —a mano, por el cotejo del portal o por otro correo—,
 //     y uno que vinculó puede haberse corregido en el Master. Lo de hoy manda
@@ -30,7 +30,7 @@ export interface EmailLabelRow {
   linked_shipment_id: string | null;
   suggested_order_name: string | null;
   match_note: string | null;
-  /** `null` en filas guardadas sin la 0226. */
+  /** `null` en filas guardadas sin la 0227. */
   outcome?: string | null;
 }
 
@@ -180,7 +180,7 @@ function isOutcome(value: unknown): value is LabelOutcome {
 }
 
 /**
- * Qué hizo el correo al llegar. Con la 0226 lo dice `outcome`; una fila sin él
+ * Qué hizo el correo al llegar. Con la 0227 lo dice `outcome`; una fila sin él
  * se lee de las frases que escribe el webhook, con la misma regla que el
  * relleno de la migración.
  */

@@ -1,4 +1,4 @@
--- 0226_olva_email_label_outcome.sql — qué hizo cada correo de Olva al llegar
+-- 0227_olva_email_label_outcome.sql — qué hizo cada correo de Olva al llegar
 -- (MOM §12, «Cotejar Olva › Correos de Olva»).
 --
 -- POR QUÉ. «Correos de Olva» lista cada rótulo que llegó del buzón y si

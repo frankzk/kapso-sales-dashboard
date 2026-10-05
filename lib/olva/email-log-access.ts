@@ -58,7 +58,7 @@ export async function getOlvaEmailLog(
     return q;
   };
   let res = await query(`${LABEL_COLS},outcome`);
-  // Sin la 0226 no hay `outcome`: `labelOutcome` lo deduce de la nota.
+  // Sin la 0227 no hay `outcome`: `labelOutcome` lo deduce de la nota.
   if (res.error && /outcome/.test(res.error.message)) res = await query(LABEL_COLS);
   fail("correos", res.error);
   const fetched = (res.data ?? []) as unknown as EmailLabelRow[];

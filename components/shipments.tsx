@@ -71,6 +71,7 @@ import {
   type ShipmentSortDirection,
   type ShipmentSortKey,
 } from "@/lib/shipment-sort";
+import { liveElapsed, liveSignature, pinLiveCalls, type LiveVoiceCall } from "@/lib/voice-live";
 import {
   REPROGRAM_STALE_DAYS,
   REPROGRAM_UNASSIGNED,
@@ -88,6 +89,7 @@ import {
   createFenixGuide,
   loadReprogramData,
   loadVoiceScore,
+  loadLiveVoiceCalls,
   loadShipmentDetail,
   reprogramCancelledShipmentException,
   registerCourierReportResult,
@@ -599,13 +601,31 @@ export function ShipmentsBoard({
       direction: current?.key === key && current.direction === "asc" ? "desc" : "asc",
     }));
   }, []);
+  const liveCalls = useLiveVoiceCalls(view === "pendiente");
+  const liveByOrder = useMemo(() => new Map(liveCalls.map((c) => [c.orderId, c])), [liveCalls]);
+  const liveFor = useCallback(
+    (row: ShipmentRow) => (row.order_id ? liveByOrder.get(row.order_id) ?? null : null),
+    [liveByOrder],
+  );
+  // La llamada en curso va primero en cualquier orden (MOM §11.8): es lo que
+  // está pasando ahora con la cola, y nadie debería abrir esa guía a la vez.
   const queueOrder = useMemo(
-    () => (sort ? sortShipmentRows(filtered, sort.key, sort.direction, storeName) : filtered),
-    [filtered, sort, storeName],
+    () =>
+      pinLiveCalls(sort ? sortShipmentRows(filtered, sort.key, sort.direction, storeName) : filtered, liveByOrder),
+    [filtered, sort, storeName, liveByOrder],
   );
   const searchOrder = useMemo(
-    () => (results && sort ? sortShipmentRows(results, sort.key, sort.direction, storeName) : results),
-    [results, sort, storeName],
+    () =>
+      results
+        ? pinLiveCalls(sort ? sortShipmentRows(results, sort.key, sort.direction, storeName) : results, liveByOrder)
+        : results,
+    [results, sort, storeName, liveByOrder],
+  );
+  // Una llamada cuyo pedido no está en la lista visible (otro filtro, otra
+  // tienda): se avisa arriba, para que «en vivo» no dependa de los filtros.
+  const liveOffscreen = useMemo(
+    () => liveCalls.filter((c) => !queueOrder.some((r) => r.order_id === c.orderId)),
+    [liveCalls, queueOrder],
   );
 
   /**
@@ -1006,6 +1026,7 @@ export function ShipmentsBoard({
               highlightedId={recentlyUpdatedId}
               cursorId={cursorId}
               claimedBy={claimedBy}
+              liveFor={liveFor}
               sort={sort}
               onSort={toggleSort}
             />
@@ -1343,6 +1364,9 @@ export function ShipmentsBoard({
             </Card>
           ) : (
             <Card className="p-0">
+              {liveOffscreen.length > 0 && (
+                <LiveOffscreenNotice calls={liveOffscreen} onFind={(name) => setSearch(name)} />
+              )}
               {filtered.length === 0 ? (
                 <p className="p-5 text-sm text-slate-500">
                   {shipments.length === 0 ? "Sin envíos en esta vista." : "Ningún envío con esos filtros."}
@@ -1356,6 +1380,7 @@ export function ShipmentsBoard({
                   highlightedId={recentlyUpdatedId}
                   cursorId={cursorId}
                   claimedBy={claimedBy}
+                  liveFor={liveFor}
                   sort={sort}
                   onSort={toggleSort}
                 />
@@ -1423,6 +1448,127 @@ const VISIBLE_STEP = 200;
 
 export type ShipmentSort = { key: ShipmentSortKey; direction: ShipmentSortDirection } | null;
 
+/** Cada cuánto se pregunta por las llamadas del agente en curso. */
+const LIVE_POLL_MS = 5_000;
+/** Al terminar una llamada se recarga la cola, pero no más de una vez en este lapso. */
+const LIVE_REFRESH_MIN_MS = 15_000;
+
+/**
+ * «Llamando ahora» (MOM §11.8): las llamadas del agente abiertas, sondeadas
+ * mientras la pestaña se ve. Cuando una termina, la cola se recarga para que
+ * la fila salga con la gestión que el agente acaba de registrar.
+ */
+function useLiveVoiceCalls(enabled: boolean): LiveVoiceCall[] {
+  const router = useRouter();
+  const [calls, setCalls] = useState<LiveVoiceCall[]>([]);
+  useEffect(() => {
+    if (!enabled) {
+      setCalls([]);
+      return;
+    }
+    let alive = true;
+    let inFlight = false;
+    let signature = "";
+    let openOrders = new Set<string>();
+    let lastRefresh = 0;
+    let pendingRefresh = false;
+    const check = async () => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
+      try {
+        const next = await loadLiveVoiceCalls().catch(() => null);
+        if (!alive || next === null) return;
+        const nextSignature = liveSignature(next);
+        const nextOrders = new Set(next.map((c) => c.orderId));
+        // Terminó una llamada: su pedido ya no está entre las abiertas.
+        const ended = [...openOrders].some((id) => !nextOrders.has(id));
+        openOrders = nextOrders;
+        if (nextSignature !== signature) {
+          signature = nextSignature;
+          setCalls(next);
+        }
+        if (ended) pendingRefresh = true;
+        if (pendingRefresh && Date.now() - lastRefresh >= LIVE_REFRESH_MIN_MS) {
+          pendingRefresh = false;
+          lastRefresh = Date.now();
+          router.refresh();
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    void check();
+    const timer = setInterval(() => void check(), LIVE_POLL_MS);
+    const onVisible = () => {
+      if (!document.hidden) void check();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [enabled, router]);
+  return calls;
+}
+
+/**
+ * La nota de la fila en llamada. Lleva su propio reloj: el tiempo corre cada
+ * segundo sin repintar la tabla entera.
+ */
+function LiveCallChip({ call, className }: { call: LiveVoiceCall; className?: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, []);
+  const talking = call.phase === "in_progress";
+  return (
+    <span
+      className={cn(
+        "w-fit items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 py-0.5 font-sans text-xs font-medium",
+        talking ? "bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-200" : "bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200",
+        className,
+      )}
+      title={talking ? `${call.agent} está hablando con la clienta` : `${call.agent} está marcando`}
+    >
+      <span className="relative flex size-2 shrink-0" aria-hidden>
+        {talking && (
+          <span className="absolute inline-flex size-full rounded-full bg-emerald-500 opacity-60 motion-safe:animate-ping" />
+        )}
+        <span className={cn("relative inline-flex size-2 rounded-full", talking ? "bg-emerald-500" : "bg-brand-500")} />
+      </span>
+      {talking ? "Llamando" : "Marcando"} · {call.agent}
+      <span className="tabular-nums opacity-75">{liveElapsed(call.since, now)}</span>
+    </span>
+  );
+}
+
+/** Llamadas en curso cuyo pedido no está en la lista: lo dice, con un atajo para buscarlo. */
+function LiveOffscreenNotice({ calls, onFind }: { calls: LiveVoiceCall[]; onFind: (orderName: string) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-slate-200 bg-slate-50 px-5 py-2.5 text-sm text-slate-700">
+      {calls.map((c) => (
+        <span key={c.orderId} className="flex flex-wrap items-center gap-2">
+          <LiveCallChip call={c} className="inline-flex" />
+          <span>
+            {c.orderName ?? "Un pedido"} no aparece con los filtros actuales.
+          </span>
+          {c.orderName && (
+            <button
+              type="button"
+              onClick={() => onFind(c.orderName!)}
+              className="rounded-sm text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
+            >
+              Buscarlo
+            </button>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // Memoizada: con `rows` y `storeName` estables, escribir en el buscador, abrir
 // el cajón o renovar la reserva ya no repinta la tabla.
 const ShipmentTable = memo(function ShipmentTable({
@@ -1433,6 +1579,7 @@ const ShipmentTable = memo(function ShipmentTable({
   highlightedId,
   cursorId,
   claimedBy,
+  liveFor,
   sort,
   onSort,
 }: {
@@ -1447,6 +1594,8 @@ const ShipmentTable = memo(function ShipmentTable({
   cursorId?: string | null;
   /** Quién tiene tomada cada guía, para no abrir una que ya está ocupada. */
   claimedBy: (row: ShipmentRow) => string | null;
+  /** La llamada del agente en curso sobre el pedido de la fila, si hay. */
+  liveFor: (row: ShipmentRow) => LiveVoiceCall | null;
   sort: ShipmentSort;
   onSort: (key: ShipmentSortKey) => void;
 }) {
@@ -1518,7 +1667,11 @@ const ShipmentTable = memo(function ShipmentTable({
               className={cn(
                 "cursor-pointer border-b border-slate-100 transition-colors duration-500 last:border-0",
                 cursorId === s.id && "ring-2 ring-inset ring-brand-400",
-                highlightedId === s.id ? "bg-emerald-50" : "hover:bg-slate-50",
+                highlightedId === s.id
+                  ? "bg-emerald-50"
+                  : liveFor(s)
+                    ? "bg-brand-50/70 hover:bg-brand-50"
+                    : "hover:bg-slate-50",
               )}
             >
               <td className="px-4 py-2.5 font-mono text-xs text-slate-700">
@@ -1542,6 +1695,10 @@ const ShipmentTable = memo(function ShipmentTable({
                 {s.created_via === "fenix_directo" && (
                   <span className="ml-1 rounded bg-indigo-50 px-1 text-xs text-indigo-700">Directa</span>
                 )}
+                {(() => {
+                  const live = liveFor(s);
+                  return live ? <LiveCallChip call={live} className="mt-1 flex" /> : null;
+                })()}
               </td>
               {stores.length > 1 && (
                 <td className="px-4 py-2.5 text-slate-600">{storeName(s.store_id)}</td>
@@ -1636,7 +1793,7 @@ const ShipmentTable = memo(function ShipmentTable({
               key={s.id}
               className={cn(
                 "flex items-start gap-3 px-4 py-3",
-                highlightedId === s.id ? "bg-emerald-50" : "",
+                highlightedId === s.id ? "bg-emerald-50" : liveFor(s) ? "bg-brand-50/70" : "",
               )}
             >
               <button
@@ -1657,6 +1814,10 @@ const ShipmentTable = memo(function ShipmentTable({
                     <span className="text-xs font-medium text-amber-700">{claimedBy(s)}</span>
                   )}
                 </span>
+                {(() => {
+                  const live = liveFor(s);
+                  return live ? <LiveCallChip call={live} className="mt-1.5 flex" /> : null;
+                })()}
                 <span className="mt-1 block text-sm text-slate-800">{s.customer_name ?? "—"}</span>
                 {/* El N° de pedido y la tienda existían solo en la tabla: en
                     teléfono no había forma de saber de qué pedido se hablaba ni,
