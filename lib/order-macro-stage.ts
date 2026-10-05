@@ -171,6 +171,9 @@ export type MacroSubstage =
   | "por_generar_rotulo"
   | "por_armar"
   | "incidencia_preparacion"
+  // Pedido acompañante (MOM §32): sus productos van en la caja de otro pedido,
+  // que todavía no salió de la empresa. No tiene caja propia que preparar.
+  | "en_caja_de_otro_pedido"
   // Por despachar
   | "listo_para_asignar"
   | "asignado_a_ruta"
@@ -226,7 +229,7 @@ export const MACRO_SUBSTAGES_BY_STAGE: Record<
     "ultimo_intento",
     "historico_sin_gestion",
   ],
-  preparacion: ["por_generar_rotulo", "por_armar", "incidencia_preparacion"],
+  preparacion: ["por_generar_rotulo", "por_armar", "incidencia_preparacion", "en_caja_de_otro_pedido"],
   por_despachar: [
     "listo_para_asignar",
     "asignado_a_ruta",
@@ -283,6 +286,7 @@ export const MACRO_SUBSTAGE_LABEL: Record<MacroSubstage, string> = {
   por_generar_rotulo: "Por generar rótulo",
   por_armar: "Por armar",
   incidencia_preparacion: "Incidencia de preparación",
+  en_caja_de_otro_pedido: "Viaja en la caja de otro pedido",
   listo_para_asignar: "Listo para asignar",
   asignado_a_ruta: "Asignado a ruta",
   en_cotejo: "En cotejo",
@@ -395,6 +399,12 @@ export interface MacroGuideSnapshot {
   /** Ancla de la ventana de Reproprovincia (el barrido la sella al anular). */
   closed_at?: string | null;
   updated_at?: string | null;
+  /**
+   * La salida es de OTRO pedido y este viaja dentro (pedido acompañante, MOM
+   * §32). Decide su estado igual que una propia, salvo mientras la caja sigue
+   * en la empresa: ahí no hay nada que este pedido tenga que preparar.
+   */
+  borrowed?: boolean;
 }
 
 export interface MacroEventSnapshot {
@@ -1278,6 +1288,22 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
   const retry = input.guides.find((guide) => isOwnCourier(guide.courier) && isActiveGuide(guide) && gfAwaitingRetry(input.events, guide));
   if (retry) {
     return result("en_curso", operation === "lima" ? "por_reprogramar_lima" : "gestion_reproprovincia", gfAwaitingRetry(input.events, retry), operation);
+  }
+
+  // PEDIDO ACOMPAÑANTE (MOM §32): viaja en la caja de otro pedido y esa caja
+  // todavía no salió de la empresa —si hubiera salido, la rama de custodia de
+  // arriba ya habría contestado En curso—. No tiene rótulo que generar ni caja
+  // que armar: contestar «Por armar» o «Por despachar» lo metía en las colas
+  // del almacén y del despacho como un paquete más, a un clic de una segunda
+  // guía. Solo si no tiene salida propia viva; con una, manda esa.
+  const ride = input.guides.find((guide) => guide.borrowed && isActiveGuide(guide));
+  if (ride && !input.guides.some((guide) => !guide.borrowed && isActiveGuide(guide))) {
+    return result(
+      "preparacion",
+      "en_caja_de_otro_pedido",
+      ride.assigned_at ?? input.legacy.since,
+      operation,
+    );
   }
 
   const ready = input.guides.find(isReadyAtCompany);
