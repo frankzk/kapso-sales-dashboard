@@ -4142,19 +4142,34 @@ Reglas de esa tabla:
     agente: el domingo 04-10, cada corte dejaba la cola parada unos 10 min
     hasta que pasaba el barrido.
 
-    **Daaph (Zadarma), desde el 05-10-2026.** Zadarma avisa el fin de cada
-    llamada a `/api/webhooks/zadarma`: la URL se configura en el panel de
-    Zadarma, en las notificaciones de la centralita, con `NOTIFY_OUT_END`.
-    - El aviso viene firmado con la clave de la API (`ZADARMA_SECRET`), como lo
-      hace su librería oficial. Al guardar la URL, Zadarma la verifica con
-      `zd_echo`.
-    - La llamada se encuentra por el teléfono de la clienta entre las abiertas
-      de Zadarma de los últimos 30 min, porque el callback no devuelve un id.
+    **Daaph (Zadarma), desde el 05-10-2026.** Zadarma no le avisa a Kapta el
+    fin de la llamada: la cuenta tiene una sola URL de avisos de la centralita
+    y la usa KairoAI, que sigue en uso. No se toca. En su lugar, cada pasada
+    del barrido le pregunta a la estadística de Zadarma
+    (`reconcileZadarmaCalls`), después del vigilante y antes de ver qué
+    agentes están libres. Así, si Daaph terminó, vuelve a llamar en esa
+    misma pasada.
+    - Solo consulta si hay llamadas de Zadarma abiertas. Lee las llamadas
+      terminadas de `/v1/statistics/` y `/v1/statistics/pbx/` desde 10 min
+      antes de la más antigua.
+    - Las horas de la estadística vienen en la zona de la cuenta, que se lee
+      de `/v1/info/timezone/`.
+    - La llamada se reconoce por el teléfono de la clienta y por haber
+      empezado desde un minuto antes de marcar, porque el callback no devuelve
+      un id. Una llamada anterior al mismo teléfono no cuenta.
     - Si estaba en curso sin gestión, se aplica el mismo cierre por corte que
       en Telnyx (`closeCutWithoutGestion`). Si seguía marcando, se cierra como
       «no contesta» con la causa que dio Zadarma: ocupado, sin respuesta,
       cancelada.
-    - Cada aviso queda en `telephony_response.eventos`.
+    - Cada cierre queda en `telephony_response.eventos` con tipo
+      `zadarma.stats`. Si la API falla, no se cierra nada y queda el
+      vigilante.
+    - La ruta `/api/webhooks/zadarma` (aviso firmado con `ZADARMA_SECRET`,
+      verificación `zd_echo`) existe, pero no está configurada en el panel.
+      Sirve si algún día la URL de avisos queda libre.
+
+    Con la consulta, un corte de Daaph tarda en liberarse lo que falta hasta
+    la siguiente pasada (≤ 5 min), no los ~10 min del vigilante.
 
     El 05-10, una llamada de Daaph contestada a las 09:15:30 seguía «en curso»
     a las 09:20 sin resultado, y la pasada de las 09:20 se perdió.
