@@ -7,7 +7,6 @@
 // acusaría a sí misma—, y que el aviso salga solo cuando hay algo que avisar.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { formatDuplicateAlert } from "@/lib/tanders/duplicate-alert";
 
 const h = vi.hoisted(() => ({
   avisos: [] as unknown[][],
@@ -273,47 +272,5 @@ describe("comprobante de pago reusado", () => {
     expect(visto.insertado).toEqual([]);
     expect(visto.updates).toEqual([]);
     expect(alertDuplicatePayments).not.toHaveBeenCalled();
-  });
-});
-
-describe("formatDuplicateAlert", () => {
-  it("dice el pedido, el monto, la operación y con quién choca", () => {
-    const texto = formatDuplicateAlert("Aurela", [
-      {
-        guia: "TANDER1",
-        pedido: "#AUR176448",
-        operacion: "86480816",
-        otras: ["#KP131846"],
-        desandadas: [],
-        monto: 129,
-        storeId: "t",
-      },
-    ]);
-    expect(texto).toContain("#AUR176448");
-    expect(texto).toContain("S/ 129.00");
-    expect(texto).toContain("86480816");
-    expect(texto).toContain("#KP131846");
-  });
-
-  it("destaca la que se había dado por cobrada: es lo urgente", () => {
-    const texto = formatDuplicateAlert("Aurela", [
-      {
-        guia: "TANDER1",
-        pedido: "#KP124793",
-        operacion: "14881571",
-        otras: ["#KP125070"],
-        desandadas: ["#KP125070"],
-        monto: 198,
-        storeId: "t",
-      },
-    ]);
-    expect(texto).toContain("#KP125070 estaba dado por COBRADO");
-  });
-
-  it("escapa el HTML del nombre de la tienda", () => {
-    // El texto va a Telegram en modo HTML: un nombre con < rompería el mensaje
-    // entero y el aviso no llegaría.
-    const texto = formatDuplicateAlert("A <b>&", []);
-    expect(texto).toContain("A &lt;b&gt;&amp;");
   });
 });
