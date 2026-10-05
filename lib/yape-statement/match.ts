@@ -97,6 +97,14 @@ const LIMA_OFFSET = 5 * HOUR;
 /** Reloj de la app que subió la constancia frente al del servidor. */
 const UPLOAD_SKEW = 2 * MINUTE;
 
+/**
+ * La cuenta del reporte, comparable: solo letras y dígitos. «GRUPO GF  S.A.C.»
+ * y «Grupo GF S.A.C.» son la misma cuenta.
+ */
+export function statementAccountKey(s: string): string {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
 function tokens(s: string | null | undefined): string[] {
   return (s ?? "")
     .normalize("NFD")
