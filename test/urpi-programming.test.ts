@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextUrpiDeliveryDate, normalizeUrpiOrder, parseUrpiProgramming, spreadsheetIdFromUrl, urpiDateIso, type UrpiTab } from "@/lib/urpi-programming";
+import { nextUrpiDeliveryDate, normalizeUrpiOrder, parseUrpiProgramming, spreadsheetIdFromUrl, urpiDateIso, urpiPrefixesSeparable, urpiStorePrefix, type UrpiTab } from "@/lib/urpi-programming";
 
 const headers = ["Validación", "Fecha de entrega", "Tipo de Envio", "Asesor", "Código de pedido", "Destinatario", "Número de contacto", "Provincia", "Distrito", "Dirección", "Referencia", "Producto a entregar", "Monto a Cobrar", "Número de referencia", "Observaciones"];
 const row = (code = "#kp12345", date = "01/10/26", amount: unknown = "149.00") => ["FUERA DE HORARIO", date, "Primer Turno", "", code, "Cliente de prueba", "900000000", "Lima", "Rímac", "Dirección de prueba", "", "1 Producto", amount, "", "Coordinar"];
@@ -54,6 +54,19 @@ describe("programaciones mensuales Urpi", () => {
     const result = parseUrpiProgramming([tab([row("")])], "2026-10", "KP");
     expect(result.rows).toHaveLength(0);
     expect(result.unassigned).toEqual([{ tab: "01/10/26", rowNumber: 6 }]);
+  });
+});
+
+describe("prefijo de tienda para libros compartidos", () => {
+  it("toma el prefijo guardado en la tienda sin #", () => {
+    expect(urpiStorePrefix("#kp")).toBe("KP");
+    expect(urpiStorePrefix(" AUR ")).toBe("AUR");
+    for (const value of [null, undefined, "", "K1", "#"]) expect(urpiStorePrefix(value)).toBeNull();
+  });
+  it("solo admite prefijos que no se solapan", () => {
+    expect(urpiPrefixesSeparable(["KP", "AUR"])).toBe(true);
+    expect(urpiPrefixesSeparable(["A", "AUR"])).toBe(false);
+    expect(urpiPrefixesSeparable(["KP", "KP"])).toBe(false);
   });
 });
 

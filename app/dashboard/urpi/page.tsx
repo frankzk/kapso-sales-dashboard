@@ -7,6 +7,7 @@ import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import { UrpiProgrammingBoard } from "@/components/urpi-programming-board";
 import { urpiGoogleConfigured } from "@/lib/urpi-google-sheets";
 import { urpiAutoEnabled } from "@/lib/urpi-auto-sync";
+import { urpiStorePrefix } from "@/lib/urpi-programming";
 import type { UrpiSource, UrpiSnapshot } from "@/lib/urpi-programming-db";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +25,11 @@ async function UrpiContent({ searchParams }: { searchParams: Promise<Params> }) 
     const [manage, edit] = await Promise.all([hasOrgPermission(orgId, "sheets.manage"), hasOrgPermission(orgId, "sheets.edit")]);
     return [orgId, { manage, edit }] as const;
   })));
-  const { data, error } = await sb.from("urpi_programming_sources").select("*").in("store_id", stores.map((store) => store.id)).order("month", { ascending: false }).order("name").limit(500);
+  const [{ data, error }, { data: prefixRows }] = await Promise.all([
+    sb.from("urpi_programming_sources").select("*").in("store_id", stores.map((store) => store.id)).order("month", { ascending: false }).order("name").limit(500),
+    // El prefijo sale de la tienda (0115); sin él, el formulario no la registra.
+    sb.from("stores").select("id,order_prefix").in("id", stores.map((store) => store.id)),
+  ]);
   if (error) return <EmptyState title="Programaciones Urpi todavía no está disponible">No se pudo cargar el registro de archivos. Contacta al administrador si el problema continúa.</EmptyState>;
   const sources = (data ?? []) as UrpiSource[];
   const source = sources.find((item) => item.id === params.source) ?? sources[0] ?? null;
@@ -44,7 +49,7 @@ async function UrpiContent({ searchParams }: { searchParams: Promise<Params> }) 
   }
   return <UrpiProgrammingBoard
     key={`${source?.id ?? "empty"}:${snapshot?.id ?? "empty"}`}
-    stores={stores.map((store) => ({ id: store.id, name: store.name, canManage: permissions.get(store.org_id)?.manage ?? false, canEdit: permissions.get(store.org_id)?.edit ?? false }))}
+    stores={stores.map((store) => ({ id: store.id, name: store.name, prefix: urpiStorePrefix(prefixRows?.find((row) => row.id === store.id)?.order_prefix), canManage: permissions.get(store.org_id)?.manage ?? false, canEdit: permissions.get(store.org_id)?.edit ?? false }))}
     sources={sources} source={source} snapshot={snapshot} versions={versions} googleConfigured={urpiGoogleConfigured()}
     autoSyncEnabled={urpiAutoEnabled() && process.env.VERCEL_ENV === "production"}
   />;

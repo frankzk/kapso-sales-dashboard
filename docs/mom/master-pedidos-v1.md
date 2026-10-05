@@ -8565,8 +8565,10 @@ y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
 Es una fuente documental de lo enviado: no confirma custodia, salida a reparto,
 entrega, cobro ni liquidación. Vive separada de las rutas propias de Grupo GF.
 
-Una fuente se registra por tienda, archivo y mes, con prefijo de pedido explícito.
-Un libro mixto Kenku/Aurela se registra para ambas tiendas, aislando KP y AUR.
+Una fuente se registra por tienda, archivo y mes. El prefijo no se escribe: sale
+de `stores.order_prefix` (0115) y una tienda sin prefijo no se registra. Un libro
+mixto Kenku/Aurela se registra de una vez para ambas tiendas (opción por defecto),
+creando una fuente por tienda que aísla KP y AUR; prefijos solapados se rechazan.
 Se leen todas las pestañas con fecha del mes y las columnas reales de la plantilla.
 El vínculo se resuelve por código completo dentro de la tienda; sin coincidencia
 o con varias coincidencias, se conserva el registro y se pide revisión. Nunca
@@ -8579,7 +8581,11 @@ anteriores siguen disponibles; retirar una fila de la hoja no equivale a cancela
 ni entregar el pedido. Los conteos son de programaciones, no ventas ni intentos.
 
 Lectura mediante conexión propia de Google con permiso de solo lectura; alternativa
-de carga del libro mensual completo `.xlsx`. La conexión de una conversación de
+de carga del libro mensual completo `.xlsx`. «Actualizar desde Google» y «Cargar
+Excel del mes» sobre una fuente procesan todas las fuentes del mismo archivo y mes
+que el usuario puede editar: el libro se lee una vez, cada tienda guarda su propia
+versión con su prefijo, y el fallo de una no impide guardar la otra; una tienda
+sin permiso de importación no se toca y se informa. La conexión de una conversación de
 Codex no autoriza automáticamente al servidor de Kapta. La lectura automática se
 programa cada 15 minutos para fuentes registradas del mes anterior, actual y
 siguiente, según Lima. No descubre ni registra por sí sola archivos nuevos.
