@@ -166,6 +166,18 @@ describe("llamadas de Daaph terminadas, por la estadística de Zadarma", () => {
     expect(zadarmaEndedCallFor(other, { phone: "930555309", dialedAt, offsetMs })).toBeNull();
   });
 
+  it("en curso, solo el registro contestado la da por terminada (no el «failed» de 0 s del callback)", () => {
+    const stats = [
+      { to: "51930555309", callstart: "2026-10-05 17:10:00", disposition: "failed", billseconds: "0" },
+      { to: "51930555309", callstart: "2026-10-05 17:10:03", disposition: "answered", billseconds: "95" },
+    ];
+    const live = { phone: "930555309", dialedAt, offsetMs, answeredOnly: true };
+    expect(zadarmaEndedCallFor(stats.slice(0, 1), live)).toBeNull();
+    expect(zadarmaEndedCallFor(stats, live)).toMatchObject({ disposition: "answered", seconds: 95 });
+    // Marcando, cualquier registro dice que terminó sin llegar al agente.
+    expect(zadarmaEndedCallFor(stats, { ...live, answeredOnly: false })?.disposition).toBe("failed");
+  });
+
   it("la causa de Zadarma se dice en el historial", () => {
     expect(zadarmaNoAnswerResumen("busy")).toBe("No contestó: la línea estaba ocupada.");
     expect(zadarmaNoAnswerResumen("failed")).toBe("No contestó: la llamada no se completó (failed).");

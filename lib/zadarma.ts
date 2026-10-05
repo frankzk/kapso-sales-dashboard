@@ -271,11 +271,12 @@ export interface ZadarmaEndedCall {
  * ¿Terminó la llamada a este teléfono que Kapta marcó en `dialedAt`? Busca en la
  * estadística (que solo trae llamadas terminadas) una al mismo número que haya
  * empezado desde un minuto antes de marcar. Una llamada anterior al mismo
- * teléfono (otro intento, otro día) no cuenta.
+ * teléfono (otro intento, otro día) no cuenta. Con `answeredOnly` (llamada en
+ * curso) solo vale el registro contestado.
  */
 export function zadarmaEndedCallFor(
   stats: readonly Record<string, unknown>[],
-  opts: { phone: string; dialedAt: string; offsetMs: number },
+  opts: { phone: string; dialedAt: string; offsetMs: number; answeredOnly?: boolean },
 ): ZadarmaEndedCall | null {
   const phone = zadarmaLocalPeru(opts.phone);
   const since = Date.parse(opts.dialedAt) - 60_000;
@@ -287,6 +288,10 @@ export function zadarmaEndedCallFor(
     if (!Number.isFinite(local)) continue;
     const startedAt = local - opts.offsetMs;
     if (startedAt < since) continue;
+    // Un callback deja más de un registro: uno «failed» de 0 s apareció el
+    // 05-10 mientras la clienta hablaba con Daaph. Una llamada en curso solo se
+    // da por terminada con el registro de la conversación («answered»).
+    if (opts.answeredOnly && String(s.disposition ?? "").toLowerCase() !== "answered") continue;
     const seconds = Number(s.billseconds ?? s.seconds);
     return {
       disposition: String(s.disposition ?? ""),

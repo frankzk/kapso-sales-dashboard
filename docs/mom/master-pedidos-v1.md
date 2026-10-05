@@ -4157,6 +4157,10 @@ Reglas de esa tabla:
     - La llamada se reconoce por el teléfono de la clienta y por haber
       empezado desde un minuto antes de marcar, porque el callback no devuelve
       un id. Una llamada anterior al mismo teléfono no cuenta.
+    - Una llamada en curso solo se da por terminada con el registro
+      contestado (`answered`). El callback deja además un registro «failed» de
+      0 s. El 05-10 se vio uno mientras la clienta hablaba con Daaph, y cerrar
+      con ese registro cortaría el registro de la gestión.
     - Si estaba en curso sin gestión, se aplica el mismo cierre por corte que
       en Telnyx (`closeCutWithoutGestion`). Si seguía marcando, se cierra como
       «no contesta» con la causa que dio Zadarma: ocupado, sin respuesta,
