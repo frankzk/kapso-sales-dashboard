@@ -1563,11 +1563,15 @@ const ShipmentTable = memo(function ShipmentTable({
   const toggleSort = onSort;
   const multiStore = stores.length > 1;
 
-  // Anchos de columna (tabla fija), medidos para que cada celda quepa en dos
-  // renglones a 1.280 px: con la ruta, el motivo y el destino ceden.
+  // Anchos de columna (tabla fija), medidos sobre el texto real para que cada
+  // celda quepa en dos renglones: la chapa «Aliclik disponible» (100 px),
+  // «Reproprovincia» (87), «Sin gestión» (69) y el encabezado «Programación»
+  // (99) mandan en sus columnas; el motivo entra entero en dos renglones desde
+  // 1.440 px y el destino conserva la ciudad. El que cede es el cliente, que
+  // se recorta con su nombre en el `title`.
   const w = showRoute
-    ? { guia: "w-[13%]", cliente: "w-[13%]", destino: "w-[13%]", motivo: "w-[13%]", estado: "w-[12%]", ruta: "w-[16%]", gestion: "w-[8%]", prog: "w-[12%]" }
-    : { guia: "w-[14%]", cliente: "w-[15%]", destino: "w-[16%]", motivo: "w-[17%]", estado: "w-[15%]", ruta: "", gestion: "w-[10%]", prog: "w-[13%]" };
+    ? { guia: "w-[13.5%]", cliente: "w-[10%]", destino: "w-[16%]", motivo: "w-[15%]", estado: "w-[11%]", ruta: "w-[13%]", gestion: "w-[9.5%]", prog: "w-[12%]" }
+    : { guia: "w-[14%]", cliente: "w-[13%]", destino: "w-[18%]", motivo: "w-[18%]", estado: "w-[14%]", ruta: "", gestion: "w-[10%]", prog: "w-[13%]" };
 
   return (
     <div>
@@ -1648,22 +1652,27 @@ const ShipmentTable = memo(function ShipmentTable({
                   {s.customer_phone && <p className={cn(SUBLINE, "truncate tabular-nums")}>{s.customer_phone}</p>}
                 </td>
                 <td className={TD}>
-                  {/* Distrito y ciudad arriba (si no cabe, se recorta la ciudad);
-                      la disponibilidad Swayp sola abajo, entera. */}
-                  <p
-                    className="truncate leading-5 text-ink-900"
-                    title={[s.district, placeLine(s)].filter(Boolean).join(" · ") || undefined}
-                  >
+                  {/* El distrito solo arriba; abajo la ciudad (o el
+                      departamento) y la disponibilidad Swayp. Si no cabe, cede
+                      primero la ciudad y después la disponibilidad. */}
+                  <p className="truncate leading-5 text-ink-900" title={s.district ?? undefined}>
                     {s.district ?? "—"}
+                  </p>
+                  <p
+                    className={cn(SUBLINE, "flex min-w-0")}
+                    title={placeLine(s) ? `${placeLine(s)} · ${fenixAvailabilityText(s)}` : fenixAvailabilityText(s)}
+                  >
                     {placeLine(s) && (
-                      <span className="text-ink-500">
-                        {DOT}
+                      <span className="min-w-0 shrink-[999] truncate">
                         <span className="capitalize">{placeLine(s)}</span>
+                        {/* Espacio duro también detrás: al final de un hijo
+                            de flex, el espacio normal se pierde. */}
+                        {"\u00a0·\u00a0"}
                       </span>
                     )}
-                  </p>
-                  <p className={SUBLINE}>
-                    <FenixAvailabilityInline shipment={s} lead={false} />
+                    <span className="min-w-0 truncate">
+                      <FenixAvailabilityInline shipment={s} lead={false} />
+                    </span>
                   </p>
                 </td>
                 <td className={TD}>
@@ -1698,7 +1707,12 @@ const ShipmentTable = memo(function ShipmentTable({
                     const g = fmtLastGestion(s.last_gestion_at);
                     return (
                       <>
-                        <p className={cn("leading-5 tabular-nums", g.days == null ? "text-ink-500" : "text-ink-900")}>
+                        <p
+                          className={cn(
+                            "whitespace-nowrap leading-5 tabular-nums",
+                            g.days == null ? "text-ink-500" : "text-ink-900",
+                          )}
+                        >
                           {g.label}
                         </p>
                         {/* Quién la tiene, antes de abrirla: se descubría al
@@ -1986,9 +2000,14 @@ function placeLine(s: Pick<ShipmentRow, "district" | "city" | "region">): string
  * Si Swayp puede llevarla: con stock, sin stock o fuera de cobertura. El texto
  * no se parte entre líneas; con `lead`, va tras « · » pegado a lo anterior.
  */
+function fenixAvailabilityText(shipment: ShipmentRow): string {
+  const reason = currentFenixReason(shipment);
+  return reason === "ok" ? "Swayp ok" : reason === "sin_stock" ? "Sin stock Swayp" : "Fuera de cobertura";
+}
+
 function FenixAvailabilityInline({ shipment, lead = true }: { shipment: ShipmentRow; lead?: boolean }) {
   const reason = currentFenixReason(shipment);
-  const text = reason === "ok" ? "Swayp ok" : reason === "sin_stock" ? "Sin stock Swayp" : "Fuera de cobertura";
+  const text = fenixAvailabilityText(shipment);
   const tone = reason === "ok" ? "text-ok-fg" : reason === "sin_stock" ? "text-warn-fg" : "text-crit-fg";
   return (
     <>
