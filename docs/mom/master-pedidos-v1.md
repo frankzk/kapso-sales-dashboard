@@ -8694,7 +8694,8 @@ código de pedido. La cabeza de cada cadena se vincula al **único** pedido de l
 organización con ese teléfono creado entre los 45 días previos al envío y el
 final de ese día (hora de Lima); los reintentos heredan el vínculo de su cadena.
 La tienda que a veces escribe Urpi («KENKU», «AURELA») solo desempata si deja
-algún candidato. Con varios candidatos el envío queda **por vincular** con la
+algún candidato. Con varios candidatos el envío queda **por vincular** —en dos
+listas: lo que Urpi ya entregó y lo demás— con la
 lista; sin pedido o sin teléfono válido, también. Nunca se elige por cercanía ni
 por nombre. Un vínculo elegido a mano (candidato o código de pedido) se aplica a
 toda la cadena y ninguna lectura posterior lo cambia. Medido sobre los 422
@@ -8707,7 +8708,8 @@ pedido. Esta regla vale para el reporte de resultados; la programación enviada
 | Urpi | Kapta |
 | --- | --- |
 | Entregado, pedido abierto en Kapta | «Entregados por marcar». Quien tiene `master.edit` los marca entregados, uno a uno o en lote, por la única puerta (§11.4, `lib/master-door.ts`): `status_override` con fuente `liquidacion`, courier `urpi`, mediodía de Lima del día del reporte y la fila de Urpi como evidencia. |
-| Entregado, pedido anulado o devuelto en Kapta | Observación. Nunca se marca: alguien lo revisa. |
+| Entregado, pedido anulado **solo en Kapta** (Shopify vivo) | También «Entregados por marcar»: solo Shopify termina una venta (v1.23). Caso real: #KP135768, entregado por Urpi el 23/09 y cerrado como anulado porque esa tarde se le emitió una guía de Tanders que se anuló sin salir. |
+| Entregado, pedido anulado **en Shopify** o devuelto | Observación. Nunca se marca. Se resuelve de dos formas: si el pedido se rehízo en Shopify, se vincula el envío al pedido nuevo con su código (y pasa a «por marcar»); si no, se **cierra con motivo** —evento `urpi_observation_resolved` en el historial del pedido, que no cambia su estado— y el dinero se cuadra en la liquidación de Urpi. Un intento posterior de Urpi la reabre. El 05-10-2026 eran 6: anulados en Shopify entre 7 y 14 días después de que Urpi los entregara y cobrara. |
 | Cancelado | Se registra con su motivo, detalle y fotos y se lista en «Cancelados por Urpi» para Seguimiento Lima. **No cambia el estado del Master** ni anula el pedido en Shopify. |
 | Reprogramado | Se registra y se lista con su nuevo día: el siguiente de lunes a sábado desde la fecha del reporte (§30.10). No cambia el estado del Master. |
 | Programado, En coordinación, sin resultado | En curso; solo informa. |
@@ -8716,6 +8718,22 @@ pedido. Esta regla vale para el reporte de resultados; la programación enviada
 Si Kapta ya cerró el pedido (entregado, anulado o devuelto), el envío pasa a
 «Al día». La diferencia entre lo que cobró Urpi y el total del pedido se
 muestra; no bloquea ni mueve dinero, eso es de la liquidación.
+
+**La salida de Urpi (decisión del owner, 05-10-2026).** Marcar entregado no
+basta: la caja de Urpi está en Kapta como salida «por definir» —se arma y rotula
+antes de saber el courier, y como los despachos a Urpi salen del Sheet nadie le
+pone el courier—, y esa salida pendiente dejaba el pedido en «Por cerrar ·
+Salida adicional activa» (37 de los primeros 40 marcados). Así que al marcar
+entregado, Kapta **rellena** la salida «por definir» como salida de Urpi, igual
+que la rellenan Tanders, Aliclik, Shalom y Swayp al emitir su guía (§4,
+`lib/route-output-fill.ts`): se conservan consecutivo, QR, preparación y
+custodia; pasa a courier `urpi`, `created_via = urpi_report`, entregada
+(`delivered_source = urpi_report`) y con `dispatched_at` el mediodía de Lima del
+primer intento de Urpi; queda el evento `route_output_filled`. Solo si es la
+**única** caja viva del pedido: con otra salida viva —otro courier u otra «por
+definir»— no se sabe qué caja se llevó Urpi y no se toca; sin «por definir», no
+se crea una salida. La pantalla ofrece completar las ya marcadas antes de esta
+regla con el mismo botón.
 
 **Por qué cancelado y reprogramado no mueven el Master.** «Por reprogramar
 Lima» (§9) exige una salida que conste fuera. Los despachos a Urpi salen del
@@ -8731,7 +8749,8 @@ desaparezca del export. Los intentos se ven también en la ficha del pedido
 (pestaña Actividad).
 
 **Permisos.** Cargar el reporte y vincular exige `sheets.edit` en la
-organización; marcar entregados, `master.edit`. Vincular y marcar solo alcanzan
+organización, igual que cerrar una observación con motivo; marcar entregados
+(y rellenar la salida), `master.edit`. Vincular y marcar solo alcanzan
 pedidos de las tiendas que la persona ve. RLS: una fila vinculada se lee
 con su tienda (`auth_store_ids()`); una sin vincular, con la organización
 (`auth_org_ids()`). Escritura solo del servidor.

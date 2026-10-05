@@ -8,6 +8,8 @@ const db = vi.hoisted(() => ({
   denied: "" as "" | "sheets.edit" | "master.edit",
   visible: ["kenku", "aurela"] as string[],
   doors: [] as any[],
+  fills: [] as any[],
+  recomputed: [] as string[],
 }));
 
 // Doble de Supabase que aplica filtros de verdad: un filtro mal puesto
@@ -26,6 +28,7 @@ function fakeAdmin() {
       limit: (n: number) => { end = n; return q; },
       range: (a: number, b: number) => { start = a; end = b + 1; return q; },
       single: () => { single = true; return q; },
+      maybeSingle: () => { single = true; return q; },
       insert: (row: any) => { insert = row; return q; },
       then: (resolve: any) => {
         if (insert) {
@@ -69,11 +72,19 @@ vi.mock("@/lib/urpi-report-access", () => ({
 vi.mock("@/lib/master-door", () => ({
   applyDeliveriesToMaster: async (_admin: unknown, items: any[]) => { db.doors.push(...items); return { applied: items.map((i) => i.orderId), rejected: [] }; },
 }));
+// El relleno de la salida se prueba aparte (test/urpi-salida.test.ts); aquí, a quién se le pide.
+vi.mock("@/lib/urpi-salida", () => ({
+  fillUrpiSalidas: async (_admin: unknown, orders: any[]) => {
+    db.fills.push(...orders);
+    return { filled: orders.filter((o) => o.orderName !== "#KP1004").map((o) => o.orderId), sinSalida: orders.filter((o) => o.orderName === "#KP1004").map((o) => o.orderId), otraSalidaViva: [], errors: [] };
+  },
+}));
+vi.mock("@/lib/order-master", () => ({ recomputeOrderMasterSafe: async (_admin: unknown, ids: string[]) => { db.recomputed.push(...ids); } }));
 
 import { importUrpiReport } from "@/lib/urpi-report-import";
 import { parseUrpiReport } from "@/lib/urpi-report";
 import { POST as importRoute } from "@/app/api/urpi/report/import/route";
-import { applyUrpiDeliveries, linkUrpiReportRow } from "@/app/dashboard/urpi/report-actions";
+import { applyUrpiDeliveries, linkUrpiReportRow, resolveUrpiObservation } from "@/app/dashboard/urpi/report-actions";
 
 const HEADER = '"_RowNumber";"Destinatario";"Resultado";"Monto Cobrado";"Motivo principal (solo canc/repro)";"Número de teléfono";"Fecha envío";"Row number relacionado";"Tienda"';
 const line = (row: string, result: string, phone: string, date = "3/10/2026", prev = "", amount = "") => `"${row}";"Cliente";"${result}";"${amount}";"-";"${phone}";"${date}";"${prev}";""`;
@@ -81,7 +92,7 @@ const csv = (...lines: string[]) => [HEADER, ...lines].join("\n");
 const stores = [{ id: "kenku", name: "Kenku Peru" }, { id: "aurela", name: "Aurela" }];
 
 beforeEach(() => {
-  db.rpcs = []; db.inserts = []; db.doors = []; db.denied = ""; db.visible = ["kenku", "aurela"];
+  db.rpcs = []; db.inserts = []; db.doors = []; db.fills = []; db.recomputed = []; db.denied = ""; db.visible = ["kenku", "aurela"];
   db.tables = {
     urpi_report_rows: [],
     order_master: [
@@ -90,6 +101,7 @@ beforeEach(() => {
       { order_id: "00000000-0000-4000-8000-000000000003", store_id: "aurela", customer_phone: "51900000003", order_created_at: "2026-09-26T15:00:00Z", order_name: "#AUR2003", general_status: "en_proceso", orders: { cancelled_at: null } },
       { order_id: "00000000-0000-4000-8000-000000000004", store_id: "kenku", customer_phone: "51900000003", order_created_at: "2026-09-27T15:00:00Z", order_name: "#KP1004", general_status: "entregado", orders: { cancelled_at: null } },
       { order_id: "x", store_id: "otra", customer_phone: "51900000001", order_created_at: "2026-09-25T15:00:00Z", order_name: "#KP9", general_status: "en_proceso", orders: { cancelled_at: null } },
+      { order_id: "00000000-0000-4000-8000-000000000005", store_id: "kenku", customer_phone: "51900000005", order_created_at: "2026-09-20T15:00:00Z", order_name: "#KP1005", general_status: "anulado", orders: { cancelled_at: null } },
     ],
   };
 });
@@ -169,7 +181,25 @@ describe("marcar entregados desde el reporte de Urpi", () => {
     expect(result.ok).toBe(true);
     expect(db.doors.map((d) => d.orderId)).toEqual(["00000000-0000-4000-8000-000000000001"]);
     expect(db.doors[0]).toMatchObject({ target: "entregado", source: "liquidacion", courier: "urpi", storeId: "kenku", occurredAt: "2026-10-03T17:00:00.000Z", payload: { urpi_report: true, urpi_row: 11 } });
-    expect(result.message).toBe("1 pedido(s) marcados como entregados; 1 ya estaban entregados; 1 anulados o devueltos en Kapta no se tocaron; 1 sin entrega de Urpi como último intento.");
+    expect(result.message).toBe("1 pedido(s) marcados como entregados; 1 ya estaban entregados; 1 salida(s) «Por definir» pasaron a Urpi entregada; 1 sin salida «Por definir» que pasar a Urpi; 1 anulados en Shopify o devueltos no se tocaron; 1 sin entrega de Urpi como último intento.");
+  });
+  it("rellena la salida de los entregados (también los ya marcados) desde el primer intento, y recalcula", async () => {
+    seed([
+      { urpi_row: 10, order_id: "00000000-0000-4000-8000-000000000001", result_code: "reprogramado", report_date: "2026-10-01" },
+      { urpi_row: 11, order_id: "00000000-0000-4000-8000-000000000001", result_code: "entregado", report_date: "2026-10-02" },
+      { urpi_row: 30, order_id: "00000000-0000-4000-8000-000000000004", result_code: "entregado" },
+    ]);
+    await applyUrpiDeliveries("org", ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000004"]);
+    expect(db.fills).toEqual([
+      { orderId: "00000000-0000-4000-8000-000000000001", orderName: "#KP1001", dispatchedOn: "2026-10-01" },
+      { orderId: "00000000-0000-4000-8000-000000000004", orderName: "#KP1004", dispatchedOn: "2026-10-03" },
+    ]);
+    expect(db.recomputed).toEqual(["00000000-0000-4000-8000-000000000001"]);
+  });
+  it("un pedido anulado solo en Kapta (Shopify vivo) se marca: solo Shopify termina una venta", async () => {
+    seed([{ urpi_row: 50, order_id: "00000000-0000-4000-8000-000000000005", result_code: "entregado" }]);
+    await applyUrpiDeliveries("org", ["00000000-0000-4000-8000-000000000005"]);
+    expect(db.doors.map((d) => d.orderId)).toEqual(["00000000-0000-4000-8000-000000000005"]);
   });
   it("no toca pedidos de una tienda que la persona no ve", async () => {
     db.visible = ["aurela"];
@@ -183,6 +213,27 @@ describe("marcar entregados desde el reporte de Urpi", () => {
     seed([{ urpi_row: 11, order_id: "00000000-0000-4000-8000-000000000001", result_code: "entregado" }]);
     expect((await applyUrpiDeliveries("org", ["00000000-0000-4000-8000-000000000001"])).ok).toBe(false);
     expect(db.doors).toEqual([]);
+  });
+});
+
+describe("cerrar una observación", () => {
+  const seed = (rows: any[]) => { db.tables.urpi_report_rows = rows.map((r) => ({ org_id: "org", last_import_id: "imp", report_date: "2026-10-03", ...r })); };
+  it("deja el motivo en la actividad del pedido, sin cambiar su estado", async () => {
+    seed([{ urpi_row: 20, order_id: "00000000-0000-4000-8000-000000000002", result_code: "entregado" }]);
+    const result = await resolveUrpiObservation("org", "00000000-0000-4000-8000-000000000002", "Anulado por error; se cobra en la liquidación");
+    expect(result.ok).toBe(true);
+    expect(db.inserts.map((i) => [i.table, i.row.kind, i.row.reason, i.row.payload])).toEqual([
+      ["order_events", "urpi_observation_resolved", "Anulado por error; se cobra en la liquidación", { urpi_report: true, urpi_row: 20 }],
+    ]);
+    expect(db.doors).toEqual([]);
+  });
+  it("exige motivo y solo vale para pedidos anulados en Shopify o devueltos", async () => {
+    seed([{ urpi_row: 11, order_id: "00000000-0000-4000-8000-000000000001", result_code: "entregado" }, { urpi_row: 20, order_id: "00000000-0000-4000-8000-000000000002", result_code: "entregado" }]);
+    expect((await resolveUrpiObservation("org", "00000000-0000-4000-8000-000000000002", "ok")).message).toContain("motivo");
+    expect((await resolveUrpiObservation("org", "00000000-0000-4000-8000-000000000001", "Revisado con Urpi")).message).toContain("ya no es una observación");
+    db.denied = "sheets.edit";
+    expect((await resolveUrpiObservation("org", "00000000-0000-4000-8000-000000000002", "Revisado con Urpi")).ok).toBe(false);
+    expect(db.inserts).toEqual([]);
   });
 });
 

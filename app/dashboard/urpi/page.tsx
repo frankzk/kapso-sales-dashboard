@@ -11,7 +11,8 @@ import { urpiStorePrefix } from "@/lib/urpi-programming";
 import type { UrpiSource, UrpiSnapshot } from "@/lib/urpi-programming-db";
 import { UrpiResultsBoard } from "@/components/urpi-results-board";
 import { UrpiViewNav } from "@/components/urpi-view-nav";
-import { buildUrpiShipments, type UrpiOrderFacts, type UrpiStoredRow } from "@/lib/urpi-report-view";
+import { buildUrpiShipments, URPI_OBSERVATION_RESOLVED, type UrpiOrderFacts, type UrpiStoredRow } from "@/lib/urpi-report-view";
+import { planUrpiSalida, type UrpiSalidaCandidate } from "@/lib/urpi-salida";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
 
 export const dynamic = "force-dynamic";
@@ -90,6 +91,26 @@ async function UrpiResultsContent({ orgId }: { orgId: string }) {
       });
     }
   }
+  // Observaciones ya cerradas con motivo: el último cierre de cada pedido.
+  const observed = [...facts.values()].filter((fact) => fact.cancelled_at || fact.general_status === "devuelto").map((fact) => fact.order_id);
+  for (let i = 0; i < observed.length; i += 200) {
+    const { data } = await sb.from("order_events").select("order_id,reason,occurred_at,payload")
+      .eq("kind", URPI_OBSERVATION_RESOLVED).in("order_id", observed.slice(i, i + 200));
+    for (const event of (data ?? []) as { order_id: string; reason: string | null; occurred_at: string; payload: { urpi_row?: number } | null }[]) {
+      const fact = facts.get(event.order_id)!;
+      const urpiRow = Number(event.payload?.urpi_row ?? 0);
+      if (!fact.observation_resolved || fact.observation_resolved.urpiRow < urpiRow) fact.observation_resolved = { urpiRow, note: event.reason ?? "", at: event.occurred_at };
+    }
+  }
+  // Entregados cuya caja sigue «por definir»: se rellenan como salida de Urpi.
+  const delivered = [...facts.values()].filter((fact) => fact.general_status === "entregado").map((fact) => fact.order_id);
+  const salidas = new Map<string, UrpiSalidaCandidate[]>();
+  for (let i = 0; i < delivered.length; i += 200) {
+    const { data } = await sb.from("shipments")
+      .select("id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,returned_at,output_number").in("order_id", delivered.slice(i, i + 200));
+    for (const row of (data ?? []) as (UrpiSalidaCandidate & { order_id: string })[]) salidas.set(row.order_id, [...(salidas.get(row.order_id) ?? []), row]);
+  }
+  for (const id of delivered) facts.get(id)!.salida_pending = planUrpiSalida(salidas.get(id) ?? []).kind === "rellenar";
   return <UrpiResultsBoard
     nav={<UrpiViewNav active="resultados" />}
     orgId={orgId} canImport={canImport} canApply={canApply} days={RESULTS_DAYS}
