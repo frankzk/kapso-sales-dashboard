@@ -1,5 +1,6 @@
 "use server";
 
+import { cancelledScanNotice } from "@/lib/scan-cancelled";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -227,6 +228,9 @@ export async function markShipmentReady(code: string): Promise<DispatchActionRes
   if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
   if (pick.kind === "ambigua") return { error: ambiguousScanError(pick.options) };
   const shipment = pick.shipment;
+  // Un pedido anulado no se arma: lo primero que hay que decir (lib/scan-cancelled.ts).
+  const cancelledReady = await cancelledScanNotice(createAdminSupabase(), shipment.order_id);
+  if (cancelledReady) return { error: cancelledReady };
   if (shipment.custody_state !== "empresa") return { error: "Ese paquete ya no figura en custodia de la empresa." };
   if (shipment.preparation_state === "listo_despacho") {
     return { notice: `${dispatchScanLabel(shipment)} ya estaba listo para despacho.`, shipment };
@@ -557,6 +561,8 @@ export async function addShipmentToManifest(manifestId: string, code: string): P
   if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
   if (pick.kind === "ambigua") return { error: ambiguousScanError(pick.options) };
   const shipment = pick.shipment;
+  const cancelledAdd = await cancelledScanNotice(createAdminSupabase(), shipment.order_id);
+  if (cancelledAdd) return { error: cancelledAdd };
   if (["in_custody", "cancelled"].includes(manifest.state)) return { error: "Esa ruta ya está cerrada." };
   if (shipment.custody_state !== "empresa") return { error: "El paquete ya no está en custodia de la empresa." };
   // La ruta se ARMA antes de que almacén termine: primero se decide qué va con
@@ -764,6 +770,10 @@ export async function scanManifestItem(
   const [manifest, candidates] = await Promise.all([visibleManifest(manifestId, auth), findScanCandidates(code, auth)]);
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
   if (!candidates.length) return { error: SCAN_NOT_FOUND };
+  // Antes que «no pertenece a esta ruta»: si el pedido está anulado, eso es lo
+  // que decide, esté o no en la ruta (#AUR177767, 05-10-2026).
+  const cancelledCheck = await cancelledScanNotice(createAdminSupabase(), candidates[0]!.order_id);
+  if (cancelledCheck) return { error: cancelledCheck };
   if (manifest.state === "cancelled") return { error: "Esa ruta ya está cerrada." };
   // Sin verificación previa del motorizado (modos confirmar y ninguno, 0185),
   // un cotejo sobre una caja ya en custodia es un registro opcional, no un error.

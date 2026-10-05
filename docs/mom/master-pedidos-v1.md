@@ -8258,6 +8258,15 @@ límite de efectivo), la línea lo dice y el paquete queda recibido, «por
 asignar». Lo del **mismo día** no cambia: «Ya estaba» es solo la caja de ese
 día, y la de otro motorizado ofrece «Mover».
 
+**Un pedido anulado se dice primero, en cualquier escaneo (05-10-2026).** Al
+escanear un paquete —armado en almacén, agregar a una ruta, cotejo de la caja o
+caja del motorizado de Grupo GF—, si su pedido está anulado (en Shopify o en
+Kapta) la respuesta es esa y nada más: «#AUR177767 está ANULADO en Shopify (el
+04/10, lo canceló el cliente): no sale. Sepáralo para devolverlo al stock.».
+Antes cada pantalla respondía con su propio motivo —«Ese paquete no pertenece a
+esta ruta», «El pedido ya avanzó…»— y quien tenía la caja en la mano no sabía que
+la decisión era simplemente no despacharla.
+
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 
 **Antes** la pestaña «Rutas» tenía dos subpestañas —«Cajas y cotejos» (solo
