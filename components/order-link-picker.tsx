@@ -9,6 +9,14 @@ import {
   type ShopifyOrderCandidate,
 } from "@/app/dashboard/envios/actions";
 import type { OrderLinkCandidate } from "@/lib/shipments-access";
+import { cn } from "@/components/ui";
+import { Badge, Banner, FIELD_BOX, OpsButton } from "@/components/ops-ui";
+import { IconSearch } from "@/components/icons";
+
+/** Una fila de candidato: número, celular, si coincide con el de la guía y fecha. */
+const CANDIDATE_ROW =
+  "flex w-full items-center gap-3 px-3 py-2 text-left text-[13px] leading-5 transition-colors hover:bg-wash disabled:opacity-50 pointer-coarse:min-h-11";
+const CANDIDATE_LIST = "max-h-56 divide-y divide-line overflow-y-auto rounded-md ring-1 ring-line";
 
 function PhoneBadge({
   candidatePhone,
@@ -19,9 +27,9 @@ function PhoneBadge({
 }) {
   if (!shipmentPhone || !candidatePhone) return null;
   return candidatePhone === shipmentPhone ? (
-    <span className="text-xs font-medium text-emerald-600">✓ mismo teléfono</span>
+    <Badge tone="ok">Mismo teléfono</Badge>
   ) : (
-    <span className="text-xs font-medium text-amber-600">⚠ teléfono distinto</span>
+    <Badge tone="warn">Teléfono distinto</Badge>
   );
 }
 
@@ -53,7 +61,7 @@ export function OrderLinkPicker({
 }: {
   shipmentId: string;
   prefill?: string | null;
-  /** The shipment's own phone — flags results as ✓/⚠ so a coincidental
+  /** The shipment's own phone — flags results «mismo / distinto» so a coincidental
    *  number-substring match (e.g. a bare order number without prefix) isn't
    *  mistaken for the right order without checking the customer first. */
   customerPhone?: string | null;
@@ -149,40 +157,40 @@ export function OrderLinkPicker({
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div className="flex gap-2">
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Buscar por N° de pedido o celular…"
-          className="flex-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-        />
-        <button
-          onClick={dismiss}
-          disabled={pending}
-          className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-        >
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">Buscar el pedido por número o celular</span>
+          <IconSearch aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Buscar por N° de pedido o celular…"
+            className={cn(FIELD_BOX, "h-9 w-full pl-8 pr-3 pointer-coarse:h-11")}
+          />
+        </label>
+        <OpsButton onClick={dismiss} disabled={pending} title="La guía no tiene pedido en Shopify" className="pointer-coarse:h-11">
           Sin pedido
-        </button>
+        </OpsButton>
       </div>
-      {searching && <p className="text-xs text-slate-400">Buscando…</p>}
+      {searching && <p className="text-[13px] text-ink-500">Buscando…</p>}
       {results && results.length === 0 && !searching && (
-        <p className="text-xs text-slate-400">Sin coincidencias.</p>
+        <p className="text-[13px] text-ink-500">Sin coincidencias.</p>
       )}
       {results && results.length > 0 && (
-        <ul className="max-h-48 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
+        <ul className={CANDIDATE_LIST}>
           {sortByPhoneMatch(results, customerPhone).map((o) => (
             <li key={o.id}>
               <button
                 type="button"
                 onClick={() => link(o.id)}
                 disabled={pending}
-                className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm hover:bg-slate-50 disabled:opacity-50"
+                className={CANDIDATE_ROW}
               >
-                <span className="font-mono text-xs text-slate-700">{o.name ?? "—"}</span>
-                <span className="text-xs text-slate-500">{o.customer_phone ?? "—"}</span>
+                <span className="font-mono font-medium text-ink-900">{o.name ?? "—"}</span>
+                <span className="tabular-nums text-ink-600">{o.customer_phone ?? "—"}</span>
                 <PhoneBadge candidatePhone={o.customer_phone} shipmentPhone={customerPhone} />
-                <span className="text-xs text-slate-400">
+                <span className="ml-auto tabular-nums text-ink-500">
                   {o.created_at ? new Date(o.created_at).toLocaleDateString("es-PE") : ""}
                 </span>
               </button>
@@ -190,52 +198,55 @@ export function OrderLinkPicker({
           ))}
         </ul>
       )}
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <OpsButton
+          size="sm"
           onClick={() => searchShopify()}
           disabled={q.trim().length < 2 || searchingShopify}
-          className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          className="pointer-coarse:h-11"
         >
           {searchingShopify ? "Buscando en Shopify…" : "Buscar en Shopify"}
-        </button>
-        <span className="text-xs text-slate-400">
+        </OpsButton>
+        <span className="text-[13px] leading-5 text-ink-500">
           Para pedidos que aún no se sincronizaron localmente.
         </span>
       </div>
       {shopifyResults && shopifyResults.length === 0 && !searchingShopify && (
-        <p className="text-xs text-slate-400">Sin coincidencias en Shopify.</p>
+        <p className="text-[13px] text-ink-500">Sin coincidencias en Shopify.</p>
       )}
       {bestMatch && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-sm">
-          <p className="text-slate-700">
-            Coincidencia: <span className="font-mono text-xs">{bestMatch.name ?? "—"}</span>
-            <span className="ml-2 text-xs font-medium text-emerald-600">✓ mismo teléfono</span>
-          </p>
-          <button
-            type="button"
-            onClick={() => linkShopify(bestMatch.gid, bestMatch.storeId)}
-            disabled={pending}
-            className="mt-1 rounded-lg bg-brand-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-          >
-            Confirmar vínculo
-          </button>
-        </div>
+        <Banner tone="ok" title="Coincide el teléfono">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <p>
+              Pedido <span className="font-mono font-medium text-ink-900">{bestMatch.name ?? "—"}</span>, con el mismo
+              celular que la guía.
+            </p>
+            <OpsButton
+              size="sm"
+              variant="primary"
+              onClick={() => linkShopify(bestMatch.gid, bestMatch.storeId)}
+              disabled={pending}
+              className="pointer-coarse:h-11"
+            >
+              Confirmar vínculo
+            </OpsButton>
+          </div>
+        </Banner>
       )}
       {shopifyResults && shopifyResults.length > (bestMatch ? 1 : 0) && (
-        <ul className="max-h-48 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
+        <ul className={CANDIDATE_LIST}>
           {sortByPhoneMatch(shopifyResults, customerPhone).map((o) => (
             <li key={o.gid}>
               <button
                 type="button"
                 onClick={() => linkShopify(o.gid, o.storeId)}
                 disabled={pending}
-                className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm hover:bg-slate-50 disabled:opacity-50"
+                className={CANDIDATE_ROW}
               >
-                <span className="font-mono text-xs text-slate-700">{o.name ?? "—"}</span>
-                <span className="text-xs text-slate-500">{o.customer_phone ?? "—"}</span>
+                <span className="font-mono font-medium text-ink-900">{o.name ?? "—"}</span>
+                <span className="tabular-nums text-ink-600">{o.customer_phone ?? "—"}</span>
                 <PhoneBadge candidatePhone={o.customer_phone} shipmentPhone={customerPhone} />
-                <span className="text-xs text-slate-400">
+                <span className="ml-auto tabular-nums text-ink-500">
                   {o.created_at ? new Date(o.created_at).toLocaleDateString("es-PE") : ""}
                 </span>
               </button>
@@ -243,7 +254,11 @@ export function OrderLinkPicker({
           ))}
         </ul>
       )}
-      {msg && <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700">{msg}</p>}
+      {msg && (
+        <p role="status" className="rounded-md bg-wash px-3 py-2 text-[13px] leading-5 text-ink-700">
+          {msg}
+        </p>
+      )}
     </div>
   );
 }

@@ -62,6 +62,7 @@ import { runCartSequence } from "@/lib/cart-sequence";
 import { autoTrialDeps, processAutoOrderTrials } from "@/lib/auto-order-trials";
 import { runReturnRecovery } from "@/lib/return-recovery";
 import { runDeliveredThanks } from "@/lib/delivered-thanks";
+import { enrichLeadLocationsFromShopify } from "@/lib/lead-shopify-location";
 import type { ConversationRow, DraftOrderRow, OrderRow } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -952,6 +953,9 @@ export interface SyncReport {
   cartsClosedByOrder: number; // carritos que salieron de la cola porque ya son pedido
   autoOrdersGenerated: number; // pedidos de la prueba de recompra automática (0214)
   orderMaster: number; // filas del Master reconciliadas en esta corrida
+  /** Leads sin ubicación buscados en Shopify por celular, y cuántos tenían
+   *  dirección (0228). Es la medida de si esta pista sirve. */
+  shopifyLocations: { checked: number; found: number };
   errors: string[];
 }
 
@@ -1033,6 +1037,7 @@ export async function runStoreSync(
     cartsClosedByOrder: 0,
     autoOrdersGenerated: 0,
     orderMaster: 0,
+    shopifyLocations: { checked: 0, found: 0 },
     errors: [],
   };
   const creds = await getStoreCreds(storeId, admin);
@@ -1264,6 +1269,24 @@ export async function runStoreSync(
       }
     } catch (e: any) {
       report.errors.push(`leads: ${e.message}`);
+    }
+  }
+
+  // 2b.5) Ubicación del cliente en Shopify (0228): a los leads de la cola que no
+  //       dicen dónde viven ni tienen pedido anterior, se los busca por celular
+  //       con la conexión de la tienda. Va después de 2b para que un lead creado
+  //       en esta misma corrida ya se pueda buscar. Acotado por corrida; si
+  //       Shopify falla, corta y reintenta en la siguiente. Best-effort.
+  if (creds.shopify_token) {
+    try {
+      const loc = await enrichLeadLocationsFromShopify(admin, storeId, {
+        domain: creds.shopify_domain,
+        token: creds.shopify_token,
+      });
+      report.shopifyLocations = { checked: loc.checked, found: loc.found };
+      if (loc.error) report.errors.push(`shopify_ubicacion: ${loc.error}`);
+    } catch (e: any) {
+      report.errors.push(`shopify_ubicacion: ${e.message}`);
     }
   }
 

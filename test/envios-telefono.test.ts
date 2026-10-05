@@ -47,7 +47,7 @@ describe("lo demás cabe en 360 px", () => {
   });
 
   it("la cabecera del cajón queda fija y el pie respeta la barra de inicio", () => {
-    expect(src).toContain('className="sticky top-0 z-10 -mx-3.5 -mt-3.5 flex items-start justify-between gap-3 border-b border-slate-100 bg-white');
+    expect(src).toContain('<header className="sticky top-0 z-10 border-b border-line bg-white">');
     expect(src).toContain("pb-[max(1rem,env(safe-area-inset-bottom))]");
     expect(layout).toContain('viewportFit: "cover"');
   });
