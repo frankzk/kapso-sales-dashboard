@@ -4160,8 +4160,43 @@ Reglas de esa tabla:
     así que la comparación la sigue contando como atendida y cortada sin
     gestión. Esto importa porque las tres líneas comparten el número de
     agente: el domingo 04-10, cada corte dejaba la cola parada unos 10 min
-    hasta que pasaba el barrido. Zadarma no avisa el corte, así que Daaph
-    sigue dependiendo del barrido.
+    hasta que pasaba el barrido.
+
+    **Daaph (Zadarma), desde el 05-10-2026.** Zadarma no le avisa a Kapta el
+    fin de la llamada: la cuenta tiene una sola URL de avisos de la centralita
+    y la usa KairoAI, que sigue en uso. No se toca. En su lugar, cada pasada
+    del barrido le pregunta a la estadística de Zadarma
+    (`reconcileZadarmaCalls`), después del vigilante y antes de ver qué
+    agentes están libres. Así, si Daaph terminó, vuelve a llamar en esa
+    misma pasada.
+    - Solo consulta si hay llamadas de Zadarma abiertas. Lee las llamadas
+      terminadas de `/v1/statistics/` y `/v1/statistics/pbx/` desde 10 min
+      antes de la más antigua.
+    - Las horas de la estadística vienen en la zona de la cuenta, que se lee
+      de `/v1/info/timezone/`.
+    - La llamada se reconoce por el teléfono de la clienta y por haber
+      empezado desde un minuto antes de marcar, porque el callback no devuelve
+      un id. Una llamada anterior al mismo teléfono no cuenta.
+    - Una llamada en curso solo se da por terminada con el registro
+      contestado (`answered`). El callback deja además un registro «failed» de
+      0 s. El 05-10 se vio uno mientras la clienta hablaba con Daaph, y cerrar
+      con ese registro cortaría el registro de la gestión.
+    - Si estaba en curso sin gestión, se aplica el mismo cierre por corte que
+      en Telnyx (`closeCutWithoutGestion`). Si seguía marcando, se cierra como
+      «no contesta» con la causa que dio Zadarma: ocupado, sin respuesta,
+      cancelada.
+    - Cada cierre queda en `telephony_response.eventos` con tipo
+      `zadarma.stats`. Si la API falla, no se cierra nada y queda el
+      vigilante.
+    - La ruta `/api/webhooks/zadarma` (aviso firmado con `ZADARMA_SECRET`,
+      verificación `zd_echo`) existe, pero no está configurada en el panel.
+      Sirve si algún día la URL de avisos queda libre.
+
+    Con la consulta, un corte de Daaph tarda en liberarse lo que falta hasta
+    la siguiente pasada (≤ 5 min), no los ~10 min del vigilante.
+
+    El 05-10, una llamada de Daaph contestada a las 09:15:30 seguía «en curso»
+    a las 09:20 sin resultado, y la pasada de las 09:20 se perdió.
 
     Para no anotar un «no contesta» encima de una gestión,
     `registrar_gestion` reserva primero la llamada: escribe su `outcome` solo
@@ -4212,6 +4247,30 @@ Reglas de esa tabla:
     porcentajes suman más de 100, se recortan a 100. Sigue habiendo una sola
     llamada a la vez por tienda, porque las tres líneas comparten el número de
     agente.
+
+    **Agentes en paralelo (decisión del owner, 05-10-2026).** Con una sola
+    llamada a la vez, cada pasada del barrido (cada 5 min) daba una llamada:
+    unas 12 por hora para una cola de ~250. Ahora cada agente con **número
+    propio** llama a la vez. La pasada lanza una llamada por número libre, cada
+    agente con el siguiente pedido de la cola y todas contando contra el tope
+    del día (`planVoiceSlots`).
+
+    Las tools encuentran la llamada por el número de agente, así que dos
+    agentes solo pueden ir en paralelo si Kapta sabe, al recibir la tool, de
+    qué motor viene. Si no lo sabe, comparten número y se turnan.
+    - **ElevenLabs** firma sus tools con su propio secreto
+      (`VOICE_TOOLS_SECRET_ELEVENLABS`). Por eso tiene su número
+      (`<número>#elevenlabs`), y sus tools y su inicio solo ven llamadas de
+      ElevenLabs (`callsForEngine`). La URL de sus tools no cambia
+      (`?agente=1-11`), porque el sufijo no tiene dígitos y el número se
+      compara por dígitos.
+    - **Daaph y Telnyx** usan el mismo agente de xAI y el mismo secreto, así
+      que comparten número y su turno se sortea con sus porcentajes. Telnyx
+      pasa a tener turno propio cuando su agente de xAI tenga otro `?agente=`,
+      configurado en `VOICE_AGENT_NUMBER_TELNYX` (con dígitos distintos).
+    - En paralelo, el porcentaje de un agente con turno propio solo lo
+      enciende o lo apaga (> 0). Si falta el secreto de ElevenLabs o es igual
+      al de xAI, todo vuelve a un turno sorteado entre los tres.
 
     **Reintento automático (04-10-2026).** Si un pedido de la cola corresponde
     al reintento automático Aliclik → Swayp, el agente no lo llama: el
@@ -8225,6 +8284,28 @@ Si algo impide asignarlo después de recibirlo (programado para otro día,
 límite de efectivo), la línea lo dice y el paquete queda recibido, «por
 asignar». Lo del **mismo día** no cambia: «Ya estaba» es solo la caja de ese
 día, y la de otro motorizado ofrece «Mover».
+
+**«Mover» un paquete que está en la oficina (05-10-2026).** Con verificación
+«exigir», un paquete que el motorizado confirmó al recibir su caja no se puede
+sacar de ella desde Despacho del día: nadie le retira en silencio algo de su
+cuadre. Pero escanearlo en la oficina prueba que no salió: #KP138381 seguía en la
+caja de Yhoni y estaba en la mano de quien armaba la de Alexis. Desde el escaneo,
+«Mover» lo recupera (`gf_office_reclaim`, 0230): lo saca de la caja del primero
+con el motivo «recuperado en oficina», borra su parada pendiente, devuelve la
+custodia a la empresa y lo mete en la caja del segundo. Solo con la parada
+**pendiente**: una ya reportada se resuelve por su reporte. Queda en el historial
+de la caja y del pedido. Si algo falla, el motivo se dice en la misma fila del
+escaneo; antes salía arriba de la página, fuera de la pantalla del celular, y
+parecía que el botón no hacía nada.
+
+**Un pedido anulado se dice primero, en cualquier escaneo (05-10-2026).** Al
+escanear un paquete —armado en almacén, agregar a una ruta, cotejo de la caja o
+caja del motorizado de Grupo GF—, si su pedido está anulado (en Shopify o en
+Kapta) la respuesta es esa y nada más: «#AUR177767 está ANULADO en Shopify (el
+04/10, lo canceló el cliente): no sale. Sepáralo para devolverlo al stock.».
+Antes cada pantalla respondía con su propio motivo —«Ese paquete no pertenece a
+esta ruta», «El pedido ya avanzó…»— y quien tenía la caja en la mano no sabía que
+la decisión era simplemente no despacharla.
 
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 

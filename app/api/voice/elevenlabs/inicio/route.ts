@@ -16,7 +16,7 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
-import { elevenLabsInitiation, pickOpenCall } from "@/lib/voice-recovery";
+import { callsForEngine, elevenLabsInitiation, pickOpenCall } from "@/lib/voice-recovery";
 import {
   loadCall,
   loadFicha,
@@ -38,7 +38,12 @@ export async function POST(req: NextRequest) {
     const admin = createAdminSupabase();
     const now = new Date();
     await sweepStaleCalls(admin, now);
-    const picked = pickOpenCall(await openCalls(admin), "dialing", { now, agentNumber: agente });
+    // Solo llamadas de ElevenLabs: este webhook es suyo, y con los agentes en
+    // paralelo una de Grok podría estar marcando con el mismo número.
+    const picked = pickOpenCall(callsForEngine(await openCalls(admin), "elevenlabs"), "dialing", {
+      now,
+      agentNumber: agente,
+    });
     if ("error" in picked) return NextResponse.json(elevenLabsInitiation(null));
 
     const call = await loadCall(admin, picked.call.id);

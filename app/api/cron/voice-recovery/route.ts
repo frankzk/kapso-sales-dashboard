@@ -1,10 +1,10 @@
 // Barrido del agente de voz (MOM §11.8).
 //
 // Cada cinco minutos, por tienda con el automático encendido y dentro del
-// horario: si el agente no está en otra llamada y queda cupo del día, llama al
-// primer pedido de la cola. UNA llamada por pasada y por tienda, porque el
-// número del agente atiende una a la vez (índice único en `voice_calls`): con
-// ~12 pasadas por hora caben de sobra las 20 a 30 del piloto.
+// horario: por cada número de agente libre, y mientras quede cupo del día,
+// llama al siguiente pedido de la cola. Un número atiende una llamada a la vez
+// (índice único en `voice_calls`); los agentes con número propio llaman en
+// paralelo (`planVoiceSlots`, MOM §11.8).
 //
 //   ?dry=1          arma la cola y cuenta exclusiones, sin llamar ni escribir.
 //                   Funciona aunque el automático esté apagado: sirve para
@@ -20,12 +20,14 @@ import {
   openCalls,
   placeVoiceCall,
   realCallsToday,
+  reconcileZadarmaCalls,
   salidasSwaypPendientes,
   sweepStaleCalls,
   telnyxConfig,
+  voiceLanes,
   type VoiceStoreSettings,
 } from "@/lib/voice-recovery-server";
-import { pickVoiceRoute } from "@/lib/voice-recovery";
+import { planVoiceSlots } from "@/lib/voice-recovery";
 import { agentSipUriFor } from "@/lib/telnyx";
 import { withinVoiceHours } from "@/lib/voice-recovery-queue";
 import { env } from "@/lib/env";
@@ -34,14 +36,23 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
+interface PassCall {
+  called: string | null;
+  agent: string;
+  telephony: "zadarma" | "telnyx";
+  engine: "grok" | "elevenlabs";
+}
+
 interface StoreReport {
   store: string | null;
   action: string;
   queue?: number;
   excluded?: Record<string, number>;
   called?: string | null;
-  telephony?: "zadarma" | "telnyx";
-  engine?: "grok" | "elevenlabs";
+  /** Una por agente libre: con los agentes en paralelo, hasta tres por pasada. */
+  calls?: PassCall[];
+  /** Agentes que seguían en otra llamada. */
+  busy?: string[];
   /** Pedidos saltados en esta pasada por ser del reintento automático. */
   skipped?: number;
   error?: string;
@@ -73,6 +84,10 @@ async function run(req: NextRequest) {
   const stores = (data ?? []) as VoiceStoreSettings[];
 
   if (!dry) await sweepStaleCalls(admin, now);
+  // Daaph: Zadarma no avisa el corte (la URL de avisos es de KairoAI); se le
+  // pregunta a su estadística antes de ver qué agentes están libres, para que
+  // el número se libere en esta misma pasada (MOM §11.8).
+  if (!dry) await reconcileZadarmaCalls(admin, now);
   // Los aceptados sin salida Swayp pedida (MOM §11.8). Fuera del horario de
   // llamadas también: la salida no molesta a nadie y la fecha ya está pactada.
   const salidas = dry ? [] : await salidasSwaypPendientes(admin, now);
@@ -82,6 +97,7 @@ async function run(req: NextRequest) {
   const telnyxCfg = telnyxConfig();
   const telnyxReady = !("error" in telnyxCfg);
   const elevenReady = !("error" in telnyxCfg) && agentSipUriFor(telnyxCfg, "elevenlabs") !== null;
+  const lanes = voiceLanes();
 
   const reports: StoreReport[] = [];
   for (const store of stores) {
@@ -99,11 +115,7 @@ async function run(req: NextRequest) {
 
       const agentNumber = store.voice_recovery_agent_number?.trim() ?? "";
       const sip = store.voice_recovery_zadarma_sip?.trim() ?? "";
-      // Agente Daaph (Zadarma + Grok), Agente Telnyx (Telnyx + Grok) y Agente
-      // ElevenLabs (Telnyx + ElevenLabs): cada llamada se sortea con
-      // VOICE_TELNYX_SHARE y VOICE_ELEVENLABS_SHARE (MOM §11.8).
-      const { telephony, engine } = pickVoiceRoute({ telnyxShare, elevenShare, telnyxReady, elevenReady });
-      if (!agentNumber || (telephony === "zadarma" && !sip)) {
+      if (!agentNumber) {
         report.action = "sin_configuracion";
         continue;
       }
@@ -111,11 +123,23 @@ async function run(req: NextRequest) {
         report.action = "fuera_de_horario";
         continue;
       }
-      if (busyAgents.has(agentNumber)) {
+      // Agente Daaph (Zadarma + Grok), Agente Telnyx (Telnyx + Grok) y Agente
+      // ElevenLabs (Telnyx + ElevenLabs). Una llamada por número de agente
+      // libre: los que tienen número propio llaman a la vez (MOM §11.8).
+      const slots = planVoiceSlots({ base: agentNumber, telnyxShare, elevenShare, telnyxReady, elevenReady, lanes })
+        .filter((sl) => sl.route.telephony !== "zadarma" || sip);
+      const free = slots.filter((sl) => !busyAgents.has(sl.agentNumber));
+      report.busy = slots.filter((sl) => busyAgents.has(sl.agentNumber)).map((sl) => sl.agentNumber);
+      if (!slots.length) {
+        report.action = "sin_configuracion";
+        continue;
+      }
+      if (!free.length) {
         report.action = "agente_ocupado";
         continue;
       }
-      if ((await realCallsToday(admin, store.id, now)) >= store.voice_recovery_daily_cap) {
+      let left = store.voice_recovery_daily_cap - (await realCallsToday(admin, store.id, now));
+      if (left <= 0) {
         report.action = "tope_diario";
         continue;
       }
@@ -130,41 +154,52 @@ async function run(req: NextRequest) {
       // El reintento automático Aliclik → Swayp tiene prioridad (no se llama):
       // ese pedido se salta y se prueba el siguiente. Sin esto, un solo pedido
       // en reintento al frente de la cola bloqueaba el día entero (04-10-2026).
-      let next = queue.candidates[0]!;
-      let placed: Awaited<ReturnType<typeof placeVoiceCall>> | null = null;
+      // Cada agente toma el siguiente pedido que nadie tomó en esta pasada.
       report.skipped = 0;
+      report.calls = [];
+      const pending = queue.candidates.slice(0, MAX_TRIES_PER_PASS);
       const tryStart = Date.now();
-      for (const candidate of queue.candidates.slice(0, MAX_TRIES_PER_PASS)) {
-        if (placed && Date.now() - tryStart > TRY_BUDGET_MS) break;
-        next = candidate;
-        placed = await placeVoiceCall(
-          admin,
-          {
-            storeId: store.id,
-            orderId: next.orderId,
-            phone: next.phone,
-            mode: "real",
-            triggeredBy: null,
-            agentNumber,
-            sip,
-            telephony,
-            engine,
-          },
-          now,
-        );
-        if (placed.ok || placed.reason !== "reintento_automatico") break;
-        report.skipped += 1;
+      let lastError: string | null = null;
+      for (const sl of free) {
+        if (left <= 0 || !pending.length) break;
+        while (pending.length) {
+          if (Date.now() - tryStart > TRY_BUDGET_MS) break;
+          const next = pending.shift()!;
+          const placed = await placeVoiceCall(
+            admin,
+            {
+              storeId: store.id,
+              orderId: next.orderId,
+              phone: next.phone,
+              mode: "real",
+              triggeredBy: null,
+              agentNumber: sl.agentNumber,
+              sip,
+              telephony: sl.route.telephony,
+              engine: sl.route.engine,
+            },
+            now,
+          );
+          if (placed.ok) {
+            busyAgents.add(sl.agentNumber);
+            left -= 1;
+            report.calls.push({ called: next.orderName, agent: sl.agentNumber, ...sl.route });
+            break;
+          }
+          if (placed.reason === "reintento_automatico") {
+            report.skipped += 1;
+            continue;
+          }
+          lastError = placed.error;
+          break;
+        }
       }
-      if (!placed) continue;
-      if (placed.ok) {
-        busyAgents.add(agentNumber);
+      if (report.calls.length) {
         report.action = "llamada";
-        report.called = next.orderName;
-        report.telephony = telephony;
-        report.engine = engine;
+        report.called = report.calls[0]!.called;
       } else {
         report.action = "error";
-        report.error = placed.error;
+        report.error = lastError ?? "Ningún pedido de la cola se pudo llamar en esta pasada.";
       }
     } catch (err) {
       report.action = "error";

@@ -1,5 +1,6 @@
 "use server";
 
+import { cancelledScanNotice } from "@/lib/scan-cancelled";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { redirect } from "next/navigation";
@@ -2357,6 +2358,12 @@ export async function moveManifestItem(
   shipmentId: string,
   targetRiderId: string,
   reason: string,
+  /**
+   * El paquete se acaba de escanear en la oficina: está en la mano, no en la
+   * calle. Permite sacarlo de una caja ya en poder del motorizado aunque él lo
+   * haya confirmado (`gf_office_reclaim`, 0230).
+   */
+  opts: { inHand?: boolean } = {},
 ): Promise<MoveManifestItemResult> {
   const auth = await requireManager(orgId);
   if ("error" in auth) return auth;
@@ -2375,7 +2382,12 @@ export async function moveManifestItem(
   // Caja ya en custodia: solo en modo «confirmar» (0185) y solo lo que el
   // motorizado no confirmó; el RPC retira, borra la parada y libera el paquete.
   const sourceInCustody = manifest.state === "in_custody";
-  if (sourceInCustody && (await riderPickupMode(admin, orgId)) !== "confirmar") return { error: "Esa caja ya está en poder del motorizado." };
+  // Escaneado en oficina: la prueba de que el paquete no salió. Se recupera de
+  // la caja del motorizado aunque él lo haya confirmado (0230).
+  const reclaimInOffice = sourceInCustody && opts.inHand === true;
+  if (sourceInCustody && !reclaimInOffice && (await riderPickupMode(admin, orgId)) !== "confirmar") {
+    return { error: `Esa caja ya está en poder de ${manifest.driver_name ?? "el motorizado"}. Si el paquete está en la oficina, escanéalo aquí y pulsa «Mover».` };
+  }
   if (!rider || !isGroupGfRiderCourier(rider.courier)) return { error: "Elige un motorizado activo de Grupo GF." };
   if (manifest.rider_id === rider.id) return { error: "El paquete ya está en la caja de ese motorizado." };
   if (!item) return { error: "El paquete ya no está en esa caja." };
@@ -2401,7 +2413,9 @@ export async function moveManifestItem(
   const fromName = manifest.driver_name ?? "otro motorizado";
   // 2) retirar del origen con el rastro (en custodia, por el RPC que además
   // borra la parada pendiente y devuelve la custodia a la empresa)
-  const { error: removeError } = sourceInCustody
+  const { error: removeError } = reclaimInOffice
+    ? await admin.rpc("gf_office_reclaim", { p_manifest_id: manifestId, p_shipment_id: shipmentId, p_reason: cleanReason, p_actor: auth.userId, p_moved_to_rider: rider.id })
+    : sourceInCustody
     ? await admin.rpc("gf_supervisor_withdraw", { p_manifest_id: manifestId, p_shipment_id: shipmentId, p_reason: cleanReason, p_actor: auth.userId, p_moved_to_rider: rider.id })
     : await admin
         .from("dispatch_manifest_items")
@@ -2504,6 +2518,8 @@ export type ScanAssignStatus =
   | "desconocido";
 
 export interface ScanAssignLine {
+  /** Solo en el navegador: por qué falló «Mover» en esta fila. */
+  moveError?: string | null;
   code: string;
   status: ScanAssignStatus;
   orderId: string | null;
@@ -2571,6 +2587,9 @@ export async function scanAssignToRider(
     return { ...base, message: found.error ?? "Ese pedido tiene varias salidas: escanea el QR de la caja." };
   }
   if (!orderId) return { ...base, message: "No encontramos un pedido con ese QR, guía o número." };
+  // Un pedido anulado no entra a ninguna caja: se dice eso y nada más (lib/scan-cancelled.ts).
+  const cancelled = await cancelledScanNotice(admin, orderId);
+  if (cancelled) return { ...base, orderId, shipmentId, status: "no_elegible", message: cancelled };
   const [{ data: om }, { data: active }] = await Promise.all([
     admin.from("order_master").select("order_name,order_total,store_id").eq("order_id", orderId).maybeSingle(),
     shipmentId ? admin
