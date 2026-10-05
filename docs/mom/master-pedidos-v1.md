@@ -8523,8 +8523,10 @@ y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
 Es una fuente documental de lo enviado: no confirma custodia, salida a reparto,
 entrega, cobro ni liquidación. Vive separada de las rutas propias de Grupo GF.
 
-Una fuente se registra por tienda, archivo y mes, con prefijo de pedido explícito.
-Un libro mixto Kenku/Aurela se registra para ambas tiendas, aislando KP y AUR.
+Una fuente se registra por tienda, archivo y mes. El prefijo no se escribe: sale
+de `stores.order_prefix` (0115) y una tienda sin prefijo no se registra. Un libro
+mixto Kenku/Aurela se registra de una vez para ambas tiendas (opción por defecto),
+creando una fuente por tienda que aísla KP y AUR; prefijos solapados se rechazan.
 Se leen todas las pestañas con fecha del mes y las columnas reales de la plantilla.
 El vínculo se resuelve por código completo dentro de la tienda; sin coincidencia
 o con varias coincidencias, se conserva el registro y se pide revisión. Nunca

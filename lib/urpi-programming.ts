@@ -51,6 +51,19 @@ export function spreadsheetIdFromUrl(value: string): string {
   return match[1]!;
 }
 
+/** Prefijo Shopify de la tienda (`stores.order_prefix`, 0115): "#kp" → "KP".
+ * Null si falta o no sirve para separar los pedidos de un libro mixto. */
+export function urpiStorePrefix(value: unknown): string | null {
+  const prefix = String(value ?? "").trim().replace(/^#/, "").toUpperCase();
+  return /^[A-Z]{1,12}$/.test(prefix) ? prefix : null;
+}
+
+/** En un libro compartido cada tienda importa por `startsWith`: ningún prefijo
+ * puede ser inicio de otro (KP/AUR sí; A/AUR mezclaría pedidos). */
+export function urpiPrefixesSeparable(prefixes: readonly string[]): boolean {
+  return prefixes.every((a, i) => prefixes.every((b, j) => i === j || !b.startsWith(a)));
+}
+
 export function validMonth(value: string): boolean {
   return /^20\d{2}-(0[1-9]|1[0-2])$/.test(value);
 }

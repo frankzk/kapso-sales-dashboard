@@ -7,9 +7,11 @@ custodia, cobro ni liquidación a partir de las pestañas de programación.
 
 1. Aplicar `db/migrations/0215_urpi_programming.sql` y
    `db/migrations/0216_urpi_auto_sync.sql` antes de desplegar.
-2. Registrar el enlace y mes por tienda. Para archivos mixtos, registrar el
-   mismo enlace para Kenku (prefijo KP) y Aurela (prefijo AUR). La separación
-   por tienda permite aplicar la misma autorización de lectura que el Master.
+2. Registrar el enlace y mes. Por defecto se registra para Kenku y Aurela a la
+   vez (libro mixto): se crea una fuente por tienda con el prefijo de
+   `stores.order_prefix` (KP, AUR); no se escribe a mano. Una tienda sin prefijo
+   o con un prefijo que se solape con otro no se registra. La separación por
+   tienda permite aplicar la misma autorización de lectura que el Master.
 3. Cargar el libro mensual completo `.xlsx` descargado de Google Sheets o
    configurar la lectura de Google descrita abajo.
 
@@ -92,7 +94,7 @@ en reportes de entrega ni cambia fechas por sí sola.
 
 ## Verificación
 
-`npm test -- test/urpi-programming.test.ts test/urpi-programming-access.test.ts test/urpi-google-sheets.test.ts test/urpi-excel.test.ts`
+`npm test -- test/urpi-programming.test.ts test/urpi-programming-access.test.ts test/urpi-register-source.test.ts test/urpi-google-sheets.test.ts test/urpi-excel.test.ts`
 y `npm run typecheck`.
 Para el proceso periódico: `npm test -- test/urpi-auto-sync.test.ts test/urpi-auto-route.test.ts`.
 
