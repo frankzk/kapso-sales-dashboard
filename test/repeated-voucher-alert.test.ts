@@ -96,6 +96,10 @@ describe("qué dice la alerta", () => {
     expect(text).toContain("mismo archivo de imagen");
     expect(text).toContain("al menos uno NO está pagado");
     expect(repeatedVoucherDetail(LEMON)).toContain("aparece en 2 pedidos: #KP126075, #KP124940");
+    // «El mismo constancia» salía con la fuente femenina: el sujeto es siempre
+    // el comprobante, y de dónde vino va entre paréntesis.
+    expect(repeatedVoucherDetail({ ...LEMON, source: "barrido_tanders" })).toMatch(/^El mismo comprobante \(constancia de Tanders\) aparece/);
+    expect(text).toContain("El mismo comprobante (cobro de courier) está en");
   });
 
   it("con nº de operación lo dice; y escapa el HTML (Telegram en modo HTML)", () => {
