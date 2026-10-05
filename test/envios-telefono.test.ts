@@ -28,7 +28,8 @@ describe("la cola es una lista por debajo de xl", () => {
     expect(cards).toContain("onClick={() => onOpen(s.id)}");
     expect(cards).toContain("href={`tel:${s.customer_phone.replace(/[^\\d+]/g, \"\")}`}");
     expect(cards).toContain("<StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />");
-    expect(cards).toContain("<AliclikRouteCell shipment={s} />");
+    // La ruta va con su porqué en un solo renglón (`inline`).
+    expect(cards).toContain("<AliclikRouteCell shipment={s} inline />");
     // Interactivo dentro de interactivo no: el enlace va al lado del botón, no dentro.
     const button = cards.slice(cards.indexOf("<button"), cards.indexOf("</button>"));
     expect(button).not.toContain("<a ");

@@ -38,7 +38,8 @@ describe("la tabla entra en el portátil", () => {
     expect(src).not.toContain("SECONDARY_COLUMN");
     // La Fecha Aliclik y el pedido van bajo la programación y la guía, y sus
     // órdenes viven en el mismo encabezado.
-    expect(src).toContain("Aliclik {fmtAliclikDate(s.aliclik_service_date)}");
+    expect(src).toContain('<span className="sr-only">Fecha Aliclik </span>');
+    expect(src).toContain("{fmtAliclikDate(s.aliclik_service_date)}");
     expect(src).toContain('also={{ label: "Aliclik", sortKey: "lastDelivery" }}');
     expect(src).toContain('also={{ label: "Pedido", sortKey: "order" }}');
   });

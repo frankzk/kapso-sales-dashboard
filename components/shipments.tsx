@@ -829,8 +829,28 @@ export function ShipmentsBoard({
     { active: reprogFilter !== "all", reset: () => setReprogFilter("all") },
   ];
 
-  /** Cuántos filtros se apartan del valor por defecto: lo que muestra el botón de teléfono. */
+  /** Cuántos filtros se apartan de cómo abre la vista: lo que limpia «Limpiar filtros». */
   const activeFilters = clientFilters.filter((f) => f.active).length;
+
+  /**
+   * Cuántas píldoras están puestas —sólidas— en esta vista, contando las que la
+   * vista trae encendidas (Cobertura «Todo menos Lima», «Sin contactar hoy»).
+   * Es lo que dice la píldora «Filtros» del teléfono: plegados, esos dos
+   * acotaban la cola sin que nada lo dijera. La ruta y «Reprogramado por» no
+   * cuentan: están a la vista, sobre los filtros.
+   */
+  const pillsOn = [
+    storeFilter.size > 0,
+    coverageFilter.size > 0,
+    departmentFilter.size > 0,
+    districtFilter.size > 0,
+    Boolean(dateFilter),
+    fenixFilter !== "all",
+    unmatchedOnly,
+    view === "pendiente" && uncontactedTodayOnly,
+    view === "pendiente" && uncontactedOnly,
+    view === "pendiente" && soloPorRecuperar,
+  ].filter(Boolean).length;
 
   /** Devuelve los filtros a como abre la vista. `keepAcrossViews` conserva la tienda. */
   function resetClientFilters(opts?: { keepAcrossViews?: boolean }) {
@@ -946,23 +966,36 @@ export function ShipmentsBoard({
             La cola de reprogramación y las guías Aliclik y Swayp {scope}.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <ShipmentSearch value={search} onChange={setSearch} />
-          <a href="/dashboard/envios/import" className={opsButtonClass("primary", "md", "pointer-coarse:h-11")}>
-            Importar reporte
-          </a>
-          <OpsButton onClick={() => setDirectGuideOpen(true)} className="pointer-coarse:h-11">
-            <IconPlus className="text-ink-500" />
-            Guía Swayp directa
-          </OpsButton>
-          <a href="/dashboard/envios/stock" className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}>
-            <IconPackage className="text-ink-500" />
-            Stock Swayp
-          </a>
-          <a href="/dashboard/envios/automatico" className={opsButtonClass("ghost", "md", "pointer-coarse:h-11")}>
-            <IconRepeat className="text-ink-500" />
-            Automático Aliclik → Swayp
-          </a>
+          {/* En el teléfono, las cuatro acciones en una rejilla de 2 × 2:
+              sueltas, dos quedaban solas en su fila. */}
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+            <a href="/dashboard/envios/import" className={opsButtonClass("primary", "md", "pointer-coarse:h-11")}>
+              Importar reporte
+            </a>
+            <OpsButton onClick={() => setDirectGuideOpen(true)} className="pointer-coarse:h-11">
+              <IconPlus className="text-ink-500" />
+              Guía Swayp directa
+            </OpsButton>
+            <a href="/dashboard/envios/stock" className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}>
+              <IconPackage className="text-ink-500" />
+              Stock Swayp
+            </a>
+            <a
+              href="/dashboard/envios/automatico"
+              aria-label="Automático Aliclik → Swayp"
+              className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}
+            >
+              <IconRepeat className="text-ink-500" />
+              <span className="sm:hidden">Automático</span>
+              <span className="hidden items-center gap-1 sm:inline-flex">
+                Automático Aliclik
+                <IconArrowRight className="text-ink-500" />
+                Swayp
+              </span>
+            </a>
+          </div>
         </div>
       </header>
 
@@ -1104,8 +1137,8 @@ export function ShipmentsBoard({
               <div className="flex flex-wrap items-center gap-2 md:hidden">
                 <FilterPill
                   label="Filtros"
-                  active={activeFilters > 0}
-                  count={activeFilters > 0 ? activeFilters : undefined}
+                  active={pillsOn > 0}
+                  count={pillsOn > 0 ? pillsOn : undefined}
                   expanded={filtersOpen}
                   onClick={() => setFiltersOpen((v) => !v)}
                 />
@@ -1474,6 +1507,14 @@ const TH =
 const TD = "border-b border-line px-3 py-2.5 align-top group-last/row:border-b-0";
 /** La segunda línea de una celda: el dato que acompaña al principal. */
 const SUBLINE = "text-[13px] leading-5 text-ink-500";
+/**
+ * « · » con espacio duro delante: el punto se queda con la palabra anterior y,
+ * si la línea se parte, ninguna empieza por «·». Los códigos crudos del
+ * courier («WRONG_ADDRESS») pueden partirse tras cada «_», para que no haga
+ * falta cortarlos por cualquier letra.
+ */
+const DOT = "\u00a0· ";
+const keepDots = (text: string) => text.replace(/ · /g, DOT).replace(/_/g, "_\u200b");
 
 // Memoizada: con `rows` y `storeName` estables, escribir en el buscador, abrir
 // el cajón o renovar la reserva ya no repinta la tabla.
@@ -1522,16 +1563,17 @@ const ShipmentTable = memo(function ShipmentTable({
   const toggleSort = onSort;
   const multiStore = stores.length > 1;
 
-  // Anchos de columna (tabla fija). Con la ruta, el motivo y el destino ceden.
+  // Anchos de columna (tabla fija), medidos para que cada celda quepa en dos
+  // renglones a 1.280 px: con la ruta, el motivo y el destino ceden.
   const w = showRoute
-    ? { guia: "w-[14%]", cliente: "w-[13%]", destino: "w-[13%]", motivo: "w-[14%]", estado: "w-[11%]", ruta: "w-[14%]", gestion: "w-[9%]", prog: "w-[12%]" }
-    : { guia: "w-[15%]", cliente: "w-[15%]", destino: "w-[16%]", motivo: "w-[18%]", estado: "w-[13%]", ruta: "", gestion: "w-[10%]", prog: "w-[13%]" };
+    ? { guia: "w-[13%]", cliente: "w-[13%]", destino: "w-[13%]", motivo: "w-[13%]", estado: "w-[12%]", ruta: "w-[16%]", gestion: "w-[8%]", prog: "w-[12%]" }
+    : { guia: "w-[14%]", cliente: "w-[15%]", destino: "w-[16%]", motivo: "w-[17%]", estado: "w-[15%]", ruta: "", gestion: "w-[10%]", prog: "w-[13%]" };
 
   return (
     <div>
       {/* ONCE COLUMNAS NO ENTRABAN EN UN PORTÁTIL: la tabla pedía 1.400 px y
-          scrolleaba de lado. Ahora son ocho celdas de dos líneas en una tabla
-          fija que cabe desde 1.280 px —la guía con su pedido y tienda, el
+          scrolleaba de lado. Ahora son ocho celdas de dos renglones en una
+          tabla fija que cabe desde 1.280 px —la guía con su pedido y tienda, el
           cliente con su celular, el destino con la disponibilidad Swayp, la
           programación con la fecha Aliclik—, y por debajo la cola es una lista. */}
       <div className="hidden xl:block">
@@ -1606,12 +1648,22 @@ const ShipmentTable = memo(function ShipmentTable({
                   {s.customer_phone && <p className={cn(SUBLINE, "truncate tabular-nums")}>{s.customer_phone}</p>}
                 </td>
                 <td className={TD}>
-                  <p className="truncate leading-5 text-ink-900" title={s.district ?? undefined}>
+                  {/* Distrito y ciudad arriba (si no cabe, se recorta la ciudad);
+                      la disponibilidad Swayp sola abajo, entera. */}
+                  <p
+                    className="truncate leading-5 text-ink-900"
+                    title={[s.district, placeLine(s)].filter(Boolean).join(" · ") || undefined}
+                  >
                     {s.district ?? "—"}
+                    {placeLine(s) && (
+                      <span className="text-ink-500">
+                        {DOT}
+                        <span className="capitalize">{placeLine(s)}</span>
+                      </span>
+                    )}
                   </p>
                   <p className={SUBLINE}>
-                    <span className="capitalize">{placeLine(s)}</span>
-                    <FenixAvailabilityInline shipment={s} lead={Boolean(placeLine(s))} />
+                    <FenixAvailabilityInline shipment={s} lead={false} />
                   </p>
                 </td>
                 <td className={TD}>
@@ -1622,28 +1674,19 @@ const ShipmentTable = memo(function ShipmentTable({
                       <p
                         title={m.texto}
                         className={cn(
-                          "line-clamp-2 text-[13px] leading-5",
+                          "line-clamp-2 break-words text-[13px] leading-5",
                           !m.consta ? "text-ink-500" : m.vioElProducto ? "font-medium text-crit-fg" : "text-ink-700",
                         )}
                       >
-                        {m.texto}
+                        {keepDots(m.texto)}
                       </p>
                     );
                   })()}
                 </td>
                 <td className={TD}>
                   <StatusBadge category={s.status_category} status={s.delivery_status} />
-                  <p className={SUBLINE}>
-                    {subState(s)}
-                    {/* Quién la tiene, antes de abrirla: se descubría al entrar,
-                        con el cajón ya bloqueado. */}
-                    {claimedBy(s) && (
-                      <>
-                        {subState(s) ? " · " : ""}
-                        <span className="font-medium text-warn-fg">{claimedBy(s)}</span>
-                      </>
-                    )}
-                  </p>
+                  {/* La segunda mitad del estado (MOM), entera bajo la chapa. */}
+                  {subState(s) && <p className={SUBLINE}>{subState(s)}</p>}
                 </td>
                 {showRoute && (
                   <td className={TD}>
@@ -1658,7 +1701,13 @@ const ShipmentTable = memo(function ShipmentTable({
                         <p className={cn("leading-5 tabular-nums", g.days == null ? "text-ink-500" : "text-ink-900")}>
                           {g.label}
                         </p>
-                        {g.days != null && (
+                        {/* Quién la tiene, antes de abrirla: se descubría al
+                            entrar, con el cajón ya bloqueado. Es la gestión de
+                            ahora, así que ocupa el lugar de la antigüedad. */}
+                        {claimedBy(s) && (
+                          <p className="text-[13px] font-medium leading-5 text-warn-fg">{claimedBy(s)}</p>
+                        )}
+                        {!claimedBy(s) && g.days != null && (
                           <p className={cn(SUBLINE, "tabular-nums", g.days >= 7 && "font-semibold text-warn-fg")}>
                             {g.days === 0 ? "hoy" : `hace ${g.days} d`}
                           </p>
@@ -1672,9 +1721,12 @@ const ShipmentTable = memo(function ShipmentTable({
                   {highlightedId === s.id ? (
                     <p className="text-[13px] font-semibold leading-5 text-ok-fg">Actualizado</p>
                   ) : (
+                    // El encabezado dice «Aliclik» bajo «Programación»: la
+                    // segunda fecha es esa. Con la palabra no cabía en un renglón.
                     s.aliclik_service_date && (
                       <p className={cn(SUBLINE, "tabular-nums")} title="Fecha Aliclik">
-                        Aliclik {fmtAliclikDate(s.aliclik_service_date)}
+                        <span className="sr-only">Fecha Aliclik </span>
+                        {fmtAliclikDate(s.aliclik_service_date)}
                       </p>
                     )
                   )}
@@ -1689,11 +1741,13 @@ const ShipmentTable = memo(function ShipmentTable({
           Cada fila lleva lo que hace falta para decidir a quién llamar —guía,
           estado, cliente, destino, motivo, programación, ruta— y un botón
           «Llamar» con `tel:` al alcance del pulgar: en el celular la llamada se
-          hace desde el mismo aparato. Misma ventana de 200 filas y mismo orden
-          que la tabla; solo cambia la forma. */}
+          hace desde el mismo aparato. Desde 640 px, en dos columnas: quién y
+          adónde a la izquierda; cómo está y qué decide la llamada a la derecha.
+          Misma ventana de 200 filas y mismo orden que la tabla. */}
       <ul className="divide-y divide-line border-t border-line xl:hidden">
         {shownRows.map((s) => {
           const gestion = fmtLastGestion(s.last_gestion_at);
+          const m = motivoParaMostrar(s);
           return (
             <li
               key={s.id}
@@ -1702,63 +1756,65 @@ const ShipmentTable = memo(function ShipmentTable({
               <button
                 type="button"
                 onClick={() => onOpen(s.id)}
-                className="min-w-0 flex-1 rounded-md text-left"
+                className="grid min-w-0 flex-1 gap-x-6 gap-y-1 rounded-md text-left sm:grid-cols-2"
               >
-                <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="font-mono text-[13px] font-medium text-ink-900">{s.guide_code}</span>
-                  {s.courier === "fenix" && <Badge>Swayp</Badge>}
-                  {s.created_via === "fenix_directo" && <Badge>Directa</Badge>}
-                  <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
-                  {claimedBy(s) && (
-                    <span className="text-[13px] font-medium text-warn-fg">{claimedBy(s)}</span>
-                  )}
+                <span className="block min-w-0">
+                  {/* El N° de pedido y la tienda existían solo en la tabla: en
+                      teléfono no había forma de saber de qué pedido se hablaba
+                      ni, con varias tiendas, de cuál era. Van junto a la guía. */}
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="font-mono text-[13px] font-medium text-ink-900">{s.guide_code}</span>
+                    {s.courier === "fenix" && <Badge>Swayp</Badge>}
+                    {s.created_via === "fenix_directo" && <Badge>Directa</Badge>}
+                    <span className={SUBLINE}>
+                      <OrderNameLabel name={s.order_name} matched={s.matched} />
+                      {multiStore && ` · ${storeName(s.store_id)}`}
+                    </span>
+                  </span>
+                  <span className="block text-sm font-medium leading-5 text-ink-900">{s.customer_name ?? "—"}</span>
+                  <span className={cn(SUBLINE, "block")}>
+                    {s.district ?? "—"}
+                    {placeLine(s) && (
+                      <>
+                        {DOT}
+                        <span className="capitalize">{placeLine(s)}</span>
+                      </>
+                    )}
+                    <FenixAvailabilityInline shipment={s} />
+                  </span>
                 </span>
-                <span className="mt-1 block text-sm font-medium text-ink-900">{s.customer_name ?? "—"}</span>
-                {/* El N° de pedido y la tienda existían solo en la tabla: en
-                    teléfono no había forma de saber de qué pedido se hablaba ni,
-                    con varias tiendas, de cuál era. */}
-                <span className={cn(SUBLINE, "block")}>
-                  <OrderNameLabel name={s.order_name} matched={s.matched} />
-                  {multiStore && ` · ${storeName(s.store_id)}`}
-                </span>
-                <span className={cn(SUBLINE, "block")}>
-                  {s.district ?? "—"}
-                  {placeLine(s) && (
-                    <>
-                      {" · "}
-                      <span className="capitalize">{placeLine(s)}</span>
-                    </>
-                  )}
-                  <FenixAvailabilityInline shipment={s} />
-                </span>
-                {(() => {
-                  const m = motivoParaMostrar(s);
-                  if (!m) return null;
-                  return (
+                <span className="block min-w-0">
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
+                    {claimedBy(s) && (
+                      <span className="text-[13px] font-medium text-warn-fg">{claimedBy(s)}</span>
+                    )}
+                  </span>
+                  {m && (
                     <span
                       className={cn(
                         "block text-[13px] leading-5",
                         m.vioElProducto ? "font-medium text-crit-fg" : "text-ink-500",
                       )}
                     >
-                      {m.texto}
-                    </span>
-                  );
-                })()}
-                <span className={cn(SUBLINE, "mt-1 block tabular-nums")}>
-                  Programación {fmtReprogram(s.next_followup_at)}
-                  {gestion.days != null && (
-                    <span className={gestion.days >= 7 ? "font-semibold text-warn-fg" : ""}>
-                      {" · "}última gestión {gestion.days === 0 ? "hoy" : `hace ${gestion.days} d`}
+                      {keepDots(m.texto)}
                     </span>
                   )}
-                  {highlightedId === s.id && <span className="ml-2 font-semibold text-ok-fg">Actualizado</span>}
-                </span>
-                {s.courier === "aliclik" && s.status_category === "pending" && (
-                  <span className="mt-1.5 block">
-                    <AliclikRouteCell shipment={s} />
+                  {s.courier === "aliclik" && s.status_category === "pending" && (
+                    <span className="mt-1 block">
+                      <AliclikRouteCell shipment={s} inline />
+                    </span>
+                  )}
+                  <span className={cn(SUBLINE, "block tabular-nums")}>
+                    Programación {fmtReprogram(s.next_followup_at)}
+                    {gestion.days != null && (
+                      <span className={gestion.days >= 7 ? "font-semibold text-warn-fg" : ""}>
+                        {DOT}última gestión {gestion.days === 0 ? "hoy" : `hace ${gestion.days} d`}
+                      </span>
+                    )}
+                    {highlightedId === s.id && <span className="ml-2 font-semibold text-ok-fg">Actualizado</span>}
                   </span>
-                )}
+                </span>
               </button>
               {s.customer_phone && (
                 <a
@@ -1882,8 +1938,12 @@ const ROUTE_BLOCKED: Partial<Record<AliclikRescheduleReason, string>> = {
   missing_service_date: "Sin Fecha Aliclik en el Excel",
 };
 
-/** El veredicto de la ruta: ¿todavía entra por Aliclik o tiene que salir por Swayp? */
-function AliclikRouteCell({ shipment }: { shipment: ShipmentRow }) {
+/**
+ * El veredicto de la ruta: ¿todavía entra por Aliclik o tiene que salir por
+ * Swayp? La chapa y su porqué en un renglón cada uno (tabla) o los dos en uno
+ * (`inline`, la lista); el porqué se recorta y el `title` lo dice entero.
+ */
+function AliclikRouteCell({ shipment, inline = false }: { shipment: ShipmentRow; inline?: boolean }) {
   if (shipment.courier !== "aliclik" || shipment.status_category !== "pending") {
     return <span className={SUBLINE}>—</span>;
   }
@@ -1892,43 +1952,49 @@ function AliclikRouteCell({ shipment }: { shipment: ShipmentRow }) {
     attempts: shipment.aliclik_attempts,
     serviceDate: shipment.aliclik_service_date,
   });
-  if (decision.eligible) {
-    return (
-      <span className="block min-w-0">
-        <Badge tone="ok">Aliclik disponible</Badge>
-        <span className={cn(SUBLINE, "block")}>
-          Dentro de ventana · {shipment.aliclik_attempts ?? 0}/{ALICLIK_MAX_INTENTOS} intentos
-        </span>
-      </span>
-    );
-  }
+  const reason = decision.eligible
+    ? `${shipment.aliclik_attempts ?? 0}/${ALICLIK_MAX_INTENTOS} intentos · dentro de ventana`
+    : (ROUTE_BLOCKED[decision.reason] ?? "Aliclik no disponible");
   return (
-    <span className="block min-w-0">
-      <Badge tone="warn">Swayp requerido</Badge>
-      <span className={cn(SUBLINE, "block")}>{ROUTE_BLOCKED[decision.reason] ?? "Aliclik no disponible"}</span>
+    <span className={inline ? "flex min-w-0 items-center gap-2" : "block min-w-0"}>
+      {decision.eligible ? (
+        <Badge tone="ok" className="shrink-0">Aliclik disponible</Badge>
+      ) : (
+        <Badge tone="warn" className="shrink-0">Swayp requerido</Badge>
+      )}
+      <span className={cn(SUBLINE, "truncate", !inline && "block")} title={reason}>
+        {keepDots(reason)}
+      </span>
     </span>
   );
 }
 
 /**
- * La segunda línea del destino: la ciudad de cobertura Swayp o, si repite el
- * distrito («Juliaca · juliaca»), el departamento.
+ * Lo que acompaña al distrito: la ciudad de cobertura Swayp o, si repite el
+ * distrito («Juliaca · juliaca»), el departamento; nada si también lo repite
+ * («Ica · Ica»).
  */
 function placeLine(s: Pick<ShipmentRow, "district" | "city" | "region">): string {
-  const same = s.city && s.district && s.city.localeCompare(s.district, "es", { sensitivity: "base" }) === 0;
-  if (s.city && !same) return s.city;
-  return normalizeDepartment(s.region) || "";
+  const repeats = (v: string) =>
+    Boolean(s.district) && v.localeCompare(s.district ?? "", "es", { sensitivity: "base" }) === 0;
+  if (s.city && !repeats(s.city)) return s.city;
+  const department = normalizeDepartment(s.region) || "";
+  return department && !repeats(department) ? department : "";
 }
 
-/** Si Swayp puede llevarla: con stock, sin stock o fuera de cobertura. No se parte entre líneas. */
+/**
+ * Si Swayp puede llevarla: con stock, sin stock o fuera de cobertura. El texto
+ * no se parte entre líneas; con `lead`, va tras « · » pegado a lo anterior.
+ */
 function FenixAvailabilityInline({ shipment, lead = true }: { shipment: ShipmentRow; lead?: boolean }) {
   const reason = currentFenixReason(shipment);
   const text = reason === "ok" ? "Swayp ok" : reason === "sin_stock" ? "Sin stock Swayp" : "Fuera de cobertura";
   const tone = reason === "ok" ? "text-ok-fg" : reason === "sin_stock" ? "text-warn-fg" : "text-crit-fg";
   return (
-    <span className={cn("whitespace-nowrap font-medium", tone)}>
-      {lead ? ` · ${text}` : text}
-    </span>
+    <>
+      {lead && DOT}
+      <span className={cn("whitespace-nowrap font-medium", tone)}>{text}</span>
+    </>
   );
 }
 
@@ -4265,6 +4331,11 @@ function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
 
 // ── Métricas de reprogramación Kapta→Swayp ───────────────────────────────────
 
+/** Una cifra entera en es-PE («1,984»), como las tarjetas de vista. */
+function fmtCount(n: number): string {
+  return n.toLocaleString("es-PE");
+}
+
 function pctLabel(tasa: number | null): string | null {
   return tasa == null ? null : `${Math.round(tasa * 100)}%`;
 }
@@ -4408,22 +4479,22 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
                         </Badge>
                       )}
                     </td>
-                    <td className={cn(MINI_TD, "font-semibold text-ink-900")}>{r.gestiones}</td>
-                    <td className={cn(MINI_TD, "text-info-fg")}>{r.reprogramadas}</td>
-                    <td className={cn(MINI_TD, "text-ink-500")}>{r.anuladas}</td>
-                    <td className={cn(MINI_TD, "text-ok-fg")}>{r.entregadas}</td>
-                    <td className={cn(MINI_TD, "text-ink-700")}>{r.guias}</td>
+                    <td className={cn(MINI_TD, "font-semibold text-ink-900")}>{fmtCount(r.gestiones)}</td>
+                    <td className={cn(MINI_TD, "text-info-fg")}>{fmtCount(r.reprogramadas)}</td>
+                    <td className={cn(MINI_TD, "text-ink-500")}>{fmtCount(r.anuladas)}</td>
+                    <td className={cn(MINI_TD, "text-ok-fg")}>{fmtCount(r.entregadas)}</td>
+                    <td className={cn(MINI_TD, "text-ink-700")}>{fmtCount(r.guias)}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr className="font-medium text-ink-700">
                   <td className={MINI_TD}>Total equipo</td>
-                  <td className={cn(MINI_TD, "font-semibold text-ink-900")}>{totals.gestiones}</td>
-                  <td className={MINI_TD}>{totals.reprogramadas}</td>
-                  <td className={MINI_TD}>{totals.anuladas}</td>
-                  <td className={MINI_TD}>{totals.entregadas}</td>
-                  <td className={MINI_TD}>{totals.guias}</td>
+                  <td className={cn(MINI_TD, "font-semibold text-ink-900")}>{fmtCount(totals.gestiones)}</td>
+                  <td className={MINI_TD}>{fmtCount(totals.reprogramadas)}</td>
+                  <td className={MINI_TD}>{fmtCount(totals.anuladas)}</td>
+                  <td className={MINI_TD}>{fmtCount(totals.entregadas)}</td>
+                  <td className={MINI_TD}>{fmtCount(totals.guias)}</td>
                 </tr>
               </tfoot>
             </table>
@@ -4466,9 +4537,13 @@ function VoiceScorePanel({ initial }: { initial: VoiceScoreRow[] }) {
   }, [key, from, to, result]);
 
   const rows = Array.isArray(result) ? result : null;
+  // Cifras en es-PE, como el resto del panel: coma de miles y punto decimal.
+  // Se escribía «5,5» y «$6,42» al lado de «3,089».
   const pct = (n: number | null) => (n == null ? "—" : `${Math.round(n * 100)}%`);
-  const per = (n: number | null) => (n == null ? "—" : n.toFixed(1).replace(".", ","));
-  const usd = (n: number | null) => (n == null ? "—" : `$${n.toFixed(2).replace(".", ",")}`);
+  const per = (n: number | null) =>
+    n == null ? "—" : n.toLocaleString("es-PE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const usd = (n: number | null) =>
+    n == null ? "—" : `US$ ${n.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   return (
     <div className={SUMMARY_PANEL}>
@@ -4498,7 +4573,7 @@ function VoiceScorePanel({ initial }: { initial: VoiceScoreRow[] }) {
               <th className={MINI_TH}>Guías Swayp</th>
               <th className={MINI_TH}>Confirma / atendidas</th>
               <th className={MINI_TH}>Llamadas por confirma</th>
-              <th className={MINI_TH}>Costo línea (US$)</th>
+              <th className={MINI_TH}>Costo línea</th>
               <th className={MINI_TH}>Costo por confirma</th>
             </tr>
           </thead>
@@ -4513,20 +4588,20 @@ function VoiceScorePanel({ initial }: { initial: VoiceScoreRow[] }) {
             {rows?.map((r) => (
               <tr key={r.agent} className={r.llamadas ? "text-ink-700" : "text-ink-500"}>
                 <td className={cn(MINI_TD, r.llamadas > 0 && "text-ink-900")}>{r.name}</td>
-                <td className={cn(MINI_TD, "font-semibold", r.llamadas > 0 && "text-ink-900")}>{r.llamadas}</td>
-                <td className={MINI_TD}>{r.atendidas}</td>
-                <td className={cn(MINI_TD, r.sinGestion > 0 && "text-warn-fg")}>{r.sinGestion}</td>
-                <td className={cn(MINI_TD, r.confirma > 0 && "text-ok-fg")}>{r.confirma}</td>
-                <td className={MINI_TD}>{r.programar}</td>
-                <td className={cn(MINI_TD, "text-ink-500")}>{r.cancela}</td>
-                <td className={MINI_TD}>{r.guias}</td>
+                <td className={cn(MINI_TD, "font-semibold", r.llamadas > 0 && "text-ink-900")}>{fmtCount(r.llamadas)}</td>
+                <td className={MINI_TD}>{fmtCount(r.atendidas)}</td>
+                <td className={cn(MINI_TD, r.sinGestion > 0 && "text-warn-fg")}>{fmtCount(r.sinGestion)}</td>
+                <td className={cn(MINI_TD, r.confirma > 0 && "text-ok-fg")}>{fmtCount(r.confirma)}</td>
+                <td className={MINI_TD}>{fmtCount(r.programar)}</td>
+                <td className={cn(MINI_TD, "text-ink-500")}>{fmtCount(r.cancela)}</td>
+                <td className={MINI_TD}>{fmtCount(r.guias)}</td>
                 <td className={cn(MINI_TD, "font-semibold")}>{pct(voiceConversion(r))}</td>
                 <td className={MINI_TD}>{per(voiceCallsPerConfirma(r))}</td>
                 <td className={cn(MINI_TD, "whitespace-nowrap")}>
                   {r.conCosto ? usd(r.costo) : "—"}
                   {r.conCosto > 0 && r.conCosto < r.llamadas && (
                     <span className="ml-1 text-xs text-ink-500">
-                      ({r.conCosto} de {r.llamadas})
+                      ({fmtCount(r.conCosto)} de {fmtCount(r.llamadas)})
                     </span>
                   )}
                 </td>
@@ -4598,12 +4673,12 @@ function ReprogramCountsRow({ label, c }: { label: string; c: ReprogramCounts })
   return (
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[13px] tabular-nums">
       <span className="w-28 shrink-0 truncate text-sm font-medium text-ink-900">{label}</span>
-      <span className="text-ink-900">{c.total} reprogramadas</span>
-      <span className="text-ok-fg">{c.entregados} entregados</span>
-      {c.entregadosFenix > 0 && <span className="text-ink-700">{c.entregadosFenix} por Swayp</span>}
-      <span className="text-ink-500">{c.anulados} anulados</span>
-      <span className="text-ink-500">{c.enCurso} en curso</span>
-      {c.enCursoViejos > 0 && <span className="font-medium text-warn-fg">{c.enCursoViejos} varados</span>}
+      <span className="text-ink-900">{fmtCount(c.total)} reprogramadas</span>
+      <span className="text-ok-fg">{fmtCount(c.entregados)} entregados</span>
+      {c.entregadosFenix > 0 && <span className="text-ink-700">{fmtCount(c.entregadosFenix)} por Swayp</span>}
+      <span className="text-ink-500">{fmtCount(c.anulados)} anulados</span>
+      <span className="text-ink-500">{fmtCount(c.enCurso)} en curso</span>
+      {c.enCursoViejos > 0 && <span className="font-medium text-warn-fg">{fmtCount(c.enCursoViejos)} varados</span>}
       <span className="ml-auto text-sm font-semibold text-ink-900">{pct ?? "—"}</span>
     </div>
   );
@@ -4769,7 +4844,7 @@ function ReprogramModal({
                 const hOk = w.total ? Math.round((w.entregados / w.total) * h) : 0;
                 return (
                   <div key={w.start} className="flex flex-1 flex-col items-center gap-0.5">
-                    <span className="text-xs tabular-nums text-ink-500">{w.total || ""}</span>
+                    <span className="text-xs tabular-nums text-ink-500">{w.total ? fmtCount(w.total) : ""}</span>
                     <div className="flex w-full flex-col justify-end overflow-hidden rounded-sm bg-wash" style={{ height: 64 }}>
                       <div className="w-full bg-line-strong" style={{ height: Math.max(0, h - hOk) }} />
                       <div className="w-full bg-ok-fg" style={{ height: hOk }} />
@@ -4802,9 +4877,9 @@ function ReprogramModal({
                   {stats.semanas.map((w) => (
                     <tr key={w.start} className="border-t border-line">
                       <td className="py-1 pr-2">{weekLabel(w.start)}</td>
-                      <td className="py-1 pr-2 text-right">{w.total}</td>
-                      <td className="py-1 pr-2 text-right text-ok-fg">{w.entregados}</td>
-                      <td className="py-1 text-right">{w.anulados}</td>
+                      <td className="py-1 pr-2 text-right">{fmtCount(w.total)}</td>
+                      <td className="py-1 pr-2 text-right text-ok-fg">{fmtCount(w.entregados)}</td>
+                      <td className="py-1 text-right">{fmtCount(w.anulados)}</td>
                     </tr>
                   ))}
                 </tbody>
