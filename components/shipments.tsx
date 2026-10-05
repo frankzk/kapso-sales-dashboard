@@ -71,7 +71,15 @@ import {
   type ShipmentSortDirection,
   type ShipmentSortKey,
 } from "@/lib/shipment-sort";
-import { liveElapsed, liveSignature, pinLiveCalls, type LiveVoiceCall } from "@/lib/voice-live";
+import {
+  agoLabel,
+  limaPassLabel,
+  liveElapsed,
+  liveSignature,
+  pinLiveCalls,
+  type LiveVoiceCall,
+  type VoiceLiveStatus,
+} from "@/lib/voice-live";
 import {
   REPROGRAM_STALE_DAYS,
   REPROGRAM_UNASSIGNED,
@@ -89,7 +97,7 @@ import {
   createFenixGuide,
   loadReprogramData,
   loadVoiceScore,
-  loadLiveVoiceCalls,
+  loadVoiceLiveStatus,
   loadShipmentDetail,
   reprogramCancelledShipmentException,
   registerCourierReportResult,
@@ -601,7 +609,8 @@ export function ShipmentsBoard({
       direction: current?.key === key && current.direction === "asc" ? "desc" : "asc",
     }));
   }, []);
-  const liveCalls = useLiveVoiceCalls(view === "pendiente");
+  const voiceNow = useVoiceLiveStatus(view === "pendiente");
+  const liveCalls = useMemo(() => voiceNow?.calls ?? [], [voiceNow]);
   const liveByOrder = useMemo(() => new Map(liveCalls.map((c) => [c.orderId, c])), [liveCalls]);
   const liveFor = useCallback(
     (row: ShipmentRow) => (row.order_id ? liveByOrder.get(row.order_id) ?? null : null),
@@ -1364,8 +1373,12 @@ export function ShipmentsBoard({
             </Card>
           ) : (
             <Card className="p-0">
-              {liveOffscreen.length > 0 && (
-                <LiveOffscreenNotice calls={liveOffscreen} onFind={(name) => setSearch(name)} />
+              {voiceNow && (
+                <VoiceNowLine
+                  status={voiceNow}
+                  offscreen={liveOffscreen}
+                  onFind={(name) => setSearch(name)}
+                />
               )}
               {filtered.length === 0 ? (
                 <p className="p-5 text-sm text-slate-500">
@@ -1454,16 +1467,16 @@ const LIVE_POLL_MS = 5_000;
 const LIVE_REFRESH_MIN_MS = 15_000;
 
 /**
- * «Llamando ahora» (MOM §11.8): las llamadas del agente abiertas, sondeadas
- * mientras la pestaña se ve. Cuando una termina, la cola se recarga para que
- * la fila salga con la gestión que el agente acaba de registrar.
+ * «Ahora» del agente (MOM §11.8): lo que llama, la última llamada y la próxima
+ * pasada, sondeado mientras la pestaña se ve. Cuando una llamada termina, la
+ * cola se recarga para que la fila salga con la gestión que el agente registró.
  */
-function useLiveVoiceCalls(enabled: boolean): LiveVoiceCall[] {
+function useVoiceLiveStatus(enabled: boolean): VoiceLiveStatus | null {
   const router = useRouter();
-  const [calls, setCalls] = useState<LiveVoiceCall[]>([]);
+  const [status, setStatus] = useState<VoiceLiveStatus | null>(null);
   useEffect(() => {
     if (!enabled) {
-      setCalls([]);
+      setStatus(null);
       return;
     }
     let alive = true;
@@ -1476,16 +1489,17 @@ function useLiveVoiceCalls(enabled: boolean): LiveVoiceCall[] {
       if (inFlight || document.hidden) return;
       inFlight = true;
       try {
-        const next = await loadLiveVoiceCalls().catch(() => null);
+        const next = await loadVoiceLiveStatus().catch(() => null);
         if (!alive || next === null) return;
-        const nextSignature = liveSignature(next);
-        const nextOrders = new Set(next.map((c) => c.orderId));
+        const nextOrders = new Set(next.calls.map((c) => c.orderId));
         // Terminó una llamada: su pedido ya no está entre las abiertas.
         const ended = [...openOrders].some((id) => !nextOrders.has(id));
         openOrders = nextOrders;
+        // Solo se repinta si algo cambió: la tabla está memoizada sobre estas filas.
+        const nextSignature = [liveSignature(next.calls), next.last?.endedAt ?? "", next.nextPassAt ?? ""].join("#");
         if (nextSignature !== signature) {
           signature = nextSignature;
-          setCalls(next);
+          setStatus(next);
         }
         if (ended) pendingRefresh = true;
         if (pendingRefresh && Date.now() - lastRefresh >= LIVE_REFRESH_MIN_MS) {
@@ -1509,7 +1523,7 @@ function useLiveVoiceCalls(enabled: boolean): LiveVoiceCall[] {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [enabled, router]);
-  return calls;
+  return status;
 }
 
 /**
@@ -1544,27 +1558,75 @@ function LiveCallChip({ call, className }: { call: LiveVoiceCall; className?: st
   );
 }
 
-/** Llamadas en curso cuyo pedido no está en la lista: lo dice, con un atajo para buscarlo. */
-function LiveOffscreenNotice({ calls, onFind }: { calls: LiveVoiceCall[]; onFind: (orderName: string) => void }) {
+/**
+ * La línea «Agente de voz» sobre la cola: siempre dice algo. Con llamada, a
+ * quién llama (y si los filtros la esconden, un atajo para buscarla); sin
+ * llamada, cómo terminó la última y cuándo es la próxima pasada.
+ */
+function VoiceNowLine({
+  status,
+  offscreen,
+  onFind,
+}: {
+  status: VoiceLiveStatus;
+  offscreen: LiveVoiceCall[];
+  onFind: (orderName: string) => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const hidden = new Set(offscreen.map((c) => c.orderId));
+  // Sin separadores «·»: al partirse la línea en un teléfono quedaban sueltos
+  // al borde. Cada tramo es un grupo que no se corta, separado por aire.
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-slate-200 bg-slate-50 px-5 py-2.5 text-sm text-slate-700">
-      {calls.map((c) => (
-        <span key={c.orderId} className="flex flex-wrap items-center gap-2">
-          <LiveCallChip call={c} className="inline-flex" />
-          <span>
-            {c.orderName ?? "Un pedido"} no aparece con los filtros actuales.
+    <div
+      className="flex flex-wrap items-center gap-x-5 gap-y-1.5 border-b border-slate-200 bg-slate-50 px-5 py-2.5 text-sm text-slate-600"
+      aria-live="polite"
+    >
+      <span className="font-medium text-slate-800">Agente de voz</span>
+      {status.calls.length > 0 ? (
+        status.calls.map((c) => (
+          <span key={c.orderId} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="flex items-center gap-2 whitespace-nowrap">
+              <LiveCallChip call={c} className="inline-flex" />
+              <span className="text-slate-700">
+                a <span className="font-medium text-slate-900">{c.orderName ?? "un pedido"}</span>
+              </span>
+            </span>
+            {hidden.has(c.orderId) && (
+              <>
+                <span className="text-slate-500">no aparece con los filtros actuales</span>
+                {c.orderName && (
+                  <button
+                    type="button"
+                    onClick={() => onFind(c.orderName!)}
+                    className="rounded-sm font-medium text-brand-700 underline-offset-2 hover:underline"
+                  >
+                    Buscarlo
+                  </button>
+                )}
+              </>
+            )}
           </span>
-          {c.orderName && (
-            <button
-              type="button"
-              onClick={() => onFind(c.orderName!)}
-              className="rounded-sm text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
-            >
-              Buscarlo
-            </button>
-          )}
+        ))
+      ) : (
+        <span className="flex items-center gap-1.5">
+          <span className="size-2 rounded-full bg-slate-300" aria-hidden />
+          Sin llamada en curso
         </span>
-      ))}
+      )}
+      {status.last && (
+        <span>
+          Última: <span className="font-medium text-slate-800">{status.last.orderName ?? "un pedido"}</span>,{" "}
+          {status.last.agent}, {status.last.result},{" "}
+          <span className="whitespace-nowrap tabular-nums">{agoLabel(status.last.endedAt, now)}</span>
+        </span>
+      )}
+      <span className="whitespace-nowrap tabular-nums">
+        {status.nextPassAt ? <>Próxima pasada {limaPassLabel(status.nextPassAt, now)}</> : "Automático apagado"}
+      </span>
     </div>
   );
 }

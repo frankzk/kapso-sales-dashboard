@@ -4247,8 +4247,17 @@ Reglas de esa tabla:
       Agente X» con un punto verde cuando la clienta ya habla. La nota lleva
       el tiempo que va la llamada. Así nadie abre esa guía para llamar a la
       vez que el agente.
-    - **Pedido oculto por los filtros:** si los filtros esconden el pedido
-      en llamada, una línea arriba de la tabla lo dice, con «Buscarlo».
+    - **Línea «Agente de voz»**, siempre visible arriba de la tabla. Con
+      llamada, dice a quién llama. Si los filtros esconden ese pedido, lo
+      avisa y ofrece «Buscarlo».
+
+      Sin llamada dice «Sin llamada en curso», cómo terminó la última
+      (pedido, agente, resultado y hace cuánto) y la hora de la próxima
+      pasada del barrido. Esa hora sale de la misma regla de horario que usa
+      el barrido (`withinVoiceHours`); si el automático está apagado, lo
+      dice. Se agregó el 04-10-2026: con una llamada cada 5 min y la mayoría
+      de menos de un minuto, la tabla pasaba casi todo el tiempo sin ninguna
+      fila marcada y no se sabía si el agente estaba trabajando.
     - **Al terminar la llamada**, la cola se recarga (como mucho una vez cada
       15 s) y la fila sale con la gestión que registró el agente.
     - **Pestaña oculta:** con la pestaña del navegador oculta no se consulta.

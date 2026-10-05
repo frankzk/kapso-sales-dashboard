@@ -56,7 +56,14 @@ import {
   type ShipmentLineageNode,
 } from "@/lib/shipment-lineage";
 import { isStale } from "@/lib/voice-recovery";
-import { liveAgentName, type LiveVoiceCall } from "@/lib/voice-live";
+import {
+  lastCallResult,
+  liveAgentName,
+  nextVoicePass,
+  type LiveVoiceCall,
+  type VoiceLiveStatus,
+} from "@/lib/voice-live";
+import { withinVoiceHours } from "@/lib/voice-recovery-queue";
 
 // The manual-review queue: guides that didn't auto-link to an order AND still
 // need a human. We exclude terminal states (delivered/closed) and rows dismissed
@@ -1348,6 +1355,65 @@ export async function getLiveVoiceCalls(storeIds: string[]): Promise<LiveVoiceCa
         since: (r.status === "in_progress" ? r.started_at : r.dialed_at) ?? r.dialed_at ?? now.toISOString(),
       };
     });
+}
+
+/**
+ * La línea «Ahora» de Envíos: lo que el agente llama, la última llamada que
+ * terminó y la próxima pasada del barrido, con la misma regla de horario que el
+ * barrido (`withinVoiceHours`). Null si la lectura falla.
+ */
+export async function getVoiceLiveStatus(storeIds: string[]): Promise<VoiceLiveStatus | null> {
+  if (!storeIds.length) return { calls: [], last: null, nextPassAt: null };
+  const sb = await createServerSupabase();
+  const [calls, lastRes, storesRes] = await Promise.all([
+    getLiveVoiceCalls(storeIds),
+    sb
+      .from("voice_calls")
+      .select("status, outcome, error, started_at, ended_at, telephony, provider, orders(name)")
+      .in("store_id", storeIds)
+      .eq("mode", "real")
+      .in("status", ["completed", "failed"])
+      .not("ended_at", "is", null)
+      .order("ended_at", { ascending: false })
+      .limit(1),
+    sb
+      .from("stores")
+      .select("voice_recovery_enabled, voice_recovery_auto, voice_recovery_hour_start, voice_recovery_hour_end")
+      .in("id", storeIds),
+  ]);
+  if (calls === null || lastRes.error || storesRes.error) return null;
+  type Last = {
+    status: string;
+    outcome: string | null;
+    error: string | null;
+    started_at: string | null;
+    ended_at: string;
+    telephony: string | null;
+    provider: string | null;
+    orders: { name: string | null } | { name: string | null }[] | null;
+  };
+  const l = ((lastRes.data ?? []) as unknown as Last[])[0];
+  const order = l ? (Array.isArray(l.orders) ? l.orders[0] : l.orders) : null;
+  type Store = {
+    voice_recovery_enabled: boolean;
+    voice_recovery_auto: boolean;
+    voice_recovery_hour_start: number;
+    voice_recovery_hour_end: number;
+  };
+  const now = new Date();
+  // Con varias tiendas, la pasada más próxima de las que tienen el automático encendido.
+  const passes = ((storesRes.data ?? []) as Store[])
+    .filter((st) => st.voice_recovery_enabled && st.voice_recovery_auto)
+    .map((st) => nextVoicePass(now, (d) => withinVoiceHours(d, st.voice_recovery_hour_start, st.voice_recovery_hour_end)))
+    .filter((d): d is Date => d !== null)
+    .sort((a, b) => a.getTime() - b.getTime());
+  return {
+    calls,
+    last: l
+      ? { orderName: order?.name ?? null, agent: liveAgentName(l.telephony, l.provider), result: lastCallResult(l), endedAt: l.ended_at }
+      : null,
+    nextPassAt: passes[0]?.toISOString() ?? null,
+  };
 }
 
 async function buildReprogramRows(

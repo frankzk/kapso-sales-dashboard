@@ -1,7 +1,18 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { liveAgentName, liveElapsed, liveSignature, pinLiveCalls, type LiveVoiceCall } from "@/lib/voice-live";
+import {
+  agoLabel,
+  lastCallResult,
+  limaPassLabel,
+  liveAgentName,
+  liveElapsed,
+  liveSignature,
+  nextVoicePass,
+  pinLiveCalls,
+  type LiveVoiceCall,
+} from "@/lib/voice-live";
+import { withinVoiceHours } from "@/lib/voice-recovery-queue";
 
 const call = (orderId: string, over: Partial<LiveVoiceCall> = {}): LiveVoiceCall => ({
   orderId,
@@ -58,7 +69,41 @@ describe("«Llamando ahora» en Envíos (MOM §11.8)", () => {
 
   it("la cola la fija primero en cualquier orden, y sondea solo en Pendiente", () => {
     const src = readFileSync(resolve(__dirname, "../components/shipments.tsx"), "utf8");
-    expect(src).toContain('useLiveVoiceCalls(view === "pendiente")');
+    expect(src).toContain('useVoiceLiveStatus(view === "pendiente")');
     expect(src).toMatch(/pinLiveCalls\(sort \? sortShipmentRows\(filtered/);
+  });
+
+  it("la última llamada, dicha en palabras", () => {
+    const base = { status: "completed", outcome: null, error: null, started_at: null };
+    expect(lastCallResult({ ...base, outcome: "confirma" })).toBe("confirmó");
+    expect(lastCallResult({ ...base, outcome: "programar" })).toBe("programó");
+    expect(lastCallResult({ ...base, outcome: "cancela" })).toBe("canceló");
+    expect(lastCallResult({ ...base, outcome: "no_contesta" })).toBe("no contestó");
+    expect(lastCallResult({ ...base, outcome: "no_contesta", started_at: "t" })).toBe("buzón o sin respuesta");
+    expect(
+      lastCallResult({ ...base, outcome: "no_contesta", started_at: "t", error: "sin registrar_gestion: se cortó la llamada" }),
+    ).toBe("se cortó sin gestión");
+    expect(lastCallResult({ ...base, status: "failed", outcome: "sin_resultado" })).toBe("falló");
+  });
+
+  it("la próxima pasada cae en punto de 5 min y dentro del horario de Lima", () => {
+    const within = (d: Date) => withinVoiceHours(d, 9, 22);
+    // Domingo 04-10 21:07 Lima → 21:10.
+    expect(nextVoicePass(new Date("2026-10-05T02:07:00Z"), within)?.toISOString()).toBe("2026-10-05T02:10:00.000Z");
+    // En punto pasa a la siguiente: 21:10 → 21:15.
+    expect(nextVoicePass(new Date("2026-10-05T02:10:00Z"), within)?.toISOString()).toBe("2026-10-05T02:15:00.000Z");
+    // 22:03 Lima del domingo → lunes 09:00.
+    expect(nextVoicePass(new Date("2026-10-05T03:03:00Z"), within)?.toISOString()).toBe("2026-10-05T14:00:00.000Z");
+    expect(nextVoicePass(new Date("2026-10-05T03:03:00Z"), () => false)).toBeNull();
+  });
+
+  it("la hora de la pasada y el «hace», en Lima", () => {
+    const now = Date.parse("2026-10-05T02:07:00Z"); // dom 21:07 Lima
+    expect(limaPassLabel("2026-10-05T02:10:00Z", now)).toBe("21:10");
+    expect(limaPassLabel("2026-10-05T14:00:00Z", now)).toBe("mañana 09:00");
+    expect(limaPassLabel("2026-10-06T14:00:00Z", now)).toBe("mar 09:00");
+    expect(agoLabel("2026-10-05T02:05:00Z", now)).toBe("hace 2 min");
+    expect(agoLabel("2026-10-05T02:06:40Z", now)).toBe("hace un momento");
+    expect(agoLabel("2026-10-05T00:05:00Z", now)).toBe("hace 2 h");
   });
 });
