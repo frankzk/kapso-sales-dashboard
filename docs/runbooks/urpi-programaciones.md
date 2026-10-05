@@ -13,7 +13,11 @@ custodia, cobro ni liquidación a partir de las pestañas de programación.
    o con un prefijo que se solape con otro no se registra. La separación por
    tienda permite aplicar la misma autorización de lectura que el Master.
 3. Cargar el libro mensual completo `.xlsx` descargado de Google Sheets o
-   configurar la lectura de Google descrita abajo.
+   configurar la lectura de Google descrita abajo. En un libro mixto basta con
+   hacerlo una vez desde cualquiera de sus tiendas: «Actualizar desde Google» y
+   «Cargar Excel del mes» leen el libro una vez y guardan Kenku y Aurela, cada
+   una con su versión. Si una falla (o el usuario no tiene `sheets.edit` en
+   ella), la otra se guarda igual y el aviso dice qué pasó con cada tienda.
 
 El registro exige `sheets.manage` y la importación `sheets.edit`, evaluados en
 la organización de la tienda. La lectura usa `auth_store_ids()` mediante RLS.
@@ -94,7 +98,7 @@ en reportes de entrega ni cambia fechas por sí sola.
 
 ## Verificación
 
-`npm test -- test/urpi-programming.test.ts test/urpi-programming-access.test.ts test/urpi-register-source.test.ts test/urpi-google-sheets.test.ts test/urpi-excel.test.ts`
+`npm test -- test/urpi-programming.test.ts test/urpi-programming-access.test.ts test/urpi-register-source.test.ts test/urpi-book-import.test.ts test/urpi-google-sheets.test.ts test/urpi-excel.test.ts`
 y `npm run typecheck`.
 Para el proceso periódico: `npm test -- test/urpi-auto-sync.test.ts test/urpi-auto-route.test.ts`.
 

@@ -31,6 +31,9 @@ export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versio
   const [target, setTarget] = useState(registrable.length > 1 ? "all" : registrable[0]?.id ?? "");
   const targets = target === "all" ? registrable : registrable.filter((store) => store.id === target);
   const selectedStore = stores.find((store) => store.id === source?.store_id);
+  // Mismo Sheet y mes: actualizar o cargar el Excel procesa todas sus tiendas.
+  const bookStores = source ? sources.filter((item) => item.spreadsheet_id === source.spreadsheet_id && item.month === source.month)
+    .map((item) => `${stores.find((store) => store.id === item.store_id)?.name ?? item.name} (${item.order_prefix})`) : [];
   const [month, setMonth] = useState(new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Lima", year: "numeric", month: "2-digit" }).format(new Date()));
   const [url, setUrl] = useState("");
   const [query, setQuery] = useState("");
@@ -62,9 +65,9 @@ export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versio
     try {
       const form = new FormData(); form.set("sourceId", source.id); form.set("file", file);
       const res = await fetch("/api/urpi/programming/import", { method: "POST", body: form });
-      const result = await res.json() as { message?: string; error?: string };
+      const result = await res.json() as { message?: string; error?: string; saved?: number };
       setNotice({ ok: res.ok, message: result.message ?? result.error ?? "No se pudo procesar el archivo." });
-      if (res.ok) { go(source.id); router.refresh(); }
+      if (res.ok || result.saved) { go(source.id); router.refresh(); }
     } catch { setNotice({ ok: false, message: "No se pudo completar la carga. La programación anterior se conserva." }); }
     finally { setUploading(false); if (fileInput.current) fileInput.current.value = ""; }
   }
@@ -78,7 +81,7 @@ export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versio
       {manageable.length > 0 && <button className={primary} onClick={() => setRegisterOpen((open) => !open)} aria-expanded={registerOpen}>Registrar archivo mensual</button>}
     </header>
 
-    {notice && <div role={notice.ok ? "status" : "alert"} className={`rounded-lg border p-3 text-sm ${notice.ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-900"}`}>{notice.message}</div>}
+    {notice && <div role={notice.ok ? "status" : "alert"} className={`whitespace-pre-line rounded-lg border p-3 text-sm ${notice.ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-900"}`}>{notice.message}</div>}
 
     {registerOpen && manageable.length > 0 && <form className="space-y-4 rounded-xl border border-slate-200 bg-white p-5" onSubmit={(event) => {
       event.preventDefault(); setNotice(null);
@@ -110,12 +113,13 @@ export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versio
           {source && selectedStore?.canEdit && <>
             <button disabled={busy || !googleConfigured} className={button} onClick={() => startTransition(async () => {
               setNotice(null); const result = await syncUrpiSource(source.id); setNotice(result);
-              if (result.ok) { go(source.id); router.refresh(); }
+              if (result.ok || result.saved) { go(source.id); router.refresh(); }
             })}>{pending ? "Leyendo Google Sheets…" : "Actualizar desde Google"}</button>
             <button disabled={busy} className={primary} onClick={() => fileInput.current?.click()}>{uploading ? "Importando…" : "Cargar Excel del mes"}</button>
             <input ref={fileInput} type="file" accept=".xlsx" className="hidden" aria-label="Excel mensual de Urpi" onChange={(e) => { const file = e.target.files?.[0]; if (file) void upload(file); }} />
           </>}
         </div>
+        {bookStores.length > 1 && <p className="text-sm text-slate-600">Archivo compartido por {bookStores.join(" y ")}: cada lectura o Excel cargado actualiza todas sus tiendas.</p>}
         <div className="flex flex-wrap justify-between gap-2 text-xs text-slate-500">
           <span>{source?.last_checked_at ? `Última lectura: ${timeLabel(source.last_checked_at)} · hora de Lima` : "Este archivo todavía no tiene una lectura guardada."}</span>
           <span>{googleConfigured ? "Conexión de lectura a Google configurada" : "Conexión a Google pendiente · disponible mediante Excel"}</span>

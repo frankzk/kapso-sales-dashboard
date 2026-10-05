@@ -1,13 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { createAdminSupabase } from "@/lib/db";
 import { requireUrpiStore } from "@/lib/urpi-programming-access";
-import { spreadsheetIdFromUrl, validMonth, parseUrpiProgramming, urpiPrefixesSeparable, urpiStorePrefix } from "@/lib/urpi-programming";
+import { spreadsheetIdFromUrl, validMonth, urpiPrefixesSeparable, urpiStorePrefix } from "@/lib/urpi-programming";
 import { readUrpiGoogleWorkbook } from "@/lib/urpi-google-sheets";
-import { saveUrpiProgramming, type UrpiSource } from "@/lib/urpi-programming-db";
+import { importUrpiBook, openUrpiBook } from "@/lib/urpi-programming-import";
 
-export interface UrpiActionResult { ok: boolean; message: string; sourceId?: string }
+/** `saved`: tiendas guardadas en una lectura del libro; puede haber éxito parcial. */
+export interface UrpiActionResult { ok: boolean; message: string; sourceId?: string; saved?: number }
 
 /** Un libro de Urpi mezcla tiendas: se registra una fuente por tienda con el
  * prefijo de `stores.order_prefix`, nunca uno escrito a mano. */
@@ -50,18 +51,15 @@ export async function registerUrpiSource(input: { storeIds: string[]; month: str
   } catch (error) { return { ok: false, message: error instanceof Error ? error.message : "No se pudo registrar el archivo." }; }
 }
 
+/** Lee el Sheet una vez y actualiza todas las tiendas registradas con él. */
 export async function syncUrpiSource(sourceId: string): Promise<UrpiActionResult> {
   const startedAt = new Date().toISOString();
   try {
-    const sb = await createServerSupabase();
-    const { data, error } = await sb.from("urpi_programming_sources").select("*").eq("id", sourceId).maybeSingle();
-    if (error || !data) throw new Error("El archivo no existe o no tienes acceso.");
-    const source = data as UrpiSource;
-    const { user } = await requireUrpiStore(source.store_id);
-    const workbook = await readUrpiGoogleWorkbook(source.spreadsheet_id, source.month);
-    const parsed = parseUrpiProgramming(workbook.tabs, source.month, source.order_prefix);
-    const result = await saveUrpiProgramming(createAdminSupabase(), source, parsed, { actor: user.id, startedAt, origin: "google", filename: null });
-    revalidatePath("/dashboard/urpi");
-    return { ok: true, message: `${result.changed ? "Programación actualizada" : "Sin cambios"}: ${result.rows} registros, ${result.linked} vinculados a Kapta.` };
+    const book = await openUrpiBook(sourceId);
+    const { spreadsheet_id, month } = book.targets[0]!.source;
+    const workbook = await readUrpiGoogleWorkbook(spreadsheet_id, month);
+    const result = await importUrpiBook(book, workbook.tabs, { startedAt, origin: "google", filename: null });
+    if (result.saved) revalidatePath("/dashboard/urpi");
+    return result;
   } catch (error) { return { ok: false, message: error instanceof Error ? error.message : "No se pudo leer Google Sheets." }; }
 }

@@ -8539,7 +8539,11 @@ anteriores siguen disponibles; retirar una fila de la hoja no equivale a cancela
 ni entregar el pedido. Los conteos son de programaciones, no ventas ni intentos.
 
 Lectura mediante conexión propia de Google con permiso de solo lectura; alternativa
-de carga del libro mensual completo `.xlsx`. La conexión de una conversación de
+de carga del libro mensual completo `.xlsx`. «Actualizar desde Google» y «Cargar
+Excel del mes» sobre una fuente procesan todas las fuentes del mismo archivo y mes
+que el usuario puede editar: el libro se lee una vez, cada tienda guarda su propia
+versión con su prefijo, y el fallo de una no impide guardar la otra; una tienda
+sin permiso de importación no se toca y se informa. La conexión de una conversación de
 Codex no autoriza automáticamente al servidor de Kapta. La lectura automática se
 programa cada 15 minutos para fuentes registradas del mes anterior, actual y
 siguiente, según Lima. No descubre ni registra por sí sola archivos nuevos.
