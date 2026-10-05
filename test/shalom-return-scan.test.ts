@@ -187,7 +187,7 @@ describe("receiveReturnedPackage con una caja de Shalom", () => {
 
   it("las cajas de Aliclik siguen recibiéndose desde el Master", async () => {
     state.courier = "aliclik";
-    expect((await receiveReturnedPackage("92083386")).error).toContain("no es de Tanders ni de Shalom");
+    expect((await receiveReturnedPackage("92083386")).error).toContain("no es de Tanders, Shalom ni Grupo GF");
     expect(writes()).toEqual([]);
   });
 });
