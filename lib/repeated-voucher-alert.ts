@@ -54,8 +54,8 @@ export interface RepeatedVoucher {
 const SOURCE_LABEL: Record<RepeatedVoucherSource, string> = {
   barrido_tanders: "constancia de Tanders",
   cobro_courier: "cobro de courier",
-  subida_manual: "comprobante subido a mano",
-  whatsapp: "comprobante llegado por WhatsApp",
+  subida_manual: "subido a mano",
+  whatsapp: "llegado por WhatsApp",
 };
 
 /** La huella: una alerta abierta por comprobante y tienda. */
@@ -74,7 +74,7 @@ export function involvedOrders(v: Pick<RepeatedVoucher, "orderName" | "alsoIn">)
 export function repeatedVoucherDetail(v: RepeatedVoucher): string {
   const pedidos = involvedOrders(v);
   const partes = [
-    `El mismo ${SOURCE_LABEL[v.source]} aparece en ${pedidos.length} pedidos: ${pedidos.join(", ")}.`,
+    `El mismo comprobante (${SOURCE_LABEL[v.source]}) aparece en ${pedidos.length} pedidos: ${pedidos.join(", ")}.`,
     v.operation ? `Operación ${v.operation}.` : v.fileSha256 ? "Es el mismo archivo de imagen." : "",
     ...(v.actions ?? []),
     "Al menos uno no está pagado: revisa cuál es cuál.",
@@ -90,7 +90,7 @@ export function repeatedVoucherTelegram(storeName: string, v: RepeatedVoucher): 
   const lines = [
     `🚨 <b>COMPROBANTE REPETIDO</b> — ${esc(storeName)}`,
     "",
-    `El mismo ${SOURCE_LABEL[v.source]} está en <b>${pedidos.length} pedidos</b>:`,
+    `El mismo comprobante (${SOURCE_LABEL[v.source]}) está en <b>${pedidos.length} pedidos</b>:`,
     ...pedidos.map((p) => `• <b>${esc(p)}</b>`),
   ];
   if (v.amount != null) lines.push(`Monto: S/ ${v.amount.toFixed(2)}`);
