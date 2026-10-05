@@ -57,7 +57,8 @@ describe("si no hay elección, no se pregunta", () => {
 
 describe("el formulario manual tiene fecha propia y se pliega", () => {
   it("no comparte `nextDate` con la llamada", () => {
-    const manual = ui.slice(ui.indexOf("Guía Swayp a mano</h3>"), ui.indexOf("Crear guía Swayp\n"));
+    const manual = ui.slice(ui.indexOf('title="Guía Swayp a mano"'), ui.indexOf("Crear guía Swayp\n"));
+    expect(manual.length).toBeGreaterThan(0);
     expect(manual).toContain("value={manualGuideDate}");
     expect(manual).not.toContain("value={nextDate}");
     expect(manual).not.toContain("nextDate ?");

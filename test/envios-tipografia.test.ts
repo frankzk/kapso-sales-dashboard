@@ -40,24 +40,26 @@ describe("una sola escala", () => {
 
 describe("el mismo rol, el mismo tratamiento", () => {
   it("el título del cajón pesa más que sus secciones", () => {
-    expect(src).toContain('id="shipment-drawer-title" className="text-base font-semibold text-slate-900"');
+    // 18 px como la ficha del pedido; sus secciones van en 16 (`SectionHead`).
+    expect(src).toContain('id="shipment-drawer-title" className="font-mono text-lg font-semibold leading-7 text-ink-900"');
   });
 
   it("las etiquetas de formulario del cajón comparten peso y tono", () => {
     expect(src).not.toContain('<label className="block text-xs text-slate-500">');
-    expect(src.match(/<label className="block text-xs font-medium text-slate-600">/g)?.length).toBeGreaterThan(8);
+    expect(src).toContain('const DRAWER_LABEL = "grid gap-1.5 text-[13px] font-medium text-ink-700";');
+    expect(src.match(/<label className=\{DRAWER_LABEL\}>/g)?.length).toBeGreaterThan(8);
   });
 
   it("fechas y cifras van en cifras tabulares donde se comparan en columna", () => {
     expect(src).toContain('<p className="leading-5 tabular-nums text-ink-900">{fmtReprogram(s.next_followup_at)}</p>');
     // Las cifras del resumen de reprogramaciones.
     expect(src).toContain('<dd className="text-xl font-semibold leading-7 tabular-nums text-ink-900">');
-    expect(src).toContain('<span className="shrink-0 text-right text-xs tabular-nums text-slate-500">');
+    expect(src).toContain('<span className="shrink-0 text-right text-[13px] leading-5 tabular-nums text-ink-500">');
   });
 
   it("los códigos de guía no se parten por la mitad", () => {
     expect(src).not.toContain("break-all");
-    expect(src).toContain("whitespace-nowrap font-mono text-xs font-semibold text-slate-800");
+    expect(src).toContain("whitespace-nowrap font-mono text-[13px] font-medium leading-5 text-ink-700");
   });
 });
 

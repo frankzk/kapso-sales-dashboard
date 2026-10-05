@@ -41,7 +41,7 @@ describe("las dos puertas: el botón y el servidor", () => {
   it("«confirma» y «programar» comparten la exigencia de futuro en el cliente", () => {
     expect(ui).toContain('const dateNeedsFuture = disposition === "programar" || disposition === "confirma";');
     expect(ui).toContain("const programDateInvalid = dateNeedsFuture && (!nextDate || nextDate <= localDateInputValue());");
-    expect(ui).toContain('disposition === "programar" || disposition === "confirma"\n                        ? tomorrowDateInputValue()');
+    expect(ui.replace(/\s+/g, " ")).toContain('disposition === "programar" || disposition === "confirma" ? tomorrowDateInputValue()');
   });
 
   it("el servidor no se fía del `min` del navegador", () => {

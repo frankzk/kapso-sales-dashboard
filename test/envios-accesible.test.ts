@@ -70,8 +70,9 @@ describe("cada control tiene nombre", () => {
     expect(src).toContain('aria-label="Buscar guía, pedido, guía Swayp o celular"');
     expect(src).toContain('aria-label="Limpiar búsqueda"');
     expect(src).toContain('aria-label="Cerrar"');
-    // Los dos <select> de disposición y las dos notas van dentro de un <label>.
-    expect(src.match(/Resultado de la llamada\n\s+<select/g)?.length).toBe(2);
+    // Los dos grupos de resultado (la llamada y la llamada de recuperación)
+    // son opciones a la vista con nombre de grupo; antes eran dos <select>.
+    expect(src.match(/role="group" aria-label="Resultado de la llamada"/g)?.length).toBe(2);
     // Ningún <select> ni <textarea> queda suelto: cada uno va dentro de un
     // <label> (la etiqueta lo precede a pocas líneas) o lleva aria-label.
     for (const tag of ["<select", "<textarea"]) {
@@ -97,7 +98,7 @@ describe("foco visible y contraste", () => {
   });
 
   it("el punto que pulsa respeta movimiento reducido", () => {
-    expect(src).toContain("animate-pulse bg-slate-400 motion-reduce:animate-none");
+    expect(src).toContain("animate-pulse bg-ink-300 motion-reduce:animate-none");
   });
 });
 
@@ -111,7 +112,9 @@ describe("títulos de sección semánticos", () => {
       "Guía Swayp a mano",
       "Historial desde el origen",
     ]) {
-      expect(src, title).toMatch(new RegExp(`<h3[^>]*>${title.replace(/[()]/g, "\\$&")}</h3>`));
+      // Escrito como <h3> o como título de `SectionHead`, que lo pinta en un <h3>.
+      const t = title.replace(/[()]/g, "\\$&");
+      expect(src, title).toMatch(new RegExp(`<h3[^>]*>${t}</h3>|<SectionHead[\\s\\S]{0,80}?title="${t}"`));
     }
   });
 });

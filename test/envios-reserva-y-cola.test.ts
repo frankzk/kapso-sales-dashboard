@@ -28,7 +28,7 @@ describe("la reserva se pide cuando hay algo que registrar", () => {
   });
 
   it("el estado de solo lectura se dice, y no deshabilita el bloque", () => {
-    expect(ui).toContain("<b>Solo lectura.</b>");
+    expect(ui).toContain("Solo lectura.</b>");
     expect(ui).toContain('disabled={claimState === "blocked" || (eagerClaim && claimState !== "mine")}');
   });
 

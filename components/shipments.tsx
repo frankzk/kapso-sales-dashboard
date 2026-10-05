@@ -6,22 +6,33 @@ import { cn } from "@/components/ui";
 import {
   Badge,
   Banner,
+  CARD_ZONE,
+  CHECKBOX,
   ChoiceChip,
+  FIELD,
   FIELD_BOX,
   FilterPill,
   OpsButton,
+  OptionTile,
+  SECTION_CARD,
+  SectionHead,
+  Skeleton,
   StatusCard,
   opsButtonClass,
   type BadgeTone,
 } from "@/components/ops-ui";
 import { ChoicePill, DatePill, FacetPill } from "@/components/facet-pill";
 import {
+  IconAlert,
+  IconArrowUpRight,
+  IconCheckCircle,
   IconChevronRight,
   IconDownload,
   IconPackage,
   IconPhone,
   IconPlus,
   IconRepeat,
+  IconWhatsApp,
 } from "@/components/icons";
 import { CopyButton } from "@/components/copy-button";
 import { OrderLineItems } from "@/components/order-line-items";
@@ -2706,35 +2717,74 @@ function ShipmentDrawer({
     !!cancelledExceptionNote.trim() &&
     !cancelledExceptionUnavailable;
 
+  // «No contesta» con los intentos agotados anula la guía: la opción lo dice
+  // antes de elegirla, no solo el aviso de después.
+  const noAnswerCancels =
+    shipment?.delivery_status === "pendiente" && (shipment.reroute_attempts ?? 0) >= MAX_INTENTOS;
+  /** La consecuencia de cada resultado, escrita bajo su opción. */
+  const dispositionHint = (key: RerouteDisposition): string => {
+    switch (key) {
+      case "confirma":
+        return "Vuelve a salir: eliges la ruta y la fecha.";
+      case "programar":
+        return "Vuelve a la cola el día que elijas. No suma intento.";
+      case "no_contesta":
+        return noAnswerCancels
+          ? "Es el último intento: anula la guía."
+          : shipment?.delivery_status === "en_ruta"
+            ? "Vuelve a Pendiente con el mismo intento."
+            : `Suma un intento: van ${shipment?.reroute_attempts ?? 0} de ${MAX_INTENTOS}.`;
+      case "cancela":
+        return "Anula la guía y el pedido pasa a cierre.";
+    }
+  };
+  const recoveryHint: Record<RecoveryCallDisposition, string> = {
+    programar: "Vuelves a llamar el día que elijas.",
+    no_contesta: "Queda anotada; la recuperación sigue abierta.",
+    no_quiere: "El pedido pasa a cierre con el motivo escrito.",
+  };
+  const statusSinceLabel =
+    detail && !("error" in detail)
+      ? fmtStatusSince(statusSince(detail.calls, detail.shipment.delivery_status))
+      : null;
+  const phone = shipment?.customer_phone ?? null;
+
   return (
-    <div className="fixed inset-0 z-20 flex justify-end bg-slate-900/30" onClick={handleClose}>
+    <div className="fixed inset-0 z-20 flex justify-end bg-ink-900/20" onClick={handleClose}>
       <div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="shipment-drawer-title"
         tabIndex={-1}
-        className="h-full w-full max-w-[34rem] overflow-y-auto bg-white p-3.5 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-xl outline-none sm:p-4 sm:pb-[max(1rem,env(safe-area-inset-bottom))]"
+        // La hoja recibe el foco solo para que Tab y el lector empiecen dentro;
+        // no es un control, así que sin anillo (el global de globals.css va
+        // fuera de capa y ganaría a una clase `outline-none`).
+        style={{ outline: "none" }}
+        className="h-full w-full max-w-[40rem] overflow-y-auto overscroll-contain bg-slate-50 shadow-pop"
         onClick={(e) => e.stopPropagation()}
       >
         {detail && "error" in detail ? (
-          <div role="alert" className="space-y-2.5">
-            <p className="break-words text-sm text-rose-700">{detail.error}</p>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={refresh}
-                className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700"
-              >
-                Reintentar
-              </button>
-              <button type="button" onClick={handleClose} className="text-xs text-slate-500 hover:underline">
-                Cerrar
-              </button>
-            </div>
+          <div className="p-4 sm:p-6">
+            <Banner tone="crit" role="alert" title="No se pudo abrir la guía">
+              <p className="break-words">{detail.error}</p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <OpsButton size="sm" variant="primary" onClick={refresh} className="pointer-coarse:h-11">
+                  Reintentar
+                </OpsButton>
+                <OpsButton size="sm" variant="ghost" onClick={handleClose} className="pointer-coarse:h-11">
+                  Cerrar
+                </OpsButton>
+              </div>
+            </Banner>
           </div>
         ) : !detail ? (
-          <p className="text-sm text-slate-500">Cargando…</p>
+          <div className="space-y-4 p-4 sm:p-6" aria-busy="true">
+            <p className="sr-only">Cargando…</p>
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-40 w-full" />
+            <Skeleton className="h-64 w-full" />
+          </div>
         ) : (
           /* LA TAREA DEL MOMENTO VA ARRIBA. Las secciones estaban en el orden en
              que se escribieron —datos, destino con lat/long, ítems de Shopify y
@@ -2751,146 +2801,203 @@ function ShipmentDrawer({
              pedido, guía a mano, historial. */
           <div
             aria-busy={reloading}
-            className={cn("flex flex-col gap-2.5 transition-opacity", reloading && "opacity-60")}
+            className={cn("transition-opacity motion-reduce:transition-none", reloading && "opacity-60")}
           >
-            {/* La cabecera queda fija: en teléfono el cajón es la pantalla entera
-                y «Cerrar» no puede irse con el scroll. */}
-            <div className="sticky top-0 z-10 -mx-3.5 -mt-3.5 flex items-start justify-between gap-3 border-b border-slate-100 bg-white px-3.5 pb-2.5 pt-3.5 sm:-mx-4 sm:-mt-4 sm:px-4 sm:pt-4">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 id="shipment-drawer-title" className="text-base font-semibold text-slate-900">
-                    <span className="sr-only">Envío · </span>
-                    <span className="font-mono">{detail.shipment.guide_code}</span>
-                    <span className="sr-only"> · {labelOf(detail.shipment.delivery_status)}</span>
-                  </h2>
-                  {detail.shipment.created_via === "fenix_directo" && (
-                    <span
-                      className="rounded bg-indigo-50 px-1.5 py-0.5 text-xs font-medium text-indigo-700"
-                      title="Guía Swayp directa: creada desde el pedido, sin guía Aliclik previa"
+            {/* La cabecera queda fija: qué guía es, en qué estado está, a quién
+                se llama y cómo, y la salida —«Siguiente» o cerrar—. En teléfono
+                el cajón es la pantalla entera y nada de esto puede irse con el
+                scroll. Como la cabecera de la ficha del pedido. */}
+            <header className="sticky top-0 z-10 border-b border-line bg-white">
+              {/* Rejilla y no `order-*`: en el teléfono la «x» queda arriba a la
+                  derecha y las acciones bajan a su fila; desde `sm` van en una. */}
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2 px-4 pt-4 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:px-6">
+                <div className="col-start-1 row-start-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <h2 id="shipment-drawer-title" className="font-mono text-lg font-semibold leading-7 text-ink-900">
+                      <span className="sr-only">Envío · </span>
+                      {detail.shipment.guide_code}
+                      <span className="sr-only"> · {labelOf(detail.shipment.delivery_status)}</span>
+                    </h2>
+                    <Badge
+                      title={
+                        detail.shipment.created_via === "fenix_directo"
+                          ? "Guía Swayp directa: creada desde el pedido, sin guía Aliclik previa"
+                          : undefined
+                      }
                     >
-                      Directa
-                    </span>
-                  )}
-                  <StatusBadge
-                    category={detail.shipment.status_category}
-                    status={detail.shipment.delivery_status}
-                    suffix={subState(detail.shipment)}
-                  />
+                      {detail.shipment.courier === "fenix"
+                        ? detail.shipment.created_via === "fenix_directo"
+                          ? "Swayp · Directa"
+                          : "Swayp"
+                        : "Aliclik"}
+                    </Badge>
+                    <StatusBadge
+                      category={detail.shipment.status_category}
+                      status={detail.shipment.delivery_status}
+                      suffix={subState(detail.shipment)}
+                    />
+                    {statusSinceLabel && (
+                      <span className="whitespace-nowrap text-[13px] leading-5 tabular-nums text-ink-500">
+                        desde {statusSinceLabel}
+                      </span>
+                    )}
+                  </div>
+                  {/* A quién se llama, con el número que se marca a un toque y
+                      su «Copiar»; y desde cuándo está en este estado. El «·», el
+                      número y «Copiar» parten juntos. */}
+                  <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-[13px] leading-5 text-ink-500">
+                    <span className="min-w-0 text-ink-700">{detail.shipment.customer_name ?? "Sin nombre"}</span>
+                    {phone && (
+                      <span className="inline-flex shrink-0 items-center gap-x-1.5 whitespace-nowrap">
+                        <span aria-hidden="true">·</span>
+                        <a
+                          href={`tel:${phone.replace(/[^\d+]/g, "")}`}
+                          className="tabular-nums text-ink-700 underline-offset-2 hover:text-brand-700 hover:underline"
+                        >
+                          {phone}
+                        </a>
+                        <CopyButton value={phone} label="el teléfono" className="justify-center pointer-coarse:size-11" />
+                      </span>
+                    )}
+                  </div>
                 </div>
-                {/* Since when it's in this status (e.g. the day it went "En ruta"),
-                    derived from the transition in its history. */}
-                {(() => {
-                  const since = fmtStatusSince(
-                    statusSince(detail.calls, detail.shipment.delivery_status),
-                  );
-                  return since ? <p className="mt-0.5 text-xs text-slate-500">Desde {since}</p> : null;
-                })()}
-              </div>
-              {/* EL CICLO TERMINA EN LA SIGUIENTE GUÍA, no en esta. La pantalla
-                  es una cola y cada vuelta acababa en «Cerrar» y buscar otra vez
-                  la fila. «Siguiente» libera la reserva de esta y toma la que
-                  viene, sin pasar por la tabla. */}
-              <div className="flex shrink-0 items-center gap-3">
-                {nextShipmentId && (
-                  <button
-                    type="button"
-                    onClick={() => handleOpenShipment(nextShipmentId)}
-                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-slate-50"
-                  >
-                    Siguiente →
-                  </button>
-                )}
-                <button onClick={handleClose} className="text-sm text-slate-500 hover:text-slate-700">
-                  Cerrar
+                {/* EL CICLO TERMINA EN LA SIGUIENTE GUÍA, no en esta. La pantalla
+                    es una cola y cada vuelta acababa en «Cerrar» y buscar otra vez
+                    la fila. «Siguiente» libera la reserva de esta y toma la que
+                    viene, sin pasar por la tabla. */}
+                <div className="col-span-2 row-start-2 flex items-center gap-1.5 sm:col-span-1 sm:col-start-2 sm:row-start-1">
+                  {phone && (
+                    <>
+                      <a
+                        href={`tel:${phone.replace(/[^\d+]/g, "")}`}
+                        title="Llamar al cliente"
+                        aria-label="Llamar al cliente"
+                        className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11 pointer-coarse:min-w-11")}
+                      >
+                        <IconPhone aria-hidden className="text-ink-500" />
+                        <span className="hidden sm:inline">Llamar</span>
+                      </a>
+                      <a
+                        href={`https://wa.me/${phone.replace(/\D/g, "")}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Abrir WhatsApp"
+                        aria-label="Abrir WhatsApp con el cliente"
+                        className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11 pointer-coarse:min-w-11")}
+                      >
+                        <IconWhatsApp aria-hidden className="text-ink-500" />
+                      </a>
+                    </>
+                  )}
+                  {nextShipmentId && (
+                    <OpsButton
+                      size="sm"
+                      onClick={() => handleOpenShipment(nextShipmentId)}
+                      aria-keyshortcuts="n"
+                      title="Atajo: n"
+                      className="pointer-coarse:h-11"
+                    >
+                      Siguiente
+                      <IconArrowRight className="text-ink-500" />
+                    </OpsButton>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleClose}
+                  aria-label="Cerrar"
+                  className="col-start-2 row-start-1 -mr-1.5 grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 sm:col-start-3 pointer-coarse:size-11"
+                >
+                  <IconClose />
                 </button>
               </div>
-            </div>
 
-            {/* Cerrar con texto sin registrar: se avisa en vez de perderlo. Va
-                bajo la cabecera fija, donde la persona está mirando. */}
-            {pendingExit && (
+              {/* LA RESERVA, EN UNA LÍNEA. Quién puede escribir en esta guía: tú,
+                  nadie todavía (solo lectura) u otra persona. */}
               <div
-                role="alert"
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900"
+                role="status"
+                className={cn(
+                  "flex items-start gap-2 px-4 pb-3 pt-2 text-[13px] leading-5 sm:px-6",
+                  claimState === "blocked" ? "text-warn-fg" : "text-ink-600",
+                )}
               >
-                <span>
-                  Escribiste algo que todavía no se registró. Si {pendingExit.kind === "open" ? "pasas a la siguiente" : "cierras"}, se descarta.
-                </span>
-                <span className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPendingExit(null)}
-                    className="font-semibold text-amber-900 hover:underline"
-                  >
-                    Seguir aquí
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => doExit(pendingExit)}
-                    className="rounded-lg bg-amber-900 px-2.5 py-1 font-medium text-white"
-                  >
-                    {pendingExit.kind === "open" ? "Descartar y seguir" : "Descartar y cerrar"}
-                  </button>
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "mt-1.5 size-2 shrink-0 rounded-full",
+                    claimState === "mine"
+                      ? "bg-ok-fg"
+                      : claimState === "blocked"
+                        ? "bg-warn-fg"
+                        : "animate-pulse bg-ink-300 motion-reduce:animate-none",
+                  )}
+                />
+                <span className="min-w-0">
+                  {claimState === "idle" ? (
+                    <>
+                      <b className="font-semibold text-ink-900">Solo lectura.</b> Nadie la tiene tomada y tú
+                      tampoco: se reservará sola en cuanto escribas algo, para no bloquearla mientras la consultas.
+                    </>
+                  ) : claimState === "mine" ? (
+                    <>
+                      <b className="font-semibold text-ink-900">Reservado para ti.</b> Se liberará
+                      automáticamente al cerrar este panel.
+                    </>
+                  ) : claimState === "blocked" ? (
+                    <>
+                      <b className="font-semibold">{claimMessage ?? "Otro asesor está atendiendo este envío."}</b>{" "}
+                      Puedes consultar la información, pero no modificarla.
+                      {/* LA NOTA NO SE ENTIERRA VIVA. Cuando la reserva vence o la
+                          toma otra persona, el `fieldset` se deshabilita y el texto
+                          recién escrito queda atrapado en un textarea inerte: antes
+                          el aviso solo decía «cierra y vuelve a abrir», y al cerrar
+                          se perdía. Ahora se ofrece copiarlo primero. */}
+                      {hasDraft && (
+                        <>
+                          {" "}
+                          <b className="font-semibold">Tienes texto sin registrar.</b>{" "}
+                          <CopyButton
+                            value={draftFields.filter((v) => v.trim()).join("\n\n")}
+                            label="lo que escribiste"
+                          />{" "}
+                          antes de cerrar.
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    "Reservando este envío…"
+                  )}
                 </span>
               </div>
-            )}
 
-            <div
-              role="status"
-              className={cn(
-                "flex items-start gap-2 rounded-lg border px-2.5 py-2 text-xs",
-                claimState === "mine"
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                  : claimState === "blocked"
-                    ? "border-amber-200 bg-amber-50 text-amber-900"
-                    : "border-slate-200 bg-slate-50 text-slate-600",
+              {/* Cerrar con texto sin registrar: se avisa en vez de perderlo. Va
+                  en la cabecera fija, donde la persona está mirando. */}
+              {pendingExit && (
+                <div className="px-4 pb-3 sm:px-6">
+                  <Banner tone="warn" role="alert">
+                    <p>
+                      Escribiste algo que todavía no se registró. Si{" "}
+                      {pendingExit.kind === "open" ? "pasas a la siguiente" : "cierras"}, se descarta.
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <OpsButton size="sm" onClick={() => setPendingExit(null)} className="pointer-coarse:h-11">
+                        Seguir aquí
+                      </OpsButton>
+                      <OpsButton
+                        size="sm"
+                        variant="danger"
+                        onClick={() => doExit(pendingExit)}
+                        className="pointer-coarse:h-11"
+                      >
+                        {pendingExit.kind === "open" ? "Descartar y seguir" : "Descartar y cerrar"}
+                      </OpsButton>
+                    </div>
+                  </Banner>
+                </div>
               )}
-            >
-              <span
-                className={cn(
-                  "mt-1 h-2 w-2 shrink-0 rounded-full",
-                  claimState === "mine"
-                    ? "bg-emerald-500"
-                    : claimState === "blocked"
-                      ? "bg-amber-500"
-                      : "animate-pulse bg-slate-400 motion-reduce:animate-none",
-                )}
-              />
-              <span>
-                {claimState === "idle" ? (
-                  <>
-                    <b>Solo lectura.</b> Nadie la tiene tomada y tú tampoco: se reservará sola en
-                    cuanto escribas algo, para no bloquearla mientras la consultas.
-                  </>
-                ) : claimState === "mine" ? (
-                  <><b>Reservado para ti.</b> Se liberará automáticamente al cerrar este panel.</>
-                ) : claimState === "blocked" ? (
-                  <>
-                    <b>{claimMessage ?? "Otro asesor está atendiendo este envío."}</b> Puedes consultar la
-                    información, pero no modificarla.
-                    {/* LA NOTA NO SE ENTIERRA VIVA. Cuando la reserva vence o la
-                        toma otra persona, el `fieldset` se deshabilita y el texto
-                        recién escrito queda atrapado en un textarea inerte: antes
-                        el aviso solo decía «cierra y vuelve a abrir», y al cerrar
-                        se perdía. Ahora se ofrece copiarlo primero. */}
-                    {hasDraft && (
-                      <>
-                        {" "}
-                        <b>Tienes texto sin registrar.</b>{" "}
-                        <CopyButton
-                          value={draftFields.filter((v) => v.trim()).join("\n\n")}
-                          label="Copiar lo que escribiste"
-                        />{" "}
-                        antes de cerrar.
-                      </>
-                    )}
-                  </>
-                ) : (
-                  "Reservando este envío…"
-                )}
-              </span>
-            </div>
+            </header>
 
+            <div className="space-y-4 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:space-y-5 sm:p-6">
             {/* En solo lectura el bloque sigue habilitado a propósito: es lo que
                 permite que tocar un control pida la reserva. Si vuelve
                 «tomada», se deshabilita y el borrador se puede copiar. */}
@@ -2910,34 +3017,12 @@ function ShipmentDrawer({
               }}
             >
 
-            {/* A quién se llama: queda arriba porque es lo que se lee mientras
-                se marca. Es corto; lo que se plegó es el destino y el pedido. */}
-            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 px-3 py-2.5 text-sm">
-                <Field label="Cliente" value={detail.shipment.customer_name} />
-                {/* EL NÚMERO QUE SE MARCA ERA TEXTO INERTE. La latitud se podía
-                    seleccionar de un clic y el teléfono no: ni marcar, ni
-                    copiar. Es el único dato de esta ficha que se USA. */}
-                <div>
-                  <dt className="text-xs text-slate-500">Teléfono</dt>
-                  <dd className="flex flex-wrap items-center gap-x-2 text-slate-700">
-                    {detail.shipment.customer_phone ? (
-                      <>
-                        <a
-                          href={`tel:${detail.shipment.customer_phone.replace(/[^\d+]/g, "")}`}
-                          className="font-medium text-brand-700 underline-offset-2 hover:underline"
-                        >
-                          {detail.shipment.customer_phone}
-                        </a>
-                        <CopyButton value={detail.shipment.customer_phone} label="Copiar" />
-                      </>
-                    ) : (
-                      "—"
-                    )}
-                  </dd>
-                </div>
-                <Field label="Ciudad" value={detail.shipment.city} />
-                <Field label="Distrito" value={detail.shipment.district} />
+            {/* A quién se llama: lo que se lee mientras se marca. El motivo
+                anterior primero, porque decide si vale la pena reenviar; después
+                adónde va, qué se declaró y las cuatro cifras de la guía. */}
+            <section aria-labelledby="guia-cliente" className={SECTION_CARD}>
+              <SectionHead id="guia-cliente" title="Cliente y destino" />
+              <div className="space-y-4 pt-4">
                 {/* MOM §11: «Revisar el motivo anterior. Si el cliente vio el
                     producto y aun así lo rechazó, normalmente no reenviar.»
                     Va en la ficha que se lee mientras suena el teléfono. */}
@@ -2945,146 +3030,154 @@ function ShipmentDrawer({
                   const m = motivoParaMostrar(detail.shipment);
                   if (!m) return null;
                   return (
-                    <div className="col-span-2">
-                      <dt className="text-xs text-slate-500">Cómo terminó el intento anterior</dt>
-                      <dd className={cn("text-sm", m.vioElProducto ? "font-medium text-rose-700" : "text-slate-700")}>
-                        {m.texto}
-                        {m.vioElProducto && (
-                          <span className="mt-0.5 block text-xs font-normal text-rose-700">
-                            Vio el producto y no quedó: normalmente no se reenvía.
-                          </span>
+                    <div>
+                      <p className={DRAWER_KEY}>Cómo terminó el intento anterior</p>
+                      <p
+                        className={cn(
+                          "text-sm leading-5 [overflow-wrap:anywhere]",
+                          m.vioElProducto ? "font-semibold text-crit-fg" : m.consta ? "text-ink-900" : "text-ink-500",
                         )}
-                      </dd>
+                      >
+                        {keepDots(m.texto)}
+                      </p>
+                      {m.vioElProducto && (
+                        <p className="mt-0.5 text-[13px] leading-5 text-crit-fg">
+                          Vio el producto y no quedó: normalmente no se reenvía.
+                        </p>
+                      )}
                     </div>
                   );
                 })()}
+                <dl className="grid grid-cols-2 gap-x-6 gap-y-3">
+                  <Field label="Distrito" value={detail.shipment.district} />
+                  <Field label="Departamento" value={normalizeDepartment(detail.shipment.region) || null} />
+                  {/* La ciudad de cobertura Swayp, solo si no repite el distrito
+                      («Juliaca · juliaca»): es con la que se evalúa Swayp. */}
+                  {detail.shipment.city &&
+                    detail.shipment.city.localeCompare(detail.shipment.district ?? "", "es", { sensitivity: "base" }) !== 0 && (
+                      <Field label="Ciudad Swayp" value={detail.shipment.city} capitalize />
+                    )}
+                  <div className="col-span-2">
+                    <Field label="Producto declarado" value={detail.shipment.product} />
+                  </div>
+                </dl>
                 {localityConflict && (
-                  <p className="col-span-2 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-2 text-xs leading-snug text-amber-900">
-                    <span className="font-semibold">Revisa el destino antes de despachar.</span> El
-                    courier dice <span className="font-semibold">{detail.shipment.city}</span>, pero la
+                  <Banner tone="warn" title="Revisa el destino antes de despachar.">
+                    El courier dice <b className="font-semibold text-ink-900">{detail.shipment.city}</b>, pero la
                     dirección de Shopify es{" "}
-                    <span className="font-semibold">
+                    <b className="font-semibold text-ink-900">
                       {[shopifyAddress?.city, shopifyAddress?.province].filter(Boolean).join(" · ")}
-                    </span>
-                    . Corrígelo con “Modificar destino” para que quede fijo.
+                    </b>
+                    . Corrígelo con «Modificar destino» para que quede fijo.
+                  </Banner>
+                )}
+                {/* Las cuatro cifras de la guía en el marco de cifras: lo que
+                    decide la ruta (intentos y fecha Aliclik, cobertura Swayp) y
+                    cuántas llamadas van. */}
+                <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-md bg-line ring-1 ring-line sm:grid-cols-4">
+                  <CompactMetric
+                    label="Intentos Aliclik"
+                    value={
+                      detail.shipment.aliclik_attempts == null
+                        ? "Sin dato"
+                        : `${detail.shipment.aliclik_attempts} / ${ALICLIK_MAX_INTENTOS}`
+                    }
+                  />
+                  <CompactMetric label="Fecha Aliclik" value={fmtAliclikDate(detail.shipment.aliclik_service_date)} />
+                  <CompactMetric label="Llamadas" value={`${detail.shipment.reroute_attempts} / ${MAX_INTENTOS}`} />
+                  <CompactMetric
+                    label="Swayp"
+                    value={
+                      fenixReason === "ok"
+                        ? "Swayp ok"
+                        : fenixReason === "sin_stock"
+                          ? "Sin stock"
+                          : "Fuera de cobertura"
+                    }
+                    tone={fenixReason === "ok" ? "positive" : fenixReason === "sin_stock" ? "warning" : "negative"}
+                  />
+                </dl>
+                {fenixDeliverySchedule && (
+                  <p className="text-[13px] leading-5 text-ink-600">
+                    <span className="font-semibold text-ink-900">Horario Swayp: {fenixDeliverySchedule.hours}</span>
+                    {fenixDeliverySchedule.note && <> · {fenixDeliverySchedule.note}</>}
                   </p>
                 )}
-                <div className="col-span-2 border-t border-slate-100 pt-1.5">
-                  <Field label="Producto declarado" value={detail.shipment.product} />
-                </div>
-              </dl>
-              <dl className="grid grid-cols-2 border-t border-slate-100 bg-slate-50 sm:grid-cols-4">
-                <CompactMetric
-                  label="Intentos Aliclik"
-                  value={
-                    detail.shipment.aliclik_attempts == null
-                      ? "Sin dato"
-                      : `${detail.shipment.aliclik_attempts} / ${ALICLIK_MAX_INTENTOS}`
-                  }
-                />
-                <CompactMetric label="Fecha Aliclik" value={fmtAliclikDate(detail.shipment.aliclik_service_date)} />
-                <CompactMetric label="Llamadas" value={`${detail.shipment.reroute_attempts} / ${MAX_INTENTOS}`} />
-                <CompactMetric
-                  label="Swayp"
-                  value={
-                    fenixReason === "ok"
-                      ? "Swayp ok"
-                      : fenixReason === "sin_stock"
-                        ? "Sin stock"
-                        : "Fuera de cobertura"
-                  }
-                  tone={fenixReason === "ok" ? "positive" : fenixReason === "sin_stock" ? "warning" : "negative"}
-                />
-              </dl>
-              {fenixDeliverySchedule && (
-                <div className="flex items-center gap-1.5 border-t border-slate-100 bg-slate-50 px-3 py-1.5 text-xs text-slate-700">
-                  <span>
-                    <strong>Horario Swayp: {fenixDeliverySchedule.hours}</strong>
-                    {fenixDeliverySchedule.note && (
-                      <span className="text-slate-500"> · {fenixDeliverySchedule.note}</span>
-                    )}
-                  </span>
-                </div>
-              )}
-              {swaypNovelty && (
-                // El estado crudo de Swayp es lo único que distingue «el
-                // mensajero está esperando una instrucción» de «va en
-                // reparto»: los dos son `en_ruta` al mapearse.
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-950">
-                  <span>
-                    <strong>
-                      {detail.shipment.swayp_state === 8
-                        ? "Swayp marcó devolución"
-                        : "Swayp reportó una novedad"}
-                    </strong>
-                    <span className="text-rose-800">
-                      {" "}
-                      · el mensajero espera una instrucción
-                    </span>
-                  </span>
-                  {detail.can.solveNovelty && (
-                    <button
-                      onClick={() => setNoveltyOpen(true)}
-                      className="rounded-lg bg-rose-700 px-2.5 py-1 font-medium text-white"
-                    >
-                      Resolver novedad
-                    </button>
-                  )}
-                </div>
-              )}
+                {swaypNovelty && (
+                  // El estado crudo de Swayp es lo único que distingue «el
+                  // mensajero está esperando una instrucción» de «va en
+                  // reparto»: los dos son `en_ruta` al mapearse.
+                  <Banner
+                    tone="crit"
+                    title={
+                      detail.shipment.swayp_state === 8 ? "Swayp marcó devolución" : "Swayp reportó una novedad"
+                    }
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                      <p>El mensajero espera una instrucción.</p>
+                      {detail.can.solveNovelty && (
+                        <OpsButton
+                          size="sm"
+                          variant="primary"
+                          onClick={() => setNoveltyOpen(true)}
+                          className="pointer-coarse:h-11"
+                        >
+                          Resolver novedad
+                        </OpsButton>
+                      )}
+                    </div>
+                  </Banner>
+                )}
+              </div>
             </section>
 
-
             {detail.shipment.delivery_status === "anulado" && (
-              <section className="space-y-2.5 rounded-xl border border-rose-200 bg-white p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    {/* En recuperación, reenviar es la acción NORMAL (MOM §11), no
-                        una excepción: la guía sí terminó, el pedido no. El flujo
-                        de abajo es el mismo; cambia lo que se le dice a quien llama. */}
-                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-rose-700">
+              <section aria-labelledby="guia-reenvio" className={SECTION_CARD}>
+                {/* En recuperación, reenviar es la acción NORMAL (MOM §11), no
+                    una excepción: la guía sí terminó, el pedido no. El flujo de
+                    abajo es el mismo; cambia lo que se le dice a quien llama. */}
+                <SectionHead
+                  id="guia-reenvio"
+                  title={enRecuperacion ? "Reenviar por Swayp" : "Reprogramar un pedido anulado"}
+                  badge={
+                    <Badge tone={enRecuperacion ? "info" : "warn"}>
                       {enRecuperacion ? "Reproprovincia" : "Excepción auditada"}
-                    </p>
-                    <h3 className="mt-0.5 text-sm font-semibold text-slate-900">
-                      {enRecuperacion ? "Reenviar por Swayp" : "Reprogramar un pedido anulado"}
-                    </h3>
-                  </div>
-                  {!showCancelledException && (
-                    <button
-                      type="button"
-                      onClick={() => setShowCancelledException(true)}
-                      className="shrink-0 rounded-lg border border-rose-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
-                    >
-                      {enRecuperacion ? "Reenviar" : "Crear excepción"}
-                    </button>
-                  )}
-                </div>
-                <p className="text-xs leading-relaxed text-slate-600">
-                  {enRecuperacion
-                    ? "La guía Aliclik ya terminó y no se toca: queda como madre transferida y se crea una guía Swayp con la fecha acordada con la clienta."
-                    : "No se borrará la anulación. Esta guía quedará como madre transferida y se creará una nueva guía Swayp con la fecha acordada."}
-                </p>
+                    </Badge>
+                  }
+                  help={
+                    enRecuperacion
+                      ? "La guía Aliclik ya terminó y no se toca: queda como madre transferida y se crea una guía Swayp con la fecha acordada con la clienta."
+                      : "No se borrará la anulación. Esta guía quedará como madre transferida y se creará una nueva guía Swayp con la fecha acordada."
+                  }
+                  aside={
+                    !showCancelledException && (
+                      <OpsButton size="sm" onClick={() => setShowCancelledException(true)} className="pointer-coarse:h-11">
+                        {enRecuperacion ? "Reenviar" : "Crear excepción"}
+                      </OpsButton>
+                    )
+                  }
+                />
 
                 {showCancelledException && (
-                  <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-2.5">
-                    <label className="block text-xs font-medium text-slate-600">
+                  <div className="space-y-4 pt-4">
+                    <label className={DRAWER_LABEL}>
                       Nueva fecha de entrega
                       <input
                         type="date"
                         value={cancelledExceptionDate}
                         min={tomorrowDateInputValue()}
                         onChange={(e) => setCancelledExceptionDate(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+                        className={DRAWER_INPUT}
                       />
                     </label>
-                    <label className="block text-xs font-medium text-slate-600">
+                    <label className={DRAWER_LABEL}>
                       {enRecuperacion ? "Nota de la llamada" : "Motivo de la excepción"}
                       <textarea
                         value={cancelledExceptionNote}
                         onChange={(e) => setCancelledExceptionNote(e.target.value)}
                         rows={2}
                         placeholder="Ej.: cliente confirmó hoy entrega para el lunes con Marianny…"
-                        className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+                        className={DRAWER_TEXTAREA}
                       />
                     </label>
 
@@ -3092,38 +3185,35 @@ function ShipmentDrawer({
                         (`#KP…`). Ya no lo acuña nadie: el número lo emite Swayp
                         al registrar el reenvío, así que prometer uno concreto
                         sería enseñar un número que no va a existir. */}
-                    <p className="rounded-md bg-slate-50 px-2 py-1.5 text-xs text-slate-600">
-                      El número de la nueva guía <b>lo emite Swayp</b> al registrar el reenvío. Si
-                      Swayp no responde, el reenvío no se registra y el aviso dice por qué.
+                    <p className={DRAWER_NOTE}>
+                      El número de la nueva guía <b className="font-semibold text-ink-900">lo emite Swayp</b> al
+                      registrar el reenvío. Si Swayp no responde, el reenvío no se registra y el aviso dice por qué.
                     </p>
 
                     {swaypSinCodbarAviso && (
-                      <p className="rounded-md bg-rose-50 px-2 py-1.5 text-xs text-rose-800">
-                        {swaypSinCodbarAviso}
-                      </p>
+                      <Banner tone="crit">{swaypSinCodbarAviso}</Banner>
                     )}
                     {cancelledExceptionUnavailable && !swaypSinCodbar && (
-                      <p className="rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                      <Banner tone="warn">
                         {fenixReason === "sin_stock"
                           ? `Swayp no tiene stock para este pedido en ${detail.shipment.city ?? "la ciudad indicada"}.`
                           : `Swayp no tiene cobertura en ${detail.shipment.city ?? "la ciudad indicada"}.`}
-                      </p>
+                      </Banner>
                     )}
 
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <OpsButton
                         onClick={() => {
                           setShowCancelledException(false);
                           setCancelledExceptionDate("");
                           setCancelledExceptionNote("");
                         }}
-                        className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
+                        className="pointer-coarse:h-11"
                       >
                         Cancelar
-                      </button>
-                      <button
-                        type="button"
+                      </OpsButton>
+                      <OpsButton
+                        variant={enRecuperacion ? "primary" : "danger"}
                         onClick={() =>
                           run(
                             () => reprogramCancelledShipmentException(shipmentId, {
@@ -3138,10 +3228,10 @@ function ShipmentDrawer({
                           )
                         }
                         disabled={pending || !cancelledExceptionReady}
-                        className="flex-1 rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                        className="pointer-coarse:h-11"
                       >
                         {pending ? "Creando…" : "Crear nueva guía Swayp"}
-                      </button>
+                      </OpsButton>
                     </div>
                   </div>
                 )}
@@ -3154,148 +3244,143 @@ function ShipmentDrawer({
                 lo que pasó con la clienta y, si no quiere, cierra la recuperación
                 con motivo. Es lo que faltaba: 0 llamadas sobre 920 pedidos. */}
             {enRecuperacion && (
-              <section className="space-y-1.5 rounded-xl border border-brand-300 bg-white p-2.5 shadow-sm">
-                <h3 className="text-sm font-semibold text-slate-900">Registrar o programar llamada</h3>
-                <p className="text-xs leading-relaxed text-slate-500">
-                  Sobre el pedido, no sobre la guía: sigue «Anulado · Reproprovincia» hasta que se reenvíe, se descarte o venza la ventana.
-                </p>
-                <label className="block text-xs font-medium text-slate-600">
-                  Resultado de la llamada
-                  <select
-                    value={recoveryDisposition}
-                    onChange={(e) => {
-                      setRecoveryDisposition(e.target.value as RecoveryCallDisposition);
-                      setConfirmDiscard(false);
-                    }}
-                    className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
-                  >
+              <section aria-labelledby="guia-recuperacion" className={ACTION_CARD}>
+                <SectionHead
+                  id="guia-recuperacion"
+                  title="Registrar o programar llamada"
+                  help="Sobre el pedido, no sobre la guía: sigue «Anulado · Reproprovincia» hasta que se reenvíe, se descarte o venza la ventana."
+                />
+                <div className="space-y-4 pt-4">
+                  <div role="group" aria-label="Resultado de la llamada" className="grid gap-2 sm:grid-cols-3">
                     {RECOVERY_CALL_DISPOSITIONS.map((d) => (
-                      <option key={d.key} value={d.key}>
-                        {d.label}
-                      </option>
+                      <OptionTile
+                        key={d.key}
+                        label={d.label}
+                        description={recoveryHint[d.key]}
+                        active={recoveryDisposition === d.key}
+                        danger={d.key === "no_quiere"}
+                        onClick={() => {
+                          setRecoveryDisposition(d.key);
+                          setConfirmDiscard(false);
+                        }}
+                      />
                     ))}
-                  </select>
-                </label>
-                {recoveryDisposition === "no_quiere" && (
-                  <p className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs text-rose-800">
-                    El pedido pasa a cierre con el motivo escrito y la guía sale de la cola. No se toca la guía de Aliclik ni el inventario.
-                  </p>
-                )}
-                {recoveryDisposition !== "no_quiere" && (
-                  <label className="block text-xs font-medium text-slate-600">
-                    {recoveryDisposition === "programar" ? "Fecha de próxima llamada" : "Fecha de próxima llamada (opcional)"}
-                    <input
-                      type="date"
-                      value={recoveryDate}
-                      onChange={(e) => setRecoveryDate(e.target.value)}
-                      min={tomorrowDateInputValue()}
-                      className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
-                    />
-                  </label>
-                )}
-                <label className="block text-xs font-medium text-slate-600">
-                  {recoveryDisposition === "no_quiere" ? "Motivo del descarte" : "Nota de la llamada"}
-                  <textarea
-                    value={recoveryNote}
-                    onChange={(e) => setRecoveryNote(e.target.value)}
-                    placeholder={
-                      recoveryDisposition === "no_quiere"
-                        ? "P. ej. la clienta ya no quiere el producto"
-                        : "Qué dijo la clienta…"
-                    }
-                    className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
-                    rows={2}
-                  />
-                  {/* La regla estaba en el servidor y el botón solo se apagaba: la
-                      persona escribía «no quiere» y no sabía por qué no podía
-                      seguir. Se dice antes, junto al campo. */}
-                  {recoveryDisposition === "no_quiere" && (
-                    <span className="mt-0.5 block text-xs font-normal text-slate-500">
-                      {recoveryNote.trim().length < DISCARD_REASON_MIN
-                        ? `Mínimo ${DISCARD_REASON_MIN} caracteres · faltan ${DISCARD_REASON_MIN - recoveryNote.trim().length}`
-                        : "Queda escrito en el pedido como motivo del descarte."}
-                    </span>
-                  )}
-                </label>
-                {/* DESCARTAR ES TERMINAL: el pedido pasa a cierre y sale de la
-                    cola. Un solo clic no basta; el segundo nombra el pedido y la
-                    consecuencia, y se puede cancelar. */}
-                {recoveryDisposition === "no_quiere" && confirmDiscard ? (
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDiscard(false)}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
-                    >
-                      Cancelar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        run(
-                          () =>
-                            registerRecoveryCall(shipmentId, {
-                              disposition: recoveryDisposition,
-                              note: recoveryNote,
-                              nextFollowupAt: null,
-                            }),
-                          () => {
-                            setRecoveryNote("");
-                            setRecoveryDate("");
-                            setConfirmDiscard(false);
-                          },
-                        )
-                      }
-                      disabled={pending || recoveryNote.trim().length < DISCARD_REASON_MIN}
-                      className="flex-1 rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
-                    >
-                      {pending
-                        ? "Descartando…"
-                        : `Sí, descartar ${detail.shipment.order_name ? `el pedido ${detail.shipment.order_name}` : "este pedido"}`}
-                    </button>
                   </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (recoveryDisposition === "no_quiere") {
-                        setConfirmDiscard(true);
-                        return;
+                  {recoveryDisposition === "no_quiere" && (
+                    <Banner tone="crit">
+                      El pedido pasa a cierre con el motivo escrito y la guía sale de la cola. No se toca la guía de
+                      Aliclik ni el inventario.
+                    </Banner>
+                  )}
+                  {recoveryDisposition !== "no_quiere" && (
+                    <label className={DRAWER_LABEL}>
+                      {recoveryDisposition === "programar" ? "Fecha de próxima llamada" : "Fecha de próxima llamada (opcional)"}
+                      <input
+                        type="date"
+                        value={recoveryDate}
+                        onChange={(e) => setRecoveryDate(e.target.value)}
+                        min={tomorrowDateInputValue()}
+                        className={DRAWER_INPUT}
+                      />
+                    </label>
+                  )}
+                  <label className={DRAWER_LABEL}>
+                    {recoveryDisposition === "no_quiere" ? "Motivo del descarte" : "Nota de la llamada"}
+                    <textarea
+                      value={recoveryNote}
+                      onChange={(e) => setRecoveryNote(e.target.value)}
+                      placeholder={
+                        recoveryDisposition === "no_quiere"
+                          ? "P. ej. la clienta ya no quiere el producto"
+                          : "Qué dijo la clienta…"
                       }
-                      run(
-                        () =>
-                          registerRecoveryCall(shipmentId, {
-                            disposition: recoveryDisposition,
-                            note: recoveryNote,
-                            nextFollowupAt: recoveryDate ? new Date(recoveryDate).toISOString() : null,
-                          }),
-                        () => {
-                          setRecoveryNote("");
-                          setRecoveryDate("");
-                        },
-                      );
-                    }}
-                    disabled={
-                      pending ||
-                      (recoveryDisposition === "programar" && !recoveryDate) ||
-                      (recoveryDisposition === "no_quiere" && recoveryNote.trim().length < DISCARD_REASON_MIN)
-                    }
-                    className={cn(
-                      "w-full rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50",
-                      recoveryDisposition === "no_quiere"
-                        ? "bg-rose-600 hover:bg-rose-700"
-                        : "bg-brand-600 hover:bg-brand-700",
+                      className={DRAWER_TEXTAREA}
+                      rows={2}
+                    />
+                    {/* La regla estaba en el servidor y el botón solo se apagaba: la
+                        persona escribía «no quiere» y no sabía por qué no podía
+                        seguir. Se dice antes, junto al campo. */}
+                    {recoveryDisposition === "no_quiere" && (
+                      <span className="text-[13px] font-normal leading-5 text-ink-500">
+                        {recoveryNote.trim().length < DISCARD_REASON_MIN
+                          ? `Mínimo ${DISCARD_REASON_MIN} caracteres · faltan ${DISCARD_REASON_MIN - recoveryNote.trim().length}`
+                          : "Queda escrito en el pedido como motivo del descarte."}
+                      </span>
                     )}
-                  >
-                    {pending
-                      ? "Registrando…"
-                      : recoveryDisposition === "no_quiere"
-                        ? "Descartar la recuperación…"
-                        : recoveryDisposition === "programar"
-                          ? "Programar llamada"
-                          : "Registrar llamada"}
-                  </button>
-                )}
+                  </label>
+                  {/* DESCARTAR ES TERMINAL: el pedido pasa a cierre y sale de la
+                      cola. Un solo clic no basta; el segundo nombra el pedido y la
+                      consecuencia, y se puede cancelar. */}
+                  {recoveryDisposition === "no_quiere" && confirmDiscard ? (
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <OpsButton onClick={() => setConfirmDiscard(false)} className="pointer-coarse:h-11">
+                        Cancelar
+                      </OpsButton>
+                      <OpsButton
+                        variant="danger"
+                        onClick={() =>
+                          run(
+                            () =>
+                              registerRecoveryCall(shipmentId, {
+                                disposition: recoveryDisposition,
+                                note: recoveryNote,
+                                nextFollowupAt: null,
+                              }),
+                            () => {
+                              setRecoveryNote("");
+                              setRecoveryDate("");
+                              setConfirmDiscard(false);
+                            },
+                          )
+                        }
+                        disabled={pending || recoveryNote.trim().length < DISCARD_REASON_MIN}
+                        className="pointer-coarse:h-11"
+                      >
+                        {pending
+                          ? "Descartando…"
+                          : `Sí, descartar ${detail.shipment.order_name ? `el pedido ${detail.shipment.order_name}` : "este pedido"}`}
+                      </OpsButton>
+                    </div>
+                  ) : (
+                    <div className="flex justify-end">
+                      <OpsButton
+                        variant={recoveryDisposition === "no_quiere" ? "danger" : "primary"}
+                        onClick={() => {
+                          if (recoveryDisposition === "no_quiere") {
+                            setConfirmDiscard(true);
+                            return;
+                          }
+                          run(
+                            () =>
+                              registerRecoveryCall(shipmentId, {
+                                disposition: recoveryDisposition,
+                                note: recoveryNote,
+                                nextFollowupAt: recoveryDate ? new Date(recoveryDate).toISOString() : null,
+                              }),
+                            () => {
+                              setRecoveryNote("");
+                              setRecoveryDate("");
+                            },
+                          );
+                        }}
+                        disabled={
+                          pending ||
+                          (recoveryDisposition === "programar" && !recoveryDate) ||
+                          (recoveryDisposition === "no_quiere" && recoveryNote.trim().length < DISCARD_REASON_MIN)
+                        }
+                        className="pointer-coarse:h-11"
+                      >
+                        {pending
+                          ? "Registrando…"
+                          : recoveryDisposition === "no_quiere"
+                            ? "Descartar la recuperación…"
+                            : recoveryDisposition === "programar"
+                              ? "Programar llamada"
+                              : "Registrar llamada"}
+                      </OpsButton>
+                    </div>
+                  )}
+                </div>
               </section>
             )}
 
@@ -3303,214 +3388,203 @@ function ShipmentDrawer({
                 before any customer call or reprogramming can be registered. */}
             {detail.shipment.courier === "fenix" && detail.shipment.delivery_status !== "anulado" && (
               detail.shipment.delivery_status === "transferido" ? (
-                <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Guía reemplazada</p>
-                  <h3 className="text-sm font-semibold text-slate-900">Continúa en la guía Swayp activa</h3>
-                  <p className="text-xs leading-relaxed text-slate-600">
-                    “Transferido” lo asigna Kapta automáticamente; no es un resultado del motorizado.
-                  </p>
+                <section aria-labelledby="guia-transferida" className={SECTION_CARD}>
+                  <SectionHead
+                    id="guia-transferida"
+                    title="Continúa en la guía Swayp activa"
+                    badge={<Badge>Guía reemplazada</Badge>}
+                    help="«Transferido» lo asigna Kapta automáticamente; no es un resultado del motorizado."
+                  />
                   {detail.linkedFenixShipment && (
-                    <button
-                      type="button"
-                      onClick={() => handleOpenShipment(detail.linkedFenixShipment!.id)}
-                      className="flex w-full items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50"
-                    >
-                      <span>
-                        <span className="block text-xs uppercase tracking-[0.12em] text-slate-500">Abrir guía activa</span>
-                        <span className="font-mono text-xs font-semibold text-slate-800">
-                          {detail.linkedFenixShipment.guide_code}
+                    <div className="pt-4">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenShipment(detail.linkedFenixShipment!.id)}
+                        className="flex w-full items-center justify-between gap-3 rounded-md bg-white px-3 py-2.5 text-left shadow-control ring-1 ring-inset ring-line-strong transition-colors hover:bg-wash pointer-coarse:min-h-11"
+                      >
+                        <span className="min-w-0">
+                          <span className="block text-[13px] leading-5 text-ink-500">Abrir guía activa</span>
+                          <span className="block font-mono text-sm font-semibold text-ink-900">
+                            {detail.linkedFenixShipment.guide_code}
+                          </span>
                         </span>
-                      </span>
-                      <IconArrowRight className="text-slate-500" />
-                    </button>
+                        <IconArrowRight className="text-ink-500" />
+                      </button>
+                    </div>
                   )}
                 </section>
               ) : fenixReadyForCustomerManagement && !showCourierCorrection ? (
-                <section className="flex items-start justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">Resultado del courier registrado</p>
-                    <p className="mt-0.5 text-sm font-semibold text-emerald-900">Pendiente de gestión con el cliente</p>
-                    <p className="mt-0.5 text-xs leading-relaxed text-emerald-800">
-                      Continúa abajo con la llamada. Si confirma, recién se generará la nueva reprogramación.
+                <section className="flex items-start justify-between gap-3 rounded-lg bg-ok-wash px-4 py-3 sm:px-5">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-ok-fg">Resultado del courier registrado</p>
+                    <p className="mt-0.5 text-[13px] leading-5 text-ink-700">
+                      Pendiente de gestión con el cliente. Continúa abajo con la llamada: si confirma, recién se generará
+                      la nueva reprogramación.
                     </p>
                   </div>
-                  <button
-                    type="button"
+                  <OpsButton
+                    size="sm"
+                    variant="ghost"
                     onClick={() => setShowCourierCorrection(true)}
-                    className="shrink-0 text-xs font-medium text-emerald-800 hover:underline"
+                    className="-my-1 shrink-0 pointer-coarse:h-11"
                   >
                     Corregir resultado
-                  </button>
+                  </OpsButton>
                 </section>
               ) : (
-                <section className="space-y-2.5 rounded-xl border border-brand-300 bg-white p-3 shadow-sm">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-orange-700">
-                        {fenixAwaitingCourierResult ? "Resultado del courier · obligatorio" : "Corrección del reporte"}
-                      </p>
-                      <h3 className="mt-0.5 text-sm font-semibold text-slate-900">Registrar resultado del courier</h3>
-                      <p className="mt-0.5 font-mono text-xs font-semibold text-slate-800">
-                        {detail.shipment.guide_code}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Estado actual</p>
-                      <StatusBadge
-                        category={detail.shipment.status_category}
-                        status={detail.shipment.delivery_status}
-                      />
-                    </div>
-                  </div>
-
-                  {fenixAwaitingCourierResult && (
-                    <p className="rounded-lg bg-slate-50 px-2.5 py-2 text-xs leading-relaxed text-slate-600">
-                      Esta guía está En ruta. Primero registra lo informado por el motorizado; la llamada y la reprogramación se habilitarán solo si vuelve a Pendiente.
-                    </p>
-                  )}
-
-                  <label className="block text-xs font-medium text-slate-600">
-                    ¿Qué informó Swayp?
-                    <select
-                      value={courierResult}
-                      onChange={(e) => {
-                        setCourierResult(e.target.value as CourierReportResult | "");
-                        setCourierDate("");
-                        // Cambiar de resultado desarma el segundo clic: un botón
-                        // rojo cebado no puede sobrevivir a un cambio de opinión.
-                        setConfirmCourierClose(false);
-                      }}
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-800"
-                    >
-                      <option value="">Selecciona el resultado…</option>
-                      {COURIER_REPORT_RESULTS.map((result) => (
-                        <option key={result.code} value={result.code}>{result.optionLabel}</option>
-                      ))}
-                    </select>
-                  </label>
-
-                  {courierResultDefinition && (
-                    <div className="rounded-lg border border-slate-200 bg-white p-2.5">
-                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Qué sucederá</p>
-                      <p className="mt-0.5 text-xs leading-relaxed text-slate-700">
-                        {courierResultDefinition.effect}
-                      </p>
-                      {reopensClosedGuide && (
-                        <p className="mt-1.5 rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">
-                          Esta corrección reabrirá una guía que actualmente está cerrada.
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  {courierResultDefinition?.requiresDate && (
-                    <label className="block text-xs font-medium text-slate-600">
-                      Nueva fecha de entrega informada por Swayp
-                      <input
-                        type="date"
-                        value={courierDate}
-                        onChange={(e) => setCourierDate(e.target.value)}
-                        // Hoy vale, ayer no: el servidor aplica la misma regla.
-                        min={localDateInputValue()}
-                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm"
-                      />
-                    </label>
-                  )}
-
-                  {courierResultDefinition && (
-                    <label className="block text-xs font-medium text-slate-600">
-                      {courierResult === "no_contesta"
-                        ? "Comentario para el historial (opcional)"
-                        : courierResultDefinition.requiresNote
-                          ? "Motivo informado por Swayp"
-                          : "Detalle del reporte (opcional)"}
-                      <textarea
-                        value={courierNote}
-                        onChange={(e) => setCourierNote(e.target.value)}
-                        rows={2}
-                        placeholder={
-                          courierResult === "no_contesta"
-                            ? "Ej.: motorizado llamó dos veces; cliente no respondió…"
-                            : courierResultDefinition.requiresNote
-                              ? "Ej.: cliente rechazó el pedido…"
-                              : "Detalle informado por el courier…"
-                        }
-                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm"
-                      />
-                      {courierResult === "no_contesta" && (
-                        <span className="mt-1 block text-xs font-normal leading-relaxed text-slate-500">
-                          Se guardará en el historial junto al cambio No contesta → Pendiente.
-                        </span>
-                      )}
-                    </label>
-                  )}
-
-                  {/* LA CUARTA SALIDA TAMBIÉN CIERRA UNA VENTA. MOM §11.5 pide
-                      la misma ceremonia a las tres salidas del cajón «porque el
-                      coste de equivocarse es el mismo», y esta —el courier
-                      informa cancelado o rechazado— cerraba con un solo clic,
-                      sin nombrar la guía ni el pedido, mientras «Cliente
-                      cancela», que hace exactamente lo mismo, pedía dos. */}
-                  {courierResultClosesSale && (
-                    <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs text-rose-800">
-                      <span className="font-semibold">Esto termina la venta.</span> La guía queda
-                      Anulada y sale de la gestión activa.
-                    </p>
-                  )}
-                  <div className="flex gap-2">
-                    {(showCourierCorrection || confirmCourierClose) && (
-                      <button
-                        type="button"
-                        onClick={() => {
+                <section aria-labelledby="guia-courier" className={fenixAwaitingCourierResult ? ACTION_CARD : SECTION_CARD}>
+                  <SectionHead
+                    id="guia-courier"
+                    title="Registrar resultado del courier"
+                    badge={
+                      fenixAwaitingCourierResult ? (
+                        <Badge tone="warn">Obligatorio</Badge>
+                      ) : (
+                        <Badge>Corrección del reporte</Badge>
+                      )
+                    }
+                    help={
+                      fenixAwaitingCourierResult
+                        ? "Esta guía está En ruta. Primero registra lo informado por el motorizado; la llamada y la reprogramación se habilitarán solo si vuelve a Pendiente."
+                        : "Corrige lo que se registró del motorizado. El historial guarda los dos reportes."
+                    }
+                  />
+                  <div className="space-y-4 pt-4">
+                    <label className={DRAWER_LABEL}>
+                      ¿Qué informó Swayp?
+                      <select
+                        value={courierResult}
+                        onChange={(e) => {
+                          setCourierResult(e.target.value as CourierReportResult | "");
+                          setCourierDate("");
+                          // Cambiar de resultado desarma el segundo clic: un botón
+                          // rojo cebado no puede sobrevivir a un cambio de opinión.
                           setConfirmCourierClose(false);
-                          setShowCourierCorrection(false);
                         }}
-                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
+                        className={DRAWER_INPUT}
                       >
-                        Cancelar
-                      </button>
+                        <option value="">Selecciona el resultado…</option>
+                        {COURIER_REPORT_RESULTS.map((result) => (
+                          <option key={result.code} value={result.code}>{result.optionLabel}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    {courierResultDefinition && (
+                      <div className={DRAWER_NOTE}>
+                        <p className="font-semibold text-ink-900">Qué sucederá</p>
+                        <p className="mt-0.5">{courierResultDefinition.effect}</p>
+                        {reopensClosedGuide && (
+                          <p className="mt-1 font-medium text-warn-fg">
+                            Esta corrección reabrirá una guía que actualmente está cerrada.
+                          </p>
+                        )}
+                      </div>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!courierResult) return;
-                        if (courierResultClosesSale && !confirmCourierClose) {
-                          setConfirmCourierClose(true);
-                          return;
-                        }
-                        run(
-                          () => registerCourierReportResult(shipmentId, {
-                            result: courierResult,
-                            deliveryDate: courierDate ? new Date(courierDate).toISOString() : null,
-                            note: courierNote,
-                          }),
-                          () => {
-                            setCourierResult("");
-                            setCourierDate("");
-                            setCourierNote("");
-                            setShowCourierCorrection(false);
+
+                    {courierResultDefinition?.requiresDate && (
+                      <label className={DRAWER_LABEL}>
+                        Nueva fecha de entrega informada por Swayp
+                        <input
+                          type="date"
+                          value={courierDate}
+                          onChange={(e) => setCourierDate(e.target.value)}
+                          // Hoy vale, ayer no: el servidor aplica la misma regla.
+                          min={localDateInputValue()}
+                          className={DRAWER_INPUT}
+                        />
+                      </label>
+                    )}
+
+                    {courierResultDefinition && (
+                      <label className={DRAWER_LABEL}>
+                        {courierResult === "no_contesta"
+                          ? "Comentario para el historial (opcional)"
+                          : courierResultDefinition.requiresNote
+                            ? "Motivo informado por Swayp"
+                            : "Detalle del reporte (opcional)"}
+                        <textarea
+                          value={courierNote}
+                          onChange={(e) => setCourierNote(e.target.value)}
+                          rows={2}
+                          placeholder={
+                            courierResult === "no_contesta"
+                              ? "Ej.: motorizado llamó dos veces; cliente no respondió…"
+                              : courierResultDefinition.requiresNote
+                                ? "Ej.: cliente rechazó el pedido…"
+                                : "Detalle informado por el courier…"
+                          }
+                          className={DRAWER_TEXTAREA}
+                        />
+                        {courierResult === "no_contesta" && (
+                          <span className="text-[13px] font-normal leading-5 text-ink-500">
+                            Se guardará en el historial junto al cambio No contesta → Pendiente.
+                          </span>
+                        )}
+                      </label>
+                    )}
+
+                    {/* LA CUARTA SALIDA TAMBIÉN CIERRA UNA VENTA. MOM §11.5 pide
+                        la misma ceremonia a las tres salidas del cajón «porque el
+                        coste de equivocarse es el mismo», y esta —el courier
+                        informa cancelado o rechazado— cerraba con un solo clic,
+                        sin nombrar la guía ni el pedido, mientras «Cliente
+                        cancela», que hace exactamente lo mismo, pedía dos. */}
+                    {courierResultClosesSale && (
+                      <Banner tone="crit" role="alert">
+                        <span className="font-semibold">Esto termina la venta.</span> La guía queda Anulada y sale de la
+                        gestión activa.
+                      </Banner>
+                    )}
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {(showCourierCorrection || confirmCourierClose) && (
+                        <OpsButton
+                          onClick={() => {
                             setConfirmCourierClose(false);
-                          },
-                        );
-                      }}
-                      disabled={pending || !courierFormValid}
-                      className={cn(
-                        "flex-1 rounded-lg px-3 py-2 text-sm font-semibold text-white disabled:opacity-50",
-                        courierResultClosesSale
-                          ? "bg-rose-600 hover:bg-rose-700"
-                          : "bg-brand-600 hover:bg-brand-700",
+                            setShowCourierCorrection(false);
+                          }}
+                          className="pointer-coarse:h-11"
+                        >
+                          Cancelar
+                        </OpsButton>
                       )}
-                    >
-                      {pending
-                        ? "Registrando…"
-                        : confirmCourierClose
-                          ? `Sí, anular la guía ${detail.shipment.guide_code}${
-                              detail.shipment.order_name ? ` del pedido ${detail.shipment.order_name}` : ""
-                            }`
-                          : courierResultClosesSale
-                            ? "Anular la guía…"
-                            : "Registrar resultado y continuar"}
-                    </button>
+                      <OpsButton
+                        variant={courierResultClosesSale ? "danger" : "primary"}
+                        onClick={() => {
+                          if (!courierResult) return;
+                          if (courierResultClosesSale && !confirmCourierClose) {
+                            setConfirmCourierClose(true);
+                            return;
+                          }
+                          run(
+                            () => registerCourierReportResult(shipmentId, {
+                              result: courierResult,
+                              deliveryDate: courierDate ? new Date(courierDate).toISOString() : null,
+                              note: courierNote,
+                            }),
+                            () => {
+                              setCourierResult("");
+                              setCourierDate("");
+                              setCourierNote("");
+                              setShowCourierCorrection(false);
+                              setConfirmCourierClose(false);
+                            },
+                          );
+                        }}
+                        disabled={pending || !courierFormValid}
+                        className="pointer-coarse:h-11"
+                      >
+                        {pending
+                          ? "Registrando…"
+                          : confirmCourierClose
+                            ? `Sí, anular la guía ${detail.shipment.guide_code}${
+                                detail.shipment.order_name ? ` del pedido ${detail.shipment.order_name}` : ""
+                              }`
+                            : courierResultClosesSale
+                              ? "Anular la guía…"
+                              : "Registrar resultado y continuar"}
+                      </OpsButton>
+                    </div>
                   </div>
                 </section>
               )
@@ -3519,461 +3593,419 @@ function ShipmentDrawer({
             {/* claim + re-route call — hidden once the shipment is terminal (entregado/
                 anulado/transferido) so a stray "no contesta" can't reopen a closed guide */}
             {isCallable(detail.shipment.delivery_status) && !fenixAwaitingCourierResult && (
-              <section className="space-y-1.5 rounded-xl border border-brand-300 bg-white p-2.5 shadow-sm">
-                <h3 className="text-sm font-semibold text-slate-900">Registrar o programar llamada</h3>
-                <label className="block text-xs font-medium text-slate-600">
-                  Resultado de la llamada
-                  <select
-                    value={disposition}
-                    onChange={(e) => {
-                      setDisposition(e.target.value as RerouteDisposition);
-                      setConfirmCancel(false);
-                    }}
-                    className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
-                  >
+              <section aria-labelledby="guia-llamada" className={ACTION_CARD}>
+                <SectionHead id="guia-llamada" title="Registrar o programar llamada" />
+                <div className="space-y-4 pt-4">
+                  {/* LOS CUATRO RESULTADOS A LA VISTA, con su consecuencia. Eran un
+                      desplegable: elegir costaba abrirlo, y lo que pasaba después
+                      se leía recién debajo. Lo que cierra la venta va en rojo. */}
+                  <div role="group" aria-label="Resultado de la llamada" className="grid gap-2 sm:grid-cols-2">
                     {DISPOSITIONS.map((d) => (
-                      <option key={d.key} value={d.key}>
-                        {d.label}
-                      </option>
+                      <OptionTile
+                        key={d.key}
+                        label={d.label}
+                        description={dispositionHint(d.key)}
+                        active={disposition === d.key}
+                        danger={d.key === "cancela" || (d.key === "no_contesta" && noAnswerCancels)}
+                        onClick={() => {
+                          setDisposition(d.key);
+                          setConfirmCancel(false);
+                        }}
+                      />
                     ))}
-                  </select>
-                </label>
-                {disposition === "confirma" && aliclikDecision && (
-                  <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-                        Elegir ruta
-                      </p>
-                      <p className="mt-0.5 text-xs text-slate-600">{aliclikDecisionCopy(aliclikDecision)}</p>
-                    </div>
-                    {/* Si solo hay una ruta posible no se pregunta: «Ruta
-                        sugerida» ya lo decidió en la fila. El selector aparece
-                        solo cuando de verdad hay dos caminos (o la excepción
-                        manual de Aliclik, que es una decisión que hay que
-                        tomar a sabiendas). */}
-                    {!showRouteChooser && (
-                      <p className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700">
-                        <span className="font-semibold">
-                          {reprogramProvider === "aliclik" ? "Ruta: Aliclik · misma guía" : "Ruta: Swayp · nueva guía"}
-                        </span>
-                        <span className="text-slate-500">
+                  </div>
+                  {disposition === "confirma" && aliclikDecision && (
+                    <div className={cn(CARD_ZONE, "space-y-3")}>
+                      <div>
+                        <p className="text-sm font-semibold text-ink-900">Ruta</p>
+                        <p className="mt-0.5 text-[13px] leading-5 text-ink-500">{aliclikDecisionCopy(aliclikDecision)}</p>
+                      </div>
+                      {/* Si solo hay una ruta posible no se pregunta: «Ruta
+                          sugerida» ya lo decidió en la fila. El selector aparece
+                          solo cuando de verdad hay dos caminos (o la excepción
+                          manual de Aliclik, que es una decisión que hay que
+                          tomar a sabiendas). */}
+                      {!showRouteChooser && (
+                        <p className={DRAWER_NOTE}>
+                          <span className="font-semibold text-ink-900">
+                            {reprogramProvider === "aliclik" ? "Ruta: Aliclik · misma guía" : "Ruta: Swayp · nueva guía"}
+                          </span>
                           {reprogramProvider === "aliclik"
                             ? " · Swayp sin stock o cobertura para este destino."
                             : " · Aliclik no disponible para esta guía."}
-                        </span>
-                      </p>
-                    )}
-                    {showRouteChooser && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setReprogramProvider("aliclik");
-                          setForceAliclik(false);
-                        }}
-                        disabled={!aliclikDecision.eligible}
-                        // La ruta elegida se veía solo por el borde de color.
-                        aria-pressed={reprogramProvider === "aliclik" && !forceAliclik}
-                        className={cn(
-                          "rounded-lg border px-2.5 py-2 text-left text-xs transition",
-                          reprogramProvider === "aliclik" && !forceAliclik
-                            ? "border-brand-500 bg-brand-50 text-brand-800"
-                            : "border-slate-200 bg-white text-slate-600",
-                          !aliclikDecision.eligible && "cursor-not-allowed opacity-45",
-                        )}
-                      >
-                        <span className="block font-semibold">Aliclik</span>
-                        <span>Misma guía</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setReprogramProvider("fenix");
-                          setForceAliclik(false);
-                        }}
-                        disabled={!fenixRouteAvailable}
-                        aria-pressed={reprogramProvider === "fenix"}
-                        className={cn(
-                          "rounded-lg border px-2.5 py-2 text-left text-xs transition",
-                          reprogramProvider === "fenix"
-                            ? "border-brand-500 bg-brand-50 text-brand-800"
-                            : "border-slate-200 bg-white text-slate-600",
-                          !fenixRouteAvailable && "cursor-not-allowed opacity-45",
-                        )}
-                      >
-                        <span className="block font-semibold">Swayp</span>
-                        <span>
-                          {fenixRouteAvailable
-                            ? "Nueva guía"
-                            : swaypSinCodbar
-                              ? "Sin vínculo de codbar"
-                              : "Sin stock/cobertura"}
-                        </span>
-                      </button>
-                    </div>
-                    )}
-                    {canForceAliclik && (
-                      <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-dashed border-slate-300 bg-white p-2 text-xs text-slate-600">
-                        <input
-                          type="checkbox"
-                          checked={forceAliclik}
-                          onChange={(e) => {
-                            setForceAliclik(e.target.checked);
-                            setReprogramProvider(e.target.checked ? "aliclik" : "fenix");
-                          }}
-                          className="mt-0.5"
-                        />
-                        <span>
-                          <b>Excepción manual Aliclik.</b> Requiere explicar el motivo en la nota y quedará auditada.
-                        </span>
-                      </label>
-                    )}
-                    {reprogramProvider === "aliclik" ? (
-                      <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs leading-relaxed text-slate-600">
-                        Primero realiza la reprogramación en Aliclik. Luego confírmala aquí: se conservará la guía actual.
-                      </p>
-                    ) : detail.shipment.order_name ? (
-                      // Antes decía sólo «se generará una nueva guía Swayp», sin
-                      // distinguir los DOS caminos que hay detrás del mismo botón.
-                      // La operadora apretaba sin saber si el número lo pondría
-                      // Swayp o si tendría que cargar la guía a mano en el Excel,
-                      // y se enteraba recién en el aviso posterior. El destino ya
-                      // decide cuál es; decirlo antes es gratis.
-                      detail.swaypApiCity ? (
-                        <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs leading-relaxed text-slate-600">
-                          Se generará una <b>nueva guía Swayp</b> con la fecha elegida y{" "}
-                          <b>el número lo emite Swayp</b>: quedará creada en su sistema, sin
-                          cargarla al Excel. Si Swayp no responde, la reprogramación{" "}
-                          <b>no se registra</b> y el aviso te dice por qué.
                         </p>
-                      ) : (
-                        <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs leading-relaxed text-amber-900">
-                          Este destino <b>no tiene bodega Swayp configurada</b>, así que Swayp no
-                          puede emitir el número y la guía no se creará. Configúrala en Ajustes o
-                          elige otro courier.
+                      )}
+                      {showRouteChooser && (
+                        <div role="group" aria-label="Ruta de la reprogramación" className="grid grid-cols-2 gap-2">
+                          <OptionTile
+                            label="Aliclik"
+                            description="Misma guía"
+                            active={reprogramProvider === "aliclik" && !forceAliclik}
+                            disabled={!aliclikDecision.eligible}
+                            onClick={() => {
+                              setReprogramProvider("aliclik");
+                              setForceAliclik(false);
+                            }}
+                          />
+                          <OptionTile
+                            label="Swayp"
+                            description={
+                              fenixRouteAvailable
+                                ? "Nueva guía"
+                                : swaypSinCodbar
+                                  ? "Sin vínculo de codbar"
+                                  : "Sin stock/cobertura"
+                            }
+                            active={reprogramProvider === "fenix"}
+                            disabled={!fenixRouteAvailable}
+                            onClick={() => {
+                              setReprogramProvider("fenix");
+                              setForceAliclik(false);
+                            }}
+                          />
+                        </div>
+                      )}
+                      {canForceAliclik && (
+                        <label className="flex cursor-pointer items-start gap-2.5 rounded-md bg-wash px-3 py-2.5 text-[13px] leading-5 text-ink-700 pointer-coarse:min-h-11">
+                          <input
+                            type="checkbox"
+                            checked={forceAliclik}
+                            onChange={(e) => {
+                              setForceAliclik(e.target.checked);
+                              setReprogramProvider(e.target.checked ? "aliclik" : "fenix");
+                            }}
+                            className={cn(CHECKBOX, "mt-0.5")}
+                          />
+                          <span>
+                            <b className="font-semibold text-ink-900">Excepción manual Aliclik.</b> Requiere explicar el
+                            motivo en la nota y quedará auditada.
+                          </span>
+                        </label>
+                      )}
+                      {reprogramProvider === "aliclik" ? (
+                        <p className="rounded-md bg-wash px-3 py-2 text-[13px] leading-relaxed text-ink-600">
+                          Primero realiza la reprogramación en Aliclik. Luego confírmala aquí: se conservará la guía actual.
                         </p>
-                      )
-                    ) : (
-                      <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs leading-relaxed text-amber-800">
-                        Sin N° de pedido no se puede autogenerar. Usa <b>Ingresar una guía Swayp a mano</b>, abajo.
-                      </p>
-                    )}
-                  </div>
-                )}
-                {disposition === "programar" && (
-                  <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs leading-relaxed text-slate-600">
-                    La guía se ocultará hasta la fecha elegida y volverá a la cola ese día.
-                    No aumenta los intentos ni cambia el estado del envío.
-                  </p>
-                )}
-                <label className="block text-xs font-medium text-slate-600">
-                  {disposition === "confirma"
-                    ? reprogramProvider === "aliclik"
-                      ? "Fecha de reprogramación en Aliclik"
-                      : "Fecha de reprogramación (va en la nueva guía Swayp)"
-                    : disposition === "programar"
-                      ? "Fecha de próxima llamada"
-                      : "Próximo intento (opcional)"}
-                  <input
-                    type="date"
-                    value={nextDate}
-                    onChange={(e) => setNextDate(e.target.value)}
-                    // UNA REPROGRAMACIÓN CONFIRMADA NO PUEDE SER DE AYER. El
-                    // `min` solo cubría «programar», y ni el botón ni el
-                    // servidor exigían futuro para «confirma»: se emitía una
-                    // guía Swayp con la fecha pasada ESTAMPADA EN SU NÚMERO
-                    // (`rescheduleGuideCode`) y un despacho imposible agendado.
-                    min={
-                      disposition === "programar" || disposition === "confirma"
-                        ? tomorrowDateInputValue()
-                        : undefined
-                    }
-                    className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
-                  />
-                </label>
-                <label className="block text-xs font-medium text-slate-600">
-                  Nota de la llamada
-                  <textarea
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                    placeholder="Qué dijo la clienta…"
-                    className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
-                    rows={2}
-                  />
-                </label>
-                {/* EL ÚLTIMO INTENTO CIERRA LA VENTA, Y ANTES NO LO DECÍA. Con
-                    los intentos agotados, un «No contesta» más anula la guía
-                    (`nextShipmentTransition`): el cajón mostraba «Llamadas 7 / 7»
-                    y nada más, y la guía se cerraba sin que nadie lo hubiera
-                    pedido. */}
-                {lastAttemptWillCancel && (
-                  <p className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs leading-relaxed text-amber-900">
-                    <b>Es el último intento.</b> Con {MAX_INTENTOS} llamadas sin respuesta, registrar este
-                    «No contesta» <b>anula la guía</b> y el pedido pasa a cierre.
-                  </p>
-                )}
-                {/* ANULAR LA VENTA SE CONFIRMA, COMO EL DESCARTE. «Cliente
-                    cancela» cerraba el pedido con el mismo botón genérico que un
-                    «No contesta». */}
-                {cancelNeedsConfirm && confirmCancel ? (
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setConfirmCancel(false)}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
-                    >
-                      Cancelar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        run(
-                          () =>
-                            registerRerouteCall(shipmentId, {
-                              disposition,
-                              note,
-                              nextFollowupAt: null,
-                              reprogramProvider,
-                              forceAliclik,
-                            }),
-                          // El confirmar de «Cliente cancela» es la SEGUNDA
-                          // llamada a esta acción y también se olvidaba de
-                          // limpiar. Anular es terminal: la guía sale de la
-                          // vista, pero la nota se quedaba viva en el cajón.
-                          () => {
-                            setNote("");
-                            setNextDate("");
-                            setConfirmCancel(false);
-                          },
+                      ) : detail.shipment.order_name ? (
+                        // Antes decía sólo «se generará una nueva guía Swayp», sin
+                        // distinguir los DOS caminos que hay detrás del mismo botón.
+                        // La operadora apretaba sin saber si el número lo pondría
+                        // Swayp o si tendría que cargar la guía a mano en el Excel,
+                        // y se enteraba recién en el aviso posterior. El destino ya
+                        // decide cuál es; decirlo antes es gratis.
+                        detail.swaypApiCity ? (
+                          <p className={DRAWER_NOTE}>
+                            Se generará una <b className="font-semibold text-ink-900">nueva guía Swayp</b> con la fecha
+                            elegida y <b className="font-semibold text-ink-900">el número lo emite Swayp</b>: quedará
+                            creada en su sistema, sin cargarla al Excel. Si Swayp no responde, la reprogramación{" "}
+                            <b className="font-semibold text-ink-900">no se registra</b> y el aviso te dice por qué.
+                          </p>
+                        ) : (
+                          <Banner tone="warn">
+                            Este destino <b className="font-semibold">no tiene bodega Swayp configurada</b>, así que Swayp
+                            no puede emitir el número y la guía no se creará. Configúrala en Ajustes o elige otro courier.
+                          </Banner>
                         )
-                      }
-                      disabled={pending}
-                      className="flex-1 rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
-                    >
-                      {pending
-                        ? "Anulando…"
-                        : `Sí, anular la guía ${detail.shipment.guide_code}${
-                            detail.shipment.order_name ? ` del pedido ${detail.shipment.order_name}` : ""
-                          }`}
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                  {gestionBlockReason && (
-                    <p id="gestion-motivo" role="status" className="text-xs text-amber-800">
-                      {gestionBlockReason}
+                      ) : (
+                        <p className="rounded-md bg-warn-wash px-3 py-2 text-[13px] leading-relaxed text-ink-700">
+                          Sin N° de pedido no se puede autogenerar. Usa <b className="font-semibold">Ingresar una guía Swayp a mano</b>, abajo.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {disposition === "programar" && (
+                    <p className={DRAWER_NOTE}>
+                      La guía se ocultará hasta la fecha elegida y volverá a la cola ese día.
+                      No aumenta los intentos ni cambia el estado del envío.
                     </p>
                   )}
-                  <button
-                    onClick={() => {
-                      if (cancelNeedsConfirm) {
-                        setConfirmCancel(true);
-                        return;
-                      }
-                      run(
-                        () =>
-                          registerRerouteCall(shipmentId, {
-                            disposition,
-                            note,
-                            nextFollowupAt: nextDate ? new Date(nextDate).toISOString() : null,
-                            reprogramProvider,
-                            forceAliclik,
-                          }),
-                        // Era la ÚNICA acción del cajón sin reseteo —las otras
-                        // cuatro sí lo tenían—, así que un segundo «Registrar
-                        // llamada» en la misma guía reenviaba la nota anterior,
-                        // y el aviso de borrador sin registrar saltaba después
-                        // de haber registrado.
-                        () => {
-                          setNote("");
-                          setNextDate("");
-                        },
-                      );
-                    }}
-                    disabled={pending || requiredDateMissing}
-                    aria-describedby={gestionBlockReason ? "gestion-motivo" : undefined}
-                    className={cn(
-                      "w-full rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50",
-                      cancelNeedsConfirm || lastAttemptWillCancel
-                        ? "bg-rose-600 hover:bg-rose-700"
-                        : "bg-brand-600 hover:bg-brand-700",
-                    )}
-                  >
-                    {disposition === "programar"
-                      ? "Programar llamada"
-                      : disposition === "confirma" && reprogramProvider === "aliclik"
-                        ? "Confirmar reprogramación Aliclik"
-                        : disposition === "confirma"
-                          ? "Crear guía Swayp y confirmar"
-                          : cancelNeedsConfirm
-                            ? "Anular la guía…"
-                            : lastAttemptWillCancel
-                              ? "Registrar y anular la guía"
-                              : "Registrar llamada"}
-                  </button>
-                  </>
-                )}
+                  <div className={cn(disposition === "confirma" && aliclikDecision && CARD_ZONE, "grid gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]")}>
+                    <label className={DRAWER_LABEL}>
+                      {disposition === "confirma"
+                        ? reprogramProvider === "aliclik"
+                          ? "Fecha de reprogramación en Aliclik"
+                          : "Fecha de reprogramación (va en la nueva guía Swayp)"
+                        : disposition === "programar"
+                          ? "Fecha de próxima llamada"
+                          : "Próximo intento (opcional)"}
+                      <input
+                        type="date"
+                        value={nextDate}
+                        onChange={(e) => setNextDate(e.target.value)}
+                        // UNA REPROGRAMACIÓN CONFIRMADA NO PUEDE SER DE AYER. El
+                        // `min` solo cubría «programar», y ni el botón ni el
+                        // servidor exigían futuro para «confirma»: se emitía una
+                        // guía Swayp con la fecha pasada ESTAMPADA EN SU NÚMERO
+                        // (`rescheduleGuideCode`) y un despacho imposible agendado.
+                        min={
+                          disposition === "programar" || disposition === "confirma"
+                            ? tomorrowDateInputValue()
+                            : undefined
+                        }
+                        className={DRAWER_INPUT}
+                      />
+                    </label>
+                    <label className={DRAWER_LABEL}>
+                      Nota de la llamada
+                      <textarea
+                        value={note}
+                        onChange={(e) => setNote(e.target.value)}
+                        placeholder="Qué dijo la clienta…"
+                        className={DRAWER_TEXTAREA}
+                        rows={2}
+                      />
+                    </label>
+                  </div>
+                  {/* EL ÚLTIMO INTENTO CIERRA LA VENTA, Y ANTES NO LO DECÍA. Con
+                      los intentos agotados, un «No contesta» más anula la guía
+                      (`nextShipmentTransition`): el cajón mostraba «Llamadas 7 / 7»
+                      y nada más, y la guía se cerraba sin que nadie lo hubiera
+                      pedido. */}
+                  {lastAttemptWillCancel && (
+                    <Banner tone="warn">
+                      <b className="font-semibold">Es el último intento.</b> Con {MAX_INTENTOS} llamadas sin respuesta,
+                      registrar este «No contesta» <b className="font-semibold">anula la guía</b> y el pedido pasa a cierre.
+                    </Banner>
+                  )}
+                  {/* ANULAR LA VENTA SE CONFIRMA, COMO EL DESCARTE. «Cliente
+                      cancela» cerraba el pedido con el mismo botón genérico que un
+                      «No contesta». */}
+                  {cancelNeedsConfirm && confirmCancel ? (
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <OpsButton onClick={() => setConfirmCancel(false)} className="pointer-coarse:h-11">
+                        Cancelar
+                      </OpsButton>
+                      <OpsButton
+                        variant="danger"
+                        onClick={() =>
+                          run(
+                            () =>
+                              registerRerouteCall(shipmentId, {
+                                disposition,
+                                note,
+                                nextFollowupAt: null,
+                                reprogramProvider,
+                                forceAliclik,
+                              }),
+                            // El confirmar de «Cliente cancela» es la SEGUNDA
+                            // llamada a esta acción y también se olvidaba de
+                            // limpiar. Anular es terminal: la guía sale de la
+                            // vista, pero la nota se quedaba viva en el cajón.
+                            () => {
+                              setNote("");
+                              setNextDate("");
+                              setConfirmCancel(false);
+                            },
+                          )
+                        }
+                        disabled={pending}
+                        className="pointer-coarse:h-11"
+                      >
+                        {pending
+                          ? "Anulando…"
+                          : `Sí, anular la guía ${detail.shipment.guide_code}${
+                              detail.shipment.order_name ? ` del pedido ${detail.shipment.order_name}` : ""
+                            }`}
+                      </OpsButton>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+                      {gestionBlockReason && (
+                        <p id="gestion-motivo" role="status" className="mr-auto text-[13px] leading-5 text-warn-fg">
+                          {gestionBlockReason}
+                        </p>
+                      )}
+                      <OpsButton
+                        variant={cancelNeedsConfirm || lastAttemptWillCancel ? "danger" : "primary"}
+                        onClick={() => {
+                          if (cancelNeedsConfirm) {
+                            setConfirmCancel(true);
+                            return;
+                          }
+                          run(
+                            () =>
+                              registerRerouteCall(shipmentId, {
+                                disposition,
+                                note,
+                                nextFollowupAt: nextDate ? new Date(nextDate).toISOString() : null,
+                                reprogramProvider,
+                                forceAliclik,
+                              }),
+                            // Era la ÚNICA acción del cajón sin reseteo —las otras
+                            // cuatro sí lo tenían—, así que un segundo «Registrar
+                            // llamada» en la misma guía reenviaba la nota anterior,
+                            // y el aviso de borrador sin registrar saltaba después
+                            // de haber registrado.
+                            () => {
+                              setNote("");
+                              setNextDate("");
+                            },
+                          );
+                        }}
+                        disabled={pending || requiredDateMissing}
+                        aria-describedby={gestionBlockReason ? "gestion-motivo" : undefined}
+                        className="pointer-coarse:h-11"
+                      >
+                        {disposition === "programar"
+                          ? "Programar llamada"
+                          : disposition === "confirma" && reprogramProvider === "aliclik"
+                            ? "Confirmar reprogramación Aliclik"
+                            : disposition === "confirma"
+                              ? "Crear guía Swayp y confirmar"
+                              : cancelNeedsConfirm
+                                ? "Anular la guía…"
+                                : lastAttemptWillCancel
+                                  ? "Registrar y anular la guía"
+                                  : "Registrar llamada"}
+                      </OpsButton>
+                    </div>
+                  )}
+                </div>
               </section>
             )}
 
-            {/* Destino y pedido: consulta, no acción. Plegados, porque entre los
-                dos traen dirección, referencia, lat/long y los ítems de Shopify,
-                y empujaban el formulario de llamada fuera de la pantalla. El
-                resumen de la línea de arriba dice si hace falta abrirlos. */}
-            <details className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-              <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium text-slate-700 marker:text-slate-500">
-                Destino y pedido
-                <span className="ml-1.5 font-normal text-slate-500">
-                  · {[detail.shipment.district, detail.shipment.city].filter(Boolean).join(", ") || "sin destino"}
-                </span>
-              </summary>
-              <div className="space-y-2 border-t border-slate-100 p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <h3 className="text-sm font-semibold text-slate-900">Destino de entrega</h3>
-                    {detail.shipment.address_override && (
-                      <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600">
-                        Modificado
-                      </span>
-                    )}
-                    <span className="text-xs text-slate-500">
-                      · {deliverySource}
-                    </span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowAddressEditor((value) => !value)}
-                  className="shrink-0 text-xs font-semibold text-brand-700 hover:text-brand-800 hover:underline"
-                >
-                  {showAddressEditor ? "Cerrar edición" : "Modificar destino"}
-                </button>
-              </div>
+            {/* Destino y pedido: consulta, no acción. Van debajo de la acción del
+                momento y cada uno en su tarjeta; antes iban plegados porque
+                empujaban el formulario de llamada fuera de la pantalla, y ahora
+                están detrás de él. */}
+            <section aria-labelledby="guia-destino" className={SECTION_CARD}>
+              <SectionHead
+                id="guia-destino"
+                title="Destino de entrega"
+                badge={detail.shipment.address_override ? <Badge>Modificado</Badge> : undefined}
+                help={deliverySource}
+                aside={
+                  <OpsButton
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setShowAddressEditor((value) => !value)}
+                    className="pointer-coarse:h-11"
+                  >
+                    {showAddressEditor ? "Cerrar edición" : "Modificar destino"}
+                  </OpsButton>
+                }
+              />
 
               {!showAddressEditor ? (
-                <div className="space-y-2">
+                <div className="space-y-4 pt-4">
                   <div>
-                    <p className="text-xs text-slate-500">Dirección completa</p>
-                    <p className="text-sm leading-snug text-slate-800">
+                    <p className={DRAWER_KEY}>Dirección completa</p>
+                    <p className="text-sm leading-5 text-ink-900">
                       {deliveryAddress ?? "No informada en Aliclik ni Shopify."}
                     </p>
                     {deliveryLocality && (
-                      <p className="mt-0.5 text-xs font-medium text-slate-600">{deliveryLocality}</p>
+                      <p className="mt-0.5 text-[13px] leading-5 text-ink-700">{deliveryLocality}</p>
                     )}
                     {deliveryReference && (
-                      <p className="mt-0.5 text-xs text-slate-500">
-                        Ref.: {deliveryReference}
-                      </p>
+                      <p className="mt-0.5 text-[13px] leading-5 text-ink-500">Ref.: {deliveryReference}</p>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 gap-3 border-t border-slate-200 pt-2">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Latitud</p>
-                      <p className="select-all font-mono text-xs text-slate-700">
-                        {detail.shipment.latitude ?? "—"}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Longitud</p>
-                      <p className="select-all font-mono text-xs text-slate-700">
-                        {detail.shipment.longitude ?? "—"}
-                      </p>
-                    </div>
+                  <div className={cn(CARD_ZONE, "flex flex-wrap items-end justify-between gap-x-6 gap-y-3")}>
+                    <dl className="flex gap-x-8">
+                      <div>
+                        <dt className={DRAWER_KEY}>Latitud</dt>
+                        <dd className="select-all font-mono text-[13px] leading-5 text-ink-900">
+                          {detail.shipment.latitude ?? "—"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className={DRAWER_KEY}>Longitud</dt>
+                        <dd className="select-all font-mono text-[13px] leading-5 text-ink-900">
+                          {detail.shipment.longitude ?? "—"}
+                        </dd>
+                      </div>
+                    </dl>
+                    {detail.shipment.latitude != null && detail.shipment.longitude != null && (
+                      <a
+                        href={`https://www.google.com/maps?q=${detail.shipment.latitude},${detail.shipment.longitude}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-[13px] font-medium text-brand-700 underline-offset-2 hover:underline pointer-coarse:min-h-11"
+                      >
+                        Abrir ubicación en Google Maps
+                        <IconArrowUpRight aria-hidden className="size-3.5" />
+                      </a>
+                    )}
                   </div>
-                  {detail.shipment.latitude != null && detail.shipment.longitude != null && (
-                    <a
-                      href={`https://www.google.com/maps?q=${detail.shipment.latitude},${detail.shipment.longitude}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex text-xs font-medium text-brand-700 hover:underline"
-                    >
-                      Abrir ubicación en Google Maps
-                    </a>
-                  )}
                 </div>
               ) : (
-                <div className="space-y-2 border-t border-slate-200 pt-2">
-                  <label className="block text-xs font-medium text-slate-600">
+                <div className="space-y-4 pt-4">
+                  <label className={DRAWER_LABEL}>
                     Dirección completa
                     <textarea
                       value={address}
                       onChange={(e) => setAddress(e.target.value)}
                       rows={2}
                       placeholder="Calle, número, urbanización…"
-                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-800"
+                      className={DRAWER_TEXTAREA}
                     />
                   </label>
-                  <label className="block text-xs font-medium text-slate-600">
+                  <label className={DRAWER_LABEL}>
                     Referencia
                     <input
                       value={addressReference}
                       onChange={(e) => setAddressReference(e.target.value)}
                       placeholder="Frente a…, puerta color…"
-                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-800"
+                      className={DRAWER_INPUT}
                     />
                   </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="block text-xs font-medium text-slate-600">
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <label className={DRAWER_LABEL}>
                       Distrito
                       <input
                         value={addressDistrict}
                         onChange={(e) => setAddressDistrict(e.target.value)}
-                        className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+                        className={DRAWER_INPUT}
                       />
                     </label>
-                    <label className="block text-xs font-medium text-slate-600">
+                    <label className={DRAWER_LABEL}>
                       Ciudad / provincia
                       <input
                         value={addressCity}
                         onChange={(e) => setAddressCity(e.target.value)}
-                        className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+                        className={DRAWER_INPUT}
+                      />
+                    </label>
+                    <label className={DRAWER_LABEL}>
+                      Departamento
+                      <input
+                        value={addressRegion}
+                        onChange={(e) => setAddressRegion(e.target.value)}
+                        className={DRAWER_INPUT}
                       />
                     </label>
                   </div>
-                  <label className="block text-xs font-medium text-slate-600">
-                    Departamento
-                    <input
-                      value={addressRegion}
-                      onChange={(e) => setAddressRegion(e.target.value)}
-                      className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
-                    />
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="block text-xs font-medium text-slate-600">
+                  <div className="grid grid-cols-2 gap-4">
+                    <label className={DRAWER_LABEL}>
                       Latitud
                       <input
                         value={addressLatitude}
                         onChange={(e) => setAddressLatitude(e.target.value)}
                         inputMode="decimal"
                         placeholder="-16.409…"
-                        className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs"
+                        className={cn(DRAWER_INPUT, "font-mono text-[13px]")}
                       />
                     </label>
-                    <label className="block text-xs font-medium text-slate-600">
+                    <label className={DRAWER_LABEL}>
                       Longitud
                       <input
                         value={addressLongitude}
                         onChange={(e) => setAddressLongitude(e.target.value)}
                         inputMode="decimal"
                         placeholder="-71.556…"
-                        className="mt-0.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs"
+                        className={cn(DRAWER_INPUT, "font-mono text-[13px]")}
                       />
                     </label>
                   </div>
-                  <p className="rounded-lg bg-slate-50 px-2 py-1.5 text-xs leading-relaxed text-slate-600">
+                  <p className={DRAWER_NOTE}>
                     Al guardar se actualizará el pedido de Shopify y esta dirección no será reemplazada por futuros Excel.
                   </p>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowAddressEditor(false)}
-                      className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
-                    >
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <OpsButton onClick={() => setShowAddressEditor(false)} className="pointer-coarse:h-11">
                       Cancelar
-                    </button>
-                    <button
-                      type="button"
+                    </OpsButton>
+                    <OpsButton
+                      variant="primary"
                       onClick={() => {
                         const payload: ShipmentAddressInput = {
                           address,
@@ -3990,53 +4022,64 @@ function ShipmentDrawer({
                         );
                       }}
                       disabled={pending || !addressFormValid}
-                      className="flex-1 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+                      className="pointer-coarse:h-11"
                     >
                       {pending ? "Guardando…" : "Guardar nuevo destino"}
-                    </button>
+                    </OpsButton>
                   </div>
                 </div>
               )}
-              </div>
+            </section>
 
             {/* order link — search+link (not just a raw UUID) for any shipment,
                 so a wrong auto-match can also be corrected here */}
-              <div className="space-y-1.5 border-t border-slate-100 bg-slate-50 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-medium text-slate-900">
-                  <span className="text-xs font-normal text-slate-500">Pedido </span>
-                  <OrderNameLabel name={detail.shipment.order_name} matched={detail.shipment.matched} />
-                </p>
-                {detail.shipment.matched && (
-                  <button
-                    onClick={() => setShowOrderPicker((v) => !v)}
-                    className="shrink-0 text-xs font-semibold text-brand-700 hover:text-brand-800 hover:underline"
-                  >
-                    {showOrderPicker ? "Cancelar" : "Cambiar"}
-                  </button>
+            <section aria-labelledby="guia-pedido" className={SECTION_CARD}>
+              <SectionHead
+                id="guia-pedido"
+                title={
+                  <>
+                    Pedido{" "}
+                    <span className="font-semibold tabular-nums text-ink-900">
+                      <OrderNameLabel name={detail.shipment.order_name} matched={detail.shipment.matched} />
+                    </span>
+                  </>
+                }
+                badge={!detail.shipment.matched ? <Badge tone="warn">Sin vincular</Badge> : undefined}
+                aside={
+                  detail.shipment.matched && (
+                    <OpsButton
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setShowOrderPicker((v) => !v)}
+                      className="pointer-coarse:h-11"
+                    >
+                      {showOrderPicker ? "Cancelar" : "Cambiar"}
+                    </OpsButton>
+                  )
+                }
+              />
+              <div className="pt-4">
+                {(!detail.shipment.matched || showOrderPicker) && (
+                  <OrderLinkPicker
+                    shipmentId={shipmentId}
+                    prefill={detail.shipment.order_name}
+                    customerPhone={detail.shipment.customer_phone}
+                    onLinked={() => {
+                      setShowOrderPicker(false);
+                      refresh();
+                    }}
+                  />
                 )}
+                {detail.shipment.matched && !showOrderPicker &&
+                  (detail.order ? (
+                    <ShipmentOrderItems order={detail.order} />
+                  ) : (
+                    <p className="text-[13px] leading-5 text-ink-500">
+                      No se encontró el detalle sincronizado de Shopify.
+                    </p>
+                  ))}
               </div>
-              {(!detail.shipment.matched || showOrderPicker) && (
-                <OrderLinkPicker
-                  shipmentId={shipmentId}
-                  prefill={detail.shipment.order_name}
-                  customerPhone={detail.shipment.customer_phone}
-                  onLinked={() => {
-                    setShowOrderPicker(false);
-                    refresh();
-                  }}
-                />
-              )}
-              {detail.shipment.matched && !showOrderPicker &&
-                (detail.order ? (
-                  <ShipmentOrderItems order={detail.order} />
-                ) : (
-                  <p className="border-t border-slate-100 pt-2 text-xs text-slate-500">
-                    No se encontró el detalle sincronizado de Shopify.
-                  </p>
-                ))}
-              </div>
-            </details>
+            </section>
 
             {/* Swayp guide — manual fallback. The common path auto-generates the
                 guide from "Cliente confirma" above; this stays for shipments
@@ -4048,104 +4091,107 @@ function ShipmentDrawer({
                 pide, o solo si el envío no tiene N° de pedido (único caso en que
                 es el camino obligado). */}
             {detail.shipment.delivery_status === "pendiente" && !detail.shipment.fenix_shipment_id && !showManualGuide && (
-              <button
-                type="button"
-                onClick={() => setShowManualGuide(true)}
-                className="self-start text-xs font-medium text-brand-700 hover:underline"
-              >
+              <OpsButton variant="ghost" size="sm" onClick={() => setShowManualGuide(true)} className="pointer-coarse:h-11">
+                <IconPlus className="text-ink-500" />
                 Ingresar una guía Swayp a mano
-              </button>
+              </OpsButton>
             )}
             {detail.shipment.delivery_status === "pendiente" && (showManualGuide || !!detail.shipment.fenix_shipment_id) && (
-              <section className="space-y-1.5 rounded-xl border border-slate-200 bg-white p-2.5">
-              <div className="flex items-start justify-between gap-3">
-                <h3 className="text-sm font-semibold text-slate-900">Guía Swayp a mano</h3>
-                {!detail.shipment.fenix_shipment_id && (
-                  <button
-                    type="button"
-                    onClick={() => setShowManualGuide(false)}
-                    className="text-xs text-slate-500 hover:underline"
-                  >
-                    Ocultar
-                  </button>
+              <section aria-labelledby="guia-manual" className={SECTION_CARD}>
+                <SectionHead
+                  id="guia-manual"
+                  title="Guía Swayp a mano"
+                  aside={
+                    !detail.shipment.fenix_shipment_id && (
+                      <OpsButton size="sm" variant="ghost" onClick={() => setShowManualGuide(false)} className="pointer-coarse:h-11">
+                        Ocultar
+                      </OpsButton>
+                    )
+                  }
+                />
+                {detail.shipment.fenix_shipment_id ? (
+                  <p className="pt-4 text-[13px] font-medium leading-5 text-ok-fg">Ya tiene guía Swayp vinculada.</p>
+                ) : (
+                  <div className="space-y-4 pt-4">
+                    <div className="grid gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
+                      <label className={DRAWER_LABEL}>
+                        Fecha de reprogramación (va en la guía)
+                        <input
+                          type="date"
+                          value={manualGuideDate}
+                          min={tomorrowDateInputValue()}
+                          aria-invalid={manualGuideDateInvalid || undefined}
+                          onChange={(e) => setManualGuideDate(e.target.value)}
+                          className={DRAWER_INPUT}
+                        />
+                      </label>
+                      {/* «Autogenerar» estaba aquí y se quitó el 16-09-2026: armaba
+                          el número con el pedido y la fecha —`#KP13166415092026`—, o
+                          sea acuñaba un código que Swayp no conoce. Esta puerta es
+                          para REGISTRAR el número que Swayp ya dio, no para
+                          inventarlo. */}
+                      <label className={DRAWER_LABEL}>
+                        N° de guía Swayp
+                        <input
+                          value={fenixGuide}
+                          onChange={(e) => setFenixGuide(e.target.value)}
+                          inputMode="numeric"
+                          aria-label="N° de guía Swayp"
+                          placeholder="P. ej. 50000132589"
+                          className={cn(DRAWER_INPUT, "font-mono")}
+                        />
+                      </label>
+                    </div>
+                    {/* El motivo del bloqueo se dice acá, en texto visible y
+                        enlazado al botón. Dentro de un botón `disabled` no lo
+                        alcanza ni el tabulador ni el lector de pantalla. */}
+                    <p
+                      id="guia-manual-motivo"
+                      className={cn("text-[13px] leading-5", swaypSinCodbar ? "text-crit-fg" : "text-ink-500")}
+                    >
+                      {/* El codbar manda: sin vínculo la guía no sale ni escrita a
+                          mano, porque Swayp no sabría qué descontar. */}
+                      {swaypSinCodbarAviso
+                        ? swaypSinCodbarAviso
+                        : manualGuideDateInvalid
+                          ? "Elige la fecha de despacho, de mañana en adelante."
+                          : numeroManualNoEsDeSwayp
+                            ? "Ese número no es de Swayp: los suyos son solo dígitos, como 50000132589. Cópialo de su panel."
+                            : "Pega aquí el número que te dio el panel de Swayp. Si aún no la creaste allá, ciérralo y confirma la reprogramación: Swayp la emite sola."}
+                    </p>
+                    <div className="flex justify-end">
+                      <OpsButton
+                        onClick={() =>
+                          run(
+                            () =>
+                              createFenixGuide(shipmentId, {
+                                guideCode: fenixGuide,
+                                nextFollowupAt: manualGuideDate ? new Date(manualGuideDate).toISOString() : null,
+                              }),
+                            // Un número de guía ya usado no se puede volver a
+                            // enviar: si se queda en el campo, el segundo intento
+                            // choca contra el duplicado en la base.
+                            () => {
+                              setFenixGuide("");
+                              setManualGuideDate("");
+                            },
+                          )
+                        }
+                        disabled={
+                          pending ||
+                          !fenixGuide.trim() ||
+                          manualGuideDateInvalid ||
+                          swaypSinCodbar ||
+                          numeroManualNoEsDeSwayp
+                        }
+                        aria-describedby="guia-manual-motivo"
+                        className="pointer-coarse:h-11"
+                      >
+                        Crear guía Swayp
+                      </OpsButton>
+                    </div>
+                  </div>
                 )}
-              </div>
-              {detail.shipment.fenix_shipment_id ? (
-                <p className="text-xs text-emerald-700">Ya tiene guía Swayp vinculada.</p>
-              ) : (
-                <>
-                  <label className="block text-xs font-medium text-slate-600">
-                    Fecha de reprogramación (va en la guía)
-                    <input
-                      type="date"
-                      value={manualGuideDate}
-                      min={tomorrowDateInputValue()}
-                      aria-invalid={manualGuideDateInvalid || undefined}
-                      onChange={(e) => setManualGuideDate(e.target.value)}
-                      className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
-                    />
-                  </label>
-                  {/* «Autogenerar» estaba aquí y se quitó el 16-09-2026: armaba
-                      el número con el pedido y la fecha —`#KP13166415092026`—, o
-                      sea acuñaba un código que Swayp no conoce. Esta puerta es
-                      para REGISTRAR el número que Swayp ya dio, no para
-                      inventarlo. */}
-                  <input
-                    value={fenixGuide}
-                    onChange={(e) => setFenixGuide(e.target.value)}
-                    inputMode="numeric"
-                    aria-label="N° de guía Swayp"
-                    placeholder="N° de guía Swayp, p. ej. 50000132589"
-                    className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-                  />
-                  {/* El motivo del bloqueo se dice acá, en texto visible y
-                      enlazado al botón. Dentro de un botón `disabled` no lo
-                      alcanza ni el tabulador ni el lector de pantalla. */}
-                  <p
-                    id="guia-manual-motivo"
-                    className={cn("text-xs", swaypSinCodbar ? "text-rose-700" : "text-slate-500")}
-                  >
-                    {/* El codbar manda: sin vínculo la guía no sale ni escrita a
-                        mano, porque Swayp no sabría qué descontar. */}
-                    {swaypSinCodbarAviso
-                      ? swaypSinCodbarAviso
-                      : manualGuideDateInvalid
-                        ? "Elige la fecha de despacho, de mañana en adelante."
-                        : numeroManualNoEsDeSwayp
-                          ? "Ese número no es de Swayp: los suyos son solo dígitos, como 50000132589. Cópialo de su panel."
-                          : "Pega aquí el número que te dio el panel de Swayp. Si aún no la creaste allá, ciérralo y confirma la reprogramación: Swayp la emite sola."}
-                  </p>
-                  <button
-                    onClick={() =>
-                      run(
-                        () =>
-                          createFenixGuide(shipmentId, {
-                            guideCode: fenixGuide,
-                            nextFollowupAt: manualGuideDate ? new Date(manualGuideDate).toISOString() : null,
-                          }),
-                        // Un número de guía ya usado no se puede volver a
-                        // enviar: si se queda en el campo, el segundo intento
-                        // choca contra el duplicado en la base.
-                        () => {
-                          setFenixGuide("");
-                          setManualGuideDate("");
-                        },
-                      )
-                    }
-                    disabled={
-                      pending ||
-                      !fenixGuide.trim() ||
-                      manualGuideDateInvalid ||
-                      swaypSinCodbar ||
-                      numeroManualNoEsDeSwayp
-                    }
-                    aria-describedby="guia-manual-motivo"
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    Crear guía Swayp
-                  </button>
-                </>
-              )}
               </section>
             )}
 
@@ -4154,27 +4200,33 @@ function ShipmentDrawer({
             <ShipmentGuideHistory guides={detail.guideHistory} onSaved={refresh} />
 
             </fieldset>
+            </div>
 
             {/* EL AVISO VA AL PIE Y SE QUEDA PEGADO. Estaba arriba, encima de
                 todos los formularios: al registrar algo desde el formulario de
-                llamada —abajo, en un cajón de 34 rem— el error aparecía fuera
-                de la pantalla y parecía que no había pasado nada. Pegado al pie
-                se ve desde cualquier punto del scroll, y al aparecer se lleva
-                el foco para que un lector de pantalla lo anuncie. */}
+                llamada —abajo, en el cajón— el error aparecía fuera de la
+                pantalla y parecía que no había pasado nada. Pegado al pie se ve
+                desde cualquier punto del scroll, y al aparecer se lleva el foco
+                para que un lector de pantalla lo anuncie. */}
             {feedback && (
-              <p
-                ref={feedbackRef}
-                tabIndex={-1}
-                role={feedback.kind === "error" ? "alert" : "status"}
-                className={cn(
-                  "sticky bottom-0 -mx-3.5 break-words border-t px-3.5 py-2 text-sm outline-none sm:-mx-4 sm:px-4",
-                  feedback.kind === "error"
-                    ? "border-rose-200 bg-rose-50 text-rose-800"
-                    : "border-emerald-200 bg-emerald-50 text-emerald-800",
-                )}
-              >
-                {feedback.text}
-              </p>
+              <div className="sticky bottom-0 z-10 border-t border-line bg-white px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
+                <p
+                  ref={feedbackRef}
+                  tabIndex={-1}
+                  role={feedback.kind === "error" ? "alert" : "status"}
+                  className={cn(
+                    "flex items-start gap-2.5 break-words rounded-lg px-3 py-2.5 text-sm text-ink-700 outline-none",
+                    feedback.kind === "error" ? "bg-crit-wash" : "bg-ok-wash",
+                  )}
+                >
+                  {feedback.kind === "error" ? (
+                    <IconAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-crit-fg" />
+                  ) : (
+                    <IconCheckCircle aria-hidden className="mt-0.5 size-4 shrink-0 text-ok-fg" />
+                  )}
+                  <span className="min-w-0 flex-1">{feedback.text}</span>
+                </p>
+              </div>
             )}
           </div>
         )}
@@ -4196,6 +4248,7 @@ function ShipmentDrawer({
     </div>
   );
 }
+
 
 /** «Cargando…» o el error con reintento, para los tres bloques del modal. */
 function ReprogramLoadState({
@@ -4222,102 +4275,72 @@ function ReprogramLoadState({
 function ShipmentGuideHistory({
   guides,
   onSaved,
-  className,
 }: {
   guides: ShipmentHistoryGuide[];
   onSaved: () => void;
-  className?: string;
 }) {
   return (
-    <section className={cn("space-y-2.5 rounded-xl border border-slate-200 bg-white p-2.5", className)}>
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-900">Historial desde el origen</h3>
-          <p className="text-xs text-slate-500">Todas las guías de esta reprogramación</p>
-        </div>
-        <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium text-slate-600">
-          {guides.length} {guides.length === 1 ? "guía" : "guías"}
-        </span>
-      </div>
+    <section aria-labelledby="guia-historial" className={SECTION_CARD}>
+      <SectionHead
+        id="guia-historial"
+        title="Historial desde el origen"
+        help="Todas las guías de esta reprogramación, de la primera a la actual."
+        aside={
+          <Badge>
+            {guides.length} {guides.length === 1 ? "guía" : "guías"}
+          </Badge>
+        }
+      />
 
-      <div>
-        {guides.map((guide, guideIndex) => (
-          <div key={guide.id}>
-            {guideIndex > 0 && (
-              <div className="flex items-center gap-2 py-1.5" aria-label="Transferencia a una nueva guía">
-                <span className="h-px flex-1 bg-slate-200" />
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
-                  Transferida → nueva guía Swayp
-                </span>
-                <span className="h-px flex-1 bg-slate-200" />
-              </div>
-            )}
-
-            <article
-              className={cn(
-                "overflow-hidden rounded-xl border bg-white",
-                guide.is_current
-                  ? "border-brand-300"
-                  : "border-slate-200",
-              )}
-            >
-              <header
-                className={cn(
-                  "flex items-start justify-between gap-3 border-b px-3 py-2",
-                  guide.is_current
-                    ? "border-brand-100 bg-brand-50/80"
-                    : "border-slate-100 bg-slate-50",
-                )}
-              >
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-                      {guideIndex === 0 ? "Guía original" : `Reprogramación ${guideIndex}`}
-                    </span>
-                    <span
-                      className={cn(
-                        "rounded-full px-1.5 py-0.5 text-xs font-medium",
-                        guide.courier === "fenix"
-                          ? "bg-orange-100 text-orange-700"
-                          : "bg-sky-100 text-sky-700",
-                      )}
-                    >
-                      {guide.courier === "fenix"
-                        ? guide.created_via === "fenix_directo"
-                          ? "Swayp directa"
-                          : "Swayp"
-                        : "Aliclik"}
-                    </span>
-                    {guide.is_current && (
-                      <span className="rounded-full bg-brand-600 px-1.5 py-0.5 text-xs font-medium text-white">
-                        Vista actual
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-0.5 whitespace-nowrap font-mono text-xs font-semibold text-slate-800">
-                    {guide.guide_code}
-                  </p>
+      {/* Una guía por zona, de borde a borde; entre una y la siguiente, la
+          transferencia dicha en palabras. */}
+      {guides.map((guide, guideIndex) => (
+        <div key={guide.id} className={cn(guideIndex === 0 ? "pt-4" : CARD_ZONE, "pb-1")}>
+          {guideIndex > 0 && (
+            <p className="mb-3 flex items-center gap-1.5 text-[13px] leading-5 text-ink-500">
+              <IconArrowRight aria-hidden className="size-3.5 text-ink-500" />
+              Transferida a una nueva guía Swayp
+            </p>
+          )}
+          <article aria-label={`${guideIndex === 0 ? "Guía original" : `Reprogramación ${guideIndex}`} ${guide.guide_code}`}>
+            <header className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-sm font-semibold text-ink-900">
+                    {guideIndex === 0 ? "Guía original" : `Reprogramación ${guideIndex}`}
+                  </span>
+                  <Badge>
+                    {guide.courier === "fenix"
+                      ? guide.created_via === "fenix_directo"
+                        ? "Swayp directa"
+                        : "Swayp"
+                      : "Aliclik"}
+                  </Badge>
+                  {guide.is_current && <Badge tone="brand">Vista actual</Badge>}
                 </div>
-                <StatusBadge category={guide.status_category} status={guide.delivery_status} />
-              </header>
+                <p className="mt-0.5 whitespace-nowrap font-mono text-[13px] font-medium leading-5 text-ink-700">
+                  {guide.guide_code}
+                </p>
+              </div>
+              <StatusBadge category={guide.status_category} status={guide.delivery_status} />
+            </header>
 
-              {guide.calls.length === 0 ? (
-                <p className="px-3 py-2.5 text-xs text-slate-500">Sin gestiones registradas en esta guía.</p>
-              ) : (
-                <ul className="divide-y divide-slate-100">
-                  {guide.calls.map((call, callIndex) => (
-                    <HistoryCallItem
-                      key={call.id ?? `${guide.id}-${callIndex}`}
-                      call={call}
-                      onSaved={onSaved}
-                    />
-                  ))}
-                </ul>
-              )}
-            </article>
-          </div>
-        ))}
-      </div>
+            {guide.calls.length === 0 ? (
+              <p className="mt-2 text-[13px] leading-5 text-ink-500">Sin gestiones registradas en esta guía.</p>
+            ) : (
+              <ul className="-mx-4 mt-2 divide-y divide-line border-t border-line sm:-mx-5">
+                {guide.calls.map((call, callIndex) => (
+                  <HistoryCallItem
+                    key={call.id ?? `${guide.id}-${callIndex}`}
+                    call={call}
+                    onSaved={onSaved}
+                  />
+                ))}
+              </ul>
+            )}
+          </article>
+        </div>
+      ))}
     </section>
   );
 }
@@ -4351,72 +4374,72 @@ function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: ()
   }
 
   return (
-    <li className="px-3 py-2 text-xs text-slate-600">
+    <li className="px-4 py-3 sm:px-5">
       <div className="flex items-start justify-between gap-3">
-        <span className="font-medium text-slate-700">
+        <span className="text-sm font-medium leading-5 text-ink-900">
           {shipmentHistoryLabel(call)}
-          {call.new_status ? ` → ${labelOf(call.new_status)}` : ""}
+          {call.new_status ? <span className="font-normal text-ink-600"> → {labelOf(call.new_status)}</span> : ""}
         </span>
-        <span className="shrink-0 text-right text-xs tabular-nums text-slate-500">
+        <span className="shrink-0 text-right text-[13px] leading-5 tabular-nums text-ink-500">
           {occurredAt && <span className="block">{occurredAt}</span>}
           {call.agent_name && <span className="block">{call.agent_name}</span>}
         </span>
       </div>
 
       {editing ? (
-        <div className="mt-1 space-y-1">
+        <div className="mt-2 space-y-2">
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             rows={2}
             autoFocus
             aria-label="Nota de la gestión"
-            className="w-full rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 focus:border-brand-400 focus:outline-none"
+            className={DRAWER_TEXTAREA}
             placeholder="Nota de la gestión…"
           />
-          {error && <p role="alert" className="text-xs text-rose-700">{error}</p>}
+          {error && <p role="alert" className="text-[13px] leading-5 text-crit-fg">{error}</p>}
           <div className="flex items-center gap-2">
-            <button
-              onClick={save}
-              disabled={saving}
-              className="rounded-md bg-brand-600 px-2 py-1 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
-            >
+            <OpsButton size="sm" variant="primary" onClick={save} disabled={saving} className="pointer-coarse:h-11">
               {saving ? "Guardando…" : "Guardar"}
-            </button>
-            <button
+            </OpsButton>
+            <OpsButton
+              size="sm"
+              variant="ghost"
               onClick={() => {
                 setEditing(false);
                 setDraft(call.note ?? "");
                 setError(null);
               }}
               disabled={saving}
-              className="text-xs text-slate-500 hover:underline"
+              className="pointer-coarse:h-11"
             >
               Cancelar
-            </button>
+            </OpsButton>
           </div>
         </div>
       ) : (
-        <div className="mt-0.5 flex items-start justify-between gap-2">
-          <p className="leading-relaxed text-slate-600">
-            {call.note || <span className="italic text-slate-500">Sin nota</span>}
+        <div className="mt-0.5 flex items-start justify-between gap-3">
+          <p className="max-w-[68ch] text-[13px] leading-5 text-ink-700">
+            {call.note || <span className="text-ink-500">Sin nota</span>}
           </p>
           {call.id && (
-            <button
+            <OpsButton
+              size="sm"
+              variant="ghost"
               onClick={() => {
                 setDraft(call.note ?? "");
                 setEditing(true);
               }}
-              className="shrink-0 text-xs font-medium text-brand-700 hover:underline"
+              className="-my-1 shrink-0 pointer-coarse:h-11"
             >
               Editar
-            </button>
+            </OpsButton>
           )}
         </div>
       )}
 
       {call.note_edited_at && !editing && (
-        <p className="mt-0.5 text-xs text-slate-500">
+        <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
           editada
           {call.note_editor_name ? ` por ${call.note_editor_name}` : ""}
           {editedAt ? ` · ${editedAt}` : ""}
@@ -4424,7 +4447,7 @@ function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: ()
       )}
 
       {call.next_followup_at && (
-        <p className="mt-0.5 text-slate-500">
+        <p className="mt-0.5 text-[13px] leading-5 tabular-nums text-ink-500">
           {call.new_status === "en_ruta"
             ? "Fecha de reprogramación"
             : call.new_status
@@ -4437,27 +4460,35 @@ function HistoryCallItem({ call, onSaved }: { call: ShipmentCallRow; onSaved: ()
   );
 }
 
+/** El par etiqueta / valor de la ficha del cajón: 13 px `ink-500` sobre 14 px `ink-900`. */
 function Field({
   label,
   value,
   clamp,
+  capitalize,
 }: {
   label: string;
   value: string | null | undefined;
   /** Truncate long values (e.g. a product name) to 2 lines instead of
    *  eating the drawer's vertical space — full text still on hover. */
   clamp?: boolean;
+  /** La ciudad llega como clave de cobertura en minúsculas («arequipa»). */
+  capitalize?: boolean;
 }) {
   return (
-    <div>
-      <dt className="text-xs text-slate-500">{label}</dt>
-      <dd className={cn("text-slate-700", clamp && "line-clamp-2")} title={clamp ? (value ?? undefined) : undefined}>
-        {value || "—"}
+    <div className="min-w-0">
+      <dt className={DRAWER_KEY}>{label}</dt>
+      <dd
+        className={cn("text-sm leading-5 text-ink-900", clamp && "line-clamp-2", capitalize && "capitalize")}
+        title={clamp ? (value ?? undefined) : undefined}
+      >
+        {value || <span className="text-ink-500">—</span>}
       </dd>
     </div>
   );
 }
 
+/** Una celda del marco de cifras del cajón, sobre `wash`. */
 function CompactMetric({
   label,
   value,
@@ -4468,20 +4499,18 @@ function CompactMetric({
   tone?: "neutral" | "positive" | "warning" | "negative";
 }) {
   return (
-    <div className="min-w-0 px-2.5 py-2">
-      <dt className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
-        {label}
-      </dt>
+    <div className="min-w-0 bg-wash px-3 py-2.5">
+      <dt className="truncate text-[13px] leading-5 text-ink-600">{label}</dt>
       <dd
         className={cn(
-          "mt-0.5 text-xs font-semibold tabular-nums",
+          "text-sm font-semibold leading-5 tabular-nums",
           tone === "positive"
-            ? "text-emerald-700"
+            ? "text-ok-fg"
             : tone === "warning"
-              ? "text-amber-700"
+              ? "text-warn-fg"
               : tone === "negative"
-                ? "text-rose-600"
-                : "text-slate-700",
+                ? "text-crit-fg"
+                : "text-ink-900",
         )}
       >
         {value || "—"}
@@ -4489,6 +4518,20 @@ function CompactMetric({
     </div>
   );
 }
+
+/** La etiqueta de un dato de solo lectura del cajón. */
+const DRAWER_KEY = "text-[13px] leading-5 text-ink-500";
+/** Etiqueta de campo del cajón: 13 px peso 500 sobre el control. */
+const DRAWER_LABEL = "grid gap-1.5 text-[13px] font-medium text-ink-700";
+const DRAWER_INPUT = cn(FIELD, "font-normal pointer-coarse:h-11");
+const DRAWER_TEXTAREA = cn(FIELD_BOX, "w-full px-3 py-2 font-normal leading-5");
+/** Una nota de apoyo dentro de una tarjeta, sobre `wash`. */
+const DRAWER_NOTE = "rounded-md bg-wash px-3 py-2 text-[13px] leading-relaxed text-ink-600";
+/**
+ * La tarjeta de la acción del momento: la de sección con el anillo azul de 2 px,
+ * como la próxima acción de la ficha del pedido.
+ */
+const ACTION_CARD = "rounded-lg bg-white p-4 shadow-control ring-2 ring-brand-600 sm:p-5";
 
 /**
  * The Aliclik NOTA parse can guess an order reference before it's actually
@@ -4509,11 +4552,11 @@ function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
   );
 
   return (
-    <div className="border-t border-slate-100 pt-2.5">
+    <div>
       <div className="flex items-center justify-between gap-3">
-        <p className="text-xs font-medium text-slate-600">Productos de Shopify</p>
+        <p className="text-[13px] font-medium leading-5 text-ink-700">Productos de Shopify</p>
         {order.line_items.length > 0 && (
-          <p className="shrink-0 text-xs tabular-nums text-slate-500">
+          <p className="shrink-0 text-[13px] leading-5 tabular-nums text-ink-500">
             {order.line_items.length} {order.line_items.length === 1 ? "producto" : "productos"}
             {" · "}
             {units} {units === 1 ? "unidad" : "unidades"}
@@ -4524,7 +4567,7 @@ function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
       {/* Mismo bloque que el Master de Pedidos. Estaba escrito dos veces, las
           dos sin variante ni precio, y divergiendo: acá se mostraba el SKU y
           allá no. Uno solo, o vuelven a separarse. */}
-      <OrderLineItems items={order.line_items} className="mt-1.5" />
+      <OrderLineItems items={order.line_items} className="mt-2" />
     </div>
   );
 }

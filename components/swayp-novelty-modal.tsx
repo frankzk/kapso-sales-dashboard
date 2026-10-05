@@ -1,9 +1,15 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { solveSwaypNovelty } from "@/app/dashboard/envios/actions";
 import { NOVELTY_ACTIONS, type NoveltyAction } from "@/lib/swayp-novelty";
 import { limaTodayKey } from "@/lib/shipments";
+import { cn } from "@/components/ui";
+import { Banner, FIELD, FIELD_BOX, OpsButton, OptionTile } from "@/components/ops-ui";
+import { IconX } from "@/components/icons";
+
+const LABEL = "grid gap-1.5 text-[13px] font-medium text-ink-700";
+const HELP = "text-[13px] font-normal leading-5 text-ink-500";
 
 /**
  * Responder una novedad de Swayp desde el drawer del envío.
@@ -40,6 +46,13 @@ export function SwaypNoveltyModal({
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const panel = useRef<HTMLDivElement>(null);
+
+  // El foco entra al abrir: el modal se monta dentro del cajón, y con teclado
+  // se quedaba detrás.
+  useEffect(() => {
+    panel.current?.focus({ preventScroll: true });
+  }, []);
 
   const meta = accion ? NOVELTY_ACTIONS[accion] : null;
   const needsDate = meta?.needsDate ?? false;
@@ -74,125 +87,129 @@ export function SwaypNoveltyModal({
     // Igual que el modal de Tanders: se monta dentro del drawer, que cierra al
     // click en su fondo. Sin frenar la propagación se cerraría también el envío.
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
+      className="fixed inset-0 z-40 grid place-items-center bg-ink-900/30 p-4"
       onClick={(e) => {
         e.stopPropagation();
         onClose();
       }}
     >
       <div
+        ref={panel}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="novedad-swayp-titulo"
+        tabIndex={-1}
+        style={{ outline: "none" }}
         onClick={(e) => e.stopPropagation()}
-        className="max-h-full w-full max-w-lg overflow-y-auto rounded-xl bg-white shadow-xl"
+        // Escape cierra ESTE modal y no el cajón de atrás: el cajón escucha la
+        // tecla en la ventana y respeta `defaultPrevented`.
+        onKeyDown={(e) => {
+          if (e.key !== "Escape") return;
+          e.preventDefault();
+          e.stopPropagation();
+          onClose();
+        }}
+        className="max-h-full w-full max-w-lg overflow-y-auto overscroll-contain rounded-lg bg-white shadow-pop"
       >
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
-          <div>
-            <p className="text-sm font-semibold text-slate-900">Resolver novedad de Swayp</p>
-            <p className="text-xs text-slate-500">
-              {guideCode ?? "Envío"}
-              {swaypGuide ? ` · guía ${swaypGuide}` : ""}
+        <header className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-line bg-white px-5 pb-3 pt-4">
+          <div className="min-w-0">
+            <h2 id="novedad-swayp-titulo" className="text-lg font-semibold leading-7 text-ink-900">
+              Resolver novedad de Swayp
+            </h2>
+            <p className="text-[13px] leading-5 text-ink-500">
+              <span className="font-mono text-ink-700">{guideCode ?? "Envío"}</span>
+              {swaypGuide ? <> · guía <span className="font-mono">{swaypGuide}</span></> : ""}
               {swaypState === 8 ? " · el mensajero marcó devolución" : ""}
             </p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700">
-            ✕
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Cerrar"
+            className="-mr-1.5 grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
+          >
+            <IconX aria-hidden className="size-4" />
           </button>
-        </div>
+        </header>
 
-        <div className="space-y-4 p-5">
+        <div className="space-y-5 px-5 py-4">
           {done ? (
-            <div className="space-y-2 rounded-lg bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
-              <p>{done}</p>
-              <p className="text-emerald-700">
-                El estado del envío lo va a confirmar Swayp por su cuenta; puede tardar unos minutos
-                en reflejarse.
+            <Banner tone="ok" role="status" title={done}>
+              <p>
+                El estado del envío lo va a confirmar Swayp por su cuenta; puede tardar unos minutos en
+                reflejarse.
               </p>
-              <button onClick={onClose} className="text-emerald-900 underline">
+              <OpsButton size="sm" onClick={onClose} className="mt-3 pointer-coarse:h-11">
                 Cerrar
-              </button>
-            </div>
+              </OpsButton>
+            </Banner>
           ) : (
             <>
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <div role="group" aria-labelledby="novedad-que-hacer" className="space-y-2">
+                <p id="novedad-que-hacer" className="text-sm font-semibold text-ink-900">
                   Qué hacer
-                </label>
-                <div className="space-y-2">
+                </p>
+                <div className="grid gap-2">
                   {(Object.keys(NOVELTY_ACTIONS) as NoveltyAction[]).map((key) => {
                     const option = NOVELTY_ACTIONS[key];
                     const blocked = option.isReturn && !canReturn;
                     return (
-                      <button
+                      <OptionTile
                         key={key}
-                        type="button"
+                        label={option.label}
+                        description={blocked ? "Necesitas el permiso de retornos y devoluciones." : option.hint}
+                        active={accion === key}
                         disabled={blocked}
                         onClick={() => setAccion(key)}
-                        className={`w-full rounded-lg border px-3 py-2 text-left text-sm disabled:opacity-40 ${
-                          accion === key
-                            ? "border-slate-900 bg-slate-50"
-                            : "border-slate-300 hover:bg-slate-50"
-                        }`}
-                      >
-                        <span className="font-medium text-slate-900">{option.label}</span>
-                        <span className="block text-xs text-slate-500">
-                          {blocked
-                            ? "Necesitas el permiso de retornos y devoluciones."
-                            : option.hint}
-                        </span>
-                      </button>
+                      />
                     );
                   })}
                 </div>
               </div>
 
               {needsDate && (
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Nueva fecha de entrega
-                  </label>
+                <label className={LABEL}>
+                  Nueva fecha de entrega
                   <input
                     type="date"
                     value={fecha}
                     min={minDate}
                     onChange={(e) => setFecha(e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    className={cn(FIELD, "font-normal sm:w-56 pointer-coarse:h-11")}
                   />
-                  <p className="mt-1 text-xs text-slate-400">
+                  <span className={HELP}>
                     Desde mañana: Swayp arma la ruta del día siguiente entre las 16:00 y las 17:00.
-                  </p>
-                </div>
+                  </span>
+                </label>
               )}
 
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Comentario para el mensajero
-                </label>
+              <label className={LABEL}>
+                Comentario para el mensajero
                 <textarea
                   value={comentario}
                   onChange={(e) => setComentario(e.target.value)}
                   rows={3}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  className={cn(FIELD_BOX, "w-full px-3 py-2 font-normal leading-5")}
                   placeholder="La clienta pidió que vuelvan por la tarde, hay portero."
                 />
-                <p className="mt-1 text-xs text-slate-400">
+                <span className={HELP}>
                   Swayp se lo muestra al mensajero: es lo único que va a leer antes de decidir.
-                </p>
-              </div>
+                </span>
+              </label>
 
               {error && (
-                <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+                <Banner tone="crit" role="alert">
+                  {error}
+                </Banner>
               )}
 
-              <div className="flex justify-end gap-2 pt-1">
-                <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm text-slate-600">
+              <div className="flex justify-end gap-2">
+                <OpsButton onClick={onClose} className="pointer-coarse:h-11">
                   Cancelar
-                </button>
-                <button
-                  onClick={submit}
-                  disabled={!canSubmit}
-                  className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
-                >
+                </OpsButton>
+                <OpsButton variant="primary" onClick={submit} disabled={!canSubmit} className="pointer-coarse:h-11">
                   {pending ? "Enviando…" : "Enviar a Swayp"}
-                </button>
+                </OpsButton>
               </div>
             </>
           )}
