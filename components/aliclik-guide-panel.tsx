@@ -30,7 +30,7 @@ import {
   Step,
   type BadgeTone,
 } from "@/components/ops-ui";
-import { IconChevronDown } from "@/components/icons";
+import { IconAlert, IconChevronDown } from "@/components/icons";
 import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
 import type { DuplicateHold } from "@/lib/aliclik-duplicate";
 import {
@@ -214,7 +214,7 @@ export function AliclikGuidePanel({
       : !duplicateAllowed
         ? "Resuelve primero la retención por posible duplicado, arriba."
         : !riskGate.allowed
-          ? riskGate.message
+          ? "Justifica la excepción de pago, arriba."
           : transportId === null
             ? "Elige una transportadora."
             : null;
@@ -227,8 +227,11 @@ export function AliclikGuidePanel({
     Math.abs((preview.collectTotal ?? 0) - preview.orderTotal) > 0.005;
   const place = (parts: (string | null | undefined)[]) => parts.filter(Boolean).join(", ");
 
+  // `@container`: el mismo panel vive en la tarjeta de la ficha (~790 px) y en
+  // la media columna del cajón de Leads (~400 px); las rejillas miran su ancho,
+  // no el de la ventana.
   return (
-    <div>
+    <div className="@container">
       <SectionHead
         title="Crear guía en Aliclik"
         help="Cotiza primero: la cotización no crea nada y sirve para confirmar cobertura y ubicación."
@@ -274,7 +277,6 @@ export function AliclikGuidePanel({
                   className={cn(FIELD_BOX, "w-full px-3 py-2 font-normal leading-5")}
                 />
               </label>
-              {!riskGate.allowed && <p className="mt-1.5 text-[13px] leading-5 text-warn-fg">{riskGate.message}</p>}
             </Banner>
           )}
 
@@ -334,9 +336,13 @@ export function AliclikGuidePanel({
                   id={`${uid}-coord`}
                   value={coordinate}
                   onChange={(e) => setCoordinate(e.target.value)}
-                  placeholder="Pega el enlace de Google Maps o -12.04318, -77.02824"
+                  placeholder="Enlace de Google Maps o coordenada"
+                  aria-describedby={`${uid}-coord-help`}
                   className={INPUT}
                 />
+                <span id={`${uid}-coord-help`} className={HELP}>
+                  Pega el enlace que mandó la clienta o la coordenada, por ejemplo -12.04318, -77.02824.
+                </span>
               </label>
               {shortened && (
                 <p className="text-[13px] leading-5 text-warn-fg">
@@ -365,8 +371,10 @@ export function AliclikGuidePanel({
               </Banner>
             )}
 
-            {/* EL PIN CONTRADICHO POR EL PEDIDO (§10). Va fuera de la revisión
-                porque cuando salta la cotización devuelve `ok: false`. No es el
+            {/* EL PIN CONTRADICHO POR EL PEDIDO (§10). Es el único bloqueo que va
+                dentro de un paso y no sobre ellos: es la respuesta de la propia
+                cotización, así que se lee junto a «Cotizar envío». Va fuera de
+                la revisión porque cuando salta la cotización devuelve `ok: false`. No es el
                 aviso de ubigeo, que es ámbar y sale en la mitad de los pedidos:
                 aquí el destino entero está en discusión, así que cierra la
                 emisión hasta que alguien escriba por qué el pin es el correcto. */}
@@ -408,7 +416,8 @@ export function AliclikGuidePanel({
                     las dos cosas que, si están mal, no tienen vuelta atrás: la
                     guía queda enganchada al pedido equivocado, o se le cobra de
                     más a la clienta en la puerta. */}
-                <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-md bg-line ring-1 ring-line">
+                <div className="overflow-hidden rounded-md ring-1 ring-line">
+                <dl className="grid grid-cols-2 gap-px bg-line">
                   <div className="bg-wash px-3 py-2.5">
                     <dt className="text-[13px] leading-5 text-ink-500">Pedido</dt>
                     <dd className="mt-0.5 font-mono text-base font-semibold leading-6 text-ink-900">
@@ -422,19 +431,20 @@ export function AliclikGuidePanel({
                     </dd>
                   </div>
                 </dl>
+                {/* Una nota de la operación, no un bloqueo: va pegada a la cifra
+                    que explica, en el lavado del marco. */}
                 {roundedDown && (
-                  <Banner tone="warn">
-                    <p>
-                      En Shopify el pedido son S/ {preview.orderTotal!.toFixed(2)}. Aliclik solo cobra importes enteros,
-                      y con esta cantidad de unidades el total exacto no se puede formar, así que se cobra{" "}
-                      <b className="font-semibold text-ink-900">
-                        S/ {Math.abs((preview.orderTotal ?? 0) - (preview.collectTotal ?? 0)).toFixed(2)} menos
-                      </b>
-                      . Nunca de más. Si quieres cobrar el importe exacto, ajústalo en el panel de Aliclik después de
-                      crear la guía.
-                    </p>
-                  </Banner>
+                  <p className="border-t border-line bg-wash px-3 py-2 text-[13px] leading-5 text-ink-600">
+                    En Shopify el pedido son S/ {preview.orderTotal!.toFixed(2)}. Aliclik solo cobra importes enteros, y
+                    con esta cantidad de unidades el total exacto no se puede formar, así que se cobra{" "}
+                    <b className="font-semibold text-ink-900">
+                      S/ {Math.abs((preview.orderTotal ?? 0) - (preview.collectTotal ?? 0)).toFixed(2)} menos
+                    </b>
+                    . Nunca de más. Si quieres cobrar el importe exacto, ajústalo en el panel de Aliclik después de crear
+                    la guía.
+                  </p>
                 )}
+                </div>
 
                 {/* El recojo se enseña siempre —la asesora se lo dice a la
                     clienta—; el pin de Aliclik contra el nuestro es el detector
@@ -476,6 +486,16 @@ export function AliclikGuidePanel({
                     </div>
                   )}
                 </dl>
+                {preview.warnings?.length ? (
+                  <ul className="space-y-1 text-[13px] leading-5 text-warn-fg">
+                    {preview.warnings.map((w) => (
+                      <li key={w} className="flex gap-1.5">
+                        <IconAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+                        {w}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
 
                 {/* Se marca cuando Aliclik va a fecharlo en domingo, el día que
                     no recogen y el que provoca la discusión con el motorizado. */}
@@ -494,19 +514,6 @@ export function AliclikGuidePanel({
                     <p>Comprueba la ubicación antes de crear: el reparto irá a donde apunta el pin, no a la dirección escrita.</p>
                   </Banner>
                 )}
-                {preview.warnings?.length ? (
-                  <Banner tone="warn">
-                    {preview.warnings.length === 1 ? (
-                      <p>{preview.warnings[0]}</p>
-                    ) : (
-                      <ul className="list-disc space-y-0.5 pl-4">
-                        {preview.warnings.map((w) => (
-                          <li key={w}>{w}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </Banner>
-                ) : null}
               </>
             )}
           </Step>
@@ -523,7 +530,7 @@ export function AliclikGuidePanel({
                 {/* El título del paso ya dice «Transportadora»: aquí solo el
                     nombre del grupo para el lector de pantalla. */}
                 <div role="group" aria-label="Transportadora">
-                  <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="grid gap-2 @lg:grid-cols-2">
                     {preview.couriers?.map((c) => (
                       <OptionTile
                         key={c.transportId}
@@ -535,11 +542,13 @@ export function AliclikGuidePanel({
                           </>
                         }
                         aside={`S/ ${c.deliveryCost.toFixed(2)}`}
-                        description={
-                          c.selectable
-                            ? `Devolución S/ ${c.returnCost.toFixed(2)}${c.addDays ? ` · +${c.addDays} día(s)` : ""}`
-                            : c.reason ?? "No se puede elegir para este pedido."
-                        }
+                        description={[
+                          `Devolución S/ ${c.returnCost.toFixed(2)}`,
+                          c.addDays ? `+${c.addDays} día(s)` : null,
+                          c.selectable ? null : c.reason ?? "No se puede elegir para este pedido.",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
                         active={transportId === c.transportId}
                         disabled={!c.selectable}
                         onClick={() => setTransportId(c.transportId)}

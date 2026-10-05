@@ -344,13 +344,17 @@ export function OptionTile({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "rounded-lg px-3 py-2.5 text-left transition-shadow disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:min-h-11",
+        // `flex-col`: en una rejilla la fila estira el botón, y un botón centra
+        // su contenido; así empieza arriba como sus vecinas.
+        "flex flex-col rounded-lg px-3 py-2.5 text-left transition-shadow disabled:cursor-not-allowed pointer-coarse:min-h-11",
         active
           ? "bg-brand-50 ring-2 ring-inset ring-brand-600"
           : "bg-white ring-1 ring-inset ring-line-strong hover:ring-ink-300",
       )}
     >
-      <span className="flex items-start justify-between gap-3">
+      {/* Apagada, se atenúa el título y no la explicación: el porqué de que no
+          se pueda elegir es justo lo que hay que leer. */}
+      <span className={cn("flex items-start justify-between gap-3", disabled && "opacity-50")}>
         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <span
             className={cn(

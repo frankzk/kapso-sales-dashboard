@@ -67,7 +67,7 @@ export function AliclikDuplicatePanel({ orderId, initialHold, onGateChange, onCh
   const verifying = !hold && !error;
   const cleared = Boolean(hold?.allowed && !error);
   return (
-    <section aria-label="Revisión de posible duplicado">
+    <section aria-label="Revisión de posible duplicado" className="@container">
       <Banner
         tone={verifying ? "info" : cleared ? "ok" : "crit"}
         title={
@@ -108,17 +108,21 @@ export function AliclikDuplicatePanel({ orderId, initialHold, onGateChange, onCh
         )}
         {hold?.conflicts.length ? (
           <>
-            <p className="mt-2">
-              Si quiere ambos: registra su confirmación y valida al menos {ADELANTO_MINIMO_LABEL} en este pedido. Si es
-              reemplazo: espera la recuperación física del anterior.
-            </p>
+            {/* Quien puede resolver lee lo mismo bajo cada opción; quien no,
+                necesita la regla escrita. */}
+            {!hold.canResolve && (
+              <p className="mt-2">
+                Si quiere ambos: registra su confirmación y valida al menos {ADELANTO_MINIMO_LABEL} en este pedido. Si
+                es reemplazo: espera la recuperación física del anterior.
+              </p>
+            )}
             {hold.canResolve && (
               <div className="mt-3 space-y-3">
                 <div role="group" aria-labelledby={`${id}-decision`}>
                   <p id={`${id}-decision`} className="text-[13px] font-medium leading-5 text-ink-700">
                     Resolución del caso
                   </p>
-                  <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
+                  <div className="mt-1.5 grid gap-2 @lg:grid-cols-2">
                     {(Object.entries(DUPLICATE_DECISIONS) as [DuplicateDecision, string][])
                       .filter(([key]) => key !== "exception" || hold.canOverride)
                       .map(([key, label]) => (
@@ -147,8 +151,9 @@ export function AliclikDuplicatePanel({ orderId, initialHold, onGateChange, onCh
                         className={cn(FIELD_BOX, "w-full px-3 py-2 font-normal leading-5")}
                       />
                     </label>
+                    {/* Secundario, como todo botón dentro de un aviso: el azul de
+                        la tarjeta es «Cotizar» o «Crear guía». */}
                     <OpsButton
-                      variant="primary"
                       onClick={save}
                       disabled={pending || reason.trim().length < 12}
                       className="pointer-coarse:h-11"
