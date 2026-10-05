@@ -2,7 +2,27 @@
 
 import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { cn, Card, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
+import { cn } from "@/components/ui";
+import {
+  Badge,
+  Banner,
+  ChoiceChip,
+  FIELD_BOX,
+  FilterPill,
+  OpsButton,
+  StatusCard,
+  opsButtonClass,
+  type BadgeTone,
+} from "@/components/ops-ui";
+import { ChoicePill, DatePill, FacetPill } from "@/components/facet-pill";
+import {
+  IconChevronRight,
+  IconDownload,
+  IconPackage,
+  IconPhone,
+  IconPlus,
+  IconRepeat,
+} from "@/components/icons";
 import { CopyButton } from "@/components/copy-button";
 import { OrderLineItems } from "@/components/order-line-items";
 // El mínimo del motivo de descarte lo define el servidor: acá se lee, no se
@@ -110,7 +130,6 @@ import {
   updateShipmentDeliveryAddress,
   type ShipmentAddressInput,
 } from "@/app/dashboard/envios/actions";
-import { ChecklistFilter } from "@/components/filters";
 import { OrderLinkPicker } from "@/components/order-link-picker";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { SwaypNoveltyModal } from "@/components/swayp-novelty-modal";
@@ -146,12 +165,17 @@ function IconArrowRight({ className }: { className?: string }) {
   );
 }
 
-const CATEGORY_BADGE: Record<string, string> = {
-  pending: "bg-amber-50 text-amber-700",
-  in_route: "bg-violet-50 text-violet-700",
-  delivered: "bg-emerald-50 text-emerald-700",
-  closed: "bg-slate-100 text-slate-600",
-  transferred: "bg-sky-50 text-sky-700",
+/**
+ * El tono de la chapa de estado (DESIGN.md, mundo de operación): pendiente es
+ * trabajo por hacer, en ruta está en camino, entregada terminó bien; cerrada y
+ * transferida ya no piden nada.
+ */
+const CATEGORY_TONE: Record<string, BadgeTone> = {
+  pending: "warn",
+  in_route: "info",
+  delivered: "ok",
+  closed: "neutral",
+  transferred: "neutral",
 };
 
 const DISPOSITIONS: { key: RerouteDisposition; label: string }[] = [
@@ -263,11 +287,12 @@ function tomorrowDateInputValue(): string {
 }
 
 /**
- * Segunda mitad del badge: «· Intento 3» en pendiente, «· por Swayp» en
+ * Segunda mitad del estado: «Intento 3» en pendiente, «por Swayp» en
  * entregado, y en una guía cerrada sin entregar, en qué quedó el PEDIDO:
- * «Anulado · Reproprovincia» mientras se puede reenviar, «· Recuperación
- * vencida» o «· Descartada» después. La primera mitad sigue siendo la guía —la
- * verdad del courier, que no se falsea—; la segunda es lo que hay que hacer.
+ * «Reproprovincia» mientras se puede reenviar, «Recuperación vencida» o
+ * «Descartada» después. La primera mitad sigue siendo la guía —la verdad del
+ * courier, que no se falsea—; la segunda es lo que hay que hacer. La tabla la
+ * pone bajo la chapa; el cajón y la lista, dentro («Anulado · Reproprovincia»).
  */
 function subState(s: {
   status_category: string;
@@ -275,10 +300,10 @@ function subState(s: {
   delivered_source: string | null;
   recovery?: RecoveryKind | null;
 }): string {
-  if (s.status_category === "pending") return ` · ${attemptLabel(s.reroute_attempts)}`;
+  if (s.status_category === "pending") return attemptLabel(s.reroute_attempts);
   if (s.status_category === "delivered" && s.delivered_source)
-    return ` · por ${s.delivered_source === "fenix" ? "Swayp" : "Aliclik"}`;
-  if (s.recovery) return ` · ${RECOVERY_LABEL[s.recovery]}`;
+    return `por ${s.delivered_source === "fenix" ? "Swayp" : "Aliclik"}`;
+  if (s.recovery) return RECOVERY_LABEL[s.recovery];
   return "";
 }
 
@@ -305,18 +330,14 @@ function StatusBadge({
 }: {
   category: string;
   status: string;
+  /** La segunda mitad (`subState`), dentro de la chapa. */
   suffix?: string;
 }) {
+  const text = suffix ? `${labelOf(status)} · ${suffix}` : labelOf(status);
   return (
-    <span
-      className={cn(
-        "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
-        CATEGORY_BADGE[category] ?? "bg-slate-100 text-slate-600",
-      )}
-    >
-      {labelOf(status)}
-      {suffix}
-    </span>
+    <Badge tone={CATEGORY_TONE[category] ?? "neutral"} title={text}>
+      {text}
+    </Badge>
   );
 }
 
@@ -837,8 +858,28 @@ export function ShipmentsBoard({
     { active: reprogFilter !== "all", reset: () => setReprogFilter("all") },
   ];
 
-  /** Cuántos filtros se apartan del valor por defecto: lo que muestra el botón de teléfono. */
+  /** Cuántos filtros se apartan de cómo abre la vista: lo que limpia «Limpiar filtros». */
   const activeFilters = clientFilters.filter((f) => f.active).length;
+
+  /**
+   * Cuántas píldoras están puestas —sólidas— en esta vista, contando las que la
+   * vista trae encendidas (Cobertura «Todo menos Lima», «Sin contactar hoy»).
+   * Es lo que dice la píldora «Filtros» del teléfono: plegados, esos dos
+   * acotaban la cola sin que nada lo dijera. La ruta y «Reprogramado por» no
+   * cuentan: están a la vista, sobre los filtros.
+   */
+  const pillsOn = [
+    storeFilter.size > 0,
+    coverageFilter.size > 0,
+    departmentFilter.size > 0,
+    districtFilter.size > 0,
+    Boolean(dateFilter),
+    fenixFilter !== "all",
+    unmatchedOnly,
+    view === "pendiente" && uncontactedTodayOnly,
+    view === "pendiente" && uncontactedOnly,
+    view === "pendiente" && soloPorRecuperar,
+  ].filter(Boolean).length;
 
   /** Devuelve los filtros a como abre la vista. `keepAcrossViews` conserva la tienda. */
   function resetClientFilters(opts?: { keepAcrossViews?: boolean }) {
@@ -851,16 +892,6 @@ export function ShipmentsBoard({
   function go(params: Record<string, string>) {
     const sp = new URLSearchParams({ view, ...params });
     router.push(`/dashboard/envios?${sp.toString()}`);
-  }
-
-  function toggleStore(id: string) {
-    setStoreFilter((prev) => {
-      const next = new Set(prev);
-      if (next.size === 0) stores.forEach((s) => next.add(s.id)); // "all" → start from all
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   }
 
   async function handleShipmentUpdated(id: string) {
@@ -945,68 +976,73 @@ export function ShipmentsBoard({
     }
   }
 
+  const scope =
+    stores.length === 1 ? `de ${stores[0]!.name}` : stores.length === 2 ? "de las dos tiendas" : `de las ${stores.length} tiendas`;
+  // «Todo menos Lima» es como abre la cola: la píldora lo dice con esas
+  // palabras y no como «Provincia COD +3», que obliga a abrirla para saberlo.
+  const coverageSummary = (selected: Set<string>) =>
+    sameSet(selected, reproCoverageDefault()) ? "Todo menos Lima" : null;
+
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-lg font-semibold text-slate-900">Envíos</h1>
-        {/* En teléfono la búsqueda ocupa el ancho entero y las acciones bajan a
-            su propia fila; en escritorio todo cabe en una línea. */}
-        <div className="flex w-full flex-wrap items-center gap-2 md:w-auto">
-          {/* global search */}
-          <div className="relative w-full md:w-auto">
-            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500">
-              <IconSearch />
-            </span>
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar guía, pedido, guía Swayp, celular…"
-              aria-label="Buscar guía, pedido, guía Swayp o celular"
-              className="w-full rounded-lg border border-slate-200 py-1.5 pl-8 pr-7 text-sm md:w-64"
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch("")}
-                aria-label="Limpiar búsqueda"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-800"
-              >
-                <IconClose />
-              </button>
-            )}
-          </div>
-          <a
-            href="/dashboard/envios/import"
-            className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
-          >
-            Importar reporte
-          </a>
-          <button
-            onClick={() => setDirectGuideOpen(true)}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Guía Swayp directa
-          </button>
-          <a
-            href="/dashboard/envios/stock"
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Stock Swayp
-          </a>
+    <div className="space-y-6">
+      {/* Título y contexto; debajo, la búsqueda y las cuatro acciones en una
+          fila. Al lado del título no caben: con la barra lateral, en 1.440 px
+          partían el contexto en una palabra por línea. */}
+      <header className="space-y-4">
+        <div className="min-w-0">
+          <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Repro Provincia</h1>
+          <p className="mt-1 text-sm text-ink-500">
+            La cola de reprogramación y las guías Aliclik y Swayp {scope}.
+          </p>
         </div>
-      </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+          <ShipmentSearch value={search} onChange={setSearch} />
+          {/* En el teléfono, las cuatro acciones en una rejilla de 2 × 2:
+              sueltas, dos quedaban solas en su fila. */}
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+            <a href="/dashboard/envios/import" className={opsButtonClass("primary", "md", "pointer-coarse:h-11")}>
+              Importar reporte
+            </a>
+            <OpsButton onClick={() => setDirectGuideOpen(true)} className="pointer-coarse:h-11">
+              <IconPlus className="text-ink-500" />
+              Guía Swayp directa
+            </OpsButton>
+            <a href="/dashboard/envios/stock" className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}>
+              <IconPackage className="text-ink-500" />
+              Stock Swayp
+            </a>
+            <a
+              href="/dashboard/envios/automatico"
+              aria-label="Automático Aliclik → Swayp"
+              className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}
+            >
+              <IconRepeat className="text-ink-500" />
+              <span className="sm:hidden">Automático</span>
+              <span className="hidden items-center gap-1 sm:inline-flex">
+                Automático Aliclik
+                <IconArrowRight className="text-ink-500" />
+                Swayp
+              </span>
+            </a>
+          </div>
+        </div>
+      </header>
 
       {/* LA COLA VA PRIMERO. Las métricas de 30 días y el marcador por asesora
           son lectura de dirección, no de quien marca el teléfono: cada apertura
           de Envíos costaba un scroll y una lectura antes de la primera guía.
           Siguen a un clic, plegadas, con los mismos datos. */}
       {(reprogram || todayByAgent || voiceScore) && (
-        <details className="group rounded-xl border border-slate-200 bg-white">
-          <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium text-slate-700 marker:text-slate-500">
-            Resumen: reprogramaciones, gestión de hoy y agentes de voz
+        <details className={cn(CARD, "group")}>
+          <summary className="flex min-h-12 cursor-pointer list-none items-center gap-2 rounded-lg px-4 text-sm transition-colors hover:bg-wash group-open:rounded-b-none sm:px-5 [&::-webkit-details-marker]:hidden">
+            <IconChevronRight
+              aria-hidden
+              className="size-4 shrink-0 text-ink-500 transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none"
+            />
+            <span className="font-semibold text-ink-900">Resumen</span>
+            <span className="min-w-0 truncate text-ink-500">reprogramaciones, gestión de hoy y agentes de voz</span>
           </summary>
-          <div className="space-y-3 border-t border-slate-100 p-3">
+          <div className="divide-y divide-line border-t border-line">
             {reprogram && <ReprogramStrip stats={reprogram} stores={stores} />}
             {todayByAgent && <TodayByAgentPanel rows={todayByAgent} />}
             {voiceScore && <VoiceScorePanel initial={voiceScore} />}
@@ -1015,18 +1051,25 @@ export function ShipmentsBoard({
       )}
 
       {searchActive ? (
-        <Card className="p-0">
-          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
-            <p className="text-sm font-medium text-slate-800">
-              Resultados de búsqueda {results ? `(${results.length})` : ""}
+        <section aria-label="Resultados de búsqueda" className={CARD}>
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
+            <p role="status" className="text-sm text-ink-700">
+              {searching ? (
+                "Buscando…"
+              ) : results ? (
+                <>
+                  <b className="font-semibold tabular-nums text-ink-900">{results.length.toLocaleString("es-PE")}</b>{" "}
+                  {results.length === 1 ? "resultado" : "resultados"} de búsqueda
+                </>
+              ) : (
+                "La búsqueda no respondió. Escribe de nuevo para reintentar."
+              )}
             </p>
-            <button onClick={() => setSearch("")} className="text-xs text-slate-500 hover:underline">
+            <OpsButton variant="ghost" size="sm" onClick={() => setSearch("")} className="pointer-coarse:h-11">
               Limpiar búsqueda
-            </button>
+            </OpsButton>
           </div>
-          {searching ? (
-            <p className="p-5 text-sm text-slate-500">Buscando…</p>
-          ) : results && results.length > 0 ? (
+          {searching ? null : results && results.length > 0 ? (
             <ShipmentTable
               rows={searchOrder ?? results}
               stores={stores}
@@ -1038,180 +1081,156 @@ export function ShipmentsBoard({
               liveFor={liveFor}
               sort={sort}
               onSort={toggleSort}
+              showRoute
             />
-          ) : (
-            <p className="p-5 text-sm text-slate-500">Sin coincidencias.</p>
-          )}
-        </Card>
+          ) : results ? (
+            <p className="border-t border-line px-4 py-8 text-sm text-ink-500 sm:px-5">
+              Sin coincidencias. Prueba con el número de guía, el pedido, la guía Swayp o el celular.
+            </p>
+          ) : null}
+        </section>
       ) : (
         <>
-          {/* tabs: en teléfono una tira que se desliza con el pulgar (seis
-              pestañas no caben en 360 px sin partirse en tres filas). */}
-          <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 md:mx-0 md:flex-wrap md:overflow-visible md:px-0">
-            {SHIPMENT_VIEWS.map((v) => (
-              <button
-                key={v.key}
-                onClick={() => go({ view: v.key })}
-                // La pestaña activa se señalaba solo con color: un lector de
-                // pantalla leía seis botones iguales.
-                aria-current={v.key === view ? "page" : undefined}
-                className={cn(
-                  "shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition",
-                  v.key === view ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50",
-                )}
+          {/* Las vistas son la navegación: seis cifras que llevan a su lista,
+              como las macroetapas del Master. La elegida lleva el borde azul. */}
+          <section aria-label="Estado de las guías" className="space-y-3">
+            <div role="group" aria-label="Vista" className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+              {SHIPMENT_VIEWS.map((v) => (
+                <StatusCard
+                  key={v.key}
+                  label={v.label}
+                  value={counts[v.key]}
+                  active={v.key === view}
+                  onClick={() => go({ view: v.key })}
+                />
+              ))}
+            </div>
+
+            {/* LA RUTA ES LA PRIMERA PREGUNTA DE LA COLA: ¿todavía entra por
+                Aliclik o tiene que salir por Swayp? Era un desplegable con el
+                nombre «Gestión»; ahora son las cifras, a la vista, y filtran. */}
+            {view === "pendiente" && (
+              <div role="group" aria-label="Ruta sugerida" className="flex flex-wrap items-center gap-1.5">
+                <span className="mr-1 text-[13px] font-medium text-ink-600">Ruta</span>
+                <ChoiceChip
+                  label="Todas"
+                  count={filteredWithoutAliclikRoute.length}
+                  active={aliclikRouteFilter === "all"}
+                  onClick={() => setAliclikRouteFilter("all")}
+                />
+                <ChoiceChip
+                  label="Aliclik disponible"
+                  count={aliclikRouteCounts.aliclikAvailable}
+                  active={aliclikRouteFilter === "aliclik_available"}
+                  onClick={() => setAliclikRouteFilter("aliclik_available")}
+                />
+                <ChoiceChip
+                  label="Swayp requerido"
+                  count={aliclikRouteCounts.fenixRequired}
+                  active={aliclikRouteFilter === "fenix_required"}
+                  onClick={() => setAliclikRouteFilter("fenix_required")}
+                />
+              </div>
+            )}
+            {/* En ruta y Entregado: de las reprogramadas, por quién salieron. */}
+            {showReprogFilter && (
+              <div role="group" aria-label="Reprogramado por" className="flex flex-wrap items-center gap-1.5">
+                <span className="mr-1 text-[13px] font-medium text-ink-600">Reprogramado por</span>
+                <ChoiceChip
+                  label="Todas"
+                  active={reprogFilter === "all"}
+                  onClick={() => setReprogFilter("all")}
+                />
+                <ChoiceChip
+                  label="Aliclik"
+                  count={reprogCounts.aliclik}
+                  active={reprogFilter === "aliclik"}
+                  onClick={() => setReprogFilter("aliclik")}
+                />
+                <ChoiceChip
+                  label="Swayp"
+                  count={reprogCounts.fenix}
+                  active={reprogFilter === "fenix"}
+                  onClick={() => setReprogFilter("fenix")}
+                />
+              </div>
+            )}
+          </section>
+
+          {/* Filtros: píldoras discontinuas que se vuelven sólidas con su valor,
+              como en el Master. Dos preguntas en una fila: qué guías entran
+              (tienda, cobertura, departamento, distrito, programación, Swayp) y
+              en qué punto de la gestión están (los interruptores). En teléfono
+              esperan detrás de una sola píldora. */}
+          {view !== "revision" && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2 md:hidden">
+                <FilterPill
+                  label="Filtros"
+                  active={pillsOn > 0}
+                  count={pillsOn > 0 ? pillsOn : undefined}
+                  expanded={filtersOpen}
+                  onClick={() => setFiltersOpen((v) => !v)}
+                />
+              </div>
+              <div
+                role="group"
+                aria-label="Filtros"
+                className={cn("flex-wrap items-center gap-2", filtersOpen ? "flex" : "hidden md:flex")}
               >
-                {v.label}
-                <span className="ml-1.5 text-xs text-slate-500">{counts[v.key]}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* filters: store chips + district multi-select + programación date */}
-          {view !== "revision" && (
-            <button
-              type="button"
-              onClick={() => setFiltersOpen((v) => !v)}
-              aria-expanded={filtersOpen}
-              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 md:hidden"
-            >
-              {filtersOpen ? "Ocultar filtros" : "Filtros"}
-              {activeFilters > 0 && (
-                <span className="ml-1.5 rounded-full bg-brand-50 px-1.5 text-xs font-semibold text-brand-700">
-                  {activeFilters}
-                </span>
-              )}
-            </button>
-          )}
-          {view !== "revision" && (
-            /* ONCE CONTROLES EN UNA SOLA FILA no eran once filtros: eran una
-               pared. Van en dos grupos con nombre —«Alcance» (qué guías entran)
-               y «Gestión» (en qué punto están)— porque son dos preguntas
-               distintas, y las acciones (Excel, limpiar) quedan aparte. */
-            <div
-              className={cn(
-                "flex-col gap-2 md:flex-row md:flex-wrap md:items-start",
-                filtersOpen ? "flex" : "hidden md:flex",
-              )}
-            >
-            <fieldset className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-1.5">
-              <legend className="px-1 text-xs font-medium text-slate-500">Alcance</legend>
-              {stores.length > 1 && (
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs text-slate-500">
-                    Tienda{storeFilter.size === 0 ? " (todas)" : ""}:
-                  </span>
-                  {stores.map((s) => {
-                    const active = storeFilter.size === 0 || storeFilter.has(s.id);
-                    return (
-                      <button
-                        key={s.id}
-                        onClick={() => toggleStore(s.id)}
-                        // Un chip que se enciende y apaga es un interruptor, y
-                        // así hay que anunciarlo: antes la selección vivía solo
-                        // en el color.
-                        aria-pressed={active}
-                        className={cn(
-                          "rounded-full border px-2.5 py-1 text-xs font-medium transition",
-                          active
-                            ? "border-brand-200 bg-brand-50 text-brand-700"
-                            : "border-slate-200 bg-white text-slate-500",
-                        )}
-                      >
-                        {s.name}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              <ChecklistFilter
-                label="Cobertura"
-                options={[...REPRO_COVERAGE_OPTIONS]}
-                selected={coverageFilter}
-                onChange={setCoverageFilter}
-                optionLabel={reproCoverageLabel}
-                capitalize={false}
-              />
-              {departmentOptions.length > 1 && (
-                <ChecklistFilter
-                  label="Departamento"
-                  options={departmentOptions}
-                  selected={departmentFilter}
-                  onChange={setDepartmentFilter}
+                {stores.length > 1 && (
+                  <FacetPill
+                    label="Tienda"
+                    allLabel="Todas las tiendas"
+                    options={stores.map((s) => ({ value: s.id, label: s.name }))}
+                    selected={storeFilter}
+                    onChange={setStoreFilter}
+                  />
+                )}
+                <FacetPill
+                  label="Cobertura"
+                  allLabel="Todas las coberturas"
+                  options={REPRO_COVERAGE_OPTIONS.map((key) => ({ value: key, label: reproCoverageLabel(key) }))}
+                  selected={coverageFilter}
+                  onChange={setCoverageFilter}
+                  summarize={coverageSummary}
                 />
-              )}
-              {districtOptions.length > 1 && (
-                <ChecklistFilter
-                  label="Distrito"
-                  options={districtOptions}
-                  selected={districtFilter}
-                  onChange={setDistrictFilter}
-                />
-              )}
-              <label className="flex items-center gap-1.5 text-xs text-slate-500">
-                Programación:
-                <input
-                  type="date"
+                {departmentOptions.length > 1 && (
+                  <FacetPill
+                    label="Departamento"
+                    allLabel="Todos los departamentos"
+                    options={departmentOptions.map((d) => ({ value: d, label: d }))}
+                    selected={departmentFilter}
+                    onChange={setDepartmentFilter}
+                  />
+                )}
+                {districtOptions.length > 1 && (
+                  <FacetPill
+                    label="Distrito"
+                    allLabel="Todos los distritos"
+                    options={districtOptions.map((d) => ({ value: d, label: d }))}
+                    selected={districtFilter}
+                    onChange={setDistrictFilter}
+                  />
+                )}
+                <DatePill
+                  label="Programación"
                   value={dateFilter}
-                  onChange={(e) => setDateFilter(e.target.value)}
-                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
+                  onChange={setDateFilter}
+                  today={localDateInputValue()}
+                  tomorrow={tomorrowDateInputValue()}
                 />
-              </label>
-            </fieldset>
-
-            <fieldset className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-1.5">
-              <legend className="px-1 text-xs font-medium text-slate-500">Gestión</legend>
-              {view === "en_ruta" && (
-                <button
-                  type="button"
-                  onClick={downloadFenixProgrammingWorkbook}
-                  disabled={!dateFilter || !fenixRowsForExport.length || exportingFenix}
-                  title={
-                    !dateFilter
-                      ? "Elige primero la fecha de programación"
-                      : !fenixRowsForExport.length
-                        ? "No hay guías Swayp visibles para esa fecha"
-                        : "Descarga las guías Swayp que quedan en la lista"
-                  }
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {exportingFenix
-                    ? "Generando Excel…"
-                    : !dateFilter
-                      ? "Elige fecha para Excel"
-                      : `Descargar Excel Swayp (${fenixRowsForExport.length})`}
-                </button>
-              )}
-              {view === "pendiente" && (
-                <label className="flex items-center gap-1.5 text-xs text-slate-500">
-                  Gestión:
-                  <select
-                    value={aliclikRouteFilter}
-                    onChange={(e) => setAliclikRouteFilter(e.target.value as AliclikRouteFilter)}
-                    className={cn(
-                      "rounded-lg border px-2 py-1 text-xs font-medium",
-                      aliclikRouteFilter === "aliclik_available"
-                        ? "border-brand-200 bg-brand-50 text-brand-700"
-                        : aliclikRouteFilter === "fenix_required"
-                          ? "border-brand-200 bg-brand-50 text-brand-700"
-                          : "border-slate-200 bg-white text-slate-700",
-                    )}
-                  >
-                    <option value="all">Todas las rutas</option>
-                    <option value="aliclik_available">
-                      Aliclik disponible ({aliclikRouteCounts.aliclikAvailable})
-                    </option>
-                    <option value="fenix_required">
-                      Swayp requerido ({aliclikRouteCounts.fenixRequired})
-                    </option>
-                  </select>
-                </label>
-              )}
-              <label className="flex items-center gap-1.5 text-xs text-slate-500">
-                Swayp:
-                <select
+                <ChoicePill<FenixAvailabilityFilter>
+                  label="Swayp"
+                  allLabel="Con y sin stock Swayp"
+                  allValue="all"
                   value={fenixFilter}
-                  onChange={(e) => {
-                    const next = e.target.value as FenixAvailabilityFilter;
+                  options={[
+                    { value: "ok", label: "Swayp ok · con stock" },
+                    { value: "sin_stock", label: "Sin stock Swayp" },
+                    { value: "sin_cobertura", label: "Fuera de cobertura" },
+                  ]}
+                  onChange={(next) => {
                     setFenixFilter(next);
                     // «Sin stock» y «Fuera de cobertura» son preguntas sobre
                     // TODO el país, así que se quita la provincia. Se hacía en
@@ -1223,156 +1242,136 @@ export function ShipmentsBoard({
                       setFilterNotice(null);
                     }
                   }}
-                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
-                >
-                  <option value="all">Todos</option>
-                  <option value="ok">Swayp ok · con stock</option>
-                  <option value="sin_stock">Sin stock Swayp</option>
-                  <option value="sin_cobertura">Fuera de cobertura</option>
-                </select>
-              </label>
-              {showReprogFilter && (
-                <label className="flex items-center gap-1.5 text-xs text-slate-500">
-                  Reprogramado por:
-                  <select
-                    value={reprogFilter}
-                    onChange={(e) => setReprogFilter(e.target.value as "all" | ReprogramCourier)}
-                    className={cn(
-                      "rounded-lg border px-2 py-1 text-xs font-medium",
-                      reprogFilter === "aliclik"
-                        ? "border-brand-200 bg-brand-50 text-brand-700"
-                        : reprogFilter === "fenix"
-                          ? "border-brand-200 bg-brand-50 text-brand-700"
-                          : "border-slate-200 bg-white text-slate-700",
-                    )}
-                  >
-                    <option value="all">Aliclik y Swayp</option>
-                    <option value="aliclik">Aliclik ({reprogCounts.aliclik})</option>
-                    <option value="fenix">Swayp ({reprogCounts.fenix})</option>
-                  </select>
-                </label>
-              )}
-              <label className="flex items-center gap-1.5 text-xs text-slate-600">
-                <input
-                  type="checkbox"
-                  checked={unmatchedOnly}
-                  onChange={(e) => setUnmatchedOnly(e.target.checked)}
-                  className="rounded border-slate-300"
                 />
-                Solo sin pedido
-              </label>
-              {view === "pendiente" && (
-                <>
-                  {/* La regla vivía en un `title`: con teclado o en táctil no
-                      existía. El nombre la resume y `aria-describedby` la dice
-                      entera, en un texto que también se ve al activar el chip. */}
-                  <label className="flex items-center gap-1.5 text-xs text-slate-600">
-                    <input
-                      type="checkbox"
-                      checked={soloPorRecuperar}
-                      onChange={(e) => setSoloPorRecuperar(e.target.checked)}
-                      aria-describedby="filtro-por-recuperar"
-                      className="rounded border-slate-300"
+                {/* Los interruptores: un toque los enciende y otro los apaga. «Sin
+                    contactar hoy» arranca encendido en Pendiente, que es como se
+                    trabaja la cola: las que ya se llamaron vuelven mañana. */}
+                {view === "pendiente" && (
+                  <>
+                    <FilterPill
+                      label="Sin contactar hoy"
+                      active={uncontactedTodayOnly}
+                      pressed={uncontactedTodayOnly}
+                      onClick={() => setUncontactedTodayOnly((v) => !v)}
+                      title="Las guías ya llamadas hoy vuelven a la cola mañana"
                     />
-                    Por recuperar (cerradas sin entregar)
-                  </label>
-                  <span
-                    id="filtro-por-recuperar"
-                    className={cn("text-xs text-slate-500", !soloPorRecuperar && "sr-only")}
+                    <FilterPill
+                      label="Nunca contactadas"
+                      active={uncontactedOnly}
+                      pressed={uncontactedOnly}
+                      onClick={() => setUncontactedOnly((v) => !v)}
+                      title="Sin una sola llamada registrada"
+                    />
+                    <FilterPill
+                      label="Por recuperar"
+                      active={soloPorRecuperar}
+                      pressed={soloPorRecuperar}
+                      onClick={() => setSoloPorRecuperar((v) => !v)}
+                      describedBy="filtro-por-recuperar"
+                    />
+                  </>
+                )}
+                <FilterPill
+                  label="Sin pedido vinculado"
+                  active={unmatchedOnly}
+                  pressed={unmatchedOnly}
+                  onClick={() => setUnmatchedOnly((v) => !v)}
+                  title="Guías que todavía no están unidas a un pedido de Shopify"
+                />
+                {activeFilters > 0 && (
+                  <OpsButton
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      resetClientFilters();
+                      setFilterNotice(null);
+                    }}
+                    className="pointer-coarse:h-11"
                   >
-                    Aliclik las cerró sin entregar y el pedido sigue en ventana de recuperación: admite
-                    una salida Swayp. Las vencidas y las descartadas ya no están en esta cola.
-                  </span>
-                  <label className="flex items-center gap-1.5 text-xs text-slate-600">
-                    <input
-                      type="checkbox"
-                      checked={uncontactedTodayOnly}
-                      onChange={(e) => setUncontactedTodayOnly(e.target.checked)}
-                      className="rounded border-slate-300"
-                    />
-                    Sin contactar hoy (vuelven mañana)
-                  </label>
-                  <label className="flex items-center gap-1.5 text-xs text-slate-600">
-                    <input
-                      type="checkbox"
-                      checked={uncontactedOnly}
-                      onChange={(e) => setUncontactedOnly(e.target.checked)}
-                      className="rounded border-slate-300"
-                    />
-                    Nunca contactadas (sin una sola llamada)
-                  </label>
-                </>
-              )}
-            </fieldset>
-
-              {activeFilters > 0 && (
-                <button
-                  onClick={() => {
-                    resetClientFilters();
-                    setFilterNotice(null);
-                  }}
-                  className="self-center text-xs text-slate-500 hover:underline"
+                    Limpiar filtros
+                  </OpsButton>
+                )}
+              </div>
+              {/* La regla vivía en un `title`: con teclado o en táctil no
+                  existía. La píldora la anuncia con `aria-describedby` y, al
+                  encenderla, se lee entera. */}
+              {view === "pendiente" && (
+                <p
+                  id="filtro-por-recuperar"
+                  className={cn("max-w-[68ch] text-[13px] leading-5 text-ink-600", !soloPorRecuperar && "sr-only")}
                 >
-                  Limpiar filtros
-                </button>
+                  Aliclik las cerró sin entregar y el pedido sigue en ventana de recuperación: admite
+                  una salida Swayp. Las vencidas y las descartadas ya no están en esta cola.
+                </p>
               )}
-            </div>
-          )}
-          {filterNotice && (
-            <p role="status" className="text-xs text-amber-800">
-              {filterNotice}
-            </p>
-          )}
-          {/* El tamaño de la cola vivía dentro del bloque de filtros, que en
-              teléfono está plegado: se trabajaba sin saber cuántas quedaban.
-              Va fuera y en una región viva, para que filtrar se anuncie. */}
-          {view !== "revision" && (
-            <p role="status" className="text-xs text-slate-500">
-              {filtered.length === shipments.length
-                ? `${shipments.length} guías en esta vista`
-                : `${filtered.length} de ${shipments.length} guías pasan los filtros`}
-              {/* LOS ATAJOS EXISTÍAN SOLO EN LOS COMENTARIOS DEL CÓDIGO. Cuatro
-                  teclas que nadie podía descubrir no son una función. */}
-              <span className="ml-2 hidden text-slate-500 md:inline">
-                ·{" "}
-                <kbd className="rounded border border-slate-200 bg-slate-50 px-1 font-sans">j</kbd>
-                <kbd className="ml-0.5 rounded border border-slate-200 bg-slate-50 px-1 font-sans">k</kbd>{" "}
-                para moverte,{" "}
-                <kbd className="rounded border border-slate-200 bg-slate-50 px-1 font-sans">Enter</kbd>{" "}
-                para abrir,{" "}
-                <kbd className="rounded border border-slate-200 bg-slate-50 px-1 font-sans">n</kbd>{" "}
-                para la siguiente
-              </span>
-            </p>
-          )}
-          {fenixExportError && (
-            <div
-              role="alert"
-              className="flex items-start justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800"
-            >
-              <span className="break-words">{fenixExportError}</span>
-              <button
-                type="button"
-                onClick={() => setFenixExportError(null)}
-                className="shrink-0 font-semibold text-rose-700 hover:underline"
-              >
-                Cerrar
-              </button>
+              {filterNotice && (
+                <Banner tone="warn" role="status">
+                  {filterNotice}
+                </Banner>
+              )}
             </div>
           )}
 
           {view === "revision" ? (
-            <Card>
-              <p className="text-sm text-slate-500">
+            <section aria-label="Revisión" className={cn(CARD, "px-4 py-4 sm:px-5")}>
+              <p className="text-sm text-ink-700">
                 Las filas por revisar se gestionan desde{" "}
-                <a className="text-brand-700 underline" href="/dashboard/envios/import">
+                <a className="font-medium text-brand-700 underline-offset-2 hover:underline" href="/dashboard/envios/import">
                   Importar reporte
                 </a>
                 .
               </p>
-            </Card>
+            </section>
           ) : (
-            <Card className="p-0">
+            <section aria-label="Guías" className={CARD}>
+              <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
+                {/* El tamaño de la cola en una región viva, para que filtrar se
+                    anuncie; y los atajos a la vista, que solo existían en los
+                    comentarios del código. */}
+                <p role="status" className="text-sm text-ink-700">
+                  <b className="font-semibold tabular-nums text-ink-900">{filtered.length.toLocaleString("es-PE")}</b>{" "}
+                  {filtered.length === shipments.length
+                    ? `${filtered.length === 1 ? "guía" : "guías"} en esta vista`
+                    : `de ${shipments.length.toLocaleString("es-PE")} guías pasan los filtros`}
+                  <span className="hidden text-ink-500 xl:inline">
+                    {" · "}
+                    <kbd className={KBD}>j</kbd> <kbd className={KBD}>k</kbd> para moverte,{" "}
+                    <kbd className={KBD}>Enter</kbd> para abrir, <kbd className={KBD}>n</kbd> para la siguiente
+                  </span>
+                </p>
+                {view === "en_ruta" && (
+                  <OpsButton
+                    size="sm"
+                    onClick={downloadFenixProgrammingWorkbook}
+                    disabled={!dateFilter || !fenixRowsForExport.length || exportingFenix}
+                    title={
+                      !dateFilter
+                        ? "Elige primero la fecha de programación"
+                        : !fenixRowsForExport.length
+                          ? "No hay guías Swayp visibles para esa fecha"
+                          : "Descarga las guías Swayp que quedan en la lista"
+                    }
+                    className="pointer-coarse:h-11"
+                  >
+                    <IconDownload className="text-ink-500" />
+                    {exportingFenix
+                      ? "Generando Excel…"
+                      : !dateFilter
+                        ? "Elige la programación para el Excel"
+                        : `Descargar Excel Swayp (${fenixRowsForExport.length})`}
+                  </OpsButton>
+                )}
+              </div>
+              {fenixExportError && (
+                <Banner tone="crit" role="alert" className="mx-4 mb-3 sm:mx-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="break-words">{fenixExportError}</span>
+                    <OpsButton variant="ghost" size="sm" onClick={() => setFenixExportError(null)} className="-my-1 shrink-0 pointer-coarse:h-11">
+                      Cerrar
+                    </OpsButton>
+                  </div>
+                </Banner>
+              )}
               {voiceNow && (
                 <VoiceNowLine
                   status={voiceNow}
@@ -1381,9 +1380,24 @@ export function ShipmentsBoard({
                 />
               )}
               {filtered.length === 0 ? (
-                <p className="p-5 text-sm text-slate-500">
-                  {shipments.length === 0 ? "Sin envíos en esta vista." : "Ningún envío con esos filtros."}
-                </p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line px-4 py-8 sm:px-5">
+                  <p className="text-sm text-ink-500">
+                    {shipments.length === 0 ? "Sin guías en esta vista." : "Ninguna guía con esos filtros."}
+                  </p>
+                  {/* Una lista vacía por los filtros trae su salida al lado. */}
+                  {activeFilters > 0 && (
+                    <OpsButton
+                      size="sm"
+                      onClick={() => {
+                        resetClientFilters();
+                        setFilterNotice(null);
+                      }}
+                      className="pointer-coarse:h-11"
+                    >
+                      Limpiar filtros
+                    </OpsButton>
+                  )}
+                </div>
               ) : (
                 <ShipmentTable
                   rows={queueOrder}
@@ -1396,9 +1410,10 @@ export function ShipmentsBoard({
                   liveFor={liveFor}
                   sort={sort}
                   onSort={toggleSort}
+                  showRoute={view === "pendiente"}
                 />
               )}
-            </Card>
+            </section>
           )}
         </>
       )}
@@ -1449,9 +1464,68 @@ export function ShipmentsBoard({
   );
 }
 
+/** Tarjeta blanca del mundo de operación: la de trabajo, la de resultados y el resumen. */
+const CARD = "rounded-lg bg-white shadow-control ring-1 ring-line";
+/** Una tecla, como la escribe la documentación de Stripe. */
+const KBD = "rounded border border-line bg-wash px-1 font-sans text-xs text-ink-700";
+
+/**
+ * El buscador de la cola: a todo el ancho en el teléfono, 320 px en escritorio,
+ * y «/» lo enfoca desde cualquier parte del tablero, como en el Master.
+ */
+function ShipmentSearch({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog']")) return;
+      e.preventDefault();
+      input.current?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  return (
+    <div role="search" className="relative w-full sm:w-64">
+      <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-500">
+        <IconSearch />
+      </span>
+      <input
+        ref={input}
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && value) onChange("");
+        }}
+        enterKeyHint="search"
+        aria-keyshortcuts="/"
+        title="Atajo: /"
+        placeholder="Buscar guía, pedido o celular…"
+        aria-label="Buscar guía, pedido, guía Swayp o celular"
+        className={cn(FIELD_BOX, "h-9 w-full pl-8 pr-9 pointer-coarse:h-11 [&::-webkit-search-cancel-button]:hidden")}
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => {
+            onChange("");
+            input.current?.focus();
+          }}
+          aria-label="Limpiar búsqueda"
+          className="absolute right-1 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:right-0 pointer-coarse:size-11"
+        >
+          <IconClose />
+        </button>
+      )}
+    </div>
+  );
+}
+
 /**
  * Filas que se pintan de una vez. Pendiente trae 3.089 y Entregado 4.042: a
- * once celdas y un botón por fila son más de 30.000 nodos, y el navegador los
+ * ocho celdas y un botón por fila son más de 25.000 nodos, y el navegador los
  * maqueta todos aunque la pantalla muestre veinte. Se pintan las primeras 200
  * —ordenadas y filtradas sobre el conjunto ENTERO, no sobre la ventana— y un
  * botón trae 200 más o todas. Nada se esconde: el contador de arriba sigue
@@ -1460,6 +1534,33 @@ export function ShipmentsBoard({
 const VISIBLE_STEP = 200;
 
 export type ShipmentSort = { key: ShipmentSortKey; direction: ShipmentSortDirection } | null;
+
+/**
+ * Encabezado y celda de la cola, los del Master: 12 px semibold entre
+ * hairlines, celdas de dos líneas. La tabla va en `border-separate` para que
+ * las hairlines del encabezado fijo viajen con él al hacer scroll.
+ */
+const TH =
+  "sticky top-0 z-10 border-y border-line bg-white py-2 text-left align-top text-xs font-semibold text-ink-600";
+const TD = "border-b border-line py-2.5 align-top group-last/row:border-b-0";
+/**
+ * El relleno lateral de las celdas: 8 px hasta 1.440 px y 12 desde ahí; en los
+ * bordes de la tarjeta, 20. Va aparte de TH y TD porque `cn` no resuelve
+ * conflictos: un `px-*` con variante pisaría el `pl-5` de la primera columna.
+ */
+const CELL_X = "px-2 min-[1440px]:px-3";
+const FIRST_X = "pl-5 pr-2 min-[1440px]:pr-3";
+const LAST_X = "pl-2 pr-5 min-[1440px]:pl-3";
+/** La segunda línea de una celda: el dato que acompaña al principal. */
+const SUBLINE = "text-[13px] leading-5 text-ink-500";
+/**
+ * « · » con espacio duro delante: el punto se queda con la palabra anterior y,
+ * si la línea se parte, ninguna empieza por «·». Los códigos crudos del
+ * courier («WRONG_ADDRESS») pueden partirse tras cada «_», para que no haga
+ * falta cortarlos por cualquier letra.
+ */
+const DOT = "\u00a0· ";
+const keepDots = (text: string) => text.replace(/ · /g, DOT).replace(/_/g, "_\u200b");
 
 /** Cada cuánto se pregunta por las llamadas del agente en curso. */
 const LIVE_POLL_MS = 5_000;
@@ -1528,7 +1629,8 @@ function useVoiceLiveStatus(enabled: boolean): VoiceLiveStatus | null {
 
 /**
  * La nota de la fila en llamada. Lleva su propio reloj: el tiempo corre cada
- * segundo sin repintar la tabla entera.
+ * segundo sin repintar la tabla entera. Hablando, el par `ok` con el punto que
+ * late (quieto con movimiento reducido); marcando, el par `info`.
  */
 function LiveCallChip({ call, className }: { call: LiveVoiceCall; className?: string }) {
   const [now, setNow] = useState(() => Date.now());
@@ -1540,20 +1642,20 @@ function LiveCallChip({ call, className }: { call: LiveVoiceCall; className?: st
   return (
     <span
       className={cn(
-        "w-fit items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 py-0.5 font-sans text-xs font-medium",
-        talking ? "bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-200" : "bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200",
+        "w-fit items-center gap-1.5 whitespace-nowrap rounded px-1.5 py-0.5 font-sans text-xs font-medium",
+        talking ? "bg-ok-bg text-ok-fg" : "bg-info-bg text-info-fg",
         className,
       )}
       title={talking ? `${call.agent} está hablando con la clienta` : `${call.agent} está marcando`}
     >
       <span className="relative flex size-2 shrink-0" aria-hidden>
         {talking && (
-          <span className="absolute inline-flex size-full rounded-full bg-emerald-500 opacity-60 motion-safe:animate-ping" />
+          <span className="absolute inline-flex size-full rounded-full bg-ok-fg opacity-50 motion-safe:animate-ping" />
         )}
-        <span className={cn("relative inline-flex size-2 rounded-full", talking ? "bg-emerald-500" : "bg-brand-500")} />
+        <span className={cn("relative inline-flex size-2 rounded-full", talking ? "bg-ok-fg" : "bg-info-fg")} />
       </span>
       {talking ? "Llamando" : "Marcando"} · {call.agent}
-      <span className="tabular-nums opacity-75">{liveElapsed(call.since, now)}</span>
+      <span className="tabular-nums">{liveElapsed(call.since, now)}</span>
     </span>
   );
 }
@@ -1582,27 +1684,27 @@ function VoiceNowLine({
   // al borde. Cada tramo es un grupo que no se corta, separado por aire.
   return (
     <div
-      className="flex flex-wrap items-center gap-x-5 gap-y-1.5 border-b border-slate-200 bg-slate-50 px-5 py-2.5 text-sm text-slate-600"
+      className="flex flex-wrap items-center gap-x-5 gap-y-1.5 border-t border-line bg-wash px-4 py-2.5 text-sm text-ink-600 sm:px-5"
       aria-live="polite"
     >
-      <span className="font-medium text-slate-800">Agente de voz</span>
+      <span className="font-medium text-ink-900">Agente de voz</span>
       {status.calls.length > 0 ? (
         status.calls.map((c) => (
           <span key={c.orderId} className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="flex items-center gap-2 whitespace-nowrap">
               <LiveCallChip call={c} className="inline-flex" />
-              <span className="text-slate-700">
-                a <span className="font-medium text-slate-900">{c.orderName ?? "un pedido"}</span>
+              <span className="text-ink-700">
+                a <span className="font-medium text-ink-900">{c.orderName ?? "un pedido"}</span>
               </span>
             </span>
             {hidden.has(c.orderId) && (
               <>
-                <span className="text-slate-500">no aparece con los filtros actuales</span>
+                <span className="text-ink-500">no aparece con los filtros actuales</span>
                 {c.orderName && (
                   <button
                     type="button"
                     onClick={() => onFind(c.orderName!)}
-                    className="rounded-sm font-medium text-brand-700 underline-offset-2 hover:underline"
+                    className="rounded-sm font-medium text-brand-700 underline-offset-2 hover:underline pointer-coarse:min-h-11"
                   >
                     Buscarlo
                   </button>
@@ -1613,13 +1715,13 @@ function VoiceNowLine({
         ))
       ) : (
         <span className="flex items-center gap-1.5">
-          <span className="size-2 rounded-full bg-slate-300" aria-hidden />
+          <span className="size-2 rounded-full bg-ink-300" aria-hidden />
           Sin llamada en curso
         </span>
       )}
       {status.last && (
         <span>
-          Última: <span className="font-medium text-slate-800">{status.last.orderName ?? "un pedido"}</span>,{" "}
+          Última: <span className="font-medium text-ink-900">{status.last.orderName ?? "un pedido"}</span>,{" "}
           {status.last.agent}, {status.last.result},{" "}
           <span className="whitespace-nowrap tabular-nums">{agoLabel(status.last.endedAt, now)}</span>
         </span>
@@ -1644,6 +1746,7 @@ const ShipmentTable = memo(function ShipmentTable({
   liveFor,
   sort,
   onSort,
+  showRoute,
 }: {
   /** YA ORDENADAS. El orden lo decide el tablero, que es quien sabe cuál es la
    *  «siguiente» guía de la cola (ver `queueOrder`). */
@@ -1660,6 +1763,8 @@ const ShipmentTable = memo(function ShipmentTable({
   liveFor: (row: ShipmentRow) => LiveVoiceCall | null;
   sort: ShipmentSort;
   onSort: (key: ShipmentSortKey) => void;
+  /** La columna Ruta, solo donde decide algo: Pendiente y la búsqueda. */
+  showRoute: boolean;
 }) {
   // La ventana vuelve al principio cuando cambian las filas (otro filtro, otra
   // pestaña, una recarga): lo que se pidió ver fue de ESE conjunto.
@@ -1676,256 +1781,305 @@ const ShipmentTable = memo(function ShipmentTable({
   const shownRows = shownCount < sortedRows.length ? sortedRows.slice(0, shownCount) : sortedRows;
   const hiddenCount = sortedRows.length - shownRows.length;
   const toggleSort = onSort;
+  const multiStore = stores.length > 1;
+
+  // Anchos de columna (tabla fija), medidos sobre el texto real para que cada
+  // celda quepa en dos renglones: la chapa «Aliclik disponible» (100 px),
+  // «Reproprovincia» (87), «Sin gestión» (69) y el encabezado «Programación»
+  // (99) mandan en sus columnas; el motivo entra entero en dos renglones desde
+  // 1.440 px y el destino conserva la ciudad. El que cede es el cliente, que
+  // se recorta con su nombre en el `title`.
+  const w = showRoute
+    ? { guia: "w-[13.5%]", cliente: "w-[10.5%]", destino: "w-[16%]", motivo: "w-[15%]", estado: "w-[10.5%]", ruta: "w-[13.5%]", gestion: "w-[9%]", prog: "w-[12%]" }
+    : { guia: "w-[14%]", cliente: "w-[13%]", destino: "w-[18%]", motivo: "w-[18%]", estado: "w-[14%]", ruta: "", gestion: "w-[10%]", prog: "w-[13%]" };
 
   return (
-    // ONCE COLUMNAS NO ENTRAN EN UN PORTÁTIL. Con la barra lateral y el cajón
-    // de 34 rem abierto, en 1.280–1.600 px las columnas de la derecha quedaban
-    // bajo el cajón o la página entera scrolleaba en horizontal (la barra
-    // lateral se iba de lado). Ahora la tabla tiene ancho propio y el
-    // contenedor scrollea hasta que entra de verdad; por encima de 1.800 px
-    // vuelve el encabezado fijo (ver TABLE_WRAP_FROM en ui.tsx). Y por debajo
-    // de `xl`, Motivo anterior y Fecha Aliclik —que el cajón muestra enteras—
-    // se esconden para que la cola quepa con menos scroll.
     <div>
-    <div className={cn("hidden md:block", TABLE_WRAP_FROM[1800])}>
-      <table className="w-full min-w-[1100px] text-sm xl:min-w-[1400px]">
-        <thead>
-          <tr className={cn(STICKY_HEAD, "text-xs text-slate-500")}>
-            <SortableShipmentHeader label="Guía" sortKey="guide" sort={sort} onSort={toggleSort} />
-            {stores.length > 1 && (
-              <SortableShipmentHeader label="Tienda" sortKey="store" sort={sort} onSort={toggleSort} />
-            )}
-            <SortableShipmentHeader label="Pedido" sortKey="order" sort={sort} onSort={toggleSort} />
-            <SortableShipmentHeader label="Cliente" sortKey="customer" sort={sort} onSort={toggleSort} />
-            {/* MOTIVO ANTERIOR EN LUGAR DE PRODUCTO. El MOM §11 manda revisar
-                cómo terminó el intento anterior antes de reenviar —«si el
-                cliente vio el producto y aun así lo rechazó, normalmente no
-                reenviar»— y esa etiqueta no se pintaba en ningún sitio. El
-                producto sigue en el cajón, que es donde se confirma. */}
-            <SortableShipmentHeader label="Motivo anterior" sortKey="reason" sort={sort} onSort={toggleSort} className={SECONDARY_COLUMN} />
-            <SortableShipmentHeader label="Distrito / Ciudad" sortKey="location" sort={sort} onSort={toggleSort} />
-            <SortableShipmentHeader label="Estado" sortKey="status" sort={sort} onSort={toggleSort} />
-            {/* La ruta es el veredicto de la fila: iba la última, y a 1.400px de
-                piso de tabla quedaba fuera de pantalla en una laptop. */}
-            <SortableShipmentHeader label="Ruta sugerida" sortKey="route" sort={sort} onSort={toggleSort} />
-            <SortableShipmentHeader label="Fecha Aliclik" sortKey="lastDelivery" sort={sort} onSort={toggleSort} className={SECONDARY_COLUMN} />
-            <SortableShipmentHeader label="Última gestión" sortKey="lastGestion" sort={sort} onSort={toggleSort} />
-            <SortableShipmentHeader label="Reprogramación" sortKey="reprogramming" sort={sort} onSort={toggleSort} />
-          </tr>
-        </thead>
-        <tbody>
-          {shownRows.map((s) => (
-            <tr
-              key={s.id}
-              id={`shipment-row-${s.id}`}
-              // SELECCIONAR UN TELÉFONO NO DEBE ABRIR —Y RESERVAR— LA GUÍA. El
-              // clic en la fila la abre y la toma diez minutos; arrastrar para
-              // copiar un número terminaba el gesto en un clic y bloqueaba la
-              // guía para el resto del equipo sin que nadie quisiera abrirla.
-              onClick={() => {
-                if (window.getSelection()?.toString()) return;
-                onOpen(s.id);
-              }}
-              className={cn(
-                "cursor-pointer border-b border-slate-100 transition-colors duration-500 last:border-0",
-                cursorId === s.id && "ring-2 ring-inset ring-brand-400",
-                highlightedId === s.id
-                  ? "bg-emerald-50"
-                  : liveFor(s)
-                    ? "bg-brand-50/70 hover:bg-brand-50"
-                    : "hover:bg-slate-50",
+      {/* ONCE COLUMNAS NO ENTRABAN EN UN PORTÁTIL: la tabla pedía 1.400 px y
+          scrolleaba de lado. Ahora son ocho celdas de dos renglones en una
+          tabla fija que cabe desde 1.280 px —la guía con su pedido y tienda, el
+          cliente con su celular, el destino con la disponibilidad Swayp, la
+          programación con la fecha Aliclik—, y por debajo la cola es una lista. */}
+      <div className="hidden xl:block">
+        <table className="w-full table-fixed border-separate border-spacing-0 text-sm">
+          <thead>
+            <tr>
+              <SortableShipmentHeader label="Guía" sortKey="guide" also={{ label: "Pedido", sortKey: "order" }} sort={sort} onSort={toggleSort} className={cn(w.guia, FIRST_X)} />
+              <SortableShipmentHeader label="Cliente" sortKey="customer" sort={sort} onSort={toggleSort} className={cn(w.cliente, CELL_X)} />
+              <SortableShipmentHeader label="Destino" sortKey="location" sort={sort} onSort={toggleSort} className={cn(w.destino, CELL_X)} />
+              {/* MOTIVO ANTERIOR EN LUGAR DE PRODUCTO. El MOM §11 manda revisar
+                  cómo terminó el intento anterior antes de reenviar —«si el
+                  cliente vio el producto y aun así lo rechazó, normalmente no
+                  reenviar»— y esa etiqueta no se pintaba en ningún sitio. El
+                  producto sigue en el cajón, que es donde se confirma. */}
+              <SortableShipmentHeader label="Motivo anterior" sortKey="reason" sort={sort} onSort={toggleSort} className={cn(w.motivo, CELL_X)} />
+              <SortableShipmentHeader label="Estado" sortKey="status" sort={sort} onSort={toggleSort} className={cn(w.estado, CELL_X)} />
+              {showRoute && (
+                <SortableShipmentHeader label="Ruta" sortKey="route" sort={sort} onSort={toggleSort} className={cn(w.ruta, CELL_X)} />
               )}
-            >
-              <td className="px-4 py-2.5 font-mono text-xs text-slate-700">
-                {/* La fila entera abre con el ratón; el código es lo que abre
-                    con el teclado. Sin este botón la cola no se podía trabajar
-                    sin ratón: ninguna guía era alcanzable con Tab. */}
-                <button
-                  type="button"
-                  id={`shipment-open-${s.id}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpen(s.id);
-                  }}
-                  className="rounded-sm font-mono text-slate-800 underline-offset-2 hover:underline"
-                >
-                  {s.guide_code}
-                </button>
-                {s.courier === "fenix" && (
-                  <span className="ml-1 rounded bg-orange-50 px-1 text-xs text-orange-700">Swayp</span>
+              <SortableShipmentHeader label="Gestión" sortKey="lastGestion" sort={sort} onSort={toggleSort} className={cn(w.gestion, CELL_X)} />
+              <SortableShipmentHeader label="Programación" sortKey="reprogramming" also={{ label: "Aliclik", sortKey: "lastDelivery" }} sort={sort} onSort={toggleSort} className={cn(w.prog, LAST_X)} />
+            </tr>
+          </thead>
+          <tbody>
+            {shownRows.map((s) => (
+              <tr
+                key={s.id}
+                id={`shipment-row-${s.id}`}
+                // SELECCIONAR UN TELÉFONO NO DEBE ABRIR —Y RESERVAR— LA GUÍA. El
+                // clic en la fila la abre y la toma diez minutos; arrastrar para
+                // copiar un número terminaba el gesto en un clic y bloqueaba la
+                // guía para el resto del equipo sin que nadie quisiera abrirla.
+                onClick={() => {
+                  if (window.getSelection()?.toString()) return;
+                  onOpen(s.id);
+                }}
+                className={cn(
+                  "group/row cursor-pointer transition-colors duration-500 motion-reduce:transition-none",
+                  highlightedId === s.id
+                    ? "bg-ok-wash"
+                    : cursorId === s.id
+                      ? "bg-brand-50"
+                      : liveFor(s)
+                        ? "bg-info-wash"
+                        : "hover:bg-wash",
                 )}
-                {s.created_via === "fenix_directo" && (
-                  <span className="ml-1 rounded bg-indigo-50 px-1 text-xs text-indigo-700">Directa</span>
-                )}
-                {(() => {
-                  const live = liveFor(s);
-                  return live ? <LiveCallChip call={live} className="mt-1 flex" /> : null;
-                })()}
-              </td>
-              {stores.length > 1 && (
-                <td className="px-4 py-2.5 text-slate-600">{storeName(s.store_id)}</td>
-              )}
-              <td className="px-4 py-2.5 text-slate-700">
-                <OrderNameLabel name={s.order_name} matched={s.matched} />
-              </td>
-              <td className="px-4 py-2.5 text-slate-700">
-                {s.customer_name ?? "—"}
-                <span className="block text-xs text-slate-500">{s.customer_phone ?? ""}</span>
-              </td>
-              <td className={cn(SECONDARY_COLUMN, "w-44 max-w-44 px-3 py-2.5 align-middle")}>
-                {(() => {
-                  const m = motivoParaMostrar(s);
-                  if (!m) return <span className="text-xs text-slate-500">—</span>;
-                  return (
-                    <span
-                      className={cn(
-                        "line-clamp-2 text-xs leading-4",
-                        !m.consta ? "text-slate-500" : m.vioElProducto ? "font-medium text-rose-700" : "text-slate-600",
-                      )}
-                    >
-                      {m.texto}
+              >
+                <td className={cn(TD, FIRST_X)}>
+                  {/* La fila entera abre con el ratón; el código es lo que abre
+                      con el teclado. Sin este botón la cola no se podía trabajar
+                      sin ratón: ninguna guía era alcanzable con Tab. */}
+                  <button
+                    type="button"
+                    id={`shipment-open-${s.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpen(s.id);
+                    }}
+                    className="max-w-full truncate rounded-sm align-middle font-mono text-[13px] font-medium leading-5 text-ink-900 underline-offset-2 hover:underline"
+                  >
+                    {s.guide_code}
+                  </button>
+                  {/* La etiqueta de courier abre la segunda línea: junto al
+                      código partía la celda en tres renglones. */}
+                  <p
+                    className={cn(SUBLINE, "flex min-w-0 items-center gap-1.5")}
+                    title={multiStore ? storeName(s.store_id) : undefined}
+                  >
+                    {s.courier === "fenix" && <Badge className="shrink-0">Swayp</Badge>}
+                    {s.created_via === "fenix_directo" && <Badge className="shrink-0">Directa</Badge>}
+                    {/* El pedido manda: es lo que identifica la fila. Si no
+                        cabe, se recorta la tienda, que también filtra arriba. */}
+                    <span className="truncate">
+                      <OrderNameLabel name={s.order_name} matched={s.matched} />
+                      {multiStore && <> · {storeName(s.store_id)}</>}
                     </span>
-                  );
-                })()}
-              </td>
-              <td className="px-4 py-2.5 text-slate-700">
-                {s.district ?? "—"}
-                <span className="block text-xs capitalize text-slate-500">
-                  {s.city ?? ""}
-                  <FenixAvailabilityInline shipment={s} />
-                </span>
-              </td>
-              <td className="px-4 py-2.5">
-                <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
-                {/* Quién la tiene, antes de abrirla: se descubría al entrar, con
-                    el cajón ya bloqueado. */}
-                {claimedBy(s) && (
-                  <span className="mt-0.5 block text-xs font-medium text-amber-700">{claimedBy(s)}</span>
+                  </p>
+                  {/* La llamada del agente en curso: la fila va primera y lo dice. */}
+                  {(() => {
+                    const live = liveFor(s);
+                    return live ? <LiveCallChip call={live} className="mt-1 flex" /> : null;
+                  })()}
+                </td>
+                <td className={cn(TD, CELL_X)}>
+                  <p className="truncate leading-5 text-ink-900" title={s.customer_name ?? undefined}>
+                    {s.customer_name ?? "—"}
+                  </p>
+                  {s.customer_phone && <p className={cn(SUBLINE, "truncate tabular-nums")}>{s.customer_phone}</p>}
+                </td>
+                <td className={cn(TD, CELL_X)}>
+                  {/* El distrito solo arriba; abajo la ciudad (o el
+                      departamento) y la disponibilidad Swayp. Si no cabe, cede
+                      primero la ciudad y después la disponibilidad. */}
+                  <p className="truncate leading-5 text-ink-900" title={s.district ?? undefined}>
+                    {s.district ?? "—"}
+                  </p>
+                  <p
+                    className={cn(SUBLINE, "flex min-w-0")}
+                    title={placeLine(s) ? `${placeLine(s)} · ${fenixAvailabilityText(s)}` : fenixAvailabilityText(s)}
+                  >
+                    {placeLine(s) && (
+                      <>
+                        <span className="min-w-[4ch] shrink-[999] truncate capitalize">{placeLine(s)}</span>
+                        {/* El punto va aparte, para que la ciudad al
+                            recortarse no se lo lleve; espacios duros, porque
+                            al borde de un hijo de flex el normal se pierde. */}
+                        <span className="shrink-0">{"\u00a0·\u00a0"}</span>
+                      </>
+                    )}
+                    <span className="min-w-0 truncate">
+                      <FenixAvailabilityInline shipment={s} lead={false} />
+                    </span>
+                  </p>
+                </td>
+                <td className={cn(TD, CELL_X)}>
+                  {(() => {
+                    const m = motivoParaMostrar(s);
+                    if (!m) return <span className={SUBLINE}>—</span>;
+                    return (
+                      <p
+                        title={m.texto}
+                        className={cn(
+                          "line-clamp-2 break-words text-[13px] leading-5",
+                          !m.consta ? "text-ink-500" : m.vioElProducto ? "font-medium text-crit-fg" : "text-ink-700",
+                        )}
+                      >
+                        {keepDots(m.texto)}
+                      </p>
+                    );
+                  })()}
+                </td>
+                <td className={cn(TD, CELL_X)}>
+                  <StatusBadge category={s.status_category} status={s.delivery_status} />
+                  {/* La segunda mitad del estado (MOM), entera bajo la chapa. */}
+                  {subState(s) && <p className={SUBLINE}>{subState(s)}</p>}
+                </td>
+                {showRoute && (
+                  <td className={cn(TD, CELL_X)}>
+                    <AliclikRouteCell shipment={s} />
+                  </td>
                 )}
-              </td>
-              <td className="px-4 py-2.5"><AliclikRouteCell shipment={s} /></td>
-              <td className={cn(SECONDARY_COLUMN, "px-4 py-2.5 whitespace-nowrap text-slate-700 tabular-nums")}>
-                {fmtAliclikDate(s.aliclik_service_date)}
-              </td>
-              <td className="px-4 py-2.5 whitespace-nowrap tabular-nums">
-                {(() => {
-                  const g = fmtLastGestion(s.last_gestion_at);
-                  return (
-                    <>
-                      <span className={g.days == null ? "text-slate-500" : "text-slate-700"}>
-                        {g.label}
-                      </span>
-                      {g.days != null && (
-                        <span
+                <td className={cn(TD, CELL_X)}>
+                  {(() => {
+                    const g = fmtLastGestion(s.last_gestion_at);
+                    return (
+                      <>
+                        <p
                           className={cn(
-                            "block text-xs",
-                            g.days >= 7 ? "font-semibold text-amber-700" : "text-slate-500",
+                            "whitespace-nowrap leading-5 tabular-nums",
+                            g.days == null ? "text-ink-500" : "text-ink-900",
                           )}
                         >
-                          {g.days === 0 ? "hoy" : `hace ${g.days} d`}
-                        </span>
-                      )}
-                    </>
-                  );
-                })()}
-              </td>
-              <td className="px-4 py-2.5 tabular-nums text-slate-600">
-                {fmtReprogram(s.next_followup_at)}
-                {highlightedId === s.id && (
-                  <span className="block text-xs font-semibold text-emerald-700">Actualizado</span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+                          {g.label}
+                        </p>
+                        {/* Quién la tiene, antes de abrirla: se descubría al
+                            entrar, con el cajón ya bloqueado. Es la gestión de
+                            ahora, así que ocupa el lugar de la antigüedad. */}
+                        {claimedBy(s) && (
+                          <p className="text-[13px] font-medium leading-5 text-warn-fg">{claimedBy(s)}</p>
+                        )}
+                        {!claimedBy(s) && g.days != null && (
+                          <p className={cn(SUBLINE, "tabular-nums", g.days >= 7 && "font-semibold text-warn-fg")}>
+                            {g.days === 0 ? "hoy" : `hace ${g.days} d`}
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
+                </td>
+                <td className={cn(TD, LAST_X)}>
+                  <p className="leading-5 tabular-nums text-ink-900">{fmtReprogram(s.next_followup_at)}</p>
+                  {highlightedId === s.id ? (
+                    <p className="text-[13px] font-semibold leading-5 text-ok-fg">Actualizado</p>
+                  ) : (
+                    // El encabezado dice «Aliclik» bajo «Programación»: la
+                    // segunda fecha es esa. Con la palabra no cabía en un renglón.
+                    s.aliclik_service_date && (
+                      <p className={cn(SUBLINE, "tabular-nums")} title="Fecha Aliclik">
+                        <span className="sr-only">Fecha Aliclik </span>
+                        {fmtAliclikDate(s.aliclik_service_date)}
+                      </p>
+                    )
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-      {/* EN TELÉFONO LA COLA SON TARJETAS, no una tabla de once columnas
-          apretada. Cada tarjeta lleva lo que hace falta para decidir a quién
-          llamar —guía, estado, cliente, destino, reprogramación, ruta— y un
-          botón «Llamar» con `tel:` al alcance del pulgar: en el celular la
-          llamada se hace desde el mismo aparato. Misma ventana de 200 filas y
-          mismo orden que la tabla; solo cambia la forma. */}
-      <ul className="divide-y divide-slate-100 md:hidden">
+      {/* POR DEBAJO DE 1.280 PX LA COLA ES UNA LISTA, no una tabla apretada.
+          Cada fila lleva lo que hace falta para decidir a quién llamar —guía,
+          estado, cliente, destino, motivo, programación, ruta— y un botón
+          «Llamar» con `tel:` al alcance del pulgar: en el celular la llamada se
+          hace desde el mismo aparato. Desde 640 px, en dos columnas: quién y
+          adónde a la izquierda; cómo está y qué decide la llamada a la derecha.
+          Misma ventana de 200 filas y mismo orden que la tabla. */}
+      <ul className="divide-y divide-line border-t border-line xl:hidden">
         {shownRows.map((s) => {
           const gestion = fmtLastGestion(s.last_gestion_at);
+          const m = motivoParaMostrar(s);
           return (
             <li
               key={s.id}
               className={cn(
-                "flex items-start gap-3 px-4 py-3",
-                highlightedId === s.id ? "bg-emerald-50" : liveFor(s) ? "bg-brand-50/70" : "",
+                "flex items-start gap-3 px-4 py-3 sm:px-5",
+                highlightedId === s.id ? "bg-ok-wash" : liveFor(s) && "bg-info-wash",
               )}
             >
               <button
                 type="button"
                 onClick={() => onOpen(s.id)}
-                className="min-w-0 flex-1 rounded-md text-left"
+                className="grid min-w-0 flex-1 gap-x-6 gap-y-1 rounded-md text-left sm:grid-cols-2"
               >
-                <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="font-mono text-sm text-slate-800">{s.guide_code}</span>
-                  {s.courier === "fenix" && (
-                    <span className="rounded bg-orange-50 px-1 text-xs text-orange-700">Swayp</span>
-                  )}
-                  {s.created_via === "fenix_directo" && (
-                    <span className="rounded bg-indigo-50 px-1 text-xs text-indigo-700">Directa</span>
-                  )}
-                  <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
-                  {claimedBy(s) && (
-                    <span className="text-xs font-medium text-amber-700">{claimedBy(s)}</span>
-                  )}
+                <span className="block min-w-0">
+                  {/* El N° de pedido y la tienda existían solo en la tabla: en
+                      teléfono no había forma de saber de qué pedido se hablaba
+                      ni, con varias tiendas, de cuál era. Van junto a la guía. */}
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="font-mono text-[13px] font-medium text-ink-900">{s.guide_code}</span>
+                    {s.courier === "fenix" && <Badge>Swayp</Badge>}
+                    {s.created_via === "fenix_directo" && <Badge>Directa</Badge>}
+                    <span className={SUBLINE}>
+                      <OrderNameLabel name={s.order_name} matched={s.matched} />
+                      {multiStore && ` · ${storeName(s.store_id)}`}
+                    </span>
+                  </span>
+                  {(() => {
+                    const live = liveFor(s);
+                    return live ? <LiveCallChip call={live} className="my-1 flex" /> : null;
+                  })()}
+                  <span className="block text-sm font-medium leading-5 text-ink-900">{s.customer_name ?? "—"}</span>
+                  <span className={cn(SUBLINE, "block")}>
+                    {s.district ?? "—"}
+                    {placeLine(s) && (
+                      <>
+                        {DOT}
+                        <span className="capitalize">{placeLine(s)}</span>
+                      </>
+                    )}
+                    <FenixAvailabilityInline shipment={s} />
+                  </span>
                 </span>
-                {(() => {
-                  const live = liveFor(s);
-                  return live ? <LiveCallChip call={live} className="mt-1.5 flex" /> : null;
-                })()}
-                <span className="mt-1 block text-sm text-slate-800">{s.customer_name ?? "—"}</span>
-                {/* El N° de pedido y la tienda existían solo en la tabla: en
-                    teléfono no había forma de saber de qué pedido se hablaba ni,
-                    con varias tiendas, de cuál era. */}
-                <span className="block text-xs text-slate-500">
-                  <OrderNameLabel name={s.order_name} matched={s.matched} />
-                  {stores.length > 1 && ` · ${storeName(s.store_id)}`}
-                </span>
-                <span className="block text-xs text-slate-500">
-                  {[s.district, s.city].filter(Boolean).join(" · ") || "—"}
-                  <FenixAvailabilityInline shipment={s} />
-                </span>
-                {(() => {
-                  const m = motivoParaMostrar(s);
-                  if (!m) return null;
-                  return (
+                <span className="block min-w-0">
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />
+                    {claimedBy(s) && (
+                      <span className="text-[13px] font-medium text-warn-fg">{claimedBy(s)}</span>
+                    )}
+                  </span>
+                  {m && (
                     <span
                       className={cn(
-                        "block text-xs",
-                        m.vioElProducto ? "font-medium text-rose-700" : "text-slate-500",
+                        "block text-[13px] leading-5",
+                        m.vioElProducto ? "font-medium text-crit-fg" : "text-ink-500",
                       )}
                     >
-                      {m.texto}
-                    </span>
-                  );
-                })()}
-                <span className="mt-1 block text-xs tabular-nums text-slate-500">
-                  Reprogramación {fmtReprogram(s.next_followup_at)}
-                  {gestion.days != null && (
-                    <span className={gestion.days >= 7 ? "font-semibold text-amber-700" : ""}>
-                      {" · "}última gestión {gestion.days === 0 ? "hoy" : `hace ${gestion.days} d`}
+                      {keepDots(m.texto)}
                     </span>
                   )}
-                  {highlightedId === s.id && (
-                    <span className="ml-2 font-semibold text-emerald-700">Actualizado</span>
+                  {s.courier === "aliclik" && s.status_category === "pending" && (
+                    <span className="mt-1 block">
+                      <AliclikRouteCell shipment={s} inline />
+                    </span>
                   )}
-                </span>
-                <span className="mt-1 block text-xs">
-                  <AliclikRouteCell shipment={s} />
+                  <span className={cn(SUBLINE, "block tabular-nums")}>
+                    Programación {fmtReprogram(s.next_followup_at)}
+                    {gestion.days != null && (
+                      <span className={gestion.days >= 7 ? "font-semibold text-warn-fg" : ""}>
+                        {DOT}última gestión {gestion.days === 0 ? "hoy" : `hace ${gestion.days} d`}
+                      </span>
+                    )}
+                    {highlightedId === s.id && <span className="ml-2 font-semibold text-ok-fg">Actualizado</span>}
+                  </span>
                 </span>
               </button>
               {s.customer_phone && (
                 <a
                   href={`tel:${s.customer_phone.replace(/[^\d+]/g, "")}`}
-                  className="inline-flex shrink-0 items-center rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700"
+                  className={opsButtonClass("secondary", "sm", "shrink-0 pointer-coarse:h-11")}
                 >
+                  <IconPhone className="text-ink-500" />
                   Llamar
                 </a>
               )}
@@ -1934,29 +2088,21 @@ const ShipmentTable = memo(function ShipmentTable({
         })}
       </ul>
       {hiddenCount > 0 && (
-        <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line px-4 py-2.5 text-[13px] text-ink-500 sm:px-5">
           {/* Decía «Se muestran X de Y» a una pantalla del otro contador, que
               dice lo mismo con otro denominador: uno cuenta lo que pasa los
               filtros, este cuenta lo que cabe en la ventana. Ahora se distinguen
               por la frase, no por recordar cuál era cuál. */}
-          <span>
+          <span className="tabular-nums">
             Cargadas las primeras {shownRows.length} de {sortedRows.length} filas.
           </span>
-          <button
-            type="button"
-            onClick={() => setVisibleCount((n) => n + VISIBLE_STEP)}
-            className="font-medium text-brand-700 hover:underline"
-          >
+          <OpsButton variant="ghost" size="sm" onClick={() => setVisibleCount((n) => n + VISIBLE_STEP)} className="pointer-coarse:h-11">
             Mostrar {Math.min(VISIBLE_STEP, hiddenCount)} más
-          </button>
+          </OpsButton>
           {hiddenCount > VISIBLE_STEP && (
-            <button
-              type="button"
-              onClick={() => setVisibleCount(sortedRows.length)}
-              className="font-medium text-brand-700 hover:underline"
-            >
+            <OpsButton variant="ghost" size="sm" onClick={() => setVisibleCount(sortedRows.length)} className="pointer-coarse:h-11">
               Mostrar todas
-            </button>
+            </OpsButton>
           )}
         </div>
       )}
@@ -1964,105 +2110,155 @@ const ShipmentTable = memo(function ShipmentTable({
   );
 });
 
-/** Columnas que el cajón ya muestra enteras: solo a partir de `xl`. */
-const SECONDARY_COLUMN = "hidden xl:table-cell";
+/** Flecha de orden, dibujada: arriba, abajo, o las dos cuando la columna no ordena. */
+function SortGlyph({ direction }: { direction: ShipmentSortDirection | null }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="size-3.5 shrink-0">
+      {direction === "asc" ? (
+        <path d="M5 9.5 8 6.5l3 3" />
+      ) : direction === "desc" ? (
+        <path d="M5 6.5 8 9.5l3-3" />
+      ) : (
+        <path d="M5.5 6 8 3.5 10.5 6M5.5 10 8 12.5 10.5 10" />
+      )}
+    </svg>
+  );
+}
 
+function SortButton({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  secondary,
+}: {
+  label: string;
+  sortKey: ShipmentSortKey;
+  sort: ShipmentSort;
+  onSort: (key: ShipmentSortKey) => void;
+  /** El orden de la segunda línea: más quieto que el de la primera. */
+  secondary?: boolean;
+}) {
+  const direction = sort?.key === sortKey ? sort.direction : null;
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(sortKey)}
+      className={cn(
+        "group -mx-1 inline-flex h-5 items-center gap-1 whitespace-nowrap rounded px-1 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:h-11",
+        direction ? "text-brand-700" : secondary && "font-medium text-ink-500",
+      )}
+    >
+      {label}
+      <span className={direction ? "text-brand-600" : "text-ink-300 group-hover:text-ink-500"}>
+        <SortGlyph direction={direction} />
+      </span>
+    </button>
+  );
+}
+
+/**
+ * Encabezado que ordena. `also` es un segundo orden en la misma columna, para
+ * el dato de la segunda línea, y va debajo como en la celda: «Guía» sobre
+ * «Pedido», «Programación» sobre «Aliclik».
+ */
 function SortableShipmentHeader({
   label,
   sortKey,
   sort,
   onSort,
   className,
+  also,
 }: {
   label: string;
   sortKey: ShipmentSortKey;
-  sort: { key: ShipmentSortKey; direction: ShipmentSortDirection } | null;
+  sort: ShipmentSort;
   onSort: (key: ShipmentSortKey) => void;
   className?: string;
+  also?: { label: string; sortKey: ShipmentSortKey };
 }) {
-  const active = sort?.key === sortKey;
+  const active = sort != null && (sort.key === sortKey || sort.key === also?.sortKey);
   const ariaSort = active ? (sort.direction === "asc" ? "ascending" : "descending") : "none";
   return (
-    // El fondo/sticky/separador los pone STICKY_HEAD desde el <tr> (ver ui.tsx).
-    <th
-      scope="col"
-      aria-sort={ariaSort}
-      className={cn("px-2 py-1 text-left font-medium first:pl-4 last:pr-4", className)}
-    >
-      <button
-        type="button"
-        onClick={() => onSort(sortKey)}
-        className={cn(
-          // hover un tono por encima del fondo del encabezado (slate-100), que
-          // si no el estado no se notaría.
-          "group inline-flex min-h-8 w-full items-center gap-1 rounded-md px-2 text-left transition hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
-          active && "bg-brand-50 text-brand-700",
-        )}
-      >
-        <span>{label}</span>
-        <span
-          aria-hidden="true"
-          className={cn(
-            "text-xs transition",
-            active ? "text-brand-600" : "text-slate-300 group-hover:text-slate-500",
-          )}
-        >
-          {active ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}
-        </span>
-      </button>
+    <th scope="col" aria-sort={ariaSort} className={cn(TH, className)}>
+      <span className="flex flex-col items-start">
+        <SortButton label={label} sortKey={sortKey} sort={sort} onSort={onSort} />
+        {also && <SortButton label={also.label} sortKey={also.sortKey} sort={sort} onSort={onSort} secondary />}
+      </span>
     </th>
   );
 }
 
-function AliclikRouteCell({ shipment }: { shipment: ShipmentRow }) {
+const ROUTE_BLOCKED: Partial<Record<AliclikRescheduleReason, string>> = {
+  three_attempts: `${ALICLIK_MAX_INTENTOS} intentos alcanzados`,
+  outside_week: "Fuera de la ventana operativa",
+  missing_attempts: "Sin NRO. INTENTOS en Excel",
+  missing_service_date: "Sin Fecha Aliclik en el Excel",
+};
+
+/**
+ * El veredicto de la ruta: ¿todavía entra por Aliclik o tiene que salir por
+ * Swayp? La chapa y su porqué en un renglón cada uno (tabla) o los dos en uno
+ * (`inline`, la lista); el porqué se recorta y el `title` lo dice entero.
+ */
+function AliclikRouteCell({ shipment, inline = false }: { shipment: ShipmentRow; inline?: boolean }) {
   if (shipment.courier !== "aliclik" || shipment.status_category !== "pending") {
-    return <span className="text-slate-500">—</span>;
+    return <span className={SUBLINE}>—</span>;
   }
   const decision = evaluateAliclikReschedule({
     courier: shipment.courier,
     attempts: shipment.aliclik_attempts,
     serviceDate: shipment.aliclik_service_date,
   });
-  if (decision.eligible) {
-    return (
-      <div className="min-w-32">
-        <span className="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
-          Aliclik disponible
-        </span>
-        <span className="mt-0.5 block text-xs leading-4 text-emerald-700">
-          Dentro de ventana · {shipment.aliclik_attempts ?? 0}/{ALICLIK_MAX_INTENTOS} intentos
-        </span>
-      </div>
-    );
-  }
-
-  const reasonLabels: Partial<Record<AliclikRescheduleReason, string>> = {
-    three_attempts: `${ALICLIK_MAX_INTENTOS} intentos alcanzados`,
-    outside_week: "Fuera de la ventana operativa",
-    missing_attempts: "Sin NRO. INTENTOS en Excel",
-    missing_service_date: "Sin Fecha Aliclik en el Excel",
-  };
+  const reason = decision.eligible
+    ? `${shipment.aliclik_attempts ?? 0}/${ALICLIK_MAX_INTENTOS} intentos · dentro de ventana`
+    : (ROUTE_BLOCKED[decision.reason] ?? "Aliclik no disponible");
   return (
-    <div className="min-w-32">
-      <span className="inline-flex rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-900">
-        Swayp requerido
+    <span className={inline ? "flex min-w-0 items-center gap-2" : "block min-w-0"}>
+      {decision.eligible ? (
+        <Badge tone="ok" className="shrink-0">Aliclik disponible</Badge>
+      ) : (
+        <Badge tone="warn" className="shrink-0">Swayp requerido</Badge>
+      )}
+      <span className={cn(SUBLINE, "truncate", !inline && "block")} title={reason}>
+        {keepDots(reason)}
       </span>
-      <span className="mt-0.5 block text-xs leading-4 text-orange-700">
-        {reasonLabels[decision.reason] ?? "Aliclik no disponible"}
-      </span>
-    </div>
+    </span>
   );
 }
 
-function FenixAvailabilityInline({ shipment }: { shipment: ShipmentRow }) {
+/**
+ * Lo que acompaña al distrito: la ciudad de cobertura Swayp o, si repite el
+ * distrito («Juliaca · juliaca»), el departamento; nada si también lo repite
+ * («Ica · Ica»).
+ */
+function placeLine(s: Pick<ShipmentRow, "district" | "city" | "region">): string {
+  const repeats = (v: string) =>
+    Boolean(s.district) && v.localeCompare(s.district ?? "", "es", { sensitivity: "base" }) === 0;
+  if (s.city && !repeats(s.city)) return s.city;
+  const department = normalizeDepartment(s.region) || "";
+  return department && !repeats(department) ? department : "";
+}
+
+/**
+ * Si Swayp puede llevarla: con stock, sin stock o fuera de cobertura. El texto
+ * no se parte entre líneas; con `lead`, va tras « · » pegado a lo anterior.
+ */
+function fenixAvailabilityText(shipment: ShipmentRow): string {
   const reason = currentFenixReason(shipment);
-  if (reason === "ok") {
-    return <span className="ml-1 font-medium text-emerald-700">· Swayp ok</span>;
-  }
-  if (reason === "sin_stock") {
-    return <span className="ml-1 font-medium text-amber-700">· Sin stock Swayp</span>;
-  }
-  return <span className="ml-1 font-medium text-rose-600">· Fuera de cobertura</span>;
+  return reason === "ok" ? "Swayp ok" : reason === "sin_stock" ? "Sin stock Swayp" : "Fuera de cobertura";
+}
+
+function FenixAvailabilityInline({ shipment, lead = true }: { shipment: ShipmentRow; lead?: boolean }) {
+  const reason = currentFenixReason(shipment);
+  const text = fenixAvailabilityText(shipment);
+  const tone = reason === "ok" ? "text-ok-fg" : reason === "sin_stock" ? "text-warn-fg" : "text-crit-fg";
+  return (
+    <>
+      {lead && DOT}
+      <span className={cn("whitespace-nowrap font-medium", tone)}>{text}</span>
+    </>
+  );
 }
 
 function ShipmentDrawer({
@@ -4073,12 +4269,12 @@ function ReprogramLoadState({
   onRetry: () => void;
   small?: boolean;
 }) {
-  const size = small ? "text-xs" : "text-sm";
-  if (!error) return <p className={cn(size, "text-slate-500")}>Cargando…</p>;
+  const size = small ? "text-[13px]" : "text-sm";
+  if (!error) return <p className={cn(size, "text-ink-500")}>Cargando…</p>;
   return (
-    <p role="alert" className={cn(size, "text-rose-700")}>
+    <p role="alert" className={cn(size, "text-crit-fg")}>
       {error}{" "}
-      <button type="button" onClick={onRetry} className="font-semibold underline">
+      <button type="button" onClick={onRetry} className="font-semibold text-brand-700 underline underline-offset-2">
         Reintentar
       </button>
     </p>
@@ -4365,7 +4561,7 @@ function CompactMetric({
  */
 function OrderNameLabel({ name, matched }: { name: string | null; matched: boolean }) {
   if (matched && name) return <>{name}</>;
-  return <span className="text-slate-500">—</span>;
+  return <span className="text-ink-500">—</span>;
 }
 
 function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
@@ -4398,20 +4594,99 @@ function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
 
 // ── Métricas de reprogramación Kapta→Swayp ───────────────────────────────────
 
+/** Una cifra entera en es-PE («1,984»), como las tarjetas de vista. */
+function fmtCount(n: number): string {
+  return n.toLocaleString("es-PE");
+}
+
 function pctLabel(tasa: number | null): string | null {
   return tasa == null ? null : `${Math.round(tasa * 100)}%`;
 }
 
-/** Snapshot SIEMPRE visible: productividad de hoy por asesora en Envíos
- *  (gestiones + resultados del día), para que cada persona mande una "foto" de su
- *  trabajo al final del día. */
+/**
+ * Las tablas del resumen: cifras a la derecha, hairlines de borde a borde del
+ * panel (los márgenes negativos son su relleno) y la primera columna con el
+ * nombre.
+ */
+const MINI_TH =
+  "border-y border-line px-3 py-2 text-right text-xs font-semibold text-ink-600 first:pl-4 first:text-left last:pr-4 sm:first:pl-5 sm:last:pr-5";
+const MINI_TD =
+  "border-b border-line px-3 py-2 text-right tabular-nums first:pl-4 first:text-left last:pr-4 sm:first:pl-5 sm:last:pr-5";
+/** Un panel del resumen plegable: título de 14 px y su contenido, sin marco propio. */
+const SUMMARY_PANEL = "px-4 py-4 sm:px-5";
+
+/** Una cifra del resumen: etiqueta, número y, si hace falta, su nota. */
+function SummaryFigure({
+  label,
+  value,
+  note,
+  warn,
+}: {
+  label: string;
+  value: number;
+  note?: string;
+  warn?: boolean;
+}) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[13px] text-ink-500">{label}</dt>
+      <dd className="text-xl font-semibold leading-7 tabular-nums text-ink-900">{value.toLocaleString("es-PE")}</dd>
+      {note && (
+        <dd className={cn("text-[13px] leading-5 tabular-nums", warn ? "font-medium text-warn-fg" : "text-ink-500")}>
+          {note}
+        </dd>
+      )}
+    </div>
+  );
+}
+
+/** «Del … al …»: los dos días de un rango a medida. */
+function RangeFields({
+  value,
+  max,
+  onChange,
+}: {
+  value: { from: string; to: string };
+  max: string;
+  onChange: (next: { from: string; to: string }) => void;
+}) {
+  const field = cn(FIELD_BOX, "h-8 w-auto px-2 tabular-nums pointer-coarse:h-11");
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[13px] text-ink-600">
+      <span aria-hidden="true">Del</span>
+      <input
+        type="date"
+        aria-label="Desde"
+        value={value.from}
+        max={value.to}
+        onChange={(e) => onChange({ ...value, from: e.target.value || value.from })}
+        className={field}
+      />
+      <span aria-hidden="true">al</span>
+      <input
+        type="date"
+        aria-label="Hasta"
+        value={value.to}
+        min={value.from}
+        max={max}
+        onChange={(e) => onChange({ ...value, to: e.target.value || value.to })}
+        className={field}
+      />
+    </div>
+  );
+}
+
+/** Snapshot de hoy: productividad por asesora en Repro Provincia (gestiones +
+ *  resultados del día), para que cada persona mande una "foto" de su trabajo al
+ *  final del día. */
 function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
-  const hoy = new Date().toLocaleDateString("es-PE", {
+  const day = new Date().toLocaleDateString("es-PE", {
     weekday: "long",
     day: "2-digit",
     month: "short",
     timeZone: "America/Lima",
   });
+  const hoy = day.charAt(0).toUpperCase() + day.slice(1);
   const totals = rows.reduce(
     (acc, r) => {
       acc.gestiones += r.gestiones;
@@ -4436,68 +4711,66 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
   };
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white">
-      <div className="flex items-center gap-2 px-3 py-2 text-xs">
-        <span className="text-sm font-semibold text-slate-800">Hoy por asesora</span>
-        <span className="capitalize text-slate-500">{hoy}</span>
-        <span className="ml-auto text-slate-500">Gestión de hoy en Envíos</span>
-      </div>
+    <div className={SUMMARY_PANEL}>
+      <h3 className="text-sm font-semibold text-ink-900">
+        Hoy por asesora <span className="font-normal text-ink-500">· {hoy}</span>
+      </h3>
       {rows.length === 0 ? (
-        <p className="px-3 pb-3 text-xs text-slate-500">Aún no hay gestión registrada hoy.</p>
+        <p className="mt-1 text-[13px] text-ink-500">Aún no hay gestión registrada hoy.</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-t border-slate-100 text-xs text-slate-500">
-                <th className="px-3 py-1.5 text-left font-medium">Asesora</th>
-                <th className="px-3 py-1.5 text-right font-medium">Gestiones</th>
-                <th className="px-3 py-1.5 text-right font-medium">Reprogramadas</th>
-                <th className="px-3 py-1.5 text-right font-medium">Anuladas</th>
-                <th className="px-3 py-1.5 text-right font-medium">Entregadas</th>
-                <th className="px-3 py-1.5 text-right font-medium">Guías</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.agent} className="border-t border-slate-100">
-                  <td className="px-3 py-1.5 text-slate-700">
-                    {label(r.name)}
-                    {isVoiceAgentKey(r.agent) && (
-                      <span className="ml-1.5 rounded bg-sky-50 px-1 text-xs font-medium text-sky-700">
-                        IA
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-1.5 text-right font-semibold text-slate-800 tabular-nums">
-                    {r.gestiones}
-                  </td>
-                  <td className="px-3 py-1.5 text-right text-violet-700 tabular-nums">{r.reprogramadas}</td>
-                  <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{r.anuladas}</td>
-                  <td className="px-3 py-1.5 text-right text-emerald-700 tabular-nums">{r.entregadas}</td>
-                  <td className="px-3 py-1.5 text-right text-slate-600 tabular-nums">{r.guias}</td>
+        <>
+          <div className="-mx-4 mt-3 overflow-x-auto sm:-mx-5">
+            <table className="w-full border-separate border-spacing-0 text-sm">
+              <thead>
+                <tr>
+                  <th className={MINI_TH}>Asesora</th>
+                  <th className={MINI_TH}>Gestiones</th>
+                  <th className={MINI_TH}>Reprogramadas</th>
+                  <th className={MINI_TH}>Anuladas</th>
+                  <th className={MINI_TH}>Entregadas</th>
+                  <th className={MINI_TH}>Guías</th>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t border-slate-200 text-slate-600">
-                <td className="px-3 py-1.5 text-left font-medium">Total equipo</td>
-                <td className="px-3 py-1.5 text-right font-semibold tabular-nums">{totals.gestiones}</td>
-                <td className="px-3 py-1.5 text-right tabular-nums">{totals.reprogramadas}</td>
-                <td className="px-3 py-1.5 text-right tabular-nums">{totals.anuladas}</td>
-                <td className="px-3 py-1.5 text-right tabular-nums">{totals.entregadas}</td>
-                <td className="px-3 py-1.5 text-right tabular-nums">{totals.guias}</td>
-              </tr>
-            </tfoot>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.agent}>
+                    <td className={cn(MINI_TD, "text-ink-900")}>
+                      {label(r.name)}
+                      {isVoiceAgentKey(r.agent) && (
+                        <Badge tone="info" className="ml-1.5 align-middle">
+                          IA
+                        </Badge>
+                      )}
+                    </td>
+                    <td className={cn(MINI_TD, "font-semibold text-ink-900")}>{fmtCount(r.gestiones)}</td>
+                    <td className={cn(MINI_TD, "text-info-fg")}>{fmtCount(r.reprogramadas)}</td>
+                    <td className={cn(MINI_TD, "text-ink-500")}>{fmtCount(r.anuladas)}</td>
+                    <td className={cn(MINI_TD, "text-ok-fg")}>{fmtCount(r.entregadas)}</td>
+                    <td className={cn(MINI_TD, "text-ink-700")}>{fmtCount(r.guias)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="font-medium text-ink-700">
+                  <td className={MINI_TD}>Total equipo</td>
+                  <td className={cn(MINI_TD, "font-semibold text-ink-900")}>{fmtCount(totals.gestiones)}</td>
+                  <td className={MINI_TD}>{fmtCount(totals.reprogramadas)}</td>
+                  <td className={MINI_TD}>{fmtCount(totals.anuladas)}</td>
+                  <td className={MINI_TD}>{fmtCount(totals.entregadas)}</td>
+                  <td className={MINI_TD}>{fmtCount(totals.guias)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
           {/* Lo que antes solo decía un tooltip: con teclado o en táctil no
               existía. Una línea, visible, y las cabeceras sin abreviar. */}
-          <p className="border-t border-slate-100 px-3 py-2 text-xs leading-relaxed text-slate-500">
+          <p className="mt-3 max-w-[110ch] text-[13px] leading-5 text-ink-500">
             Gestiones: llamadas y reprogramaciones registradas hoy · Reprogramadas: confirmadas y en ruta ·
             Anuladas: la clienta canceló · Entregadas: cerradas por el resultado del courier · Guías: distintas
             tocadas hoy · Agente Daaph, Agente Telnyx y Agente ElevenLabs: el agente de voz IA por distintas líneas y
             motores; cada llamada suya es una gestión.
           </p>
-        </div>
+        </>
       )}
     </div>
   );
@@ -4527,130 +4800,102 @@ function VoiceScorePanel({ initial }: { initial: VoiceScoreRow[] }) {
   }, [key, from, to, result]);
 
   const rows = Array.isArray(result) ? result : null;
+  // Cifras en es-PE, como el resto del panel: coma de miles y punto decimal.
+  // Se escribía «5,5» y «$6,42» al lado de «3,089».
   const pct = (n: number | null) => (n == null ? "—" : `${Math.round(n * 100)}%`);
-  const per = (n: number | null) => (n == null ? "—" : n.toFixed(1).replace(".", ","));
-  const usd = (n: number | null) => (n == null ? "—" : `$${n.toFixed(2).replace(".", ",")}`);
-  const cell = "px-3 py-1.5 text-right tabular-nums";
+  const per = (n: number | null) =>
+    n == null ? "—" : n.toLocaleString("es-PE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const usd = (n: number | null) =>
+    n == null ? "—" : `US$ ${n.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white">
-      <div className="flex items-center gap-2 px-3 py-2 text-xs">
-        <span className="text-sm font-semibold text-slate-800">Agentes de voz: comparación</span>
-        <span className="ml-auto text-slate-500">{from === to ? from : `${from} al ${to}`}</span>
+    <div className={SUMMARY_PANEL}>
+      <h3 className="text-sm font-semibold text-ink-900">
+        Agentes de voz: comparación{" "}
+        <span className="font-normal tabular-nums text-ink-500">· {from === to ? from : `${from} al ${to}`}</span>
+      </h3>
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div role="group" aria-label="Rango" className="flex flex-wrap items-center gap-1.5">
+          {REPROGRAM_PRESETS.map((p) => (
+            <ChoiceChip key={p.key} label={p.label} active={preset === p.key} onClick={() => setPreset(p.key)} />
+          ))}
+        </div>
+        {preset === "rango" && <RangeFields value={custom} max={today} onChange={setCustom} />}
       </div>
-      <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2">
-        {REPROGRAM_PRESETS.map((p) => (
-          <button
-            key={p.key}
-            type="button"
-            onClick={() => setPreset(p.key)}
-            aria-pressed={preset === p.key}
-            className={cn(
-              "rounded-full border px-2.5 py-1 text-xs font-medium transition",
-              preset === p.key
-                ? "border-brand-200 bg-brand-50 text-brand-700"
-                : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
-            )}
-          >
-            {p.label}
-          </button>
-        ))}
-        {preset === "rango" && (
-          <span className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            <span aria-hidden="true">Del</span>
-            <input
-              type="date"
-              aria-label="Desde"
-              value={custom.from}
-              max={custom.to}
-              onChange={(e) => setCustom((s) => ({ ...s, from: e.target.value || s.from }))}
-              className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
-            />
-            <span aria-hidden="true">al</span>
-            <input
-              type="date"
-              aria-label="Hasta"
-              value={custom.to}
-              min={custom.from}
-              max={today}
-              onChange={(e) => setCustom((s) => ({ ...s, to: e.target.value || s.to }))}
-              className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
-            />
-          </span>
-        )}
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+      <div className="-mx-4 mt-3 overflow-x-auto sm:-mx-5">
+        <table className="w-full border-separate border-spacing-0 text-sm">
           <thead>
-            <tr className="border-t border-slate-100 text-xs text-slate-500">
-              <th className="px-3 py-1.5 text-left font-medium">Agente</th>
-              <th className="px-3 py-1.5 text-right font-medium">Llamadas</th>
-              <th className="px-3 py-1.5 text-right font-medium">Atendidas</th>
-              <th className="px-3 py-1.5 text-right font-medium">Sin gestión</th>
-              <th className="px-3 py-1.5 text-right font-medium">Confirma</th>
-              <th className="px-3 py-1.5 text-right font-medium">Programa</th>
-              <th className="px-3 py-1.5 text-right font-medium">Cancela</th>
-              <th className="px-3 py-1.5 text-right font-medium">Guías Swayp</th>
-              <th className="px-3 py-1.5 text-right font-medium">Confirma / atendidas</th>
-              <th className="px-3 py-1.5 text-right font-medium">Llamadas por confirma</th>
-              <th className="px-3 py-1.5 text-right font-medium">Costo línea (US$)</th>
-              <th className="px-3 py-1.5 text-right font-medium">Costo por confirma</th>
+            <tr>
+              <th className={MINI_TH}>Agente</th>
+              <th className={MINI_TH}>Llamadas</th>
+              <th className={MINI_TH}>Atendidas</th>
+              <th className={MINI_TH}>Sin gestión</th>
+              <th className={MINI_TH}>Confirma</th>
+              <th className={MINI_TH}>Programa</th>
+              <th className={MINI_TH}>Cancela</th>
+              <th className={MINI_TH}>Guías Swayp</th>
+              <th className={MINI_TH}>Confirma / atendidas</th>
+              <th className={MINI_TH}>Llamadas por confirma</th>
+              <th className={MINI_TH}>Costo línea</th>
+              <th className={MINI_TH}>Costo por confirma</th>
             </tr>
           </thead>
           <tbody>
             {!rows && (
-              <tr className="border-t border-slate-100">
-                <td colSpan={12} className="px-3 py-3 text-xs text-slate-500">
+              <tr>
+                <td colSpan={12} className="px-4 py-3 text-[13px] text-ink-500 sm:px-5">
                   {result === "error" ? "No se pudo leer este rango." : "Cargando…"}
                 </td>
               </tr>
             )}
             {rows?.map((r) => (
-              <tr key={r.agent} className={`border-t border-slate-100 ${r.llamadas ? "" : "text-slate-500"}`}>
-                <td className="px-3 py-1.5 text-left text-slate-700">{r.name}</td>
-                <td className={`${cell} font-semibold text-slate-800`}>{r.llamadas}</td>
-                <td className={cell}>{r.atendidas}</td>
-                <td className={`${cell} text-amber-700`}>{r.sinGestion}</td>
-                <td className={`${cell} text-emerald-700`}>{r.confirma}</td>
-                <td className={cell}>{r.programar}</td>
-                <td className={`${cell} text-slate-500`}>{r.cancela}</td>
-                <td className={cell}>{r.guias}</td>
-                <td className={`${cell} font-semibold`}>{pct(voiceConversion(r))}</td>
-                <td className={cell}>{per(voiceCallsPerConfirma(r))}</td>
-                <td className={cell}>
+              <tr key={r.agent} className={r.llamadas ? "text-ink-700" : "text-ink-500"}>
+                <td className={cn(MINI_TD, r.llamadas > 0 && "text-ink-900")}>{r.name}</td>
+                <td className={cn(MINI_TD, "font-semibold", r.llamadas > 0 && "text-ink-900")}>{fmtCount(r.llamadas)}</td>
+                <td className={MINI_TD}>{fmtCount(r.atendidas)}</td>
+                <td className={cn(MINI_TD, r.sinGestion > 0 && "text-warn-fg")}>{fmtCount(r.sinGestion)}</td>
+                <td className={cn(MINI_TD, r.confirma > 0 && "text-ok-fg")}>{fmtCount(r.confirma)}</td>
+                <td className={MINI_TD}>{fmtCount(r.programar)}</td>
+                <td className={cn(MINI_TD, "text-ink-500")}>{fmtCount(r.cancela)}</td>
+                <td className={MINI_TD}>{fmtCount(r.guias)}</td>
+                <td className={cn(MINI_TD, "font-semibold")}>{pct(voiceConversion(r))}</td>
+                <td className={MINI_TD}>{per(voiceCallsPerConfirma(r))}</td>
+                <td className={cn(MINI_TD, "whitespace-nowrap")}>
                   {r.conCosto ? usd(r.costo) : "—"}
                   {r.conCosto > 0 && r.conCosto < r.llamadas && (
-                    <span className="ml-1 text-xs text-slate-500">
-                      ({r.conCosto} de {r.llamadas})
+                    <span className="ml-1 text-xs text-ink-500">
+                      ({fmtCount(r.conCosto)} de {fmtCount(r.llamadas)})
                     </span>
                   )}
                 </td>
-                <td className={cell}>{usd(voiceCostPerConfirma(r))}</td>
+                <td className={MINI_TD}>{usd(voiceCostPerConfirma(r))}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        <p className="border-t border-slate-100 px-3 py-2 text-xs leading-relaxed text-slate-500">
-          Solo llamadas reales (no las de prueba) · Atendidas: la clienta habló con el agente · Sin gestión: atendió
-          pero se cortó sin que el agente registrara un resultado · Guías Swayp: salidas creadas por sus «confirma» ·
-          Costo línea: lo que Telnyx avisó que cobró (los dos tramos; sin el minuto de xAI ni de ElevenLabs).
-          Zadarma no lo avisa, por eso Daaph sale con guion · Agente Daaph: Zadarma + Grok · Agente Telnyx:
-          Telnyx + Grok · Agente ElevenLabs: Telnyx + ElevenLabs.
-        </p>
       </div>
+      <p className="mt-3 max-w-[110ch] text-[13px] leading-5 text-ink-500">
+        Solo llamadas reales (no las de prueba) · Atendidas: la clienta habló con el agente · Sin gestión: atendió
+        pero se cortó sin que el agente registrara un resultado · Guías Swayp: salidas creadas por sus «confirma» ·
+        Costo línea: lo que Telnyx avisó que cobró (los dos tramos; sin el minuto de xAI ni de ElevenLabs).
+        Zadarma no lo avisa, por eso Daaph sale con guion · Agente Daaph: Zadarma + Grok · Agente Telnyx:
+        Telnyx + Grok · Agente ElevenLabs: Telnyx + ElevenLabs.
+      </p>
     </div>
   );
 }
 
-/** Franja compacta bajo el encabezado: la tasa de entrega de lo reprogramado en
- *  Kapta (guías Swayp hijas), visible sin clics. "Ver detalle" abre el popup. */
+/** La tasa de entrega de lo reprogramado en Kapta (guías Swayp hijas) en los
+ *  últimos 30 días, en cinco cifras. «Ver detalle» abre el análisis por rango. */
 function ReprogramStrip({ stats, stores }: { stats: ReprogramStats; stores: StoreSummary[] }) {
   const [open, setOpen] = useState(false);
   if (!stats.historico.total) {
     return (
-      <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
-        <span className="text-sm font-semibold text-slate-800">Reprogramados en Kapta</span>{" "}
-        · todavía ninguna. Aparecerá en cuanto se confirme la primera reprogramación.
+      <div className={SUMMARY_PANEL}>
+        <h3 className="text-sm font-semibold text-ink-900">Reprogramados en Kapta</h3>
+        <p className="mt-1 text-[13px] text-ink-500">
+          Todavía ninguna. Aparecerá en cuanto se confirme la primera reprogramación.
+        </p>
       </div>
     );
   }
@@ -4658,32 +4903,28 @@ function ReprogramStrip({ stats, stores }: { stats: ReprogramStats; stores: Stor
   const pct = pctLabel(c.tasa);
   return (
     <>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs tabular-nums text-slate-600">
-        <span className="text-sm font-semibold text-slate-800">Reprogramados en Kapta</span>
-        <span className="text-slate-500">últimos 30 días:</span>
-        <span className="font-semibold text-slate-800" title="Reprogramaciones confirmadas (Aliclik + Swayp)">
-          {c.total}
-        </span>
-        <span>
-          {c.entregados} entregados
-          {pct && (
-            <>
-              {" "}
-              (<b>{pct}</b> de los cerrados)
-            </>
-          )}
-        </span>
-        <span className="text-sky-700">{c.entregadosFenix} por Swayp</span>
-        <span>{c.anulados} anulados</span>
-        <span>
-          {c.enCurso} en curso
-          {c.enCursoViejos > 0 && (
-            <span className="font-medium text-amber-700"> · {c.enCursoViejos} varados +{REPROGRAM_STALE_DAYS}d</span>
-          )}
-        </span>
-        <button type="button" onClick={() => setOpen(true)} className="ml-auto font-medium text-brand-700 hover:underline">
-          Ver detalle
-        </button>
+      <div className={SUMMARY_PANEL}>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+          <h3 className="text-sm font-semibold text-ink-900">
+            Reprogramados en Kapta <span className="font-normal text-ink-500">· últimos 30 días</span>
+          </h3>
+          <OpsButton variant="ghost" size="sm" onClick={() => setOpen(true)} className="-my-1 pointer-coarse:h-11">
+            Ver detalle
+            <IconArrowRight className="text-ink-500" />
+          </OpsButton>
+        </div>
+        <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:flex lg:flex-wrap lg:gap-x-12">
+          <SummaryFigure label="Reprogramaciones" value={c.total} />
+          <SummaryFigure label="Entregados" value={c.entregados} note={pct ? `${pct} de los cerrados` : undefined} />
+          <SummaryFigure label="Por Swayp" value={c.entregadosFenix} />
+          <SummaryFigure label="Anulados" value={c.anulados} />
+          <SummaryFigure
+            label="En curso"
+            value={c.enCurso}
+            note={c.enCursoViejos > 0 ? `${c.enCursoViejos} varados +${REPROGRAM_STALE_DAYS} d` : undefined}
+            warn
+          />
+        </dl>
       </div>
       {open && <ReprogramModal stats={stats} stores={stores} onClose={() => setOpen(false)} />}
     </>
@@ -4693,19 +4934,15 @@ function ReprogramStrip({ stats, stores }: { stats: ReprogramStats; stores: Stor
 function ReprogramCountsRow({ label, c }: { label: string; c: ReprogramCounts }) {
   const pct = pctLabel(c.tasa);
   return (
-    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-sm">
-      <span className="w-28 shrink-0 truncate font-medium text-slate-700">{label}</span>
-      <span className="tabular-nums text-slate-800" title="Reprogramaciones (Aliclik + Swayp)">{c.total}</span>
-      <span className="tabular-nums text-emerald-700" title="Entregados (ambos couriers)">{c.entregados} entregados</span>
-      {c.entregadosFenix > 0 && (
-        <span className="tabular-nums text-sky-700" title="De los entregados, los que salieron por Swayp">
-          {c.entregadosFenix} por Swayp
-        </span>
-      )}
-      <span className="tabular-nums text-slate-500">{c.anulados} anulados</span>
-      <span className="tabular-nums text-slate-500">{c.enCurso} en curso</span>
-      {c.enCursoViejos > 0 && <span className="tabular-nums text-amber-700">{c.enCursoViejos} varados</span>}
-      <span className="ml-auto font-semibold tabular-nums text-slate-800">{pct ?? "—"}</span>
+    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[13px] tabular-nums">
+      <span className="w-28 shrink-0 truncate text-sm font-medium text-ink-900">{label}</span>
+      <span className="text-ink-900">{fmtCount(c.total)} reprogramadas</span>
+      <span className="text-ok-fg">{fmtCount(c.entregados)} entregados</span>
+      {c.entregadosFenix > 0 && <span className="text-ink-700">{fmtCount(c.entregadosFenix)} por Swayp</span>}
+      <span className="text-ink-500">{fmtCount(c.anulados)} anulados</span>
+      <span className="text-ink-500">{fmtCount(c.enCurso)} en curso</span>
+      {c.enCursoViejos > 0 && <span className="font-medium text-warn-fg">{fmtCount(c.enCursoViejos)} varados</span>}
+      <span className="ml-auto text-sm font-semibold text-ink-900">{pct ?? "—"}</span>
     </div>
   );
 }
@@ -4801,186 +5038,177 @@ function ReprogramModal({
         return reprogramRangeStats(data.rows, startMs, endMs, Date.now());
       })()
     : null;
+  const range = presetLabel(preset);
 
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-slate-900/30 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-30 grid place-items-center bg-ink-900/30 p-4" onClick={onClose}>
       <div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="reprogram-modal-title"
         tabIndex={-1}
-        className="max-h-[85vh] w-full max-w-lg overflow-auto rounded-2xl bg-white p-5 shadow-xl outline-none"
+        className="max-h-[85vh] w-full max-w-xl overflow-y-auto overscroll-contain rounded-lg bg-white shadow-pop outline-none"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-3 flex items-center justify-between">
-          <h2 id="reprogram-modal-title" className="text-base font-semibold text-slate-900">
+        <header className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-line bg-white px-5 pb-3 pt-4">
+          <h2 id="reprogram-modal-title" className="text-lg font-semibold leading-7 text-ink-900">
             Reprogramaciones (Aliclik + Swayp)
           </h2>
           <button
             type="button"
             onClick={onClose}
             aria-label="Cerrar"
-            className="text-slate-500 hover:text-slate-800"
+            className="-mr-1.5 grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
           >
             <IconClose />
           </button>
-        </div>
+        </header>
 
-        {/* Chips de rango — para monitorear qué se está gestionando. */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {REPROGRAM_PRESETS.map((p) => (
-            <button
-              key={p.key}
-              type="button"
-              onClick={() => setPreset(p.key)}
-              className={cn(
-                "rounded-full border px-2.5 py-1 text-xs font-medium transition",
-                preset === p.key
-                  ? "border-brand-200 bg-brand-50 text-brand-700"
-                  : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
-              )}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-        {preset === "rango" && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            <span aria-hidden="true">Del</span>
-            <input
-              type="date"
-              aria-label="Desde"
-              value={custom.from}
-              max={custom.to}
-              onChange={(e) => setCustom((s) => ({ ...s, from: e.target.value || s.from }))}
-              className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
-            />
-            <span aria-hidden="true">al</span>
-            <input
-              type="date"
-              aria-label="Hasta"
-              value={custom.to}
-              min={custom.from}
-              max={today}
-              onChange={(e) => setCustom((s) => ({ ...s, to: e.target.value || s.to }))}
-              className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700"
-            />
-          </div>
-        )}
-
-        <div className="mt-3 space-y-1.5 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-          {ranged ? (
-            <ReprogramCountsRow
-              label={from === to ? from.slice(5) : `${from.slice(5)}–${to.slice(5)}`}
-              c={ranged.counts}
-            />
-          ) : (
-            <ReprogramLoadState error={loadError} onRetry={retry} />
-          )}
-          <ReprogramCountsRow label="Histórico" c={stats.historico} />
-        </div>
-
-        {/* Tendencia semanal (semana = lunes local). Barra = reprogramados; el
-            segmento verde son los que YA terminaron entregados.
-
-            DOS DE LAS TRES CIFRAS VIVÍAN SOLO EN EL `title`: entregados y
-            anulados no se podían leer sin ratón ni con lector de pantalla, y en
-            teléfono no existe el hover. Ahora la tabla equivalente está debajo,
-            plegada, y las barras son decoración anunciada como tal. */}
-        <p className="mt-4 mb-1 text-xs font-semibold tracking-[0.12em] text-slate-500 uppercase">Últimas 8 semanas</p>
-        <div className="flex items-end gap-1.5" aria-hidden="true">
-          {stats.semanas.map((w) => {
-            const h = Math.round((w.total / maxWeek) * 64);
-            const hOk = w.total ? Math.round((w.entregados / w.total) * h) : 0;
-            return (
-              <div key={w.start} className="flex flex-1 flex-col items-center gap-0.5">
-                <span className="text-xs tabular-nums text-slate-500">{w.total || ""}</span>
-                <div
-                  className="flex w-full flex-col justify-end overflow-hidden rounded-sm bg-slate-100"
-                  style={{ height: 64 }}
-                >
-                  <div className="w-full bg-slate-300" style={{ height: Math.max(0, h - hOk) }} />
-                  <div className="w-full bg-emerald-500" style={{ height: hOk }} />
-                </div>
-                <span className="text-xs text-slate-500">{weekLabel(w.start)}</span>
-              </div>
-            );
-          })}
-        </div>
-        <details className="mt-1">
-          <summary className="cursor-pointer select-none text-xs text-slate-500">
-            Ver las 8 semanas en números
-          </summary>
-          <table className="mt-1.5 w-full text-xs">
-            <thead>
-              <tr className="text-left text-slate-500">
-                <th className="py-0.5 pr-2 font-medium">Semana</th>
-                <th className="py-0.5 pr-2 text-right font-medium">Reprogramados</th>
-                <th className="py-0.5 pr-2 text-right font-medium">Entregados</th>
-                <th className="py-0.5 text-right font-medium">Anulados</th>
-              </tr>
-            </thead>
-            <tbody className="tabular-nums text-slate-700">
-              {stats.semanas.map((w) => (
-                <tr key={w.start} className="border-t border-slate-100">
-                  <td className="py-0.5 pr-2">{weekLabel(w.start)}</td>
-                  <td className="py-0.5 pr-2 text-right">{w.total}</td>
-                  <td className="py-0.5 pr-2 text-right text-emerald-700">{w.entregados}</td>
-                  <td className="py-0.5 text-right">{w.anulados}</td>
-                </tr>
+        <div className="space-y-6 px-5 py-4">
+          {/* Chips de rango — para monitorear qué se está gestionando. */}
+          <div className="space-y-2">
+            <div role="group" aria-label="Rango" className="flex flex-wrap items-center gap-1.5">
+              {REPROGRAM_PRESETS.map((p) => (
+                <ChoiceChip key={p.key} label={p.label} active={preset === p.key} onClick={() => setPreset(p.key)} />
               ))}
-            </tbody>
-          </table>
-        </details>
-
-        <p className="mt-4 mb-1 text-xs font-semibold tracking-[0.12em] text-slate-500 uppercase">
-          Por tienda ({presetLabel(preset)})
-        </p>
-        <div className="space-y-1.5">
-          {ranged ? (
-            Object.entries(ranged.porTienda).length ? (
-              Object.entries(ranged.porTienda)
-                .sort((a, b) => b[1].total - a[1].total)
-                .map(([sid, c]) => <ReprogramCountsRow key={sid} label={storeName(sid)} c={c} />)
-            ) : (
-              <p className="text-xs text-slate-500">Sin reprogramaciones en este rango.</p>
-            )
-          ) : (
-            <ReprogramLoadState error={loadError} onRetry={retry} small />
-          )}
-        </div>
-
-        <p className="mt-4 mb-1 text-xs font-semibold tracking-[0.12em] text-slate-500 uppercase">
-          Por asesor ({presetLabel(preset)})
-        </p>
-        <div className="space-y-1.5">
-          {ranged ? (
-            Object.entries(ranged.porAsesor).length ? (
-              Object.entries(ranged.porAsesor)
-                .sort((a, b) => b[1].total - a[1].total)
-                .map(([uid, c]) => (
+            </div>
+            {preset === "rango" && <RangeFields value={custom} max={today} onChange={setCustom} />}
+            <div className="divide-y divide-line rounded-md ring-1 ring-line">
+              <div className="px-3 py-2.5">
+                {ranged ? (
                   <ReprogramCountsRow
-                    key={uid}
-                    label={uid === REPROGRAM_UNASSIGNED ? "Sin asignar" : asesorNames[uid] ?? uid}
-                    c={c}
+                    label={from === to ? from.slice(5) : `${from.slice(5)}–${to.slice(5)}`}
+                    c={ranged.counts}
                   />
-                ))
-            ) : (
-              <p className="text-xs text-slate-500">Sin reprogramaciones en este rango.</p>
-            )
-          ) : (
-            <ReprogramLoadState error={loadError} onRetry={retry} small />
-          )}
-        </div>
+                ) : (
+                  <ReprogramLoadState error={loadError} onRetry={retry} />
+                )}
+              </div>
+              <div className="px-3 py-2.5">
+                <ReprogramCountsRow label="Histórico" c={stats.historico} />
+              </div>
+            </div>
+          </div>
 
-        <p className="mt-4 text-xs leading-relaxed text-slate-500">
-          Universo: reprogramaciones confirmadas en el dashboard — <b>Aliclik</b> (la guía sigue en Aliclik) y{" "}
-          <b>Swayp</b> (antes Fénix; se creó una guía Swayp); las entregas de primer intento no entran. <b>Por Swayp</b> es el
-          subconjunto de entregados que salió por una guía Swayp. Los cortes por rango usan la fecha en que se confirmó
-          la reprogramación. La <b>tasa</b> es entregados ÷ cerrados (entregados + anulados) — lo en curso no la afecta.{" "}
-          <b>Varados</b>: en curso hace más de {REPROGRAM_STALE_DAYS} días, probables anulados sin confirmar.
-        </p>
+          {/* Tendencia semanal (semana = lunes local). Barra = reprogramados; el
+              tramo verde son los que YA terminaron entregados.
+
+              DOS DE LAS TRES CIFRAS VIVÍAN SOLO EN EL `title`: entregados y
+              anulados no se podían leer sin ratón ni con lector de pantalla, y en
+              teléfono no existe el hover. Ahora la tabla equivalente está debajo,
+              plegada, y las barras son decoración anunciada como tal. */}
+          <div>
+            <h3 className="text-sm font-semibold text-ink-900">Últimas 8 semanas</h3>
+            <p className="text-[13px] text-ink-500">La barra son las reprogramaciones; el tramo verde, las ya entregadas.</p>
+            <div className="mt-2 flex items-end gap-1.5" aria-hidden="true">
+              {stats.semanas.map((w) => {
+                const h = Math.round((w.total / maxWeek) * 64);
+                const hOk = w.total ? Math.round((w.entregados / w.total) * h) : 0;
+                return (
+                  <div key={w.start} className="flex flex-1 flex-col items-center gap-0.5">
+                    <span className="text-xs tabular-nums text-ink-500">{w.total ? fmtCount(w.total) : ""}</span>
+                    <div className="flex w-full flex-col justify-end overflow-hidden rounded-sm bg-wash" style={{ height: 64 }}>
+                      <div className="w-full bg-line-strong" style={{ height: Math.max(0, h - hOk) }} />
+                      <div className="w-full bg-ok-fg" style={{ height: hOk }} />
+                    </div>
+                    <span className="text-xs tabular-nums text-ink-500">{weekLabel(w.start)}</span>
+                  </div>
+                );
+              })}
+            </div>
+            {/* Grupo con nombre: el modal vive dentro del resumen plegable, que
+                también es un <details> abierto. */}
+            <details className="group/weeks mt-2">
+              <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-[13px] font-medium text-brand-700 [&::-webkit-details-marker]:hidden">
+                <IconChevronRight
+                  aria-hidden
+                  className="size-3.5 transition-transform duration-150 group-open/weeks:rotate-90 motion-reduce:transition-none"
+                />
+                Ver las 8 semanas en números
+              </summary>
+              <table className="mt-1.5 w-full text-[13px]">
+                <thead>
+                  <tr className="text-left text-ink-600">
+                    <th className="py-1 pr-2 font-semibold">Semana</th>
+                    <th className="py-1 pr-2 text-right font-semibold">Reprogramados</th>
+                    <th className="py-1 pr-2 text-right font-semibold">Entregados</th>
+                    <th className="py-1 text-right font-semibold">Anulados</th>
+                  </tr>
+                </thead>
+                <tbody className="tabular-nums text-ink-700">
+                  {stats.semanas.map((w) => (
+                    <tr key={w.start} className="border-t border-line">
+                      <td className="py-1 pr-2">{weekLabel(w.start)}</td>
+                      <td className="py-1 pr-2 text-right">{fmtCount(w.total)}</td>
+                      <td className="py-1 pr-2 text-right text-ok-fg">{fmtCount(w.entregados)}</td>
+                      <td className="py-1 text-right">{fmtCount(w.anulados)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </details>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-ink-900">
+              Por tienda <span className="font-normal text-ink-500">· {range}</span>
+            </h3>
+            <div className="mt-2 divide-y divide-line">
+              {ranged ? (
+                Object.entries(ranged.porTienda).length ? (
+                  Object.entries(ranged.porTienda)
+                    .sort((a, b) => b[1].total - a[1].total)
+                    .map(([sid, c]) => (
+                      <div key={sid} className="py-2">
+                        <ReprogramCountsRow label={storeName(sid)} c={c} />
+                      </div>
+                    ))
+                ) : (
+                  <p className="text-[13px] text-ink-500">Sin reprogramaciones en este rango.</p>
+                )
+              ) : (
+                <ReprogramLoadState error={loadError} onRetry={retry} small />
+              )}
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-ink-900">
+              Por asesor <span className="font-normal text-ink-500">· {range}</span>
+            </h3>
+            <div className="mt-2 divide-y divide-line">
+              {ranged ? (
+                Object.entries(ranged.porAsesor).length ? (
+                  Object.entries(ranged.porAsesor)
+                    .sort((a, b) => b[1].total - a[1].total)
+                    .map(([uid, c]) => (
+                      <div key={uid} className="py-2">
+                        <ReprogramCountsRow
+                          label={uid === REPROGRAM_UNASSIGNED ? "Sin asignar" : asesorNames[uid] ?? uid}
+                          c={c}
+                        />
+                      </div>
+                    ))
+                ) : (
+                  <p className="text-[13px] text-ink-500">Sin reprogramaciones en este rango.</p>
+                )
+              ) : (
+                <ReprogramLoadState error={loadError} onRetry={retry} small />
+              )}
+            </div>
+          </div>
+
+          <p className="border-t border-line pt-4 text-[13px] leading-5 text-ink-500">
+            Universo: reprogramaciones confirmadas en el dashboard — <b className="font-semibold text-ink-700">Aliclik</b> (la
+            guía sigue en Aliclik) y <b className="font-semibold text-ink-700">Swayp</b> (antes Fénix; se creó una guía Swayp); las
+            entregas de primer intento no entran. <b className="font-semibold text-ink-700">Por Swayp</b> es el subconjunto de
+            entregados que salió por una guía Swayp. Los cortes por rango usan la fecha en que se confirmó la
+            reprogramación. La <b className="font-semibold text-ink-700">tasa</b> es entregados ÷ cerrados (entregados +
+            anulados) — lo en curso no la afecta. <b className="font-semibold text-ink-700">Varados</b>: en curso hace más de{" "}
+            {REPROGRAM_STALE_DAYS} días, probables anulados sin confirmar.
+          </p>
+        </div>
       </div>
     </div>
   );

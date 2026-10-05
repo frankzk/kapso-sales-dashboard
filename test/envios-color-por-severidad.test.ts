@@ -31,7 +31,7 @@ describe("las secciones del cajón son neutras", () => {
 
   it("los títulos de sección son neutros", () => {
     for (const m of src.matchAll(/<h3 className="([^"]*)"/g)) {
-      expect(m[1], m[1]).toContain("text-slate-900");
+      expect(m[1], m[1]).toMatch(/text-(slate|ink)-900/);
     }
   });
 
@@ -45,9 +45,10 @@ describe("las secciones del cajón son neutras", () => {
         expect(allowed.has(line.trim()), line.trim()).toBe(true);
       }
     }
-    // Indigo solo en la etiqueta «Directa»: fondo y texto, en la tabla, en las
-    // tarjetas de teléfono y en el cajón.
-    expect(src.match(/indigo-[0-9]/g)?.length).toBe(6);
+    // Indigo solo en la etiqueta «Directa» del cajón (fondo y texto). En la
+    // cola, desde el 05-10-2026, «Directa» y «Swayp» son chapas neutras: el
+    // color de la fila es para el estado y la ruta.
+    expect(src.match(/indigo-[0-9]/g)?.length).toBe(2);
   });
 });
 

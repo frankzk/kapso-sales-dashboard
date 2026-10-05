@@ -85,7 +85,8 @@ describe("descartar la recuperación se confirma nombrando el pedido", () => {
 
 describe("lo que explicaba un tooltip ahora se lee", () => {
   it("la tabla de hoy por asesora lleva una leyenda visible y cabeceras sin abreviar", () => {
-    const panel = ui.slice(ui.indexOf("Hoy por asesora</span>"), ui.indexOf("function ReprogramStrip"));
+    const panel = ui.slice(ui.indexOf("function TodayByAgentPanel"), ui.indexOf("function VoiceScorePanel"));
+    expect(panel).toContain("Hoy por asesora");
     expect(panel).not.toContain('title="');
     expect(panel).toContain(">Reprogramadas</th>");
     expect(panel).toContain("Entregadas: cerradas por el resultado del courier");

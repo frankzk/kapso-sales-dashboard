@@ -73,8 +73,12 @@ export const FilterPill = forwardRef<HTMLButtonElement, {
   onClick: () => void;
   onClear?: () => void;
   expanded?: boolean;
+  /** Filtro de sí/no: el estado que anuncia el lector de pantalla. */
+  pressed?: boolean;
+  /** Id del texto que explica la regla del filtro. */
+  describedBy?: string;
   title?: string;
-}>(function FilterPill({ label, value, active, count, onClick, onClear, expanded, title }, ref) {
+}>(function FilterPill({ label, value, active, count, onClick, onClear, expanded, pressed, describedBy, title }, ref) {
   const countNode = count != null && <span className="tabular-nums text-ink-500">{count.toLocaleString("es-PE")}</span>;
   if (!value && !active) {
     return (
@@ -83,6 +87,8 @@ export const FilterPill = forwardRef<HTMLButtonElement, {
         type="button"
         onClick={onClick}
         aria-expanded={expanded}
+        aria-pressed={pressed}
+        aria-describedby={describedBy}
         title={title}
         className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-dashed border-line-strong bg-white pl-2 pr-3 text-[13px] font-medium text-ink-600 transition-colors hover:border-ink-300 hover:text-ink-900 pointer-coarse:h-11"
       >
@@ -104,6 +110,8 @@ export const FilterPill = forwardRef<HTMLButtonElement, {
         type="button"
         onClick={onClick}
         aria-expanded={expanded}
+        aria-pressed={pressed}
+        aria-describedby={describedBy}
         title={title}
         className={cn("inline-flex h-8 min-w-0 items-center gap-1.5 whitespace-nowrap rounded-r-full pr-3 text-ink-700 hover:text-ink-900 pointer-coarse:h-11", !onClear && "rounded-l-full pl-3")}
       >
