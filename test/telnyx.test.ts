@@ -305,6 +305,17 @@ describe("guardas del flujo (código)", () => {
     expect(server.match(/if \(isAutoRetryInterlock\(insertError\)\) return autoRetryRefusal\(\);/g)).toHaveLength(2);
   });
 
+  it("con el cupo del piloto lleno, el agente sí llama; con otro motivo manda el reintento (05-10-2026)", () => {
+    const fn = server.slice(server.indexOf("export async function placeVoiceCall("));
+    const body = fn.slice(0, fn.indexOf("return autoRetryRefusal();"));
+    expect(body).toContain('verdict.cohort==="recent_no_history"');
+    expect(body).toContain("await pilotUsedToday(admin,");
+    expect(body).toContain("pilot_daily_cap??3");
+    // Una sola cuenta del cupo: la misma función en el despachador.
+    const auto = readFileSync(resolve(__dirname, "../lib/swayp-auto-server.ts"), "utf8");
+    expect(auto).toContain("let pilotUsed=await pilotUsedToday(admin,settings.org_id);");
+  });
+
   it("el barrido sortea línea y motor de cada llamada", () => {
     expect(cron).toContain("pickVoiceRoute({ telnyxShare, elevenShare, telnyxReady, elevenReady })");
     expect(cron).toContain("telephony,");

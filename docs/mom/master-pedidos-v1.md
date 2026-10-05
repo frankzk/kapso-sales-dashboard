@@ -4155,6 +4155,24 @@ Reglas de esa tabla:
     del reintento automático los marca como candidatos, pero el despachador
     emite pocos al día (por ejemplo, el piloto tiene cupo diario). Ahora cada
     pasada prueba hasta 60 pedidos, con un tope de 30 s, antes de rendirse.
+
+    **Cupo del piloto lleno (decisión del owner, 05-10-2026).** Si el pedido
+    es apto para el reintento solo como piloto (cohorte `recent_no_history`,
+    sin entrega previa en el domicilio) y el cupo diario del piloto ya está
+    usado, el despachador no lo va a emitir hoy, así que el agente sí lo
+    llama. En la corrida del 04-10, 20 a 26 de cada 50 pedidos revisados
+    quedaron fuera solo por ese cupo, y se quedaban días sin que nadie los
+    atendiera.
+
+    El cupo se cuenta con la misma función en los dos lados
+    (`pilotUsedToday`, día de Lima). Con cualquier otro motivo (ubicación sin
+    corroborar, producto sin vínculo, sin stock) el reintento sigue teniendo
+    prioridad y el agente no llama.
+
+    Mientras la llamada está abierta, el despachador no emite
+    (`human_management`). Un «cancela» o un «que no me llamen» lo descartan
+    para siempre (`rejection`). Si la clienta no contesta, al día siguiente el
+    despachador puede emitirlo con cupo nuevo.
     **Secreto propio (04-10-2026).** Las tools aceptan `VOICE_TOOLS_SECRET`
     (xAI) o `VOICE_TOOLS_SECRET_ELEVENLABS` (ElevenLabs). El segundo es
     opcional: si está vacío, solo vale el primero. Así cada agente tiene su

@@ -17,6 +17,17 @@ export async function inspectAuto(admin: SupabaseClient, shipmentId: string) {
   return data as { snapshot: AutoSnapshot; fingerprint: string };
 }
 
+/**
+ * Intentos del piloto (clientas sin entrega previa) emitidos hoy, día de Lima.
+ * Lo usan el despachador, para su cupo, y el agente de voz, que llama a quien
+ * el cupo dejó fuera (MOM §11.8): una sola cuenta para los dos.
+ */
+export async function pilotUsedToday(admin: SupabaseClient, orgId: string): Promise<number> {
+  const used=await admin.from("swayp_guide_emissions").select("evidence").eq("org_id",orgId).eq("automatic",true).gte("created_at",`${limaDateKey()}T00:00:00-05:00`);
+  if(used.error) throw new Error(used.error.message);
+  return (used.data??[]).filter(e=>(e.evidence as {cohort?:string}|null)?.cohort==="recent_no_history").length;
+}
+
 export async function runAutoDispatch(admin: SupabaseClient, settings: AutoSettings, dry = false) {
   const started = Date.now();
   const report = { checked: 0, eligible: 0, created: 0, review: 0, excluded: {} as Record<string,number>, error: null as string | null };
@@ -28,9 +39,7 @@ export async function runAutoDispatch(admin: SupabaseClient, settings: AutoSetti
     runId=run.data.id;
   }
   try {
-    const used=await admin.from("swayp_guide_emissions").select("evidence").eq("org_id",settings.org_id).eq("automatic",true).gte("created_at",`${limaDateKey()}T00:00:00-05:00`);
-    if(used.error) throw new Error(used.error.message);
-    let pilotUsed=(used.data??[]).filter(e=>e.evidence?.cohort==="recent_no_history").length;
+    let pilotUsed=await pilotUsedToday(admin,settings.org_id);
     const {data:rows,error} = await admin.rpc("swayp_auto_candidates",{p_org:settings.org_id});
     if (error) throw new Error(error.message);
     for (const row of (rows ?? []) as {id:string}[]) {

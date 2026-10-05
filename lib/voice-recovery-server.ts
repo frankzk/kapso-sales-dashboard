@@ -35,7 +35,7 @@ import {
 } from "@/lib/telnyx";
 import { reenviarGuiaAnulada } from "@/lib/swayp-reenvio";
 import { parseSenders } from "@/lib/swayp-guide";
-import { inspectAuto } from "@/lib/swayp-auto-server";
+import { inspectAuto, pilotUsedToday } from "@/lib/swayp-auto-server";
 import { evaluateAutoDispatch, type AutoSettings } from "@/lib/swayp-auto-policy";
 
 const OPEN_STATUSES = ["queued", "dialing", "in_progress"] as const;
@@ -419,8 +419,15 @@ export async function placeVoiceCall(
       if(guideError) return {ok:false,status:503,error:guideError.message};
       for(const g of guides??[]) {
         const {snapshot}=await inspectAuto(admin,g.id);
-        if(evaluateAutoDispatch(snapshot,policy as AutoSettings,now).eligible)
-          return autoRetryRefusal();
+        const verdict=evaluateAutoDispatch(snapshot,policy as AutoSettings,now);
+        if(!verdict.eligible) continue;
+        // Piloto (sin entrega previa) con el cupo del día lleno: hoy el
+        // despachador no lo emite, así que el agente sí llama (decisión del
+        // owner, 05-10-2026). Con cualquier otro motivo, el reintento manda.
+        if(verdict.cohort==="recent_no_history"
+          && (policy as AutoSettings).pilot_enabled
+          && await pilotUsedToday(admin,(policy as AutoSettings).org_id)>=((policy as AutoSettings).pilot_daily_cap??3)) continue;
+        return autoRetryRefusal();
       }
     }
   }
