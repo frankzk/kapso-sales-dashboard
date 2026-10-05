@@ -1,6 +1,6 @@
 # Clientes externos de Grupo GF Courier — plan
 
-Versión 3 · 05-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
+Versión 4 · 05-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
 
 Grupo GF Courier hoy reparte solo para tiendas de su propia organización
 (Aurela y Kenku). Este plan lo abre a **tiendas cliente**: negocios ajenos, con
@@ -10,22 +10,59 @@ este documento es el plan de trabajo y el registro de lo que se encontró en el
 código. **Nada de esto cambia el MOM todavía**: las reglas nuevas se aprueban y
 se escriben allí en la Fase 0, antes de programar (AGENTS.md).
 
+Piloto: **noviembre de 2026**, con un cliente de **menos de 20 pedidos al
+día**.
+
 ## 1. Decisiones tomadas (05-10-2026)
+
+### Modelo
 
 | # | Decisión |
 | --- | --- |
 | 1 | El cliente usa **Kapta completo** en **su propia organización**: su Master, su Shopify, su equipo. Grupo GF no es dueño de su tienda ni entra a su organización. |
-| 2 | **El cliente elige qué pedidos** encarga a Grupo GF. Sus pedidos no aparecen solos en «Pedidos disponibles» como los de Aurela y Kenku. |
-| 3 | La **liquidación Grupo GF ↔ tienda** entra en la primera versión. |
-| 4 | **Una sola base de datos**, separada por organización (§2). |
-| 5 | **Grupo GF arma** en su almacén. El producto puede ser de Proveeduría Grupo GF (hoy, la mayoría) o del cliente guardado en Grupo GF, y un pedido puede mezclar los dos. |
+| 2 | **Una sola base de datos**, separada por organización (§2). |
+| 3 | **Alta por su cuenta.** El cliente crea su usuario y su organización, conecta su Shopify y acepta con un código la invitación de Grupo GF. Grupo GF nunca es dueño de esa organización. |
+| 4 | Swayp, Shalom, el agente de voz y Chatby **quedan apagados** para organizaciones cliente: usan credenciales únicas de Grupo GF (`lib/env.ts`). |
+
+### Asignación y operación
+
+| # | Decisión |
+| --- | --- |
+| 5 | **El cliente elige qué pedidos** encarga. Sus pedidos no aparecen solos en «Pedidos disponibles» como los de Aurela y Kenku. |
 | 6 | **Asignar obliga.** Si el pedido cumple contrato, cobertura, tarifa y no hay pausa, queda tomado. Grupo GF puede anular con motivo. No hay estado «solicitada». |
-| 7 | **Todo cobro en la puerta va a Grupo GF**: efectivo, Yape de Grupo GF y POS. Si el cliente final igual paga directo a la tienda, se marca «pago directo a la tienda»: no entra al neto ni paga comisión. |
-| 8 | **Cuenta corriente por contrato.** Cada liquidación aprobada suma su neto, positivo o negativo; cada depósito de Grupo GF o pago del cliente resta. |
-| 9 | El producto de Proveeduría Grupo GF se cobra **solo en lo entregado**. Un rechazo o un no entregado lo devuelve a la bolsa sin cargo; dañado o faltante queda observado (§29.7). |
-| 10 | **Mapeo de SKU obligatorio** por tienda: cada SKU del Shopify del cliente es «producto Grupo GF X» o «producto propio del cliente». Un pedido con una línea sin mapear no se puede asignar. |
-| 11 | **Bolsa por línea, sin control de stock** en la v1: se registra de qué bolsa sale cada línea para armar y cobrar, sin reservar ni contar. Conteo y recepción del inventario del cliente, en la v2. |
-| 12 | Swayp, Shalom, el agente de voz y Chatby **quedan apagados** para organizaciones cliente: usan credenciales únicas de Grupo GF (`lib/env.ts`). |
+| 7 | **La tienda cancela cuando quiera, sin costo** (§29.6), aunque el paquete esté en la caja o en la calle: vuelve al almacén. |
+| 8 | **El reintento lo decide el cliente.** Un no entregado vuelve a su Master en «Por reprogramar» y él lo reprograma con fecha. |
+| 9 | **Desarmado.** Al volver al almacén, si el pedido **no tiene reprogramación registrada**, el paquete se desarma y el producto vuelve a su bolsa. Reprogramar después arma de nuevo, con guía y QR nuevos. Si ya estaba reprogramado, sale otra vez con la misma guía. |
+| 10 | **Marca blanca.** El rótulo y los mensajes del motorizado llevan el nombre de la tienda cliente. Ya funciona así: `lib/labels/rotulo-pdf.ts:646`, `lib/rider-contact.ts`. |
+| 11 | El **motorizado gana lo mismo** por un pedido de cliente que por uno de Aurela o Kenku. |
+
+### Producto
+
+| # | Decisión |
+| --- | --- |
+| 12 | **Grupo GF arma** en su almacén. El producto puede ser de Proveeduría Grupo GF (hoy, la mayoría) o del cliente guardado en Grupo GF, y un pedido puede mezclar los dos. |
+| 13 | **Mapeo de SKU obligatorio** por tienda: cada SKU del Shopify del cliente es «producto Grupo GF X» o «producto propio del cliente». Un pedido con una línea sin mapear no se puede asignar. |
+| 14 | **Bolsa por línea, sin control de stock** en la v1: se registra de qué bolsa sale cada línea para armar y cobrar, sin reservar ni contar. Conteo y recepción del inventario del cliente, en la v2. |
+| 15 | **Catálogo visible al cliente**: nombre, SKU, precio a la tienda y foto de cada producto de Proveeduría. |
+| 16 | **Precio del producto a la tienda**: un precio general por producto, con vigencia, y excepciones por contrato. |
+| 17 | El producto de Proveeduría se cobra **solo en lo entregado**. Un rechazo o un no entregado lo devuelve a la bolsa sin cargo. |
+| 18 | **Pérdida o daño de producto del cliente: caso a caso.** El paquete queda observado y Grupo GF registra un ajuste con motivo en la cuenta corriente. |
+
+### Dinero
+
+| # | Decisión |
+| --- | --- |
+| 19 | **Tarifa por distrito: una tabla general de externos**, aparte de la interna de Aurela y Kenku, más excepciones por contrato. Incluye IGV, igual que hoy. |
+| 20 | **Comisión Yape para externos: 5 %** general, con excepción por contrato. Aurela y Kenku siguen con 3.5 %. |
+| 21 | **Comisión POS**: un porcentaje por contrato, con vigencia. |
+| 22 | **Todo cobro en la puerta va a Grupo GF**: efectivo, Yape de Grupo GF y POS. Si el comprador igual paga directo a la tienda, se marca «pago directo a la tienda»: no entra al neto ni paga comisión. |
+| 23 | La **liquidación Grupo GF ↔ tienda** es diaria y entra en la v1. |
+| 24 | **Cuenta corriente por contrato.** Cada liquidación aprobada suma su neto, positivo o negativo; cada depósito de Grupo GF o pago del cliente resta. |
+| 25 | **Depósito diario** del saldo a favor al aprobar la liquidación del día. Un saldo en contra se arrastra. |
+| 26 | **Deuda: suspensión manual.** Grupo GF ve el saldo y suspende el contrato cuando decide (§29.10). Nada se bloquea solo. |
+| 27 | El pedido del cliente queda **cerrado financieramente al aprobar** la liquidación que lo incluye. |
+| 28 | **Liquidación de solo lectura** para el cliente en la v1. Los reclamos van por fuera y Grupo GF registra el ajuste. |
+| 29 | **Facturas fuera de Kapta** en la v1. Kapta muestra montos con IGV incluido y exporta el detalle. |
 
 ## 2. Una sola base de datos
 
@@ -50,41 +87,49 @@ pruebas de aislamiento entre dos clientes.
 
 | Vive en la organización del **cliente** | Vive en la organización de **Grupo GF** |
 | --- | --- |
-| Tienda, conexión Shopify, pedidos (`orders`, `order_master`) | Operador (`logistics_providers`), tarifas y comisión |
+| Tienda, conexión Shopify, pedidos (`orders`, `order_master`) | Operador (`logistics_providers`), tarifas, comisiones y catálogo de Proveeduría |
 | Salidas y QR (`shipments`), actividad (`order_events`) | Motorizados, rutas (`delivery_routes`), cajas (`dispatch_manifests`) |
-| Pagos previos del cliente final (`order_payments`) | Paradas y su evidencia (`delivery_stops`, con el `store_id` del cliente) |
-| Lectura de su liquidación | Pago a motorizados, liquidación al cliente y su aprobación |
+| Pagos previos del comprador (`order_payments`) | Paradas y su evidencia (`delivery_stops`, con el `store_id` del cliente) |
+| Mapeo de sus SKU | Pago a motorizados, liquidación al cliente, cuenta corriente |
 
 El **contrato** (`logistics_service_agreements`: `provider_id`, `client_org_id`,
 `store_id`) une las dos y es lo único que da acceso de una a otra. La
 **solicitud** (`logistics_requests`) es el pedido concreto que el cliente
-encargó, con la tarifa congelada.
+encargó, con tarifa, bolsa y precio de cada línea congelados.
 
 ## 4. Recorrido de un pedido
 
-1. El cliente conecta su Shopify en Kapta (ya existe) y acepta el contrato que
-   Grupo GF le ofrece.
+1. El cliente crea su cuenta, conecta su Shopify, acepta la invitación de Grupo
+   GF con su código y mapea sus SKU mirando el catálogo de Proveeduría.
 2. En la Mesa de ruta de su pedido ve Grupo GF Courier con distrito, tarifa y
    fecha prevista, y pulsa **«Asignar a Grupo GF Courier»** (uno o en lote).
-3. Kapta valida contrato, cobertura, tarifa y pausas, congela la tarifa y crea
-   la solicitud y la salida con su QR (o rellena la caja `por definir`).
+3. Kapta valida contrato, cobertura, tarifa, pausas y mapeo; congela tarifa,
+   bolsa y precio de cada línea; y crea la solicitud y la salida con su QR (o
+   rellena la caja `por definir`).
 4. El pedido aparece en Grupo GF en «Pedidos tomados · Sin ruta», con el nombre
-   de la tienda. Desde ahí sigue el camino de siempre: asignar a una caja,
-   cotejo de oficina, recepción del motorizado, reparto, reporte y cierre de
-   ruta.
-5. El Almacén de Grupo GF arma la caja: producto de Proveeduría o producto del
-   cliente, según el mapeo de cada SKU (§7, Fase 3).
+   de la tienda. El Almacén de Grupo GF lo arma con producto de Proveeduría o
+   del cliente, según la bolsa de cada línea.
+5. Sigue el camino de siempre: asignar a una caja, cotejo de oficina, recepción
+   del motorizado, reparto, reporte y cierre de ruta. El comprador ve la marca
+   de la tienda.
 6. El cliente ve en su Master la etapa y la evidencia (foto, comprobante), sin
    nombre ni teléfono del motorizado (§29.7).
-7. Al terminar el día, Grupo GF aprueba la liquidación de esa tienda y su neto
-   pasa a la cuenta corriente. El cliente la ve en su Kapta:
+7. **Si no se entrega**, vuelve al Master del cliente en «Por reprogramar». Al
+   llegar al almacén:
+   - con una reprogramación ya registrada, sale otra vez con la misma guía;
+   - sin ella, se desarma y el producto vuelve a su bolsa. Reprogramar después
+     genera una solicitud y una salida nuevas.
+8. Al terminar el día, Grupo GF aprueba la liquidación de esa tienda. Su neto
+   pasa a la cuenta corriente, el pedido queda cerrado financieramente y se
+   deposita el saldo a favor. El cliente la ve en su Kapta:
 
    ```text
    COD cobrado por Grupo GF
-   − tarifa de entrega o rechazo
-   − 3.5 % del importe recibido por el Yape de Grupo GF
-   − precio del producto de Proveeduría Grupo GF en lo entregado
-   = neto del día → cuenta corriente
+   − tarifa de entrega o rechazo   (tabla de externos o la del contrato)
+   − 5 % de cada Yape recibido por Grupo GF   (o la del contrato)
+   − % de cada cobro por POS                  (la del contrato)
+   − precio a la tienda del producto de Proveeduría, solo en lo entregado
+   = neto del día → cuenta corriente → depósito del saldo a favor
    ```
 
 ## 5. Lo que hoy lo impide
@@ -110,6 +155,7 @@ del usuario los pierde:
 | --- | --- |
 | Escaneo de QR (`despacho/actions.ts:79-109`) | «No encontramos…» al escanear, cotejar o recibir de vuelta |
 | Cajas del día (`lib/dispatch-access.ts:116-217`) | Las cajas muestran menos paquetes; una caja solo de un cliente se ve vacía |
+| Almacén (`lib/dispatch-access.ts:306-327`) | Los pedidos del cliente no entran a la cola de armado |
 | Rótulos (`app/api/pedidos/rotulos/route.ts`) | 404 |
 | Coordinación y fotos (`app/reparto/actions.ts:76-82`, `app/api/reparto/foto`) | «Esa parada no es tuya» al reportar por el motorizado |
 | Drawer del pedido (`pedidos/actions.ts:122-140`) | «Sin acceso a este pedido» |
@@ -149,21 +195,22 @@ pantalla. Y dos huecos de origen:
 
 Hoy no se filtra porque todos somos la misma empresa.
 
-## 6. Lo que falta precisar al escribir el MOM
+## 6. Lo que las decisiones agregan al sistema
 
-Las decisiones de producto (9 a 11) salen de la 5: si el cliente revende
-producto de Grupo GF, la liquidación también le cobra ese producto, y Grupo GF
-tiene que saber qué producto suyo es cada línea del Shopify del cliente. Hoy no
-hay catálogo de Grupo GF para terceros: `product_costs` (0050) es el costo
-propio de cada organización, no un precio de venta a un cliente.
+Lo que hoy no existe y las respuestas exigen:
 
-Quedan tres detalles menores, a cerrar en la Fase 0 con el texto del MOM:
+| Decisión | Qué hay que construir | Hoy |
+| --- | --- | --- |
+| 19, 20 | Precios **internos** y **de externos**: una segunda tabla general de tarifas y una segunda comisión Yape general | Una sola general por operador (0134) |
+| 21 | Comisión POS con vigencia | `logistics_fee_rules.kind` solo admite `yape_commission` (0134:158) |
+| 15, 16 | Catálogo de Proveeduría con precio a la tienda, vigencia y foto | No existe; `product_costs` (0050) es el costo propio de cada organización |
+| 13 | Mapeo de SKU de la tienda a producto de Grupo GF | Hay el mismo patrón para Aliclik y Swayp (`aliclik_sku_map`, `swayp_sku_map`) |
+| 8, 9 | No entregado de cliente: a su «Por reprogramar», no a la cola de reintento de Grupo GF; desarmado si no hay reprogramación | La cola de reintento de Grupo GF toma todos (`RETRY_QUEUE_FILTER`); el reintento conserva la salida (0192) |
+| 24, 25 | Cuenta corriente y depósito diario | No hay saldos entre organizaciones |
 
-- **Cierre financiero del pedido del cliente**: al aprobar su línea de
-  liquidación o al registrar el depósito que la paga.
-- **Cancelación desde la tienda** después de que el pedido entró a una caja
-  (propuesta en la Fase 3: la tienda cancela antes; después lo hace Grupo GF).
-- **Frecuencia del depósito del saldo a favor**: un campo del contrato.
+Con menos de 20 pedidos al día, la revisión humana de cada liquidación alcanza.
+El cruce automático con el estado de cuenta del Yape de Grupo GF queda para la
+v2.
 
 ## 7. Fases
 
@@ -172,20 +219,21 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
 
 ### Fase 0 — Reglas en el MOM (sin código)
 
-- Escribir en el MOM las decisiones de §1 y §6. Ver §8.
+- Escribir en el MOM las decisiones de §1. Ver §8.
 - Probar con el primer cliente cómo conecta su Shopify: el token de app
   personalizada que usa `docs/onboarding-tienda-externa.md` o la app de Kapta
   por OAuth. Hay que verificar en Shopify que la app se pueda instalar en
   tiendas ajenas; el repo no lo dice.
 
-### Fase 1 — Contrato con otra organización
+### Fase 1 — Contrato y precios de externos
 
-- **Consentimiento del cliente.** Grupo GF crea una invitación: contrato en
-  `draft`, con nombre del cliente y, si aplica, tarifas propias. El owner del
-  cliente la acepta en los ajustes de su tienda. Recién ahí el contrato pasa a
-  `active`, con `client_org_id` y `store_id` comprobados (lo exige el
-  comentario de 0134:55-58). Grupo GF nunca engancha una tienda ajena por su
-  cuenta.
+- **Invitación con código** (decisión 3).
+  - Grupo GF crea el contrato en `draft`, con nombre del cliente y sus
+    excepciones de precio si las hay.
+  - El owner del cliente pega el código en los ajustes de su tienda.
+  - Recién ahí el contrato pasa a `active`, con `client_org_id` y `store_id`
+    comprobados (lo exige el comentario de 0134:55-58).
+  - Grupo GF nunca engancha una tienda ajena por su cuenta.
 - **Un solo Grupo GF.** El operador es único. El menú y el botón «Activar» solo
   aparecen a miembros de la organización del operador; se corrige
   `courier/page.tsx:41` (`memberships[0]`).
@@ -193,15 +241,25 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
   operador a partir del contrato vigente de la tienda; para Aurela y Kenku da lo
   mismo que hoy. Corre en el servidor, porque con la sesión del cliente no se
   ven las pausas generales (0137:39).
-- **Tarifario.** El universo de distritos incluye las tiendas con contrato.
+- **Precios de externos.**
+  - Tarifas y comisiones generales distinguen interno y externo.
+  - Resolución: excepción del contrato → general de externos → (solo internos)
+    general interna.
+  - El tarifario muestra las dos tablas, y el universo de distritos incluye las
+    tiendas con contrato.
+  - Comisión Yape de externos al 5 % y comisión POS por contrato, ambas con
+    vigencia.
 - **Campo nuevo en el contrato: quién inicia.** `cola_operador` para Aurela y
   Kenku, `tienda_asigna` para clientes. `assignment_mode` existe pero no se lee
   en ningún sitio.
-- **Integraciones apagadas** para organizaciones cliente (decisión 12): Swayp,
+- **Integraciones apagadas** para organizaciones cliente (decisión 4): Swayp,
   Shalom, agente de voz y Chatby no se ofrecen ni se ejecutan para sus tiendas.
-- **Pruebas.** Validación entre organizaciones, invitación aceptada y rechazada,
-  que no se pueda crear un segundo operador y que una tienda cliente no dispare
-  ninguna de esas integraciones.
+- **Pruebas.**
+  - Validación entre organizaciones; invitación aceptada, rechazada y con código
+    vencido.
+  - Que no se pueda crear un segundo operador.
+  - Resolución de precios interna y externa.
+  - Que una tienda cliente no dispare ninguna de esas integraciones.
 
 ### Fase 2 — Grupo GF ve solo lo que le asignaron
 
@@ -217,41 +275,54 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
   - Deja de saltarse paradas del cliente.
   - Aplica sus entregas al Master.
   - Para tiendas cliente no crea `rider_settlements` en la organización del
-    cliente: eso lo reemplaza la Fase 5.
+    cliente: eso lo reemplaza la Fase 5. El pago del motorizado no cambia
+    (decisión 11).
 - **Pruebas.**
   - Un smoke SQL por pantalla de §5b (patrón `scripts/sql/gf_*_smoke.sql`).
   - Una prueba de aislamiento: el cliente A no ve nada del cliente B, y Grupo
     GF no ve los pedidos que el cliente no le asignó.
 
-### Fase 3 — La tienda asigna
+### Fase 3 — Catálogo, asignación y reintentos
 
-- **Pedidos disponibles.** Excluye las tiendas `tienda_asigna`
-  (`courier/actions.ts:470-499`).
-- **Mesa de ruta y Master del cliente.** La tarjeta de Grupo GF muestra
-  distrito, tarifa y fecha prevista. «Ver en Grupo GF» pasa a «Asignar a Grupo
-  GF Courier» (`order-drawer.tsx:845-849`, `order-route-desk.tsx:199-202`), y
-  hay asignación en lote desde el Master (`orders-master.tsx:1238`).
-- **Acción de servidor.**
-  - Exige `master.edit` en la organización del cliente y el contrato vigente.
-  - Reutiliza `takeOrdersCore`: mismas validaciones, idempotencia, tarifa
-    congelada y relleno de la caja `por definir` conservando el QR.
-  - Guarda `requested_by` con el usuario del cliente.
-  - Escribe con la llave de servicio, porque la RLS de `logistics_requests`
-    solo deja escribir al operador (0138:95-103).
-- **Cancelar o reprogramar desde la tienda**, con motivo (§29.6). Propuesta
-  para la v1: la tienda cancela mientras el pedido no está en una caja; después
-  lo hace Grupo GF.
-- **Catálogo de Grupo GF para clientes.**
-  - Productos de Proveeduría con **precio al cliente**: vigencia, precio general
-    y excepción por contrato, el mismo patrón que las tarifas por distrito
-    (§29.8).
-  - Mapeo de SKU por tienda (decisión 10), que puede editar el cliente y Grupo GF
-    revisa.
-  - Asignar exige todas las líneas mapeadas, y la solicitud congela bolsa y
-    precio de cada línea, igual que congela la tarifa.
+- **Catálogo de Proveeduría.**
+  - Productos con nombre, SKU, foto y precio a la tienda (decisiones 15 y 16).
+  - Precio general con vigencia y excepciones por contrato, el mismo patrón que
+    las tarifas.
+  - El cliente lo ve en su Kapta, solo lectura.
+- **Mapeo de SKU** por tienda (decisión 13), editable por el cliente, con la
+  foto del producto de Grupo GF al lado para no equivocarse.
+- **Asignar desde la tienda.**
+  - **Pedidos disponibles** excluye las tiendas `tienda_asigna`
+    (`courier/actions.ts:470-499`).
+  - **Mesa de ruta y Master del cliente.** La tarjeta de Grupo GF muestra
+    distrito, tarifa y fecha prevista. «Ver en Grupo GF» pasa a «Asignar a Grupo
+    GF Courier» (`order-drawer.tsx:845-849`, `order-route-desk.tsx:199-202`), y
+    hay asignación en lote desde el Master (`orders-master.tsx:1238`).
+  - **Acción de servidor:**
+    - exige `master.edit` en la organización del cliente, el contrato vigente
+      y todas las líneas mapeadas;
+    - reutiliza `takeOrdersCore`: mismas validaciones, idempotencia, tarifa
+      congelada y relleno de la caja `por definir` conservando el QR;
+    - congela además bolsa y precio de cada línea;
+    - guarda `requested_by` con el usuario del cliente;
+    - escribe con la llave de servicio, porque la RLS de `logistics_requests`
+      solo deja escribir al operador (0138:95-103).
+- **Cancelar desde la tienda**, sin costo y en cualquier momento (decisión 7).
+  Si el paquete está en una caja o en la calle, vuelve al almacén y se desarma.
+- **Reintento del cliente** (decisiones 8 y 9).
+  - Un no entregado de tienda cliente va a «Por reprogramar» en su Master y no
+    a la cola de reintento de Grupo GF.
+  - El cliente reprograma con fecha.
+  - Al recibirlo en oficina (`gf_return_to_office`):
+    - con reprogramación, conserva la salida (0192);
+    - sin ella, se desarma: la solicitud se cierra y el producto vuelve a su
+      bolsa.
+  - Reprogramar después crea una solicitud y una salida nuevas, con tarifa y
+    precio vigentes ese día.
 - **Almacén de Grupo GF.**
   - Ve en su cola los pedidos asignados (`getWarehouseStationData`, rótulos),
     con la bolsa de cada línea a la vista.
+  - Registra el desarmado.
   - En el Almacén del cliente, esos pedidos aparecen como «Lo arma Grupo GF» y
     no se preparan ahí.
 
@@ -271,67 +342,88 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
 - **Tablas.**
   - Liquidación diaria por contrato: cabecera y líneas por parada.
   - Correcciones append-only con motivo, como pide §14 (patrón 0093).
-  - **Cuenta corriente** append-only (decisión 8). Movimientos:
+  - **Cuenta corriente** append-only (decisión 24). Movimientos:
     - neto de una liquidación aprobada (+ o −);
     - depósito de Grupo GF al cliente;
     - pago del cliente a Grupo GF;
-    - ajuste con motivo.
+    - ajuste con motivo, por ejemplo una pérdida (decisión 18).
 
     El saldo es la suma; nada se edita.
 - **Cálculo.** Una función SQL que devuelve una foto en JSON, como
   `rider_pay_preview` (0222). Por tienda y día, sobre las paradas de rutas de
-  Grupo GF:
+  Grupo GF, la fórmula de §4:
   - lo cobrado, por medio y cuenta receptora;
   - la tarifa congelada de la solicitud (`logistics_requests.tariff_amount`,
     vía `shipment_id`) para entregado o rechazado, con el rechazo cobrado una
     vez por pedido y ruta/día;
-  - el 3.5 % sobre cada Yape recibido por Grupo GF, redondeado por operación,
-    con la regla vigente (la del contrato gana a la general);
+  - las comisiones Yape y POS vigentes, redondeadas por operación;
   - el precio congelado del producto de Proveeduría, solo en lo entregado
-    (decisión 9);
+    (decisión 17);
   - el neto.
 - **Bloqueos.** Una ruta abierta, una parada pendiente, evidencia faltante o una
   línea sin tarifa («Sin tarifa configurada», nunca S/0).
 - **Aprobación.** Humana, con `settlements.close` en la organización de Grupo
   GF, contra la versión vista y congelando el resultado (patrón
-  `rider_pay_approve`, 0162).
+  `rider_pay_approve`, 0162). Al aprobar:
+  - el neto entra a la cuenta corriente;
+  - cada pedido de la liquidación queda cerrado financieramente en el Master
+    del cliente (decisión 27).
+- **Depósito diario** (decisión 25). Grupo GF registra la transferencia del
+  saldo a favor con su constancia. Un saldo en contra se arrastra al día
+  siguiente.
 - **Reporte de parada.** Para tiendas cliente registra la cuenta receptora
-  (decisión 7): efectivo, Yape de Grupo GF, POS de Grupo GF o pago directo a la
+  (decisión 22): efectivo, Yape de Grupo GF, POS de Grupo GF o pago directo a la
   tienda.
-- **Lado del cliente.** Ve su liquidación, líneas y evidencias en su Kapta, solo
-  lectura.
-- **A definir en el MOM.** Cuándo queda cerrado financieramente el pedido del
-  cliente: al aprobar su línea o al registrar el depósito.
-- **v2.** Cruce automático del Yape de Grupo GF con su estado de cuenta. En la
-  v1 la aprobación humana compara el total contra el estado de cuenta.
+- **Lado del cliente.** Ve en su Kapta, solo lectura, su liquidación, líneas,
+  evidencias, cuenta corriente y depósitos, con exportación para facturar
+  (decisión 29).
+- **Lado de Grupo GF.** Saldo de cada cliente a la vista y suspensión manual
+  del contrato (decisión 26).
 
-### Fase 6 — Piloto
+### Fase 6 — Piloto (noviembre 2026)
 
 - Actualizar `docs/onboarding-tienda-externa.md`:
-  - pasos del contrato;
+  - código de invitación y mapeo de SKU;
   - `order_prefix` de la tienda (nace vacío);
   - la lista de aislamiento ampliada: cliente A ≠ cliente B, el cliente no ve
     motorizados, Grupo GF no ve lo no asignado.
-- Un cliente, pocos pedidos, un día completo hasta la liquidación aprobada.
+- Un cliente, menos de 20 pedidos al día, una semana completa con
+  liquidaciones y depósitos diarios aprobados.
 
 ## 8. Cambios al MOM (Fase 0)
 
-- **§29.1–§29.2.** Tienda cliente en su propia organización; el contrato dice
-  quién inicia; Aurela y Kenku siguen en cola automática; asignar obliga
-  (decisión 6).
-- **§29.3.** Bolsa por línea a partir del mapeo de SKU; precio al cliente del
-  producto de Proveeduría; qué se cobra en un rechazo (decisiones 9 a 11).
-- **§29.6.** La tienda asigna, cancela y reprograma: hasta cuándo y con qué
-  motivo.
-- **§29.7.** Qué ve el cliente y qué se le oculta, en concreto.
+- **§29.1–§29.2.**
+  - Tienda cliente en su propia organización, con alta por invitación.
+  - El contrato dice quién inicia; Aurela y Kenku siguen en cola automática.
+  - Asignar obliga.
+  - Integraciones apagadas para clientes.
+- **§29.3.**
+  - Catálogo de Proveeduría y bolsa por línea a partir del mapeo de SKU.
+  - Precio a la tienda.
+  - Desarmado al volver sin reprogramación.
+  - Producto cobrado solo en lo entregado.
+- **§29.4.** Reprogramar después de desarmar crea una salida nueva (ya lo dice
+  para «debe desarmarse»; se agrega el caso del cliente).
+- **§29.6.** La tienda asigna, cancela sin costo en cualquier momento y decide
+  el reintento.
+- **§29.7.**
+  - Para clientes, «Reprogramado conserva el paquete armado» solo si la
+    reprogramación existe al volver.
+  - Qué ve el cliente y qué se le oculta.
+  - Marca blanca.
+- **§29.8.** Tarifas y comisiones internas y de externos: Yape 5 % y POS por
+  contrato.
 - **§29.9.**
-  - Liquidación a la tienda, con la fórmula de §4 (agrega el producto de
-    Proveeduría al neto de hoy): líneas, rechazo una vez por pedido y ruta/día,
-    pedidos pagados por adelantado.
+  - Liquidación a la tienda con la fórmula de §4.
   - Cuenta receptora en la puerta.
-  - Cuenta corriente y cierre financiero del pedido del cliente.
-- **§29.10.** Grupo GF ve solo los pedidos asignados; el owner de un cliente no
-  administra operadores.
+  - Cuenta corriente y depósito diario.
+  - Cierre financiero al aprobar.
+  - Pérdidas como ajuste.
+  - Facturación fuera de Kapta.
+- **§29.10.**
+  - Grupo GF ve solo los pedidos asignados.
+  - El owner de un cliente no administra operadores.
+  - Suspensión manual por deuda con el saldo a la vista.
 - **§29.11.** El paso 5 se divide: tiendas Shopify ahora; API y Excel después.
 
 ## 9. Riesgos
@@ -342,7 +434,11 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
 - **Conexión Shopify.** No está verificado que la app de Kapta (OAuth) se pueda
   instalar en tiendas ajenas, ni que Shopify siga permitiendo crear apps
   personalizadas desde el admin. Se prueba en la Fase 0.
-- **Integraciones con credenciales globales** (decisión 12).
+- **Sin control de stock** (decisión 14). Un pedido puede asignarse sin producto
+  y enterarse al armar, igual que hoy con Aurela y Kenku.
+- **Yape sin validar.** En la v1, el Yape de la puerta se acepta con su captura y
+  la aprobación humana compara contra el estado de cuenta. Con más volumen hace
+  falta el cruce automático.
 - **Token `propio`.** Las salidas de clientes también lo llevan (§29.2). El
   cliente vería «propio» si no se traduce (Fase 4).
 - **Permisos sumados entre organizaciones.** `getMasterPermissions` suma
@@ -355,9 +451,12 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
 
 - Portal por API o Excel para tiendas sin Shopify (§29.11 paso 5, segunda
   parte).
-- Conteo de stock, reservas y recepción del inventario del cliente con cotejo
-  (§29.3, decisión 11).
+- Conteo de stock, reservas y recepción o retiro del inventario del cliente
+  (§29.3).
+- Reclamos del cliente dentro de Kapta.
+- Valor declarado por SKU para compensar pérdidas.
+- Facturación electrónica.
+- Cruce automático del Yape de Grupo GF con su estado de cuenta.
 - Cobro de la suscripción de Kapta a los clientes.
 - GPS en el reporte (§29.7): no existe en ninguna parte todavía.
-- Enlace público de seguimiento para el cliente final.
-- Cruce automático del Yape de Grupo GF con su estado de cuenta.
+- Enlace público de seguimiento para el comprador.
