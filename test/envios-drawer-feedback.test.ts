@@ -37,8 +37,9 @@ describe("la respuesta de una acción se queda hasta la siguiente", () => {
   it("error y aviso llevan color y rol distintos", () => {
     const render = between("{feedback && (", "{feedback.text}");
     expect(render).toContain('role={feedback.kind === "error" ? "alert" : "status"}');
-    expect(render).toContain("border-rose-200 bg-rose-50 text-rose-800");
-    expect(render).toContain("border-emerald-200 bg-emerald-50 text-emerald-800");
+    // Lavado crítico con su icono para el error; lavado ok para el aviso.
+    expect(render).toContain('feedback.kind === "error" ? "bg-crit-wash" : "bg-ok-wash"');
+    expect(render).toContain("<IconAlert");
     expect(render).toContain("break-words");
   });
 

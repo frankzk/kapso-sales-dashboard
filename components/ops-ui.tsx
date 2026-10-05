@@ -310,6 +310,53 @@ export function SectionHead({ title, badge, help, aside, id }: {
   );
 }
 
+/**
+ * Tarjeta-opción: una elección a la vista (el resultado de una llamada, una
+ * ruta, qué hacer con una novedad), con título de 14 px y su consecuencia en
+ * 13 px; elegida, el anillo azul de 2 px. La que no se deshace lleva el título
+ * en `crit-fg`. Es la de la mesa de cierre de la ficha, hecha pieza.
+ */
+export function OptionTile({
+  label,
+  description,
+  active,
+  danger,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  description?: string;
+  active: boolean;
+  danger?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "rounded-lg px-3 py-2.5 text-left transition-shadow disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:min-h-11",
+        active
+          ? "bg-brand-50 ring-2 ring-inset ring-brand-600"
+          : "bg-white ring-1 ring-inset ring-line-strong hover:ring-ink-300",
+      )}
+    >
+      <span
+        className={cn(
+          "block text-sm font-semibold leading-5",
+          danger ? "text-crit-fg" : active ? "text-brand-700" : "text-ink-900",
+        )}
+      >
+        {label}
+      </span>
+      {description && <span className="mt-0.5 block text-[13px] leading-5 text-ink-600">{description}</span>}
+    </button>
+  );
+}
+
 /** Esqueleto de carga: bloques en el lavado, sin brillo que se mueva. */
 export function Skeleton({ className }: { className?: string }) {
   return <div aria-hidden className={cn("animate-pulse rounded-lg bg-wash", className)} />;

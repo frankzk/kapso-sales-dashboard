@@ -40,7 +40,9 @@ describe("«Siguiente» sin pasar por la tabla", () => {
   it("el botón libera la reserva de esta guía al tomar la siguiente", () => {
     expect(ui).toContain("nextShipmentId={nextInQueue}");
     expect(ui).toContain("onClick={() => handleOpenShipment(nextShipmentId)}");
-    expect(ui).toContain("Siguiente →");
+    // «Siguiente» con la flecha dibujada (antes un «→» de texto) y su atajo.
+    expect(ui).toContain("Siguiente\n                      <IconArrowRight");
+    expect(ui).toContain('aria-keyshortcuts="n"');
     // `handleOpenShipment` pasa por requestExit → doExit, que suelta el claim.
     expect(ui).toContain('if (exit.kind === "open") onOpenShipment(exit.id);');
     expect(ui).toContain("releaseCurrentClaim();\n    if (exit.kind === \"open\")");

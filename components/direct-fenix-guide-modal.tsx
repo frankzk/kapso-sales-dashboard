@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
+import { Badge, Banner, FIELD, FIELD_BOX, OpsButton } from "@/components/ops-ui";
+import { IconArrowLeft, IconCheck, IconSearch, IconX, IconXCircle } from "@/components/icons";
 import {
   createDirectFenixGuide,
   previewDirectFenixGuide,
@@ -54,6 +56,16 @@ export function DirectFenixGuideModal({
   const [msg, setMsg] = useState<string | null>(null);
   const [createdNotice, setCreatedNotice] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const panel = useRef<HTMLDivElement>(null);
+
+  // El foco entra al abrir; al cerrar vuelve a quien lo abrió.
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panel.current?.focus({ preventScroll: true });
+    return () => {
+      if (opener?.isConnected) opener.focus({ preventScroll: true });
+    };
+  }, []);
 
   useEffect(() => {
     if (!initialOrderId) return;
@@ -183,74 +195,107 @@ export function DirectFenixGuideModal({
   // botón sólo se activaba con el campo lleno, y el campo lleno apaga la API—.
   // El servidor ya resuelve el código cuando llega vacío.
 
+  const candidateRow =
+    "flex w-full items-center gap-3 px-3 py-2 text-left text-[13px] leading-5 transition-colors hover:bg-wash disabled:opacity-50 pointer-coarse:min-h-11";
+
   return (
-    <div className="fixed inset-0 z-30 flex items-start justify-center overflow-y-auto bg-slate-900/30 p-4 sm:p-8" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-30 flex items-start justify-center overflow-y-auto bg-ink-900/30 p-4 sm:p-8"
+      onClick={onClose}
+    >
       <div
-        className="w-full max-w-xl rounded-2xl bg-white p-4 shadow-xl"
+        ref={panel}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="guia-directa-titulo"
+        tabIndex={-1}
+        style={{ outline: "none" }}
+        // Escape cierra este modal y no lo que haya detrás (la ficha del pedido
+        // también escucha la tecla).
+        onKeyDown={(e) => {
+          if (e.key !== "Escape") return;
+          e.preventDefault();
+          e.stopPropagation();
+          onClose();
+        }}
+        className="w-full max-w-xl rounded-lg bg-white shadow-pop"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-2.5">
-          <div>
-            <p className="text-sm font-semibold text-slate-900">Guía Swayp directa</p>
-            <p className="text-xs text-slate-500">
+        <header className="flex items-start justify-between gap-3 border-b border-line px-5 pb-3 pt-4">
+          <div className="min-w-0">
+            <h2 id="guia-directa-titulo" className="text-lg font-semibold leading-7 text-ink-900">
+              Guía Swayp directa
+            </h2>
+            <p className="text-[13px] leading-5 text-ink-500">
               Despacho desde el stock regional de Swayp (antes Fénix), sin guía Aliclik previa.
             </p>
           </div>
-          <button onClick={onClose} className="text-sm text-slate-400 hover:text-slate-700">
-            Cerrar
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Cerrar"
+            className="-mr-1.5 grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
+          >
+            <IconX aria-hidden className="size-4" />
           </button>
-        </div>
+        </header>
 
+        <div className="px-5 py-4">
         {createdNotice ? (
-          <div className="space-y-3 pt-3">
-            <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-              {createdNotice}
-            </p>
-            <p className="text-xs text-slate-500">
-              Al cerrar te llevamos a la pestaña <b>En ruta</b>, donde queda la guía. Para enviarla a
-              Swayp, filtra por su fecha de despacho y descarga el Excel de programación.
-            </p>
-            <button
-              onClick={onClose}
-              className="w-full rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
-            >
-              Ver la guía en En ruta
-            </button>
+          <div className="space-y-4">
+            <Banner tone="ok" role="status" title={createdNotice}>
+              <p>
+                Al cerrar te llevamos a la pestaña <b className="font-semibold">En ruta</b>, donde queda la guía. Para
+                enviarla a Swayp, filtra por su fecha de despacho y descarga el Excel de programación.
+              </p>
+            </Banner>
+            <div className="flex justify-end">
+              <OpsButton variant="primary" onClick={onClose} className="pointer-coarse:h-11">
+                Ver la guía en En ruta
+              </OpsButton>
+            </div>
           </div>
         ) : !preview && initialOrderId ? (
-          <div className="pt-4">
-            <p className="text-sm text-slate-500">Validando cobertura y stock Swayp…</p>
-            {msg && <p className="mt-3 rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">{msg}</p>}
+          <div className="space-y-3">
+            <p className="text-sm text-ink-500">Validando cobertura y stock Swayp…</p>
+            {msg && (
+              <Banner tone="crit" role="alert">
+                {msg}
+              </Banner>
+            )}
           </div>
         ) : !preview ? (
-          <div className="space-y-2 pt-3">
-            <label className="block text-xs text-slate-500">
-              Paso 1 · Busca el pedido de Shopify
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="N° de pedido (#KP…, #AUR…) o celular…"
-                autoFocus
-                className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-              />
+          <div className="space-y-3">
+            <label className="grid gap-1.5 text-sm font-semibold text-ink-900">
+              Busca el pedido de Shopify
+              <span className="relative">
+                <IconSearch aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
+                <input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="N° de pedido (#KP…, #AUR…) o celular…"
+                  autoFocus
+                  className={cn(FIELD_BOX, "h-9 w-full pl-8 pr-3 font-normal pointer-coarse:h-11")}
+                />
+              </span>
             </label>
-            {searching && <p className="text-xs text-slate-400">Buscando…</p>}
+            {searching && <p className="text-[13px] text-ink-500">Buscando…</p>}
             {results && results.length === 0 && !searching && (
-              <p className="text-xs text-slate-400">Sin coincidencias locales.</p>
+              <p className="text-[13px] text-ink-500">Sin coincidencias locales.</p>
             )}
             {results && results.length > 0 && (
-              <ul className="max-h-48 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
+              <ul className="max-h-56 divide-y divide-line overflow-y-auto rounded-md ring-1 ring-line">
                 {results.map((o) => (
                   <li key={o.id}>
                     <button
                       type="button"
                       onClick={() => loadPreview({ orderId: o.id })}
                       disabled={loadingPreview}
-                      className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm hover:bg-slate-50 disabled:opacity-50"
+                      className={candidateRow}
                     >
-                      <span className="font-mono text-xs text-slate-700">{o.name ?? "—"}</span>
-                      <span className="text-xs text-slate-500">{o.customer_phone ?? "—"}</span>
-                      <span className="text-xs text-slate-400">
+                      <span className="font-mono font-medium text-ink-900">{o.name ?? "—"}</span>
+                      <span className="tabular-nums text-ink-600">{o.customer_phone ?? "—"}</span>
+                      <span className="ml-auto tabular-nums text-ink-500">
                         {o.created_at ? new Date(o.created_at).toLocaleDateString("es-PE") : ""}
                       </span>
                     </button>
@@ -258,33 +303,33 @@ export function DirectFenixGuideModal({
                 ))}
               </ul>
             )}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <OpsButton
+                size="sm"
                 onClick={() => void searchShopify()}
                 disabled={q.trim().length < 2 || searchingShopify}
-                className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                className="pointer-coarse:h-11"
               >
                 {searchingShopify ? "Buscando en Shopify…" : "Buscar en Shopify"}
-              </button>
-              <span className="text-xs text-slate-400">Para pedidos que aún no se sincronizaron.</span>
+              </OpsButton>
+              <span className="text-[13px] leading-5 text-ink-500">Para pedidos que aún no se sincronizaron.</span>
             </div>
             {shopifyResults && shopifyResults.length === 0 && !searchingShopify && (
-              <p className="text-xs text-slate-400">Sin coincidencias en Shopify.</p>
+              <p className="text-[13px] text-ink-500">Sin coincidencias en Shopify.</p>
             )}
             {shopifyResults && shopifyResults.length > 0 && (
-              <ul className="max-h-48 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
+              <ul className="max-h-56 divide-y divide-line overflow-y-auto rounded-md ring-1 ring-line">
                 {shopifyResults.map((o) => (
                   <li key={o.gid}>
                     <button
                       type="button"
                       onClick={() => loadPreview({ orderGid: o.gid, storeId: o.storeId })}
                       disabled={loadingPreview}
-                      className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm hover:bg-slate-50 disabled:opacity-50"
+                      className={candidateRow}
                     >
-                      <span className="font-mono text-xs text-slate-700">{o.name ?? "—"}</span>
-                      <span className="text-xs text-slate-500">{o.customer_phone ?? "—"}</span>
-                      <span className="text-xs text-slate-400">
+                      <span className="font-mono font-medium text-ink-900">{o.name ?? "—"}</span>
+                      <span className="tabular-nums text-ink-600">{o.customer_phone ?? "—"}</span>
+                      <span className="ml-auto tabular-nums text-ink-500">
                         {o.created_at ? new Date(o.created_at).toLocaleDateString("es-PE") : ""}
                       </span>
                     </button>
@@ -292,87 +337,91 @@ export function DirectFenixGuideModal({
                 ))}
               </ul>
             )}
-            {loadingPreview && <p className="text-xs text-slate-400">Cargando pedido…</p>}
-            {msg && <p className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">{msg}</p>}
+            {loadingPreview && <p className="text-[13px] text-ink-500">Cargando pedido…</p>}
+            {msg && (
+              <Banner tone="crit" role="alert">
+                {msg}
+              </Banner>
+            )}
           </div>
         ) : (
-          <div className="space-y-2.5 pt-3">
+          <div className="space-y-4">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Paso 2 · Revisa y confirma
-              </p>
-              <button
-                type="button"
+              <p className="text-sm font-semibold text-ink-900">Revisa y confirma</p>
+              <OpsButton
+                size="sm"
+                variant="ghost"
                 onClick={() => {
                   setPreview(null);
                   setMsg(null);
                 }}
-                className="text-xs text-slate-500 hover:underline"
+                className="-my-1 pointer-coarse:h-11"
               >
-                ← Cambiar pedido
-              </button>
+                <IconArrowLeft className="text-ink-500" />
+                Cambiar pedido
+              </OpsButton>
             </div>
 
-            <section className="rounded-xl border border-sky-200 bg-white">
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-1 px-3 py-2 text-sm">
-                <div>
-                  <dt className="text-[11px] text-slate-400">Pedido</dt>
-                  <dd className="font-mono text-xs text-slate-800">{preview.orderName ?? "—"}</dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] text-slate-400">Cobrar</dt>
-                  <dd className="text-slate-800">
-                    {preview.totalAmount != null
-                      ? `${preview.currency ?? "PEN"} ${preview.totalAmount.toFixed(2)}`
-                      : "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] text-slate-400">Cliente</dt>
-                  <dd className="text-slate-800">{preview.customerName ?? "—"}</dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] text-slate-400">Teléfono</dt>
-                  <dd className="text-slate-800">{preview.customerPhone ?? "—"}</dd>
-                </div>
-                <div className="col-span-2 border-t border-slate-100 pt-1">
-                  <dt className="text-[11px] text-slate-400">
-                    Destino
-                    {preview.address.source && (
-                      <span className="ml-1 rounded bg-slate-100 px-1 text-[10px] text-slate-500">
-                        {preview.address.source === "shopify"
-                          ? "Shopify"
-                          : preview.address.source === "carrito"
-                            ? "Carrito COD"
-                            : "Lead"}
-                      </span>
-                    )}
-                  </dt>
-                  <dd className="text-slate-800">
-                    {[preview.address.address1, preview.address.address2].filter(Boolean).join(" · ") ||
-                      "Sin dirección registrada"}
-                    <span className="block text-xs text-slate-500">
-                      {[preview.address.district, preview.address.region].filter(Boolean).join(", ") || "—"}
-                      {preview.city && <span className="capitalize"> · almacén: {preview.city}</span>}
-                    </span>
-                  </dd>
-                </div>
-              </dl>
-              {preview.schedule && (
-                <p className="border-t border-amber-100 bg-amber-50/70 px-3 py-1.5 text-xs text-amber-800">
-                  Horario Swayp: {preview.schedule.hours}
-                  {preview.schedule.note ? ` · ${preview.schedule.note}` : ""}
-                </p>
-              )}
-            </section>
+            {/* El pedido y adónde va, en el marco de cifras: lo que se revisa
+                antes de mandar una caja desde el almacén regional. */}
+            <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-md bg-line ring-1 ring-line">
+              <div className="bg-wash px-3 py-2.5">
+                <dt className="text-[13px] leading-5 text-ink-600">Pedido</dt>
+                <dd className="font-mono text-sm font-semibold leading-5 text-ink-900">{preview.orderName ?? "—"}</dd>
+              </div>
+              <div className="bg-wash px-3 py-2.5">
+                <dt className="text-[13px] leading-5 text-ink-600">Cobrar</dt>
+                <dd className="text-sm font-semibold leading-5 tabular-nums text-ink-900">
+                  {preview.totalAmount != null
+                    ? `${preview.currency ?? "PEN"} ${preview.totalAmount.toFixed(2)}`
+                    : "—"}
+                </dd>
+              </div>
+              <div className="bg-wash px-3 py-2.5">
+                <dt className="text-[13px] leading-5 text-ink-600">Cliente</dt>
+                <dd className="text-sm leading-5 text-ink-900">{preview.customerName ?? "—"}</dd>
+              </div>
+              <div className="bg-wash px-3 py-2.5">
+                <dt className="text-[13px] leading-5 text-ink-600">Teléfono</dt>
+                <dd className="text-sm leading-5 tabular-nums text-ink-900">{preview.customerPhone ?? "—"}</dd>
+              </div>
+              <div className="col-span-2 bg-wash px-3 py-2.5">
+                <dt className="flex items-center gap-1.5 text-[13px] leading-5 text-ink-600">
+                  Destino
+                  {preview.address.source && (
+                    <Badge>
+                      {preview.address.source === "shopify"
+                        ? "Shopify"
+                        : preview.address.source === "carrito"
+                          ? "Carrito COD"
+                          : "Lead"}
+                    </Badge>
+                  )}
+                </dt>
+                <dd className="text-sm leading-5 text-ink-900">
+                  {[preview.address.address1, preview.address.address2].filter(Boolean).join(" · ") ||
+                    "Sin dirección registrada"}
+                  <span className="block text-[13px] text-ink-600">
+                    {[preview.address.district, preview.address.region].filter(Boolean).join(", ") || "—"}
+                    {preview.city && <span className="capitalize"> · almacén: {preview.city}</span>}
+                  </span>
+                </dd>
+              </div>
+            </dl>
+            {preview.schedule && (
+              <p className="text-[13px] leading-5 text-ink-600">
+                <span className="font-semibold text-ink-900">Horario Swayp: {preview.schedule.hours}</span>
+                {preview.schedule.note ? ` · ${preview.schedule.note}` : ""}
+              </p>
+            )}
 
-            <section className="rounded-xl border border-slate-200">
-              <p className="border-b border-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
+            <section aria-labelledby="guia-directa-productos" className="overflow-hidden rounded-md ring-1 ring-line">
+              <p id="guia-directa-productos" className="border-b border-line px-3 py-2 text-[13px] font-medium leading-5 text-ink-700">
                 Productos y stock Swayp{preview.city ? ` en ${titleCaseCity(preview.city)}` : ""}
               </p>
-              <ul className="divide-y divide-slate-100">
+              <ul className="divide-y divide-line">
                 {preview.lineItems.length === 0 && (
-                  <li className="px-3 py-1.5 text-xs text-slate-400">Pedido sin productos registrados.</li>
+                  <li className="px-3 py-2 text-[13px] text-ink-500">Pedido sin productos registrados.</li>
                 )}
                 {preview.lineItems.map((li, i) => {
                   const missing =
@@ -384,26 +433,36 @@ export function DirectFenixGuideModal({
                     li.title.trim() || (li.sku ?? "").trim() || "(producto sin nombre)",
                   );
                   return (
-                    <li key={i} className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm">
-                      <span className="min-w-0 flex-1 truncate text-slate-700" title={li.title}>
+                    <li key={i} className="flex items-center justify-between gap-3 px-3 py-2 text-sm leading-5">
+                      <span className="min-w-0 flex-1 truncate text-ink-900" title={li.title}>
                         {li.title || "—"}
-                        {li.quantity > 1 && <span className="text-xs text-slate-400"> ×{li.quantity}</span>}
+                        {li.quantity > 1 && <span className="text-[13px] tabular-nums text-ink-500"> × {li.quantity}</span>}
                       </span>
                       {sinVinculo ? (
                         <span
-                          className="shrink-0 text-xs font-medium text-rose-600"
+                          className="inline-flex shrink-0 items-center gap-1 text-[13px] font-medium text-crit-fg"
                           title="Swayp no tiene este producto en su catálogo: falta vincularlo en Catálogo de productos."
                         >
-                          ✗ sin vínculo Swayp
+                          <IconXCircle aria-hidden className="size-3.5" />
+                          sin vínculo Swayp
                         </span>
                       ) : preview.stockOk ? (
-                        <span className="text-xs font-medium text-emerald-600">✓ stock</span>
+                        <span className="inline-flex shrink-0 items-center gap-1 text-[13px] font-medium text-ok-fg">
+                          <IconCheck aria-hidden className="size-3.5" />
+                          stock
+                        </span>
                       ) : missing ? (
-                        <span className="text-xs font-medium text-rose-600">✗ sin stock</span>
+                        <span className="inline-flex shrink-0 items-center gap-1 text-[13px] font-medium text-crit-fg">
+                          <IconXCircle aria-hidden className="size-3.5" />
+                          sin stock
+                        </span>
                       ) : preview.stockReason === "sin_cobertura" ? (
-                        <span className="text-xs text-slate-400">—</span>
+                        <span className="text-[13px] text-ink-500">—</span>
                       ) : (
-                        <span className="text-xs font-medium text-emerald-600">✓ stock</span>
+                        <span className="inline-flex shrink-0 items-center gap-1 text-[13px] font-medium text-ok-fg">
+                          <IconCheck aria-hidden className="size-3.5" />
+                          stock
+                        </span>
                       )}
                     </li>
                   );
@@ -411,10 +470,8 @@ export function DirectFenixGuideModal({
               </ul>
               <p
                 className={cn(
-                  "border-t px-3 py-1.5 text-xs font-medium",
-                  preview.stockOk && !blockedByLink
-                    ? "border-emerald-100 bg-emerald-50/70 text-emerald-700"
-                    : "border-rose-100 bg-rose-50/70 text-rose-700",
+                  "border-t border-line px-3 py-2 text-[13px] font-medium leading-5",
+                  preview.stockOk && !blockedByLink ? "bg-ok-wash text-ok-fg" : "bg-crit-wash text-crit-fg",
                 )}
               >
                 {/* El vínculo se dice PRIMERO: es lo que bloquea, y manda a otra
@@ -434,12 +491,14 @@ export function DirectFenixGuideModal({
                 aviso era una columna a la derecha de una lista, y el botón se
                 apagaba sin decir por qué. Dice qué falta y dónde se arregla. */}
             {blockedByLink && (
-              <div className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs text-rose-800">
-                <p className="font-semibold">
-                  {preview.unlinked.length === 1
+              <Banner
+                tone="crit"
+                title={
+                  preview.unlinked.length === 1
                     ? "Este producto no está en el inventario de Swayp"
-                    : "Estos productos no están en el inventario de Swayp"}
-                </p>
+                    : "Estos productos no están en el inventario de Swayp"
+                }
+              >
                 <ul className="mt-1 list-disc space-y-0.5 pl-4">
                   {preview.unlinked.map((nombre) => (
                     <li key={nombre}>{nombre}</li>
@@ -451,39 +510,39 @@ export function DirectFenixGuideModal({
                   {preview.unlinked.length === 1 ? "Vincúlalo" : "Vincúlalos"} en Catálogo de
                   productos y vuelve a abrir esta ventana.
                 </p>
-              </div>
+              </Banner>
             )}
             {blockedByOrder && (
-              <p className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">
+              <Banner tone="crit">
                 {preview.cancelled
                   ? "El pedido está cancelado en Shopify; no se puede crear la guía."
                   : "El pedido fue reembolsado por completo en Shopify; no se puede crear la guía."}
-              </p>
+              </Banner>
             )}
             {/* El texto lo escribe el servidor y nombra al courier de verdad.
                 Antes se armaba aquí con «fenix → Swayp, todo lo demás →
                 Aliclik», y una salida de Grupo GF se anunciaba como de Aliclik
                 (#KP134416). */}
             {blockedByGuide && preview.salidaAdicional && (
-              <p className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">
-                {preview.salidaAdicional.texto}
-              </p>
+              <Banner tone="crit">{preview.salidaAdicional.texto}</Banner>
             )}
             {preview.salidaAdicional?.tipo === "pideMotivo" && !blockedByOrder && (
-              <div className="rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-2 text-xs text-amber-900">
-                <p>{preview.salidaAdicional.texto}</p>
-                <textarea
-                  value={motivo}
-                  onChange={(e) => setMotivo(e.target.value)}
-                  rows={2}
-                  placeholder="Ej. Grupo GF no lo entregó; sale por Swayp sin esperar su reporte."
-                  className="mt-1.5 w-full rounded-md border border-amber-300 bg-white px-2 py-1.5 text-xs text-slate-900"
-                />
-                <p className="mt-1">
+              <Banner tone="warn">
+                <label className="grid gap-1.5">
+                  {preview.salidaAdicional.texto}
+                  <textarea
+                    value={motivo}
+                    onChange={(e) => setMotivo(e.target.value)}
+                    rows={2}
+                    placeholder="Ej. Grupo GF no lo entregó; sale por Swayp sin esperar su reporte."
+                    className={cn(FIELD_BOX, "w-full px-3 py-2 leading-5")}
+                  />
+                </label>
+                <p className="mt-1.5">
                   Queda registrado en el pedido. Si la otra salida termina entregando, hay que
                   cancelar esta.
                 </p>
-              </div>
+              </Banner>
             )}
             {/* Una salida «por definir» NO bloquea: la guía se le escribe
                 encima, sin abrir otra ni gastar una del presupuesto de cinco.
@@ -491,31 +550,33 @@ export function DirectFenixGuideModal({
                 se nombra la salida porque quien arma la caja tiene ese rótulo
                 delante. */}
             {preview.fillableOutputCode && !blockedByGuide && !blockedByOrder && (
-              <p className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs text-sky-800">
-                La salida <span className="font-mono">{preview.fillableOutputCode}</span> está por
+              <Banner tone="info">
+                La salida <span className="font-mono font-medium text-ink-900">{preview.fillableOutputCode}</span> está por
                 definir: la guía se le escribe encima, sin anularla ni abrir otra.
-              </p>
+              </Banner>
             )}
             {preview.warnings.length > 0 && !blockedByGuide && !blockedByOrder && (
-              <ul className="space-y-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
-                {preview.warnings.map((w, i) => (
-                  <li key={i}>• {w}</li>
-                ))}
-              </ul>
+              <Banner tone="warn">
+                <ul className="list-disc space-y-0.5 pl-4">
+                  {preview.warnings.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              </Banner>
             )}
 
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <label className="block text-xs text-slate-500">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
                 Fecha de despacho (desde mañana)
                 <input
                   type="date"
                   value={dispatchDate}
                   min={earliestDispatchDate()}
                   onChange={(e) => setDispatchDate(e.target.value)}
-                  className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-800"
+                  className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11")}
                 />
               </label>
-              <label className="block text-xs text-slate-500">
+              <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
                 N° de guía Swayp
                 {/* «Autogenerar» estaba aquí y se quitó el 16-09-2026: armaba el
                     número con el pedido y la fecha —`#KP13166415092026`—, que es
@@ -525,41 +586,47 @@ export function DirectFenixGuideModal({
                   onChange={(e) => setGuideCode(e.target.value)}
                   inputMode="numeric"
                   placeholder="Vacío: lo emite Swayp"
+                  aria-invalid={numeroNoEsDeSwayp || undefined}
                   className={cn(
-                    "mt-0.5 w-full rounded-lg border px-2.5 py-1.5 font-mono text-xs",
-                    numeroNoEsDeSwayp ? "border-rose-300 bg-rose-50" : "border-slate-200",
+                    FIELD,
+                    "font-mono font-normal pointer-coarse:h-11",
+                    numeroNoEsDeSwayp && "ring-2 ring-crit-fg",
                   )}
                 />
-                <span
-                  className={cn(
-                    "mt-1 block text-[11px]",
-                    numeroNoEsDeSwayp ? "text-rose-700" : "text-slate-400",
-                  )}
-                >
+                <span className={cn("text-[13px] font-normal leading-5", numeroNoEsDeSwayp ? "text-crit-fg" : "text-ink-500")}>
                   {numeroNoEsDeSwayp
                     ? "Ese número no es de Swayp: los suyos son solo dígitos, como 50000132589."
                     : "Déjalo vacío y el número lo emite Swayp. Escríbelo solo si la guía ya existe en su panel: con el campo lleno no se le pide, para no duplicar el paquete."}
                 </span>
               </label>
             </div>
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Nota (opcional, queda en el historial)…"
-              rows={2}
-              className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
-            />
+            <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
+              Nota (opcional)
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Queda en el historial…"
+                rows={2}
+                className={cn(FIELD_BOX, "w-full px-3 py-2 font-normal leading-5")}
+              />
+            </label>
 
-            {msg && <p className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700">{msg}</p>}
-            <button
-              onClick={create}
-              disabled={pending || !canCreate}
-              className="w-full rounded-lg border border-orange-300 bg-orange-50 px-3 py-1.5 text-sm font-medium text-orange-800 hover:bg-orange-100 disabled:opacity-50"
-            >
-              {pending ? "Creando…" : "Crear guía Swayp directa"}
-            </button>
+            {msg && (
+              <Banner tone="crit" role="alert">
+                {msg}
+              </Banner>
+            )}
+            <div className="flex justify-end gap-2">
+              <OpsButton onClick={onClose} className="pointer-coarse:h-11">
+                Cancelar
+              </OpsButton>
+              <OpsButton variant="primary" onClick={create} disabled={pending || !canCreate} className="pointer-coarse:h-11">
+                {pending ? "Creando…" : "Crear guía Swayp directa"}
+              </OpsButton>
+            </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   );

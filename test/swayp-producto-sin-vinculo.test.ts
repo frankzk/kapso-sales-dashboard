@@ -118,7 +118,8 @@ describe("el modal avisa y apaga el botón", () => {
   });
 
   it("cada producto sin vínculo se marca en su renglón", () => {
-    expect(ui).toContain("✗ sin vínculo Swayp");
+    // Con su icono dibujado (antes un «✗» de texto).
+    expect(ui).toContain("<IconXCircle aria-hidden className=\"size-3.5\" />\n                          sin vínculo Swayp");
   });
 
   it("y el resumen ya no puede decir «disponible» con un vínculo faltando", () => {
@@ -192,7 +193,7 @@ describe("las tres puertas de Envíos", () => {
     expect(ui).toContain('"Sin vínculo de codbar"');
     // …y el reenvío y el alta a mano lo enseñan como texto.
     expect(ui).toContain("{swaypSinCodbarAviso}");
-    expect(ui).toContain("{swaypSinCodbarAviso\n                      ? swaypSinCodbarAviso");
+    expect(ui.replace(/\s+/g, " ")).toContain("{swaypSinCodbarAviso ? swaypSinCodbarAviso");
   });
 });
 

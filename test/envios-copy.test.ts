@@ -59,7 +59,8 @@ describe("palabras de la asesora, no del sistema", () => {
     expect(ui).not.toContain("Etapa 1");
     expect(ui).not.toContain("Paso 1");
     expect(ui).toContain(">Resultado del courier registrado</p>");
-    expect(ui).toContain('"Resultado del courier · obligatorio"');
+    // El paso obligatorio se dice con una chapa junto al título del bloque.
+    expect(ui).toContain('<Badge tone="warn">Obligatorio</Badge>');
   });
 
   it("el producto se llama Kapta", () => {
@@ -79,7 +80,7 @@ describe("descartar la recuperación se confirma nombrando el pedido", () => {
     expect(ui).toContain("`Sí, descartar ${detail.shipment.order_name ? `el pedido ${detail.shipment.order_name}` : \"este pedido\"}`");
     expect(ui).toContain('"Descartar la recuperación…"');
     // Cambiar de resultado retira la confirmación pendiente.
-    expect(ui).toContain("setRecoveryDisposition(e.target.value as RecoveryCallDisposition);\n                      setConfirmDiscard(false);");
+    expect(ui.replace(/\s+/g, " ")).toContain("setRecoveryDisposition(d.key); setConfirmDiscard(false);");
   });
 });
 
