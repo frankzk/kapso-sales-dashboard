@@ -1,5 +1,6 @@
 "use server";
 
+import { cancelledScanNotice } from "@/lib/scan-cancelled";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { redirect } from "next/navigation";
@@ -2571,6 +2572,9 @@ export async function scanAssignToRider(
     return { ...base, message: found.error ?? "Ese pedido tiene varias salidas: escanea el QR de la caja." };
   }
   if (!orderId) return { ...base, message: "No encontramos un pedido con ese QR, guía o número." };
+  // Un pedido anulado no entra a ninguna caja: se dice eso y nada más (lib/scan-cancelled.ts).
+  const cancelled = await cancelledScanNotice(admin, orderId);
+  if (cancelled) return { ...base, orderId, shipmentId, status: "no_elegible", message: cancelled };
   const [{ data: om }, { data: active }] = await Promise.all([
     admin.from("order_master").select("order_name,order_total,store_id").eq("order_id", orderId).maybeSingle(),
     shipmentId ? admin
