@@ -94,6 +94,7 @@ import {
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import { VoiceAgentPanel } from "@/components/voice-agent-panel";
+import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
 import { COURIER_TBD } from "@/lib/shipment-output";
 import {
@@ -1848,6 +1849,7 @@ export function OrderDrawer({
               hidden={workspace !== "actividad"}
               className="flex flex-col gap-4 sm:gap-6"
             >
+              <UrpiAttemptsSection orderId={orderId} className={cn("order-1", SECTION)} />
               <section
                 data-drawer-section="historial"
                 className={cn("order-1 space-y-5", SECTION)}

@@ -1290,10 +1290,12 @@ intento fallido (`apiGuideReceivedBack`, `lib/reproprovincia.ts`), con la misma
 ventana y la misma ancla. Grupo GF y el motorizado propio no entran: su
 «Recibir en oficina» devuelve la salida a «por asignar».
 
-Lo que queda fuera: Axel y Urpi no reportan sus no entregados a Kapta —solo
-llegan por la liquidación, que únicamente mueve entregas—. Hasta que lo hagan,
-su no entregado llega a «Por reprogramar Lima» cuando alguien anula esa salida
-con la caja ya fuera.
+Lo que queda fuera: Axel no reporta sus no entregados a Kapta —solo llegan por
+la liquidación, que únicamente mueve entregas—. Urpi sí los reporta desde el
+05-10-2026 (§30.11), pero se registran y listan sin cambiar el Master porque sus
+despachos no tienen salida en Kapta. Hasta que eso cambie, el no entregado de
+ambos llega a «Por reprogramar Lima» cuando alguien anula esa salida con la caja
+ya fuera.
 
 #### Las guías con API también aceptan la salida adicional
 
@@ -1443,7 +1445,7 @@ Reglas:
 | Johnny, Roy y Douglas | WhatsApp; `entregado` o `entregado en efectivo`, más evidencia para Yape, Plin, link o POS | Durante/final de ruta |
 | Axel Courier | Cuadro de entregados y devueltos; devolución física normalmente al día siguiente | Día siguiente |
 | Swayp | Excel/plataforma en tiempo real | Durante la ruta |
-| Urpi | Plataforma en tiempo real | Durante la ruta |
+| Urpi | Plataforma en tiempo real; su export «Reporte del mes – detallado» se carga en Kapta (§30.11) | Durante la ruta |
 | Tanders | Incidencias por WhatsApp y cierre completo de ruta por la noche | Cotejo al día siguiente |
 
 Estados externos observados: entregado, no responde, rechazado, reprogramado y
@@ -8639,10 +8641,73 @@ exige `sheets.manage` e importar `sheets.edit`, dentro de la organización elegi
 de lunes a sábado. Viernes pasa a sábado, sábado a lunes. Se calcula desde la
 fecha del reporte, no desde su importación. Cruza meses y años sin crear otra
 identidad de pedido ni otra salida física. Se omiten domingos; no se estableció
-excepción para feriados. La función y sus pruebas quedan preparadas para la fase
-de reportes; la programación enviada conserva su fecha original.
+excepción para feriados. La usan los resultados de Urpi (§30.11) para el día del
+reintento; la programación enviada conserva su fecha original.
 
 Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0215–0216.
+
+### 30.11 Resultados de entrega que reporta Urpi (05/10/2026)
+
+`/dashboard/urpi?vista=resultados` carga el export «Reporte del mes – detallado»
+del AppSheet de Urpi (.csv). Es lo que Urpi **dice** que pasó en cada intento:
+Kapta lo registra, lo vincula al pedido y propone; no lo da por hecho.
+
+**Identidad.** Urpi exporta una fila por **intento**, no por pedido, con su
+número de fila («_RowNumber») como identidad. Un reintento apunta al anterior en
+«Row number relacionado», que el export pinta como fecha (serial de Excel:
+«24/04/1906» es la fila 2306); el lector recupera el número. La identidad de una
+fila es organización + número de fila: Kenku y Aurela comparten libro y
+organización. Medido el 05-10-2026: 2307 intentos de febrero a octubre; 1072
+reintentos encadenados, todos con el mismo teléfono que su anterior.
+
+**Vínculo por teléfono (decisión del owner, 05-10-2026).** El reporte no trae
+código de pedido. La cabeza de cada cadena se vincula al **único** pedido de la
+organización con ese teléfono creado entre los 45 días previos al envío y el
+final de ese día (hora de Lima); los reintentos heredan el vínculo de su cadena.
+La tienda que a veces escribe Urpi («KENKU», «AURELA») solo desempata si deja
+algún candidato. Con varios candidatos el envío queda **por vincular** con la
+lista; sin pedido o sin teléfono válido, también. Nunca se elige por cercanía ni
+por nombre. Un vínculo elegido a mano (candidato o código de pedido) se aplica a
+toda la cadena y ninguna lectura posterior lo cambia. Medido sobre los 422
+intentos de septiembre y octubre: 395 con un único pedido, 27 con varios, 0 sin
+pedido. Esta regla vale para el reporte de resultados; la programación enviada
+(§30.10) sigue cruzando solo por código.
+
+**Qué hace cada resultado.** Lo decide el **último** intento del pedido:
+
+| Urpi | Kapta |
+| --- | --- |
+| Entregado, pedido abierto en Kapta | «Entregados por marcar». Quien tiene `master.edit` los marca entregados, uno a uno o en lote, por la única puerta (§11.4, `lib/master-door.ts`): `status_override` con fuente `liquidacion`, courier `urpi`, mediodía de Lima del día del reporte y la fila de Urpi como evidencia. |
+| Entregado, pedido anulado o devuelto en Kapta | Observación. Nunca se marca: alguien lo revisa. |
+| Cancelado | Se registra con su motivo, detalle y fotos y se lista en «Cancelados por Urpi» para Seguimiento Lima. **No cambia el estado del Master** ni anula el pedido en Shopify. |
+| Reprogramado | Se registra y se lista con su nuevo día: el siguiente de lunes a sábado desde la fecha del reporte (§30.10). No cambia el estado del Master. |
+| Programado, En coordinación, sin resultado | En curso; solo informa. |
+| Cualquier otro valor | «Estado no reconocido»: se guarda tal cual y no se interpreta. |
+
+Si Kapta ya cerró el pedido (entregado, anulado o devuelto), el envío pasa a
+«Al día». La diferencia entre lo que cobró Urpi y el total del pedido se
+muestra; no bloquea ni mueve dinero, eso es de la liquidación.
+
+**Por qué cancelado y reprogramado no mueven el Master.** «Por reprogramar
+Lima» (§9) exige una salida que conste fuera. Los despachos a Urpi salen del
+Google Sheet de programación, no de la ruta de Urpi de Kapta (6 salidas de Urpi
+en Kapta, todas de agosto), así que no hay salida sobre la que apoyar el intento
+fallido. Pasar los cancelados a «Por reprogramar Lima» queda para una decisión
+posterior: crear la salida desde el reporte o despachar a Urpi desde Kapta.
+
+**Historial.** Cada fila se guarda como llegó y cada cambio deja una versión
+inmutable; reimportar el mismo archivo no escribe filas, aunque la lectura queda
+registrada. Los lotes de 200 filas son atómicos. Nunca se borra una fila que
+desaparezca del export. Los intentos se ven también en la ficha del pedido
+(pestaña Actividad).
+
+**Permisos.** Cargar el reporte y vincular exige `sheets.edit` en la
+organización; marcar entregados, `master.edit`. Vincular y marcar solo alcanzan
+pedidos de las tiendas que la persona ve. RLS: una fila vinculada se lee
+con su tienda (`auth_store_ids()`); una sin vincular, con la organización
+(`auth_org_ids()`). Escritura solo del servidor.
+
+Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migración 0228.
 
 ## 31. Agradecimiento con catálogo al entregar
 

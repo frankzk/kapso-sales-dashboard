@@ -96,6 +96,44 @@ la de importación. No se excluyen feriados porque no se indicó esa excepción.
 Se aplicará al integrar reportes; esta pantalla no convierte programaciones
 en reportes de entrega ni cambia fechas por sí sola.
 
+## Resultados de entrega (reporte de Urpi)
+
+`/dashboard/urpi?vista=resultados` (pestaña «Resultados de entrega»). MOM §30.11.
+
+1. Aplicar `db/migrations/0228_urpi_report.sql` **antes** de desplegar el código
+   que la usa (DEPLOY.md: desplegar no aplica migraciones).
+2. En la plataforma de Urpi, «Reporte del mes – detallado» → **Exportar**. Sale
+   un `.csv` («AppSheet.ViewData…») con una fila por intento.
+3. Pulsar **Cargar reporte de Urpi** y elegir ese archivo. Se puede cargar el
+   export completo cada día: lo ya guardado no se reescribe, solo entra lo nuevo
+   o cambiado, y cada cambio deja versión.
+4. Revisar las listas:
+   - **Entregados por marcar**: seleccionar y «Marcar entregados». Exige
+     `master.edit`. Pasa por `lib/master-door.ts` como la liquidación.
+   - **Cancelados por Urpi** y **Reprogramados**: para Seguimiento Lima; no
+     cambian el Master.
+   - **Por vincular**: elegir el pedido de la lista o escribir su código. Se
+     vincula toda la cadena de intentos y queda como manual.
+   - **Observaciones**: Urpi dice entregado y Kapta lo tiene anulado o devuelto.
+
+El vínculo es por teléfono (el reporte no trae código de pedido): un único
+pedido de Kenku o Aurela con ese teléfono creado en los 45 días previos al envío.
+Con varios, decide una persona. Si Urpi añade algún día el código de pedido a su
+export, conviene usarlo y retirar el cruce por teléfono.
+
+Verificación: `npm test -- test/urpi-report.test.ts test/urpi-report-link.test.ts test/urpi-report-import.test.ts`
+y, en un Postgres desechable, `bash scripts/verify-urpi-report.sh` (RLS por
+tienda y organización, versiones por cambio, vínculo manual que ninguna lectura
+pisa, pedidos solo de la misma organización). Nunca contra Supabase.
+
+Validación con datos reales (05/10/2026): el export de Urpi del 04/10 (2307
+intentos, febrero–octubre) se lee completo: 1086 reprogramados, 686 cancelados,
+513 entregados, 22 sin resultado o programados, 0 estados desconocidos; 1072
+reintentos encadenados sin ninguno huérfano. Contra Kapta, solo con conteos: de
+los 422 intentos de septiembre y octubre, 395 tienen un único pedido por
+teléfono. De los pedidos que Urpi dio por entregados en ese periodo, 38 seguían
+«en proceso» en Kapta, 22 entregados y 6 anulados.
+
 ## Verificación
 
 `npm test -- test/urpi-programming.test.ts test/urpi-programming-access.test.ts test/urpi-register-source.test.ts test/urpi-book-import.test.ts test/urpi-google-sheets.test.ts test/urpi-excel.test.ts`

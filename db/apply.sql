@@ -457,4 +457,6 @@
 \ir migrations/0226_repeated_voucher_alert.sql
 \echo 'Applying 0227_olva_email_label_outcome.sql'
 \ir migrations/0227_olva_email_label_outcome.sql
+\echo 'Applying 0228_urpi_report.sql'
+\ir migrations/0228_urpi_report.sql
 \echo 'Done.'
