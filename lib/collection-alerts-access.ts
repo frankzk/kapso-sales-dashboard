@@ -6,7 +6,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { nextOffer, type AlertRouting, type EscalationStep } from "@/lib/collection-escalation";
 
-export type CollectionAlertKind = "registrado" | "sin_atribuir";
+export type CollectionAlertKind = "registrado" | "sin_atribuir" | "comprobante_repetido";
 
 export interface RaiseAlertInput {
   storeId: string;
@@ -94,6 +94,9 @@ export async function reconcileCollectionOffers(
     .select("id,offered_to,offered_at,passed,claimed_by")
     .eq("store_id", storeId)
     .eq("status", "abierta")
+    // La de comprobante repetido no escala: la ven a la vez todos los que
+    // tienen el permiso (lib/repeated-voucher-alert.ts).
+    .neq("kind", "comprobante_repetido")
     .limit(200);
   const rows = (data ?? []) as {
     id: string;

@@ -100,6 +100,10 @@ export const PERMISSIONS = [
   "routes.manage", // armar la ruta del día y asignarla
   "routes.deliver", // reportar SUS propias paradas desde /reparto
   "routes.report_others", // reportar por un motorizado, con actor y motivo propios
+  // Recibir la alerta urgente de «comprobante repetido» (0226): el mismo pago
+  // en más de un pedido. Se concede persona por persona desde Equipo, porque es
+  // a quién se le avisa — no una facultad del rol.
+  "alerts.repeated_voucher",
   // Recuperación del pedido devuelto (0112): escribirle a la clienta cuya guía
   // volvió, proponiéndole el reenvío por agencia con adelanto. Permiso propio y
   // no `master.edit` por el mismo motivo que las guías: es una escritura hacia
@@ -179,6 +183,13 @@ export const GRANTED_ONE_BY_ONE = [
     permission: "shalom.override_payment_validation",
     label: "Corregir pagos",
     description: "Mover un pago al pedido correcto o forzar su estado.",
+    lastOneMatters: true,
+  },
+  {
+    permission: "alerts.repeated_voucher",
+    label: "Alerta de comprobante repetido",
+    description: "Recibir la alerta urgente cuando un mismo comprobante aparece en más de un pedido.",
+    /** Sin nadie que la reciba, un pago cobrado dos veces vuelve a pasar en silencio. */
     lastOneMatters: true,
   },
   {

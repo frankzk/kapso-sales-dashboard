@@ -65,6 +65,7 @@ import {
   inspectVoucher,
 } from "@/lib/voucher-inspect";
 import type { OrderMasterRow } from "@/lib/types";
+import { raiseRepeatedVoucherAlert } from "@/lib/repeated-voucher-alert";
 
 const MASTER_PATH = "/dashboard/pedidos";
 const PAYMENT_REVIEW_PATH = "/dashboard/pagos";
@@ -663,6 +664,22 @@ export async function registerPayment(
       note: `Intento de registrar un comprobante ya usado. ${message}`,
       payload: { signals: verdict.signals, conflict_payment_id: verdict.conflict.id },
     });
+
+    // Un comprobante que ya paga OTRO pedido es la alerta urgente (0226): se
+    // bloqueó, pero alguien intentó cobrar dos pedidos con el mismo papel.
+    if (!verdict.sameOrder) {
+      await raiseRepeatedVoucherAlert(admin, {
+        storeId: ctx.storeId,
+        orderId,
+        orderName: ctx.row.order_name,
+        alsoIn: [conflict.order_name ?? "otro pedido"],
+        operation,
+        fileSha256: input.sha256 ?? null,
+        amount,
+        source: "subida_manual",
+        actions: ["Se bloqueó al subirlo: no se registró."],
+      });
+    }
 
     return {
       error: message,
@@ -1655,6 +1672,17 @@ export async function completePaymentData(
         reason: "posible_duplicado",
         note: `Intento de asignar el nº de operación ${operation}, ya usado como ${other.kind} en ${where}.`,
       });
+      if (other.order_id !== payment.order_id) {
+        await raiseRepeatedVoucherAlert(admin, {
+          storeId: ctx.storeId,
+          orderId: payment.order_id,
+          orderName: ctx.row.order_name,
+          alsoIn: [where],
+          operation,
+          source: "subida_manual",
+          actions: ["Se bloqueó al escribir el nº de operación: no se guardó."],
+        });
+      }
       return {
         error: `Ese nº de operación ya está registrado como ${other.kind} en ${where}.`,
         duplicate: { message: `Ya usado en ${where}.`, orderName: where, paymentId: other.id },

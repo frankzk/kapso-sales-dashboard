@@ -91,6 +91,7 @@ import {
   type ShipmentSortDirection,
   type ShipmentSortKey,
 } from "@/lib/shipment-sort";
+import { liveElapsed, liveSignature, pinLiveCalls, type LiveVoiceCall } from "@/lib/voice-live";
 import {
   REPROGRAM_STALE_DAYS,
   REPROGRAM_UNASSIGNED,
@@ -108,6 +109,7 @@ import {
   createFenixGuide,
   loadReprogramData,
   loadVoiceScore,
+  loadLiveVoiceCalls,
   loadShipmentDetail,
   reprogramCancelledShipmentException,
   registerCourierReportResult,
@@ -620,13 +622,31 @@ export function ShipmentsBoard({
       direction: current?.key === key && current.direction === "asc" ? "desc" : "asc",
     }));
   }, []);
+  const liveCalls = useLiveVoiceCalls(view === "pendiente");
+  const liveByOrder = useMemo(() => new Map(liveCalls.map((c) => [c.orderId, c])), [liveCalls]);
+  const liveFor = useCallback(
+    (row: ShipmentRow) => (row.order_id ? liveByOrder.get(row.order_id) ?? null : null),
+    [liveByOrder],
+  );
+  // La llamada en curso va primero en cualquier orden (MOM §11.8): es lo que
+  // está pasando ahora con la cola, y nadie debería abrir esa guía a la vez.
   const queueOrder = useMemo(
-    () => (sort ? sortShipmentRows(filtered, sort.key, sort.direction, storeName) : filtered),
-    [filtered, sort, storeName],
+    () =>
+      pinLiveCalls(sort ? sortShipmentRows(filtered, sort.key, sort.direction, storeName) : filtered, liveByOrder),
+    [filtered, sort, storeName, liveByOrder],
   );
   const searchOrder = useMemo(
-    () => (results && sort ? sortShipmentRows(results, sort.key, sort.direction, storeName) : results),
-    [results, sort, storeName],
+    () =>
+      results
+        ? pinLiveCalls(sort ? sortShipmentRows(results, sort.key, sort.direction, storeName) : results, liveByOrder)
+        : results,
+    [results, sort, storeName, liveByOrder],
+  );
+  // Una llamada cuyo pedido no está en la lista visible (otro filtro, otra
+  // tienda): se avisa arriba, para que «en vivo» no dependa de los filtros.
+  const liveOffscreen = useMemo(
+    () => liveCalls.filter((c) => !queueOrder.some((r) => r.order_id === c.orderId)),
+    [liveCalls, queueOrder],
   );
 
   /**
@@ -1049,6 +1069,7 @@ export function ShipmentsBoard({
               highlightedId={recentlyUpdatedId}
               cursorId={cursorId}
               claimedBy={claimedBy}
+              liveFor={liveFor}
               sort={sort}
               onSort={toggleSort}
               showRoute
@@ -1342,6 +1363,9 @@ export function ShipmentsBoard({
                   </div>
                 </Banner>
               )}
+              {liveOffscreen.length > 0 && (
+                <LiveOffscreenNotice calls={liveOffscreen} onFind={(name) => setSearch(name)} />
+              )}
               {filtered.length === 0 ? (
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line px-4 py-8 sm:px-5">
                   <p className="text-sm text-ink-500">
@@ -1370,6 +1394,7 @@ export function ShipmentsBoard({
                   highlightedId={recentlyUpdatedId}
                   cursorId={cursorId}
                   claimedBy={claimedBy}
+                  liveFor={liveFor}
                   sort={sort}
                   onSort={toggleSort}
                   showRoute={view === "pendiente"}
@@ -1503,8 +1528,16 @@ export type ShipmentSort = { key: ShipmentSortKey; direction: ShipmentSortDirect
  * las hairlines del encabezado fijo viajen con él al hacer scroll.
  */
 const TH =
-  "sticky top-0 z-10 border-y border-line bg-white px-3 py-2 text-left align-top text-xs font-semibold text-ink-600";
-const TD = "border-b border-line px-3 py-2.5 align-top group-last/row:border-b-0";
+  "sticky top-0 z-10 border-y border-line bg-white py-2 text-left align-top text-xs font-semibold text-ink-600";
+const TD = "border-b border-line py-2.5 align-top group-last/row:border-b-0";
+/**
+ * El relleno lateral de las celdas: 8 px hasta 1.440 px y 12 desde ahí; en los
+ * bordes de la tarjeta, 20. Va aparte de TH y TD porque `cn` no resuelve
+ * conflictos: un `px-*` con variante pisaría el `pl-5` de la primera columna.
+ */
+const CELL_X = "px-2 min-[1440px]:px-3";
+const FIRST_X = "pl-5 pr-2 min-[1440px]:pr-3";
+const LAST_X = "pl-2 pr-5 min-[1440px]:pl-3";
 /** La segunda línea de una celda: el dato que acompaña al principal. */
 const SUBLINE = "text-[13px] leading-5 text-ink-500";
 /**
@@ -1516,6 +1549,128 @@ const SUBLINE = "text-[13px] leading-5 text-ink-500";
 const DOT = "\u00a0· ";
 const keepDots = (text: string) => text.replace(/ · /g, DOT).replace(/_/g, "_\u200b");
 
+/** Cada cuánto se pregunta por las llamadas del agente en curso. */
+const LIVE_POLL_MS = 5_000;
+/** Al terminar una llamada se recarga la cola, pero no más de una vez en este lapso. */
+const LIVE_REFRESH_MIN_MS = 15_000;
+
+/**
+ * «Llamando ahora» (MOM §11.8): las llamadas del agente abiertas, sondeadas
+ * mientras la pestaña se ve. Cuando una termina, la cola se recarga para que
+ * la fila salga con la gestión que el agente acaba de registrar.
+ */
+function useLiveVoiceCalls(enabled: boolean): LiveVoiceCall[] {
+  const router = useRouter();
+  const [calls, setCalls] = useState<LiveVoiceCall[]>([]);
+  useEffect(() => {
+    if (!enabled) {
+      setCalls([]);
+      return;
+    }
+    let alive = true;
+    let inFlight = false;
+    let signature = "";
+    let openOrders = new Set<string>();
+    let lastRefresh = 0;
+    let pendingRefresh = false;
+    const check = async () => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
+      try {
+        const next = await loadLiveVoiceCalls().catch(() => null);
+        if (!alive || next === null) return;
+        const nextSignature = liveSignature(next);
+        const nextOrders = new Set(next.map((c) => c.orderId));
+        // Terminó una llamada: su pedido ya no está entre las abiertas.
+        const ended = [...openOrders].some((id) => !nextOrders.has(id));
+        openOrders = nextOrders;
+        if (nextSignature !== signature) {
+          signature = nextSignature;
+          setCalls(next);
+        }
+        if (ended) pendingRefresh = true;
+        if (pendingRefresh && Date.now() - lastRefresh >= LIVE_REFRESH_MIN_MS) {
+          pendingRefresh = false;
+          lastRefresh = Date.now();
+          router.refresh();
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    void check();
+    const timer = setInterval(() => void check(), LIVE_POLL_MS);
+    const onVisible = () => {
+      if (!document.hidden) void check();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [enabled, router]);
+  return calls;
+}
+
+/**
+ * La nota de la fila en llamada. Lleva su propio reloj: el tiempo corre cada
+ * segundo sin repintar la tabla entera. Hablando, el par `ok` con el punto que
+ * late (quieto con movimiento reducido); marcando, el par `info`.
+ */
+function LiveCallChip({ call, className }: { call: LiveVoiceCall; className?: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, []);
+  const talking = call.phase === "in_progress";
+  return (
+    <span
+      className={cn(
+        "w-fit items-center gap-1.5 whitespace-nowrap rounded px-1.5 py-0.5 font-sans text-xs font-medium",
+        talking ? "bg-ok-bg text-ok-fg" : "bg-info-bg text-info-fg",
+        className,
+      )}
+      title={talking ? `${call.agent} está hablando con la clienta` : `${call.agent} está marcando`}
+    >
+      <span className="relative flex size-2 shrink-0" aria-hidden>
+        {talking && (
+          <span className="absolute inline-flex size-full rounded-full bg-ok-fg opacity-50 motion-safe:animate-ping" />
+        )}
+        <span className={cn("relative inline-flex size-2 rounded-full", talking ? "bg-ok-fg" : "bg-info-fg")} />
+      </span>
+      {talking ? "Llamando" : "Marcando"} · {call.agent}
+      <span className="tabular-nums">{liveElapsed(call.since, now)}</span>
+    </span>
+  );
+}
+
+/** Llamadas en curso cuyo pedido no está en la lista: lo dice, con un atajo para buscarlo. */
+function LiveOffscreenNotice({ calls, onFind }: { calls: LiveVoiceCall[]; onFind: (orderName: string) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line bg-info-wash px-4 py-2.5 text-sm text-ink-700 sm:px-5">
+      {calls.map((c) => (
+        <span key={c.orderId} className="flex flex-wrap items-center gap-2">
+          <LiveCallChip call={c} className="inline-flex" />
+          <span>
+            {c.orderName ?? "Un pedido"} no aparece con los filtros actuales.
+          </span>
+          {c.orderName && (
+            <button
+              type="button"
+              onClick={() => onFind(c.orderName!)}
+              className="rounded-sm text-sm font-medium text-brand-700 underline-offset-2 hover:underline pointer-coarse:min-h-11"
+            >
+              Buscarlo
+            </button>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // Memoizada: con `rows` y `storeName` estables, escribir en el buscador, abrir
 // el cajón o renovar la reserva ya no repinta la tabla.
 const ShipmentTable = memo(function ShipmentTable({
@@ -1526,6 +1681,7 @@ const ShipmentTable = memo(function ShipmentTable({
   highlightedId,
   cursorId,
   claimedBy,
+  liveFor,
   sort,
   onSort,
   showRoute,
@@ -1541,6 +1697,8 @@ const ShipmentTable = memo(function ShipmentTable({
   cursorId?: string | null;
   /** Quién tiene tomada cada guía, para no abrir una que ya está ocupada. */
   claimedBy: (row: ShipmentRow) => string | null;
+  /** La llamada del agente en curso sobre el pedido de la fila, si hay. */
+  liveFor: (row: ShipmentRow) => LiveVoiceCall | null;
   sort: ShipmentSort;
   onSort: (key: ShipmentSortKey) => void;
   /** La columna Ruta, solo donde decide algo: Pendiente y la búsqueda. */
@@ -1570,7 +1728,7 @@ const ShipmentTable = memo(function ShipmentTable({
   // 1.440 px y el destino conserva la ciudad. El que cede es el cliente, que
   // se recorta con su nombre en el `title`.
   const w = showRoute
-    ? { guia: "w-[13.5%]", cliente: "w-[10%]", destino: "w-[16%]", motivo: "w-[15%]", estado: "w-[11%]", ruta: "w-[13%]", gestion: "w-[9.5%]", prog: "w-[12%]" }
+    ? { guia: "w-[13.5%]", cliente: "w-[10.5%]", destino: "w-[16%]", motivo: "w-[15%]", estado: "w-[10.5%]", ruta: "w-[13.5%]", gestion: "w-[9%]", prog: "w-[12%]" }
     : { guia: "w-[14%]", cliente: "w-[13%]", destino: "w-[18%]", motivo: "w-[18%]", estado: "w-[14%]", ruta: "", gestion: "w-[10%]", prog: "w-[13%]" };
 
   return (
@@ -1584,21 +1742,21 @@ const ShipmentTable = memo(function ShipmentTable({
         <table className="w-full table-fixed border-separate border-spacing-0 text-sm">
           <thead>
             <tr>
-              <SortableShipmentHeader label="Guía" sortKey="guide" also={{ label: "Pedido", sortKey: "order" }} sort={sort} onSort={toggleSort} className={cn(w.guia, "pl-5")} />
-              <SortableShipmentHeader label="Cliente" sortKey="customer" sort={sort} onSort={toggleSort} className={w.cliente} />
-              <SortableShipmentHeader label="Destino" sortKey="location" sort={sort} onSort={toggleSort} className={w.destino} />
+              <SortableShipmentHeader label="Guía" sortKey="guide" also={{ label: "Pedido", sortKey: "order" }} sort={sort} onSort={toggleSort} className={cn(w.guia, FIRST_X)} />
+              <SortableShipmentHeader label="Cliente" sortKey="customer" sort={sort} onSort={toggleSort} className={cn(w.cliente, CELL_X)} />
+              <SortableShipmentHeader label="Destino" sortKey="location" sort={sort} onSort={toggleSort} className={cn(w.destino, CELL_X)} />
               {/* MOTIVO ANTERIOR EN LUGAR DE PRODUCTO. El MOM §11 manda revisar
                   cómo terminó el intento anterior antes de reenviar —«si el
                   cliente vio el producto y aun así lo rechazó, normalmente no
                   reenviar»— y esa etiqueta no se pintaba en ningún sitio. El
                   producto sigue en el cajón, que es donde se confirma. */}
-              <SortableShipmentHeader label="Motivo anterior" sortKey="reason" sort={sort} onSort={toggleSort} className={w.motivo} />
-              <SortableShipmentHeader label="Estado" sortKey="status" sort={sort} onSort={toggleSort} className={w.estado} />
+              <SortableShipmentHeader label="Motivo anterior" sortKey="reason" sort={sort} onSort={toggleSort} className={cn(w.motivo, CELL_X)} />
+              <SortableShipmentHeader label="Estado" sortKey="status" sort={sort} onSort={toggleSort} className={cn(w.estado, CELL_X)} />
               {showRoute && (
-                <SortableShipmentHeader label="Ruta" sortKey="route" sort={sort} onSort={toggleSort} className={w.ruta} />
+                <SortableShipmentHeader label="Ruta" sortKey="route" sort={sort} onSort={toggleSort} className={cn(w.ruta, CELL_X)} />
               )}
-              <SortableShipmentHeader label="Gestión" sortKey="lastGestion" sort={sort} onSort={toggleSort} className={w.gestion} />
-              <SortableShipmentHeader label="Programación" sortKey="reprogramming" also={{ label: "Aliclik", sortKey: "lastDelivery" }} sort={sort} onSort={toggleSort} className={cn(w.prog, "pr-5")} />
+              <SortableShipmentHeader label="Gestión" sortKey="lastGestion" sort={sort} onSort={toggleSort} className={cn(w.gestion, CELL_X)} />
+              <SortableShipmentHeader label="Programación" sortKey="reprogramming" also={{ label: "Aliclik", sortKey: "lastDelivery" }} sort={sort} onSort={toggleSort} className={cn(w.prog, LAST_X)} />
             </tr>
           </thead>
           <tbody>
@@ -1616,10 +1774,16 @@ const ShipmentTable = memo(function ShipmentTable({
                 }}
                 className={cn(
                   "group/row cursor-pointer transition-colors duration-500 motion-reduce:transition-none",
-                  highlightedId === s.id ? "bg-ok-wash" : cursorId === s.id ? "bg-brand-50" : "hover:bg-wash",
+                  highlightedId === s.id
+                    ? "bg-ok-wash"
+                    : cursorId === s.id
+                      ? "bg-brand-50"
+                      : liveFor(s)
+                        ? "bg-info-wash"
+                        : "hover:bg-wash",
                 )}
               >
-                <td className={cn(TD, "pl-5")}>
+                <td className={cn(TD, FIRST_X)}>
                   {/* La fila entera abre con el ratón; el código es lo que abre
                       con el teclado. Sin este botón la cola no se podía trabajar
                       sin ratón: ninguna guía era alcanzable con Tab. */}
@@ -1636,22 +1800,32 @@ const ShipmentTable = memo(function ShipmentTable({
                   </button>
                   {/* La etiqueta de courier abre la segunda línea: junto al
                       código partía la celda en tres renglones. */}
-                  <p className={cn(SUBLINE, "flex min-w-0 items-center gap-1.5")}>
+                  <p
+                    className={cn(SUBLINE, "flex min-w-0 items-center gap-1.5")}
+                    title={multiStore ? storeName(s.store_id) : undefined}
+                  >
                     {s.courier === "fenix" && <Badge className="shrink-0">Swayp</Badge>}
                     {s.created_via === "fenix_directo" && <Badge className="shrink-0">Directa</Badge>}
+                    {/* El pedido manda: es lo que identifica la fila. Si no
+                        cabe, se recorta la tienda, que también filtra arriba. */}
                     <span className="truncate">
                       <OrderNameLabel name={s.order_name} matched={s.matched} />
                       {multiStore && <> · {storeName(s.store_id)}</>}
                     </span>
                   </p>
+                  {/* La llamada del agente en curso: la fila va primera y lo dice. */}
+                  {(() => {
+                    const live = liveFor(s);
+                    return live ? <LiveCallChip call={live} className="mt-1 flex" /> : null;
+                  })()}
                 </td>
-                <td className={TD}>
+                <td className={cn(TD, CELL_X)}>
                   <p className="truncate leading-5 text-ink-900" title={s.customer_name ?? undefined}>
                     {s.customer_name ?? "—"}
                   </p>
                   {s.customer_phone && <p className={cn(SUBLINE, "truncate tabular-nums")}>{s.customer_phone}</p>}
                 </td>
-                <td className={TD}>
+                <td className={cn(TD, CELL_X)}>
                   {/* El distrito solo arriba; abajo la ciudad (o el
                       departamento) y la disponibilidad Swayp. Si no cabe, cede
                       primero la ciudad y después la disponibilidad. */}
@@ -1663,19 +1837,20 @@ const ShipmentTable = memo(function ShipmentTable({
                     title={placeLine(s) ? `${placeLine(s)} · ${fenixAvailabilityText(s)}` : fenixAvailabilityText(s)}
                   >
                     {placeLine(s) && (
-                      <span className="min-w-0 shrink-[999] truncate">
-                        <span className="capitalize">{placeLine(s)}</span>
-                        {/* Espacio duro también detrás: al final de un hijo
-                            de flex, el espacio normal se pierde. */}
-                        {"\u00a0·\u00a0"}
-                      </span>
+                      <>
+                        <span className="min-w-[4ch] shrink-[999] truncate capitalize">{placeLine(s)}</span>
+                        {/* El punto va aparte, para que la ciudad al
+                            recortarse no se lo lleve; espacios duros, porque
+                            al borde de un hijo de flex el normal se pierde. */}
+                        <span className="shrink-0">{"\u00a0·\u00a0"}</span>
+                      </>
                     )}
                     <span className="min-w-0 truncate">
                       <FenixAvailabilityInline shipment={s} lead={false} />
                     </span>
                   </p>
                 </td>
-                <td className={TD}>
+                <td className={cn(TD, CELL_X)}>
                   {(() => {
                     const m = motivoParaMostrar(s);
                     if (!m) return <span className={SUBLINE}>—</span>;
@@ -1692,17 +1867,17 @@ const ShipmentTable = memo(function ShipmentTable({
                     );
                   })()}
                 </td>
-                <td className={TD}>
+                <td className={cn(TD, CELL_X)}>
                   <StatusBadge category={s.status_category} status={s.delivery_status} />
                   {/* La segunda mitad del estado (MOM), entera bajo la chapa. */}
                   {subState(s) && <p className={SUBLINE}>{subState(s)}</p>}
                 </td>
                 {showRoute && (
-                  <td className={TD}>
+                  <td className={cn(TD, CELL_X)}>
                     <AliclikRouteCell shipment={s} />
                   </td>
                 )}
-                <td className={TD}>
+                <td className={cn(TD, CELL_X)}>
                   {(() => {
                     const g = fmtLastGestion(s.last_gestion_at);
                     return (
@@ -1730,7 +1905,7 @@ const ShipmentTable = memo(function ShipmentTable({
                     );
                   })()}
                 </td>
-                <td className={cn(TD, "pr-5")}>
+                <td className={cn(TD, LAST_X)}>
                   <p className="leading-5 tabular-nums text-ink-900">{fmtReprogram(s.next_followup_at)}</p>
                   {highlightedId === s.id ? (
                     <p className="text-[13px] font-semibold leading-5 text-ok-fg">Actualizado</p>
@@ -1765,7 +1940,10 @@ const ShipmentTable = memo(function ShipmentTable({
           return (
             <li
               key={s.id}
-              className={cn("flex items-start gap-3 px-4 py-3 sm:px-5", highlightedId === s.id && "bg-ok-wash")}
+              className={cn(
+                "flex items-start gap-3 px-4 py-3 sm:px-5",
+                highlightedId === s.id ? "bg-ok-wash" : liveFor(s) && "bg-info-wash",
+              )}
             >
               <button
                 type="button"
@@ -1785,6 +1963,10 @@ const ShipmentTable = memo(function ShipmentTable({
                       {multiStore && ` · ${storeName(s.store_id)}`}
                     </span>
                   </span>
+                  {(() => {
+                    const live = liveFor(s);
+                    return live ? <LiveCallChip call={live} className="my-1 flex" /> : null;
+                  })()}
                   <span className="block text-sm font-medium leading-5 text-ink-900">{s.customer_name ?? "—"}</span>
                   <span className={cn(SUBLINE, "block")}>
                     {s.district ?? "—"}

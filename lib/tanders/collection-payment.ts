@@ -49,7 +49,50 @@ export interface CollectionInput {
 
 export type CollectionOutcome =
   | { registered: true; status: string }
-  | { registered: false; reason: "ya_registrado" | "duplicado" | "sin_pedido" | "error"; detail?: string };
+  | {
+      registered: false;
+      reason: "duplicado";
+      /** Dónde estaba ya ese comprobante, para la alerta (0226). */
+      repeated: RepeatedIn;
+    }
+  | { registered: false; reason: "ya_registrado" | "sin_pedido" | "error"; detail?: string };
+
+/** El comprobante repetido y el pedido donde ya estaba. */
+export interface RepeatedIn {
+  /** Nombre del pedido donde ya estaba; null si no se pudo saber. */
+  orderName: string | null;
+  orderId: string | null;
+  sha256: string;
+  operation: string | null;
+  amount: number | null;
+  /** Mismo pedido: un reintento suyo, no un pago usado en otro. */
+  sameOrder: boolean;
+}
+
+/**
+ * Dónde estaba ya el comprobante. Se busca por la huella del archivo y luego por
+ * el nº de operación: con el choque detectado por el índice único (23505) no
+ * tenemos el pago contra el que chocó, y la alerta tiene que nombrar el pedido.
+ */
+async function whereItWas(
+  admin: SupabaseClient,
+  sha256: string,
+  operation: string | null,
+  conflictOrderId: string | null,
+): Promise<{ orderId: string | null; orderName: string | null }> {
+  let orderId = conflictOrderId;
+  if (!orderId) {
+    const bySha = await admin.from("order_payments").select("order_id").eq("file_sha256", sha256).limit(1);
+    orderId = ((bySha.data as { order_id: string }[] | null) ?? [])[0]?.order_id ?? null;
+  }
+  if (!orderId && operation) {
+    const byOp = await admin.from("order_payments").select("order_id").eq("operation_number", operation).limit(1);
+    orderId = ((byOp.data as { order_id: string }[] | null) ?? [])[0]?.order_id ?? null;
+  }
+  if (!orderId) return { orderId: null, orderName: null };
+  const { data } = await admin.from("orders").select("name").eq("id", orderId).maybeSingle();
+  return { orderId, orderName: (data as { name: string | null } | null)?.name ?? null };
+}
 
 /**
  * En qué estado entra a la cola.
@@ -143,7 +186,14 @@ export async function registerCourierCollection(
     },
     choques,
   );
-  if (dup.duplicate) return { registered: false, reason: "duplicado" };
+  if (dup.duplicate) {
+    const where = await whereItWas(admin, sha256, operation, dup.conflict?.order_id ?? null);
+    return {
+      registered: false,
+      reason: "duplicado",
+      repeated: { ...where, sha256, operation, amount, sameOrder: dup.sameOrder },
+    };
+  }
 
   // La imagen se guarda en NUESTRO bucket, no se enlaza la de Tanders: la
   // evidencia de un cobro no puede depender de que un tercero conserve el
@@ -191,7 +241,14 @@ export async function registerCourierCollection(
   if (error) {
     // Los índices únicos de 0049 son la última línea de defensa: si el choque se
     // coló entre la comprobación y el insert, aquí se para.
-    if ((error as { code?: string }).code === "23505") return { registered: false, reason: "duplicado" };
+    if ((error as { code?: string }).code === "23505") {
+      const where = await whereItWas(admin, sha256, operation, null);
+      return {
+        registered: false,
+        reason: "duplicado",
+        repeated: { ...where, sha256, operation, amount, sameOrder: where.orderId === input.orderId },
+      };
+    }
     return { registered: false, reason: "error", detail: error.message };
   }
   return { registered: true, status };

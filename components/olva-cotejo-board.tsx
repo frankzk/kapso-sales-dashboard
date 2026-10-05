@@ -51,17 +51,9 @@ export function OlvaCotejoBoard({
   liveLinked: Record<string, string | null>;
   labelHints?: LabelHints;
 }) {
+  // El título, la explicación y las pestañas los pone la página (OlvaPage).
   return (
     <div className="space-y-6">
-      <header className="space-y-1">
-        <h1 className="text-xl font-semibold text-slate-900">Cotejar Olva</h1>
-        <p className="max-w-3xl text-sm text-slate-500">
-          Trae del portal de Olva los envíos que registró la empresa y les pone el tracking a las salidas de Kapta
-          que no lo tienen. <strong>Solo vincula lo que no admite duda</strong>: el «Doc. externo» igual al número
-          del pedido, el DNI de la clienta, o la misma dirección con todos sus nombres. Lo demás queda abajo para que lo
-          decida una persona. Con el tracking puesto, Kapta rastrea el envío y le avisa a la clienta.
-        </p>
-      </header>
       {orgs.map((org) => (
         <OrgCotejo key={org.orgId} org={org} liveLinked={liveLinked} labelHints={labelHints} />
       ))}

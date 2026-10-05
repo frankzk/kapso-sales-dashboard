@@ -7,7 +7,7 @@ import { registerUrpiSource, syncUrpiSource } from "@/app/dashboard/urpi/actions
 import { URPI_SOURCE_EXAMPLES, sheetUrl, urpiAutoMonths } from "@/lib/urpi-programming";
 import type { UrpiSource, UrpiSnapshot } from "@/lib/urpi-programming-db";
 
-type Store = { id: string; name: string; canManage: boolean; canEdit: boolean };
+type Store = { id: string; name: string; prefix: string | null; canManage: boolean; canEdit: boolean };
 type Props = {
   stores: Store[]; sources: UrpiSource[]; source: UrpiSource | null; snapshot: UrpiSnapshot | null;
   versions: Pick<UrpiSnapshot, "id" | "created_at" | "origin" | "row_count">[]; googleConfigured: boolean; autoSyncEnabled: boolean;
@@ -26,11 +26,16 @@ export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versio
   const [notice, setNotice] = useState<{ ok: boolean; message: string } | null>(null);
   const [registerOpen, setRegisterOpen] = useState(sources.length === 0);
   const manageable = stores.filter((store) => store.canManage);
-  const [storeId, setStoreId] = useState(manageable[0]?.id ?? "");
+  // Los libros de Urpi mezclan tiendas: por defecto se registran todas a la vez.
+  const registrable = manageable.filter((store) => store.prefix);
+  const [target, setTarget] = useState(registrable.length > 1 ? "all" : registrable[0]?.id ?? "");
+  const targets = target === "all" ? registrable : registrable.filter((store) => store.id === target);
   const selectedStore = stores.find((store) => store.id === source?.store_id);
+  // Mismo Sheet y mes: actualizar o cargar el Excel procesa todas sus tiendas.
+  const bookStores = source ? sources.filter((item) => item.spreadsheet_id === source.spreadsheet_id && item.month === source.month)
+    .map((item) => `${stores.find((store) => store.id === item.store_id)?.name ?? item.name} (${item.order_prefix})`) : [];
   const [month, setMonth] = useState(new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Lima", year: "numeric", month: "2-digit" }).format(new Date()));
   const [url, setUrl] = useState("");
-  const [prefix, setPrefix] = useState("");
   const [query, setQuery] = useState("");
   const [date, setDate] = useState("");
   const [onlyReview, setOnlyReview] = useState(false);
@@ -60,9 +65,9 @@ export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versio
     try {
       const form = new FormData(); form.set("sourceId", source.id); form.set("file", file);
       const res = await fetch("/api/urpi/programming/import", { method: "POST", body: form });
-      const result = await res.json() as { message?: string; error?: string };
+      const result = await res.json() as { message?: string; error?: string; saved?: number };
       setNotice({ ok: res.ok, message: result.message ?? result.error ?? "No se pudo procesar el archivo." });
-      if (res.ok) { go(source.id); router.refresh(); }
+      if (res.ok || result.saved) { go(source.id); router.refresh(); }
     } catch { setNotice({ ok: false, message: "No se pudo completar la carga. La programación anterior se conserva." }); }
     finally { setUploading(false); if (fileInput.current) fileInput.current.value = ""; }
   }
@@ -76,24 +81,28 @@ export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versio
       {manageable.length > 0 && <button className={primary} onClick={() => setRegisterOpen((open) => !open)} aria-expanded={registerOpen}>Registrar archivo mensual</button>}
     </header>
 
-    {notice && <div role={notice.ok ? "status" : "alert"} className={`rounded-lg border p-3 text-sm ${notice.ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-900"}`}>{notice.message}</div>}
+    {notice && <div role={notice.ok ? "status" : "alert"} className={`whitespace-pre-line rounded-lg border p-3 text-sm ${notice.ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-900"}`}>{notice.message}</div>}
 
     {registerOpen && manageable.length > 0 && <form className="space-y-4 rounded-xl border border-slate-200 bg-white p-5" onSubmit={(event) => {
       event.preventDefault(); setNotice(null);
       startTransition(async () => {
-        const result = await registerUrpiSource({ storeId, month, url, prefix }); setNotice(result);
+        const result = await registerUrpiSource({ storeIds: targets.map((store) => store.id), month, url }); setNotice(result);
         if (result.ok && result.sourceId) { setRegisterOpen(false); go(result.sourceId); router.refresh(); }
       });
     }}>
-      <p className="text-sm text-slate-600">Registra el enlace una vez por tienda y mes. Si el archivo mezcla Kenku y Aurela, registra ambas tiendas con el mismo enlace y su prefijo correspondiente.</p>
+      <p className="text-sm text-slate-600">Registra el enlace una vez por mes. Con un archivo compartido, cada tienda importa solo los pedidos de su prefijo.</p>
       <div className="grid gap-3 md:grid-cols-3">
-        <label className="grid gap-1 text-sm">Tienda<select required className={field} value={storeId} onChange={(e) => setStoreId(e.target.value)}>{manageable.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>
+        <label className="grid gap-1 text-sm">Tienda<select required className={field} value={target} onChange={(e) => setTarget(e.target.value)}>
+          {registrable.length > 1 && <option value="all">{registrable.map((store) => store.name).join(" y ")} (mismo archivo)</option>}
+          {manageable.map((store) => <option key={store.id} value={store.id} disabled={!store.prefix}>{store.name}{store.prefix ? "" : " · sin prefijo"}</option>)}
+        </select></label>
         <label className="grid gap-1 text-sm">Mes<input required type="month" className={field} value={month} onChange={(e) => setMonth(e.target.value)} /></label>
-        <label className="grid gap-1 text-sm">Prefijo de pedido<input required maxLength={12} placeholder="KP o AUR" className={field} value={prefix} onChange={(e) => setPrefix(e.target.value.toUpperCase())} /></label>
+        <div className="grid gap-1 text-sm"><span>Prefijo de pedido</span><p className="flex h-10 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700">{targets.map((store) => `${store.prefix} (${store.name})`).join(" y ") || "—"}</p></div>
       </div>
+      {registrable.length < manageable.length && <p className="text-xs text-amber-800">{manageable.filter((store) => !store.prefix).map((store) => store.name).join(", ")}: falta el prefijo de pedidos en Ajustes de la tienda.</p>}
       <label className="grid gap-1 text-sm">Enlace de Google Sheets<input required type="url" className={field} placeholder="https://docs.google.com/spreadsheets/d/…" value={url} onChange={(e) => setUrl(e.target.value)} /></label>
       <div className="flex flex-wrap items-center gap-2"><span className="text-xs text-slate-500">Archivos compartidos:</span>{URPI_SOURCE_EXAMPLES.map((example) => <button type="button" className="text-xs font-medium text-brand-700 underline underline-offset-2" key={example.month} onClick={() => { setMonth(example.month); setUrl(sheetUrl(example.spreadsheetId)); }}>{example.title}</button>)}</div>
-      <button disabled={busy} className={primary}>{pending ? "Registrando…" : "Guardar archivo"}</button>
+      <button disabled={busy || !targets.length} className={primary}>{pending ? "Registrando…" : "Guardar archivo"}</button>
     </form>}
 
     {!sources.length ? <div className="rounded-xl border border-dashed border-slate-300 px-6 py-12 text-center"><h2 className="font-semibold text-slate-900">Reúne aquí las programaciones de Urpi</h2><p className="mt-2 text-sm text-slate-600">Registra el archivo mensual y carga sus pestañas para consultar cada fecha y pedido.</p></div> : <>
@@ -104,12 +113,13 @@ export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versio
           {source && selectedStore?.canEdit && <>
             <button disabled={busy || !googleConfigured} className={button} onClick={() => startTransition(async () => {
               setNotice(null); const result = await syncUrpiSource(source.id); setNotice(result);
-              if (result.ok) { go(source.id); router.refresh(); }
+              if (result.ok || result.saved) { go(source.id); router.refresh(); }
             })}>{pending ? "Leyendo Google Sheets…" : "Actualizar desde Google"}</button>
             <button disabled={busy} className={primary} onClick={() => fileInput.current?.click()}>{uploading ? "Importando…" : "Cargar Excel del mes"}</button>
             <input ref={fileInput} type="file" accept=".xlsx" className="hidden" aria-label="Excel mensual de Urpi" onChange={(e) => { const file = e.target.files?.[0]; if (file) void upload(file); }} />
           </>}
         </div>
+        {bookStores.length > 1 && <p className="text-sm text-slate-600">Archivo compartido por {bookStores.join(" y ")}: cada lectura o Excel cargado actualiza todas sus tiendas.</p>}
         <div className="flex flex-wrap justify-between gap-2 text-xs text-slate-500">
           <span>{source?.last_checked_at ? `Última lectura: ${timeLabel(source.last_checked_at)} · hora de Lima` : "Este archivo todavía no tiene una lectura guardada."}</span>
           <span>{googleConfigured ? "Conexión de lectura a Google configurada" : "Conexión a Google pendiente · disponible mediante Excel"}</span>

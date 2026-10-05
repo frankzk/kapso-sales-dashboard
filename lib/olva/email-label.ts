@@ -22,6 +22,10 @@
 import { parseOlvaTracking, type OlvaTrackingId } from "@/lib/olva/tracking";
 import { createdNear, sharedNames, type CotejoCandidate } from "@/lib/olva/portal-match";
 
+/** Qué hizo un rótulo al llegar; se guarda en `olva_email_labels.outcome` (0227). */
+export const LABEL_OUTCOMES = ["vinculado", "ya_vinculado", "sugerido", "ambiguo", "sin_pareja", "ilegible"] as const;
+export type LabelOutcome = (typeof LABEL_OUTCOMES)[number];
+
 export interface OlvaEmailLabel {
   id: OlvaTrackingId | null;
   senderDoc: string | null;
