@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { registerUrpiSource, syncUrpiSource } from "@/app/dashboard/urpi/actions";
 import { URPI_SOURCE_EXAMPLES, sheetUrl, urpiAutoMonths } from "@/lib/urpi-programming";
 import type { UrpiSource, UrpiSnapshot } from "@/lib/urpi-programming-db";
@@ -11,6 +11,7 @@ type Store = { id: string; name: string; prefix: string | null; canManage: boole
 type Props = {
   stores: Store[]; sources: UrpiSource[]; source: UrpiSource | null; snapshot: UrpiSnapshot | null;
   versions: Pick<UrpiSnapshot, "id" | "created_at" | "origin" | "row_count">[]; googleConfigured: boolean; autoSyncEnabled: boolean;
+  nav?: ReactNode;
 };
 const field = "h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500";
 const button = "rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50";
@@ -19,7 +20,7 @@ const dateLabel = (value: string) => value.split("-").reverse().join("/");
 const timeLabel = (value: string) => new Intl.DateTimeFormat("es-PE", { dateStyle: "short", timeStyle: "short", timeZone: "America/Lima" }).format(new Date(value));
 const money = (value: number) => new Intl.NumberFormat("es-PE", { style: "currency", currency: "PEN" }).format(value);
 
-export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versions, googleConfigured, autoSyncEnabled }: Props) {
+export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versions, googleConfigured, autoSyncEnabled, nav }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [uploading, setUploading] = useState(false);
@@ -73,6 +74,7 @@ export function UrpiProgrammingBoard({ stores, sources, source, snapshot, versio
   }
 
   return <div className="mx-auto max-w-[1500px] space-y-6 p-4 md:p-6">
+    {nav}
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div><p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Couriers externos</p>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Urpi · Programaciones enviadas</h1>

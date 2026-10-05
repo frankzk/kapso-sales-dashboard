@@ -459,4 +459,6 @@
 \ir migrations/0227_olva_email_label_outcome.sql
 \echo 'Applying 0228_lead_shopify_location.sql'
 \ir migrations/0228_lead_shopify_location.sql
+\echo 'Applying 0229_urpi_report.sql'
+\ir migrations/0229_urpi_report.sql
 \echo 'Done.'
