@@ -15,11 +15,11 @@ import {
 import {
   activeClaimHolders,
   isLeadGestion,
-  isLeadSegment,
+  isQueueBucket,
   isQueueState,
   leadInteractionDateFilterFromParams,
   type LeadGestion,
-  type LeadSegment,
+  type QueueBucket,
   type QueueState,
 } from "@/lib/leads";
 import type { DistrictCoverageRule } from "@/lib/district-coverage";
@@ -111,10 +111,11 @@ async function LeadsContent({
       : isLeadGestion(sp.gest) && sp.gest !== "sin_llamar"
         ? "seguimiento"
         : null;
-  // Eje 2 (segmento): ?seg=, o un ?tab=<segmento> viejo del PR #76.
-  const initialSeg: LeadSegment | null = isLeadSegment(sp.seg)
+  // Eje 2 (segmento): ?seg=, o un ?tab=<segmento> viejo del PR #76. Un
+  // ?seg=interes guardado de antes de partirlo en Distrito/Producto abre «Todos».
+  const initialSeg: QueueBucket | null = isQueueBucket(sp.seg)
     ? sp.seg
-    : isLeadSegment(sp.tab)
+    : isQueueBucket(sp.tab)
       ? sp.tab
       : null;
   const initialGest: LeadGestion | null = isLeadGestion(sp.gest) ? sp.gest : null;

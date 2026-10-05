@@ -2621,6 +2621,22 @@ Tasa de cierre entre los LLAMADOS, 60 días:
 Mismo orden en las dos tiendas; lo que cambia son las magnitudes, y por eso los
 pesos de llamada son por tienda.
 
+**El filtro parte `interes` en Distrito y Producto (05-10-2026).** La fila de
+chips del Segmento ya no muestra «Distrito o producto»: muestra **Distrito**
+(dio su distrito, con o sin ficha) y **Producto** (solo llegó desde la ficha),
+y la pastilla de cada fila dice «Dio distrito» o «Vio producto»
+(`QUEUE_BUCKETS` / `leadQueueBucket` en `lib/leads.ts`). Quien trae las dos va
+a Distrito: decir dónde lo quiere está más cerca de comprar que mirar el
+producto. El motivo es el volumen: al abrirlo, sin carrito en la cola había
+687 con distrito (Aurela 136, Kenku 551) y 876 solo con la ficha (Aurela 173,
+Kenku 703); en un solo chip no se podían trabajar por tandas. Un `?seg=interes`
+guardado de antes abre «Todos».
+
+Solo cambia el FILTRO. La prioridad de llamada sigue con los cuatro segmentos
+de arriba y su `interes` único (`leadSegment`): la razón del dato —el orden
+entre las dos señales se contradice entre tiendas— sigue en pie, así que no se
+les da un peso distinto.
+
 **Cobertura de la cola de leads (04-10-2026).** Al lado del segmento, la cola
 se parte en **Lima / Provincia / Sin identificar** (`lib/lead-coverage.ts`).
 Es una pista para repartir llamadas, **no** la cobertura del pedido: esa sigue
