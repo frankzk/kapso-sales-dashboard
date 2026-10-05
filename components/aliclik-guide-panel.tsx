@@ -486,16 +486,6 @@ export function AliclikGuidePanel({
                     </div>
                   )}
                 </dl>
-                {preview.warnings?.length ? (
-                  <ul className="space-y-1 text-[13px] leading-5 text-warn-fg">
-                    {preview.warnings.map((w) => (
-                      <li key={w} className="flex gap-1.5">
-                        <IconAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-                        {w}
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
 
                 {/* Se marca cuando Aliclik va a fecharlo en domingo, el día que
                     no recogen y el que provoca la discusión con el motorizado. */}
@@ -514,6 +504,18 @@ export function AliclikGuidePanel({
                     <p>Comprueba la ubicación antes de crear: el reparto irá a donde apunta el pin, no a la dirección escrita.</p>
                   </Banner>
                 )}
+                {/* Los avisos de la cotización van después: el domingo y el pin
+                    explican la fila de arriba y tienen que quedar pegados a ella. */}
+                {preview.warnings?.length ? (
+                  <ul className="space-y-1 text-[13px] leading-5 text-warn-fg">
+                    {preview.warnings.map((w) => (
+                      <li key={w} className="flex gap-1.5">
+                        <IconAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+                        {w}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </>
             )}
           </Step>
@@ -542,13 +544,18 @@ export function AliclikGuidePanel({
                           </>
                         }
                         aside={`S/ ${c.deliveryCost.toFixed(2)}`}
-                        description={[
-                          `Devolución S/ ${c.returnCost.toFixed(2)}`,
-                          c.addDays ? `+${c.addDays} día(s)` : null,
-                          c.selectable ? null : c.reason ?? "No se puede elegir para este pedido.",
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
+                        description={
+                          c.selectable ? (
+                            `Devolución S/ ${c.returnCost.toFixed(2)}${c.addDays ? ` · +${c.addDays} día(s)` : ""}`
+                          ) : (
+                            // Apagada, lo primero es por qué no se puede elegir.
+                            <>
+                              <span className="block text-warn-fg">{c.reason ?? "No se puede elegir para este pedido."}</span>
+                              Devolución S/ {c.returnCost.toFixed(2)}
+                              {c.addDays ? ` · +${c.addDays} día(s)` : ""}
+                            </>
+                          )
+                        }
                         active={transportId === c.transportId}
                         disabled={!c.selectable}
                         onClick={() => setTransportId(c.transportId)}

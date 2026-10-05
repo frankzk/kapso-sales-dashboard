@@ -327,7 +327,8 @@ export function OptionTile({
   onClick,
 }: {
   label: string;
-  description?: string;
+  /** La consecuencia de elegirla, o por qué no se puede. */
+  description?: ReactNode;
   active: boolean;
   danger?: boolean;
   disabled?: boolean;
