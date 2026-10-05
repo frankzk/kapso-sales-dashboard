@@ -3,6 +3,8 @@ import { getAccessibleStores, getAdNames, getCurrentUser, getWaNumbers } from "@
 import {
   ALL_STORES,
   LEAD_VIEWS,
+  getDistrictCoverageRules,
+  getLeadPriorCoverage,
   getLeadQueueSnapshot,
   getStoreLeads,
   leadsViewLimit,
@@ -19,6 +21,7 @@ import {
   type LeadSegment,
   type QueueState,
 } from "@/lib/leads";
+import type { DistrictCoverageRule } from "@/lib/district-coverage";
 import { EmptyState } from "@/components/ui";
 import { getAdProductMap } from "@/lib/ad-products-access";
 import { resolveAgentNames } from "@/lib/agent-names";
@@ -141,15 +144,23 @@ async function LeadsContent({
   // «Tomado» sola obligaba a abrir el lead para descubrir a quién preguntarle.
   // Solo se resuelven las reservas vivas: una decena de asesoras, no la cola.
   const agentNamesPromise = leadsPromise.then((rows) => resolveAgentNames(activeClaimHolders(rows)));
-  const [snapshot, leads, user, adNames, waNumbers, adProductMap, agentNames] = await Promise.all([
-    snapshotPromise,
-    leadsPromise,
-    userPromise,
-    adNamesPromise,
-    waNumbersPromise,
-    adProductsPromise,
-    agentNamesPromise,
-  ]);
+  // El filtro de cobertura (Lima / Provincia) solo existe en «Por llamar». Las
+  // dos lecturas son independientes de la lista y no la esperan.
+  const inQueue = view === "por_llamar";
+  const priorCoveragePromise = inQueue ? getLeadPriorCoverage(scope) : Promise.resolve<Record<string, string>>({});
+  const coverageRulesPromise = inQueue ? getDistrictCoverageRules(scope) : Promise.resolve<DistrictCoverageRule[]>([]);
+  const [snapshot, leads, user, adNames, waNumbers, adProductMap, agentNames, priorCoverage, coverageRules] =
+    await Promise.all([
+      snapshotPromise,
+      leadsPromise,
+      userPromise,
+      adNamesPromise,
+      waNumbersPromise,
+      adProductsPromise,
+      agentNamesPromise,
+      priorCoveragePromise,
+      coverageRulesPromise,
+    ]);
 
   return (
     <LeadsBoard
@@ -165,6 +176,8 @@ async function LeadsContent({
       adNames={adNames}
       waNumbers={waNumbers}
       agentNames={agentNames}
+      priorCoverage={priorCoverage}
+      coverageRules={coverageRules}
       adDeclarations={Object.fromEntries(adProductMap)}
       currency={currency}
       timezone={timezone}

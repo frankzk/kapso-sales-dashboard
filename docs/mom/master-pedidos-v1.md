@@ -2590,6 +2590,63 @@ Tasa de cierre entre los LLAMADOS, 60 días:
 Mismo orden en las dos tiendas; lo que cambia son las magnitudes, y por eso los
 pesos de llamada son por tienda.
 
+**Cobertura de la cola de leads (04-10-2026).** Al lado del segmento, la cola
+se parte en **Lima / Provincia / Sin identificar** (`lib/lead-coverage.ts`).
+Es una pista para repartir llamadas, **no** la cobertura del pedido: esa sigue
+teniendo una sola definición, `order_coverage_for` (§5), y el pedido la recibe
+al nacer. Por eso existe un tercer valor que el pedido no tiene: un lead que no
+dijo dónde vive no es de provincia, es uno del que no se sabe. Medido al
+abrirlo: el 71 % de los ~3.000 «Sin llamar» no tenía ni distrito ni región.
+
+Se decide con la primera señal que sirva:
+
+1. **Su propia dirección**: la del carrito de Shopify, la guardada del cliente
+   (el Flow deja el departamento en `province`, no en `region`) o la respuesta
+   del chat. Lima es la MISMA regla del pedido (`isLimaMetropolitanaOrCallao`,
+   espejo de `is_lima_metropolitana`) y las excepciones de `district_coverage`
+   mandan igual (Pucusana → Provincia). El botón «¿Lima o provincia?» del bot
+   cuenta como respuesta. Un texto libre se lee buscando distritos de Lima y
+   departamentos, provincias o ciudades de fuera; si nombra las dos cosas, o un
+   distrito que existe en Lima y en provincia (Independencia, La Victoria),
+   queda Sin identificar.
+2. **El último pedido del mismo teléfono** (`order_master.coverage`, 0225),
+   solo si lo propio no alcanza: lo que contestó hoy es más nuevo.
+
+«Lima (departamento)» sin un distrito legible **no** se da por Provincia: de
+los pedidos con esa región de los últimos 120 días, 188 de 633 (30 %) resultaron
+de Lima Metropolitana por su distrito. Las frases del bot que el lector del
+chat guardó como distrito («indicarte bien 🚚», «coordinarlo») no son lugar y
+quedan Sin identificar.
+
+**Qué cuenta como distrito dicho en el chat (05-10-2026).** El lector
+(`parseOrderSignals`, `lib/kapso.ts`) guardaba como distrito cosas que no lo
+eran: medido en la cola, 459 leads, el 40 % de los que tenían distrito sin
+carrito. Dos fallos:
+
+- **El eco tomaba el texto del bot.** Si el cliente no contestaba la pregunta
+  de ubicación, se guardaba lo que seguía a «envío … para» en el propio mensaje
+  del bot: «indicarte bien 🚚» (130 leads), «Lima o provincia», «tu zona». Ahora
+  el eco solo cuenta si nombra un lugar que se reconoce y no sale de una
+  pregunta del bot.
+- **Cualquier respuesta corta valía.** «Precio», «¡Hola! Quiero más
+  información», «Gracias mañana te llamo», «Selected: Sí, la misma». Ahora
+  (`isPlaceReply`) vale un lugar que se reconoce, el botón «Lima / Provincia»
+  (sin el «Selected:»), o un texto corto sin números ni palabras de
+  conversación, que es como se ve un distrito chico fuera de las listas.
+
+Lo ya guardado no se corrige solo: la sincronización rellena el distrito pero
+nunca lo borra, y releer la conversación con el lector nuevo solo lo
+reemplaza si encuentra un lugar. Por eso se limpió aparte, una vez, el
+05-10-2026: los 705 valores distintos de la cola pasaron por `isPlaceReply`
+y, en todos los leads sin carrito con esos mismos valores, 2.049 quedaron sin
+distrito y 546 perdieron el «Selected:». Cambia su segmento —de 276 «Sin
+llamar», 207 dejaron `interes`—, no su estado: ninguno salió de la cola. No
+se tocó `updated_at`, que ordena Ganados y Perdidos. El valor anterior quedó
+en `lead_district_cleanup_20261005` (sin acceso desde la app), y revertir es
+`update leads l set district = b.old_district from
+lead_district_cleanup_20261005 b where l.id = b.lead_id`. Los leads cerrados
+con valores que no estaban en la cola no se revisaron.
+
 **Dentro de `carrito`, primero la que armó varios (Kenku, 30-09-2026).** Quien
 armó 2 o más carritos en 48 horas cierra más cuando se la llama, en los cuatro
 tramos horarios. Mismo método que la tabla de arriba —60 días, solo carritos
