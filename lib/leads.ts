@@ -391,6 +391,46 @@ export function isLeadSegment(v: string | undefined | null): v is LeadSegment {
 }
 
 // ---------------------------------------------------------------------------
+// Baldes del FILTRO de la cola (05-10-2026). Son los cuatro segmentos con
+// `interes` partido en sus dos señales, para trabajar cada una por tandas ahora
+// que la cola crece: «Distrito» (dio su distrito, con o sin ficha) y «Producto»
+// (solo llegó desde la ficha). Quien trae las dos va a Distrito: decir dónde lo
+// quiere está más cerca de comprar que mirar el producto.
+//
+// SOLO EL FILTRO. La prioridad de llamada sigue usando `leadSegment` y su
+// `interes` único: separadas, las tasas de cierre de las dos tiendas se
+// contradecían en el orden (MOM, «Segmentos de la cola de leads»), así que no
+// hay un peso por señal que sea cierto en las dos.
+// ---------------------------------------------------------------------------
+
+export type QueueBucket = "carrito" | "distrito" | "producto" | "converso" | "frio";
+
+/** De mayor a menor intención, como LEAD_SEGMENTS. */
+export const QUEUE_BUCKETS: { key: QueueBucket; label: string }[] = [
+  { key: "carrito", label: "🛒 Carrito" },
+  { key: "distrito", label: "Distrito" },
+  { key: "producto", label: "Producto" },
+  { key: "converso", label: "Conversó" },
+  { key: "frio", label: "Frío" },
+];
+
+export function leadQueueBucket(lead: LeadSegmentSignals): QueueBucket {
+  const seg = leadSegment(lead);
+  if (seg !== "interes") return seg;
+  return (lead.district ?? "").trim() ? "distrito" : "producto";
+}
+
+export function isQueueBucket(v: string | undefined | null): v is QueueBucket {
+  return !!v && QUEUE_BUCKETS.some((b) => b.key === v);
+}
+
+export function countQueueBuckets(leads: LeadSegmentSignals[]): Record<QueueBucket, number> {
+  const out: Record<QueueBucket, number> = { carrito: 0, distrito: 0, producto: 0, converso: 0, frio: 0 };
+  for (const l of leads) out[leadQueueBucket(l)] += 1;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Identidad del lead cuando no hay teléfono (0105).
 //
 // Meta está moviendo la identidad de WhatsApp del número al BSUID: un cliente
