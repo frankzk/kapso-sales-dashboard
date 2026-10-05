@@ -8258,6 +8258,19 @@ límite de efectivo), la línea lo dice y el paquete queda recibido, «por
 asignar». Lo del **mismo día** no cambia: «Ya estaba» es solo la caja de ese
 día, y la de otro motorizado ofrece «Mover».
 
+**«Mover» un paquete que está en la oficina (05-10-2026).** Con verificación
+«exigir», un paquete que el motorizado confirmó al recibir su caja no se puede
+sacar de ella desde Despacho del día: nadie le retira en silencio algo de su
+cuadre. Pero escanearlo en la oficina prueba que no salió: #KP138381 seguía en la
+caja de Yhoni y estaba en la mano de quien armaba la de Alexis. Desde el escaneo,
+«Mover» lo recupera (`gf_office_reclaim`, 0230): lo saca de la caja del primero
+con el motivo «recuperado en oficina», borra su parada pendiente, devuelve la
+custodia a la empresa y lo mete en la caja del segundo. Solo con la parada
+**pendiente**: una ya reportada se resuelve por su reporte. Queda en el historial
+de la caja y del pedido. Si algo falla, el motivo se dice en la misma fila del
+escaneo; antes salía arriba de la página, fuera de la pantalla del celular, y
+parecía que el botón no hacía nada.
+
 **Un pedido anulado se dice primero, en cualquier escaneo (05-10-2026).** Al
 escanear un paquete —armado en almacén, agregar a una ruta, cotejo de la caja o
 caja del motorizado de Grupo GF—, si su pedido está anulado (en Shopify o en

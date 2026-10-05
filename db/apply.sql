@@ -461,4 +461,6 @@
 \ir migrations/0228_lead_shopify_location.sql
 \echo 'Applying 0229_urpi_report.sql'
 \ir migrations/0229_urpi_report.sql
+\echo 'Applying 0230_gf_office_reclaim.sql'
+\ir migrations/0230_gf_office_reclaim.sql
 \echo 'Done.'
