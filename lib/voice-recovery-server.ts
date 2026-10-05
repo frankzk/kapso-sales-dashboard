@@ -383,7 +383,12 @@ export async function reconcileZadarmaCalls(
 
   let closed = 0;
   for (const row of rows) {
-    const ended = zadarmaEndedCallFor(stats, { phone: row.phone, dialedAt: row.dialed_at, offsetMs });
+    const ended = zadarmaEndedCallFor(stats, {
+      phone: row.phone,
+      dialedAt: row.dialed_at,
+      offsetMs,
+      answeredOnly: row.status === "in_progress",
+    });
     if (!ended) continue;
     const telephony = { ...(row.telephony_response ?? {}) };
     const eventos = Array.isArray(telephony.eventos) ? [...(telephony.eventos as unknown[])] : [];
