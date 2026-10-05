@@ -74,7 +74,7 @@ async function UrpiResultsContent({ orgId }: { orgId: string }) {
       .eq("org_id", orgId).gte("report_date", cutoff).order("urpi_row", { ascending: false }).limit(5000),
     sb.from("urpi_report_imports").select("created_at,filename,row_count,new_count,changed_count").eq("org_id", orgId).order("created_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
-  if (rowsRes.error) return <EmptyState title="Resultados de Urpi todavía no está disponible">No se pudo leer el reporte. Si es la primera vez, falta aplicar la migración 0228.</EmptyState>;
+  if (rowsRes.error) return <EmptyState title="Resultados de Urpi todavía no está disponible">No se pudo leer el reporte. Si es la primera vez, falta aplicar la migración 0229.</EmptyState>;
   const rows = (rowsRes.data ?? []) as UrpiStoredRow[];
   const ids = [...new Set(rows.flatMap((row) => [row.order_id, ...row.candidate_order_ids]).filter((id): id is string => Boolean(id)))];
   const facts = new Map<string, UrpiOrderFacts>();

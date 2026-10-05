@@ -18398,8 +18398,9 @@ create index if not exists olva_email_labels_sender_created_idx
 comment on column olva_email_labels.outcome is
   'Qué hizo el correo al llegar: vinculado, ya_vinculado, sugerido, ambiguo, sin_pareja o ilegible.';
 
--- ---- 0228 ----
--- 0228_urpi_report.sql — resultados de entrega que reporta Urpi (MOM §30.11).
+-- ---- 0229 ----
+-- 0229_urpi_report.sql — resultados de entrega que reporta Urpi (MOM §30.11).
+-- (La 0228 es lead_shopify_location, #865, aplicada antes en producción.)
 --
 -- Urpi exporta desde su AppSheet una fila por INTENTO, con su número de fila
 -- («_RowNumber») como identidad y «Row number relacionado» apuntando al intento

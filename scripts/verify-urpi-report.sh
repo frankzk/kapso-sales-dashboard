@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prueba 0228_urpi_report.sql en un cluster de Postgres DESECHABLE (nunca en
+# Prueba 0229_urpi_report.sql en un cluster de Postgres DESECHABLE (nunca en
 # Supabase): RLS por tienda/organización, historial por cambio, vínculo manual
 # que ninguna lectura pisa y pedidos siempre de la misma organización.
 #   bash scripts/verify-urpi-report.sh

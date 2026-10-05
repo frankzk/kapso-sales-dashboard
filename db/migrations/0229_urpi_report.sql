@@ -1,4 +1,5 @@
--- 0228_urpi_report.sql — resultados de entrega que reporta Urpi (MOM §30.11).
+-- 0229_urpi_report.sql — resultados de entrega que reporta Urpi (MOM §30.11).
+-- (La 0228 es lead_shopify_location, #865, aplicada antes en producción.)
 --
 -- Urpi exporta desde su AppSheet una fila por INTENTO, con su número de fila
 -- («_RowNumber») como identidad y «Row number relacionado» apuntando al intento

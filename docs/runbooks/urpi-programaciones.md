@@ -100,7 +100,7 @@ en reportes de entrega ni cambia fechas por sí sola.
 
 `/dashboard/urpi?vista=resultados` (pestaña «Resultados de entrega»). MOM §30.11.
 
-1. Aplicar `db/migrations/0228_urpi_report.sql` **antes** de desplegar el código
+1. Aplicar `db/migrations/0229_urpi_report.sql` **antes** de desplegar el código
    que la usa (DEPLOY.md: desplegar no aplica migraciones).
 2. En la plataforma de Urpi, «Reporte del mes – detallado» → **Exportar**. Sale
    un `.csv` («AppSheet.ViewData…») con una fila por intento.

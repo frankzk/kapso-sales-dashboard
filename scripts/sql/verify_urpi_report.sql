@@ -1,5 +1,5 @@
 -- ⚠️  THROWAWAY TEST CLUSTERS ONLY — never run against a real Supabase DB.
--- Verifica 0228_urpi_report.sql sobre un Postgres vacío:
+-- Verifica 0229_urpi_report.sql sobre un Postgres vacío:
 --   psql -v ON_ERROR_STOP=1 -f scripts/sql/verify_urpi_report.sql
 -- (lo levanta scripts/verify-urpi-report.sh). Termina con «urpi_report: ok».
 \set ON_ERROR_STOP on
@@ -28,8 +28,8 @@ insert into orders values ('b1111111-0000-0000-0000-000000000001', '11111111-111
   ('b2222222-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222222'),
   ('b3333333-0000-0000-0000-000000000003', '33333333-3333-3333-3333-333333333333');
 
-\ir ../../db/migrations/0228_urpi_report.sql
-\ir ../../db/migrations/0228_urpi_report.sql
+\ir ../../db/migrations/0229_urpi_report.sql
+\ir ../../db/migrations/0229_urpi_report.sql
 
 create function pg_temp.check(ok boolean, what text) returns void language plpgsql as $$
 begin if not ok then raise exception 'FALLA: %', what; end if; end $$;

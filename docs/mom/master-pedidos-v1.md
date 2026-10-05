@@ -8725,7 +8725,7 @@ pedidos de las tiendas que la persona ve. RLS: una fila vinculada se lee
 con su tienda (`auth_store_ids()`); una sin vincular, con la organización
 (`auth_org_ids()`). Escritura solo del servidor.
 
-Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migración 0228.
+Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migración 0229.
 
 ## 31. Agradecimiento con catálogo al entregar
 
