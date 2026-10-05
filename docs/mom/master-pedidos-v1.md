@@ -2636,8 +2636,16 @@ carrito. Dos fallos:
 
 Lo ya guardado no se corrige solo: la sincronización rellena el distrito pero
 nunca lo borra, y releer la conversación con el lector nuevo solo lo
-reemplaza si encuentra un lugar. Como el segmento `interes` es «dio su
-distrito», esos leads siguen contando ahí hasta que se limpie su distrito.
+reemplaza si encuentra un lugar. Por eso se limpió aparte, una vez, el
+05-10-2026: los 705 valores distintos de la cola pasaron por `isPlaceReply`
+y, en todos los leads sin carrito con esos mismos valores, 2.049 quedaron sin
+distrito y 546 perdieron el «Selected:». Cambia su segmento —de 276 «Sin
+llamar», 207 dejaron `interes`—, no su estado: ninguno salió de la cola. No
+se tocó `updated_at`, que ordena Ganados y Perdidos. El valor anterior quedó
+en `lead_district_cleanup_20261005` (sin acceso desde la app), y revertir es
+`update leads l set district = b.old_district from
+lead_district_cleanup_20261005 b where l.id = b.lead_id`. Los leads cerrados
+con valores que no estaban en la cola no se revisaron.
 
 **Dentro de `carrito`, primero la que armó varios (Kenku, 30-09-2026).** Quien
 armó 2 o más carritos en 48 horas cierra más cuando se la llama, en los cuatro
