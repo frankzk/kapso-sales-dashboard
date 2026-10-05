@@ -2640,6 +2640,17 @@ Se decide con la primera señal que sirva:
    queda Sin identificar.
 2. **El último pedido del mismo teléfono** (`order_master.coverage`, 0225),
    solo si lo propio no alcanza: lo que contestó hoy es más nuevo.
+3. **La dirección del cliente en Shopify** (`lead_shopify_locations`, 0228),
+   solo si tampoco compró antes. La base tiene todos los pedidos desde que
+   abrió cada tienda, pero no todos los carritos (los de Kenku empiezan el
+   06-05-2026), y cada carrito viejo dejó en Shopify un cliente con su
+   dirección. La sincronización busca por celular, con la conexión de la
+   tienda, a los leads de la cola sin ubicación ni pedido (30 por tienda y
+   corrida, los más nuevos primero, una vez por lead), y el reporte de la
+   corrida dice cuántos buscó y cuántos tenían dirección. Va en una tabla
+   aparte y no en el lead: un carrito de hace un año no es «dio su distrito»
+   (no cambia el segmento) y escribir en `leads` haría recargar la cola en
+   todas las pantallas.
 
 «Lima (departamento)» sin un distrito legible **no** se da por Provincia: de
 los pedidos con esa región de los últimos 120 días, 188 de 633 (30 %) resultaron
@@ -3889,7 +3900,9 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
   llamó N veces».
 - Horario `voice_recovery_hour_start`–`voice_recovery_hour_end` (09–20 de Lima
   por defecto), más estrecho que el laboral de §6.1 a propósito: una llamada
-  automática a las 21:45 se recibe distinto que la de una asesora. **Los
+  automática a las 21:45 se recibe distinto que la de una asesora. El
+  owner lo puede extender por tienda: Kenku llama hasta las 22:00 desde el
+  04-10-2026 (ver «Piloto y medida»). **Los
   domingos llama desde las 11:00** (`VOICE_SUNDAY_START_HOUR`, o desde el
   inicio de la tienda si es más tarde), el barrido y el botón por igual.
   Decisión del owner, 26-09-2026; antes el domingo no llamaba. Lo que sigue
@@ -4247,8 +4260,17 @@ Reglas de esa tabla:
       Agente X» con un punto verde cuando la clienta ya habla. La nota lleva
       el tiempo que va la llamada. Así nadie abre esa guía para llamar a la
       vez que el agente.
-    - **Pedido oculto por los filtros:** si los filtros esconden el pedido
-      en llamada, una línea arriba de la tabla lo dice, con «Buscarlo».
+    - **Línea «Agente de voz»**, siempre visible arriba de la tabla. Con
+      llamada, dice a quién llama. Si los filtros esconden ese pedido, lo
+      avisa y ofrece «Buscarlo».
+
+      Sin llamada dice «Sin llamada en curso», cómo terminó la última
+      (pedido, agente, resultado y hace cuánto) y la hora de la próxima
+      pasada del barrido. Esa hora sale de la misma regla de horario que usa
+      el barrido (`withinVoiceHours`); si el automático está apagado, lo
+      dice. Se agregó el 04-10-2026: con una llamada cada 5 min y la mayoría
+      de menos de un minuto, la tabla pasaba casi todo el tiempo sin ninguna
+      fila marcada y no se sabía si el agente estaba trabajando.
     - **Al terminar la llamada**, la cola se recarga (como mucho una vez cada
       15 s) y la fila sale con la gestión que registró el agente.
     - **Pestaña oculta:** con la pestaña del navegador oculta no se consulta.
@@ -4360,7 +4382,14 @@ La cola se vació a las 14:35: de los pedidos con stock Swayp, 158 ya tenían la
 pedidos. Ese mismo día también sube el tope a **`voice_recovery_daily_cap =
 130`**, lo que cabe entre las 9:00 y las 20:00 con una llamada cada cinco
 minutos. Sigue habiendo una llamada del agente por pedido y día. El tope de
-siete días de gestión (§6.1) sigue siendo de todos. Todas las
+siete días de gestión (§6.1) sigue siendo de todos.
+**Cuarto ajuste, 04-10-2026 (noche):** Kenku pasa a **`voice_recovery_hour_end
+= 22`** y **`voice_recovery_daily_cap = 150`**. Así el agente llama en el mismo
+horario laboral de las asesoras (§6.1, hasta las 22:00), y no solo hasta las
+20:00 como manda el valor por defecto. La última pasada es a las 21:55, y esa
+llamada puede terminar pasadas las 22:00. Con dos horas más caben unas 155
+pasadas por día, por eso el tope sube de 130 a 150. Las demás tiendas siguen
+con 09–20 por defecto. Todas las
 transcripciones de la
 primera semana se escuchan. Se decide con estas cifras, comparadas con la
 línea base de cero llamadas:
