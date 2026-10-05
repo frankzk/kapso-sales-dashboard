@@ -437,6 +437,13 @@ function SettlementDetailPanel({
                 </td>
                 <td className="px-3 py-2 text-slate-500">
                   {r.verdict === "sin_pedido" ? "—" : money(r.expected)}
+                  {/* La guía lleva pedidos acompañantes (MOM §32): lo esperado
+                      es la suma, y sin decirlo el número no casa con el pedido. */}
+                  {r.verdict !== "sin_pedido" && (r.facts?.companion_total ?? 0) > 0 && (
+                    <span className="block text-xs text-slate-500">
+                      incl. {money(r.facts!.companion_total!)} de acompañantes
+                    </span>
+                  )}
                 </td>
                 <td
                   className={cn(

@@ -73,6 +73,12 @@ courier. No es la identidad interna de la salida.
 Bolsa o caja física correspondiente a una salida. La versión v1 soporta un solo
 paquete por salida.
 
+### Pedido acompañante
+
+Pedido que viaja dentro de la caja —la salida y su guía— de otro pedido, el
+principal: una sola guía cobra los dos. La salida sigue siendo del principal;
+el acompañante no tiene salida propia y hereda el estado de esa caja (§32).
+
 ### Manifiesto
 
 Agrupación de salidas para un courier y una ruta del día. El manifiesto debe
@@ -177,6 +183,9 @@ Reglas:
 - El courier y la fecha son metadatos visibles; no forman parte del token QR.
 - El código de guía externa se conserva separado.
 - El límite global acordado es cinco salidas por pedido.
+- Una salida de Aliclik puede llevar, además de su pedido, **pedidos
+  acompañantes** de la misma clienta (§32). No es otra salida de ellos: es la
+  misma caja, con una guía que cobra los dos, y el acompañante la hereda.
 - Puede existir más de una salida activa, pero Kapta debe mostrar una alerta.
 - Si una salida entrega, las demás salidas activas deben generar una tarea
   urgente para Daysi: avisar al courier o motorizado y cancelar la entrega.
@@ -501,6 +510,10 @@ Registro:
   (S/ 1.439) aparecieron en la alerta de cobro**. La estimación previa al cambio
   decía «11 pedidos y S/ 1.062» y salió mal en las dos direcciones; queda escrita
   la medida, no la estimación.
+- **Vincular un pedido acompañante también lo decide alguien** (§32, regla 7):
+  `companion_linked` cede el candado anterior en los dos pedidos, como un
+  registro de guía. Los cuatro casos que lo motivaron tenían justo un «Cambiar
+  estado» usado como nota —«comparte guía con…»— congelando a los dos.
 - La subetapa y el conteo de días se derivan de esos hechos. No hay un contador
   que alguien tenga que mantener.
 
@@ -849,6 +862,8 @@ Ejemplos:
 | Entregado, courier aún no liquidó | Por cerrar | Pendiente de liquidación |
 | Shopify anulado, paquete aún con courier | Por cerrar | Devolución física pendiente |
 | Shopify anulado, nunca se despachó | Finalizado | Anulado cerrado |
+| Pedido acompañante con la caja del principal aún en la empresa (§32) | Preparación | Viaja en la caja de otro pedido |
+| Pedido acompañante con la caja del principal entregada, sin liquidar (§32) | Por cerrar | Pendiente de liquidación |
 
 **Una salida devuelta no cierra el pedido si otra sigue viva (v1.19,
 29-09-2026).** El estado del pedido daba «Devuelto» en cuanto UNA salida
@@ -2217,6 +2232,11 @@ quedarse parada, y el Master no admitía registrarla.
 nombra al pedido y `portal_operator_attested` cuando lo único que hay es la firma
 de quien lo afirmó. Un solo valor para ambas borraría esa diferencia justo en la
 columna que se mira para auditar cómo llegó una guía a su pedido.
+
+**Una guía del portal que lleva dos pedidos** (la misma clienta, uno de Kenku y
+otro de Aurela) se vincula a UNO solo —el principal— y el otro se registra como
+**pedido acompañante** desde su ficha (§32). La guía sigue siendo de un pedido;
+lo que cambia es que el otro la hereda, y la liquidación espera la suma.
 
 #### Preguntar si Aliclik llega, aunque el pedido sea de Agencia
 
@@ -5551,6 +5571,9 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
   como advertencia y una persona debe confirmar el vínculo; nunca se corrige de
   forma automática.
 - No existe liquidación parcial por guía.
+- La guía que lleva **pedidos acompañantes** (§32) cobra la suma: su fila se
+  cuadra contra el total del principal más el de sus acompañantes vigentes, y
+  cerrar la liquidación del principal cierra la de ellos.
 - Si una fila no cuadra, todo el lote queda Observado.
 - Causas: pago faltante, importe menor o pedido no incluido.
 - Antes del cierre, un rol con `settlements.manage` puede corregir una comisión
@@ -8811,3 +8834,151 @@ aprobada guarda `https://…/kenku-peru/?wa={{1}}` y cada envío pone el número
 - **Nace apagado en todas las tiendas.** Se enciende en Ajustes de la tienda →
   «Agradecer al entregar», con el nombre de la plantilla ya aprobada en la WABA
   de esa tienda. Cada envío y cada rechazo quedan en `delivered_thanks_sends`.
+
+## 32. Pedido acompañante: una caja y una guía para dos pedidos (05-10-2026)
+
+Un **pedido acompañante** viaja dentro de la caja de otro pedido —el
+**principal**— con la guía de ese. Pasa cuando la misma clienta tiene dos
+pedidos abiertos —casi siempre uno de Kenku y otro de Aurela, que comparten la
+cuenta de Aliclik— y la operación decide mandarlo todo junto: **una sola guía
+cobra en la puerta los dos importes**.
+
+**Por qué existe.** El modelo era una salida = un pedido (§3) y el código de
+guía es único por courier, así que el caso no tenía dónde escribirse. Se
+anotaba con «Cambiar estado», que **congela** el pedido (§6.1, y justo lo que
+ese apartado prohíbe: el cambio manual no es una bitácora). Medido el
+05-10-2026: 4 casos y 8 pedidos entre el 15-09 y el 02-10, la misma clienta en
+los cuatro.
+
+| Principal (lleva la guía) | Acompañante | Qué pasaba |
+| --- | --- | --- |
+| #AUR176985 (S/ 215) | #KP134433 (S/ 149) | Aliclik entregó el 16-09 y cobra **S/ 364 = 215 + 149**; el acompañante seguía en «Preparación · Por generar rótulo» |
+| #AUR177589 (S/ 119) | #KP137733 (S/ 83) | Guía en ruta; el principal con candado en «Pendiente» |
+| #AUR177622 (S/ 116,10) | #KP137851 (S/ 104) | Aliclik entregó el 03-10; el candado del principal lo dejaba «En curso» |
+| #KP138284 (S/ 149) | #AUR177714 (S/ 62) | Guía por armar; los dos con candado |
+
+Tres daños a la vez: los acompañantes (S/ 398) no salían nunca de Preparación
+—a un clic de que alguien les generara una segunda guía—; el candado del
+principal escondía lo que reportaba Aliclik; y la liquidación de la guía trae
+el cobro de los dos pedidos contra el total del principal solo, que es «Reportó
+más de lo esperado» y deja el lote observado (§14).
+
+### 32.1 Reglas
+
+1. **El vínculo es con una SALIDA, no con el pedido.** El acompañante viaja en
+   una caja concreta del principal —su salida y su guía—, que es el hecho
+   físico (§3, §4). Si el principal tiene otra salida, no la arrastra.
+2. **Solo Aliclik, y con la guía ya emitida.** La guía combinada —productos y
+   cobro de los dos pedidos— se crea en el portal de Aliclik y se vincula al
+   principal como cualquier guía del portal (§10.1). Kapta no crea guías
+   combinadas por API. La caja puede estar por salir, en ruta, entregada o de
+   vuelta: el vínculo se puede registrar tarde, que es como se registran los
+   cuatro casos de arriba. Lo único que no vale es una guía **anulada sin haber
+   salido** de la empresa: esa caja ya no existe. Sumar otro courier es
+   decisión del owner y se escribe aquí antes de tocar `COMPANION_COURIERS`.
+3. **Quién puede ser acompañante:** un pedido distinto del principal, **de la
+   misma clienta** (mismo celular, últimos 9 dígitos; sin teléfono en alguno de
+   los dos no se puede comprobar y no se vincula), no anulado en Shopify, con
+   el expediente sin finalizar, **sin salida propia viva** (una salida `por
+   definir` se anula antes), que no lleve a su vez acompañantes y que no esté
+   ya en otra caja. El principal tampoco puede ser acompañante de otro: no hay
+   cadenas.
+4. **Vincular y desvincular** exigen `master.edit`, ver las tiendas de los dos
+   pedidos y un **motivo escrito** de 8 caracteres como mínimo. Se escriben como
+   hechos en los **dos** pedidos a la vez, en un solo insert
+   (`companion_linked` / `companion_unlinked` en `order_events`, con el mismo
+   `link_id` en el `payload`): la línea de tiempo de cada uno lo cuenta, y nada
+   se borra. El vínculo vigente lo dice el **último hecho del lado
+   acompañante**; el del principal es su espejo. No hay tabla nueva ni
+   migración. Se vincula desde la ficha del acompañante («¿Viaja en la caja de
+   otro pedido?»), y se desvincula desde cualquiera de las dos.
+5. **Qué hereda el acompañante mientras el vínculo esté vivo:** el estado de
+   esa salida —courier, guía, despacho, entrega, devolución, Reproprovincia—,
+   los hechos de esa salida (retorno, inventario, merma, custodia) y la
+   liquidación del principal (`liquidation_closed` / `liquidation_observed`),
+   porque su dinero llega en la misma fila. **No hereda** el costo logístico (el
+   flete se paga una vez y está en el principal: el acompañante queda en
+   S/ 0), ni la ubicación, ni el cliente, ni los cambios manuales, comentarios,
+   registros de guía o cierres de expediente del principal.
+6. **Mientras la caja no sale de la empresa**, el acompañante está en
+   **«Preparación · Viaja en la caja de otro pedido»**
+   (`en_caja_de_otro_pedido`). No es «Por generar rótulo» ni «Por armar»: no
+   tiene caja propia que preparar, así que no entra a las colas del almacén,
+   del despacho ni de Grupo GF. En cuanto la caja sale, sigue a su caja: En
+   curso, Por cerrar, Finalizado.
+7. **Vincular suelta el candado** de un cambio manual anterior **en los dos
+   pedidos**, igual que registrar una guía (§6.1): es una persona decidiendo
+   sobre la salida, con motivo. Desvincular no lo resucita.
+8. **La mesa de rutas del acompañante se cierra** mientras esté vinculado, y el
+   panel de crear guía de Aliclik no se ofrece: darle salida propia exige
+   desvincularlo primero, porque sería un segundo paquete para la misma
+   clienta.
+9. **Una salida anulada sin haber salido deja de prestar su estado**: el
+   acompañante vuelve a su propia situación (normalmente Preparación) y la
+   ficha avisa de que esa caja ya no existe, hasta que alguien lo desvincule o
+   lo vincule a otra caja. Anulada **después** de salir sí presta —es un «no
+   entregó»— y el acompañante entra a Reproprovincia con su principal.
+10. **Un reenvío no muda al acompañante.** Si el principal sale otra vez
+    (Swayp, otra guía), la caja nueva puede llevar o no los productos del
+    acompañante: se decide desvinculando y vinculando a la salida nueva. Sin
+    eso, el acompañante sigue la suerte de la caja vieja, y su ventana de
+    recuperación vence con ella.
+11. **Liquidación.** La fila del courier para la guía del principal espera el
+    total del principal **más** el de sus acompañantes vigentes
+    (`companion_total`): con eso, S/ 364 en #AUR176985 «Coincide». Cerrar la
+    liquidación del principal —en la Mesa de cierre o al validar el cobro—
+    cierra la del acompañante: no se firma dos veces el mismo dinero.
+12. **La puerta del Master (§11.4).** Si una ruta o una liquidación marca
+    entregado al principal, el acompañante vigente se marca entregado con él,
+    con la misma fuente y un motivo que nombra al principal y la guía. Las
+    fuentes de esa puerta no escriben en la salida, así que sin esto el
+    acompañante se quedaría «En curso».
+13. **El agente de voz no llama dos veces** a la clienta: comprueba la
+    recuperación con las salidas propias del pedido (§11.8), y el acompañante
+    no tiene ninguna. Llama solo al principal.
+14. **La ficha y el rótulo.** En «Salidas y guías» el acompañante dice en qué
+    caja viaja (pedido, guía, estado); el principal lista lo que lleva y cuánto
+    debe cobrar la guía en la puerta —la suma—, y avisa si Aliclik informó por
+    API otro cobro. El **rótulo interno** de la caja lista también los
+    productos del acompañante, con su pedido al lado, y el importe a cobrar es
+    lo que todavía deben los dos.
+
+### 32.2 Lo que no cambia
+
+- La salida sigue siendo de un solo pedido (`shipments.order_id`) y el código
+  de guía sigue siendo único por courier. El principal no cambia de estado
+  por llevar acompañantes.
+- El acompañante muestra en el listado la guía del principal
+  (`order_master.guide_code`): buscar por guía encuentra a los dos.
+- Los dos pedidos se recalculan juntos: recalcular cualquiera arrastra al otro
+  (`recomputeOrderMaster`), así que un reporte de Aliclik sobre la guía mueve a
+  los dos sin que nadie se acuerde.
+- La versión de resolución **no sube** (`mom-v1.23`): ningún pedido tenía
+  vínculo, así que ninguna fila cambia sola. Cada vínculo recalcula sus dos
+  pedidos al escribirse.
+
+### 32.3 Criterios de aceptación
+
+- Vincular #KP137851 a la salida AUR5XAUR177622 de #AUR177622 deja a los dos
+  sin candado; #KP137851 pasa a «Por cerrar · Pendiente de liquidación» con la
+  entrega de Aliclik del 03-10 y costo logístico S/ 0, y #AUR177622 a «Por
+  cerrar · Pendiente de liquidación».
+- Un acompañante cuya caja está por armar aparece en «Preparación · Viaja en la
+  caja de otro pedido», no en «Por generar rótulo» ni en las colas del almacén.
+- La línea de liquidación de #AUR176985 por S/ 364, con #KP134433 vinculado,
+  sale «Coincide».
+- Cerrar la liquidación del principal lleva al acompañante a Finalizado
+  (entregado y cerrado) sin firmarlo aparte.
+- No se puede vincular: a una guía de otro courier, a una salida sin guía o
+  anulada sin salir, con teléfonos distintos, un pedido con salida propia
+  viva, un pedido anulado en Shopify o finalizado, ni formando cadenas.
+- Desvincular devuelve al acompañante a su propia situación y queda en el
+  historial de los dos pedidos con su motivo.
+
+Implementación: `lib/order-companion.ts` (reglas puras),
+`lib/order-companion-access.ts` (lectura), `lib/order-master.ts` (la caja
+prestada), `lib/order-macro-stage.ts` (`en_caja_de_otro_pedido`),
+`lib/settlements.ts` (`companion_total`), `lib/master-door.ts`,
+`app/dashboard/pedidos/companion-actions.ts` y
+`components/order-companion-panel.tsx`. Pruebas en
+`test/order-companion.test.ts`.

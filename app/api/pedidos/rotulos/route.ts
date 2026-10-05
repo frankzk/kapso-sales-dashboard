@@ -17,6 +17,8 @@ import { selectLabelsForOrders, type ShipmentForLabel } from "@/lib/labels/pick-
 import { labelItemsFor } from "@/lib/labels/line-items";
 import { orderFullyPaid } from "@/lib/order-paid";
 import type { PaymentGateway } from "@/lib/payment-gateway";
+import { companionLabelContent } from "@/lib/order-companion";
+import { loadCompanionRides } from "@/lib/order-companion-access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -165,6 +167,70 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // PEDIDO ACOMPAÑANTE (MOM §32): la caja del principal lleva también los
+  // productos de los pedidos que viajan en ella, y la puerta cobra todos. El
+  // rótulo es lo que miran quien arma la caja y quien la entrega, así que los
+  // dice. Si la lectura falla, el rótulo sale como siempre —solo el principal—
+  // y queda en el registro: no se deja al almacén sin papel por esto.
+  const companionsByShipment = new Map<
+    string,
+    { orderName: string | null; items: ReturnType<typeof labelItemsFor>; total: number | null; paid: boolean }[]
+  >();
+  if (selectedOrderIds.length) {
+    try {
+      const selectedShipmentIds = new Set(selected.map((row) => row.id));
+      const rides = (await loadCompanionRides(sb, selectedOrderIds)).filter(
+        (ride) => ride.shipment && selectedShipmentIds.has(ride.link.hostShipmentId),
+      );
+      const companionIds = [...new Set(rides.map((ride) => ride.link.companionOrderId))];
+      if (companionIds.length) {
+        const [{ data: companionOrders }, { data: companionMasters }] = await Promise.all([
+          sb
+            .from("orders")
+            .select("id,name,line_items,total_amount,financial_status,total_refunded,payment_gateway")
+            .in("id", companionIds),
+          sb.from("order_master").select("order_id,payment_state").in("order_id", companionIds),
+        ]);
+        const paymentState = new Map(
+          ((companionMasters as { order_id: string; payment_state: string | null }[] | null) ?? []).map((m) => [
+            m.order_id,
+            m.payment_state,
+          ]),
+        );
+        const byId = new Map(
+          ((companionOrders as {
+            id: string;
+            name: string | null;
+            line_items: unknown;
+            total_amount: number | null;
+            financial_status: string | null;
+            total_refunded: number | null;
+            payment_gateway: PaymentGateway | null;
+          }[] | null) ?? []).map((order) => [order.id, order]),
+        );
+        for (const ride of rides) {
+          const order = byId.get(ride.link.companionOrderId);
+          if (!order) continue;
+          const list = companionsByShipment.get(ride.link.hostShipmentId) ?? [];
+          list.push({
+            orderName: order.name ?? ride.link.companionOrderName,
+            items: labelItemsFor(order.line_items, null),
+            total: order.total_amount,
+            paid: orderFullyPaid({
+              financialStatus: order.financial_status,
+              totalRefunded: order.total_refunded,
+              paymentState: paymentState.get(order.id) ?? null,
+              paymentGateway: order.payment_gateway,
+            }),
+          });
+          companionsByShipment.set(ride.link.hostShipmentId, list);
+        }
+      }
+    } catch (cause) {
+      console.error("[rotulos] acompañantes", cause);
+    }
+  }
+
   // La tienda es la marca que el cliente reconoce; "Kapta" no le dice nada a
   // nadie. Va en la cabecera del rótulo, sobre el código de salida.
   const storeNames = new Map<string, string>();
@@ -180,18 +246,23 @@ export async function GET(request: NextRequest) {
     selected.map(async (row) => {
       const payload = row.qr_token || row.output_code || row.guide_code;
       const money = row.order_id ? moneyByOrder.get(row.order_id) : undefined;
+      const content = companionLabelContent(
+        {
+          items: labelItemsFor(row.order_id ? lineItemsByOrder.get(row.order_id) : null, row.product),
+          total: money?.total ?? null,
+          paid: money?.paid ?? false,
+        },
+        companionsByShipment.get(row.id) ?? [],
+      );
       return {
         code: outputDisplayCode(row.output_code, row.courier) || row.guide_code,
         storeName: storeNames.get(row.store_id) ?? null,
         orderName: row.order_name,
         customerName: row.customer_name,
         customerPhone: row.customer_phone,
-        items: labelItemsFor(
-          row.order_id ? lineItemsByOrder.get(row.order_id) : null,
-          row.product,
-        ),
-        collectAmount: money?.total ?? null,
-        paid: money?.paid ?? false,
+        items: content.items,
+        collectAmount: content.collectAmount,
+        paid: content.paid,
         currency: money?.currency ?? null,
         note: row.order_id ? (noteByOrder.get(row.order_id) ?? null) : null,
         // Sin la región: repite la provincia en casi todo el país y gastaba una

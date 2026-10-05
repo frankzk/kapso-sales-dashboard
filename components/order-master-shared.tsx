@@ -616,6 +616,10 @@ export const TIMELINE_LABEL: Record<string, string> = {
   order_finalized: "Expediente finalizado",
   order_reopened: "Expediente reabierto",
   status_override: "Estado cambiado manualmente",
+  // Pedido acompañante (MOM §32): el mismo hecho en los dos pedidos; la nota
+  // dice de qué lado está cada uno.
+  companion_linked: "Caja compartida con otro pedido",
+  companion_unlinked: "Caja compartida deshecha",
   // Camino del pedido en Grupo GF Courier (MOM §29.13): lo que escriben la
   // bandeja, la mesa de despacho, el teléfono del motorizado y Liquidaciones 2.
   logistics_request_accepted: "Tomado por Grupo GF Courier",

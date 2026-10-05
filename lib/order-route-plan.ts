@@ -135,7 +135,7 @@ export interface RouteDeskBlocker {
    * arriba del todo. #AUR176830 se quedó dos rondas sin encontrarlo aun con la
    * instrucción delante, que es la señal de que faltaba el atajo y no la frase.
    */
-  target: "cierre" | "acciones";
+  target: "cierre" | "acciones" | "guias";
   cta: string;
 }
 
@@ -181,9 +181,28 @@ export function routeDeskGate(order: {
    * `createManualRouteOutput` antes de dejar crear la salida.
    */
   closedByFailedDelivery?: boolean;
+  /**
+   * El pedido viaja en la caja de otro (pedido acompañante, MOM §32). Sus
+   * productos ya tienen caja y guía: una salida propia sería un segundo paquete
+   * para la misma clienta. Para dársela, primero se desvincula.
+   */
+  companionOf?: { hostOrderName: string | null; guideCode: string | null } | null;
 }): RouteDeskGate {
   const blockers: RouteDeskBlocker[] = [];
   const blockedActions = new Set<RouteAction>();
+
+  if (order.companionOf) {
+    const host = order.companionOf.hostOrderName ?? "otro pedido";
+    const guide = order.companionOf.guideCode ? ` (guía ${order.companionOf.guideCode})` : "";
+    blockers.push({
+      text:
+        `Viaja en la caja de ${host}${guide}: no necesita salida propia. ` +
+        "Si va a salir por separado, desvincúlalo primero en «Salidas y guías».",
+      target: "guias",
+      cta: "Ir a Salidas y guías ↓",
+    });
+    for (const action of ALL_ROUTE_ACTIONS) blockedActions.add(action);
+  }
 
   if (order.macroStage === "finalizado") {
     blockers.push({
