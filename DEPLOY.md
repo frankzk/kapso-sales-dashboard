@@ -2059,3 +2059,15 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
    created_at desc limit 5;` — `validated` y `report` (validados, omitidos por
    motivo, errores). Cada pago validado así tiene un evento `payment` con
    fuente `estado_yape` y el movimiento en `payload`.
+
+### 05-10-2026 · Alerta urgente de comprobante repetido (0226)
+
+1. **Migración `0226_repeated_voucher_alert.sql`**, a mano, antes del código:
+   amplía `collection_alerts.kind` con `comprobante_repetido`, añade
+   `dedupe_key` (una abierta por comprobante) y `stores.urgent_telegram_chat_id`.
+   Sin ella, levantar la alerta falla (en silencio: el cobro igual queda
+   bloqueado).
+2. **Permiso por persona** «Alerta de comprobante repetido» desde Equipo a
+   quienes deben verla en Kapta.
+3. **Grupo de Telegram** con esas personas y el bot de la tienda; su chat id en
+   Ajustes → Telegram → Alertas urgentes («Buscar grupos» lo encuentra).

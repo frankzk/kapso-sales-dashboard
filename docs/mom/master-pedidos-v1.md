@@ -1684,10 +1684,37 @@ sin tope de antigüedad. Reglas:
     contra cualquier comprobación anterior, no solo las validadas (un voucher
     rechazado en A que reaparece en B sigue siendo el mismo papel dos veces), y
     se excluye la propia guía, que se relee mientras siga pendiente.
-    - **Es el único motivo que además AVISA por Telegram**, al mismo canal de
-      la tienda que el resumen diario. Los otros rechazos son un cobro mal
-      hecho y se corrigen; este hay que mirarlo hoy. El aviso es accesorio: el
-      veredicto ya bloqueó el cobro.
+    - **Es el único motivo que además AVISA**, porque hay que mirarlo hoy; los
+      otros rechazos son un cobro mal hecho y se corrigen. El aviso es la
+      **alerta urgente de comprobante repetido** (abajo). El bloqueo del cobro
+      no depende de él.
+    - **Alerta urgente de comprobante repetido (0226, 05-10-2026).** Regla del
+      owner: **un mismo comprobante no puede estar en más de un pedido**, y
+      cuando pase lo tienen que ver Frank, Yohalis, Akemi y Daysi. El caso:
+      un solo Lemon de S/ 89 (20-08, 15:12) era el comprobante de **cuatro**
+      pedidos Tanders —#KP124940, #KP126075, #KP126468, #KP126871—, el mismo
+      archivo subido cuatro veces. El nº de operación salía cortado
+      («2026…843») y la huella del archivo, que sí lo cazaba, bloqueaba el
+      cobro **en silencio**: nadie se enteró en un mes.
+      - **Todos los caminos que encuentran un repetido avisan, por la misma
+        puerta** (`lib/repeated-voucher-alert.ts`): el nº de operación repetido
+        en el barrido de Tanders, el **mismo archivo** al encolar el cobro del
+        courier, la subida a mano en el pedido (y el nº escrito a mano), el
+        comprobante que llega por WhatsApp y la relectura de comprobantes. Solo
+        cuando es **otro** pedido: el mismo pedido dos veces es un reintento.
+      - **Dos vías.** En Kapta, la alerta flotante con sonido, en rojo, para
+        quien tenga el permiso **«Alerta de comprobante repetido»**
+        (`alerts.repeated_voucher`, se concede persona por persona en Equipo;
+        el rol admin no lo trae). **Sin escalera**: la ven todos a la vez.
+        Y por Telegram al **grupo de alertas urgentes** de la tienda (Ajustes →
+        Telegram), porque quien no está conectado también tiene que enterarse;
+        sin grupo configurado va al chat del resumen diario.
+      - **Una por comprobante**: la huella es el archivo si se conoce, si no el
+        nº de operación. Mientras esté abierta no se repite ni la alerta ni el
+        Telegram, aunque el barrido vuelva a pasar cada hora.
+      - **Se cierra diciendo qué se hizo** («Ya lo revisé»): cuál pedido sí
+        estaba pagado y qué se hizo con el otro. Ningún hecho del sistema la
+        resuelve sola, y no se descarta.
     - El nº se guarda **normalizado** (solo letras y dígitos, en mayúsculas) y
       **nunca como número**: Yape los emite con ceros a la izquierda
       («06420756»). Una lectura **truncada** («202609...495099») se guarda como
