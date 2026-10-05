@@ -3887,7 +3887,9 @@ razón: el primer lote de cada tienda se mira antes de soltarlo.
   llamó N veces».
 - Horario `voice_recovery_hour_start`–`voice_recovery_hour_end` (09–20 de Lima
   por defecto), más estrecho que el laboral de §6.1 a propósito: una llamada
-  automática a las 21:45 se recibe distinto que la de una asesora. **Los
+  automática a las 21:45 se recibe distinto que la de una asesora. El
+  owner lo puede extender por tienda: Kenku llama hasta las 22:00 desde el
+  04-10-2026 (ver «Piloto y medida»). **Los
   domingos llama desde las 11:00** (`VOICE_SUNDAY_START_HOUR`, o desde el
   inicio de la tienda si es más tarde), el barrido y el botón por igual.
   Decisión del owner, 26-09-2026; antes el domingo no llamaba. Lo que sigue
@@ -4358,7 +4360,14 @@ La cola se vació a las 14:35: de los pedidos con stock Swayp, 158 ya tenían la
 pedidos. Ese mismo día también sube el tope a **`voice_recovery_daily_cap =
 130`**, lo que cabe entre las 9:00 y las 20:00 con una llamada cada cinco
 minutos. Sigue habiendo una llamada del agente por pedido y día. El tope de
-siete días de gestión (§6.1) sigue siendo de todos. Todas las
+siete días de gestión (§6.1) sigue siendo de todos.
+**Cuarto ajuste, 04-10-2026 (noche):** Kenku pasa a **`voice_recovery_hour_end
+= 22`** y **`voice_recovery_daily_cap = 150`**. Así el agente llama en el mismo
+horario laboral de las asesoras (§6.1, hasta las 22:00), y no solo hasta las
+20:00 como manda el valor por defecto. La última pasada es a las 21:55, y esa
+llamada puede terminar pasadas las 22:00. Con dos horas más caben unas 155
+pasadas por día, por eso el tope sube de 130 a 150. Las demás tiendas siguen
+con 09–20 por defecto. Todas las
 transcripciones de la
 primera semana se escuchan. Se decide con estas cifras, comparadas con la
 línea base de cero llamadas:
