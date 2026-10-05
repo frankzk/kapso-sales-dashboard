@@ -224,6 +224,26 @@ export function DispatchDayBoard(props: Props) {
     if (line.status === "asignado" || line.status === "ya_en_caja") scheduleRefresh();
   }
 
+  /**
+   * «Mover» un QR que está en la caja de otro motorizado. Se acaba de escanear
+   * aquí, así que está en la oficina: el servidor lo recupera aunque su caja ya
+   * esté en poder del otro (0230). El resultado se dice EN LA FILA — el aviso de
+   * arriba quedaba fuera de la pantalla y parecía que el botón no hacía nada.
+   */
+  async function moveScanned(line: ScanAssignLine) {
+    if (!line.manifestId || !line.shipmentId || !riderId) return;
+    const from = line.riderName ?? "otro motorizado";
+    setLines((cur) => cur.map((l) => (l === line ? { ...l, status: "procesando", message: "Moviendo…", moveError: null } : l)));
+    const result = await moveManifestItem(orgId, line.manifestId, line.shipmentId, riderId, `Escaneado en oficina para la caja de ${riderName}`, { inHand: true });
+    setLines((cur) => cur.map((l) => {
+      if (l.code !== line.code || l.status !== "procesando") return l;
+      return "error" in result && result.error
+        ? { ...line, moveError: result.error }
+        : { ...line, status: "asignado", riderName, receivedFrom: from, moveError: null, message: `Movido de la caja de ${from}.` };
+    }));
+    if (!("error" in result && result.error)) scheduleRefresh();
+  }
+
   /** «Asignar igual» un QR programado para otro día: su línea vuelve a «asignando…». */
   async function confirmScanned(line: ScanAssignLine) {
     setLines((cur) => cur.map((l) => (l === line ? { ...l, status: "procesando", message: "Asignando…" } : l)));
@@ -684,14 +704,14 @@ export function DispatchDayBoard(props: Props) {
                 {lines.map((l, i) => {
                   const r = scanRowPresentation(l, riderName);
                   return (
-                    <li key={`${l.code}:${i}`} className="flex items-center gap-2 px-3 py-2 text-sm" title={[l.message, l.cashWarning].filter(Boolean).join(" · ")}>
+                    <li key={`${l.code}:${i}`} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-sm" title={[l.message, l.cashWarning].filter(Boolean).join(" · ")}>
                       <span className="flex min-w-0 flex-1 items-center gap-2">
                         <span className="shrink-0 font-semibold text-ink-900">{l.orderName ?? l.code}</span>
                         <Badge tone={r.tone} className="min-w-0">{r.text}</Badge>
                       </span>
                       {l.amount != null && <span className="shrink-0 text-[13px] tabular-nums text-ink-500">{moneyShort(l.amount)}</span>}
                       {l.status === "en_otra_caja" && l.manifestId && l.shipmentId && riderId && (
-                        <OpsButton size="sm" disabled={pending || draining} onClick={() => run(async () => moveManifestItem(orgId, l.manifestId!, l.shipmentId!, riderId, `Escaneado en la caja de ${riderName}`))}>Mover</OpsButton>
+                        <OpsButton size="sm" disabled={pending || draining} onClick={() => void moveScanned(l)}>Mover</OpsButton>
                       )}
                       {l.status === "programado_otro_dia" && riderId && (
                         <OpsButton size="sm" disabled={pending || draining} onClick={() => confirmScanned(l)} title={l.message}>Asignar igual</OpsButton>
@@ -699,6 +719,7 @@ export function DispatchDayBoard(props: Props) {
                       {l.status === "bloqueado_efectivo" && !overrideCash && (
                         <OpsButton size="sm" onClick={() => setOverrideCash(true)} title={`${cashOverrideHint(props.cashWarning, props.cashLimit)} Toca «Autorizar» y vuelve a escanear.`}>Autorizar</OpsButton>
                       )}
+                      {l.moveError && <p role="alert" className="basis-full text-xs font-medium text-crit-fg">{l.moveError}</p>}
                     </li>
                   );
                 })}
