@@ -4620,13 +4620,28 @@ dentro del máximo general de 10. El cupo se configura en la base
 la reserva comprueba el general primero. Tiene interruptor
 propio, apagado al instalar. La vía con historial se conserva.
 
-- Pedido de hasta **14 días**, importe positivo de hasta **S/500**, con **0, 1
-  o 2 intentos Aliclik informados**. Un intento sin dato no cuenta como cero: se
-  aparta. Tres o más intentos también.
+- Pedido de hasta **14 días**, importe positivo de hasta **S/500**, con **1 o 2
+  intentos Aliclik informados** y el paquete **en reparto o de vuelta**
+  (despacho `PICKED`, `TO_RETURN` o `RETURNED`). Un intento sin dato no cuenta
+  como cero: se aparta. Cero intentos, tres o más, y un despacho que diga que el
+  paquete no salió a reparto (`LEFT_IN_WAREHOUSE`, `STORE_CENTRAL`,
+  `REMAINING_IN_TRANSIT`) también.
+- **Solo si Aliclik llegó a visitar** (05-10-2026, decisión del owner,
+  migración 0231). Revierte el «0 intentos» de la ampliación del 03-10. Medido
+  sobre los reenvíos por Swayp tras una Aliclik fallida desde el 15-09, con 4 o
+  más días: de los **37** cuyo paquete Aliclik nunca salió a reparto o no tuvo
+  ni un intento, **ninguno** se entregó; los 7 entregados tenían todos al menos
+  una visita. Un `CANCEL` sin visita suele ser el cliente cancelando por
+  teléfono con Aliclik: así contestaron #KP136734 y #KP136038, reenviados por el
+  piloto el 03-10 con 0 intentos («cancelé ese pedido», «ahora no lo quiero»).
+  De las 22 guías del piloto hasta ese día, 13 habían salido con 0 intentos.
+  Se aparta con su propio motivo, «Piloto: Aliclik no llegó a visitar»
+  (`aliclikSalioAReparto`), para que la pantalla diga por qué. La vía con
+  entrega previa no cambia.
 - El máximo inicial de S/199 se amplió a **S/500** por decisión del usuario el
   01-10-2026. Se conservaron el cupo y el resto de condiciones.
 - **Ampliación del 03-10-2026** (decisión del owner, migración 0220): de 7 a 14
-  días y de exactamente un intento a 0–2. En 70 pasadas el piloto emitió 4
+  días y de exactamente un intento a 0–2 (el 0 se revirtió el 05-10, arriba). En 70 pasadas el piloto emitió 4
   guías y en las últimas no halló ni un elegible; el cupo no era el freno. De
   126 pedidos apartados por estos límites, 95 pasaban de 7 días —la edad se
   cuenta desde la compra y Aliclik suele fallar entre el día 5 y el 10—, 68

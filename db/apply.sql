@@ -463,4 +463,6 @@
 \ir migrations/0229_urpi_report.sql
 \echo 'Applying 0230_gf_office_reclaim.sql'
 \ir migrations/0230_gf_office_reclaim.sql
+\echo 'Applying 0231_swayp_pilot_solo_con_visita.sql'
+\ir migrations/0231_swayp_pilot_solo_con_visita.sql
 \echo 'Done.'
