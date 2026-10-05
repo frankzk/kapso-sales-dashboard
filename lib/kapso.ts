@@ -15,6 +15,7 @@ import { env } from "@/lib/env";
 import { type ConversationRow } from "@/lib/types";
 import { normalizePhone } from "@/lib/phone";
 import { leadProductHandle } from "@/lib/leads";
+import { mentionsKnownPlace } from "@/lib/lead-coverage";
 
 export interface KapsoClientOpts {
   apiKey: string;
@@ -937,6 +938,55 @@ function looksLikePlace(s: string): boolean {
   return !NOT_A_PLACE_RE.test(s);
 }
 
+// Palabras que delatan que la respuesta es conversación y no un lugar: el
+// saludo con que abre un anuncio («¡Hola! Quiero más información»), el precio,
+// el aplazamiento («Gracias mañana te llamo»), la talla, el medio de envío
+// («Shalom», «agencia») o la respuesta a otro botón («Sí, la misma»). Sacadas de
+// los 705 distritos distintos de la cola del 04-10-2026: todas estaban
+// guardadas como distrito. Un lugar que las contenga y que reconocemos
+// («Arequipa cuanto tarda en llegar», «huancayo mismo») pasa igual, porque eso
+// se mira antes.
+const CONVERSATIONAL_RE =
+  /\b(?:hola|buen[oa]s (?:d[ií]as|tardes?|noches)|gracias|graias|precios?|cu[aá]nt[oa]s?|cuesta|costo|caros?|estafa|quiero|quisiera|kiero|queria|deseo|busco|duda|informaci[oó]n|info|deja|dejen|escrib\w*|comunic\w*|consult\w*|confirm\w*|avis\w*|momento|despu[eé]s|luego|hoy|ma[ñn]ana|lunes|martes|mi[eé]rcoles|jueves|viernes|semana|llamo|llamar|llamen|llamada|ok|okey|vale|bien|todav[ií]a|favor|porfa\w*|verdad|ocupad[oa]|interesa|amig[oa]|se[ñn]orita|srta|joven|estimad[oa]|tallas?|modelos?|cat[aá]logo|pedido|pedir|pido|pide|dinero|pagar?|compr[ao]r?|compre|tratamiento|consumir|producto|sirve|garant[ií]a|receta|yape|tengo|tiene|tienen|puedo|puede|mism[oa]|agencia|shalom|olva|oficina|delivery|muy|pero|tambi[eé]n|es[aeo]|algun\w*|alg[uú]n|ningun\w*|c[oó]mo|cu[aá]l(?:es)?|cu[aá]ndo|necesit\w*|disculp\w*|trabajar|ficha|env[ií]ame|m[aá]ndame|d[ií]game|d[eé]jame|dame|efecto|herpes|peso|di[aá]lisis|diab[eé]tic\w*|colesterol|ri[ñn]ones|h[ií]gado|c[aá]ncer|enero|febrero|marzo|abril|junio|julio|agosto|se(?:p|)tiembre|octubre|noviembre|diciembre)\b/i;
+
+// Frases del propio bot. El eco las tomaba por distrito cuando el cliente no
+// contestaba («…el envío para indicarte bien 🚚», 130 leads de la cola): un
+// verbo con pronombre pegado (indicarte, coordinarlo, dejártelo,
+// coordinándolo), un «tu», la pregunta «¿Lima o provincia?» o el formato del
+// bot (asteriscos, dos puntos) no son nunca un lugar.
+const BOT_PHRASE_RE =
+  /\b(?:tu|tus)\b|\b[a-záéíóúñ]+(?:ar|er|ir|ár|ér|ír|ando|endo|ándo|éndo)(?:te|lo|la|los|las|le|les|me|se|telo|tela|selo)\b|\blima o\b|\bo (?:en )?provincias?\b|[*:]/i;
+
+/** Kapso entrega la respuesta a un botón como «Selected: Lima». */
+function cleanReply(text: string): string {
+  return text.trim().replace(/\s+/g, " ").replace(/^selected:\s*/i, "");
+}
+
+/**
+ * ¿La respuesta del cliente a la pregunta de ubicación es un lugar?
+ *
+ * Antes bastaba con que fuera corta y no fuera pregunta, y así se guardaron
+ * como distrito «Precio», «¡Hola! Quiero más información» o «Gracias mañana te
+ * llamo». Ahora pasa un lugar que reconocemos (lib/lead-coverage.ts), la
+ * respuesta al botón «¿Lima o provincia?», o un texto corto, sin números y sin
+ * palabras de conversación — que es como se ve un distrito chico que no está
+ * en ninguna lista («Chocope», «Huantar»), y no hay que perderlo.
+ */
+export function isPlaceReply(text: string): boolean {
+  const d = cleanReply(text);
+  if (!d || d.length > 40 || d.includes("?")) return false;
+  if (LOCATION_FILLER_RE.test(d) || /^[\d\sx×]+$/i.test(d)) return false;
+  if (/^(?:lima|provincias?)$/i.test(d)) return true;
+  if (mentionsKnownPlace(d)) return true;
+  return (
+    d.split(" ").length <= 4 &&
+    !/\d/.test(d) &&
+    /[a-záéíóúñü]{3}/i.test(d) && // ni «👍» ni «M»
+    !CONVERSATIONAL_RE.test(d) &&
+    !BOT_PHRASE_RE.test(d)
+  );
+}
+
 /**
  * Extract buyer-intent signals from a conversation's messages. The bots collect
  * these in-chat (no Shopify draft order is created):
@@ -962,13 +1012,7 @@ export function parseOrderSignals(msgs: ParsedMsg[]): OrderSignals {
   for (let i = msgs.length - 1; i >= 0; i--) {
     if (msgs[i]!.dir !== "outbound" || !isLocationPrompt(msgs[i]!.text)) continue;
     const reply = msgs.slice(i + 1).find((x) => x.dir === "inbound" && x.text.trim());
-    if (reply) {
-      const d = reply.text.trim().replace(/\s+/g, " ");
-      // a place name: short, not a question, not filler, not a quantity
-      if (d.length <= 40 && !d.includes("?") && !LOCATION_FILLER_RE.test(d) && !/^[\d\sx×]+$/i.test(d)) {
-        district = d;
-      }
-    }
+    if (reply && isPlaceReply(reply.text)) district = cleanReply(reply.text);
     break; // last prompt wins
   }
   if (!district) {
@@ -979,10 +1023,18 @@ export function parseOrderSignals(msgs: ParsedMsg[]): OrderSignals {
         m.text.match(/entrega\s+(?:en|para|a)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ][^\n.,!?]*)/i);
       if (echo) {
         const e = echo[1]!.trim().replace(/\s+/g, " ");
+        // El eco sale de una PREGUNTA del bot («¿El envío es para Lima o
+        // provincia?»): eso es lo que pregunta, no lo que el cliente contestó.
+        const after = m.text.slice((echo.index ?? 0) + echo[0].length).trimStart();
+        if (after.startsWith("?")) continue;
         // Valida SIN el artículo ("La Molina" → "Molina" pasa el filtro) pero
-        // guarda el texto original. Mata capturas conversacionales del bot:
-        // "te lo envío para cuando quieras ver más modelos con calma".
-        if (looksLikePlace(e.replace(/^(?:el|la|los|las|un|una)\s+/i, ""))) district = e.slice(0, 40); // last wins
+        // guarda el texto original. Y tiene que ser un lugar que reconocemos:
+        // el texto del bot dice de todo después de «envío … para» —«para
+        // indicarte bien 🚚», «para dejártelo listo», «a tu zona»—, y cuando el
+        // cliente no contestaba, eso quedaba como su distrito.
+        if (looksLikePlace(e.replace(/^(?:el|la|los|las|un|una)\s+/i, "")) && mentionsKnownPlace(e)) {
+          district = e.slice(0, 40); // last wins
+        }
       }
     }
   }
@@ -992,13 +1044,18 @@ export function parseOrderSignals(msgs: ParsedMsg[]): OrderSignals {
     for (const m of msgs) {
       if (m.dir !== "inbound") continue;
       const v = m.text.match(
-        /(?:soy de|vivo en|estoy en|me encuentro en|mi (?:distrito|ciudad|provincia) es)\s+([a-záéíóúñü][a-záéíóúñü\s]{1,38}?)(?=\s+(?:y|pero|que|para|porque|cerca)\b|[.,;!?\n]|$)/i,
+        /(soy de|vivo en|estoy en|me encuentro en|mi (?:distrito|ciudad|provincia) es)\s+([a-záéíóúñü][a-záéíóúñü\s]{1,38}?)(?=\s+(?:y|pero|que|para|porque|cerca)\b|[.,;!?\n]|$)/i,
       );
       if (!v) continue;
-      let d = v[1]!.trim().replace(/\s+/g, " ");
+      let d = v[2]!.trim().replace(/\s+/g, " ");
       d = d.replace(/^(?:el|la|los|las|un|una|mi)\s+/i, "");
       d = d.replace(/^(?:departamento|provincia|ciudad|distrito|zona)\s+(?:de\s+)?/i, "");
-      if (looksLikePlace(d)) district = d.slice(0, 40); // last wins
+      // «Estoy en» dice dónde está ahora, no dónde vive («estoy en diálisis»,
+      // «estoy en clase»): solo cuenta si nombra un lugar que reconocemos.
+      const situacion = /^(?:estoy|me encuentro)/i.test(v[1]!);
+      if (looksLikePlace(d) && !CONVERSATIONAL_RE.test(d) && (!situacion || mentionsKnownPlace(d))) {
+        district = d.slice(0, 40); // last wins
+      }
     }
   }
 

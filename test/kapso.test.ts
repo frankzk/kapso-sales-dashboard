@@ -9,6 +9,7 @@ import {
   conversationToLeadSeed,
   parseHandoffPayload,
   parseOrderSignals,
+  isPlaceReply,
   detectYapePayment,
   collectVoucherCandidates,
   fetchKapsoImageBase64,
@@ -202,6 +203,95 @@ describe("parseOrderSignals (buyer intent from chat messages)", () => {
       { t: 3, dir: "inbound", text: "San Isidro" },
     ]);
     expect(s.district).toBe("San Isidro");
+  });
+
+  // ── Lo que se guardaba como distrito y no era un lugar (cola, 04-10-2026) ──
+  const sinRespuesta = (bot: string) => parseOrderSignals([{ t: 1, dir: "outbound", text: bot }]).district;
+  const respuesta = (texto: string) =>
+    parseOrderSignals([
+      { t: 1, dir: "outbound", text: "¿A qué distrito sería el envío?" },
+      { t: 2, dir: "inbound", text: texto },
+    ]).district;
+
+  it("si el cliente no contesta, el eco NO toma la frase del bot como distrito", () => {
+    // «indicarte bien 🚚» estaba en 130 leads de la cola: la pregunta del bot
+    // sin respuesta caía al eco, que tomaba lo que seguía a «envío … para».
+    expect(sinRespuesta("Cuéntame tu distrito del envío para indicarte bien 🚚")).toBeNull();
+    expect(sinRespuesta("Te consulto el distrito del envío para dejártelo listo")).toBeNull();
+    expect(sinRespuesta("Dime tu distrito y coordinamos el envío a tu zona 😊")).toBeNull();
+    expect(sinRespuesta("Pasa tu distrito y el envío lo vemos para coordinarlo")).toBeNull();
+  });
+
+  it("el eco de una PREGUNTA del bot no es la respuesta del cliente", () => {
+    expect(sinRespuesta("¿El envío es para Lima o provincia?")).toBeNull();
+    expect(sinRespuesta("Hola 👋 ¿El envío sería para Arequipa?")).toBeNull();
+  });
+
+  it("el eco sigue sirviendo cuando confirma un lugar", () => {
+    expect(sinRespuesta("Tu pedido va así:\n- 1 x X: S/ 79\nEnvío: gratis a Huancayo\nTotal a pagar: S/ 79")).toBe("Huancayo");
+  });
+
+  it("la respuesta a un botón llega sin el «Selected:»", () => {
+    expect(respuesta("Selected: Lima")).toBe("Lima");
+    expect(respuesta("Selected: Provincia")).toBe("Provincia");
+    expect(respuesta("Selected: Para Iquitos")).toBe("Para Iquitos");
+    // Un botón que no es un lugar no es un distrito.
+    expect(respuesta("Selected: Si, la misma")).toBeNull();
+    expect(respuesta("Selected: Confirmar pedido")).toBeNull();
+  });
+
+  it("descarta respuestas que son conversación, no un lugar", () => {
+    for (const texto of [
+      "Precio",
+      "¡Hola! Quiero más información",
+      "Gracias mañana te llamo",
+      "Yo te aviso",
+      "Talla m",
+      "Tengo una duda",
+      "Esta muy caro",
+      "este mismo número",
+      "Shalom 🙌",
+      "👍",
+      "M",
+      "fines de julio",
+    ]) {
+      expect(respuesta(texto), texto).toBeNull();
+    }
+  });
+
+  it("guarda un lugar aunque venga con conversación, o aunque no esté en ninguna lista", () => {
+    expect(respuesta("Arequipa cuanto tarda en llegar")).toBe("Arequipa cuanto tarda en llegar");
+    expect(respuesta("En HUANCAYO")).toBe("En HUANCAYO");
+    // Distritos chicos que no están en las listas: cortos, sin números, sin
+    // palabras de conversación. No hay que perderlos.
+    expect(respuesta("Chocope")).toBe("Chocope");
+    expect(respuesta("De quiicacha")).toBe("De quiicacha");
+  });
+
+  it("«estoy en» solo cuenta si nombra un lugar que se reconoce", () => {
+    const espontaneo = (texto: string) => parseOrderSignals([{ t: 1, dir: "inbound", text: texto }]).district;
+    expect(espontaneo("estoy en diálisis")).toBeNull();
+    expect(espontaneo("estoy en Comas")).toBe("Comas");
+    expect(espontaneo("soy de Chocope")).toBe("Chocope");
+  });
+
+  it("isPlaceReply: frases del bot guardadas como distrito", () => {
+    for (const texto of [
+      "indicarte bien 🚚",
+      "Lima o provincia",
+      "coordinarlo",
+      "dejártelo coordinado 😊",
+      "ir coordinándolo",
+      "tu domicilio",
+      "tu puerta* 🏠",
+      "servirte",
+      "agencia 📦",
+    ]) {
+      expect(isPlaceReply(texto), texto).toBe(false);
+    }
+    for (const texto of ["Sjl", "La Molina", "Cerro de Pasco", "Huamanga", "Jesús maría", "Hyo"]) {
+      expect(isPlaceReply(texto), texto).toBe(true);
+    }
   });
 });
 

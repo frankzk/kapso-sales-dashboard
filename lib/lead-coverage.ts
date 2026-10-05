@@ -141,6 +141,18 @@ function mentionsProvincePlace(place: string): boolean {
   return PROVINCE_PLACES.some((term) => hasWord(place, term));
 }
 
+/**
+ * ¿El texto nombra un lugar que sabemos reconocer? Un distrito de Lima o Callao
+ * —también los que se repiten en provincia: siguen siendo un lugar—, o un
+ * departamento, provincia o ciudad de fuera. Sirve para separar un lugar de una
+ * frase (lib/kapso.ts), no para decidir la cobertura.
+ */
+export function mentionsKnownPlace(text: string | null | undefined): boolean {
+  const place = placeOf(text);
+  if (!place) return false;
+  return resolveLimaDistrict(place, { searchInText: true }) !== null || mentionsProvincePlace(place);
+}
+
 /** Lo que dice SU PROPIA dirección, sin mirar pedidos anteriores. */
 function coverageFromLocation(
   lead: LeadCoverageSignals,

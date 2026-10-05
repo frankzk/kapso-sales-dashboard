@@ -2618,6 +2618,27 @@ de Lima Metropolitana por su distrito. Las frases del bot que el lector del
 chat guardó como distrito («indicarte bien 🚚», «coordinarlo») no son lugar y
 quedan Sin identificar.
 
+**Qué cuenta como distrito dicho en el chat (05-10-2026).** El lector
+(`parseOrderSignals`, `lib/kapso.ts`) guardaba como distrito cosas que no lo
+eran: medido en la cola, 459 leads, el 40 % de los que tenían distrito sin
+carrito. Dos fallos:
+
+- **El eco tomaba el texto del bot.** Si el cliente no contestaba la pregunta
+  de ubicación, se guardaba lo que seguía a «envío … para» en el propio mensaje
+  del bot: «indicarte bien 🚚» (130 leads), «Lima o provincia», «tu zona». Ahora
+  el eco solo cuenta si nombra un lugar que se reconoce y no sale de una
+  pregunta del bot.
+- **Cualquier respuesta corta valía.** «Precio», «¡Hola! Quiero más
+  información», «Gracias mañana te llamo», «Selected: Sí, la misma». Ahora
+  (`isPlaceReply`) vale un lugar que se reconoce, el botón «Lima / Provincia»
+  (sin el «Selected:»), o un texto corto sin números ni palabras de
+  conversación, que es como se ve un distrito chico fuera de las listas.
+
+Lo ya guardado no se corrige solo: la sincronización rellena el distrito pero
+nunca lo borra, y releer la conversación con el lector nuevo solo lo
+reemplaza si encuentra un lugar. Como el segmento `interes` es «dio su
+distrito», esos leads siguen contando ahí hasta que se limpie su distrito.
+
 **Dentro de `carrito`, primero la que armó varios (Kenku, 30-09-2026).** Quien
 armó 2 o más carritos en 48 horas cierra más cuando se la llama, en los cuatro
 tramos horarios. Mismo método que la tabla de arriba —60 días, solo carritos
