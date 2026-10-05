@@ -499,7 +499,11 @@ describe("Envíos, en el código", () => {
 
   it("el badge escribe la segunda mitad desde el mismo texto", () => {
     const src = read("components/shipments.tsx");
-    expect(src).toContain("if (s.recovery) return ` · ${RECOVERY_LABEL[s.recovery]}`;");
+    expect(src).toContain("if (s.recovery) return RECOVERY_LABEL[s.recovery];");
+    // La chapa une las dos mitades con « · » (cajón y lista); la tabla pone la
+    // segunda bajo la chapa, sin cortarla.
+    expect(src).toContain("const text = suffix ? `${labelOf(status)} · ${suffix}` : labelOf(status);");
+    expect(src).toContain("{subState(s)}");
   });
 
   it("y el MOM lo dice", () => {

@@ -49,8 +49,9 @@ describe("el mismo rol, el mismo tratamiento", () => {
   });
 
   it("fechas y cifras van en cifras tabulares donde se comparan en columna", () => {
-    expect(src).toContain('<td className="px-4 py-2.5 tabular-nums text-slate-600">');
-    expect(src).toContain("py-2 text-xs tabular-nums text-slate-600");
+    expect(src).toContain('<p className="leading-5 tabular-nums text-ink-900">{fmtReprogram(s.next_followup_at)}</p>');
+    // Las cifras del resumen de reprogramaciones.
+    expect(src).toContain('<dd className="text-xl font-semibold leading-7 tabular-nums text-ink-900">');
     expect(src).toContain('<span className="shrink-0 text-right text-xs tabular-nums text-slate-500">');
   });
 

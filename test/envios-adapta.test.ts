@@ -16,26 +16,36 @@ import { describe, expect, it } from "vitest";
 const src = readFileSync(resolve(process.cwd(), "components/shipments.tsx"), "utf8");
 const css = readFileSync(resolve(process.cwd(), "app/globals.css"), "utf8");
 
+/**
+ * Rediseño del 05-10-2026 (Repro Provincia, «Compacta, sin scroll»): la tabla
+ * de once columnas que pedía 1.400 px y scrolleaba de lado pasó a ocho celdas
+ * de dos líneas en una tabla fija que cabe desde 1.280 px. Por debajo, la cola
+ * es una lista.
+ */
 describe("la tabla entra en el portátil", () => {
-  it("tiene ancho propio y el contenedor scrollea hasta que entra de verdad", () => {
-    expect(src).toContain('<div className={cn("hidden md:block", TABLE_WRAP_FROM[1800])}>');
-    expect(src).toContain('<table className="w-full min-w-[1100px] text-sm xl:min-w-[1400px]">');
-    expect(src).not.toContain("className={TABLE_WRAP}");
+  it("es fija, sin ancho mínimo, y solo aparece desde xl", () => {
+    expect(src).toContain('<div className="hidden xl:block">');
+    expect(src).toContain('<table className="w-full table-fixed border-separate border-spacing-0 text-sm">');
+    expect(src).not.toMatch(/min-w-\[1[0-9]{3}px\]/);
+    expect(src).not.toContain("TABLE_WRAP");
   });
 
-  it("las dos columnas que el cajón ya muestra enteras se esconden por debajo de xl", () => {
-    expect(src).toContain('const SECONDARY_COLUMN = "hidden xl:table-cell";');
-    // Encabezado y celda, las dos veces. «Producto» se cambió por «Motivo
-    // anterior» (MOM §11.7): es lo que decide si se reenvía, y el producto
-    // sigue entero en el cajón.
-    expect(src.match(/className=\{SECONDARY_COLUMN\}/g)?.length).toBe(2);
-    expect(src.match(/cn\(SECONDARY_COLUMN, /g)?.length).toBe(2);
-    const header = src.slice(src.indexOf('label="Motivo anterior"'), src.indexOf('label="Motivo anterior"') + 160);
-    expect(header).toContain("className={SECONDARY_COLUMN}");
+  it("lo que eran columnas secundarias va en la segunda línea, y se sigue ordenando", () => {
+    // «Producto» se cambió por «Motivo anterior» (MOM §11.7): es lo que decide
+    // si se reenvía, y el producto sigue entero en el cajón. Ahora es una
+    // columna de todas las anchuras de la tabla, no una que se esconde.
+    expect(src).toContain('label="Motivo anterior" sortKey="reason"');
+    expect(src).not.toContain("SECONDARY_COLUMN");
+    // La Fecha Aliclik y el pedido van bajo la programación y la guía, y sus
+    // órdenes viven en el mismo encabezado.
+    expect(src).toContain('<span className="sr-only">Fecha Aliclik </span>');
+    expect(src).toContain("{fmtAliclikDate(s.aliclik_service_date)}");
+    expect(src).toContain('also={{ label: "Aliclik", sortKey: "lastDelivery" }}');
+    expect(src).toContain('also={{ label: "Pedido", sortKey: "order" }}');
   });
 
   it("el encabezado ordenable acepta la clase de la columna", () => {
-    expect(src).toContain('className={cn("px-2 py-1 text-left font-medium first:pl-4 last:pr-4", className)}');
+    expect(src).toContain('<th scope="col" aria-sort={ariaSort} className={cn(TH, className)}>');
   });
 });
 

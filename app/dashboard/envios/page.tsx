@@ -1,5 +1,4 @@
 import { Suspense } from "react";
-import Link from "next/link";
 import { getAccessibleStores } from "@/lib/access";
 import {
   getReprogramStats,
@@ -53,9 +52,9 @@ async function EnviosContent({
     getVoiceScore(storeIds, today, today),
   ]);
 
+  // El automático Aliclik → Swayp se abre desde las acciones de la cabecera
+  // del tablero: vivía en un enlace suelto encima de la página.
   return (
-    <>
-    <Link href="/dashboard/envios/automatico" className="block px-6 pt-3 text-sm text-blue-700">Ver automático Aliclik → Swayp</Link>
     <ShipmentsBoard
       stores={stores}
       view={view}
@@ -66,6 +65,5 @@ async function EnviosContent({
       voiceScore={voiceScore}
       initialOpenId={sp.open ?? null}
     />
-    </>
   );
 }
