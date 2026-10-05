@@ -25,7 +25,16 @@ import {
   type VoiceLanes,
 } from "@/lib/voice-recovery";
 import { compareVoiceCandidates, voiceRecoveryEligible } from "@/lib/voice-recovery-queue";
-import { requestCallback, zadarmaLocalPeru } from "@/lib/zadarma";
+import {
+  requestCallback,
+  zadarmaEndedCallFor,
+  zadarmaGet,
+  zadarmaLocalPeru,
+  zadarmaLocalStamp,
+  zadarmaNoAnswerResumen,
+  zadarmaOffsetMs,
+  type ZadarmaCredentials,
+} from "@/lib/zadarma";
 import {
   agentSipUriFor,
   clienteDialBody,
@@ -311,6 +320,88 @@ export async function closeCutWithoutGestion(
     now,
     { error: "sin registrar_gestion: se cortó la llamada", soloSinGestion: true },
   );
+}
+
+/** Eventos guardados por llamada en `telephony_response.eventos`. */
+const MAX_EVENTOS = 40;
+
+/**
+ * Cierra las llamadas de Daaph (Zadarma) que ya terminaron, preguntándole a la
+ * estadística de Zadarma (MOM §11.8, 05-10-2026). Zadarma no le avisa a Kapta
+ * del corte: la URL de avisos de la cuenta la usa KairoAI. Sin esto, un corte
+ * sin `registrar_gestion` dejaba a Daaph «en llamada» hasta el vigilante.
+ *
+ *   · terminó «en curso» → corte sin gestión (como Telnyx);
+ *   · terminó «marcando» → «no contesta», con la causa de Zadarma.
+ *
+ * Si la API falla, no cierra nada: queda el vigilante. Devuelve cuántas cerró.
+ */
+export async function reconcileZadarmaCalls(
+  admin: SupabaseClient,
+  now: Date,
+  fetchImpl: typeof fetch = fetch,
+): Promise<number> {
+  const { data } = await admin
+    .from("voice_calls")
+    .select("id, store_id, order_id, mode, status, phone, dialed_at, telephony_response")
+    .eq("telephony", "zadarma")
+    .in("status", OPEN_STATUSES as unknown as string[]);
+  type Row = {
+    id: string;
+    store_id: string;
+    order_id: string;
+    mode: "real" | "test";
+    status: "dialing" | "in_progress";
+    phone: string;
+    dialed_at: string;
+    telephony_response: Record<string, unknown> | null;
+  };
+  const rows = ((data ?? []) as Row[]).filter((r) => Number.isFinite(Date.parse(r.dialed_at)));
+  if (!rows.length) return 0;
+
+  let creds: ZadarmaCredentials;
+  try {
+    creds = { key: env.zadarmaKey(), secret: env.zadarmaSecret() };
+  } catch {
+    return 0;
+  }
+  const offsetMs = zadarmaOffsetMs(await zadarmaGet(creds, "/v1/info/timezone/", {}, fetchImpl));
+  if (offsetMs === null) return 0;
+  const from = new Date(Math.min(...rows.map((r) => Date.parse(r.dialed_at))) - 10 * 60_000);
+  const window = {
+    start: zadarmaLocalStamp(from, offsetMs),
+    end: zadarmaLocalStamp(new Date(now.getTime() + 60_000), offsetMs),
+  };
+  const [general, pbx] = await Promise.all([
+    zadarmaGet(creds, "/v1/statistics/", { ...window, limit: 1000 }, fetchImpl),
+    zadarmaGet(creds, "/v1/statistics/pbx/", { ...window, version: 2 }, fetchImpl),
+  ]);
+  const stats = [general, pbx].flatMap((b) =>
+    Array.isArray(b?.stats) ? (b.stats as Record<string, unknown>[]) : [],
+  );
+  if (!general && !pbx) return 0;
+
+  let closed = 0;
+  for (const row of rows) {
+    const ended = zadarmaEndedCallFor(stats, { phone: row.phone, dialedAt: row.dialed_at, offsetMs });
+    if (!ended) continue;
+    const telephony = { ...(row.telephony_response ?? {}) };
+    const eventos = Array.isArray(telephony.eventos) ? [...(telephony.eventos as unknown[])] : [];
+    eventos.push({
+      t: now.toISOString(),
+      tipo: "zadarma.stats",
+      causa: ended.disposition,
+      ...(ended.seconds !== null ? { segundos: ended.seconds } : {}),
+      inicio: ended.startedAt,
+    });
+    telephony.eventos = eventos.slice(-MAX_EVENTOS);
+    await admin.from("voice_calls").update({ telephony_response: telephony }).eq("id", row.id);
+    if (row.status === "in_progress") await closeCutWithoutGestion(admin, row, now);
+    else
+      await closeAsNoAnswer(admin, row, zadarmaNoAnswerResumen(ended.disposition), now, { soloSinGestion: true });
+    closed += 1;
+  }
+  return closed;
 }
 
 export async function openCalls(admin: SupabaseClient): Promise<OpenCall[]> {

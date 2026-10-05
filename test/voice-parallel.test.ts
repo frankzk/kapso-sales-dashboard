@@ -11,6 +11,11 @@ import {
   type OpenCall,
 } from "@/lib/voice-recovery";
 import {
+  zadarmaEndedCallFor,
+  zadarmaGet,
+  zadarmaLocalStamp,
+  zadarmaNoAnswerResumen,
+  zadarmaOffsetMs,
   zadarmaNotifyPhones,
   zadarmaNotifySignature,
   zadarmaNotifyString,
@@ -119,8 +124,77 @@ describe("aviso de fin de llamada de Zadarma (Daaph)", () => {
     expect(route).toContain('.eq("telephony", "zadarma")');
     expect(route).toContain('.in("status", ["dialing", "in_progress"])');
     expect(route).toContain("await closeCutWithoutGestion(admin, row, now);");
-    expect(route).toContain("await closeAsNoAnswer(admin, row, noAnswerResumen(form.disposition), now);");
+    expect(route).toContain("await closeAsNoAnswer(admin, row, zadarmaNoAnswerResumen(form.disposition), now);");
     // Zadarma verifica la URL con zd_echo al guardarla.
     expect(route).toContain('searchParams.get("zd_echo")');
+  });
+});
+
+describe("llamadas de Daaph terminadas, por la estadística de Zadarma", () => {
+  // Cuenta en hora de Kiev (+3): la estadística da `callstart` en esa hora.
+  const tz = { unixtime: Date.parse("2026-10-05T14:00:00Z") / 1000, datetime: "2026-10-05 17:00:00" };
+  const offsetMs = zadarmaOffsetMs(tz)!;
+  const dialedAt = "2026-10-05T14:10:00.000Z";
+
+  it("la zona de la cuenta sale de la hora local y el unixtime", () => {
+    expect(offsetMs).toBe(3 * 3600_000);
+    expect(zadarmaOffsetMs({ unixtime: tz.unixtime + 7, datetime: "2026-10-05 09:00:07" })).toBe(-5 * 3600_000);
+    expect(zadarmaOffsetMs(null)).toBeNull();
+    expect(zadarmaLocalStamp(new Date(dialedAt), offsetMs)).toBe("2026-10-05 17:10:00");
+  });
+
+  it("encuentra la llamada al teléfono que empezó al marcar, con su causa y duración", () => {
+    const stats = [
+      { to: "51930555309", callstart: "2026-10-05 17:10:04", disposition: "answered", billseconds: "48" },
+    ];
+    expect(zadarmaEndedCallFor(stats, { phone: "930 555 309", dialedAt, offsetMs })).toEqual({
+      disposition: "answered",
+      seconds: 48,
+      startedAt: "2026-10-05T14:10:04.000Z",
+    });
+    // La de la centralita trae el teléfono en `destination` y la duración en `seconds`.
+    const pbx = [{ destination: "930555309", callstart: "2026-10-05 17:10:02", disposition: "busy", seconds: 0 }];
+    expect(zadarmaEndedCallFor(pbx, { phone: "+51930555309", dialedAt, offsetMs })?.disposition).toBe("busy");
+  });
+
+  it("una llamada anterior al mismo teléfono, u otro teléfono, no cierra la de ahora", () => {
+    const old = [{ to: "51930555309", callstart: "2026-10-05 16:40:00", disposition: "no answer" }];
+    expect(zadarmaEndedCallFor(old, { phone: "930555309", dialedAt, offsetMs })).toBeNull();
+    // Leída sin corregir la zona, esta parecería posterior: la corrección importa.
+    expect(zadarmaEndedCallFor(old, { phone: "930555309", dialedAt, offsetMs: 0 })).not.toBeNull();
+    const other = [{ to: "51999888777", callstart: "2026-10-05 17:10:04", disposition: "answered" }];
+    expect(zadarmaEndedCallFor(other, { phone: "930555309", dialedAt, offsetMs })).toBeNull();
+  });
+
+  it("la causa de Zadarma se dice en el historial", () => {
+    expect(zadarmaNoAnswerResumen("busy")).toBe("No contestó: la línea estaba ocupada.");
+    expect(zadarmaNoAnswerResumen("failed")).toBe("No contestó: la llamada no se completó (failed).");
+  });
+
+  it("GET firmado; si Zadarma falla devuelve null y no se cierra nada", async () => {
+    let seen: { url: string; auth: string | null } | null = null;
+    const ok = (async (url: string, init: RequestInit) => {
+      seen = { url, auth: new Headers(init.headers).get("authorization") };
+      return new Response(JSON.stringify({ status: "success", stats: [] }));
+    }) as unknown as typeof fetch;
+    const creds = { key: "k", secret: "s" };
+    expect(await zadarmaGet(creds, "/v1/statistics/", { start: "a", end: "b" }, ok)).toEqual({ status: "success", stats: [] });
+    expect(seen!.url).toBe("https://api.zadarma.com/v1/statistics/?end=b&start=a");
+    expect(seen!.auth).toMatch(/^k:.+/);
+    const bad = (async () => new Response(JSON.stringify({ status: "error" }), { status: 401 })) as unknown as typeof fetch;
+    expect(await zadarmaGet(creds, "/v1/statistics/", {}, bad)).toBeNull();
+    const down = (async () => {
+      throw new Error("red");
+    }) as unknown as typeof fetch;
+    expect(await zadarmaGet(creds, "/v1/statistics/", {}, down)).toBeNull();
+  });
+
+  it("el barrido consulta a Zadarma después del vigilante y antes de ver qué agentes están libres", () => {
+    const route = readFileSync(resolve(__dirname, "../app/api/cron/voice-recovery/route.ts"), "utf8");
+    const reconcile = route.indexOf("await reconcileZadarmaCalls(admin, now)");
+    expect(reconcile).toBeGreaterThan(route.indexOf("await sweepStaleCalls(admin, now)"));
+    expect(reconcile).toBeLessThan(route.indexOf("const busyAgents"));
+    const server = readFileSync(resolve(__dirname, "../lib/voice-recovery-server.ts"), "utf8");
+    expect(server).toContain("if (row.status === \"in_progress\") await closeCutWithoutGestion(admin, row, now);");
   });
 });

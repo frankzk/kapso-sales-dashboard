@@ -20,6 +20,7 @@ import {
   openCalls,
   placeVoiceCall,
   realCallsToday,
+  reconcileZadarmaCalls,
   salidasSwaypPendientes,
   sweepStaleCalls,
   telnyxConfig,
@@ -83,6 +84,10 @@ async function run(req: NextRequest) {
   const stores = (data ?? []) as VoiceStoreSettings[];
 
   if (!dry) await sweepStaleCalls(admin, now);
+  // Daaph: Zadarma no avisa el corte (la URL de avisos es de KairoAI); se le
+  // pregunta a su estadística antes de ver qué agentes están libres, para que
+  // el número se libere en esta misma pasada (MOM §11.8).
+  if (!dry) await reconcileZadarmaCalls(admin, now);
   // Los aceptados sin salida Swayp pedida (MOM §11.8). Fuera del horario de
   // llamadas también: la salida no molesta a nadie y la fecha ya está pactada.
   const salidas = dry ? [] : await salidasSwaypPendientes(admin, now);

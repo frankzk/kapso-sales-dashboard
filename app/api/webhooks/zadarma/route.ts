@@ -23,7 +23,13 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { closeAsNoAnswer, closeCutWithoutGestion } from "@/lib/voice-recovery-server";
-import { ZADARMA_END_EVENTS, zadarmaLocalPeru, zadarmaNotifyPhones, zadarmaNotifyValid } from "@/lib/zadarma";
+import {
+  ZADARMA_END_EVENTS,
+  zadarmaLocalPeru,
+  zadarmaNoAnswerResumen,
+  zadarmaNotifyPhones,
+  zadarmaNotifyValid,
+} from "@/lib/zadarma";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,24 +38,6 @@ export const maxDuration = 15;
 const MAX_EVENTOS = 40;
 /** Una llamada marcada hace más que esto ya no es la de este aviso. */
 const MATCH_WINDOW_MS = 30 * 60_000;
-
-/** Cómo se dice en el historial lo que Zadarma contestó de una llamada que no llegó al agente. */
-function noAnswerResumen(disposition: string | undefined): string {
-  switch ((disposition ?? "").toLowerCase()) {
-    case "busy":
-      return "No contestó: la línea estaba ocupada.";
-    case "no answer":
-      return "No contestó: timbró sin respuesta.";
-    case "cancel":
-      return "No contestó: la llamada se canceló antes de que contestara.";
-    case "answered":
-      return "No contestó: colgó antes de hablar con el agente.";
-    case "unallocated number":
-      return "No contestó: el número no existe.";
-    default:
-      return `No contestó: la llamada no se completó (${disposition || "sin causa"}).`;
-  }
-}
 
 function echo(req: NextRequest, form?: Record<string, string>) {
   const value = req.nextUrl.searchParams.get("zd_echo") ?? form?.zd_echo;
@@ -127,6 +115,6 @@ export async function POST(req: NextRequest) {
     await closeCutWithoutGestion(admin, row, now);
     return NextResponse.json({ ok: true, action: "corte_sin_gestion" });
   }
-  await closeAsNoAnswer(admin, row, noAnswerResumen(form.disposition), now);
+  await closeAsNoAnswer(admin, row, zadarmaNoAnswerResumen(form.disposition), now);
   return NextResponse.json({ ok: true, action: "no_contesta" });
 }

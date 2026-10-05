@@ -208,3 +208,109 @@ export function zadarmaNotifyPhones(p: Record<string, string>): string[] {
     .map((x) => zadarmaLocalPeru(x))
     .filter((x): x is string => Boolean(x));
 }
+
+// ── Llamadas terminadas, por consulta (05-10-2026) ──────────────────────────
+//
+// El aviso de fin de llamada (webhook) no se puede usar: la cuenta comparte la
+// única URL de «llamadas a la centralita» con otra operación (KairoAI). En su
+// lugar, el barrido le pregunta a Zadarma por las llamadas TERMINADAS
+// (`/v1/statistics/` y `/v1/statistics/pbx/`, que solo listan llamadas que ya
+// acabaron) y cierra las de Daaph que Kapta sigue viendo abiertas.
+//
+// Las horas de la estadística (`callstart`) vienen en la zona horaria de la
+// cuenta: se lee con `/v1/info/timezone/` (hora local y unixtime) y se corrige.
+
+/** GET firmado a la API de Zadarma; null si falla (quien llama sigue sin cerrar). */
+export async function zadarmaGet(
+  creds: ZadarmaCredentials,
+  method: string,
+  params: Record<string, string | number | undefined | null>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Record<string, unknown> | null> {
+  const query = zadarmaQuery(params);
+  const sign = zadarmaSignature(method, query, creds.secret);
+  try {
+    const res = await fetchImpl(`${ZADARMA_API_BASE}${method}${query ? `?${query}` : ""}`, {
+      method: "GET",
+      headers: { Authorization: `${creds.key}:${sign}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    return res.ok && body.status === "success" ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cuánto adelanta la hora local de la cuenta a UTC, en ms, a partir de la
+ * respuesta de `/v1/info/timezone/` (`unixtime` y `datetime` local). Se
+ * redondea a 15 min: la diferencia entre ambos campos es solo la zona.
+ */
+export function zadarmaOffsetMs(tz: { unixtime?: unknown; datetime?: unknown } | null): number | null {
+  const unix = Number(tz?.unixtime);
+  const local = Date.parse(`${String(tz?.datetime ?? "").replace(" ", "T")}Z`);
+  if (!Number.isFinite(unix) || !Number.isFinite(local)) return null;
+  const q = 15 * 60_000;
+  return Math.round((local - unix * 1000) / q) * q;
+}
+
+/** Fecha en la hora local de la cuenta, como la pide la estadística (`Y-m-d H:i:s`). */
+export function zadarmaLocalStamp(at: Date, offsetMs: number): string {
+  return new Date(at.getTime() + offsetMs).toISOString().slice(0, 19).replace("T", " ");
+}
+
+export interface ZadarmaEndedCall {
+  disposition: string;
+  seconds: number | null;
+  /** Inicio de la llamada en UTC (ISO). */
+  startedAt: string;
+}
+
+/**
+ * ¿Terminó la llamada a este teléfono que Kapta marcó en `dialedAt`? Busca en la
+ * estadística (que solo trae llamadas terminadas) una al mismo número que haya
+ * empezado desde un minuto antes de marcar. Una llamada anterior al mismo
+ * teléfono (otro intento, otro día) no cuenta.
+ */
+export function zadarmaEndedCallFor(
+  stats: readonly Record<string, unknown>[],
+  opts: { phone: string; dialedAt: string; offsetMs: number },
+): ZadarmaEndedCall | null {
+  const phone = zadarmaLocalPeru(opts.phone);
+  const since = Date.parse(opts.dialedAt) - 60_000;
+  if (!phone || !Number.isFinite(since)) return null;
+  for (const s of stats) {
+    const to = [s.to, s.destination].map((x) => zadarmaLocalPeru(x == null ? null : String(x)));
+    if (!to.includes(phone)) continue;
+    const local = Date.parse(`${String(s.callstart ?? "").replace(" ", "T")}Z`);
+    if (!Number.isFinite(local)) continue;
+    const startedAt = local - opts.offsetMs;
+    if (startedAt < since) continue;
+    const seconds = Number(s.billseconds ?? s.seconds);
+    return {
+      disposition: String(s.disposition ?? ""),
+      seconds: Number.isFinite(seconds) ? seconds : null,
+      startedAt: new Date(startedAt).toISOString(),
+    };
+  }
+  return null;
+}
+
+/** Cómo se dice en el historial lo que Zadarma contestó de una llamada que no llegó al agente. */
+export function zadarmaNoAnswerResumen(disposition: string | undefined): string {
+  switch ((disposition ?? "").toLowerCase()) {
+    case "busy":
+      return "No contestó: la línea estaba ocupada.";
+    case "no answer":
+      return "No contestó: timbró sin respuesta.";
+    case "cancel":
+      return "No contestó: la llamada se canceló antes de que contestara.";
+    case "answered":
+      return "No contestó: colgó antes de hablar con el agente.";
+    case "unallocated number":
+      return "No contestó: el número no existe.";
+    default:
+      return `No contestó: la llamada no se completó (${disposition || "sin causa"}).`;
+  }
+}
