@@ -8271,6 +8271,26 @@ de la caja y del pedido. Si algo falla, el motivo se dice en la misma fila del
 escaneo; antes salía arriba de la página, fuera de la pantalla del celular, y
 parecía que el botón no hacía nada.
 
+**Devoluciones de Almacén también recibe lo que vuelve de Grupo GF
+(05-10-2026).** El escáner de Almacén → Devoluciones solo aceptaba Tanders y
+Shalom: KP137351-S01 y KP137320-S01 respondían «no es de Tanders ni de Shalom»
+y quien tenía la caja en la mano no sabía qué pasaba con el pedido. Ahora un
+paquete de Grupo GF (o aún sin courier) se resuelve igual que en Despacho del día
+→ «Devoluciones» (`lib/gf-returns-scan.ts`):
+
+| Dónde está el paquete | Qué hace el escaneo |
+| --- | --- |
+| En la caja de un motorizado, reportado «No entregado» (cualquier motivo) | Lo recibe en oficina (`gf_return_to_office`): sale de la caja, la custodia vuelve a la empresa y el pedido queda por asignar en Grupo GF, en «Por reprogramar Lima». |
+| En la caja, reportado entregado | No lo toca: lo dice. |
+| En la caja, sin reporte | No lo toca: pide que el motorizado lo reporte. |
+| Sin caja y en la empresa, nunca recibido en oficina | Nada que recibir: dice que nunca salió en Kapta y sigue por asignar. Era el caso de KP137351 y KP137320 («Por despachar · Listo para asignar»). |
+| Sin caja y ya recibido en oficina | Lo dice sin alarma. |
+
+Solo la anulación en Shopify termina la venta: un anulado que vuelve se recibe
+igual —la caja tiene que salir de la del motorizado— y el aviso dice que está
+anulado y se separa para el stock. Aliclik y los demás siguen recibiéndose desde
+el Master. Pruebas en `test/gf-returns-scan.test.ts`.
+
 **Un pedido anulado se dice primero, en cualquier escaneo (05-10-2026).** Al
 escanear un paquete —armado en almacén, agregar a una ruta, cotejo de la caja o
 caja del motorizado de Grupo GF—, si su pedido está anulado (en Shopify o en
