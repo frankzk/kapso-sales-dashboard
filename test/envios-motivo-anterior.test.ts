@@ -110,7 +110,7 @@ describe("dónde se ve", () => {
   it("la tarjeta de teléfono recuperó pedido y tienda", () => {
     // Existían solo en la tabla: en el celular no había forma de saber de qué
     // pedido se hablaba ni, con varias tiendas, de cuál era.
-    const card = ui.slice(ui.indexOf("<ul className=\"divide-y divide-slate-100 md:hidden\">"));
+    const card = ui.slice(ui.indexOf("<ul className=\"divide-y divide-line border-t border-line xl:hidden\">"));
     expect(card.slice(0, 3000)).toContain("<OrderNameLabel name={s.order_name} matched={s.matched} />");
     expect(card.slice(0, 3000)).toContain("storeName(s.store_id)");
   });

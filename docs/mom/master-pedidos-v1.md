@@ -2534,7 +2534,9 @@ quedó el pedido: **«Anulado · Reproprovincia»** mientras se puede reenviar,
 el último intento fue un rechazo en la puerta) o **«Anulado · Descartada»**
 después. Es
 el mismo patrón de «Pendiente · Sin llamar» y «Entregado · por Swayp». Sin la
-segunda mitad, una guía viva para Swayp se veía igual que una muerta. Las
+segunda mitad, una guía viva para Swayp se veía igual que una muerta. En la
+tabla de la cola la segunda mitad va en la línea bajo la chapa, entera; en el
+cajón y en la lista del teléfono, dentro de la chapa. Las
 vencidas y descartadas se quedan en la pestaña Anulado, que es el registro, con
 su segunda mitad escrita. No se inventa un `delivery_status` «reproprovincia»:
 el barrido de Aliclik lo pisaría en el siguiente ciclo.

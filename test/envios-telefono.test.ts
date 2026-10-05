@@ -7,23 +7,24 @@ import { describe, expect, it } from "vitest";
  *
  * PRODUCT.md deja el flujo móvil de motorizados para una etapa posterior; esto
  * no lo inventa. Lo que hace es que la cola de llamadas se pueda trabajar
- * desde un celular: tarjetas en vez de once columnas, «Llamar» con `tel:` al
- * alcance del pulgar, filtros plegados, pestañas que se deslizan, búsqueda a
- * todo el ancho, y un cajón cuya cabecera («Cerrar») no se va con el scroll.
+ * desde un celular: una lista en vez de la tabla, «Llamar» con `tel:` al
+ * alcance del pulgar, filtros plegados, las seis vistas en dos columnas,
+ * búsqueda a todo el ancho, y un cajón cuya cabecera («Cerrar») no se va con
+ * el scroll.
  */
 
 const src = readFileSync(resolve(process.cwd(), "components/shipments.tsx"), "utf8");
 const layout = readFileSync(resolve(process.cwd(), "app/layout.tsx"), "utf8");
 
-describe("la cola son tarjetas por debajo de md", () => {
+describe("la cola es una lista por debajo de xl", () => {
   it("la tabla se esconde y la lista aparece, con la MISMA ventana de filas", () => {
-    expect(src).toContain('<div className={cn("hidden md:block", TABLE_WRAP_FROM[1800])}>');
-    expect(src).toContain('<ul className="divide-y divide-slate-100 md:hidden">');
+    expect(src).toContain('<div className="hidden xl:block">');
+    expect(src).toContain('<ul className="divide-y divide-line border-t border-line xl:hidden">');
     expect(src.match(/\{shownRows\.map\(\(s\) => /g)?.length).toBe(2);
   });
 
-  it("cada tarjeta abre la guía y ofrece llamar con tel:", () => {
-    const cards = src.slice(src.indexOf('<ul className="divide-y divide-slate-100 md:hidden">'), src.indexOf("{hiddenCount > 0 && ("));
+  it("cada fila abre la guía y ofrece llamar con tel:", () => {
+    const cards = src.slice(src.indexOf('<ul className="divide-y divide-line border-t border-line xl:hidden">'), src.indexOf("{hiddenCount > 0 && ("));
     expect(cards).toContain("onClick={() => onOpen(s.id)}");
     expect(cards).toContain("href={`tel:${s.customer_phone.replace(/[^\\d+]/g, \"\")}`}");
     expect(cards).toContain("<StatusBadge category={s.status_category} status={s.delivery_status} suffix={subState(s)} />");
@@ -35,11 +36,12 @@ describe("la cola son tarjetas por debajo de md", () => {
 });
 
 describe("lo demás cabe en 360 px", () => {
-  it("búsqueda a todo el ancho, pestañas deslizables, filtros plegados", () => {
-    expect(src).toContain('className="w-full rounded-lg border border-slate-200 py-1.5 pl-8 pr-7 text-sm md:w-64"');
-    expect(src).toContain('className="-mx-4 flex gap-1.5 overflow-x-auto px-4 md:mx-0 md:flex-wrap md:overflow-visible md:px-0"');
+  it("búsqueda a todo el ancho, vistas en rejilla, filtros plegados", () => {
+    expect(src).toContain('<div role="search" className="relative w-full sm:w-64">');
+    // Seis vistas en dos columnas: no se parten ni se deslizan.
+    expect(src).toContain('className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6"');
     expect(src).toContain('filtersOpen ? "flex" : "hidden md:flex"');
-    expect(src).toContain("aria-expanded={filtersOpen}");
+    expect(src).toContain("expanded={filtersOpen}");
     expect(src).toContain("{activeFilters > 0 && (");
   });
 
