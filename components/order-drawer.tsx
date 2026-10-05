@@ -1684,21 +1684,25 @@ export function OrderDrawer({
                 detail.routePlan.activeOutputCount === 0 && (
                 <div
                   data-drawer-section="aliclik"
-                  className={cn("order-5 space-y-4", SECTION)}
+                  className={cn("order-5", SECTION)}
                 >
                   <SectionHead
                     title="Aliclik"
                     help="Aliclik no atiende pedidos de Agencia; este va con Shalom u Olva. Si la dirección está mal clasificada, corrígela y la cobertura se recalcula sola. Y si la dirección está bien pero crees que Aliclik sí llega, pregúntaselo: cotizar no crea nada."
+                    aside={
+                      <OpsButton size="sm" variant="ghost" onClick={() => jumpTo("ubicacion")} className="pointer-coarse:h-11">
+                        Revisar ubicación y cobertura
+                        <IconChevronDown aria-hidden className="text-ink-500" />
+                      </OpsButton>
+                    }
                   />
-                  <OpsButton size="sm" onClick={() => jumpTo("ubicacion")} className="pointer-coarse:h-11">
-                    Revisar ubicación y cobertura
-                    <IconChevronDown aria-hidden className="text-ink-500" />
-                  </OpsButton>
-                  <AliclikCoverageProbe
-                    orderId={detail.row.order_id}
-                    district={detail.row.district}
-                    canMark={canCreateGuide}
-                  />
+                  <div className="pt-4 sm:pt-5">
+                    <AliclikCoverageProbe
+                      orderId={detail.row.order_id}
+                      district={detail.row.district}
+                      canMark={canCreateGuide}
+                    />
+                  </div>
                 </div>
               )}
               {canEdit ? (

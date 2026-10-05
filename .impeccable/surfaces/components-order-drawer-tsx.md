@@ -26,3 +26,27 @@ FIRST VIEWPORT: header (order, state, amount, coverage, store · created · clie
 FORM: Stripe Dashboard detail page in a side sheet (category canon), pinned by the user in words («estilo Stripe»); no roll and no seed key; accent translated to Kapta blue.
 
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict and DESIGN.md.
+
+---
+
+# Paneles de Aliclik de la ficha
+
+Scope: lo que la ficha dibuja dentro de su tarjeta «Aliclik» y la retención por duplicado: `components/aliclik-guide-panel.tsx` (crear guía: ubicación y cotización, revisión del pedido, del monto a cobrar, del recojo y de dónde cae el pin, transportadora y creación; vincular una guía ya creada en el portal), `components/aliclik-duplicate-panel.tsx` (también en la gestión de confirmación) y `components/aliclik-coverage-probe.tsx` (el bloque de Agencia que pregunta si Aliclik llega). El panel de crear guía también vive en el cajón de Leads, que conserva su aspecto anterior: allí se ve en su propia tarjeta. Mode: Operate.
+Audience: la asesora de confirmación con el pedido confirmado; quien despacha Provincia COD.
+Job: emitir la guía Aliclik correcta sin sorpresas —sobre el pedido correcto, por el monto correcto, al pin correcto y por la transportadora elegida—, ver antes de pulsar lo que la bloquea y por qué, y vincular la guía si ya se creó en el portal.
+Constraints: toda la lógica se conserva —cotizar antes de crear, reintento acotado mientras Shopify devuelve la dirección, `busy` separado para cotizar y crear, aviso al cerrar mientras se crea, monto esperado que el servidor recalcula, compuertas de riesgo (§8), del veto y del duplicado (§8.3), del pin sin respaldo (§10) y de la escritura desactivada— y los textos de negocio. MOM §8, §8.3, §10 y §10.2. Sin glifos ni emoji. 44 px con puntero táctil.
+Decisions (05-10-2026, Frankz): «vamos con los paneles de Aliclik de la ficha»; alcance «Los tres paneles» (también cambia en Leads); forma «Pasos como el cobro» (discos numerados con la línea entre pasos; los bloqueos como avisos antes de los pasos); detalle «Opciones y vincular al pie» (cada transportadora es una tarjeta-opción con su precio, la más barata elegida; «Vincular una guía ya creada» plegado al pie de la tarjeta).
+
+## Direction contract (Aliclik)
+
+THESIS: Creating an Aliclik guide is an irreversible write with money on it, so the card reads like the cobro: three numbered steps that end in one blue button, and everything that can stop the write said above the steps before anyone presses. Refuses the card inside the card, the sky-blue accordion on top, the ⚠ glyphs, the radio list and the error said twice.
+
+OWN-WORLD: the ficha's section card on the canvas; `SectionHead` with the API health as a chapa; blockers as `Banner` (crit for duplicate and pin, warn for payment risk and Sunday pickup); the cobro's step discs and line; the figures frame for order and amount on `wash`; `OptionTile` per transportadora with the price tabular at the right; the fold at the bottom as an edge-to-edge zone.
+
+STORY: The operator sees whether Aliclik is up and whether anything blocks the guide; pastes the pin if missing and quotes; reads which order, how much the door collects, when they pick it up and where the pin lands; picks the transportadora and creates.
+
+FIRST VIEWPORT: the card head «Crear guía en Aliclik» with its health chapa and help; any blocker banners; step 1 with the location field and «Cotizar envío» as the card's primary until there is a quote.
+
+FORM: the cobro's stepper inside a Stripe detail section (the ficha's committed world), pinned by the user in words («Pasos como el cobro»); no roll and no seed key.
+
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance.

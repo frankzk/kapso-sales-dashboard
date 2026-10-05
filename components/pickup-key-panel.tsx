@@ -23,6 +23,7 @@ import {
   OpsButton,
   SectionHead,
   Skeleton,
+  Step,
   type BadgeTone,
 } from "@/components/ops-ui";
 import {
@@ -2229,60 +2230,6 @@ function VoucherForm({
         </Banner>
       )}
     </div>
-  );
-}
-
-/**
- * Un paso del registro: el disco con su número (o el visto cuando está hecho,
- * como el recorrido de la ficha), el título con su estado en chapa, la ayuda y
- * lo suyo debajo. La línea que baja al siguiente paso se pinta en tinta cuando
- * este ya está hecho.
- */
-function Step({
-  n,
-  title,
-  done,
-  badge,
-  help,
-  last = false,
-  children,
-}: {
-  n: number;
-  title: string;
-  done: boolean;
-  badge?: ReactNode;
-  help?: string;
-  last?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <li className={cn("relative pl-9", !last && "pb-6")}>
-      {!last && (
-        <span
-          aria-hidden="true"
-          className={cn("absolute bottom-0 left-[11px] top-7 w-px", done ? "bg-ink-500" : "bg-line-strong")}
-        />
-      )}
-      <span
-        aria-hidden="true"
-        className={cn(
-          "absolute left-0 top-0 grid size-6 place-items-center rounded-full text-xs font-semibold tabular-nums",
-          done ? "bg-ink-900 text-white" : "bg-white text-ink-600 ring-1 ring-inset ring-line-strong",
-        )}
-      >
-        {done ? <IconCheck className="size-3.5" strokeWidth={2.6} /> : n}
-      </span>
-      <div className="flex min-h-6 flex-wrap items-center gap-x-2 gap-y-1">
-        <h5 className="text-sm font-semibold text-ink-900">
-          <span className="sr-only">Paso {n}: </span>
-          {title}
-          {done && <span className="sr-only"> (hecho)</span>}
-        </h5>
-        {badge}
-      </div>
-      {help && <p className="mt-0.5 max-w-[68ch] text-[13px] leading-5 text-ink-500">{help}</p>}
-      <div className="mt-3 space-y-3">{children}</div>
-    </li>
   );
 }
 
