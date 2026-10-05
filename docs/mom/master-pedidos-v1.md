@@ -2640,6 +2640,17 @@ Se decide con la primera señal que sirva:
    queda Sin identificar.
 2. **El último pedido del mismo teléfono** (`order_master.coverage`, 0225),
    solo si lo propio no alcanza: lo que contestó hoy es más nuevo.
+3. **La dirección del cliente en Shopify** (`lead_shopify_locations`, 0228),
+   solo si tampoco compró antes. La base tiene todos los pedidos desde que
+   abrió cada tienda, pero no todos los carritos (los de Kenku empiezan el
+   06-05-2026), y cada carrito viejo dejó en Shopify un cliente con su
+   dirección. La sincronización busca por celular, con la conexión de la
+   tienda, a los leads de la cola sin ubicación ni pedido (30 por tienda y
+   corrida, los más nuevos primero, una vez por lead), y el reporte de la
+   corrida dice cuántos buscó y cuántos tenían dirección. Va en una tabla
+   aparte y no en el lead: un carrito de hace un año no es «dio su distrito»
+   (no cambia el segmento) y escribir en `leads` haría recargar la cola en
+   todas las pantallas.
 
 «Lima (departamento)» sin un distrito legible **no** se da por Provincia: de
 los pedidos con esa región de los últimos 120 días, 188 de 633 (30 %) resultaron

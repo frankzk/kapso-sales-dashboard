@@ -206,23 +206,37 @@ function coverageFromLocation(
 }
 
 /**
- * Cobertura del lead para la cola de llamadas.
+ * Cobertura del lead para la cola de llamadas. Primera señal que sirva:
  *
- * `priorCoverage` es la cobertura del último pedido del mismo teléfono
- * (`order_master.coverage`), o null si no compró antes. Solo decide cuando la
- * dirección del propio lead no dice nada: lo que contestó hoy es más nuevo.
+ * 1. Lo que dijo el propio lead (carrito, chat): es lo más nuevo.
+ * 2. `priorCoverage`: la cobertura del último pedido del mismo teléfono
+ *    (`order_master.coverage`), o null si no compró antes. Es una entrega real.
+ * 3. `shopifyAddress`: la dirección por defecto del cliente en Shopify (0228),
+ *    que suele venir de un carrito viejo que la base no tiene. Se lee con las
+ *    mismas reglas que la del lead.
  */
 export function leadCoverage(
   lead: LeadCoverageSignals,
   {
     priorCoverage = null,
+    shopifyAddress = null,
     overrides = [],
-  }: { priorCoverage?: string | null; overrides?: readonly DistrictCoverageRule[] } = {},
+  }: {
+    priorCoverage?: string | null;
+    shopifyAddress?: { province: string | null; city: string | null } | null;
+    overrides?: readonly DistrictCoverageRule[];
+  } = {},
 ): LeadCoverage {
   const own = coverageFromLocation(lead, overrides);
   if (own !== "sin_identificar") return own;
   if (priorCoverage === "lima") return "lima";
   if (priorCoverage === "provincia_cod" || priorCoverage === "agencia") return "provincia";
+  if (shopifyAddress) {
+    return coverageFromLocation(
+      { store_id: lead.store_id, province: shopifyAddress.province, district: shopifyAddress.city },
+      overrides,
+    );
+  }
   return "sin_identificar";
 }
 
