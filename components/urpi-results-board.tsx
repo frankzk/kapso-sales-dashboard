@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState, useTransition, type ReactNode } from "react";
-import { applyUrpiDeliveries, linkUrpiReportRow } from "@/app/dashboard/urpi/report-actions";
+import { applyUrpiDeliveries, linkUrpiReportRow, resolveUrpiObservation } from "@/app/dashboard/urpi/report-actions";
 import { URPI_RESULT_LABEL } from "@/lib/urpi-report";
 import type { UrpiBucket, UrpiShipment } from "@/lib/urpi-report-view";
 
@@ -30,14 +30,15 @@ const RESULT_TONE: Record<string, string> = {
 };
 
 const TABS: { key: UrpiBucket; label: string; help: string }[] = [
-  { key: "por_aplicar", label: "Entregados por marcar", help: "Urpi los entregó y Kapta todavía no lo sabe. Revisa y márcalos entregados: van al Master por la misma vía que la liquidación." },
+  { key: "por_aplicar", label: "Entregados por marcar", help: "Urpi los entregó y Kapta todavía no lo sabe. Revisa y márcalos entregados: van al Master por la misma vía que la liquidación, y su salida «Por definir» pasa a ser la salida de Urpi entregada." },
   { key: "cancelado", label: "Cancelados por Urpi", help: "Urpi los canceló y siguen abiertos en Kapta. Seguimiento Lima decide si se llaman, salen con otro courier o vuelven. Kapta no cambia su estado." },
   { key: "reprogramado", label: "Reprogramados", help: "Urpi los reintenta el siguiente día de lunes a sábado desde la fecha del reporte." },
-  { key: "por_vincular", label: "Por vincular", help: "El teléfono no lleva a un único pedido. Elige el pedido o escribe su código: se vincula todo el envío." },
-  { key: "observacion", label: "Observaciones", help: "Urpi dice entregado, pero Kapta los tiene anulados o devueltos. Nunca se marcan solos: revísalos uno a uno." },
+  { key: "por_vincular_entregado", label: "Por vincular – entregados", help: "Urpi los entregó, pero el teléfono no lleva a un único pedido. Elige el pedido o escribe su código: se vincula todo el envío y pasa a «Entregados por marcar»." },
+  { key: "por_vincular_otro", label: "Por vincular – otros", help: "Cancelados, reprogramados o en curso cuyo teléfono no lleva a un único pedido. Elige el pedido o escribe su código: se vincula todo el envío." },
+  { key: "observacion", label: "Observaciones", help: "Urpi entregó y cobró, pero el pedido está anulado en Shopify o devuelto. No se marca entregado: solo Shopify termina una venta. Si se rehízo el pedido en Shopify, vincúlalo al nuevo; si no, ciérrala con el motivo (queda en la actividad del pedido)." },
   { key: "no_reconocido", label: "Estado no reconocido", help: "Urpi escribió un estado que Kapta no conoce. Se guarda tal cual y no se interpreta." },
   { key: "en_curso", label: "En curso", help: "Programados o en coordinación con Urpi." },
-  { key: "al_dia", label: "Al día", help: "Kapta ya los tiene entregados, anulados o devueltos." },
+  { key: "al_dia", label: "Al día", help: "Kapta ya los tiene entregados, anulados o devueltos, o la observación se cerró con motivo." },
 ];
 
 export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastImport, shipments }: Props) {
@@ -55,6 +56,10 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [codes, setCodes] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  // Entregados ya marcados cuya caja sigue «Por definir» (marcados antes de que
+  // existiera el relleno): se completan con el mismo botón.
+  const salidaPending = useMemo(() => shipments.filter((shipment) => shipment.latest.result_code === "entregado" && shipment.order?.salida_pending).map((shipment) => shipment.order!.order_id), [shipments]);
   const fileInput = useRef<HTMLInputElement>(null);
   const busy = pending || uploading;
 
@@ -111,6 +116,10 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
       <h2 className="font-semibold text-slate-900">Todavía no hay resultados de Urpi</h2>
       <p className="mt-2 text-sm text-slate-600">{canImport ? "Carga el export de «Reporte del mes – detallado» para empezar." : "Pide a quien gestiona Urpi que cargue su reporte."}</p>
     </div> : <>
+      {salidaPending.length > 0 && <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+        <span>{salidaPending.length} pedido(s) entregados por Urpi siguen con su salida «Por definir» pendiente, y la mesa de cierre los ve como «Salida adicional activa».</span>
+        {canApply && <button className={button} disabled={busy} onClick={() => run(() => applyUrpiDeliveries(orgId, salidaPending))}>{pending ? "Actualizando…" : "Pasar a salida de Urpi entregada"}</button>}
+      </div>}
       <div role="tablist" aria-label="Resultados de Urpi" className="flex flex-wrap gap-2">
         {TABS.filter((item) => counts.get(item.key) || item.key === "por_aplicar").map((item) => <button key={item.key} role="tab" aria-selected={tab === item.key}
           onClick={() => { setTab(item.key); setPage(0); setSelected(new Set()); }}
@@ -133,7 +142,7 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
         <table className="w-full min-w-[1000px] text-left text-sm"><thead className="bg-slate-50 text-xs text-slate-500"><tr>
           {tab === "por_aplicar" && canApply && <th className="w-10 px-4 py-3"><span className="sr-only">Seleccionar</span></th>}
-          {["Último intento", "Pedido", "Destinatario", "Resultado de Urpi", tab === "por_aplicar" || tab === "observacion" ? "Cobro" : "Detalle", "En Kapta"].map((title) => <th key={title} className="px-4 py-3 font-medium">{title}</th>)}
+          {["Último intento", "Pedido", "Destinatario", "Resultado de Urpi", COBRO_TABS.has(tab) ? "Cobro" : "Detalle", "En Kapta"].map((title) => <th key={title} className="px-4 py-3 font-medium">{title}</th>)}
         </tr></thead>
           <tbody className="divide-y divide-slate-100">{pageRows.map((shipment) => {
             const { latest, order } = shipment;
@@ -155,14 +164,24 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
                 {data.reason && <div className="text-xs text-slate-600">{data.reason}</div>}
                 <Attempts shipment={shipment} />
               </td>
-              <td className="max-w-80 px-4 py-3 text-xs">{(tab === "por_aplicar" || tab === "observacion") ? <div className="space-y-0.5">
+              <td className="max-w-80 px-4 py-3 text-xs">{COBRO_TABS.has(tab) ? <div className="space-y-0.5">
                   <div>{data.paymentMethod ?? "Sin método"}{data.amountCollected !== null ? ` · ${money(data.amountCollected)}` : ""}</div>
                   {data.serviceFee !== null && <div className="text-slate-500">Servicio Urpi: {money(data.serviceFee)}</div>}
                   {shipment.amountGap !== null && Math.abs(shipment.amountGap) > 0.5 && <div className="text-amber-800">Total en Kapta {money(order?.order_total ?? 0)} · diferencia {shipment.amountGap > 0 ? "+" : "−"}{money(Math.abs(shipment.amountGap))}</div>}
                   <Evidence urls={data.evidence} />
                 </div>
                 : <><p className="line-clamp-3 whitespace-pre-wrap text-slate-600">{data.detail ?? "Sin detalle"}</p><Evidence urls={data.evidence} /></>}</td>
-              <td className="px-4 py-3 text-xs">{order ? <><div className="font-medium text-slate-800">{GENERAL_LABEL[order.general_status] ?? order.general_status}</div><div className="text-slate-500">{order.stage_label}</div></> : <span className="text-slate-500">—</span>}</td>
+              <td className="max-w-72 px-4 py-3 text-xs">{order ? <>
+                <div className="font-medium text-slate-800">{GENERAL_LABEL[order.general_status] ?? order.general_status}</div><div className="text-slate-500">{order.stage_label}</div>
+                {shipment.annulledOnlyInKapta && <div className="mt-1 text-amber-800">Anulado solo en Kapta; en Shopify sigue vivo, así que se puede marcar.</div>}
+                {shipment.bucket === "observacion" && <div className="mt-1 text-amber-800">{order.cancelled_at ? `Anulado en Shopify el ${timeLabel(order.cancelled_at).split(",")[0]}` : "Devuelto en Kapta"}{latest.report_date ? `; Urpi lo entregó el ${dateLabel(latest.report_date)}` : ""}.</div>}
+                {shipment.bucket === "al_dia" && order.observation_resolved && <div className="mt-1 text-slate-600">Observación cerrada: {order.observation_resolved.note}</div>}
+                {shipment.bucket === "observacion" && canImport && <ObservationActions busy={busy} note={notes[shipment.key] ?? ""} code={codes[shipment.key] ?? ""}
+                  onNote={(value) => setNotes((prev) => ({ ...prev, [shipment.key]: value }))}
+                  onCode={(value) => setCodes((prev) => ({ ...prev, [shipment.key]: value }))}
+                  onResolve={(note) => run(() => resolveUrpiObservation(orgId, order.order_id, note))}
+                  onRelink={(ref) => run(() => linkUrpiReportRow(orgId, latest.urpi_row, ref))} />}
+              </> : <span className="text-slate-500">—</span>}</td>
             </tr>;
           })}</tbody>
         </table>
@@ -170,7 +189,26 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
       </div>
       <div className="flex items-center justify-between text-sm text-slate-500"><span>{visible.length ? page * 50 + 1 : 0}–{Math.min((page + 1) * 50, visible.length)} de {visible.length}</span><div className="flex gap-2"><button className={button} disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Anterior</button><button className={button} disabled={(page + 1) * 50 >= visible.length} onClick={() => setPage((value) => value + 1)}>Siguiente</button></div></div>
     </>}
-    <p className="border-t border-slate-200 pt-4 text-xs text-slate-500">Urpi no envía el código de pedido: el vínculo se hace por teléfono con un único pedido de los 45 días previos al envío; con varios, decides tú. Marcar entregados exige permiso para editar el Master. Cancelados y reprogramados quedan registrados y no cambian el estado del pedido.</p>
+    <p className="border-t border-slate-200 pt-4 text-xs text-slate-500">Urpi no envía el código de pedido: el vínculo se hace por teléfono con un único pedido de los 45 días previos al envío; con varios, decides tú. Marcar entregados exige permiso para editar el Master y convierte la salida «Por definir» del pedido en la salida de Urpi entregada. Cancelados y reprogramados quedan registrados y no cambian el estado del pedido.</p>
+  </div>;
+}
+
+/** Listas donde lo que importa es lo que cobró Urpi, no el detalle del intento. */
+const COBRO_TABS = new Set<UrpiBucket>(["por_aplicar", "observacion", "por_vincular_entregado"]);
+
+function ObservationActions({ busy, note, code, onNote, onCode, onResolve, onRelink }: {
+  busy: boolean; note: string; code: string; onNote: (value: string) => void; onCode: (value: string) => void;
+  onResolve: (note: string) => void; onRelink: (ref: string) => void;
+}) {
+  return <div className="mt-2 space-y-2">
+    <form className="flex gap-1" onSubmit={(e) => { e.preventDefault(); if (code.trim()) onRelink(code); }}>
+      <input className="h-8 w-28 rounded border border-slate-300 px-2 text-xs" placeholder="KP12345" aria-label="Código del pedido rehecho en Shopify" value={code} onChange={(e) => onCode(e.target.value.toUpperCase())} />
+      <button disabled={busy || !code.trim()} className="rounded border border-slate-300 px-2 text-xs disabled:opacity-50">Vincular a otro</button>
+    </form>
+    <form className="space-y-1" onSubmit={(e) => { e.preventDefault(); if (note.trim().length >= 5) onResolve(note); }}>
+      <textarea rows={2} className="w-full rounded border border-slate-300 px-2 py-1 text-xs" placeholder="Motivo: p. ej. anulado por error; se cobra en la liquidación de Urpi" aria-label="Motivo para cerrar la observación" value={note} onChange={(e) => onNote(e.target.value)} />
+      <button disabled={busy || note.trim().length < 5} className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-50">Cerrar con motivo</button>
+    </form>
   </div>;
 }
 

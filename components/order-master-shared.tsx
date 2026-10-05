@@ -587,6 +587,7 @@ export const TIMELINE_LABEL: Record<string, string> = {
   route_output_cancelled: "Salida anulada",
   olva_tracking_linked: "Tracking de Olva registrado",
   route_output_filled: "Courier decidido sobre la salida",
+  urpi_observation_resolved: "Observación de Urpi cerrada",
   dispatched: "Pedido despachado",
   out_for_delivery: "Salida a reparto",
   attempt_failed: "Intento fallido",

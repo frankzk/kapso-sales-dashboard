@@ -74,9 +74,9 @@ describe("envíos de Urpi y lo que Kapta ya sabe", () => {
     expect(shipment).toMatchObject({ bucket: "por_aplicar", amountGap: 10 });
     expect(shipment!.attempts.map((a) => a.urpi_row)).toEqual([1, 2]);
   });
-  it("entregado por Urpi pero anulado o devuelto en Kapta → observación; ya entregado → al día", () => {
+  it("entregado por Urpi pero anulado en Shopify o devuelto → observación; ya entregado → al día", () => {
     const delivered = [stored(1, { result_code: "entregado" })];
-    expect(buildUrpiShipments(delivered, new Map([["o1", fact("o1", { general_status: "anulado" })]]))[0]!.bucket).toBe("observacion");
+    expect(buildUrpiShipments(delivered, new Map([["o1", fact("o1", { general_status: "anulado", cancelled_at: "2026-10-02T00:00:00Z" })]]))[0]!.bucket).toBe("observacion");
     expect(buildUrpiShipments(delivered, new Map([["o1", fact("o1", { cancelled_at: "2026-10-02T00:00:00Z" })]]))[0]!.bucket).toBe("observacion");
     expect(buildUrpiShipments(delivered, new Map([["o1", fact("o1", { general_status: "devuelto" })]]))[0]!.bucket).toBe("observacion");
     expect(buildUrpiShipments(delivered, new Map([["o1", fact("o1", { general_status: "entregado" })]]))[0]!.bucket).toBe("al_dia");
@@ -94,8 +94,22 @@ describe("envíos de Urpi y lo que Kapta ya sabe", () => {
     ];
     const shipments = buildUrpiShipments(rows, new Map([["o1", fact("o1")], ["o2", fact("o2")]]));
     expect(shipments).toHaveLength(1);
-    expect(shipments[0]).toMatchObject({ key: "cadena:1", bucket: "por_vincular" });
+    expect(shipments[0]).toMatchObject({ key: "cadena:1", bucket: "por_vincular_otro" });
     expect(shipments[0]!.candidates.map((c) => c.order_id)).toEqual(["o1", "o2"]);
+  });
+  it("por vincular se parte: lo que Urpi ya entregó va aparte", () => {
+    const row = stored(1, { order_id: null, store_id: null, link_status: "sin_pedido", result_code: "entregado" });
+    expect(buildUrpiShipments([row], new Map())[0]!.bucket).toBe("por_vincular_entregado");
+  });
+  it("anulado solo en Kapta (Shopify vivo) no es observación: se puede marcar", () => {
+    const [shipment] = buildUrpiShipments([stored(1, { result_code: "entregado" })], new Map([["o1", fact("o1", { general_status: "anulado" })]]));
+    expect(shipment).toMatchObject({ bucket: "por_aplicar", annulledOnlyInKapta: true });
+  });
+  it("una observación cerrada con motivo sale de la lista; un intento posterior la reabre", () => {
+    const closed = fact("o1", { general_status: "anulado", cancelled_at: "2026-10-02T00:00:00Z", observation_resolved: { urpiRow: 1, note: "Anulado por error", at: "2026-10-05T00:00:00Z" } });
+    expect(buildUrpiShipments([stored(1, { result_code: "entregado" })], new Map([["o1", closed]]))[0]!.bucket).toBe("al_dia");
+    const later = [stored(1, { result_code: "reprogramado" }), stored(2, { result_code: "entregado" })];
+    expect(buildUrpiShipments(later, new Map([["o1", closed]]))[0]!.bucket).toBe("observacion");
   });
   it("un estado que Kapta no reconoce queda aparte", () => {
     expect(buildUrpiShipments([stored(1, { result_code: "otro" })], new Map([["o1", fact("o1")]]))[0]!.bucket).toBe("no_reconocido");
