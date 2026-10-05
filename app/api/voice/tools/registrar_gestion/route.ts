@@ -18,7 +18,7 @@ import { after, NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { discardRecovery } from "@/lib/recovery-discard";
-import { pickOpenCall, translateGestion, voiceDates } from "@/lib/voice-recovery";
+import { callsForEngine, pickOpenCall, translateGestion, voiceDates } from "@/lib/voice-recovery";
 import {
   crearSalidaSwaypDelAgente,
   loadCall,
@@ -26,6 +26,7 @@ import {
   openCalls,
   readToolBody,
   voiceToolAuthorized,
+  voiceToolEngine,
   writeVoiceAttempt,
 } from "@/lib/voice-recovery-server";
 
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
   const admin = createAdminSupabase();
   const now = new Date();
 
-  const picked = pickOpenCall(await openCalls(admin), "in_progress", {
+  const picked = pickOpenCall(callsForEngine(await openCalls(admin), voiceToolEngine(req.headers)), "in_progress", {
     now,
     agentNumber: body.agente ?? null,
     customerPhone: body.numero_cliente ?? null,

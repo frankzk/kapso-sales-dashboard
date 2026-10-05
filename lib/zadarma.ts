@@ -28,7 +28,7 @@
 // con la query ordenada por clave y codificada como `http_build_query` de PHP
 // (RFC 1738: espacio → «+»).
 
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 export const ZADARMA_API_BASE = "https://api.zadarma.com";
 
@@ -156,4 +156,55 @@ export async function requestCallback(
     };
   }
   return { ok: true, response: body, from: built.params.from, to: built.params.to };
+}
+
+// ── Avisos de la centralita (webhook) ───────────────────────────────────────
+//
+// Zadarma avisa los pasos de cada llamada por POST (formulario) a la URL de
+// «Notificaciones» de la centralita. Firma de su librería oficial
+// (zadarma/user-api-v1, lib/Webhook/*.php y Client::encodeSignature):
+//
+//   Signature = base64( hex( hmac_sha1( cadena, secret ) ) )
+//
+// con la cadena según el evento:
+//   NOTIFY_START, NOTIFY_END          → caller_id + called_did + call_start
+//   NOTIFY_OUT_START, NOTIFY_OUT_END  → internal + destination + call_start
+//
+// Al guardar la URL, Zadarma la verifica con `?zd_echo=<x>` y espera `<x>`.
+
+export const ZADARMA_END_EVENTS = new Set(["NOTIFY_END", "NOTIFY_OUT_END"]);
+
+/** La cadena firmada de un aviso, o null si el evento no se maneja. */
+export function zadarmaNotifyString(p: Record<string, string>): string | null {
+  switch (p.event) {
+    case "NOTIFY_START":
+    case "NOTIFY_END":
+      return `${p.caller_id ?? ""}${p.called_did ?? ""}${p.call_start ?? ""}`;
+    case "NOTIFY_OUT_START":
+    case "NOTIFY_OUT_END":
+      return `${p.internal ?? ""}${p.destination ?? ""}${p.call_start ?? ""}`;
+    default:
+      return null;
+  }
+}
+
+export function zadarmaNotifySignature(str: string, secret: string): string {
+  const hex = createHmac("sha1", secret).update(str, "utf8").digest("hex");
+  return Buffer.from(hex, "utf8").toString("base64");
+}
+
+/** ¿El aviso viene firmado por la cuenta? Un evento que no se maneja, no. */
+export function zadarmaNotifyValid(p: Record<string, string>, signature: string | null, secret: string): boolean {
+  const str = zadarmaNotifyString(p);
+  if (str === null || !signature || !secret) return false;
+  const want = Buffer.from(zadarmaNotifySignature(str, secret));
+  const got = Buffer.from(signature.trim());
+  return want.length === got.length && timingSafeEqual(want, got);
+}
+
+/** Los teléfonos de un aviso, en el formato de la cuenta: el de la clienta está entre ellos. */
+export function zadarmaNotifyPhones(p: Record<string, string>): string[] {
+  return [p.destination, p.caller_id, p.called_did]
+    .map((x) => zadarmaLocalPeru(x))
+    .filter((x): x is string => Boolean(x));
 }
