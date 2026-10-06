@@ -42,7 +42,11 @@ export interface ShalomTrackingSnapshot {
   at: string | null;
   /** Hay una incidencia de demora declarada por Shalom. */
   delayed: boolean;
-  /** Fecha del hito `destino`: cuándo llegó a la agencia donde se recoge. */
+  /**
+   * Fecha del hito `destino`: cuándo llegó a la agencia donde se recoge. Ojo:
+   * Shalom la mueve mientras el paquete sigue ahí, así que no dice desde cuándo
+   * está. Para contar días en la agencia, ver `shalomFirstArrival`.
+   */
   arrivedAt: string | null;
 }
 
@@ -69,7 +73,7 @@ export function readShalomTracking(status: ShalomTrackingStatus | null | undefin
   if (entregado) {
     // La entrega en agencia es un recojo del cliente, y ese es el estado
     // operativo que el equipo espera ver en el flujo de Shalom (§10). Salvo
-    // cuando no pudo serlo: ver `shalomExitIsReturn`.
+    // cuando no pudo serlo: ver `shalomExitReturnDays`.
     return { deliveryStatus: "entregado", pickupState: "recogido", at: entregado, delayed, arrivedAt };
   }
 
@@ -111,9 +115,17 @@ export function readShalomTracking(status: ShalomTrackingStatus | null | undefin
 //
 // Medido sobre los «recogido» de Shalom de 75 días: 48 salieron de la agencia
 // sin que la clave se revelara ni se enviara nunca, sin el saldo pagado y tras
-// 15 a 41 días en ella, en tandas de minuto a minuto (22/09 a las 10:25, 10:26
-// y 10:27, por ejemplo). Sin clave la clienta no puede recoger, así que eran
+// 15 a 41 días en ella, en tandas de minuto a minuto (22/09 a las 15:25, 15:26
+// y 15:27, por ejemplo). Sin clave la clienta no puede recoger, así que eran
 // retornos. Los recojos reales sin pago completo salieron a los 1-7 días.
+//
+// LA LLEGADA QUE CUENTA ES LA PRIMERA (05-10-2026). Shalom mueve la fecha de
+// `destino` mientras el paquete sigue en la agencia: la de la última respuesta
+// no dice desde cuándo está ahí. Contando con ella, la regla dejó pasar 7
+// retornos el 03/10 y el 05/10 —llevaban 36 a 40 días y Shalom decía menos de
+// 8—, y los dos que sí detectó los contó en 10 y 8 días cuando llevaban 37 y
+// 38. La primera llegada ya está en la línea de tiempo: es el
+// `disponible_para_recojo` que el rastreo escribió ese día.
 // ---------------------------------------------------------------------------
 
 /**
@@ -132,13 +144,19 @@ export interface ShalomExitFacts {
   keyGiven: boolean;
   /** Hay rastro de cobro: el mismo criterio que la alerta de cobro del Master. */
   collected: boolean;
+  /**
+   * La primera vez que esta guía quedó en la agencia según la línea de tiempo,
+   * o null si el rastreo nunca la vio llegar.
+   */
+  firstArrivalAt: string | null;
 }
 
 function shalomInstant(fecha: string | null): number | null {
   if (!fecha) return null;
-  // Shalom fecha como «2026-04-16 11:40:45», sin zona. Las dos fechas que se
-  // restan vienen de la misma respuesta y con el mismo formato, así que basta
-  // leerlas igual: sin zona, las dos como UTC.
+  // Shalom fecha como «2026-04-16 11:40:45», sin zona. Las fechas que se restan
+  // salen todas de Shalom: de la misma respuesta, o la llegada que el rastreo
+  // guardó tal cual en la línea de tiempo y que la base devuelve con `+00:00`.
+  // Basta leerlas igual: sin zona, como UTC.
   let iso = fecha.trim().replace(" ", "T");
   if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) iso += "T00:00:00";
   const zoned = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(iso);
@@ -155,20 +173,38 @@ export function shalomDaysAtAgency(snapshot: Pick<ShalomTrackingSnapshot, "arriv
 }
 
 /**
- * ¿Este `entregado` es el retorno y no un recojo?
+ * Desde cuándo está el paquete en la agencia: la más antigua entre la llegada
+ * que quedó en la línea de tiempo y la que manda Shalom ahora. Una fecha que no
+ * se puede leer no cuenta.
+ */
+export function shalomFirstArrival(shalomSays: string | null, timeline: string | null): string | null {
+  const said = shalomInstant(shalomSays);
+  const seen = shalomInstant(timeline);
+  if (seen == null) return said == null ? null : shalomSays;
+  if (said == null) return timeline;
+  return seen < said ? timeline : shalomSays;
+}
+
+/**
+ * ¿Este `entregado` es el retorno y no un recojo? Si lo es, devuelve los días
+ * que el paquete pasó en la agencia —la prueba que queda en la línea de
+ * tiempo—; si no, null.
  *
  * Todas a la vez, y cada una cierra una puerta distinta:
  *   - Tiene clave y nunca se dio: sin ella no se recoge en el mostrador. Sin
  *     clave registrada no hay nada que lo pruebe, y se respeta lo que dice Shalom.
  *   - No está cobrado: a quien pagó se le libera la clave.
- *   - Pasó `SHALOM_RETURN_MIN_DAYS` o más en la agencia. Si la llegada no consta,
- *     no se adivina.
+ *   - Pasó `SHALOM_RETURN_MIN_DAYS` o más en la agencia, contados desde la
+ *     PRIMERA llegada. Si ninguna llegada consta, no se adivina.
  */
-export function shalomExitIsReturn(snapshot: ShalomTrackingSnapshot, facts: ShalomExitFacts): boolean {
-  if (snapshot.deliveryStatus !== "entregado") return false;
-  if (!facts.hasKey || facts.keyGiven || facts.collected) return false;
-  const days = shalomDaysAtAgency(snapshot);
-  return days != null && days >= SHALOM_RETURN_MIN_DAYS;
+export function shalomExitReturnDays(snapshot: ShalomTrackingSnapshot, facts: ShalomExitFacts): number | null {
+  if (snapshot.deliveryStatus !== "entregado") return null;
+  if (!facts.hasKey || facts.keyGiven || facts.collected) return null;
+  const days = shalomDaysAtAgency({
+    arrivedAt: shalomFirstArrival(snapshot.arrivedAt, facts.firstArrivalAt),
+    at: snapshot.at,
+  });
+  return days != null && days >= SHALOM_RETURN_MIN_DAYS ? days : null;
 }
 
 /** Lo que el cron escribe en la guía y en la línea de tiempo por un hito. */
@@ -189,14 +225,18 @@ export interface ShalomGuideWrite {
 }
 
 /**
- * La escritura de un hito. Un retorno no es un recojo: la guía original muere
- * (`anulado`, y el cron deja de preguntar por ella) y la caja viene de vuelta
- * (`retorno`), así que el pedido pasa a «Por cerrar · Devolución física
- * pendiente» y se espera en Devoluciones hasta que alguien la escanee.
+ * La escritura de un hito. `returnDays` son los días en la agencia cuando el
+ * `entregado` es el retorno (`shalomExitReturnDays`), y null en cualquier otro
+ * caso.
+ *
+ * Un retorno no es un recojo: la guía original muere (`anulado`, y el cron deja
+ * de preguntar por ella) y la caja viene de vuelta (`retorno`), así que el
+ * pedido pasa a «Por cerrar · Devolución física pendiente» y se espera en
+ * Devoluciones hasta que alguien la escanee.
  */
-export function shalomGuideWrite(snapshot: ShalomTrackingSnapshot, isReturn: boolean): ShalomGuideWrite {
+export function shalomGuideWrite(snapshot: ShalomTrackingSnapshot, returnDays: number | null): ShalomGuideWrite {
   const demora = snapshot.delayed ? " (con demora declarada)" : "";
-  if (!isReturn) {
+  if (returnDays == null) {
     return {
       patch: {
         delivery_status: snapshot.deliveryStatus,
@@ -211,7 +251,6 @@ export function shalomGuideWrite(snapshot: ShalomTrackingSnapshot, isReturn: boo
       },
     };
   }
-  const days = shalomDaysAtAgency(snapshot);
   return {
     patch: {
       delivery_status: "anulado",
@@ -224,9 +263,9 @@ export function shalomGuideWrite(snapshot: ShalomTrackingSnapshot, isReturn: boo
       new_status: "anulado",
       new_operational: "retorno_iniciado",
       note:
-        `Shalom: retorno_iniciado${demora}. Lo dio por «entregado» tras ${days} días en la agencia, ` +
+        `Shalom: retorno_iniciado${demora}. Lo dio por «entregado» tras ${returnDays} días en la agencia, ` +
         "sin que la clienta tuviera la clave ni pagara el saldo: es el retorno (cambio de destino), no un recojo.",
-      payload: { shalom_dice: "entregado", dias_en_agencia: days, regla: "retorno_sin_clave" },
+      payload: { shalom_dice: "entregado", dias_en_agencia: returnDays, regla: "retorno_sin_clave" },
     },
   };
 }
