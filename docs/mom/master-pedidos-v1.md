@@ -5090,7 +5090,7 @@ pago completo», la alerta crítica de cobro, por un paquete que venía de vuelt
   la tenía como recogida. Medido sobre los «recogido» de Shalom de 75 días:
   **48** salieron de la agencia sin que la clave se revelara ni se enviara
   nunca, sin el saldo pagado y tras **15 a 41 días** en ella, en tandas de minuto
-  a minuto —el 22/09 a las 10:25, 10:26 y 10:27, por ejemplo—. Sin clave no se
+  a minuto —el 22/09 a las 15:25, 15:26 y 15:27, por ejemplo—. Sin clave no se
   recoge en el mostrador: eran retornos. Los 10 recojos reales con saldo
   pendiente salieron a los **1-7 días**, y en 9 de ellos alguien había revelado
   la clave.
@@ -5099,27 +5099,40 @@ pago completo», la alerta crítica de cobro, por un paquete que venía de vuelt
      (`key_view`) ni se envió (`key_shared`, `pickup_key_shares`);
   2. no hay rastro de cobro, con el **mismo** criterio que la alerta
      `recogido_sin_pago_completo` (§6.5);
-  3. pasaron **8 días o más** entre la llegada a la agencia (hito `destino`) y
-     la salida.
+  3. pasaron **8 días o más** entre la **primera** llegada a la agencia y la
+     salida. La primera llegada es la más antigua entre el
+     `disponible_para_recojo` de esa guía en la línea de tiempo y el hito
+     `destino` de la respuesta.
 
-  Sin clave registrada o sin fecha de llegada no se adivina: se respeta el
-  recojo y la alerta sigue encendida para que una persona lo mire.
+  Sin clave registrada o sin ninguna fecha de llegada no se adivina: se respeta
+  el recojo y la alerta sigue encendida para que una persona lo mire.
+- **La llegada que cuenta es la primera (05-10-2026).** Shalom mueve la fecha de
+  `destino` mientras el paquete sigue en la agencia: la que trae la respuesta
+  del `entregado` no dice desde cuándo está ahí. Contando con ella, la primera
+  versión de la regla dejó pasar **7 retornos** el 03/10 y el 05/10 —llevaban
+  36 a 40 días en la agencia y Shalom decía menos de 8—, y los dos que sí
+  detectó (#KP130021 y #KP129758) los contó en 10 y 8 días cuando llevaban 37 y
+  38. La llegada se toma de la línea de tiempo: el `disponible_para_recojo` que
+  el rastreo escribió **para esa guía**. Un reenvío con otra guía no hereda los
+  días de la primera, y una corrección manual (`status_override`) no trae guía
+  ni es la llegada física.
 - **Qué se escribe.** La guía queda `anulado` —terminal: el rastreo deja de
   preguntar por ella—, con `pickup_state = retorno_iniciado`, custodia `retorno`
   y `closed_at` en la fecha de salida, y su `courier_status` en la línea de
   tiempo dice por qué y cuántos días estuvo en la agencia. El pedido pasa a
   «Por cerrar · Devolución física pendiente» y la caja se espera en
   **Devoluciones** (§9.4).
-- **Falla cerrado.** Si no se pueden leer la clave o el cobro, no se escribe
-  nada: la guía sigue viva y la pasada siguiente lo reintenta. «No pude leer la
-  clave» no es «no hay clave».
+- **Falla cerrado.** Si no se pueden leer la clave, el cobro o la llegada, no
+  se escribe nada: la guía sigue viva y la pasada siguiente lo reintenta. «No
+  pude leer la clave» no es «no hay clave».
 - **De la clave solo se pregunta si existe.** Nunca se lee `key_enc`.
 - Costo asumido: un recojo real con la clave dictada por fuera de Kapta, sin
   revelarla en pantalla, sin cobro y tras 8 días en la agencia se leería como
   retorno. Esa caja nunca llegaría a Devoluciones y se quedaría «por recibir»:
   ahí se ve.
-- Lo leído antes de esta regla no se corrige solo: esas guías ya están
-  `entregado` y el rastreo no vuelve a preguntar por ellas.
+- Lo leído antes de esta regla —y lo que su primera versión dejó pasar entre el
+  03/10 y el 05/10— no se corrige solo: esas guías ya están `entregado` y el
+  rastreo no vuelve a preguntar por ellas.
 
 Contingencia cuando la creación por API o Shalom Pro está degradada:
 
