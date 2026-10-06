@@ -582,7 +582,7 @@ export type BlockedReason =
   // sacar dice por qué, en vez de desaparecer de la cola (`lib/gf-retry.ts`:
   // `reprogramBlockReason` y `ownRetryDecision`).
   | "otra_salida_viva"
-  | "varias_salidas_vivas"
+  | "revisar_salidas"
   | "salida_devuelta"
   | "caja_sin_reporte"
   | "fuera_de_oficina"
@@ -595,7 +595,7 @@ export const BLOCKED_REASON_LABEL: Record<BlockedReason, { label: string; fix: "
   tarifa_faltante: { label: "Tarifa faltante para el distrito", fix: "tarifario" },
   servicio_pausado: { label: "Servicio pausado en el distrito", fix: "tarifario" },
   otra_salida_viva: { label: "Otra salida sigue viva: la lleva su courier", fix: "pedido" },
-  varias_salidas_vivas: { label: "Más de una salida viva de Grupo GF: revísalas en la ficha", fix: "pedido" },
+  revisar_salidas: { label: "Sus salidas de Grupo GF no se pueden reusar tal cual: revísalas en la ficha", fix: "pedido" },
   salida_devuelta: { label: "Su salida ya volvió al almacén (devuelta)", fix: "pedido" },
   caja_sin_reporte: { label: "En una caja sin «No entregado» de esa caja", fix: "despacho" },
   fuera_de_oficina: { label: "El paquete no consta en la oficina ni en una caja", fix: "despacho" },

@@ -8322,7 +8322,8 @@ Decisión del owner (06-10-2026):
   tomar y al escanear:
   - «Otra salida sigue viva: la lleva su courier» —una reprogramación de
     Aliclik, por ejemplo—.
-  - «Más de una salida viva de Grupo GF: revísalas en la ficha».
+  - «Sus salidas de Grupo GF no se pueden reusar tal cual: revísalas en la
+    ficha» (más de una viva, una en ruta, o junto a una entregada).
   - «Su salida ya volvió al almacén (devuelta)»: el rechazo que la 0189 recibió
     como devuelto. Todavía no tiene camino desde la lista (0 casos el
     05-10-2026).
@@ -8336,12 +8337,22 @@ Decisión del owner (06-10-2026):
   armar otra caja para el mismo paquete.
 - «Asignar» cuenta y asigna solo lo asignable: un «No entregado» que sigue en
   una caja se recibe en oficina primero, y si no había nada asignable se dice.
+- Si la salida cambia entre la lectura y la toma (se anuló o salió), la
+  solicitud recién creada se deshace: no queda una «observada» sin salida.
+- Una solicitud de Grupo GF cancelada antes ya no se cuenta como «ya estaba
+  tomado»: la clave de idempotencia (`kapta:proveedor:pedido`, 0138) choca
+  también con ella, y ahora se dice que no se puede volver a tomar desde aquí.
 - Asignar a una caja exige la salida `pendiente`: una anulada o entregada no
   entra (`assignRouteCore`).
 - Asignado a una caja, el pedido deja «Por reprogramar Lima» como cualquier
   reintento de Grupo GF (`dispatch_route_assigned` es movimiento para
   `gfAwaitingRetry`). El resolver no cambia y la versión **no sube**
-  (`mom-v1.23`).
+  (`mom-v1.23`). **Pendiente:** con `rider_pickup_mode` en `confirmar` o
+  `ninguno` (hoy `exigir`), la custodia pasa al asignar y `gfRiderSignal` sigue
+  leyendo el «No entregado» anterior: el pedido se vería en «Por reprogramar
+  Lima» hasta el «Lo llevo» (`confirmar`) o el reporte de la parada
+  (`ninguno`). Antes de cambiar de modo hay que contar la asignación como
+  reinicio en `gfRiderSignal`, como ya hace `returned_to_office`.
 
 Con la foto del 05-10-2026, la tarjeta pasa de 277 a 329 (los 45 por asignar y
 7 por recibir en oficina) y los 7 restantes del Master se ven en «Sin

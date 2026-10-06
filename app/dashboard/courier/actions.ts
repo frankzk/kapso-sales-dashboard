@@ -1314,7 +1314,19 @@ async function takeOrdersCore(
         .single();
       if (requestInsert.error) {
         if (requestInsert.error.code === "23505") {
-          alreadyAccepted.push(orderId);
+          // Dos pestañas a la vez: la otra ya lo tomó. Pero la clave de
+          // idempotencia (`kapta:proveedor:pedido`) también choca con una
+          // solicitud CANCELADA, y eso no es «ya estaba tomado».
+          const { data: live } = await admin
+            .from("logistics_requests")
+            .select("id")
+            .eq("order_id", orderId)
+            .eq("provider_id", check.providerId)
+            .neq("status", "cancelled")
+            .limit(1)
+            .maybeSingle();
+          if (live) alreadyAccepted.push(orderId);
+          else failed.push({ orderId, error: "Este pedido ya tuvo una solicitud de Grupo GF que se canceló: no se puede volver a tomar desde aquí." });
           continue;
         }
         failed.push({ orderId, error: requestInsert.error.message });
@@ -1372,6 +1384,15 @@ async function takeOrdersCore(
         created_via: "grupo_gf_courier",
       }, { createIfMissing: mayCreateOutput, forceNew: Boolean(review) });
       if ("error" in write) {
+        if (own) {
+          // La salida cambió entre la lectura y la escritura (se anuló o
+          // salió). La solicitud se creó en esta misma llamada y todavía no
+          // tiene salida ni eventos: se deshace para que el pedido no quede
+          // tras una «observada» que nadie puede corregir.
+          await admin.from("logistics_requests").delete().eq("id", requestId).eq("status", "accepting");
+          failed.push({ orderId, error: write.error });
+          continue;
+        }
         await admin
           .from("logistics_requests")
           .update({ status: "observed", observation: write.error })
@@ -1962,7 +1983,7 @@ async function assignRouteCore(
     // Una salida anulada o entregada no entra en una caja: la toma pudo
     // reusar una salida que alguien anuló o cerró después (06-10-2026).
     if (shipment.delivery_status === "anulado" || shipment.delivery_status === "entregado") {
-      failed.push({ requestId: request.id, error: `La salida está ${shipment.delivery_status.replace("_", " ")}: no entra en una caja.` });
+      failed.push({ requestId: request.id, error: `La salida está ${shipment.delivery_status}: no entra en una caja.` });
       continue;
     }
     if (activeManifestByShipment.has(request.shipment_id)) {

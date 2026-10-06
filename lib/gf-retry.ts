@@ -195,7 +195,7 @@ export function ownRetryDecisionMessage(
   outputCode?: string | null,
 ): string {
   const where = box ? `en la caja de ${box.riderName}${box.routeDate ? ` del ${dayMonth(box.routeDate)}` : ""}` : "en una caja";
-  if (decision.action === "recibir_en_oficina") return `Sigue ${where} como «No entregado»: recíbelo en oficina (o escanéalo) y después asígnalo.`;
+  if (decision.action === "recibir_en_oficina") return `Sigue ${where} como «No entregado»: recíbelo en oficina (o escanea su QR) y después asígnalo.`;
   if (decision.reason === "caja_sin_reporte") return `Sigue ${where} sin «No entregado» de esa caja: revisa su parada antes de sacarlo otra vez.`;
   if (decision.reason === "salida_en_otra_solicitud") return `${outputCode ?? "Su salida"} ya estuvo en otra solicitud de Grupo GF: revísalo antes de volver a tomarlo.`;
   return "El paquete no consta en la oficina ni en una caja: revisa su custodia en la ficha antes de asignarlo.";
@@ -213,18 +213,19 @@ export function ownOutputLabel(outputCode: string | null | undefined): string {
  * `returned_at`: el rechazo que la 0189 recibió, que deja `pendiente`) no está
  * viva aunque su `delivery_status` lo diga.
  * - `otra_salida_viva`: la lleva otro courier (una reprogramación de Aliclik).
- * - `varias_salidas_vivas`: más de una salida de Grupo GF o «por definir» viva.
+ * - `revisar_salidas`: quedan salidas de Grupo GF o «por definir» vivas que no
+ *   se reusan tal cual (más de una, una en ruta, o junto a una entregada).
  * - `salida_devuelta`: la propia ya volvió al almacén y no queda otra viva.
  * - `sin_salida`: no queda ninguna.
  */
-export type ReprogramBlock = "otra_salida_viva" | "varias_salidas_vivas" | "salida_devuelta" | "sin_salida";
+export type ReprogramBlock = "otra_salida_viva" | "revisar_salidas" | "salida_devuelta" | "sin_salida";
 
 export function reprogramBlockReason(outputs: readonly OutputLike[]): ReprogramBlock {
   const returned = (output: OutputLike) => Boolean(output.returned_at) || output.custody_state === "devuelto";
   const live = outputsBlockingRetry(outputs).filter((output) => LIVE_DELIVERY_STATUSES.includes(output.delivery_status) && !returned(output));
   const ours = (output: OutputLike) => courierKey(output.courier) === "propio" || isCourierTbd(output.courier);
   if (live.some((output) => !ours(output))) return "otra_salida_viva";
-  if (live.length > 1) return "varias_salidas_vivas";
+  if (live.length) return "revisar_salidas";
   if (outputs.some((output) => courierKey(output.courier) === "propio" && returned(output))) return "salida_devuelta";
   return "sin_salida";
 }

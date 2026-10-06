@@ -35,6 +35,8 @@ const state = vi.hoisted(() => ({
   order: {} as Record<string, unknown>,
   outputs: [] as Record<string, unknown>[],
   tables: {} as Record<string, unknown>,
+  adoptFails: false,
+  insertConflict: false,
   writes: [] as { table: string; op: string; value: any; filters: Record<string, unknown> }[],
 }));
 
@@ -57,9 +59,12 @@ vi.mock("@/lib/db", () => {
     for (const method of ["select", "in", "limit", "is", "not", "order", "neq"]) q[method] = () => q;
     q.eq = (key: string, val: unknown) => { filters[key] = val; return q; };
     for (const method of ["insert", "update"]) q[method] = (val: unknown) => { op = method; value = val; return q; };
+    q.delete = () => { op = "delete"; value = {}; return q; };
     const result = () => {
       if (op !== "read") {
         state.writes.push({ table, op, value, filters: { ...filters } });
+        if (state.adoptFails && table === "shipments" && op === "update" && "created_via" in value) return { data: null, error: null };
+        if (state.insertConflict && table === "logistics_requests" && op === "insert") return { data: null, error: { code: "23505", message: "duplicate key" } };
         return { data: table === "shipments" ? { id: value.id ?? filters.id, output_code: "KP132798-S01" } : { id: value.id ?? "request" }, error: null };
       }
       const fixture = state.tables[table];
@@ -152,7 +157,7 @@ describe("1. la salida propia que se reprograma con ella misma", () => {
     // Una salida que ya estuvo en otra solicitud, aunque cancelada (`logistics_requests_shipment_uniq`).
     expect(ownRetryDecision(s01, null, true)).toEqual({ action: "bloquear", reason: "salida_en_otra_solicitud" });
     const box = { riderName: "Roy", routeDate: "2026-09-17" };
-    expect(ownRetryDecisionMessage({ action: "recibir_en_oficina" }, box)).toBe("Sigue en la caja de Roy del 17/09 como «No entregado»: recíbelo en oficina (o escanéalo) y después asígnalo.");
+    expect(ownRetryDecisionMessage({ action: "recibir_en_oficina" }, box)).toBe("Sigue en la caja de Roy del 17/09 como «No entregado»: recíbelo en oficina (o escanea su QR) y después asígnalo.");
     expect(ownRetryDecisionMessage({ action: "bloquear", reason: "caja_sin_reporte" }, box)).toBe("Sigue en la caja de Roy del 17/09 sin «No entregado» de esa caja: revisa su parada antes de sacarlo otra vez.");
     // Sin la fila de la caja no queda «del » colgando.
     expect(ownRetryDecisionMessage({ action: "bloquear", reason: "caja_sin_reporte" }, { riderName: "Roy", routeDate: "" })).toBe("Sigue en la caja de Roy sin «No entregado» de esa caja: revisa su parada antes de sacarlo otra vez.");
@@ -169,15 +174,18 @@ describe("1. la salida propia que se reprograma con ella misma", () => {
   it("lo que no se puede sacar dice por qué en «Sin condiciones», con el motivo cierto", () => {
     const aliclik = { ...s01, id: "a", courier: "aliclik", delivery_status: "en_ruta", custody_state: "courier" };
     expect(reprogramBlockReason([s01, aliclik])).toBe("otra_salida_viva");
-    // Dos de Grupo GF vivas (o una «por definir» además) no es «la lleva su courier».
-    expect(reprogramBlockReason([s01, { ...s01, id: "s02" }])).toBe("varias_salidas_vivas");
-    expect(reprogramBlockReason([s01, { ...s01, id: "pd", courier: "por_definir" }])).toBe("varias_salidas_vivas");
+    // Salidas de Grupo GF que no se reusan tal cual no son «la lleva su courier»:
+    // dos vivas, una «por definir» además, una en ruta, o junto a una entregada.
+    expect(reprogramBlockReason([s01, { ...s01, id: "s02" }])).toBe("revisar_salidas");
+    expect(reprogramBlockReason([s01, { ...s01, id: "pd", courier: "por_definir" }])).toBe("revisar_salidas");
+    expect(reprogramBlockReason([{ ...s01, delivery_status: "en_ruta" }])).toBe("revisar_salidas");
+    expect(reprogramBlockReason([s01, { ...s01, id: "x", delivery_status: "entregado" }])).toBe("revisar_salidas");
     // El rechazo que la 0189 recibió en oficina: deja `pendiente` con custodia
     // `devuelto` y `returned_at` (0189, líneas 45-47). No está viva.
     expect(reprogramBlockReason([{ ...s01, custody_state: "devuelto", returned_at: "2026-09-24T15:00:00Z" }])).toBe("salida_devuelta");
     expect(reprogramBlockReason([{ ...s01, delivery_status: "anulado" }])).toBe("sin_salida");
     expect(reprogramBlockReason([])).toBe("sin_salida");
-    for (const reason of ["otra_salida_viva", "varias_salidas_vivas", "salida_devuelta", "caja_sin_reporte", "fuera_de_oficina", "salida_en_otra_solicitud"] as const) {
+    for (const reason of ["otra_salida_viva", "revisar_salidas", "salida_devuelta", "caja_sin_reporte", "fuera_de_oficina", "salida_en_otra_solicitud"] as const) {
       expect(BLOCKED_REASON_LABEL[reason].label.length).toBeGreaterThan(10);
     }
   });
@@ -303,6 +311,8 @@ describe("4. tomarlo de verdad reusa la S01", () => {
     vi.setSystemTime(new Date("2026-10-06T15:00:00Z"));
     state.writes = [];
     state.tables = {};
+    state.adoptFails = false;
+    state.insertConflict = false;
     state.order = { order_id: "kp132798", order_name: "#KP132798", store_id: "kenku", coverage: "lima", current_courier: "propio", macro_stage: "en_curso", macro_substage: "por_reprogramar_lima", operational_status: "asignado_a_courier", district: "San Martin de Porres" };
     state.outputs = [{ ...s01 }];
   });
@@ -344,7 +354,7 @@ describe("4. tomarlo de verdad reusa la S01", () => {
     };
     const result = await take();
     expect(result.accepted).toEqual([]);
-    expect(result.error).toBe("Sigue en la caja de Yhoni del 19/09 como «No entregado»: recíbelo en oficina (o escanéalo) y después asígnalo.");
+    expect(result.error).toBe("Sigue en la caja de Yhoni del 19/09 como «No entregado»: recíbelo en oficina (o escanea su QR) y después asígnalo.");
     expect(state.writes).toEqual([]);
   });
 
@@ -395,6 +405,27 @@ describe("4. tomarlo de verdad reusa la S01", () => {
     const result = await take();
     expect(result.error).toBe("Otra salida sigue viva: la lleva su courier.");
     expect(state.writes).toEqual([]);
+  });
+
+  it("si la salida cambió entre leerla y adoptarla, deshace la solicitud recién creada", async () => {
+    // Se anuló o salió en otra pestaña: sin esto el pedido quedaba tras una
+    // solicitud «observada» sin salida que nadie podía corregir.
+    state.adoptFails = true;
+    const result = await take();
+    expect(result.accepted).toEqual([]);
+    expect(result.error).toBe("KP132798-S01 ya no está pendiente en la oficina: vuelve a cargar la lista.");
+    const undo = state.writes.find((w) => w.table === "logistics_requests" && w.op === "delete")!;
+    expect(undo.filters).toMatchObject({ status: "accepting" });
+    expect(state.writes.some((w) => w.table === "logistics_requests" && w.op === "update")).toBe(false);
+    expect(state.writes.some((w) => w.table === "logistics_request_events" || w.table === "order_events")).toBe(false);
+  });
+
+  it("una solicitud cancelada antes no se cuenta como «ya estaba tomado»", async () => {
+    // La clave de idempotencia choca también con una cancelada (0138).
+    state.insertConflict = true;
+    const result = await take();
+    expect(result.alreadyAccepted).toEqual([]);
+    expect(result.error).toBe("Este pedido ya tuvo una solicitud de Grupo GF que se canceló: no se puede volver a tomar desde aquí.");
   });
 
   it("guarda en el evento lo que la adopción sobrescribe", async () => {
