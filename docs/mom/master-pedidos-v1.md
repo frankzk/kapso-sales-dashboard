@@ -1303,7 +1303,9 @@ contra entrega— y su Por cerrar es correcto.) Una guía de **Tanders o Swayp**
 dando por viva pero cuya caja ya se recibió en el almacén (`returned_at`) es un
 intento fallido (`apiGuideReceivedBack`, `lib/reproprovincia.ts`), con la misma
 ventana y la misma ancla. Grupo GF y el motorizado propio no entran: su
-«Recibir en oficina» devuelve la salida a «por asignar».
+«Recibir en oficina» devuelve la salida a «por asignar». Lo que el motorizado
+propio no entregó se reprograma desde «Desde la lista» con su misma salida,
+también sin solicitud de Grupo GF (06-10-2026, §29.13).
 
 Lo que queda fuera: Axel no reporta sus no entregados a Kapta —solo llegan por
 la liquidación, que únicamente mueve entregas—. Urpi sí los reporta desde el
@@ -7268,9 +7270,12 @@ Pedidos disponibles**, no creando una salida pedido por pedido en la Mesa de
 ruta. Los pedidos Kapta aparecen automáticamente desde `Preparación · Por
 generar rótulo`, `Preparación · Por armar` y `Por despachar · Listo para
 asignar`, cuando corresponden a Lima Metropolitana o Callao y tienen operador y
-contrato activos, distrito canónico, tarifa vigente y servicio no pausado. Si
-ya existe una salida, debe ser la caja `por definir`; una salida asignada a otro
-courier no se ofrece. El operador puede tomarlos individualmente o en lote. La
+contrato activos, distrito canónico, tarifa vigente y servicio no pausado.
+También entra `En curso · Por reprogramar Lima` (v1.19), y desde el 06-10-2026
+por su etapa, sea cual sea el estado operativo (§29.13). Si
+ya existe una salida, debe ser la caja `por definir` —o, al reprogramar, la
+salida propia de Grupo GF que no se entregó (§29.13)—; una salida asignada a
+otro courier no se ofrece. El operador puede tomarlos individualmente o en lote. La
 Mesa de ruta solo informa que el pedido está disponible y enlaza esa bandeja;
 no abre un segundo formulario ni genera un rótulo desde el drawer.
 
@@ -8247,19 +8252,82 @@ pedido que Tanders no entregó está En curso (§9), así que no aparecía nunca
 cola suma los pedidos de Lima en **«En curso · Por reprogramar Lima» que
 esperan courier nuevo** (`pendiente_nuevo_courier`, `lib/gf-retry.ts`). Un
 «Por reprogramar Lima» cuya guía sigue viva con su courier —una reprogramación
-de Aliclik, por ejemplo— no entra: esa la lleva ese courier.
+de Aliclik, por ejemplo— no entra: esa la lleva ese courier. Desde el
+06-10-2026 la puerta es la etapa y lo que Grupo GF no entregó con su propia
+salida también entra, con esa misma salida (abajo).
 
 - La fila lleva la chapa **«Tanders no entregó · vuelve»** o **«· volvió»** —o
   **«Swayp no entregó · vuelve»** desde la v1.22— y
   cuenta en «Por asignar» y en la tarjeta «Por reprogramar».
-- **Tomarlo crea una salida NUEVA** con su QR y Almacén arma otra caja (§9.3):
-  la anterior es de otro courier y lleva su rótulo. Nunca se rellena otra
-  salida, y la que falló no cuenta como «ya en caja» aunque siga volviendo.
+- Cuando la salida que falló es de **otro courier**, **tomarlo crea una salida
+  NUEVA** con su QR y Almacén arma otra caja (§9.3): la anterior es de otro
+  courier y lleva su rótulo. Nunca se rellena otra salida, y la que falló no
+  cuenta como «ya en caja» aunque siga volviendo.
 - Si la caja anterior **todavía vuelve**, la salida nueva es adicional y su
   motivo se escribe solo (`additional_output_reason`, §9): el hecho ya lo
   reportó el courier. El tope de cinco salidas se aplica igual.
 - Con la salida nueva el pedido deja la recuperación y sigue el camino normal
   de Grupo GF; el paquete que volvió no lo devuelve a «Devuelto» (§7).
+
+**Lo que Grupo GF no entregó con su propia salida también se reprograma desde la lista, con esa misma salida (06-10-2026, decisión del owner).**
+#KP132798 salió el 06/09 en una ruta del cuaderno con su salida KP132798-S01 y
+volvió «No entregado · rechazado» el 07/09. El Master lo tenía en «Por
+reprogramar Lima» (v1.15, `gfAwaitingRetry`), pero la cola solo traía ese
+apartado con `pendiente_nuevo_courier` —lo que otro courier no entregó— y el
+pedido no tenía solicitud de Grupo GF ni caja: no aparecía en «Desde la lista»,
+el escaneo respondía «El pedido ya avanzó» y la ficha decía «Grupo GF Courier ya
+tiene una salida activa». Medido el 05-10-2026: el Master tenía **336** pedidos
+en «Por reprogramar Lima» y la tarjeta «Por reprogramar» contaba **277**.
+Faltaban 45 como #KP132798 (salida del cuaderno en la empresa, nunca en una
+caja) y 10 con la S01 todavía dentro de una caja de Grupo GF del 17 o 19/09, sin
+solicitud; otros 4 estaban en «Sin condiciones» por distrito inválido.
+
+Decisión del owner (06-10-2026):
+
+- **La puerta es la etapa.** «Desde la lista» trae todo «En curso · Por
+  reprogramar Lima» de Lima de las tiendas con contrato
+  (`REPROGRAM_QUEUE_FILTER`, `lib/gf-retry.ts`), sea cual sea el estado
+  operativo. Cada pedido dice qué toca o, en «Sin condiciones», por qué no
+  sale: ninguno desaparece en silencio.
+- **Lo que otro courier no entregó** sigue como en la v1.19: salida nueva.
+- **Si la única salida viva es la propia de Grupo GF** (`ownRetryOutput`), **se
+  toma con ESA salida**: mismo consecutivo, QR, `output_code`, `guide_code`,
+  rótulo y armado (`listo_despacho`). No se crea otra ni se «rellena» —ya es de
+  Grupo GF—, no gasta una de las cinco salidas ni pide motivo de salida
+  adicional. La solicitud apunta a esa salida (`logistics_requests.shipment_id`),
+  que pasa a `created_via = grupo_gf_courier` como al rellenar; el anterior
+  queda en el evento de la toma (`payload.ownRetry`). Es lo que ya hacía
+  «Recibir en oficina» con los no entregados de una caja (v1.15) y lo que dice
+  el §29.4: una reprogramación que conserva el paquete armado conserva su
+  identidad física. La fila lleva la chapa **«Grupo GF no entregó · sale con su
+  S01»**.
+- **Si sigue en una caja de un día anterior** con el «No entregado» de esa
+  caja, aparece para **«Recibir en oficina»** —o se escanea, que lo recibe y lo
+  asigna— y después se toma con la misma salida. Sin el «No entregado» de esa
+  caja (solo la parada del cuaderno, o la de la caja dice otra cosa) va a «Sin
+  condiciones · En una caja anterior sin "No entregado" de esa caja»: hay que
+  revisar la parada antes de sacarlo otra vez (#KP134157, #KP134960 y #KP134917
+  el 05-10-2026). Fuera de la oficina y sin caja: «El paquete no consta en la
+  oficina».
+- **Otra salida viva** —una reprogramación de Aliclik, por ejemplo— sigue sin
+  poder tomarse; ahora se ve en «Sin condiciones · Otra salida sigue viva: la
+  lleva su courier». Sin ninguna salida viva que sacar (una propia ya devuelta,
+  por ejemplo), en «Sin condiciones · Sin salida armable en Almacén».
+- Una salida que ya estuvo en otra solicitud de Grupo GF, aunque cancelada, no
+  se vuelve a enlazar (`logistics_requests_shipment_uniq`): se dice al tomar.
+- Asignar a una caja exige la salida `pendiente`: una anulada o entregada no
+  entra (`assignRouteCore`).
+- Asignado a una caja, el pedido deja «Por reprogramar Lima» como cualquier
+  reintento de Grupo GF (`dispatch_route_assigned` es movimiento para
+  `gfAwaitingRetry`). El resolver no cambia y la versión **no sube**
+  (`mom-v1.23`).
+
+Con la foto del 05-10-2026, la tarjeta pasa de 277 a 329 (los 45 por asignar y
+7 por recibir en oficina) y los 7 restantes del Master se ven en «Sin
+condiciones» con su motivo (4 por distrito, 3 en una caja sin su reporte).
+Implementación: `lib/gf-retry.ts`, `app/dashboard/courier/actions.ts`
+(`loadCourierOperations`, `takeOrdersCore`, `adoptOwnOutput`, `assignRouteCore`)
+y `components/dispatch-day-board.tsx`. Pruebas en `test/gf-own-retry.test.ts`.
 
 **Escanear un «No entregado» de una caja anterior lo recibe y lo asigna
 (29-09-2026).** #KP136779 y #KP136896 salieron el 26/09 con Yhoni y volvieron

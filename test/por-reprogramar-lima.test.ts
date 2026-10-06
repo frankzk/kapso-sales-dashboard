@@ -396,9 +396,13 @@ describe("las piezas en el código", () => {
     const start = src.indexOf("async function loadCourierOperations(");
     const body = src.slice(start, src.indexOf("\nexport async function loadCourierConfig(", start));
     expect(body).toContain("macro_stage,macro_substage,operational_status");
-    expect(body).toContain("${RETRY_QUEUE_FILTER}");
+    // Desde el 06-10-2026 «Por reprogramar Lima» entra por su etapa
+    // (`REPROGRAM_QUEUE_FILTER`, que contiene al reintento); el operativo
+    // sigue distinguiendo el reintento de otro courier (test/gf-own-retry.test.ts).
+    expect(body).toContain("${REPROGRAM_QUEUE_FILTER}");
+    expect(body).toContain("isRetryAdmission(order.macro_stage, order.macro_substage, order.operational_status)");
     expect(body).toContain("activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null)");
-    expect(body).toContain("const needsExistingBox = !review && !retry && order.macro_substage !== \"por_generar_rotulo\"");
+    expect(body).toContain("const needsExistingBox = !review && !retry && !own && order.macro_substage !== \"por_generar_rotulo\"");
     expect(body).toContain("failedOutput: retry ? lastFailedOutput(outputs) : null");
   });
 

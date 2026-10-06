@@ -196,6 +196,11 @@ export interface QueueRow {
    */
   failedOutput?: { courier: string; returned: boolean } | null;
   tandersReview?: import("@/lib/gf-tanders-review").TandersReview | null;
+  /**
+   * Grupo GF no lo entregó con su propia salida y sale con ESA (06-10-2026,
+   * `ownRetryOutput`): mismo QR y rótulo, Almacén no arma otra caja.
+   */
+  ownOutput?: { outputCode: string | null } | null;
 }
 
 export interface QueueRoute {
@@ -567,7 +572,17 @@ export const CREATED_WINDOW_LABEL: Record<CreatedWindow, string> = {
 };
 
 /** Por qué un pedido de Lima no entra en la cola («sin condiciones»). */
-export type BlockedReason = "ya_en_caja" | "sin_salida" | "distrito_invalido" | "tarifa_faltante" | "servicio_pausado";
+export type BlockedReason =
+  | "ya_en_caja"
+  | "sin_salida"
+  | "distrito_invalido"
+  | "tarifa_faltante"
+  | "servicio_pausado"
+  // «Por reprogramar Lima» entra por su etapa (06-10-2026): lo que no se puede
+  // sacar dice por qué, en vez de desaparecer de la cola (`lib/gf-retry.ts`).
+  | "otra_salida_viva"
+  | "caja_sin_reporte"
+  | "fuera_de_oficina";
 
 export const BLOCKED_REASON_LABEL: Record<BlockedReason, { label: string; fix: "tarifario" | "despacho" | "pedido" }> = {
   ya_en_caja: { label: "Ya está en una caja de despacho", fix: "despacho" },
@@ -575,6 +590,9 @@ export const BLOCKED_REASON_LABEL: Record<BlockedReason, { label: string; fix: "
   distrito_invalido: { label: "Distrito inválido o sin contrato", fix: "pedido" },
   tarifa_faltante: { label: "Tarifa faltante para el distrito", fix: "tarifario" },
   servicio_pausado: { label: "Servicio pausado en el distrito", fix: "tarifario" },
+  otra_salida_viva: { label: "Otra salida sigue viva: la lleva su courier", fix: "pedido" },
+  caja_sin_reporte: { label: "En una caja anterior sin «No entregado» de esa caja", fix: "despacho" },
+  fuera_de_oficina: { label: "El paquete no consta en la oficina", fix: "despacho" },
 };
 
 // ---------------------------------------------------------------------------

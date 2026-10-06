@@ -180,6 +180,7 @@ export function GrupoGfCourierBoard({
           orgId={orgId}
           day={today}
           available={snapshot.operations.available}
+          returnable={snapshot.operations.returnable ?? []}
           accepted={snapshot.operations.accepted}
           blocked={snapshot.operations.blocked}
           riders={snapshot.operations.riders}
