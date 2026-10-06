@@ -21,7 +21,7 @@ export const EMAIL_LOG_LIMIT = 200;
 
 const LABEL_COLS =
   "id,message_id,file_name,received_at,created_at,subject,registro,olva_tracking,olva_emision,sender_doc," +
-  "recipient_name,address,parse_error,linked_shipment_id,suggested_order_name,match_note";
+  "recipient_name,address,parse_error,linked_shipment_id,suggested_order_name,match_note,label_index,label_count";
 
 function fail(what: string, error: { message: string } | null): void {
   if (error) throw new Error(`correos de Olva: ${what} — ${error.message}`);

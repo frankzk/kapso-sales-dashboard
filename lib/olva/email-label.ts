@@ -38,6 +38,24 @@ export interface OlvaEmailLabel {
   ubigeo: string | null;
   /** YYYY-MM-DD de «FECHA WEB», si se pudo leer. */
   fecha: string | null;
+  /** «(2/4)» junto al registro: el rótulo 2 de los 4 del PDF. */
+  part: number | null;
+  parts: number | null;
+}
+
+/**
+ * Los rótulos de un PDF, uno por envío. Un registro de Olva con varios envíos
+ * trae un rótulo por envío en el mismo PDF —«N° REGISTRO: … (1/4)», «(2/4)»…—
+ * y hasta el 06-10-2026 solo se leía el primero: 102 de los 163 rótulos de
+ * los primeros 61 correos nunca se cotejaron. El texto sale con cada rótulo
+ * empezando en «ENVIA:» y su TRACKING al final, así que se parte por ahí. PURA.
+ */
+export function splitOlvaLabelTexts(raw: string): string[] {
+  const parts = raw
+    .split(/(?=ENVIA\s*:)/i)
+    .map((p) => p.trim())
+    .filter((p) => /RECIBE\s*:/i.test(p));
+  return parts.length ? parts : [raw];
 }
 
 const LABELS = "ENVIA|RECIBE|RUC\\/DNI|TELEFONO\\/CELULAR|DIRECCI[OÓ]N|REFERENCIA|N[°ºo]?\\s*REGISTRO|FECHA WEB|TRACKING";
@@ -70,6 +88,7 @@ export function parseOlvaLabelText(raw: string): OlvaEmailLabel {
   const phone = recipient.match(/TELEFONO\/CELULAR\s*:\s*\+?(\d[\d ]{6,16}\d)/i)?.[1]?.replace(/\s/g, "") ?? null;
   const web = text.match(/FECHA WEB\s*:\s*(\d{2})\/(\d{2})\/(\d{2,4})/i);
   const year = web?.[3] ? (web[3].length === 2 ? `20${web[3]}` : web[3]) : null;
+  const of = text.match(/REGISTRO\s*:?\s*\d{6,}\s*\(\s*(\d+)\s*\/\s*(\d+)\s*\)/i);
 
   return {
     id: parsed?.ok ? parsed.value : null,
@@ -82,6 +101,8 @@ export function parseOlvaLabelText(raw: string): OlvaEmailLabel {
     registro: text.match(/REGISTRO\s*:?\s*(\d{6,})/i)?.[1] ?? null,
     ubigeo: text.match(/\(ubigeo\)\s*(\d{6})/i)?.[1] ?? null,
     fecha: web && year ? `${year}-${web[2]}-${web[1]}` : null,
+    part: of ? Number(of[1]) : null,
+    parts: of ? Number(of[2]) : null,
   };
 }
 

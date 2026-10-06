@@ -9,6 +9,7 @@ import {
   orderFitsLabelDate,
   parseOlvaLabelText,
   phoneKey,
+  splitOlvaLabelTexts,
   type LabelOutcome,
   type OlvaEmailLabel,
 } from "@/lib/olva/email-label";
@@ -76,15 +77,45 @@ async function suggestOrder(
     .map((o) => o.order_name as string);
 }
 
-export async function ingestOlvaEmailLabel(
+export interface EmailIngestInput {
+  messageId: string;
+  fileName: string;
+  receivedAt: string | null;
+  subject: string | null;
+  text: string;
+}
+
+/**
+ * Un PDF de Olva: cada rótulo que trae es una fila y un cotejo propio
+ * (`label_index`, 0232). Un registro con cuatro envíos son cuatro rótulos.
+ */
+export async function ingestOlvaEmailLabels(
   admin: SupabaseClient,
-  input: { messageId: string; fileName: string; receivedAt: string | null; subject: string | null; text: string },
+  input: EmailIngestInput,
+): Promise<LabelIngestResult[]> {
+  const texts = splitOlvaLabelTexts(input.text);
+  const results: LabelIngestResult[] = [];
+  for (const [i, text] of texts.entries()) {
+    const label = parseOlvaLabelText(text);
+    // La posición que dice el rótulo, «(2/4)»; si no se lee, el orden en el PDF.
+    results.push(await ingestOlvaEmailLabel(admin, { ...input, text }, label, label.part ?? i + 1, texts.length));
+  }
+  return results;
+}
+
+async function ingestOlvaEmailLabel(
+  admin: SupabaseClient,
+  input: EmailIngestInput,
+  label: OlvaEmailLabel,
+  labelIndex: number,
+  labelCount: number,
 ): Promise<LabelIngestResult> {
-  const label = parseOlvaLabelText(input.text);
   const tracking = label.id ? formatOlvaTracking(label.id) : null;
   const base = {
     message_id: input.messageId,
     file_name: input.fileName,
+    label_index: labelIndex,
+    label_count: label.parts ?? labelCount,
     received_at: input.receivedAt,
     subject: input.subject,
     registro: label.registro,
@@ -104,12 +135,12 @@ export async function ingestOlvaEmailLabel(
   };
   const save = async (extra: Record<string, unknown>, result: LabelIngestResult) => {
     const row = { ...base, ...extra, match_note: result.note, outcome: result.outcome };
-    let { error } = await admin.from("olva_email_labels").upsert(row, { onConflict: "message_id,file_name" });
+    let { error } = await admin.from("olva_email_labels").upsert(row, { onConflict: "message_id,file_name,label_index" });
     // Sin la 0227 aplicada no existe `outcome`: el correo se guarda igual y
     // «Correos de Olva» deduce el resultado de la nota (`labelOutcome`).
     if (error && /outcome/.test(error.message)) {
       const { outcome: _outcome, ...legacy } = row;
-      ({ error } = await admin.from("olva_email_labels").upsert(legacy, { onConflict: "message_id,file_name" }));
+      ({ error } = await admin.from("olva_email_labels").upsert(legacy, { onConflict: "message_id,file_name,label_index" }));
     }
     if (error) console.error("[olva-email] no se pudo guardar el rótulo", input.messageId, error.message);
     return result;
@@ -133,6 +164,7 @@ export async function ingestOlvaEmailLabel(
       .select("linked_shipment_id,match_note")
       .eq("message_id", input.messageId)
       .eq("file_name", input.fileName)
+      .eq("label_index", labelIndex)
       .maybeSingle();
     const prior = before as { linked_shipment_id: string | null; match_note: string | null } | null;
     if (prior?.linked_shipment_id === linked.id && prior.match_note?.startsWith("Puesto en")) {
