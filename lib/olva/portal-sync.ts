@@ -262,6 +262,8 @@ async function labelPairs(
         reference: null,
         registro: null,
         ubigeo: null,
+        part: null,
+        parts: null,
         fecha: l.label_date ?? row.fechaRegistro,
       },
       free,

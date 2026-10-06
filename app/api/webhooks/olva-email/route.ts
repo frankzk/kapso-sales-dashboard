@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
-import { ingestOlvaEmailLabel, pdfText } from "@/lib/olva/email-ingest";
+import { ingestOlvaEmailLabels, pdfText } from "@/lib/olva/email-ingest";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -86,6 +86,7 @@ export async function POST(req: NextRequest) {
     console.error("[olva-email] no se pudo leer el PDF", e);
   }
 
-  const result = await ingestOlvaEmailLabel(createAdminSupabase(), { messageId, fileName, receivedAt, subject, text });
-  return NextResponse.json({ ok: true, ...result });
+  // Un rótulo por envío del registro: el PDF puede traer varios (0232).
+  const labels = await ingestOlvaEmailLabels(createAdminSupabase(), { messageId, fileName, receivedAt, subject, text });
+  return NextResponse.json({ ok: true, ...labels[0], labels });
 }

@@ -5344,6 +5344,17 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   200 más recientes (`lib/olva/email-log.ts`). Si Make vuelve a mandar un
   correo que ya vinculó, sigue figurando como «vinculado al llegar» y no
   pasa a «ya tenía tracking».
+- **Un PDF trae un rótulo por envío del registro** (migración 0232, 06-10-2026).
+  Un registro de Olva con varios envíos manda un solo correo con un solo PDF
+  que trae un rótulo por envío («N° REGISTRO: … (1/4)», «(2/4)»…). Hasta
+  entonces se guardaba una fila por PDF y solo se leía el primer rótulo: el
+  registro 202600718786 del 05/10 traía cuatro envíos y solo vinculó
+  #KP138456; de los primeros 61 correos, 102 de sus 163 rótulos nunca se
+  cotejaron. Ahora el PDF se parte en sus rótulos (cada uno empieza en
+  «ENVIA:» y termina en su TRACKING), cada rótulo es **una fila y un cotejo
+  propio** (`label_index`, la «k» de «(k/n)», y `label_count`; la clave es
+  `message_id` + `file_name` + `label_index`) y «Correos de Olva» cuenta
+  rótulos —«163 rótulos en 61 correos»— y muestra «Reg. … · rótulo 2/4».
 - **El tracking se guarda sin ceros delante.** El portal escribe
   «02649804/26»; la página pública, el correo y todo lo guardado, «2649804-26».
   `parseOlvaTracking` quita los ceros para que el índice único vea el mismo
