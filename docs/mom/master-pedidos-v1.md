@@ -1395,6 +1395,10 @@ mostrar la razón de la sugerencia y permitir que Daysi elija otra ruta válida.
 - Si cambia el producto, courier o día de salida, se crea una salida nueva con
   QR nuevo. Almacén reimprime, arma otra caja y la coloca en la agrupación del
   nuevo courier.
+- Excepción de Grupo GF: si no cambia el producto ni el courier, su propia
+  salida vuelve a salir otro día con el mismo envío, QR y rótulo —recibida en
+  oficina (§29.5, v1.15) o, sin solicitud de Grupo GF, desde «Desde la lista»
+  (06-10-2026, §29.13)—. No se arma otra caja para el mismo paquete.
 - La nueva salida no debe borrar ni cerrar automáticamente la devolución física
   de la salida anterior.
 - El equipo revisa el courier anterior y el motivo antes de elegir el siguiente.
@@ -7274,8 +7278,8 @@ contrato activos, distrito canónico, tarifa vigente y servicio no pausado.
 También entra `En curso · Por reprogramar Lima` (v1.19), y desde el 06-10-2026
 por su etapa, sea cual sea el estado operativo (§29.13). Si
 ya existe una salida, debe ser la caja `por definir` —o, al reprogramar, la
-salida propia de Grupo GF que no se entregó (§29.13)—; una salida asignada a
-otro courier no se ofrece. El operador puede tomarlos individualmente o en lote. La
+salida propia de Grupo GF que no se entregó (§29.13)—; una salida viva de otro
+courier no se ofrece (la que ese courier no entregó no cuenta, v1.19). El operador puede tomarlos individualmente o en lote. La
 Mesa de ruta solo informa que el pedido está disponible y enlaza esa bandeja;
 no abre un segundo formulario ni genera un rótulo desde el drawer.
 
@@ -8292,29 +8296,46 @@ Decisión del owner (06-10-2026):
 - **Lo que otro courier no entregó** sigue como en la v1.19: salida nueva.
 - **Si la única salida viva es la propia de Grupo GF** (`ownRetryOutput`), **se
   toma con ESA salida**: mismo consecutivo, QR, `output_code`, `guide_code`,
-  rótulo y armado (`listo_despacho`). No se crea otra ni se «rellena» —ya es de
-  Grupo GF—, no gasta una de las cinco salidas ni pide motivo de salida
-  adicional. La solicitud apunta a esa salida (`logistics_requests.shipment_id`),
-  que pasa a `created_via = grupo_gf_courier` como al rellenar; el anterior
-  queda en el evento de la toma (`payload.ownRetry`). Es lo que ya hacía
+  rótulo y armado (no se toca `preparation_state`). No se crea otra ni se
+  «rellena» —ya es de Grupo GF—, no gasta una de las cinco salidas ni pide
+  motivo de salida adicional. La solicitud apunta a esa salida
+  (`logistics_requests.shipment_id`), que pasa a `created_via =
+  grupo_gf_courier` como al rellenar, con `assigned_at` y `next_followup_at` de
+  la toma; los valores anteriores quedan en el evento de la toma
+  (`payload.ownRetry`). Una salida devuelta (custodia `devuelto` o
+  `returned_at`, como deja la 0189 un rechazo recibido) no cuenta como viva. Es lo que ya hacía
   «Recibir en oficina» con los no entregados de una caja (v1.15) y lo que dice
   el §29.4: una reprogramación que conserva el paquete armado conserva su
   identidad física. La fila lleva la chapa **«Grupo GF no entregó · sale con su
   S01»**.
-- **Si sigue en una caja de un día anterior** con el «No entregado» de esa
-  caja, aparece para **«Recibir en oficina»** —o se escanea, que lo recibe y lo
-  asigna— y después se toma con la misma salida. Sin el «No entregado» de esa
-  caja (solo la parada del cuaderno, o la de la caja dice otra cosa) va a «Sin
-  condiciones · En una caja anterior sin "No entregado" de esa caja»: hay que
+- **Si sigue en una caja** y lo último que su motorizado reportó en ESA caja
+  es «No entregado» —lo mismo que exige `gf_return_to_office`, 0206—, aparece
+  con la chapa «No entregado · motivo» para **«Recibir en oficina»** —o se
+  escanea, que lo recibe y lo asigna— y después se toma con la misma salida.
+  Sin ese reporte (solo la parada del cuaderno, o la de la caja dice otra cosa)
+  va a «Sin condiciones · En una caja sin "No entregado" de esa caja»: hay que
   revisar la parada antes de sacarlo otra vez (#KP134157, #KP134960 y #KP134917
-  el 05-10-2026). Fuera de la oficina y sin caja: «El paquete no consta en la
-  oficina».
-- **Otra salida viva** —una reprogramación de Aliclik, por ejemplo— sigue sin
-  poder tomarse; ahora se ve en «Sin condiciones · Otra salida sigue viva: la
-  lleva su courier». Sin ninguna salida viva que sacar (una propia ya devuelta,
-  por ejemplo), en «Sin condiciones · Sin salida armable en Almacén».
-- Una salida que ya estuvo en otra solicitud de Grupo GF, aunque cancelada, no
-  se vuelve a enlazar (`logistics_requests_shipment_uniq`): se dice al tomar.
+  el 05-10-2026). Ni en la empresa ni en una caja: «El paquete no consta en la
+  oficina ni en una caja» (revisar su custodia en la ficha).
+- **Lo que no se puede tomar se ve en «Sin condiciones» con su motivo**
+  (`reprogramBlockReason`, `ownRetryDecision`), la misma regla en la cola, al
+  tomar y al escanear:
+  - «Otra salida sigue viva: la lleva su courier» —una reprogramación de
+    Aliclik, por ejemplo—.
+  - «Más de una salida viva de Grupo GF: revísalas en la ficha».
+  - «Su salida ya volvió al almacén (devuelta)»: el rechazo que la 0189 recibió
+    como devuelto. Todavía no tiene camino desde la lista (0 casos el
+    05-10-2026).
+  - «Su salida ya estuvo en otra solicitud de Grupo GF»: una salida solo puede
+    estar en una solicitud, aunque esté cancelada
+    (`logistics_requests_shipment_uniq`).
+  - Sin ninguna salida, «Sin salida armable en Almacén».
+- La ficha del pedido ya no manda a anular esa salida: la Mesa de ruta dice que,
+  si no se entregó, se reprograma con esa misma salida desde Despacho del día
+  (`lib/order-route-plan.ts`). Anularla gastaba el consecutivo y obligaba a
+  armar otra caja para el mismo paquete.
+- «Asignar» cuenta y asigna solo lo asignable: un «No entregado» que sigue en
+  una caja se recibe en oficina primero, y si no había nada asignable se dice.
 - Asignar a una caja exige la salida `pendiente`: una anulada o entregada no
   entra (`assignRouteCore`).
 - Asignado a una caja, el pedido deja «Por reprogramar Lima» como cualquier
@@ -8326,8 +8347,9 @@ Con la foto del 05-10-2026, la tarjeta pasa de 277 a 329 (los 45 por asignar y
 7 por recibir en oficina) y los 7 restantes del Master se ven en «Sin
 condiciones» con su motivo (4 por distrito, 3 en una caja sin su reporte).
 Implementación: `lib/gf-retry.ts`, `app/dashboard/courier/actions.ts`
-(`loadCourierOperations`, `takeOrdersCore`, `adoptOwnOutput`, `assignRouteCore`)
-y `components/dispatch-day-board.tsx`. Pruebas en `test/gf-own-retry.test.ts`.
+(`loadCourierOperations`, `loadActiveBoxes`, `takeOrdersCore`, `adoptOwnOutput`,
+`assignRouteCore`), `lib/order-route-plan.ts` y
+`components/dispatch-day-board.tsx`. Pruebas en `test/gf-own-retry.test.ts`.
 
 **Escanear un «No entregado» de una caja anterior lo recibe y lo asigna
 (29-09-2026).** #KP136779 y #KP136896 salieron el 26/09 con Yhoni y volvieron

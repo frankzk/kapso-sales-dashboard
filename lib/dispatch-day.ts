@@ -579,10 +579,14 @@ export type BlockedReason =
   | "tarifa_faltante"
   | "servicio_pausado"
   // «Por reprogramar Lima» entra por su etapa (06-10-2026): lo que no se puede
-  // sacar dice por qué, en vez de desaparecer de la cola (`lib/gf-retry.ts`).
+  // sacar dice por qué, en vez de desaparecer de la cola (`lib/gf-retry.ts`:
+  // `reprogramBlockReason` y `ownRetryDecision`).
   | "otra_salida_viva"
+  | "varias_salidas_vivas"
+  | "salida_devuelta"
   | "caja_sin_reporte"
-  | "fuera_de_oficina";
+  | "fuera_de_oficina"
+  | "salida_en_otra_solicitud";
 
 export const BLOCKED_REASON_LABEL: Record<BlockedReason, { label: string; fix: "tarifario" | "despacho" | "pedido" }> = {
   ya_en_caja: { label: "Ya está en una caja de despacho", fix: "despacho" },
@@ -591,8 +595,11 @@ export const BLOCKED_REASON_LABEL: Record<BlockedReason, { label: string; fix: "
   tarifa_faltante: { label: "Tarifa faltante para el distrito", fix: "tarifario" },
   servicio_pausado: { label: "Servicio pausado en el distrito", fix: "tarifario" },
   otra_salida_viva: { label: "Otra salida sigue viva: la lleva su courier", fix: "pedido" },
-  caja_sin_reporte: { label: "En una caja anterior sin «No entregado» de esa caja", fix: "despacho" },
-  fuera_de_oficina: { label: "El paquete no consta en la oficina", fix: "despacho" },
+  varias_salidas_vivas: { label: "Más de una salida viva de Grupo GF: revísalas en la ficha", fix: "pedido" },
+  salida_devuelta: { label: "Su salida ya volvió al almacén (devuelta)", fix: "pedido" },
+  caja_sin_reporte: { label: "En una caja sin «No entregado» de esa caja", fix: "despacho" },
+  fuera_de_oficina: { label: "El paquete no consta en la oficina ni en una caja", fix: "despacho" },
+  salida_en_otra_solicitud: { label: "Su salida ya estuvo en otra solicitud de Grupo GF", fix: "despacho" },
 };
 
 // ---------------------------------------------------------------------------
@@ -659,7 +666,7 @@ export const QUEUE_TILE_LABEL: Record<QueueTile, { label: string; hint: string }
   por_asignar: { label: "Por asignar", hint: "Pedidos de Lima con condiciones para salir y sin caja: disponibles más tomados sin ruta. Quita los filtros de la lista." },
   nunca_salieron: QUEUE_SEGMENT_LABEL.nunca_salieron,
   programados_hoy: QUEUE_SEGMENT_LABEL.programados_hoy,
-  por_reprogramar: { label: "Por reprogramar", hint: "No entregados (En curso · Por reprogramar Lima): los del motorizado que siguen en su caja se reciben en oficina; los que ya volvieron, y los que otro courier no entregó, se asignan o se programan con el calendario. Lo de otro courier sale en una salida nueva." },
+  por_reprogramar: { label: "Por reprogramar", hint: "No entregados (En curso · Por reprogramar Lima): los del motorizado que siguen en su caja se reciben en oficina; los que ya volvieron, y los que otro courier no entregó, se asignan o se programan con el calendario. Lo de otro courier sale en una salida nueva; lo de Grupo GF, con su misma salida. Los que no se pueden sacar están en «Sin condiciones»." },
   tomados_sin_caja: { label: "Tomados sin caja", hint: "Ya tomados por Grupo GF (servicio y tarifa reservados) pero todavía sin motorizado." },
   armados: { label: "Armados", hint: "Tomados cuya salida ya armó Almacén (listo para despacho) y siguen sin caja." },
 };

@@ -8,9 +8,11 @@
 // Grupo GF no había puerta.
 //
 // Qué entra: el pedido en recuperación, es decir `pendiente_nuevo_courier` (la
-// misma regla de lib/reproprovincia.ts que decide el Master). Qué NO entra: un
+// misma regla de lib/reproprovincia.ts que decide el Master). Qué NO se toma: un
 // «Por reprogramar Lima» cuya guía sigue viva con su courier —una
-// reprogramación de Aliclik, por ejemplo—: esa la lleva ese courier.
+// reprogramación de Aliclik, por ejemplo—: esa la lleva ese courier. Desde el
+// 06-10-2026 la cola trae todo «Por reprogramar Lima» por su etapa y lo que
+// Grupo GF no entregó con su propia salida sale con ESA salida (abajo).
 //
 // Al tomarlo se crea una salida NUEVA con su QR y Almacén arma otra caja (§9.3):
 // la caja anterior es de otro courier y trae su rótulo. Si todavía vuelve, la
@@ -19,7 +21,7 @@
 
 import { courierKey } from "@/lib/dispatch";
 import { guideFailedAfterDispatch, type RecoveryGuideLike } from "@/lib/reproprovincia";
-import { nombreDeCourier } from "@/lib/shipment-output";
+import { isCourierTbd, nombreDeCourier } from "@/lib/shipment-output";
 
 /** ¿El pedido espera un courier nuevo porque otro no lo entregó? */
 export function isRetryAdmission(
@@ -135,31 +137,45 @@ export function ownRetryOutput<T extends OwnOutputLike>(
 ): T | null {
   if (!isReprogramStage(order.macro_stage, order.macro_substage)) return null;
   if (outputs.some((output) => output.delivery_status === "entregado" || output.status_category === "delivered")) return null;
-  const live = outputsBlockingRetry(outputs).filter((output) => LIVE_DELIVERY_STATUSES.includes(output.delivery_status));
+  // Una salida devuelta (la 0189 deja `pendiente` con custodia `devuelto`) ya
+  // no está viva: no se reusa ni estorba a otra que sí lo esté.
+  const live = outputsBlockingRetry(outputs).filter((output) =>
+    LIVE_DELIVERY_STATUSES.includes(output.delivery_status) && !output.returned_at && output.custody_state !== "devuelto");
   if (live.length !== 1) return null;
   const output = live[0]!;
-  if (courierKey(output.courier) !== "propio" || output.delivery_status !== "pendiente") return null;
-  if (output.returned_at || output.custody_state === "devuelto") return null;
-  return output;
+  return courierKey(output.courier) === "propio" && output.delivery_status === "pendiente" ? output : null;
 }
 
 /**
- * Qué toca con esa salida según dónde está el paquete:
- * - `oficina`: en custodia de la empresa y sin caja → se toma con ella.
- * - `recibir_en_oficina`: sigue en una caja y su motorizado lo reportó «No
- *   entregado» en ESA caja → primero «Recibir en oficina» (0188/0206).
- * - `caja_sin_reporte`: sigue en una caja sin ese reporte (la parada de esa
- *   caja dice otra cosa, o solo hay la del cuaderno) → hay que revisarlo.
- * - `fuera_de_oficina`: la custodia no es de la empresa y no está en caja.
+ * Qué toca con esa salida, la misma decisión en la cola y al tomarlo:
+ * - `tomar`: en custodia de la empresa, sin caja y sin otra solicitud → se toma
+ *   con ella.
+ * - `recibir_en_oficina`: sigue en una caja y lo ÚLTIMO que su motorizado
+ *   reportó en ESA caja es «No entregado» → primero «Recibir en oficina» (lo
+ *   mismo que exige `gf_return_to_office`, 0206).
+ * - `bloquear`, con el motivo de «Sin condiciones»:
+ *   - `caja_sin_reporte`: en una caja sin ese reporte (la parada de la caja
+ *     dice otra cosa, o solo está la del cuaderno): hay que revisar la parada.
+ *   - `fuera_de_oficina`: ni en la empresa ni en una caja.
+ *   - `salida_en_otra_solicitud`: la salida ya estuvo en otra solicitud de
+ *     Grupo GF, aunque cancelada (`logistics_requests_shipment_uniq`, 0138).
  */
-export type OwnRetrySpot = "oficina" | "recibir_en_oficina" | "caja_sin_reporte" | "fuera_de_oficina";
+export type OwnRetryBlock = "caja_sin_reporte" | "fuera_de_oficina" | "salida_en_otra_solicitud";
 
-export function ownRetrySpot(
-  output: { custody_state?: string | null },
+export type OwnRetryDecision =
+  | { action: "tomar" }
+  | { action: "recibir_en_oficina" }
+  | { action: "bloquear"; reason: OwnRetryBlock };
+
+export function ownRetryDecision(
+  output: { custody_state?: string | null; custody_transferred_at?: string | null },
   box: { undeliveredReason?: string | null } | null,
-): OwnRetrySpot {
-  if (box) return box.undeliveredReason ? "recibir_en_oficina" : "caja_sin_reporte";
-  return output.custody_state === "empresa" ? "oficina" : "fuera_de_oficina";
+  inOtherRequest: boolean,
+): OwnRetryDecision {
+  if (box) return box.undeliveredReason ? { action: "recibir_en_oficina" } : { action: "bloquear", reason: "caja_sin_reporte" };
+  if (output.custody_state !== "empresa" || output.custody_transferred_at) return { action: "bloquear", reason: "fuera_de_oficina" };
+  if (inOtherRequest) return { action: "bloquear", reason: "salida_en_otra_solicitud" };
+  return { action: "tomar" };
 }
 
 /** La línea del historial al tomarlo: dice que sale con la misma salida. */
@@ -172,15 +188,17 @@ function dayMonth(day: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(day) ? `${day.slice(8, 10)}/${day.slice(5, 7)}` : day;
 }
 
-/** Por qué no se puede tomar todavía, según dónde está el paquete. */
-export function ownRetrySpotMessage(
-  spot: Exclude<OwnRetrySpot, "oficina">,
+/** Por qué no se puede tomar todavía, dicho al tomarlo o al escanearlo. */
+export function ownRetryDecisionMessage(
+  decision: Exclude<OwnRetryDecision, { action: "tomar" }>,
   box: { riderName: string; routeDate: string } | null,
+  outputCode?: string | null,
 ): string {
-  const where = box ? `en la caja de ${box.riderName} del ${dayMonth(box.routeDate)}` : "";
-  if (spot === "recibir_en_oficina") return `Sigue ${where} como «No entregado»: recíbelo en oficina (o escanéalo) y después asígnalo.`;
-  if (spot === "caja_sin_reporte") return `Sigue ${where} sin «No entregado» de esa caja: revisa su parada antes de sacarlo otra vez.`;
-  return "El paquete no consta en la oficina: recíbelo antes de asignarlo.";
+  const where = box ? `en la caja de ${box.riderName}${box.routeDate ? ` del ${dayMonth(box.routeDate)}` : ""}` : "en una caja";
+  if (decision.action === "recibir_en_oficina") return `Sigue ${where} como «No entregado»: recíbelo en oficina (o escanéalo) y después asígnalo.`;
+  if (decision.reason === "caja_sin_reporte") return `Sigue ${where} sin «No entregado» de esa caja: revisa su parada antes de sacarlo otra vez.`;
+  if (decision.reason === "salida_en_otra_solicitud") return `${outputCode ?? "Su salida"} ya estuvo en otra solicitud de Grupo GF: revísalo antes de volver a tomarlo.`;
+  return "El paquete no consta en la oficina ni en una caja: revisa su custodia en la ficha antes de asignarlo.";
 }
 
 /** «Grupo GF no entregó · sale con su S01»: la chapa de la fila. */
@@ -191,11 +209,22 @@ export function ownOutputLabel(outputCode: string | null | undefined): string {
 
 /**
  * Por qué un «Por reprogramar Lima» no se puede tomar cuando no es reintento
- * ni salida propia: otra salida sigue viva (la lleva su courier), o no queda
- * ninguna viva que sacar (una propia ya devuelta, por ejemplo).
+ * ni salida propia que se reusa. Una salida devuelta (custodia `devuelto` o
+ * `returned_at`: el rechazo que la 0189 recibió, que deja `pendiente`) no está
+ * viva aunque su `delivery_status` lo diga.
+ * - `otra_salida_viva`: la lleva otro courier (una reprogramación de Aliclik).
+ * - `varias_salidas_vivas`: más de una salida de Grupo GF o «por definir» viva.
+ * - `salida_devuelta`: la propia ya volvió al almacén y no queda otra viva.
+ * - `sin_salida`: no queda ninguna.
  */
-export function reprogramBlockReason(outputs: readonly OutputLike[]): "otra_salida_viva" | "sin_salida" {
-  return outputsBlockingRetry(outputs).some((output) => LIVE_DELIVERY_STATUSES.includes(output.delivery_status))
-    ? "otra_salida_viva"
-    : "sin_salida";
+export type ReprogramBlock = "otra_salida_viva" | "varias_salidas_vivas" | "salida_devuelta" | "sin_salida";
+
+export function reprogramBlockReason(outputs: readonly OutputLike[]): ReprogramBlock {
+  const returned = (output: OutputLike) => Boolean(output.returned_at) || output.custody_state === "devuelto";
+  const live = outputsBlockingRetry(outputs).filter((output) => LIVE_DELIVERY_STATUSES.includes(output.delivery_status) && !returned(output));
+  const ours = (output: OutputLike) => courierKey(output.courier) === "propio" || isCourierTbd(output.courier);
+  if (live.some((output) => !ours(output))) return "otra_salida_viva";
+  if (live.length > 1) return "varias_salidas_vivas";
+  if (outputs.some((output) => courierKey(output.courier) === "propio" && returned(output))) return "salida_devuelta";
+  return "sin_salida";
 }

@@ -28,8 +28,8 @@ import {
   lastFailedOutput,
   outputsBlockingRetry,
   ownRetryOutput,
-  ownRetrySpot,
-  ownRetrySpotMessage,
+  ownRetryDecision,
+  ownRetryDecisionMessage,
   ownRetryTakenNote,
   reprogramBlockReason,
   retryAdditionalReason,
@@ -42,7 +42,7 @@ import { lookupDispatchShipment } from "@/app/dashboard/pedidos/despacho/actions
 import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 import { custodyOnAssign, isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
-import { programDayLabel, programNeedsConfirm, takenIsAssignable, type BlockedReason } from "@/lib/dispatch-day";
+import { BLOCKED_REASON_LABEL, programDayLabel, programNeedsConfirm, takenIsAssignable, type BlockedReason } from "@/lib/dispatch-day";
 import { pastBoxDecision, pastBoxMessage, receivedFromLabel } from "@/lib/gf-scan-return";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
@@ -142,7 +142,6 @@ export interface CourierAvailableOrder {
  * entregado» en esa caja: se recibe en oficina y después se toma con ella.
  */
 export interface CourierReturnableOrder extends CourierAvailableOrder {
-  shipmentId: string;
   route: CourierRouteAssignment;
 }
 
@@ -362,11 +361,14 @@ type AdmissionShipmentRow = {
   tanders_created_at?: string | null;
   guide_code?: string | null;
   output_code?: string | null;
+  /** Lo que reusar la salida propia sobrescribe: queda en el evento de la toma. */
+  assigned_at?: string | null;
+  next_followup_at?: string | null;
 };
 
 /** Las columnas de salida que la admisión necesita, en la cola y al tomar. */
 const ADMISSION_SHIPMENT_COLUMNS =
-  "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at,status_category,reported_status,swayp_state,returned_at,guide_code,output_code,tanders_created_at:tanders_raw->>createdAt";
+  "id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,output_number,dispatched_at,status_category,reported_status,swayp_state,returned_at,guide_code,output_code,assigned_at,next_followup_at,tanders_created_at:tanders_raw->>createdAt";
 
 function isCourierAdmissionStage(stage: unknown, substage: unknown, operational?: unknown): boolean {
   return (
@@ -414,10 +416,11 @@ async function loadDepartures(admin: Admin, orderIds: string[]): Promise<Map<str
 }
 
 /**
- * La caja activa de cada salida (ítem sin `removed_at`), con el «No entregado»
- * que su motorizado reportó en ESA caja: lo mismo que exige
- * `gf_return_to_office` (0206). Para las salidas propias que se reprograman
- * sin solicitud de Grupo GF (`ownRetryOutput`), que no pasan por `accepted`.
+ * La caja activa de cada salida (ítem sin `removed_at`) y, si lo ÚLTIMO que su
+ * motorizado reportó en ESA caja es «No entregado», su motivo: exactamente lo
+ * que exige `gf_return_to_office` (0206: caja de Grupo GF, última parada por
+ * `reported_at`). Para las salidas propias que se reprograman sin solicitud de
+ * Grupo GF (`ownRetryOutput`), que no pasan por `accepted`.
  */
 async function loadActiveBoxes(admin: Admin, shipmentIds: string[]): Promise<Map<string, CourierRouteAssignment>> {
   const out = new Map<string, CourierRouteAssignment>();
@@ -432,16 +435,17 @@ async function loadActiveBoxes(admin: Admin, shipmentIds: string[]): Promise<Map
   const [{ data: manifests }, { data: stops }] = await Promise.all([
     courierRowsByIds([...new Set(boxItems.map((item) => item.manifest_id))], (ids) => admin
       .from("dispatch_manifests")
-      .select("id,route_date,rider_id,driver_name,state,load_number,delivery_route_id")
+      .select("id,courier,route_date,rider_id,driver_name,state,load_number,delivery_route_id")
       .in("id", ids)),
     courierRowsByIds(boxItems.map((item) => item.shipment_id), (ids) => admin
       .from("delivery_stops")
-      .select("shipment_id,dispatch_manifest_id,outcome_reason")
+      .select("shipment_id,dispatch_manifest_id,status,outcome_reason,reported_at")
       .in("shipment_id", ids)
-      .eq("status", "no_entregado")),
+      .not("dispatch_manifest_id", "is", null)),
   ]);
   const manifestById = new Map((manifests as Array<{
     id: string;
+    courier: string;
     route_date: string;
     rider_id: string | null;
     driver_name: string | null;
@@ -449,11 +453,17 @@ async function loadActiveBoxes(admin: Admin, shipmentIds: string[]): Promise<Map
     load_number: number;
     delivery_route_id: string | null;
   }>).map((manifest) => [manifest.id, manifest]));
-  const undelivered = new Map((stops as Array<{ shipment_id: string; dispatch_manifest_id: string | null; outcome_reason: string | null }>)
-    .filter((stop) => stop.dispatch_manifest_id)
-    .map((stop) => [`${stop.dispatch_manifest_id}:${stop.shipment_id}`, stop.outcome_reason ?? "sin motivo"]));
+  // La última parada de cada (caja, salida), como la ordena la 0206.
+  const lastStop = new Map<string, { status: string; outcome_reason: string | null; reported_at: string | null }>();
+  for (const stop of stops as Array<{ shipment_id: string; dispatch_manifest_id: string; status: string; outcome_reason: string | null; reported_at: string | null }>) {
+    const key = `${stop.dispatch_manifest_id}:${stop.shipment_id}`;
+    const current = lastStop.get(key);
+    if (!current || (stop.reported_at ?? "") > (current.reported_at ?? "")) lastStop.set(key, stop);
+  }
   for (const item of boxItems) {
     const manifest = manifestById.get(item.manifest_id);
+    const stop = lastStop.get(`${item.manifest_id}:${item.shipment_id}`);
+    const undelivered = manifest && courierKey(manifest.courier) === "propio" && stop?.status === "no_entregado";
     out.set(item.shipment_id, {
       manifestId: item.manifest_id,
       loadNumber: manifest?.load_number ?? 1,
@@ -464,7 +474,7 @@ async function loadActiveBoxes(admin: Admin, shipmentIds: string[]): Promise<Map
       state: manifest?.state ?? "unknown",
       officeCheckedAt: item.office_checked_at,
       pickupCheckedAt: item.pickup_checked_at,
-      undeliveredReason: undelivered.get(`${item.manifest_id}:${item.shipment_id}`) ?? null,
+      undeliveredReason: undelivered ? stop?.outcome_reason ?? "sin motivo" : null,
     });
   }
   return out;
@@ -678,7 +688,14 @@ async function loadCourierOperations(
     const own = ownRetryOutput(order, shipmentsByOrder.get(order.order_id) ?? []);
     if (own) ownByOrder.set(order.order_id, own);
   }
-  const ownBoxes = await loadActiveBoxes(admin, [...ownByOrder.values()].map((output) => output.id));
+  const ownIds = [...ownByOrder.values()].map((output) => output.id);
+  const [ownBoxes, { data: ownRequestRows }] = await Promise.all([
+    loadActiveBoxes(admin, ownIds),
+    // Una salida solo puede estar en UNA solicitud, también cancelada
+    // (`logistics_requests_shipment_uniq`): lo mismo que se mira al tomar.
+    courierRowsByIds(ownIds, (ids) => admin.from("logistics_requests").select("shipment_id").in("shipment_id", ids)),
+  ]);
+  const ownInRequest = new Set((ownRequestRows as Array<{ shipment_id: string }>).map((request) => request.shipment_id));
 
   let blockedCount = 0;
   const blocked: CourierBlockedOrder[] = [];
@@ -721,13 +738,12 @@ async function loadCourierOperations(
       block(order, assigned ? "ya_en_caja" : "sin_salida");
       continue;
     }
-    // Si su salida sigue en una caja de un día anterior, primero se recibe en
-    // oficina; sin el «No entregado» de esa caja, o fuera de la oficina sin
-    // caja, no se puede sacar y se dice.
+    // Si su salida sigue en una caja, primero se recibe en oficina; lo que no
+    // se puede sacar (`ownRetryDecision`) va a «Sin condiciones» con su motivo.
     const ownBox = own ? ownBoxes.get(own.id) ?? null : null;
-    const spot = own ? ownRetrySpot(own, ownBox) : null;
-    if (spot === "caja_sin_reporte" || spot === "fuera_de_oficina") {
-      block(order, spot);
+    const decision = own ? ownRetryDecision(own, ownBox, ownInRequest.has(own.id)) : null;
+    if (decision?.action === "bloquear") {
+      block(order, decision.reason);
       continue;
     }
     const agreement = agreementByStore.get(order.store_id);
@@ -779,7 +795,7 @@ async function loadCourierOperations(
       tandersReview: review,
       ownOutput: own ? { outputCode: own.output_code ?? null } : null,
     };
-    if (own && ownBox && spot === "recibir_en_oficina") returnable.push({ ...row, shipmentId: own.id, route: ownBox });
+    if (ownBox && decision?.action === "recibir_en_oficina") returnable.push({ ...row, route: ownBox });
     else available.push(row);
   }
 
@@ -1177,32 +1193,22 @@ async function takeOrdersCore(
       // ESA salida, sin crear otra. La misma regla que la cola.
       const own = review || isRetryAdmission(row.macro_stage, row.macro_substage, row.operational_status) ? null : ownRetryOutput(row, outputs);
       if (!isCourierAdmissionStage(row.macro_stage, row.macro_substage, row.operational_status) && !review && !own) {
-        failed.push({ orderId, error: !isReprogramStage(row.macro_stage, row.macro_substage)
-          ? "El pedido ya avanzó y salió de Pedidos disponibles."
-          : reprogramBlockReason(outputs) === "otra_salida_viva"
-          ? "Otra salida sigue viva: la lleva su courier."
-          : "No tiene una salida viva que reprogramar." });
+        failed.push({ orderId, error: isReprogramStage(row.macro_stage, row.macro_substage)
+          ? `${BLOCKED_REASON_LABEL[reprogramBlockReason(outputs)].label}.`
+          : "El pedido ya avanzó y salió de Pedidos disponibles." });
         continue;
       }
       if (own) {
-        // En una caja, recibirlo en oficina es un hecho físico y va a propósito
-        // («Recibir en oficina» o su escaneo); aquí solo se dice.
-        const box = (await loadActiveBoxes(admin, [own.id])).get(own.id) ?? null;
-        const spot = ownRetrySpot(own, box);
-        if (spot !== "oficina") {
-          failed.push({ orderId, error: ownRetrySpotMessage(spot, box) });
-          continue;
-        }
-        // Una salida solo puede estar en UNA solicitud, también cancelada
-        // (`logistics_requests_shipment_uniq`, 0138).
-        const { data: priorRequest } = await admin
-          .from("logistics_requests")
-          .select("id")
-          .eq("shipment_id", own.id)
-          .limit(1)
-          .maybeSingle();
-        if (priorRequest) {
-          failed.push({ orderId, error: `${own.output_code ?? "Su salida"} ya estuvo en otra solicitud de Grupo GF: revísalo antes de volver a tomarlo.` });
+        // La misma decisión que la cola (`ownRetryDecision`). En una caja,
+        // recibirlo en oficina es un hecho físico y va a propósito («Recibir en
+        // oficina» o su escaneo); aquí solo se dice.
+        const [box, { data: priorRequest }] = await Promise.all([
+          loadActiveBoxes(admin, [own.id]).then((boxes) => boxes.get(own.id) ?? null),
+          admin.from("logistics_requests").select("id").eq("shipment_id", own.id).limit(1).maybeSingle(),
+        ]);
+        const decision = ownRetryDecision(own, box, Boolean(priorRequest));
+        if (decision.action !== "tomar") {
+          failed.push({ orderId, error: ownRetryDecisionMessage(decision, box, own.output_code) });
           continue;
         }
       }
@@ -1223,7 +1229,7 @@ async function takeOrdersCore(
       // courier y lleva su rótulo (§9.3)—; nunca se rellena otra.
       const retry = isRetryAdmission(row.macro_stage, row.macro_substage, row.operational_status);
       // Con la salida propia no hay «por definir» que rellenar: es la única viva.
-      const fillable = retry || review ? null : pickFillableRouteOutput(outputs);
+      const fillable = retry || review || own ? null : pickFillableRouteOutput(outputs);
       const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null);
       const mayCreateOutput = Boolean(review) || retry || row.macro_substage === "por_generar_rotulo";
       if (assigned) {
@@ -1331,9 +1337,9 @@ async function takeOrdersCore(
       // pertenecer a una caja distinta, aunque el UPDATE conservara la original.
       const newShipmentId = fillable?.id ?? randomUUID();
       // La salida propia conserva su código de guía: el rótulo pegado sigue valiendo.
-      const guideCode = own?.guide_code ?? manualRouteGuideCode(
+      const guideCode = own ? own.guide_code ?? null : manualRouteGuideCode(
         row.order_name == null ? null : String(row.order_name),
-        own?.id ?? newShipmentId,
+        newShipmentId,
         "propio",
       );
       const acceptedAt = new Date().toISOString();
@@ -1422,7 +1428,7 @@ async function takeOrdersCore(
             shipmentId: write.shipmentId,
             outputCode,
             reusedOutput: write.filled,
-            ownRetry: own ? { previousCreatedVia: own.created_via } : null,
+            ownRetry: own ? { previousCreatedVia: own.created_via, previousAssignedAt: own.assigned_at ?? null, previousNextFollowupAt: own.next_followup_at ?? null } : null,
             tariffAmount: check.tariffAmount,
             scheduledFor,
           },
@@ -1448,7 +1454,7 @@ async function takeOrdersCore(
             requestId,
             outputCode,
             reusedOutput: write.filled,
-            ownRetry: own ? { previousCreatedVia: own.created_via } : null,
+            ownRetry: own ? { previousCreatedVia: own.created_via, previousAssignedAt: own.assigned_at ?? null, previousNextFollowupAt: own.next_followup_at ?? null } : null,
             tariffId: check.tariffId,
             tandersReview: review && confirmation ? { ...review, packageLocation: confirmation.packageLocation } : null,
             tariffAmount: check.tariffAmount,
@@ -1955,7 +1961,7 @@ async function assignRouteCore(
     }
     // Una salida anulada o entregada no entra en una caja: la toma pudo
     // reusar una salida que alguien anuló o cerró después (06-10-2026).
-    if (shipment.delivery_status && shipment.delivery_status !== "pendiente") {
+    if (shipment.delivery_status === "anulado" || shipment.delivery_status === "entregado") {
       failed.push({ requestId: request.id, error: `La salida está ${shipment.delivery_status.replace("_", " ")}: no entra en una caja.` });
       continue;
     }
