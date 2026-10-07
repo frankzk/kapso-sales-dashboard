@@ -24,6 +24,7 @@ import { operationFitsCourier, routeKindForCourier } from "@/lib/dispatch-routin
 import { courierLabelFor } from "@/lib/couriers/catalog";
 import { decideReception } from "@/lib/returns-reception";
 import { gfReturnDecision } from "@/lib/gf-returns-scan";
+import { boxWho, notInThisBoxMessage } from "@/lib/scan-other-box";
 import { loadPickupKeyFacts } from "@/lib/shalom/pickup-facts";
 import {
   decideShalomReception,
@@ -863,7 +864,26 @@ export async function scanManifestItem(
   if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
   const shipment = pick.shipment;
   const item = (rows ?? []).find((row) => row.shipment_id === shipment.id);
-  if (!item) return { error: "Ese paquete no pertenece a esta ruta." };
+  if (!item) {
+    // Decir en qué caja está: «no pertenece a esta ruta» parecía que no
+    // dejaba asignarlo (KP136825, 07-10-2026, `lib/scan-other-box.ts`).
+    const { data: other } = await admin
+      .from("dispatch_manifest_items")
+      .select("dispatch_manifests!inner(courier,route_date,driver_name,received_by,state)")
+      .eq("shipment_id", shipment.id)
+      .is("removed_at", null)
+      .neq("manifest_id", manifestId)
+      .neq("dispatch_manifests.state", "cancelled")
+      .limit(1)
+      .maybeSingle();
+    const raw = (other as { dispatch_manifests: unknown } | null)?.dispatch_manifests;
+    const box = (Array.isArray(raw) ? raw[0] : raw) as
+      | { courier: string; route_date: string; driver_name: string | null; received_by: string | null }
+      | undefined;
+    const here = { who: boxWho(manifest, courierLabelFor(manifest.courier)), routeDate: manifest.route_date };
+    const elsewhere = box ? { who: boxWho(box, courierLabelFor(box.courier)), routeDate: box.route_date } : null;
+    return { error: notInThisBoxMessage(here, elsewhere) };
+  }
 
   if (stage === "pickup") {
     const { data: all } = await admin

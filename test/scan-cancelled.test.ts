@@ -41,7 +41,7 @@ describe("los escaneos lo dicen antes que cualquier otra cosa", () => {
   it("cotejo: antes de «Ese paquete no pertenece a esta ruta»", () => {
     const body = despacho.slice(despacho.indexOf("export async function scanManifestItem"));
     expect(body.indexOf("cancelledScanNotice(")).toBeGreaterThan(0);
-    expect(body.indexOf("cancelledScanNotice(")).toBeLessThan(body.indexOf("Ese paquete no pertenece a esta ruta."));
+    expect(body.indexOf("cancelledScanNotice(")).toBeLessThan(body.indexOf("notInThisBoxMessage("));
   });
 
   it("armado en almacén y agregar a ruta también", () => {
