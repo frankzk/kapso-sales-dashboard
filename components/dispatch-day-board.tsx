@@ -74,7 +74,7 @@ import {
 } from "@/lib/dispatch-day";
 import { macroStageLabel, macroSubstageLabel, ORDER_MACRO_STAGES } from "@/lib/order-macro-stage";
 import { nonDeliveryReasonLabel } from "@/lib/gf-delivery";
-import { failedOutputLabel } from "@/lib/gf-retry";
+import { failedOutputLabel, ownOutputLabel } from "@/lib/gf-retry";
 import { confirmedTandersReview, type TandersConfirmations, type TandersPackageLocation, type TandersReview } from "@/lib/gf-tanders-review";
 import { addToTray, optimisticBox, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
@@ -92,6 +92,7 @@ import {
   type CourierActionResult,
   type CourierAvailableOrder,
   type CourierBlockedOrder,
+  type CourierReturnableOrder,
   type CourierRiderOption,
 } from "@/app/dashboard/courier/actions";
 import { removeManifestItem, scanManifestItem } from "@/app/dashboard/pedidos/despacho/actions";
@@ -100,6 +101,8 @@ interface Props {
   orgId: string;
   day: string;
   available: CourierAvailableOrder[];
+  /** Salidas propias en una caja anterior sin solicitud: se reciben en oficina. */
+  returnable: CourierReturnableOrder[];
   accepted: CourierAcceptedOrder[];
   /** Pedidos de Lima que no entran en la cola, con su motivo («sin condiciones»). */
   blocked: CourierBlockedOrder[];
@@ -322,6 +325,7 @@ export function DispatchDayBoard(props: Props) {
         route: null,
         failedOutput: o.failedOutput ?? null,
         tandersReview: o.tandersReview ?? null,
+        ownOutput: o.ownOutput ?? null,
       }));
     return [...taken, ...free];
   }, [props.accepted, props.available]);
@@ -360,7 +364,42 @@ export function DispatchDayBoard(props: Props) {
         undeliveredReason: o.route.undeliveredReason ?? null,
       },
     })), [props.accepted]);
-  const allRows = useMemo(() => [...queue, ...tracked], [queue, tracked]);
+  // Lo que Grupo GF no entregó con su propia salida y sigue en una caja
+  // anterior, sin solicitud (06-10-2026): se recibe en oficina como los demás
+  // «No entregado» y después se toma con esa misma salida.
+  const ownInBox = useMemo<QueueRow[]>(() => props.returnable.map((o) => ({
+    orderId: o.orderId,
+    orderName: o.orderName,
+    storeName: o.storeName,
+    customerName: o.customerName,
+    customerPhone: o.customerPhone,
+    district: o.district,
+    orderTotal: o.orderTotal,
+    createdAt: o.orderCreatedAt,
+    scheduledFor: o.scheduledFor,
+    tariffAmount: o.tariffAmount,
+    taken: false,
+    requestId: null,
+    armed: null,
+    observation: null,
+    hasPriorDispatch: o.hasPriorDispatch,
+    programmedFor: null,
+    programReason: null,
+    macroStage: o.macroStage,
+    macroSubstage: o.macroSubstage,
+    assignable: false,
+    route: {
+      riderName: o.route.riderName,
+      routeDate: o.route.routeDate,
+      loadNumber: o.route.loadNumber,
+      state: o.route.state,
+      officeCheckedAt: o.route.officeCheckedAt,
+      pickupCheckedAt: o.route.pickupCheckedAt,
+      undeliveredReason: o.route.undeliveredReason ?? null,
+    },
+    ownOutput: o.ownOutput ?? null,
+  })), [props.returnable]);
+  const allRows = useMemo(() => [...queue, ...tracked, ...ownInBox], [queue, tracked, ownInBox]);
 
   const stores = useMemo(() => [...new Set(queue.map((q) => q.storeName))].sort(), [queue]);
   const districts = useMemo(() => [...new Set(queue.map((q) => q.district))].sort((a, b) => a.localeCompare(b, "es")), [queue]);
@@ -486,6 +525,12 @@ export function DispatchDayBoard(props: Props) {
     const confirmProgrammed = Boolean(opts.confirmProgrammed);
     const split = splitAssignment(ids, props.available, props.accepted);
     setSelected(new Set());
+    // Un «No entregado» que sigue en una caja no se asigna: se recibe en
+    // oficina primero. Sin nada asignable, decirlo en vez de «Asignados».
+    if (!split.orderIds.length && !split.requestIds.length) {
+      run(async () => ({ error: "Ninguno de los marcados se puede asignar: los «No entregado» que siguen en una caja se reciben en oficina primero." }));
+      return;
+    }
     run(async () => {
       // Lo que falló se dice como error, en rojo y sin repetirse; lo demás
       // como aviso. Antes todo salía junto en verde, también los rechazos.
@@ -570,7 +615,7 @@ export function DispatchDayBoard(props: Props) {
           {declined.length > 0 && (
             <AttentionPill icon={IconPackage} label="No recogidos" count={declined.length} hint="Paquetes que el motorizado no recogió de su caja: vuelven a «por asignar». Toca para ver cuáles." active={declinedOpen} onClick={() => setDeclinedOpen((v) => !v)} />
           )}
-          <AttentionPill icon={IconAlert} label="Sin condiciones" count={props.blocked.length} hint="Pedidos de Lima que no entran en la cola: tarifa faltante, distrito inválido, servicio pausado o sin salida armable. Abre la lista con el motivo de cada uno." active={blockedOpen} onClick={() => setBlockedOpen((v) => !v)} />
+          <AttentionPill icon={IconAlert} label="Sin condiciones" count={props.blocked.length} hint="Pedidos de Lima que no entran en la cola: tarifa faltante, distrito inválido, servicio pausado, sin salida armable, o un «Por reprogramar» que no se puede sacar (otra salida viva, caja sin su «No entregado»…). Abre la lista con el motivo de cada uno." active={blockedOpen} onClick={() => setBlockedOpen((v) => !v)} />
         </div>
       </div>
 
@@ -866,12 +911,12 @@ export function DispatchDayBoard(props: Props) {
               </label>
               <OpsButton
                 variant="primary"
-                disabled={pending || !canManageDispatch || !riderId || !selected.size}
+                disabled={pending || !canManageDispatch || !riderId || !selectedAssignable.length}
                 onClick={() => assign()}
                 title={riderId ? undefined : "Elige el motorizado arriba"}
                 className="max-w-full truncate"
               >
-                {pending ? "Asignando…" : `Asignar${selected.size ? ` ${selected.size}` : ""} a ${riderName || "…"}`}
+                {pending ? "Asignando…" : `Asignar${selectedAssignable.length ? ` ${selectedAssignable.length}` : ""} a ${riderName || "…"}`}
               </OpsButton>
               {/* Programar: guarda el día de salida de los marcados, sin tomarlos. */}
               <div className="relative">
@@ -1199,6 +1244,7 @@ function StateBadges({ q, today }: { q: QueueRow; today: string }) {
     <div className="flex flex-wrap items-center gap-1">
       {q.route?.undeliveredReason && <Badge tone="urgent" title="Sigue en la caja del motorizado: márcalo y «Recibir en oficina» cuando vuelva el paquete">No entregado · {nonDeliveryReasonLabel(q.route.undeliveredReason)}</Badge>}
       {q.failedOutput && <Badge tone="crit" title="Otro courier no lo entregó. Al asignarlo se crea una salida nueva y Almacén arma otra caja con su rótulo.">{failedOutputLabel(q.failedOutput)}</Badge>}
+      {q.ownOutput && !q.route && <Badge tone="crit" title={`Grupo GF no lo entregó. Sale con su misma salida${q.ownOutput.outputCode ? ` ${q.ownOutput.outputCode}` : ""}: mismo QR y rótulo, Almacén no arma otra caja.`}>{ownOutputLabel(q.ownOutput.outputCode)}</Badge>}
       {q.tandersReview && <span className="text-xs text-warn-fg" title={`Confirma el paquete antes de asignar. ${q.tandersReview.courier === "swayp" ? "Swayp" : "Tanders"} conserva su salida original.`}>{courierReviewChip(q.tandersReview)} {programDayLabel(limaDay(q.tandersReview.dispatchedAt)!)}</span>}
       {q.assignable && q.programmedFor && <ProgramChip day={q.programmedFor} today={today} reason={q.programReason ?? null} />}
       {q.taken && !q.route && <Badge>tomado · sin caja</Badge>}

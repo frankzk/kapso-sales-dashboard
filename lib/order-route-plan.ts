@@ -426,6 +426,11 @@ function applyOutputPolicy(
       availability: "blocked",
       reason: vuelve
         ? `${route.label} no entregó: su guía está en devolución y el paquete vuelve al origen. Mientras esa guía siga abierta no se crea otra con ${route.label}.`
+        // La salida propia que no se entregó se reprograma con ELLA MISMA desde
+        // Despacho del día (06-10-2026, MOM §29.13): anularla gastaba el
+        // consecutivo y obligaba a armar otra caja para el mismo paquete.
+        : route.key === "propio"
+        ? `${route.label} ya tiene una salida activa en este pedido${blocking.outputCode ? ` (${blocking.outputCode})` : ""}. Si no se entregó, se reprograma con esa misma salida desde Despacho del día («Desde la lista»).`
         : `${route.label} ya tiene una salida activa en este pedido. Anúlala o ciérrala antes de crear otra.`,
       blockingOutput: {
         id: blocking.id,

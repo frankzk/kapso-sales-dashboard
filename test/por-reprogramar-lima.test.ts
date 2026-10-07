@@ -313,7 +313,7 @@ describe("3. una salida devuelta no cierra el pedido si otra sigue viva", () => 
 });
 
 describe("4. «Desde la lista» ofrece lo que otro courier no entregó", () => {
-  it("entra el pedido que espera courier nuevo, y solo ese", () => {
+  it("el reintento de otro courier es solo el que espera courier nuevo", () => {
     expect(isRetryAdmission("en_curso", "por_reprogramar_lima", "pendiente_nuevo_courier")).toBe(true);
     // Una reprogramación de Aliclik con su guía viva la lleva Aliclik.
     expect(isRetryAdmission("en_curso", "por_reprogramar_lima", "reprogramado")).toBe(false);
@@ -396,9 +396,13 @@ describe("las piezas en el código", () => {
     const start = src.indexOf("async function loadCourierOperations(");
     const body = src.slice(start, src.indexOf("\nexport async function loadCourierConfig(", start));
     expect(body).toContain("macro_stage,macro_substage,operational_status");
-    expect(body).toContain("${RETRY_QUEUE_FILTER}");
+    // Desde el 06-10-2026 «Por reprogramar Lima» entra por su etapa
+    // (`REPROGRAM_QUEUE_FILTER`, que contiene al reintento); el operativo
+    // sigue distinguiendo el reintento de otro courier (test/gf-own-retry.test.ts).
+    expect(body).toContain("${REPROGRAM_QUEUE_FILTER}");
+    expect(body).toContain("isRetryAdmission(order.macro_stage, order.macro_substage, order.operational_status)");
     expect(body).toContain("activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null)");
-    expect(body).toContain("const needsExistingBox = !review && !retry && order.macro_substage !== \"por_generar_rotulo\"");
+    expect(body).toContain("const needsExistingBox = !review && !retry && !own && order.macro_substage !== \"por_generar_rotulo\"");
     expect(body).toContain("failedOutput: retry ? lastFailedOutput(outputs) : null");
   });
 
@@ -407,7 +411,8 @@ describe("las piezas en el código", () => {
     const start = src.indexOf("async function takeOrdersCore(");
     const body = src.slice(start, src.indexOf("\nexport ", start));
     expect(body).toContain("isCourierAdmissionStage(row.macro_stage, row.macro_substage, row.operational_status)");
-    expect(body).toContain("const fillable = retry || review ? null : pickFillableRouteOutput(outputs);");
+    // La salida propia que se reusa tampoco rellena (06-10-2026, test/gf-own-retry.test.ts).
+    expect(body).toContain("const fillable = retry || review || own ? null : pickFillableRouteOutput(outputs);");
     expect(body).toContain("const mayCreateOutput = Boolean(review) || retry || row.macro_substage === \"por_generar_rotulo\";");
     expect(body).toContain("motivo: reviewReason ?? (failedBefore ? retryAdditionalReason(failedBefore) : null)");
     expect(body).toContain("outputs.length >= MAX_OUTPUTS_PER_ORDER");
