@@ -4626,13 +4626,28 @@ dentro del máximo general de 10. El cupo se configura en la base
 la reserva comprueba el general primero. Tiene interruptor
 propio, apagado al instalar. La vía con historial se conserva.
 
-- Pedido de hasta **14 días**, importe positivo de hasta **S/500**, con **0, 1
-  o 2 intentos Aliclik informados**. Un intento sin dato no cuenta como cero: se
-  aparta. Tres o más intentos también.
+- Pedido de hasta **14 días**, importe positivo de hasta **S/500**, con **1 o 2
+  intentos Aliclik informados** y el paquete **en reparto o de vuelta**
+  (despacho `PICKED`, `TO_RETURN` o `RETURNED`). Un intento sin dato no cuenta
+  como cero: se aparta. Cero intentos, tres o más, y un despacho que diga que el
+  paquete no salió a reparto (`LEFT_IN_WAREHOUSE`, `STORE_CENTRAL`,
+  `REMAINING_IN_TRANSIT`) también.
+- **Solo si Aliclik llegó a visitar** (05-10-2026, decisión del owner,
+  migración 0231). Revierte el «0 intentos» de la ampliación del 03-10. Medido
+  sobre los reenvíos por Swayp tras una Aliclik fallida desde el 15-09, con 4 o
+  más días: de los **37** cuyo paquete Aliclik nunca salió a reparto o no tuvo
+  ni un intento, **ninguno** se entregó; los 7 entregados tenían todos al menos
+  una visita. Un `CANCEL` sin visita suele ser el cliente cancelando por
+  teléfono con Aliclik: así contestaron #KP136734 y #KP136038, reenviados por el
+  piloto el 03-10 con 0 intentos («cancelé ese pedido», «ahora no lo quiero»).
+  De las 22 guías del piloto hasta ese día, 13 habían salido con 0 intentos.
+  Se aparta con su propio motivo, «Piloto: Aliclik no llegó a visitar»
+  (`aliclikSalioAReparto`), para que la pantalla diga por qué. La vía con
+  entrega previa no cambia.
 - El máximo inicial de S/199 se amplió a **S/500** por decisión del usuario el
   01-10-2026. Se conservaron el cupo y el resto de condiciones.
 - **Ampliación del 03-10-2026** (decisión del owner, migración 0220): de 7 a 14
-  días y de exactamente un intento a 0–2. En 70 pasadas el piloto emitió 4
+  días y de exactamente un intento a 0–2 (el 0 se revirtió el 05-10, arriba). En 70 pasadas el piloto emitió 4
   guías y en las últimas no halló ni un elegible; el cupo no era el freno. De
   126 pedidos apartados por estos límites, 95 pasaban de 7 días —la edad se
   cuenta desde la compra y Aliclik suele fallar entre el día 5 y el 10—, 68
@@ -5081,7 +5096,7 @@ pago completo», la alerta crítica de cobro, por un paquete que venía de vuelt
   la tenía como recogida. Medido sobre los «recogido» de Shalom de 75 días:
   **48** salieron de la agencia sin que la clave se revelara ni se enviara
   nunca, sin el saldo pagado y tras **15 a 41 días** en ella, en tandas de minuto
-  a minuto —el 22/09 a las 10:25, 10:26 y 10:27, por ejemplo—. Sin clave no se
+  a minuto —el 22/09 a las 15:25, 15:26 y 15:27, por ejemplo—. Sin clave no se
   recoge en el mostrador: eran retornos. Los 10 recojos reales con saldo
   pendiente salieron a los **1-7 días**, y en 9 de ellos alguien había revelado
   la clave.
@@ -5090,27 +5105,40 @@ pago completo», la alerta crítica de cobro, por un paquete que venía de vuelt
      (`key_view`) ni se envió (`key_shared`, `pickup_key_shares`);
   2. no hay rastro de cobro, con el **mismo** criterio que la alerta
      `recogido_sin_pago_completo` (§6.5);
-  3. pasaron **8 días o más** entre la llegada a la agencia (hito `destino`) y
-     la salida.
+  3. pasaron **8 días o más** entre la **primera** llegada a la agencia y la
+     salida. La primera llegada es la más antigua entre el
+     `disponible_para_recojo` de esa guía en la línea de tiempo y el hito
+     `destino` de la respuesta.
 
-  Sin clave registrada o sin fecha de llegada no se adivina: se respeta el
-  recojo y la alerta sigue encendida para que una persona lo mire.
+  Sin clave registrada o sin ninguna fecha de llegada no se adivina: se respeta
+  el recojo y la alerta sigue encendida para que una persona lo mire.
+- **La llegada que cuenta es la primera (05-10-2026).** Shalom mueve la fecha de
+  `destino` mientras el paquete sigue en la agencia: la que trae la respuesta
+  del `entregado` no dice desde cuándo está ahí. Contando con ella, la primera
+  versión de la regla dejó pasar **7 retornos** el 03/10 y el 05/10 —llevaban
+  36 a 40 días en la agencia y Shalom decía menos de 8—, y los dos que sí
+  detectó (#KP130021 y #KP129758) los contó en 10 y 8 días cuando llevaban 37 y
+  38. La llegada se toma de la línea de tiempo: el `disponible_para_recojo` que
+  el rastreo escribió **para esa guía**. Un reenvío con otra guía no hereda los
+  días de la primera, y una corrección manual (`status_override`) no trae guía
+  ni es la llegada física.
 - **Qué se escribe.** La guía queda `anulado` —terminal: el rastreo deja de
   preguntar por ella—, con `pickup_state = retorno_iniciado`, custodia `retorno`
   y `closed_at` en la fecha de salida, y su `courier_status` en la línea de
   tiempo dice por qué y cuántos días estuvo en la agencia. El pedido pasa a
   «Por cerrar · Devolución física pendiente» y la caja se espera en
   **Devoluciones** (§9.4).
-- **Falla cerrado.** Si no se pueden leer la clave o el cobro, no se escribe
-  nada: la guía sigue viva y la pasada siguiente lo reintenta. «No pude leer la
-  clave» no es «no hay clave».
+- **Falla cerrado.** Si no se pueden leer la clave, el cobro o la llegada, no
+  se escribe nada: la guía sigue viva y la pasada siguiente lo reintenta. «No
+  pude leer la clave» no es «no hay clave».
 - **De la clave solo se pregunta si existe.** Nunca se lee `key_enc`.
 - Costo asumido: un recojo real con la clave dictada por fuera de Kapta, sin
   revelarla en pantalla, sin cobro y tras 8 días en la agencia se leería como
   retorno. Esa caja nunca llegaría a Devoluciones y se quedaría «por recibir»:
   ahí se ve.
-- Lo leído antes de esta regla no se corrige solo: esas guías ya están
-  `entregado` y el rastreo no vuelve a preguntar por ellas.
+- Lo leído antes de esta regla —y lo que su primera versión dejó pasar entre el
+  03/10 y el 05/10— no se corrige solo: esas guías ya están `entregado` y el
+  rastreo no vuelve a preguntar por ellas.
 
 Contingencia cuando la creación por API o Shalom Pro está degradada:
 
@@ -5335,6 +5363,17 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   200 más recientes (`lib/olva/email-log.ts`). Si Make vuelve a mandar un
   correo que ya vinculó, sigue figurando como «vinculado al llegar» y no
   pasa a «ya tenía tracking».
+- **Un PDF trae un rótulo por envío del registro** (migración 0232, 06-10-2026).
+  Un registro de Olva con varios envíos manda un solo correo con un solo PDF
+  que trae un rótulo por envío («N° REGISTRO: … (1/4)», «(2/4)»…). Hasta
+  entonces se guardaba una fila por PDF y solo se leía el primer rótulo: el
+  registro 202600718786 del 05/10 traía cuatro envíos y solo vinculó
+  #KP138456; de los primeros 61 correos, 102 de sus 163 rótulos nunca se
+  cotejaron. Ahora el PDF se parte en sus rótulos (cada uno empieza en
+  «ENVIA:» y termina en su TRACKING), cada rótulo es **una fila y un cotejo
+  propio** (`label_index`, la «k» de «(k/n)», y `label_count`; la clave es
+  `message_id` + `file_name` + `label_index`) y «Correos de Olva» cuenta
+  rótulos —«163 rótulos en 61 correos»— y muestra «Reg. … · rótulo 2/4».
 - **El tracking se guarda sin ceros delante.** El portal escribe
   «02649804/26»; la página pública, el correo y todo lo guardado, «2649804-26».
   `parseOlvaTracking` quita los ceros para que el índice único vea el mismo
@@ -8398,6 +8437,26 @@ custodia a la empresa y lo mete en la caja del segundo. Solo con la parada
 de la caja y del pedido. Si algo falla, el motivo se dice en la misma fila del
 escaneo; antes salía arriba de la página, fuera de la pantalla del celular, y
 parecía que el botón no hacía nada.
+
+**Devoluciones de Almacén también recibe lo que vuelve de Grupo GF
+(05-10-2026).** El escáner de Almacén → Devoluciones solo aceptaba Tanders y
+Shalom: KP137351-S01 y KP137320-S01 respondían «no es de Tanders ni de Shalom»
+y quien tenía la caja en la mano no sabía qué pasaba con el pedido. Ahora un
+paquete de Grupo GF (o aún sin courier) se resuelve igual que en Despacho del día
+→ «Devoluciones» (`lib/gf-returns-scan.ts`):
+
+| Dónde está el paquete | Qué hace el escaneo |
+| --- | --- |
+| En la caja de un motorizado, reportado «No entregado» (cualquier motivo) | Lo recibe en oficina (`gf_return_to_office`): sale de la caja, la custodia vuelve a la empresa y el pedido queda por asignar en Grupo GF, en «Por reprogramar Lima». |
+| En la caja, reportado entregado | No lo toca: lo dice. |
+| En la caja, sin reporte | No lo toca: pide que el motorizado lo reporte. |
+| Sin caja y en la empresa, nunca recibido en oficina | Nada que recibir: dice que nunca salió en Kapta y sigue por asignar. Era el caso de KP137351 y KP137320 («Por despachar · Listo para asignar»). |
+| Sin caja y ya recibido en oficina | Lo dice sin alarma. |
+
+Solo la anulación en Shopify termina la venta: un anulado que vuelve se recibe
+igual —la caja tiene que salir de la del motorizado— y el aviso dice que está
+anulado y se separa para el stock. Aliclik y los demás siguen recibiéndose desde
+el Master. Pruebas en `test/gf-returns-scan.test.ts`.
 
 **Un pedido anulado se dice primero, en cualquier escaneo (05-10-2026).** Al
 escanear un paquete —armado en almacén, agregar a una ruta, cotejo de la caja o

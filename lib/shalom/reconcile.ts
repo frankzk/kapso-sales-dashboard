@@ -7,7 +7,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { loadShalomExitFacts } from "@/lib/shalom/pickup-facts";
 import {
   readShalomTracking,
-  shalomExitIsReturn,
+  shalomExitReturnDays,
   shalomGuideWrite,
   shalomTrackingChanged,
   type ShalomTrackingStatus,
@@ -36,17 +36,18 @@ export async function applyShalomTracking(
   const read = readShalomTracking(status);
 
   // Un «entregado» se mira dos veces antes de escribirlo: si la clienta nunca
-  // tuvo la clave ni pagó y el paquete llevaba días en la agencia, Shalom lo
-  // sacó para devolverlo. Si no se pueden leer esos hechos no se escribe nada:
-  // la guía sigue viva y la pasada siguiente lo vuelve a intentar.
-  let isReturn = false;
+  // tuvo la clave ni pagó y el paquete llevaba días en la agencia —contados
+  // desde que llegó, no desde la fecha que Shalom dice hoy—, Shalom lo sacó para
+  // devolverlo. Si no se pueden leer esos hechos no se escribe nada: la guía
+  // sigue viva y la pasada siguiente lo vuelve a intentar.
+  let returnDays: number | null = null;
   if (read.deliveryStatus === "entregado" && guide.order_id) {
-    const facts = await loadShalomExitFacts(admin, guide.order_id);
+    const facts = await loadShalomExitFacts(admin, guide.order_id, guide.guide_code);
     if (!facts.ok) return { kind: "error", message: `${guide.guide_code}: ${facts.error}` };
-    isReturn = shalomExitIsReturn(read, facts.facts);
+    returnDays = shalomExitReturnDays(read, facts.facts);
   }
 
-  const write = shalomGuideWrite(read, isReturn);
+  const write = shalomGuideWrite(read, returnDays);
   const next = { deliveryStatus: write.patch.delivery_status, pickupState: write.patch.pickup_state };
   if (!shalomTrackingChanged(guide, next)) return { kind: "sin_cambio" };
 
@@ -72,5 +73,5 @@ export async function applyShalomTracking(
       payload: write.event.payload,
     });
   }
-  return { kind: "aplicado", retorno: isReturn, pickupState: write.patch.pickup_state };
+  return { kind: "aplicado", retorno: returnDays != null, pickupState: write.patch.pickup_state };
 }

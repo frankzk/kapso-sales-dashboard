@@ -275,3 +275,18 @@ describe("linkedBy", () => {
     expect(linkedBy(undefined)).toBeNull();
   });
 });
+
+describe("un correo con varios rótulos (0232)", () => {
+  it("cada rótulo es una fila, juntos y en el orden del PDF, y se cuentan los correos aparte", () => {
+    const log = build({
+      labels: [
+        correo({ id: "b", message_id: "m-1", label_index: 2, label_count: 3, olva_tracking: "2000002" }),
+        correo({ id: "c", message_id: "m-1", label_index: 3, label_count: 3, olva_tracking: "2000003" }),
+        correo({ id: "a", message_id: "m-1", label_index: 1, label_count: 3, olva_tracking: "2000001" }),
+        correo({ id: "z", message_id: "m-2", label_index: 1, label_count: 1, received_at: "2026-10-04T14:20:00Z" }),
+      ],
+    });
+    expect(log.entries.map((e) => [e.id, e.part])).toEqual([["a", "1/3"], ["b", "2/3"], ["c", "3/3"], ["z", null]]);
+    expect(log.emails).toBe(2);
+  });
+});

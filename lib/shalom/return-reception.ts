@@ -5,7 +5,7 @@
 // Shalom no tiene un hito de retorno. Cuando saca un paquete de la agencia de
 // destino para devolverlo —«cambio de destino», con una guía nueva rumbo a
 // Lima—, cierra la guía original como `entregado`. El rastreo ya distingue ese
-// caso (`shalomExitIsReturn`) y deja la guía anulada y en `retorno`; esta es la
+// caso (`shalomExitReturnDays`) y deja la guía anulada y en `retorno`; esta es la
 // otra mitad: la caja llega al almacén, alguien la escanea y queda recibida.
 //
 // Y cubre lo que el rastreo no pudo ver. Una guía que Shalom dio por recogida

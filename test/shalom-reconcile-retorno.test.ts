@@ -1,7 +1,8 @@
 // Lo que el cron de Shalom escribe cuando el rastreo dice «entregado» (MOM §12,
 // 03-10-2026): el recojo de siempre, o el retorno si la clienta nunca tuvo la
-// clave ni pagó y el paquete llevaba días en la agencia. Y que una lectura que
-// falla no escribe nada: «no pude leer la clave» no es «no hay clave».
+// clave ni pagó y el paquete llevaba días en la agencia —desde la PRIMERA
+// llegada, que Shalom no conserva (05-10-2026)—. Y que una lectura que falla no
+// escribe nada: «no pude leer la clave» no es «no hay clave».
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
@@ -17,19 +18,26 @@ interface Call {
   filters: [string, unknown][];
 }
 
+/** Una respuesta fija por tabla, o una que mira qué se preguntó. */
+type Replies = Partial<Record<string, Reply | ((call: Call) => Reply)>>;
+
 /** Una base de mentira: responde por tabla y apunta cada llamada. */
-function fakeAdmin(replies: Partial<Record<string, Reply>>) {
+function fakeAdmin(replies: Replies) {
   const calls: Call[] = [];
   const from = (table: string) => {
     const call: Call = { table, op: "select", filters: [] };
     calls.push(call);
     const b: Record<string, unknown> = {};
     b.select = (columns: string) => ((call.columns = columns), b);
-    for (const m of ["eq", "in", "is", "limit"]) b[m] = (col: unknown, val?: unknown) => (call.filters.push([`${m}:${String(col)}`, val]), b);
+    for (const m of ["eq", "in", "is", "order", "limit"]) b[m] = (col: unknown, val?: unknown) => (call.filters.push([`${m}:${String(col)}`, val]), b);
     b.update = (value: Record<string, unknown>) => ((call.op = "update"), (call.value = value), b);
     b.insert = async (value: Record<string, unknown>) => ((call.op = "insert"), (call.value = value), { data: null, error: null });
+    const answer = (key: string, fallback: Reply): Reply => {
+      const reply = replies[key];
+      return typeof reply === "function" ? reply(call) : (reply ?? fallback);
+    };
     const result = (): Reply =>
-      call.op === "select" ? (replies[table] ?? { data: [], error: null }) : (replies[`${table}:${call.op}`] ?? { data: null, error: null });
+      call.op === "select" ? answer(table, { data: [], error: null }) : answer(`${table}:${call.op}`, { data: null, error: null });
     b.maybeSingle = async () => result();
     b.then = (resolve: (r: Reply) => unknown, reject: (e: unknown) => unknown) => Promise.resolve(result()).then(resolve, reject);
     return b;
@@ -55,7 +63,7 @@ const SALIO_A_LOS_36_DIAS = {
 const NOW = "2026-10-03T15:00:00.000Z";
 
 /** #KP128064: clave registrada, nunca dada, adelanto validado y nada más. */
-const SIN_CLAVE_NI_COBRO: Partial<Record<string, Reply>> = {
+const SIN_CLAVE_NI_COBRO: Replies = {
   shalom_pickup_keys: { data: [{ order_id: "order-1" }], error: null },
   pickup_key_shares: { data: [], error: null },
   order_events: { data: [], error: null },
@@ -167,5 +175,75 @@ describe("applyShalomTracking", () => {
     const { admin, calls } = fakeAdmin({ ...SIN_CLAVE_NI_COBRO, "shipments:update": { data: null, error: { message: "deadlock" } } });
     expect(await applyShalomTracking(admin, GUIDE, SALIO_A_LOS_36_DIAS, NOW)).toMatchObject({ kind: "error" });
     expect(calls.filter((c) => c.op === "insert")).toEqual([]);
+  });
+});
+
+const isArrivalRead = (call: Call) =>
+  call.filters.some(([k, v]) => k === "eq:new_operational" && v === "disponible_para_recojo");
+
+/** La línea de tiempo: la llegada de la guía y ningún evento de clave. */
+const llegoEl = (occurredAt: string): Replies => ({
+  order_events: (call) => ({ data: isArrivalRead(call) ? [{ occurred_at: occurredAt }] : [], error: null }),
+});
+
+// #KP129688 llegó a la agencia el 26/08. El 05/10 Shalom lo sacó para
+// devolverlo, y su respuesta de ese día traía otra llegada, de cinco días antes.
+describe("applyShalomTracking: la llegada que cuenta es la primera (05-10-2026)", () => {
+  const KP129688 = {
+    transito: f("2026-08-25 11:39:29"),
+    destino: f("2026-09-30 10:00:00"),
+    entregado: f("2026-10-05 13:45:13"),
+  };
+  const PRIMERA = "2026-08-26T14:48:53+00:00";
+
+  it("Shalom movió la llegada: se cuenta desde la que quedó en la línea de tiempo", async () => {
+    const { admin, calls } = fakeAdmin({ ...SIN_CLAVE_NI_COBRO, ...llegoEl(PRIMERA) });
+    expect(await applyShalomTracking(admin, GUIDE, KP129688, NOW)).toEqual({
+      kind: "aplicado",
+      retorno: true,
+      pickupState: "retorno_iniciado",
+    });
+    const insert = writes(calls).find((c) => c.op === "insert")!;
+    expect(insert.value).toMatchObject({ new_operational: "retorno_iniciado", payload: { dias_en_agencia: 39 } });
+    expect(String(insert.value!.note)).toContain("tras 39 días");
+  });
+
+  it("sin esa llegada, el mismo rastreo se leía como un recojo de 5 días", async () => {
+    const { admin } = fakeAdmin(SIN_CLAVE_NI_COBRO);
+    expect(await applyShalomTracking(admin, GUIDE, KP129688, NOW)).toMatchObject({ retorno: false, pickupState: "recogido" });
+  });
+
+  it("pregunta por la llegada de ESTA guía, y por la más antigua", async () => {
+    const { admin, calls } = fakeAdmin({ ...SIN_CLAVE_NI_COBRO, ...llegoEl(PRIMERA) });
+    await applyShalomTracking(admin, GUIDE, KP129688, NOW);
+    const reads = calls.filter((c) => c.table === "order_events" && isArrivalRead(c));
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatchObject({
+      columns: "occurred_at",
+      filters: [
+        ["eq:order_id", "order-1"],
+        ["eq:guide_code", "92083386"],
+        ["eq:new_operational", "disponible_para_recojo"],
+        ["order:occurred_at", { ascending: true }],
+        ["limit:1", undefined],
+      ],
+    });
+  });
+
+  it("si no se puede leer la llegada, no escribe nada y lo reintenta la pasada siguiente", async () => {
+    const { admin, calls } = fakeAdmin({
+      ...SIN_CLAVE_NI_COBRO,
+      order_events: (call) => (isArrivalRead(call) ? { data: null, error: { message: "57014 timeout" } } : { data: [], error: null }),
+    });
+    const outcome = await applyShalomTracking(admin, GUIDE, KP129688, NOW);
+    expect(outcome).toMatchObject({ kind: "error" });
+    expect(outcome.kind === "error" && outcome.message).toContain("llegada a la agencia: 57014 timeout");
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it("una guía sin número no pregunta por la llegada: cuenta la que manda Shalom", async () => {
+    const { admin, calls } = fakeAdmin({ ...SIN_CLAVE_NI_COBRO, ...llegoEl(PRIMERA) });
+    expect(await applyShalomTracking(admin, { ...GUIDE, guide_code: null }, KP129688, NOW)).toMatchObject({ retorno: false });
+    expect(calls.filter((c) => c.table === "order_events" && isArrivalRead(c))).toEqual([]);
   });
 });

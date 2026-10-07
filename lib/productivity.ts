@@ -17,6 +17,7 @@ import { tzParts } from "@/lib/metrics";
 import { chunk, defaultRange, parseRange, previousRange, type DateRange } from "@/lib/access";
 import { onlineVendedoraIds } from "@/lib/presence";
 import { leadSegment, type LeadSegment } from "@/lib/leads";
+import type { DayTotals } from "@/lib/productivity-month";
 
 const DB_READ_CONCURRENCY = 4;
 
@@ -340,6 +341,41 @@ export function computeAdvisorConversionByDay(opts: {
     if (i != null) rowOf(s.vendedora)[i]!.pedidos += 1;
   }
   return series;
+}
+
+// ── Ventas por día (el ritmo del mes) ─────────────────────────────────────────
+
+/**
+ * Pedidos cerrados e ingresos por día local, del equipo y de cada asesora. Cuenta
+ * lo mismo que «Cerrados» e «Ingresos» de `computeAdvisorStats` —una venta
+ * registrada con su dueña es un cierre, por su neto—, así que el ritmo del mes
+ * cuadra con las cifras de arriba. Pura.
+ */
+export function dailySalesTotals(
+  sales: readonly AdvisorSale[],
+  tz: string,
+): { team: DayTotals[]; byAgent: Record<string, DayTotals[]> } {
+  const team = new Map<string, DayTotals>();
+  const byAgent = new Map<string, Map<string, DayTotals>>();
+  const add = (map: Map<string, DayTotals>, date: string, net: number) => {
+    const d = map.get(date) ?? { date, cerrados: 0, ingresos: 0 };
+    d.cerrados += 1;
+    d.ingresos = Math.round((d.ingresos + net) * 100) / 100;
+    map.set(date, d);
+  };
+  for (const s of sales) {
+    if (!s.vendedora || !s.occurredAt) continue;
+    const date = tzParts(s.occurredAt, tz).date;
+    add(team, date, s.net);
+    let own = byAgent.get(s.vendedora);
+    if (!own) byAgent.set(s.vendedora, (own = new Map()));
+    add(own, date, s.net);
+  }
+  const sorted = (map: Map<string, DayTotals>) => [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
+  return {
+    team: sorted(team),
+    byAgent: Object.fromEntries([...byAgent].map(([agent, map]) => [agent, sorted(map)])),
+  };
 }
 
 // ── Velocidad de 1ª gestión (speed-to-lead) ──────────────────────────────────
@@ -935,6 +971,10 @@ export interface ProductivityBoardData {
   onlineIdle: { userId: string; email: string }[];
   /** Velocidad de 1ª gestión del rango (equipo, carritos vs resto). */
   firstTouch: FirstTouchStats;
+  /** Cerrados e ingresos por día del rango (con la lente de fuente): el ritmo
+   *  del mes. `dailyByAgent` es lo mismo por asesora, para «Mi productividad». */
+  daily: DayTotals[];
+  dailyByAgent: Record<string, DayTotals[]>;
 }
 
 /** Paged shipment_calls events (agent + occurred_at + shipment ref) for the
@@ -1051,14 +1091,19 @@ async function fetchLeadsCreatedPaged(
  * per advisor (source lens applied, consistent with % cierre), and the live
  * presence snapshot. The range's lead_calls are fetched ONCE and feed both
  * metrics and heatmap. All returned structures are JSON-serializable.
+ *
+ * `opts.prevRange` replaces the default comparison (the equally-sized period
+ * just before): a month compares with the previous month, not with the 30 days
+ * that happen to precede it (see lib/productivity-month.ts).
  */
 export async function getProductivityBoard(
   storeIds: string[],
   range: DateRange,
   source: SourceBucket | null = null,
   tz = "America/Lima",
+  opts: { prevRange?: DateRange } = {},
 ): Promise<ProductivityBoardData> {
-  const prevRange = previousRange(range);
+  const prevRange = opts.prevRange ?? previousRange(range);
   const empty: ProductivityBoardData = {
     rows: [],
     prevTotals: { llamadas: 0, leadsTrabajados: 0, cerrados: 0, ingresos: 0 },
@@ -1068,6 +1113,8 @@ export async function getProductivityBoard(
     heatMode: "day",
     onlineIdle: [],
     firstTouch: emptyFirstTouchStats(),
+    daily: [],
+    dailyByAgent: {},
   };
   if (!storeIds.length) return empty;
   const sb = await createServerSupabase();
@@ -1162,6 +1209,9 @@ export async function getProductivityBoard(
   const idleEmails = idleIds.length ? await resolveEmails(idleIds) : new Map<string, string>();
   const onlineIdle = idleIds.map((id) => ({ userId: id, email: idleEmails.get(id) ?? id }));
 
+  // Las mismas ventas que «Cerrados» e «Ingresos», día por día.
+  const daily = dailySalesTotals(scopedSales, tz);
+
   return {
     rows,
     prevTotals,
@@ -1171,7 +1221,39 @@ export async function getProductivityBoard(
     heatMode: heat.mode,
     onlineIdle,
     firstTouch,
+    daily: daily.team,
+    dailyByAgent: daily.byAgent,
   };
+}
+
+/**
+ * Pedidos cerrados e ingresos de un rango, sin el resto del tablero: lo que
+ * hace falta para decir «septiembre cerró en …» junto al mes en curso. Misma
+ * fuente y misma cuenta que «Cerrados» e «Ingresos» (`order_sales` con su
+ * dueña, por su neto), con la lente de fuente y, en «Mi productividad», solo
+ * las ventas de la asesora.
+ */
+export async function getSalesTotals(
+  storeIds: string[],
+  range: DateRange,
+  source: SourceBucket | null = null,
+  tz = "America/Lima",
+  vendedora: string | null = null,
+): Promise<{ cerrados: number; ingresos: number }> {
+  if (!storeIds.length) return { cerrados: 0, ingresos: 0 };
+  const sb = await createServerSupabase();
+  const { startIso, endIso } = localRangeBoundsIso(range.from, range.to, tz);
+  const sales = await fetchAdvisorSalesPaged(sb, storeIds, startIso, endIso);
+  let cerrados = 0;
+  let ingresos = 0;
+  for (const s of sales) {
+    if (!s.vendedora) continue;
+    if (source && s.source !== source) continue;
+    if (vendedora && s.vendedora !== vendedora) continue;
+    cerrados += 1;
+    ingresos += s.net;
+  }
+  return { cerrados, ingresos: Math.round(ingresos * 100) / 100 };
 }
 
 // ───────────────────────── Drill-down: leads an advisor worked ─────────────────

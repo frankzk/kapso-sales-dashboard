@@ -1,5 +1,5 @@
 import { describe,expect,it } from "vitest";
-import { evaluateAutoDispatch,nextAutoDelivery,productsOverlap,type AutoSnapshot,type AutoSettings } from "@/lib/swayp-auto-policy";
+import { aliclikSalioAReparto,evaluateAutoDispatch,nextAutoDelivery,pilotAttemptsOk,productsOverlap,type AutoSnapshot,type AutoSettings } from "@/lib/swayp-auto-policy";
 import type { OrderLineItem } from "@/lib/types";
 const now=new Date("2026-10-01T20:00:00Z");
 const config:AutoSettings={org_id:"org",enabled:true,daily_cap:10,max_order_days:14,history_days:180};
@@ -56,10 +56,10 @@ describe("piloto sin historial",()=>{
     expect(evaluateAutoDispatch(fresh(),pilot,now)).toMatchObject({eligible:true,cohort:"recent_no_history",priorOrderId:null});
   });
   it("queda apagado por defecto",()=>expect(evaluateAutoDispatch(fresh(),config,now)).toMatchObject({reason:"no_history"}));
-  it.each([0,1,2])("admite %s intentos Aliclik informados",attempts=>{
+  it.each([1,2])("admite %s intentos Aliclik informados",attempts=>{
     const s=fresh();s.source.aliclik_attempts=attempts;expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({eligible:true,cohort:"recent_no_history"});
   });
-  it.each([null,undefined,3,4,-1,1.5])("aparta %s intentos: sin dato no es cero, y tres ya es demasiado",attempts=>{
+  it.each([0,null,undefined,3,4,-1,1.5])("aparta %s intentos: sin visita no hay reenvío, sin dato no es cero, y tres ya es demasiado",attempts=>{
     const s=fresh();s.source.aliclik_attempts=attempts as number|null;expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"pilot_limits"});
   });
   it.each([200,300,499.99,500])("admite S/%s con los demás requisitos del piloto",amount=>{
@@ -88,4 +88,28 @@ describe("piloto sin historial",()=>{
     expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"duplicate"});
   });
   it("conserva la vía original y su plazo",()=>expect(evaluateAutoDispatch(snapshot(),pilot,now)).toMatchObject({eligible:true,cohort:"prior_delivery"}));
+
+  // 05-10-2026: de 37 reenvíos cuyo paquete Aliclik nunca salió a reparto,
+  // ninguno se entregó. #KP136734 y #KP136038 (0 intentos, CANCEL) contestaron
+  // que ya habían cancelado.
+  describe("solo si Aliclik llegó a visitar",()=>{
+    it.each(["CANCEL · PICKED · CONFIRMED","CANCEL · TO_RETURN · CONFIRMED","NOT_RESPOND · RETURNED"])("admite %s",label=>{
+      const s=fresh();s.source.reported_status=label;
+      expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({eligible:true,cohort:"recent_no_history"});
+    });
+    it.each(["CANCEL · LEFT_IN_WAREHOUSE · CONFIRMED","CANCEL · STORE_CENTRAL · CONFIRMED","CANCEL · REMAINING_IN_TRANSIT · CONFIRMED","CANCEL"])("aparta %s aunque informe un intento",label=>{
+      const s=fresh();s.source.reported_status=label;
+      expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({reason:"pilot_no_visit"});
+    });
+    it("lee el despacho, no busca la palabra en toda la etiqueta",()=>{
+      expect(aliclikSalioAReparto("CANCEL · LEFT_IN_WAREHOUSE · PICKED")).toBe(false);
+      expect(aliclikSalioAReparto(null)).toBe(false);
+    });
+    it("cero intentos ya no entra al piloto",()=>expect(pilotAttemptsOk(0)).toBe(false));
+    it("la vía con entrega previa no cambia",()=>{
+      const s=snapshot();s.source.reported_status="CANCEL · LEFT_IN_WAREHOUSE · CONFIRMED";s.source.closed_at="2026-09-30T12:00:00Z";
+      Object.assign(s.source,{aliclik_attempts:0});
+      expect(evaluateAutoDispatch(s,pilot,now)).toMatchObject({eligible:true,cohort:"prior_delivery"});
+    });
+  });
 });
