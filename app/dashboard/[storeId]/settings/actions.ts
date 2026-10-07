@@ -136,6 +136,9 @@ export async function updateStore(
     cart_seq_hours_2: get("cart_seq_hours_2"),
     cart_seq_hour_start: get("cart_seq_hour_start"),
     cart_seq_hour_end: get("cart_seq_hour_end"),
+    cart_seq_image_test_enabled: get("cart_seq_image_test_enabled"),
+    cart_seq_image_template_1_name: get("cart_seq_image_template_1_name"),
+    cart_seq_image_template_1_language: get("cart_seq_image_template_1_language"),
     return_recovery_enabled: get("return_recovery_enabled"),
     return_recovery_auto: get("return_recovery_auto"),
     return_recovery_template_name: get("return_recovery_template_name"),
@@ -232,6 +235,20 @@ export async function updateStore(
   });
 
   if (!Object.keys(patch).length) return { notice: "No hay cambios para guardar." };
+
+  // Prueba de imagen (0233): al encenderla se anota desde cuándo, y los
+  // resultados cuentan desde ahí. Guardar el formulario con la prueba ya
+  // encendida no reinicia la fecha.
+  if (patch.cart_seq_image_test_enabled === true) {
+    const { data: prev } = await ctx.admin
+      .from("stores")
+      .select("cart_seq_image_test_enabled")
+      .eq("id", storeId)
+      .maybeSingle();
+    if (!(prev as { cart_seq_image_test_enabled?: boolean } | null)?.cart_seq_image_test_enabled) {
+      patch.cart_seq_image_test_started_at = new Date().toISOString();
+    }
+  }
 
   const { error } = await ctx.admin.from("stores").update(patch).eq("id", storeId);
   if (error) return { error: error.message };

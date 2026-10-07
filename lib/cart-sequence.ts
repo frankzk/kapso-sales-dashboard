@@ -19,6 +19,14 @@ import type { StoreCreds } from "@/lib/ingest";
 import { isSendablePhone, isTierLimitError, sanitizeTemplateParam } from "@/lib/leads-ingest";
 import { sendWhatsappTemplate } from "@/lib/kapso";
 import { tzParts } from "@/lib/metrics";
+import { env } from "@/lib/env";
+import {
+  cartImageVariant,
+  cartProductWithImage,
+  waImageUrl,
+  type CartImageVariant,
+  type CatalogImage,
+} from "@/lib/cart-image-test";
 
 /** Toques máximos de la secuencia (plantilla 1 y plantilla 2). */
 export const CART_SEQ_MAX_TOUCHES = 2;
@@ -64,7 +72,7 @@ export interface CartSeqLead {
  *  plantilla; los campos del lead son el fallback denormalizado. */
 export interface CartSnapshot {
   created_at: string | null;
-  line_items?: { title?: string | null; quantity?: number | null }[] | null;
+  line_items?: { title?: string | null; quantity?: number | null; product_id?: string | number | null }[] | null;
   total_amount?: number | null;
   currency?: string | null;
   address1?: string | null;
@@ -208,6 +216,8 @@ export interface CartSeqReport {
   sent: number;
   failed: number;
   skipped: number; // candidatos SQL descartados por la regla fina
+  /** Mensajes 1 de la prueba de imagen (0233) enviados con foto. */
+  withImage?: number;
 }
 
 /**
@@ -226,6 +236,7 @@ export async function runCartSequence(
   creds: StoreCreds,
   sendTemplate: typeof sendWhatsappTemplate = sendWhatsappTemplate,
   nowIso = new Date().toISOString(),
+  siteUrl = env.siteUrl(),
 ): Promise<CartSeqReport> {
   const report: CartSeqReport = { sent: 0, failed: 0, skipped: 0 };
   if (!creds.cart_seq_enabled) return report;
@@ -298,37 +309,97 @@ export async function runCartSequence(
   report.skipped = rows.length - sendable.length;
   const batch = sendable.slice(0, CART_SEQ_BATCH_CAP);
 
-  for (const l of batch) {
-    const touch = cartSeqTouchesFor(l) + 1;
-    const templateName =
-      touch === 1 ? creds.cart_seq_template_1_name! : creds.cart_seq_template_2_name!;
-    const language =
-      (touch === 1 ? creds.cart_seq_template_1_language : creds.cart_seq_template_2_language) ??
-      "es";
-    const pnId = (l.wa_phone_number_id ?? creds.whatsapp_phone_number_id)!;
-    const bodyParams = cartTemplateParams(l, snapByGid.get(l.draft_order_gid!) ?? null)!;
+  // Prueba de imagen (0233): solo el mensaje 1 y solo los carritos con foto en
+  // el espejo de catálogo; entre esos, 50/50 por carrito (lib/cart-image-test).
+  const imageTest = creds.cart_seq_image_test_enabled && !!creds.cart_seq_image_template_1_name;
+  let catalog: CatalogImage[] = [];
+  if (imageTest && batch.some((l) => cartSeqTouchesFor(l) === 0)) {
+    const { data: images } = await admin
+      .from("shopify_product_images")
+      .select("product_id, catalog_title")
+      .eq("store_id", storeId)
+      .not("image_url", "is", null);
+    catalog = (images as CatalogImage[] | null) ?? [];
+  }
 
-    let ok = false;
-    let err: string | null = null;
-    let errCode: number | undefined;
+  const apiKey = creds.kapso_api_key;
+  type SendOutcome = { ok: boolean; err: string | null; errCode: number | undefined };
+  const send = async (
+    templateName: string,
+    language: string,
+    l: CartSeqLead,
+    headerImage?: { link: string },
+  ): Promise<SendOutcome> => {
     try {
-      const send = await sendTemplate(
-        { apiKey: creds.kapso_api_key },
+      const res = await sendTemplate(
+        { apiKey },
         {
-          phoneNumberId: pnId,
+          phoneNumberId: (l.wa_phone_number_id ?? creds.whatsapp_phone_number_id)!,
           to: l.phone,
           templateName,
           language,
-          bodyParams,
+          bodyParams: cartTemplateParams(l, snapByGid.get(l.draft_order_gid!) ?? null)!,
+          ...(headerImage ? { headerImage } : {}),
         },
       );
-      ok = send.ok;
-      if (!send.ok) {
-        err = send.error ?? "envío rechazado";
-        errCode = send.code;
-      }
+      return res.ok
+        ? { ok: true, err: null, errCode: undefined }
+        : { ok: false, err: res.error ?? "envío rechazado", errCode: res.code };
     } catch (e) {
-      err = e instanceof Error ? e.message : String(e);
+      return { ok: false, err: e instanceof Error ? e.message : String(e), errCode: undefined };
+    }
+  };
+
+  for (const l of batch) {
+    const touch = cartSeqTouchesFor(l) + 1;
+    let templateName =
+      touch === 1 ? creds.cart_seq_template_1_name! : creds.cart_seq_template_2_name!;
+    let language =
+      (touch === 1 ? creds.cart_seq_template_1_language : creds.cart_seq_template_2_language) ??
+      "es";
+
+    const productId =
+      imageTest && touch === 1
+        ? cartProductWithImage(snapByGid.get(l.draft_order_gid!)?.line_items, catalog)
+        : null;
+    let variant: CartImageVariant | null = productId ? cartImageVariant(l.draft_order_gid!) : null;
+    let imageUrl = variant === "imagen" ? waImageUrl(siteUrl, storeId, productId!) : null;
+
+    let ok: boolean;
+    let err: string | null;
+    let errCode: number | undefined;
+    if (imageUrl) {
+      ({ ok, err, errCode } = await send(
+        creds.cart_seq_image_template_1_name!,
+        creds.cart_seq_image_template_1_language ?? "es",
+        l,
+        { link: imageUrl },
+      ));
+      // La plantilla con imagen falló (mal nombre, no aprobada, foto rota): el
+      // cliente no se queda sin su mensaje 1. Queda el intento auditado y sale
+      // el de siempre, FUERA de la prueba (variant null).
+      if (!ok && !isTierLimitError(errCode, err)) {
+        await admin.from("cart_seq_sends").insert({
+          store_id: storeId,
+          lead_id: l.id,
+          phone: l.phone,
+          draft_order_gid: l.draft_order_gid,
+          template_name: creds.cart_seq_image_template_1_name,
+          touch,
+          ok: false,
+          error: err,
+          variant: "imagen",
+          image_url: imageUrl,
+        });
+        variant = null;
+        imageUrl = null;
+        ({ ok, err, errCode } = await send(templateName, language, l));
+      } else {
+        templateName = creds.cart_seq_image_template_1_name!;
+        language = creds.cart_seq_image_template_1_language ?? "es";
+      }
+    } else {
+      ({ ok, err, errCode } = await send(templateName, language, l));
     }
 
     // Tope de mensajería de Meta: audita el intento pero NO consume el toque
@@ -343,6 +414,8 @@ export async function runCartSequence(
         touch,
         ok: false,
         error: err,
+        variant,
+        image_url: imageUrl,
       });
       report.failed += 1;
       break;
@@ -365,6 +438,8 @@ export async function runCartSequence(
       touch,
       ok,
       error: err,
+      variant,
+      image_url: imageUrl,
     });
     await admin.from("lead_calls").insert({
       lead_id: l.id,
@@ -372,11 +447,12 @@ export async function runCartSequence(
       kind: "system",
       vendedora: null,
       note: ok
-        ? `📤 Carrito: plantilla «${templateName}» enviada (toque ${touch}/${CART_SEQ_MAX_TOUCHES})`
+        ? `📤 Carrito: plantilla «${templateName}» enviada${imageUrl ? " con la foto del producto" : ""} (toque ${touch}/${CART_SEQ_MAX_TOUCHES})`
         : `⚠️ Carrito: falló envío de «${templateName}» (${err})`,
     });
     if (ok) report.sent += 1;
     else report.failed += 1;
+    if (ok && imageUrl) report.withImage = (report.withImage ?? 0) + 1;
   }
   return report;
 }
