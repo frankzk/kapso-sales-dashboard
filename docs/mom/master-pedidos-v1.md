@@ -7646,6 +7646,38 @@ sale foto de entrega que pedir.
   de Alexis.
 - El paso a paso está en `docs/runbooks/cuaderno-a-rutas.md`.
 
+**Excepción: el reprogramado que el motorizado conserva sale en su ruta
+siguiente, ya cotejado (07-10-2026, decisión de Frankz).** Alexis no devuelve
+a la oficina lo que el cliente pide para otro día: se lo queda y lo vuelve a
+llevar, y su hoja del día siguiente lo trae. En Kapta el paquete seguía en la
+caja del día anterior (§29.13: un no entregado vuelve físicamente a la
+oficina), así que esas filas de la hoja quedaban fuera de la ruta y sin
+cargar: #KP138029 (S/ 89) y #KP138037 (S/ 567) del 01/10, entregados el 02/10.
+
+- Un «No entregado · Reprogramado por el cliente» que el motorizado conserva
+  pasa a su ruta del día siguiente sin volver a la oficina. Si la hoja nombra
+  un día («LUNES», «MIÉRCOLES»), pasa a la ruta de ese día. El día siguiente
+  es aunque sea domingo: si la hoja muestra que salió, la ruta de ese día se
+  abre con esa carga (el 04/10 de Alexis nació así, con 4 paquetes).
+- El paquete sale de la caja anterior con motivo («Reprogramado…: Alexis se
+  quedó con el paquete y sale en su ruta del dd/mm, ya cotejado»), y deja
+  `carried_over` en esa caja y `package_removed` en el pedido. Entra en una
+  carga adicional de la ruta siguiente, cotejada por oficina y por el
+  motorizado: él ya lo tiene, no hay nada que cotejar. La carga pasa a
+  custodia y nace la parada pendiente, como cualquier carga recibida.
+- No queda «Por devolver»: en «Reparto y liquidación» la parada anterior dice
+  **«Pasó a la ruta del dd/mm»** (`stopReturnState`, `lib/routes.ts`) y la
+  columna «Devolver» de Rutas lo cuenta como resuelto
+  (`lib/courier-route-ledger.ts`). La parada anterior se conserva: es la
+  evidencia del intento y cuenta en la liquidación de ese día.
+- Solo el reprogramado. «No contesta», «Otro» y el rechazo siguen volviendo a
+  la oficina. Un pedido anulado en Shopify tampoco pasa aunque el motorizado lo
+  siga cargando: va a «Devolución física pendiente» y hay que recibirlo
+  (#KP138124, #AUR177704 y #KP138376 siguieron en la hoja de Alexis del 02 al
+  04/10).
+- Si la hoja del día siguiente no lo trae, no se pasa: se le pregunta a quien
+  liquida, porque una parada sin reporte frena el cierre de esa ruta.
+
 ### 29.8 Tarifas por distrito y comisión Yape
 
 Grupo GF Courier cobra una tarifa por distrito/zona que **incluye IGV**. Debe
