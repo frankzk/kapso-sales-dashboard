@@ -1,6 +1,6 @@
 # Clientes externos de Grupo GF Courier — plan
 
-Versión 7 · 08-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
+Versión 8 · 08-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
 
 Grupo GF Courier hoy reparte solo para tiendas de su propia organización
 (Aurela y Kenku). Este plan lo abre a **tiendas cliente**: negocios ajenos, con
@@ -65,6 +65,8 @@ día**.
 | 29 | **Facturas fuera de Kapta** en la v1. Kapta muestra montos con IGV incluido y exporta el detalle. |
 | 30 | **La liquidación diaria la aprueban Yohalis o Frankz** (08-10-2026). |
 | 31 | **Una segunda app de Shopify, solo para tiendas cliente**, con distribución pública oculta y revisión de Shopify. La app actual («kapso-sales-dashboard-aurelape», 2 instalaciones) queda intacta para Aurela y Kenku: nunca pasó revisión pública y el método de distribución no se puede cambiar una vez elegido (08-10-2026). |
+| 32 | **Datos personales del comprador: anonimizar y conservar** (MOM §29.15.9). Ante los pedidos de borrado de Shopify, o al vencer la retención, se borran los datos personales del comprador de una tienda cliente y se conservan los hechos operativos y financieros. Aurela y Kenku no cambian (08-10-2026). |
+| 33 | **Política de privacidad:** borrador escrito por Claude con lo que Kapta hace de verdad, revisado por un abogado antes de publicarse (08-10-2026). |
 
 ## 2. Una sola base de datos
 
@@ -288,6 +290,24 @@ por cada corrección. Sin app aprobada, ninguna tienda cliente puede conectarse.
 - **A verificar:** si la revisión exige que la app se vea dentro del admin de
   Shopify (embebida). Kapta es una web aparte; si lo exige, hace falta una
   pantalla embebida mínima que lleve a Kapta.
+
+**Cumplimiento antes de enviar a revisión** (revisado el 08-10-2026):
+
+| Requisito de Shopify | Hoy en Kapta | Falta |
+| --- | --- | --- |
+| Solo API GraphQL (apps públicas nuevas, desde abril de 2025) | Cumple: `lib/shopify.ts` usa solo `graphql.json` | — |
+| Credenciales cifradas, HTTPS | Cumple: tokens cifrados AES-GCM | — |
+| Firma de webhooks verificada | Cumple: secreto por tienda | Aplicarlo también a los de privacidad, con 401 si falla |
+| Instalación desde Shopify, sin escribir el dominio, OAuth inmediato | No | Flujo nuevo (arriba) |
+| Webhooks obligatorios de privacidad y desinstalación | No | Anonimización de MOM §29.15.9 |
+| Nivel 2: acceso restringido del personal | Parcial: hoy no hay clientes externos | Fase 2: Grupo GF ve solo lo asignado |
+| Nivel 2: registro de accesos a datos de compradores | No | Registrar persona, fecha y pedido |
+| Nivel 2: plazos de retención | No | Definir el plazo en la política (pendiente) |
+| Nivel 2: separar pruebas y producción | Sin verificar | Frankz revisa si las vistas previas de Vercel usan la base de producción |
+| Nivel 2: plan de respuesta a incidentes | No | Documento corto |
+| Política de privacidad pública | No existe ninguna página pública | Borrador (decisión 33) y página en Kapta |
+| Uso de datos solo para operar la app | Riesgo: unos 20 módulos cruzan compradores por teléfono | Revisar en la Fase 2 que ninguno mezcle organizaciones |
+| Cobro de la app con el sistema de Shopify | No aplica: la app es gratis | Si un día se cobra la suscripción, usar el sistema de cobro de Shopify o pedir excepción |
 
 ### Fase 1 — Contrato y precios de externos
 
