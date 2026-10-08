@@ -4759,6 +4759,33 @@ vía. Costo por entrega recuperada = suma de fletes cotizados y devoluciones
 registradas de la vía / entregas logradas, incluyendo envíos fallidos. Si falta
 un costo o aún no hay entregas, indica pendiente; nunca lo presenta como cero.
 
+### 11.10 Filtro «Swayp» en el Master (08-10-2026)
+
+El Master tiene el mismo filtro «Swayp» que Repro Provincia, con las mismas tres
+opciones y los mismos textos: **Swayp ok · con stock**, **Sin stock Swayp** y
+**Fuera de cobertura**. Responde, sobre el pedido, lo que Repro responde sobre
+la guía: ¿lo puede llevar Swayp hoy?
+
+- **La regla es la de Repro**, no una propia: `evaluateFenix`. «Ok» es que la
+  ciudad de destino tiene almacén Swayp (o se reparte desde uno, como Chupaca
+  desde Huancayo) y hay stock disponible del producto del pedido; «sin stock»,
+  que hay almacén pero no stock; «fuera de cobertura», que no hay almacén. Lima
+  no lleva control de cantidad, así que siempre sale «ok»: para provincia se
+  combina con el filtro Cobertura.
+- **El destino** es el del Master: distrito y provincia del ubigeo, o el
+  departamento si falta la provincia.
+- **Solo se calcula en Por confirmar, Preparación, Por despachar y En curso.**
+  En Por cerrar y Finalizado queda vacío: el stock de hoy no decide nada ahí, y
+  un «ok» congelado de hace semanas confundiría.
+- **Vive en `order_master.swayp_availability`** (0235) porque el Master filtra en
+  la base y pagina; calcularlo en la página no permitiría contar ni filtrar.
+- **Se refresca cada hora** (cron `swayp-inventory`) y al terminar cada sync de
+  inventario, sin depender del recálculo del pedido: lo que la cambia es el
+  stock, y el recálculo del pedido no se entera de que el stock cambió. Un
+  pedido nuevo o que cambia de etapa puede tardar hasta una hora en tener valor.
+  La función es `recalcularDisponibilidadSwaypMaster`
+  (`lib/master-swayp-availability.ts`) y solo escribe las filas que cambian.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom

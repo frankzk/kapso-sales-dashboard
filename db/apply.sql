@@ -471,4 +471,6 @@
 \ir migrations/0233_cart_seq_image_test.sql
 \echo 'Applying 0234_gf_notebook_carry_over.sql'
 \ir migrations/0234_gf_notebook_carry_over.sql
+\echo 'Applying 0235_order_master_swayp_availability.sql'
+\ir migrations/0235_order_master_swayp_availability.sql
 \echo 'Done.'

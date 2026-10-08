@@ -27,6 +27,7 @@ const SET_KEYS: { param: string; field: keyof MasterFilters }[] = [
   { param: "p", field: "provinces" },
   { param: "d", field: "districts" },
   { param: "cv", field: "coverages" },
+  { param: "sw", field: "swaypAvailability" },
   { param: "pk", field: "pickupStates" },
   { param: "gd", field: "managementDays" },
 ];
