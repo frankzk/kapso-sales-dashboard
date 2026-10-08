@@ -5745,6 +5745,15 @@ registra en cada evento.
   admin no le permite validar movimientos bancarios. Debe quedar al
   menos un validador activo y, al retirar un miembro, se eliminan sus permisos
   puntuales para que no reaparezcan si vuelve a ser invitado.
+- Exportar datos (`data.export`, 08-10-2026): descargar en Excel el Master de
+  Pedidos (filtrado o la selección) y en CSV los pedidos o el resumen diario.
+  Una descarga es la base de clientes entera —nombre, teléfono, distrito y
+  monto de ~28.000 pedidos— en un clic, y ninguna vendedora la necesita para
+  trabajar: ve en pantalla lo que gestiona. Viene con **owner y admin**; la
+  vendedora no la trae y se le concede con el check **Exportar datos** de
+  **Equipo** (a un admin también se le puede quitar ahí). Sin el permiso el
+  botón no aparece y las rutas (`/api/export`, `/api/export/pedidos`)
+  responden 403 sin leer la base.
 - Excepción COD por riesgo: justificación obligatoria.
 - Continuar con discrepancia geográfica: justificación obligatoria.
 - Retirar del manifiesto: motivo obligatorio.

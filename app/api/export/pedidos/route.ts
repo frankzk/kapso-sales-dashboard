@@ -30,6 +30,7 @@ import {
   type MasterExportContext,
 } from "@/lib/master-export";
 import type { OrderMasterRow } from "@/lib/types";
+import { getMasterPermissions } from "@/lib/permissions-access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,6 +56,9 @@ export async function GET(req: NextRequest) {
   // negando el fichero a quien sí ve las filas en pantalla.
   const stores = await getAccessibleStores();
   if (!stores.length) return new NextResponse("forbidden", { status: 403 });
+  // Ver el Master no basta para bajarlo: un Excel son nombre, teléfono y monto
+  // de miles de pedidos en un clic. `data.export` (08-10-2026).
+  if (!(await getMasterPermissions()).can("data.export")) return exportForbidden();
   const storeIds = stores.map((s) => s.id);
 
   // Mismo parseo que la página: la URL es el contrato entre la tabla y esto.
@@ -100,6 +104,9 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const stores = await getAccessibleStores();
   if (!stores.length) return new NextResponse("forbidden", { status: 403 });
+  // Ver el Master no basta para bajarlo: un Excel son nombre, teléfono y monto
+  // de miles de pedidos en un clic. `data.export` (08-10-2026).
+  if (!(await getMasterPermissions()).can("data.export")) return exportForbidden();
 
   let ids: string[] = [];
   try {
@@ -185,4 +192,11 @@ function workbookResponse(
         },
       }),
   );
+}
+
+function exportForbidden() {
+  return new NextResponse("Tu usuario no tiene permiso para exportar datos. Pídeselo a un administrador.", {
+    status: 403,
+    headers: { "content-type": "text/plain; charset=utf-8" },
+  });
 }

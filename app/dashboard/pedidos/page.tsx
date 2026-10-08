@@ -149,6 +149,7 @@ async function PedidosContent({
       facets={facets}
       agency={agency}
       canEdit={!perms.readOnly}
+      canExport={perms.can("data.export")}
       canOverride={perms.can("master.override_status")}
       canCreateGuide={perms.can("aliclik.create_guide")}
       canCreateTandersGuide={perms.can("tanders.create_guide")}
