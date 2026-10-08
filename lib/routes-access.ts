@@ -56,6 +56,9 @@ export interface StopWithOrder extends RouteStop {
   pickup_checked_at?: string | null;
   /** «No entregado» que ya volvió a la oficina (`returned_to_office`, 0188). */
   returned_at?: string | null;
+  /** Día de la ruta a la que pasó el paquete sin volver a la oficina: el
+   *  motorizado lo conservó tras reprogramarse (`carried_over`, §29.7). */
+  carried_to?: string | null;
   order: {
     name: string | null;
     customer_name: string | null;
@@ -158,7 +161,8 @@ export async function getRouteDetail(
       collection: balances.get(s.order_id),
       manifest_item_id: pickups.get(pickupKey(s))?.id ?? null,
       pickup_checked_at: pickups.get(pickupKey(s))?.pickup_checked_at ?? null,
-      returned_at: returns.get(pickupKey(s)) ?? null,
+      returned_at: returns.returned.get(pickupKey(s)) ?? null,
+      carried_to: returns.carried.get(pickupKey(s)) ?? null,
     })),
   };
 }
@@ -185,22 +189,28 @@ function pickupKey(stop: { dispatch_manifest_id?: string | null; shipment_id?: s
  * del supervisor, y el motorizado solo recibe los de SUS paradas (ya
  * filtradas por RLS arriba).
  */
-/** Cuándo volvió a la oficina cada «No entregado» de una caja (0188). */
-async function loadStopReturns(stops: readonly StopWithOrder[]): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
+/**
+ * Qué fue de cada «No entregado» de una caja: cuándo volvió a la oficina
+ * (0188) o a qué ruta pasó porque el motorizado lo conservó (§29.7).
+ */
+async function loadStopReturns(stops: readonly StopWithOrder[]): Promise<{ returned: Map<string, string>; carried: Map<string, string> }> {
+  const returned = new Map<string, string>();
+  const carried = new Map<string, string>();
   const failed = stops.filter((s) => s.status === "no_entregado" && s.dispatch_manifest_id && s.shipment_id);
-  if (!failed.length) return map;
+  if (!failed.length) return { returned, carried };
   const admin = createAdminSupabase();
   const { data } = await admin
     .from("dispatch_events")
-    .select("manifest_id,shipment_id,occurred_at")
-    .eq("kind", "returned_to_office")
+    .select("kind,manifest_id,shipment_id,occurred_at,payload")
+    .in("kind", ["returned_to_office", "carried_over"])
     .in("manifest_id", [...new Set(failed.map((s) => s.dispatch_manifest_id as string))])
     .in("shipment_id", failed.map((s) => s.shipment_id as string));
-  for (const row of (data ?? []) as Array<{ manifest_id: string; shipment_id: string; occurred_at: string }>) {
-    map.set(`${row.manifest_id}:${row.shipment_id}`, row.occurred_at);
+  for (const row of (data ?? []) as Array<{ kind: string; manifest_id: string; shipment_id: string; occurred_at: string; payload: { to_route_date?: string } | null }>) {
+    const key = `${row.manifest_id}:${row.shipment_id}`;
+    if (row.kind === "returned_to_office") returned.set(key, row.occurred_at);
+    else carried.set(key, row.payload?.to_route_date ?? row.occurred_at.slice(0, 10));
   }
-  return map;
+  return { returned, carried };
 }
 
 async function loadStopPickups(stops: readonly StopWithOrder[]): Promise<Map<string, { id: string; pickup_checked_at: string | null }>> {

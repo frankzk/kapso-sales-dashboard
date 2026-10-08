@@ -22,6 +22,7 @@ import {
   routeCloseBlockers,
   routeTotals,
   stopsMissingEvidence,
+  stopReturnState,
   stopsNotReceived,
   type EvidenceStop,
   type OpenLoad,
@@ -906,9 +907,11 @@ function RouteDetail({
 /** Resultado de la parada en dos líneas: qué pasó y, debajo, la devolución y la nota. */
 function StopResult({ stop: s }: { stop: StopWithOrder }) {
   const reason = s.status === "no_entregado" ? reasonLabel(s.outcome_reason) : null;
-  // Todo no entregado vuelve físicamente a la oficina (0188/0189).
-  const returnState = s.status === "no_entregado" && s.dispatch_manifest_id ? (s.returned_at ? "devuelto" : "por_devolver") : null;
+  // Todo no entregado vuelve físicamente a la oficina (0188/0189), salvo el
+  // reprogramado que el motorizado conservó y salió en su ruta siguiente (§29.7).
+  const returnState = stopReturnState(s);
   const returnedAt = s.returned_at ? new Date(s.returned_at) : null;
+  const carriedTo = s.carried_to ? `${s.carried_to.slice(8, 10)}/${s.carried_to.slice(5, 7)}` : null;
   return (
     <div className="min-w-0 text-xs">
       {/* Un no entregado se lee por su motivo, en rojo: «Rechazó el pedido»,
@@ -933,6 +936,14 @@ function StopResult({ stop: s }: { stop: StopWithOrder }) {
               title={`Recibido en oficina el ${returnedAt.toLocaleString("es-PE", { timeZone: "America/Lima" })}`}
             >
               Devuelto · {returnedAt.toLocaleString("es-PE", { timeZone: "America/Lima", day: "2-digit", month: "2-digit" })}
+            </span>
+          )}
+          {returnState === "paso_a_otra_ruta" && carriedTo && (
+            <span
+              className="shrink-0 whitespace-nowrap text-xs font-semibold tabular-nums text-ok-fg"
+              title={`No volvió a la oficina: el motorizado se quedó con el paquete y salió en su ruta del ${carriedTo}`}
+            >
+              Pasó a la ruta del {carriedTo}
             </span>
           )}
           {s.note && <span className="min-w-0 truncate text-ink-500" title={s.note}>{s.note}</span>}

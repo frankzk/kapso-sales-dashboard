@@ -32,6 +32,7 @@ import {
 import { IconAlert, IconArrowLeft, IconCheckCircle, IconChevronDown, IconCopy } from "@/components/icons";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import { STORE_STATUSES, STORE_STATUS_LABEL } from "@/lib/store-settings";
+import { imageTestSummary, type ImageTestRow } from "@/lib/cart-image-test";
 import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import {
   addPaymentMethod,
@@ -98,6 +99,10 @@ export interface StoreSettingsData {
     cart_seq_hours_2: number;
     cart_seq_hour_start: number;
     cart_seq_hour_end: number;
+    cart_seq_image_test_enabled: boolean;
+    cart_seq_image_template_1_name: string | null;
+    cart_seq_image_template_1_language: string | null;
+    cart_seq_image_test_started_at: string | null;
     return_recovery_enabled: boolean;
     return_recovery_auto: boolean;
     return_recovery_template_name: string | null;
@@ -233,6 +238,8 @@ export interface StoreSettingsData {
   escalation: Array<{ id: string; userId: string; name: string; minutes: number; sort: number }>;
   /** Usuarios de la tienda que pueden entrar en la escalera. */
   escalationCandidates: Array<{ id: string; name: string }>;
+  /** Resultado de la prueba de imagen en carritos (0233), por brazo. */
+  cartImageTest: ImageTestRow[];
   replyTemplates: Array<{
     id: string;
     label: string;
@@ -1844,6 +1851,58 @@ function NumberField({
   );
 }
 
+/**
+ * Cómo va la prueba de imagen (0233): por grupo, carritos, cuántos compraron
+ * en 7 días y quién cerró, con una frase que dice si ya se puede concluir.
+ */
+function CartImageTestResult({ rows, since }: { rows: ImageTestRow[]; since: string | null }) {
+  const r = imageTestSummary(rows);
+  const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
+  const arms = [
+    { label: "Con foto", a: r.imagen },
+    { label: "Sin foto (control)", a: r.control },
+  ];
+  return (
+    <div className="mt-4 rounded-lg ring-1 ring-line">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3 shadow-[inset_0_-1px_0_var(--color-line)]">
+        <p className="text-sm font-semibold text-ink-900">Resultado de la prueba</p>
+        {since && (
+          <p className="text-xs tabular-nums text-ink-500">
+            Desde el {new Date(since).toLocaleDateString("es-PE", { day: "numeric", month: "short", timeZone: "America/Lima" })}
+          </p>
+        )}
+      </div>
+      <table className="w-full text-[13px] tabular-nums">
+        <thead>
+          <tr className="text-left text-xs text-ink-500">
+            <th className="px-4 py-2 font-medium">Grupo</th>
+            <th className="px-2 py-2 text-right font-medium">Carritos</th>
+            <th className="px-2 py-2 text-right font-medium">Compraron</th>
+            <th className="px-2 py-2 text-right font-medium">Tasa</th>
+            <th className="hidden px-4 py-2 text-right font-medium sm:table-cell">Bot · asistido · asesora</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-line">
+          {arms.map(({ label, a }) => (
+            <tr key={label}>
+              <td className="px-4 py-2 text-ink-900">{label}</td>
+              <td className="px-2 py-2 text-right">{a.carritos.toLocaleString("es-PE")}</td>
+              <td className="px-2 py-2 text-right">{a.convertidos.toLocaleString("es-PE")}</td>
+              <td className="px-2 py-2 text-right font-semibold text-ink-900">{pct(a.tasa)}</td>
+              <td className="hidden px-4 py-2 text-right text-ink-600 sm:table-cell">
+                {a.bot} · {a.bot_asistido} · {a.asesora}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="px-4 py-3 text-[13px] text-ink-700 shadow-[inset_0_1px_0_var(--color-line)]">
+        {r.veredicto} <span className="text-ink-500">Compra = pedido no anulado en los 7 días siguientes al mensaje 1.</span>
+      </p>
+    </div>
+  );
+}
+
 function AutomationSections({ data }: { data: StoreSettingsData }) {
   const s = data.store;
   return (
@@ -1977,6 +2036,9 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
             s.cart_seq_hours_2,
             s.cart_seq_template_2_name,
             s.cart_seq_template_2_language,
+            s.cart_seq_image_test_enabled,
+            s.cart_seq_image_template_1_name,
+            s.cart_seq_image_template_1_language,
           ]}
         >
           <ToggleRow
@@ -2037,7 +2099,44 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
               />
             </Field>
           </SubRow>
+          <ToggleRow
+            name="cart_seq_image_test_enabled"
+            label="Prueba: mensaje 1 con la foto del producto"
+            defaultChecked={s.cart_seq_image_test_enabled}
+            on="Encendida"
+            off="Apagada"
+            description={
+              <p>
+                Mitad de los carritos recibe el mensaje 1 con la foto del producto que dejó; la otra mitad, el de
+                siempre. Usa una plantilla <strong>igual a la del mensaje 1 pero con cabecera de imagen</strong>,
+                aprobada por Meta. Si esa plantilla falla, sale la de siempre.
+              </p>
+            }
+          />
+          <SubRow title="Plantilla con imagen" cols={2}>
+            <Field label="Plantilla · nombre" htmlFor="cart_seq_image_template_1_name">
+              <input
+                id="cart_seq_image_template_1_name"
+                name="cart_seq_image_template_1_name"
+                defaultValue={s.cart_seq_image_template_1_name ?? ""}
+                placeholder="carrito_abandonado_1_img"
+                className={FIELD}
+              />
+            </Field>
+            <Field label="Plantilla · idioma" htmlFor="cart_seq_image_template_1_language">
+              <input
+                id="cart_seq_image_template_1_language"
+                name="cart_seq_image_template_1_language"
+                defaultValue={s.cart_seq_image_template_1_language ?? ""}
+                placeholder="es"
+                className={FIELD}
+              />
+            </Field>
+          </SubRow>
         </StoreForm>
+        {(s.cart_seq_image_test_started_at || data.cartImageTest.length > 0) && (
+          <CartImageTestResult rows={data.cartImageTest} since={s.cart_seq_image_test_started_at} />
+        )}
       </SettingsSection>
 
       <SettingsSection

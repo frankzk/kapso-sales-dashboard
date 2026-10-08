@@ -84,7 +84,8 @@ describe("devoluciones en Rutas (22-09-2026)", () => {
     expect(board).toContain('label="Devoluciones"');
     expect(board).toContain("<ReturnsScanner");
     expect(read("components/returns-scanner.tsx")).toContain('verb: "Devueltos"');
-    expect(read("lib/courier-route-ledger.ts")).toContain('.eq("kind", "returned_to_office")');
+    // Desde el 07/10 también cuenta lo que pasó a la ruta siguiente del motorizado (§29.7).
+    expect(read("lib/courier-route-ledger.ts")).toContain('.in("kind", ["returned_to_office", "carried_over"])');
     expect(read("components/routes.tsx")).toContain("s.returned_at");
     expect(read("db/migrations/0189_gf_return_rejected.sql")).toContain("if v_stop.outcome_reason = 'rechazado' then");
   });

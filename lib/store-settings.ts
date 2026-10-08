@@ -48,6 +48,10 @@ export interface StoreSettingsInput {
   cart_seq_hours_2?: string;
   cart_seq_hour_start?: string;
   cart_seq_hour_end?: string;
+  /** Prueba de imagen en el mensaje 1 (0233). */
+  cart_seq_image_test_enabled?: string | boolean;
+  cart_seq_image_template_1_name?: string;
+  cart_seq_image_template_1_language?: string;
   // Recuperación del pedido devuelto (0112). Dos interruptores: `enabled`
   // habilita la cola y el botón, `auto` deja que el cron envíe solo.
   return_recovery_enabled?: string | boolean;
@@ -243,11 +247,17 @@ export function buildStoreUpdate(
     patch.cart_seq_enabled =
       input.cart_seq_enabled === true || input.cart_seq_enabled === "true";
   }
+  if (input.cart_seq_image_test_enabled !== undefined) {
+    patch.cart_seq_image_test_enabled =
+      input.cart_seq_image_test_enabled === true || input.cart_seq_image_test_enabled === "true";
+  }
   for (const k of [
     "cart_seq_template_1_name",
     "cart_seq_template_1_language",
     "cart_seq_template_2_name",
     "cart_seq_template_2_language",
+    "cart_seq_image_template_1_name",
+    "cart_seq_image_template_1_language",
   ] as const) {
     const v = clean(input[k]);
     if (v !== null) patch[k] = v;

@@ -79,14 +79,66 @@ Botones (quick reply): `CONFIRMA TU PEDIDO` · `MODIFICAR DIRECCION`
 Notas:
 - Crear el par **por tienda** ("desde Aurela" / "desde Kenku Peru" es texto
   fijo del cuerpo — cada tienda configura sus propias plantillas en Ajustes).
-- El **header de imagen** se sube al crear la plantilla y queda fijo (Meta no
-  permite variar la imagen por producto en el mismo template). Usa el banner
-  general de la marca, o crea variantes por categoría si lo necesitas después.
+- **Corrección (07-10-2026):** las plantillas que corren desde el 20-07-2026
+  son **solo texto**: el envío nunca mandó cabecera, y una plantilla con
+  cabecera de imagen exige la imagen en cada envío. La imagen de muestra que
+  pide Meta al crear la plantilla es solo para la revisión: **la imagen SÍ
+  puede variar por producto**, porque se manda en cada mensaje. Ver «Prueba:
+  mensaje 1 con la foto del producto».
 - Los botones quick-reply no llevan variables; el cuerpo solo las 4 indicadas.
 - Meta revisa las plantillas (horas a ~1 día). Evita MAYÚSCULAS en exceso
   fuera de las frases clave y signos repetidos (!!!).
 - Cuando estén **aprobadas**, pon su nombre exacto e idioma en
   Ajustes → "Secuencia de carritos abandonados" y habilita el envío.
+
+## Prueba: mensaje 1 con la foto del producto (0233, 07-10-2026)
+
+**Por qué.** Del 20-07 al 07-10-2026 se enviaron 14.483 mensajes a 9.072
+carritos y el 19,2 % terminó en pedido en 7 días (15 % tras el mensaje 1, 7 %
+tras el 2). Todos fueron iguales, así que no hay con qué comparar si una foto
+sube el cierre: hay que probarlo.
+
+**Cómo funciona.**
+- Solo el **mensaje 1** (el que más convierte). El mensaje 2 sale igual para
+  todos.
+- Entran los carritos cuyo producto tiene foto en el espejo de catálogo
+  (`shopify_product_images`). Los carritos COD llegan **sin `product_id`**, así
+  que la foto se busca por el **título** del primer producto (casa en el 99 %).
+  Sin foto ⇒ fuera de la prueba, y eso se decide ANTES del sorteo.
+- **Sorteo 50/50 por carrito** con un hash del `draft_order_gid`
+  (`lib/cart-image-test.ts`): el mismo carrito cae siempre en el mismo grupo.
+  «imagen» recibe la plantilla con cabecera de imagen y la foto de SU producto;
+  «control», la de siempre. Mismo texto y mismas horas: la foto es lo único
+  distinto.
+- Meta solo acepta **JPG o PNG** en la cabecera y el 45 % de las fotos de
+  Shopify son WebP: la foto va por `/api/wa-image/<tienda>/<producto>.jpg`, que
+  la convierte a JPG de 800 px. La ruta recibe tienda y producto, no una URL:
+  solo entrega fotos del catálogo de `cdn.shopify.com`.
+- Si la plantilla con imagen falla (nombre mal escrito, no aprobada), el cliente
+  recibe la de siempre en la misma corrida y ese carrito queda fuera de la
+  prueba; el intento fallido queda en `cart_seq_sends`.
+- Cada envío guarda su grupo en `cart_seq_sends.variant` (`imagen`, `control`
+  o null = fuera de la prueba) y la foto en `image_url`.
+
+**Cómo se lee.** En Ajustes → «Secuencia de carritos abandonados», debajo del
+formulario: carritos, compraron (pedido no anulado en los 7 días siguientes al
+mensaje 1), tasa, y quién cerró (bot · asistido · asesora, la regla de
+«Atribución de ventas»), contados desde que se encendió la prueba
+(`stores.cart_seq_image_test_started_at`, `cart_image_test_results`). Con
+menos de 300 carritos por grupo no concluye; después, una diferencia cuenta
+solo con p < 0,05. A ~110 carritos/día, detectar +5 puntos (15 % → 20 %) toma
+2–3 semanas; +3 puntos, ~6.
+
+**Para encenderla.**
+1. En WhatsApp Manager, por tienda: `carrito_abandonado_1_img`, copia exacta de
+   `carrito_abandonado_1` (mismo texto, 4 variables, mismos botones) con
+   **cabecera de tipo imagen**. Meta pide una imagen de muestra: cualquiera
+   del producto sirve.
+2. Cuando esté aprobada: Ajustes → «Secuencia de carritos abandonados» → nombre
+   e idioma de la plantilla con imagen, y encender «Prueba: mensaje 1 con la
+   foto del producto».
+3. Revisar en el historial de un lead del grupo «imagen» que diga «enviada con
+   la foto del producto» y que el mensaje llegó con la foto.
 
 ## Spec del workflow en Kapso ("si acepta → subir el pedido")
 

@@ -112,6 +112,10 @@ export interface StoreCreds {
   cart_seq_hours_2: number;
   cart_seq_hour_start: number;
   cart_seq_hour_end: number;
+  /** Prueba de imagen en el mensaje 1 (0233): plantilla con cabecera de imagen. */
+  cart_seq_image_test_enabled: boolean;
+  cart_seq_image_template_1_name: string | null;
+  cart_seq_image_template_1_language: string | null;
   /** Recuperación del pedido devuelto (0112). `enabled` habilita la cola y el
    *  botón; `auto` deja que el cron envíe solo. Ver lib/return-recovery.ts. */
   return_recovery_enabled: boolean;
@@ -261,6 +265,10 @@ export async function getStoreCreds(
     cart_seq_hours_2: data.cart_seq_hours_2 ?? 24,
     cart_seq_hour_start: data.cart_seq_hour_start ?? 8,
     cart_seq_hour_end: data.cart_seq_hour_end ?? 21,
+    // Pre-0233 ⇒ sin prueba de imagen: el mensaje 1 sale como siempre.
+    cart_seq_image_test_enabled: data.cart_seq_image_test_enabled ?? false,
+    cart_seq_image_template_1_name: data.cart_seq_image_template_1_name ?? null,
+    cart_seq_image_template_1_language: data.cart_seq_image_template_1_language ?? null,
     // Pre-0112 las columnas no existen (select * → undefined) ⇒ recuperación
     // apagada, que es exactamente el comportamiento anterior.
     return_recovery_enabled: data.return_recovery_enabled ?? false,

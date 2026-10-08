@@ -14,6 +14,7 @@ import {
   routeCloseBlockerMessage,
   routeCloseBlockers,
   stopEffect,
+  stopReturnState,
   routeTotals,
   stopsMissingEvidence,
   stopsNotReceived,
@@ -422,6 +423,27 @@ describe("liquidar: qué paradas no tienen foto, con su pedido", () => {
     expect(access).toContain("photo_path,voucher_path,reported_at,reported_by,");
     const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
     expect(mom).toContain("**Excepción: lo cargado desde el cuaderno no exige foto (03-10-2026, decisión\nde Frankz).**");
+  });
+
+  it("el reprogramado que el motorizado conserva pasa a su ruta siguiente y no queda por devolver (§29.7)", () => {
+    const caja = { status: "no_entregado", dispatch_manifest_id: "m-0510" };
+    expect(stopReturnState(caja)).toBe("por_devolver");
+    expect(stopReturnState({ ...caja, returned_at: "2026-10-06T15:00:00Z" })).toBe("devuelto");
+    expect(stopReturnState({ ...caja, carried_to: "2026-10-06" })).toBe("paso_a_otra_ruta");
+    // Si después volvió a la oficina, manda la devolución.
+    expect(stopReturnState({ ...caja, returned_at: "2026-10-08T15:00:00Z", carried_to: "2026-10-06" })).toBe("devuelto");
+    // Entregas y paradas sin caja (cuaderno histórico) no tienen nada que devolver.
+    expect(stopReturnState({ status: "entregado", dispatch_manifest_id: "m-0510" })).toBeNull();
+    expect(stopReturnState({ status: "no_entregado", dispatch_manifest_id: null })).toBeNull();
+    // La ruta lo lee del evento `carried_over` de la caja anterior, igual que la lista de Rutas.
+    const access = readFileSync(resolve(process.cwd(), "lib/routes-access.ts"), "utf8");
+    expect(access).toContain('.in("kind", ["returned_to_office", "carried_over"])');
+    const ledger = readFileSync(resolve(process.cwd(), "lib/courier-route-ledger.ts"), "utf8");
+    expect(ledger).toContain('.in("kind", ["returned_to_office", "carried_over"])');
+    const panel = readFileSync(resolve(process.cwd(), "components/routes.tsx"), "utf8");
+    expect(panel).toContain("Pasó a la ruta del {carriedTo}");
+    const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    expect(mom).toContain("**Excepción: el reprogramado que el motorizado conserva sale en su ruta\nsiguiente, ya cotejado (07-10-2026, decisión de Frankz).**");
   });
 
   it("el mensaje nombra cada pedido y dice cómo arreglarlo", () => {
