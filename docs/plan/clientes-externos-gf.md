@@ -1,6 +1,6 @@
 # Clientes externos de Grupo GF Courier — plan
 
-Versión 5 · 08-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
+Versión 6 · 08-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
 
 Grupo GF Courier hoy reparte solo para tiendas de su propia organización
 (Aurela y Kenku). Este plan lo abre a **tiendas cliente**: negocios ajenos, con
@@ -54,7 +54,7 @@ día**.
 | --- | --- |
 | 19 | **Tarifa por distrito: una tabla general de externos**, aparte de la interna de Aurela y Kenku, más excepciones por contrato. Incluye IGV, igual que hoy. |
 | 20 | **Comisión Yape para externos: 5 %** general, con excepción por contrato. Aurela y Kenku siguen con 3.5 %. (Confirmado el 08-10-2026.) |
-| 21 | **Comisión POS**: un porcentaje por contrato, con vigencia. |
+| 21 | **Comisión POS: 5 % fijo** para todas las tiendas cliente, sin excepción por contrato (08-10-2026). |
 | 22 | **Todo cobro en la puerta va a Grupo GF**: efectivo, Yape de Grupo GF y POS. Si el comprador igual paga directo a la tienda, se marca «pago directo a la tienda»: no entra al neto ni paga comisión. |
 | 23 | La **liquidación Grupo GF ↔ tienda** es diaria y entra en la v1. |
 | 24 | **Cuenta corriente por contrato.** Cada liquidación aprobada suma su neto, positivo o negativo; cada depósito de Grupo GF o pago del cliente resta. |
@@ -63,6 +63,7 @@ día**.
 | 27 | El pedido del cliente queda **cerrado financieramente al aprobar** la liquidación que lo incluye. |
 | 28 | **Liquidación de solo lectura** para el cliente en la v1. Los reclamos van por fuera y Grupo GF registra el ajuste. |
 | 29 | **Facturas fuera de Kapta** en la v1. Kapta muestra montos con IGV incluido y exporta el detalle. |
+| 30 | **La liquidación diaria la aprueban Yohalis o Frankz** (08-10-2026). |
 
 ## 2. Una sola base de datos
 
@@ -130,7 +131,7 @@ encargó, con tarifa, bolsa y precio de cada línea congelados.
    COD cobrado por Grupo GF
    − tarifa de entrega o rechazo   (tabla de externos o la del contrato)
    − 5 % de cada Yape recibido por Grupo GF   (o la del contrato)
-   − % de cada cobro por POS                  (la del contrato)
+   − 5 % de cada cobro por POS de Grupo GF    (fijo)
    − precio a la tienda del producto de Proveeduría, solo en lo entregado
    = neto del día → cuenta corriente → depósito del saldo a favor
    ```
@@ -205,7 +206,7 @@ Lo que hoy no existe y las respuestas exigen:
 | Decisión | Qué hay que construir | Hoy |
 | --- | --- | --- |
 | 19, 20 | Precios **internos** y **de externos**: una segunda tabla general de tarifas y una segunda comisión Yape general | Una sola general por operador (0134) |
-| 21 | Comisión POS con vigencia | `logistics_fee_rules.kind` solo admite `yape_commission` (0134:158) |
+| 21 | Comisión POS de 5 % fija para tiendas cliente | `logistics_fee_rules.kind` solo admite `yape_commission` (0134:158) |
 | 15, 16 | Catálogo de Proveeduría con precio a la tienda, vigencia y foto | No existe; `product_costs` (0050) es el costo propio de cada organización |
 | 13 | Mapeo de SKU de la tienda a producto de Grupo GF | Hay el mismo patrón para Aliclik y Swayp (`aliclik_sku_map`, `swayp_sku_map`) |
 | 8, 9 | No entregado de cliente: a su «Por reprogramar», no a la cola de reintento de Grupo GF; desarmado si no hay reprogramación | La cola de reintento de Grupo GF toma todos (`RETRY_QUEUE_FILTER`); el reintento conserva la salida (0192) |
@@ -264,8 +265,8 @@ revisión.
     general interna.
   - El tarifario muestra las dos tablas, y el universo de distritos incluye las
     tiendas con contrato.
-  - Comisión Yape de externos al 5 % y comisión POS por contrato, ambas con
-    vigencia.
+  - Comisión Yape de externos al 5 %, con vigencia y excepción por contrato, y
+    comisión POS fija de 5 %.
 - **Campo nuevo en el contrato: quién inicia.** `cola_operador` para Aurela y
   Kenku, `tienda_asigna` para clientes. `assignment_mode` existe pero no se lee
   en ningún sitio.
@@ -382,7 +383,7 @@ revisión.
   - el neto.
 - **Bloqueos.** Una ruta abierta, una parada pendiente, evidencia faltante o una
   línea sin tarifa («Sin tarifa configurada», nunca S/0).
-- **Aprobación.** Humana, con `settlements.close` en la organización de Grupo
+- **Aprobación.** Humana, por Yohalis o Frankz, con `settlements.close` en la organización de Grupo
   GF, contra la versión vista y congelando el resultado (patrón
   `rider_pay_approve`, 0162). Al aprobar:
   - el neto entra a la cuenta corriente;
@@ -432,8 +433,8 @@ revisión.
     reprogramación existe al volver.
   - Qué ve el cliente y qué se le oculta.
   - Marca blanca.
-- **§29.8.** Tarifas y comisiones internas y de externos: Yape 5 % y POS por
-  contrato.
+- **§29.8.** Tarifas y comisiones internas y de externos: Yape 5 % y POS 5 %
+  fijo.
 - **§29.9.**
   - Liquidación a la tienda con la fórmula de §4.
   - Cuenta receptora en la puerta.

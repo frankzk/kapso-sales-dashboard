@@ -7863,7 +7863,7 @@ La comisión general por pagos recibidos en el Yape de Grupo GF es **3.5 %**:
 
 **Tiendas cliente de otra organización (§29.15.6).** Tienen su propia tabla
 general de tarifas (la de externos), una comisión Yape general de 5 % y una
-comisión POS por contrato. La tabla interna y el 3.5 % siguen siendo de Aurela
+comisión POS fija de 5 %. La tabla interna y el 3.5 % siguen siendo de Aurela
 y Kenku.
 
 ### 29.9 Liquidaciones y efectivo
@@ -8875,7 +8875,7 @@ recibe el pedido en la puerta.
 | Tarifa por distrito | Tabla general interna | **Tabla general de externos** |
 | Excepción por contrato | Sí | Sí |
 | Comisión Yape | 3.5 % | **5 %** general |
-| Comisión POS | — | **% por contrato** |
+| Comisión POS | — | **5 % fijo**, sin excepción por contrato |
 | Producto de Proveeduría | — | Precio a la tienda (§29.15.4) |
 
 - **Tarifa.** Para una tienda cliente se busca primero la excepción del
@@ -8887,9 +8887,10 @@ recibe el pedido en la puerta.
   - se calculan solo sobre lo efectivamente recibido por ese medio en las
     cuentas de Grupo GF;
   - se redondean a dos decimales por operación;
-  - tienen vigencia, con excepción por contrato.
+  - tienen vigencia.
 
-  La comisión POS se fija al crear el contrato (puede ser 0 %).
+  La comisión Yape admite excepción por contrato. La comisión POS es **5 % fija
+  para todas las tiendas cliente**, sin excepción por contrato.
 - **El motorizado gana lo mismo** por un pedido de tienda cliente que por uno
   de Aurela o Kenku. Su tarifario (§29.10) no distingue la tienda.
 
@@ -8928,8 +8929,9 @@ COD cobrado por Grupo GF
   - una parada pendiente;
   - evidencia faltante (con las excepciones de §29.7);
   - una línea sin tarifa.
-- **Aprobación humana.** La hace alguien de Grupo GF con `settlements.close`,
-  sobre la versión que vio, y la liquidación queda **aprobada** y congelada. Una
+- **Aprobación humana.** La aprueba la responsable financiera (Yohalis) o el
+  owner (Frankz), con `settlements.close` en la organización de Grupo GF, sobre
+  la versión que vio. La liquidación queda **aprobada** y congelada. Una
   corrección posterior es un ajuste con motivo en la cuenta corriente, nunca
   una edición de la liquidación (§14).
 - **Al aprobar:**
@@ -9001,7 +9003,7 @@ COD cobrado por Grupo GF
 - Un no entregado sin reprogramación se desarma al recibirse en la oficina. Uno
   ya reprogramado, o conservado por el motorizado con fecha, sale con la misma
   guía.
-- Ejemplo de liquidación. Supuestos: tarifa S/ 10, Yape al 5 %, POS al 4 % y
+- Ejemplo de liquidación. Supuestos: tarifa S/ 10, Yape al 5 %, POS al 5 % y
   producto a S/ 40. Paradas del día:
   - entrega de S/ 100 cobrada por Yape;
   - entrega de S/ 80 en efectivo;
