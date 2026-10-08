@@ -36,7 +36,8 @@ export interface CourierLedgerRow {
   settlementStatus: string | null;
   /** «No entregado» de una caja: paquetes que deben volver a la oficina. */
   returnsDue: number;
-  /** De esos, los ya recibidos en oficina (`returned_to_office`, 0188). */
+  /** De esos, los ya recibidos en oficina (`returned_to_office`, 0188) o que
+   *  salieron en la ruta siguiente del motorizado (`carried_over`, §29.7). */
   returnsDone: number;
   /** Pedidos que coinciden con el código buscado, solo en resultados de búsqueda. */
   matchedOrders?: string[];
@@ -202,10 +203,12 @@ export async function getCourierRouteLedger(opts: { day?: string | null; limit?:
     list.push(item);
     itemsByManifest.set(item.manifest_id, list);
   }
-  // Devoluciones recibidas en oficina (0188), por caja y paquete.
+  // Devoluciones recibidas en oficina (0188), por caja y paquete. Lo que el
+  // motorizado conservó y salió en su ruta siguiente (`carried_over`, §29.7)
+  // tampoco queda por devolver: ya no está en esa caja.
   const returned = new Set<string>();
   if (manifestIds.length) {
-    const rows = await chunked(manifestIds, 50, (ids) => sb.from("dispatch_events").select("manifest_id,shipment_id").eq("kind", "returned_to_office").in("manifest_id", ids));
+    const rows = await chunked(manifestIds, 50, (ids) => sb.from("dispatch_events").select("manifest_id,shipment_id").in("kind", ["returned_to_office", "carried_over"]).in("manifest_id", ids));
     for (const r of rows as { manifest_id: string; shipment_id: string }[]) returned.add(`${r.manifest_id}:${r.shipment_id}`);
   }
   const shipmentIds = [...new Set((items as ItemLite[]).filter((i) => !i.removed_at).map((i) => i.shipment_id))];
