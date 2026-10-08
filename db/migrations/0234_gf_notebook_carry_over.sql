@@ -144,6 +144,6 @@ create index if not exists rider_notebook_imports_rider_day
   on public.rider_notebook_imports(rider_id, route_date desc);
 alter table public.rider_notebook_imports enable row level security;
 -- Sin políticas: la lee y escribe el servidor con el service role, después de
--- comprobar `routes.manage` (app/dashboard/courier/notebook-actions.ts).
+-- comprobar `routes.manage` (lib/notebook-import-access.ts, app/api/courier/notebook).
 revoke all on public.rider_notebook_imports from anon, authenticated;
 grant all on public.rider_notebook_imports to service_role;
