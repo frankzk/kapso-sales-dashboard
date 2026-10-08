@@ -7678,6 +7678,46 @@ cargar: #KP138029 (S/ 89) y #KP138037 (S/ 567) del 01/10, entregados el 02/10.
 - Si la hoja del día siguiente no lo trae, no se pasa: se le pregunta a quien
   liquida, porque una parada sin reporte frena el cierre de esa ruta.
 
+**La hoja del motorizado sin app se carga desde Kapta (08-10-2026, decisión de
+Frankz).** Hasta el 07/10 cada hoja de Alexis se cargaba con SQL desde una
+conversación con Claude. Ahora la carga cualquiera que arma rutas en Grupo GF
+Courier (`routes.manage`), desde «Reparto y liquidación» de la ruta, con
+«Cargar hoja»:
+
+- **Fotos.** De una a cuatro capturas de la misma hoja, subidas de una en una
+  al bucket privado `rider-notebooks`. Kapta las lee con visión
+  (`lib/rider-sheet-vision.ts`): transcribe, no corrige ni inventa; lo
+  ilegible queda vacío y lo completa una persona.
+- **Cruce** (`buildNotebookPlan`, `lib/notebook-import.ts`). Por el código de
+  OBSERVACIÓN; sin código, por nombre y monto solo si hay un candidato claro,
+  marcado «por nombre». Cada fila cae en un grupo: pendiente de la ruta (se
+  reporta), ya reportada (no se toca), reprogramado que conserva de una caja
+  anterior (pasa a esta ruta, como arriba), anulado en Shopify, en otra caja,
+  inexistente o sin código. Estas últimas no se cargan: se dice dónde está el
+  paquete. Las paradas pendientes que la hoja no nombra se listan, y una fila
+  sin código se puede asignar a mano a una de ellas.
+- **Vocabulario.** El de arriba, más: SOLO ENTREGA, YAPE PROV y PAGADO son
+  «Entregado · Sin cobro» (ya estaba pagado); NO ESTABA, DIRECCIÓN y SIN
+  DINERO, su motivo; un día de la semana («MIÉRCOLES»), «Reprogramado» con el
+  día en la nota. Lo que no se entiende («CAMBIO») queda sin decidir.
+- **Avisos.** Cobro menor que el saldo (se carga y la nota lo dice), mayor que
+  el saldo (no se carga), «Sin cobro» con saldo pendiente, plata anotada en una
+  no entrega y un total escrito que no cuadra con la suma de las filas.
+- **Aplicar.** Se revalida contra la base de ese momento. Los reprogramados
+  pasan con `gf_carry_over` (0233): todo o nada, y nunca en una carga que
+  Despacho todavía está armando. Cada parada se reporta por `writeStopReport`
+  en modo cuaderno: `reported_by` vacío, sin foto ni captura, la nota «Cuaderno
+  de X del dd/mm (punto N)… Cargado por Y el dd/mm» y `origen: cuaderno` con
+  el id de la hoja en la actividad del pedido. Si quien liquida cambia lo que
+  dice la hoja, la nota lo dice.
+- **Auditoría.** `rider_notebook_imports` guarda las fotos, lo leído, la
+  propuesta y lo aplicado. Una hoja se aplica una sola vez; si algo falló, se
+  vuelve a leer y lo ya cargado sale como «Ya reportada».
+- **Otro día.** «Día de la hoja» cruza con otra ruta del mismo motorizado. Si
+  ese día no tiene ruta (salió solo con reprogramados), el traspaso la abre.
+- Terminar la ruta y aprobar el pago siguen siendo de quien liquida. El SQL de
+  `docs/runbooks/cuaderno-a-rutas.md` queda como respaldo.
+
 ### 29.8 Tarifas por distrito y comisión Yape
 
 Grupo GF Courier cobra una tarifa por distrito/zona que **incluye IGV**. Debe

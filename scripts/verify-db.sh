@@ -197,6 +197,9 @@ echo "  ✅ rechazo del 27/09 sin foto no frena el pago; el del 28/09 sí; entre
 echo "▶ pago del motorizado: lo cargado desde el cuaderno no exige foto (0222)"
 $PSQL -f "$ROOT/scripts/sql/rider_pay_notebook_photo_smoke.sql"
 echo "  ✅ entrega y rechazo del cuaderno sin foto no frenan el pago y se pagan; la entrega de la app sin foto y el Yape sin captura sí cuentan"
+echo "▶ el reprogramado que el motorizado conserva pasa a su ruta siguiente (0233)"
+$PSQL -f "$ROOT/scripts/sql/gf_carry_over_smoke.sql"
+echo "  ✅ sale de la caja anterior con rastro, entra cotejado en una carga en custodia con su parada pendiente; no contesta, anulado y repetidos no pasan; todo o nada"
 
 echo ""
 echo "✅ DB verification passed."

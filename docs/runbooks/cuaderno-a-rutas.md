@@ -96,6 +96,19 @@ reporta las paradas desde el teléfono. Llega una foto de su hoja por día
 Ganancia mot. · Observación, con el pedido en Observación). Los pasos 1 a 3 de
 arriba no sirven aquí: crean rutas y cajas que ya existen.
 
+**Desde el 08/10/2026 se hace en Kapta, no con SQL** (MOM §29.7): Grupo GF
+Courier → Rutas → la ruta del motorizado → «Reparto y liquidación» →
+**Cargar hoja**. Se suben las capturas del día, Kapta las lee y propone fila
+por fila; quien liquida revisa (lo que no se entiende, lo cruzado por nombre,
+los cobros parciales) y pulsa **Aplicar**. Los reprogramados que él conserva
+pasan solos a la ruta del día (`gf_carry_over`, 0233). Para el día en que solo
+salió con reprogramados y no tiene ruta, se abre cualquier ruta suya y se
+cambia «Día de la hoja». Después, igual que siempre: comprobar efectivo y
+ganancia, terminar la ruta y aprobar el pago.
+
+Lo que sigue es el respaldo a mano, para cuando la lectura falla o hay que
+corregir algo que la pantalla no permite.
+
 1. **Transcribe y cuadra.** Pasa cada fila a una tabla y suma «Recaudado» y
    «Ganancia»: tienen que dar el TOTAL COBRADO de la foto al céntimo antes de
    seguir. Ojo con la fecha de la cabecera (la del 01/10 decía 28/02/2025):
@@ -135,7 +148,9 @@ arriba no sirven aquí: crean rutas y cajas que ya existen.
    en «Por reprogramar Lima». Terminar la ruta y aprobar el pago siguen siendo
    de quien liquida, desde «Reparto y liquidación».
 
-**Los reprogramados que él conserva** (§29.7, desde el 07/10/2026): antes de
+**Los reprogramados que él conserva** (§29.7, desde el 07/10/2026; desde el
+08/10 lo hace «Cargar hoja», o a mano `select gf_carry_over(<rider_id>,
+'<día>', array[<shipment_id>…]::uuid[], '<user_id>')`): antes de
 reportar el día N, pasa a su ruta del día N los «Reprogramado» del día
 anterior que la hoja del día N trae (o del día que la hoja nombró:
 «LUNES»…). Va día por día y en transacciones separadas —pasar, reportar,
