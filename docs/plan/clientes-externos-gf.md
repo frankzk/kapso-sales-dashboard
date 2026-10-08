@@ -1,6 +1,6 @@
 # Clientes externos de Grupo GF Courier — plan
 
-Versión 4 · 05-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
+Versión 5 · 08-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
 
 Grupo GF Courier hoy reparte solo para tiendas de su propia organización
 (Aurela y Kenku). Este plan lo abre a **tiendas cliente**: negocios ajenos, con
@@ -21,7 +21,7 @@ día**.
 | --- | --- |
 | 1 | El cliente usa **Kapta completo** en **su propia organización**: su Master, su Shopify, su equipo. Grupo GF no es dueño de su tienda ni entra a su organización. |
 | 2 | **Una sola base de datos**, separada por organización (§2). |
-| 3 | **Alta por su cuenta.** El cliente crea su usuario y su organización, conecta su Shopify y acepta con un código la invitación de Grupo GF. Grupo GF nunca es dueño de esa organización. |
+| 3 | **Alta por invitación.** El registro público de Kapta sigue cerrado: Grupo GF invita por correo al dueño, que entra, crea **su** organización, conecta su Shopify y acepta el contrato con un código. Grupo GF nunca es dueño de esa organización. |
 | 4 | Swayp, Shalom, el agente de voz y Chatby **quedan apagados** para organizaciones cliente: usan credenciales únicas de Grupo GF (`lib/env.ts`). |
 
 ### Asignación y operación
@@ -30,9 +30,9 @@ día**.
 | --- | --- |
 | 5 | **El cliente elige qué pedidos** encarga. Sus pedidos no aparecen solos en «Pedidos disponibles» como los de Aurela y Kenku. |
 | 6 | **Asignar obliga.** Si el pedido cumple contrato, cobertura, tarifa y no hay pausa, queda tomado. Grupo GF puede anular con motivo. No hay estado «solicitada». |
-| 7 | **La tienda cancela cuando quiera, sin costo** (§29.6), aunque el paquete esté en la caja o en la calle: vuelve al almacén. |
+| 7 | **La tienda cancela cuando quiera, sin costo** (§29.6), aunque el paquete esté en la caja o en la calle: vuelve al almacén y se desarma. |
 | 8 | **El reintento lo decide el cliente.** Un no entregado vuelve a su Master en «Por reprogramar» y él lo reprograma con fecha. |
-| 9 | **Desarmado.** Al volver al almacén, si el pedido **no tiene reprogramación registrada**, el paquete se desarma y el producto vuelve a su bolsa. Reprogramar después arma de nuevo, con guía y QR nuevos. Si ya estaba reprogramado, sale otra vez con la misma guía. |
+| 9 | **Desarmado.** Al volver al almacén, si el pedido **no tiene reprogramación registrada**, el paquete se desarma y el producto vuelve a su bolsa. Reprogramar después arma de nuevo, con guía y QR nuevos. Si ya estaba reprogramado, sale otra vez con la misma guía. Un «Reprogramado por el cliente» que el motorizado **conserva** (§29.7, 07-10-2026) cuenta como reprogramación registrada: sale en la ruta del día pedido sin volver a la oficina, y la tienda lo ve en su Master con la fecha y puede cancelarlo o cambiarla. |
 | 10 | **Marca blanca.** El rótulo y los mensajes del motorizado llevan el nombre de la tienda cliente. Ya funciona así: `lib/labels/rotulo-pdf.ts:646`, `lib/rider-contact.ts`. |
 | 11 | El **motorizado gana lo mismo** por un pedido de cliente que por uno de Aurela o Kenku. |
 
@@ -53,7 +53,7 @@ día**.
 | # | Decisión |
 | --- | --- |
 | 19 | **Tarifa por distrito: una tabla general de externos**, aparte de la interna de Aurela y Kenku, más excepciones por contrato. Incluye IGV, igual que hoy. |
-| 20 | **Comisión Yape para externos: 5 %** general, con excepción por contrato. Aurela y Kenku siguen con 3.5 %. |
+| 20 | **Comisión Yape para externos: 5 %** general, con excepción por contrato. Aurela y Kenku siguen con 3.5 %. (Confirmado el 08-10-2026.) |
 | 21 | **Comisión POS**: un porcentaje por contrato, con vigencia. |
 | 22 | **Todo cobro en la puerta va a Grupo GF**: efectivo, Yape de Grupo GF y POS. Si el comprador igual paga directo a la tienda, se marca «pago directo a la tienda»: no entra al neto ni paga comisión. |
 | 23 | La **liquidación Grupo GF ↔ tienda** es diaria y entra en la v1. |
@@ -99,8 +99,9 @@ encargó, con tarifa, bolsa y precio de cada línea congelados.
 
 ## 4. Recorrido de un pedido
 
-1. El cliente crea su cuenta, conecta su Shopify, acepta la invitación de Grupo
-   GF con su código y mapea sus SKU mirando el catálogo de Proveeduría.
+1. Grupo GF invita por correo al dueño. Este entra, crea su organización,
+   conecta su Shopify, acepta el contrato con su código y mapea sus SKU mirando
+   el catálogo de Proveeduría.
 2. En la Mesa de ruta de su pedido ve Grupo GF Courier con distrito, tarifa y
    fecha prevista, y pulsa **«Asignar a Grupo GF Courier»** (uno o en lote).
 3. Kapta valida contrato, cobertura, tarifa, pausas y mapeo; congela tarifa,
@@ -116,7 +117,9 @@ encargó, con tarifa, bolsa y precio de cada línea congelados.
    nombre ni teléfono del motorizado (§29.7).
 7. **Si no se entrega**, vuelve al Master del cliente en «Por reprogramar». Al
    llegar al almacén:
-   - con una reprogramación ya registrada, sale otra vez con la misma guía;
+   - con una reprogramación ya registrada, sale otra vez con la misma guía; si
+     el comprador se la pidió al motorizado y él conserva el paquete, ni
+     siquiera vuelve: pasa a la ruta del día pedido;
    - sin ella, se desarma y el producto vuelve a su bolsa. Reprogramar después
      genera una solicitud y una salida nuevas.
 8. Al terminar el día, Grupo GF aprueba la liquidación de esa tienda. Su neto
@@ -219,15 +222,25 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
 
 ### Fase 0 — Reglas en el MOM (sin código)
 
+- La rama ya trae la rama de integración al 08-10-2026, incluidas 0230
+  (recuperar en oficina), 0234 (traspaso de reprogramados) y §32 (pedido
+  acompañante, solo Aliclik: no afecta). Las migraciones de este plan empiezan
+  en 0235. Hay que actualizar las referencias de línea de §5, que cambiaron con
+  esos commits.
 - Escribir en el MOM las decisiones de §1. Ver §8.
 - Probar con el primer cliente cómo conecta su Shopify: el token de app
   personalizada que usa `docs/onboarding-tienda-externa.md` o la app de Kapta
   por OAuth. Hay que verificar en Shopify que la app se pueda instalar en
   tiendas ajenas; el repo no lo dice.
+- **Fuera del software, antes del piloto:** un contrato escrito con el cliente.
+  Debe cubrir la custodia del efectivo, la responsabilidad por pérdidas y el
+  uso de los datos de sus compradores (Ley 29733).
 
 ### Fase 1 — Contrato y precios de externos
 
 - **Invitación con código** (decisión 3).
+  - Grupo GF invita por correo al dueño (invitación de Supabase Auth, con el
+    registro público cerrado).
   - Grupo GF crea el contrato en `draft`, con nombre del cliente y sus
     excepciones de precio si las hay.
   - El owner del cliente pega el código en los ajustes de su tienda.
@@ -313,6 +326,9 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
   - Un no entregado de tienda cliente va a «Por reprogramar» en su Master y no
     a la cola de reintento de Grupo GF.
   - El cliente reprograma con fecha.
+  - Si el comprador pidió otro día y el motorizado conserva el paquete, el
+    traspaso a su ruta siguiente (`gf_carry_over`, 0234) registra la
+    reprogramación en el Master de la tienda con esa fecha.
   - Al recibirlo en oficina (`gf_return_to_office`):
     - con reprogramación, conserva la salida (0192);
     - sin ella, se desarma: la solicitud se cierra y el producto vuelve a su
@@ -383,7 +399,8 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
 ### Fase 6 — Piloto (noviembre 2026)
 
 - Actualizar `docs/onboarding-tienda-externa.md`:
-  - código de invitación y mapeo de SKU;
+  - invitación por correo con el registro cerrado (hoy pide abrirlo), código
+    del contrato y mapeo de SKU;
   - `order_prefix` de la tienda (nace vacío);
   - la lista de aislamiento ampliada: cliente A ≠ cliente B, el cliente no ve
     motorizados, Grupo GF no ve lo no asignado.
