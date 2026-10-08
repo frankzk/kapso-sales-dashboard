@@ -30,6 +30,12 @@ export interface MasterFilters {
   provinces: Set<string>;
   districts: Set<string>;
   coverages: Set<string>;
+  /**
+   * Disponibilidad Swayp del pedido (`order_master.swayp_availability`): ok,
+   * sin_stock, sin_cobertura. La misma pregunta que el filtro «Swayp» de Repro
+   * Provincia, sobre pedidos en vez de guías.
+   */
+  swaypAvailability: Set<string>;
   /** YYYY-MM-DD; extremos inclusive, vacío = sin límite. */
   createdFrom: string;
   createdTo: string;
@@ -116,6 +122,7 @@ export function emptyFilters(): MasterFilters {
     provinces: new Set(),
     districts: new Set(),
     coverages: new Set(),
+    swaypAvailability: new Set(),
     createdFrom: "",
     createdTo: "",
     dispatchedFrom: "",
@@ -149,6 +156,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.provinces.size > 0 ||
     f.districts.size > 0 ||
     f.coverages.size > 0 ||
+    f.swaypAvailability.size > 0 ||
     Boolean(f.createdFrom || f.createdTo) ||
     Boolean(f.dispatchedFrom || f.dispatchedTo) ||
     Boolean(f.movementFrom || f.movementTo) ||
@@ -190,6 +198,17 @@ export function canStillExpire(row: Pick<OrderMasterRow, "pickup_state" | "agenc
 
 /** Valor con el que se pide «sin verificación de cobro» (la columna en null). */
 export const PAYMENT_CHECK_NONE = "sin";
+
+/**
+ * Las opciones del filtro «Swayp», con el mismo texto que el de Repro
+ * Provincia. Viven acá y no en lib/master-swayp-availability.ts porque esa
+ * escribe en la base y la pantalla no debe arrastrarla al navegador.
+ */
+export const SWAYP_AVAILABILITY_OPTIONS: { value: "ok" | "sin_stock" | "sin_cobertura"; label: string }[] = [
+  { value: "ok", label: "Swayp ok · con stock" },
+  { value: "sin_stock", label: "Sin stock Swayp" },
+  { value: "sin_cobertura", label: "Fuera de cobertura" },
+];
 
 /** Las opciones del filtro, en el orden en que se enseñan. */
 export const PAYMENT_CHECK_OPTIONS: { value: string; label: string }[] = [
@@ -237,6 +256,7 @@ export function matchesFilters(
   if (!inSet(f.provinces, row.province)) return false;
   if (!inSet(f.districts, row.district)) return false;
   if (!inSet(f.coverages, row.coverage)) return false;
+  if (!inSet(f.swaypAvailability, row.swayp_availability)) return false;
 
   // El filtro de courier mira el actual Y el último: buscar "los pedidos que
   // tocó Fenix" no debe perder los que ya pasaron a otra guía.

@@ -22,6 +22,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ciudadSinControl } from "@/lib/fenix";
 import { recalcularElegibilidadFenix } from "@/lib/fenix-eligibility";
+import { recalcularDisponibilidadSwaypMaster } from "@/lib/master-swayp-availability";
 import { recordStockMovement } from "@/lib/fenix-ledger";
 import {
   diagnoseInventoryAccess,
@@ -410,6 +411,14 @@ async function sincronizar(
   } catch (e) {
     errorGuias = e instanceof Error ? e.message : "error desconocido";
     console.error("[swayp-inventory] recalcular elegibilidad:", e);
+  }
+
+  // Y el filtro «Swayp» del Master, con el stock recién escrito (0235). Un
+  // fallo acá no invalida el sync: el cron horario lo vuelve a intentar.
+  try {
+    await recalcularDisponibilidadSwaypMaster(admin, input.orgId);
+  } catch (e) {
+    console.error("[swayp-inventory] disponibilidad Swayp del Master:", e);
   }
 
   return {
