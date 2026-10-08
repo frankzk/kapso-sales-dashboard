@@ -7704,7 +7704,7 @@ Courier (`routes.manage`), desde «Reparto y liquidación» de la ruta, con
   el saldo (no se carga), «Sin cobro» con saldo pendiente, plata anotada en una
   no entrega y un total escrito que no cuadra con la suma de las filas.
 - **Aplicar.** Se revalida contra la base de ese momento. Los reprogramados
-  pasan con `gf_carry_over` (0233): todo o nada, y nunca en una carga que
+  pasan con `gf_carry_over` (0234): todo o nada, y nunca en una carga que
   Despacho todavía está armando. Cada parada se reporta por `writeStopReport`
   en modo cuaderno: `reported_by` vacío, sin foto ni captura, la nota «Cuaderno
   de X del dd/mm (punto N)… Cargado por Y el dd/mm» y `origen: cuaderno` con

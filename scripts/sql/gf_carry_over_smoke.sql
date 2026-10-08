@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- 0233: el reprogramado que el motorizado conserva pasa a su ruta siguiente, ya
+-- 0234: el reprogramado que el motorizado conserva pasa a su ruta siguiente, ya
 -- cotejado (MOM §29.7). Sale de la caja anterior con rastro, entra en una carga
 -- adicional en custodia y nace su parada pendiente; lo demás no pasa.
 begin;

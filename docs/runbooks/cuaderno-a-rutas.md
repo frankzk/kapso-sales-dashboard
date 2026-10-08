@@ -101,7 +101,7 @@ Courier → Rutas → la ruta del motorizado → «Reparto y liquidación» →
 **Cargar hoja**. Se suben las capturas del día, Kapta las lee y propone fila
 por fila; quien liquida revisa (lo que no se entiende, lo cruzado por nombre,
 los cobros parciales) y pulsa **Aplicar**. Los reprogramados que él conserva
-pasan solos a la ruta del día (`gf_carry_over`, 0233). Para el día en que solo
+pasan solos a la ruta del día (`gf_carry_over`, 0234). Para el día en que solo
 salió con reprogramados y no tiene ruta, se abre cualquier ruta suya y se
 cambia «Día de la hoja». Después, igual que siempre: comprobar efectivo y
 ganancia, terminar la ruta y aprobar el pago.

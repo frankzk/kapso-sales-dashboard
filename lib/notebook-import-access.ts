@@ -167,7 +167,7 @@ function shiftDay(day: string, days: number): string {
  * Los reprogramados que el motorizado sigue teniendo: parada «Reprogramado» en
  * una caja suya de un día anterior, todavía en custodia y con el paquete
  * activo en ella (no volvió a la oficina ni pasó ya a otra ruta). Es la misma
- * condición que valida `gf_carry_over` (0233).
+ * condición que valida `gf_carry_over` (0234).
  */
 async function loadCarryCandidates(admin: SupabaseClient, target: NotebookTarget, onRoute: Set<string>): Promise<PlanCarry[]> {
   const { data: routes } = await admin

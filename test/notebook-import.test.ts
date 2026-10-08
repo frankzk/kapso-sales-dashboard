@@ -257,7 +257,7 @@ describe("la hoja se carga desde Kapta (08-10-2026)", () => {
     expect(apply).toContain('admin.rpc("gf_carry_over"');
     const report = read("lib/stop-report.ts");
     expect(report).toContain('reported_by: input.status === "pendiente" || notebook ? null : input.actor,');
-    const migration = read("db/migrations/0233_gf_notebook_carry_over.sql");
+    const migration = read("db/migrations/0234_gf_notebook_carry_over.sql");
     expect(migration).toContain("Despacho está armando la carga de");
     expect(migration).toContain("revoke all on public.rider_notebook_imports from anon, authenticated;");
   });

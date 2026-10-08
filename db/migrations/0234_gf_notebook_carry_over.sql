@@ -1,4 +1,4 @@
--- 0233_gf_notebook_carry_over.sql — la hoja del motorizado sin app se carga
+-- 0234_gf_notebook_carry_over.sql — la hoja del motorizado sin app se carga
 -- desde Kapta (MOM §29.7, 08-10-2026, decisión de Frankz).
 --
 -- QUÉ PASABA. Alexis todavía no usa la app: manda una foto de su hoja por día y
