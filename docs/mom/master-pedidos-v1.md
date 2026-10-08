@@ -3750,6 +3750,33 @@ el código viejo. Los resultados de llamada son cuatro: **Cliente confirma
 reprogramación**, **Programar próxima llamada**, **No contesta** y **Cliente
 cancela / anula**.
 
+**En una guía que Swayp informa por API, el resultado no se pide a mano
+(08-10-2026).** «Registrar resultado del courier» nació en julio, cuando Fénix
+no le decía nada a Kapta y alguien escribía lo que reportaba el motorizado.
+Desde el 29-09-2026 el barrido lee cada media hora cada guía con número de
+Swayp (§11.2), así que la entrega, la cancelación, la devolución y la novedad
+llegan solas. En #KP135202 el recuadro pedía como **«Obligatorio»** un resultado
+que Swayp ya había dado —Devolución (8)— y ni siquiera ofrecía esa opción, así
+que parecía que faltaba el estado.
+
+- Con número emitido por Swayp y al menos una lectura (`swaypInformsByApi`), el
+  cajón muestra **«Lo que informó Swayp»**: el estado con su nombre y número,
+  la última novedad, la hora de la lectura y qué toca. Con novedad, resolverla.
+  En devolución, «Reenviar por Swayp» en provincia (§11.8) o resolver la
+  novedad para que vuelva a reparto.
+- **«Corregir a mano»** abre el recuadro de siempre, sin «Obligatorio», para
+  cuando Swayp esté atrasado o se equivoque, y **sin «No contesta»**
+  (`SWAYP_API_MANUAL_EXCLUDED`). Ese «No contesta» pasaba la guía a Pendiente,
+  pero mientras Swayp siga diciendo reparto o novedad la siguiente lectura la
+  devolvía a En ruta (`en_ruta` gana a `pendiente`): la gestión se perdía sola
+  en media hora. El servidor lo rechaza igual. Con la clienta al teléfono, lo
+  que toca es resolver la novedad en Swayp.
+- La llamada de gestión sigue oculta mientras la guía esté En ruta, como antes.
+- Las guías manuales, sin número de Swayp, siguen igual.
+- En la lista, la chapa de una Swayp viva dice **«En ruta · en devolución»** o
+  **«En ruta · con novedad»** (`swaypLiveSubState`): las tres situaciones se
+  guardan `en_ruta`.
+
 Dos reglas más del mismo cajón, por la misma razón (no preguntar lo que ya
 está decidido): si «Ruta sugerida» deja una sola ruta posible, la llamada no
 pide elegir entre Aliclik y Swayp, lo dice; y el formulario manual de guía
