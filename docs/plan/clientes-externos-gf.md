@@ -287,6 +287,25 @@ por cada corrección. Sin app aprobada, ninguna tienda cliente puede conectarse.
   inválida responde 401.
 - **Desinstalación (`app/uninstalled`).** Marca la tienda desconectada y deja
   de sincronizarla, sin borrar pedidos ni historial (§2).
+- **Anonimización (MOM §29.15.9): lo que la hace más grande de lo que parece**
+  (revisión del 08-10-2026):
+  - `order_events` y otras tablas de historial rechazan todo UPDATE y DELETE
+    (trigger `reject_mutation`, 0045). El rol de servicio solo puede leer e
+    insertar (0145). Varias guardan datos del comprador en notas y payloads:
+    resumen y dirección de la llamada de voz, nombre de quien pagó por Yape,
+    pagador de Flow. Hace falta una función controlada que reescriba solo los
+    campos personales y deje un evento con el motivo.
+  - Hay datos del comprador en unas 40 tablas, incluidas copias en JSON
+    (`orders.raw`, `shipments.*_raw`, `order_payments.vision`,
+    `import_rows`, `urpi_*`).
+  - Algunas no tienen `store_id` y hay que llegar por otro camino:
+    `olva_email_labels`, `yape_statement_movements` y los logs de webhooks.
+  - Archivos a borrar:
+    - `yape-vouchers` y `courier-reports`, por tienda;
+    - `delivery-proofs` y `shalom-labels`, sin prefijo de tienda;
+    - `whatsapp-media`, que además es público (tarea aparte sugerida).
+  - Borrar un pedido no es opción: la cascada choca con `order_events` y con
+    claves foráneas que lo impiden. Por eso la regla es anonimizar, no borrar.
 - **A verificar:** si la revisión exige que la app se vea dentro del admin de
   Shopify (embebida). Kapta es una web aparte; si lo exige, hace falta una
   pantalla embebida mínima que lleve a Kapta.
