@@ -1,6 +1,6 @@
 # Clientes externos de Grupo GF Courier — plan
 
-Versión 6 · 08-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
+Versión 7 · 08-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
 
 Grupo GF Courier hoy reparte solo para tiendas de su propia organización
 (Aurela y Kenku). Este plan lo abre a **tiendas cliente**: negocios ajenos, con
@@ -64,6 +64,7 @@ día**.
 | 28 | **Liquidación de solo lectura** para el cliente en la v1. Los reclamos van por fuera y Grupo GF registra el ajuste. |
 | 29 | **Facturas fuera de Kapta** en la v1. Kapta muestra montos con IGV incluido y exporta el detalle. |
 | 30 | **La liquidación diaria la aprueban Yohalis o Frankz** (08-10-2026). |
+| 31 | **Una segunda app de Shopify, solo para tiendas cliente**, con distribución pública oculta y revisión de Shopify. La app actual («kapso-sales-dashboard-aurelape», 2 instalaciones) queda intacta para Aurela y Kenku: nunca pasó revisión pública y el método de distribución no se puede cambiar una vez elegido (08-10-2026). |
 
 ## 2. Una sola base de datos
 
@@ -233,13 +234,60 @@ revisión.
   en 0235. Hay que actualizar las referencias de línea de §5, que cambiaron con
   esos commits.
 - Escribir en el MOM las decisiones de §1. Ver §8.
-- Probar con el primer cliente cómo conecta su Shopify: el token de app
-  personalizada que usa `docs/onboarding-tienda-externa.md` o la app de Kapta
-  por OAuth. Hay que verificar en Shopify que la app se pueda instalar en
-  tiendas ajenas; el repo no lo dice.
+- ~~Probar cómo conecta su Shopify el primer cliente.~~ Resuelto el 08-10-2026
+  con la decisión 31 y la Fase 1b. Desde el 01-01-2026 Shopify no deja crear
+  apps personalizadas desde el admin (las del Dev Dashboard dan tokens de 24 h
+  que Kapta no renueva), y la app actual no puede instalarse en tiendas
+  ajenas.
 - **Fuera del software, antes del piloto:** un contrato escrito con el cliente.
   Debe cubrir la custodia del efectivo, la responsabilidad por pérdidas y el
   uso de los datos de sus compradores (Ley 29733).
+
+### Fase 1b — App pública de Shopify para tiendas cliente (camino crítico)
+
+Va en paralelo con las fases 1 a 5, porque la revisión de Shopify tarda: según
+reportes de desarrolladores, de 5 a 10 días hábiles en arrancar y de 2 a 3 días
+por cada corrección. Sin app aprobada, ninguna tienda cliente puede conectarse.
+
+**Lo que hace Frankz en el Dev Dashboard:**
+
+1. Crear una app nueva, distinta de «kapso-sales-dashboard-aurelape». El nombre
+   lo ve el dueño de la tienda al instalar.
+2. Elegir distribución **pública** con visibilidad **oculta**. Es definitivo.
+3. Copiar el ID y el secreto de cliente directo a las variables de entorno de
+   Vercel, nunca al chat ni al repositorio.
+4. Pedir acceso a datos protegidos de clientes, nivel 2 (nombre, dirección y
+   teléfono del comprador), con la justificación: entrega contra entrega.
+5. Al final, enviar a revisión con:
+   - la ficha de la app (descripción, capturas, contacto de soporte);
+   - una URL de política de privacidad;
+   - una cuenta de prueba en Kapta para el revisor;
+   - precio «gratis», porque el cobro de la suscripción está fuera de la v1.
+
+**Lo que cambia en el código:**
+
+- **Dos apps.**
+  - Credenciales de la app de clientes en variables nuevas.
+  - Las tiendas de organizaciones cliente usan esta app; las de Grupo GF siguen
+    con la actual.
+  - El secreto de webhook ya se guarda por tienda, así que la validación de
+    firmas no cambia.
+- **Instalación que empieza en Shopify.** La revisión rechaza que la app pida
+  escribir el dominio `*.myshopify.com`, y exige autorizar (OAuth) apenas se
+  instala.
+  - Hoy el flujo es al revés: la tienda se crea en Kapta escribiendo el
+    dominio (`createStore`) y desde ahí se abre `/api/shopify/install`.
+  - El flujo nuevo: el dueño instala desde el enlace de la ficha oculta → OAuth
+    → vuelve a Kapta → entra con su invitación (decisión 3) → elige o crea su
+    organización → la tienda queda creada con el dominio que trajo Shopify.
+- **Webhooks obligatorios de privacidad** con firma verificada:
+  `customers/data_request`, `customers/redact` y `shop/redact`. Una firma
+  inválida responde 401.
+- **Desinstalación (`app/uninstalled`).** Marca la tienda desconectada y deja
+  de sincronizarla, sin borrar pedidos ni historial (§2).
+- **A verificar:** si la revisión exige que la app se vea dentro del admin de
+  Shopify (embebida). Kapta es una web aparte; si lo exige, hace falta una
+  pantalla embebida mínima que lleve a Kapta.
 
 ### Fase 1 — Contrato y precios de externos
 
@@ -453,9 +501,10 @@ revisión.
 - **Lecturas con la llave de servicio.** Toda lectura entre organizaciones pasa
   por el helper de «tiendas con contrato»; las pruebas con dos clientes son
   obligatorias en cada fase.
-- **Conexión Shopify.** No está verificado que la app de Kapta (OAuth) se pueda
-  instalar en tiendas ajenas, ni que Shopify siga permitiendo crear apps
-  personalizadas desde el admin. Se prueba en la Fase 0.
+- **Revisión de Shopify.** Es el camino crítico del piloto (Fase 1b). Si
+  rechaza o pide cambios, cada vuelta suma días. Si no llega a tiempo, la única
+  salida es una tienda cliente antigua que todavía permita crear la app vieja
+  desde su admin.
 - **Sin control de stock** (decisión 14). Un pedido puede asignarse sin producto
   y enterarse al armar, igual que hoy con Aurela y Kenku.
 - **Yape sin validar.** En la v1, el Yape de la puerta se acepta con su captura y
