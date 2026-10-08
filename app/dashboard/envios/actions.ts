@@ -41,6 +41,8 @@ import {
   normalizeCity,
   rescheduleGuideCode,
   shipmentRequiresCourierResult,
+  SWAYP_API_MANUAL_EXCLUDED,
+  swaypInformsByApi,
   type CourierReportResult,
   type FenixDeliverySchedule,
   type RerouteDisposition,
@@ -1110,7 +1112,7 @@ export async function registerCourierReportResult(
   const admin = createAdminSupabase();
   const { data: shipment } = await admin
     .from("shipments")
-    .select("id,courier,guide_code,delivery_status,next_followup_at,fenix_shipment_id")
+    .select("id,courier,guide_code,delivery_status,next_followup_at,fenix_shipment_id,swayp_guide,swayp_synced_at")
     .eq("id", shipmentId)
     .maybeSingle();
   if (!shipment) return { error: "Guía no encontrada." };
@@ -1120,6 +1122,8 @@ export async function registerCourierReportResult(
     delivery_status: string;
     next_followup_at: string | null;
     fenix_shipment_id: string | null;
+    swayp_guide: string | null;
+    swayp_synced_at: string | null;
   };
   if (current.courier !== "fenix") {
     return { error: "Este flujo corresponde al reporte Swayp. Aliclik se actualiza con su Excel diario." };
@@ -1129,6 +1133,15 @@ export async function registerCourierReportResult(
       error: current.fenix_shipment_id
         ? "Esta guía ya fue reemplazada. Registra el resultado en su nueva guía Swayp."
         : "Una guía transferida no admite resultados; abre la guía Swayp activa.",
+    };
+  }
+  // Swayp la informa por API (08-10-2026): un «No contesta» a mano la pasaría a
+  // Pendiente y la siguiente lectura la devolvería a En ruta. Se pierde solo.
+  if (swaypInformsByApi(current) && SWAYP_API_MANUAL_EXCLUDED.has(input.result)) {
+    return {
+      error:
+        `Swayp informa la guía ${current.guide_code} por su API y la sigue dando en reparto: un «No contesta» a mano ` +
+        "se perdería en la siguiente lectura. Habla con la clienta y resuelve la novedad en Swayp.",
     };
   }
 
