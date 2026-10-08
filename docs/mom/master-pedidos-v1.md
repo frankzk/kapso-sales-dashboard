@@ -4355,6 +4355,22 @@ Reglas de esa tabla:
     el agente registra `no_contesta` y **después** cuelga. Nunca cuelga sin
     registrar, salvo si la ficha no existe. La duración máxima bajó de 300 s
     a 180 s.
+    **Registrar antes de anunciar, y sin silencios largos (08-10-2026).**
+    - **Registro primero.** El 08-10, el cliente de #KP138343 pidió cancelar.
+      El agente le dijo «Cancelaremos su pedido» sin haber llamado a
+      `registrar_gestion`. El cliente colgó al oír la despedida, y Kapta lo
+      cerró como «no contesta». Desde entonces el guion manda registrar **en
+      cuanto la decisión está clara y antes de anunciarla o despedirse**. El
+      agente nunca dice que el pedido queda cancelado, confirmado o
+      reprogramado sin haber registrado antes. Con «cancela», registra apenas
+      la clienta da el motivo, o cuando no quiere darlo.
+    - **Muletilla.** El 07-10, tras «Sí, habla», el modelo (Gemini 2.5 Flash
+      Lite) tardó 3 s en contestar, cuando lo normal es 0,3 s. La clienta oyó
+      casi 4 s de silencio y colgó. Ahora, si el modelo tarda más de 1,5 s, el
+      agente dice «Ajá…», y si sigue tardando, «Un momentito…». La muletilla
+      no se usa antes de que la clienta hable.
+    - **Sin razonamiento interno** (`thinking_budget` = 0). En esa respuesta,
+      el modelo generó 841 tokens para una sola frase.
   - **«Llamando ahora» (Envíos, 05-10-2026).** En la pestaña Pendiente, la
     pantalla pregunta cada 5 s por las llamadas del agente abiertas: reales,
     marcando o en conversación, y sin las caducadas (`getLiveVoiceCalls`).
