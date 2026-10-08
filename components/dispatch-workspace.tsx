@@ -494,6 +494,10 @@ export function DispatchBoxPanel({
         pending={pendingScans}
         lastCaptured={lastCaptured}
         issues={scanIssues}
+        // La caja en el título: con dos cajas de 16 paquetes, «Escanear QR»
+        // no decía cuál se estaba verificando (KP136825, 07-10-2026).
+        title={selected && mode !== "build" ? `${mode === "office" ? "Verificar caja" : "Recibir carga"} · ${routeHeading(selected).title}` : undefined}
+        hint={selected ? `${routeDayLong(selected.route_date)}. Solo cuenta lo que está en esta caja.` : undefined}
       />
     </div>
   );

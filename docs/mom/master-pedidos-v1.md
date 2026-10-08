@@ -8499,6 +8499,21 @@ Antes cada pantalla respondía con su propio motivo —«Ese paquete no pertenec
 esta ruta», «El pedido ya avanzó…»— y quien tenía la caja en la mano no sabía que
 la decisión era simplemente no despacharla.
 
+**Verificar una caja dice cuál es, y dónde está lo que no es suyo
+(07-10-2026).** KP136825-S01 ya estaba en la caja de Alexis —la única que le
+faltaba verificar— y se escaneó en la verificación de Roy, también de 16
+paquetes. La cámara solo decía «Escanear QR» y el error «Ese paquete no
+pertenece a esta ruta»: parecía que no dejaba asignarlo. Ahora, con pocas
+palabras:
+
+- La cámara se titula con el paso y la caja: **«Verificar caja · Roy»** (o
+  «Recibir carga · …»), y debajo el día y «Solo cuenta lo que está en esta
+  caja».
+- El error nombra las dos cajas (`lib/scan-other-box.ts`): «Está en la caja de
+  Alexis (07/10), no en la de Roy. Verifícalo en esa caja.» Si no está en
+  ninguna: «No está en la caja de Roy ni en otra. Agrégalo primero a una
+  caja.» El anulado sigue diciéndose antes que esto.
+
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 
 **Antes** la pestaña «Rutas» tenía dos subpestañas —«Cajas y cotejos» (solo
