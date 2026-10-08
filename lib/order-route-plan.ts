@@ -425,7 +425,11 @@ function applyOutputPolicy(
       recommended: false,
       availability: "blocked",
       reason: vuelve
-        ? `${route.label} no entregó: su guía está en devolución y el paquete vuelve al origen. Mientras esa guía siga abierta no se crea otra con ${route.label}.`
+        ? route.key === "swayp" && operation !== "lima"
+          // En provincia Swayp se repite (08-10-2026): la guía en devolución
+          // queda como madre del reenvío, que se hace desde su ficha en Envíos.
+          ? `${route.label} no entregó: su guía está en devolución y el paquete vuelve a su bodega. Para reenviarlo con ${route.label}, usa «Reenviar por Swayp» en la ficha de esa guía en Envíos: queda como madre y sale una guía nueva.`
+          : `${route.label} no entregó: su guía está en devolución y el paquete vuelve al origen. Mientras esa guía siga abierta no se crea otra con ${route.label}.`
         // La salida propia que no se entregó se reprograma con ELLA MISMA desde
         // Despacho del día (06-10-2026, MOM §29.13): anularla gastaba el
         // consecutivo y obligaba a armar otra caja para el mismo paquete.

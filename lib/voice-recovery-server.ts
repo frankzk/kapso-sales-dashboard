@@ -43,7 +43,7 @@ import {
   type TelnyxConfig,
   type VoiceEngine,
 } from "@/lib/telnyx";
-import { reenviarGuiaAnulada } from "@/lib/swayp-reenvio";
+import { buscarOrigenReenvio, reenviarGuiaAnulada } from "@/lib/swayp-reenvio";
 import { parseSenders } from "@/lib/swayp-guide";
 import { inspectAuto, pilotUsedToday } from "@/lib/swayp-auto-server";
 import { evaluateAutoDispatch, type AutoSettings } from "@/lib/swayp-auto-policy";
@@ -203,15 +203,9 @@ async function noteOnRecoveryGuide(
   nextContactOn: string | null,
   now: Date,
 ): Promise<void> {
-  const { data } = await admin
-    .from("shipments")
-    .select("id")
-    .eq("order_id", call.order_id)
-    .eq("delivery_status", "anulado")
-    .is("fenix_shipment_id", null)
-    .order("updated_at", { ascending: false })
-    .limit(1);
-  const guia = (data ?? [])[0] as { id: string } | undefined;
+  // La guía que Envíos ofrece reenviar: la anulada o, en provincia, la Swayp en
+  // devolución (`buscarOrigenReenvio`).
+  const guia = await buscarOrigenReenvio(admin, call.order_id);
   if (!guia) return;
   const followup = nextContactOn ? `${nextContactOn}T00:00:00Z` : null;
   const firma = await voiceNoteSigner(admin, call.id);
@@ -1070,18 +1064,12 @@ export async function crearSalidaSwaypDelAgente(
   }
 
   const resultado = await (async (): Promise<SalidaSwaypAgente> => {
-    const { data: guias } = await admin
-      .from("shipments")
-      .select("id, guide_code, delivery_address, delivery_reference")
-      .eq("order_id", call.order_id)
-      .eq("delivery_status", "anulado")
-      .is("fenix_shipment_id", null)
-      .order("updated_at", { ascending: false })
-      .limit(1);
-    const anulada = (guias ?? [])[0] as
-      | { id: string; guide_code: string; delivery_address: string | null; delivery_reference: string | null }
-      | undefined;
-    if (!anulada) return { ok: false, motivo: "el pedido no tiene una guía anulada sin reemplazo" };
+    // La misma madre que ofrece el botón de Envíos: la guía anulada o, en
+    // provincia, la Swayp en devolución (#KP135202, 05-10-2026).
+    const anulada = await buscarOrigenReenvio(admin, call.order_id);
+    if (!anulada) {
+      return { ok: false, motivo: "el pedido no tiene una guía anulada ni una guía Swayp en devolución sin reemplazo" };
+    }
 
     if (!mismaDireccion(gestion.direccionConfirmada, anulada.delivery_address, anulada.delivery_reference)) {
       return {

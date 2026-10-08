@@ -1231,7 +1231,9 @@ Tanders:
 - **En Lima va a «Por reprogramar Lima»** y a la lista de Grupo GF con la chapa
   «Swayp no entregó · vuelve»: Swayp se usa una sola vez por pedido en Lima
   (§9.3), así que el siguiente intento es de otro courier. **En provincia va a
-  Gestión Reproprovincia**, donde Swayp sí se repite.
+  Gestión Reproprovincia**, donde Swayp sí se repite: desde el 08-10-2026 la
+  guía en devolución es la madre del reenvío por Swayp, sin esperar a que se
+  confirme la devolución (§11.8).
 - **La ventana es la de la tienda** (`return_recovery_max_days`), no los 65 días
   de Tanders, que eran por su antigüedad. Se ancla igual, en la **salida** del
   intento fallido: el barrido sella la guía en cada pasada y la Devolución
@@ -4109,7 +4111,36 @@ Reglas de esa tabla:
 
   La guía anulada queda como madre `transferido` y nace la hija Swayp En ruta
   con la fecha que aceptó la clienta. El actor es nulo y la nota dice «Agente
-  de voz». Se pide **después de responder** a la tool, con la clienta todavía
+  de voz».
+- **La madre también puede ser una guía Swayp en devolución (08-10-2026,
+  decisión del owner).** #KP135202 (Arequipa): Swayp no entregó la guía
+  50000137273 y la marcó en **Devolución (8)**. Eso abre la recuperación (§9,
+  v1.22) y el agente llamó: el 05/10 la clienta aceptó el reenvío para el 07/10,
+  pero no salió nada («el pedido no tiene una guía anulada sin reemplazo»). La
+  guía en devolución sigue `en_ruta` mientras el paquete vuelve a la bodega de
+  Swayp y nadie la anula, porque una devolución en curso no se cancela. Así que
+  el reenvío no tenía por dónde salir, ni por el agente ni por el botón.
+  Ahora la madre del reenvío (`origenReenvioSwayp`, `lib/swayp-reenvio.ts`) es:
+  - la guía **anulada** sin reemplazo, como antes (la Aliclik que no entregó, o
+    la Swayp con la devolución confirmada, que se guarda `anulado`);
+  - o, si no hay, la guía **Swayp en devolución** sin reemplazo, **solo en
+    provincia**. La modalidad es la del Master (`macro_operation`). En Lima
+    Swayp va una sola vez por pedido (§9.3) y el reintento es de Grupo GF; sin
+    modalidad no se adivina.
+
+  Justo antes de emitir, Kapta **le pregunta a Swayp** por esa guía
+  (`confirmarDevolucionSwayp`). Si la vendedora revirtió la devolución desde la
+  novedad y la guía volvió a reparto, no se emite: sería un segundo paquete para
+  la misma clienta. Si Swayp no responde, tampoco. La guía en devolución queda
+  como madre `transferido`, igual que la anulada, y nace la hija con la fecha
+  pedida.
+
+  Los tres caminos usan la misma regla:
+  - el agente de voz, para la salida y para dejar su gestión en la guía;
+  - el botón **«Reenviar por Swayp»** de la ficha de esa guía en Envíos, que
+    ahora aparece también sobre la guía en devolución;
+  - la Mesa de ruta del pedido, que en provincia ya no dice «no se crea otra con
+    Swayp» y manda a ese botón. Se pide **después de responder** a la tool, con la clienta todavía
   en línea, y **una sola vez por llamada**. La fila se reclama antes de llamar
   a Swayp porque su API no deshace una guía: un segundo POST sería un segundo
   paquete. El barrido del cron (cada cinco minutos, a cualquier hora) recoge

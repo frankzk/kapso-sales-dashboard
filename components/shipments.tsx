@@ -2745,6 +2745,10 @@ function ShipmentDrawer({
   // llamadas y reenvío como acción normal. La puerta de verdad está en el
   // servidor, con la misma función que puso esa mitad.
   const enRecuperacion = shipment?.delivery_status === "anulado" && shipment.recovery === "activa";
+  // Una guía Swayp en devolución, en provincia, también se reenvía por Swayp
+  // (08-10-2026): queda como madre igual que la anulada. Lo decide el servidor.
+  const reenvioDesdeDevolucion = !!detail && !("error" in detail) && detail.swaypReturnResend;
+  const reenvioNormal = enRecuperacion || reenvioDesdeDevolucion;
   const fenixReadyForCustomerManagement =
     shipment?.courier === "fenix" && shipment.delivery_status === "pendiente";
   // Una sola resolución para todo el cajón: los dos botones que autogeneran una
@@ -3195,21 +3199,23 @@ function ShipmentDrawer({
               </div>
             </section>
 
-            {detail.shipment.delivery_status === "anulado" && (
+            {(detail.shipment.delivery_status === "anulado" || reenvioDesdeDevolucion) && (
               <section aria-labelledby="guia-reenvio" className={SECTION_CARD}>
                 {/* En recuperación, reenviar es la acción NORMAL (MOM §11), no
                     una excepción: la guía sí terminó, el pedido no. El flujo de
                     abajo es el mismo; cambia lo que se le dice a quien llama. */}
                 <SectionHead
                   id="guia-reenvio"
-                  title={enRecuperacion ? "Reenviar por Swayp" : "Reprogramar un pedido anulado"}
+                  title={reenvioNormal ? "Reenviar por Swayp" : "Reprogramar un pedido anulado"}
                   badge={
-                    <Badge tone={enRecuperacion ? "info" : "warn"}>
-                      {enRecuperacion ? "Reproprovincia" : "Excepción auditada"}
+                    <Badge tone={reenvioNormal ? "info" : "warn"}>
+                      {reenvioNormal ? "Reproprovincia" : "Excepción auditada"}
                     </Badge>
                   }
                   help={
-                    enRecuperacion
+                    reenvioDesdeDevolucion
+                      ? "Swayp no entregó y el paquete vuelve a su bodega. Esta guía no se cancela: queda como madre transferida y se crea una guía Swayp nueva con la fecha acordada con la clienta. Antes de emitirla se confirma con Swayp que sigue en devolución."
+                      : reenvioNormal
                       ? "La guía Aliclik ya terminó y no se toca: queda como madre transferida y se crea una guía Swayp con la fecha acordada con la clienta."
                       : "No se borrará la anulación. Esta guía quedará como madre transferida y se creará una nueva guía Swayp con la fecha acordada."
                   }
@@ -3224,7 +3230,7 @@ function ShipmentDrawer({
                         aria-describedby={cancelledExceptionUnavailable ? "guia-reenvio-bloqueo" : undefined}
                         className="pointer-coarse:h-11"
                       >
-                        {enRecuperacion ? "Reenviar" : "Crear excepción"}
+                        {reenvioNormal ? "Reenviar" : "Crear excepción"}
                       </OpsButton>
                     )
                   }
@@ -3257,7 +3263,7 @@ function ShipmentDrawer({
                       />
                     </label>
                     <label className={DRAWER_LABEL}>
-                      {enRecuperacion ? "Nota de la llamada" : "Motivo de la excepción"}
+                      {reenvioNormal ? "Nota de la llamada" : "Motivo de la excepción"}
                       <textarea
                         value={cancelledExceptionNote}
                         onChange={(e) => setCancelledExceptionNote(e.target.value)}
@@ -3289,7 +3295,7 @@ function ShipmentDrawer({
                         Cancelar
                       </OpsButton>
                       <OpsButton
-                        variant={enRecuperacion ? "primary" : "danger"}
+                        variant={reenvioNormal ? "primary" : "danger"}
                         onClick={() =>
                           run(
                             () => reprogramCancelledShipmentException(shipmentId, {
