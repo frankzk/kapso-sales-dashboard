@@ -3759,8 +3759,12 @@ llegan solas. En #KP135202 el recuadro pedía como **«Obligatorio»** un result
 que Swayp ya había dado —Devolución (8)— y ni siquiera ofrecía esa opción, así
 que parecía que faltaba el estado.
 
-- Con número emitido por Swayp y al menos una lectura (`swaypInformsByApi`), el
-  cajón muestra **«Lo que informó Swayp»**: el estado con su nombre y número,
+- Con número emitido por Swayp (`swaypInformsByApi`), **desde que nace la guía**,
+  el cajón muestra **«Lo que informó Swayp»**. Primero se exigía una lectura del
+  barrido, y la guía nueva de #KP135202 —creada a las 10:25— recibió a las 10:52
+  un «No contesta» a mano en el recuadro viejo, que borró la fecha del reenvío.
+  El barrido lee toda guía viva con número de Swayp, así que el número basta.
+  El cajón muestra: el estado con su nombre y número,
   la última novedad, la hora de la lectura y qué toca. Con novedad, resolverla.
   En devolución, «Reenviar por Swayp» en provincia (§11.8) o resolver la
   novedad para que vuelva a reparto.

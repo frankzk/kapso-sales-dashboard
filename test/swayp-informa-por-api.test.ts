@@ -20,14 +20,17 @@ import { SWAYP_STATES } from "@/lib/swayp";
 describe("swaypInformsByApi", () => {
   const api = { courier: "fenix", swayp_guide: "50000137273", swayp_synced_at: "2026-10-08T14:52:55Z" };
 
-  it("con número de Swayp y al menos una lectura del barrido", () => {
+  it("con número de Swayp, desde que nace: no espera a la primera lectura", () => {
     expect(swaypInformsByApi(api)).toBe(true);
+    // #KP135202: 50000147404 se creó a las 10:25 y a las 10:52, todavía sin
+    // leer, se le registró «No contesta» a mano en el recuadro viejo.
+    const sinLeer = { ...api, swayp_synced_at: null };
+    expect(swaypInformsByApi(sinLeer)).toBe(true);
   });
 
-  it("una guía manual, o nunca leída, sigue pidiendo el resultado a mano", () => {
+  it("una guía manual, sin número de Swayp, sigue pidiendo el resultado a mano", () => {
     expect(swaypInformsByApi({ ...api, swayp_guide: null })).toBe(false);
-    expect(swaypInformsByApi({ ...api, swayp_synced_at: null })).toBe(false);
-    expect(swaypInformsByApi({ ...api, swayp_synced_at: undefined })).toBe(false);
+    expect(swaypInformsByApi({ ...api, swayp_guide: "" })).toBe(false);
   });
 
   it("solo Swayp", () => {
@@ -107,7 +110,7 @@ describe("el cableado", () => {
     const reja = cuerpo.indexOf("swaypInformsByApi(current) && SWAYP_API_MANUAL_EXCLUDED.has(input.result)");
     expect(reja).toBeGreaterThan(-1);
     expect(reja).toBeLessThan(cuerpo.indexOf("courierReportTransition(input.result)"));
-    expect(cuerpo).toContain('.select("id,courier,guide_code,delivery_status,next_followup_at,fenix_shipment_id,swayp_guide,swayp_synced_at")');
+    expect(cuerpo).toContain('.select("id,courier,guide_code,delivery_status,next_followup_at,fenix_shipment_id,swayp_guide")');
   });
 
   it("el expediente trae la hora de la última lectura", () => {
