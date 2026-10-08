@@ -41,6 +41,8 @@ import {
   normalizeCity,
   rescheduleGuideCode,
   shipmentRequiresCourierResult,
+  SWAYP_API_MANUAL_EXCLUDED,
+  swaypInformsByApi,
   type CourierReportResult,
   type FenixDeliverySchedule,
   type RerouteDisposition,
@@ -132,6 +134,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import {
   createFenixGuideViaApi,
   DIRECT_GUIDE_ORDER_COLUMNS,
+  origenReenvioSwayp,
   reenviarGuiaAnulada,
   resolveCurrentFenixEligibility,
   resolveDirectGuideAddress,
@@ -276,6 +279,12 @@ export async function loadShipmentDetail(
        * teléfono. La reja de verdad sigue en `spinOffFenixGuide`.
        */
       swaypUnlinked: string[];
+      /**
+       * La guía es una Swayp EN DEVOLUCIÓN en provincia y se puede reenviar por
+       * Swayp desde aquí (`origenReenvioSwayp`, 08-10-2026). La reja de verdad
+       * sigue en `reenviarGuiaAnulada`, que además le pregunta a Swayp.
+       */
+      swaypReturnResend: boolean;
     }
   | { error: string }
 > {
@@ -337,7 +346,21 @@ export async function loadShipmentDetail(
     }
   }
   const perms = await getMasterPermissions();
+  let swaypReturnResend = false;
+  if (detail.shipment.order_id && detail.shipment.delivery_status === "en_ruta") {
+    const { data: master } = await admin
+      .from("order_master")
+      .select("macro_operation")
+      .eq("order_id", detail.shipment.order_id)
+      .maybeSingle();
+    swaypReturnResend =
+      origenReenvioSwayp(
+        detail.shipment,
+        (master as { macro_operation: string | null } | null)?.macro_operation ?? null,
+      ) === "swayp_en_devolucion";
+  }
   return {
+    swaypReturnResend,
     shipment: detail.shipment,
     calls,
     guideHistory,
@@ -1089,7 +1112,7 @@ export async function registerCourierReportResult(
   const admin = createAdminSupabase();
   const { data: shipment } = await admin
     .from("shipments")
-    .select("id,courier,guide_code,delivery_status,next_followup_at,fenix_shipment_id")
+    .select("id,courier,guide_code,delivery_status,next_followup_at,fenix_shipment_id,swayp_guide,swayp_synced_at")
     .eq("id", shipmentId)
     .maybeSingle();
   if (!shipment) return { error: "Guía no encontrada." };
@@ -1099,6 +1122,8 @@ export async function registerCourierReportResult(
     delivery_status: string;
     next_followup_at: string | null;
     fenix_shipment_id: string | null;
+    swayp_guide: string | null;
+    swayp_synced_at: string | null;
   };
   if (current.courier !== "fenix") {
     return { error: "Este flujo corresponde al reporte Swayp. Aliclik se actualiza con su Excel diario." };
@@ -1108,6 +1133,15 @@ export async function registerCourierReportResult(
       error: current.fenix_shipment_id
         ? "Esta guía ya fue reemplazada. Registra el resultado en su nueva guía Swayp."
         : "Una guía transferida no admite resultados; abre la guía Swayp activa.",
+    };
+  }
+  // Swayp la informa por API (08-10-2026): un «No contesta» a mano la pasaría a
+  // Pendiente y la siguiente lectura la devolvería a En ruta. Se pierde solo.
+  if (swaypInformsByApi(current) && SWAYP_API_MANUAL_EXCLUDED.has(input.result)) {
+    return {
+      error:
+        `Swayp informa la guía ${current.guide_code} por su API y la sigue dando en reparto: un «No contesta» a mano ` +
+        "se perdería en la siguiente lectura. Habla con la clienta y resuelve la novedad en Swayp.",
     };
   }
 
@@ -1213,7 +1247,7 @@ export async function reprogramCancelledShipmentException(
   revalidatePath("/dashboard/envios");
   return {
     notice:
-      `Excepción registrada. La guía anulada quedó en el historial y se creó ` +
+      `La guía ${r.sourceGuide} quedó en el historial y se creó ` +
       `${r.guideCode} para la nueva fecha. Emitida por Swayp.`,
   };
 }

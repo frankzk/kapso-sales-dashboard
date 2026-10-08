@@ -457,4 +457,18 @@
 \ir migrations/0226_repeated_voucher_alert.sql
 \echo 'Applying 0227_olva_email_label_outcome.sql'
 \ir migrations/0227_olva_email_label_outcome.sql
+\echo 'Applying 0228_lead_shopify_location.sql'
+\ir migrations/0228_lead_shopify_location.sql
+\echo 'Applying 0229_urpi_report.sql'
+\ir migrations/0229_urpi_report.sql
+\echo 'Applying 0230_gf_office_reclaim.sql'
+\ir migrations/0230_gf_office_reclaim.sql
+\echo 'Applying 0231_swayp_pilot_solo_con_visita.sql'
+\ir migrations/0231_swayp_pilot_solo_con_visita.sql
+\echo 'Applying 0232_olva_email_label_index.sql'
+\ir migrations/0232_olva_email_label_index.sql
+\echo 'Applying 0233_cart_seq_image_test.sql'
+\ir migrations/0233_cart_seq_image_test.sql
+\echo 'Applying 0234_gf_notebook_carry_over.sql'
+\ir migrations/0234_gf_notebook_carry_over.sql
 \echo 'Done.'

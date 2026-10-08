@@ -14,6 +14,8 @@ import {
   type SettlementMasterFacts,
 } from "@/lib/settlements";
 import type { CostTariff } from "@/lib/costs";
+import { companionTotalsByHost } from "@/lib/order-companion";
+import { loadCompanionRides, loadOrderTotals } from "@/lib/order-companion-access";
 
 export interface RiderRow {
   id: string;
@@ -128,6 +130,30 @@ export async function getSettlementDetail(id: string): Promise<SettlementDetail 
       facts.set(row.order_id, row);
       if (row.order_name) orderNames[row.order_id] = row.order_name;
     }
+  }
+
+  // PEDIDO ACOMPAÑANTE (MOM §32): la guía del principal cobra también lo de
+  // los pedidos que viajan en su caja, y la fila del courier lo trae entero.
+  // Solo cuentan las cajas que prestan su estado: una anulada sin salir ya no
+  // lleva a nadie. Si la lectura falla, la fila se cuadra contra el principal
+  // solo y saldrá como diferencia: es lo seguro, nadie cierra a ciegas.
+  try {
+    const rides = (await loadCompanionRides(sb, orderIds)).filter(
+      (ride) => ride.shipment && facts.has(ride.link.hostOrderId),
+    );
+    if (rides.length) {
+      const totals = await loadOrderTotals(sb, rides.map((ride) => ride.link.companionOrderId));
+      const byHost = companionTotalsByHost(
+        rides.map((ride) => ride.link),
+        new Map([...totals].map(([id, row]) => [id, row.total])),
+      );
+      for (const [hostId, companionTotal] of byHost) {
+        const fact = facts.get(hostId);
+        if (fact) facts.set(hostId, { ...fact, companion_total: companionTotal });
+      }
+    }
+  } catch (cause) {
+    console.error("[settlements] acompañantes", id, cause);
   }
 
   return {

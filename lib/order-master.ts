@@ -50,6 +50,12 @@ import {
   type OrderEventSnapshot,
   type StatusOverride,
 } from "@/lib/order-status";
+import {
+  activeCompanionLinks,
+  borrowedHostEvents,
+  companionPartnerIds,
+  lentShipment,
+} from "@/lib/order-companion";
 
 const ORDER_COLUMNS =
   "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,payment_gateway,shipping_mode,customer_phone,total_amount,total_refunded,raw";
@@ -797,22 +803,41 @@ export interface RecomputeResult {
 /**
  * Recalcula `order_master` para los pedidos indicados. Idempotente: se puede
  * llamar tantas veces como haga falta con el mismo resultado.
+ *
+ * Si alguno es parte de un vínculo de pedido acompañante (MOM §32), el otro
+ * pedido del vínculo se recalcula en la misma pasada, y `requested`/`written`
+ * lo cuentan.
  */
 export async function recomputeOrderMaster(
   admin: SupabaseClient,
   orderIds: readonly string[],
   opts: { now?: string } = {},
 ): Promise<RecomputeResult> {
-  const ids = [...new Set(orderIds.filter(Boolean))];
-  if (!ids.length) return { requested: 0, written: 0 };
+  const requested = [...new Set(orderIds.filter(Boolean))];
+  if (!requested.length) return { requested: 0, written: 0 };
   const now = opts.now ?? new Date().toISOString();
+
+  // PEDIDO ACOMPAÑANTE (MOM §32): los dos pedidos de un vínculo se recalculan
+  // JUNTOS. El acompañante hereda la salida del principal, así que recalcularlo
+  // sin las guías ni los hechos del principal lo devolvería a su propia
+  // situación —sin caja— y lo escribiría así. Y al revés: lo que mueve la guía
+  // es el recálculo del PRINCIPAL (el reporte del courier, el barrido del
+  // desfase), así que es ese recálculo el que tiene que arrastrar al
+  // acompañante. Los vínculos se leen de los propios eventos, que ya se traen:
+  // sin vínculos no cuesta ni una consulta más.
+  const requestedEvents = await fetchEvents(admin, requested);
+  const known = new Set(requested);
+  const partners = companionPartnerIds(requestedEvents).filter((id) => !known.has(id));
+  const ids = partners.length ? [...requested, ...partners] : requested;
+  const events = partners.length
+    ? requestedEvents.concat(await fetchEvents(admin, partners))
+    : requestedEvents;
 
   const orders = await fetchOrders(admin, ids);
   if (!orders.length) return { requested: ids.length, written: 0 };
 
   const shipments = await fetchShipments(admin, ids);
   const calls = await fetchCalls(admin, shipments.map((s) => s.id));
-  const events = await fetchEvents(admin, ids);
   const drafts = await fetchDraftAddresses(admin, orders);
   const geoOverrides = await fetchGeoOverrides(admin, ids);
   const signals = await fetchPaymentSignals(admin, ids);
@@ -831,6 +856,10 @@ export async function recomputeOrderMaster(
   const shipmentsByOrder = groupBy(shipments, (s) => s.order_id);
   const callsByShipment = groupBy(calls, (c) => c.shipment_id);
   const eventsByOrder = groupBy(events, (e) => e.order_id);
+  // El vínculo vigente de cada acompañante y las salidas por id, para prestarle
+  // la caja del principal (`lentShipment`).
+  const companionLinks = new Map(activeCompanionLinks(events).map((link) => [link.companionOrderId, link]));
+  const shipmentsById = new Map(shipments.map((s) => [s.id, s]));
 
   // Resolver provincia necesita un ida y vuelta más, así que primero se junta
   // el distrito de cada pedido y luego se consulta el ubigeo de una sola vez.
@@ -987,7 +1016,19 @@ export async function recomputeOrderMaster(
       geoSource,
     } = ctx;
 
-    const eventSnapshots: OrderEventSnapshot[] = orderEvents.map((e) => ({
+    // PEDIDO ACOMPAÑANTE (MOM §32). La caja del principal decide el estado de
+    // este pedido como si fuera suya —despacho, entrega, devolución,
+    // Reproprovincia—, junto con los hechos de esa caja y la liquidación del
+    // principal. Lo demás sigue siendo propio: la ubicación, el cliente, el
+    // candado y el costo (el flete se paga una vez y está en el principal).
+    const ride = lentShipment(companionLinks.get(order.id), shipmentsById);
+    const rideEvents = ride?.order_id
+      ? borrowedHostEvents(eventsByOrder.get(ride.order_id) ?? [], ride.id)
+      : [];
+    const stateEvents = rideEvents.length ? [...orderEvents, ...rideEvents] : orderEvents;
+    const stateShipments = ride ? [...guides, ride] : guides;
+
+    const eventSnapshots: OrderEventSnapshot[] = stateEvents.map((e) => ({
       kind: e.kind,
       shipment_id: e.shipment_id,
       occurred_at: e.occurred_at,
@@ -1044,7 +1085,7 @@ export async function recomputeOrderMaster(
         financial_status: order.financial_status,
         shipping_mode: order.shipping_mode,
       },
-      guides: guides.map((s) => toGuideSnapshot(s, callsByShipment.get(s.id) ?? [])),
+      guides: stateShipments.map((s) => toGuideSnapshot(s, callsByShipment.get(s.id) ?? [])),
       events: eventSnapshots,
       override,
       now,
@@ -1064,8 +1105,11 @@ export async function recomputeOrderMaster(
         province,
         district,
       },
-      guides: guides.map((s) => toMacroGuideSnapshot(s, callsByShipment.get(s.id) ?? [])),
-      events: orderEvents.map((event) => ({
+      guides: [
+        ...guides.map((s) => toMacroGuideSnapshot(s, callsByShipment.get(s.id) ?? [])),
+        ...(ride ? [{ ...toMacroGuideSnapshot(ride, callsByShipment.get(ride.id) ?? []), borrowed: true }] : []),
+      ],
+      events: stateEvents.map((event) => ({
         kind: event.kind,
         occurred_at: event.occurred_at,
         shipment_id: event.shipment_id,
@@ -1102,6 +1146,10 @@ export async function recomputeOrderMaster(
             return: num(activeGuide.quoted_return_cost),
           }
         : null;
+    // El acompañante que va en la caja del principal no paga flete: la guía es
+    // una y su costo ya está en el principal (MOM §32). Sin esto, la tarifa del
+    // distrito se cobraba dos veces por un solo paquete.
+    const ridesInHostBox = Boolean(ride?.guide_code) && state.guideCode === ride?.guide_code;
 
     return {
       store_id: order.store_id,
@@ -1160,7 +1208,9 @@ export async function recomputeOrderMaster(
       delivered_courier: state.deliveredCourier,
       returned_at: state.returnedAt,
       last_movement_at: state.lastMovementAt,
-      logistics_cost: tariffs.length || actualCost
+      logistics_cost: ridesInHostBox
+        ? 0
+        : tariffs.length || actualCost
         ? computeLogisticsCost(tariffs, {
             ctx: {
               storeId: order.store_id,

@@ -52,8 +52,8 @@ begin
   update swayp_auto_settings set daily_cap=10,pilot_daily_cap=1 where org_id=org;
   insert into orders(id,store_id,shopify_order_id,created_at,total_amount) values(o4,a,'pilot4',now(),500.01),(o5,b,'pilot5',now(),149);
   insert into shipments(id,store_id,order_id,courier,guide_code,delivery_status,status_category,reported_status,closed_at,aliclik_attempts) values
-    (s4,a,o4,'aliclik','PILOT4','anulado','cancelled','CANCEL',now(),1),
-    (s5,b,o5,'aliclik','PILOT5','anulado','cancelled','CANCEL',now(),1);
+    (s4,a,o4,'aliclik','PILOT4','anulado','cancelled','CANCEL · TO_RETURN · CONFIRMED',now(),1),
+    (s5,b,o5,'aliclik','PILOT5','anulado','cancelled','CANCEL · TO_RETURN · CONFIRMED',now(),1);
   evidence:=jsonb_build_object('fingerprint',swayp_auto_inspect(s4)->>'fingerprint','cohort','recent_no_history','location',jsonb_build_object('ok',true));
   r:=swayp_emission_claim(a,o4,s4::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence,'[{"codbar":"TEST","disponible":50}]',now());
   if r->>'error'<>'Piloto desactivado' then raise exception 'pilot flag bypass: %',r; end if;
@@ -64,6 +64,17 @@ begin
   evidence:=jsonb_build_object('fingerprint',swayp_auto_inspect(s4)->>'fingerprint','cohort','recent_no_history','location',jsonb_build_object('ok',true));
   r:=swayp_emission_claim(a,o4,s4::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence||'{"location":{"ok":false}}','[{"codbar":"TEST","disponible":50}]',now());
   if r->>'error'<>'El pedido no cumple el piloto sin historial' then raise exception 'location bypass: %',r; end if;
+  -- 0231: sin visita de Aliclik no hay reenvío del piloto.
+  update shipments set aliclik_attempts=0 where id=s4;
+  evidence:=jsonb_build_object('fingerprint',swayp_auto_inspect(s4)->>'fingerprint','cohort','recent_no_history','location',jsonb_build_object('ok',true));
+  r:=swayp_emission_claim(a,o4,s4::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence,'[{"codbar":"TEST","disponible":50}]',now());
+  if r->>'error'<>'El pedido no cumple el piloto sin historial' then raise exception 'zero attempts accepted: %',r; end if;
+  update shipments set aliclik_attempts=1,reported_status='CANCEL · LEFT_IN_WAREHOUSE · CONFIRMED' where id=s4;
+  evidence:=jsonb_build_object('fingerprint',swayp_auto_inspect(s4)->>'fingerprint','cohort','recent_no_history','location',jsonb_build_object('ok',true));
+  r:=swayp_emission_claim(a,o4,s4::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence,'[{"codbar":"TEST","disponible":50}]',now());
+  if r->>'error'<>'El pedido no cumple el piloto sin historial' then raise exception 'package never left accepted: %',r; end if;
+  update shipments set reported_status='CANCEL · TO_RETURN · CONFIRMED' where id=s4;
+  evidence:=jsonb_build_object('fingerprint',swayp_auto_inspect(s4)->>'fingerprint','cohort','recent_no_history','location',jsonb_build_object('ok',true));
   r:=swayp_emission_claim(a,o4,s4::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence,'[{"codbar":"TEST","disponible":50}]',now());
   if not r ? 'id' then raise exception 'pilot claim failed: %',r; end if;
   evidence:=jsonb_build_object('fingerprint',swayp_auto_inspect(s5)->>'fingerprint','cohort','recent_no_history','location',jsonb_build_object('ok',true));

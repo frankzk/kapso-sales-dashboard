@@ -58,6 +58,8 @@ import {
   type SwaypRouteCheck,
 } from "@/lib/order-route-plan";
 import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
+import { companionCollectTotal } from "@/lib/order-companion";
+import { loadCompanionRides, loadOrderTotals } from "@/lib/order-companion-access";
 import { cargarMapaSwayp } from "@/lib/swayp-sku-map";
 import { productosSinVinculo } from "@/lib/swayp-productos";
 import type {
@@ -517,6 +519,110 @@ export interface OrderMasterDetail {
    * paquete y en qué quedó. Vacío si el pedido no pasó por una caja ni ruta.
    */
   gfDeliveries: GfDelivery[];
+  /** Pedido acompañante (MOM §32): en qué caja viaja y qué lleva en las suyas. */
+  companion: OrderCompanionInfo;
+}
+
+/** La caja de otro pedido en la que viaja este, o lo que lleva en las suyas (§32). */
+export interface OrderCompanionInfo {
+  /** Si este pedido es acompañante: la caja del principal en la que viaja. */
+  travelsIn: {
+    hostOrderId: string;
+    hostOrderName: string | null;
+    hostShipmentId: string;
+    courier: string | null;
+    guideCode: string | null;
+    deliveryStatus: string | null;
+    /** ¿La caja presta su estado? Anulada sin salir, no (regla 9). */
+    lends: boolean;
+    linkedAt: string;
+  } | null;
+  /** Si este pedido es principal: lo que viaja en sus cajas. */
+  carries: {
+    companionOrderId: string;
+    companionOrderName: string | null;
+    companionTotal: number | null;
+    hostShipmentId: string;
+    guideCode: string | null;
+    lends: boolean;
+    linkedAt: string;
+  }[];
+  /** Lo que debe cobrar la guía en la puerta: el principal + sus acompañantes. */
+  collectTotal: number | null;
+  /** Lo que el courier informó por API que cobra esa guía, si lo informó. */
+  reportedCollect: number | null;
+  /** La lectura falló: la ficha lo dice en vez de enseñar «sin vínculo». */
+  error: string | null;
+}
+
+const NO_COMPANION: OrderCompanionInfo = {
+  travelsIn: null,
+  carries: [],
+  collectTotal: null,
+  reportedCollect: null,
+  error: null,
+};
+
+/**
+ * El vínculo de pedido acompañante visto desde un pedido. Con el cliente del
+ * usuario: si no ve la tienda del otro pedido, no ve el vínculo, igual que no
+ * vería el pedido.
+ */
+async function loadOrderCompanionInfo(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  row: OrderMasterRow,
+): Promise<OrderCompanionInfo> {
+  try {
+    const rides = await loadCompanionRides(sb, [row.order_id]);
+    if (!rides.length) return NO_COMPANION;
+    const mine = rides.find((ride) => ride.link.companionOrderId === row.order_id) ?? null;
+    const carried = rides.filter((ride) => ride.link.hostOrderId === row.order_id);
+    const totals = carried.length
+      ? await loadOrderTotals(sb, carried.map((ride) => ride.link.companionOrderId))
+      : new Map<string, { total: number | null; name: string | null; storeId: string | null }>();
+    const riding = carried.filter((ride) => ride.shipment);
+    const reportedRide = riding.find((ride) => ride.rawShipment?.created_via === "aliclik_api");
+    const reported = reportedRide?.rawShipment?.reported_collect_amount;
+    return {
+      travelsIn: mine
+        ? {
+            hostOrderId: mine.link.hostOrderId,
+            hostOrderName: mine.link.hostOrderName,
+            hostShipmentId: mine.link.hostShipmentId,
+            courier: mine.rawShipment?.courier ?? null,
+            guideCode: mine.rawShipment?.guide_code ?? mine.link.hostGuideCode,
+            deliveryStatus: mine.rawShipment?.delivery_status ?? null,
+            // Sin la fila (la tienda del principal no está entre las de quien
+            // mira) no se sabe: no se afirma que la caja ya no exista.
+            lends: mine.rawShipment ? Boolean(mine.shipment) : true,
+            linkedAt: mine.link.linkedAt,
+          }
+        : null,
+      carries: carried.map((ride) => ({
+        companionOrderId: ride.link.companionOrderId,
+        companionOrderName: totals.get(ride.link.companionOrderId)?.name ?? ride.link.companionOrderName,
+        companionTotal: totals.get(ride.link.companionOrderId)?.total ?? null,
+        hostShipmentId: ride.link.hostShipmentId,
+        guideCode: ride.rawShipment?.guide_code ?? ride.link.hostGuideCode,
+        lends: Boolean(ride.shipment),
+        linkedAt: ride.link.linkedAt,
+      })),
+      collectTotal: riding.length
+        ? companionCollectTotal(
+            row.order_total,
+            riding.map((ride) => totals.get(ride.link.companionOrderId)?.total ?? null),
+          )
+        : null,
+      reportedCollect: reported != null && Number.isFinite(Number(reported)) ? Number(reported) : null,
+      error: null,
+    };
+  } catch (cause) {
+    console.error("[order-detail] acompañantes", row.order_id, cause);
+    return {
+      ...NO_COMPANION,
+      error: cause instanceof Error ? cause.message : "No se pudo leer el vínculo de pedido acompañante.",
+    };
+  }
 }
 
 export interface OrderTaskSummary {
@@ -887,7 +993,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     ...item,
     image_url: item.product_id ? images.get(item.product_id) ?? null : null,
   }));
-  const [swayp, aliclikHealth, grupoGfCourier, gfDeliveries] = await Promise.all([
+  const [swayp, aliclikHealth, grupoGfCourier, gfDeliveries, companion] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
     loadGroupGfCourierRouteCheck(sb, row),
@@ -897,6 +1003,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
       console.error("[order-detail] loadGfDeliveries", orderId, cause);
       return [] as GfDelivery[];
     }),
+    loadOrderCompanionInfo(sb, row),
   ]);
   return {
     row,
@@ -907,6 +1014,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     aliclikHealth,
     tasks,
     gfDeliveries,
+    companion,
     address: shopifyShippingAddress(orderRow?.raw),
     departamentoElegido: shopifyDepartamentoElegido(orderRow?.raw),
     shopifyNote: shopifyOrderNote(orderRow?.raw),
@@ -920,6 +1028,9 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
       closedByFailedDelivery: guides.some((guide) =>
         etiquetaDiceTerminoSinEntregar(guide.reported_status),
       ),
+      companionOf: companion.travelsIn
+        ? { hostOrderName: companion.travelsIn.hostOrderName, guideCode: companion.travelsIn.guideCode }
+        : null,
     }),
     routePlan: buildOrderRoutePlan({
       operation: operationOf(row, guides),

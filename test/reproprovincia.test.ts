@@ -569,7 +569,10 @@ describe("gestión sobre la guía anulada, desde Envíos", () => {
     expect(src).toContain('const enRecuperacion = shipment?.delivery_status === "anulado" && shipment.recovery === "activa";');
     expect(src).toContain("{enRecuperacion && (");
     expect(src).toContain("registerRecoveryCall(shipmentId, {");
-    expect(src).toContain('{enRecuperacion ? "Reproprovincia" : "Excepción auditada"}');
+    // Reenviar es lo normal en recuperación, y también sobre una Swayp en
+    // devolución en provincia (08-10-2026, §11.8).
+    expect(src).toContain("const reenvioNormal = enRecuperacion || reenvioDesdeDevolucion;");
+    expect(src).toContain('{reenvioNormal ? "Reproprovincia" : "Excepción auditada"}');
   });
 
   it("y el MOM lo dice", () => {

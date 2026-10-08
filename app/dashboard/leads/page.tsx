@@ -5,6 +5,7 @@ import {
   LEAD_VIEWS,
   getDistrictCoverageRules,
   getLeadPriorCoverage,
+  getLeadShopifyLocations,
   getLeadQueueSnapshot,
   getStoreLeads,
   leadsViewLimit,
@@ -14,11 +15,11 @@ import {
 import {
   activeClaimHolders,
   isLeadGestion,
-  isLeadSegment,
+  isQueueBucket,
   isQueueState,
   leadInteractionDateFilterFromParams,
   type LeadGestion,
-  type LeadSegment,
+  type QueueBucket,
   type QueueState,
 } from "@/lib/leads";
 import type { DistrictCoverageRule } from "@/lib/district-coverage";
@@ -110,10 +111,11 @@ async function LeadsContent({
       : isLeadGestion(sp.gest) && sp.gest !== "sin_llamar"
         ? "seguimiento"
         : null;
-  // Eje 2 (segmento): ?seg=, o un ?tab=<segmento> viejo del PR #76.
-  const initialSeg: LeadSegment | null = isLeadSegment(sp.seg)
+  // Eje 2 (segmento): ?seg=, o un ?tab=<segmento> viejo del PR #76. Un
+  // ?seg=interes guardado de antes de partirlo en Distrito/Producto abre «Todos».
+  const initialSeg: QueueBucket | null = isQueueBucket(sp.seg)
     ? sp.seg
-    : isLeadSegment(sp.tab)
+    : isQueueBucket(sp.tab)
       ? sp.tab
       : null;
   const initialGest: LeadGestion | null = isLeadGestion(sp.gest) ? sp.gest : null;
@@ -144,23 +146,37 @@ async function LeadsContent({
   // «Tomado» sola obligaba a abrir el lead para descubrir a quién preguntarle.
   // Solo se resuelven las reservas vivas: una decena de asesoras, no la cola.
   const agentNamesPromise = leadsPromise.then((rows) => resolveAgentNames(activeClaimHolders(rows)));
-  // El filtro de cobertura (Lima / Provincia) solo existe en «Por llamar». Las
-  // dos lecturas son independientes de la lista y no la esperan.
+  // El filtro de cobertura (Lima / Provincia) solo existe en «Por llamar». Sus
+  // lecturas son independientes de la lista y no la esperan.
   const inQueue = view === "por_llamar";
   const priorCoveragePromise = inQueue ? getLeadPriorCoverage(scope) : Promise.resolve<Record<string, string>>({});
   const coverageRulesPromise = inQueue ? getDistrictCoverageRules(scope) : Promise.resolve<DistrictCoverageRule[]>([]);
-  const [snapshot, leads, user, adNames, waNumbers, adProductMap, agentNames, priorCoverage, coverageRules] =
-    await Promise.all([
-      snapshotPromise,
-      leadsPromise,
-      userPromise,
-      adNamesPromise,
-      waNumbersPromise,
-      adProductsPromise,
-      agentNamesPromise,
-      priorCoveragePromise,
-      coverageRulesPromise,
-    ]);
+  const shopifyLocationsPromise = inQueue
+    ? getLeadShopifyLocations(scope)
+    : Promise.resolve<Record<string, { province: string | null; city: string | null }>>({});
+  const [
+    snapshot,
+    leads,
+    user,
+    adNames,
+    waNumbers,
+    adProductMap,
+    agentNames,
+    priorCoverage,
+    coverageRules,
+    shopifyLocations,
+  ] = await Promise.all([
+    snapshotPromise,
+    leadsPromise,
+    userPromise,
+    adNamesPromise,
+    waNumbersPromise,
+    adProductsPromise,
+    agentNamesPromise,
+    priorCoveragePromise,
+    coverageRulesPromise,
+    shopifyLocationsPromise,
+  ]);
 
   return (
     <LeadsBoard
@@ -177,6 +193,7 @@ async function LeadsContent({
       waNumbers={waNumbers}
       agentNames={agentNames}
       priorCoverage={priorCoverage}
+      shopifyLocations={shopifyLocations}
       coverageRules={coverageRules}
       adDeclarations={Object.fromEntries(adProductMap)}
       currency={currency}

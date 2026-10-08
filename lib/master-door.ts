@@ -17,6 +17,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { defaultOperationalFor } from "@/lib/order-status";
+import { companionDoorFollowers } from "@/lib/order-companion";
+import { loadCompanionRides, loadOrderTotals } from "@/lib/order-companion-access";
 
 export type MasterDoorTarget = "entregado";
 export type MasterDoorSource = "ruta" | "liquidacion";
@@ -109,6 +111,68 @@ export async function applyDeliveriesToMaster(admin: SupabaseClient, items: read
     result.applied = [];
     return result;
   }
+  await followCompanions(admin, items, result);
   await recomputeOrderMasterSafe(admin, result.applied);
   return result;
+}
+
+/**
+ * PEDIDO ACOMPAÑANTE (MOM §32 regla 12): lo que viaja en la caja de un pedido
+ * que esta puerta acaba de entregar, se entrega con él. Mismo hecho, misma
+ * fuente, y un motivo que nombra al principal y la guía. Best-effort: si falla,
+ * el principal ya quedó bien y el acompañante se arregla a mano desde su ficha;
+ * no se deshace una entrega por no poder escribir la de su acompañante.
+ */
+async function followCompanions(
+  admin: SupabaseClient,
+  items: readonly MasterDoorItem[],
+  result: MasterDoorResult,
+): Promise<void> {
+  try {
+    const rides = await loadCompanionRides(admin, result.applied);
+    const followers = companionDoorFollowers(result.applied, rides, result.applied);
+    if (!followers.length) return;
+    const byOrder = new Map(items.map((item) => [item.orderId, item]));
+    const stores = await loadOrderTotals(admin, followers.map((ride) => ride.link.companionOrderId));
+    const events = followers.flatMap((ride) => {
+      const host = byOrder.get(ride.link.hostOrderId);
+      const storeId = stores.get(ride.link.companionOrderId)?.storeId ?? null;
+      if (!host || !storeId) return [];
+      return [
+        {
+          store_id: storeId,
+          order_id: ride.link.companionOrderId,
+          kind: "status_override",
+          occurred_at: host.occurredAt ?? new Date().toISOString(),
+          actor: host.actor,
+          source: host.source,
+          courier: host.courier ?? null,
+          new_status: host.target,
+          new_operational: defaultOperationalFor(host.target),
+          reason:
+            `Entregado con ${ride.link.hostOrderName ?? "su pedido principal"}: viajaba en su caja` +
+            (ride.link.hostGuideCode ? ` (guía ${ride.link.hostGuideCode})` : "") +
+            ". " +
+            host.reason,
+          // Sin `shipment_id`: la salida es del principal, y los flujos que
+          // leen hechos por salida (retorno, inventario) no deben ver aquí uno
+          // del acompañante. La caja va en el payload.
+          payload: {
+            ...(host.payload ?? {}),
+            companion_of: ride.link.hostOrderId,
+            host_shipment_id: ride.link.hostShipmentId,
+          },
+        },
+      ];
+    });
+    if (!events.length) return;
+    const { error } = await admin.from("order_events").insert(events);
+    if (error) {
+      console.error("[master-door] acompañantes", error.message);
+      return;
+    }
+    result.applied.push(...events.map((event) => event.order_id));
+  } catch (cause) {
+    console.error("[master-door] acompañantes", cause);
+  }
 }

@@ -16,7 +16,7 @@ vi.mock("@/lib/db", () => {
     let columns = "*";
     let value: Record<string, unknown> | undefined;
     const q: any = {};
-    for (const method of ["eq", "in", "is", "ilike", "limit", "or"]) q[method] = () => q;
+    for (const method of ["eq", "neq", "in", "is", "ilike", "limit", "or"]) q[method] = () => q;
     q.select = (s: string) => { columns = s; return q; };
     q.insert = q.update = (v: Record<string, unknown>) => { value = v; return q; };
     const result = () => {

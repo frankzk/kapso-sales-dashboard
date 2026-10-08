@@ -8,15 +8,34 @@ import type { OrderLineItem } from "@/lib/types";
 export interface AutoSettings { org_id: string; enabled: boolean; daily_cap: number; max_order_days: number; history_days: number; pilot_enabled?: boolean; pilot_daily_cap?: number }
 export type AutoCohort = "prior_delivery" | "recent_no_history";
 
-/** MOM 11.9.1, ampliado el 03-10-2026: hasta 14 días y de 0 a 2 intentos Aliclik.
- *  La reserva de la base (`swayp_emission_claim`, 0220) repite estos límites. */
+/** MOM 11.9.1: hasta 14 días (03-10-2026) y de 1 a 2 intentos Aliclik con el
+ *  paquete en reparto (05-10-2026). La reserva de la base
+ *  (`swayp_emission_claim`, 0231) repite estos límites. */
 export const PILOT_MAX_ORDER_DAYS = 14;
 export const PILOT_MAX_AMOUNT = 500;
+export const PILOT_MIN_ALICLIK_ATTEMPTS = 1;
 export const PILOT_MAX_ALICLIK_ATTEMPTS = 2;
 
-/** Un intento informado de 0 a 2. Sin dato no se asume ninguno. */
+/**
+ * Un intento informado de 1 a 2. Sin dato no se asume ninguno, y cero ya no
+ * entra (05-10-2026): de 37 reenvíos cuyo paquete Aliclik nunca llegó a
+ * visitar, ninguno se entregó. Un `CANCEL` sin visita suele ser el cliente
+ * cancelando por teléfono con Aliclik.
+ */
 export function pilotAttemptsOk(attempts: number | null | undefined): boolean {
-  return Number.isInteger(attempts) && attempts! >= 0 && attempts! <= PILOT_MAX_ALICLIK_ATTEMPTS;
+  return Number.isInteger(attempts) && attempts! >= PILOT_MIN_ALICLIK_ATTEMPTS && attempts! <= PILOT_MAX_ALICLIK_ATTEMPTS;
+}
+
+/** Despachos de Aliclik que acreditan que el paquete salió a reparto. */
+const DESPACHO_EN_REPARTO = new Set(["PICKED", "TO_RETURN", "RETURNED"]);
+
+/**
+ * ¿El paquete de Aliclik salió a reparto? Lee el segundo campo de la etiqueta
+ * (`CANCEL · TO_RETURN · CONFIRMED`). `LEFT_IN_WAREHOUSE`, `STORE_CENTRAL` y
+ * `REMAINING_IN_TRANSIT` no cuentan: ninguno de esos reenvíos se entregó.
+ */
+export function aliclikSalioAReparto(reportedStatus: string | null | undefined): boolean {
+  return DESPACHO_EN_REPARTO.has((reportedStatus ?? "").split(" · ")[1]?.trim() ?? "");
 }
 interface Guide { id: string; courier: string; delivery_status: string; reported_status: string | null; fenix_shipment_id: string | null }
 export interface AutoSnapshot {
@@ -64,7 +83,8 @@ export const AUTO_REASONS: Record<string, string> = {
   no_mapping: "Falta vínculo de algún producto con Swayp", no_stock: "Sin stock completo en Swayp",
   api_disabled: "Bodega sin emisión por API", created: "Guía Swayp creada", review: "Emisión pendiente de revisión",
   emission_blocked: "Emisión detenida por tope, reserva o cambio de datos",
-  pilot_limits: "Piloto: requiere hasta 14 días, de 0 a 2 intentos informados y máximo S/500",
+  pilot_limits: "Piloto: requiere hasta 14 días, de 1 a 2 intentos informados y máximo S/500",
+  pilot_no_visit: "Piloto: Aliclik no llegó a visitar (el paquete no salió a reparto)",
   pilot_location: "Piloto: ubicación o referencia sin corroborar",
   pilot_cap: "Piloto: cupo diario de intentos alcanzado",
   payment_review: "Tiene un pago registrado: revisar saldo antes de reenviar",
@@ -105,6 +125,7 @@ export function evaluateAutoDispatch(s: AutoSnapshot, c: AutoSettings, now: Date
   if (!prior && !c.pilot_enabled) return no("no_history");
   if (!prior) {
     if (age > PILOT_MAX_ORDER_DAYS || !pilotAttemptsOk(g.aliclik_attempts) || Number(o.total_amount) > PILOT_MAX_AMOUNT) return no("pilot_limits");
+    if (!aliclikSalioAReparto(g.reported_status)) return no("pilot_no_visit");
     // Presence alone is not corroboration: the server also resolves these
     // coordinates through Aliclik and requires the exact destination ubigeo.
     if (!address.address2?.trim() || !Number.isFinite(g.latitude) || !Number.isFinite(g.longitude)

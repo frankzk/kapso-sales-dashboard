@@ -87,6 +87,13 @@ export interface SettlementMasterFacts {
   province: string | null;
   district: string | null;
   store_id: string;
+  /**
+   * Lo que suman los pedidos acompañantes que viajan en la caja de este pedido
+   * (MOM §32). La guía cobra en la puerta el principal MÁS ellos, y la fila del
+   * courier trae ese cobro entero: contra el total del principal solo, saldría
+   * «Reportó más de lo esperado» —#AUR176985 trae S/ 364 = 215 + 149—.
+   */
+  companion_total?: number | null;
 }
 
 export interface ReconciledLine {
@@ -95,7 +102,8 @@ export interface ReconciledLine {
   verdict: SettlementVerdict;
   /** Lo que el motorizado declaró haber cobrado. */
   declared: number;
-  /** Lo que debía traer según el Master: el total del pedido si está entregado. */
+  /** Lo que debía traer según el Master: el total del pedido si está entregado,
+   *  más el de sus acompañantes (MOM §32). */
   expected: number;
   /** declarado − esperado. Positivo = trae de más; negativo = falta. */
   difference: number;
@@ -166,7 +174,7 @@ export function reconcileLine(
   }
 
   const delivered = facts.general_status === "entregado";
-  const expected = delivered ? round2(facts.order_total ?? 0) : 0;
+  const expected = delivered ? round2((facts.order_total ?? 0) + (facts.companion_total ?? 0)) : 0;
   const difference = round2(declared - expected);
 
   let verdict: SettlementVerdict;

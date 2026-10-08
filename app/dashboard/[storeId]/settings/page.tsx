@@ -133,6 +133,15 @@ export default async function StoreSettingsPage({
     listEscalationCandidates(storeId),
   ]);
 
+  // La prueba de imagen en carritos (0233), desde que se encendió. Pre-0233
+  // la función no existe ⇒ `error` y sin resultados, sin tumbar Ajustes.
+  const { data: cartImageTest } = full?.cart_seq_image_test_started_at
+    ? await admin.rpc("cart_image_test_results", {
+        p_store_id: storeId,
+        p_since: full.cart_seq_image_test_started_at,
+      })
+    : { data: null };
+
   const data: StoreSettingsData = {
     store: {
       id: full.id,
@@ -163,6 +172,11 @@ export default async function StoreSettingsPage({
       cart_seq_hours_2: full.cart_seq_hours_2 ?? 24,
       cart_seq_hour_start: full.cart_seq_hour_start ?? 8,
       cart_seq_hour_end: full.cart_seq_hour_end ?? 21,
+      // Pre-0233 ⇒ sin prueba de imagen.
+      cart_seq_image_test_enabled: full.cart_seq_image_test_enabled ?? false,
+      cart_seq_image_template_1_name: full.cart_seq_image_template_1_name ?? null,
+      cart_seq_image_template_1_language: full.cart_seq_image_template_1_language ?? null,
+      cart_seq_image_test_started_at: full.cart_seq_image_test_started_at ?? null,
       // Pre-0112 las columnas no existen ⇒ recuperación apagada.
       return_recovery_enabled: full.return_recovery_enabled ?? false,
       return_recovery_auto: full.return_recovery_auto ?? false,
@@ -279,6 +293,7 @@ export default async function StoreSettingsPage({
     paymentMethods: (paymentMethods as StoreSettingsData["paymentMethods"]) ?? [],
     escalation,
     escalationCandidates,
+    cartImageTest: (cartImageTest as StoreSettingsData["cartImageTest"] | null) ?? [],
   };
 
   const banner = sp.installed

@@ -45,28 +45,34 @@ describe("las secciones del cajón son neutras", () => {
         expect(allowed.has(line.trim()), line.trim()).toBe(true);
       }
     }
-    // Indigo solo en la etiqueta «Directa» del cajón (fondo y texto). En la
-    // cola, desde el 05-10-2026, «Directa» y «Swayp» son chapas neutras: el
-    // color de la fila es para el estado y la ruta.
-    expect(src.match(/indigo-[0-9]/g)?.length).toBe(2);
+    // Desde el 05-10-2026 «Directa» y «Swayp» son chapas neutras en la cola y
+    // en el cajón: el color es para el estado y la ruta.
+    expect(src).not.toMatch(/indigo-[0-9]/);
   });
 });
 
 describe("un solo acento de acción", () => {
   it("los botones primarios son de la marca; rose solo para lo irreversible", () => {
     expect(src).not.toMatch(/bg-(orange|emerald|violet|indigo|sky|teal)-6\d\d px/);
-    expect(src.match(/bg-brand-600/g)?.length).toBeGreaterThan(4);
-    // Rose queda en lo irreversible: crear la guía de excepción, «no quiere»
-    // (primer clic y confirmación), «Cliente cancela» (primer clic y
-    // confirmación), resolver la novedad de Swayp y —desde la cuarta crítica—
-    // el resultado del courier que anula la guía, que también cierra la venta.
-    expect(src.match(/(?<!hover:)bg-rose-(600|700)/g)?.length).toBe(7);
+    // Desde el 05-10-2026 los botones son los del mundo de operación
+    // (`OpsButton`): la acción principal es `primary` (azul Kapta) y lo
+    // irreversible es `danger` —crear la guía de excepción, «no quiere» (primer
+    // clic y confirmación), «Cliente cancela» (primer clic y confirmación), el
+    // resultado del courier que anula la guía y descartar un borrador—. Ya no
+    // hay botones pintados a mano en rojo.
+    expect(src).not.toMatch(/(?<!hover:)bg-rose-(600|700)/);
+    expect(src.match(/"primary"/g)?.length).toBeGreaterThan(6);
+    expect(src.match(/"danger"/g)?.length).toBeGreaterThanOrEqual(6);
   });
 
   it("los filtros activos y la ruta elegida usan el acento, no el color del courier", () => {
     expect(src).not.toContain('"border-emerald-300 bg-emerald-50 text-emerald-800"');
     expect(src).not.toContain('"border-indigo-300 bg-indigo-50 text-indigo-800"');
-    expect(src).toContain('? "border-brand-500 bg-brand-50 text-brand-800"');
+    // La opción elegida (resultado, ruta) lleva el anillo azul de 2 px: es la
+    // tarjeta-opción compartida del mundo de operación.
+    const ops = readFileSync(resolve(process.cwd(), "components/ops-ui.tsx"), "utf8");
+    expect(ops).toContain('? "bg-brand-50 ring-2 ring-inset ring-brand-600"');
+    expect(src.match(/<OptionTile/g)?.length).toBeGreaterThanOrEqual(4);
   });
 });
 

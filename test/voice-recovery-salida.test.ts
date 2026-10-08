@@ -70,6 +70,11 @@ describe("registrar_gestion crea la salida Swayp solo cuando corresponde (§11.8
     expect(agente.indexOf("mismaDireccion(")).toBeLessThan(agente.indexOf("reenviarGuiaAnulada("));
   });
 
+  it("la madre del reenvío sale de la misma regla que el botón de Envíos (08-10-2026)", () => {
+    expect(agente).toContain("await buscarOrigenReenvio(admin, call.order_id)");
+    expect(agente.indexOf("buscarOrigenReenvio(")).toBeLessThan(agente.indexOf("reenviarGuiaAnulada("));
+  });
+
   it("el actor es el agente, no una persona", () => {
     expect(agente).toContain("{ userId: null, storeId: call.store_id }");
   });
@@ -106,8 +111,9 @@ describe("la gestión del agente también queda en la guía que muestra Envíos 
     expect(cuerpo.indexOf("if (error) return error.message;")).toBeLessThan(cuerpo.indexOf("noteOnRecoveryGuide("));
   });
 
-  it("como una llamada sobre la guía anulada, sin actor humano y con fecha pactada si la hay", () => {
-    expect(nota).toContain('.eq("delivery_status", "anulado")');
+  it("como una llamada sobre la guía que Envíos ofrece reenviar, sin actor humano y con fecha pactada si la hay", () => {
+    // La anulada o, en provincia, la Swayp en devolución: la misma regla que el botón.
+    expect(nota).toContain("await buscarOrigenReenvio(admin, call.order_id)");
     expect(nota).toContain('from("shipment_calls").insert(');
     expect(nota).toContain("agent: null");
     expect(nota).toContain('kind: "call"');

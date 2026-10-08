@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { Card, DeltaBadge, cn } from "@/components/ui";
 import { ProductivityTable } from "@/components/productivity-table";
+import { ProductivityMonthSelect } from "@/components/productivity-month-select";
 import type { DateRange } from "@/lib/access";
+import type { MonthPace, MonthView } from "@/lib/productivity-month";
 import type { StoreSummary } from "@/lib/types";
 import {
   FIRST_TOUCH_FAST_MIN,
@@ -17,6 +19,16 @@ import {
 } from "@/lib/productivity";
 
 type SourceFilter = SourceBucket | null;
+
+/** La vista por mes (`?mes=`): qué mes, con qué se compara y a qué ritmo va. */
+export interface ProductivityMonth {
+  view: MonthView;
+  pace: MonthPace;
+  /** "agosto": el mes anterior entero, para «agosto cerró en …». */
+  prevMonthName: string;
+  /** Cerrados e ingresos de ese mes entero (en modo solo, los de la asesora). */
+  prevMonthTotals: { cerrados: number; ingresos: number } | null;
+}
 
 const SOURCE_FILTERS: { key: SourceBucket; label: string }[] = [
   { key: "meta_ad", label: "📣 Campaña" },
@@ -36,8 +48,9 @@ function pctDelta(cur: number, prev: number): number | null {
   return Math.round(((cur - prev) / prev) * 1000) / 10;
 }
 
-function buildHref(opts: { from: string; to: string; store: string | null; src: string | null }): string {
-  const qs = new URLSearchParams({ from: opts.from, to: opts.to });
+/** Un rango de días (`from`/`to`) o un mes (`mes`); el mes manda si viene. */
+function buildHref(opts: { from: string; to: string; store: string | null; src: string | null; mes?: string | null }): string {
+  const qs = new URLSearchParams(opts.mes ? { mes: opts.mes } : { from: opts.from, to: opts.to });
   if (opts.store) qs.set("store", opts.store);
   if (opts.src) qs.set("src", opts.src);
   return `/dashboard/productividad?${qs.toString()}`;
@@ -98,6 +111,8 @@ export function ProductivityBoard({
   initialOnlineIds,
   firstTouch,
   solo = false,
+  month = null,
+  months = [],
 }: {
   rows: AdvisorBoardRow[];
   prevTotals: ProductivityTotals;
@@ -118,6 +133,10 @@ export function ProductivityBoard({
   firstTouch: FirstTouchStats | null;
   /** Vista de vendedora: solo su propia fila — sin KPI de presencia del equipo. */
   solo?: boolean;
+  /** Vista por mes; null cuando se mira un rango de días. */
+  month?: ProductivityMonth | null;
+  /** Los meses que se pueden elegir, del actual hacia atrás. */
+  months?: { month: string; label: string }[];
 }) {
   const totals = rows.reduce(
     (a, r) => ({
@@ -153,6 +172,17 @@ export function ProductivityBoard({
     ...[7, 30, 90].map((d) => ({ label: `${d}d`, p: localPresetRange(d, tz) })),
   ];
 
+  // Vista por mes: el mes en curso y el anterior van en chip —son los que se
+  // miran a diario—; el resto, en «Otro mes…». Cambiar de tienda o de fuente
+  // conserva el mes elegido.
+  const mes = month?.view.month ?? null;
+  const [thisMonth, lastMonth] = months;
+  const chipMonths = new Set([thisMonth?.month, lastMonth?.month]);
+  const hrefFor = (opts: { store: string | null; src: string | null }) =>
+    buildHref({ from: range.from, to: range.to, mes, ...opts });
+  const count = (n: number) => n.toLocaleString("es-PE");
+  const monthSubs = monthKpiSubs({ month, hasPrev, prevTotals, currency, count });
+
   return (
     <div className="flex flex-col gap-3 xl:h-[calc(100vh-3rem)] xl:overflow-hidden">
       {/* Header + todos los filtros en una sola franja */}
@@ -162,7 +192,15 @@ export function ProductivityBoard({
             {solo ? "Mi productividad" : "Productividad por asesora"}
           </h1>
           <p className="text-xs text-slate-400">
-            {range.from} → {range.to}
+            {month
+              ? [
+                  month.view.label,
+                  month.view.current ? `día ${month.view.day} de ${month.view.daysInMonth}` : null,
+                  hasPrev ? `vs ${month.view.prevLabel}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
+              : `${range.from} → ${range.to}`}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -171,21 +209,48 @@ export function ProductivityBoard({
               key={label}
               href={buildHref({ from: p.from, to: p.to, store: storeId, src: source })}
               label={label}
-              active={range.from === p.from && range.to === p.to}
+              active={!month && range.from === p.from && range.to === p.to}
             />
           ))}
+          {thisMonth && (
+            <>
+              <ChipDivider />
+              <Chip
+                href={buildHref({ from: range.from, to: range.to, store: storeId, src: source, mes: thisMonth.month })}
+                label="Este mes"
+                active={mes === thisMonth.month}
+              />
+              {lastMonth && (
+                <Chip
+                  href={buildHref({ from: range.from, to: range.to, store: storeId, src: source, mes: lastMonth.month })}
+                  label={lastMonth.label.split(" ")[0]!}
+                  active={mes === lastMonth.month}
+                />
+              )}
+              {months.length > 2 && (
+                <ProductivityMonthSelect
+                  options={months.map((m) => ({
+                    ...m,
+                    href: buildHref({ from: range.from, to: range.to, store: storeId, src: source, mes: m.month }),
+                  }))}
+                  value={mes}
+                  active={Boolean(mes) && !chipMonths.has(mes!)}
+                />
+              )}
+            </>
+          )}
           {stores.length > 1 && (
             <>
               <ChipDivider />
               <Chip
-                href={buildHref({ from: range.from, to: range.to, store: null, src: source })}
+                href={hrefFor({ store: null, src: source })}
                 label="Todas"
                 active={!storeId}
               />
               {stores.map((s) => (
                 <Chip
                   key={s.id}
-                  href={buildHref({ from: range.from, to: range.to, store: s.id, src: source })}
+                  href={hrefFor({ store: s.id, src: source })}
                   label={s.name}
                   active={storeId === s.id}
                 />
@@ -194,14 +259,14 @@ export function ProductivityBoard({
           )}
           <ChipDivider />
           <Chip
-            href={buildHref({ from: range.from, to: range.to, store: storeId, src: null })}
+            href={hrefFor({ store: storeId, src: null })}
             label="Fuente: todas"
             active={!source}
           />
           {SOURCE_FILTERS.map((f) => (
             <Chip
               key={f.key}
-              href={buildHref({ from: range.from, to: range.to, store: storeId, src: f.key })}
+              href={hrefFor({ store: storeId, src: f.key })}
               label={f.label}
               active={source === f.key}
             />
@@ -216,21 +281,25 @@ export function ProductivityBoard({
           label={solo ? "Mis llamadas" : "Llamadas"}
           value={String(totals.llamadas)}
           delta={hasPrev ? pctDelta(totals.llamadas, prevTotals.llamadas) : undefined}
+          sub={monthSubs.llamadas}
         />
         <Kpi
           label={solo ? "Mis leads" : "Leads trabajados"}
           value={String(totals.leads)}
           delta={hasPrev ? pctDelta(totals.leads, prevTotals.leadsTrabajados) : undefined}
+          sub={monthSubs.leads}
         />
         <Kpi
           label={solo ? "Mis cerrados" : "Pedidos cerrados"}
           value={String(totals.cerrados)}
           delta={hasPrev ? pctDelta(totals.cerrados, prevTotals.cerrados) : undefined}
+          sub={monthSubs.cerrados}
         />
         <Kpi
           label={solo ? "Mis ingresos" : "Ingresos atribuidos"}
           value={money(totals.ingresos, currency)}
           delta={hasPrev ? pctDelta(totals.ingresos, prevTotals.ingresos) : undefined}
+          sub={monthSubs.ingresos}
         />
         <Kpi
           label={solo ? "Mi 1ª gestión" : "1ª gestión carritos"}
@@ -278,4 +347,39 @@ export function ProductivityBoard({
       </Card>
     </div>
   );
+}
+
+/**
+ * Las líneas bajo las cifras en la vista por mes. En las de trabajo, la cifra
+ * con la que se compara (solo con base del equipo). En cerrados e ingresos, el
+ * mes anterior entero —«agosto: 2.790»— y, en el mes en curso, a qué ritmo va.
+ */
+function monthKpiSubs({
+  month,
+  hasPrev,
+  prevTotals,
+  currency,
+  count,
+}: {
+  month: ProductivityMonth | null;
+  hasPrev: boolean;
+  prevTotals: ProductivityTotals;
+  currency: string;
+  count: (n: number) => string;
+}): { llamadas?: string; leads?: string; cerrados?: string; ingresos?: string } {
+  if (!month) return {};
+  const { view, pace, prevMonthName, prevMonthTotals } = month;
+  const vs = (n: number) => (hasPrev ? `${view.prevLabel}: ${count(n)}` : undefined);
+  const closing = (n: number | undefined, fmt: (x: number) => string) =>
+    n == null ? null : view.current ? `${prevMonthName} cerró en ${fmt(n)}` : `${prevMonthName}: ${fmt(n)}`;
+  const pacing = (n: number | undefined, fmt: (x: number) => string) =>
+    !view.current ? null : n == null ? "el ritmo se ve desde mañana" : `a este ritmo ~${fmt(n)}`;
+  const join = (...parts: (string | null)[]) => parts.filter(Boolean).join(" · ") || undefined;
+  const soles = (n: number) => money(n, currency);
+  return {
+    llamadas: vs(prevTotals.llamadas),
+    leads: vs(prevTotals.leadsTrabajados),
+    cerrados: join(pacing(pace.projected?.cerrados, count), closing(prevMonthTotals?.cerrados, count)),
+    ingresos: join(pacing(pace.projected?.ingresos, soles), closing(prevMonthTotals?.ingresos, soles)),
+  };
 }

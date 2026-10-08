@@ -192,8 +192,10 @@ describe("filterQueue (Desde la lista)", () => {
 
   it("las opciones de subetapa: ninguna sin etapa; con etapa, las del MOM de esa etapa y detrás lo raro que traiga una fila", () => {
     expect(queueSubstageOptions(rows, [])).toEqual([]);
-    expect(queueSubstageOptions(rows, ["preparacion"]).map((o) => o.substage)).toEqual(["por_generar_rotulo", "por_armar", "incidencia_preparacion"]);
-    expect(queueSubstageOptions(rows, ["por_despachar", "preparacion"]).map((o) => o.stage)).toEqual(["preparacion", "preparacion", "preparacion", "por_despachar", "por_despachar", "por_despachar", "por_despachar", "por_despachar", "por_despachar"]);
+    // `en_caja_de_otro_pedido` (pedido acompañante, MOM §32) sale aunque la cola
+    // no admita esas filas: la regla es «las del MOM de esa etapa, aunque estén en cero».
+    expect(queueSubstageOptions(rows, ["preparacion"]).map((o) => o.substage)).toEqual(["por_generar_rotulo", "por_armar", "incidencia_preparacion", "en_caja_de_otro_pedido"]);
+    expect(queueSubstageOptions(rows, ["por_despachar", "preparacion"]).map((o) => o.stage)).toEqual(["preparacion", "preparacion", "preparacion", "preparacion", "por_despachar", "por_despachar", "por_despachar", "por_despachar", "por_despachar", "por_despachar"]);
     const moved = [...rows, row({ orderId: "m", macroStage: "por_despachar", macroSubstage: "raro" }), row({ orderId: "n", macroStage: null, macroSubstage: null })];
     const opts = queueSubstageOptions(moved, ["por_despachar"]);
     expect(opts[opts.length - 1]).toEqual({ stage: "por_despachar", substage: "raro" });

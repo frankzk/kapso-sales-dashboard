@@ -18397,3 +18397,775 @@ create index if not exists olva_email_labels_sender_created_idx
 
 comment on column olva_email_labels.outcome is
   'Qué hizo el correo al llegar: vinculado, ya_vinculado, sugerido, ambiguo, sin_pareja o ilegible.';
+
+-- ---- 0228 ----
+-- 0228_lead_shopify_location.sql — la dirección que Shopify tiene del cliente,
+-- como tercera pista del filtro de cobertura de la cola de leads.
+--
+-- POR QUÉ. Después de mirar lo que dijo el lead (su carrito, su chat) y el
+-- último pedido de su celular (0225), quedan ~1.900 «Sin llamar» sin ubicación
+-- (medido el 05-10-2026). La base ya tiene TODOS los pedidos desde que abrió
+-- cada tienda, pero NO todos los carritos: los de Kenku empiezan el 06-05-2026.
+-- Cada carrito del formulario COD de antes creó en Shopify un cliente con su
+-- dirección, y esa dirección solo está allá. La sincronización la busca por
+-- celular con la conexión de la tienda (`read_customers`, que ya se usa para
+-- «Pedidos anteriores») y la guarda aquí.
+--
+-- POR QUÉ UNA TABLA Y NO COLUMNAS EN `leads`. Dos razones:
+--   1. Separa lo que dijo el lead de lo que sabe Shopify. `leads.district` es
+--      «dio su distrito» y decide el segmento `interes`; un carrito de hace un
+--      año no es una señal de compra de hoy.
+--   2. Escribir en `leads` dispara `leads_touch`, que mueve la firma de la cola
+--      (0059) y hace que todas las pantallas abiertas recarguen la cola entera.
+--      Esta tabla no la toca.
+--
+-- UNA FILA POR LEAD CONSULTADO, haya o no dirección: `checked_at` es lo que
+-- impide volver a preguntarle a Shopify por el mismo celular en cada corrida.
+
+create table if not exists lead_shopify_locations (
+  lead_id    uuid primary key references leads(id) on delete cascade,
+  store_id   uuid not null references stores(id) on delete cascade,
+  -- `defaultAddress.province` y `.city` del cliente, como los manda Shopify:
+  -- la región («Lima (provincia)», «Arequipa») y la ciudad o distrito.
+  province   text,
+  city       text,
+  checked_at timestamptz not null default now()
+);
+
+-- La cola solo lee las filas que encontraron algo.
+create index if not exists lead_shopify_locations_found_idx
+  on lead_shopify_locations (store_id)
+  where province is not null or city is not null;
+
+comment on table lead_shopify_locations is
+  'Dirección por defecto del cliente en Shopify, buscada por celular para los leads sin ubicación. Pista del filtro de cobertura (lib/lead-coverage.ts), no la dirección del lead. Una fila por lead consultado, con o sin dirección.';
+
+alter table lead_shopify_locations enable row level security;
+
+drop policy if exists lead_shopify_locations_select on lead_shopify_locations;
+create policy lead_shopify_locations_select on lead_shopify_locations for select to authenticated
+  using (store_id in (select auth_store_ids()));
+
+-- REVOKE ANTES DE GRANT: Supabase da `all` por defecto a las tablas nuevas.
+revoke all on lead_shopify_locations from anon, authenticated, service_role;
+grant select on lead_shopify_locations to authenticated;
+grant select, insert, update on lead_shopify_locations to service_role;
+
+-- ----------------------------------------------------------------------------
+-- lead_shopify_location_candidates — a quién buscar en esta corrida
+-- ----------------------------------------------------------------------------
+-- Los leads de la cola (open/hot, fuera de Yape) que no dicen dónde viven, que
+-- no tienen un pedido anterior con el mismo celular (0225 ya los ubica) y que
+-- todavía no se consultaron. Los más nuevos primero: son los que se van a
+-- llamar antes. Va en SQL porque el `not exists` contra dos tablas no se puede
+-- escribir en PostgREST.
+create or replace function public.lead_shopify_location_candidates(
+  p_store_id uuid,
+  p_limit integer default 30
+)
+returns table (lead_id uuid, phone text)
+language sql
+stable
+security invoker
+set search_path = public
+as $fn$
+  select l.id, l.phone
+  from leads l
+  where l.store_id = p_store_id
+    and l.category in ('open', 'hot')
+    and l.status <> 'yape_por_verificar'
+    and l.phone is not null
+    and l.draft_order_gid is null
+    and coalesce(trim(l.district), '') = ''
+    and coalesce(trim(l.region), '') = ''
+    and coalesce(trim(l.province), '') = ''
+    and not exists (select 1 from lead_shopify_locations s where s.lead_id = l.id)
+    and not exists (
+      select 1 from order_master o
+      where o.customer_phone = l.phone
+        and o.coverage in ('lima', 'provincia_cod', 'agencia')
+    )
+  order by l.first_seen_at desc nulls last
+  limit greatest(p_limit, 0);
+$fn$;
+
+revoke all on function public.lead_shopify_location_candidates(uuid, integer) from public, anon, authenticated;
+grant execute on function public.lead_shopify_location_candidates(uuid, integer) to service_role;
+
+-- ----------------------------------------------------------------------------
+-- lead_shopify_location_hints — lo que lee la cola
+-- ----------------------------------------------------------------------------
+-- Las direcciones encontradas de los leads que están HOY en «Por llamar». La
+-- tabla guarda también las de leads ya cerrados; filtrarlas aquí evita
+-- mandarle a la pantalla filas que no va a usar. `security invoker`: la RLS de
+-- las dos tablas decide qué tiendas ve quien mira.
+create or replace function public.lead_shopify_location_hints(p_store_ids uuid[])
+returns table (lead_id uuid, province text, city text)
+language sql
+stable
+security invoker
+set search_path = public
+as $fn$
+  select s.lead_id, s.province, s.city
+  from lead_shopify_locations s
+  join leads l on l.id = s.lead_id
+  where s.store_id = any(p_store_ids)
+    and (s.province is not null or s.city is not null)
+    and l.category in ('open', 'hot')
+    and l.status <> 'yape_por_verificar';
+$fn$;
+
+revoke all on function public.lead_shopify_location_hints(uuid[]) from public, anon;
+grant execute on function public.lead_shopify_location_hints(uuid[]) to authenticated, service_role;
+
+-- ---- 0229 ----
+-- 0229_urpi_report.sql — resultados de entrega que reporta Urpi (MOM §30.11).
+-- (La 0228 es lead_shopify_location, #865, aplicada antes en producción.)
+--
+-- Urpi exporta desde su AppSheet una fila por INTENTO, con su número de fila
+-- («_RowNumber») como identidad y «Row number relacionado» apuntando al intento
+-- anterior. No trae código de pedido: Kapta lo vincula por teléfono y fecha
+-- (lib/urpi-report-link.ts) y deja a revisión lo que no es único.
+--
+-- Qué guarda y qué no:
+--   * Cada fila de Urpi tal como llegó (data), y una VERSIÓN por cada cambio:
+--     reimportar el mismo contenido no duplica nada y nunca se borra historial.
+--   * El vínculo con el pedido. Uno elegido a mano no lo pisa ninguna lectura.
+--   * No crea salidas, no cambia estados ni mueve dinero. La entrega se aplica
+--     al Master aparte, por la única puerta (lib/master-door.ts).
+-- Kenku y Aurela comparten organización y libro de Urpi: la fila es de la
+-- organización y queda en su tienda al vincularse.
+
+create table if not exists public.urpi_report_imports (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organizations(id),
+  created_at timestamptz not null default now(),
+  created_by uuid references auth.users(id),
+  filename text,
+  row_count integer not null default 0 check (row_count between 0 and 20000),
+  new_count integer not null default 0,
+  changed_count integer not null default 0
+);
+create index if not exists urpi_report_imports_org_created on public.urpi_report_imports(org_id, created_at desc);
+
+create table if not exists public.urpi_report_rows (
+  org_id uuid not null references public.organizations(id),
+  urpi_row integer not null check (urpi_row > 0),
+  previous_row integer check (previous_row is null or previous_row > 0),
+  report_date date,
+  result_code text not null check (result_code in ('entregado','reprogramado','cancelado','programado','en_coordinacion','sin_resultado','otro')),
+  phone text check (phone is null or phone ~ '^9[0-9]{8}$'),
+  data jsonb not null check (jsonb_typeof(data) = 'object'),
+  digest text not null check (digest ~ '^[a-f0-9]{64}$'),
+  order_id uuid references public.orders(id),
+  store_id uuid references public.stores(id),
+  link_status text not null check (link_status in ('vinculado','varios','sin_pedido','sin_telefono')),
+  link_method text check (link_method in ('telefono','cadena','manual')),
+  candidate_order_ids uuid[] not null default '{}',
+  linked_by uuid references auth.users(id),
+  linked_at timestamptz,
+  first_import_id uuid not null references public.urpi_report_imports(id),
+  last_import_id uuid not null references public.urpi_report_imports(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (org_id, urpi_row),
+  check ((order_id is null) = (store_id is null)),
+  check ((link_status = 'vinculado') = (order_id is not null))
+);
+create index if not exists urpi_report_rows_order on public.urpi_report_rows(order_id) where order_id is not null;
+create index if not exists urpi_report_rows_previous on public.urpi_report_rows(org_id, previous_row) where previous_row is not null;
+create index if not exists urpi_report_rows_result on public.urpi_report_rows(org_id, result_code, report_date desc);
+
+create table if not exists public.urpi_report_row_versions (
+  id bigint generated always as identity primary key,
+  org_id uuid not null,
+  urpi_row integer not null,
+  import_id uuid not null references public.urpi_report_imports(id),
+  digest text not null check (digest ~ '^[a-f0-9]{64}$'),
+  data jsonb not null check (jsonb_typeof(data) = 'object'),
+  created_at timestamptz not null default now(),
+  foreign key (org_id, urpi_row) references public.urpi_report_rows(org_id, urpi_row)
+);
+create index if not exists urpi_report_versions_row on public.urpi_report_row_versions(org_id, urpi_row, created_at);
+
+alter table public.urpi_report_imports enable row level security;
+alter table public.urpi_report_rows enable row level security;
+alter table public.urpi_report_row_versions enable row level security;
+revoke all on public.urpi_report_imports, public.urpi_report_rows, public.urpi_report_row_versions from anon, authenticated;
+grant select on public.urpi_report_imports, public.urpi_report_rows, public.urpi_report_row_versions to authenticated;
+grant all on public.urpi_report_imports, public.urpi_report_rows, public.urpi_report_row_versions to service_role;
+
+-- Una fila vinculada se lee con la tienda; una sin vincular, con la organización
+-- (todavía no se sabe de qué tienda es y alguien tiene que elegir el pedido).
+drop policy if exists urpi_report_imports_read on public.urpi_report_imports;
+create policy urpi_report_imports_read on public.urpi_report_imports for select to authenticated
+  using (org_id in (select public.auth_org_ids()));
+drop policy if exists urpi_report_rows_read on public.urpi_report_rows;
+create policy urpi_report_rows_read on public.urpi_report_rows for select to authenticated
+  using (org_id in (select public.auth_org_ids())
+    and (store_id is null or store_id in (select public.auth_store_ids())));
+drop policy if exists urpi_report_versions_read on public.urpi_report_row_versions;
+create policy urpi_report_versions_read on public.urpi_report_row_versions for select to authenticated
+  using (exists (select 1 from public.urpi_report_rows r
+    where r.org_id = urpi_report_row_versions.org_id and r.urpi_row = urpi_report_row_versions.urpi_row
+      and r.org_id in (select public.auth_org_ids())
+      and (r.store_id is null or r.store_id in (select public.auth_store_ids()))));
+
+-- El pedido vinculado debe ser de una tienda de la misma organización.
+create or replace function public.urpi_report_order_in_org(p_org_id uuid, p_order_id uuid, p_store_id uuid)
+returns boolean language sql stable security invoker set search_path = public as $$
+  select p_order_id is null or exists (
+    select 1 from public.orders o join public.stores s on s.id = o.store_id
+     where o.id = p_order_id and o.store_id = p_store_id and s.org_id = p_org_id)
+$$;
+
+-- Un lote de filas, atómico: fila nueva → fila + versión; contenido distinto →
+-- versión + fila; vínculo distinto → vínculo, salvo que sea manual. Solo el
+-- servidor lo llama, después de comprobar el permiso del usuario.
+create or replace function public.save_urpi_report_batch(p_org_id uuid, p_import_id uuid, p_rows jsonb)
+returns jsonb language plpgsql security invoker set search_path = public as $$
+declare
+  r record;
+  cur public.urpi_report_rows;
+  n_new integer := 0;
+  n_changed integer := 0;
+begin
+  if jsonb_typeof(p_rows) is distinct from 'array' or jsonb_array_length(p_rows) > 1000 then raise exception 'invalid_batch'; end if;
+  perform 1 from public.urpi_report_imports where id = p_import_id and org_id = p_org_id;
+  if not found then raise exception 'invalid_import'; end if;
+  for r in select * from jsonb_to_recordset(p_rows) as x(
+    urpi_row integer, previous_row integer, report_date date, result_code text, phone text, data jsonb, digest text,
+    order_id uuid, store_id uuid, link_status text, link_method text, candidate_order_ids uuid[])
+  loop
+    if not public.urpi_report_order_in_org(p_org_id, r.order_id, r.store_id) then raise exception 'invalid_order_scope'; end if;
+    select * into cur from public.urpi_report_rows where org_id = p_org_id and urpi_row = r.urpi_row for update;
+    if not found then
+      insert into public.urpi_report_rows(org_id, urpi_row, previous_row, report_date, result_code, phone, data, digest,
+        order_id, store_id, link_status, link_method, candidate_order_ids, linked_at, first_import_id, last_import_id)
+      values (p_org_id, r.urpi_row, r.previous_row, r.report_date, r.result_code, r.phone, r.data, r.digest,
+        r.order_id, r.store_id, r.link_status, r.link_method, coalesce(r.candidate_order_ids, '{}'),
+        case when r.order_id is not null then now() end, p_import_id, p_import_id);
+      insert into public.urpi_report_row_versions(org_id, urpi_row, import_id, digest, data)
+        values (p_org_id, r.urpi_row, p_import_id, r.digest, r.data);
+      n_new := n_new + 1;
+      continue;
+    end if;
+    if cur.digest is distinct from r.digest then
+      insert into public.urpi_report_row_versions(org_id, urpi_row, import_id, digest, data)
+        values (p_org_id, r.urpi_row, p_import_id, r.digest, r.data);
+      update public.urpi_report_rows set previous_row = r.previous_row, report_date = r.report_date,
+          result_code = r.result_code, phone = r.phone, data = r.data, digest = r.digest,
+          last_import_id = p_import_id, updated_at = now()
+        where org_id = p_org_id and urpi_row = r.urpi_row;
+      n_changed := n_changed + 1;
+    end if;
+    if cur.link_method is distinct from 'manual' and (cur.order_id is distinct from r.order_id
+        or cur.link_status is distinct from r.link_status or cur.link_method is distinct from r.link_method
+        or cur.candidate_order_ids is distinct from coalesce(r.candidate_order_ids, '{}')) then
+      update public.urpi_report_rows set order_id = r.order_id, store_id = r.store_id, link_status = r.link_status,
+          link_method = r.link_method, candidate_order_ids = coalesce(r.candidate_order_ids, '{}'),
+          linked_by = null, linked_at = case when r.order_id is distinct from cur.order_id then
+            case when r.order_id is not null then now() end else cur.linked_at end,
+          updated_at = now()
+        where org_id = p_org_id and urpi_row = r.urpi_row;
+    end if;
+  end loop;
+  update public.urpi_report_imports set new_count = new_count + n_new, changed_count = changed_count + n_changed
+    where id = p_import_id;
+  return jsonb_build_object('new', n_new, 'changed', n_changed);
+end $$;
+
+-- Vínculo elegido a mano: toda la cadena de intentos (hacia atrás y hacia
+-- delante) es el mismo pedido. Pasa a manual y ninguna lectura lo cambia.
+create or replace function public.link_urpi_report_chain(p_org_id uuid, p_urpi_row integer, p_order_id uuid, p_store_id uuid, p_actor uuid)
+returns integer language plpgsql security invoker set search_path = public as $$
+declare
+  root integer;
+  touched integer;
+begin
+  if p_order_id is null or not public.urpi_report_order_in_org(p_org_id, p_order_id, p_store_id) then raise exception 'invalid_order_scope'; end if;
+  perform 1 from public.urpi_report_rows where org_id = p_org_id and urpi_row = p_urpi_row;
+  if not found then raise exception 'row_not_found'; end if;
+  with recursive up(urpi_row, previous_row, depth) as (
+    select urpi_row, previous_row, 0 from public.urpi_report_rows where org_id = p_org_id and urpi_row = p_urpi_row
+    union all
+    select r.urpi_row, r.previous_row, up.depth + 1 from public.urpi_report_rows r
+      join up on r.org_id = p_org_id and r.urpi_row = up.previous_row where up.depth < 100
+  )
+  select urpi_row into root from up order by depth desc limit 1;
+  with recursive chain(urpi_row, depth) as (
+    select root, 0
+    union all
+    select r.urpi_row, chain.depth + 1 from public.urpi_report_rows r
+      join chain on r.org_id = p_org_id and r.previous_row = chain.urpi_row where chain.depth < 100
+  )
+  update public.urpi_report_rows t set order_id = p_order_id, store_id = p_store_id, link_status = 'vinculado',
+      link_method = 'manual', candidate_order_ids = '{}', linked_by = p_actor, linked_at = now(), updated_at = now()
+    from chain where t.org_id = p_org_id and t.urpi_row = chain.urpi_row;
+  get diagnostics touched = row_count;
+  return touched;
+end $$;
+
+revoke all on function public.urpi_report_order_in_org(uuid,uuid,uuid) from public, anon, authenticated;
+revoke all on function public.save_urpi_report_batch(uuid,uuid,jsonb) from public, anon, authenticated;
+revoke all on function public.link_urpi_report_chain(uuid,integer,uuid,uuid,uuid) from public, anon, authenticated;
+grant execute on function public.urpi_report_order_in_org(uuid,uuid,uuid) to service_role;
+grant execute on function public.save_urpi_report_batch(uuid,uuid,jsonb) to service_role;
+grant execute on function public.link_urpi_report_chain(uuid,integer,uuid,uuid,uuid) to service_role;
+
+-- ---- 0230 ----
+-- 0230_gf_office_reclaim.sql — «Mover» un paquete que está en la oficina aunque
+-- su caja ya esté en poder del motorizado.
+--
+-- QUÉ PASABA (05-10-2026). Con verificación «exigir», un paquete que el
+-- motorizado confirmó al recibir su caja no se puede retirar desde Despacho del
+-- día: `gf_withdraw_in_custody` lo rechaza a propósito, para que nadie le saque
+-- en silencio un paquete de su cuadre. Pero #KP138381 estaba en la oficina, en la
+-- mano de quien lo escaneaba para la caja de Alexis, y seguía en la de Yhoni: el
+-- «Mover» fallaba y el único camino eran tres pasos (reportarlo «No entregado»,
+-- «Recibir en oficina» y volver a escanearlo).
+--
+-- QUÉ CAMBIA. Escanear el paquete en la oficina es la prueba de que no está en
+-- la calle. `gf_office_reclaim` lo saca de la caja del motorizado con ese
+-- motivo dicho —«recuperado en oficina»—, borra su parada pendiente y devuelve la
+-- custodia a la empresa, listo para entrar en la caja del otro motorizado. Solo
+-- con la parada PENDIENTE: una ya reportada (entregada o no) se resuelve por su
+-- reporte, nunca desde aquí. Queda en el historial del pedido y de la caja, con
+-- quién lo hizo y a quién va.
+
+create or replace function public.gf_office_reclaim(
+  p_manifest_id uuid,
+  p_shipment_id uuid,
+  p_reason text,
+  p_actor uuid,
+  p_moved_to_rider uuid
+)
+returns uuid
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_item dispatch_manifest_items%rowtype;
+  v_manifest dispatch_manifests%rowtype;
+  v_shipment shipments%rowtype;
+  v_stop_status text;
+  v_rider text;
+  v_target text;
+  v_reason text := left(trim(coalesce(p_reason, '')), 200);
+  v_note text;
+begin
+  if length(v_reason) < 3 then raise exception 'Escribe el motivo.'; end if;
+  select * into v_item from dispatch_manifest_items
+    where manifest_id = p_manifest_id and shipment_id = p_shipment_id and removed_at is null
+    for update;
+  if not found then raise exception 'Ese paquete ya no está en la caja.'; end if;
+  select * into v_manifest from dispatch_manifests where id = p_manifest_id for update;
+  if v_manifest.courier <> 'propio' then raise exception 'Solo para cajas de Grupo GF.'; end if;
+  if v_manifest.state <> 'in_custody' then raise exception 'La caja no está en poder del motorizado.'; end if;
+
+  select status into v_stop_status from delivery_stops
+    where shipment_id = v_item.shipment_id and dispatch_manifest_id = p_manifest_id
+    order by reported_at desc nulls last limit 1 for update;
+  if v_stop_status is not null and v_stop_status <> 'pendiente' then
+    raise exception 'Esa parada ya fue reportada: se resuelve por su reporte, no desde aquí.';
+  end if;
+
+  select * into v_shipment from shipments where id = v_item.shipment_id for update;
+  v_rider := coalesce(v_manifest.driver_name, 'el motorizado');
+  select full_name into v_target from riders where id = p_moved_to_rider;
+  v_note := 'Escaneado en oficina: el paquete no salió con ' || v_rider || '. Se mueve a '
+    || coalesce(v_target, 'otro motorizado') || ': ' || v_reason;
+
+  perform set_config('gf.withdraw', 'on', true);
+  update dispatch_manifest_items
+     set removed_at = now(), removed_by = p_actor,
+         removal_reason = left('Recuperado en oficina, movido a ' || coalesce(v_target, 'otro motorizado') || ': ' || v_reason, 300)
+   where id = v_item.id;
+  perform set_config('gf.withdraw', 'off', true);
+
+  delete from delivery_stops
+   where shipment_id = v_item.shipment_id and dispatch_manifest_id = p_manifest_id and status = 'pendiente';
+
+  update shipments
+     set custody_state = 'empresa', custody_transferred_at = null, custody_transferred_by = null, dispatched_at = null
+   where id = v_item.shipment_id;
+
+  update logistics_requests
+     set status = 'accepted', observation = left(v_note, 300)
+   where shipment_id = v_item.shipment_id and status = 'scheduled';
+
+  insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+  values (v_manifest.org_id, p_manifest_id, v_item.shipment_id, p_actor, 'reclaimed_in_office',
+          jsonb_build_object('reason', v_reason, 'moved_to', p_moved_to_rider,
+                             'pickup_checked_at', v_item.pickup_checked_at, 'in_custody', true));
+  if v_shipment.order_id is not null then
+    insert into order_events(store_id, order_id, kind, actor, source, courier, guide_code, shipment_id, reason, note, payload)
+    values (v_shipment.store_id, v_shipment.order_id, 'returned_to_office', p_actor, 'dispatch', 'propio',
+            v_shipment.guide_code, v_item.shipment_id, v_reason, v_note,
+            jsonb_build_object('manifest_id', p_manifest_id, 'rider_id', v_manifest.rider_id,
+                               'route_date', v_manifest.route_date, 'moved_to', p_moved_to_rider,
+                               'reclaimed_in_office', true));
+  end if;
+  return v_shipment.order_id;
+end;
+$$;
+
+revoke all on function public.gf_office_reclaim(uuid, uuid, text, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.gf_office_reclaim(uuid, uuid, text, uuid, uuid) to service_role;
+
+-- ---- 0231 ----
+-- 0231_swayp_pilot_solo_con_visita.sql — el piloto sin historial del
+-- reintento automático Aliclik → Swayp (MOM §11.9.1) solo reenvía si Aliclik
+-- llegó a visitar: al menos 1 intento informado (1 o 2) y la guía en reparto o
+-- de vuelta (`PICKED`, `TO_RETURN`, `RETURNED`).
+--
+-- POR QUÉ (05-10-2026, decisión del owner). Medido sobre los reenvíos por
+-- Swayp tras una Aliclik fallida desde el 15-09 (con 4+ días): de los 37 cuyo
+-- paquete Aliclik nunca salió a reparto o no tuvo ni un intento, NINGUNO se
+-- entregó. Un `CANCEL` sin visita suele ser el cliente cancelando por teléfono
+-- con Aliclik: así contestaron #KP136734 y #KP136038, reenviados por el piloto
+-- el 03-10 con 0 intentos. La 0220 había abierto el piloto a 0 intentos; 13 de
+-- sus 22 guías salieron así.
+--
+-- QUÉ CAMBIA. Solo la condición del piloto dentro de `swayp_emission_claim`
+-- (misma función que la 0220). 14 días, S/500, cupo, pin corroborado y pagos
+-- no cambian. La vía con entrega previa (`prior_delivery`) tampoco. La app
+-- aplica lo mismo con `pilotAttemptsOk` y `aliclikSalioAReparto`
+-- (lib/swayp-auto-policy.ts).
+
+create or replace function swayp_emission_claim(p_store uuid,p_order uuid,p_key text,p_city text,p_products jsonb,
+  p_auto boolean default false,p_evidence jsonb default '{}',p_stock jsonb default null,p_read_at timestamptz default null)
+returns jsonb language plpgsql set search_path=public as $$
+declare v_org uuid; v_id uuid; c swayp_auto_settings; v_source shipments; r record; v_reserved numeric; v_available numeric;
+begin
+  select org_id into v_org from stores where id=p_store and status='active';
+  if v_org is null or not exists(select 1 from orders where id=p_order and store_id=p_store) then
+    return jsonb_build_object('error','Pedido o tienda inválidos'); end if;
+  perform pg_advisory_xact_lock(hashtextextended(v_org::text,209));
+  if exists(select 1 from swayp_guide_emissions where source_key=p_key
+    or (order_id=p_order and (state<>'created' or child_id is null))) then
+    return jsonb_build_object('error','Emisión previa o incierta: revisar antes de emitir otra guía'); end if;
+  if p_auto then
+    -- Solo el automático exige que no quede otra salida viva: su origen es una
+    -- guía Aliclik ya anulada. Por botón o voz, la salida «por definir» se
+    -- rellena y la adicional de Lima lleva motivo (puertaDeSalidaAdicional, MOM
+    -- §9); este chequeo las rechazaba todas (0219).
+    if exists(select 1 from shipments where order_id=p_order and id::text<>p_key
+      and delivery_status not in ('anulado','devuelto','transferido')) then
+      return jsonb_build_object('error','El pedido tiene otra guía activa o entregada'); end if;
+    select * into c from swayp_auto_settings where org_id=v_org;
+    if c.org_id is null or not c.enabled then return jsonb_build_object('error','Automático desactivado'); end if;
+    if exists(select 1 from swayp_guide_emissions where order_id=p_order and automatic) then
+      return jsonb_build_object('error','El pedido ya tuvo su intento automático'); end if;
+    if (select count(*) from swayp_guide_emissions where org_id=v_org and automatic
+      and created_at>=(date_trunc('day',now() at time zone 'America/Lima') at time zone 'America/Lima'))>=c.daily_cap then
+      return jsonb_build_object('error','Tope diario alcanzado'); end if;
+    select * into v_source from shipments where id=p_key::uuid and order_id=p_order for update;
+    if v_source.id is null or v_source.delivery_status<>'anulado' or v_source.fenix_shipment_id is not null
+      or v_source.claimed_by is not null then return jsonb_build_object('error','La guía cambió o está tomada'); end if;
+    if p_evidence->>'fingerprint' is distinct from md5(swayp_auto_snapshot(v_source.id)::text) then
+      return jsonb_build_object('error','Los datos cambiaron; se reevaluará'); end if;
+    if p_evidence->>'cohort'='recent_no_history' then
+      if not c.pilot_enabled then return jsonb_build_object('error','Piloto desactivado'); end if;
+      if (select count(*) from swayp_guide_emissions where org_id=v_org and automatic
+        and evidence->>'cohort'='recent_no_history'
+        and created_at>=(date_trunc('day',now() at time zone 'America/Lima') at time zone 'America/Lima'))>=c.pilot_daily_cap then
+        return jsonb_build_object('error','Piloto: cupo diario alcanzado'); end if;
+      -- 0231: Aliclik tuvo que IR. Al menos un intento informado y el paquete
+      -- en reparto o de vuelta; sin visita no hay reenvío automático.
+      if v_source.aliclik_attempts is null or v_source.aliclik_attempts not between 1 and 2
+        or split_part(coalesce(v_source.reported_status,''),' · ',2) not in ('PICKED','TO_RETURN','RETURNED')
+        or not exists(select 1 from orders where id=p_order and created_at between now()-interval '14 days' and now() and total_amount>0 and total_amount<=500)
+        or exists(select 1 from order_payments where order_id=p_order and validation_status<>'rechazado')
+        or p_evidence#>>'{location,ok}' is distinct from 'true' then
+        return jsonb_build_object('error','El pedido no cumple el piloto sin historial'); end if;
+    end if;
+    if p_read_at is null or p_read_at<now()-interval '2 minutes' or p_stock is null then
+      return jsonb_build_object('error','Se requiere inventario Swayp recién leído'); end if;
+    for r in select value->>'codbar' codbar,sum((value->>'cantidad')::numeric) qty from jsonb_array_elements(p_products) group by 1 loop
+      select coalesce(sum((x->>'disponible')::numeric),0) into v_available from jsonb_array_elements(p_stock) x where x->>'codbar'=r.codbar;
+      select coalesce(sum((x->>'cantidad')::numeric),0) into v_reserved
+        from swayp_guide_emissions e cross join lateral jsonb_array_elements(e.products) x
+        where e.org_id=v_org and e.city=p_city and x->>'codbar'=r.codbar
+          and (e.created_at>=p_read_at or e.state<>'created' or e.child_id is null);
+      if v_available-v_reserved<r.qty then return jsonb_build_object('error','Stock insuficiente después de reservas'); end if;
+    end loop;
+    if jsonb_array_length(p_products)=0 then return jsonb_build_object('error','Sin productos vinculados'); end if;
+  end if;
+  insert into swayp_guide_emissions(source_key,order_id,store_id,org_id,automatic,city,products,evidence)
+    values(p_key,p_order,p_store,v_org,p_auto,p_city,p_products,p_evidence) returning id into v_id;
+  return jsonb_build_object('id',v_id);
+end;
+$$;
+
+-- ---- 0232 ----
+-- 0232_olva_email_label_index.sql — un rótulo por fila, no un PDF por fila
+-- (MOM §12, «Cotejar Olva › Correos de Olva»).
+--
+-- POR QUÉ. Un registro de Olva con varios envíos manda UN correo con UN PDF
+-- que trae un rótulo por envío («N° REGISTRO: … (1/4)», «(2/4)»…). La 0223
+-- guardaba una fila por PDF (`message_id` + `file_name`) y el lector solo
+-- veía el primer rótulo: 102 de los 163 rótulos de los primeros 61 correos
+-- nunca se cotejaron (el del 05-10-2026, registro 202600718786, traía cuatro
+-- y solo vinculó #KP138456).
+--
+-- `label_index` es la posición del rótulo en su PDF (la «k» de «(k/n)») y
+-- `label_count` cuántos trae. Las filas que ya existen son el primer rótulo de
+-- su PDF: quedan con 1. Make puede volver a mandar el mismo correo y sigue sin
+-- duplicarse: la clave pasa a ser `message_id` + `file_name` + `label_index`.
+
+alter table olva_email_labels add column if not exists label_index int not null default 1;
+alter table olva_email_labels add column if not exists label_count int;
+
+update olva_email_labels
+   set label_count = coalesce(substring(raw_text from '\(\s*1\s*/\s*(\d+)\s*\)')::int, 1)
+ where label_count is null;
+
+alter table olva_email_labels drop constraint if exists olva_email_labels_message_id_file_name_key;
+alter table olva_email_labels drop constraint if exists olva_email_labels_message_file_label_key;
+alter table olva_email_labels add constraint olva_email_labels_message_file_label_key
+  unique (message_id, file_name, label_index);
+
+comment on column olva_email_labels.label_index is
+  'Posición del rótulo en su PDF (la k de «(k/n)»): un registro con varios envíos trae un rótulo por envío.';
+comment on column olva_email_labels.label_count is
+  'Cuántos rótulos trae el PDF de este correo.';
+
+-- ---- 0233 ----
+-- 0233_cart_seq_image_test.sql — prueba A/B: el mensaje 1 de carrito
+-- abandonado con la foto del producto (docs/carritos-secuencia-whatsapp.md).
+--
+-- POR QUÉ. Desde el 20-07-2026 todos los mensajes de carrito salieron iguales
+-- (solo texto), así que no hay con qué comparar si una imagen sube el cierre.
+-- Con la prueba encendida, cada carrito que tiene foto en el espejo de
+-- catálogo (`shopify_product_images`) se sortea 50/50 por su `draft_order_gid`:
+-- «imagen» recibe la plantilla aprobada con cabecera de imagen y la foto del
+-- producto que dejó; «control», la de siempre. Solo el mensaje 1 —el que
+-- convierte más—; el mensaje 2 sale igual para los dos.
+--
+-- `cart_seq_sends.variant` guarda el brazo de cada envío (null = fuera de la
+-- prueba: prueba apagada, mensaje 2 o carrito sin foto) e `image_url` la foto
+-- que se mandó. `cart_image_test_results` lee el resultado: pedido no anulado
+-- con ese teléfono en los 7 días siguientes al mensaje 1, separado por quién
+-- cerró con la misma regla que «Atribución de ventas» (lib/metrics.ts).
+
+alter table stores add column if not exists cart_seq_image_test_enabled boolean not null default false;
+alter table stores add column if not exists cart_seq_image_template_1_name text;
+alter table stores add column if not exists cart_seq_image_template_1_language text;
+alter table stores add column if not exists cart_seq_image_test_started_at timestamptz;
+
+alter table cart_seq_sends add column if not exists variant text;
+alter table cart_seq_sends add column if not exists image_url text;
+
+alter table cart_seq_sends drop constraint if exists cart_seq_sends_variant_check;
+alter table cart_seq_sends add constraint cart_seq_sends_variant_check
+  check (variant is null or variant in ('imagen', 'control'));
+
+create index if not exists cart_seq_sends_variant_idx
+  on cart_seq_sends (store_id, sent_at) where variant is not null;
+
+comment on column stores.cart_seq_image_test_enabled is
+  'Prueba A/B del mensaje 1 de carrito con la foto del producto (0233).';
+comment on column stores.cart_seq_image_template_1_name is
+  'Plantilla aprobada igual a la del mensaje 1 pero con cabecera de imagen.';
+comment on column stores.cart_seq_image_test_started_at is
+  'Cuándo se encendió la prueba: los resultados cuentan desde aquí.';
+comment on column cart_seq_sends.variant is
+  'Brazo de la prueba de imagen: imagen | control; null = fuera de la prueba.';
+
+-- Resultado por brazo y por quién cerró. Un carrito = su primer envío con
+-- variante; convierte si hay un pedido NO anulado con ese teléfono en los 7
+-- días siguientes. Quién cerró: «asesora» si el pedido lleva venta_manual o
+-- carrito_recuperado; «bot_asistido» si una asesora tocó al lead en los 7
+-- días previos al pedido; si no, «bot».
+create or replace function public.cart_image_test_results(p_store_id uuid, p_since timestamptz default null)
+returns table (variant text, carritos bigint, convertidos bigint, bot bigint, bot_asistido bigint, asesora bigint, ventas numeric)
+language sql stable
+set search_path = public
+as $$
+  with carts as (
+    select distinct on (s.draft_order_gid) s.store_id, s.phone, s.draft_order_gid, s.variant, s.sent_at t0
+    from cart_seq_sends s
+    where s.store_id = p_store_id and s.ok and s.touch = 1 and s.variant is not null
+      and (p_since is null or s.sent_at >= p_since)
+    order by s.draft_order_gid, s.sent_at
+  ), conv as (
+    select c.*, o.id order_id, o.created_at oc, o.tags, o.total_amount
+    from carts c
+    left join lateral (
+      select o.* from orders o
+      where o.store_id = c.store_id and o.customer_phone = c.phone and o.cancelled_at is null
+        and o.created_at > c.t0 and o.created_at <= c.t0 + interval '7 days'
+      order by o.created_at limit 1
+    ) o on true
+  ), ch as (
+    select v.*,
+      case when v.order_id is null then null
+        when v.tags && array['venta_manual', 'carrito_recuperado'] then 'asesora'
+        when exists (
+          select 1 from lead_calls lc join leads l on l.id = lc.lead_id
+          where l.store_id = v.store_id and l.phone = v.phone and lc.vendedora is not null
+            and lc.occurred_at <= v.oc and lc.occurred_at >= v.oc - interval '7 days'
+        ) then 'bot_asistido'
+        else 'bot' end canal
+    from conv v
+  )
+  select ch.variant, count(*), count(order_id),
+    count(*) filter (where canal = 'bot'), count(*) filter (where canal = 'bot_asistido'),
+    count(*) filter (where canal = 'asesora'), coalesce(sum(total_amount), 0)
+  from ch group by ch.variant order by ch.variant;
+$$;
+
+revoke all on function public.cart_image_test_results(uuid, timestamptz) from public, anon, authenticated;
+grant execute on function public.cart_image_test_results(uuid, timestamptz) to service_role;
+
+-- ---- 0234 ----
+-- 0234_gf_notebook_carry_over.sql — la hoja del motorizado sin app se carga
+-- desde Kapta (MOM §29.7, 08-10-2026, decisión de Frankz).
+--
+-- QUÉ PASABA. Alexis todavía no usa la app: manda una foto de su hoja por día y
+-- hasta ahora se cargaba a mano con SQL (docs/runbooks/cuaderno-a-rutas.md).
+-- El paso más delicado era el traspaso de los reprogramados que él conserva:
+-- sacar el paquete de la caja del día anterior y meterlo en una carga de su
+-- ruta siguiente, ya cotejada, con rastro (§29.7, 07-10-2026). Eso solo se
+-- puede hacer en SQL —el guardián de la caja exige `gf.withdraw = on` en la
+-- misma transacción— y lo hacía una persona con acceso a la base.
+--
+-- QUÉ CAMBIA.
+--   gf_carry_over            el traspaso, en una función: valida cada paquete
+--                            (reprogramado, en una caja anterior del mismo
+--                            motorizado, pedido vivo, sin parada en la ruta
+--                            destino, sin una carga a medio armar ese día), lo
+--                            retira con `carried_over` y
+--                            `package_removed`, lo mete en una carga adicional
+--                            cotejada por oficina y por el motorizado, y pasa la
+--                            carga a custodia: nacen las paradas pendientes.
+--   rider_notebook_imports   cada hoja leída desde «Reparto y liquidación»: las
+--                            fotos (bucket privado), lo que leyó la visión, el
+--                            cruce con la ruta y lo que se aplicó. Es la
+--                            auditoría de lo que se cargó sin la app.
+--
+-- Aplicar a mano antes de desplegar el código que la usa (DEPLOY.md).
+
+create or replace function public.gf_carry_over(
+  p_rider_id uuid,
+  p_to_date date,
+  p_shipment_ids uuid[],
+  p_actor uuid
+)
+returns uuid
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_rider riders%rowtype;
+  v_load uuid;
+  r record;
+  v_n int := 0;
+  v_reason text;
+  v_wanted int := (select count(distinct x) from unnest(p_shipment_ids) as x);
+begin
+  if v_wanted = 0 then raise exception 'No hay paquetes que pasar.'; end if;
+  select * into v_rider from riders where id = p_rider_id;
+  if not found then raise exception 'Motorizado no encontrado.'; end if;
+
+  for r in
+    select distinct on (sh.id)
+           sh.id shipment_id, sh.order_id, sh.store_id ship_store, sh.guide_code,
+           i.id item_id, i.store_id item_store, m.id old_manifest, m.org_id, m.route_date old_date, s.id old_stop
+      from unnest(p_shipment_ids) as x(shipment_id)
+      join shipments sh on sh.id = x.shipment_id
+      join orders o on o.id = sh.order_id and o.cancelled_at is null
+      join dispatch_manifest_items i on i.shipment_id = sh.id and i.removed_at is null
+      join dispatch_manifests m on m.id = i.manifest_id and m.rider_id = p_rider_id and m.courier = 'propio'
+           and m.state = 'in_custody' and m.route_date < p_to_date
+      join delivery_stops s on s.dispatch_manifest_id = m.id and s.shipment_id = sh.id
+           and s.status = 'no_entregado' and s.outcome_reason = 'reprogramado'
+     order by sh.id, s.reported_at desc nulls last
+  loop
+    if exists (select 1 from delivery_routes dr join delivery_stops ds on ds.route_id = dr.id
+                where dr.rider_id = p_rider_id and dr.route_date = p_to_date and ds.order_id = r.order_id) then
+      raise exception 'El pedido ya tiene parada en la ruta del %.', to_char(p_to_date, 'DD/MM');
+    end if;
+    if v_load is null then
+      v_load := public.gf_dispatch_load(r.org_id, p_rider_id, p_to_date, p_actor);
+      -- gf_dispatch_load devuelve la carga que Despacho esté armando para ese
+      -- día. Esa no se toca: pasarla a custodia sacaría su caja a medio cotejar.
+      if exists (select 1 from dispatch_manifest_items where manifest_id = v_load) then
+        raise exception 'Despacho está armando la carga de % del %: pasa los reprogramados cuando él la reciba.',
+          v_rider.full_name, to_char(p_to_date, 'DD/MM');
+      end if;
+    end if;
+    v_reason := 'Reprogramado el ' || to_char(r.old_date, 'DD/MM') || ': ' || v_rider.full_name
+             || ' se quedó con el paquete y sale en su ruta del ' || to_char(p_to_date, 'DD/MM') || ', ya cotejado.';
+
+    -- 1. Sale de la caja anterior: no volvió a la oficina, sigue con él.
+    perform set_config('gf.withdraw', 'on', true);
+    update dispatch_manifest_items
+       set removed_at = clock_timestamp(), removed_by = p_actor, removal_reason = left(v_reason, 300)
+     where id = r.item_id;
+    perform set_config('gf.withdraw', 'off', true);
+    insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+    values (r.org_id, r.old_manifest, r.shipment_id, p_actor, 'carried_over',
+            jsonb_build_object('stop_id', r.old_stop, 'to_route_date', p_to_date, 'to_manifest_id', v_load, 'reason', v_reason));
+    -- Un segundo antes de la custodia de la carga nueva: la señal del motorizado
+    -- que manda en el Master es la recepción (gfRiderSignal, mom-v1.14).
+    insert into order_events(store_id, order_id, kind, occurred_at, actor, source, courier, guide_code, shipment_id, reason, note, payload)
+    values (r.ship_store, r.order_id, 'package_removed', now() - interval '1 second', p_actor, 'dispatch', 'propio',
+            r.guide_code, r.shipment_id, 'reprogramado', v_reason,
+            jsonb_build_object('manifest_id', r.old_manifest, 'rider_id', p_rider_id, 'route_date', r.old_date,
+                               'carried_over', true, 'to_route_date', p_to_date, 'to_manifest_id', v_load));
+
+    -- 2. Entra en la carga del día, cotejada por oficina y por el motorizado:
+    --    él ya lo tiene, no hay nada que cotejar.
+    insert into dispatch_manifest_items(manifest_id, shipment_id, store_id, added_by,
+      office_checked_at, office_checked_by, pickup_checked_at, pickup_checked_by)
+    values (v_load, r.shipment_id, r.item_store, p_actor, clock_timestamp(), p_actor, clock_timestamp(), p_actor);
+    insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload) values
+      (r.org_id, v_load, r.shipment_id, p_actor, 'package_added',
+       jsonb_build_object('source', 'grupo_gf_courier', 'riderId', p_rider_id, 'carried_from_manifest', r.old_manifest,
+                          'carried_from_date', r.old_date, 'note', v_reason)),
+      (r.org_id, v_load, r.shipment_id, p_actor, 'office_checked', jsonb_build_object('carried_over', true)),
+      (r.org_id, v_load, r.shipment_id, p_actor, 'pickup_checked', jsonb_build_object('carried_over', true));
+    v_n := v_n + 1;
+  end loop;
+
+  if v_n <> v_wanted then
+    raise exception 'Solo % de % paquetes son reprogramados que % conserva en una caja anterior.', v_n, v_wanted, v_rider.full_name;
+  end if;
+  -- 3. La carga pasa a custodia: nacen las paradas pendientes de la ruta del día.
+  perform public.finalize_dispatch_manifest(v_load, p_actor);
+  return v_load;
+end;
+$$;
+revoke all on function public.gf_carry_over(uuid, date, uuid[], uuid) from public, anon, authenticated;
+grant execute on function public.gf_carry_over(uuid, date, uuid[], uuid) to service_role;
+
+create table if not exists public.rider_notebook_imports (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organizations(id),
+  rider_id uuid not null references public.riders(id),
+  route_date date not null,
+  route_id uuid references public.delivery_routes(id),
+  -- Fotos de la hoja en el bucket privado `rider-notebooks`.
+  photo_paths text[] not null default '{}',
+  -- Lo que leyó la visión, tal cual: la base para discutir una fila.
+  transcription jsonb not null default '{}' check (jsonb_typeof(transcription) = 'object'),
+  -- El cruce con la ruta y la propuesta por fila (lib/notebook-import.ts).
+  plan jsonb not null default '[]' check (jsonb_typeof(plan) = 'array'),
+  status text not null default 'leida' check (status in ('leida', 'aplicada')),
+  -- Qué se aplicó y qué falló, fila por fila.
+  result jsonb,
+  created_by uuid not null references auth.users(id),
+  created_at timestamptz not null default now(),
+  applied_by uuid references auth.users(id),
+  applied_at timestamptz,
+  check ((status = 'aplicada') = (applied_at is not null))
+);
+create index if not exists rider_notebook_imports_rider_day
+  on public.rider_notebook_imports(rider_id, route_date desc);
+alter table public.rider_notebook_imports enable row level security;
+-- Sin políticas: la lee y escribe el servidor con el service role, después de
+-- comprobar `routes.manage` (lib/notebook-import-access.ts, app/api/courier/notebook).
+revoke all on public.rider_notebook_imports from anon, authenticated;
+grant all on public.rider_notebook_imports to service_role;

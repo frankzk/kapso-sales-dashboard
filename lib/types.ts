@@ -354,6 +354,8 @@ export interface ShipmentRow {
    */
   swayp_guide?: string | null;
   swayp_state?: number | null;
+  /** Cuándo lo leyó por última vez el barrido de Swayp (solo en el expediente). */
+  swayp_synced_at?: string | null;
   /** 'fenix_directo' = guía creada desde un pedido, sin guía Aliclik madre. */
   created_via?: string | null;
   delivered_source: string | null; // 'aliclik' | 'fenix' — sub-state of Entregado

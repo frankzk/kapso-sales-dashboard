@@ -38,7 +38,9 @@ describe("«Cliente cancela / anula» pide un segundo clic que nombra el pedido"
   });
 
   it("cambiar de resultado retira la confirmación pendiente", () => {
-    expect(ui).toContain("setDisposition(e.target.value as RerouteDisposition);\n                      setConfirmCancel(false);");
+    // El resultado se elige en opciones a la vista; elegir otro desarma el
+    // segundo clic.
+    expect(ui.replace(/\s+/g, " ")).toContain("setDisposition(d.key); setConfirmCancel(false);");
   });
 });
 
@@ -48,7 +50,7 @@ describe("el último intento avisa antes de anular", () => {
     expect(ui).toContain('disposition === "no_contesta" &&');
     expect(ui).toContain("(shipment.reroute_attempts ?? 0) >= MAX_INTENTOS;");
     expect(ui).toContain("{lastAttemptWillCancel && (");
-    expect(ui).toContain("<b>Es el último intento.</b>");
+    expect(ui).toContain("Es el último intento.</b>");
     expect(ui).toContain('"Registrar y anular la guía"');
   });
 });

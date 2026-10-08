@@ -196,6 +196,7 @@ export function OrdersMasterBoard({
   facets,
   agency,
   canEdit,
+  canExport = false,
   canOverride,
   canCreateGuide,
   canCreateTandersGuide,
@@ -239,6 +240,8 @@ export function OrdersMasterBoard({
   /** Contado en la base: sobre una página daría números falsos sin avisar. */
   agency: AgencySummary;
   canEdit: boolean;
+  /** Descargar el Excel (`data.export`, 08-10-2026): owner, admin o concedido en Equipo. */
+  canExport?: boolean;
   canOverride: boolean;
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
@@ -812,12 +815,14 @@ export function OrdersMasterBoard({
                 <span className="hidden text-ink-500 sm:inline"> · los más recientes primero</span>
               </p>
               <div className="flex flex-wrap items-center gap-2">
-                <ExportButton
-                  busy={exporting}
-                  total={total}
-                  selected={selectedIds.size}
-                  onClick={() => void downloadExcel()}
-                />
+                {canExport && (
+                  <ExportButton
+                    busy={exporting}
+                    total={total}
+                    selected={selectedIds.size}
+                    onClick={() => void downloadExcel()}
+                  />
+                )}
                 <PagerControls page={page} totalPages={totalPages} busy={navigating} onPage={goToPage} />
               </div>
             </div>

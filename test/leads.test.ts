@@ -18,6 +18,10 @@ import {
   hasProductLink,
   isLeadSegment,
   countLeadSegments,
+  QUEUE_BUCKETS,
+  leadQueueBucket,
+  isQueueBucket,
+  countQueueBuckets,
   LEAD_GESTIONES,
   gestionOf,
   isLeadGestion,
@@ -248,10 +252,58 @@ describe("leadSegment (Por llamar sub-segmentation)", () => {
       { status: "nuevo", inbound_count: 0 },
     ]);
     expect(counts).toEqual({ carrito: 1, interes: 1, converso: 1, frio: 2 });
-    // El orden de la lista ES el orden de la cascada y el de la fila de chips.
+    // El orden de la lista ES el orden de la cascada (la fila de chips sale de
+    // QUEUE_BUCKETS, más abajo).
     expect(LEAD_SEGMENTS.map((s) => s.key)).toEqual(["carrito", "interes", "converso", "frio"]);
     expect(isLeadSegment("carrito")).toBe(true);
     expect(isLeadSegment("nope")).toBe(false);
+  });
+});
+
+// «Distrito o producto» partido en dos chips del filtro (05-10-2026). La
+// prioridad de la cola sigue en `leadSegment`: esto solo cambia qué se filtra.
+describe("leadQueueBucket (chips Distrito / Producto del filtro)", () => {
+  const conLink = { first_inbound_text: "https://kenku.pe/products/x Tengo una consulta" };
+
+  it("interés con distrito → Distrito; solo con el link → Producto", () => {
+    expect(leadQueueBucket({ status: "nuevo", district: "Pueblo Libre" })).toBe("distrito");
+    expect(leadQueueBucket({ status: "nuevo", inbound_count: 1, ...conLink })).toBe("producto");
+  });
+
+  it("con las dos señales va a Distrito: decir dónde lo quiere es lo más cercano a comprar", () => {
+    expect(leadQueueBucket({ status: "nuevo", district: "Wanchaq", ...conLink })).toBe("distrito");
+  });
+
+  it("un distrito en blanco no cuenta: con link es Producto", () => {
+    expect(leadQueueBucket({ status: "nuevo", district: "  ", ...conLink })).toBe("producto");
+  });
+
+  it("los demás segmentos pasan igual", () => {
+    expect(leadQueueBucket({ status: "nuevo", cart_item_count: 1, district: "Ate", ...conLink })).toBe("carrito");
+    expect(leadQueueBucket({ status: "nuevo", inbound_count: 4 })).toBe("converso");
+    expect(leadQueueBucket({ status: "nuevo" })).toBe("frio");
+  });
+
+  it("parte exactamente el balde de interés, sin mover a nadie más", () => {
+    const leads = [
+      { status: "nuevo", cart_item_count: 1 },
+      { status: "nuevo", district: "Ate" },
+      { status: "nuevo", district: "Surco", ...conLink },
+      { status: "nuevo", ...conLink },
+      { status: "nuevo", inbound_count: 4 },
+      { status: "nuevo" },
+    ];
+    const seg = countLeadSegments(leads);
+    const buckets = countQueueBuckets(leads);
+    expect(buckets).toEqual({ carrito: 1, distrito: 2, producto: 1, converso: 1, frio: 1 });
+    expect(buckets.distrito + buckets.producto).toBe(seg.interes);
+  });
+
+  it("la fila de chips va de mayor a menor intención y valida la clave", () => {
+    expect(QUEUE_BUCKETS.map((b) => b.key)).toEqual(["carrito", "distrito", "producto", "converso", "frio"]);
+    expect(isQueueBucket("producto")).toBe(true);
+    // Un ?seg=interes guardado de antes ya no es un chip: abre «Todos».
+    expect(isQueueBucket("interes")).toBe(false);
   });
 });
 

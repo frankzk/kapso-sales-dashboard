@@ -108,7 +108,7 @@ export function OlvaEmailLog({ log, editableOrgIds }: { log: EmailLog; editableO
         {log.firstReceivedAt && (
           <>
             {" "}
-            · {plural(log.entries.length, "correo", "correos")} {emailLogSince(log.firstReceivedAt)}
+            · {plural(log.entries.length, "rótulo", "rótulos")} en {plural(log.emails, "correo", "correos")} {emailLogSince(log.firstReceivedAt)}
           </>
         )}
         {log.truncated && " (los más recientes)"}.
@@ -151,7 +151,7 @@ export function OlvaEmailLog({ log, editableOrgIds }: { log: EmailLog; editableO
         {days.length === 0 ? (
           <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-6">
             <p className="text-sm text-ink-500">
-              Ningún correo en «{CARDS.find((c) => c.id === filter)?.label}».
+              Ningún rótulo en «{CARDS.find((c) => c.id === filter)?.label}».
             </p>
             <OpsButton variant="ghost" size="sm" onClick={() => setFilter("todos")}>
               Ver todos
@@ -170,7 +170,7 @@ export function OlvaEmailLog({ log, editableOrgIds }: { log: EmailLog; editableO
                 >
                   <span className="font-semibold text-ink-900">{emailLogDayLabel(day.day)}</span>
                   <span className="font-normal tabular-nums text-ink-500">
-                    {plural(day.entries.length, "correo", "correos")}
+                    {plural(day.entries.length, "rótulo", "rótulos")}
                     {filter === "todos" && ` · ${plural(matched, "vinculado al llegar", "vinculados al llegar")}`}
                   </span>
                 </h2>
@@ -186,7 +186,7 @@ export function OlvaEmailLog({ log, editableOrgIds }: { log: EmailLog; editableO
       </section>
 
       {log.truncated && (
-        <p className="text-center text-[13px] text-ink-500">Se muestran los {log.entries.length} correos más recientes.</p>
+        <p className="text-center text-[13px] text-ink-500">Se muestran los {log.entries.length} rótulos más recientes.</p>
       )}
     </div>
   );
@@ -214,7 +214,10 @@ function EmailRow({ entry, canEdit }: { entry: EmailLogEntry; canEdit: boolean }
             <p className="text-[13px] font-medium leading-5 text-ink-500">Sin tracking</p>
           )}
           {entry.registro ? (
-            <p className="text-xs tabular-nums leading-4 text-ink-500">Reg. {entry.registro}</p>
+            <p className="text-xs tabular-nums leading-4 text-ink-500">
+              Reg. {entry.registro}
+              {entry.part && ` · rótulo ${entry.part}`}
+            </p>
           ) : entry.subject ? (
             <p className="truncate text-xs leading-4 text-ink-500" title={entry.subject}>
               {entry.subject}

@@ -31,7 +31,7 @@ import {
   type TelnyxCostRecord,
   type TelnyxEvent,
 } from "@/lib/telnyx";
-import { closeAsNoAnswer, telnyxConfig } from "@/lib/voice-recovery-server";
+import { closeAsNoAnswer, closeCutWithoutGestion, telnyxConfig } from "@/lib/voice-recovery-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -169,39 +169,17 @@ export async function POST(req: NextRequest) {
       const resumen = contesto ? "No contestó: colgó antes de hablar con el agente." : noAnswerResumen(ev);
       await closeAsNoAnswer(admin, asOpen(row), resumen, now);
     }
-    if (row.status === "in_progress") await closeCutWithoutGestion(admin, row, now);
+    if (row.status === "in_progress") await closeCutWithoutGestion(admin, asOpen(row), now);
     return NextResponse.json({ ok: true, action: "cliente_colgo" });
   }
 
   if (ev.type === "call.hangup" && leg === "agente") {
     await hangup(telephony.cliente);
-    if (row.status === "in_progress") await closeCutWithoutGestion(admin, row, now);
+    if (row.status === "in_progress") await closeCutWithoutGestion(admin, asOpen(row), now);
     return NextResponse.json({ ok: true, action: "agente_colgo" });
   }
 
   return NextResponse.json({ ok: true });
-}
-
-/** Margen para que llegue un `registrar_gestion` pedido a la vez que el corte. */
-const HANGUP_GRACE_MS = 3_000;
-
-/**
- * La conversación se cortó y el agente no registró nada: se cierra como «no
- * contesta» al momento, sin esperar al barrido. Todos los agentes comparten el
- * número de la tienda (una llamada abierta a la vez), y con el barrido la cola
- * quedaba parada ~10 min tras cada corte (04-10-2026). El error empieza con
- * «sin registrar_gestion», como el del barrido: la comparación la sigue
- * contando como atendida y cortada sin gestión.
- */
-async function closeCutWithoutGestion(admin: ReturnType<typeof createAdminSupabase>, row: Row, now: Date) {
-  await new Promise((r) => setTimeout(r, HANGUP_GRACE_MS));
-  await closeAsNoAnswer(
-    admin,
-    asOpen(row),
-    "No contestó: la llamada llegó al agente pero se cortó sin gestión (buzón o cuelgue).",
-    now,
-    { error: "sin registrar_gestion: se cortó la llamada", soloSinGestion: true },
-  );
 }
 
 /**

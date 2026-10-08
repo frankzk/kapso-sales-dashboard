@@ -268,7 +268,8 @@ describe("guardas del flujo (código)", () => {
 
   it("un pedido del reintento automático no bloquea la cola: se salta al siguiente (04-10-2026)", () => {
     expect(server).toContain('reason: "reintento_automatico"');
-    expect(cron).toContain('placed.ok || placed.reason !== "reintento_automatico"');
+    // Saltar el reintento y probar el siguiente; otro error corta ese agente.
+    expect(cron).toContain('if (placed.reason === "reintento_automatico") {');
     expect(cron).toContain("queue.candidates.slice(0, MAX_TRIES_PER_PASS)");
     // Con 10 no alcanzaba: los del reintento se juntan al frente (04-10-2026).
     expect(cron).toContain("const MAX_TRIES_PER_PASS = 60;");
@@ -277,8 +278,8 @@ describe("guardas del flujo (código)", () => {
 
   it("un corte sin gestión se cierra al momento, no a los ~10 min del barrido (04-10-2026)", () => {
     // Los dos tramos: cuelgue de la clienta y del agente.
-    expect(route.match(/if \(row\.status === "in_progress"\) await closeCutWithoutGestion\(admin, row, now\);/g)).toHaveLength(2);
-    const fn = route.slice(route.indexOf("async function closeCutWithoutGestion"));
+    expect(route.match(/if \(row\.status === "in_progress"\) await closeCutWithoutGestion\(admin, asOpen\(row\), now\);/g)).toHaveLength(2);
+    const fn = server.slice(server.indexOf("export async function closeCutWithoutGestion"));
     // Margen por si el registro venía en camino, y nunca sobre una gestión.
     expect(fn.indexOf("HANGUP_GRACE_MS")).toBeLessThan(fn.indexOf("closeAsNoAnswer("));
     expect(fn).toContain("soloSinGestion: true");
@@ -316,9 +317,15 @@ describe("guardas del flujo (código)", () => {
     expect(auto).toContain("let pilotUsed=await pilotUsedToday(admin,settings.org_id);");
   });
 
-  it("el barrido sortea línea y motor de cada llamada", () => {
-    expect(cron).toContain("pickVoiceRoute({ telnyxShare, elevenShare, telnyxReady, elevenReady })");
-    expect(cron).toContain("telephony,");
-    expect(cron).toContain("engine,");
+  it("el barrido lanza una llamada por agente libre, cada una con su línea, motor y número (05-10-2026)", () => {
+    expect(cron).toContain("planVoiceSlots({ base: agentNumber, telnyxShare, elevenShare, telnyxReady, elevenReady, lanes })");
+    expect(cron).toContain("const free = slots.filter((sl) => !busyAgents.has(sl.agentNumber));");
+    expect(cron).toContain("agentNumber: sl.agentNumber,");
+    expect(cron).toContain("telephony: sl.route.telephony,");
+    expect(cron).toContain("engine: sl.route.engine,");
+    // Cada agente toma el siguiente pedido: nunca dos agentes al mismo pedido.
+    expect(cron).toContain("const next = pending.shift()!;");
+    // El tope del día cuenta cada llamada de la pasada.
+    expect(cron).toContain("left -= 1;");
   });
 });

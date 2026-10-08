@@ -180,6 +180,7 @@ export function GrupoGfCourierBoard({
           orgId={orgId}
           day={today}
           available={snapshot.operations.available}
+          returnable={snapshot.operations.returnable}
           accepted={snapshot.operations.accepted}
           blocked={snapshot.operations.blocked}
           riders={snapshot.operations.riders}
@@ -433,7 +434,7 @@ function AvailableOrders({
           </p>
           {blockedCount > 0 && (
             <p className="mt-1 text-xs text-amber-700">
-              {blockedCount} pedido{blockedCount === 1 ? "" : "s"} no aparece{blockedCount === 1 ? "" : "n"} por tarifa faltante, distrito inválido o servicio pausado.
+              {blockedCount} pedido{blockedCount === 1 ? "" : "s"} no aparece{blockedCount === 1 ? "" : "n"} por tarifa faltante, distrito inválido, servicio pausado u otro motivo de «Sin condiciones».
             </p>
           )}
         </div>

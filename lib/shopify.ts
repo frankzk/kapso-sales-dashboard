@@ -512,6 +512,45 @@ export async function getCustomerRecentOrders(
   }
 }
 
+/** La dirección por defecto de un cliente de Shopify, o null si no tiene. Puro. */
+export function parseCustomerAddress(data: unknown): { province: string | null; city: string | null } | null {
+  const node = (data as { customers?: { edges?: { node?: { defaultAddress?: unknown } }[] } } | null)?.customers
+    ?.edges?.[0]?.node;
+  const addr = (node?.defaultAddress ?? null) as { province?: string | null; city?: string | null } | null;
+  const province = addr?.province?.trim() || null;
+  const city = addr?.city?.trim() || null;
+  return province || city ? { province, city } : null;
+}
+
+/**
+ * La dirección por defecto del cliente de Shopify con ese celular (0228).
+ *
+ * Shopify guarda la dirección de cada carrito del formulario COD en el cliente,
+ * y la base no tiene los carritos viejos (los de Kenku empiezan en mayo de 2026),
+ * así que para muchos leads sin ubicación esta es la única pista. Mismo permiso
+ * y misma búsqueda que `getCustomerRecentOrders`.
+ *
+ * Devuelve `{ found: false }` cuando Shopify contestó y no hay cliente o no tiene
+ * dirección (se marca como consultado), y LANZA si la llamada falla, para que
+ * quien llama no lo marque y lo reintente en la próxima corrida.
+ */
+export async function getCustomerAddressByPhone(
+  opts: ShopifyClientOpts,
+  phone: string | null | undefined,
+): Promise<{ found: false } | { found: true; province: string | null; city: string | null }> {
+  const e164 = toE164(phone);
+  if (!e164) return { found: false };
+  const query = `
+    query($q: String!) {
+      customers(first: 1, query: $q) {
+        edges { node { defaultAddress { province city } } }
+      }
+    }`;
+  const data = await shopifyGraphQL({ ...opts, query, variables: { q: `phone:${e164}` } });
+  const addr = parseCustomerAddress(data);
+  return addr ? { found: true, ...addr } : { found: false };
+}
+
 /** Shopify order search query for tag:kapso, optionally bounded by updated_at. */
 export function buildKapsoOrdersSearchQuery(
   updatedAtCursorIso?: string | null,
