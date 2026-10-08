@@ -75,10 +75,15 @@ describe("los permisos de concesión individual salen de UNA lista", () => {
   // consulta de Equipo, la de sus acciones y el `upsert`. Con esa forma de
   // hacerlo, `shalom.override_payment_validation` se quedó dentro del rol
   // `admin` —catorce personas— sin que nadie lo hubiera decidido.
-  it("ninguno viene con el rol admin", () => {
+  it("ninguno viene con el rol admin, salvo los marcados `withAdminRole`", () => {
     for (const entry of GRANTED_ONE_BY_ONE) {
-      expect(permissionsFor(["admin"]).has(entry.permission), entry.permission).toBe(false);
+      const withAdmin = "withAdminRole" in entry && entry.withAdminRole === true;
+      expect(permissionsFor(["admin"]).has(entry.permission), entry.permission).toBe(withAdmin);
     }
+    // Hoy la única excepción es exportar: los financieros siguen fuera del rol.
+    expect(
+      GRANTED_ONE_BY_ONE.filter((e) => "withAdminRole" in e && e.withAdminRole).map((e) => e.permission),
+    ).toEqual(["data.export"]);
   });
 
   it("y el owner los conserva todos, por continuidad", () => {
@@ -276,5 +281,26 @@ describe("logistics.manage (Grupo GF Courier)", () => {
 
   it("aparece entre los permisos concedibles desde Equipo", () => {
     expect(GRANTED_ONE_BY_ONE.some((entry) => entry.permission === "logistics.manage")).toBe(true);
+  });
+});
+
+// Exportar el Master, los pedidos o el resumen diario (08-10-2026): una
+// descarga es la base de clientes entera. Owner y admin la traen; una
+// vendedora solo con la casilla de Equipo.
+describe("data.export", () => {
+  it("la traen owner y admin, no la vendedora ni el viewer", () => {
+    expect(permissionsFor(["owner"]).has("data.export")).toBe(true);
+    expect(permissionsFor(["admin"]).has("data.export")).toBe(true);
+    expect(permissionsFor(["vendedora"]).has("data.export")).toBe(false);
+    expect(permissionsFor(["viewer"]).has("data.export")).toBe(false);
+  });
+
+  it("a una vendedora de confianza se le concede en Equipo", () => {
+    expect(permissionsFor(["vendedora"], [{ permission: "data.export", granted: true }]).has("data.export")).toBe(true);
+    expect(GRANTED_ONE_BY_ONE.some((e) => e.permission === "data.export")).toBe(true);
+  });
+
+  it("y a un admin se le puede quitar", () => {
+    expect(permissionsFor(["admin"], [{ permission: "data.export", granted: false }]).has("data.export")).toBe(false);
   });
 });

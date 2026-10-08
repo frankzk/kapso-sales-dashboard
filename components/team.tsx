@@ -151,8 +151,9 @@ export function TeamManager({
                 frase escrita a mano, añadir un permiso dejaba la explicación
                 hablando solo del primero. */}
             <p className="mb-3 text-xs text-slate-500">
-              Estos permisos NO vienen con el rol: se conceden persona por persona según su
-              responsabilidad. Los accesos correspondientes aparecen en su menú al recargar.{" "}
+              Estos permisos se conceden persona por persona según su responsabilidad; solo
+              «Exportar datos» viene ya con dueño y admin. Los accesos correspondientes aparecen
+              en su menú al recargar.{" "}
               {GRANTED_ONE_BY_ONE.map((entry) => (
                 <span key={entry.permission} className="mr-1 inline-block">
                   <strong className="font-semibold text-slate-700">{entry.label}</strong>:{" "}
@@ -165,7 +166,7 @@ export function TeamManager({
                 <thead>
                   <tr className={cn(STICKY_HEAD, "text-xs text-slate-500")}>
                     <th className="py-2 text-left font-medium">Miembro</th>
-                    <th className="py-2 text-left font-medium">Permisos financieros</th>
+                    <th className="py-2 text-left font-medium">Permisos por persona</th>
                     <th className="py-2 text-left font-medium">Rol</th>
                     <th className="py-2 text-left font-medium">Acceso a tiendas</th>
                     <th className="py-2 text-right font-medium">Acción</th>
