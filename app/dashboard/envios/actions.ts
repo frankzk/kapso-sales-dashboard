@@ -1112,7 +1112,7 @@ export async function registerCourierReportResult(
   const admin = createAdminSupabase();
   const { data: shipment } = await admin
     .from("shipments")
-    .select("id,courier,guide_code,delivery_status,next_followup_at,fenix_shipment_id,swayp_guide,swayp_synced_at")
+    .select("id,courier,guide_code,delivery_status,next_followup_at,fenix_shipment_id,swayp_guide")
     .eq("id", shipmentId)
     .maybeSingle();
   if (!shipment) return { error: "Guía no encontrada." };
@@ -1123,7 +1123,6 @@ export async function registerCourierReportResult(
     next_followup_at: string | null;
     fenix_shipment_id: string | null;
     swayp_guide: string | null;
-    swayp_synced_at: string | null;
   };
   if (current.courier !== "fenix") {
     return { error: "Este flujo corresponde al reporte Swayp. Aliclik se actualiza con su Excel diario." };

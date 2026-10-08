@@ -795,16 +795,17 @@ export function shipmentRequiresCourierResult(
  * nada a Kapta y alguien escribía lo que reportaba el motorizado. Desde el
  * 29-09-2026 el barrido lee cada guía con número de Swayp cada media hora
  * (§11.2): la entrega, la cancelación, la devolución y la novedad llegan solas.
- * Con número emitido por Swayp y al menos una lectura, pedirlo como
- * «Obligatorio» repetía lo que Swayp ya dijo —y sin ofrecer «Devolución», así
- * que parecía que faltaba el estado (#KP135202)—.
+ * Con número emitido por Swayp, pedirlo como «Obligatorio» repetía lo que
+ * Swayp ya dijo —y sin ofrecer «Devolución», así que parecía que faltaba el
+ * estado (#KP135202)—.
+ *
+ * Desde que nace, no desde la primera lectura (08-10-2026): la guía nueva de
+ * #KP135202 se creó a las 10:25 y, antes de que el barrido la leyera, alguien
+ * registró «No contesta» en el recuadro viejo; se perdió la fecha del reenvío.
+ * El barrido lee toda guía viva con número de Swayp, así que el número basta.
  */
-export function swaypInformsByApi(s: {
-  courier?: string | null;
-  swayp_guide?: string | null;
-  swayp_synced_at?: string | null;
-}): boolean {
-  return s.courier === "fenix" && Boolean(s.swayp_guide) && Boolean(s.swayp_synced_at);
+export function swaypInformsByApi(s: { courier?: string | null; swayp_guide?: string | null }): boolean {
+  return s.courier === "fenix" && Boolean(s.swayp_guide);
 }
 
 /**

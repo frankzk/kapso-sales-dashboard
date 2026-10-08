@@ -4630,7 +4630,9 @@ function SwaypReading({
         id="guia-swayp-informa"
         title="Lo que informó Swayp"
         badge={<Badge tone="info">Por API</Badge>}
-        help={`Kapta lee esta guía en Swayp cada media hora${leido ? `; la última vez, el ${leido}` : ""}. No hace falta registrarlo a mano.`}
+        help={`Kapta lee esta guía en Swayp cada media hora${
+          leido ? `; la última vez, el ${leido}` : "; todavía no la leyó, lo que se ve es lo que dijo Swayp al emitirla"
+        }. No hace falta registrarlo a mano.`}
         aside={
           <OpsButton size="sm" variant="ghost" onClick={onCorrect} className="pointer-coarse:h-11">
             Corregir a mano
