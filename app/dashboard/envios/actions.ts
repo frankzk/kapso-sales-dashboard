@@ -132,6 +132,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import {
   createFenixGuideViaApi,
   DIRECT_GUIDE_ORDER_COLUMNS,
+  origenReenvioSwayp,
   reenviarGuiaAnulada,
   resolveCurrentFenixEligibility,
   resolveDirectGuideAddress,
@@ -276,6 +277,12 @@ export async function loadShipmentDetail(
        * teléfono. La reja de verdad sigue en `spinOffFenixGuide`.
        */
       swaypUnlinked: string[];
+      /**
+       * La guía es una Swayp EN DEVOLUCIÓN en provincia y se puede reenviar por
+       * Swayp desde aquí (`origenReenvioSwayp`, 08-10-2026). La reja de verdad
+       * sigue en `reenviarGuiaAnulada`, que además le pregunta a Swayp.
+       */
+      swaypReturnResend: boolean;
     }
   | { error: string }
 > {
@@ -337,7 +344,21 @@ export async function loadShipmentDetail(
     }
   }
   const perms = await getMasterPermissions();
+  let swaypReturnResend = false;
+  if (detail.shipment.order_id && detail.shipment.delivery_status === "en_ruta") {
+    const { data: master } = await admin
+      .from("order_master")
+      .select("macro_operation")
+      .eq("order_id", detail.shipment.order_id)
+      .maybeSingle();
+    swaypReturnResend =
+      origenReenvioSwayp(
+        detail.shipment,
+        (master as { macro_operation: string | null } | null)?.macro_operation ?? null,
+      ) === "swayp_en_devolucion";
+  }
   return {
+    swaypReturnResend,
     shipment: detail.shipment,
     calls,
     guideHistory,
@@ -1213,7 +1234,7 @@ export async function reprogramCancelledShipmentException(
   revalidatePath("/dashboard/envios");
   return {
     notice:
-      `Excepción registrada. La guía anulada quedó en el historial y se creó ` +
+      `La guía ${r.sourceGuide} quedó en el historial y se creó ` +
       `${r.guideCode} para la nueva fecha. Emitida por Swayp.`,
   };
 }
