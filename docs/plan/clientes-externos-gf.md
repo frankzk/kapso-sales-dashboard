@@ -222,6 +222,10 @@ pruebas. Las migraciones se corren a mano antes del código (`DEPLOY.md`).
 
 ### Fase 0 — Reglas en el MOM (sin código)
 
+**Borrador escrito el 08-10-2026** en el MOM, §29.15, con referencias en §29.2,
+§29.3, §29.4, §29.6, §29.7, §29.8, §29.9, §29.10 y §29.11. Está pendiente de
+revisión.
+
 - La rama ya trae la rama de integración al 08-10-2026, incluidas 0230
   (recuperar en oficina), 0234 (traspaso de reprogramados) y §32 (pedido
   acompañante, solo Aliclik: no afecta). Las migraciones de este plan empiezan
