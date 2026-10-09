@@ -2927,6 +2927,49 @@ en Lima, el 66 % en Provincia COD y el 65 % en Agencia; Aurela, ~60 %. Con 30
 pedidos el margen es de unos ±18 puntos: alcanza para ver si se entrega «casi
 igual» o «claramente peor», no diferencias finas.
 
+A la semana (09-10-2026): 7 entregados, 8 anulados, 13 en curso y 2 sin
+confirmar. Anulación del 27 %, contra ~19 % de la recompra normal; tres de las
+ocho anulaciones fueron «ya lo tiene / ya lo compró», todas de clientes que
+habían recibido o pedido ese producto antes. Por eso la prueba siguiente
+excluye el carrito del mismo producto que la última entrega.
+
+**Prueba A/B: pedido sin llamada contra la cola (`ab-recompra-prov-1`,
+09-10-2026).** La primera prueba compara contra una tasa histórica, y eso no
+dice si generar el pedido **vende más** que dejar el carrito en la cola: un
+pedido por carrito da más pedidos, pero algunos se anulan; la llamada cierra
+menos, pero entrega mejor. Aquí cada carrito que cumple la regla se sortea al
+llegar:
+
+- **auto** → se genera el pedido, con el mismo generador de la primera prueba.
+- **control** → no se toca: queda en la cola y la asesora lo trabaja como
+  siempre.
+
+La moneda es el hash del carrito, así que el mismo carrito cae siempre en la
+misma mitad aunque el cron lo vea dos veces. Se mide **pedidos entregados por
+carrito** en cada mitad (`auto_order_ab_results`). En `control` cuenta el
+primer pedido del mismo teléfono en los 14 días siguientes al carrito, lo haya
+cerrado la asesora, el bot o el cliente solo.
+
+Quién entra (`auto_order_ab_candidates`, la regla entera en un solo sitio):
+
+- Lead `nuevo`, sin gestión; carrito abierto con entre 3 y 48 horas, total
+  mayor que cero y dirección despachable.
+- Último pedido del teléfono **entregado** y de 7 o más días antes del
+  carrito; cobertura **Provincia COD**.
+- El cliente no escribió después del carrito y no tiene pedido vivo posterior.
+- Algún producto **distinto** de los de su última entrega.
+
+Las tres horas de espera dejan fuera a quien abandona el formulario y compra
+solo enseguida: en los 14 días previos, la mitad de estos carritos terminó en
+pedido dentro de la hora. Con la regla quedan unos 14 carritos por semana entre
+las dos mitades, así que la prueba dura **tres semanas** para llegar a ~20 por
+mitad. 41 de 59 de esos carritos no recibieron ninguna llamada.
+
+Se enciende y se apaga en `auto_order_cohorts` (interruptor, ventana con
+inicio y fin obligatorios, tope diario por tienda). Sin ventana no inscribe:
+una cohorte sin fin sería una automatización completa que nadie decidió. El
+cron inscribe como mucho cada 20 minutos por tienda.
+
 **Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
 que la cola tiene que recortar: quedan fuera **Shalom, Olva, Tanders, Urpi y el
 reparto propio**. Shalom y Olva son agencia —la clienta recoge en el terminal,
