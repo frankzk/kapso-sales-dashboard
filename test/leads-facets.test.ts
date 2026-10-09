@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { facetItems } from "@/lib/leads-facets";
-import { LEAD_SEGMENTS, countLeadSegments } from "@/lib/leads";
+import { LEAD_SEGMENTS, QUEUE_BUCKETS, countLeadSegments, countQueueBuckets } from "@/lib/leads";
 
 type Row = { id: string; src: string; state: string; hot: boolean };
 
@@ -102,18 +102,20 @@ describe("los chips de segmento no pueden divergir de la lista canónica", () =>
   // sumar el total y no había forma de filtrarlos.
   const SOURCE = readFileSync(resolve(process.cwd(), "components/leads.tsx"), "utf8");
 
-  it("la fila se deriva de LEAD_SEGMENTS, no de una lista escrita al lado", () => {
-    expect(SOURCE).toContain("[...LEAD_SEGMENTS].reverse().map(({ key })");
+  it("la fila se deriva de QUEUE_BUCKETS, no de una lista escrita al lado", () => {
+    // Desde el 05-10-2026 los chips son los baldes del filtro (interés partido
+    // en Distrito y Producto), no los cuatro segmentos de la prioridad.
+    expect(SOURCE).toContain("[...QUEUE_BUCKETS].reverse().map(({ key, label })");
   });
 
-  it("ningún `as LeadSegment[]` vuelve a silenciar al compilador acá", () => {
+  it("ningún `as LeadSegment[]` ni `as QueueBucket[]` vuelve a silenciar al compilador acá", () => {
     // El cast es lo que dejó pasar el fallo: sin él, TypeScript rechaza una
     // clave que ya no existe en el tipo, que es justo lo que hace falta.
     //
     // Exige el `]` de cierre delante para matchear el cast de VERDAD y no la
     // mención entre comillas del comentario que explica esto en leads.tsx.
     // Sin esa ancla, la prueba fallaba con el arreglo ya puesto.
-    expect(SOURCE).not.toMatch(/\]\s*as LeadSegment\[\]/);
+    expect(SOURCE).not.toMatch(/\]\s*as (LeadSegment|QueueBucket)\[\]/);
   });
 
   it("el contador devuelve exactamente un balde por segmento de la lista", () => {
@@ -122,6 +124,8 @@ describe("los chips de segmento no pueden divergir de la lista canónica", () =>
     // pinta. Acá se comprueba de verdad, no leyendo el fuente.
     const counts = countLeadSegments([]);
     expect(Object.keys(counts).sort()).toEqual(LEAD_SEGMENTS.map((s) => s.key).sort());
+    const buckets = countQueueBuckets([]);
+    expect(Object.keys(buckets).sort()).toEqual(QUEUE_BUCKETS.map((b) => b.key).sort());
   });
 
   it("y los baldes suman el total, sin dejar leads fuera", () => {
@@ -135,5 +139,7 @@ describe("los chips de segmento no pueden divergir de la lista canónica", () =>
     const counts = countLeadSegments(leads);
     const suma = LEAD_SEGMENTS.reduce((n, s) => n + counts[s.key], 0);
     expect(suma).toBe(leads.length);
+    const buckets = countQueueBuckets(leads);
+    expect(QUEUE_BUCKETS.reduce((n, b) => n + buckets[b.key], 0)).toBe(leads.length);
   });
 });

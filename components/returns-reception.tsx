@@ -27,7 +27,8 @@ import { shalomReturnSince } from "@/lib/shalom/returns";
  * Mismo gesto que el armado de la estación de almacén, otro contexto (MOM
  * §29.13): la pantalla declara qué significa escanear, el usuario solo escanea.
  * Un solo escáner para los dos couriers: quien tiene la caja en la mano no tiene
- * por qué elegir antes de quién es.
+ * por qué elegir antes de quién es. Desde el 05-10-2026 también recibe lo que
+ * vuelve de Grupo GF (`lib/gf-returns-scan.ts`).
  */
 export function ReturnsReception({ initialData }: { initialData: ReturnsReceptionData }) {
   const [data, setData] = useState(initialData);
@@ -90,7 +91,7 @@ export function ReturnsReception({ initialData }: { initialData: ReturnsReceptio
         <Link href="/dashboard/pedidos/almacen" className="text-[13px] font-medium text-ink-500 hover:text-ink-900">← Almacén</Link>
         <h1 className="mt-1 text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Devoluciones</h1>
         <p className="mt-1 max-w-2xl text-sm text-ink-500">
-          Escanea cada caja que vuelve al almacén, sea de Tanders o de Shalom. Lo que el courier devolvió y nadie escaneó es lo que falta recibir.
+          Escanea cada caja que vuelve al almacén, sea de Tanders, de Shalom o de Grupo GF. Lo que el courier devolvió y nadie escaneó es lo que falta recibir. Un «No entregado» de Grupo GF vuelve a «por asignar» para reprogramarlo.
         </p>
       </header>
 

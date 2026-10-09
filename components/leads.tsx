@@ -35,17 +35,19 @@ import {
 } from "@/lib/meta-audience";
 import {
   LEAD_GESTIONES,
-  LEAD_SEGMENTS,
+  QUEUE_BUCKETS,
   QUEUE_STATES,
   categoryOf,
   countGestiones,
-  countLeadSegments,
+  countQueueBuckets,
   countLeadWindows,
   countQueueStates,
   gestionOf,
   isClaimActive,
+  isQueueBucket,
   labelOf,
   leadHook,
+  leadQueueBucket,
   leadSegment,
   matchesLeadInteractionDate,
   leadWindowInfo,
@@ -54,8 +56,8 @@ import {
   type LeadGestion,
   type LeadInteractionDateFilter,
   type LeadHookKind,
-  type LeadSegment,
   type LeadWindow,
+  type QueueBucket,
   type QueueState,
   type YapeKind,
   leadHandle,
@@ -206,25 +208,21 @@ const OUTCOME_VIEWS: { key: LeadView; label: string }[] = [
   { key: "perdidos", label: "Perdidos" },
 ];
 
-const SEGMENT_BADGE: Record<LeadSegment, string> = {
+// Keyed by the queue FILTER bucket (lib/leads.ts › QUEUE_BUCKETS), so the pill
+// on each row reads the same as the chip that finds it.
+const SEGMENT_BADGE: Record<QueueBucket, string> = {
   carrito: "bg-emerald-50 text-emerald-700",
-  interes: "bg-amber-50 text-amber-700",
+  distrito: "bg-amber-50 text-amber-700",
+  producto: "bg-yellow-50 text-yellow-800",
   converso: "bg-blue-50 text-blue-700",
   frio: "bg-slate-100 text-slate-500",
 };
 
 // Plain calificación labels (no emoji) for the row/drawer pills, per the redesign.
-const SEG_PILL_LABEL: Record<LeadSegment, string> = {
+const SEG_PILL_LABEL: Record<QueueBucket, string> = {
   carrito: "Con carrito",
-  interes: "Distrito o producto",
-  converso: "Conversó",
-  frio: "Frío",
-};
-
-// Labels for the segment "accesos directos" row (only Carrito carries an emoji).
-const SEG_TAB_LABEL: Record<LeadSegment, string> = {
-  carrito: "🛒 Carrito",
-  interes: "Distrito o producto",
+  distrito: "Dio distrito",
+  producto: "Vio producto",
   converso: "Conversó",
   frio: "Frío",
 };
@@ -237,7 +235,7 @@ const OUTCOME_SEG_BADGE: Record<"won" | "lost", { label: string; cls: string }> 
 };
 
 /** Calificación chip per row. Active leads (open/hot) show their engagement level
- *  (Frío → Conversó → Dio distrito → Con carrito); leads that are already won or
+ *  (Frío → Conversó → Vio producto → Dio distrito → Con carrito); leads that are already won or
  *  lost show the outcome (Ganados/Perdidos) — the engagement level is meaningless
  *  once the lead is closed, and "Con carrito" on a cancelled lead is misleading.
  *  The specific reason (e.g. "Cancelado por cliente") stays available on hover. */
@@ -254,7 +252,7 @@ function SegmentBadge({ lead }: { lead: LeadRow }) {
       </span>
     );
   }
-  const seg = leadSegment(lead);
+  const seg = leadQueueBucket(lead);
   // El monto del carrito va en el propio chip: con la cola ordenada por
   // prioridad, entre dos carritos el ticket es lo que decide a cuál llamar
   // primero, y hasta ahora había que abrir el drawer para verlo.
@@ -675,7 +673,7 @@ export function LeadsBoard({
   timezone: string;
   insights: LeadsInsights | null;
   initialState?: QueueState | null;
-  initialSeg?: LeadSegment | null;
+  initialSeg?: QueueBucket | null;
   initialGest?: LeadGestion | null;
   initialInteractionDate?: LeadInteractionDateFilter | null;
   initialOpenId?: string | null; // ?open=<id> → auto-abre ese lead (desde el pop-up de Yapes)
@@ -727,7 +725,7 @@ export function LeadsBoard({
   // pendiente. Eje 2 (segmento, "accesos directos" debajo): frío…carrito, scopeado
   // al estado activo. La Gestión es un refino que vive en Filtros (sin default).
   const [queueState, setQueueState] = useState<QueueState>(initialState ?? "sin_llamar");
-  const [segFilter, setSegFilter] = useState<LeadSegment | null>(initialSeg ?? null);
+  const [segFilter, setSegFilter] = useState<QueueBucket | null>(initialSeg ?? null);
   // Eje 3 (cobertura): Lima / Provincia / Sin identificar, al lado del segmento.
   // Es una pista para repartir llamadas, no la cobertura del pedido (ver
   // lib/lead-coverage.ts).
@@ -1299,7 +1297,7 @@ export function LeadsBoard({
     // Eje 1 (estado) y eje 2 (segmento) son facets independientes que combinan por
     // AND: el segmento se filtra DENTRO del estado activo (no lo reemplaza).
     const matchState = (l: LeadRow) => !inQueue || matchesQueueState(l, queueState);
-    const matchSeg = (l: LeadRow) => !inQueue || !segFilter || leadSegment(l) === segFilter;
+    const matchSeg = (l: LeadRow) => !inQueue || !segFilter || leadQueueBucket(l) === segFilter;
     const matchCov = (l: LeadRow) => !inQueue || !covFilter || coverageOf(l) === covFilter;
     const matchGest = (l: LeadRow) => {
       // En "Sin llamar" todos son nuevos → la gestión no aplica (su panel se oculta).
@@ -1388,7 +1386,7 @@ export function LeadsBoard({
       hasFbWeb: leads.some((l) => l.source === "fb_web"),
       hasCart: leads.some((l) => l.source === "cod_cart"),
       hasBrowse: leads.some((l) => l.source === "abandoned_browse"),
-      segCounts: countLeadSegments(segBase),
+      segCounts: countQueueBuckets(segBase),
       segTotal: segBase.length,
       covCounts: countLeadCoverage(covBase.map(coverageOf)),
       covTotal: covBase.length,
@@ -1803,19 +1801,19 @@ export function LeadsBoard({
             <SegControl
               label="Segmento"
               value={segFilter ?? "all"}
-              onChange={(key) => setSegFilter(key === "all" ? null : (key as LeadSegment))}
+              onChange={(key) => setSegFilter(isQueueBucket(key) ? key : null)}
               options={[
                 { key: "all", label: "Todos", count: segTotal },
-                // Sale de LEAD_SEGMENTS, no de una lista escrita acá. Estaba a
+                // Sale de QUEUE_BUCKETS, no de una lista escrita acá. Estaba a
                 // mano y con un `as LeadSegment[]` que silenciaba al compilador:
                 // al fusionar `distrito` en `interes`, esta fila siguió pidiendo
-                // «distrito» —una clave que ya no existe— y el chip del balde
+                // «distrito» —una clave que ya no existía— y el chip del balde
                 // nuevo, con 490 leads dentro, no se dibujó. Los segmentos
                 // dejaron de sumar el total y nadie podía filtrarlos.
                 // Invertida porque la fila se lee de menor a mayor intención.
-                ...[...LEAD_SEGMENTS].reverse().map(({ key }) => ({
+                ...[...QUEUE_BUCKETS].reverse().map(({ key, label }) => ({
                   key,
-                  label: SEG_TAB_LABEL[key],
+                  label,
                   count: segCounts[key],
                 })),
               ]}

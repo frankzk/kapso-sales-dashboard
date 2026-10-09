@@ -32,6 +32,9 @@ export interface EmailLabelRow {
   match_note: string | null;
   /** `null` en filas guardadas sin la 0227. */
   outcome?: string | null;
+  /** Posición del rótulo en su PDF y cuántos trae (0232). */
+  label_index?: number | null;
+  label_count?: number | null;
 }
 
 /** Una salida que hoy tiene el tracking (o la que vinculó el correo). */
@@ -70,6 +73,10 @@ export interface EmailLogEntry {
   day: string;
   tracking: string | null;
   registro: string | null;
+  /** El correo que lo trajo: un PDF puede traer varios rótulos. */
+  messageId: string;
+  /** «2/4» si el PDF trae más de un rótulo. */
+  part: string | null;
   subject: string | null;
   recipient: string | null;
   address: string | null;
@@ -96,7 +103,10 @@ export interface EmailLogDay {
 }
 
 export interface EmailLog {
+  /** Un rótulo por envío; un correo puede traer varios. */
   entries: EmailLogEntry[];
+  /** Cuántos correos trajeron esos rótulos. */
+  emails: number;
   counts: Record<EmailLogState, number>;
   lastReceivedAt: string | null;
   firstReceivedAt: string | null;
@@ -285,6 +295,8 @@ export function buildEmailLog(input: {
       day: limaDay(receivedAt),
       tracking,
       registro: row.registro,
+      messageId: row.message_id,
+      part: (row.label_count ?? 1) > 1 ? `${row.label_index ?? 1}/${row.label_count}` : null,
       subject: row.subject,
       recipient: row.recipient_name,
       address: row.address,
@@ -303,11 +315,19 @@ export function buildEmailLog(input: {
     };
   });
 
-  entries.sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
+  // Los rótulos de un mismo correo, juntos y en el orden del PDF.
+  const index = new Map(input.labels.map((row) => [row.id, row.label_index ?? 1]));
+  entries.sort(
+    (a, b) =>
+      b.receivedAt.localeCompare(a.receivedAt) ||
+      a.messageId.localeCompare(b.messageId) ||
+      (index.get(a.id) ?? 1) - (index.get(b.id) ?? 1),
+  );
   const counts = Object.fromEntries(EMAIL_LOG_STATES.map((s) => [s, 0])) as Record<EmailLogState, number>;
   for (const e of entries) counts[e.state] += 1;
   return {
     entries,
+    emails: new Set(entries.map((e) => e.messageId)).size,
     counts,
     lastReceivedAt: entries[0]?.receivedAt ?? null,
     firstReceivedAt: entries.at(-1)?.receivedAt ?? null,
@@ -315,7 +335,7 @@ export function buildEmailLog(input: {
   };
 }
 
-/** Los correos de una lista, por día de llegada (el más reciente primero). PURA. */
+/** Los rótulos de una lista, por día de llegada (el más reciente primero). PURA. */
 export function groupEmailLogByDay(entries: EmailLogEntry[]): EmailLogDay[] {
   const days: EmailLogDay[] = [];
   for (const entry of entries) {

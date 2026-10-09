@@ -261,6 +261,25 @@ export function isForceableBlocker(blocker: RouteCloseBlocker): boolean {
 }
 
 /**
+ * Qué pasó con el paquete de un «No entregado» que salió en una caja: volvió a
+ * la oficina (`returned_to_office`), el motorizado lo conservó y salió en su
+ * ruta siguiente (`carried_over`, MOM §29.7, 07-10-2026), o sigue por devolver.
+ */
+export type StopReturnState = "devuelto" | "paso_a_otra_ruta" | "por_devolver";
+
+export function stopReturnState(stop: {
+  status: string;
+  dispatch_manifest_id?: string | null;
+  returned_at?: string | null;
+  carried_to?: string | null;
+}): StopReturnState | null {
+  if (stop.status !== "no_entregado" || !stop.dispatch_manifest_id) return null;
+  if (stop.returned_at) return "devuelto";
+  if (stop.carried_to) return "paso_a_otra_ruta";
+  return "por_devolver";
+}
+
+/**
  * Los «No entregado» de la ruta que siguen en su caja de Grupo GF. Mismo
  * criterio que el escaneo de Despacho del día: un ítem activo es un paquete que
  * la caja todavía dice tener.

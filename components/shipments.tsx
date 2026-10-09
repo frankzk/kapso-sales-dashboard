@@ -62,6 +62,10 @@ import {
   SHIPMENT_CLAIM_HEARTBEAT_MS,
   shipmentRequiresCourierResult,
   statusSince,
+  SWAYP_API_MANUAL_EXCLUDED,
+  swaypInformsByApi,
+  swaypLiveSubState,
+  swaypReadingSummary,
   type AliclikRescheduleReason,
   type AliclikRouteFilter,
   type ReprogramCourier,
@@ -310,10 +314,17 @@ function subState(s: {
   reroute_attempts: number;
   delivered_source: string | null;
   recovery?: RecoveryKind | null;
+  courier?: string | null;
+  delivery_status?: string;
+  swayp_state?: number | null;
 }): string {
   if (s.status_category === "pending") return attemptLabel(s.reroute_attempts);
   if (s.status_category === "delivered" && s.delivered_source)
     return `por ${s.delivered_source === "fenix" ? "Swayp" : "Aliclik"}`;
+  // Una Swayp viva puede ir a entregarse, esperar una instrucción o venir de
+  // vuelta, y las tres se guardan `en_ruta` (08-10-2026).
+  const swayp = s.delivery_status ? swaypLiveSubState({ ...s, delivery_status: s.delivery_status }) : null;
+  if (swayp) return swayp;
   if (s.recovery) return RECOVERY_LABEL[s.recovery];
   return "";
 }
@@ -2745,6 +2756,17 @@ function ShipmentDrawer({
   // llamadas y reenvío como acción normal. La puerta de verdad está en el
   // servidor, con la misma función que puso esa mitad.
   const enRecuperacion = shipment?.delivery_status === "anulado" && shipment.recovery === "activa";
+  // Una guía Swayp en devolución, en provincia, también se reenvía por Swayp
+  // (08-10-2026): queda como madre igual que la anulada. Lo decide el servidor.
+  const reenvioDesdeDevolucion = !!detail && !("error" in detail) && detail.swaypReturnResend;
+  const reenvioNormal = enRecuperacion || reenvioDesdeDevolucion;
+  // Swayp informa el resultado de esta guía por su API: no se pide a mano
+  // (08-10-2026). La corrección manual sigue a un clic, sin «No contesta».
+  const swaypPorApi = !!detail && !("error" in detail) && swaypInformsByApi(detail.shipment);
+  const courierResultRequired = fenixAwaitingCourierResult && !swaypPorApi;
+  const courierResultOptions = swaypPorApi
+    ? COURIER_REPORT_RESULTS.filter((result) => !SWAYP_API_MANUAL_EXCLUDED.has(result.code))
+    : COURIER_REPORT_RESULTS;
   const fenixReadyForCustomerManagement =
     shipment?.courier === "fenix" && shipment.delivery_status === "pendiente";
   // Una sola resolución para todo el cajón: los dos botones que autogeneran una
@@ -3195,21 +3217,23 @@ function ShipmentDrawer({
               </div>
             </section>
 
-            {detail.shipment.delivery_status === "anulado" && (
+            {(detail.shipment.delivery_status === "anulado" || reenvioDesdeDevolucion) && (
               <section aria-labelledby="guia-reenvio" className={SECTION_CARD}>
                 {/* En recuperación, reenviar es la acción NORMAL (MOM §11), no
                     una excepción: la guía sí terminó, el pedido no. El flujo de
                     abajo es el mismo; cambia lo que se le dice a quien llama. */}
                 <SectionHead
                   id="guia-reenvio"
-                  title={enRecuperacion ? "Reenviar por Swayp" : "Reprogramar un pedido anulado"}
+                  title={reenvioNormal ? "Reenviar por Swayp" : "Reprogramar un pedido anulado"}
                   badge={
-                    <Badge tone={enRecuperacion ? "info" : "warn"}>
-                      {enRecuperacion ? "Reproprovincia" : "Excepción auditada"}
+                    <Badge tone={reenvioNormal ? "info" : "warn"}>
+                      {reenvioNormal ? "Reproprovincia" : "Excepción auditada"}
                     </Badge>
                   }
                   help={
-                    enRecuperacion
+                    reenvioDesdeDevolucion
+                      ? "Swayp no entregó y el paquete vuelve a su bodega. Esta guía no se cancela: queda como madre transferida y se crea una guía Swayp nueva con la fecha acordada con la clienta. Antes de emitirla se confirma con Swayp que sigue en devolución."
+                      : reenvioNormal
                       ? "La guía Aliclik ya terminó y no se toca: queda como madre transferida y se crea una guía Swayp con la fecha acordada con la clienta."
                       : "No se borrará la anulación. Esta guía quedará como madre transferida y se creará una nueva guía Swayp con la fecha acordada."
                   }
@@ -3224,7 +3248,7 @@ function ShipmentDrawer({
                         aria-describedby={cancelledExceptionUnavailable ? "guia-reenvio-bloqueo" : undefined}
                         className="pointer-coarse:h-11"
                       >
-                        {enRecuperacion ? "Reenviar" : "Crear excepción"}
+                        {reenvioNormal ? "Reenviar" : "Crear excepción"}
                       </OpsButton>
                     )
                   }
@@ -3257,7 +3281,7 @@ function ShipmentDrawer({
                       />
                     </label>
                     <label className={DRAWER_LABEL}>
-                      {enRecuperacion ? "Nota de la llamada" : "Motivo de la excepción"}
+                      {reenvioNormal ? "Nota de la llamada" : "Motivo de la excepción"}
                       <textarea
                         value={cancelledExceptionNote}
                         onChange={(e) => setCancelledExceptionNote(e.target.value)}
@@ -3289,7 +3313,7 @@ function ShipmentDrawer({
                         Cancelar
                       </OpsButton>
                       <OpsButton
-                        variant={enRecuperacion ? "primary" : "danger"}
+                        variant={reenvioNormal ? "primary" : "danger"}
                         onClick={() =>
                           run(
                             () => reprogramCancelledShipmentException(shipmentId, {
@@ -3507,22 +3531,30 @@ function ShipmentDrawer({
                     Corregir resultado
                   </OpsButton>
                 </section>
+              ) : swaypPorApi && fenixAwaitingCourierResult && !showCourierCorrection ? (
+                <SwaypReading
+                  shipment={detail.shipment}
+                  canResend={reenvioDesdeDevolucion}
+                  onCorrect={() => setShowCourierCorrection(true)}
+                />
               ) : (
-                <section aria-labelledby="guia-courier" className={fenixAwaitingCourierResult ? ACTION_CARD : SECTION_CARD}>
+                <section aria-labelledby="guia-courier" className={courierResultRequired ? ACTION_CARD : SECTION_CARD}>
                   <SectionHead
                     id="guia-courier"
                     title="Registrar resultado del courier"
                     badge={
-                      fenixAwaitingCourierResult ? (
+                      courierResultRequired ? (
                         <Badge tone="warn">Obligatorio</Badge>
                       ) : (
                         <Badge>Corrección del reporte</Badge>
                       )
                     }
                     help={
-                      fenixAwaitingCourierResult
+                      courierResultRequired
                         ? "Esta guía está En ruta. Primero registra lo informado por el motorizado; la llamada y la reprogramación se habilitarán solo si vuelve a Pendiente."
-                        : "Corrige lo que se registró del motorizado. El historial guarda los dos reportes."
+                        : swaypPorApi
+                          ? "Swayp informa esta guía por su API. Corrígela a mano solo si Swayp está atrasado o se equivoca: su siguiente lectura puede volver a cambiarla."
+                          : "Corrige lo que se registró del motorizado. El historial guarda los dos reportes."
                     }
                   />
                   <div className="space-y-4 pt-4">
@@ -3533,7 +3565,7 @@ function ShipmentDrawer({
                         ¿Qué informó Swayp?
                       </p>
                       <div className="grid gap-2 sm:grid-cols-2">
-                        {COURIER_REPORT_RESULTS.map((result) => (
+                        {courierResultOptions.map((result) => (
                           <OptionTile
                             key={result.code}
                             label={result.label}
@@ -4574,6 +4606,57 @@ function Field({
 }
 
 /** Una celda del marco de cifras del cajón, sobre `wash`. */
+/**
+ * «Lo que informó Swayp» (08-10-2026): en una guía que Swayp informa por API,
+ * el resultado no se pide a mano. Se dice qué leyó Kapta, cuándo, y qué toca.
+ */
+function SwaypReading({
+  shipment,
+  canResend,
+  onCorrect,
+}: {
+  shipment: { swayp_state?: number | null; swayp_synced_at?: string | null; reported_status?: string | null };
+  canResend: boolean;
+  onCorrect: () => void;
+}) {
+  const summary = swaypReadingSummary(shipment.swayp_state, { canResend });
+  const leido = fmtStatusSince(shipment.swayp_synced_at ?? null);
+  const novedad = shipment.reported_status?.startsWith("Swayp · ")
+    ? shipment.reported_status.slice("Swayp · ".length)
+    : null;
+  return (
+    <section aria-labelledby="guia-swayp-informa" className={SECTION_CARD}>
+      <SectionHead
+        id="guia-swayp-informa"
+        title="Lo que informó Swayp"
+        badge={<Badge tone="info">Por API</Badge>}
+        help={`Kapta lee esta guía en Swayp cada media hora${
+          leido ? `; la última vez, el ${leido}` : "; todavía no la leyó, lo que se ve es lo que dijo Swayp al emitirla"
+        }. No hace falta registrarlo a mano.`}
+        aside={
+          <OpsButton size="sm" variant="ghost" onClick={onCorrect} className="pointer-coarse:h-11">
+            Corregir a mano
+          </OpsButton>
+        }
+      />
+      <div className="pt-4">
+        <dl
+          className={cn(
+            "grid gap-px overflow-hidden rounded-md bg-line ring-1 ring-line",
+            novedad ? "sm:grid-cols-2" : "",
+          )}
+        >
+          <CompactMetric label="Estado en Swayp" value={summary.estado} />
+          {novedad && <CompactMetric label="Última novedad" value={novedad} />}
+        </dl>
+      </div>
+      <p className="pt-3 text-[13px] leading-5 text-ink-700">
+        {summary.detalle} <span className="font-medium text-ink-900">{summary.siguiente}</span>
+      </p>
+    </section>
+  );
+}
+
 function CompactMetric({
   label,
   value,

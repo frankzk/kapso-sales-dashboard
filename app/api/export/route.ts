@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabase } from "@/lib/db";
 import { getAccessibleStores, parseRange } from "@/lib/access";
 import { toCsv, type CsvColumn } from "@/lib/csv";
+import { getMasterPermissions } from "@/lib/permissions-access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,9 @@ export async function GET(req: NextRequest) {
 
   const stores = await getAccessibleStores();
   if (!stores.length) return new NextResponse("forbidden", { status: 403 });
+  // Bajar pedidos o el resumen diario es sacar el negocio entero en un fichero:
+  // `data.export`, no el solo acceso a la tienda (08-10-2026).
+  if (!(await getMasterPermissions()).can("data.export")) return exportForbidden();
   const storeId = sp.get("storeId");
   const ids = storeId ? stores.filter((s) => s.id === storeId).map((s) => s.id) : stores.map((s) => s.id);
   if (!ids.length) return new NextResponse("forbidden", { status: 403 });
@@ -96,5 +100,13 @@ function csvResponse(csv: string, filename: string) {
       "Content-Disposition": `attachment; filename="${filename}"`,
       "Cache-Control": "no-store",
     },
+  });
+}
+
+/** Sin `data.export`: lo dice en palabras, no un «forbidden» que nadie entiende. */
+function exportForbidden() {
+  return new NextResponse("Tu usuario no tiene permiso para exportar datos. Pídeselo a un administrador.", {
+    status: 403,
+    headers: { "content-type": "text/plain; charset=utf-8" },
   });
 }

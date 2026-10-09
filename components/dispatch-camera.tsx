@@ -21,6 +21,8 @@ export function DispatchCamera({
   pending = 0,
   lastCaptured,
   issues = [],
+  title = "Escanear QR",
+  hint,
 }: {
   open: boolean;
   onClose: () => void;
@@ -41,6 +43,10 @@ export function DispatchCamera({
   lastCaptured?: string | null;
   /** Failed saves remain visible even if a later package succeeds. */
   issues?: string[];
+  /** Qué se está haciendo y con qué caja: «Verificar caja · Roy». */
+  title?: string;
+  /** Debajo del título; sin él, cómo apuntar. */
+  hint?: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   // Parent callbacks change after every scan; they must not reopen the camera.
@@ -125,8 +131,8 @@ export function DispatchCamera({
       <div className="max-h-[95dvh] w-full overflow-y-auto rounded-t-2xl bg-white pb-[env(safe-area-inset-bottom)] shadow-2xl sm:max-w-lg sm:rounded-2xl">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
-            <p id="dispatch-camera-title" className="font-semibold text-slate-950">Escanear QR</p>
-            <p className="text-xs text-slate-500">{continuous ? "Apunta a cada rótulo; la cámara sigue abierta hasta que termines." : "Apunta al rótulo hasta que vibre el lector."}</p>
+            <p id="dispatch-camera-title" className="font-semibold text-slate-950">{title}</p>
+            <p className="text-xs text-slate-500">{hint ?? (continuous ? "Apunta a cada rótulo; la cámara sigue abierta hasta que termines." : "Apunta al rótulo hasta que vibre el lector.")}</p>
           </div>
           {continuous
             ? <button ref={closeRef} type="button" onClick={onClose} className="min-h-10 shrink-0 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-800">Listo</button>

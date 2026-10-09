@@ -18,6 +18,7 @@
 //   5. Pendiente                 — todavía no arrancó bien el proceso logístico.
 
 import { hasConfirmationSignal } from "@/lib/order-confirmation";
+import { COMPANION_LINKED } from "@/lib/order-companion";
 import { recoveryActive } from "@/lib/reproprovincia";
 import { cancelledAsRecordCorrection, correctedShipmentIds } from "@/lib/shipment-output";
 
@@ -378,8 +379,13 @@ const AGENCY_COURIERS = new Set(["shalom", "olva"]);
 /** Eventos de salida que SIEMPRE los escribe una persona, y por eso pueden
  *  vencer a un override anterior. Medido sobre 30 días: los 2.589
  *  `guide_registered` y los 1.083 `guide_created` llevan actor; los 15.969
- *  `courier_status` —el camino automático— no lo llevan nunca. */
-const HUMAN_GUIDE_EVENTS = new Set(["guide_registered", "guide_created"]);
+ *  `courier_status` —el camino automático— no lo llevan nunca.
+ *
+ *  `companion_linked` (MOM §32) por el mismo argumento: vincular un pedido a la
+ *  caja de otro es una persona decidiendo sobre la salida, y lo exige motivo.
+ *  Los cuatro casos que lo motivaron tenían justo un candado puesto como nota
+ *  —«comparte guía con…»— que congelaba a los dos pedidos. */
+const HUMAN_GUIDE_EVENTS = new Set(["guide_registered", "guide_created", COMPANION_LINKED]);
 
 export function isAgencyCourier(courier: string | null | undefined): boolean {
   return AGENCY_COURIERS.has((courier ?? "").toLowerCase());

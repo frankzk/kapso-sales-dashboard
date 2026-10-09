@@ -14,6 +14,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Badge, Banner, SidePanel, Skeleton, type BadgeTone } from "@/components/ops-ui";
 import { RoutesBoard } from "@/components/routes";
+import { RiderNotebookImport } from "@/components/rider-notebook-import";
 import { loadCourierRouteReport, type CourierRouteReport } from "@/app/dashboard/courier/actions";
 import { closeCourierBoxHref, readCourierReportRequest } from "@/lib/courier-box-href";
 import { routeDayLong } from "@/lib/dispatch";
@@ -118,6 +119,10 @@ export function CourierRouteReportView({ report, error, onClose, onChanged, onRe
           <Skeleton className="h-24" />
           <Skeleton className="h-48" />
         </div>
+      )}
+      {/* La hoja del motorizado sin app (§29.7): se carga aquí, no por SQL. */}
+      {report && route && route.status !== "cerrada" && (
+        <RiderNotebookImport routeId={route.id} riderName={riderName} routeDate={route.route_date} onApplied={onChanged} />
       )}
       {report && (
         <RoutesBoard

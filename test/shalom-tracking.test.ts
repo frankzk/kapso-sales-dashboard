@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   readShalomTracking,
   shalomDaysAtAgency,
-  shalomExitIsReturn,
+  shalomExitReturnDays,
+  shalomFirstArrival,
   shalomGuideWrite,
   shalomNeedsTracking,
   shalomTrackingChanged,
@@ -154,7 +155,7 @@ describe("el «entregado» de Shalom que es un retorno", () => {
       entregado: f(fecha),
     });
   const KP128064 = salida("2026-09-22 10:25:24");
-  const sinClaveNiCobro: ShalomExitFacts = { hasKey: true, keyGiven: false, collected: false };
+  const sinClaveNiCobro: ShalomExitFacts = { hasKey: true, keyGiven: false, collected: false, firstArrivalAt: null };
 
   it("el rastreo guarda cuándo llegó a la agencia de destino", () => {
     expect(KP128064.arrivedAt).toBe(llegada);
@@ -169,46 +170,99 @@ describe("el «entregado» de Shalom que es un retorno", () => {
     expect(shalomDaysAtAgency({ arrivedAt: "2026-08-17T04:48:09-05:00", at: "2026-09-22T10:25:24-05:00" })).toBe(36);
   });
 
-  it("#KP128064: clave registrada que nadie dio, sin cobro y 36 días en la agencia → retorno", () => {
-    expect(shalomExitIsReturn(KP128064, sinClaveNiCobro)).toBe(true);
+  it("#KP128064: clave registrada que nadie dio, sin cobro y 36 días en la agencia → retorno de 36 días", () => {
+    expect(shalomExitReturnDays(KP128064, sinClaveNiCobro)).toBe(36);
   });
 
   it("si la clave se reveló o se envió, la clienta pudo recogerlo: se respeta el recojo", () => {
-    expect(shalomExitIsReturn(KP128064, { ...sinClaveNiCobro, keyGiven: true })).toBe(false);
+    expect(shalomExitReturnDays(KP128064, { ...sinClaveNiCobro, keyGiven: true })).toBeNull();
   });
 
   it("si está cobrado, a la clienta se le libera la clave: se respeta el recojo", () => {
-    expect(shalomExitIsReturn(KP128064, { ...sinClaveNiCobro, collected: true })).toBe(false);
+    expect(shalomExitReturnDays(KP128064, { ...sinClaveNiCobro, collected: true })).toBeNull();
   });
 
   it("sin clave registrada no hay nada que pruebe que no pudo recogerlo", () => {
-    expect(shalomExitIsReturn(KP128064, { ...sinClaveNiCobro, hasKey: false })).toBe(false);
+    expect(shalomExitReturnDays(KP128064, { ...sinClaveNiCobro, hasKey: false })).toBeNull();
   });
 
   it("un recojo a los pocos días se respeta aunque falte el saldo: lo mira una persona", () => {
     // Como #KP125426, que salió de la agencia a los 3 días sin pago registrado
     // ni clave revelada: la alerta de cobro sigue encendida para revisarlo.
-    expect(shalomExitIsReturn(salida("2026-08-20 11:18:00"), sinClaveNiCobro)).toBe(false);
+    expect(shalomExitReturnDays(salida("2026-08-20 11:18:00"), sinClaveNiCobro)).toBeNull();
   });
 
   it("el umbral es de días enteros en la agencia", () => {
     expect(SHALOM_RETURN_MIN_DAYS).toBe(8);
-    expect(shalomExitIsReturn(salida("2026-08-25 04:48:08"), sinClaveNiCobro)).toBe(false); // 7 días y 23:59
-    expect(shalomExitIsReturn(salida("2026-08-25 04:48:09"), sinClaveNiCobro)).toBe(true); // 8 días
+    expect(shalomExitReturnDays(salida("2026-08-25 04:48:08"), sinClaveNiCobro)).toBeNull(); // 7 días y 23:59
+    expect(shalomExitReturnDays(salida("2026-08-25 04:48:09"), sinClaveNiCobro)).toBe(8); // 8 días
   });
 
-  it("sin fecha de llegada no se adivina un retorno", () => {
+  it("sin ninguna fecha de llegada no se adivina un retorno", () => {
     const sinLlegada = readShalomTracking({ transito: f("2026-08-15 11:20:53"), entregado: f("2026-09-22 10:25:24") });
-    expect(shalomExitIsReturn(sinLlegada, sinClaveNiCobro)).toBe(false);
+    expect(shalomExitReturnDays(sinLlegada, sinClaveNiCobro)).toBeNull();
+    // Si Shalom no la manda pero el rastreo la vio llegar, cuenta esa.
+    expect(shalomExitReturnDays(sinLlegada, { ...sinClaveNiCobro, firstArrivalAt: "2026-08-17T04:48:09+00:00" })).toBe(36);
   });
 
   it("solo se mira un «entregado»", () => {
     const enAgencia = readShalomTracking({ destino: f(llegada) });
-    expect(shalomExitIsReturn(enAgencia, sinClaveNiCobro)).toBe(false);
+    expect(shalomExitReturnDays(enAgencia, sinClaveNiCobro)).toBeNull();
     // Aunque el hito vivo llegue días después de la llegada.
     const enReparto = readShalomTracking({ destino: f(llegada), reparto: f("2026-08-27 09:00:00") });
     expect(shalomDaysAtAgency(enReparto)).toBe(10);
-    expect(shalomExitIsReturn(enReparto, sinClaveNiCobro)).toBe(false);
+    expect(shalomExitReturnDays(enReparto, sinClaveNiCobro)).toBeNull();
+  });
+});
+
+// Shalom mueve la fecha de `destino` mientras el paquete sigue en la agencia
+// (MOM §12, 05-10-2026). #KP129688 llegó el 26/08 y Shalom lo sacó el 05/10,
+// pero en la respuesta de ese día la llegada era de días antes: con ella, la
+// regla lo dejó pasar como recojo.
+describe("la llegada que cuenta es la primera", () => {
+  // El `disponible_para_recojo` que el rastreo escribió el 26/08, como lo
+  // devuelve la base: el texto de Shalom guardado en UTC.
+  const primera = "2026-08-26T14:48:53+00:00";
+  const KP129688 = readShalomTracking({
+    transito: f("2026-08-25 11:39:29"),
+    destino: f("2026-09-30 10:00:00"),
+    entregado: f("2026-10-05 13:45:13"),
+  });
+  const facts: ShalomExitFacts = { hasKey: true, keyGiven: false, collected: false, firstArrivalAt: primera };
+
+  it("con la llegada que manda Shalom al final, el retorno parecía un recojo de 5 días", () => {
+    expect(shalomDaysAtAgency(KP129688)).toBe(5);
+    expect(shalomExitReturnDays(KP129688, { ...facts, firstArrivalAt: null })).toBeNull();
+  });
+
+  it("contados desde la primera llegada son 39 días: es el retorno", () => {
+    expect(shalomExitReturnDays(KP129688, facts)).toBe(39);
+  });
+
+  it("gana la llegada más antigua, venga de donde venga", () => {
+    expect(shalomFirstArrival("2026-09-30 10:00:00", primera)).toBe(primera);
+    expect(shalomFirstArrival("2026-08-17 04:48:09", primera)).toBe("2026-08-17 04:48:09");
+    expect(shalomFirstArrival(null, primera)).toBe(primera);
+    expect(shalomFirstArrival("2026-08-17 04:48:09", null)).toBe("2026-08-17 04:48:09");
+    expect(shalomFirstArrival(null, null)).toBeNull();
+  });
+
+  it("una fecha que no se puede leer no cuenta", () => {
+    expect(shalomFirstArrival("ayer", primera)).toBe(primera);
+    expect(shalomFirstArrival("2026-08-17 04:48:09", "sin fecha")).toBe("2026-08-17 04:48:09");
+    expect(shalomFirstArrival("ayer", "sin fecha")).toBeNull();
+  });
+
+  it("una llegada más tardía en la línea de tiempo no acorta la cuenta", () => {
+    const KP128064 = readShalomTracking({ destino: f("2026-08-17 04:48:09"), entregado: f("2026-09-22 10:25:24") });
+    expect(shalomExitReturnDays(KP128064, { ...facts, firstArrivalAt: "2026-09-20T10:00:00+00:00" })).toBe(36);
+  });
+
+  it("la hora de Shalom sin zona y la de la base se leen igual", () => {
+    const salida = "2026-10-05 13:45:13";
+    expect(shalomDaysAtAgency({ arrivedAt: primera, at: salida })).toBe(39);
+    expect(shalomDaysAtAgency({ arrivedAt: "2026-08-26 14:48:53", at: salida })).toBe(39);
+    expect(shalomDaysAtAgency({ arrivedAt: primera, at: "2026-10-04 14:48:52" })).toBe(38);
   });
 });
 
@@ -217,19 +271,19 @@ describe("shalomGuideWrite", () => {
   const retorno = readShalomTracking({ destino: f("2026-08-17 04:48:09"), entregado: f("2026-09-22 10:25:24") });
 
   it("un recojo se escribe como siempre", () => {
-    expect(shalomGuideWrite(recojo, false)).toEqual({
+    expect(shalomGuideWrite(recojo, null)).toEqual({
       patch: { delivery_status: "entregado", status_category: "delivered", pickup_state: "recogido" },
       event: { new_status: "entregado", new_operational: "recogido", note: "Shalom: recogido.", payload: {} },
     });
     const transito = readShalomTracking({ transito: f("2026-04-15 14:08:21"), demora: f("2026-04-15 20:00:00") });
-    expect(shalomGuideWrite(transito, false)).toMatchObject({
+    expect(shalomGuideWrite(transito, null)).toMatchObject({
       patch: { delivery_status: "en_ruta", status_category: "pending", pickup_state: "en_transito" },
       event: { note: "Shalom: en_transito (con demora declarada)." },
     });
   });
 
   it("un retorno anula la guía, la pone de vuelta y fecha el cierre en la salida de la agencia", () => {
-    const write = shalomGuideWrite(retorno, true);
+    const write = shalomGuideWrite(retorno, 36);
     expect(write.patch).toEqual({
       delivery_status: "anulado",
       status_category: "closed",
@@ -246,12 +300,19 @@ describe("shalomGuideWrite", () => {
     expect(write.event.note).toContain("no un recojo");
   });
 
+  it("los días que se escriben son los de la regla, no los que diría la llegada de Shalom", () => {
+    const movida = readShalomTracking({ destino: f("2026-09-30 10:00:00"), entregado: f("2026-10-05 13:45:13") });
+    const write = shalomGuideWrite(movida, 39);
+    expect(write.event.note).toContain("tras 39 días");
+    expect(write.event.payload).toMatchObject({ dias_en_agencia: 39 });
+  });
+
   it("la guía anulada sale del rastreo: nadie la vuelve a dar por recogida", () => {
-    expect(shalomNeedsTracking(shalomGuideWrite(retorno, true).patch.delivery_status)).toBe(false);
+    expect(shalomNeedsTracking(shalomGuideWrite(retorno, 36).patch.delivery_status)).toBe(false);
   });
 
   it("escribir el retorno sobre una guía en la agencia cuenta como cambio", () => {
-    const { patch } = shalomGuideWrite(retorno, true);
+    const { patch } = shalomGuideWrite(retorno, 36);
     expect(
       shalomTrackingChanged(
         { delivery_status: "pendiente", pickup_state: "disponible_para_recojo" },

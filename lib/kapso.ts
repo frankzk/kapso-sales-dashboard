@@ -317,6 +317,12 @@ export async function sendWhatsappTemplate(
      */
     headerDocument?: { link: string; filename?: string };
     /**
+     * Imagen para una plantilla aprobada con cabecera de tipo imagen: la foto
+     * del producto del carrito (prueba de 0233). Meta la baja de `link` al
+     * enviar y solo acepta JPG o PNG, por eso pasa por /api/wa-image.
+     */
+    headerImage?: { link: string };
+    /**
      * La parte variable de los botones de URL DINÁMICA, uno por botón y en el
      * orden en que están en la plantilla. Meta solo deja una variable por
      * botón y tiene que ir AL FINAL de la URL aprobada: la plantilla guarda
@@ -338,6 +344,12 @@ export async function sendWhatsappTemplate(
           },
         },
       ],
+    });
+  }
+  if (params.headerImage) {
+    components.push({
+      type: "header",
+      parameters: [{ type: "image", image: { link: params.headerImage.link } }],
     });
   }
   if (params.bodyParams?.length) {

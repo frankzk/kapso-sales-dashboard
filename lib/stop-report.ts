@@ -35,6 +35,14 @@ export interface WriteStopReportInput {
   writtenPayment?: string | null;
   /** Coordinación o Liquidaciones 2 escribiendo por el motorizado. */
   delegated?: boolean;
+  /**
+   * Cargado desde la hoja del motorizado sin app (MOM §29.7, 08-10-2026):
+   * `reported_by` queda null —la marca de «desde el cuaderno», que lo exime de
+   * foto al cerrar y al pagar— y no se pide foto ni captura del Yape, porque
+   * nadie estuvo en la puerta con el teléfono. Quién lo cargó queda en
+   * `actor` y en la actividad del pedido.
+   */
+  notebook?: { riderName: string; importId: string } | null;
 }
 
 export type WriteStopReportResult =
@@ -75,6 +83,8 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
   const reason = isNonDeliveryReason(input.outcomeReason) ? input.outcomeReason : null;
   const photoPath = input.photoPath ?? stop.photo_path;
   const voucherPath = input.voucherPath ?? stop.voucher_path;
+  const notebook = input.notebook ?? null;
+  if (notebook && input.delegated) return { ok: false, error: "Un reporte desde el cuaderno no es delegado." };
   if (input.delegated && !photoPath) {
     return { ok: false, error: "Adjunta la evidencia del reporte por el motorizado." };
   }
@@ -89,7 +99,9 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
       hasPhoto: Boolean(photoPath),
       hasVoucher: Boolean(voucherPath),
     });
-    if (!validation.ok) return { ok: false, error: validation.errors.join(" ") };
+    // Desde el cuaderno no hay foto ni captura que pedir; lo demás vale igual.
+    const errors = validation.errors.filter((_, i) => !notebook || (validation.fields[i] !== "foto" && validation.fields[i] !== "yape"));
+    if (errors.length) return { ok: false, error: errors.join(" ") };
   }
 
   const now = new Date().toISOString();
@@ -113,7 +125,7 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
       written_status_code: input.writtenStatusCode ?? null,
       written_payment: input.writtenPayment ?? null,
       reported_at: input.status === "pendiente" ? null : now,
-      reported_by: input.status === "pendiente" ? null : input.actor,
+      reported_by: input.status === "pendiente" || notebook ? null : input.actor,
       updated_at: now,
     })
     .eq("id", input.stopId);
@@ -156,6 +168,7 @@ export async function writeStopReport(admin: SupabaseClient, input: WriteStopRep
       photoPath,
       voucherPath,
       delegated: Boolean(input.delegated),
+      notebook,
     }).catch(() => undefined);
   }
   if (unconfirmed && pickup) {
@@ -241,6 +254,7 @@ async function writeStopReportedEvent(
     stopId: string; routeId: string; orderId: string; actor: string; status: string;
     method: string | null; collected: number | null; reason: string | null; note: string | null;
     photoPath: string | null; voucherPath: string | null; delegated: boolean;
+    notebook?: { riderName: string; importId: string } | null;
   },
 ): Promise<void> {
   const [{ data: stopRow }, { data: rider }] = await Promise.all([
@@ -248,7 +262,9 @@ async function writeStopReportedEvent(
     admin.from("riders").select("full_name").eq("user_id", ev.actor).limit(1).maybeSingle(),
   ]);
   if (!stopRow?.store_id) return;
-  const who = ev.delegated ? "Coordinación reportó por el motorizado" : rider?.full_name ? `${rider.full_name} reportó` : "Reporte";
+  const who = ev.notebook
+    ? `Cuaderno de ${ev.notebook.riderName}`
+    : ev.delegated ? "Coordinación reportó por el motorizado" : rider?.full_name ? `${rider.full_name} reportó` : "Reporte";
   const parts: string[] = [];
   if (ev.status === "entregado") {
     parts.push("Entregado");
@@ -259,6 +275,7 @@ async function writeStopReportedEvent(
   }
   const evidence = [ev.photoPath ? "foto" : null, ev.voucherPath ? "comprobante" : null].filter(Boolean).join(" y ");
   if (evidence) parts.push(`con ${evidence}`);
+  else if (ev.notebook) parts.push("sin foto");
   if (ev.note?.trim()) parts.push(`«${ev.note.trim()}»`);
   await admin.from("order_events").insert({
     store_id: stopRow.store_id,
@@ -273,6 +290,7 @@ async function writeStopReportedEvent(
     payload: {
       stop_id: ev.stopId, route_id: ev.routeId, status: ev.status, payment_method: ev.method,
       collected_amount: ev.collected, outcome_reason: ev.reason, photo_path: ev.photoPath, voucher_path: ev.voucherPath,
+      ...(ev.notebook ? { origen: "cuaderno", notebook_import_id: ev.notebook.importId } : {}),
     },
   });
 }

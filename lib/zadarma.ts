@@ -28,7 +28,7 @@
 // con la query ordenada por clave y codificada como `http_build_query` de PHP
 // (RFC 1738: espacio → «+»).
 
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 export const ZADARMA_API_BASE = "https://api.zadarma.com";
 
@@ -156,4 +156,166 @@ export async function requestCallback(
     };
   }
   return { ok: true, response: body, from: built.params.from, to: built.params.to };
+}
+
+// ── Avisos de la centralita (webhook) ───────────────────────────────────────
+//
+// Zadarma avisa los pasos de cada llamada por POST (formulario) a la URL de
+// «Notificaciones» de la centralita. Firma de su librería oficial
+// (zadarma/user-api-v1, lib/Webhook/*.php y Client::encodeSignature):
+//
+//   Signature = base64( hex( hmac_sha1( cadena, secret ) ) )
+//
+// con la cadena según el evento:
+//   NOTIFY_START, NOTIFY_END          → caller_id + called_did + call_start
+//   NOTIFY_OUT_START, NOTIFY_OUT_END  → internal + destination + call_start
+//
+// Al guardar la URL, Zadarma la verifica con `?zd_echo=<x>` y espera `<x>`.
+
+export const ZADARMA_END_EVENTS = new Set(["NOTIFY_END", "NOTIFY_OUT_END"]);
+
+/** La cadena firmada de un aviso, o null si el evento no se maneja. */
+export function zadarmaNotifyString(p: Record<string, string>): string | null {
+  switch (p.event) {
+    case "NOTIFY_START":
+    case "NOTIFY_END":
+      return `${p.caller_id ?? ""}${p.called_did ?? ""}${p.call_start ?? ""}`;
+    case "NOTIFY_OUT_START":
+    case "NOTIFY_OUT_END":
+      return `${p.internal ?? ""}${p.destination ?? ""}${p.call_start ?? ""}`;
+    default:
+      return null;
+  }
+}
+
+export function zadarmaNotifySignature(str: string, secret: string): string {
+  const hex = createHmac("sha1", secret).update(str, "utf8").digest("hex");
+  return Buffer.from(hex, "utf8").toString("base64");
+}
+
+/** ¿El aviso viene firmado por la cuenta? Un evento que no se maneja, no. */
+export function zadarmaNotifyValid(p: Record<string, string>, signature: string | null, secret: string): boolean {
+  const str = zadarmaNotifyString(p);
+  if (str === null || !signature || !secret) return false;
+  const want = Buffer.from(zadarmaNotifySignature(str, secret));
+  const got = Buffer.from(signature.trim());
+  return want.length === got.length && timingSafeEqual(want, got);
+}
+
+/** Los teléfonos de un aviso, en el formato de la cuenta: el de la clienta está entre ellos. */
+export function zadarmaNotifyPhones(p: Record<string, string>): string[] {
+  return [p.destination, p.caller_id, p.called_did]
+    .map((x) => zadarmaLocalPeru(x))
+    .filter((x): x is string => Boolean(x));
+}
+
+// ── Llamadas terminadas, por consulta (05-10-2026) ──────────────────────────
+//
+// El aviso de fin de llamada (webhook) no se puede usar: la cuenta comparte la
+// única URL de «llamadas a la centralita» con otra operación (KairoAI). En su
+// lugar, el barrido le pregunta a Zadarma por las llamadas TERMINADAS
+// (`/v1/statistics/` y `/v1/statistics/pbx/`, que solo listan llamadas que ya
+// acabaron) y cierra las de Daaph que Kapta sigue viendo abiertas.
+//
+// Las horas de la estadística (`callstart`) vienen en la zona horaria de la
+// cuenta: se lee con `/v1/info/timezone/` (hora local y unixtime) y se corrige.
+
+/** GET firmado a la API de Zadarma; null si falla (quien llama sigue sin cerrar). */
+export async function zadarmaGet(
+  creds: ZadarmaCredentials,
+  method: string,
+  params: Record<string, string | number | undefined | null>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Record<string, unknown> | null> {
+  const query = zadarmaQuery(params);
+  const sign = zadarmaSignature(method, query, creds.secret);
+  try {
+    const res = await fetchImpl(`${ZADARMA_API_BASE}${method}${query ? `?${query}` : ""}`, {
+      method: "GET",
+      headers: { Authorization: `${creds.key}:${sign}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    return res.ok && body.status === "success" ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cuánto adelanta la hora local de la cuenta a UTC, en ms, a partir de la
+ * respuesta de `/v1/info/timezone/` (`unixtime` y `datetime` local). Se
+ * redondea a 15 min: la diferencia entre ambos campos es solo la zona.
+ */
+export function zadarmaOffsetMs(tz: { unixtime?: unknown; datetime?: unknown } | null): number | null {
+  const unix = Number(tz?.unixtime);
+  const local = Date.parse(`${String(tz?.datetime ?? "").replace(" ", "T")}Z`);
+  if (!Number.isFinite(unix) || !Number.isFinite(local)) return null;
+  const q = 15 * 60_000;
+  return Math.round((local - unix * 1000) / q) * q;
+}
+
+/** Fecha en la hora local de la cuenta, como la pide la estadística (`Y-m-d H:i:s`). */
+export function zadarmaLocalStamp(at: Date, offsetMs: number): string {
+  return new Date(at.getTime() + offsetMs).toISOString().slice(0, 19).replace("T", " ");
+}
+
+export interface ZadarmaEndedCall {
+  disposition: string;
+  seconds: number | null;
+  /** Inicio de la llamada en UTC (ISO). */
+  startedAt: string;
+}
+
+/**
+ * ¿Terminó la llamada a este teléfono que Kapta marcó en `dialedAt`? Busca en la
+ * estadística (que solo trae llamadas terminadas) una al mismo número que haya
+ * empezado desde un minuto antes de marcar. Una llamada anterior al mismo
+ * teléfono (otro intento, otro día) no cuenta. Con `answeredOnly` (llamada en
+ * curso) solo vale el registro contestado.
+ */
+export function zadarmaEndedCallFor(
+  stats: readonly Record<string, unknown>[],
+  opts: { phone: string; dialedAt: string; offsetMs: number; answeredOnly?: boolean },
+): ZadarmaEndedCall | null {
+  const phone = zadarmaLocalPeru(opts.phone);
+  const since = Date.parse(opts.dialedAt) - 60_000;
+  if (!phone || !Number.isFinite(since)) return null;
+  for (const s of stats) {
+    const to = [s.to, s.destination].map((x) => zadarmaLocalPeru(x == null ? null : String(x)));
+    if (!to.includes(phone)) continue;
+    const local = Date.parse(`${String(s.callstart ?? "").replace(" ", "T")}Z`);
+    if (!Number.isFinite(local)) continue;
+    const startedAt = local - opts.offsetMs;
+    if (startedAt < since) continue;
+    // Un callback deja más de un registro: uno «failed» de 0 s apareció el
+    // 05-10 mientras la clienta hablaba con Daaph. Una llamada en curso solo se
+    // da por terminada con el registro de la conversación («answered»).
+    if (opts.answeredOnly && String(s.disposition ?? "").toLowerCase() !== "answered") continue;
+    const seconds = Number(s.billseconds ?? s.seconds);
+    return {
+      disposition: String(s.disposition ?? ""),
+      seconds: Number.isFinite(seconds) ? seconds : null,
+      startedAt: new Date(startedAt).toISOString(),
+    };
+  }
+  return null;
+}
+
+/** Cómo se dice en el historial lo que Zadarma contestó de una llamada que no llegó al agente. */
+export function zadarmaNoAnswerResumen(disposition: string | undefined): string {
+  switch ((disposition ?? "").toLowerCase()) {
+    case "busy":
+      return "No contestó: la línea estaba ocupada.";
+    case "no answer":
+      return "No contestó: timbró sin respuesta.";
+    case "cancel":
+      return "No contestó: la llamada se canceló antes de que contestara.";
+    case "answered":
+      return "No contestó: colgó antes de hablar con el agente.";
+    case "unallocated number":
+      return "No contestó: el número no existe.";
+    default:
+      return `No contestó: la llamada no se completó (${disposition || "sin causa"}).`;
+  }
 }

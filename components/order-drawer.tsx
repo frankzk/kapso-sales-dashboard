@@ -53,6 +53,7 @@ import {
   IconX,
 } from "@/components/icons";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
+import { OrderCompanionPanel } from "@/components/order-companion-panel";
 import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
 import { CopyButton } from "@/components/copy-button";
 import { AliclikCoverageProbe } from "@/components/aliclik-coverage-probe";
@@ -342,6 +343,19 @@ function drawerNextAction(row: OrderMasterRow, showPayments: boolean, gfSentence
   }
 
   if (stage === "preparacion") {
+    // Pedido acompañante (MOM §32): su caja es la de otro pedido. No hay nada
+    // que preparar aquí; mandar a «Revisar rutas» empujaba a crearle una guía.
+    if (substage === "en_caja_de_otro_pedido") {
+      return {
+        eyebrow: "Preparación · pedido acompañante",
+        title: "Viaja en la caja de otro pedido",
+        description:
+          "Sus productos van en la caja y la guía de su pedido principal: no necesita rótulo ni guía propia. Sigue a esa caja hasta la entrega y la liquidación.",
+        cta: "Ver la caja",
+        target: "guias",
+        tone: "indigo",
+      };
+    }
     if (substage === "incidencia_preparacion") {
       return {
         eyebrow: "Preparación · incidencia",
@@ -877,10 +891,13 @@ export function OrderDrawer({
   // tarde o temprano deja de coincidir con la primera. `blocked` también cuenta:
   // si la ruta está frenada (por ejemplo, tope de salidas), crear la guía por el
   // panel sería saltarse el mismo límite por la puerta de atrás.
+  // Y no a un pedido acompañante (MOM §32): ya viaja en la guía de otro, y una
+  // propia sería un segundo paquete para la misma clienta.
   const aliclikOffered = Boolean(
-    detail?.routePlan.candidates.some(
-      (candidate) => candidate.action === "aliclik" && candidate.availability !== "blocked",
-    ),
+    !detail?.companion.travelsIn &&
+      detail?.routePlan.candidates.some(
+        (candidate) => candidate.action === "aliclik" && candidate.availability !== "blocked",
+      ),
   );
 
   // La ficha del §8 se carga aparte del detalle —recorre el historial del
@@ -1385,9 +1402,11 @@ export function OrderDrawer({
                   help="Cada salida conserva su courier, rótulo, QR y resultado independiente."
                 />
                 {detail.guides.length === 0 ? (
-                  <p className="text-sm text-ink-500">
-                    Sin gestión logística registrada todavía.
-                  </p>
+                  detail.companion.travelsIn ? null : (
+                    <p className="text-sm text-ink-500">
+                      Sin gestión logística registrada todavía.
+                    </p>
+                  )
                 ) : (
                   // Filas de borde a borde, con la hairline de la tarjeta: un marco
                   // dentro de la tarjeta sería una tarjeta dentro de otra.
@@ -1583,6 +1602,26 @@ export function OrderDrawer({
                     })}
                   </ul>
                 )}
+                {/* Pedido acompañante (MOM §32): en qué caja viaja este pedido, o
+                    qué lleva en las suyas y cuánto debe cobrar la guía. */}
+                <OrderCompanionPanel
+                  orderId={orderId}
+                  orderName={detail.row.order_name}
+                  orderTotal={detail.row.order_total}
+                  companion={detail.companion}
+                  canEdit={canEdit}
+                  // Solo donde el pedido todavía espera salir: un pedido ya en
+                  // curso o entregado salió en su propia caja, y ofrecérselo en
+                  // todos sería ruido. El servidor vuelve a comprobar la regla.
+                  canBeCompanion={
+                    (detail.row.macro_stage === "por_confirmar" || detail.row.macro_stage === "preparacion") &&
+                    !detail.guides.some(
+                      (g) => (g.delivery_status === "pendiente" || g.delivery_status === "en_ruta") && !g.returned_at,
+                    )
+                  }
+                  pending={pending}
+                  run={run}
+                />
                 {/* El cobro del courier lo confirma una PERSONA en Validar
                     pagos: el lector de imágenes prepara la ficha, pero valida una
                     imagen, no un depósito. Desde acá se llega de un clic en vez

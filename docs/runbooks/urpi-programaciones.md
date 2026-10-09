@@ -109,19 +109,25 @@ en reportes de entrega ni cambia fechas por sí sola.
    o cambiado, y cada cambio deja versión.
 4. Revisar las listas:
    - **Entregados por marcar**: seleccionar y «Marcar entregados». Exige
-     `master.edit`. Pasa por `lib/master-door.ts` como la liquidación.
+     `master.edit`. Pasa por `lib/master-door.ts` como la liquidación y
+     convierte la salida «Por definir» del pedido en salida de Urpi entregada
+     (`lib/urpi-salida.ts`). Incluye los anulados solo en Kapta.
+   - **Aviso de salidas «Por definir»**: entregados que se marcaron antes de que
+     existiera el relleno. «Pasar a salida de Urpi entregada» los completa.
    - **Cancelados por Urpi** y **Reprogramados**: para Seguimiento Lima; no
      cambian el Master.
-   - **Por vincular**: elegir el pedido de la lista o escribir su código. Se
-     vincula toda la cadena de intentos y queda como manual.
-   - **Observaciones**: Urpi dice entregado y Kapta lo tiene anulado o devuelto.
+   - **Por vincular – entregados / – otros**: elegir el pedido de la lista o
+     escribir su código. Se vincula toda la cadena de intentos y queda manual.
+   - **Observaciones**: Urpi entregó y cobró, pero el pedido está anulado en
+     Shopify o devuelto. Vincular al pedido rehecho en Shopify, o «Cerrar con
+     motivo» (queda en la actividad del pedido; no cambia su estado).
 
 El vínculo es por teléfono (el reporte no trae código de pedido): un único
 pedido de Kenku o Aurela con ese teléfono creado en los 45 días previos al envío.
 Con varios, decide una persona. Si Urpi añade algún día el código de pedido a su
 export, conviene usarlo y retirar el cruce por teléfono.
 
-Verificación: `npm test -- test/urpi-report.test.ts test/urpi-report-link.test.ts test/urpi-report-import.test.ts`
+Verificación: `npm test -- test/urpi-report.test.ts test/urpi-report-link.test.ts test/urpi-report-import.test.ts test/urpi-salida.test.ts`
 y, en un Postgres desechable, `bash scripts/verify-urpi-report.sh` (RLS por
 tienda y organización, versiones por cambio, vínculo manual que ninguna lectura
 pisa, pedidos solo de la misma organización). Nunca contra Supabase.

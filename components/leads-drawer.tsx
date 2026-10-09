@@ -23,11 +23,11 @@ import {
   MANUAL_STATUSES,
   categoryOf,
   labelOf,
-  leadSegment,
+  leadQueueBucket,
   leadWindowInfo,
   yapeKind,
-  type LeadSegment,
   type LeadWindow,
+  type QueueBucket,
   type YapeKind,
   leadHandle,
   leadCanCall,
@@ -216,25 +216,20 @@ function MetaAttribution({ lead, adMeta }: { lead: LeadRow; adMeta: AdMeta | nul
   );
 }
 
-const SEGMENT_BADGE: Record<LeadSegment, string> = {
+// Same buckets and colors as the row pill in components/leads.tsx.
+const SEGMENT_BADGE: Record<QueueBucket, string> = {
   carrito: "bg-emerald-50 text-emerald-700",
-  interes: "bg-amber-50 text-amber-700",
+  distrito: "bg-amber-50 text-amber-700",
+  producto: "bg-yellow-50 text-yellow-800",
   converso: "bg-blue-50 text-blue-700",
   frio: "bg-slate-100 text-slate-500",
 };
 
 // Plain calificación labels (no emoji) for the row/drawer pills, per the redesign.
-const SEG_PILL_LABEL: Record<LeadSegment, string> = {
+const SEG_PILL_LABEL: Record<QueueBucket, string> = {
   carrito: "Con carrito",
-  interes: "Distrito o producto",
-  converso: "Conversó",
-  frio: "Frío",
-};
-
-// Labels for the segment "accesos directos" row (only Carrito carries an emoji).
-const SEG_TAB_LABEL: Record<LeadSegment, string> = {
-  carrito: "🛒 Carrito",
-  interes: "Distrito o producto",
+  distrito: "Dio distrito",
+  producto: "Vio producto",
   converso: "Conversó",
   frio: "Frío",
 };
@@ -247,7 +242,7 @@ const OUTCOME_SEG_BADGE: Record<"won" | "lost", { label: string; cls: string }> 
 };
 
 /** Calificación chip per row. Active leads (open/hot) show their engagement level
- *  (Frío → Conversó → Dio distrito → Con carrito); leads that are already won or
+ *  (Frío → Conversó → Vio producto → Dio distrito → Con carrito); leads that are already won or
  *  lost show the outcome (Ganados/Perdidos) — the engagement level is meaningless
  *  once the lead is closed, and "Con carrito" on a cancelled lead is misleading.
  *  The specific reason (e.g. "Cancelado por cliente") stays available on hover. */
@@ -264,7 +259,7 @@ function SegmentBadge({ lead }: { lead: LeadRow }) {
       </span>
     );
   }
-  const seg = leadSegment(lead);
+  const seg = leadQueueBucket(lead);
   return (
     <span className={cn("whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium", SEGMENT_BADGE[seg])}>
       {SEG_PILL_LABEL[seg]}

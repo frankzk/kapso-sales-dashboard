@@ -13,6 +13,8 @@
 // the report already says ENTREGADO. The `pendiente` queue is split in the UI by
 // `fenix_eligible` (only guides with Swayp stock in their city are worked).
 
+import { SWAYP_STATES } from "@/lib/swayp-states";
+
 export type ShipmentCategory = "pending" | "in_route" | "delivered" | "closed" | "transferred";
 
 /**
@@ -784,6 +786,84 @@ export function shipmentRequiresCourierResult(
   deliveryStatus: string | null | undefined,
 ): boolean {
   return courier === "fenix" && deliveryStatus === "en_ruta";
+}
+
+/**
+ * ¿Swayp informa el resultado de esta guía por su API? (08-10-2026)
+ *
+ * «Registrar resultado del courier» nació en julio, cuando Fénix no le decía
+ * nada a Kapta y alguien escribía lo que reportaba el motorizado. Desde el
+ * 29-09-2026 el barrido lee cada guía con número de Swayp cada media hora
+ * (§11.2): la entrega, la cancelación, la devolución y la novedad llegan solas.
+ * Con número emitido por Swayp, pedirlo como «Obligatorio» repetía lo que
+ * Swayp ya dijo —y sin ofrecer «Devolución», así que parecía que faltaba el
+ * estado (#KP135202)—.
+ *
+ * Desde que nace, no desde la primera lectura (08-10-2026): la guía nueva de
+ * #KP135202 se creó a las 10:25 y, antes de que el barrido la leyera, alguien
+ * registró «No contesta» en el recuadro viejo; se perdió la fecha del reenvío.
+ * El barrido lee toda guía viva con número de Swayp, así que el número basta.
+ */
+export function swaypInformsByApi(s: { courier?: string | null; swayp_guide?: string | null }): boolean {
+  return s.courier === "fenix" && Boolean(s.swayp_guide);
+}
+
+/**
+ * Resultados que no se registran a mano en una guía que Swayp informa por API.
+ * «No contesta» la pasaría a Pendiente, y la siguiente lectura la devolvería a
+ * En ruta mientras Swayp diga reparto o novedad: la gestión se perdía sola en
+ * media hora. Ahí lo que toca es resolver la novedad en Swayp.
+ */
+export const SWAYP_API_MANUAL_EXCLUDED: ReadonlySet<CourierReportResult> = new Set<CourierReportResult>(["no_contesta"]);
+
+/**
+ * La segunda mitad de la chapa de una guía Swayp viva: lo que la lista no puede
+ * decir con `en_ruta` solo. El paquete puede ir a entregarse, esperar una
+ * instrucción o venir de vuelta, y los tres se guardan `en_ruta`.
+ */
+export function swaypLiveSubState(s: {
+  courier?: string | null;
+  delivery_status: string;
+  swayp_state?: number | null;
+}): string | null {
+  if (s.courier !== "fenix" || s.delivery_status !== "en_ruta") return null;
+  if (s.swayp_state === 8) return "en devolución";
+  if (s.swayp_state === 6) return "con novedad";
+  return null;
+}
+
+/** Lo que informó Swayp de una guía viva, en palabras, y qué toca hacer. */
+export function swaypReadingSummary(
+  state: number | null | undefined,
+  opts: { canResend: boolean },
+): { estado: string; detalle: string; siguiente: string } {
+  const nombre = state != null ? SWAYP_STATES[state] : undefined;
+  const estado = nombre ? `${nombre} (${state})` : "Sin estado reconocido";
+  switch (state) {
+    case 1:
+    case 2:
+    case 3:
+      return { estado, detalle: "Todavía está en la bodega de Swayp.", siguiente: "Nada que registrar: Swayp avisa cuando salga." };
+    case 4:
+    case 5:
+      return { estado, detalle: "El mensajero la tiene y va a entregarla.", siguiente: "Nada que registrar: la entrega o la novedad llegan solas." };
+    case 6:
+      return {
+        estado,
+        detalle: "El mensajero espera una instrucción.",
+        siguiente: "Habla con la clienta y resuelve la novedad: Swayp reprograma, cambia la dirección o la devuelve.",
+      };
+    case 8:
+      return {
+        estado,
+        detalle: "Swayp no entregó y el paquete vuelve a su bodega.",
+        siguiente: opts.canResend
+          ? "Si la clienta lo quiere, reenvíalo con «Reenviar por Swayp». Si la devolución fue un error, resuelve la novedad para que vuelva a reparto."
+          : "Si la devolución fue un error, resuelve la novedad para que vuelva a reparto.",
+      };
+    default:
+      return { estado, detalle: "Swayp informó un estado que Kapta no traduce.", siguiente: "Revísala en el panel de Swayp." };
+  }
 }
 
 export interface CourierReportTransition {

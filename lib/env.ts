@@ -56,6 +56,10 @@ export const env = {
     return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
   },
 
+  // Número propio del Agente Telnyx (el `?agente=` de su agente en xAI), para
+  // que llame a la vez que Daaph. Vacío = comparte número y turno con Daaph.
+  voiceAgentNumberTelnyx: () => (process.env.VOICE_AGENT_NUMBER_TELNYX ?? "").trim(),
+
   // --- non-secret runtime config ---
   shopifyApiVersion: () => process.env.SHOPIFY_API_VERSION ?? "2025-01",
   kapsoApiBase: () =>

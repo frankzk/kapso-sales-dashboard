@@ -127,6 +127,12 @@ export const PERMISSIONS = [
   // las guías de Aliclik, Tanders y Shalom: quien puede leer la cola no queda
   // habilitado por eso a vender a nombre de la tienda.
   "orders.create",
+  // Descargar en Excel/CSV el Master de Pedidos, los pedidos o el resumen
+  // diario (08-10-2026). Una descarga es la base de clientes entera —nombre,
+  // teléfono, distrito y monto de ~28.000 pedidos— en un clic, y ninguna
+  // vendedora la necesita para trabajar: ve en pantalla lo que gestiona. Viene
+  // con owner y admin; a una vendedora de confianza se le concede en Equipo.
+  "data.export",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -198,15 +204,33 @@ export const GRANTED_ONE_BY_ONE = [
     description: "Gestionar clientes, tarifas y parámetros del operador logístico.",
     lastOneMatters: false,
   },
+  {
+    permission: "data.export",
+    label: "Exportar datos",
+    description: "Descargar en Excel o CSV el Master de Pedidos, los pedidos y el resumen diario. Viene con dueño y admin.",
+    lastOneMatters: false,
+    // Owner y admin ya exportaban: quitárselo no es lo que se pidió. La casilla
+    // está para concedérselo a una vendedora concreta (08-10-2026).
+    withAdminRole: true,
+  },
 ] as const satisfies readonly {
   permission: Permission;
   label: string;
   description: string;
   lastOneMatters: boolean;
+  /** Viene con el rol admin y además tiene casilla en Equipo para los demás roles. */
+  withAdminRole?: boolean;
 }[];
 
 const ONE_BY_ONE: ReadonlySet<string> = new Set(
   GRANTED_ONE_BY_ONE.map((entry) => entry.permission),
+);
+
+/** Los de concesión individual que el rol admin NO trae. */
+const NOT_IN_ADMIN_ROLE: ReadonlySet<string> = new Set(
+  GRANTED_ONE_BY_ONE.filter((entry) => !("withAdminRole" in entry && entry.withAdminRole)).map(
+    (entry) => entry.permission,
+  ),
 );
 
 /** ¿Este permiso se concede a mano en vez de venir con el rol? */
@@ -232,7 +256,7 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
       // enumerarlos acá era lo que dejó a `shalom.override_payment_validation`
       // dentro del rol `admin` —catorce personas— cuando `payments.validate` ya
       // se había sacado por la misma razón.
-      !ONE_BY_ONE.has(permission),
+      !NOT_IN_ADMIN_ROLE.has(permission),
   ),
   // La vendedora carga la liquidación y corrige vínculos, pero NO la cierra:
   // cerrar congela lo que se le paga al motorizado y no se deshace.

@@ -22,9 +22,19 @@ import {
   type Ficha,
   type GestionAction,
   type OpenCall,
+  type VoiceLanes,
 } from "@/lib/voice-recovery";
 import { compareVoiceCandidates, voiceRecoveryEligible } from "@/lib/voice-recovery-queue";
-import { requestCallback, zadarmaLocalPeru } from "@/lib/zadarma";
+import {
+  requestCallback,
+  zadarmaEndedCallFor,
+  zadarmaGet,
+  zadarmaLocalPeru,
+  zadarmaLocalStamp,
+  zadarmaNoAnswerResumen,
+  zadarmaOffsetMs,
+  type ZadarmaCredentials,
+} from "@/lib/zadarma";
 import {
   agentSipUriFor,
   clienteDialBody,
@@ -33,7 +43,7 @@ import {
   type TelnyxConfig,
   type VoiceEngine,
 } from "@/lib/telnyx";
-import { reenviarGuiaAnulada } from "@/lib/swayp-reenvio";
+import { buscarOrigenReenvio, reenviarGuiaAnulada } from "@/lib/swayp-reenvio";
 import { parseSenders } from "@/lib/swayp-guide";
 import { inspectAuto, pilotUsedToday } from "@/lib/swayp-auto-server";
 import { evaluateAutoDispatch, type AutoSettings } from "@/lib/swayp-auto-policy";
@@ -58,6 +68,27 @@ function secretEquals(provided: string | null | undefined, expected: string): bo
  */
 export function voiceToolAuthorized(req: NextRequest): boolean {
   return voiceToolSecretMatches(req.headers, [env.voiceToolsSecret(), env.voiceToolsSecretElevenLabs()]);
+}
+
+/**
+ * Qué motor llamó a la tool, por el secreto que trajo: el de ElevenLabs o el de
+ * xAI. Null si los dos secretos son el mismo (o falta el de ElevenLabs): ahí no
+ * se puede distinguir y los agentes no llaman en paralelo (`voiceLanes`).
+ */
+export function voiceToolEngine(headers: Pick<Headers, "get">): "grok" | "elevenlabs" | null {
+  const main = env.voiceToolsSecret();
+  const eleven = env.voiceToolsSecretElevenLabs();
+  if (!eleven || eleven === main) return null;
+  if (voiceToolSecretMatches(headers, [eleven])) return "elevenlabs";
+  if (voiceToolSecretMatches(headers, [main])) return "grok";
+  return null;
+}
+
+/** Qué agentes pueden llamar a la vez (MOM §11.8, agentes en paralelo). */
+export function voiceLanes(): VoiceLanes {
+  const main = env.voiceToolsSecret();
+  const eleven = env.voiceToolsSecretElevenLabs();
+  return { elevenOwn: Boolean(eleven) && eleven !== main, telnyxNumber: env.voiceAgentNumberTelnyx() };
 }
 
 /** Separado para probarlo sin Request. Un secreto vacío nunca autoriza. */
@@ -172,15 +203,9 @@ async function noteOnRecoveryGuide(
   nextContactOn: string | null,
   now: Date,
 ): Promise<void> {
-  const { data } = await admin
-    .from("shipments")
-    .select("id")
-    .eq("order_id", call.order_id)
-    .eq("delivery_status", "anulado")
-    .is("fenix_shipment_id", null)
-    .order("updated_at", { ascending: false })
-    .limit(1);
-  const guia = (data ?? [])[0] as { id: string } | undefined;
+  // La guía que Envíos ofrece reenviar: la anulada o, en provincia, la Swayp en
+  // devolución (`buscarOrigenReenvio`).
+  const guia = await buscarOrigenReenvio(admin, call.order_id);
   if (!guia) return;
   const followup = nextContactOn ? `${nextContactOn}T00:00:00Z` : null;
   const firma = await voiceNoteSigner(admin, call.id);
@@ -265,10 +290,123 @@ export async function closeAsNoAnswer(
   }
 }
 
+/** Margen para que llegue un `registrar_gestion` pedido a la vez que el corte. */
+export const HANGUP_GRACE_MS = 3_000;
+
+/**
+ * La conversación se cortó y el agente no registró nada: se cierra como «no
+ * contesta» al momento, sin esperar al barrido. Lo llaman los avisos de corte
+ * de Telnyx y de Zadarma (MOM §11.8). Con el barrido, la cola quedaba parada
+ * ~10 min tras cada corte (04-10-2026). El error empieza con «sin
+ * registrar_gestion», como el del barrido: la comparación la sigue contando
+ * como atendida y cortada sin gestión.
+ */
+export async function closeCutWithoutGestion(
+  admin: SupabaseClient,
+  c: Pick<OpenCall, "id" | "status"> & { store_id: string; order_id: string; mode: "real" | "test" },
+  now: Date,
+): Promise<void> {
+  await new Promise((r) => setTimeout(r, HANGUP_GRACE_MS));
+  await closeAsNoAnswer(
+    admin,
+    c,
+    "No contestó: la llamada llegó al agente pero se cortó sin gestión (buzón o cuelgue).",
+    now,
+    { error: "sin registrar_gestion: se cortó la llamada", soloSinGestion: true },
+  );
+}
+
+/** Eventos guardados por llamada en `telephony_response.eventos`. */
+const MAX_EVENTOS = 40;
+
+/**
+ * Cierra las llamadas de Daaph (Zadarma) que ya terminaron, preguntándole a la
+ * estadística de Zadarma (MOM §11.8, 05-10-2026). Zadarma no le avisa a Kapta
+ * del corte: la URL de avisos de la cuenta la usa KairoAI. Sin esto, un corte
+ * sin `registrar_gestion` dejaba a Daaph «en llamada» hasta el vigilante.
+ *
+ *   · terminó «en curso» → corte sin gestión (como Telnyx);
+ *   · terminó «marcando» → «no contesta», con la causa de Zadarma.
+ *
+ * Si la API falla, no cierra nada: queda el vigilante. Devuelve cuántas cerró.
+ */
+export async function reconcileZadarmaCalls(
+  admin: SupabaseClient,
+  now: Date,
+  fetchImpl: typeof fetch = fetch,
+): Promise<number> {
+  const { data } = await admin
+    .from("voice_calls")
+    .select("id, store_id, order_id, mode, status, phone, dialed_at, telephony_response")
+    .eq("telephony", "zadarma")
+    .in("status", OPEN_STATUSES as unknown as string[]);
+  type Row = {
+    id: string;
+    store_id: string;
+    order_id: string;
+    mode: "real" | "test";
+    status: "dialing" | "in_progress";
+    phone: string;
+    dialed_at: string;
+    telephony_response: Record<string, unknown> | null;
+  };
+  const rows = ((data ?? []) as Row[]).filter((r) => Number.isFinite(Date.parse(r.dialed_at)));
+  if (!rows.length) return 0;
+
+  let creds: ZadarmaCredentials;
+  try {
+    creds = { key: env.zadarmaKey(), secret: env.zadarmaSecret() };
+  } catch {
+    return 0;
+  }
+  const offsetMs = zadarmaOffsetMs(await zadarmaGet(creds, "/v1/info/timezone/", {}, fetchImpl));
+  if (offsetMs === null) return 0;
+  const from = new Date(Math.min(...rows.map((r) => Date.parse(r.dialed_at))) - 10 * 60_000);
+  const window = {
+    start: zadarmaLocalStamp(from, offsetMs),
+    end: zadarmaLocalStamp(new Date(now.getTime() + 60_000), offsetMs),
+  };
+  const [general, pbx] = await Promise.all([
+    zadarmaGet(creds, "/v1/statistics/", { ...window, limit: 1000 }, fetchImpl),
+    zadarmaGet(creds, "/v1/statistics/pbx/", { ...window, version: 2 }, fetchImpl),
+  ]);
+  const stats = [general, pbx].flatMap((b) =>
+    Array.isArray(b?.stats) ? (b.stats as Record<string, unknown>[]) : [],
+  );
+  if (!general && !pbx) return 0;
+
+  let closed = 0;
+  for (const row of rows) {
+    const ended = zadarmaEndedCallFor(stats, {
+      phone: row.phone,
+      dialedAt: row.dialed_at,
+      offsetMs,
+      answeredOnly: row.status === "in_progress",
+    });
+    if (!ended) continue;
+    const telephony = { ...(row.telephony_response ?? {}) };
+    const eventos = Array.isArray(telephony.eventos) ? [...(telephony.eventos as unknown[])] : [];
+    eventos.push({
+      t: now.toISOString(),
+      tipo: "zadarma.stats",
+      causa: ended.disposition,
+      ...(ended.seconds !== null ? { segundos: ended.seconds } : {}),
+      inicio: ended.startedAt,
+    });
+    telephony.eventos = eventos.slice(-MAX_EVENTOS);
+    await admin.from("voice_calls").update({ telephony_response: telephony }).eq("id", row.id);
+    if (row.status === "in_progress") await closeCutWithoutGestion(admin, row, now);
+    else
+      await closeAsNoAnswer(admin, row, zadarmaNoAnswerResumen(ended.disposition), now, { soloSinGestion: true });
+    closed += 1;
+  }
+  return closed;
+}
+
 export async function openCalls(admin: SupabaseClient): Promise<OpenCall[]> {
   const { data, error } = await admin
     .from("voice_calls")
-    .select("id, agent_number, phone, status, dialed_at, started_at")
+    .select("id, agent_number, phone, provider, status, dialed_at, started_at")
     .in("status", OPEN_STATUSES as unknown as string[]);
   if (error) throw new Error(error.message);
   return (data ?? []) as OpenCall[];
@@ -926,18 +1064,12 @@ export async function crearSalidaSwaypDelAgente(
   }
 
   const resultado = await (async (): Promise<SalidaSwaypAgente> => {
-    const { data: guias } = await admin
-      .from("shipments")
-      .select("id, guide_code, delivery_address, delivery_reference")
-      .eq("order_id", call.order_id)
-      .eq("delivery_status", "anulado")
-      .is("fenix_shipment_id", null)
-      .order("updated_at", { ascending: false })
-      .limit(1);
-    const anulada = (guias ?? [])[0] as
-      | { id: string; guide_code: string; delivery_address: string | null; delivery_reference: string | null }
-      | undefined;
-    if (!anulada) return { ok: false, motivo: "el pedido no tiene una guía anulada sin reemplazo" };
+    // La misma madre que ofrece el botón de Envíos: la guía anulada o, en
+    // provincia, la Swayp en devolución (#KP135202, 05-10-2026).
+    const anulada = await buscarOrigenReenvio(admin, call.order_id);
+    if (!anulada) {
+      return { ok: false, motivo: "el pedido no tiene una guía anulada ni una guía Swayp en devolución sin reemplazo" };
+    }
 
     if (!mismaDireccion(gestion.direccionConfirmada, anulada.delivery_address, anulada.delivery_reference)) {
       return {

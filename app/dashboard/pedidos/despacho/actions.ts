@@ -1,5 +1,6 @@
 "use server";
 
+import { cancelledScanNotice } from "@/lib/scan-cancelled";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -22,6 +23,8 @@ import {
 import { operationFitsCourier, routeKindForCourier } from "@/lib/dispatch-routing";
 import { courierLabelFor } from "@/lib/couriers/catalog";
 import { decideReception } from "@/lib/returns-reception";
+import { gfReturnDecision } from "@/lib/gf-returns-scan";
+import { boxWho, notInThisBoxMessage } from "@/lib/scan-other-box";
 import { loadPickupKeyFacts } from "@/lib/shalom/pickup-facts";
 import {
   decideShalomReception,
@@ -227,6 +230,9 @@ export async function markShipmentReady(code: string): Promise<DispatchActionRes
   if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
   if (pick.kind === "ambigua") return { error: ambiguousScanError(pick.options) };
   const shipment = pick.shipment;
+  // Un pedido anulado no se arma: lo primero que hay que decir (lib/scan-cancelled.ts).
+  const cancelledReady = await cancelledScanNotice(createAdminSupabase(), shipment.order_id);
+  if (cancelledReady) return { error: cancelledReady };
   if (shipment.custody_state !== "empresa") return { error: "Ese paquete ya no figura en custodia de la empresa." };
   if (shipment.preparation_state === "listo_despacho") {
     return { notice: `${dispatchScanLabel(shipment)} ya estaba listo para despacho.`, shipment };
@@ -295,8 +301,9 @@ export async function receiveReturnedPackage(
   if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
   if (pick.kind === "ambigua") return { error: ambiguousScanError(pick.options) };
   const shipment = pick.shipment;
+  if (shipment.courier === "propio" || isCourierTbd(shipment.courier)) return receiveGrupoGfReturn(shipment);
   if (!RETURN_SCAN_COURIERS.has(shipment.courier)) {
-    return { error: `${dispatchScanLabel(shipment)} no es de Tanders ni de Shalom: su devolución se registra desde el Master.` };
+    return { error: `${dispatchScanLabel(shipment)} no es de Tanders, Shalom ni Grupo GF: su devolución se registra desde el Master.` };
   }
   if (shipment.courier === "shalom") return receiveShalomReturn(shipment, returnGuide);
 
@@ -362,6 +369,69 @@ export async function receiveReturnedPackage(
   revalidatePath(RETURNS_PATH);
   revalidatePath("/dashboard/pedidos");
   return { notice: `${dispatchScanLabel(shipment)} recibida en almacén.`, shipment };
+}
+
+/**
+ * Un paquete de Grupo GF (o sin courier aún) escaneado en Devoluciones (MOM
+ * §29.13, `lib/gf-returns-scan.ts`). Un «No entregado» se recibe en oficina
+ * como en Despacho del día y el pedido queda por asignar para reprogramarlo;
+ * lo que nunca salió solo se explica. Un pedido anulado en Shopify se recibe
+ * igual —la caja tiene que salir de la del motorizado— y se dice que no vuelve
+ * a salir.
+ */
+async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<DispatchActionResult> {
+  const label = dispatchScanLabel(shipment);
+  const admin = createAdminSupabase();
+  const [{ data: items }, { data: received }, cancelled] = await Promise.all([
+    admin
+      .from("dispatch_manifest_items")
+      .select("id,manifest_id,dispatch_manifests!inner(courier,route_date,driver_name)")
+      .eq("shipment_id", shipment.id)
+      .is("removed_at", null)
+      .eq("dispatch_manifests.courier", "propio")
+      .limit(1),
+    admin
+      .from("order_events")
+      .select("id")
+      .eq("shipment_id", shipment.id)
+      .in("kind", ["returned_to_office", "reclaimed_in_office"])
+      .limit(1),
+    cancelledScanNotice(admin, shipment.order_id),
+  ]);
+  const item = (items ?? [])[0] as
+    | { id: string; manifest_id: string; dispatch_manifests: { route_date: string; driver_name: string | null } | { route_date: string; driver_name: string | null }[] }
+    | undefined;
+  const manifest = item ? (Array.isArray(item.dispatch_manifests) ? item.dispatch_manifests[0] : item.dispatch_manifests) : null;
+  let stopStatus: string | null = null;
+  if (item) {
+    const { data: stop } = await admin
+      .from("delivery_stops")
+      .select("status")
+      .eq("shipment_id", shipment.id)
+      .eq("dispatch_manifest_id", item.manifest_id)
+      .order("reported_at", { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle();
+    stopStatus = (stop as { status?: string } | null)?.status ?? null;
+  }
+  const decision = gfReturnDecision(label, {
+    box: item && manifest ? { riderName: manifest.driver_name ?? "el motorizado", routeDate: manifest.route_date, stopStatus } : null,
+    custodyState: shipment.custody_state,
+    receivedInOffice: Boolean(received?.length),
+  });
+  if (decision.kind === "error") return { error: decision.message };
+  if (decision.kind === "aviso") return cancelled ? { error: cancelled } : { notice: decision.message, shipment };
+
+  const { user } = await currentUser();
+  const { data: orderId, error } = await admin.rpc("gf_return_to_office", { p_item_id: item!.id, p_actor: user.id });
+  if (error) return { error: `${label}: ${error.message}` };
+  if (orderId) await recomputeOrderMasterSafe(admin, [orderId as string]);
+  revalidatePath(RETURNS_PATH);
+  revalidatePath("/dashboard/courier");
+  revalidatePath("/dashboard/pedidos");
+  return cancelled
+    ? { error: `${label} recibido en oficina. ${cancelled}`, shipment }
+    : { notice: `${label} recibido en oficina: vuelve a «por asignar» en Grupo GF para reprogramarlo.`, shipment };
 }
 
 /**
@@ -557,6 +627,8 @@ export async function addShipmentToManifest(manifestId: string, code: string): P
   if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
   if (pick.kind === "ambigua") return { error: ambiguousScanError(pick.options) };
   const shipment = pick.shipment;
+  const cancelledAdd = await cancelledScanNotice(createAdminSupabase(), shipment.order_id);
+  if (cancelledAdd) return { error: cancelledAdd };
   if (["in_custody", "cancelled"].includes(manifest.state)) return { error: "Esa ruta ya está cerrada." };
   if (shipment.custody_state !== "empresa") return { error: "El paquete ya no está en custodia de la empresa." };
   // La ruta se ARMA antes de que almacén termine: primero se decide qué va con
@@ -764,6 +836,10 @@ export async function scanManifestItem(
   const [manifest, candidates] = await Promise.all([visibleManifest(manifestId, auth), findScanCandidates(code, auth)]);
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
   if (!candidates.length) return { error: SCAN_NOT_FOUND };
+  // Antes que «no pertenece a esta ruta»: si el pedido está anulado, eso es lo
+  // que decide, esté o no en la ruta (#AUR177767, 05-10-2026).
+  const cancelledCheck = await cancelledScanNotice(createAdminSupabase(), candidates[0]!.order_id);
+  if (cancelledCheck) return { error: cancelledCheck };
   if (manifest.state === "cancelled") return { error: "Esa ruta ya está cerrada." };
   // Sin verificación previa del motorizado (modos confirmar y ninguno, 0185),
   // un cotejo sobre una caja ya en custodia es un registro opcional, no un error.
@@ -788,7 +864,26 @@ export async function scanManifestItem(
   if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
   const shipment = pick.shipment;
   const item = (rows ?? []).find((row) => row.shipment_id === shipment.id);
-  if (!item) return { error: "Ese paquete no pertenece a esta ruta." };
+  if (!item) {
+    // Decir en qué caja está: «no pertenece a esta ruta» parecía que no
+    // dejaba asignarlo (KP136825, 07-10-2026, `lib/scan-other-box.ts`).
+    const { data: other } = await admin
+      .from("dispatch_manifest_items")
+      .select("dispatch_manifests!inner(courier,route_date,driver_name,received_by,state)")
+      .eq("shipment_id", shipment.id)
+      .is("removed_at", null)
+      .neq("manifest_id", manifestId)
+      .neq("dispatch_manifests.state", "cancelled")
+      .limit(1)
+      .maybeSingle();
+    const raw = (other as { dispatch_manifests: unknown } | null)?.dispatch_manifests;
+    const box = (Array.isArray(raw) ? raw[0] : raw) as
+      | { courier: string; route_date: string; driver_name: string | null; received_by: string | null }
+      | undefined;
+    const here = { who: boxWho(manifest, courierLabelFor(manifest.courier)), routeDate: manifest.route_date };
+    const elsewhere = box ? { who: boxWho(box, courierLabelFor(box.courier)), routeDate: box.route_date } : null;
+    return { error: notInThisBoxMessage(here, elsewhere) };
+  }
 
   if (stage === "pickup") {
     const { data: all } = await admin

@@ -435,3 +435,36 @@ describe("el aviso de la mesa distingue la salida que estorba de la que se relle
     }
   });
 });
+
+// Una guía Swayp en devolución (08-10-2026, MOM §11.8). En provincia, la mesa
+// manda al «Reenviar por Swayp» de Envíos; en Lima, Swayp no se repite.
+describe("Swayp en devolución en la mesa de ruta", () => {
+  const enDevolucion = {
+    id: "s1",
+    courier: "fenix",
+    deliveryStatus: "en_ruta",
+    swaypState: 8,
+    custodyState: "retorno",
+    guideCode: "50000137273",
+  };
+  const swaypDe = (operation: "provincia_cod" | "lima") =>
+    buildOrderRoutePlan({
+      operation,
+      outputs: [enDevolucion],
+      paymentState: "sin_pago",
+      swayp: { known: true, covered: true, stockOk: true, city: "arequipa" },
+    }).candidates.find((route) => route.key === "swayp");
+
+  it("en provincia sigue bloqueada aquí, pero dice dónde se reenvía", () => {
+    const swayp = swaypDe("provincia_cod");
+    expect(swayp?.availability).toBe("blocked");
+    expect(swayp?.reason).toContain("usa «Reenviar por Swayp» en la ficha de esa guía en Envíos");
+    expect(swayp?.reason).not.toContain("no se crea otra");
+  });
+
+  it("en Lima no se crea otra con Swayp", () => {
+    const swayp = swaypDe("lima");
+    expect(swayp?.availability).toBe("blocked");
+    expect(swayp?.reason).toContain("Mientras esa guía siga abierta no se crea otra con");
+  });
+});

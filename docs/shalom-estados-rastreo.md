@@ -63,6 +63,13 @@ usaba el adaptador de reportes de agencia.
 
 **`reparto` gana a `destino`**, porque solo puede ocurrir después.
 
+**La fecha de `destino` no es la primera llegada.** Shalom la mueve mientras el
+paquete sigue en la agencia. Medido el 05-10-2026: dos retornos que llevaban 37
+y 38 días ahí salieron con una fecha de `destino` de 10 y 8 días antes. Para
+saber desde cuándo está el paquete en la agencia se usa la primera llegada que
+quedó en la línea de tiempo, el `disponible_para_recojo` de esa guía. Así lo
+hace la regla del «entregado» que es el retorno (MOM §12).
+
 ---
 
 ## Los dos modos de la API
