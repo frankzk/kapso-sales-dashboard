@@ -81,6 +81,15 @@ begin
   r:=swayp_emission_claim(b,o5,s5::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence,'[{"codbar":"TEST","disponible":50}]',now());
   if r->>'error'<>'Piloto: cupo diario alcanzado' then raise exception 'pilot cap not shared across stores: %',r; end if;
   if (select attempts from swayp_auto_metrics where org_id=org and cohort='recent_no_history')<>1 then raise exception 'cohort metrics missing'; end if;
+  -- 0236: una guía Swayp en Devolución (8) cuenta como devuelta, no pendiente,
+  -- aunque Kapta la tenga `en_ruta`.
+  update swayp_guide_emissions set guide_code='SWTEST4',state='created' where order_id=o4 and automatic;
+  insert into shipments(store_id,order_id,courier,guide_code,swayp_guide,delivery_status,status_category,swayp_state)
+    values(a,o4,'fenix','SWTEST4','SWTEST4','en_ruta','in_route',8);
+  if (select returned from swayp_auto_metrics where org_id=org and cohort='recent_no_history')<>1
+    or (select pending from swayp_auto_metrics where org_id=org and cohort='recent_no_history')<>0 then
+    raise exception 'Swayp return counted as pending: %',(select row_to_json(m) from swayp_auto_metrics m where org_id=org and cohort='recent_no_history');
+  end if;
 end $$;
 set local role authenticated;
 do $$ begin

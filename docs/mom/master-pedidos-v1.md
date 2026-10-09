@@ -4760,6 +4760,16 @@ vía. Costo por entrega recuperada = suma de fletes cotizados y devoluciones
 registradas de la vía / entregas logradas, incluyendo envíos fallidos. Si falta
 un costo o aún no hay entregas, indica pendiente; nunca lo presenta como cero.
 
+**El resultado se lee del estado de Swayp (0236, 09-10-2026).** La vista
+`swayp_auto_metrics` contaba como devuelta solo una guía `devuelto` en Kapta, y
+Swayp nunca llega ahí: su Devolución (8) queda `en_ruta` y la confirmada (9, 12),
+`anulado`. La pantalla decía «1 entregada · 0 devueltas · 25 pendientes» con 18
+guías en Devolución. Ahora: entregada es `entregado` o Swayp 7; devuelta, Swayp
+8, 9 o 12, la caja de vuelta o `devuelto`; anulada, el resto de las anuladas;
+pendiente, lo demás. Los retornos de Swayp no traen costo registrado, así que el
+costo por entrega queda «pendiente» hasta tenerlo, en vez de mostrarse más bajo
+de lo que es.
+
 ### 11.10 Filtro «Swayp» en el Master (08-10-2026)
 
 El Master tiene el mismo filtro «Swayp» que Repro Provincia, con las mismas tres
