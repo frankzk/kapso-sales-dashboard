@@ -4916,6 +4916,17 @@ la guía: ¿lo puede llevar Swayp hoy?
         no recibe el aviso de llegada. Ya tiene su clave, y el mensaje de la
         clave le dijo «cuando llegue, preséntala con tu DNI». Un «ya llegó» para
         pagados necesitaría su propia plantilla, sin saldo ni botones de cobro.
+      - **Pagado en el checkout es «ya no debe nada»** (09-10-2026, decisión
+        del owner), tenga o no comprobantes. El saldo se calculaba solo con los
+        Yape validados y un pedido cobrado por la pasarela no tiene ninguno:
+        salía «Total 134.10 · Pagado 0.00 · Saldo 134.10». **Trece pedidos web**
+        recibieron ese cobro entre el 17-09 y el 09-10 —siete de Shalom y seis
+        de Olva, éstos con el Yape para pagar—. En #KP138120 la clienta contestó
+        con la captura de su pago web y el bot de cobranza la registró como un
+        pago nuevo. Ahora ninguno de los dos avisos, de Shalom ni de Olva, sale
+        a un pedido `isWebPrepaid` (la misma regla de «Pagos», abajo): la fila
+        queda `skipped` con «pagado en el checkout». «Marcado como pagado a
+        mano» en Shopify **no** cuenta: sigue el conducto de las constancias.
     - **El aviso de llegada NO lleva fecha límite**, y es una decisión, no un
       olvido: «puedes recogerlo hasta el 16 de octubre» es un permiso a 28 días
       vista, y lo que provoca es dejarlo para después. Urge sin fecha y sin
@@ -5033,6 +5044,11 @@ la guía: ¿lo puede llevar Swayp hoy?
     - Los candidatos se buscan **por celular**, no por el pedido del último
       aviso: quedarse con el último sería justo la adivinanza que las puertas
       existen para evitar.
+    - **Un pedido pagado en el checkout no es candidato** (09-10-2026): no debe
+      nada, aunque no tenga ninguna fila en `order_payments`. Antes su saldo
+      salía como el total y la captura del pago web entraba por la puerta del
+      monto como un pago nuevo (#KP138120: S/ 134.10 a «YP AURELA KENKU», el
+      cobro de la pasarela, registrado como diferencia por Yape).
     - Lo que no pasa **queda como anomalía con su motivo** (`inbound_voucher`).
       El silencio es lo único inaceptable: la clienta ya pagó.
     - **El comprobante repetido del MISMO pedido no avisa a nadie.** Rastro y

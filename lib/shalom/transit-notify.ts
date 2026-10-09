@@ -38,6 +38,8 @@ import { isSendablePhone, sanitizeTemplateParam } from "@/lib/leads-ingest";
 import { parseLabelLineItems } from "@/lib/labels/line-items";
 import { tzParts } from "@/lib/metrics";
 import { loadStorePaymentMethods, yapeNumberParam } from "@/lib/payment-methods";
+import { isWebPrepaid } from "@/lib/order-paid";
+import type { PaymentGateway } from "@/lib/payment-gateway";
 import { replyFirstName } from "@/lib/wa-reply-templates";
 import { shalomVoucherPdf, signedDocUrl } from "@/lib/shalom/label-cache";
 import { loadStoreShalom } from "@/lib/shalom/session";
@@ -443,6 +445,8 @@ async function gatherFacts(
   arrivedAt: string | null;
   /** Estado general del pedido: a uno cerrado no se le escribe. */
   generalStatus: string | null;
+  /** Lo cobró la pasarela del checkout: no hay saldo que pedir. */
+  webPrepaid: boolean;
 }> {
   const [master, order, draft, payments, methods, llegada] = await Promise.all([
     orderId
@@ -453,7 +457,11 @@ async function gatherFacts(
           .maybeSingle()
       : Promise.resolve({ data: null }),
     orderId
-      ? admin.from("orders").select("name,total_amount,customer_phone,line_items").eq("id", orderId).maybeSingle()
+      ? admin
+          .from("orders")
+          .select("name,total_amount,customer_phone,line_items,financial_status,total_refunded,payment_gateway")
+          .eq("id", orderId)
+          .maybeSingle()
       : Promise.resolve({ data: null }),
     orderId
       ? admin.from("shalom_order_drafts").select("destiny_terminal_name").eq("order_id", orderId).maybeSingle()
@@ -489,6 +497,9 @@ async function gatherFacts(
     total_amount: number | null;
     customer_phone: string | null;
     line_items: unknown;
+    financial_status?: string | null;
+    total_refunded?: number | string | null;
+    payment_gateway?: PaymentGateway | null;
   } | null;
   const d = (draft.data ?? null) as { destiny_terminal_name: string | null } | null;
 
@@ -534,6 +545,11 @@ async function gatherFacts(
     orderName: m?.order_name ?? o?.name ?? null,
     arrivedAt: ((llegada.data ?? null) as { occurred_at: string } | null)?.occurred_at ?? null,
     generalStatus: m?.general_status ?? null,
+    webPrepaid: isWebPrepaid({
+      financialStatus: o?.financial_status ?? null,
+      totalRefunded: o?.total_refunded == null ? null : Number(o.total_refunded),
+      paymentGateway: o?.payment_gateway ?? null,
+    }),
   };
 }
 
@@ -549,6 +565,15 @@ const CLOSED_ORDER_STATUSES = ["anulado", "entregado", "devuelto"];
  * Entregado. Pedirle dinero a quien ya pagó es la forma más rápida de que deje
  * de creerse los mensajes que sí importan.
  *
+ * PAGADO EN EL CHECKOUT, TAMPOCO (09-10-2026). El saldo se calculaba solo con
+ * los comprobantes de Yape, y un pedido cobrado por la pasarela no tiene
+ * ninguno: salía «Total 134.10 · Pagado 0.00 · Saldo 134.10». Trece pedidos
+ * pagados por web recibieron ese cobro entre el 17-09 y el 09-10 —los de Olva
+ * con el Yape para pagar—, y en #KP138120 la clienta contestó con la captura de
+ * su pago, que el bot de cobranza registró como un pago nuevo. Las dos vías de
+ * cobro no se suman (MOM §12, lib/order-paid.ts): pagado en el checkout es
+ * pagado entero, igual que «ya pagó todo».
+ *
  * Saldo desconocido (sin total) NO se salta aquí: ahí la plantilla ya se niega
  * sola por falta de datos, con el motivo escrito.
  */
@@ -556,10 +581,13 @@ export function noticeSkipReason(input: {
   generalStatus: string | null | undefined;
   orderTotal: number | null | undefined;
   validatedAmount: number | null | undefined;
+  /** Lo cobró la pasarela del checkout (`isWebPrepaid`). */
+  webPrepaid?: boolean;
 }): string | null {
   if (input.generalStatus && CLOSED_ORDER_STATUSES.includes(input.generalStatus)) {
     return `el pedido ya está ${input.generalStatus}`;
   }
+  if (input.webPrepaid) return "pagado en el checkout: no hay saldo que cobrar";
   const saldo = pendingBalance(input.orderTotal, input.validatedAmount);
   if (saldo === 0) return "ya pagó todo: no hay saldo que cobrar";
   return null;
@@ -793,7 +821,7 @@ async function sendOne(
   const shipment = (sh ?? null) as ShipmentRow | null;
   if (!shipment) return fail("la guía ya no existe", { retryable: false });
 
-  const { facts, phone, leadPhoneNumberId, orderName, arrivedAt, generalStatus } = await gatherFacts(
+  const { facts, phone, leadPhoneNumberId, orderName, arrivedAt, generalStatus, webPrepaid } = await gatherFacts(
     admin,
     row.store_id,
     shipment,
@@ -807,6 +835,7 @@ async function sendOne(
     generalStatus,
     orderTotal: facts.orderTotal,
     validatedAmount: facts.validatedAmount,
+    webPrepaid,
   });
   if (noAvisar) {
     await admin
