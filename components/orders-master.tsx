@@ -557,6 +557,12 @@ export function OrdersMasterBoard({
               Almacén · Entregas a couriers
             </Link>
           )}
+          {/* El registro del botón «Enviar por Swayp» (MOM §11.11), donde nace. */}
+          {view === "por_confirmar" && (
+            <Link href="/dashboard/pedidos/swayp-desde-confirmar" className={opsButtonClass("ghost", "md", "pointer-coarse:h-11")}>
+              Swayp desde Por confirmar
+            </Link>
+          )}
         </div>
       </header>
 

@@ -1094,6 +1094,28 @@ no se crea la guía. Esta excepción tampoco levanta el veto de dos rechazos del
 distintas; la regla impide emitir una nueva. Lima y los demás couriers conservan
 sus reglas. Las resoluciones quedan en `order_events`, sin borrar historial.
 
+### 8.4 Entrega estimada de Aliclik según los días del pedido (09-10-2026)
+
+Pedido por el owner: antes de crear la primera guía Aliclik, la ficha dice
+cuántas de cada 10 guías parecidas entregó Aliclik según los días de
+calendario (Lima) que lleva el pedido: hoy, 1, 2, o 3 días o más. Al 09-10-2026,
+en Kenku: 61 %, 55 %, 40 % y 27 %; en Aurela: 70 %, 69 %, 50 % y 42 %.
+
+- **Es un aviso, no una regla.** No bloquea la creación, no cambia la ruta
+  sugerida ni pide permiso. Va en la tarjeta de Aliclik de la mesa de ruta y,
+  si la entrega es baja (menos de 50 %), en «Crear guía en Aliclik». Bajo 35 %
+  aconseja crearla solo si el cliente contesta ese día y vuelve a confirmar, o
+  con adelanto.
+- **Se mide por guía, no por pedido.** Cuenta la primera guía de cada pedido
+  creada por la API, que salió del almacén y ya tiene resultado (entregada, o
+  cerrada o transferida sin entrega), creada entre 70 y 14 días atrás
+  (`aliclik_delivery_by_order_age()`, migración 0236). Medir el pedido por su
+  `dispatched_at` exageraba la caída: esa fecha se mueve cuando un envío falla
+  y se reprograma, así que los que fallan parecían más viejos.
+- **Por tienda.** Un tramo con menos de 30 guías con resultado usa las de todas
+  las tiendas que el usuario ve, y la ficha lo dice. Sin muestra, no se muestra
+  un número. Un reenvío no lleva el aviso: las cifras son de primeras guías.
+
 ## 9. Lima
 
 - Todos los pedidos entran directamente a Preparación.
@@ -4786,6 +4808,66 @@ la guía: ¿lo puede llevar Swayp hoy?
   pedido nuevo o que cambia de etapa puede tardar hasta una hora en tener valor.
   La función es `recalcularDisponibilidadSwaypMaster`
   (`lib/master-swayp-availability.ts`) y solo escribe las filas que cambian.
+
+### 11.11 Swayp desde Por confirmar (v1.24, 09-10-2026)
+
+Decisión del owner. Un pedido de **provincia COD** en **Por confirmar** que
+Swayp puede llevar hoy («Swayp ok · con stock», §11.10) puede salir por Swayp
+**sin confirmar**, con el botón **«Enviar por Swayp»** de la mesa de
+confirmación. Invierte, para esos pedidos, el orden de la Fase 3 («Aliclik
+primero, Swayp tras el fallo»), y es una excepción escrita a «crear el rótulo
+implica confirmación» (§6.1), como la del §11.9.
+
+- **El botón** abre la guía Swayp directa de siempre (mismas validaciones de
+  destino, stock por producto, vínculo de Catálogo, número de Swayp y fecha de
+  despacho posterior a hoy: Swayp arma la ruta del día siguiente). El servidor
+  exige además que el pedido siga en Por confirmar y sea provincia COD, y graba
+  el hecho `swayp_desde_por_confirmar` con la guía (`shipment_id`) y quien lo
+  pulsó, **antes** de recalcular el Master. No escribe `confirmed`: no hubo
+  confirmación. No se ofrece en «Swayp no entregó».
+- **Si Swayp entrega**, terminó como cualquier entrega.
+- **Si Swayp no entrega**, el pedido **vuelve a «Por confirmar · Swayp no
+  entregó»** y entra otra vez a las llamadas, normalmente para salir por
+  Aliclik. «No entregó» es: Devolución (8), Devolución confirmada (9) o con cobro
+  (12) —en provincia Swayp deja la guía en 8 y no la pasa a 9—, la caja ya
+  escaneada de vuelta, o la guía anulada. Una novedad abierta (6) **no** es un
+  fallo: Swayp todavía la resuelve.
+- **Vuelven todos los motivos**, también el rechazo en la puerta (novedades 15 y
+  16) y las fallas de Swayp (18 falta inventario, 20 bodega no despachó, 21 sin
+  cobertura), con su motivo a la vista: «Rechazó a Swayp en la puerta» y «Falla
+  de Swayp, no de la clienta». Llamar cuesta poco; lo caro es el envío. Si la
+  caja volvió y su inventario no está conciliado, arrastra además
+  `devolucion_pendiente_inventario`.
+- **No pasa por Gestión Reproprovincia** ni por el agente de voz de recuperación
+  (§11.8): esa cola toma solo «En gestión Reproprovincia», y este pedido está en
+  Por confirmar. Sí entra a las llamadas de confirmación.
+- **Deja de mandar** en cuanto pasa algo después: otra salida viva o entregada
+  (la guía nueva toma el pedido), la anulación en Shopify, o una confirmación
+  (`confirmed`) posterior al envío, que lo pasa a **Preparación · Por generar
+  rótulo** para la salida nueva.
+- **La guía Swayp en Devolución no frena la guía Aliclik.** La regla «fuera de
+  Lima no hay otra salida viva» pide anular la anterior, pero una guía Swayp en
+  Devolución no se puede anular (Swayp solo cancela en Generada) ni se va a
+  entregar. Crear o vincular una guía Aliclik la ignora
+  (`swaypGuiaDeVuelta`, lib/swayp-desde-confirmacion.ts). Riesgo aceptado: si
+  Swayp devolviera esa guía a Reparto con la Aliclik ya emitida, habría dos
+  salidas vivas y el Master lo avisa (§4).
+- **Registro**: Master de Pedidos → Por confirmar → «Swayp desde Por confirmar»
+  (`/dashboard/pedidos/swayp-desde-confirmar`). Cada envío con su guía, el
+  estado y la novedad de Swayp, el resultado (en camino, entregado, volvió a Por
+  confirmar, salió por otra vía, anulado en Shopify), el motivo y la salida que
+  vino después. Arriba, enviados, entregados y la tasa de entrega sobre los ya
+  resueltos.
+
+Contexto medido al decidirlo (guías Swayp desde el 15-09-2026): de 11 guías
+Swayp directas a provincia, 0 entregadas; en Lima, 47 de 119. De las 157 que
+terminaron en devolución, el 21 % fue rechazo en la puerta y el 12 % falla de
+Swayp. El registro existe para medir si, sin confirmar, Swayp entrega lo
+suficiente.
+
+La regla vive en `lib/swayp-desde-confirmacion.ts` y la aplica
+`resolveMacroStage` antes del estado terminal y de Reproprovincia
+(`MOM_RESOLUTION_VERSION` sube a `mom-v1.24`).
 
 ## 12. Agencia: Shalom y Olva
 

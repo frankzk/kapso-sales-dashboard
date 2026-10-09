@@ -31,11 +31,14 @@ function earliestDispatchDate(): string {
  */
 export function DirectFenixGuideModal({
   initialOrderId,
+  origen,
   onClose,
   onCreated,
 }: {
   /** Abre desde el Master sin volver a buscar el pedido. */
   initialOrderId?: string;
+  /** El botón de Por confirmar (MOM §11.11): la guía sale sin confirmar. */
+  origen?: "por_confirmar";
   onClose: () => void;
   /** Recibe el id de la guía creada para que el tablero salte a "En ruta" y la resalte. */
   onCreated: (shipmentId?: string) => void;
@@ -155,6 +158,7 @@ export function DirectFenixGuideModal({
         guideCode,
         note,
         motivoSalidaAdicional: preview.salidaAdicional?.tipo === "pideMotivo" ? motivo : null,
+        origen,
       });
       if (r.error) {
         setMsg(r.error);
@@ -525,6 +529,13 @@ export function DirectFenixGuideModal({
                 (#KP134416). */}
             {blockedByGuide && preview.salidaAdicional && (
               <Banner tone="crit">{preview.salidaAdicional.texto}</Banner>
+            )}
+            {/* MOM §11.11: que nadie lea este envío como una confirmación. */}
+            {origen === "por_confirmar" && (
+              <Banner tone="info">
+                Sale desde Por confirmar, sin confirmación. Si Swayp no lo entrega, el pedido vuelve a
+                «Por confirmar · Swayp no entregó» para llamarlo otra vez.
+              </Banner>
             )}
             {preview.salidaAdicional?.tipo === "pideMotivo" && !blockedByOrder && (
               <Banner tone="warn">
