@@ -2273,6 +2273,13 @@ function OrderFormPanel({
   const [discountValue, setDiscountValue] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
+  /**
+   * El aviso de posible duplicado que el asesor puede saltarse (09-10-2026).
+   * El servidor pedía «vuelve a confirmar», pero la pantalla nunca mandaba la
+   * confirmación: «Generar pedido» repetía el mismo aviso para siempre y el
+   * cliente que pedía una unidad más se quedaba sin pedido.
+   */
+  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   const [generatedOrder, setGeneratedOrder] = useState<NonNullable<LeadActionState["generatedOrder"]> | null>(null);
   const { state: copiedOrder, copy: copyOrder, reset: resetCopiedOrder } = useCopyToClipboard();
 
@@ -2335,12 +2342,14 @@ function OrderFormPanel({
     setItems((x) => x.filter((it) => it.key !== key));
   }
 
-  function submit() {
+  /** `confirmarDuplicado`: el asesor vio el aviso de duplicado y lo crea igual. */
+  function submit(confirmarDuplicado = false) {
     if (!valid) {
       setMsg("Completa productos, dirección y distrito antes de generar.");
       return;
     }
     setMsg(null);
+    setDuplicateWarning(null);
     setGeneratedOrder(null);
     resetCopiedOrder();
     startTransition(async () => {
@@ -2365,7 +2374,12 @@ function OrderFormPanel({
             ? null
             : { kind: discountKind, value: discountValue },
         noReutilizarBorrador,
+        confirmarDuplicado,
       });
+      if (res.requiereConfirmacion && res.error) {
+        setDuplicateWarning(res.error);
+        return;
+      }
       if (res.error) {
         setMsg(res.error);
         return;
@@ -2706,11 +2720,35 @@ function OrderFormPanel({
             </div>
           )}
 
-          {!generatedOrder && (
+          {!generatedOrder && duplicateWarning && (
+            <div role="alert" className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+              <p className="text-xs text-amber-900">{duplicateWarning}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => submit(true)}
+                  disabled={pending || !valid}
+                  className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {pending ? "Generando..." : "Sí, crear otro pedido"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDuplicateWarning(null)}
+                  disabled={pending}
+                  className="text-xs text-slate-600 hover:underline disabled:opacity-60"
+                >
+                  No, revisar primero
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!generatedOrder && !duplicateWarning && (
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={submit}
+                onClick={() => submit()}
                 disabled={pending || !valid}
                 className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
               >
