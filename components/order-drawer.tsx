@@ -67,7 +67,7 @@ import { markTandersLabelGenerated } from "@/app/dashboard/pedidos/tanders-actio
 import { ShalomGuideModal } from "@/components/shalom-guide-modal";
 import { cancelShalomGuide } from "@/app/dashboard/pedidos/shalom-actions";
 import { shalomGuideIsCancelable } from "@/lib/shalom/draft";
-import { fenixOutputIsCancelable, manualOutputIsCancelable } from "@/lib/shipment-output";
+import { fenixOutputIsCancelable, manualOutputIsCancelable, nombreDeCourier } from "@/lib/shipment-output";
 import {
   addOrderComment,
   cancelFenixOutput,
@@ -97,6 +97,13 @@ import {
 import { VoiceAgentPanel } from "@/components/voice-agent-panel";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
+import { downloadPdf } from "@/lib/download-pdf";
+import {
+  isFailedOutput,
+  reprogramLabelState,
+  type OutputForDecision,
+  type ReprogramLabelState,
+} from "@/lib/labels/resolve-output";
 import { COURIER_TBD } from "@/lib/shipment-output";
 import {
   AGENCY_COURIER_OPTIONS,
@@ -182,7 +189,7 @@ import { formatOlvaTracking, OLVA_TRACKING_URL } from "@/lib/olva/tracking";
 import { gfDeliverySentence, gfDeliverySummary, type GfDelivery } from "@/lib/gf-delivery";
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import type { RouteCandidate } from "@/lib/order-route-plan";
-import type { OrderMasterRow, StoreSummary } from "@/lib/types";
+import type { OrderMasterRow, ShipmentRow, StoreSummary } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // Formato
@@ -300,7 +307,12 @@ const NEXT_ACTION_BADGE: Record<DrawerNextAction["tone"], BadgeTone> = {
  * pedido?». Las herramientas secundarias quedan más abajo como evidencia o
  * corrección.
  */
-function drawerNextAction(row: OrderMasterRow, showPayments: boolean, gfSentence: string | null = null): DrawerNextAction {
+function drawerNextAction(
+  row: OrderMasterRow,
+  showPayments: boolean,
+  gfSentence: string | null = null,
+  reprogram: ReprogramLabelState | null = null,
+): DrawerNextAction {
   const stage = row.macro_stage as OrderMacroStage | null | undefined;
   const substage = row.macro_substage as MacroSubstage | null | undefined;
 
@@ -415,6 +427,22 @@ function drawerNextAction(row: OrderMasterRow, showPayments: boolean, gfSentence
       };
     }
     if (substage === "por_reprogramar_lima") {
+      // Otro courier no lo entregó y todavía no hay salida nueva: la caja que
+      // volvió lleva su rótulo, y reimprimirlo es lo que dejó a #AUR177756 con
+      // un QR que no cuadraba (§9.3, 09-10-2026).
+      if (reprogram && !reprogram.live) {
+        const courier = nombreDeCourier(reprogram.failed.courier);
+        return {
+          eyebrow: "Seguimiento",
+          title: "Llamar y reprogramar con una salida nueva",
+          description:
+            `${courier} no entregó ${reprogram.failed.outputCode ?? "su salida"} y la caja ${reprogram.failed.returned ? "ya volvió" : "vuelve"}. ` +
+            `Registra la llamada; si acepta otra entrega, imprime el rótulo de la salida nueva y pégalo sobre la caja, tapando el de ${courier}.`,
+          cta: "Registrar seguimiento",
+          target: "acciones",
+          tone: "amber",
+        };
+      }
       return {
         eyebrow: "Seguimiento",
         title: "Volver a confirmar con el cliente",
@@ -964,7 +992,29 @@ export function OrderDrawer({
   const showPaymentPanel = paymentPanel?.show ?? false;
   // La salida GF activa (o la última) para la tarjeta de acción.
   const gfActive = detail?.gfDeliveries.length ? detail.gfDeliveries[detail.gfDeliveries.length - 1]! : null;
-  const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel, gfDeliverySentence(gfActive)) : null;
+  // La salida que su courier no entregó y con qué sale ahora la caja (§28).
+  const reprogram = detail ? reprogramLabelState(detail.guides.map(guideForDecision)) : null;
+  const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel, gfDeliverySentence(gfActive), reprogram) : null;
+  // Imprimir el rótulo de la salida nueva: «Descargar rótulos» de un solo
+  // pedido. La salida nace aquí, «por definir», con el motivo escrito solo.
+  const offerNewOutputLabel = Boolean(
+    canEdit && reprogram && !reprogram.live && detail?.row.macro_substage === "por_reprogramar_lima",
+  );
+  const printNewOutputLabel = () =>
+    run(async () => {
+      const resolved = await resolveLabelsForOrders([orderId]);
+      if (!resolved.shipmentIds.length) {
+        return { error: resolved.blocked[0]?.error ?? resolved.error ?? "No hay rótulo que imprimir." };
+      }
+      const pdf = await downloadPdf(`/api/pedidos/rotulos?ids=${resolved.shipmentIds.join(",")}`, "x-rotulos-missing", "rotulos.pdf");
+      // La salida ya existe aunque el PDF no baje: se dice y se recarga la ficha,
+      // donde su «Rótulo interno» queda a un clic.
+      return {
+        notice: [resolved.notice, pdf.error ? `No se pudo descargar el PDF (${pdf.error}): usa su «Rótulo interno»` : "Rótulo descargado"]
+          .filter(Boolean)
+          .join(" · "),
+      };
+    });
 
   // Diálogo modal: el foco entra a la hoja al abrir (sin saltar el scroll) y
   // vuelve a donde estaba al cerrar, p. ej. al pedido de la tabla del Master.
@@ -1341,6 +1391,16 @@ export function OrderDrawer({
                         <GfDeliveryLine delivery={gfActive} />
                       </>
                     )}
+                    {offerNewOutputLabel && (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                        <OpsButton disabled={pending} onClick={() => void printNewOutputLabel()} className="pointer-coarse:h-11">
+                          Imprimir rótulo de la salida nueva
+                        </OpsButton>
+                        <p className="text-[13px] text-ink-600">
+                          Después de la llamada. Va encima del rótulo viejo.
+                        </p>
+                      </div>
+                    )}
                   </DrawerNextActionCard>
                 </div>
               )}
@@ -1441,6 +1501,10 @@ export function OrderDrawer({
                         reportedStatus: g.reported_status ?? null,
                       };
                       const gf = detail.gfDeliveries.find((d) => d.shipmentId === g.id);
+                      // Su courier no la entregó: su rótulo ya no es el de la
+                      // caja que sale. Reprogramar es imprimir el de la salida
+                      // nueva y pegarlo encima (§9.3, 09-10-2026).
+                      const notDelivered = isFailedOutput(guideForDecision(g));
                       return (
                       <li key={g.id} className="space-y-2.5 px-4 py-3 sm:px-5">
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
@@ -1480,7 +1544,28 @@ export function OrderDrawer({
                           )}
                         </div>
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                          {g.courier === "tanders" && (
+                          {notDelivered && (
+                            <>
+                              <span className="text-[13px] text-ink-600">
+                                {reprogram?.live
+                                  ? `No entregada: la caja va como ${reprogram.live.outputCode ?? "otra salida"}.`
+                                  : "No entregada: se reprograma con el rótulo de una salida nueva."}
+                              </span>
+                              {offerNewOutputLabel && reprogram?.failed.shipmentId === g.id && (
+                                <button type="button" disabled={pending} onClick={() => void printNewOutputLabel()} className={DOC_LINK}>
+                                  Imprimir rótulo de la salida nueva
+                                </button>
+                              )}
+                              {/* El viejo, discreto: solo para registrar la
+                                  devolución si su papel se perdió. */}
+                              {g.qr_token && (
+                                <a href={`/api/pedidos/rotulos?ids=${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK_QUIET}>
+                                  Rótulo viejo (solo Devoluciones)
+                                </a>
+                              )}
+                            </>
+                          )}
+                          {g.courier === "tanders" && !notDelivered && (
                             // Navegación real (no window.open tras un await): así el
                             // bloqueador de ventanas emergentes no se la come. El
                             // marcado en Tanders sale en paralelo, sin frenar la
@@ -1503,7 +1588,7 @@ export function OrderDrawer({
                               «rótulo generado» igual que el enlace suyo: para
                               Tanders el paquete quedó rotulado, lo imprimas junto o
                               por separado. */}
-                          {g.courier === "tanders" && (
+                          {g.courier === "tanders" && !notDelivered && (
                             <a
                               href={`/api/pedidos/guia-combinada?ids=${g.id}`}
                               target="_blank"
@@ -1546,7 +1631,7 @@ export function OrderDrawer({
                               </a>
                             </>
                           )}
-                          {g.qr_token && (
+                          {g.qr_token && !notDelivered && (
                             <a href={`/api/pedidos/rotulos?ids=${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK}>
                               Rótulo interno
                               <IconArrowUpRight aria-hidden className="size-3.5" />
@@ -2057,6 +2142,23 @@ const FIELD_VALUE = "mt-0.5 break-words text-sm leading-5 text-ink-900";
 const LABEL = "grid gap-1.5 text-[13px] font-medium text-ink-700";
 const TEXTAREA = cn(FIELD, "h-auto py-2 leading-5");
 /** Enlace a un papel o a otra pantalla (abre en otra pestaña). */
+/** Una salida de la ficha vista desde la regla del rótulo (lib/labels/resolve-output.ts). */
+function guideForDecision(g: ShipmentRow): OutputForDecision {
+  return {
+    id: g.id,
+    custody_state: g.custody_state ?? null,
+    delivery_status: g.delivery_status ?? null,
+    created_at: g.created_at ?? null,
+    output_number: g.output_number ?? null,
+    courier: g.courier,
+    output_code: g.output_code ?? null,
+    reported_status: g.reported_status ?? null,
+    swayp_state: g.swayp_state ?? null,
+    dispatched_at: g.dispatched_at ?? null,
+    returned_at: g.returned_at ?? null,
+  };
+}
+
 const DOC_LINK =
   "inline-flex items-center gap-1 text-[13px] font-medium text-brand-700 underline-offset-2 hover:underline pointer-coarse:min-h-11";
 const DOC_LINK_QUIET =

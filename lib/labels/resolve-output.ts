@@ -6,6 +6,20 @@
 //
 // Puro y testeado: es la regla de negocio, no puede vivir dentro de un handler.
 
+// LA SALIDA QUE YA NO ENTREGÓ (09-10-2026, decisión del owner). #AUR177756:
+// Tanders no entregó su S01 y la caja volvió. Al reprogramar por llamada el
+// equipo reimprimió el rótulo de Tanders —«Descargar rótulos» respondía «Tiene
+// 1 salida todavía en la calle»—, armó la caja con él y Grupo GF, al tomarlo,
+// creó una S02 cuyo rótulo nadie imprimió: en «Verificar caja» el QR de la caja
+// era el de la S01 y no cuadraba. Una salida que su courier ya dio por no
+// entregada (`guideFailedAfterDispatch`: Tanders RETURNING/RETURNED, Swayp
+// Devolución, anulada después de salir) no está «en la calle»: nadie la
+// trabaja. Pedir el rótulo crea la salida nueva con su QR, y el motivo lo
+// escribe el sistema porque el hecho ya lo reportó el courier. Ese rótulo es el
+// que se pega sobre la caja que volvió (MOM §9.3, §28).
+
+import { guideFailedAfterDispatch } from "@/lib/reproprovincia";
+
 /** Salida vista desde la decisión de rotular. */
 export interface OutputForDecision {
   id: string;
@@ -13,13 +27,33 @@ export interface OutputForDecision {
   delivery_status: string | null;
   created_at: string | null;
   output_number: number | null;
+  /** Lo que hace falta para saber si su courier ya la dio por no entregada. */
+  courier?: string | null;
+  output_code?: string | null;
+  reported_status?: string | null;
+  swayp_state?: number | null;
+  dispatched_at?: string | null;
+  returned_at?: string | null;
+}
+
+/** La salida que su courier no entregó y motiva la nueva, para el motivo. */
+export interface FailedOutputForLabel {
+  shipmentId: string;
+  outputCode: string | null;
+  courier: string;
+  /** La caja ya volvió (recibida, o el courier dice que volvió). */
+  returned: boolean;
 }
 
 export type LabelDecision =
   /** Ya hay una salida con nosotros: se reimprime esa, no se crea otra. */
   | { kind: "reuse"; shipmentId: string }
-  /** No hay nada que estorbe: se crea una salida y se imprime. */
-  | { kind: "create" }
+  /**
+   * No hay nada que estorbe: se crea una salida y se imprime. `afterFailure`
+   * nombra la última salida que su courier no entregó: la nueva es su
+   * reprogramación y lleva motivo automático.
+   */
+  | { kind: "create"; afterFailure?: FailedOutputForLabel }
   /**
    * Hay una salida activa fuera de la empresa: crear otra son dos paquetes del
    * mismo pedido circulando a la vez, y el MOM (§23) exige justificación
@@ -27,21 +61,45 @@ export type LabelDecision =
    */
   | { kind: "needs_justification"; activeOutputs: number };
 
+/** Los estados de una salida que sigue viva. */
+const LIVE_STATUSES = ["pendiente", "en_ruta", "por_preparar"];
+
+/** ¿Su courier ya la dio por no entregada? La regla única de lib/reproprovincia.ts. */
+export function isFailedOutput(output: OutputForDecision): boolean {
+  return guideFailedAfterDispatch({
+    courier: output.courier ?? "",
+    delivery_status: output.delivery_status ?? "",
+    reported_status: output.reported_status ?? null,
+    swayp_state: output.swayp_state ?? null,
+    dispatched_at: output.dispatched_at ?? null,
+    returned_at: output.returned_at ?? null,
+  });
+}
+
 /**
  * Una salida está ACTIVA mientras el intento de entrega sigue vivo. Una salida
  * devuelta NO cuenta: el paquete ya volvió, y rearmarlo es reprogramación
- * normal (Reproprovincia, reintento en Lima), no una salida simultánea.
+ * normal (Reproprovincia, reintento en Lima), no una salida simultánea. Tampoco
+ * la que su courier ya dio por no entregada aunque siga `en_ruta`: la caja
+ * vuelve y nadie la trabaja.
  */
 export function isActiveOutput(output: OutputForDecision): boolean {
   return (
     output.custody_state !== "devuelto" &&
-    ["pendiente", "en_ruta", "por_preparar"].includes(output.delivery_status ?? "")
+    LIVE_STATUSES.includes(output.delivery_status ?? "") &&
+    !isFailedOutput(output)
   );
 }
 
-/** Sigue en nuestras manos: es la que se rotula y se arma. */
+/**
+ * Sigue en nuestras manos: es la que se rotula y se arma. La que no entregó su
+ * courier no, aunque su custodia diga `empresa`: su rótulo ya no es el de la
+ * caja que sale (§9.3). Tampoco una anulada: anular una «por definir» deja su
+ * custodia en `empresa`, y reimprimirla daba el rótulo de una salida muerta
+ * justo cuando se reprograma después de anularla (629 anuladas así, 09-10-2026).
+ */
 export function isWithCompany(output: OutputForDecision): boolean {
-  return output.custody_state === "empresa";
+  return output.custody_state === "empresa" && output.delivery_status !== "anulado" && !isFailedOutput(output);
 }
 
 function mostRecent(outputs: readonly OutputForDecision[]): OutputForDecision | null {
@@ -68,7 +126,54 @@ export function decideLabelAction(outputs: readonly OutputForDecision[]): LabelD
   const active = outputs.filter(isActiveOutput);
   if (active.length) return { kind: "needs_justification", activeOutputs: active.length };
 
+  // La última que no entregó su courier: un hecho que consta, sea cual sea lo
+  // que vino después (una «por definir» anulada, por ejemplo). Si sigue
+  // `en_ruta`, crear la nueva sin motivo lo rechazaría la puerta de §23.
+  const last = mostRecent(outputs.filter(isFailedOutput));
+  if (last) {
+    return {
+      kind: "create",
+      afterFailure: {
+        shipmentId: last.id,
+        outputCode: last.output_code ?? null,
+        courier: last.courier ?? "",
+        returned: Boolean(last.returned_at) || last.custody_state === "devuelto",
+      },
+    };
+  }
   return { kind: "create" };
+}
+
+/** Lo que la ficha del pedido enseña de una salida que su courier no entregó. */
+export interface ReprogramLabelState {
+  failed: FailedOutputForLabel;
+  /**
+   * La salida viva con la que sale ahora la caja, si ya existe: su rótulo es el
+   * que va encima. Sin ella, la ficha ofrece imprimir el de la salida nueva.
+   */
+  live: { shipmentId: string; outputCode: string | null } | null;
+}
+
+/**
+ * ¿El pedido tiene una salida que su courier no entregó, y con qué sale ahora?
+ * null si ninguna falló. La misma regla que `decideLabelAction`, para la ficha.
+ */
+export function reprogramLabelState(outputs: readonly OutputForDecision[]): ReprogramLabelState | null {
+  const failed = mostRecent(outputs.filter(isFailedOutput));
+  if (!failed) return null;
+  const live = mostRecent(outputs.filter((output) =>
+    !isFailedOutput(output) &&
+    LIVE_STATUSES.includes(output.delivery_status ?? "") &&
+    output.custody_state !== "devuelto"));
+  return {
+    failed: {
+      shipmentId: failed.id,
+      outputCode: failed.output_code ?? null,
+      courier: failed.courier ?? "",
+      returned: Boolean(failed.returned_at) || failed.custody_state === "devuelto",
+    },
+    live: live ? { shipmentId: live.id, outputCode: live.output_code ?? null } : null,
+  };
 }
 
 /** Cuántos pedidos se nombran en un aviso antes de resumir. El aviso es un

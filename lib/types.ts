@@ -309,6 +309,8 @@ export interface ShipmentRow {
   ready_by?: string | null;
   custody_transferred_at?: string | null;
   custody_transferred_by?: string | null;
+  /** Cuándo salió con su courier: prueba que una anulada fue un intento fallido. */
+  dispatched_at?: string | null;
   returned_at?: string | null;
   /** Quién dio por devuelta la guía (0118): 'aliclik_api' | '<courier>_report' |
    *  'manual'. Se sella junto a `returned_at`. */

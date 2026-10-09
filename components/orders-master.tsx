@@ -178,6 +178,7 @@ import { fmtDate, fmtDateTime, fmtAge, CoverageBadge, MacroStageBadge, MacroStag
 import { DRAWER_SECTION_IDS, OrderDrawer, type DrawerSectionId, type DrawerWorkspaceView } from "@/components/order-drawer";
 import { workspaceForDrawerSection } from "@/lib/order-drawer-href";
 import { hasCombinedGuide, type CombinedGuideCourier } from "@/lib/labels/guia-combinada-select";
+import { downloadPdf } from "@/lib/download-pdf";
 
 export function OrdersMasterBoard({
   stores,
@@ -1289,31 +1290,6 @@ async function downloadCombinadas(
 ): Promise<{ error?: string; missing: number; failed: number }> {
   const target = COMBINED_ENDPOINT[courier];
   return downloadPdf(`${target.url}?orders=${orderIds.join(",")}`, "x-combinadas-omitidas", target.file);
-}
-
-async function downloadPdf(
-  url: string,
-  missingHeader: string,
-  fallbackName: string,
-): Promise<{ error?: string; missing: number; failed: number }> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    return { error: body?.error ?? "No se pudieron generar los rótulos.", missing: 0, failed: 0 };
-  }
-  const missing = Number(response.headers.get(missingHeader) ?? "0");
-  const failed = Number(response.headers.get("x-combinadas-fallidas") ?? "0");
-  const blob = await response.blob();
-  const href = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = href;
-  anchor.download =
-    response.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ?? fallbackName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(href);
-  return { missing, failed };
 }
 
 function BulkBar({

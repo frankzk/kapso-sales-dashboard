@@ -38,6 +38,8 @@ import { loadStoreCollectionAccounts } from "@/lib/collection-accounts";
 import { describeDuplicate, findDuplicate, normalizeOperationNumber } from "@/lib/yape-dedup";
 import { raiseCollectionAlert } from "@/lib/collection-alerts-access";
 import { raiseRepeatedVoucherAlert } from "@/lib/repeated-voucher-alert";
+import { isWebPrepaid } from "@/lib/order-paid";
+import type { PaymentGateway } from "@/lib/payment-gateway";
 
 /** Un pedido al que este comprobante PODRÍA pertenecer. */
 export interface VoucherCandidate {
@@ -396,12 +398,19 @@ export async function loadVoucherCandidates(
 ): Promise<VoucherCandidate[]> {
   const { data: pedidos } = await admin
     .from("orders")
-    .select("id,name,total_amount")
+    .select("id,name,total_amount,financial_status,total_refunded,payment_gateway")
     .eq("store_id", storeId)
     .eq("customer_phone", phone)
     .order("created_at", { ascending: false })
     .limit(10);
-  const rows = (pedidos ?? []) as { id: string; name: string | null; total_amount: number | null }[];
+  const rows = (pedidos ?? []) as {
+    id: string;
+    name: string | null;
+    total_amount: number | null;
+    financial_status?: string | null;
+    total_refunded?: number | string | null;
+    payment_gateway?: PaymentGateway | null;
+  }[];
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
 
@@ -424,6 +433,19 @@ export async function loadVoucherCandidates(
   for (const r of rows) {
     const envio = guia.get(r.id);
     if (!envio) continue; // sin guía de Shalom no es de esta cobranza
+    // Cobrado en el checkout: no debe nada, tenga o no comprobantes. Su saldo
+    // salía como el total —el prepago no es una fila de `order_payments`—, y la
+    // captura del pago web entraba por la puerta del monto como un pago nuevo
+    // (#KP138120, 05-10-2026). Las dos vías no se suman (lib/order-paid.ts).
+    if (
+      isWebPrepaid({
+        financialStatus: r.financial_status ?? null,
+        totalRefunded: r.total_refunded == null ? null : Number(r.total_refunded),
+        paymentGateway: r.payment_gateway ?? null,
+      })
+    ) {
+      continue;
+    }
     const total = r.total_amount == null ? null : Number(r.total_amount);
     const saldo = total == null ? null : Math.max(0, Math.round((total - (validado.get(r.id) ?? 0)) * 100) / 100);
     if (saldo != null && saldo <= 0) continue; // ya no debe nada

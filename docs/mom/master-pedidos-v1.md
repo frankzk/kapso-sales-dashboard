@@ -1438,6 +1438,16 @@ entonces:
 - Si cambia el producto, courier o día de salida, se crea una salida nueva con
   QR nuevo. Almacén reimprime, arma otra caja y la coloca en la agrupación del
   nuevo courier.
+- **Cuando otro courier no entregó y su caja vuelve (09-10-2026, decisión del
+  owner).** Lo que se reimprime es **el rótulo de la salida nueva**, no el del
+  courier que no entregó: después de la llamada, «Imprimir rótulo de la salida
+  nueva» en el pedido —o «Descargar rótulos» en el Master— crea la salida
+  «por definir» con su QR (§28) y ese rótulo se pega **encima** del anterior,
+  tapando su QR. La caja física puede ser la misma; su identidad es la de la
+  salida nueva (§29.4). El rótulo del courier anterior queda solo para registrar
+  la devolución (§9.4). Pasó con #AUR177756: se reimprimió el rótulo de Tanders
+  (S01), la caja se armó con él, Grupo GF creó al tomarla una S02 cuyo rótulo
+  nadie imprimió, y en «Verificar caja» el QR de la caja no cuadraba.
 - Excepción de Grupo GF: si no cambia el producto ni el courier, su propia
   salida vuelve a salir otro día con el mismo envío, QR y rótulo —recibida en
   oficina (§29.5, v1.15) o, sin solicitud de Grupo GF, desde «Desde la lista»
@@ -2934,6 +2944,49 @@ comparación es contra los pedidos de recompra normales de julio-agosto de 2026
 en Lima, el 66 % en Provincia COD y el 65 % en Agencia; Aurela, ~60 %. Con 30
 pedidos el margen es de unos ±18 puntos: alcanza para ver si se entrega «casi
 igual» o «claramente peor», no diferencias finas.
+
+A la semana (09-10-2026): 7 entregados, 8 anulados, 13 en curso y 2 sin
+confirmar. Anulación del 27 %, contra ~19 % de la recompra normal; tres de las
+ocho anulaciones fueron «ya lo tiene / ya lo compró», todas de clientes que
+habían recibido o pedido ese producto antes. Por eso la prueba siguiente
+excluye el carrito del mismo producto que la última entrega.
+
+**Prueba A/B: pedido sin llamada contra la cola (`ab-recompra-prov-1`,
+09-10-2026).** La primera prueba compara contra una tasa histórica, y eso no
+dice si generar el pedido **vende más** que dejar el carrito en la cola: un
+pedido por carrito da más pedidos, pero algunos se anulan; la llamada cierra
+menos, pero entrega mejor. Aquí cada carrito que cumple la regla se sortea al
+llegar:
+
+- **auto** → se genera el pedido, con el mismo generador de la primera prueba.
+- **control** → no se toca: queda en la cola y la asesora lo trabaja como
+  siempre.
+
+La moneda es el hash del carrito, así que el mismo carrito cae siempre en la
+misma mitad aunque el cron lo vea dos veces. Se mide **pedidos entregados por
+carrito** en cada mitad (`auto_order_ab_results`). En `control` cuenta el
+primer pedido del mismo teléfono en los 14 días siguientes al carrito, lo haya
+cerrado la asesora, el bot o el cliente solo.
+
+Quién entra (`auto_order_ab_candidates`, la regla entera en un solo sitio):
+
+- Lead `nuevo`, sin gestión; carrito abierto con entre 3 y 48 horas, total
+  mayor que cero y dirección despachable.
+- Último pedido del teléfono **entregado** y de 7 o más días antes del
+  carrito; cobertura **Provincia COD**.
+- El cliente no escribió después del carrito y no tiene pedido vivo posterior.
+- Algún producto **distinto** de los de su última entrega.
+
+Las tres horas de espera dejan fuera a quien abandona el formulario y compra
+solo enseguida: en los 14 días previos, la mitad de estos carritos terminó en
+pedido dentro de la hora. Con la regla quedan unos 14 carritos por semana entre
+las dos mitades, así que la prueba dura **tres semanas** para llegar a ~20 por
+mitad. 41 de 59 de esos carritos no recibieron ninguna llamada.
+
+Se enciende y se apaga en `auto_order_cohorts` (interruptor, ventana con
+inicio y fin obligatorios, tope diario por tienda). Sin ventana no inscribe:
+una cohorte sin fin sería una automatización completa que nadie decidió. El
+cron inscribe como mucho cada 20 minutos por tienda.
 
 **Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
 que la cola tiene que recortar: quedan fuera **Shalom, Olva, Tanders, Urpi y el
@@ -4800,6 +4853,16 @@ vía. Costo por entrega recuperada = suma de fletes cotizados y devoluciones
 registradas de la vía / entregas logradas, incluyendo envíos fallidos. Si falta
 un costo o aún no hay entregas, indica pendiente; nunca lo presenta como cero.
 
+**El resultado se lee del estado de Swayp (0237, 09-10-2026).** La vista
+`swayp_auto_metrics` contaba como devuelta solo una guía `devuelto` en Kapta, y
+Swayp nunca llega ahí: su Devolución (8) queda `en_ruta` y la confirmada (9, 12),
+`anulado`. La pantalla decía «1 entregada · 0 devueltas · 25 pendientes» con 18
+guías en Devolución. Ahora: entregada es `entregado` o Swayp 7; devuelta, Swayp
+8, 9 o 12, la caja de vuelta o `devuelto`; anulada, el resto de las anuladas;
+pendiente, lo demás. Los retornos de Swayp no traen costo registrado, así que el
+costo por entrega queda «pendiente» hasta tenerlo, en vez de mostrarse más bajo
+de lo que es.
+
 ### 11.10 Filtro «Swayp» en el Master (08-10-2026)
 
 El Master tiene el mismo filtro «Swayp» que Repro Provincia, con las mismas tres
@@ -5016,6 +5079,17 @@ La regla vive en `lib/swayp-desde-confirmacion.ts` y la aplica
         no recibe el aviso de llegada. Ya tiene su clave, y el mensaje de la
         clave le dijo «cuando llegue, preséntala con tu DNI». Un «ya llegó» para
         pagados necesitaría su propia plantilla, sin saldo ni botones de cobro.
+      - **Pagado en el checkout es «ya no debe nada»** (09-10-2026, decisión
+        del owner), tenga o no comprobantes. El saldo se calculaba solo con los
+        Yape validados y un pedido cobrado por la pasarela no tiene ninguno:
+        salía «Total 134.10 · Pagado 0.00 · Saldo 134.10». **Trece pedidos web**
+        recibieron ese cobro entre el 17-09 y el 09-10 —siete de Shalom y seis
+        de Olva, éstos con el Yape para pagar—. En #KP138120 la clienta contestó
+        con la captura de su pago web y el bot de cobranza la registró como un
+        pago nuevo. Ahora ninguno de los dos avisos, de Shalom ni de Olva, sale
+        a un pedido `isWebPrepaid` (la misma regla de «Pagos», abajo): la fila
+        queda `skipped` con «pagado en el checkout». «Marcado como pagado a
+        mano» en Shopify **no** cuenta: sigue el conducto de las constancias.
     - **El aviso de llegada NO lleva fecha límite**, y es una decisión, no un
       olvido: «puedes recogerlo hasta el 16 de octubre» es un permiso a 28 días
       vista, y lo que provoca es dejarlo para después. Urge sin fecha y sin
@@ -5133,6 +5207,11 @@ La regla vive en `lib/swayp-desde-confirmacion.ts` y la aplica
     - Los candidatos se buscan **por celular**, no por el pedido del último
       aviso: quedarse con el último sería justo la adivinanza que las puertas
       existen para evitar.
+    - **Un pedido pagado en el checkout no es candidato** (09-10-2026): no debe
+      nada, aunque no tenga ninguna fila en `order_payments`. Antes su saldo
+      salía como el total y la captura del pago web entraba por la puerta del
+      monto como un pago nuevo (#KP138120: S/ 134.10 a «YP AURELA KENKU», el
+      cobro de la pasarela, registrado como diferencia por Yape).
     - Lo que no pasa **queda como anomalía con su motivo** (`inbound_voucher`).
       El silencio es lo único inaceptable: la clienta ya pagó.
     - **El comprobante repetido del MISMO pedido no avisa a nadie.** Rastro y
@@ -7371,15 +7450,48 @@ Por cada pedido seleccionado:
 
 | Situación | Qué ocurre |
 | --- | --- |
-| Ya tiene una salida en custodia de la empresa | Se **reimprime esa**; no se crea otra |
+| Ya tiene una salida en custodia de la empresa | Se **reimprime esa**; no se crea otra. No cuentan una anulada ni una que su courier no entregó (abajo) |
 | No tiene ninguna salida | Se **crea** una sin courier decidido |
 | Su última salida fue **devuelta** | Se **crea** una nueva: rearmar es reprogramación normal, no una salida simultánea |
-| Tiene una salida **todavía en la calle** | No se crea nada: una salida adicional exige justificación auditada (§23) y se hace desde el pedido |
+| Una salida **no la entregó su courier** (Tanders `RETURNING`/`RETURNED`, Swayp Devolución, anulada después de salir) | Se **crea** la salida nueva con **motivo automático** (09-10-2026): la anterior no está «en la calle» aunque su courier la siga dando en ruta, porque nadie la trabaja |
+| Tiene una salida **todavía en la calle** (viva de verdad) | No se crea nada: una salida adicional exige justificación auditada (§23) y se hace desde el pedido |
+
+**La salida que su courier no entregó (09-10-2026, decisión del owner).**
+«Descargar rótulos» respondía «Tiene 1 salida todavía en la calle» a un pedido
+cuya S01 de Tanders volvía, y el equipo terminaba reimprimiendo el rótulo de
+Tanders (§9.3, #AUR177756). La regla es la misma de la recuperación
+(`guideFailedAfterDispatch`, §9): una salida que su courier ya reportó como no
+entregada no cuenta como activa.
+
+- El motivo lo escribe el sistema, porque el hecho ya lo reportó el courier:
+  «Tanders no entregó AUR177756-S01 y su caja todavía vuelve (o «ya volvió»):
+  se reprograma con una salida nueva y su propio rótulo, que se pega sobre la
+  caja». Va en `route_output_created`.
+- Si la anterior sigue viva para su courier (todavía vuelve), la nueva es
+  **adicional**: su justificación va además en su propio evento
+  `additional_output_reason` con las salidas que seguían vivas, **una vez, al
+  nacer**. Quien la rellene después no la repite (§29.13).
+- El tope de cinco salidas se aplica igual (§4). Pedirlo dos veces reimprime la
+  misma «por definir».
+- El aviso nombra los pedidos que salieron con salida nueva y pide pegar su
+  rótulo sobre la caja que volvió.
+- Con la «por definir» viva el pedido sale de «Por reprogramar Lima» y pasa a
+  «Preparación · Por armar»: imprimirla **es** reprogramar, por eso se hace
+  después de la llamada. La ficha lo dice en «Próxima acción» y ofrece
+  «Imprimir rótulo de la salida nueva».
+- Una «por definir» **anulada** conserva la custodia `empresa`, pero no se
+  reimprime: pedir el rótulo otra vez crea una nueva (antes reimprimía la
+  anulada).
+- Si la lectura de las salidas falla, no se decide nada: sin salidas a la vista
+  cada pedido parecería no tener ninguna y se crearía una por pedido.
 
 - **Reusar gana a crear**: pedir el rótulo dos veces no puede consumir el límite
   de cinco salidas del pedido.
 - Reimprimir el rótulo de una salida concreta —papel perdido o dañado— se hace
-  desde el pedido, que lista cada salida con su rótulo.
+  desde el pedido, que lista cada salida con su rótulo. La de un courier que no
+  entregó ya no ofrece su rótulo como enlace principal: dice con qué salida va la
+  caja y deja, discreto, «Rótulo viejo (solo Devoluciones)». «Guías combinadas»
+  en lote tampoco imprime la de Tanders que no entregó.
 
 ### Crear salidas en lote
 
@@ -7673,6 +7785,16 @@ tienda/fecha; el courier se decide en despacho, no durante el armado.
 - Una transferencia entre motorizados conserva el QR; cambia la custodia y queda
   un evento por cada actor.
 - Una reprogramación que conserva el paquete armado conserva su identidad física.
+  **Excepción: la caja que vuelve de otro courier** (09-10-2026). Cambia el
+  courier, así que nace una salida nueva (§4, §9.3) y la caja cambia de identidad
+  una sola vez: el rótulo de la nueva se pega encima y tapa el QR viejo. **El QR
+  viejo no es alias** de la nueva: «Dejar paquete listo» no lo marca listo y
+  «Verificar caja» no lo coteja; los dos responden nombrando la salida con la que
+  sale la caja («Es el rótulo viejo de AUR177756-S01 (Tanders no entregó). En
+  esta caja va como AUR177756-S02: escanea su rótulo…»). Asignar por escaneo lee
+  el **pedido**: con el QR viejo la caja entra como la salida que se rellenó o
+  nació al tomarlo, y la línea pide imprimir su rótulo y pegarlo encima. Así se
+  cumple «un solo QR interno vivo por paquete».
 - Un pedido anulado, rechazado definitivamente o que debe desarmarse libera la
   reserva y devuelve el producto a su bolsa. Si luego se vuelve a armar, nace una
   salida nueva con QR nuevo, respetando §4.
@@ -8620,11 +8742,27 @@ salida también entra, con esa misma salida (abajo).
   cuenta en «Por asignar» y en la tarjeta «Por reprogramar».
 - Cuando la salida que falló es de **otro courier**, **tomarlo crea una salida
   NUEVA** con su QR y Almacén arma otra caja (§9.3): la anterior es de otro
-  courier y lleva su rótulo. Nunca se rellena otra salida, y la que falló no
-  cuenta como «ya en caja» aunque siga volviendo.
-- Si la caja anterior **todavía vuelve**, la salida nueva es adicional y su
-  motivo se escribe solo (`additional_output_reason`, §9): el hecho ya lo
-  reportó el courier. El tope de cinco salidas se aplica igual.
+  courier y lleva su rótulo. **Nunca se rellena la salida del courier que
+  falló**, y la que falló no cuenta como «ya en caja» aunque siga volviendo.
+- **Precisión del 09-10-2026: la «por definir» nacida al reprogramar SÍ se
+  rellena.** Si después de la llamada se pidió el rótulo de la salida nueva
+  (§28), esa «por definir» es la caja que se arma y su rótulo el que va pegado.
+  Tomarla la **rellena** como cualquier «por definir» (§29.2): mismo QR,
+  consecutivo y rótulo, sin motivo nuevo y sin gastar otra de las cinco. Pasa
+  en el camino normal —el pedido ya está en Preparación o Listo para asignar—,
+  donde la salida que falló **tampoco estorba**: antes respondía «El pedido ya
+  tiene una salida asignada a otro courier» por la S01 de Tanders que volvía. Y
+  pasa también en el reintento, si el Master no alcanzó a recalcularse: rellena
+  la que existe en vez de crear otra.
+- La toma **crea** salida solo si no existe esa «por definir» (el camino viejo,
+  sin rótulo pedido antes). Entonces el aviso nombra la salida nueva —«Salida
+  nueva AUR177756-S03: imprime su rótulo y pégalo sobre la caja que volvió»— y
+  la fila de la cola lo dice a la vista, no solo en el título.
+- Si la caja anterior **todavía vuelve** y la toma crea la salida, esta es
+  adicional y su motivo se escribe solo (`additional_output_reason`, §9): el
+  hecho ya lo reportó el courier. Si ya volvió, el motivo dice «ya volvió» y no
+  «todavía vuelve». El tope de cinco salidas se aplica igual. Rellenar no es
+  salida adicional: su motivo se escribió al nacer (§28).
 - Con la salida nueva el pedido deja la recuperación y sigue el camino normal
   de Grupo GF; el paquete que volvió no lo devuelve a «Devuelto» (§7).
 

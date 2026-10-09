@@ -145,6 +145,6 @@ describe("los reimpresos llegan nombrados al aviso", () => {
   });
 
   it("la consulta trae el nombre del pedido", () => {
-    expect(source).toContain("id,order_id,order_name,custody_state");
+    expect(source).toContain("id,order_id,order_name,courier,output_code");
   });
 });
