@@ -32,6 +32,8 @@ import {
 } from "@/components/ops-ui";
 import { IconAlert, IconChevronDown } from "@/components/icons";
 import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
+import { AliclikOutlookBanner } from "@/components/aliclik-outlook";
+import type { AliclikOutlook } from "@/lib/aliclik-outlook";
 import type { DuplicateHold } from "@/lib/aliclik-duplicate";
 import {
   createAliclikGuide,
@@ -81,6 +83,8 @@ export function AliclikGuidePanel({
   paymentState = null,
   riskReasons = [],
   duplicateHold,
+  outlook,
+  storeName,
   onDuplicateChanged,
   onCreated,
 }: {
@@ -91,6 +95,9 @@ export function AliclikGuidePanel({
   paymentState?: string | null;
   riskReasons?: string[];
   duplicateHold?: DuplicateHold | null;
+  /** Cuántas guías de Aliclik se entregan según los días del pedido (09-10-2026). */
+  outlook?: AliclikOutlook | null;
+  storeName?: string | null;
   onDuplicateChanged?: () => void;
   onCreated: () => void;
 }) {
@@ -287,6 +294,10 @@ export function AliclikGuidePanel({
             onGateChange={setDuplicateAllowed}
             onChanged={onDuplicateChanged}
           />
+
+          {/* Un aviso, no un bloqueo: va después de lo que sí para la
+              escritura. Solo con entrega baja; si no, no dice nada. */}
+          <AliclikOutlookBanner outlook={outlook} storeName={storeName} />
         </div>
 
         {/* Creada la guía, la cotización se borra y con ella el paso 3: el

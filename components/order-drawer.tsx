@@ -1408,6 +1408,8 @@ export function OrderDrawer({
                   onJump={jumpTo}
                   actionEnabled={routeEnabled}
                   onSelect={selectRoute}
+                  aliclikOutlook={detail.aliclikOutlook}
+                  storeName={storeName(detail.row.store_id)}
                 />
               </div>
               <section
@@ -1718,6 +1720,8 @@ export function OrderDrawer({
                     paymentState={detail.row.payment_state}
                     riskReasons={brief?.risk.reasons ?? []}
                     duplicateHold={brief?.duplicateHold}
+                    outlook={detail.aliclikOutlook}
+                    storeName={storeName(detail.row.store_id)}
                     onDuplicateChanged={() => { void reload(); onSaved(); }}
                     onCreated={() => {
                       void reload();
