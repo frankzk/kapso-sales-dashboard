@@ -284,6 +284,7 @@ Una paleta fría y contenida: tinta azulada, hairlines casi invisibles, un azul 
 - **Crítico** (`crit-bg` / `crit-fg`, lavado `crit-wash`): errores y acciones destructivas.
 - **Urgente** (`urgent`): la única chapa sólida con texto blanco, reservada para lo que no puede esperar.
 - **Macroetapas del MOM** (excepción consciente): la macroetapa de un pedido lleva el tono que fija el MOM (§25 de `docs/mom/master-pedidos-v1.md`): ámbar para confirmación, celeste para preparación, índigo para despacho, cian para seguimiento, naranja para cierre, verde para completado y gris para consulta. Va en chapa de 4 px con el par `*-100` / `*-800` de Tailwind (`MacroStageBadge`) y, en las tarjetas de macroetapa, como un cuadro de 8 px en `*-500` delante de la etiqueta (`MacroStageDot`), que hace de leyenda de la tabla. Son tonos de una regla de negocio, no estados de este sistema: no se usan para nada más.
+- **Cobertura** (excepción consciente, 09-10-2026): la cobertura del pedido es una clasificación y no un estado, así que no usa los pares `ok`/`warn`/`crit` —un «Agencia» en ámbar se leería como un problema— ni los matices de las macroetapas, que van en la misma fila. Lleva un tinte suave de un matiz propio: fondo `*-50`, anillo interior `*-200` y texto `*-800` de Tailwind, Lima en violeta, Provincia COD en verde azulado (`teal`) y Agencia en fucsia (`CoverageBadge`, en `components/coverage-badge.tsx`). Queda más callado que la chapa de etapa (`*-100` / `*-800`), que sigue siendo lo más fuerte de la fila. «Por revisar» es la única con el par `warn`, porque pide que alguien actúe. El texto dice siempre la cobertura: el color ayuda a escanear, no la sustituye.
 
 ### Named Rules
 **The Azul con Oficio Rule.** El azul Kapta solo marca acción principal, selección, pestaña activa, foco y enlaces. Nunca es un fondo de sección, un adorno ni un color de estado.
@@ -366,6 +367,7 @@ Firmes y discretos: se distinguen por relleno y sombra, no por tamaño.
 - **Chapa (Badge):** 20 px de alto, 4 px de radio, 12 px en peso 500, par de tono (`neutral`, `info`, `ok`, `warn`, `crit`, `urgent`, `brand`). Si el texto es largo, parte en líneas en vez de cortarse.
 - **Píldora de filtro:** vacía es discontinua (`line-strong`) con «+» y la etiqueta en `ink-600`; con valor pasa a sólida con sombra de control, una «x» para quitarla, un separador de 1 px y el valor en `brand-700`. Un filtro de sí/no se enciende con el mismo toque.
 - **Píldora de excepción:** blanca y redonda con icono, etiqueta y una chapa de contador (`warn` si hay algo, `neutral` en cero); activa sube a anillo azul de 2 px.
+- **Chapa de cobertura:** la misma chapa de 20 px con el tinte de su operación (ver «Estados → Cobertura»): Master, ficha y excepciones por distrito en Ajustes.
 - **Chip de elección:** redondo, 32 px; encendido en `brand-50` con anillo azul de 2 px; en cero, deshabilitado al 40 %.
 
 ### Cards / Containers
