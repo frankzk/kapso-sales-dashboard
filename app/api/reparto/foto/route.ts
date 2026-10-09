@@ -6,11 +6,14 @@ import { getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { routeReportAccess } from "@/lib/route-report-access";
 import {
+  PHOTO_AS_IS_BYTES,
   PHOTO_DIRECT_LIMIT,
+  PHOTO_HEADER_BYTES,
   PHOTO_MAX_SIDE,
   PHOTO_QUALITY,
   PHOTO_UPLOAD_LIMIT,
   imageKind,
+  readImageSize,
 } from "@/lib/photo-resize";
 
 export const runtime = "nodejs";
@@ -82,9 +85,12 @@ export async function POST(req: NextRequest) {
   const stop = await stopForUpload(stopId);
   if (stop instanceof NextResponse) return stop;
 
-  const bytes = new Uint8Array(await file.arrayBuffer());
+  const received = new Uint8Array(await file.arrayBuffer());
+  const light = await lighten(received);
+  const bytes = light ?? received;
+  const stored = light ? "image/jpeg" : type || "image/jpeg";
   const sha = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
-  const ext = type.includes("png") ? "png" : type.includes("webp") ? "webp" : "jpg";
+  const ext = light ? "jpg" : /hei[cf]/.test(type) ? "heic" : type.includes("png") ? "png" : type.includes("webp") ? "webp" : "jpg";
   const path = `${stop.routeId}/${stopId}/${kind}-${sha}.${ext}`;
 
   const admin = createAdminSupabase();
@@ -92,7 +98,7 @@ export async function POST(req: NextRequest) {
     await ensureBucket(admin);
     const { error } = await admin.storage
       .from(BUCKET)
-      .upload(path, new Blob([bytes as BlobPart], { type: type || "image/jpeg" }), {
+      .upload(path, new Blob([bytes as BlobPart], { type: stored }), {
         upsert: true,
       });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -126,6 +132,42 @@ async function stopForUpload(stopId: string): Promise<{ routeId: string } | Next
 
 /** Lo que `sharp` sabe abrir. El HEIC de los iPhone y de algunos Android, no. */
 const SERVER_READABLE = new Set(["jpeg", "png", "webp", "gif", "avif"]);
+
+/**
+ * La foto en JPEG de 1600 px por el lado mayor: lo mismo que hace el teléfono
+ * cuando puede. Null si no se deja abrir (rota o rara).
+ */
+async function toLightJpeg(bytes: Buffer): Promise<Buffer | null> {
+  try {
+    return await sharp(bytes, { animated: false, limitInputPixels: 200_000_000 })
+      .rotate()
+      .resize({ width: PHOTO_MAX_SIDE, height: PHOTO_MAX_SIDE, fit: "inside", withoutEnlargement: true })
+      .flatten({ background: "#ffffff" })
+      .jpeg({ quality: Math.round(PHOTO_QUALITY * 100), mozjpeg: true })
+      .toBuffer();
+  } catch (e) {
+    console.error("[reparto/foto] no se pudo reducir", e);
+    return null;
+  }
+}
+
+/**
+ * La foto que llega pesada por la subida normal se reduce antes de guardarla
+ * (09-10-2026). Son las que el celular no tuvo memoria para achicar y subió
+ * enteras: de 1 a 4 por ruta, de 1 a 1,7 MB, entre fotos de 130 KB. Así toda
+ * evidencia guardada pesa lo mismo y se abre rápido en el panel. Una foto ya
+ * liviana y de 1600 px o menos se guarda tal cual; la que `sharp` no abre
+ * (HEIC), también: la evidencia no se pierde. Null = se guarda la recibida.
+ */
+async function lighten(bytes: Uint8Array): Promise<Buffer | null> {
+  if (!SERVER_READABLE.has(imageKind(bytes.subarray(0, 32)))) return null;
+  if (bytes.length <= PHOTO_AS_IS_BYTES) {
+    const size = readImageSize(bytes.subarray(0, PHOTO_HEADER_BYTES));
+    if (!size || Math.max(size.width, size.height) <= PHOTO_MAX_SIDE) return null;
+  }
+  const jpg = await toLightJpeg(Buffer.from(bytes));
+  return jpg && jpg.length < bytes.length ? jpg : null;
+}
 
 /**
  * La foto que el celular no pudo abrir para achicarla y pesa más que el corte
@@ -182,19 +224,9 @@ async function direct(req: NextRequest) {
     if (!SERVER_READABLE.has(imageKind(new Uint8Array(bytes.subarray(0, 32))))) {
       return NextResponse.json({ ok: true, path: original, reduced: false });
     }
-    let jpg: Buffer;
-    try {
-      jpg = await sharp(bytes, { animated: false, limitInputPixels: 200_000_000 })
-        .rotate()
-        .resize({ width: PHOTO_MAX_SIDE, height: PHOTO_MAX_SIDE, fit: "inside", withoutEnlargement: true })
-        .flatten({ background: "#ffffff" })
-        .jpeg({ quality: Math.round(PHOTO_QUALITY * 100), mozjpeg: true })
-        .toBuffer();
-    } catch (e) {
-      // Una foto rota o rara: se queda el original, que igual es la evidencia.
-      console.error("[reparto/foto] no se pudo reducir", original, e);
-      return NextResponse.json({ ok: true, path: original, reduced: false });
-    }
+    const jpg = await toLightJpeg(bytes);
+    // Una foto rota o rara: se queda el original, que igual es la evidencia.
+    if (!jpg) return NextResponse.json({ ok: true, path: original, reduced: false });
     const sha = createHash("sha256").update(jpg).digest("hex").slice(0, 16);
     const path = `${prefix}${kind}-${sha}.jpg`;
     const { error: upError } = await admin.storage
