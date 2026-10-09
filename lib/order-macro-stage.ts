@@ -22,7 +22,18 @@ import {
   recoveryActive,
   recoveryWindow,
 } from "@/lib/reproprovincia";
+import {
+  swaypDesdeConfirmacionCase,
+  swaypDesdeConfirmacionFailed,
+  swaypNoEntregoMotivo,
+} from "@/lib/swayp-desde-confirmacion";
 
+// v1.24 (09-10-2026): Swayp desde Por confirmar (MOM §11.11). Un pedido que salió
+// por Swayp con el botón de la mesa de confirmación y Swayp NO entregó vuelve a
+// «Por confirmar · Swayp no entregó» en vez de ir a Gestión Reproprovincia, para
+// que entre otra vez a las llamadas. Solo mueve pedidos con el hecho nuevo
+// `swayp_desde_por_confirmar`, pero la versión sube para que el cron recalcule.
+//
 // v1.23 (30-09-2026): en Lima, lo que cualquier courier no entrega pasa a «Por
 // reprogramar Lima»; solo la entrega lleva a cerrar y solo la anulación en
 // Shopify termina la venta (owner). Dos cambios: una guía ANULADA DESPUÉS DE
@@ -132,7 +143,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.23" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.24" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -164,6 +175,11 @@ export type MacroSubstage =
   | "por_confirmar"
   | "volver_a_contactar"
   | "ultimo_intento"
+  // Salió por Swayp desde Por confirmar y Swayp no entregó (v1.24, §11.11).
+  | "swayp_no_entrego"
+  // Motivos de «Swayp no entregó», no subetapas: dicen por qué volvió.
+  | "swayp_rechazo_en_puerta"
+  | "swayp_falla_propia"
   // Motivo de Por confirmar, no subetapa: describe QUÉ falta, no en qué punto
   // de la gestión está el pedido. Ver `confirmationSubstage`.
   | "pago_requerido_pendiente"
@@ -224,6 +240,7 @@ export const MACRO_SUBSTAGES_BY_STAGE: Record<
   // subetapa competía con «Volver a contactar» por el mismo pedido.
   por_confirmar: [
     "sin_llamar",
+    "swayp_no_entrego",
     "por_confirmar",
     "volver_a_contactar",
     "ultimo_intento",
@@ -282,6 +299,9 @@ export const MACRO_SUBSTAGE_LABEL: Record<MacroSubstage, string> = {
   por_confirmar: "Por confirmar",
   volver_a_contactar: "Volver a contactar",
   ultimo_intento: "Último intento",
+  swayp_no_entrego: "Swayp no entregó",
+  swayp_rechazo_en_puerta: "Rechazó a Swayp en la puerta",
+  swayp_falla_propia: "Falla de Swayp, no de la clienta",
   pago_requerido_pendiente: "Pago requerido pendiente",
   por_generar_rotulo: "Por generar rótulo",
   por_armar: "Por armar",
@@ -1142,6 +1162,54 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
       finalized?.occurred_at ?? input.legacy.since,
       operation,
     );
+  }
+
+  // SWAYP DESDE POR CONFIRMAR (v1.24, MOM §11.11). El pedido salió por Swayp con
+  // el botón de la mesa de confirmación, SIN confirmar, y Swayp no entregó: vuelve
+  // a Por confirmar para que se le llame otra vez —normalmente para salir por
+  // Aliclik—. Va antes que el estado terminal y que Reproprovincia: la Swayp
+  // fallida abriría la recuperación (§11) y la mandaría a En curso, o a Por
+  // cerrar al anularse, y el owner pidió que vuelva a las llamadas.
+  //
+  // Deja de mandar en cuanto pasa algo después: otra salida viva o entregada (la
+  // guía nueva toma el pedido), la anulación en Shopify (la decide una persona),
+  // o una confirmación posterior al envío (pasa a Preparación para generar el
+  // rótulo de la salida nueva).
+  const swaypCase = input.order.cancelled_at ? null : swaypDesdeConfirmacionCase(input.guides, input.events);
+  if (swaypCase && swaypDesdeConfirmacionFailed(swaypCase.guide)) {
+    const caseGuide = swaypCase.guide;
+    const anotherOutput = input.guides.some(
+      (guide) => guide.id !== caseGuide.id && (guide.delivery_status === "entregado" || isActiveGuide(guide)),
+    );
+    if (!anotherOutput) {
+      const inventoryPending = hasReturned(caseGuide) && !inventoryResolvedForGuide(caseGuide, input.events);
+      const reconfirmed = latestEvent(
+        input.events.filter((event) => event.occurred_at > swaypCase.sentAt),
+        ["confirmed"],
+      );
+      if (reconfirmed && agencyPaymentReady(operation, input.paymentState)) {
+        return result(
+          "preparacion",
+          "por_generar_rotulo",
+          reconfirmed.occurred_at,
+          operation,
+          inventoryPending ? ["devolucion_pendiente_inventario"] : [],
+        );
+      }
+      const motivo = swaypNoEntregoMotivo(caseGuide);
+      const reasons: MacroSubstage[] = [
+        ...(motivo === "rechazo_en_puerta" ? (["swayp_rechazo_en_puerta"] as const) : []),
+        ...(motivo === "falla_swayp" ? (["swayp_falla_propia"] as const) : []),
+        ...(inventoryPending ? (["devolucion_pendiente_inventario"] as const) : []),
+      ];
+      return result(
+        "por_confirmar",
+        "swayp_no_entrego",
+        caseGuide.closed_at ?? caseGuide.returned_at ?? caseGuide.updated_at ?? swaypCase.sentAt,
+        operation,
+        reasons,
+      );
+    }
   }
 
   if (["entregado", "anulado", "devuelto"].includes(input.legacy.general)) {

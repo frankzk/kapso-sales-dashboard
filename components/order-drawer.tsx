@@ -780,6 +780,8 @@ export function OrderDrawer({
   const [tandersOpen, setTandersOpen] = useState(false);
   const [shalomOpen, setShalomOpen] = useState(false);
   const [swaypOpen, setSwaypOpen] = useState(false);
+  /** `por_confirmar` cuando lo abre el botón de la mesa de confirmación (§11.11). */
+  const [swaypOrigen, setSwaypOrigen] = useState<"por_confirmar" | undefined>(undefined);
   const [manualRoute, setManualRoute] = useState<RouteCandidate | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -875,6 +877,7 @@ export function OrderDrawer({
       return;
     }
     if (route.action === "swayp") {
+      setSwaypOrigen(undefined);
       setSwaypOpen(true);
       return;
     }
@@ -1368,6 +1371,21 @@ export function OrderDrawer({
                       run(() => registerConfirmationAttempt(orderId, payload))
                     }
                   />
+                  {/* MOM §11.11: provincia COD que Swayp puede llevar hoy sale sin
+                      confirmar; si Swayp no entrega, vuelve aquí. No se ofrece en
+                      «Swayp no entregó»: ese pedido se llama para salir por otra vía. */}
+                  {detail.row.macro_stage === "por_confirmar" &&
+                    detail.row.macro_substage !== "swayp_no_entrego" &&
+                    detail.row.coverage === "provincia_cod" &&
+                    detail.row.swayp_availability === "ok" && (
+                      <EnviarPorSwaypDesdeConfirmacion
+                        pending={pending}
+                        onOpen={() => {
+                          setSwaypOrigen("por_confirmar");
+                          setSwaypOpen(true);
+                        }}
+                      />
+                    )}
                   {detail.row.macro_substage === "gestion_reproprovincia" && (
                     <>
                       {/* MOM §11.8: el agente de voz llama a estos pedidos. */}
@@ -1995,6 +2013,7 @@ export function OrderDrawer({
       {swaypOpen && (
         <DirectFenixGuideModal
           initialOrderId={orderId}
+          origen={swaypOrigen}
           onClose={() => setSwaypOpen(false)}
           onCreated={() => {
             void reload();
@@ -3120,6 +3139,28 @@ function OrderActions({
  * a mano en Reproprovincia; por eso pide motivo y no se esconde detrás de un
  * icono. Las otras salidas —Swayp, reprogramar Aliclik— viven en Rutas.
  */
+/**
+ * «Enviar por Swayp» desde Por confirmar (MOM §11.11). Sale SIN confirmar, por
+ * decisión del owner: lo dice el panel, para que nadie lo lea como una
+ * confirmación. Si Swayp no entrega, el pedido vuelve a «Por confirmar · Swayp
+ * no entregó».
+ */
+function EnviarPorSwaypDesdeConfirmacion({ pending, onOpen }: { pending: boolean; onOpen: () => void }) {
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-ok-wash p-4">
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-ok-fg">Swayp lo puede llevar hoy</p>
+        <p className="mt-0.5 text-[13px] leading-5 text-ink-700">
+          Sale sin confirmar. Si Swayp no lo entrega, el pedido vuelve a Por confirmar para llamarlo otra vez.
+        </p>
+      </div>
+      <OpsButton size="sm" disabled={pending} onClick={onOpen} className="pointer-coarse:h-11">
+        Enviar por Swayp
+      </OpsButton>
+    </div>
+  );
+}
+
 function DescartarRecuperacion({
   pending,
   onDiscard,

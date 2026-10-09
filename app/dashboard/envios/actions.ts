@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { SWAYP_DESDE_CONFIRMACION_KIND } from "@/lib/swayp-desde-confirmacion";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { resolveAgentName, resolveAgentNames } from "@/lib/agent-names";
 import { recomputeOrderMasterForShipmentsSafe } from "@/lib/order-master";
@@ -1674,6 +1675,12 @@ export async function createDirectFenixGuide(input: {
   note?: string;
   /** Motivo de la salida adicional en Lima, con otra salida todavía viva. */
   motivoSalidaAdicional?: string | null;
+  /**
+   * `por_confirmar`: el botón «Enviar por Swayp» de la mesa de confirmación
+   * (MOM §11.11). Sale sin confirmar y, si Swayp no entrega, el pedido vuelve a
+   * Por confirmar. Solo para provincia COD en Por confirmar.
+   */
+  origen?: "por_confirmar";
 }): Promise<ShipmentActionState & { shipmentId?: string }> {
   const sb = await createServerSupabase();
   const {
@@ -1699,6 +1706,25 @@ export async function createDirectFenixGuide(input: {
   }
 
   const admin = createAdminSupabase();
+
+  // El botón de Por confirmar solo vale donde el owner lo pensó: provincia COD
+  // que todavía está por confirmar. Se lee del Master, que es donde vive esa
+  // respuesta; un pedido que avanzó entre abrir la ficha y pulsar ya no es eso.
+  if (input.origen === "por_confirmar") {
+    const { data: master } = await admin
+      .from("order_master")
+      .select("macro_stage,coverage")
+      .eq("order_id", order.id)
+      .maybeSingle();
+    const m = master as { macro_stage: string | null; coverage: string | null } | null;
+    if (m?.macro_stage !== "por_confirmar") {
+      return { error: "El pedido ya no está en Por confirmar. Actualiza la ficha." };
+    }
+    if (m.coverage !== "provincia_cod") {
+      return { error: "«Enviar por Swayp» desde Por confirmar es solo para pedidos de provincia COD." };
+    }
+  }
+
   const { address } = await resolveDirectGuideAddress(admin, order);
   const district = address?.city ?? null;
   const region = address?.province ?? null;
@@ -1910,6 +1936,30 @@ export async function createDirectFenixGuide(input: {
     });
   }
 
+  // El hecho que hace volver el pedido a Por confirmar si Swayp no entrega (MOM
+  // §11.11). Va ANTES de recalcular el Master: el recálculo lo lee.
+  let avisoOrigen = "";
+  if (input.origen === "por_confirmar") {
+    const { error: caseError } = await admin.from("order_events").insert({
+      store_id: order.store_id,
+      order_id: order.id,
+      kind: SWAYP_DESDE_CONFIRMACION_KIND,
+      occurred_at: new Date().toISOString(),
+      actor: user.id,
+      source: "manual",
+      courier: "fenix",
+      guide_code: code,
+      shipment_id: childId,
+      note: "Enviado por Swayp desde Por confirmar, sin confirmación. Si Swayp no entrega, vuelve a Por confirmar.",
+    });
+    // La guía ya existe en Swayp: no se deshace por esto, pero se dice, porque
+    // sin el hecho el pedido no volvería solo a Por confirmar.
+    avisoOrigen = caseError
+      ? ` No se pudo marcar como «desde Por confirmar» (${caseError.message}): si Swayp no entrega, avisa para devolverlo a mano.`
+      : " Si Swayp no la entrega, el pedido vuelve a Por confirmar.";
+    revalidatePath("/dashboard/pedidos");
+  }
+
   await syncMasterForShipment(admin, childId);
   revalidatePath("/dashboard/envios");
   // `es-PE` con mes corto ya trae punto —«11 set.»— y la frase añade el suyo,
@@ -1927,7 +1977,7 @@ export async function createDirectFenixGuide(input: {
     ? ` Se escribió sobre la salida ${written.outputCode ?? "por definir"}, sin abrir otra.`
     : "";
   return {
-    notice: `Guía Swayp directa ${code} creada — En ruta, despacho ${fecha}.${relleno}${swaypNotice}`,
+    notice: `Guía Swayp directa ${code} creada — En ruta, despacho ${fecha}.${relleno}${swaypNotice}${avisoOrigen}`,
     shipmentId: childId,
   };
 }
