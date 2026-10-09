@@ -4,7 +4,9 @@
 // una sección con su título, los bloqueos y avisos como avisos de página, y una
 // tarjeta por modalidad. La sugerida lleva el anillo azul y el botón principal.
 
+import { useId, useState } from "react";
 import { cn } from "@/components/ui";
+import { IconChevronDown } from "@/components/icons";
 import { Badge, Banner, OpsButton, SectionHead } from "@/components/ops-ui";
 import { AliclikOutlookLadder } from "@/components/aliclik-outlook";
 import type { AliclikOutlook } from "@/lib/aliclik-outlook";
@@ -63,6 +65,126 @@ export function OrderRouteDesk({
 }) {
   const blockers = gate?.blockers ?? [];
   const blockedActions = new Set(gate?.blockedActions ?? []);
+  const [showRare, setShowRare] = useState(false);
+  const uid = useId();
+  // Una tarjeta por modalidad.
+  const renderTile = (route: RouteCandidate) => {
+    // Por MODALIDAD, no por pedido: con el pedido cerrado, Tanders y
+    // Shalom se niegan siempre, la salida manual solo si no se cerró por
+    // una entrega fallida, y Aliclik y Swayp ni miran el estado. Ver
+    // `routeDeskGate`.
+    const closed = blockedActions.has(route.action);
+    const enabled = !closed && route.availability !== "blocked" && actionEnabled(route);
+    // «Sugerido» solo cuando se puede tomar: con el pedido cerrado la
+    // tarjeta dice «Reabrir primero» y una recomendación ahí confunde.
+    const suggested = route.recommended && enabled;
+    return (
+      <article
+        key={route.key}
+        className={cn(
+          "flex min-h-36 flex-col rounded-lg p-4",
+          STATUS_TONE[route.availability].bg,
+          suggested ? "ring-2 ring-inset ring-brand-600" : STATUS_TONE[route.availability].ring,
+        )}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className={cn("text-sm font-semibold", route.availability === "blocked" ? "text-ink-600" : "text-ink-900")}>
+              {route.label}
+            </p>
+            <p className="mt-0.5 text-[13px] text-ink-500">{route.timing}</p>
+          </div>
+          {suggested && <Badge tone="brand">Sugerido</Badge>}
+          {route.availability === "warning" && !suggested && <Badge tone="warn">Con aviso</Badge>}
+        </div>
+        {/* Nombrar la salida que bloquea, no solo decir que existe.
+            «No disponible» a secas obliga a bajar hasta «Salidas y guías»
+            para saber de cuál se habla, y en el panel del courier hay que
+            buscarla por su número. Con el número, el código corto y el
+            estado que el courier reporta, la tarjeta ya contesta las tres
+            preguntas que uno se hace ahí mismo. */}
+        {route.blockingOutput && (
+          // Un recuadro sin anillo: la tarjeta de la modalidad ya es el
+          // marco, y otro anillo dentro sería un marco dentro de otro.
+          <div
+            className={cn(
+              "mt-3 rounded-md px-3 py-2",
+              route.availability === "warning" ? "bg-white" : "bg-wash",
+            )}
+          >
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-600">
+              <span className="font-semibold text-ink-700">
+                {shipmentIsReturning(route.blockingOutput) ? "Salida en devolución" : "Salida activa"}
+              </span>
+              {route.blockingOutput.guideCode && (
+                // `select-all`: el número se copia de un clic para pegarlo
+                // en el buscador del panel del courier, que es lo que se
+                // hace con él justo después de leerlo.
+                <span className="select-all font-mono font-semibold text-ink-900">
+                  N° {route.blockingOutput.guideCode}
+                </span>
+              )}
+              {route.blockingOutput.shortCode && (
+                <span className="rounded bg-wash px-1.5 py-0.5 font-mono font-medium text-ink-700 ring-1 ring-inset ring-line">
+                  {route.blockingOutput.shortCode}
+                </span>
+              )}
+            </p>
+            <p
+              className={cn(
+                "mt-0.5 text-xs",
+                shipmentIsReturning(route.blockingOutput) ? "font-medium text-warn-fg" : "text-ink-500",
+              )}
+            >
+              {shipmentStateLabel(route.blockingOutput)}
+            </p>
+          </div>
+        )}
+        <p className={cn("mt-3 text-[13px] leading-5", route.availability === "blocked" ? "text-ink-500" : "text-ink-700")}>
+          {route.reason}
+        </p>
+        {/* Antes de abrir Aliclik, lo que suele pasar con un pedido de
+            estos días. Solo si la tarjeta se puede tomar: en una
+            bloqueada o con salida activa la pregunta no está abierta. */}
+        {route.action === "aliclik" && aliclikOutlook && enabled && !route.blockingOutput && (
+          <AliclikOutlookLadder
+            outlook={aliclikOutlook}
+            storeName={storeName}
+            onWash={route.availability === "warning"}
+            className="mt-3"
+          />
+        )}
+        <div className="flex-1" />
+        <OpsButton
+          size="sm"
+          variant={suggested ? "primary" : "secondary"}
+          disabled={!enabled}
+          onClick={() => onSelect(route)}
+          className="mt-4 self-start pointer-coarse:h-11"
+        >
+          {closed
+            ? "Reabrir primero"
+            : route.blockingOutput
+            ? "Ya tiene salida activa"
+            : route.availability === "blocked"
+            ? "No disponible"
+            : actionEnabled(route)
+              ? route.key === "propio"
+                ? "Ver en Grupo GF"
+                : ACTION_LABEL[route.action]
+              : "Sin permiso"}
+        </OpsButton>
+      </article>
+    );
+  };
+
+  // Lo que casi no se usa (Axel, Urpi) va plegado al pie y nunca se sugiere
+  // (09-10-2026). Se abre solo si una de esas tarjetas tiene algo que decir:
+  // una salida viva suya, para que no quede escondida.
+  const main = plan.candidates.filter((route) => !route.rarelyUsed);
+  const rare = plan.candidates.filter((route) => route.rarelyUsed);
+  const rareOpen = showRare || rare.some((route) => Boolean(route.blockingOutput) || route.recommended);
+
   return (
     <section className="space-y-4">
       <SectionHead
@@ -113,117 +235,35 @@ export function OrderRouteDesk({
         </Banner>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        {plan.candidates.map((route) => {
-          // Por MODALIDAD, no por pedido: con el pedido cerrado, Tanders y
-          // Shalom se niegan siempre, la salida manual solo si no se cerró por
-          // una entrega fallida, y Aliclik y Swayp ni miran el estado. Ver
-          // `routeDeskGate`.
-          const closed = blockedActions.has(route.action);
-          const enabled = !closed && route.availability !== "blocked" && actionEnabled(route);
-          // «Sugerido» solo cuando se puede tomar: con el pedido cerrado la
-          // tarjeta dice «Reabrir primero» y una recomendación ahí confunde.
-          const suggested = route.recommended && enabled;
-          return (
-            <article
-              key={route.key}
-              className={cn(
-                "flex min-h-36 flex-col rounded-lg p-4",
-                STATUS_TONE[route.availability].bg,
-                suggested ? "ring-2 ring-inset ring-brand-600" : STATUS_TONE[route.availability].ring,
-              )}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className={cn("text-sm font-semibold", route.availability === "blocked" ? "text-ink-600" : "text-ink-900")}>
-                    {route.label}
-                  </p>
-                  <p className="mt-0.5 text-[13px] text-ink-500">{route.timing}</p>
-                </div>
-                {suggested && <Badge tone="brand">Sugerido</Badge>}
-                {route.availability === "warning" && !suggested && <Badge tone="warn">Con aviso</Badge>}
-              </div>
-              {/* Nombrar la salida que bloquea, no solo decir que existe.
-                  «No disponible» a secas obliga a bajar hasta «Salidas y guías»
-                  para saber de cuál se habla, y en el panel del courier hay que
-                  buscarla por su número. Con el número, el código corto y el
-                  estado que el courier reporta, la tarjeta ya contesta las tres
-                  preguntas que uno se hace ahí mismo. */}
-              {route.blockingOutput && (
-                // Un recuadro sin anillo: la tarjeta de la modalidad ya es el
-                // marco, y otro anillo dentro sería un marco dentro de otro.
-                <div
-                  className={cn(
-                    "mt-3 rounded-md px-3 py-2",
-                    route.availability === "warning" ? "bg-white" : "bg-wash",
-                  )}
-                >
-                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-600">
-                    <span className="font-semibold text-ink-700">
-                      {shipmentIsReturning(route.blockingOutput) ? "Salida en devolución" : "Salida activa"}
-                    </span>
-                    {route.blockingOutput.guideCode && (
-                      // `select-all`: el número se copia de un clic para pegarlo
-                      // en el buscador del panel del courier, que es lo que se
-                      // hace con él justo después de leerlo.
-                      <span className="select-all font-mono font-semibold text-ink-900">
-                        N° {route.blockingOutput.guideCode}
-                      </span>
-                    )}
-                    {route.blockingOutput.shortCode && (
-                      <span className="rounded bg-wash px-1.5 py-0.5 font-mono font-medium text-ink-700 ring-1 ring-inset ring-line">
-                        {route.blockingOutput.shortCode}
-                      </span>
-                    )}
-                  </p>
-                  <p
-                    className={cn(
-                      "mt-0.5 text-xs",
-                      shipmentIsReturning(route.blockingOutput) ? "font-medium text-warn-fg" : "text-ink-500",
-                    )}
-                  >
-                    {shipmentStateLabel(route.blockingOutput)}
-                  </p>
-                </div>
-              )}
-              <p className={cn("mt-3 text-[13px] leading-5", route.availability === "blocked" ? "text-ink-500" : "text-ink-700")}>
-                {route.reason}
-              </p>
-              {/* Antes de abrir Aliclik, lo que suele pasar con un pedido de
-                  estos días. Solo si la tarjeta se puede tomar: en una
-                  bloqueada o con salida activa la pregunta no está abierta. */}
-              {route.action === "aliclik" && aliclikOutlook && enabled && !route.blockingOutput && (
-                <AliclikOutlookLadder
-                  outlook={aliclikOutlook}
-                  storeName={storeName}
-                  onWash={route.availability === "warning"}
-                  className="mt-3"
-                />
-              )}
-              <div className="flex-1" />
-              <OpsButton
-                size="sm"
-                variant={suggested ? "primary" : "secondary"}
-                disabled={!enabled}
-                onClick={() => onSelect(route)}
-                className="mt-4 self-start pointer-coarse:h-11"
-              >
-                {closed
-                  ? "Reabrir primero"
-                  : route.blockingOutput
-                  ? "Ya tiene salida activa"
-                  : route.availability === "blocked"
-                  ? "No disponible"
-                  : actionEnabled(route)
-                    ? route.key === "propio"
-                      ? "Ver en Grupo GF"
-                      : ACTION_LABEL[route.action]
-                    : "Sin permiso"}
-              </OpsButton>
-            </article>
-          );
-        })}
-      </div>
+      <div className="grid gap-3 sm:grid-cols-2">{main.map(renderTile)}</div>
+
+      {rare.length > 0 && (
+        <div className="-mx-4 border-t border-line px-4 pt-3 sm:-mx-5 sm:px-5">
+          <button
+            type="button"
+            onClick={() => setShowRare((open) => !open)}
+            aria-expanded={rareOpen}
+            aria-controls={`${uid}-otros`}
+            className="-mx-2 flex w-[calc(100%+1rem)] items-center justify-between gap-4 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-wash pointer-coarse:min-h-11"
+          >
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold leading-5 text-ink-900">Otros couriers</span>
+              <span className="mt-0.5 block text-[13px] leading-5 text-ink-500">
+                {rare.map((route) => route.label).join(", ")} · casi no se usan; no se sugieren.
+              </span>
+            </span>
+            <IconChevronDown
+              aria-hidden
+              className={cn("size-4 shrink-0 text-ink-500 transition-transform motion-reduce:transition-none", rareOpen && "rotate-180")}
+            />
+          </button>
+          {rareOpen && (
+            <div id={`${uid}-otros`} className="grid gap-3 pt-3 sm:grid-cols-2">
+              {rare.map(renderTile)}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

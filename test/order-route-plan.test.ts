@@ -75,7 +75,24 @@ describe("motor de rutas MOM Fase 3", () => {
     const grupoGf = plan.candidates.find((route) => route.key === "propio");
     expect(grupoGf?.availability).toBe("blocked");
     expect(grupoGf?.reason).toContain("Sin tarifa");
-    expect(plan.candidates.find((route) => route.recommended)?.key).toBe("axel");
+    // Antes sugería Axel antes del mediodía. Desde el 09-10-2026 Axel casi no
+    // se usa (1 salida en 60 días en Lima) y la sugerencia pasa a Tanders.
+    expect(plan.candidates.find((route) => route.recommended)?.key).toBe("tanders");
+  });
+
+  it("Axel y Urpi casi no se usan: van al final, plegados, y nunca se sugieren (09-10-2026)", () => {
+    for (const now of ["2026-10-09T14:00:00Z", "2026-10-09T22:00:00Z"]) {
+      const plan = buildOrderRoutePlan({
+        operation: "lima",
+        outputs: [],
+        grupoGfCourier: { ...grupoGfDisponible, eligible: false, reason: "Sin tarifa." },
+        now: new Date(now),
+      });
+      const keys = plan.candidates.map((route) => route.key);
+      expect(keys.slice(-2)).toEqual(["axel", "urpi"]);
+      expect(plan.candidates.filter((route) => route.rarelyUsed).map((route) => route.key)).toEqual(["axel", "urpi"]);
+      expect(plan.candidates.find((route) => route.recommended)?.key).not.toMatch(/axel|urpi/);
+    }
   });
 
   it("Grupo GF Courier no aparece fuera de Lima Metropolitana y Callao", () => {

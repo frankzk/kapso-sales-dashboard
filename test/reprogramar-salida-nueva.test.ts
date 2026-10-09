@@ -324,7 +324,10 @@ describe("regla 2: Grupo GF rellena la salida que nació al imprimir", () => {
     state.outputs = [{ ...S01_ROW, reported_status: "PICKED" }, S02_ROW];
     const result = await take();
     expect(result.accepted).toEqual([]);
-    expect(result.failed[0]?.error).toBe("El pedido ya tiene una salida asignada a otro courier.");
+    // Desde el 09-10-2026 la negativa nombra la salida y su courier.
+    expect(result.failed[0]?.error).toBe(
+      "AUR177756-S01 está en ruta con Tanders. Para llevarlo en Grupo GF, registra antes el resultado de la que está en ruta.",
+    );
     expect(state.writes).toEqual([]);
   });
 });
