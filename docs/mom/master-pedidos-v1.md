@@ -1411,6 +1411,24 @@ Fénix. `Thunder` y `Tander` en la entrevista se normalizan como **Tanders**.
 Estas prioridades son parámetros operativos, no reglas rígidas: el sistema debe
 mostrar la razón de la sugerencia y permitir que Daysi elija otra ruta válida.
 
+**Axel Courier y Urpi ya no se sugieren (09-10-2026, decisión del owner).** Las
+reglas 2, 4 y 5 describen la operación de antes de Grupo GF Courier. En Lima,
+en los 60 días previos, Grupo GF hizo 1.864 salidas, Tanders 881, Swayp 138,
+Axel 1 y Urpi 0. La única de Axel fue la S02 de #KP139675, creada por la regla 2
+(«quiere a partir de las 4») cuando el pedido debía salir con Grupo GF. Desde
+entonces:
+
+- La mesa de ruta sugiere Grupo GF Courier si es elegible y está dentro de su
+  corte; si no, Tanders. Nunca sugiere Axel ni Urpi, tampoco como último
+  recurso.
+- Axel y Urpi siguen disponibles, plegados al pie de la mesa en «Otros
+  couriers». Esa franja se abre sola si alguno tiene una salida viva.
+- Cuando Grupo GF no puede tomar un pedido porque otro courier tiene una salida
+  viva, la negativa nombra la salida, el courier y dónde está («KP139675-S02 es
+  de Axel Courier y sigue en almacén · KP139675-S01 está en ruta con Swayp») y
+  dice qué hacer: anular la que sigue en almacén o registrar antes el resultado
+  de la que está en ruta.
+
 ### 9.3 Resultado fallido y nueva salida
 
 - Se revisa primero por qué no fue entregado: horario, ausencia, falta de

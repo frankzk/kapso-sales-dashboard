@@ -50,6 +50,7 @@ import { getRouteDetail, type RouteRow, type StopWithOrder } from "@/lib/routes-
 import { getRiders, type RiderRow } from "@/lib/settlements-access";
 import { routeReportAccess } from "@/lib/route-report-access";
 import { loadRouteCloseContext, type RouteCloseContext } from "@/lib/route-close";
+import { otherCourierBlockMessage } from "@/lib/gf-admission-message";
 
 const COURIER_PATH = "/dashboard/courier";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -1195,7 +1196,8 @@ async function takeOrdersCore(
       if (!isCourierAdmissionStage(row.macro_stage, row.macro_substage, row.operational_status) && !review && !own) {
         failed.push({ orderId, error: isReprogramStage(row.macro_stage, row.macro_substage)
           ? `${BLOCKED_REASON_LABEL[reprogramBlockReason(outputs)].label}.`
-          : "El pedido ya avanzó y salió de Pedidos disponibles." });
+          // Si lo frena la salida de otro courier, se dice cuál y de quién.
+          : otherCourierBlockMessage(outputs) ?? "El pedido ya avanzó y salió de Pedidos disponibles." });
         continue;
       }
       if (own) {
@@ -1233,7 +1235,13 @@ async function takeOrdersCore(
       const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null);
       const mayCreateOutput = Boolean(review) || retry || row.macro_substage === "por_generar_rotulo";
       if (assigned) {
-        failed.push({ orderId, error: "El pedido ya tiene una salida asignada a otro courier." });
+        // Nombrar la salida y su courier (09-10-2026): «asignada a otro
+        // courier» a secas dejaba adivinando cuál y qué hacer.
+        const blocking = review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs;
+        failed.push({
+          orderId,
+          error: otherCourierBlockMessage(blocking.filter((o) => o.id !== fillable?.id)) ?? "El pedido ya tiene una salida asignada a otro courier.",
+        });
         continue;
       }
       if (!mayCreateOutput && !fillable && !own) {
