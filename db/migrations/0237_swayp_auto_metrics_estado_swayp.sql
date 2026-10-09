@@ -1,4 +1,4 @@
--- 0236_swayp_auto_metrics_estado_swayp.sql — el resultado del automático
+-- 0237_swayp_auto_metrics_estado_swayp.sql — el resultado del automático
 -- Aliclik → Swayp (MOM §11.9) se lee del ESTADO DE SWAYP, no del
 -- `delivery_status` de Kapta.
 --

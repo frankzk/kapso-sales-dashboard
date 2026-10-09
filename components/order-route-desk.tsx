@@ -6,6 +6,8 @@
 
 import { cn } from "@/components/ui";
 import { Badge, Banner, OpsButton, SectionHead } from "@/components/ops-ui";
+import { AliclikOutlookLadder } from "@/components/aliclik-outlook";
+import type { AliclikOutlook } from "@/lib/aliclik-outlook";
 import { shipmentIsReturning, shipmentStateLabel } from "@/lib/order-status";
 import type {
   OrderRoutePlan,
@@ -38,6 +40,8 @@ export function OrderRouteDesk({
   onJump,
   actionEnabled,
   onSelect,
+  aliclikOutlook,
+  storeName,
 }: {
   plan: OrderRoutePlan;
   /**
@@ -53,6 +57,9 @@ export function OrderRouteDesk({
   onJump?: (target: RouteDeskBlocker["target"]) => void;
   actionEnabled: (route: RouteCandidate) => boolean;
   onSelect: (route: RouteCandidate) => void;
+  /** Cuántas guías de Aliclik se entregan según los días del pedido (09-10-2026). */
+  aliclikOutlook?: AliclikOutlook | null;
+  storeName?: string | null;
 }) {
   const blockers = gate?.blockers ?? [];
   const blockedActions = new Set(gate?.blockedActions ?? []);
@@ -182,6 +189,17 @@ export function OrderRouteDesk({
               <p className={cn("mt-3 text-[13px] leading-5", route.availability === "blocked" ? "text-ink-500" : "text-ink-700")}>
                 {route.reason}
               </p>
+              {/* Antes de abrir Aliclik, lo que suele pasar con un pedido de
+                  estos días. Solo si la tarjeta se puede tomar: en una
+                  bloqueada o con salida activa la pregunta no está abierta. */}
+              {route.action === "aliclik" && aliclikOutlook && enabled && !route.blockingOutput && (
+                <AliclikOutlookLadder
+                  outlook={aliclikOutlook}
+                  storeName={storeName}
+                  onWash={route.availability === "warning"}
+                  className="mt-3"
+                />
+              )}
               <div className="flex-1" />
               <OpsButton
                 size="sm"

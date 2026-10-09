@@ -1094,6 +1094,28 @@ no se crea la guía. Esta excepción tampoco levanta el veto de dos rechazos del
 distintas; la regla impide emitir una nueva. Lima y los demás couriers conservan
 sus reglas. Las resoluciones quedan en `order_events`, sin borrar historial.
 
+### 8.4 Entrega estimada de Aliclik según los días del pedido (09-10-2026)
+
+Pedido por el owner: antes de crear la primera guía Aliclik, la ficha dice
+cuántas de cada 10 guías parecidas entregó Aliclik según los días de
+calendario (Lima) que lleva el pedido: hoy, 1, 2, o 3 días o más. Al 09-10-2026,
+en Kenku: 61 %, 55 %, 40 % y 27 %; en Aurela: 70 %, 69 %, 50 % y 42 %.
+
+- **Es un aviso, no una regla.** No bloquea la creación, no cambia la ruta
+  sugerida ni pide permiso. Va en la tarjeta de Aliclik de la mesa de ruta y,
+  si la entrega es baja (menos de 50 %), en «Crear guía en Aliclik». Bajo 35 %
+  aconseja crearla solo si el cliente contesta ese día y vuelve a confirmar, o
+  con adelanto.
+- **Se mide por guía, no por pedido.** Cuenta la primera guía de cada pedido
+  creada por la API, que salió del almacén y ya tiene resultado (entregada, o
+  cerrada o transferida sin entrega), creada entre 70 y 14 días atrás
+  (`aliclik_delivery_by_order_age()`, migración 0236). Medir el pedido por su
+  `dispatched_at` exageraba la caída: esa fecha se mueve cuando un envío falla
+  y se reprograma, así que los que fallan parecían más viejos.
+- **Por tienda.** Un tramo con menos de 30 guías con resultado usa las de todas
+  las tiendas que el usuario ve, y la ficha lo dice. Sin muestra, no se muestra
+  un número. Un reenvío no lleva el aviso: las cifras son de primeras guías.
+
 ## 9. Lima
 
 - Todos los pedidos entran directamente a Preparación.
@@ -4760,7 +4782,7 @@ vía. Costo por entrega recuperada = suma de fletes cotizados y devoluciones
 registradas de la vía / entregas logradas, incluyendo envíos fallidos. Si falta
 un costo o aún no hay entregas, indica pendiente; nunca lo presenta como cero.
 
-**El resultado se lee del estado de Swayp (0236, 09-10-2026).** La vista
+**El resultado se lee del estado de Swayp (0237, 09-10-2026).** La vista
 `swayp_auto_metrics` contaba como devuelta solo una guía `devuelto` en Kapta, y
 Swayp nunca llega ahí: su Devolución (8) queda `en_ruta` y la confirmada (9, 12),
 `anulado`. La pantalla decía «1 entregada · 0 devueltas · 25 pendientes» con 18

@@ -4,12 +4,12 @@ import { describe, expect, it } from "vitest";
 
 /**
  * El resultado del automático Aliclik → Swayp se lee del ESTADO DE SWAYP
- * (0236, 09-10-2026). La pantalla decía «0 devueltas · 25 pendientes» con 18
+ * (0237, 09-10-2026). La pantalla decía «0 devueltas · 25 pendientes» con 18
  * guías en Devolución: Swayp nunca deja una guía `devuelto` en Kapta. La prueba
  * de la vista contra una base real vive en scripts/sql/swayp_auto_smoke.sql.
  */
 const read = (...p: string[]) => readFileSync(resolve(process.cwd(), ...p), "utf8");
-const MIGRATION = "db/migrations/0236_swayp_auto_metrics_estado_swayp.sql";
+const MIGRATION = "db/migrations/0237_swayp_auto_metrics_estado_swayp.sql";
 
 describe("swayp_auto_metrics lee el estado de Swayp", () => {
   const sql = read(MIGRATION);
