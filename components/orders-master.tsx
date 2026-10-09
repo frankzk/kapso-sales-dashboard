@@ -98,6 +98,7 @@ import {
   MASTER_SEARCH_MIN_CHARS,
   masterSearchTerm,
   PAYMENT_CHECK_OPTIONS,
+  SWAYP_AVAILABILITY_OPTIONS,
   type AgencySummary,
   type MasterFilters,
   type MasterSortKey,
@@ -751,6 +752,17 @@ export function OrdersMasterBoard({
                 selected={filters.coverages}
                 onChange={(coverages) => patch({ coverages })}
               />
+              {/* La misma pregunta que el filtro «Swayp» de Repro Provincia, sobre
+                  el pedido: ¿lo puede llevar Swayp hoy? Opciones fijas, como el
+                  cobro del courier: «Sin stock» tiene que poder pedirse aunque
+                  hoy no haya ninguno. Se calcula cada hora (0235). */}
+              <FacetPill
+                label="Swayp"
+                allLabel="Con y sin stock Swayp"
+                options={SWAYP_AVAILABILITY_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                selected={filters.swaypAvailability}
+                onChange={(swaypAvailability) => patch({ swaypAvailability })}
+              />
               {facets.pickup.length > 0 && (
                 <FacetPill
                   label="Agencia"
@@ -962,6 +974,7 @@ function pillFilterCount(f: MasterFilters, withManagement: boolean): number {
     f.provinces,
     f.districts,
     f.coverages,
+    f.swaypAvailability,
     f.pickupStates,
     ...(withManagement ? [f.managementDays] : []),
   ].filter((set) => set.size > 0).length;
@@ -993,6 +1006,7 @@ const CLEARED_PILL_FILTERS: Partial<MasterFilters> = {
   provinces: new Set(),
   districts: new Set(),
   coverages: new Set(),
+  swaypAvailability: new Set(),
   pickupStates: new Set(),
   managementDays: new Set(),
   ...CLEARED_MORE_FILTERS,
