@@ -131,7 +131,7 @@ export class OrderMasterReadError extends Error {
 const MASTER_COLUMNS =
   "id,store_id,order_id,order_name,order_created_at,customer_name," +
   "customer_phone,region,province,district," +
-  "coverage," +
+  "coverage,swayp_availability," +
   "shipping_mode,order_total,general_status," +
   "operational_status,macro_stage,macro_substage,macro_reasons,macro_operation,macro_version,macro_since," +
   "confirmation_active,confirmation_day_count,confirmation_last_contact_at," +
@@ -1138,6 +1138,7 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
   if (f.provinces.size) q = q.in("province", [...f.provinces]);
   if (f.districts.size) q = q.in("district", [...f.districts]);
   if (f.coverages.size) q = q.in("coverage", [...f.coverages]);
+  if (f.swaypAvailability.size) q = q.in("swayp_availability", [...f.swaypAvailability]);
   if (f.pickupStates.size) q = q.in("pickup_state", [...f.pickupStates]);
 
   // Días con gestión. La columna es un entero y el filtro viaja por la URL como

@@ -506,6 +506,8 @@ export interface OrderMasterRow {
   district: string | null;
   /** Flujo operativo derivado de la ubicación y la cobertura COD vigente. */
   coverage?: "lima" | "provincia_cod" | "agencia" | "por_revisar" | null;
+  /** ¿Swayp puede llevarlo hoy? Misma regla que Repro Provincia (0235); null fuera de las etapas que la usan. */
+  swayp_availability?: "ok" | "sin_stock" | "sin_cobertura" | null;
   address?: string | null;
   reference?: string | null;
   latitude?: number | null;

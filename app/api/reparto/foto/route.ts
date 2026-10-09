@@ -1,10 +1,17 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
+import sharp from "sharp";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { routeReportAccess } from "@/lib/route-report-access";
-import { PHOTO_UPLOAD_LIMIT } from "@/lib/photo-resize";
+import {
+  PHOTO_DIRECT_LIMIT,
+  PHOTO_MAX_SIDE,
+  PHOTO_QUALITY,
+  PHOTO_UPLOAD_LIMIT,
+  imageKind,
+} from "@/lib/photo-resize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,6 +54,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Tu rol no permite reportar entregas." }, { status: 403 });
   }
 
+  // La foto que el celular no pudo achicar va por otro camino (08-10-2026).
+  if ((req.headers.get("content-type") ?? "").includes("application/json")) return direct(req);
+
   let form: FormData;
   try {
     form = await req.formData();
@@ -69,25 +79,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Eso no parece una foto." }, { status: 415 });
   }
 
-  // La parada tiene que ser visible para QUIEN sube: es la comprobación de que
-  // es suya, y la hace la base, no este código.
-  const sb = await createServerSupabase();
-  const { data: stop } = await sb
-    .from("delivery_stops")
-    .select("id,route_id")
-    .eq("id", stopId)
-    .maybeSingle();
-  if (!stop) {
-    return NextResponse.json({ error: "Esa parada no es tuya." }, { status: 403 });
-  }
-  if (!await routeReportAccess(stop.route_id)) {
-    return NextResponse.json({ error: "No tienes permiso para reportar esta ruta o ya no está en curso." }, { status: 403 });
-  }
+  const stop = await stopForUpload(stopId);
+  if (stop instanceof NextResponse) return stop;
 
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sha = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
   const ext = type.includes("png") ? "png" : type.includes("webp") ? "webp" : "jpg";
-  const path = `${(stop as { route_id: string }).route_id}/${stopId}/${kind}-${sha}.${ext}`;
+  const path = `${stop.routeId}/${stopId}/${kind}-${sha}.${ext}`;
 
   const admin = createAdminSupabase();
   try {
@@ -104,6 +102,110 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ ok: true, path, kind });
+}
+
+/**
+ * La parada tiene que ser visible para QUIEN sube: es la comprobación de que
+ * es suya, y la hace la base (RLS), no este código. Y la ruta tiene que
+ * seguir abierta para que pueda reportarla.
+ */
+async function stopForUpload(stopId: string): Promise<{ routeId: string } | NextResponse> {
+  const sb = await createServerSupabase();
+  const { data: stop } = await sb
+    .from("delivery_stops")
+    .select("id,route_id")
+    .eq("id", stopId)
+    .maybeSingle();
+  if (!stop) return NextResponse.json({ error: "Esa parada no es tuya." }, { status: 403 });
+  const routeId = (stop as { route_id: string }).route_id;
+  if (!await routeReportAccess(routeId)) {
+    return NextResponse.json({ error: "No tienes permiso para reportar esta ruta o ya no está en curso." }, { status: 403 });
+  }
+  return { routeId };
+}
+
+/** Lo que `sharp` sabe abrir. El HEIC de los iPhone y de algunos Android, no. */
+const SERVER_READABLE = new Set(["jpeg", "png", "webp", "gif", "avif"]);
+
+/**
+ * La foto que el celular no pudo abrir para achicarla y pesa más que el corte
+ * de Vercel (08-10-2026: la captura del Yape de #KP139761 que Roy no podía
+ * adjuntar, aunque había subido otras 79 sin problema). Dos pasos, JSON:
+ *
+ *   { action: "firmar", stopId, kind, type, size } → { path, token }
+ *     El teléfono la sube ENTERA directo a Storage con ese token: no pasa por
+ *     esta función, así que el corte de 4,5 MB no aplica.
+ *   { action: "reducir", stopId, kind, path } → { path, reduced }
+ *     El servidor la baja, la reduce a 1600 px en JPEG —lo mismo que hace el
+ *     teléfono cuando puede— y borra el original. Si no la puede abrir
+ *     (HEIC), queda el original: la evidencia no se pierde.
+ */
+async function direct(req: NextRequest) {
+  let body: { action?: unknown; stopId?: unknown; kind?: unknown; type?: unknown; size?: unknown; path?: unknown };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return NextResponse.json({ error: "Cuerpo inválido." }, { status: 400 });
+  }
+  const stopId = typeof body.stopId === "string" ? body.stopId : "";
+  const kind = body.kind === "yape" ? "yape" : "entrega";
+  const stop = await stopForUpload(stopId);
+  if (stop instanceof NextResponse) return stop;
+  const prefix = `${stop.routeId}/${stopId}/`;
+  const admin = createAdminSupabase();
+  await ensureBucket(admin);
+
+  if (body.action === "firmar") {
+    const size = Number(body.size);
+    if (!(size > 0)) return NextResponse.json({ error: "La foto está vacía." }, { status: 400 });
+    if (size > PHOTO_DIRECT_LIMIT) {
+      return NextResponse.json({ error: "Esa foto pesa más de 25 MB. Tómala con «Cámara»." }, { status: 413 });
+    }
+    const type = typeof body.type === "string" ? body.type.toLowerCase() : "";
+    if (type && !type.startsWith("image/")) return NextResponse.json({ error: "Eso no parece una foto." }, { status: 415 });
+    const ext = /hei[cf]/.test(type) ? "heic" : type.includes("png") ? "png" : type.includes("webp") ? "webp" : "jpg";
+    const path = `${prefix}${kind}-original-${Date.now()}-${randomBytes(4).toString("hex")}.${ext}`;
+    const { data, error } = await admin.storage.from(BUCKET).createSignedUploadUrl(path);
+    if (error || !data) return NextResponse.json({ error: error?.message ?? "No se pudo preparar la subida." }, { status: 500 });
+    return NextResponse.json({ ok: true, path: data.path, token: data.token });
+  }
+
+  if (body.action === "reducir") {
+    const original = typeof body.path === "string" ? body.path : "";
+    // Solo un original de ESTA parada, subido por «firmar».
+    if (!original.startsWith(prefix) || !original.includes(`/${kind}-original-`) || original.includes("..")) {
+      return NextResponse.json({ error: "La foto no pertenece a esta parada." }, { status: 403 });
+    }
+    const { data: blob, error } = await admin.storage.from(BUCKET).download(original);
+    if (error || !blob) return NextResponse.json({ error: "La foto no llegó. Vuelve a intentar." }, { status: 404 });
+    const bytes = Buffer.from(await blob.arrayBuffer());
+    if (!SERVER_READABLE.has(imageKind(new Uint8Array(bytes.subarray(0, 32))))) {
+      return NextResponse.json({ ok: true, path: original, reduced: false });
+    }
+    let jpg: Buffer;
+    try {
+      jpg = await sharp(bytes, { animated: false, limitInputPixels: 200_000_000 })
+        .rotate()
+        .resize({ width: PHOTO_MAX_SIDE, height: PHOTO_MAX_SIDE, fit: "inside", withoutEnlargement: true })
+        .flatten({ background: "#ffffff" })
+        .jpeg({ quality: Math.round(PHOTO_QUALITY * 100), mozjpeg: true })
+        .toBuffer();
+    } catch (e) {
+      // Una foto rota o rara: se queda el original, que igual es la evidencia.
+      console.error("[reparto/foto] no se pudo reducir", original, e);
+      return NextResponse.json({ ok: true, path: original, reduced: false });
+    }
+    const sha = createHash("sha256").update(jpg).digest("hex").slice(0, 16);
+    const path = `${prefix}${kind}-${sha}.jpg`;
+    const { error: upError } = await admin.storage
+      .from(BUCKET)
+      .upload(path, new Blob([new Uint8Array(jpg)], { type: "image/jpeg" }), { upsert: true });
+    if (upError) return NextResponse.json({ ok: true, path: original, reduced: false });
+    await admin.storage.from(BUCKET).remove([original]).catch(() => {});
+    return NextResponse.json({ ok: true, path, reduced: true });
+  }
+
+  return NextResponse.json({ error: "Acción desconocida." }, { status: 400 });
 }
 
 /**
