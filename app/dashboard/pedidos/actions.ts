@@ -74,7 +74,9 @@ import {
   manualOutputIsCancelable,
   normalizeOrderCode,
   restoredRouteOutputPatch,
+  salidasQueEstorban,
 } from "@/lib/shipment-output";
+import { reprogramOutputReason } from "@/lib/gf-retry";
 import { cancelGuides, swaypOptsFromEnv } from "@/lib/swayp";
 import { env } from "@/lib/env";
 import {
@@ -1022,6 +1024,12 @@ export interface ResolveLabelsResult extends MasterActionState {
    * tenía el pedido delante en el momento de decidir y lo tiraba.
    */
   reusedOrders: string[];
+  /**
+   * Los pedidos cuya última salida no entregó su courier y que salieron con
+   * una salida NUEVA (§28, 09-10-2026): su rótulo se pega sobre la caja que
+   * volvió, tapando el anterior.
+   */
+  reprogrammedOrders: string[];
   /** Pedidos que exigen una salida adicional justificada (§23). */
   blocked: { orderId: string; error: string }[];
 }
@@ -1040,31 +1048,45 @@ export interface ResolveLabelsResult extends MasterActionState {
 export async function resolveLabelsForOrders(orderIds: string[]): Promise<ResolveLabelsResult> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) {
-    return { error: "Tu rol no permite crear salidas.", shipmentIds: [], created: 0, reused: 0, reusedOrders: [], blocked: [] };
+    return { error: "Tu rol no permite crear salidas.", shipmentIds: [], created: 0, reused: 0, reusedOrders: [], reprogrammedOrders: [], blocked: [] };
   }
   const unique = Array.from(new Set(orderIds.filter(Boolean)));
   if (!unique.length) {
-    return { error: "No hay pedidos seleccionados.", shipmentIds: [], created: 0, reused: 0, reusedOrders: [], blocked: [] };
+    return { error: "No hay pedidos seleccionados.", shipmentIds: [], created: 0, reused: 0, reusedOrders: [], reprogrammedOrders: [], blocked: [] };
   }
   if (unique.length > MAX_BULK_OUTPUTS) {
     return {
       error: `Demasiados pedidos de una vez (máximo ${MAX_BULK_OUTPUTS}).`,
-      shipmentIds: [], created: 0, reused: 0, reusedOrders: [], blocked: [],
+      shipmentIds: [], created: 0, reused: 0, reusedOrders: [], reprogrammedOrders: [], blocked: [],
     };
   }
 
   const admin = createAdminSupabase();
-  const { data: shipmentRows } = await admin
+  // Si la lectura falla no se decide nada: sin salidas a la vista, cada pedido
+  // parecería no tener ninguna y se crearía una por pedido.
+  const { data: shipmentRows, error: shipmentError } = await admin
     .from("shipments")
-    .select("id,order_id,order_name,custody_state,delivery_status,created_at,output_number")
+    .select(
+      "id,order_id,order_name,courier,output_code,guide_code,created_via,custody_state,custody_transferred_at," +
+        "delivery_status,reported_status,swayp_state,dispatched_at,returned_at,created_at,output_number",
+    )
     .in("order_id", unique);
+  if (shipmentError) {
+    return { error: shipmentError.message, shipmentIds: [], created: 0, reused: 0, reusedOrders: [], reprogrammedOrders: [], blocked: [] };
+  }
 
-  const byOrder = new Map<string, OutputForDecision[]>();
-  const nameByOrder = new Map<string, string>();
-  for (const row of (shipmentRows ?? []) as (OutputForDecision & {
+  type LabelOutputRow = OutputForDecision & {
     order_id: string | null;
     order_name: string | null;
-  })[]) {
+    courier: string;
+    delivery_status: string;
+    guide_code: string | null;
+    created_via: string | null;
+    custody_transferred_at: string | null;
+  };
+  const byOrder = new Map<string, LabelOutputRow[]>();
+  const nameByOrder = new Map<string, string>();
+  for (const row of (shipmentRows ?? []) as unknown as LabelOutputRow[]) {
     if (!row.order_id) continue;
     const list = byOrder.get(row.order_id) ?? [];
     list.push(row);
@@ -1075,6 +1097,7 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
   const shipmentIds: string[] = [];
   const blocked: ResolveLabelsResult["blocked"] = [];
   const reusedOrders: string[] = [];
+  const reprogrammedOrders: string[] = [];
   let created = 0;
   let reused = 0;
 
@@ -1095,11 +1118,20 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
       });
       continue;
     }
+    // La última salida no la entregó su courier: la nueva es su reprogramación
+    // y el motivo lo escribe el sistema, porque el hecho ya lo reportó el
+    // courier (§28, 09-10-2026). Sin él, la puerta de §23 la rechazaría
+    // mientras la anterior siga `en_ruta` volviendo.
+    const failure = decision.afterFailure ?? null;
+    const note = failure
+      ? reprogramOutputReason({ courier: failure.courier, returned: failure.returned, outputCode: failure.outputCode })
+      : undefined;
     // La fecha prevista es solo seguimiento; hoy es la estimación honesta
     // mientras no exista la ruta que la fije de verdad.
     const result = await createManualRouteOutput(orderId, {
       courier: COURIER_TBD,
       dispatchDate: limaTodayKey(),
+      note,
     });
     if (result.error || !result.shipmentId) {
       blocked.push({ orderId, error: result.error ?? "No se pudo crear la salida." });
@@ -1107,6 +1139,33 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
     }
     shipmentIds.push(result.shipmentId);
     created += 1;
+    if (!failure) continue;
+    const name = nameByOrder.get(orderId);
+    if (name) reprogrammedOrders.push(name);
+    // Si la anterior sigue viva para su courier (Tanders RETURNING, Swayp en
+    // Devolución), la nueva es ADICIONAL: su justificación va en su propio
+    // evento con las salidas que seguían vivas, igual que en la toma de Grupo
+    // GF y en Swayp. Una vez, al nacer; quien la rellene después no la repite.
+    const vivas = salidasQueEstorban((byOrder.get(orderId) ?? []).filter((o) => o.id !== result.shipmentId));
+    if (vivas.length && note) {
+      const ctx = await authorizeOrder(orderId);
+      if (ctx) {
+        await recordEvent(admin, ctx, {
+          kind: "additional_output_reason",
+          courier: COURIER_TBD,
+          shipmentId: result.shipmentId,
+          reason: note,
+          note: `Salida adicional${result.outputCode ? ` ${result.outputCode}` : ""} con ${vivas.length} salida(s) todavía viva(s).`,
+          payload: {
+            salidas_vivas: vivas.map((o) => ({
+              codigo: o.output_code ?? o.guide_code ?? null,
+              courier: o.courier,
+              estado: o.delivery_status,
+            })),
+          },
+        });
+      }
+    }
   }
 
   const parts: string[] = [];
@@ -1117,11 +1176,18 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
         (reusedOrders.length ? ` (${listNames(reusedOrders)})` : ""),
     );
   }
+  if (reprogrammedOrders.length) {
+    parts.push(
+      `${reprogrammedOrders.length} con salida nueva porque su courier no entregó (${listNames(reprogrammedOrders)}): ` +
+        "pega su rótulo sobre la caja que volvió, tapando el anterior",
+    );
+  }
   return {
     shipmentIds,
     created,
     reused,
     reusedOrders,
+    reprogrammedOrders,
     blocked,
     notice: parts.length ? parts.join(" · ") : undefined,
     error: shipmentIds.length ? undefined : "Ningún pedido tiene un rótulo que imprimir.",

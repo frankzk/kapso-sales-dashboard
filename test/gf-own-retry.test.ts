@@ -460,11 +460,15 @@ describe("las piezas en el código", () => {
     const body = between("async function takeOrdersCore(", "\nexport ");
     expect(body).toContain("ownRetryOutput(row, outputs)");
     expect(body).toContain("const decision = ownRetryDecision(own, box, Boolean(priorRequest));");
-    expect(body).toContain("const fillable = retry || review || own ? null : pickFillableRouteOutput(outputs);");
+    // Desde el 09-10-2026 el reintento rellena la «por definir» que nació al
+    // pedir su rótulo (test/reprogramar-salida-nueva.test.ts); la propia, nunca.
+    expect(body).toContain("const fillable = review || own ? null : pickFillableRouteOutput(outputs);");
     expect(body).toContain("const write = own ? await adoptOwnOutput(admin, own, { acceptedAt, scheduledFor }) : await writeCourierGuide(");
-    // La puerta de salida adicional y el tope de cinco siguen siendo solo del reintento y la revisión.
-    expect(body).toContain("const puerta = retry || review");
-    expect(body).toContain("if ((retry || review) && outputs.length >= MAX_OUTPUTS_PER_ORDER)");
+    // La puerta de salida adicional y el tope de cinco siguen siendo solo del
+    // reintento que CREA y de la revisión: rellenar no es salida adicional.
+    expect(body).toContain("const retryCreates = retry && !fillable;");
+    expect(body).toContain("const puerta = retryCreates || review");
+    expect(body).toContain("if ((retryCreates || review) && outputs.length >= MAX_OUTPUTS_PER_ORDER)");
   });
 
   it("asignar a una caja rechaza una salida anulada o entregada", () => {

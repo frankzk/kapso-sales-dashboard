@@ -32,6 +32,7 @@ import {
   ownRetryDecisionMessage,
   ownRetryTakenNote,
   reprogramBlockReason,
+  newOutputLabelNotice,
   retryAdditionalReason,
   retryTakenNote,
   type FailedOutput,
@@ -39,6 +40,7 @@ import {
 import { courierKey, normalizeDispatchScan } from "@/lib/dispatch";
 import { courierReview, tandersReviewQueueFilter, swaypUndispatchedQueueFilter, confirmedTandersReview, tandersReviewReason, type TandersReview, type TandersConfirmations } from "@/lib/gf-tanders-review";
 import { lookupDispatchShipment } from "@/app/dashboard/pedidos/despacho/actions";
+import { previousLabelNote } from "@/lib/scan-other-box";
 import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 import { custodyOnAssign, isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
@@ -732,7 +734,9 @@ async function loadCourierOperations(
     }
     const fillable = own ? null : pickFillableRouteOutput(outputs);
     // La salida propia que se reprograma es la única viva (`ownRetryOutput`): no estorba.
-    const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null);
+    // La que su courier no entregó tampoco, tampoco cuando el pedido ya tiene su
+    // «por definir» impresa y está en Preparación (09-10-2026, §28).
+    const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs), fillable?.id ?? null);
     const needsExistingBox = !review && !retry && !own && order.macro_substage !== "por_generar_rotulo";
     if (assigned || (needsExistingBox && !fillable)) {
       block(order, assigned ? "ya_en_caja" : "sin_salida");
@@ -1091,7 +1095,8 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
 }
 
 export interface TakeCourierOrdersResult extends CourierActionResult {
-  accepted: Array<{ orderId: string; shipmentId: string; outputCode: string | null }>;
+  /** `needsLabel`: la salida nació al tomarlo y su rótulo falta imprimir. */
+  accepted: Array<{ orderId: string; shipmentId: string; outputCode: string | null; needsLabel?: boolean }>;
   alreadyAccepted: string[];
   failed: Array<{ orderId: string; error: string }>;
 }
@@ -1225,13 +1230,20 @@ async function takeOrdersCore(
       }
       const reviewReason = review && confirmation ? tandersReviewReason(confirmation.packageLocation, review.uncollected === true, review.courier) : null;
       // REINTENTO (v1.19): otro courier no lo entregó. La salida que falló no
-      // cuenta como asignada y se abre una NUEVA —la caja anterior es de ese
-      // courier y lleva su rótulo (§9.3)—; nunca se rellena otra.
+      // cuenta como asignada y nunca se rellena: la caja anterior es de ese
+      // courier (§9.3). Si ya existe la «por definir» que nació al pedir su
+      // rótulo (§28, 09-10-2026), se rellena ESA —su rótulo es el que va pegado
+      // en la caja—; si no, se abre una NUEVA.
       const retry = isRetryAdmission(row.macro_stage, row.macro_substage, row.operational_status);
       // Con la salida propia no hay «por definir» que rellenar: es la única viva.
-      const fillable = retry || review || own ? null : pickFillableRouteOutput(outputs);
-      const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null);
-      const mayCreateOutput = Boolean(review) || retry || row.macro_substage === "por_generar_rotulo";
+      const fillable = review || own ? null : pickFillableRouteOutput(outputs);
+      // La que su courier no entregó no estorba en ningún camino: tampoco
+      // cuando el pedido, con su «por definir» ya impresa, está en Preparación.
+      const assigned = own ? null : activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs), fillable?.id ?? null);
+      // Un reintento que rellena no crea: si otra pestaña se lleva la «por
+      // definir» entre leer y escribir, no nace una caja sin puerta ni tope.
+      const retryCreates = retry && !fillable;
+      const mayCreateOutput = Boolean(review) || retryCreates || row.macro_substage === "por_generar_rotulo";
       if (assigned) {
         failed.push({ orderId, error: "El pedido ya tiene una salida asignada a otro courier." });
         continue;
@@ -1244,7 +1256,8 @@ async function takeOrdersCore(
       // ADICIONAL y lleva motivo (§9). Lo escribe el sistema porque el hecho ya
       // lo reportó el courier; el tope de cinco salidas se aplica igual.
       const failedBefore = retry ? lastFailedOutput(outputs) : null;
-      const puerta = retry || review
+      // Rellenar no es una salida adicional: su motivo se escribió al nacer.
+      const puerta = retryCreates || review
         ? puertaDeSalidaAdicional({
             courier: "propio",
             operation: "lima",
@@ -1256,7 +1269,7 @@ async function takeOrdersCore(
         failed.push({ orderId, error: puerta.error });
         continue;
       }
-      if ((retry || review) && outputs.length >= MAX_OUTPUTS_PER_ORDER) {
+      if ((retryCreates || review) && outputs.length >= MAX_OUTPUTS_PER_ORDER) {
         failed.push({ orderId, error: `El pedido ya alcanzó el máximo de ${MAX_OUTPUTS_PER_ORDER} salidas.` });
         continue;
       }
@@ -1509,7 +1522,10 @@ async function takeOrdersCore(
           : Promise.resolve(),
       ]);
       await fx.recompute([orderId]);
-      accepted.push({ orderId, shipmentId: write.shipmentId, outputCode: outputCode ?? null });
+      // Otro courier no lo entregó y nadie había pedido su rótulo: la salida
+      // nació aquí y su rótulo todavía no existe en papel. Se dice con su código
+      // para que se imprima y se pegue sobre la caja que volvió.
+      accepted.push({ orderId, shipmentId: write.shipmentId, outputCode: outputCode ?? null, ...(retry && !write.filled ? { needsLabel: true } : {}) });
     } catch (error) {
       failed.push({ orderId, error: error instanceof Error ? error.message : String(error) });
     }
@@ -1526,6 +1542,8 @@ async function takeOrdersCore(
       `${accepted.length} pedido${accepted.length === 1 ? "" : "s"} tomado${accepted.length === 1 ? "" : "s"}. Almacén ${accepted.length === 1 ? "lo armará" : "los armará"} o conservará el armado que ya tenían.`,
     );
   }
+  const toLabel = accepted.filter((item) => item.needsLabel).map((item) => item.outputCode ?? item.orderId);
+  if (toLabel.length) messages.push(newOutputLabelNotice(toLabel));
   if (alreadyAccepted.length) {
     messages.push(`${alreadyAccepted.length} ya ${alreadyAccepted.length === 1 ? "estaba" : "estaban"} tomado${alreadyAccepted.length === 1 ? "" : "s"}; no se duplicó nada.`);
   }
@@ -2763,6 +2781,11 @@ export interface ScanAssignLine {
    * en oficina antes de asignarlo: «Yhoni del 26/09».
    */
   receivedFrom?: string | null;
+  /**
+   * Se leyó el rótulo de otra salida del pedido (la de Tanders que no entregó)
+   * y la caja entró como esta: su rótulo es el que hay que imprimir y pegar.
+   */
+  relabel?: { outputCode: string | null; labelUrl: string } | null;
 }
 
 /**
@@ -2907,13 +2930,24 @@ export async function scanAssignToRider(
     return { ...line, status: /efectivo|límite/i.test(why) ? "bloqueado_efectivo" : "no_elegible", message: receivedNote + why };
   }
   const manifestId = assigned.manifestIds[0] ?? null;
+  // Se leyó el rótulo de OTRA salida del pedido —el de Tanders que no entregó,
+  // típicamente— y la caja entró como la salida que se rellenó o nació al
+  // tomarlo. Su rótulo es el que tiene que llevar: se nombra y se ofrece.
+  const took = taken.accepted[0] ?? null;
+  const relabel = took && found.shipment && took.shipmentId !== found.shipment.id
+    ? { outputCode: took.outputCode, labelUrl: `/api/pedidos/rotulos?ids=${took.shipmentId}` }
+    : null;
+  const relabelNote = relabel && found.shipment
+    ? ` ${previousLabelNote({ outputCode: found.shipment.output_code, courier: found.shipment.courier }, relabel.outputCode)}`
+    : "";
   return {
     ...line,
     status: "asignado",
     manifestId,
-    shipmentId: taken.accepted[0]?.shipmentId ?? shipmentId,
-    message: `${receivedNote}Asignado a ${rider.full_name}. Falta verificarlo en oficina («Verificar caja»).`,
+    shipmentId: took?.shipmentId ?? shipmentId,
+    message: `${receivedNote}Asignado a ${rider.full_name}.${relabelNote} Falta verificarlo en oficina («Verificar caja»).`,
     cashWarning: assigned.cashWarning ?? null,
+    relabel,
   };
   } finally {
     fx.flush();
