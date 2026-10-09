@@ -477,4 +477,6 @@
 \ir migrations/0236_aliclik_delivery_by_order_age.sql
 \echo 'Applying 0237_swayp_auto_metrics_estado_swayp.sql'
 \ir migrations/0237_swayp_auto_metrics_estado_swayp.sql
+\echo 'Applying 0238_auto_order_ab.sql'
+\ir migrations/0238_auto_order_ab.sql
 \echo 'Done.'
