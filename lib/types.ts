@@ -354,6 +354,8 @@ export interface ShipmentRow {
    */
   swayp_guide?: string | null;
   swayp_state?: number | null;
+  /** Cuándo lo leyó por última vez el barrido de Swayp (solo en el expediente). */
+  swayp_synced_at?: string | null;
   /** 'fenix_directo' = guía creada desde un pedido, sin guía Aliclik madre. */
   created_via?: string | null;
   delivered_source: string | null; // 'aliclik' | 'fenix' — sub-state of Entregado
@@ -504,6 +506,8 @@ export interface OrderMasterRow {
   district: string | null;
   /** Flujo operativo derivado de la ubicación y la cobertura COD vigente. */
   coverage?: "lima" | "provincia_cod" | "agencia" | "por_revisar" | null;
+  /** ¿Swayp puede llevarlo hoy? Misma regla que Repro Provincia (0235); null fuera de las etapas que la usan. */
+  swayp_availability?: "ok" | "sin_stock" | "sin_cobertura" | null;
   address?: string | null;
   reference?: string | null;
   latitude?: number | null;

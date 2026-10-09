@@ -13,9 +13,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
 import {
+  getGuide,
   isSwaypAuthError,
+  readSwaypGuide,
   swaypAuthErrorHint,
   swaypOptsFromEnv,
+  SWAYP_RETURN_STATES,
   quote as quoteSwayp,
 } from "@/lib/swayp";
 import { buildSwaypGuideInput, parseSenders } from "@/lib/swayp-guide";
@@ -44,6 +47,141 @@ import {
 import { normalizePhone } from "@/lib/phone";
 import type { OrderLineItem, OrderShippingAddress } from "@/lib/types";
 import { emitSwaypOnce, type AutoEmission } from "@/lib/swayp-emission";
+import { swaypGuideFailed } from "@/lib/reproprovincia";
+
+/**
+ * De qué guía sale un reenvío por Swayp (MOM §11.8). La guía de origen queda
+ * como madre `transferido` y nace una hija Swayp.
+ */
+export type OrigenReenvioSwayp = "anulada" | "swayp_en_devolucion";
+
+export interface GuiaOrigenReenvio {
+  courier: string | null;
+  delivery_status: string;
+  swayp_state?: number | null;
+  fenix_shipment_id: string | null;
+}
+
+/**
+ * ¿Esta guía puede ser la madre de un reenvío por Swayp?
+ *
+ * - Una guía ANULADA sin reemplazo: el caso de siempre. Es la Aliclik que
+ *   terminó sin entregar, o la Swayp con la devolución ya confirmada (9 y 12 se
+ *   guardan `anulado`).
+ * - Una guía SWAYP EN DEVOLUCIÓN (8) sin reemplazo, en provincia (08-10-2026,
+ *   decisión del owner). Swayp no entregó y el paquete vuelve a su bodega, pero
+ *   la guía sigue `en_ruta` mientras vuelve y nadie la anula: una devolución en
+ *   curso no se cancela. Pidiendo «anulada», el reenvío no tenía camino aunque
+ *   la recuperación ya estaba abierta. #KP135202: el 05/10 la clienta aceptó por
+ *   teléfono el reenvío para el 07/10 y no salió nada.
+ *
+ * En Lima no: allí Swayp va una sola vez por pedido (§9.3) y el reintento es de
+ * Grupo GF. Sin la modalidad del Master no se adivina.
+ */
+export function origenReenvioSwayp(
+  guide: GuiaOrigenReenvio,
+  operation: string | null | undefined,
+): OrigenReenvioSwayp | null {
+  if (guide.fenix_shipment_id) return null;
+  if (guide.delivery_status === "anulado") return "anulada";
+  if (guide.delivery_status !== "en_ruta") return null;
+  if (!operation || operation === "lima" || operation === "desconocida") return null;
+  return swaypGuideFailed({ courier: guide.courier ?? "", delivery_status: guide.delivery_status, swayp_state: guide.swayp_state })
+    ? "swayp_en_devolucion"
+    : null;
+}
+
+/**
+ * Entre las guías de un pedido, la que sirve de madre del reenvío: la anulada
+ * más reciente y, si no hay, la Swayp en devolución más reciente.
+ */
+export function elegirOrigenReenvio<T extends GuiaOrigenReenvio & { updated_at?: string | null }>(
+  guias: readonly T[],
+  operation: string | null | undefined,
+): T | null {
+  const recientes = [...guias].sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+  return (
+    recientes.find((g) => origenReenvioSwayp(g, operation) === "anulada") ??
+    recientes.find((g) => origenReenvioSwayp(g, operation) === "swayp_en_devolucion") ??
+    null
+  );
+}
+
+export interface GuiaOrigenDelPedido {
+  id: string;
+  guide_code: string;
+  delivery_address: string | null;
+  delivery_reference: string | null;
+}
+
+/**
+ * La madre del reenvío de un pedido, leída de la base (`elegirOrigenReenvio`).
+ * La usan el agente de voz —para la salida y para dejar su gestión en la guía
+ * que muestra Envíos— con la misma regla que el botón.
+ */
+export async function buscarOrigenReenvio(
+  admin: SupabaseClient,
+  orderId: string,
+): Promise<GuiaOrigenDelPedido | null> {
+  const [{ data: guias }, { data: master }] = await Promise.all([
+    admin
+      .from("shipments")
+      .select("id,guide_code,delivery_address,delivery_reference,courier,delivery_status,swayp_state,fenix_shipment_id,updated_at")
+      .eq("order_id", orderId)
+      .in("delivery_status", ["anulado", "en_ruta"])
+      .is("fenix_shipment_id", null),
+    admin.from("order_master").select("macro_operation").eq("order_id", orderId).maybeSingle(),
+  ]);
+  const operation = (master as { macro_operation: string | null } | null)?.macro_operation ?? null;
+  const elegida = elegirOrigenReenvio(
+    ((guias ?? []) as unknown as (GuiaOrigenDelPedido & GuiaOrigenReenvio & { updated_at: string | null })[]),
+    operation,
+  );
+  if (!elegida) return null;
+  return {
+    id: elegida.id,
+    guide_code: elegida.guide_code,
+    delivery_address: elegida.delivery_address,
+    delivery_reference: elegida.delivery_reference,
+  };
+}
+
+/** Lee el estado de UNA guía en Swayp ahora mismo. Inyectable en las pruebas. */
+export type LectorEstadoSwayp = (guia: string) => Promise<number | null>;
+
+const leerEstadoSwayp: LectorEstadoSwayp = async (guia) => {
+  const body = await getGuide(swaypOptsFromEnv(), guia);
+  return body ? readSwaypGuide(body).state : null;
+};
+
+/**
+ * La guía en devolución se vuelve a mirar en Swayp justo antes de pedir otra.
+ * El barrido la lee cada media hora, y en ese rato la vendedora pudo revertir la
+ * devolución desde la novedad: con la guía de vuelta en reparto, la nueva sería
+ * un segundo paquete para la misma clienta.
+ */
+export async function confirmarDevolucionSwayp(
+  guia: string | null,
+  leer: LectorEstadoSwayp = leerEstadoSwayp,
+): Promise<{ ok: true } | { error: string }> {
+  if (!guia) return { error: "La guía Swayp en devolución no tiene número: no se puede confirmar su estado." };
+  let estado: number | null;
+  try {
+    estado = await leer(guia);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { error: `No se pudo confirmar con Swayp que la guía ${guia} sigue en devolución (${msg}). Reintenta.` };
+  }
+  if (estado == null || !SWAYP_RETURN_STATES.has(estado)) {
+    return {
+      error:
+        `Swayp ya no tiene la guía ${guia} en devolución` +
+        (estado == null ? "" : ` (estado ${estado})`) +
+        ". Si volvió a reparto no hace falta otra guía; actualiza el panel.",
+    };
+  }
+  return { ok: true };
+}
 
 /**
  * Reevalúa la cobertura y el stock de un envío contra el inventario de hoy.
@@ -446,6 +584,13 @@ export async function spinOffFenixGuide(
      */
     swaypGuide?: string | null;
     swaypState?: number | null;
+    /**
+     * La madre es una guía Swayp EN DEVOLUCIÓN (`origenReenvioSwayp`): su
+     * resultado ya se sabe —no entregó—, así que no espera «el resultado del
+     * courier». Solo lo pasa `reenviarGuiaAnulada`, y se vuelve a comprobar
+     * con el estado guardado de la madre.
+     */
+    origenEnDevolucion?: boolean;
   } = {},
 ): Promise<{ error: string } | { childId: string; guideCode: string }> {
   const code = guideCode.trim().toUpperCase();
@@ -457,7 +602,7 @@ export async function spinOffFenixGuide(
     .eq("id", shipmentId)
     .maybeSingle();
   let parentResult = await fetchParent(
-    "courier,delivery_status,store_id,order_id,order_name,customer_name,customer_phone,product,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_shipment_id",
+    "courier,delivery_status,store_id,order_id,order_name,customer_name,customer_phone,product,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_shipment_id,swayp_state",
   );
   if (parentResult.error) {
     parentResult = await fetchParent(
@@ -470,8 +615,10 @@ export async function spinOffFenixGuide(
     courier: string;
     delivery_status: string;
     fenix_shipment_id: string | null;
+    swayp_state?: number | null;
   };
-  if (shipmentRequiresCourierResult(source.courier, source.delivery_status)) {
+  const resultadoYaSabido = opts.origenEnDevolucion === true && swaypGuideFailed(source);
+  if (shipmentRequiresCourierResult(source.courier, source.delivery_status) && !resultadoYaSabido) {
     return { error: "Primero registra el resultado del courier antes de crear otra guía Swayp." };
   }
   if (source.fenix_shipment_id) {
@@ -574,12 +721,14 @@ export async function spinOffFenixGuide(
 }
 
 /**
- * «Reenviar por Swayp» sobre una guía anulada: el cuerpo de la acción de
- * Envíos, sin la sesión. La guía anulada nunca se reabre; queda como madre
- * `transferido` y nace una hija Swayp En ruta con la fecha pedida.
+ * «Reenviar por Swayp» sobre una guía anulada, o sobre una guía Swayp en
+ * devolución en provincia (`origenReenvioSwayp`): el cuerpo de la acción de
+ * Envíos, sin la sesión. La guía de origen nunca se reabre ni se cancela; queda
+ * como madre `transferido` y nace una hija Swayp En ruta con la fecha pedida.
  *
  * Las rejas van en este orden y ninguna se salta:
- * - la guía sigue anulada y sin reemplazo;
+ * - la guía sigue siendo un origen válido y sin reemplazo;
+ * - si está en devolución, Swayp lo confirma ahora mismo;
  * - el pedido tiene número;
  * - hay cobertura y stock hoy, no el flag guardado;
  * - Swayp emite el número (stock ítem por ítem y vínculo de codbar dentro);
@@ -593,6 +742,7 @@ export async function reenviarGuiaAnulada(
   ctx: { userId: string | null; storeId: string },
   shipmentId: string,
   input: { nextFollowupAt?: string | null; note?: string | null },
+  deps: { leerEstadoSwayp?: LectorEstadoSwayp } = {},
 ): Promise<{ error: string } | { childId: string; guideCode: string; sourceGuide: string }> {
   const note = input.note?.trim() ?? "";
   if (!note) {
@@ -605,7 +755,7 @@ export async function reenviarGuiaAnulada(
   const { data: shipment, error: shipmentError } = await admin
     .from("shipments")
     .select(
-      `id,courier,guide_code,delivery_status,order_id,order_name,${FENIX_COVERAGE_COLUMNS},product,fenix_eligible,fenix_shipment_id`,
+      `id,courier,guide_code,delivery_status,order_id,order_name,${FENIX_COVERAGE_COLUMNS},product,fenix_eligible,fenix_shipment_id,swayp_state,swayp_guide`,
     )
     .eq("id", shipmentId)
     .maybeSingle();
@@ -614,8 +764,11 @@ export async function reenviarGuiaAnulada(
   }
 
   const current = shipment as unknown as {
+    courier: string | null;
     guide_code: string;
     delivery_status: string;
+    swayp_state: number | null;
+    swayp_guide: string | null;
     order_id: string | null;
     order_name: string | null;
     city: string | null;
@@ -626,11 +779,35 @@ export async function reenviarGuiaAnulada(
     fenix_eligible: boolean;
     fenix_shipment_id: string | null;
   };
-  if (current.delivery_status !== "anulado") {
-    return { error: "La guía ya cambió de estado. Actualiza el panel antes de continuar." };
-  }
   if (current.fenix_shipment_id) {
-    return { error: "Esta guía anulada ya tiene una guía Swayp de reemplazo." };
+    return { error: `La guía ${current.guide_code} ya tiene una guía Swayp de reemplazo.` };
+  }
+  // La modalidad es la del Master: la misma que decide entre «Por reprogramar
+  // Lima» y «En gestión Reproprovincia».
+  let operation: string | null = null;
+  if (current.delivery_status !== "anulado" && current.order_id) {
+    const { data: master } = await admin
+      .from("order_master")
+      .select("macro_operation")
+      .eq("order_id", current.order_id)
+      .maybeSingle();
+    operation = (master as { macro_operation: string | null } | null)?.macro_operation ?? null;
+  }
+  const origen = origenReenvioSwayp(current, operation);
+  if (!origen) {
+    return {
+      error:
+        current.delivery_status === "en_ruta" && swaypGuideFailed({ ...current, courier: current.courier ?? "" })
+          ? "En Lima, lo que Swayp no entregó se reprograma con Grupo GF («Por reprogramar Lima»): Swayp va una sola vez por pedido."
+          : "La guía ya cambió de estado. Actualiza el panel antes de continuar.",
+    };
+  }
+  if (origen === "swayp_en_devolucion") {
+    const confirmada = await confirmarDevolucionSwayp(
+      current.swayp_guide ?? current.guide_code,
+      deps.leerEstadoSwayp,
+    );
+    if ("error" in confirmada) return confirmada;
   }
 
   // La copia del envío puede estar vacía aunque el enlace exista (ver
@@ -686,10 +863,16 @@ export async function reenviarGuiaAnulada(
   }
   const guideCode = String(viaApi.guia);
 
-  const auditNote = `Excepción sobre guía anulada ${current.guide_code}. Motivo: ${note}`;
+  const auditNote =
+    origen === "swayp_en_devolucion"
+      ? `Reenvío sobre la guía Swayp ${current.guide_code}, en devolución. Motivo: ${note}`
+      : `Excepción sobre guía anulada ${current.guide_code}. Motivo: ${note}`;
   const spun = await spinOffFenixGuide(admin, ctx, shipmentId, guideCode, {
     childNextFollowupAt: input.nextFollowupAt,
-    expectedSourceStatus: "anulado",
+    // La madre tiene que seguir como estaba al leerla: si el barrido la movió
+    // mientras Swayp emitía, la hija se deshace.
+    expectedSourceStatus: current.delivery_status,
+    origenEnDevolucion: origen === "swayp_en_devolucion",
     parentAuditNote: `${auditNote}. Nueva guía Swayp: ${guideCode}.`,
     // Sin esto la hija tendría el número correcto en `guide_code` y
     // `swayp_guide` nulo — y el webhook busca por esa columna, así que el envío

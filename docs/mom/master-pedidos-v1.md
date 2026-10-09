@@ -1,7 +1,8 @@
 # Master Operations Map — Master de Pedidos v1
 
 Estado: Fase 4 implementada; macroetapa Por confirmar cerrada funcionalmente;
-modelo Grupo GF Courier definido para implementación incremental
+modelo Grupo GF Courier definido para implementación incremental; tiendas
+cliente de otra organización aprobadas, sin implementar (§29.15)
 Propietario del proceso: Frankz  
 Sistema: Kapta (`kapso-sales-dashboard`)  
 Fuente visual: board Miro «Master Operations Map»  
@@ -1231,7 +1232,9 @@ Tanders:
 - **En Lima va a «Por reprogramar Lima»** y a la lista de Grupo GF con la chapa
   «Swayp no entregó · vuelve»: Swayp se usa una sola vez por pedido en Lima
   (§9.3), así que el siguiente intento es de otro courier. **En provincia va a
-  Gestión Reproprovincia**, donde Swayp sí se repite.
+  Gestión Reproprovincia**, donde Swayp sí se repite: desde el 08-10-2026 la
+  guía en devolución es la madre del reenvío por Swayp, sin esperar a que se
+  confirme la devolución (§11.8).
 - **La ventana es la de la tienda** (`return_recovery_max_days`), no los 65 días
   de Tanders, que eran por su antigüedad. Se ancla igual, en la **salida** del
   intento fallido: el barrido sella la guía en cada pasada y la Devolución
@@ -3748,6 +3751,37 @@ el código viejo. Los resultados de llamada son cuatro: **Cliente confirma
 reprogramación**, **Programar próxima llamada**, **No contesta** y **Cliente
 cancela / anula**.
 
+**En una guía que Swayp informa por API, el resultado no se pide a mano
+(08-10-2026).** «Registrar resultado del courier» nació en julio, cuando Fénix
+no le decía nada a Kapta y alguien escribía lo que reportaba el motorizado.
+Desde el 29-09-2026 el barrido lee cada media hora cada guía con número de
+Swayp (§11.2), así que la entrega, la cancelación, la devolución y la novedad
+llegan solas. En #KP135202 el recuadro pedía como **«Obligatorio»** un resultado
+que Swayp ya había dado —Devolución (8)— y ni siquiera ofrecía esa opción, así
+que parecía que faltaba el estado.
+
+- Con número emitido por Swayp (`swaypInformsByApi`), **desde que nace la guía**,
+  el cajón muestra **«Lo que informó Swayp»**. Primero se exigía una lectura del
+  barrido, y la guía nueva de #KP135202 —creada a las 10:25— recibió a las 10:52
+  un «No contesta» a mano en el recuadro viejo, que borró la fecha del reenvío.
+  El barrido lee toda guía viva con número de Swayp, así que el número basta.
+  El cajón muestra: el estado con su nombre y número,
+  la última novedad, la hora de la lectura y qué toca. Con novedad, resolverla.
+  En devolución, «Reenviar por Swayp» en provincia (§11.8) o resolver la
+  novedad para que vuelva a reparto.
+- **«Corregir a mano»** abre el recuadro de siempre, sin «Obligatorio», para
+  cuando Swayp esté atrasado o se equivoque, y **sin «No contesta»**
+  (`SWAYP_API_MANUAL_EXCLUDED`). Ese «No contesta» pasaba la guía a Pendiente,
+  pero mientras Swayp siga diciendo reparto o novedad la siguiente lectura la
+  devolvía a En ruta (`en_ruta` gana a `pendiente`): la gestión se perdía sola
+  en media hora. El servidor lo rechaza igual. Con la clienta al teléfono, lo
+  que toca es resolver la novedad en Swayp.
+- La llamada de gestión sigue oculta mientras la guía esté En ruta, como antes.
+- Las guías manuales, sin número de Swayp, siguen igual.
+- En la lista, la chapa de una Swayp viva dice **«En ruta · en devolución»** o
+  **«En ruta · con novedad»** (`swaypLiveSubState`): las tres situaciones se
+  guardan `en_ruta`.
+
 Dos reglas más del mismo cajón, por la misma razón (no preguntar lo que ya
 está decidido): si «Ruta sugerida» deja una sola ruta posible, la llamada no
 pide elegir entre Aliclik y Swayp, lo dice; y el formulario manual de guía
@@ -4109,7 +4143,36 @@ Reglas de esa tabla:
 
   La guía anulada queda como madre `transferido` y nace la hija Swayp En ruta
   con la fecha que aceptó la clienta. El actor es nulo y la nota dice «Agente
-  de voz». Se pide **después de responder** a la tool, con la clienta todavía
+  de voz».
+- **La madre también puede ser una guía Swayp en devolución (08-10-2026,
+  decisión del owner).** #KP135202 (Arequipa): Swayp no entregó la guía
+  50000137273 y la marcó en **Devolución (8)**. Eso abre la recuperación (§9,
+  v1.22) y el agente llamó: el 05/10 la clienta aceptó el reenvío para el 07/10,
+  pero no salió nada («el pedido no tiene una guía anulada sin reemplazo»). La
+  guía en devolución sigue `en_ruta` mientras el paquete vuelve a la bodega de
+  Swayp y nadie la anula, porque una devolución en curso no se cancela. Así que
+  el reenvío no tenía por dónde salir, ni por el agente ni por el botón.
+  Ahora la madre del reenvío (`origenReenvioSwayp`, `lib/swayp-reenvio.ts`) es:
+  - la guía **anulada** sin reemplazo, como antes (la Aliclik que no entregó, o
+    la Swayp con la devolución confirmada, que se guarda `anulado`);
+  - o, si no hay, la guía **Swayp en devolución** sin reemplazo, **solo en
+    provincia**. La modalidad es la del Master (`macro_operation`). En Lima
+    Swayp va una sola vez por pedido (§9.3) y el reintento es de Grupo GF; sin
+    modalidad no se adivina.
+
+  Justo antes de emitir, Kapta **le pregunta a Swayp** por esa guía
+  (`confirmarDevolucionSwayp`). Si la vendedora revirtió la devolución desde la
+  novedad y la guía volvió a reparto, no se emite: sería un segundo paquete para
+  la misma clienta. Si Swayp no responde, tampoco. La guía en devolución queda
+  como madre `transferido`, igual que la anulada, y nace la hija con la fecha
+  pedida.
+
+  Los tres caminos usan la misma regla:
+  - el agente de voz, para la salida y para dejar su gestión en la guía;
+  - el botón **«Reenviar por Swayp»** de la ficha de esa guía en Envíos, que
+    ahora aparece también sobre la guía en devolución;
+  - la Mesa de ruta del pedido, que en provincia ya no dice «no se crea otra con
+    Swayp» y manda a ese botón. Se pide **después de responder** a la tool, con la clienta todavía
   en línea, y **una sola vez por llamada**. La fila se reclama antes de llamar
   a Swayp porque su API no deshace una guía: un segundo POST sería un segundo
   paquete. El barrido del cron (cada cinco minutos, a cualquier hora) recoge
@@ -4696,6 +4759,33 @@ La pantalla agrega guías, entregas, devoluciones, anulaciones y pendientes por
 vía. Costo por entrega recuperada = suma de fletes cotizados y devoluciones
 registradas de la vía / entregas logradas, incluyendo envíos fallidos. Si falta
 un costo o aún no hay entregas, indica pendiente; nunca lo presenta como cero.
+
+### 11.10 Filtro «Swayp» en el Master (08-10-2026)
+
+El Master tiene el mismo filtro «Swayp» que Repro Provincia, con las mismas tres
+opciones y los mismos textos: **Swayp ok · con stock**, **Sin stock Swayp** y
+**Fuera de cobertura**. Responde, sobre el pedido, lo que Repro responde sobre
+la guía: ¿lo puede llevar Swayp hoy?
+
+- **La regla es la de Repro**, no una propia: `evaluateFenix`. «Ok» es que la
+  ciudad de destino tiene almacén Swayp (o se reparte desde uno, como Chupaca
+  desde Huancayo) y hay stock disponible del producto del pedido; «sin stock»,
+  que hay almacén pero no stock; «fuera de cobertura», que no hay almacén. Lima
+  no lleva control de cantidad, así que siempre sale «ok»: para provincia se
+  combina con el filtro Cobertura.
+- **El destino** es el del Master: distrito y provincia del ubigeo, o el
+  departamento si falta la provincia.
+- **Solo se calcula en Por confirmar, Preparación, Por despachar y En curso.**
+  En Por cerrar y Finalizado queda vacío: el stock de hoy no decide nada ahí, y
+  un «ok» congelado de hace semanas confundiría.
+- **Vive en `order_master.swayp_availability`** (0235) porque el Master filtra en
+  la base y pagina; calcularlo en la página no permitiría contar ni filtrar.
+- **Se refresca cada hora** (cron `swayp-inventory`) y al terminar cada sync de
+  inventario, sin depender del recálculo del pedido: lo que la cambia es el
+  stock, y el recálculo del pedido no se entera de que el stock cambió. Un
+  pedido nuevo o que cambia de etapa puede tardar hasta una hora en tener valor.
+  La función es `recalcularDisponibilidadSwaypMaster`
+  (`lib/master-swayp-availability.ts`) y solo escribe las filas que cambian.
 
 ## 12. Agencia: Shalom y Olva
 
@@ -7332,6 +7422,8 @@ liquidación del día.
   recoge paquetes armados en otros almacenes: Grupo GF reserva, arma y rotula.
 - Una ruta puede mezclar pedidos de Aurela, Kenku y otras tiendas autorizadas.
 - El portal de una tienda externa admite conexión Shopify, API y carga Excel.
+  La primera versión es solo con Shopify y en la organización de la tienda
+  (§29.15); API y Excel vienen después.
 
 Para Aurela y Kenku, la admisión operativa ocurre desde **Grupo GF Courier →
 Pedidos disponibles**, no creando una salida pedido por pedido en la Mesa de
@@ -7390,9 +7482,10 @@ Volver a tomar un pedido que Grupo GF Courier ya tiene aceptado o programado
 rechaza por la salida que dejó esa toma: cuenta como ya tomado y sigue a la
 asignación.
 
-Las futuras tiendas externas pueden conservar asignación explícita según su
-contrato. La cola automática descrita arriba es el camino de mínima fricción
-para las tiendas de Grupo GF administradas dentro de Kapta.
+Las tiendas cliente de otra organización asignan ellas mismas cada pedido y
+nunca entran a esta cola (§29.15.2). La cola automática descrita arriba es el
+camino de mínima fricción para las tiendas de Grupo GF administradas dentro de
+Kapta.
 
 **Prioridad dentro de Pedidos disponibles.** La bandeja separa dos colas sin
 inventar un estado operativo nuevo:
@@ -7460,6 +7553,9 @@ El courier no exige implementar ahora un ERP completo. La fundación admite
 - Las filas históricas o tiendas todavía sin control de inventario pueden
   mantener la bolsa y la reserva nulas. Esta compatibilidad no se interpreta
   como stock cero.
+- En una tienda cliente de otra organización, la bolsa de cada línea sale del
+  mapeo de SKU de la tienda; la primera versión no reserva ni cuenta unidades
+  (§29.15.4).
 
 La Mesa de fulfillment debe ser rápida y excepcional: `Pendiente de armar →
 Armando → Listo`. La reserva es automática y no crea un formulario. En el camino
@@ -7480,6 +7576,8 @@ tienda/fecha; el courier se decide en despacho, no durante el armado.
 - Un pedido anulado, rechazado definitivamente o que debe desarmarse libera la
   reserva y devuelve el producto a su bolsa. Si luego se vuelve a armar, nace una
   salida nueva con QR nuevo, respetando §4.
+- En una tienda cliente de otra organización, un no entregado que vuelve a la
+  oficina sin reprogramación registrada también se desarma (§29.15.5).
 
 ### 29.5 Ruta diaria, cargas y transferencias
 
@@ -7542,6 +7640,8 @@ el último escaneo de «Recibir mi caja» fallaba con `delivery_stop_shipment_un
 - Cancelar una solicitud no tiene costo, incluso si el motorizado ya salió. El
   paquete puede retornar al almacén al día siguiente y la cancelación logística
   no cancela por sí sola el pedido Shopify.
+- En una tienda cliente de otra organización, la tienda asigna, cancela y
+  decide el reintento (§29.15.2, §29.15.5).
 
 **Programar la salida sin tomar el pedido (29-09-2026).** En Despacho del día,
 el calendario de «Desde la lista» **solo guarda el día** en que deben salir los
@@ -7578,6 +7678,8 @@ nombre. Fecha y hora se capturan automáticamente. Una entrega exige:
 
 La tienda ve estado y evidencia, no nombre/teléfono del motorizado ni ubicación
 en vivo. El cliente final recibe un enlace público que muestra solo estados.
+Lo que se oculta a una tienda cliente de otra organización, y dónde, está en
+§29.15.3.
 
 Catálogo inicial y regla de cobro:
 
@@ -7596,6 +7698,10 @@ Catálogo inicial y regla de cobro:
 Un rechazo exige motivo y evidencia. Si el cliente rechaza en días distintos,
 se cobra como máximo una vez en cada ruta/día. Otros intentos no entregados
 siguen sin costo aunque se repitan.
+
+En una tienda cliente de otra organización, «Reprogramado» conserva el paquete
+armado solo si la reprogramación está registrada cuando el paquete vuelve a la
+oficina; si no, se desarma (§29.15.5).
 
 **La foto del rechazo se pide al reportarlo, no al liquidar (28-09-2026,
 decisión de Frankz).** El teléfono pedía foto a la entrega pero no al
@@ -7786,6 +7892,11 @@ La comisión general por pagos recibidos en el Yape de Grupo GF es **3.5 %**:
 - no se aplica a efectivo ni a un rechazo sin pago; y
 - se conserva como regla con vigencia, aunque inicialmente sea general.
 
+**Tiendas cliente de otra organización (§29.15.6).** Tienen su propia tabla
+general de tarifas (la de externos), una comisión Yape general de 5 % y una
+comisión POS fija de 5 %. La tabla interna y el 3.5 % siguen siendo de Aurela
+y Kenku.
+
 ### 29.9 Liquidaciones y efectivo
 
 Existen dos conciliaciones relacionadas, no intercambiables:
@@ -7826,6 +7937,11 @@ COD cobrado
 Si una fila no tiene tarifa, evidencia o resultado definitivo, la liquidación
 completa permanece abierta. Las correcciones conservan lo declarado, el valor
 anterior, actor, motivo y fecha como ya exige §14.
+
+Para una tienda cliente de otra organización, el neto también descuenta la
+comisión POS y el producto de Proveeduría entregado. Además, entra a una
+cuenta corriente, el saldo a favor se deposita a diario y aprobar cierra
+financieramente sus pedidos (§29.15.8).
 
 **Pago por motorizado desde el Tarifario (22-09-2026).** La tabla de tarifas
 de Grupo GF suma una columna **«Pago a [motorizado]»**: el motorizado se
@@ -7886,6 +8002,8 @@ cambia solo: la diferencia se corrige con un adicional o reabriendo la ruta.
 - Una tienda ve únicamente sus solicitudes, inventario asociado, estados,
   evidencias, cargos y liquidaciones.
 - El operador ve solo los datos necesarios de las tiendas con contrato vigente.
+  En una tienda cliente de otra organización, eso es solo los pedidos que la
+  tienda le asignó (§29.15.3).
 - El motorizado ve únicamente sus cargas y paradas activas.
 - Grupo GF puede suspender una tienda por deuda, incidencias o problemas de
   inventario; la suspensión no borra pedidos ni liquidaciones existentes.
@@ -7903,7 +8021,8 @@ El orden obligatorio evita reescribir las pantallas sobre identidades ambiguas:
    entre `delivery_routes` y `dispatch_manifests` solo después de comprobarla.
 4. Implementar doble liquidación y límites de efectivo.
 5. Publicar portal de tiendas, seguimiento por estados y entrada Shopify/API/
-   Excel.
+   Excel. Va en dos partes: primero las tiendas cliente con Shopify en su
+   propia organización (§29.15); después la entrada por API y Excel.
 6. Añadir bolsas y reservas opcionales; el inventario estricto no bloquea las
    primeras fases.
 
@@ -8656,6 +8775,285 @@ misma lista y el mismo panel para quien coteja, recibe o arma rutas sin
 administrar el courier; quien administra cae en la pestaña. Los enlaces
 antiguos `?manifiesto=` abren esa caja en la pestaña (`legacyManifestHref`).
 Nada de esto cambia acciones de servidor ni la base.
+
+### 29.15 Tiendas cliente de otra organización (aprobado entre el 05 y el 08-10-2026)
+
+**Estado: aprobado, sin implementar.** El plan de trabajo, con lo que hoy lo
+impide en el código, está en `docs/plan/clientes-externos-gf.md`.
+
+Grupo GF Courier presta servicio a **tiendas cliente**: negocios ajenos que
+venden en su propio Shopify y le encargan pedidos. Hasta ahora §29 solo se
+cumplía con Aurela y Kenku, que viven en la misma organización que el operador.
+En esta sección, **tienda** es la tienda cliente y **comprador** es quien
+recibe el pedido en la puerta.
+
+#### 29.15.1 Identidad y alta
+
+- Cada tienda cliente vive en **su propia organización** y usa Kapta completo:
+  su Master, su Shopify, su equipo. Grupo GF no es miembro ni dueño de esa
+  organización. Kapta es una sola base de datos; el aislamiento entre
+  organizaciones lo da la base, no una base por cliente.
+- **Alta por invitación.** El registro público de Kapta sigue cerrado. Grupo GF
+  invita por correo al dueño de la tienda; el dueño entra, crea su
+  organización, conecta su Shopify y acepta el contrato con un código.
+- El contrato nace en `draft` y pasa a `active` solo cuando la tienda lo
+  acepta. Kapta comprueba que la tienda pertenece a la organización cliente
+  del contrato. Grupo GF nunca vincula una tienda ajena por su cuenta.
+- **Un solo operador.** Grupo GF Courier existe una vez. El owner de una
+  organización cliente no administra operadores ni ve el módulo de Grupo GF
+  Courier.
+- Las integraciones que usan credenciales únicas de Grupo GF quedan
+  **apagadas** para organizaciones cliente: Swayp, Shalom, agente de voz y
+  Chatby. Se encienden solo cuando sean por tienda.
+- Grupo GF suspende un contrato a mano, por deuda u otro motivo (§29.10). La
+  suspensión bloquea nuevas asignaciones y no borra pedidos, solicitudes ni
+  liquidaciones.
+
+#### 29.15.2 La tienda asigna
+
+- El contrato dice **quién inicia**: la cola del operador (Aurela y Kenku,
+  §29.2) o la tienda. Los pedidos de una tienda cliente **nunca** aparecen en
+  «Pedidos disponibles».
+- La tienda asigna desde la Mesa de ruta de su pedido, o en lote desde su
+  Master. Antes de confirmar ve distrito, tarifa y fecha prevista.
+- **Asignar obliga a Grupo GF.** Se valida en el servidor lo mismo que en
+  «Tomar pedidos» (§29.2):
+  - contrato vigente;
+  - Lima Metropolitana o Callao, con distrito canónico;
+  - tarifa vigente;
+  - distrito sin pausa;
+  - corte de las 11:30 para la fecha prevista.
+
+  Además, todas las líneas del pedido tienen que estar mapeadas (§29.15.4). Si
+  cumple, queda tomado: no existe un estado «solicitada» ni una aprobación de
+  Grupo GF.
+- Asignar crea la solicitud logística idempotente, congela tarifa, bolsa y
+  precio de cada línea, y crea la salida o rellena la caja `por definir`
+  conservando su QR (§29.2). El actor que solicita es el usuario de la tienda.
+- El pedido aparece en Grupo GF en «Pedidos tomados · Sin ruta» con el nombre
+  de la tienda, y desde ahí sigue el camino de siempre: caja, cotejo de
+  oficina, recepción del motorizado, reparto, reporte y cierre de ruta.
+- Grupo GF puede anular la solicitud con motivo; la tienda lo ve en su Master.
+- **La tienda cancela cuando quiera, sin costo** (§29.6), aunque el paquete
+  esté en una caja o en la calle: el paquete vuelve al almacén y se desarma
+  (§29.15.5). Cancelar la solicitud no cancela el pedido en Shopify (§2).
+
+#### 29.15.3 Qué ve cada uno
+
+- **Grupo GF ve solo los pedidos que la tienda le asignó**, con los datos que
+  necesita para armar, entregar, cobrar y liquidar. Nunca ve el resto de
+  pedidos, clientes ni pagos de la tienda.
+- **La tienda ve** etapa, evidencia (foto y comprobante), su liquidación y su
+  cuenta corriente.
+- **La tienda no ve** nombre, teléfono ni ubicación del motorizado, ni el
+  correo del personal de Grupo GF. En su actividad aparecen como «Motorizado de
+  Grupo GF» y «Grupo GF Courier». La regla vale también para lo que la tienda
+  pueda consultar directamente en la base, no solo para la pantalla.
+- **Marca blanca.** El rótulo (§28) y los mensajes del motorizado al comprador
+  llevan el nombre de la tienda, como ya ocurre con Aurela y Kenku.
+- Una tienda cliente nunca ve nada de otra.
+
+#### 29.15.4 Producto, catálogo y armado
+
+- **Grupo GF arma** en su almacén (§29.2). El producto puede ser de
+  Proveeduría Grupo GF o propio de la tienda, guardado en Grupo GF. Un pedido
+  puede mezclar los dos.
+- **Catálogo de Proveeduría.** La tienda ve, en solo lectura, el nombre, SKU,
+  foto y precio a la tienda de cada producto. El precio tiene vigencia: hay un
+  precio general y excepciones por contrato, con la misma precedencia que las
+  tarifas (§29.8).
+- **Mapeo de SKU obligatorio.** Cada SKU del Shopify de la tienda se marca como
+  «producto Grupo GF X» o «producto propio de la tienda». Un pedido con una
+  línea sin mapear no se puede asignar, y Kapta dice qué línea falta.
+- **Primera versión sin control de stock** (§29.3 lo permite). Se registra de
+  qué bolsa sale cada línea, para armar y para cobrar, pero no se reservan ni
+  se cuentan unidades. El conteo, la recepción y el retiro del inventario de la
+  tienda quedan para una versión posterior.
+- El Almacén de Grupo GF arma estos pedidos. En el Almacén de la tienda
+  aparecen como «Lo arma Grupo GF» y no se preparan allí.
+- **El producto de Proveeduría se cobra solo en lo entregado.** Un rechazo o un
+  no entregado lo devuelve a su bolsa sin cargo.
+- **Pérdida o daño de producto de la tienda: caso a caso.** El paquete queda
+  observado (§29.7) y Grupo GF registra un ajuste con motivo en la cuenta
+  corriente (§29.15.8).
+
+#### 29.15.5 No entregado, reprogramación y desarmado
+
+- **El reintento lo decide la tienda.** Un no entregado de una tienda cliente
+  va a «En curso · Por reprogramar Lima» en el Master de la tienda (§9). No
+  entra a la cola de reprogramados de Grupo GF. La tienda reprograma con fecha.
+- Un «Reprogramado por el cliente» que el motorizado **conserva** (§29.7,
+  07-10-2026) cuenta como reprogramación registrada: pasa a la ruta del día
+  pedido sin volver a la oficina. La tienda lo ve con la fecha y puede
+  cambiarla o cancelar.
+- Al recibirlo en la oficina:
+  - **con una reprogramación registrada**, conserva la salida, la guía y el QR
+    (§29.5, reintento con el mismo envío);
+  - **sin reprogramación registrada**, se desarma: el producto vuelve a su
+    bolsa, la solicitud se anula con motivo «desarmado sin reprogramación» y
+    la salida termina.
+- Reprogramar un pedido desarmado lo arma de nuevo con una solicitud y una
+  salida nuevas, con QR nuevo (§29.4) y con la tarifa y el precio vigentes ese
+  día.
+- Para una tienda cliente, la fila «Reprogramado · conserva el paquete armado»
+  de §29.7 se cumple solo si la reprogramación está registrada cuando el
+  paquete vuelve.
+
+#### 29.15.6 Precios
+
+| Concepto | Aurela y Kenku | Tienda cliente |
+| --- | --- | --- |
+| Tarifa por distrito | Tabla general interna | **Tabla general de externos** |
+| Excepción por contrato | Sí | Sí |
+| Comisión Yape | 3.5 % | **5 %** general |
+| Comisión POS | — | **5 % fijo**, sin excepción por contrato |
+| Producto de Proveeduría | — | Precio a la tienda (§29.15.4) |
+
+- **Tarifa.** Para una tienda cliente se busca primero la excepción del
+  contrato y después la tabla general de externos; nunca la interna. Todo lo
+  demás de §29.8 se mantiene: incluye IGV, entrega y rechazo cobran lo mismo,
+  y sin coincidencia aparece «Sin tarifa configurada», nunca S/ 0.
+- **Comisiones.** La comisión Yape y la de POS siguen las mismas reglas que la
+  comisión Yape de §29.8:
+  - se calculan solo sobre lo efectivamente recibido por ese medio en las
+    cuentas de Grupo GF;
+  - se redondean a dos decimales por operación;
+  - tienen vigencia.
+
+  La comisión Yape admite excepción por contrato. La comisión POS es **5 % fija
+  para todas las tiendas cliente**, sin excepción por contrato.
+- **El motorizado gana lo mismo** por un pedido de tienda cliente que por uno
+  de Aurela o Kenku. Su tarifario (§29.10) no distingue la tienda.
+
+#### 29.15.7 Cobro en la puerta
+
+- **Todo cobro va a Grupo GF:** efectivo, Yape de Grupo GF y POS de Grupo GF.
+- El reporte de la parada de un pedido de tienda cliente registra la **cuenta
+  receptora**, no solo el medio.
+- Si el comprador igual paga directo a una cuenta de la tienda, se registra
+  como «pago directo a la tienda»: no entra al neto ni paga comisión.
+- El importe sugerido sigue §29.10: el saldo después de los pagos que la tienda
+  ya validó.
+
+#### 29.15.8 Liquidación diaria y cuenta corriente
+
+Hay **una liquidación por contrato y día**. Se calcula sobre las paradas de ese
+día, en rutas de Grupo GF, con pedidos de esa tienda. Una ruta que mezcla
+tiendas aporta a cada una solo sus paradas (§29.5).
+
+```text
+COD cobrado por Grupo GF
+− tarifa de entrega o rechazo (la congelada en la solicitud)
+− comisión Yape sobre cada Yape recibido por Grupo GF
+− comisión POS sobre cada cobro por POS de Grupo GF
+− precio a la tienda del producto de Proveeduría, solo en lo entregado
+= neto del día
+```
+
+- **Tarifa por resultado.** Entregado y rechazado cobran la tarifa congelada en
+  la solicitud. El rechazo se cobra una vez por pedido y ruta/día (§29.7); los
+  demás resultados, S/ 0.
+- **Producto.** El precio es el congelado en la solicitud.
+- **Bloqueos.** La liquidación queda **por aprobar** y no se puede aprobar
+  mientras haya:
+  - una ruta sin terminar;
+  - una parada pendiente;
+  - evidencia faltante (con las excepciones de §29.7);
+  - una línea sin tarifa.
+- **Aprobación humana.** La aprueba la responsable financiera (Yohalis) o el
+  owner (Frankz), con `settlements.close` en la organización de Grupo GF, sobre
+  la versión que vio. La liquidación queda **aprobada** y congelada. Una
+  corrección posterior es un ajuste con motivo en la cuenta corriente, nunca
+  una edición de la liquidación (§14).
+- **Al aprobar:**
+  - el neto entra a la cuenta corriente;
+  - cada pedido incluido queda **cerrado financieramente** en el Master de la
+    tienda: de «Por cerrar · Pendiente de liquidación» pasa a «Finalizado ·
+    Entregado y liquidado» (§6.5, §6.6).
+- **Cuenta corriente por contrato**, append-only. Sus movimientos son:
+  - el neto de una liquidación aprobada (positivo o negativo);
+  - un depósito de Grupo GF a la tienda;
+  - un pago de la tienda a Grupo GF;
+  - un ajuste con motivo.
+
+  El saldo es la suma; ningún movimiento se edita ni se borra.
+- **Depósito diario.** Al aprobar la liquidación del día, Grupo GF deposita el
+  saldo a favor de la tienda y registra la constancia. Un saldo en contra (por
+  ejemplo, pedidos pagados por adelantado que solo deben la tarifa) se arrastra
+  al día siguiente. Grupo GF ve el saldo de cada tienda y decide si suspende el
+  contrato (§29.15.1).
+- **Lo que ve la tienda**, en solo lectura: liquidación, líneas, evidencias,
+  cuenta corriente y depósitos, con exportación del detalle. En esta versión
+  los reclamos van por fuera de Kapta y Grupo GF registra el ajuste.
+- **Facturas fuera de Kapta.** Los montos se muestran con IGV incluido.
+- **Yape.** La aprobación humana compara el total contra el estado de cuenta
+  del Yape de Grupo GF. El cruce automático, operación por operación, queda
+  para después.
+
+#### 29.15.9 Lo que no cambia
+
+- Shopify sigue siendo la única fuente de pedidos (§2). Kapta no crea pedidos
+  para la tienda, y cancelar una solicitud no cancela el pedido en Shopify.
+- Aurela y Kenku siguen con la cola automática de «Pedidos disponibles», la
+  tabla interna, el 3.5 % y el reintento gestionado por Grupo GF.
+- Rutas que mezclan tiendas, cotejos, custodia, reportes y pago del motorizado
+  funcionan igual para todos.
+
+#### 29.15.10 Fuera de esta versión
+
+- Entrada por API o Excel para tiendas sin Shopify (§29.11).
+- Conteo, reserva, recepción y retiro del inventario de la tienda (§29.3).
+- Reclamos de la tienda dentro de Kapta.
+- Valor declarado por SKU para compensar pérdidas.
+- Facturación electrónica.
+- Cruce automático del Yape de Grupo GF con su estado de cuenta.
+- Cobro de la suscripción de Kapta a la tienda.
+
+#### 29.15.11 Criterios de aceptación
+
+- Una tienda invitada que acepta el contrato con su código lo deja `active`.
+  Un código equivocado o de otra invitación no lo activa.
+- El owner de una organización cliente no ve Grupo GF Courier ni puede crear
+  un segundo operador.
+- Un pedido de tienda cliente en Lima, con todas sus líneas mapeadas, se asigna
+  desde su Mesa de ruta y aparece en «Pedidos tomados · Sin ruta» de Grupo GF
+  con el nombre de la tienda. No aparece nunca en «Pedidos disponibles».
+- Asignar dos veces el mismo pedido, o en paralelo, deja una sola solicitud
+  activa.
+- Un pedido con una línea sin mapear no se asigna, y el aviso nombra la línea.
+- La tarifa congelada sale de la excepción del contrato o, si no hay, de la
+  tabla de externos, nunca de la interna. Sin tarifa, el pedido no se asigna.
+- El equipo de Grupo GF escanea, coteja, rotula, reporta por el motorizado y
+  cierra la ruta de un pedido de tienda cliente igual que uno de Aurela. Al
+  cerrar la ruta, ninguna parada de la tienda queda fuera.
+- Grupo GF no ve un pedido de la tienda que no le fue asignado. La tienda A no
+  ve nada de la tienda B.
+- Con la sesión de la tienda, ninguna consulta, ni de pantalla ni directa a la
+  base, devuelve el nombre o el teléfono de un motorizado ni el correo del
+  personal de Grupo GF.
+- Un no entregado sin reprogramación se desarma al recibirse en la oficina. Uno
+  ya reprogramado, o conservado por el motorizado con fecha, sale con la misma
+  guía.
+- Ejemplo de liquidación. Supuestos: tarifa S/ 10, Yape al 5 %, POS al 5 % y
+  producto a S/ 40. Paradas del día:
+  - entrega de S/ 100 cobrada por Yape;
+  - entrega de S/ 80 en efectivo;
+  - un rechazo;
+  - un pedido pagado por adelantado entregado sin cobro.
+
+  | Concepto | Monto |
+  | --- | ---: |
+  | COD cobrado (100 + 80) | S/ 180.00 |
+  | Tarifas: 3 entregas y 1 rechazo × S/ 10 | − S/ 40.00 |
+  | Comisión Yape: 5 % de S/ 100 | − S/ 5.00 |
+  | Comisión POS (no hubo cobros por POS) | S/ 0.00 |
+  | Producto: 3 entregados × S/ 40 | − S/ 120.00 |
+  | **Neto del día** | **S/ 15.00** |
+
+  El neto entra a la cuenta corriente y se deposita ese día.
+- Aprobar la liquidación deja los pedidos entregados de la tienda en
+  «Finalizado · Entregado y liquidado». Una corrección posterior aparece como
+  ajuste en la cuenta corriente, sin cambiar la liquidación aprobada.
 
 ## 30. Liquidaciones 2 — hojas por dominio
 

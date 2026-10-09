@@ -17,7 +17,13 @@ const ANTHROPIC_VERSION = "2023-06-01";
 // Una hoja de Alexis llega a 50 filas en tres capturas. 105 s deja margen
 // dentro de los 120 s de la función de Vercel, como la liquidación por foto.
 const REQUEST_TIMEOUT_MS = 105_000;
-const MAX_TOKENS = 12_000;
+// El techo sin streaming. Lo que más gasta no es la hoja (40 filas compactas
+// son ~2.000 tokens): es el razonamiento. claude-sonnet-5 piensa por defecto
+// con esfuerzo alto, y el 08/10 la primera hoja real de Alexis (40 filas, una
+// captura) se quedó sin salida a los 12.000 tokens. Transcribir no necesita
+// pensar: se pide esfuerzo bajo y filas como arreglos.
+const MAX_TOKENS = 16_000;
+const EFFORT = "low";
 
 export interface RiderSheetImage {
   base64: string;
@@ -36,6 +42,8 @@ export interface RiderSheet {
 export interface RiderSheetVisionResult extends RiderSheet {
   /** false ante cualquier fallo: no es «la hoja no tenía filas». */
   ok: boolean;
+  /** La salida se cortó: `lines` trae solo las filas completas hasta ahí. */
+  truncated?: boolean;
   model: string;
   failure?: "missing_credentials" | "api_error" | "timeout" | "invalid_response";
   detail?: string;
@@ -60,26 +68,26 @@ const SYSTEM_PROMPT =
 
 function buildPrompt(images: number): string {
   return (
-    `Recibes ${images === 1 ? "una captura" : `${images} capturas`} de la hoja. Devuelve SOLO un JSON con esta forma exacta:\n` +
+    `Recibes ${images === 1 ? "una captura" : `${images} capturas`} de la hoja. ` +
+    "Devuelve SOLO un JSON, sin texto antes ni después, con esta forma exacta:\n" +
     "{\n" +
     '  "date": string|null,          // fecha de la cabecera en formato YYYY-MM-DD, tal cual esté escrita\n' +
     '  "rider_name": string|null,    // nombre del motorizado si aparece\n' +
     '  "total_amount": number|null,  // TOTAL COBRADO / TOTAL RECAUDADO de la hoja, si aparece\n' +
     '  "total_fee": number|null,     // total de GANANCIA MOT., si aparece\n' +
-    '  "lines": [\n' +
-    "    {\n" +
-    '      "item": number|null,      // ITEM\n' +
-    '      "store": string|null,     // PROVEEDOR (AURELA, KENKU…)\n' +
-    '      "customer": string|null,  // CLIENTE: la persona\n' +
-    '      "district": string|null,  // DISTRITO\n' +
-    '      "written": string|null,   // F. PAGO tal cual: EFECTIVO, PAGO POS, SOLO ENTREGA, YAPE PROV, CAIDA, COBRO CAIDA, NO CONTESTO, REPRO, MIERCOLES…\n' +
-    '      "amount": number|null,    // RECAUDADO de esa fila (S/.0.00 es 0)\n' +
-    '      "fee": number|null,       // GANANCIA MOT. de esa fila\n' +
-    '      "order": string|null,     // código del pedido en OBSERVACIÓN: #KP138029, #AUR177790\n' +
-    '      "notes": string|null      // el resto de la OBSERVACIÓN, si dice algo más\n' +
-    "    }\n" +
-    "  ]\n" +
+    '  "rows": [ [item, store, customer, district, written, amount, fee, order, notes], ... ]\n' +
     "}\n\n" +
+    "Cada fila de `rows` es un arreglo de 9 valores, en este orden:\n" +
+    "  item      número|null  ITEM\n" +
+    "  store     texto|null   PROVEEDOR (AURELA, KENKU…)\n" +
+    "  customer  texto|null   CLIENTE: la persona\n" +
+    "  district  texto|null   DISTRITO\n" +
+    "  written   texto|null   F. PAGO tal cual: EFECTIVO, PAGO POS, SOLO ENTREGA, YAPE PROV, CAIDA, COBRO CAIDA, NO CONTESTO, REPRO, MIERCOLES…\n" +
+    "  amount    número|null  RECAUDADO de esa fila (S/.0.00 es 0)\n" +
+    "  fee       número|null  GANANCIA MOT. de esa fila\n" +
+    "  order     texto|null   código del pedido en OBSERVACIÓN: #KP138029, #AUR177790\n" +
+    "  notes     texto|null   el resto de la OBSERVACIÓN, si dice algo más\n" +
+    'Ejemplo de fila: [5, "AURELA", "Dotty Pinedo", "Mariscal", "EFECTIVO", 189, 12, "#KP138910", null]\n\n' +
     "Reglas:\n" +
     "- Una fila por ITEM, en el orden de la hoja. Ignora encabezados y filas de TOTAL.\n" +
     "- Si un ITEM aparece en dos capturas, transcríbelo una sola vez.\n" +
@@ -89,7 +97,8 @@ function buildPrompt(images: number): string {
     "- Si F. PAGO está cortada por el ancho de la celda («OLO ENTREGA», «YAPE PROV»), copia lo visible.\n" +
     "- Los montos son números sin «S/.»: S/.189.00 es 189, S/.0.00 es 0. Celda vacía es null.\n" +
     "- La columna UTILIDAD se ignora.\n" +
-    "- Si la imagen no es una hoja de reparto, devuelve `lines` vacío."
+    "- Si la imagen no es una hoja de reparto, devuelve `rows` vacío.\n" +
+    "- No expliques nada: solo el JSON."
   );
 }
 
@@ -127,24 +136,98 @@ function day(v: unknown): string | null {
   return Number.isFinite(Date.parse(`${s}T00:00:00.000Z`)) ? s : null;
 }
 
-/** Convierte la respuesta del modelo en filas. Aparte de la red, para probarla. */
-export function parseRiderSheet(text: string): RiderSheet | null {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  let obj: unknown;
+const ROW_KEYS = ["item", "store", "customer", "district", "written", "amount", "fee", "order", "notes"] as const;
+
+/** Una fila como arreglo de 9 valores (el formato pedido) o como objeto. */
+function rowObject(raw: unknown): Record<string, unknown> | null {
+  if (Array.isArray(raw)) return Object.fromEntries(ROW_KEYS.map((k, i) => [k, raw[i] ?? null]));
+  return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+}
+
+/**
+ * Las filas completas de una respuesta cortada: cada `[...]` cerrado dentro de
+ * `"rows": [`. Lo que quedó a medias se descarta; nunca se completa.
+ */
+function salvageRows(text: string): unknown[] {
+  const at = text.search(/"rows"\s*:\s*\[/);
+  if (at < 0) return [];
+  const rows: unknown[] = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  for (let i = text.indexOf("[", at) + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "[") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "]") {
+      if (depth === 0) break;
+      depth--;
+      if (depth === 0 && start >= 0) {
+        try {
+          rows.push(JSON.parse(text.slice(start, i + 1)));
+        } catch {
+          // Fila ilegible: fuera.
+        }
+        start = -1;
+      }
+    }
+  }
+  return rows;
+}
+
+/** Un campo suelto de la cabecera de una respuesta cortada. */
+function headField(text: string, key: string): unknown {
+  const m = new RegExp(`"${key}"\\s*:\\s*("(?:[^"\\\\]|\\\\.)*"|-?[\\d.]+|null)`).exec(text);
+  if (!m || m[1] === "null") return null;
   try {
-    obj = JSON.parse(text.slice(start, end + 1));
+    return JSON.parse(m[1]!);
   } catch {
     return null;
+  }
+}
+
+/**
+ * Convierte la respuesta del modelo en filas. Aparte de la red, para probarla.
+ * Con `allowTruncated`, una respuesta cortada devuelve sus filas completas.
+ */
+export function parseRiderSheet(text: string, allowTruncated = false): RiderSheet | null {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  let obj: unknown = null;
+  if (start >= 0 && end > start) {
+    try {
+      obj = JSON.parse(text.slice(start, end + 1));
+    } catch {
+      obj = null;
+    }
+  }
+  if (!obj && allowTruncated) {
+    const rows = salvageRows(text);
+    if (!rows.length) return null;
+    obj = {
+      date: headField(text, "date"),
+      rider_name: headField(text, "rider_name"),
+      total_amount: headField(text, "total_amount"),
+      total_fee: headField(text, "total_fee"),
+      rows,
+    };
   }
   if (!obj || typeof obj !== "object") return null;
   const o = obj as Record<string, unknown>;
   const lines: NotebookLine[] = [];
   const seen = new Set<string>();
-  for (const raw of Array.isArray(o.lines) ? o.lines : []) {
-    if (!raw || typeof raw !== "object") continue;
-    const l = raw as Record<string, unknown>;
+  const rawRows = Array.isArray(o.rows) ? o.rows : Array.isArray(o.lines) ? o.lines : [];
+  for (const raw of rawRows) {
+    const l = rowObject(raw);
+    if (!l) continue;
     const item = num(l.item);
     const line: NotebookLine = {
       item: item !== null && Number.isInteger(item) ? item : null,
@@ -187,13 +270,14 @@ export async function readRiderSheet(images: readonly RiderSheetImage[], opts: R
   const base = (opts.apiBase ?? "https://api.anthropic.com").replace(/\/$/, "");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const res = await doFetch(`${base}/v1/messages`, {
+  const send = (withEffort: boolean) =>
+    doFetch(`${base}/v1/messages`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-api-key": opts.apiKey, "anthropic-version": ANTHROPIC_VERSION },
       body: JSON.stringify({
         model,
         max_tokens: MAX_TOKENS,
+        ...(withEffort ? { output_config: { effort: EFFORT } } : {}),
         system: SYSTEM_PROMPT,
         messages: [
           {
@@ -210,6 +294,13 @@ export async function readRiderSheet(images: readonly RiderSheetImage[], opts: R
       }),
       signal: controller.signal,
     });
+  try {
+    let res = await send(true);
+    // Un modelo configurado que no acepte el esfuerzo: se repite sin él.
+    if (res.status === 400) {
+      const body = await res.clone().text().catch(() => "");
+      if (/effort|output_config/i.test(body)) res = await send(false);
+    }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       let detail = `Anthropic respondió HTTP ${res.status}.`;
@@ -222,18 +313,21 @@ export async function readRiderSheet(images: readonly RiderSheetImage[], opts: R
       return { ...empty, failure: "api_error", detail };
     }
     const json = await res.json();
-    const parsed = parseRiderSheet(extractText(json));
-    if (!parsed) {
-      const stopReason = (json as { stop_reason?: string })?.stop_reason;
+    const stopReason = (json as { stop_reason?: string })?.stop_reason;
+    const cut = stopReason === "max_tokens";
+    const parsed = parseRiderSheet(extractText(json), cut);
+    if (!parsed || (cut && !parsed.lines.length)) {
       return {
         ...empty,
         failure: "invalid_response",
-        detail: stopReason === "max_tokens"
-          ? "La lectura quedó cortada: manda la hoja en menos capturas o por partes."
-          : "El modelo no devolvió la hoja en el formato esperado.",
+        detail: cut
+          ? "La lectura quedó cortada antes de la primera fila: recorta la foto en dos partes y súbelas por separado."
+          : stopReason === "refusal"
+            ? "El modelo no quiso leer esa imagen."
+            : "El modelo no devolvió la hoja en el formato esperado.",
       };
     }
-    return { ...parsed, ok: true, model };
+    return { ...parsed, ok: true, model, ...(cut ? { truncated: true } : {}) };
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "AbortError";
     return {
