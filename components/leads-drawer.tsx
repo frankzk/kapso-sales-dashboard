@@ -16,6 +16,7 @@ import {
 import { waKindLabel, type WaNumber } from "@/lib/wa-numbers";
 import type { CustomerHistory } from "@/lib/leads-access";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
+import { SECTION_CARD } from "@/components/ops-ui";
 import { EmojiPicker } from "@/components/emoji-picker";
 import { insertAtCursor } from "@/lib/emoji";
 import {
@@ -673,23 +674,27 @@ export function LeadDrawer({
                 </div>
               )}
 
+              {/* El panel trae su contenido sin marco (en la ficha lo enmarca la
+                  tarjeta de su sección); aquí lleva su propia tarjeta. */}
               {history?.currentOrderId && !history.currentOrderGuide && (
-                <AliclikGuidePanel
-                  // `key` = candado de identidad. Sin ella, si la vendedora pulsa
-                  // "Generar nuevo pedido" con el panel abierto, React reutiliza
-                  // la instancia: cambia `orderId` pero se queda dentro la
-                  // cotización del pedido ANTERIOR. Crear entonces mandaría a
-                  // Aliclik el courier y el precio de un pedido y el id de otro.
-                  // Con la key el panel se monta de cero para cada pedido.
-                  key={history.currentOrderId}
-                  orderId={history.currentOrderId}
-                  hasCoordinate={history.currentOrderHasCoordinate}
-                  health={history.currentOrderAliclikHealth}
-                  // Sin argumento a propósito: `{refreshList:true}` toma un atajo
-                  // que NO recarga el historial, y el panel se quedaría visible
-                  // ofreciendo crear una guía que ya existe.
-                  onCreated={() => onRegistered()}
-                />
+                <div className={SECTION_CARD}>
+                  <AliclikGuidePanel
+                    // `key` = candado de identidad. Sin ella, si la vendedora pulsa
+                    // "Generar nuevo pedido" con el panel abierto, React reutiliza
+                    // la instancia: cambia `orderId` pero se queda dentro la
+                    // cotización del pedido ANTERIOR. Crear entonces mandaría a
+                    // Aliclik el courier y el precio de un pedido y el id de otro.
+                    // Con la key el panel se monta de cero para cada pedido.
+                    key={history.currentOrderId}
+                    orderId={history.currentOrderId}
+                    hasCoordinate={history.currentOrderHasCoordinate}
+                    health={history.currentOrderAliclikHealth}
+                    // Sin argumento a propósito: `{refreshList:true}` toma un atajo
+                    // que NO recarga el historial, y el panel se quedaría visible
+                    // ofreciendo crear una guía que ya existe.
+                    onCreated={() => onRegistered()}
+                  />
+                </div>
               )}
 
               {/* Pedidos anteriores: últimos 3 pedidos de Shopify de este cliente */}

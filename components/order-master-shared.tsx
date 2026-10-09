@@ -90,10 +90,6 @@ import {
 import { buildMasterQuery } from "@/lib/master-query";
 import { OrderLineItems } from "@/components/order-line-items";
 import {
-  ORDER_COVERAGE_LABEL,
-  type OrderCoverage,
-} from "@/lib/order-coverage";
-import {
   GENERAL_STATUSES,
   daysInAgency,
   daysInStatus,
@@ -207,28 +203,9 @@ const STATUS_TONE: Record<string, string> = {
   devuelto: "bg-crit-bg text-crit-fg",
 };
 
-// Chapa de 4 px del mundo de operación. La cobertura se lee por su texto; solo
-// «Por revisar» lleva color, porque es la única que pide que alguien actúe.
-const COVERAGE_TONE: Record<OrderCoverage, string> = {
-  lima: "bg-line text-ink-600",
-  provincia_cod: "bg-line text-ink-600",
-  agencia: "bg-line text-ink-600",
-  por_revisar: "bg-warn-bg text-warn-fg",
-};
-
-export function CoverageBadge({ coverage }: { coverage: OrderMasterRow["coverage"] }) {
-  const value = coverage ?? "por_revisar";
-  return (
-    <span
-      className={cn(
-        "inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded px-1.5 text-xs font-medium leading-none",
-        COVERAGE_TONE[value],
-      )}
-    >
-      {ORDER_COVERAGE_LABEL[value]}
-    </span>
-  );
-}
+// La chapa de cobertura vive en su propio módulo para que Ajustes la use sin
+// cargar el Master; aquí se reexporta para quien ya la importaba de este.
+export { CoverageBadge } from "@/components/coverage-badge";
 
 /**
  * Anular una guía de Shalom, en dos pasos.

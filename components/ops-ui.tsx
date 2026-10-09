@@ -9,7 +9,7 @@
 import { forwardRef, useEffect, useRef, type ButtonHTMLAttributes, type ComponentType, type ReactNode, type SVGProps } from "react";
 import { cn } from "@/components/ui";
 import { opsButtonClass, type ButtonSize, type ButtonVariant } from "@/components/ops-styles";
-import { IconAlert, IconCheckCircle, IconInfo, IconPlusCircle, IconXCircle } from "@/components/icons";
+import { IconAlert, IconCheck, IconCheckCircle, IconInfo, IconPlusCircle, IconXCircle } from "@/components/icons";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -322,13 +322,20 @@ export function OptionTile({
   active,
   danger,
   disabled,
+  badge,
+  aside,
   onClick,
 }: {
   label: string;
-  description?: string;
+  /** La consecuencia de elegirla, o por qué no se puede. */
+  description?: ReactNode;
   active: boolean;
   danger?: boolean;
   disabled?: boolean;
+  /** Chapa junto al título («Más barata», «Express»). */
+  badge?: ReactNode;
+  /** Lo que se compara entre opciones (un precio), a la derecha del título. */
+  aside?: ReactNode;
   onClick: () => void;
 }) {
   return (
@@ -338,22 +345,87 @@ export function OptionTile({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "rounded-lg px-3 py-2.5 text-left transition-shadow disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:min-h-11",
+        // `flex-col`: en una rejilla la fila estira el botón, y un botón centra
+        // su contenido; así empieza arriba como sus vecinas.
+        "flex flex-col rounded-lg px-3 py-2.5 text-left transition-shadow disabled:cursor-not-allowed pointer-coarse:min-h-11",
         active
           ? "bg-brand-50 ring-2 ring-inset ring-brand-600"
           : "bg-white ring-1 ring-inset ring-line-strong hover:ring-ink-300",
       )}
     >
-      <span
-        className={cn(
-          "block text-sm font-semibold leading-5",
-          danger ? "text-crit-fg" : active ? "text-brand-700" : "text-ink-900",
-        )}
-      >
-        {label}
+      {/* Apagada, se atenúa el título y no la explicación: el porqué de que no
+          se pueda elegir es justo lo que hay que leer. */}
+      <span className={cn("flex items-start justify-between gap-3", disabled && "opacity-50")}>
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <span
+            className={cn(
+              "text-sm font-semibold leading-5",
+              danger ? "text-crit-fg" : active ? "text-brand-700" : "text-ink-900",
+            )}
+          >
+            {label}
+          </span>
+          {badge}
+        </span>
+        {aside && <span className="shrink-0 text-sm font-semibold leading-5 tabular-nums text-ink-900">{aside}</span>}
       </span>
       {description && <span className="mt-0.5 block text-[13px] leading-5 text-ink-600">{description}</span>}
     </button>
+  );
+}
+
+/**
+ * Un paso de un registro en varios pasos (el cobro, la guía de Aliclik): el
+ * disco con su número —o el visto cuando está hecho, como el recorrido de la
+ * ficha—, el título con su estado en chapa, la ayuda y lo suyo debajo. La línea
+ * que baja al siguiente paso se pinta en tinta cuando este ya está hecho. Va
+ * dentro de un `<ol>`.
+ */
+export function Step({
+  n,
+  title,
+  done,
+  badge,
+  help,
+  last = false,
+  children,
+}: {
+  n: number;
+  title: string;
+  done: boolean;
+  badge?: ReactNode;
+  help?: ReactNode;
+  last?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <li className={cn("relative pl-9", !last && "pb-6")}>
+      {!last && (
+        <span
+          aria-hidden="true"
+          className={cn("absolute bottom-0 left-[11px] top-7 w-px", done ? "bg-ink-500" : "bg-line-strong")}
+        />
+      )}
+      <span
+        aria-hidden="true"
+        className={cn(
+          "absolute left-0 top-0 grid size-6 place-items-center rounded-full text-xs font-semibold tabular-nums",
+          done ? "bg-ink-900 text-white" : "bg-white text-ink-600 ring-1 ring-inset ring-line-strong",
+        )}
+      >
+        {done ? <IconCheck className="size-3.5" strokeWidth={2.6} /> : n}
+      </span>
+      <div className="flex min-h-6 flex-wrap items-center gap-x-2 gap-y-1">
+        <h5 className="text-sm font-semibold text-ink-900">
+          <span className="sr-only">Paso {n}: </span>
+          {title}
+          {done && <span className="sr-only"> (hecho)</span>}
+        </h5>
+        {badge}
+      </div>
+      {help && <p className="mt-0.5 max-w-[68ch] text-[13px] leading-5 text-ink-500">{help}</p>}
+      <div className="mt-3 space-y-3">{children}</div>
+    </li>
   );
 }
 
