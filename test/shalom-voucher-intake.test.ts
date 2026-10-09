@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { duplicateAction, matchCandidate, type VoucherCandidate } from "@/lib/shalom/voucher-intake";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  duplicateAction,
+  loadVoucherCandidates,
+  matchCandidate,
+  type VoucherCandidate,
+} from "@/lib/shalom/voucher-intake";
 import { voucherReading } from "@/lib/voucher-inspect";
 import { yapeRecipientReadingFromVision, type CollectionAccount } from "@/lib/yape-recipient";
 
@@ -198,5 +204,64 @@ describe("el comprobante repetido", () => {
     // Esto es justo lo que la deduplicación existe para cazar, y callarlo sería
     // el error contrario —el caro—.
     expect(duplicateAction(false)).toEqual({ alert: true, outcome: "yape_de_otro_pedido" });
+  });
+});
+
+describe("los candidatos: solo pedidos que deben algo", () => {
+  /** Lo justo de PostgREST para `loadVoucherCandidates`: tres lecturas encadenadas. */
+  function fakeAdmin(tables: Record<string, Record<string, unknown>[]>) {
+    return {
+      from(table: string) {
+        const chain: Record<string, unknown> = {
+          select: () => chain,
+          eq: () => chain,
+          in: () => chain,
+          order: () => chain,
+          limit: () => chain,
+          then: (res: (v: unknown) => unknown) => Promise.resolve({ data: tables[table] ?? [], error: null }).then(res),
+        };
+        return chain;
+      },
+    } as unknown as SupabaseClient;
+  }
+
+  const SHIPMENTS = [
+    { order_id: "web", guide_code: "98145084", shalom_codigo: "9WDH" },
+    { order_id: "cod", guide_code: "98145099", shalom_codigo: "7KQP" },
+  ];
+
+  // #KP138120 (05-10-2026): pagado en el checkout, sin ninguna fila en
+  // `order_payments`, así que su «saldo» salía como el total. La clienta mandó
+  // la captura de su pago web y entró por la puerta del monto como un pago nuevo.
+  it("un pedido cobrado en el checkout no es candidato: ya no debe nada", async () => {
+    const admin = fakeAdmin({
+      orders: [
+        { id: "web", name: "#KP138120", total_amount: 134.1, financial_status: "paid", total_refunded: "0.00", payment_gateway: "checkout" },
+        { id: "cod", name: "#KP138121", total_amount: 134.1, financial_status: "pending", total_refunded: "0.00", payment_gateway: "cod" },
+      ],
+      shipments: SHIPMENTS,
+    });
+    const candidatos = await loadVoucherCandidates(admin, "store", "51982748959");
+    expect(candidatos.map((c) => c.orderName)).toEqual(["#KP138121"]);
+    // Y la captura de S/ 134.10 ya no tiene a qué pedido web pegarse.
+    expect(matchCandidate(candidatos, 134.1, null)).toMatchObject({ ok: true, candidate: { orderId: "cod" } });
+  });
+
+  it("marcado pagado a mano en Shopify sigue el conducto de las constancias", async () => {
+    const admin = fakeAdmin({
+      orders: [{ id: "web", name: "#KP138120", total_amount: 134.1, financial_status: "paid", total_refunded: "0.00", payment_gateway: "manual" }],
+      shipments: SHIPMENTS,
+    });
+    const candidatos = await loadVoucherCandidates(admin, "store", "51982748959");
+    expect(candidatos.map((c) => c.orderName)).toEqual(["#KP138120"]);
+  });
+
+  it("con un reembolso, el prepago se deshace y vuelve a deber", async () => {
+    const admin = fakeAdmin({
+      orders: [{ id: "web", name: "#KP138120", total_amount: 134.1, financial_status: "paid", total_refunded: "134.10", payment_gateway: "checkout" }],
+      shipments: SHIPMENTS,
+    });
+    const candidatos = await loadVoucherCandidates(admin, "store", "51982748959");
+    expect(candidatos.map((c) => c.saldo)).toEqual([134.1]);
   });
 });
