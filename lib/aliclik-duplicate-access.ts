@@ -4,7 +4,7 @@ import { createServerSupabase } from "@/lib/db";
 import { permissionsFor } from "@/lib/permissions";
 import { classifyOperation } from "@/lib/order-macro-stage";
 import { normalizePhone } from "@/lib/phone";
-import { duplicateGate, duplicateItems, sharesDuplicateItem, unresolvedDuplicateShipment,
+import { DECLARED_OUTCOME_KINDS, duplicateGate, duplicateItems, sharesDuplicateItem, unresolvedDuplicateShipment,
   type DuplicateConflict, type DuplicateHold, type DuplicateResolution, type DuplicateShipment } from "@/lib/aliclik-duplicate";
 
 export const DUPLICATE_READ_ERROR = "No se pudo verificar si hay otro envío del mismo producto pendiente. Reintenta antes de crear la guía Aliclik.";
@@ -60,10 +60,27 @@ export async function loadAliclikDuplicateHold(orderId: string): Promise<Duplica
         .select("id,order_id,guide_code,courier,dispatched_at,custody_transferred_at,out_for_delivery_at,aliclik_reported_dispatch_date,returned_at,delivery_status,custody_state,pickup_state")
         .in("order_id", ids).in("store_id", storeIds).order("id").range(offset, offset + 99);
       if (guidesError || !data) throw new Error(DUPLICATE_READ_ERROR);
-      active.push(...(data as DuplicateShipment[]).filter(unresolvedDuplicateShipment));
+      active.push(...(data as DuplicateShipment[]).filter((g) => unresolvedDuplicateShipment(g)));
       if (data.length < 100) break;
     }
   }
+  if (!active.length) return clear;
+  // Una salida cuyo destino alguien declaró —entregada o perdida— ya no es una
+  // caja pendiente (MOM §8.3). La devolución declarada no se busca aquí: pasa
+  // por la recepción y deja `returned_at`, que el filtro de arriba ya mira.
+  const declaredIds = new Set<string>();
+  for (let start = 0; start < active.length; start += 100) {
+    const { data, error: declaredError } = await sb.from("order_events").select("shipment_id")
+      .in("kind", [...DECLARED_OUTCOME_KINDS])
+      .in("shipment_id", active.slice(start, start + 100).map((g) => g.id));
+    if (declaredError || !data) throw new Error(DUPLICATE_READ_ERROR);
+    for (const event of data as { shipment_id: string | null }[]) {
+      if (event.shipment_id) declaredIds.add(event.shipment_id);
+    }
+  }
+  const pending = active.filter((g) => unresolvedDuplicateShipment(g, declaredIds));
+  active.length = 0;
+  active.push(...pending);
   if (!active.length) return clear;
   const itemsById = new Map<string, NonNullable<ReturnType<typeof duplicateItems>>>();
   const ids = [...new Set([orderId, ...active.map((g) => g.order_id)])];

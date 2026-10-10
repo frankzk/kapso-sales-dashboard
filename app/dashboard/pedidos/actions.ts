@@ -2039,7 +2039,10 @@ export async function registerClosureAction(
     (selectedShipment?.courier?.toLowerCase() !== "aliclik" ||
       !workflowIsOpen(
         eventRows,
-        ["indemnity_requested"],
+        // Una pérdida declarada al resolver un duplicado (MOM §8.3) también la
+        // abre: sin esto la macroetapa la mostraría pendiente y nadie podría
+        // cerrarla.
+        ["indemnity_requested", "courier_loss_declared"],
         ["indemnity_resolved"],
         selectedShipment.id,
       ))

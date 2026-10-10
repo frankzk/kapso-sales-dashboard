@@ -1147,8 +1147,9 @@ concretas que revisó:
 - **Quiere ambos:** confirmación explícita registrada y al menos el adelanto
   mínimo vigente validado en el pedido nuevo. Un comprobante pendiente o el
   pago del primer pedido no sirven. El pago se vuelve a comprobar al crear.
-- **Reemplaza al anterior:** sigue retenido hasta que conste la recuperación
-  física o entrega del envío anterior. Solicitar detenerlo no lo libera.
+- **Reemplaza al anterior:** quien resuelve declara qué pasó con cada envío anterior
+  y eso libera la guía (cambio del 10-10-2026, ver abajo). Solicitar detenerlo
+  no basta.
 - **Excepción autorizada:** exige el permiso `master.override_status` en la
   organización del pedido y un motivo. La autorización solo vale para los
   productos y salidas revisados; un cambio exige nueva revisión.
@@ -1160,6 +1161,44 @@ no se crea la guía. Esta excepción tampoco levanta el veto de dos rechazos del
 §8.2. Cotizar o vincular una guía que ya existe siguen siendo operaciones
 distintas; la regla impide emitir una nueva. Lima y los demás couriers conservan
 sus reglas. Las resoluciones quedan en `order_events`, sin borrar historial.
+
+#### Reemplazo: se declara el destino del envío anterior (10-10-2026)
+
+Decisión del owner. Hasta esta fecha «reemplaza» esperaba una constancia de
+entrega o retorno que, en los casos reales, el seguimiento ya no iba a traer:
+una guía `transferido` deja de consultarse, una anulada se consulta solo tres
+semanas y un paquete que el courier perdió no vuelve nunca. Del 02 al
+10-10-2026 hubo 4 pedidos y 15 intentos con «reemplaza», y los 4 terminaron en
+la excepción de un responsable; las vendedoras no podían cerrar el caso.
+
+Ahora, al elegir «reemplaza», quien resuelve declara el destino de **cada**
+salida anterior en conflicto, y cada declaración pasa por la puerta que ya le
+corresponde. Queda con actor, fecha y motivo sobre el pedido anterior:
+
+| Destino declarado | Qué se escribe | Dónde queda el pedido anterior |
+| --- | --- | --- |
+| Volvió al almacén | La recepción de devolución (`return_receive`, permiso `closure.return`), igual que desde la mesa de cierre | Su camino normal: Devolución pendiente de inventario |
+| Lo recibió el cliente | El hecho `delivery_declared` sobre esa salida | Por cerrar · **Entrega declarada · confirmar cobro** |
+| El courier lo perdió | El hecho `courier_loss_declared` sobre esa salida | Por cerrar · Indemnización pendiente |
+
+- **La guía del courier no se toca.** «Lo recibió el cliente» no la marca
+  entregada: esa puerta es del courier (§11). Lo que cambia es el pedido.
+- **Entrega declarada** se cierra cuando el pedido pasa a `entregado` —lo
+  reporta el courier o se confirma a mano, y desde ahí manda la liquidación— o
+  cuando alguien fija el estado en «Gestión manual» después de la declaración,
+  también si resultó falsa. Una declaración sin salida sería otro pedido
+  atascado.
+- **La pérdida declarada abre la indemnización** igual que la solicitud formal;
+  finanzas la completa con monto y la cierra con «Resolver indemnización».
+- **Solo Aliclik admite los tres destinos.** Para otro courier solo se declara
+  la devolución: su entrega tiene su propia puerta y la indemnización formal es
+  solo de Aliclik, así que una pérdida declarada no tendría quién la cierre.
+- Si la puerta de devolución se niega —por ejemplo, la salida figura en la
+  empresa— no se guarda la resolución y la guía sigue retenida; el motivo se
+  muestra tal cual. Las declaraciones se escriben antes que la resolución.
+- Una salida con destino declarado deja de contar como caja pendiente para
+  esta regla. Si después aparece, su devolución o entrega se registra por las
+  puertas de siempre.
 
 ### 8.4 Entrega estimada de Aliclik según los días del pedido (09-10-2026)
 
