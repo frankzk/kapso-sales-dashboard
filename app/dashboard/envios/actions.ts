@@ -10,7 +10,7 @@ import { recomputeOrderMasterForShipmentsSafe } from "@/lib/order-master";
 import {
   getReprogramRows,
   getShipmentWithCalls,
-  getVoiceScore,
+  getTeamScore,
   getVoiceLiveStatus,
   searchOrdersForLink,
   searchShipmentsQuery,
@@ -20,7 +20,7 @@ import {
 import type { RecoveryCallDisposition } from "@/lib/reproprovincia";
 import { discardRecovery, validarMotivoDescarte } from "@/lib/recovery-discard";
 import type { ReprogramChildRow } from "@/lib/shipments";
-import type { VoiceScoreRow } from "@/lib/voice-scoreboard";
+import type { TeamScore } from "@/lib/team-score";
 import type { VoiceLiveStatus } from "@/lib/voice-live";
 import {
   CLAIM_TTL_MINUTES,
@@ -203,10 +203,10 @@ export async function loadReprogramData(): Promise<{
   return getReprogramRows(storeIds);
 }
 
-/** «Agentes de voz: comparación» para un rango de días de Lima. RLS-scoped. */
-export async function loadVoiceScore(from: string, to: string): Promise<VoiceScoreRow[] | null> {
+/** «Gestión por persona» para un rango de días de Lima. RLS-scoped. */
+export async function loadTeamScore(from: string, to: string): Promise<TeamScore | null> {
   const stores = await getAccessibleStores();
-  return getVoiceScore(
+  return getTeamScore(
     stores.map((s) => s.id),
     from,
     to,

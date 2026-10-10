@@ -1264,6 +1264,8 @@ export interface ReproDayCall {
   kind: string;
   newStatus: string | null; // resultado de la gestión (delivery_status resultante)
   shipmentId: string | null;
+  /** El pedido de la guía: una reprogramación toca dos guías del mismo pedido. */
+  orderId?: string | null;
   note?: string | null;
 }
 
@@ -1293,12 +1295,20 @@ export interface ReproDayAgentCount {
   anuladas: number; // cliente canceló → Anulado
   entregadas: number; // marcadas Entregado en la gestión
   guias: number; // guías distintas tocadas hoy
+  pedidos: number; // pedidos distintos (una reprogramación toca dos guías del mismo pedido)
 }
 
 /** Agrega las gestiones del día por asesor con el desglose de resultados.
  *  Pure (ordena por gestiones desc; el agente de voz al final). */
 export function aggregateReproDay(calls: ReproDayCall[]): ReproDayAgentCount[] {
-  type Acc = { gestiones: number; reprogramadas: number; anuladas: number; entregadas: number; guias: Set<string> };
+  type Acc = {
+    gestiones: number;
+    reprogramadas: number;
+    anuladas: number;
+    entregadas: number;
+    guias: Set<string>;
+    pedidos: Set<string>;
+  };
   const map = new Map<string, Acc>();
   for (const c of calls) {
     if (c.kind !== "call" && c.kind !== "reroute") continue;
@@ -1306,12 +1316,14 @@ export function aggregateReproDay(calls: ReproDayCall[]): ReproDayAgentCount[] {
     if (!actor) continue;
     const e =
       map.get(actor) ??
-      { gestiones: 0, reprogramadas: 0, anuladas: 0, entregadas: 0, guias: new Set<string>() };
+      { gestiones: 0, reprogramadas: 0, anuladas: 0, entregadas: 0, guias: new Set<string>(), pedidos: new Set<string>() };
     e.gestiones += 1;
     if (c.newStatus === "en_ruta") e.reprogramadas += 1;
     else if (c.newStatus === "anulado") e.anuladas += 1;
     else if (c.newStatus === "entregado") e.entregadas += 1;
     if (c.shipmentId) e.guias.add(c.shipmentId);
+    const pedido = c.orderId ?? c.shipmentId;
+    if (pedido) e.pedidos.add(pedido);
     map.set(actor, e);
   }
   return [...map.entries()]
@@ -1322,6 +1334,7 @@ export function aggregateReproDay(calls: ReproDayCall[]): ReproDayAgentCount[] {
       anuladas: e.anuladas,
       entregadas: e.entregadas,
       guias: e.guias.size,
+      pedidos: e.pedidos.size,
     }))
     .sort(
       (a, b) =>
