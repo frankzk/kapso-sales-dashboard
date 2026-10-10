@@ -427,9 +427,14 @@ export async function ingestYapeStatement(
         orderId: row.order_id,
         actor: null,
         trigger: "estado_yape",
+        releasedByPaymentId: row.id,
         extraInboundAt: visionSourceOf(row.vision) === "wa_cobranza_shalom" ? row.registered_at : null,
       });
       if (!envio.noKey) summary.clave = envio.sent ? "enviada" : envio.note;
+    } else {
+      // Validado, pero sin tiempo para la clave: se dice, para que no se dé
+      // por entregada. Sale desde la ficha («Enviar clave por WhatsApp»).
+      summary.clave = "Sin tiempo en esta corrida para la clave: si el pedido es de agencia, envíala desde la ficha.";
     }
     result.validados.push(summary);
   }

@@ -57,7 +57,7 @@ const ORDER = "ord-139240";
 const STORE = "store-kenku";
 const NOW = new Date("2026-10-10T17:20:00Z");
 
-function tables(over: { payments?: Row[]; master?: Row; key?: boolean; lastAlert?: string | null } = {}) {
+function tables(over: { payments?: Row[]; master?: Row; key?: boolean; lastAlert?: string | null; shares?: Row[] } = {}) {
   return {
     shalom_pickup_keys: over.key === false ? [] : [{ order_id: ORDER, key_enc: "cifrada" }],
     order_master: [{
@@ -75,9 +75,10 @@ function tables(over: { payments?: Row[]; master?: Row; key?: boolean; lastAlert
       ...over.master,
     }],
     order_payments: over.payments ?? [
-      { order_id: ORDER, kind: "adelanto", validation_status: "validado", amount: 30 },
-      { order_id: ORDER, kind: "diferencia", validation_status: "validado", amount: 159 },
+      { id: "pay-ade", order_id: ORDER, kind: "adelanto", validation_status: "validado", amount: 30 },
+      { id: "pay-dif", order_id: ORDER, kind: "diferencia", validation_status: "validado", amount: 159 },
     ],
+    pickup_key_shares: over.shares ?? [],
     orders: [{ id: ORDER, name: "#KP139240", customer_phone: "51900000000" }],
     collection_alerts: over.lastAlert === null ? [] : [{ store_id: STORE, phone: "51900000000", created_at: over.lastAlert ?? "2026-10-10T17:14:24Z" }],
   } as Record<string, Row[]>;
@@ -91,8 +92,14 @@ beforeEach(() => {
   h.send.mockResolvedValue({ ok: true, id: "wamid.1" });
 });
 
-const deliver = (db: ReturnType<typeof fakeDb>, trigger: "validar" | "estado_yape" | "ficha" = "estado_yape", actor: string | null = null) =>
-  deliverPickupKey(db.admin, { storeId: STORE, orderId: ORDER, actor, trigger });
+// En las puertas automáticas la suelta el pago que se acaba de validar: la
+// diferencia de S/ 159 de #KP139240.
+const deliver = (
+  db: ReturnType<typeof fakeDb>,
+  trigger: "validar" | "estado_yape" | "ficha" = "estado_yape",
+  actor: string | null = null,
+  releasedByPaymentId: string | null = "pay-dif",
+) => deliverPickupKey(db.admin, { storeId: STORE, orderId: ORDER, actor, trigger, releasedByPaymentId });
 
 describe("deliverPickupKey", () => {
   it("#KP139240: pago completo validado por el estado de cuenta → manda la clave y lo registra sin persona", async () => {
@@ -132,7 +139,7 @@ describe("deliverPickupKey", () => {
 
   it("con solo el adelanto la clave sigue bloqueada", async () => {
     const db = fakeDb(tables({
-      payments: [{ order_id: ORDER, kind: "adelanto", validation_status: "validado", amount: 30 }],
+      payments: [{ id: "pay-ade", order_id: ORDER, kind: "adelanto", validation_status: "validado", amount: 30 }],
       master: { payment_state: "adelanto_validado", financial_status: "pending" },
     }));
     const res = await deliver(db);
@@ -161,6 +168,54 @@ describe("deliverPickupKey", () => {
     const event = db.inserts.find((i) => i.table === "order_events")!.row;
     expect(event).toMatchObject({ actor: "u1", source: "manual" });
     expect(event.note).toContain("desde la ficha del pedido");
+  });
+
+  // Lo que encontró la verificación (10-10-2026): `canRevealPickupKey` abre
+  // con lo CARGADO porque una persona mira la imagen; sin persona, el listón es
+  // lo VALIDADO, y solo el pago que lo completa suelta la clave.
+  it("sin persona, no sale si lo que cubre el pedido es un comprobante cargado sin validar", async () => {
+    const payments = [
+      { id: "pay-ade", order_id: ORDER, kind: "adelanto", validation_status: "validado", amount: 30 },
+      { id: "pay-100", order_id: ORDER, kind: "diferencia", validation_status: "validado", amount: 100 },
+      { id: "pay-59", order_id: ORDER, kind: "diferencia", validation_status: "pendiente_revision", amount: 59 },
+    ];
+    const db = fakeDb(tables({ payments }));
+    const res = await deliver(db, "estado_yape", null, "pay-100");
+    expect(res.sent).toBe(false);
+    expect(res.note).toContain("no es el que completa lo validado");
+    expect(h.send).not.toHaveBeenCalled();
+    // Con el «Validar» de una persona, igual: el servidor no se fía del navegador.
+    expect((await deliver(fakeDb(tables({ payments })), "validar", "u1", "pay-100")).sent).toBe(false);
+    // Desde la ficha sí: la persona mira los comprobantes, como al dictarla.
+    expect((await deliver(fakeDb(tables({ payments })), "ficha", "u1", null)).sent).toBe(true);
+  });
+
+  it("no la manda dos veces: un pago que ya no cambia nada, o una entrega que ya consta", async () => {
+    // El adelanto validado DESPUÉS de que la diferencia ya cubría: no completa nada nuevo.
+    const yaCubria = [
+      { id: "pay-ade", order_id: ORDER, kind: "adelanto", validation_status: "validado", amount: 30 },
+      { id: "pay-dif", order_id: ORDER, kind: "diferencia", validation_status: "validado", amount: 189 },
+    ];
+    expect((await deliver(fakeDb(tables({ payments: yaCubria })), "estado_yape", null, "pay-ade")).sent).toBe(false);
+    // Sin el pago que la suelta, una puerta automática no manda nada.
+    expect((await deliver(fakeDb(tables()), "estado_yape", null, null)).sent).toBe(false);
+    // Una entrega registrada (a mano o por otra puerta) cierra las automáticas.
+    const conEntrega = fakeDb(tables({ shares: [{ order_id: ORDER, channel: "llamada" }] }));
+    expect(await deliver(conEntrega, "estado_yape")).toEqual({ sent: false, note: "La clave no se envió: ya consta su entrega al cliente." });
+    expect(h.send).not.toHaveBeenCalled();
+    // La ficha la reenvía si una persona lo pide (la clienta la perdió).
+    expect((await deliver(fakeDb(tables({ shares: [{ order_id: ORDER, channel: "whatsapp" }] })), "ficha", "u1", null)).sent).toBe(true);
+  });
+
+  it("si WhatsApp no responde a tiempo, no lo da por enviado ni por fallido: pide revisar el chat", async () => {
+    h.send.mockResolvedValue({ ok: false, error: "The operation was aborted due to timeout", ambiguous: true });
+    const db = fakeDb(tables());
+    const res = await deliver(db);
+    expect(res.sent).toBe(false);
+    expect(res.note).toContain("No se pudo confirmar el envío de la clave");
+    expect(db.inserts).toEqual([]);
+    // El envío lleva tope de tiempo.
+    expect(typeof h.send.mock.calls[0]![0].fetchImpl).toBe("function");
   });
 
   it("si WhatsApp la rechaza, no registra ninguna entrega", async () => {

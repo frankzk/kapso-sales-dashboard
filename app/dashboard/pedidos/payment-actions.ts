@@ -1018,6 +1018,7 @@ export async function validatePayment(
       orderId: payment.order_id,
       actor: ctx.userId,
       trigger: "validar",
+      releasedByPaymentId: payment.id,
       // Si el comprobante entró por WhatsApp, su registro ES el mensaje de la
       // clienta: la ventana de 24 h cuenta desde ahí aunque no haya quedado
       // otro rastro suyo.

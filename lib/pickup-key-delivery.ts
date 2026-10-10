@@ -10,11 +10,14 @@
 // Medido ese día: 59 pedidos de agencia con un pago validado así; 38 quedaron
 // con el pago completo y 23 de ellos sin ningún envío de la clave registrado.
 //
-// LA REGLA. Una sola función manda la clave, con las mismas rejas en las tres
-// puertas: el botón «Validar», el estado de cuenta de Yape y «Enviar clave por
-// WhatsApp» en la ficha. Vuelve a comprobar `canRevealPickupKey` con los datos
-// frescos, respeta la ventana de 24 h de WhatsApp y, salvo cuando lo pide una
-// persona desde la ficha, el interruptor de envío automático de la tienda.
+// LA REGLA. Una sola función manda la clave para las tres puertas: el botón
+// «Validar», el estado de cuenta de Yape y «Enviar clave por WhatsApp» en la
+// ficha. Siempre vuelve a comprobar `canRevealPickupKey` con los datos frescos
+// y respeta la ventana de 24 h de WhatsApp. Las dos puertas sin persona
+// después (validar y el estado de cuenta) además exigen que ESTE pago sea el
+// que hace que lo VALIDADO cubra el pedido, que no conste ya una entrega y
+// que el interruptor de envío automático de la tienda esté encendido. La
+// ficha no: ahí decide una persona, como cuando registra una entrega a mano.
 //
 // NUNCA LANZA: el pago ya está validado cuando esto corre y eso no se deshace.
 // Devuelve qué decir, para que nadie dé por entregada una clave que no salió.
@@ -30,10 +33,14 @@ import {
   describeBlockers,
   packageAtAgency,
   paymentState,
+  validationReleasesPickupKey,
   type PaymentSnapshot,
 } from "@/lib/pickup-key";
 import { keySendWindowOpen, pickupKeyMessage, type PickupKeyMessageFacts } from "@/lib/pickup-key-message";
 import type { PaymentGateway } from "@/lib/payment-gateway";
+
+/** Lo que se espera a WhatsApp antes de darlo por no confirmado. */
+const SEND_TIMEOUT_MS = 15_000;
 
 /** Quién soltó la clave. Decide el texto del registro y si rige el interruptor. */
 export type PickupKeyTrigger = "validar" | "estado_yape" | "ficha";
@@ -65,6 +72,13 @@ export interface PickupKeyDeliveryInput {
   /** Quien lo causó; null cuando lo causa el estado de cuenta de Yape. */
   actor: string | null;
   trigger: PickupKeyTrigger;
+  /**
+   * El pago cuya validación la suelta. Obligatorio en las puertas automáticas
+   * («validar» y «estado_yape»): sale solo si ESTE pago es el que hace que lo
+   * VALIDADO cubra el pedido (`validationReleasesPickupKey`). Así no sale con
+   * un comprobante cargado que nadie validó, ni dos veces.
+   */
+  releasedByPaymentId?: string | null;
   /** Un entrante que aún no dejó rastro en las dos tablas (el propio Yape). */
   extraInboundAt?: string | null;
   /** De dónde vino la petición, para el registro de consulta (0049). */
@@ -221,7 +235,7 @@ export async function deliverPickupKey(
         .maybeSingle(),
       admin
         .from("order_payments")
-        .select("kind,validation_status,order_id,amount")
+        .select("id,kind,validation_status,order_id,amount")
         .eq("order_id", input.orderId),
     ]);
     const row = master as {
@@ -236,7 +250,7 @@ export async function deliverPickupKey(
     if (!row) return { sent: false, note: "No se pudo releer el pedido para enviar la clave." };
     const orderTotal = row.order_total == null ? null : Number(row.order_total);
     const payments = (paymentRows ?? []) as PaymentSnapshot[];
-    const verdict = canRevealPickupKey({
+    const keyCtx = {
       orderId: input.orderId,
       generalStatus: row.general_status,
       pickupState: row.pickup_state,
@@ -249,9 +263,37 @@ export async function deliverPickupKey(
         paymentState: row.payment_state,
         paymentGateway: row.payment_gateway,
       },
-    });
+    };
+    const verdict = canRevealPickupKey(keyCtx);
     if (!verdict.allowed) {
       return { sent: false, note: `La clave no se envió: ${describeBlockers(verdict)}` };
+    }
+    if (input.trigger !== "ficha") {
+      // EL LISTÓN DEL ENVÍO SIN PERSONA (0173). `canRevealPickupKey` abre con
+      // los comprobantes CARGADOS porque una persona mira la imagen antes de
+      // dictarla; aquí no la hay. Sale solo si ESTE pago, al validarse, hizo
+      // que lo VALIDADO cubra el pedido: la misma pregunta que decide si el
+      // botón ofrece «validar y enviar», hecha sobre la foto de antes de
+      // validarlo. Eso también impide mandarla dos veces: la segunda validación
+      // ya no cambia nada.
+      const paymentId = input.releasedByPaymentId ?? null;
+      const before = payments.map((p) =>
+        p.id === paymentId ? { ...p, validation_status: "pendiente_revision" } : p,
+      );
+      if (!paymentId || !validationReleasesPickupKey({ ...keyCtx, payments: before }, paymentId)) {
+        return {
+          sent: false,
+          note: "La clave no se envió sola: este pago no es el que completa lo validado del pedido. Si falta entregarla, envíala desde la ficha.",
+        };
+      }
+      // Y si una persona ya la entregó (registrada), no se repite.
+      const { data: shared } = await admin
+        .from("pickup_key_shares")
+        .select("id")
+        .eq("order_id", input.orderId)
+        .limit(1)
+        .maybeSingle();
+      if (shared) return { sent: false, note: "La clave no se envió: ya consta su entrega al cliente." };
     }
 
     const delivery = await keyDeliveryContext(admin, input.storeId, input.orderId, row.pickup_state);
@@ -275,12 +317,23 @@ export async function deliverPickupKey(
     const key = decryptOrNull((keyRow as { key_enc: string } | null)?.key_enc ?? null);
     if (!key) return { sent: false, note: "La clave no se pudo descifrar. Vuelve a registrarla." };
 
+    // Con tope: el estado de cuenta corre con presupuesto de tiempo y un
+    // WhatsApp colgado no puede comérselo. Un corte por tiempo es ambiguo
+    // —el mensaje pudo salir— y se dice así, sin reintentar.
     const res = await sendWhatsappText(
-      { apiKey: creds.kapso_api_key },
+      {
+        apiKey: creds.kapso_api_key,
+        fetchImpl: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(SEND_TIMEOUT_MS) }),
+      },
       { phoneNumberId, to: delivery.phone, body: pickupKeyMessage(delivery.facts, key) },
     );
     if (!res.ok) {
-      return { sent: false, note: `La clave NO se envió (${res.error ?? "WhatsApp la rechazó"}).` };
+      return {
+        sent: false,
+        note: res.ambiguous
+          ? "No se pudo confirmar el envío de la clave (WhatsApp no respondió a tiempo): revisa el chat antes de mandarla otra vez."
+          : `La clave NO se envió (${res.error ?? "WhatsApp la rechazó"}).`,
+      };
     }
 
     // La consulta se anota igual que cuando la mira una persona: la clave se

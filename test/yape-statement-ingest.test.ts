@@ -248,6 +248,8 @@ describe("ingestYapeStatement", () => {
       orderId: "ord-1",
       actor: null,
       trigger: "estado_yape",
+      // La suelta ESTE pago, solo si es el que completa lo validado.
+      releasedByPaymentId: "pay-1",
       // El comprobante llegó por WhatsApp: es su mensaje, la ventana cuenta desde ahí.
       extraInboundAt: "2026-10-04T14:25:00.000Z",
     });
@@ -266,6 +268,23 @@ describe("ingestYapeStatement", () => {
     h.deliver.mockResolvedValue({ sent: false, noKey: true, note: "El pedido no tiene clave de recojo registrada." });
     res = await ingestYapeStatement(fakeDb(base()).admin, INPUT);
     expect(res.validados[0]!.clave).toBeUndefined();
+  });
+
+  it("validado pero sin tiempo para la clave: el reporte lo dice, no la da por entregada", async () => {
+    // El presupuesto se acaba justo al validar.
+    const realNow = Date.now.bind(Date);
+    h.apply.mockImplementation(async () => {
+      vi.spyOn(Date, "now").mockImplementation(() => realNow() + 3_600_000);
+      return { ok: true, confirmado: false };
+    });
+    try {
+      const res = await ingestYapeStatement(fakeDb(base()).admin, INPUT);
+      expect(res.validados).toHaveLength(1);
+      expect(h.deliver).not.toHaveBeenCalled();
+      expect(res.validados[0]!.clave).toContain("envíala desde la ficha");
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("no intenta la clave si el pago no llegó a validarse, ni en el simulacro", async () => {
