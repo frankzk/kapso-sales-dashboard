@@ -46,6 +46,7 @@ import {
   revealPickupKey,
   setPickupKey,
   sharePickupKey,
+  sendPickupKeyByWhatsapp,
   validatePayment,
   type PaymentRow,
   type PickupKeyPanel as PanelData,
@@ -458,6 +459,7 @@ export function ShalomPickupKeyPanel({
         embedded
         onSetKey={(key) => run(() => setPickupKey(orderId, key))}
         onShare={(channel, note) => run(() => sharePickupKey(orderId, { channel, note }))}
+        onSendWhatsapp={() => run(() => sendPickupKeyByWhatsapp(orderId))}
         onError={setError}
       />
     </div>
@@ -2240,6 +2242,7 @@ function KeySection({
   embedded = false,
   onSetKey,
   onShare,
+  onSendWhatsapp,
   onError,
 }: {
   panel: PanelData;
@@ -2248,6 +2251,8 @@ function KeySection({
   embedded?: boolean;
   onSetKey: (key: string) => void;
   onShare: (channel: string, note: string) => void;
+  /** Manda la clave por WhatsApp de la tienda y registra la entrega. */
+  onSendWhatsapp: () => void;
   onError: (msg: string | null) => void;
 }) {
   const [newKey, setNewKey] = useState("");
@@ -2362,6 +2367,21 @@ function KeySection({
             <p className="text-[13px] text-ink-500">
               Tu rol no permite ver la clave; solicítala a un administrador.
             </p>
+          )}
+
+          {panel.canViewKey && panel.canReveal && (
+            // El envío que no salió solo (10-10-2026): la clave de un pago que
+            // validó el estado de cuenta antes de que lo hiciera, o una que la
+            // clienta perdió. Mismas rejas que al validar (ventana de 24 h
+            // incluida); si no se puede, el aviso dice por qué.
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pt-1">
+              <OpsButton variant="primary" disabled={pending} onClick={onSendWhatsapp} className="pointer-coarse:h-11">
+                Enviar clave por WhatsApp
+              </OpsButton>
+              <p className="text-[13px] leading-5 text-ink-500">
+                {panel.shares.length ? "Ya consta una entrega; enviarla otra vez la repite." : "Todavía no consta ninguna entrega."}
+              </p>
+            </div>
           )}
 
           {panel.canViewKey && panel.canReveal && (

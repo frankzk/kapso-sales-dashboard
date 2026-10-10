@@ -5458,7 +5458,18 @@ La regla vive en `lib/swayp-desde-confirmacion.ts` y la aplica
         manda la clave vive en el drawer— y llevar allí obligaba a buscar a
         mano el pedido que el sistema ya sabía cuál era.
       - **Al validar el pago que cierra el pedido, la clave sale sola** (0173),
-        en el mismo clic, y ese envío **es** el registro de la entrega.
+        en el mismo clic, y ese envío **es** el registro de la entrega. Desde
+        el 10-10-2026 también cuando lo valida el estado de cuenta de Yape
+        (§16.2), y la ficha tiene **«Enviar clave por WhatsApp»** para la que
+        no salió sola —validada antes de esto, ventana cerrada en su momento,
+        o perdida por la clienta—: mismas rejas y mismo registro
+        (`lib/pickup-key-delivery.ts`, una sola función para las tres
+        puertas). El servidor ya no se fía de que el navegador solo pida
+        «validar y enviar» cuando corresponde: también al validar exige que
+        ese pago complete lo validado y que no conste una entrega. El botón de
+        la ficha no exige ninguna de las dos ni el interruptor de envío
+        automático: lo pulsa una persona que mira los comprobantes, como
+        cuando dicta la clave, y sirve para reenviarla.
         - **Por qué.** Medido el 21-09-2026: 786 pedidos pagados con clave
           registrada, **770** con la clave ya consultada por alguien y **3**
           con la entrega registrada. La clave se entrega —si no, habría
@@ -6370,6 +6381,31 @@ solo «casi».
   movimiento: pagador, canal, monto y hora. Cada conciliación queda en
   `yape_statement_matches`, **única por movimiento y por comprobante**: el
   mismo dinero no paga dos pedidos.
+- **Y como una persona, suelta la clave de recojo (10-10-2026).** Si el pago
+  validado completa un pedido de agencia, la clave sale por WhatsApp como
+  cuando lo valida una persona con el botón (§12, 0173): mismas rejas y el
+  mismo registro, sin persona (`pickup_key_shares` con `shared_by` nulo,
+  evento `key_shared` con fuente `estado_yape`). Las rejas de un envío sin
+  nadie después:
+  - sale solo si **este** pago es el que hace que lo **validado** cubra el
+    pedido (`validationReleasesPickupKey`, preguntado sobre la foto de antes
+    de validarlo). Un comprobante cargado y sin validar no cuenta aunque sume:
+    es lo que mira una persona antes de dictarla, y aquí no la hay;
+  - por lo mismo **no sale dos veces**: validar después otro pago del pedido
+    ya no completa nada. Y si consta una entrega (a mano o por otra puerta),
+    no se repite;
+  - ventana de 24 h e interruptor de envío automático de la tienda;
+  - el envío a WhatsApp tiene tope de 15 s; si no responde, no se da por
+    enviado ni se reintenta: se pide revisar el chat.
+
+  Si no sale, el reporte dice por qué en el pedido (`clave`), también cuando
+  la corrida se quedó sin tiempo después de validar. Antes validaba y nadie la
+  mandaba: #KP139240 pagó la diferencia de S/ 159 a las 12:10, el estado de
+  cuenta la validó a las 12:17 con el paquete en la agencia, y a las 14:09 la
+  clienta escribió «Por segunda vez les remite el comprobante de pago. No hay
+  seriedad en esta empresa». Medido ese día: 59 pedidos de agencia con un pago
+  validado así; 38 con el pago completo y 23 de ellos sin ningún envío de la
+  clave registrado.
 - **Nunca lo valida el cruce, aunque el dinero esté en el reporte:**
   - lo que no está en `pendiente_revision`: lo observado, lo incompleto y lo
     duplicado lo está mirando una persona, y su decisión manda. Por lo mismo,
