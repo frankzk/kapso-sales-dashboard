@@ -105,7 +105,7 @@ echo "  ✅ motorizado lee del Master solo sus paradas; owner sigue viendo todo"
 # aislamiento por org se respetan.
 echo "▶ cobertura por coordenada"
 $PSQL -f "$ROOT/scripts/sql/coverage_smoke.sql" >/dev/null
-echo "▶ order_master_stale (0123): el desfase se ve aunque sea ANTIGUO"
+echo "▶ order_master_stale (0123, 0240, 0241): el desfase se ve aunque sea ANTIGUO o RECIÉN recalculado, y solo lo pide el servidor"
 $PSQL -f "$ROOT/scripts/sql/order_master_stale_smoke.sql"
 # Qué escritura cuenta como cambio (0204): un sello de lectura de la API o un
 # recálculo sin cambios no pueden mover `updated_at`, o vuelve la cascada de

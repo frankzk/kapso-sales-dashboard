@@ -105,14 +105,25 @@ begin
   if v_n <> 1 then
     raise exception 'el desfasado recalculado más recientemente tiene que verse aunque la tienda pase de 20.000 filas';
   end if;
-  -- Y quien pase el tope a mano sigue recortando: con 1 fila de recorrido solo se
-  -- mira el recálculo más viejo (#T4, desfasado).
-  select count(*) into v_n from order_master_stale(v_store, 1000, 1);
-  if v_n <> 1 then raise exception 'p_scan pasado a mano debería seguir recortando el recorrido'; end if;
+
+  -- 9. Y no queda tope que pasarle (0241): la firma con `p_scan` ya no existe.
+  select count(*) into v_n from pg_proc where proname = 'order_master_stale' and pronargs <> 2;
+  if v_n <> 0 then raise exception 'order_master_stale no debería tener tope de recorrido (p_scan)'; end if;
+
+  -- 10. Solo la llama el barrido, con service_role (0241). Es SECURITY DEFINER:
+  --     abierta al navegador devolvería pedidos de cualquier tienda saltándose
+  --     la RLS.
+  if has_function_privilege('anon', 'order_master_stale(uuid,int)', 'execute')
+     or has_function_privilege('authenticated', 'order_master_stale(uuid,int)', 'execute') then
+    raise exception 'order_master_stale no debería poder llamarse con la clave pública';
+  end if;
+  if not has_function_privilege('service_role', 'order_master_stale(uuid,int)', 'execute') then
+    raise exception 'el barrido (service_role) tiene que poder llamar a order_master_stale';
+  end if;
 
   delete from order_master where store_id = v_store;
   delete from shipments    where store_id = v_store;
   delete from orders       where store_id = v_store;
 
-  raise notice 'order_master_stale: 9 comprobaciones OK';
+  raise notice 'order_master_stale: 10 comprobaciones OK';
 end $$;

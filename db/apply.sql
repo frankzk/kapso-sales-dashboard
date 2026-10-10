@@ -483,4 +483,6 @@
 \ir migrations/0239_swayp_link_emission_on_fill.sql
 \echo 'Applying 0240_order_master_stale_sin_tope.sql'
 \ir migrations/0240_order_master_stale_sin_tope.sql
+\echo 'Applying 0241_order_master_stale_cerrada.sql'
+\ir migrations/0241_order_master_stale_cerrada.sql
 \echo 'Done.'
