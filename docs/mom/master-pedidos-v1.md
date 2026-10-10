@@ -4681,13 +4681,21 @@ Reglas de esa tabla:
     - **Reprogramadas:** salieron a En ruta. En la asesora es el `new_status`
       de su gestión. En el agente es la salida Swayp que creó
       (`outcome_payload.salida_swayp.ok`).
-    - **Anuladas y Entregadas:** solo asesoras. El agente no anula: su
-      «cancela» va en su propia columna. «Entregadas» cuenta las gestiones
-      en que la asesora registró el resultado del courier «Entregado». **No es
-      la entrega de lo reprogramado:** esa tasa está en «Reprogramados en
-      Kapta». El 10-10, de 29 salidas Swayp de los agentes, 4 ya estaban
-      entregadas (2 de Telnyx y 2 de ElevenLabs), y la tabla igual mostraba
-      vacío.
+    - **Llegaron** (10-10-2026): de las guías que esa persona sacó a En ruta
+      en el rango, cuántas figuran entregadas hoy, como «2 de 6». Es la
+      entrega real de lo reprogramado. Las recientes pueden seguir en
+      camino. Sale de las filas `en_ruta` de `shipment_calls`, también en
+      los agentes: su salida Swayp deja esa fila en la guía nueva. Ese día,
+      desde el inicio del piloto, iba así:
+      - Telnyx: 2 de 6.
+      - ElevenLabs: 2 de 4.
+      - Daaph: 0 de 19. Casi todas eran de fines de setiembre y seguían con
+        novedad («no contesta», «ya no desea»).
+    - **Anuladas y Entregas registradas:** solo asesoras. El agente no
+      anula: su «cancela» va en su propia columna. «Entregas registradas»
+      cuenta las gestiones en que la asesora cerró la guía como entregada con
+      el resultado del courier. Antes se llamaba «Entregadas», y en los
+      agentes salía vacía aunque sus guías sí se entregaban.
 
     **Columnas «Llamadas del agente»** (vacías en las asesoras):
     - **Atendidas:** `started_at` presente —`identificar_llamada` corrió, el
