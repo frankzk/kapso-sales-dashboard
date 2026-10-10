@@ -53,6 +53,7 @@ import { getRiders, type RiderRow } from "@/lib/settlements-access";
 import { routeReportAccess } from "@/lib/route-report-access";
 import { loadRouteCloseContext, type RouteCloseContext } from "@/lib/route-close";
 import { otherCourierBlockMessage } from "@/lib/gf-admission-message";
+import { writeGfDispatchProgram } from "@/lib/gf-dispatch-program";
 
 const COURIER_PATH = "/dashboard/courier";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -1750,32 +1751,19 @@ export async function rescheduleGroupGfCourierOrders(
     if (!storeId) { errors.push("Un pedido no es de esta organización."); continue; }
     const request = byOrder.get(orderId);
     if (request?.shipment_id && inBoxShipments.has(request.shipment_id)) { inBox.push(orderId); continue; }
-    const { error } = await admin.from("gf_dispatch_programs").upsert({
-      order_id: orderId,
-      store_id: storeId,
-      scheduled_for: day,
+    // El mismo camino que el reporte de la parada con fecha (lib/gf-dispatch-program).
+    const result = await writeGfDispatchProgram(admin, {
+      orderId,
+      storeId,
+      day,
       reason,
-      set_by: auth.userId,
-      set_at: now,
-    }, { onConflict: "order_id" });
-    if (error) { errors.push(error.message); continue; }
-    if (request && request.scheduled_for !== day) {
-      const { error: moveError } = await admin.from("logistics_requests").update({ scheduled_for: day }).eq("id", request.id);
-      if (moveError) errors.push(moveError.message);
-    }
-    const from = previous.get(orderId)?.scheduled_for ?? null;
-    await admin.from("order_events").insert({
-      store_id: storeId,
-      order_id: orderId,
-      kind: "dispatch_programmed",
-      occurred_at: now,
       actor: auth.userId,
-      source: "grupo_gf_courier",
-      courier: "propio",
-      shipment_id: request?.shipment_id ?? null,
-      note: `Salida programada para el ${label}${from && from !== day ? ` (antes el ${programDayLabel(from)})` : ""}: ${reason}.`,
-      payload: { from, to: day, reason, requestId: request?.id ?? null },
+      request: request ?? null,
+      from: previous.get(orderId)?.scheduled_for ?? null,
+      now,
     });
+    if (result.error) errors.push(result.error);
+    if (!result.written) continue;
     programmed.push(orderId);
   }
   revalidatePath(COURIER_PATH);

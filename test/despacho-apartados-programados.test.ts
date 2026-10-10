@@ -242,8 +242,12 @@ describe("el servidor: programar no toma, y asignar confirma", () => {
     expect(program).not.toContain("takeOrdersCore");
     expect(program).toContain("if (!auth.canManageDispatch)");
     expect(program).toContain("Escribe el motivo");
-    expect(program).toContain('.from("gf_dispatch_programs").upsert(');
-    expect(program).toContain('kind: "dispatch_programmed"');
+    // La escritura vive en lib/gf-dispatch-program (10-10-2026), la misma que
+    // usa el reporte de la parada «Reprogramado por el cliente» con fecha.
+    expect(program).toContain("await writeGfDispatchProgram(admin, {");
+    const writer = readFileSync(resolve(process.cwd(), "lib/gf-dispatch-program.ts"), "utf8");
+    expect(writer).toContain('.from("gf_dispatch_programs").upsert(');
+    expect(writer).toContain('kind: "dispatch_programmed"');
   });
 
   it("«en caja» es tener un paquete activo en una caja, no el estado de la solicitud", () => {

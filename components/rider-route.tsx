@@ -81,6 +81,11 @@ function cn(...parts: Array<string | false | null | undefined>): string {
 
 type Glyph = ComponentType<SVGProps<SVGSVGElement>>;
 
+/** Hoy en Lima (YYYY-MM-DD): el mínimo de la nueva fecha de un reprogramado. */
+function limaToday(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
 /** Campo del motorizado: 48 px, texto de 16 px (Android no hace zoom), anillo fino y foco azul. */
 const RIDER_FIELD =
   "block h-12 w-full min-w-0 rounded-md border-0 bg-white px-3 text-base text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500";
@@ -955,6 +960,8 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
   );
   const [reason, setReason] = useState(stop.outcome_reason ?? "");
   const [note, setNote] = useState(stop.note ?? "");
+  /** «Reprogramado por el cliente» con fecha (10-10-2026): opcional, YYYY-MM-DD. */
+  const [rescheduleOn, setRescheduleOn] = useState("");
   const [photoPath, setPhotoPath] = useState<string | null>(stop.photo_path);
   const [voucherPath, setVoucherPath] = useState<string | null>(stop.voucher_path);
   const [err, setErr] = useState<string | null>(null);
@@ -1132,9 +1139,14 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
           writtenPayment: writtenPayment.trim() || null,
           reasonCode: mustExplain ? reasonCode : null,
           reasonNote: mustExplain ? reasonNote.trim() || null : null,
+          rescheduleOn: status === "no_entregado" && reason === "reprogramado" ? rescheduleOn || null : null,
         });
         if (!res.ok) setErr(res.error ?? "No se pudo guardar.");
-        else {
+        else if (res.message?.includes("No se pudo agendar")) {
+          // El reporte quedó, la fecha no: se dice aquí antes de cerrar.
+          try { window.localStorage.removeItem(draftKey(stop.id)); } catch { /* sin almacenamiento */ }
+          setErr(res.message);
+        } else {
           try { window.localStorage.removeItem(draftKey(stop.id)); } catch { /* sin almacenamiento */ }
           onDone();
         }
@@ -1376,6 +1388,25 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
               ))}
             </div>
           </fieldset>
+        )}
+
+        {/* La fecha que dio el cliente, de una vez (10-10-2026). Opcional: sin
+            fecha, el pedido va a «Por reprogramar» como siempre. */}
+        {status === "no_entregado" && reason === "reprogramado" && (
+          <label className="block text-sm font-semibold text-ink-900">
+            Nueva fecha <span className="font-normal text-ink-500">(opcional)</span>
+            <input
+              type="date"
+              value={rescheduleOn}
+              min={limaToday()}
+              onChange={(e) => { setRescheduleOn(e.target.value); setErr(null); }}
+              aria-describedby={`reprograma-${stop.id}`}
+              className={cn(RIDER_FIELD, "mt-1.5")}
+            />
+            <span id={`reprograma-${stop.id}`} className="mt-1 block text-xs font-normal text-ink-500">
+              Si el cliente dio fecha, la salida queda agendada para ese día en Grupo GF.
+            </span>
+          </label>
         )}
 
         {/* Un rechazo se cobra a la tienda: el motorizado lo fotografía en la
