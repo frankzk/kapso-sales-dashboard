@@ -6,6 +6,8 @@
 import { deriveFenixCoverageCity, fenixWarehouseKey, isFenixCity, normalizeCity } from "./shipments";
 
 export interface FenixStockRow {
+  /** Id del renglón en `fenix_stock`, cuando viene de la base. */
+  id?: string;
   city: string; // normalized coverage key
   product: string;
   sku?: string | null; // exact catalog key when available
