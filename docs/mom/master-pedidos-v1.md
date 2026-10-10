@@ -5100,6 +5100,41 @@ La regla vive en `lib/swayp-desde-confirmacion.ts` y la aplica
 `resolveMacroStage` antes del estado terminal y de Reproprovincia
 (`MOM_RESOLUTION_VERSION` sube a `mom-v1.24`).
 
+### 11.12 Oportunidades en Stock Swayp (10-10-2026)
+
+«Por reponer» responde qué falta para las guías **ya emitidas**. La vista
+**Oportunidades** de Stock Swayp responde la pregunta de antes: qué producto,
+en qué bodega de Swayp, dejaría salir pedidos que hoy esperan. Pedido del owner,
+10-10-2026. Es una lectura: no cambia etapas, no emite guías ni toca el stock.
+
+**Quién entra** (`lib/swayp-oportunidades.ts`), leído del Master:
+
+- **Repro Provincia**: subetapa `gestion_reproprovincia`. El intento falló y el
+  pedido se puede reenviar por Swayp si su bodega tiene el producto.
+- **Por confirmar**: provincia COD, salvo «Swayp no entregó». Es la misma regla
+  que el botón «Enviar por Swayp» (§11.11): con stock, saldría sin esperar la
+  confirmación. «Swayp no entregó» queda fuera porque ya salió por Swayp y se
+  llama para salir por otra vía.
+- Solo con **dirección completa**: dirección, distrito y provincia (o
+  departamento). Sin eso no hay guía que emitir aunque llegue el stock.
+- Solo en ciudades **con bodega Swayp**. Las demás no se destraban mandando
+  mercadería. Los que quedan fuera por cobertura o por dirección se cuentan en
+  la cabecera, para que se vean.
+
+**Cómo se mide.** Por producto, no por pedido: una guía directa sale con el
+pedido completo (`evaluateDirectFenixStock`). Por eso se cruza cada producto
+con su renglón de la bodega (SKU exacto primero, después el nombre) y se compara
+la demanda en unidades contra la cantidad. Una unidad en bodega para diez
+pedidos son nueve por mandar, no «hay stock». La columna `swayp_availability`
+del Master (§11.10) no sirve para esto: da un pedido por cubierto si alguno de
+sus productos tiene stock.
+
+**Qué muestra cada fila** (ciudad y producto): los pedidos que lo esperan,
+separados por fuente; el stock actual; las unidades por mandar; el total de esos
+pedidos; y cuántos **salen solo con ese producto** (no les falta nada más). Cada
+fila se abre en sus pedidos, con enlace al Master, ordenados primero por los que
+salen solo con eso y después por los días que llevan en su etapa.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom
