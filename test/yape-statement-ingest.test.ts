@@ -11,6 +11,7 @@ import type { StatementMovement } from "@/lib/yape-statement/parse";
 const h = vi.hoisted(() => ({
   movements: [] as StatementMovement[],
   apply: vi.fn(),
+  deliver: vi.fn(),
   backfill: vi.fn(async () => ({ candidates: 0, filled: 0, unreadable: 0, amountMismatch: 0, deferred: 0 })),
 }));
 
@@ -21,6 +22,7 @@ vi.mock("@/lib/yape-statement/parse", () => ({
   },
 }));
 vi.mock("@/lib/payment-validation", () => ({ applyPaymentValidation: h.apply }));
+vi.mock("@/lib/pickup-key-delivery", () => ({ deliverPickupKey: h.deliver }));
 vi.mock("@/lib/tanders/collection-time-backfill", () => ({ backfillCourierPaidAt: h.backfill }));
 vi.mock("@/lib/collection-accounts", () => ({
   loadCollectionAccounts: async (_: unknown, ids: string[]) =>
@@ -155,6 +157,8 @@ beforeEach(() => {
   h.movements = [movimiento("Benito Cac*", 30, "2026-10-04T14:22:42.000Z")];
   h.apply.mockReset();
   h.apply.mockResolvedValue({ ok: true, confirmado: false });
+  h.deliver.mockReset();
+  h.deliver.mockResolvedValue({ sent: false, noKey: true, note: "El pedido no tiene clave de recojo registrada." });
   h.backfill.mockClear();
 });
 
@@ -227,5 +231,48 @@ describe("ingestYapeStatement", () => {
     expect(res.outcome).toBe("sin_tienda");
     expect(h.apply).not.toHaveBeenCalled();
     expect(db.tables.yape_statement_movements ?? []).toEqual([]);
+  });
+
+  // #KP139240 (10-10-2026): el estado de cuenta validó la diferencia que
+  // completaba el pago y la clave de recojo no salió. Ahora sale como cuando
+  // valida una persona, con las mismas rejas (lib/pickup-key-delivery.ts).
+  it("al validar, suelta la clave de recojo como una persona, y lo deja en el reporte", async () => {
+    h.deliver.mockResolvedValue({ sent: true, note: "Clave de recojo enviada por WhatsApp." });
+    const db = fakeDb(
+      base({ kind: "diferencia", vision: { source: "wa_cobranza_shalom", extracted: { recipient_name: "Grupo Gf S.a.c.", recipient_phone_last_digits: "309" } } }),
+    );
+    const res = await ingestYapeStatement(db.admin, INPUT);
+    expect(h.deliver).toHaveBeenCalledTimes(1);
+    expect(h.deliver.mock.calls[0]![1]).toEqual({
+      storeId: STORE,
+      orderId: "ord-1",
+      actor: null,
+      trigger: "estado_yape",
+      // El comprobante llegó por WhatsApp: es su mensaje, la ventana cuenta desde ahí.
+      extraInboundAt: "2026-10-04T14:25:00.000Z",
+    });
+    expect(res.validados[0]!.clave).toBe("enviada");
+    // Después de validar, nunca antes: la reja relee el pago ya validado.
+    expect(h.apply.mock.invocationCallOrder[0]!).toBeLessThan(h.deliver.mock.invocationCallOrder[0]!);
+  });
+
+  it("si la clave no sale, el reporte dice por qué; sin clave (no es de agencia), no dice nada", async () => {
+    h.deliver.mockResolvedValue({ sent: false, note: "La clave NO se envió: la clienta no escribe hace más de 24 h." });
+    let res = await ingestYapeStatement(fakeDb(base()).admin, INPUT);
+    expect(res.validados[0]!.clave).toBe("La clave NO se envió: la clienta no escribe hace más de 24 h.");
+    // Un comprobante que no llegó por WhatsApp no abre la ventana.
+    expect(h.deliver.mock.calls[0]![1].extraInboundAt).toBeNull();
+
+    h.deliver.mockResolvedValue({ sent: false, noKey: true, note: "El pedido no tiene clave de recojo registrada." });
+    res = await ingestYapeStatement(fakeDb(base()).admin, INPUT);
+    expect(res.validados[0]!.clave).toBeUndefined();
+  });
+
+  it("no intenta la clave si el pago no llegó a validarse, ni en el simulacro", async () => {
+    h.apply.mockResolvedValue({ ok: false, error: "cambió", stale: true });
+    await ingestYapeStatement(fakeDb(base()).admin, INPUT);
+    h.apply.mockResolvedValue({ ok: true, confirmado: false });
+    await ingestYapeStatement(fakeDb(base()).admin, { ...INPUT, dryRun: true });
+    expect(h.deliver).not.toHaveBeenCalled();
   });
 });

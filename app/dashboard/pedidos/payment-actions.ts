@@ -38,19 +38,13 @@ import {
   canRevealPickupKey,
   describeBlockers,
   paymentPlanProblem,
-  packageAtAgency,
   paymentState,
   validationReleasesPickupKey,
   type PaymentSnapshot,
 } from "@/lib/pickup-key";
-import {
-  KEY_MASK,
-  keySendWindowOpen,
-  pickupKeyMessage,
-  type PickupKeyMessageFacts,
-} from "@/lib/pickup-key-message";
+import { KEY_MASK, keySendWindowOpen, pickupKeyMessage } from "@/lib/pickup-key-message";
 import { getStoreCreds } from "@/lib/ingest";
-import { sendWhatsappText } from "@/lib/kapso";
+import { deliverPickupKey, keyDeliveryContext } from "@/lib/pickup-key-delivery";
 import {
   describeDuplicate,
   findDuplicate,
@@ -1019,16 +1013,18 @@ export async function validatePayment(
   // nunca salió.
   let claveNota = "";
   if (opts.sendKey) {
-    const envio = await deliverPickupKeyByWhatsapp({
+    const envio = await deliverPickupKey(createAdminSupabase(), {
       storeId: ctx.storeId,
       orderId: payment.order_id,
-      userId: ctx.userId,
+      actor: ctx.userId,
+      trigger: "validar",
       // Si el comprobante entró por WhatsApp, su registro ES el mensaje de la
       // clienta: la ventana de 24 h cuenta desde ahí aunque no haya quedado
       // otro rastro suyo.
       extraInboundAt: visionSource(payment.vision) === "wa_cobranza_shalom"
         ? payment.registered_at
         : null,
+      request: await requestOrigin(),
     });
     claveNota = ` ${envio.note}`;
   }
@@ -1364,248 +1360,41 @@ export async function sharePickupKey(
 }
 
 // ---------------------------------------------------------------------------
-// La clave que sale sola al validar (0173)
+// La clave por WhatsApp (0173): lib/pickup-key-delivery.ts
 // ---------------------------------------------------------------------------
 
-interface KeyDeliveryContext {
-  facts: PickupKeyMessageFacts;
-  phone: string | null;
-  /** Lo último que sabemos que escribió ella. Decide la ventana de 24 h. */
-  lastInboundAt: string | null;
+/** De dónde vino la petición, para el registro de consulta de la clave (0049). */
+async function requestOrigin(): Promise<{ ip: string | null; userAgent: string | null }> {
+  const h = await headers();
+  return { ip: h.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null, userAgent: h.get("user-agent") };
 }
 
 /**
- * Todo lo que el mensaje de la clave necesita saber del pedido, y desde cuándo
- * se le puede escribir. Ninguna lectura lanza: lo que falte sale como hueco y
- * el mensaje se escribe sin ello.
+ * «Enviar clave por WhatsApp» desde la ficha (10-10-2026): la clave de un pedido
+ * ya pagado que no salió sola —la validó el estado de cuenta antes de que el
+ * envío existiera, la ventana estaba cerrada, o la clienta la perdió—. Las
+ * mismas rejas que el envío al validar, salvo el interruptor de envío
+ * automático: aquí decide una persona, como cuando registra una entrega.
  */
-async function keyDeliveryContext(
-  admin: ReturnType<typeof createAdminSupabase>,
-  storeId: string,
-  orderId: string,
-  /** Dónde está el paquete: el mensaje dice «ve ahora» o «cuando llegue». */
-  pickupState: string | null,
-): Promise<KeyDeliveryContext> {
-  const [order, master, draft, shipment] = await Promise.all([
-    admin.from("orders").select("name,customer_phone").eq("id", orderId).maybeSingle(),
-    admin
-      .from("order_master")
-      .select("order_name,customer_name,customer_phone")
-      .eq("order_id", orderId)
-      .maybeSingle(),
-    admin
-      .from("shalom_order_drafts")
-      .select("destiny_terminal_name")
-      .eq("order_id", orderId)
-      .maybeSingle(),
-    admin
-      .from("shipments")
-      .select("guide_code,agency_branch,province,district,created_at")
-      .eq("order_id", orderId)
-      .eq("courier", "shalom")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  ]);
-  const o = (order.data ?? null) as { name: string | null; customer_phone: string | null } | null;
-  const m = (master.data ?? null) as {
-    order_name: string | null;
-    customer_name: string | null;
-    customer_phone: string | null;
-  } | null;
-  const d = (draft.data ?? null) as { destiny_terminal_name: string | null } | null;
-  const s = (shipment.data ?? null) as {
-    guide_code: string | null;
-    agency_branch: string | null;
-    province: string | null;
-    district: string | null;
-  } | null;
-
-  const phone = m?.customer_phone ?? o?.customer_phone ?? null;
-
-  // CUÁNDO ESCRIBIÓ ELLA. No hay tabla de mensajes entrantes, pero sí dos
-  // rastros que solo existen porque escribió: la respuesta automática que se le
-  // mandó y la alerta que levantó su comprobante. Se toma el más reciente. Si
-  // no consta ninguno, la ventana se da por cerrada y no se manda nada.
-  const [replies, alerts] = phone
-    ? await Promise.all([
-        admin
-          .from("wa_auto_replies")
-          .select("created_at")
-          .eq("store_id", storeId)
-          .eq("phone", phone)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-        admin
-          .from("collection_alerts")
-          .select("created_at")
-          .eq("store_id", storeId)
-          .eq("phone", phone)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-      ])
-    : [{ data: null }, { data: null }];
-  const marcas = [
-    (replies.data as { created_at: string } | null)?.created_at ?? null,
-    (alerts.data as { created_at: string } | null)?.created_at ?? null,
-  ].filter((t): t is string => Boolean(t));
-
-  return {
-    facts: {
-      customerName: m?.customer_name ?? null,
-      orderName: m?.order_name ?? o?.name ?? null,
-      agencyName:
-        d?.destiny_terminal_name?.trim() ||
-        s?.agency_branch?.trim() ||
-        [s?.province, s?.district].filter(Boolean).join(" / ") ||
-        null,
-      guideCode: s?.guide_code ?? null,
-      atAgency: packageAtAgency(pickupState),
-    },
-    phone,
-    lastInboundAt: marcas.length
-      ? marcas.reduce((a, b) => (Date.parse(a) >= Date.parse(b) ? a : b))
-      : null,
-  };
-}
-
-/**
- * Manda la clave de recojo por WhatsApp y registra la entrega. NUNCA lanza: el
- * pago ya está validado cuando esto corre y eso no se deshace — lo único que
- * devuelve es qué decirle a quien pulsó el botón.
- *
- * VUELVE A COMPROBAR `canRevealPickupKey` con los datos frescos, después de la
- * validación, sin fiarse de lo que pidió el navegador. Es la misma reja que
- * protege `revealPickupKey`: el envío automático no puede soltar un paquete que
- * la pantalla no soltaría.
- */
-async function deliverPickupKeyByWhatsapp(input: {
-  storeId: string;
-  orderId: string;
-  userId: string;
-  /** Un entrante que aún no dejó rastro en las dos tablas (el propio Yape). */
-  extraInboundAt?: string | null;
-}): Promise<{ sent: boolean; note: string }> {
-  const admin = createAdminSupabase();
-  try {
-    const creds = await getStoreCreds(input.storeId, admin);
-    if (!creds?.shalom_pickup_key_autosend_enabled) {
-      return { sent: false, note: "El envío automático de la clave está apagado en esta tienda." };
-    }
-    const phoneNumberId = creds.shalom_transit_phone_number_id ?? creds.whatsapp_phone_number_id;
-    if (!creds.kapso_api_key || !phoneNumberId) {
-      return { sent: false, note: "La tienda no tiene WhatsApp configurado para enviarla." };
-    }
-
-    const ctx = await authorizeOrder(input.orderId);
-    if (!ctx) return { sent: false, note: "No se pudo releer el pedido para enviar la clave." };
-
-    const [{ data: keyRow }, { data: paymentRows }] = await Promise.all([
-      admin.from("shalom_pickup_keys").select("key_enc").eq("order_id", input.orderId).maybeSingle(),
-      admin
-        .from("order_payments")
-        .select("kind,validation_status,order_id,amount")
-        .eq("order_id", input.orderId),
-    ]);
-    const payments = (paymentRows ?? []) as PaymentSnapshot[];
-    const verdict = canRevealPickupKey({
-      orderId: input.orderId,
-      generalStatus: ctx.row.general_status,
-      pickupState: ctx.row.pickup_state,
-      payments,
-      orderTotal: ctx.row.order_total,
-      hasKey: Boolean(keyRow),
-      paymentFacts: {
-        financialStatus: ctx.row.financial_status,
-        totalRefunded: ctx.row.total_refunded,
-        paymentState: ctx.row.payment_state,
-        paymentGateway: ctx.row.payment_gateway,
-      },
-    });
-    if (!verdict.allowed) {
-      return { sent: false, note: `La clave no se envió: ${describeBlockers(verdict)}` };
-    }
-
-    const delivery = await keyDeliveryContext(admin, input.storeId, input.orderId, ctx.row.pickup_state);
-    if (!delivery.phone) {
-      return { sent: false, note: "La clave no se envió: el pedido no tiene celular." };
-    }
-    const nowIso = new Date().toISOString();
-    const ultimo =
-      [delivery.lastInboundAt, input.extraInboundAt ?? null]
-        .filter((t): t is string => Boolean(t))
-        .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
-    if (!keySendWindowOpen(ultimo, nowIso)) {
-      return {
-        sent: false,
-        note:
-          "La clave NO se envió: la clienta no escribe hace más de 24 h y WhatsApp no deja " +
-          "mandarle texto libre fuera de esa ventana. Entrégasela tú y regístralo.",
-      };
-    }
-
-    const key = decryptOrNull((keyRow as { key_enc: string } | null)?.key_enc ?? null);
-    if (!key) return { sent: false, note: "La clave no se pudo descifrar. Vuelve a registrarla." };
-
-    const res = await sendWhatsappText(
-      { apiKey: creds.kapso_api_key },
-      { phoneNumberId, to: delivery.phone, body: pickupKeyMessage(delivery.facts, key) },
-    );
-    if (!res.ok) {
-      return { sent: false, note: `La clave NO se envió (${res.error ?? "WhatsApp la rechazó"}).` };
-    }
-
-    // La consulta se anota igual que cuando la mira una persona: la clave se
-    // descifró, y el marco de 0049 dice que eso queda registrado SIEMPRE, con
-    // quién lo causó. Aquí lo causó quien pulsó validar.
-    const h = await headers();
-    await admin.from("pickup_key_views").insert({
-      store_id: input.storeId,
-      order_id: input.orderId,
-      user_id: input.userId,
-      ip: h.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
-      user_agent: h.get("user-agent"),
-      reason: "Enviada al cliente por WhatsApp al validar el pago.",
-      override: false,
-      payment_state: {
-        state: paymentState(payments, ctx.row.order_total),
-        orderTotal: ctx.row.order_total,
-        paidTotal: payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0),
-        payments: payments.map((p) => ({
-          kind: p.kind,
-          status: p.validation_status,
-          amount: p.amount,
-        })),
-        blockers: verdict.blockers,
-      },
-    });
-    // Y EL ENVÍO ES EL REGISTRO: esta fila es la que se pedía con un segundo
-    // clic que nadie daba —3 de 786 pedidos pagados la tenían—.
-    await admin.from("pickup_key_shares").insert({
-      store_id: input.storeId,
-      order_id: input.orderId,
-      shared_by: input.userId,
-      channel: "whatsapp",
-      confirmed: true,
-      note: `Enviada al validar el pago.${res.id ? ` Mensaje ${res.id}.` : ""}`,
-    });
-    await admin.from("order_events").insert({
-      store_id: input.storeId,
-      order_id: input.orderId,
-      kind: "key_shared",
-      actor: input.userId,
-      source: "system",
-      note: `Clave de recojo enviada por WhatsApp a ${delivery.phone} al validar el pago.`,
-    });
-    return { sent: true, note: `Clave de recojo enviada por WhatsApp a ${delivery.phone}.` };
-  } catch (e) {
-    return {
-      sent: false,
-      note: `La clave NO se envió (${e instanceof Error ? e.message : "fallo inesperado"}).`,
-    };
+export async function sendPickupKeyByWhatsapp(orderId: string): Promise<PaymentActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("shalom.reveal_pickup_key")) {
+    return { error: "Tu rol no permite entregar la clave." };
   }
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const admin = createAdminSupabase();
+  const envio = await deliverPickupKey(admin, {
+    storeId: ctx.storeId,
+    orderId,
+    actor: ctx.userId,
+    trigger: "ficha",
+    request: await requestOrigin(),
+  });
+  if (!envio.sent) return { error: envio.note };
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  return { notice: envio.note };
 }
 
 /**

@@ -5458,7 +5458,14 @@ La regla vive en `lib/swayp-desde-confirmacion.ts` y la aplica
         manda la clave vive en el drawer— y llevar allí obligaba a buscar a
         mano el pedido que el sistema ya sabía cuál era.
       - **Al validar el pago que cierra el pedido, la clave sale sola** (0173),
-        en el mismo clic, y ese envío **es** el registro de la entrega.
+        en el mismo clic, y ese envío **es** el registro de la entrega. Desde
+        el 10-10-2026 también cuando lo valida el estado de cuenta de Yape
+        (§16.2), y la ficha tiene **«Enviar clave por WhatsApp»** para la que
+        no salió sola —validada antes de esto, ventana cerrada en su momento,
+        o perdida por la clienta—: mismas rejas y mismo registro
+        (`lib/pickup-key-delivery.ts`, una sola función para las tres
+        puertas). Ese botón no depende del interruptor de envío automático: lo
+        pulsa una persona, como cuando registra una entrega a mano.
         - **Por qué.** Medido el 21-09-2026: 786 pedidos pagados con clave
           registrada, **770** con la clave ya consultada por alguien y **3**
           con la entrega registrada. La clave se entrega —si no, habría
@@ -6370,6 +6377,19 @@ solo «casi».
   movimiento: pagador, canal, monto y hora. Cada conciliación queda en
   `yape_statement_matches`, **única por movimiento y por comprobante**: el
   mismo dinero no paga dos pedidos.
+- **Y como una persona, suelta la clave de recojo (10-10-2026).** Si el pago
+  validado completa un pedido de agencia, la clave sale por WhatsApp como
+  cuando lo valida una persona con el botón (§12, 0173): mismas rejas —lo
+  validado cubre el pedido, ventana de 24 h, interruptor de envío automático
+  de la tienda— y el mismo registro, sin persona (`pickup_key_shares` con
+  `shared_by` nulo, evento `key_shared` con fuente `estado_yape`). Si no sale,
+  el reporte dice por qué en el pedido (`clave`). Antes validaba y nadie la
+  mandaba: #KP139240 pagó la diferencia de S/ 159 a las 12:10, el estado de
+  cuenta la validó a las 12:17 con el paquete en la agencia, y a las 14:09 la
+  clienta escribió «Por segunda vez les remite el comprobante de pago. No hay
+  seriedad en esta empresa». Medido ese día: 59 pedidos de agencia con un pago
+  validado así; 38 con el pago completo y 23 de ellos sin ningún envío de la
+  clave registrado.
 - **Nunca lo valida el cruce, aunque el dinero esté en el reporte:**
   - lo que no está en `pendiente_revision`: lo observado, lo incompleto y lo
     duplicado lo está mirando una persona, y su decisión manda. Por lo mismo,
