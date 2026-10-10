@@ -11,6 +11,7 @@
 // nulo para el agente de voz) y ya autorizó el acceso.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
 import { env } from "@/lib/env";
 import {
   getGuide,
@@ -751,6 +752,7 @@ export async function reenviarGuiaAnulada(
   if (!isFutureShipmentFollowup(input.nextFollowupAt)) {
     return { error: "Elige una fecha futura para la nueva entrega." };
   }
+  if (!isSwaypDispatchDay(input.nextFollowupAt)) return { error: SWAYP_SUNDAY_ERROR };
 
   const { data: shipment, error: shipmentError } = await admin
     .from("shipments")

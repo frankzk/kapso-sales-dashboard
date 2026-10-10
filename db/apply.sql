@@ -479,4 +479,6 @@
 \ir migrations/0237_swayp_auto_metrics_estado_swayp.sql
 \echo 'Applying 0238_auto_order_ab.sql'
 \ir migrations/0238_auto_order_ab.sql
+\echo 'Applying 0239_swayp_link_emission_on_fill.sql'
+\ir migrations/0239_swayp_link_emission_on_fill.sql
 \echo 'Done.'

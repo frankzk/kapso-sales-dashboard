@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
 import { SWAYP_DESDE_CONFIRMACION_KIND } from "@/lib/swayp-desde-confirmacion";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { resolveAgentName, resolveAgentNames } from "@/lib/agent-names";
@@ -602,6 +603,14 @@ export async function registerRerouteCall(
   // fecha pasada estampada en su número y un despacho agendado para ayer.
   if (input.disposition === "confirma" && !isFutureShipmentFollowup(input.nextFollowupAt)) {
     return { error: "La fecha de reprogramación tiene que ser futura." };
+  }
+  // Por Swayp, la fecha es la de despacho de la guía nueva: lunes a sábado.
+  if (
+    input.disposition === "confirma" &&
+    (input.reprogramProvider ?? "fenix") === "fenix" &&
+    !isSwaypDispatchDay(input.nextFollowupAt)
+  ) {
+    return { error: SWAYP_SUNDAY_ERROR };
   }
   if (
     input.disposition === "programar" &&
@@ -1272,6 +1281,7 @@ export async function createFenixGuide(
   if (!isFutureShipmentFollowup(input.nextFollowupAt ?? null)) {
     return { error: "La fecha de reprogramación tiene que ser futura." };
   }
+  if (!isSwaypDispatchDay(input.nextFollowupAt)) return { error: SWAYP_SUNDAY_ERROR };
 
   // EL NÚMERO TIENE QUE SER DE SWAYP. Esta puerta existe para registrar una guía
   // que la operadora YA creó en el panel de Swayp; hasta hoy también aceptaba el
@@ -1799,6 +1809,7 @@ export async function createDirectFenixGuide(input: {
   if (dispatchDay <= limaTodayKey()) {
     return { error: "Elige una fecha de despacho desde mañana." };
   }
+  if (!isSwaypDispatchDay(dispatchDay)) return { error: SWAYP_SUNDAY_ERROR };
 
   // Guía por API. Sólo cuando el operador NO escribió un código a mano: si lo
   // escribió es porque la generó él en el sistema de Swayp, y pedir otra
