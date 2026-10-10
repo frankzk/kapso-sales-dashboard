@@ -1055,7 +1055,14 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
 
   const numericAmount = amount.trim() ? Number(amount.replace(",", ".")) : null;
   const collectedForReason = status === "entregado" ? (method === "sin_cobro" ? 0 : numericAmount) : null;
-  const mustExplain = status === "entregado" && Boolean(vocabulary) && montoDiffers(collectedForReason, stop.order?.total ?? null);
+  // Lo que había que cobrar es el saldo, no el total (MOM §30.9, 10-10-2026).
+  const due = amountDue(stop);
+  const mustExplain = status === "entregado" && Boolean(vocabulary) && montoDiffers(collectedForReason, due);
+  // Pagado antes de la entrega: no hay nada que cobrar y va «Sin cobro».
+  const fullyPaid = stop.collection?.remaining === 0;
+  useEffect(() => {
+    if (status === "entregado" && fullyPaid && !method) setMethod("sin_cobro");
+  }, [status, fullyPaid, method]);
   // Las cuentas del cuaderno para el método elegido (p. ej. los Yape de la
   // empresa). Solo se ofrecen si hay más de una: si no, la deduce el método.
   const accounts = useMemo(
@@ -1080,7 +1087,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
     delegated && !reportReason.trim() ? { field: "delegado", message: "Indica por qué reportas por el motorizado." }
     : delegated && !photoPath ? { field: "foto", message: "Adjunta la evidencia del reporte por el motorizado." }
     : !check.ok ? { field: check.fields[0] ?? "estado", message: check.errors[0] ?? "Revisa el reporte." }
-    : mustExplain && !reasonCode ? { field: "diferencia", message: `Cobraste ${money(collectedForReason)} y el pedido es de ${money(stop.order?.total)}. Elige por qué.` }
+    : mustExplain && !reasonCode ? { field: "diferencia", message: `Cobraste ${money(collectedForReason)} y había que cobrar ${money(due)}. Elige por qué.` }
     : mustExplain && reasonCode === "otro" && reasonNote.trim().length < 3 ? { field: "diferencia", message: "Con motivo «Otro», escribe una nota." }
     : null;
   // Sin saldo no se puede cuadrar el cobro: es lo único que bloquea el botón.
@@ -1192,6 +1199,13 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
         {status === "entregado" && (
           <>
             {/* La cifra grande está arriba de la ficha; aquí, la referencia del cobro. */}
+            {fullyPaid && (
+              <p className="rounded-lg bg-ok-wash px-3 py-2 text-sm text-ink-700">
+                <strong className="font-semibold text-ok-fg">Ya está pagado.</strong>{" "}
+                {stop.collection?.validated ? `${money(stop.collection.validated)} pagados y validados antes de la entrega. ` : ""}
+                No cobres nada: va como «Sin cobro».
+              </p>
+            )}
             <div className="text-xs text-ink-600">
               <p className="tabular-nums">
                 Saldo por cobrar: <strong className="font-semibold text-ink-900">{stop.collection?.remaining == null ? "No disponible, actualiza la ruta" : money(stop.collection.remaining)}</strong>
@@ -1303,7 +1317,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
 
             {mustExplain && vocabulary && (
               <div ref={anchor("diferencia")} className="space-y-2 rounded-lg bg-warn-wash p-3 text-sm">
-                <p className="font-semibold text-warn-fg">Cobraste {money(collectedForReason)} y el pedido es de {money(stop.order?.total)}. ¿Por qué?</p>
+                <p className="font-semibold text-warn-fg">Cobraste {money(collectedForReason)} y había que cobrar {money(due)}. ¿Por qué?</p>
                 <select value={reasonCode} onChange={(e) => setReasonCode(e.target.value)} aria-label="Motivo de la diferencia" className={RIDER_FIELD}>
                   <option value="">Elige el motivo</option>
                   {vocabulary.reasons.map((r) => (
@@ -1313,7 +1327,10 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
                 <input value={reasonNote} onChange={(e) => setReasonNote(e.target.value)} placeholder="Nota (obligatoria con «Otro»)" aria-label="Nota del motivo" className={RIDER_FIELD} />
               </div>
             )}
-            {method === "sin_cobro" && <p className="text-sm text-ink-600">Se registrará S/ 0.00. Si queda saldo, explica el motivo en la nota.</p>}
+            {method === "sin_cobro" && !fullyPaid && <p className="text-sm text-ink-600">Se registrará S/ 0.00. Si queda saldo, explica el motivo en la nota.</p>}
+            {method && method !== "sin_cobro" && fullyPaid && (
+              <p className="text-sm text-warn-fg">El pedido ya está pagado: no hay saldo que cobrar. Si el cliente pagó otra vez, avisa a coordinación.</p>
+            )}
             {method === "yape" && <p className="text-xs text-ink-500">Yape reportado a la empresa. La captura no equivale a validación bancaria.</p>}
 
             <div className="space-y-2">

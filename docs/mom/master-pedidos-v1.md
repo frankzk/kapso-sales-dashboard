@@ -9676,6 +9676,20 @@ y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
   monto de esa fila, con su nombre en la nota. Es lo que después lee y acepta
   quien liquida antes de aplicar al Master (§30.8): el motivo lo escribe quien
   repartió; aceptarlo es de quien liquida.
+- **Lo que había que cobrar es el saldo (10-10-2026, decisión de Frankz).** El
+  «monto de Kapta» con que se compara es el saldo por cobrar —el total menos lo
+  ya pagado y validado— y el total solo si el saldo no se pudo leer
+  (`amountDue`, `lib/sheets/monto.ts`). Un pedido pagado antes se entrega «Sin
+  cobro» y cuadra: #KP139362 (S/ 268.20 pagados por adelantado) pedía explicar
+  por qué no se cobraron S/ 268.20. El motivo se pide solo si el motorizado
+  tiene hoja de Reparto propio, porque es la observación de esa hoja: es la
+  misma condición con que la pantalla enseña el selector, y servidor y
+  pantalla ya no se contradicen (a Alexis, sin hoja, el servidor le pedía un
+  motivo que la pantalla no dejaba elegir).
+- **Ya está pagado.** Con saldo cero, al marcar «Entregado» la pantalla elige
+  «Sin cobro» sola y lo dice en verde («Ya está pagado… No cobres nada»). Si
+  alguien elige otro método, avisa que no hay saldo que cobrar; el servidor
+  sigue rechazando un cobro mayor que el saldo.
 - **Solo ve su hoja.** Un usuario cuyo único rol es `motorizado` solo puede
   entrar a `/reparto`; el panel lo redirige. En la base (0179), sus lecturas
   de hojas, filas, alias, observaciones e historial quedan acotadas a la hoja
