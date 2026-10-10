@@ -155,17 +155,31 @@ export interface ShalomSession {
 }
 
 /**
- * Orden de la cuenta, de `GET /v1/orders`. Se declara solo lo que se usa para
- * la recuperación tras un timeout; el resto viaja en el índice de firma.
+ * Orden de la cuenta, de `GET /v1/orders`. Se declara solo lo que se usa: la
+ * recuperación tras un timeout y «Cotejar Shalom» (lib/shalom/account-match.ts);
+ * el resto viaja en el índice de firma.
+ *
+ * Del destinatario se declaran los campos de la persona del contrato
+ * (`ShalomPerson`). Que el listado los traiga, y que sean del destinatario y no
+ * del remitente, NO se da por hecho: Cotejar Shalom lo comprueba en cada
+ * lectura contra las guías creadas por API (`checkListingContract`).
  */
 export interface ShalomAccountOrder {
   id: number;
-  guia?: string | null;
+  guia?: string | number | null;
   serie?: string | null;
   codigo?: string | null;
   pickup_code?: string | null;
   created_at?: string | null;
-  receiver?: { document?: string | null; full_name?: string | null } | null;
+  receiver?: {
+    document_type?: string | null;
+    document?: string | number | null;
+    full_name?: string | null;
+    name?: string | null;
+    last_name?: string | null;
+    sur_name?: string | null;
+    phone?: string | number | null;
+  } | null;
   [k: string]: unknown;
 }
 

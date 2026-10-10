@@ -36,7 +36,6 @@ import { writeCourierGuide } from "@/lib/route-output-fill";
 import { warmShalomLabel } from "@/lib/shalom/label-cache";
 import {
   filledShipmentIds,
-  isFillableRouteOutput,
   restoredRouteOutputPatch,
   ROUTE_OUTPUT_FILLED,
 } from "@/lib/shipment-output";
@@ -62,7 +61,6 @@ import {
   type StoreShalom,
 } from "@/lib/shalom/session";
 import {
-  blockingActiveGuide,
   buildShalomOrderPayload,
   documentError,
   generatePickupCode,
@@ -79,6 +77,7 @@ import {
   normalizeManualShalomGuide,
   type ManualShalomGuideInput,
 } from "@/lib/shalom/manual";
+import { activeGuides, registerExistingShalomGuide } from "@/lib/shalom/register-guide";
 import {
   ShalomApiError,
   ShalomTimeoutError,
@@ -91,9 +90,6 @@ import {
 import type { OrderMasterRow } from "@/lib/types";
 
 const MASTER_PATH = "/dashboard/pedidos";
-
-/** Guías que ya cubren el pedido: crear otra encima duplica el despacho. */
-const ACTIVE_STATUSES = new Set(["pendiente", "en_ruta", "por_preparar"]);
 
 export interface ShalomDraftView {
   orderId: string;
@@ -199,31 +195,6 @@ async function outputWasFilled(
   return filledShipmentIds((data ?? []) as { kind: string; shipment_id: string | null }[]).has(
     shipmentId,
   );
-}
-
-/** Guías vivas del pedido, para no despachar dos veces lo mismo. */
-async function activeGuides(
-  admin: ReturnType<typeof createAdminSupabase>,
-  orderId: string,
-): Promise<{ courier: string; guide_code: string; delivery_status: string }[]> {
-  const { data } = await admin
-    .from("shipments")
-    .select(
-      "courier,guide_code,delivery_status,created_via,custody_state,custody_transferred_at",
-    )
-    .eq("order_id", orderId);
-  const rows =
-    (data as {
-      courier: string;
-      guide_code: string;
-      delivery_status: string;
-      created_via: string | null;
-      custody_state: string | null;
-      custody_transferred_at: string | null;
-    }[]) ?? [];
-  // La salida «por definir» no cuenta como guía activa: es ESTA caja esperando
-  // courier, y la guía nueva se escribe encima de ella. Ver lib/route-output-fill.
-  return rows.filter((g) => ACTIVE_STATUSES.has(g.delivery_status) && !isFillableRouteOutput(g));
 }
 
 // ---------------------------------------------------------------------------
@@ -588,187 +559,24 @@ export async function registerManualShalomGuide(
   const guide = normalized.value;
   const admin = createAdminSupabase();
 
-  // El número impreso identifica una salida real. Nunca puede aparecer en dos
-  // pedidos distintos, incluso si dos personas registran la contingencia al
-  // mismo tiempo (la base además conserva unique(courier, guide_code)).
-  const duplicate = await admin
-    .from("shipments")
-    .select("id,order_id,store_id,guide_code")
-    .eq("courier", "shalom")
-    .eq("guide_code", guide.guideCode)
-    .maybeSingle();
-  if (duplicate.error) return { error: `No se pudo validar la guía: ${duplicate.error.message}` };
-  if (duplicate.data?.order_id && duplicate.data.order_id !== row.order_id) {
-    return {
-      error: `La guía ${guide.guideCode} ya está vinculada a otro pedido. Revisa el número antes de continuar.`,
-    };
-  }
+  // Las reglas —número único, ninguna otra salida viva, relleno de la salida
+  // «por definir», evento en la línea de tiempo— viven en UN sitio, porque
+  // Cotejar Shalom registra guías existentes por el mismo camino desde el
+  // cron. Ver lib/shalom/register-guide.ts.
+  const res = await registerExistingShalomGuide(admin, row, guide, { actor: userId });
+  if (!res.ok) return { error: res.error };
 
-  // La contingencia registra una salida física igual que la vía API, así que
-  // hereda su misma regla: un pedido no puede quedar con dos salidas vivas. Sin
-  // esto, la pestaña «Ya la creé en Shalom Pro» era la puerta de atrás — no la
-  // frena `blockers` en el modal ni se comprobaba acá— y dejaba al pedido con
-  // dos paquetes que nadie sabe cuál viaja.
-  //
-  // Se excluye ESTA guía: reenviar el formulario para completar identificadores
-  // que faltaban es idempotente por diseño y no debe chocar consigo mismo.
-  const otherActive = blockingActiveGuide(await activeGuides(admin, orderId), guide.guideCode);
-  if (otherActive) {
-    return {
-      error:
-        `El pedido ya tiene una salida activa: ${otherActive.guide_code} (${otherActive.courier}, ${otherActive.delivery_status}). ` +
-        "Anúlala antes de vincular esta guía; si ya salió con el courier, registra primero su retorno.",
-    };
-  }
-
-  const now = new Date().toISOString();
-  let shipmentId = duplicate.data?.id ?? null;
-  let alreadyLinked = Boolean(shipmentId);
-  let filledOutput: string | null = null;
-
-  if (!shipmentId) {
-    const written = await writeCourierGuide(admin, row.order_id, {
-      courier: "shalom",
-      guide_code: guide.guideCode,
-      store_id: row.store_id,
-      order_id: row.order_id,
-      matched: true,
-      match_method: "manual",
-      order_name: row.order_name,
-      customer_name: row.customer_name,
-      customer_phone: row.customer_phone,
-      product: null,
-      district: row.district,
-      province: row.province,
-      city: row.district,
-      region: row.region,
-      delivery_address: null,
-      agency_branch: guide.agencyBranch,
-      delivery_status: "pendiente",
-      status_category: "pending",
-      pickup_state: "pendiente_de_envio",
-      shalom_codigo: guide.codigo,
-      shalom_serie: guide.serie,
-      shalom_ose_id: guide.oseId,
-      shalom_order_id: guide.shalomOrderId,
-      shalom_raw: {
-        source: SHALOM_ORIGIN.manual,
-        guia: guide.guideCode,
-        codigo: guide.codigo,
-        serie: guide.serie,
-        ose_id: guide.oseId,
-        order_id: guide.shalomOrderId,
-        recorded_at: now,
-        recorded_by: userId,
-      },
-      // `preparation_state`, `custody_state` y `assigned_at` NO viajan aquí, y
-      // es deliberado: esta fila también se usa como UPDATE cuando rellena una
-      // salida que ya existía. Mandarlos haría retroceder a `rotulo_generado`
-      // una caja que el almacén ya escaneó como `listo_despacho` — borrar el
-      // trabajo hecho para registrar una guía. Al insertar de cero, la base
-      // pone `no_iniciado` y `empresa` por defecto, que es exactamente lo que
-      // hace la vía API con una guía recién creada.
-      created_via: SHALOM_ORIGIN.manual,
-    });
-
-    if ("error" in written) {
-      // La guía EXISTE en Shalom —la creó una persona en su panel—, así que el
-      // mensaje tiene que dejarla anotada en vez de sugerir reintentar.
-      if (/duplicate key|23505/i.test(written.error)) {
-        return {
-          error: `La guía ${guide.guideCode} fue registrada por otra persona mientras completabas el formulario. Actualiza el pedido para verla.`,
-        };
-      }
-      return { error: `No se pudo registrar la guía manual: ${written.error}` };
-    }
-    shipmentId = written.shipmentId;
-    filledOutput = written.filled ? written.outputCode : null;
-  } else {
-    // Un segundo envío del mismo formulario es idempotente. Permite completar
-    // identificadores faltantes, pero nunca cambia de pedido ni crea otro QR.
-    const patch: Record<string, unknown> = { updated_at: now };
-    if (guide.codigo) patch.shalom_codigo = guide.codigo;
-    if (guide.serie) patch.shalom_serie = guide.serie;
-    if (guide.oseId) patch.shalom_ose_id = guide.oseId;
-    if (guide.shalomOrderId) patch.shalom_order_id = guide.shalomOrderId;
-    if (guide.agencyBranch) patch.agency_branch = guide.agencyBranch;
-    const updated = await admin.from("shipments").update(patch).eq("id", shipmentId);
-    if (updated.error) return { error: `La guía ya existe, pero no se pudo actualizar: ${updated.error.message}` };
-  }
-
-  let keyWarning = "";
-  if (guide.pickupCode) {
-    const { data: previousKey } = await admin
-      .from("shalom_pickup_keys")
-      .select("order_id")
-      .eq("order_id", row.order_id)
-      .maybeSingle();
-    const keyWrite = await admin.from("shalom_pickup_keys").upsert(
-      {
-        order_id: row.order_id,
-        store_id: row.store_id,
-        key_enc: encrypt(guide.pickupCode),
-        created_by: userId,
-        ...(previousKey ? { replaced_at: now, replaced_by: userId } : {}),
-      },
-      { onConflict: "order_id" },
-    );
-    if (keyWrite.error) {
-      keyWarning = ` La guía quedó vinculada, pero la clave no pudo guardarse (${keyWrite.error.message}); regístrala desde la salida Shalom en Salidas y guías.`;
-    }
-  } else {
-    keyWarning = " No se ingresó la clave de recojo; regístrala después desde la salida Shalom en Salidas y guías.";
-  }
-
-  const { data: validatedPayments } = await admin
-    .from("order_payments")
-    .select("amount")
-    .eq("order_id", row.order_id)
-    .eq("validation_status", "validado");
-  const advance = (validatedPayments ?? []).reduce(
-    (sum, payment) => sum + (Number(payment.amount) || 0),
-    0,
-  );
-  await admin.from("order_events").insert({
-    store_id: row.store_id,
-    order_id: row.order_id,
-    kind: alreadyLinked ? "guide_link_updated" : "guide_created",
-    occurred_at: now,
-    actor: userId,
-    source: "shalom",
-    courier: "shalom",
-    guide_code: guide.guideCode,
-    note:
-      `Guía Shalom ${alreadyLinked ? "actualizada" : "creada fuera de Kapta y vinculada manualmente"}.` +
-      `${guide.agencyBranch ? ` Destino: ${guide.agencyBranch}.` : ""}` +
-      ` Adelanto validado: S/ ${advance.toFixed(2)}.`,
-    // Nunca se guarda la clave en la línea de tiempo: solo la confirmación de
-    // que fue recibida y cifrada.
-    payload: {
-      source: SHALOM_ORIGIN.manual,
-      shipment_id: shipmentId,
-      codigo: guide.codigo,
-      serie: guide.serie,
-      ose_id: guide.oseId,
-      shalom_order_id: guide.shalomOrderId,
-      agency_branch: guide.agencyBranch,
-      has_pickup_key: Boolean(guide.pickupCode),
-      validated_advance: advance,
-    },
-  });
-
-  await recomputeOrderMasterSafe(admin, [row.order_id]);
   revalidatePath(MASTER_PATH);
 
   return {
     notice:
-      `${alreadyLinked ? "La guía ya estaba vinculada; se actualizaron sus datos" : "Guía externa vinculada"}: ${guide.guideCode}.` +
+      `${res.alreadyLinked ? "La guía ya estaba vinculada; se actualizaron sus datos" : "Guía externa vinculada"}: ${guide.guideCode}.` +
       // Se dice cuando REUSA la salida existente: el operador venía a vincular
       // una guía y podría esperar una fila nueva. Saber que la caja rotulada
       // como `KP123-S01` es esta evita que busque un segundo bulto.
-      (filledOutput ? ` Se usó la salida ${filledOutput}, que ya estaba armada y rotulada.` : "") +
+      (res.filledOutput ? ` Se usó la salida ${res.filledOutput}, que ya estaba armada y rotulada.` : "") +
       " El tracking público se hará automáticamente por este número cuando Shalom responda." +
-      keyWarning,
+      res.keyWarning,
     guideCode: guide.guideCode,
   };
 }
