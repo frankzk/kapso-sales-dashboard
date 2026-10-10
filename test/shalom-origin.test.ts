@@ -6,6 +6,9 @@ import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
 const read = (...parts: string[]) => readFileSync(resolve(process.cwd(), ...parts), "utf8");
 
 const ACTIONS = "app/dashboard/pedidos/shalom-actions.ts";
+// La guía que ya existía en Shalom Pro se registra aquí, desde el drawer y
+// desde Cotejar Shalom: también escribe salidas y tiene que declarar su origen.
+const REGISTER = "lib/shalom/register-guide.ts";
 const MIGRATION = "db/migrations/0108_shalom_created_via.sql";
 
 describe("origen de las salidas de Shalom", () => {
@@ -30,7 +33,7 @@ describe("origen de las salidas de Shalom", () => {
     // Y el origen se cuenta como ASIGNACIÓN (`created_via: SHALOM_ORIGIN.…`), no
     // como aparición del nombre: el fichero también lo declara como tipo al leer
     // las salidas, y eso no escribe nada.
-    const source = read(ACTIONS);
+    const source = read(ACTIONS) + read(REGISTER);
     const writes = [
       ...(source.match(/from\("shipments"\)\s*\.insert/g) ?? []),
       ...(source.match(/writeCourierGuide\(/g) ?? []),
@@ -44,9 +47,11 @@ describe("origen de las salidas de Shalom", () => {
   it("la server action no repite los literales a mano", () => {
     // Si el literal se escribe suelto, el siguiente insert puede olvidarlo sin
     // que nada avise; obligando a pasar por la constante, el test de arriba lo ve.
-    const source = read(ACTIONS).replace(/^import[\s\S]*?from "@\/lib\/shalom\/origin";$/m, "");
-    expect(source).not.toContain(`"${SHALOM_ORIGIN.api}"`);
-    expect(source).not.toContain(`"${SHALOM_ORIGIN.manual}"`);
+    for (const file of [ACTIONS, REGISTER]) {
+      const source = read(file).replace(/^import[\s\S]*?from "@\/lib\/shalom\/origin";$/m, "");
+      expect(source).not.toContain(`"${SHALOM_ORIGIN.api}"`);
+      expect(source).not.toContain(`"${SHALOM_ORIGIN.manual}"`);
+    }
   });
 
   it("el backfill escribe la misma marca que el código", () => {

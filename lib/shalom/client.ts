@@ -335,10 +335,18 @@ export class ShalomClient {
    * El `from` sigue valiendo la pena aunque no aligere el upstream: recorta lo
    * que viaja hasta nosotros, que a ~3 KB por orden son megabytes.
    */
-  async ordersSince(from: string, perPage = 200): Promise<ShalomAccountOrder[]> {
+  async ordersSince(
+    from: string,
+    perPage = 200,
+    opts: { page?: number; timeoutMs?: number } = {},
+  ): Promise<ShalomAccountOrder[]> {
+    // `page` lo usa Cotejar Shalom, que necesita el listado ENTERO desde una
+    // fecha (lib/shalom/account-match.ts, `collectListingPages`). Quien solo
+    // quiere la primera página no tiene que decir nada.
+    const page = opts.page && opts.page > 1 ? Math.floor(opts.page) : 1;
     const body = await this.request<{ orders?: ShalomAccountOrder[] }>(
-      `/v1/orders?from=${encodeURIComponent(from)}&page=1&per_page=${perPage}`,
-      { shalomAuth: true, timeoutMs: SLOW_TIMEOUT_MS },
+      `/v1/orders?from=${encodeURIComponent(from)}&page=${page}&per_page=${perPage}`,
+      { shalomAuth: true, timeoutMs: opts.timeoutMs ?? SLOW_TIMEOUT_MS },
     );
     return body?.orders ?? [];
   }
@@ -456,8 +464,8 @@ export function findCreatedOrder(
   match: { document: string; pickupCode: string },
 ): ShalomAccountOrder | null {
   const hits = orders.filter((o) => {
-    const doc = (o.receiver?.document ?? "").trim();
-    const code = (o.pickup_code ?? "").trim();
+    const doc = String(o.receiver?.document ?? "").trim();
+    const code = String(o.pickup_code ?? "").trim();
     return doc === match.document && code === match.pickupCode;
   });
   return hits.length === 1 ? (hits[0] as ShalomAccountOrder) : null;

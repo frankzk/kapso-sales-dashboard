@@ -5520,6 +5520,75 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
    aparece con otro `id`, o ninguna aparece, no se escribe nada. Mientras
    tanto, el aviso de una guía manual sin OSE ID **reintenta** en vez de
    fallar.
+8. **Si nadie la registra, la registra Cotejar Shalom** (10-10-2026). Ver abajo.
+
+#### Cotejar Shalom: la guía hecha a mano que nadie registró (decidido el 10-10-2026)
+
+- **El problema.** Al 10-10-2026 había **30 pedidos pagados enteros** en
+  «Preparación · Por generar rótulo» **sin ninguna salida** (#KP123532 …
+  #KP140107), casi todos con «shalom …» en la nota o con el DNI apuntado: la
+  guía se creó a mano en `pro.shalom.pe` y el paso 2 de arriba no se hizo. Sin
+  la guía en Kapta no hay rastreo, ni avisos, ni clave que entregar, y el pedido
+  se queda parado para siempre aunque la clienta ya lo haya recogido.
+- **Qué hace.** El cron de Shalom (`/api/cron/shalom-reconcile`), **cuatro
+  veces al día** —la pasada de las 8, 12, 16 y 20 h de Lima— o a mano con
+  `?cotejar=1`, lee el listado de órdenes de la cuenta de Shalom Pro
+  (`GET /v1/orders`, con su destinatario) desde el pedido más viejo y vincula
+  la guía a su pedido **por el mismo camino que «Ya la creé en Shalom Pro»**
+  (`lib/shalom/register-guide.ts`): las mismas comprobaciones, la salida
+  `shalom_pro_manual` con su QR, el relleno de la salida «por definir» y el
+  `guide_created` en la línea de tiempo. Desde ahí el rastreo de cada media
+  hora mueve el estado y encola los avisos, como con cualquier guía.
+- **Quién es candidato.** Pedido de los últimos 90 días en «Preparación · Por
+  generar rótulo», con el pago que Agencia exige para pasar a Preparación
+  (`agencyPaymentReady`: adelanto validado, diferencia cargada o pago
+  completo) y **sin ninguna salida que estorbe**: ni una de Shalom que no esté
+  anulada ni una salida viva de otro courier (la salida «por definir» no
+  estorba: se rellena).
+- **Solo se vincula lo que no admite duda**, porque una guía en el pedido
+  equivocado mueve el estado de OTRO pedido y le avisa a OTRA clienta. Dos
+  caminos:
+  1. **Mismo DNI**: el documento del destinatario de la guía es el apuntado
+     para el envío («DNI y agencia» del panel de pagos, `shalom_order_drafts`).
+     Basta aunque el nombre sea otro: quien recoge puede ser un familiar.
+  2. **Mismo celular y un nombre en común**: los 9 dígitos del celular del
+     pedido y al menos un nombre de 3 letras o más del destinatario de Shalom.
+     Si los dos lados tienen DNI y no es el mismo, no vale: es otra persona con
+     el mismo teléfono.
+
+  Y en los dos, **una pareja única** con la guía creada entre **1 día antes y
+  45 días después** del pedido:
+  - de las guías **sin vincular**, solo UNA tiene el DNI o el celular del
+    pedido — otra «parecida» (mismo celular, otro nombre) ya es duda;
+  - **ningún otro pedido de Kapta** de las tiendas de esa cuenta —esté como
+    esté, cerrado o anulado incluidos— tiene ese DNI o ese celular con la guía
+    dentro de su ventana: la misma clienta con dos pedidos no se adivina;
+  - una guía que **ya está en una salida** de Kapta no se toca.
+- **Antes de creerse el listado, se comprueba en cada lectura**, igual que el
+  OSE ID de arriba:
+  - que esté **entero**: tienen que aparecer al menos el 97 % de las guías que
+    Kapta creó por API en el periodo. Si falta más —una página que no llegó,
+    un tope que Shalom no avisa— no se vincula nada en esa cuenta;
+  - que su destinatario **sea el destinatario**: en las guías creadas por API,
+    el DNI y el celular del listado tienen que coincidir con los del pedido en
+    nueve de cada diez, con diez como mínimo. El campo que no pasa no se usa
+    para vincular, y si no pasa ninguno no se vincula nada.
+- **Lo que escribe.** `actor` nulo —no lo decidió una persona— y la nota
+  «Guía Shalom creada fuera de Kapta y registrada por Cotejar Shalom (mismo
+  DNI)» o «(mismo celular y nombre)»; en `shalom_raw` y en el payload,
+  `registered_by: cotejar_shalom`. El código y la serie salen del listado; el
+  OSE ID solo si el listado demuestra que su `id` lo es. **La clave de recojo
+  no**: el listado no se usa para eso, y la nota pide registrarla desde la
+  salida Shalom, en Salidas y guías. Ese `guide_created` cuenta como el del
+  drawer —es el mismo hecho— y por eso también levanta una corrección manual
+  anterior del estado (`status_override`).
+- **Tope de 10 guías por pasada**; lo que sobra entra en la siguiente.
+- **Lo que queda para una persona.** Lo ambiguo y lo sin pareja no se toca:
+  sigue en «Por generar rótulo» y se registra a mano con «Ya la creé en Shalom
+  Pro». El informe del cron (`cotejo`, y la línea `[shalom-cotejo]` de la
+  bitácora) dice cuántos candidatos, vinculados, ambiguos, sin pareja y por
+  tope hubo, el porqué de cada ambiguo y, por cuenta, cuántas guías trajo el
+  listado, su cobertura y la comprobación del destinatario.
 
 ### Olva
 
