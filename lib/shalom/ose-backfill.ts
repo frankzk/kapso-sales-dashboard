@@ -16,6 +16,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { loadStoreShalom, readWithFreshSession } from "@/lib/shalom/session";
 import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
+import { collectListingPages } from "@/lib/shalom/account-match";
+import { SLOW_TIMEOUT_MS } from "@/lib/shalom/client";
 import type { ShalomAccountOrder } from "@/lib/shalom/types";
 
 /** Una guía de la cuenta con OSE ID conocido: la prueba de que `id` es el OSE ID. */
@@ -88,8 +90,12 @@ export interface OseBackfillReport {
 
 /** Hasta dónde se buscan guías manuales sin OSE ID. */
 const LOOKBACK_DAYS = 30;
-/** El listado pagina; un día de Kenku son ~45 guías. */
-const PER_PAGE = 600;
+/** El listado pagina y Shalom no entrega más de 200 por página aunque se le
+ *  pidan más (medido el 10-10-2026): con 600 se leía solo la primera página. */
+const PER_PAGE = 200;
+/** Un mes de las dos tiendas cabe de sobra; el resto del cron necesita su tiempo. */
+const MAX_PAGES = 15;
+const LISTING_BUDGET_MS = 90_000;
 
 /**
  * Busca las guías manuales recientes sin OSE ID y se lo pone desde el listado
@@ -128,7 +134,15 @@ export async function backfillManualOseIds(admin: SupabaseClient): Promise<OseBa
     const oldest = Math.min(...rows.map((r) => Date.parse(r.created_at)).filter(Number.isFinite));
     const desde = new Date(oldest - 86_400_000).toISOString().slice(0, 10);
     try {
-      const orders = await readWithFreshSession(admin, storeId, store, (c) => c.ordersSince(desde, PER_PAGE));
+      // Todas las páginas desde `desde`: con una sola, las guías que no cabían
+      // en ella quedaban sin OSE ID. Un listado a medias no engaña a
+      // `resolveOseIds` —solo resuelve menos—, así que se usa lo que llegó.
+      const { orders } = await readWithFreshSession(admin, storeId, store, (c) =>
+        collectListingPages(
+          (page, left) => c.ordersSince(desde, PER_PAGE, { page, timeoutMs: Math.min(SLOW_TIMEOUT_MS, left) }),
+          { perPage: PER_PAGE, maxPages: MAX_PAGES, deadlineMs: Date.now() + LISTING_BUDGET_MS },
+        ),
+      );
       const { data: knownRows } = await admin
         .from("shipments")
         .select("guide_code,shalom_ose_id")
