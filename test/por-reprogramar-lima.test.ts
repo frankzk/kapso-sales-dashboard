@@ -401,7 +401,7 @@ describe("las piezas en el código", () => {
     // sigue distinguiendo el reintento de otro courier (test/gf-own-retry.test.ts).
     expect(body).toContain("${REPROGRAM_QUEUE_FILTER}");
     expect(body).toContain("isRetryAdmission(order.macro_stage, order.macro_substage, order.operational_status)");
-    expect(body).toContain("activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : retry ? outputsBlockingRetry(outputs) : outputs, fillable?.id ?? null)");
+    expect(body).toContain("activeAssignedOutput(review ? outputs.filter((o) => !review.shipmentIds.includes(o.id)) : outputsBlockingRetry(outputs), fillable?.id ?? null)");
     expect(body).toContain("const needsExistingBox = !review && !retry && !own && order.macro_substage !== \"por_generar_rotulo\"");
     expect(body).toContain("failedOutput: retry ? lastFailedOutput(outputs) : null");
   });
@@ -412,8 +412,10 @@ describe("las piezas en el código", () => {
     const body = src.slice(start, src.indexOf("\nexport ", start));
     expect(body).toContain("isCourierAdmissionStage(row.macro_stage, row.macro_substage, row.operational_status)");
     // La salida propia que se reusa tampoco rellena (06-10-2026, test/gf-own-retry.test.ts).
-    expect(body).toContain("const fillable = retry || review || own ? null : pickFillableRouteOutput(outputs);");
-    expect(body).toContain("const mayCreateOutput = Boolean(review) || retry || row.macro_substage === \"por_generar_rotulo\";");
+    // Si ya nació su «por definir» al pedir el rótulo (§28, 09-10-2026), se
+    // rellena esa; si no, se crea (test/reprogramar-salida-nueva.test.ts).
+    expect(body).toContain("const fillable = review || own ? null : pickFillableRouteOutput(outputs);");
+    expect(body).toContain("const mayCreateOutput = Boolean(review) || retryCreates || row.macro_substage === \"por_generar_rotulo\";");
     expect(body).toContain("motivo: reviewReason ?? (failedBefore ? retryAdditionalReason(failedBefore) : null)");
     expect(body).toContain("outputs.length >= MAX_OUTPUTS_PER_ORDER");
     expect(body).toContain('kind: "additional_output_reason"');
@@ -442,7 +444,7 @@ describe("las piezas en el código", () => {
     // La v1.21 (adelanto mínimo de Agencia, #KP134162) y la v1.22 (Swayp que
     // no entrega) vinieron después; lo que se vigila aquí es que el MOM
     // documente la v1.19.
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.23");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.25");
     const mom = read("docs/mom/master-pedidos-v1.md");
     expect(mom).toContain("#### Lo que Tanders no entrega también es «Por reprogramar Lima» (v1.19, 29-09-2026)");
     expect(mom).toContain("**Crear la guía directa no es reprogramar (v1.19, 29-09-2026).**");

@@ -20,7 +20,29 @@
 // alto. Solo LEE: a diferencia de «Descargar rótulos», no crea salidas — un
 // pedido sin esa guía se cuenta aparte y se dice.
 //
+// Tampoco la de Tanders que no entregó (RETURNING/RETURNED, 09-10-2026): su
+// rótulo es el de la caja que volvió, y reimprimirlo para reprogramar es
+// justo lo que dejó a #AUR177756 con un QR que no cuadraba. Se reprograma
+// con el rótulo de la salida nueva («Descargar rótulos», MOM §9.3).
+//
 // Puro y probado en test/guia-combinada-select.test.ts.
+
+// `tandersStatusCode` y no `guideFailedAfterDispatch` (lib/reproprovincia.ts),
+// cuyas dos ramas de Tanders repite: este módulo lo carga el Master en el
+// navegador, y reproprovincia arrastra módulos de servidor. Las anuladas ya
+// quedan fuera arriba.
+import { tandersStatusCode } from "@/lib/tanders/status";
+
+/**
+ * Tanders no entregó: `RETURNING` (vuelve), `RETURNED` (volvió), o su caja ya
+ * se recibió en Devoluciones aunque Tanders la siga dando viva
+ * (`apiGuideReceivedBack`).
+ */
+function tandersDidNotDeliver(row: { delivery_status: string; reported_status?: string | null; returned_at?: string | null }): boolean {
+  const code = tandersStatusCode(row.reported_status);
+  if (code === "RETURNING" || code === "RETURNED") return true;
+  return (row.delivery_status === "pendiente" || row.delivery_status === "en_ruta") && Boolean(row.returned_at);
+}
 
 export const COMBINED_GUIDE_COURIERS = ["tanders", "shalom"] as const;
 export type CombinedGuideCourier = (typeof COMBINED_GUIDE_COURIERS)[number];
@@ -37,6 +59,10 @@ export interface CombinadaCandidate {
   output_number: number | null;
   /** Shalom: solo las guías creadas por API tienen PDF que embeber. */
   shalom_ose_id?: number | null;
+  /** Tanders: su estado crudo dice si no entregó (RETURNING/RETURNED). */
+  reported_status?: string | null;
+  /** Tanders: la caja ya se recibió en Devoluciones. */
+  returned_at?: string | null;
 }
 
 export interface CombinadaSelection {
@@ -55,6 +81,7 @@ export function pickCombinadaOutputs(
   for (const row of rows) {
     if (!row.order_id || row.courier !== courier || row.delivery_status === "anulado") continue;
     if (courier === "shalom" && !row.shalom_ose_id) continue;
+    if (courier === "tanders" && tandersDidNotDeliver(row)) continue;
     const current = best.get(row.order_id);
     if (!current || (row.output_number ?? 0) > (current.output_number ?? 0)) best.set(row.order_id, row);
   }

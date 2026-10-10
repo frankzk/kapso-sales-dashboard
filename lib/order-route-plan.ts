@@ -106,6 +106,13 @@ export interface RouteCandidate {
    * y dos campos para el mismo hecho terminan discrepando.
    */
   blockingOutput?: RouteBlockingOutput | null;
+  /**
+   * Casi no se usa (09-10-2026): la mesa la pliega en «Otros couriers» y nunca
+   * la sugiere. En Lima, en 60 días: Grupo GF 1.864 salidas, Tanders 881,
+   * Swayp 138, Axel 1 y Urpi 0. Sigue disponible: la decisión es de
+   * Seguimiento Lima (MOM §9.2).
+   */
+  rarelyUsed?: boolean;
 }
 
 export interface OrderRoutePlan {
@@ -577,27 +584,26 @@ export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan 
     const minute = limaMinute(input.now ?? new Date());
     const groupGf = groupGfCandidate(input, minute);
     const groupCutoff = cutoffMinute(input.grupoGfCourier?.sameDayCutoff);
-    const first = input.grupoGfCourier?.eligible && minute <= groupCutoff
-      ? "propio"
-      : minute <= 12 * 60
-        ? "axel"
-        : "tanders";
+    // Axel ya no se sugiere (09-10-2026): casi no se usa, y sugerirlo antes
+    // del mediodía lo ponía con el anillo azul por delante de Tanders.
+    const first = input.grupoGfCourier?.eligible && minute <= groupCutoff ? "propio" : "tanders";
     routes = [
       { ...groupGf, recommended: first === "propio" && groupGf.availability !== "blocked" },
-      candidate(
-        "axel",
-        minute <= 12 * 60 ? "Puede entrar al corte de hoy" : "Programar para el día siguiente",
-        "Axel Courier puede repetirse cuando sea necesario.",
-        { recommended: first === "axel" },
-      ),
       candidate(
         "tanders",
         minute <= 16 * 60 ? "Ruta del día siguiente" : "Siguiente programación",
         "Integración directa con Tanders y rótulo del courier.",
         { recommended: first === "tanders" },
       ),
-      candidate("urpi", "Según recojo coordinado", "Salida manual con rótulo interno de Kapta."),
       swaypCandidate(input, false),
+      // Plegados en «Otros couriers»: siguen disponibles, no se sugieren.
+      candidate(
+        "axel",
+        minute <= 12 * 60 ? "Puede entrar al corte de hoy" : "Programar para el día siguiente",
+        "Axel Courier puede repetirse cuando sea necesario.",
+        { rarelyUsed: true },
+      ),
+      candidate("urpi", "Según recojo coordinado", "Salida manual con rótulo interno de Kapta.", { rarelyUsed: true }),
     ];
   } else if (operation === "agencia") {
     routes = [
@@ -637,7 +643,9 @@ export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan 
 
   routes = routes.map((route) => applyOutputPolicy(route, input, operation));
   if (!routes.some((route) => route.recommended && route.availability !== "blocked")) {
-    const firstAvailable = routes.find((route) => route.availability !== "blocked");
+    // Nunca se sugiere un courier que casi no se usa: si solo queda ese, no
+    // hay sugerencia y la mesa lo deja a criterio de Seguimiento Lima.
+    const firstAvailable = routes.find((route) => route.availability !== "blocked" && !route.rarelyUsed);
     if (firstAvailable) {
       routes = routes.map((route) => ({ ...route, recommended: route.key === firstAvailable.key }));
     }

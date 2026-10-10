@@ -24,7 +24,8 @@ import { operationFitsCourier, routeKindForCourier } from "@/lib/dispatch-routin
 import { courierLabelFor } from "@/lib/couriers/catalog";
 import { decideReception } from "@/lib/returns-reception";
 import { gfReturnDecision } from "@/lib/gf-returns-scan";
-import { boxWho, notInThisBoxMessage } from "@/lib/scan-other-box";
+import { boxWho, notInThisBoxMessage, oldLabelHint } from "@/lib/scan-other-box";
+import type { OutputForDecision } from "@/lib/labels/resolve-output";
 import { loadPickupKeyFacts } from "@/lib/shalom/pickup-facts";
 import {
   decideShalomReception,
@@ -218,6 +219,40 @@ export async function lookupDispatchShipment(code: string): Promise<DispatchActi
   return pick.kind === "unica" ? { shipment: pick.shipment } : { error: SCAN_NOT_FOUND };
 }
 
+/**
+ * El rótulo viejo de la caja que volvió (09-10-2026, `oldLabelHint`): solo en
+ * el camino que ya falla, así que el escaneo normal no paga la lectura. Lee las
+ * salidas del pedido y, en «Verificar caja», cuáles están en esa caja.
+ */
+async function oldLabelError(
+  shipment: DispatchShipment,
+  where: "caja" | "pedido",
+  manifestId?: string,
+): Promise<string | null> {
+  if (!shipment.order_id) return null;
+  const admin = createAdminSupabase();
+  const [{ data }, { data: order }] = await Promise.all([
+    admin
+      .from("shipments")
+      .select("id,courier,output_code,output_number,created_at,custody_state,delivery_status,reported_status,swayp_state,dispatched_at,returned_at")
+      .eq("order_id", shipment.order_id),
+    admin.from("order_master").select("macro_substage").eq("order_id", shipment.order_id).maybeSingle(),
+  ]);
+  const outputs = (data ?? []) as unknown as OutputForDecision[];
+  const reprogramming = (order as { macro_substage?: string | null } | null)?.macro_substage === "por_reprogramar_lima";
+  let inThisBox = new Set<string>();
+  if (where === "caja" && manifestId && outputs.length > 1) {
+    const { data: items } = await admin
+      .from("dispatch_manifest_items")
+      .select("shipment_id")
+      .eq("manifest_id", manifestId)
+      .in("shipment_id", outputs.map((output) => output.id))
+      .is("removed_at", null);
+    inThisBox = new Set(((items ?? []) as { shipment_id: string }[]).map((item) => item.shipment_id));
+  }
+  return oldLabelHint(shipment.id, outputs, where, { inThisBox, reprogramming });
+}
+
 export async function markShipmentReady(code: string): Promise<DispatchActionResult> {
   const perms = await getMasterPermissions();
   if (!perms.can("warehouse.prepare")) return { error: "No tienes permiso para preparar paquetes." };
@@ -233,7 +268,11 @@ export async function markShipmentReady(code: string): Promise<DispatchActionRes
   // Un pedido anulado no se arma: lo primero que hay que decir (lib/scan-cancelled.ts).
   const cancelledReady = await cancelledScanNotice(createAdminSupabase(), shipment.order_id);
   if (cancelledReady) return { error: cancelledReady };
-  if (shipment.custody_state !== "empresa") return { error: "Ese paquete ya no figura en custodia de la empresa." };
+  if (shipment.custody_state !== "empresa") {
+    // La caja que volvió con el rótulo de Tanders encima: se nombra la salida
+    // con la que sale. No hay alias, el QR viejo no se marca listo (§29.4).
+    return { error: (await oldLabelError(shipment, "pedido")) ?? "Ese paquete ya no figura en custodia de la empresa." };
+  }
   if (shipment.preparation_state === "listo_despacho") {
     return { notice: `${dispatchScanLabel(shipment)} ya estaba listo para despacho.`, shipment };
   }
@@ -882,7 +921,10 @@ export async function scanManifestItem(
       | undefined;
     const here = { who: boxWho(manifest, courierLabelFor(manifest.courier)), routeDate: manifest.route_date };
     const elsewhere = box ? { who: boxWho(box, courierLabelFor(box.courier)), routeDate: box.route_date } : null;
-    return { error: notInThisBoxMessage(here, elsewhere) };
+    // El rótulo viejo de Tanders sobre la caja que volvió (#AUR177756): si su
+    // salida nueva está en esta caja, se nombra; no coteja por ella (§29.4).
+    const oldLabel = box ? null : await oldLabelError(shipment, "caja", manifestId);
+    return { error: oldLabel ?? notInThisBoxMessage(here, elsewhere) };
   }
 
   if (stage === "pickup") {

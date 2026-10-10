@@ -18,9 +18,15 @@
 // la caja anterior es de otro courier y trae su rótulo. Si todavía vuelve, la
 // salida nueva es adicional y su motivo se escribe solo (§9, «otra salida viva
 // pide motivo, no bloquea»): el porqué ya lo dijo el courier.
+//
+// Desde el 09-10-2026 la salida nueva nace ANTES, al pedir su rótulo después de
+// la llamada (§28, `decideLabelAction`): su rótulo se pega sobre la caja que
+// volvió y el pedido pasa a Preparación. Grupo GF RELLENA esa «por definir»,
+// con su QR, en vez de crear otra; la que falló sigue sin rellenarse nunca.
 
 import { courierKey } from "@/lib/dispatch";
 import { guideFailedAfterDispatch, type RecoveryGuideLike } from "@/lib/reproprovincia";
+import { listNames } from "@/lib/labels/resolve-output";
 import { isCourierTbd, nombreDeCourier } from "@/lib/shipment-output";
 
 /** ¿El pedido espera un courier nuevo porque otro no lo entregó? */
@@ -77,11 +83,32 @@ export function failedOutputLabel(failed: FailedOutput): string {
 }
 
 /**
- * El motivo de la salida adicional cuando la caja anterior todavía no volvió.
- * Lo escribe el sistema porque el hecho ya consta: lo reportó el courier.
+ * El motivo de la salida adicional cuando la caja anterior sigue viva para su
+ * courier. Lo escribe el sistema porque el hecho ya consta: lo reportó el
+ * courier. Si la caja ya volvió no dice que «todavía vuelve».
  */
 export function retryAdditionalReason(failed: FailedOutput): string {
-  return `${nombreDeCourier(failed.courier)} no entregó y su caja todavía vuelve: se reprograma con Grupo GF desde Despacho del día.`;
+  return `${nombreDeCourier(failed.courier)} no entregó y su caja ${failed.returned ? "ya volvió" : "todavía vuelve"}: se reprograma con Grupo GF desde Despacho del día.`;
+}
+
+/**
+ * El motivo de la salida nueva que nace al pedir el rótulo de un pedido cuya
+ * última salida no entregó su courier (09-10-2026, §28). No nombra a Grupo GF:
+ * el courier de la nueva se fija al entrar a una ruta.
+ */
+export function reprogramOutputReason(failed: FailedOutput & { outputCode?: string | null }): string {
+  const which = failed.outputCode ? ` ${failed.outputCode}` : "";
+  return `${nombreDeCourier(failed.courier)} no entregó${which} y su caja ${failed.returned ? "ya volvió" : "todavía vuelve"}: se reprograma con una salida nueva y su propio rótulo, que se pega sobre la caja.`;
+}
+
+/**
+ * El aviso de la toma cuando la salida NACIÓ al tomarla: nadie pidió antes su
+ * rótulo, así que la caja todavía lleva el del courier que no entregó
+ * (#AUR177756, 08-10-2026). Se nombra para imprimirlo y pegarlo encima.
+ */
+export function newOutputLabelNotice(codes: readonly string[]): string {
+  const which = codes.length === 1 ? `Salida nueva ${codes[0]}` : `Salidas nuevas ${listNames(codes)}`;
+  return `${which}: imprime su rótulo y pégalo sobre la caja que volvió, tapando el anterior.`;
 }
 
 /** La línea del historial al tomarlo: dice por qué hay una salida nueva. */

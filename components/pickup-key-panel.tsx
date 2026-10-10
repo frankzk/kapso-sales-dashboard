@@ -23,6 +23,7 @@ import {
   OpsButton,
   SectionHead,
   Skeleton,
+  Step,
   type BadgeTone,
 } from "@/components/ops-ui";
 import {
@@ -45,6 +46,7 @@ import {
   revealPickupKey,
   setPickupKey,
   sharePickupKey,
+  sendPickupKeyByWhatsapp,
   validatePayment,
   type PaymentRow,
   type PickupKeyPanel as PanelData,
@@ -457,6 +459,7 @@ export function ShalomPickupKeyPanel({
         embedded
         onSetKey={(key) => run(() => setPickupKey(orderId, key))}
         onShare={(channel, note) => run(() => sharePickupKey(orderId, { channel, note }))}
+        onSendWhatsapp={() => run(() => sendPickupKeyByWhatsapp(orderId))}
         onError={setError}
       />
     </div>
@@ -2232,60 +2235,6 @@ function VoucherForm({
   );
 }
 
-/**
- * Un paso del registro: el disco con su número (o el visto cuando está hecho,
- * como el recorrido de la ficha), el título con su estado en chapa, la ayuda y
- * lo suyo debajo. La línea que baja al siguiente paso se pinta en tinta cuando
- * este ya está hecho.
- */
-function Step({
-  n,
-  title,
-  done,
-  badge,
-  help,
-  last = false,
-  children,
-}: {
-  n: number;
-  title: string;
-  done: boolean;
-  badge?: ReactNode;
-  help?: string;
-  last?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <li className={cn("relative pl-9", !last && "pb-6")}>
-      {!last && (
-        <span
-          aria-hidden="true"
-          className={cn("absolute bottom-0 left-[11px] top-7 w-px", done ? "bg-ink-500" : "bg-line-strong")}
-        />
-      )}
-      <span
-        aria-hidden="true"
-        className={cn(
-          "absolute left-0 top-0 grid size-6 place-items-center rounded-full text-xs font-semibold tabular-nums",
-          done ? "bg-ink-900 text-white" : "bg-white text-ink-600 ring-1 ring-inset ring-line-strong",
-        )}
-      >
-        {done ? <IconCheck className="size-3.5" strokeWidth={2.6} /> : n}
-      </span>
-      <div className="flex min-h-6 flex-wrap items-center gap-x-2 gap-y-1">
-        <h5 className="text-sm font-semibold text-ink-900">
-          <span className="sr-only">Paso {n}: </span>
-          {title}
-          {done && <span className="sr-only"> (hecho)</span>}
-        </h5>
-        {badge}
-      </div>
-      {help && <p className="mt-0.5 max-w-[68ch] text-[13px] leading-5 text-ink-500">{help}</p>}
-      <div className="mt-3 space-y-3">{children}</div>
-    </li>
-  );
-}
-
 function KeySection({
   panel,
   orderId,
@@ -2293,6 +2242,7 @@ function KeySection({
   embedded = false,
   onSetKey,
   onShare,
+  onSendWhatsapp,
   onError,
 }: {
   panel: PanelData;
@@ -2301,6 +2251,8 @@ function KeySection({
   embedded?: boolean;
   onSetKey: (key: string) => void;
   onShare: (channel: string, note: string) => void;
+  /** Manda la clave por WhatsApp de la tienda y registra la entrega. */
+  onSendWhatsapp: () => void;
   onError: (msg: string | null) => void;
 }) {
   const [newKey, setNewKey] = useState("");
@@ -2415,6 +2367,21 @@ function KeySection({
             <p className="text-[13px] text-ink-500">
               Tu rol no permite ver la clave; solicítala a un administrador.
             </p>
+          )}
+
+          {panel.canViewKey && panel.canReveal && (
+            // El envío que no salió solo (10-10-2026): la clave de un pago que
+            // validó el estado de cuenta antes de que lo hiciera, o una que la
+            // clienta perdió. Mismas rejas que al validar (ventana de 24 h
+            // incluida); si no se puede, el aviso dice por qué.
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pt-1">
+              <OpsButton variant="primary" disabled={pending} onClick={onSendWhatsapp} className="pointer-coarse:h-11">
+                Enviar clave por WhatsApp
+              </OpsButton>
+              <p className="text-[13px] leading-5 text-ink-500">
+                {panel.shares.length ? "Ya consta una entrega; enviarla otra vez la repite." : "Todavía no consta ninguna entrega."}
+              </p>
+            </div>
           )}
 
           {panel.canViewKey && panel.canReveal && (

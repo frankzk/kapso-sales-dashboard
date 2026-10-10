@@ -81,6 +81,36 @@ begin
   r:=swayp_emission_claim(b,o5,s5::text,'arequipa','[{"codbar":"TEST","cantidad":1}]',true,evidence,'[{"codbar":"TEST","disponible":50}]',now());
   if r->>'error'<>'Piloto: cupo diario alcanzado' then raise exception 'pilot cap not shared across stores: %',r; end if;
   if (select attempts from swayp_auto_metrics where org_id=org and cohort='recent_no_history')<>1 then raise exception 'cohort metrics missing'; end if;
+  -- 0237: una guía Swayp en Devolución (8) cuenta como devuelta, no pendiente,
+  -- aunque Kapta la tenga `en_ruta`.
+  update swayp_guide_emissions set guide_code='SWTEST4',state='created' where order_id=o4 and automatic;
+  insert into shipments(store_id,order_id,courier,guide_code,swayp_guide,delivery_status,status_category,swayp_state)
+    values(a,o4,'fenix','SWTEST4','SWTEST4','en_ruta','in_route',8);
+  if (select returned from swayp_auto_metrics where org_id=org and cohort='recent_no_history')<>1
+    or (select pending from swayp_auto_metrics where org_id=org and cohort='recent_no_history')<>0 then
+    raise exception 'Swayp return counted as pending: %',(select row_to_json(m) from swayp_auto_metrics m where org_id=org and cohort='recent_no_history');
+  end if;
+end $$;
+do $$
+declare
+  org uuid := '33333333-3333-3333-3333-333333333333';
+  a uuid := 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  o6 uuid := gen_random_uuid(); s6 uuid := gen_random_uuid(); em uuid;
+begin
+  -- 0239: la guía Swayp que RELLENA una salida «por definir» (UPDATE, no
+  -- INSERT) también enlaza su emisión.
+  insert into orders(id,store_id,shopify_order_id,created_at) values(o6,a,'fill6',now());
+  insert into shipments(id,store_id,order_id,courier,guide_code,delivery_status,status_category)
+    values(s6,a,o6,'por_definir','MOM-FILL6','pendiente','pending');
+  insert into swayp_guide_emissions(source_key,order_id,store_id,org_id,automatic,city,state,guide_code)
+    values('fill-'||o6::text,o6,a,org,false,'arequipa','created','SWFILL6') returning id into em;
+  update shipments set courier='fenix',guide_code='SWFILL6',swayp_guide='SWFILL6',delivery_status='en_ruta',status_category='in_route' where id=s6;
+  if (select child_id from swayp_guide_emissions where id=em) is distinct from s6 then
+    raise exception 'filled output did not link its emission';
+  end if;
+  delete from swayp_guide_emissions where id=em;
+  delete from shipments where id=s6;
+  delete from orders where id=o6;
 end $$;
 set local role authenticated;
 do $$ begin

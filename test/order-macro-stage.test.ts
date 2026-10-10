@@ -1,9 +1,14 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { DEPARTURE_EVENT_KINDS } from "@/lib/dispatch-day";
 import {
   MACRO_SUBSTAGES_BY_STAGE,
+  MOM_RESOLUTION_VERSION,
   ORDER_MACRO_STAGES,
   agencyPaymentReady,
   classifyOperation,
+  pagadoDirectoSinCourier,
   resolveMacroStage,
   type MacroEventSnapshot,
   type MacroGuideSnapshot,
@@ -611,6 +616,162 @@ describe("resolveMacroStage — Por cerrar y Finalizado", () => {
     });
     expect(reopened).toMatchObject({ stage: "por_cerrar", substage: "validacion_cierre_pendiente" });
     expect(closedAgain).toMatchObject({ stage: "finalizado", substage: "entregado_cerrado" });
+  });
+});
+
+// v1.25 (10-10-2026, MOM §6.5). 28 pedidos y S/ 4.838,70 medidos el 09-10-2026
+// —Kenku 22 / S/ 3.997,50, Aurela 6 / S/ 841,20—: provincia COD, sin ni una fila
+// en `shipments`, Yape validado o checkout, y marcados «entregado» a mano. Se
+// quedaban para siempre en «Pendiente de liquidación» porque no había courier
+// que liquidara.
+describe("pagado completo a la tienda y sin courier: no espera liquidación (v1.25)", () => {
+  const DELIVERED_BY_HAND = { general: "entregado", operational: "entregado", since: "2026-09-20T15:00:00.000Z" };
+  const yapeTotal = paymentState(
+    [{ kind: "total", validation_status: "validado", order_id: "kp", amount: 179.9 }],
+    179.9,
+  );
+
+  it("entregado, sin salida y con el Yape validado finaliza como entregado y cerrado", () => {
+    expect(yapeTotal).toBe("pago_completo");
+    const state = resolve({
+      order: order({ coverage: "provincia_cod" }),
+      legacy: DELIVERED_BY_HAND,
+      paymentState: yapeTotal,
+    });
+    expect(state).toMatchObject({
+      stage: "finalizado",
+      substage: "entregado_cerrado",
+      operation: "provincia_cod",
+      since: DELIVERED_BY_HAND.since,
+      reasons: [],
+    });
+    expect(pagadoDirectoSinCourier({ order: order(), guides: [], events: [], paymentState: yapeTotal })).toBe(true);
+  });
+
+  it("vale igual para la pasarela del checkout y para Lima: lo que manda es que no hubo courier", () => {
+    // `pago_completo` es lo que el Master le pasa al resolver cuando cobró la
+    // pasarela confirmada (lib/order-master.ts, `isWebPrepaid`).
+    const checkout = resolve({
+      order: order({ financial_status: "paid", coverage: "provincia_cod" }),
+      legacy: DELIVERED_BY_HAND,
+      paymentState: "pago_completo",
+    });
+    const lima = resolve({
+      order: order({ region: "Lima", province: "Lima", district: "Surco", coverage: "lima" }),
+      legacy: DELIVERED_BY_HAND,
+      paymentState: "pago_completo",
+    });
+    expect(checkout).toMatchObject({ stage: "finalizado", substage: "entregado_cerrado" });
+    expect(lima).toMatchObject({ stage: "finalizado", substage: "entregado_cerrado", operation: "lima" });
+  });
+
+  it("sin pago completo sigue Por cerrar esperando la liquidación", () => {
+    for (const payment of [null, "sin_pago", "adelanto_validado", "pago_total_cargado", "diferencia_cargada"]) {
+      const state = resolve({ legacy: DELIVERED_BY_HAND, paymentState: payment });
+      expect(state).toMatchObject({ stage: "por_cerrar", substage: "pendiente_liquidacion" });
+    }
+  });
+
+  it("el `paid` de Shopify sin comprobante validado no basta: eso vale para el mostrador de Agencia", () => {
+    const state = resolve({
+      order: order({ financial_status: "paid" }),
+      legacy: DELIVERED_BY_HAND,
+      paymentState: null,
+    });
+    expect(state).toMatchObject({ stage: "por_cerrar", substage: "pendiente_liquidacion" });
+  });
+
+  it("un reembolso deshace el cobro y vuelve a esperar", () => {
+    const state = resolve({
+      order: order({ total_refunded: 179.9 }),
+      legacy: DELIVERED_BY_HAND,
+      paymentState: "pago_completo",
+    });
+    expect(state).toMatchObject({ stage: "por_cerrar", substage: "pendiente_liquidacion" });
+  });
+
+  it("con una salida entregada (no Agencia) y sin liquidación sigue pendiente de liquidación aunque esté pagado", () => {
+    const state = resolve({
+      guides: [guide({ delivery_status: "entregado", custody_state: "courier" })],
+      legacy: DELIVERED_BY_HAND,
+      paymentState: "pago_completo",
+    });
+    expect(state).toMatchObject({ stage: "por_cerrar", substage: "pendiente_liquidacion" });
+  });
+
+  it("una salida anulada sin salir también cuenta como salida: queda como hoy", () => {
+    const state = resolve({
+      guides: [guide({ delivery_status: "anulado" })],
+      legacy: DELIVERED_BY_HAND,
+      paymentState: "pago_completo",
+    });
+    expect(state).toMatchObject({ stage: "por_cerrar", substage: "pendiente_liquidacion" });
+  });
+
+  it("la caja prestada de un pedido acompañante es una salida: espera la liquidación del principal", () => {
+    const state = resolve({
+      guides: [guide({ delivery_status: "entregado", custody_state: "courier", borrowed: true })],
+      legacy: DELIVERED_BY_HAND,
+      paymentState: "pago_completo",
+    });
+    expect(state).toMatchObject({ stage: "por_cerrar", substage: "pendiente_liquidacion" });
+  });
+
+  it("una parada de motorizado sin salida (cuaderno) prueba que hubo courier", () => {
+    for (const kind of DEPARTURE_EVENT_KINDS) {
+      const state = resolve({
+        order: order({ region: "Lima", province: "Lima", district: "Surco", coverage: "lima" }),
+        events: [event(kind, "2026-09-20T12:00:00.000Z")],
+        legacy: DELIVERED_BY_HAND,
+        paymentState: "pago_completo",
+      });
+      expect(state, kind).toMatchObject({ stage: "por_cerrar", substage: "pendiente_liquidacion" });
+    }
+  });
+
+  it("los demás motivos de cierre siguen frenando", () => {
+    const blocked = (events: MacroEventSnapshot[]) =>
+      resolve({ events, legacy: DELIVERED_BY_HAND, paymentState: "pago_completo" });
+
+    const refund = blocked([event("refund_requested", "2026-09-21T10:00:00.000Z")]);
+    expect(refund).toMatchObject({ stage: "por_cerrar", substage: "reembolso_pendiente", reasons: ["reembolso_pendiente"] });
+
+    const customerReturn = blocked([event("customer_return_started", "2026-09-21T10:00:00.000Z")]);
+    expect(customerReturn).toMatchObject({ stage: "por_cerrar", substage: "devolucion_cliente" });
+
+    const observed = blocked([event("liquidation_observed", "2026-09-21T10:00:00.000Z")]);
+    expect(observed).toMatchObject({ stage: "por_cerrar", substage: "liquidacion_observada" });
+
+    const reopened = blocked([
+      event("order_finalized", "2026-09-21T10:00:00.000Z"),
+      event("order_reopened", "2026-09-22T10:00:00.000Z"),
+    ]);
+    expect(reopened).toMatchObject({ stage: "por_cerrar", substage: "validacion_cierre_pendiente" });
+
+    // Resuelto el reembolso, ya no queda nada abierto.
+    const refundDone = blocked([
+      event("refund_requested", "2026-09-21T10:00:00.000Z"),
+      event("refund_completed", "2026-09-22T10:00:00.000Z"),
+    ]);
+    expect(refundDone).toMatchObject({ stage: "finalizado", substage: "entregado_cerrado" });
+  });
+
+  // Agencia no espera liquidación, así que la regla no le aplica: sin salida
+  // sigue donde estaba. Si eso también debe cerrar es otra decisión del owner.
+  it("Agencia sin salida no cambia: sigue en Validación de cierre pendiente", () => {
+    const state = resolve({
+      order: order({ shipping_mode: "agency" }),
+      legacy: { ...DELIVERED_BY_HAND, operational: "recogido" },
+      paymentState: "pago_completo",
+    });
+    expect(state).toMatchObject({ stage: "por_cerrar", substage: "validacion_cierre_pendiente" });
+  });
+
+  it("la versión sube y el MOM lo documenta", () => {
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.25");
+    const mom = readFileSync(join(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
+    expect(mom).toContain("#### Pagado a la tienda y sin courier: no espera liquidación (v1.25, 10-10-2026)");
+    expect(mom).toContain("`MOM_RESOLUTION_VERSION` sube a `mom-v1.25`");
   });
 });
 

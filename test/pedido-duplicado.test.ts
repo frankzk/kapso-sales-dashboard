@@ -184,6 +184,18 @@ describe("las piezas en el código", () => {
     expect(source).toContain("requiereConfirmacion: true");
   });
 
+  it("y la pantalla de verdad manda esa confirmación (09-10-2026)", () => {
+    // El servidor decía «vuelve a confirmar», pero el formulario nunca mandaba
+    // `confirmarDuplicado`: «Generar pedido» repetía el aviso para siempre y el
+    // cliente que pedía una unidad más (junto a #KP139668) no tenía pedido.
+    const drawer = read("components/leads-drawer.tsx");
+    expect(drawer).toContain("if (res.requiereConfirmacion && res.error) {");
+    expect(drawer).toContain("onClick={() => submit(true)}");
+    expect(drawer).toContain("Sí, crear otro pedido");
+    const body = drawer.slice(drawer.indexOf("const res = await generateOrder(leadId, {"), drawer.indexOf("if (res.requiereConfirmacion"));
+    expect(body).toContain("confirmarDuplicado,");
+  });
+
   it("YA NO bloquea por `has_order`: eso lo decide el aviso", () => {
     // El candado viejo no sabía distinguir: frenaba igual al que recompra un mes
     // después que al que registra dos veces la misma venta. Ahora lo decide

@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
   if (!shipmentIds.length) {
     const { data: candidates } = await sb
       .from("shipments")
-      .select("id,order_id,courier,delivery_status,output_number")
+      .select("id,order_id,courier,delivery_status,output_number,reported_status,returned_at")
       .in("order_id", requestedOrders)
       .eq("courier", "tanders");
     const picked = pickCombinadaOutputs(requestedOrders, (candidates ?? []) as CombinadaCandidate[], "tanders");

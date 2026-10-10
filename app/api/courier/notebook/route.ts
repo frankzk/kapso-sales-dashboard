@@ -61,6 +61,10 @@ export async function POST(req: NextRequest) {
   const { ctx } = await loadNotebookContext(target, sheet.lines, admin);
   const plan = buildNotebookPlan(sheet.lines, ctx, sheet.totals);
   const notices: string[] = [];
+  if (sheet.truncated) {
+    const last = sheet.lines[sheet.lines.length - 1]?.item;
+    notices.push(`La lectura se cortó${last != null ? ` después del ítem ${last}` : ""}: faltan las últimas filas. Revisa abajo las paradas que la hoja «no menciona» o recorta la foto y lee la otra parte.`);
+  }
   if (sheet.date && sheet.date !== target.routeDate) {
     notices.push(`La cabecera dice ${ddmm(sheet.date)}${sheet.date.slice(0, 4) !== target.routeDate.slice(0, 4) ? `/${sheet.date.slice(0, 4)}` : ""} y se cruza con la ruta del ${ddmm(target.routeDate)}: revisa que sea la hoja de ese día.`);
   }

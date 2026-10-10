@@ -309,6 +309,8 @@ export interface ShipmentRow {
   ready_by?: string | null;
   custody_transferred_at?: string | null;
   custody_transferred_by?: string | null;
+  /** Cuándo salió con su courier: prueba que una anulada fue un intento fallido. */
+  dispatched_at?: string | null;
   returned_at?: string | null;
   /** Quién dio por devuelta la guía (0118): 'aliclik_api' | '<courier>_report' |
    *  'manual'. Se sella junto a `returned_at`. */
@@ -506,6 +508,8 @@ export interface OrderMasterRow {
   district: string | null;
   /** Flujo operativo derivado de la ubicación y la cobertura COD vigente. */
   coverage?: "lima" | "provincia_cod" | "agencia" | "por_revisar" | null;
+  /** ¿Swayp puede llevarlo hoy? Misma regla que Repro Provincia (0235); null fuera de las etapas que la usan. */
+  swayp_availability?: "ok" | "sin_stock" | "sin_cobertura" | null;
   address?: string | null;
   reference?: string | null;
   latitude?: number | null;

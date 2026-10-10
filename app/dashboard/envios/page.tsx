@@ -2,8 +2,7 @@ import { Suspense } from "react";
 import { getAccessibleStores } from "@/lib/access";
 import {
   getReprogramStats,
-  getReproTodayByAgent,
-  getVoiceScore,
+  getTeamScore,
   getShipmentCounts,
   getStoreShipments,
   isShipmentView,
@@ -44,12 +43,11 @@ async function EnviosContent({
   // pool); the store/province/district filters happen client-side in the board.
   const storeIds = stores.map((s) => s.id);
   const today = limaTodayKey();
-  const [counts, shipments, reprogram, todayByAgent, voiceScore] = await Promise.all([
+  const [counts, shipments, reprogram, teamScore] = await Promise.all([
     getShipmentCounts(storeIds),
     getStoreShipments(storeIds, view),
     getReprogramStats(storeIds),
-    getReproTodayByAgent(storeIds),
-    getVoiceScore(storeIds, today, today),
+    getTeamScore(storeIds, today, today),
   ]);
 
   // El automático Aliclik → Swayp se abre desde las acciones de la cabecera
@@ -61,8 +59,7 @@ async function EnviosContent({
       reprogram={reprogram}
       counts={counts}
       shipments={shipments}
-      todayByAgent={todayByAgent}
-      voiceScore={voiceScore}
+      teamScore={teamScore}
       initialOpenId={sp.open ?? null}
     />
   );

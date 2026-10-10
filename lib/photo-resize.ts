@@ -96,3 +96,25 @@ export function decodeResize(size: { width: number; height: number } | null): { 
   if (!size || Math.max(size.width, size.height) <= PHOTO_MAX_SIDE) return {};
   return size.width >= size.height ? { resizeWidth: PHOTO_MAX_SIDE } : { resizeHeight: PHOTO_MAX_SIDE };
 }
+
+/**
+ * Lo más grande que se acepta por la subida directa a Storage (08-10-2026): la
+ * foto que el celular no pudo abrir para achicarla —una de 50 MP de la
+ * pantalla del cliente, o un HEIC— sube entera y la reduce el servidor.
+ */
+export const PHOTO_DIRECT_LIMIT = 25 * 1024 * 1024;
+
+/** El formato por la firma de los primeros bytes, sin fiarse de la extensión. */
+export function imageKind(b: Uint8Array): "jpeg" | "png" | "webp" | "gif" | "heic" | "avif" | "otro" {
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "jpeg";
+  if (b.length >= 4 && b[0] === 0x89 && ascii(b, 1, 3) === "PNG") return "png";
+  if (b.length >= 12 && ascii(b, 0, 4) === "RIFF" && ascii(b, 8, 4) === "WEBP") return "webp";
+  if (b.length >= 4 && ascii(b, 0, 4) === "GIF8") return "gif";
+  // ISO BMFF: «ftyp» en el byte 4 y la marca detrás.
+  if (b.length >= 12 && ascii(b, 4, 4) === "ftyp") {
+    const brand = ascii(b, 8, 4);
+    if (brand === "avif" || brand === "avis") return "avif";
+    if (["heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1"].includes(brand)) return "heic";
+  }
+  return "otro";
+}

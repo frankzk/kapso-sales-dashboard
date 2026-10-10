@@ -16,7 +16,9 @@
 // que llegue a todo Pisac. Por eso el botón de marcar el distrito es un segundo
 // paso explícito y no una consecuencia automática de la cotización.
 
-import { useState, useTransition } from "react";
+import { useId, useState, useTransition } from "react";
+import { cn } from "@/components/ui";
+import { Banner, FIELD, OpsButton } from "@/components/ops-ui";
 import {
   markDistrictCoveredByAliclik,
   previewAliclikGuide,
@@ -36,7 +38,8 @@ export function AliclikCoverageProbe({
   const [pending, start] = useTransition();
   const [preview, setPreview] = useState<AliclikPreview | null>(null);
   const [coordinate, setCoordinate] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const uid = useId();
 
   if (!canMark) return null;
 
@@ -54,75 +57,63 @@ export function AliclikCoverageProbe({
     start(async () => {
       const cost = preview?.couriers?.[0]?.deliveryCost ?? null;
       const result = await markDistrictCoveredByAliclik(orderId, cost ?? null);
-      setMessage(result.error ?? result.notice ?? null);
+      const text = result.error ?? result.notice ?? null;
+      setMessage(text ? { kind: result.error ? "error" : "ok", text } : null);
       if (!result.error) setPreview(null);
     });
 
   const quoted = preview?.ok ? preview.couriers?.[0] : undefined;
 
   return (
-    <div className="mt-3 space-y-2">
-      <button
-        type="button"
-        onClick={probe}
-        disabled={pending}
-        className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-      >
+    <div className="space-y-3">
+      <OpsButton onClick={probe} disabled={pending} className="pointer-coarse:h-11">
         {pending ? "Consultando a Aliclik…" : "Comprobar si Aliclik llega"}
-      </button>
+      </OpsButton>
 
       {/* Sin coordenada no hay nada que cotizar: Aliclik responde por punto. */}
       {preview?.needsCoordinate ? (
-        <label className="block">
-          <span className="text-xs text-slate-600">
-            Pega el enlace de Google Maps o la coordenada y vuelve a comprobar.
-          </span>
+        <label className="grid gap-1.5 text-[13px] font-medium text-ink-700" htmlFor={`${uid}-coord`}>
+          Pega el enlace de Google Maps o la coordenada y vuelve a comprobar.
           <input
+            id={`${uid}-coord`}
             value={coordinate}
             onChange={(event) => setCoordinate(event.target.value)}
             placeholder="-13.42, -71.85"
-            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            className={cn(FIELD, "font-normal pointer-coarse:h-11")}
           />
         </label>
       ) : null}
 
       {quoted ? (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-          <p className="font-semibold">
-            Aliclik sí llega{district ? ` a ${district}` : ""}
-            {typeof quoted.deliveryCost === "number"
-              ? ` — S/ ${quoted.deliveryCost.toFixed(2)}`
-              : ""}
-            .
-          </p>
-          <p className="mt-1 text-xs leading-5">
+        <Banner
+          tone="ok"
+          title={`Aliclik sí llega${district ? ` a ${district}` : ""}${
+            typeof quoted.deliveryCost === "number" ? ` — S/ ${quoted.deliveryCost.toFixed(2)}` : ""
+          }.`}
+        >
+          <p>
             La cotización es de esta coordenada. Marcar el distrito cambia el despacho de{" "}
-            <strong>todos</strong> sus pedidos, así que confírmalo solo si Aliclik cubre el
+            <b className="font-semibold text-ink-900">todos</b> sus pedidos, así que confírmalo solo si Aliclik cubre el
             distrito y no únicamente esta dirección.
           </p>
-          <button
-            type="button"
-            onClick={mark}
-            disabled={pending}
-            className="mt-2 rounded-lg bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-60"
-          >
+          <OpsButton size="sm" onClick={mark} disabled={pending} className="mt-3 pointer-coarse:h-11">
             Marcar {district ?? "el distrito"} como Provincia COD
-          </button>
-        </div>
+          </OpsButton>
+        </Banner>
       ) : null}
 
       {/* Que no llegue también es una respuesta útil: confirma que Agencia
           estaba bien y ahorra la duda la próxima vez. */}
       {preview && !preview.ok && !preview.needsCoordinate ? (
-        <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+        <p className="rounded-md bg-wash px-3 py-2 text-[13px] leading-5 text-ink-700">
           {preview.error ?? "Aliclik no cotizó este destino."}
         </p>
       ) : null}
 
       {message ? (
-        <p className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
-          {message}
-        </p>
+        <Banner tone={message.kind === "ok" ? "ok" : "crit"} role={message.kind === "ok" ? "status" : "alert"}>
+          <p>{message.text}</p>
+        </Banner>
       ) : null}
     </div>
   );

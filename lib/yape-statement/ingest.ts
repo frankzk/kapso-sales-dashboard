@@ -7,13 +7,16 @@
 //   2. ponerle hora a los cobros de courier que entraron sin ella;
 //   3. cruzar (lib/yape-statement/match.ts, puro y probado);
 //   4. validar cada coincidencia por el MISMO camino que una persona
-//      (lib/payment-validation.ts), con `actor` nulo y fuente `estado_yape`.
+//      (lib/payment-validation.ts), con `actor` nulo y fuente `estado_yape`, y
+//      como ella, soltar la clave de recojo si ese pago completa un pedido de
+//      agencia (lib/pickup-key-delivery.ts).
 //
 // SERVER-ONLY: escribe con la clave de servicio.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { loadCollectionAccounts } from "@/lib/collection-accounts";
 import { applyPaymentValidation } from "@/lib/payment-validation";
+import { deliverPickupKey } from "@/lib/pickup-key-delivery";
 import { backfillCourierPaidAt, type CourierTimeBackfillReport } from "@/lib/tanders/collection-time-backfill";
 import {
   matchStatement,
@@ -46,6 +49,8 @@ export interface StatementValidation {
   movimiento: string;
   hora: string;
   regla: string;
+  /** Pedido de agencia: si su clave de recojo salió al validar, o por qué no. */
+  clave?: string;
 }
 
 export interface StatementRunResult {
@@ -66,6 +71,12 @@ const MINUTE = 60_000;
 
 function limaClock(iso: string): string {
   return new Date(Date.parse(iso) - 5 * HOUR).toISOString().slice(0, 19).replace("T", " ");
+}
+
+/** De dónde salió la lectura guardada con el comprobante, si consta. */
+function visionSourceOf(vision: unknown): string | null {
+  const root = vision && typeof vision === "object" ? (vision as Record<string, unknown>) : {};
+  return typeof root.source === "string" ? root.source : null;
 }
 
 function chunks<T>(xs: T[], n: number): T[][] {
@@ -404,6 +415,27 @@ export async function ingestYapeStatement(
       continue;
     }
     await admin.from("yape_statement_matches").update({ validated: true }).eq("payment_id", row.id);
+    // LA CLAVE, COMO CUANDO VALIDA UNA PERSONA (10-10-2026). Validar el pago que
+    // completa un pedido de agencia es lo que suelta su clave de recojo; antes
+    // esto validaba y nadie se la mandaba (#KP139240). Las mismas rejas que el
+    // botón (lib/pickup-key-delivery.ts): pago completo, ventana de 24 h e
+    // interruptor de envío automático de la tienda. El comprobante que entró
+    // por WhatsApp es su mensaje: la ventana cuenta desde ahí.
+    if (Date.now() < deadline) {
+      const envio = await deliverPickupKey(admin, {
+        storeId: row.store_id,
+        orderId: row.order_id,
+        actor: null,
+        trigger: "estado_yape",
+        releasedByPaymentId: row.id,
+        extraInboundAt: visionSourceOf(row.vision) === "wa_cobranza_shalom" ? row.registered_at : null,
+      });
+      if (!envio.noKey) summary.clave = envio.sent ? "enviada" : envio.note;
+    } else {
+      // Validado, pero sin tiempo para la clave: se dice, para que no se dé
+      // por entregada. Sale desde la ficha («Enviar clave por WhatsApp»).
+      summary.clave = "Sin tiempo en esta corrida para la clave: si el pedido es de agencia, envíala desde la ficha.";
+    }
     result.validados.push(summary);
   }
 

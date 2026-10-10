@@ -25,6 +25,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { swaypGuiaDeVuelta } from "@/lib/swayp-desde-confirmacion";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { isFillableRouteOutput } from "@/lib/shipment-output";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
@@ -539,7 +540,7 @@ async function resolveExistingAliclikGuide(
 
   const { data: activeRows, error: activeError } = await admin
     .from("shipments")
-    .select("guide_code,external_order_number,delivery_status")
+    .select("guide_code,external_order_number,delivery_status,courier,swayp_state,returned_at")
     .eq("order_id", orderId)
     .not("delivery_status", "in", "(anulado,transferido)");
   if (activeError) {
@@ -553,9 +554,14 @@ async function resolveExistingAliclikGuide(
       guide_code: string;
       external_order_number: string | null;
       delivery_status: string;
+      courier: string;
+      swayp_state: number | null;
+      returned_at: string | null;
     }[]
   ).find(
     (guide) =>
+      // La Swayp en Devolución no frena: no se entrega ni se puede anular (§11.11).
+      !swaypGuiaDeVuelta(guide) &&
       guide.guide_code.toUpperCase() !== code.toUpperCase() &&
       guide.external_order_number?.toUpperCase() !== orderNumber.toUpperCase(),
   );
@@ -1201,10 +1207,13 @@ export async function createAliclikGuide(
   // La salida «por definir» NO cuenta: es ESTA caja esperando courier, y la guía
   // se va a escribir encima de ella. Contarla obligaba a anularla para poder
   // emitir la guía — y anularla arrastraba al pedido (#KP127639).
+  // Tampoco la guía Swayp en Devolución (`swaypGuiaDeVuelta`, MOM §11.11): no
+  // se va a entregar ni se puede anular, y es justo la que obliga a salir por
+  // Aliclik.
   const { data: live } = await admin
     .from("shipments")
     .select(
-      "id,guide_code,delivery_status,courier,created_via,custody_state,custody_transferred_at",
+      "id,guide_code,delivery_status,courier,created_via,custody_state,custody_transferred_at,swayp_state,returned_at",
     )
     .eq("order_id", orderId)
     .not("delivery_status", "in", "(anulado,transferido)");
@@ -1216,7 +1225,9 @@ export async function createAliclikGuide(
     created_via: string | null;
     custody_state: string | null;
     custody_transferred_at: string | null;
-  }[]).find((g) => !isFillableRouteOutput(g));
+    swayp_state: number | null;
+    returned_at: string | null;
+  }[]).find((g) => !isFillableRouteOutput(g) && !swaypGuiaDeVuelta(g));
   if (activeGuide) {
     return { error: `Este pedido ya tiene una guía activa (${activeGuide.guide_code}).` };
   }

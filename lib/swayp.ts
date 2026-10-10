@@ -651,6 +651,20 @@ export function swaypLabelSaysUndispatched(label: string | null | undefined): bo
   return /bodega no despach/i.test(normalizeLabel(label));
 }
 
+/**
+ * Novedades de Swayp que son una falla de SWAYP, no de la clienta: 18 «Falta
+ * inventario», 20 «Bodega no despachó mercancía» y 21 «Sin cobertura». Nadie
+ * fue a la puerta, así que no dicen nada de si la clienta lo quiere.
+ */
+export const SWAYP_OWN_FAILURE_NOVELTIES: ReadonlySet<number> = new Set([18, 20, 21]);
+
+/** ¿La etiqueta de una guía Swayp dice que falló Swayp y no la entrega? */
+export function swaypLabelSaysOwnFailure(label: string | null | undefined): boolean {
+  if (!label || !label.startsWith(SWAYP_LABEL_PREFIX)) return false;
+  const id = /\((\d+)\)\s*$/.exec(label)?.[1];
+  return id ? SWAYP_OWN_FAILURE_NOVELTIES.has(Number(id)) : false;
+}
+
 function isoOrNull(value: unknown): string | null {
   if (typeof value !== "string" || !value.trim()) return null;
   const ms = Date.parse(value);

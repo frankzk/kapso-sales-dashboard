@@ -20,6 +20,8 @@ import { orderTotals, type OrderTotals } from "@/lib/order-totals";
 import { productImagesFor } from "@/lib/shopify-product-images";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
+import type { AliclikOutlook } from "@/lib/aliclik-outlook";
+import { loadAliclikOutlook } from "@/lib/aliclik-outlook-access";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { courierKey } from "@/lib/dispatch";
 import { pickLatestBox, pickLatestStop, type GfBoxItem, type GfDelivery, type GfStop } from "@/lib/gf-delivery";
@@ -131,7 +133,7 @@ export class OrderMasterReadError extends Error {
 const MASTER_COLUMNS =
   "id,store_id,order_id,order_name,order_created_at,customer_name," +
   "customer_phone,region,province,district," +
-  "coverage," +
+  "coverage,swayp_availability," +
   "shipping_mode,order_total,general_status," +
   "operational_status,macro_stage,macro_substage,macro_reasons,macro_operation,macro_version,macro_since," +
   "confirmation_active,confirmation_day_count,confirmation_last_contact_at," +
@@ -501,6 +503,12 @@ export interface OrderMasterDetail {
    * `cancelledAsRecordCorrection` documenta como peligroso.
    */
   filledOutputIds: string[];
+  /**
+   * Salidas cuya caja devuelta registró una PERSONA en el almacén (evento
+   * `return_received`). El `returned_at` que sella el barrido de Tanders no
+   * cuenta: dice que Tanders la devolvió, no que alguien la recibió.
+   */
+  receivedReturnIds?: string[];
   routePlan: OrderRoutePlan;
   /**
    * Qué impide crear una salida y a cuáles de las modalidades (`routeDeskGate`).
@@ -512,6 +520,11 @@ export interface OrderMasterDetail {
   routeGate: RouteDeskGate;
   /** Foco de salud de la API de Aliclik, para el panel de crear guía. */
   aliclikHealth: AliclikHealthState;
+  /**
+   * Cuántas de cada 10 guías de Aliclik se entregan según los días que lleva
+   * el pedido (09-10-2026). Solo antes de la primera guía; null sin muestra.
+   */
+  aliclikOutlook: AliclikOutlook | null;
   tasks: OrderTaskSummary[];
   /**
    * Grupo GF Courier (MOM §29.13): por cada salida propia, la caja del
@@ -993,9 +1006,14 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     ...item,
     image_url: item.product_id ? images.get(item.product_id) ?? null : null,
   }));
-  const [swayp, aliclikHealth, grupoGfCourier, gfDeliveries, companion] = await Promise.all([
+  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
+    // Un aviso, no un dato del pedido: si falla, la ficha sale sin él.
+    loadAliclikOutlook(sb, row, guides).catch((cause) => {
+      console.error("[order-detail] loadAliclikOutlook", orderId, cause);
+      return null;
+    }),
     loadGroupGfCourierRouteCheck(sb, row),
     // Un fallo aquí no tumba la ficha, pero queda en el registro del servidor:
     // tragarlo en silencio dejaba la ficha sin repartidor y sin pista del porqué.
@@ -1012,6 +1030,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     lineItems,
     totals: orderTotals(orderRow?.raw, row.order_total),
     aliclikHealth,
+    aliclikOutlook,
     tasks,
     gfDeliveries,
     companion,
@@ -1019,6 +1038,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     departamentoElegido: shopifyDepartamentoElegido(orderRow?.raw),
     shopifyNote: shopifyOrderNote(orderRow?.raw),
     filledOutputIds: [...filledShipmentIds(events)],
+    receivedReturnIds: [...new Set(events.filter((e) => e.kind === "return_received" && e.shipment_id).map((e) => e.shipment_id as string))],
     // MISMA pregunta que hace `createManualRouteOutput` antes de dejar crear la
     // salida, y por eso el mismo ayudante: el estado del pedido no distingue
     // «lo canceló el courier» de «lo cancelamos nosotros», la etiqueta sí.
@@ -1138,6 +1158,7 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
   if (f.provinces.size) q = q.in("province", [...f.provinces]);
   if (f.districts.size) q = q.in("district", [...f.districts]);
   if (f.coverages.size) q = q.in("coverage", [...f.coverages]);
+  if (f.swaypAvailability.size) q = q.in("swayp_availability", [...f.swaypAvailability]);
   if (f.pickupStates.size) q = q.in("pickup_state", [...f.pickupStates]);
 
   // Días con gestión. La columna es un entero y el filtro viaja por la URL como

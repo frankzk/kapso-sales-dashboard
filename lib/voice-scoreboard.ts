@@ -17,6 +17,8 @@ import {
 
 export interface VoiceScoreCall {
   telephony: string | null;
+  /** El pedido llamado: dos llamadas al mismo pedido son un pedido. */
+  order_id?: string | null;
   provider: string | null;
   /** Lo marca `identificar_llamada`: el agente creyó oír a una persona. */
   started_at: string | null;
@@ -37,6 +39,8 @@ export interface VoiceScoreRow {
   agent: string;
   name: string;
   llamadas: number;
+  /** Pedidos distintos llamados. */
+  pedidos: number;
   atendidas: number;
   /** Atendió y terminó sin que el agente registrara la gestión. */
   sinGestion: number;
@@ -89,6 +93,7 @@ export function aggregateVoiceScore(calls: readonly VoiceScoreCall[]): VoiceScor
         agent,
         name,
         llamadas: 0,
+        pedidos: 0,
         atendidas: 0,
         sinGestion: 0,
         confirma: 0,
@@ -100,9 +105,11 @@ export function aggregateVoiceScore(calls: readonly VoiceScoreCall[]): VoiceScor
       },
     ]),
   );
+  const pedidos = new Map<string, Set<string>>(ORDER.map(([agent]) => [agent, new Set<string>()]));
   for (const c of calls) {
     const r = rows.get(voiceAgentOfCall(c))!;
     r.llamadas += 1;
+    if (c.order_id) pedidos.get(r.agent)!.add(c.order_id);
     if (voiceCallAnswered(c)) {
       r.atendidas += 1;
       if (!GESTION.has(c.outcome ?? "")) r.sinGestion += 1;
@@ -116,7 +123,7 @@ export function aggregateVoiceScore(calls: readonly VoiceScoreCall[]): VoiceScor
       r.conCosto += 1;
     }
   }
-  return [...rows.values()];
+  return [...rows.values()].map((r) => ({ ...r, pedidos: pedidos.get(r.agent)!.size }));
 }
 
 /** Confirma sobre atendidas, o null sin atendidas. */

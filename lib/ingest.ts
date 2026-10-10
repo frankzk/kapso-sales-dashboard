@@ -60,6 +60,7 @@ import {
 } from "@/lib/leads-ingest";
 import { runCartSequence } from "@/lib/cart-sequence";
 import { autoTrialDeps, processAutoOrderTrials } from "@/lib/auto-order-trials";
+import { abDeps, enrollAbCohorts } from "@/lib/auto-order-ab";
 import { runReturnRecovery } from "@/lib/return-recovery";
 import { runDeliveredThanks } from "@/lib/delivered-thanks";
 import { enrichLeadLocationsFromShopify } from "@/lib/lead-shopify-location";
@@ -507,6 +508,24 @@ export async function recordSyncError(
     { store_id: storeId, source, last_run_at: new Date().toISOString(), status: "error", error: message },
     { onConflict: "store_id,source" },
   );
+}
+
+const AB_SYNC_SOURCE = "auto_ab";
+const AB_ENROLL_EVERY_MIN = 20;
+
+/**
+ * ¿Toca inscribir en la prueba A/B? Una vez cada AB_ENROLL_EVERY_MIN por tienda.
+ * Un error al fallar también cuenta como pasada: si la consulta revienta, no se
+ * reintenta cada 5 minutos contra una base que quizá ya va cargada.
+ */
+async function abEnrollDue(admin: SupabaseClient, storeId: string): Promise<boolean> {
+  const { data } = await admin
+    .from("sync_state")
+    .select("last_run_at")
+    .match({ store_id: storeId, source: AB_SYNC_SOURCE })
+    .maybeSingle();
+  const last = Date.parse((data as { last_run_at?: string | null } | null)?.last_run_at ?? "");
+  return !Number.isFinite(last) || Date.now() - last >= AB_ENROLL_EVERY_MIN * 60_000;
 }
 
 /** Una pasada terminó bien: avanza el cursor hasta donde llegó y limpia el error. */
@@ -960,6 +979,7 @@ export interface SyncReport {
   requeued: number; // carritos reencolados con atención (olas, máx 2 por lead)
   cartsClosedByOrder: number; // carritos que salieron de la cola porque ya son pedido
   autoOrdersGenerated: number; // pedidos de la prueba de recompra automática (0214)
+  abEnrolled: number; // carritos inscritos en la prueba A/B de recompra (0238), las dos mitades
   orderMaster: number; // filas del Master reconciliadas en esta corrida
   /** Leads sin ubicación buscados en Shopify por celular, y cuántos tenían
    *  dirección (0228). Es la medida de si esta pista sirve. */
@@ -1044,6 +1064,7 @@ export async function runStoreSync(
     requeued: 0,
     cartsClosedByOrder: 0,
     autoOrdersGenerated: 0,
+    abEnrolled: 0,
     orderMaster: 0,
     shopifyLocations: { checked: 0, found: 0 },
     errors: [],
@@ -1206,6 +1227,21 @@ export async function runStoreSync(
   //     pendientes es una sola lectura. Va después de 1c para que un carrito
   //     que ya es pedido salga de la cola antes y la prueba lo omita.
   if (creds.shopify_token) {
+    // 1d-0) Prueba A/B (0238): inscribe carritos nuevos y los sortea entre
+    //     `auto` (el generador de abajo los convierte en pedido en esta misma
+    //     corrida) y `control` (se quedan en la cola). La consulta de candidatos
+    //     recorre los pedidos por teléfono, así que corre cada AB_ENROLL_EVERY_MIN
+    //     y no en cada pasada de 5 minutos; sin cohorte encendida no lee nada más.
+    try {
+      if (await abEnrollDue(admin, storeId)) {
+        const ab = await enrollAbCohorts(storeId, abDeps(admin, storeId));
+        report.abEnrolled = ab.enrolledAuto + ab.enrolledControl;
+        await recordSyncOk(admin, storeId, AB_SYNC_SOURCE, null);
+      }
+    } catch (e: any) {
+      report.errors.push(`ab_recompra: ${e.message}`);
+      await recordSyncError(admin, storeId, AB_SYNC_SOURCE, e.message);
+    }
     try {
       const trials = await processAutoOrderTrials(
         autoTrialDeps(admin, storeId, { domain: creds.shopify_domain, token: creds.shopify_token }),

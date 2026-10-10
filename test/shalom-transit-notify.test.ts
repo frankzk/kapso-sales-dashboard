@@ -791,6 +791,63 @@ describe("a quién NO se le manda el aviso de cobro", () => {
   it("sin total conocido no decide aquí: la plantilla ya se niega sola", () => {
     expect(noticeSkipReason({ generalStatus: "en_proceso", orderTotal: null, validatedAmount: 0 })).toBeNull();
   });
+
+  // #KP138120 (04-10-2026): pagado en el checkout y sin comprobantes, el aviso
+  // le dijo «Total 134.10 · Pagado 0.00 · Saldo 134.10». Trece pedidos web así
+  // entre el 17-09 y el 09-10.
+  it("a quien pagó en el checkout, aunque no tenga ningún comprobante", () => {
+    expect(
+      noticeSkipReason({ generalStatus: "en_proceso", orderTotal: 134.1, validatedAmount: 0, webPrepaid: true }),
+    ).toBe("pagado en el checkout: no hay saldo que cobrar");
+  });
+
+  it("el pedido pagado en el checkout se cierra como skipped y no se manda", async () => {
+    const admin = fakeAdmin({
+      order: {
+        name: "#KP138120",
+        total_amount: 134.1,
+        customer_phone: "51982748959",
+        line_items: [],
+        financial_status: "paid",
+        total_refunded: "0.00",
+        payment_gateway: "checkout",
+      },
+      payments: [],
+    });
+    const send = vi.fn();
+    const report = await processTransitNotifications(admin, {
+      nowIso: NOW,
+      sendTemplate: send,
+      loadCreds: async () => CREDS,
+    });
+    expect(report).toMatchObject({ sent: 0, skipped: 1 });
+    expect(send).not.toHaveBeenCalled();
+    expect(admin.updates.at(-1)).toMatchObject({
+      table: "shalom_transit_notifications",
+      patch: { status: "skipped", error: "pagado en el checkout: no hay saldo que cobrar" },
+    });
+  });
+
+  it("marcado pagado a mano en Shopify sigue cobrándose con el aviso", async () => {
+    const admin = fakeAdmin({
+      order: {
+        name: "#KP133540",
+        total_amount: 89.1,
+        customer_phone: "51929098849",
+        line_items: [{ title: "Zapatilla Runner", variant_title: "39-40", quantity: 1 }],
+        financial_status: "paid",
+        total_refunded: "0.00",
+        payment_gateway: "manual",
+      },
+    });
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.T" });
+    const report = await processTransitNotifications(admin, {
+      nowIso: NOW,
+      sendTemplate: send,
+      loadCreds: async () => CREDS,
+    });
+    expect(report).toMatchObject({ sent: 1, skipped: 0 });
+  });
 });
 
 describe("el tope de avisos por tienda (0194)", () => {

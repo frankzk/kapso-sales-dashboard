@@ -782,7 +782,9 @@ logística, financiera, de devolución, inventario o reclamo.
 
 Motivos simultáneos posibles:
 
-- `pendiente_liquidacion`.
+- `pendiente_liquidacion` — entregado fuera de Agencia y sin `liquidation_closed`.
+  **No se abre** si el pedido se pagó completo directo a la tienda y ningún
+  courier lo llevó (v1.25, ver abajo).
 - `liquidacion_observada`.
 - `salida_adicional_activa`.
 - `devolucion_fisica_pendiente`.
@@ -811,6 +813,66 @@ Motivos simultáneos posibles:
 Un pedido puede tener varios motivos de cierre abiertos. La macroetapa no cambia
 a Finalizado hasta que todos estén resueltos.
 
+#### Pagado a la tienda y sin courier: no espera liquidación (v1.25, 10-10-2026)
+
+Decisión del owner. **Un pedido pagado completo directo a la tienda, sin courier
+que cobre, no espera liquidación.** La liquidación existe para dos cosas: que el
+courier o el motorizado rinda el dinero que cobró en la puerta, y descontarle su
+costo de envío (§14). Si la clienta le pagó a la tienda y nadie llevó el
+paquete, no hay ni dinero en manos de nadie ni flete que netear: no hay nada que
+liquidar, y exigir la firma de una liquidación es esperar algo que no va a
+llegar.
+
+**Qué pasaba.** El motivo `pendiente_liquidacion` se abría sobre todo pedido
+entregado fuera de Agencia sin el evento `liquidation_closed`, hubiera o no
+courier. Medido en producción el 09-10-2026: **28 pedidos y S/ 4.838,70**
+(Kenku 22 / S/ 3.997,50; Aurela 6 / S/ 841,20) estaban para siempre en «Por
+cerrar · Pendiente de liquidación». Todos eran provincia COD, **sin ninguna
+fila en `shipments`**, con el pago completo (Yape validado o la pasarela del
+checkout) y marcados «entregado» a mano por el owner (cambio manual con
+candado). Nadie iba a escribir su `liquidation_closed`, y tampoco a mano: el
+cierre de liquidación del drawer exige un costo logístico, que sin salida no
+existe. «Finalizar» tampoco servía, porque `pendiente_liquidacion` lo bloquea.
+
+**La regla** (`pagadoDirectoSinCourier`, lib/order-macro-stage.ts). Un pedido
+fuera de Agencia en estado general `entregado` no abre `pendiente_liquidacion`
+—y, sin otro motivo abierto, pasa a **Finalizado · Entregado y cerrado**
+(`entregado_cerrado`)— cuando se cumplen las tres:
+
+1. **Ninguna salida**: ni propia ni prestada (pedido acompañante, §32). Con una,
+   aunque se anulara sin salir, el pedido sigue esperando su liquidación como
+   hasta ahora.
+2. **Ninguna parada de motorizado**: ningún «Lo llevo», reporte en la puerta,
+   vuelta a oficina ni entrega sin recojo confirmado (los hechos de «salió a
+   reparto», `DEPARTURE_EVENT_KINDS`). Las paradas del cuaderno pueden existir
+   sin salida, y con ellas hubo un courier que pudo cobrar.
+3. **Pago completo validado y sin reembolso**: `pago_completo` —comprobantes
+   validados que cubren el total, o la pasarela confirmada del checkout— y
+   `total_refunded` en cero. El `paid` de Shopify sin comprobante **no basta**:
+   vale como rastro de cobro en el mostrador de Agencia (arriba), pero aquí
+   cerraría un pedido con un cobro que nadie validó en Kapta. Los comprobantes
+   de cobro del courier (`cobro_courier`) solo existen con una salida, así que
+   la condición 1 ya los deja fuera.
+
+**Lo que no cambia.** Los demás motivos siguen frenando igual: un reembolso
+pendiente, una devolución del cliente, una liquidación observada, una
+reapertura (§6.6). Un pedido con salida —entregada, en curso o anulada— sigue
+exactamente como antes: espera su `liquidation_closed`. Fuera de Agencia la
+regla no distingue canal: un pedido de Lima entregado a mano y pagado a la
+tienda, sin salida ni motorizado, cierra igual. No se inventa subetapa: es la
+misma `entregado_cerrado` de una entrega liquidada.
+
+**Agencia queda fuera, y es una decisión pendiente.** Agencia no espera
+liquidación, así que esta regla no le aplica. Pero un pedido de Agencia
+entregado **sin ninguna salida** se queda en «Por cerrar · Validación de cierre
+pendiente» aunque esté pagado completo: el resolver exige una salida entregada
+para cerrar un `entregado` (el motivo de respaldo de `closingReasons`), y ese
+motivo vuelve aunque alguien lo finalice a mano. Si debe cerrar como «Recogido y
+cerrado» lo decide el owner; no se cambia aquí.
+
+`MOM_RESOLUTION_VERSION` sube a `mom-v1.25` para que el cron recalcule el
+histórico; los 28 pedidos salen solos de Por cerrar sin tocar sus datos.
+
 ### 6.6 Finalizado
 
 No quedan tareas comerciales, logísticas, financieras, de devolución,
@@ -819,6 +881,9 @@ inventario, indemnización ni reembolso.
 Resultados finales visibles:
 
 - Entregado y liquidado.
+- Entregado y pagado a la tienda, sin courier que liquidar (v1.25, §6.5). Usa
+  la misma subetapa que el anterior, `entregado_cerrado` («Entregado y
+  cerrado»).
 - Recogido y pagado completamente.
 - Anulado sin paquetes pendientes.
 - Devuelto y conciliado.
@@ -863,6 +928,8 @@ Ejemplos:
 | Aliclik retornando y Swayp repartiendo | En curso | En reparto |
 | Una salida entregó y otra sigue activa | Por cerrar | Salida adicional activa |
 | Entregado, courier aún no liquidó | Por cerrar | Pendiente de liquidación |
+| Entregado (no Agencia) sin ninguna salida ni motorizado, pagado completo a la tienda (v1.25, §6.5) | Finalizado | Entregado y cerrado |
+| Entregado (no Agencia) sin ninguna salida, sin pago completo validado | Por cerrar | Pendiente de liquidación |
 | Shopify anulado, paquete aún con courier | Por cerrar | Devolución física pendiente |
 | Shopify anulado, nunca se despachó | Finalizado | Anulado cerrado |
 | Pedido acompañante con la caja del principal aún en la empresa (§32) | Preparación | Viaja en la caja de otro pedido |
@@ -1095,6 +1162,28 @@ no se crea la guía. Esta excepción tampoco levanta el veto de dos rechazos del
 §8.2. Cotizar o vincular una guía que ya existe siguen siendo operaciones
 distintas; la regla impide emitir una nueva. Lima y los demás couriers conservan
 sus reglas. Las resoluciones quedan en `order_events`, sin borrar historial.
+
+### 8.4 Entrega estimada de Aliclik según los días del pedido (09-10-2026)
+
+Pedido por el owner: antes de crear la primera guía Aliclik, la ficha dice
+cuántas de cada 10 guías parecidas entregó Aliclik según los días de
+calendario (Lima) que lleva el pedido: hoy, 1, 2, o 3 días o más. Al 09-10-2026,
+en Kenku: 61 %, 55 %, 40 % y 27 %; en Aurela: 70 %, 69 %, 50 % y 42 %.
+
+- **Es un aviso, no una regla.** No bloquea la creación, no cambia la ruta
+  sugerida ni pide permiso. Va en la tarjeta de Aliclik de la mesa de ruta y,
+  si la entrega es baja (menos de 50 %), en «Crear guía en Aliclik». Bajo 35 %
+  aconseja crearla solo si el cliente contesta ese día y vuelve a confirmar, o
+  con adelanto.
+- **Se mide por guía, no por pedido.** Cuenta la primera guía de cada pedido
+  creada por la API, que salió del almacén y ya tiene resultado (entregada, o
+  cerrada o transferida sin entrega), creada entre 70 y 14 días atrás
+  (`aliclik_delivery_by_order_age()`, migración 0236). Medir el pedido por su
+  `dispatched_at` exageraba la caída: esa fecha se mueve cuando un envío falla
+  y se reprograma, así que los que fallan parecían más viejos.
+- **Por tienda.** Un tramo con menos de 30 guías con resultado usa las de todas
+  las tiendas que el usuario ve, y la ficha lo dice. Sin muestra, no se muestra
+  un número. Un reenvío no lleva el aviso: las cifras son de primeras guías.
 
 ## 9. Lima
 
@@ -1391,6 +1480,24 @@ Fénix. `Thunder` y `Tander` en la entrevista se normalizan como **Tanders**.
 Estas prioridades son parámetros operativos, no reglas rígidas: el sistema debe
 mostrar la razón de la sugerencia y permitir que Daysi elija otra ruta válida.
 
+**Axel Courier y Urpi ya no se sugieren (09-10-2026, decisión del owner).** Las
+reglas 2, 4 y 5 describen la operación de antes de Grupo GF Courier. En Lima,
+en los 60 días previos, Grupo GF hizo 1.864 salidas, Tanders 881, Swayp 138,
+Axel 1 y Urpi 0. La única de Axel fue la S02 de #KP139675, creada por la regla 2
+(«quiere a partir de las 4») cuando el pedido debía salir con Grupo GF. Desde
+entonces:
+
+- La mesa de ruta sugiere Grupo GF Courier si es elegible y está dentro de su
+  corte; si no, Tanders. Nunca sugiere Axel ni Urpi, tampoco como último
+  recurso.
+- Axel y Urpi siguen disponibles, plegados al pie de la mesa en «Otros
+  couriers». Esa franja se abre sola si alguno tiene una salida viva.
+- Cuando Grupo GF no puede tomar un pedido porque otro courier tiene una salida
+  viva, la negativa nombra la salida, el courier y dónde está («KP139675-S02 es
+  de Axel Courier y sigue en almacén · KP139675-S01 está en ruta con Swayp») y
+  dice qué hacer: anular la que sigue en almacén o registrar antes el resultado
+  de la que está en ruta.
+
 ### 9.3 Resultado fallido y nueva salida
 
 - Se revisa primero por qué no fue entregado: horario, ausencia, falta de
@@ -1400,6 +1507,17 @@ mostrar la razón de la sugerencia y permitir que Daysi elija otra ruta válida.
 - Si cambia el producto, courier o día de salida, se crea una salida nueva con
   QR nuevo. Almacén reimprime, arma otra caja y la coloca en la agrupación del
   nuevo courier.
+- **En Lima, cuando otro courier no entregó y su caja vuelve (09-10-2026,
+  decisión del owner).** Lo que se reimprime es **el rótulo de la salida nueva**, no el del
+  courier que no entregó: después de la llamada, «Imprimir rótulo de la salida
+  nueva» en el pedido —o «Descargar rótulos» en el Master— crea la salida
+  «por definir» con su QR (§28) y ese rótulo se pega **encima** del anterior,
+  tapando su QR. La caja física puede ser la misma; su identidad es la de la
+  salida nueva (§29.4). El rótulo del courier anterior queda solo para registrar
+  la devolución (§9.4): si es de Tanders y nadie la recibió, se escanea en
+  Devoluciones antes de taparlo. Pasó con #AUR177756: se reimprimió el rótulo de Tanders
+  (S01), la caja se armó con él, Grupo GF creó al tomarla una S02 cuyo rótulo
+  nadie imprimió, y en «Verificar caja» el QR de la caja no cuadraba.
 - Excepción de Grupo GF: si no cambia el producto ni el courier, su propia
   salida vuelve a salir otro día con el mismo envío, QR y rótulo —recibida en
   oficina (§29.5, v1.15) o, sin solicitud de Grupo GF, desde «Desde la lista»
@@ -2897,6 +3015,49 @@ en Lima, el 66 % en Provincia COD y el 65 % en Agencia; Aurela, ~60 %. Con 30
 pedidos el margen es de unos ±18 puntos: alcanza para ver si se entrega «casi
 igual» o «claramente peor», no diferencias finas.
 
+A la semana (09-10-2026): 7 entregados, 8 anulados, 13 en curso y 2 sin
+confirmar. Anulación del 27 %, contra ~19 % de la recompra normal; tres de las
+ocho anulaciones fueron «ya lo tiene / ya lo compró», todas de clientes que
+habían recibido o pedido ese producto antes. Por eso la prueba siguiente
+excluye el carrito del mismo producto que la última entrega.
+
+**Prueba A/B: pedido sin llamada contra la cola (`ab-recompra-prov-1`,
+09-10-2026).** La primera prueba compara contra una tasa histórica, y eso no
+dice si generar el pedido **vende más** que dejar el carrito en la cola: un
+pedido por carrito da más pedidos, pero algunos se anulan; la llamada cierra
+menos, pero entrega mejor. Aquí cada carrito que cumple la regla se sortea al
+llegar:
+
+- **auto** → se genera el pedido, con el mismo generador de la primera prueba.
+- **control** → no se toca: queda en la cola y la asesora lo trabaja como
+  siempre.
+
+La moneda es el hash del carrito, así que el mismo carrito cae siempre en la
+misma mitad aunque el cron lo vea dos veces. Se mide **pedidos entregados por
+carrito** en cada mitad (`auto_order_ab_results`). En `control` cuenta el
+primer pedido del mismo teléfono en los 14 días siguientes al carrito, lo haya
+cerrado la asesora, el bot o el cliente solo.
+
+Quién entra (`auto_order_ab_candidates`, la regla entera en un solo sitio):
+
+- Lead `nuevo`, sin gestión; carrito abierto con entre 3 y 48 horas, total
+  mayor que cero y dirección despachable.
+- Último pedido del teléfono **entregado** y de 7 o más días antes del
+  carrito; cobertura **Provincia COD**.
+- El cliente no escribió después del carrito y no tiene pedido vivo posterior.
+- Algún producto **distinto** de los de su última entrega.
+
+Las tres horas de espera dejan fuera a quien abandona el formulario y compra
+solo enseguida: en los 14 días previos, la mitad de estos carritos terminó en
+pedido dentro de la hora. Con la regla quedan unos 14 carritos por semana entre
+las dos mitades, así que la prueba dura **tres semanas** para llegar a ~20 por
+mitad. 41 de 59 de esos carritos no recibieron ninguna llamada.
+
+Se enciende y se apaga en `auto_order_cohorts` (interruptor, ventana con
+inicio y fin obligatorios, tope diario por tienda). Sin ventana no inscribe:
+una cohorte sin fin sería una automatización completa que nadie decidió. El
+cron inscribe como mucho cada 20 minutos por tienda.
+
 **Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
 que la cola tiene que recortar: quedan fuera **Shalom, Olva, Tanders, Urpi y el
 reparto propio**. Shalom y Olva son agencia —la clienta recoge en el terminal,
@@ -3855,6 +4016,30 @@ cajón, la columna de la cola y los mensajes del servidor muestran `MAX_INTENTOS
 aplican la transición y la ventana de reprogramación. El mínimo del motivo de
 descarte sale igual de `DISCARD_REASON_MIN`.
 
+#### 11.6.1 Swayp despacha de lunes a sábado (10-10-2026)
+
+Toda **fecha de despacho de una guía Swayp** es de lunes a sábado: Swayp no
+reparte los domingos (§11, «Horarios Swayp documentados»). Decisión del owner,
+10-10-2026, después de ver el selector de la guía directa ofreciendo domingos.
+
+- **En la pantalla**, el `<input type="date">` nativo no permite apagar un día de
+  la semana, así que las cuatro puertas que fijan esa fecha usan una lista de
+  días (`SwaypDispatchDateSelect`, `lib/swayp-dispatch-days.ts`) que empieza
+  mañana y salta los domingos: la **Guía Swayp directa** (también la que sale
+  desde Por confirmar, §11.11), que propone el primer día válido; **Cliente
+  confirma** por Swayp; la **guía Swayp a mano** y la **nueva fecha de la
+  excepción** de una guía anulada. «Cliente confirma» por Aliclik y «Programar
+  llamada» siguen con el calendario: no son despachos Swayp.
+- **En el servidor**, la misma regla (`isSwaypDispatchDay`) en
+  `createDirectFenixGuide`, `createFenixGuide`, `registerRerouteCall` con
+  «confirma» por Swayp y `reenviarGuiaAnulada` (que usan también el reenvío por
+  voz y la excepción), con el mismo texto: «Swayp no despacha los domingos: elige
+  una fecha de lunes a sábado». Como en §11.6, la regla pertenece a la función
+  que emite, no a la pantalla.
+- El agente de voz ya no ofrecía domingos (§11.8) y el automático Aliclik →
+  Swayp ya los saltaba (`nextAutoDelivery`, que además salta el sábado en
+  Arequipa).
+
 ### 11.7 El motivo anterior se ve antes de llamar, y su ausencia también
 
 §11 manda revisar cómo terminó el intento anterior antes de reenviar: «si el
@@ -4210,6 +4395,11 @@ Reglas de esa tabla:
   «Reintento automático Aliclik → Swayp» también lo escribe, y el 03-10 le dio
   al Agente Daaph 21 gestiones y 6 reprogramadas con 10 llamadas y ningún
   «confirma».
+
+  **Desde el 10-10-2026 la tabla es «Gestión por persona»** (ver más abajo
+  en esta sección). Ahí el agente ya no se cuenta por estas filas sino por
+  sus llamadas. Las filas siguen escribiéndose para el
+  historial de la guía.
 - **Agente Daaph contra Agente Telnyx** (03-10-2026). Es el mismo agente de
   xAI con el mismo guion y la misma voz. Cambia solo la línea: Daaph llama por
   Zadarma (callback) y Telnyx por Telnyx Call Control. Así se mide qué línea
@@ -4294,9 +4484,9 @@ Reglas de esa tabla:
     por Zadarma. La prueba manual elige la línea: «Probar en mi teléfono»
     del Master tiene «Llamarme» (Zadarma) y «Por Telnyx», y
     `/api/internal/voice/test-call` acepta `telefonia`.
-  - **«Hoy por asesora».** Las notas de una llamada por Telnyx firman
-    «Agente de voz (Telnyx)» y cuentan en la fila **«Agente Telnyx»**; las de
-    Zadarma, en «Agente Daaph». Las dos filas van al final de la tabla.
+  - **Firma por línea.** Las notas de una llamada por Telnyx firman
+    «Agente de voz (Telnyx)», y las de Zadarma, «Agente de voz». Así el
+    historial de la guía dice qué agente llamó.
   - **Agente ElevenLabs** (03-10-2026). Usa la misma línea Telnyx, pero con
     otro motor: el agente de ElevenLabs («Agente ElevenLabs · Kenku
     Reproprovincia»), con el mismo guion y las mismas herramientas de Kapta.
@@ -4460,14 +4650,56 @@ Reglas de esa tabla:
     - **Pestaña oculta:** con la pestaña del navegador oculta no se consulta.
     - **Tiempo de la llamada:** el reloj de la nota corre solo, sin repintar
       la tabla.
-  - **«Agentes de voz: comparación»** (Envíos, en el resumen de arriba, junto
-    a «Hoy por asesora»). Muestra una fila por agente, siempre los tres, con
-    llamadas **reales** (`mode = 'real'`) del rango elegido, con los mismos
-    chips que el popup de reprogramaciones: Hoy, Ayer, Últimos 7 días, Este
-    mes o un Rango a mano (días de Lima, ambos incluidos, hasta 366). Hoy llega
-    con la página; los otros rangos se piden al elegirlos. El agente sale de la
-    llamada: Zadarma es Daaph; Telnyx con
+  - **«Gestión por persona»** (Envíos, en el resumen plegable, 10-10-2026).
+    Asesoras y agentes de voz van en **una sola tabla**. Antes eran dos,
+    «Hoy por asesora» y «Agentes de voz: comparación», y no cuadraban a la
+    vista:
+    - arriba, «Guías» (24) eran las guías distintas tocadas; abajo, «Guías
+      Swayp» (1) eran las salidas creadas;
+    - la salida Swayp de un agente le sumaba tres gestiones: su llamada y las
+      dos filas `reroute`.
+
+    Rango con los mismos chips que el popup de reprogramaciones: Hoy, Ayer,
+    Últimos 7 días, Este mes o un Rango a mano (días de Lima, ambos incluidos,
+    hasta 366). Hoy llega con la página; los otros rangos se piden al
+    elegirlos.
+
+    **Filas.** Primero las asesoras, por gestiones, y después los tres
+    agentes, siempre, aunque estén en cero, con la marca IA. Cada fila sale
+    de **una sola fuente**:
+    - **asesora:** sus gestiones en `shipment_calls`;
+    - **agente:** sus llamadas **reales** (`mode = 'real'`) en `voice_calls`,
+      fechadas por `queued_at`. Una llamada es una gestión. Las filas sin
+      actor del agente en `shipment_calls` no se cuentan aquí.
+
+    El agente sale de la llamada: Zadarma es Daaph; Telnyx con
     `provider = 'grok'` es Telnyx y con `elevenlabs` es ElevenLabs.
+
+    **Columnas para todos:**
+    - **Gestiones:** llamadas y reprogramaciones registradas; en un agente,
+      cada llamada.
+    - **Pedidos:** pedidos distintos. Se cuenta el pedido de la guía, no la
+      guía, porque una reprogramación toca dos guías del mismo pedido.
+    - **Reprogramadas:** salieron a En ruta. En la asesora es el `new_status`
+      de su gestión. En el agente es la salida Swayp que creó
+      (`outcome_payload.salida_swayp.ok`).
+    - **Llegaron** (10-10-2026): de las guías que esa persona sacó a En ruta
+      en el rango, cuántas figuran entregadas hoy, como «2 de 6». Es la
+      entrega real de lo reprogramado. Las recientes pueden seguir en
+      camino. Sale de las filas `en_ruta` de `shipment_calls`, también en
+      los agentes: su salida Swayp deja esa fila en la guía nueva. Ese día,
+      desde el inicio del piloto, iba así:
+      - Telnyx: 2 de 6.
+      - ElevenLabs: 2 de 4.
+      - Daaph: 0 de 19. Casi todas eran de fines de setiembre y seguían con
+        novedad («no contesta», «ya no desea»).
+    - **Anuladas y Entregas registradas:** solo asesoras. El agente no
+      anula: su «cancela» va en su propia columna. «Entregas registradas»
+      cuenta las gestiones en que la asesora cerró la guía como entregada con
+      el resultado del courier. Antes se llamaba «Entregadas», y en los
+      agentes salía vacía aunque sus guías sí se entregaban.
+
+    **Columnas «Llamadas del agente»** (vacías en las asesoras):
     - **Atendidas:** `started_at` presente —`identificar_llamada` corrió, el
       agente creyó oír a una persona— **salvo que el propio agente registrara
       después «no contestó»**: eso es un buzón. El «no contestó» que escribe el
@@ -4476,15 +4708,16 @@ Reglas de esa tabla:
       atendidas y 10 sin gestión sobre 4 buzones y 6 cortes).
     - **Sin gestión:** atendidas cuyo resultado no es `confirma`, `programar`
       ni `cancela`.
-    - **Guías Swayp:** `outcome_payload.salida_swayp.ok`.
-    - **Conversión:** confirma sobre atendidas.
-    - **Llamadas por confirma:** llamadas sobre confirma, como aproximación
-      del costo.
-
+    - **Volver a llamar** (`programar`) y **Cancela**.
+    - **Conversión:** reprogramadas por llamada sobre atendidas. En el total
+      suman solo las de los agentes: el 10-10 decía 35 % porque sumaba las
+      reprogramadas de las asesoras.
     - **Costo línea (US$):** lo que Telnyx avisa que cobró, la suma de los dos
       tramos. No incluye el minuto de xAI ni el de ElevenLabs.
-    - **Costo por confirma:** solo cuando todas las llamadas del rango traen
-      costo. Si hay llamadas sin costo, la columna muestra «n de m».
+    - **Costo por reprogramada:** solo cuando todas las llamadas de la fila
+      traen costo. Si hay llamadas sin costo, «Costo línea» muestra «n de m».
+
+    La fila **Total** suma todas las filas, asesoras y agentes.
 
     Daaph sale con guion porque Zadarma no avisa el costo por llamada, y la
     duración que guarda `voice_calls` no es la facturada cuando la cierra el
@@ -4692,6 +4925,16 @@ como «otra guía activa» la propia salida «por definir» y ninguna guía dire
 podía crear (#KP138264, #KP138197 y #KP138302, esta con la salida de Grupo GF
 todavía pendiente). La 0219 lo limita al automático.
 
+**La emisión se enlaza con su guía también al rellenar (0239, 10-10-2026).**
+`swayp_link_emission` (0209) escribía el `child_id` de la emisión solo al
+**insertar** la guía. La Guía Swayp directa rellena la salida «por definir» del
+pedido con un **update** (`lib/route-output-fill.ts`), y esas emisiones quedaban
+sin hija: 32 entre el 02 y el 10-10-2026. La reserva lee una emisión sin hija
+como emisión incierta, así que bloqueaba cualquier otra emisión Swayp del pedido
+y seguía restando su stock. La 0239 agrega el mismo enlace en update —cuando la
+fila pasa a ser guía Swayp con número— y enlaza las sueltas por tienda, pedido y
+número (cada una casaba con una sola guía).
+
 En **Repro Provincia → Ver automático Aliclik → Swayp** se muestran el estado,
 las ejecuciones, las guías emitidas y el último motivo por pedido. Un administrador
 puede pausar o activar la regla y ejecutar una pasada. Las escrituras quedan
@@ -4761,6 +5004,103 @@ La pantalla agrega guías, entregas, devoluciones, anulaciones y pendientes por
 vía. Costo por entrega recuperada = suma de fletes cotizados y devoluciones
 registradas de la vía / entregas logradas, incluyendo envíos fallidos. Si falta
 un costo o aún no hay entregas, indica pendiente; nunca lo presenta como cero.
+
+**El resultado se lee del estado de Swayp (0237, 09-10-2026).** La vista
+`swayp_auto_metrics` contaba como devuelta solo una guía `devuelto` en Kapta, y
+Swayp nunca llega ahí: su Devolución (8) queda `en_ruta` y la confirmada (9, 12),
+`anulado`. La pantalla decía «1 entregada · 0 devueltas · 25 pendientes» con 18
+guías en Devolución. Ahora: entregada es `entregado` o Swayp 7; devuelta, Swayp
+8, 9 o 12, la caja de vuelta o `devuelto`; anulada, el resto de las anuladas;
+pendiente, lo demás. Los retornos de Swayp no traen costo registrado, así que el
+costo por entrega queda «pendiente» hasta tenerlo, en vez de mostrarse más bajo
+de lo que es.
+
+### 11.10 Filtro «Swayp» en el Master (08-10-2026)
+
+El Master tiene el mismo filtro «Swayp» que Repro Provincia, con las mismas tres
+opciones y los mismos textos: **Swayp ok · con stock**, **Sin stock Swayp** y
+**Fuera de cobertura**. Responde, sobre el pedido, lo que Repro responde sobre
+la guía: ¿lo puede llevar Swayp hoy?
+
+- **La regla es la de Repro**, no una propia: `evaluateFenix`. «Ok» es que la
+  ciudad de destino tiene almacén Swayp (o se reparte desde uno, como Chupaca
+  desde Huancayo) y hay stock disponible del producto del pedido; «sin stock»,
+  que hay almacén pero no stock; «fuera de cobertura», que no hay almacén. Lima
+  no lleva control de cantidad, así que siempre sale «ok»: para provincia se
+  combina con el filtro Cobertura.
+- **El destino** es el del Master: distrito y provincia del ubigeo, o el
+  departamento si falta la provincia.
+- **Solo se calcula en Por confirmar, Preparación, Por despachar y En curso.**
+  En Por cerrar y Finalizado queda vacío: el stock de hoy no decide nada ahí, y
+  un «ok» congelado de hace semanas confundiría.
+- **Vive en `order_master.swayp_availability`** (0235) porque el Master filtra en
+  la base y pagina; calcularlo en la página no permitiría contar ni filtrar.
+- **Se refresca cada hora** (cron `swayp-inventory`) y al terminar cada sync de
+  inventario, sin depender del recálculo del pedido: lo que la cambia es el
+  stock, y el recálculo del pedido no se entera de que el stock cambió. Un
+  pedido nuevo o que cambia de etapa puede tardar hasta una hora en tener valor.
+  La función es `recalcularDisponibilidadSwaypMaster`
+  (`lib/master-swayp-availability.ts`) y solo escribe las filas que cambian.
+
+### 11.11 Swayp desde Por confirmar (v1.24, 09-10-2026)
+
+Decisión del owner. Un pedido de **provincia COD** en **Por confirmar** que
+Swayp puede llevar hoy («Swayp ok · con stock», §11.10) puede salir por Swayp
+**sin confirmar**, con el botón **«Enviar por Swayp»** de la mesa de
+confirmación. Invierte, para esos pedidos, el orden de la Fase 3 («Aliclik
+primero, Swayp tras el fallo»), y es una excepción escrita a «crear el rótulo
+implica confirmación» (§6.1), como la del §11.9.
+
+- **El botón** abre la guía Swayp directa de siempre (mismas validaciones de
+  destino, stock por producto, vínculo de Catálogo, número de Swayp y fecha de
+  despacho posterior a hoy: Swayp arma la ruta del día siguiente). El servidor
+  exige además que el pedido siga en Por confirmar y sea provincia COD, y graba
+  el hecho `swayp_desde_por_confirmar` con la guía (`shipment_id`) y quien lo
+  pulsó, **antes** de recalcular el Master. No escribe `confirmed`: no hubo
+  confirmación. No se ofrece en «Swayp no entregó».
+- **Si Swayp entrega**, terminó como cualquier entrega.
+- **Si Swayp no entrega**, el pedido **vuelve a «Por confirmar · Swayp no
+  entregó»** y entra otra vez a las llamadas, normalmente para salir por
+  Aliclik. «No entregó» es: Devolución (8), Devolución confirmada (9) o con cobro
+  (12) —en provincia Swayp deja la guía en 8 y no la pasa a 9—, la caja ya
+  escaneada de vuelta, o la guía anulada. Una novedad abierta (6) **no** es un
+  fallo: Swayp todavía la resuelve.
+- **Vuelven todos los motivos**, también el rechazo en la puerta (novedades 15 y
+  16) y las fallas de Swayp (18 falta inventario, 20 bodega no despachó, 21 sin
+  cobertura), con su motivo a la vista: «Rechazó a Swayp en la puerta» y «Falla
+  de Swayp, no de la clienta». Llamar cuesta poco; lo caro es el envío. Si la
+  caja volvió y su inventario no está conciliado, arrastra además
+  `devolucion_pendiente_inventario`.
+- **No pasa por Gestión Reproprovincia** ni por el agente de voz de recuperación
+  (§11.8): esa cola toma solo «En gestión Reproprovincia», y este pedido está en
+  Por confirmar. Sí entra a las llamadas de confirmación.
+- **Deja de mandar** en cuanto pasa algo después: otra salida viva o entregada
+  (la guía nueva toma el pedido), la anulación en Shopify, o una confirmación
+  (`confirmed`) posterior al envío, que lo pasa a **Preparación · Por generar
+  rótulo** para la salida nueva.
+- **La guía Swayp en Devolución no frena la guía Aliclik.** La regla «fuera de
+  Lima no hay otra salida viva» pide anular la anterior, pero una guía Swayp en
+  Devolución no se puede anular (Swayp solo cancela en Generada) ni se va a
+  entregar. Crear o vincular una guía Aliclik la ignora
+  (`swaypGuiaDeVuelta`, lib/swayp-desde-confirmacion.ts). Riesgo aceptado: si
+  Swayp devolviera esa guía a Reparto con la Aliclik ya emitida, habría dos
+  salidas vivas y el Master lo avisa (§4).
+- **Registro**: Master de Pedidos → Por confirmar → «Swayp desde Por confirmar»
+  (`/dashboard/pedidos/swayp-desde-confirmar`). Cada envío con su guía, el
+  estado y la novedad de Swayp, el resultado (en camino, entregado, volvió a Por
+  confirmar, salió por otra vía, anulado en Shopify), el motivo y la salida que
+  vino después. Arriba, enviados, entregados y la tasa de entrega sobre los ya
+  resueltos.
+
+Contexto medido al decidirlo (guías Swayp desde el 15-09-2026): de 11 guías
+Swayp directas a provincia, 0 entregadas; en Lima, 47 de 119. De las 157 que
+terminaron en devolución, el 21 % fue rechazo en la puerta y el 12 % falla de
+Swayp. El registro existe para medir si, sin confirmar, Swayp entrega lo
+suficiente.
+
+La regla vive en `lib/swayp-desde-confirmacion.ts` y la aplica
+`resolveMacroStage` antes del estado terminal y de Reproprovincia
+(`MOM_RESOLUTION_VERSION` sube a `mom-v1.24`).
 
 ## 12. Agencia: Shalom y Olva
 
@@ -4891,6 +5231,17 @@ un costo o aún no hay entregas, indica pendiente; nunca lo presenta como cero.
         no recibe el aviso de llegada. Ya tiene su clave, y el mensaje de la
         clave le dijo «cuando llegue, preséntala con tu DNI». Un «ya llegó» para
         pagados necesitaría su propia plantilla, sin saldo ni botones de cobro.
+      - **Pagado en el checkout es «ya no debe nada»** (09-10-2026, decisión
+        del owner), tenga o no comprobantes. El saldo se calculaba solo con los
+        Yape validados y un pedido cobrado por la pasarela no tiene ninguno:
+        salía «Total 134.10 · Pagado 0.00 · Saldo 134.10». **Trece pedidos web**
+        recibieron ese cobro entre el 17-09 y el 09-10 —siete de Shalom y seis
+        de Olva, éstos con el Yape para pagar—. En #KP138120 la clienta contestó
+        con la captura de su pago web y el bot de cobranza la registró como un
+        pago nuevo. Ahora ninguno de los dos avisos, de Shalom ni de Olva, sale
+        a un pedido `isWebPrepaid` (la misma regla de «Pagos», abajo): la fila
+        queda `skipped` con «pagado en el checkout». «Marcado como pagado a
+        mano» en Shopify **no** cuenta: sigue el conducto de las constancias.
     - **El aviso de llegada NO lleva fecha límite**, y es una decisión, no un
       olvido: «puedes recogerlo hasta el 16 de octubre» es un permiso a 28 días
       vista, y lo que provoca es dejarlo para después. Urge sin fecha y sin
@@ -5008,6 +5359,11 @@ un costo o aún no hay entregas, indica pendiente; nunca lo presenta como cero.
     - Los candidatos se buscan **por celular**, no por el pedido del último
       aviso: quedarse con el último sería justo la adivinanza que las puertas
       existen para evitar.
+    - **Un pedido pagado en el checkout no es candidato** (09-10-2026): no debe
+      nada, aunque no tenga ninguna fila en `order_payments`. Antes su saldo
+      salía como el total y la captura del pago web entraba por la puerta del
+      monto como un pago nuevo (#KP138120: S/ 134.10 a «YP AURELA KENKU», el
+      cobro de la pasarela, registrado como diferencia por Yape).
     - Lo que no pasa **queda como anomalía con su motivo** (`inbound_voucher`).
       El silencio es lo único inaceptable: la clienta ya pagó.
     - **El comprobante repetido del MISMO pedido no avisa a nadie.** Rastro y
@@ -5104,7 +5460,18 @@ un costo o aún no hay entregas, indica pendiente; nunca lo presenta como cero.
         manda la clave vive en el drawer— y llevar allí obligaba a buscar a
         mano el pedido que el sistema ya sabía cuál era.
       - **Al validar el pago que cierra el pedido, la clave sale sola** (0173),
-        en el mismo clic, y ese envío **es** el registro de la entrega.
+        en el mismo clic, y ese envío **es** el registro de la entrega. Desde
+        el 10-10-2026 también cuando lo valida el estado de cuenta de Yape
+        (§16.2), y la ficha tiene **«Enviar clave por WhatsApp»** para la que
+        no salió sola —validada antes de esto, ventana cerrada en su momento,
+        o perdida por la clienta—: mismas rejas y mismo registro
+        (`lib/pickup-key-delivery.ts`, una sola función para las tres
+        puertas). El servidor ya no se fía de que el navegador solo pida
+        «validar y enviar» cuando corresponde: también al validar exige que
+        ese pago complete lo validado y que no conste una entrega. El botón de
+        la ficha no exige ninguna de las dos ni el interruptor de envío
+        automático: lo pulsa una persona que mira los comprobantes, como
+        cuando dicta la clave, y sirve para reenviarla.
         - **Por qué.** Medido el 21-09-2026: 786 pedidos pagados con clave
           registrada, **770** con la clave ya consultada por alguien y **3**
           con la entrega registrada. La clave se entrega —si no, habría
@@ -5249,6 +5616,82 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
    aparece con otro `id`, o ninguna aparece, no se escribe nada. Mientras
    tanto, el aviso de una guía manual sin OSE ID **reintenta** en vez de
    fallar.
+8. **Si nadie la registra, la registra Cotejar Shalom** (10-10-2026). Ver abajo.
+
+#### Cotejar Shalom: la guía hecha a mano que nadie registró (decidido el 10-10-2026)
+
+- **El problema.** Al 10-10-2026 había **30 pedidos pagados enteros** en
+  «Preparación · Por generar rótulo» **sin ninguna salida** (#KP123532 …
+  #KP140107), casi todos con «shalom …» en la nota o con el DNI apuntado: la
+  guía se creó a mano en `pro.shalom.pe` y el paso 2 de arriba no se hizo. Sin
+  la guía en Kapta no hay rastreo, ni avisos, ni clave que entregar, y el pedido
+  se queda parado para siempre aunque la clienta ya lo haya recogido.
+- **Qué hace.** El cron de Shalom (`/api/cron/shalom-reconcile`), **cuatro
+  veces al día** —la pasada de las 8, 12, 16 y 20 h de Lima— o a mano con
+  `?cotejar=1`, lee el listado de órdenes de la cuenta de Shalom Pro
+  (`GET /v1/orders`, con su destinatario) desde el pedido más viejo y vincula
+  la guía a su pedido **por el mismo camino que «Ya la creé en Shalom Pro»**
+  (`lib/shalom/register-guide.ts`): las mismas comprobaciones, la salida
+  `shalom_pro_manual` con su QR, el relleno de la salida «por definir» y el
+  `guide_created` en la línea de tiempo. Desde ahí el rastreo de cada media
+  hora mueve el estado y encola los avisos, como con cualquier guía.
+- **Quién es candidato.** Pedido de los últimos 90 días en «Preparación · Por
+  generar rótulo», con el pago que Agencia exige para pasar a Preparación
+  (`agencyPaymentReady`: adelanto validado, diferencia cargada o pago
+  completo) y **sin ninguna salida que estorbe**: ni una de Shalom que no esté
+  anulada ni una salida viva de otro courier (la salida «por definir» no
+  estorba: se rellena).
+- **Solo se vincula lo que no admite duda**, porque una guía en el pedido
+  equivocado mueve el estado de OTRO pedido y le avisa a OTRA clienta. Dos
+  caminos:
+  1. **Mismo DNI**: el documento del destinatario de la guía es el apuntado
+     para el envío («DNI y agencia» del panel de pagos, `shalom_order_drafts`).
+     Basta aunque el nombre sea otro: quien recoge puede ser un familiar.
+  2. **Mismo celular y un nombre en común**: los 9 dígitos del celular del
+     pedido y al menos un nombre de 3 letras o más del destinatario de Shalom.
+     Si los dos lados tienen DNI y no es el mismo, no vale: es otra persona con
+     el mismo teléfono.
+
+  Y en los dos, **una pareja única** con la guía creada entre **1 día antes y
+  45 días después** del pedido:
+  - de las guías **sin vincular**, solo UNA tiene el DNI o el celular del
+    pedido — otra «parecida» (mismo celular, otro nombre) ya es duda;
+  - **ningún otro pedido de Kapta** de las tiendas de esa cuenta —esté como
+    esté, cerrado o anulado incluidos— tiene ese DNI o ese celular con la guía
+    dentro de su ventana: la misma clienta con dos pedidos no se adivina;
+  - una guía que **ya está en una salida** de Kapta no se toca.
+- **Antes de creerse el listado, se comprueba en cada lectura**, igual que el
+  OSE ID de arriba:
+  - que esté **entero**: tienen que aparecer al menos el 97 % de las guías que
+    Kapta creó por API en el periodo. Si falta más —una página que no llegó,
+    un tope que Shalom no avisa— no se vincula nada en esa cuenta. **Ese tope
+    existe**: Shalom no entrega más de 200 órdenes por página aunque se le
+    pidan más. La primera pasada (10-10-2026, 12:00) pidió 500, recibió 200 y
+    dio el listado por terminado en la página 1 —198 de 1.555 guías—; la
+    comprobación lo frenó y no vinculó nada. Desde entonces se piden páginas
+    de 200 y la última es la que llega vacía o más corta que las anteriores,
+    nunca «más corta que lo pedido». El relleno del OSE ID lee el listado
+    igual, todas sus páginas;
+  - que su destinatario **sea el destinatario**: en las guías creadas por API,
+    el DNI y el celular del listado tienen que coincidir con los del pedido en
+    nueve de cada diez, con diez como mínimo. El campo que no pasa no se usa
+    para vincular, y si no pasa ninguno no se vincula nada.
+- **Lo que escribe.** `actor` nulo —no lo decidió una persona— y la nota
+  «Guía Shalom creada fuera de Kapta y registrada por Cotejar Shalom (mismo
+  DNI)» o «(mismo celular y nombre)»; en `shalom_raw` y en el payload,
+  `registered_by: cotejar_shalom`. El código y la serie salen del listado; el
+  OSE ID solo si el listado demuestra que su `id` lo es. **La clave de recojo
+  no**: el listado no se usa para eso, y la nota pide registrarla desde la
+  salida Shalom, en Salidas y guías. Ese `guide_created` cuenta como el del
+  drawer —es el mismo hecho— y por eso también levanta una corrección manual
+  anterior del estado (`status_override`).
+- **Tope de 10 guías por pasada**; lo que sobra entra en la siguiente.
+- **Lo que queda para una persona.** Lo ambiguo y lo sin pareja no se toca:
+  sigue en «Por generar rótulo» y se registra a mano con «Ya la creé en Shalom
+  Pro». El informe del cron (`cotejo`, y la línea `[shalom-cotejo]` de la
+  bitácora) dice cuántos candidatos, vinculados, ambiguos, sin pareja y por
+  tope hubo, el porqué de cada ambiguo y, por cuenta, cuántas guías trajo el
+  listado, su cobertura y la comprobación del destinatario.
 
 ### Olva
 
@@ -5775,6 +6218,12 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
   cobro, Kapta aún no registra entrega» indica que primero debe aplicarse o
   validar el resultado operativo; no implica automáticamente fraude ni cierre.
 - El costo faltante bloquea el cierre.
+- **Sin courier no hay liquidación (v1.25, §6.5).** Un pedido entregado (no
+  Agencia) sin ninguna salida ni parada de motorizado, pagado completo a la tienda y sin
+  reembolso, no espera `liquidation_closed`: no hay cobro que rendir ni costo
+  logístico que descontar, porque nadie lo llevó. Por eso la regla anterior no
+  le aplica: no se le exige un costo que no existe para cerrar una liquidación
+  que tampoco existe. Con cualquier salida, todo lo de esta sección sigue igual.
 - Swayp vence a los cuatro días; Axel y Urpi a los tres días.
 - Responsables: Daysi para Lima, Akemi para Swayp, Yohalis como responsable
   financiera principal y Frankz para validar depósitos Aliclik.
@@ -5934,6 +6383,31 @@ solo «casi».
   movimiento: pagador, canal, monto y hora. Cada conciliación queda en
   `yape_statement_matches`, **única por movimiento y por comprobante**: el
   mismo dinero no paga dos pedidos.
+- **Y como una persona, suelta la clave de recojo (10-10-2026).** Si el pago
+  validado completa un pedido de agencia, la clave sale por WhatsApp como
+  cuando lo valida una persona con el botón (§12, 0173): mismas rejas y el
+  mismo registro, sin persona (`pickup_key_shares` con `shared_by` nulo,
+  evento `key_shared` con fuente `estado_yape`). Las rejas de un envío sin
+  nadie después:
+  - sale solo si **este** pago es el que hace que lo **validado** cubra el
+    pedido (`validationReleasesPickupKey`, preguntado sobre la foto de antes
+    de validarlo). Un comprobante cargado y sin validar no cuenta aunque sume:
+    es lo que mira una persona antes de dictarla, y aquí no la hay;
+  - por lo mismo **no sale dos veces**: validar después otro pago del pedido
+    ya no completa nada. Y si consta una entrega (a mano o por otra puerta),
+    no se repite;
+  - ventana de 24 h e interruptor de envío automático de la tienda;
+  - el envío a WhatsApp tiene tope de 15 s; si no responde, no se da por
+    enviado ni se reintenta: se pide revisar el chat.
+
+  Si no sale, el reporte dice por qué en el pedido (`clave`), también cuando
+  la corrida se quedó sin tiempo después de validar. Antes validaba y nadie la
+  mandaba: #KP139240 pagó la diferencia de S/ 159 a las 12:10, el estado de
+  cuenta la validó a las 12:17 con el paquete en la agencia, y a las 14:09 la
+  clienta escribió «Por segunda vez les remite el comprobante de pago. No hay
+  seriedad en esta empresa». Medido ese día: 59 pedidos de agencia con un pago
+  validado así; 38 con el pago completo y 23 de ellos sin ningún envío de la
+  clave registrado.
 - **Nunca lo valida el cruce, aunque el dinero esté en el reporte:**
   - lo que no está en `pendiente_revision`: lo observado, lo incompleto y lo
     duplicado lo está mirando una persona, y su decisión manda. Por lo mismo,
@@ -6334,7 +6808,8 @@ Primer bloque publicado en el drawer del Master:
   reembolsos; los permisos puntuales de `user_permissions` siguen prevaleciendo.
 - El resolver quedó versionado —`mom-v1.4` en este bloque; la versión vigente es
   siempre `MOM_RESOLUTION_VERSION` en `lib/order-macro-stage.ts`, hoy
-  `mom-v1.9`—; el cron detecta versiones anteriores y recalcula el histórico por
+  `mom-v1.25` (10-10-2026: pagado a la tienda y sin courier no espera
+  liquidación, §6.5)—; el cron detecta versiones anteriores y recalcula el histórico por
   lotes hasta que todo el Master converja, sin necesitar credenciales locales ni
   detener la sincronización. Toda regla que cambie el resultado de filas que
   nadie tocó debe subir esa constante, o el histórico queda con el veredicto
@@ -6837,6 +7312,9 @@ viven en `scripts/sql/master_liviano_smoke.sql`.
 - Inventario o merma no se pueden conciliar antes de recibir físicamente una
   devolución.
 - Una entrega COD no finaliza hasta registrar su liquidación conciliada.
+  Excepción (v1.25, §6.5): entregado sin ninguna salida ni parada de
+  motorizado y pagado completo a la tienda, sin reembolso, finaliza sin
+  liquidación, porque no hubo courier que cobrara.
 - Falta de costo logístico bloquea la conciliación financiera.
 - Una liquidación observada conserva el lote abierto hasta su conciliación.
 - La indemnización formal solo se abre sobre una salida Aliclik.
@@ -7246,15 +7724,76 @@ Por cada pedido seleccionado:
 
 | Situación | Qué ocurre |
 | --- | --- |
-| Ya tiene una salida en custodia de la empresa | Se **reimprime esa**; no se crea otra |
+| Ya tiene una salida **viva** en custodia de la empresa | Se **reimprime esa**; no se crea otra. No cuentan una anulada, entregada o `transferido` —la custodia `empresa` sola no basta— ni una que su courier no entregó (abajo) |
 | No tiene ninguna salida | Se **crea** una sin courier decidido |
 | Su última salida fue **devuelta** | Se **crea** una nueva: rearmar es reprogramación normal, no una salida simultánea |
-| Tiene una salida **todavía en la calle** | No se crea nada: una salida adicional exige justificación auditada (§23) y se hace desde el pedido |
+| **En Lima**, una salida **no la entregó su courier** (Tanders `RETURNING`/`RETURNED`, Swayp Devolución, anulada después de salir) | Se **crea** la salida nueva con **motivo automático** (09-10-2026): la anterior no está «en la calle» aunque su courier la siga dando en ruta, porque nadie la trabaja |
+| Tiene una salida **todavía en la calle** (viva de verdad) | No se crea nada: una salida adicional exige justificación auditada (§23) y se hace desde el pedido |
+
+**La salida que su courier no entregó (09-10-2026, decisión del owner).**
+«Descargar rótulos» respondía «Tiene 1 salida todavía en la calle» a un pedido
+cuya S01 de Tanders volvía, y el equipo terminaba reimprimiendo el rótulo de
+Tanders (§9.3, #AUR177756). La regla es la misma de la recuperación
+(`guideFailedAfterDispatch`, §9): una salida que su courier ya reportó como no
+entregada no cuenta como activa.
+
+- **Solo en Lima** (`macro_operation`). Fuera de Lima no cambia nada: la Swayp
+  en Devolución de un pedido de provincia la gestiona Reproprovincia con
+  «Reenviar por Swayp» (§11) y sigue pidiendo justificación; una «por definir»
+  lo sacaría de esa cola con un rótulo para una caja que vuelve a la bodega de
+  Swayp.
+- El motivo lo escribe el sistema, porque el hecho ya lo reportó el courier:
+  «Tanders no entregó AUR177756-S01 y su caja todavía vuelve (o «ya volvió»):
+  se reprograma con una salida nueva y su propio rótulo, que se pega sobre la
+  caja». Va en `route_output_created`.
+- Si la anterior sigue viva para su courier (todavía vuelve), la nueva es
+  **adicional**: su justificación va además en su propio evento
+  `additional_output_reason` con las salidas que seguían vivas, **una vez, al
+  nacer**. La toma de Grupo GF que la rellena no la repite (§29.13). Swayp
+  directa sí vuelve a pedir motivo si la anterior sigue viva para su courier:
+  su puerta (`puertaDeSalidaAdicional`) la cuenta, como siempre.
+- Antes de crear, las salidas del pedido **se vuelven a leer**: la foto de una
+  tanda de 50 puede tener decenas de segundos, y otra persona pudo imprimir la
+  salida nueva o Grupo GF tomarlo entretanto. Con la foto fresca se reimprime
+  la que ya existe en vez de crear una segunda.
+- El tope de cinco salidas se aplica igual (§4). Pedirlo dos veces reimprime la
+  misma «por definir».
+- El aviso nombra los pedidos que salieron con salida nueva y pide pegar su
+  rótulo sobre la caja que volvió.
+- Con la «por definir» viva el pedido sale de «Por reprogramar Lima» y pasa a
+  «Preparación · Por armar»: imprimirla **es** reprogramar, por eso se hace
+  después de la llamada. La ficha lo dice en «Próxima acción» y ofrece
+  «Imprimir rótulo de la salida nueva».
+- Una «por definir» **anulada** conserva la custodia `empresa`, pero no se
+  reimprime: pedir el rótulo otra vez crea una nueva (antes reimprimía la
+  anulada). Lo mismo una entregada o `transferido` —la madre de un reenvío
+  Swayp, #KP134300—: solo se reimprime una salida viva.
+- La ficha solo dice «la caja va como …» de una salida viva **nacida después**
+  de la que falló. Una anterior que sigue abierta (#KP134960, una de Grupo GF
+  del 17-09 sin cerrar) no es la caja que volvió, y mientras exista pedir el
+  rótulo responde que hay una salida todavía en la calle: la ficha la nombra
+  («Cerrar la salida abierta antes de reprogramar») y no ofrece imprimir.
+- Si **ninguna persona** registró la recepción de la caja de **Tanders**
+  (evento `return_received`), la ficha pide escanear su rótulo en Devoluciones
+  antes de taparlo, aunque el barrido ya diga `RETURNED`: eso dice que Tanders
+  la devolvió, no que alguien la recibió. La salida nueva no cierra la
+  devolución de la anterior (§9.3), y sin ese registro la guía quedaría en
+  «Faltan» y el pedido entregado en Por cerrar. Swayp no se recibe escaneando;
+  su devolución se registra en la mesa de cierre.
+- Si la lectura de las salidas falla, no se decide nada: sin salidas a la vista
+  cada pedido parecería no tener ninguna y se crearía una por pedido.
 
 - **Reusar gana a crear**: pedir el rótulo dos veces no puede consumir el límite
   de cinco salidas del pedido.
 - Reimprimir el rótulo de una salida concreta —papel perdido o dañado— se hace
-  desde el pedido, que lista cada salida con su rótulo.
+  desde el pedido, que lista cada salida con su rótulo. En Lima, la de un
+  courier que no entregó ya no ofrece su rótulo como enlace principal: dice con
+  qué salida va la caja —si ya existe una viva nacida después—, o que se
+  reprograma con una salida nueva, o que otra salida anterior sigue abierta; y
+  deja, discreto, «Rótulo viejo» («(solo Devoluciones)» para Tanders y Shalom,
+  que Devoluciones recibe escaneando). Fuera de Lima la fila no cambia.
+  «Guías combinadas» en lote tampoco imprime la de Tanders que no entregó ni la
+  que ya se recibió en Devoluciones.
 
 ### Crear salidas en lote
 
@@ -7548,6 +8087,29 @@ tienda/fecha; el courier se decide en despacho, no durante el armado.
 - Una transferencia entre motorizados conserva el QR; cambia la custodia y queda
   un evento por cada actor.
 - Una reprogramación que conserva el paquete armado conserva su identidad física.
+  **Excepción: la caja que vuelve de otro courier** (09-10-2026). Cambia el
+  courier, así que nace una salida nueva (§4, §9.3) y la caja cambia de identidad
+  una sola vez: el rótulo de la nueva se pega encima y tapa el QR viejo. **El QR
+  viejo no es alias** de la nueva: «Dejar paquete listo» no lo marca listo y
+  «Verificar caja» no lo coteja; los dos responden nombrando la salida con la que
+  sale la caja («Es el rótulo viejo de AUR177756-S01 (Tanders no entregó). En
+  esta caja va como AUR177756-S02: escanea su rótulo…»). Asignar por escaneo lee
+  el **pedido**: con el QR viejo la caja entra como la salida que se rellenó o
+  nació al tomarlo, y la línea pide imprimir su rótulo y pegarlo encima.
+  **También si el pedido ya estaba tomado** «Desde la lista» con la salida
+  nueva en una caja: el escaneo busca en las cajas por la salida de su
+  solicitud de Grupo GF y responde «Ya estaba en la caja de …» o «Está en la
+  caja de …» (con «Mover») más el aviso del rótulo, en vez de «ya está asignado
+  a una ruta». Solo un rótulo que no es de Grupo GF paga esa lectura. Así se
+  cumple «un solo QR interno vivo por paquete».
+- Qué salida se nombra: en «Verificar caja», la viva que está en **esa** caja,
+  nazca cuando nazca (#KP136825 tenía su S01 de Grupo GF en la caja de Alexis
+  y la S02 de Tanders, posterior, era la que no entregó); en «Dejar paquete
+  listo», una viva nacida después de la que falló. Si no hay ninguna, el pedido
+  está en «Por reprogramar Lima» y no queda otra viva anterior, el mensaje dice
+  cómo nace la nueva. Si el pedido ya no se reprograma (Por cerrar, devolución
+  pendiente de inventario), el escáner responde lo de siempre: no invita a
+  reprogramarlo.
 - Un pedido anulado, rechazado definitivamente o que debe desarmarse libera la
   reserva y devuelve el producto a su bolsa. Si luego se vuelve a armar, nace una
   salida nueva con QR nuevo, respetando §4.
@@ -7783,6 +8345,22 @@ cargar: #KP138029 (S/ 89) y #KP138037 (S/ 567) del 01/10, entregados el 02/10.
   04/10).
 - Si la hoja del día siguiente no lo trae, no se pasa: se le pregunta a quien
   liquida, porque una parada sin reporte frena el cierre de esa ruta.
+
+**La fecha del reprogramado va en el mismo reporte (10-10-2026, pedido de
+Frankz).** Antes, quien reportaba «No entregado · Reprogramado por el cliente»
+tenía que ir después a Grupo GF a programar el día que pidió el cliente.
+
+- El reporte de la parada, del motorizado o de Coordinación por él, ofrece
+  «Nueva fecha (opcional)» solo con ese motivo. No acepta días anteriores a hoy
+  ni posteriores a 60 días.
+- Con fecha, la salida queda agendada para ese día por el mismo camino que
+  «Programar» de Grupo GF (`lib/gf-dispatch-program.ts`): el programa, la
+  solicitud movida a ese día y `dispatch_programmed` en el historial, con el
+  motivo «Reprogramado por el cliente (reporte de la parada de …)».
+- La fecha se valida antes de escribir el reporte. Si el reporte queda y el
+  programa no, la pantalla lo dice y pide programarlo en Grupo GF.
+- Sin fecha, todo sigue igual: el pedido va a «En curso · Por reprogramar
+  Lima».
 
 **La hoja del motorizado sin app se carga desde Kapta (08-10-2026, decisión de
 Frankz).** Hasta el 07/10 cada hoja de Alexis se cargaba con SQL desde una
@@ -8493,13 +9071,33 @@ salida también entra, con esa misma salida (abajo).
 - La fila lleva la chapa **«Tanders no entregó · vuelve»** o **«· volvió»** —o
   **«Swayp no entregó · vuelve»** desde la v1.22— y
   cuenta en «Por asignar» y en la tarjeta «Por reprogramar».
-- Cuando la salida que falló es de **otro courier**, **tomarlo crea una salida
-  NUEVA** con su QR y Almacén arma otra caja (§9.3): la anterior es de otro
-  courier y lleva su rótulo. Nunca se rellena otra salida, y la que falló no
-  cuenta como «ya en caja» aunque siga volviendo.
-- Si la caja anterior **todavía vuelve**, la salida nueva es adicional y su
-  motivo se escribe solo (`additional_output_reason`, §9): el hecho ya lo
-  reportó el courier. El tope de cinco salidas se aplica igual.
+- Cuando la salida que falló es de **otro courier**, **el pedido sale con una
+  salida NUEVA** con su QR (§9.3): la anterior es de otro courier y lleva su
+  rótulo. La toma rellena la «por definir» nacida al pedir su rótulo o, si no
+  existe, la crea (abajo); la caja física puede ser la misma, con el rótulo
+  nuevo encima. **Nunca se rellena la salida del courier que falló**, y la que
+  falló no cuenta como «ya en caja» aunque siga volviendo.
+- **Precisión del 09-10-2026: la «por definir» nacida al reprogramar SÍ se
+  rellena.** Si después de la llamada se pidió el rótulo de la salida nueva
+  (§28), esa «por definir» es la caja que se arma y su rótulo el que va pegado.
+  Tomarla la **rellena** como cualquier «por definir» (§29.2): mismo QR,
+  consecutivo y rótulo, sin motivo nuevo y sin gastar otra de las cinco. Pasa
+  en el camino normal —el pedido ya está en Preparación o Listo para asignar—,
+  donde la salida que falló **tampoco estorba**: antes respondía «El pedido ya
+  tiene una salida asignada a otro courier» por la S01 de Tanders que volvía. Y
+  pasa también en el reintento, si el Master no alcanzó a recalcularse: rellena
+  la que existe en vez de crear otra.
+- La toma **crea** salida solo si no existe esa «por definir» (el camino viejo,
+  sin rótulo pedido antes). Entonces el aviso nombra la salida nueva —«Salida
+  nueva AUR177756-S03: imprime su rótulo y pégalo sobre la caja que volvió»— y
+  la fila de la cola lo dice a la vista, no solo en el título. La fila lo dice
+  solo cuando la toma de verdad va a crearla: si su «por definir» ya existe
+  (el Master no alcanzó a recalcularse), no hay rótulo nuevo que pedir.
+- Si la caja anterior **todavía vuelve** y la toma crea la salida, esta es
+  adicional y su motivo se escribe solo (`additional_output_reason`, §9): el
+  hecho ya lo reportó el courier. Si ya volvió, el motivo dice «ya volvió» y no
+  «todavía vuelve». El tope de cinco salidas se aplica igual. Rellenar no es
+  salida adicional: su motivo se escribió al nacer (§28).
 - Con la salida nueva el pedido deja la recuperación y sigue el camino normal
   de Grupo GF; el paquete que volvió no lo devuelve a «Devuelto» (§7).
 
@@ -9435,6 +10033,20 @@ y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
   monto de esa fila, con su nombre en la nota. Es lo que después lee y acepta
   quien liquida antes de aplicar al Master (§30.8): el motivo lo escribe quien
   repartió; aceptarlo es de quien liquida.
+- **Lo que había que cobrar es el saldo (10-10-2026, decisión de Frankz).** El
+  «monto de Kapta» con que se compara es el saldo por cobrar —el total menos lo
+  ya pagado y validado— y el total solo si el saldo no se pudo leer
+  (`amountDue`, `lib/sheets/monto.ts`). Un pedido pagado antes se entrega «Sin
+  cobro» y cuadra: #KP139362 (S/ 268.20 pagados por adelantado) pedía explicar
+  por qué no se cobraron S/ 268.20. El motivo se pide solo si el motorizado
+  tiene hoja de Reparto propio, porque es la observación de esa hoja: es la
+  misma condición con que la pantalla enseña el selector, y servidor y
+  pantalla ya no se contradicen (a Alexis, sin hoja, el servidor le pedía un
+  motivo que la pantalla no dejaba elegir).
+- **Ya está pagado.** Con saldo cero, al marcar «Entregado» la pantalla elige
+  «Sin cobro» sola y lo dice en verde («Ya está pagado… No cobres nada»). Si
+  alguien elige otro método, avisa que no hay saldo que cobrar; el servidor
+  sigue rechazando un cobro mayor que el saldo.
 - **Solo ve su hoja.** Un usuario cuyo único rol es `motorizado` solo puede
   entrar a `/reparto`; el panel lo redirige. En la base (0179), sus lecturas
   de hojas, filas, alias, observaciones e historial quedan acotadas a la hoja

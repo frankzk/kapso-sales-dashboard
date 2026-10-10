@@ -22,7 +22,28 @@ import {
   recoveryActive,
   recoveryWindow,
 } from "@/lib/reproprovincia";
+import {
+  swaypDesdeConfirmacionCase,
+  swaypDesdeConfirmacionFailed,
+  swaypNoEntregoMotivo,
+} from "@/lib/swayp-desde-confirmacion";
 
+// v1.25 (10-10-2026): un pedido pagado completo directo a la tienda, sin courier
+// que cobre, no espera liquidación (MOM §6.5, decisión del owner). Entregado fuera
+// de Agencia, sin ninguna salida ni parada de motorizado y con `pago_completo` sin
+// reembolso, va a «Finalizado · Entregado y cerrado» en vez de quedarse para
+// siempre en «Por cerrar · Pendiente de liquidación»: nadie tiene dinero que
+// rendir y ningún `liquidation_closed` iba a llegar. Medido el 09-10-2026: 28
+// pedidos y S/ 4.838,70 (Kenku 22 / S/ 3.997,50; Aurela 6 / S/ 841,20), todos
+// provincia COD marcados «entregado» a mano. Cambia filas que nadie tocó, así
+// que sube.
+//
+// v1.24 (09-10-2026): Swayp desde Por confirmar (MOM §11.11). Un pedido que salió
+// por Swayp con el botón de la mesa de confirmación y Swayp NO entregó vuelve a
+// «Por confirmar · Swayp no entregó» en vez de ir a Gestión Reproprovincia, para
+// que entre otra vez a las llamadas. Solo mueve pedidos con el hecho nuevo
+// `swayp_desde_por_confirmar`, pero la versión sube para que el cron recalcule.
+//
 // v1.23 (30-09-2026): en Lima, lo que cualquier courier no entrega pasa a «Por
 // reprogramar Lima»; solo la entrega lleva a cerrar y solo la anulación en
 // Shopify termina la venta (owner). Dos cambios: una guía ANULADA DESPUÉS DE
@@ -132,7 +153,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.23" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.25" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -164,6 +185,11 @@ export type MacroSubstage =
   | "por_confirmar"
   | "volver_a_contactar"
   | "ultimo_intento"
+  // Salió por Swayp desde Por confirmar y Swayp no entregó (v1.24, §11.11).
+  | "swayp_no_entrego"
+  // Motivos de «Swayp no entregó», no subetapas: dicen por qué volvió.
+  | "swayp_rechazo_en_puerta"
+  | "swayp_falla_propia"
   // Motivo de Por confirmar, no subetapa: describe QUÉ falta, no en qué punto
   // de la gestión está el pedido. Ver `confirmationSubstage`.
   | "pago_requerido_pendiente"
@@ -224,6 +250,7 @@ export const MACRO_SUBSTAGES_BY_STAGE: Record<
   // subetapa competía con «Volver a contactar» por el mismo pedido.
   por_confirmar: [
     "sin_llamar",
+    "swayp_no_entrego",
     "por_confirmar",
     "volver_a_contactar",
     "ultimo_intento",
@@ -282,6 +309,9 @@ export const MACRO_SUBSTAGE_LABEL: Record<MacroSubstage, string> = {
   por_confirmar: "Por confirmar",
   volver_a_contactar: "Volver a contactar",
   ultimo_intento: "Último intento",
+  swayp_no_entrego: "Swayp no entregó",
+  swayp_rechazo_en_puerta: "Rechazó a Swayp en la puerta",
+  swayp_falla_propia: "Falla de Swayp, no de la clienta",
   pago_requerido_pendiente: "Pago requerido pendiente",
   por_generar_rotulo: "Por generar rótulo",
   por_armar: "Por armar",
@@ -724,6 +754,55 @@ export function agencyPaymentReady(
   );
 }
 
+/**
+ * Hechos que prueban que un motorizado se llevó el paquete aunque no exista la
+ * salida: las paradas del cuaderno pueden no tener `shipment_id`. Es la misma
+ * lista que `DEPARTURE_EVENT_KINDS` (lib/dispatch-day.ts); no se importa de allí
+ * porque ese módulo importa este.
+ */
+const RIDER_DEPARTURE_KINDS = new Set([
+  "pickup_checked",
+  "stop_reported",
+  "returned_to_office",
+  "delivered_unconfirmed_pickup",
+]);
+
+/**
+ * ¿Lo pagó completo directo a la tienda, sin courier que cobre? (v1.25, MOM §6.5)
+ *
+ * La liquidación existe para rendir el dinero que cobró un courier o un
+ * motorizado y descontarle su costo de envío (§14). Si la clienta le pagó a la
+ * tienda y nadie llevó el paquete, ninguna de las dos cosas existe: no hay dinero
+ * en manos de nadie ni flete que netear. Exigir `liquidation_closed` dejaba el
+ * pedido para siempre en «Por cerrar · Pendiente de liquidación», porque esa
+ * firma no llega nunca —y a mano tampoco: el cierre de liquidación del drawer
+ * pide un costo logístico que sin salida no hay—. Medido el 09-10-2026: 28
+ * pedidos y S/ 4.838,70, todos provincia COD marcados «entregado» a mano, sin
+ * fila en `shipments` y con los Yape validados o la pasarela del checkout.
+ *
+ * Las tres condiciones son estrictas a propósito:
+ *
+ *  - NINGUNA salida, ni propia ni prestada (pedido acompañante, §32): con una,
+ *    hubo un courier que pudo cobrar, y manda la liquidación de siempre. Tampoco
+ *    una guía anulada antes de salir: sigue siendo una salida y queda como hoy.
+ *  - NINGUNA parada de motorizado (`RIDER_DEPARTURE_KINDS`), por lo mismo.
+ *  - `pago_completo` —comprobantes validados que cubren el total, o la pasarela
+ *    confirmada del checkout—, y sin reembolso. NO `hasCollectionEvidence`: el
+ *    `paid` de Shopify sin comprobante vale para el mostrador de Agencia, pero
+ *    aquí sería dar por cobrado algo que nadie en Kapta validó. Los comprobantes
+ *    de cobro del courier (`cobro_courier`) solo existen con una salida, y la
+ *    primera condición ya los deja fuera.
+ */
+export function pagadoDirectoSinCourier(
+  input: Pick<ResolveMacroStageInput, "order" | "guides" | "events" | "paymentState">,
+): boolean {
+  if (input.guides.length) return false;
+  if (input.events.some((event) => RIDER_DEPARTURE_KINDS.has(event.kind))) return false;
+  if (!hasPaymentComplete(input.paymentState)) return false;
+  const refunded = input.order.total_refunded ?? 0;
+  return !(Number.isFinite(refunded) && refunded > 0);
+}
+
 function finalResultSubstage(legacy: LegacyOrderStateSnapshot, operation: OperationKind): MacroSubstage {
   if (legacy.general === "entregado") {
     return operation === "agencia" ? "recogido_cerrado" : "entregado_cerrado";
@@ -833,15 +912,21 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
     reasons.push("devolucion_cliente");
   }
 
+  // Pagado completo a la tienda y sin courier (v1.25): no hay nada que liquidar.
+  // Una liquidación observada sigue frenando: alguien la abrió y la cierra él.
+  // Solo donde se exige liquidación: Agencia no la espera y esta regla no la
+  // toca (sin salida sigue en Validación de cierre pendiente, como antes).
+  const sinLiquidacion =
+    legacy.general === "entregado" && operation !== "agencia" && pagadoDirectoSinCourier(input);
   const liquidationClosed = latestEvent(events, ["liquidation_closed"]);
   if (
     legacy.general === "entregado" &&
     operation !== "agencia" &&
     !liquidationClosed &&
+    !sinLiquidacion &&
     !reasons.includes("liquidacion_observada")
   ) {
-    // El repositorio auditado todavía no contiene la fuente de liquidaciones.
-    // Mantenerlo Por cerrar evita declarar un cierre financiero inventado.
+    // Sin la firma de la liquidación no se declara un cierre financiero.
     reasons.push("pendiente_liquidacion");
   }
 
@@ -863,8 +948,9 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   }
 
   // `delivered` puede venir de order_events aun sin guía entregada; se conserva
-  // para dejar explícito que el cierre depende de la fuente financiera.
-  if (legacy.general === "entregado" && !delivered && !reasons.length) {
+  // para dejar explícito que el cierre depende de la fuente financiera. Sin
+  // courier, esa fuente es el pago validado a la tienda (v1.25), y ya está.
+  if (legacy.general === "entregado" && !delivered && !sinLiquidacion && !reasons.length) {
     reasons.push("validacion_cierre_pendiente");
   }
   return [...new Set(reasons)];
@@ -1144,6 +1230,54 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
     );
   }
 
+  // SWAYP DESDE POR CONFIRMAR (v1.24, MOM §11.11). El pedido salió por Swayp con
+  // el botón de la mesa de confirmación, SIN confirmar, y Swayp no entregó: vuelve
+  // a Por confirmar para que se le llame otra vez —normalmente para salir por
+  // Aliclik—. Va antes que el estado terminal y que Reproprovincia: la Swayp
+  // fallida abriría la recuperación (§11) y la mandaría a En curso, o a Por
+  // cerrar al anularse, y el owner pidió que vuelva a las llamadas.
+  //
+  // Deja de mandar en cuanto pasa algo después: otra salida viva o entregada (la
+  // guía nueva toma el pedido), la anulación en Shopify (la decide una persona),
+  // o una confirmación posterior al envío (pasa a Preparación para generar el
+  // rótulo de la salida nueva).
+  const swaypCase = input.order.cancelled_at ? null : swaypDesdeConfirmacionCase(input.guides, input.events);
+  if (swaypCase && swaypDesdeConfirmacionFailed(swaypCase.guide)) {
+    const caseGuide = swaypCase.guide;
+    const anotherOutput = input.guides.some(
+      (guide) => guide.id !== caseGuide.id && (guide.delivery_status === "entregado" || isActiveGuide(guide)),
+    );
+    if (!anotherOutput) {
+      const inventoryPending = hasReturned(caseGuide) && !inventoryResolvedForGuide(caseGuide, input.events);
+      const reconfirmed = latestEvent(
+        input.events.filter((event) => event.occurred_at > swaypCase.sentAt),
+        ["confirmed"],
+      );
+      if (reconfirmed && agencyPaymentReady(operation, input.paymentState)) {
+        return result(
+          "preparacion",
+          "por_generar_rotulo",
+          reconfirmed.occurred_at,
+          operation,
+          inventoryPending ? ["devolucion_pendiente_inventario"] : [],
+        );
+      }
+      const motivo = swaypNoEntregoMotivo(caseGuide);
+      const reasons: MacroSubstage[] = [
+        ...(motivo === "rechazo_en_puerta" ? (["swayp_rechazo_en_puerta"] as const) : []),
+        ...(motivo === "falla_swayp" ? (["swayp_falla_propia"] as const) : []),
+        ...(inventoryPending ? (["devolucion_pendiente_inventario"] as const) : []),
+      ];
+      return result(
+        "por_confirmar",
+        "swayp_no_entrego",
+        caseGuide.closed_at ?? caseGuide.returned_at ?? caseGuide.updated_at ?? swaypCase.sentAt,
+        operation,
+        reasons,
+      );
+    }
+  }
+
   if (["entregado", "anulado", "devuelto"].includes(input.legacy.general)) {
     // Anulado sin una salida física puede cerrarse automáticamente.
     const everDispatched = input.guides.some(hasExternalCustody);
@@ -1184,6 +1318,19 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
       hasCollectionEvidence(input.paymentState, input.order)
     ) {
       return result("finalizado", "recogido_cerrado", input.legacy.since, operation);
+    }
+    // Pagado completo a la tienda y sin courier que cobre (v1.25, MOM §6.5): la
+    // MISMA condición que apaga `pendiente_liquidacion` en `closingReasons`. Si
+    // los dos sitios discreparan, el pedido perdería el motivo y caería en
+    // `validacion_cierre_pendiente`, atascado igual con otro nombre. Cualquier
+    // otro motivo abierto (reembolso, devolución del cliente, reapertura…) ya
+    // devolvió Por cerrar arriba.
+    if (
+      input.legacy.general === "entregado" &&
+      operation !== "agencia" &&
+      pagadoDirectoSinCourier(input)
+    ) {
+      return result("finalizado", "entregado_cerrado", input.legacy.since, operation);
     }
     const liquidationClosed = latestEvent(input.events, ["liquidation_closed"]);
     if (input.legacy.general === "entregado" && liquidationClosed) {

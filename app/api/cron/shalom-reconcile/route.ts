@@ -9,6 +9,8 @@ import { shalomNeedsTracking, type ShalomTrackingStatus } from "@/lib/shalom/tra
 import { applyShalomTracking, type ShalomLiveGuide } from "@/lib/shalom/reconcile";
 import { enqueueTransitNotification, processTransitNotifications } from "@/lib/shalom/transit-notify";
 import { backfillManualOseIds } from "@/lib/shalom/ose-backfill";
+import { cotejarShalom } from "@/lib/shalom/account-cotejo";
+import { shouldRunShalomCotejo } from "@/lib/shalom/account-match";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,6 +48,13 @@ const BATCH_SIZE = 50;
  * siga funcionando mientras el cron corre.
  */
 const MAX_PER_RUN = BATCH_SIZE * 20;
+/**
+ * Hasta cuándo puede seguir bajando páginas Cotejar Shalom, contado desde que
+ * entra la petición. Deja sitio a la cola de avisos y a los 300 s de la función:
+ * un listado que no termina a tiempo no vincula nada y se reintenta en la
+ * siguiente pasada que coteje.
+ */
+const COTEJO_DEADLINE_MS = 200_000;
 
 function secretEquals(provided: string | null, expected: string): boolean {
   if (!provided) return false;
@@ -69,6 +78,7 @@ interface LiveGuide extends ShalomLiveGuide {
 }
 
 export async function GET(req: NextRequest) {
+  const requestStartedAt = Date.now();
   if (!authorized(req)) return new NextResponse("unauthorized", { status: 401 });
   if (!env.shalomConfigured()) {
     // Sin API key no hay nada que preguntar. No es un fallo: es un despliegue
@@ -254,6 +264,21 @@ export async function GET(req: NextRequest) {
   const ose = await backfillManualOseIds(admin);
   errors.push(...ose.errores);
 
+  // Cotejar Shalom (MOM §12): las guías creadas a mano en Shalom Pro que nadie
+  // registró, vinculadas a su pedido solo si no admiten duda. Cuatro veces al
+  // día —el listado entero es caro y el cupo es de todas las tiendas— o a mano
+  // con `?cotejar=1`. Va antes de los avisos para que una guía recién
+  // vinculada no espere otro día; los avisos que no quepan salen en la pasada
+  // siguiente, media hora después.
+  const cotejo = shouldRunShalomCotejo(new Date(), req.nextUrl.searchParams.get("cotejar") === "1")
+    ? await cotejarShalom(admin, { deadlineMs: requestStartedAt + COTEJO_DEADLINE_MS })
+    : null;
+  if (cotejo) {
+    errors.push(...cotejo.errores);
+    // La respuesta del cron no se guarda en ningún sitio; la bitácora sí.
+    console.info("[shalom-cotejo]", JSON.stringify(cotejo));
+  }
+
   const elapsed = Date.now() - startedAt;
   const avisos = await processTransitNotifications(admin, {
     budgetMs: Math.max(20_000, 240_000 - elapsed),
@@ -267,6 +292,19 @@ export async function GET(req: NextRequest) {
     // quedó la cola tras drenarla.
     avisos: { encolados: queued, ...avisos },
     oseManual: { buscadas: ose.buscadas, resueltas: ose.resueltas, sinResolver: ose.sinResolver.length },
+    // Cotejar Shalom: null en las pasadas que no cotejan.
+    cotejo: cotejo
+      ? {
+          candidatos: cotejo.candidatos,
+          vinculados: cotejo.vinculados,
+          ambiguos: cotejo.ambiguos,
+          sinPareja: cotejo.sinPareja,
+          porTope: cotejo.porTope,
+          sinCotejar: cotejo.sinCotejar,
+          cuentas: cotejo.cuentas,
+          detalle: cotejo.detalle,
+        }
+      : null,
     // `reported` = Shalom contestó. `applied` = además cambió algo. Separarlos
     // es lo que hace legible una corrida a mano: reported>0 y applied=0 significa
     // "todo bien, sin novedad", que antes se leía igual que "no corrió".

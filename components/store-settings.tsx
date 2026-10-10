@@ -9,6 +9,7 @@ import { useActionState, useEffect, useRef, useState, useTransition, type ReactN
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import { Badge, Banner, CHECKBOX, FIELD, OpsButton, opsButtonClass } from "@/components/ops-ui";
+import { CoverageBadge } from "@/components/coverage-badge";
 import {
   CARD,
   CardHeader,
@@ -3327,12 +3328,6 @@ function EscalationSection({
   );
 }
 
-const COVERAGE_LABEL: Record<string, string> = {
-  lima: "Lima",
-  provincia_cod: "Provincia COD",
-  agencia: "Agencia",
-};
-
 /**
  * Excepciones de cobertura por distrito (0121).
  *
@@ -3390,7 +3385,7 @@ function DistrictCoverageSection({
                 <div className="min-w-0 flex-1">
                   <p className="flex flex-wrap items-center gap-2 text-sm font-semibold capitalize leading-5 text-ink-900">
                     {r.district}
-                    <Badge className="normal-case">{COVERAGE_LABEL[r.coverage] ?? r.coverage}</Badge>
+                    <CoverageBadge coverage={r.coverage} />
                     {r.store_id === null && <Badge className="normal-case">Todas las tiendas</Badge>}
                   </p>
                   {r.note && <p className="mt-0.5 text-[13px] leading-5 text-ink-500">{r.note}</p>}
