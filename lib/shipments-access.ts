@@ -1,6 +1,7 @@
 // RLS-scoped reads for the Envíos module. Mirrors lib/leads-access.ts: queue
 // listing by view, counts, and a shipment + call-history detail loader.
 
+import { buildTeamScore, type TeamScore } from "@/lib/team-score";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase } from "@/lib/db";
 import type {
@@ -1236,19 +1237,22 @@ export async function getReprogramStats(storeIds: string[]): Promise<ReprogramSt
 
 export type ReproDayAgentNamed = ReproDayAgentCount & { name: string };
 
-/** Productividad de hoy (día calendario Lima) por asesora en Repro Provincia:
- *  gestiones, reprogramaciones y guías distintas tocadas. Snapshot de fin de día.
- *  Lee también las filas sin actor: las del agente de voz (`reproDayActor`). */
-export async function getReproTodayByAgent(storeIds: string[]): Promise<ReproDayAgentNamed[]> {
+/** Productividad por asesora en Repro Provincia entre `startIso` (incluido) y
+ *  `endIso` (no): gestiones, resultados y pedidos distintos. Lee también las
+ *  filas sin actor: las del agente de voz (`reproDayActor`), que «Gestión por
+ *  persona» descarta para contarlo por sus llamadas. */
+async function getReproByAgent(
+  storeIds: string[],
+  { startIso, endIso }: { startIso: string; endIso: string },
+): Promise<ReproDayAgentNamed[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
-  const { startIso, endIso } = limaCalendarDayBounds();
 
   const calls: ReproDayCall[] = [];
   for (let from = 0; from < MAX_LIST * 4; from += PAGE) {
     const { data, error } = await sb
       .from("shipment_calls")
-      .select("agent, kind, new_status, shipment_id, note")
+      .select("agent, kind, new_status, shipment_id, note, shipment:shipments(order_id, delivery_status)")
       .in("store_id", storeIds)
       .gte("occurred_at", startIso)
       .lt("occurred_at", endIso)
@@ -1256,15 +1260,24 @@ export async function getReproTodayByAgent(storeIds: string[]): Promise<ReproDay
       .range(from, from + PAGE - 1);
     if (error) break;
     const batch =
-      (data as {
+      (data as unknown as {
         agent: string | null;
         kind: string;
         new_status: string | null;
         shipment_id: string | null;
         note: string | null;
+        shipment: { order_id: string | null; delivery_status: string | null } | null;
       }[]) ?? [];
     for (const r of batch) {
-      calls.push({ agent: r.agent, kind: r.kind, newStatus: r.new_status, shipmentId: r.shipment_id, note: r.note });
+      calls.push({
+        agent: r.agent,
+        kind: r.kind,
+        newStatus: r.new_status,
+        shipmentId: r.shipment_id,
+        orderId: r.shipment?.order_id ?? null,
+        delivered: r.shipment?.delivery_status === "entregado",
+        note: r.note,
+      });
     }
     if (batch.length < PAGE) break;
   }
@@ -1295,7 +1308,7 @@ export async function getVoiceScore(storeIds: string[], from: string, to: string
     const { data, error } = await sb
       .from("voice_calls")
       .select(
-        "telephony, provider, started_at, outcome, error, salida_ok:outcome_payload->salida_swayp->ok, costo:telephony_response->costo->total",
+        "telephony, provider, order_id, started_at, outcome, error, salida_ok:outcome_payload->salida_swayp->ok, costo:telephony_response->costo->total",
       )
       .in("store_id", storeIds)
       .eq("mode", "real")
@@ -1311,6 +1324,19 @@ export async function getVoiceScore(storeIds: string[], from: string, to: string
     if (batch.length < PAGE) break;
   }
   return aggregateVoiceScore(calls);
+}
+
+/**
+ * «Gestión por persona» (MOM §11.8): asesoras y agentes de voz en una tabla,
+ * entre dos días de Lima, ambos incluidos. Null si el rango no vale o la
+ * lectura de los agentes falla.
+ */
+export async function getTeamScore(storeIds: string[], from: string, to: string): Promise<TeamScore | null> {
+  const bounds = voiceScoreBounds(from, to);
+  if (!storeIds.length || !bounds) return null;
+  const [people, agents] = await Promise.all([getReproByAgent(storeIds, bounds), getVoiceScore(storeIds, from, to)]);
+  if (!agents) return null;
+  return buildTeamScore(people, agents);
 }
 
 /**

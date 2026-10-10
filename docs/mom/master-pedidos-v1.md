@@ -4014,6 +4014,30 @@ cajón, la columna de la cola y los mensajes del servidor muestran `MAX_INTENTOS
 aplican la transición y la ventana de reprogramación. El mínimo del motivo de
 descarte sale igual de `DISCARD_REASON_MIN`.
 
+#### 11.6.1 Swayp despacha de lunes a sábado (10-10-2026)
+
+Toda **fecha de despacho de una guía Swayp** es de lunes a sábado: Swayp no
+reparte los domingos (§11, «Horarios Swayp documentados»). Decisión del owner,
+10-10-2026, después de ver el selector de la guía directa ofreciendo domingos.
+
+- **En la pantalla**, el `<input type="date">` nativo no permite apagar un día de
+  la semana, así que las cuatro puertas que fijan esa fecha usan una lista de
+  días (`SwaypDispatchDateSelect`, `lib/swayp-dispatch-days.ts`) que empieza
+  mañana y salta los domingos: la **Guía Swayp directa** (también la que sale
+  desde Por confirmar, §11.11), que propone el primer día válido; **Cliente
+  confirma** por Swayp; la **guía Swayp a mano** y la **nueva fecha de la
+  excepción** de una guía anulada. «Cliente confirma» por Aliclik y «Programar
+  llamada» siguen con el calendario: no son despachos Swayp.
+- **En el servidor**, la misma regla (`isSwaypDispatchDay`) en
+  `createDirectFenixGuide`, `createFenixGuide`, `registerRerouteCall` con
+  «confirma» por Swayp y `reenviarGuiaAnulada` (que usan también el reenvío por
+  voz y la excepción), con el mismo texto: «Swayp no despacha los domingos: elige
+  una fecha de lunes a sábado». Como en §11.6, la regla pertenece a la función
+  que emite, no a la pantalla.
+- El agente de voz ya no ofrecía domingos (§11.8) y el automático Aliclik →
+  Swayp ya los saltaba (`nextAutoDelivery`, que además salta el sábado en
+  Arequipa).
+
 ### 11.7 El motivo anterior se ve antes de llamar, y su ausencia también
 
 §11 manda revisar cómo terminó el intento anterior antes de reenviar: «si el
@@ -4369,6 +4393,11 @@ Reglas de esa tabla:
   «Reintento automático Aliclik → Swayp» también lo escribe, y el 03-10 le dio
   al Agente Daaph 21 gestiones y 6 reprogramadas con 10 llamadas y ningún
   «confirma».
+
+  **Desde el 10-10-2026 la tabla es «Gestión por persona»** (ver más abajo
+  en esta sección). Ahí el agente ya no se cuenta por estas filas sino por
+  sus llamadas. Las filas siguen escribiéndose para el
+  historial de la guía.
 - **Agente Daaph contra Agente Telnyx** (03-10-2026). Es el mismo agente de
   xAI con el mismo guion y la misma voz. Cambia solo la línea: Daaph llama por
   Zadarma (callback) y Telnyx por Telnyx Call Control. Así se mide qué línea
@@ -4453,9 +4482,9 @@ Reglas de esa tabla:
     por Zadarma. La prueba manual elige la línea: «Probar en mi teléfono»
     del Master tiene «Llamarme» (Zadarma) y «Por Telnyx», y
     `/api/internal/voice/test-call` acepta `telefonia`.
-  - **«Hoy por asesora».** Las notas de una llamada por Telnyx firman
-    «Agente de voz (Telnyx)» y cuentan en la fila **«Agente Telnyx»**; las de
-    Zadarma, en «Agente Daaph». Las dos filas van al final de la tabla.
+  - **Firma por línea.** Las notas de una llamada por Telnyx firman
+    «Agente de voz (Telnyx)», y las de Zadarma, «Agente de voz». Así el
+    historial de la guía dice qué agente llamó.
   - **Agente ElevenLabs** (03-10-2026). Usa la misma línea Telnyx, pero con
     otro motor: el agente de ElevenLabs («Agente ElevenLabs · Kenku
     Reproprovincia»), con el mismo guion y las mismas herramientas de Kapta.
@@ -4619,14 +4648,56 @@ Reglas de esa tabla:
     - **Pestaña oculta:** con la pestaña del navegador oculta no se consulta.
     - **Tiempo de la llamada:** el reloj de la nota corre solo, sin repintar
       la tabla.
-  - **«Agentes de voz: comparación»** (Envíos, en el resumen de arriba, junto
-    a «Hoy por asesora»). Muestra una fila por agente, siempre los tres, con
-    llamadas **reales** (`mode = 'real'`) del rango elegido, con los mismos
-    chips que el popup de reprogramaciones: Hoy, Ayer, Últimos 7 días, Este
-    mes o un Rango a mano (días de Lima, ambos incluidos, hasta 366). Hoy llega
-    con la página; los otros rangos se piden al elegirlos. El agente sale de la
-    llamada: Zadarma es Daaph; Telnyx con
+  - **«Gestión por persona»** (Envíos, en el resumen plegable, 10-10-2026).
+    Asesoras y agentes de voz van en **una sola tabla**. Antes eran dos,
+    «Hoy por asesora» y «Agentes de voz: comparación», y no cuadraban a la
+    vista:
+    - arriba, «Guías» (24) eran las guías distintas tocadas; abajo, «Guías
+      Swayp» (1) eran las salidas creadas;
+    - la salida Swayp de un agente le sumaba tres gestiones: su llamada y las
+      dos filas `reroute`.
+
+    Rango con los mismos chips que el popup de reprogramaciones: Hoy, Ayer,
+    Últimos 7 días, Este mes o un Rango a mano (días de Lima, ambos incluidos,
+    hasta 366). Hoy llega con la página; los otros rangos se piden al
+    elegirlos.
+
+    **Filas.** Primero las asesoras, por gestiones, y después los tres
+    agentes, siempre, aunque estén en cero, con la marca IA. Cada fila sale
+    de **una sola fuente**:
+    - **asesora:** sus gestiones en `shipment_calls`;
+    - **agente:** sus llamadas **reales** (`mode = 'real'`) en `voice_calls`,
+      fechadas por `queued_at`. Una llamada es una gestión. Las filas sin
+      actor del agente en `shipment_calls` no se cuentan aquí.
+
+    El agente sale de la llamada: Zadarma es Daaph; Telnyx con
     `provider = 'grok'` es Telnyx y con `elevenlabs` es ElevenLabs.
+
+    **Columnas para todos:**
+    - **Gestiones:** llamadas y reprogramaciones registradas; en un agente,
+      cada llamada.
+    - **Pedidos:** pedidos distintos. Se cuenta el pedido de la guía, no la
+      guía, porque una reprogramación toca dos guías del mismo pedido.
+    - **Reprogramadas:** salieron a En ruta. En la asesora es el `new_status`
+      de su gestión. En el agente es la salida Swayp que creó
+      (`outcome_payload.salida_swayp.ok`).
+    - **Llegaron** (10-10-2026): de las guías que esa persona sacó a En ruta
+      en el rango, cuántas figuran entregadas hoy, como «2 de 6». Es la
+      entrega real de lo reprogramado. Las recientes pueden seguir en
+      camino. Sale de las filas `en_ruta` de `shipment_calls`, también en
+      los agentes: su salida Swayp deja esa fila en la guía nueva. Ese día,
+      desde el inicio del piloto, iba así:
+      - Telnyx: 2 de 6.
+      - ElevenLabs: 2 de 4.
+      - Daaph: 0 de 19. Casi todas eran de fines de setiembre y seguían con
+        novedad («no contesta», «ya no desea»).
+    - **Anuladas y Entregas registradas:** solo asesoras. El agente no
+      anula: su «cancela» va en su propia columna. «Entregas registradas»
+      cuenta las gestiones en que la asesora cerró la guía como entregada con
+      el resultado del courier. Antes se llamaba «Entregadas», y en los
+      agentes salía vacía aunque sus guías sí se entregaban.
+
+    **Columnas «Llamadas del agente»** (vacías en las asesoras):
     - **Atendidas:** `started_at` presente —`identificar_llamada` corrió, el
       agente creyó oír a una persona— **salvo que el propio agente registrara
       después «no contestó»**: eso es un buzón. El «no contestó» que escribe el
@@ -4635,15 +4706,16 @@ Reglas de esa tabla:
       atendidas y 10 sin gestión sobre 4 buzones y 6 cortes).
     - **Sin gestión:** atendidas cuyo resultado no es `confirma`, `programar`
       ni `cancela`.
-    - **Guías Swayp:** `outcome_payload.salida_swayp.ok`.
-    - **Conversión:** confirma sobre atendidas.
-    - **Llamadas por confirma:** llamadas sobre confirma, como aproximación
-      del costo.
-
+    - **Volver a llamar** (`programar`) y **Cancela**.
+    - **Conversión:** reprogramadas por llamada sobre atendidas. En el total
+      suman solo las de los agentes: el 10-10 decía 35 % porque sumaba las
+      reprogramadas de las asesoras.
     - **Costo línea (US$):** lo que Telnyx avisa que cobró, la suma de los dos
       tramos. No incluye el minuto de xAI ni el de ElevenLabs.
-    - **Costo por confirma:** solo cuando todas las llamadas del rango traen
-      costo. Si hay llamadas sin costo, la columna muestra «n de m».
+    - **Costo por reprogramada:** solo cuando todas las llamadas de la fila
+      traen costo. Si hay llamadas sin costo, «Costo línea» muestra «n de m».
+
+    La fila **Total** suma todas las filas, asesoras y agentes.
 
     Daaph sale con guion porque Zadarma no avisa el costo por llamada, y la
     duración que guarda `voice_calls` no es la facturada cuando la cierra el
@@ -4850,6 +4922,16 @@ definir» del pedido, y en Lima puede salir como adicional con motivo (§9,
 como «otra guía activa» la propia salida «por definir» y ninguna guía directa se
 podía crear (#KP138264, #KP138197 y #KP138302, esta con la salida de Grupo GF
 todavía pendiente). La 0219 lo limita al automático.
+
+**La emisión se enlaza con su guía también al rellenar (0239, 10-10-2026).**
+`swayp_link_emission` (0209) escribía el `child_id` de la emisión solo al
+**insertar** la guía. La Guía Swayp directa rellena la salida «por definir» del
+pedido con un **update** (`lib/route-output-fill.ts`), y esas emisiones quedaban
+sin hija: 32 entre el 02 y el 10-10-2026. La reserva lee una emisión sin hija
+como emisión incierta, así que bloqueaba cualquier otra emisión Swayp del pedido
+y seguía restando su stock. La 0239 agrega el mismo enlace en update —cuando la
+fila pasa a ser guía Swayp con número— y enlaza las sueltas por tienda, pedido y
+número (cada una casaba con una sola guía).
 
 En **Repro Provincia → Ver automático Aliclik → Swayp** se muestran el estado,
 las ejecuciones, las guías emitidas y el último motivo por pedido. Un administrador

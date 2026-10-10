@@ -1,7 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
+import { SwaypDispatchDateSelect } from "@/components/swayp-dispatch-date-select";
 import { cn } from "@/components/ui";
 import {
   Badge,
@@ -88,13 +90,8 @@ import type {
   ShipmentRow,
   StoreSummary,
 } from "@/lib/types";
-import { SHIPMENT_VIEWS, type ShipmentView, type ReproDayAgentNamed } from "@/lib/shipments-access";
-import {
-  voiceCallsPerConfirma,
-  voiceConversion,
-  voiceCostPerConfirma,
-  type VoiceScoreRow,
-} from "@/lib/voice-scoreboard";
+import { SHIPMENT_VIEWS, type ShipmentView } from "@/lib/shipments-access";
+import { teamConversion, teamCostPerReprogramada, type TeamScore, type TeamScoreRow } from "@/lib/team-score";
 import {
   RECOVERY_CALL_DISPOSITIONS,
   RECOVERY_LABEL,
@@ -118,7 +115,6 @@ import {
 import {
   REPROGRAM_STALE_DAYS,
   REPROGRAM_UNASSIGNED,
-  isVoiceAgentKey,
   limaRangeBounds,
   limaTodayKey,
   localityMismatch,
@@ -131,7 +127,7 @@ import {
   claimShipment,
   createFenixGuide,
   loadReprogramData,
-  loadVoiceScore,
+  loadTeamScore,
   loadVoiceLiveStatus,
   loadShipmentDetail,
   reprogramCancelledShipmentException,
@@ -448,8 +444,7 @@ export function ShipmentsBoard({
   counts,
   shipments,
   reprogram,
-  todayByAgent,
-  voiceScore,
+  teamScore,
   initialOpenId,
 }: {
   stores: StoreSummary[];
@@ -457,9 +452,8 @@ export function ShipmentsBoard({
   counts: Record<ShipmentView, number>;
   shipments: ShipmentRow[];
   reprogram?: ReprogramStats;
-  todayByAgent?: ReproDayAgentNamed[];
-  /** «Agentes de voz: comparación» de hoy; los otros rangos se piden al elegirlos. */
-  voiceScore?: VoiceScoreRow[] | null;
+  /** «Gestión por persona» de hoy; los otros rangos se piden al elegirlos. */
+  teamScore?: TeamScore | null;
   initialOpenId?: string | null;
 }) {
   const router = useRouter();
@@ -1054,7 +1048,7 @@ export function ShipmentsBoard({
           son lectura de dirección, no de quien marca el teléfono: cada apertura
           de Envíos costaba un scroll y una lectura antes de la primera guía.
           Siguen a un clic, plegadas, con los mismos datos. */}
-      {(reprogram || todayByAgent || voiceScore) && (
+      {(reprogram || teamScore) && (
         <details className={cn(CARD, "group")}>
           <summary className="flex min-h-12 cursor-pointer list-none items-center gap-2 rounded-lg px-4 text-sm transition-colors hover:bg-wash group-open:rounded-b-none sm:px-5 [&::-webkit-details-marker]:hidden">
             <IconChevronRight
@@ -1062,12 +1056,11 @@ export function ShipmentsBoard({
               className="size-4 shrink-0 text-ink-500 transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none"
             />
             <span className="font-semibold text-ink-900">Resumen</span>
-            <span className="min-w-0 truncate text-ink-500">reprogramaciones, gestión de hoy y agentes de voz</span>
+            <span className="min-w-0 truncate text-ink-500">reprogramaciones y gestión por persona</span>
           </summary>
           <div className="divide-y divide-line border-t border-line">
             {reprogram && <ReprogramStrip stats={reprogram} stores={stores} />}
-            {todayByAgent && <TodayByAgentPanel rows={todayByAgent} />}
-            {voiceScore && <VoiceScorePanel initial={voiceScore} />}
+            {teamScore && <TeamScorePanel initial={teamScore} />}
           </div>
         </details>
       )}
@@ -2612,13 +2605,19 @@ function ShipmentDrawer({
   // nueva y programa el despacho. Un `<input type=date>` con `min` no basta:
   // se puede teclear la fecha a mano y el atributo no lo impide.
   const dateNeedsFuture = disposition === "programar" || disposition === "confirma";
-  const programDateInvalid = dateNeedsFuture && (!nextDate || nextDate <= localDateInputValue());
+  // «Cliente confirma» por Swayp emite la guía con esa fecha de despacho, y
+  // Swayp no despacha los domingos (10-10-2026).
+  const confirmaPorSwayp = disposition === "confirma" && reprogramProvider !== "aliclik";
+  const swaypDomingo = confirmaPorSwayp && !!nextDate && !isSwaypDispatchDay(nextDate);
+  const programDateInvalid =
+    dateNeedsFuture && (!nextDate || nextDate <= localDateInputValue() || swaypDomingo);
   // La guía a mano acuña por la MISMA `rescheduleGuideCode` que «confirma», así
   // que tiene la misma exigencia. Estaba sin `min`, sin entrar en el `disabled`
   // y sin guarda en el servidor: era la segunda puerta de la regla del MOM
   // §11.6, y era la que el cajón abre a la fuerza cuando el envío no tiene N° de
   // pedido —justo cuando nadie mira con cuidado.
-  const manualGuideDateInvalid = !manualGuideDate || manualGuideDate <= localDateInputValue();
+  const manualGuideDateInvalid =
+    !manualGuideDate || manualGuideDate <= localDateInputValue() || !isSwaypDispatchDay(manualGuideDate);
   // MISMA función que la reja del servidor, para que el botón no invite a algo
   // que la acción va a rechazar.
   const numeroManualNoEsDeSwayp = !!fenixGuide.trim() && !esNumeroDeGuiaSwayp(fenixGuide);
@@ -2716,9 +2715,11 @@ function ShipmentDrawer({
       ? "Explica el motivo de la excepción antes de registrarla."
       : disposition === "confirma" && !nextDate
         ? "Elige la fecha de despacho para confirmar."
-        : programDateInvalid
-          ? "La fecha tiene que ser futura: va estampada en el número de la guía nueva."
-          : null;
+        : swaypDomingo
+          ? SWAYP_SUNDAY_ERROR
+          : programDateInvalid
+            ? "La fecha tiene que ser futura: va estampada en el número de la guía nueva."
+            : null;
   const parsedLatitude = Number(addressLatitude.replace(",", "."));
   const parsedLongitude = Number(addressLongitude.replace(",", "."));
   const addressFormValid =
@@ -2782,7 +2783,7 @@ function ShipmentDrawer({
   // ausencia sigue siendo un bloqueo.
   const cancelledExceptionTienePedido = !!shipment && !!drawerOrderName;
   const cancelledExceptionDateInvalid =
-    !cancelledExceptionDate || cancelledExceptionDate <= localDateInputValue();
+    !cancelledExceptionDate || cancelledExceptionDate <= localDateInputValue() || !isSwaypDispatchDay(cancelledExceptionDate);
   // Sin vínculo de codbar no hay guía, así que el reenvío tampoco: si no, el
   // botón invita y el servidor rechaza.
   const cancelledExceptionUnavailable = fenixReason !== "ok" || swaypSinCodbar;
@@ -3271,12 +3272,10 @@ function ShipmentDrawer({
                 {showCancelledException && !cancelledExceptionUnavailable && (
                   <div className="space-y-4 pt-4">
                     <label className={DRAWER_LABEL}>
-                      Nueva fecha de entrega
-                      <input
-                        type="date"
+                      Nueva fecha de entrega (lunes a sábado)
+                      <SwaypDispatchDateSelect
                         value={cancelledExceptionDate}
-                        min={tomorrowDateInputValue()}
-                        onChange={(e) => setCancelledExceptionDate(e.target.value)}
+                        onChange={setCancelledExceptionDate}
                         className={DRAWER_INPUT}
                       />
                     </label>
@@ -3840,26 +3839,35 @@ function ShipmentDrawer({
                         {disposition === "confirma"
                           ? reprogramProvider === "aliclik"
                             ? "Fecha de reprogramación en Aliclik"
-                            : "Fecha de reprogramación (va en la nueva guía Swayp)"
+                            : "Fecha de reprogramación (va en la nueva guía Swayp, lunes a sábado)"
                           : disposition === "programar"
                             ? "Fecha de próxima llamada"
                             : "Próximo intento (opcional)"}
-                        <input
-                          type="date"
-                          value={nextDate}
-                          onChange={(e) => setNextDate(e.target.value)}
-                          // UNA REPROGRAMACIÓN CONFIRMADA NO PUEDE SER DE AYER. El
-                          // `min` solo cubría «programar», y ni el botón ni el
-                          // servidor exigían futuro para «confirma»: se emitía una
-                          // guía Swayp con la fecha pasada ESTAMPADA EN SU NÚMERO
-                          // (`rescheduleGuideCode`) y un despacho imposible agendado.
-                          min={
-                            disposition === "programar" || disposition === "confirma"
-                              ? tomorrowDateInputValue()
-                              : undefined
-                          }
-                          className={DRAWER_INPUT}
-                        />
+                        {confirmaPorSwayp ? (
+                          <SwaypDispatchDateSelect
+                            value={nextDate}
+                            onChange={setNextDate}
+                            invalid={swaypDomingo}
+                            className={DRAWER_INPUT}
+                          />
+                        ) : (
+                          <input
+                            type="date"
+                            value={nextDate}
+                            onChange={(e) => setNextDate(e.target.value)}
+                            // UNA REPROGRAMACIÓN CONFIRMADA NO PUEDE SER DE AYER. El
+                            // `min` solo cubría «programar», y ni el botón ni el
+                            // servidor exigían futuro para «confirma»: se emitía una
+                            // guía Swayp con la fecha pasada ESTAMPADA EN SU NÚMERO
+                            // (`rescheduleGuideCode`) y un despacho imposible agendado.
+                            min={
+                              disposition === "programar" || disposition === "confirma"
+                                ? tomorrowDateInputValue()
+                                : undefined
+                            }
+                            className={DRAWER_INPUT}
+                          />
+                        )}
                       </label>
                     )}
                     <label className={DRAWER_LABEL}>
@@ -4232,13 +4240,11 @@ function ShipmentDrawer({
                   <div className="space-y-4 pt-4">
                     <div className="grid gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
                       <label className={DRAWER_LABEL}>
-                        Fecha de reprogramación (va en la guía)
-                        <input
-                          type="date"
+                        Fecha de reprogramación (va en la guía, lunes a sábado)
+                        <SwaypDispatchDateSelect
                           value={manualGuideDate}
-                          min={tomorrowDateInputValue()}
-                          aria-invalid={manualGuideDateInvalid || undefined}
-                          onChange={(e) => setManualGuideDate(e.target.value)}
+                          onChange={setManualGuideDate}
+                          invalid={manualGuideDateInvalid && !!manualGuideDate}
                           className={DRAWER_INPUT}
                         />
                       </label>
@@ -4825,28 +4831,53 @@ function RangeFields({
   );
 }
 
-/** Snapshot de hoy: productividad por asesora en Repro Provincia (gestiones +
- *  resultados del día), para que cada persona mande una "foto" de su trabajo al
- *  final del día. */
-function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
-  const day = new Date().toLocaleDateString("es-PE", {
-    weekday: "long",
-    day: "2-digit",
-    month: "short",
-    timeZone: "America/Lima",
-  });
-  const hoy = day.charAt(0).toUpperCase() + day.slice(1);
-  const totals = rows.reduce(
-    (acc, r) => {
-      acc.gestiones += r.gestiones;
-      acc.reprogramadas += r.reprogramadas;
-      acc.anuladas += r.anuladas;
-      acc.entregadas += r.entregadas;
-      acc.guias += r.guias;
-      return acc;
-    },
-    { gestiones: 0, reprogramadas: 0, anuladas: 0, entregadas: 0, guias: 0 },
-  );
+/** Un día de Lima («2026-10-10») como «Sábado, 10 oct.». */
+function limaDayLabel(key: string): string {
+  const d = new Date(`${key}T12:00:00-05:00`);
+  const txt = d.toLocaleDateString("es-PE", { weekday: "long", day: "2-digit", month: "short", timeZone: "America/Lima" });
+  return txt.charAt(0).toUpperCase() + txt.slice(1);
+}
+
+/** «10 oct.» o «3 oct. al 9 oct.»: el rango de la tabla, en palabras. */
+function limaRangeLabel(from: string, to: string): string {
+  if (from === to) return limaDayLabel(from);
+  const short = (key: string) =>
+    new Date(`${key}T12:00:00-05:00`).toLocaleDateString("es-PE", { day: "numeric", month: "short", timeZone: "America/Lima" });
+  return `${short(from)} al ${short(to)}`;
+}
+
+/** Columnas que valen para todos, con la de la persona. */
+const COMMON_COLUMNS = 7;
+/** Columnas que solo tienen sentido en una llamada del agente. */
+const AGENT_ONLY_COLUMNS = 7;
+
+/**
+ * «Gestión por persona» (MOM §11.8): asesoras y agentes de voz en una tabla.
+ * Eran dos —«Hoy por asesora» y «Agentes de voz: comparación»— y las dos decían
+ * «Guías» para cosas distintas (10-10-2026). Las cinco primeras cifras valen
+ * para todos; las del bloque «Llamadas del agente» solo para los agentes.
+ */
+function TeamScorePanel({ initial }: { initial: TeamScore }) {
+  const today = limaTodayKey();
+  const [preset, setPreset] = useState<ReprogramPreset>("hoy");
+  const [custom, setCustom] = useState({ from: today, to: today });
+  const { from, to } = reprogramPresetRange(preset, custom);
+  const key = `${from}|${to}`;
+  const [loaded, setLoaded] = useState<Record<string, TeamScore | "error">>({ [`${today}|${today}`]: initial });
+  const result = loaded[key];
+
+  useEffect(() => {
+    if (result) return;
+    let alive = true;
+    loadTeamScore(from, to)
+      .then((score) => alive && setLoaded((m) => ({ ...m, [key]: score ?? "error" })))
+      .catch(() => alive && setLoaded((m) => ({ ...m, [key]: "error" })));
+    return () => {
+      alive = false;
+    };
+  }, [key, from, to, result]);
+
+  const score = result && result !== "error" ? result : null;
   /**
    * El correo se acorta SOLO si lo que llegó es un correo. Cortando por «@» a
    * ciegas, una fila decía «mariannys» y la de al lado «Mariannys Pérez» según
@@ -4858,110 +4889,83 @@ function TodayByAgentPanel({ rows }: { rows: ReproDayAgentNamed[] }) {
     const user = name.split("@")[0] || name;
     return user.replace(/[._-]+/g, " ").replace(/\b\p{Ll}/gu, (c) => c.toUpperCase());
   };
-
-  return (
-    <div className={SUMMARY_PANEL}>
-      <h3 className="text-sm font-semibold text-ink-900">
-        Hoy por asesora <span className="font-normal text-ink-500">· {hoy}</span>
-      </h3>
-      {rows.length === 0 ? (
-        <p className="mt-1 text-[13px] text-ink-500">Aún no hay gestión registrada hoy.</p>
-      ) : (
-        <>
-          <div className="-mx-4 mt-3 overflow-x-auto sm:-mx-5">
-            <table className="w-full border-separate border-spacing-0 text-sm">
-              <thead>
-                <tr>
-                  <th className={MINI_TH}>Asesora</th>
-                  <th className={MINI_TH}>Gestiones</th>
-                  <th className={MINI_TH}>Reprogramadas</th>
-                  <th className={MINI_TH}>Anuladas</th>
-                  <th className={MINI_TH}>Entregadas</th>
-                  <th className={MINI_TH}>Guías</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.agent}>
-                    <td className={cn(MINI_TD, "text-ink-900")}>
-                      {label(r.name)}
-                      {isVoiceAgentKey(r.agent) && (
-                        <Badge tone="info" className="ml-1.5 align-middle">
-                          IA
-                        </Badge>
-                      )}
-                    </td>
-                    <td className={cn(MINI_TD, "font-semibold text-ink-900")}>{fmtCount(r.gestiones)}</td>
-                    <td className={cn(MINI_TD, "text-info-fg")}>{fmtCount(r.reprogramadas)}</td>
-                    <td className={cn(MINI_TD, "text-ink-500")}>{fmtCount(r.anuladas)}</td>
-                    <td className={cn(MINI_TD, "text-ok-fg")}>{fmtCount(r.entregadas)}</td>
-                    <td className={cn(MINI_TD, "text-ink-700")}>{fmtCount(r.guias)}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="font-medium text-ink-700">
-                  <td className={MINI_TD}>Total equipo</td>
-                  <td className={cn(MINI_TD, "font-semibold text-ink-900")}>{fmtCount(totals.gestiones)}</td>
-                  <td className={MINI_TD}>{fmtCount(totals.reprogramadas)}</td>
-                  <td className={MINI_TD}>{fmtCount(totals.anuladas)}</td>
-                  <td className={MINI_TD}>{fmtCount(totals.entregadas)}</td>
-                  <td className={MINI_TD}>{fmtCount(totals.guias)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-          {/* Lo que antes solo decía un tooltip: con teclado o en táctil no
-              existía. Una línea, visible, y las cabeceras sin abreviar. */}
-          <p className="mt-3 max-w-[110ch] text-[13px] leading-5 text-ink-500">
-            Gestiones: llamadas y reprogramaciones registradas hoy · Reprogramadas: confirmadas y en ruta ·
-            Anuladas: la clienta canceló · Entregadas: cerradas por el resultado del courier · Guías: distintas
-            tocadas hoy · Agente Daaph, Agente Telnyx y Agente ElevenLabs: el agente de voz IA por distintas líneas y
-            motores; cada llamada suya es una gestión.
-          </p>
-        </>
-      )}
-    </div>
-  );
-}
-
-/** «Agentes de voz: comparación» (MOM §11.8): los agentes que compiten, uno al
- *  lado del otro, solo con llamadas reales. Los mismos chips de rango que el
- *  popup de reprogramaciones; hoy llega con la página y el resto se pide. */
-function VoiceScorePanel({ initial }: { initial: VoiceScoreRow[] }) {
-  const today = limaTodayKey();
-  const [preset, setPreset] = useState<ReprogramPreset>("hoy");
-  const [custom, setCustom] = useState({ from: today, to: today });
-  const { from, to } = reprogramPresetRange(preset, custom);
-  const key = `${from}|${to}`;
-  const [loaded, setLoaded] = useState<Record<string, VoiceScoreRow[] | "error">>({ [`${today}|${today}`]: initial });
-  const result = loaded[key];
-
-  useEffect(() => {
-    if (result) return;
-    let alive = true;
-    loadVoiceScore(from, to)
-      .then((rows) => alive && setLoaded((m) => ({ ...m, [key]: rows ?? "error" })))
-      .catch(() => alive && setLoaded((m) => ({ ...m, [key]: "error" })));
-    return () => {
-      alive = false;
-    };
-  }, [key, from, to, result]);
-
-  const rows = Array.isArray(result) ? result : null;
   // Cifras en es-PE, como el resto del panel: coma de miles y punto decimal.
-  // Se escribía «5,5» y «$6,42» al lado de «3,089».
   const pct = (n: number | null) => (n == null ? "—" : `${Math.round(n * 100)}%`);
-  const per = (n: number | null) =>
-    n == null ? "—" : n.toLocaleString("es-PE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   const usd = (n: number | null) =>
     n == null ? "—" : `US$ ${n.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const AGENT_EDGE = "border-l border-line";
+  /** Celda que no aplica a la fila: vacía a la vista, dicha al lector de pantalla. */
+  const na = (first?: boolean) => (
+    <td className={cn(MINI_TD, first && AGENT_EDGE)}>
+      <span className="sr-only">No aplica</span>
+    </td>
+  );
+
+  const row = (r: TeamScoreRow, total = false) => {
+    const idle = r.voice && r.llamadas === 0;
+    const strong = !idle && "text-ink-900";
+    const agentCols = total ? score!.rows.some((x) => x.voice) : r.voice;
+    return (
+      <tr
+        key={r.key}
+        className={cn(idle ? "text-ink-500" : "text-ink-700", total && "font-medium")}
+      >
+        <td className={cn(MINI_TD, "whitespace-nowrap", strong)}>
+          {total ? "Total" : label(r.name)}
+          {r.voice && (
+            <Badge tone="info" className="ml-1.5 align-middle">
+              IA
+            </Badge>
+          )}
+        </td>
+        <td className={cn(MINI_TD, "font-semibold", strong)}>{fmtCount(r.gestiones)}</td>
+        <td className={MINI_TD}>{fmtCount(r.pedidos)}</td>
+        <td className={cn(MINI_TD, r.reprogramadas > 0 && !total && "text-info-fg")}>{fmtCount(r.reprogramadas)}</td>
+        <td className={cn(MINI_TD, "whitespace-nowrap")}>
+          {r.llegaronDe ? (
+            <>
+              <span className={cn(r.llegaron > 0 && !total && "text-ok-fg")}>{fmtCount(r.llegaron)}</span>
+              <span className="text-xs text-ink-500"> de {fmtCount(r.llegaronDe)}</span>
+            </>
+          ) : (
+            "—"
+          )}
+        </td>
+        {r.anuladas === null ? na() : <td className={MINI_TD}>{fmtCount(r.anuladas)}</td>}
+        {r.entregadas === null ? (
+          na()
+        ) : (
+          <td className={cn(MINI_TD, r.entregadas > 0 && !total && "text-ok-fg")}>{fmtCount(r.entregadas)}</td>
+        )}
+        {!agentCols || r.atendidas === null ? (
+          Array.from({ length: AGENT_ONLY_COLUMNS }, (_, i) => <Fragment key={i}>{na(i === 0)}</Fragment>)
+        ) : (
+          <>
+            <td className={cn(MINI_TD, AGENT_EDGE)}>{fmtCount(r.atendidas)}</td>
+            <td className={cn(MINI_TD, (r.sinGestion ?? 0) > 0 && !total && "text-warn-fg")}>{fmtCount(r.sinGestion ?? 0)}</td>
+            <td className={MINI_TD}>{fmtCount(r.programar ?? 0)}</td>
+            <td className={MINI_TD}>{fmtCount(r.cancela ?? 0)}</td>
+            <td className={cn(MINI_TD, "font-semibold")}>{pct(teamConversion(r))}</td>
+            <td className={cn(MINI_TD, "whitespace-nowrap")}>
+              {r.conCosto ? usd(r.costo) : "—"}
+              {r.conCosto > 0 && r.conCosto < r.llamadas && (
+                <span className="ml-1 text-xs text-ink-500">
+                  ({fmtCount(r.conCosto)} de {fmtCount(r.llamadas)})
+                </span>
+              )}
+            </td>
+            <td className={MINI_TD}>{usd(teamCostPerReprogramada(r))}</td>
+          </>
+        )}
+      </tr>
+    );
+  };
 
   return (
     <div className={SUMMARY_PANEL}>
       <h3 className="text-sm font-semibold text-ink-900">
-        Agentes de voz: comparación{" "}
-        <span className="font-normal tabular-nums text-ink-500">· {from === to ? from : `${from} al ${to}`}</span>
+        Gestión por persona{" "}
+        <span className="font-normal tabular-nums text-ink-500">· {limaRangeLabel(from, to)}</span>
       </h3>
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
         <div role="group" aria-label="Rango" className="flex flex-wrap items-center gap-1.5">
@@ -4975,61 +4979,72 @@ function VoiceScorePanel({ initial }: { initial: VoiceScoreRow[] }) {
         <table className="w-full border-separate border-spacing-0 text-sm">
           <thead>
             <tr>
-              <th className={MINI_TH}>Agente</th>
-              <th className={MINI_TH}>Llamadas</th>
-              <th className={MINI_TH}>Atendidas</th>
+              <th colSpan={COMMON_COLUMNS} className="px-4 pb-1 sm:px-5">
+                <span className="sr-only">Todos</span>
+              </th>
+              <th
+                colSpan={AGENT_ONLY_COLUMNS}
+                scope="colgroup"
+                className={cn("px-3 pb-1 text-left text-xs font-semibold text-ink-500 last:pr-4 sm:last:pr-5", AGENT_EDGE)}
+              >
+                Llamadas del agente
+              </th>
+            </tr>
+            <tr>
+              <th className={MINI_TH}>Persona</th>
+              <th className={MINI_TH}>Gestiones</th>
+              <th className={MINI_TH}>Pedidos</th>
+              <th className={MINI_TH}>Reprogramadas</th>
+              <th className={MINI_TH}>Llegaron</th>
+              <th className={MINI_TH}>Anuladas</th>
+              <th className={MINI_TH}>Entregas registradas</th>
+              <th className={cn(MINI_TH, AGENT_EDGE)}>Atendidas</th>
               <th className={MINI_TH}>Sin gestión</th>
-              <th className={MINI_TH}>Confirma</th>
-              <th className={MINI_TH}>Programa</th>
+              <th className={MINI_TH}>Volver a llamar</th>
               <th className={MINI_TH}>Cancela</th>
-              <th className={MINI_TH}>Guías Swayp</th>
-              <th className={MINI_TH}>Confirma / atendidas</th>
-              <th className={MINI_TH}>Llamadas por confirma</th>
+              <th className={MINI_TH}>Conversión</th>
               <th className={MINI_TH}>Costo línea</th>
-              <th className={MINI_TH}>Costo por confirma</th>
+              <th className={MINI_TH}>Costo por reprogramada</th>
             </tr>
           </thead>
           <tbody>
-            {!rows && (
+            {!score && (
               <tr>
-                <td colSpan={12} className="px-4 py-3 text-[13px] text-ink-500 sm:px-5">
+                <td colSpan={COMMON_COLUMNS + AGENT_ONLY_COLUMNS} className="px-4 py-3 text-[13px] text-ink-500 sm:px-5">
                   {result === "error" ? "No se pudo leer este rango." : "Cargando…"}
                 </td>
               </tr>
             )}
-            {rows?.map((r) => (
-              <tr key={r.agent} className={r.llamadas ? "text-ink-700" : "text-ink-500"}>
-                <td className={cn(MINI_TD, r.llamadas > 0 && "text-ink-900")}>{r.name}</td>
-                <td className={cn(MINI_TD, "font-semibold", r.llamadas > 0 && "text-ink-900")}>{fmtCount(r.llamadas)}</td>
-                <td className={MINI_TD}>{fmtCount(r.atendidas)}</td>
-                <td className={cn(MINI_TD, r.sinGestion > 0 && "text-warn-fg")}>{fmtCount(r.sinGestion)}</td>
-                <td className={cn(MINI_TD, r.confirma > 0 && "text-ok-fg")}>{fmtCount(r.confirma)}</td>
-                <td className={MINI_TD}>{fmtCount(r.programar)}</td>
-                <td className={cn(MINI_TD, "text-ink-500")}>{fmtCount(r.cancela)}</td>
-                <td className={MINI_TD}>{fmtCount(r.guias)}</td>
-                <td className={cn(MINI_TD, "font-semibold")}>{pct(voiceConversion(r))}</td>
-                <td className={MINI_TD}>{per(voiceCallsPerConfirma(r))}</td>
-                <td className={cn(MINI_TD, "whitespace-nowrap")}>
-                  {r.conCosto ? usd(r.costo) : "—"}
-                  {r.conCosto > 0 && r.conCosto < r.llamadas && (
-                    <span className="ml-1 text-xs text-ink-500">
-                      ({fmtCount(r.conCosto)} de {fmtCount(r.llamadas)})
-                    </span>
-                  )}
+            {score && !score.rows.some((r) => !r.voice) && (
+              <tr>
+                <td colSpan={COMMON_COLUMNS + AGENT_ONLY_COLUMNS} className="px-4 py-2 text-[13px] text-ink-500 sm:px-5">
+                  Ninguna asesora registró gestión en este rango.
                 </td>
-                <td className={MINI_TD}>{usd(voiceCostPerConfirma(r))}</td>
               </tr>
-            ))}
+            )}
+            {score?.rows.map((r) => row(r))}
           </tbody>
+          {score && <tfoot>{row(score.total, true)}</tfoot>}
         </table>
       </div>
-      <p className="mt-3 max-w-[110ch] text-[13px] leading-5 text-ink-500">
-        Solo llamadas reales (no las de prueba) · Atendidas: la clienta habló con el agente · Sin gestión: atendió
-        pero se cortó sin que el agente registrara un resultado · Guías Swayp: salidas creadas por sus «confirma» ·
-        Costo línea: lo que Telnyx avisó que cobró (los dos tramos; sin el minuto de xAI ni de ElevenLabs).
-        Zadarma no lo avisa, por eso Daaph sale con guion · Agente Daaph: Zadarma + Grok · Agente Telnyx:
-        Telnyx + Grok · Agente ElevenLabs: Telnyx + ElevenLabs.
-      </p>
+      {/* Lo que antes solo decía un tooltip: con teclado o en táctil no
+          existía. Visible, y las cabeceras sin abreviar. */}
+      <div className="mt-3 max-w-[110ch] space-y-1 text-[13px] leading-5 text-ink-500">
+        <p>
+          Gestiones: llamadas y reprogramaciones registradas; en un agente, cada llamada real (no las de prueba) ·
+          Pedidos: distintos gestionados; una reprogramación toca dos guías del mismo pedido · Reprogramadas:
+          salieron a En ruta con su guía Swayp nueva · Llegaron: de esas guías, cuántas ya figuran entregadas (las
+          recientes pueden seguir en camino) · Anuladas: la clienta canceló · Entregas registradas: la asesora
+          cerró la guía como entregada con el resultado del courier.
+        </p>
+        <p>
+          Llamadas del agente: Atendidas, la clienta habló con el agente · Sin gestión, atendió pero se cortó sin
+          que el agente registrara un resultado · Volver a llamar, pidió que la llamen otro día · Cancela, no quiere
+          el pedido · Conversión, reprogramadas por llamada sobre atendidas (el total, solo agentes) · Costo línea, lo que Telnyx avisó que cobró (los dos
+          tramos; sin el minuto de xAI ni de ElevenLabs). Zadarma no lo avisa, por eso Daaph sale con guion ·
+          Agente Daaph: Zadarma + Grok · Agente Telnyx: Telnyx + Grok · Agente ElevenLabs: Telnyx + ElevenLabs.
+        </p>
+      </div>
     </div>
   );
 }

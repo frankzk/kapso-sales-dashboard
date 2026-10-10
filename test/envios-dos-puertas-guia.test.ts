@@ -19,12 +19,16 @@ const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md")
 
 describe("la puerta manual, en el cliente", () => {
   it("el campo tiene piso de mañana", () => {
-    const bloque = ui.slice(ui.indexOf("Fecha de reprogramación (va en la guía)"));
-    expect(bloque.slice(0, 500)).toContain("min={tomorrowDateInputValue()}");
+    // Desde el 10-10-2026 es la lista de días de despacho Swayp (lunes a
+    // sábado), que empieza mañana: test/swayp-dispatch-days.test.ts.
+    const bloque = ui.slice(ui.indexOf("Fecha de reprogramación (va en la guía, lunes a sábado)"));
+    expect(bloque.slice(0, 500)).toContain("<SwaypDispatchDateSelect");
   });
 
   it("la fecha entra en la condición del botón", () => {
-    expect(ui).toContain("const manualGuideDateInvalid = !manualGuideDate || manualGuideDate <= localDateInputValue();");
+    expect(ui).toContain(
+      "const manualGuideDateInvalid =\n    !manualGuideDate || manualGuideDate <= localDateInputValue() || !isSwaypDispatchDay(manualGuideDate);",
+    );
     // Se le sumaron dos condiciones después —sin codbar no hay guía, y el
     // número tiene que ser de Swayp—. La fecha sigue siendo una de ellas, que
     // es lo que esta prueba cuida.
