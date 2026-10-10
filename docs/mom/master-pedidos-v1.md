@@ -5607,13 +5607,15 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
    tránsito y de llegada llevan el ticket en PDF, y el ticket se baja con el
    OSE ID: sin él el aviso no sale. El 01-10-2026 se crearon a mano 21 guías de
    Kenku sin OSE ID y 25 avisos se perdieron. Ahora el cron de Shalom, antes de
-   drenar la cola de avisos, busca las guías manuales de los últimos 30 días
+   drenar la cola de avisos, busca las guías manuales de los últimos 7 días
    sin OSE ID en el listado de órdenes de la cuenta (`GET /v1/orders`) y les
    pone el `id` de su orden. Que ese `id` sea el OSE ID **se comprueba en cada
    lectura** con las guías creadas por API, cuyo OSE ID se conoce: si alguna
    aparece con otro `id`, o ninguna aparece, no se escribe nada. Mientras
    tanto, el aviso de una guía manual sin OSE ID **reintenta** en vez de
-   fallar.
+   fallar. La ventana era de 30 días y bajó a **7** el 10-10-2026: el ticket
+   sirve a los avisos de la primera semana, y una sola guía vieja que el
+   listado nunca resuelve hacía releer diez días de listado cada media hora.
 8. **Si nadie la registra, la registra Cotejar Shalom** (10-10-2026). Ver abajo.
 
 #### Cotejar Shalom: la guía hecha a mano que nadie registró (decidido el 10-10-2026)
@@ -5624,15 +5626,21 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   guía se creó a mano en `pro.shalom.pe` y el paso 2 de arriba no se hizo. Sin
   la guía en Kapta no hay rastreo, ni avisos, ni clave que entregar, y el pedido
   se queda parado para siempre aunque la clienta ya lo haya recogido.
-- **Qué hace.** El cron de Shalom (`/api/cron/shalom-reconcile`), **cuatro
-  veces al día** —la pasada de las 8, 12, 16 y 20 h de Lima— o a mano con
-  `?cotejar=1`, lee el listado de órdenes de la cuenta de Shalom Pro
+- **Qué hace.** Su propio cron (`/api/cron/shalom-cotejo`), **cuatro veces
+  al día** —la pasada de las 8, 12, 16 y 20 h de Lima, en el minuto 10—, lee
+  el listado de órdenes de la cuenta de Shalom Pro
   (`GET /v1/orders`, con su destinatario) desde el pedido más viejo y vincula
   la guía a su pedido **por el mismo camino que «Ya la creé en Shalom Pro»**
   (`lib/shalom/register-guide.ts`): las mismas comprobaciones, la salida
   `shalom_pro_manual` con su QR, el relleno de la salida «por definir» y el
   `guide_created` en la línea de tiempo. Desde ahí el rastreo de cada media
   hora mueve el estado y encola los avisos, como con cualquier guía.
+- **Por qué tiene cron propio** (10-10-2026). Nació como un paso de
+  `shalom-reconcile`, detrás del rastreo y del relleno del OSE ID, con la hora
+  límite contada desde que entraba la petición. El listado es lento —Shalom
+  arma la cuenta entera para contestar cada página— y a las 16:00 del
+  10-10-2026 se rindió sin recibir ni la primera página, con 47 pedidos
+  esperando. Con su propia invocación tiene ~270 s solo para el listado.
 - **Quién es candidato.** Pedido de los últimos 90 días en «Preparación · Por
   generar rótulo», con el pago que Agencia exige para pasar a Preparación
   (`agencyPaymentReady`: adelanto validado, diferencia cargada o pago
@@ -5686,8 +5694,8 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 - **Tope de 10 guías por pasada**; lo que sobra entra en la siguiente.
 - **Lo que queda para una persona.** Lo ambiguo y lo sin pareja no se toca:
   sigue en «Por generar rótulo» y se registra a mano con «Ya la creé en Shalom
-  Pro». El informe del cron (`cotejo`, y la línea `[shalom-cotejo]` de la
-  bitácora) dice cuántos candidatos, vinculados, ambiguos, sin pareja y por
+  Pro». La respuesta de `/api/cron/shalom-cotejo` (y la línea
+  `[shalom-cotejo]` de la bitácora) dice cuántos candidatos, vinculados, ambiguos, sin pareja y por
   tope hubo, el porqué de cada ambiguo y, por cuenta, cuántas guías trajo el
   listado, su cobertura y la comprobación del destinatario.
 
