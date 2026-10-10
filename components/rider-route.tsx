@@ -81,6 +81,11 @@ function cn(...parts: Array<string | false | null | undefined>): string {
 
 type Glyph = ComponentType<SVGProps<SVGSVGElement>>;
 
+/** Hoy en Lima (YYYY-MM-DD): el mínimo de la nueva fecha de un reprogramado. */
+function limaToday(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
 /** Campo del motorizado: 48 px, texto de 16 px (Android no hace zoom), anillo fino y foco azul. */
 const RIDER_FIELD =
   "block h-12 w-full min-w-0 rounded-md border-0 bg-white px-3 text-base text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500";
@@ -955,6 +960,8 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
   );
   const [reason, setReason] = useState(stop.outcome_reason ?? "");
   const [note, setNote] = useState(stop.note ?? "");
+  /** «Reprogramado por el cliente» con fecha (10-10-2026): opcional, YYYY-MM-DD. */
+  const [rescheduleOn, setRescheduleOn] = useState("");
   const [photoPath, setPhotoPath] = useState<string | null>(stop.photo_path);
   const [voucherPath, setVoucherPath] = useState<string | null>(stop.voucher_path);
   const [err, setErr] = useState<string | null>(null);
@@ -1055,7 +1062,14 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
 
   const numericAmount = amount.trim() ? Number(amount.replace(",", ".")) : null;
   const collectedForReason = status === "entregado" ? (method === "sin_cobro" ? 0 : numericAmount) : null;
-  const mustExplain = status === "entregado" && Boolean(vocabulary) && montoDiffers(collectedForReason, stop.order?.total ?? null);
+  // Lo que había que cobrar es el saldo, no el total (MOM §30.9, 10-10-2026).
+  const due = amountDue(stop);
+  const mustExplain = status === "entregado" && Boolean(vocabulary) && montoDiffers(collectedForReason, due);
+  // Pagado antes de la entrega: no hay nada que cobrar y va «Sin cobro».
+  const fullyPaid = stop.collection?.remaining === 0;
+  useEffect(() => {
+    if (status === "entregado" && fullyPaid && !method) setMethod("sin_cobro");
+  }, [status, fullyPaid, method]);
   // Las cuentas del cuaderno para el método elegido (p. ej. los Yape de la
   // empresa). Solo se ofrecen si hay más de una: si no, la deduce el método.
   const accounts = useMemo(
@@ -1080,7 +1094,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
     delegated && !reportReason.trim() ? { field: "delegado", message: "Indica por qué reportas por el motorizado." }
     : delegated && !photoPath ? { field: "foto", message: "Adjunta la evidencia del reporte por el motorizado." }
     : !check.ok ? { field: check.fields[0] ?? "estado", message: check.errors[0] ?? "Revisa el reporte." }
-    : mustExplain && !reasonCode ? { field: "diferencia", message: `Cobraste ${money(collectedForReason)} y el pedido es de ${money(stop.order?.total)}. Elige por qué.` }
+    : mustExplain && !reasonCode ? { field: "diferencia", message: `Cobraste ${money(collectedForReason)} y había que cobrar ${money(due)}. Elige por qué.` }
     : mustExplain && reasonCode === "otro" && reasonNote.trim().length < 3 ? { field: "diferencia", message: "Con motivo «Otro», escribe una nota." }
     : null;
   // Sin saldo no se puede cuadrar el cobro: es lo único que bloquea el botón.
@@ -1125,9 +1139,14 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
           writtenPayment: writtenPayment.trim() || null,
           reasonCode: mustExplain ? reasonCode : null,
           reasonNote: mustExplain ? reasonNote.trim() || null : null,
+          rescheduleOn: status === "no_entregado" && reason === "reprogramado" ? rescheduleOn || null : null,
         });
         if (!res.ok) setErr(res.error ?? "No se pudo guardar.");
-        else {
+        else if (res.message?.includes("No se pudo agendar")) {
+          // El reporte quedó, la fecha no: se dice aquí antes de cerrar.
+          try { window.localStorage.removeItem(draftKey(stop.id)); } catch { /* sin almacenamiento */ }
+          setErr(res.message);
+        } else {
           try { window.localStorage.removeItem(draftKey(stop.id)); } catch { /* sin almacenamiento */ }
           onDone();
         }
@@ -1192,6 +1211,13 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
         {status === "entregado" && (
           <>
             {/* La cifra grande está arriba de la ficha; aquí, la referencia del cobro. */}
+            {fullyPaid && (
+              <p className="rounded-lg bg-ok-wash px-3 py-2 text-sm text-ink-700">
+                <strong className="font-semibold text-ok-fg">Ya está pagado.</strong>{" "}
+                {stop.collection?.validated ? `${money(stop.collection.validated)} pagados y validados antes de la entrega. ` : ""}
+                No cobres nada: va como «Sin cobro».
+              </p>
+            )}
             <div className="text-xs text-ink-600">
               <p className="tabular-nums">
                 Saldo por cobrar: <strong className="font-semibold text-ink-900">{stop.collection?.remaining == null ? "No disponible, actualiza la ruta" : money(stop.collection.remaining)}</strong>
@@ -1303,7 +1329,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
 
             {mustExplain && vocabulary && (
               <div ref={anchor("diferencia")} className="space-y-2 rounded-lg bg-warn-wash p-3 text-sm">
-                <p className="font-semibold text-warn-fg">Cobraste {money(collectedForReason)} y el pedido es de {money(stop.order?.total)}. ¿Por qué?</p>
+                <p className="font-semibold text-warn-fg">Cobraste {money(collectedForReason)} y había que cobrar {money(due)}. ¿Por qué?</p>
                 <select value={reasonCode} onChange={(e) => setReasonCode(e.target.value)} aria-label="Motivo de la diferencia" className={RIDER_FIELD}>
                   <option value="">Elige el motivo</option>
                   {vocabulary.reasons.map((r) => (
@@ -1313,7 +1339,10 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
                 <input value={reasonNote} onChange={(e) => setReasonNote(e.target.value)} placeholder="Nota (obligatoria con «Otro»)" aria-label="Nota del motivo" className={RIDER_FIELD} />
               </div>
             )}
-            {method === "sin_cobro" && <p className="text-sm text-ink-600">Se registrará S/ 0.00. Si queda saldo, explica el motivo en la nota.</p>}
+            {method === "sin_cobro" && !fullyPaid && <p className="text-sm text-ink-600">Se registrará S/ 0.00. Si queda saldo, explica el motivo en la nota.</p>}
+            {method && method !== "sin_cobro" && fullyPaid && (
+              <p className="text-sm text-warn-fg">El pedido ya está pagado: no hay saldo que cobrar. Si el cliente pagó otra vez, avisa a coordinación.</p>
+            )}
             {method === "yape" && <p className="text-xs text-ink-500">Yape reportado a la empresa. La captura no equivale a validación bancaria.</p>}
 
             <div className="space-y-2">
@@ -1359,6 +1388,25 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
               ))}
             </div>
           </fieldset>
+        )}
+
+        {/* La fecha que dio el cliente, de una vez (10-10-2026). Opcional: sin
+            fecha, el pedido va a «Por reprogramar» como siempre. */}
+        {status === "no_entregado" && reason === "reprogramado" && (
+          <label className="block text-sm font-semibold text-ink-900">
+            Nueva fecha <span className="font-normal text-ink-500">(opcional)</span>
+            <input
+              type="date"
+              value={rescheduleOn}
+              min={limaToday()}
+              onChange={(e) => { setRescheduleOn(e.target.value); setErr(null); }}
+              aria-describedby={`reprograma-${stop.id}`}
+              className={cn(RIDER_FIELD, "mt-1.5")}
+            />
+            <span id={`reprograma-${stop.id}`} className="mt-1 block text-xs font-normal text-ink-500">
+              Si el cliente dio fecha, la salida queda agendada para ese día en Grupo GF.
+            </span>
+          </label>
         )}
 
         {/* Un rechazo se cobra a la tienda: el motorizado lo fotografía en la
