@@ -780,7 +780,9 @@ logística, financiera, de devolución, inventario o reclamo.
 
 Motivos simultáneos posibles:
 
-- `pendiente_liquidacion`.
+- `pendiente_liquidacion` — entregado fuera de Agencia y sin `liquidation_closed`.
+  **No se abre** si el pedido se pagó completo directo a la tienda y ningún
+  courier lo llevó (v1.25, ver abajo).
 - `liquidacion_observada`.
 - `salida_adicional_activa`.
 - `devolucion_fisica_pendiente`.
@@ -809,6 +811,66 @@ Motivos simultáneos posibles:
 Un pedido puede tener varios motivos de cierre abiertos. La macroetapa no cambia
 a Finalizado hasta que todos estén resueltos.
 
+#### Pagado a la tienda y sin courier: no espera liquidación (v1.25, 10-10-2026)
+
+Decisión del owner. **Un pedido pagado completo directo a la tienda, sin courier
+que cobre, no espera liquidación.** La liquidación existe para dos cosas: que el
+courier o el motorizado rinda el dinero que cobró en la puerta, y descontarle su
+costo de envío (§14). Si la clienta le pagó a la tienda y nadie llevó el
+paquete, no hay ni dinero en manos de nadie ni flete que netear: no hay nada que
+liquidar, y exigir la firma de una liquidación es esperar algo que no va a
+llegar.
+
+**Qué pasaba.** El motivo `pendiente_liquidacion` se abría sobre todo pedido
+entregado fuera de Agencia sin el evento `liquidation_closed`, hubiera o no
+courier. Medido en producción el 09-10-2026: **28 pedidos y S/ 4.838,70**
+(Kenku 22 / S/ 3.997,50; Aurela 6 / S/ 841,20) estaban para siempre en «Por
+cerrar · Pendiente de liquidación». Todos eran provincia COD, **sin ninguna
+fila en `shipments`**, con el pago completo (Yape validado o la pasarela del
+checkout) y marcados «entregado» a mano por el owner (cambio manual con
+candado). Nadie iba a escribir su `liquidation_closed`, y tampoco a mano: el
+cierre de liquidación del drawer exige un costo logístico, que sin salida no
+existe. «Finalizar» tampoco servía, porque `pendiente_liquidacion` lo bloquea.
+
+**La regla** (`pagadoDirectoSinCourier`, lib/order-macro-stage.ts). Un pedido
+fuera de Agencia en estado general `entregado` no abre `pendiente_liquidacion`
+—y, sin otro motivo abierto, pasa a **Finalizado · Entregado y cerrado**
+(`entregado_cerrado`)— cuando se cumplen las tres:
+
+1. **Ninguna salida**: ni propia ni prestada (pedido acompañante, §32). Con una,
+   aunque se anulara sin salir, el pedido sigue esperando su liquidación como
+   hasta ahora.
+2. **Ninguna parada de motorizado**: ningún «Lo llevo», reporte en la puerta,
+   vuelta a oficina ni entrega sin recojo confirmado (los hechos de «salió a
+   reparto», `DEPARTURE_EVENT_KINDS`). Las paradas del cuaderno pueden existir
+   sin salida, y con ellas hubo un courier que pudo cobrar.
+3. **Pago completo validado y sin reembolso**: `pago_completo` —comprobantes
+   validados que cubren el total, o la pasarela confirmada del checkout— y
+   `total_refunded` en cero. El `paid` de Shopify sin comprobante **no basta**:
+   vale como rastro de cobro en el mostrador de Agencia (arriba), pero aquí
+   cerraría un pedido con un cobro que nadie validó en Kapta. Los comprobantes
+   de cobro del courier (`cobro_courier`) solo existen con una salida, así que
+   la condición 1 ya los deja fuera.
+
+**Lo que no cambia.** Los demás motivos siguen frenando igual: un reembolso
+pendiente, una devolución del cliente, una liquidación observada, una
+reapertura (§6.6). Un pedido con salida —entregada, en curso o anulada— sigue
+exactamente como antes: espera su `liquidation_closed`. Fuera de Agencia la
+regla no distingue canal: un pedido de Lima entregado a mano y pagado a la
+tienda, sin salida ni motorizado, cierra igual. No se inventa subetapa: es la
+misma `entregado_cerrado` de una entrega liquidada.
+
+**Agencia queda fuera, y es una decisión pendiente.** Agencia no espera
+liquidación, así que esta regla no le aplica. Pero un pedido de Agencia
+entregado **sin ninguna salida** se queda en «Por cerrar · Validación de cierre
+pendiente» aunque esté pagado completo: el resolver exige una salida entregada
+para cerrar un `entregado` (el motivo de respaldo de `closingReasons`), y ese
+motivo vuelve aunque alguien lo finalice a mano. Si debe cerrar como «Recogido y
+cerrado» lo decide el owner; no se cambia aquí.
+
+`MOM_RESOLUTION_VERSION` sube a `mom-v1.25` para que el cron recalcule el
+histórico; los 28 pedidos salen solos de Por cerrar sin tocar sus datos.
+
 ### 6.6 Finalizado
 
 No quedan tareas comerciales, logísticas, financieras, de devolución,
@@ -817,6 +879,9 @@ inventario, indemnización ni reembolso.
 Resultados finales visibles:
 
 - Entregado y liquidado.
+- Entregado y pagado a la tienda, sin courier que liquidar (v1.25, §6.5). Usa
+  la misma subetapa que el anterior, `entregado_cerrado` («Entregado y
+  cerrado»).
 - Recogido y pagado completamente.
 - Anulado sin paquetes pendientes.
 - Devuelto y conciliado.
@@ -861,6 +926,8 @@ Ejemplos:
 | Aliclik retornando y Swayp repartiendo | En curso | En reparto |
 | Una salida entregó y otra sigue activa | Por cerrar | Salida adicional activa |
 | Entregado, courier aún no liquidó | Por cerrar | Pendiente de liquidación |
+| Entregado (no Agencia) sin ninguna salida ni motorizado, pagado completo a la tienda (v1.25, §6.5) | Finalizado | Entregado y cerrado |
+| Entregado (no Agencia) sin ninguna salida, sin pago completo validado | Por cerrar | Pendiente de liquidación |
 | Shopify anulado, paquete aún con courier | Por cerrar | Devolución física pendiente |
 | Shopify anulado, nunca se despachó | Finalizado | Anulado cerrado |
 | Pedido acompañante con la caja del principal aún en la empresa (§32) | Preparación | Viaja en la caja de otro pedido |
@@ -5979,6 +6046,12 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
   cobro, Kapta aún no registra entrega» indica que primero debe aplicarse o
   validar el resultado operativo; no implica automáticamente fraude ni cierre.
 - El costo faltante bloquea el cierre.
+- **Sin courier no hay liquidación (v1.25, §6.5).** Un pedido entregado (no
+  Agencia) sin ninguna salida ni parada de motorizado, pagado completo a la tienda y sin
+  reembolso, no espera `liquidation_closed`: no hay cobro que rendir ni costo
+  logístico que descontar, porque nadie lo llevó. Por eso la regla anterior no
+  le aplica: no se le exige un costo que no existe para cerrar una liquidación
+  que tampoco existe. Con cualquier salida, todo lo de esta sección sigue igual.
 - Swayp vence a los cuatro días; Axel y Urpi a los tres días.
 - Responsables: Daysi para Lima, Akemi para Swayp, Yohalis como responsable
   financiera principal y Frankz para validar depósitos Aliclik.
@@ -6538,7 +6611,8 @@ Primer bloque publicado en el drawer del Master:
   reembolsos; los permisos puntuales de `user_permissions` siguen prevaleciendo.
 - El resolver quedó versionado —`mom-v1.4` en este bloque; la versión vigente es
   siempre `MOM_RESOLUTION_VERSION` en `lib/order-macro-stage.ts`, hoy
-  `mom-v1.9`—; el cron detecta versiones anteriores y recalcula el histórico por
+  `mom-v1.25` (10-10-2026: pagado a la tienda y sin courier no espera
+  liquidación, §6.5)—; el cron detecta versiones anteriores y recalcula el histórico por
   lotes hasta que todo el Master converja, sin necesitar credenciales locales ni
   detener la sincronización. Toda regla que cambie el resultado de filas que
   nadie tocó debe subir esa constante, o el histórico queda con el veredicto
@@ -7041,6 +7115,9 @@ viven en `scripts/sql/master_liviano_smoke.sql`.
 - Inventario o merma no se pueden conciliar antes de recibir físicamente una
   devolución.
 - Una entrega COD no finaliza hasta registrar su liquidación conciliada.
+  Excepción (v1.25, §6.5): entregado sin ninguna salida ni parada de
+  motorizado y pagado completo a la tienda, sin reembolso, finaliza sin
+  liquidación, porque no hubo courier que cobrara.
 - Falta de costo logístico bloquea la conciliación financiera.
 - Una liquidación observada conserva el lote abierto hasta su conciliación.
 - La indemnización formal solo se abre sobre una salida Aliclik.
