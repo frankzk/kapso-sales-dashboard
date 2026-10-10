@@ -20,6 +20,7 @@ import { opsButtonClass } from "@/components/ops-styles";
 import { IconArrowLeft, IconChevronDown, IconSearch, IconX } from "@/components/icons";
 import { FENIX_CITIES } from "@/lib/shipments";
 import type { DemandRow } from "@/lib/fenix-demand";
+import { OPORTUNIDAD_ORIGEN_LABEL, type OportunidadRow, type Oportunidades } from "@/lib/swayp-oportunidades";
 import type { FenixStockRowDb, StoreSummary } from "@/lib/types";
 import type { BodegaSwaypResumen } from "@/lib/swayp-guide";
 import { ciudadSinControl, sinControlDeCantidad } from "@/lib/fenix";
@@ -80,10 +81,14 @@ function capitalizar(s: string): string {
  * - «Por reponer»: falta para las guías pendientes (lo que hay que mandar).
  * - «Sin stock»: en 0 en su bodega, con o sin pedidos (no se puede prometer).
  * - «Inventario»: todo, para responder «¿hay esto en Juliaca?».
+ * - «Oportunidades»: lo que dejaría salir pedidos que hoy esperan —Repro
+ *   Provincia y Por confirmar— si llegara a su bodega. Tiene su propia tabla:
+ *   sus filas son pedidos por destrabar, no renglones de stock.
  */
-type View = "reponer" | "sinstock" | "inventario";
+type View = "reponer" | "sinstock" | "inventario" | "oportunidades";
 
 function enVista(r: DemandRow, view: View): boolean {
+  if (view === "oportunidades") return false;
   if (view === "reponer") return r.shortfall > 0;
   if (view === "sinstock") return !r.unlimited && r.stock <= 0;
   return true;
@@ -105,6 +110,7 @@ export function FenixStockEditor({
   canEdit,
   stores,
   demand = [],
+  oportunidades = null,
   bodegas = [],
   syncResumen = null,
 }: {
@@ -112,6 +118,7 @@ export function FenixStockEditor({
   canEdit: boolean;
   stores: StoreSummary[];
   demand?: DemandRow[];
+  oportunidades?: Oportunidades | null;
   bodegas?: BodegaSwaypResumen[];
   syncResumen?: SyncResumen | null;
 }) {
@@ -198,12 +205,23 @@ export function FenixStockEditor({
       ? v
       : [...v].sort((a, b) => a.city.localeCompare(b.city) || a.product.localeCompare(b.product));
   }, [demand, view]);
+  const opRows = useMemo(() => oportunidades?.rows ?? [], [oportunidades]);
+  const enOportunidades = view === "oportunidades";
   const cityCounts = useMemo(() => {
     const m = new Map<string, number>();
-    for (const r of inView) m.set(r.city, (m.get(r.city) ?? 0) + 1);
+    for (const r of enOportunidades ? opRows : inView) m.set(r.city, (m.get(r.city) ?? 0) + 1);
     return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  }, [inView]);
+  }, [inView, opRows, enOportunidades]);
   const q = query.trim().toLowerCase();
+  // En oportunidades también se busca por pedido: «¿qué le falta al #KP139502?».
+  const opVisibles = opRows.filter(
+    (r) =>
+      (!cityFilter || r.city === cityFilter) &&
+      (!q ||
+        r.product.toLowerCase().includes(q) ||
+        (r.sku ?? "").toLowerCase().includes(q) ||
+        r.pedidos.some((p) => (p.orderName ?? "").toLowerCase().includes(q))),
+  );
   const visible = inView.filter(
     (r) =>
       (!cityFilter || r.city === cityFilter) &&
@@ -223,7 +241,8 @@ export function FenixStockEditor({
         <div className="min-w-0">
           <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Stock Swayp</h1>
           <p className="mt-1 max-w-[68ch] text-pretty text-sm text-ink-500">
-            Lo que hay en cada bodega de Swayp y lo que piden las guías pendientes de Repro Provincia.
+            Lo que hay en cada bodega de Swayp, lo que piden las guías pendientes de Repro Provincia y dónde mandar mercadería
+            para que salgan los pedidos que esperan.
           </p>
           <SyncLine resumen={syncResumen} canEdit={canEdit} />
           {!canEdit && (
@@ -256,7 +275,7 @@ export function FenixStockEditor({
         </Banner>
       )}
 
-      <div className="grid grid-cols-3 gap-2 sm:gap-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
         <StatusCard
           label="Por reponer"
           value={counts.reponer}
@@ -282,12 +301,30 @@ export function FenixStockEditor({
           onClick={() => elegirVista("inventario")}
           hint="Todos los productos por ciudad"
         />
+        <StatusCard
+          label="Oportunidades"
+          value={opRows.length}
+          active={enOportunidades}
+          onClick={() => elegirVista("oportunidades")}
+          hint={
+            !oportunidades
+              ? "No se pudieron leer los pedidos"
+              : oportunidades.resumen.pedidos
+                ? `${nf.format(oportunidades.resumen.pedidos)} ${oportunidades.resumen.pedidos === 1 ? "pedido espera" : "pedidos esperan"} stock`
+                : "Ningún pedido espera stock Swayp"
+          }
+        />
       </div>
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         {cityCounts.length > 1 ? (
           <div role="group" aria-label="Ciudad" className="flex flex-wrap items-center gap-2">
-            <ChoiceChip label="Todas" count={inView.length} active={cityFilter === null} onClick={() => setCityFilter(null)} />
+            <ChoiceChip
+              label="Todas"
+              count={enOportunidades ? opRows.length : inView.length}
+              active={cityFilter === null}
+              onClick={() => setCityFilter(null)}
+            />
             {cityCounts.map(([c, n]) => (
               <ChoiceChip key={c} label={titulo(c)} count={n} active={cityFilter === c} onClick={() => setCityFilter(c)} />
             ))}
@@ -305,78 +342,90 @@ export function FenixStockEditor({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Escape" && setQuery("")}
-            placeholder="Buscar producto o SKU"
+            placeholder={enOportunidades ? "Buscar producto, SKU o pedido" : "Buscar producto o SKU"}
             className={cn(FIELD, "pl-9 pointer-coarse:h-11")}
           />
         </label>
       </div>
 
-      <section aria-label="Productos" className={CARD}>
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 sm:px-5">
-          <p role="status" className="text-sm text-ink-700">
-            <b className="font-semibold tabular-nums text-ink-900">{nf.format(visible.length)}</b>{" "}
-            {visible.length === 1 ? "producto" : "productos"}
-            {view === "reponer" ? (
-              <span className="text-ink-500">
-                {" "}
-                · faltan{" "}
-                <b className="font-semibold tabular-nums text-ink-900">
-                  {nf.format(visible.reduce((n, r) => n + r.shortfall, 0))}
-                </b>{" "}
-                unidades para las guías pendientes
-              </span>
-            ) : view === "sinstock" ? (
-              // En 0 por definición: lo que importa es cuántos ya tienen pedidos.
-              <span className="text-ink-500">
-                {" "}
-                · {nf.format(visible.filter((r) => r.demand > 0).length)} con guías pendientes
-              </span>
-            ) : (
-              <span className="text-ink-500">
-                {" "}
-                · {nf.format(unidadesVisibles)} unidades en bodega
-                {visible.some((r) => r.unlimited) && ` · ${visible.filter((r) => r.unlimited).length} sin control de cantidad`}
-              </span>
+      {enOportunidades ? (
+        <OportunidadesSection
+          rows={opVisibles}
+          resumen={oportunidades?.resumen ?? null}
+          filtrado={!!cityFilter || !!q}
+          onLimpiar={() => {
+            setCityFilter(null);
+            setQuery("");
+          }}
+        />
+      ) : (
+        <section aria-label="Productos" className={CARD}>
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 sm:px-5">
+            <p role="status" className="text-sm text-ink-700">
+              <b className="font-semibold tabular-nums text-ink-900">{nf.format(visible.length)}</b>{" "}
+              {visible.length === 1 ? "producto" : "productos"}
+              {view === "reponer" ? (
+                <span className="text-ink-500">
+                  {" "}
+                  · faltan{" "}
+                  <b className="font-semibold tabular-nums text-ink-900">
+                    {nf.format(visible.reduce((n, r) => n + r.shortfall, 0))}
+                  </b>{" "}
+                  unidades para las guías pendientes
+                </span>
+              ) : view === "sinstock" ? (
+                // En 0 por definición: lo que importa es cuántos ya tienen pedidos.
+                <span className="text-ink-500">
+                  {" "}
+                  · {nf.format(visible.filter((r) => r.demand > 0).length)} con guías pendientes
+                </span>
+              ) : (
+                <span className="text-ink-500">
+                  {" "}
+                  · {nf.format(unidadesVisibles)} unidades en bodega
+                  {visible.some((r) => r.unlimited) && ` · ${visible.filter((r) => r.unlimited).length} sin control de cantidad`}
+                </span>
+              )}
+            </p>
+            {(cityFilter || q) && (
+              <OpsButton
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setCityFilter(null);
+                  setQuery("");
+                }}
+                className="pointer-coarse:h-11"
+              >
+                Limpiar filtros
+              </OpsButton>
             )}
-          </p>
-          {(cityFilter || q) && (
-            <OpsButton
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setCityFilter(null);
-                setQuery("");
-              }}
-              className="pointer-coarse:h-11"
-            >
-              Limpiar filtros
-            </OpsButton>
-          )}
-        </div>
+          </div>
 
-        {visible.length === 0 ? (
-          <p className="border-t border-line px-4 py-8 text-sm text-ink-500 sm:px-5">
-            {q || cityFilter
-              ? "Sin coincidencias con los filtros."
-              : view === "reponer"
-                ? "Nada por reponer: el stock cubre las guías pendientes."
-                : view === "sinstock"
-                  ? "Ningún producto está en 0."
-                  : "Sin stock registrado."}
-          </p>
-        ) : (
-          <StockTable
-            rows={visible}
-            stockById={stockById}
-            canEdit={canEdit}
-            pending={pending}
-            confirmDelete={confirmDelete}
-            onAskDelete={setConfirmDelete}
-            onDelete={remove}
-            onKardex={setKardexRow}
-          />
-        )}
-      </section>
+          {visible.length === 0 ? (
+            <p className="border-t border-line px-4 py-8 text-sm text-ink-500 sm:px-5">
+              {q || cityFilter
+                ? "Sin coincidencias con los filtros."
+                : view === "reponer"
+                  ? "Nada por reponer: el stock cubre las guías pendientes."
+                  : view === "sinstock"
+                    ? "Ningún producto está en 0."
+                    : "Sin stock registrado."}
+            </p>
+          ) : (
+            <StockTable
+              rows={visible}
+              stockById={stockById}
+              canEdit={canEdit}
+              pending={pending}
+              confirmDelete={confirmDelete}
+              onAskDelete={setConfirmDelete}
+              onDelete={remove}
+              onKardex={setKardexRow}
+            />
+          )}
+        </section>
+      )}
 
       {canEdit && (
         <SyncCard
@@ -397,6 +446,231 @@ export function FenixStockEditor({
         <StockKardexModal row={kardexRow} canEdit={canEdit} onClose={() => setKardexRow(null)} onChanged={() => router.refresh()} />
       )}
     </div>
+  );
+}
+
+const soles = new Intl.NumberFormat("es-PE", { style: "currency", currency: "PEN", maximumFractionDigits: 0 });
+
+/**
+ * OPORTUNIDADES: qué mandar a cada bodega para que salgan pedidos que hoy
+ * esperan (`lib/swayp-oportunidades.ts`). Cada fila se abre en sus pedidos, con
+ * enlace al Master: la lista sirve para decidir el envío y para llamar a quien
+ * ya puede salir cuando llegue.
+ */
+function OportunidadesSection({
+  rows,
+  resumen,
+  filtrado,
+  onLimpiar,
+}: {
+  rows: OportunidadRow[];
+  resumen: Oportunidades["resumen"] | null;
+  filtrado: boolean;
+  onLimpiar: () => void;
+}) {
+  const [abiertas, setAbiertas] = useState<Set<string>>(new Set());
+  const toggle = (key: string) =>
+    setAbiertas((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const unidades = rows.reduce((n, r) => n + r.faltan, 0);
+  const pedidos = new Set(rows.flatMap((r) => r.pedidos.map((p) => p.orderId))).size;
+  const fuera = resumen ? resumen.fueraDeCobertura : 0;
+  const sinDir = resumen ? resumen.sinDireccion : 0;
+
+  const pedidosCell = (r: OportunidadRow) => (
+    <>
+      <p className="text-sm tabular-nums text-ink-900">{nf.format(r.pedidos.length)}</p>
+      <p className="text-[13px] leading-5 tabular-nums text-ink-500">
+        {[r.repro && `${nf.format(r.repro)} Repro`, r.porConfirmar && `${nf.format(r.porConfirmar)} Por confirmar`]
+          .filter(Boolean)
+          .join(" · ")}
+      </p>
+    </>
+  );
+
+  const detalle = (r: OportunidadRow) => (
+    <ul className="grid gap-1.5">
+      {r.pedidos.map((p) => (
+        <li key={p.orderId} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] leading-5">
+          <a
+            href={`/dashboard/pedidos?abrir=${encodeURIComponent(p.orderId)}`}
+            className="font-medium text-brand-700 hover:underline"
+          >
+            {p.orderName ?? "Pedido sin nombre"}
+          </a>
+          <Badge tone={p.origen === "repro" ? "info" : "neutral"}>{OPORTUNIDAD_ORIGEN_LABEL[p.origen]}</Badge>
+          {p.soloEste ? (
+            <Badge tone="ok">Solo le falta esto</Badge>
+          ) : (
+            <span className="text-ink-500">Le falta otro producto más</span>
+          )}
+          <span className="tabular-nums text-ink-600">
+            {p.unidades > 1 && `${nf.format(p.unidades)} u. · `}
+            {soles.format(p.total)}
+            {p.dias !== null && ` · ${p.dias === 1 ? "1 día" : `${nf.format(p.dias)} días`} en su etapa`}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+
+  return (
+    <section aria-label="Oportunidades" className={CARD}>
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 px-4 py-3 sm:px-5">
+        <div className="min-w-0">
+          <p role="status" className="text-sm text-ink-700">
+            <b className="font-semibold tabular-nums text-ink-900">{nf.format(rows.length)}</b>{" "}
+            {rows.length === 1 ? "producto" : "productos"}
+            <span className="text-ink-500">
+              {" "}
+              · mandar <b className="font-semibold tabular-nums text-ink-900">{nf.format(unidades)}</b>{" "}
+              {unidades === 1 ? "unidad" : "unidades"} destraba hasta{" "}
+              <b className="font-semibold tabular-nums text-ink-900">{nf.format(pedidos)}</b>{" "}
+              {pedidos === 1 ? "pedido" : "pedidos"}
+            </span>
+          </p>
+          <p className="mt-0.5 max-w-[80ch] text-pretty text-[13px] leading-5 text-ink-500">
+            Pedidos de Repro Provincia y de Por confirmar (provincia COD) con dirección completa que saldrían por Swayp si
+            su bodega tuviera el producto.
+            {(fuera > 0 || sinDir > 0) &&
+              ` No entran ${[
+                fuera > 0 && `${nf.format(fuera)} en ciudades sin bodega Swayp`,
+                sinDir > 0 && `${nf.format(sinDir)} sin dirección completa`,
+              ]
+                .filter(Boolean)
+                .join(" ni ")}.`}
+          </p>
+        </div>
+        {filtrado && (
+          <OpsButton size="sm" variant="ghost" onClick={onLimpiar} className="pointer-coarse:h-11">
+            Limpiar filtros
+          </OpsButton>
+        )}
+      </div>
+
+      {!resumen ? (
+        <p role="alert" className="border-t border-line px-4 py-8 text-sm text-crit-fg sm:px-5">
+          No se pudieron leer los pedidos del Master. Recarga la página; si sigue, avisa: la lista no está vacía, no se pudo armar.
+        </p>
+      ) : rows.length === 0 ? (
+        <p className="border-t border-line px-4 py-8 text-sm text-ink-500 sm:px-5">
+          {filtrado ? "Sin coincidencias con los filtros." : "Ningún pedido espera stock Swayp: el stock cubre lo que se podría mandar."}
+        </p>
+      ) : (
+        <>
+          <table className="hidden w-full table-fixed text-left md:table">
+            <thead className="text-xs font-medium text-ink-600">
+              <tr>
+                <th className="sticky top-0 z-[1] w-[14%] border-y border-line bg-white py-2 pl-4 pr-3 font-medium sm:pl-5">Ciudad</th>
+                <th className="sticky top-0 z-[1] border-y border-line bg-white py-2 pr-3 font-medium">Producto</th>
+                <th className="sticky top-0 z-[1] w-[17%] border-y border-line bg-white py-2 pr-3 font-medium">Pedidos</th>
+                <th className="sticky top-0 z-[1] w-[7%] border-y border-line bg-white py-2 pr-3 text-right font-medium">Stock</th>
+                <th className="sticky top-0 z-[1] w-[8%] border-y border-line bg-white py-2 pr-3 text-right font-medium">Mandar</th>
+                <th className="sticky top-0 z-[1] w-[11%] border-y border-line bg-white py-2 pr-3 text-right font-medium">En pedidos</th>
+                <th className="sticky top-0 z-[1] w-[12%] border-y border-line bg-white py-2 pr-4 font-medium sm:pr-5">
+                  <span className="sr-only">Detalle</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const abierta = abiertas.has(r.key);
+                return [
+                  <tr key={r.key} className={cn("align-top hover:bg-wash", !abierta && "border-b border-line last:border-0")}>
+                    <td className="py-2.5 pl-4 pr-3 sm:pl-5">
+                      <p className="text-sm leading-5 text-ink-900">{titulo(r.city)}</p>
+                      {r.department.toLowerCase() !== r.city && (
+                        <p className="text-[13px] leading-5 text-ink-500">{r.department}</p>
+                      )}
+                    </td>
+                    <td className="py-2.5 pr-3">
+                      <p className="line-clamp-2 text-sm leading-5 text-ink-900" title={r.product}>
+                        {r.product}
+                      </p>
+                      {r.sku && <p className="truncate font-mono text-xs leading-5 text-ink-500">{r.sku}</p>}
+                      {r.soloEste > 0 && (
+                        <p className="text-[13px] leading-5 text-ok-fg">
+                          {r.soloEste === 1 ? "1 sale" : `${nf.format(r.soloEste)} salen`} solo con este producto
+                        </p>
+                      )}
+                    </td>
+                    <td className="py-2.5 pr-3">{pedidosCell(r)}</td>
+                    <td className="py-2.5 pr-3 text-right text-sm tabular-nums text-ink-900">
+                      {r.stockId ? nf.format(r.stock) : <span title="No está anotado en esta bodega" className="text-ink-300">—</span>}
+                    </td>
+                    <td className="py-2.5 pr-3 text-right text-sm font-semibold tabular-nums text-crit-fg">{nf.format(r.faltan)}</td>
+                    <td className="py-2.5 pr-3 text-right text-sm tabular-nums text-ink-900">{soles.format(r.valor)}</td>
+                    <td className="py-1.5 pr-4 text-right sm:pr-5">
+                      <button
+                        type="button"
+                        aria-expanded={abierta}
+                        aria-controls={`op-${r.key}`}
+                        onClick={() => toggle(r.key)}
+                        className={cn(ROW_ACTION, "gap-1 text-ink-600 hover:bg-wash hover:text-ink-900")}
+                      >
+                        {abierta ? "Ocultar" : "Ver pedidos"}
+                        <IconChevronDown aria-hidden className={cn("size-4 transition-transform", abierta && "rotate-180")} />
+                      </button>
+                    </td>
+                  </tr>,
+                  abierta && (
+                    <tr key={`${r.key}-detalle`} id={`op-${r.key}`} className="border-b border-line last:border-0">
+                      <td colSpan={7} className="bg-wash px-4 py-3 sm:px-5">
+                        {detalle(r)}
+                      </td>
+                    </tr>
+                  ),
+                ];
+              })}
+            </tbody>
+          </table>
+
+          <ul className="divide-y divide-line border-t border-line md:hidden">
+            {rows.map((r) => {
+              const abierta = abiertas.has(r.key);
+              return (
+                <li key={r.key} className="px-4 py-3">
+                  <p className="text-sm leading-5 text-ink-900">{r.product}</p>
+                  <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
+                    {titulo(r.city)}
+                    {r.department.toLowerCase() !== r.city && ` · ${r.department}`}
+                  </p>
+                  <p className="mt-1 text-[13px] leading-5 tabular-nums text-ink-700">
+                    <span className="font-semibold text-crit-fg">mandar {nf.format(r.faltan)}</span> · stock{" "}
+                    {r.stockId ? nf.format(r.stock) : "sin anotar"} · {nf.format(r.pedidos.length)}{" "}
+                    {r.pedidos.length === 1 ? "pedido" : "pedidos"} · {soles.format(r.valor)}
+                  </p>
+                  {r.soloEste > 0 && (
+                    <p className="text-[13px] leading-5 text-ok-fg">
+                      {r.soloEste === 1 ? "1 sale" : `${nf.format(r.soloEste)} salen`} solo con este producto
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    aria-expanded={abierta}
+                    aria-controls={`op-m-${r.key}`}
+                    onClick={() => toggle(r.key)}
+                    className={cn(ROW_ACTION, "mt-1 -ml-2 gap-1 text-ink-600 hover:bg-wash hover:text-ink-900")}
+                  >
+                    {abierta ? "Ocultar pedidos" : "Ver pedidos"}
+                    <IconChevronDown aria-hidden className={cn("size-4 transition-transform", abierta && "rotate-180")} />
+                  </button>
+                  {abierta && (
+                    <div id={`op-m-${r.key}`} className="mt-2">
+                      {detalle(r)}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+    </section>
   );
 }
 
