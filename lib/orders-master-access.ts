@@ -503,6 +503,12 @@ export interface OrderMasterDetail {
    * `cancelledAsRecordCorrection` documenta como peligroso.
    */
   filledOutputIds: string[];
+  /**
+   * Salidas cuya caja devuelta registró una PERSONA en el almacén (evento
+   * `return_received`). El `returned_at` que sella el barrido de Tanders no
+   * cuenta: dice que Tanders la devolvió, no que alguien la recibió.
+   */
+  receivedReturnIds?: string[];
   routePlan: OrderRoutePlan;
   /**
    * Qué impide crear una salida y a cuáles de las modalidades (`routeDeskGate`).
@@ -1032,6 +1038,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     departamentoElegido: shopifyDepartamentoElegido(orderRow?.raw),
     shopifyNote: shopifyOrderNote(orderRow?.raw),
     filledOutputIds: [...filledShipmentIds(events)],
+    receivedReturnIds: [...new Set(events.filter((e) => e.kind === "return_received" && e.shipment_id).map((e) => e.shipment_id as string))],
     // MISMA pregunta que hace `createManualRouteOutput` antes de dejar crear la
     // salida, y por eso el mismo ayudante: el estado del pedido no distingue
     // «lo canceló el courier» de «lo cancelamos nosotros», la etiqueta sí.

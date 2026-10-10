@@ -186,6 +186,12 @@ export interface ReprogramLabelState {
    * que va encima. Sin ella, la ficha ofrece imprimir el de la salida nueva.
    */
   live: { shipmentId: string; outputCode: string | null } | null;
+  /**
+   * Sin `live`: una salida viva ANTERIOR a la que falló que sigue abierta
+   * (#KP134960, una de Grupo GF del 17-09 sin cerrar). Mientras exista, pedir
+   * el rótulo responde «todavía en la calle»: hay que cerrarla o anularla antes.
+   */
+  open: { shipmentId: string; outputCode: string | null } | null;
 }
 
 /**
@@ -199,6 +205,11 @@ export function reprogramLabelState(outputs: readonly OutputForDecision[]): Repr
   const failed = mostRecent(outputs.filter(isFailedOutput));
   if (!failed) return null;
   const live = mostRecent(newerLiveSiblings(outputs, failed));
+  const open = live ? null : mostRecent(outputs.filter((output) =>
+    output.id !== failed.id &&
+    !isFailedOutput(output) &&
+    LIVE_STATUSES.includes(output.delivery_status ?? "") &&
+    output.custody_state !== "devuelto"));
   return {
     failed: {
       shipmentId: failed.id,
@@ -207,6 +218,7 @@ export function reprogramLabelState(outputs: readonly OutputForDecision[]): Repr
       returned: Boolean(failed.returned_at) || failed.custody_state === "devuelto",
     },
     live: live ? { shipmentId: live.id, outputCode: live.output_code ?? null } : null,
+    open: open ? { shipmentId: open.id, outputCode: open.output_code ?? null } : null,
   };
 }
 

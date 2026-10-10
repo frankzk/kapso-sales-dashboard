@@ -7497,23 +7497,30 @@ entregada no cuenta como activa.
   Swayp, #KP134300—: solo se reimprime una salida viva.
 - La ficha solo dice «la caja va como …» de una salida viva **nacida después**
   de la que falló. Una anterior que sigue abierta (#KP134960, una de Grupo GF
-  del 17-09 sin cerrar) no es la caja que volvió: pedir el rótulo responde que
-  hay una salida todavía en la calle.
-- Si la caja de **Tanders** todavía no se recibió, la ficha pide escanear su
-  rótulo en Devoluciones antes de taparlo: la salida nueva no cierra la
-  devolución de la anterior (§9.3), y sin ese registro el pedido entregado
-  quedaría en Por cerrar esperando una caja que salió con otro rótulo. Swayp no
-  se recibe escaneando; su devolución se registra en la mesa de cierre.
+  del 17-09 sin cerrar) no es la caja que volvió, y mientras exista pedir el
+  rótulo responde que hay una salida todavía en la calle: la ficha la nombra
+  («Cerrar la salida abierta antes de reprogramar») y no ofrece imprimir.
+- Si **ninguna persona** registró la recepción de la caja de **Tanders**
+  (evento `return_received`), la ficha pide escanear su rótulo en Devoluciones
+  antes de taparlo, aunque el barrido ya diga `RETURNED`: eso dice que Tanders
+  la devolvió, no que alguien la recibió. La salida nueva no cierra la
+  devolución de la anterior (§9.3), y sin ese registro la guía quedaría en
+  «Faltan» y el pedido entregado en Por cerrar. Swayp no se recibe escaneando;
+  su devolución se registra en la mesa de cierre.
 - Si la lectura de las salidas falla, no se decide nada: sin salidas a la vista
   cada pedido parecería no tener ninguna y se crearía una por pedido.
 
 - **Reusar gana a crear**: pedir el rótulo dos veces no puede consumir el límite
   de cinco salidas del pedido.
 - Reimprimir el rótulo de una salida concreta —papel perdido o dañado— se hace
-  desde el pedido, que lista cada salida con su rótulo. La de un courier que no
-  entregó ya no ofrece su rótulo como enlace principal: dice con qué salida va la
-  caja y deja, discreto, «Rótulo viejo (solo Devoluciones)». «Guías combinadas»
-  en lote tampoco imprime la de Tanders que no entregó.
+  desde el pedido, que lista cada salida con su rótulo. En Lima, la de un
+  courier que no entregó ya no ofrece su rótulo como enlace principal: dice con
+  qué salida va la caja —si ya existe una viva nacida después—, o que se
+  reprograma con una salida nueva, o que otra salida anterior sigue abierta; y
+  deja, discreto, «Rótulo viejo» («(solo Devoluciones)» para Tanders y Shalom,
+  que Devoluciones recibe escaneando). Fuera de Lima la fila no cambia.
+  «Guías combinadas» en lote tampoco imprime la de Tanders que no entregó ni la
+  que ya se recibió en Devoluciones.
 
 ### Crear salidas en lote
 
@@ -7815,13 +7822,21 @@ tienda/fecha; el courier se decide en despacho, no durante el armado.
   sale la caja («Es el rótulo viejo de AUR177756-S01 (Tanders no entregó). En
   esta caja va como AUR177756-S02: escanea su rótulo…»). Asignar por escaneo lee
   el **pedido**: con el QR viejo la caja entra como la salida que se rellenó o
-  nació al tomarlo —también si el pedido ya estaba tomado desde la lista—, y la
-  línea pide imprimir su rótulo y pegarlo encima. Así se cumple «un solo QR
-  interno vivo por paquete». La salida nombrada es siempre una viva nacida
-  después de la que falló; si no hay ninguna y el pedido está en «Por
-  reprogramar Lima», el mensaje dice cómo nace. Si el pedido ya no se reprograma
-  (Por cerrar, devolución pendiente de inventario), el escáner responde lo de
-  siempre: no invita a reprogramarlo.
+  nació al tomarlo, y la línea pide imprimir su rótulo y pegarlo encima.
+  **También si el pedido ya estaba tomado** «Desde la lista» con la salida
+  nueva en una caja: el escaneo busca en las cajas por la salida de su
+  solicitud de Grupo GF y responde «Ya estaba en la caja de …» o «Está en la
+  caja de …» (con «Mover») más el aviso del rótulo, en vez de «ya está asignado
+  a una ruta». Solo un rótulo que no es de Grupo GF paga esa lectura. Así se
+  cumple «un solo QR interno vivo por paquete».
+- Qué salida se nombra: en «Verificar caja», la viva que está en **esa** caja,
+  nazca cuando nazca (#KP136825 tenía su S01 de Grupo GF en la caja de Alexis
+  y la S02 de Tanders, posterior, era la que no entregó); en «Dejar paquete
+  listo», una viva nacida después de la que falló. Si no hay ninguna, el pedido
+  está en «Por reprogramar Lima» y no queda otra viva anterior, el mensaje dice
+  cómo nace la nueva. Si el pedido ya no se reprograma (Por cerrar, devolución
+  pendiente de inventario), el escáner responde lo de siempre: no invita a
+  reprogramarlo.
 - Un pedido anulado, rechazado definitivamente o que debe desarmarse libera la
   reserva y devuelve el producto a su bolsa. Si luego se vuelve a armar, nace una
   salida nueva con QR nuevo, respetando §4.

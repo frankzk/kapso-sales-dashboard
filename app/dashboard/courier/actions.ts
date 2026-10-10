@@ -20,7 +20,7 @@ import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-acces
 import { resolveLimaDistrict } from "@/lib/order-coverage";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { writeCourierGuide, type RouteOutputWriteResult } from "@/lib/route-output-fill";
-import { MAX_OUTPUTS_PER_ORDER, manualRouteGuideCode, pickFillableRouteOutput, puertaDeSalidaAdicional } from "@/lib/shipment-output";
+import { MAX_OUTPUTS_PER_ORDER, isCourierTbd, manualRouteGuideCode, pickFillableRouteOutput, puertaDeSalidaAdicional } from "@/lib/shipment-output";
 import {
   REPROGRAM_QUEUE_FILTER,
   isReprogramStage,
@@ -2840,6 +2840,32 @@ export async function scanAssignToRider(
   // Un pedido anulado no entra a ninguna caja: se dice eso y nada más (lib/scan-cancelled.ts).
   const cancelled = await cancelledScanNotice(admin, orderId);
   if (cancelled) return { ...base, orderId, shipmentId, status: "no_elegible", message: cancelled };
+  // El rótulo viejo de la caja que volvió (§29.4): se leyó el de otro courier
+  // y el pedido ya tiene su solicitud de Grupo GF con OTRA salida —tomado
+  // «Desde la lista» antes de imprimir el rótulo nuevo—. La caja es esa
+  // salida: por ella se busca en las cajas, y la línea pide pegar su rótulo.
+  // Solo se pregunta con un rótulo que no es de Grupo GF: el escaneo normal no
+  // paga la lectura.
+  let oldLabel: { outputCode: string | null; courier: string } | null = null;
+  let relabelEarly: ScanAssignLine["relabel"] = null;
+  if (found.shipment?.courier && gfProvider?.id && courierKey(found.shipment.courier) !== "propio" && !isCourierTbd(found.shipment.courier)) {
+    const { data: request } = await admin
+      .from("logistics_requests")
+      .select("shipment_id")
+      .eq("order_id", orderId)
+      .eq("provider_id", gfProvider.id)
+      .in("status", ["accepted", "scheduled"])
+      .limit(1)
+      .maybeSingle();
+    const requestShipment = (request as { shipment_id: string | null } | null)?.shipment_id ?? null;
+    if (requestShipment && requestShipment !== found.shipment.id) {
+      const { data: requested } = await admin.from("shipments").select("output_code").eq("id", requestShipment).maybeSingle();
+      oldLabel = { outputCode: found.shipment.output_code ?? null, courier: found.shipment.courier };
+      relabelEarly = { outputCode: (requested as { output_code?: string | null } | null)?.output_code ?? null, labelUrl: `/api/pedidos/rotulos?ids=${requestShipment}` };
+      shipmentId = requestShipment;
+    }
+  }
+  const oldLabelNote = oldLabel && relabelEarly ? ` ${previousLabelNote(oldLabel, relabelEarly.outputCode)}` : "";
   const [{ data: om }, { data: active }] = await Promise.all([
     admin.from("order_master").select("order_name,order_total,store_id").eq("order_id", orderId).maybeSingle(),
     shipmentId ? admin
@@ -2889,12 +2915,13 @@ export async function scanAssignToRider(
           ...line,
           status: "ya_en_caja",
           manifestId: box.manifest_id,
-          message: box.office_checked_at
+          message: (box.office_checked_at
             ? `Ya estaba en la caja de ${rider.full_name}, verificado en oficina.`
-            : `Ya estaba en la caja de ${rider.full_name}; falta verificarlo en oficina.`,
+            : `Ya estaba en la caja de ${rider.full_name}; falta verificarlo en oficina.`) + oldLabelNote,
+          relabel: relabelEarly,
         };
       }
-      return { ...line, status: "en_otra_caja", manifestId: box.manifest_id, riderName: box.dispatch_manifests.driver_name ?? "otro motorizado", message: `Está en la caja de ${box.dispatch_manifests.driver_name ?? "otro motorizado"} del ${box.dispatch_manifests.route_date}.` };
+      return { ...line, status: "en_otra_caja", manifestId: box.manifest_id, riderName: box.dispatch_manifests.driver_name ?? "otro motorizado", message: `Está en la caja de ${box.dispatch_manifests.driver_name ?? "otro motorizado"} del ${box.dispatch_manifests.route_date}.${oldLabelNote}`, relabel: relabelEarly };
     }
   }
 

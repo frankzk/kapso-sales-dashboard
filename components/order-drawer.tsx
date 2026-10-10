@@ -311,7 +311,7 @@ function drawerNextAction(
   row: OrderMasterRow,
   showPayments: boolean,
   gfSentence: string | null = null,
-  reprogram: ReprogramLabelState | null = null,
+  reprogram: DrawerReprogram | null = null,
 ): DrawerNextAction {
   const stage = row.macro_stage as OrderMacroStage | null | undefined;
   const substage = row.macro_substage as MacroSubstage | null | undefined;
@@ -430,6 +430,20 @@ function drawerNextAction(
       // Otro courier no lo entregó y todavía no hay salida nueva: la caja que
       // volvió lleva su rótulo, y reimprimirlo es lo que dejó a #AUR177756 con
       // un QR que no cuadraba (§9.3, 09-10-2026).
+      if (reprogram && !reprogram.live && reprogram.open) {
+        // Una salida anterior sigue abierta: pedir el rótulo respondería
+        // «todavía en la calle». Primero se cierra o se anula (#KP134960).
+        return {
+          eyebrow: "Seguimiento",
+          title: "Cerrar la salida abierta antes de reprogramar",
+          description:
+            `${nombreDeCourier(reprogram.failed.courier)} no entregó ${reprogram.failed.outputCode ?? "su salida"}, pero ` +
+            `${reprogram.open.outputCode ?? "otra salida"} sigue abierta. Registra su resultado o anúlala; después, la salida nueva.`,
+          cta: "Ver salidas y guías",
+          target: "guias",
+          tone: "amber",
+        };
+      }
       if (reprogram && !reprogram.live) {
         const courier = nombreDeCourier(reprogram.failed.courier);
         return {
@@ -441,7 +455,9 @@ function drawerNextAction(
             // La salida nueva no cierra la devolución de la anterior (§9.3): sin
             // registrarla, el pedido entregado quedaría en Por cerrar esperando
             // una caja que salió con el rótulo nuevo encima.
-            (!reprogram.failed.returned && RETURN_SCAN_COURIERS.has(reprogram.failed.courier)
+            // Lo que dice el barrido de Tanders («RETURNED») no es la recepción:
+            // la registra una persona escaneando la caja.
+            (!reprogram.received && RETURN_SCAN_COURIERS.has(reprogram.failed.courier)
               ? ` Antes de taparlo, escanéalo en Devoluciones para registrar que volvió.`
               : ""),
           cta: "Registrar seguimiento",
@@ -1001,14 +1017,17 @@ export function OrderDrawer({
   // La salida que su courier no entregó y con qué sale ahora la caja (§28).
   // Solo en Lima (§28): fuera de Lima la Swayp en devolución la gestiona
   // Reproprovincia con «Reenviar por Swayp» (§11), y su ficha no cambia.
-  const reprogram = detail && detail.row.macro_operation === "lima"
+  const reprogramState = detail && detail.row.macro_operation === "lima"
     ? reprogramLabelState(detail.guides.map(guideForDecision))
+    : null;
+  const reprogram: DrawerReprogram | null = reprogramState
+    ? { ...reprogramState, received: (detail?.receivedReturnIds ?? []).includes(reprogramState.failed.shipmentId) }
     : null;
   const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel, gfDeliverySentence(gfActive), reprogram) : null;
   // Imprimir el rótulo de la salida nueva: «Descargar rótulos» de un solo
   // pedido. La salida nace aquí, «por definir», con el motivo escrito solo.
   const offerNewOutputLabel = Boolean(
-    canEdit && reprogram && !reprogram.live && detail?.row.macro_substage === "por_reprogramar_lima",
+    canEdit && reprogram && !reprogram.live && !reprogram.open && detail?.row.macro_substage === "por_reprogramar_lima",
   );
   const printNewOutputLabel = () =>
     run(async () => {
@@ -1559,6 +1578,8 @@ export function OrderDrawer({
                               <span className="text-[13px] text-ink-600">
                                 {reprogram?.live
                                   ? `No entregada: la caja va como ${reprogram.live.outputCode ?? "otra salida"}.`
+                                  : reprogram?.open
+                                  ? `No entregada. ${reprogram.open.outputCode ?? "Otra salida"} sigue abierta: ciérrala o anúlala antes de reprogramar.`
                                   : detail.row.macro_substage === "por_reprogramar_lima"
                                   ? "No entregada: se reprograma con el rótulo de una salida nueva."
                                   : "No entregada por su courier."}
@@ -2160,6 +2181,9 @@ const TEXTAREA = cn(FIELD, "h-auto py-2 leading-5");
  * (`RETURN_SCAN_COURIERS` de app/dashboard/pedidos/despacho/actions.ts).
  */
 const RETURN_SCAN_COURIERS: ReadonlySet<string> = new Set(["tanders", "shalom"]);
+
+/** La reprogramación de la ficha, con si una persona ya recibió la caja que falló. */
+type DrawerReprogram = ReprogramLabelState & { received: boolean };
 
 /** Una salida de la ficha vista desde la regla del rótulo (lib/labels/resolve-output.ts). */
 function guideForDecision(g: ShipmentRow): OutputForDecision {
