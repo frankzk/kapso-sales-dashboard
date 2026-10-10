@@ -7073,9 +7073,19 @@ Tres reglas, a partir de acá:
    donde la comparación se puede hacer de verdad, y con eso la definición del
    desfase existe en **un solo sitio** —como `order_coverage_for` desde la 0104,
    y por la misma razón—. Se recorre del recálculo más viejo al más nuevo: lo
-   que lleva más tiempo mintiendo sale primero, y lo que un tope de recorrido
-   deje fuera es siempre lo más recientemente recalculado, que es lo que menos
-   falta hace mirar.
+   que lleva más tiempo mintiendo sale primero.
+
+   **Y sobre la tienda entera (0240, 10-10-2026).** La 0123 recortaba el
+   recorrido a las 20.000 filas más viejas, con la idea de que lo que quedara
+   fuera —lo recién recalculado— era «lo que menos falta hace mirar». Era al
+   revés: lo recién recalculado son los pedidos vivos, los que los barridos de
+   los couriers tocan cada hora. Cuando Kenku pasó de 23.900 filas, esas ~3.900
+   quedaron fuera: **293 desfasados y 7 vistos**, y un desfasado volvía a entrar
+   solo cuando otros 3.900 se recalculaban después de él. Pasó con #KP136038,
+   descartado a las 15:40 y aún en «Gestión Reproprovincia» a las 18:00. Sin el
+   índice que la 0204 borró, la base ya ordenaba la tienda entera; recorrerla
+   toda cuesta lo mismo (90 ms contra 84 ms, medido) y no deja a nadie fuera.
+   `p_scan` sigue existiendo, pero solo recorta si alguien lo pasa a mano.
 2. **El recálculo va por tandas.** Un pedido que revienta cuesta su trozo, no la
    lista entera. Endurecimiento, no la causa de este incidente: el import de
    Aliclik llega a llamar con más de mil pedidos de golpe y cualquier fallo los

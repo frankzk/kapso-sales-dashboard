@@ -481,4 +481,6 @@
 \ir migrations/0238_auto_order_ab.sql
 \echo 'Applying 0239_swayp_link_emission_on_fill.sql'
 \ir migrations/0239_swayp_link_emission_on_fill.sql
+\echo 'Applying 0240_order_master_stale_sin_tope.sql'
+\ir migrations/0240_order_master_stale_sin_tope.sql
 \echo 'Done.'

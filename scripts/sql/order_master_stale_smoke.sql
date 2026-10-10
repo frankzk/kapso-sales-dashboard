@@ -86,9 +86,33 @@ begin
     from order_master_stale('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'::uuid);
   if v_n <> 0 then raise exception 'no debería devolver pedidos de otra tienda'; end if;
 
+  -- 8. EL CASO DE LA 0240. Una tienda con MÁS de 20.000 filas en el Master, y el
+  --    desfasado es el recalculado más recientemente. La 0123 recorría solo las
+  --    20.000 más viejas y lo dejaba fuera: lo recién recalculado son los pedidos
+  --    vivos, los que los barridos tocan cada hora (10-10-2026, Kenku: 293
+  --    desfasados y 7 vistos).
+  insert into orders (id, store_id, shopify_order_id, name, created_at)
+  select gen_random_uuid(), v_store, 'bulk-' || i, '#B' || i, now() - interval '30 days'
+    from generate_series(1, 20001) i;
+  insert into order_master (order_id, store_id, shopify_order_id, order_name, macro_version, recomputed_at)
+  select o.id, v_store, o.shopify_order_id, o.name, 'mom-v1.8', now() - interval '3 hours'
+    from orders o where o.store_id = v_store and o.shopify_order_id like 'bulk-%';
+  -- #T2 pasa a ser el recálculo más nuevo de la tienda (puesto 20.005), y su
+  -- guía (escrita hace 10 minutos) sigue siendo posterior. La guía no se toca:
+  -- `shipments_touch` (0204) no deja mover `updated_at` a mano.
+  update order_master set recomputed_at = now() - interval '11 minutes' where order_id = v_stale;
+  select count(*) into v_n from order_master_stale(v_store) where order_id = v_stale;
+  if v_n <> 1 then
+    raise exception 'el desfasado recalculado más recientemente tiene que verse aunque la tienda pase de 20.000 filas';
+  end if;
+  -- Y quien pase el tope a mano sigue recortando: con 1 fila de recorrido solo se
+  -- mira el recálculo más viejo (#T4, desfasado).
+  select count(*) into v_n from order_master_stale(v_store, 1000, 1);
+  if v_n <> 1 then raise exception 'p_scan pasado a mano debería seguir recortando el recorrido'; end if;
+
   delete from order_master where store_id = v_store;
   delete from shipments    where store_id = v_store;
   delete from orders       where store_id = v_store;
 
-  raise notice 'order_master_stale: 7 comprobaciones OK';
+  raise notice 'order_master_stale: 9 comprobaciones OK';
 end $$;

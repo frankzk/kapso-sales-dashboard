@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { budgetShareMs, reconcileOrderMaster, recomputeInBatches } from "@/lib/order-master";
 
@@ -219,5 +221,34 @@ describe("reconcileOrderMaster — la puerta del desfase que no puede mirar", ()
   it("cuando la puerta responde, no inventa un fallo", async () => {
     const res = await reconcileOrderMaster(stubAdmin(null) as any, ["store-a"]);
     expect(res.staleDoorError ?? null).toBeNull();
+  });
+});
+
+// ── Que el detector mire la tienda entera (0240) ────────────────────────────
+//
+// La 0123 recorría solo las 20.000 filas con el recálculo más viejo. Kenku pasó
+// de 23.900 y lo recién recalculado —los pedidos vivos, que los barridos tocan
+// cada hora— quedó fuera: 293 desfasados y 7 vistos el 10-10-2026. La prueba de
+// verdad es el caso 8 de `scripts/sql/order_master_stale_smoke.sql`; acá se fija
+// que nadie vuelva a poner el tope por la puerta de atrás.
+
+describe("order_master_stale — sin tope de recorrido", () => {
+  const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
+
+  it("la 0240 deja `p_scan` sin recortar por defecto", () => {
+    const sql = read("db/migrations/0240_order_master_stale_sin_tope.sql");
+    expect(sql).toContain("p_scan int default null");
+    expect(sql).toContain("cross join lateral");
+  });
+
+  it("el barrido no le pasa un tope", () => {
+    const src = read("lib/order-master.ts");
+    const call = src.slice(src.indexOf('admin.rpc("order_master_stale"'), src.indexOf('admin.rpc("order_master_stale"') + 200);
+    expect(call).toContain("p_store_id: storeId");
+    expect(call).not.toContain("p_scan");
+  });
+
+  it("la prueba de la base reproduce la tienda de más de 20.000 filas", () => {
+    expect(read("scripts/sql/order_master_stale_smoke.sql")).toContain("from generate_series(1, 20001) i;");
   });
 });
