@@ -43,11 +43,23 @@ import type { SyncResult } from "@/lib/swayp-inventory-sync";
 type ProductResult = Awaited<ReturnType<typeof searchStockProducts>>[number];
 type Msg = { kind: "ok" | "error"; text: string } | null;
 
+/** Lo que la página sabe del sync diario, para cualquiera que la mire (ver page.tsx). */
+export interface SyncResumen {
+  automaticoActivo: boolean;
+  /** Qué falta configurar; vacío para quien no es administrador. */
+  faltan: string[];
+  ultima: { created_at: string; source: "cron" | "manual"; ok: boolean; cambios: number } | null;
+  retenidas: number;
+}
+
 const CARD = "rounded-lg bg-white shadow-control ring-1 ring-line";
 const LABEL = "grid gap-1.5 text-[13px] font-medium text-ink-700";
 const HELP = "text-[13px] font-normal leading-5 text-ink-500";
 const H4 = "text-sm font-semibold leading-5 text-ink-900";
 const nf = new Intl.NumberFormat("es-PE");
+// Sin el color: `cn` no resuelve choques de Tailwind, cada botón pone el suyo.
+const ROW_ACTION =
+  "inline-flex h-8 items-center rounded-md px-2 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:h-11";
 
 /** «san roman» → «San Roman»: las ciudades vienen normalizadas en minúscula. */
 function titulo(s: string): string {
@@ -64,25 +76,25 @@ function capitalizar(s: string): string {
  * tabla de stock de abajo repetía casi las mismas filas. Ahora es una tabla y
  * se elige qué mirar:
  * - «Por reponer»: falta para las guías pendientes (lo que hay que mandar).
- * - «Agotados»: en 0 en su bodega, con o sin pedidos (no se puede prometer).
+ * - «Sin stock»: en 0 en su bodega, con o sin pedidos (no se puede prometer).
  * - «Inventario»: todo, para responder «¿hay esto en Juliaca?».
  */
-type View = "reponer" | "agotados" | "inventario";
+type View = "reponer" | "sinstock" | "inventario";
 
 function enVista(r: DemandRow, view: View): boolean {
   if (view === "reponer") return r.shortfall > 0;
-  if (view === "agotados") return !r.unlimited && r.stock <= 0;
+  if (view === "sinstock") return !r.unlimited && r.stock <= 0;
   return true;
 }
 
 /** La chapa de la fila. Lo que pide acción va en su tono; lo que está bien, en
- *  verde solo si hay pedidos que cubrir, y sin chapa si no los hay. */
+ *  verde solo si hay pedidos que cubrir. Sin pedidos no hay chapa, tampoco en
+ *  0: el stock en 0 ya se lee en su columna y en la vista «Sin stock». */
 function estadoDe(r: DemandRow): { tone: BadgeTone; label: string } | null {
   if (r.unlimited) return { tone: "neutral", label: "Sin control" };
   if (r.status === "sin_stock") return { tone: "crit", label: "Sin stock" };
   if (r.status === "reponer") return { tone: "warn", label: "Reponer" };
-  if (r.stock <= 0) return { tone: "neutral", label: "Agotado" };
-  if (r.demand > 0) return { tone: "ok", label: "Cubre" };
+  if (r.demand > 0 && r.stock > 0) return { tone: "ok", label: "Cubre" };
   return null;
 }
 
@@ -92,21 +104,25 @@ export function FenixStockEditor({
   stores,
   demand = [],
   bodegas = [],
+  syncResumen = null,
 }: {
   rows: FenixStockRowDb[];
   canEdit: boolean;
   stores: StoreSummary[];
   demand?: DemandRow[];
   bodegas?: BodegaSwaypResumen[];
+  syncResumen?: SyncResumen | null;
 }) {
   const router = useRouter();
+  const searchRef = useRef<HTMLInputElement>(null);
   const [msg, setMsg] = useState<Msg>(null);
   const [pending, start] = useTransition();
   const [kardexRow, setKardexRow] = useState<FenixStockRowDb | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  // El estado del sync diario se lee una vez y se comparte: la cabecera dice qué
-  // tan frescos son los números y la tarjeta del pie lo detalla.
+  // El detalle del sync diario (solo administradores) lo muestra la tarjeta del
+  // pie; la cabecera usa el resumen que arma el servidor para todos.
   const [estado, setEstado] = useState<SwaypSyncEstado | null>(null);
+  const [estadoError, setEstadoError] = useState(false);
 
   const porReponer = useMemo(() => demand.filter((r) => enVista(r, "reponer")), [demand]);
   const [view, setView] = useState<View>(porReponer.length ? "reponer" : "inventario");
@@ -116,13 +132,36 @@ export function FenixStockEditor({
   const stockById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
 
   function cargarEstado() {
+    setEstadoError(false);
     swaypInventoryEstado()
-      .then((r) => setEstado("error" in r ? null : r))
-      .catch(() => setEstado(null));
+      .then((r) => {
+        if ("error" in r) {
+          setEstado(null);
+          setEstadoError(true);
+        } else setEstado(r);
+      })
+      .catch(() => {
+        setEstado(null);
+        setEstadoError(true);
+      });
   }
   useEffect(() => {
     if (canEdit) cargarEstado();
   }, [canEdit]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // «/» lleva a la búsqueda desde cualquier parte de la página, como en el
+  // tablero de Repro Provincia; Escape la borra.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.closest("input, textarea, select, [contenteditable='true']") || t.isContentEditable)) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   function recompute() {
     start(async () => {
@@ -143,7 +182,7 @@ export function FenixStockEditor({
 
   const counts = {
     reponer: porReponer.length,
-    agotados: demand.filter((r) => enVista(r, "agotados")).length,
+    sinstock: demand.filter((r) => enVista(r, "sinstock")).length,
     inventario: demand.length,
   };
   const unidadesPorReponer = porReponer.reduce((n, r) => n + r.shortfall, 0);
@@ -181,13 +220,12 @@ export function FenixStockEditor({
       <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
         <div className="min-w-0">
           <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Stock Swayp</h1>
-          <p className="mt-1 max-w-[68ch] text-sm text-ink-500">
+          <p className="mt-1 max-w-[68ch] text-pretty text-sm text-ink-500">
             Lo que hay en cada bodega de Swayp y lo que piden las guías pendientes de Repro Provincia.
           </p>
-          {canEdit ? (
-            <SyncLine estado={estado} />
-          ) : (
-            <p className="mt-2 text-[13px] leading-5 text-ink-500">
+          <SyncLine resumen={syncResumen} canEdit={canEdit} />
+          {!canEdit && (
+            <p className="mt-1 text-[13px] leading-5 text-ink-500">
               Solo un administrador puede editar el stock. Lo ves en modo lectura.
             </p>
           )}
@@ -229,11 +267,11 @@ export function FenixStockEditor({
           }
         />
         <StatusCard
-          label="Agotados"
-          value={counts.agotados}
-          active={view === "agotados"}
-          onClick={() => elegirVista("agotados")}
-          hint="En 0 en su bodega"
+          label="Sin stock"
+          value={counts.sinstock}
+          active={view === "sinstock"}
+          onClick={() => elegirVista("sinstock")}
+          hint="En 0 en su bodega, con o sin pedidos"
         />
         <StatusCard
           label="Inventario"
@@ -259,7 +297,9 @@ export function FenixStockEditor({
           <span className="sr-only">Buscar producto</span>
           <IconSearch aria-hidden className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
           <input
+            ref={searchRef}
             type="search"
+            aria-keyshortcuts="/"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Escape" && setQuery("")}
@@ -282,6 +322,12 @@ export function FenixStockEditor({
                   {nf.format(visible.reduce((n, r) => n + r.shortfall, 0))}
                 </b>{" "}
                 unidades para las guías pendientes
+              </span>
+            ) : view === "sinstock" ? (
+              // En 0 por definición: lo que importa es cuántos ya tienen pedidos.
+              <span className="text-ink-500">
+                {" "}
+                · {nf.format(visible.filter((r) => r.demand > 0).length)} con guías pendientes
               </span>
             ) : (
               <span className="text-ink-500">
@@ -312,7 +358,7 @@ export function FenixStockEditor({
               ? "Sin coincidencias con los filtros."
               : view === "reponer"
                 ? "Nada por reponer: el stock cubre las guías pendientes."
-                : view === "agotados"
+                : view === "sinstock"
                   ? "Ningún producto está en 0."
                   : "Sin stock registrado."}
           </p>
@@ -335,7 +381,11 @@ export function FenixStockEditor({
           stores={stores}
           bodegas={bodegas}
           estado={estado}
-          onEstadoChanged={cargarEstado}
+          estadoError={estadoError}
+          onEstadoChanged={() => {
+            cargarEstado();
+            router.refresh();
+          }}
           onMsg={setMsg}
         />
       )}
@@ -394,24 +444,29 @@ function StockTable({
         </div>
       );
     }
+    // Acciones de texto en peso 500: repetidas en cada fila, no pueden pesar
+    // más que el nombre del producto. Eliminar, en su tono.
     return (
-      <div className="flex flex-wrap justify-end gap-1.5">
+      <div className="flex flex-wrap justify-end gap-1">
         {!sinControlDeCantidad(stock) && (
-          <OpsButton size="sm" variant="ghost" onClick={() => onKardex(stock)} className="pointer-coarse:h-11">
+          <button
+            type="button"
+            onClick={() => onKardex(stock)}
+            className={cn(ROW_ACTION, "text-ink-600 hover:bg-wash hover:text-ink-900")}
+          >
             Movimientos
-          </OpsButton>
+          </button>
         )}
         {canEdit && (
-          <OpsButton
-            size="sm"
-            variant="ghost"
+          <button
+            type="button"
             disabled={pending}
             onClick={() => onAskDelete(stock.id)}
             aria-label={`Eliminar ${stock.product} de ${titulo(stock.city)}`}
-            className="text-crit-fg hover:text-crit-fg pointer-coarse:h-11"
+            className={cn(ROW_ACTION, "text-crit-fg hover:bg-crit-wash")}
           >
             Eliminar
-          </OpsButton>
+          </button>
         )}
       </div>
     );
@@ -436,8 +491,8 @@ function StockTable({
             <th className="sticky top-0 z-[1] w-[9%] border-y border-line bg-white py-2 pr-3 text-right font-medium">Pendientes</th>
             <th className="sticky top-0 z-[1] w-[8%] border-y border-line bg-white py-2 pr-3 text-right font-medium">Stock</th>
             <th className="sticky top-0 z-[1] w-[8%] border-y border-line bg-white py-2 pr-3 text-right font-medium">Faltante</th>
-            <th className="sticky top-0 z-[1] w-[10%] border-y border-line bg-white py-2 pr-3 font-medium">Estado</th>
-            <th className="sticky top-0 z-[1] w-[19%] border-y border-line bg-white py-2 pr-4 font-medium sm:pr-5">
+            <th className="sticky top-0 z-[1] w-[11%] border-y border-line bg-white py-2 pl-4 pr-3 font-medium">Estado</th>
+            <th className="sticky top-0 z-[1] w-[18%] border-y border-line bg-white py-2 pr-4 font-medium sm:pr-5">
               <span className="sr-only">Acciones</span>
             </th>
           </tr>
@@ -470,7 +525,7 @@ function StockTable({
                     <span className="text-ink-300">—</span>
                   )}
                 </td>
-                <td className="py-2.5 pr-3">{estado && <Badge tone={estado.tone}>{estado.label}</Badge>}</td>
+                <td className="py-2.5 pl-4 pr-3">{estado && <Badge tone={estado.tone}>{estado.label}</Badge>}</td>
                 <td className="py-1.5 pr-4 sm:pr-5">{acciones(r)}</td>
               </tr>
             );
@@ -528,30 +583,28 @@ function haceCuanto(iso: string): string {
 }
 
 /**
- * Qué tan frescos son los números, en la cabecera: el sync diario, la última
- * corrida y, si quedaron ciudades retenidas, un enlace a la tarjeta del pie.
+ * Qué tan frescos son los números, en la cabecera y para todos: el sync
+ * diario, la última corrida y —al administrador, que puede actuar— las
+ * ciudades retenidas, con un enlace a la tarjeta del pie.
  */
-function SyncLine({ estado }: { estado: SwaypSyncEstado | null }) {
-  if (!estado) {
-    return <p className="mt-2 text-[13px] leading-5 text-ink-500">Leyendo el estado del sync con Swayp…</p>;
-  }
-  const ultima = estado.corridas[0];
-  const ultimaAuto = estado.corridas.find((c) => c.source === "cron");
-  const retenidas = ultimaAuto?.ok ? (ultimaAuto.resumen.retenidas ?? []) : [];
-  const cambios = ultima?.resumen.ciudades?.length ?? 0;
-  const bien = estado.automaticoActivo && (!ultima || ultima.ok) && !retenidas.length;
+function SyncLine({ resumen, canEdit }: { resumen: SyncResumen | null; canEdit: boolean }) {
+  if (!resumen) return null;
+  const { ultima, retenidas } = resumen;
+  const bien = resumen.automaticoActivo && (!ultima || ultima.ok) && !retenidas;
   return (
     <p className="mt-2 flex items-start gap-2 text-[13px] leading-5 text-ink-600">
       <span aria-hidden className={cn("mt-1.5 size-2 shrink-0 rounded-full", bien ? "bg-ok-fg" : "bg-warn-fg")} />
       <span>
-        {estado.automaticoActivo ? "Sync diario con Swayp activo" : `Sync diario sin configurar (falta ${estado.faltan.join(", ")})`}
+        {resumen.automaticoActivo
+          ? "Sync diario con Swayp activo"
+          : `Sync diario sin configurar${resumen.faltan.length ? ` (falta ${resumen.faltan.join(", ")})` : ""}`}
         {ultima ? (
           <>
             {" "}
             · última sincronización {haceCuanto(ultima.created_at)}, {ultima.source === "cron" ? "automática" : "manual"}
             {ultima.ok ? (
-              cambios ? (
-                `, ${cambios} ${cambios === 1 ? "ciudad con cambios" : "ciudades con cambios"}`
+              ultima.cambios ? (
+                `, ${ultima.cambios} ${ultima.cambios === 1 ? "ciudad con cambios" : "ciudades con cambios"}`
               ) : (
                 ", sin cambios"
               )
@@ -562,13 +615,17 @@ function SyncLine({ estado }: { estado: SwaypSyncEstado | null }) {
         ) : (
           " · todavía sin sincronizaciones"
         )}
-        {retenidas.length > 0 && (
+        {retenidas > 0 && (
           <>
             {" "}
             ·{" "}
-            <a href="#sincronizar" className="font-medium text-brand-700 underline-offset-2 hover:underline">
-              {retenidas.length} {retenidas.length === 1 ? "ciudad retenida" : "ciudades retenidas"}
-            </a>
+            {canEdit ? (
+              <a href="#sincronizar" className="font-medium text-brand-700 underline-offset-2 hover:underline">
+                {retenidas} {retenidas === 1 ? "ciudad retenida" : "ciudades retenidas"}
+              </a>
+            ) : (
+              `${retenidas} ${retenidas === 1 ? "ciudad retenida" : "ciudades retenidas"}`
+            )}
           </>
         )}
       </span>
@@ -586,12 +643,14 @@ function SyncCard({
   stores,
   bodegas,
   estado,
+  estadoError,
   onEstadoChanged,
   onMsg,
 }: {
   stores: StoreSummary[];
   bodegas: BodegaSwaypResumen[];
   estado: SwaypSyncEstado | null;
+  estadoError: boolean;
   onEstadoChanged: () => void;
   onMsg: (m: Msg) => void;
 }) {
@@ -599,10 +658,10 @@ function SyncCard({
     <section id="sincronizar" aria-labelledby="sincronizar-titulo" className={cn(SECTION_CARD, "scroll-mt-6")}>
       <SectionHead
         id="sincronizar-titulo"
-        title="Sincronizar con Swayp"
+        title="Sincronizar stock desde Swayp"
         help="El sync diario deja cada ciudad igual a Swayp sin que nadie haga nada. Aquí se lee al momento, se importa el Excel de respaldo o se anota a mano lo que Swayp no cubre."
       />
-      <DryRunSwayp estado={estado} onEstadoChanged={onEstadoChanged} />
+      <DryRunSwayp estado={estado} estadoError={estadoError} onEstadoChanged={onEstadoChanged} />
       <ImportarDeSwayp onDone={onMsg} />
       <AnotarAMano stores={stores} onMsg={onMsg} />
       {bodegas.length > 0 && <BodegasSwayp bodegas={bodegas} />}
@@ -620,7 +679,15 @@ const LINK = "font-medium text-brand-700 underline-offset-2 hover:underline";
  * el importador de Excel. El token se pega a mano y no se guarda (dura ~1 h).
  * Correo, RUC e idCompany vienen precargados con los de la organización.
  */
-function DryRunSwayp({ estado, onEstadoChanged }: { estado: SwaypSyncEstado | null; onEstadoChanged: () => void }) {
+function DryRunSwayp({
+  estado,
+  estadoError,
+  onEstadoChanged,
+}: {
+  estado: SwaypSyncEstado | null;
+  estadoError: boolean;
+  onEstadoChanged: () => void;
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [accion, setAccion] = useState<"leer" | "aplicar" | null>(null);
@@ -708,7 +775,17 @@ function DryRunSwayp({ estado, onEstadoChanged }: { estado: SwaypSyncEstado | nu
         <p className={HELP}>Trae todas las bodegas y muestra qué cambiaría en cada ciudad.</p>
       </div>
 
-      {estado && <EstadoAutomatico estado={estado} />}
+      {estado ? (
+        <EstadoAutomatico estado={estado} />
+      ) : estadoError ? (
+        <Banner tone="warn" role="alert" title="No se pudo leer el estado del sync">
+          <OpsButton size="sm" onClick={onEstadoChanged} className="mt-2 pointer-coarse:h-11">
+            Reintentar
+          </OpsButton>
+        </Banner>
+      ) : (
+        <p className="rounded-md bg-wash px-3 py-2.5 text-[13px] text-ink-500">Leyendo el estado del sync…</p>
+      )}
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <OpsButton
@@ -977,8 +1054,16 @@ function CiudadDiff({
         <div className="flex flex-wrap gap-1.5">
           {hayCambios ? (
             <>
-              {bajan.length > 0 && <Badge tone="crit" className="tabular-nums">{nf.format(bajan.length)} bajan</Badge>}
-              {suben > 0 && <Badge tone="ok" className="tabular-nums">{nf.format(suben)} suben</Badge>}
+              {bajan.length > 0 && (
+                <Badge tone="crit" className="tabular-nums">
+                  {nf.format(bajan.length)} {bajan.length === 1 ? "baja" : "bajan"}
+                </Badge>
+              )}
+              {suben > 0 && (
+                <Badge tone="ok" className="tabular-nums">
+                  {nf.format(suben)} {suben === 1 ? "sube" : "suben"}
+                </Badge>
+              )}
               {c.altas.length > 0 && (
                 <Badge tone="info" className="tabular-nums">
                   {nf.format(c.altas.length)} {c.altas.length === 1 ? "alta" : "altas"}
@@ -1116,8 +1201,8 @@ function ResultadoSync({ r }: { r: Extract<SyncResult, { ok: true }> }) {
         {r.ciudades.map((c) => {
           const sinControl = ciudadSinControl(c.ciudad);
           const partes = [
-            c.bajan ? `${c.bajan} bajan${c.aCero ? ` (${c.aCero} a 0)` : ""}` : null,
-            c.suben ? `${c.suben} suben` : null,
+            c.bajan ? `${c.bajan} ${c.bajan === 1 ? "baja" : "bajan"}${c.aCero ? ` (${c.aCero} a 0)` : ""}` : null,
+            c.suben ? `${c.suben} ${c.suben === 1 ? "sube" : "suben"}` : null,
             c.altas ? `${c.altas} ${c.altas === 1 ? "alta" : "altas"}` : null,
           ].filter(Boolean);
           return (
@@ -1195,15 +1280,31 @@ function ImportarDeSwayp({ onDone }: { onDone: (m: Msg) => void }) {
           bodega y «Enviar a Excel». Un archivo por bodega; la ciudad sale del propio archivo.
         </p>
       </div>
+      {/* El campo de archivo del navegador («Choose File / No file chosen»)
+          no es de este mundo ni de este idioma: va oculto detrás de su
+          etiqueta, con el foco dibujado en ella. */}
       <div className="flex flex-wrap items-center gap-3">
         <input
           ref={inputRef}
+          id="importar-swayp"
           type="file"
           accept=".xlsx,.csv"
-          aria-label="Archivo de inventario de Swayp"
           onChange={(e) => setArchivo(e.target.files?.[0] ?? null)}
-          className="min-w-0 text-[13px] text-ink-600 file:mr-3 file:h-9 file:cursor-pointer file:rounded-md file:border-0 file:bg-white file:px-3 file:text-sm file:font-semibold file:text-ink-700 file:shadow-control file:ring-1 file:ring-inset file:ring-line-strong hover:file:bg-wash"
+          className="peer sr-only"
         />
+        <label
+          htmlFor="importar-swayp"
+          className={opsButtonClass(
+            "secondary",
+            "md",
+            "cursor-pointer peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand-500 pointer-coarse:h-11",
+          )}
+        >
+          Elegir archivo
+        </label>
+        <span className={cn("min-w-0 truncate text-[13px]", archivo ? "text-ink-900" : "text-ink-500")}>
+          {archivo?.name ?? "Ningún archivo"}
+        </span>
         <OpsButton onClick={subir} disabled={pending || !archivo} className="pointer-coarse:h-11">
           {pending ? "Importando…" : "Importar"}
         </OpsButton>
