@@ -47,10 +47,11 @@ const DAY_MS = 86_400_000;
 const LOOKBACK_DAYS = 90;
 /** Guías que se vinculan por pasada. Lo que sobre entra en la siguiente. */
 export const MAX_LINKS_PER_RUN = 10;
-/** El listado pagina; ~3 KB por orden. */
-const PER_PAGE = 500;
-/** 90 días de las dos tiendas son ~2.500 guías: 12 páginas sobran. */
-const MAX_PAGES = 12;
+/** El listado pagina; ~3 KB por orden. Shalom no entrega más de 200 por página
+ *  aunque se le pidan más (medido el 10-10-2026), así que se pide eso. */
+const PER_PAGE = 200;
+/** 90 días de las dos tiendas son ~2.500 guías: 13 páginas de 200; 20 sobran. */
+const MAX_PAGES = 20;
 /** `.in()` viaja en la URL: listas cortas. */
 const CHUNK = 150;
 /** Las guías de la API de la última hora pueden no estar todavía en el listado. */

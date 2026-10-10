@@ -334,6 +334,26 @@ describe("bajar el listado entero", () => {
     expect(r.orders).toHaveLength(20);
   });
 
+  it("Shalom recorta la página por debajo de `perPage`: se siguen pidiendo páginas", async () => {
+    // Lo que pasó el 10-10-2026: se pidieron 500 y llegaron 200. Medir el final
+    // contra `perPage` daba el listado por entero en la página 1.
+    const r = await collectListingPages(paginas(23, 4), { perPage: 10, maxPages: 10, deadlineMs: Date.now() + 60_000 });
+    expect(r).toMatchObject({ completo: true, paginas: 6 });
+    expect(r.orders).toHaveLength(23);
+  });
+
+  it("recortada y exacta: el final es la página vacía", async () => {
+    const r = await collectListingPages(paginas(8, 4), { perPage: 10, maxPages: 10, deadlineMs: Date.now() + 60_000 });
+    expect(r).toMatchObject({ completo: true, paginas: 3 });
+    expect(r.orders).toHaveLength(8);
+  });
+
+  it("una sola página corta se confirma con la siguiente vacía", async () => {
+    const r = await collectListingPages(paginas(3, 10), { perPage: 10, maxPages: 5, deadlineMs: Date.now() + 60_000 });
+    expect(r).toMatchObject({ completo: true, paginas: 2 });
+    expect(r.orders).toHaveLength(3);
+  });
+
   it("si el wrapper ignora `page` y repite, el listado NO está entero", async () => {
     const r = await collectListingPages(async () => Array.from({ length: 10 }, (_, i) => orden(i)), {
       perPage: 10,

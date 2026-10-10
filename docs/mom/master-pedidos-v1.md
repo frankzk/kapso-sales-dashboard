@@ -5569,7 +5569,14 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   OSE ID de arriba:
   - que esté **entero**: tienen que aparecer al menos el 97 % de las guías que
     Kapta creó por API en el periodo. Si falta más —una página que no llegó,
-    un tope que Shalom no avisa— no se vincula nada en esa cuenta;
+    un tope que Shalom no avisa— no se vincula nada en esa cuenta. **Ese tope
+    existe**: Shalom no entrega más de 200 órdenes por página aunque se le
+    pidan más. La primera pasada (10-10-2026, 12:00) pidió 500, recibió 200 y
+    dio el listado por terminado en la página 1 —198 de 1.555 guías—; la
+    comprobación lo frenó y no vinculó nada. Desde entonces se piden páginas
+    de 200 y la última es la que llega vacía o más corta que las anteriores,
+    nunca «más corta que lo pedido». El relleno del OSE ID lee el listado
+    igual, todas sus páginas;
   - que su destinatario **sea el destinatario**: en las guías creadas por API,
     el DNI y el celular del listado tienen que coincidir con los del pedido en
     nueve de cada diez, con diez como mínimo. El campo que no pasa no se usa
