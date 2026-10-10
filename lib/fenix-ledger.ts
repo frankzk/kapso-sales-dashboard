@@ -18,7 +18,7 @@ export const STOCK_MOVEMENT_LABEL: Record<StockMovementKind, string> = {
   entrada: "Entrada",
   salida_entrega: "Salida por entrega",
   salida_merma: "Merma / pérdida",
-  ajuste: "Ajuste (conteo Fénix)",
+  ajuste: "Ajuste (conteo Swayp)",
 };
 
 export interface StockMovementRow {

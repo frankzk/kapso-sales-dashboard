@@ -114,48 +114,69 @@ const swaypDevolucion = out({
 });
 const s02PorDefinir = out({ id: "s02", output_code: "AUR177756-S02", output_number: 2, created_at: "2026-10-09T15:00:00Z" });
 
-describe("regla 1: la salida que su courier no entregó no está «en la calle»", () => {
-  it("Tanders RETURNING: no cuenta como activa ni como en la empresa", () => {
-    expect(isActiveOutput(tandersVuelve)).toBe(false);
+const LIMA = { lima: true };
+
+describe("regla 1: en Lima, la salida que su courier no entregó no está «en la calle»", () => {
+  it("Tanders RETURNING: en Lima no cuenta como activa; en ningún sitio como «en la empresa»", () => {
+    expect(isActiveOutput(tandersVuelve, LIMA)).toBe(false);
+    expect(isActiveOutput(tandersVuelve)).toBe(true);
     expect(isWithCompany({ ...tandersVuelve, custody_state: "empresa" })).toBe(false);
   });
 
+  it("fuera de Lima no cambia: la Swayp en Devolución de provincia sigue en Reproprovincia (§11)", () => {
+    expect(decideLabelAction([swaypDevolucion])).toEqual({ kind: "needs_justification", activeOutputs: 1 });
+    expect(decideLabelAction([swaypDevolucion], { lima: false })).toEqual({ kind: "needs_justification", activeOutputs: 1 });
+    // Una anulada, como antes: se crea, pero sin el motivo de la reprogramación de Lima.
+    expect(decideLabelAction([{ ...swaypDevolucion, delivery_status: "anulado" }])).toEqual({ kind: "create" });
+  });
+
   it("pedir el rótulo crea la salida nueva y dice qué salida no entregó (antes: «necesita justificación»)", () => {
-    expect(decideLabelAction([tandersVuelve])).toEqual({
+    expect(decideLabelAction([tandersVuelve], LIMA)).toEqual({
       kind: "create",
       afterFailure: { shipmentId: "s01", outputCode: "AUR177756-S01", courier: "tanders", returned: false },
     });
   });
 
   it("Swayp en Devolución (8), igual", () => {
-    expect(decideLabelAction([swaypDevolucion])).toMatchObject({ kind: "create", afterFailure: { courier: "fenix", returned: false } });
+    expect(decideLabelAction([swaypDevolucion], LIMA)).toMatchObject({ kind: "create", afterFailure: { courier: "fenix", returned: false } });
   });
 
   it("anulada después de salir, igual; y si la caja ya se recibió, dice que volvió", () => {
     const anulada = { ...tandersVuelve, delivery_status: "anulado", reported_status: "CANCELLED" };
-    expect(decideLabelAction([anulada])).toMatchObject({ kind: "create", afterFailure: { shipmentId: "s01" } });
+    expect(decideLabelAction([anulada], LIMA)).toMatchObject({ kind: "create", afterFailure: { shipmentId: "s01" } });
     const recibida = { ...tandersVuelve, custody_state: "devuelto", returned_at: "2026-10-08T16:00:00Z" };
-    expect(decideLabelAction([recibida])).toMatchObject({ kind: "create", afterFailure: { returned: true } });
+    expect(decideLabelAction([recibida], LIMA)).toMatchObject({ kind: "create", afterFailure: { returned: true } });
+    // La custodia `devuelto` sola también dice que volvió (filas sin `returned_at`).
+    const devueltaSinFecha = { ...tandersVuelve, reported_status: "RETURNED", custody_state: "devuelto" };
+    expect(decideLabelAction([devueltaSinFecha], LIMA)).toMatchObject({ kind: "create", afterFailure: { returned: true } });
   });
 
   it("una salida viva de verdad sigue pidiendo justificación (§23)", () => {
     const tandersEnReparto = { ...tandersVuelve, reported_status: "PICKED" };
-    expect(decideLabelAction([tandersEnReparto])).toEqual({ kind: "needs_justification", activeOutputs: 1 });
+    expect(decideLabelAction([tandersEnReparto], LIMA)).toEqual({ kind: "needs_justification", activeOutputs: 1 });
     const gfEnRuta = out({ id: "gf", courier: "propio", delivery_status: "en_ruta", custody_state: "courier" });
-    expect(decideLabelAction([tandersVuelve, gfEnRuta])).toEqual({ kind: "needs_justification", activeOutputs: 1 });
+    expect(decideLabelAction([tandersVuelve, gfEnRuta], LIMA)).toEqual({ kind: "needs_justification", activeOutputs: 1 });
   });
 
   it("pulsar dos veces reimprime la S02, no crea una S03", () => {
-    expect(decideLabelAction([tandersVuelve, s02PorDefinir])).toEqual({ kind: "reuse", shipmentId: "s02" });
+    expect(decideLabelAction([tandersVuelve, s02PorDefinir], LIMA)).toEqual({ kind: "reuse", shipmentId: "s02" });
   });
 
   it("después de anular una «por definir», la nueva sigue llevando el motivo de la que falló", () => {
     const anuladaPorError = { ...s02PorDefinir, delivery_status: "anulado" };
-    expect(decideLabelAction([tandersVuelve, anuladaPorError])).toMatchObject({ kind: "create", afterFailure: { shipmentId: "s01" } });
+    expect(decideLabelAction([tandersVuelve, anuladaPorError], LIMA)).toMatchObject({ kind: "create", afterFailure: { shipmentId: "s01" } });
+  });
+
+  it("solo se reimprime una salida viva: una entregada o «transferido» en custodia empresa no (#KP134300)", () => {
+    const madreTransferida = out({ id: "s01", courier: "fenix", output_code: "KP134300-S01", delivery_status: "transferido", custody_state: "empresa", created_at: "2026-09-20T15:00:00Z" });
+    const hijaDevuelta = out({ id: "s02", courier: "fenix", output_code: "KP134300-S02", delivery_status: "anulado", custody_state: "retorno", swayp_state: 9, dispatched_at: "2026-09-25T14:00:00Z", created_at: "2026-09-24T15:00:00Z", output_number: 2 });
+    expect(isWithCompany(madreTransferida)).toBe(false);
+    expect(isWithCompany({ ...madreTransferida, delivery_status: "entregado" })).toBe(false);
+    expect(decideLabelAction([madreTransferida, hijaDevuelta], LIMA)).toMatchObject({ kind: "create", afterFailure: { shipmentId: "s02" } });
   });
 
   it("sin ninguna que fallara, crear no lleva motivo", () => {
-    expect(decideLabelAction([out({ id: "a", custody_state: "devuelto" })])).toEqual({ kind: "create" });
+    expect(decideLabelAction([out({ id: "a", custody_state: "devuelto" })], LIMA)).toEqual({ kind: "create" });
   });
 });
 
@@ -180,11 +201,34 @@ describe("la ficha: con qué sale la caja", () => {
     expect(reprogramLabelState([tandersVuelve])).toEqual({
       failed: { shipmentId: "s01", outputCode: "AUR177756-S01", courier: "tanders", returned: false },
       live: null,
+      open: null,
     });
     expect(reprogramLabelState([tandersVuelve, s02PorDefinir])?.live).toEqual({ shipmentId: "s02", outputCode: "AUR177756-S02" });
     // #AUR177756 hoy: la S02 ya es de Grupo GF y salió.
     const s02Gf = { ...s02PorDefinir, courier: "propio", custody_state: "courier", delivery_status: "en_ruta" };
     expect(reprogramLabelState([tandersVuelve, s02Gf])?.live?.outputCode).toBe("AUR177756-S02");
+  });
+
+  it("«nacida después» se lee por fecha y, en filas sin fecha, por consecutivo", () => {
+    // Filas antiguas sin consecutivo: manda la fecha.
+    const sinNumero = { ...s02PorDefinir, output_number: null };
+    const fallidaSinNumero = { ...tandersVuelve, output_number: null };
+    expect(reprogramLabelState([fallidaSinNumero, sinNumero])?.live?.shipmentId).toBe("s02");
+    // Sin fecha: manda el consecutivo.
+    const sinFecha = { ...s02PorDefinir, created_at: null };
+    const fallidaSinFecha = { ...tandersVuelve, created_at: null };
+    expect(reprogramLabelState([fallidaSinFecha, sinFecha])?.live?.shipmentId).toBe("s02");
+    expect(reprogramLabelState([{ ...fallidaSinFecha, output_number: 3 }, sinFecha])?.live).toBeNull();
+  });
+
+  it("una salida viva ANTERIOR a la que falló no es la caja que volvió (#KP134960)", () => {
+    const gfViejaAbierta = out({ id: "s01", courier: "propio", output_code: "KP134960-S01", custody_state: "courier", created_at: "2026-09-17T15:00:00Z" });
+    const tandersVolvio = { ...tandersVuelve, id: "s02", output_code: "KP134960-S02", output_number: 2, delivery_status: "anulado", reported_status: "RETURNED", custody_state: "devuelto", created_at: "2026-09-24T15:00:00Z" };
+    expect(reprogramLabelState([gfViejaAbierta, tandersVolvio])?.live).toBeNull();
+    // La ficha la nombra como abierta y no ofrece imprimir: el clic fallaría.
+    expect(reprogramLabelState([gfViejaAbierta, tandersVolvio])?.open).toEqual({ shipmentId: "s01", outputCode: "KP134960-S01" });
+    // Y pedir el rótulo responde que hay una todavía en la calle, no crea.
+    expect(decideLabelAction([gfViejaAbierta, tandersVolvio], LIMA)).toEqual({ kind: "needs_justification", activeOutputs: 1 });
   });
 
   it("una entregada o anulada no es la caja viva; sin ninguna que fallara, nada", () => {
@@ -195,13 +239,23 @@ describe("la ficha: con qué sale la caja", () => {
 
 describe("regla 3: el rótulo viejo nombra la salida con la que sale, sin alias", () => {
   it("«Verificar caja»: la S02 está en esta caja", () => {
-    expect(oldLabelHint("s01", [tandersVuelve, s02PorDefinir], "caja", new Set(["s02"]))).toBe(
+    expect(oldLabelHint("s01", [tandersVuelve, s02PorDefinir], "caja", { inThisBox: new Set(["s02"]) })).toBe(
       "Es el rótulo viejo de AUR177756-S01 (Tanders no entregó). En esta caja va como AUR177756-S02: escanea su rótulo; si la caja no lo tiene, imprímelo y pégalo encima.",
     );
   });
 
+  it("«Verificar caja»: la salida que está en ESTA caja se nombra aunque sea anterior a la que falló (#KP136825)", () => {
+    const gfEnLaCaja = out({ id: "g01", courier: "propio", output_code: "KP136825-S01", custody_state: "courier", created_at: "2026-09-26T15:00:00Z" });
+    const tandersPosterior = { ...tandersVuelve, id: "t02", output_code: "KP136825-S02", output_number: 2, created_at: "2026-10-06T15:00:00Z" };
+    expect(oldLabelHint("t02", [gfEnLaCaja, tandersPosterior], "caja", { inThisBox: new Set(["g01"]) })).toBe(
+      "Es el rótulo viejo de KP136825-S02 (Tanders no entregó). En esta caja va como KP136825-S01: escanea su rótulo; si la caja no lo tiene, imprímelo y pégalo encima.",
+    );
+    // En el almacén no: una anterior no es la caja que volvió.
+    expect(oldLabelHint("t02", [gfEnLaCaja, tandersPosterior], "pedido", { reprogramming: true })).toBeNull();
+  });
+
   it("«Verificar caja»: la S02 existe pero no está en esta caja → el error de siempre", () => {
-    expect(oldLabelHint("s01", [tandersVuelve, s02PorDefinir], "caja", new Set())).toBeNull();
+    expect(oldLabelHint("s01", [tandersVuelve, s02PorDefinir], "caja", { inThisBox: new Set() })).toBeNull();
   });
 
   it("«Dejar paquete listo»: la S02 está en el almacén", () => {
@@ -210,10 +264,20 @@ describe("regla 3: el rótulo viejo nombra la salida con la que sale, sin alias"
     );
   });
 
-  it("sin salida nueva todavía (#KP137746), dice cómo nace", () => {
-    expect(oldLabelHint("s01", [tandersVuelve], "pedido")).toBe(
+  it("sin salida nueva todavía (#KP137746), dice cómo nace si el pedido está por reprogramarse", () => {
+    expect(oldLabelHint("s01", [tandersVuelve], "pedido", { reprogramming: true })).toBe(
       "Es el rótulo viejo de AUR177756-S01 (Tanders no entregó). Para reprogramarlo, imprime desde el pedido el rótulo de su salida nueva y pégalo encima.",
     );
+  });
+
+  it("un pedido que ya no se reprograma (Por cerrar) no recibe la invitación: el error de siempre", () => {
+    expect(oldLabelHint("s01", [tandersVuelve], "pedido", { reprogramming: false })).toBeNull();
+    expect(oldLabelHint("s01", [tandersVuelve], "pedido")).toBeNull();
+  });
+
+  it("una salida viva anterior a la que falló no se nombra como la caja", () => {
+    const anterior = { ...s02PorDefinir, id: "s00", output_code: "AUR177756-S00", output_number: 0, created_at: "2026-10-01T15:00:00Z" };
+    expect(oldLabelHint("s01", [tandersVuelve, anterior], "pedido", { reprogramming: true })).toBeNull();
   });
 
   it("una salida que no falló no cambia ningún mensaje", () => {
@@ -238,8 +302,10 @@ describe("regla 3: el rótulo viejo nombra la salida con la que sale, sin alias"
       { id: "vuelve", order_id: "o1", courier: "tanders", delivery_status: "en_ruta", output_number: 1, reported_status: "RETURNING" },
       { id: "volvio", order_id: "o2", courier: "tanders", delivery_status: "en_ruta", output_number: 1, reported_status: "returned" },
       { id: "viva", order_id: "o3", courier: "tanders", delivery_status: "pendiente", output_number: 1, reported_status: "PENDING" },
+      // Tanders la sigue dando en reparto, pero la caja ya se recibió en Devoluciones.
+      { id: "recibida", order_id: "o4", courier: "tanders", delivery_status: "en_ruta", output_number: 1, reported_status: "PICKED", returned_at: "2026-10-08T16:00:00Z" },
     ];
-    expect(pickCombinadaOutputs(["o1", "o2", "o3"], rows, "tanders")).toEqual({ shipmentIds: ["viva"], missingOrderIds: ["o1", "o2"] });
+    expect(pickCombinadaOutputs(["o1", "o2", "o3", "o4"], rows, "tanders")).toEqual({ shipmentIds: ["viva"], missingOrderIds: ["o1", "o2", "o4"] });
   });
 });
 
@@ -346,9 +412,14 @@ describe("el cableado", () => {
     expect(body).toContain("dispatchDate: limaTodayKey(),\n      note,");
     expect(body).toContain("salidasQueEstorban((byOrder.get(orderId) ?? []).filter((o) => o.id !== result.shipmentId))");
     expect(body).toContain('kind: "additional_output_reason"');
-    // Si la lectura falla no se crea una salida por pedido a ciegas.
-    expect(body).toContain("if (shipmentError) {");
+    // Si una lectura falla no se crea una salida por pedido a ciegas.
+    expect(body).toContain("if (shipmentError || masterError) {");
     expect(body).toContain("reported_status,swayp_state,dispatched_at,returned_at");
+    // Solo en Lima, y con la foto del pedido fresca antes de crear.
+    expect(body).toContain('admin.from("order_master").select("order_id,macro_operation").in("order_id", unique)');
+    expect(body).toContain("const decisionCtx = { lima: limaOrders.has(orderId) };");
+    expect(body).toContain('const { data: fresh, error: freshError } = await admin.from("shipments").select(labelColumns).eq("order_id", orderId);');
+    expect(body).toContain("decision = decideLabelAction(freshRows, decisionCtx);");
   });
 
   it("los escáneres de almacén nombran la salida hermana solo en el camino que ya falla", () => {
@@ -362,19 +433,30 @@ describe("el cableado", () => {
   it("asignar por escaneo con el rótulo viejo nombra la salida y ofrece su rótulo", () => {
     const src = read("app/dashboard/courier/actions.ts");
     const scan = src.slice(src.indexOf("export async function scanAssignToRider("));
-    expect(scan).toContain("took.shipmentId !== found.shipment.id");
-    expect(scan).toContain("labelUrl: `/api/pedidos/rotulos?ids=${took.shipmentId}`");
+    // También si el pedido ya estaba tomado: la salida es la de su solicitud.
+    expect(scan).toContain('.select("id,shipment_id")');
+    expect(scan).toContain("requestShipmentId !== found.shipment.id");
+    expect(scan).toContain("labelUrl: `/api/pedidos/rotulos?ids=${requestShipmentId}`");
     const board = read("components/dispatch-day-board.tsx");
     expect(board).toContain("{l.relabel && (");
+    // La chapa «nace su salida nueva» solo cuando la toma de verdad la crea.
+    expect(src).toContain("newOutputOnTake: retry && !fillable,");
+    expect(board).toContain("{q.newOutputOnTake && !q.taken && <span");
   });
 
   it("la ficha deja de ofrecer el rótulo de la que falló como enlace principal", () => {
     const ficha = read("components/order-drawer.tsx");
-    expect(ficha).toContain("const notDelivered = isFailedOutput(guideForDecision(g));");
+    expect(ficha).toContain('detail && detail.row.macro_operation === "lima"');
+    expect(ficha).toContain("const notDelivered = reprogram !== null && isFailedOutput(guideForDecision(g));");
     expect(ficha).toContain('{g.courier === "tanders" && !notDelivered && (');
     expect(ficha).toContain("{g.qr_token && !notDelivered && (");
     expect(ficha).toContain("Rótulo viejo (solo Devoluciones)");
     expect(ficha).toContain("Imprimir rótulo de la salida nueva");
+    // Con una salida anterior abierta no se ofrece imprimir (el clic fallaría).
+    expect(ficha).toContain("canEdit && reprogram && !reprogram.live && !reprogram.open &&");
+    // El aviso de Devoluciones depende de que una persona recibiera la caja, no del barrido.
+    expect(ficha).toContain("(!reprogram.received && RETURN_SCAN_COURIERS.has(reprogram.failed.courier)");
+    expect(read("lib/orders-master-access.ts")).toContain('events.filter((e) => e.kind === "return_received" && e.shipment_id)');
     expect(ficha).toContain("await resolveLabelsForOrders([orderId])");
   });
 });

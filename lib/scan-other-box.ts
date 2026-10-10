@@ -10,7 +10,7 @@
 // en la mano. PURA.
 
 import { boxDayShort } from "@/lib/gf-scan-return";
-import { isFailedOutput, type OutputForDecision } from "@/lib/labels/resolve-output";
+import { isFailedOutput, newerLiveSiblings, type OutputForDecision } from "@/lib/labels/resolve-output";
 import { nombreDeCourier } from "@/lib/shipment-output";
 
 export interface BoxRef {
@@ -73,27 +73,45 @@ const LIVE_STATUSES = new Set(["pendiente", "en_ruta", "por_preparar"]);
 /**
  * ¿El escaneo leyó el rótulo viejo de una caja que volvió? Si la salida
  * escaneada la dio por no entregada su courier, el mensaje que nombra la salida
- * con la que sale: la que está en ESTA caja (`caja`, «Verificar caja») o la del
- * pedido en el almacén (`pedido`, «Dejar paquete listo»). Si el pedido no tiene
- * otra salida viva, cómo se crea. null cuando no aplica: el error de siempre.
+ * con la que sale: la viva que está en ESTA caja (`caja`, «Verificar caja»), o
+ * una viva NACIDA DESPUÉS de ella en el almacén (`pedido`, «Dejar paquete
+ * listo»). Si no
+ * hay ninguna y el pedido está por reprogramarse, cómo se crea. null cuando no
+ * aplica: el error de siempre. Un pedido que ya no se reprograma (Por cerrar,
+ * devolución pendiente de inventario) no recibe la invitación a reprogramarlo.
  */
 export function oldLabelHint(
   scannedId: string,
   outputs: readonly OutputForDecision[],
   where: "caja" | "pedido",
-  inThisBox: ReadonlySet<string> = new Set(),
+  opts: { inThisBox?: ReadonlySet<string>; reprogramming?: boolean } = {},
 ): string | null {
   const scanned = outputs.find((output) => output.id === scannedId);
   if (!scanned || !isFailedOutput(scanned)) return null;
   const ref = { outputCode: scanned.output_code ?? null, courier: scanned.courier ?? "" };
-  const live = outputs.filter((output) =>
-    output.id !== scannedId &&
-    LIVE_STATUSES.has(output.delivery_status ?? "") &&
-    output.custody_state !== "devuelto" &&
-    !isFailedOutput(output));
-  if (!live.length) return oldLabelMessage(ref, null, where);
+  // En «Verificar caja» la prueba es estar en ESTA caja, nazca cuando nazca:
+  // #KP136825 tenía su S01 de Grupo GF en la caja de Alexis y la S02 de
+  // Tanders, posterior, era la que no entregó.
+  if (where === "caja") {
+    const inBox = outputs
+      .filter((output) =>
+        output.id !== scannedId && opts.inThisBox?.has(output.id) && !isFailedOutput(output) &&
+        output.custody_state !== "devuelto" && LIVE_STATUSES.has(output.delivery_status ?? ""))
+      .sort((a, b) => (b.output_number ?? 0) - (a.output_number ?? 0));
+    if (inBox[0]) return oldLabelMessage(ref, { outputCode: inBox[0].output_code ?? null }, where);
+  }
+  const live = newerLiveSiblings(outputs, scanned);
+  if (!live.length) {
+    // Sin salida nueva, se dice cómo nace —solo si se reprograma y no queda
+    // otra viva anterior, que pedir el rótulo rechazaría por estar en la calle—.
+    const olderLive = outputs.some((output) =>
+      output.id !== scannedId && !isFailedOutput(output) && output.custody_state !== "devuelto" &&
+      LIVE_STATUSES.has(output.delivery_status ?? ""));
+    return opts.reprogramming && !olderLive ? oldLabelMessage(ref, null, where) : null;
+  }
+  if (where === "caja") return null;
   const here = live
-    .filter((output) => (where === "caja" ? inThisBox.has(output.id) : output.custody_state === "empresa"))
+    .filter((output) => output.custody_state === "empresa")
     .sort((a, b) => (b.output_number ?? 0) - (a.output_number ?? 0));
   return here[0] ? oldLabelMessage(ref, { outputCode: here[0].output_code ?? null }, where) : null;
 }

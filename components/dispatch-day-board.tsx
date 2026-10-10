@@ -324,6 +324,7 @@ export function DispatchDayBoard(props: Props) {
         assignable: true,
         route: null,
         failedOutput: o.failedOutput ?? null,
+        newOutputOnTake: o.newOutputOnTake ?? false,
         tandersReview: o.tandersReview ?? null,
         ownOutput: o.ownOutput ?? null,
       }));
@@ -1252,11 +1253,12 @@ function StateBadges({ q, today }: { q: QueueRow; today: string }) {
   return (
     <div className="flex flex-wrap items-center gap-1">
       {q.route?.undeliveredReason && <Badge tone="urgent" title="Sigue en la caja del motorizado: márcalo y «Recibir en oficina» cuando vuelva el paquete">No entregado · {nonDeliveryReasonLabel(q.route.undeliveredReason)}</Badge>}
-      {q.failedOutput && <Badge tone="crit" title="Otro courier no lo entregó y nadie pidió todavía el rótulo de su salida nueva.">{failedOutputLabel(q.failedOutput)}</Badge>}
+      {q.failedOutput && <Badge tone="crit" title="Otro courier no lo entregó: sale con una salida nueva, con su propio rótulo encima del anterior.">{failedOutputLabel(q.failedOutput)}</Badge>}
       {/* Visible, no en el title: la caja que volvió lleva el rótulo del otro
           courier, y al asignarlo nace la salida nueva cuyo rótulo hay que pegar
-          encima (#AUR177756). Lo mejor es pedirlo antes, desde el pedido. */}
-      {q.failedOutput && !q.taken && <span className="text-xs text-warn-fg">al asignarlo nace su salida nueva: imprime su rótulo</span>}
+          encima (#AUR177756). Si su «por definir» ya existe, la toma la rellena
+          y no hay nada que avisar. Lo mejor es pedirlo antes, desde el pedido. */}
+      {q.newOutputOnTake && !q.taken && <span className="text-xs text-warn-fg">al asignarlo nace su salida nueva: imprime su rótulo</span>}
       {q.ownOutput && !q.route && <Badge tone="crit" title={`Grupo GF no lo entregó. Sale con su misma salida${q.ownOutput.outputCode ? ` ${q.ownOutput.outputCode}` : ""}: mismo QR y rótulo, Almacén no arma otra caja.`}>{ownOutputLabel(q.ownOutput.outputCode)}</Badge>}
       {q.tandersReview && <span className="text-xs text-warn-fg" title={`Confirma el paquete antes de asignar. ${q.tandersReview.courier === "swayp" ? "Swayp" : "Tanders"} conserva su salida original.`}>{courierReviewChip(q.tandersReview)} {programDayLabel(limaDay(q.tandersReview.dispatchedAt)!)}</span>}
       {q.assignable && q.programmedFor && <ProgramChip day={q.programmedFor} today={today} reason={q.programReason ?? null} />}

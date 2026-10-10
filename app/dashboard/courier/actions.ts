@@ -20,7 +20,7 @@ import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-acces
 import { resolveLimaDistrict } from "@/lib/order-coverage";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { writeCourierGuide, type RouteOutputWriteResult } from "@/lib/route-output-fill";
-import { MAX_OUTPUTS_PER_ORDER, manualRouteGuideCode, pickFillableRouteOutput, puertaDeSalidaAdicional } from "@/lib/shipment-output";
+import { MAX_OUTPUTS_PER_ORDER, isCourierTbd, manualRouteGuideCode, pickFillableRouteOutput, puertaDeSalidaAdicional } from "@/lib/shipment-output";
 import {
   REPROGRAM_QUEUE_FILTER,
   isReprogramStage,
@@ -53,6 +53,7 @@ import { getRiders, type RiderRow } from "@/lib/settlements-access";
 import { routeReportAccess } from "@/lib/route-report-access";
 import { loadRouteCloseContext, type RouteCloseContext } from "@/lib/route-close";
 import { otherCourierBlockMessage } from "@/lib/gf-admission-message";
+import { writeGfDispatchProgram } from "@/lib/gf-dispatch-program";
 
 const COURIER_PATH = "/dashboard/courier";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -131,6 +132,11 @@ export interface CourierAvailableOrder {
    * y si su caja ya volvió. Al tomarlo se crea una salida nueva.
    */
   failedOutput?: FailedOutput | null;
+  /**
+   * Al tomarlo NACE su salida: nadie pidió todavía el rótulo de la nueva (no
+   * hay «por definir» que rellenar, §28). Si la hay, la toma la rellena.
+   */
+  newOutputOnTake?: boolean;
   tandersReview?: TandersReview | null;
   /**
    * Grupo GF no lo entregó con su propia salida y sale con ESA misma salida
@@ -797,6 +803,7 @@ async function loadCourierOperations(
       macroStage: order.macro_stage ?? null,
       macroSubstage: order.macro_substage ?? null,
       failedOutput: retry ? lastFailedOutput(outputs) : null,
+      newOutputOnTake: retry && !fillable,
       tandersReview: review,
       ownOutput: own ? { outputCode: own.output_code ?? null } : null,
     };
@@ -1744,32 +1751,19 @@ export async function rescheduleGroupGfCourierOrders(
     if (!storeId) { errors.push("Un pedido no es de esta organización."); continue; }
     const request = byOrder.get(orderId);
     if (request?.shipment_id && inBoxShipments.has(request.shipment_id)) { inBox.push(orderId); continue; }
-    const { error } = await admin.from("gf_dispatch_programs").upsert({
-      order_id: orderId,
-      store_id: storeId,
-      scheduled_for: day,
+    // El mismo camino que el reporte de la parada con fecha (lib/gf-dispatch-program).
+    const result = await writeGfDispatchProgram(admin, {
+      orderId,
+      storeId,
+      day,
       reason,
-      set_by: auth.userId,
-      set_at: now,
-    }, { onConflict: "order_id" });
-    if (error) { errors.push(error.message); continue; }
-    if (request && request.scheduled_for !== day) {
-      const { error: moveError } = await admin.from("logistics_requests").update({ scheduled_for: day }).eq("id", request.id);
-      if (moveError) errors.push(moveError.message);
-    }
-    const from = previous.get(orderId)?.scheduled_for ?? null;
-    await admin.from("order_events").insert({
-      store_id: storeId,
-      order_id: orderId,
-      kind: "dispatch_programmed",
-      occurred_at: now,
       actor: auth.userId,
-      source: "grupo_gf_courier",
-      courier: "propio",
-      shipment_id: request?.shipment_id ?? null,
-      note: `Salida programada para el ${label}${from && from !== day ? ` (antes el ${programDayLabel(from)})` : ""}: ${reason}.`,
-      payload: { from, to: day, reason, requestId: request?.id ?? null },
+      request: request ?? null,
+      from: previous.get(orderId)?.scheduled_for ?? null,
+      now,
     });
+    if (result.error) errors.push(result.error);
+    if (!result.written) continue;
     programmed.push(orderId);
   }
   revalidatePath(COURIER_PATH);
@@ -2846,6 +2840,32 @@ export async function scanAssignToRider(
   // Un pedido anulado no entra a ninguna caja: se dice eso y nada más (lib/scan-cancelled.ts).
   const cancelled = await cancelledScanNotice(admin, orderId);
   if (cancelled) return { ...base, orderId, shipmentId, status: "no_elegible", message: cancelled };
+  // El rótulo viejo de la caja que volvió (§29.4): se leyó el de otro courier
+  // y el pedido ya tiene su solicitud de Grupo GF con OTRA salida —tomado
+  // «Desde la lista» antes de imprimir el rótulo nuevo—. La caja es esa
+  // salida: por ella se busca en las cajas, y la línea pide pegar su rótulo.
+  // Solo se pregunta con un rótulo que no es de Grupo GF: el escaneo normal no
+  // paga la lectura.
+  let oldLabel: { outputCode: string | null; courier: string } | null = null;
+  let relabelEarly: ScanAssignLine["relabel"] = null;
+  if (found.shipment?.courier && gfProvider?.id && courierKey(found.shipment.courier) !== "propio" && !isCourierTbd(found.shipment.courier)) {
+    const { data: request } = await admin
+      .from("logistics_requests")
+      .select("shipment_id")
+      .eq("order_id", orderId)
+      .eq("provider_id", gfProvider.id)
+      .in("status", ["accepted", "scheduled"])
+      .limit(1)
+      .maybeSingle();
+    const requestShipment = (request as { shipment_id: string | null } | null)?.shipment_id ?? null;
+    if (requestShipment && requestShipment !== found.shipment.id) {
+      const { data: requested } = await admin.from("shipments").select("output_code").eq("id", requestShipment).maybeSingle();
+      oldLabel = { outputCode: found.shipment.output_code ?? null, courier: found.shipment.courier };
+      relabelEarly = { outputCode: (requested as { output_code?: string | null } | null)?.output_code ?? null, labelUrl: `/api/pedidos/rotulos?ids=${requestShipment}` };
+      shipmentId = requestShipment;
+    }
+  }
+  const oldLabelNote = oldLabel && relabelEarly ? ` ${previousLabelNote(oldLabel, relabelEarly.outputCode)}` : "";
   const [{ data: om }, { data: active }] = await Promise.all([
     admin.from("order_master").select("order_name,order_total,store_id").eq("order_id", orderId).maybeSingle(),
     shipmentId ? admin
@@ -2895,12 +2915,13 @@ export async function scanAssignToRider(
           ...line,
           status: "ya_en_caja",
           manifestId: box.manifest_id,
-          message: box.office_checked_at
+          message: (box.office_checked_at
             ? `Ya estaba en la caja de ${rider.full_name}, verificado en oficina.`
-            : `Ya estaba en la caja de ${rider.full_name}; falta verificarlo en oficina.`,
+            : `Ya estaba en la caja de ${rider.full_name}; falta verificarlo en oficina.`) + oldLabelNote,
+          relabel: relabelEarly,
         };
       }
-      return { ...line, status: "en_otra_caja", manifestId: box.manifest_id, riderName: box.dispatch_manifests.driver_name ?? "otro motorizado", message: `Está en la caja de ${box.dispatch_manifests.driver_name ?? "otro motorizado"} del ${box.dispatch_manifests.route_date}.` };
+      return { ...line, status: "en_otra_caja", manifestId: box.manifest_id, riderName: box.dispatch_manifests.driver_name ?? "otro motorizado", message: `Está en la caja de ${box.dispatch_manifests.driver_name ?? "otro motorizado"} del ${box.dispatch_manifests.route_date}.${oldLabelNote}`, relabel: relabelEarly };
     }
   }
 
@@ -2928,7 +2949,7 @@ export async function scanAssignToRider(
   const taken = await takeOrdersCore(auth, orgId, [orderId], { dispatchDay: opts.scheduledFor ?? limaClock().day }, fx, { gfProvider });
   if (taken.failed.length) return { ...line, status: "no_elegible", message: receivedNote + taken.failed[0]!.error };
   if (!taken.accepted.length && !taken.alreadyAccepted.length) return { ...line, status: "no_elegible", message: receivedNote + (taken.error ?? "No se pudo tomar el pedido.") };
-  const { data: requests } = await admin.from("logistics_requests").select("id").eq("order_id", orderId).eq("provider_id", gfProvider?.id ?? "").in("status", ["accepted", "scheduled"]);
+  const { data: requests } = await admin.from("logistics_requests").select("id,shipment_id").eq("order_id", orderId).eq("provider_id", gfProvider?.id ?? "").in("status", ["accepted", "scheduled"]);
   const requestIds = ((requests ?? []) as { id: string }[]).map((r) => r.id);
   if (!requestIds.length) return { ...line, status: "no_elegible", message: receivedNote + "El pedido se tomó pero no se pudo asignar. Continúa desde la lista." };
   // La programación ya se miró arriba (o se confirmó): no se vuelve a leer.
@@ -2941,10 +2962,19 @@ export async function scanAssignToRider(
   // Se leyó el rótulo de OTRA salida del pedido —el de Tanders que no entregó,
   // típicamente— y la caja entró como la salida que se rellenó o nació al
   // tomarlo. Su rótulo es el que tiene que llevar: se nombra y se ofrece.
+  // La salida que entró es la de la solicitud: la que se rellenó o nació en
+  // esta toma, o la de una toma anterior («Desde la lista», sin rótulo impreso
+  // todavía), que es justo el caso en que la caja aún lleva el rótulo viejo.
   const took = taken.accepted[0] ?? null;
-  const relabel = took && found.shipment && took.shipmentId !== found.shipment.id
-    ? { outputCode: took.outputCode, labelUrl: `/api/pedidos/rotulos?ids=${took.shipmentId}` }
-    : null;
+  const requestShipmentId = took?.shipmentId
+    ?? ((requests ?? []) as { shipment_id: string | null }[]).find((request) => request.shipment_id)?.shipment_id
+    ?? null;
+  let relabel: ScanAssignLine["relabel"] = null;
+  if (requestShipmentId && found.shipment && requestShipmentId !== found.shipment.id) {
+    const outputCode = took?.outputCode ?? ((await admin.from("shipments").select("output_code").eq("id", requestShipmentId).maybeSingle())
+      .data as { output_code?: string | null } | null)?.output_code ?? null;
+    relabel = { outputCode, labelUrl: `/api/pedidos/rotulos?ids=${requestShipmentId}` };
+  }
   const relabelNote = relabel && found.shipment
     ? ` ${previousLabelNote({ outputCode: found.shipment.output_code, courier: found.shipment.courier }, relabel.outputCode)}`
     : "";
@@ -2952,7 +2982,7 @@ export async function scanAssignToRider(
     ...line,
     status: "asignado",
     manifestId,
-    shipmentId: took?.shipmentId ?? shipmentId,
+    shipmentId: requestShipmentId ?? shipmentId,
     message: `${receivedNote}Asignado a ${rider.full_name}.${relabelNote} Falta verificarlo en oficina («Verificar caja»).`,
     cashWarning: assigned.cashWarning ?? null,
     relabel,
