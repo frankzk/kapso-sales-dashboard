@@ -201,6 +201,7 @@ describe("la ficha: con qué sale la caja", () => {
     expect(reprogramLabelState([tandersVuelve])).toEqual({
       failed: { shipmentId: "s01", outputCode: "AUR177756-S01", courier: "tanders", returned: false },
       live: null,
+      open: null,
     });
     expect(reprogramLabelState([tandersVuelve, s02PorDefinir])?.live).toEqual({ shipmentId: "s02", outputCode: "AUR177756-S02" });
     // #AUR177756 hoy: la S02 ya es de Grupo GF y salió.
@@ -224,6 +225,8 @@ describe("la ficha: con qué sale la caja", () => {
     const gfViejaAbierta = out({ id: "s01", courier: "propio", output_code: "KP134960-S01", custody_state: "courier", created_at: "2026-09-17T15:00:00Z" });
     const tandersVolvio = { ...tandersVuelve, id: "s02", output_code: "KP134960-S02", output_number: 2, delivery_status: "anulado", reported_status: "RETURNED", custody_state: "devuelto", created_at: "2026-09-24T15:00:00Z" };
     expect(reprogramLabelState([gfViejaAbierta, tandersVolvio])?.live).toBeNull();
+    // La ficha la nombra como abierta y no ofrece imprimir: el clic fallaría.
+    expect(reprogramLabelState([gfViejaAbierta, tandersVolvio])?.open).toEqual({ shipmentId: "s01", outputCode: "KP134960-S01" });
     // Y pedir el rótulo responde que hay una todavía en la calle, no crea.
     expect(decideLabelAction([gfViejaAbierta, tandersVolvio], LIMA)).toEqual({ kind: "needs_justification", activeOutputs: 1 });
   });
@@ -239,6 +242,16 @@ describe("regla 3: el rótulo viejo nombra la salida con la que sale, sin alias"
     expect(oldLabelHint("s01", [tandersVuelve, s02PorDefinir], "caja", { inThisBox: new Set(["s02"]) })).toBe(
       "Es el rótulo viejo de AUR177756-S01 (Tanders no entregó). En esta caja va como AUR177756-S02: escanea su rótulo; si la caja no lo tiene, imprímelo y pégalo encima.",
     );
+  });
+
+  it("«Verificar caja»: la salida que está en ESTA caja se nombra aunque sea anterior a la que falló (#KP136825)", () => {
+    const gfEnLaCaja = out({ id: "g01", courier: "propio", output_code: "KP136825-S01", custody_state: "courier", created_at: "2026-09-26T15:00:00Z" });
+    const tandersPosterior = { ...tandersVuelve, id: "t02", output_code: "KP136825-S02", output_number: 2, created_at: "2026-10-06T15:00:00Z" };
+    expect(oldLabelHint("t02", [gfEnLaCaja, tandersPosterior], "caja", { inThisBox: new Set(["g01"]) })).toBe(
+      "Es el rótulo viejo de KP136825-S02 (Tanders no entregó). En esta caja va como KP136825-S01: escanea su rótulo; si la caja no lo tiene, imprímelo y pégalo encima.",
+    );
+    // En el almacén no: una anterior no es la caja que volvió.
+    expect(oldLabelHint("t02", [gfEnLaCaja, tandersPosterior], "pedido", { reprogramming: true })).toBeNull();
   });
 
   it("«Verificar caja»: la S02 existe pero no está en esta caja → el error de siempre", () => {
@@ -439,6 +452,11 @@ describe("el cableado", () => {
     expect(ficha).toContain("{g.qr_token && !notDelivered && (");
     expect(ficha).toContain("Rótulo viejo (solo Devoluciones)");
     expect(ficha).toContain("Imprimir rótulo de la salida nueva");
+    // Con una salida anterior abierta no se ofrece imprimir (el clic fallaría).
+    expect(ficha).toContain("canEdit && reprogram && !reprogram.live && !reprogram.open &&");
+    // El aviso de Devoluciones depende de que una persona recibiera la caja, no del barrido.
+    expect(ficha).toContain("(!reprogram.received && RETURN_SCAN_COURIERS.has(reprogram.failed.courier)");
+    expect(read("lib/orders-master-access.ts")).toContain('events.filter((e) => e.kind === "return_received" && e.shipment_id)');
     expect(ficha).toContain("await resolveLabelsForOrders([orderId])");
   });
 });
