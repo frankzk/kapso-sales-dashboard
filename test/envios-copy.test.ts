@@ -85,12 +85,14 @@ describe("descartar la recuperación se confirma nombrando el pedido", () => {
 });
 
 describe("lo que explicaba un tooltip ahora se lee", () => {
-  it("la tabla de hoy por asesora lleva una leyenda visible y cabeceras sin abreviar", () => {
-    const panel = ui.slice(ui.indexOf("function TodayByAgentPanel"), ui.indexOf("function VoiceScorePanel"));
-    expect(panel).toContain("Hoy por asesora");
+  it("la tabla de gestión por persona lleva una leyenda visible y cabeceras sin abreviar", () => {
+    const panel = ui.slice(ui.indexOf("function TeamScorePanel"), ui.indexOf("function ReprogramStrip"));
+    expect(panel).toContain("Gestión por persona");
     expect(panel).not.toContain('title="');
     expect(panel).toContain(">Reprogramadas</th>");
-    expect(panel).toContain("Entregadas: cerradas por el resultado del courier");
+    expect(panel).toContain("Entregadas: cerradas por el");
+    // Una sola palabra para una sola cosa: ya no hay «Guías» y «Guías Swayp».
+    expect(panel).not.toContain(">Guías");
     expect(ui).not.toContain('title="Editar nota"');
   });
 });

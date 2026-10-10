@@ -281,9 +281,18 @@ describe("aggregateReproDay (productividad de hoy por asesora)", () => {
       { agent: "u1", kind: "system", newStatus: null, shipmentId: "g5" }, // kind no-gestión → ignorado
     ]);
     expect(out).toEqual([
-      { agent: "u1", gestiones: 4, reprogramadas: 1, anuladas: 1, entregadas: 1, guias: 3 },
-      { agent: "u2", gestiones: 1, reprogramadas: 0, anuladas: 0, entregadas: 0, guias: 1 },
+      { agent: "u1", gestiones: 4, reprogramadas: 1, anuladas: 1, entregadas: 1, guias: 3, pedidos: 3 },
+      { agent: "u2", gestiones: 1, reprogramadas: 0, anuladas: 0, entregadas: 0, guias: 1, pedidos: 1 },
     ]);
+  });
+
+  it("pedidos cuenta el pedido, no la guía: una reprogramación toca dos guías del mismo pedido", () => {
+    const out = aggregateReproDay([
+      { agent: "u1", kind: "reroute", newStatus: "transferido", shipmentId: "g1", orderId: "p1" },
+      { agent: "u1", kind: "reroute", newStatus: "en_ruta", shipmentId: "h1", orderId: "p1" },
+      { agent: "u1", kind: "call", newStatus: null, shipmentId: "g2", orderId: "p2" },
+    ]);
+    expect(out[0]).toMatchObject({ guias: 3, pedidos: 2 });
   });
 
   it("ordena por gestiones desc y devuelve [] sin datos", () => {
@@ -318,8 +327,8 @@ describe("aggregateReproDay (productividad de hoy por asesora)", () => {
       { agent: "u1", kind: "call", newStatus: null, shipmentId: "g3" },
     ]);
     expect(out).toEqual([
-      { agent: "u1", gestiones: 1, reprogramadas: 0, anuladas: 0, entregadas: 0, guias: 1 },
-      { agent: VOICE_AGENT_KEY, gestiones: 4, reprogramadas: 1, anuladas: 0, entregadas: 0, guias: 3 },
+      { agent: "u1", gestiones: 1, reprogramadas: 0, anuladas: 0, entregadas: 0, guias: 1, pedidos: 1 },
+      { agent: VOICE_AGENT_KEY, gestiones: 4, reprogramadas: 1, anuladas: 0, entregadas: 0, guias: 3, pedidos: 3 },
     ]);
   });
 

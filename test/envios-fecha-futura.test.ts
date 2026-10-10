@@ -40,7 +40,10 @@ describe("la regla, pura", () => {
 describe("las dos puertas: el botón y el servidor", () => {
   it("«confirma» y «programar» comparten la exigencia de futuro en el cliente", () => {
     expect(ui).toContain('const dateNeedsFuture = disposition === "programar" || disposition === "confirma";');
-    expect(ui).toContain("const programDateInvalid = dateNeedsFuture && (!nextDate || nextDate <= localDateInputValue());");
+    // Por Swayp, además, sin domingos (10-10-2026): test/swayp-dispatch-days.test.ts.
+    expect(ui.replace(/\s+/g, " ")).toContain(
+      "const programDateInvalid = dateNeedsFuture && (!nextDate || nextDate <= localDateInputValue() || swaypDomingo);",
+    );
     expect(ui.replace(/\s+/g, " ")).toContain('disposition === "programar" || disposition === "confirma" ? tomorrowDateInputValue()');
   });
 
