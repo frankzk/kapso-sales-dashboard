@@ -586,6 +586,9 @@ export const TIMELINE_LABEL: Record<string, string> = {
   liquidation_closed: "Liquidación conciliada",
   indemnity_requested: "Indemnización solicitada",
   indemnity_resolved: "Indemnización resuelta",
+  // Declarados al resolver un posible duplicado de Aliclik (MOM §8.3).
+  delivery_declared: "Entrega declarada por el equipo",
+  courier_loss_declared: "Pérdida declarada · indemnización abierta",
   refund_requested: "Reembolso solicitado",
   refund_completed: "Reembolso confirmado",
   customer_return_started: "Devolución del cliente abierta",
