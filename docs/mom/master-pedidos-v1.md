@@ -1438,14 +1438,15 @@ entonces:
 - Si cambia el producto, courier o día de salida, se crea una salida nueva con
   QR nuevo. Almacén reimprime, arma otra caja y la coloca en la agrupación del
   nuevo courier.
-- **Cuando otro courier no entregó y su caja vuelve (09-10-2026, decisión del
-  owner).** Lo que se reimprime es **el rótulo de la salida nueva**, no el del
+- **En Lima, cuando otro courier no entregó y su caja vuelve (09-10-2026,
+  decisión del owner).** Lo que se reimprime es **el rótulo de la salida nueva**, no el del
   courier que no entregó: después de la llamada, «Imprimir rótulo de la salida
   nueva» en el pedido —o «Descargar rótulos» en el Master— crea la salida
   «por definir» con su QR (§28) y ese rótulo se pega **encima** del anterior,
   tapando su QR. La caja física puede ser la misma; su identidad es la de la
   salida nueva (§29.4). El rótulo del courier anterior queda solo para registrar
-  la devolución (§9.4). Pasó con #AUR177756: se reimprimió el rótulo de Tanders
+  la devolución (§9.4): si es de Tanders y nadie la recibió, se escanea en
+  Devoluciones antes de taparlo. Pasó con #AUR177756: se reimprimió el rótulo de Tanders
   (S01), la caja se armó con él, Grupo GF creó al tomarla una S02 cuyo rótulo
   nadie imprimió, y en «Verificar caja» el QR de la caja no cuadraba.
 - Excepción de Grupo GF: si no cambia el producto ni el courier, su propia
@@ -7450,10 +7451,10 @@ Por cada pedido seleccionado:
 
 | Situación | Qué ocurre |
 | --- | --- |
-| Ya tiene una salida en custodia de la empresa | Se **reimprime esa**; no se crea otra. No cuentan una anulada ni una que su courier no entregó (abajo) |
+| Ya tiene una salida **viva** en custodia de la empresa | Se **reimprime esa**; no se crea otra. No cuentan una anulada, entregada o `transferido` —la custodia `empresa` sola no basta— ni una que su courier no entregó (abajo) |
 | No tiene ninguna salida | Se **crea** una sin courier decidido |
 | Su última salida fue **devuelta** | Se **crea** una nueva: rearmar es reprogramación normal, no una salida simultánea |
-| Una salida **no la entregó su courier** (Tanders `RETURNING`/`RETURNED`, Swayp Devolución, anulada después de salir) | Se **crea** la salida nueva con **motivo automático** (09-10-2026): la anterior no está «en la calle» aunque su courier la siga dando en ruta, porque nadie la trabaja |
+| **En Lima**, una salida **no la entregó su courier** (Tanders `RETURNING`/`RETURNED`, Swayp Devolución, anulada después de salir) | Se **crea** la salida nueva con **motivo automático** (09-10-2026): la anterior no está «en la calle» aunque su courier la siga dando en ruta, porque nadie la trabaja |
 | Tiene una salida **todavía en la calle** (viva de verdad) | No se crea nada: una salida adicional exige justificación auditada (§23) y se hace desde el pedido |
 
 **La salida que su courier no entregó (09-10-2026, decisión del owner).**
@@ -7463,6 +7464,11 @@ Tanders (§9.3, #AUR177756). La regla es la misma de la recuperación
 (`guideFailedAfterDispatch`, §9): una salida que su courier ya reportó como no
 entregada no cuenta como activa.
 
+- **Solo en Lima** (`macro_operation`). Fuera de Lima no cambia nada: la Swayp
+  en Devolución de un pedido de provincia la gestiona Reproprovincia con
+  «Reenviar por Swayp» (§11) y sigue pidiendo justificación; una «por definir»
+  lo sacaría de esa cola con un rótulo para una caja que vuelve a la bodega de
+  Swayp.
 - El motivo lo escribe el sistema, porque el hecho ya lo reportó el courier:
   «Tanders no entregó AUR177756-S01 y su caja todavía vuelve (o «ya volvió»):
   se reprograma con una salida nueva y su propio rótulo, que se pega sobre la
@@ -7470,7 +7476,13 @@ entregada no cuenta como activa.
 - Si la anterior sigue viva para su courier (todavía vuelve), la nueva es
   **adicional**: su justificación va además en su propio evento
   `additional_output_reason` con las salidas que seguían vivas, **una vez, al
-  nacer**. Quien la rellene después no la repite (§29.13).
+  nacer**. La toma de Grupo GF que la rellena no la repite (§29.13). Swayp
+  directa sí vuelve a pedir motivo si la anterior sigue viva para su courier:
+  su puerta (`puertaDeSalidaAdicional`) la cuenta, como siempre.
+- Antes de crear, las salidas del pedido **se vuelven a leer**: la foto de una
+  tanda de 50 puede tener decenas de segundos, y otra persona pudo imprimir la
+  salida nueva o Grupo GF tomarlo entretanto. Con la foto fresca se reimprime
+  la que ya existe en vez de crear una segunda.
 - El tope de cinco salidas se aplica igual (§4). Pedirlo dos veces reimprime la
   misma «por definir».
 - El aviso nombra los pedidos que salieron con salida nueva y pide pegar su
@@ -7481,7 +7493,17 @@ entregada no cuenta como activa.
   «Imprimir rótulo de la salida nueva».
 - Una «por definir» **anulada** conserva la custodia `empresa`, pero no se
   reimprime: pedir el rótulo otra vez crea una nueva (antes reimprimía la
-  anulada).
+  anulada). Lo mismo una entregada o `transferido` —la madre de un reenvío
+  Swayp, #KP134300—: solo se reimprime una salida viva.
+- La ficha solo dice «la caja va como …» de una salida viva **nacida después**
+  de la que falló. Una anterior que sigue abierta (#KP134960, una de Grupo GF
+  del 17-09 sin cerrar) no es la caja que volvió: pedir el rótulo responde que
+  hay una salida todavía en la calle.
+- Si la caja de **Tanders** todavía no se recibió, la ficha pide escanear su
+  rótulo en Devoluciones antes de taparlo: la salida nueva no cierra la
+  devolución de la anterior (§9.3), y sin ese registro el pedido entregado
+  quedaría en Por cerrar esperando una caja que salió con otro rótulo. Swayp no
+  se recibe escaneando; su devolución se registra en la mesa de cierre.
 - Si la lectura de las salidas falla, no se decide nada: sin salidas a la vista
   cada pedido parecería no tener ninguna y se crearía una por pedido.
 
@@ -7793,8 +7815,13 @@ tienda/fecha; el courier se decide en despacho, no durante el armado.
   sale la caja («Es el rótulo viejo de AUR177756-S01 (Tanders no entregó). En
   esta caja va como AUR177756-S02: escanea su rótulo…»). Asignar por escaneo lee
   el **pedido**: con el QR viejo la caja entra como la salida que se rellenó o
-  nació al tomarlo, y la línea pide imprimir su rótulo y pegarlo encima. Así se
-  cumple «un solo QR interno vivo por paquete».
+  nació al tomarlo —también si el pedido ya estaba tomado desde la lista—, y la
+  línea pide imprimir su rótulo y pegarlo encima. Así se cumple «un solo QR
+  interno vivo por paquete». La salida nombrada es siempre una viva nacida
+  después de la que falló; si no hay ninguna y el pedido está en «Por
+  reprogramar Lima», el mensaje dice cómo nace. Si el pedido ya no se reprograma
+  (Por cerrar, devolución pendiente de inventario), el escáner responde lo de
+  siempre: no invita a reprogramarlo.
 - Un pedido anulado, rechazado definitivamente o que debe desarmarse libera la
   reserva y devuelve el producto a su bolsa. Si luego se vuelve a armar, nace una
   salida nueva con QR nuevo, respetando §4.
@@ -8740,10 +8767,12 @@ salida también entra, con esa misma salida (abajo).
 - La fila lleva la chapa **«Tanders no entregó · vuelve»** o **«· volvió»** —o
   **«Swayp no entregó · vuelve»** desde la v1.22— y
   cuenta en «Por asignar» y en la tarjeta «Por reprogramar».
-- Cuando la salida que falló es de **otro courier**, **tomarlo crea una salida
-  NUEVA** con su QR y Almacén arma otra caja (§9.3): la anterior es de otro
-  courier y lleva su rótulo. **Nunca se rellena la salida del courier que
-  falló**, y la que falló no cuenta como «ya en caja» aunque siga volviendo.
+- Cuando la salida que falló es de **otro courier**, **el pedido sale con una
+  salida NUEVA** con su QR (§9.3): la anterior es de otro courier y lleva su
+  rótulo. La toma rellena la «por definir» nacida al pedir su rótulo o, si no
+  existe, la crea (abajo); la caja física puede ser la misma, con el rótulo
+  nuevo encima. **Nunca se rellena la salida del courier que falló**, y la que
+  falló no cuenta como «ya en caja» aunque siga volviendo.
 - **Precisión del 09-10-2026: la «por definir» nacida al reprogramar SÍ se
   rellena.** Si después de la llamada se pidió el rótulo de la salida nueva
   (§28), esa «por definir» es la caja que se arma y su rótulo el que va pegado.
@@ -8757,7 +8786,9 @@ salida también entra, con esa misma salida (abajo).
 - La toma **crea** salida solo si no existe esa «por definir» (el camino viejo,
   sin rótulo pedido antes). Entonces el aviso nombra la salida nueva —«Salida
   nueva AUR177756-S03: imprime su rótulo y pégalo sobre la caja que volvió»— y
-  la fila de la cola lo dice a la vista, no solo en el título.
+  la fila de la cola lo dice a la vista, no solo en el título. La fila lo dice
+  solo cuando la toma de verdad va a crearla: si su «por definir» ya existe
+  (el Master no alcanzó a recalcularse), no hay rótulo nuevo que pedir.
 - Si la caja anterior **todavía vuelve** y la toma crea la salida, esta es
   adicional y su motivo se escribe solo (`additional_output_reason`, §9): el
   hecho ya lo reportó el courier. Si ya volvió, el motivo dice «ya volvió» y no

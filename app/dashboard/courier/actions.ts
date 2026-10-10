@@ -131,6 +131,11 @@ export interface CourierAvailableOrder {
    * y si su caja ya volvió. Al tomarlo se crea una salida nueva.
    */
   failedOutput?: FailedOutput | null;
+  /**
+   * Al tomarlo NACE su salida: nadie pidió todavía el rótulo de la nueva (no
+   * hay «por definir» que rellenar, §28). Si la hay, la toma la rellena.
+   */
+  newOutputOnTake?: boolean;
   tandersReview?: TandersReview | null;
   /**
    * Grupo GF no lo entregó con su propia salida y sale con ESA misma salida
@@ -797,6 +802,7 @@ async function loadCourierOperations(
       macroStage: order.macro_stage ?? null,
       macroSubstage: order.macro_substage ?? null,
       failedOutput: retry ? lastFailedOutput(outputs) : null,
+      newOutputOnTake: retry && !fillable,
       tandersReview: review,
       ownOutput: own ? { outputCode: own.output_code ?? null } : null,
     };
@@ -2928,7 +2934,7 @@ export async function scanAssignToRider(
   const taken = await takeOrdersCore(auth, orgId, [orderId], { dispatchDay: opts.scheduledFor ?? limaClock().day }, fx, { gfProvider });
   if (taken.failed.length) return { ...line, status: "no_elegible", message: receivedNote + taken.failed[0]!.error };
   if (!taken.accepted.length && !taken.alreadyAccepted.length) return { ...line, status: "no_elegible", message: receivedNote + (taken.error ?? "No se pudo tomar el pedido.") };
-  const { data: requests } = await admin.from("logistics_requests").select("id").eq("order_id", orderId).eq("provider_id", gfProvider?.id ?? "").in("status", ["accepted", "scheduled"]);
+  const { data: requests } = await admin.from("logistics_requests").select("id,shipment_id").eq("order_id", orderId).eq("provider_id", gfProvider?.id ?? "").in("status", ["accepted", "scheduled"]);
   const requestIds = ((requests ?? []) as { id: string }[]).map((r) => r.id);
   if (!requestIds.length) return { ...line, status: "no_elegible", message: receivedNote + "El pedido se tomó pero no se pudo asignar. Continúa desde la lista." };
   // La programación ya se miró arriba (o se confirmó): no se vuelve a leer.
@@ -2941,10 +2947,19 @@ export async function scanAssignToRider(
   // Se leyó el rótulo de OTRA salida del pedido —el de Tanders que no entregó,
   // típicamente— y la caja entró como la salida que se rellenó o nació al
   // tomarlo. Su rótulo es el que tiene que llevar: se nombra y se ofrece.
+  // La salida que entró es la de la solicitud: la que se rellenó o nació en
+  // esta toma, o la de una toma anterior («Desde la lista», sin rótulo impreso
+  // todavía), que es justo el caso en que la caja aún lleva el rótulo viejo.
   const took = taken.accepted[0] ?? null;
-  const relabel = took && found.shipment && took.shipmentId !== found.shipment.id
-    ? { outputCode: took.outputCode, labelUrl: `/api/pedidos/rotulos?ids=${took.shipmentId}` }
-    : null;
+  const requestShipmentId = took?.shipmentId
+    ?? ((requests ?? []) as { shipment_id: string | null }[]).find((request) => request.shipment_id)?.shipment_id
+    ?? null;
+  let relabel: ScanAssignLine["relabel"] = null;
+  if (requestShipmentId && found.shipment && requestShipmentId !== found.shipment.id) {
+    const outputCode = took?.outputCode ?? ((await admin.from("shipments").select("output_code").eq("id", requestShipmentId).maybeSingle())
+      .data as { output_code?: string | null } | null)?.output_code ?? null;
+    relabel = { outputCode, labelUrl: `/api/pedidos/rotulos?ids=${requestShipmentId}` };
+  }
   const relabelNote = relabel && found.shipment
     ? ` ${previousLabelNote({ outputCode: found.shipment.output_code, courier: found.shipment.courier }, relabel.outputCode)}`
     : "";
@@ -2952,7 +2967,7 @@ export async function scanAssignToRider(
     ...line,
     status: "asignado",
     manifestId,
-    shipmentId: took?.shipmentId ?? shipmentId,
+    shipmentId: requestShipmentId ?? shipmentId,
     message: `${receivedNote}Asignado a ${rider.full_name}.${relabelNote} Falta verificarlo en oficina («Verificar caja»).`,
     cashWarning: assigned.cashWarning ?? null,
     relabel,

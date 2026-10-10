@@ -17,6 +17,11 @@
 // trabaja. Pedir el rótulo crea la salida nueva con su QR, y el motivo lo
 // escribe el sistema porque el hecho ya lo reportó el courier. Ese rótulo es el
 // que se pega sobre la caja que volvió (MOM §9.3, §28).
+//
+// SOLO EN LIMA. Fuera de Lima no cambia nada: la Swayp en Devolución de un
+// pedido de provincia la gestiona Reproprovincia con «Reenviar por Swayp»
+// (§11), y una «por definir» lo sacaría de esa cola con un rótulo para una
+// caja que vuelve a la bodega de Swayp, no a la nuestra.
 
 import { guideFailedAfterDispatch } from "@/lib/reproprovincia";
 
@@ -34,6 +39,11 @@ export interface OutputForDecision {
   swayp_state?: number | null;
   dispatched_at?: string | null;
   returned_at?: string | null;
+}
+
+/** Dónde se decide. Sin `lima`, la regla es la de siempre (fuera de Lima, §11). */
+export interface LabelDecisionContext {
+  lima?: boolean;
 }
 
 /** La salida que su courier no entregó y motiva la nueva, para el motivo. */
@@ -79,27 +89,38 @@ export function isFailedOutput(output: OutputForDecision): boolean {
 /**
  * Una salida está ACTIVA mientras el intento de entrega sigue vivo. Una salida
  * devuelta NO cuenta: el paquete ya volvió, y rearmarlo es reprogramación
- * normal (Reproprovincia, reintento en Lima), no una salida simultánea. Tampoco
- * la que su courier ya dio por no entregada aunque siga `en_ruta`: la caja
- * vuelve y nadie la trabaja.
+ * normal (Reproprovincia, reintento en Lima), no una salida simultánea. En
+ * Lima tampoco la que su courier ya dio por no entregada aunque siga `en_ruta`:
+ * la caja vuelve y nadie la trabaja.
  */
-export function isActiveOutput(output: OutputForDecision): boolean {
+export function isActiveOutput(output: OutputForDecision, ctx: LabelDecisionContext = {}): boolean {
   return (
     output.custody_state !== "devuelto" &&
+    LIVE_STATUSES.includes(output.delivery_status ?? "") &&
+    !(ctx.lima && isFailedOutput(output))
+  );
+}
+
+/**
+ * Sigue en nuestras manos y viva: es la que se rotula y se arma. La custodia
+ * sola no basta: anular una «por definir» la deja en `empresa`, y lo mismo
+ * pasa con filas antiguas entregadas o `transferido` (la madre de un reenvío
+ * Swayp, #KP134300). Reimprimirlas daba el rótulo de una salida muerta. Tampoco
+ * la que no entregó su courier: su rótulo ya no es el de la caja que sale
+ * (§9.3).
+ */
+export function isWithCompany(output: OutputForDecision): boolean {
+  return (
+    output.custody_state === "empresa" &&
     LIVE_STATUSES.includes(output.delivery_status ?? "") &&
     !isFailedOutput(output)
   );
 }
 
-/**
- * Sigue en nuestras manos: es la que se rotula y se arma. La que no entregó su
- * courier no, aunque su custodia diga `empresa`: su rótulo ya no es el de la
- * caja que sale (§9.3). Tampoco una anulada: anular una «por definir» deja su
- * custodia en `empresa`, y reimprimirla daba el rótulo de una salida muerta
- * justo cuando se reprograma después de anularla (629 anuladas así, 09-10-2026).
- */
-export function isWithCompany(output: OutputForDecision): boolean {
-  return output.custody_state === "empresa" && output.delivery_status !== "anulado" && !isFailedOutput(output);
+/** ¿`output` nació después de `ref`? Por fecha de creación y, sin ella, por consecutivo. */
+function bornAfter(output: OutputForDecision, ref: OutputForDecision): boolean {
+  if (output.created_at && ref.created_at && output.created_at !== ref.created_at) return output.created_at > ref.created_at;
+  return (output.output_number ?? 0) > (ref.output_number ?? 0);
 }
 
 function mostRecent(outputs: readonly OutputForDecision[]): OutputForDecision | null {
@@ -118,18 +139,18 @@ function mostRecent(outputs: readonly OutputForDecision[]): OutputForDecision | 
  * El orden importa: reusar gana a crear, para que pulsar dos veces el botón no
  * queme el límite de cinco salidas del pedido (§4).
  */
-export function decideLabelAction(outputs: readonly OutputForDecision[]): LabelDecision {
+export function decideLabelAction(outputs: readonly OutputForDecision[], ctx: LabelDecisionContext = {}): LabelDecision {
   const withCompany = outputs.filter(isWithCompany);
   const reusable = mostRecent(withCompany);
   if (reusable) return { kind: "reuse", shipmentId: reusable.id };
 
-  const active = outputs.filter(isActiveOutput);
+  const active = outputs.filter((output) => isActiveOutput(output, ctx));
   if (active.length) return { kind: "needs_justification", activeOutputs: active.length };
 
   // La última que no entregó su courier: un hecho que consta, sea cual sea lo
   // que vino después (una «por definir» anulada, por ejemplo). Si sigue
   // `en_ruta`, crear la nueva sin motivo lo rechazaría la puerta de §23.
-  const last = mostRecent(outputs.filter(isFailedOutput));
+  const last = ctx.lima ? mostRecent(outputs.filter(isFailedOutput)) : null;
   if (last) {
     return {
       kind: "create",
@@ -142,6 +163,19 @@ export function decideLabelAction(outputs: readonly OutputForDecision[]): LabelD
     };
   }
   return { kind: "create" };
+}
+
+/**
+ * Las salidas vivas que nacieron después de `failed` y no fallaron: con una de
+ * ellas sale la caja que volvió. La comparten la ficha y los escáneres.
+ */
+export function newerLiveSiblings<T extends OutputForDecision>(outputs: readonly T[], failed: OutputForDecision): T[] {
+  return outputs.filter((output) =>
+    output.id !== failed.id &&
+    !isFailedOutput(output) &&
+    LIVE_STATUSES.includes(output.delivery_status ?? "") &&
+    output.custody_state !== "devuelto" &&
+    bornAfter(output, failed));
 }
 
 /** Lo que la ficha del pedido enseña de una salida que su courier no entregó. */
@@ -157,14 +191,14 @@ export interface ReprogramLabelState {
 /**
  * ¿El pedido tiene una salida que su courier no entregó, y con qué sale ahora?
  * null si ninguna falló. La misma regla que `decideLabelAction`, para la ficha.
+ * Solo cuenta como «con qué sale» una salida viva NACIDA DESPUÉS de la que
+ * falló: una anterior que sigue abierta (#KP134960, una de Grupo GF del 17-09
+ * sin cerrar) no es la caja que volvió.
  */
 export function reprogramLabelState(outputs: readonly OutputForDecision[]): ReprogramLabelState | null {
   const failed = mostRecent(outputs.filter(isFailedOutput));
   if (!failed) return null;
-  const live = mostRecent(outputs.filter((output) =>
-    !isFailedOutput(output) &&
-    LIVE_STATUSES.includes(output.delivery_status ?? "") &&
-    output.custody_state !== "devuelto"));
+  const live = mostRecent(newerLiveSiblings(outputs, failed));
   return {
     failed: {
       shipmentId: failed.id,

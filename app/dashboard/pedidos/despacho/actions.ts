@@ -231,11 +231,15 @@ async function oldLabelError(
 ): Promise<string | null> {
   if (!shipment.order_id) return null;
   const admin = createAdminSupabase();
-  const { data } = await admin
-    .from("shipments")
-    .select("id,courier,output_code,output_number,created_at,custody_state,delivery_status,reported_status,swayp_state,dispatched_at,returned_at")
-    .eq("order_id", shipment.order_id);
+  const [{ data }, { data: order }] = await Promise.all([
+    admin
+      .from("shipments")
+      .select("id,courier,output_code,output_number,created_at,custody_state,delivery_status,reported_status,swayp_state,dispatched_at,returned_at")
+      .eq("order_id", shipment.order_id),
+    admin.from("order_master").select("macro_substage").eq("order_id", shipment.order_id).maybeSingle(),
+  ]);
   const outputs = (data ?? []) as unknown as OutputForDecision[];
+  const reprogramming = (order as { macro_substage?: string | null } | null)?.macro_substage === "por_reprogramar_lima";
   let inThisBox = new Set<string>();
   if (where === "caja" && manifestId && outputs.length > 1) {
     const { data: items } = await admin
@@ -246,7 +250,7 @@ async function oldLabelError(
       .is("removed_at", null);
     inThisBox = new Set(((items ?? []) as { shipment_id: string }[]).map((item) => item.shipment_id));
   }
-  return oldLabelHint(shipment.id, outputs, where, inThisBox);
+  return oldLabelHint(shipment.id, outputs, where, { inThisBox, reprogramming });
 }
 
 export async function markShipmentReady(code: string): Promise<DispatchActionResult> {

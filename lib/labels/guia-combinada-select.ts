@@ -27,15 +27,21 @@
 //
 // Puro y probado en test/guia-combinada-select.test.ts.
 
-// `tandersStatusCode` y no `tandersGuideFailed` (lib/reproprovincia.ts), que
-// es la misma regla: este módulo lo carga el Master en el navegador, y
-// reproprovincia arrastra módulos de servidor.
+// `tandersStatusCode` y no `guideFailedAfterDispatch` (lib/reproprovincia.ts),
+// cuyas dos ramas de Tanders repite: este módulo lo carga el Master en el
+// navegador, y reproprovincia arrastra módulos de servidor. Las anuladas ya
+// quedan fuera arriba.
 import { tandersStatusCode } from "@/lib/tanders/status";
 
-/** Tanders no entregó: `RETURNING` (vuelve) o `RETURNED` (volvió). */
-function tandersDidNotDeliver(row: { reported_status?: string | null }): boolean {
+/**
+ * Tanders no entregó: `RETURNING` (vuelve), `RETURNED` (volvió), o su caja ya
+ * se recibió en Devoluciones aunque Tanders la siga dando viva
+ * (`apiGuideReceivedBack`).
+ */
+function tandersDidNotDeliver(row: { delivery_status: string; reported_status?: string | null; returned_at?: string | null }): boolean {
   const code = tandersStatusCode(row.reported_status);
-  return code === "RETURNING" || code === "RETURNED";
+  if (code === "RETURNING" || code === "RETURNED") return true;
+  return (row.delivery_status === "pendiente" || row.delivery_status === "en_ruta") && Boolean(row.returned_at);
 }
 
 export const COMBINED_GUIDE_COURIERS = ["tanders", "shalom"] as const;
@@ -55,6 +61,8 @@ export interface CombinadaCandidate {
   shalom_ose_id?: number | null;
   /** Tanders: su estado crudo dice si no entregó (RETURNING/RETURNED). */
   reported_status?: string | null;
+  /** Tanders: la caja ya se recibió en Devoluciones. */
+  returned_at?: string | null;
 }
 
 export interface CombinadaSelection {

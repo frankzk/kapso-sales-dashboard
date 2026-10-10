@@ -195,6 +195,8 @@ export interface QueueRow {
    * ya volvió. Al asignarlo se crea una salida nueva y Almacén arma otra caja.
    */
   failedOutput?: { courier: string; returned: boolean } | null;
+  /** Al asignarlo nace su salida nueva y su rótulo falta imprimir (§28). */
+  newOutputOnTake?: boolean;
   tandersReview?: import("@/lib/gf-tanders-review").TandersReview | null;
   /**
    * Grupo GF no lo entregó con su propia salida y sale con ESA (06-10-2026,

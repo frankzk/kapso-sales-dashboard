@@ -1062,18 +1062,27 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
   }
 
   const admin = createAdminSupabase();
-  // Si la lectura falla no se decide nada: sin salidas a la vista, cada pedido
-  // parecería no tener ninguna y se crearía una por pedido.
-  const { data: shipmentRows, error: shipmentError } = await admin
-    .from("shipments")
-    .select(
-      "id,order_id,order_name,courier,output_code,guide_code,created_via,custody_state,custody_transferred_at," +
-        "delivery_status,reported_status,swayp_state,dispatched_at,returned_at,created_at,output_number",
-    )
-    .in("order_id", unique);
-  if (shipmentError) {
-    return { error: shipmentError.message, shipmentIds: [], created: 0, reused: 0, reusedOrders: [], reprogrammedOrders: [], blocked: [] };
+  const labelColumns =
+    "id,order_id,order_name,courier,output_code,guide_code,created_via,custody_state,custody_transferred_at," +
+    "delivery_status,reported_status,swayp_state,dispatched_at,returned_at,created_at,output_number";
+  // Si una lectura falla no se decide nada: sin salidas a la vista, cada pedido
+  // parecería no tener ninguna y se crearía una por pedido. La operación decide
+  // si la salida que no entregó su courier libera el rótulo: solo en Lima (§28).
+  const [{ data: shipmentRows, error: shipmentError }, { data: masterRows, error: masterError }] = await Promise.all([
+    admin.from("shipments").select(labelColumns).in("order_id", unique),
+    admin.from("order_master").select("order_id,macro_operation").in("order_id", unique),
+  ]);
+  if (shipmentError || masterError) {
+    return {
+      error: (shipmentError ?? masterError)!.message,
+      shipmentIds: [], created: 0, reused: 0, reusedOrders: [], reprogrammedOrders: [], blocked: [],
+    };
   }
+  const limaOrders = new Set(
+    ((masterRows ?? []) as { order_id: string; macro_operation: string | null }[])
+      .filter((row) => row.macro_operation === "lima")
+      .map((row) => row.order_id),
+  );
 
   type LabelOutputRow = OutputForDecision & {
     order_id: string | null;
@@ -1102,7 +1111,24 @@ export async function resolveLabelsForOrders(orderIds: string[]): Promise<Resolv
   let reused = 0;
 
   for (const orderId of unique) {
-    const decision = decideLabelAction(byOrder.get(orderId) ?? []);
+    const decisionCtx = { lima: limaOrders.has(orderId) };
+    let decision = decideLabelAction(byOrder.get(orderId) ?? [], decisionCtx);
+    if (decision.kind === "create") {
+      // Antes de crear, la foto del pedido se vuelve a leer: la de la tanda
+      // puede tener decenas de segundos —cada creación recalcula el Master— y
+      // mientras tanto otra persona pudo imprimir su salida nueva o Grupo GF
+      // tomarlo. Con la foto vieja nacería una segunda salida viva para la
+      // misma caja, y el motivo automático pasaría la puerta de §23 igual.
+      const { data: fresh, error: freshError } = await admin.from("shipments").select(labelColumns).eq("order_id", orderId);
+      if (freshError) {
+        blocked.push({ orderId, error: freshError.message });
+        continue;
+      }
+      const freshRows = (fresh ?? []) as unknown as LabelOutputRow[];
+      byOrder.set(orderId, freshRows);
+      for (const row of freshRows) if (row.order_name) nameByOrder.set(orderId, row.order_name);
+      decision = decideLabelAction(freshRows, decisionCtx);
+    }
     if (decision.kind === "reuse") {
       shipmentIds.push(decision.shipmentId);
       reused += 1;

@@ -437,7 +437,13 @@ function drawerNextAction(
           title: "Llamar y reprogramar con una salida nueva",
           description:
             `${courier} no entregó ${reprogram.failed.outputCode ?? "su salida"} y la caja ${reprogram.failed.returned ? "ya volvió" : "vuelve"}. ` +
-            `Registra la llamada; si acepta otra entrega, imprime el rótulo de la salida nueva y pégalo sobre la caja, tapando el de ${courier}.`,
+            `Registra la llamada; si acepta otra entrega, imprime el rótulo de la salida nueva y pégalo sobre la caja, tapando el de ${courier}.` +
+            // La salida nueva no cierra la devolución de la anterior (§9.3): sin
+            // registrarla, el pedido entregado quedaría en Por cerrar esperando
+            // una caja que salió con el rótulo nuevo encima.
+            (!reprogram.failed.returned && RETURN_SCAN_COURIERS.has(reprogram.failed.courier)
+              ? ` Antes de taparlo, escanéalo en Devoluciones para registrar que volvió.`
+              : ""),
           cta: "Registrar seguimiento",
           target: "acciones",
           tone: "amber",
@@ -993,7 +999,11 @@ export function OrderDrawer({
   // La salida GF activa (o la última) para la tarjeta de acción.
   const gfActive = detail?.gfDeliveries.length ? detail.gfDeliveries[detail.gfDeliveries.length - 1]! : null;
   // La salida que su courier no entregó y con qué sale ahora la caja (§28).
-  const reprogram = detail ? reprogramLabelState(detail.guides.map(guideForDecision)) : null;
+  // Solo en Lima (§28): fuera de Lima la Swayp en devolución la gestiona
+  // Reproprovincia con «Reenviar por Swayp» (§11), y su ficha no cambia.
+  const reprogram = detail && detail.row.macro_operation === "lima"
+    ? reprogramLabelState(detail.guides.map(guideForDecision))
+    : null;
   const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel, gfDeliverySentence(gfActive), reprogram) : null;
   // Imprimir el rótulo de la salida nueva: «Descargar rótulos» de un solo
   // pedido. La salida nace aquí, «por definir», con el motivo escrito solo.
@@ -1504,7 +1514,7 @@ export function OrderDrawer({
                       // Su courier no la entregó: su rótulo ya no es el de la
                       // caja que sale. Reprogramar es imprimir el de la salida
                       // nueva y pegarlo encima (§9.3, 09-10-2026).
-                      const notDelivered = isFailedOutput(guideForDecision(g));
+                      const notDelivered = reprogram !== null && isFailedOutput(guideForDecision(g));
                       return (
                       <li key={g.id} className="space-y-2.5 px-4 py-3 sm:px-5">
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
@@ -1549,18 +1559,21 @@ export function OrderDrawer({
                               <span className="text-[13px] text-ink-600">
                                 {reprogram?.live
                                   ? `No entregada: la caja va como ${reprogram.live.outputCode ?? "otra salida"}.`
-                                  : "No entregada: se reprograma con el rótulo de una salida nueva."}
+                                  : detail.row.macro_substage === "por_reprogramar_lima"
+                                  ? "No entregada: se reprograma con el rótulo de una salida nueva."
+                                  : "No entregada por su courier."}
                               </span>
                               {offerNewOutputLabel && reprogram?.failed.shipmentId === g.id && (
                                 <button type="button" disabled={pending} onClick={() => void printNewOutputLabel()} className={DOC_LINK}>
                                   Imprimir rótulo de la salida nueva
                                 </button>
                               )}
-                              {/* El viejo, discreto: solo para registrar la
-                                  devolución si su papel se perdió. */}
+                              {/* El viejo, discreto: para registrar la devolución
+                                  si su papel se perdió. «Solo Devoluciones» solo
+                                  donde Devoluciones lo recibe escaneando. */}
                               {g.qr_token && (
                                 <a href={`/api/pedidos/rotulos?ids=${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK_QUIET}>
-                                  Rótulo viejo (solo Devoluciones)
+                                  {RETURN_SCAN_COURIERS.has(g.courier) ? "Rótulo viejo (solo Devoluciones)" : "Rótulo viejo"}
                                 </a>
                               )}
                             </>
@@ -2142,6 +2155,12 @@ const FIELD_VALUE = "mt-0.5 break-words text-sm leading-5 text-ink-900";
 const LABEL = "grid gap-1.5 text-[13px] font-medium text-ink-700";
 const TEXTAREA = cn(FIELD, "h-auto py-2 leading-5");
 /** Enlace a un papel o a otra pantalla (abre en otra pestaña). */
+/**
+ * Los couriers cuya caja devuelta se recibe escaneando en Devoluciones
+ * (`RETURN_SCAN_COURIERS` de app/dashboard/pedidos/despacho/actions.ts).
+ */
+const RETURN_SCAN_COURIERS: ReadonlySet<string> = new Set(["tanders", "shalom"]);
+
 /** Una salida de la ficha vista desde la regla del rótulo (lib/labels/resolve-output.ts). */
 function guideForDecision(g: ShipmentRow): OutputForDecision {
   return {
