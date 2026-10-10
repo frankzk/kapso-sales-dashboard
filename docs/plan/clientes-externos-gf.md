@@ -1,6 +1,6 @@
 # Clientes externos de Grupo GF Courier — plan
 
-Versión 8 · 08-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
+Versión 9 · 10-10-2026 · rama `claude/ecstatic-feynman-2w64ot`
 
 Grupo GF Courier hoy reparte solo para tiendas de su propia organización
 (Aurela y Kenku). Este plan lo abre a **tiendas cliente**: negocios ajenos, con
@@ -310,6 +310,31 @@ por cada corrección. Sin app aprobada, ninguna tienda cliente puede conectarse.
   Shopify (embebida). Kapta es una web aparte; si lo exige, hace falta una
   pantalla embebida mínima que lleve a Kapta.
 
+**Estado al 10-10-2026.**
+
+- **Hecho (primera parte):**
+  - migración `0240_shopify_client_app.sql`: con qué app se conectó cada
+    tienda, fecha de desinstalación, instalaciones pendientes y registro de
+    avisos de privacidad;
+  - credenciales de la segunda app en `SHOPIFY_CLIENT_APP_API_KEY` y
+    `SHOPIFY_CLIENT_APP_API_SECRET`;
+  - instalación desde Shopify: `/api/shopify/clientes/entrada` (URL de la app)
+    → OAuth → `/api/shopify/clientes/callback` → instalación pendiente → el
+    dueño la reclama en `/dashboard/conectar-shopify`;
+  - webhooks de privacidad en `/api/shopify/clientes/cumplimiento`: firma
+    verificada (401 si falla), cada aviso registrado una vez como `pendiente`;
+    `shop/redact` además corta el acceso;
+  - `app/uninstalled`: borra el token y deja la tienda `disabled`. De paso, un
+    tema que no es pedido ya no se procesa como pedido.
+- **Falta (segunda parte, antes de enviar a revisión):**
+  - cumplir los avisos: anonimizar (`customers/redact`, `shop/redact`) y
+    entregar datos (`customers/data_request`), y marcarlos `atendida`;
+  - registro de accesos a datos de compradores;
+  - plan de respuesta a incidentes y plazo de retención en la política;
+  - verificar si la revisión exige una pantalla embebida en el admin;
+  - la invitación por correo (decisión 3) es de la Fase 1: hasta entonces solo
+    reclama una instalación quien ya tiene cuenta en Kapta.
+
 **Cumplimiento antes de enviar a revisión** (revisado el 08-10-2026):
 
 | Requisito de Shopify | Hoy en Kapta | Falta |
@@ -317,8 +342,8 @@ por cada corrección. Sin app aprobada, ninguna tienda cliente puede conectarse.
 | Solo API GraphQL (apps públicas nuevas, desde abril de 2025) | Cumple: `lib/shopify.ts` usa solo `graphql.json` | — |
 | Credenciales cifradas, HTTPS | Cumple: tokens cifrados AES-GCM | — |
 | Firma de webhooks verificada | Cumple: secreto por tienda | Aplicarlo también a los de privacidad, con 401 si falla |
-| Instalación desde Shopify, sin escribir el dominio, OAuth inmediato | No | Flujo nuevo (arriba) |
-| Webhooks obligatorios de privacidad y desinstalación | No | Anonimización de MOM §29.15.9 |
+| Instalación desde Shopify, sin escribir el dominio, OAuth inmediato | Cumple desde el 10-10-2026 | — |
+| Webhooks obligatorios de privacidad y desinstalación | Parcial: se reciben, se verifican y se registran; la desinstalación corta el acceso | Anonimización y entrega de datos de MOM §29.15.9 |
 | Nivel 2: acceso restringido del personal | Parcial: hoy no hay clientes externos | Fase 2: Grupo GF ve solo lo asignado |
 | Nivel 2: registro de accesos a datos de compradores | No | Registrar persona, fecha y pedido |
 | Nivel 2: plazos de retención | No | Definir el plazo en la política (pendiente) |

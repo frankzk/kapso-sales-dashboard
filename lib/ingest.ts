@@ -21,6 +21,7 @@ import {
   mapRestDraftOrder,
   mapRestOrder,
   verifyShopifyHmac,
+  routeShopifyTopic,
 } from "@/lib/shopify";
 import {
   classifyKapsoEvent,
@@ -589,10 +590,52 @@ export async function processShopifyWebhook(
   }
 
   // Route by topic. Order topics (orders/*) and draft topics (draft_orders/*)
-  // share the HMAC/idempotency/JSON prefix above, then diverge.
-  return params.topic.startsWith("draft_orders/")
-    ? processDraftOrderWebhook(admin, creds, params, payload, webhookId)
-    : processOrderWebhook(admin, creds, params, payload, webhookId);
+  // share the HMAC/idempotency/JSON prefix above, then diverge. La
+  // desinstalación tiene su rama; un tema desconocido ya no entra como pedido.
+  switch (routeShopifyTopic(params.topic)) {
+    case "draft":
+      return processDraftOrderWebhook(admin, creds, params, payload, webhookId);
+    case "order":
+      return processOrderWebhook(admin, creds, params, payload, webhookId);
+    case "uninstalled":
+      return processAppUninstalled(admin, params, webhookId);
+    default:
+      return { status: "ok", message: `tema ignorado: ${params.topic}` };
+  }
+}
+
+/**
+ * `app/uninstalled` (MOM §29.15.9): la tienda desinstaló la app. Queda
+ * deshabilitada (los crons solo corren sobre tiendas activas) y sin token, que
+ * Shopify ya revocó. No se borra nada: pedidos e historial siguen. Los datos
+ * personales de sus compradores se anonimizan cuando llega el `shop/redact`.
+ */
+async function processAppUninstalled(
+  admin: SupabaseClient,
+  params: ProcessWebhookParams,
+  webhookId: string,
+): Promise<WebhookResult> {
+  const { error: insErr } = await admin.from("webhook_events").insert({
+    store_id: params.storeId,
+    topic: params.topic,
+    shopify_id: null,
+    webhook_id: webhookId,
+    processed: true,
+  });
+  if (insErr) {
+    if ((insErr as any).code === "23505") return { status: "duplicate" };
+    throw new Error(`webhook_events insert: ${insErr.message}`);
+  }
+  const { error } = await admin
+    .from("stores")
+    .update({
+      shopify_token_enc: null,
+      status: "disabled",
+      shopify_uninstalled_at: new Date().toISOString(),
+    })
+    .eq("id", params.storeId);
+  if (error) throw new Error(`stores update: ${error.message}`);
+  return { status: "ok" };
 }
 
 export interface FlowWebhookParams {

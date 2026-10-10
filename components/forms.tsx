@@ -14,10 +14,11 @@ const inputCls =
 const labelCls = "block text-sm font-medium text-slate-700";
 const hintCls = "mt-1 text-xs text-slate-400";
 
-export function CreateOrgForm() {
+export function CreateOrgForm({ next }: { next?: string } = {}) {
   const [state, action, pending] = useActionState(createOrganization, initial);
   return (
     <form action={action} className="max-w-md space-y-4">
+      {next && <input type="hidden" name="next" value={next} />}
       <div>
         <label className={labelCls} htmlFor="name">
           Nombre de la organización

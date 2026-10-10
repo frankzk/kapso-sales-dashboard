@@ -1940,12 +1940,33 @@ export const DRAFT_ORDER_WEBHOOK_TOPICS = [
   "DRAFT_ORDERS_DELETE",
 ] as const;
 
+// La app de clientes también escucha la desinstalación, para dejar la tienda
+// desconectada (MOM §29.15.9). Llega al mismo handler por tienda.
+export const CLIENT_APP_WEBHOOK_TOPICS = ["APP_UNINSTALLED"] as const;
+
+export type ShopifyWebhookRoute = "order" | "draft" | "uninstalled" | "ignore";
+
+/**
+ * A qué rama va un webhook del handler por tienda. Antes todo lo que no era
+ * `draft_orders/*` se procesaba como pedido: un `app/uninstalled` (que trae la
+ * tienda, no un pedido) habría entrado como pedido vacío. Un tema que no
+ * conocemos se ignora. Sin cabecera de tema, la ruta manda "orders/unknown",
+ * que sigue siendo un pedido como siempre.
+ */
+export function routeShopifyTopic(topic: string): ShopifyWebhookRoute {
+  const t = (topic ?? "").toLowerCase();
+  if (t.startsWith("draft_orders/")) return "draft";
+  if (t.startsWith("orders/")) return "order";
+  if (t === "app/uninstalled") return "uninstalled";
+  return "ignore";
+}
+
 /** Register orders + draft_orders create/update(/delete) webhooks at our handler. */
 export async function registerOrderWebhooks(
-  opts: ShopifyClientOpts & { callbackUrl: string },
+  opts: ShopifyClientOpts & { callbackUrl: string; extraTopics?: readonly string[] },
 ): Promise<Array<{ topic: string; id: string | null; error?: string }>> {
   const results: Array<{ topic: string; id: string | null; error?: string }> = [];
-  for (const topic of [...ORDER_WEBHOOK_TOPICS, ...DRAFT_ORDER_WEBHOOK_TOPICS]) {
+  for (const topic of [...ORDER_WEBHOOK_TOPICS, ...DRAFT_ORDER_WEBHOOK_TOPICS, ...(opts.extraTopics ?? [])]) {
     const data = await shopifyGraphQL<any>({
       ...opts,
       query: WEBHOOK_CREATE_MUTATION,
@@ -1986,6 +2007,17 @@ export async function fetchShopInfo(opts: ShopifyClientOpts): Promise<ShopInfo> 
 // ---------------------------------------------------------------------------
 // OAuth install flow ("Install on Shopify" → token captured automatically)
 // ---------------------------------------------------------------------------
+
+// Lo que piden las dos apps de Kapta (la interna y la de tiendas cliente):
+// read_draft_orders + write_draft_orders power the abandoned-cart (Releasit COD)
+// feature: read open/completed drafts, and "Generar pedido" completes a draft
+// into a real order. read_products powers the order form's catalog picker
+// (productos reales con stock + precio). read_orders stays for the order sync.
+// read_customers powers the drawer's "Pedidos anteriores" — Shopify can't search
+// orders by phone, so we look the customer up by phone and read THEIR orders
+// (the local orders table is kapso-only, so non-bot purchases live only here).
+export const SHOPIFY_APP_SCOPES =
+  "read_orders,read_draft_orders,write_draft_orders,read_products,read_customers";
 
 const SHOP_DOMAIN_RE = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
 

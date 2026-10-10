@@ -9371,7 +9371,8 @@ recibe el pedido en la puerta.
   organización, conecta su Shopify y acepta el contrato con un código.
 - La tienda conecta su Shopify instalando **la app pública de Kapta para
   tiendas cliente**, desde el enlace que le da Grupo GF. No escribe el dominio
-  de su tienda. Aurela y Kenku siguen con su app actual.
+  de su tienda. Aurela y Kenku siguen con su app actual. Cómo se reclama la
+  instalación y qué pasa al desinstalar: §29.15.9, «Implementación».
 - El contrato nace en `draft` y pasa a `active` solo cuando la tienda lo
   acepta. Kapta comprueba que la tienda pertenece a la organización cliente
   del contrato. Grupo GF nunca vincula una tienda ajena por su cuenta.
@@ -9606,6 +9607,34 @@ del comprador se anonimizan.** Aurela y Kenku no cambian.
   se usan para Aurela, Kenku ni otra tienda. Ninguna regla los cruza por
   teléfono con pedidos de otra organización: riesgo, pedidos anteriores,
   confirmación o campañas.
+
+**Implementación (Fase 1b, primera parte, 10-10-2026).**
+
+- **Qué app usa cada tienda.** Cada tienda guarda con qué app de Shopify se
+  conectó: `interna` (la app actual de Aurela y Kenku) o `clientes` (la app
+  pública). No hay otro valor. Un mismo dominio de Shopify no puede estar en
+  dos tiendas con la app de clientes, y la app de clientes no toma una tienda
+  que ya está con la interna.
+- **Instalación.** La tienda instala desde Shopify y autoriza en el acto. Kapta
+  guarda esa autorización como **instalación pendiente** por 30 minutos. El
+  dueño la reclama dentro de Kapta: elige una organización donde sea owner o
+  admin, y la tienda se crea ahí con el dominio que trajo Shopify. Una
+  instalación pendiente vencida o ya reclamada no sirve.
+- **Cada aviso de privacidad se registra** con su firma verificada (firma
+  inválida: 401, sin escribir nada) y una sola vez por aviso. Su estado es
+  `pendiente` hasta que se cumple y `atendida` después, con fecha. No hay otro
+  estado. Un aviso de una tienda que no está en Kapta se registra igual, sin
+  tienda.
+- **Al desinstalar** (`app/uninstalled`) y al llegar `shop/redact`: se borra el
+  token de Shopify, la tienda pasa a `disabled` y se anota la fecha de
+  desinstalación (la primera; un aviso posterior no la cambia). Los procesos
+  automáticos ya solo toman tiendas `active`. Pedidos, historial y
+  liquidaciones no se tocan. Si la tienda reinstala, vuelve a `active` con el
+  token nuevo.
+- **Falta (segunda parte):** cumplir los avisos pendientes (anonimizar y
+  entregar datos) y el registro de accesos. Hasta entonces los avisos quedan
+  `pendiente`, dentro del plazo de 30 días de Shopify, y la app no se envía a
+  revisión.
 
 #### 29.15.10 Lo que no cambia
 

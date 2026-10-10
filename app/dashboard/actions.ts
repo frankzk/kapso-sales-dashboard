@@ -270,7 +270,10 @@ export async function createOrganization(
   if (mErr) return { error: mErr.message };
 
   revalidatePath("/dashboard");
-  redirect("/dashboard/stores/new");
+  // Quien llega desde la instalación de la app de clientes vuelve a terminarla
+  // (MOM §29.15.1). Solo esa ruta: un `next` libre sería una redirección abierta.
+  const next = String(formData.get("next") ?? "");
+  redirect(next === "/dashboard/conectar-shopify" ? next : "/dashboard/stores/new");
 }
 
 /**

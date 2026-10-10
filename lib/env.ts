@@ -240,4 +240,16 @@ export const env = {
   shopifyAppApiSecret: () => process.env.SHOPIFY_APP_API_SECRET ?? "",
   shopifyOAuthConfigured: () =>
     Boolean(process.env.SHOPIFY_APP_API_KEY && process.env.SHOPIFY_APP_API_SECRET),
+
+  // --- App de Shopify para tiendas cliente (MOM §29.15.1) ---
+  // Segunda app, pública y oculta, que pasa por la revisión de Shopify. La de
+  // arriba sigue siendo la de Aurela y Kenku: el método de distribución no se
+  // cambia una vez elegido, así que no se reutiliza.
+  shopifyClientAppApiKey: () => (process.env.SHOPIFY_CLIENT_APP_API_KEY ?? "").trim(),
+  shopifyClientAppApiSecret: () => (process.env.SHOPIFY_CLIENT_APP_API_SECRET ?? "").trim(),
+  shopifyClientAppConfigured: () =>
+    Boolean(
+      (process.env.SHOPIFY_CLIENT_APP_API_KEY ?? "").trim() &&
+        (process.env.SHOPIFY_CLIENT_APP_API_SECRET ?? "").trim(),
+    ),
 };
