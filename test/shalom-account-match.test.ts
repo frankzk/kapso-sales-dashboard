@@ -12,7 +12,6 @@ import {
   matchShalomListing,
   readListingGuide,
   shareAName,
-  shouldRunShalomCotejo,
   WINDOW_AFTER_DAYS,
   WINDOW_BEFORE_DAYS,
   type CotejoShalomOrder,
@@ -380,19 +379,6 @@ describe("bajar el listado entero", () => {
   });
 });
 
-describe("cuándo coteja el cron", () => {
-  it("cuatro veces al día, en la pasada en punto de Lima", () => {
-    expect(shouldRunShalomCotejo(new Date("2026-10-10T13:00:00Z"), false)).toBe(true); // 08:00 Lima
-    expect(shouldRunShalomCotejo(new Date("2026-10-11T01:00:00Z"), false)).toBe(true); // 20:00 Lima
-    expect(shouldRunShalomCotejo(new Date("2026-10-10T13:30:00Z"), false)).toBe(false);
-    expect(shouldRunShalomCotejo(new Date("2026-10-10T14:00:00Z"), false)).toBe(false);
-  });
-
-  it("`?cotejar=1` lo fuerza", () => {
-    expect(shouldRunShalomCotejo(new Date("2026-10-10T14:00:00Z"), true)).toBe(true);
-  });
-});
-
 describe("una sola puerta para registrar una guía existente", () => {
   const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 
@@ -406,8 +392,11 @@ describe("una sola puerta para registrar una guía existente", () => {
     expect(cotejo).not.toContain("pickupCode:");
   });
 
-  it("el cron de Shalom corre el cotejo", () => {
-    expect(read("app/api/cron/shalom-reconcile/route.ts")).toContain("cotejarShalom(");
+  it("el cotejo tiene cron propio, fuera del rastreo de media hora", () => {
+    // Colgado del final de shalom-reconcile se quedaba sin tiempo para bajar el
+    // listado (10-10-2026, 16:00): no vuelve ahí.
+    expect(read("app/api/cron/shalom-cotejo/route.ts")).toContain("cotejarShalom(");
+    expect(read("app/api/cron/shalom-reconcile/route.ts")).not.toContain("cotejarShalom(");
   });
 });
 

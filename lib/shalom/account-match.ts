@@ -412,17 +412,11 @@ export async function collectListingPages(
   return { orders, paginas: opts.maxPages, completo: false, motivo: `más de ${opts.maxPages} páginas` };
 }
 
-/** Horas de Lima en que el cron coteja: cuatro al día, en la pasada en punto. */
-export const COTEJO_HORAS_LIMA = [8, 12, 16, 20] as const;
-
 /**
- * ¿Toca cotejar en esta pasada? El listado entero cuesta: cada página hace que
- * el wrapper baje la cuenta completa de Shalom, y el cupo de 60 llamadas por
- * minuto es de todas las tiendas. Con cuatro veces al día sobra para pedidos
- * que llevan semanas parados. `forzar` es el `?cotejar=1` del cron.
+ * Horas de Lima en que corre el cron de Cotejar Shalom (/api/cron/shalom-cotejo,
+ * vercel.json). El listado entero cuesta: cada página hace que el wrapper baje
+ * la cuenta completa de Shalom, y el cupo de 60 llamadas por minuto es de todas
+ * las tiendas. Con cuatro veces al día sobra para pedidos que llevan semanas
+ * parados. La prueba de vercel.json comprueba que el horario dice lo mismo.
  */
-export function shouldRunShalomCotejo(now: Date, forzar: boolean): boolean {
-  if (forzar) return true;
-  const limaHour = (now.getUTCHours() + 24 - 5) % 24;
-  return (COTEJO_HORAS_LIMA as readonly number[]).includes(limaHour) && now.getUTCMinutes() < 30;
-}
+export const COTEJO_HORAS_LIMA = [8, 12, 16, 20] as const;
