@@ -26,6 +26,21 @@ export interface TeamScoreRow {
   pedidos: number;
   /** Salieron a En ruta: la reprogramación de la asesora o la salida Swayp del agente. */
   reprogramadas: number;
+  /**
+   * Las reprogramadas que salieron de una llamada del agente: la base de la
+   * conversión y del costo. Null en las asesoras. En el total suma solo las de
+   * los agentes: con todas, el 10-10 el total decía 35 % de conversión porque
+   * contaba las 56 reprogramadas de una asesora sobre las atendidas del agente.
+   */
+  reprogramadasLlamada: number | null;
+  /**
+   * Entrega real de lo reprogramado: de las guías que esta persona sacó a En
+   * ruta en el rango, cuántas figuran entregadas hoy. Sale de `shipment_calls`
+   * también para los agentes (su salida Swayp deja la fila `en_ruta` en la
+   * guía nueva).
+   */
+  llegaron: number;
+  llegaronDe: number;
   /** Null en los agentes: no anulan, a lo más proponen (`cancela`). */
   anuladas: number | null;
   entregadas: number | null;
@@ -44,7 +59,9 @@ export interface TeamScore {
   total: TeamScoreRow;
 }
 
-function personRow(p: ReproDayAgentCount & { name: string }): TeamScoreRow {
+type Person = ReproDayAgentCount & { name: string };
+
+function personRow(p: Person): TeamScoreRow {
   return {
     key: p.agent,
     name: p.name,
@@ -52,6 +69,9 @@ function personRow(p: ReproDayAgentCount & { name: string }): TeamScoreRow {
     gestiones: p.gestiones,
     pedidos: p.pedidos,
     reprogramadas: p.reprogramadas,
+    reprogramadasLlamada: null,
+    llegaron: p.reprogramadasEntregadas,
+    llegaronDe: p.reprogramadasGuias,
     anuladas: p.anuladas,
     entregadas: p.entregadas,
     atendidas: null,
@@ -64,7 +84,7 @@ function personRow(p: ReproDayAgentCount & { name: string }): TeamScoreRow {
   };
 }
 
-function agentRow(a: VoiceScoreRow): TeamScoreRow {
+function agentRow(a: VoiceScoreRow, trail: Person | undefined): TeamScoreRow {
   return {
     key: a.agent,
     name: a.name,
@@ -72,6 +92,9 @@ function agentRow(a: VoiceScoreRow): TeamScoreRow {
     gestiones: a.llamadas,
     pedidos: a.pedidos,
     reprogramadas: a.guias,
+    reprogramadasLlamada: a.guias,
+    llegaron: trail?.reprogramadasEntregadas ?? 0,
+    llegaronDe: trail?.reprogramadasGuias ?? 0,
     anuladas: null,
     entregadas: null,
     atendidas: a.atendidas,
@@ -95,12 +118,14 @@ const sum = (rows: TeamScoreRow[], pick: (r: TeamScoreRow) => number | null): nu
  * `shipment_calls` se descartan: el agente se cuenta por sus llamadas.
  */
 export function buildTeamScore(
-  people: (ReproDayAgentCount & { name: string })[],
+  people: Person[],
   agents: VoiceScoreRow[],
 ): TeamScore {
+  // Del rastro del agente en `shipment_calls` solo se toma la entrega real.
+  const trails = new Map(people.filter((p) => isVoiceAgentKey(p.agent)).map((p) => [p.agent, p]));
   const rows = [
     ...people.filter((p) => !isVoiceAgentKey(p.agent)).map(personRow),
-    ...agents.map(agentRow),
+    ...agents.map((a) => agentRow(a, trails.get(a.agent))),
   ];
   const total: TeamScoreRow = {
     key: "total",
@@ -109,6 +134,9 @@ export function buildTeamScore(
     gestiones: sum(rows, (r) => r.gestiones) ?? 0,
     pedidos: sum(rows, (r) => r.pedidos) ?? 0,
     reprogramadas: sum(rows, (r) => r.reprogramadas) ?? 0,
+    reprogramadasLlamada: sum(rows, (r) => r.reprogramadasLlamada),
+    llegaron: sum(rows, (r) => r.llegaron) ?? 0,
+    llegaronDe: sum(rows, (r) => r.llegaronDe) ?? 0,
     anuladas: sum(rows, (r) => r.anuladas),
     entregadas: sum(rows, (r) => r.entregadas),
     atendidas: sum(rows, (r) => r.atendidas),
@@ -122,9 +150,9 @@ export function buildTeamScore(
   return { rows, total };
 }
 
-/** Reprogramadas sobre atendidas; null sin atendidas o en una asesora. */
-export function teamConversion(r: Pick<TeamScoreRow, "reprogramadas" | "atendidas">): number | null {
-  return r.atendidas ? r.reprogramadas / r.atendidas : null;
+/** Reprogramadas por llamada sobre atendidas; null sin atendidas o en una asesora. */
+export function teamConversion(r: Pick<TeamScoreRow, "reprogramadasLlamada" | "atendidas">): number | null {
+  return r.atendidas && r.reprogramadasLlamada !== null ? r.reprogramadasLlamada / r.atendidas : null;
 }
 
 /**
@@ -132,8 +160,8 @@ export function teamConversion(r: Pick<TeamScoreRow, "reprogramadas" | "atendida
  * con una parte sin costo el cociente saldría más barato de lo que fue.
  */
 export function teamCostPerReprogramada(
-  r: Pick<TeamScoreRow, "reprogramadas" | "costo" | "conCosto" | "llamadas">,
+  r: Pick<TeamScoreRow, "reprogramadasLlamada" | "costo" | "conCosto" | "llamadas">,
 ): number | null {
-  if (!r.reprogramadas || r.costo === null || !r.conCosto || r.conCosto < r.llamadas) return null;
-  return r.costo / r.reprogramadas;
+  if (!r.reprogramadasLlamada || r.costo === null || !r.conCosto || r.conCosto < r.llamadas) return null;
+  return r.costo / r.reprogramadasLlamada;
 }

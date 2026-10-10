@@ -90,7 +90,8 @@ describe("lo que explicaba un tooltip ahora se lee", () => {
     expect(panel).toContain("Gestión por persona");
     expect(panel).not.toContain('title="');
     expect(panel).toContain(">Reprogramadas</th>");
-    expect(panel).toContain("Entregadas: cerradas por el");
+    expect(panel).toContain("Entregas registradas: la asesora");
+    expect(panel).toContain(">Llegaron</th>");
     // Una sola palabra para una sola cosa: ya no hay «Guías» y «Guías Swayp».
     expect(panel).not.toContain(">Guías");
     expect(ui).not.toContain('title="Editar nota"');

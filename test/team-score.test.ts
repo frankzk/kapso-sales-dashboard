@@ -12,6 +12,8 @@ const person = (agent: string, name: string, o: Partial<ReproDayAgentCount> = {}
   entregadas: 0,
   guias: 0,
   pedidos: 0,
+  reprogramadasGuias: 0,
+  reprogramadasEntregadas: 0,
   ...o,
 });
 
@@ -23,9 +25,23 @@ describe("«Gestión por persona»: asesoras y agentes en una tabla (10-10-2026)
     { telephony: "zadarma", provider: "grok", order_id: "p3", started_at: "t", outcome: "programar", salidaOk: false },
   ]);
   const people = [
-    person("u1", "Mariannys", { gestiones: 4, reprogramadas: 2, pedidos: 4, guias: 5 }),
+    person("u1", "Mariannys", {
+      gestiones: 4,
+      reprogramadas: 2,
+      pedidos: 4,
+      guias: 5,
+      reprogramadasGuias: 2,
+      reprogramadasEntregadas: 1,
+    }),
     // La fila del agente armada desde `shipment_calls` (llamada + dos `reroute`) se descarta.
-    person(VOICE_AGENT_TELNYX_KEY, "Agente Telnyx", { gestiones: 4, reprogramadas: 1, guias: 3, pedidos: 2 }),
+    person(VOICE_AGENT_TELNYX_KEY, "Agente Telnyx", {
+      gestiones: 4,
+      reprogramadas: 1,
+      guias: 3,
+      pedidos: 2,
+      reprogramadasGuias: 1,
+      reprogramadasEntregadas: 1,
+    }),
   ];
   const { rows, total } = buildTeamScore(people, agents);
 
@@ -50,5 +66,19 @@ describe("«Gestión por persona»: asesoras y agentes en una tabla (10-10-2026)
   it("el total suma todos; el costo por reprogramada del total no sale si falta el de una llamada", () => {
     expect(total).toMatchObject({ gestiones: 7, reprogramadas: 3, pedidos: 7, anuladas: 0, atendidas: 2, programar: 1 });
     expect(teamCostPerReprogramada(total)).toBeNull();
+  });
+
+  it("llegaron: la entrega real de lo reprogramado, del rastro en shipment_calls, también para el agente", () => {
+    expect(rows[0]).toMatchObject({ llegaron: 1, llegaronDe: 2 });
+    expect(rows.find((r) => r.key === VOICE_AGENT_TELNYX_KEY)).toMatchObject({ llegaron: 1, llegaronDe: 1 });
+    expect(rows.find((r) => r.key === VOICE_AGENT_KEY)).toMatchObject({ llegaron: 0, llegaronDe: 0 });
+    expect(total).toMatchObject({ llegaron: 2, llegaronDe: 3 });
+  });
+
+  it("la conversión del total usa solo las reprogramadas de los agentes, no las de las asesoras", () => {
+    // 1 reprogramada por llamada (Telnyx) sobre 2 atendidas; las 2 de Mariannys no cuentan.
+    expect(total.reprogramadasLlamada).toBe(1);
+    expect(teamConversion(total)).toBe(0.5);
+    expect(teamConversion(rows[0]!)).toBeNull();
   });
 });

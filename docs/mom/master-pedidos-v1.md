@@ -4681,8 +4681,21 @@ Reglas de esa tabla:
     - **Reprogramadas:** salieron a En ruta. En la asesora es el `new_status`
       de su gestión. En el agente es la salida Swayp que creó
       (`outcome_payload.salida_swayp.ok`).
-    - **Anuladas y Entregadas:** solo asesoras. El agente no anula: su
-      «cancela» va en su propia columna.
+    - **Llegaron** (10-10-2026): de las guías que esa persona sacó a En ruta
+      en el rango, cuántas figuran entregadas hoy, como «2 de 6». Es la
+      entrega real de lo reprogramado. Las recientes pueden seguir en
+      camino. Sale de las filas `en_ruta` de `shipment_calls`, también en
+      los agentes: su salida Swayp deja esa fila en la guía nueva. Ese día,
+      desde el inicio del piloto, iba así:
+      - Telnyx: 2 de 6.
+      - ElevenLabs: 2 de 4.
+      - Daaph: 0 de 19. Casi todas eran de fines de setiembre y seguían con
+        novedad («no contesta», «ya no desea»).
+    - **Anuladas y Entregas registradas:** solo asesoras. El agente no
+      anula: su «cancela» va en su propia columna. «Entregas registradas»
+      cuenta las gestiones en que la asesora cerró la guía como entregada con
+      el resultado del courier. Antes se llamaba «Entregadas», y en los
+      agentes salía vacía aunque sus guías sí se entregaban.
 
     **Columnas «Llamadas del agente»** (vacías en las asesoras):
     - **Atendidas:** `started_at` presente —`identificar_llamada` corrió, el
@@ -4694,7 +4707,9 @@ Reglas de esa tabla:
     - **Sin gestión:** atendidas cuyo resultado no es `confirma`, `programar`
       ni `cancela`.
     - **Volver a llamar** (`programar`) y **Cancela**.
-    - **Conversión:** reprogramadas sobre atendidas.
+    - **Conversión:** reprogramadas por llamada sobre atendidas. En el total
+      suman solo las de los agentes: el 10-10 decía 35 % porque sumaba las
+      reprogramadas de las asesoras.
     - **Costo línea (US$):** lo que Telnyx avisa que cobró, la suma de los dos
       tramos. No incluye el minuto de xAI ni el de ElevenLabs.
     - **Costo por reprogramada:** solo cuando todas las llamadas de la fila

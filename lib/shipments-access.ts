@@ -1252,7 +1252,7 @@ async function getReproByAgent(
   for (let from = 0; from < MAX_LIST * 4; from += PAGE) {
     const { data, error } = await sb
       .from("shipment_calls")
-      .select("agent, kind, new_status, shipment_id, note, shipment:shipments(order_id)")
+      .select("agent, kind, new_status, shipment_id, note, shipment:shipments(order_id, delivery_status)")
       .in("store_id", storeIds)
       .gte("occurred_at", startIso)
       .lt("occurred_at", endIso)
@@ -1266,7 +1266,7 @@ async function getReproByAgent(
         new_status: string | null;
         shipment_id: string | null;
         note: string | null;
-        shipment: { order_id: string | null } | null;
+        shipment: { order_id: string | null; delivery_status: string | null } | null;
       }[]) ?? [];
     for (const r of batch) {
       calls.push({
@@ -1275,6 +1275,7 @@ async function getReproByAgent(
         newStatus: r.new_status,
         shipmentId: r.shipment_id,
         orderId: r.shipment?.order_id ?? null,
+        delivered: r.shipment?.delivery_status === "entregado",
         note: r.note,
       });
     }

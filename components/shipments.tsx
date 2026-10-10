@@ -4846,6 +4846,8 @@ function limaRangeLabel(from: string, to: string): string {
   return `${short(from)} al ${short(to)}`;
 }
 
+/** Columnas que valen para todos, con la de la persona. */
+const COMMON_COLUMNS = 7;
 /** Columnas que solo tienen sentido en una llamada del agente. */
 const AGENT_ONLY_COLUMNS = 7;
 
@@ -4919,6 +4921,16 @@ function TeamScorePanel({ initial }: { initial: TeamScore }) {
         <td className={cn(MINI_TD, "font-semibold", strong)}>{fmtCount(r.gestiones)}</td>
         <td className={MINI_TD}>{fmtCount(r.pedidos)}</td>
         <td className={cn(MINI_TD, r.reprogramadas > 0 && !total && "text-info-fg")}>{fmtCount(r.reprogramadas)}</td>
+        <td className={cn(MINI_TD, "whitespace-nowrap")}>
+          {r.llegaronDe ? (
+            <>
+              <span className={cn(r.llegaron > 0 && !total && "text-ok-fg")}>{fmtCount(r.llegaron)}</span>
+              <span className="text-xs text-ink-500"> de {fmtCount(r.llegaronDe)}</span>
+            </>
+          ) : (
+            "—"
+          )}
+        </td>
         {r.anuladas === null ? na() : <td className={MINI_TD}>{fmtCount(r.anuladas)}</td>}
         {r.entregadas === null ? (
           na()
@@ -4967,7 +4979,7 @@ function TeamScorePanel({ initial }: { initial: TeamScore }) {
         <table className="w-full border-separate border-spacing-0 text-sm">
           <thead>
             <tr>
-              <th colSpan={6} className="px-4 pb-1 sm:px-5">
+              <th colSpan={COMMON_COLUMNS} className="px-4 pb-1 sm:px-5">
                 <span className="sr-only">Todos</span>
               </th>
               <th
@@ -4983,8 +4995,9 @@ function TeamScorePanel({ initial }: { initial: TeamScore }) {
               <th className={MINI_TH}>Gestiones</th>
               <th className={MINI_TH}>Pedidos</th>
               <th className={MINI_TH}>Reprogramadas</th>
+              <th className={MINI_TH}>Llegaron</th>
               <th className={MINI_TH}>Anuladas</th>
-              <th className={MINI_TH}>Entregadas</th>
+              <th className={MINI_TH}>Entregas registradas</th>
               <th className={cn(MINI_TH, AGENT_EDGE)}>Atendidas</th>
               <th className={MINI_TH}>Sin gestión</th>
               <th className={MINI_TH}>Volver a llamar</th>
@@ -4997,14 +5010,14 @@ function TeamScorePanel({ initial }: { initial: TeamScore }) {
           <tbody>
             {!score && (
               <tr>
-                <td colSpan={6 + AGENT_ONLY_COLUMNS} className="px-4 py-3 text-[13px] text-ink-500 sm:px-5">
+                <td colSpan={COMMON_COLUMNS + AGENT_ONLY_COLUMNS} className="px-4 py-3 text-[13px] text-ink-500 sm:px-5">
                   {result === "error" ? "No se pudo leer este rango." : "Cargando…"}
                 </td>
               </tr>
             )}
             {score && !score.rows.some((r) => !r.voice) && (
               <tr>
-                <td colSpan={6 + AGENT_ONLY_COLUMNS} className="px-4 py-2 text-[13px] text-ink-500 sm:px-5">
+                <td colSpan={COMMON_COLUMNS + AGENT_ONLY_COLUMNS} className="px-4 py-2 text-[13px] text-ink-500 sm:px-5">
                   Ninguna asesora registró gestión en este rango.
                 </td>
               </tr>
@@ -5020,13 +5033,14 @@ function TeamScorePanel({ initial }: { initial: TeamScore }) {
         <p>
           Gestiones: llamadas y reprogramaciones registradas; en un agente, cada llamada real (no las de prueba) ·
           Pedidos: distintos gestionados; una reprogramación toca dos guías del mismo pedido · Reprogramadas:
-          salieron a En ruta con su guía Swayp nueva · Anuladas: la clienta canceló · Entregadas: cerradas por el
-          resultado del courier.
+          salieron a En ruta con su guía Swayp nueva · Llegaron: de esas guías, cuántas ya figuran entregadas (las
+          recientes pueden seguir en camino) · Anuladas: la clienta canceló · Entregas registradas: la asesora
+          cerró la guía como entregada con el resultado del courier.
         </p>
         <p>
           Llamadas del agente: Atendidas, la clienta habló con el agente · Sin gestión, atendió pero se cortó sin
           que el agente registrara un resultado · Volver a llamar, pidió que la llamen otro día · Cancela, no quiere
-          el pedido · Conversión, reprogramadas sobre atendidas · Costo línea, lo que Telnyx avisó que cobró (los dos
+          el pedido · Conversión, reprogramadas por llamada sobre atendidas (el total, solo agentes) · Costo línea, lo que Telnyx avisó que cobró (los dos
           tramos; sin el minuto de xAI ni de ElevenLabs). Zadarma no lo avisa, por eso Daaph sale con guion ·
           Agente Daaph: Zadarma + Grok · Agente Telnyx: Telnyx + Grok · Agente ElevenLabs: Telnyx + ElevenLabs.
         </p>
