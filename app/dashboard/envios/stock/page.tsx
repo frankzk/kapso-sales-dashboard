@@ -23,7 +23,7 @@ export default async function FenixStockPage() {
   const canEdit = adminOrgs.some((m) => m.role === "owner" || m.role === "admin");
 
   if (!rows.length && !canEdit) {
-    return <EmptyState title="Sin stock de Fenix registrado" />;
+    return <EmptyState title="Sin stock de Swayp registrado" />;
   }
 
   // stores only source the product catalog for the picker (stock stays org-level)
@@ -33,7 +33,9 @@ export default async function FenixStockPage() {
   // Demand report: pending guides (what customers are asking for per province)
   // crossed with stock. Product identity prefers the linked Shopify order's
   // primary line item (same catalog the stock is keyed on).
-  let demand: ReturnType<typeof buildFenixDemand> = [];
+  // Sin tiendas no hay guías que cruzar, pero el inventario se ve igual: la
+  // tabla de la página es la de demanda, que trae todos los renglones de stock.
+  let demand: ReturnType<typeof buildFenixDemand> = buildFenixDemand(rows, []);
   if (storeIds.length) {
     const { data: pend } = await sb
       .from("shipments")
