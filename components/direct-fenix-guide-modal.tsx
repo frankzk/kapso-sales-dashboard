@@ -14,12 +14,19 @@ import {
 } from "@/app/dashboard/envios/actions";
 import type { OrderLinkCandidate } from "@/lib/shipments-access";
 import { limaTodayKey } from "@/lib/shipments";
+import { firstSwaypDispatchDay, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
+import { SwaypDispatchDateSelect } from "@/components/swayp-dispatch-date-select";
 import { esNumeroDeGuiaSwayp } from "@/lib/swayp-guide";
 
 /** El despacho más pronto es mañana (Lima): el Excel del día ya suele estar
  *  enviado, así que una guía de hoy nunca llegaría a Fenix. */
 function earliestDispatchDate(): string {
   return limaTodayKey(new Date(Date.now() + 86_400_000));
+}
+
+/** El primer día que Swayp despacha: mañana, o el lunes si mañana es domingo. */
+function defaultDispatchDate(): string {
+  return firstSwaypDispatchDay(limaTodayKey());
 }
 
 /**
@@ -52,7 +59,7 @@ export function DirectFenixGuideModal({
   const [preview, setPreview] = useState<DirectFenixGuidePreview | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
 
-  const [dispatchDate, setDispatchDate] = useState(earliestDispatchDate());
+  const [dispatchDate, setDispatchDate] = useState(defaultDispatchDate());
   const [guideCode, setGuideCode] = useState("");
   const [note, setNote] = useState("");
   const [motivo, setMotivo] = useState("");
@@ -194,7 +201,8 @@ export function DirectFenixGuideModal({
     !blockedByStock &&
     !blockedByLink &&
     !!dispatchDate &&
-    dispatchDate >= earliestDispatchDate();
+    dispatchDate >= earliestDispatchDate() &&
+    isSwaypDispatchDay(dispatchDate);
   // Ojo: NO se exige `guideCode`. Exigirlo era la otra mitad del bloqueo —el
   // botón sólo se activaba con el campo lleno, y el campo lleno apaga la API—.
   // El servidor ya resuelve el código cuando llega vacío.
@@ -578,12 +586,10 @@ export function DirectFenixGuideModal({
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
-                Fecha de despacho (desde mañana)
-                <input
-                  type="date"
+                Fecha de despacho (lunes a sábado)
+                <SwaypDispatchDateSelect
                   value={dispatchDate}
-                  min={earliestDispatchDate()}
-                  onChange={(e) => setDispatchDate(e.target.value)}
+                  onChange={setDispatchDate}
                   className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11")}
                 />
               </label>

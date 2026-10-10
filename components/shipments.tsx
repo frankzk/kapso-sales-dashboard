@@ -2,6 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
+import { SwaypDispatchDateSelect } from "@/components/swayp-dispatch-date-select";
 import { cn } from "@/components/ui";
 import {
   Badge,
@@ -2603,13 +2605,19 @@ function ShipmentDrawer({
   // nueva y programa el despacho. Un `<input type=date>` con `min` no basta:
   // se puede teclear la fecha a mano y el atributo no lo impide.
   const dateNeedsFuture = disposition === "programar" || disposition === "confirma";
-  const programDateInvalid = dateNeedsFuture && (!nextDate || nextDate <= localDateInputValue());
+  // «Cliente confirma» por Swayp emite la guía con esa fecha de despacho, y
+  // Swayp no despacha los domingos (10-10-2026).
+  const confirmaPorSwayp = disposition === "confirma" && reprogramProvider !== "aliclik";
+  const swaypDomingo = confirmaPorSwayp && !!nextDate && !isSwaypDispatchDay(nextDate);
+  const programDateInvalid =
+    dateNeedsFuture && (!nextDate || nextDate <= localDateInputValue() || swaypDomingo);
   // La guía a mano acuña por la MISMA `rescheduleGuideCode` que «confirma», así
   // que tiene la misma exigencia. Estaba sin `min`, sin entrar en el `disabled`
   // y sin guarda en el servidor: era la segunda puerta de la regla del MOM
   // §11.6, y era la que el cajón abre a la fuerza cuando el envío no tiene N° de
   // pedido —justo cuando nadie mira con cuidado.
-  const manualGuideDateInvalid = !manualGuideDate || manualGuideDate <= localDateInputValue();
+  const manualGuideDateInvalid =
+    !manualGuideDate || manualGuideDate <= localDateInputValue() || !isSwaypDispatchDay(manualGuideDate);
   // MISMA función que la reja del servidor, para que el botón no invite a algo
   // que la acción va a rechazar.
   const numeroManualNoEsDeSwayp = !!fenixGuide.trim() && !esNumeroDeGuiaSwayp(fenixGuide);
@@ -2707,9 +2715,11 @@ function ShipmentDrawer({
       ? "Explica el motivo de la excepción antes de registrarla."
       : disposition === "confirma" && !nextDate
         ? "Elige la fecha de despacho para confirmar."
-        : programDateInvalid
-          ? "La fecha tiene que ser futura: va estampada en el número de la guía nueva."
-          : null;
+        : swaypDomingo
+          ? SWAYP_SUNDAY_ERROR
+          : programDateInvalid
+            ? "La fecha tiene que ser futura: va estampada en el número de la guía nueva."
+            : null;
   const parsedLatitude = Number(addressLatitude.replace(",", "."));
   const parsedLongitude = Number(addressLongitude.replace(",", "."));
   const addressFormValid =
@@ -2773,7 +2783,7 @@ function ShipmentDrawer({
   // ausencia sigue siendo un bloqueo.
   const cancelledExceptionTienePedido = !!shipment && !!drawerOrderName;
   const cancelledExceptionDateInvalid =
-    !cancelledExceptionDate || cancelledExceptionDate <= localDateInputValue();
+    !cancelledExceptionDate || cancelledExceptionDate <= localDateInputValue() || !isSwaypDispatchDay(cancelledExceptionDate);
   // Sin vínculo de codbar no hay guía, así que el reenvío tampoco: si no, el
   // botón invita y el servidor rechaza.
   const cancelledExceptionUnavailable = fenixReason !== "ok" || swaypSinCodbar;
@@ -3262,12 +3272,10 @@ function ShipmentDrawer({
                 {showCancelledException && !cancelledExceptionUnavailable && (
                   <div className="space-y-4 pt-4">
                     <label className={DRAWER_LABEL}>
-                      Nueva fecha de entrega
-                      <input
-                        type="date"
+                      Nueva fecha de entrega (lunes a sábado)
+                      <SwaypDispatchDateSelect
                         value={cancelledExceptionDate}
-                        min={tomorrowDateInputValue()}
-                        onChange={(e) => setCancelledExceptionDate(e.target.value)}
+                        onChange={setCancelledExceptionDate}
                         className={DRAWER_INPUT}
                       />
                     </label>
@@ -3831,26 +3839,35 @@ function ShipmentDrawer({
                         {disposition === "confirma"
                           ? reprogramProvider === "aliclik"
                             ? "Fecha de reprogramación en Aliclik"
-                            : "Fecha de reprogramación (va en la nueva guía Swayp)"
+                            : "Fecha de reprogramación (va en la nueva guía Swayp, lunes a sábado)"
                           : disposition === "programar"
                             ? "Fecha de próxima llamada"
                             : "Próximo intento (opcional)"}
-                        <input
-                          type="date"
-                          value={nextDate}
-                          onChange={(e) => setNextDate(e.target.value)}
-                          // UNA REPROGRAMACIÓN CONFIRMADA NO PUEDE SER DE AYER. El
-                          // `min` solo cubría «programar», y ni el botón ni el
-                          // servidor exigían futuro para «confirma»: se emitía una
-                          // guía Swayp con la fecha pasada ESTAMPADA EN SU NÚMERO
-                          // (`rescheduleGuideCode`) y un despacho imposible agendado.
-                          min={
-                            disposition === "programar" || disposition === "confirma"
-                              ? tomorrowDateInputValue()
-                              : undefined
-                          }
-                          className={DRAWER_INPUT}
-                        />
+                        {confirmaPorSwayp ? (
+                          <SwaypDispatchDateSelect
+                            value={nextDate}
+                            onChange={setNextDate}
+                            invalid={swaypDomingo}
+                            className={DRAWER_INPUT}
+                          />
+                        ) : (
+                          <input
+                            type="date"
+                            value={nextDate}
+                            onChange={(e) => setNextDate(e.target.value)}
+                            // UNA REPROGRAMACIÓN CONFIRMADA NO PUEDE SER DE AYER. El
+                            // `min` solo cubría «programar», y ni el botón ni el
+                            // servidor exigían futuro para «confirma»: se emitía una
+                            // guía Swayp con la fecha pasada ESTAMPADA EN SU NÚMERO
+                            // (`rescheduleGuideCode`) y un despacho imposible agendado.
+                            min={
+                              disposition === "programar" || disposition === "confirma"
+                                ? tomorrowDateInputValue()
+                                : undefined
+                            }
+                            className={DRAWER_INPUT}
+                          />
+                        )}
                       </label>
                     )}
                     <label className={DRAWER_LABEL}>
@@ -4223,13 +4240,11 @@ function ShipmentDrawer({
                   <div className="space-y-4 pt-4">
                     <div className="grid gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
                       <label className={DRAWER_LABEL}>
-                        Fecha de reprogramación (va en la guía)
-                        <input
-                          type="date"
+                        Fecha de reprogramación (va en la guía, lunes a sábado)
+                        <SwaypDispatchDateSelect
                           value={manualGuideDate}
-                          min={tomorrowDateInputValue()}
-                          aria-invalid={manualGuideDateInvalid || undefined}
-                          onChange={(e) => setManualGuideDate(e.target.value)}
+                          onChange={setManualGuideDate}
+                          invalid={manualGuideDateInvalid && !!manualGuideDate}
                           className={DRAWER_INPUT}
                         />
                       </label>

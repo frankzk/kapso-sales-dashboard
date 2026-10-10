@@ -371,9 +371,17 @@ export interface CollectedListing {
 
 /**
  * Baja el listado página a página hasta la última. Shalom no dice cuántas hay:
- * se para cuando una viene con menos de `perPage`, cuando una repite lo ya
- * visto (el wrapper ignoró `page`) o cuando se acaba el tiempo o el tope.
- * Las tres últimas dejan el listado incompleto, y quien llama no vincula.
+ * se para cuando una viene VACÍA o más corta que la más larga ya vista, cuando
+ * una repite lo ya visto (el wrapper ignoró `page`) o cuando se acaba el tiempo
+ * o el tope. Las tres últimas dejan el listado incompleto, y quien llama no
+ * vincula.
+ *
+ * EL FINAL NO SE MIDE CONTRA `perPage`. Shalom recorta la página en silencio:
+ * se le pidieron 500 y devolvió 200, y como 200 < 500 la primera pasada en
+ * producción (10-10-2026) dio el listado por terminado en la página 1 —198 de
+ * 1.555 guías—. La cobertura lo frenó y no se vinculó nada, pero el cotejo no
+ * servía. El tamaño de página real es el que el servidor devuelve, así que la
+ * última página es la que viene más corta que las anteriores (o vacía).
  */
 export async function collectListingPages(
   fetchPage: (page: number, timeoutMs: number) => Promise<ShalomAccountOrder[]>,
@@ -382,6 +390,8 @@ export async function collectListingPages(
   const now = opts.now ?? Date.now;
   const orders: ShalomAccountOrder[] = [];
   const ids = new Set<string>();
+  /** La página más larga vista: el tamaño que el servidor de verdad entrega. */
+  let longest = 0;
   for (let page = 1; page <= opts.maxPages; page += 1) {
     const left = opts.deadlineMs - now();
     if (left < 5_000) return { orders, paginas: page - 1, completo: false, motivo: "se acabó el tiempo de la pasada" };
@@ -396,7 +406,8 @@ export async function collectListingPages(
       return { orders, paginas: page, completo: false, motivo: `la página ${page} repite la anterior: el listado no pagina` };
     }
     orders.push(...fresh);
-    if (batch.length < opts.perPage) return { orders, paginas: page, completo: true, motivo: null };
+    if (!batch.length || batch.length < longest) return { orders, paginas: page, completo: true, motivo: null };
+    longest = Math.max(longest, batch.length);
   }
   return { orders, paginas: opts.maxPages, completo: false, motivo: `más de ${opts.maxPages} páginas` };
 }
