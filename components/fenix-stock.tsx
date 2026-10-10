@@ -50,6 +50,8 @@ export interface SyncResumen {
   faltan: string[];
   ultima: { created_at: string; source: "cron" | "manual"; ok: boolean; cambios: number } | null;
   retenidas: number;
+  /** No se pudieron leer las corridas: se dice, no se confunde con «sin sincronizaciones». */
+  errorDeLectura: boolean;
 }
 
 const CARD = "rounded-lg bg-white shadow-control ring-1 ring-line";
@@ -382,6 +384,7 @@ export function FenixStockEditor({
           bodegas={bodegas}
           estado={estado}
           estadoError={estadoError}
+          automaticoActivo={estado?.automaticoActivo ?? !!syncResumen?.automaticoActivo}
           onEstadoChanged={() => {
             cargarEstado();
             router.refresh();
@@ -589,6 +592,14 @@ function haceCuanto(iso: string): string {
  */
 function SyncLine({ resumen, canEdit }: { resumen: SyncResumen | null; canEdit: boolean }) {
   if (!resumen) return null;
+  if (resumen.errorDeLectura) {
+    return (
+      <p className="mt-2 flex items-start gap-2 text-[13px] leading-5 text-ink-600">
+        <span aria-hidden className="mt-1.5 size-2 shrink-0 rounded-full bg-warn-fg" />
+        <span>No se pudo leer el estado del sync. Los números pueden no estar al día.</span>
+      </p>
+    );
+  }
   const { ultima, retenidas } = resumen;
   const bien = resumen.automaticoActivo && (!ultima || ultima.ok) && !retenidas;
   return (
@@ -644,6 +655,7 @@ function SyncCard({
   bodegas,
   estado,
   estadoError,
+  automaticoActivo,
   onEstadoChanged,
   onMsg,
 }: {
@@ -651,6 +663,8 @@ function SyncCard({
   bodegas: BodegaSwaypResumen[];
   estado: SwaypSyncEstado | null;
   estadoError: boolean;
+  /** Del estado leído aquí o, si esa lectura falló, del resumen del servidor. */
+  automaticoActivo: boolean;
   onEstadoChanged: () => void;
   onMsg: (m: Msg) => void;
 }) {
@@ -661,7 +675,12 @@ function SyncCard({
         title="Sincronizar stock desde Swayp"
         help="El sync diario deja cada ciudad igual a Swayp sin que nadie haga nada. Aquí se lee al momento, se importa el Excel de respaldo o se anota a mano lo que Swayp no cubre."
       />
-      <DryRunSwayp estado={estado} estadoError={estadoError} onEstadoChanged={onEstadoChanged} />
+      <DryRunSwayp
+        estado={estado}
+        estadoError={estadoError}
+        automaticoActivo={automaticoActivo}
+        onEstadoChanged={onEstadoChanged}
+      />
       <ImportarDeSwayp onDone={onMsg} />
       <AnotarAMano stores={stores} onMsg={onMsg} />
       {bodegas.length > 0 && <BodegasSwayp bodegas={bodegas} />}
@@ -682,10 +701,12 @@ const LINK = "font-medium text-brand-700 underline-offset-2 hover:underline";
 function DryRunSwayp({
   estado,
   estadoError,
+  automaticoActivo,
   onEstadoChanged,
 }: {
   estado: SwaypSyncEstado | null;
   estadoError: boolean;
+  automaticoActivo: boolean;
   onEstadoChanged: () => void;
 }) {
   const router = useRouter();
@@ -709,8 +730,10 @@ function DryRunSwayp({
   // Si pegan «Bearer <token>», se le quita el prefijo: el código ya lo agrega,
   // y con doble «Bearer» el panel rechaza (403).
   const limpio = token.trim().replace(/^Bearer\s+/i, "");
-  // Sin token pegado se lee la API de integraciones (la del sync diario).
-  const puedeLeer = !!limpio || !!estado?.automaticoActivo;
+  // Sin token pegado se lee la API de integraciones (la del sync diario). Si
+  // el estado no se pudo leer aquí, vale lo que dice la cabecera: el botón no
+  // se apaga sin razón mientras el diario está activo.
+  const puedeLeer = !!limpio || automaticoActivo;
 
   function leer() {
     if (!puedeLeer) return;

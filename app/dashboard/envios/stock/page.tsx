@@ -79,8 +79,7 @@ export default async function FenixStockPage() {
       stores={stores}
       demand={demand}
       bodegas={bodegas}
-      // Si no se puede leer, la página sigue: solo falta la línea del sync.
-      syncResumen={await resumenDelSync(sb, canEdit).catch(() => null)}
+      syncResumen={await resumenDelSync(sb, canEdit)}
     />
   );
 }
@@ -91,23 +90,41 @@ export default async function FenixStockPage() {
  * sincronización y si salió bien es lo primero que necesita quien prepara lo
  * que falta mandar. Aquí no viaja ninguna credencial: fecha, origen, si salió
  * bien, cuántas ciudades cambiaron y cuántas quedaron retenidas. Lo que falta
- * configurar (nombres de variables) solo se le dice al administrador.
+ * configurar (nombres de variables) solo se le dice al administrador. Si la
+ * lectura falla se dice así: callar o decir «todavía sin sincronizaciones»
+ * confundiría un error con otro estado.
  */
 async function resumenDelSync(
   sb: Awaited<ReturnType<typeof createServerSupabase>>,
   canEdit: boolean,
 ): Promise<SyncResumen | null> {
-  const { data: mem } = await sb.from("memberships").select("org_id");
+  const auto = fuenteAutomaticaDesdeEnv();
+  const sinLeer = (automaticoActivo: boolean): SyncResumen => ({
+    automaticoActivo,
+    faltan: [],
+    ultima: null,
+    retenidas: 0,
+    errorDeLectura: true,
+  });
+  const { data: mem, error: memError } = await sb.from("memberships").select("org_id");
+  if (memError) return sinLeer(false);
   const orgIds = [...new Set(((mem as { org_id: string }[]) ?? []).map((m) => m.org_id))];
   if (!orgIds.length) return null;
-  const auto = fuenteAutomaticaDesdeEnv();
   const orgId = auto.ok && orgIds.includes(auto.orgId) ? auto.orgId : orgIds[0]!;
-  const { data } = await createAdminSupabase()
-    .from("swayp_inventory_sync_runs")
-    .select("created_at,source,ok,resumen")
-    .eq("org_id", orgId)
-    .order("created_at", { ascending: false })
-    .limit(5);
+  const automaticoActivo = auto.ok && auto.orgId === orgId;
+  let data: unknown[] | null;
+  try {
+    const r = await createAdminSupabase()
+      .from("swayp_inventory_sync_runs")
+      .select("created_at,source,ok,resumen")
+      .eq("org_id", orgId)
+      .order("created_at", { ascending: false })
+      .limit(5);
+    if (r.error) return sinLeer(automaticoActivo);
+    data = r.data;
+  } catch {
+    return sinLeer(automaticoActivo);
+  }
   type Run = {
     created_at: string;
     source: "cron" | "manual";
@@ -118,11 +135,12 @@ async function resumenDelSync(
   const ultima = runs[0];
   const ultimaAuto = runs.find((r) => r.source === "cron");
   return {
-    automaticoActivo: auto.ok && auto.orgId === orgId,
+    automaticoActivo,
     faltan: canEdit && !auto.ok ? auto.faltan : [],
     ultima: ultima
       ? { created_at: ultima.created_at, source: ultima.source, ok: ultima.ok, cambios: ultima.resumen?.ciudades?.length ?? 0 }
       : null,
     retenidas: ultimaAuto?.ok ? (ultimaAuto.resumen?.retenidas?.length ?? 0) : 0,
+    errorDeLectura: false,
   };
 }
