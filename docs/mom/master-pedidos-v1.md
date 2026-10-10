@@ -7203,7 +7203,15 @@ Tres reglas, a partir de acá:
    descartado a las 15:40 y aún en «Gestión Reproprovincia» a las 18:00. Sin el
    índice que la 0204 borró, la base ya ordenaba la tienda entera; recorrerla
    toda cuesta lo mismo (90 ms contra 84 ms, medido) y no deja a nadie fuera.
-   `p_scan` sigue existiendo, pero solo recorta si alguien lo pasa a mano.
+
+   **Sin `p_scan` y cerrada al navegador (0241, 10-10-2026).** El mismo día
+   el tope se quitó dos veces en paralelo (#920 y #918), y en producción quedó
+   la versión del #918: un solo agregado de las guías cruzado con el Master
+   (52 ms medidos, el mismo resultado) y sin el argumento `p_scan`, para que
+   nadie pueda volver a ponerle un tope por cantidad. Y la función, que es
+   SECURITY DEFINER, ya no la puede llamar `anon` ni `authenticated`: con la
+   clave pública y el id de una tienda devolvía ids de pedidos ajenos,
+   saltándose la RLS. Solo la llama el barrido, con `service_role`.
 2. **El recálculo va por tandas.** Un pedido que revienta cuesta su trozo, no la
    lista entera. Endurecimiento, no la causa de este incidente: el import de
    Aliclik llega a llamar con más de mil pedidos de golpe y cualquier fallo los
