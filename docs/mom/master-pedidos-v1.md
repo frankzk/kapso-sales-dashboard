@@ -3947,6 +3947,30 @@ cajón, la columna de la cola y los mensajes del servidor muestran `MAX_INTENTOS
 aplican la transición y la ventana de reprogramación. El mínimo del motivo de
 descarte sale igual de `DISCARD_REASON_MIN`.
 
+#### 11.6.1 Swayp despacha de lunes a sábado (10-10-2026)
+
+Toda **fecha de despacho de una guía Swayp** es de lunes a sábado: Swayp no
+reparte los domingos (§11, «Horarios Swayp documentados»). Decisión del owner,
+10-10-2026, después de ver el selector de la guía directa ofreciendo domingos.
+
+- **En la pantalla**, el `<input type="date">` nativo no permite apagar un día de
+  la semana, así que las cuatro puertas que fijan esa fecha usan una lista de
+  días (`SwaypDispatchDateSelect`, `lib/swayp-dispatch-days.ts`) que empieza
+  mañana y salta los domingos: la **Guía Swayp directa** (también la que sale
+  desde Por confirmar, §11.11), que propone el primer día válido; **Cliente
+  confirma** por Swayp; la **guía Swayp a mano** y la **nueva fecha de la
+  excepción** de una guía anulada. «Cliente confirma» por Aliclik y «Programar
+  llamada» siguen con el calendario: no son despachos Swayp.
+- **En el servidor**, la misma regla (`isSwaypDispatchDay`) en
+  `createDirectFenixGuide`, `createFenixGuide`, `registerRerouteCall` con
+  «confirma» por Swayp y `reenviarGuiaAnulada` (que usan también el reenvío por
+  voz y la excepción), con el mismo texto: «Swayp no despacha los domingos: elige
+  una fecha de lunes a sábado». Como en §11.6, la regla pertenece a la función
+  que emite, no a la pantalla.
+- El agente de voz ya no ofrecía domingos (§11.8) y el automático Aliclik →
+  Swayp ya los saltaba (`nextAutoDelivery`, que además salta el sábado en
+  Arequipa).
+
 ### 11.7 El motivo anterior se ve antes de llamar, y su ausencia también
 
 §11 manda revisar cómo terminó el intento anterior antes de reenviar: «si el
@@ -4783,6 +4807,16 @@ definir» del pedido, y en Lima puede salir como adicional con motivo (§9,
 como «otra guía activa» la propia salida «por definir» y ninguna guía directa se
 podía crear (#KP138264, #KP138197 y #KP138302, esta con la salida de Grupo GF
 todavía pendiente). La 0219 lo limita al automático.
+
+**La emisión se enlaza con su guía también al rellenar (0239, 10-10-2026).**
+`swayp_link_emission` (0209) escribía el `child_id` de la emisión solo al
+**insertar** la guía. La Guía Swayp directa rellena la salida «por definir» del
+pedido con un **update** (`lib/route-output-fill.ts`), y esas emisiones quedaban
+sin hija: 32 entre el 02 y el 10-10-2026. La reserva lee una emisión sin hija
+como emisión incierta, así que bloqueaba cualquier otra emisión Swayp del pedido
+y seguía restando su stock. La 0239 agrega el mismo enlace en update —cuando la
+fila pasa a ser guía Swayp con número— y enlaza las sueltas por tienda, pedido y
+número (cada una casaba con una sola guía).
 
 En **Repro Provincia → Ver automático Aliclik → Swayp** se muestran el estado,
 las ejecuciones, las guías emitidas y el último motivo por pedido. Un administrador
