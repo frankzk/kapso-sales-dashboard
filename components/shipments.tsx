@@ -5026,7 +5026,7 @@ function TeamScorePanel({ initial }: { initial: TeamScore }) {
         <p>
           Llamadas del agente: Atendidas, la clienta habló con el agente · Sin gestión, atendió pero se cortó sin
           que el agente registrara un resultado · Volver a llamar, pidió que la llamen otro día · Cancela, no quiere
-          el pedido · Conversión, reprogramadas sobre atendidas · Costo línea, lo que Telnyx avisó que cobró (los dos
+          el pedido · Conversión, reprogramadas por llamada sobre atendidas (el total, solo agentes) · Costo línea, lo que Telnyx avisó que cobró (los dos
           tramos; sin el minuto de xAI ni de ElevenLabs). Zadarma no lo avisa, por eso Daaph sale con guion ·
           Agente Daaph: Zadarma + Grok · Agente Telnyx: Telnyx + Grok · Agente ElevenLabs: Telnyx + ElevenLabs.
         </p>

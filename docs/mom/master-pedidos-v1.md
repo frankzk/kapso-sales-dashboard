@@ -4682,7 +4682,12 @@ Reglas de esa tabla:
       de su gestión. En el agente es la salida Swayp que creó
       (`outcome_payload.salida_swayp.ok`).
     - **Anuladas y Entregadas:** solo asesoras. El agente no anula: su
-      «cancela» va en su propia columna.
+      «cancela» va en su propia columna. «Entregadas» cuenta las gestiones
+      en que la asesora registró el resultado del courier «Entregado». **No es
+      la entrega de lo reprogramado:** esa tasa está en «Reprogramados en
+      Kapta». El 10-10, de 29 salidas Swayp de los agentes, 4 ya estaban
+      entregadas (2 de Telnyx y 2 de ElevenLabs), y la tabla igual mostraba
+      vacío.
 
     **Columnas «Llamadas del agente»** (vacías en las asesoras):
     - **Atendidas:** `started_at` presente —`identificar_llamada` corrió, el
@@ -4694,7 +4699,9 @@ Reglas de esa tabla:
     - **Sin gestión:** atendidas cuyo resultado no es `confirma`, `programar`
       ni `cancela`.
     - **Volver a llamar** (`programar`) y **Cancela**.
-    - **Conversión:** reprogramadas sobre atendidas.
+    - **Conversión:** reprogramadas por llamada sobre atendidas. En el total
+      suman solo las de los agentes: el 10-10 decía 35 % porque sumaba las
+      reprogramadas de las asesoras.
     - **Costo línea (US$):** lo que Telnyx avisa que cobró, la suma de los dos
       tramos. No incluye el minuto de xAI ni el de ElevenLabs.
     - **Costo por reprogramada:** solo cuando todas las llamadas de la fila

@@ -51,4 +51,11 @@ describe("«Gestión por persona»: asesoras y agentes en una tabla (10-10-2026)
     expect(total).toMatchObject({ gestiones: 7, reprogramadas: 3, pedidos: 7, anuladas: 0, atendidas: 2, programar: 1 });
     expect(teamCostPerReprogramada(total)).toBeNull();
   });
+
+  it("la conversión del total usa solo las reprogramadas de los agentes, no las de las asesoras", () => {
+    // 1 reprogramada por llamada (Telnyx) sobre 2 atendidas; las 2 de Mariannys no cuentan.
+    expect(total.reprogramadasLlamada).toBe(1);
+    expect(teamConversion(total)).toBe(0.5);
+    expect(teamConversion(rows[0]!)).toBeNull();
+  });
 });
