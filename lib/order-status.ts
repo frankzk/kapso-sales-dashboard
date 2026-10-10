@@ -384,7 +384,12 @@ const AGENCY_COURIERS = new Set(["shalom", "olva"]);
  *  `companion_linked` (MOM §32) por el mismo argumento: vincular un pedido a la
  *  caja de otro es una persona decidiendo sobre la salida, y lo exige motivo.
  *  Los cuatro casos que lo motivaron tenían justo un candado puesto como nota
- *  —«comparte guía con…»— que congelaba a los dos pedidos. */
+ *  —«comparte guía con…»— que congelaba a los dos pedidos.
+ *
+ *  Única excepción sin actor: el `guide_created` de Cotejar Shalom (MOM §12),
+ *  que registra una guía que una persona YA creó en Shalom Pro y solo cuando
+ *  no admite duda. Es el mismo hecho que el «Ya la creé en Shalom Pro» del
+ *  drawer, y por eso cuenta igual. */
 const HUMAN_GUIDE_EVENTS = new Set(["guide_registered", "guide_created", COMPANION_LINKED]);
 
 export function isAgencyCourier(courier: string | null | undefined): boolean {
