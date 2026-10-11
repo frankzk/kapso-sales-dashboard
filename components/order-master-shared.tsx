@@ -571,6 +571,8 @@ export const TIMELINE_LABEL: Record<string, string> = {
   novelty_solved: "Novedad de Swayp resuelta",
   comment: "Comentario",
   confirmation_contact: "Intento de confirmación",
+  // MOM §8.5: la llamada que hizo una persona desde la ficha, por Telnyx.
+  browser_call: "Llamada desde Kapta",
   confirmation_followup: "Próximo contacto pactado",
   reschedule: "Reprogramación",
   reroute: "Reprogramación",

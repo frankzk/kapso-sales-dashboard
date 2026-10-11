@@ -1222,6 +1222,41 @@ en Kenku: 61 %, 55 %, 40 % y 27 %; en Aurela: 70 %, 69 %, 50 % y 42 %.
   las tiendas que el usuario ve, y la ficha lo dice. Sin muestra, no se muestra
   un número. Un reenvío no lleva el aviso: las cifras son de primeras guías.
 
+### 8.5 Llamar desde la computadora (11-10-2026)
+
+Pedido por el owner: la asesora llama a la clienta desde la ficha del pedido y
+habla con audífonos, sin usar su celular. La llamada sale por Telnyx (WebRTC) y
+la clienta ve el número de la empresa, no el de la asesora.
+
+- **Dónde.** «Llamar desde Kapta», en la cabecera de la ficha, junto a
+  «Llamar» y «WhatsApp». Sale para quien puede editar el Master
+  (`master.edit`, el mismo permiso que registra la gestión) y solo si la línea
+  está configurada. Llama solo a teléfonos peruanos.
+- **Con qué número.** `TELNYX_WEBRTC_FROM_NUMBER`; vacío, el del Agente Telnyx.
+  Al 11-10-2026 es un número de Estados Unidos mientras se tramita uno de Perú:
+  cambiarlo es cambiar esa variable.
+- **Qué queda.** Al colgar, la llamada se guarda en el historial del pedido
+  (`browser_call`, «Llamada desde Kapta»): quién llamó, a qué número, con cuál,
+  si contestó y cuánto se habló, o por qué no se habló (ocupado, no contestó,
+  el número no existe…). Una llamada que no llegó a timbrar —sin micrófono, sin
+  línea— no se guarda: no fue un intento de contacto. Cerrar la ficha con la
+  llamada en curso la cuelga, y se guarda igual.
+- **No reemplaza la gestión.** La llamada es un hecho; el resultado («confirma»,
+  «no contesta», «reprograma»…) se sigue registrando en la mesa de
+  confirmación (§6.1), y la tarjeta de la llamada lleva hasta ella. Así
+  «Gestión por persona» cuenta lo mismo que antes.
+- **La clave de Telnyx no sale del servidor.** Cada persona tiene su
+  credencial en Telnyx (tabla `telnyx_webrtc_credentials`, migración 0243), y
+  el navegador recibe un token que dura 24 horas. Con ese token se puede llamar
+  por la línea mientras dure: el perfil de salida de Telnyx debe limitar los
+  destinos a Perú.
+- **Configuración (una vez).** En Telnyx, una conexión SIP de credenciales con
+  el perfil de salida que ya permite Perú; su id va en
+  `TELNYX_WEBRTC_CONNECTION_ID`. La conexión del Agente Telnyx (Call Control)
+  no sirve para esto. El sitio permite el micrófono a su propio origen
+  (`Permissions-Policy: microphone=(self)`) y la conexión a
+  `wss://rtc.telnyx.com`.
+
 ## 9. Lima
 
 - Todos los pedidos entran directamente a Preparación.
