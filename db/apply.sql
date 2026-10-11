@@ -487,4 +487,6 @@
 \ir migrations/0241_order_master_stale_cerrada.sql
 \echo 'Applying 0242_pickup_reminder.sql'
 \ir migrations/0242_pickup_reminder.sql
+\echo 'Applying 0243_telnyx_webrtc_credentials.sql'
+\ir migrations/0243_telnyx_webrtc_credentials.sql
 \echo 'Done.'

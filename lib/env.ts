@@ -56,6 +56,14 @@ export const env = {
     return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
   },
 
+  // Llamar desde la computadora (MOM §8.5): la conexión SIP «de credenciales» de
+  // Telnyx por la que salen las llamadas del navegador. Vacía = el botón no
+  // aparece. TELNYX_WEBRTC_FROM_NUMBER es el número que ve la clienta; vacío =
+  // el mismo del Agente Telnyx. Cambiarlo es cambiar esta variable, nada más.
+  telnyxWebrtcConnectionId: () => (process.env.TELNYX_WEBRTC_CONNECTION_ID ?? "").trim(),
+  telnyxWebrtcFromNumber: () =>
+    (process.env.TELNYX_WEBRTC_FROM_NUMBER || process.env.TELNYX_FROM_NUMBER || "").trim(),
+
   // Número propio del Agente Telnyx (el `?agente=` de su agente en xAI), para
   // que llame a la vez que Daaph. Vacío = comparte número y turno con Daaph.
   voiceAgentNumberTelnyx: () => (process.env.VOICE_AGENT_NUMBER_TELNYX ?? "").trim(),
