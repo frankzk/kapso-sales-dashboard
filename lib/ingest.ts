@@ -190,6 +190,15 @@ export interface StoreCreds {
   olva_arrival_template_enabled: boolean;
   olva_arrival_template_name: string | null;
   olva_arrival_params: string | null;
+  /** Recordatorio de recojo, día 3 y día 7 en la agencia (0242). Interruptor
+   *  y plantilla por courier; la imagen de respaldo es de la tienda. */
+  shalom_reminder_template_enabled: boolean;
+  shalom_reminder_template_name: string | null;
+  shalom_reminder_params: string | null;
+  olva_reminder_template_enabled: boolean;
+  olva_reminder_template_name: string | null;
+  olva_reminder_params: string | null;
+  shalom_reminder_fallback_image_url: string | null;
 }
 
 /**
@@ -339,6 +348,15 @@ export async function getStoreCreds(
     olva_arrival_template_enabled: data.olva_arrival_template_enabled ?? false,
     olva_arrival_template_name: data.olva_arrival_template_name ?? null,
     olva_arrival_params: data.olva_arrival_params ?? null,
+    // Pre-0242 las columnas no existen ⇒ recordatorio apagado; nombres y orden
+    // de variables, espejo de los defaults de la migración.
+    shalom_reminder_template_enabled: data.shalom_reminder_template_enabled ?? false,
+    shalom_reminder_template_name: data.shalom_reminder_template_name ?? "guias_shalom_recordatorio",
+    shalom_reminder_params: data.shalom_reminder_params ?? "nombre,agencia,guia,saldo,vence",
+    olva_reminder_template_enabled: data.olva_reminder_template_enabled ?? false,
+    olva_reminder_template_name: data.olva_reminder_template_name ?? "guias_olva_recordatorio",
+    olva_reminder_params: data.olva_reminder_params ?? "nombre,agencia,guia,saldo,vence",
+    shalom_reminder_fallback_image_url: data.shalom_reminder_fallback_image_url ?? null,
   };
 }
 

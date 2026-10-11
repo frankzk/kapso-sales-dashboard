@@ -178,10 +178,13 @@ function fakeAdmin(
   const inserts: { table: string; row: any }[] = [];
   const updates: { table: string; patch: any }[] = [];
   const anomalies: any[] = [];
+  /** Los filtros `eq`/`in` de cada lectura, para ver CÓMO se busca el aviso. */
+  const filters: { table: string; col: string; val: unknown }[] = [];
   const admin: any = {
     inserts,
     updates,
     anomalies,
+    filters,
     rpc: async (_fn: string, args: any) => {
       anomalies.push(args);
       return { error: null };
@@ -197,7 +200,14 @@ function fakeAdmin(
           return chain;
         },
         select: () => chain,
-        eq: () => chain,
+        eq: (col: string, val: unknown) => {
+          filters.push({ table, col, val });
+          return chain;
+        },
+        in: (col: string, val: unknown) => {
+          filters.push({ table, col, val });
+          return chain;
+        },
         gte: () => chain,
         order: () => chain,
         limit: () => chain,
@@ -308,6 +318,39 @@ describe("handleInboundMessage", () => {
       table: "shalom_transit_notifications",
       patch: { ticket_sent_at: "2026-09-15T16:00:00Z", ticket_error: null },
     });
+  });
+
+  it("el botón de un RECORDATORIO de recojo se contesta igual: saldo, cuenta y ticket (0242)", async () => {
+    // El recordatorio lleva los mismos tres botones. La respuesta se cuelga del
+    // último aviso enviado a ese celular SIN mirar de qué tipo es: un filtro
+    // por `kind` dejaría mudo al aviso nuevo.
+    const admin = fakeAdmin({
+      lastNotification: {
+        id: "notif-rec",
+        order_id: "ord-1",
+        shipment_id: "ship-1",
+        courier: "shalom",
+        kind: "recordatorio_d7",
+        sent_at: "2026-10-11T15:00:00Z",
+        ticket_sent_at: null,
+      },
+    });
+    const sendText = vi.fn().mockResolvedValue({ ok: true, id: "wamid.OUT" });
+    const sendDoc = vi.fn().mockResolvedValue({ ok: true, id: "wamid.DOC" });
+    const res = await handleInboundMessage(admin, "store", CREDS, buttonEvent("Pagar con Yape"), {
+      sendText,
+      sendDocument: sendDoc,
+      nowIso: "2026-10-11T16:00:00Z",
+    });
+    expect(res.reason).toBe("replied:yape;ticket:enviado");
+    expect(sendText.mock.calls[0]![1].body).toBe(YAPE_CON_SALDO);
+    expect(sendDoc).toHaveBeenCalledTimes(1);
+    // El sello del ticket va en la fila del recordatorio, que es la que se contestó.
+    expect(admin.updates.at(-1)).toMatchObject({ table: "shalom_transit_notifications", patch: { ticket_error: null } });
+    // Y la búsqueda del aviso no filtra por tipo.
+    const avisos = admin.filters.filter((f: any) => f.table === "shalom_transit_notifications");
+    expect(avisos.map((f: any) => f.col)).toEqual(expect.arrayContaining(["store_id", "phone", "status"]));
+    expect(avisos.some((f: any) => f.col === "kind")).toBe(false);
   });
 
   it("quien pulsa un SEGUNDO botón recibe el ticket otra vez, debajo de la respuesta", async () => {

@@ -27,6 +27,16 @@
 // aprueba cada texto aparte— y los datos que la rellenan: la «guía» de Olva es
 // su tracking («2552504-26»), no tiene código corto ni ticket, y devuelve a los
 // 6 días y no a los 28. Por eso cada fila de la cola dice de qué courier es.
+//
+// Y UN TERCER AVISO: EL RECORDATORIO DE RECOJO (0242). El de llegada sale una
+// vez y después nada; al 10-10-2026 Kenku tenía 230 pedidos en la agencia
+// debiendo S/ 37.087. El recordatorio sale al día 3 y al día 7 de la llegada
+// (Olva, que devuelve a los 6, solo el del 3) a quien sigue en la agencia y
+// debe saldo. Son dos `kind` de esta misma cola —`recordatorio_d3` y
+// `recordatorio_d7`—, así que la unique (shipment_id, kind) los deja salir una
+// vez cada uno, y comparten número, horario, tope y botones con los otros dos.
+// Lo encola `lib/shalom/pickup-reminder.ts`; aquí solo se envía. Su plantilla
+// lleva la FOTO del producto en la cabecera.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { OLVA_PICKUP_WINDOW_DAYS, formatOlvaTracking } from "@/lib/olva/tracking";
@@ -43,6 +53,9 @@ import type { PaymentGateway } from "@/lib/payment-gateway";
 import { replyFirstName } from "@/lib/wa-reply-templates";
 import { shalomVoucherPdf, signedDocUrl } from "@/lib/shalom/label-cache";
 import { loadStoreShalom } from "@/lib/shalom/session";
+import { firstProductWithImage, waImageUrl, type CatalogImage } from "@/lib/cart-image-test";
+import { AGENCY_AVAILABLE_STATES } from "@/lib/order-master-filters";
+import { env } from "@/lib/env";
 
 /** Los tokens que pueden ir en `stores.shalom_transit_params`. */
 export const TRANSIT_TOKENS = [
@@ -60,8 +73,26 @@ export const TRANSIT_TOKENS = [
 ] as const;
 export type TransitToken = (typeof TRANSIT_TOKENS)[number];
 
-/** Qué aviso es. Comparten cola, número, horario y cuentas; el texto no. */
-export type NoticeKind = "transito" | "disponible";
+/** Los dos recordatorios de recojo (0242): al día 3 y al día 7 de la llegada.
+ *  Dos `kind` y no uno con contador: así la unique (shipment_id, kind) que ya
+ *  existe garantiza que cada uno salga como mucho una vez por guía. */
+export const REMINDER_KINDS = ["recordatorio_d3", "recordatorio_d7"] as const;
+export type ReminderKind = (typeof REMINDER_KINDS)[number];
+
+/** Qué aviso es. Comparten cola, número, horario y cuentas; el texto no. Es
+ *  la misma lista que el `check` de `shalom_transit_notifications.kind`. */
+export const NOTICE_KINDS = ["transito", "disponible", ...REMINDER_KINDS] as const;
+export type NoticeKind = (typeof NOTICE_KINDS)[number];
+
+export function isReminderKind(kind: string | null | undefined): kind is ReminderKind {
+  return (REMINDER_KINDS as readonly string[]).includes(String(kind ?? ""));
+}
+
+/** El `kind` de una fila de la cola. Sin decirlo es el de tránsito: es el que
+ *  ya existía antes de la 0170. */
+export function parseNoticeKind(raw: string | null | undefined): NoticeKind {
+  return (NOTICE_KINDS as readonly string[]).includes(String(raw ?? "")) ? (raw as NoticeKind) : "transito";
+}
 
 /** De qué courier es la guía. Decide la plantilla y los datos; nada más. */
 export type NoticeCourier = "shalom" | "olva";
@@ -70,6 +101,14 @@ export type NoticeCourier = "shalom" | "olva";
 export const TRANSIT_DEFAULT_PARAMS = TRANSIT_TOKENS.filter((t) => t !== "vence").join(",");
 /** El de Olva: lo mismo sin `codigo`, que Olva no tiene. */
 export const OLVA_TRANSIT_DEFAULT_PARAMS = TRANSIT_TOKENS.filter((t) => t !== "vence" && t !== "codigo").join(",");
+/** El del recordatorio de recojo (0242), igual para Shalom y Olva: {{1}}
+ *  nombre, {{2}} agencia, {{3}} guía, {{4}} saldo, {{5}} fecha límite. */
+export const REMINDER_DEFAULT_PARAMS = "nombre,agencia,guia,saldo,vence";
+/** Los nombres de plantilla por omisión del recordatorio (0242). */
+export const REMINDER_DEFAULT_TEMPLATE: Record<NoticeCourier, string> = {
+  shalom: "guias_shalom_recordatorio",
+  olva: "guias_olva_recordatorio",
+};
 
 /** Días que Shalom guarda el paquete antes de devolverlo (MOM §12). */
 export const PICKUP_WINDOW_DAYS = 28;
@@ -280,6 +319,11 @@ export interface TransitConfig {
   language: string;
   tokens: TransitToken[];
   attachTicket: boolean;
+  /** La plantilla lleva cabecera de IMAGEN: la foto del producto (el
+   *  recordatorio de recojo, 0242). Sin imagen no se manda. */
+  headerImage?: boolean;
+  /** La imagen de respaldo de la tienda, para el pedido sin foto. */
+  fallbackImageUrl?: string | null;
   /** Número propio del aviso, o `null` para elegir por lead / tienda. */
   phoneNumberId: string | null;
   storePhoneNumberId: string | null;
@@ -299,19 +343,31 @@ export function transitConfig(
   // y las cuentas son de la tienda y se comparten — encender el de llegada, o
   // el de Olva, no puede obligar a reconfigurar por dónde sale.
   const llegada = kind === "disponible";
+  // Los dos recordatorios (día 3 y día 7) son la MISMA plantilla: lo que los
+  // separa es cuándo salen, no lo que dicen.
+  const recordatorio = isReminderKind(kind);
   const olva = courier === "olva";
-  const enabled = olva
-    ? llegada ? creds.olva_arrival_template_enabled : creds.olva_transit_template_enabled
-    : llegada ? creds.shalom_arrival_template_enabled : creds.shalom_transit_template_enabled;
-  const templateName = olva
-    ? llegada ? creds.olva_arrival_template_name : creds.olva_transit_template_name
-    : llegada ? creds.shalom_arrival_template_name : creds.shalom_transit_template_name;
-  const rawParams = olva
-    ? llegada ? creds.olva_arrival_params : creds.olva_transit_params
-    : llegada ? creds.shalom_arrival_params : creds.shalom_transit_params;
-  // Olva no tiene ticket: su guía es un número y ya.
-  const attach = olva ? false : llegada ? creds.shalom_arrival_attach_ticket : creds.shalom_transit_attach_ticket;
-  const que = `${llegada ? "aviso de llegada" : "aviso"}${olva ? " de Olva" : ""}`;
+  const enabled = recordatorio
+    ? olva ? creds.olva_reminder_template_enabled : creds.shalom_reminder_template_enabled
+    : olva
+      ? llegada ? creds.olva_arrival_template_enabled : creds.olva_transit_template_enabled
+      : llegada ? creds.shalom_arrival_template_enabled : creds.shalom_transit_template_enabled;
+  const templateName = recordatorio
+    ? olva ? creds.olva_reminder_template_name : creds.shalom_reminder_template_name
+    : olva
+      ? llegada ? creds.olva_arrival_template_name : creds.olva_transit_template_name
+      : llegada ? creds.shalom_arrival_template_name : creds.shalom_transit_template_name;
+  const rawParams = recordatorio
+    ? olva ? creds.olva_reminder_params : creds.shalom_reminder_params
+    : olva
+      ? llegada ? creds.olva_arrival_params : creds.olva_transit_params
+      : llegada ? creds.shalom_arrival_params : creds.shalom_transit_params;
+  // Olva no tiene ticket: su guía es un número y ya. El recordatorio lleva la
+  // foto del producto en la cabecera, no el ticket: una cabecera es una sola.
+  const attach = olva || recordatorio
+    ? false
+    : llegada ? creds.shalom_arrival_attach_ticket : creds.shalom_transit_attach_ticket;
+  const que = `${recordatorio ? "recordatorio de recojo" : llegada ? "aviso de llegada" : "aviso"}${olva ? " de Olva" : ""}`;
 
   if (!enabled) return { cfg: null, reason: `${que} apagado en la tienda` };
   if (!templateName) return { cfg: null, reason: `la tienda no tiene plantilla de ${que} configurada` };
@@ -325,6 +381,8 @@ export function transitConfig(
       language: creds.shalom_transit_template_language ?? "es",
       tokens,
       attachTicket: Boolean(attach),
+      headerImage: recordatorio,
+      fallbackImageUrl: recordatorio ? creds.shalom_reminder_fallback_image_url?.trim() || null : null,
       phoneNumberId: creds.shalom_transit_phone_number_id?.trim() || null,
       storePhoneNumberId: creds.whatsapp_phone_number_id,
       apiKey: creds.kapso_api_key,
@@ -412,6 +470,135 @@ interface ShipmentRow {
   agency_branch: string | null;
   province: string | null;
   district: string | null;
+  /** Para el recordatorio (0242): ¿sigue esperando en la agencia? */
+  pickup_state?: string | null;
+  delivery_status?: string | null;
+  /** Olva la escribe al llegar; Shalom no (MOM §12). */
+  agency_arrived_at?: string | null;
+}
+
+// ── Recordatorio de recojo (0242) ───────────────────────────────────────────
+
+/**
+ * Desde cuándo está la guía en la agencia, para el recordatorio. Pura.
+ *
+ * TRES FUENTES, EN ESTE ORDEN:
+ *  1. El PRIMER `courier_status` → `disponible_para_recojo` que el rastreo
+ *     escribió para ESA guía. Es el hecho, y el primero porque Shalom mueve su
+ *     fecha de `destino` mientras el paquete sigue allí (MOM §12, «La llegada
+ *     que cuenta es la primera»).
+ *  2. Cuándo salió el aviso de llegada: si se mandó, el paquete ya estaba.
+ *  3. `shipments.agency_arrived_at`, que llena el rastreo de Olva y Shalom no.
+ *
+ * Sin ninguna, `null`: no se adivina una llegada, y sin llegada no hay día 3
+ * ni fecha límite que decir.
+ */
+export function guideArrivalAt(input: {
+  firstArrivalEventAt: string | null | undefined;
+  arrivalNoticeSentAt: string | null | undefined;
+  agencyArrivedAt: string | null | undefined;
+}): string | null {
+  for (const v of [input.firstArrivalEventAt, input.arrivalNoticeSentAt, input.agencyArrivedAt]) {
+    if (v && Number.isFinite(Date.parse(v))) return v;
+  }
+  return null;
+}
+
+/** Estados de entrega con los que la guía ya no está esperando a nadie. */
+const GUIDE_CLOSED_DELIVERY = ["entregado", "anulado", "transferido", "devuelto"];
+
+/** ¿Sigue la guía esperando a la clienta en la agencia? Pura. La lista de
+ *  sub-estados es la del Master (`AGENCY_AVAILABLE_STATES`): una sola. */
+export function stillAtAgency(pickupState: string | null | undefined, deliveryStatus: string | null | undefined): boolean {
+  if (deliveryStatus && GUIDE_CLOSED_DELIVERY.includes(deliveryStatus)) return false;
+  return (AGENCY_AVAILABLE_STATES as readonly string[]).includes(String(pickupState ?? ""));
+}
+
+/**
+ * Por qué NO mandar un recordatorio que ya está en la cola, o `null`. Pura.
+ *
+ * Se mira OTRA VEZ al enviar porque entre encolar y enviar pueden pasar horas
+ * —el tope y el horario los retienen—: la clienta puede haber recogido el
+ * paquete, o puede haberse pasado el plazo. Un «recógelo antes del 16» el 17
+ * es mentira, y uno a quien ya lo recogió le pide plata por algo que tiene en
+ * la mano. Lo de «ya pagó todo» lo decide `noticeSkipReason`, como para los
+ * otros avisos.
+ */
+export function reminderSendSkipReason(input: {
+  courier: NoticeCourier;
+  pickupState: string | null | undefined;
+  deliveryStatus: string | null | undefined;
+  arrivedAt: string | null | undefined;
+  nowIso: string;
+}): string | null {
+  if (!stillAtAgency(input.pickupState, input.deliveryStatus)) return "la guía ya no está esperando en la agencia";
+  const t = input.arrivedAt ? Date.parse(input.arrivedAt) : NaN;
+  if (!Number.isFinite(t)) return "no se sabe cuándo llegó a la agencia";
+  const limite = t + pickupWindowDays(input.courier) * 24 * 3600 * 1000;
+  if (Date.parse(input.nowIso) >= limite) return "ya pasó la fecha límite de recojo";
+  return null;
+}
+
+/**
+ * La imagen de la cabecera del recordatorio. Pura.
+ *
+ * La foto del primer producto del pedido que la tenga en el espejo de catálogo
+ * —la misma búsqueda que la prueba de carritos (0233): por `product_id` y, si
+ * no, por título—, servida en JPG por /api/wa-image porque Meta no acepta
+ * WebP. Sin foto, la imagen de respaldo de la tienda. Sin ninguna, NO se manda:
+ * la plantilla se aprobó con cabecera de imagen y Meta rechaza un envío sin
+ * ella, así que gastar el intento no sirve de nada.
+ */
+export function reminderHeaderImage(input: {
+  lineItems: unknown;
+  catalog: CatalogImage[];
+  siteUrl: string;
+  storeId: string;
+  fallbackUrl: string | null | undefined;
+}): { ok: true; link: string; source: "producto" | "respaldo" } | { ok: false; reason: string } {
+  const productId = firstProductWithImage(input.lineItems, input.catalog);
+  if (productId) return { ok: true, link: waImageUrl(input.siteUrl, input.storeId, productId), source: "producto" };
+  const fallback = String(input.fallbackUrl ?? "").trim();
+  if (/^https:\/\//i.test(fallback)) return { ok: true, link: fallback, source: "respaldo" };
+  return {
+    ok: false,
+    reason: "sin foto del producto ni imagen de respaldo: la plantilla del recordatorio lleva imagen en la cabecera",
+  };
+}
+
+/** Cuándo llegó ESTA guía a la agencia, leyendo las tres fuentes de
+ *  `guideArrivalAt`. Una lectura que falla cuenta como dato ausente: a lo sumo
+ *  el recordatorio no sale, nunca sale con una fecha inventada. */
+export async function loadGuideArrival(
+  admin: SupabaseClient,
+  input: { shipmentId: string; orderId: string | null; guideCode: string | null; agencyArrivedAt?: string | null },
+): Promise<string | null> {
+  const [evento, aviso] = await Promise.all([
+    input.orderId && input.guideCode
+      ? admin
+          .from("order_events")
+          .select("occurred_at")
+          .eq("order_id", input.orderId)
+          .eq("guide_code", input.guideCode)
+          .eq("kind", "courier_status")
+          .eq("new_operational", "disponible_para_recojo")
+          .order("occurred_at", { ascending: true })
+          .limit(1)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    admin
+      .from("shalom_transit_notifications")
+      .select("sent_at")
+      .eq("shipment_id", input.shipmentId)
+      .eq("kind", "disponible")
+      .eq("status", "sent")
+      .maybeSingle(),
+  ]);
+  return guideArrivalAt({
+    firstArrivalEventAt: ((evento.data ?? null) as { occurred_at: string | null } | null)?.occurred_at ?? null,
+    arrivalNoticeSentAt: ((aviso.data ?? null) as { sent_at: string | null } | null)?.sent_at ?? null,
+    agencyArrivedAt: input.agencyArrivedAt ?? null,
+  });
 }
 
 /**
@@ -614,6 +801,8 @@ export async function processTransitNotifications(
     storeId?: string;
     /** Cuántos avisos ENVIADOS tiene la tienda desde `sinceIso`. Para el tope. */
     countSent?: (storeId: string, sinceIso: string) => Promise<number>;
+    /** De dónde sale la URL pública de /api/wa-image (la foto del recordatorio). */
+    siteUrl?: string;
   } = {},
 ): Promise<TransitReport> {
   const report: TransitReport = { sent: 0, failed: 0, skipped: 0, deferred: 0, errors: [] };
@@ -622,6 +811,14 @@ export async function processTransitNotifications(
   const budget = opts.budgetMs ?? 150_000;
   const send = opts.sendTemplate ?? sendWhatsappTemplate;
   const loadCreds = opts.loadCreds ?? ((id: string) => getStoreCreds(id, admin));
+  // El espejo de catálogo de cada tienda, leído UNA vez por pasada y solo si
+  // sale algún recordatorio: son unos cientos de filas y casi no cambian.
+  const catalogs = new Map<string, Promise<CatalogImage[]>>();
+  const loadCatalog = (storeId: string): Promise<CatalogImage[]> => {
+    if (!catalogs.has(storeId)) catalogs.set(storeId, loadStoreCatalog(admin, storeId));
+    return catalogs.get(storeId)!;
+  };
+  const siteUrl = opts.siteUrl ?? env.siteUrl();
   const countSent =
     opts.countSent ??
     (async (storeId: string, sinceIso: string): Promise<number> => {
@@ -720,7 +917,7 @@ export async function processTransitNotifications(
       continue;
     }
 
-    const kind: NoticeKind = row.kind === "disponible" ? "disponible" : "transito";
+    const kind: NoticeKind = parseNoticeKind(row.kind);
     const courier: NoticeCourier = row.courier === "olva" ? "olva" : "shalom";
     const claveCfg = `${row.store_id}:${kind}:${courier}`;
     if (!credsByStore.has(row.store_id)) {
@@ -761,7 +958,7 @@ export async function processTransitNotifications(
       continue;
     }
 
-    const outcome = await sendOne(admin, row, cfg, { nowIso, send, kind });
+    const outcome = await sendOne(admin, row, cfg, { nowIso, send, kind, loadCatalog, siteUrl });
     const cuenta = enviados.get(row.store_id);
     if (outcome === "sent" && cuenta) {
       cuenta.day += 1;
@@ -786,10 +983,27 @@ async function sendOne(
   admin: SupabaseClient,
   row: TransitQueueRow,
   cfg: TransitConfig,
-  ctx: { nowIso: string; send: SendTemplate; kind?: NoticeKind },
+  ctx: {
+    nowIso: string;
+    send: SendTemplate;
+    kind?: NoticeKind;
+    /** El espejo de catálogo de la tienda, para la foto del recordatorio. */
+    loadCatalog?: (storeId: string) => Promise<CatalogImage[]>;
+    siteUrl?: string;
+  },
 ): Promise<"sent" | "failed" | "retry" | "skipped"> {
   const attempts = (row.attempts ?? 0) + 1;
   const courier = cfg.courier ?? "shalom";
+  const recordatorio = isReminderKind(ctx.kind);
+
+  /** Cerrar la fila sin mandar: no es un fallo, es que ya no toca. */
+  const skip = async (motivo: string, patch: Record<string, unknown> = {}): Promise<"skipped"> => {
+    await admin
+      .from("shalom_transit_notifications")
+      .update({ status: "skipped", error: motivo, updated_at: ctx.nowIso, ...patch })
+      .eq("id", row.id);
+    return "skipped";
+  };
 
   const fail = async (
     error: string,
@@ -814,7 +1028,7 @@ async function sendOne(
   const { data: sh } = await admin
     .from("shipments")
     .select(
-      "id,guide_code,shalom_codigo,shalom_ose_id,olva_tracking,olva_emision,customer_name,customer_phone,agency_branch,province,district,created_via",
+      "id,guide_code,shalom_codigo,shalom_ose_id,olva_tracking,olva_emision,customer_name,customer_phone,agency_branch,province,district,created_via,pickup_state,delivery_status,agency_arrived_at",
     )
     .eq("id", row.shipment_id)
     .maybeSingle();
@@ -837,17 +1051,34 @@ async function sendOne(
     validatedAmount: facts.validatedAmount,
     webPrepaid,
   });
-  if (noAvisar) {
-    await admin
-      .from("shalom_transit_notifications")
-      .update({ status: "skipped", error: noAvisar, updated_at: ctx.nowIso })
-      .eq("id", row.id);
-    return "skipped";
+  if (noAvisar) return skip(noAvisar);
+
+  // El recordatorio (0242) además tiene que seguir siendo verdad AL ENVIAR: el
+  // paquete sigue en la agencia y el plazo no ha pasado. Su llegada se lee por
+  // guía y la primera, como en `guideArrivalAt` — la misma que usó quien lo
+  // encoló, para que la fecha límite del mensaje sea la que decidió el día 3.
+  let llegada = arrivedAt;
+  if (recordatorio) {
+    llegada = await loadGuideArrival(admin, {
+      shipmentId: row.shipment_id,
+      orderId: row.order_id,
+      guideCode: shipment.guide_code,
+      agencyArrivedAt: shipment.agency_arrived_at ?? null,
+    });
+    const yaNo = reminderSendSkipReason({
+      courier,
+      pickupState: shipment.pickup_state,
+      deliveryStatus: shipment.delivery_status,
+      arrivedAt: llegada,
+      nowIso: ctx.nowIso,
+    });
+    if (yaNo) return skip(yaNo);
   }
-  // La fecha límite solo la pide el aviso de llegada; se calcula siempre
-  // porque cuesta nada y así `transitBodyParams` decide con el dato delante.
-  // Con los días de CADA courier: Olva devuelve a los 6, Shalom a los 28.
-  facts.pickupDeadline = pickupDeadlineLabel(arrivedAt, cfg.timezone, pickupWindowDays(courier));
+  // La fecha límite solo la piden el aviso de llegada y el recordatorio; se
+  // calcula siempre porque cuesta nada y así `transitBodyParams` decide con el
+  // dato delante. Con los días de CADA courier: Olva devuelve a los 6, Shalom
+  // a los 28.
+  facts.pickupDeadline = pickupDeadlineLabel(llegada, cfg.timezone, pickupWindowDays(courier));
 
   if (!phone || !isSendablePhone(phone)) {
     return fail(`sin celular peruano al que escribir (${phone ?? "vacío"})`, { retryable: false, patch: { phone } });
@@ -864,6 +1095,25 @@ async function sendOne(
       retryable: true,
       patch: { phone, phone_number_id: phoneNumberId },
     });
+  }
+
+  // La foto del producto en la cabecera del recordatorio (0242). Sin foto ni
+  // imagen de respaldo NO se manda: Meta rechaza una plantilla de cabecera de
+  // imagen que llega sin ella, y reintentarlo no la hace aparecer.
+  let headerImage: { link: string } | undefined;
+  let imageSource: "producto" | "respaldo" | null = null;
+  if (cfg.headerImage) {
+    const catalog = ctx.loadCatalog ? await ctx.loadCatalog(row.store_id) : [];
+    const img = reminderHeaderImage({
+      lineItems: facts.lineItems,
+      catalog,
+      siteUrl: ctx.siteUrl ?? env.siteUrl(),
+      storeId: row.store_id,
+      fallbackUrl: cfg.fallbackImageUrl,
+    });
+    if (!img.ok) return skip(img.reason, { phone, phone_number_id: phoneNumberId });
+    headerImage = { link: img.link };
+    imageSource = img.source;
   }
 
   // El ticket de Shalom en cabecera, si la tienda lo pide. Se baja (o se lee de
@@ -904,11 +1154,15 @@ async function sendOne(
         language: cfg.language,
         bodyParams: built.params,
         ...(headerDocument ? { headerDocument } : {}),
+        ...(headerImage ? { headerImage } : {}),
       },
     );
   } catch (e) {
     res = { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+
+  // La foto que viajó, solo cuando hubo una: la columna es de la 0242.
+  const imagen = headerImage ? { header_image_url: headerImage.link } : {};
 
   if (!res.ok) {
     // Una llamada ambigua —la petición pudo llegar a Meta y la respuesta no
@@ -917,7 +1171,7 @@ async function sendOne(
     return fail(res.error ?? "envío rechazado", {
       retryable: !res.ambiguous,
       code: res.code,
-      patch: { phone, phone_number_id: phoneNumberId, template_name: cfg.templateName, params: built.params },
+      patch: { phone, phone_number_id: phoneNumberId, template_name: cfg.templateName, params: built.params, ...imagen },
     });
   }
 
@@ -935,6 +1189,7 @@ async function sendOne(
       error: null,
       error_code: null,
       updated_at: ctx.nowIso,
+      ...imagen,
       // Aquí NO se sella `ticket_sent_at`, aunque el ticket haya viajado en la
       // cabecera. Medido en el chat real: encima de un mensaje de quince líneas
       // el adjunto queda arriba del todo y pasa desapercibido justo cuando la
@@ -947,7 +1202,13 @@ async function sendOne(
   if (row.order_id) {
     // Queda en la línea de tiempo del pedido, al lado del `courier_status` que
     // lo disparó: quien mire el pedido tiene que ver que se avisó y con qué.
-    const que = ctx.kind === "disponible" ? "Aviso de llegada a la agencia" : "Aviso de guía en tránsito";
+    const que = recordatorio
+      ? `Recordatorio de recojo (día ${ctx.kind === "recordatorio_d7" ? 7 : 3})`
+      : ctx.kind === "disponible"
+        ? "Aviso de llegada a la agencia"
+        : "Aviso de guía en tránsito";
+    const conImagen =
+      imageSource === "producto" ? " con la foto del producto" : imageSource === "respaldo" ? " con la imagen de respaldo" : "";
     await admin.from("order_events").insert({
       store_id: row.store_id,
       order_id: row.order_id,
@@ -959,7 +1220,7 @@ async function sendOne(
       guide_code: shipment.guide_code,
       note: `📤 ${que}: plantilla «${cfg.templateName}» enviada${
         orderName ? ` por ${orderName}` : ""
-      }${headerDocument ? " con el ticket de Shalom" : ""}.`,
+      }${headerDocument ? " con el ticket de Shalom" : ""}${conImagen}.`,
     });
   }
   return "sent";
@@ -1039,6 +1300,29 @@ export async function sendTransitTicket(
   } catch (e) {
     await stamp({ ticket_error: e instanceof Error ? e.message : String(e) }).catch(() => {});
     return { sent: false, reason: "error" };
+  }
+}
+
+/**
+ * Los productos CON foto del espejo de catálogo de una tienda (0164), para la
+ * cabecera del recordatorio. La misma lectura que la prueba de carritos
+ * (lib/cart-sequence.ts). Si falla, lista vacía: el recordatorio cae a la
+ * imagen de respaldo o no sale, nunca sale sin imagen.
+ */
+async function loadStoreCatalog(admin: SupabaseClient, storeId: string): Promise<CatalogImage[]> {
+  try {
+    const { data, error } = await admin
+      .from("shopify_product_images")
+      .select("product_id,catalog_title,image_url")
+      .eq("store_id", storeId);
+    if (error) return [];
+    return ((data ?? []) as (CatalogImage & { image_url: string | null })[])
+      // Solo lo que /api/wa-image acepta servir (el CDN de Shopify): otra foto
+      // daría a Meta un 404 en la cabecera y el envío fallaría.
+      .filter((r) => /^https:\/\/cdn\.shopify\.com\//.test(r.image_url ?? ""))
+      .map((r) => ({ product_id: String(r.product_id), catalog_title: r.catalog_title ?? null }));
+  } catch {
+    return [];
   }
 }
 
