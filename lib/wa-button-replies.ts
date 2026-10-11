@@ -1,4 +1,6 @@
 // Respuestas automáticas a los botones del aviso de guía en tránsito (MOM §12).
+// Y de los otros dos avisos de la misma cola —llegada y recordatorio de recojo
+// (0242)—, que llevan los mismos botones y se contestan igual.
 //
 // La plantilla `guias_shalom` termina con tres botones: «Pagar con Yape»,
 // «Transferencia Depósito» y «Link de pago». Un botón pulsado llega como un
@@ -662,6 +664,12 @@ const SIN_AVISO: TransitContext = {
  * pedido y qué saldo habla, y para saber a qué guía mandarle el ticket. Sin
  * aviso previo se contesta igual, sin cifras y sin ticket — el botón pudo venir
  * de otra conversación.
+ *
+ * DE CUALQUIER TIPO, A PROPÓSITO: tránsito, llegada o recordatorio de recojo
+ * (0242). Los tres llevan los mismos botones de cobro, así que el botón de un
+ * recordatorio se contesta igual que el de los otros — mismo saldo
+ * recalculado y, si es de Shalom, el mismo ticket detrás. No se filtra por
+ * `kind`: un filtro aquí es el sitio donde un aviso nuevo se quedaría mudo.
  */
 async function latestTransitContext(
   admin: SupabaseClient,

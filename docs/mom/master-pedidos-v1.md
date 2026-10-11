@@ -5266,8 +5266,9 @@ salen solo con eso y después por los días que llevan en su etapa.
     el texto, no los datos.
     - **Tope de envío por tienda** (0194, 28-09-2026): máximo por día —en 24 h
       móviles, que es como lo mide WhatsApp— y máximo por hora, contando los
-      avisos de Shalom y Olva, tránsito y llegada, juntos. Nace en **30/día y
-      8/hora** y se sube desde Ajustes a medida que el número gane calidad.
+      avisos de Shalom y Olva, tránsito, llegada y recordatorio de recojo,
+      juntos. Nace en **30/día y 8/hora** y se sube desde Ajustes a medida que
+      el número gane calidad.
       - **Por qué.** Ese día WhatsApp bloqueó el 600, desde el que salían estos
         avisos: venía mandando 50-75 plantillas al día a clientas que nunca le
         habían escrito. El número que lo reemplace es nuevo, y un número nuevo
@@ -5320,11 +5321,13 @@ salen solo con eso y después por los días que llevan en su etapa.
       amenaza — «recógelo lo antes posible» y, sobre todo, «paga ahora y al
       llegar solo retiras», que es urgencia que le sirve A ELLA: con el cobro
       validado, la clave está lista cuando llegue al mostrador. El token
-      `vence` existe en el código por si algún día hace falta (un recordatorio
-      cerca del plazo), pero no entra en el orden por omisión.
+      `vence` existe en el código por si algún día hace falta, pero no entra
+      en el orden por omisión del aviso de llegada. Lo usa el recordatorio de
+      recojo (0242, abajo).
     - **Una fila por guía y por tipo.** La unique pasó de `shipment_id` a
       `(shipment_id, kind)`: una misma guía recibe el de tránsito y, días
-      después, el de llegada — pero ninguno de los dos dos veces.
+      después, el de llegada — pero ninguno de los dos dos veces. Los dos
+      recordatorios de recojo (0242) son dos tipos más con la misma garantía.
     - **Interruptores separados, número compartido.** Encender uno no enciende
       el otro, porque cada plantilla se aprueba aparte en Meta. El número, el
       horario y las cuentas de cobro son de la tienda y valen para los dos.
@@ -5332,6 +5335,84 @@ salen solo con eso y después por los días que llevan en su etapa.
       con saldo** (173 de Kenku y 40 de Aurela, ~S/ 34.000) a las que nunca se
       les escribió, porque llegaron antes de que esto existiera o su tránsito
       ocurrió con el aviso apagado. Ese es el hueco que cierra el segundo aviso.
+  - **El recordatorio de recojo: un tercer aviso, al día 3 y al día 7**
+    (0242, aprobado por el owner el 11-10-2026). El de llegada sale una vez,
+    el día que el paquete llega, y después nada.
+    - **Por qué.** Medido el 10-10-2026: Kenku tenía **230 pedidos en la
+      agencia** (Shalom 224, Olva 6) que todavía debían el saldo, **S/ 37.087**
+      en total — 82 llegados hace 3 días o menos, 28 de 4 a 7 días, 39 de 8 a
+      14, 36 de 15 a 21, 9 de 22 o más (Shalom devuelve a los 28) y 36 sin
+      fecha de llegada conocida. Un paquete que se queda en el mostrador sin
+      cobrar vuelve a Lima con el flete pagado dos veces.
+    - **Cuándo.** Al **día 3** y al **día 7** desde que la guía quedó
+      `disponible_para_recojo`. **Olva solo el del día 3**: guarda el paquete
+      6 días (`OLVA_PICKUP_WINDOW_DAYS`) y un «día 7» de Olva no existe.
+      **Nunca después de la fecha límite del courier** (28 días Shalom, 6
+      Olva): un «recógelo antes del 16» el 17 es mentira.
+    - **Desde cuándo cuenta.** Shalom no llena `shipments.agency_arrived_at`.
+      La llegada es, en este orden: el **primer** `courier_status` →
+      `disponible_para_recojo` que el rastreo escribió **para esa guía** (la
+      misma regla de «La llegada que cuenta es la primera», abajo); si no hay,
+      cuándo salió el aviso de llegada; si tampoco, `agency_arrived_at` (Olva
+      sí la escribe). Sin ninguna no se adivina: no hay recordatorio.
+    - **A quién.** A la guía que **sigue en la agencia** (`pickup_state` en la
+      lista del Master de «disponible»: `disponible_para_recojo`,
+      `pendiente_de_recojo`; sin `entregado`, `anulado`, `devuelto` ni
+      `transferido`) y cuyo pedido **todavía debe**: las mismas reglas de
+      cobro que los otros dos avisos — ni «ya pagó todo», ni «pagado en el
+      checkout», ni un pedido cerrado; sin total conocido tampoco, porque el
+      saldo es la mitad del mensaje. Se mira **al encolar** —para no llenar la
+      cola de filas que se van a omitir— y **otra vez al enviar**, junto con
+      que siga en la agencia y en plazo: el tope y el horario pueden retenerlo
+      horas, y en ese rato pudo pagar o recogerlo. La fila queda `skipped` con
+      el motivo.
+    - **Una vez cada uno, y nunca dos de golpe.** Son dos tipos de la misma
+      cola, `recordatorio_d3` y `recordatorio_d7`: la unique `(shipment_id,
+      kind)` hace que cada uno salga como mucho una vez por guía, sin tocar la
+      garantía que ya existía (un único `recordatorio` con contador habría
+      obligado a cambiarla). Se encola **solo el más avanzado que ya toca**:
+      al encenderlo por primera vez, una guía que lleva 10 días en la agencia
+      recibe el de día 7 y **nunca** el de día 3. Y no entra un recordatorio
+      con otro aviso de esa guía todavía en la cola, ni a menos de **48 h**
+      de otro enviado: el de día 3 retenido por el tope no sale el mismo día
+      que el de día 7, ni el recordatorio pisa a un aviso de llegada que salió
+      tarde.
+    - **Quién lo encola.** El cron de cada courier, **antes de drenar** la cola:
+      `shalom-reconcile` las guías de Shalom y `olva-reconcile` las de Olva.
+      Sale por el mismo envío que los otros: **mismo número, horario, tope y
+      botones**. Para no tapar a los avisos que no pueden esperar —el primer
+      encendido en Kenku metería ~140 de golpe y un «va en camino» saldría un
+      día tarde— una tienda no tiene más de **10 recordatorios esperando** en
+      la cola a la vez; lo que vence antes entra primero, y el resto entra en
+      las pasadas siguientes. Un pedido con dos guías en la agencia recibe uno
+      por pasada. Si una lectura (pagos, avisos, llegadas) falla, **no se
+      encola nada**: un pago que no se pudo leer no es «no pagó».
+    - **La plantilla.** Propia, aprobada aparte en Meta:
+      `guias_shalom_recordatorio` (Olva: `guias_olva_recordatorio`), idioma
+      `es`. Cuerpo: {{1}} nombre, {{2}} agencia, {{3}} guía, {{4}} saldo y
+      {{5}} **la fecha límite** (`vence`, con `pickupDeadlineLabel`). El orden
+      se configura como el de los otros avisos. Aquí sí va la fecha, a
+      diferencia del aviso de llegada: el día 3 o el 7 ya no es «tienes 28
+      días», es «se te está pasando», y la fecha es lo que la clienta necesita.
+    - **La cabecera es una IMAGEN: la foto del producto.** La misma búsqueda
+      que la prueba de carritos (0233): el espejo `shopify_product_images`,
+      por `product_id` y, si no, por título contra `catalog_title`; en un
+      pedido de varios productos, **el primero que tenga foto**. Va servida en
+      JPG por `/api/wa-image`, porque Meta no acepta WebP. Sin foto, la
+      **imagen de respaldo** de la tienda (Ajustes, una para los dos
+      couriers, `https://`). **Sin ninguna de las dos no se manda** y la fila
+      queda `skipped` con el motivo: Meta rechaza una plantilla de cabecera de
+      imagen sin imagen. La URL que viajó queda en la fila
+      (`header_image_url`). No lleva el ticket de Shalom en la cabecera —es
+      una sola—, pero el ticket **sí sale al pulsar cualquier botón**, como
+      con los otros avisos.
+    - **Los botones se contestan igual.** La respuesta se cuelga del último
+      aviso enviado a ese celular **sea del tipo que sea**: mismo saldo
+      recalculado, mismas cuentas, mismo «Link de pago» y el ticket detrás si
+      es de Shalom.
+    - **Nace apagado**, por tienda y por courier («Recordatorio de recojo» en
+      Ajustes, junto al aviso de llegada de cada courier). Encender el de
+      Shalom no enciende el de Olva.
   - **La clave de recojo nunca va en el mensaje.** Guía, código y agencia sin la
     clave no abren nada; la clave se entrega desde la salida, con el cobro
     validado y con auditoría. Esta regla no cambia.
@@ -5861,6 +5942,12 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   es la oficina que el rastreo apuntó al llegar. Los interruptores y las
   plantillas de Olva se configuran en Ajustes, aparte de los de Shalom; con el
   aviso apagado la cola cierra la fila como omitida y no manda nada.
+- **El recordatorio de recojo de Olva** (0242): el mismo de Shalom (ver
+  «El recordatorio de recojo» arriba), **solo el del día 3** —Olva devuelve a
+  los 6—, con su plantilla `guias_olva_recordatorio`, su interruptor apagado de
+  nacimiento y `vence` a 6 días. La llegada sale de `agency_arrived_at`, que el
+  rastreo de Olva sí escribe, si no hay antes un `courier_status` de esa guía.
+  Lo encola `olva-reconcile` antes de drenar la cola.
 
 #### Cotejar Olva: el tracking sale del portal de clientes (migración 0218, decidido el 02-10-2026)
 

@@ -2071,3 +2071,34 @@ desafío. Solo cambia desde qué red sale la petición, igual que elegir la regi
    quienes deben verla en Kapta.
 3. **Grupo de Telegram** con esas personas y el bot de la tienda; su chat id en
    Ajustes → Telegram → Alertas urgentes («Buscar grupos» lo encuentra).
+
+### 11-10-2026 · Recordatorio de recojo, día 3 y día 7 en la agencia (0242, MOM §12)
+
+1. **Migración `0242_pickup_reminder.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0242_pickup_reminder.sql`. Amplía el
+   `check` de `shalom_transit_notifications.kind` con `recordatorio_d3` y
+   `recordatorio_d7`, añade `shalom_transit_notifications.header_image_url` y
+   en `stores` los interruptores (apagados), plantillas, orden de variables e
+   imagen de respaldo del recordatorio. Sin ella, los crons de Shalom y Olva
+   siguen funcionando y reportan el error en `errors`; no se encola nada.
+2. **Las plantillas en Meta**, en la WABA del número de los avisos:
+   `guias_shalom_recordatorio` y `guias_olva_recordatorio`, idioma `es`,
+   **cabecera de IMAGEN**, cuerpo con cinco variables en este orden: nombre,
+   agencia, guía, saldo, fecha límite; y los tres botones de respuesta rápida
+   de siempre («Pagar con Yape», «Transferencia / Depósito», «Link de pago»).
+3. **Con la plantilla aprobada**, Ajustes → Avisos de guía Shalom →
+   «Recordatorio de recojo»: comprobar nombre y orden
+   (`nombre,agencia,guia,saldo,vence`), poner una **imagen de respaldo** (JPG o
+   PNG por https) para los pedidos sin foto de catálogo, y encender. Lo mismo
+   en Avisos de guía Olva cuando su plantilla esté aprobada.
+4. **`NEXT_PUBLIC_SITE_URL` tiene que ser la URL pública real**: de ahí sale
+   la foto del producto (`/api/wa-image/...`) que Meta baja al enviar.
+
+**Qué mirar después.** El informe de `/api/cron/shalom-reconcile` (y de
+`olva-reconcile`) trae `recordatorios: { tiendas, guias, encolados, porTope,
+motivos }`. El primer encendido en Kenku tiene ~140 guías por recordar (93
+ya en el día 7 o más; medido el 11-10-2026): entran de a 10 por tienda
+(`porTope` cuenta las que esperan) y salen con el tope diario de siempre, así
+que la tanda tarda uno o dos días. Cada envío queda en
+la línea de tiempo («Recordatorio de recojo (día 3)…») y la foto que viajó en
+`shalom_transit_notifications.header_image_url`.
