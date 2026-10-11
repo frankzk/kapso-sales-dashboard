@@ -2,6 +2,24 @@
 
 export const GROUP_GF_YAPE_PERCENTAGE = 3.5;
 
+/**
+ * Corte del mismo día (MOM §29.6): lo que se toma hasta esta hora de Lima sale
+ * hoy por la tarde (Alexis recoge 12:30 y cubre todo Lima); lo de después,
+ * mañana. Es el valor por defecto: manda `logistics_providers.same_day_cutoff`.
+ */
+export const GF_SAME_DAY_CUTOFF_DEFAULT = "12:00";
+
+/** Minuto del día de un corte «HH:MM»; uno ilegible cae en el corte por defecto. */
+export function sameDayCutoffMinute(value: string | null | undefined): number {
+  const match = /^(\d{1,2}):(\d{2})/.exec(value ?? "") ?? /^(\d{1,2}):(\d{2})/.exec(GF_SAME_DAY_CUTOFF_DEFAULT)!;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+/** «HH:MM» del corte vigente, para mostrarlo tal cual lo guarda el proveedor. */
+export function sameDayCutoffLabel(value: string | null | undefined): string {
+  return /^\d{1,2}:\d{2}/.test(value ?? "") ? value!.slice(0, 5) : GF_SAME_DAY_CUTOFF_DEFAULT;
+}
+
 export type CourierOutcome =
   | "entregado"
   | "rechazado"

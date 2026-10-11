@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getAccessibleStores, getAdminOrgs, getCurrentUser } from "@/lib/access";
 import { getDispatchWorkspaceData, type DispatchWorkspaceData } from "@/lib/dispatch-access";
+import { canOperateGroupGf } from "@/lib/permissions";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import {
   resolveDistrictAvailability,
@@ -43,7 +44,7 @@ import { lookupDispatchShipment } from "@/app/dashboard/pedidos/despacho/actions
 import { previousLabelNote } from "@/lib/scan-other-box";
 import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
-import { custodyOnAssign, isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
+import { custodyOnAssign, GF_SAME_DAY_CUTOFF_DEFAULT, isRiderPickupMode, sameDayCutoffMinute, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import { BLOCKED_REASON_LABEL, programDayLabel, programNeedsConfirm, takenIsAssignable, type BlockedReason } from "@/lib/dispatch-day";
 import { pastBoxDecision, pastBoxMessage, receivedFromLabel } from "@/lib/gf-scan-return";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
@@ -99,6 +100,8 @@ export interface CourierConfigSnapshot {
   districts: PeruDistrictRow[];
   yapePercentage: number;
   canManageDispatch: boolean;
+  /** Tarifario, contratos, pago de motorizados y exceso de efectivo (§29.9, §29.10). */
+  canManageLogistics: boolean;
   operations: CourierOperationsSnapshot;
 }
 
@@ -234,25 +237,47 @@ const EMPTY_OPERATIONS: CourierOperationsSnapshot = {
   sourceCount: 0,
 };
 
-async function requireManager(
+type ManagerAuth = { userId: string; canManageDispatch: boolean; canManageLogistics: boolean };
+
+/**
+ * Quién entra: `operar` es Despacho del día (tomar, asignar, programar,
+ * recibir en oficina) y lo hace cualquiera con `dispatch.manage` o
+ * `logistics.manage` (decisión del 11-10-2026, MOM §29.10). `administrar` es
+ * tarifario, contratos y pago de motorizados: solo `logistics.manage`.
+ */
+async function requireCourierAccess(
   orgId: string,
-): Promise<{ userId: string; canManageDispatch: boolean } | { error: string }> {
+  level: "operar" | "administrar",
+): Promise<ManagerAuth | { error: string }> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const [permissions, memberships] = await Promise.all([
     getMasterPermissions(),
     getAdminOrgs(),
   ]);
-  if (!permissions.can("logistics.manage")) {
-    return { error: "No tienes permiso para administrar Grupo GF Courier." };
+  const allowed = level === "administrar" ? permissions.can("logistics.manage") : canOperateGroupGf(permissions.can);
+  if (!allowed) {
+    return { error: level === "administrar" ? "No tienes permiso para administrar Grupo GF Courier." : "No tienes permiso para operar Grupo GF Courier." };
   }
   if (!memberships.some((membership) => membership.org_id === orgId)) {
     return { error: "No perteneces a esta organización." };
   }
-  return { userId: user.id, canManageDispatch: permissions.can("dispatch.manage") };
+  return {
+    userId: user.id,
+    canManageDispatch: permissions.can("dispatch.manage"),
+    canManageLogistics: permissions.can("logistics.manage"),
+  };
 }
 
-type ManagerAuth = { userId: string; canManageDispatch: boolean };
+/** Tarifario, contratos y pago de motorizados: solo `logistics.manage`. */
+function requireManager(orgId: string) {
+  return requireCourierAccess(orgId, "administrar");
+}
+
+/** Despacho del día: cualquiera que despache o administre el courier. */
+function requireOperator(orgId: string) {
+  return requireCourierAccess(orgId, "operar");
+}
 
 /**
  * Qué hace una acción al terminar. Desde la lista, recalcula el Master y
@@ -316,14 +341,9 @@ function limaClock(now = new Date()): { day: string; minute: number } {
   };
 }
 
-function cutoffMinute(value: string | null | undefined): number {
-  const match = /^(\d{1,2}):(\d{2})/.exec(value ?? "");
-  return match ? Number(match[1]) * 60 + Number(match[2]) : 11 * 60 + 30;
-}
-
 function scheduledDay(cutoff: string | null | undefined, now = new Date()): string {
   const current = limaClock(now);
-  return current.minute <= cutoffMinute(cutoff) ? current.day : nextDay(current.day);
+  return current.minute <= sameDayCutoffMinute(cutoff) ? current.day : nextDay(current.day);
 }
 
 type OperationsConfig = {
@@ -794,7 +814,7 @@ async function loadCourierOperations(
       districtKey,
       tariffId: tariff.tariff.id,
       tariffAmount: tariff.tariff.delivery_amount,
-      // Programado: sale ese día. Si no, hoy o mañana según el corte de las 11:30.
+      // Programado: sale ese día. Si no, hoy o mañana según el corte del mismo día (12:00).
       scheduledFor: program?.scheduled_for ?? scheduledDay(config.provider.same_day_cutoff),
       hasPriorDispatch: lastDispatchByOrder.has(order.order_id),
       lastDispatchedAt: lastDispatchByOrder.get(order.order_id) ?? null,
@@ -987,7 +1007,7 @@ async function loadCourierOperations(
 }
 
 export async function loadCourierConfig(orgId: string): Promise<CourierConfigSnapshot> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) {
     return {
       provider: null,
@@ -997,6 +1017,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
       districts: [],
       yapePercentage: 3.5,
       canManageDispatch: false,
+      canManageLogistics: false,
       operations: EMPTY_OPERATIONS,
     };
   }
@@ -1032,6 +1053,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
       districts,
       yapePercentage: 3.5,
       canManageDispatch: auth.canManageDispatch,
+      canManageLogistics: auth.canManageLogistics,
       operations: EMPTY_OPERATIONS,
     };
   }
@@ -1098,6 +1120,7 @@ export async function loadCourierConfig(orgId: string): Promise<CourierConfigSna
     districts,
     yapePercentage: Number(fee?.percentage ?? 3.5),
     canManageDispatch: auth.canManageDispatch,
+    canManageLogistics: auth.canManageLogistics,
     operations,
   };
 }
@@ -1121,7 +1144,7 @@ export async function takeGroupGfCourierOrders(
   orderIds: string[],
   opts: { scheduledFor?: string | null; dispatchDay?: string | null; tandersConfirmations?: TandersConfirmations } = {},
 ): Promise<TakeCourierOrdersResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return { ...auth, accepted: [], alreadyAccepted: [], failed: [] };
   return takeOrdersCore(auth, orgId, orderIds, opts, IMMEDIATE_EFFECTS);
 }
@@ -1307,12 +1330,12 @@ async function takeOrdersCore(
         continue;
       }
 
-      // El corte (11:30) fija el primer día posible; el supervisor puede
+      // El corte del mismo día (12:00) fija el primer día posible; el supervisor puede
       // pedir uno posterior (modo escaneo, §29.13), nunca uno anterior.
       const earliest = scheduledDay(check.sameDayCutoff);
       // `dispatchDay` viene de la mesa de despacho con el paquete en la mano
-      // (Despacho del día): ese día manda, también después del corte de las
-      // 11:30. El corte solo rige lo que se toma sin despachar todavía.
+      // (Despacho del día): ese día manda, también después del corte del
+      // mismo día. El corte solo rige lo que se toma sin despachar todavía.
       const dispatchDay = opts.dispatchDay && DATE_RE.test(opts.dispatchDay) && opts.dispatchDay >= limaClock().day ? opts.dispatchDay : null;
       const scheduledFor = dispatchDay ?? (opts.scheduledFor && DATE_RE.test(opts.scheduledFor) && opts.scheduledFor > earliest ? opts.scheduledFor : earliest);
       const requestId = randomUUID();
@@ -1586,7 +1609,7 @@ export interface AssignCourierRouteResult extends CourierActionResult {
  * Lima» hasta que se asigne otra vez.
  */
 export async function returnUndeliveredToOffice(orgId: string, orderIds: string[]): Promise<CourierActionResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   const ids = [...new Set(orderIds.filter(Boolean))];
@@ -1619,7 +1642,7 @@ export async function returnUndeliveredToOffice(orgId: string, orderIds: string[
 export async function returnUndeliveredByCode(orgId: string, rawCode: string): Promise<CourierActionResult & { orderName?: string | null }> {
   const code = normalizeDispatchScan(rawCode).slice(0, 200);
   if (!code) return { error: "Escanea el QR o escribe el código del paquete." };
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
   const admin = createAdminSupabase();
   let orderId: string | null = null;
@@ -1710,7 +1733,7 @@ export async function rescheduleGroupGfCourierOrders(
   day: string,
   rawReason = "",
 ): Promise<CourierActionResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   if (!DATE_RE.test(day)) return { error: "Elige una fecha válida." };
@@ -1779,7 +1802,7 @@ export async function rescheduleGroupGfCourierOrders(
 
 /** «Quitar la fecha»: el pedido vuelve a su apartado de siempre. Queda en el historial. */
 export async function clearGroupGfCourierPrograms(orgId: string, orderIds: string[]): Promise<CourierActionResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   const ids = [...new Set(orderIds.filter(Boolean))];
@@ -1807,7 +1830,7 @@ export async function clearGroupGfCourierPrograms(orgId: string, orderIds: strin
 }
 
 export async function takeAndAssignGroupGfCourierOrders(orgId: string, riderId: string, orderIds: string[], opts: { overrideCash?: boolean; scheduledFor?: string | null; day?: string | null; confirmProgrammed?: boolean; tandersConfirmations?: TandersConfirmations } = {}): Promise<CourierActionResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   const admin = createAdminSupabase();
@@ -1847,7 +1870,7 @@ export async function assignGroupGfCourierRoute(
   requestIds: string[],
   opts: { overrideCash?: boolean; day?: string | null; confirmProgrammed?: boolean } = {},
 ): Promise<AssignCourierRouteResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return { ...auth, assigned: 0, manifestIds: [], failed: [] };
   return assignRouteCore(auth, orgId, riderId, requestIds, opts, IMMEDIATE_EFFECTS);
 }
@@ -2069,8 +2092,12 @@ async function assignRouteCore(
       warningAmount: amount((provider as { cash_warning_amount?: unknown }).cash_warning_amount),
       limitAmount: amount((provider as { cash_limit_amount?: unknown }).cash_limit_amount),
     });
-    if (verdict.status === "blocked" && !opts.overrideCash) {
-      for (const request of group) failed.push({ requestId: request.id, error: verdict.message ?? "Límite de efectivo superado." });
+    // Pasar el límite es una excepción de quien administra el courier
+    // (§29.9: Daysi o Frankz), no de cualquiera que despache.
+    if (verdict.status === "blocked" && !(opts.overrideCash && auth.canManageLogistics)) {
+      const message = verdict.message ?? "Límite de efectivo superado.";
+      const error = opts.overrideCash ? `${message} Solo quien administra Grupo GF puede autorizar pasar el límite.` : message;
+      for (const request of group) failed.push({ requestId: request.id, error });
       continue;
     }
     if (verdict.message) cashWarnings.push(verdict.status === "blocked" ? `${verdict.message} Autorizado por ${auth.userId}.` : verdict.message);
@@ -2261,7 +2288,7 @@ export async function activateGroupGfCourier(orgId: string): Promise<CourierActi
         name: "Grupo GF Courier",
         legal_name: "Grupo GF",
         coverage_note: "Lima Metropolitana y Callao",
-        same_day_cutoff: "11:30",
+        same_day_cutoff: GF_SAME_DAY_CUTOFF_DEFAULT,
         cash_warning_amount: 4000,
         cash_limit_amount: 5000,
         created_by: auth.userId,
@@ -2295,7 +2322,7 @@ export async function activateGroupGfCourier(orgId: string): Promise<CourierActi
         client_label: store.name,
         assignment_mode: "direct",
         settlement_frequency: "daily",
-        same_day_cutoff: "11:30",
+        same_day_cutoff: GF_SAME_DAY_CUTOFF_DEFAULT,
         coverage_note: "Lima Metropolitana y Callao",
         created_by: auth.userId,
       });
@@ -2610,7 +2637,7 @@ export async function moveManifestItem(
    */
   opts: { inHand?: boolean } = {},
 ): Promise<MoveManifestItemResult> {
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return auth;
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas." };
   const cleanReason = reason.trim();
@@ -2807,7 +2834,7 @@ export async function scanAssignToRider(
   const code = normalizeDispatchScan(rawCode).slice(0, 200);
   const base: ScanAssignLine = { code, status: "desconocido", orderId: null, orderName: null, shipmentId: null, manifestId: null, riderName: null, amount: null, message: "" };
   if (!code) return { ...base, message: "Escanea el QR o el código del paquete." };
-  const auth = await requireManager(orgId);
+  const auth = await requireOperator(orgId);
   if ("error" in auth) return { ...base, status: "no_elegible", message: auth.error };
   if (!auth.canManageDispatch) return { ...base, status: "no_elegible", message: "No tienes permiso para organizar rutas." };
   const admin = createAdminSupabase();

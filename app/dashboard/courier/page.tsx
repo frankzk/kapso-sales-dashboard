@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import { EmptyState } from "@/components/ui";
 import { getAdminOrgs } from "@/lib/access";
+import { canOperateGroupGf } from "@/lib/permissions";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { GrupoGfCourierBoard } from "@/components/grupo-gf-courier";
 import { loadCourierConfig } from "./actions";
@@ -28,9 +29,11 @@ async function CourierContent({ searchParams }: { searchParams: Promise<SP> }) {
     getMasterPermissions(),
     getAdminOrgs(),
   ]);
-  if (!permissions.can("logistics.manage")) {
-    // Quien solo arma rutas, coteja o recibe tiene la lista de Rutas sola.
-    if (permissions.can("routes.manage") || permissions.can("dispatch.manage") || permissions.can("dispatch.pickup")) redirect("/dashboard/courier/rutas");
+  // Despacho del día es de todo el equipo que despacha (11-10-2026, MOM
+  // §29.10); el Tarifario sigue siendo de quien administra el courier.
+  if (!canOperateGroupGf(permissions.can)) {
+    // Quien solo arma rutas o coteja en la salida tiene la lista de Rutas sola.
+    if (permissions.can("routes.manage") || permissions.can("dispatch.pickup")) redirect("/dashboard/courier/rutas");
     return (
       <EmptyState title="Acceso restringido">
         Frankz puede habilitarte “Administrar Grupo GF Courier” desde Equipo.

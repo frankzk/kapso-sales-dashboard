@@ -16,7 +16,7 @@ import { CourierRouteReportDrawer } from "@/components/courier-route-report-draw
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import type { CourierLedgerRow, PendingReturn } from "@/lib/courier-route-ledger";
 import { resolveRiderRate, type RiderRateVersion } from "@/lib/rider-pay";
-import { resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
+import { GF_SAME_DAY_CUTOFF_DEFAULT, resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
 import {
   activateGroupGfCourier,
   assignGroupGfCourierRoute,
@@ -48,8 +48,9 @@ function money(value: number): string {
 }
 
 type CourierTabId = "dispatch" | "available" | "preparation" | "routes" | "tariffs";
-function readCourierTab(value: string | null): CourierTabId {
-  return value === "available" || value === "preparation" || value === "routes" || value === "tariffs" ? value : "dispatch";
+function readCourierTab(value: string | null, canManageLogistics: boolean): CourierTabId {
+  if (value === "tariffs") return canManageLogistics ? value : "dispatch";
+  return value === "available" || value === "preparation" || value === "routes" ? value : "dispatch";
 }
 /** Vistas anteriores: fuera de la barra, accesibles desde «⋯». Despacho del día ya hace lo suyo en un paso. */
 const LEGACY_TABS: ReadonlyArray<{ id: CourierTabId; label: string }> = [
@@ -82,8 +83,11 @@ export function GrupoGfCourierBoard({
   const [pending, startTransition] = useTransition();
   const searchParams = useSearchParams();
   const requestedTab = searchParams.get("tab");
-  const [tab, setTab] = useState<CourierTabId>(readCourierTab(requestedTab));
-  useEffect(() => { setTab(readCourierTab(requestedTab)); }, [requestedTab]);
+  // El Tarifario es de quien administra el courier (§29.10); el resto del
+  // equipo opera Despacho del día y Rutas.
+  const canManageLogistics = snapshot.canManageLogistics;
+  const [tab, setTab] = useState<CourierTabId>(readCourierTab(requestedTab, canManageLogistics));
+  useEffect(() => { setTab(readCourierTab(requestedTab, canManageLogistics)); }, [requestedTab, canManageLogistics]);
 
   function run(action: () => Promise<CourierActionResult>) {
     startTransition(async () => {
@@ -110,18 +114,18 @@ export function GrupoGfCourierBoard({
             <p className="text-sm font-semibold text-slate-900">Fundación lista para activar</p>
             <ul className="mt-2 space-y-1 text-sm text-slate-600">
               <li>Lima Metropolitana y Callao</li>
-              <li>Corte del mismo día: 11:30</li>
+              <li>Corte del mismo día: {GF_SAME_DAY_CUTOFF_DEFAULT}</li>
               <li>Advertencia S/ 4,000; límite S/ 5,000</li>
             </ul>
           </div>
-          <button
+          {snapshot.canManageLogistics ? <button
             type="button"
             disabled={pending}
             onClick={() => run(() => activateGroupGfCourier(orgId))}
             className="h-10 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white transition hover:bg-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:opacity-50"
           >
             {pending ? "Activando…" : "Activar Grupo GF Courier"}
-          </button>
+          </button> : <p className="text-sm text-slate-600">Lo activa quien administra Grupo GF Courier.</p>}
         </Card>
       </div>
     );
@@ -154,11 +158,13 @@ export function GrupoGfCourierBoard({
           shortLabel="Rutas"
           count={ledger.filter((row) => row.routeDate === today).length}
         />
-        <CourierTab
-          active={tab === "tariffs"}
-          onClick={() => setTab("tariffs")}
-          label="Tarifario"
-        />
+        {canManageLogistics && (
+          <CourierTab
+            active={tab === "tariffs"}
+            onClick={() => setTab("tariffs")}
+            label="Tarifario"
+          />
+        )}
         <MoreViewsMenu
           active={LEGACY_TABS.some((t) => t.id === tab)}
           items={LEGACY_TABS.map((t) => ({ ...t, count: t.id === "available" ? snapshot.operations.available.length : snapshot.operations.accepted.length }))}
@@ -186,7 +192,9 @@ export function GrupoGfCourierBoard({
           riders={snapshot.operations.riders}
           manifests={manifests}
           canManageDispatch={snapshot.canManageDispatch}
+          canAuthorizeCash={canManageLogistics}
           riderPickupMode={provider.rider_pickup_mode ?? "exigir"}
+          sameDayCutoff={provider.same_day_cutoff}
           cashWarning={provider.cash_warning_amount}
           cashLimit={provider.cash_limit_amount}
           pending={pending}
@@ -212,6 +220,7 @@ export function GrupoGfCourierBoard({
           orders={snapshot.operations.accepted}
           riders={snapshot.operations.riders}
           canManageDispatch={snapshot.canManageDispatch}
+          canAuthorizeCash={canManageLogistics}
           pending={pending}
           run={run}
         />
@@ -227,7 +236,7 @@ export function GrupoGfCourierBoard({
       )}
       <CourierBoxDrawer />
       <CourierRouteReportDrawer />
-      {tab === "tariffs" && (
+      {tab === "tariffs" && canManageLogistics && (
         <TariffMatrix
           orgId={orgId}
           snapshot={snapshot}
@@ -670,6 +679,7 @@ function AcceptedOrders({
   orders,
   riders,
   canManageDispatch,
+  canAuthorizeCash,
   pending,
   run,
 }: {
@@ -677,6 +687,8 @@ function AcceptedOrders({
   orders: CourierAcceptedOrder[];
   riders: CourierRiderOption[];
   canManageDispatch: boolean;
+  /** Pasar el límite de efectivo es de quien administra el courier (§29.9). */
+  canAuthorizeCash: boolean;
   pending: boolean;
   run: (action: () => Promise<CourierActionResult>) => void;
 }) {
@@ -753,10 +765,12 @@ function AcceptedOrders({
               {riders.map((rider) => <option key={rider.id} value={rider.id}>{rider.fullName}</option>)}
             </select>
           </label>
-          <label className="flex items-center gap-2 text-xs text-slate-600">
-            <input type="checkbox" checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} disabled={pending} />
-            Autorizo superar el límite de efectivo de la ruta
-          </label>
+          {canAuthorizeCash && (
+            <label className="flex items-center gap-2 text-xs text-slate-600">
+              <input type="checkbox" checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} disabled={pending} />
+              Autorizo superar el límite de efectivo de la ruta
+            </label>
+          )}
           <button
             type="button"
             disabled={!canManageDispatch || !riderId || !selected.size || pending}

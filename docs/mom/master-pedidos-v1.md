@@ -1496,6 +1496,13 @@ La diferencia entre el corte general de almacén (aprox. 11:00) y los cortes de
 cada courier debe modelarse como capacidad/horario de ruta, no como un estado
 del pedido.
 
+**Corte de Grupo GF a las 12:00 (11-10-2026, decisión del owner).** Lo que se
+programa o se toma hasta las 12:00 del mismo día sale esa tarde: Alexis recoge
+a las 12:30 y cubre todo Lima. Es el `same_day_cutoff` del proveedor (0242) y
+reemplaza al de las 11:30 en §29.2 y §29.6; después de las 12:00 el pedido sale
+al día siguiente salvo que Despacho GF apruebe el cambio (§29.6). No es un
+estado del pedido.
+
 ### 9.2 Sugerencia de courier en Lima
 
 La decisión final sigue siendo de Seguimiento Lima. La sugerencia actual parte
@@ -1988,6 +1995,48 @@ Cobros y liquidación observados:
 - Daysi realiza hoy parte de estos cotejos semanalmente por capacidad. Los SLA
   financieros definidos en la sección de Liquidaciones no cambian: el sistema
   debe separar `resultado reportado`, `pago verificado` y `lote conciliado`.
+
+### 9.5 Reprogramación en Lima: procedimiento de la fase 0 (11-10-2026)
+
+Decisión del owner sobre la propuesta «Reprogramación en Lima: quién hace
+qué». Ordena el trabajo con las pantallas que ya existen; no crea etapas,
+subetapas ni estados nuevos. La pantalla propia de la tienda («Repro Lima») y
+la lista de Almacén «Reintentos por salir» quedan para una fase posterior.
+
+- **Cualquiera del equipo** llama, gestiona, reprograma, programa y recibe en
+  oficina; no hay una persona asignada. Lo hacen desde Grupo GF Courier →
+  Despacho del día, abierto a quien despacha (`dispatch.manage`) o administra
+  el courier (`logistics.manage`, §29.10). El actor real queda en cada evento.
+- **Grupo GF toma cualquier pedido de la cola**, también un reprogramado que
+  todavía no tiene fecha (§29.13, decisión del 06-10-2026): no se agrega un
+  bloqueo por fecha.
+- **Corte: 12:00 del mismo día** (§9.1). Programar o tomar hasta esa hora
+  hace que salga esa tarde; después, al día siguiente. Un cambio posterior lo
+  aprueba Despacho GF (§29.6).
+- **Paso a paso de un «No entregado» de Grupo GF:**
+  1. El motorizado reporta el motivo y la foto en su ruta; si el cliente pide
+     otro día, lo escribe en la nota. Puede reintentarlo el mismo día con la
+     misma caja (§9.3). Al terminar, entrega en oficina toda caja no entregada.
+  2. Esa misma noche alguien del equipo lo recibe con «Recibir en oficina»
+     (escaneo o lista, §29.13): al día siguiente no queda ninguna caja «No
+     entregado» a nombre de un motorizado. La caja va al estante de
+     reprogramados, en la bandeja del día en que se recibió.
+  3. Alguien del equipo contacta al cliente y deja fecha y courier con
+     «Programar» (motivo «Confirmado con cliente: …», §29.6), o anota en la
+     ficha por qué no se programó. La fecha que el cliente dio en la puerta se
+     confirma antes de programarla.
+  4. Para el día programado, la caja pasa del estante al anaquel del día. Por
+     defecto **se mantiene**: misma salida, QR y rótulo (excepción de Grupo GF,
+     §9.3). Se reimprime el rótulo de la misma salida si cambió la dirección, el
+     teléfono o el monto; se arma otra salida si cambia el producto o el courier
+     (§9.3); se desarma si el cliente ya no lo quiere o el pedido se cancela.
+  5. Despacho GF lo asigna a un motorizado desde «Programados hoy» o por QR.
+- **Barrido inicial.** Las cajas «No entregado» que siguen registradas en la
+  caja de un motorizado se reciben en oficina una por una; lo que no aparezca
+  físicamente se registra como paquete que no consta (§13), no como búsqueda en
+  la calle.
+- **Urpi**, mientras no se registre su despacho en Kapta (§30.11): un pedido con
+  reporte de Urpi no se toma en Grupo GF sin revisar antes si ya salió con Urpi.
 
 ## 10. Provincia COD y Aliclik
 
@@ -6318,8 +6367,10 @@ mantiene observado el lote completo.
 | --- | --- | --- |
 | Confirmación | Confirmación | Milagros |
 | Preparación/almacén | Almacén | Yelitza y Matías |
-| Seguimiento Lima | Seguimiento Lima | Daysi |
+| Seguimiento Lima | Seguimiento Lima | Daysi; cualquiera del equipo reprograma (§9.5) |
 | Apoyo Lima/cotejo | Operación Lima | Diana |
+| Recibir en oficina y devoluciones de Lima | Operación Lima | Cualquiera del equipo (Diana, Daysi, Yessenia, Sara…, §9.5) |
+| Aprobar cambios después del corte de las 12:00 | Despacho GF | Despacho GF (§29.6) |
 | Reproprovincia | Jefatura Repro | Akemi |
 | Reproprovincia | Operación Repro | Mariannys |
 | Shalom/Olva | Seguimiento Agencia | Gerardo |
@@ -8028,7 +8079,7 @@ liquidación del día.
 
 - Cobertura: Lima Metropolitana y Callao.
 - Punto de operación: un único almacén de Grupo GF.
-- Corte para salida el mismo día: **11:30**.
+- Corte para salida el mismo día: **12:00** (11:30 hasta el 11-10-2026; §9.1, 0242).
 - La tienda asigna directamente la solicitud a Grupo GF Courier.
 - Grupo GF puede recibir inventario de una tienda, pero en el alcance inicial no
   recoge paquetes armados en otros almacenes: Grupo GF reserva, arma y rotula.
@@ -8265,13 +8316,15 @@ el último escaneo de «Recibir mi caja» fallaba con `delivery_stop_shipment_un
 
 - Una tienda puede pactar fecha y una franja amplia de aproximadamente cinco
   horas.
-- Un cambio después de las 11:30 requiere aprobación de Grupo GF y muestra
-  distrito, tarifa y fecha resultantes.
+- Un cambio después del corte de las 12:00 (§9.1) requiere aprobación de
+  Despacho GF y muestra distrito, tarifa y fecha resultantes.
 - Solo se aprueba dentro del día si el destino permanece en la ruta del mismo
   motorizado.
 - Si el cambio exige pasar a otro motorizado, se cancela la guía logística y la
   solicitud vuelve a `Por agendar`. Nunca se mueve silenciosamente entre rutas.
 - La tienda o Grupo GF pueden reprogramar, y siempre se registra actor y motivo.
+  En Kenku y Aurela lo hace cualquiera del equipo con acceso a Despacho del
+  día (§9.5, §29.10).
 - Cancelar una solicitud no tiene costo, incluso si el motorizado ya salió. El
   paquete puede retornar al almacén al día siguiente y la cancelación logística
   no cancela por sí sola el pedido Shopify.
@@ -8649,6 +8702,15 @@ cambia solo: la diferencia se corrige con un adicional o reabriendo la ruta.
 
 - Daysi administra tiendas cliente, motorizados, capacidad, asignaciones, rutas,
   contratos y tarifas de Grupo GF Courier.
+- **Operar no es administrar (11-10-2026, decisión del owner).** Despacho del
+  día —tomar, asignar, programar, reprogramar, recibir en oficina y la pestaña
+  Rutas— es de cualquiera que despache (`dispatch.manage`, que traen los roles
+  admin y vendedora) o administre el courier (`logistics.manage`), para que
+  quien esté pueda ejecutar (§9.5). El Tarifario, los contratos, el pago por
+  motorizado, activar el courier y autorizar una ruta por encima del límite de
+  efectivo (§29.9) siguen siendo solo de `logistics.manage`, que se concede
+  persona por persona en Equipo; el servidor lo vuelve a comprobar aunque la
+  pantalla lo pida.
 - Frankz conserva permiso de propietario y excepción.
 - Una tienda ve únicamente sus solicitudes, inventario asociado, estados,
   evidencias, cargos y liquidaciones.
@@ -8757,8 +8819,8 @@ fotografiar vivía en tres componentes que decidían por su cuenta.
 **Dos pasos para el supervisor, en una pantalla, con la pistola en la mano.**
 La pestaña «Despacho del día» de Grupo GF Courier abre en **modo escaneo**: el
 supervisor elige motorizado (y el día de la caja, hoy por defecto, nunca un día
-ya pasado) y escanea QR tras QR. Ese día manda también después del corte de
-las 11:30: el corte rige lo que se toma sin despachar todavía, no a la mesa
+ya pasado) y escanea QR tras QR. Ese día manda también después del corte del
+mismo día (12:00, §9.1): el corte rige lo que se toma sin despachar todavía, no a la mesa
 que ya tiene el paquete en la mano; si la solicitud estaba prevista para otro
 día, se mueve al de la caja con `logistics_request_rescheduled`. Cada lectura, en un
 solo gesto, **toma** el pedido si hacía falta, lo **pone en la caja** del
@@ -8958,7 +9020,7 @@ el orden del MOM (aunque estén en cero); si una fila trae otra por un dato
 viejo del Master, aparece detrás; cambiar de etapa apaga las subetapas que
 dejan de verse— y **Fecha pactada** —Vencidos, Hoy, Próximos sobre la salida
 prevista: la de la solicitud tomada o, si el pedido sigue disponible, hoy o
-mañana según el corte de las 11:30; «vencido» es un tomado cuya salida ya
+mañana según el corte de las 12:00; «vencido» es un tomado cuya salida ya
 pasó—. Dentro de cada grupo se encienden varios chips a la vez (basta con
 cumplir uno) y los grupos se combinan entre sí y con el resto del picker, la
 búsqueda y las tiles; sin ningún chip encendido el grupo es «todas», y el
@@ -9493,7 +9555,7 @@ recibe el pedido en la puerta.
   - Lima Metropolitana o Callao, con distrito canónico;
   - tarifa vigente;
   - distrito sin pausa;
-  - corte de las 11:30 para la fecha prevista.
+  - corte de las 12:00 para la fecha prevista.
 
   Además, todas las líneas del pedido tienen que estar mapeadas (§29.15.4). Si
   cumple, queda tomado: no existe un estado «solicitada» ni una aprobación de

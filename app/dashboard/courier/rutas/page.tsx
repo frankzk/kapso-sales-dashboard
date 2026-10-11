@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAccessibleStores } from "@/lib/access";
+import { canOperateGroupGf } from "@/lib/permissions";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { getDispatchRiders } from "@/lib/dispatch-access";
 import { getCourierRouteLedger } from "@/lib/courier-route-ledger";
@@ -16,14 +17,14 @@ export const dynamic = "force-dynamic";
 type SP = { manifiesto?: string; dia?: string; caja?: string; ruta?: string; reparto?: string; motorizado?: string };
 
 /**
- * Rutas de Grupo GF Courier para quien no administra el courier (cotejo,
- * recepción, coordinación de rutas): la misma lista y el mismo panel que la
- * pestaña Rutas (MOM §29.14). Quien sí administra va a la pestaña. Los
+ * Rutas de Grupo GF Courier para quien no opera el courier (cotejo en la
+ * salida, coordinación de rutas): la misma lista y el mismo panel que la
+ * pestaña Rutas (MOM §29.14). Quien lo opera (§29.10) va a la pestaña. Los
  * enlaces antiguos `?manifiesto=` abren esa caja.
  */
 export default async function CourierDispatchPage({ searchParams }: { searchParams: Promise<SP> }) {
   const [params, stores, permissions] = await Promise.all([searchParams, getAccessibleStores(), getMasterPermissions()]);
-  if (permissions.can("logistics.manage")) redirect(legacyManifestHref(params.manifiesto ?? params.caja, ROUTES_TAB_HREF));
+  if (canOperateGroupGf(permissions.can)) redirect(legacyManifestHref(params.manifiesto ?? params.caja, ROUTES_TAB_HREF));
   if (params.manifiesto) redirect(legacyManifestHref(params.manifiesto, "/dashboard/courier/rutas"));
   const canManage = permissions.can("dispatch.manage");
   const canPickup = permissions.can("dispatch.pickup");

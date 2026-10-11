@@ -78,7 +78,7 @@ import { failedOutputLabel, ownOutputLabel } from "@/lib/gf-retry";
 import { confirmedTandersReview, type TandersConfirmations, type TandersPackageLocation, type TandersReview } from "@/lib/gf-tanders-review";
 import { addToTray, optimisticBox, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
-import type { RiderPickupMode } from "@/lib/grupo-gf-courier";
+import { sameDayCutoffLabel, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import {
   assignGroupGfCourierRoute,
   moveManifestItem,
@@ -109,8 +109,12 @@ interface Props {
   riders: CourierRiderOption[];
   manifests: DispatchManifest[];
   canManageDispatch: boolean;
+  /** Pasar el límite de efectivo es de quien administra el courier (§29.9). */
+  canAuthorizeCash?: boolean;
   /** 0185: exigir (verifica su caja antes de la ruta) · confirmar («Lo llevo» por paquete) · ninguno. */
   riderPickupMode: RiderPickupMode;
+  /** Corte del mismo día del proveedor («HH:MM», MOM §29.6). */
+  sameDayCutoff?: string | null;
   /** Umbrales de efectivo de la ruta (MOM §29.9): aviso y límite. */
   cashWarning: number;
   cashLimit: number;
@@ -129,6 +133,7 @@ const PROGRAM_REASONS = ["La clienta pidió ese día", "La clienta no está ante
 
 export function DispatchDayBoard(props: Props) {
   const { orgId, day, riders, canManageDispatch, pending, run } = props;
+  const cutoff = sameDayCutoffLabel(props.sameDayCutoff);
   const router = useRouter();
   // Sin motorizado preseleccionado: elegirlo es el primer gesto del supervisor.
   // Preseleccionar al primero de la lista mandaba paquetes a la caja de quien
@@ -762,8 +767,11 @@ export function DispatchDayBoard(props: Props) {
                       {l.status === "programado_otro_dia" && riderId && (
                         <OpsButton size="sm" disabled={pending || draining} onClick={() => confirmScanned(l)} title={l.message}>Asignar igual</OpsButton>
                       )}
-                      {l.status === "bloqueado_efectivo" && !overrideCash && (
+                      {l.status === "bloqueado_efectivo" && !overrideCash && props.canAuthorizeCash && (
                         <OpsButton size="sm" onClick={() => setOverrideCash(true)} title={`${cashOverrideHint(props.cashWarning, props.cashLimit)} Toca «Autorizar» y vuelve a escanear.`}>Autorizar</OpsButton>
+                      )}
+                      {l.status === "bloqueado_efectivo" && !props.canAuthorizeCash && (
+                        <p className="basis-full text-xs text-ink-500">Pasar el límite lo autoriza quien administra Grupo GF (Daysi o Frankz).</p>
                       )}
                       {l.moveError && <p role="alert" className="basis-full text-xs font-medium text-crit-fg">{l.moveError}</p>}
                       {/* Se leyó el rótulo viejo (Tanders que no entregó): la caja
@@ -882,7 +890,7 @@ export function DispatchDayBoard(props: Props) {
             )}
             {openPill === "fecha" && (
               <Sheet look="ops" title="Fecha pactada" onClose={closePill} anchored anchorRef={pillRef.fecha}>
-                <p className="text-[13px] text-ink-500">Fecha pactada de salida: la programada, la de la solicitud ya tomada o, si el pedido sigue disponible, hoy o mañana según el corte de las 11:30. «Vencidos» son los que ya debían haber salido.</p>
+                <p className="text-[13px] text-ink-500">Fecha pactada de salida: la programada, la de la solicitud ya tomada o, si el pedido sigue disponible, hoy o mañana según el corte de las {cutoff}. «Vencidos» son los que ya debían haber salido.</p>
                 <div role="group" aria-label="Fecha pactada" className="mt-3 flex flex-wrap gap-1.5">
                   {SCHEDULED_BUCKETS.map((bucket) => (
                     <ChoiceChip key={bucket} label={SCHEDULED_BUCKET_LABEL[bucket]} count={facets.due[bucket]} active={filters.due.includes(bucket)} onClick={() => patchFilters({ due: toggleInList(filters.due, bucket) })} />
@@ -973,9 +981,11 @@ export function DispatchDayBoard(props: Props) {
                   Recibir en oficina {selectedReturnable.length}
                 </OpsButton>
               )}
-              <label className="flex min-h-8 items-center gap-2 text-[13px] text-ink-600 sm:ml-auto" title={cashOverrideHint(props.cashWarning, props.cashLimit)}>
-                <input type="checkbox" className={CHECKBOX} checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} /> <span className="whitespace-nowrap">Superar el límite</span>
-              </label>
+              {props.canAuthorizeCash && (
+                <label className="flex min-h-8 items-center gap-2 text-[13px] text-ink-600 sm:ml-auto" title={cashOverrideHint(props.cashWarning, props.cashLimit)}>
+                  <input type="checkbox" className={CHECKBOX} checked={overrideCash} onChange={(e) => setOverrideCash(e.target.checked)} /> <span className="whitespace-nowrap">Superar el límite</span>
+                </label>
+              )}
             </div>
 
             {tandersConfirm && (
@@ -1062,7 +1072,7 @@ export function DispatchDayBoard(props: Props) {
                     <th className="px-3 py-2.5">Distrito</th>
                     <th className="px-3 py-2.5">Estado</th>
                     <th className="px-3 py-2.5">Creado</th>
-                    <th className="px-3 py-2.5" title="Salida prevista: el día programado si lo tiene; si no, después del corte de las 11:30 el pedido sale al día siguiente. Para los que ya salieron, el día de su caja.">Sale</th>
+                    <th className="px-3 py-2.5" title={`Salida prevista: el día programado si lo tiene; si no, después del corte de las ${cutoff} el pedido sale al día siguiente. Para los que ya salieron, el día de su caja.`}>Sale</th>
                     <th className="px-3 py-2.5 text-right">Venta</th>
                     <th className="px-4 py-2.5 text-right">Tarifa</th>
                   </tr>

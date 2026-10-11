@@ -1,6 +1,6 @@
 import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import type { OperationKind } from "@/lib/order-macro-stage";
-import type { GroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier";
+import { sameDayCutoffLabel, sameDayCutoffMinute, type GroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier";
 import { shipmentIsReturning, terminalOrderBlocker } from "@/lib/order-status";
 import {
   MAX_OUTPUTS_PER_ORDER,
@@ -334,16 +334,10 @@ function limaMinute(now: Date): number {
   return number("hour") * 60 + number("minute");
 }
 
-function cutoffMinute(value: string | null | undefined): number {
-  const match = /^(\d{1,2}):(\d{2})/.exec(value ?? "");
-  if (!match) return 11 * 60 + 30;
-  return Number(match[1]) * 60 + Number(match[2]);
-}
-
 function groupGfCandidate(input: OrderRoutePlanInput, minute: number): RouteCandidate {
   const check = input.grupoGfCourier;
-  const cutoff = check?.sameDayCutoff || "11:30";
-  const timing = minute <= cutoffMinute(cutoff)
+  const cutoff = sameDayCutoffLabel(check?.sameDayCutoff);
+  const timing = minute <= sameDayCutoffMinute(cutoff)
     ? `Puede salir hoy · corte ${cutoff}`
     : `Programar para el día siguiente · corte ${cutoff}`;
   if (!check) {
@@ -583,7 +577,7 @@ export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan 
   if (operation === "lima") {
     const minute = limaMinute(input.now ?? new Date());
     const groupGf = groupGfCandidate(input, minute);
-    const groupCutoff = cutoffMinute(input.grupoGfCourier?.sameDayCutoff);
+    const groupCutoff = sameDayCutoffMinute(input.grupoGfCourier?.sameDayCutoff);
     // Axel ya no se sugiere (09-10-2026): casi no se usa, y sugerirlo antes
     // del mediodía lo ponía con el anillo azul por delante de Tanders.
     const first = input.grupoGfCourier?.eligible && minute <= groupCutoff ? "propio" : "tanders";
