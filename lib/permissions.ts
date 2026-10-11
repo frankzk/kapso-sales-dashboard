@@ -345,18 +345,6 @@ export function hasPermission(
 }
 
 /**
- * ¿Opera Grupo GF Courier? Despacho del día —tomar, asignar, programar,
- * reprogramar y recibir en oficina— es de cualquiera que despache
- * (`dispatch.manage`) o administre el courier (`logistics.manage`): decisión
- * del owner del 11-10-2026, para que quien esté pueda ejecutar (MOM §29.10).
- * Tarifario, contratos, pago de motorizados y autorizar un exceso de efectivo
- * (§29.9) siguen siendo solo de `logistics.manage`.
- */
-export function canOperateGroupGf(can: (permission: Permission) => boolean): boolean {
-  return can("logistics.manage") || can("dispatch.manage");
-}
-
-/**
  * ¿Este usuario es solo-lectura en el Master? Cierto para `viewer` puro y para
  * cualquiera cuyos permisos de edición hayan sido revocados. Un usuario SIN
  * ningún rol tampoco edita (no debería llegar aquí: RLS ya lo dejaría sin
