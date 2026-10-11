@@ -1147,8 +1147,9 @@ concretas que revisó:
 - **Quiere ambos:** confirmación explícita registrada y al menos el adelanto
   mínimo vigente validado en el pedido nuevo. Un comprobante pendiente o el
   pago del primer pedido no sirven. El pago se vuelve a comprobar al crear.
-- **Reemplaza al anterior:** sigue retenido hasta que conste la recuperación
-  física o entrega del envío anterior. Solicitar detenerlo no lo libera.
+- **Reemplaza al anterior:** quien resuelve declara qué pasó con cada envío anterior
+  y eso libera la guía (cambio del 10-10-2026, ver abajo). Solicitar detenerlo
+  no basta.
 - **Excepción autorizada:** exige el permiso `master.override_status` en la
   organización del pedido y un motivo. La autorización solo vale para los
   productos y salidas revisados; un cambio exige nueva revisión.
@@ -1160,6 +1161,44 @@ no se crea la guía. Esta excepción tampoco levanta el veto de dos rechazos del
 §8.2. Cotizar o vincular una guía que ya existe siguen siendo operaciones
 distintas; la regla impide emitir una nueva. Lima y los demás couriers conservan
 sus reglas. Las resoluciones quedan en `order_events`, sin borrar historial.
+
+#### Reemplazo: se declara el destino del envío anterior (10-10-2026)
+
+Decisión del owner. Hasta esta fecha «reemplaza» esperaba una constancia de
+entrega o retorno que, en los casos reales, el seguimiento ya no iba a traer:
+una guía `transferido` deja de consultarse, una anulada se consulta solo tres
+semanas y un paquete que el courier perdió no vuelve nunca. Del 02 al
+10-10-2026 hubo 4 pedidos y 15 intentos con «reemplaza», y los 4 terminaron en
+la excepción de un responsable; las vendedoras no podían cerrar el caso.
+
+Ahora, al elegir «reemplaza», quien resuelve declara el destino de **cada**
+salida anterior en conflicto, y cada declaración pasa por la puerta que ya le
+corresponde. Queda con actor, fecha y motivo sobre el pedido anterior:
+
+| Destino declarado | Qué se escribe | Dónde queda el pedido anterior |
+| --- | --- | --- |
+| Volvió al almacén | La recepción de devolución (`return_receive`, permiso `closure.return`), igual que desde la mesa de cierre | Su camino normal: Devolución pendiente de inventario |
+| Lo recibió el cliente | El hecho `delivery_declared` sobre esa salida | Por cerrar · **Entrega declarada · confirmar cobro** |
+| El courier lo perdió | El hecho `courier_loss_declared` sobre esa salida | Por cerrar · Indemnización pendiente |
+
+- **La guía del courier no se toca.** «Lo recibió el cliente» no la marca
+  entregada: esa puerta es del courier (§11). Lo que cambia es el pedido.
+- **Entrega declarada** se cierra cuando el pedido pasa a `entregado` —lo
+  reporta el courier o se confirma a mano, y desde ahí manda la liquidación— o
+  cuando alguien fija el estado en «Gestión manual» después de la declaración,
+  también si resultó falsa. Una declaración sin salida sería otro pedido
+  atascado.
+- **La pérdida declarada abre la indemnización** igual que la solicitud formal;
+  finanzas la completa con monto y la cierra con «Resolver indemnización».
+- **Solo Aliclik admite los tres destinos.** Para otro courier solo se declara
+  la devolución: su entrega tiene su propia puerta y la indemnización formal es
+  solo de Aliclik, así que una pérdida declarada no tendría quién la cierre.
+- Si la puerta de devolución se niega —por ejemplo, la salida figura en la
+  empresa— no se guarda la resolución y la guía sigue retenida; el motivo se
+  muestra tal cual. Las declaraciones se escriben antes que la resolución.
+- Una salida con destino declarado deja de contar como caja pendiente para
+  esta regla. Si después aparece, su devolución o entrega se registra por las
+  puertas de siempre.
 
 ### 8.4 Entrega estimada de Aliclik según los días del pedido (09-10-2026)
 
@@ -5100,6 +5139,41 @@ La regla vive en `lib/swayp-desde-confirmacion.ts` y la aplica
 `resolveMacroStage` antes del estado terminal y de Reproprovincia
 (`MOM_RESOLUTION_VERSION` sube a `mom-v1.24`).
 
+### 11.12 Oportunidades en Stock Swayp (10-10-2026)
+
+«Por reponer» responde qué falta para las guías **ya emitidas**. La vista
+**Oportunidades** de Stock Swayp responde la pregunta de antes: qué producto,
+en qué bodega de Swayp, dejaría salir pedidos que hoy esperan. Pedido del owner,
+10-10-2026. Es una lectura: no cambia etapas, no emite guías ni toca el stock.
+
+**Quién entra** (`lib/swayp-oportunidades.ts`), leído del Master:
+
+- **Repro Provincia**: subetapa `gestion_reproprovincia`. El intento falló y el
+  pedido se puede reenviar por Swayp si su bodega tiene el producto.
+- **Por confirmar**: provincia COD, salvo «Swayp no entregó». Es la misma regla
+  que el botón «Enviar por Swayp» (§11.11): con stock, saldría sin esperar la
+  confirmación. «Swayp no entregó» queda fuera porque ya salió por Swayp y se
+  llama para salir por otra vía.
+- Solo con **dirección completa**: dirección, distrito y provincia (o
+  departamento). Sin eso no hay guía que emitir aunque llegue el stock.
+- Solo en ciudades **con bodega Swayp**. Las demás no se destraban mandando
+  mercadería. Los que quedan fuera por cobertura o por dirección se cuentan en
+  la cabecera, para que se vean.
+
+**Cómo se mide.** Por producto, no por pedido: una guía directa sale con el
+pedido completo (`evaluateDirectFenixStock`). Por eso se cruza cada producto
+con su renglón de la bodega (SKU exacto primero, después el nombre) y se compara
+la demanda en unidades contra la cantidad. Una unidad en bodega para diez
+pedidos son nueve por mandar, no «hay stock». La columna `swayp_availability`
+del Master (§11.10) no sirve para esto: da un pedido por cubierto si alguno de
+sus productos tiene stock.
+
+**Qué muestra cada fila** (ciudad y producto): los pedidos que lo esperan,
+separados por fuente; el stock actual; las unidades por mandar; el total de esos
+pedidos; y cuántos **salen solo con ese producto** (no les falta nada más). Cada
+fila se abre en sus pedidos, con enlace al Master, ordenados primero por los que
+salen solo con eso y después por los días que llevan en su etapa.
+
 ## 12. Agencia: Shalom y Olva
 
 ### Shalom
@@ -5458,7 +5532,18 @@ La regla vive en `lib/swayp-desde-confirmacion.ts` y la aplica
         manda la clave vive en el drawer— y llevar allí obligaba a buscar a
         mano el pedido que el sistema ya sabía cuál era.
       - **Al validar el pago que cierra el pedido, la clave sale sola** (0173),
-        en el mismo clic, y ese envío **es** el registro de la entrega.
+        en el mismo clic, y ese envío **es** el registro de la entrega. Desde
+        el 10-10-2026 también cuando lo valida el estado de cuenta de Yape
+        (§16.2), y la ficha tiene **«Enviar clave por WhatsApp»** para la que
+        no salió sola —validada antes de esto, ventana cerrada en su momento,
+        o perdida por la clienta—: mismas rejas y mismo registro
+        (`lib/pickup-key-delivery.ts`, una sola función para las tres
+        puertas). El servidor ya no se fía de que el navegador solo pida
+        «validar y enviar» cuando corresponde: también al validar exige que
+        ese pago complete lo validado y que no conste una entrega. El botón de
+        la ficha no exige ninguna de las dos ni el interruptor de envío
+        automático: lo pulsa una persona que mira los comprobantes, como
+        cuando dicta la clave, y sirve para reenviarla.
         - **Por qué.** Medido el 21-09-2026: 786 pedidos pagados con clave
           registrada, **770** con la clave ya consultada por alguien y **3**
           con la entrega registrada. La clave se entrega —si no, habría
@@ -6378,6 +6463,31 @@ solo «casi».
   movimiento: pagador, canal, monto y hora. Cada conciliación queda en
   `yape_statement_matches`, **única por movimiento y por comprobante**: el
   mismo dinero no paga dos pedidos.
+- **Y como una persona, suelta la clave de recojo (10-10-2026).** Si el pago
+  validado completa un pedido de agencia, la clave sale por WhatsApp como
+  cuando lo valida una persona con el botón (§12, 0173): mismas rejas y el
+  mismo registro, sin persona (`pickup_key_shares` con `shared_by` nulo,
+  evento `key_shared` con fuente `estado_yape`). Las rejas de un envío sin
+  nadie después:
+  - sale solo si **este** pago es el que hace que lo **validado** cubra el
+    pedido (`validationReleasesPickupKey`, preguntado sobre la foto de antes
+    de validarlo). Un comprobante cargado y sin validar no cuenta aunque sume:
+    es lo que mira una persona antes de dictarla, y aquí no la hay;
+  - por lo mismo **no sale dos veces**: validar después otro pago del pedido
+    ya no completa nada. Y si consta una entrega (a mano o por otra puerta),
+    no se repite;
+  - ventana de 24 h e interruptor de envío automático de la tienda;
+  - el envío a WhatsApp tiene tope de 15 s; si no responde, no se da por
+    enviado ni se reintenta: se pide revisar el chat.
+
+  Si no sale, el reporte dice por qué en el pedido (`clave`), también cuando
+  la corrida se quedó sin tiempo después de validar. Antes validaba y nadie la
+  mandaba: #KP139240 pagó la diferencia de S/ 159 a las 12:10, el estado de
+  cuenta la validó a las 12:17 con el paquete en la agencia, y a las 14:09 la
+  clienta escribió «Por segunda vez les remite el comprobante de pago. No hay
+  seriedad en esta empresa». Medido ese día: 59 pedidos de agencia con un pago
+  validado así; 38 con el pago completo y 23 de ellos sin ningún envío de la
+  clave registrado.
 - **Nunca lo valida el cruce, aunque el dinero esté en el reporte:**
   - lo que no está en `pendiente_revision`: lo observado, lo incompleto y lo
     duplicado lo está mirando una persona, y su decisión manda. Por lo mismo,
@@ -7081,9 +7191,27 @@ Tres reglas, a partir de acá:
    donde la comparación se puede hacer de verdad, y con eso la definición del
    desfase existe en **un solo sitio** —como `order_coverage_for` desde la 0104,
    y por la misma razón—. Se recorre del recálculo más viejo al más nuevo: lo
-   que lleva más tiempo mintiendo sale primero, y lo que un tope de recorrido
-   deje fuera es siempre lo más recientemente recalculado, que es lo que menos
-   falta hace mirar.
+   que lleva más tiempo mintiendo sale primero.
+
+   **Y sobre la tienda entera (0240, 10-10-2026).** La 0123 recortaba el
+   recorrido a las 20.000 filas más viejas, con la idea de que lo que quedara
+   fuera —lo recién recalculado— era «lo que menos falta hace mirar». Era al
+   revés: lo recién recalculado son los pedidos vivos, los que los barridos de
+   los couriers tocan cada hora. Cuando Kenku pasó de 23.900 filas, esas ~3.900
+   quedaron fuera: **293 desfasados y 7 vistos**, y un desfasado volvía a entrar
+   solo cuando otros 3.900 se recalculaban después de él. Pasó con #KP136038,
+   descartado a las 15:40 y aún en «Gestión Reproprovincia» a las 18:00. Sin el
+   índice que la 0204 borró, la base ya ordenaba la tienda entera; recorrerla
+   toda cuesta lo mismo (90 ms contra 84 ms, medido) y no deja a nadie fuera.
+
+   **Sin `p_scan` y cerrada al navegador (0241, 10-10-2026).** El mismo día
+   el tope se quitó dos veces en paralelo (#920 y #918), y en producción quedó
+   la versión del #918: un solo agregado de las guías cruzado con el Master
+   (52 ms medidos, el mismo resultado) y sin el argumento `p_scan`, para que
+   nadie pueda volver a ponerle un tope por cantidad. Y la función, que es
+   SECURITY DEFINER, ya no la puede llamar `anon` ni `authenticated`: con la
+   clave pública y el id de una tienda devolvía ids de pedidos ajenos,
+   saltándose la RLS. Solo la llama el barrido, con `service_role`.
 2. **El recálculo va por tandas.** Un pedido que revienta cuesta su trozo, no la
    lista entera. Endurecimiento, no la causa de este incidente: el import de
    Aliclik llega a llamar con más de mil pedidos de golpe y cualquier fallo los

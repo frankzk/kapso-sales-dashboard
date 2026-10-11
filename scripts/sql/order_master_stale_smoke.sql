@@ -86,9 +86,44 @@ begin
     from order_master_stale('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'::uuid);
   if v_n <> 0 then raise exception 'no debería devolver pedidos de otra tienda'; end if;
 
+  -- 8. EL CASO DE LA 0240. Una tienda con MÁS de 20.000 filas en el Master, y el
+  --    desfasado es el recalculado más recientemente. La 0123 recorría solo las
+  --    20.000 más viejas y lo dejaba fuera: lo recién recalculado son los pedidos
+  --    vivos, los que los barridos tocan cada hora (10-10-2026, Kenku: 293
+  --    desfasados y 7 vistos).
+  insert into orders (id, store_id, shopify_order_id, name, created_at)
+  select gen_random_uuid(), v_store, 'bulk-' || i, '#B' || i, now() - interval '30 days'
+    from generate_series(1, 20001) i;
+  insert into order_master (order_id, store_id, shopify_order_id, order_name, macro_version, recomputed_at)
+  select o.id, v_store, o.shopify_order_id, o.name, 'mom-v1.8', now() - interval '3 hours'
+    from orders o where o.store_id = v_store and o.shopify_order_id like 'bulk-%';
+  -- #T2 pasa a ser el recálculo más nuevo de la tienda (puesto 20.005), y su
+  -- guía (escrita hace 10 minutos) sigue siendo posterior. La guía no se toca:
+  -- `shipments_touch` (0204) no deja mover `updated_at` a mano.
+  update order_master set recomputed_at = now() - interval '11 minutes' where order_id = v_stale;
+  select count(*) into v_n from order_master_stale(v_store) where order_id = v_stale;
+  if v_n <> 1 then
+    raise exception 'el desfasado recalculado más recientemente tiene que verse aunque la tienda pase de 20.000 filas';
+  end if;
+
+  -- 9. Y no queda tope que pasarle (0241): la firma con `p_scan` ya no existe.
+  select count(*) into v_n from pg_proc where proname = 'order_master_stale' and pronargs <> 2;
+  if v_n <> 0 then raise exception 'order_master_stale no debería tener tope de recorrido (p_scan)'; end if;
+
+  -- 10. Solo la llama el barrido, con service_role (0241). Es SECURITY DEFINER:
+  --     abierta al navegador devolvería pedidos de cualquier tienda saltándose
+  --     la RLS.
+  if has_function_privilege('anon', 'order_master_stale(uuid,int)', 'execute')
+     or has_function_privilege('authenticated', 'order_master_stale(uuid,int)', 'execute') then
+    raise exception 'order_master_stale no debería poder llamarse con la clave pública';
+  end if;
+  if not has_function_privilege('service_role', 'order_master_stale(uuid,int)', 'execute') then
+    raise exception 'el barrido (service_role) tiene que poder llamar a order_master_stale';
+  end if;
+
   delete from order_master where store_id = v_store;
   delete from shipments    where store_id = v_store;
   delete from orders       where store_id = v_store;
 
-  raise notice 'order_master_stale: 7 comprobaciones OK';
+  raise notice 'order_master_stale: 10 comprobaciones OK';
 end $$;

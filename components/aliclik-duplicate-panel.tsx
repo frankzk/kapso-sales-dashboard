@@ -2,7 +2,14 @@
 
 import { useEffect, useId, useState, useTransition } from "react";
 import { getAliclikDuplicateHold, resolveAliclikDuplicate } from "@/app/dashboard/pedidos/aliclik-duplicate-actions";
-import { DUPLICATE_DECISIONS, type DuplicateDecision, type DuplicateHold } from "@/lib/aliclik-duplicate";
+import {
+  DUPLICATE_DECISIONS,
+  PRIOR_SHIPMENT_OUTCOMES,
+  allowedPriorOutcomes,
+  type DuplicateDecision,
+  type DuplicateHold,
+  type PriorShipmentOutcome,
+} from "@/lib/aliclik-duplicate";
 import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import { cn } from "@/components/ui";
 import { Banner, FIELD_BOX, OpsButton, OptionTile } from "@/components/ops-ui";
@@ -12,7 +19,7 @@ import { IconArrowUpRight } from "@/components/icons";
 const DECISION_HINT: Record<DuplicateDecision, string> = {
   keep_existing: "El nuevo sigue retenido; su cancelación va por el procedimiento habitual.",
   both: `Libera la guía con al menos ${ADELANTO_MINIMO_LABEL} validados en este pedido.`,
-  replacement: "Sigue retenido hasta que conste la recuperación o la entrega del anterior.",
+  replacement: "Libera la guía al declarar qué pasó con el envío anterior: volvió, lo recibió o se perdió.",
   exception: "Vale solo para los productos y salidas revisados.",
 };
 
@@ -27,6 +34,7 @@ export function AliclikDuplicatePanel({ orderId, initialHold, onGateChange, onCh
   const [error, setError] = useState<string | null>(null);
   const [decision, setDecision] = useState<DuplicateDecision | "">("");
   const [reason, setReason] = useState("");
+  const [outcomes, setOutcomes] = useState<Record<string, PriorShipmentOutcome>>({});
   const [pending, startTransition] = useTransition();
   useEffect(() => {
     let alive = true;
@@ -57,9 +65,12 @@ export function AliclikDuplicatePanel({ orderId, initialHold, onGateChange, onCh
     startTransition(async () => {
       setError(null);
       try {
-        const result = await resolveAliclikDuplicate(orderId, { decision, reason, fingerprint: hold.fingerprint! });
+        const result = await resolveAliclikDuplicate(orderId, {
+          decision, reason, fingerprint: hold.fingerprint!,
+          ...(decision === "replacement" ? { outcomes } : {}),
+        });
         if ("error" in result) setError(result.error);
-        else { setHold(result.hold); setDecision(""); setReason(""); onChanged?.(); }
+        else { setHold(result.hold); setDecision(""); setReason(""); setOutcomes({}); onChanged?.(); }
       } catch { setError("No se pudo guardar la resolución. Reintenta."); }
     });
   };
@@ -113,7 +124,7 @@ export function AliclikDuplicatePanel({ orderId, initialHold, onGateChange, onCh
             {!hold.canResolve && (
               <p className="mt-2">
                 Si quiere ambos: registra su confirmación y valida al menos {ADELANTO_MINIMO_LABEL} en este pedido. Si
-                es reemplazo: espera la recuperación física del anterior.
+                es reemplazo: quien resuelve declara qué pasó con el envío anterior.
               </p>
             )}
             {hold.canResolve && (
@@ -137,6 +148,49 @@ export function AliclikDuplicatePanel({ orderId, initialHold, onGateChange, onCh
                       ))}
                   </div>
                 </div>
+                {/* Reemplazo: el destino de CADA envío anterior, por la puerta
+                    que le corresponde (MOM §8.3). Solo Aliclik admite «lo
+                    recibió» y «se perdió»; el resto, solo la devolución. */}
+                {decision === "replacement" && (
+                  <div role="group" aria-labelledby={`${id}-outcomes`} className="space-y-2">
+                    <p id={`${id}-outcomes`} className="text-[13px] font-medium leading-5 text-ink-700">
+                      ¿Qué pasó con el envío anterior?
+                    </p>
+                    {hold.conflicts.map((conflict) => {
+                      const chosen = outcomes[conflict.shipmentId] ?? "";
+                      return (
+                        <label key={conflict.shipmentId} className="grid gap-1 text-[13px] text-ink-700">
+                          <span>
+                            {conflict.orderName} · <span className="font-mono">{conflict.guideCode}</span>
+                          </span>
+                          <select
+                            value={chosen}
+                            disabled={pending}
+                            onChange={(e) =>
+                              setOutcomes((prev) => ({
+                                ...prev,
+                                [conflict.shipmentId]: e.target.value as PriorShipmentOutcome,
+                              }))
+                            }
+                            className={cn(FIELD_BOX, "w-full px-3 py-2")}
+                          >
+                            <option value="" disabled>
+                              Elige qué pasó…
+                            </option>
+                            {allowedPriorOutcomes(conflict.courier).map((outcome) => (
+                              <option key={outcome} value={outcome}>
+                                {PRIOR_SHIPMENT_OUTCOMES[outcome].label}
+                              </option>
+                            ))}
+                          </select>
+                          {chosen && (
+                            <span className="text-ink-500">{PRIOR_SHIPMENT_OUTCOMES[chosen].hint}</span>
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
                 {decision && (
                   <>
                     <label className="grid gap-1.5 text-[13px] font-medium text-ink-700" htmlFor={`${id}-reason`}>
@@ -155,7 +209,12 @@ export function AliclikDuplicatePanel({ orderId, initialHold, onGateChange, onCh
                         la tarjeta es «Cotizar» o «Crear guía». */}
                     <OpsButton
                       onClick={save}
-                      disabled={pending || reason.trim().length < 12}
+                      disabled={
+                        pending ||
+                        reason.trim().length < 12 ||
+                        (decision === "replacement" &&
+                          hold.conflicts.some((conflict) => !outcomes[conflict.shipmentId]))
+                      }
                       className="pointer-coarse:h-11"
                     >
                       {pending ? "Guardando…" : "Registrar resolución"}

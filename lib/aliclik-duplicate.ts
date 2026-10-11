@@ -58,12 +58,97 @@ export function sharesDuplicateItem(a: DuplicateItem[], b: DuplicateItem[], same
   return matches ? true : unknown ? null : false;
 }
 
+/**
+ * QUÉ PASÓ CON EL ENVÍO ANTERIOR, DICHO POR UNA PERSONA (MOM §8.3, 10-10-2026).
+ *
+ * «Reemplaza al anterior» esperaba una constancia de entrega o retorno que, en
+ * los casos reales, el seguimiento ya no iba a traer: una guía `transferido`
+ * deja de leerse, una anulada se lee solo tres semanas y un paquete perdido no
+ * vuelve nunca. Del 02 al 10-10-2026 hubo 4 pedidos y 15 intentos con
+ * «reemplaza», y los 4 terminaron en la excepción de un responsable.
+ *
+ * Ahora quien resuelve declara el destino de cada salida anterior y cada
+ * declaración pasa por la puerta que ya le corresponde:
+ *
+ *   - `devuelto`   → la recepción de devolución del pedido anterior
+ *                    (`return_receive`, permiso `closure.return`).
+ *   - `extraviado` → hecho `courier_loss_declared`: abre la indemnización del
+ *                    pedido anterior. Solo Aliclik tiene indemnización formal.
+ *   - `entregado`  → hecho `delivery_declared`: el pedido anterior pasa a Por
+ *                    cerrar · Entrega declarada hasta que el courier la reporte
+ *                    o un responsable fije el estado. La guía NO se marca
+ *                    entregada: esa puerta es del courier.
+ */
+export type PriorShipmentOutcome = "devuelto" | "entregado" | "extraviado";
+
+export const PRIOR_SHIPMENT_OUTCOMES: Record<PriorShipmentOutcome, { label: string; hint: string }> = {
+  devuelto: {
+    label: "Volvió al almacén",
+    hint: "Registra la recepción de la devolución en el pedido anterior.",
+  },
+  entregado: {
+    label: "Lo recibió el cliente",
+    hint: "El pedido anterior pasa a Por cerrar · Entrega declarada para confirmar el cobro.",
+  },
+  extraviado: {
+    label: "El courier lo perdió",
+    hint: "Abre la indemnización del pedido anterior.",
+  },
+};
+
+/** Hechos que, sobre una salida, la sacan de la retención sin `returned_at`. */
+export const DECLARED_OUTCOME_KIND: Record<Exclude<PriorShipmentOutcome, "devuelto">, string> = {
+  entregado: "delivery_declared",
+  extraviado: "courier_loss_declared",
+};
+export const DECLARED_OUTCOME_KINDS: readonly string[] = Object.values(DECLARED_OUTCOME_KIND);
+
+/**
+ * Qué destinos se pueden declarar para una salida. Aliclik admite los tres. El
+ * resto de couriers, solo la devolución: su entrega tiene su propia puerta (el
+ * resultado del courier en Envíos) y la indemnización formal es solo de
+ * Aliclik, así que una pérdida declarada no tendría quién la cierre.
+ */
+export function allowedPriorOutcomes(courier: string): PriorShipmentOutcome[] {
+  return courier.trim().toLowerCase() === "aliclik" ? ["devuelto", "entregado", "extraviado"] : ["devuelto"];
+}
+
+/** Cada salida en conflicto con un destino válido para su courier; ni más ni menos. */
+export function replacementOutcomesProblem(
+  conflicts: readonly Pick<DuplicateConflict, "shipmentId" | "guideCode" | "courier">[],
+  outcomes: unknown,
+): string | null {
+  if (!outcomes || typeof outcomes !== "object" || Array.isArray(outcomes)) {
+    return "Indica qué pasó con cada envío anterior.";
+  }
+  const given = outcomes as Record<string, unknown>;
+  const ids = new Set(conflicts.map((c) => c.shipmentId));
+  if (Object.keys(given).some((key) => !ids.has(key))) {
+    return "Los envíos cambiaron. Actualiza la revisión antes de resolver.";
+  }
+  for (const conflict of conflicts) {
+    const outcome = given[conflict.shipmentId];
+    if (typeof outcome !== "string") return `Indica qué pasó con la guía ${conflict.guideCode}.`;
+    if (!(allowedPriorOutcomes(conflict.courier) as string[]).includes(outcome)) {
+      return `La guía ${conflict.guideCode} (${conflict.courier}) solo admite declarar que volvió al almacén.`;
+    }
+  }
+  return null;
+}
+
 const AGENCY_IN_CUSTODY = new Set([
   "registrado_en_agencia", "en_transito", "disponible_para_recojo", "cliente_notificado",
   "pendiente_de_recojo", "proximo_a_vencer", "en_reparto", "retorno_iniciado", "devuelto_al_origen",
 ]);
-/** Commercial cancellation and a closed courier status don't recover a box. */
-export function unresolvedDuplicateShipment(guide: DuplicateShipment): boolean {
+/**
+ * Commercial cancellation and a closed courier status don't recover a box. A
+ * declared outcome does (`declaredIds`): a person signed what happened to it.
+ */
+export function unresolvedDuplicateShipment(
+  guide: DuplicateShipment,
+  declaredIds?: ReadonlySet<string>,
+): boolean {
+  if (declaredIds?.has(guide.id)) return false;
   if (guide.returned_at || guide.custody_state === "devuelto" ||
       guide.delivery_status === "entregado" || guide.pickup_state === "recogido") return false;
   return Boolean(guide.dispatched_at || guide.custody_transferred_at || guide.out_for_delivery_at ||
@@ -86,7 +171,7 @@ export function duplicateGate(
   const message = current?.decision === "both"
     ? `Falta validar al menos ${ADELANTO_MINIMO_LABEL} en este pedido. Un comprobante pendiente no libera la guía.`
     : current?.decision === "replacement"
-      ? "Espera la recuperación física del envío anterior. Solicitar su retorno o anularlo no libera esta guía."
+      ? "Declara qué pasó con cada envío anterior —volvió, lo recibió el cliente o se perdió— para liberar esta guía. Solicitar su retorno o anularlo no basta."
       : current?.decision === "keep_existing"
         ? "Conserva el envío anterior y tramita la cancelación del nuevo por el procedimiento habitual."
         : "Otro pedido del mismo teléfono y producto sigue despachado. Registra una resolución antes de crear otra guía Aliclik.";
