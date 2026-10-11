@@ -21,6 +21,7 @@ import {
   documentKey,
   guideCodeKey,
   listingCoverage,
+  listingFromDate,
   matchShalomListing,
   readListingGuide,
   WINDOW_AFTER_DAYS,
@@ -395,7 +396,8 @@ export async function cotejarShalom(
     const oldest = Math.min(
       ...group.candidates.map((c) => Date.parse(c.order_created_at ?? "")).filter(Number.isFinite),
     );
-    const desde = new Date((Number.isFinite(oldest) ? oldest : Date.now()) - 2 * DAY_MS).toISOString().slice(0, 10);
+    // Nunca antes de lo que Shalom entrega (~45 días): ver `listingFromDate`.
+    const desde = listingFromDate(oldest, Date.now());
     const account: CotejoAccountReport = {
       tiendas: group.storeIds,
       candidatos: group.candidates.length,

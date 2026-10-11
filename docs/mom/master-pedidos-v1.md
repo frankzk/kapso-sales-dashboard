@@ -5721,6 +5721,13 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   tiempo, sin vincular nada). En tandas de tres se lee en ~150 s; las páginas
   se procesan en orden con las mismas reglas, y si una falla, falla el
   listado entero y no se vincula nada.
+- **El listado solo llega ~45 días atrás** (medido el 11-10-2026). Pedido
+  desde el 19-08, llegó entero pero sin ninguna guía anterior al 27-08: las 160
+  guías de la API que la cobertura echaba en falta eran exactamente esas.
+  Shalom recorta aunque se le pida más. Por eso el listado se pide desde dos
+  días antes del pedido más viejo **pero nunca más de 44 días atrás**, y la
+  cobertura se mide dentro de esa ventana. Un pedido cuya guía se creó antes
+  de la ventana no se puede cotejar: queda sin pareja, para una persona.
 - **Quién es candidato.** Pedido de los últimos 90 días en «Preparación · Por
   generar rótulo», con el pago que Agencia exige para pasar a Preparación
   (`agencyPaymentReady`: adelanto validado, diferencia cargada o pago

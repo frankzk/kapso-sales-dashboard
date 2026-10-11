@@ -424,6 +424,28 @@ export async function collectListingPages(
 }
 
 /**
+ * Cuántos días hacia atrás entrega de verdad el listado de la cuenta. Medido el
+ * 11-10-2026: con `from=2026-08-19` el listado llegó entero (8 páginas, fin por
+ * página corta) pero sin ninguna guía anterior al 27-08 18:00 —exactamente las
+ * 160 de la API que faltaban—: Shalom recorta a ~45 días aunque se le pida
+ * más. Se usa 44 para no rozar el borde.
+ */
+export const LISTING_WINDOW_DAYS = 44;
+
+/**
+ * Desde qué día se pide el listado (YYYY-MM-DD): dos días antes del pedido más
+ * viejo, pero nunca antes de lo que Shalom entrega. Pedir más atrás no trae
+ * nada y hace que la cobertura cuente como «faltantes» guías que el listado
+ * nunca iba a traer. Una guía creada antes de la ventana no se puede cotejar:
+ * su pedido queda sin pareja y para una persona. PURA.
+ */
+export function listingFromDate(oldestOrderMs: number, nowMs: number): string {
+  const wanted = (Number.isFinite(oldestOrderMs) ? oldestOrderMs : nowMs) - 2 * 86_400_000;
+  const floor = nowMs - LISTING_WINDOW_DAYS * 86_400_000;
+  return new Date(Math.max(wanted, floor)).toISOString().slice(0, 10);
+}
+
+/**
  * Horas de Lima en que corre el cron de Cotejar Shalom (/api/cron/shalom-cotejo,
  * vercel.json). El listado entero cuesta: cada página hace que el wrapper baje
  * la cuenta completa de Shalom, y el cupo de 60 llamadas por minuto es de todas

@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   checkListingContract,
   collectListingPages,
+  LISTING_WINDOW_DAYS,
+  listingFromDate,
   CONTRACT_MIN_AGREEMENT,
   CONTRACT_MIN_COMPARED,
   COTEJO_HORAS_LIMA,
@@ -313,6 +315,28 @@ describe("antes de creerse el listado", () => {
     expect(listingCoverage(listado.slice(0, 15), codes).completo).toBe(false);
     // Sin ninguna guía con la que medir, no se da por entero.
     expect(listingCoverage(listado, []).completo).toBe(false);
+  });
+});
+
+describe("desde cuándo se pide el listado", () => {
+  const DAY = 86_400_000;
+  const now = Date.parse("2026-10-11T19:00:00Z");
+
+  it("dos días antes del pedido más viejo, si cae dentro de lo que Shalom entrega", () => {
+    expect(listingFromDate(Date.parse("2026-10-01T15:00:00Z"), now)).toBe("2026-09-29");
+  });
+
+  it("nunca antes de la ventana del listado (~45 días): pedirlo más atrás no trae nada", () => {
+    // El 11-10-2026 se pidió desde el 19-08 y faltaron justo las 160 guías de
+    // la API anteriores al 27-08: Shalom no las entrega.
+    expect(LISTING_WINDOW_DAYS).toBe(44);
+    expect(listingFromDate(Date.parse("2026-08-21T12:00:00Z"), now)).toBe(
+      new Date(now - LISTING_WINDOW_DAYS * DAY).toISOString().slice(0, 10),
+    );
+  });
+
+  it("sin pedidos con fecha, la ventana manda", () => {
+    expect(listingFromDate(Number.POSITIVE_INFINITY, now)).toBe("2026-10-09");
   });
 });
 
