@@ -4778,6 +4778,26 @@ Reglas de esa tabla:
     injusta. El owner decidió arrancar el 04-10-2026 con el +1 de EE. UU.
     Al leer la comparación, la tasa de atendidas de Telnyx y ElevenLabs se
     lee con esa desventaja hasta que llegue el número de Lima.
+  - **Daaph, apagado** (11-10-2026, decisión del owner). Datos de octubre
+    al día 11:
+
+    | Agente | Llamadas | Reprogramadas | Por llamada | Entregadas |
+    | --- | --- | --- | --- | --- |
+    | Daaph | 190 | 4 | 2,1 % | 0 de 4 |
+    | Telnyx | 119 | 6 | 5,0 % | 2 de 6 |
+    | ElevenLabs | 207 | 4 | 1,9 % | 2 de 4 |
+
+    Las 19 salidas de Daaph de setiembre tampoco se entregaron. Daaph y
+    Telnyx son el mismo agente de xAI y se turnan el mismo puesto: apagar
+    Daaph no quita llamadas, todos sus turnos pasan a Telnyx. 4 contra 6
+    reprogramadas no prueba la diferencia, pero Zadarma además no avisa el
+    fin ni el costo de la llamada.
+
+    Se apaga con la configuración, sin tocar el código:
+    `VOICE_TELNYX_SHARE` = 67 y `VOICE_ELEVENLABS_SHARE` = 33. Daaph recibe
+    lo que sobra de 100, así que queda en 0. Si ElevenLabs baja, hay que
+    subir Telnyx en lo mismo, o Daaph vuelve a llamar. Para volver a
+    encenderlo basta bajar `VOICE_TELNYX_SHARE`.
 - Todo hecho que escribe lleva en `payload` el `voice_call_id`, y la línea de
   tiempo del drawer lo muestra con actor **«Agente de voz»** y enlace a la
   transcripción. Un intento que no se puede leer después no es historial
